@@ -65,7 +65,8 @@ export function simpleMarkdownFallback(text) {
 
 /**
  * Render markdown text to HTML.
- * Strips ROUTE blocks, uses marked.js with code highlighting,
+ * Strips ROUTE/TASKS blocks (complete and partial/streaming),
+ * uses marked.js with code highlighting,
  * falls back to simple regex-based rendering.
  * Results are cached by input text to avoid repeated parsing.
  */
@@ -75,8 +76,11 @@ const _MD_CACHE_MAX = 2000;
 export function renderMarkdown(text) {
   if (!text || typeof text !== 'string') return '';
   // Strip ROUTE blocks and TASKS blocks (tasks shown in dedicated panel)
+  // First strip complete blocks, then strip partial/unclosed blocks (visible during streaming)
   text = text.replace(/---ROUTE---[\s\S]*?---END_ROUTE---/g, '').trim();
   text = text.replace(/---TASKS---[\s\S]*?---END_TASKS---/g, '').trim();
+  text = text.replace(/---ROUTE---[\s\S]*$/g, '').trim();
+  text = text.replace(/---TASKS---[\s\S]*$/g, '').trim();
   if (!text) return '';
 
   const cached = _mdCache.get(text);
