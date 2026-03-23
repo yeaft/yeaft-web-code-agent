@@ -270,13 +270,17 @@ export function handleMessage(store, msg) {
               return true;
             }
           }
-          const crewMsgs = store.crewMessagesMap?.[msg.conversationId];
-          if (crewMsgs) {
-            for (let i = crewMsgs.length - 1; i >= 0; i--) {
-              if (crewMsgs[i].type === 'tool' && crewMsgs[i].toolName === 'AskUserQuestion' && !crewMsgs[i].askRequestId) {
-                crewMsgs[i].askRequestId = msg.requestId;
-                crewMsgs[i].askQuestions = msg.questions;
-                return true;
+          // Crew mode: msg.conversationId is the role's individual conversation ID,
+          // but crewMessagesMap is keyed by session ID (e.g. crew_XXXXX).
+          // Search all crew sessions to find the matching AskUserQuestion tool message.
+          if (store.crewMessagesMap) {
+            for (const crewMsgs of Object.values(store.crewMessagesMap)) {
+              for (let i = crewMsgs.length - 1; i >= 0; i--) {
+                if (crewMsgs[i].type === 'tool' && crewMsgs[i].toolName === 'AskUserQuestion' && !crewMsgs[i].askRequestId) {
+                  crewMsgs[i].askRequestId = msg.requestId;
+                  crewMsgs[i].askQuestions = msg.questions;
+                  return true;
+                }
               }
             }
           }
