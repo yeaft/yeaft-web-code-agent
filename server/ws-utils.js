@@ -91,9 +91,13 @@ export async function broadcastAgentList() {
           conversations: Array.from(agent.conversations.values()).filter(c =>
             CONFIG.skipAuth || !c.userId || c.userId === client.userId
           ).map(c => {
-            if (!c.title) {
+            if (!c.title || (c.type === 'crew' && !c.name)) {
               const dbSession = sessionDb.get(c.id);
-              if (dbSession?.title) c.title = dbSession.title;
+              if (dbSession?.title) {
+                c.title = c.title || dbSession.title;
+                // Crew sessions store name as title in DB
+                if (c.type === 'crew' && !c.name) c.name = dbSession.title;
+              }
             }
             return c;
           })
@@ -115,9 +119,12 @@ export async function sendConversationList(clientId, agentId) {
     const filteredConvs = Array.from(agent.conversations.values()).filter(c =>
       CONFIG.skipAuth || !c.userId || c.userId === client.userId
     ).map(c => {
-      if (!c.title) {
+      if (!c.title || (c.type === 'crew' && !c.name)) {
         const dbSession = sessionDb.get(c.id);
-        if (dbSession?.title) c.title = dbSession.title;
+        if (dbSession?.title) {
+          c.title = c.title || dbSession.title;
+          if (c.type === 'crew' && !c.name) c.name = dbSession.title;
+        }
       }
       return c;
     });
