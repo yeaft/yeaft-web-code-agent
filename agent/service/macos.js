@@ -7,10 +7,9 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { getLogDir, getNodePath, getCliPath } from './config.js';
 
+/** Pure path getter — no side effects (no directory creation). */
 export function getLaunchdPlistPath() {
-  const dir = join(homedir(), 'Library', 'LaunchAgents');
-  mkdirSync(dir, { recursive: true });
-  return join(dir, 'com.yeaft.agent.plist');
+  return join(homedir(), 'Library', 'LaunchAgents', 'com.yeaft.agent.plist');
 }
 
 function generateLaunchdPlist(config) {
@@ -61,6 +60,8 @@ ${envDict.join('\n')}
 
 export function macInstall(config) {
   const plistPath = getLaunchdPlistPath();
+  // Ensure LaunchAgents directory exists before writing
+  mkdirSync(join(homedir(), 'Library', 'LaunchAgents'), { recursive: true });
   // Unload first if exists
   if (existsSync(plistPath)) {
     try { execSync(`launchctl unload ${plistPath} 2>/dev/null`); } catch {}

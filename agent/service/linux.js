@@ -7,10 +7,9 @@ import { join, dirname } from 'path';
 import { homedir } from 'os';
 import { SERVICE_NAME, getLogDir, getNodePath, getCliPath } from './config.js';
 
+/** Pure path getter — no side effects (no directory creation). */
 export function getSystemdServicePath() {
-  const dir = join(homedir(), '.config', 'systemd', 'user');
-  mkdirSync(dir, { recursive: true });
-  return join(dir, `${SERVICE_NAME}.service`);
+  return join(homedir(), '.config', 'systemd', 'user', `${SERVICE_NAME}.service`);
 }
 
 function generateSystemdUnit(config) {
@@ -50,6 +49,8 @@ WantedBy=default.target
 
 export function linuxInstall(config) {
   const servicePath = getSystemdServicePath();
+  // Ensure systemd user directory exists before writing
+  mkdirSync(join(homedir(), '.config', 'systemd', 'user'), { recursive: true });
   writeFileSync(servicePath, generateSystemdUnit(config));
   execSync('systemctl --user daemon-reload');
   execSync(`systemctl --user enable ${SERVICE_NAME}`);
