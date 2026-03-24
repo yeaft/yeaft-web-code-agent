@@ -6,6 +6,7 @@ import { query, Stream } from '../sdk/index.js';
 import { promises as fs, mkdirSync } from 'fs';
 import { join } from 'path';
 import { getMessages } from '../crew-i18n.js';
+import { handleAskUserQuestion } from '../conversation.js';
 import ctx from '../context.js';
 
 /** Format role label */
@@ -158,6 +159,16 @@ async function _createRoleQueryInner(session, roleName) {
     appendSystemPrompt: systemPrompt,
     ...(effectiveDisallowed.length > 0 && { disallowedTools: effectiveDisallowed })
   };
+
+  // Only the decision maker intercepts AskUserQuestion to forward to Web UI
+  if (role.isDecisionMaker) {
+    queryOptions.canCallTool = async (toolName, input, toolCtx) => {
+      if (toolName === 'AskUserQuestion') {
+        return await handleAskUserQuestion(session.id, input, toolCtx);
+      }
+      return input;
+    };
+  }
 
   if (savedSessionId) {
     queryOptions.resume = savedSessionId;
