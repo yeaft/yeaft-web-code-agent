@@ -1,30 +1,16 @@
 /**
  * Service — doctor command
  * Diagnoses service configuration issues: checks paths, service status, version consistency.
+ *
+ * Reuses path and status functions from platform modules to avoid duplication.
  */
 import { execSync } from 'child_process';
 import { existsSync, readFileSync, statSync } from 'fs';
-import { join, dirname } from 'path';
 import { platform, homedir } from 'os';
-import { fileURLToPath } from 'url';
-import { SERVICE_NAME } from './config.js';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
-// ── Platform-specific service config paths ─────────────────────────────────
-
-function getMacPlistPath() {
-  return join(homedir(), 'Library', 'LaunchAgents', 'com.yeaft.agent.plist');
-}
-
-function getLinuxServicePath() {
-  return join(homedir(), '.config', 'systemd', 'user', `${SERVICE_NAME}.service`);
-}
-
-function getWindowsEcosystemPath() {
-  const appData = process.env.APPDATA || join(homedir(), 'AppData', 'Roaming');
-  return join(appData, SERVICE_NAME, 'ecosystem.config.cjs');
-}
+import { getNodePath } from './config.js';
+import { getLaunchdPlistPath, getMacServiceStatus } from './macos.js';
+import { getSystemdServicePath, getLinuxServiceStatus } from './linux.js';
+import { getEcosystemPath, getWinServiceStatus } from './windows.js';
 
 // ── Parse paths from service config files ──────────────────────────────────
 
@@ -107,76 +93,11 @@ function getCliVersion(nodePath, cliPath) {
 }
 
 function getCurrentNodePath() {
-  return process.execPath;
+  return getNodePath();
 }
 
 function getCurrentNodeVersion() {
   return process.version;
-}
-
-// ── Service status checks ──────────────────────────────────────────────────
-
-function getMacServiceStatus() {
-  try {
-    const output = execSync('launchctl list | grep com.yeaft.agent', {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    if (output.trim()) {
-      const parts = output.trim().split(/\s+/);
-      const pid = parts[0];
-      if (pid !== '-') {
-        return { running: true, pid };
-      }
-      return { running: false, pid: null };
-    }
-    return { running: false, pid: null };
-  } catch {
-    return { running: false, pid: null };
-  }
-}
-
-function getLinuxServiceStatus() {
-  try {
-    const output = execSync(`systemctl --user is-active ${SERVICE_NAME}`, {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }).trim();
-    if (output === 'active') {
-      // Try to get PID
-      let pid = null;
-      try {
-        pid = execSync(`systemctl --user show ${SERVICE_NAME} --property=MainPID --value`, {
-          encoding: 'utf-8',
-          stdio: ['pipe', 'pipe', 'pipe'],
-        }).trim();
-        if (pid === '0') pid = null;
-      } catch {}
-      return { running: true, pid };
-    }
-    return { running: false, pid: null };
-  } catch {
-    return { running: false, pid: null };
-  }
-}
-
-function getWindowsServiceStatus() {
-  try {
-    const output = execSync('pm2 jlist', {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    const apps = JSON.parse(output);
-    const app = Array.isArray(apps) && apps.find(a => a.name === 'yeaft-agent');
-    if (app) {
-      const running = app.pm2_env && app.pm2_env.status === 'online';
-      const pid = running ? app.pid : null;
-      return { running, pid: pid ? String(pid) : null };
-    }
-    return { running: false, pid: null };
-  } catch {
-    return { running: false, pid: null };
-  }
 }
 
 // ── Tilde shorthand for display ────────────────────────────────────────────
@@ -201,17 +122,17 @@ export function doctor() {
 
   // 1. Determine platform and config path
   if (os === 'darwin') {
-    configPath = getMacPlistPath();
+    configPath = getLaunchdPlistPath();
     parsePaths = parseMacPaths;
     getServiceStatus = getMacServiceStatus;
   } else if (os === 'linux') {
-    configPath = getLinuxServicePath();
+    configPath = getSystemdServicePath();
     parsePaths = parseLinuxPaths;
     getServiceStatus = getLinuxServiceStatus;
   } else if (os === 'win32') {
-    configPath = getWindowsEcosystemPath();
+    configPath = getEcosystemPath();
     parsePaths = parseWindowsPaths;
-    getServiceStatus = getWindowsServiceStatus;
+    getServiceStatus = getWinServiceStatus;
   } else {
     console.log(`\u26a0\ufe0f  Unsupported platform: ${os}`);
     console.log(`   The doctor command supports macOS, Linux, and Windows.`);

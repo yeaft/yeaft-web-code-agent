@@ -22,7 +22,7 @@ function ensurePm2() {
   }
 }
 
-function getEcosystemPath() {
+export function getEcosystemPath() {
   return join(getConfigDir(), 'ecosystem.config.cjs');
 }
 
@@ -153,6 +153,29 @@ export function winRestart() {
     execSync(`pm2 restart ${PM2_APP_NAME}`, { stdio: 'inherit' });
   } catch {
     console.error('Service not running. Use "yeaft-agent start" to start.');
+  }
+}
+
+/**
+ * Query pm2 for the current service status.
+ * Returns { running: boolean, pid: string|null }.
+ */
+export function getWinServiceStatus() {
+  try {
+    const output = execSync('pm2 jlist', {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const apps = JSON.parse(output);
+    const app = Array.isArray(apps) && apps.find(a => a.name === 'yeaft-agent');
+    if (app) {
+      const running = app.pm2_env && app.pm2_env.status === 'online';
+      const pid = running ? app.pid : null;
+      return { running, pid: pid ? String(pid) : null };
+    }
+    return { running: false, pid: null };
+  } catch {
+    return { running: false, pid: null };
   }
 }
 

@@ -107,22 +107,38 @@ export function macRestart() {
   macStart();
 }
 
-export function macStatus() {
+/**
+ * Query launchd for the current service status.
+ * Returns { running: boolean, pid: string|null, exitCode: string|null }.
+ */
+export function getMacServiceStatus() {
   try {
-    const output = execSync(`launchctl list | grep com.yeaft.agent`, { encoding: 'utf-8' });
+    const output = execSync('launchctl list | grep com.yeaft.agent', {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
     if (output.trim()) {
       const parts = output.trim().split(/\s+/);
       const pid = parts[0];
       const exitCode = parts[1];
       if (pid !== '-') {
-        console.log(`Service is running (PID: ${pid})`);
-      } else {
-        console.log(`Service is stopped (last exit code: ${exitCode})`);
+        return { running: true, pid, exitCode };
       }
-    } else {
-      console.log('Service is not installed.');
+      return { running: false, pid: null, exitCode };
     }
+    return { running: false, pid: null, exitCode: null };
   } catch {
+    return { running: false, pid: null, exitCode: null };
+  }
+}
+
+export function macStatus() {
+  const status = getMacServiceStatus();
+  if (status.running) {
+    console.log(`Service is running (PID: ${status.pid})`);
+  } else if (status.exitCode !== null) {
+    console.log(`Service is stopped (last exit code: ${status.exitCode})`);
+  } else {
     console.log('Service is not installed.');
   }
 }

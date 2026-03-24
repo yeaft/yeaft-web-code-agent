@@ -88,6 +88,33 @@ export function linuxRestart() {
   console.log('Service restarted.');
 }
 
+/**
+ * Query systemd for the current service status.
+ * Returns { running: boolean, pid: string|null }.
+ */
+export function getLinuxServiceStatus() {
+  try {
+    const output = execSync(`systemctl --user is-active ${SERVICE_NAME}`, {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
+    if (output === 'active') {
+      let pid = null;
+      try {
+        pid = execSync(`systemctl --user show ${SERVICE_NAME} --property=MainPID --value`, {
+          encoding: 'utf-8',
+          stdio: ['pipe', 'pipe', 'pipe'],
+        }).trim();
+        if (pid === '0') pid = null;
+      } catch {}
+      return { running: true, pid };
+    }
+    return { running: false, pid: null };
+  } catch {
+    return { running: false, pid: null };
+  }
+}
+
 export function linuxStatus() {
   try {
     execSync(`systemctl --user status ${SERVICE_NAME}`, { stdio: 'inherit' });
