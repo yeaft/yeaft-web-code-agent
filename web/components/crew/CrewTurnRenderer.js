@@ -42,6 +42,7 @@ export default {
           <span class="crew-error-icon">{{ turn.message.recoverable ? '🔄' : '❌' }}</span>
           <span>{{ turn.message.content }}</span>
         </div>
+        <div v-else-if="turn.message.type === 'text' && turn.message.role === 'human'" class="crew-msg-content user-text-content">{{ turn.message.content }}</div>
         <div v-else-if="turn.message.type === 'text'" class="crew-msg-content markdown-body" v-html="mdRender(turn.message.content)"></div>
         <div v-if="showHumanBubble && turn.message.attachments && turn.message.attachments.length > 0" class="user-attachments" style="margin-top: 6px;">
           <div v-for="(att, aidx) in turn.message.attachments" :key="aidx" class="user-attachment-item" :class="{ 'is-image': att.isImage }">

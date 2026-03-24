@@ -434,6 +434,14 @@
   word-break: break-word;
 }
 
+/* Human (user) messages use plain text rendering to prevent HTML/XML tags from
+   being swallowed by the browser.  Unlike AI/role messages that need markdown
+   rendering, user input is displayed verbatim via Vue {{ }} text interpolation. */
+.crew-msg-content.user-text-content {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .crew-message.crew-msg-text {
   border-left: 3px solid var(--role-border, transparent);
 }
