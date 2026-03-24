@@ -7,10 +7,9 @@ import { join, dirname } from 'path';
 import { homedir } from 'os';
 import { SERVICE_NAME, getLogDir, getNodePath, getCliPath } from './config.js';
 
+/** Pure path getter — no side effects (no directory creation). */
 export function getSystemdServicePath() {
-  const dir = join(homedir(), '.config', 'systemd', 'user');
-  mkdirSync(dir, { recursive: true });
-  return join(dir, `${SERVICE_NAME}.service`);
+  return join(homedir(), '.config', 'systemd', 'user', `${SERVICE_NAME}.service`);
 }
 
 function generateSystemdUnit(config) {
@@ -50,6 +49,8 @@ WantedBy=default.target
 
 export function linuxInstall(config) {
   const servicePath = getSystemdServicePath();
+  // Ensure systemd user directory exists before writing
+  mkdirSync(join(homedir(), '.config', 'systemd', 'user'), { recursive: true });
   writeFileSync(servicePath, generateSystemdUnit(config));
   execSync('systemctl --user daemon-reload');
   execSync(`systemctl --user enable ${SERVICE_NAME}`);
@@ -86,6 +87,33 @@ export function linuxStop() {
 export function linuxRestart() {
   execSync(`systemctl --user restart ${SERVICE_NAME}`, { stdio: 'inherit' });
   console.log('Service restarted.');
+}
+
+/**
+ * Query systemd for the current service status.
+ * Returns { running: boolean, pid: string|null }.
+ */
+export function getLinuxServiceStatus() {
+  try {
+    const output = execSync(`systemctl --user is-active ${SERVICE_NAME}`, {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
+    if (output === 'active') {
+      let pid = null;
+      try {
+        pid = execSync(`systemctl --user show ${SERVICE_NAME} --property=MainPID --value`, {
+          encoding: 'utf-8',
+          stdio: ['pipe', 'pipe', 'pipe'],
+        }).trim();
+        if (pid === '0') pid = null;
+      } catch {}
+      return { running: true, pid };
+    }
+    return { running: false, pid: null };
+  } catch {
+    return { running: false, pid: null };
+  }
 }
 
 export function linuxStatus() {
