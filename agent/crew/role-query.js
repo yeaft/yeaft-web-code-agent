@@ -146,6 +146,9 @@ async function _createRoleQueryInner(session, roleName) {
 
   // 继承全局 MCP disallowedTools，避免不必要的 tool schema token 消耗
   const globalDisallowed = ctx.CONFIG?.disallowedTools || [];
+  // Crew 角色禁用 Agent 工具，强制通过 ROUTE 块协作
+  const crewDisallowed = ['Agent'];
+  const effectiveDisallowed = [...globalDisallowed, ...crewDisallowed];
 
   const queryOptions = {
     cwd: roleCwd,
@@ -153,7 +156,7 @@ async function _createRoleQueryInner(session, roleName) {
     abort: abortController.signal,
     model: role.model || undefined,
     appendSystemPrompt: systemPrompt,
-    ...(globalDisallowed.length > 0 && { disallowedTools: globalDisallowed })
+    ...(effectiveDisallowed.length > 0 && { disallowedTools: effectiveDisallowed })
   };
 
   if (savedSessionId) {
