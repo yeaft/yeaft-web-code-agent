@@ -20,6 +20,7 @@ export async function handleAgentCrew(agentId, agent, msg) {
       const crewUsername = msg.username || agent.ownerUsername || null;
       agent.conversations.set(msg.sessionId, {
         id: msg.sessionId,
+        name: msg.name || '',
         workDir: msg.projectDir,
         userId: crewUserId,
         username: crewUsername,
@@ -48,6 +49,7 @@ export async function handleAgentCrew(agentId, agent, msg) {
       if (!agent.conversations.has(msg.sessionId)) {
         agent.conversations.set(msg.sessionId, {
           id: msg.sessionId,
+          name: msg.name || '',
           workDir: msg.projectDir,
           userId: restoreUserId,
           username: restoreUsername,

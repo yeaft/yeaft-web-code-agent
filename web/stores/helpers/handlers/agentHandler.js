@@ -109,6 +109,8 @@ export function handleAgentList(store, msg) {
         existing.agentId = serverConv.agentId;
         existing.agentName = serverConv.agentName;
         if (serverConv.type) existing.type = serverConv.type;
+        // Preserve crew session name from server; keep existing if server has none
+        if (serverConv.name !== undefined) existing.name = serverConv.name;
       } else {
         store.conversations.push(serverConv);
       }

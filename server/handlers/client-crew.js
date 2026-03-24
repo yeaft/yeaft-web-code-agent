@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { CONFIG } from '../config.js';
 import { agents, pendingFiles } from '../context.js';
-import { sendToWebClient, forwardToAgent } from '../ws-utils.js';
+import { sendToWebClient, forwardToAgent, broadcastAgentList } from '../ws-utils.js';
 
 /**
  * Handle Crew (multi-agent) messages from web client.
@@ -158,6 +158,12 @@ export async function handleClientCrew(clientId, client, msg, checkAgentAccess) 
       const updateCrewAgentId = msg.agentId || client.currentAgent;
       if (!updateCrewAgentId) break;
       if (!await checkAgentAccess(updateCrewAgentId)) break;
+      // Sync name to server-side memory so broadcastAgentList sends it
+      const updateAgent = agents.get(updateCrewAgentId);
+      if (updateAgent && msg.sessionId && msg.name !== undefined) {
+        const conv = updateAgent.conversations.get(msg.sessionId);
+        if (conv) conv.name = msg.name;
+      }
       const updatePayload = {
         type: 'update_crew_session',
         sessionId: msg.sessionId,
@@ -165,6 +171,7 @@ export async function handleClientCrew(clientId, client, msg, checkAgentAccess) 
       };
       if (msg.roles) updatePayload.roles = msg.roles;
       await forwardToAgent(updateCrewAgentId, updatePayload);
+      await broadcastAgentList();
       break;
     }
 
