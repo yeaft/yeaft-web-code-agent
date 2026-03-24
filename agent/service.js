@@ -22,5 +22,6 @@ export {
   stop,
   restart,
   status,
-  logs
+  logs,
+  doctor
 } from './service/index.js';
