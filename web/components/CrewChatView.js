@@ -98,6 +98,11 @@ export default {
           </template>
         </template>
 
+        <!-- Typing dots: visible after user sends message, before AI responds -->
+        <div v-if="isWaitingResponse" class="typing-indicator">
+          <span></span><span></span><span></span>
+        </div>
+
         <div class="crew-scroll-bottom"
              :class="{ 'is-hidden': scroll.isAtBottom.value }"
              @click="scroll.scrollToBottomAndReset()">
@@ -281,6 +286,12 @@ export default {
   },
 
   computed: {
+    isWaitingResponse() {
+      const messages = this.store.currentCrewMessages;
+      if (!messages || messages.length === 0) return false;
+      const lastMsg = messages[messages.length - 1];
+      return lastMsg.role === 'human' && !lastMsg._sendFailed;
+    },
     isInitializing() {
       return this.store.currentCrewStatus?.status === 'initializing';
     },
