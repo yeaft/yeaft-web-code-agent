@@ -5522,8 +5522,8 @@ describe('Crew MCP disallowedTools inheritance', () => {
   });
 
   it('should pass disallowedTools to queryOptions when global list is non-empty', () => {
-    // The spread pattern conditionally adds disallowedTools
-    expect(roleQuerySource).toContain('disallowedTools: globalDisallowed');
+    // The spread pattern conditionally adds effectiveDisallowed (global + crew disallowed)
+    expect(roleQuerySource).toContain('disallowedTools: effectiveDisallowed');
   });
 
   it('should default to empty array when ctx.CONFIG.disallowedTools is undefined', () => {
