@@ -12,6 +12,7 @@ import {
 import { getSystemdServicePath, linuxInstall, linuxUninstall, linuxStart, linuxStop, linuxRestart, linuxStatus, linuxLogs } from './linux.js';
 import { getLaunchdPlistPath, macInstall, macUninstall, macStart, macStop, macRestart, macStatus, macLogs } from './macos.js';
 import { winInstall, winUninstall, winStart, winStop, winRestart, winStatus, winLogs } from './windows.js';
+import { doctor } from './doctor.js';
 
 export {
   getConfigDir, getLogDir, getConfigPath,
@@ -97,3 +98,5 @@ export function logs() {
   else if (os === 'darwin') macLogs();
   else if (os === 'win32') winLogs();
 }
+
+export { doctor };

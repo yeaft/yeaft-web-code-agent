@@ -19,7 +19,9 @@ const subArgs = args.slice(1);
 // Service management subcommands
 const SERVICE_COMMANDS = ['install', 'uninstall', 'start', 'stop', 'restart', 'status', 'logs'];
 
-if (command === 'upgrade') {
+if (command === 'doctor') {
+  handleDoctorCommand();
+} else if (command === 'upgrade') {
   upgrade();
 } else if (command === '--version' || command === '-v') {
   console.log(pkg.version);
@@ -45,6 +47,7 @@ function printHelp() {
     yeaft-agent restart                Restart installed service
     yeaft-agent status                 Show service status
     yeaft-agent logs                   View service logs (follow mode)
+    yeaft-agent doctor                 Diagnose service configuration
     yeaft-agent upgrade                Upgrade to latest version
     yeaft-agent --version              Show version
 
@@ -80,6 +83,11 @@ async function handleServiceCommand(command, args) {
     case 'status':    service.status(); break;
     case 'logs':      service.logs(); break;
   }
+}
+
+async function handleDoctorCommand() {
+  const { doctor } = await import('./service.js');
+  doctor();
 }
 
 function parseAndStart(args) {
