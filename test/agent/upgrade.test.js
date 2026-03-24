@@ -643,7 +643,7 @@ describe('remote upgrade (upgrade.js) — PM2 race condition fix', () => {
 
   it('should delete PM2 app before process exit to prevent auto-restart', () => {
     // The fix: pm2 delete must happen BEFORE cleanupAndExit, not in the bat script
-    const deleteIndex = upgradeSource.indexOf("pm2', ['delete'");
+    const deleteIndex = upgradeSource.indexOf("pm2Path, ['delete'");
     const exitIndex = upgradeSource.indexOf('cleanupAndExit(0)');
     expect(deleteIndex).toBeGreaterThan(-1);
     expect(exitIndex).toBeGreaterThan(-1);
@@ -651,7 +651,7 @@ describe('remote upgrade (upgrade.js) — PM2 race condition fix', () => {
   });
 
   it('should use execFileSync for pm2 delete (synchronous before exit)', () => {
-    expect(upgradeSource).toContain("execFileSync('pm2', ['delete'");
+    expect(upgradeSource).toContain("execFileSync(pm2Path, ['delete'");
   });
 
   it('should not have pm2 stop in the bat script (replaced by pre-exit pm2 delete)', () => {
@@ -664,12 +664,12 @@ describe('remote upgrade (upgrade.js) — PM2 race condition fix', () => {
   });
 
   it('should re-register PM2 via ecosystem config after upgrade', () => {
-    expect(upgradeSource).toContain('pm2 start');
+    expect(upgradeSource).toContain('pm2Win}" start');
     expect(upgradeSource).toContain('ecosystem.config.cjs');
   });
 
   it('should save PM2 process list after re-registering', () => {
-    expect(upgradeSource).toContain('pm2 save');
+    expect(upgradeSource).toContain('pm2Win}" save');
   });
 
   // --- PR #244: VBScript wrapper in upgrade.js ---

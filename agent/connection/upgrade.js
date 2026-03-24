@@ -10,6 +10,13 @@ import { stopAgentHeartbeat } from './heartbeat.js';
 
 const PM2_APP_NAME = 'yeaft-agent';
 
+// Derive absolute paths for npm/pm2 from current node executable.
+// In launchd/systemd environments, PATH may not include nvm/node dirs,
+// but process.execPath always points to the running node binary.
+const nodeBinDir = dirname(process.execPath);
+const npmPath = join(nodeBinDir, 'npm');
+const pm2Path = join(nodeBinDir, 'pm2');
+
 // Shared cleanup logic for restart/upgrade
 function cleanupAndExit(exitCode) {
   setTimeout(() => {
@@ -46,7 +53,7 @@ export async function handleUpgradeAgent() {
     const pkgName = ctx.pkgName || '@yeaft/webchat-agent';
     // Check latest version (async to avoid blocking heartbeat)
     const latestVersion = await new Promise((resolve, reject) => {
-      execFile('npm', ['view', pkgName, 'version'], { stdio: 'pipe', shell: process.platform === 'win32' }, (err, stdout) => {
+      execFile(npmPath, ['view', pkgName, 'version'], { stdio: 'pipe' }, (err, stdout) => {
         if (err) reject(err); else resolve(stdout.toString().trim());
       });
     });
@@ -74,7 +81,7 @@ export async function handleUpgradeAgent() {
 
     // 判断全局安装 vs 局部安装
     const isGlobalInstall = await new Promise((resolve) => {
-      execFile('npm', ['prefix', '-g'], { shell: process.platform === 'win32' }, (err, stdout) => {
+      execFile(npmPath, ['prefix', '-g'], (err, stdout) => {
         if (err) { resolve(false); return; }
         const globalPrefix = stdout.toString().trim().replace(/\\/g, '/');
         resolve(installDir === globalPrefix || installDir === globalPrefix + '/lib');
@@ -94,7 +101,7 @@ export async function handleUpgradeAgent() {
     const isPm2 = !!process.env.pm_id;
     if (isPm2) {
       try {
-        execFileSync('pm2', ['delete', PM2_APP_NAME], { shell: process.platform === 'win32', stdio: 'pipe' });
+        execFileSync(pm2Path, ['delete', PM2_APP_NAME], { stdio: 'pipe' });
         console.log(`[Agent] PM2 app deleted to prevent auto-restart during upgrade`);
       } catch {
         console.log(`[Agent] PM2 delete skipped (app may not be registered)`);
@@ -130,6 +137,8 @@ function spawnWindowsUpgradeScript(pkgName, installDir, isGlobalInstall, latestV
 
   // Determine the target package directory inside node_modules
   const pkgDir = join(installDir, 'node_modules', ...pkgName.split('/')).replace(/\//g, '\\');
+
+  const pm2Win = pm2Path.replace(/\//g, '\\');
 
   const batLines = [
     '@echo off',
@@ -178,7 +187,7 @@ function spawnWindowsUpgradeScript(pkgName, installDir, isGlobalInstall, latestV
   // Use Node.js worker for file-level upgrade (avoids EBUSY on directory rename)
   batLines.push(
     'echo [Upgrade] Running upgrade worker at %time%... >> "%LOGFILE%"',
-    'node "%WORKER%" "%PKG%" "%PKG_DIR%" "%LOGFILE%"',
+    `"${process.execPath.replace(/\//g, '\\')}" "%WORKER%" "%PKG%" "%PKG_DIR%" "%LOGFILE%"`,
     'if not "%errorlevel%"=="0" (',
     '  echo [Upgrade] Worker failed with exit code %errorlevel% at %time% >> "%LOGFILE%"',
     '  goto CLEANUP',
@@ -193,8 +202,8 @@ function spawnWindowsUpgradeScript(pkgName, installDir, isGlobalInstall, latestV
     batLines.push(
       'echo [Upgrade] Re-registering agent via PM2... >> "%LOGFILE%"',
       `if exist "${ecoPath}" (`,
-      `  call pm2 start "${ecoPath}" >> "%LOGFILE%" 2>&1`,
-      '  call pm2 save >> "%LOGFILE%" 2>&1',
+      `  call "${pm2Win}" start "${ecoPath}" >> "%LOGFILE%" 2>&1`,
+      `  call "${pm2Win}" save >> "%LOGFILE%" 2>&1`,
       '  echo [Upgrade] PM2 app re-registered at %time% >> "%LOGFILE%"',
       ') else (',
       '  echo [Upgrade] WARNING: ecosystem.config.cjs not found, PM2 not restarted >> "%LOGFILE%"',
@@ -241,12 +250,17 @@ function spawnUnixUpgradeScript(pkgName, installDir, isGlobalInstall, latestVers
   const isLaunchd = platform() === 'darwin' && existsSync(join(process.env.HOME || '', 'Library', 'LaunchAgents', 'com.yeaft.agent.plist'));
   const cwd = isGlobalInstall ? undefined : installDir;
 
+  // Ensure PATH includes the node bin dir (critical for launchd which has minimal PATH)
+  const currentPath = process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin';
+  const exportPath = currentPath.includes(nodeBinDir) ? currentPath : `${nodeBinDir}:${currentPath}`;
+
   const shLines = [
     '#!/bin/bash',
     `PID=${pid}`,
     `PKG="${pkgName}@latest"`,
+    `NPM="${npmPath}"`,
     `LOGFILE="${join(configDir, 'logs', 'upgrade.log')}"`,
-    `export PATH="${process.env.PATH}"`,
+    `export PATH="${exportPath}"`,
     '',
     '# Redirect all output to log file',
     'exec > "$LOGFILE" 2>&1',
@@ -285,10 +299,10 @@ function spawnUnixUpgradeScript(pkgName, installDir, isGlobalInstall, latestVers
     );
   }
 
-  // npm install
+  // npm install (use absolute path via $NPM variable)
   const npmCmd = isGlobalInstall
-    ? `npm install -g "$PKG"`
-    : `cd "$INSTALL_DIR" && npm install "$PKG"`;
+    ? `"$NPM" install -g "$PKG"`
+    : `cd "$INSTALL_DIR" && "$NPM" install "$PKG"`;
 
   shLines.push(
     'echo "[Upgrade] Installing $PKG..."',
