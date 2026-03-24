@@ -6,6 +6,7 @@ import { query, Stream } from '../sdk/index.js';
 import { promises as fs, mkdirSync } from 'fs';
 import { join } from 'path';
 import { getMessages } from '../crew-i18n.js';
+import { handleAskUserQuestion } from '../conversation.js';
 import ctx from '../context.js';
 
 /** Format role label */
@@ -156,6 +157,13 @@ async function _createRoleQueryInner(session, roleName) {
     abort: abortController.signal,
     model: role.model || undefined,
     appendSystemPrompt: systemPrompt,
+    // Intercept AskUserQuestion to forward to Web UI (same as Chat mode)
+    canCallTool: async (toolName, input, toolCtx) => {
+      if (toolName === 'AskUserQuestion') {
+        return await handleAskUserQuestion(session.id, input, toolCtx);
+      }
+      return input;
+    },
     ...(effectiveDisallowed.length > 0 && { disallowedTools: effectiveDisallowed })
   };
 
