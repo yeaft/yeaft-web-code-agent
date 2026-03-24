@@ -157,15 +157,18 @@ async function _createRoleQueryInner(session, roleName) {
     abort: abortController.signal,
     model: role.model || undefined,
     appendSystemPrompt: systemPrompt,
-    // Intercept AskUserQuestion to forward to Web UI (same as Chat mode)
-    canCallTool: async (toolName, input, toolCtx) => {
+    ...(effectiveDisallowed.length > 0 && { disallowedTools: effectiveDisallowed })
+  };
+
+  // Only the decision maker intercepts AskUserQuestion to forward to Web UI
+  if (role.isDecisionMaker) {
+    queryOptions.canCallTool = async (toolName, input, toolCtx) => {
       if (toolName === 'AskUserQuestion') {
         return await handleAskUserQuestion(session.id, input, toolCtx);
       }
       return input;
-    },
-    ...(effectiveDisallowed.length > 0 && { disallowedTools: effectiveDisallowed })
-  };
+    };
+  }
 
   if (savedSessionId) {
     queryOptions.resume = savedSessionId;
