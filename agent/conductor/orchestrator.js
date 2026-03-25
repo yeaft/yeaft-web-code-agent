@@ -28,7 +28,8 @@ import {
   getFlow, getThinkingMode,
   getDiscussionActors, getPlanningActors, getPlanningLead,
   getQualityGateConfig, getAcceptanceVerifier,
-  needsQualityGate, getAdversarialReviewConfig, getExecutionStages
+  needsQualityGate, getPostPlanningDiscussion, getExecutionStages,
+  isQualityGateBeforeExecution
 } from './orchestrator-flows.js';
 
 // =====================================================================
@@ -253,9 +254,37 @@ Respond with JSON: { "complexity": "trivial"|"small"|"complex", "reasoning": "..
   // ===================================================================
 
   async _phaseDiscussion(task, flow) {
+    // 区分两种 discussion:
+    // 1. 初始 discussion (task.plan === null) — 标准发散讨论
+    // 2. Post-planning discussion (task.plan !== null) — Trading 对抗性审查
+    const isPostPlanning = task.plan !== null;
+
+    if (isPostPlanning) {
+      const ppConfig = getPostPlanningDiscussion(flow);
+      if (ppConfig) {
+        this.log(`DISCUSSION (post-planning): ${ppConfig.purpose}`);
+        await this._runActorsParallel(task, ppConfig.actors, {
+          instruction: `${ppConfig.purpose}\n\nChallenge points:\n${ppConfig.challengePoints.map(p => `- ${p}`).join('\n')}\n\nStrategy to review: ${JSON.stringify(task.plan)}`,
+          memoryPath: this._getMemoryPath(task)
+        });
+        this.log(`DISCUSSION (post-planning): completed`);
+      }
+
+      // Post-planning discussion 之后:
+      // Trading: QG before execution → QUALITY_GATE
+      // Others: → EXECUTION
+      if (isQualityGateBeforeExecution(flow)) {
+        transitionPhase(task, Phase.QUALITY_GATE);
+      } else {
+        transitionPhase(task, Phase.EXECUTION);
+      }
+      this._notify(task);
+      return;
+    }
+
+    // 标准初始 discussion
     this.log(`DISCUSSION: starting for task ${task.taskId}`);
 
-    // 获取应创建的 discussion actor 列表
     const context = { uiInvolved: this._isUiInvolved(task) };
     const actorDefs = getDiscussionActors(flow, context);
 
@@ -266,16 +295,12 @@ Respond with JSON: { "complexity": "trivial"|"small"|"complex", "reasoning": "..
       return;
     }
 
-    // 并行创建所有 discussion actors
     const results = await this._runActorsParallel(task, actorDefs, {
       instruction: `Discussion topic: ${task.description}`,
       memoryPath: this._getMemoryPath(task)
     });
 
     this.log(`DISCUSSION: ${results.length} actors completed`);
-
-    // Trading 特有：DISCUSSION 阶段包含分析（macro + technical）
-    // 结果已通过 actor 写入 memory.md
 
     transitionPhase(task, Phase.PLANNING);
     this._notify(task);
@@ -320,13 +345,16 @@ Respond with JSON: { "complexity": "trivial"|"small"|"complex", "reasoning": "..
     task.currentStepIndex = 0;
     this.log(`PLANNING: produced plan with ${plan.steps.length} steps`);
 
-    // Trading 特有：planning 之后进行对抗性审查
-    const adversarialConfig = getAdversarialReviewConfig(flow);
-    if (adversarialConfig) {
-      await this._runAdversarialReview(task, flow, adversarialConfig);
+    // 如果场景有 post-planning discussion（Trading 对抗性审查），transition 到 DISCUSSION
+    const ppConfig = getPostPlanningDiscussion(flow);
+    if (ppConfig) {
+      transitionPhase(task, Phase.DISCUSSION);
+    } else if (isQualityGateBeforeExecution(flow)) {
+      // QG before execution（不常见，但保持灵活性）
+      transitionPhase(task, Phase.QUALITY_GATE);
+    } else {
+      transitionPhase(task, Phase.EXECUTION);
     }
-
-    transitionPhase(task, Phase.EXECUTION);
     this._notify(task);
   }
 
@@ -364,21 +392,6 @@ Respond with JSON: { "complexity": "trivial"|"small"|"complex", "reasoning": "..
     }
 
     return null;
-  }
-
-  /**
-   * Trading 特有：对抗性审查
-   */
-  async _runAdversarialReview(task, flow, config) {
-    this.log(`ADVERSARIAL REVIEW: ${config.purpose}`);
-
-    const results = await this._runActorsParallel(task, config.actors, {
-      instruction: `Adversarial review: ${config.purpose}\n\nChallenge points:\n${config.challengePoints.map(p => `- ${p}`).join('\n')}\n\nStrategy to review: ${JSON.stringify(task.plan)}`,
-      memoryPath: this._getMemoryPath(task)
-    });
-
-    this.log(`ADVERSARIAL REVIEW: completed with ${results.length} actors`);
-    // 结果通过 memory.md 传递给下一阶段
   }
 
   // ===================================================================
@@ -482,8 +495,8 @@ Respond with JSON: { "complexity": "trivial"|"small"|"complex", "reasoning": "..
         return; // 交给 quality gate phase 处理
       }
 
-      // 前进到下一步
-      task.currentStepIndex = Math.max(...parallelSteps.map(s => s.index)) + 1;
+      // 前进到并行组之后的下一个 pending 步骤
+      task.currentStepIndex = this._advancePastCompletedSteps(task);
       this._notify(task);
     }
 
@@ -575,28 +588,44 @@ Respond with JSON: { "complexity": "trivial"|"small"|"complex", "reasoning": "..
     this.log(`QUALITY GATE: starting for task ${task.taskId}`);
 
     const qgConfig = getQualityGateConfig(flow);
-    const results = [];
-
-    // 创建 reviewer
-    if (qgConfig.reviewer) {
-      const reviewResult = await this._runSingleActor(task, qgConfig.reviewer, {
-        instruction: `Review the execution output for quality, correctness, and standards compliance.
+    const qgInstruction = `Review the execution output for quality, correctness, and standards compliance.
 Pass threshold: ${qgConfig.passThreshold || 'N/A'}
-Check areas: ${qgConfig.checkAreas?.join(', ') || 'all'}`,
-        workDir: task.workDir,
-        memoryPath: this._getMemoryPath(task)
-      });
-      results.push({ type: 'review', result: reviewResult });
-    }
+Check areas: ${qgConfig.checkAreas?.join(', ') || 'all'}`;
+    const qgContext = {
+      workDir: task.workDir,
+      memoryPath: this._getMemoryPath(task)
+    };
 
-    // 创建 tester（如果有且可以并行，理论上应并行，这里简化为串行）
-    if (qgConfig.tester) {
-      const testResult = await this._runSingleActor(task, qgConfig.tester, {
-        instruction: 'Test the implementation. Cover core logic and edge cases.',
-        workDir: task.workDir,
-        memoryPath: this._getMemoryPath(task)
+    let results;
+
+    // 如果配置了并行且同时有 reviewer + tester，并行运行
+    if (qgConfig.parallel && qgConfig.reviewer && qgConfig.tester) {
+      const actorDefs = [qgConfig.reviewer, qgConfig.tester];
+      const parallelResults = await this._runActorsParallel(task, actorDefs, {
+        ...qgContext,
+        instruction: qgInstruction
       });
-      results.push({ type: 'testing', result: testResult });
+      results = [
+        { type: 'review', result: parallelResults[0] },
+        { type: 'testing', result: parallelResults[1] }
+      ];
+    } else {
+      // 串行
+      results = [];
+      if (qgConfig.reviewer) {
+        const reviewResult = await this._runSingleActor(task, qgConfig.reviewer, {
+          ...qgContext,
+          instruction: qgInstruction
+        });
+        results.push({ type: 'review', result: reviewResult });
+      }
+      if (qgConfig.tester) {
+        const testResult = await this._runSingleActor(task, qgConfig.tester, {
+          ...qgContext,
+          instruction: 'Test the implementation. Cover core logic and edge cases.'
+        });
+        results.push({ type: 'testing', result: testResult });
+      }
     }
 
     // 判定结果
@@ -605,9 +634,12 @@ Check areas: ${qgConfig.checkAreas?.join(', ') || 'all'}`,
     if (allPass) {
       this.log('QUALITY GATE: PASS');
 
-      // 如果还有后续步骤，回到 execution
-      if (task.plan && task.currentStepIndex < task.plan.steps.length - 1) {
-        task.currentStepIndex++;
+      // Trading: QG before execution → pass → EXECUTION
+      if (isQualityGateBeforeExecution(flow)) {
+        transitionPhase(task, Phase.EXECUTION);
+      } else if (task.plan && task.currentStepIndex < task.plan.steps.length - 1) {
+        // 还有后续步骤，回到 execution 继续
+        task.currentStepIndex = this._advancePastCompletedSteps(task);
         transitionPhase(task, Phase.EXECUTION);
       } else {
         transitionPhase(task, Phase.ACCEPTANCE);
@@ -617,11 +649,14 @@ Check areas: ${qgConfig.checkAreas?.join(', ') || 'all'}`,
 
       const stepIdx = task.currentStepIndex;
       const failCount = recordStepFail(task, stepIdx);
-      const maxRetries = qgConfig.maxRetries || 2;
+      const maxRetries = qgConfig.maxRetries || 3;
 
       if (failCount >= maxRetries) {
         // 升级：创建 discussion 重新讨论方案
         this.log(`QUALITY GATE: step ${stepIdx} failed ${failCount} times, escalating to DISCUSSION`);
+        // 重置 plan 以触发完整的 re-plan 流程（而非误入 post-planning discussion 路径）
+        task.plan = null;
+        task.currentStepIndex = -1;
         transitionPhase(task, Phase.DISCUSSION);
       } else {
         // 打回修改：回到 execution 重做当前步骤
@@ -776,9 +811,8 @@ Focus areas: ${flow.acceptance.focusAreas.join(', ')}`,
 
     return results.map((r, i) => {
       if (r.status === 'fulfilled') {
-        const result = r.value || {};
-        result.personaId = actorDefs[i].personaId;
-        return result;
+        // 不修改原始 result 对象，创建新对象附加 personaId
+        return { ...r.value, personaId: actorDefs[i].personaId };
       }
       return { error: r.reason?.message || 'Unknown error', personaId: actorDefs[i].personaId };
     });
@@ -787,6 +821,20 @@ Focus areas: ${flow.acceptance.focusAreas.join(', ')}`,
   // ===================================================================
   // Utility
   // ===================================================================
+
+  /**
+   * 跳过已完成的步骤，返回下一个 pending 步骤的 index
+   * 修复 #2: 并行步骤组完成后正确推进到下一个未完成的步骤
+   */
+  _advancePastCompletedSteps(task) {
+    if (!task.plan) return task.currentStepIndex;
+    const steps = task.plan.steps;
+    let idx = task.currentStepIndex;
+    while (idx < steps.length && steps[idx].status === 'completed') {
+      idx++;
+    }
+    return idx;
+  }
 
   /**
    * 判断任务是否涉及 UI

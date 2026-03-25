@@ -211,9 +211,9 @@ export function getValidTransitions(phase) {
     case Phase.TRIAGE:
       return [Phase.DISCUSSION, Phase.PLANNING, Phase.EXECUTION, Phase.FAILED];
     case Phase.DISCUSSION:
-      return [Phase.PLANNING, Phase.FAILED];
+      return [Phase.PLANNING, Phase.QUALITY_GATE, Phase.EXECUTION, Phase.FAILED];
     case Phase.PLANNING:
-      return [Phase.EXECUTION, Phase.DISCUSSION, Phase.FAILED];
+      return [Phase.EXECUTION, Phase.DISCUSSION, Phase.QUALITY_GATE, Phase.FAILED];
     case Phase.EXECUTION:
       return [Phase.QUALITY_GATE, Phase.ACCEPTANCE, Phase.FAILED];
     case Phase.QUALITY_GATE:
@@ -237,14 +237,14 @@ export function addActiveActor(task, actorInstance) {
 }
 
 /**
- * Actor 完成：从 active 移到 completed
+ * 从 activeActors 中移除并转移到 completedActors（共享逻辑）
  */
-export function completeActor(task, instanceId, result) {
+function _transferActor(task, instanceId, status, result) {
   const idx = task.activeActors.findIndex(a => a.instanceId === instanceId);
   if (idx === -1) return null;
 
   const actor = task.activeActors.splice(idx, 1)[0];
-  actor.status = ActorStatus.DONE;
+  actor.status = status;
   actor.result = result;
   actor.completedAt = Date.now();
   task.completedActors.push(actor);
@@ -253,19 +253,17 @@ export function completeActor(task, instanceId, result) {
 }
 
 /**
+ * Actor 完成：从 active 移到 completed
+ */
+export function completeActor(task, instanceId, result) {
+  return _transferActor(task, instanceId, ActorStatus.DONE, result);
+}
+
+/**
  * Actor 失败
  */
 export function failActor(task, instanceId, error) {
-  const idx = task.activeActors.findIndex(a => a.instanceId === instanceId);
-  if (idx === -1) return null;
-
-  const actor = task.activeActors.splice(idx, 1)[0];
-  actor.status = ActorStatus.FAILED;
-  actor.result = { error: error?.message || String(error) };
-  actor.completedAt = Date.now();
-  task.completedActors.push(actor);
-  task.updatedAt = Date.now();
-  return actor;
+  return _transferActor(task, instanceId, ActorStatus.FAILED, { error: error?.message || String(error) });
 }
 
 /**
@@ -306,6 +304,7 @@ export function serializeTask(task) {
     currentStepIndex: task.currentStepIndex,
     iterations: task.iterations,
     maxIterations: task.maxIterations,
+    stepFailCounts: Object.fromEntries(task.stepFailCounts),
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
     completedAt: task.completedAt,

@@ -101,7 +101,7 @@ const devFlow = {
     tester: { personaId: 'beck', specialty: 'testing' },
     parallel: true,          // review 和 testing 可并行
     passThreshold: 9,        // 10分制, ≥9 通过
-    maxRetries: 2,           // 同一步骤 fail ≥ 此值 → 升级 discussion
+    maxRetries: 3,           // 同一步骤 fail ≥3 次 → 升级 discussion（设计文档 6.2.2）
     codingRequiresReview: true,
     codingRequiresTesting: true,
     designRequiresReview: false,
@@ -174,7 +174,7 @@ const writingFlow = {
     tester: null,             // Writing 无 tester
     parallel: false,
     checkAreas: ['设定一致性', '时间线', '人物逻辑', '爽点落地', '文字质量'],
-    maxRetries: 2
+    maxRetries: 3
   },
 
   acceptance: {
@@ -229,10 +229,10 @@ const tradingFlow = {
   },
 
   /**
-   * Trading 特有：对抗性讨论
-   * planning 之后、execution 之前，索罗斯 vs 塔勒布 压力测试
+   * Trading 特有：对抗性讨论（PLANNING 之后自动进入）
+   * 设计文档 6.2.5: PLANNING → DISCUSSION（对抗性审查）→ QG → EXECUTION
    */
-  adversarialReview: {
+  postPlanningDiscussion: {
     actors: [
       { personaId: 'soros', specialty: 'discussion' },
       { personaId: 'taleb', specialty: 'discussion' }
@@ -246,6 +246,12 @@ const tradingFlow = {
     outputTarget: 'memory'
   },
 
+  /**
+   * Trading 特有：QG 在 EXECUTION 之前（风控审查通过才能执行）
+   * 设计文档 6.2.5: QG pass → 执行 / fail → 打回修改策略
+   */
+  qualityGateBeforeExecution: true,
+
   qualityGate: {
     reviewer: { personaId: 'taleb', specialty: 'risk-review' },
     tester: null,
@@ -256,7 +262,7 @@ const tradingFlow = {
       minConvexity: 3,            // 凸性 ≥ 3:1
       requireTailHedge: true
     },
-    maxRetries: 2
+    maxRetries: 3
   },
 
   execution: {
@@ -350,7 +356,7 @@ const videoFlow = {
     tester: null,
     parallel: false,
     checkAreas: ['锚点完整性', '色调统一', '角色描述一致', '时长合理'],
-    maxRetries: 2
+    maxRetries: 3
   },
 
   acceptance: {
@@ -454,15 +460,31 @@ export function needsQualityGate(flow, specialty) {
   if (specialty === 'design') {
     return qg.designRequiresReview === true;
   }
-  // 其他 specialty（execution, prompt-assembly 等）
+  if (specialty === 'execution') {
+    // Trading: execution actor 的产出需要风控审查（如果配置了 QG before execution）
+    // 但如果 QG 已在 execution 之前跑过了，这里就不需要重复
+    // 其他场景中 execution specialty 不存在，直接返回 false
+    return flow.qualityGateBeforeExecution !== true
+      && flow.scenario === 'trading'
+      && !!qg.reviewer;
+  }
+  // 其他 specialty（prompt-assembly 等）— 检查是否有 reviewer
   return false;
 }
 
 /**
- * Trading 特有：获取对抗性审查配置
+ * 获取 post-planning discussion 配置（Trading 对抗性审查）
+ * PLANNING 完成后自动进入此 discussion
  */
-export function getAdversarialReviewConfig(flow) {
-  return flow.adversarialReview || null;
+export function getPostPlanningDiscussion(flow) {
+  return flow.postPlanningDiscussion || null;
+}
+
+/**
+ * 该场景的 QG 是否在 EXECUTION 之前（Trading: 风控通过才能交易）
+ */
+export function isQualityGateBeforeExecution(flow) {
+  return flow.qualityGateBeforeExecution === true;
 }
 
 /**
