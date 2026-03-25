@@ -488,7 +488,201 @@ describe('ConductorChatView V5 header cleanup', () => {
 });
 
 // =====================================================================
-// 9. Boundary conditions
+// 9. Mobile ≤768px: overlay + absolute panel + full-width TaskPanel
+// =====================================================================
+
+describe('mobile responsive behavior', () => {
+  it('CSS: conductor-mobile-overlay is hidden by default, shown at ≤768px', () => {
+    // Default: display: none
+    expect(conductorCssSource).toContain('.conductor-mobile-overlay');
+    expect(conductorCssSource).toMatch(/\.conductor-mobile-overlay\s*\{[^}]*display:\s*none/);
+    // At ≤768px: display: block + position absolute + overlay background
+    const mobileBlock = conductorCssSource.substring(
+      conductorCssSource.indexOf('@media (max-width: 768px)'),
+      conductorCssSource.indexOf('@media (max-width: 480px)')
+    );
+    expect(mobileBlock).toContain('.conductor-mobile-overlay');
+    expect(mobileBlock).toContain('display: block');
+  });
+
+  it('CSS: ActivePanel becomes absolute overlay at ≤768px', () => {
+    const mobileBlock = conductorCssSource.substring(
+      conductorCssSource.indexOf('@media (max-width: 768px)'),
+      conductorCssSource.indexOf('@media (max-width: 480px)')
+    );
+    expect(mobileBlock).toContain('.conductor-active-panel');
+    expect(mobileBlock).toContain('position: absolute');
+    expect(mobileBlock).toContain('z-index: 20');
+  });
+
+  it('CSS: TaskPanel is full width at ≤768px', () => {
+    const mobileBlock = conductorCssSource.substring(
+      conductorCssSource.indexOf('@media (max-width: 768px)'),
+      conductorCssSource.indexOf('@media (max-width: 480px)')
+    );
+    expect(mobileBlock).toContain('.conductor-task-panel');
+    expect(mobileBlock).toContain('width: 100%');
+  });
+
+  it('template: mobile overlay click closes ActivePanel via store', () => {
+    expect(conductorChatViewSource).toContain('conductor-mobile-overlay');
+    expect(conductorChatViewSource).toContain('showActivePanel && isMobile');
+    expect(conductorChatViewSource).toContain('store.conductorActivePanelVisible = false');
+  });
+
+  it('ConductorChatView tracks isMobile via window.innerWidth', () => {
+    expect(conductorChatViewSource).toContain('window.innerWidth < 768');
+    expect(conductorChatViewSource).toContain('resize');
+  });
+
+  it('CSS: old conductor-header responsive rules removed', () => {
+    const mobileBlock = conductorCssSource.substring(
+      conductorCssSource.indexOf('@media (max-width: 768px)')
+    );
+    expect(mobileBlock).not.toContain('.conductor-header ');
+    expect(mobileBlock).not.toContain('.conductor-header-center');
+    expect(mobileBlock).not.toContain('.conductor-header-name');
+    expect(mobileBlock).not.toContain('.conductor-header-cost');
+  });
+});
+
+// =====================================================================
+// 10. P0 fix: openConductor sets currentAgent before sendWsMessage,
+//     conductor_session_created uses msg.agentId with store fallback
+// =====================================================================
+
+describe('P0 fix: openConductor agentId binding', () => {
+  // Simulate the FIXED openConductor logic (mirrors conductor.js lines 77-104)
+  function simulateFixedOpenConductor(store, agentId) {
+    const existing = store.conversations.find(
+      c => c.type === 'conductor' && c.agentId === agentId
+    );
+
+    if (existing) {
+      store.selectConversation(existing.id, agentId);
+      return { action: 'resumed' };
+    }
+
+    // P0 FIX: set currentAgent BEFORE sending WS message
+    store.currentAgent = agentId;
+
+    const sessionId = 'cond_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    store.conductorMessages[sessionId] = [];
+    store.conductorTasks[sessionId] = {};
+    store.conductorActors[sessionId] = {};
+
+    store.sentMessages.push({
+      type: 'create_conductor_session',
+      sessionId,
+      agentId
+    });
+    return { action: 'created', sessionId };
+  }
+
+  // Simulate conductor_session_created handler (mirrors conductor.js lines 184-233)
+  function simulateSessionCreatedHandler(store, msg) {
+    const sid = msg.sessionId;
+    // P0 FIX: prefer msg.agentId over store.currentAgent
+    const agentId = msg.agentId || store.currentAgent;
+
+    let conv = store.conversations.find(c => c.id === sid);
+    if (!conv) {
+      const agent = store.agents.find(a => a.id === agentId);
+      conv = {
+        id: sid,
+        agentId,
+        agentName: agent?.name || agentId,
+        type: 'conductor'
+      };
+      store.conversations.push(conv);
+    } else {
+      conv.agentId = agentId;
+    }
+    return conv;
+  }
+
+  it('openConductor should set store.currentAgent before WS message', () => {
+    const store = {
+      conversations: [],
+      conductorMessages: {},
+      conductorTasks: {},
+      conductorActors: {},
+      sentMessages: [],
+      currentAgent: 'old-agent' // starts as a different agent
+    };
+
+    simulateFixedOpenConductor(store, 'new-agent');
+    // currentAgent must be updated BEFORE the WS message is sent
+    expect(store.currentAgent).toBe('new-agent');
+    expect(store.sentMessages[0].agentId).toBe('new-agent');
+  });
+
+  it('source: conductor.js sets currentAgent before sendWsMessage', () => {
+    // Line: store.currentAgent = agentId;
+    // Must appear BEFORE store.sendWsMessage
+    const openFn = conductorHelperSource.substring(
+      conductorHelperSource.indexOf('export function openConductor'),
+      conductorHelperSource.indexOf('export function resumeConductorSession')
+    );
+    const setAgentIdx = openFn.indexOf('store.currentAgent = agentId');
+    const sendWsIdx = openFn.indexOf('store.sendWsMessage');
+    expect(setAgentIdx).toBeGreaterThan(-1);
+    expect(sendWsIdx).toBeGreaterThan(-1);
+    expect(setAgentIdx).toBeLessThan(sendWsIdx); // set BEFORE send
+  });
+
+  it('conductor_session_created handler prefers msg.agentId over store.currentAgent', () => {
+    const store = {
+      conversations: [],
+      agents: [{ id: 'agent-B', name: 'Worker-B' }],
+      currentAgent: 'agent-A' // store has stale value
+    };
+    const msg = {
+      type: 'conductor_session_created',
+      sessionId: 'cond_test',
+      agentId: 'agent-B' // server echoes correct agentId
+    };
+
+    const conv = simulateSessionCreatedHandler(store, msg);
+    // Should use msg.agentId, NOT store.currentAgent
+    expect(conv.agentId).toBe('agent-B');
+    expect(conv.agentName).toBe('Worker-B');
+  });
+
+  it('conductor_session_created handler falls back to store.currentAgent when msg has no agentId', () => {
+    const store = {
+      conversations: [],
+      agents: [],
+      currentAgent: 'agent-fallback'
+    };
+    const msg = {
+      type: 'conductor_session_created',
+      sessionId: 'cond_fb'
+      // no agentId in msg
+    };
+
+    const conv = simulateSessionCreatedHandler(store, msg);
+    expect(conv.agentId).toBe('agent-fallback');
+  });
+
+  it('source: handler uses msg.agentId || store.currentAgent pattern', () => {
+    const handlerBlock = conductorHelperSource.substring(
+      conductorHelperSource.indexOf("msg.type === 'conductor_session_created'"),
+      conductorHelperSource.indexOf("msg.type === 'conductor_session_restored'") !== -1
+        ? conductorHelperSource.indexOf("msg.type === 'conductor_session_restored'")
+        : conductorHelperSource.indexOf("msg.type === 'conductor_session_created'") + 500
+    );
+    expect(handlerBlock).toContain('msg.agentId || store.currentAgent');
+  });
+
+  it('dead createConductorSession removed from store', () => {
+    // P1 fix: the old createConductorSession function should not exist
+    expect(chatStoreSource).not.toContain('createConductorSession(config)');
+  });
+});
+
+// =====================================================================
+// 11. Boundary conditions (supplementary)
 // =====================================================================
 
 describe('boundary conditions', () => {
