@@ -75,10 +75,10 @@ export async function initTaskDir(workDir, taskId) {
 let _stateWriteLock = Promise.resolve();
 
 /**
- * Load global task registry from state.json
- * @returns {ConductorState} { tasks: Record<taskId, TaskRegistryEntry>, lastUpdate }
+ * Read state.json from disk (no locking).
+ * Internal helper — use inside _stateWriteLock or via loadState().
  */
-export async function loadState() {
+async function loadStateRaw() {
   const filePath = join(CONDUCTOR_HOME, 'state.json');
   try {
     return JSON.parse(await fs.readFile(filePath, 'utf-8'));
@@ -88,38 +88,62 @@ export async function loadState() {
 }
 
 /**
- * Save global task registry to state.json (atomic write)
+ * Write state to disk (no locking, atomic via tmp+rename).
+ * Internal helper — must only be called inside _stateWriteLock chain.
+ */
+async function writeState(state) {
+  await fs.mkdir(CONDUCTOR_HOME, { recursive: true });
+  state.lastUpdate = Date.now();
+  const data = JSON.stringify(state, null, 2);
+  const filePath = join(CONDUCTOR_HOME, 'state.json');
+  const tmpPath = filePath + '.tmp';
+  await fs.writeFile(tmpPath, data);
+  await fs.rename(tmpPath, filePath);
+}
+
+/**
+ * Load global task registry from state.json
+ * @returns {ConductorState} { tasks: Record<taskId, TaskRegistryEntry>, lastUpdate }
+ */
+export async function loadState() {
+  return loadStateRaw();
+}
+
+/**
+ * Save global task registry to state.json (serialized via lock)
  */
 export async function saveState(state) {
-  const doWrite = async () => {
-    await fs.mkdir(CONDUCTOR_HOME, { recursive: true });
-    state.lastUpdate = Date.now();
-    const data = JSON.stringify(state, null, 2);
-    const filePath = join(CONDUCTOR_HOME, 'state.json');
-    const tmpPath = filePath + '.tmp';
-    await fs.writeFile(tmpPath, data);
-    await fs.rename(tmpPath, filePath);
-  };
+  const doWrite = () => writeState(state);
   _stateWriteLock = _stateWriteLock.then(doWrite, doWrite);
   return _stateWriteLock;
 }
 
 /**
  * Update a single task entry in state.json
+ * Read-modify-write is serialized through _stateWriteLock to prevent races.
  */
 export async function updateTaskInState(taskId, entry) {
-  const state = await loadState();
-  state.tasks[taskId] = { ...entry, lastUpdate: Date.now() };
-  await saveState(state);
+  const doUpdate = async () => {
+    const state = await loadStateRaw();
+    state.tasks[taskId] = { ...entry, lastUpdate: Date.now() };
+    await writeState(state);
+  };
+  _stateWriteLock = _stateWriteLock.then(doUpdate, doUpdate);
+  return _stateWriteLock;
 }
 
 /**
  * Remove a task entry from state.json
+ * Read-modify-write is serialized through _stateWriteLock to prevent races.
  */
 export async function removeTaskFromState(taskId) {
-  const state = await loadState();
-  delete state.tasks[taskId];
-  await saveState(state);
+  const doRemove = async () => {
+    const state = await loadStateRaw();
+    delete state.tasks[taskId];
+    await writeState(state);
+  };
+  _stateWriteLock = _stateWriteLock.then(doRemove, doRemove);
+  return _stateWriteLock;
 }
 
 // =====================================================================

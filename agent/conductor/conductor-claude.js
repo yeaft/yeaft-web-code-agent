@@ -242,7 +242,8 @@ function parseForwardTask(text) {
   while ((match = regex.exec(text)) !== null) {
     const block = match[1];
     const taskIdMatch = block.match(/^taskId:\s*(.+)/im);
-    const messageMatch = block.match(/^message:\s*([\s\S]*?)$/im);
+    // message may be multi-line: capture from "message:" to end of block
+    const messageMatch = block.match(/^message:\s*([\s\S]*)$/im);
     if (taskIdMatch) {
       forwards.push({
         taskId: taskIdMatch[1].trim(),
