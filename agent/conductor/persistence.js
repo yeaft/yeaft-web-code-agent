@@ -1,156 +1,219 @@
 /**
- * Conductor — 持久化管理
+ * Conductor — 持久化管理 (V5)
  *
- * 全局 session 索引 (~/.claude/conductor-sessions.json)
- * 每 task 的 .conductor/ 目录结构
- * Session 元数据 + UI 消息分片（复用 crew 的 logrotate 模式）
+ * Conductor Home: ~/.config/yeaft-agent/.conductor/
+ *   session.json  — Conductor Claude session 元数据
+ *   state.json    — 全局 task 注册表
+ *   messages.json — UI 消息（分片）
+ *
+ * Task 目录: {workDir}/.conductor/task-N/
+ *   CLAUDE.md, memory.md, plan.json, status.json
+ *   actors/{specialty}-{persona}/CLAUDE.md
  */
 import { promises as fs } from 'fs';
 import { join } from 'path';
-import { homedir } from 'os';
+import { getConfigDir } from '../service.js';
+import { createTaskWorktree } from './worktree.js';
 
 // =====================================================================
-// Conductor Session Index (~/.claude/conductor-sessions.json)
+// Conductor Home (Agent-level, singleton)
 // =====================================================================
 
-const CONDUCTOR_INDEX_PATH = join(homedir(), '.claude', 'conductor-sessions.json');
+const CONDUCTOR_HOME = join(getConfigDir(), '.conductor');
 
-let _indexWriteLock = Promise.resolve();
-
-export async function loadConductorIndex() {
-  try { return JSON.parse(await fs.readFile(CONDUCTOR_INDEX_PATH, 'utf-8')); }
-  catch { return []; }
+export function getConductorHome() {
+  return CONDUCTOR_HOME;
 }
 
-async function saveConductorIndex(index) {
-  const doWrite = async () => {
-    await fs.mkdir(join(homedir(), '.claude'), { recursive: true });
-    const data = JSON.stringify(index, null, 2);
-    const tmpPath = CONDUCTOR_INDEX_PATH + '.tmp';
-    await fs.writeFile(tmpPath, data);
-    await fs.rename(tmpPath, CONDUCTOR_INDEX_PATH);
+export async function ensureConductorHome() {
+  await fs.mkdir(CONDUCTOR_HOME, { recursive: true });
+  return CONDUCTOR_HOME;
+}
+
+// =====================================================================
+// Task Directory ({workDir}/.conductor/{taskId}/)
+// =====================================================================
+
+export function getTaskDir(workDir, taskId) {
+  return join(workDir, '.conductor', taskId);
+}
+
+export async function initTaskDir(workDir, taskId) {
+  const dir = getTaskDir(workDir, taskId);
+  await fs.mkdir(join(dir, 'actors'), { recursive: true });
+
+  // Initialize empty files if they don't exist
+  const files = {
+    'CLAUDE.md': '',
+    'memory.md': '',
+    'status.json': JSON.stringify({ taskId, status: 'created', updatedAt: Date.now() }, null, 2)
   };
-  _indexWriteLock = _indexWriteLock.then(doWrite, doWrite);
-  return _indexWriteLock;
-}
-
-function sessionToIndexEntry(session) {
-  return {
-    sessionId: session.id,
-    status: session.status,
-    name: session.name || '',
-    workDir: session.workDir || null,
-    userId: session.userId,
-    username: session.username,
-    agentId: session.agentId || null,
-    scenarioId: session.scenarioId || null,
-    createdAt: session.createdAt,
-    updatedAt: Date.now()
-  };
-}
-
-export async function upsertConductorIndex(session) {
-  const index = await loadConductorIndex();
-  const entry = sessionToIndexEntry(session);
-  const idx = index.findIndex(e => e.sessionId === session.id);
-  if (idx >= 0) index[idx] = entry; else index.push(entry);
-  await saveConductorIndex(index);
-}
-
-export async function hideConductorSession(sessionId, conductorSessions) {
-  const index = await loadConductorIndex();
-  const entry = index.find(e => e.sessionId === sessionId);
-  if (entry) {
-    entry.hidden = true;
-    entry.hiddenAt = Date.now();
-    await saveConductorIndex(index);
-    console.log(`[Conductor] Hidden session ${sessionId}`);
+  for (const [name, content] of Object.entries(files)) {
+    const filePath = join(dir, name);
+    try {
+      await fs.access(filePath);
+    } catch {
+      await fs.writeFile(filePath, content);
+    }
   }
-  if (conductorSessions.has(sessionId)) {
-    conductorSessions.delete(sessionId);
+
+  // Create worktree for this task (isolates file modifications per task)
+  let worktreePath = null;
+  try {
+    worktreePath = await createTaskWorktree(workDir, taskId, dir);
+  } catch (e) {
+    console.warn(`[Conductor] Failed to create worktree for ${taskId}:`, e.message);
   }
+
+  return { dir, worktreePath };
 }
 
 // =====================================================================
-// Conductor Directory Structure
+// State JSON (Global Task Registry)
 // =====================================================================
+
+let _stateWriteLock = Promise.resolve();
 
 /**
- * 初始化 .conductor 目录结构
- * 注意：.conductor 放在 task 绑定的 workDir 下，不在 session 级
- * session 级元数据存储在 ~/.claude/conductor/<sessionId>/
+ * Read state.json from disk (no locking).
+ * Internal helper — use inside _stateWriteLock or via loadState().
  */
-const CONDUCTOR_DATA_DIR = join(homedir(), '.claude', 'conductor');
-
-export function getSessionDataDir(sessionId) {
-  return join(CONDUCTOR_DATA_DIR, sessionId);
+async function loadStateRaw() {
+  const filePath = join(CONDUCTOR_HOME, 'state.json');
+  try {
+    return JSON.parse(await fs.readFile(filePath, 'utf-8'));
+  } catch {
+    return { tasks: {}, lastUpdate: 0 };
+  }
 }
 
-export async function initSessionDataDir(sessionId) {
-  const dir = getSessionDataDir(sessionId);
-  await fs.mkdir(dir, { recursive: true });
-  return dir;
+/**
+ * Write state to disk (no locking, atomic via tmp+rename).
+ * Internal helper — must only be called inside _stateWriteLock chain.
+ */
+async function writeState(state) {
+  await fs.mkdir(CONDUCTOR_HOME, { recursive: true });
+  state.lastUpdate = Date.now();
+  const data = JSON.stringify(state, null, 2);
+  const filePath = join(CONDUCTOR_HOME, 'state.json');
+  const tmpPath = filePath + '.tmp';
+  await fs.writeFile(tmpPath, data);
+  await fs.rename(tmpPath, filePath);
+}
+
+/**
+ * Load global task registry from state.json
+ * @returns {ConductorState} { tasks: Record<taskId, TaskRegistryEntry>, lastUpdate }
+ */
+export async function loadState() {
+  return loadStateRaw();
+}
+
+/**
+ * Save global task registry to state.json (serialized via lock)
+ */
+export async function saveState(state) {
+  const doWrite = () => writeState(state);
+  _stateWriteLock = _stateWriteLock.then(doWrite, doWrite);
+  return _stateWriteLock;
+}
+
+/**
+ * Update a single task entry in state.json
+ * Read-modify-write is serialized through _stateWriteLock to prevent races.
+ */
+export async function updateTaskInState(taskId, entry) {
+  const doUpdate = async () => {
+    const state = await loadStateRaw();
+    state.tasks[taskId] = { ...entry, lastUpdate: Date.now() };
+    await writeState(state);
+  };
+  _stateWriteLock = _stateWriteLock.then(doUpdate, doUpdate);
+  return _stateWriteLock;
+}
+
+/**
+ * Remove a task entry from state.json
+ * Read-modify-write is serialized through _stateWriteLock to prevent races.
+ */
+export async function removeTaskFromState(taskId) {
+  const doRemove = async () => {
+    const state = await loadStateRaw();
+    delete state.tasks[taskId];
+    await writeState(state);
+  };
+  _stateWriteLock = _stateWriteLock.then(doRemove, doRemove);
+  return _stateWriteLock;
 }
 
 // =====================================================================
-// Session Metadata
+// Conductor Metadata (session.json — Claude session persistence)
 // =====================================================================
 
-const MESSAGE_SHARD_SIZE = 256 * 1024;
-
-export async function saveSessionMeta(session) {
-  const dir = getSessionDataDir(session.id);
-  await fs.mkdir(dir, { recursive: true });
+export async function saveConductorMeta(conductor) {
+  const dir = await ensureConductorHome();
 
   const meta = {
-    sessionId: session.id,
-    name: session.name || '',
-    status: session.status,
-    workDir: session.workDir || null,
-    scenarioId: session.scenarioId || null,
-    tasks: Array.from(session.tasks.values()).map(t => ({
-      taskId: t.taskId,
-      title: t.title,
-      workDir: t.workDir,
-      status: t.status,
-      phase: t.phase,
-      progress: t.progress,
-      createdAt: t.createdAt,
-      updatedAt: t.updatedAt
-    })),
-    costUsd: session.costUsd,
-    totalInputTokens: session.totalInputTokens,
-    totalOutputTokens: session.totalOutputTokens,
-    userId: session.userId,
-    username: session.username,
-    agentId: session.agentId || null,
-    createdAt: session.createdAt,
+    status: conductor.status,
+    costUsd: conductor.costUsd,
+    totalInputTokens: conductor.totalInputTokens,
+    totalOutputTokens: conductor.totalOutputTokens,
+    userId: conductor.userId,
+    username: conductor.username,
+    createdAt: conductor.createdAt,
     updatedAt: Date.now()
   };
 
   await fs.writeFile(join(dir, 'session.json'), JSON.stringify(meta, null, 2));
 
-  // 保存 UI 消息（logrotate 分片）
-  if (session.uiMessages && session.uiMessages.length > 0) {
-    const cleaned = session.uiMessages.map(m => {
+  // Save UI messages (logrotate shards)
+  if (conductor.uiMessages && conductor.uiMessages.length > 0) {
+    const cleaned = conductor.uiMessages.map(m => {
       const { _streaming, ...rest } = m;
       return rest;
     });
     const json = JSON.stringify(cleaned);
-    if (json.length > MESSAGE_SHARD_SIZE && !session._rotating) {
-      await rotateMessages(session, dir, cleaned);
+    if (json.length > MESSAGE_SHARD_SIZE && !conductor._rotating) {
+      await rotateMessages(conductor, dir, cleaned);
     } else {
       await fs.writeFile(join(dir, 'messages.json'), json);
     }
   }
 }
 
-async function rotateMessages(session, dir, cleaned) {
-  session._rotating = true;
+export async function loadConductorMeta() {
+  const filePath = join(CONDUCTOR_HOME, 'session.json');
+  try {
+    return JSON.parse(await fs.readFile(filePath, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+// =====================================================================
+// UI Message Persistence (logrotate shards in conductor home)
+// =====================================================================
+
+const MESSAGE_SHARD_SIZE = 256 * 1024;
+
+export async function loadConductorMessages() {
+  let messages = [];
+  try {
+    messages = JSON.parse(await fs.readFile(join(CONDUCTOR_HOME, 'messages.json'), 'utf-8'));
+  } catch { /* file may not exist */ }
+  let hasOlderMessages = false;
+  try {
+    await fs.access(join(CONDUCTOR_HOME, 'messages.1.json'));
+    hasOlderMessages = true;
+  } catch { /* no older shards */ }
+  return { messages, hasOlderMessages };
+}
+
+async function rotateMessages(conductor, dir, cleaned) {
+  conductor._rotating = true;
   try {
     const halfLen = Math.floor(cleaned.length / 2);
     let splitIdx = halfLen;
-    // 尝试找 system/route 类型消息作为断点
     for (let i = halfLen; i > Math.max(0, halfLen - 20); i--) {
       if (cleaned[i].type === 'system' || cleaned[i].type === 'task_created') {
         splitIdx = i + 1;
@@ -171,11 +234,11 @@ async function rotateMessages(session, dir, cleaned) {
 
     await fs.writeFile(join(dir, 'messages.1.json'), JSON.stringify(archivePart));
     await fs.writeFile(join(dir, 'messages.json'), JSON.stringify(remainPart));
-    session.uiMessages = remainPart.map(m => ({ ...m }));
+    conductor.uiMessages = remainPart.map(m => ({ ...m }));
 
     console.log(`[Conductor] Rotated: archived ${archivePart.length} msgs, kept ${remainPart.length}`);
   } finally {
-    session._rotating = false;
+    conductor._rotating = false;
   }
 }
 
@@ -205,47 +268,20 @@ export async function cleanupMessageShards(dir) {
   } catch { /* dir may not exist */ }
 }
 
-export async function loadSessionMeta(sessionId) {
-  const dir = getSessionDataDir(sessionId);
-  try { return JSON.parse(await fs.readFile(join(dir, 'session.json'), 'utf-8')); }
-  catch { return null; }
-}
-
-export async function loadSessionMessages(sessionId) {
-  const dir = getSessionDataDir(sessionId);
-  let messages = [];
-  try { messages = JSON.parse(await fs.readFile(join(dir, 'messages.json'), 'utf-8')); }
-  catch { /* file may not exist */ }
-  let hasOlderMessages = false;
-  try {
-    await fs.access(join(dir, 'messages.1.json'));
-    hasOlderMessages = true;
-  } catch { /* no older shards */ }
-  return { messages, hasOlderMessages };
-}
-
-export async function handleLoadConductorHistory(msg, conductorSessions, sendConductorMessage) {
-  const { sessionId, requestId } = msg;
+export async function handleLoadConductorHistory(msg, conductor, sendMsg) {
+  const { requestId } = msg;
   const shardIndex = parseInt(msg.shardIndex, 10);
 
-  if (!Number.isFinite(shardIndex) || shardIndex < 1) {
-    sendConductorMessage({
+  if (!Number.isFinite(shardIndex) || shardIndex < 1 || !conductor) {
+    sendMsg({
       type: 'conductor_history_loaded',
-      sessionId, shardIndex: msg.shardIndex, requestId,
-      messages: [], hasMore: false
-    });
-    return;
-  }
-  if (!conductorSessions.has(sessionId)) {
-    sendConductorMessage({
-      type: 'conductor_history_loaded',
-      sessionId, shardIndex, requestId,
+      shardIndex: msg.shardIndex, requestId,
       messages: [], hasMore: false
     });
     return;
   }
 
-  const dir = getSessionDataDir(sessionId);
+  const dir = getConductorHome();
   const shardPath = join(dir, `messages.${shardIndex}.json`);
   let messages = [];
   try {
@@ -253,9 +289,9 @@ export async function handleLoadConductorHistory(msg, conductorSessions, sendCon
   } catch { /* shard doesn't exist */ }
 
   const hasMore = shardIndex < await getMaxShardIndex(dir);
-  sendConductorMessage({
+  sendMsg({
     type: 'conductor_history_loaded',
-    sessionId, shardIndex, requestId,
+    shardIndex, requestId,
     messages, hasMore
   });
 }

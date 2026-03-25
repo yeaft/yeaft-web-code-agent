@@ -21,11 +21,9 @@ import {
   handleLoadCrewHistory, handleCheckCrewContext
 } from '../crew.js';
 import {
-  createConductorSession, handleListConductorSessions,
-  resumeConductorSession, handleConductorUserInput,
-  handleUpdateWorkDir, handleUpdateConductorSession,
-  stopConductorSession, clearConductorSession,
-  hideConductorSession, handleLoadConductorHistory
+  initConductor, handleConductorUserInput,
+  stopConductor, clearConductor,
+  handleConductorHistory
 } from '../conductor.js';
 import { sendToServer, flushMessageBuffer } from './buffer.js';
 import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
@@ -260,44 +258,24 @@ export async function handleMessage(msg) {
       break;
 
     // Conductor (V2) messages
-    case 'create_conductor_session':
-      await createConductorSession(msg);
-      break;
-
-    case 'list_conductor_sessions':
-      await handleListConductorSessions(msg);
-      break;
-
-    case 'resume_conductor_session':
-      await resumeConductorSession(msg);
+    case 'open_conductor':
+      await initConductor(msg);
       break;
 
     case 'conductor_user_input':
       await handleConductorUserInput(msg);
       break;
 
-    case 'conductor_update_workdir':
-      await handleUpdateWorkDir(msg);
+    case 'stop_conductor':
+      await stopConductor();
       break;
 
-    case 'update_conductor_session':
-      await handleUpdateConductorSession(msg);
-      break;
-
-    case 'stop_conductor_session':
-      await stopConductorSession(msg.sessionId);
-      break;
-
-    case 'clear_conductor_session':
-      await clearConductorSession(msg.sessionId);
-      break;
-
-    case 'delete_conductor_session':
-      await hideConductorSession(msg.sessionId);
+    case 'clear_conductor':
+      await clearConductor();
       break;
 
     case 'conductor_load_history':
-      await handleLoadConductorHistory(msg);
+      await handleConductorHistory(msg);
       break;
 
     // Port proxy

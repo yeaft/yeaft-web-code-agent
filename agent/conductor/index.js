@@ -1,12 +1,12 @@
 /**
- * Conductor — 模块入口
+ * Conductor — Module Entry
  *
- * 导出三大核心子系统：
- * 1. Personas — 18 个人物定义（4 场景）
- * 2. Specialties — specialty 行为定义（通用 + 场景特有）
- * 3. CLAUDE.md Generator — 三段式动态生成
- * 4. Actor — Claude 实例创建/管理/释放
- * 5. Worktree — 按线程的 worktree 管理
+ * Exports three core subsystems:
+ * 1. Personas — 18 persona definitions (4 scenarios)
+ * 2. Specialties — specialty behavior definitions
+ * 3. CLAUDE.md Generator — dynamic 3-section generation
+ * 4. Actor — Claude instance create/manage/release
+ * 5. Worktree — per-task worktree management
  */
 
 // ---- Personas ----
@@ -57,7 +57,9 @@ export {
 
 // ---- Worktree Management ----
 export {
-  createThreadWorktree,
-  cleanupTaskWorktrees,
-  cleanupAllConductorWorktrees
+  createTaskWorktree,
+  cleanupTaskWorktree,
+  cleanupAllConductorWorktrees,
+  getTaskWorktreePath,
+  getActorCwd
 } from './worktree.js';
