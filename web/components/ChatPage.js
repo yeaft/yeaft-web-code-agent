@@ -9,11 +9,12 @@ import CrewChatView from './CrewChatView.js';
 import ExpertPanel from './ExpertPanel.js';
 import BtwOverlay from './BtwOverlay.js';
 import ConductorConfigPanel from './conductor/ConductorConfigPanel.js';
+import ConductorChatView from './conductor/ConductorChatView.js';
 import { useAuthStore } from '../stores/auth.js';
 
 export default {
   name: 'ChatPage',
-  components: { ChatHeader, MessageList, ChatInput, WorkbenchPanel, ProxyTab, SettingsPanel, CrewConfigPanel, CrewChatView, ExpertPanel, BtwOverlay, ConductorConfigPanel },
+  components: { ChatHeader, MessageList, ChatInput, WorkbenchPanel, ProxyTab, SettingsPanel, CrewConfigPanel, CrewChatView, ExpertPanel, BtwOverlay, ConductorConfigPanel, ConductorChatView },
   template: `
     <div class="chat-page" :class="{ 'show-sidebar': showMobileSidebar }">
 
@@ -291,6 +292,10 @@ export default {
         <template v-if="isCurrentCrewConversation">
           <ChatHeader @toggle-sidebar="showMobileSidebar = !showMobileSidebar" />
           <CrewChatView />
+        </template>
+        <!-- Conductor Conversation -->
+        <template v-else-if="isCurrentConductorConversation">
+          <ConductorChatView />
         </template>
         <!-- Normal Chat Mode -->
         <template v-else>
@@ -572,6 +577,9 @@ export default {
     isCurrentCrewConversation() {
       return this.store.currentConversationIsCrew;
     },
+    isCurrentConductorConversation() {
+      return this.store.currentConversationIsConductor;
+    },
     currentAgentLatency() {
       if (!this.store.currentAgent) return null;
       const agent = this.store.agents.find(a => a.id === this.store.currentAgent);
@@ -616,10 +624,7 @@ export default {
       this.conductorConfigOpen = true;
     },
     startConductorSession(config) {
-      // TODO: Wire to backend when conductor engine is ready
-      // For now, close the config panel. The actual session creation
-      // will be implemented by dev-2 (conductor engine) and dev-5 (frontend state).
-      console.log('[Conductor] Creating session with config:', config);
+      this.store.createConductorSession(config);
       this.conductorConfigOpen = false;
     },
     startCrewSession(config) {

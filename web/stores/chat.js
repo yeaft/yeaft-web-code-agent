@@ -10,6 +10,7 @@ import * as convHelpers from './helpers/conversation.js';
 import * as sessionHelpers from './helpers/session.js';
 import * as watchdogHelpers from './helpers/watchdog.js';
 import * as crewHelpers from './helpers/crew.js';
+import * as conductorHelpers from './helpers/conductor.js';
 
 const { defineStore } = Pinia;
 
@@ -126,6 +127,15 @@ export const useChatStore = defineStore('chat', {
     // =====================
     expertPanelOpen: false,           // 帮帮团面板是否打开
     expertSelections: [],             // 当前已选的角色/Action: [{ role: string, action: string|null }]
+
+    // =====================
+    // Conductor (V2 orchestrator) 状态 — 按 sessionId 存储
+    // =====================
+    conductorSessions: {},        // { [sessionId]: { id, scenario, workDir, agentId, actors, tasks, createdAt } }
+    conductorMessages: {},        // { [sessionId]: messages[] }
+    conductorTasks: {},           // { [sessionId]: { [taskId]: { id, title, status, plan, actors, progress } } }
+    conductorActors: {},          // { [sessionId]: { [actorKey]: { key, persona, specialty, taskId, status, spawnedAt } } }
+    conductorStatuses: {},        // { [sessionId]: { status, costUsd, activeActors, activeTasks } }
   }),
 
   getters: {
@@ -208,6 +218,22 @@ export const useChatStore = defineStore('chat', {
     currentCrewMessages: (state) => {
       if (!state.currentConversation) return EMPTY_ARRAY;
       return state.crewMessagesMap[state.currentConversation] || EMPTY_ARRAY;
+    },
+    // 当前 conversation 是否是 Conductor
+    currentConversationIsConductor: (state) => {
+      if (!state.currentConversation) return false;
+      const conv = state.conversations.find(c => c.id === state.currentConversation);
+      return conv?.type === 'conductor';
+    },
+    // 当前 Conductor session 信息
+    currentConductorSession: (state) => {
+      if (!state.currentConversation) return null;
+      return state.conductorSessions[state.currentConversation] || null;
+    },
+    // 当前 Conductor 消息列表
+    currentConductorMessages: (state) => {
+      if (!state.currentConversation) return EMPTY_ARRAY;
+      return state.conductorMessages[state.currentConversation] || EMPTY_ARRAY;
     }
   },
 
@@ -395,6 +421,16 @@ export const useChatStore = defineStore('chat', {
     handleCrewOutput(msg) { crewHelpers.handleCrewOutput(this, msg); },
     startRefreshTimeout() { crewHelpers.startRefreshTimeout(this); },
 
+    // =====================
+    // Conductor (V2 orchestrator) actions
+    // =====================
+    createConductorSession(config) { conductorHelpers.createConductorSession(this, config); },
+    resumeConductorSession(sessionId, agentId) { conductorHelpers.resumeConductorSession(this, sessionId, agentId); },
+    sendConductorMessage(content) { conductorHelpers.sendConductorMessage(this, content); },
+    sendConductorControl(action, taskId) { conductorHelpers.sendConductorControl(this, action, taskId); },
+    switchConductorWorkDir(workDir) { conductorHelpers.switchConductorWorkDir(this, workDir); },
+    handleConductorOutput(msg) { conductorHelpers.handleConductorOutput(this, msg); },
+
     openFileInExplorer(filePath) {
       if (!this.currentConversation) return;
       this.workbenchExpanded = true;
@@ -419,6 +455,7 @@ export const useChatStore = defineStore('chat', {
       this.processingConversations = {};
       this.executionStatusMap = {};
       this.workbenchExpanded = false;
+      conductorHelpers.clearConductorThrottles();
       if (this.ws) {
         this.ws.close();
       }
