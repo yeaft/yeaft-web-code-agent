@@ -8,11 +8,12 @@ import CrewConfigPanel from './CrewConfigPanel.js';
 import CrewChatView from './CrewChatView.js';
 import ExpertPanel from './ExpertPanel.js';
 import BtwOverlay from './BtwOverlay.js';
+import ConductorConfigPanel from './conductor/ConductorConfigPanel.js';
 import { useAuthStore } from '../stores/auth.js';
 
 export default {
   name: 'ChatPage',
-  components: { ChatHeader, MessageList, ChatInput, WorkbenchPanel, ProxyTab, SettingsPanel, CrewConfigPanel, CrewChatView, ExpertPanel, BtwOverlay },
+  components: { ChatHeader, MessageList, ChatInput, WorkbenchPanel, ProxyTab, SettingsPanel, CrewConfigPanel, CrewChatView, ExpertPanel, BtwOverlay, ConductorConfigPanel },
   template: `
     <div class="chat-page" :class="{ 'show-sidebar': showMobileSidebar }">
 
@@ -37,6 +38,9 @@ export default {
           </button>
           <button class="collapsed-icon-btn" @click="newCrewSession" title="Crew">
             <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+          </button>
+          <button class="collapsed-icon-btn" @click="openConductorConfig" title="Conductor">
+            <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/></svg>
           </button>
           <div class="collapsed-spacer"></div>
           <button class="collapsed-icon-btn" @click="store.toggleTheme()" :title="store.theme === 'dark' ? $t('chat.sidebar.lightMode') : $t('chat.sidebar.darkMode')">
@@ -131,6 +135,42 @@ export default {
 
         <!-- Session Panels — adaptive scroll layout -->
         <div class="session-panels">
+          <!-- Conductor Sessions Panel (top, visually prominent) -->
+          <div class="conductor-sidebar-section">
+            <div class="conductor-sidebar-header">
+              <div class="conductor-sidebar-title" @click="conductorGroupCollapsed = !conductorGroupCollapsed">
+                <svg class="session-collapse-arrow" :class="{ collapsed: conductorGroupCollapsed }" viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
+                <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/></svg>
+                <span>Conductor</span>
+              </div>
+              <button class="conductor-new-btn" @click="openConductorConfig" :disabled="crewCapableAgentCount === 0" title="New Conductor">
+                <svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+                New
+              </button>
+            </div>
+            <div class="conductor-session-list" v-show="!conductorGroupCollapsed">
+              <div
+                v-for="conv in conductorConversations"
+                :key="conv.id"
+                class="conductor-session-item"
+                :class="{ active: conv.id === store.currentConversation }"
+                @click="selectConversation(conv.id, conv.agentId)"
+              >
+                <span class="conductor-session-icon">⚡</span>
+                <div class="conductor-session-info">
+                  <div class="conductor-session-name">{{ conv.title || 'Conductor' }}</div>
+                  <div class="conductor-session-meta">{{ conv.scenario || '' }} · {{ getConversationTime(conv) }}</div>
+                </div>
+                <button class="conductor-session-delete" @click.stop="deleteConversation(conv.id, conv.agentId)" title="Delete">
+                  <svg viewBox="0 0 24 24"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                </button>
+              </div>
+              <div class="conductor-sidebar-empty" v-if="conductorConversations.length === 0">
+                No Conductor sessions
+              </div>
+            </div>
+          </div>
+
           <!-- Chat Sessions Panel -->
           <div class="session-panel" :class="{ collapsed: chatGroupCollapsed }">
             <div class="session-group-header">
@@ -293,6 +333,13 @@ export default {
         @close="store.crewConfigOpen = false"
         @start="startCrewSession"
         @browse="openCrewFolderPicker"
+      />
+
+      <!-- Conductor Config Panel -->
+      <ConductorConfigPanel
+        v-if="conductorConfigOpen"
+        @close="conductorConfigOpen = false"
+        @start="startConductorSession"
       />
 
       <!-- Unified Conversation Modal (New + Resume) -->
@@ -493,6 +540,8 @@ export default {
       serverVersion: '',
       chatGroupCollapsed: false,
       crewGroupCollapsed: false,
+      conductorGroupCollapsed: false,
+      conductorConfigOpen: false,
       // Inline rename state
       editingCrewId: null,
       editingCrewName: ''
@@ -542,8 +591,11 @@ export default {
     crewConversations() {
       return this.sortByActivity(this.store.conversations.filter(c => c.type === 'crew'));
     },
+    conductorConversations() {
+      return this.sortByActivity(this.store.conversations.filter(c => c.type === 'conductor'));
+    },
     normalConversations() {
-      return this.sortByActivity(this.store.conversations.filter(c => c.type !== 'crew'));
+      return this.sortByActivity(this.store.conversations.filter(c => c.type !== 'crew' && c.type !== 'conductor'));
     }
   },
   methods: {
@@ -558,6 +610,17 @@ export default {
     // Crew mode methods
     newCrewSession() {
       this.store.enterCrewMode();
+    },
+    // Conductor mode methods
+    openConductorConfig() {
+      this.conductorConfigOpen = true;
+    },
+    startConductorSession(config) {
+      // TODO: Wire to backend when conductor engine is ready
+      // For now, close the config panel. The actual session creation
+      // will be implemented by dev-2 (conductor engine) and dev-5 (frontend state).
+      console.log('[Conductor] Creating session with config:', config);
+      this.conductorConfigOpen = false;
     },
     startCrewSession(config) {
       this.store.createCrewSession(config);

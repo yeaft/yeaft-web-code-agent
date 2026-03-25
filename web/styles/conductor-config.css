@@ -1,0 +1,440 @@
+/* =====================================================================
+   Conductor Config Panel (Modal Overlay)
+   Reuses CSS variable system from crew-config.css
+   ===================================================================== */
+
+.conductor-config-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+[data-theme="dark"] .conductor-config-overlay {
+  background: rgba(0, 0, 0, 0.7);
+}
+
+.conductor-config-panel {
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  width: 92%;
+  max-width: 600px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="dark"] .conductor-config-panel {
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+}
+
+.conductor-config-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.conductor-config-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.3px;
+}
+
+.conductor-config-close {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+
+.conductor-config-close:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.conductor-config-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.conductor-config-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.conductor-config-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.conductor-label-hint {
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* =====================================================================
+   Scenario Cards Grid
+   ===================================================================== */
+
+.conductor-scenario-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+@media (max-width: 500px) {
+  .conductor-scenario-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.conductor-scenario-card {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1.5px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-main);
+  cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+}
+
+.conductor-scenario-card:hover {
+  border-color: var(--text-muted);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+.conductor-scenario-card.active {
+  border-color: var(--scenario-color, var(--accent-blue));
+  background: color-mix(in srgb, var(--scenario-color, var(--accent-blue)) 5%, var(--bg-main));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--scenario-color, var(--accent-blue)) 15%, transparent);
+}
+
+.scenario-card-icon {
+  font-size: 24px;
+  line-height: 1;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.scenario-card-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.scenario-card-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+
+.scenario-card-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.scenario-card-check {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  color: var(--scenario-color, var(--accent-blue));
+}
+
+/* =====================================================================
+   Persona Preview Chips
+   ===================================================================== */
+
+.conductor-persona-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.conductor-persona-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 20px;
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  font-size: 13px;
+  transition: border-color 0.15s;
+}
+
+.conductor-persona-chip:hover {
+  border-color: var(--text-muted);
+}
+
+.persona-chip-name {
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.persona-chip-tags {
+  display: flex;
+  gap: 3px;
+}
+
+.persona-chip-tag {
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--sidebar-hover);
+  padding: 1px 6px;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+
+/* =====================================================================
+   Footer
+   ===================================================================== */
+
+.conductor-config-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 16px 24px;
+  border-top: 1px solid var(--border-color);
+}
+
+.conductor-start-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.conductor-start-btn:not(:disabled) {
+  background: var(--accent);
+  color: var(--bg-main);
+}
+
+.conductor-start-btn:not(:disabled):hover {
+  background: var(--accent-hover);
+}
+
+/* =====================================================================
+   Empty State
+   ===================================================================== */
+
+.conductor-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 32px 0;
+}
+
+.conductor-empty-icon {
+  color: var(--text-muted);
+  opacity: 0.5;
+}
+
+.conductor-empty-text {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+/* =====================================================================
+   Sidebar: Conductor Sessions Panel
+   ===================================================================== */
+
+.conductor-sidebar-section {
+  padding: 8px 12px 4px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.conductor-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.conductor-sidebar-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.conductor-sidebar-title:hover {
+  color: var(--text-primary);
+}
+
+.conductor-sidebar-title svg {
+  flex-shrink: 0;
+}
+
+.conductor-new-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.conductor-new-btn:hover {
+  background: var(--sidebar-hover);
+  border-color: var(--text-muted);
+  color: var(--text-primary);
+}
+
+.conductor-new-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.conductor-new-btn svg {
+  flex-shrink: 0;
+}
+
+/* Conductor session list items */
+.conductor-session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 6px;
+}
+
+.conductor-session-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.conductor-session-item:hover {
+  background: var(--sidebar-hover);
+}
+
+.conductor-session-item.active {
+  background: var(--session-active);
+}
+
+.conductor-session-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+  width: 20px;
+  text-align: center;
+}
+
+.conductor-session-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.conductor-session-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.conductor-session-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.conductor-session-delete {
+  opacity: 0;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+
+.conductor-session-item:hover .conductor-session-delete {
+  opacity: 1;
+}
+
+.conductor-session-delete:hover {
+  background: var(--error);
+  color: #fff;
+}
+
+.conductor-session-delete svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* Empty state in sidebar */
+.conductor-sidebar-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 8px 10px;
+  text-align: center;
+}
