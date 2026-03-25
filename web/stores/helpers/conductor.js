@@ -86,6 +86,10 @@ export function openConductor(store, agentId) {
     return;
   }
 
+  // Set currentAgent BEFORE sending WS — conductor_session_created handler
+  // reads store.currentAgent to bind the conversation to this agent.
+  store.currentAgent = agentId;
+
   // Create new conductor session for this agent
   const sessionId = 'cond_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
@@ -96,24 +100,6 @@ export function openConductor(store, agentId) {
   store.sendWsMessage({
     type: 'create_conductor_session',
     sessionId,
-    agentId
-  });
-}
-
-export function createConductorSession(store, config) {
-  const sessionId = 'cond_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  const agentId = config.agentId || store.currentAgent;
-
-  store.conductorMessages[sessionId] = [];
-  store.conductorTasks[sessionId] = {};
-  store.conductorActors[sessionId] = {};
-
-  store.sendWsMessage({
-    type: 'create_conductor_session',
-    sessionId,
-    scenario: config.scenario || 'dev',
-    workDir: config.workDir,
-    name: config.name || '',
     agentId
   });
 }
@@ -196,6 +182,9 @@ export function handleConductorOutput(store, msg) {
   // ── Session lifecycle ──
 
   if (msg.type === 'conductor_session_created') {
+    // Prefer agentId from server response (echoed back), fallback to store
+    const agentId = msg.agentId || store.currentAgent;
+
     store.conductorSessions[sid] = {
       id: sid,
       scenario: msg.scenario,
@@ -216,11 +205,11 @@ export function handleConductorOutput(store, msg) {
     // Create or reuse conversation entry
     let conv = store.conversations.find(c => c.id === sid);
     if (!conv) {
-      const agent = store.agents.find(a => a.id === store.currentAgent);
+      const agent = store.agents.find(a => a.id === agentId);
       conv = {
         id: sid,
-        agentId: store.currentAgent,
-        agentName: agent?.name || store.currentAgent,
+        agentId,
+        agentName: agent?.name || agentId,
         workDir: msg.workDir,
         claudeSessionId: null,
         createdAt: Date.now(),
@@ -231,6 +220,7 @@ export function handleConductorOutput(store, msg) {
       store.conversations.push(conv);
     } else {
       conv.type = 'conductor';
+      conv.agentId = agentId;
       conv.name = msg.name || '';
     }
 
@@ -246,6 +236,9 @@ export function handleConductorOutput(store, msg) {
   }
 
   if (msg.type === 'conductor_session_restored') {
+    // Prefer agentId from server response, fallback to store
+    const agentId = msg.agentId || store.currentAgent;
+
     store.conductorSessions[sid] = {
       id: sid,
       scenario: msg.scenario,
@@ -288,11 +281,11 @@ export function handleConductorOutput(store, msg) {
     // Ensure conversation entry
     let conv = store.conversations.find(c => c.id === sid);
     if (!conv) {
-      const agent = store.agents.find(a => a.id === store.currentAgent);
+      const agent = store.agents.find(a => a.id === agentId);
       conv = {
         id: sid,
-        agentId: store.currentAgent,
-        agentName: agent?.name || store.currentAgent,
+        agentId,
+        agentName: agent?.name || agentId,
         workDir: msg.workDir,
         claudeSessionId: null,
         createdAt: Date.now(),
@@ -303,6 +296,7 @@ export function handleConductorOutput(store, msg) {
       store.conversations.push(conv);
     } else {
       conv.type = 'conductor';
+      conv.agentId = agentId;
       conv.name = msg.name || '';
     }
 

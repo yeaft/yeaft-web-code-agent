@@ -426,7 +426,6 @@ export const useChatStore = defineStore('chat', {
     // Conductor (V2 orchestrator) actions
     // =====================
     openConductor(agentId) { conductorHelpers.openConductor(this, agentId); },
-    createConductorSession(config) { conductorHelpers.createConductorSession(this, config); },
     resumeConductorSession(sessionId, agentId) { conductorHelpers.resumeConductorSession(this, sessionId, agentId); },
     sendConductorMessage(content, taskId, attachments) { conductorHelpers.sendConductorMessage(this, content, taskId, attachments); },
     sendConductorControl(action, taskId) { conductorHelpers.sendConductorControl(this, action, taskId); },
