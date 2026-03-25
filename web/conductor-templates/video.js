@@ -16,6 +16,7 @@ export default {
     { id: 'storyboarding', name: '分镜', mode: 'convergent', description: '分镜设计、视觉语言、镜头规划' },
     { id: 'prompt-assembly', name: 'Prompt', mode: 'convergent', description: '最终 AI 视频 prompt 组装' },
     { id: 'continuity-check', name: '一致性', mode: 'convergent', description: '跨片段一致性审查' },
+    { id: 'review', name: '审核', mode: 'convergent', description: '脚本/分镜/prompt 及整体方案审核' },
   ],
   personas: [
     {
