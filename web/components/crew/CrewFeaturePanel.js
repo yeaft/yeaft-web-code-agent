@@ -9,7 +9,7 @@
  *      followed by full message thread using CrewTurnRenderer.
  */
 import {
-  formatDuration, formatTime, getRoleStyle
+  formatDuration, formatTime, getRoleStyle as getRoleStyleFn
 } from './crewHelpers.js';
 import {
   shouldShowTurnDivider, getMaxRound
@@ -30,6 +30,7 @@ export default {
     expandedFeatureTaskId: { type: String, default: null },
     nowTick: { type: Number, required: true },
     icons: { type: Object, required: true },
+    roleColorMap: { type: Object, default: () => ({}) },
     getRoleDisplayName: { type: Function, default: (name) => name }
   },
   emits: ['toggle-turn', 'expand-feature', 'close-feature', 'ask-submit'],
@@ -157,6 +158,7 @@ export default {
                   :show-human-bubble="true"
                   :expanded-turns="expandedTurns"
                   :icons="icons"
+                  :role-color-map="roleColorMap"
                   :get-role-display-name="getRoleDisplayName"
                   @toggle-turn="$emit('toggle-turn', $event)"
                   @ask-submit="(rid, ans) => $emit('ask-submit', rid, ans)"
@@ -258,7 +260,9 @@ export default {
   methods: {
     formatDuration,
     formatTime,
-    getRoleStyle,
+    getRoleStyle(roleName) {
+      return getRoleStyleFn(roleName, this.roleColorMap[roleName]);
+    },
     shouldShowTurnDivider,
     getMaxRound,
 

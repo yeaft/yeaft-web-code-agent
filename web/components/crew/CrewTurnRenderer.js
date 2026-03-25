@@ -11,7 +11,7 @@
 import { renderMarkdown } from '../../utils/markdown.js';
 import { openImagePreview } from '../../utils/imagePreview.js';
 import {
-  formatTime, shortName, getRoleStyle, getImageUrl
+  formatTime, shortName, getRoleStyle as getRoleStyleFn, getImageUrl
 } from './crewHelpers.js';
 import AskCard from '../AskCard.js';
 
@@ -23,6 +23,7 @@ export default {
     showHumanBubble: { type: Boolean, default: false },
     expandedTurns: { type: Object, required: true },
     icons: { type: Object, required: true },
+    roleColorMap: { type: Object, default: () => ({}) },
     getRoleDisplayName: { type: Function, default: (name) => name }
   },
   emits: ['toggle-turn', 'ask-submit'],
@@ -109,7 +110,9 @@ export default {
   methods: {
     formatTime,
     shortName,
-    getRoleStyle,
+    getRoleStyle(roleName) {
+      return getRoleStyleFn(roleName, this.roleColorMap[roleName]);
+    },
     getImageUrl,
     mdRender: renderMarkdown,
 

@@ -44,7 +44,7 @@ export function shortName(displayName) {
   return idx > 0 ? displayName.substring(idx + 1) : displayName;
 }
 
-export function getRoleStyle(roleName) {
+export function getRoleStyle(roleName, roleIndex) {
   if (PRESET_ROLES.includes(roleName)) {
     return {
       '--role-color': `var(--crew-color-${roleName})`,
@@ -53,8 +53,9 @@ export function getRoleStyle(roleName) {
       '--role-bg-glow': `var(--crew-color-${roleName}-bg-glow)`
     };
   }
-  const hash = roleName.split('').reduce((h, c) => (h * 31 + c.charCodeAt(0)) & 0xff, 0);
-  const idx = hash % 4;
+  const idx = roleIndex != null
+    ? roleIndex % 8
+    : (roleName.split('').reduce((h, c) => (h * 31 + c.charCodeAt(0)) & 0xff, 0) % 8);
   return {
     '--role-color': `var(--crew-color-fallback-${idx})`,
     '--role-bg': `var(--crew-color-fallback-${idx}-bg)`,
