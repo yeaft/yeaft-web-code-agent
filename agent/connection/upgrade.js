@@ -17,6 +17,7 @@ const nodeBinDir = dirname(process.execPath);
 const isWin = platform() === 'win32';
 const npmPath = join(nodeBinDir, isWin ? 'npm.cmd' : 'npm');
 const pm2Path = join(nodeBinDir, isWin ? 'pm2.cmd' : 'pm2');
+const shellOpt = isWin ? { shell: true } : {};
 
 // Shared cleanup logic for restart/upgrade
 function cleanupAndExit(exitCode) {
@@ -54,7 +55,7 @@ export async function handleUpgradeAgent() {
     const pkgName = ctx.pkgName || '@yeaft/webchat-agent';
     // Check latest version (async to avoid blocking heartbeat)
     const latestVersion = await new Promise((resolve, reject) => {
-      execFile(npmPath, ['view', pkgName, 'version'], { stdio: 'pipe' }, (err, stdout) => {
+      execFile(npmPath, ['view', pkgName, 'version'], { stdio: 'pipe', ...shellOpt }, (err, stdout) => {
         if (err) reject(err); else resolve(stdout.toString().trim());
       });
     });
@@ -82,7 +83,7 @@ export async function handleUpgradeAgent() {
 
     // 判断全局安装 vs 局部安装
     const isGlobalInstall = await new Promise((resolve) => {
-      execFile(npmPath, ['prefix', '-g'], (err, stdout) => {
+      execFile(npmPath, ['prefix', '-g'], { ...shellOpt }, (err, stdout) => {
         if (err) { resolve(false); return; }
         const globalPrefix = stdout.toString().trim().replace(/\\/g, '/');
         resolve(installDir === globalPrefix || installDir === globalPrefix + '/lib');
@@ -102,7 +103,7 @@ export async function handleUpgradeAgent() {
     const isPm2 = !!process.env.pm_id;
     if (isPm2) {
       try {
-        execFileSync(pm2Path, ['delete', PM2_APP_NAME], { stdio: 'pipe' });
+        execFileSync(pm2Path, ['delete', PM2_APP_NAME], { stdio: 'pipe', ...shellOpt });
         console.log(`[Agent] PM2 app deleted to prevent auto-restart during upgrade`);
       } catch {
         console.log(`[Agent] PM2 delete skipped (app may not be registered)`);
