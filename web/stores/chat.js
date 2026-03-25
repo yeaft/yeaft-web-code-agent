@@ -426,7 +426,7 @@ export const useChatStore = defineStore('chat', {
     // =====================
     createConductorSession(config) { conductorHelpers.createConductorSession(this, config); },
     resumeConductorSession(sessionId, agentId) { conductorHelpers.resumeConductorSession(this, sessionId, agentId); },
-    sendConductorMessage(content) { conductorHelpers.sendConductorMessage(this, content); },
+    sendConductorMessage(content, taskId, attachments) { conductorHelpers.sendConductorMessage(this, content, taskId, attachments); },
     sendConductorControl(action, taskId) { conductorHelpers.sendConductorControl(this, action, taskId); },
     switchConductorWorkDir(workDir) { conductorHelpers.switchConductorWorkDir(this, workDir); },
     handleConductorOutput(msg) { conductorHelpers.handleConductorOutput(this, msg); },

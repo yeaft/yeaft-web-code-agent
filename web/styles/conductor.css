@@ -14,6 +14,11 @@
   to   { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes conductor-actor-exit {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(-6px) scale(0.95); }
+}
+
 @keyframes conductor-task-slide-in {
   from { transform: translateX(100%); }
   to   { transform: translateX(0); }
@@ -596,6 +601,12 @@
   background: var(--bg-main);
   border: 1px solid var(--border-color);
   animation: conductor-actor-enter 0.3s ease-out;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.conductor-actor-card.status-releasing {
+  animation: conductor-actor-exit 0.3s ease-in forwards;
+  pointer-events: none;
 }
 
 .conductor-actor-card.compact { padding: 3px 8px; gap: 6px; border-radius: 6px; font-size: 11px; }
