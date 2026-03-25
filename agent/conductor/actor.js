@@ -9,7 +9,6 @@
  * 复用 V1 的 createRoleQuery 模式，适配 Conductor 三层架构
  */
 import { query, Stream } from '../sdk/index.js';
-import { promises as fs } from 'fs';
 import { join } from 'path';
 import { mkdirSync } from 'fs';
 import ctx from '../context.js';
@@ -40,7 +39,7 @@ const _actorLocks = new Map();
 /**
  * 创建 Actor 实例
  *
- * 流程：生成 CLAUDE.md → 创建目录 → 写入 CLAUDE.md → 启动 Claude query → 注册
+ * 流程：生成 CLAUDE.md → 创建目录 → 启动 Claude query（appendSystemPrompt 注入）→ 注册
  *
  * @param {object} params
  * @param {string} params.personaId - persona ID
@@ -132,12 +131,8 @@ async function _createActorInner(params, instanceId) {
   const actorDir = join(taskDir, 'actors', actorDirName);
   mkdirSync(actorDir, { recursive: true });
 
-  // 3. 写入 CLAUDE.md
-  const claudemdPath = join(actorDir, 'CLAUDE.md');
-  await fs.writeFile(claudemdPath, claudemdContent, 'utf-8');
-  console.log(`[Actor] Wrote CLAUDE.md for ${instanceId} at ${claudemdPath}`);
-
-  // 4. 确定 cwd（coding actor 用 worktree，其他用 actor 目录）
+  // 3. 确定 cwd（coding actor 用 worktree，其他用 actor 目录）
+  // CLAUDE.md 通过 appendSystemPrompt 注入 SDK，不写入文件（避免双重注入）
   const actorCwd = worktreePath || actorDir;
   mkdirSync(actorCwd, { recursive: true });
 
@@ -356,6 +351,13 @@ export async function releaseActor(taskId, instanceId, options = {}) {
 
   instance.status = 'done';
   instance.activity = '已释放';
+
+  // 从 registry 移除，防止内存泄漏
+  const taskActors = actorRegistry.get(taskId);
+  if (taskActors) {
+    taskActors.delete(instanceId);
+    if (taskActors.size === 0) actorRegistry.delete(taskId);
+  }
 
   console.log(`[Actor] Released ${instanceId}${force ? ' (forced)' : ''}`);
 }

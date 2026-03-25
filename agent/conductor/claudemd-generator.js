@@ -67,9 +67,6 @@ ${section3}`.trim();
  * 生成人物基底部分
  */
 function generatePersonaBase(persona, specialty) {
-  const thinkingMode = getThinkingMode(specialty.id);
-  const thinkingLabel = thinkingMode === 'divergent' ? '发散思维' : '收敛执行';
-
   return `# 你是 ${persona.name} — 此刻你在做 ${specialty.displayName}
 
 ${persona.base}`;
@@ -140,7 +137,6 @@ function generateTaskContext(persona, specialty, ctx) {
 
   // worktree 路径和纪律规则（coding actor 专用）
   if (ctx.worktreePath) {
-    lines.push(`- 代码工作目录：${ctx.worktreePath}`);
     lines.push('');
     lines.push('## Worktree 纪律');
     lines.push(`- 代码工作目录：${ctx.worktreePath}`);

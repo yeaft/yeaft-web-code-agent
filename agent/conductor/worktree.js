@@ -9,7 +9,7 @@
  * 复用 crew/worktree.js 的 git 操作模式
  */
 import { promises as fs } from 'fs';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { execFile as execFileCb } from 'child_process';
 import { promisify } from 'util';
 
@@ -154,11 +154,13 @@ async function directoryExists(dir) {
  * 检查目录是否是 git 认识的 worktree
  */
 async function isKnownWorktree(projectDir, wtDir) {
+  const normalizedWtDir = resolve(wtDir);
   try {
     const { stdout } = await execFile('git', ['worktree', 'list', '--porcelain'], { cwd: projectDir });
     for (const line of stdout.split('\n')) {
-      if (line.startsWith('worktree ') && line.slice('worktree '.length).trim() === wtDir) {
-        return true;
+      if (line.startsWith('worktree ')) {
+        const knownPath = resolve(line.slice('worktree '.length).trim());
+        if (knownPath === normalizedWtDir) return true;
       }
     }
   } catch { /* ignore */ }

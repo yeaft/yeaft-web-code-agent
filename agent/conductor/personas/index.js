@@ -57,7 +57,7 @@ export function getScenarios() {
  * @returns {Array}
  */
 export function getAllPersonas() {
-  return allPersonas;
+  return [...allPersonas];
 }
 
 /**
