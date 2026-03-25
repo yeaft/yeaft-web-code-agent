@@ -1,13 +1,13 @@
 /**
- * ConductorChatView — Main Conductor V2 conversation page.
+ * ConductorChatView — Main Conductor V5 conversation view.
  *
+ * Reuses ChatHeader (via ChatPage parent) for consistent visual language.
  * Layout:
- *   Left:  Conductor conversation message flow
- *   Right: ConductorActivePanel (task list, 240px)
+ *   Left:  Conductor conversation message flow (chat-like)
+ *   Right: ConductorActivePanel (task list + actor status)
  *
- * Header: Current work dir (switchable) + session info
- *
- * Push-in: ConductorTaskPanel slides in from right when a task is selected
+ * Header is provided by ChatPage (ChatHeader component), same as Crew mode.
+ * ConductorChatView handles: messages + input + active panel.
  */
 import ConductorActivePanel from './ConductorActivePanel.js';
 import ConductorTaskPanel from './ConductorTaskPanel.js';
@@ -17,57 +17,20 @@ export default {
   name: 'ConductorChatView',
   components: { ConductorActivePanel, ConductorTaskPanel },
   template: `
-    <div class="conductor-chat-view">
-      <!-- Header: Work dir + session info -->
-      <div class="conductor-header">
-        <div class="conductor-header-left">
-          <span class="conductor-header-icon">🎼</span>
-          <span class="conductor-header-name">{{ sessionName }}</span>
-          <span class="conductor-header-scenario" v-if="session?.scenario">{{ session.scenario }}</span>
-        </div>
-        <div class="conductor-header-center">
-          <div class="conductor-workdir" @click="showWorkDirMenu = !showWorkDirMenu">
-            <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
-            <span class="conductor-workdir-path">{{ currentWorkDir || 'No path' }}</span>
-            <svg class="conductor-workdir-chevron" viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z"/></svg>
-          </div>
-          <!-- Work dir dropdown -->
-          <div v-if="showWorkDirMenu" class="conductor-workdir-menu" @click.stop>
-            <div class="conductor-workdir-menu-title">Switch work directory</div>
-            <div v-for="folder in folders" :key="folder"
-                 class="conductor-workdir-menu-item"
-                 :class="{ active: folder === currentWorkDir }"
-                 @click="switchWorkDir(folder)">
-              {{ folder }}
-            </div>
-            <div class="conductor-workdir-menu-input">
-              <input v-model="customWorkDir" placeholder="Custom path..." @keydown.enter="switchToCustom" />
-            </div>
-          </div>
-        </div>
-        <div class="conductor-header-right">
-          <span class="conductor-header-cost" v-if="statusInfo?.costUsd">
-            \${{ (statusInfo.costUsd || 0).toFixed(2) }}
-          </span>
-          <button class="conductor-header-panel-toggle" @click="showActivePanel = !showActivePanel"
-                  :class="{ active: showActivePanel }">
-            <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>
-            <span v-if="activeTaskCount > 0" class="conductor-header-badge">{{ activeTaskCount }}</span>
-          </button>
-        </div>
-      </div>
-
+    <div class="conductor-chat-view" :class="{ 'active-panel-visible': showActivePanel }">
       <!-- Main workspace: Chat + Active Panel -->
-      <div class="conductor-workspace" :class="{ 'hide-active-panel': !showActivePanel, 'task-panel-open': !!selectedTaskId }">
-        <!-- Mobile overlay -->
-        <div class="conductor-mobile-overlay" v-if="showActivePanel && isMobile" @click="showActivePanel = false"></div>
+      <div class="conductor-workspace" :class="{ 'task-panel-open': !!selectedTaskId }">
+        <!-- Mobile overlay for active panel -->
+        <div class="conductor-mobile-overlay" v-if="showActivePanel && isMobile" @click="store.conductorActivePanelVisible = false"></div>
 
         <!-- Center: Chat Messages -->
         <div class="conductor-panel-center">
           <div class="conductor-messages" ref="messagesRef" @scroll="onScroll">
             <!-- Empty state -->
             <div v-if="conductorMessages.length === 0" class="conductor-empty">
-              <div class="conductor-empty-icon">🎼</div>
+              <div class="conductor-empty-icon">
+                <svg viewBox="0 0 24 24" width="40" height="40"><path fill="var(--text-muted)" d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/></svg>
+              </div>
               <div class="conductor-empty-text">Conductor is ready</div>
               <div class="conductor-empty-hint">Describe what you need, and I'll create tasks and assign actors</div>
             </div>
@@ -93,7 +56,7 @@ export default {
 
               <!-- Tool use (compact) -->
               <div v-else-if="msg.type === 'tool'" class="conductor-msg conductor-msg-tool">
-                <span class="conductor-msg-tool-icon">⚡</span>
+                <span class="conductor-msg-tool-icon">&#9889;</span>
                 <span class="conductor-msg-tool-name">{{ msg.toolName }}</span>
               </div>
 
@@ -105,36 +68,34 @@ export default {
                   <span v-else class="conductor-msg-role-label">{{ roleLabel(msg) }}</span>
                   <span v-if="msg.specialty" class="conductor-msg-specialty">{{ msg.specialty }}</span>
                   <span v-if="msg.taskId" class="conductor-msg-task-link" @click="openTask(msg.taskId)">
-                    → {{ getTaskTitle(msg.taskId) }}
+                    &rarr; {{ getTaskTitle(msg.taskId) }}
                   </span>
                 </div>
                 <div class="conductor-msg-text" v-html="renderMarkdown(msg.content)"></div>
-                <span v-if="msg._streaming" class="conductor-typing-dots">
-                  <span class="conductor-typing-dot"></span>
-                  <span class="conductor-typing-dot"></span>
-                  <span class="conductor-typing-dot"></span>
+                <span v-if="msg._streaming" class="typing-indicator conductor-streaming-dots">
+                  <span></span><span></span><span></span>
                 </span>
               </div>
             </template>
 
-            <!-- Typing indicator -->
+            <!-- Waiting for response indicator -->
             <div v-if="isWaitingResponse" class="typing-indicator">
               <span></span><span></span><span></span>
             </div>
 
-            <!-- Scroll to bottom -->
+            <!-- Scroll to bottom fab -->
             <div class="conductor-scroll-bottom"
                  :class="{ 'is-hidden': isAtBottom }"
                  @click="scrollToBottom">
-              ↓ Latest
+              &#8595; Latest
             </div>
           </div>
 
-          <!-- Input -->
+          <!-- Input area — conductor-specific (sends via store.sendConductorMessage) -->
           <div class="conductor-input-area">
-            <div class="conductor-input-hints" v-if="statusInfo">
+            <div class="conductor-input-hints" v-if="activeTaskCount > 0 || activeActorCount > 0">
               <span class="conductor-hint-meta" v-if="activeTaskCount > 0">{{ activeTaskCount }} tasks</span>
-              <span class="conductor-hint-sep" v-if="activeTaskCount > 0">&middot;</span>
+              <span class="conductor-hint-sep" v-if="activeTaskCount > 0 && activeActorCount > 0">&middot;</span>
               <span class="conductor-hint-meta" v-if="activeActorCount > 0">{{ activeActorCount }} actors</span>
             </div>
             <div class="conductor-input-wrapper">
@@ -176,9 +137,6 @@ export default {
           @send-message="sendTaskMessage"
         />
       </div>
-
-      <!-- Click-away for workdir menu -->
-      <div v-if="showWorkDirMenu" class="conductor-backdrop" @click="showWorkDirMenu = false"></div>
     </div>
   `,
 
@@ -191,25 +149,18 @@ export default {
     return {
       inputText: '',
       selectedTaskId: null,
-      showActivePanel: true,
-      showWorkDirMenu: false,
-      customWorkDir: '',
       isAtBottom: true,
-      isMobile: window.innerWidth < 768,
-      folders: []
+      isMobile: window.innerWidth < 768
     };
   },
 
   computed: {
+    showActivePanel() {
+      return this.store.conductorActivePanelVisible;
+    },
     session() {
       const sid = this.store.currentConversation;
       return sid ? this.store.conductorSessions[sid] : null;
-    },
-    sessionName() {
-      return this.session?.name || 'Conductor';
-    },
-    currentWorkDir() {
-      return this.session?.currentWorkDir || this.store.currentWorkDir || '';
     },
     conductorMessages() {
       const sid = this.store.currentConversation;
@@ -225,11 +176,6 @@ export default {
       const sid = this.store.currentConversation;
       if (!sid) return {};
       return this.store.conductorActors[sid] || {};
-    },
-    statusInfo() {
-      const sid = this.store.currentConversation;
-      if (!sid) return null;
-      return this.store.conductorStatuses[sid] || null;
     },
     activeTaskCount() {
       return Object.values(this.currentTasks).filter(
@@ -296,21 +242,13 @@ export default {
       this.store.sendConductorMessage(text);
       this.inputText = '';
       this.isAtBottom = true;
-      this.$nextTick(() => this.scrollToBottom());
+      this.$nextTick(() => {
+        this.scrollToBottom();
+        this.autoResize();
+      });
     },
     sendTaskMessage(text, taskId) {
       this.store.sendConductorMessage(text, taskId);
-    },
-    switchWorkDir(folder) {
-      this.store.switchConductorWorkDir(folder);
-      this.showWorkDirMenu = false;
-    },
-    switchToCustom() {
-      if (this.customWorkDir.trim()) {
-        this.store.switchConductorWorkDir(this.customWorkDir.trim());
-        this.customWorkDir = '';
-        this.showWorkDirMenu = false;
-      }
     },
     handleKeydown(e) {
       if (e.key === 'Enter' && !e.shiftKey) {
@@ -336,16 +274,11 @@ export default {
         el.scrollTop = el.scrollHeight;
         this.isAtBottom = true;
       }
-    },
-    async loadFolders() {
-      await this.store.listFolders();
-      this.folders = this.store.folders.map(f => f.path || f);
     }
   },
 
   mounted() {
     this.scrollToBottom();
-    this.loadFolders();
     this._resizeHandler = () => { this.isMobile = window.innerWidth < 768; };
     window.addEventListener('resize', this._resizeHandler);
   },

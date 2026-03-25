@@ -136,6 +136,7 @@ export const useChatStore = defineStore('chat', {
     conductorTasks: {},           // { [sessionId]: { [taskId]: { id, title, status, plan, actors, progress } } }
     conductorActors: {},          // { [sessionId]: { [actorKey]: { key, persona, specialty, taskId, status, spawnedAt } } }
     conductorStatuses: {},        // { [sessionId]: { status, costUsd, activeActors, activeTasks } }
+    conductorActivePanelVisible: true,  // Active Panel toggle (shared across sessions)
   }),
 
   getters: {
@@ -424,6 +425,7 @@ export const useChatStore = defineStore('chat', {
     // =====================
     // Conductor (V2 orchestrator) actions
     // =====================
+    openConductor(agentId) { conductorHelpers.openConductor(this, agentId); },
     createConductorSession(config) { conductorHelpers.createConductorSession(this, config); },
     resumeConductorSession(sessionId, agentId) { conductorHelpers.resumeConductorSession(this, sessionId, agentId); },
     sendConductorMessage(content, taskId, attachments) { conductorHelpers.sendConductorMessage(this, content, taskId, attachments); },

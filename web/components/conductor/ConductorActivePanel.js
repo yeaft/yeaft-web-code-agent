@@ -47,6 +47,12 @@ export default {
               </span>
             </div>
 
+            <!-- workDir + scenario meta -->
+            <div class="conductor-task-card-meta" v-if="task.workDir || task.scenario">
+              <span class="conductor-task-card-workdir" v-if="task.workDir" :title="task.workDir">{{ shortenPath(task.workDir) }}</span>
+              <span class="conductor-task-card-scenario" v-if="task.scenario">{{ task.scenario }}</span>
+            </div>
+
             <!-- Progress bar -->
             <div class="conductor-task-card-bar">
               <div class="conductor-task-card-bar-fill"
@@ -95,6 +101,13 @@ export default {
     }
   },
   methods: {
+    shortenPath(path) {
+      if (!path) return '';
+      const parts = path.replace(/\\/g, '/').split('/');
+      // Show last 2 segments: parent/project
+      if (parts.length <= 2) return path;
+      return '~/' + parts.slice(-2).join('/');
+    },
     taskActors(taskId) {
       return Object.values(this.actors || {}).filter(a => a.taskId === taskId);
     },

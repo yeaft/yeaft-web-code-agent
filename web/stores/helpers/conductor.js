@@ -66,6 +66,40 @@ function ensureMessages(store, sessionId) {
 
 // ─── Public actions ──────────────────────────────────────
 
+/**
+ * openConductor(agentId) — 1:1 model entry point.
+ *
+ * Each Agent has exactly ONE Conductor. Clicking the Conductor button
+ * in the Agent dropdown either resumes the existing Conductor conversation
+ * for that Agent, or creates a new one (no scenario selection — scenario
+ * is per-task, not per-Conductor).
+ */
+export function openConductor(store, agentId) {
+  // Check if a conductor conversation already exists for this agent
+  const existing = store.conversations.find(
+    c => c.type === 'conductor' && c.agentId === agentId
+  );
+
+  if (existing) {
+    // Resume — switch to existing conductor conversation
+    store.selectConversation(existing.id, agentId);
+    return;
+  }
+
+  // Create new conductor session for this agent
+  const sessionId = 'cond_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+  store.conductorMessages[sessionId] = [];
+  store.conductorTasks[sessionId] = {};
+  store.conductorActors[sessionId] = {};
+
+  store.sendWsMessage({
+    type: 'create_conductor_session',
+    sessionId,
+    agentId
+  });
+}
+
 export function createConductorSession(store, config) {
   const sessionId = 'cond_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const agentId = config.agentId || store.currentAgent;
