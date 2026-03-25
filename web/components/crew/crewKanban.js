@@ -48,16 +48,19 @@ export function computeCompletedTaskIds(doneTasks, activeTasks) {
   const activeTaskIdSet = new Set(activeTasks.map(at => at.id));
   for (const task of doneTasks) {
     if (task.taskId && activeTaskIdSet.has(task.taskId)) {
+      // Primary: exact taskId match
       ids.add(task.taskId);
-    } else {
-      const t = task.text.toLowerCase();
+    } else if (!task.taskId) {
+      // Fallback: exact title match only (no substring matching to avoid false positives)
+      const t = task.text.toLowerCase().trim();
+      if (!t) continue;
       for (const at of activeTasks) {
-        const title = at.title.toLowerCase();
-        if (t.includes(title) || title.includes(t)) {
+        if (t === at.title.toLowerCase().trim()) {
           ids.add(at.id);
         }
       }
     }
+    // If task has a taskId but it doesn't match any active task, skip it entirely
   }
   return ids;
 }

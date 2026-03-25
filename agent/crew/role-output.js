@@ -127,7 +127,8 @@ export async function processRoleOutput(session, roleName, roleQuery, roleState)
         // 决策者 turn 完成：检测 TASKS block 中新完成的任务
         const roleConfig = session.roles.get(roleName);
         if (roleConfig?.isDecisionMaker) {
-          const nowCompleted = parseCompletedTasks(roleState.accumulatedText);
+          const knownTaskIds = Array.from(session.features.keys());
+          const nowCompleted = parseCompletedTasks(roleState.accumulatedText, knownTaskIds);
           if (nowCompleted.size > 0) {
             const prev = session._completedTaskIds || new Set();
             const newlyDone = [];
