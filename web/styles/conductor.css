@@ -39,179 +39,16 @@
   100% { transform: translateX(200%); }
 }
 
-/* --- ConductorChatView --- */
+/* --- ConductorChatView (V5 — uses ChatHeader, no custom header) --- */
 
 .conductor-chat-view {
   display: flex;
   flex-direction: column;
-  height: 100%;
-  width: 100%;
-  overflow: hidden;
-  position: relative;
-}
-
-/* Header */
-.conductor-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--border-color);
-  background: var(--bg-sidebar);
-  gap: 12px;
-  min-height: 44px;
-  flex-shrink: 0;
-}
-
-.conductor-header-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.conductor-header-icon { font-size: 18px; flex-shrink: 0; }
-
-.conductor-header-name {
-  font-weight: 600;
-  font-size: 14px;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.conductor-header-scenario {
-  font-size: 12px;
-  color: var(--text-muted);
-  padding: 1px 6px;
-  background: var(--sidebar-hover);
-  border-radius: 4px;
-  white-space: nowrap;
-}
-
-.conductor-header-center {
   flex: 1;
-  position: relative;
-  display: flex;
-  justify-content: center;
-}
-
-.conductor-workdir {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-  padding: 4px 10px;
-  border-radius: 6px;
-  transition: background 0.15s;
-  max-width: 350px;
-}
-
-.conductor-workdir:hover { background: var(--sidebar-hover); }
-.conductor-workdir svg { color: var(--text-muted); flex-shrink: 0; }
-
-.conductor-workdir-path {
-  font-size: 12px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.conductor-workdir-chevron { color: var(--text-muted); flex-shrink: 0; }
-
-/* Workdir dropdown */
-.conductor-workdir-menu {
-  position: absolute;
-  top: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  background: var(--bg-main);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 6px 0;
-  min-width: 280px;
-  max-height: 320px;
-  overflow-y: auto;
-  z-index: 50;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
-}
-
-.conductor-workdir-menu-title {
-  font-size: 11px;
-  color: var(--text-muted);
-  padding: 4px 12px 6px;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-}
-
-.conductor-workdir-menu-item {
-  padding: 6px 12px;
-  font-size: 13px;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: background 0.1s;
-}
-
-.conductor-workdir-menu-item:hover { background: var(--sidebar-hover); }
-.conductor-workdir-menu-item.active { color: var(--crew-color-primary, #4a9eff); font-weight: 500; }
-
-.conductor-workdir-menu-input {
-  padding: 6px 12px 4px;
-  border-top: 1px solid var(--border-color);
-  margin-top: 4px;
-}
-
-.conductor-workdir-menu-input input {
   width: 100%;
-  background: var(--bg-input, var(--bg-sidebar));
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  padding: 6px 8px;
-  font-size: 12px;
-  color: var(--text-primary);
-  outline: none;
-}
-
-.conductor-workdir-menu-input input:focus { border-color: var(--crew-color-primary, #4a9eff); }
-
-.conductor-header-right { display: flex; align-items: center; gap: 8px; }
-
-.conductor-header-cost { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
-
-.conductor-header-panel-toggle {
-  background: none;
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  padding: 4px 8px;
-  cursor: pointer;
-  color: var(--text-secondary);
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  transition: background 0.15s, border-color 0.15s;
+  overflow: hidden;
   position: relative;
 }
-
-.conductor-header-panel-toggle:hover { background: var(--sidebar-hover); }
-.conductor-header-panel-toggle.active { color: var(--crew-color-primary, #4a9eff); border-color: var(--crew-color-primary, #4a9eff); }
-
-.conductor-header-badge {
-  background: var(--crew-color-primary, #4a9eff);
-  color: #fff;
-  font-size: 10px;
-  font-weight: 600;
-  min-width: 16px;
-  height: 16px;
-  border-radius: 8px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 4px;
-}
-
-.conductor-backdrop { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 40; }
 
 /* --- Workspace layout --- */
 
@@ -665,11 +502,64 @@
 .conductor-messages .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
 .conductor-messages .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
 
+/* --- Task card meta (workDir + scenario) --- */
+
+.conductor-task-card-meta {
+  display: flex; align-items: center; gap: 6px;
+  margin-bottom: 6px;
+}
+
+.conductor-task-card-workdir {
+  font-size: 11px; color: var(--text-muted);
+  font-family: monospace;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 140px;
+}
+
+.conductor-task-card-scenario {
+  font-size: 10px; color: var(--text-secondary);
+  background: var(--sidebar-hover);
+  padding: 1px 6px; border-radius: 8px;
+  white-space: nowrap;
+}
+
+/* --- Agent dropdown Conductor button --- */
+
+.agent-dropdown-conductor-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.agent-dropdown-conductor-btn:hover {
+  background: var(--sidebar-hover);
+  border-color: var(--text-muted);
+  color: #ff9800;
+}
+
+.agent-dropdown-conductor-btn:disabled {
+  opacity: 0.3; cursor: not-allowed;
+}
+
+/* --- ChatHeader conductor actions --- */
+
+.conductor-header-actions {
+  display: flex; align-items: center; gap: 8px;
+}
+
+.conductor-cost-label {
+  font-size: 12px; color: var(--text-muted); font-family: monospace;
+}
+
 /* --- Mobile responsive --- */
 
 @media (max-width: 768px) {
-  .conductor-header { flex-wrap: wrap; gap: 6px; padding: 6px 12px; }
-  .conductor-header-center { order: 3; flex-basis: 100%; justify-content: flex-start; }
   .conductor-msg-human { max-width: 85%; }
   .conductor-msg-assistant { max-width: 95%; }
 
@@ -691,6 +581,4 @@
 
 @media (max-width: 480px) {
   .conductor-active-panel { width: 200px; min-width: 200px; }
-  .conductor-header-name { font-size: 13px; }
-  .conductor-header-cost { display: none; }
 }

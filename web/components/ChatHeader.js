@@ -125,6 +125,18 @@ export default {
           </svg>
         </button>
       </div>
+      <div class="conductor-header-actions" v-if="store.currentConversationIsConductor">
+        <span class="conductor-cost-label" v-if="conductorCost">
+          \${{ conductorCost }}
+        </span>
+        <button class="crew-header-nav-btn"
+                :class="{ active: store.conductorActivePanelVisible }"
+                @click="store.conductorActivePanelVisible = !store.conductorActivePanelVisible"
+                title="Tasks">
+          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>
+          <span v-if="conductorActiveTaskCount > 0" class="nav-badge">{{ conductorActiveTaskCount }}</span>
+        </button>
+      </div>
     </header>
   `,
   setup() {
@@ -134,6 +146,12 @@ export default {
     const headerTitle = Vue.computed(() => {
       if (!store.currentConversation) {
         return 'Claude Web Chat';
+      }
+
+      // Conductor conversation
+      if (store.currentConversationIsConductor) {
+        const agent = store.agents.find(a => a.id === store.currentAgent);
+        return (agent?.name || 'Agent') + ' · Conductor';
       }
 
       // Crew conversation — use renamed session name if available
@@ -341,6 +359,24 @@ export default {
       document.removeEventListener('click', closeMcpOnOutsideClick);
     });
 
-    return { store, headerTitle, folderPath, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, hasStreamingRoles, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, openCrewEdit, onCrewPanelToggle, isCrewPanelActive, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel };
+    // Conductor header data
+    const conductorCost = Vue.computed(() => {
+      const sid = store.currentConversation;
+      if (!sid || !store.currentConversationIsConductor) return null;
+      const status = store.conductorStatuses[sid];
+      return status?.costUsd ? status.costUsd.toFixed(2) : null;
+    });
+
+    const conductorActiveTaskCount = Vue.computed(() => {
+      const sid = store.currentConversation;
+      if (!sid) return 0;
+      const tasks = store.conductorTasks[sid];
+      if (!tasks) return 0;
+      return Object.values(tasks).filter(
+        t => t.status === 'active' || t.status === 'executing' || t.status === 'planning'
+      ).length;
+    });
+
+    return { store, headerTitle, folderPath, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, hasStreamingRoles, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, openCrewEdit, onCrewPanelToggle, isCrewPanelActive, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel, conductorCost, conductorActiveTaskCount };
   }
 };
