@@ -1,13 +1,14 @@
 /**
  * CrewRolePanel — Left sidebar: Role cards and action buttons.
  */
-import { ICONS, getRoleStyle } from './crewHelpers.js';
+import { ICONS, getRoleStyle as getRoleStyleFn } from './crewHelpers.js';
 
 export default {
   name: 'CrewRolePanel',
   props: {
     store: { type: Object, required: true },
     sessionRoles: { type: Array, required: true },
+    roleColorMap: { type: Object, default: () => ({}) },
     mode: { type: String, default: 'crew' }
   },
   emits: ['scroll-to-role', 'control-action', 'clear-role', 'abort-role', 'show-add-role'],
@@ -59,7 +60,9 @@ export default {
     icons() { return ICONS; }
   },
   methods: {
-    getRoleStyle,
+    getRoleStyle(roleName) {
+      return getRoleStyleFn(roleName, this.roleColorMap[roleName]);
+    },
 
     isRoleStreaming(roleName) {
       return this.store.currentCrewStatus?.activeRoles?.includes(roleName);

@@ -14,7 +14,7 @@
  */
 import { clearMarkdownCache } from '../utils/markdown.js';
 import {
-  ICONS, formatTokens
+  ICONS, formatTokens, PRESET_ROLES
 } from './crew/crewHelpers.js';
 import {
   appendToSegments, rebuildBlocksFromSegments,
@@ -44,6 +44,7 @@ export default {
         <crew-role-panel
           :store="store"
           :session-roles="sessionRoles"
+          :role-color-map="roleColorMap"
           @scroll-to-role="scrollToRoleLatest"
           @control-action="controlAction"
           @clear-role="clearRole"
@@ -90,6 +91,7 @@ export default {
                 :show-human-bubble="true"
                 :expanded-turns="expandedTurns"
                 :icons="icons"
+                :role-color-map="roleColorMap"
                 :get-role-display-name="getRoleDisplayName"
                 @toggle-turn="toggleTurn"
                 @ask-submit="onAskSubmit"
@@ -214,6 +216,7 @@ export default {
           :expanded-feature-task-id="expandedFeatureTaskId"
           :now-tick="nowTick"
           :icons="icons"
+          :role-color-map="roleColorMap"
           :get-role-display-name="getRoleDisplayName"
           @toggle-turn="toggleTurn"
           @expand-feature="expandFeature"
@@ -383,6 +386,18 @@ export default {
     },
     sessionRoles() {
       return this.store.currentCrewSession?.roles || [];
+    },
+    roleColorMap() {
+      const map = {};
+      let fbIndex = 0;
+      for (const role of this.sessionRoles) {
+        if (PRESET_ROLES.includes(role.name)) {
+          map[role.name] = null;
+        } else {
+          map[role.name] = fbIndex++;
+        }
+      }
+      return map;
     },
     featureKanban() {
       return buildFeatureKanban(
