@@ -92,16 +92,53 @@ export async function readTaskFile(session, taskId) {
 }
 
 /**
- * 从 TASKS block 文本中提取已完成任务的 taskId 集合
+ * 从文本中提取已完成任务的 taskId 集合。
+ *
+ * Primary: parse TASKS block (---TASKS--- / ---END_TASKS---) for checked items with #taskId.
+ * Fallback: when no TASKS block is found AND knownTaskIds are provided,
+ *   scan the full text for known taskId + completion keyword combinations.
+ *   This handles cases where the PM mentions task completion in prose without
+ *   emitting a formal TASKS block.
+ *
+ * @param {string} text - accumulated role output text
+ * @param {string[]} [knownTaskIds] - list of known task IDs to search for in fallback mode
+ * @returns {Set<string>} completed task IDs
  */
-export function parseCompletedTasks(text) {
+export function parseCompletedTasks(text, knownTaskIds) {
   const ids = new Set();
+
+  // Primary: TASKS block parsing
   const match = text.match(/---TASKS---([\s\S]*?)---END_TASKS---/);
-  if (!match) return ids;
-  for (const line of match[1].split('\n')) {
-    const m = line.match(/^-\s*\[[xX]\]\s*.+#(\S+)/);
-    if (m) ids.add(m[1]);
+  if (match) {
+    for (const line of match[1].split('\n')) {
+      const m = line.match(/^-\s*\[[xX]\]\s*.+#(\S+)/);
+      if (m) ids.add(m[1]);
+    }
+    return ids;
   }
+
+  // Fallback: scan plain text for known taskId + completion keywords
+  if (!knownTaskIds || knownTaskIds.length === 0) return ids;
+
+  const completionPatterns = [
+    /已完成/, /完成/, /已合并/, /合并/, /DONE/, /DONE_MERGED/, /MERGED/,
+    /已关闭/, /关闭/, /✅/, /通过/, /passed/i, /merged/i, /completed/i
+  ];
+
+  for (const taskId of knownTaskIds) {
+    // Search for lines/sentences containing the taskId
+    const escaped = taskId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`^.*${escaped}.*$`, 'gm');
+    let lineMatch;
+    while ((lineMatch = re.exec(text)) !== null) {
+      const line = lineMatch[0];
+      if (completionPatterns.some(p => p.test(line))) {
+        ids.add(taskId);
+        break;
+      }
+    }
+  }
+
   return ids;
 }
 
