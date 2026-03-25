@@ -1,14 +1,16 @@
 /**
- * Conductor — UI 消息辅助函数
+ * Conductor — UI Message Helpers (V5)
  *
- * 与 crew/ui-messages.js 结构一致，但用 conductor_ 前缀的消息类型。
- * 核心职责：向 server 发送 WebSocket 消息，维护 uiMessages 持久化列表。
+ * Sends WebSocket messages to server/frontend.
+ * Maintains uiMessages persistence list on the conductor instance.
+ *
+ * No sessionId — Conductor is a singleton per Agent.
  */
 import ctx from '../context.js';
-import { upsertConductorIndex, saveSessionMeta } from './persistence.js';
+import { saveConductorMeta } from './persistence.js';
 
 /**
- * 发送 conductor 消息到 server（透传到 Web 前端）
+ * Send conductor message to server (forwarded to Web frontend)
  */
 export function sendConductorMessage(msg) {
   if (ctx.sendToServer) {
@@ -17,19 +19,18 @@ export function sendConductorMessage(msg) {
 }
 
 /**
- * 发送 Conductor Claude 的输出到前端
+ * Send Conductor Claude output to frontend
  * outputType: 'text' | 'tool_use' | 'tool_result' | 'system' | 'task_created' | 'task_forwarded'
  */
-export function sendConductorOutput(session, outputType, rawMessage, extra = {}) {
+export function sendConductorOutput(conductor, outputType, rawMessage, extra = {}) {
   sendConductorMessage({
     type: 'conductor_output',
-    sessionId: session.id,
     outputType,
     data: rawMessage,
     ...extra
   });
 
-  // 记录精简 UI 消息
+  // Record trimmed UI messages
   if (outputType === 'text') {
     const content = rawMessage?.message?.content;
     let text = '';
@@ -39,10 +40,9 @@ export function sendConductorOutput(session, outputType, rawMessage, extra = {})
       text = content.filter(b => b.type === 'text').map(b => b.text).join('');
     }
     if (!text) return;
-    // 反向查找 streaming 消息
     let found = false;
-    for (let i = session.uiMessages.length - 1; i >= 0; i--) {
-      const msg = session.uiMessages[i];
+    for (let i = conductor.uiMessages.length - 1; i >= 0; i--) {
+      const msg = conductor.uiMessages[i];
       if (msg.source === 'conductor' && msg.type === 'text' && msg._streaming) {
         msg.content += text;
         found = true;
@@ -50,7 +50,7 @@ export function sendConductorOutput(session, outputType, rawMessage, extra = {})
       }
     }
     if (!found) {
-      session.uiMessages.push({
+      conductor.uiMessages.push({
         source: 'conductor', type: 'text', content: text,
         _streaming: true, timestamp: Date.now()
       });
@@ -61,25 +61,25 @@ export function sendConductorOutput(session, outputType, rawMessage, extra = {})
     if (typeof content === 'string') text = content;
     else if (Array.isArray(content)) text = content.filter(b => b.type === 'text').map(b => b.text).join('');
     if (!text) return;
-    session.uiMessages.push({
+    conductor.uiMessages.push({
       source: 'conductor', type: 'system', content: text, timestamp: Date.now()
     });
   } else if (outputType === 'task_created') {
-    session.uiMessages.push({
+    conductor.uiMessages.push({
       source: 'conductor', type: 'task_created',
       taskId: extra.taskId, taskTitle: extra.taskTitle,
       content: `Created task: ${extra.taskTitle}`,
       timestamp: Date.now()
     });
   } else if (outputType === 'task_forwarded') {
-    session.uiMessages.push({
+    conductor.uiMessages.push({
       source: 'conductor', type: 'task_forwarded',
       taskId: extra.taskId,
       content: `Forwarded message to task: ${extra.taskId}`,
       timestamp: Date.now()
     });
   } else if (outputType === 'tool_use') {
-    endConductorStreaming(session);
+    endConductorStreaming(conductor);
     const content = rawMessage?.message?.content;
     if (Array.isArray(content)) {
       for (const block of content) {
@@ -89,7 +89,7 @@ export function sendConductorOutput(session, outputType, rawMessage, extra = {})
           if (input.file_path) trimmedInput.file_path = input.file_path;
           if (input.command) trimmedInput.command = input.command.substring(0, 200);
           if (input.pattern) trimmedInput.pattern = input.pattern;
-          session.uiMessages.push({
+          conductor.uiMessages.push({
             source: 'conductor', type: 'tool',
             toolName: block.name, toolId: block.id,
             toolInput: Object.keys(trimmedInput).length > 0 ? trimmedInput : null,
@@ -103,9 +103,9 @@ export function sendConductorOutput(session, outputType, rawMessage, extra = {})
   } else if (outputType === 'tool_result') {
     const toolId = rawMessage?.message?.tool_use_id;
     if (toolId) {
-      for (let i = session.uiMessages.length - 1; i >= 0; i--) {
-        if (session.uiMessages[i].type === 'tool' && session.uiMessages[i].toolId === toolId) {
-          session.uiMessages[i].hasResult = true;
+      for (let i = conductor.uiMessages.length - 1; i >= 0; i--) {
+        if (conductor.uiMessages[i].type === 'tool' && conductor.uiMessages[i].toolId === toolId) {
+          conductor.uiMessages[i].hasResult = true;
           break;
         }
       }
@@ -114,56 +114,57 @@ export function sendConductorOutput(session, outputType, rawMessage, extra = {})
 }
 
 /**
- * 结束 Conductor 的 streaming 消息
+ * End Conductor streaming message
  */
-export function endConductorStreaming(session) {
-  for (let i = session.uiMessages.length - 1; i >= 0; i--) {
-    if (session.uiMessages[i].source === 'conductor' && session.uiMessages[i]._streaming) {
-      delete session.uiMessages[i]._streaming;
+export function endConductorStreaming(conductor) {
+  for (let i = conductor.uiMessages.length - 1; i >= 0; i--) {
+    if (conductor.uiMessages[i].source === 'conductor' && conductor.uiMessages[i]._streaming) {
+      delete conductor.uiMessages[i]._streaming;
       break;
     }
   }
 }
 
 /**
- * 记录用户消息到 uiMessages
+ * Record user message to uiMessages
  */
-export function recordUserMessage(session, content) {
-  session.uiMessages.push({
+export function recordUserMessage(conductor, content) {
+  conductor.uiMessages.push({
     source: 'user', type: 'text', content,
     timestamp: Date.now()
   });
 }
 
 /**
- * 发送 session 状态更新到前端
+ * Send conductor status update to frontend
  */
-export function sendStatusUpdate(session) {
-  const tasks = Array.from(session.tasks.values()).map(t => ({
-    taskId: t.taskId,
-    title: t.title,
-    workDir: t.workDir,
-    status: t.status,
-    phase: t.phase,
-    progress: t.progress,
-    activeActors: t.activeActors || [],
-    createdAt: t.createdAt,
-    updatedAt: t.updatedAt
-  }));
+export function sendStatusUpdate(conductor) {
+  const tasks = {};
+  for (const [taskId, t] of conductor.tasks) {
+    tasks[taskId] = {
+      taskId: t.taskId,
+      title: t.title,
+      workDir: t.workDir,
+      scenario: t.scenario,
+      status: t.status,
+      activeActors: t.activeActors || [],
+      currentStep: t.currentStep || '',
+      lastUpdate: t.lastUpdate || t.updatedAt
+    };
+  }
 
   sendConductorMessage({
     type: 'conductor_status',
-    sessionId: session.id,
-    status: session.status,
-    workDir: session.workDir,
+    status: conductor.status,
     tasks,
-    costUsd: session.costUsd,
-    totalInputTokens: session.totalInputTokens,
-    totalOutputTokens: session.totalOutputTokens,
-    activeClaudes: session.activeClaudes || 0
+    costUsd: conductor.costUsd,
+    totalInputTokens: conductor.totalInputTokens,
+    totalOutputTokens: conductor.totalOutputTokens,
+    activeClaudes: conductor.activeClaudes || 0
   });
 
-  // 异步持久化
-  upsertConductorIndex(session).catch(e => console.warn('[Conductor] Failed to update index:', e.message));
-  saveSessionMeta(session).catch(e => console.warn('[Conductor] Failed to save meta:', e.message));
+  // Async persist
+  saveConductorMeta(conductor).catch(e =>
+    console.warn('[Conductor] Failed to save meta:', e.message)
+  );
 }

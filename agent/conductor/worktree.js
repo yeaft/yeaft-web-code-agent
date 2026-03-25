@@ -1,12 +1,12 @@
 /**
- * Conductor — Worktree 管理
+ * Conductor — Worktree Management (V5)
  *
- * Conductor 的 worktree 策略与 Crew V1 不同：
- * - Crew V1: 每个 dev group 一个 worktree
- * - Conductor: 每个并行执行线程(thread) 一个 worktree
+ * V5 strategy: each task gets ONE worktree at creation time.
+ * Path: {workDir}/.conductor/task-N/worktree/
  *
- * worktree 位于 .conductor/tasks/task-N/worktrees/thread-N/
- * 复用 crew/worktree.js 的 git 操作模式
+ * This prevents file conflicts when multiple tasks work on the same project.
+ * - Read-write actors (coding/testing/review) → cwd = worktree
+ * - Read-only actors (planning/discussion/design) → cwd = {workDir}
  */
 import { promises as fs } from 'fs';
 import { join, resolve } from 'path';
@@ -16,117 +16,117 @@ import { promisify } from 'util';
 const execFile = promisify(execFileCb);
 
 /**
- * 为 task 的执行线程创建 worktree
+ * Create a worktree for a task.
+ * Called at task creation time.
  *
- * @param {string} projectDir - 主项目目录（git 仓库根目录）
- * @param {string} taskDir - task 目录路径 (.conductor/tasks/task-N)
- * @param {string} threadId - 线程 ID (e.g. 't1', 't2')
+ * @param {string} workDir - Project root directory (git repo root)
+ * @param {string} taskId - Task ID (e.g. 'task-m1234-abcd')
+ * @param {string} taskDir - Full task directory path ({workDir}/.conductor/{taskId})
  * @param {object} [options]
- * @param {string} [options.baseBranch='HEAD'] - 基于哪个 ref 创建
- * @returns {Promise<string>} worktree 路径
+ * @param {string} [options.baseBranch='HEAD'] - Base ref for the worktree
+ * @returns {Promise<string>} worktree path
  */
-export async function createThreadWorktree(projectDir, taskDir, threadId, options = {}) {
+export async function createTaskWorktree(workDir, taskId, taskDir, options = {}) {
   const { baseBranch = 'HEAD' } = options;
 
-  const worktreeBase = join(taskDir, 'worktrees');
-  await fs.mkdir(worktreeBase, { recursive: true });
+  const wtDir = join(taskDir, 'worktree');
+  const branch = `conductor/${taskId}`;
 
-  const wtDir = join(worktreeBase, threadId);
-  const branch = `conductor/${extractTaskId(taskDir)}-${threadId}`;
-
-  // 检查是否已存在
+  // Check if worktree already exists
   const exists = await directoryExists(wtDir);
   if (exists) {
-    // 检查 git 是否认识它
-    const known = await isKnownWorktree(projectDir, wtDir);
+    const known = await isKnownWorktree(workDir, wtDir);
     if (known) {
       console.log(`[Conductor/Worktree] Already exists: ${wtDir}`);
       return wtDir;
     }
-    // 孤立目录，清理后重建
+    // Orphaned directory, clean up and recreate
     console.warn(`[Conductor/Worktree] Orphaned dir, removing: ${wtDir}`);
     await fs.rm(wtDir, { recursive: true, force: true }).catch(() => {});
   }
 
+  // Check if this is a git repo
+  const isGitRepo = await directoryExists(join(workDir, '.git'));
+  if (!isGitRepo) {
+    // Not a git repo — just create a regular directory (no worktree isolation possible)
+    console.warn(`[Conductor/Worktree] ${workDir} is not a git repo, creating plain directory`);
+    await fs.mkdir(wtDir, { recursive: true });
+    return wtDir;
+  }
+
   try {
-    // 创建分支
+    // Create branch (ignore if already exists)
     try {
-      await execFile('git', ['branch', branch, baseBranch], { cwd: projectDir });
+      await execFile('git', ['branch', branch, baseBranch], { cwd: workDir });
     } catch {
-      // 分支已存在，忽略
+      // Branch already exists, ignore
     }
 
-    // 创建 worktree
-    await execFile('git', ['worktree', 'add', wtDir, branch], { cwd: projectDir });
+    // Create worktree
+    await execFile('git', ['worktree', 'add', wtDir, branch], { cwd: workDir });
     console.log(`[Conductor/Worktree] Created: ${wtDir} on branch ${branch}`);
     return wtDir;
   } catch (e) {
-    console.error(`[Conductor/Worktree] Failed to create ${threadId}:`, e.message);
-    throw e;
+    console.error(`[Conductor/Worktree] Failed to create worktree for ${taskId}:`, e.message);
+    // Fallback: create plain directory so task can still function
+    await fs.mkdir(wtDir, { recursive: true }).catch(() => {});
+    return wtDir;
   }
 }
 
 /**
- * 清理 task 的全部 worktrees
+ * Clean up a task's worktree
  *
- * @param {string} projectDir - 主项目目录
- * @param {string} taskDir - task 目录路径
+ * @param {string} workDir - Project root directory
+ * @param {string} taskId - Task ID
+ * @param {string} taskDir - Full task directory path
  */
-export async function cleanupTaskWorktrees(projectDir, taskDir) {
-  const worktreeBase = join(taskDir, 'worktrees');
+export async function cleanupTaskWorktree(workDir, taskId, taskDir) {
+  const wtDir = join(taskDir, 'worktree');
+  const branch = `conductor/${taskId}`;
 
-  if (!(await directoryExists(worktreeBase))) {
+  if (!(await directoryExists(wtDir))) return;
+
+  const isGitRepo = await directoryExists(join(workDir, '.git'));
+  if (!isGitRepo) {
+    // Plain directory, just remove
+    await fs.rm(wtDir, { recursive: true, force: true }).catch(() => {});
     return;
   }
 
   try {
-    const entries = await fs.readdir(worktreeBase);
-    for (const entry of entries) {
-      const wtDir = join(worktreeBase, entry);
-      const branch = `conductor/${extractTaskId(taskDir)}-${entry}`;
-
-      try {
-        await execFile('git', ['worktree', 'remove', wtDir, '--force'], { cwd: projectDir });
-        console.log(`[Conductor/Worktree] Removed: ${wtDir}`);
-      } catch (e) {
-        console.warn(`[Conductor/Worktree] Failed to remove ${wtDir}:`, e.message);
-      }
-
-      try {
-        await execFile('git', ['branch', '-D', branch], { cwd: projectDir });
-        console.log(`[Conductor/Worktree] Deleted branch: ${branch}`);
-      } catch (e) {
-        console.warn(`[Conductor/Worktree] Failed to delete branch ${branch}:`, e.message);
-      }
-    }
-
-    // 尝试删除 worktrees 目录
-    try {
-      await fs.rmdir(worktreeBase);
-    } catch { /* 目录不空，忽略 */ }
+    await execFile('git', ['worktree', 'remove', wtDir, '--force'], { cwd: workDir });
+    console.log(`[Conductor/Worktree] Removed: ${wtDir}`);
   } catch (e) {
-    console.error(`[Conductor/Worktree] Failed to cleanup ${taskDir}:`, e.message);
+    console.warn(`[Conductor/Worktree] Failed to remove ${wtDir}:`, e.message);
+  }
+
+  try {
+    await execFile('git', ['branch', '-D', branch], { cwd: workDir });
+    console.log(`[Conductor/Worktree] Deleted branch: ${branch}`);
+  } catch (e) {
+    console.warn(`[Conductor/Worktree] Failed to delete branch ${branch}:`, e.message);
   }
 }
 
 /**
- * 清理整个 conductor 下的全部 worktrees
+ * Clean up all conductor worktrees under a project
  *
- * @param {string} projectDir - 主项目目录
- * @param {string} conductorDir - .conductor 目录路径
+ * @param {string} workDir - Project root directory
  */
-export async function cleanupAllConductorWorktrees(projectDir, conductorDir) {
-  const tasksDir = join(conductorDir, 'tasks');
+export async function cleanupAllConductorWorktrees(workDir) {
+  const conductorDir = join(workDir, '.conductor');
 
-  if (!(await directoryExists(tasksDir))) return;
+  if (!(await directoryExists(conductorDir))) return;
 
   try {
-    const taskEntries = await fs.readdir(tasksDir);
-    for (const taskEntry of taskEntries) {
-      const taskDir = join(tasksDir, taskEntry);
+    const entries = await fs.readdir(conductorDir);
+    for (const entry of entries) {
+      if (!entry.startsWith('task-')) continue;
+      const taskDir = join(conductorDir, entry);
       const stat = await fs.stat(taskDir).catch(() => null);
       if (stat?.isDirectory()) {
-        await cleanupTaskWorktrees(projectDir, taskDir);
+        await cleanupTaskWorktree(workDir, entry, taskDir);
       }
     }
   } catch (e) {
@@ -134,13 +134,30 @@ export async function cleanupAllConductorWorktrees(projectDir, conductorDir) {
   }
 }
 
+/**
+ * Get the worktree path for a task (for cwd routing)
+ */
+export function getTaskWorktreePath(taskDir) {
+  return join(taskDir, 'worktree');
+}
+
+/**
+ * Determine actor cwd based on specialty:
+ * - Read-write actors → worktree
+ * - Read-only actors → workDir (main project directory)
+ */
+export function getActorCwd(workDir, taskDir, specialty) {
+  const readWriteSpecialties = new Set(['coding', 'testing', 'review']);
+  if (readWriteSpecialties.has(specialty)) {
+    return getTaskWorktreePath(taskDir);
+  }
+  return workDir;
+}
+
 // =====================================================================
 // Helpers
 // =====================================================================
 
-/**
- * 检查目录是否存在
- */
 async function directoryExists(dir) {
   try {
     await fs.access(dir);
@@ -150,9 +167,6 @@ async function directoryExists(dir) {
   }
 }
 
-/**
- * 检查目录是否是 git 认识的 worktree
- */
 async function isKnownWorktree(projectDir, wtDir) {
   const normalizedWtDir = resolve(wtDir);
   try {
@@ -165,11 +179,4 @@ async function isKnownWorktree(projectDir, wtDir) {
     }
   } catch { /* ignore */ }
   return false;
-}
-
-/**
- * 从 taskDir 路径中提取 taskId（取最后一个路径段）
- */
-function extractTaskId(taskDir) {
-  return taskDir.split(/[\\/]/).filter(Boolean).pop() || 'unknown';
 }

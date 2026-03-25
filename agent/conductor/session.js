@@ -1,19 +1,16 @@
 /**
- * Conductor — Session 核心
+ * Conductor — Session Core (V5 Singleton)
  *
- * 管理 Conductor session 的完整生命周期。
- * 与 V1 Crew 的关键区别：
- * - 不绑定固定工作路径，workDir 可动态切换
- * - 不定义固定角色列表，task 创建时由 orchestrator 决定
- * - session 级元数据存在 ~/.claude/conductor/<sessionId>/
+ * Each Agent has exactly one Conductor (1:1 binding).
+ * No multi-session Map — just a single conductor instance.
+ *
+ * Conductor has no workDir; tasks bind to workDir.
  */
-import { randomUUID } from 'crypto';
 import ctx from '../context.js';
 import {
-  loadConductorIndex, upsertConductorIndex,
-  loadSessionMeta, saveSessionMeta, loadSessionMessages,
-  getMaxShardIndex, getSessionDataDir, initSessionDataDir,
-  cleanupMessageShards
+  ensureConductorHome, loadConductorMeta, saveConductorMeta,
+  loadConductorMessages, loadState, getMaxShardIndex,
+  getConductorHome, cleanupMessageShards
 } from './persistence.js';
 import {
   sendConductorMessage, sendConductorOutput, sendStatusUpdate, recordUserMessage
@@ -21,335 +18,191 @@ import {
 import { createConductorClaude, sendToConductor, stopConductorClaude } from './conductor-claude.js';
 
 // =====================================================================
-// Data Structures
+// Singleton Conductor Instance
 // =====================================================================
 
-/** @type {Map<string, ConductorSession>} */
-export const conductorSessions = new Map();
+/** @type {Conductor|null} */
+let conductor = null;
+
+/**
+ * Get the current Conductor instance (or null if not initialized)
+ */
+export function getConductor() {
+  return conductor;
+}
 
 // =====================================================================
-// Session Lifecycle
+// Conductor Lifecycle
 // =====================================================================
 
 /**
- * 创建 Conductor Session
+ * Initialize or restore the single Conductor instance.
+ * Called when user opens the Conductor UI.
  */
-export async function createConductorSession(msg) {
-  const {
-    sessionId = randomUUID(),
-    name = '',
-    workDir = null,
-    scenarioId = null,
-    userId,
-    username
-  } = msg;
+export async function initConductor(msg) {
+  const { userId, username } = msg;
 
-  const session = {
-    id: sessionId,
-    name: name || 'Conductor',
-    workDir,
-    scenarioId,
+  // Already initialized in memory — just send current state
+  if (conductor) {
+    if (!conductor.uiMessages || conductor.uiMessages.length === 0) {
+      const loaded = await loadConductorMessages();
+      conductor.uiMessages = loaded.messages;
+    }
+    const cleaned = (conductor.uiMessages || []).map(m => {
+      const { _streaming, ...rest } = m;
+      return rest;
+    });
+    const dir = getConductorHome();
+    const hasOlderMessages = await getMaxShardIndex(dir) > 0;
+
+    // Load state.json for task info
+    const state = await loadState();
+
+    sendConductorMessage({
+      type: 'conductor_opened',
+      tasks: state.tasks,
+      userId: conductor.userId,
+      username: conductor.username,
+      uiMessages: cleaned,
+      hasOlderMessages,
+      status: conductor.status
+    });
+    sendStatusUpdate(conductor);
+    return conductor;
+  }
+
+  // Ensure conductor home directory exists
+  await ensureConductorHome();
+
+  // Try restore from disk
+  const meta = await loadConductorMeta();
+
+  conductor = {
     status: 'running',
     tasks: new Map(),
     conductorState: null,
-    costUsd: 0,
-    totalInputTokens: 0,
-    totalOutputTokens: 0,
+    costUsd: meta?.costUsd || 0,
+    totalInputTokens: meta?.totalInputTokens || 0,
+    totalOutputTokens: meta?.totalOutputTokens || 0,
     activeClaudes: 0,
     uiMessages: [],
-    userId,
-    username,
-    agentId: ctx.CONFIG?.agentName || null,
-    createdAt: Date.now(),
+    userId: userId || meta?.userId,
+    username: username || meta?.username,
+    createdAt: meta?.createdAt || Date.now(),
     _rotating: false,
     _conductorSemRelease: null
   };
 
-  conductorSessions.set(sessionId, session);
+  // Load state.json to populate tasks map
+  const state = await loadState();
+  for (const [taskId, entry] of Object.entries(state.tasks || {})) {
+    conductor.tasks.set(taskId, entry);
+  }
 
-  // 初始化数据目录
-  await initSessionDataDir(sessionId);
+  // Load UI messages from disk
+  const loaded = await loadConductorMessages();
+  conductor.uiMessages = loaded.messages;
 
-  // 通知前端
+  const isResume = !!meta;
+
   sendConductorMessage({
-    type: 'conductor_session_created',
-    sessionId,
-    name: session.name,
-    workDir: session.workDir,
-    scenarioId: session.scenarioId,
-    userId,
-    username
+    type: 'conductor_opened',
+    tasks: state.tasks,
+    userId: conductor.userId,
+    username: conductor.username,
+    uiMessages: conductor.uiMessages,
+    hasOlderMessages: loaded.hasOlderMessages,
+    status: conductor.status,
+    resumed: isResume
   });
+  sendStatusUpdate(conductor);
 
-  sendStatusUpdate(session);
-
-  // 注册到全局 index
-  await upsertConductorIndex(session);
-  await saveSessionMeta(session);
-
-  // 启动 Conductor Claude
+  // Start Conductor Claude
   try {
-    await createConductorClaude(session);
-    console.log(`[Conductor] Session ${sessionId} created, Claude ready`);
+    await createConductorClaude(conductor);
+    console.log(`[Conductor] ${isResume ? 'Resumed' : 'Created'}, Claude ready`);
   } catch (e) {
     console.error('[Conductor] Failed to start Claude:', e.message);
-    sendConductorOutput(session, 'system', {
+    sendConductorOutput(conductor, 'system', {
       message: { role: 'assistant', content: `Conductor 启动失败: ${e.message}` }
     });
   }
 
-  return session;
+  await saveConductorMeta(conductor);
+  return conductor;
 }
 
 /**
- * 列出所有 conductor sessions
- */
-export async function handleListConductorSessions(msg) {
-  const { requestId, _requestClientId } = msg;
-  const index = await loadConductorIndex();
-
-  const agentId = ctx.CONFIG?.agentName || null;
-  const filtered = agentId
-    ? index.filter(e => !e.agentId || e.agentId === agentId)
-    : index;
-
-  // 更新活跃 session 的状态
-  for (const entry of filtered) {
-    const active = conductorSessions.get(entry.sessionId);
-    if (active) {
-      entry.status = active.status;
-    }
-  }
-
-  ctx.sendToServer({
-    type: 'conductor_sessions_list',
-    requestId,
-    _requestClientId,
-    sessions: filtered.filter(e => !e.hidden)
-  });
-}
-
-/**
- * 恢复已停止的 conductor session
- */
-export async function resumeConductorSession(msg) {
-  const { sessionId, userId, username } = msg;
-
-  // 已在内存中
-  if (conductorSessions.has(sessionId)) {
-    const session = conductorSessions.get(sessionId);
-    // 加载 UI 消息
-    if (!session.uiMessages || session.uiMessages.length === 0) {
-      const loaded = await loadSessionMessages(sessionId);
-      session.uiMessages = loaded.messages;
-    }
-    const cleaned = (session.uiMessages || []).map(m => {
-      const { _streaming, ...rest } = m;
-      return rest;
-    });
-    const dir = getSessionDataDir(sessionId);
-    const hasOlderMessages = await getMaxShardIndex(dir) > 0;
-
-    sendConductorMessage({
-      type: 'conductor_session_restored',
-      sessionId,
-      name: session.name,
-      workDir: session.workDir,
-      scenarioId: session.scenarioId,
-      tasks: Array.from(session.tasks.values()),
-      userId: session.userId,
-      username: session.username,
-      uiMessages: cleaned,
-      hasOlderMessages
-    });
-    sendStatusUpdate(session);
-    return;
-  }
-
-  // 从磁盘恢复
-  const meta = await loadSessionMeta(sessionId);
-  if (!meta) {
-    sendConductorMessage({
-      type: 'error', sessionId,
-      message: 'Conductor session not found'
-    });
-    return;
-  }
-
-  const session = {
-    id: sessionId,
-    name: meta.name || '',
-    workDir: meta.workDir || null,
-    scenarioId: meta.scenarioId || null,
-    status: 'running',
-    tasks: new Map((meta.tasks || []).map(t => [t.taskId, t])),
-    conductorState: null,
-    costUsd: meta.costUsd || 0,
-    totalInputTokens: meta.totalInputTokens || 0,
-    totalOutputTokens: meta.totalOutputTokens || 0,
-    activeClaudes: 0,
-    uiMessages: [],
-    userId: userId || meta.userId,
-    username: username || meta.username,
-    agentId: meta.agentId || ctx.CONFIG?.agentName || null,
-    createdAt: meta.createdAt || Date.now(),
-    _rotating: false,
-    _conductorSemRelease: null
-  };
-
-  conductorSessions.set(sessionId, session);
-
-  const loaded = await loadSessionMessages(sessionId);
-  session.uiMessages = loaded.messages;
-
-  sendConductorMessage({
-    type: 'conductor_session_restored',
-    sessionId,
-    name: session.name,
-    workDir: session.workDir,
-    scenarioId: session.scenarioId,
-    tasks: Array.from(session.tasks.values()),
-    userId: session.userId,
-    username: session.username,
-    uiMessages: session.uiMessages,
-    hasOlderMessages: loaded.hasOlderMessages
-  });
-  sendStatusUpdate(session);
-
-  // 启动 Conductor Claude
-  try {
-    await createConductorClaude(session);
-    console.log(`[Conductor] Session ${sessionId} resumed, Claude ready`);
-  } catch (e) {
-    console.error('[Conductor] Failed to resume Claude:', e.message);
-  }
-
-  await upsertConductorIndex(session);
-  await saveSessionMeta(session);
-}
-
-/**
- * 处理用户输入
+ * Handle user input to Conductor
  */
 export async function handleConductorUserInput(msg) {
-  const { sessionId, content } = msg;
-  const session = conductorSessions.get(sessionId);
-  if (!session) {
-    console.warn(`[Conductor] Session not found: ${sessionId}`);
+  const { content } = msg;
+  if (!conductor) {
+    console.warn('[Conductor] Not initialized, ignoring input');
     return;
   }
 
-  // 确保 session 在运行态（先检查再记录，避免停止态也记录消息）
-  if (session.status === 'stopped') {
+  if (conductor.status === 'stopped') {
     sendConductorMessage({
       type: 'conductor_error',
-      sessionId,
-      error: 'Session is stopped'
+      error: 'Conductor is stopped'
     });
     return;
   }
 
-  // 记录到 UI
-  recordUserMessage(session, content);
-
-  session.status = 'running';
-
-  // 发给 Conductor Claude
-  await sendToConductor(session, content);
+  recordUserMessage(conductor, content);
+  conductor.status = 'running';
+  await sendToConductor(conductor, content);
 }
 
 /**
- * 更新工作路径
+ * Stop Conductor
  */
-export async function handleUpdateWorkDir(msg) {
-  const { sessionId, workDir } = msg;
-  const session = conductorSessions.get(sessionId);
-  if (!session) return;
+export async function stopConductor() {
+  if (!conductor) return;
 
-  session.workDir = workDir;
-  console.log(`[Conductor] Session ${sessionId} workDir updated: ${workDir}`);
+  conductor.status = 'stopped';
+  await stopConductorClaude(conductor);
 
-  sendConductorMessage({
-    type: 'conductor_workdir_updated',
-    sessionId,
-    workDir
+  sendConductorOutput(conductor, 'system', {
+    message: { role: 'assistant', content: 'Conductor 已停止' }
   });
-  sendStatusUpdate(session);
-  await saveSessionMeta(session);
+  sendStatusUpdate(conductor);
+  await saveConductorMeta(conductor);
+
+  conductor = null;
+  console.log('[Conductor] Stopped');
 }
 
 /**
- * 更新 session name
+ * Clear Conductor (reset messages, restart Claude)
  */
-export async function handleUpdateConductorSession(msg) {
-  const { sessionId, name, workDir } = msg;
-  const session = conductorSessions.get(sessionId);
-  if (!session) return;
+export async function clearConductor() {
+  if (!conductor) return;
 
-  if (name !== undefined) session.name = name;
-  if (workDir !== undefined) session.workDir = workDir;
-  await saveSessionMeta(session);
-  await upsertConductorIndex(session);
-}
+  await stopConductorClaude(conductor);
 
-/**
- * 停止 session
- */
-export async function stopConductorSession(sessionId) {
-  const session = conductorSessions.get(sessionId);
-  if (!session) return;
+  // Clear data but keep tasks
+  conductor.uiMessages = [];
+  conductor.costUsd = 0;
+  conductor.totalInputTokens = 0;
+  conductor.totalOutputTokens = 0;
 
-  session.status = 'stopped';
-
-  // 停止 Conductor Claude
-  await stopConductorClaude(session);
-
-  sendConductorOutput(session, 'system', {
-    message: { role: 'assistant', content: 'Session 已停止' }
-  });
-  sendStatusUpdate(session);
-  await saveSessionMeta(session);
-  await upsertConductorIndex(session);
-
-  conductorSessions.delete(sessionId);
-  console.log(`[Conductor] Session ${sessionId} stopped`);
-}
-
-/**
- * 清空 session
- */
-export async function clearConductorSession(sessionId) {
-  const session = conductorSessions.get(sessionId);
-  if (!session) return;
-
-  // 停止 Claude
-  await stopConductorClaude(session);
-
-  // 清空数据
-  session.tasks.clear();
-  session.uiMessages = [];
-  session.costUsd = 0;
-  session.totalInputTokens = 0;
-  session.totalOutputTokens = 0;
-
-  const dir = getSessionDataDir(sessionId);
+  const dir = getConductorHome();
   await cleanupMessageShards(dir);
 
-  session.status = 'running';
+  conductor.status = 'running';
 
-  sendConductorMessage({
-    type: 'conductor_session_cleared',
-    sessionId
-  });
-  sendStatusUpdate(session);
+  sendConductorMessage({ type: 'conductor_cleared' });
+  sendStatusUpdate(conductor);
 
-  // 重启 Claude
+  // Restart Claude
   try {
-    await createConductorClaude(session);
+    await createConductorClaude(conductor);
   } catch (e) {
     console.error('[Conductor] Failed to restart Claude after clear:', e.message);
   }
 
-  await saveSessionMeta(session);
-  console.log(`[Conductor] Session ${sessionId} cleared`);
+  await saveConductorMeta(conductor);
+  console.log('[Conductor] Cleared');
 }
