@@ -381,6 +381,11 @@
   padding: 0 8px;
 }
 
+/* Chat panel (first): cap height so Crew panel stays visible */
+.session-panel:first-child .session-panel-list {
+  max-height: 50vh;
+}
+
 /* Add button in group header, right-aligned */
 .session-header-add-btn {
   display: flex;
