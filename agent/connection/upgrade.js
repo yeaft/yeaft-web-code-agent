@@ -14,8 +14,9 @@ const PM2_APP_NAME = 'yeaft-agent';
 // In launchd/systemd environments, PATH may not include nvm/node dirs,
 // but process.execPath always points to the running node binary.
 const nodeBinDir = dirname(process.execPath);
-const npmPath = join(nodeBinDir, 'npm');
-const pm2Path = join(nodeBinDir, 'pm2');
+const isWin = platform() === 'win32';
+const npmPath = join(nodeBinDir, isWin ? 'npm.cmd' : 'npm');
+const pm2Path = join(nodeBinDir, isWin ? 'pm2.cmd' : 'pm2');
 
 // Shared cleanup logic for restart/upgrade
 function cleanupAndExit(exitCode) {
