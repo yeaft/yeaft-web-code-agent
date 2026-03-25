@@ -6,7 +6,6 @@ import {
 
 export default {
   name: 'ExpertPanel',
-  emits: ['close'],
   template: `
     <div class="expert-panel" :class="{ open: visible }">
       <div class="expert-panel-header">
