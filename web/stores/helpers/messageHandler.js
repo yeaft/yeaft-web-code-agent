@@ -382,6 +382,21 @@ export function handleMessage(store, msg) {
       clearRefreshTimeout();
       break;
 
+    // Conductor (V2 multi-agent orchestrator) messages
+    case 'conductor_session_created':
+    case 'conductor_session_restored':
+    case 'conductor_status_update':
+    case 'conductor_actor_update':
+    case 'conductor_task_created':
+    case 'conductor_task_updated':
+    case 'conductor_task_completed':
+    case 'conductor_output':
+    case 'conductor_turn_completed':
+    case 'conductor_workdir_changed':
+    case 'conductor_error':
+      store.handleConductorOutput(msg);
+      break;
+
     // /btw side question streaming
     case 'btw_stream':
       store.appendBtwDelta(msg.delta);
