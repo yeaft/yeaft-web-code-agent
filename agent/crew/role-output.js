@@ -197,6 +197,14 @@ export async function processRoleOutput(session, roleName, roleQuery, roleState)
       if (session.status === 'paused' && roleState.accumulatedText) {
         const routes = parseRoutes(roleState.accumulatedText);
         if (routes.length > 0 && session.pendingRoutes.length === 0) {
+          // Fill missing taskId from roleState.currentTask (same as normal path L170-175)
+          const currentTask = roleState.currentTask;
+          for (const route of routes) {
+            if (!route.taskId && currentTask) {
+              route.taskId = currentTask.taskId;
+              route.taskTitle = currentTask.taskTitle;
+            }
+          }
           session.pendingRoutes = routes.map(route => ({ fromRole: roleName, route }));
           console.log(`[Crew] Saved ${routes.length} pending route(s) from aborted ${roleName}`);
         }

@@ -398,21 +398,26 @@ export function handleCrewOutput(store, msg) {
     };
 
     if (msg.outputType === 'text') {
+      const msgTaskId = msg.taskId || null;
       // 反向搜索该角色的最后一条 _streaming 消息（并发安全）
+      // ★ 同时匹配 taskId，防止跨 task 合并导致 feature 面板丢失消息
       let streamMsg = null;
       for (let i = messages.length - 1; i >= 0; i--) {
-        if (messages[i].role === msg.role && messages[i].type === 'text' && messages[i]._streaming) {
+        if (messages[i].role === msg.role && messages[i].type === 'text' && messages[i]._streaming
+            && (messages[i].taskId || null) === msgTaskId) {
           streamMsg = messages[i];
           break;
         }
       }
       // 如果没有 _streaming 消息，查找同角色最后一条 text（可能被 tool_use 关闭了 _streaming）
       // 如果中间只隔了 tool/tool_result（同角色），说明在同一 turn 内，重新 append
+      // ★ 同样检查 taskId 一致性
       if (!streamMsg) {
         for (let i = messages.length - 1; i >= 0; i--) {
           const m = messages[i];
           if (m.role !== msg.role) break; // 碰到其他角色的消息，停止
-          if (m.type === 'text') { streamMsg = m; break; }
+          if (m.type === 'text' && (m.taskId || null) === msgTaskId) { streamMsg = m; break; }
+          if (m.type === 'text') break; // 同角色 text 但 taskId 不同，停止
           if (m.type !== 'tool') break; // 碰到非 tool 类型（如 route/system），停止
         }
         if (streamMsg) streamMsg._streaming = true;
