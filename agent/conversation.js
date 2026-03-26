@@ -1,5 +1,5 @@
 import ctx from './context.js';
-import { query, Stream } from './sdk/index.js';
+import { query } from './sdk/index.js';
 import { loadSessionHistory } from './history.js';
 import { startClaudeQuery } from './claude.js';
 import { crewSessions, loadCrewIndex } from './crew.js';
@@ -23,8 +23,9 @@ function prestartClaude(conversationId, workDir, resumeSessionId) {
 
 /**
  * Preload slash commands from Claude CLI (fire-and-forget).
- * Spawns a minimal CLI process to capture the system init message,
- * then aborts immediately (no API tokens consumed — init is local).
+ * Spawns a minimal CLI process with a cheap built-in command (/cost)
+ * to trigger the system init message, captures slash_commands,
+ * then aborts immediately (no API tokens consumed).
  *
  * @param {string} [workDir] - Project directory (default: agent workDir)
  * @param {string} [targetId] - conversationId to key the update to
@@ -34,9 +35,11 @@ export async function preloadSlashCommands(workDir, targetId = '__preload__') {
   const effectiveWorkDir = workDir || ctx.CONFIG.workDir;
   try {
     const abortController = new AbortController();
-    const inputStream = new Stream();
+    // Use --print with a cheap built-in command to trigger system init.
+    // In stream-json mode, Claude CLI won't emit init until a user message arrives,
+    // so we use string prompt mode instead which triggers init immediately.
     const claudeQuery = query({
-      prompt: inputStream,
+      prompt: '/cost',
       options: {
         cwd: effectiveWorkDir,
         permissionMode: 'bypassPermissions',
