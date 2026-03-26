@@ -311,6 +311,8 @@ export function handleCrewOutput(store, msg) {
       store.crewMessagesMap[sid] = msg.uiMessages.map(m => {
         // Dynamically compute isDecisionMaker from session roles (same as real-time crew_output)
         const senderRole = effectiveRoles.find(r => r.name === m.role);
+        // Restored AskUserQuestion without askRequestId → mark as expired history
+        const isHistoryAsk = m.type === 'tool' && m.toolName === 'AskUserQuestion' && !m.askRequestId;
         return {
           id: m.timestamp || Date.now() + Math.random(),
           role: m.role,
@@ -326,6 +328,7 @@ export function handleCrewOutput(store, msg) {
           toolInput: m.toolInput || null,
           toolResult: null,
           hasResult: m.hasResult || false,
+          isHistory: isHistoryAsk || undefined,
           taskId: m.taskId || null,
           taskTitle: m.taskTitle || null,
           isDecisionMaker: !!(senderRole && senderRole.isDecisionMaker),
