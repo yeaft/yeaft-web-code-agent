@@ -120,7 +120,8 @@ export function sendConductorMessage(store, content, taskId = null, attachments 
   const msg = {
     type: 'conductor_user_input',
     content,
-    agentId: store.currentAgent
+    agentId: store.currentAgent,
+    workDir: store.conductorWorkDir || undefined
   };
   if (attachments && attachments.length > 0) {
     msg.attachments = attachments;
@@ -197,7 +198,8 @@ export function handleConductorOutput(store, msg) {
         id: convId,
         agentId,
         agentName: agent?.name || agentId,
-        workDir: conductorHome,
+        workDir: null,
+        conductorHome,
         claudeSessionId: null,
         createdAt: Date.now(),
         processing: false,
@@ -208,9 +210,9 @@ export function handleConductorOutput(store, msg) {
     } else {
       conv.type = 'conductor';
       conv.agentId = agentId;
-      conv.workDir = conductorHome;
+      conv.conductorHome = conductorHome;
     }
-    store.currentWorkDir = conductorHome || '';
+    store.currentWorkDir = '';
 
     // Switch to this conversation
     if (store.currentConversation && store.currentConversation !== convId && store.messages.length > 0) {

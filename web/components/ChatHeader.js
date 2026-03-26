@@ -126,6 +126,16 @@ export default {
         </button>
       </div>
       <div class="conductor-header-actions" v-if="store.currentConversationIsConductor">
+        <button class="conductor-workdir-btn" @click="toggleWorkDirPicker" :title="conductorWorkDirLabel || 'Select work directory'">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+          </svg>
+          <span class="conductor-workdir-name">{{ conductorWorkDirLabel || 'No folder' }}</span>
+        </button>
+        <div class="conductor-workdir-picker" v-if="showWorkDirPicker" @click.stop>
+          <input type="text" v-model="workDirInput" placeholder="Enter work directory path..." class="conductor-workdir-input" @keydown.enter="setWorkDir" @keydown.esc="showWorkDirPicker = false" ref="workDirInputRef" />
+          <button class="conductor-workdir-set-btn" @click="setWorkDir" :disabled="!workDirInput.trim()">Set</button>
+        </div>
         <span class="conductor-cost-label" v-if="conductorCost">
           \${{ conductorCost }}
         </span>
@@ -377,6 +387,41 @@ export default {
       ).length;
     });
 
-    return { store, headerTitle, folderPath, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, hasStreamingRoles, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, openCrewEdit, onCrewPanelToggle, isCrewPanelActive, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel, conductorCost, conductorActiveTaskCount };
+    // Conductor workDir picker
+    const showWorkDirPicker = Vue.ref(false);
+    const workDirInput = Vue.ref('');
+    const workDirInputRef = Vue.ref(null);
+
+    const conductorWorkDirLabel = Vue.computed(() => {
+      const dir = store.conductorWorkDir;
+      if (!dir) return '';
+      const parts = dir.replace(/\\/g, '/').split('/').filter(Boolean);
+      return parts[parts.length - 1] || dir;
+    });
+
+    const toggleWorkDirPicker = () => {
+      showWorkDirPicker.value = !showWorkDirPicker.value;
+      if (showWorkDirPicker.value) {
+        workDirInput.value = store.conductorWorkDir || store.currentAgentInfo?.workDir || '';
+        Vue.nextTick(() => workDirInputRef.value?.focus());
+      }
+    };
+
+    const setWorkDir = () => {
+      const val = workDirInput.value.trim();
+      if (val) {
+        store.conductorWorkDir = val;
+      }
+      showWorkDirPicker.value = false;
+    };
+
+    // Initialize conductorWorkDir from agent's workDir when opening conductor
+    Vue.watch(() => store.currentConversationIsConductor, (isConductor) => {
+      if (isConductor && !store.conductorWorkDir) {
+        store.conductorWorkDir = store.currentAgentInfo?.workDir || '';
+      }
+    }, { immediate: true });
+
+    return { store, headerTitle, folderPath, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, hasStreamingRoles, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, openCrewEdit, onCrewPanelToggle, isCrewPanelActive, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel, conductorCost, conductorActiveTaskCount, showWorkDirPicker, workDirInput, workDirInputRef, conductorWorkDirLabel, toggleWorkDirPicker, setWorkDir };
   }
 };
