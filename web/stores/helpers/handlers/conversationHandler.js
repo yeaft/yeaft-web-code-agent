@@ -81,7 +81,9 @@ export function handleConversationResumed(store, msg) {
   console.log('dbMessages received:', msg.dbMessages?.length || 0, 'dbMessageCount:', msg.dbMessageCount || 0);
   if (msg.dbMessages && msg.dbMessages.length > 0) {
     const formatted = msg.dbMessages.map(m => store.formatDbMessage(m)).flat().filter(Boolean);
-    for (const m of formatted) {
+    // Filter empty user messages (tool_result artifacts from DB)
+    const cleaned = formatted.filter(m => !(m.type === 'user' && (!m.content || !m.content.trim())));
+    for (const m of cleaned) {
       store.messages.push(m);
     }
   }
