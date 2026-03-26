@@ -99,8 +99,6 @@ async function detectCapabilities() {
     const { getDefaultClaudeCodePath } = await import('./sdk/utils.js');
     const claudePath = getDefaultClaudeCodePath();
     if (claudePath) capabilities.push('crew');
-    // Conductor V2 reuses the same Claude CLI
-    if (claudePath) capabilities.push('conductor');
   } catch {}
 
   console.log(`[Capabilities] Detected: ${capabilities.join(', ')}`);

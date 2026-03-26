@@ -20,11 +20,6 @@ import {
   handleListCrewSessions, handleCheckCrewExists, handleDeleteCrewDir, resumeCrewSession, removeFromCrewIndex, hideCrewSession,
   handleLoadCrewHistory, handleCheckCrewContext
 } from '../crew.js';
-import {
-  initConductor, handleConductorUserInput,
-  stopConductor, clearConductor,
-  handleConductorHistory
-} from '../conductor.js';
 import { sendToServer, flushMessageBuffer } from './buffer.js';
 import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
@@ -258,27 +253,6 @@ export async function handleMessage(msg) {
 
     case 'crew_load_history':
       await handleLoadCrewHistory(msg);
-      break;
-
-    // Conductor (V2) messages
-    case 'open_conductor':
-      await initConductor(msg);
-      break;
-
-    case 'conductor_user_input':
-      await handleConductorUserInput(msg);
-      break;
-
-    case 'stop_conductor':
-      await stopConductor();
-      break;
-
-    case 'clear_conductor':
-      await clearConductor();
-      break;
-
-    case 'conductor_load_history':
-      await handleConductorHistory(msg);
       break;
 
     // Port proxy

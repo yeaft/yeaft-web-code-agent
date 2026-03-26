@@ -10,7 +10,7 @@ export default {
     cancelFn: { type: Function, default: null },
     /** i18n key for placeholder text. Defaults to 'chatInput.placeholder'. */
     placeholderKey: { type: String, default: '' },
-    /** External processing flag (e.g. conductor waiting for response). Controls stop button visibility. */
+    /** External processing flag. Controls stop button visibility. */
     showStop: { type: Boolean, default: false }
   },
   template: `
@@ -126,7 +126,7 @@ export default {
     const autocompleteRef = Vue.ref(null);
     const expertAutocompleteRef = Vue.ref(null);
 
-    // Derived: is this a custom-send context (e.g. conductor)?
+    // Derived: is this a custom-send context?
     const isCustomSend = Vue.computed(() => !!props.sendFn);
 
     // Placeholder i18n key
@@ -449,7 +449,7 @@ export default {
 
       const trimmed = inputText.value.trim();
 
-      // Custom send mode (e.g. conductor): delegate to provided function
+      // Custom send mode: delegate to provided function
       if (props.sendFn) {
         const attachmentInfos = attachments.value
           .filter(a => a.fileId)
