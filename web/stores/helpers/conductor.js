@@ -86,6 +86,7 @@ export function openConductor(store, agentId) {
   if (existing) {
     // Resume — switch to existing conductor conversation
     store.selectConversation(existing.id, agentId);
+    return;
   }
 
   // Set currentAgent BEFORE sending WS — conductor_opened handler

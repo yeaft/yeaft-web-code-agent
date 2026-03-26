@@ -175,7 +175,9 @@ export default {
       return this.store.conductorTasks[sid] || {};
     },
     currentActors() {
-      // V5: actors are task-level on the Agent side, no separate UI state yet
+      // TODO: V5 actors are managed per-task on the Agent side and not yet
+      // exposed as a separate UI state. The ConductorActivePanel actors prop
+      // will remain empty until actor-level status is surfaced in V5 protocol.
       return {};
     },
     activeTaskCount() {
