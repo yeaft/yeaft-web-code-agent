@@ -140,7 +140,7 @@ export function sendCrewOutput(session, roleName, outputType, rawMessage, extra 
           // Save trimmed toolInput for restore
           const input = block.input || {};
           let savedInput;
-          if (block.name === 'TodoWrite') {
+          if (block.name === 'TodoWrite' || block.name === 'AskUserQuestion') {
             savedInput = input;
           } else {
             const trimmedInput = {};
