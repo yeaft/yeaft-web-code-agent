@@ -226,8 +226,13 @@ export function handleMessage(store, msg) {
       break;
 
     case 'slash_commands_update':
-      if (msg.slashCommands && msg.slashCommands.length > 0 && msg.conversationId) {
-        store.slashCommandsMap[msg.conversationId] = msg.slashCommands;
+      if (msg.slashCommands && msg.slashCommands.length > 0) {
+        if (msg.conversationId) {
+          store.slashCommandsMap[msg.conversationId] = msg.slashCommands;
+        }
+        if (msg.agentId) {
+          store.slashCommandsMap[`agent:${msg.agentId}`] = msg.slashCommands;
+        }
       }
       break;
 
