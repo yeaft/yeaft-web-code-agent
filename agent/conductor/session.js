@@ -138,7 +138,7 @@ export async function initConductor(msg) {
  * Handle user input to Conductor
  */
 export async function handleConductorUserInput(msg) {
-  const { content } = msg;
+  const { content, workDir } = msg;
   if (!conductor) {
     console.warn('[Conductor] Not initialized, ignoring input');
     return;
@@ -154,7 +154,7 @@ export async function handleConductorUserInput(msg) {
 
   recordUserMessage(conductor, content);
   conductor.status = 'running';
-  await sendToConductor(conductor, content);
+  await sendToConductor(conductor, content, workDir);
 }
 
 /**
