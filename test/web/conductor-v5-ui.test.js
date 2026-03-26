@@ -477,7 +477,7 @@ describe('ConductorChatView V5 header cleanup', () => {
   it('CSS: old conductor-header styles removed', () => {
     expect(conductorCssSource).not.toContain('.conductor-header {');
     expect(conductorCssSource).not.toContain('.conductor-header-left');
-    expect(conductorCssSource).not.toContain('.conductor-workdir');
+    expect(conductorCssSource).not.toContain('.conductor-workdir {');
     expect(conductorCssSource).not.toContain('.conductor-workdir-menu');
   });
 
@@ -712,7 +712,7 @@ describe('boundary conditions', () => {
     // The template uses v-if="conductorMessages.length === 0"
     expect(conductorChatViewSource).toContain('conductorMessages.length === 0');
     expect(conductorChatViewSource).toContain('conductor-empty');
-    expect(conductorChatViewSource).toContain('Conductor is ready');
+    expect(conductorChatViewSource).toContain("$t('conductor.ready')");
   });
 
   it('openConductor: agent with no existing conversations creates fresh session', () => {

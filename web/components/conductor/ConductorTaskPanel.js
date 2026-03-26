@@ -43,7 +43,7 @@ export default {
 
       <!-- Plan Steps -->
       <div v-if="planSteps.length > 0" class="conductor-task-plan">
-        <div class="conductor-task-plan-title">Plan</div>
+        <div class="conductor-task-plan-title">{{ $t('conductor.plan') }}</div>
         <div v-for="(step, idx) in planSteps" :key="idx"
              class="conductor-task-plan-step"
              :class="'step-' + (step.status || 'pending')">
@@ -56,7 +56,7 @@ export default {
       <!-- Active Actors -->
       <div v-if="actors.length > 0" class="conductor-task-actors-section">
         <div class="conductor-task-actors-title">
-          Active Instances
+          {{ $t('conductor.activeInstances') }}
           <span class="conductor-task-actors-count">{{ actors.length }}</span>
         </div>
         <div class="conductor-task-actors-list">
@@ -71,7 +71,7 @@ export default {
       <!-- Task Messages -->
       <div class="conductor-task-messages" ref="messagesRef">
         <div v-if="hasMoreMessages" class="conductor-task-load-more" @click="visibleMessageCount += 30">
-          Load older messages
+          {{ $t('conductor.loadOlder') }}
         </div>
         <template v-for="msg in visibleMessages" :key="msg.id">
           <!-- System / Actor Spawn / Release -->
@@ -120,7 +120,7 @@ export default {
         <textarea
           v-model="inputText"
           @keydown="handleKeydown"
-          placeholder="Send to Orchestrator..."
+          :placeholder="$t('conductor.taskInputPlaceholder')"
           rows="1"
         ></textarea>
         <button class="conductor-task-send" @click="send" :disabled="!inputText.trim()">
@@ -134,15 +134,16 @@ export default {
       return this.task?.plan || [];
     },
     taskStatusLabel() {
-      const LABELS = {
-        active: 'Executing',
-        executing: 'Executing',
-        planning: 'Planning',
-        waiting: 'Waiting',
-        completed: 'Completed',
-        error: 'Error'
+      const KEYS = {
+        active: 'conductor.statusExecuting',
+        executing: 'conductor.statusExecuting',
+        planning: 'conductor.statusPlanning',
+        waiting: 'conductor.statusWaiting',
+        completed: 'conductor.statusCompleted',
+        error: 'conductor.statusError'
       };
-      return LABELS[this.task?.status] || this.task?.status || 'Active';
+      const key = KEYS[this.task?.status];
+      return key ? this.$t(key) : (this.task?.status || 'Active');
     },
     visibleMessages() {
       if (this.messages.length <= this.visibleMessageCount) return this.messages;
