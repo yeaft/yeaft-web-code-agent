@@ -160,13 +160,15 @@ async function _createRoleQueryInner(session, roleName) {
     ...(effectiveDisallowed.length > 0 && { disallowedTools: effectiveDisallowed })
   };
 
-  // Intercept AskUserQuestion for all roles — forward to Web UI for interactive answering
-  queryOptions.canCallTool = async (toolName, input, toolCtx) => {
-    if (toolName === 'AskUserQuestion') {
-      return await handleAskUserQuestion(session.id, input, toolCtx);
-    }
-    return input;
-  };
+  // Only the decision maker intercepts AskUserQuestion to forward to Web UI
+  if (role.isDecisionMaker) {
+    queryOptions.canCallTool = async (toolName, input, toolCtx) => {
+      if (toolName === 'AskUserQuestion') {
+        return await handleAskUserQuestion(session.id, input, toolCtx);
+      }
+      return input;
+    };
+  }
 
   if (savedSessionId) {
     queryOptions.resume = savedSessionId;
