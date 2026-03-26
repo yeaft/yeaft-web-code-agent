@@ -230,14 +230,18 @@ describe('ChatHeader conductor enhancements', () => {
     expect(simulateHeaderTitle(store)).toBe('Agent · Conductor');
   });
 
-  it('source: ChatHeader template should have conductor-header-actions div', () => {
-    expect(chatHeaderSource).toContain('conductor-header-actions');
+  it('source: ChatHeader template should have conductor task toggle in header-right', () => {
     expect(chatHeaderSource).toContain('currentConversationIsConductor');
+    expect(chatHeaderSource).toContain('conductorActivePanelVisible');
   });
 
-  it('source: ChatHeader should display conductor cost label', () => {
-    expect(chatHeaderSource).toContain('conductor-cost-label');
-    expect(chatHeaderSource).toContain('conductorCost');
+  it('source: cost label moved to ConductorChatView (not in ChatHeader)', () => {
+    expect(chatHeaderSource).not.toContain('conductor-cost-label');
+    const conductorChatViewSource = readFileSync(
+      resolve(__dirname, '../../web/components/conductor/ConductorChatView.js'), 'utf-8'
+    );
+    expect(conductorChatViewSource).toContain('conductor-cost-label');
+    expect(conductorChatViewSource).toContain('conductorCost');
   });
 
   // Simulate conductorCost computed
@@ -481,9 +485,9 @@ describe('ConductorChatView V5 header cleanup', () => {
     expect(conductorCssSource).not.toContain('.conductor-workdir-menu');
   });
 
-  it('CSS: new conductor-header-actions styles present', () => {
-    expect(conductorCssSource).toContain('.conductor-header-actions');
+  it('CSS: conductor cost-label and resize-handle styles present', () => {
     expect(conductorCssSource).toContain('.conductor-cost-label');
+    expect(conductorCssSource).toContain('.conductor-resize-handle');
   });
 });
 
