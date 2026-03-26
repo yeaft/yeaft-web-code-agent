@@ -76,6 +76,8 @@ function buildConductorSystemPrompt(conductor) {
 - 不拆解任务步骤
 - 不评估需要几个人
 - 不写代码
+- 你没有任何工具可用（不能读文件、不能执行命令、不能搜索）
+- 你只能输出文本和指令块（CREATE_TASK / FORWARD_TASK）
 
 ## 当前活跃任务
 ${taskSummaries || '(无)'}
@@ -144,7 +146,27 @@ export async function createConductorClaude(conductor) {
     cwd: conductorHome,
     permissionMode: 'bypassPermissions',
     abort: abortController.signal,
-    appendSystemPrompt: systemPrompt
+    appendSystemPrompt: systemPrompt,
+    maxTurns: 1,
+    disallowedTools: [
+      'Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep',
+      'NotebookEdit', 'WebFetch', 'WebSearch',
+      'Task', 'AskUserQuestion', 'TodoWrite',
+      'EnterPlanMode', 'ExitPlanMode', 'EnterWorktree', 'ExitWorktree',
+      'CronCreate', 'CronDelete', 'CronList',
+      'RemoteTrigger', 'Skill', 'TaskOutput', 'TaskStop',
+      'mcp__playwright__browser_click', 'mcp__playwright__browser_close',
+      'mcp__playwright__browser_console_messages', 'mcp__playwright__browser_drag',
+      'mcp__playwright__browser_evaluate', 'mcp__playwright__browser_file_upload',
+      'mcp__playwright__browser_fill_form', 'mcp__playwright__browser_handle_dialog',
+      'mcp__playwright__browser_hover', 'mcp__playwright__browser_install',
+      'mcp__playwright__browser_navigate', 'mcp__playwright__browser_navigate_back',
+      'mcp__playwright__browser_network_requests', 'mcp__playwright__browser_press_key',
+      'mcp__playwright__browser_resize', 'mcp__playwright__browser_run_code',
+      'mcp__playwright__browser_select_option', 'mcp__playwright__browser_snapshot',
+      'mcp__playwright__browser_tabs', 'mcp__playwright__browser_take_screenshot',
+      'mcp__playwright__browser_type', 'mcp__playwright__browser_wait_for'
+    ]
   };
 
   if (savedSessionId) {
