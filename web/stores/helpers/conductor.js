@@ -1,122 +1,107 @@
 /**
- * Conductor (V2 orchestration engine) store helpers.
- * Follows the same pattern as crew.js — extracted from chat.js.
+ * Conductor (V5 — 1:1 singleton per Agent) store helpers.
+ *
+ * V5 model:
+ *   - No sessionId — each Agent has exactly one Conductor
+ *   - Keyed by agentId (using `conductor_${agentId}` as conversation ID)
+ *   - Server protocol: open_conductor, conductor_user_input,
+ *     stop_conductor, clear_conductor, conductor_load_history
+ *   - Agent responses: conductor_opened, conductor_output, conductor_status,
+ *     conductor_turn_completed, conductor_error, conductor_task_created,
+ *     conductor_task_message, conductor_cleared, conductor_history_loaded
  *
  * State model:
- *   conductorSessions: { [sessionId]: ConductorSessionMeta }
- *   conductorTasks:    { [sessionId]: { [taskId]: TaskStatus } }
- *   conductorActors:   { [sessionId]: { [actorKey]: ActorState } }
- *   conductorMessages: { [sessionId]: message[] }
- *   conductorStatuses: { [sessionId]: { status, costUsd, ... } }
- *
- * 2-second throttle: incoming status updates are batched and flushed
- * every 2 s to avoid UI jitter.
+ *   conductorMessages: { [convId]: message[] }
+ *   conductorTasks:    { [convId]: { [taskId]: TaskStatus } }
+ *   conductorStatuses: { [convId]: { status, costUsd, ... } }
  */
 
 // ─── Throttle helpers ────────────────────────────────────
 const THROTTLE_MS = 2000;
-let _throttleTimers = {};   // sessionId → timerId
-let _pendingUpdates = {};   // sessionId → { tasks, actors, status }
+let _throttleTimers = {};   // convId → timerId
+let _pendingUpdates = {};   // convId → { tasks, status }
 
-function flushThrottled(store, sessionId) {
-  const pending = _pendingUpdates[sessionId];
+function flushThrottled(store, convId) {
+  const pending = _pendingUpdates[convId];
   if (!pending) return;
 
   if (pending.tasks) {
-    if (!store.conductorTasks[sessionId]) store.conductorTasks[sessionId] = {};
-    Object.assign(store.conductorTasks[sessionId], pending.tasks);
-  }
-  if (pending.actors) {
-    store.conductorActors[sessionId] = { ...pending.actors };
+    if (!store.conductorTasks[convId]) store.conductorTasks[convId] = {};
+    Object.assign(store.conductorTasks[convId], pending.tasks);
   }
   if (pending.status) {
-    store.conductorStatuses[sessionId] = {
-      ...(store.conductorStatuses[sessionId] || {}),
+    store.conductorStatuses[convId] = {
+      ...(store.conductorStatuses[convId] || {}),
       ...pending.status
     };
   }
 
-  delete _pendingUpdates[sessionId];
-  delete _throttleTimers[sessionId];
+  delete _pendingUpdates[convId];
+  delete _throttleTimers[convId];
 }
 
-function scheduleFlush(store, sessionId) {
-  if (_throttleTimers[sessionId]) return; // already scheduled
-  _throttleTimers[sessionId] = setTimeout(() => {
-    flushThrottled(store, sessionId);
+function scheduleFlush(store, convId) {
+  if (_throttleTimers[convId]) return;
+  _throttleTimers[convId] = setTimeout(() => {
+    flushThrottled(store, convId);
   }, THROTTLE_MS);
 }
 
-function mergeThrottled(store, sessionId, patch) {
-  if (!_pendingUpdates[sessionId]) _pendingUpdates[sessionId] = {};
-  const p = _pendingUpdates[sessionId];
+function mergeThrottled(store, convId, patch) {
+  if (!_pendingUpdates[convId]) _pendingUpdates[convId] = {};
+  const p = _pendingUpdates[convId];
   if (patch.tasks) p.tasks = { ...(p.tasks || {}), ...patch.tasks };
-  if (patch.actors) p.actors = patch.actors; // replace (full snapshot)
   if (patch.status) p.status = { ...(p.status || {}), ...patch.status };
-  scheduleFlush(store, sessionId);
+  scheduleFlush(store, convId);
 }
 
 // ─── Ensure messages array exists ────────────────────────
-function ensureMessages(store, sessionId) {
-  if (!store.conductorMessages[sessionId]) {
-    store.conductorMessages[sessionId] = [];
+function ensureMessages(store, convId) {
+  if (!store.conductorMessages[convId]) {
+    store.conductorMessages[convId] = [];
   }
-  return store.conductorMessages[sessionId];
+  return store.conductorMessages[convId];
+}
+
+// ─── Derive conversation ID from agentId ─────────────────
+function conductorConvId(agentId) {
+  return `conductor_${agentId}`;
 }
 
 // ─── Public actions ──────────────────────────────────────
 
 /**
- * openConductor(agentId) — 1:1 model entry point.
+ * openConductor(agentId) — V5 1:1 model entry point.
  *
  * Each Agent has exactly ONE Conductor. Clicking the Conductor button
- * in the Agent dropdown either resumes the existing Conductor conversation
- * for that Agent, or creates a new one (no scenario selection — scenario
- * is per-task, not per-Conductor).
+ * either resumes the existing Conductor conversation or creates a new one.
+ * No scenario selection — scenario is per-task, not per-Conductor.
  */
 export function openConductor(store, agentId) {
+  const convId = conductorConvId(agentId);
+
   // Check if a conductor conversation already exists for this agent
-  const existing = store.conversations.find(
-    c => c.type === 'conductor' && c.agentId === agentId
-  );
+  const existing = store.conversations.find(c => c.id === convId);
 
   if (existing) {
     // Resume — switch to existing conductor conversation
     store.selectConversation(existing.id, agentId);
-    return;
   }
 
-  // Set currentAgent BEFORE sending WS — conductor_session_created handler
+  // Set currentAgent BEFORE sending WS — conductor_opened handler
   // reads store.currentAgent to bind the conversation to this agent.
   store.currentAgent = agentId;
 
-  // Create new conductor session for this agent
-  const sessionId = 'cond_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-
-  store.conductorMessages[sessionId] = [];
-  store.conductorTasks[sessionId] = {};
-  store.conductorActors[sessionId] = {};
-
+  // Send open_conductor to server — Agent will init or resume
   store.sendWsMessage({
-    type: 'create_conductor_session',
-    sessionId,
+    type: 'open_conductor',
     agentId
   });
 }
 
-export function resumeConductorSession(store, sessionId, agentId) {
-  if (!store.conductorMessages[sessionId]) store.conductorMessages[sessionId] = [];
-  store._pendingConductorRestore = sessionId;
-  store.sendWsMessage({
-    type: 'resume_conductor_session',
-    sessionId,
-    agentId: agentId || store.currentAgent
-  });
-}
-
 export function sendConductorMessage(store, content, taskId = null, attachments = undefined) {
-  const sessionId = store.currentConversation;
-  const messages = ensureMessages(store, sessionId);
+  const convId = store.currentConversation;
+  const messages = ensureMessages(store, convId);
 
   messages.push({
     id: crypto.randomUUID(),
@@ -128,14 +113,12 @@ export function sendConductorMessage(store, content, taskId = null, attachments 
   });
 
   // Update lastMessageAt for sidebar sorting
-  const conv = store.conversations.find(c => c.id === sessionId);
+  const conv = store.conversations.find(c => c.id === convId);
   if (conv) conv.lastMessageAt = Date.now();
 
   const msg = {
-    type: 'conductor_human_input',
-    sessionId,
+    type: 'conductor_user_input',
     content,
-    taskId,
     agentId: store.currentAgent
   };
   if (attachments && attachments.length > 0) {
@@ -148,124 +131,42 @@ export function sendConductorMessage(store, content, taskId = null, attachments 
   }
 }
 
-export function sendConductorControl(store, action, taskId = null) {
-  const sessionId = store.currentConversation;
+export function sendConductorControl(store, action) {
+  const type = action === 'stop' ? 'stop_conductor' : 'clear_conductor';
   store.sendWsMessage({
-    type: 'conductor_control',
-    sessionId,
-    action,
-    taskId,
+    type,
     agentId: store.currentAgent
   });
-}
-
-export function switchConductorWorkDir(store, workDir) {
-  const sessionId = store.currentConversation;
-  store.sendWsMessage({
-    type: 'conductor_switch_workdir',
-    sessionId,
-    workDir,
-    agentId: store.currentAgent
-  });
-  // Optimistic update
-  if (store.conductorSessions[sessionId]) {
-    store.conductorSessions[sessionId].currentWorkDir = workDir;
-  }
 }
 
 // ─── WS message handler ─────────────────────────────────
 
 export function handleConductorOutput(store, msg) {
   if (!msg) return;
-  const sid = msg.sessionId;
 
-  // ── Session lifecycle ──
+  // V5: derive convId from agentId (no sessionId in messages)
+  const agentId = msg.agentId || store.currentAgent;
+  const convId = agentId ? conductorConvId(agentId) : store.currentConversation;
 
-  if (msg.type === 'conductor_session_created') {
-    // Prefer agentId from server response (echoed back), fallback to store
-    const agentId = msg.agentId || store.currentAgent;
+  // ── Conductor opened (new or resumed) ──
 
-    store.conductorSessions[sid] = {
-      id: sid,
-      scenario: msg.scenario,
-      currentWorkDir: msg.workDir,
-      name: msg.name || '',
-      createdAt: msg.createdAt || Date.now()
-    };
-    store.conductorTasks[sid] = {};
-    store.conductorActors[sid] = {};
-    ensureMessages(store, sid).push({
-      id: crypto.randomUUID(),
-      role: 'system',
-      type: 'system',
-      content: 'Conductor session started',
-      timestamp: Date.now()
-    });
-
-    // Create or reuse conversation entry
-    let conv = store.conversations.find(c => c.id === sid);
-    if (!conv) {
-      const agent = store.agents.find(a => a.id === agentId);
-      conv = {
-        id: sid,
-        agentId,
-        agentName: agent?.name || agentId,
-        workDir: msg.workDir,
-        claudeSessionId: null,
-        createdAt: Date.now(),
-        processing: false,
-        type: 'conductor',
-        name: msg.name || ''
-      };
-      store.conversations.push(conv);
-    } else {
-      conv.type = 'conductor';
-      conv.agentId = agentId;
-      conv.name = msg.name || '';
-    }
-
-    // Switch to this conversation
-    if (store.currentConversation && store.messages.length > 0) {
-      store.messagesCache[store.currentConversation] = store.messages;
-    }
-    store.currentConversation = sid;
-    store.currentWorkDir = msg.workDir;
-    store.messages = [];
-    store.saveOpenSessions();
-    return;
-  }
-
-  if (msg.type === 'conductor_session_restored') {
-    // Prefer agentId from server response, fallback to store
-    const agentId = msg.agentId || store.currentAgent;
-
-    store.conductorSessions[sid] = {
-      id: sid,
-      scenario: msg.scenario,
-      currentWorkDir: msg.workDir,
-      name: msg.name || '',
-      createdAt: msg.createdAt || Date.now()
-    };
-
-    // Restore tasks + actors snapshots
+  if (msg.type === 'conductor_opened') {
+    // Restore tasks
     if (msg.tasks) {
-      store.conductorTasks[sid] = {};
-      for (const t of msg.tasks) {
-        store.conductorTasks[sid][t.taskId] = t;
-      }
-    }
-    if (msg.actors) {
-      store.conductorActors[sid] = {};
-      for (const a of msg.actors) {
-        store.conductorActors[sid][a.key || `${a.persona}-${a.specialty}`] = a;
+      store.conductorTasks[convId] = {};
+      if (typeof msg.tasks === 'object' && !Array.isArray(msg.tasks)) {
+        // V5: tasks is an object { taskId: entry }
+        for (const [taskId, t] of Object.entries(msg.tasks)) {
+          store.conductorTasks[convId][taskId] = t;
+        }
       }
     }
 
     // Restore messages
     if (msg.uiMessages && msg.uiMessages.length > 0) {
-      store.conductorMessages[sid] = msg.uiMessages.map(m => ({
+      store.conductorMessages[convId] = msg.uiMessages.map(m => ({
         id: m.timestamp || crypto.randomUUID(),
-        role: m.role,
+        role: m.role || m.source || 'conductor',
         type: m.type || 'text',
         content: m.content,
         taskId: m.taskId || null,
@@ -275,59 +176,58 @@ export function handleConductorOutput(store, msg) {
         _streaming: false
       }));
     } else {
-      ensureMessages(store, sid);
+      ensureMessages(store, convId);
     }
 
-    // Ensure conversation entry
-    let conv = store.conversations.find(c => c.id === sid);
+    // Update status
+    store.conductorStatuses[convId] = {
+      status: msg.status || 'running',
+      costUsd: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0
+    };
+
+    // Create or reuse conversation entry
+    let conv = store.conversations.find(c => c.id === convId);
     if (!conv) {
       const agent = store.agents.find(a => a.id === agentId);
       conv = {
-        id: sid,
+        id: convId,
         agentId,
         agentName: agent?.name || agentId,
-        workDir: msg.workDir,
+        workDir: null,
         claudeSessionId: null,
         createdAt: Date.now(),
         processing: false,
         type: 'conductor',
-        name: msg.name || ''
+        name: 'Conductor'
       };
       store.conversations.push(conv);
     } else {
       conv.type = 'conductor';
       conv.agentId = agentId;
-      conv.name = msg.name || '';
     }
 
-    // Switch if user explicitly restored
-    if (store._pendingConductorRestore === sid) {
-      if (store.currentConversation && store.messages.length > 0) {
-        store.messagesCache[store.currentConversation] = store.messages;
-      }
-      store.currentConversation = sid;
-      store.currentWorkDir = msg.workDir;
-      store.messages = [];
-      delete store._pendingConductorRestore;
+    // Switch to this conversation
+    if (store.currentConversation && store.currentConversation !== convId && store.messages.length > 0) {
+      store.messagesCache[store.currentConversation] = store.messages;
     }
+    store.currentConversation = convId;
+    store.messages = [];
     store.saveOpenSessions();
     return;
   }
 
-  // ── Status updates (throttled) ──
+  // ── Status update (throttled) ──
 
-  if (msg.type === 'conductor_status_update') {
+  if (msg.type === 'conductor_status') {
     const patch = {};
     if (msg.tasks) {
       patch.tasks = {};
-      for (const t of msg.tasks) {
-        patch.tasks[t.taskId] = t;
-      }
-    }
-    if (msg.actors) {
-      patch.actors = {};
-      for (const a of msg.actors) {
-        patch.actors[a.key || `${a.persona}-${a.specialty}`] = a;
+      if (typeof msg.tasks === 'object' && !Array.isArray(msg.tasks)) {
+        for (const [taskId, t] of Object.entries(msg.tasks)) {
+          patch.tasks[taskId] = t;
+        }
       }
     }
     if (msg.status || msg.costUsd !== undefined) {
@@ -335,130 +235,62 @@ export function handleConductorOutput(store, msg) {
         status: msg.status,
         costUsd: msg.costUsd,
         totalInputTokens: msg.totalInputTokens || 0,
-        totalOutputTokens: msg.totalOutputTokens || 0
+        totalOutputTokens: msg.totalOutputTokens || 0,
+        activeClaudes: msg.activeClaudes || 0
       };
     }
-    mergeThrottled(store, sid, patch);
-    return;
-  }
-
-  if (msg.type === 'conductor_actor_update') {
-    // Immediate actor state change (spawn / release)
-    if (!store.conductorActors[sid]) store.conductorActors[sid] = {};
-    const key = msg.actorKey || `${msg.persona}-${msg.specialty}`;
-
-    if (msg.action === 'spawn') {
-      store.conductorActors[sid][key] = {
-        key,
-        persona: msg.persona,
-        specialty: msg.specialty,
-        taskId: msg.taskId,
-        status: msg.status || 'active',
-        spawnedAt: Date.now()
-      };
-      // System message
-      ensureMessages(store, sid).push({
-        id: crypto.randomUUID(),
-        role: 'system',
-        type: 'actor_spawn',
-        content: `${msg.persona} joined as ${msg.specialty}`,
-        persona: msg.persona,
-        specialty: msg.specialty,
-        taskId: msg.taskId,
-        timestamp: Date.now()
-      });
-    } else if (msg.action === 'release') {
-      // Mark as releasing for CSS fade-out animation, then remove after 300ms
-      if (store.conductorActors[sid][key]) {
-        store.conductorActors[sid][key].status = 'releasing';
-        setTimeout(() => {
-          if (store.conductorActors[sid]?.[key]?.status === 'releasing') {
-            delete store.conductorActors[sid][key];
-          }
-        }, 300);
-      } else {
-        delete store.conductorActors[sid][key];
-      }
-      ensureMessages(store, sid).push({
-        id: crypto.randomUUID(),
-        role: 'system',
-        type: 'actor_release',
-        content: `${msg.persona} (${msg.specialty}) completed`,
-        persona: msg.persona,
-        specialty: msg.specialty,
-        taskId: msg.taskId,
-        timestamp: Date.now()
-      });
-    } else if (msg.action === 'status') {
-      if (store.conductorActors[sid][key]) {
-        store.conductorActors[sid][key].status = msg.status;
-      }
-    }
+    mergeThrottled(store, convId, patch);
     return;
   }
 
   // ── Task lifecycle ──
 
   if (msg.type === 'conductor_task_created') {
-    if (!store.conductorTasks[sid]) store.conductorTasks[sid] = {};
-    store.conductorTasks[sid][msg.taskId] = {
-      taskId: msg.taskId,
-      title: msg.title,
-      status: 'active',
-      plan: msg.plan || [],
-      instanceCount: 0,
-      progress: 0,
-      createdAt: Date.now()
+    if (!store.conductorTasks[convId]) store.conductorTasks[convId] = {};
+    const task = msg.task || {};
+    const taskId = task.taskId || msg.taskId;
+    store.conductorTasks[convId][taskId] = {
+      taskId,
+      title: task.title || msg.title,
+      status: task.status || 'active',
+      workDir: task.workDir,
+      scenario: task.scenario,
+      createdAt: task.createdAt || Date.now()
     };
-    ensureMessages(store, sid).push({
+    ensureMessages(store, convId).push({
       id: crypto.randomUUID(),
       role: 'conductor',
       type: 'task_created',
-      content: `Task created: ${msg.title}`,
-      taskId: msg.taskId,
+      content: `Task created: ${task.title || msg.title || taskId}`,
+      taskId,
       timestamp: Date.now()
     });
     return;
   }
 
-  if (msg.type === 'conductor_task_updated') {
-    if (store.conductorTasks[sid]?.[msg.taskId]) {
-      const task = store.conductorTasks[sid][msg.taskId];
-      if (msg.status) task.status = msg.status;
-      if (msg.plan) task.plan = msg.plan;
-      if (msg.progress !== undefined) task.progress = msg.progress;
-      if (msg.instanceCount !== undefined) task.instanceCount = msg.instanceCount;
-    }
-    return;
-  }
-
-  if (msg.type === 'conductor_task_completed') {
-    if (store.conductorTasks[sid]?.[msg.taskId]) {
-      store.conductorTasks[sid][msg.taskId].status = 'completed';
-      store.conductorTasks[sid][msg.taskId].progress = 100;
-    }
-    ensureMessages(store, sid).push({
+  if (msg.type === 'conductor_task_message') {
+    ensureMessages(store, convId).push({
       id: crypto.randomUUID(),
-      role: 'system',
-      type: 'task_completed',
-      content: `Task completed: ${msg.title || msg.taskId}`,
-      taskId: msg.taskId,
+      role: 'conductor',
+      type: 'task_message',
+      content: msg.message || '',
+      taskId: msg.taskId || null,
       timestamp: Date.now()
     });
     return;
   }
 
-  // ── Message output (conductor / orchestrator / actor text) ──
+  // ── Message output (conductor text, tool_use, tool_result, system) ──
 
   if (msg.type === 'conductor_output') {
-    const messages = ensureMessages(store, sid);
+    const messages = ensureMessages(store, convId);
 
     if (msg.outputType === 'text') {
       // Try to append to existing streaming message from same source
       let streamMsg = null;
       for (let i = messages.length - 1; i >= 0; i--) {
         const m = messages[i];
-        if (m.role === msg.role && m._streaming && (m.taskId || null) === (msg.taskId || null)) {
+        if (m.role === (msg.role || 'conductor') && m._streaming && (m.taskId || null) === (msg.taskId || null)) {
           streamMsg = m;
           break;
         }
@@ -488,7 +320,7 @@ export function handleConductorOutput(store, msg) {
     if (msg.outputType === 'tool_use') {
       // End streaming text
       for (let i = messages.length - 1; i >= 0; i--) {
-        if (messages[i].role === msg.role && messages[i]._streaming) {
+        if (messages[i].role === (msg.role || 'conductor') && messages[i]._streaming) {
           messages[i]._streaming = false;
           break;
         }
@@ -554,9 +386,9 @@ export function handleConductorOutput(store, msg) {
   // ── Turn completed ──
 
   if (msg.type === 'conductor_turn_completed') {
-    const messages = ensureMessages(store, sid);
+    const messages = ensureMessages(store, convId);
     for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === msg.role && messages[i]._streaming) {
+      if (messages[i]._streaming) {
         messages[i]._streaming = false;
         break;
       }
@@ -564,16 +396,33 @@ export function handleConductorOutput(store, msg) {
     return;
   }
 
-  // ── Work dir switched ──
+  // ── Conductor cleared ──
 
-  if (msg.type === 'conductor_workdir_changed') {
-    if (store.conductorSessions[sid]) {
-      store.conductorSessions[sid].currentWorkDir = msg.workDir;
-    }
-    const conv = store.conversations.find(c => c.id === sid);
-    if (conv) conv.workDir = msg.workDir;
-    if (store.currentConversation === sid) {
-      store.currentWorkDir = msg.workDir;
+  if (msg.type === 'conductor_cleared') {
+    store.conductorMessages[convId] = [];
+    store.conductorTasks[convId] = {};
+    store.conductorStatuses[convId] = {};
+    return;
+  }
+
+  // ── History loaded ──
+
+  if (msg.type === 'conductor_history_loaded') {
+    const messages = ensureMessages(store, convId);
+    if (msg.messages && msg.messages.length > 0) {
+      const olderMessages = msg.messages.map(m => ({
+        id: m.timestamp || crypto.randomUUID(),
+        role: m.role || m.source || 'conductor',
+        type: m.type || 'text',
+        content: m.content,
+        taskId: m.taskId || null,
+        persona: m.persona || null,
+        specialty: m.specialty || null,
+        timestamp: m.timestamp || Date.now(),
+        _streaming: false
+      }));
+      // Prepend older messages
+      store.conductorMessages[convId] = [...olderMessages, ...messages];
     }
     return;
   }
@@ -581,7 +430,7 @@ export function handleConductorOutput(store, msg) {
   // ── Session error ──
 
   if (msg.type === 'conductor_error') {
-    ensureMessages(store, sid).push({
+    ensureMessages(store, convId).push({
       id: crypto.randomUUID(),
       role: 'system',
       type: 'error',

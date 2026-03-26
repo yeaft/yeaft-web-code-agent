@@ -159,8 +159,10 @@ export default {
       return this.store.conductorActivePanelVisible;
     },
     session() {
+      // V5: no separate conductorSessions — use the conversation entry
       const sid = this.store.currentConversation;
-      return sid ? this.store.conductorSessions[sid] : null;
+      if (!sid) return null;
+      return this.store.conversations.find(c => c.id === sid) || null;
     },
     conductorMessages() {
       const sid = this.store.currentConversation;
@@ -173,9 +175,8 @@ export default {
       return this.store.conductorTasks[sid] || {};
     },
     currentActors() {
-      const sid = this.store.currentConversation;
-      if (!sid) return {};
-      return this.store.conductorActors[sid] || {};
+      // V5: actors are task-level on the Agent side, no separate UI state yet
+      return {};
     },
     activeTaskCount() {
       return Object.values(this.currentTasks).filter(
