@@ -10,7 +10,6 @@ import * as convHelpers from './helpers/conversation.js';
 import * as sessionHelpers from './helpers/session.js';
 import * as watchdogHelpers from './helpers/watchdog.js';
 import * as crewHelpers from './helpers/crew.js';
-import * as conductorHelpers from './helpers/conductor.js';
 
 const { defineStore } = Pinia;
 
@@ -127,16 +126,6 @@ export const useChatStore = defineStore('chat', {
     // =====================
     expertPanelOpen: false,           // 帮帮团面板是否打开
     expertSelections: [],             // 当前已选的角色/Action: [{ role: string, action: string|null }]
-
-    // =====================
-    // Conductor (V5 — 1:1 per Agent) 状态 — 按 conductor_${agentId} 存储
-    // =====================
-    conductorMessages: {},        // { [convId]: messages[] }
-    conductorTasks: {},           // { [convId]: { [taskId]: TaskStatus } }
-    conductorStatuses: {},        // { [convId]: { status, costUsd, ... } }
-    conductorActivePanelVisible: true,  // Active Panel toggle
-    conductorWorkDir: '',         // User-selected task workDir for Conductor
-    conductorProcessing: false,   // True while conductor is processing a turn
   }),
 
   getters: {
@@ -219,17 +208,6 @@ export const useChatStore = defineStore('chat', {
     currentCrewMessages: (state) => {
       if (!state.currentConversation) return EMPTY_ARRAY;
       return state.crewMessagesMap[state.currentConversation] || EMPTY_ARRAY;
-    },
-    // 当前 conversation 是否是 Conductor
-    currentConversationIsConductor: (state) => {
-      if (!state.currentConversation) return false;
-      const conv = state.conversations.find(c => c.id === state.currentConversation);
-      return conv?.type === 'conductor';
-    },
-    // 当前 Conductor 消息列表
-    currentConductorMessages: (state) => {
-      if (!state.currentConversation) return EMPTY_ARRAY;
-      return state.conductorMessages[state.currentConversation] || EMPTY_ARRAY;
     }
   },
 
@@ -418,14 +396,6 @@ export const useChatStore = defineStore('chat', {
     handleCrewOutput(msg) { crewHelpers.handleCrewOutput(this, msg); },
     startRefreshTimeout() { crewHelpers.startRefreshTimeout(this); },
 
-    // =====================
-    // Conductor (V5 — 1:1 per Agent) actions
-    // =====================
-    openConductor(agentId) { conductorHelpers.openConductor(this, agentId); },
-    sendConductorMessage(content, taskId, attachments) { conductorHelpers.sendConductorMessage(this, content, taskId, attachments); },
-    sendConductorControl(action) { conductorHelpers.sendConductorControl(this, action); },
-    handleConductorOutput(msg) { conductorHelpers.handleConductorOutput(this, msg); },
-
     openFileInExplorer(filePath) {
       if (!this.currentConversation) return;
       this.workbenchExpanded = true;
@@ -450,7 +420,6 @@ export const useChatStore = defineStore('chat', {
       this.processingConversations = {};
       this.executionStatusMap = {};
       this.workbenchExpanded = false;
-      conductorHelpers.clearConductorThrottles();
       if (this.ws) {
         this.ws.close();
       }

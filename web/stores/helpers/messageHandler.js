@@ -289,18 +289,6 @@ export function handleMessage(store, msg) {
               }
             }
           }
-          // Conductor mode: search conductorMessages across all convIds
-          if (store.conductorMessages) {
-            for (const condMsgs of Object.values(store.conductorMessages)) {
-              for (let i = condMsgs.length - 1; i >= 0; i--) {
-                if (condMsgs[i].type === 'tool' && condMsgs[i].toolName === 'AskUserQuestion' && !condMsgs[i].askRequestId) {
-                  condMsgs[i].askRequestId = msg.requestId;
-                  condMsgs[i].askQuestions = msg.questions;
-                  return true;
-                }
-              }
-            }
-          }
           return false;
         };
         if (!tryLink()) {
@@ -397,19 +385,6 @@ export function handleMessage(store, msg) {
       console.warn('[Crew] Session restore failed:', msg.message);
       store.refreshingSession = false;
       clearRefreshTimeout();
-      break;
-
-    // Conductor (V5 — 1:1 per Agent) messages
-    case 'conductor_opened':
-    case 'conductor_output':
-    case 'conductor_status':
-    case 'conductor_turn_completed':
-    case 'conductor_error':
-    case 'conductor_task_created':
-    case 'conductor_task_message':
-    case 'conductor_cleared':
-    case 'conductor_history_loaded':
-      store.handleConductorOutput(msg);
       break;
 
     // /btw side question streaming

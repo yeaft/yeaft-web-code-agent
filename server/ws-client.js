@@ -12,7 +12,6 @@ import {
 import { handleClientConversation } from './handlers/client-conversation.js';
 import { handleClientWorkbench } from './handlers/client-workbench.js';
 import { handleClientCrew } from './handlers/client-crew.js';
-import { handleClientConductor } from './handlers/client-conductor.js';
 import { handleClientMisc } from './handlers/client-misc.js';
 
 export function handleWebConnection(ws, url) {
@@ -172,6 +171,5 @@ async function handleWebMessage(clientId, msg) {
   if (await handleClientConversation(clientId, client, msg, checkAgentAccess)) return;
   if (await handleClientWorkbench(clientId, client, msg, checkAgentAccess)) return;
   if (await handleClientCrew(clientId, client, msg, checkAgentAccess)) return;
-  if (await handleClientConductor(clientId, client, msg, checkAgentAccess)) return;
   if (await handleClientMisc(clientId, client, msg, checkAgentAccess)) return;
 }

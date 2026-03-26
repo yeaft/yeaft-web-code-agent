@@ -34,20 +34,12 @@ export default {
         <span class="context-usage-hint" v-if="contextUsage" :class="contextColorClass" :title="contextLabel">
           {{ contextUsage.percentage }}%
         </span>
-        <!-- Expert panel button — hidden in Conductor mode -->
-        <button class="header-action-btn" :class="{ active: store.expertPanelOpen }" @click="toggleExpertPanel" :title="$t('chatHeader.expertPanel')" v-if="!store.currentConversationIsCrew && !store.currentConversationIsConductor">
+        <!-- Expert panel button — hidden in Crew mode -->
+        <button class="header-action-btn" :class="{ active: store.expertPanelOpen }" @click="toggleExpertPanel" :title="$t('chatHeader.expertPanel')" v-if="!store.currentConversationIsCrew">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
           </svg>
           <span class="mcp-count-badge" v-if="store.expertSelections && store.expertSelections.length > 0">{{ store.expertSelections.length }}</span>
-        </button>
-        <!-- Task panel toggle — shown in Conductor mode -->
-        <button class="header-action-btn" v-if="store.currentConversationIsConductor"
-                :class="{ active: store.conductorActivePanelVisible }"
-                @click="store.conductorActivePanelVisible = !store.conductorActivePanelVisible"
-                title="Tasks">
-          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>
-          <span v-if="conductorActiveTaskCount > 0" class="nav-badge">{{ conductorActiveTaskCount }}</span>
         </button>
         <!-- MCP Config Button -->
         <div class="mcp-config-wrapper" v-if="store.currentMcpServers.length > 0">
@@ -143,12 +135,6 @@ export default {
     const headerTitle = Vue.computed(() => {
       if (!store.currentConversation) {
         return 'Claude Web Chat';
-      }
-
-      // Conductor conversation
-      if (store.currentConversationIsConductor) {
-        const agent = store.agents.find(a => a.id === store.currentAgent);
-        return (agent?.name || 'Agent') + ' · Conductor';
       }
 
       // Crew conversation — use renamed session name if available
@@ -356,18 +342,6 @@ export default {
       document.removeEventListener('click', closeMcpOnOutsideClick);
     });
 
-    // Conductor header data
-
-    const conductorActiveTaskCount = Vue.computed(() => {
-      const sid = store.currentConversation;
-      if (!sid) return 0;
-      const tasks = store.conductorTasks[sid];
-      if (!tasks) return 0;
-      return Object.values(tasks).filter(
-        t => t.status === 'active' || t.status === 'executing' || t.status === 'planning'
-      ).length;
-    });
-
-    return { store, headerTitle, folderPath, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, hasStreamingRoles, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, openCrewEdit, onCrewPanelToggle, isCrewPanelActive, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel, conductorActiveTaskCount };
+    return { store, headerTitle, folderPath, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, hasStreamingRoles, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, openCrewEdit, onCrewPanelToggle, isCrewPanelActive, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel };
   }
 };

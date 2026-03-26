@@ -115,7 +115,7 @@ export function handleAgentList(store, msg) {
         store.conversations.push(serverConv);
       }
     }
-    store.conversations = store.conversations.filter(c => allServerConvIds.has(c.id) || c.type === 'conductor');
+    store.conversations = store.conversations.filter(c => allServerConvIds.has(c.id));
 
     for (const serverConv of allServerConvs) {
       const isStaleCrewProcessing = serverConv.processing && serverConv.type === 'crew'
@@ -155,40 +155,34 @@ export function handleAgentList(store, msg) {
       store.sendWsMessage({ type: 'select_agent', agentId: store.currentAgent, silent: true });
       if (store.currentConversation) {
         const conv = store.conversations.find(c => c.id === store.currentConversation);
-        if (conv?.type === 'conductor') {
-          // Conductor reconnect — use open_conductor instead of select_conversation
-          console.log('[Reconnect] Conductor conversation detected, sending open_conductor:', store.currentAgent);
-          store.sendWsMessage({ type: 'open_conductor', agentId: store.currentAgent });
+        store.sendWsMessage({ type: 'select_conversation', conversationId: store.currentConversation });
+        if (conv?.type === 'crew') {
+          console.log('[Reconnect] Crew conversation detected, resuming crew session:', store.currentConversation);
+          store.sendWsMessage({
+            type: 'resume_crew_session',
+            sessionId: store.currentConversation,
+            agentId: store.currentAgent
+          });
         } else {
-          store.sendWsMessage({ type: 'select_conversation', conversationId: store.currentConversation });
-          if (conv?.type === 'crew') {
-            console.log('[Reconnect] Crew conversation detected, resuming crew session:', store.currentConversation);
+          if (store.messages.length > 0) {
+            const lastMessageId = store.messages[store.messages.length - 1]?.id;
+            console.log('[Reconnect] Requesting missed messages after:', lastMessageId);
             store.sendWsMessage({
-              type: 'resume_crew_session',
-              sessionId: store.currentConversation,
-              agentId: store.currentAgent
+              type: 'sync_messages',
+              conversationId: store.currentConversation,
+              afterMessageId: lastMessageId
             });
           } else {
-            if (store.messages.length > 0) {
-              const lastMessageId = store.messages[store.messages.length - 1]?.id;
-              console.log('[Reconnect] Requesting missed messages after:', lastMessageId);
-              store.sendWsMessage({
-                type: 'sync_messages',
-                conversationId: store.currentConversation,
-                afterMessageId: lastMessageId
-              });
-            } else {
-              store.sendWsMessage({
-                type: 'sync_messages',
-                conversationId: store.currentConversation,
-                turns: 5
-              });
-            }
             store.sendWsMessage({
-              type: 'refresh_conversation',
-              conversationId: store.currentConversation
+              type: 'sync_messages',
+              conversationId: store.currentConversation,
+              turns: 5
             });
           }
+          store.sendWsMessage({
+            type: 'refresh_conversation',
+            conversationId: store.currentConversation
+          });
         }
       } else if (!store.recoveryDismissed) {
         console.log('[Reconnect] currentConversation null, attempting restore');
@@ -316,24 +310,18 @@ export function handleAgentSelected(store, msg) {
     store.currentWorkDir = currentConv?.workDir || store.currentWorkDir || msg.workDir;
     console.log('[Reconnect] Restoring conversation selection:', store.currentConversation);
     clearSessionLoading(store);
-    if (currentConv?.type === 'conductor') {
-      // Conductor reconnect — use open_conductor instead of select_conversation
-      console.log('[Reconnect] Conductor conversation detected in agent_selected, sending open_conductor:', store.currentAgent);
-      store.sendWsMessage({ type: 'open_conductor', agentId: store.currentAgent });
-    } else {
+    store.sendWsMessage({
+      type: 'select_conversation',
+      conversationId: store.currentConversation
+    });
+    // ★ Crew session needs resume to restore roles after server restart
+    if (currentConv?.type === 'crew') {
+      console.log('[Reconnect] Crew conversation detected in agent_selected, resuming:', store.currentConversation);
       store.sendWsMessage({
-        type: 'select_conversation',
-        conversationId: store.currentConversation
+        type: 'resume_crew_session',
+        sessionId: store.currentConversation,
+        agentId: msg.agentId
       });
-      // ★ Crew session needs resume to restore roles after server restart
-      if (currentConv?.type === 'crew') {
-        console.log('[Reconnect] Crew conversation detected in agent_selected, resuming:', store.currentConversation);
-        store.sendWsMessage({
-          type: 'resume_crew_session',
-          sessionId: store.currentConversation,
-          agentId: msg.agentId
-        });
-      }
     }
   } else {
     store.currentConversation = null;

@@ -8,12 +8,11 @@ import CrewConfigPanel from './CrewConfigPanel.js';
 import CrewChatView from './CrewChatView.js';
 import ExpertPanel from './ExpertPanel.js';
 import BtwOverlay from './BtwOverlay.js';
-import ConductorChatView from './conductor/ConductorChatView.js';
 import { useAuthStore } from '../stores/auth.js';
 
 export default {
   name: 'ChatPage',
-  components: { ChatHeader, MessageList, ChatInput, WorkbenchPanel, ProxyTab, SettingsPanel, CrewConfigPanel, CrewChatView, ExpertPanel, BtwOverlay, ConductorChatView },
+  components: { ChatHeader, MessageList, ChatInput, WorkbenchPanel, ProxyTab, SettingsPanel, CrewConfigPanel, CrewChatView, ExpertPanel, BtwOverlay },
   template: `
     <div class="chat-page" :class="{ 'show-sidebar': showMobileSidebar }">
 
@@ -91,14 +90,6 @@ export default {
                   >
                     <span v-if="restartingAgents[agent.id]" class="spinner-mini"></span>
                     <svg v-else viewBox="0 0 24 24" width="13" height="13"><path fill="currentColor" d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
-                  </button>
-                  <button
-                    class="agent-dropdown-conductor-btn"
-                    @click.stop="openConductor(agent.id)"
-                    :disabled="!agent.online || !agent.capabilities?.includes('crew')"
-                    title="Conductor"
-                  >
-                    <svg viewBox="0 0 24 24" width="13" height="13"><path fill="currentColor" d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/></svg>
                   </button>
                 </div>
                 <div v-if="onlineAgents.length === 0" class="agent-dropdown-empty">{{ $t('chat.agent.none') }}</div>
@@ -260,11 +251,6 @@ export default {
         <template v-if="isCurrentCrewConversation">
           <ChatHeader @toggle-sidebar="showMobileSidebar = !showMobileSidebar" />
           <CrewChatView />
-        </template>
-        <!-- Conductor Conversation -->
-        <template v-else-if="isCurrentConductorConversation">
-          <ChatHeader @toggle-sidebar="showMobileSidebar = !showMobileSidebar" />
-          <ConductorChatView />
         </template>
         <!-- Normal Chat Mode -->
         <template v-else>
@@ -538,9 +524,6 @@ export default {
     isCurrentCrewConversation() {
       return this.store.currentConversationIsCrew;
     },
-    isCurrentConductorConversation() {
-      return this.store.currentConversationIsConductor;
-    },
     currentAgentLatency() {
       if (!this.store.currentAgent) return null;
       const agent = this.store.agents.find(a => a.id === this.store.currentAgent);
@@ -561,7 +544,7 @@ export default {
       return this.sortByActivity(this.store.conversations.filter(c => c.type === 'crew'));
     },
     normalConversations() {
-      return this.sortByActivity(this.store.conversations.filter(c => c.type !== 'crew' && c.type !== 'conductor'));
+      return this.sortByActivity(this.store.conversations.filter(c => c.type !== 'crew'));
     }
   },
   methods: {
@@ -576,11 +559,6 @@ export default {
     // Crew mode methods
     newCrewSession() {
       this.store.enterCrewMode();
-    },
-    // Conductor mode — 1:1 per Agent
-    openConductor(agentId) {
-      this.store.openConductor(agentId);
-      this.agentManagerOpen = false;
     },
     startCrewSession(config) {
       this.store.createCrewSession(config);
