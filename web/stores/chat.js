@@ -275,6 +275,7 @@ export const useChatStore = defineStore('chat', {
     sendWsMessage(msg) { return wsHelpers.sendWsMessage(this, msg); },
     parseWsMessage(data) { return wsHelpers.parseWsMessage(this, data); },
     connect() { wsHelpers.connect(this); },
+    ensureConnected() { return wsHelpers.ensureConnected(this); },
     scheduleReconnect() { wsHelpers.scheduleReconnect(this); },
     manualReconnect() { wsHelpers.manualReconnect(this); },
     startHeartbeat() { wsHelpers.startHeartbeat(this); },
