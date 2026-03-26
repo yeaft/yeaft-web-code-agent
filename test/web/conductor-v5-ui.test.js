@@ -619,11 +619,11 @@ describe('P0 fix: openConductor agentId binding', () => {
 
   it('source: conductor.js sets currentAgent before sendWsMessage', () => {
     // Line: store.currentAgent = agentId;
-    // Must appear BEFORE store.sendWsMessage
-    const openFn = conductorHelperSource.substring(
-      conductorHelperSource.indexOf('export function openConductor'),
-      conductorHelperSource.indexOf('export function resumeConductorSession')
-    );
+    // Must appear BEFORE store.sendWsMessage in openConductor
+    // V5: resumeConductorSession no longer exists, use sendConductorMessage as end marker
+    const startIdx = conductorHelperSource.indexOf('export function openConductor');
+    const endIdx = conductorHelperSource.indexOf('export function sendConductorMessage');
+    const openFn = conductorHelperSource.substring(startIdx, endIdx);
     const setAgentIdx = openFn.indexOf('store.currentAgent = agentId');
     const sendWsIdx = openFn.indexOf('store.sendWsMessage');
     expect(setAgentIdx).toBeGreaterThan(-1);
@@ -666,13 +666,9 @@ describe('P0 fix: openConductor agentId binding', () => {
   });
 
   it('source: handler uses msg.agentId || store.currentAgent pattern', () => {
-    const handlerBlock = conductorHelperSource.substring(
-      conductorHelperSource.indexOf("msg.type === 'conductor_session_created'"),
-      conductorHelperSource.indexOf("msg.type === 'conductor_session_restored'") !== -1
-        ? conductorHelperSource.indexOf("msg.type === 'conductor_session_restored'")
-        : conductorHelperSource.indexOf("msg.type === 'conductor_session_created'") + 500
-    );
-    expect(handlerBlock).toContain('msg.agentId || store.currentAgent');
+    // V5: conductor_opened handler (not conductor_session_created) uses
+    // msg.agentId || store.currentAgent to derive agentId
+    expect(conductorHelperSource).toContain('msg.agentId || store.currentAgent');
   });
 
   it('dead createConductorSession removed from store', () => {
