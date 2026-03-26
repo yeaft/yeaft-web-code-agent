@@ -138,22 +138,26 @@ async function ensureDependencies() {
   }
 }
 
-// 确保 yeaft-skills 插件已安装/更新
+// 确保 yeaft-skills 插件已安装到 Claude CLI plugin 系统并注册为 marketplace
 async function ensureYeaftSkills() {
-  const skillsDir = join(homedir(), '.claude', 'skills', 'yeaft-skills');
+  const MARKETPLACE_NAME = 'yeaft-skills-dev';
   const REPO_URL = 'https://github.com/yeaft/yeaft-skills.git';
+  const pluginsDir = join(homedir(), '.claude', 'plugins');
+  const marketplacesDir = join(pluginsDir, 'marketplaces');
+  const installDir = join(marketplacesDir, MARKETPLACE_NAME);
+  const knownFile = join(pluginsDir, 'known_marketplaces.json');
 
   try {
-    if (!existsSync(skillsDir)) {
-      console.log('[Startup] yeaft-skills not found, installing...');
-      const parentDir = join(homedir(), '.claude', 'skills');
-      mkdirSync(parentDir, { recursive: true });
-      await execAsync(`git clone ${REPO_URL} "${skillsDir}"`, { timeout: 60000 });
+    // Clone or update the marketplace repo
+    if (!existsSync(installDir)) {
+      console.log('[Startup] yeaft-skills not found, installing as marketplace plugin...');
+      mkdirSync(marketplacesDir, { recursive: true });
+      await execAsync(`git clone ${REPO_URL} "${installDir}"`, { timeout: 60000 });
       console.log('[Startup] yeaft-skills installed');
     } else {
       console.log('[Startup] yeaft-skills found, checking for updates...');
       const { stdout } = await execAsync('git pull --ff-only', {
-        cwd: skillsDir,
+        cwd: installDir,
         timeout: 30000
       });
       if (stdout.includes('Already up to date')) {
@@ -161,6 +165,28 @@ async function ensureYeaftSkills() {
       } else {
         console.log('[Startup] yeaft-skills updated');
       }
+    }
+
+    // Register in known_marketplaces.json (idempotent)
+    let known = {};
+    if (existsSync(knownFile)) {
+      try {
+        known = JSON.parse(readFileSync(knownFile, 'utf-8'));
+      } catch { /* corrupted file, will recreate */ }
+    }
+    if (!known[MARKETPLACE_NAME]) {
+      known[MARKETPLACE_NAME] = {
+        source: { source: 'github', repo: 'yeaft/yeaft-skills' },
+        installLocation: installDir,
+        lastUpdated: new Date().toISOString()
+      };
+      writeFileSync(knownFile, JSON.stringify(known, null, 2));
+      console.log('[Startup] yeaft-skills registered in known_marketplaces.json');
+    } else {
+      // Update lastUpdated timestamp
+      known[MARKETPLACE_NAME].lastUpdated = new Date().toISOString();
+      known[MARKETPLACE_NAME].installLocation = installDir;
+      writeFileSync(knownFile, JSON.stringify(known, null, 2));
     }
   } catch (e) {
     console.warn('[Startup] yeaft-skills sync failed (skills will be unavailable):', e.message);
