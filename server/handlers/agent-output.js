@@ -1,6 +1,7 @@
 import { messageDb } from '../database.js';
-import { broadcastAgentList, forwardToClients } from '../ws-utils.js';
-import { trackMessage } from '../context.js';
+import { broadcastAgentList, forwardToClients, sendToWebClient } from '../ws-utils.js';
+import { trackMessage, webClients } from '../context.js';
+import { CONFIG } from '../config.js';
 
 /**
  * Handle Claude output and interaction messages from agent.
@@ -136,11 +137,25 @@ export async function handleAgentOutput(agentId, agent, msg) {
     case 'slash_commands_update':
       // 缓存到 agent 对象上，供 web 端选择 agent 时立即获取
       agent.slashCommands = msg.slashCommands || [];
-      await forwardToClients(agentId, msg.conversationId, {
-        type: 'slash_commands_update',
-        conversationId: msg.conversationId,
-        slashCommands: msg.slashCommands
-      });
+      if (msg.conversationId === '__preload__') {
+        // Agent-level preload: broadcast to all owner clients with agentId
+        for (const [, client] of webClients) {
+          if (client.authenticated && (CONFIG.skipAuth || agent.ownerId === client.userId)) {
+            await sendToWebClient(client, {
+              type: 'slash_commands_update',
+              agentId,
+              slashCommands: msg.slashCommands
+            });
+          }
+        }
+      } else {
+        // Per-conversation or per-crew-session update
+        await forwardToClients(agentId, msg.conversationId, {
+          type: 'slash_commands_update',
+          conversationId: msg.conversationId,
+          slashCommands: msg.slashCommands
+        });
+      }
       break;
 
     case 'compact_status':

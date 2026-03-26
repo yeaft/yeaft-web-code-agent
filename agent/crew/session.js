@@ -12,6 +12,7 @@ import {
   loadSessionMeta, saveSessionMeta, loadSessionMessages, getMaxShardIndex
 } from './persistence.js';
 import { sendCrewMessage, sendCrewOutput, sendStatusUpdate } from './ui-messages.js';
+import { preloadSlashCommands } from '../conversation.js';
 
 // =====================================================================
 // Data Structures
@@ -295,6 +296,9 @@ export async function createCrewSession(msg) {
     });
   }
 
+  // ★ Preload project-level skills for crew session input autocomplete
+  preloadSlashCommands(projectDir, sessionId).catch(() => {});
+
   return session;
 }
 
@@ -463,6 +467,8 @@ export async function resumeCrewSession(msg) {
       hasOlderMessages
     });
     sendStatusUpdate(session);
+    // ★ Preload project-level skills for crew session input autocomplete
+    preloadSlashCommands(session.projectDir, sessionId).catch(() => {});
     return;
   }
 
@@ -539,6 +545,9 @@ export async function resumeCrewSession(msg) {
 
   await upsertCrewIndex(session);
   await saveSessionMeta(session);
+
+  // ★ Preload project-level skills for crew session input autocomplete
+  preloadSlashCommands(session.projectDir, sessionId).catch(() => {});
 
   console.log(`[Crew] Session ${sessionId} resumed, waiting for human input`);
 }

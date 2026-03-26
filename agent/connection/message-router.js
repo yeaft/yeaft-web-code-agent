@@ -12,7 +12,7 @@ import {
   createConversation, resumeConversation, deleteConversation,
   handleRefreshConversation, handleCancelExecution,
   handleUserInput, handleUpdateConversationSettings, handleAskUserAnswer,
-  sendConversationList, handleBtwQuestion
+  sendConversationList, handleBtwQuestion, preloadSlashCommands
 } from '../conversation.js';
 import {
   createCrewSession, handleCrewHumanInput, handleCrewControl,
@@ -65,6 +65,9 @@ export async function handleMessage(msg) {
       if (ctx.mcpServers.length > 0) {
         sendToServer({ type: 'mcp_servers_list', servers: ctx.mcpServers });
       }
+
+      // ★ Preload slash commands for immediate skill availability in new sessions
+      preloadSlashCommands().catch(() => {});
       break;
 
     case 'create_conversation':

@@ -1,5 +1,5 @@
 import ctx from './context.js';
-import { query } from './sdk/index.js';
+import { query, Stream } from './sdk/index.js';
 import { loadSessionHistory } from './history.js';
 import { startClaudeQuery } from './claude.js';
 import { crewSessions, loadCrewIndex } from './crew.js';
@@ -19,6 +19,55 @@ function prestartClaude(conversationId, workDir, resumeSessionId) {
   startClaudeQuery(conversationId, workDir, resumeSessionId).catch(err => {
     console.warn(`[Prestart] Failed for ${conversationId}: ${err.message}`);
   });
+}
+
+/**
+ * Preload slash commands from Claude CLI (fire-and-forget).
+ * Spawns a minimal CLI process to capture the system init message,
+ * then aborts immediately (no API tokens consumed — init is local).
+ *
+ * @param {string} [workDir] - Project directory (default: agent workDir)
+ * @param {string} [targetId] - conversationId to key the update to
+ *                               ('__preload__' for agent-level, or crewSessionId)
+ */
+export async function preloadSlashCommands(workDir, targetId = '__preload__') {
+  const effectiveWorkDir = workDir || ctx.CONFIG.workDir;
+  try {
+    const abortController = new AbortController();
+    const inputStream = new Stream();
+    const claudeQuery = query({
+      prompt: inputStream,
+      options: {
+        cwd: effectiveWorkDir,
+        permissionMode: 'bypassPermissions',
+        abort: abortController.signal,
+        maxTurns: 1
+      }
+    });
+    for await (const message of claudeQuery) {
+      if (message.type === 'system' && message.subtype === 'init') {
+        const slashCommands = message.slash_commands || [];
+        if (slashCommands.length > 0) {
+          // Update agent-level cache if this is the first load
+          if (ctx.slashCommands.length === 0) {
+            ctx.slashCommands = [...slashCommands];
+          }
+          ctx.sendToServer({
+            type: 'slash_commands_update',
+            conversationId: targetId,
+            slashCommands
+          });
+          console.log(`[Preload] ${targetId}: loaded ${slashCommands.length} slash commands from ${effectiveWorkDir}`);
+        }
+        abortController.abort();
+        break;
+      }
+    }
+  } catch (err) {
+    if (err.name !== 'AbortError') {
+      console.warn(`[Preload] Failed for ${targetId}: ${err.message}`);
+    }
+  }
 }
 
 /**
