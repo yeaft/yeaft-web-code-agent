@@ -550,12 +550,44 @@
 /* --- ChatHeader conductor actions --- */
 
 .conductor-header-actions {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: 8px; position: relative;
 }
 
 .conductor-cost-label {
   font-size: 12px; color: var(--text-muted); font-family: monospace;
 }
+
+.conductor-workdir-btn {
+  display: flex; align-items: center; gap: 4px;
+  background: var(--sidebar-hover); border: 1px solid var(--border-color);
+  border-radius: 6px; padding: 3px 8px; cursor: pointer;
+  font-size: 12px; color: var(--text-secondary);
+  max-width: 200px; overflow: hidden; white-space: nowrap;
+}
+.conductor-workdir-btn:hover { border-color: var(--text-muted); }
+.conductor-workdir-btn svg { flex-shrink: 0; opacity: 0.6; }
+.conductor-workdir-name { overflow: hidden; text-overflow: ellipsis; }
+
+.conductor-workdir-picker {
+  position: absolute; top: 100%; right: 0; margin-top: 4px;
+  display: flex; align-items: center; gap: 4px;
+  background: var(--bg-main); border: 1px solid var(--border-color);
+  border-radius: 8px; padding: 6px 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  z-index: 50; min-width: 300px;
+}
+.conductor-workdir-input {
+  flex: 1; border: 1px solid var(--border-color); border-radius: 4px;
+  padding: 4px 8px; font-size: 13px; font-family: monospace;
+  background: var(--bg-main); color: var(--text-primary); outline: none;
+}
+.conductor-workdir-input:focus { border-color: var(--crew-color-primary, #4a9eff); }
+.conductor-workdir-set-btn {
+  padding: 4px 12px; border: none; border-radius: 4px;
+  background: var(--crew-color-primary, #4a9eff); color: white;
+  font-size: 12px; cursor: pointer; white-space: nowrap;
+}
+.conductor-workdir-set-btn:hover { opacity: 0.9; }
+.conductor-workdir-set-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* --- Mobile responsive --- */
 

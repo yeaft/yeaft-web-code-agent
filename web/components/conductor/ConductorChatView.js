@@ -1,21 +1,21 @@
 /**
  * ConductorChatView — Main Conductor V5 conversation view.
  *
- * Reuses ChatHeader (via ChatPage parent) for consistent visual language.
- * Layout:
- *   Left:  Conductor conversation message flow (chat-like)
- *   Right: ConductorActivePanel (task list + actor status)
+ * Reuses MessageItem + AssistantTurn from Chat mode for consistent message
+ * rendering. System/task lifecycle messages use compact inline display.
  *
- * Header is provided by ChatPage (ChatHeader component), same as Crew mode.
- * ConductorChatView handles: messages + input + active panel.
+ * Layout:
+ *   Left:  Conductor conversation message flow (reusing Chat components)
+ *   Right: ConductorActivePanel (task list + actor status)
  */
 import ConductorActivePanel from './ConductorActivePanel.js';
 import ConductorTaskPanel from './ConductorTaskPanel.js';
-import { renderMarkdown } from './utils.js';
+import MessageItem from '../MessageItem.js';
+import AssistantTurn from '../AssistantTurn.js';
 
 export default {
   name: 'ConductorChatView',
-  components: { ConductorActivePanel, ConductorTaskPanel },
+  components: { ConductorActivePanel, ConductorTaskPanel, MessageItem, AssistantTurn },
   template: `
     <div class="conductor-chat-view" :class="{ 'active-panel-visible': showActivePanel }">
       <!-- Main workspace: Chat + Active Panel -->
@@ -35,52 +35,30 @@ export default {
               <div class="conductor-empty-hint">Describe what you need, and I'll create tasks and assign actors</div>
             </div>
 
-            <!-- Messages -->
-            <template v-for="msg in conductorMessages" :key="msg.id">
-              <!-- Human messages -->
-              <div v-if="msg.role === 'human'" class="conductor-msg conductor-msg-human">
-                <div class="conductor-msg-content">{{ msg.content }}</div>
-              </div>
+            <!-- Messages rendered via Chat components -->
+            <div v-else class="messages">
+              <template v-for="item in turnGroups" :key="item.id">
+                <!-- Human messages: reuse MessageItem -->
+                <MessageItem v-if="item.type === 'user'" :message="item.message" />
 
-              <!-- System messages (compact) -->
-              <div v-else-if="msg.type === 'system' || msg.type === 'actor_spawn' || msg.type === 'actor_release' || msg.type === 'task_created' || msg.type === 'task_completed'"
-                   class="conductor-msg conductor-msg-system"
-                   :class="'msg-' + msg.type">
-                <span class="conductor-msg-system-text">{{ msg.content }}</span>
-              </div>
+                <!-- Assistant turns: reuse AssistantTurn -->
+                <AssistantTurn v-else-if="item.type === 'assistant-turn'" :turn="item" />
 
-              <!-- Error messages -->
-              <div v-else-if="msg.type === 'error'" class="conductor-msg conductor-msg-error">
-                {{ msg.content }}
-              </div>
-
-              <!-- Tool use (compact) -->
-              <div v-else-if="msg.type === 'tool'" class="conductor-msg conductor-msg-tool">
-                <span class="conductor-msg-tool-icon">&#9889;</span>
-                <span class="conductor-msg-tool-name">{{ msg.toolName }}</span>
-              </div>
-
-              <!-- Conductor / Orchestrator / Actor text -->
-              <div v-else class="conductor-msg conductor-msg-assistant"
-                   :class="{ 'is-streaming': msg._streaming, 'role-conductor': msg.role === 'conductor', 'role-orchestrator': msg.role === 'orchestrator', 'role-actor': msg.role === 'actor' }">
-                <div class="conductor-msg-header">
-                  <span v-if="msg.persona" class="conductor-msg-persona">{{ msg.persona }}</span>
-                  <span v-else class="conductor-msg-role-label">{{ roleLabel(msg) }}</span>
-                  <span v-if="msg.specialty" class="conductor-msg-specialty">{{ msg.specialty }}</span>
-                  <span v-if="msg.taskId" class="conductor-msg-task-link" @click="openTask(msg.taskId)">
-                    &rarr; {{ getTaskTitle(msg.taskId) }}
-                  </span>
+                <!-- System / task lifecycle messages (compact inline) -->
+                <div v-else-if="item.type === 'system'" class="conductor-msg conductor-msg-system" :class="'msg-' + (item.message.type || 'system')">
+                  <span class="conductor-msg-system-text">{{ item.message.content }}</span>
                 </div>
-                <div class="conductor-msg-text" v-html="renderMarkdown(msg.content)"></div>
-                <span v-if="msg._streaming" class="typing-indicator conductor-streaming-dots">
-                  <span></span><span></span><span></span>
-                </span>
-              </div>
-            </template>
 
-            <!-- Waiting for response indicator -->
-            <div v-if="isWaitingResponse" class="typing-indicator">
-              <span></span><span></span><span></span>
+                <!-- Error messages -->
+                <div v-else-if="item.type === 'error'" class="conductor-msg conductor-msg-error">
+                  {{ item.message.content }}
+                </div>
+              </template>
+
+              <!-- Waiting for response indicator -->
+              <div v-if="isWaitingResponse" class="typing-indicator">
+                <span></span><span></span><span></span>
+              </div>
             </div>
 
             <!-- Scroll to bottom fab -->
@@ -159,7 +137,6 @@ export default {
       return this.store.conductorActivePanelVisible;
     },
     session() {
-      // V5: no separate conductorSessions — use the conversation entry
       const sid = this.store.currentConversation;
       if (!sid) return null;
       return this.store.conversations.find(c => c.id === sid) || null;
@@ -205,6 +182,95 @@ export default {
       if (!msgs || msgs.length === 0) return false;
       const last = msgs[msgs.length - 1];
       return last.role === 'human' && !last._sendFailed;
+    },
+    /**
+     * Transform conductor messages into turn groups compatible with
+     * MessageItem and AssistantTurn components.
+     */
+    turnGroups() {
+      const msgs = this.conductorMessages;
+      const result = [];
+      let currentTurn = null;
+      let turnCounter = 0;
+
+      const finishTurn = () => {
+        if (currentTurn) {
+          if (currentTurn.textContent || currentTurn.toolMsgs.length > 0) {
+            result.push(currentTurn);
+          }
+          currentTurn = null;
+        }
+      };
+
+      const startTurn = () => {
+        turnCounter++;
+        currentTurn = {
+          type: 'assistant-turn',
+          id: 'cturn_' + turnCounter,
+          textContent: '',
+          isStreaming: false,
+          todoMsg: null,
+          toolMsgs: [],
+          askMsg: null,
+          messages: []
+        };
+      };
+
+      for (let i = 0; i < msgs.length; i++) {
+        const msg = msgs[i];
+
+        // Human → MessageItem as user
+        if (msg.role === 'human') {
+          finishTurn();
+          result.push({
+            type: 'user',
+            id: msg.id || 'hu_' + i,
+            message: { type: 'user', content: msg.content, id: msg.id }
+          });
+          continue;
+        }
+
+        // System / task lifecycle → compact inline
+        if (msg.type === 'system' || msg.type === 'task_created' || msg.type === 'task_completed'
+            || msg.type === 'actor_spawn' || msg.type === 'actor_release' || msg.type === 'task_message') {
+          finishTurn();
+          result.push({ type: 'system', id: msg.id || 'cs_' + i, message: msg });
+          continue;
+        }
+
+        // Error → compact inline
+        if (msg.type === 'error') {
+          finishTurn();
+          result.push({ type: 'error', id: msg.id || 'ce_' + i, message: msg });
+          continue;
+        }
+
+        // Tool → aggregate into AssistantTurn
+        if (msg.type === 'tool') {
+          if (!currentTurn) startTurn();
+          currentTurn.toolMsgs.push({
+            toolName: msg.toolName,
+            toolInput: msg.toolInput || {},
+            toolResult: msg.toolResult || null,
+            hasResult: msg.hasResult || false
+          });
+          currentTurn.messages.push(msg);
+          continue;
+        }
+
+        // Text (conductor / orchestrator / actor) → aggregate into AssistantTurn
+        if (!currentTurn) startTurn();
+        if (msg.content) {
+          currentTurn.textContent += msg.content;
+        }
+        if (msg._streaming) {
+          currentTurn.isStreaming = true;
+        }
+        currentTurn.messages.push(msg);
+      }
+
+      finishTurn();
+      return result;
     }
   },
 
@@ -222,17 +288,6 @@ export default {
   },
 
   methods: {
-    roleLabel(msg) {
-      if (msg.role === 'conductor') return 'Conductor';
-      if (msg.role === 'orchestrator') return 'Orchestrator';
-      if (msg.role === 'actor') return 'Actor';
-      return msg.role || 'System';
-    },
-    getTaskTitle(taskId) {
-      const task = this.currentTasks[taskId];
-      return task?.title || taskId;
-    },
-    renderMarkdown,
     openTask(taskId) {
       this.selectedTaskId = this.selectedTaskId === taskId ? null : taskId;
     },

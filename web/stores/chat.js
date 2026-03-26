@@ -135,6 +135,7 @@ export const useChatStore = defineStore('chat', {
     conductorTasks: {},           // { [convId]: { [taskId]: TaskStatus } }
     conductorStatuses: {},        // { [convId]: { status, costUsd, ... } }
     conductorActivePanelVisible: true,  // Active Panel toggle
+    conductorWorkDir: '',         // User-selected task workDir for Conductor
   }),
 
   getters: {
