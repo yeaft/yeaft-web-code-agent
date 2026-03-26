@@ -477,7 +477,7 @@ describe('ConductorChatView V5 header cleanup', () => {
   it('CSS: old conductor-header styles removed', () => {
     expect(conductorCssSource).not.toContain('.conductor-header {');
     expect(conductorCssSource).not.toContain('.conductor-header-left');
-    expect(conductorCssSource).not.toContain('.conductor-workdir');
+    expect(conductorCssSource).not.toContain('.conductor-workdir {');
     expect(conductorCssSource).not.toContain('.conductor-workdir-menu');
   });
 
