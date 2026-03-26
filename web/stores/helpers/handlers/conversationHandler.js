@@ -6,6 +6,11 @@ import { isRecentlyClosed, stopProcessingWatchdog } from '../watchdog.js';
 import { clearSessionLoading } from '../session.js';
 import { t } from '../../../utils/i18n.js';
 
+/** Filter out empty user messages — tool_result artifacts stored as empty user records in DB */
+function filterEmptyUserMessages(messages) {
+  return messages.filter(m => !(m.type === 'user' && (!m.content || !m.content.trim())));
+}
+
 export function handleConversationCreated(store, msg) {
   clearSessionLoading(store);
   if (store.currentConversation && store.messages.length > 0) {
@@ -81,8 +86,7 @@ export function handleConversationResumed(store, msg) {
   console.log('dbMessages received:', msg.dbMessages?.length || 0, 'dbMessageCount:', msg.dbMessageCount || 0);
   if (msg.dbMessages && msg.dbMessages.length > 0) {
     const formatted = msg.dbMessages.map(m => store.formatDbMessage(m)).flat().filter(Boolean);
-    // Filter empty user messages (tool_result artifacts from DB)
-    const cleaned = formatted.filter(m => !(m.type === 'user' && (!m.content || !m.content.trim())));
+    const cleaned = filterEmptyUserMessages(formatted);
     for (const m of cleaned) {
       store.messages.push(m);
     }
@@ -198,7 +202,9 @@ export function handleExecutionCancelled(store, msg) {
 
 export function handleSyncMessagesResult(store, msg) {
   if (msg.conversationId === store.currentConversation) {
-    const formatted = (msg.messages || []).map(m => store.formatDbMessage(m)).flat().filter(Boolean);
+    const formatted = filterEmptyUserMessages(
+      (msg.messages || []).map(m => store.formatDbMessage(m)).flat().filter(Boolean)
+    );
 
     if (formatted.length > 0) {
       const firstDbMsg = store.messages.find(m => m.dbMessageId);
