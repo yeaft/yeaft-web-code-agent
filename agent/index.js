@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { platform, homedir } from 'os';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, cpSync } from 'fs';
 import { join, dirname } from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
@@ -141,21 +141,37 @@ async function ensureDependencies() {
 // 确保 yeaft-skills 插件已安装到 Claude CLI plugin 系统并注册为 marketplace
 async function ensureYeaftSkills() {
   const MARKETPLACE_NAME = 'yeaft-skills-dev';
+  const PLUGIN_NAME = 'yeaft-skills';
+  const PLUGIN_KEY = `${PLUGIN_NAME}@${MARKETPLACE_NAME}`;
+  const PLUGIN_VERSION = '0.1.0';
   const REPO_URL = 'https://github.com/yeaft/yeaft-skills.git';
-  const pluginsDir = join(homedir(), '.claude', 'plugins');
+  const claudeDir = join(homedir(), '.claude');
+  const pluginsDir = join(claudeDir, 'plugins');
   const marketplacesDir = join(pluginsDir, 'marketplaces');
   const installDir = join(marketplacesDir, MARKETPLACE_NAME);
   const knownFile = join(pluginsDir, 'known_marketplaces.json');
+  const installedFile = join(pluginsDir, 'installed_plugins.json');
+  const settingsFile = join(claudeDir, 'settings.json');
+  const cacheDir = join(pluginsDir, 'cache', MARKETPLACE_NAME, PLUGIN_NAME, PLUGIN_VERSION);
 
   try {
-    // Clone or update the marketplace repo
+    // --- Layer 1: Clone or update the marketplace repo ---
+    let gitSha = '';
+    let needsCacheUpdate = false;
     if (!existsSync(installDir)) {
       console.log('[Startup] yeaft-skills not found, installing as marketplace plugin...');
       mkdirSync(marketplacesDir, { recursive: true });
       await execAsync(`git clone ${REPO_URL} "${installDir}"`, { timeout: 60000 });
+      needsCacheUpdate = true;
       console.log('[Startup] yeaft-skills installed');
     } else {
       console.log('[Startup] yeaft-skills found, checking for updates...');
+      // Record HEAD before pull to detect changes
+      let headBefore = '';
+      try {
+        const { stdout: h } = await execAsync('git rev-parse HEAD', { cwd: installDir, timeout: 5000 });
+        headBefore = h.trim();
+      } catch { /* ignore */ }
       const { stdout } = await execAsync('git pull --ff-only', {
         cwd: installDir,
         timeout: 30000
@@ -163,11 +179,24 @@ async function ensureYeaftSkills() {
       if (stdout.includes('Already up to date')) {
         console.log('[Startup] yeaft-skills is up to date');
       } else {
+        needsCacheUpdate = true;
         console.log('[Startup] yeaft-skills updated');
       }
+      // Double-check: compare HEAD after pull
+      if (!needsCacheUpdate && headBefore) {
+        try {
+          const { stdout: h2 } = await execAsync('git rev-parse HEAD', { cwd: installDir, timeout: 5000 });
+          if (h2.trim() !== headBefore) needsCacheUpdate = true;
+        } catch { /* ignore */ }
+      }
     }
+    // Get current commit SHA for installed_plugins.json
+    try {
+      const { stdout: sha } = await execAsync('git rev-parse HEAD', { cwd: installDir, timeout: 5000 });
+      gitSha = sha.trim();
+    } catch { /* non-critical */ }
 
-    // Register in known_marketplaces.json (idempotent)
+    // --- Layer 2: Register in known_marketplaces.json (idempotent) ---
     let known = {};
     if (existsSync(knownFile)) {
       try {
@@ -183,10 +212,59 @@ async function ensureYeaftSkills() {
       writeFileSync(knownFile, JSON.stringify(known, null, 2));
       console.log('[Startup] yeaft-skills registered in known_marketplaces.json');
     } else {
-      // Update lastUpdated timestamp
       known[MARKETPLACE_NAME].lastUpdated = new Date().toISOString();
       known[MARKETPLACE_NAME].installLocation = installDir;
       writeFileSync(knownFile, JSON.stringify(known, null, 2));
+    }
+
+    // --- Layer 3: Copy to plugin cache (on first install or after update) ---
+    if (!existsSync(cacheDir) || needsCacheUpdate) {
+      mkdirSync(cacheDir, { recursive: true });
+      cpSync(installDir, cacheDir, { recursive: true });
+      console.log(`[Startup] yeaft-skills ${needsCacheUpdate ? 'updated in' : 'copied to'} plugin cache`);
+    }
+
+    // --- Layer 4: Register in installed_plugins.json ---
+    let installed = { version: 2, plugins: {} };
+    if (existsSync(installedFile)) {
+      try {
+        installed = JSON.parse(readFileSync(installedFile, 'utf-8'));
+      } catch { /* corrupted, will recreate */ }
+    }
+    if (!installed.plugins) installed.plugins = {};
+    if (!installed.plugins[PLUGIN_KEY]) {
+      const now = new Date().toISOString();
+      installed.plugins[PLUGIN_KEY] = [{
+        scope: 'user',
+        installPath: cacheDir,
+        version: PLUGIN_VERSION,
+        installedAt: now,
+        lastUpdated: now,
+        ...(gitSha ? { gitCommitSha: gitSha } : {})
+      }];
+      writeFileSync(installedFile, JSON.stringify(installed, null, 2));
+      console.log('[Startup] yeaft-skills registered in installed_plugins.json');
+    }
+
+    // --- Layer 5: Enable in settings.json ---
+    // Read existing settings; on parse failure skip to avoid losing user config
+    let settings = null;
+    if (existsSync(settingsFile)) {
+      try {
+        settings = JSON.parse(readFileSync(settingsFile, 'utf-8'));
+      } catch {
+        console.warn('[Startup] settings.json corrupted, skipping enabledPlugins write');
+      }
+    } else {
+      settings = {};
+    }
+    if (settings !== null) {
+      if (!settings.enabledPlugins) settings.enabledPlugins = {};
+      if (!settings.enabledPlugins[PLUGIN_KEY]) {
+        settings.enabledPlugins[PLUGIN_KEY] = true;
+        writeFileSync(settingsFile, JSON.stringify(settings, null, 2));
+        console.log('[Startup] yeaft-skills enabled in settings.json');
+      }
     }
   } catch (e) {
     console.warn('[Startup] yeaft-skills sync failed (skills will be unavailable):', e.message);
