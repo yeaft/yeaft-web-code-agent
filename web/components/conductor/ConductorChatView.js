@@ -526,6 +526,9 @@ export default {
         // Tool → aggregate into AssistantTurn
         if (msg.type === 'tool') {
           if (!currentTurn) startTurn();
+          if (msg.toolName === 'AskUserQuestion') {
+            currentTurn.askMsg = msg;
+          }
           currentTurn.toolMsgs.push({
             toolName: msg.toolName,
             toolInput: msg.toolInput || {},
