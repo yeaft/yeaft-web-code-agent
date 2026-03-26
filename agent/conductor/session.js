@@ -16,6 +16,7 @@ import {
   sendConductorMessage, sendConductorOutput, sendStatusUpdate, recordUserMessage
 } from './ui-messages.js';
 import { createConductorClaude, sendToConductor, stopConductorClaude } from './conductor-claude.js';
+import { stopAllTaskExecutions } from './task-runner.js';
 
 // =====================================================================
 // Singleton Conductor Instance
@@ -164,6 +165,7 @@ export async function stopConductor() {
   if (!conductor) return;
 
   conductor.status = 'stopped';
+  await stopAllTaskExecutions();
   await stopConductorClaude(conductor);
 
   sendConductorOutput(conductor, 'system', {

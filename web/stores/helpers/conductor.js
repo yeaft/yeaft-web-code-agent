@@ -251,6 +251,28 @@ export function handleConductorOutput(store, msg) {
 
   // ── Task lifecycle ──
 
+  if (msg.type === 'conductor_task_creating') {
+    if (!store.conductorTasks[convId]) store.conductorTasks[convId] = {};
+    const taskId = msg.taskId;
+    store.conductorTasks[convId][taskId] = {
+      taskId,
+      title: msg.title,
+      status: 'creating',
+      workDir: msg.workDir,
+      scenario: msg.scenario,
+      createdAt: Date.now()
+    };
+    ensureMessages(store, convId).push({
+      id: crypto.randomUUID(),
+      role: 'conductor',
+      type: 'task_creating',
+      content: `Creating task: ${msg.title}...`,
+      taskId,
+      timestamp: Date.now()
+    });
+    return;
+  }
+
   if (msg.type === 'conductor_task_created') {
     if (!store.conductorTasks[convId]) store.conductorTasks[convId] = {};
     const task = msg.task || {};
@@ -283,6 +305,21 @@ export function handleConductorOutput(store, msg) {
       taskId: msg.taskId || null,
       timestamp: Date.now()
     });
+    return;
+  }
+
+  if (msg.type === 'conductor_task_status') {
+    if (!store.conductorTasks[convId]) store.conductorTasks[convId] = {};
+    const taskId = msg.taskId;
+    const task = msg.task || {};
+    const existing = store.conductorTasks[convId][taskId] || {};
+    store.conductorTasks[convId][taskId] = {
+      ...existing,
+      ...task,
+      taskId,
+      status: task.phase || task.status || existing.status,
+      lastUpdate: Date.now()
+    };
     return;
   }
 

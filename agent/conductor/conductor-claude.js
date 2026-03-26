@@ -21,6 +21,7 @@ import {
   getConductorHome, ensureConductorHome,
   loadState, saveState, updateTaskInState, initTaskDir
 } from './persistence.js';
+import { startTaskExecution } from './task-runner.js';
 
 // =====================================================================
 // Claude Session ID Persistence
@@ -191,6 +192,7 @@ export async function sendToConductor(conductor, content) {
 
   state.turnActive = true;
   state.accumulatedText = '';
+  state._lastUserContent = content;  // Preserve original user input for task description
   state.inputStream.enqueue({
     type: 'user',
     message: { role: 'user', content: fullContent }
@@ -328,6 +330,18 @@ async function processConductorOutput(conductor, conductorQuery) {
         for (const ct of createTasks) {
           const taskId = `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 
+          // Notify frontend: task is being created (worktree may take a few seconds)
+          sendConductorOutput(conductor, 'task_creating', null, {
+            taskId, taskTitle: ct.title
+          });
+          sendConductorMessage({
+            type: 'conductor_task_creating',
+            taskId,
+            title: ct.title,
+            workDir: ct.workDir,
+            scenario: ct.scenario
+          });
+
           // Create task directory at {workDir}/.conductor/{taskId}/ (includes worktree)
           let worktreePath = null;
           if (ct.workDir) {
@@ -339,10 +353,15 @@ async function processConductorOutput(conductor, conductorQuery) {
             }
           }
 
+          // Extract user's original message as task description
+          // (the content that triggered this CREATE_TASK)
+          const userDescription = state._lastUserContent || ct.title;
+
           // Register in state.json
           const taskEntry = {
             taskId,
             title: ct.title,
+            description: userDescription,
             workDir: ct.workDir,
             scenario: ct.scenario,
             status: 'created',
@@ -367,6 +386,11 @@ async function processConductorOutput(conductor, conductorQuery) {
           });
 
           console.log(`[Conductor] Task created: ${taskId} — ${ct.title} @ ${ct.workDir} (${ct.scenario})`);
+
+          // Start Orchestrator-driven execution (fire-and-forget)
+          startTaskExecution(conductor, taskEntry).catch(e =>
+            console.error(`[Conductor] Task execution failed for ${taskId}:`, e.message)
+          );
         }
 
         // Handle FORWARD_TASK

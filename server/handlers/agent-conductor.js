@@ -12,7 +12,9 @@ const CONDUCTOR_MSG_TYPES = new Set([
   'conductor_status',
   'conductor_turn_completed',
   'conductor_error',
+  'conductor_task_creating',
   'conductor_task_created',
+  'conductor_task_status',
   'conductor_task_message',
   'conductor_cleared',
   'conductor_history_loaded'

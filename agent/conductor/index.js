@@ -1,12 +1,13 @@
 /**
  * Conductor — Module Entry
  *
- * Exports three core subsystems:
+ * Exports core subsystems:
  * 1. Personas — 18 persona definitions (4 scenarios)
  * 2. Specialties — specialty behavior definitions
  * 3. CLAUDE.md Generator — dynamic 3-section generation
  * 4. Actor — Claude instance create/manage/release
  * 5. Worktree — per-task worktree management
+ * 6. Task Runner — Orchestrator ↔ Actor bridge layer
  */
 
 // ---- Personas ----
@@ -63,3 +64,11 @@ export {
   getTaskWorktreePath,
   getActorCwd
 } from './worktree.js';
+
+// ---- Task Runner (Orchestrator ↔ Actor bridge) ----
+export {
+  startTaskExecution,
+  stopTaskExecution,
+  stopAllTaskExecutions,
+  getOrchestrator
+} from './task-runner.js';

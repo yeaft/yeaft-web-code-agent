@@ -20,7 +20,7 @@ export function sendConductorMessage(msg) {
 
 /**
  * Send Conductor Claude output to frontend
- * outputType: 'text' | 'tool_use' | 'tool_result' | 'system' | 'task_created' | 'task_forwarded'
+ * outputType: 'text' | 'tool_use' | 'tool_result' | 'system' | 'task_creating' | 'task_created' | 'task_forwarded'
  */
 export function sendConductorOutput(conductor, outputType, rawMessage, extra = {}) {
   sendConductorMessage({
@@ -63,6 +63,13 @@ export function sendConductorOutput(conductor, outputType, rawMessage, extra = {
     if (!text) return;
     conductor.uiMessages.push({
       source: 'conductor', type: 'system', content: text, timestamp: Date.now()
+    });
+  } else if (outputType === 'task_creating') {
+    conductor.uiMessages.push({
+      source: 'conductor', type: 'task_creating',
+      taskId: extra.taskId, taskTitle: extra.taskTitle,
+      content: `Creating task: ${extra.taskTitle}...`,
+      timestamp: Date.now()
     });
   } else if (outputType === 'task_created') {
     conductor.uiMessages.push({
