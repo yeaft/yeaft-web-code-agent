@@ -4,6 +4,19 @@ import { useAuthStore } from '../auth.js';
 import { encrypt, decrypt, isEncrypted } from '../../utils/encryption.js';
 import { clearSessionLoading } from './session.js';
 
+// Pending ensureConnected resolvers — settled by onopen/timeout
+let _connectResolvers = [];
+
+function _settleConnectResolvers(success) {
+  const resolvers = _connectResolvers;
+  _connectResolvers = [];
+  for (const { resolve, reject, timer } of resolvers) {
+    clearTimeout(timer);
+    if (success) resolve();
+    else reject(new Error('WebSocket reconnect failed'));
+  }
+}
+
 export function sendWsMessage(store, msg) {
   if (!store.ws || store.ws.readyState !== WebSocket.OPEN) {
     console.warn('[WS] Cannot send, connection not open:', msg.type);
@@ -22,6 +35,34 @@ export function sendWsMessage(store, msg) {
     console.error('[WS] Failed to send message:', msg.type, e);
     return false;
   }
+}
+
+/**
+ * Ensure WebSocket is connected before sending.
+ * - If already open: resolves immediately.
+ * - If disconnected/reconnecting: triggers reconnect and waits for onopen (timeout 10s).
+ */
+export function ensureConnected(store, timeoutMs = 10000) {
+  if (store.ws && store.ws.readyState === WebSocket.OPEN) {
+    return Promise.resolve();
+  }
+
+  console.log('[WS] ensureConnected: not connected, triggering reconnect...');
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      _connectResolvers = _connectResolvers.filter(r => r.resolve !== resolve);
+      reject(new Error('WebSocket reconnect timeout'));
+    }, timeoutMs);
+
+    _connectResolvers.push({ resolve, reject, timer });
+
+    // Only trigger reconnect if not already connecting
+    if (!store.ws || store.ws.readyState !== WebSocket.CONNECTING) {
+      store.reconnectAttempts = 0;
+      store.connect();
+    }
+  });
 }
 
 export function parseWsMessage(store, data) {
@@ -74,6 +115,7 @@ export function connect(store) {
     store.connectionState = 'connected';
     store.reconnectAttempts = 0;
     store.startHeartbeat();
+    _settleConnectResolvers(true);
   };
 
   store.ws.onmessage = (event) => {
@@ -99,6 +141,7 @@ export function connect(store) {
       localStorage.removeItem('authToken');
       authStore.reset();
       store.reconnectAttempts = 0;
+      _settleConnectResolvers(false);
       return;
     }
 

@@ -116,6 +116,7 @@ export default {
   'chat.connection.updating': '服务正在更新，请稍候...',
   'chat.connection.disconnected': '连接断开',
   'chat.connection.reconnect': '重连',
+  'chat.connection.reconnectFailed': '连接断开，请点击重连按钮重试。',
 
   // Chat - Time
   'chat.time.justNow': '刚刚',

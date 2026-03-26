@@ -116,6 +116,7 @@ export default {
   'chat.connection.updating': 'Server is updating, please wait...',
   'chat.connection.disconnected': 'Disconnected',
   'chat.connection.reconnect': 'Reconnect',
+  'chat.connection.reconnectFailed': 'Connection lost. Please click reconnect to retry.',
 
   // Chat - Time
   'chat.time.justNow': 'Just now',

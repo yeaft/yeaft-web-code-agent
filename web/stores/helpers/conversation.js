@@ -2,6 +2,7 @@
 
 import { startProcessingWatchdog, stopProcessingWatchdog } from './watchdog.js';
 import { setSessionLoading, saveOpenSessions } from './session.js';
+import { ensureConnected } from './websocket.js';
 import { t } from '../../utils/i18n.js';
 
 export function selectAgent(store, agentId) {
@@ -283,7 +284,20 @@ export function sendMessage(store, text, attachments = [], options = {}) {
   if (hasExpertSelections) {
     wsMsg.expertSelections = options.expertSelections;
   }
-  store.sendWsMessage(wsMsg);
+
+  // Try send; if WS not connected, auto-reconnect and retry
+  if (!store.sendWsMessage(wsMsg)) {
+    ensureConnected(store).then(() => {
+      store.sendWsMessage(wsMsg);
+    }).catch(() => {
+      store.addMessage({
+        type: 'system',
+        content: t('chat.connection.reconnectFailed')
+      });
+      delete store.processingConversations[store.currentConversation];
+      stopProcessingWatchdog(store, store.currentConversation);
+    });
+  }
 }
 
 export function cancelExecution(store) {
