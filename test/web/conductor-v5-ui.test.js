@@ -712,7 +712,7 @@ describe('boundary conditions', () => {
     // The template uses v-if="conductorMessages.length === 0"
     expect(conductorChatViewSource).toContain('conductorMessages.length === 0');
     expect(conductorChatViewSource).toContain('conductor-empty');
-    expect(conductorChatViewSource).toContain('Conductor is ready');
+    expect(conductorChatViewSource).toContain("$t('conductor.ready')");
   });
 
   it('openConductor: agent with no existing conversations creates fresh session', () => {

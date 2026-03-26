@@ -223,6 +223,17 @@
 
 /* --- Active Panel (right side, 240px) --- */
 
+/* crew-feature-card extensions for conductor context */
+.conductor-active-panel .crew-feature-card.is-selected {
+  border-color: var(--crew-color-primary, #4a9eff);
+  box-shadow: 0 0 0 1px var(--crew-color-primary, #4a9eff);
+}
+
+.conductor-active-panel .crew-feature-card-bar-fill.is-indeterminate {
+  width: 40% !important;
+  animation: conductor-indeterminate 1.5s infinite ease-in-out;
+}
+
 .conductor-active-panel {
   width: 240px; min-width: 240px;
   border-left: 1px solid var(--border-color);

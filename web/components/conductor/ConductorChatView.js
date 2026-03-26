@@ -31,8 +31,8 @@ export default {
               <div class="conductor-empty-icon">
                 <svg viewBox="0 0 24 24" width="40" height="40"><path fill="var(--text-muted)" d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/></svg>
               </div>
-              <div class="conductor-empty-text">Conductor is ready</div>
-              <div class="conductor-empty-hint">Describe what you need, and I'll create tasks and assign actors</div>
+              <div class="conductor-empty-text">{{ $t('conductor.ready') }}</div>
+              <div class="conductor-empty-hint">{{ $t('conductor.emptyHint') }}</div>
             </div>
 
             <!-- Messages rendered via Chat components -->
@@ -65,16 +65,16 @@ export default {
             <div class="conductor-scroll-bottom"
                  :class="{ 'is-hidden': isAtBottom }"
                  @click="scrollToBottom">
-              &#8595; Latest
+              {{ $t('conductor.scrollLatest') }}
             </div>
           </div>
 
           <!-- Input area — conductor-specific (sends via store.sendConductorMessage) -->
           <div class="conductor-input-area">
             <div class="conductor-input-hints" v-if="activeTaskCount > 0 || activeActorCount > 0">
-              <span class="conductor-hint-meta" v-if="activeTaskCount > 0">{{ activeTaskCount }} tasks</span>
+              <span class="conductor-hint-meta" v-if="activeTaskCount > 0">{{ $t('conductor.tasks', { count: activeTaskCount }) }}</span>
               <span class="conductor-hint-sep" v-if="activeTaskCount > 0 && activeActorCount > 0">&middot;</span>
-              <span class="conductor-hint-meta" v-if="activeActorCount > 0">{{ activeActorCount }} actors</span>
+              <span class="conductor-hint-meta" v-if="activeActorCount > 0">{{ $t('conductor.actors', { count: activeActorCount }) }}</span>
             </div>
             <div class="conductor-input-wrapper">
               <textarea
@@ -82,7 +82,7 @@ export default {
                 v-model="inputText"
                 @keydown="handleKeydown"
                 @input="autoResize"
-                placeholder="Talk to the Conductor..."
+                :placeholder="$t('conductor.inputPlaceholder')"
                 rows="1"
               ></textarea>
               <button class="conductor-send-btn" @click="sendMessage" :disabled="!inputText.trim()">
