@@ -156,13 +156,15 @@ describe('ConductorChatView i18n integration', () => {
     expect(chatViewSource).not.toMatch(/>\s*&#8595;\s*Latest\s*</);
   });
 
-  it('input hints use $t("conductor.tasks") and $t("conductor.actors")', () => {
-    expect(chatViewSource).toContain("$t('conductor.tasks'");
-    expect(chatViewSource).toContain("$t('conductor.actors'");
+  it('input hints for tasks/actors — removed in ChatInput reuse (hints now computed, not in template)', () => {
+    // The conductor-input-hints were removed when ChatInput replaced the custom input area.
+    // Task/actor counts are still available as computed properties but no longer rendered inline.
+    expect(chatViewSource).toContain('activeTaskCount');
+    expect(chatViewSource).toContain('activeActorCount');
   });
 
-  it('input placeholder uses :placeholder="$t(\'conductor.inputPlaceholder\')"', () => {
-    expect(chatViewSource).toContain("$t('conductor.inputPlaceholder')");
+  it('input placeholder passed via ChatInput placeholder-key prop', () => {
+    expect(chatViewSource).toContain("placeholder-key=\"conductor.inputPlaceholder\"");
     expect(chatViewSource).not.toContain('placeholder="Talk to the Conductor..."');
   });
 });

@@ -12,10 +12,11 @@ import ConductorActivePanel from './ConductorActivePanel.js';
 import ConductorTaskPanel from './ConductorTaskPanel.js';
 import MessageItem from '../MessageItem.js';
 import AssistantTurn from '../AssistantTurn.js';
+import ChatInput from '../ChatInput.js';
 
 export default {
   name: 'ConductorChatView',
-  components: { ConductorActivePanel, ConductorTaskPanel, MessageItem, AssistantTurn },
+  components: { ConductorActivePanel, ConductorTaskPanel, MessageItem, AssistantTurn, ChatInput },
   template: `
     <div class="conductor-chat-view" :class="{ 'active-panel-visible': showActivePanel }">
       <!-- Main workspace: Chat + Active Panel -->
@@ -32,7 +33,19 @@ export default {
                 <svg viewBox="0 0 24 24" width="40" height="40"><path fill="var(--text-muted)" d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/></svg>
               </div>
               <div class="conductor-empty-text">{{ $t('conductor.ready') }}</div>
-              <div class="conductor-empty-hint">{{ $t('conductor.emptyHint') }}</div>
+              <template v-if="!store.conductorWorkDir">
+                <div class="conductor-empty-hint">{{ $t('conductor.selectDirHint') }}</div>
+                <button class="conductor-empty-action" @click="openFolderPicker">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                  </svg>
+                  {{ $t('conductor.chooseDir') }}
+                </button>
+                <div class="conductor-empty-subtitle">{{ $t('conductor.orTypeBelow') }}</div>
+              </template>
+              <template v-else>
+                <div class="conductor-empty-hint">{{ $t('conductor.emptyHint') }}</div>
+              </template>
             </div>
 
             <!-- Messages rendered via Chat components -->
@@ -69,27 +82,13 @@ export default {
             </div>
           </div>
 
-          <!-- Input area — conductor-specific (sends via store.sendConductorMessage) -->
-          <div class="conductor-input-area">
-            <div class="conductor-input-hints" v-if="activeTaskCount > 0 || activeActorCount > 0">
-              <span class="conductor-hint-meta" v-if="activeTaskCount > 0">{{ $t('conductor.tasks', { count: activeTaskCount }) }}</span>
-              <span class="conductor-hint-sep" v-if="activeTaskCount > 0 && activeActorCount > 0">&middot;</span>
-              <span class="conductor-hint-meta" v-if="activeActorCount > 0">{{ $t('conductor.actors', { count: activeActorCount }) }}</span>
-            </div>
-            <div class="conductor-input-wrapper">
-              <textarea
-                ref="inputRef"
-                v-model="inputText"
-                @keydown="handleKeydown"
-                @input="autoResize"
-                :placeholder="$t('conductor.inputPlaceholder')"
-                rows="1"
-              ></textarea>
-              <button class="conductor-send-btn" @click="sendMessage" :disabled="!inputText.trim()">
-                <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
-              </button>
-            </div>
-          </div>
+          <!-- Input: reuse ChatInput with conductor-specific send behavior -->
+          <ChatInput
+            :send-fn="conductorSendFn"
+            :cancel-fn="conductorCancelFn"
+            placeholder-key="conductor.inputPlaceholder"
+            :show-stop="isWaitingResponse"
+          />
         </div>
 
         <!-- Right: Active Panel -->
@@ -125,7 +124,6 @@ export default {
 
   data() {
     return {
-      inputText: '',
       selectedTaskId: null,
       isAtBottom: true,
       isMobile: window.innerWidth < 768
@@ -294,31 +292,23 @@ export default {
     closeTask() {
       this.selectedTaskId = null;
     },
-    sendMessage() {
-      const text = this.inputText.trim();
+    /** Trigger the ChatHeader workDir Picker via shared store flag. */
+    openFolderPicker() {
+      this.store.conductorPickerOpen = true;
+    },
+    /** Send function passed to ChatInput — delegates to store.sendConductorMessage. */
+    conductorSendFn(text, attachments) {
       if (!text) return;
-      this.store.sendConductorMessage(text);
-      this.inputText = '';
+      this.store.sendConductorMessage(text, null, attachments);
       this.isAtBottom = true;
-      this.$nextTick(() => {
-        this.scrollToBottom();
-        this.autoResize();
-      });
+      this.$nextTick(() => this.scrollToBottom());
+    },
+    /** Cancel function passed to ChatInput — sends stop_conductor. */
+    conductorCancelFn() {
+      this.store.sendConductorControl('stop');
     },
     sendTaskMessage(text, taskId) {
       this.store.sendConductorMessage(text, taskId);
-    },
-    handleKeydown(e) {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        this.sendMessage();
-      }
-    },
-    autoResize() {
-      const el = this.$refs.inputRef;
-      if (!el) return;
-      el.style.height = 'auto';
-      el.style.height = Math.min(el.scrollHeight, 120) + 'px';
     },
     onScroll() {
       const el = this.$refs.messagesRef;

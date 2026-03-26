@@ -126,16 +126,61 @@ export default {
         </button>
       </div>
       <div class="conductor-header-actions" v-if="store.currentConversationIsConductor">
-        <button class="conductor-workdir-btn" @click="toggleWorkDirPicker" :title="conductorWorkDirLabel || 'Select work directory'">
+        <button class="conductor-workdir-btn" :class="{ 'is-empty': !store.conductorWorkDir, 'is-open': showWorkDirPicker }" @click="toggleWorkDirPicker" :title="store.conductorWorkDir || 'Select work directory'" aria-haspopup="dialog" :aria-expanded="showWorkDirPicker">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
           </svg>
-          <span class="conductor-workdir-name">{{ conductorWorkDirLabel || 'No folder' }}</span>
+          <span class="conductor-workdir-name">{{ conductorWorkDirLabel || 'Select folder...' }}</span>
+          <svg class="conductor-workdir-chevron" viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="6 9 12 15 18 9"/>
+          </svg>
         </button>
-        <div class="conductor-workdir-picker" v-if="showWorkDirPicker" @click.stop>
-          <input type="text" v-model="workDirInput" placeholder="Enter work directory path..." class="conductor-workdir-input" @keydown.enter="setWorkDir" @keydown.esc="showWorkDirPicker = false" ref="workDirInputRef" />
-          <button class="conductor-workdir-set-btn" @click="setWorkDir" :disabled="!workDirInput.trim()">Set</button>
+        <!-- Folder Picker panel -->
+        <div class="conductor-workdir-picker" v-if="showWorkDirPicker" @click.stop role="dialog" aria-label="Select work directory">
+          <!-- Path bar -->
+          <div class="conductor-picker-path-bar">
+            <input type="text" v-model="pickerPathInput" :placeholder="$t('conductor.enterPath')" class="conductor-picker-path-input" :class="{ 'is-invalid': pickerPathInvalid }" @keydown.enter="pickerNavigateToInput" aria-label="Directory path" ref="pickerPathInputRef" />
+            <button class="conductor-picker-up-btn" @click="pickerNavigateUp" :disabled="!pickerPathInput" aria-label="Navigate to parent directory" :title="$t('conductor.parentDir')">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="18 15 12 9 6 15"/>
+              </svg>
+            </button>
+          </div>
+          <!-- Recent directories -->
+          <div class="conductor-picker-recent" v-if="recentWorkDirs.length > 0">
+            <div class="conductor-picker-recent-title">{{ $t('conductor.recentDirs') }}</div>
+            <div class="conductor-picker-recent-item" v-for="dir in recentWorkDirs" :key="dir" @click="pickerSelectRecent(dir)">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/></svg>
+              <span>{{ dir }}</span>
+            </div>
+          </div>
+          <!-- Folder browsing area -->
+          <div class="conductor-picker-list" role="listbox">
+            <div v-if="pickerLoading" class="conductor-picker-loading">
+              <span class="compact-spinner"></span>
+              {{ $t('conductor.loading') }}
+            </div>
+            <div v-else-if="pickerFolders.length === 0" class="conductor-picker-empty">
+              {{ $t('conductor.noSubdirs') }}
+            </div>
+            <template v-else>
+              <div class="conductor-picker-folder" v-for="folder in pickerFolders" :key="folder.name" :class="{ 'is-selected': pickerSelectedFolder === folder.name }" role="option" :aria-selected="pickerSelectedFolder === folder.name" @click="pickerSelectFolder(folder.name)" @dblclick="pickerEnterFolder(folder.name)">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                </svg>
+                <span class="conductor-picker-folder-name">{{ folder.name }}</span>
+              </div>
+            </template>
+          </div>
+          <!-- Footer actions -->
+          <div class="conductor-picker-footer">
+            <button class="conductor-picker-cancel" @click="showWorkDirPicker = false">{{ $t('common.cancel') }}</button>
+            <button class="conductor-picker-select" @click="pickerConfirm" :disabled="!pickerPathInput.trim()">{{ $t('common.select') }}</button>
+          </div>
         </div>
+        <!-- Mobile overlay for picker -->
+        <div class="conductor-picker-overlay" v-if="showWorkDirPicker && isMobilePicker" @click="showWorkDirPicker = false"></div>
+        <span class="conductor-cost-sep" v-if="conductorCost">&middot;</span>
         <span class="conductor-cost-label" v-if="conductorCost">
           \${{ conductorCost }}
         </span>
@@ -387,10 +432,34 @@ export default {
       ).length;
     });
 
-    // Conductor workDir picker
+    // Conductor workDir picker — upgraded to Folder Picker
     const showWorkDirPicker = Vue.ref(false);
-    const workDirInput = Vue.ref('');
-    const workDirInputRef = Vue.ref(null);
+    const pickerPathInput = Vue.ref('');
+    const pickerPathInputRef = Vue.ref(null);
+    const pickerFolders = Vue.ref([]);
+    const pickerLoading = Vue.ref(false);
+    const pickerSelectedFolder = Vue.ref('');
+    const pickerPathInvalid = Vue.ref(false);
+    const isMobilePicker = Vue.computed(() => window.innerWidth <= 768);
+
+    const RECENT_DIRS_KEY = 'conductor-recent-workdirs';
+    const MAX_RECENT = 5;
+
+    const recentWorkDirs = Vue.ref([]);
+    const loadRecentDirs = () => {
+      try {
+        const raw = localStorage.getItem(RECENT_DIRS_KEY);
+        recentWorkDirs.value = raw ? JSON.parse(raw).slice(0, MAX_RECENT) : [];
+      } catch { recentWorkDirs.value = []; }
+    };
+    const saveRecentDir = (dir) => {
+      if (!dir) return;
+      const list = recentWorkDirs.value.filter(d => d !== dir);
+      list.unshift(dir);
+      recentWorkDirs.value = list.slice(0, MAX_RECENT);
+      try { localStorage.setItem(RECENT_DIRS_KEY, JSON.stringify(recentWorkDirs.value)); } catch {}
+    };
+    loadRecentDirs();
 
     const conductorWorkDirLabel = Vue.computed(() => {
       const dir = store.conductorWorkDir;
@@ -399,21 +468,124 @@ export default {
       return parts[parts.length - 1] || dir;
     });
 
+    const pickerLoadDir = (dirPath) => {
+      pickerLoading.value = true;
+      pickerSelectedFolder.value = '';
+      pickerPathInvalid.value = false;
+      store.sendWsMessage({
+        type: 'list_directory',
+        conversationId: '_conductor_picker',
+        agentId: store.currentAgent,
+        dirPath,
+        workDir: store.conductorWorkDir || store.currentAgentInfo?.workDir || '',
+        _clientId: store.clientId
+      });
+    };
+
     const toggleWorkDirPicker = () => {
       showWorkDirPicker.value = !showWorkDirPicker.value;
       if (showWorkDirPicker.value) {
-        workDirInput.value = store.conductorWorkDir || store.currentAgentInfo?.workDir || '';
-        Vue.nextTick(() => workDirInputRef.value?.focus());
+        const defaultDir = store.conductorWorkDir || store.currentAgentInfo?.workDir || '';
+        pickerPathInput.value = defaultDir;
+        pickerFolders.value = [];
+        pickerSelectedFolder.value = '';
+        pickerPathInvalid.value = false;
+        loadRecentDirs();
+        if (defaultDir) pickerLoadDir(defaultDir);
+        Vue.nextTick(() => pickerPathInputRef.value?.focus());
       }
     };
 
-    const setWorkDir = () => {
-      const val = workDirInput.value.trim();
-      if (val) {
-        store.conductorWorkDir = val;
+    const pickerNavigateToInput = () => {
+      const val = pickerPathInput.value.trim();
+      if (!val) return;
+      pickerLoadDir(val);
+    };
+
+    const pickerNavigateUp = () => {
+      if (!pickerPathInput.value) return;
+      const isWin = pickerPathInput.value.includes('\\');
+      const parts = pickerPathInput.value.replace(/[/\\]$/, '').split(/[/\\]/);
+      parts.pop();
+      if (parts.length === 0) {
+        pickerPathInput.value = '/';
+        pickerLoadDir('/');
+      } else if (isWin && parts.length === 1 && /^[A-Za-z]:$/.test(parts[0])) {
+        pickerPathInput.value = parts[0] + '\\';
+        pickerLoadDir(parts[0] + '\\');
+      } else {
+        const sep = isWin ? '\\' : '/';
+        const parent = parts.join(sep);
+        pickerPathInput.value = parent;
+        pickerLoadDir(parent);
       }
+    };
+
+    const pickerSelectFolder = (name) => {
+      pickerSelectedFolder.value = pickerSelectedFolder.value === name ? '' : name;
+    };
+
+    const pickerEnterFolder = (name) => {
+      const base = pickerPathInput.value.replace(/[/\\]$/, '');
+      const sep = base.includes('\\') ? '\\' : '/';
+      const newPath = base + sep + name;
+      pickerPathInput.value = newPath;
+      pickerLoadDir(newPath);
+    };
+
+    const pickerSelectRecent = (dir) => {
+      store.conductorWorkDir = dir;
+      saveRecentDir(dir);
       showWorkDirPicker.value = false;
     };
+
+    const pickerConfirm = () => {
+      let path = pickerPathInput.value.trim();
+      if (!path) return;
+      if (pickerSelectedFolder.value) {
+        const sep = path.includes('\\') ? '\\' : '/';
+        path = path.replace(/[/\\]$/, '') + sep + pickerSelectedFolder.value;
+      }
+      store.conductorWorkDir = path;
+      saveRecentDir(path);
+      showWorkDirPicker.value = false;
+    };
+
+    // Listen for directory_listing responses for conductor picker
+    const handlePickerListing = (e) => {
+      const msg = e.detail;
+      if (!msg || msg.type !== 'directory_listing' || msg.conversationId !== '_conductor_picker') return;
+      pickerLoading.value = false;
+      if (msg.error) {
+        pickerPathInvalid.value = true;
+        pickerFolders.value = [];
+        return;
+      }
+      pickerPathInvalid.value = false;
+      pickerFolders.value = (msg.entries || [])
+        .filter(entry => entry.type === 'directory')
+        .sort((a, b) => a.name.localeCompare(b.name));
+      if (msg.dirPath != null) pickerPathInput.value = msg.dirPath;
+    };
+
+    // Close picker on outside click
+    const closePickerOnOutsideClick = (e) => {
+      if (!showWorkDirPicker.value) return;
+      const pickerEl = document.querySelector('.conductor-workdir-picker');
+      const btnEl = document.querySelector('.conductor-workdir-btn');
+      if (pickerEl && !pickerEl.contains(e.target) && btnEl && !btnEl.contains(e.target)) {
+        showWorkDirPicker.value = false;
+      }
+    };
+
+    Vue.onMounted(() => {
+      window.addEventListener('workbench-message', handlePickerListing);
+      document.addEventListener('click', closePickerOnOutsideClick);
+    });
+    Vue.onUnmounted(() => {
+      window.removeEventListener('workbench-message', handlePickerListing);
+      document.removeEventListener('click', closePickerOnOutsideClick);
+    });
 
     // Initialize conductorWorkDir from agent's workDir when opening conductor
     Vue.watch(() => store.currentConversationIsConductor, (isConductor) => {
@@ -422,6 +594,14 @@ export default {
       }
     }, { immediate: true });
 
-    return { store, headerTitle, folderPath, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, hasStreamingRoles, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, openCrewEdit, onCrewPanelToggle, isCrewPanelActive, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel, conductorCost, conductorActiveTaskCount, showWorkDirPicker, workDirInput, workDirInputRef, conductorWorkDirLabel, toggleWorkDirPicker, setWorkDir };
+    // Watch for external trigger to open picker (e.g. from ConductorChatView empty state)
+    Vue.watch(() => store.conductorPickerOpen, (open) => {
+      if (open && !showWorkDirPicker.value) {
+        toggleWorkDirPicker();
+        store.conductorPickerOpen = false;
+      }
+    });
+
+    return { store, headerTitle, folderPath, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, hasStreamingRoles, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, openCrewEdit, onCrewPanelToggle, isCrewPanelActive, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel, conductorCost, conductorActiveTaskCount, showWorkDirPicker, conductorWorkDirLabel, toggleWorkDirPicker, pickerPathInput, pickerPathInputRef, pickerFolders, pickerLoading, pickerSelectedFolder, pickerPathInvalid, isMobilePicker, recentWorkDirs, pickerNavigateToInput, pickerNavigateUp, pickerSelectFolder, pickerEnterFolder, pickerSelectRecent, pickerConfirm };
   }
 };
