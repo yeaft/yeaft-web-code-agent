@@ -134,11 +134,6 @@ export default {
           </svg>
         </button>
       </div>
-      <div class="conductor-header-actions" v-if="store.currentConversationIsConductor">
-        <span class="conductor-cost-label" v-if="conductorCost">
-          \${{ conductorCost }}
-        </span>
-      </div>
     </header>
   `,
   setup() {
@@ -362,12 +357,6 @@ export default {
     });
 
     // Conductor header data
-    const conductorCost = Vue.computed(() => {
-      const sid = store.currentConversation;
-      if (!sid || !store.currentConversationIsConductor) return null;
-      const status = store.conductorStatuses[sid];
-      return status?.costUsd ? status.costUsd.toFixed(2) : null;
-    });
 
     const conductorActiveTaskCount = Vue.computed(() => {
       const sid = store.currentConversation;
@@ -379,6 +368,6 @@ export default {
       ).length;
     });
 
-    return { store, headerTitle, folderPath, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, hasStreamingRoles, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, openCrewEdit, onCrewPanelToggle, isCrewPanelActive, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel, conductorCost, conductorActiveTaskCount };
+    return { store, headerTitle, folderPath, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, hasStreamingRoles, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, openCrewEdit, onCrewPanelToggle, isCrewPanelActive, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel, conductorActiveTaskCount };
   }
 };

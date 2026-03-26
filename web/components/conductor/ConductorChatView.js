@@ -95,6 +95,7 @@ export default {
                   <polyline points="6 9 12 15 18 9"/>
                 </svg>
               </button>
+              <span class="conductor-cost-label" v-if="conductorCost">\${{ conductorCost }}</span>
               <!-- Folder Picker panel -->
               <div class="conductor-workdir-picker" v-if="showWorkDirPicker" @click.stop role="dialog" aria-label="Select work directory">
                 <div class="conductor-picker-path-bar">
@@ -147,6 +148,9 @@ export default {
           </div>
         </div>
 
+        <!-- Resize handle between center and active panel -->
+        <div class="conductor-resize-handle" v-if="showActivePanel && !isMobile" @mousedown="startResize"></div>
+
         <!-- Right: Active Panel -->
         <conductor-active-panel
           v-if="showActivePanel"
@@ -156,6 +160,7 @@ export default {
           :actors="currentActors"
           :selected-task-id="selectedTaskId"
           @open-task="openTask"
+          :style="activePanelStyle"
         />
 
         <!-- Push-in: Task Panel -->
@@ -330,6 +335,66 @@ export default {
       document.removeEventListener('click', closePickerOnOutsideClick);
     });
 
+    // Conductor cost
+    const conductorCost = Vue.computed(() => {
+      const sid = store.currentConversation;
+      if (!sid || !store.currentConversationIsConductor) return null;
+      const status = store.conductorStatuses[sid];
+      return status?.costUsd ? status.costUsd.toFixed(2) : null;
+    });
+
+    // Active panel resizable width
+    const PANEL_WIDTH_KEY = 'conductor-panel-width';
+    const DEFAULT_PANEL_WIDTH = 360;
+    const MIN_PANEL_WIDTH = 200;
+
+    const loadPanelWidth = () => {
+      try {
+        const saved = localStorage.getItem(PANEL_WIDTH_KEY);
+        if (saved) {
+          const w = parseInt(saved, 10);
+          if (w >= MIN_PANEL_WIDTH) return w;
+        }
+      } catch {}
+      return DEFAULT_PANEL_WIDTH;
+    };
+
+    const panelWidth = Vue.ref(loadPanelWidth());
+    const isResizing = Vue.ref(false);
+
+    const activePanelStyle = Vue.computed(() => ({
+      width: panelWidth.value + 'px',
+      minWidth: panelWidth.value + 'px'
+    }));
+
+    const startResize = (e) => {
+      e.preventDefault();
+      isResizing.value = true;
+      const startX = e.clientX;
+      const startWidth = panelWidth.value;
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+
+      const onMouseMove = (ev) => {
+        const delta = startX - ev.clientX; // moving left increases width
+        const maxWidth = Math.floor(window.innerWidth * 0.6);
+        const newWidth = Math.max(MIN_PANEL_WIDTH, Math.min(maxWidth, startWidth + delta));
+        panelWidth.value = newWidth;
+      };
+
+      const onMouseUp = () => {
+        isResizing.value = false;
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+        try { localStorage.setItem(PANEL_WIDTH_KEY, String(panelWidth.value)); } catch {}
+      };
+
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+    };
+
     // Initialize conductorWorkDir from agent's workDir when opening conductor
     Vue.watch(() => store.currentConversationIsConductor, (isConductor) => {
       if (isConductor && !store.conductorWorkDir) {
@@ -337,7 +402,7 @@ export default {
       }
     }, { immediate: true });
 
-    return { store, showWorkDirPicker, conductorWorkDirLabel, toggleWorkDirPicker, pickerPathInput, pickerPathInputRef, pickerFolders, pickerLoading, pickerSelectedFolder, pickerPathInvalid, recentWorkDirs, pickerNavigateToInput, pickerNavigateUp, pickerSelectFolder, pickerEnterFolder, pickerSelectRecent, pickerConfirm };
+    return { store, showWorkDirPicker, conductorWorkDirLabel, conductorCost, activePanelStyle, startResize, toggleWorkDirPicker, pickerPathInput, pickerPathInputRef, pickerFolders, pickerLoading, pickerSelectedFolder, pickerPathInvalid, recentWorkDirs, pickerNavigateToInput, pickerNavigateUp, pickerSelectFolder, pickerEnterFolder, pickerSelectRecent, pickerConfirm };
   },
 
   data() {
