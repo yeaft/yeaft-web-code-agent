@@ -21,7 +21,7 @@ import {
   getConductorHome, ensureConductorHome,
   loadState, saveState, updateTaskInState, initTaskDir
 } from './persistence.js';
-import { startTaskExecution } from './task-runner.js';
+import { startTaskExecution, forwardToTask } from './task-runner.js';
 
 // =====================================================================
 // Claude Session ID Persistence
@@ -143,7 +143,15 @@ export async function createConductorClaude(conductor) {
     cwd: conductorHome,
     permissionMode: 'bypassPermissions',
     abort: abortController.signal,
-    appendSystemPrompt: systemPrompt
+    appendSystemPrompt: systemPrompt,
+    // Conductor Claude is a lightweight classifier — restrict heavy tools
+    // Only allow: Read, Glob, Grep (for context awareness), WebFetch, WebSearch
+    disallowedTools: [
+      'Write', 'Edit', 'NotebookEdit',
+      'Bash', 'Agent',
+      'EnterPlanMode', 'ExitPlanMode',
+      'EnterWorktree', 'ExitWorktree'
+    ]
   };
 
   if (savedSessionId) {
@@ -404,6 +412,11 @@ async function processConductorOutput(conductor, conductorQuery) {
               timestamp: Date.now()
             });
             task.lastUpdate = Date.now();
+
+            // Forward to Orchestrator (which will relay to active actors)
+            forwardToTask(ft.taskId, ft.message).catch(e =>
+              console.warn(`[Conductor] Failed to forward to orchestrator ${ft.taskId}:`, e.message)
+            );
 
             sendConductorOutput(conductor, 'task_forwarded', null, {
               taskId: ft.taskId

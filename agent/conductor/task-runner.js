@@ -19,6 +19,7 @@ import { getTaskDir, updateTaskInState } from './persistence.js';
 import {
   sendConductorMessage, sendConductorOutput, sendStatusUpdate
 } from './ui-messages.js';
+import { READ_WRITE_SPECIALTIES } from './worktree.js';
 
 // =====================================================================
 // Per-task Orchestrator registry
@@ -35,12 +36,6 @@ const orchestrators = new Map();
 export function getOrchestrator(taskId) {
   return orchestrators.get(taskId) || null;
 }
-
-// =====================================================================
-// Read-write specialties (need worktree cwd)
-// =====================================================================
-
-const READ_WRITE_SPECIALTIES = new Set(['coding', 'testing', 'review']);
 
 // =====================================================================
 // ActorManager Adapter
@@ -119,10 +114,37 @@ function createActorManagerAdapter(conductor, taskEntry) {
           if (result.inputTokens) conductor.totalInputTokens += result.inputTokens;
           if (result.outputTokens) conductor.totalOutputTokens += result.outputTokens;
 
+          // Update tracking: decrement active count
+          if (taskEntry.activeActors) {
+            const idx = taskEntry.activeActors.indexOf(instanceId);
+            if (idx !== -1) taskEntry.activeActors.splice(idx, 1);
+          }
+          conductor.activeClaudes = Math.max(0, (conductor.activeClaudes || 1) - 1);
+          sendStatusUpdate(conductor);
+
+          // Release actor from registry to prevent memory leak
+          releaseActor(taskId, instanceId).catch(e =>
+            console.warn(`[TaskRunner] Failed to auto-release actor ${instanceId}:`, e.message)
+          );
+
           resolveResult(result);
         },
         onError: (instanceId, error) => {
           console.error(`[TaskRunner] Actor ${instanceId} failed for task ${taskId}:`, error.message);
+
+          // Update tracking: decrement active count
+          if (taskEntry.activeActors) {
+            const idx = taskEntry.activeActors.indexOf(instanceId);
+            if (idx !== -1) taskEntry.activeActors.splice(idx, 1);
+          }
+          conductor.activeClaudes = Math.max(0, (conductor.activeClaudes || 1) - 1);
+          sendStatusUpdate(conductor);
+
+          // Release actor from registry on error too
+          releaseActor(taskId, instanceId).catch(e =>
+            console.warn(`[TaskRunner] Failed to auto-release failed actor ${instanceId}:`, e.message)
+          );
+
           rejectResult(error);
         }
       });
@@ -158,6 +180,13 @@ function createActorManagerAdapter(conductor, taskEntry) {
         if (idx !== -1) taskEntry.activeActors.splice(idx, 1);
       }
       conductor.activeClaudes = Math.max(0, (conductor.activeClaudes || 1) - 1);
+    },
+
+    /**
+     * Send a message to an active actor (for user message forwarding).
+     */
+    sendMessage(instanceId, message) {
+      sendToActor(taskId, instanceId, message);
     }
   };
 }
@@ -231,6 +260,7 @@ export async function startTaskExecution(conductor, taskEntry) {
   // Start the task (async — orchestrator runs its state machine internally)
   try {
     await orchestrator.startTask({
+      taskId,
       title,
       description: description || title,
       scenario,
@@ -259,6 +289,22 @@ export async function startTaskExecution(conductor, taskEntry) {
 }
 
 /**
+ * Forward a user message to a running task's orchestrator.
+ *
+ * @param {string} taskId
+ * @param {string} message
+ */
+export async function forwardToTask(taskId, message) {
+  const orchestrator = orchestrators.get(taskId);
+  if (!orchestrator) {
+    console.warn(`[TaskRunner] Cannot forward to task ${taskId}: no active orchestrator`);
+    return;
+  }
+
+  await orchestrator.handleUserMessage(taskId, message);
+}
+
+/**
  * Stop a running task's orchestrator and release all its actors.
  *
  * @param {string} taskId
@@ -268,6 +314,9 @@ export async function stopTaskExecution(taskId) {
   if (!orchestrator) return;
 
   console.log(`[TaskRunner] Stopping task ${taskId}`);
+
+  // Abort the orchestrator state machine (stops at next phase boundary)
+  orchestrator.abort();
   orchestrators.delete(taskId);
 
   // Release all actors for this task

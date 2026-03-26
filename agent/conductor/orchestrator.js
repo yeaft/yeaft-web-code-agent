@@ -53,6 +53,18 @@ export class Orchestrator {
 
     /** @type {Map<string, Task>} */
     this.tasks = new Map();
+
+    /** Abort flag — checked at each phase boundary in _runStateMachine */
+    this._aborted = false;
+  }
+
+  /**
+   * Abort the orchestrator — stops the state machine loop at the next phase boundary.
+   * Does NOT release actors (that's handled by task-runner's stopTaskExecution).
+   */
+  abort() {
+    this._aborted = true;
+    this.log('Orchestrator aborted');
   }
 
   // ===================================================================
@@ -63,15 +75,16 @@ export class Orchestrator {
    * 创建并启动新 Task
    *
    * @param {object} params
+   * @param {string} [params.taskId] — 外部指定的 taskId（来自 Conductor），不提供则自动生成
    * @param {string} params.title
    * @param {string} params.description
    * @param {string} params.scenario — 'dev' | 'writing' | 'trading' | 'video'
    * @param {string} params.workDir
    * @returns {Task}
    */
-  async startTask({ title, description, scenario, workDir }) {
+  async startTask({ taskId: externalTaskId, title, description, scenario, workDir }) {
     const flow = getFlow(scenario);  // 验证 scenario 合法性
-    const task = createTask({ title, description, scenario, workDir });
+    const task = createTask({ taskId: externalTaskId, title, description, scenario, workDir });
     this.tasks.set(task.taskId, task);
     this._notify(task);
 
@@ -114,13 +127,33 @@ export class Orchestrator {
 
   /**
    * 用户消息注入（Task 对话页直接交互时）
-   * TODO: 后续实现用户消息处理
+   *
+   * 将 Conductor 转发的用户消息注入到正在运行的 task：
+   * - 如果 task 有活跃的 actor，发送给所有活跃 actor
+   * - 如果没有活跃 actor（phase 之间），存入 inbox 等待下一个 actor
    */
   async handleUserMessage(taskId, message) {
     const task = this.tasks.get(taskId);
     if (!task) return;
     this.log(`User message for ${taskId}: ${message.substring(0, 100)}...`);
-    // 用户消息处理逻辑由 Conductor 引擎层实现
+
+    // Store in inbox for actors in subsequent phases
+    if (!task.inbox) task.inbox = [];
+    task.inbox.push({ from: 'user', content: message, timestamp: Date.now() });
+    task.updatedAt = Date.now();
+
+    // If there are active actors, forward to them
+    if (task.activeActors.length > 0) {
+      for (const actor of task.activeActors) {
+        try {
+          this.actorManager.sendMessage?.(actor.instanceId, message);
+        } catch (e) {
+          this.log(`Failed to send user message to actor ${actor.instanceId}: ${e.message}`);
+        }
+      }
+    }
+
+    this._notify(task);
   }
 
   // ===================================================================
@@ -132,6 +165,15 @@ export class Orchestrator {
    */
   async _runStateMachine(task, flow) {
     while (task.phase !== Phase.DONE && task.phase !== Phase.FAILED) {
+      // Check abort flag at each phase boundary
+      if (this._aborted) {
+        this.log(`Task ${task.taskId} aborted`);
+        task.error = 'Task aborted';
+        transitionPhase(task, Phase.FAILED);
+        this._notify(task);
+        break;
+      }
+
       this.log(`Task ${task.taskId} entering phase: ${task.phase}`);
 
       switch (task.phase) {

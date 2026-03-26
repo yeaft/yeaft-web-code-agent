@@ -16,6 +16,12 @@ import { promisify } from 'util';
 const execFile = promisify(execFileCb);
 
 /**
+ * Specialties that need read-write access (use worktree as cwd).
+ * Shared constant — imported by task-runner.js.
+ */
+export const READ_WRITE_SPECIALTIES = new Set(['coding', 'testing', 'review']);
+
+/**
  * Create a worktree for a task.
  * Called at task creation time.
  *
@@ -147,8 +153,7 @@ export function getTaskWorktreePath(taskDir) {
  * - Read-only actors → workDir (main project directory)
  */
 export function getActorCwd(workDir, taskDir, specialty) {
-  const readWriteSpecialties = new Set(['coding', 'testing', 'review']);
-  if (readWriteSpecialties.has(specialty)) {
+  if (READ_WRITE_SPECIALTIES.has(specialty)) {
     return getTaskWorktreePath(taskDir);
   }
   return workDir;

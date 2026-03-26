@@ -62,7 +62,8 @@ export {
   cleanupTaskWorktree,
   cleanupAllConductorWorktrees,
   getTaskWorktreePath,
-  getActorCwd
+  getActorCwd,
+  READ_WRITE_SPECIALTIES
 } from './worktree.js';
 
 // ---- Task Runner (Orchestrator ↔ Actor bridge) ----
@@ -70,5 +71,6 @@ export {
   startTaskExecution,
   stopTaskExecution,
   stopAllTaskExecutions,
+  forwardToTask,
   getOrchestrator
 } from './task-runner.js';

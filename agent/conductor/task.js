@@ -58,14 +58,15 @@ export function generateTaskId() {
  * 创建 Task 实例
  *
  * @param {object} params
+ * @param {string} [params.taskId]    — 外部指定的 taskId（来自 Conductor），不提供则自动生成
  * @param {string} params.title       — 任务标题
  * @param {string} params.description — 任务描述（用户原始输入 or Conductor 转译）
  * @param {string} params.scenario    — 场景: dev / writing / trading / video
  * @param {string} params.workDir     — 工作目录（创建时绑定）
  * @returns {Task}
  */
-export function createTask({ title, description, scenario, workDir }) {
-  const taskId = generateTaskId();
+export function createTask({ taskId: externalTaskId, title, description, scenario, workDir }) {
+  const taskId = externalTaskId || generateTaskId();
   const now = Date.now();
 
   return {
