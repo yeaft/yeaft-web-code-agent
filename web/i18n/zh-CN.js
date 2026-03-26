@@ -18,6 +18,7 @@ export default {
   'common.drives': '驱动器',
   'common.rootDir': '根目录',
   'common.comma': '，',
+  'common.select': '选择',
 
   // ============ Login ============
   'login.subtitle': '远程 Claude Code CLI 访问界面',
@@ -631,4 +632,12 @@ export default {
   'conductor.statusWaiting': '等待中',
   'conductor.statusCompleted': '已完成',
   'conductor.statusError': '错误',
+  'conductor.selectDirHint': '选择工作目录以开始',
+  'conductor.chooseDir': '选择目录...',
+  'conductor.orTypeBelow': '或在下方输入命令开始',
+  'conductor.enterPath': '输入目录路径...',
+  'conductor.parentDir': '上级目录',
+  'conductor.recentDirs': '最近使用',
+  'conductor.loading': '加载中...',
+  'conductor.noSubdirs': '无子目录',
 };

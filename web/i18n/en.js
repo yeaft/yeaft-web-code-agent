@@ -18,6 +18,7 @@ export default {
   'common.drives': 'Drives',
   'common.rootDir': 'Root',
   'common.comma': ', ',
+  'common.select': 'Select',
 
   // ============ Login ============
   'login.subtitle': 'Remote Claude Code CLI Access',
@@ -631,4 +632,12 @@ export default {
   'conductor.statusWaiting': 'Waiting',
   'conductor.statusCompleted': 'Completed',
   'conductor.statusError': 'Error',
+  'conductor.selectDirHint': 'Select a working directory to start',
+  'conductor.chooseDir': 'Choose Directory...',
+  'conductor.orTypeBelow': 'Or type a command below to begin',
+  'conductor.enterPath': 'Enter directory path...',
+  'conductor.parentDir': 'Parent directory',
+  'conductor.recentDirs': 'Recent',
+  'conductor.loading': 'Loading...',
+  'conductor.noSubdirs': 'No subdirectories',
 };

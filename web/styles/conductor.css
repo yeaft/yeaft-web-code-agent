@@ -185,41 +185,8 @@
 .conductor-empty-text { font-size: 16px; font-weight: 500; }
 .conductor-empty-hint { font-size: 13px; color: var(--text-muted); }
 
-/* --- Input area --- */
-
-.conductor-input-area { padding: 8px 16px 12px; border-top: 1px solid var(--border-color); background: var(--bg-main); flex-shrink: 0; }
-.conductor-input-hints { display: flex; align-items: center; gap: 6px; padding-bottom: 4px; }
-.conductor-hint-meta { font-size: 11px; color: var(--text-muted); }
-.conductor-hint-sep { font-size: 11px; color: var(--text-muted); }
-
-.conductor-input-wrapper {
-  display: flex; align-items: flex-end; gap: 8px;
-  background: var(--bg-sidebar);
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  padding: 8px 12px;
-  transition: border-color 0.15s;
-}
-
-.conductor-input-wrapper:focus-within { border-color: var(--crew-color-primary, #4a9eff); }
-
-.conductor-input-wrapper textarea {
-  flex: 1; resize: none; border: none; background: transparent;
-  color: var(--text-primary); font-family: inherit; font-size: 14px;
-  line-height: 1.5; outline: none; max-height: 120px;
-}
-
-.conductor-send-btn {
-  background: none; border: none; cursor: pointer;
-  color: var(--crew-color-primary, #4a9eff);
-  padding: 4px; border-radius: 4px;
-  transition: background 0.15s, opacity 0.15s;
-  flex-shrink: 0;
-}
-
-.conductor-send-btn:disabled { opacity: 0.3; cursor: default; }
-.conductor-send-btn:not(:disabled):hover { background: var(--sidebar-hover); }
-.conductor-send-btn svg { width: 20px; height: 20px; fill: currentColor; }
+/* --- Input area (now uses shared ChatInput component) --- */
+/* Legacy conductor-specific input styles removed — ChatInput provides consistent UI */
 
 /* --- Active Panel (right side, 240px) --- */
 
@@ -565,40 +532,122 @@
 }
 
 .conductor-cost-label {
-  font-size: 12px; color: var(--text-muted); font-family: monospace;
+  font-size: 11px; color: var(--text-muted); font-family: monospace; flex-shrink: 0;
 }
 
-.conductor-workdir-btn {
-  display: flex; align-items: center; gap: 4px;
-  background: var(--sidebar-hover); border: 1px solid var(--border-color);
-  border-radius: 6px; padding: 3px 8px; cursor: pointer;
-  font-size: 12px; color: var(--text-secondary);
-  max-width: 200px; overflow: hidden; white-space: nowrap;
+.conductor-cost-sep {
+  font-size: 11px; color: var(--text-muted); opacity: 0.5;
 }
-.conductor-workdir-btn:hover { border-color: var(--text-muted); }
-.conductor-workdir-btn svg { flex-shrink: 0; opacity: 0.6; }
-.conductor-workdir-name { overflow: hidden; text-overflow: ellipsis; }
+
+/* workDir button — upgraded to 3-state design */
+.conductor-workdir-btn {
+  display: flex; align-items: center; gap: 6px;
+  background: var(--bg-sidebar); border: 1px solid var(--border-color);
+  border-radius: 8px; padding: 4px 10px; cursor: pointer;
+  font-size: 12px; color: var(--text-secondary);
+  max-width: 240px; overflow: hidden; white-space: nowrap;
+  transition: border-color 0.15s, background 0.15s;
+}
+.conductor-workdir-btn:hover { border-color: var(--text-muted); background: var(--sidebar-hover); }
+.conductor-workdir-btn svg { flex-shrink: 0; opacity: 0.7; width: 14px; height: 14px; }
+.conductor-workdir-btn.is-empty { border-style: dashed; color: var(--text-muted); }
+.conductor-workdir-btn.is-empty svg { opacity: 0.5; }
+.conductor-workdir-btn.is-open { border-color: var(--crew-color-primary, #4a9eff); background: var(--sidebar-hover); }
+.conductor-workdir-name { overflow: hidden; text-overflow: ellipsis; font-family: monospace; font-size: 12px; }
+.conductor-workdir-chevron { flex-shrink: 0; width: 10px; height: 10px; color: var(--text-muted); transition: transform 0.15s; }
+.conductor-workdir-btn.is-open .conductor-workdir-chevron { transform: rotate(180deg); }
+
+/* --- Folder Picker panel --- */
+
+@keyframes conductor-picker-enter {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes conductor-shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-4px); }
+  40% { transform: translateX(4px); }
+  60% { transform: translateX(-3px); }
+  80% { transform: translateX(3px); }
+}
 
 .conductor-workdir-picker {
-  position: absolute; top: 100%; right: 0; margin-top: 4px;
-  display: flex; align-items: center; gap: 4px;
+  position: absolute; top: 100%; left: 0; margin-top: 4px;
+  width: 360px; max-height: 400px;
   background: var(--bg-main); border: 1px solid var(--border-color);
-  border-radius: 8px; padding: 6px 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-  z-index: 50; min-width: 300px;
+  border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+  z-index: 50; display: flex; flex-direction: column; overflow: hidden;
+  animation: conductor-picker-enter 0.15s ease-out;
 }
-.conductor-workdir-input {
-  flex: 1; border: 1px solid var(--border-color); border-radius: 4px;
-  padding: 4px 8px; font-size: 13px; font-family: monospace;
-  background: var(--bg-main); color: var(--text-primary); outline: none;
+
+[data-theme="dark"] .conductor-workdir-picker { box-shadow: 0 8px 24px rgba(0,0,0,0.3); }
+
+.conductor-picker-path-bar { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--border-color); }
+
+.conductor-picker-path-input {
+  flex: 1; border: 1px solid var(--border-color); border-radius: 6px;
+  padding: 5px 8px; font-size: 12px; font-family: monospace;
+  background: var(--bg-sidebar); color: var(--text-primary); outline: none;
+  transition: border-color 0.15s;
 }
-.conductor-workdir-input:focus { border-color: var(--crew-color-primary, #4a9eff); }
-.conductor-workdir-set-btn {
-  padding: 4px 12px; border: none; border-radius: 4px;
+.conductor-picker-path-input:focus { border-color: var(--crew-color-primary, #4a9eff); }
+.conductor-picker-path-input.is-invalid { border-color: #ef4444; animation: conductor-shake 0.3s ease-out; }
+
+.conductor-picker-up-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border: 1px solid var(--border-color);
+  border-radius: 6px; background: transparent; color: var(--text-secondary);
+  cursor: pointer; flex-shrink: 0; transition: background 0.15s, border-color 0.15s;
+}
+.conductor-picker-up-btn:hover { background: var(--sidebar-hover); border-color: var(--text-muted); }
+.conductor-picker-up-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.conductor-picker-recent { padding: 6px 10px; border-bottom: 1px solid var(--border-color); }
+.conductor-picker-recent-title { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px; margin-bottom: 4px; }
+.conductor-picker-recent-item {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 6px; border-radius: 4px;
+  font-size: 12px; font-family: monospace; color: var(--text-secondary);
+  cursor: pointer; transition: background 0.1s;
+}
+.conductor-picker-recent-item:hover { background: var(--sidebar-hover); }
+.conductor-picker-recent-item svg { flex-shrink: 0; width: 12px; height: 12px; color: var(--text-muted); }
+
+.conductor-picker-list { flex: 1; overflow-y: auto; max-height: 240px; padding: 4px 0; }
+.conductor-picker-folder {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 10px; font-size: 13px; color: var(--text-primary);
+  cursor: pointer; transition: background 0.1s;
+}
+.conductor-picker-folder:hover { background: var(--sidebar-hover); }
+.conductor-picker-folder.is-selected { background: var(--sidebar-hover); border-left: 2px solid var(--crew-color-primary, #4a9eff); padding-left: 8px; }
+.conductor-picker-folder svg { flex-shrink: 0; width: 14px; height: 14px; color: #f59e0b; }
+.conductor-picker-folder-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conductor-picker-empty { text-align: center; padding: 16px; font-size: 12px; color: var(--text-muted); }
+.conductor-picker-loading { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 16px; font-size: 12px; color: var(--text-muted); }
+
+.conductor-picker-footer { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--border-color); }
+.conductor-picker-cancel { padding: 4px 12px; border: 1px solid var(--border-color); border-radius: 6px; background: transparent; color: var(--text-secondary); font-size: 12px; cursor: pointer; transition: background 0.15s; }
+.conductor-picker-cancel:hover { background: var(--sidebar-hover); }
+.conductor-picker-select { padding: 4px 14px; border: none; border-radius: 6px; background: var(--crew-color-primary, #4a9eff); color: white; font-size: 12px; font-weight: 500; cursor: pointer; transition: opacity 0.15s; }
+.conductor-picker-select:hover { opacity: 0.9; }
+.conductor-picker-select:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* --- Empty state guide (Choose Directory) --- */
+
+.conductor-empty-action {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 20px; margin-top: 8px;
   background: var(--crew-color-primary, #4a9eff); color: white;
-  font-size: 12px; cursor: pointer; white-space: nowrap;
+  border: none; border-radius: 8px; font-size: 14px; font-weight: 500;
+  cursor: pointer; transition: opacity 0.15s, transform 0.1s;
 }
-.conductor-workdir-set-btn:hover { opacity: 0.9; }
-.conductor-workdir-set-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.conductor-empty-action:hover { opacity: 0.9; }
+.conductor-empty-action:active { transform: scale(0.98); }
+.conductor-empty-action svg { width: 16px; height: 16px; }
+
+.conductor-empty-subtitle { font-size: 12px; color: var(--text-muted); margin-top: 12px; }
 
 /* --- Mobile responsive --- */
 
@@ -620,6 +669,21 @@
   }
 
   .conductor-task-panel { width: 100%; }
+
+  /* Mobile: workDir picker as centered modal */
+  .conductor-workdir-btn { max-width: 160px; }
+
+  .conductor-workdir-picker {
+    position: fixed; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: calc(100vw - 32px); max-width: 360px; max-height: 70vh;
+    margin-top: 0; z-index: 100;
+  }
+
+  .conductor-picker-overlay {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.3); z-index: 99;
+  }
 }
 
 @media (max-width: 480px) {

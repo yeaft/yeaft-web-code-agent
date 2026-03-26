@@ -3,10 +3,20 @@ import { buildAutocompleteItems as buildExpertAutocomplete, getSelectionLabel, E
 
 export default {
   name: 'ChatInput',
+  props: {
+    /** Custom send function: (text, attachmentInfos) => void. Overrides store.sendMessage. */
+    sendFn: { type: Function, default: null },
+    /** Custom cancel/stop function. Overrides store.cancelExecution. */
+    cancelFn: { type: Function, default: null },
+    /** i18n key for placeholder text. Defaults to 'chatInput.placeholder'. */
+    placeholderKey: { type: String, default: '' },
+    /** External processing flag (e.g. conductor waiting for response). Controls stop button visibility. */
+    showStop: { type: Boolean, default: false }
+  },
   template: `
     <footer class="input-area" ref="inputAreaRef">
-      <!-- Expert chips bar (above attachments) -->
-      <div class="expert-chips-bar" v-if="expertSelections.length > 0">
+      <!-- Expert chips bar (above attachments) — hidden in custom send mode -->
+      <div class="expert-chips-bar" v-if="!sendFn && expertSelections.length > 0">
         <span
           v-for="(sel, index) in expertSelections"
           :key="sel.role + (sel.action || '')"
@@ -80,13 +90,13 @@ export default {
             @keydown="handleKeydown"
             @paste="handlePaste"
             @blur="onBlur"
-            :placeholder="isCompacting ? $t('chatHeader.compacting') : $t('chatInput.placeholder')"
+            :placeholder="isCompacting ? $t('chatHeader.compacting') : $t(effectivePlaceholderKey)"
             :disabled="isCompacting"
             rows="1"
           ></textarea>
         </div>
         <button
-          v-if="store.isProcessing"
+          v-if="isStopVisible"
           class="send-btn stop-btn"
           @click="cancelExecution"
           :title="$t('chatInput.stop')"
@@ -104,7 +114,7 @@ export default {
       </div>
     </footer>
   `,
-  setup() {
+  setup(props) {
     const store = Pinia.useChatStore();
     const authStore = Pinia.useAuthStore();
     const inputText = Vue.ref('');
@@ -115,6 +125,15 @@ export default {
     const inputAreaRef = Vue.ref(null);
     const autocompleteRef = Vue.ref(null);
     const expertAutocompleteRef = Vue.ref(null);
+
+    // Derived: is this a custom-send context (e.g. conductor)?
+    const isCustomSend = Vue.computed(() => !!props.sendFn);
+
+    // Placeholder i18n key
+    const effectivePlaceholderKey = Vue.computed(() => props.placeholderKey || 'chatInput.placeholder');
+
+    // Stop button visibility: use prop or fall back to store.isProcessing
+    const isStopVisible = Vue.computed(() => props.showStop || (!isCustomSend.value && store.isProcessing));
 
     // Expert panel selections: synced with store
     const expertSelections = Vue.computed({
@@ -428,8 +447,30 @@ export default {
       showAutocomplete.value = false;
       showExpertAutocomplete.value = false;
 
-      // Intercept /btw side question
       const trimmed = inputText.value.trim();
+
+      // Custom send mode (e.g. conductor): delegate to provided function
+      if (props.sendFn) {
+        const attachmentInfos = attachments.value
+          .filter(a => a.fileId)
+          .map(a => ({
+            fileId: a.fileId,
+            name: a.name,
+            preview: a.preview,
+            isImage: a.file?.type?.startsWith('image/') || false,
+            mimeType: a.file?.type || ''
+          }));
+
+        props.sendFn(trimmed, attachmentInfos.length > 0 ? attachmentInfos : undefined);
+
+        attachments.value = [];
+        inputText.value = '';
+        delete store.inputDrafts[store.currentConversation];
+        if (inputRef.value) inputRef.value.style.height = 'auto';
+        return;
+      }
+
+      // Intercept /btw side question
       if (trimmed.startsWith('/btw ')) {
         store.sendBtwQuestion(trimmed.substring(5));
         inputText.value = '';
@@ -516,7 +557,11 @@ export default {
     };
 
     const cancelExecution = () => {
-      store.cancelExecution();
+      if (props.cancelFn) {
+        props.cancelFn();
+      } else {
+        store.cancelExecution();
+      }
     };
 
     return {
@@ -529,12 +574,16 @@ export default {
       uploading,
       canSend,
       isCompacting,
+      isStopVisible,
+      effectivePlaceholderKey,
       showAutocomplete,
       selectedIndex,
       filteredCommands,
       flatItems,
       groupedCommands,
       autocompleteRef,
+      // Props passed through for template access
+      sendFn: Vue.toRef(props, 'sendFn'),
       // Expert panel
       expertSelections,
       showExpertAutocomplete,
