@@ -30,7 +30,8 @@ export async function handleClientConductor(clientId, client, msg, checkAgentAcc
       if (!await checkAgentAccess(agentId)) break;
       await forwardToAgent(agentId, {
         type: 'conductor_user_input',
-        content: msg.content
+        content: msg.content,
+        workDir: msg.workDir || undefined
       });
       break;
     }
