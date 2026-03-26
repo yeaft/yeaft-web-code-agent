@@ -15,8 +15,10 @@ const PM2_APP_NAME = 'yeaft-agent';
 // but process.execPath always points to the running node binary.
 const nodeBinDir = dirname(process.execPath);
 const isWin = platform() === 'win32';
-const npmPath = join(nodeBinDir, isWin ? 'npm.cmd' : 'npm');
-const pm2Path = join(nodeBinDir, isWin ? 'pm2.cmd' : 'pm2');
+// Windows: use plain 'npm'/'pm2' — shell:true finds them via PATH.
+// macOS/Linux: use absolute path — launchd/systemd may have minimal PATH.
+const npmPath = isWin ? 'npm' : join(nodeBinDir, 'npm');
+const pm2Path = isWin ? 'pm2' : join(nodeBinDir, 'pm2');
 const shellOpt = isWin ? { shell: true } : {};
 
 // Ensure PATH includes nodeBinDir so that `#!/usr/bin/env node` shebangs
