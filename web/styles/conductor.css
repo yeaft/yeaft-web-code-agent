@@ -185,7 +185,19 @@
 .conductor-empty-text { font-size: 16px; font-weight: 500; }
 .conductor-empty-hint { font-size: 13px; color: var(--text-muted); }
 
-/* --- Input area (now uses shared ChatInput component) --- */
+/* --- Input area (workDir bar + ChatInput wrapper) --- */
+
+.conductor-input-area {
+  display: flex; flex-direction: column;
+  flex-shrink: 0;
+}
+
+.conductor-workdir-bar {
+  display: flex; align-items: center;
+  padding: 6px 16px 0;
+  position: relative;
+}
+
 /* Legacy conductor-specific input styles removed — ChatInput provides consistent UI */
 
 /* --- Active Panel (right side, 240px) --- */
@@ -535,10 +547,6 @@
   font-size: 11px; color: var(--text-muted); font-family: monospace; flex-shrink: 0;
 }
 
-.conductor-cost-sep {
-  font-size: 11px; color: var(--text-muted); opacity: 0.5;
-}
-
 /* workDir button — upgraded to 3-state design */
 .conductor-workdir-btn {
   display: flex; align-items: center; gap: 6px;
@@ -560,7 +568,7 @@
 /* --- Folder Picker panel --- */
 
 @keyframes conductor-picker-enter {
-  from { opacity: 0; transform: translateY(-4px); }
+  from { opacity: 0; transform: translateY(4px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
@@ -573,7 +581,7 @@
 }
 
 .conductor-workdir-picker {
-  position: absolute; top: 100%; left: 0; margin-top: 4px;
+  position: absolute; bottom: 100%; left: 0; margin-bottom: 4px;
   width: 360px; max-height: 400px;
   background: var(--bg-main); border: 1px solid var(--border-color);
   border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.12);
@@ -671,13 +679,13 @@
   .conductor-task-panel { width: 100%; }
 
   /* Mobile: workDir picker as centered modal */
-  .conductor-workdir-btn { max-width: 160px; }
+  .conductor-workdir-btn { max-width: 200px; }
 
   .conductor-workdir-picker {
     position: fixed; top: 50%; left: 50%;
     transform: translate(-50%, -50%);
     width: calc(100vw - 32px); max-width: 360px; max-height: 70vh;
-    margin-top: 0; z-index: 100;
+    margin-bottom: 0; bottom: auto; z-index: 100;
   }
 
   .conductor-picker-overlay {
