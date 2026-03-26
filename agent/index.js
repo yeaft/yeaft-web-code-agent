@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { platform, homedir } from 'os';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, cpSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, cpSync, chmodSync, readdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
@@ -217,10 +217,22 @@ async function ensureYeaftSkills() {
       writeFileSync(knownFile, JSON.stringify(known, null, 2));
     }
 
+    // --- Layer 2.5: Ensure hook scripts are executable (git clone may lose +x on some OS) ---
+    const fixHookPermissions = (dir) => {
+      const hooksDir = join(dir, 'hooks');
+      if (existsSync(hooksDir)) {
+        for (const f of readdirSync(hooksDir)) {
+          try { chmodSync(join(hooksDir, f), 0o755); } catch { /* ignore */ }
+        }
+      }
+    };
+    fixHookPermissions(installDir);
+
     // --- Layer 3: Copy to plugin cache (on first install or after update) ---
     if (!existsSync(cacheDir) || needsCacheUpdate) {
       mkdirSync(cacheDir, { recursive: true });
       cpSync(installDir, cacheDir, { recursive: true });
+      fixHookPermissions(cacheDir);
       console.log(`[Startup] yeaft-skills ${needsCacheUpdate ? 'updated in' : 'copied to'} plugin cache`);
     }
 
