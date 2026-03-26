@@ -65,7 +65,8 @@ export async function initConductor(msg) {
       username: conductor.username,
       uiMessages: cleaned,
       hasOlderMessages,
-      status: conductor.status
+      status: conductor.status,
+      conductorHome: getConductorHome()
     });
     sendStatusUpdate(conductor);
     return conductor;
@@ -113,7 +114,8 @@ export async function initConductor(msg) {
     uiMessages: conductor.uiMessages,
     hasOlderMessages: loaded.hasOlderMessages,
     status: conductor.status,
-    resumed: isResume
+    resumed: isResume,
+    conductorHome: getConductorHome()
   });
   sendStatusUpdate(conductor);
 
