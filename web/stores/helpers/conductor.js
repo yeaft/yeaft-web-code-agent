@@ -189,6 +189,7 @@ export function handleConductorOutput(store, msg) {
     };
 
     // Create or reuse conversation entry
+    const conductorHome = msg.conductorHome || null;
     let conv = store.conversations.find(c => c.id === convId);
     if (!conv) {
       const agent = store.agents.find(a => a.id === agentId);
@@ -196,7 +197,7 @@ export function handleConductorOutput(store, msg) {
         id: convId,
         agentId,
         agentName: agent?.name || agentId,
-        workDir: null,
+        workDir: conductorHome,
         claudeSessionId: null,
         createdAt: Date.now(),
         processing: false,
@@ -207,7 +208,9 @@ export function handleConductorOutput(store, msg) {
     } else {
       conv.type = 'conductor';
       conv.agentId = agentId;
+      conv.workDir = conductorHome;
     }
+    store.currentWorkDir = conductorHome || '';
 
     // Switch to this conversation
     if (store.currentConversation && store.currentConversation !== convId && store.messages.length > 0) {
