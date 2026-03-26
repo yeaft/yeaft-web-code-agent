@@ -110,6 +110,8 @@ message: <要转发的内容>
 - 每条用户消息只需要一种响应：创建任务 / 转发 / 直接回答
 - 创建任务时只给标题，不要描述实现步骤
 - 创建任务时必须指定 workDir（用户提到的项目路径）和 scenario（场景类型）
+- 当消息包含 [工作路径: xxx] 时，直接使用该路径作为 workDir 创建 CREATE_TASK，不要再询问 workDir
+- 当消息包含 [工作路径: xxx] 时，这是用户明确的意图——立刻创建任务，不要做任何分析
 - 如果用户没指定 workDir 或 scenario，先询问
 - 如果用户问"进度怎样"，直接汇总上面的任务列表状态
 - 保持回复简洁
@@ -176,18 +178,24 @@ export async function createConductorClaude(conductor) {
 /**
  * Send message to Conductor Claude
  */
-export async function sendToConductor(conductor, content) {
+export async function sendToConductor(conductor, content, workDir) {
   let state = conductor.conductorState;
 
   if (!state || !state.query || !state.inputStream) {
     state = await createConductorClaude(conductor);
   }
 
+  // Inject workDir prefix so Conductor knows the project path
+  let fullContent = content;
+  if (workDir) {
+    fullContent = `[工作路径: ${workDir}]\n${content}`;
+  }
+
   // Inject task context before user message
   const taskContext = buildTaskContext(conductor);
-  const fullContent = taskContext
-    ? `${content}\n\n---\n<conductor-context>\n${taskContext}\n</conductor-context>`
-    : content;
+  if (taskContext) {
+    fullContent = `${fullContent}\n\n---\n<conductor-context>\n${taskContext}\n</conductor-context>`;
+  }
 
   state.turnActive = true;
   state.accumulatedText = '';
