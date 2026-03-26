@@ -124,6 +124,10 @@ export default {
         const msg = messages[i];
 
         if (msg.type === 'user') {
+          // Skip empty user messages (tool_result artifacts from DB)
+          if (!msg.content || !msg.content.trim()) {
+            continue;
+          }
           finishTurn();
           result.push({ type: 'user', id: msg.id || 'u_' + i, message: msg });
           continue;

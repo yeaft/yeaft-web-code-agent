@@ -22,17 +22,20 @@ export async function handleAgentOutput(agentId, agent, msg) {
             const content = typeof rawContent === 'string'
               ? rawContent
               : (Array.isArray(rawContent) ? rawContent.map(b => b.text || '').join('') : JSON.stringify(rawContent));
-            // 检查 convInfo 上暂存的 expertSelections，保存为 metadata
-            const conv = agent.conversations.get(msg.conversationId);
-            let metadata = null;
-            if (conv?._pendingExperts) {
-              metadata = JSON.stringify({ experts: conv._pendingExperts });
-              delete conv._pendingExperts;
+            // Skip empty content — tool_result arrays produce '' which shouldn't be stored as user messages
+            if (content) {
+              // 检查 convInfo 上暂存的 expertSelections，保存为 metadata
+              const conv = agent.conversations.get(msg.conversationId);
+              let metadata = null;
+              if (conv?._pendingExperts) {
+                metadata = JSON.stringify({ experts: conv._pendingExperts });
+                delete conv._pendingExperts;
+              }
+              const dbId = messageDb.add(msg.conversationId, 'user', content, 'user', null, null, metadata);
+              msg.data.dbMessageId = dbId;
+              // Track user message count for stats
+              trackMessage(conv?.userId || agent?.ownerId);
             }
-            const dbId = messageDb.add(msg.conversationId, 'user', content, 'user', null, null, metadata);
-            msg.data.dbMessageId = dbId;
-            // Track user message count for stats
-            trackMessage(conv?.userId || agent?.ownerId);
           }
           if (data.type === 'assistant' && data.message?.content) {
             let content;
