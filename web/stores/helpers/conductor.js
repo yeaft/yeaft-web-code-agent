@@ -130,6 +130,8 @@ export function sendConductorMessage(store, content, taskId = null, attachments 
   const sent = store.sendWsMessage(msg);
   if (!sent && messages.length > 0) {
     messages[messages.length - 1]._sendFailed = true;
+  } else {
+    store.conductorProcessing = true;
   }
 }
 
@@ -399,6 +401,7 @@ export function handleConductorOutput(store, msg) {
         break;
       }
     }
+    store.conductorProcessing = false;
     return;
   }
 
@@ -408,6 +411,7 @@ export function handleConductorOutput(store, msg) {
     store.conductorMessages[convId] = [];
     store.conductorTasks[convId] = {};
     store.conductorStatuses[convId] = {};
+    store.conductorProcessing = false;
     return;
   }
 
@@ -444,6 +448,7 @@ export function handleConductorOutput(store, msg) {
       taskId: msg.taskId || null,
       timestamp: Date.now()
     });
+    store.conductorProcessing = false;
     return;
   }
 }

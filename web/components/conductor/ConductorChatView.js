@@ -394,10 +394,7 @@ export default {
       return this.conductorMessages.filter(m => m.taskId === this.selectedTaskId);
     },
     isWaitingResponse() {
-      const msgs = this.conductorMessages;
-      if (!msgs || msgs.length === 0) return false;
-      const last = msgs[msgs.length - 1];
-      return last.role === 'human' && !last._sendFailed;
+      return this.store.conductorProcessing;
     },
     /**
      * Transform conductor messages into turn groups compatible with
