@@ -19,6 +19,12 @@ const npmPath = join(nodeBinDir, isWin ? 'npm.cmd' : 'npm');
 const pm2Path = join(nodeBinDir, isWin ? 'pm2.cmd' : 'pm2');
 const shellOpt = isWin ? { shell: true } : {};
 
+// Ensure PATH includes nodeBinDir so that `#!/usr/bin/env node` shebangs
+// can locate node in launchd/systemd environments with minimal PATH.
+const currentPath = process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin';
+const safePath = currentPath.includes(nodeBinDir) ? currentPath : `${nodeBinDir}:${currentPath}`;
+const safeEnv = { ...process.env, PATH: safePath };
+
 // Shared cleanup logic for restart/upgrade
 function cleanupAndExit(exitCode) {
   setTimeout(() => {
@@ -55,7 +61,7 @@ export async function handleUpgradeAgent() {
     const pkgName = ctx.pkgName || '@yeaft/webchat-agent';
     // Check latest version (async to avoid blocking heartbeat)
     const latestVersion = await new Promise((resolve, reject) => {
-      execFile(npmPath, ['view', pkgName, 'version'], { stdio: 'pipe', ...shellOpt }, (err, stdout) => {
+      execFile(npmPath, ['view', pkgName, 'version'], { stdio: 'pipe', env: safeEnv, ...shellOpt }, (err, stdout) => {
         if (err) reject(err); else resolve(stdout.toString().trim());
       });
     });
@@ -83,7 +89,7 @@ export async function handleUpgradeAgent() {
 
     // 判断全局安装 vs 局部安装
     const isGlobalInstall = await new Promise((resolve) => {
-      execFile(npmPath, ['prefix', '-g'], { ...shellOpt }, (err, stdout) => {
+      execFile(npmPath, ['prefix', '-g'], { env: safeEnv, ...shellOpt }, (err, stdout) => {
         if (err) { resolve(false); return; }
         const globalPrefix = stdout.toString().trim().replace(/\\/g, '/');
         resolve(installDir === globalPrefix || installDir === globalPrefix + '/lib');
@@ -103,7 +109,7 @@ export async function handleUpgradeAgent() {
     const isPm2 = !!process.env.pm_id;
     if (isPm2) {
       try {
-        execFileSync(pm2Path, ['delete', PM2_APP_NAME], { stdio: 'pipe', ...shellOpt });
+        execFileSync(pm2Path, ['delete', PM2_APP_NAME], { stdio: 'pipe', env: safeEnv, ...shellOpt });
         console.log(`[Agent] PM2 app deleted to prevent auto-restart during upgrade`);
       } catch {
         console.log(`[Agent] PM2 delete skipped (app may not be registered)`);
@@ -252,17 +258,13 @@ function spawnUnixUpgradeScript(pkgName, installDir, isGlobalInstall, latestVers
   const isLaunchd = platform() === 'darwin' && existsSync(join(process.env.HOME || '', 'Library', 'LaunchAgents', 'com.yeaft.agent.plist'));
   const cwd = isGlobalInstall ? undefined : installDir;
 
-  // Ensure PATH includes the node bin dir (critical for launchd which has minimal PATH)
-  const currentPath = process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin';
-  const exportPath = currentPath.includes(nodeBinDir) ? currentPath : `${nodeBinDir}:${currentPath}`;
-
   const shLines = [
     '#!/bin/bash',
     `PID=${pid}`,
     `PKG="${pkgName}@latest"`,
     `NPM="${npmPath}"`,
     `LOGFILE="${join(configDir, 'logs', 'upgrade.log')}"`,
-    `export PATH="${exportPath}"`,
+    `export PATH="${safePath}"`,
     '',
     '# Redirect all output to log file',
     'exec > "$LOGFILE" 2>&1',
