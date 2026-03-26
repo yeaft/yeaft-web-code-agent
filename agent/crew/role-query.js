@@ -160,15 +160,14 @@ async function _createRoleQueryInner(session, roleName) {
     ...(effectiveDisallowed.length > 0 && { disallowedTools: effectiveDisallowed })
   };
 
-  // Only the decision maker intercepts AskUserQuestion to forward to Web UI
-  if (role.isDecisionMaker) {
-    queryOptions.canCallTool = async (toolName, input, toolCtx) => {
-      if (toolName === 'AskUserQuestion') {
-        return await handleAskUserQuestion(session.id, input, toolCtx);
-      }
-      return input;
-    };
-  }
+  // Intercept AskUserQuestion for all roles — forward to Web UI for interactive answering.
+  // Without this, non-DM roles' AskCard buttons stay disabled (no askRequestId).
+  queryOptions.canCallTool = async (toolName, input, toolCtx) => {
+    if (toolName === 'AskUserQuestion') {
+      return await handleAskUserQuestion(session.id, input, toolCtx);
+    }
+    return input;
+  };
 
   if (savedSessionId) {
     queryOptions.resume = savedSessionId;
