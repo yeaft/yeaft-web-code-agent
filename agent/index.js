@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { platform, homedir } from 'os';
-import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
@@ -138,6 +138,35 @@ async function ensureDependencies() {
   }
 }
 
+// 确保 yeaft-skills 插件已安装/更新
+async function ensureYeaftSkills() {
+  const skillsDir = join(homedir(), '.claude', 'skills', 'yeaft-skills');
+  const REPO_URL = 'https://github.com/yeaft/yeaft-skills.git';
+
+  try {
+    if (!existsSync(skillsDir)) {
+      console.log('[Startup] yeaft-skills not found, installing...');
+      const parentDir = join(homedir(), '.claude', 'skills');
+      mkdirSync(parentDir, { recursive: true });
+      await execAsync(`git clone ${REPO_URL} "${skillsDir}"`, { timeout: 60000 });
+      console.log('[Startup] yeaft-skills installed');
+    } else {
+      console.log('[Startup] yeaft-skills found, checking for updates...');
+      const { stdout } = await execAsync('git pull --ff-only', {
+        cwd: skillsDir,
+        timeout: 30000
+      });
+      if (stdout.includes('Already up to date')) {
+        console.log('[Startup] yeaft-skills is up to date');
+      } else {
+        console.log('[Startup] yeaft-skills updated');
+      }
+    }
+  } catch (e) {
+    console.warn('[Startup] yeaft-skills sync failed (skills will be unavailable):', e.message);
+  }
+}
+
 // 优雅退出
 function cleanup() {
   // 清理所有终端
@@ -176,6 +205,7 @@ process.on('SIGTERM', () => {
 // 启动 - 先确保依赖，再检测能力，再连接
 (async () => {
   await ensureDependencies();
+  await ensureYeaftSkills();
   ctx.agentCapabilities = await detectCapabilities();
   connect();
 })();
