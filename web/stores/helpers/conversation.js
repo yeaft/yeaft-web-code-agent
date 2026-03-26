@@ -338,6 +338,19 @@ export function answerUserQuestion(store, requestId, answers) {
       crewMsg.selectedAnswers = answers;
     }
   }
+  // Also check Conductor messages across all convIds
+  if (store.conductorMessages) {
+    for (const condMsgs of Object.values(store.conductorMessages)) {
+      const condMsg = condMsgs.find(m =>
+        m.type === 'tool' && m.toolName === 'AskUserQuestion' && m.askRequestId === requestId
+      );
+      if (condMsg) {
+        condMsg.askAnswered = true;
+        condMsg.selectedAnswers = answers;
+        break;
+      }
+    }
+  }
   // 立刻进入 processing 状态，显示"思考中"指示器
   if (store.currentConversation && !store.processingConversations[store.currentConversation]) {
     store.processingConversations[store.currentConversation] = true;

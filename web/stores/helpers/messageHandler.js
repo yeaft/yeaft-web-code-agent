@@ -284,6 +284,18 @@ export function handleMessage(store, msg) {
               }
             }
           }
+          // Conductor mode: search conductorMessages across all convIds
+          if (store.conductorMessages) {
+            for (const condMsgs of Object.values(store.conductorMessages)) {
+              for (let i = condMsgs.length - 1; i >= 0; i--) {
+                if (condMsgs[i].type === 'tool' && condMsgs[i].toolName === 'AskUserQuestion' && !condMsgs[i].askRequestId) {
+                  condMsgs[i].askRequestId = msg.requestId;
+                  condMsgs[i].askQuestions = msg.questions;
+                  return true;
+                }
+              }
+            }
+          }
           return false;
         };
         if (!tryLink()) {
