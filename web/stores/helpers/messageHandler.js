@@ -382,18 +382,16 @@ export function handleMessage(store, msg) {
       clearRefreshTimeout();
       break;
 
-    // Conductor (V2 multi-agent orchestrator) messages
-    case 'conductor_session_created':
-    case 'conductor_session_restored':
-    case 'conductor_status_update':
-    case 'conductor_actor_update':
-    case 'conductor_task_created':
-    case 'conductor_task_updated':
-    case 'conductor_task_completed':
+    // Conductor (V5 — 1:1 per Agent) messages
+    case 'conductor_opened':
     case 'conductor_output':
+    case 'conductor_status':
     case 'conductor_turn_completed':
-    case 'conductor_workdir_changed':
     case 'conductor_error':
+    case 'conductor_task_created':
+    case 'conductor_task_message':
+    case 'conductor_cleared':
+    case 'conductor_history_loaded':
       store.handleConductorOutput(msg);
       break;
 

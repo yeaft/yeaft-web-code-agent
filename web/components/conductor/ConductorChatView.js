@@ -159,8 +159,10 @@ export default {
       return this.store.conductorActivePanelVisible;
     },
     session() {
+      // V5: no separate conductorSessions — use the conversation entry
       const sid = this.store.currentConversation;
-      return sid ? this.store.conductorSessions[sid] : null;
+      if (!sid) return null;
+      return this.store.conversations.find(c => c.id === sid) || null;
     },
     conductorMessages() {
       const sid = this.store.currentConversation;
@@ -173,9 +175,10 @@ export default {
       return this.store.conductorTasks[sid] || {};
     },
     currentActors() {
-      const sid = this.store.currentConversation;
-      if (!sid) return {};
-      return this.store.conductorActors[sid] || {};
+      // TODO: V5 actors are managed per-task on the Agent side and not yet
+      // exposed as a separate UI state. The ConductorActivePanel actors prop
+      // will remain empty until actor-level status is surfaced in V5 protocol.
+      return {};
     },
     activeTaskCount() {
       return Object.values(this.currentTasks).filter(

@@ -129,14 +129,12 @@ export const useChatStore = defineStore('chat', {
     expertSelections: [],             // 当前已选的角色/Action: [{ role: string, action: string|null }]
 
     // =====================
-    // Conductor (V2 orchestrator) 状态 — 按 sessionId 存储
+    // Conductor (V5 — 1:1 per Agent) 状态 — 按 conductor_${agentId} 存储
     // =====================
-    conductorSessions: {},        // { [sessionId]: { id, scenario, workDir, agentId, actors, tasks, createdAt } }
-    conductorMessages: {},        // { [sessionId]: messages[] }
-    conductorTasks: {},           // { [sessionId]: { [taskId]: { id, title, status, plan, actors, progress } } }
-    conductorActors: {},          // { [sessionId]: { [actorKey]: { key, persona, specialty, taskId, status, spawnedAt } } }
-    conductorStatuses: {},        // { [sessionId]: { status, costUsd, activeActors, activeTasks } }
-    conductorActivePanelVisible: true,  // Active Panel toggle (shared across sessions)
+    conductorMessages: {},        // { [convId]: messages[] }
+    conductorTasks: {},           // { [convId]: { [taskId]: TaskStatus } }
+    conductorStatuses: {},        // { [convId]: { status, costUsd, ... } }
+    conductorActivePanelVisible: true,  // Active Panel toggle
   }),
 
   getters: {
@@ -225,11 +223,6 @@ export const useChatStore = defineStore('chat', {
       if (!state.currentConversation) return false;
       const conv = state.conversations.find(c => c.id === state.currentConversation);
       return conv?.type === 'conductor';
-    },
-    // 当前 Conductor session 信息
-    currentConductorSession: (state) => {
-      if (!state.currentConversation) return null;
-      return state.conductorSessions[state.currentConversation] || null;
     },
     // 当前 Conductor 消息列表
     currentConductorMessages: (state) => {
@@ -423,13 +416,11 @@ export const useChatStore = defineStore('chat', {
     startRefreshTimeout() { crewHelpers.startRefreshTimeout(this); },
 
     // =====================
-    // Conductor (V2 orchestrator) actions
+    // Conductor (V5 — 1:1 per Agent) actions
     // =====================
     openConductor(agentId) { conductorHelpers.openConductor(this, agentId); },
-    resumeConductorSession(sessionId, agentId) { conductorHelpers.resumeConductorSession(this, sessionId, agentId); },
     sendConductorMessage(content, taskId, attachments) { conductorHelpers.sendConductorMessage(this, content, taskId, attachments); },
-    sendConductorControl(action, taskId) { conductorHelpers.sendConductorControl(this, action, taskId); },
-    switchConductorWorkDir(workDir) { conductorHelpers.switchConductorWorkDir(this, workDir); },
+    sendConductorControl(action) { conductorHelpers.sendConductorControl(this, action); },
     handleConductorOutput(msg) { conductorHelpers.handleConductorOutput(this, msg); },
 
     openFileInExplorer(filePath) {
