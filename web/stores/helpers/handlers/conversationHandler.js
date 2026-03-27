@@ -11,6 +11,18 @@ function filterEmptyUserMessages(messages) {
   return messages.filter(m => !(m.type === 'user' && (!m.content || !m.content.trim())));
 }
 
+/** Mark all pending tool-use messages as completed for a conversation */
+export function markAllToolsCompleted(store, convId) {
+  const msgs = convId === store.currentConversation
+    ? store.messages
+    : (store.messagesCache[convId] || []);
+  for (const msg of msgs) {
+    if (msg.type === 'tool-use' && !msg.hasResult) {
+      msg.hasResult = true;
+    }
+  }
+}
+
 export function handleConversationCreated(store, msg) {
   clearSessionLoading(store);
   if (store.currentConversation && store.messages.length > 0) {
@@ -134,6 +146,7 @@ export function handleTurnCompleted(store, msg) {
       status.currentTool = null;
     }
     store.finishStreamingForConversation(convId);
+    markAllToolsCompleted(store, convId);
     const conv = store.conversations.find(c => c.id === convId);
     if (conv) {
       if (msg.claudeSessionId) conv.claudeSessionId = msg.claudeSessionId;
@@ -164,6 +177,7 @@ export function handleConversationClosed(store, msg) {
       status.currentTool = null;
     }
     store.finishStreamingForConversation(convId);
+    markAllToolsCompleted(store, convId);
     const conv = store.conversations.find(c => c.id === convId);
     if (conv) {
       if (msg.claudeSessionId) conv.claudeSessionId = msg.claudeSessionId;
@@ -199,6 +213,7 @@ export function handleExecutionCancelled(store, msg) {
       status.currentTool = null;
     }
     store.finishStreamingForConversation(convId);
+    markAllToolsCompleted(store, convId);
   }
 }
 

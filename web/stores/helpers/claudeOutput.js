@@ -1,6 +1,7 @@
 // Claude output processing helpers
 
 import { resetProcessingWatchdog, stopProcessingWatchdog } from './watchdog.js';
+import { markAllToolsCompleted } from './handlers/conversationHandler.js';
 
 export function getOrCreateExecutionStatus(store, conversationId) {
   if (!store.executionStatusMap[conversationId]) {
@@ -178,14 +179,10 @@ export function handleClaudeOutput(store, conversationId, data) {
     if (!store._turnCompletedConvs) store._turnCompletedConvs = new Set();
     store._turnCompletedConvs.add(conversationId);
     execStatus.currentTool = null;
+    markAllToolsCompleted(store, conversationId);
     const msgs = conversationId === store.currentConversation
       ? store.messages
       : (store.messagesCache[conversationId] || []);
-    for (const msg of msgs) {
-      if (msg.type === 'tool-use' && !msg.hasResult) {
-        msg.hasResult = true;
-      }
-    }
     // ★ Display result text only from result_text (slash commands like /skills, /context).
     // Do NOT fall back to data.result — it contains the full assistant response text
     // which was already streamed via 'assistant' messages, causing duplicate output.
