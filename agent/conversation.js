@@ -1,3 +1,6 @@
+import { readFileSync, readdirSync } from 'fs';
+import { join } from 'path';
+import { homedir } from 'os';
 import ctx from './context.js';
 import { query } from './sdk/index.js';
 import { loadSessionHistory } from './history.js';
@@ -6,6 +9,114 @@ import { crewSessions, loadCrewIndex } from './crew.js';
 
 // 不支持的斜杠命令（真正需要交互式 CLI 的命令）
 const UNSUPPORTED_SLASH_COMMANDS = ['/help', '/bug', '/login', '/logout', '/terminal-setup', '/vim', '/config'];
+
+// 内置命令的描述（作为 fallback，这些命令 CLI 不提供 frontmatter 描述）
+const BUILTIN_COMMAND_DESCRIPTIONS = {
+  compact: 'Compact conversation context',
+  context: 'Show context usage',
+  cost: 'Show token costs',
+  init: 'Reinitialize session',
+  review: 'Code review',
+  insights: 'Session insights',
+  'pr-comments': 'PR comment review',
+  'release-notes': 'Generate release notes',
+  'security-review': 'Security review',
+  heapdump: 'Heap dump (debug)',
+};
+
+/**
+ * Load command descriptions from installed plugin commands/*.md files.
+ * Parses YAML frontmatter to extract name and description fields.
+ * Results are cached in ctx.slashCommandDescriptions.
+ */
+export function loadPluginCommandDescriptions() {
+  if (Object.keys(ctx.slashCommandDescriptions).length > 0) return; // already loaded
+
+  try {
+    const installedPath = join(homedir(), '.claude', 'plugins', 'installed_plugins.json');
+    const installed = JSON.parse(readFileSync(installedPath, 'utf-8'));
+
+    for (const [pluginKey, entries] of Object.entries(installed.plugins || {})) {
+      // pluginKey: "yeaft-skills@yeaft-skills-dev"
+      const pluginName = pluginKey.split('@')[0]; // "yeaft-skills"
+      for (const entry of entries) {
+        const commandsDir = join(entry.installPath, 'commands');
+        let files;
+        try {
+          files = readdirSync(commandsDir).filter(f => f.endsWith('.md'));
+        } catch { continue; }
+
+        for (const file of files) {
+          try {
+            const content = readFileSync(join(commandsDir, file), 'utf-8');
+            const fm = parseFrontmatter(content);
+            if (fm.name && fm.description) {
+              // CLI uses pluginName:commandName format (e.g. "yeaft-skills:sprint")
+              const cliName = `${pluginName}:${fm.name}`;
+              // Take first line of description only
+              const desc = fm.description.split('\n')[0].trim();
+              ctx.slashCommandDescriptions[cliName] = desc;
+            }
+          } catch { /* skip unparseable files */ }
+        }
+      }
+    }
+
+    // Add builtin descriptions
+    for (const [name, desc] of Object.entries(BUILTIN_COMMAND_DESCRIPTIONS)) {
+      if (!ctx.slashCommandDescriptions[name]) {
+        ctx.slashCommandDescriptions[name] = desc;
+      }
+    }
+
+    console.log(`[Preload] Loaded ${Object.keys(ctx.slashCommandDescriptions).length} command descriptions`);
+  } catch (err) {
+    console.warn('[Preload] Failed to load plugin command descriptions:', err.message);
+  }
+}
+
+/**
+ * Minimal YAML frontmatter parser for commands/*.md files.
+ * Extracts name and description from --- delimited frontmatter.
+ */
+function parseFrontmatter(content) {
+  const match = content.match(/^---\s*\n([\s\S]*?)\n---/);
+  if (!match) return {};
+
+  const fm = {};
+  const lines = match[1].split('\n');
+  let currentKey = null;
+  let multilineValue = '';
+
+  for (const line of lines) {
+    // New key: value pair
+    const kvMatch = line.match(/^(\w+):\s*(.*)/);
+    if (kvMatch) {
+      // Save previous multiline value
+      if (currentKey && multilineValue) {
+        fm[currentKey] = multilineValue.trim();
+      }
+      currentKey = kvMatch[1];
+      const val = kvMatch[2].trim();
+      if (val === '|' || val === '>') {
+        multilineValue = '';
+      } else {
+        fm[currentKey] = val;
+        currentKey = null;
+        multilineValue = '';
+      }
+    } else if (currentKey && (line.startsWith('  ') || line.trim() === '')) {
+      // Continuation of multiline value
+      multilineValue += (multilineValue ? '\n' : '') + line.trimStart();
+    }
+  }
+  // Save last multiline value
+  if (currentKey && multilineValue) {
+    fm[currentKey] = multilineValue.trim();
+  }
+
+  return fm;
+}
 
 /**
  * Prestart Claude CLI process in background (fire-and-forget).
@@ -33,6 +144,10 @@ function prestartClaude(conversationId, workDir, resumeSessionId) {
  */
 export async function preloadSlashCommands(workDir, targetId = '__preload__') {
   const effectiveWorkDir = workDir || ctx.CONFIG.workDir;
+
+  // Eagerly load plugin command descriptions (cached, runs once)
+  loadPluginCommandDescriptions();
+
   try {
     const abortController = new AbortController();
     // Use --print with a cheap built-in command to trigger system init.
@@ -58,7 +173,8 @@ export async function preloadSlashCommands(workDir, targetId = '__preload__') {
           ctx.sendToServer({
             type: 'slash_commands_update',
             conversationId: targetId,
-            slashCommands
+            slashCommands,
+            slashCommandDescriptions: ctx.slashCommandDescriptions
           });
           console.log(`[Preload] ${targetId}: loaded ${slashCommands.length} slash commands from ${effectiveWorkDir}`);
         }

@@ -69,7 +69,8 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
           workDir: agent.workDir,
           capabilities: agent.capabilities || ['terminal', 'file_editor', 'background_tasks'],
           conversations: filteredConvs,
-          slashCommands: agent.slashCommands || []
+          slashCommands: agent.slashCommands || [],
+          slashCommandDescriptions: agent.slashCommandDescriptions || {}
         });
       } else {
         await sendToWebClient(client, { type: 'error', message: 'Agent not found or offline' });

@@ -2,7 +2,7 @@
  * crewInput — Composable factory for input handling, @-mention, slash-command autocomplete, file upload, message sending.
  */
 
-import { SYSTEM_SKILLS, SYSTEM_SKILL_NAMES, DEFAULT_SLASH_COMMANDS } from '../../utils/slash-commands.js';
+import { DEFAULT_SLASH_COMMANDS, getCommandDescription, buildGroupedCommands } from '../../utils/slash-commands.js';
 
 export function createCrewInput(store, authStore, { getInputRef, getFileInputRef, getCurrentPendingAsk }) {
   const inputText = Vue.ref('');
@@ -54,34 +54,11 @@ export function createCrewInput(store, authStore, { getInputRef, getFileInputRef
       .filter(cmd => cmd.toLowerCase().startsWith(prefix) && cmd.toLowerCase() !== prefix)
       .map(cmd => ({
         cmd,
-        desc: SYSTEM_SKILLS[cmd] || cmd.slice(1)
+        desc: getCommandDescription(cmd, store.slashCommandDescriptions)
       }));
   });
 
-  const slashGroupedCommands = Vue.computed(() => {
-    const items = slashFlatItems.value;
-    if (items.length === 0) return [];
-
-    const system = [];
-    const project = [];
-    items.forEach((item, i) => {
-      const entry = { ...item, flatIndex: i };
-      if (SYSTEM_SKILL_NAMES.has(item.cmd)) {
-        system.push(entry);
-      } else {
-        project.push(entry);
-      }
-    });
-
-    const groups = [];
-    if (system.length > 0) {
-      groups.push({ label: 'System', items: system, isLast: project.length === 0 });
-    }
-    if (project.length > 0) {
-      groups.push({ label: 'Project', items: project, isLast: true });
-    }
-    return groups;
-  });
+  const slashGroupedCommands = Vue.computed(() => buildGroupedCommands(slashFlatItems.value));
 
   const slashFilteredCommands = Vue.computed(() => slashFlatItems.value.map(item => item.cmd));
 

@@ -14,6 +14,8 @@ export default {
   agentCapabilities: [],
   // Agent 级别的 slash commands 缓存（所有 conversation 共用）
   slashCommands: [],
+  // Slash command 描述映射: { commandName: description } — 从 plugin commands/*.md 提取
+  slashCommandDescriptions: {},
   // MCP servers 列表 (从 ~/.claude.json 读取): [{ name, enabled, source }]
   mcpServers: [],
   // 连接相关
