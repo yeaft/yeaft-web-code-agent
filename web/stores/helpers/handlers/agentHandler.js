@@ -243,6 +243,10 @@ export function handleAgentSelected(store, msg) {
     // hasn't reported its own slashCommands yet
     store.slashCommandsMap[`agent:${msg.agentId}`] = msg.slashCommands;
   }
+  // Merge command descriptions
+  if (msg.slashCommandDescriptions) {
+    store.slashCommandDescriptions = { ...store.slashCommandDescriptions, ...msg.slashCommandDescriptions };
+  }
 
   const serverConvs = msg.conversations || [];
   const seenIds = new Set();

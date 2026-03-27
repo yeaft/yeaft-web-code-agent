@@ -1,4 +1,4 @@
-import { SYSTEM_SKILLS, SYSTEM_SKILL_NAMES, DEFAULT_SLASH_COMMANDS } from '../utils/slash-commands.js';
+import { DEFAULT_SLASH_COMMANDS, getCommandDescription, buildGroupedCommands } from '../utils/slash-commands.js';
 import { buildAutocompleteItems as buildExpertAutocomplete, getSelectionLabel, EXPERT_ROLES, MAX_SELECTIONS } from '../utils/expert-roles.js';
 
 export default {
@@ -234,35 +234,12 @@ export default {
         .filter(cmd => cmd.toLowerCase().startsWith(prefix) && cmd.toLowerCase() !== prefix)
         .map(cmd => ({
           cmd,
-          desc: SYSTEM_SKILLS[cmd] || cmd.slice(1)
+          desc: getCommandDescription(cmd, store.slashCommandDescriptions)
         }));
     });
 
     // Grouped commands for rendering: [{ label, items: [{ cmd, desc, flatIndex }], isLast }]
-    const groupedCommands = Vue.computed(() => {
-      const items = flatItems.value;
-      if (items.length === 0) return [];
-
-      const system = [];
-      const project = [];
-      items.forEach((item, i) => {
-        const entry = { ...item, flatIndex: i };
-        if (SYSTEM_SKILL_NAMES.has(item.cmd)) {
-          system.push(entry);
-        } else {
-          project.push(entry);
-        }
-      });
-
-      const groups = [];
-      if (system.length > 0) {
-        groups.push({ label: 'System', items: system, isLast: project.length === 0 });
-      }
-      if (project.length > 0) {
-        groups.push({ label: 'Project', items: project, isLast: true });
-      }
-      return groups;
-    });
+    const groupedCommands = Vue.computed(() => buildGroupedCommands(flatItems.value));
 
     // Keep filteredCommands as flat string array for keyboard nav compatibility
     const filteredCommands = Vue.computed(() => flatItems.value.map(item => item.cmd));

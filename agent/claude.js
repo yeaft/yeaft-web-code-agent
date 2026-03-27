@@ -310,7 +310,8 @@ async function processClaudeOutput(conversationId, claudeQuery, state) {
             ctx.sendToServer({
               type: 'slash_commands_update',
               conversationId,
-              slashCommands: state.slashCommands
+              slashCommands: state.slashCommands,
+              slashCommandDescriptions: ctx.slashCommandDescriptions
             });
           }
         }

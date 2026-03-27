@@ -234,6 +234,10 @@ export function handleMessage(store, msg) {
           store.slashCommandsMap[`agent:${msg.agentId}`] = msg.slashCommands;
         }
       }
+      // Merge command descriptions (cumulative — new descriptions extend existing)
+      if (msg.slashCommandDescriptions) {
+        store.slashCommandDescriptions = { ...store.slashCommandDescriptions, ...msg.slashCommandDescriptions };
+      }
       break;
 
     case 'compact_status':
