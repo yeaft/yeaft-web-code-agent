@@ -7,13 +7,13 @@ import SettingsPanel from './SettingsPanel.js';
 import CrewConfigPanel from './CrewConfigPanel.js';
 import CrewChatView from './CrewChatView.js';
 import ExpertPanel from './ExpertPanel.js';
-import TaskPanel from './TaskPanel.js';
+import SubAgentPanel from './SubAgentPanel.js';
 import BtwOverlay from './BtwOverlay.js';
 import { useAuthStore } from '../stores/auth.js';
 
 export default {
   name: 'ChatPage',
-  components: { ChatHeader, MessageList, ChatInput, WorkbenchPanel, ProxyTab, SettingsPanel, CrewConfigPanel, CrewChatView, ExpertPanel, TaskPanel, BtwOverlay },
+  components: { ChatHeader, MessageList, ChatInput, WorkbenchPanel, ProxyTab, SettingsPanel, CrewConfigPanel, CrewChatView, ExpertPanel, SubAgentPanel, BtwOverlay },
   template: `
     <div class="chat-page" :class="{ 'show-sidebar': showMobileSidebar }">
 
@@ -106,7 +106,7 @@ export default {
                 </button>
               <button v-if="canUseWorkbench" class="sidebar-icon-btn" :class="{ active: store.workbenchExpanded }" @click="store.toggleWorkbench()" :title="$t('chat.sidebar.workbench')">
                 <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M20 3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H4V5h16v14zM6 7h5v2H6V7zm0 4h5v2H6v-2zm0 4h5v2H6v-2zm7-8h5v10h-5V7z"/></svg>
-                <span class="action-badge" v-if="store.currentBackgroundTasks.length > 0">{{ store.currentBackgroundTasks.length }}</span>
+                <span class="action-badge" v-if="store.runningSubagentCount > 0">{{ store.runningSubagentCount }}</span>
               </button>
             </div>
           </div>
@@ -267,8 +267,8 @@ export default {
             </div>
             <!-- Right Panel overlay (mobile only) -->
             <div class="expert-panel-overlay" v-if="store.activeRightPanel" @click="store.activeRightPanel = null"></div>
-            <TaskPanel
-              v-if="store.activeRightPanel === 'tasks'"
+            <SubAgentPanel
+              v-if="store.activeRightPanel === 'subagents'"
               :visible="true"
               @close="store.activeRightPanel = null"
             />

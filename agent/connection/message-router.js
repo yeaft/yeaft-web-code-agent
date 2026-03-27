@@ -105,10 +105,6 @@ export async function handleMessage(msg) {
       await handleBtwQuestion(msg);
       break;
 
-    case 'stop_background_task':
-      await (await import('../conversation.js')).handleStopBackgroundTask(msg);
-      break;
-
     case 'cancel_execution':
       await handleCancelExecution(msg);
       break;

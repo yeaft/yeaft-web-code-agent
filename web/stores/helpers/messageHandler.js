@@ -405,16 +405,34 @@ export function handleMessage(store, msg) {
       store.btwLoading = false;
       break;
 
-    // Background task tracking (Sub-Agent / Bash)
+    // Background task tracking (legacy — kept for server compatibility)
     case 'background_task_started':
-      if (msg.conversationId && msg.task) {
-        store.addBackgroundTask(msg.conversationId, msg.task);
+    case 'background_task_output':
+      // No longer rendered in frontend — superseded by subagent_* events
+      break;
+
+    // Sub-Agent JSONL messages (real-time subagent tracking)
+    case 'subagent_started':
+      if (msg.conversationId && msg.subagentId) {
+        store.addSubagent(msg.conversationId, {
+          id: msg.subagentId,
+          slug: msg.slug,
+          type: msg.subagentType,
+          description: msg.description,
+          parentToolUseId: msg.parentToolUseId
+        });
       }
       break;
 
-    case 'background_task_output':
-      if (msg.conversationId && msg.taskId) {
-        store.updateBackgroundTask(msg.conversationId, msg.taskId, msg.task, msg.newOutput);
+    case 'subagent_message':
+      if (msg.conversationId && msg.subagentId && msg.message) {
+        store.appendSubagentMessage(msg.conversationId, msg.subagentId, msg.message);
+      }
+      break;
+
+    case 'subagent_completed':
+      if (msg.conversationId && msg.subagentId) {
+        store.completeSubagent(msg.conversationId, msg.subagentId);
       }
       break;
 

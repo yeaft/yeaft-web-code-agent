@@ -103,6 +103,8 @@ export function handleConversationDeleted(store, msg) {
   if (store._closedAt) delete store._closedAt[msg.conversationId];
   stopProcessingWatchdog(store, msg.conversationId);
   delete store.executionStatusMap[msg.conversationId];
+  // 清理 subagent 数据
+  delete store.subagents[msg.conversationId];
   // 清理 crew 数据
   delete store.crewSessions?.[msg.conversationId];
   delete store.crewMessagesMap?.[msg.conversationId];

@@ -1,6 +1,7 @@
 import { query, Stream } from './sdk/index.js';
 import ctx from './context.js';
 import { sendConversationList, sendOutput, sendError, handleAskUserQuestion } from './conversation.js';
+import { startSubagentWatcher, stopSubagentWatcher, cleanupSubagentWatchers } from './subagent.js';
 
 /**
  * Determine maxContextTokens and autoCompactThreshold from model name.
@@ -40,6 +41,7 @@ export async function startClaudeQuery(conversationId, workDir, resumeSessionId)
     if (existing.abortController) {
       existing.abortController.abort();
     }
+    cleanupSubagentWatchers(conversationId);
     ctx.conversations.delete(conversationId);
   }
 
@@ -211,6 +213,9 @@ function detectAndTrackBackgroundTask(conversationId, state, message) {
             conversationId,
             task: taskInfo
           });
+
+          // Start watching subagent JSONL files for this Task
+          startSubagentWatcher(conversationId, state, toolUseId);
         }
       }
     }
@@ -241,6 +246,11 @@ function detectAndTrackBackgroundTask(conversationId, state, message) {
           taskId: toolUseId,
           task: taskInfo
         });
+
+        // Stop subagent watcher if this was a Task (Agent) tool_use
+        if (taskInfo.type === 'agent') {
+          stopSubagentWatcher(conversationId, toolUseId);
+        }
       }
     }
   }
@@ -564,6 +574,7 @@ async function processClaudeOutput(conversationId, claudeQuery, state) {
       console.log(`[SDK] Stale processClaudeOutput for ${conversationId}, skipping cleanup`);
     } else if (!wasCancelled && (wasTurnActive || !resultHandled)) {
       // 进程异常退出：要么 turn 正在进行中，要么从未成功完成过任何 turn
+      cleanupSubagentWatchers(conversationId);
       ctx.sendToServer({
         type: 'conversation_closed',
         conversationId,

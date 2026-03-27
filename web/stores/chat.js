@@ -129,10 +129,11 @@ export const useChatStore = defineStore('chat', {
     expertSelections: [],             // 当前已选的角色/Action: [{ role: string, action: string|null }]
 
     // =====================
-    // Background Tasks 状态 (Sub-Agent / Bash)
+    // Sub-Agent 状态 (JSONL watcher)
     // =====================
-    backgroundTasks: {},              // { [conversationId]: { [taskId]: taskInfo } }
-    activeRightPanel: null,           // null | 'tasks' | 'experts' — 右侧面板互斥切换
+    subagents: {},                    // { [conversationId]: { [subagentId]: SubagentInfo } }
+    activeSubagentId: null,           // 当前展开的 subagent ID (null = 列表模式)
+    activeRightPanel: null,           // null | 'subagents' | 'experts' — 右侧面板互斥切换
   }),
 
   getters: {
@@ -178,28 +179,36 @@ export const useChatStore = defineStore('chat', {
     showRecoveryBanner: (state) => {
       return state.pendingRecovery && !state.recoveryDismissed && !state.currentConversation;
     },
-    // 当前会话的后台任务列表
-    currentBackgroundTasks: (state) => {
+    // 当前会话的 subagent 列表
+    currentSubagents: (state) => {
       if (!state.currentConversation) return EMPTY_ARRAY;
-      const convTasks = state.backgroundTasks[state.currentConversation];
-      if (!convTasks) return EMPTY_ARRAY;
-      return Object.values(convTasks);
+      const convSubagents = state.subagents[state.currentConversation];
+      if (!convSubagents) return EMPTY_ARRAY;
+      return Object.values(convSubagents);
     },
-    // 是否有正在运行的后台任务
-    hasRunningBackgroundTasks: (state) => {
+    // 是否有正在运行的 subagent
+    hasRunningSubagents: (state) => {
       if (!state.currentConversation) return false;
-      const convTasks = state.backgroundTasks[state.currentConversation];
-      if (!convTasks) return false;
-      return Object.values(convTasks).some(t => t.status === 'running' || t.status === 'stopping');
+      const convSubagents = state.subagents[state.currentConversation];
+      if (!convSubagents) return false;
+      return Object.values(convSubagents).some(s => s.status === 'running');
     },
-    // 运行中的后台任务数
-    runningBackgroundTaskCount: (state) => {
+    // 运行中的 subagent 数
+    runningSubagentCount: (state) => {
       if (!state.currentConversation) return 0;
-      const convTasks = state.backgroundTasks[state.currentConversation];
-      if (!convTasks) return 0;
-      return Object.values(convTasks).filter(t => t.status === 'running' || t.status === 'stopping').length;
+      const convSubagents = state.subagents[state.currentConversation];
+      if (!convSubagents) return 0;
+      return Object.values(convSubagents).filter(s => s.status === 'running').length;
     },
-    // 当前选中的后台任务详情
+    // 当前展开的 subagent 的消息列表
+    activeSubagentMessages: (state) => {
+      if (!state.currentConversation || !state.activeSubagentId) return EMPTY_ARRAY;
+      const convSubagents = state.subagents[state.currentConversation];
+      if (!convSubagents) return EMPTY_ARRAY;
+      const agent = convSubagents[state.activeSubagentId];
+      return agent?.messages || EMPTY_ARRAY;
+    },
+    // 当前选中的后台任务详情（保留接口兼容）
     selectedTaskInfo: () => {
       return null;
     },
@@ -268,100 +277,36 @@ export const useChatStore = defineStore('chat', {
     },
 
     // =====================
-    // Background Tasks
+    // Sub-Agents
     // =====================
-    addBackgroundTask(conversationId, task) {
-      if (!this.backgroundTasks[conversationId]) {
-        this.backgroundTasks[conversationId] = {};
+    addSubagent(conversationId, info) {
+      if (!this.subagents[conversationId]) {
+        this.subagents[conversationId] = {};
       }
-      this.backgroundTasks[conversationId][task.id] = {
-        ...task,
-        output: task.output || '',
-        collapsed: false,
-        exitTimer: null,
-        exiting: false
+      this.subagents[conversationId][info.id] = {
+        id: info.id,
+        slug: info.slug || info.id,
+        type: info.type || 'Task',
+        description: info.description || '',
+        parentToolUseId: info.parentToolUseId || null,
+        status: 'running',
+        startTime: Date.now(),
+        messages: []
       };
-    },
-    updateBackgroundTask(conversationId, taskId, task, newOutput) {
-      const convTasks = this.backgroundTasks[conversationId];
-      if (!convTasks || !convTasks[taskId]) return;
-      const existing = convTasks[taskId];
-      // Update fields from task info
-      if (task) {
-        existing.status = task.status;
-        existing.output = task.output || existing.output;
-        existing.endTime = task.endTime || existing.endTime;
-      }
-      // Append incremental output
-      if (newOutput) {
-        existing.output = (existing.output || '') + newOutput;
-      }
-      // If completed/error/stopped, start 15s exit timer
-      if (existing.status === 'completed' || existing.status === 'error' || existing.status === 'stopped') {
-        existing.collapsed = true;
-        this._startExitTimer(conversationId, taskId);
+      // Auto-open panel when first subagent starts for current conversation
+      if (conversationId === this.currentConversation && this.activeRightPanel !== 'subagents') {
+        this.activeRightPanel = 'subagents';
       }
     },
-    removeBackgroundTask(conversationId, taskId) {
-      const convTasks = this.backgroundTasks[conversationId];
-      if (!convTasks) return;
-      // Clear timer if any
-      if (convTasks[taskId]?.exitTimer) {
-        clearTimeout(convTasks[taskId].exitTimer);
-      }
-      delete convTasks[taskId];
-      // If no tasks left in this conversation, clean up
-      if (Object.keys(convTasks).length === 0) {
-        delete this.backgroundTasks[conversationId];
-        // Auto-close panel if no tasks remain for current conversation
-        if (conversationId === this.currentConversation && this.activeRightPanel === 'tasks') {
-          this.activeRightPanel = null;
-        }
-      }
+    appendSubagentMessage(conversationId, subagentId, message) {
+      const convSubagents = this.subagents[conversationId];
+      if (!convSubagents || !convSubagents[subagentId]) return;
+      convSubagents[subagentId].messages.push(message);
     },
-    pauseExitTimer(conversationId, taskId) {
-      const convTasks = this.backgroundTasks[conversationId];
-      if (!convTasks || !convTasks[taskId]) return;
-      if (convTasks[taskId].exitTimer) {
-        clearTimeout(convTasks[taskId].exitTimer);
-        convTasks[taskId].exitTimer = null;
-      }
-    },
-    resumeExitTimer(conversationId, taskId) {
-      const convTasks = this.backgroundTasks[conversationId];
-      if (!convTasks || !convTasks[taskId]) return;
-      const task = convTasks[taskId];
-      if (task.status === 'completed' || task.status === 'error' || task.status === 'stopped') {
-        this._startExitTimer(conversationId, taskId);
-      }
-    },
-    _startExitTimer(conversationId, taskId) {
-      const convTasks = this.backgroundTasks[conversationId];
-      if (!convTasks || !convTasks[taskId]) return;
-      // Clear existing timer
-      if (convTasks[taskId].exitTimer) {
-        clearTimeout(convTasks[taskId].exitTimer);
-      }
-      convTasks[taskId].exitTimer = setTimeout(() => {
-        const ct = this.backgroundTasks[conversationId];
-        if (ct && ct[taskId]) {
-          ct[taskId].exiting = true;
-          // Remove after fade-out animation (300ms)
-          setTimeout(() => {
-            this.removeBackgroundTask(conversationId, taskId);
-          }, 350);
-        }
-      }, 15000);
-    },
-    stopBackgroundTask(conversationId, taskId) {
-      const convTasks = this.backgroundTasks[conversationId];
-      if (!convTasks || !convTasks[taskId]) return;
-      convTasks[taskId].status = 'stopping';
-      this.sendWsMessage({
-        type: 'stop_background_task',
-        conversationId,
-        taskId
-      });
+    completeSubagent(conversationId, subagentId) {
+      const convSubagents = this.subagents[conversationId];
+      if (!convSubagents || !convSubagents[subagentId]) return;
+      convSubagents[subagentId].status = 'completed';
     },
 
     // =====================
@@ -537,13 +482,8 @@ export const useChatStore = defineStore('chat', {
       this.processingConversations = {};
       this.executionStatusMap = {};
       this.workbenchExpanded = false;
-      // Clear background task exit timers before resetting
-      for (const convTasks of Object.values(this.backgroundTasks)) {
-        for (const task of Object.values(convTasks)) {
-          if (task.exitTimer) clearTimeout(task.exitTimer);
-        }
-      }
-      this.backgroundTasks = {};
+      this.subagents = {};
+      this.activeSubagentId = null;
       this.activeRightPanel = null;
       if (this.ws) {
         this.ws.close();

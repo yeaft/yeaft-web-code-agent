@@ -35,11 +35,11 @@ export default {
           {{ contextUsage.percentage }}%
         </span>
         <!-- Expert panel button — hidden in Crew mode -->
-        <button class="header-action-btn" :class="{ active: store.activeRightPanel === 'tasks' }" @click="toggleTaskPanel" :title="$t('chatHeader.taskPanel')" v-if="runningTaskCount > 0 || store.activeRightPanel === 'tasks'">
+        <button class="header-action-btn" :class="{ active: store.activeRightPanel === 'subagents' }" @click="toggleSubAgentPanel" :title="$t('chatHeader.subAgentPanel')" v-if="runningSubagentCount > 0 || store.activeRightPanel === 'subagents'">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
           </svg>
-          <span class="task-count-badge" v-if="runningTaskCount > 0">{{ runningTaskCount }}</span>
+          <span class="subagent-count-badge" v-if="runningSubagentCount > 0">{{ runningSubagentCount }}</span>
         </button>
         <button class="header-action-btn" :class="{ active: store.activeRightPanel === 'experts' }" @click="toggleExpertPanel" :title="$t('chatHeader.expertPanel')" v-if="!store.currentConversationIsCrew">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -330,12 +330,12 @@ export default {
       store.activeRightPanel = store.activeRightPanel === 'experts' ? null : 'experts';
     };
 
-    const toggleTaskPanel = () => {
-      store.activeRightPanel = store.activeRightPanel === 'tasks' ? null : 'tasks';
+    const toggleSubAgentPanel = () => {
+      store.activeRightPanel = store.activeRightPanel === 'subagents' ? null : 'subagents';
     };
 
-    const runningTaskCount = Vue.computed(() => {
-      return store.runningBackgroundTaskCount;
+    const runningSubagentCount = Vue.computed(() => {
+      return store.runningSubagentCount;
     });
 
     const toggleMcpServer = (serverName, enabled) => {
@@ -356,6 +356,6 @@ export default {
       document.removeEventListener('click', closeMcpOnOutsideClick);
     });
 
-    return { store, headerTitle, folderPath, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, hasStreamingRoles, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, openCrewEdit, onCrewPanelToggle, isCrewPanelActive, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel, toggleTaskPanel, runningTaskCount };
+    return { store, headerTitle, folderPath, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, hasStreamingRoles, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, openCrewEdit, onCrewPanelToggle, isCrewPanelActive, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel, toggleSubAgentPanel, runningSubagentCount };
   }
 };

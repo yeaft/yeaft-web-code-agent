@@ -1,0 +1,412 @@
+/* ==================================
+   Sub-Agent Panel Styles
+   ================================== */
+
+/* ---- Panel Container ---- */
+.subagent-panel {
+  width: 0;
+  overflow: hidden;
+  border-left: none;
+  background: var(--bg-sidebar);
+  display: flex;
+  flex-direction: column;
+  transition: width 0.2s ease;
+  flex-shrink: 0;
+}
+
+.subagent-panel.open {
+  width: 320px;
+  border-left: 1px solid var(--border-color);
+}
+
+/* Expanded mode: wider panel when viewing a subagent's messages */
+.subagent-panel.open.expanded {
+  width: 40%;
+  min-width: 360px;
+  max-width: 600px;
+}
+
+/* ---- Panel Header ---- */
+.subagent-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.subagent-panel-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  flex: 1;
+}
+
+.subagent-panel-count {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.subagent-panel-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.subagent-panel-close:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+/* ---- Expanded Header ---- */
+.subagent-expanded-header {
+  gap: 6px;
+}
+
+.subagent-back-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.subagent-back-btn:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.subagent-expanded-slug {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Type Badge ---- */
+.subagent-type-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: var(--sidebar-hover);
+  border-radius: 10px;
+  text-transform: capitalize;
+  flex-shrink: 0;
+}
+
+/* ---- Status Dot ---- */
+.subagent-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #9e9e9e;
+  flex-shrink: 0;
+}
+
+.subagent-status-dot.is-running {
+  background: #ff9800;
+  animation: subagent-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes subagent-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.4; }
+}
+
+/* ---- Card List ---- */
+.subagent-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+/* ---- Subagent Card ---- */
+.subagent-card {
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, opacity 0.3s;
+  animation: subagent-card-enter 0.2s ease-out;
+}
+
+@keyframes subagent-card-enter {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.subagent-card:hover {
+  border-color: var(--text-muted);
+}
+
+.subagent-card.is-completed {
+  opacity: 0.6;
+}
+
+.subagent-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.subagent-card-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.subagent-card-slug {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-card-preview {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.subagent-card-preview.is-waiting {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ---- Messages Area (Expanded) ---- */
+.subagent-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  scroll-behavior: smooth;
+}
+
+/* ---- Message Bubble ---- */
+.subagent-msg {
+  animation: subagent-msg-enter 0.15s ease-out;
+}
+
+@keyframes subagent-msg-enter {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.subagent-msg-text {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+
+/* Markdown body inside messages — inherit from global markdown-body styles */
+.subagent-msg-text.markdown-body {
+  font-size: 13px;
+}
+
+.subagent-msg-text.markdown-body pre {
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+/* ---- Tool Message ---- */
+.subagent-msg-tool {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--sidebar-hover);
+  border-radius: 6px;
+  line-height: 1.5;
+}
+
+.subagent-tool-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--text-muted);
+}
+
+.subagent-tool-text {
+  flex: 1;
+  font-family: var(--font-mono, monospace);
+  word-break: break-word;
+}
+
+/* ---- Empty / Waiting State ---- */
+.subagent-msg-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.subagent-msg-dots {
+  display: flex;
+  gap: 4px;
+}
+
+.subagent-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  animation: subagent-dot-pulse 1.2s infinite;
+}
+
+.subagent-dot:nth-child(2) { animation-delay: 0.2s; }
+.subagent-dot:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes subagent-dot-pulse {
+  0%, 60%, 100% { opacity: 0.3; }
+  30%           { opacity: 1; }
+}
+
+/* ---- Empty State (list mode) ---- */
+.subagent-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  gap: 6px;
+  padding: 32px 16px;
+  text-align: center;
+}
+
+.subagent-empty-icon {
+  font-size: 28px;
+}
+
+.subagent-empty-text {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.subagent-empty-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  max-width: 200px;
+}
+
+/* ---- Header Badge ---- */
+.subagent-count-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 14px;
+  height: 14px;
+  border-radius: 7px;
+  background: #ff9800;
+  color: white;
+  font-size: 10px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 3px;
+  line-height: 1;
+  animation: subagent-badge-bounce 0.3s ease-out;
+}
+
+@keyframes subagent-badge-bounce {
+  0%   { transform: scale(0); }
+  50%  { transform: scale(1.3); }
+  100% { transform: scale(1); }
+}
+
+/* ==================================
+   Dark Theme Overrides
+   ================================== */
+[data-theme="dark"] .subagent-panel,
+.dark .subagent-panel {
+  background: var(--bg-sidebar);
+}
+
+[data-theme="dark"] .subagent-card,
+.dark .subagent-card {
+  background: var(--bg-main);
+  border-color: var(--border-light);
+}
+
+[data-theme="dark"] .subagent-msg-tool,
+.dark .subagent-msg-tool {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* ==================================
+   Mobile Responsive
+   ================================== */
+@media (max-width: 768px) {
+  .subagent-panel.open {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 80vw;
+    max-width: 320px;
+    height: 100%;
+    overflow-y: auto;
+    border-radius: 0;
+    border-left: 1px solid var(--border-color);
+    border-top: none;
+    z-index: 100;
+    box-shadow: -4px 0 20px rgba(0, 0, 0, 0.15);
+  }
+
+  .subagent-panel.open.expanded {
+    width: 90vw;
+    max-width: none;
+    min-width: 0;
+  }
+}
+
+/* Large screens: allow wider panel */
+@media (min-width: 1400px) {
+  .subagent-panel.open {
+    width: 360px;
+  }
+}

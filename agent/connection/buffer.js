@@ -7,6 +7,7 @@ export const BUFFERABLE_TYPES = new Set([
   'claude_output', 'turn_completed', 'conversation_closed',
   'session_id_update', 'compact_status', 'slash_commands_update',
   'background_task_started', 'background_task_output',
+  'subagent_started', 'subagent_message', 'subagent_completed',
   'crew_output', 'crew_status', 'crew_turn_completed',
   'crew_session_created', 'crew_session_restored', 'crew_human_needed',
   'crew_role_added', 'crew_role_removed',
