@@ -156,6 +156,13 @@ export async function processRoleOutput(session, roleName, roleQuery, roleState)
         roleState.accumulatedText = '';
         roleState.turnActive = false;
 
+        // Mark pending tool messages as completed before notifying frontend
+        for (const m of session.uiMessages) {
+          if (m.role === roleName && m.type === 'tool' && !m.hasResult) {
+            m.hasResult = true;
+          }
+        }
+
         sendCrewMessage({
           type: 'crew_turn_completed',
           sessionId: session.id,
