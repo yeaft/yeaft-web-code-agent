@@ -247,7 +247,7 @@ export default {
   'chatHeader.mcpConfig': 'MCP Servers',
   'chatHeader.mcpNeedRestart': 'Changes will take effect after restarting the session.',
   'chatHeader.expertPanel': 'Expert Panel',
-  'chatHeader.taskPanel': 'Background Tasks',
+  'chatHeader.subAgentPanel': 'Sub-Agents',
 
   // ============ Settings ============
   'settings.close': 'Close settings',
@@ -612,19 +612,12 @@ export default {
   'expertPanel.noResults': 'No results',
   'expertPanel.clearAll': 'Clear',
 
-  // ============ Task Panel ============
-  'taskPanel.title': 'Background Tasks',
-  'taskPanel.running': 'Running',
-  'taskPanel.stopping': 'Stopping...',
-  'taskPanel.completed': 'Completed',
-  'taskPanel.failed': 'Failed',
-  'taskPanel.stopped': 'Stopped',
-  'taskPanel.stopTask': 'Stop task',
-  'taskPanel.waitingOutput': 'Waiting for output...',
-  'taskPanel.empty': 'No background tasks',
-  'taskPanel.emptyHint': 'Tasks will appear here when Claude runs them in parallel',
-  'taskPanel.justNow': 'just now',
-  'taskPanel.secondsAgo': '{n}s ago',
-  'taskPanel.minutesAgo': '{n}m ago',
-  'taskPanel.hoursAgo': '{n}h ago',
+  // ============ Sub-Agent Panel ============
+  'subAgentPanel.title': 'Sub-Agents',
+  'subAgentPanel.back': 'Back to list',
+  'subAgentPanel.running': 'Running',
+  'subAgentPanel.completed': 'Completed',
+  'subAgentPanel.waitingMessages': 'Waiting for messages...',
+  'subAgentPanel.empty': 'No sub-agents',
+  'subAgentPanel.emptyHint': 'Sub-agents will appear here when Claude delegates tasks',
 };

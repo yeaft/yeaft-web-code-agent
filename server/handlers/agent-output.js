@@ -134,6 +134,12 @@ export async function handleAgentOutput(agentId, agent, msg) {
       });
       break;
 
+    case 'subagent_started':
+    case 'subagent_message':
+    case 'subagent_completed':
+      await forwardToClients(agentId, msg.conversationId, msg);
+      break;
+
     case 'slash_commands_update':
       // 缓存到 agent 对象上，供 web 端选择 agent 时立即获取
       agent.slashCommands = msg.slashCommands || [];

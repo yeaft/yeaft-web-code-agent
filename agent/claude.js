@@ -1,6 +1,7 @@
 import { query, Stream } from './sdk/index.js';
 import ctx from './context.js';
 import { sendConversationList, sendOutput, sendError, handleAskUserQuestion } from './conversation.js';
+import { startSubagentWatcher, stopSubagentWatcher, cleanupSubagentWatchers } from './subagent.js';
 
 /**
  * Determine maxContextTokens and autoCompactThreshold from model name.
@@ -211,6 +212,9 @@ function detectAndTrackBackgroundTask(conversationId, state, message) {
             conversationId,
             task: taskInfo
           });
+
+          // Start watching subagent JSONL files for this Task
+          startSubagentWatcher(conversationId, state, toolUseId);
         }
       }
     }
@@ -241,6 +245,11 @@ function detectAndTrackBackgroundTask(conversationId, state, message) {
           taskId: toolUseId,
           task: taskInfo
         });
+
+        // Stop subagent watcher if this was a Task (Agent) tool_use
+        if (taskInfo.type === 'agent') {
+          stopSubagentWatcher(conversationId, toolUseId);
+        }
       }
     }
   }

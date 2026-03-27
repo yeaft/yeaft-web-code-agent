@@ -453,23 +453,6 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       break;
     }
 
-    case 'stop_background_task': {
-      if (!client.currentAgent) return;
-      if (!await checkAgentAccess(client.currentAgent)) return;
-      const stopConvId = msg.conversationId;
-      if (!stopConvId || !msg.taskId) return;
-      if (!CONFIG.skipAuth && !verifyConversationOwnership(stopConvId, client.userId)) {
-        console.warn(`[Security] User ${client.userId} stop_background_task denied for ${stopConvId}`);
-        return;
-      }
-      await forwardToAgent(client.currentAgent, {
-        type: 'stop_background_task',
-        conversationId: stopConvId,
-        taskId: msg.taskId
-      });
-      break;
-    }
-
     default:
       return false; // Not handled
   }
