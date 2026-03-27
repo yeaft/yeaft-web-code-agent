@@ -405,5 +405,18 @@ export function handleMessage(store, msg) {
       store.btwLoading = false;
       break;
 
+    // Background task tracking (Sub-Agent / Bash)
+    case 'background_task_started':
+      if (msg.conversationId && msg.task) {
+        store.addBackgroundTask(msg.conversationId, msg.task);
+      }
+      break;
+
+    case 'background_task_output':
+      if (msg.conversationId && msg.taskId) {
+        store.updateBackgroundTask(msg.conversationId, msg.taskId, msg.task, msg.newOutput);
+      }
+      break;
+
   }
 }

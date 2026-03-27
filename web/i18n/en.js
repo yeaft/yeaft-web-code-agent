@@ -247,6 +247,7 @@ export default {
   'chatHeader.mcpConfig': 'MCP Servers',
   'chatHeader.mcpNeedRestart': 'Changes will take effect after restarting the session.',
   'chatHeader.expertPanel': 'Expert Panel',
+  'chatHeader.taskPanel': 'Background Tasks',
 
   // ============ Settings ============
   'settings.close': 'Close settings',
@@ -610,4 +611,16 @@ export default {
   'expertPanel.search': 'Search roles or actions...',
   'expertPanel.noResults': 'No results',
   'expertPanel.clearAll': 'Clear',
+
+  // ============ Task Panel ============
+  'taskPanel.title': 'Background Tasks',
+  'taskPanel.running': 'Running',
+  'taskPanel.stopping': 'Stopping...',
+  'taskPanel.completed': 'Completed',
+  'taskPanel.failed': 'Failed',
+  'taskPanel.stopped': 'Stopped',
+  'taskPanel.stopTask': 'Stop task',
+  'taskPanel.waitingOutput': 'Waiting for output...',
+  'taskPanel.empty': 'No background tasks',
+  'taskPanel.emptyHint': 'Tasks will appear here when Claude runs them in parallel',
 };

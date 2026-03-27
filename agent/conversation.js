@@ -551,6 +551,31 @@ export async function handleCancelExecution(msg) {
   sendConversationList();
 }
 
+// 停止单个后台任务
+export async function handleStopBackgroundTask(msg) {
+  const { conversationId, taskId } = msg;
+
+  const state = ctx.conversations.get(conversationId);
+  if (!state) return;
+
+  const taskInfo = state.backgroundTasks?.get(taskId);
+  if (!taskInfo) return;
+
+  // Mark task as stopped
+  taskInfo.status = 'stopped';
+  taskInfo.endTime = Date.now();
+
+  console.log(`[Tasks] Stopped: ${taskId} in conversation ${conversationId}`);
+
+  // Notify frontend
+  ctx.sendToServer({
+    type: 'background_task_output',
+    conversationId,
+    taskId,
+    task: taskInfo
+  });
+}
+
 // 清空排队消息 — 已移至 server 端管理 (Phase 3.6)
 // handleClearQueue 和 handleCancelQueuedMessage 不再需要
 

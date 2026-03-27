@@ -126,8 +126,13 @@ export const useChatStore = defineStore('chat', {
     // =====================
     // Expert Panel (帮帮团) 状态
     // =====================
-    expertPanelOpen: false,           // 帮帮团面板是否打开
     expertSelections: [],             // 当前已选的角色/Action: [{ role: string, action: string|null }]
+
+    // =====================
+    // Background Tasks 状态 (Sub-Agent / Bash)
+    // =====================
+    backgroundTasks: {},              // { [conversationId]: { [taskId]: taskInfo } }
+    activeRightPanel: null,           // null | 'tasks' | 'experts' — 右侧面板互斥切换
   }),
 
   getters: {
@@ -173,13 +178,26 @@ export const useChatStore = defineStore('chat', {
     showRecoveryBanner: (state) => {
       return state.pendingRecovery && !state.recoveryDismissed && !state.currentConversation;
     },
-    // 当前会话的后台任务列表（保留接口兼容）
-    currentBackgroundTasks: () => {
-      return [];
+    // 当前会话的后台任务列表
+    currentBackgroundTasks: (state) => {
+      if (!state.currentConversation) return EMPTY_ARRAY;
+      const convTasks = state.backgroundTasks[state.currentConversation];
+      if (!convTasks) return EMPTY_ARRAY;
+      return Object.values(convTasks);
     },
     // 是否有正在运行的后台任务
-    hasRunningBackgroundTasks: () => {
-      return false;
+    hasRunningBackgroundTasks: (state) => {
+      if (!state.currentConversation) return false;
+      const convTasks = state.backgroundTasks[state.currentConversation];
+      if (!convTasks) return false;
+      return Object.values(convTasks).some(t => t.status === 'running' || t.status === 'stopping');
+    },
+    // 运行中的后台任务数
+    runningBackgroundTaskCount: (state) => {
+      if (!state.currentConversation) return 0;
+      const convTasks = state.backgroundTasks[state.currentConversation];
+      if (!convTasks) return 0;
+      return Object.values(convTasks).filter(t => t.status === 'running' || t.status === 'stopping').length;
     },
     // 当前选中的后台任务详情
     selectedTaskInfo: () => {
@@ -247,6 +265,103 @@ export const useChatStore = defineStore('chat', {
     },
     appendBtwDelta(delta) {
       this.btwAnswer += delta;
+    },
+
+    // =====================
+    // Background Tasks
+    // =====================
+    addBackgroundTask(conversationId, task) {
+      if (!this.backgroundTasks[conversationId]) {
+        this.backgroundTasks[conversationId] = {};
+      }
+      this.backgroundTasks[conversationId][task.id] = {
+        ...task,
+        output: task.output || '',
+        collapsed: false,
+        exitTimer: null,
+        exiting: false
+      };
+    },
+    updateBackgroundTask(conversationId, taskId, task, newOutput) {
+      const convTasks = this.backgroundTasks[conversationId];
+      if (!convTasks || !convTasks[taskId]) return;
+      const existing = convTasks[taskId];
+      // Update fields from task info
+      if (task) {
+        existing.status = task.status;
+        existing.output = task.output || existing.output;
+        existing.endTime = task.endTime || existing.endTime;
+      }
+      // Append incremental output
+      if (newOutput) {
+        existing.output = (existing.output || '') + newOutput;
+      }
+      // If completed/error/stopped, start 15s exit timer
+      if (existing.status === 'completed' || existing.status === 'error' || existing.status === 'stopped') {
+        existing.collapsed = true;
+        this._startExitTimer(conversationId, taskId);
+      }
+    },
+    removeBackgroundTask(conversationId, taskId) {
+      const convTasks = this.backgroundTasks[conversationId];
+      if (!convTasks) return;
+      // Clear timer if any
+      if (convTasks[taskId]?.exitTimer) {
+        clearTimeout(convTasks[taskId].exitTimer);
+      }
+      delete convTasks[taskId];
+      // If no tasks left in this conversation, clean up
+      if (Object.keys(convTasks).length === 0) {
+        delete this.backgroundTasks[conversationId];
+        // Auto-close panel if no tasks remain for current conversation
+        if (conversationId === this.currentConversation && this.activeRightPanel === 'tasks') {
+          this.activeRightPanel = null;
+        }
+      }
+    },
+    pauseExitTimer(conversationId, taskId) {
+      const convTasks = this.backgroundTasks[conversationId];
+      if (!convTasks || !convTasks[taskId]) return;
+      if (convTasks[taskId].exitTimer) {
+        clearTimeout(convTasks[taskId].exitTimer);
+        convTasks[taskId].exitTimer = null;
+      }
+    },
+    resumeExitTimer(conversationId, taskId) {
+      const convTasks = this.backgroundTasks[conversationId];
+      if (!convTasks || !convTasks[taskId]) return;
+      const task = convTasks[taskId];
+      if (task.status === 'completed' || task.status === 'error' || task.status === 'stopped') {
+        this._startExitTimer(conversationId, taskId);
+      }
+    },
+    _startExitTimer(conversationId, taskId) {
+      const convTasks = this.backgroundTasks[conversationId];
+      if (!convTasks || !convTasks[taskId]) return;
+      // Clear existing timer
+      if (convTasks[taskId].exitTimer) {
+        clearTimeout(convTasks[taskId].exitTimer);
+      }
+      convTasks[taskId].exitTimer = setTimeout(() => {
+        const ct = this.backgroundTasks[conversationId];
+        if (ct && ct[taskId]) {
+          ct[taskId].exiting = true;
+          // Remove after fade-out animation (300ms)
+          setTimeout(() => {
+            this.removeBackgroundTask(conversationId, taskId);
+          }, 350);
+        }
+      }, 15000);
+    },
+    stopBackgroundTask(conversationId, taskId) {
+      const convTasks = this.backgroundTasks[conversationId];
+      if (!convTasks || !convTasks[taskId]) return;
+      convTasks[taskId].status = 'stopping';
+      this.sendWsMessage({
+        type: 'stop_background_task',
+        conversationId,
+        taskId
+      });
     },
 
     // =====================
