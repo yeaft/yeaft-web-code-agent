@@ -41,6 +41,7 @@ export async function startClaudeQuery(conversationId, workDir, resumeSessionId)
     if (existing.abortController) {
       existing.abortController.abort();
     }
+    cleanupSubagentWatchers(conversationId);
     ctx.conversations.delete(conversationId);
   }
 
@@ -573,6 +574,7 @@ async function processClaudeOutput(conversationId, claudeQuery, state) {
       console.log(`[SDK] Stale processClaudeOutput for ${conversationId}, skipping cleanup`);
     } else if (!wasCancelled && (wasTurnActive || !resultHandled)) {
       // 进程异常退出：要么 turn 正在进行中，要么从未成功完成过任何 turn
+      cleanupSubagentWatchers(conversationId);
       ctx.sendToServer({
         type: 'conversation_closed',
         conversationId,

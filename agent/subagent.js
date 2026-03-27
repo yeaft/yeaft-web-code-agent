@@ -148,6 +148,7 @@ function startFileWatcher(filePath, agentId, conversationId, watcherState) {
   } catch { /* file might not be ready yet */ }
 
   // Watch for new content
+  let pendingPartial = '';
   const watcher = watch(filePath, () => {
     try {
       const stat = statSync(filePath);
@@ -157,11 +158,19 @@ function startFileWatcher(filePath, agentId, conversationId, watcherState) {
       const buffer = Buffer.alloc(stat.size - bytesRead);
       readSync(fd, buffer, 0, buffer.length, bytesRead);
       closeSync(fd);
-      bytesRead = stat.size;
 
-      const newContent = buffer.toString('utf-8');
-      const lines = newContent.split('\n').filter(l => l.trim());
-      for (const line of lines) {
+      const newContent = pendingPartial + buffer.toString('utf-8');
+
+      // Split into lines; the last element may be a partial line
+      const parts = newContent.split('\n');
+      const maybePartial = parts.pop(); // last element ('' if content ended with \n, or partial line)
+      pendingPartial = maybePartial || '';
+
+      // Advance bytesRead by what we consumed (total read minus what we're holding back)
+      bytesRead = stat.size - Buffer.byteLength(pendingPartial, 'utf-8');
+
+      for (const line of parts) {
+        if (!line.trim()) continue;
         const parsed = parseJsonlLine(line);
         if (parsed) {
           for (const msg of parsed) {
@@ -177,7 +186,7 @@ function startFileWatcher(filePath, agentId, conversationId, watcherState) {
     } catch { /* ignore read errors during active writes */ }
   });
 
-  watcherState.fileWatchers.set(filePath, { watcher, bytesRead });
+  watcherState.fileWatchers.set(filePath, { watcher });
 }
 
 /**
