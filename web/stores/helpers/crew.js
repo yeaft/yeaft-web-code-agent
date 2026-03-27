@@ -21,6 +21,15 @@ export function clearRefreshTimeout() {
   }
 }
 
+/** Mark pending crew tool messages as completed, optionally filtered by role */
+function markCrewToolsCompleted(messages, role) {
+  for (const m of messages) {
+    if (m.type === 'tool' && !m.hasResult && (!role || m.role === role)) {
+      m.hasResult = true;
+    }
+  }
+}
+
 export function enterCrewMode(store) {
   store.crewConfigMode = 'create';
   store.crewConfigOpen = true;
@@ -595,10 +604,12 @@ export function handleCrewOutput(store, msg) {
         for (const m of messages) {
           if (m._streaming) m._streaming = false;
         }
+        markCrewToolsCompleted(messages);
       } else {
         for (const m of messages) {
           if (m._streaming && !activeSet.has(m.role)) {
             m._streaming = false;
+            if (m.type === 'tool' && !m.hasResult) m.hasResult = true;
           }
         }
       }
@@ -621,6 +632,7 @@ export function handleCrewOutput(store, msg) {
         break;
       }
     }
+    markCrewToolsCompleted(messages, msg.role);
     return;
   }
 

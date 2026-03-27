@@ -231,6 +231,13 @@ async function interruptRole(session, roleName, newContent, fromSource = 'human'
   roleState.turnActive = false;
   roleState.accumulatedText = '';
 
+  // Mark pending tool messages as completed before notifying frontend
+  for (const m of session.uiMessages) {
+    if (m.role === roleName && m.type === 'tool' && !m.hasResult) {
+      m.hasResult = true;
+    }
+  }
+
   sendCrewMessage({
     type: 'crew_turn_completed',
     sessionId: session.id,
@@ -280,6 +287,13 @@ async function abortRole(session, roleName) {
   roleState.inputStream = null;
   roleState.turnActive = false;
   roleState.accumulatedText = '';
+
+  // Mark pending tool messages as completed before notifying frontend
+  for (const m of session.uiMessages) {
+    if (m.role === roleName && m.type === 'tool' && !m.hasResult) {
+      m.hasResult = true;
+    }
+  }
 
   sendCrewMessage({
     type: 'crew_turn_completed',
