@@ -159,7 +159,8 @@ export async function preloadSlashCommands(workDir, targetId = '__preload__') {
         cwd: effectiveWorkDir,
         permissionMode: 'bypassPermissions',
         abort: abortController.signal,
-        maxTurns: 1
+        maxTurns: 1,
+        noSessionPersistence: true
       }
     });
     for await (const message of claudeQuery) {

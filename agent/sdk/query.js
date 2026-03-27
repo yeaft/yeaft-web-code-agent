@@ -341,7 +341,8 @@ export function query(config) {
       forkSession,
       model,
       canCallTool,
-      abort
+      abort,
+      noSessionPersistence
     } = {}
   } = config;
 
@@ -364,6 +365,7 @@ export function query(config) {
   if (allowedTools.length > 0) args.push('--allowedTools', ...allowedTools);
   if (disallowedTools.length > 0) args.push('--disallowedTools', ...disallowedTools);
   if (permissionMode) args.push('--permission-mode', permissionMode);
+  if (noSessionPersistence) args.push('--no-session-persistence');
 
   // Handle prompt input
   if (typeof prompt === 'string') {
