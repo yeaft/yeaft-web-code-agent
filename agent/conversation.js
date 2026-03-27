@@ -552,6 +552,11 @@ export async function handleCancelExecution(msg) {
 }
 
 // 停止单个后台任务
+// NOTE: This is a "soft stop" — it marks the task as stopped in our tracking state
+// and notifies the frontend, but does NOT actually kill the underlying subprocess.
+// The Claude SDK's abortController.abort() kills the entire session (all sub-tasks),
+// not individual ones. Per-sub-agent abort is not supported by the SDK.
+// TODO [P2]: Investigate SDK changes that might enable per-task cancellation.
 export async function handleStopBackgroundTask(msg) {
   const { conversationId, taskId } = msg;
 
@@ -561,7 +566,7 @@ export async function handleStopBackgroundTask(msg) {
   const taskInfo = state.backgroundTasks?.get(taskId);
   if (!taskInfo) return;
 
-  // Mark task as stopped
+  // Soft stop: mark as stopped in tracking state (subprocess continues in background)
   taskInfo.status = 'stopped';
   taskInfo.endTime = Date.now();
 

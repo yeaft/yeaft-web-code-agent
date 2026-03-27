@@ -537,6 +537,14 @@ export const useChatStore = defineStore('chat', {
       this.processingConversations = {};
       this.executionStatusMap = {};
       this.workbenchExpanded = false;
+      // Clear background task exit timers before resetting
+      for (const convTasks of Object.values(this.backgroundTasks)) {
+        for (const task of Object.values(convTasks)) {
+          if (task.exitTimer) clearTimeout(task.exitTimer);
+        }
+      }
+      this.backgroundTasks = {};
+      this.activeRightPanel = null;
       if (this.ws) {
         this.ws.close();
       }

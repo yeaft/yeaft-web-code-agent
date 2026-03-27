@@ -623,4 +623,8 @@ export default {
   'taskPanel.waitingOutput': 'Waiting for output...',
   'taskPanel.empty': 'No background tasks',
   'taskPanel.emptyHint': 'Tasks will appear here when Claude runs them in parallel',
+  'taskPanel.justNow': 'just now',
+  'taskPanel.secondsAgo': '{n}s ago',
+  'taskPanel.minutesAgo': '{n}m ago',
+  'taskPanel.hoursAgo': '{n}h ago',
 };

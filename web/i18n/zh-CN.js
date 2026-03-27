@@ -623,4 +623,8 @@ export default {
   'taskPanel.waitingOutput': '等待输出...',
   'taskPanel.empty': '暂无后台任务',
   'taskPanel.emptyHint': '当 Claude 并行运行任务时会在这里显示',
+  'taskPanel.justNow': '刚刚',
+  'taskPanel.secondsAgo': '{n}秒前',
+  'taskPanel.minutesAgo': '{n}分钟前',
+  'taskPanel.hoursAgo': '{n}小时前',
 };

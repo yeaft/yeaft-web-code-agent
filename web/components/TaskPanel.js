@@ -133,7 +133,6 @@ export default {
     });
 
     const getTaskIcon = (task) => {
-      if (task.status === 'stopping') return task.type === 'agent' ? '\u{1F916}' : '\u{1F4BB}';
       return task.type === 'agent' ? '\u{1F916}' : '\u{1F4BB}';
     };
 
@@ -165,13 +164,14 @@ export default {
     };
 
     const formatElapsed = (timestamp) => {
+      const t = Vue.inject('t');
       if (!timestamp) return '';
       const seconds = Math.floor((now.value - timestamp) / 1000);
-      if (seconds < 5) return 'just now';
-      if (seconds < 60) return `${seconds}s ago`;
+      if (seconds < 5) return t('taskPanel.justNow');
+      if (seconds < 60) return t('taskPanel.secondsAgo').replace('{n}', seconds);
       const minutes = Math.floor(seconds / 60);
-      if (minutes < 60) return `${minutes}m ago`;
-      return `${Math.floor(minutes / 60)}h ago`;
+      if (minutes < 60) return t('taskPanel.minutesAgo').replace('{n}', minutes);
+      return t('taskPanel.hoursAgo').replace('{n}', Math.floor(minutes / 60));
     };
 
     const trimOutput = (output) => {
