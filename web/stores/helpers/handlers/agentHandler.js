@@ -285,7 +285,8 @@ export function handleAgentSelected(store, msg) {
 
   const agentConvIds = new Set(serverConvs.map(c => c.id));
   for (const conv of serverConvs) {
-    if (conv.processing && !isRecentlyClosed(store, conv.id)) {
+    if (conv.processing && !isRecentlyClosed(store, conv.id)
+        && !store._turnCompletedConvs?.has(conv.id)) {
       store.processingConversations[conv.id] = true;
     } else if (store.processingConversations[conv.id]) {
       delete store.processingConversations[conv.id];
