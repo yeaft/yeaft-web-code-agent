@@ -131,11 +131,11 @@ describe('Bug 2: mobile overlay', () => {
 
   it('ChatPage template has overlay element that closes panel on click', () => {
     const source = read('web/components/ChatPage.js');
-    // Verify overlay exists with v-if bound to expertPanelOpen
+    // Verify overlay exists with v-if bound to activeRightPanel
     expect(source).toContain('class="expert-panel-overlay"');
-    expect(source).toContain('v-if="store.expertPanelOpen"');
-    // Verify click handler sets expertPanelOpen to false
-    expect(source).toMatch(/expert-panel-overlay.*@click="store\.expertPanelOpen\s*=\s*false"/s);
+    expect(source).toContain('v-if="store.activeRightPanel"');
+    // Verify click handler sets activeRightPanel to null
+    expect(source).toMatch(/expert-panel-overlay.*@click="store\.activeRightPanel\s*=\s*null"/s);
   });
 });
 

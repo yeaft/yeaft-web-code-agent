@@ -247,6 +247,7 @@ export default {
   'chatHeader.mcpConfig': 'MCP 服务器配置',
   'chatHeader.mcpNeedRestart': '更改将在重启会话后生效。',
   'chatHeader.expertPanel': '帮帮团',
+  'chatHeader.taskPanel': '后台任务',
 
   // ============ Settings ============
   'settings.close': '关闭设置',
@@ -610,4 +611,20 @@ export default {
   'expertPanel.search': '搜索角色或 Action...',
   'expertPanel.noResults': '没有匹配结果',
   'expertPanel.clearAll': '清空',
+
+  // ============ 后台任务面板 (Task Panel) ============
+  'taskPanel.title': '后台任务',
+  'taskPanel.running': '运行中',
+  'taskPanel.stopping': '停止中...',
+  'taskPanel.completed': '已完成',
+  'taskPanel.failed': '失败',
+  'taskPanel.stopped': '已停止',
+  'taskPanel.stopTask': '停止任务',
+  'taskPanel.waitingOutput': '等待输出...',
+  'taskPanel.empty': '暂无后台任务',
+  'taskPanel.emptyHint': '当 Claude 并行运行任务时会在这里显示',
+  'taskPanel.justNow': '刚刚',
+  'taskPanel.secondsAgo': '{n}秒前',
+  'taskPanel.minutesAgo': '{n}分钟前',
+  'taskPanel.hoursAgo': '{n}小时前',
 };

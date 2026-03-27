@@ -7,12 +7,13 @@ import SettingsPanel from './SettingsPanel.js';
 import CrewConfigPanel from './CrewConfigPanel.js';
 import CrewChatView from './CrewChatView.js';
 import ExpertPanel from './ExpertPanel.js';
+import TaskPanel from './TaskPanel.js';
 import BtwOverlay from './BtwOverlay.js';
 import { useAuthStore } from '../stores/auth.js';
 
 export default {
   name: 'ChatPage',
-  components: { ChatHeader, MessageList, ChatInput, WorkbenchPanel, ProxyTab, SettingsPanel, CrewConfigPanel, CrewChatView, ExpertPanel, BtwOverlay },
+  components: { ChatHeader, MessageList, ChatInput, WorkbenchPanel, ProxyTab, SettingsPanel, CrewConfigPanel, CrewChatView, ExpertPanel, TaskPanel, BtwOverlay },
   template: `
     <div class="chat-page" :class="{ 'show-sidebar': showMobileSidebar }">
 
@@ -255,7 +256,7 @@ export default {
         <!-- Normal Chat Mode -->
         <template v-else>
           <ChatHeader @toggle-sidebar="showMobileSidebar = !showMobileSidebar" />
-          <div class="chat-body" :class="{ 'expert-panel-open': store.expertPanelOpen }">
+          <div class="chat-body" :class="{ 'expert-panel-open': store.activeRightPanel }">
             <div class="chat-body-main">
               <MessageList
                 @new-conversation="openConversationModal"
@@ -264,13 +265,19 @@ export default {
               />
               <ChatInput />
             </div>
-            <!-- Expert Panel overlay (mobile only) -->
-            <div class="expert-panel-overlay" v-if="store.expertPanelOpen" @click="store.expertPanelOpen = false"></div>
+            <!-- Right Panel overlay (mobile only) -->
+            <div class="expert-panel-overlay" v-if="store.activeRightPanel" @click="store.activeRightPanel = null"></div>
+            <TaskPanel
+              v-if="store.activeRightPanel === 'tasks'"
+              :visible="true"
+              @close="store.activeRightPanel = null"
+            />
             <ExpertPanel
-              :visible="store.expertPanelOpen"
+              v-else-if="store.activeRightPanel === 'experts'"
+              :visible="true"
               :modelValue="store.expertSelections"
               @update:modelValue="store.expertSelections = $event"
-              @close="store.expertPanelOpen = false"
+              @close="store.activeRightPanel = null"
             />
           </div>
         </template>

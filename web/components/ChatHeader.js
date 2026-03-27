@@ -35,7 +35,13 @@ export default {
           {{ contextUsage.percentage }}%
         </span>
         <!-- Expert panel button — hidden in Crew mode -->
-        <button class="header-action-btn" :class="{ active: store.expertPanelOpen }" @click="toggleExpertPanel" :title="$t('chatHeader.expertPanel')" v-if="!store.currentConversationIsCrew">
+        <button class="header-action-btn" :class="{ active: store.activeRightPanel === 'tasks' }" @click="toggleTaskPanel" :title="$t('chatHeader.taskPanel')" v-if="runningTaskCount > 0 || store.activeRightPanel === 'tasks'">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+          </svg>
+          <span class="task-count-badge" v-if="runningTaskCount > 0">{{ runningTaskCount }}</span>
+        </button>
+        <button class="header-action-btn" :class="{ active: store.activeRightPanel === 'experts' }" @click="toggleExpertPanel" :title="$t('chatHeader.expertPanel')" v-if="!store.currentConversationIsCrew">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
           </svg>
@@ -321,8 +327,16 @@ export default {
     };
 
     const toggleExpertPanel = () => {
-      store.expertPanelOpen = !store.expertPanelOpen;
+      store.activeRightPanel = store.activeRightPanel === 'experts' ? null : 'experts';
     };
+
+    const toggleTaskPanel = () => {
+      store.activeRightPanel = store.activeRightPanel === 'tasks' ? null : 'tasks';
+    };
+
+    const runningTaskCount = Vue.computed(() => {
+      return store.runningBackgroundTaskCount;
+    });
 
     const toggleMcpServer = (serverName, enabled) => {
       store.toggleConversationMcp(serverName, enabled);
@@ -342,6 +356,6 @@ export default {
       document.removeEventListener('click', closeMcpOnOutsideClick);
     });
 
-    return { store, headerTitle, folderPath, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, hasStreamingRoles, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, openCrewEdit, onCrewPanelToggle, isCrewPanelActive, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel };
+    return { store, headerTitle, folderPath, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, hasStreamingRoles, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, openCrewEdit, onCrewPanelToggle, isCrewPanelActive, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel, toggleTaskPanel, runningTaskCount };
   }
 };
