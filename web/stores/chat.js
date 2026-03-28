@@ -38,6 +38,8 @@ export const useChatStore = defineStore('chat', {
     currentWorkDir: null,
     // ★ Multi-column: unified message store, replaces old messages[] + messagesCache{}
     messagesMap: {},  // { [conversationId]: messages[] }
+    // ★ Split-screen: pane state
+    splitPanes: [],  // [{ id: 'pane-0', conversationId: convId }, ...] — empty = single-screen mode
     // 会话标题缓存：conversationId -> title (最新用户消息，使用对象而非 Map 以确保响应式)
     conversationTitles: {},
     // Per-conversation 处理状态：conversationId -> true (使用对象而非 Set 以确保响应式)
@@ -147,6 +149,8 @@ export const useChatStore = defineStore('chat', {
     messagesCache: (state) => state.messagesMap,
     // ★ Multi-column: whether multiple columns are active
     isMultiColumn: (state) => state.activeConversations.length > 1,
+    // ★ Split-screen: whether in split-screen mode (2+ panes)
+    isSplitMode: (state) => state.splitPanes.length > 1,
     // 当前会话是否在处理中
     isProcessing: (state) => {
       return state.currentConversation ? !!state.processingConversations[state.currentConversation] : false;
@@ -371,6 +375,48 @@ export const useChatStore = defineStore('chat', {
     removeColumn(conversationId) { convHelpers.removeColumn(this, conversationId); },
     sendMessageToConversation(conversationId, text, attachments = [], options = {}) { convHelpers.sendMessageToConversation(this, conversationId, text, attachments, options); },
     cancelExecutionForConversation(conversationId) { convHelpers.cancelExecutionForConversation(this, conversationId); },
+    // ★ Split-screen: pane management
+    addPane() {
+      if (this.splitPanes.length >= 3) return;
+      if (this.splitPanes.length === 0) {
+        // Entering split mode: first pane inherits current conversation
+        this.splitPanes = [
+          { id: 'pane-0', conversationId: this.currentConversation },
+          { id: 'pane-1', conversationId: null }
+        ];
+        // Ensure second conv is in activeConversations if set
+      } else {
+        const nextId = 'pane-' + Date.now();
+        this.splitPanes.push({ id: nextId, conversationId: null });
+      }
+    },
+    removePane(paneId) {
+      const idx = this.splitPanes.findIndex(p => p.id === paneId);
+      if (idx < 0) return;
+      this.splitPanes.splice(idx, 1);
+      if (this.splitPanes.length <= 1) {
+        // Exit split mode: remaining pane's conversation becomes primary
+        const remaining = this.splitPanes[0];
+        if (remaining?.conversationId) {
+          this.activeConversations = [remaining.conversationId];
+        }
+        this.splitPanes = [];
+      }
+    },
+    setPaneConversation(paneId, conversationId) {
+      const pane = this.splitPanes.find(p => p.id === paneId);
+      if (!pane) return;
+      pane.conversationId = conversationId;
+      // Ensure conversation is in activeConversations
+      if (conversationId && !this.activeConversations.includes(conversationId)) {
+        this.activeConversations.push(conversationId);
+      }
+      // Ensure messagesMap entry exists
+      if (conversationId && !this.messagesMap[conversationId]) {
+        this.messagesMap[conversationId] = [];
+        this.sendWsMessage({ type: 'sync_messages', conversationId, turns: 5 });
+      }
+    },
     sendMessage(text, attachments = [], options = {}) { convHelpers.sendMessage(this, text, attachments, options); },
     cancelExecution() { convHelpers.cancelExecution(this); },
     answerUserQuestion(requestId, answers) { convHelpers.answerUserQuestion(this, requestId, answers); },
