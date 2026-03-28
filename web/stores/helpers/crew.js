@@ -285,13 +285,10 @@ export function handleCrewOutput(store, msg) {
       conv.type = 'crew';
       conv.name = msg.name || '';
     }
-    // 缓存当前消息，切换到 crew conversation
-    if (store.currentConversation && store.messages.length > 0) {
-      store.messagesCache[store.currentConversation] = store.messages;
-    }
-    store.currentConversation = sid;
+    // 切换到 crew conversation
+    store.activeConversations = [sid];
     store.currentWorkDir = msg.projectDir;
-    store.messages = [];
+    store.messagesMap[sid] = [];
     store.saveOpenSessions();
     return;
   }
@@ -377,12 +374,9 @@ export function handleCrewOutput(store, msg) {
     // 用户主动恢复（从 CrewConfigPanel 点击恢复按钮）→ 切换到恢复的 session
     // 页面刷新时不设置 _pendingCrewRestore，不切换（保持当前行为）
     if (store._pendingCrewRestore === sid) {
-      if (store.currentConversation && store.messages.length > 0) {
-        store.messagesCache[store.currentConversation] = store.messages;
-      }
-      store.currentConversation = sid;
+      store.activeConversations = [sid];
       store.currentWorkDir = msg.projectDir;
-      store.messages = [];
+      store.messagesMap[sid] = [];
       delete store._pendingCrewRestore;
     }
     store.saveOpenSessions();

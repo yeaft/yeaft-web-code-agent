@@ -256,7 +256,7 @@ export default {
           agentId: store.currentAgent
         });
       } else {
-        store.messages = [];
+        store.messagesMap[store.currentConversation] = [];
         store.sendWsMessage({
           type: 'sync_messages',
           conversationId: store.currentConversation,

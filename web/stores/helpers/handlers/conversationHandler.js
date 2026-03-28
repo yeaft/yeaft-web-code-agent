@@ -13,9 +13,7 @@ function filterEmptyUserMessages(messages) {
 
 /** Mark all pending tool-use messages as completed for a conversation */
 export function markAllToolsCompleted(store, convId) {
-  const msgs = convId === store.currentConversation
-    ? store.messages
-    : (store.messagesCache[convId] || []);
+  const msgs = store.messagesMap[convId] || [];
   for (const msg of msgs) {
     if (msg.type === 'tool-use' && !msg.hasResult) {
       msg.hasResult = true;
@@ -25,9 +23,6 @@ export function markAllToolsCompleted(store, convId) {
 
 export function handleConversationCreated(store, msg) {
   clearSessionLoading(store);
-  if (store.currentConversation && store.messages.length > 0) {
-    store.messagesCache[store.currentConversation] = store.messages;
-  }
   const createdAgent = store.agents.find(a => a.id === msg.agentId);
   store.conversations = store.conversations.filter(c => c.id !== msg.conversationId);
   store.conversations.push({
@@ -43,9 +38,9 @@ export function handleConversationCreated(store, msg) {
   });
   store.currentAgent = msg.agentId;
   store.currentAgentInfo = createdAgent;
-  store.currentConversation = msg.conversationId;
+  store.activeConversations = [msg.conversationId];
   store.currentWorkDir = msg.workDir;
-  store.messages = [];
+  store.messagesMap[msg.conversationId] = [];
   store.sendWsMessage({
     type: 'select_conversation',
     conversationId: msg.conversationId
@@ -59,9 +54,6 @@ export function handleConversationCreated(store, msg) {
 
 export function handleConversationResumed(store, msg) {
   clearSessionLoading(store);
-  if (store.currentConversation && store.messages.length > 0) {
-    store.messagesCache[store.currentConversation] = store.messages;
-  }
   const resumedAgent = store.agents.find(a => a.id === msg.agentId);
   store.conversations = store.conversations.filter(c =>
     c.id !== msg.conversationId &&
@@ -80,9 +72,9 @@ export function handleConversationResumed(store, msg) {
   });
   store.currentAgent = msg.agentId;
   store.currentAgentInfo = resumedAgent;
-  store.currentConversation = msg.conversationId;
+  store.activeConversations = [msg.conversationId];
   store.currentWorkDir = msg.workDir;
-  store.messages = [];
+  store.messagesMap[msg.conversationId] = [];
   if (store._pendingSessionTitle) {
     store.conversationTitles[msg.conversationId] = store._pendingSessionTitle;
     store._pendingSessionTitle = null;
@@ -99,8 +91,9 @@ export function handleConversationResumed(store, msg) {
   if (msg.dbMessages && msg.dbMessages.length > 0) {
     const formatted = msg.dbMessages.map(m => store.formatDbMessage(m)).flat().filter(Boolean);
     const cleaned = filterEmptyUserMessages(formatted);
+    const msgs = store.messagesMap[msg.conversationId] || [];
     for (const m of cleaned) {
-      store.messages.push(m);
+      msgs.push(m);
     }
   }
   store.hasMoreMessages = !!msg.hasMoreMessages;
@@ -109,7 +102,7 @@ export function handleConversationResumed(store, msg) {
 
 export function handleConversationDeleted(store, msg) {
   store.conversations = store.conversations.filter(c => c.id !== msg.conversationId);
-  delete store.messagesCache[msg.conversationId];
+  delete store.messagesMap[msg.conversationId];
   delete store.conversationTitles[msg.conversationId];
   delete store.processingConversations[msg.conversationId];
   if (store._closedAt) delete store._closedAt[msg.conversationId];
@@ -123,13 +116,16 @@ export function handleConversationDeleted(store, msg) {
   delete store.crewOlderMessages?.[msg.conversationId];
   delete store.crewStatuses?.[msg.conversationId];
   window.dispatchEvent(new CustomEvent('conversation-deleted', { detail: { conversationId: msg.conversationId } }));
-  if (store.currentConversation === msg.conversationId) {
-    store.currentConversation = null;
-    store.messages = [];
-    store.addMessage({
-      type: 'system',
-      content: t('chat.session.closed')
-    });
+  // Remove from activeConversations if present
+  const delIdx = store.activeConversations.indexOf(msg.conversationId);
+  if (delIdx >= 0) {
+    store.activeConversations.splice(delIdx, 1);
+    if (store.activeConversations.length === 0) {
+      store.addMessage({
+        type: 'system',
+        content: t('chat.session.closed')
+      });
+    }
   }
   store.saveOpenSessions();
 }
@@ -218,26 +214,30 @@ export function handleExecutionCancelled(store, msg) {
 }
 
 export function handleSyncMessagesResult(store, msg) {
-  if (msg.conversationId === store.currentConversation) {
+  if (!store.messagesMap[msg.conversationId]) {
+    store.messagesMap[msg.conversationId] = [];
+  }
+  const msgs = store.messagesMap[msg.conversationId];
+  if (msg.conversationId && store.activeConversations.includes(msg.conversationId)) {
     const formatted = filterEmptyUserMessages(
       (msg.messages || []).map(m => store.formatDbMessage(m)).flat().filter(Boolean)
     );
 
     if (formatted.length > 0) {
-      const firstDbMsg = store.messages.find(m => m.dbMessageId);
+      const firstDbMsg = msgs.find(m => m.dbMessageId);
       if (firstDbMsg &&
           formatted[0].dbMessageId &&
           formatted[formatted.length - 1].dbMessageId < firstDbMsg.dbMessageId) {
-        const insertIdx = store.messages.indexOf(firstDbMsg);
+        const insertIdx = msgs.indexOf(firstDbMsg);
         console.log(`[Sync] Prepending ${formatted.length} older messages at index ${insertIdx}`);
-        store.messages.splice(insertIdx, 0, ...formatted);
+        msgs.splice(insertIdx, 0, ...formatted);
       } else {
         console.log(`[Sync] Received ${formatted.length} messages`);
         for (const m of formatted) {
-          if (m.dbMessageId && store.messages.some(existing => existing.dbMessageId === m.dbMessageId)) {
+          if (m.dbMessageId && msgs.some(existing => existing.dbMessageId === m.dbMessageId)) {
             continue;
           }
-          store.messages.push(m);
+          msgs.push(m);
         }
       }
     }

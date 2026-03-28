@@ -40,9 +40,7 @@ export function handleClaudeOutput(store, conversationId, data) {
     if (!content) return;
 
     // New assistant message means all previous tools are done
-    const msgs = conversationId === store.currentConversation
-      ? store.messages
-      : (store.messagesCache[conversationId] || []);
+    const msgs = store.messagesMap[conversationId] || [];
     for (const msg of msgs) {
       if (msg.type === 'tool-use' && !msg.hasResult) {
         msg.hasResult = true;
@@ -134,9 +132,7 @@ export function handleClaudeOutput(store, conversationId, data) {
     }
 
     if (toolResults.length > 0) {
-      const msgs = conversationId === store.currentConversation
-        ? store.messages
-        : (store.messagesCache[conversationId] || []);
+      const msgs = store.messagesMap[conversationId] || [];
 
       for (const result of toolResults) {
         if (execStatus.toolHistory.length > 0) {
@@ -157,9 +153,7 @@ export function handleClaudeOutput(store, conversationId, data) {
     } else if (typeof userContent === 'string' && userContent.trim()) {
       // 普通用户消息（agent 广播回来的）
       // 发送端已通过 addMessage 本地添加，检查是否已存在以避免重复
-      const msgs = conversationId === store.currentConversation
-        ? store.messages
-        : (store.messagesCache[conversationId] || []);
+      const msgs = store.messagesMap[conversationId] || [];
       const duplicate = msgs.some(m => m.type === 'user' && m.content === userContent);
       if (!duplicate) {
         store.addMessageToConversation(conversationId, {
@@ -180,9 +174,7 @@ export function handleClaudeOutput(store, conversationId, data) {
     store._turnCompletedConvs.add(conversationId);
     execStatus.currentTool = null;
     markAllToolsCompleted(store, conversationId);
-    const msgs = conversationId === store.currentConversation
-      ? store.messages
-      : (store.messagesCache[conversationId] || []);
+    const msgs = store.messagesMap[conversationId] || [];
     // ★ Display result text only from result_text (slash commands like /skills, /context).
     // Do NOT fall back to data.result — it contains the full assistant response text
     // which was already streamed via 'assistant' messages, causing duplicate output.

@@ -84,19 +84,15 @@ export function autoRestoreConversation(store, conversationId) {
   const conv = store.conversations.find(c => c.id === conversationId);
   if (!conv) return;
 
-  if (store.currentConversation && store.messages.length > 0) {
-    store.messagesCache[store.currentConversation] = store.messages;
-  }
-
-  // For crew conversations, initialize crewMessagesMap BEFORE setting currentConversation
+  // For crew conversations, initialize crewMessagesMap BEFORE setting activeConversations
   if (conv.type === 'crew') {
     if (!store.crewMessagesMap[conversationId]) {
       store.crewMessagesMap[conversationId] = [];
     }
-    store.messages = [];
+    store.messagesMap[conversationId] = [];
   }
 
-  store.currentConversation = conversationId;
+  store.activeConversations = [conversationId];
   store.currentWorkDir = conv.workDir;
 
   if (conv.type === 'crew') {
@@ -109,11 +105,11 @@ export function autoRestoreConversation(store, conversationId) {
         agentId: conv.agentId || store.currentAgent
       });
     }
-  } else if (store.messagesCache[conversationId]?.length > 0) {
-    store.messages = store.messagesCache[conversationId];
-    console.log('[AutoRestore] Restored from cache:', store.messages.length, 'messages');
+  } else if (store.messagesMap[conversationId]?.length > 0) {
+    // Messages already in messagesMap, nothing to do
+    console.log('[AutoRestore] Restored from messagesMap:', store.messagesMap[conversationId].length, 'messages');
   } else if (conv.claudeSessionId) {
-    store.messages = [];
+    store.messagesMap[conversationId] = [];
     setSessionLoading(store, true, t('chat.session.loadingHistory'));
     console.log('[AutoRestore] Loading history for session:', conv.claudeSessionId);
     store.sendWsMessage({
@@ -124,7 +120,7 @@ export function autoRestoreConversation(store, conversationId) {
       conversationId: conversationId
     });
   } else {
-    store.messages = [];
+    store.messagesMap[conversationId] = [];
     // ★ Phase 6.1: 使用 turns 加载最近 5 个 turn
     store.sendWsMessage({
       type: 'sync_messages',

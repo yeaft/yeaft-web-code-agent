@@ -77,14 +77,14 @@ export function handleMessage(store, msg) {
       if (store.currentConversation === msg.conversationId) {
         return;
       }
-      store.currentConversation = msg.conversationId;
+      store.activeConversations = [msg.conversationId];
       {
         const conv = store.conversations.find(c => c.id === msg.conversationId);
         if (conv) {
           store.currentWorkDir = conv.workDir;
         }
       }
-      store.messages = [];
+      store.messagesMap[msg.conversationId] = [];
       store.saveOpenSessions();
       break;
 
@@ -155,18 +155,11 @@ export function handleMessage(store, msg) {
         const convId = errorConvId;
         const errMsgId = 'err_' + errorId;
         setTimeout(() => {
-          if (store.currentConversation === convId) {
-            const idx = store.messages.findIndex(m => m.id === errMsgId);
+          const msgs = store.messagesMap[convId];
+          if (msgs) {
+            const idx = msgs.findIndex(m => m.id === errMsgId);
             if (idx >= 0) {
-              store.messages.splice(idx, 1);
-            }
-          } else {
-            const cached = store.messagesCache[convId];
-            if (cached) {
-              const idx = cached.findIndex(m => m.id === errMsgId);
-              if (idx >= 0) {
-                cached.splice(idx, 1);
-              }
+              msgs.splice(idx, 1);
             }
           }
         }, 5000);
@@ -269,9 +262,7 @@ export function handleMessage(store, msg) {
     case 'ask_user_question':
       if (msg.conversationId) {
         const tryLink = () => {
-          const msgs = msg.conversationId === store.currentConversation
-            ? store.messages
-            : (store.messagesCache[msg.conversationId] || []);
+          const msgs = store.messagesMap[msg.conversationId] || [];
           for (let i = msgs.length - 1; i >= 0; i--) {
             if (msgs[i].type === 'tool-use' && msgs[i].toolName === 'AskUserQuestion' && !msgs[i].askRequestId) {
               msgs[i].askRequestId = msg.requestId;
