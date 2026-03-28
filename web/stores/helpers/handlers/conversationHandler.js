@@ -38,7 +38,19 @@ export function handleConversationCreated(store, msg) {
   });
   store.currentAgent = msg.agentId;
   store.currentAgentInfo = createdAgent;
-  store.activeConversations = [msg.conversationId];
+  // In split mode, assign new conversation to first empty pane instead of
+  // overwriting activeConversations (which would break other panes).
+  if (store.splitPanes.length > 1) {
+    const emptyPane = store.splitPanes.find(p => !p.conversationId);
+    if (emptyPane) {
+      emptyPane.conversationId = msg.conversationId;
+    }
+    if (!store.activeConversations.includes(msg.conversationId)) {
+      store.activeConversations.push(msg.conversationId);
+    }
+  } else {
+    store.activeConversations = [msg.conversationId];
+  }
   store.currentWorkDir = msg.workDir;
   store.messagesMap[msg.conversationId] = [];
   store.sendWsMessage({
@@ -72,7 +84,18 @@ export function handleConversationResumed(store, msg) {
   });
   store.currentAgent = msg.agentId;
   store.currentAgentInfo = resumedAgent;
-  store.activeConversations = [msg.conversationId];
+  // In split mode, assign resumed conversation to first empty pane
+  if (store.splitPanes.length > 1) {
+    const emptyPane = store.splitPanes.find(p => !p.conversationId);
+    if (emptyPane) {
+      emptyPane.conversationId = msg.conversationId;
+    }
+    if (!store.activeConversations.includes(msg.conversationId)) {
+      store.activeConversations.push(msg.conversationId);
+    }
+  } else {
+    store.activeConversations = [msg.conversationId];
+  }
   store.currentWorkDir = msg.workDir;
   store.messagesMap[msg.conversationId] = [];
   if (store._pendingSessionTitle) {
@@ -125,6 +148,12 @@ export function handleConversationDeleted(store, msg) {
         type: 'system',
         content: t('chat.session.closed')
       });
+    }
+  }
+  // Clear from splitPanes if present
+  for (const pane of store.splitPanes) {
+    if (pane.conversationId === msg.conversationId) {
+      pane.conversationId = null;
     }
   }
   store.saveOpenSessions();
