@@ -236,21 +236,49 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       break;
 
     case 'chat': {
-      if (!client.currentAgent || !client.currentConversation) {
+      // Support explicit conversationId for multi-column mode
+      const convId = msg.conversationId || client.currentConversation;
+      if (!convId) {
         await sendToWebClient(client, { type: 'error', message: 'No conversation selected' });
         return;
       }
 
-      if (!await checkAgentAccess(client.currentAgent)) return;
+      // Ownership check when explicit conversationId is provided
+      if (msg.conversationId && !CONFIG.skipAuth) {
+        if (!verifyConversationOwnership(msg.conversationId, client.userId)) {
+          await sendToWebClient(client, { type: 'error', message: 'Permission denied' });
+          return;
+        }
+      }
 
-      const chatAgent = agents.get(client.currentAgent);
-      if (chatAgent?.status === 'syncing') {
-        await sendToWebClient(client, { type: 'error', message: 'Agent is still syncing, please wait...' });
+      // Find the agent that owns this conversation
+      let chatAgentId = client.currentAgent;
+      let chatAgent = agents.get(chatAgentId);
+      let convInfo = chatAgent?.conversations.get(convId);
+
+      // If conversation not found on current agent, search all agents
+      if (!convInfo && msg.conversationId) {
+        for (const [agentId, agent] of agents) {
+          if (agent.conversations.has(convId)) {
+            chatAgentId = agentId;
+            chatAgent = agent;
+            convInfo = agent.conversations.get(convId);
+            break;
+          }
+        }
+      }
+
+      if (!chatAgentId || !chatAgent) {
+        await sendToWebClient(client, { type: 'error', message: 'No agent available' });
         return;
       }
 
-      const convId = client.currentConversation;
-      const convInfo = chatAgent?.conversations.get(convId);
+      if (!await checkAgentAccess(chatAgentId)) return;
+
+      if (chatAgent.status === 'syncing') {
+        await sendToWebClient(client, { type: 'error', message: 'Agent is still syncing, please wait...' });
+        return;
+      }
 
       // 处理附件
       const fileIds = msg.fileIds || [];
@@ -286,7 +314,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       }
 
       if (resolvedFiles.length > 0) {
-        await forwardToAgent(client.currentAgent, {
+        await forwardToAgent(chatAgentId, {
           type: 'transfer_files',
           conversationId: convId,
           files: resolvedFiles,
@@ -297,10 +325,9 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
           expertSelections: msg.expertSelections || null
         });
       } else {
-        await forwardToAgent(client.currentAgent, {
+        await forwardToAgent(chatAgentId, {
           type: 'execute',
           conversationId: convId,
-          prompt: msg.prompt,
           workDir: msg.workDir || convInfo?.workDir,
           claudeSessionId: convInfo?.claudeSessionId,
           targetRole: msg.targetRole || null,

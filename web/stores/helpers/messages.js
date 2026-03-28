@@ -8,76 +8,54 @@ export function addMessageToConversation(store, conversationId, msg) {
     ...msg
   };
 
-  if (conversationId === store.currentConversation) {
-    store.messages.push(newMsg);
-    store.messagesCache[conversationId] = store.messages;
-  } else {
-    if (!store.messagesCache[conversationId]) {
-      store.messagesCache[conversationId] = [];
-    }
-    store.messagesCache[conversationId].push(newMsg);
+  if (!store.messagesMap[conversationId]) {
+    store.messagesMap[conversationId] = [];
   }
+  store.messagesMap[conversationId].push(newMsg);
 }
 
 export function appendToAssistantMessageForConversation(store, conversationId, text) {
   if (!conversationId) return;
   if (!text) return;
 
-  if (conversationId === store.currentConversation) {
-    const lastMsg = store.messages[store.messages.length - 1];
-    if (lastMsg && lastMsg.type === 'assistant' && lastMsg.isStreaming) {
-      // Dedup guard: skip if the message already ends with this exact text
-      if (lastMsg.content.endsWith(text)) return;
-      lastMsg.content += text;
-    } else {
-      addMessageToConversation(store, conversationId, {
-        type: 'assistant',
-        content: text,
-        isStreaming: true
-      });
-    }
+  if (!store.messagesMap[conversationId]) {
+    store.messagesMap[conversationId] = [];
+  }
+  const msgs = store.messagesMap[conversationId];
+  const lastMsg = msgs[msgs.length - 1];
+  if (lastMsg && lastMsg.type === 'assistant' && lastMsg.isStreaming) {
+    // Dedup guard: skip if the message already ends with this exact text
+    if (lastMsg.content.endsWith(text)) return;
+    lastMsg.content += text;
   } else {
-    if (!store.messagesCache[conversationId]) {
-      store.messagesCache[conversationId] = [];
-    }
-    const cached = store.messagesCache[conversationId];
-    const lastMsg = cached[cached.length - 1];
-    if (lastMsg && lastMsg.type === 'assistant' && lastMsg.isStreaming) {
-      // Dedup guard: skip if the message already ends with this exact text
-      if (lastMsg.content.endsWith(text)) return;
-      lastMsg.content += text;
-    } else {
-      cached.push({
-        id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
-        type: 'assistant',
-        content: text,
-        isStreaming: true
-      });
-    }
+    addMessageToConversation(store, conversationId, {
+      type: 'assistant',
+      content: text,
+      isStreaming: true
+    });
   }
 }
 
 export function finishStreamingForConversation(store, conversationId) {
   if (!conversationId) return;
 
-  if (conversationId === store.currentConversation) {
-    const lastMsg = store.messages[store.messages.length - 1];
+  const msgs = store.messagesMap[conversationId];
+  if (msgs && msgs.length > 0) {
+    const lastMsg = msgs[msgs.length - 1];
     if (lastMsg && lastMsg.isStreaming) {
       lastMsg.isStreaming = false;
-    }
-  } else {
-    const cached = store.messagesCache[conversationId];
-    if (cached && cached.length > 0) {
-      const lastMsg = cached[cached.length - 1];
-      if (lastMsg && lastMsg.isStreaming) {
-        lastMsg.isStreaming = false;
-      }
     }
   }
 }
 
 export function loadHistoryMessages(store, historyMessages) {
   console.log('Loading history messages:', historyMessages);
+  const convId = store.currentConversation;
+  if (!convId) return;
+  if (!store.messagesMap[convId]) {
+    store.messagesMap[convId] = [];
+  }
+  const msgs = store.messagesMap[convId];
   let lastUserMessage = null;
   for (const msg of historyMessages) {
     console.log('Processing message:', msg.type, msg);
@@ -118,10 +96,10 @@ export function loadHistoryMessages(store, historyMessages) {
               isHistory: true
             });
           } else if (block.type === 'tool_result') {
-            for (let i = store.messages.length - 1; i >= 0; i--) {
-              if (store.messages[i].type === 'tool-use' && !store.messages[i].hasResult) {
-                store.messages[i].hasResult = true;
-                store.messages[i].toolResult = block.content;
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              if (msgs[i].type === 'tool-use' && !msgs[i].hasResult) {
+                msgs[i].hasResult = true;
+                msgs[i].toolResult = block.content;
                 break;
               }
             }
@@ -130,11 +108,11 @@ export function loadHistoryMessages(store, historyMessages) {
       }
     }
   }
-  if (lastUserMessage && store.currentConversation && !store.conversationTitles[store.currentConversation]) {
+  if (lastUserMessage && convId && !store.conversationTitles[convId]) {
     const title = lastUserMessage.trim().substring(0, 100);
-    store.conversationTitles[store.currentConversation] = title;
+    store.conversationTitles[convId] = title;
   }
-  console.log('Messages after loading:', store.messages);
+  console.log('Messages after loading:', msgs);
 }
 
 export function formatDbMessage(dbMsg) {

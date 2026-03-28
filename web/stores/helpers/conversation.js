@@ -64,10 +64,6 @@ export function resumeConversation(store, claudeSessionId, workDir, agentId = nu
 export function selectConversation(store, conversationId, agentId) {
   if (conversationId === store.currentConversation) return;
 
-  if (store.currentConversation && store.messages.length > 0) {
-    store.messagesCache[store.currentConversation] = store.messages;
-  }
-
   const conv = store.conversations.find(c => c.id === conversationId);
   if (conv && conv.agentId && conv.agentId !== store.currentAgent) {
     const agent = store.agents.find(a => a.id === conv.agentId);
@@ -88,16 +84,16 @@ export function selectConversation(store, conversationId, agentId) {
   });
 
   if (conv?.type === 'crew') {
-    // Crew conversations use crewMessagesMap, not messages/messagesCache.
-    // Initialize crewMessagesMap entry BEFORE setting currentConversation,
+    // Crew conversations use crewMessagesMap, not messagesMap.
+    // Initialize crewMessagesMap entry BEFORE setting activeConversations,
     // so that currentCrewMessages getter tracks the correct reactive property.
     if (!store.crewMessagesMap[conversationId]) {
       store.crewMessagesMap[conversationId] = [];
     }
-    store.messages = [];
+    store.messagesMap[conversationId] = [];
   }
 
-  store.currentConversation = conversationId;
+  store.activeConversations = [conversationId];
   if (conv) {
     store.currentWorkDir = conv.workDir;
   }
@@ -113,11 +109,11 @@ export function selectConversation(store, conversationId, agentId) {
       });
     }
   } else {
-    const cachedMessages = store.messagesCache[conversationId];
+    const cachedMessages = store.messagesMap[conversationId];
     if (cachedMessages && cachedMessages.length > 0) {
-      store.messages = cachedMessages;
+      // Messages already in messagesMap, nothing to do
     } else {
-      store.messages = [];
+      store.messagesMap[conversationId] = [];
       // ★ Phase 6.1: 使用 turns 加载最近 5 个 turn
       store.sendWsMessage({
         type: 'sync_messages',
@@ -206,17 +202,20 @@ export function closeSession(store, conversationId, agentId) {
   store.conversations = store.conversations.filter(c => c.id !== conversationId);
 
   // Clean up caches
-  delete store.messagesCache[conversationId];
+  delete store.messagesMap[conversationId];
   delete store.processingConversations[conversationId];
   stopProcessingWatchdog(store, conversationId);
   delete store.executionStatusMap[conversationId];
 
-  if (store.currentConversation === conversationId) {
-    store.currentConversation = null;
-    store.messages = [];
-    // Clear lastViewedConversation so refresh doesn't restore this session
-    localStorage.removeItem('lastViewedConversation');
-    store.lastViewedConversation = null;
+  // Remove from activeConversations if present
+  const activeIdx = store.activeConversations.indexOf(conversationId);
+  if (activeIdx >= 0) {
+    store.activeConversations.splice(activeIdx, 1);
+    if (store.activeConversations.length === 0) {
+      // Clear lastViewedConversation so refresh doesn't restore this session
+      localStorage.removeItem('lastViewedConversation');
+      store.lastViewedConversation = null;
+    }
   }
 
   // Send delete_conversation to server (reuses existing handler which:
@@ -256,11 +255,15 @@ export function deleteConversation(store, conversationId, agentId) {
 
   // 立即从本地列表移除（不等 server 同步）
   store.conversations = store.conversations.filter(c => c.id !== conversationId);
-  if (store.currentConversation === conversationId) {
-    store.currentConversation = null;
-    // 清除 lastViewedConversation，防止页面刷新时 autoRestore 恢复已删除的对话
-    localStorage.removeItem('lastViewedConversation');
-    store.lastViewedConversation = null;
+  // Remove from activeConversations if present
+  const delIdx = store.activeConversations.indexOf(conversationId);
+  if (delIdx >= 0) {
+    store.activeConversations.splice(delIdx, 1);
+    if (store.activeConversations.length === 0) {
+      // 清除 lastViewedConversation，防止页面刷新时 autoRestore 恢复已删除的对话
+      localStorage.removeItem('lastViewedConversation');
+      store.lastViewedConversation = null;
+    }
   }
 
   // 如果目标 conversation 在其他 agent 上，需要先通知 server 切换 agent
@@ -385,7 +388,8 @@ export function answerUserQuestion(store, requestId, answers) {
   });
   // Find the AskUserQuestion tool-use message by askRequestId and mark it answered
   // Check both Chat messages and Crew messages
-  const chatMsg = store.messages.find(m =>
+  const chatMsgs = store.messagesMap[store.currentConversation] || [];
+  const chatMsg = chatMsgs.find(m =>
     m.type === 'tool-use' && m.toolName === 'AskUserQuestion' && m.askRequestId === requestId
   );
   if (chatMsg) {
@@ -411,6 +415,132 @@ export function answerUserQuestion(store, requestId, answers) {
     }
     store.getOrCreateExecutionStatus(store.currentConversation);
   }
+}
+
+// ★ Multi-column: append a conversation as a new column (max 3)
+export function appendColumn(store, conversationId) {
+  if (!conversationId) return;
+  if (store.activeConversations.includes(conversationId)) return;
+  if (store.activeConversations.length >= 3) return;
+
+  store.activeConversations.push(conversationId);
+
+  // Ensure messagesMap entry exists
+  if (!store.messagesMap[conversationId]) {
+    store.messagesMap[conversationId] = [];
+    // Load messages from server
+    store.sendWsMessage({
+      type: 'sync_messages',
+      conversationId,
+      turns: 5
+    });
+  }
+
+  saveOpenSessions(store);
+}
+
+// ★ Multi-column: remove a column
+export function removeColumn(store, conversationId) {
+  const idx = store.activeConversations.indexOf(conversationId);
+  if (idx < 0) return;
+
+  store.activeConversations.splice(idx, 1);
+
+  if (store.activeConversations.length === 0) {
+    localStorage.removeItem('lastViewedConversation');
+    store.lastViewedConversation = null;
+  }
+
+  saveOpenSessions(store);
+}
+
+// ★ Multi-column: send message to a specific conversation (parameterized)
+export function sendMessageToConversation(store, conversationId, text, attachments = [], options = {}) {
+  const hasExpertSelections = options.expertSelections && options.expertSelections.length > 0;
+  if ((!text.trim() && attachments.length === 0 && !hasExpertSelections) || !store.currentAgent || !conversationId) return;
+
+  store.addMessageToConversation(conversationId, {
+    type: 'user',
+    content: text,
+    attachments: attachments.length > 0 ? attachments : undefined,
+    expertSelections: hasExpertSelections ? options.expertSelections : undefined
+  });
+
+  if (text.trim()) {
+    const title = text.trim().substring(0, 100);
+    store.conversationTitles[conversationId] = title;
+  } else if (hasExpertSelections) {
+    const sel = options.expertSelections[0];
+    const label = `@${sel.role}${sel.action ? '\u00B7' + sel.action : ''}`;
+    store.conversationTitles[conversationId] = label;
+  }
+
+  const conv = store.conversations.find(c => c.id === conversationId);
+  if (conv) {
+    conv.lastMessageAt = Date.now();
+  }
+
+  if (!store.processingConversations[conversationId]) {
+    store.processingConversations[conversationId] = true;
+    if (store._closedAt?.[conversationId]) {
+      delete store._closedAt[conversationId];
+    }
+    store._turnCompletedConvs?.delete(conversationId);
+    store.getOrCreateExecutionStatus(conversationId);
+    startProcessingWatchdog(store, conversationId);
+  }
+
+  const fileIds = attachments.map(a => a.fileId);
+  const wsMsg = {
+    type: 'chat',
+    conversationId,
+    prompt: text,
+    fileIds,
+    workDir: conv?.workDir || store.currentWorkDir
+  };
+  if (options.targetRole) {
+    wsMsg.targetRole = options.targetRole;
+  }
+  if (hasExpertSelections) {
+    wsMsg.expertSelections = options.expertSelections;
+  }
+
+  if (!store.sendWsMessage(wsMsg)) {
+    ensureConnected(store).then(() => {
+      store.sendWsMessage(wsMsg);
+    }).catch(() => {
+      store.addMessageToConversation(conversationId, {
+        type: 'system',
+        content: t('chat.connection.reconnectFailed')
+      });
+      delete store.processingConversations[conversationId];
+      stopProcessingWatchdog(store, conversationId);
+    });
+  }
+}
+
+// ★ Multi-column: cancel execution for a specific conversation
+export function cancelExecutionForConversation(store, conversationId) {
+  if (!conversationId) return;
+  if (!store.processingConversations[conversationId]) return;
+
+  store.sendWsMessage({
+    type: 'cancel_execution',
+    conversationId
+  });
+
+  delete store.processingConversations[conversationId];
+  stopProcessingWatchdog(store, conversationId);
+  if (!store._closedAt) store._closedAt = {};
+  store._closedAt[conversationId] = Date.now();
+  const status = store.executionStatusMap[conversationId];
+  if (status) status.currentTool = null;
+  store.finishStreamingForConversation(conversationId);
+
+  store.addMessageToConversation(conversationId, {
+    type: 'system',
+    content: t('chat.execution.cancelled')
+  });
 }
 
 export function refreshAgents(store) {

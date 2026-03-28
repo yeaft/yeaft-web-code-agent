@@ -33,12 +33,11 @@ export const useChatStore = defineStore('chat', {
     // 所有活跃的 conversations（跨所有 agents）
     // 每个 conversation 包含 { id, agentId, agentName, workDir, claudeSessionId, createdAt, processing }
     conversations: [],
-    currentConversation: null,
+    // ★ Multi-column: active conversations (max 3), replaces old currentConversation
+    activeConversations: [],  // [convId, ...] — first element is primary
     currentWorkDir: null,
-    // 当前会话的消息
-    messages: [],
-    // 消息缓存：conversationId -> messages[] (使用对象而非 Map 以确保响应式)
-    messagesCache: {},
+    // ★ Multi-column: unified message store, replaces old messages[] + messagesCache{}
+    messagesMap: {},  // { [conversationId]: messages[] }
     // 会话标题缓存：conversationId -> title (最新用户消息，使用对象而非 Map 以确保响应式)
     conversationTitles: {},
     // Per-conversation 处理状态：conversationId -> true (使用对象而非 Set 以确保响应式)
@@ -137,6 +136,17 @@ export const useChatStore = defineStore('chat', {
   }),
 
   getters: {
+    // ★ Multi-column: compatibility shim — reads activeConversations[0]
+    currentConversation: (state) => state.activeConversations[0] || null,
+    // ★ Multi-column: compatibility shim — reads messagesMap for primary conversation
+    messages: (state) => {
+      const convId = state.activeConversations[0];
+      return convId ? (state.messagesMap[convId] || EMPTY_ARRAY) : EMPTY_ARRAY;
+    },
+    // ★ Multi-column: compatibility shim — alias for messagesMap
+    messagesCache: (state) => state.messagesMap,
+    // ★ Multi-column: whether multiple columns are active
+    isMultiColumn: (state) => state.activeConversations.length > 1,
     // 当前会话是否在处理中
     isProcessing: (state) => {
       return state.currentConversation ? !!state.processingConversations[state.currentConversation] : false;
@@ -356,6 +366,11 @@ export const useChatStore = defineStore('chat', {
     toggleConversationMcp(serverName, enabled) { convHelpers.toggleConversationMcp(this, serverName, enabled); },
     deleteConversation(conversationId, agentId) { convHelpers.deleteConversation(this, conversationId, agentId); },
     closeSession(conversationId, agentId) { convHelpers.closeSession(this, conversationId, agentId); },
+    // ★ Multi-column: column management
+    appendColumn(conversationId) { convHelpers.appendColumn(this, conversationId); },
+    removeColumn(conversationId) { convHelpers.removeColumn(this, conversationId); },
+    sendMessageToConversation(conversationId, text, attachments = [], options = {}) { convHelpers.sendMessageToConversation(this, conversationId, text, attachments, options); },
+    cancelExecutionForConversation(conversationId) { convHelpers.cancelExecutionForConversation(this, conversationId); },
     sendMessage(text, attachments = [], options = {}) { convHelpers.sendMessage(this, text, attachments, options); },
     cancelExecution() { convHelpers.cancelExecution(this); },
     answerUserQuestion(requestId, answers) { convHelpers.answerUserQuestion(this, requestId, answers); },
@@ -369,7 +384,8 @@ export const useChatStore = defineStore('chat', {
       if (this.loadingMoreMessages || !this.hasMoreMessages || !this.currentConversation) return;
       this.loadingMoreMessages = true;
 
-      const firstMsgWithId = this.messages.find(m => m.dbMessageId);
+      const msgs = this.messagesMap[this.currentConversation] || [];
+      const firstMsgWithId = msgs.find(m => m.dbMessageId);
       this.sendWsMessage({
         type: 'sync_messages',
         conversationId: this.currentConversation,
@@ -476,9 +492,8 @@ export const useChatStore = defineStore('chat', {
       this.currentAgent = null;
       this.currentAgentInfo = null;
       this.conversations = [];
-      this.currentConversation = null;
-      this.messages = [];
-      this.messagesCache = {};
+      this.activeConversations = [];
+      this.messagesMap = {};
       this.conversationTitles = {};
       this.processingConversations = {};
       this.executionStatusMap = {};

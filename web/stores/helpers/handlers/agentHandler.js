@@ -29,13 +29,13 @@ export function restoreLastViewedConversation(store, agentSetup) {
   }
 
   // 设置 conversation 状态
-  // For crew conversations, initialize crewMessagesMap BEFORE setting currentConversation
+  // For crew conversations, initialize crewMessagesMap BEFORE setting activeConversations
   if (conv.type === 'crew' && !store.crewMessagesMap[lastViewed]) {
     store.crewMessagesMap[lastViewed] = [];
   }
-  store.currentConversation = lastViewed;
+  store.activeConversations = [lastViewed];
   store.currentWorkDir = conv.workDir;
-  store.messages = [];
+  store.messagesMap[lastViewed] = [];
   store.sendWsMessage({ type: 'select_conversation', conversationId: lastViewed });
 
   if (conv.type === 'crew') {
@@ -171,8 +171,9 @@ export function handleAgentList(store, msg) {
             agentId: store.currentAgent
           });
         } else {
-          if (store.messages.length > 0) {
-            const lastMessageId = store.messages[store.messages.length - 1]?.id;
+          const currentMsgs = store.messagesMap[store.currentConversation] || [];
+          if (currentMsgs.length > 0) {
+            const lastMessageId = currentMsgs[currentMsgs.length - 1]?.id;
             console.log('[Reconnect] Requesting missed messages after:', lastMessageId);
             store.sendWsMessage({
               type: 'sync_messages',
@@ -336,9 +337,8 @@ export function handleAgentSelected(store, msg) {
       });
     }
   } else {
-    store.currentConversation = null;
+    store.activeConversations = [];
     store.currentWorkDir = msg.workDir;
-    store.messages = [];
 
     const lastViewed = store.lastViewedConversation || localStorage.getItem('lastViewedConversation');
     if (lastViewed && store.conversations.find(c => c.id === lastViewed)) {
