@@ -182,9 +182,9 @@ describe('conversation switch resets visibleBlockCount', () => {
     expect(viewSource).toContain('this.scroll.visibleBlockCount.value = 20');
   });
 
-  it('reset is triggered by watching store.currentConversation', () => {
-    // The watcher should exist
-    expect(viewSource).toContain("'store.currentConversation'");
+  it('reset is triggered by watching effectiveConvId (conversationId prop fallback)', () => {
+    // The watcher should exist — uses effectiveConvId computed (prop || store.currentConversation)
+    expect(viewSource).toContain("'effectiveConvId'");
   });
 });
 

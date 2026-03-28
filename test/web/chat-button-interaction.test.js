@@ -43,7 +43,7 @@ describe('refresh button — business logic', () => {
     const setupSection = headerSource.split('setup()')[1] || '';
     const fnStart = setupSection.indexOf('refreshSession');
     const fnBody = setupSection.substring(fnStart, fnStart + 800);
-    expect(fnBody).toContain('store.messages = []');
+    expect(fnBody).toContain('messagesMap[store.currentConversation] = []');
   });
 
   it('refreshSession sets refreshingSession to true', () => {
