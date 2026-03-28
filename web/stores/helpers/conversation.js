@@ -62,6 +62,10 @@ export function resumeConversation(store, claudeSessionId, workDir, agentId = nu
 }
 
 export function selectConversation(store, conversationId, agentId) {
+  // In split mode, selectConversation from sidebar is not applicable —
+  // panes are managed via setPaneConversation. Treat as no-op.
+  if (store.splitPanes.length > 1) return;
+
   if (conversationId === store.currentConversation) return;
 
   const conv = store.conversations.find(c => c.id === conversationId);
@@ -218,6 +222,13 @@ export function closeSession(store, conversationId, agentId) {
     }
   }
 
+  // Clear from splitPanes if present
+  for (const pane of store.splitPanes) {
+    if (pane.conversationId === conversationId) {
+      pane.conversationId = null;
+    }
+  }
+
   // Send delete_conversation to server (reuses existing handler which:
   // 1. removes from agent.conversations Map
   // 2. sets is_active=0 in DB (data preserved)
@@ -263,6 +274,13 @@ export function deleteConversation(store, conversationId, agentId) {
       // 清除 lastViewedConversation，防止页面刷新时 autoRestore 恢复已删除的对话
       localStorage.removeItem('lastViewedConversation');
       store.lastViewedConversation = null;
+    }
+  }
+
+  // Clear from splitPanes if present
+  for (const pane of store.splitPanes) {
+    if (pane.conversationId === conversationId) {
+      pane.conversationId = null;
     }
   }
 
