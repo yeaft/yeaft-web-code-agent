@@ -3,19 +3,23 @@ import fs from 'fs';
 import path from 'path';
 
 /**
- * Tests for PR #374: split-screen menu styling.
+ * Tests for PR #377: split-screen collapsible sidebar.
  *
- * Verifies that split-screen components correctly reuse existing sidebar/header
- * CSS classes instead of defining custom duplicates, and that all CSS variables
- * reference valid tokens from the design system.
- *
- * 5 test areas:
- *   1. SessionSelector dropdown opaque background
- *   2. GlobalToolbar agent dropdown opaque background
- *   3. PaneHeader action buttons use shared .header-action-btn
- *   4. GlobalToolbar buttons use shared .sidebar-icon-btn
- *   5. SessionSelector list items reuse .session-item styles
- *   + boundary: empty state, in-other-pane opacity
+ * Verifies that:
+ *   1. split-screen.css uses correct CSS variables (no undefined tokens)
+ *   2. PaneSidebar reuses sidebar CSS classes
+ *   3. PaneSidebar uses pane-local state (not global)
+ *   4. SplitPane integrates PaneSidebar with horizontal layout
+ *   5. GlobalToolbar is simplified (split controls only)
+ *   6. CSS layout: pane-sidebar + split-pane-content
+ *   7. Collapsed sidebar has all required icons
+ *   8. New Chat/Crew auto-assigns to current pane
+ *   9. Close session removes from list
+ *  10. Settings panel opens from pane sidebar
+ *  11. Theme toggle from sidebar
+ *  12. Empty pane state
+ *  13. Agent-offline guards (disabled buttons)
+ *  14. Removed old components (SessionSelector, PaneHeader)
  */
 
 const webDir = path.resolve(__dirname, '../../web');
@@ -25,188 +29,7 @@ function readFile(relativePath) {
 }
 
 // =====================================================================
-// 1. SessionSelector dropdown — opaque background
-// =====================================================================
-describe('SessionSelector dropdown opaque background', () => {
-  const css = readFile('styles/split-screen.css');
-  const selectorJs = readFile('components/SessionSelector.js');
-
-  it('should define .session-selector-dropdown with var(--bg-main) background', () => {
-    // The dropdown must have an opaque background, not transparent/inherit
-    const dropdownRule = css.match(/\.session-selector-dropdown\s*\{[^}]+\}/);
-    expect(dropdownRule).not.toBeNull();
-    expect(dropdownRule[0]).toContain('background: var(--bg-main)');
-  });
-
-  it('should have box-shadow with opacity >= 0.3 for visual separation', () => {
-    const dropdownRule = css.match(/\.session-selector-dropdown\s*\{[^}]+\}/);
-    expect(dropdownRule).not.toBeNull();
-    // Extract rgba opacity value from box-shadow
-    const shadowMatch = dropdownRule[0].match(/rgba\(0\s*,\s*0\s*,\s*0\s*,\s*([\d.]+)\)/);
-    expect(shadowMatch).not.toBeNull();
-    expect(parseFloat(shadowMatch[1])).toBeGreaterThanOrEqual(0.3);
-  });
-
-  it('should have border using var(--border-color)', () => {
-    const dropdownRule = css.match(/\.session-selector-dropdown\s*\{[^}]+\}/);
-    expect(dropdownRule).not.toBeNull();
-    expect(dropdownRule[0]).toContain('var(--border-color)');
-  });
-
-  it('should render dropdown with session-selector-dropdown class in template', () => {
-    expect(selectorJs).toContain('class="session-selector-dropdown"');
-  });
-});
-
-// =====================================================================
-// 2. GlobalToolbar agent dropdown — opaque background
-// =====================================================================
-describe('GlobalToolbar agent dropdown opaque background', () => {
-  const css = readFile('styles/split-screen.css');
-  const toolbarJs = readFile('components/GlobalToolbar.js');
-
-  it('should define .gt-agent-dropdown with var(--bg-main) background', () => {
-    const dropdownRule = css.match(/\.gt-agent-dropdown\s*\{[^}]+\}/);
-    expect(dropdownRule).not.toBeNull();
-    expect(dropdownRule[0]).toContain('background: var(--bg-main)');
-  });
-
-  it('should have box-shadow with opacity >= 0.3', () => {
-    const dropdownRule = css.match(/\.gt-agent-dropdown\s*\{[^}]+\}/);
-    expect(dropdownRule).not.toBeNull();
-    const shadowMatch = dropdownRule[0].match(/rgba\(0\s*,\s*0\s*,\s*0\s*,\s*([\d.]+)\)/);
-    expect(shadowMatch).not.toBeNull();
-    expect(parseFloat(shadowMatch[1])).toBeGreaterThanOrEqual(0.3);
-  });
-
-  it('should render dropdown with gt-agent-dropdown class in template', () => {
-    expect(toolbarJs).toContain('class="gt-agent-dropdown"');
-  });
-});
-
-// =====================================================================
-// 3. PaneHeader uses .header-action-btn (not custom .ph-action-btn)
-// =====================================================================
-describe('PaneHeader uses shared header-action-btn class', () => {
-  const paneHeaderJs = readFile('components/PaneHeader.js');
-  const css = readFile('styles/split-screen.css');
-
-  it('should use header-action-btn class on all action buttons', () => {
-    // Count occurrences of header-action-btn in the template
-    const matches = paneHeaderJs.match(/class="header-action-btn/g);
-    expect(matches).not.toBeNull();
-    // PaneHeader has: expert panel, compact, crew roles, refresh, add pane, close pane = 7 buttons
-    expect(matches.length).toBeGreaterThanOrEqual(5);
-  });
-
-  it('should NOT define .ph-action-btn as a standalone CSS rule', () => {
-    // The old custom .ph-action-btn class should no longer be defined
-    const phActionBtnRule = css.match(/\.ph-action-btn\s*\{/);
-    expect(phActionBtnRule).toBeNull();
-  });
-
-  it('should NOT use ph-action-btn class in component template', () => {
-    expect(paneHeaderJs).not.toContain('class="ph-action-btn"');
-  });
-
-  it('should still define .ph-close-btn hover override', () => {
-    // Pane-specific hover for close button should remain
-    expect(css).toContain('.ph-close-btn:hover');
-    const closeRule = css.match(/\.ph-close-btn:hover\s*\{[^}]+\}/);
-    expect(closeRule).not.toBeNull();
-    expect(closeRule[0]).toContain('#ef4444');
-  });
-
-  it('should still define .ph-add-btn hover override', () => {
-    expect(css).toContain('.ph-add-btn:hover');
-    const addRule = css.match(/\.ph-add-btn:hover\s*\{[^}]+\}/);
-    expect(addRule).not.toBeNull();
-    expect(addRule[0]).toContain('var(--accent)');
-  });
-});
-
-// =====================================================================
-// 4. GlobalToolbar uses .sidebar-icon-btn (not custom .gt-btn)
-// =====================================================================
-describe('GlobalToolbar uses shared sidebar-icon-btn class', () => {
-  const toolbarJs = readFile('components/GlobalToolbar.js');
-  const css = readFile('styles/split-screen.css');
-
-  it('should use sidebar-icon-btn class on all control buttons', () => {
-    const matches = toolbarJs.match(/class="sidebar-icon-btn/g);
-    expect(matches).not.toBeNull();
-    // GlobalToolbar has: theme toggle, settings, add pane, merge = 4 buttons
-    expect(matches.length).toBeGreaterThanOrEqual(4);
-  });
-
-  it('should NOT define .gt-btn as a standalone CSS rule', () => {
-    // The old custom .gt-btn class should no longer be defined as a standalone rule
-    // (gt-btn-add and gt-btn-merge overrides are fine — those are color specializations)
-    const gtBtnStandalone = css.match(/\.gt-btn\s*\{/);
-    expect(gtBtnStandalone).toBeNull();
-  });
-
-  it('should NOT use gt-btn class (without suffix) in component template', () => {
-    // Should not have class="gt-btn" as a class on buttons
-    expect(toolbarJs).not.toMatch(/class="gt-btn"/);
-  });
-
-  it('should keep .gt-btn-add as a color override', () => {
-    expect(css).toContain('.gt-btn-add');
-    const addRule = css.match(/\.gt-btn-add\s*\{[^}]+\}/);
-    expect(addRule).not.toBeNull();
-    expect(addRule[0]).toContain('var(--accent)');
-  });
-
-  it('should keep .gt-btn-merge as a color override', () => {
-    expect(css).toContain('.gt-btn-merge');
-    const mergeRule = css.match(/\.gt-btn-merge\s*\{[^}]+\}/);
-    expect(mergeRule).not.toBeNull();
-    expect(mergeRule[0]).toContain('var(--text-muted)');
-  });
-});
-
-// =====================================================================
-// 5. SessionSelector list items reuse .session-item
-// =====================================================================
-describe('SessionSelector reuses sidebar session-item styles', () => {
-  const selectorJs = readFile('components/SessionSelector.js');
-  const css = readFile('styles/split-screen.css');
-
-  it('should use session-item class on conversation items', () => {
-    expect(selectorJs).toContain('class="session-item ss-session-item"');
-  });
-
-  it('should use session-group-header class on group headers', () => {
-    expect(selectorJs).toContain('class="session-group-header ss-group-header-compact"');
-  });
-
-  it('should use session-item-header wrapper with title span', () => {
-    expect(selectorJs).toContain('class="session-item-header"');
-    expect(selectorJs).toContain('class="title"');
-  });
-
-  it('should NOT define .ss-option as a standalone CSS rule', () => {
-    // Old custom .ss-option class should no longer be in CSS
-    const ssOptionRule = css.match(/\.ss-option\s*\{/);
-    expect(ssOptionRule).toBeNull();
-  });
-
-  it('should define .ss-session-item compact overrides', () => {
-    const compactRule = css.match(/\.ss-session-item\s*\{[^}]+\}/);
-    expect(compactRule).not.toBeNull();
-    expect(compactRule[0]).toContain('padding');
-  });
-
-  it('should define .ss-group-header-compact overrides', () => {
-    const compactHeader = css.match(/\.ss-group-header-compact\s*\{[^}]+\}/);
-    expect(compactHeader).not.toBeNull();
-    expect(compactHeader[0]).toContain('font-size: 11px');
-  });
-});
-
-// =====================================================================
-// 6. CSS variable correctness — no undefined/old variables
+// 1. CSS variable correctness — no undefined/old variables
 // =====================================================================
 describe('CSS variable correctness in split-screen.css', () => {
   const css = readFile('styles/split-screen.css');
@@ -220,7 +43,6 @@ describe('CSS variable correctness in split-screen.css', () => {
   });
 
   it('should NOT use bare --border (should be --border-color)', () => {
-    // Match var(--border) but not var(--border-color)
     const bareMatches = css.match(/var\(--border\b(?!-)/g);
     expect(bareMatches).toBeNull();
   });
@@ -230,78 +52,394 @@ describe('CSS variable correctness in split-screen.css', () => {
     expect(hoverMatches).toBeNull();
   });
 
-  it('should use var(--bg-main) for opaque backgrounds', () => {
-    const bgMainUsages = css.match(/var\(--bg-main\)/g);
-    expect(bgMainUsages).not.toBeNull();
-    // At least for .session-selector-dropdown and .gt-agent-dropdown
-    expect(bgMainUsages.length).toBeGreaterThanOrEqual(2);
-  });
-
-  it('should use var(--bg-sidebar) for toolbar/trigger backgrounds', () => {
+  it('should use var(--bg-sidebar) for toolbar background', () => {
     const bgSidebarUsages = css.match(/var\(--bg-sidebar\)/g);
     expect(bgSidebarUsages).not.toBeNull();
     expect(bgSidebarUsages.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('should use var(--sidebar-hover) for hover states', () => {
-    const sidebarHoverUsages = css.match(/var\(--sidebar-hover\)/g);
-    expect(sidebarHoverUsages).not.toBeNull();
-    expect(sidebarHoverUsages.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('should use var(--session-active) for pane-mode background', () => {
-    const paneModeRule = css.match(/\.pane-mode\s*\{[^}]+\}/);
-    expect(paneModeRule).not.toBeNull();
-    expect(paneModeRule[0]).toContain('var(--session-active)');
-  });
-
-  it('should use var(--success, #22c55e) for online status dot', () => {
-    const dotOnlineRule = css.match(/\.status-dot\.online\s*\{[^}]+\}/);
-    expect(dotOnlineRule).not.toBeNull();
-    expect(dotOnlineRule[0]).toContain('var(--success');
+  it('should use var(--border-color) for borders', () => {
+    const borderColorUsages = css.match(/var\(--border-color\)/g);
+    expect(borderColorUsages).not.toBeNull();
+    expect(borderColorUsages.length).toBeGreaterThanOrEqual(1);
   });
 });
 
 // =====================================================================
-// 7. Boundary conditions
+// 2. PaneSidebar — reuses sidebar CSS classes
 // =====================================================================
-describe('Boundary conditions', () => {
+describe('PaneSidebar reuses sidebar CSS classes', () => {
+  const paneSidebarJs = readFile('components/PaneSidebar.js');
+
+  it('should use "sidebar" and "pane-sidebar" CSS classes', () => {
+    expect(paneSidebarJs).toContain('class="sidebar pane-sidebar"');
+  });
+
+  it('should use sidebar-collapsed-bar for collapsed state', () => {
+    expect(paneSidebarJs).toContain('class="sidebar-collapsed-bar"');
+  });
+
+  it('should use collapsed-icon-btn on collapsed bar buttons', () => {
+    const matches = paneSidebarJs.match(/class="collapsed-icon-btn"/g);
+    expect(matches).not.toBeNull();
+    expect(matches.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('should use session-group-header for session panels', () => {
+    expect(paneSidebarJs).toContain('class="session-group-header"');
+  });
+
+  it('should use session-item class on conversation items', () => {
+    expect(paneSidebarJs).toContain('class="session-item"');
+  });
+
+  it('should use session-panel-list for session lists', () => {
+    expect(paneSidebarJs).toContain('class="session-panel-list"');
+  });
+
+  it('should use sidebar-header-row for expanded header', () => {
+    expect(paneSidebarJs).toContain('class="sidebar-header-row"');
+  });
+
+  it('should use sidebar-brand for agent status', () => {
+    expect(paneSidebarJs).toContain('class="sidebar-brand agent-dropdown-trigger"');
+  });
+
+  it('should use sidebar-bottom for bottom nav', () => {
+    expect(paneSidebarJs).toContain('class="sidebar-bottom"');
+  });
+
+  it('should use agent-dropdown for agent list', () => {
+    expect(paneSidebarJs).toContain('class="agent-dropdown"');
+  });
+});
+
+// =====================================================================
+// 3. PaneSidebar behavior — pane-local state, not global
+// =====================================================================
+describe('PaneSidebar pane-local state', () => {
+  const paneSidebarJs = readFile('components/PaneSidebar.js');
+
+  it('should have localCollapsed state defaulting to true', () => {
+    expect(paneSidebarJs).toContain('const localCollapsed = Vue.ref(true)');
+  });
+
+  it('should NOT reference store.sidebarCollapsed', () => {
+    expect(paneSidebarJs).not.toContain('store.sidebarCollapsed');
+  });
+
+  it('should use setPaneConversation for session clicks (not selectConversation)', () => {
+    expect(paneSidebarJs).toContain('store.setPaneConversation(props.paneId');
+    expect(paneSidebarJs).not.toContain('store.selectConversation');
+  });
+
+  it('should accept paneId and conversationId props', () => {
+    expect(paneSidebarJs).toContain("paneId: { type: String, required: true }");
+    expect(paneSidebarJs).toContain("conversationId: { type: String, default: null }");
+  });
+
+  it('should highlight active session using conversationId prop (not store.currentConversation)', () => {
+    expect(paneSidebarJs).toContain('conv.id === conversationId');
+    expect(paneSidebarJs).not.toContain('store.currentConversation');
+  });
+});
+
+// =====================================================================
+// 4. SplitPane integrates PaneSidebar
+// =====================================================================
+describe('SplitPane integrates PaneSidebar', () => {
+  const splitPaneJs = readFile('components/SplitPane.js');
+
+  it('should import PaneSidebar', () => {
+    expect(splitPaneJs).toContain("import PaneSidebar from './PaneSidebar.js'");
+  });
+
+  it('should register PaneSidebar as a component', () => {
+    expect(splitPaneJs).toContain('PaneSidebar');
+  });
+
+  it('should render PaneSidebar in template', () => {
+    expect(splitPaneJs).toContain('<PaneSidebar');
+  });
+
+  it('should pass paneId and conversationId to PaneSidebar', () => {
+    expect(splitPaneJs).toContain(':paneId="paneId"');
+    expect(splitPaneJs).toContain(':conversationId="conversationId"');
+  });
+
+  it('should wrap content in split-pane-content div', () => {
+    expect(splitPaneJs).toContain('class="split-pane-content"');
+  });
+});
+
+// =====================================================================
+// 5. GlobalToolbar is simplified
+// =====================================================================
+describe('GlobalToolbar simplified to split controls only', () => {
+  const toolbarJs = readFile('components/GlobalToolbar.js');
+
+  it('should use sidebar-icon-btn on control buttons', () => {
+    const matches = toolbarJs.match(/class="sidebar-icon-btn/g);
+    expect(matches).not.toBeNull();
+    expect(matches.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('should NOT have agent status dropdown', () => {
+    expect(toolbarJs).not.toContain('gt-agent-dropdown');
+    expect(toolbarJs).not.toContain('gt-agent-status');
+  });
+
+  it('should NOT have session selector', () => {
+    expect(toolbarJs).not.toContain('gt-session-selector');
+    expect(toolbarJs).not.toContain('gt-session-dropdown');
+  });
+
+  it('should NOT have theme toggle or settings', () => {
+    expect(toolbarJs).not.toContain('settingsOpen');
+    expect(toolbarJs).not.toContain('SettingsPanel');
+  });
+
+  it('should keep gt-btn-add and gt-btn-merge classes', () => {
+    expect(toolbarJs).toContain('gt-btn-add');
+    expect(toolbarJs).toContain('gt-btn-merge');
+  });
+
+  it('should have connection warning', () => {
+    expect(toolbarJs).toContain('gt-connection-warn');
+  });
+});
+
+// =====================================================================
+// 6. CSS layout — pane sidebar + content
+// =====================================================================
+describe('CSS layout for pane sidebar', () => {
   const css = readFile('styles/split-screen.css');
-  const selectorJs = readFile('components/SessionSelector.js');
 
-  it('should define .in-other-pane opacity rule for cross-pane marking', () => {
-    const inOtherRule = css.match(/\.ss-session-item\.in-other-pane\s*\{[^}]+\}/);
-    expect(inOtherRule).not.toBeNull();
-    expect(inOtherRule[0]).toContain('opacity');
-    // Opacity should be a semi-transparent value (< 1)
-    const opacityMatch = inOtherRule[0].match(/opacity:\s*([\d.]+)/);
-    expect(opacityMatch).not.toBeNull();
-    expect(parseFloat(opacityMatch[1])).toBeLessThan(1);
-    expect(parseFloat(opacityMatch[1])).toBeGreaterThan(0);
+  it('should define .split-pane with flex-direction: row', () => {
+    const paneRule = css.match(/\.split-pane\s*\{[^}]+\}/);
+    expect(paneRule).not.toBeNull();
+    expect(paneRule[0]).toContain('flex-direction: row');
   });
 
-  it('should define empty state (.ss-empty) for when no sessions exist', () => {
-    const emptyRule = css.match(/\.ss-empty\s*\{[^}]+\}/);
-    expect(emptyRule).not.toBeNull();
-    expect(emptyRule[0]).toContain('text-align: center');
-    expect(emptyRule[0]).toContain('var(--text-muted)');
+  it('should define .pane-sidebar width', () => {
+    const sidebarRule = css.match(/\.pane-sidebar\s*\{[^}]+\}/);
+    expect(sidebarRule).not.toBeNull();
+    expect(sidebarRule[0]).toContain('width:');
   });
 
-  it('should render empty state in template when no conversations', () => {
-    expect(selectorJs).toContain('class="ss-empty"');
-    // Condition: both chat and crew arrays are empty
-    expect(selectorJs).toContain('chatConversations.length === 0 && crewConversations.length === 0');
+  it('should define .pane-sidebar.collapsed with 48px width', () => {
+    const collapsedRule = css.match(/\.pane-sidebar\.collapsed\s*\{[^}]+\}/);
+    expect(collapsedRule).not.toBeNull();
+    expect(collapsedRule[0]).toContain('48px');
   });
 
-  it('should render ss-option-badge for cross-pane identification', () => {
-    expect(selectorJs).toContain('class="ss-option-badge"');
-    // Badge only shows for items in other panes
-    expect(selectorJs).toContain("isInOtherPane(conv.id)");
+  it('should define .split-pane-content as flex column', () => {
+    const contentRule = css.match(/\.split-pane-content\s*\{[^}]+\}/);
+    expect(contentRule).not.toBeNull();
+    expect(contentRule[0]).toContain('flex-direction: column');
+    expect(contentRule[0]).toContain('flex: 1');
+  });
+});
+
+// =====================================================================
+// 7. Collapsed sidebar — all required icons present
+// =====================================================================
+describe('PaneSidebar collapsed bar has required icons', () => {
+  const paneSidebarJs = readFile('components/PaneSidebar.js');
+
+  it('should have expand button in collapsed bar', () => {
+    // Expand button sets localCollapsed = false
+    expect(paneSidebarJs).toContain('localCollapsed = false');
   });
 
-  it('should define .ss-option-badge styling', () => {
-    const badgeRule = css.match(/\.ss-option-badge\s*\{[^}]+\}/);
-    expect(badgeRule).not.toBeNull();
-    expect(badgeRule[0]).toContain('background: var(--accent)');
+  it('should have new chat button in collapsed bar', () => {
+    expect(paneSidebarJs).toContain('@click="newChat"');
+  });
+
+  it('should have crew button in collapsed bar', () => {
+    expect(paneSidebarJs).toContain('@click="newCrewSession"');
+  });
+
+  it('should have close-pane button in collapsed bar', () => {
+    // close-pane emit from collapsed bar
+    expect(paneSidebarJs).toContain("@click=\"$emit('close-pane')\"");
+  });
+
+  it('should have theme toggle button in collapsed bar', () => {
+    expect(paneSidebarJs).toContain('store.toggleTheme()');
+  });
+
+  it('should render collapsed bar only when localCollapsed is true', () => {
+    expect(paneSidebarJs).toContain('v-if="localCollapsed"');
+  });
+});
+
+// =====================================================================
+// 8. New Chat/Crew auto-assignment to current pane
+// =====================================================================
+describe('PaneSidebar new session auto-assigns to pane', () => {
+  const paneSidebarJs = readFile('components/PaneSidebar.js');
+
+  it('should call store.createConversation() for new chat', () => {
+    expect(paneSidebarJs).toContain('store.createConversation()');
+  });
+
+  it('should call store.enterCrewMode() for new crew', () => {
+    expect(paneSidebarJs).toContain('store.enterCrewMode()');
+  });
+
+  it('should NOT use Vue.nextTick for pane assignment (race condition fix)', () => {
+    // newChat/newCrewSession must NOT use Vue.nextTick — createConversation is async WebSocket.
+    // handleConversationCreated in the store auto-assigns to empty panes in split mode.
+    const newChatMatch = paneSidebarJs.match(/function newChat\(\)[^}]*\}/s);
+    if (newChatMatch) {
+      expect(newChatMatch[0]).not.toContain('Vue.nextTick');
+    }
+    const newCrewMatch = paneSidebarJs.match(/function newCrewSession\(\)[^}]*\}/s);
+    if (newCrewMatch) {
+      expect(newCrewMatch[0]).not.toContain('Vue.nextTick');
+    }
+  });
+
+  it('should guard newChat when no agents online', () => {
+    expect(paneSidebarJs).toContain('if (onlineAgentCount.value === 0) return');
+  });
+});
+
+// =====================================================================
+// 9. Close session — removesfrom list via store
+// =====================================================================
+describe('PaneSidebar close session behavior', () => {
+  const paneSidebarJs = readFile('components/PaneSidebar.js');
+
+  it('should call store.closeSession with conversationId and agentId', () => {
+    expect(paneSidebarJs).toContain('store.closeSession(conversationId, agentId)');
+  });
+
+  it('should have delete button on session items with click.stop', () => {
+    expect(paneSidebarJs).toContain('@click.stop="closeSession(conv.id, conv.agentId)"');
+  });
+
+  it('should use session-delete-btn class matching sidebar style', () => {
+    expect(paneSidebarJs).toContain('class="session-delete-btn"');
+  });
+});
+
+// =====================================================================
+// 10. Settings panel opens from pane sidebar
+// =====================================================================
+describe('PaneSidebar opens settings panel', () => {
+  const paneSidebarJs = readFile('components/PaneSidebar.js');
+
+  it('should import SettingsPanel component', () => {
+    expect(paneSidebarJs).toContain("import SettingsPanel from './SettingsPanel.js'");
+  });
+
+  it('should have settingsOpen ref', () => {
+    expect(paneSidebarJs).toContain('const settingsOpen = Vue.ref(false)');
+  });
+
+  it('should render SettingsPanel when settingsOpen is true', () => {
+    expect(paneSidebarJs).toContain('v-if="settingsOpen"');
+    expect(paneSidebarJs).toContain('@close="settingsOpen = false"');
+  });
+
+  it('should have settings button in sidebar-bottom', () => {
+    expect(paneSidebarJs).toContain('@click="settingsOpen = true"');
+  });
+});
+
+// =====================================================================
+// 11. Theme toggle from pane sidebar
+// =====================================================================
+describe('PaneSidebar theme toggle', () => {
+  const paneSidebarJs = readFile('components/PaneSidebar.js');
+
+  it('should call store.toggleTheme() on click', () => {
+    expect(paneSidebarJs).toContain('@click="store.toggleTheme()"');
+  });
+
+  it('should show sun icon for dark theme and moon icon for light', () => {
+    // v-if for dark → sun icon, v-else → moon icon (same as ChatPage sidebar)
+    expect(paneSidebarJs).toContain('v-if="store.theme === \'dark\'"');
+  });
+});
+
+// =====================================================================
+// 12. Empty pane state — no conversation selected
+// =====================================================================
+describe('SplitPane empty state', () => {
+  const splitPaneJs = readFile('components/SplitPane.js');
+
+  it('should show pane-empty-state when no conversationId', () => {
+    expect(splitPaneJs).toContain('class="pane-empty-state"');
+  });
+
+  it('should display selectSession text in empty state', () => {
+    expect(splitPaneJs).toContain("$t('splitScreen.selectSession')");
+  });
+
+  it('should display selectHint text in empty state', () => {
+    expect(splitPaneJs).toContain("$t('splitScreen.selectHint')");
+  });
+
+  it('should NOT have close button in empty state (sidebar handles close)', () => {
+    // Old: had pane-empty-close button. New: PaneSidebar handles close-pane
+    expect(splitPaneJs).not.toContain('pane-empty-close');
+  });
+});
+
+// =====================================================================
+// 13. Agent offline — new chat button disabled
+// =====================================================================
+describe('PaneSidebar agent-offline guards', () => {
+  const paneSidebarJs = readFile('components/PaneSidebar.js');
+
+  it('should disable new chat button when no agents online', () => {
+    expect(paneSidebarJs).toContain(':disabled="onlineAgentCount === 0"');
+  });
+
+  it('should compute onlineAgentCount from store.agents', () => {
+    expect(paneSidebarJs).toContain("store.agents.filter(a => a.online).length");
+  });
+
+  it('should skip session click when agent is offline', () => {
+    expect(paneSidebarJs).toContain("if (conv.agentOnline === false) return");
+  });
+
+  it('should apply agent-offline class on session items', () => {
+    expect(paneSidebarJs).toContain("'agent-offline': conv.agentOnline === false");
+  });
+});
+
+// =====================================================================
+// 14. Removed components — SessionSelector and PaneHeader no longer used
+// =====================================================================
+describe('Removed split-screen components', () => {
+  const css = readFile('styles/split-screen.css');
+  const splitPaneJs = readFile('components/SplitPane.js');
+
+  it('should NOT import SessionSelector in SplitPane', () => {
+    expect(splitPaneJs).not.toContain('SessionSelector');
+  });
+
+  it('should NOT import PaneHeader in SplitPane', () => {
+    expect(splitPaneJs).not.toContain('PaneHeader');
+  });
+
+  it('should NOT define .session-selector CSS rules', () => {
+    expect(css).not.toMatch(/\.session-selector\s*\{/);
+  });
+
+  it('should NOT define .pane-header CSS rules', () => {
+    expect(css).not.toMatch(/\.pane-header\s*\{/);
+  });
+
+  it('should NOT define .gt-agent-dropdown CSS rules', () => {
+    expect(css).not.toMatch(/\.gt-agent-dropdown\s*\{/);
+  });
+
+  it('should NOT define .gt-session-selector CSS rules', () => {
+    expect(css).not.toMatch(/\.gt-session-selector\s*\{/);
   });
 });

@@ -7,7 +7,7 @@
   overflow: hidden;
 }
 
-/* ===== Global Toolbar ===== */
+/* ===== Global Toolbar (simplified: split controls only) ===== */
 .global-toolbar {
   display: flex;
   align-items: center;
@@ -25,59 +25,6 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  position: relative;
-}
-
-.gt-agent-status {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-.gt-agent-status:hover {
-  background: var(--sidebar-hover);
-}
-.gt-agent-status .status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--text-muted);
-}
-.gt-agent-status .status-dot.online {
-  background: var(--success, #22c55e);
-}
-.gt-agent-label {
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.gt-agent-dropdown {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  min-width: 200px;
-  background: var(--bg-main);
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  box-shadow: 0 4px 24px rgba(0,0,0,0.3);
-  z-index: 100;
-  padding: 4px 0;
-}
-.gt-agent-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  font-size: 13px;
-}
-.gt-agent-name { flex: 1; }
-.gt-agent-version {
-  font-size: 11px;
-  color: var(--text-muted);
 }
 
 .gt-connection-warn {
@@ -111,11 +58,11 @@
   overflow: hidden;
 }
 
-/* ===== Single Pane ===== */
+/* ===== Single Pane (horizontal: sidebar + content) ===== */
 .split-pane {
   flex: 1;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -125,171 +72,23 @@
   border-left: 1px solid var(--border-color);
 }
 
-/* ===== Session Selector ===== */
-.session-selector {
-  position: relative;
-  flex-shrink: 0;
-  border-bottom: 1px solid var(--border-color);
+/* ===== Pane Sidebar (narrower than ChatPage sidebar) ===== */
+.pane-sidebar {
+  width: 220px;
 }
-.session-selector-trigger {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  padding: 6px 12px;
-  background: var(--bg-sidebar);
-  border: none;
-  cursor: pointer;
-  font-size: 13px;
-  color: var(--text-primary);
-  text-align: left;
+.pane-sidebar.collapsed {
+  width: 48px;
+  min-width: 48px;
 }
-.session-selector-trigger:hover {
-  background: var(--sidebar-hover);
-}
-.ss-icon { font-size: 14px; }
-.ss-name {
+
+/* ===== Split Pane Content Area ===== */
+.split-pane-content {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.ss-name.placeholder {
-  color: var(--text-muted);
-  font-style: italic;
-}
-.ss-chevron {
-  transition: transform 0.2s;
-  color: var(--text-muted);
-}
-.ss-chevron.open {
-  transform: rotate(180deg);
-}
-
-.session-selector-dropdown {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  max-height: 60vh;
-  overflow-y: auto;
-  background: var(--bg-main);
-  border: 1px solid var(--border-color);
-  border-radius: 0 0 8px 8px;
-  box-shadow: 0 4px 24px rgba(0,0,0,0.3);
-  z-index: 100;
-}
-.ss-group {
-  padding: 4px 0;
-}
-.ss-group + .ss-group {
-  border-top: 1px solid var(--border-color);
-}
-/* Compact group header inside dropdown — reuses .session-group-header from sidebar */
-.ss-group-header-compact {
-  padding: 4px 8px 2px 12px;
-  margin: 0;
-  font-size: 11px;
-}
-/* Compact session items inside dropdown — reuses .session-item from sidebar */
-.ss-session-item {
-  padding: 6px 12px;
-  margin-bottom: 0;
-  border-radius: 0;
-}
-.ss-session-item.in-other-pane {
-  opacity: 0.6;
-}
-.ss-option-badge {
-  font-size: 10px;
-  padding: 1px 4px;
-  border-radius: 3px;
-  background: var(--accent);
-  color: white;
-  flex-shrink: 0;
-}
-.ss-empty {
-  padding: 16px 12px;
-  text-align: center;
-  font-size: 13px;
-  color: var(--text-muted);
-}
-.ss-actions {
-  padding: 4px 8px;
-  border-top: 1px solid var(--border-color);
-}
-.ss-action-btn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  padding: 6px 8px;
-  background: none;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 13px;
-  color: var(--accent);
-}
-.ss-action-btn:hover {
-  background: var(--sidebar-hover);
-}
-.ss-action-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-/* ===== Pane Header ===== */
-.pane-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 3px 8px;
-  flex-shrink: 0;
-  border-bottom: 1px solid var(--border-color);
-  gap: 4px;
-  min-height: 30px;
-}
-.pane-header-left {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.pane-mode {
-  font-size: 11px;
-  font-weight: 600;
-  padding: 1px 6px;
-  border-radius: 3px;
-  background: var(--session-active);
-  color: var(--accent);
-}
-.pane-mode.crew {
-  background: rgba(59, 130, 246, 0.1);
-  color: #3b82f6;
-}
-.pane-context-usage {
-  font-size: 11px;
-  font-weight: 500;
-}
-.pane-context-usage.context-ok { color: var(--text-muted); }
-.pane-context-usage.context-warn { color: #f59e0b; }
-.pane-context-usage.context-danger { color: #ef4444; }
-
-.pane-header-actions {
-  display: flex;
-  gap: 2px;
-}
-.pane-header-right {
-  display: flex;
-  gap: 2px;
-}
-
-/* Pane-specific hover colors for close/add — applied on top of .header-action-btn */
-.ph-close-btn:hover {
-  color: #ef4444;
-}
-.ph-add-btn:hover {
-  color: var(--accent);
 }
 
 /* ===== Pane Empty State ===== */
@@ -349,82 +148,4 @@
   .split-screen-btn {
     display: none !important;
   }
-}
-
-/* ===== GlobalToolbar separator ===== */
-.gt-separator {
-  width: 1px;
-  height: 18px;
-  background: var(--border-color);
-  flex-shrink: 0;
-}
-
-/* ===== GlobalToolbar session selector ===== */
-.gt-session-selector {
-  position: relative;
-}
-.gt-session-dropdown {
-  position: absolute;
-  top: calc(100% + 8px);
-  left: 0;
-  min-width: 300px;
-  background: var(--bg-main);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  box-shadow: 0 4px 24px rgba(0,0,0,0.3);
-  z-index: 100;
-  padding: 8px;
-}
-.gt-session-dropdown-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-muted);
-  padding: 2px 4px 6px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-.gt-pane-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 0;
-}
-.gt-pane-label {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  flex-shrink: 0;
-  min-width: 48px;
-}
-.gt-pane-select {
-  flex: 1;
-  padding: 4px 8px;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  background: var(--bg-sidebar);
-  color: var(--text-primary);
-  font-size: 13px;
-  cursor: pointer;
-  min-width: 0;
-}
-.gt-pane-select:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
-/* ===== Pane empty close button ===== */
-.pane-empty-close {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  background: none;
-  border: none;
-  cursor: pointer;
-  color: var(--text-muted);
-  padding: 4px;
-  border-radius: 4px;
-}
-.pane-empty-close:hover {
-  background: var(--sidebar-hover);
-  color: #ef4444;
 }

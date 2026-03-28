@@ -1,11 +1,12 @@
 /**
  * SplitPane — one pane in split-screen mode.
- * Each pane looks like the normal ChatPage: ChatHeader + content area.
+ * Each pane is a complete interactive page: PaneSidebar + ChatHeader + content area.
  *
  * Key design: SplitPane does NOT modify global store.currentConversation.
  * Instead, it reads its own conversation from store.splitPanes and passes
  * per-conversation data via props (conversationId, sendFn, cancelFn) to children.
  */
+import PaneSidebar from './PaneSidebar.js';
 import ChatHeader from './ChatHeader.js';
 import MessageItem from './MessageItem.js';
 import AssistantTurn from './AssistantTurn.js';
@@ -14,66 +15,71 @@ import CrewChatView from './CrewChatView.js';
 
 export default {
   name: 'SplitPane',
-  components: { ChatHeader, MessageItem, AssistantTurn, ChatInput, CrewChatView },
+  components: { PaneSidebar, ChatHeader, MessageItem, AssistantTurn, ChatInput, CrewChatView },
   props: {
     paneId: { type: String, required: true },
     paneIndex: { type: Number, default: 0 },
     paneCount: { type: Number, default: 2 }
   },
   template: `
-    <div class="split-pane" :class="{ 'pane-empty': !conversationId }">
-      <!-- ChatHeader — same as normal mode, with conversationId prop -->
-      <ChatHeader
-        v-if="conversationId"
+    <div class="split-pane">
+      <!-- Pane sidebar (collapsible, defaults to collapsed) -->
+      <PaneSidebar
+        :paneId="paneId"
         :conversationId="conversationId"
-        :showClosePane="true"
         @close-pane="closePane"
       />
 
       <!-- Content area -->
-      <template v-if="conversationId">
-        <!-- Crew mode -->
-        <CrewChatView v-if="isCrew" :conversationId="conversationId" />
+      <div class="split-pane-content">
+        <!-- ChatHeader — same as normal mode, with conversationId prop -->
+        <ChatHeader
+          v-if="conversationId"
+          :conversationId="conversationId"
+          :showClosePane="true"
+          @close-pane="closePane"
+        />
 
-        <!-- Chat mode -->
-        <template v-else>
-          <!-- Inline message list (avoids modifying MessageList.js) -->
-          <main class="chat-container split-pane-messages" ref="containerRef">
-            <div class="messages">
-              <template v-for="item in turnGroups" :key="item.id">
-                <MessageItem v-if="item.type === 'user' || item.type === 'system' || item.type === 'error'" :message="item.message" />
-                <AssistantTurn v-else-if="item.type === 'assistant-turn'" :turn="item" />
-              </template>
-              <div v-if="showTypingDots" class="typing-indicator">
-                <span></span><span></span><span></span>
+        <template v-if="conversationId">
+          <!-- Crew mode -->
+          <CrewChatView v-if="isCrew" :conversationId="conversationId" />
+
+          <!-- Chat mode -->
+          <template v-else>
+            <!-- Inline message list (avoids modifying MessageList.js) -->
+            <main class="chat-container split-pane-messages" ref="containerRef">
+              <div class="messages">
+                <template v-for="item in turnGroups" :key="item.id">
+                  <MessageItem v-if="item.type === 'user' || item.type === 'system' || item.type === 'error'" :message="item.message" />
+                  <AssistantTurn v-else-if="item.type === 'assistant-turn'" :turn="item" />
+                </template>
+                <div v-if="showTypingDots" class="typing-indicator">
+                  <span></span><span></span><span></span>
+                </div>
               </div>
-            </div>
-          </main>
+            </main>
 
-          <!-- Chat input with per-pane send/cancel -->
-          <ChatInput
-            :sendFn="sendFn"
-            :cancelFn="cancelFn"
-            :showStop="isProcessing"
-          />
+            <!-- Chat input with per-pane send/cancel -->
+            <ChatInput
+              :sendFn="sendFn"
+              :cancelFn="cancelFn"
+              :showStop="isProcessing"
+            />
+          </template>
         </template>
-      </template>
 
-      <!-- Empty state: no conversation selected -->
-      <div v-else class="pane-empty-state">
-        <div class="pane-empty-icon">
-          <svg viewBox="0 0 48 48" width="48" height="48">
-            <rect width="48" height="48" rx="12" fill="var(--accent)" opacity="0.15"/>
-            <path d="M12 16l6 6-6 6" stroke="var(--accent)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-            <path d="M21 28h15" stroke="var(--accent)" stroke-width="3.5" stroke-linecap="round"/>
-          </svg>
+        <!-- Empty state: no conversation selected -->
+        <div v-else class="pane-empty-state">
+          <div class="pane-empty-icon">
+            <svg viewBox="0 0 48 48" width="48" height="48">
+              <rect width="48" height="48" rx="12" fill="var(--accent)" opacity="0.15"/>
+              <path d="M12 16l6 6-6 6" stroke="var(--accent)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+              <path d="M21 28h15" stroke="var(--accent)" stroke-width="3.5" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <p class="pane-empty-text">{{ $t('splitScreen.selectSession') }}</p>
+          <p class="pane-empty-hint">{{ $t('splitScreen.selectHint') }}</p>
         </div>
-        <p class="pane-empty-text">{{ $t('splitScreen.selectSession') }}</p>
-        <p class="pane-empty-hint">{{ $t('splitScreen.selectHint') }}</p>
-        <!-- Close button for empty pane -->
-        <button class="pane-empty-close" @click="closePane" :title="$t('splitScreen.closePane')">
-          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-        </button>
       </div>
     </div>
   `,
