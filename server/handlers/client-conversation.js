@@ -46,13 +46,16 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
           const agent = agents.get(dbSession.agent_id);
           if (!agent) continue;
           if (agent.conversations.has(dbSession.id)) continue;
+          // For sessions with user_id IS NULL: only restore if agent belongs to this user
+          // or skipAuth is enabled (prevents leaking orphan sessions to wrong users)
+          if (!dbSession.user_id && !CONFIG.skipAuth && agent.ownerId !== client.userId) continue;
           agent.conversations.set(dbSession.id, {
             id: dbSession.id,
             workDir: dbSession.work_dir,
             claudeSessionId: dbSession.claude_session_id,
             title: dbSession.title,
             createdAt: dbSession.created_at,
-            userId: dbSession.user_id,
+            userId: dbSession.user_id || client.userId,
             username: client.username,
             fromDb: true
           });

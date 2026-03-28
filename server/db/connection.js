@@ -276,7 +276,7 @@ export const stmts = {
   `),
 
   getActiveSessionsByUser: db.prepare(`
-    SELECT * FROM sessions WHERE user_id = ? AND is_active = 1 ORDER BY updated_at DESC
+    SELECT * FROM sessions WHERE (user_id = ? OR user_id IS NULL) AND is_active = 1 ORDER BY updated_at DESC
   `),
 
   deleteSession: db.prepare(`

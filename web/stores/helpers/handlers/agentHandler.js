@@ -117,10 +117,18 @@ export function handleAgentList(store, msg) {
         store.conversations.push(serverConv);
       }
     }
-    // Mark conversations not in server list as agent offline (instead of removing them)
+    // Mark conversations not in server list as agent offline —
+    // but only if their agent is truly offline (not just missing from conversation list).
+    // This prevents graying out sessions that the server hasn't restored from DB yet.
+    const onlineAgentIds = new Set(msg.agents.filter(a => a.online).map(a => a.id));
     for (const conv of store.conversations) {
       if (!allServerConvIds.has(conv.id)) {
-        conv.agentOnline = false;
+        // If the conv's agent is online, keep agentOnline true (server may just not have the session in memory)
+        if (conv.agentId && onlineAgentIds.has(conv.agentId)) {
+          conv.agentOnline = true;
+        } else {
+          conv.agentOnline = false;
+        }
       }
     }
 
