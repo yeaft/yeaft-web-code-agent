@@ -133,6 +133,66 @@ export function autoRestoreConversation(store, conversationId) {
     type: 'select_conversation',
     conversationId
   });
+
+  // ★ Restore splitPanes from localStorage (split-screen persistence)
+  restoreSplitPanes(store);
+}
+
+/**
+ * Restore splitPanes from localStorage.
+ * Filters out panes with conversationIds that no longer exist in store.conversations.
+ * If only 0-1 valid panes remain, exit split mode (empty array).
+ */
+function restoreSplitPanes(store) {
+  // Only restore once per session — skip if already in split mode
+  if (store.splitPanes.length > 0) return;
+
+  const raw = localStorage.getItem('splitPanes');
+  if (!raw) return;
+
+  let panes;
+  try {
+    panes = JSON.parse(raw);
+  } catch {
+    localStorage.removeItem('splitPanes');
+    return;
+  }
+
+  if (!Array.isArray(panes) || panes.length < 2) {
+    localStorage.removeItem('splitPanes');
+    return;
+  }
+
+  // Validate: each pane needs an id; conversationId must exist (or be null)
+  const convIds = new Set(store.conversations.map(c => c.id));
+  const validPanes = panes
+    .filter(p => p && typeof p.id === 'string')
+    .map(p => ({
+      id: p.id,
+      conversationId: (p.conversationId && convIds.has(p.conversationId)) ? p.conversationId : null
+    }));
+
+  if (validPanes.length < 2) {
+    localStorage.removeItem('splitPanes');
+    return;
+  }
+
+  store.splitPanes = validPanes;
+
+  // Ensure all pane conversationIds are in activeConversations + have messagesMap entries
+  for (const pane of validPanes) {
+    if (pane.conversationId) {
+      if (!store.activeConversations.includes(pane.conversationId)) {
+        store.activeConversations.push(pane.conversationId);
+      }
+      if (!store.messagesMap[pane.conversationId]) {
+        store.messagesMap[pane.conversationId] = [];
+        store.sendWsMessage({ type: 'sync_messages', conversationId: pane.conversationId, turns: 5 });
+      }
+    }
+  }
+
+  console.log('[SplitPanes] Restored', validPanes.length, 'panes from localStorage');
 }
 
 export function saveOpenSessions(store) {
@@ -154,6 +214,13 @@ export function saveOpenSessions(store) {
     }
   }
   store.lastUsedAgent = store.currentAgent;
+
+  // ★ Persist splitPanes to localStorage (split-screen state survives refresh)
+  if (store.splitPanes.length > 0) {
+    localStorage.setItem('splitPanes', JSON.stringify(store.splitPanes));
+  } else {
+    localStorage.removeItem('splitPanes');
+  }
 }
 
 export function getLastSession(store) {
@@ -164,6 +231,7 @@ export function clearLastSession(store) {
   localStorage.removeItem('lastUsedAgent');
   localStorage.removeItem('lastUsedSession');
   localStorage.removeItem('lastViewedConversation');
+  localStorage.removeItem('splitPanes');
   store.lastUsedAgent = null;
   store.lastUsedSession = null;
   store.lastViewedConversation = null;

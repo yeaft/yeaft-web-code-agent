@@ -35,6 +35,9 @@ import CrewFeaturePanel from './crew/CrewFeaturePanel.js';
 export default {
   name: 'CrewChatView',
   components: { CrewTurnRenderer, CrewRolePanel, CrewFeaturePanel },
+  props: {
+    conversationId: { type: String, default: null }
+  },
   template: `
     <div class="crew-chat-view">
       <div class="crew-workspace" :class="{ 'hide-roles': !store.crewPanelVisible.roles, 'hide-features': !store.crewPanelVisible.features, 'feature-expanded': !!expandedFeatureTaskId, 'mobile-panel-roles': store.crewMobilePanel === 'roles', 'mobile-panel-features': store.crewMobilePanel === 'features' }">
@@ -289,6 +292,9 @@ export default {
   },
 
   computed: {
+    effectiveConvId() {
+      return this.conversationId || this.store.currentConversation;
+    },
     isWaitingResponse() {
       const messages = this.store.currentCrewMessages;
       if (!messages || messages.length === 0) return false;
@@ -437,7 +443,7 @@ export default {
     kanbanFeatureCount(val) {
       this.store.crewInProgressCount = val;
     },
-    'store.currentConversation'(newId, oldId) {
+    'effectiveConvId'(newId, oldId) {
       this.store.crewMobilePanel = null;
       if (oldId) this.input.saveDraft(oldId);
       this.input.restoreDraft(newId);
@@ -450,7 +456,7 @@ export default {
       });
     },
     'input.inputText.value'(val) {
-      const convId = this.store.currentConversation;
+      const convId = this.effectiveConvId;
       if (convId) {
         if (val) {
           this.store.inputDrafts[convId] = val;
@@ -580,7 +586,7 @@ export default {
     document.addEventListener('click', closeMenus);
     this._cleanupClick = closeMenus;
     this._elapsedTimer = setInterval(() => { this.nowTick = Date.now(); }, 1000);
-    const convId = this.store.currentConversation;
+    const convId = this.effectiveConvId;
     this._draftConvId = convId;
     this.input.restoreDraft(convId);
     this.$nextTick(() => this.scroll.scrollToBottom());
@@ -593,7 +599,7 @@ export default {
     if (this._elapsedTimer) {
       clearInterval(this._elapsedTimer);
     }
-    const convId = this._draftConvId || this.store.currentConversation;
+    const convId = this._draftConvId || this.effectiveConvId;
     this.input.saveDraft(convId);
   }
 };
