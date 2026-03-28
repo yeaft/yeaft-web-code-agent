@@ -40,21 +40,21 @@ describe('refresh button — business logic', () => {
   });
 
   it('refreshSession clears messages for non-Crew before sending', () => {
-    const setupSection = headerSource.split('setup()')[1] || '';
+    const setupSection = headerSource.split(/setup\s*\([^)]*\)/)[1] || '';
     const fnStart = setupSection.indexOf('refreshSession');
     const fnBody = setupSection.substring(fnStart, fnStart + 800);
-    expect(fnBody).toContain('messagesMap[store.currentConversation] = []');
+    expect(fnBody).toContain('messagesMap[effectiveConvId.value] = []');
   });
 
   it('refreshSession sets refreshingSession to true', () => {
-    const setupSection = headerSource.split('setup()')[1] || '';
+    const setupSection = headerSource.split(/setup\s*\([^)]*\)/)[1] || '';
     const fnStart = setupSection.indexOf('refreshSession');
     const fnBody = setupSection.substring(fnStart, fnStart + 300);
     expect(fnBody).toContain('store.refreshingSession = true');
   });
 
   it('refreshSession sends sync_messages with turns: 5', () => {
-    const setupSection = headerSource.split('setup()')[1] || '';
+    const setupSection = headerSource.split(/setup\s*\([^)]*\)/)[1] || '';
     const fnStart = setupSection.indexOf('refreshSession');
     const fnBody = setupSection.substring(fnStart, fnStart + 800);
     expect(fnBody).toContain("type: 'sync_messages'");
@@ -62,18 +62,18 @@ describe('refresh button — business logic', () => {
   });
 
   it('refreshSession sends conversationId in sync_messages', () => {
-    const setupSection = headerSource.split('setup()')[1] || '';
+    const setupSection = headerSource.split(/setup\s*\([^)]*\)/)[1] || '';
     const fnStart = setupSection.indexOf('refreshSession');
     const fnBody = setupSection.substring(fnStart, fnStart + 800);
-    expect(fnBody).toContain('conversationId: store.currentConversation');
+    expect(fnBody).toContain('conversationId: effectiveConvId.value');
   });
 
   it('refreshSession guards against double-refresh and missing conversation', () => {
-    const setupSection = headerSource.split('setup()')[1] || '';
+    const setupSection = headerSource.split(/setup\s*\([^)]*\)/)[1] || '';
     const fnStart = setupSection.indexOf('refreshSession');
     const fnBody = setupSection.substring(fnStart, fnStart + 300);
     expect(fnBody).toContain('refreshingSession');
-    expect(fnBody).toContain('currentConversation');
+    expect(fnBody).toContain('effectiveConvId');
   });
 });
 
@@ -81,22 +81,22 @@ describe('refresh button — business logic', () => {
 // 2. canRefresh computed
 // =====================================================================
 describe('canRefresh computed', () => {
-  it('canRefresh checks currentConversation', () => {
-    const setupSection = headerSource.split('setup()')[1] || '';
+  it('canRefresh checks currentConversation or effectiveConvId', () => {
+    const setupSection = headerSource.split(/setup\s*\([^)]*\)/)[1] || '';
     const fnStart = setupSection.indexOf('canRefresh');
     const fnBody = setupSection.substring(fnStart, fnStart + 300);
-    expect(fnBody).toContain('currentConversation');
+    expect(fnBody).toContain('effectiveConvId');
   });
 
   it('canRefresh checks processingConversations', () => {
-    const setupSection = headerSource.split('setup()')[1] || '';
+    const setupSection = headerSource.split(/setup\s*\([^)]*\)/)[1] || '';
     const fnStart = setupSection.indexOf('canRefresh');
     const fnBody = setupSection.substring(fnStart, fnStart + 300);
     expect(fnBody).toContain('processingConversations');
   });
 
   it('canRefresh checks refreshingSession', () => {
-    const setupSection = headerSource.split('setup()')[1] || '';
+    const setupSection = headerSource.split(/setup\s*\([^)]*\)/)[1] || '';
     const fnStart = setupSection.indexOf('canRefresh');
     const fnBody = setupSection.substring(fnStart, fnStart + 300);
     expect(fnBody).toContain('refreshingSession');
@@ -125,20 +125,20 @@ describe('clear button — state management', () => {
   });
 
   it('isClearing computed checks clearStatus.status === clearing', () => {
-    const setupSection = headerSource.split('setup()')[1] || '';
+    const setupSection = headerSource.split(/setup\s*\([^)]*\)/)[1] || '';
     expect(setupSection).toContain("clearStatus?.status === 'clearing'");
   });
 
-  it('isClearing checks conversationId matches currentConversation', () => {
-    const setupSection = headerSource.split('setup()')[1] || '';
+  it('isClearing checks conversationId matches effectiveConvId', () => {
+    const setupSection = headerSource.split(/setup\s*\([^)]*\)/)[1] || '';
     const fnStart = setupSection.indexOf('isClearing');
     const fnBody = setupSection.substring(fnStart, fnStart + 200);
     expect(fnBody).toContain('clearStatus?.conversationId');
-    expect(fnBody).toContain('currentConversation');
+    expect(fnBody).toContain('effectiveConvId');
   });
 
   it('clearMessages sets clearStatus before sending /clear', () => {
-    const setupSection = headerSource.split('setup()')[1] || '';
+    const setupSection = headerSource.split(/setup\s*\([^)]*\)/)[1] || '';
     const clearStart = setupSection.indexOf('clearMessages');
     const clearBody = setupSection.substring(clearStart, clearStart + 500);
     expect(clearBody).toContain('store.clearStatus');
@@ -146,7 +146,7 @@ describe('clear button — state management', () => {
   });
 
   it('clearMessages checks isClearing before proceeding', () => {
-    const setupSection = headerSource.split('setup()')[1] || '';
+    const setupSection = headerSource.split(/setup\s*\([^)]*\)/)[1] || '';
     const clearStart = setupSection.indexOf('clearMessages');
     const clearBody = setupSection.substring(clearStart, clearStart + 300);
     expect(clearBody).toContain('isClearing');
@@ -158,21 +158,21 @@ describe('clear button — state management', () => {
 // =====================================================================
 describe('unified status banner', () => {
   it('showStatusBanner checks clearStatus', () => {
-    const setupSection = headerSource.split('setup()')[1] || '';
+    const setupSection = headerSource.split(/setup\s*\([^)]*\)/)[1] || '';
     const fnStart = setupSection.indexOf('showStatusBanner');
     const fnBody = setupSection.substring(fnStart, fnStart + 300);
     expect(fnBody).toContain('clearStatus');
   });
 
   it('showStatusBanner also checks compactStatus', () => {
-    const setupSection = headerSource.split('setup()')[1] || '';
+    const setupSection = headerSource.split(/setup\s*\([^)]*\)/)[1] || '';
     const fnStart = setupSection.indexOf('showStatusBanner');
     const fnBody = setupSection.substring(fnStart, fnStart + 300);
     expect(fnBody).toContain('compactStatus');
   });
 
   it('statusBannerClass distinguishes clearing vs compacting', () => {
-    const setupSection = headerSource.split('setup()')[1] || '';
+    const setupSection = headerSource.split(/setup\s*\([^)]*\)/)[1] || '';
     const fnStart = setupSection.indexOf('statusBannerClass');
     const fnBody = setupSection.substring(fnStart, fnStart + 400);
     expect(fnBody).toContain("'clearing'");

@@ -24,13 +24,13 @@ beforeAll(() => {
 // =====================================================================
 describe('compact button', () => {
   it('compactContext function sends /compact via sendMessage', () => {
-    const setupSection = headerSource.split('setup()')[1] || '';
+    const setupSection = headerSource.split(/setup\s*\([^)]*\)/)[1] || '';
     const fnSection = setupSection.split('compactContext')[1]?.split('};')[0] || '';
     expect(fnSection).toContain("sendMessage('/compact')");
   });
 
   it('compactContext checks isCompacting before sending', () => {
-    const setupSection = headerSource.split('setup()')[1] || '';
+    const setupSection = headerSource.split(/setup\s*\([^)]*\)/)[1] || '';
     const fnSection = setupSection.split('compactContext')[1]?.split('};')[0] || '';
     expect(fnSection).toContain('isCompacting');
   });
@@ -45,13 +45,13 @@ describe('compact button', () => {
 // =====================================================================
 describe('clear button', () => {
   it('clearMessages uses confirm dialog before sending', () => {
-    const setupSection = headerSource.split('setup()')[1] || '';
+    const setupSection = headerSource.split(/setup\s*\([^)]*\)/)[1] || '';
     const fnSection = setupSection.split('clearMessages')[1]?.split('};')[0] || '';
     expect(fnSection).toContain('confirm(');
   });
 
   it('clearMessages sends /clear via sendMessage', () => {
-    const setupSection = headerSource.split('setup()')[1] || '';
+    const setupSection = headerSource.split(/setup\s*\([^)]*\)/)[1] || '';
     const clearStart = setupSection.indexOf('clearMessages');
     const clearBody = setupSection.substring(clearStart, clearStart + 500);
     expect(clearBody).toContain("sendMessage('/clear')");
@@ -63,15 +63,15 @@ describe('clear button', () => {
 // =====================================================================
 describe('isCompacting computed', () => {
   it('isCompacting checks compactStatus status === compacting', () => {
-    const setupSection = headerSource.split('setup()')[1] || '';
+    const setupSection = headerSource.split(/setup\s*\([^)]*\)/)[1] || '';
     expect(setupSection).toContain("compactStatus?.status === 'compacting'");
   });
 
-  it('isCompacting checks conversationId matches currentConversation', () => {
-    const setupSection = headerSource.split('setup()')[1] || '';
+  it('isCompacting checks conversationId matches effectiveConvId', () => {
+    const setupSection = headerSource.split(/setup\s*\([^)]*\)/)[1] || '';
     const isCompactingSection = setupSection.split('isCompacting')[1]?.split('});')[0] || '';
     expect(isCompactingSection).toContain('conversationId');
-    expect(isCompactingSection).toContain('currentConversation');
+    expect(isCompactingSection).toContain('effectiveConvId');
   });
 });
 
@@ -80,6 +80,7 @@ describe('isCompacting computed', () => {
 // =====================================================================
 describe('buttons visibility — Chat mode only', () => {
   it('header-right div excludes Crew conversations', () => {
-    expect(headerSource).toContain('!store.currentConversationIsCrew');
+    // ChatHeader now uses local isCrew computed (instead of store.currentConversationIsCrew)
+    expect(headerSource).toContain('!isCrew');
   });
 });
