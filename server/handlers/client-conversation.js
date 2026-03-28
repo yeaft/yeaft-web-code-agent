@@ -39,6 +39,25 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
           });
         }
       }
+      // Restore all active sessions for this user from DB (cross-client sync)
+      if (client.userId) {
+        const activeSessions = sessionDb.getActiveByUser(client.userId);
+        for (const dbSession of activeSessions) {
+          const agent = agents.get(dbSession.agent_id);
+          if (!agent) continue;
+          if (agent.conversations.has(dbSession.id)) continue;
+          agent.conversations.set(dbSession.id, {
+            id: dbSession.id,
+            workDir: dbSession.work_dir,
+            claudeSessionId: dbSession.claude_session_id,
+            title: dbSession.title,
+            createdAt: dbSession.created_at,
+            userId: dbSession.user_id,
+            username: client.username,
+            fromDb: true
+          });
+        }
+      }
       await broadcastAgentList();
       break;
 

@@ -94,6 +94,7 @@ export default {
   'chat.session.creating': '正在创建会话...',
   'chat.session.loadingHistory': '正在加载会话历史...',
   'chat.session.closed': '会话已关闭',
+  'chat.session.agentOffline': 'Agent 已离线，该会话将在 Agent 重新上线后恢复。',
   'chat.execution.cancelled': '执行已取消',
 
   'chat.sidebar.expand': '展开菜单',

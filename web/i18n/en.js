@@ -94,6 +94,7 @@ export default {
   'chat.session.creating': 'Creating conversation...',
   'chat.session.loadingHistory': 'Loading conversation history...',
   'chat.session.closed': 'Conversation closed',
+  'chat.session.agentOffline': 'Agent is offline. This session will be available when the agent reconnects.',
   'chat.execution.cancelled': 'Execution cancelled',
 
   'chat.sidebar.expand': 'Expand menu',

@@ -275,6 +275,10 @@ export const stmts = {
     SELECT * FROM sessions WHERE is_active = 1 ORDER BY updated_at DESC
   `),
 
+  getActiveSessionsByUser: db.prepare(`
+    SELECT * FROM sessions WHERE user_id = ? AND is_active = 1 ORDER BY updated_at DESC
+  `),
+
   deleteSession: db.prepare(`
     DELETE FROM sessions WHERE id = ?
   `),

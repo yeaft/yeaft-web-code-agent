@@ -47,6 +47,10 @@ export const sessionDb = {
     return stmts.getActiveSessions.all();
   },
 
+  getActiveByUser(userId) {
+    return stmts.getActiveSessionsByUser.all(userId);
+  },
+
   delete(id) {
     stmts.deleteSession.run(id);
   },

@@ -149,8 +149,8 @@ export default {
                 v-for="conv in normalConversations"
                 :key="conv.id"
                 class="session-item"
-                :class="{ active: conv.id === store.currentConversation, processing: store.isConversationProcessing(conv.id) }"
-                @click="selectConversation(conv.id, conv.agentId)"
+                :class="{ active: conv.id === store.currentConversation, processing: store.isConversationProcessing(conv.id), 'agent-offline': conv.agentOnline === false }"
+                @click="onSessionClick(conv)"
               >
                 <div class="session-item-header">
                   <div class="title" :title="getConversationFullTitle(conv)">
@@ -158,7 +158,7 @@ export default {
                     {{ getConversationTitle(conv) }}
                   </div>
                   <span class="session-time">{{ getConversationTime(conv) }}</span>
-                  <button class="session-delete-btn" @click.stop="deleteConversation(conv.id, conv.agentId)" :title="$t('chat.sidebar.closeConv')">
+                  <button class="session-delete-btn" @click.stop="closeSession(conv.id, conv.agentId)" :title="$t('chat.sidebar.closeConv')">
                     <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
                   </button>
                 </div>
@@ -191,8 +191,8 @@ export default {
                 v-for="conv in crewConversations"
                 :key="conv.id"
                 class="session-item session-item-crew"
-                :class="{ active: conv.id === store.currentConversation, processing: store.isConversationProcessing(conv.id) }"
-                @click="editingCrewId !== conv.id && selectConversation(conv.id, conv.agentId)"
+                :class="{ active: conv.id === store.currentConversation, processing: store.isConversationProcessing(conv.id), 'agent-offline': conv.agentOnline === false }"
+                @click="editingCrewId !== conv.id && onSessionClick(conv)"
               >
                 <div class="session-item-header">
                   <div class="title" :title="getConversationFullTitle(conv)">
@@ -215,7 +215,7 @@ export default {
                     >{{ getCrewTitle(conv) }}</span>
                   </div>
                   <span class="session-time">{{ getConversationTime(conv) }}</span>
-                  <button class="session-delete-btn" @click.stop="deleteConversation(conv.id, conv.agentId)" :title="$t('chat.sidebar.closeConv')">
+                  <button class="session-delete-btn" @click.stop="closeSession(conv.id, conv.agentId)" :title="$t('chat.sidebar.closeConv')">
                     <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
                   </button>
                 </div>
@@ -730,6 +730,16 @@ export default {
     selectConversation(conversationId, agentId) {
       this.store.selectConversation(conversationId, agentId);
       this.showMobileSidebar = false;
+    },
+    onSessionClick(conv) {
+      if (conv.agentOnline === false) {
+        this.store.addMessage({ type: 'system', content: this.$t('chat.session.agentOffline') });
+        return;
+      }
+      this.selectConversation(conv.id, conv.agentId);
+    },
+    closeSession(conversationId, agentId) {
+      this.store.closeSession(conversationId, agentId);
     },
     deleteConversation(conversationId, agentId) {
       const conv = this.store.conversations.find(c => c.id === conversationId);

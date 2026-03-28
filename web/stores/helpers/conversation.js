@@ -184,6 +184,57 @@ export function toggleConversationMcp(store, serverName, enabled) {
   updateConversationSettings(store, convId, { disallowedTools: newDisallowed });
 }
 
+export function closeSession(store, conversationId, agentId) {
+  const conv = store.conversations.find(c => c.id === conversationId);
+
+  // Crew sessions: stop all roles + clean crew data, but do NOT send delete_crew_session
+  // (crew data preserved in DB for future recovery)
+  if (conv?.type === 'crew' && store.crewSessions[conversationId]) {
+    store.sendWsMessage({
+      type: 'crew_control',
+      sessionId: conversationId,
+      action: 'stop_all',
+      agentId
+    });
+    delete store.crewSessions[conversationId];
+    delete store.crewMessagesMap[conversationId];
+    delete store.crewOlderMessages[conversationId];
+    delete store.crewStatuses[conversationId];
+  }
+
+  // Optimistically remove from local conversations list
+  store.conversations = store.conversations.filter(c => c.id !== conversationId);
+
+  // Clean up caches
+  delete store.messagesCache[conversationId];
+  delete store.processingConversations[conversationId];
+  stopProcessingWatchdog(store, conversationId);
+  delete store.executionStatusMap[conversationId];
+
+  if (store.currentConversation === conversationId) {
+    store.currentConversation = null;
+    store.messages = [];
+    // Clear lastViewedConversation so refresh doesn't restore this session
+    localStorage.removeItem('lastViewedConversation');
+    store.lastViewedConversation = null;
+  }
+
+  // Send delete_conversation to server (reuses existing handler which:
+  // 1. removes from agent.conversations Map
+  // 2. sets is_active=0 in DB (data preserved)
+  // 3. broadcasts updated agent list
+  // 4. forwards to agent for resource cleanup (terminals, processes))
+  if (agentId && agentId !== store.currentAgent) {
+    store.sendWsMessage({ type: 'select_agent', agentId, silent: true });
+    store.sendWsMessage({ type: 'delete_conversation', conversationId });
+    store.sendWsMessage({ type: 'select_agent', agentId: store.currentAgent, silent: true });
+  } else {
+    store.sendWsMessage({ type: 'delete_conversation', conversationId });
+  }
+
+  store.saveOpenSessions();
+}
+
 export function deleteConversation(store, conversationId, agentId) {
   // 清理 crew 数据（不管 server 是否响应）
   const conv = store.conversations.find(c => c.id === conversationId);
