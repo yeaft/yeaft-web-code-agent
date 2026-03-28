@@ -100,6 +100,7 @@ export function handleAgentList(store, msg) {
     for (const serverConv of allServerConvs) {
       // 跳过已删除的 crew session，防止 conversation_list 同步恢复
       if (store._deletedCrewSessionIds?.has(serverConv.id)) continue;
+      serverConv.agentOnline = true;
       const existing = store.conversations.find(c => c.id === serverConv.id);
       if (existing) {
         existing.claudeSessionId = serverConv.claudeSessionId || existing.claudeSessionId;
@@ -108,6 +109,7 @@ export function handleAgentList(store, msg) {
         existing.username = serverConv.username;
         existing.agentId = serverConv.agentId;
         existing.agentName = serverConv.agentName;
+        existing.agentOnline = true;
         if (serverConv.type) existing.type = serverConv.type;
         // Preserve crew session name from server; keep existing if server has none
         if (serverConv.name !== undefined) existing.name = serverConv.name;
@@ -115,7 +117,12 @@ export function handleAgentList(store, msg) {
         store.conversations.push(serverConv);
       }
     }
-    store.conversations = store.conversations.filter(c => allServerConvIds.has(c.id));
+    // Mark conversations not in server list as agent offline (instead of removing them)
+    for (const conv of store.conversations) {
+      if (!allServerConvIds.has(conv.id)) {
+        conv.agentOnline = false;
+      }
+    }
 
     for (const serverConv of allServerConvs) {
       const isStaleCrewProcessing = serverConv.processing && serverConv.type === 'crew'

@@ -134,7 +134,7 @@ describe('inline rename CSS styles', () => {
 // =====================================================================
 describe('session click blocked during editing', () => {
   it('session item click is conditional on editingCrewId', () => {
-    expect(chatPageSource).toContain('editingCrewId !== conv.id && selectConversation');
+    expect(chatPageSource).toContain('editingCrewId !== conv.id && onSessionClick');
   });
 });
 

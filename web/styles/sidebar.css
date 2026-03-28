@@ -494,6 +494,14 @@
   color: var(--text-secondary);
 }
 
+.session-item.agent-offline {
+  opacity: 0.45;
+}
+
+.session-item.agent-offline:hover {
+  opacity: 0.6;
+}
+
 .processing-dot {
   display: inline-block;
   width: 8px;

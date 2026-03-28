@@ -355,6 +355,7 @@ export const useChatStore = defineStore('chat', {
     updateConversationSettings(conversationId, settings) { convHelpers.updateConversationSettings(this, conversationId, settings); },
     toggleConversationMcp(serverName, enabled) { convHelpers.toggleConversationMcp(this, serverName, enabled); },
     deleteConversation(conversationId, agentId) { convHelpers.deleteConversation(this, conversationId, agentId); },
+    closeSession(conversationId, agentId) { convHelpers.closeSession(this, conversationId, agentId); },
     sendMessage(text, attachments = [], options = {}) { convHelpers.sendMessage(this, text, attachments, options); },
     cancelExecution() { convHelpers.cancelExecution(this); },
     answerUserQuestion(requestId, answers) { convHelpers.answerUserQuestion(this, requestId, answers); },
