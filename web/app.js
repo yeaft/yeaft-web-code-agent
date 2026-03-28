@@ -5,6 +5,8 @@ import zhCN from './i18n/zh-CN.js';
 import en from './i18n/en.js';
 import LoginPage from './components/LoginPage.js';
 import ChatPage from './components/ChatPage.js';
+import GlobalToolbar from './components/GlobalToolbar.js';
+import SplitPane from './components/SplitPane.js';
 import ToolLine from './components/ToolLine.js';
 
 // Make stores globally available for components
@@ -15,10 +17,27 @@ window.Pinia = {
 };
 
 const App = {
-  components: { LoginPage, ChatPage },
+  components: { LoginPage, ChatPage, GlobalToolbar, SplitPane },
   template: `
     <LoginPage v-if="!authStore.isAuthenticated" />
-    <ChatPage v-else />
+    <template v-else>
+      <!-- Single-screen mode: unchanged ChatPage -->
+      <ChatPage v-if="!chatStore.isSplitMode" />
+
+      <!-- Split-screen mode: GlobalToolbar + SplitPane ×N -->
+      <div v-else class="split-screen-layout">
+        <GlobalToolbar />
+        <div class="split-panes-container" :class="'panes-' + chatStore.splitPanes.length">
+          <SplitPane
+            v-for="(pane, idx) in chatStore.splitPanes"
+            :key="pane.id"
+            :paneId="pane.id"
+            :paneIndex="idx"
+            :paneCount="chatStore.splitPanes.length"
+          />
+        </div>
+      </div>
+    </template>
   `,
   setup() {
     const chatStore = useChatStore();

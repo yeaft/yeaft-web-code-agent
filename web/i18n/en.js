@@ -621,4 +621,15 @@ export default {
   'subAgentPanel.waitingMessages': 'Waiting for messages...',
   'subAgentPanel.empty': 'No sub-agents',
   'subAgentPanel.emptyHint': 'Sub-agents will appear here when Claude delegates tasks',
+
+  // ============ Split Screen ============
+  'splitScreen.split': 'Split screen',
+  'splitScreen.closePane': 'Close pane',
+  'splitScreen.addPane': 'Add pane',
+  'splitScreen.merge': 'Merge to single screen',
+  'splitScreen.selectSession': 'Select session...',
+  'splitScreen.selectHint': 'Choose a session from the dropdown above',
+  'splitScreen.newChat': 'New Chat',
+  'splitScreen.newCrew': 'New Crew',
+  'splitScreen.noSessions': 'No sessions',
 };

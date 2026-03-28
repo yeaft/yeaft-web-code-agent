@@ -621,4 +621,15 @@ export default {
   'subAgentPanel.waitingMessages': '等待消息...',
   'subAgentPanel.empty': '暂无子代理',
   'subAgentPanel.emptyHint': '当 Claude 委派任务时，子代理会在这里显示',
+
+  // ============ 分屏 (Split Screen) ============
+  'splitScreen.split': '分屏',
+  'splitScreen.closePane': '关闭此面板',
+  'splitScreen.addPane': '添加面板',
+  'splitScreen.merge': '合并为单屏',
+  'splitScreen.selectSession': '选择会话...',
+  'splitScreen.selectHint': '从顶部下拉菜单选择一个会话',
+  'splitScreen.newChat': '新建 Chat',
+  'splitScreen.newCrew': '新建 Crew',
+  'splitScreen.noSessions': '暂无会话',
 };
