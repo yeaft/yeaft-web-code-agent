@@ -25,33 +25,41 @@ export default {
       <div class="session-selector-dropdown" v-if="isOpen" @click.stop>
         <!-- Chat sessions -->
         <div class="ss-group" v-if="chatConversations.length > 0">
-          <div class="ss-group-title">Chat</div>
+          <div class="session-group-header ss-group-header-compact">
+            <span class="session-group-icon">💬</span>
+            Chat
+          </div>
           <div
             v-for="conv in chatConversations"
             :key="conv.id"
-            class="ss-option"
+            class="session-item ss-session-item"
             :class="{ active: conv.id === conversationId, 'in-other-pane': isInOtherPane(conv.id) }"
             @click="selectConv(conv.id)"
           >
-            <span class="ss-option-icon">{{ conv.processing ? '...' : '💬' }}</span>
-            <span class="ss-option-name">{{ getConvTitle(conv) }}</span>
-            <span class="ss-option-badge" v-if="isInOtherPane(conv.id)">{{ getPaneBadge(conv.id) }}</span>
+            <div class="session-item-header">
+              <span class="title">{{ getConvTitle(conv) }}</span>
+              <span class="ss-option-badge" v-if="isInOtherPane(conv.id)">{{ getPaneBadge(conv.id) }}</span>
+            </div>
           </div>
         </div>
 
         <!-- Crew sessions -->
         <div class="ss-group" v-if="crewConversations.length > 0">
-          <div class="ss-group-title">Crew</div>
+          <div class="session-group-header ss-group-header-compact">
+            <span class="session-group-icon">👥</span>
+            Crew
+          </div>
           <div
             v-for="conv in crewConversations"
             :key="conv.id"
-            class="ss-option"
+            class="session-item ss-session-item"
             :class="{ active: conv.id === conversationId, 'in-other-pane': isInOtherPane(conv.id) }"
             @click="selectConv(conv.id)"
           >
-            <span class="ss-option-icon">👥</span>
-            <span class="ss-option-name">{{ conv.name || 'Crew Session' }}</span>
-            <span class="ss-option-badge" v-if="isInOtherPane(conv.id)">{{ getPaneBadge(conv.id) }}</span>
+            <div class="session-item-header">
+              <span class="title">{{ conv.name || 'Crew Session' }}</span>
+              <span class="ss-option-badge" v-if="isInOtherPane(conv.id)">{{ getPaneBadge(conv.id) }}</span>
+            </div>
           </div>
         </div>
 

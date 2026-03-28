@@ -15,8 +15,8 @@
   height: 36px;
   min-height: 36px;
   padding: 0 12px;
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
+  background: var(--bg-sidebar);
+  border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
   z-index: 50;
 }
@@ -39,7 +39,7 @@
   color: var(--text-secondary);
 }
 .gt-agent-status:hover {
-  background: var(--hover);
+  background: var(--sidebar-hover);
 }
 .gt-agent-status .status-dot {
   width: 8px;
@@ -48,7 +48,7 @@
   background: var(--text-muted);
 }
 .gt-agent-status .status-dot.online {
-  background: #22c55e;
+  background: var(--success, #22c55e);
 }
 .gt-agent-label {
   font-size: 13px;
@@ -60,10 +60,10 @@
   top: 100%;
   left: 0;
   min-width: 200px;
-  background: var(--bg-primary);
-  border: 1px solid var(--border);
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
   border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  box-shadow: 0 4px 24px rgba(0,0,0,0.3);
   z-index: 100;
   padding: 4px 0;
 }
@@ -94,25 +94,7 @@
   gap: 4px;
 }
 
-.gt-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  background: none;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  cursor: pointer;
-  color: var(--text-secondary);
-  transition: all 0.15s;
-}
-.gt-btn:hover {
-  background: var(--hover);
-  border-color: var(--border);
-  color: var(--text-primary);
-}
+/* gt-btn-add/merge: color overrides for sidebar-icon-btn reuse */
 .gt-btn-add {
   color: var(--accent);
 }
@@ -140,14 +122,14 @@
   position: relative;
 }
 .split-pane + .split-pane {
-  border-left: 1px solid var(--border);
+  border-left: 1px solid var(--border-color);
 }
 
 /* ===== Session Selector ===== */
 .session-selector {
   position: relative;
   flex-shrink: 0;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-color);
 }
 .session-selector-trigger {
   display: flex;
@@ -155,7 +137,7 @@
   gap: 6px;
   width: 100%;
   padding: 6px 12px;
-  background: var(--bg-secondary);
+  background: var(--bg-sidebar);
   border: none;
   cursor: pointer;
   font-size: 13px;
@@ -163,7 +145,7 @@
   text-align: left;
 }
 .session-selector-trigger:hover {
-  background: var(--hover);
+  background: var(--sidebar-hover);
 }
 .ss-icon { font-size: 14px; }
 .ss-name {
@@ -191,52 +173,32 @@
   right: 0;
   max-height: 60vh;
   overflow-y: auto;
-  background: var(--bg-primary);
-  border: 1px solid var(--border);
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
   border-radius: 0 0 8px 8px;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+  box-shadow: 0 4px 24px rgba(0,0,0,0.3);
   z-index: 100;
 }
 .ss-group {
   padding: 4px 0;
 }
 .ss-group + .ss-group {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border-color);
 }
-.ss-group-title {
-  padding: 4px 12px 2px;
+/* Compact group header inside dropdown — reuses .session-group-header from sidebar */
+.ss-group-header-compact {
+  padding: 4px 8px 2px 12px;
+  margin: 0;
   font-size: 11px;
-  font-weight: 600;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
 }
-.ss-option {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+/* Compact session items inside dropdown — reuses .session-item from sidebar */
+.ss-session-item {
   padding: 6px 12px;
-  cursor: pointer;
-  font-size: 13px;
-  color: var(--text-primary);
-  transition: background 0.1s;
+  margin-bottom: 0;
+  border-radius: 0;
 }
-.ss-option:hover {
-  background: var(--hover);
-}
-.ss-option.active {
-  background: var(--accent-bg, rgba(217, 119, 6, 0.1));
-  color: var(--accent);
-}
-.ss-option.in-other-pane {
+.ss-session-item.in-other-pane {
   opacity: 0.6;
-}
-.ss-option-icon { font-size: 14px; }
-.ss-option-name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .ss-option-badge {
   font-size: 10px;
@@ -244,6 +206,7 @@
   border-radius: 3px;
   background: var(--accent);
   color: white;
+  flex-shrink: 0;
 }
 .ss-empty {
   padding: 16px 12px;
@@ -253,7 +216,7 @@
 }
 .ss-actions {
   padding: 4px 8px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border-color);
 }
 .ss-action-btn {
   display: flex;
@@ -269,7 +232,7 @@
   color: var(--accent);
 }
 .ss-action-btn:hover {
-  background: var(--hover);
+  background: var(--sidebar-hover);
 }
 .ss-action-btn:disabled {
   opacity: 0.4;
@@ -283,7 +246,7 @@
   justify-content: space-between;
   padding: 3px 8px;
   flex-shrink: 0;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-color);
   gap: 4px;
   min-height: 30px;
 }
@@ -297,7 +260,7 @@
   font-weight: 600;
   padding: 1px 6px;
   border-radius: 3px;
-  background: var(--accent-bg, rgba(217, 119, 6, 0.1));
+  background: var(--session-active);
   color: var(--accent);
 }
 .pane-mode.crew {
@@ -321,26 +284,7 @@
   gap: 2px;
 }
 
-.ph-action-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  background: none;
-  border: 1px solid transparent;
-  border-radius: 3px;
-  cursor: pointer;
-  color: var(--text-secondary);
-  font-size: 12px;
-  transition: all 0.15s;
-}
-.ph-action-btn:hover {
-  background: var(--hover);
-  border-color: var(--border);
-  color: var(--text-primary);
-}
+/* Pane-specific hover colors for close/add — applied on top of .header-action-btn */
 .ph-close-btn:hover {
   color: #ef4444;
 }
