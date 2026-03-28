@@ -265,32 +265,15 @@ export default {
       store.closeSession(conversationId, agentId);
     }
 
-    // New Chat: create conversation and assign to this pane
+    // New Chat: create conversation — handleConversationCreated in the store
+    // auto-assigns to the first empty pane in split mode.
     function newChat() {
       if (onlineAgentCount.value === 0) return;
       store.createConversation();
-      // After creation, the newest conversation will be the last added.
-      // We need to assign it to this pane once it appears.
-      Vue.nextTick(() => {
-        const newest = store.conversations
-          .filter(c => c.type !== 'crew')
-          .sort((a, b) => (b.lastMessageAt || b.createdAt || 0) - (a.lastMessageAt || a.createdAt || 0))[0];
-        if (newest) {
-          store.setPaneConversation(props.paneId, newest.id);
-        }
-      });
     }
 
     function newCrewSession() {
       store.enterCrewMode();
-      Vue.nextTick(() => {
-        const newest = store.conversations
-          .filter(c => c.type === 'crew')
-          .sort((a, b) => (b.lastMessageAt || b.createdAt || 0) - (a.lastMessageAt || a.createdAt || 0))[0];
-        if (newest) {
-          store.setPaneConversation(props.paneId, newest.id);
-        }
-      });
     }
 
     // Close dropdowns on outside click

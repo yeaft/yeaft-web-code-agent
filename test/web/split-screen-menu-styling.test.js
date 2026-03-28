@@ -288,10 +288,17 @@ describe('PaneSidebar new session auto-assigns to pane', () => {
     expect(paneSidebarJs).toContain('store.enterCrewMode()');
   });
 
-  it('should assign newest chat conversation to pane via setPaneConversation after creation', () => {
-    // After createConversation, nextTick → find newest → setPaneConversation
-    expect(paneSidebarJs).toContain('Vue.nextTick');
-    expect(paneSidebarJs).toContain('store.setPaneConversation(props.paneId, newest.id)');
+  it('should NOT use Vue.nextTick for pane assignment (race condition fix)', () => {
+    // newChat/newCrewSession must NOT use Vue.nextTick — createConversation is async WebSocket.
+    // handleConversationCreated in the store auto-assigns to empty panes in split mode.
+    const newChatMatch = paneSidebarJs.match(/function newChat\(\)[^}]*\}/s);
+    if (newChatMatch) {
+      expect(newChatMatch[0]).not.toContain('Vue.nextTick');
+    }
+    const newCrewMatch = paneSidebarJs.match(/function newCrewSession\(\)[^}]*\}/s);
+    if (newCrewMatch) {
+      expect(newCrewMatch[0]).not.toContain('Vue.nextTick');
+    }
   });
 
   it('should guard newChat when no agents online', () => {
