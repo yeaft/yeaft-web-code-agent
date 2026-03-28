@@ -350,3 +350,81 @@
     display: none !important;
   }
 }
+
+/* ===== GlobalToolbar separator ===== */
+.gt-separator {
+  width: 1px;
+  height: 18px;
+  background: var(--border-color);
+  flex-shrink: 0;
+}
+
+/* ===== GlobalToolbar session selector ===== */
+.gt-session-selector {
+  position: relative;
+}
+.gt-session-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  min-width: 300px;
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.3);
+  z-index: 100;
+  padding: 8px;
+}
+.gt-session-dropdown-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 2px 4px 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.gt-pane-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+.gt-pane-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  min-width: 48px;
+}
+.gt-pane-select {
+  flex: 1;
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-sidebar);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  min-width: 0;
+}
+.gt-pane-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* ===== Pane empty close button ===== */
+.pane-empty-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 4px;
+  border-radius: 4px;
+}
+.pane-empty-close:hover {
+  background: var(--sidebar-hover);
+  color: #ef4444;
+}

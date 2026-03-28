@@ -1,17 +1,21 @@
 export default {
   name: 'ChatHeader',
-  emits: ['toggle-sidebar'],
+  emits: ['toggle-sidebar', 'close-pane'],
+  props: {
+    conversationId: { type: String, default: null },
+    showClosePane: { type: Boolean, default: false }
+  },
   template: `
     <header class="chat-header">
-      <!-- Mobile sidebar toggle — hidden on desktop, shown for all modes -->
-      <button class="header-sidebar-toggle"
+      <!-- Mobile sidebar toggle — hidden on desktop and in split mode -->
+      <button class="header-sidebar-toggle" v-if="!store.isSplitMode"
               @click="$emit('toggle-sidebar')">
         <svg viewBox="0 0 24 24" width="16" height="16">
           <path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/>
         </svg>
       </button>
       <!-- Mobile page reload — hidden on desktop -->
-      <button class="header-reload-btn"
+      <button class="header-reload-btn" v-if="!store.isSplitMode"
               @click="reloadPage"
               title="Reload page">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -30,7 +34,7 @@ export default {
         </svg>
         <span class="compact-message">{{ statusBannerMessage }}</span>
       </div>
-      <div class="header-right" v-if="store.currentConversation && !store.currentConversationIsCrew">
+      <div class="header-right" v-if="effectiveConvId && !isCrew">
         <span class="context-usage-hint" v-if="contextUsage" :class="contextColorClass" :title="contextLabel">
           {{ contextUsage.percentage }}%
         </span>
@@ -41,7 +45,7 @@ export default {
           </svg>
           <span class="subagent-count-badge" v-if="runningSubagentCount > 0">{{ runningSubagentCount }}</span>
         </button>
-        <button class="header-action-btn" :class="{ active: store.activeRightPanel === 'experts' }" @click="toggleExpertPanel" :title="$t('chatHeader.expertPanel')" v-if="!store.currentConversationIsCrew">
+        <button class="header-action-btn" :class="{ active: store.activeRightPanel === 'experts' }" @click="toggleExpertPanel" :title="$t('chatHeader.expertPanel')" v-if="!isCrew">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
           </svg>
@@ -100,9 +104,13 @@ export default {
             <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
           </svg>
         </button>
+        <!-- Close pane button (split mode only) -->
+        <button class="header-action-btn" v-if="showClosePane" @click="$emit('close-pane')" :title="$t('splitScreen.closePane')">
+          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
       </div>
-      <div class="crew-header-actions" v-if="store.currentConversationIsCrew">
-        <button v-if="store.currentConversationIsCrew" class="crew-header-nav-btn"
+      <div class="crew-header-actions" v-if="isCrew">
+        <button v-if="isCrew" class="crew-header-nav-btn"
                 :class="{ active: isCrewPanelActive('roles') }"
                 @click="onCrewPanelToggle('roles')">
           <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
@@ -131,32 +139,51 @@ export default {
             <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
           </svg>
         </button>
+        <!-- Close pane button (split mode only) -->
+        <button class="crew-header-nav-btn" v-if="showClosePane" @click="$emit('close-pane')" :title="$t('splitScreen.closePane')">
+          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
       </div>
     </header>
   `,
-  setup() {
+  setup(props) {
     const store = Pinia.useChatStore();
     const t = Vue.inject('t');
 
+    // ★ Core: effectiveConvId — prop takes priority over store.currentConversation
+    const effectiveConvId = Vue.computed(() => {
+      return props.conversationId || store.currentConversation;
+    });
+
+    // ★ Local isCrew check — replaces store.currentConversationIsCrew
+    const isCrew = Vue.computed(() => {
+      if (!effectiveConvId.value) return false;
+      const conv = store.conversations.find(c => c.id === effectiveConvId.value);
+      return conv?.type === 'crew';
+    });
+
     const headerTitle = Vue.computed(() => {
-      if (!store.currentConversation) {
+      if (!effectiveConvId.value) {
         return 'Claude Web Chat';
       }
 
       // Crew conversation — use renamed session name if available
-      if (store.currentConversationIsCrew) {
-        const conv = store.conversations.find(c => c.id === store.currentConversation);
+      if (isCrew.value) {
+        const conv = store.conversations.find(c => c.id === effectiveConvId.value);
         return conv?.name || 'Crew Session';
       }
 
-      const title = store.getConversationTitle(store.currentConversation);
+      const title = store.getConversationTitle(effectiveConvId.value);
       if (title) {
         return title;
       }
 
-      if (store.currentWorkDir) {
-        const parts = store.currentWorkDir.split(/[/\\]/);
-        return parts[parts.length - 1] || parts[parts.length - 2] || store.currentWorkDir;
+      // For non-prop mode, use currentWorkDir; for prop mode, look up conv.workDir
+      const conv = store.conversations.find(c => c.id === effectiveConvId.value);
+      const workDir = conv?.workDir || store.currentWorkDir;
+      if (workDir) {
+        const parts = workDir.split(/[/\\]/);
+        return parts[parts.length - 1] || parts[parts.length - 2] || workDir;
       }
 
       return t('chatHeader.newConv');
@@ -164,14 +191,14 @@ export default {
 
     // Unified status banner: shows compact or clear status
     const showStatusBanner = Vue.computed(() => {
-      if (store.clearStatus?.conversationId === store.currentConversation) return true;
+      if (store.clearStatus?.conversationId === effectiveConvId.value) return true;
       if (!store.compactStatus) return false;
-      return store.compactStatus.conversationId === store.currentConversation;
+      return store.compactStatus.conversationId === effectiveConvId.value;
     });
 
     const statusBannerClass = Vue.computed(() => {
       // Clear status takes priority when active
-      if (store.clearStatus?.conversationId === store.currentConversation) {
+      if (store.clearStatus?.conversationId === effectiveConvId.value) {
         return store.clearStatus.status === 'clearing' ? 'compacting' : 'completed';
       }
       if (!store.compactStatus) return '';
@@ -179,14 +206,14 @@ export default {
     });
 
     const statusBannerSpinner = Vue.computed(() => {
-      if (store.clearStatus?.conversationId === store.currentConversation) {
+      if (store.clearStatus?.conversationId === effectiveConvId.value) {
         return store.clearStatus.status === 'clearing';
       }
       return store.compactStatus?.status === 'compacting';
     });
 
     const statusBannerMessage = Vue.computed(() => {
-      if (store.clearStatus?.conversationId === store.currentConversation) {
+      if (store.clearStatus?.conversationId === effectiveConvId.value) {
         if (store.clearStatus.status === 'clearing') {
           return t('chatHeader.clearing');
         }
@@ -200,13 +227,14 @@ export default {
     });
 
     const folderPath = Vue.computed(() => {
-      if (!store.currentConversation || !store.currentWorkDir) return '';
-      return store.currentWorkDir;
+      if (!effectiveConvId.value) return '';
+      const conv = store.conversations.find(c => c.id === effectiveConvId.value);
+      return conv?.workDir || store.currentWorkDir || '';
     });
 
     const contextUsage = Vue.computed(() => {
       if (!store.contextUsage) return null;
-      if (store.contextUsage.conversationId !== store.currentConversation) return null;
+      if (store.contextUsage.conversationId !== effectiveConvId.value) return null;
       return store.contextUsage;
     });
     const contextColorClass = Vue.computed(() => {
@@ -230,36 +258,36 @@ export default {
 
     const isCompacting = Vue.computed(() => {
       return store.compactStatus?.status === 'compacting'
-        && store.compactStatus?.conversationId === store.currentConversation;
+        && store.compactStatus?.conversationId === effectiveConvId.value;
     });
 
     const isClearing = Vue.computed(() => {
       return store.clearStatus?.status === 'clearing'
-        && store.clearStatus?.conversationId === store.currentConversation;
+        && store.clearStatus?.conversationId === effectiveConvId.value;
     });
 
     const canRefresh = Vue.computed(() => {
-      if (!store.currentConversation) return false;
-      return !store.processingConversations[store.currentConversation]
+      if (!effectiveConvId.value) return false;
+      return !store.processingConversations[effectiveConvId.value]
         && !store.refreshingSession;
     });
 
     const refreshSession = () => {
-      if (store.refreshingSession || !store.currentConversation) return;
+      if (store.refreshingSession || !effectiveConvId.value) return;
       store.refreshingSession = true;
       store.startRefreshTimeout();
-      if (store.currentConversationIsCrew) {
+      if (isCrew.value) {
         // Crew: resume session to reload roles + messages
         store.sendWsMessage({
           type: 'resume_crew_session',
-          sessionId: store.currentConversation,
+          sessionId: effectiveConvId.value,
           agentId: store.currentAgent
         });
       } else {
-        store.messagesMap[store.currentConversation] = [];
+        store.messagesMap[effectiveConvId.value] = [];
         store.sendWsMessage({
           type: 'sync_messages',
-          conversationId: store.currentConversation,
+          conversationId: effectiveConvId.value,
           turns: 5
         });
       }
@@ -278,7 +306,7 @@ export default {
       if (isClearing.value) return;
       if (!confirm(t('chatHeader.confirmClear'))) return;
       store.clearStatus = {
-        conversationId: store.currentConversation,
+        conversationId: effectiveConvId.value,
         status: 'clearing'
       };
       store.sendMessage('/clear');
@@ -318,7 +346,7 @@ export default {
     });
 
     const currentConvNeedRestart = Vue.computed(() => {
-      const conv = store.conversations.find(c => c.id === store.currentConversation);
+      const conv = store.conversations.find(c => c.id === effectiveConvId.value);
       return !!conv?.needRestart;
     });
 
@@ -356,6 +384,6 @@ export default {
       document.removeEventListener('click', closeMcpOnOutsideClick);
     });
 
-    return { store, headerTitle, folderPath, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, hasStreamingRoles, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, openCrewEdit, onCrewPanelToggle, isCrewPanelActive, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel, toggleSubAgentPanel, runningSubagentCount };
+    return { store, effectiveConvId, isCrew, headerTitle, folderPath, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, hasStreamingRoles, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, openCrewEdit, onCrewPanelToggle, isCrewPanelActive, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel, toggleSubAgentPanel, runningSubagentCount };
   }
 };

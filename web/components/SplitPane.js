@@ -1,17 +1,12 @@
 /**
  * SplitPane — one pane in split-screen mode.
- * Contains SessionSelector + PaneHeader + MessageList/ChatInput (Chat)
- *            or CrewChatView (Crew).
+ * Each pane looks like the normal ChatPage: ChatHeader + content area.
  *
  * Key design: SplitPane does NOT modify global store.currentConversation.
  * Instead, it reads its own conversation from store.splitPanes and passes
- * per-conversation data via props (sendFn, cancelFn, showStop) to child components.
- *
- * MessageList currently reads store.messages directly (getter → activeConversations[0]).
- * For non-primary panes, we use SplitMessageList which overrides the message source.
+ * per-conversation data via props (conversationId, sendFn, cancelFn) to children.
  */
-import SessionSelector from './SessionSelector.js';
-import PaneHeader from './PaneHeader.js';
+import ChatHeader from './ChatHeader.js';
 import MessageItem from './MessageItem.js';
 import AssistantTurn from './AssistantTurn.js';
 import ChatInput from './ChatInput.js';
@@ -19,7 +14,7 @@ import CrewChatView from './CrewChatView.js';
 
 export default {
   name: 'SplitPane',
-  components: { SessionSelector, PaneHeader, MessageItem, AssistantTurn, ChatInput, CrewChatView },
+  components: { ChatHeader, MessageItem, AssistantTurn, ChatInput, CrewChatView },
   props: {
     paneId: { type: String, required: true },
     paneIndex: { type: Number, default: 0 },
@@ -27,20 +22,12 @@ export default {
   },
   template: `
     <div class="split-pane" :class="{ 'pane-empty': !conversationId }">
-      <!-- Session selector (always shown) -->
-      <SessionSelector
-        :paneId="paneId"
+      <!-- ChatHeader — same as normal mode, with conversationId prop -->
+      <ChatHeader
+        v-if="conversationId"
         :conversationId="conversationId"
-        @select="onSelectConversation"
-      />
-
-      <!-- Pane header (shown when conversation selected) -->
-      <PaneHeader
-        :paneId="paneId"
-        :conversationId="conversationId"
-        :paneCount="paneCount"
+        :showClosePane="true"
         @close-pane="closePane"
-        @add-pane="store.addPane()"
       />
 
       <!-- Content area -->
@@ -83,6 +70,10 @@ export default {
         </div>
         <p class="pane-empty-text">{{ $t('splitScreen.selectSession') }}</p>
         <p class="pane-empty-hint">{{ $t('splitScreen.selectHint') }}</p>
+        <!-- Close button for empty pane -->
+        <button class="pane-empty-close" @click="closePane" :title="$t('splitScreen.closePane')">
+          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
       </div>
     </div>
   `,
@@ -221,11 +212,6 @@ export default {
       store.cancelExecutionForConversation(conversationId.value);
     };
 
-    // Select conversation for this pane
-    function onSelectConversation(convId) {
-      store.setPaneConversation(props.paneId, convId);
-    }
-
     // Close this pane
     function closePane() {
       store.removePane(props.paneId);
@@ -298,7 +284,6 @@ export default {
       turnGroups,
       sendFn,
       cancelFn,
-      onSelectConversation,
       closePane
     };
   }
