@@ -3,6 +3,7 @@ export default {
   emits: ['toggle-sidebar', 'close-pane'],
   props: {
     conversationId: { type: String, default: null },
+    paneId: { type: String, default: null },
     showClosePane: { type: Boolean, default: false }
   },
   template: `
@@ -39,13 +40,13 @@ export default {
           {{ contextUsage.percentage }}%
         </span>
         <!-- Expert panel button — hidden in Crew mode -->
-        <button class="header-action-btn" :class="{ active: store.activeRightPanel === 'subagents' }" @click="toggleSubAgentPanel" :title="$t('chatHeader.subAgentPanel')" v-if="runningSubagentCount > 0 || store.activeRightPanel === 'subagents'">
+        <button class="header-action-btn" :class="{ active: effectiveRightPanel === 'subagents' }" @click="toggleSubAgentPanel" :title="$t('chatHeader.subAgentPanel')" v-if="runningSubagentCount > 0 || effectiveRightPanel === 'subagents'">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
           </svg>
           <span class="subagent-count-badge" v-if="runningSubagentCount > 0">{{ runningSubagentCount }}</span>
         </button>
-        <button class="header-action-btn" :class="{ active: store.activeRightPanel === 'experts' }" @click="toggleExpertPanel" :title="$t('chatHeader.expertPanel')" v-if="!isCrew">
+        <button class="header-action-btn" :class="{ active: effectiveRightPanel === 'experts' }" @click="toggleExpertPanel" :title="$t('chatHeader.expertPanel')" v-if="!isCrew">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
           </svg>
@@ -316,19 +317,24 @@ export default {
       store.openCrewConfig();
     };
 
+    // ★ Pane-local panel state: reads from pane in split mode, global store otherwise
+    const effectiveRightPanel = Vue.computed(() => {
+      return store.getPaneRightPanel(props.paneId);
+    });
+
     const onCrewPanelToggle = (panel) => {
       if (window.innerWidth < 768) {
-        store.toggleCrewMobilePanel(panel);
+        store.toggleCrewMobilePanel(panel, props.paneId);
       } else {
-        store.toggleCrewPanel(panel);
+        store.toggleCrewPanel(panel, props.paneId);
       }
     };
 
     const isCrewPanelActive = (panel) => {
       if (window.innerWidth < 768) {
-        return store.crewMobilePanel === panel;
+        return store.getPaneMobilePanel(props.paneId) === panel;
       }
-      return store.crewPanelVisible[panel];
+      return store.getPanelVisible(props.paneId)[panel];
     };
 
     // MCP panel
@@ -355,11 +361,11 @@ export default {
     };
 
     const toggleExpertPanel = () => {
-      store.activeRightPanel = store.activeRightPanel === 'experts' ? null : 'experts';
+      store.togglePaneRightPanel('experts', props.paneId);
     };
 
     const toggleSubAgentPanel = () => {
-      store.activeRightPanel = store.activeRightPanel === 'subagents' ? null : 'subagents';
+      store.togglePaneRightPanel('subagents', props.paneId);
     };
 
     const runningSubagentCount = Vue.computed(() => {
@@ -384,6 +390,6 @@ export default {
       document.removeEventListener('click', closeMcpOnOutsideClick);
     });
 
-    return { store, effectiveConvId, isCrew, headerTitle, folderPath, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, hasStreamingRoles, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, openCrewEdit, onCrewPanelToggle, isCrewPanelActive, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel, toggleSubAgentPanel, runningSubagentCount };
+    return { store, effectiveConvId, effectiveRightPanel, isCrew, headerTitle, folderPath, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, hasStreamingRoles, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, openCrewEdit, onCrewPanelToggle, isCrewPanelActive, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel, toggleSubAgentPanel, runningSubagentCount };
   }
 };

@@ -36,12 +36,13 @@ export default {
   name: 'CrewChatView',
   components: { CrewTurnRenderer, CrewRolePanel, CrewFeaturePanel },
   props: {
-    conversationId: { type: String, default: null }
+    conversationId: { type: String, default: null },
+    paneId: { type: String, default: null }
   },
   template: `
     <div class="crew-chat-view">
-      <div class="crew-workspace" :class="{ 'hide-roles': !store.crewPanelVisible.roles, 'hide-features': !store.crewPanelVisible.features, 'feature-expanded': !!expandedFeatureTaskId, 'mobile-panel-roles': store.crewMobilePanel === 'roles', 'mobile-panel-features': store.crewMobilePanel === 'features' }">
-        <div class="crew-mobile-overlay" v-if="store.crewMobilePanel" @click="store.crewMobilePanel = null"></div>
+      <div class="crew-workspace" :class="{ 'hide-roles': !effectivePanelVisible.roles, 'hide-features': !effectivePanelVisible.features, 'feature-expanded': !!expandedFeatureTaskId, 'mobile-panel-roles': effectiveMobilePanel === 'roles', 'mobile-panel-features': effectiveMobilePanel === 'features' }">
+        <div class="crew-mobile-overlay" v-if="effectiveMobilePanel" @click="clearMobilePanel"></div>
 
         <!-- Left Panel: Role Cards -->
         <crew-role-panel
@@ -292,6 +293,12 @@ export default {
   },
 
   computed: {
+    effectivePanelVisible() {
+      return this.store.getPanelVisible(this.paneId);
+    },
+    effectiveMobilePanel() {
+      return this.store.getPaneMobilePanel(this.paneId);
+    },
     effectiveConvId() {
       return this.conversationId || this.store.currentConversation;
     },
@@ -438,13 +445,13 @@ export default {
 
   watch: {
     '$route'() {
-      this.store.crewMobilePanel = null;
+      this.store.setPaneMobilePanel(this.paneId, null);
     },
     kanbanFeatureCount(val) {
       this.store.crewInProgressCount = val;
     },
     'effectiveConvId'(newId, oldId) {
-      this.store.crewMobilePanel = null;
+      this.store.setPaneMobilePanel(this.paneId, null);
       if (oldId) this.input.saveDraft(oldId);
       this.input.restoreDraft(newId);
       this._draftConvId = newId;
@@ -477,6 +484,10 @@ export default {
     formatTokens,
     shouldShowTurnDivider,
     getMaxRound,
+
+    clearMobilePanel() {
+      this.store.setPaneMobilePanel(this.paneId, null);
+    },
 
     getEmptyRole() {
       return { name: '', displayName: '', icon: '\u{1F916}', description: '', model: 'sonnet', claudeMd: '', isDecisionMaker: false };

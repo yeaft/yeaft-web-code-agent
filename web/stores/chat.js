@@ -258,11 +258,61 @@ export const useChatStore = defineStore('chat', {
     // =====================
     // Crew panel toggle
     // =====================
-    toggleCrewMobilePanel(panel) {
+    toggleCrewMobilePanel(panel, paneId = null) {
+      if (paneId && this.isSplitMode) {
+        const pane = this.splitPanes.find(p => p.id === paneId);
+        if (pane) { pane.crewMobilePanel = pane.crewMobilePanel === panel ? null : panel; return; }
+      }
       this.crewMobilePanel = this.crewMobilePanel === panel ? null : panel;
     },
-    toggleCrewPanel(panel) {
+    toggleCrewPanel(panel, paneId = null) {
+      if (paneId && this.isSplitMode) {
+        const pane = this.splitPanes.find(p => p.id === paneId);
+        if (pane) { pane.crewPanelVisible[panel] = !pane.crewPanelVisible[panel]; return; }
+      }
       this.crewPanelVisible[panel] = !this.crewPanelVisible[panel];
+    },
+    togglePaneRightPanel(panelType, paneId = null) {
+      if (paneId && this.isSplitMode) {
+        const pane = this.splitPanes.find(p => p.id === paneId);
+        if (pane) { pane.activeRightPanel = pane.activeRightPanel === panelType ? null : panelType; return; }
+      }
+      this.activeRightPanel = this.activeRightPanel === panelType ? null : panelType;
+    },
+    getPanelVisible(paneId) {
+      if (paneId && this.isSplitMode) {
+        const pane = this.splitPanes.find(p => p.id === paneId);
+        if (pane) return pane.crewPanelVisible;
+      }
+      return this.crewPanelVisible;
+    },
+    getPaneMobilePanel(paneId) {
+      if (paneId && this.isSplitMode) {
+        const pane = this.splitPanes.find(p => p.id === paneId);
+        if (pane) return pane.crewMobilePanel;
+      }
+      return this.crewMobilePanel;
+    },
+    getPaneRightPanel(paneId) {
+      if (paneId && this.isSplitMode) {
+        const pane = this.splitPanes.find(p => p.id === paneId);
+        if (pane) return pane.activeRightPanel;
+      }
+      return this.activeRightPanel;
+    },
+    setPaneMobilePanel(paneId, value) {
+      if (paneId && this.isSplitMode) {
+        const pane = this.splitPanes.find(p => p.id === paneId);
+        if (pane) { pane.crewMobilePanel = value; return; }
+      }
+      this.crewMobilePanel = value;
+    },
+    setPaneRightPanel(paneId, value) {
+      if (paneId && this.isSplitMode) {
+        const pane = this.splitPanes.find(p => p.id === paneId);
+        if (pane) { pane.activeRightPanel = value; return; }
+      }
+      this.activeRightPanel = value;
     },
 
     // =====================
@@ -378,16 +428,24 @@ export const useChatStore = defineStore('chat', {
     // ★ Split-screen: pane management
     addPane() {
       if (this.splitPanes.length >= 3) return;
+      const makePaneState = (id, conversationId) => ({
+        id,
+        conversationId,
+        // Pane-local panel state (split mode only; non-split reads global store)
+        crewPanelVisible: { roles: true, features: true },
+        activeRightPanel: null,
+        crewMobilePanel: null
+      });
       if (this.splitPanes.length === 0) {
         // Entering split mode: first pane inherits current conversation
         this.splitPanes = [
-          { id: 'pane-0', conversationId: this.currentConversation },
-          { id: 'pane-1', conversationId: null }
+          makePaneState('pane-0', this.currentConversation),
+          makePaneState('pane-1', null)
         ];
         // Ensure second conv is in activeConversations if set
       } else {
         const nextId = 'pane-' + Date.now();
-        this.splitPanes.push({ id: nextId, conversationId: null });
+        this.splitPanes.push(makePaneState(nextId, null));
       }
     },
     removePane(paneId) {

@@ -169,7 +169,10 @@ function restoreSplitPanes(store) {
     .filter(p => p && typeof p.id === 'string')
     .map(p => ({
       id: p.id,
-      conversationId: (p.conversationId && convIds.has(p.conversationId)) ? p.conversationId : null
+      conversationId: (p.conversationId && convIds.has(p.conversationId)) ? p.conversationId : null,
+      crewPanelVisible: p.crewPanelVisible || { roles: true, features: true },
+      activeRightPanel: p.activeRightPanel || null,
+      crewMobilePanel: p.crewMobilePanel || null
     }));
 
   if (validPanes.length < 2) {
