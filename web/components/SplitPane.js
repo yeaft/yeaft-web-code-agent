@@ -36,13 +36,14 @@ export default {
         <ChatHeader
           v-if="conversationId"
           :conversationId="conversationId"
+          :paneId="paneId"
           :showClosePane="true"
           @close-pane="closePane"
         />
 
         <template v-if="conversationId">
           <!-- Crew mode -->
-          <CrewChatView v-if="isCrew" :conversationId="conversationId" />
+          <CrewChatView v-if="isCrew" :conversationId="conversationId" :paneId="paneId" />
 
           <!-- Chat mode -->
           <template v-else>
