@@ -3,19 +3,24 @@ import fs from 'fs';
 import path from 'path';
 
 /**
- * Tests for task-160: split-screen layout refactor.
+ * Tests for PR #381: split-screen layout refactor — PaneTopBar + GlobalSidebar.
  *
  * Verifies:
  *   1. CSS layout — split-screen-layout is row, split-pane is column
  *   2. GlobalSidebar — narrow left column with split controls + settings + theme
  *   3. PaneTopBar — top bar per pane with session dropdown + actions
- *   4. SplitPane integrates PaneTopBar (not PaneSidebar)
- *   5. app.js uses GlobalSidebar (not GlobalToolbar)
- *   6. PaneTopBar session dropdown — click-to-select sessions
- *   7. PaneTopBar agent status + action buttons
- *   8. Old components removed (GlobalToolbar, PaneSidebar)
+ *   4. PaneTopBar session dropdown — click-to-select sessions, Chat + Crew groups
+ *   5. PaneTopBar action buttons — new chat/crew, close pane, agent status
+ *   6. SplitPane integrates PaneTopBar (not PaneSidebar)
+ *   7. app.js uses GlobalSidebar (not GlobalToolbar)
+ *   8. Old components removed (GlobalToolbar.js, PaneSidebar.js)
  *   9. CSS variable correctness
  *  10. Empty pane state preserved
+ *  11. ChatPage.js not modified (non-split mode unaffected)
+ *  12. Outside click closes dropdown
+ *  13. SplitPane close pane → store.removePane
+ *  14. Session dropdown CSS (absolute, z-index, opaque)
+ *  15. GlobalSidebar CSS structure
  */
 
 const webDir = path.resolve(__dirname, '../../web');
@@ -403,5 +408,159 @@ describe('Empty pane state', () => {
 
   it('should keep split-pane-messages styles', () => {
     expect(css).toContain('.split-pane-messages');
+  });
+});
+
+// =====================================================================
+// 11. Non-split mode not affected — ChatPage.js zero changes
+// =====================================================================
+describe('ChatPage.js not modified', () => {
+  const chatPageJs = readFile('components/ChatPage.js');
+
+  it('should NOT import PaneTopBar or GlobalSidebar', () => {
+    expect(chatPageJs).not.toContain('PaneTopBar');
+    expect(chatPageJs).not.toContain('GlobalSidebar');
+  });
+
+  it('should NOT reference splitPanes', () => {
+    expect(chatPageJs).not.toContain('splitPanes');
+  });
+
+  it('should still use regular sidebar classes', () => {
+    expect(chatPageJs).toContain('class="sidebar');
+  });
+});
+
+// =====================================================================
+// 12. PaneTopBar outside click closes dropdown
+// =====================================================================
+describe('PaneTopBar outside click behavior', () => {
+  const ptbJs = readFile('components/PaneTopBar.js');
+
+  it('should register document click listener on mount', () => {
+    expect(ptbJs).toContain("document.addEventListener('click', handleOutsideClick)");
+  });
+
+  it('should remove document click listener on unmount', () => {
+    expect(ptbJs).toContain("document.removeEventListener('click', handleOutsideClick)");
+  });
+
+  it('should close dropdown in handleOutsideClick', () => {
+    expect(ptbJs).toContain('if (dropdownOpen.value)');
+    expect(ptbJs).toContain('dropdownOpen.value = false');
+  });
+
+  it('should use click.stop on dropdown to prevent closing', () => {
+    expect(ptbJs).toContain('class="ptb-session-dropdown" v-if="dropdownOpen" @click.stop');
+  });
+});
+
+// =====================================================================
+// 13. SplitPane close pane calls store.removePane
+// =====================================================================
+describe('SplitPane close pane', () => {
+  const splitPaneJs = readFile('components/SplitPane.js');
+
+  it('should call store.removePane with paneId', () => {
+    expect(splitPaneJs).toContain('store.removePane(props.paneId)');
+  });
+
+  it('should emit close-pane from PaneTopBar to trigger closePane', () => {
+    expect(splitPaneJs).toContain('@close-pane="closePane"');
+  });
+});
+
+// =====================================================================
+// 14. Dropdown CSS — absolute positioning, z-index, opaque background
+// =====================================================================
+describe('Session dropdown CSS', () => {
+  const css = readFile('styles/split-screen.css');
+
+  it('should position dropdown absolutely', () => {
+    const dropdownRule = css.match(/\.ptb-session-dropdown\s*\{[^}]+\}/);
+    expect(dropdownRule).not.toBeNull();
+    expect(dropdownRule[0]).toContain('position: absolute');
+  });
+
+  it('should have z-index for dropdown overlay', () => {
+    const dropdownRule = css.match(/\.ptb-session-dropdown\s*\{[^}]+\}/);
+    expect(dropdownRule).not.toBeNull();
+    expect(dropdownRule[0]).toContain('z-index:');
+  });
+
+  it('should have opaque background (not transparent)', () => {
+    const dropdownRule = css.match(/\.ptb-session-dropdown\s*\{[^}]+\}/);
+    expect(dropdownRule).not.toBeNull();
+    expect(dropdownRule[0]).toContain('var(--bg-sidebar)');
+  });
+
+  it('should have box-shadow for visual separation', () => {
+    const dropdownRule = css.match(/\.ptb-session-dropdown\s*\{[^}]+\}/);
+    expect(dropdownRule).not.toBeNull();
+    expect(dropdownRule[0]).toContain('box-shadow');
+  });
+
+  it('should have max-height with overflow scroll', () => {
+    const dropdownRule = css.match(/\.ptb-session-dropdown\s*\{[^}]+\}/);
+    expect(dropdownRule).not.toBeNull();
+    expect(dropdownRule[0]).toContain('max-height');
+    expect(dropdownRule[0]).toContain('overflow-y: auto');
+  });
+
+  it('should style .ptb-dropdown-empty for no-sessions state', () => {
+    const emptyRule = css.match(/\.ptb-dropdown-empty\s*\{[^}]+\}/);
+    expect(emptyRule).not.toBeNull();
+    expect(emptyRule[0]).toContain('text-align: center');
+    expect(emptyRule[0]).toContain('var(--text-muted)');
+  });
+
+  it('should style active dropdown item distinctly', () => {
+    const activeRule = css.match(/\.ptb-dropdown-item\.active\s*\{[^}]+\}/);
+    expect(activeRule).not.toBeNull();
+    expect(activeRule[0]).toContain('var(--accent');
+  });
+
+  it('should style agent-offline dropdown items with reduced opacity', () => {
+    const offlineRule = css.match(/\.ptb-dropdown-item\.agent-offline\s*\{[^}]+\}/);
+    expect(offlineRule).not.toBeNull();
+    expect(offlineRule[0]).toContain('opacity');
+    expect(offlineRule[0]).toContain('cursor: not-allowed');
+  });
+});
+
+// =====================================================================
+// 15. GlobalSidebar CSS structure
+// =====================================================================
+describe('GlobalSidebar CSS', () => {
+  const css = readFile('styles/split-screen.css');
+
+  it('should define .global-sidebar as flex column', () => {
+    const rule = css.match(/\.global-sidebar\s*\{[^}]+\}/);
+    expect(rule).not.toBeNull();
+    expect(rule[0]).toContain('flex-direction: column');
+  });
+
+  it('should justify space-between (top/bottom sections)', () => {
+    const rule = css.match(/\.global-sidebar\s*\{[^}]+\}/);
+    expect(rule).not.toBeNull();
+    expect(rule[0]).toContain('justify-content: space-between');
+  });
+
+  it('should have background using --bg-sidebar', () => {
+    const rule = css.match(/\.global-sidebar\s*\{[^}]+\}/);
+    expect(rule).not.toBeNull();
+    expect(rule[0]).toContain('var(--bg-sidebar)');
+  });
+
+  it('should have right border separator', () => {
+    const rule = css.match(/\.global-sidebar\s*\{[^}]+\}/);
+    expect(rule).not.toBeNull();
+    expect(rule[0]).toContain('border-right');
+  });
+
+  it('should style gs-icon-btn with hover state', () => {
+    const hoverRule = css.match(/\.gs-icon-btn:hover\s*\{[^}]+\}/);
+    expect(hoverRule).not.toBeNull();
+    expect(hoverRule[0]).toContain('var(--sidebar-hover)');
   });
 });
