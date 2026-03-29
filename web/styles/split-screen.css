@@ -143,6 +143,12 @@
   /* Inherits header-action-btn styles */
 }
 
+/* ===== Occupied session in split mode ===== */
+.pane-sidebar .session-item.occupied {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* ===== Mobile: hide split-screen ===== */
 @media (max-width: 768px) {
   .split-screen-btn {

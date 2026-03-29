@@ -285,8 +285,23 @@ export function handleCrewOutput(store, msg) {
       conv.type = 'crew';
       conv.name = msg.name || '';
     }
-    // 切换到 crew conversation
-    store.activeConversations = [sid];
+    // 切换到 crew conversation — split mode aware
+    if (store.splitPanes.length > 1) {
+      const pendingPaneId = store._pendingPaneId;
+      store._pendingPaneId = null;
+      if (pendingPaneId) {
+        const targetPane = store.splitPanes.find(p => p.id === pendingPaneId);
+        if (targetPane) targetPane.conversationId = sid;
+      } else {
+        const emptyPane = store.splitPanes.find(p => !p.conversationId);
+        if (emptyPane) emptyPane.conversationId = sid;
+      }
+      if (!store.activeConversations.includes(sid)) {
+        store.activeConversations.push(sid);
+      }
+    } else {
+      store.activeConversations = [sid];
+    }
     store.currentWorkDir = msg.projectDir;
     store.messagesMap[sid] = [];
     store.saveOpenSessions();

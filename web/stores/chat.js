@@ -40,6 +40,7 @@ export const useChatStore = defineStore('chat', {
     messagesMap: {},  // { [conversationId]: messages[] }
     // ★ Split-screen: pane state
     splitPanes: [],  // [{ id: 'pane-0', conversationId: convId }, ...] — empty = single-screen mode
+    _pendingPaneId: null,  // Tracks which pane requested a new session (split mode only)
     // 会话标题缓存：conversationId -> title (最新用户消息，使用对象而非 Map 以确保响应式)
     conversationTitles: {},
     // Per-conversation 处理状态：conversationId -> true (使用对象而非 Set 以确保响应式)
