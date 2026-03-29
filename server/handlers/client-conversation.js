@@ -331,6 +331,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         await forwardToAgent(chatAgentId, {
           type: 'execute',
           conversationId: convId,
+          prompt: msg.prompt,
           workDir: msg.workDir || convInfo?.workDir,
           claudeSessionId: convInfo?.claudeSessionId,
           targetRole: msg.targetRole || null,

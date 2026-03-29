@@ -196,6 +196,7 @@ export async function preloadSlashCommands(workDir, targetId = '__preload__') {
  * @returns {{type: string|null, command?: string, message: string, passthrough?: boolean}}
  */
 export function parseSlashCommand(message) {
+  if (!message) return { type: null, message: '' };
   const trimmed = message.trim();
 
   // 检查是否是不支持的斜杠命令
