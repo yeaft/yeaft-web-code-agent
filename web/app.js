@@ -5,7 +5,7 @@ import zhCN from './i18n/zh-CN.js';
 import en from './i18n/en.js';
 import LoginPage from './components/LoginPage.js';
 import ChatPage from './components/ChatPage.js';
-import GlobalToolbar from './components/GlobalToolbar.js';
+import GlobalSidebar from './components/GlobalSidebar.js';
 import SplitPane from './components/SplitPane.js';
 import ToolLine from './components/ToolLine.js';
 
@@ -17,16 +17,16 @@ window.Pinia = {
 };
 
 const App = {
-  components: { LoginPage, ChatPage, GlobalToolbar, SplitPane },
+  components: { LoginPage, ChatPage, GlobalSidebar, SplitPane },
   template: `
     <LoginPage v-if="!authStore.isAuthenticated" />
     <template v-else>
       <!-- Single-screen mode: unchanged ChatPage -->
       <ChatPage v-if="!chatStore.isSplitMode" />
 
-      <!-- Split-screen mode: GlobalToolbar + SplitPane ×N -->
+      <!-- Split-screen mode: GlobalSidebar (left) + SplitPane ×N (right) -->
       <div v-else class="split-screen-layout">
-        <GlobalToolbar />
+        <GlobalSidebar />
         <div class="split-panes-container" :class="'panes-' + chatStore.splitPanes.length">
           <SplitPane
             v-for="(pane, idx) in chatStore.splitPanes"

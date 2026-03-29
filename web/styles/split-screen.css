@@ -1,52 +1,56 @@
 /* ===== Split-Screen Layout ===== */
+/* Row: GlobalSidebar (left, 40px) + split-panes-container (right, flex) */
 .split-screen-layout {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   width: 100%;
   height: 100vh;
   overflow: hidden;
 }
 
-/* ===== Global Toolbar (simplified: split controls only) ===== */
-.global-toolbar {
+/* ===== Global Sidebar (left narrow column) ===== */
+.global-sidebar {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   justify-content: space-between;
-  height: 36px;
-  min-height: 36px;
-  padding: 0 12px;
+  width: 40px;
+  min-width: 40px;
   background: var(--bg-sidebar);
-  border-bottom: 1px solid var(--border-color);
+  border-right: 1px solid var(--border-color);
   flex-shrink: 0;
   z-index: 50;
 }
 
-.gt-left {
+.gs-top,
+.gs-bottom {
   display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.gt-connection-warn {
-  display: flex;
+  flex-direction: column;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
+  padding: 8px 0;
+}
+
+.gs-icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.gs-icon-btn:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.gs-connection-warn {
   color: var(--warning, #f59e0b);
-}
-
-.gt-right {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-/* gt-btn-add/merge: color overrides for sidebar-icon-btn reuse */
-.gt-btn-add {
-  color: var(--accent);
-}
-.gt-btn-merge {
-  color: var(--text-muted);
+  cursor: default;
 }
 
 /* ===== Split Panes Container ===== */
@@ -58,11 +62,11 @@
   overflow: hidden;
 }
 
-/* ===== Single Pane (horizontal: sidebar + content) ===== */
+/* ===== Single Pane (vertical: topbar + content) ===== */
 .split-pane {
   flex: 1;
   display: flex;
-  flex-direction: row;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -72,23 +76,196 @@
   border-left: 1px solid var(--border-color);
 }
 
-/* ===== Pane Sidebar (narrower than ChatPage sidebar) ===== */
-.pane-sidebar {
-  width: 220px;
-}
-.pane-sidebar.collapsed {
-  width: 48px;
-  min-width: 48px;
+/* ===== Pane TopBar (horizontal bar at top of each pane) ===== */
+.pane-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 36px;
+  min-height: 36px;
+  padding: 0 8px;
+  background: var(--bg-sidebar);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+  gap: 8px;
 }
 
-/* ===== Split Pane Content Area ===== */
-.split-pane-content {
-  flex: 1;
+.ptb-left {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   min-width: 0;
-  min-height: 0;
+  flex: 1;
+  position: relative;
+}
+
+.ptb-session-trigger {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 2px 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ptb-session-trigger:hover {
+  background: var(--sidebar-hover);
+}
+
+.ptb-session-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ptb-chevron {
+  flex-shrink: 0;
+  transition: transform 0.15s;
+}
+.ptb-chevron.open {
+  transform: rotate(180deg);
+}
+
+/* Session dropdown */
+.ptb-session-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  min-width: 240px;
+  max-width: 360px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  z-index: 200;
+  padding: 4px 0;
+  margin-top: 2px;
+}
+
+.ptb-dropdown-group + .ptb-dropdown-group {
+  border-top: 1px solid var(--border-color);
+  margin-top: 4px;
+  padding-top: 4px;
+}
+
+.ptb-dropdown-label {
+  padding: 4px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.ptb-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.ptb-dropdown-item:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+.ptb-dropdown-item.active {
+  background: var(--accent-bg, rgba(59, 130, 246, 0.1));
+  color: var(--accent);
+}
+.ptb-dropdown-item.agent-offline {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ptb-item-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ptb-item-time {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.ptb-crew-icon {
+  flex-shrink: 0;
+}
+
+.ptb-dropdown-empty {
+  padding: 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* Center: agent status */
+.ptb-center {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.ptb-agent-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+.ptb-agent-dot.online {
+  background: #22c55e;
+}
+
+.ptb-agent-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Right: action buttons */
+.ptb-right {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.ptb-icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.ptb-icon-btn:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+.ptb-icon-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.ptb-close-btn:hover {
+  color: var(--error, #ef4444);
 }
 
 /* ===== Pane Empty State ===== */
