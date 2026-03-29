@@ -38,12 +38,17 @@ export function handleConversationCreated(store, msg) {
   });
   store.currentAgent = msg.agentId;
   store.currentAgentInfo = createdAgent;
-  // In split mode, assign new conversation to first empty pane instead of
-  // overwriting activeConversations (which would break other panes).
+  // In split mode, assign new conversation to the requesting pane (via _pendingPaneId)
+  // or fall back to first empty pane. Never overwrite activeConversations wholesale.
   if (store.splitPanes.length > 1) {
-    const emptyPane = store.splitPanes.find(p => !p.conversationId);
-    if (emptyPane) {
-      emptyPane.conversationId = msg.conversationId;
+    const pendingPaneId = store._pendingPaneId;
+    store._pendingPaneId = null;
+    if (pendingPaneId) {
+      const targetPane = store.splitPanes.find(p => p.id === pendingPaneId);
+      if (targetPane) targetPane.conversationId = msg.conversationId;
+    } else {
+      const emptyPane = store.splitPanes.find(p => !p.conversationId);
+      if (emptyPane) emptyPane.conversationId = msg.conversationId;
     }
     if (!store.activeConversations.includes(msg.conversationId)) {
       store.activeConversations.push(msg.conversationId);
@@ -84,11 +89,17 @@ export function handleConversationResumed(store, msg) {
   });
   store.currentAgent = msg.agentId;
   store.currentAgentInfo = resumedAgent;
-  // In split mode, assign resumed conversation to first empty pane
+  // In split mode, assign resumed conversation to the requesting pane (via _pendingPaneId)
+  // or fall back to first empty pane.
   if (store.splitPanes.length > 1) {
-    const emptyPane = store.splitPanes.find(p => !p.conversationId);
-    if (emptyPane) {
-      emptyPane.conversationId = msg.conversationId;
+    const pendingPaneId = store._pendingPaneId;
+    store._pendingPaneId = null;
+    if (pendingPaneId) {
+      const targetPane = store.splitPanes.find(p => p.id === pendingPaneId);
+      if (targetPane) targetPane.conversationId = msg.conversationId;
+    } else {
+      const emptyPane = store.splitPanes.find(p => !p.conversationId);
+      if (emptyPane) emptyPane.conversationId = msg.conversationId;
     }
     if (!store.activeConversations.includes(msg.conversationId)) {
       store.activeConversations.push(msg.conversationId);

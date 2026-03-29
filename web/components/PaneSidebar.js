@@ -104,7 +104,7 @@ export default {
               v-for="conv in chatConversations"
               :key="conv.id"
               class="session-item"
-              :class="{ active: conv.id === conversationId, processing: store.isConversationProcessing(conv.id), 'agent-offline': conv.agentOnline === false }"
+              :class="{ active: conv.id === conversationId, processing: store.isConversationProcessing(conv.id), 'agent-offline': conv.agentOnline === false, occupied: occupiedSessionIds.includes(conv.id) }"
               @click="onSessionClick(conv)"
             >
               <div class="session-item-header">
@@ -142,7 +142,7 @@ export default {
               v-for="conv in crewConversations"
               :key="conv.id"
               class="session-item session-item-crew"
-              :class="{ active: conv.id === conversationId, processing: store.isConversationProcessing(conv.id), 'agent-offline': conv.agentOnline === false }"
+              :class="{ active: conv.id === conversationId, processing: store.isConversationProcessing(conv.id), 'agent-offline': conv.agentOnline === false, occupied: occupiedSessionIds.includes(conv.id) }"
               @click="onSessionClick(conv)"
             >
               <div class="session-item-header">
@@ -198,6 +198,13 @@ export default {
 
     const crewConversations = Vue.computed(() => {
       return sortByActivity(store.conversations.filter(c => c.type === 'crew'));
+    });
+
+    // Sessions already open in other panes — grey out + block click
+    const occupiedSessionIds = Vue.computed(() => {
+      return store.splitPanes
+        .filter(p => p.id !== props.paneId && p.conversationId)
+        .map(p => p.conversationId);
     });
 
     // Helper functions (same logic as ChatPage)
@@ -258,6 +265,7 @@ export default {
     // Session click → setPaneConversation (not selectConversation)
     function onSessionClick(conv) {
       if (conv.agentOnline === false) return;
+      if (occupiedSessionIds.value.includes(conv.id)) return;
       store.setPaneConversation(props.paneId, conv.id);
     }
 
@@ -269,10 +277,12 @@ export default {
     // auto-assigns to the first empty pane in split mode.
     function newChat() {
       if (onlineAgentCount.value === 0) return;
+      store._pendingPaneId = props.paneId;
       store.createConversation();
     }
 
     function newCrewSession() {
+      store._pendingPaneId = props.paneId;
       store.enterCrewMode();
     }
 
@@ -300,6 +310,7 @@ export default {
       onlineAgentCount,
       chatConversations,
       crewConversations,
+      occupiedSessionIds,
       getConversationTitle,
       getConversationFullTitle,
       getCrewTitle,
