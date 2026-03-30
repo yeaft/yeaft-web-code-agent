@@ -1,12 +1,11 @@
 /**
  * SplitPane — one pane in split-screen mode.
- * Each pane has: PaneTopBar (top) + ChatHeader + content area (column layout).
+ * Each pane has: ChatHeader + content area (column layout).
  *
  * Key design: SplitPane does NOT modify global store.currentConversation.
  * Instead, it reads its own conversation from store.splitPanes and passes
  * per-conversation data via props (conversationId, sendFn, cancelFn) to children.
  */
-import PaneTopBar from './PaneTopBar.js';
 import ChatHeader from './ChatHeader.js';
 import MessageItem from './MessageItem.js';
 import AssistantTurn from './AssistantTurn.js';
@@ -15,7 +14,7 @@ import CrewChatView from './CrewChatView.js';
 
 export default {
   name: 'SplitPane',
-  components: { PaneTopBar, ChatHeader, MessageItem, AssistantTurn, ChatInput, CrewChatView },
+  components: { ChatHeader, MessageItem, AssistantTurn, ChatInput, CrewChatView },
   props: {
     paneId: { type: String, required: true },
     paneIndex: { type: Number, default: 0 },
@@ -23,16 +22,8 @@ export default {
   },
   template: `
     <div class="split-pane">
-      <!-- Top bar: session selector + actions -->
-      <PaneTopBar
-        :paneId="paneId"
-        :conversationId="conversationId"
-        @close-pane="closePane"
-      />
-
-      <!-- ChatHeader — same as normal mode, with conversationId prop -->
+      <!-- ChatHeader — always visible, with close-pane button -->
       <ChatHeader
-        v-if="conversationId"
         :conversationId="conversationId"
         :paneId="paneId"
         :showClosePane="true"
