@@ -2,7 +2,6 @@ import ChatHeader from './ChatHeader.js';
 import MessageList from './MessageList.js';
 import ChatInput from './ChatInput.js';
 import WorkbenchPanel from './WorkbenchPanel.js';
-import ProxyTab from './ProxyTab.js';
 import SettingsPanel from './SettingsPanel.js';
 import CrewConfigPanel from './CrewConfigPanel.js';
 import CrewChatView from './CrewChatView.js';
@@ -13,7 +12,7 @@ import { useAuthStore } from '../stores/auth.js';
 
 export default {
   name: 'ChatPage',
-  components: { ChatHeader, MessageList, ChatInput, WorkbenchPanel, ProxyTab, SettingsPanel, CrewConfigPanel, CrewChatView, ExpertPanel, SubAgentPanel, BtwOverlay },
+  components: { ChatHeader, MessageList, ChatInput, WorkbenchPanel, SettingsPanel, CrewConfigPanel, CrewChatView, ExpertPanel, SubAgentPanel, BtwOverlay },
   template: `
     <div class="chat-page" :class="{ 'show-sidebar': showMobileSidebar }">
 
@@ -26,9 +25,6 @@ export default {
         <div class="sidebar-collapsed-bar" v-if="store.sidebarCollapsed">
           <button class="collapsed-icon-btn" @click="store.toggleSidebar()" :title="$t('chat.sidebar.expand')">
             <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>
-          </button>
-          <button v-if="canUseWorkbench" class="collapsed-icon-btn" :class="{ 'has-enabled': totalEnabledPorts > 0 }" @click="proxyOpen = !proxyOpen" :title="$t('chat.sidebar.portProxy')">
-            <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
           </button>
           <button v-if="canUseWorkbench" class="collapsed-icon-btn" :class="{ active: store.workbenchExpanded }" @click="store.toggleWorkbench()" :title="$t('chat.sidebar.workbench')">
             <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M20 3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H4V5h16v14zM6 7h5v2H6V7zm0 4h5v2H6v-2zm0 4h5v2H6v-2zm7-8h5v10h-5V7z"/></svg>
@@ -105,10 +101,6 @@ export default {
               <button class="sidebar-icon-btn" @click="store.toggleSidebar()" :title="$t('chat.sidebar.collapse')">
                 <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 18h13v-2H3v2zm0-5h10v-2H3v2zm0-7v2h13V6H3zm18 9.59L17.42 12 21 8.41 19.59 7l-5 5 5 5L21 15.59z"/></svg>
               </button>
-              <button v-if="canUseWorkbench" class="sidebar-icon-btn" :class="{ active: proxyOpen, 'has-enabled': totalEnabledPorts > 0 }" @click="proxyOpen = !proxyOpen" :title="$t('chat.sidebar.portProxy')">
-                  <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
-                  <span class="action-badge" v-if="totalEnabledPorts > 0">{{ totalEnabledPorts }}</span>
-                </button>
               <button v-if="canUseWorkbench" class="sidebar-icon-btn" :class="{ active: store.workbenchExpanded }" @click="store.toggleWorkbench()" :title="$t('chat.sidebar.workbench')">
                 <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M20 3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H4V5h16v14zM6 7h5v2H6V7zm0 4h5v2H6v-2zm0 4h5v2H6v-2zm7-8h5v10h-5V7z"/></svg>
                 <span class="action-badge" v-if="store.runningSubagentCount > 0">{{ store.runningSubagentCount }}</span>
@@ -437,16 +429,6 @@ export default {
         </div>
       </div>
 
-      <!-- Port Proxy Modal -->
-      <div class="modal-overlay" v-if="canUseWorkbench && proxyOpen" @click.self="proxyOpen = false">
-        <div class="modal proxy-modal">
-          <button class="resume-close-btn" @click="proxyOpen = false">
-            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-          </button>
-          <ProxyTab />
-        </div>
-      </div>
-
       <!-- Settings Panel -->
 
       <!-- Folder Picker Dialog -->
@@ -490,7 +472,6 @@ export default {
       showAgentDropdown: false,
       showMobileSidebar: false,
       showSettingsPanel: false,
-      proxyOpen: false,
       agentManagerOpen: false,
       restartingAgents: {},
       upgradingAgents: {},
@@ -548,14 +529,6 @@ export default {
     },
     isMobileView() {
       return this.windowWidth < 640;
-    },
-    totalEnabledPorts() {
-      let count = 0;
-      for (const agentId of Object.keys(this.store.proxyPorts)) {
-        const ports = this.store.proxyPorts[agentId] || [];
-        count += ports.filter(p => p.enabled).length;
-      }
-      return count;
     },
     crewConversations() {
       return this.sortByActivity(this.store.conversations.filter(c => c.type === 'crew'));
