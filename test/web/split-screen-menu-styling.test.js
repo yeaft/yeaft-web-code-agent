@@ -332,8 +332,10 @@ describe('Old components removed', () => {
     expect(css).not.toMatch(/\.global-toolbar\s*\{/);
   });
 
-  it('should NOT have .pane-sidebar CSS rules', () => {
-    expect(css).not.toMatch(/\.pane-sidebar\s*\{/);
+  it('should have .pane-sidebar as slide-in panel (not old PaneSidebar component)', () => {
+    expect(css).toMatch(/\.pane-sidebar\s*\{/);
+    expect(css).toContain('transform: translateX(-100%)');
+    expect(css).toContain('.pane-sidebar.open');
   });
 
   it('should NOT have .split-pane-content CSS rules', () => {

@@ -632,6 +632,7 @@ export default {
   'splitScreen.newChat': 'New Chat',
   'splitScreen.newCrew': 'New Crew',
   'splitScreen.noSessions': 'No sessions',
+  'splitScreen.openSessionList': 'Open Session List',
   'splitScreen.pane': 'Pane',
   'splitScreen.assignSession': 'Assign sessions to panes',
 };

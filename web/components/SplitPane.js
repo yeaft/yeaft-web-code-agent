@@ -30,6 +30,7 @@ export default {
         :paneId="paneId"
         :showClosePane="true"
         @close-pane="closePane"
+        @toggle-pane-sidebar="paneSidebarOpen = !paneSidebarOpen"
       />
 
       <template v-if="conversationId">
@@ -78,7 +79,7 @@ export default {
         </template>
       </template>
 
-      <!-- Empty state: no conversation selected — inline session list -->
+      <!-- Empty state: no conversation selected -->
       <div v-else class="pane-empty-state">
         <div class="pane-empty-icon">
           <svg viewBox="0 0 48 48" width="48" height="48">
@@ -88,39 +89,92 @@ export default {
           </svg>
         </div>
         <p class="pane-empty-text">{{ $t('splitScreen.selectSession') }}</p>
+        <button class="pane-empty-open-btn" @click="paneSidebarOpen = true">
+          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>
+          {{ $t('splitScreen.openSessionList') }}
+        </button>
+      </div>
 
-        <!-- Inline session list -->
-        <div class="pane-session-list" v-if="emptyChatConvs.length > 0 || emptyCrewConvs.length > 0">
-          <div class="pane-session-group" v-if="emptyChatConvs.length > 0">
-            <div class="pane-session-label">{{ $t('chat.sidebar.recentChats') }}</div>
-            <div
-              v-for="conv in emptyChatConvs"
-              :key="conv.id"
-              class="pane-session-item"
-              @click="onEmptySessionClick(conv)"
-            >
-              <svg class="pane-session-icon" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>
-              <span class="pane-session-title">{{ getEmptyConvTitle(conv) }}</span>
-              <span class="pane-session-time">{{ getEmptyConvTime(conv) }}</span>
+      <!-- Pane sidebar overlay -->
+      <div class="pane-sidebar-overlay" v-if="paneSidebarOpen" @click="paneSidebarOpen = false"></div>
+
+      <!-- Pane sidebar panel -->
+      <div class="pane-sidebar" :class="{ open: paneSidebarOpen }">
+        <div class="pane-sidebar-header">
+          <span>{{ $t('splitScreen.selectSession') }}</span>
+          <button class="pane-sidebar-close" @click="paneSidebarOpen = false">
+            <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+          </button>
+        </div>
+        <div class="pane-sidebar-body">
+          <!-- Chat Sessions -->
+          <div class="session-panel" v-if="paneChatConvs.length > 0">
+            <div class="session-group-header">
+              <div class="session-group-title-area">
+                <svg class="session-group-icon" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/></svg>
+                <span>{{ $t('chat.sidebar.recentChats') }}</span>
+              </div>
+            </div>
+            <div class="session-panel-list">
+              <div
+                v-for="conv in paneChatConvs"
+                :key="conv.id"
+                class="session-item"
+                :class="{ active: conv.id === conversationId, processing: store.isConversationProcessing(conv.id), 'agent-offline': conv.agentOnline === false }"
+                @click="onSidebarSessionClick(conv)"
+              >
+                <div class="session-item-header">
+                  <div class="title">
+                    <span v-if="store.isConversationProcessing(conv.id)" class="processing-dot"></span>
+                    {{ getConvTitle(conv) }}
+                  </div>
+                  <span class="session-time">{{ getConvTime(conv) }}</span>
+                </div>
+                <div class="session-info">
+                  <span class="session-path">{{ shortenPath(conv.workDir) }}</span>
+                  <span class="session-agent" v-if="conv.agentName">{{ conv.agentName }}</span>
+                </div>
+              </div>
             </div>
           </div>
-          <div class="pane-session-group" v-if="emptyCrewConvs.length > 0">
-            <div class="pane-session-label">Crew Sessions</div>
-            <div
-              v-for="conv in emptyCrewConvs"
-              :key="conv.id"
-              class="pane-session-item"
-              @click="onEmptySessionClick(conv)"
-            >
-              <svg class="pane-session-icon" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
-              <span class="pane-session-title">{{ conv.name || 'Crew Session' }}</span>
-              <span class="pane-session-time">{{ getEmptyConvTime(conv) }}</span>
+
+          <!-- Crew Sessions -->
+          <div class="session-panel" v-if="paneCrewConvs.length > 0">
+            <div class="session-group-header">
+              <div class="session-group-title-area">
+                <svg class="session-group-icon" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+                <span>Crew Sessions</span>
+              </div>
             </div>
+            <div class="session-panel-list">
+              <div
+                v-for="conv in paneCrewConvs"
+                :key="conv.id"
+                class="session-item session-item-crew"
+                :class="{ active: conv.id === conversationId, processing: store.isConversationProcessing(conv.id), 'agent-offline': conv.agentOnline === false }"
+                @click="onSidebarSessionClick(conv)"
+              >
+                <div class="session-item-header">
+                  <div class="title">
+                    <span v-if="store.isConversationProcessing(conv.id)" class="processing-dot"></span>
+                    <svg class="crew-conv-icon" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+                    {{ conv.name || 'Crew Session' }}
+                  </div>
+                  <span class="session-time">{{ getConvTime(conv) }}</span>
+                </div>
+                <div class="session-info">
+                  <span class="session-path">{{ shortenPath(conv.workDir) }}</span>
+                  <span class="session-agent" v-if="conv.agentName">{{ conv.agentName }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Empty state -->
+          <div v-if="paneChatConvs.length === 0 && paneCrewConvs.length === 0" class="pane-sidebar-empty">
+            {{ $t('splitScreen.noSessions') }}
           </div>
         </div>
-
-        <!-- No sessions at all -->
-        <p v-else class="pane-empty-hint">{{ $t('splitScreen.noSessions') }}</p>
       </div>
     </div>
   `,
@@ -273,26 +327,29 @@ export default {
       store.setPaneRightPanel(props.paneId, null);
     }
 
-    // Session lists for empty state
-    const emptyChatConvs = Vue.computed(() => {
+    // Pane sidebar state
+    const paneSidebarOpen = Vue.ref(false);
+
+    // Session lists (shared between sidebar and empty state)
+    const paneChatConvs = Vue.computed(() => {
       return [...store.conversations.filter(c => c.type !== 'crew')]
         .sort((a, b) => (b.lastMessageAt || 0) - (a.lastMessageAt || 0));
     });
 
-    const emptyCrewConvs = Vue.computed(() => {
+    const paneCrewConvs = Vue.computed(() => {
       return [...store.conversations.filter(c => c.type === 'crew')]
         .sort((a, b) => (b.lastMessageAt || 0) - (a.lastMessageAt || 0));
     });
 
-    function getEmptyConvTitle(conv) {
+    function getConvTitle(conv) {
       if (conv.type === 'crew') return conv.name || 'Crew Session';
       const cachedTitle = store.getConversationTitle(conv.id);
-      if (cachedTitle) return cachedTitle.length > 40 ? cachedTitle.slice(0, 40) + '...' : cachedTitle;
+      if (cachedTitle) return cachedTitle.length > 30 ? cachedTitle.slice(0, 30) + '...' : cachedTitle;
       if (conv.claudeSessionId) return conv.claudeSessionId.slice(0, 8) + '...';
       return conv.id.slice(0, 8) + '...';
     }
 
-    function getEmptyConvTime(conv) {
+    function getConvTime(conv) {
       const execStatus = store.executionStatusMap[conv.id];
       const ts = execStatus?.lastActivity || conv.createdAt;
       if (!ts) return '';
@@ -307,8 +364,18 @@ export default {
       return date.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' });
     }
 
-    function onEmptySessionClick(conv) {
+    function shortenPath(path) {
+      if (!path) return '-';
+      if (path.length <= 25) return path;
+      const parts = path.split(/[/\\]/);
+      if (parts.length <= 2) return path;
+      return '...' + parts.slice(-2).join('/');
+    }
+
+    function onSidebarSessionClick(conv) {
+      if (conv.agentOnline === false) return;
       store.setPaneConversation(props.paneId, conv.id);
+      paneSidebarOpen.value = false;
     }
 
     // Auto-scroll when new messages arrive
@@ -381,11 +448,13 @@ export default {
       closePane,
       paneRightPanel,
       closePanePanel,
-      emptyChatConvs,
-      emptyCrewConvs,
-      getEmptyConvTitle,
-      getEmptyConvTime,
-      onEmptySessionClick
+      paneSidebarOpen,
+      paneChatConvs,
+      paneCrewConvs,
+      getConvTitle,
+      getConvTime,
+      shortenPath,
+      onSidebarSessionClick
     };
   }
 };
