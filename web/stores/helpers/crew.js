@@ -389,7 +389,24 @@ export function handleCrewOutput(store, msg) {
     // 用户主动恢复（从 CrewConfigPanel 点击恢复按钮）→ 切换到恢复的 session
     // 页面刷新时不设置 _pendingCrewRestore，不切换（保持当前行为）
     if (store._pendingCrewRestore === sid) {
-      store.activeConversations = [sid];
+      // Split mode aware — don't nuke other panes' conversations
+      if (store.splitPanes.length > 1) {
+        const pendingPaneId = store._pendingPaneId;
+        store._pendingPaneId = null;
+        if (pendingPaneId) {
+          const targetPane = store.splitPanes.find(p => p.id === pendingPaneId);
+          if (targetPane) targetPane.conversationId = sid;
+        } else {
+          // Find the pane that triggered the restore, or an empty pane
+          const emptyPane = store.splitPanes.find(p => !p.conversationId);
+          if (emptyPane) emptyPane.conversationId = sid;
+        }
+        if (!store.activeConversations.includes(sid)) {
+          store.activeConversations.push(sid);
+        }
+      } else {
+        store.activeConversations = [sid];
+      }
       store.currentWorkDir = msg.projectDir;
       store.messagesMap[sid] = [];
       delete store._pendingCrewRestore;

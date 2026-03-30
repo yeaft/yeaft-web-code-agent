@@ -97,7 +97,14 @@ export function selectConversation(store, conversationId, agentId) {
     store.messagesMap[conversationId] = [];
   }
 
-  store.activeConversations = [conversationId];
+  // Split mode aware — don't nuke other panes' conversations
+  if (store.splitPanes.length > 1) {
+    if (!store.activeConversations.includes(conversationId)) {
+      store.activeConversations.push(conversationId);
+    }
+  } else {
+    store.activeConversations = [conversationId];
+  }
   if (conv) {
     store.currentWorkDir = conv.workDir;
   }
