@@ -136,8 +136,8 @@ function inferHumanMessageTaskId(store, sessionId, targetRole) {
   return null;
 }
 
-export function sendCrewMessage(store, content, targetRole, attachments) {
-  const sessionId = store.currentConversation;
+export function sendCrewMessage(store, content, targetRole, attachments, conversationId) {
+  const sessionId = conversationId || store.currentConversation;
   // 添加人的消息到本地显示
   if (!store.crewMessagesMap[sessionId]) store.crewMessagesMap[sessionId] = [];
 
@@ -181,8 +181,8 @@ export function sendCrewMessage(store, content, targetRole, attachments) {
   }
 }
 
-export function sendCrewControl(store, action, targetRole) {
-  const sessionId = store.currentConversation;
+export function sendCrewControl(store, action, targetRole, conversationId) {
+  const sessionId = conversationId || store.currentConversation;
   store.sendWsMessage({
     type: 'crew_control',
     sessionId,
@@ -192,8 +192,8 @@ export function sendCrewControl(store, action, targetRole) {
   });
 }
 
-export function addCrewRole(store, role) {
-  const sessionId = store.currentConversation;
+export function addCrewRole(store, role, conversationId) {
+  const sessionId = conversationId || store.currentConversation;
   store.sendWsMessage({
     type: 'crew_add_role',
     sessionId,
@@ -202,8 +202,8 @@ export function addCrewRole(store, role) {
   });
 }
 
-export function removeCrewRole(store, roleName) {
-  const sessionId = store.currentConversation;
+export function removeCrewRole(store, roleName, conversationId) {
+  const sessionId = conversationId || store.currentConversation;
   store.sendWsMessage({
     type: 'crew_remove_role',
     sessionId,

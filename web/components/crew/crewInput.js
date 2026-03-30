@@ -4,7 +4,7 @@
 
 import { DEFAULT_SLASH_COMMANDS, getCommandDescription, buildGroupedCommands } from '../../utils/slash-commands.js';
 
-export function createCrewInput(store, authStore, { getInputRef, getFileInputRef, getCurrentPendingAsk }) {
+export function createCrewInput(store, authStore, { getInputRef, getFileInputRef, getCurrentPendingAsk, getConversationId }) {
   const inputText = Vue.ref('');
   const attachments = Vue.ref([]);
   const uploading = Vue.ref(false);
@@ -24,7 +24,9 @@ export function createCrewInput(store, authStore, { getInputRef, getFileInputRef
 
   const filteredAtRoles = Vue.computed(() => {
     if (!atMenuVisible.value) return [];
-    const roles = store.currentCrewSession?.roles || [];
+    const convId = getConversationId ? getConversationId() : store.currentConversation;
+    const session = convId ? store.crewSessions[convId] : null;
+    const roles = session?.roles || [];
     const q = atQuery.value.toLowerCase();
     if (!q) return roles;
     return roles.filter(r =>
@@ -37,7 +39,7 @@ export function createCrewInput(store, authStore, { getInputRef, getFileInputRef
   // Crew mode: use current conversation (crew session id) for per-session commands,
   // fallback to agent-level, then defaults
   const availableCommands = Vue.computed(() => {
-    const convId = store.currentConversation;
+    const convId = getConversationId ? getConversationId() : store.currentConversation;
     const agentId = store.currentAgent;
     const dynamic = (convId && store.slashCommandsMap[convId])
       || (agentId && store.slashCommandsMap[`agent:${agentId}`])
@@ -260,12 +262,13 @@ export function createCrewInput(store, authStore, { getInputRef, getFileInputRef
     slashMenuVisible.value = false;
 
     const text = inputText.value.trim();
+    const convId = getConversationId ? getConversationId() : store.currentConversation;
 
     // Intercept /btw side question
     if (text.startsWith('/btw ')) {
       store.sendBtwQuestion(text.substring(5));
       inputText.value = '';
-      delete store.inputDrafts[store.currentConversation];
+      delete store.inputDrafts[convId];
       const textarea = getInputRef();
       if (textarea) textarea.style.height = 'auto';
       return;
@@ -284,10 +287,10 @@ export function createCrewInput(store, authStore, { getInputRef, getFileInputRef
     // AskUserQuestion answers are now handled by AskCard component's submit event,
     // no longer intercepted here in the input handler.
 
-    store.sendCrewMessage(text, null, attachmentInfos.length > 0 ? attachmentInfos : undefined);
+    store.sendCrewMessage(text, null, attachmentInfos.length > 0 ? attachmentInfos : undefined, convId);
     inputText.value = '';
     attachments.value = [];
-    delete store.inputDrafts[store.currentConversation];
+    delete store.inputDrafts[convId];
     const textarea = getInputRef();
     if (textarea) textarea.style.height = 'auto';
     if (scrollToBottom) {

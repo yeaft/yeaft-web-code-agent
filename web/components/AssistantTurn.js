@@ -8,6 +8,10 @@ export default {
     turn: {
       type: Object,
       required: true
+    },
+    conversationId: {
+      type: String,
+      default: null
     }
   },
   template: `
@@ -75,7 +79,7 @@ export default {
 
     // AskUserQuestion — delegate to AskCard component
     const onAskSubmit = (requestId, answers) => {
-      store.answerUserQuestion(requestId, answers);
+      store.answerUserQuestion(requestId, answers, props.conversationId || undefined);
     };
 
     const showToolActions = Vue.computed(() => {

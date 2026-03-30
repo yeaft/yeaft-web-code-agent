@@ -1,7 +1,7 @@
 /**
  * crewScroll — Composable factory for scroll management, history loading, block visibility.
  */
-export function createCrewScroll(store, { getMessagesRef, getFeatureBlocks }) {
+export function createCrewScroll(store, { getMessagesRef, getFeatureBlocks, getConversationId }) {
   const isAtBottom = Vue.ref(true);
   const visibleBlockCount = Vue.ref(20);
   const isLoadingMore = Vue.ref(false);
@@ -24,7 +24,7 @@ export function createCrewScroll(store, { getMessagesRef, getFeatureBlocks }) {
   });
 
   const hasOlderMessages = Vue.computed(() => {
-    const sid = store.currentConversation;
+    const sid = getConversationId ? getConversationId() : store.currentConversation;
     const older = store.crewOlderMessages[sid];
     return older?.hasMore || false;
   });
@@ -74,7 +74,7 @@ export function createCrewScroll(store, { getMessagesRef, getFeatureBlocks }) {
 
   function loadHistory(watchFn) {
     if (isLoadingHistory.value || !hasOlderMessages.value) return;
-    const sid = store.currentConversation;
+    const sid = getConversationId ? getConversationId() : store.currentConversation;
     const requested = store.loadCrewHistory(sid);
     if (!requested) return;
     // Use provided watchFn or fall back to Vue.watch (works in Options API created() scope)

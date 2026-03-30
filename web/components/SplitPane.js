@@ -46,7 +46,7 @@ export default {
                 <div class="messages">
                   <template v-for="item in turnGroups" :key="item.id">
                     <MessageItem v-if="item.type === 'user' || item.type === 'system' || item.type === 'error'" :message="item.message" />
-                    <AssistantTurn v-else-if="item.type === 'assistant-turn'" :turn="item" />
+                    <AssistantTurn v-else-if="item.type === 'assistant-turn'" :turn="item" :conversationId="conversationId" />
                   </template>
                   <div v-if="showTypingDots" class="typing-indicator">
                     <span></span><span></span><span></span>
