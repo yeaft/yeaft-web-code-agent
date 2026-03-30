@@ -30,7 +30,18 @@ export default {
           <div class="ptb-dropdown-group" v-if="chatConversations.length > 0">
             <div class="ptb-dropdown-label">{{ $t('chat.sidebar.recentChats') }}</div>
             <div
-              v-for="conv in chatConversations"
+              v-for="conv in pinnedChatConversations"
+              :key="conv.id"
+              class="ptb-dropdown-item is-pinned"
+              :class="{ active: conv.id === conversationId, 'agent-offline': conv.agentOnline === false }"
+              @click="onSessionClick(conv)"
+            >
+              <svg class="ptb-pin-icon" viewBox="0 0 24 24" width="10" height="10"><path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>
+              <span class="ptb-item-title">{{ getConversationTitle(conv) }}</span>
+              <span class="ptb-item-time">{{ getConversationTime(conv) }}</span>
+            </div>
+            <div
+              v-for="conv in unpinnedChatConversations"
               :key="conv.id"
               class="ptb-dropdown-item"
               :class="{ active: conv.id === conversationId, 'agent-offline': conv.agentOnline === false }"
@@ -45,7 +56,19 @@ export default {
           <div class="ptb-dropdown-group" v-if="crewConversations.length > 0">
             <div class="ptb-dropdown-label">Crew Sessions</div>
             <div
-              v-for="conv in crewConversations"
+              v-for="conv in pinnedCrewConversations"
+              :key="conv.id"
+              class="ptb-dropdown-item is-pinned"
+              :class="{ active: conv.id === conversationId, 'agent-offline': conv.agentOnline === false }"
+              @click="onSessionClick(conv)"
+            >
+              <svg class="ptb-pin-icon" viewBox="0 0 24 24" width="10" height="10"><path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>
+              <svg class="ptb-crew-icon" viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+              <span class="ptb-item-title">{{ getCrewTitle(conv) }}</span>
+              <span class="ptb-item-time">{{ getConversationTime(conv) }}</span>
+            </div>
+            <div
+              v-for="conv in unpinnedCrewConversations"
               :key="conv.id"
               class="ptb-dropdown-item"
               :class="{ active: conv.id === conversationId, 'agent-offline': conv.agentOnline === false }"
@@ -126,6 +149,24 @@ export default {
       return sortByActivity(store.conversations.filter(c => c.type === 'crew'));
     });
 
+    const pinnedChatConversations = Vue.computed(() => {
+      const pinned = store.conversations.filter(c => c.type !== 'crew' && store.isSessionPinned(c.id));
+      return pinned.sort((a, b) => store.pinnedSessions.indexOf(a.id) - store.pinnedSessions.indexOf(b.id));
+    });
+
+    const unpinnedChatConversations = Vue.computed(() => {
+      return sortByActivity(store.conversations.filter(c => c.type !== 'crew' && !store.isSessionPinned(c.id)));
+    });
+
+    const pinnedCrewConversations = Vue.computed(() => {
+      const pinned = store.conversations.filter(c => c.type === 'crew' && store.isSessionPinned(c.id));
+      return pinned.sort((a, b) => store.pinnedSessions.indexOf(a.id) - store.pinnedSessions.indexOf(b.id));
+    });
+
+    const unpinnedCrewConversations = Vue.computed(() => {
+      return sortByActivity(store.conversations.filter(c => c.type === 'crew' && !store.isSessionPinned(c.id)));
+    });
+
     function sortByActivity(conversations) {
       return [...conversations].sort((a, b) => {
         const aTime = a.lastMessageAt || 0;
@@ -203,6 +244,10 @@ export default {
       onlineAgentCount,
       chatConversations,
       crewConversations,
+      pinnedChatConversations,
+      unpinnedChatConversations,
+      pinnedCrewConversations,
+      unpinnedCrewConversations,
       getConversationTitle,
       getCrewTitle,
       getConversationTime,

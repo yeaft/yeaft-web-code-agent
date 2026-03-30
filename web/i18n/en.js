@@ -111,6 +111,8 @@ export default {
   'chat.sidebar.emptyHint': 'Click the button above to create a new conversation',
   'chat.sidebar.closeConv': 'Close Conversation',
   'chat.sidebar.renameConv': 'Rename',
+  'chat.sidebar.pin': 'Pin to top',
+  'chat.sidebar.unpin': 'Unpin',
 
   // Chat - Connection
   'chat.connection.connecting': 'Connecting...',
