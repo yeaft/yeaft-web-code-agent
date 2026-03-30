@@ -493,3 +493,31 @@
     width: 360px;
   }
 }
+
+/* ---- Split-pane mode: panel floats over conversation ---- */
+.split-pane .chat-body {
+  position: relative;
+}
+
+.split-pane .expert-panel-overlay {
+  display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.3);
+  z-index: 59;
+}
+
+.split-pane .expert-panel.open {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 80%;
+  max-width: 320px;
+  z-index: 60;
+  border-left: 1px solid var(--border-color);
+  box-shadow: -4px 0 20px rgba(0, 0, 0, 0.15);
+}
