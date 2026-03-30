@@ -1,6 +1,6 @@
 export default {
   name: 'ChatHeader',
-  emits: ['toggle-sidebar', 'close-pane'],
+  emits: ['toggle-sidebar', 'close-pane', 'toggle-pane-sidebar'],
   props: {
     conversationId: { type: String, default: null },
     paneId: { type: String, default: null },
@@ -15,6 +15,13 @@ export default {
           <path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/>
         </svg>
       </button>
+      <!-- Split-mode pane sidebar toggle -->
+      <button class="header-sidebar-toggle pane-sidebar-toggle" v-if="store.isSplitMode && paneId"
+              @click="$emit('toggle-pane-sidebar')">
+        <svg viewBox="0 0 24 24" width="16" height="16">
+          <path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/>
+        </svg>
+      </button>
       <!-- Mobile page reload — hidden on desktop -->
       <button class="header-reload-btn" v-if="!store.isSplitMode"
               @click="reloadPage"
@@ -23,43 +30,9 @@ export default {
           <path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/>
         </svg>
       </button>
-      <div class="chat-title-group" :class="{ 'split-title-clickable': store.isSplitMode && paneId }" @click.stop="onTitleClick">
+      <div class="chat-title-group">
         <div class="chat-title">{{ headerTitle }}</div>
-        <svg v-if="store.isSplitMode && paneId" class="split-title-chevron" :class="{ open: splitDropdownOpen }" viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z"/></svg>
         <div v-if="folderPath" class="chat-title-path">{{ folderPath }}</div>
-        <!-- Split-mode session dropdown -->
-        <div class="split-session-dropdown" v-if="splitDropdownOpen" @click.stop>
-          <div class="split-dd-group" v-if="splitChatConvs.length > 0">
-            <div class="split-dd-label">{{ $t('chat.sidebar.recentChats') }}</div>
-            <div
-              v-for="conv in splitChatConvs"
-              :key="conv.id"
-              class="split-dd-item"
-              :class="{ active: conv.id === effectiveConvId }"
-              @click="onSplitSessionClick(conv)"
-            >
-              <span class="split-dd-title">{{ getSplitConvTitle(conv) }}</span>
-              <span class="split-dd-time">{{ getSplitConvTime(conv) }}</span>
-            </div>
-          </div>
-          <div class="split-dd-group" v-if="splitCrewConvs.length > 0">
-            <div class="split-dd-label">Crew Sessions</div>
-            <div
-              v-for="conv in splitCrewConvs"
-              :key="conv.id"
-              class="split-dd-item"
-              :class="{ active: conv.id === effectiveConvId }"
-              @click="onSplitSessionClick(conv)"
-            >
-              <svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
-              <span class="split-dd-title">{{ conv.name || 'Crew Session' }}</span>
-              <span class="split-dd-time">{{ getSplitConvTime(conv) }}</span>
-            </div>
-          </div>
-          <div v-if="splitChatConvs.length === 0 && splitCrewConvs.length === 0" class="split-dd-empty">
-            {{ $t('splitScreen.noSessions') }}
-          </div>
-        </div>
       </div>
       <!-- Compact / Clear Status Banner -->
       <div v-if="showStatusBanner" class="compact-status-banner" :class="statusBannerClass">
@@ -411,57 +384,6 @@ export default {
     };
 
     // Close MCP panel on click outside (dropdown is teleported to body)
-    // --- Split-mode session dropdown ---
-    const splitDropdownOpen = Vue.ref(false);
-
-    function onTitleClick() {
-      if (!store.isSplitMode || !props.paneId) return;
-      splitDropdownOpen.value = !splitDropdownOpen.value;
-    }
-
-    const splitChatConvs = Vue.computed(() => {
-      if (!store.isSplitMode) return [];
-      return [...store.conversations.filter(c => c.type !== 'crew')].sort((a, b) => (b.lastMessageAt || 0) - (a.lastMessageAt || 0));
-    });
-
-    const splitCrewConvs = Vue.computed(() => {
-      if (!store.isSplitMode) return [];
-      return [...store.conversations.filter(c => c.type === 'crew')].sort((a, b) => (b.lastMessageAt || 0) - (a.lastMessageAt || 0));
-    });
-
-    function getSplitConvTitle(conv) {
-      if (conv.type === 'crew') return conv.name || 'Crew Session';
-      const cachedTitle = store.getConversationTitle(conv.id);
-      if (cachedTitle) return cachedTitle.length > 30 ? cachedTitle.slice(0, 30) + '...' : cachedTitle;
-      if (conv.claudeSessionId) return conv.claudeSessionId.slice(0, 8) + '...';
-      return conv.id.slice(0, 8) + '...';
-    }
-
-    function getSplitConvTime(conv) {
-      const execStatus = store.executionStatusMap[conv.id];
-      const ts = execStatus?.lastActivity || conv.createdAt;
-      if (!ts) return '';
-      const date = new Date(ts);
-      const now = new Date();
-      const diffMs = now - date;
-      if (diffMs < 60000) return 'now';
-      if (diffMs < 3600000) return Math.floor(diffMs / 60000) + 'm';
-      if (date.toDateString() === now.toDateString()) {
-        return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-      }
-      return date.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' });
-    }
-
-    function onSplitSessionClick(conv) {
-      store.setPaneConversation(props.paneId, conv.id);
-      splitDropdownOpen.value = false;
-    }
-
-    // Close split dropdown on outside click
-    const closeSplitDropdown = () => {
-      if (splitDropdownOpen.value) splitDropdownOpen.value = false;
-    };
-
     const closeMcpOnOutsideClick = (e) => {
       if (store.mcpPanelOpen && !e.target.closest('.mcp-dropdown') && !e.target.closest('.mcp-config-wrapper')) {
         store.mcpPanelOpen = false;
@@ -470,13 +392,11 @@ export default {
 
     Vue.onMounted(() => {
       document.addEventListener('click', closeMcpOnOutsideClick);
-      document.addEventListener('click', closeSplitDropdown);
     });
     Vue.onUnmounted(() => {
       document.removeEventListener('click', closeMcpOnOutsideClick);
-      document.removeEventListener('click', closeSplitDropdown);
     });
 
-    return { store, effectiveConvId, effectiveRightPanel, isCrew, headerTitle, folderPath, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, hasStreamingRoles, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, openCrewEdit, onCrewPanelToggle, isCrewPanelActive, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel, toggleSubAgentPanel, runningSubagentCount, splitDropdownOpen, onTitleClick, splitChatConvs, splitCrewConvs, getSplitConvTitle, getSplitConvTime, onSplitSessionClick };
+    return { store, effectiveConvId, effectiveRightPanel, isCrew, headerTitle, folderPath, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, hasStreamingRoles, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, openCrewEdit, onCrewPanelToggle, isCrewPanelActive, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel, toggleSubAgentPanel, runningSubagentCount };
   }
 };
