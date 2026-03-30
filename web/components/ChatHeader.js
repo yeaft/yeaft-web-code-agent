@@ -32,7 +32,10 @@ export default {
       </button>
       <div class="chat-title-group">
         <div class="chat-title">{{ headerTitle }}</div>
-        <div v-if="folderPath" class="chat-title-path">{{ folderPath }}</div>
+        <div v-if="folderPath || (store.isSplitMode && agentName)" class="chat-title-path">
+          <span v-if="store.isSplitMode && agentName" class="chat-title-agent">{{ agentName }}</span>
+          {{ folderPath }}
+        </div>
       </div>
       <!-- Compact / Clear Status Banner -->
       <div v-if="showStatusBanner" class="compact-status-banner" :class="statusBannerClass">
@@ -195,6 +198,15 @@ export default {
       }
 
       return t('chatHeader.newConv');
+    });
+
+    const agentName = Vue.computed(() => {
+      if (!effectiveConvId.value) return '';
+      const conv = store.conversations.find(c => c.id === effectiveConvId.value);
+      const aid = conv?.agentId;
+      if (!aid) return '';
+      const agent = store.agents.find(a => a.id === aid);
+      return agent?.name || '';
     });
 
     // Unified status banner: shows compact or clear status
@@ -397,6 +409,6 @@ export default {
       document.removeEventListener('click', closeMcpOnOutsideClick);
     });
 
-    return { store, effectiveConvId, effectiveRightPanel, isCrew, headerTitle, folderPath, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, hasStreamingRoles, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, openCrewEdit, onCrewPanelToggle, isCrewPanelActive, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel, toggleSubAgentPanel, runningSubagentCount };
+    return { store, effectiveConvId, effectiveRightPanel, isCrew, headerTitle, agentName, folderPath, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, hasStreamingRoles, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, openCrewEdit, onCrewPanelToggle, isCrewPanelActive, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel, toggleSubAgentPanel, runningSubagentCount };
   }
 };

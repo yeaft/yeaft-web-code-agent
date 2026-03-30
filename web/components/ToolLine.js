@@ -99,6 +99,13 @@ export default {
       if (hasExpandableContent.value) isExpanded.value = !isExpanded.value;
     };
 
+    const middleTruncate = (text, maxLen = 80) => {
+      if (!text || text.length <= maxLen) return text || '';
+      const headLen = Math.ceil(maxLen * 0.6);
+      const tailLen = maxLen - headLen - 3;
+      return text.slice(0, headLen) + '...' + text.slice(-tailLen);
+    };
+
     const getToolIcon = (name) => {
       const icons = { Read: '\u{1F4D6}', Edit: '\u270F\uFE0F', Write: '\u{1F4DD}', Bash: '\u26A1', Glob: '\u{1F50D}', Grep: '\u{1F50E}', Task: '\u{1F4CB}', WebFetch: '\u{1F310}', WebSearch: '\u{1F50D}', TodoWrite: '\u2705' };
       return icons[name] || '\u2699\uFE0F';
@@ -119,7 +126,7 @@ export default {
       if (toolName === 'Write' && input.file_path) return `Write ${input.file_path}`;
       if (toolName === 'Bash' && input.command) {
         const cmd = input.command;
-        return cmd.length > 80 ? cmd.slice(0, 80) + '...' : cmd;
+        return middleTruncate(cmd, 80);
       }
       if (toolName === 'Glob' && input.pattern) return `Glob ${input.pattern}` + (input.path ? ` in ${input.path}` : '');
       if (toolName === 'Grep' && input.pattern) {
@@ -130,13 +137,13 @@ export default {
       }
       if (toolName === 'Task') {
         const agent = input.subagent_type || 'agent';
-        const desc = input.description || input.prompt?.slice(0, 40) || '';
+        const desc = input.description || middleTruncate(input.prompt || '', 40);
         return `Task [${agent}]: ${desc}`;
       }
       if (toolName === 'WebFetch' && input.url) {
         try {
           const url = new URL(input.url);
-          return `Fetch ${url.hostname}${url.pathname.length > 20 ? url.pathname.slice(0, 20) + '...' : url.pathname}`;
+          return `Fetch ${url.hostname}${url.pathname.length > 20 ? middleTruncate(url.pathname, 20) : url.pathname}`;
         } catch { return `Fetch ${input.url.slice(0, 50)}`; }
       }
       if (toolName === 'WebSearch' && input.query) return `Search "${input.query}"`;
