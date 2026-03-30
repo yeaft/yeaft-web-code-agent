@@ -3,11 +3,12 @@ import fs from 'fs';
 import path from 'path';
 
 /**
- * Tests for PR #392 (task-172 + task-173):
+ * Tests for PR #392 (task-172 + task-173 + task-176):
  *   Part 1: middleTruncate function in ToolLine.js
  *   Part 2: ChatHeader agentName in split-mode
+ *   Part 3: Vertical alignment fix (task-176)
  *
- * 7 test areas:
+ * 10 test areas:
  *   1. middleTruncate — pure function behavioral tests
  *   2. ToolLine Bash truncation uses middleTruncate(cmd, 80)
  *   3. ToolLine WebFetch truncation uses middleTruncate(pathname, 20)
@@ -15,6 +16,9 @@ import path from 'path';
  *   5. ChatHeader agentName computed logic
  *   6. ChatHeader template — isSplitMode && agentName condition
  *   7. CSS .chat-title-agent style exists
+ *   8. CSS .chat-title-path flex alignment (task-176)
+ *   9. CSS .chat-title-path-text ellipsis (task-176)
+ *  10. ChatHeader folderPath wrapped in span.chat-title-path-text (task-176)
  */
 
 const webDir = path.resolve(__dirname, '../../web');
@@ -255,5 +259,101 @@ describe('CSS .chat-title-agent style', () => {
     const rule = css.match(/\.chat-title-agent\s*\{[^}]+\}/);
     expect(rule).not.toBeNull();
     expect(rule[0]).toContain('margin-right: 6px');
+  });
+
+  it('should NOT have vertical-align: middle (flex child does not need it)', () => {
+    const rule = css.match(/\.chat-title-agent\s*\{[^}]+\}/);
+    expect(rule).not.toBeNull();
+    expect(rule[0]).not.toContain('vertical-align');
+  });
+});
+
+// =====================================================================
+// 8. CSS .chat-title-path — flex alignment (task-176)
+// =====================================================================
+describe('CSS .chat-title-path flex alignment', () => {
+  const css = readFile('styles/sidebar.css');
+
+  it('should define .chat-title-path rule', () => {
+    expect(css).toMatch(/\.chat-title-path\s*\{/);
+  });
+
+  it('should use display: flex for vertical alignment', () => {
+    const rule = css.match(/\.chat-title-path\s*\{[^}]+\}/);
+    expect(rule).not.toBeNull();
+    expect(rule[0]).toContain('display: flex');
+  });
+
+  it('should use align-items: center for vertical centering', () => {
+    const rule = css.match(/\.chat-title-path\s*\{[^}]+\}/);
+    expect(rule).not.toBeNull();
+    expect(rule[0]).toContain('align-items: center');
+  });
+
+  it('should have overflow: hidden to prevent overflow', () => {
+    const rule = css.match(/\.chat-title-path\s*\{[^}]+\}/);
+    expect(rule).not.toBeNull();
+    expect(rule[0]).toContain('overflow: hidden');
+  });
+
+  it('should have white-space: nowrap to prevent wrapping', () => {
+    const rule = css.match(/\.chat-title-path\s*\{[^}]+\}/);
+    expect(rule).not.toBeNull();
+    expect(rule[0]).toContain('white-space: nowrap');
+  });
+});
+
+// =====================================================================
+// 9. CSS .chat-title-path-text — ellipsis for folderPath (task-176)
+// =====================================================================
+describe('CSS .chat-title-path-text ellipsis', () => {
+  const css = readFile('styles/sidebar.css');
+
+  it('should define .chat-title-path-text rule', () => {
+    expect(css).toMatch(/\.chat-title-path-text\s*\{/);
+  });
+
+  it('should have overflow: hidden for text truncation', () => {
+    const rule = css.match(/\.chat-title-path-text\s*\{[^}]+\}/);
+    expect(rule).not.toBeNull();
+    expect(rule[0]).toContain('overflow: hidden');
+  });
+
+  it('should have text-overflow: ellipsis for truncated text', () => {
+    const rule = css.match(/\.chat-title-path-text\s*\{[^}]+\}/);
+    expect(rule).not.toBeNull();
+    expect(rule[0]).toContain('text-overflow: ellipsis');
+  });
+
+  it('should have min-width: 0 to allow flex shrinking', () => {
+    const rule = css.match(/\.chat-title-path-text\s*\{[^}]+\}/);
+    expect(rule).not.toBeNull();
+    expect(rule[0]).toContain('min-width: 0');
+  });
+
+  it('should have white-space: nowrap to prevent wrapping', () => {
+    const rule = css.match(/\.chat-title-path-text\s*\{[^}]+\}/);
+    expect(rule).not.toBeNull();
+    expect(rule[0]).toContain('white-space: nowrap');
+  });
+});
+
+// =====================================================================
+// 10. ChatHeader template — folderPath wrapped in span.chat-title-path-text (task-176)
+// =====================================================================
+describe('ChatHeader folderPath wrapped in span', () => {
+  const chatHeaderJs = readFile('components/ChatHeader.js');
+
+  it('should wrap folderPath in a span with class chat-title-path-text', () => {
+    expect(chatHeaderJs).toContain('class="chat-title-path-text"');
+    expect(chatHeaderJs).toContain('{{ folderPath }}</span>');
+  });
+
+  it('should have both chat-title-agent and chat-title-path-text as children of chat-title-path', () => {
+    // Both spans should appear within the chat-title-path div
+    const pathBlock = chatHeaderJs.match(/class="chat-title-path"[\s\S]*?<\/div>/);
+    expect(pathBlock).not.toBeNull();
+    expect(pathBlock[0]).toContain('chat-title-agent');
+    expect(pathBlock[0]).toContain('chat-title-path-text');
   });
 });
