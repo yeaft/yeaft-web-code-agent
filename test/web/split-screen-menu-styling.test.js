@@ -57,10 +57,9 @@ describe('CSS layout structure', () => {
     expect(rule[0]).toContain('width: 40px');
   });
 
-  it('should define .pane-topbar with 36px height', () => {
+  it('should NOT have .pane-topbar (removed in PR #385)', () => {
     const rule = css.match(/\.pane-topbar\s*\{[^}]+\}/);
-    expect(rule).not.toBeNull();
-    expect(rule[0]).toContain('height: 36px');
+    expect(rule).toBeNull();
   });
 
   it('should define .split-panes-container', () => {
@@ -249,24 +248,24 @@ describe('PaneTopBar action buttons', () => {
 });
 
 // =====================================================================
-// 6. SplitPane integrates PaneTopBar
+// 6. SplitPane no longer uses PaneTopBar (removed in PR #385)
 // =====================================================================
-describe('SplitPane integrates PaneTopBar', () => {
+describe('SplitPane does NOT use PaneTopBar', () => {
   const splitPaneJs = readFile('components/SplitPane.js');
 
-  it('should import PaneTopBar', () => {
-    expect(splitPaneJs).toContain("import PaneTopBar from './PaneTopBar.js'");
+  it('should NOT import PaneTopBar', () => {
+    expect(splitPaneJs).not.toContain("import PaneTopBar from './PaneTopBar.js'");
   });
 
-  it('should register PaneTopBar as a component', () => {
-    expect(splitPaneJs).toContain('PaneTopBar');
+  it('should NOT register PaneTopBar as a component', () => {
+    expect(splitPaneJs).not.toContain('components: { PaneTopBar');
   });
 
-  it('should render PaneTopBar in template', () => {
-    expect(splitPaneJs).toContain('<PaneTopBar');
+  it('should NOT render PaneTopBar in template', () => {
+    expect(splitPaneJs).not.toContain('<PaneTopBar');
   });
 
-  it('should pass paneId and conversationId to PaneTopBar', () => {
+  it('should still pass paneId and conversationId to ChatHeader', () => {
     expect(splitPaneJs).toContain(':paneId="paneId"');
     expect(splitPaneJs).toContain(':conversationId="conversationId"');
   });
@@ -355,7 +354,7 @@ describe('CSS variable correctness', () => {
   it('should use var(--bg-sidebar) for backgrounds', () => {
     const matches = css.match(/var\(--bg-sidebar\)/g);
     expect(matches).not.toBeNull();
-    expect(matches.length).toBeGreaterThanOrEqual(2);
+    expect(matches.length).toBeGreaterThanOrEqual(1);
   });
 
   it('should use var(--border-color) for borders', () => {
@@ -473,58 +472,23 @@ describe('SplitPane close pane', () => {
 // =====================================================================
 // 14. Dropdown CSS — absolute positioning, z-index, opaque background
 // =====================================================================
-describe('Session dropdown CSS', () => {
+describe('Session dropdown CSS (removed in PR #385)', () => {
   const css = readFile('styles/split-screen.css');
 
-  it('should position dropdown absolutely', () => {
-    const dropdownRule = css.match(/\.ptb-session-dropdown\s*\{[^}]+\}/);
-    expect(dropdownRule).not.toBeNull();
-    expect(dropdownRule[0]).toContain('position: absolute');
+  it('should NOT have .ptb-session-dropdown (removed with PaneTopBar)', () => {
+    expect(css).not.toContain('.ptb-session-dropdown');
   });
 
-  it('should have z-index for dropdown overlay', () => {
-    const dropdownRule = css.match(/\.ptb-session-dropdown\s*\{[^}]+\}/);
-    expect(dropdownRule).not.toBeNull();
-    expect(dropdownRule[0]).toContain('z-index:');
+  it('should NOT have .ptb-dropdown-empty (removed with PaneTopBar)', () => {
+    expect(css).not.toContain('.ptb-dropdown-empty');
   });
 
-  it('should have opaque background (not transparent)', () => {
-    const dropdownRule = css.match(/\.ptb-session-dropdown\s*\{[^}]+\}/);
-    expect(dropdownRule).not.toBeNull();
-    expect(dropdownRule[0]).toContain('var(--bg-sidebar)');
+  it('should NOT have .ptb-dropdown-item.active (removed with PaneTopBar)', () => {
+    expect(css).not.toContain('.ptb-dropdown-item.active');
   });
 
-  it('should have box-shadow for visual separation', () => {
-    const dropdownRule = css.match(/\.ptb-session-dropdown\s*\{[^}]+\}/);
-    expect(dropdownRule).not.toBeNull();
-    expect(dropdownRule[0]).toContain('box-shadow');
-  });
-
-  it('should have max-height with overflow scroll', () => {
-    const dropdownRule = css.match(/\.ptb-session-dropdown\s*\{[^}]+\}/);
-    expect(dropdownRule).not.toBeNull();
-    expect(dropdownRule[0]).toContain('max-height');
-    expect(dropdownRule[0]).toContain('overflow-y: auto');
-  });
-
-  it('should style .ptb-dropdown-empty for no-sessions state', () => {
-    const emptyRule = css.match(/\.ptb-dropdown-empty\s*\{[^}]+\}/);
-    expect(emptyRule).not.toBeNull();
-    expect(emptyRule[0]).toContain('text-align: center');
-    expect(emptyRule[0]).toContain('var(--text-muted)');
-  });
-
-  it('should style active dropdown item distinctly', () => {
-    const activeRule = css.match(/\.ptb-dropdown-item\.active\s*\{[^}]+\}/);
-    expect(activeRule).not.toBeNull();
-    expect(activeRule[0]).toContain('var(--accent');
-  });
-
-  it('should style agent-offline dropdown items with reduced opacity', () => {
-    const offlineRule = css.match(/\.ptb-dropdown-item\.agent-offline\s*\{[^}]+\}/);
-    expect(offlineRule).not.toBeNull();
-    expect(offlineRule[0]).toContain('opacity');
-    expect(offlineRule[0]).toContain('cursor: not-allowed');
+  it('should NOT have .ptb-dropdown-item.agent-offline (removed with PaneTopBar)', () => {
+    expect(css).not.toContain('.ptb-dropdown-item.agent-offline');
   });
 });
 
