@@ -410,3 +410,22 @@
     width: 360px;
   }
 }
+
+/* ---- Split-pane mode: panel floats over conversation ---- */
+.split-pane .subagent-panel.open {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 80%;
+  max-width: 320px;
+  z-index: 60;
+  border-left: 1px solid var(--border-color);
+  box-shadow: -4px 0 20px rgba(0, 0, 0, 0.15);
+}
+
+.split-pane .subagent-panel.open.expanded {
+  width: 90%;
+  max-width: none;
+  min-width: 0;
+}
