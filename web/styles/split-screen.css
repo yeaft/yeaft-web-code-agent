@@ -253,3 +253,73 @@
   font-size: 13px;
   color: var(--text-muted);
 }
+
+/* ===== Split-Pane Crew Panels: Overlay Drawers ===== */
+/* In split mode, crew panels float over the conversation as drawers,
+   similar to mobile mode, to avoid eating pane width. */
+.split-pane .crew-workspace {
+  position: relative;
+}
+
+.split-pane .crew-panel-left,
+.split-pane .crew-panel-right {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 100;
+  width: min(260px, 80%);
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Left panel: slide from left */
+.split-pane .crew-panel-left {
+  left: 0;
+  transform: translateX(-100%);
+  box-shadow: 2px 0 12px rgba(0, 0, 0, 0.15);
+}
+
+/* Right panel: slide from right */
+.split-pane .crew-panel-right {
+  left: auto;
+  right: 0;
+  transform: translateX(100%);
+  box-shadow: -2px 0 12px rgba(0, 0, 0, 0.15);
+}
+
+/* Show panels when mobile-panel class is set */
+.split-pane .crew-workspace.mobile-panel-roles .crew-panel-left {
+  transform: translateX(0);
+}
+.split-pane .crew-workspace.mobile-panel-features .crew-panel-right {
+  transform: translateX(0);
+}
+
+/* Override desktop hide-* rules in split mode —
+   panels are drawers, not flex siblings */
+.split-pane .crew-workspace.hide-roles .crew-panel-left {
+  width: min(260px, 80%) !important;
+  min-width: auto;
+  padding: unset;
+  border: unset;
+}
+.split-pane .crew-workspace.hide-features .crew-panel-right {
+  width: min(260px, 80%) !important;
+  min-width: auto;
+  padding: unset;
+  border: unset;
+}
+.split-pane .crew-workspace.hide-roles .crew-panel-center,
+.split-pane .crew-workspace.hide-features .crew-panel-center {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* Backdrop overlay in split mode */
+.split-pane .crew-mobile-overlay {
+  display: block;
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.3);
+  z-index: 99;
+  animation: crew-overlay-fadein 0.3s ease;
+}
