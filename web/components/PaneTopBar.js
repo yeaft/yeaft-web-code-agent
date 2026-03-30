@@ -174,7 +174,7 @@ export default {
     function newChat() {
       if (onlineAgentCount.value === 0) return;
       store._pendingPaneId = props.paneId;
-      store.createConversation();
+      store.splitConvModalOpen = true;
     }
 
     function newCrewSession() {

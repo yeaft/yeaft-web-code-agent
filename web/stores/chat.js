@@ -119,6 +119,7 @@ export const useChatStore = defineStore('chat', {
     crewOlderMessages: {},       // { [sessionId]: { hasMore, nextShard, loading } }
     crewStatuses: {},             // { [sessionId]: { status, currentRole, round, costUsd, activeRoles } }
     crewExistsResult: null,       // check_crew_exists 结果: { exists, projectDir, sessionInfo }
+    splitConvModalOpen: false,    // 分屏模式下新建会话 modal 是否打开
     crewConfigOpen: false,        // crew 配置面板是否打开
     crewConfigMode: 'create',    // 'create' | 'edit'
     crewMobilePanel: null,       // null | 'roles' | 'features' — 移动端 Drawer 状态
