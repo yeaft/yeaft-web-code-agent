@@ -214,6 +214,7 @@ const App = {
 
     function closeSplitConvModal() {
       chatStore.splitConvModalOpen = false;
+      chatStore._pendingPaneId = null;
       splitConvAgent.value = '';
       splitConvWorkDir.value = '';
       splitHistoryLoaded.value = false;
