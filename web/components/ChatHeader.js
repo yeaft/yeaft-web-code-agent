@@ -34,7 +34,7 @@ export default {
         <div class="chat-title">{{ headerTitle }}</div>
         <div v-if="folderPath || (store.isSplitMode && agentName)" class="chat-title-path">
           <span v-if="store.isSplitMode && agentName" class="chat-title-agent">{{ agentName }}</span>
-          {{ folderPath }}
+          <span class="chat-title-path-text">{{ folderPath }}</span>
         </div>
       </div>
       <!-- Compact / Clear Status Banner -->
