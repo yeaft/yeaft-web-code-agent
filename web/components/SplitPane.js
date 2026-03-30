@@ -11,10 +11,12 @@ import MessageItem from './MessageItem.js';
 import AssistantTurn from './AssistantTurn.js';
 import ChatInput from './ChatInput.js';
 import CrewChatView from './CrewChatView.js';
+import ExpertPanel from './ExpertPanel.js';
+import SubAgentPanel from './SubAgentPanel.js';
 
 export default {
   name: 'SplitPane',
-  components: { ChatHeader, MessageItem, AssistantTurn, ChatInput, CrewChatView },
+  components: { ChatHeader, MessageItem, AssistantTurn, ChatInput, CrewChatView, ExpertPanel, SubAgentPanel },
   props: {
     paneId: { type: String, required: true },
     paneIndex: { type: Number, default: 0 },
@@ -36,25 +38,43 @@ export default {
 
         <!-- Chat mode -->
         <template v-else>
-          <!-- Inline message list (avoids modifying MessageList.js) -->
-          <main class="chat-container split-pane-messages" ref="containerRef">
-            <div class="messages">
-              <template v-for="item in turnGroups" :key="item.id">
-                <MessageItem v-if="item.type === 'user' || item.type === 'system' || item.type === 'error'" :message="item.message" />
-                <AssistantTurn v-else-if="item.type === 'assistant-turn'" :turn="item" />
-              </template>
-              <div v-if="showTypingDots" class="typing-indicator">
-                <span></span><span></span><span></span>
-              </div>
-            </div>
-          </main>
+          <div class="chat-body" :class="{ 'expert-panel-open': paneRightPanel }">
+            <div class="chat-body-main">
+              <!-- Inline message list (avoids modifying MessageList.js) -->
+              <main class="chat-container split-pane-messages" ref="containerRef">
+                <div class="messages">
+                  <template v-for="item in turnGroups" :key="item.id">
+                    <MessageItem v-if="item.type === 'user' || item.type === 'system' || item.type === 'error'" :message="item.message" />
+                    <AssistantTurn v-else-if="item.type === 'assistant-turn'" :turn="item" />
+                  </template>
+                  <div v-if="showTypingDots" class="typing-indicator">
+                    <span></span><span></span><span></span>
+                  </div>
+                </div>
+              </main>
 
-          <!-- Chat input with per-pane send/cancel -->
-          <ChatInput
-            :sendFn="sendFn"
-            :cancelFn="cancelFn"
-            :showStop="isProcessing"
-          />
+              <!-- Chat input with per-pane send/cancel -->
+              <ChatInput
+                :sendFn="sendFn"
+                :cancelFn="cancelFn"
+                :showStop="isProcessing"
+              />
+            </div>
+            <!-- Right Panel overlay (mobile only) -->
+            <div class="expert-panel-overlay" v-if="paneRightPanel" @click="closePanePanel"></div>
+            <SubAgentPanel
+              v-if="paneRightPanel === 'subagents'"
+              :visible="true"
+              @close="closePanePanel"
+            />
+            <ExpertPanel
+              v-else-if="paneRightPanel === 'experts'"
+              :visible="true"
+              :modelValue="store.expertSelections"
+              @update:modelValue="store.expertSelections = $event"
+              @close="closePanePanel"
+            />
+          </div>
         </template>
       </template>
 
@@ -212,6 +232,15 @@ export default {
       store.removePane(props.paneId);
     }
 
+    // Right panel state for this pane
+    const paneRightPanel = Vue.computed(() => {
+      return store.getPaneRightPanel(props.paneId);
+    });
+
+    function closePanePanel() {
+      store.setPaneRightPanel(props.paneId, null);
+    }
+
     // Auto-scroll when new messages arrive
     const isAtBottom = Vue.ref(true);
     const SCROLL_THRESHOLD = 50;
@@ -279,7 +308,9 @@ export default {
       turnGroups,
       sendFn,
       cancelFn,
-      closePane
+      closePane,
+      paneRightPanel,
+      closePanePanel
     };
   }
 };
