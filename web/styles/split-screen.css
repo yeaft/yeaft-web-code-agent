@@ -148,3 +148,94 @@
     display: none !important;
   }
 }
+
+/* ===== Split-mode Session Dropdown (in ChatHeader) ===== */
+.split-title-clickable {
+  cursor: pointer;
+  position: relative;
+}
+.split-title-clickable:hover .chat-title {
+  color: var(--accent);
+}
+
+.split-title-chevron {
+  margin-left: 2px;
+  vertical-align: middle;
+  transition: transform 0.2s;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+.split-title-chevron.open {
+  transform: rotate(180deg);
+}
+
+.split-session-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 200;
+  min-width: 240px;
+  max-width: 320px;
+  max-height: 360px;
+  overflow-y: auto;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  padding: 4px 0;
+  margin-top: 4px;
+}
+
+.split-dd-group + .split-dd-group {
+  border-top: 1px solid var(--border-color);
+  margin-top: 4px;
+  padding-top: 4px;
+}
+
+.split-dd-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 6px 12px 4px;
+  letter-spacing: 0.5px;
+}
+
+.split-dd-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.split-dd-item:hover {
+  background: var(--sidebar-hover);
+}
+.split-dd-item.active {
+  background: var(--accent-bg, rgba(59, 130, 246, 0.1));
+  color: var(--accent);
+}
+
+.split-dd-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.split-dd-time {
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.split-dd-empty {
+  padding: 16px 12px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted);
+}
