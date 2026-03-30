@@ -440,7 +440,48 @@ export const useChatStore = defineStore('chat', {
         crewMobilePanel: null
       });
       if (this.splitPanes.length === 0) {
-        // Entering split mode: first pane inherits current conversation
+        // Entering split mode: try to restore previous split layout
+        const saved = localStorage.getItem('splitPanesSaved');
+        if (saved) {
+          try {
+            const panes = JSON.parse(saved);
+            if (Array.isArray(panes) && panes.length >= 2) {
+              // Validate conversationIds still exist
+              const convIds = new Set(this.conversations.map(c => c.id));
+              const validPanes = panes
+                .filter(p => p && typeof p.id === 'string')
+                .map(p => ({
+                  ...makePaneState(p.id, null),
+                  conversationId: (p.conversationId && convIds.has(p.conversationId)) ? p.conversationId : null
+                }));
+              if (validPanes.length >= 2) {
+                this.splitPanes = validPanes;
+                // Ensure activeConversations includes all pane conversations
+                for (const pane of validPanes) {
+                  if (pane.conversationId && !this.activeConversations.includes(pane.conversationId)) {
+                    this.activeConversations.push(pane.conversationId);
+                  }
+                  // Load messages for crew/chat conversations that aren't cached
+                  if (pane.conversationId && !this.messagesMap[pane.conversationId]) {
+                    this.messagesMap[pane.conversationId] = [];
+                    const conv = this.conversations.find(c => c.id === pane.conversationId);
+                    if (conv?.type === 'crew') {
+                      if (!this.crewMessagesMap[pane.conversationId]) {
+                        this.crewMessagesMap[pane.conversationId] = [];
+                      }
+                    } else {
+                      this.sendWsMessage({ type: 'sync_messages', conversationId: pane.conversationId, turns: 5 });
+                    }
+                  }
+                }
+                localStorage.removeItem('splitPanesSaved');
+                return;
+              }
+            }
+          } catch { /* ignore corrupt data */ }
+          localStorage.removeItem('splitPanesSaved');
+        }
+        // Fallback: fresh split — first pane inherits current conversation
         this.splitPanes = [
           makePaneState('pane-0', this.currentConversation),
           makePaneState('pane-1', null)
