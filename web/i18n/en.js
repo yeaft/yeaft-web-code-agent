@@ -173,6 +173,12 @@ export default {
   'message.loadingMore': 'Loading more messages...',
   'message.loadMore': '↑ Click or scroll up to load more',
 
+  // ============ Typing Health ============
+  'chat.waiting.slow': 'Waiting for response...',
+  'chat.waiting.stuck': 'Response may be stuck',
+  'chat.waiting.refresh': 'Refresh',
+  'chat.waiting.disconnected': 'Connection lost',
+
   // ============ Message Item ============
   'message.copyContent': 'Copy content',
   'message.copy': 'Copy content',

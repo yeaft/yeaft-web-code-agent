@@ -48,8 +48,16 @@ export default {
                     <MessageItem v-if="item.type === 'user' || item.type === 'system' || item.type === 'error'" :message="item.message" />
                     <AssistantTurn v-else-if="item.type === 'assistant-turn'" :turn="item" :conversationId="conversationId" />
                   </template>
-                  <div v-if="showTypingDots" class="typing-indicator">
+                  <div v-if="showTypingDots" class="typing-indicator" :class="'phase-' + (waitingPhase || 'normal')">
                     <span></span><span></span><span></span>
+                    <span v-if="waitingPhase === 'slow'" class="typing-status-text">{{ $t('chat.waiting.slow') }}</span>
+                    <span v-else-if="waitingPhase === 'stuck'" class="typing-status-text typing-status-warn">
+                      {{ $t('chat.waiting.stuck') }}
+                      <button class="typing-refresh-btn" @click="refreshSession">{{ $t('chat.waiting.refresh') }}</button>
+                    </span>
+                    <span v-else-if="waitingPhase === 'disconnected'" class="typing-status-text typing-status-error">
+                      {{ $t('chat.waiting.disconnected') }}
+                    </span>
                   </div>
                 </div>
               </main>
@@ -230,6 +238,30 @@ export default {
     const showTypingDots = Vue.computed(() => {
       return isProcessing.value && !hasStreamingMessage.value;
     });
+
+    // Health phase for typing indicator
+    const now = Vue.ref(Date.now());
+    let nowTimer = null;
+
+    const waitingPhase = Vue.computed(() => {
+      if (!isProcessing.value) return null;
+      if (store.connectionState !== 'connected') return 'disconnected';
+      const convId = conversationId.value;
+      const execStatus = store.executionStatusMap[convId];
+      const lastAct = execStatus?.lastActivity;
+      if (!lastAct) return 'normal';
+      const elapsed = now.value - lastAct;
+      if (elapsed < 30000) return 'normal';
+      if (elapsed < 90000) return 'slow';
+      return 'stuck';
+    });
+
+    function refreshSession() {
+      const convId = conversationId.value;
+      if (!convId) return;
+      const conv = store.conversations.find(c => c.id === convId);
+      store.sendWsMessage({ type: 'refresh_conversation', conversationId: convId, agentId: conv?.agentId });
+    }
 
     // Turn aggregation (same logic as MessageList)
     const turnGroups = Vue.computed(() => {
@@ -488,6 +520,7 @@ export default {
     });
 
     Vue.onMounted(() => {
+      nowTimer = setInterval(() => { now.value = Date.now(); }, 1000);
       if (containerRef.value) {
         containerRef.value.addEventListener('scroll', onScroll);
         scrollToBottom();
@@ -495,6 +528,7 @@ export default {
     });
 
     Vue.onUnmounted(() => {
+      clearInterval(nowTimer);
       if (containerRef.value) {
         containerRef.value.removeEventListener('scroll', onScroll);
       }
@@ -508,6 +542,8 @@ export default {
       messages,
       isProcessing,
       showTypingDots,
+      waitingPhase,
+      refreshSession,
       turnGroups,
       sendFn,
       cancelFn,
