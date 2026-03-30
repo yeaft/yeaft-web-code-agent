@@ -120,7 +120,7 @@ export default {
                 v-for="conv in paneChatConvs"
                 :key="conv.id"
                 class="session-item"
-                :class="{ active: conv.id === conversationId, processing: store.isConversationProcessing(conv.id), 'agent-offline': conv.agentOnline === false }"
+                :class="{ active: conv.id === conversationId, processing: store.isConversationProcessing(conv.id), 'agent-offline': conv.agentOnline === false, occupied: isOccupiedByOtherPane(conv.id) }"
                 @click="onSidebarSessionClick(conv)"
               >
                 <div class="session-item-header">
@@ -133,6 +133,7 @@ export default {
                 <div class="session-info">
                   <span class="session-path">{{ shortenPath(conv.workDir) }}</span>
                   <span class="session-agent" v-if="conv.agentName">{{ conv.agentName }}</span>
+                  <span class="pane-occupied-tag" v-if="isOccupiedByOtherPane(conv.id)">{{ $t('splitScreen.occupied') }}</span>
                 </div>
               </div>
             </div>
@@ -151,7 +152,7 @@ export default {
                 v-for="conv in paneCrewConvs"
                 :key="conv.id"
                 class="session-item session-item-crew"
-                :class="{ active: conv.id === conversationId, processing: store.isConversationProcessing(conv.id), 'agent-offline': conv.agentOnline === false }"
+                :class="{ active: conv.id === conversationId, processing: store.isConversationProcessing(conv.id), 'agent-offline': conv.agentOnline === false, occupied: isOccupiedByOtherPane(conv.id) }"
                 @click="onSidebarSessionClick(conv)"
               >
                 <div class="session-item-header">
@@ -165,6 +166,7 @@ export default {
                 <div class="session-info">
                   <span class="session-path">{{ shortenPath(conv.workDir) }}</span>
                   <span class="session-agent" v-if="conv.agentName">{{ conv.agentName }}</span>
+                  <span class="pane-occupied-tag" v-if="isOccupiedByOtherPane(conv.id)">{{ $t('splitScreen.occupied') }}</span>
                 </div>
               </div>
             </div>
@@ -372,8 +374,13 @@ export default {
       return '...' + parts.slice(-2).join('/');
     }
 
+    function isOccupiedByOtherPane(convId) {
+      return store.splitPanes.some(p => p.id !== props.paneId && p.conversationId === convId);
+    }
+
     function onSidebarSessionClick(conv) {
       if (conv.agentOnline === false) return;
+      if (isOccupiedByOtherPane(conv.id)) return;
       store.setPaneConversation(props.paneId, conv.id);
       paneSidebarOpen.value = false;
     }
@@ -454,6 +461,7 @@ export default {
       getConvTitle,
       getConvTime,
       shortenPath,
+      isOccupiedByOtherPane,
       onSidebarSessionClick
     };
   }

@@ -633,6 +633,7 @@ export default {
   'splitScreen.newCrew': '新建 Crew',
   'splitScreen.noSessions': '暂无会话',
   'splitScreen.openSessionList': '打开会话列表',
+  'splitScreen.occupied': '已打开',
   'splitScreen.pane': '面板',
   'splitScreen.assignSession': '分配会话到面板',
 };
