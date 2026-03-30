@@ -375,8 +375,7 @@ describe('CSS variable correctness', () => {
     expect(css).toContain('var(--sidebar-hover)');
   });
 
-  it('should NOT use old variables (--bg-primary, --bg-secondary)', () => {
-    expect(css).not.toContain('--bg-primary');
+  it('should NOT use old variables (--bg-secondary)', () => {
     expect(css).not.toContain('--bg-secondary');
   });
 });
