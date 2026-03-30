@@ -473,6 +473,20 @@ export default {
       }
     );
 
+    // Watch for conversation changes — re-bind scroll listener on new DOM
+    Vue.watch(conversationId, () => {
+      if (containerRef.value) {
+        containerRef.value.removeEventListener('scroll', onScroll);
+      }
+      isAtBottom.value = true;
+      Vue.nextTick(() => {
+        if (containerRef.value) {
+          containerRef.value.addEventListener('scroll', onScroll);
+          scrollToBottom();
+        }
+      });
+    });
+
     Vue.onMounted(() => {
       if (containerRef.value) {
         containerRef.value.addEventListener('scroll', onScroll);
