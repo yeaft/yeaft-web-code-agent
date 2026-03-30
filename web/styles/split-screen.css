@@ -90,12 +90,13 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
   gap: 12px;
   padding: 24px;
+  overflow-y: auto;
 }
 .pane-empty-icon {
   opacity: 0.5;
+  margin-top: auto;
 }
 .pane-empty-text {
   font-size: 15px;
@@ -105,7 +106,66 @@
 .pane-empty-hint {
   font-size: 13px;
   color: var(--text-muted);
-  margin: 0;
+  margin: 0 0 auto;
+}
+
+/* ===== Pane Empty State — Inline Session List ===== */
+.pane-session-list {
+  width: 100%;
+  max-width: 320px;
+  margin-top: 4px;
+  margin-bottom: auto;
+}
+
+.pane-session-group + .pane-session-group {
+  margin-top: 12px;
+}
+
+.pane-session-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 0 8px 6px;
+  letter-spacing: 0.5px;
+}
+
+.pane-session-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.pane-session-item:hover {
+  background: var(--sidebar-hover);
+}
+.pane-session-item:active {
+  background: var(--accent-bg, rgba(59, 130, 246, 0.1));
+}
+
+.pane-session-icon {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+.pane-session-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pane-session-time {
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-shrink: 0;
 }
 
 /* ===== Split Pane Messages ===== */
