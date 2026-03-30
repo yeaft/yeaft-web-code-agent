@@ -1028,6 +1028,19 @@
   white-space: nowrap;
 }
 
+.chat-title-agent {
+  display: inline-block;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+  margin-right: 6px;
+  font-weight: 500;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
 .header-left {
   display: flex;
   align-items: center;
