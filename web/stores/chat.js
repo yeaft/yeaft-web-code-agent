@@ -582,8 +582,18 @@ export const useChatStore = defineStore('chat', {
     renameChatSession(convId, title) {
       if (title && title.trim()) {
         this.customConversationTitles[convId] = title.trim();
+        this.sendWsMessage({
+          type: 'update_conversation_settings',
+          conversationId: convId,
+          title: title.trim()
+        });
       } else {
         delete this.customConversationTitles[convId];
+        this.sendWsMessage({
+          type: 'update_conversation_settings',
+          conversationId: convId,
+          title: ''
+        });
       }
     },
     handleCrewOutput(msg) { crewHelpers.handleCrewOutput(this, msg); },

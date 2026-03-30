@@ -91,8 +91,13 @@ export function handleAgentList(store, msg) {
           agentId: agent.id,
           agentName: agent.name
         });
-        if (serverConv.title && !store.conversationTitles[serverConv.id]) {
-          store.conversationTitles[serverConv.id] = serverConv.title;
+        if (serverConv.title) {
+          if (serverConv.customTitle) {
+            store.customConversationTitles[serverConv.id] = serverConv.title;
+          }
+          if (!store.conversationTitles[serverConv.id]) {
+            store.conversationTitles[serverConv.id] = serverConv.title;
+          }
         }
       }
     }
@@ -291,8 +296,13 @@ export function handleAgentSelected(store, msg) {
   store.conversations = [...otherAgentConvs, ...activeConvs];
 
   for (const conv of serverConvs) {
-    if (conv.title && !store.conversationTitles[conv.id]) {
-      store.conversationTitles[conv.id] = conv.title;
+    if (conv.title) {
+      if (conv.customTitle) {
+        store.customConversationTitles[conv.id] = conv.title;
+      }
+      if (!store.conversationTitles[conv.id]) {
+        store.conversationTitles[conv.id] = conv.title;
+      }
     }
   }
 
