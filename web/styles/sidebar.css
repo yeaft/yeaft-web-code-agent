@@ -1019,13 +1019,21 @@
 }
 
 .chat-title-path {
+  display: flex;
+  align-items: center;
   font-size: 11px;
   font-weight: 400;
   color: var(--text-secondary);
   opacity: 0.7;
   overflow: hidden;
+  white-space: nowrap;
+}
+
+.chat-title-path-text {
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
 
 .chat-title-agent {
@@ -1038,7 +1046,6 @@
   margin-right: 6px;
   font-weight: 500;
   white-space: nowrap;
-  vertical-align: middle;
 }
 
 .header-left {
