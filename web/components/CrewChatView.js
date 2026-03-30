@@ -634,7 +634,8 @@ export default {
     refreshCrewSession() {
       const convId = this.effectiveConvId;
       if (!convId) return;
-      this.store.sendWsMessage({ type: 'refresh_conversation', conversationId: convId });
+      const conv = this.store.conversations.find(c => c.id === convId);
+      this.store.sendWsMessage({ type: 'refresh_conversation', conversationId: convId, agentId: conv?.agentId });
     }
   },
 

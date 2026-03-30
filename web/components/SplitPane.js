@@ -259,7 +259,8 @@ export default {
     function refreshSession() {
       const convId = conversationId.value;
       if (!convId) return;
-      store.sendWsMessage({ type: 'refresh_conversation', conversationId: convId });
+      const conv = store.conversations.find(c => c.id === convId);
+      store.sendWsMessage({ type: 'refresh_conversation', conversationId: convId, agentId: conv?.agentId });
     }
 
     // Turn aggregation (same logic as MessageList)
