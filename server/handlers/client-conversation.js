@@ -309,8 +309,8 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         convInfo._pendingExperts = msg.expertSelections;
       }
 
-      // 用用户输入的 prompt 更新会话标题
-      if (msg.prompt && msg.prompt.trim()) {
+      // 用用户输入的 prompt 更新会话标题（跳过用户自定义标题的会话）
+      if (msg.prompt && msg.prompt.trim() && !(convInfo?.customTitle)) {
         const title = msg.prompt.trim().substring(0, 100);
         sessionDb.update(convId, { title });
         if (convInfo) convInfo.title = title;
@@ -429,11 +429,25 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         await sendToWebClient(client, { type: 'error', message: 'Permission denied' });
         return;
       }
-      await forwardToAgent(client.currentAgent, {
-        type: 'update_conversation_settings',
-        conversationId: settingsConvId,
-        disallowedTools: msg.disallowedTools
-      });
+      // Handle custom title (server-local, no agent forwarding needed)
+      if (msg.title !== undefined) {
+        const titleAgent = agents.get(client.currentAgent);
+        const titleConvInfo = titleAgent?.conversations.get(settingsConvId);
+        if (msg.title) {
+          sessionDb.update(settingsConvId, { title: msg.title });
+          if (titleConvInfo) { titleConvInfo.title = msg.title; titleConvInfo.customTitle = true; }
+        } else {
+          if (titleConvInfo) { titleConvInfo.customTitle = false; }
+        }
+      }
+      // Only forward to agent if disallowedTools present
+      if (msg.disallowedTools) {
+        await forwardToAgent(client.currentAgent, {
+          type: 'update_conversation_settings',
+          conversationId: settingsConvId,
+          disallowedTools: msg.disallowedTools
+        });
+      }
       break;
     }
 
