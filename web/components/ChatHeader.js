@@ -342,7 +342,7 @@ export default {
     });
 
     const onCrewPanelToggle = (panel) => {
-      if (window.innerWidth < 768) {
+      if (window.innerWidth < 768 || store.isSplitMode) {
         store.toggleCrewMobilePanel(panel, props.paneId);
       } else {
         store.toggleCrewPanel(panel, props.paneId);
@@ -350,7 +350,7 @@ export default {
     };
 
     const isCrewPanelActive = (panel) => {
-      if (window.innerWidth < 768) {
+      if (window.innerWidth < 768 || store.isSplitMode) {
         return store.getPaneMobilePanel(props.paneId) === panel;
       }
       return store.getPanelVisible(props.paneId)[panel];
