@@ -30,7 +30,7 @@ export function startProcessingWatchdog(store, conversationId) {
         delete store._processingWatchdogs[conversationId];
       }, 10000);
     }
-  }, 120000); // 2 minutes
+  }, 90000); // 90 seconds
 }
 
 export function resetProcessingWatchdog(store, conversationId) {

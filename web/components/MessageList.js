@@ -73,8 +73,16 @@ export default {
           <AssistantTurn v-else-if="item.type === 'assistant-turn'" :turn="item" />
         </template>
         <!-- Typing dots: visible when processing but not streaming text -->
-        <div v-if="showTypingDots" class="typing-indicator">
+        <div v-if="showTypingDots" class="typing-indicator" :class="'phase-' + (waitingPhase || 'normal')">
           <span></span><span></span><span></span>
+          <span v-if="waitingPhase === 'slow'" class="typing-status-text">{{ $t('chat.waiting.slow') }}</span>
+          <span v-else-if="waitingPhase === 'stuck'" class="typing-status-text typing-status-warn">
+            {{ $t('chat.waiting.stuck') }}
+            <button class="typing-refresh-btn" @click="refreshSession">{{ $t('chat.waiting.refresh') }}</button>
+          </span>
+          <span v-else-if="waitingPhase === 'disconnected'" class="typing-status-text typing-status-error">
+            {{ $t('chat.waiting.disconnected') }}
+          </span>
         </div>
       </div>
     </main>
@@ -201,6 +209,29 @@ export default {
       return store.isProcessing && !hasStreamingMessage.value;
     });
 
+    // Health phase for typing indicator
+    const now = Vue.ref(Date.now());
+    let nowTimer = null;
+
+    const waitingPhase = Vue.computed(() => {
+      if (!store.isProcessing) return null;
+      if (store.connectionState !== 'connected') return 'disconnected';
+      const convId = store.currentConversation;
+      const execStatus = store.executionStatusMap[convId];
+      const lastAct = execStatus?.lastActivity;
+      if (!lastAct) return 'normal';
+      const elapsed = now.value - lastAct;
+      if (elapsed < 30000) return 'normal';
+      if (elapsed < 90000) return 'slow';
+      return 'stuck';
+    });
+
+    function refreshSession() {
+      const convId = store.currentConversation;
+      if (!convId) return;
+      store.sendWsMessage({ type: 'refresh_conversation', conversationId: convId });
+    }
+
     // Scroll handling
     const checkIfAtBottom = () => {
       if (!containerRef.value) return true;
@@ -260,6 +291,7 @@ export default {
     );
 
     Vue.onMounted(() => {
+      nowTimer = setInterval(() => { now.value = Date.now(); }, 1000);
       scrollToBottom();
       if (containerRef.value) {
         containerRef.value.addEventListener('scroll', onScroll);
@@ -267,6 +299,7 @@ export default {
     });
 
     Vue.onUnmounted(() => {
+      clearInterval(nowTimer);
       if (containerRef.value) {
         containerRef.value.removeEventListener('scroll', onScroll);
       }
@@ -277,6 +310,8 @@ export default {
       containerRef,
       hasStreamingMessage,
       showTypingDots,
+      waitingPhase,
+      refreshSession,
       onlineAgents,
       turnGroups
     };

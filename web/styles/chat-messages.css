@@ -132,6 +132,7 @@
 /* Typing Indicator */
 .typing-indicator {
   display: flex;
+  align-items: center;
   gap: 4px;
   padding: 16px 0;
 }
@@ -150,6 +151,36 @@
 @keyframes typing {
   0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
   30% { transform: translateY(-8px); opacity: 1; }
+}
+
+/* Typing Health Phases */
+.typing-indicator.phase-slow span:nth-child(-n+3) { background: var(--warning-yellow, #f5a623); }
+.typing-indicator.phase-stuck span:nth-child(-n+3) { background: var(--warning-orange, #e57c23); }
+.typing-indicator.phase-disconnected span:nth-child(-n+3) { background: var(--error-red, #e53935); }
+
+.typing-status-text {
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.typing-status-warn { color: var(--warning-orange, #e57c23); }
+.typing-status-error { color: var(--error-red, #e53935); }
+
+.typing-refresh-btn {
+  margin-left: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-family: inherit;
+}
+.typing-refresh-btn:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
 }
 
 /* Load More Messages */

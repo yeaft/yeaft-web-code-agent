@@ -107,8 +107,16 @@ export default {
         </template>
 
         <!-- Typing dots: visible after user sends message, before AI responds -->
-        <div v-if="isWaitingResponse" class="typing-indicator">
+        <div v-if="isWaitingResponse" class="typing-indicator" :class="'phase-' + (waitingPhase || 'normal')">
           <span></span><span></span><span></span>
+          <span v-if="waitingPhase === 'slow'" class="typing-status-text">{{ $t('chat.waiting.slow') }}</span>
+          <span v-else-if="waitingPhase === 'stuck'" class="typing-status-text typing-status-warn">
+            {{ $t('chat.waiting.stuck') }}
+            <button class="typing-refresh-btn" @click="refreshCrewSession">{{ $t('chat.waiting.refresh') }}</button>
+          </span>
+          <span v-else-if="waitingPhase === 'disconnected'" class="typing-status-text typing-status-error">
+            {{ $t('chat.waiting.disconnected') }}
+          </span>
         </div>
 
         <div class="crew-scroll-bottom"
@@ -327,6 +335,18 @@ export default {
       if (!messages || messages.length === 0) return false;
       const lastMsg = messages[messages.length - 1];
       return lastMsg.role === 'human' && !lastMsg._sendFailed;
+    },
+    waitingPhase() {
+      if (!this.isWaitingResponse) return null;
+      if (this.store.connectionState !== 'connected') return 'disconnected';
+      const convId = this.effectiveConvId;
+      const execStatus = this.store.executionStatusMap[convId];
+      const lastAct = execStatus?.lastActivity;
+      if (!lastAct) return 'normal';
+      const elapsed = this.nowTick - lastAct;
+      if (elapsed < 30000) return 'normal';
+      if (elapsed < 90000) return 'slow';
+      return 'stuck';
     },
     isInitializing() {
       return this.paneCrewStatus?.status === 'initializing';
@@ -609,6 +629,12 @@ export default {
 
     loadHistory() {
       this.scroll.loadHistory((getter, cb) => this.$watch(getter, cb));
+    },
+
+    refreshCrewSession() {
+      const convId = this.effectiveConvId;
+      if (!convId) return;
+      this.store.sendWsMessage({ type: 'refresh_conversation', conversationId: convId });
     }
   },
 

@@ -173,6 +173,12 @@ export default {
   'message.loadingMore': '加载更多消息...',
   'message.loadMore': '↑ 点击或向上滚动加载更多',
 
+  // ============ Typing Health ============
+  'chat.waiting.slow': '等待响应中...',
+  'chat.waiting.stuck': '响应可能已卡住',
+  'chat.waiting.refresh': '刷新',
+  'chat.waiting.disconnected': '连接已断开',
+
   // ============ Message Item ============
   'message.copyContent': '复制内容',
   'message.copy': '复制内容',
