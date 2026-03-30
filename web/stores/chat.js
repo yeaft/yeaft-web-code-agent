@@ -43,6 +43,7 @@ export const useChatStore = defineStore('chat', {
     _pendingPaneId: null,  // Tracks which pane requested a new session (split mode only)
     // 会话标题缓存：conversationId -> title (最新用户消息，使用对象而非 Map 以确保响应式)
     conversationTitles: {},
+    customConversationTitles: {},
     // Per-conversation 处理状态：conversationId -> true (使用对象而非 Set 以确保响应式)
     processingConversations: {},
     theme: localStorage.getItem('theme') || 'dark',
@@ -178,7 +179,7 @@ export const useChatStore = defineStore('chat', {
     },
     // 获取会话标题
     getConversationTitle: (state) => (conversationId) => {
-      return state.conversationTitles[conversationId] || null;
+      return state.customConversationTitles[conversationId] || state.conversationTitles[conversationId] || null;
     },
     // 获取当前会话的执行状态
     executionStatus: (state) => {
@@ -578,6 +579,13 @@ export const useChatStore = defineStore('chat', {
     addCrewRole(role) { crewHelpers.addCrewRole(this, role); },
     removeCrewRole(roleName) { crewHelpers.removeCrewRole(this, roleName); },
     renameCrewSession(sessionId, name) { crewHelpers.renameCrewSession(this, sessionId, name); },
+    renameChatSession(convId, title) {
+      if (title && title.trim()) {
+        this.customConversationTitles[convId] = title.trim();
+      } else {
+        delete this.customConversationTitles[convId];
+      }
+    },
     handleCrewOutput(msg) { crewHelpers.handleCrewOutput(this, msg); },
     startRefreshTimeout() { crewHelpers.startRefreshTimeout(this); },
 
@@ -601,6 +609,7 @@ export const useChatStore = defineStore('chat', {
       this.activeConversations = [];
       this.messagesMap = {};
       this.conversationTitles = {};
+      this.customConversationTitles = {};
       this.processingConversations = {};
       this.executionStatusMap = {};
       this.workbenchExpanded = false;

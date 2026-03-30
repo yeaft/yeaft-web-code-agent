@@ -152,14 +152,27 @@ export default {
                 :key="conv.id"
                 class="session-item"
                 :class="{ active: conv.id === store.currentConversation, processing: store.isConversationProcessing(conv.id), 'agent-offline': conv.agentOnline === false }"
-                @click="onSessionClick(conv)"
+                @click="editingChatId !== conv.id && onSessionClick(conv)"
               >
                 <div class="session-item-header">
                   <div class="title" :title="getConversationFullTitle(conv)">
                     <span v-if="store.isConversationProcessing(conv.id)" class="processing-dot"></span>
-                    {{ getConversationTitle(conv) }}
+                    <input
+                      v-if="editingChatId === conv.id"
+                      ref="chatRenameInput"
+                      class="chat-rename-input"
+                      v-model="editingChatName"
+                      @keydown.enter="commitChatRename"
+                      @keydown.escape="cancelChatRename"
+                      @blur="commitChatRename"
+                      @click.stop
+                    />
+                    <span v-else>{{ getConversationTitle(conv) }}</span>
                   </div>
                   <span class="session-time">{{ getConversationTime(conv) }}</span>
+                  <button class="session-rename-btn" @click.stop="startChatRename(conv)" :title="$t('chat.sidebar.renameConv')">
+                    <svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+                  </button>
                   <button class="session-delete-btn" @click.stop="closeSession(conv.id, conv.agentId)" :title="$t('chat.sidebar.closeConv')">
                     <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
                   </button>
@@ -494,7 +507,9 @@ export default {
       crewGroupCollapsed: false,
       // Inline rename state
       editingCrewId: null,
-      editingCrewName: ''
+      editingCrewName: '',
+      editingChatId: null,
+      editingChatName: ''
     };
   },
   computed: {
@@ -798,6 +813,30 @@ export default {
     cancelCrewRename() {
       this.editingCrewId = null;
       this.editingCrewName = '';
+    },
+    startChatRename(conv) {
+      this.editingChatId = conv.id;
+      this.editingChatName = this.store.customConversationTitles[conv.id] || this.store.conversationTitles[conv.id] || '';
+      this.$nextTick(() => {
+        const input = this.$refs.chatRenameInput;
+        if (input) {
+          const el = Array.isArray(input) ? input[0] : input;
+          el.focus();
+          el.select();
+        }
+      });
+    },
+    commitChatRename() {
+      if (!this.editingChatId) return;
+      const convId = this.editingChatId;
+      const title = this.editingChatName.trim();
+      this.editingChatId = null;
+      this.editingChatName = '';
+      this.store.renameChatSession(convId, title);
+    },
+    cancelChatRename() {
+      this.editingChatId = null;
+      this.editingChatName = '';
     },
     getConversationTime(conv) {
       // 优先显示最后活动时间，其次创建时间

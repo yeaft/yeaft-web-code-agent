@@ -588,6 +588,69 @@
   fill: currentColor;
 }
 
+/* Chat session rename button — positioned left of delete button */
+.session-rename-btn {
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  position: absolute;
+  right: 22px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1;
+  padding-left: 8px;
+  box-sizing: content-box;
+  background: linear-gradient(to right, transparent 0px, var(--sidebar-hover) 8px);
+}
+
+.session-item.active .session-rename-btn {
+  background: linear-gradient(to right, transparent 0px, var(--session-active) 8px);
+}
+
+.session-item:hover .session-rename-btn {
+  opacity: 1;
+}
+
+.session-rename-btn:hover {
+  color: var(--accent);
+}
+
+.session-rename-btn svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
+/* Chat session inline rename input */
+.chat-rename-input {
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--accent-blue, #3b82f6);
+  outline: none;
+  color: var(--text-primary);
+  font-size: inherit;
+  font-family: inherit;
+  padding: 0 0 1px;
+  margin: 0;
+  line-height: inherit;
+}
+
+.chat-rename-input::selection {
+  background: var(--accent-blue, #3b82f6);
+  color: white;
+}
+
 .session-info {
   display: flex;
   align-items: center;

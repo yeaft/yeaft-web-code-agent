@@ -138,6 +138,7 @@ export function handleConversationDeleted(store, msg) {
   store.conversations = store.conversations.filter(c => c.id !== msg.conversationId);
   delete store.messagesMap[msg.conversationId];
   delete store.conversationTitles[msg.conversationId];
+  delete store.customConversationTitles[msg.conversationId];
   delete store.processingConversations[msg.conversationId];
   if (store._closedAt) delete store._closedAt[msg.conversationId];
   stopProcessingWatchdog(store, msg.conversationId);
