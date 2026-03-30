@@ -111,6 +111,8 @@ export default {
   'chat.sidebar.emptyHint': '点击上方按钮创建新会话',
   'chat.sidebar.closeConv': '关闭会话',
   'chat.sidebar.renameConv': '重命名',
+  'chat.sidebar.pin': '置顶',
+  'chat.sidebar.unpin': '取消置顶',
 
   // Chat - Connection
   'chat.connection.connecting': '连接中...',

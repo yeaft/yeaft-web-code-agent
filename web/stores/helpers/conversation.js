@@ -236,6 +236,13 @@ export function closeSession(store, conversationId, agentId) {
     }
   }
 
+  // Clear pin state if present
+  const pinIdx = store.pinnedSessions.indexOf(conversationId);
+  if (pinIdx >= 0) {
+    store.pinnedSessions.splice(pinIdx, 1);
+    localStorage.setItem('pinned-sessions', JSON.stringify(store.pinnedSessions));
+  }
+
   // Send delete_conversation to server (reuses existing handler which:
   // 1. removes from agent.conversations Map
   // 2. sets is_active=0 in DB (data preserved)
@@ -289,6 +296,13 @@ export function deleteConversation(store, conversationId, agentId) {
     if (pane.conversationId === conversationId) {
       pane.conversationId = null;
     }
+  }
+
+  // Clear pin state if present
+  const pinIdx2 = store.pinnedSessions.indexOf(conversationId);
+  if (pinIdx2 >= 0) {
+    store.pinnedSessions.splice(pinIdx2, 1);
+    localStorage.setItem('pinned-sessions', JSON.stringify(store.pinnedSessions));
   }
 
   // 如果目标 conversation 在其他 agent 上，需要先通知 server 切换 agent

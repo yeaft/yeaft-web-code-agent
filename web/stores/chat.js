@@ -138,6 +138,11 @@ export const useChatStore = defineStore('chat', {
     subagents: {},                    // { [conversationId]: { [subagentId]: SubagentInfo } }
     activeSubagentId: null,           // 当前展开的 subagent ID (null = 列表模式)
     activeRightPanel: null,           // null | 'subagents' | 'experts' — 右侧面板互斥切换
+
+    // =====================
+    // Session Pin 置顶
+    // =====================
+    pinnedSessions: JSON.parse(localStorage.getItem('pinned-sessions') || '[]'),
   }),
 
   getters: {
@@ -519,6 +524,19 @@ export const useChatStore = defineStore('chat', {
         this.sendWsMessage({ type: 'sync_messages', conversationId, turns: 5 });
       }
     },
+    // ★ Session Pin
+    togglePin(sessionId) {
+      const idx = this.pinnedSessions.indexOf(sessionId);
+      if (idx >= 0) {
+        this.pinnedSessions.splice(idx, 1);
+      } else {
+        this.pinnedSessions.unshift(sessionId);
+      }
+      localStorage.setItem('pinned-sessions', JSON.stringify(this.pinnedSessions));
+    },
+    isSessionPinned(sessionId) {
+      return this.pinnedSessions.includes(sessionId);
+    },
     sendMessage(text, attachments = [], options = {}) { convHelpers.sendMessage(this, text, attachments, options); },
     cancelExecution() { convHelpers.cancelExecution(this); },
     answerUserQuestion(requestId, answers, conversationId) { convHelpers.answerUserQuestion(this, requestId, answers, conversationId); },
@@ -667,6 +685,7 @@ export const useChatStore = defineStore('chat', {
       this.subagents = {};
       this.activeSubagentId = null;
       this.activeRightPanel = null;
+      this.pinnedSessions = [];
       if (this.ws) {
         this.ws.close();
       }

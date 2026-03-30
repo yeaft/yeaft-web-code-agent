@@ -148,7 +148,50 @@ export default {
             </div>
             <div class="session-panel-list" v-show="!chatGroupCollapsed">
               <div
-                v-for="conv in normalConversations"
+                v-for="conv in pinnedChatConversations"
+                :key="conv.id"
+                class="session-item is-pinned"
+                :class="{ active: conv.id === store.currentConversation, processing: store.isConversationProcessing(conv.id), 'agent-offline': conv.agentOnline === false }"
+                @click="editingChatId !== conv.id && onSessionClick(conv)"
+              >
+                <div class="session-item-header">
+                  <div class="title" :title="getConversationFullTitle(conv)">
+                    <span v-if="store.isConversationProcessing(conv.id)" class="processing-dot"></span>
+                    <input
+                      v-if="editingChatId === conv.id"
+                      ref="chatRenameInput"
+                      class="chat-rename-input"
+                      v-model="editingChatName"
+                      @keydown.enter="commitChatRename"
+                      @keydown.escape="cancelChatRename"
+                      @blur="commitChatRename"
+                      @click.stop
+                    />
+                    <span v-else>{{ getConversationTitle(conv) }}</span>
+                  </div>
+                  <span class="session-time">{{ getConversationTime(conv) }}</span>
+                  <button class="session-pin-btn" @click.stop="store.togglePin(conv.id)" :title="$t('chat.sidebar.unpin')">
+                    <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>
+                  </button>
+                  <button class="session-rename-btn" @click.stop="startChatRename(conv)" :title="$t('chat.sidebar.renameConv')">
+                    <svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+                  </button>
+                  <button class="session-delete-btn" @click.stop="closeSession(conv.id, conv.agentId)" :title="$t('chat.sidebar.closeConv')">
+                    <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                  </button>
+                </div>
+                <div class="session-info">
+                  <span class="session-path">{{ shortenPath(conv.workDir) }}</span>
+                  <span class="session-agent" v-if="conv.agentName">{{ conv.agentName }}</span>
+                  <span class="latency-indicator" v-if="getAgentLatency(conv.agentId)" :class="getLatencyClass(getAgentLatency(conv.agentId))" :title="getAgentLatency(conv.agentId) + 'ms'">
+                    <svg viewBox="0 0 24 24" width="10" height="10"><circle cx="12" cy="12" r="5" fill="currentColor"/></svg>
+                    {{ getAgentLatency(conv.agentId) }}ms
+                  </span>
+                </div>
+              </div>
+              <div class="session-pin-divider" v-if="pinnedChatConversations.length > 0 && unpinnedChatConversations.length > 0" role="separator"></div>
+              <div
+                v-for="conv in unpinnedChatConversations"
                 :key="conv.id"
                 class="session-item"
                 :class="{ active: conv.id === store.currentConversation, processing: store.isConversationProcessing(conv.id), 'agent-offline': conv.agentOnline === false }"
@@ -170,6 +213,9 @@ export default {
                     <span v-else>{{ getConversationTitle(conv) }}</span>
                   </div>
                   <span class="session-time">{{ getConversationTime(conv) }}</span>
+                  <button class="session-pin-btn" @click.stop="store.togglePin(conv.id)" :title="$t('chat.sidebar.pin')">
+                    <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>
+                  </button>
                   <button class="session-rename-btn" @click.stop="startChatRename(conv)" :title="$t('chat.sidebar.renameConv')">
                     <svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
                   </button>
@@ -203,7 +249,52 @@ export default {
             </div>
             <div class="session-panel-list" v-show="!crewGroupCollapsed">
               <div
-                v-for="conv in crewConversations"
+                v-for="conv in pinnedCrewConversations"
+                :key="conv.id"
+                class="session-item session-item-crew is-pinned"
+                :class="{ active: conv.id === store.currentConversation, processing: store.isConversationProcessing(conv.id), 'agent-offline': conv.agentOnline === false }"
+                @click="editingCrewId !== conv.id && onSessionClick(conv)"
+              >
+                <div class="session-item-header">
+                  <div class="title" :title="getConversationFullTitle(conv)">
+                    <span v-if="store.isConversationProcessing(conv.id)" class="processing-dot"></span>
+                    <svg class="crew-conv-icon" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+                    <input
+                      v-if="editingCrewId === conv.id"
+                      ref="crewRenameInput"
+                      class="crew-rename-input"
+                      v-model="editingCrewName"
+                      @keydown.enter="commitCrewRename"
+                      @keydown.escape="cancelCrewRename"
+                      @blur="commitCrewRename"
+                      @click.stop
+                    />
+                    <span
+                      v-else
+                      class="crew-title-text"
+                      @dblclick.stop="startCrewRename(conv)"
+                    >{{ getCrewTitle(conv) }}</span>
+                  </div>
+                  <span class="session-time">{{ getConversationTime(conv) }}</span>
+                  <button class="session-pin-btn session-pin-btn-crew" @click.stop="store.togglePin(conv.id)" :title="$t('chat.sidebar.unpin')">
+                    <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>
+                  </button>
+                  <button class="session-delete-btn" @click.stop="closeSession(conv.id, conv.agentId)" :title="$t('chat.sidebar.closeConv')">
+                    <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                  </button>
+                </div>
+                <div class="session-info">
+                  <span class="session-path">{{ shortenPath(conv.workDir) }}</span>
+                  <span class="session-agent" v-if="conv.agentName">{{ conv.agentName }}</span>
+                  <span class="latency-indicator" v-if="getAgentLatency(conv.agentId)" :class="getLatencyClass(getAgentLatency(conv.agentId))" :title="getAgentLatency(conv.agentId) + 'ms'">
+                    <svg viewBox="0 0 24 24" width="10" height="10"><circle cx="12" cy="12" r="5" fill="currentColor"/></svg>
+                    {{ getAgentLatency(conv.agentId) }}ms
+                  </span>
+                </div>
+              </div>
+              <div class="session-pin-divider" v-if="pinnedCrewConversations.length > 0 && unpinnedCrewConversations.length > 0" role="separator"></div>
+              <div
+                v-for="conv in unpinnedCrewConversations"
                 :key="conv.id"
                 class="session-item session-item-crew"
                 :class="{ active: conv.id === store.currentConversation, processing: store.isConversationProcessing(conv.id), 'agent-offline': conv.agentOnline === false }"
@@ -230,6 +321,9 @@ export default {
                     >{{ getCrewTitle(conv) }}</span>
                   </div>
                   <span class="session-time">{{ getConversationTime(conv) }}</span>
+                  <button class="session-pin-btn session-pin-btn-crew" @click.stop="store.togglePin(conv.id)" :title="$t('chat.sidebar.pin')">
+                    <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>
+                  </button>
                   <button class="session-delete-btn" @click.stop="closeSession(conv.id, conv.agentId)" :title="$t('chat.sidebar.closeConv')">
                     <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
                   </button>
@@ -550,6 +644,20 @@ export default {
     },
     normalConversations() {
       return this.sortByActivity(this.store.conversations.filter(c => c.type !== 'crew'));
+    },
+    pinnedChatConversations() {
+      const pinned = this.store.conversations.filter(c => c.type !== 'crew' && this.store.isSessionPinned(c.id));
+      return pinned.sort((a, b) => this.store.pinnedSessions.indexOf(a.id) - this.store.pinnedSessions.indexOf(b.id));
+    },
+    unpinnedChatConversations() {
+      return this.sortByActivity(this.store.conversations.filter(c => c.type !== 'crew' && !this.store.isSessionPinned(c.id)));
+    },
+    pinnedCrewConversations() {
+      const pinned = this.store.conversations.filter(c => c.type === 'crew' && this.store.isSessionPinned(c.id));
+      return pinned.sort((a, b) => this.store.pinnedSessions.indexOf(a.id) - this.store.pinnedSessions.indexOf(b.id));
+    },
+    unpinnedCrewConversations() {
+      return this.sortByActivity(this.store.conversations.filter(c => c.type === 'crew' && !this.store.isSessionPinned(c.id)));
     }
   },
   methods: {
