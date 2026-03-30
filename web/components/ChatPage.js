@@ -276,7 +276,7 @@ export default {
                     >{{ getCrewTitle(conv) }}</span>
                   </div>
                   <span class="session-time">{{ getConversationTime(conv) }}</span>
-                  <button class="session-pin-btn" @click.stop="store.togglePin(conv.id)" :title="$t('chat.sidebar.unpin')">
+                  <button class="session-pin-btn session-pin-btn-crew" @click.stop="store.togglePin(conv.id)" :title="$t('chat.sidebar.unpin')">
                     <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>
                   </button>
                   <button class="session-delete-btn" @click.stop="closeSession(conv.id, conv.agentId)" :title="$t('chat.sidebar.closeConv')">
