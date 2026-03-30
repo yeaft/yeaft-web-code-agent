@@ -75,7 +75,7 @@ export default {
       </div>
 
       <!-- Settings panel overlay -->
-      <SettingsPanel v-if="settingsOpen" @close="settingsOpen = false" />
+      <SettingsPanel :visible="settingsOpen" @close="settingsOpen = false" />
     </aside>
   `,
   setup() {

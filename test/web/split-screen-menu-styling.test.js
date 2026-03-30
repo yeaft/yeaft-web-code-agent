@@ -100,7 +100,7 @@ describe('GlobalSidebar component', () => {
 
   it('should import and render SettingsPanel', () => {
     expect(gsJs).toContain("import SettingsPanel from './SettingsPanel.js'");
-    expect(gsJs).toContain('v-if="settingsOpen"');
+    expect(gsJs).toContain(':visible="settingsOpen"');
   });
 
   it('should have theme toggle', () => {
