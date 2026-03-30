@@ -108,6 +108,10 @@ export default {
     }
 
     function mergePanes() {
+      // Save current split layout before exiting
+      if (store.splitPanes.length >= 2) {
+        localStorage.setItem('splitPanesSaved', JSON.stringify(store.splitPanes));
+      }
       const first = store.splitPanes[0];
       if (first?.conversationId) {
         store.activeConversations = [first.conversationId];

@@ -235,6 +235,7 @@ export function clearLastSession(store) {
   localStorage.removeItem('lastUsedSession');
   localStorage.removeItem('lastViewedConversation');
   localStorage.removeItem('splitPanes');
+  localStorage.removeItem('splitPanesSaved');
   store.lastUsedAgent = null;
   store.lastUsedSession = null;
   store.lastViewedConversation = null;
