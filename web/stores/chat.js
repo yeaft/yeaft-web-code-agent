@@ -480,7 +480,7 @@ export const useChatStore = defineStore('chat', {
     },
     sendMessage(text, attachments = [], options = {}) { convHelpers.sendMessage(this, text, attachments, options); },
     cancelExecution() { convHelpers.cancelExecution(this); },
-    answerUserQuestion(requestId, answers) { convHelpers.answerUserQuestion(this, requestId, answers); },
+    answerUserQuestion(requestId, answers, conversationId) { convHelpers.answerUserQuestion(this, requestId, answers, conversationId); },
     refreshAgents() { convHelpers.refreshAgents(this); },
     refreshConversation() { convHelpers.refreshConversation(this); },
     restartAgent(agentId) { convHelpers.restartAgent(this, agentId); },
@@ -574,10 +574,10 @@ export const useChatStore = defineStore('chat', {
     createCrewSession(config) { crewHelpers.createCrewSession(this, config); },
     resumeCrewSession(sessionId, agentId) { crewHelpers.resumeCrewSession(this, sessionId, agentId); },
     loadCrewHistory(sessionId) { return crewHelpers.loadCrewHistory(this, sessionId); },
-    sendCrewMessage(content, targetRole = null, attachments = undefined) { crewHelpers.sendCrewMessage(this, content, targetRole, attachments); },
-    sendCrewControl(action, targetRole = null) { crewHelpers.sendCrewControl(this, action, targetRole); },
-    addCrewRole(role) { crewHelpers.addCrewRole(this, role); },
-    removeCrewRole(roleName) { crewHelpers.removeCrewRole(this, roleName); },
+    sendCrewMessage(content, targetRole = null, attachments = undefined, conversationId = undefined) { crewHelpers.sendCrewMessage(this, content, targetRole, attachments, conversationId); },
+    sendCrewControl(action, targetRole = null, conversationId = undefined) { crewHelpers.sendCrewControl(this, action, targetRole, conversationId); },
+    addCrewRole(role, conversationId = undefined) { crewHelpers.addCrewRole(this, role, conversationId); },
+    removeCrewRole(roleName, conversationId = undefined) { crewHelpers.removeCrewRole(this, roleName, conversationId); },
     renameCrewSession(sessionId, name) { crewHelpers.renameCrewSession(this, sessionId, name); },
     renameChatSession(convId, title) {
       if (title && title.trim()) {

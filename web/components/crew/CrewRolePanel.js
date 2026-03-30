@@ -9,6 +9,8 @@ export default {
     store: { type: Object, required: true },
     sessionRoles: { type: Array, required: true },
     roleColorMap: { type: Object, default: () => ({}) },
+    crewStatus: { type: Object, default: null },
+    crewMessages: { type: Array, default: () => [] },
     mode: { type: String, default: 'crew' }
   },
   emits: ['scroll-to-role', 'control-action', 'clear-role', 'abort-role', 'show-add-role'],
@@ -65,15 +67,15 @@ export default {
     },
 
     isRoleStreaming(roleName) {
-      return this.store.currentCrewStatus?.activeRoles?.includes(roleName);
+      return this.crewStatus?.activeRoles?.includes(roleName);
     },
 
     getRoleCurrentTool(roleName) {
-      return this.store.currentCrewStatus?.currentToolByRole?.[roleName] || null;
+      return this.crewStatus?.currentToolByRole?.[roleName] || null;
     },
 
     getRoleCurrentTask(roleName) {
-      const messages = this.store.currentCrewMessages;
+      const messages = this.crewMessages;
       for (let i = messages.length - 1; i >= 0; i--) {
         const msg = messages[i];
         if (msg.role === roleName && msg.taskTitle) {

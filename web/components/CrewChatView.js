@@ -49,6 +49,8 @@ export default {
           :store="store"
           :session-roles="sessionRoles"
           :role-color-map="roleColorMap"
+          :crew-status="paneCrewStatus"
+          :crew-messages="paneCrewMessages"
           @scroll-to-role="scrollToRoleLatest"
           @control-action="controlAction"
           @clear-role="clearRole"
@@ -61,9 +63,9 @@ export default {
 
       <!-- Messages -->
       <div class="crew-messages" ref="messagesRef" @scroll="scroll.onScroll()">
-        <div v-if="store.currentCrewMessages.length === 0" class="crew-empty">
+        <div v-if="paneCrewMessages.length === 0" class="crew-empty">
           <div class="crew-empty-icon" v-html="icons.crew.replace(/16/g, '48')"></div>
-          <div class="crew-empty-text" v-if="store.currentCrewSession">{{ $t('crew.emptyWaiting') }}</div>
+          <div class="crew-empty-text" v-if="paneCrewSession">{{ $t('crew.emptyWaiting') }}</div>
           <div class="crew-empty-text" v-else>{{ $t('crew.emptyWaitingSession') }}</div>
         </div>
 
@@ -125,10 +127,10 @@ export default {
 
       <!-- Input -->
       <div class="input-area crew-input-area">
-        <div class="crew-input-hints" v-if="store.currentCrewSession && store.currentCrewStatus">
-          <span class="crew-hint-meta">R{{ store.currentCrewStatus.round || 0 }}</span>
+        <div class="crew-input-hints" v-if="paneCrewSession && paneCrewStatus">
+          <span class="crew-hint-meta">R{{ paneCrewStatus.round || 0 }}</span>
           <span class="crew-hint-sep">&middot;</span>
-          <span class="crew-hint-meta">\${{ (store.currentCrewStatus.costUsd || 0).toFixed(2) }}</span>
+          <span class="crew-hint-meta">\${{ (paneCrewStatus.costUsd || 0).toFixed(2) }}</span>
           <template v-if="totalTokens > 0">
             <span class="crew-hint-sep">&middot;</span>
             <span class="crew-hint-meta">{{ formatTokens(totalTokens) }}</span>
@@ -284,11 +286,13 @@ export default {
     this.input = createCrewInput(this.store, this.authStore, {
       getInputRef: () => this.$refs.inputRef,
       getFileInputRef: () => this.$refs.fileInput,
-      getCurrentPendingAsk: () => this.currentPendingAsk
+      getCurrentPendingAsk: () => this.currentPendingAsk,
+      getConversationId: () => this.effectiveConvId
     });
     this.scroll = createCrewScroll(this.store, {
       getMessagesRef: () => this.$refs.messagesRef,
-      getFeatureBlocks: () => this.featureBlocks
+      getFeatureBlocks: () => this.featureBlocks,
+      getConversationId: () => this.effectiveConvId
     });
   },
 
@@ -302,32 +306,48 @@ export default {
     effectiveConvId() {
       return this.conversationId || this.store.currentConversation;
     },
+    // Per-pane crew data — reads from effectiveConvId instead of global currentConversation
+    paneCrewSession() {
+      const convId = this.effectiveConvId;
+      if (!convId) return null;
+      return this.store.crewSessions[convId] || null;
+    },
+    paneCrewStatus() {
+      const convId = this.effectiveConvId;
+      if (!convId) return null;
+      return this.store.crewStatuses[convId] || null;
+    },
+    paneCrewMessages() {
+      const convId = this.effectiveConvId;
+      if (!convId) return [];
+      return this.store.crewMessagesMap[convId] || [];
+    },
     isWaitingResponse() {
-      const messages = this.store.currentCrewMessages;
+      const messages = this.paneCrewMessages;
       if (!messages || messages.length === 0) return false;
       const lastMsg = messages[messages.length - 1];
       return lastMsg.role === 'human' && !lastMsg._sendFailed;
     },
     isInitializing() {
-      return this.store.currentCrewStatus?.status === 'initializing';
+      return this.paneCrewStatus?.status === 'initializing';
     },
     initProgressText() {
-      const p = this.store.currentCrewStatus?.initProgress;
+      const p = this.paneCrewStatus?.initProgress;
       if (p === 'roles') return this.$t('crew.initRoles');
       if (p === 'worktrees') return this.$t('crew.initWorktrees');
       return this.$t('crew.initPreparing');
     },
     totalTokens() {
-      const s = this.store.currentCrewStatus;
+      const s = this.paneCrewStatus;
       if (!s) return 0;
       return (s.totalInputTokens || 0) + (s.totalOutputTokens || 0);
     },
     availablePresets() {
-      const existing = this.store.currentCrewSession?.roles?.map(r => r.name) || [];
+      const existing = this.paneCrewSession?.roles?.map(r => r.name) || [];
       return this.rolePresets.filter(p => !existing.includes(p.name));
     },
     crewTasks() {
-      return parseCrewTasks(this.store.currentCrewMessages);
+      return parseCrewTasks(this.paneCrewMessages);
     },
     completedTaskCount() {
       return this.crewTasks.filter(t => t.done).length;
@@ -336,14 +356,14 @@ export default {
       return this.crewTasks.filter(t => t.done);
     },
     activeTasks() {
-      const persistedFeatures = this.store.currentCrewStatus?.features || [];
-      return collectActiveTasks(persistedFeatures, this.store.currentCrewMessages);
+      const persistedFeatures = this.paneCrewStatus?.features || [];
+      return collectActiveTasks(persistedFeatures, this.paneCrewMessages);
     },
     completedTaskIds() {
       return computeCompletedTaskIds(this.doneTasks, this.activeTasks);
     },
     featureBlocks() {
-      const allMessages = this.store.currentCrewMessages;
+      const allMessages = this.paneCrewMessages;
       const completed = this.completedTaskIds;
       const len = allMessages.length;
 
@@ -378,7 +398,7 @@ export default {
     },
     pendingAsks() {
       const asks = [];
-      const messages = this.store.currentCrewMessages;
+      const messages = this.paneCrewMessages;
       for (const msg of messages) {
         if (msg.type === 'tool' && msg.toolName === 'AskUserQuestion' && !msg.askAnswered && msg.askRequestId) {
           asks.push({
@@ -395,10 +415,10 @@ export default {
       return this.pendingAsks.length > 0 ? this.pendingAsks[0] : null;
     },
     todosByFeature() {
-      return buildTodosByFeature(this.store.currentCrewMessages);
+      return buildTodosByFeature(this.paneCrewMessages);
     },
     sessionRoles() {
-      return this.store.currentCrewSession?.roles || [];
+      return this.paneCrewSession?.roles || [];
     },
     roleColorMap() {
       const map = {};
@@ -472,7 +492,7 @@ export default {
         }
       }
     },
-    'store.currentCrewMessages': {
+    'paneCrewMessages': {
       handler() {
         this.$nextTick(() => this.scroll.smartScrollToBottom());
       },
@@ -498,7 +518,7 @@ export default {
     },
 
     getRoleDisplayName(roleName) {
-      const session = this.store.currentCrewSession;
+      const session = this.paneCrewSession;
       if (!session) return roleName;
       const role = session.roles.find(r => r.name === roleName);
       return role ? role.displayName : roleName;
@@ -515,7 +535,7 @@ export default {
       if (action === 'clear') {
         if (!confirm(this.$t('crew.confirmClear'))) return;
       }
-      this.store.sendCrewControl(action, targetRole);
+      this.store.sendCrewControl(action, targetRole, this.effectiveConvId);
     },
 
     clearRole(roleName) {
@@ -529,7 +549,7 @@ export default {
     },
 
     quickAddPreset(preset) {
-      this.store.addCrewRole({ ...preset });
+      this.store.addCrewRole({ ...preset }, this.effectiveConvId);
       if (this.availablePresets.length <= 1) {
         this.showAddRole = false;
       }
@@ -537,7 +557,7 @@ export default {
 
     confirmAddRole() {
       if (!this.newRole.name || !this.newRole.displayName) return;
-      this.store.addCrewRole({ ...this.newRole });
+      this.store.addCrewRole({ ...this.newRole }, this.effectiveConvId);
       this.showAddRole = false;
       this.newRole = this.getEmptyRole();
     },
@@ -561,7 +581,7 @@ export default {
     },
 
     onAskSubmit(requestId, answers) {
-      this.store.answerUserQuestion(requestId, answers);
+      this.store.answerUserQuestion(requestId, answers, this.effectiveConvId);
     },
 
     scrollToRoleLatest(roleName) {

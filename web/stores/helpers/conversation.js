@@ -397,16 +397,17 @@ export function cancelExecution(store) {
   });
 }
 
-export function answerUserQuestion(store, requestId, answers) {
+export function answerUserQuestion(store, requestId, answers, conversationId) {
+  const convId = conversationId || store.currentConversation;
   store.sendWsMessage({
     type: 'ask_user_answer',
-    conversationId: store.currentConversation,
+    conversationId: convId,
     requestId,
     answers
   });
   // Find the AskUserQuestion tool-use message by askRequestId and mark it answered
   // Check both Chat messages and Crew messages
-  const chatMsgs = store.messagesMap[store.currentConversation] || [];
+  const chatMsgs = store.messagesMap[convId] || [];
   const chatMsg = chatMsgs.find(m =>
     m.type === 'tool-use' && m.toolName === 'AskUserQuestion' && m.askRequestId === requestId
   );
@@ -415,7 +416,7 @@ export function answerUserQuestion(store, requestId, answers) {
     chatMsg.selectedAnswers = answers;
   }
   // Also check Crew messages for the current conversation
-  const crewMsgs = store.crewMessagesMap?.[store.currentConversation];
+  const crewMsgs = store.crewMessagesMap?.[convId];
   if (crewMsgs) {
     const crewMsg = crewMsgs.find(m =>
       m.type === 'tool' && m.toolName === 'AskUserQuestion' && m.askRequestId === requestId
@@ -426,12 +427,12 @@ export function answerUserQuestion(store, requestId, answers) {
     }
   }
   // 立刻进入 processing 状态，显示"思考中"指示器
-  if (store.currentConversation && !store.processingConversations[store.currentConversation]) {
-    store.processingConversations[store.currentConversation] = true;
-    if (store._closedAt?.[store.currentConversation]) {
-      delete store._closedAt[store.currentConversation];
+  if (convId && !store.processingConversations[convId]) {
+    store.processingConversations[convId] = true;
+    if (store._closedAt?.[convId]) {
+      delete store._closedAt[convId];
     }
-    store.getOrCreateExecutionStatus(store.currentConversation);
+    store.getOrCreateExecutionStatus(convId);
   }
 }
 
