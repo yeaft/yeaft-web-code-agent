@@ -121,14 +121,27 @@ export default {
                 :key="conv.id"
                 class="session-item"
                 :class="{ active: conv.id === conversationId, processing: store.isConversationProcessing(conv.id), 'agent-offline': conv.agentOnline === false, occupied: isOccupiedByOtherPane(conv.id) }"
-                @click="onSidebarSessionClick(conv)"
+                @click="editingChatId !== conv.id && onSidebarSessionClick(conv)"
               >
                 <div class="session-item-header">
                   <div class="title">
                     <span v-if="store.isConversationProcessing(conv.id)" class="processing-dot"></span>
-                    {{ getConvTitle(conv) }}
+                    <input
+                      v-if="editingChatId === conv.id"
+                      ref="chatRenameInput"
+                      class="chat-rename-input"
+                      v-model="editingChatName"
+                      @keydown.enter="commitChatRename"
+                      @keydown.escape="cancelChatRename"
+                      @blur="commitChatRename"
+                      @click.stop
+                    />
+                    <span v-else>{{ getConvTitle(conv) }}</span>
                   </div>
                   <span class="session-time">{{ getConvTime(conv) }}</span>
+                  <button class="session-rename-btn" @click.stop="startChatRename(conv)">
+                    <svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+                  </button>
                 </div>
                 <div class="session-info">
                   <span class="session-path">{{ shortenPath(conv.workDir) }}</span>
@@ -332,6 +345,11 @@ export default {
     // Pane sidebar state
     const paneSidebarOpen = Vue.ref(false);
 
+    // Inline rename state
+    const editingChatId = Vue.ref(null);
+    const editingChatName = Vue.ref('');
+    const chatRenameInput = Vue.ref(null);
+
     // Session lists (shared between sidebar and empty state)
     const paneChatConvs = Vue.computed(() => {
       return [...store.conversations.filter(c => c.type !== 'crew')]
@@ -383,6 +401,33 @@ export default {
       if (isOccupiedByOtherPane(conv.id)) return;
       store.setPaneConversation(props.paneId, conv.id);
       paneSidebarOpen.value = false;
+    }
+
+    function startChatRename(conv) {
+      editingChatId.value = conv.id;
+      editingChatName.value = store.customConversationTitles[conv.id] || store.conversationTitles[conv.id] || '';
+      Vue.nextTick(() => {
+        const input = chatRenameInput.value;
+        if (input) {
+          const el = Array.isArray(input) ? input[0] : input;
+          el.focus();
+          el.select();
+        }
+      });
+    }
+
+    function commitChatRename() {
+      if (!editingChatId.value) return;
+      const convId = editingChatId.value;
+      const title = editingChatName.value.trim();
+      editingChatId.value = null;
+      editingChatName.value = '';
+      store.renameChatSession(convId, title);
+    }
+
+    function cancelChatRename() {
+      editingChatId.value = null;
+      editingChatName.value = '';
     }
 
     // Auto-scroll when new messages arrive
@@ -462,7 +507,13 @@ export default {
       getConvTime,
       shortenPath,
       isOccupiedByOtherPane,
-      onSidebarSessionClick
+      onSidebarSessionClick,
+      editingChatId,
+      editingChatName,
+      chatRenameInput,
+      startChatRename,
+      commitChatRename,
+      cancelChatRename
     };
   }
 };

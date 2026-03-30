@@ -110,6 +110,7 @@ export default {
   'chat.sidebar.settings': 'Settings',
   'chat.sidebar.emptyHint': 'Click the button above to create a new conversation',
   'chat.sidebar.closeConv': 'Close Conversation',
+  'chat.sidebar.renameConv': 'Rename',
 
   // Chat - Connection
   'chat.connection.connecting': 'Connecting...',
