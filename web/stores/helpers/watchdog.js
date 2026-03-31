@@ -86,4 +86,8 @@ export function stopProcessingWatchdog(store, conversationId) {
     clearTimeout(store._pongTimeouts[conversationId]);
     delete store._pongTimeouts[conversationId];
   }
+  // Clean up session health state
+  if (store.sessionHealth?.[conversationId]) {
+    delete store.sessionHealth[conversationId];
+  }
 }

@@ -68,7 +68,6 @@ export default {
                       {{ $t('chat.waiting.cliExited') }}
                       <button class="typing-refresh-btn" @click="refreshSession">{{ $t('chat.waiting.refresh') }}</button>
                     </span>
-                    </span>
                   </div>
                 </div>
               </main>
