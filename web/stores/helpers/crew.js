@@ -286,14 +286,14 @@ export function handleCrewOutput(store, msg) {
       conv.name = msg.name || '';
     }
     // 切换到 crew conversation — split mode aware
-    if (store.splitPanes.length > 1) {
+    if (store.panels.length > 1) {
       const pendingPaneId = store._pendingPaneId;
       store._pendingPaneId = null;
       if (pendingPaneId) {
-        const targetPane = store.splitPanes.find(p => p.id === pendingPaneId);
+        const targetPane = store.panels.find(p => p.id === pendingPaneId);
         if (targetPane) targetPane.conversationId = sid;
       } else {
-        const emptyPane = store.splitPanes.find(p => !p.conversationId);
+        const emptyPane = store.panels.find(p => !p.conversationId);
         if (emptyPane) emptyPane.conversationId = sid;
       }
       if (!store.activeConversations.includes(sid)) {
@@ -390,15 +390,15 @@ export function handleCrewOutput(store, msg) {
     // 页面刷新时不设置 _pendingCrewRestore，不切换（保持当前行为）
     if (store._pendingCrewRestore === sid) {
       // Split mode aware — don't nuke other panes' conversations
-      if (store.splitPanes.length > 1) {
+      if (store.panels.length > 1) {
         const pendingPaneId = store._pendingPaneId;
         store._pendingPaneId = null;
         if (pendingPaneId) {
-          const targetPane = store.splitPanes.find(p => p.id === pendingPaneId);
+          const targetPane = store.panels.find(p => p.id === pendingPaneId);
           if (targetPane) targetPane.conversationId = sid;
         } else {
           // Find the pane that triggered the restore, or an empty pane
-          const emptyPane = store.splitPanes.find(p => !p.conversationId);
+          const emptyPane = store.panels.find(p => !p.conversationId);
           if (emptyPane) emptyPane.conversationId = sid;
         }
         if (!store.activeConversations.includes(sid)) {

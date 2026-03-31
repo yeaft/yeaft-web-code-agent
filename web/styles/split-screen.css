@@ -54,7 +54,8 @@
 }
 
 /* ===== Split Panes Container ===== */
-.split-panes-container {
+.split-panes-container,
+.panels-container {
   display: flex;
   flex: 1;
   min-width: 0;
@@ -74,6 +75,11 @@
 }
 .split-pane + .split-pane {
   border-left: 1px solid var(--border-color);
+}
+
+/* Active panel highlight in multi-panel mode */
+.split-pane.active-panel {
+  border-top: 2px solid var(--accent);
 }
 
 /* ===== GlobalSidebar divider ===== */
@@ -155,6 +161,40 @@
 /* ===== Split Screen Button in ChatHeader ===== */
 .split-screen-btn {
   /* Inherits header-action-btn styles */
+}
+
+/* ===== Session Split Button (sidebar item) ===== */
+.session-split-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+  flex-shrink: 0;
+  padding: 0;
+}
+.session-item:hover .session-split-btn {
+  opacity: 1;
+}
+.session-split-btn:hover {
+  opacity: 1;
+  background: var(--sidebar-hover);
+  color: var(--accent);
+}
+.session-split-btn svg {
+  width: 14px;
+  height: 14px;
+}
+/* Crew session split button — adjust position for crew layout */
+.session-split-btn-crew {
+  margin-left: 4px;
 }
 
 /* ===== Occupied session in split mode ===== */

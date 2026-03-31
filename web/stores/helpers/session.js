@@ -134,38 +134,38 @@ export function autoRestoreConversation(store, conversationId) {
     conversationId
   });
 
-  // ★ Restore splitPanes from localStorage (split-screen persistence)
-  restoreSplitPanes(store);
+  // ★ Restore panels from localStorage (split-screen persistence)
+  restorePanels(store);
 }
 
 /**
- * Restore splitPanes from localStorage.
- * Filters out panes with conversationIds that no longer exist in store.conversations.
- * If only 0-1 valid panes remain, exit split mode (empty array).
+ * Restore panels from localStorage.
+ * Filters out panels with conversationIds that no longer exist in store.conversations.
+ * If only 0-1 valid panels remain, exit split mode (empty array).
  */
-function restoreSplitPanes(store) {
+function restorePanels(store) {
   // Only restore once per session — skip if already in split mode
-  if (store.splitPanes.length > 0) return;
+  if (store.panels.length > 0) return;
 
-  const raw = localStorage.getItem('splitPanes');
+  const raw = localStorage.getItem('panels');
   if (!raw) return;
 
-  let panes;
+  let panels;
   try {
-    panes = JSON.parse(raw);
+    panels = JSON.parse(raw);
   } catch {
-    localStorage.removeItem('splitPanes');
+    localStorage.removeItem('panels');
     return;
   }
 
-  if (!Array.isArray(panes) || panes.length < 2) {
-    localStorage.removeItem('splitPanes');
+  if (!Array.isArray(panels) || panels.length < 2) {
+    localStorage.removeItem('panels');
     return;
   }
 
-  // Validate: each pane needs an id; conversationId must exist (or be null)
+  // Validate: each panel needs an id; conversationId must exist (or be null)
   const convIds = new Set(store.conversations.map(c => c.id));
-  const validPanes = panes
+  const validPanels = panels
     .filter(p => p && typeof p.id === 'string')
     .map(p => ({
       id: p.id,
@@ -175,27 +175,28 @@ function restoreSplitPanes(store) {
       crewMobilePanel: p.crewMobilePanel || null
     }));
 
-  if (validPanes.length < 2) {
-    localStorage.removeItem('splitPanes');
+  if (validPanels.length < 2) {
+    localStorage.removeItem('panels');
     return;
   }
 
-  store.splitPanes = validPanes;
+  store.panels = validPanels;
+  store.activePanelId = validPanels[0]?.id || null;
 
-  // Ensure all pane conversationIds are in activeConversations + have messagesMap entries
-  for (const pane of validPanes) {
-    if (pane.conversationId) {
-      if (!store.activeConversations.includes(pane.conversationId)) {
-        store.activeConversations.push(pane.conversationId);
+  // Ensure all panel conversationIds are in activeConversations + have messagesMap entries
+  for (const panel of validPanels) {
+    if (panel.conversationId) {
+      if (!store.activeConversations.includes(panel.conversationId)) {
+        store.activeConversations.push(panel.conversationId);
       }
-      if (!store.messagesMap[pane.conversationId]) {
-        store.messagesMap[pane.conversationId] = [];
-        store.sendWsMessage({ type: 'sync_messages', conversationId: pane.conversationId, turns: 5 });
+      if (!store.messagesMap[panel.conversationId]) {
+        store.messagesMap[panel.conversationId] = [];
+        store.sendWsMessage({ type: 'sync_messages', conversationId: panel.conversationId, turns: 5 });
       }
     }
   }
 
-  console.log('[SplitPanes] Restored', validPanes.length, 'panes from localStorage');
+  console.log('[Panels] Restored', validPanels.length, 'panels from localStorage');
 }
 
 export function saveOpenSessions(store) {
@@ -218,11 +219,11 @@ export function saveOpenSessions(store) {
   }
   store.lastUsedAgent = store.currentAgent;
 
-  // ★ Persist splitPanes to localStorage (split-screen state survives refresh)
-  if (store.splitPanes.length > 0) {
-    localStorage.setItem('splitPanes', JSON.stringify(store.splitPanes));
+  // ★ Persist panels to localStorage (split-screen state survives refresh)
+  if (store.panels.length > 0) {
+    localStorage.setItem('panels', JSON.stringify(store.panels));
   } else {
-    localStorage.removeItem('splitPanes');
+    localStorage.removeItem('panels');
   }
 }
 
@@ -234,7 +235,7 @@ export function clearLastSession(store) {
   localStorage.removeItem('lastUsedAgent');
   localStorage.removeItem('lastUsedSession');
   localStorage.removeItem('lastViewedConversation');
-  localStorage.removeItem('splitPanes');
+  localStorage.removeItem('panels');
   localStorage.removeItem('splitPanesSaved');
   store.lastUsedAgent = null;
   store.lastUsedSession = null;

@@ -38,9 +38,10 @@ export const useChatStore = defineStore('chat', {
     currentWorkDir: null,
     // ★ Multi-column: unified message store, replaces old messages[] + messagesCache{}
     messagesMap: {},  // { [conversationId]: messages[] }
-    // ★ Split-screen: pane state
-    splitPanes: [],  // [{ id: 'pane-0', conversationId: convId }, ...] — empty = single-screen mode
-    _pendingPaneId: null,  // Tracks which pane requested a new session (split mode only)
+    // ★ Split-screen: panel state (unified single/multi-panel)
+    panels: [],  // [{ id: 'panel-0', conversationId: convId }, ...] — empty = single-screen mode
+    activePanelId: null,  // Currently focused panel ID (for multi-panel click routing)
+    _pendingPaneId: null,  // Tracks which panel requested a new session (split mode only)
     // 会话标题缓存：conversationId -> title (最新用户消息，使用对象而非 Map 以确保响应式)
     conversationTitles: {},
     customConversationTitles: {},
@@ -159,8 +160,8 @@ export const useChatStore = defineStore('chat', {
     messagesCache: (state) => state.messagesMap,
     // ★ Multi-column: whether multiple columns are active
     isMultiColumn: (state) => state.activeConversations.length > 1,
-    // ★ Split-screen: whether in split-screen mode (2+ panes)
-    isSplitMode: (state) => state.splitPanes.length > 1,
+    // ★ Split-screen: whether in split-screen mode (2+ panels)
+    isSplitMode: (state) => state.panels.length > 1,
     // 当前会话是否在处理中
     isProcessing: (state) => {
       return state.currentConversation ? !!state.processingConversations[state.currentConversation] : false;
@@ -270,56 +271,56 @@ export const useChatStore = defineStore('chat', {
     // =====================
     toggleCrewMobilePanel(panel, paneId = null) {
       if (paneId && this.isSplitMode) {
-        const pane = this.splitPanes.find(p => p.id === paneId);
+        const pane = this.panels.find(p => p.id === paneId);
         if (pane) { pane.crewMobilePanel = pane.crewMobilePanel === panel ? null : panel; return; }
       }
       this.crewMobilePanel = this.crewMobilePanel === panel ? null : panel;
     },
     toggleCrewPanel(panel, paneId = null) {
       if (paneId && this.isSplitMode) {
-        const pane = this.splitPanes.find(p => p.id === paneId);
+        const pane = this.panels.find(p => p.id === paneId);
         if (pane) { pane.crewPanelVisible[panel] = !pane.crewPanelVisible[panel]; return; }
       }
       this.crewPanelVisible[panel] = !this.crewPanelVisible[panel];
     },
     togglePaneRightPanel(panelType, paneId = null) {
       if (paneId && this.isSplitMode) {
-        const pane = this.splitPanes.find(p => p.id === paneId);
+        const pane = this.panels.find(p => p.id === paneId);
         if (pane) { pane.activeRightPanel = pane.activeRightPanel === panelType ? null : panelType; return; }
       }
       this.activeRightPanel = this.activeRightPanel === panelType ? null : panelType;
     },
     getPanelVisible(paneId) {
       if (paneId && this.isSplitMode) {
-        const pane = this.splitPanes.find(p => p.id === paneId);
+        const pane = this.panels.find(p => p.id === paneId);
         if (pane) return pane.crewPanelVisible;
       }
       return this.crewPanelVisible;
     },
     getPaneMobilePanel(paneId) {
       if (paneId && this.isSplitMode) {
-        const pane = this.splitPanes.find(p => p.id === paneId);
+        const pane = this.panels.find(p => p.id === paneId);
         if (pane) return pane.crewMobilePanel;
       }
       return this.crewMobilePanel;
     },
     getPaneRightPanel(paneId) {
       if (paneId && this.isSplitMode) {
-        const pane = this.splitPanes.find(p => p.id === paneId);
+        const pane = this.panels.find(p => p.id === paneId);
         if (pane) return pane.activeRightPanel;
       }
       return this.activeRightPanel;
     },
     setPaneMobilePanel(paneId, value) {
       if (paneId && this.isSplitMode) {
-        const pane = this.splitPanes.find(p => p.id === paneId);
+        const pane = this.panels.find(p => p.id === paneId);
         if (pane) { pane.crewMobilePanel = value; return; }
       }
       this.crewMobilePanel = value;
     },
     setPaneRightPanel(paneId, value) {
       if (paneId && this.isSplitMode) {
-        const pane = this.splitPanes.find(p => p.id === paneId);
+        const pane = this.panels.find(p => p.id === paneId);
         if (pane) { pane.activeRightPanel = value; return; }
       }
       this.activeRightPanel = value;
@@ -435,49 +436,50 @@ export const useChatStore = defineStore('chat', {
     removeColumn(conversationId) { convHelpers.removeColumn(this, conversationId); },
     sendMessageToConversation(conversationId, text, attachments = [], options = {}) { convHelpers.sendMessageToConversation(this, conversationId, text, attachments, options); },
     cancelExecutionForConversation(conversationId) { convHelpers.cancelExecutionForConversation(this, conversationId); },
-    // ★ Split-screen: pane management
-    addPane() {
-      if (this.splitPanes.length >= 3) return;
-      const makePaneState = (id, conversationId) => ({
+    // ★ Split-screen: panel management
+    addPanel() {
+      if (this.panels.length >= 3) return;
+      const makePanelState = (id, conversationId) => ({
         id,
         conversationId,
-        // Pane-local panel state (split mode only; non-split reads global store)
+        // Panel-local state (split mode only; non-split reads global store)
         crewPanelVisible: { roles: true, features: true },
         activeRightPanel: null,
         crewMobilePanel: null
       });
-      if (this.splitPanes.length === 0) {
+      if (this.panels.length === 0) {
         // Entering split mode: try to restore previous split layout
         const saved = localStorage.getItem('splitPanesSaved');
         if (saved) {
           try {
-            const panes = JSON.parse(saved);
-            if (Array.isArray(panes) && panes.length >= 2) {
+            const panels = JSON.parse(saved);
+            if (Array.isArray(panels) && panels.length >= 2) {
               // Validate conversationIds still exist
               const convIds = new Set(this.conversations.map(c => c.id));
-              const validPanes = panes
+              const validPanels = panels
                 .filter(p => p && typeof p.id === 'string')
                 .map(p => ({
-                  ...makePaneState(p.id, null),
+                  ...makePanelState(p.id, null),
                   conversationId: (p.conversationId && convIds.has(p.conversationId)) ? p.conversationId : null
                 }));
-              if (validPanes.length >= 2) {
-                this.splitPanes = validPanes;
-                // Ensure activeConversations includes all pane conversations
-                for (const pane of validPanes) {
-                  if (pane.conversationId && !this.activeConversations.includes(pane.conversationId)) {
-                    this.activeConversations.push(pane.conversationId);
+              if (validPanels.length >= 2) {
+                this.panels = validPanels;
+                this.activePanelId = validPanels[0].id;
+                // Ensure activeConversations includes all panel conversations
+                for (const panel of validPanels) {
+                  if (panel.conversationId && !this.activeConversations.includes(panel.conversationId)) {
+                    this.activeConversations.push(panel.conversationId);
                   }
                   // Load messages for crew/chat conversations that aren't cached
-                  if (pane.conversationId && !this.messagesMap[pane.conversationId]) {
-                    this.messagesMap[pane.conversationId] = [];
-                    const conv = this.conversations.find(c => c.id === pane.conversationId);
+                  if (panel.conversationId && !this.messagesMap[panel.conversationId]) {
+                    this.messagesMap[panel.conversationId] = [];
+                    const conv = this.conversations.find(c => c.id === panel.conversationId);
                     if (conv?.type === 'crew') {
-                      if (!this.crewMessagesMap[pane.conversationId]) {
-                        this.crewMessagesMap[pane.conversationId] = [];
+                      if (!this.crewMessagesMap[panel.conversationId]) {
+                        this.crewMessagesMap[panel.conversationId] = [];
                       }
                     } else {
-                      this.sendWsMessage({ type: 'sync_messages', conversationId: pane.conversationId, turns: 5 });
+                      this.sendWsMessage({ type: 'sync_messages', conversationId: panel.conversationId, turns: 5 });
                     }
                   }
                 }
@@ -488,34 +490,39 @@ export const useChatStore = defineStore('chat', {
           } catch { /* ignore corrupt data */ }
           localStorage.removeItem('splitPanesSaved');
         }
-        // Fallback: fresh split — first pane inherits current conversation
-        this.splitPanes = [
-          makePaneState('pane-0', this.currentConversation),
-          makePaneState('pane-1', null)
+        // Fallback: fresh split — first panel inherits current conversation
+        this.panels = [
+          makePanelState('panel-0', this.currentConversation),
+          makePanelState('panel-1', null)
         ];
+        this.activePanelId = 'panel-0';
         // Ensure second conv is in activeConversations if set
       } else {
-        const nextId = 'pane-' + Date.now();
-        this.splitPanes.push(makePaneState(nextId, null));
+        const nextId = 'panel-' + Date.now();
+        this.panels.push(makePanelState(nextId, null));
       }
     },
-    removePane(paneId) {
-      const idx = this.splitPanes.findIndex(p => p.id === paneId);
+    removePanel(panelId) {
+      const idx = this.panels.findIndex(p => p.id === panelId);
       if (idx < 0) return;
-      this.splitPanes.splice(idx, 1);
-      if (this.splitPanes.length <= 1) {
-        // Exit split mode: remaining pane's conversation becomes primary
-        const remaining = this.splitPanes[0];
+      this.panels.splice(idx, 1);
+      if (this.panels.length <= 1) {
+        // Exit split mode: remaining panel's conversation becomes primary
+        const remaining = this.panels[0];
         if (remaining?.conversationId) {
           this.activeConversations = [remaining.conversationId];
         }
-        this.splitPanes = [];
+        this.panels = [];
+        this.activePanelId = null;
+      } else if (this.activePanelId === panelId) {
+        // Active panel was removed, switch to first remaining
+        this.activePanelId = this.panels[0]?.id || null;
       }
     },
-    setPaneConversation(paneId, conversationId) {
-      const pane = this.splitPanes.find(p => p.id === paneId);
-      if (!pane) return;
-      pane.conversationId = conversationId;
+    setPanelConversation(panelId, conversationId) {
+      const panel = this.panels.find(p => p.id === panelId);
+      if (!panel) return;
+      panel.conversationId = conversationId;
       // Ensure conversation is in activeConversations
       if (conversationId && !this.activeConversations.includes(conversationId)) {
         this.activeConversations.push(conversationId);
@@ -525,6 +532,58 @@ export const useChatStore = defineStore('chat', {
         this.messagesMap[conversationId] = [];
         this.sendWsMessage({ type: 'sync_messages', conversationId, turns: 5 });
       }
+    },
+    setActivePanel(panelId) {
+      this.activePanelId = panelId;
+    },
+    // ★ Split to new panel: add a conversation to a new panel on the right
+    splitToPanel(conversationId) {
+      if (!conversationId) return;
+      const makePanelState = (id, convId) => ({
+        id,
+        conversationId: convId,
+        crewPanelVisible: { roles: true, features: true },
+        activeRightPanel: null,
+        crewMobilePanel: null
+      });
+      if (this.panels.length === 0) {
+        // Not in split mode yet — enter split mode
+        this.panels = [
+          makePanelState('panel-0', this.currentConversation),
+          makePanelState('panel-' + Date.now(), conversationId)
+        ];
+        this.activePanelId = this.panels[1].id;
+      } else if (this.panels.length >= 3) {
+        // Max panels reached — replace last panel
+        this.panels[this.panels.length - 1].conversationId = conversationId;
+        this.activePanelId = this.panels[this.panels.length - 1].id;
+      } else {
+        // Add new panel
+        const newId = 'panel-' + Date.now();
+        this.panels.push(makePanelState(newId, conversationId));
+        this.activePanelId = newId;
+      }
+      // Ensure conversation is in activeConversations
+      if (!this.activeConversations.includes(conversationId)) {
+        this.activeConversations.push(conversationId);
+      }
+      // Ensure messagesMap entry exists
+      if (!this.messagesMap[conversationId]) {
+        this.messagesMap[conversationId] = [];
+        const conv = this.conversations.find(c => c.id === conversationId);
+        if (conv?.type === 'crew') {
+          if (!this.crewMessagesMap[conversationId]) {
+            this.crewMessagesMap[conversationId] = [];
+          }
+        } else {
+          this.sendWsMessage({ type: 'sync_messages', conversationId, turns: 5 });
+        }
+      }
+      this.saveOpenSessions();
+    },
+    // ★ Check if a conversation is in any panel
+    isInAnyPanel(conversationId) {
+      return this.panels.some(p => p.conversationId === conversationId);
     },
     // ★ Session Pin
     togglePin(sessionId) {
