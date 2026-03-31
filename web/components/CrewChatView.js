@@ -121,11 +121,9 @@ export default {
           </span>
           <span v-else-if="waitingStatus === 'session-lost'" class="typing-status-text typing-status-warn">
             {{ $t('chat.waiting.sessionLost') }}
-            <button class="typing-refresh-btn" @click="refreshCrewSession">{{ $t('chat.waiting.refresh') }}</button>
           </span>
           <span v-else-if="waitingStatus === 'cli-exited'" class="typing-status-text typing-status-warn">
             {{ $t('chat.waiting.cliExited') }}
-            <button class="typing-refresh-btn" @click="refreshCrewSession">{{ $t('chat.waiting.refresh') }}</button>
           </span>
         </div>
 

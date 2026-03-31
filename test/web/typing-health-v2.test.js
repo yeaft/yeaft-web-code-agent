@@ -383,9 +383,11 @@ describe('messageHandler — pong_session', () => {
 // 8. watchdog.js — ping-based model
 // =====================================================================
 describe('watchdog.js — ping-based health monitoring', () => {
-  it('should send ping_session instead of refresh_conversation', () => {
+  it('should send ping_session instead of refresh_conversation in startProcessingWatchdog', () => {
     expect(watchdogSource).toContain("type: 'ping_session'");
-    expect(watchdogSource).not.toContain("type: 'refresh_conversation'");
+    // startProcessingWatchdog uses ping, but startLegacyWatchdog uses refresh for old agents
+    const pingSection = watchdogSource.substring(0, watchdogSource.indexOf('startLegacyWatchdog'));
+    expect(pingSection).not.toContain("type: 'refresh_conversation'");
   });
 
   it('should use 45000ms initial delay', () => {
@@ -507,20 +509,20 @@ describe('i18n — typing health v2 keys', () => {
     expect(zhSource).toContain("'Agent 已离线'");
   });
 
-  it('en: sessionLost = "Session lost on agent"', () => {
-    expect(enSource).toContain("'Session lost on agent'");
+  it('en: sessionLost = auto-refreshed message', () => {
+    expect(enSource).toContain("'Session lost, refreshed, waiting for update...'");
   });
 
-  it('zh: sessionLost = "Agent 上的 session 已丢失"', () => {
-    expect(zhSource).toContain("'Agent 上的 session 已丢失'");
+  it('zh: sessionLost = auto-refreshed message', () => {
+    expect(zhSource).toContain("'Session 已丢失，已刷新，等待最新信息...'");
   });
 
-  it('en: cliExited = "Claude process exited"', () => {
-    expect(enSource).toContain("'Claude process exited'");
+  it('en: cliExited = auto-refreshed message', () => {
+    expect(enSource).toContain("'Claude process exited, refreshed, waiting for update...'");
   });
 
-  it('zh: cliExited = "Claude 进程已退出"', () => {
-    expect(zhSource).toContain("'Claude 进程已退出'");
+  it('zh: cliExited = auto-refreshed message', () => {
+    expect(zhSource).toContain("'Claude 进程已退出，已刷新，等待最新信息...'");
   });
 });
 
@@ -528,18 +530,18 @@ describe('i18n — typing health v2 keys', () => {
 // 11. CSS — status classes (replacing phase classes)
 // =====================================================================
 describe('CSS — typing health v2 status styles', () => {
-  it('should have status-disconnected with red color', () => {
+  it('should have status-disconnected with red color (rgba)', () => {
     expect(cssSource).toContain('.typing-indicator.status-disconnected');
-    expect(cssSource).toContain('#e53935');
+    expect(cssSource).toContain('rgba(229, 57, 53');
   });
 
   it('should have status-agent-offline with red color', () => {
     expect(cssSource).toContain('.typing-indicator.status-agent-offline');
   });
 
-  it('should have status-compacting with blue color', () => {
+  it('should have status-compacting with blue color (rgba)', () => {
     expect(cssSource).toContain('.typing-indicator.status-compacting');
-    expect(cssSource).toContain('#5b9bd5');
+    expect(cssSource).toContain('rgba(91, 155, 213');
   });
 
   it('should have status-session-lost with orange color', () => {
@@ -597,11 +599,11 @@ describe('Three-view template consistency (v2)', () => {
     }
   });
 
-  it('agent-offline, session-lost, cli-exited should all have refresh button', () => {
+  it('only agent-offline should have refresh button (session-lost/cli-exited auto-refresh)', () => {
     for (const src of [messageListSource, splitPaneSource, crewChatViewSource]) {
-      // Count refresh buttons — should be 3 (one for each recoverable status)
+      // Count refresh buttons — should be 1 (only agent-offline; session-lost/cli-exited auto-refresh)
       const matches = src.match(/typing-refresh-btn/g) || [];
-      expect(matches.length).toBeGreaterThanOrEqual(3);
+      expect(matches.length).toBe(1);
     }
   });
 
