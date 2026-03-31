@@ -90,7 +90,7 @@ loadMcpServers();
 
 // Agent capabilities（启动时自动检测）
 async function detectCapabilities() {
-  const capabilities = ['background_tasks', 'file_editor'];
+  const capabilities = ['background_tasks', 'file_editor', 'ping_session'];
   const pty = await loadNodePty();
   if (pty) capabilities.push('terminal');
 

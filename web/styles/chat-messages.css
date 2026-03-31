@@ -155,10 +155,10 @@
 
 /* Typing Health Status Styles */
 .typing-indicator.status-disconnected span:nth-child(-n+3),
-.typing-indicator.status-agent-offline span:nth-child(-n+3) { background: var(--error-red, #e53935); }
-.typing-indicator.status-compacting span:nth-child(-n+3) { background: var(--accent-blue, #5b9bd5); }
+.typing-indicator.status-agent-offline span:nth-child(-n+3) { background: rgba(229, 57, 53, 0.6); }
+.typing-indicator.status-compacting span:nth-child(-n+3) { background: rgba(91, 155, 213, 0.6); }
 .typing-indicator.status-session-lost span:nth-child(-n+3),
-.typing-indicator.status-cli-exited span:nth-child(-n+3) { background: var(--warning-orange, #e57c23); }
+.typing-indicator.status-cli-exited span:nth-child(-n+3) { background: rgba(229, 124, 35, 0.6); }
 
 .typing-status-text {
   margin-left: 8px;
@@ -166,9 +166,9 @@
   color: var(--text-secondary);
   white-space: nowrap;
 }
-.typing-status-warn { color: var(--warning-orange, #e57c23); }
-.typing-status-error { color: var(--error-red, #e53935); }
-.typing-status-compact { color: var(--accent-blue, #5b9bd5); }
+.typing-status-warn { color: rgba(229, 124, 35, 0.85); }
+.typing-status-error { color: rgba(229, 57, 53, 0.85); }
+.typing-status-compact { color: rgba(91, 155, 213, 0.85); }
 
 .typing-refresh-btn {
   margin-left: 6px;

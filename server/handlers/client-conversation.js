@@ -433,6 +433,15 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         });
         return;
       }
+      // Old agent doesn't support ping_session — reply unsupported
+      if (!pingAgentObj.capabilities?.includes('ping_session')) {
+        await sendToWebClient(client, {
+          type: 'pong_session',
+          conversationId: pingConvId,
+          status: 'unsupported'
+        });
+        return;
+      }
       await forwardToAgent(pingAgent, {
         type: 'ping_session',
         conversationId: pingConvId,

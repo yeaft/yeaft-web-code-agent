@@ -6,7 +6,7 @@
 import { useAuthStore } from '../auth.js';
 import { decodeKey } from '../../utils/encryption.js';
 import { t } from '../../utils/i18n.js';
-import { stopProcessingWatchdog } from './watchdog.js';
+import { stopProcessingWatchdog, startLegacyWatchdog } from './watchdog.js';
 import { clearSessionLoading } from './session.js';
 import { clearRefreshTimeout } from './crew.js';
 import { handleAgentList, handleAgentSelected } from './handlers/agentHandler.js';
@@ -269,6 +269,13 @@ export function handleMessage(store, msg) {
         delete store._pongTimeouts[pongConvId];
       }
 
+      if (msg.status === 'unsupported') {
+        // Old agent doesn't support ping — stop ping watchdog, fallback to legacy 90s refresh
+        stopProcessingWatchdog(store, pongConvId);
+        startLegacyWatchdog(store, pongConvId);
+        break;
+      }
+
       if (msg.status === 'ok') {
         // Clear health warning
         if (store.sessionHealth?.[pongConvId]) {
@@ -287,6 +294,18 @@ export function handleMessage(store, msg) {
         store.sessionHealth[pongConvId] = { status: msg.status };
         // Clear processing state for terminal statuses
         if (msg.status === 'session-lost' || msg.status === 'cli-exited') {
+          // Auto-refresh (prevent duplicate)
+          if (!store._autoRefreshed) store._autoRefreshed = {};
+          if (!store._autoRefreshed[pongConvId]) {
+            store._autoRefreshed[pongConvId] = true;
+            const conv = store.conversations.find(c => c.id === pongConvId);
+            store.sendWsMessage({
+              type: 'refresh_conversation',
+              conversationId: pongConvId,
+              agentId: conv?.agentId
+            });
+          }
+          // Clear processing state
           delete store.processingConversations[pongConvId];
           stopProcessingWatchdog(store, pongConvId);
           store.finishStreamingForConversation(pongConvId);

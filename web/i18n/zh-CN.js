@@ -179,8 +179,8 @@ export default {
   'chat.waiting.disconnected': '连接已断开',
   'chat.waiting.compacting': '正在压缩上下文...',
   'chat.waiting.agentOffline': 'Agent 已离线',
-  'chat.waiting.sessionLost': 'Agent 上的 session 已丢失',
-  'chat.waiting.cliExited': 'Claude 进程已退出',
+  'chat.waiting.sessionLost': 'Session 已丢失，已刷新，等待最新信息...',
+  'chat.waiting.cliExited': 'Claude 进程已退出，已刷新，等待最新信息...',
   'chat.waiting.refresh': '刷新',
 
   // ============ Message Item ============

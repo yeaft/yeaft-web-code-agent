@@ -179,8 +179,8 @@ export default {
   'chat.waiting.disconnected': 'Connection lost',
   'chat.waiting.compacting': 'Compacting context...',
   'chat.waiting.agentOffline': 'Agent offline',
-  'chat.waiting.sessionLost': 'Session lost on agent',
-  'chat.waiting.cliExited': 'Claude process exited',
+  'chat.waiting.sessionLost': 'Session lost, refreshed, waiting for update...',
+  'chat.waiting.cliExited': 'Claude process exited, refreshed, waiting for update...',
   'chat.waiting.refresh': 'Refresh',
 
   // ============ Message Item ============

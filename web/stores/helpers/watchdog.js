@@ -90,4 +90,37 @@ export function stopProcessingWatchdog(store, conversationId) {
   if (store.sessionHealth?.[conversationId]) {
     delete store.sessionHealth[conversationId];
   }
+  // Clean up auto-refresh flag
+  if (store._autoRefreshed?.[conversationId]) {
+    delete store._autoRefreshed[conversationId];
+  }
+}
+
+/**
+ * Legacy watchdog for old agents that don't support ping_session.
+ * After 90s of processing, sends refresh_conversation.
+ * If still processing after 10s more, force-clears processing state.
+ */
+export function startLegacyWatchdog(store, conversationId) {
+  stopProcessingWatchdog(store, conversationId);
+  if (!store._processingWatchdogs) store._processingWatchdogs = {};
+  store._processingWatchdogs[conversationId] = setTimeout(() => {
+    if (store.processingConversations[conversationId]) {
+      const conv = store.conversations.find(c => c.id === conversationId);
+      store.sendWsMessage({
+        type: 'refresh_conversation',
+        conversationId,
+        agentId: conv?.agentId
+      });
+      store._processingWatchdogs[conversationId] = setTimeout(() => {
+        if (store.processingConversations[conversationId]) {
+          delete store.processingConversations[conversationId];
+          const status = store.executionStatusMap[conversationId];
+          if (status) status.currentTool = null;
+          store.finishStreamingForConversation(conversationId);
+        }
+        delete store._processingWatchdogs[conversationId];
+      }, 10000);
+    }
+  }, 90000);
 }
