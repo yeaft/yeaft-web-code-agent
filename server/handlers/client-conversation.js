@@ -419,6 +419,28 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       break;
     }
 
+    case 'ping_session': {
+      const pingAgent = msg.agentId || client.currentAgent;
+      const pingConvId = msg.conversationId;
+      if (!pingAgent || !pingConvId) return;
+      // Check agent is online first — if not, reply directly
+      const pingAgentObj = agents.get(pingAgent);
+      if (!pingAgentObj || !pingAgentObj.ws || pingAgentObj.ws.readyState !== 1) {
+        await sendToWebClient(client, {
+          type: 'pong_session',
+          conversationId: pingConvId,
+          status: 'agent-offline'
+        });
+        return;
+      }
+      await forwardToAgent(pingAgent, {
+        type: 'ping_session',
+        conversationId: pingConvId,
+        clientId
+      });
+      break;
+    }
+
     case 'update_conversation_settings': {
       if (!client.currentAgent) return;
       if (!await checkAgentAccess(client.currentAgent)) return;

@@ -58,6 +58,12 @@ export function handleClaudeOutput(store, conversationId, data) {
     }
     if (!Array.isArray(content)) return;
 
+    // Empty content array = finish-streaming signal (text was fully streamed via deltas)
+    if (content.length === 0) {
+      store.finishStreamingForConversation(conversationId);
+      return;
+    }
+
     for (const block of content) {
       if (block.type === 'text') {
         store.appendToAssistantMessageForConversation(conversationId, block.text);

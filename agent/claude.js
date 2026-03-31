@@ -286,6 +286,9 @@ async function processClaudeOutput(conversationId, claudeQuery, state) {
     for await (const message of claudeQuery) {
       console.log('Output:', message.type, message.subtype || '');
 
+      // Track last output time for ping health checks
+      state._lastOutputTime = Date.now();
+
       // 捕获 system init 消息中的 metadata
       if (message.type === 'system' && message.subtype === 'init') {
         state.claudeSessionId = message.session_id;

@@ -176,10 +176,12 @@ export default {
   'message.loadMore': '↑ Click or scroll up to load more',
 
   // ============ Typing Health ============
-  'chat.waiting.slow': 'Waiting for response...',
-  'chat.waiting.stuck': 'Response may be stuck',
-  'chat.waiting.refresh': 'Refresh',
   'chat.waiting.disconnected': 'Connection lost',
+  'chat.waiting.compacting': 'Compacting context...',
+  'chat.waiting.agentOffline': 'Agent offline',
+  'chat.waiting.sessionLost': 'Session lost on agent',
+  'chat.waiting.cliExited': 'Claude process exited',
+  'chat.waiting.refresh': 'Refresh',
 
   // ============ Message Item ============
   'message.copyContent': 'Copy content',

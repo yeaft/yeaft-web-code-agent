@@ -1,47 +1,89 @@
-// Processing watchdog helpers
-// Prevents processing state from getting stuck
+// Processing watchdog helpers — ping-based session health monitoring
+// Sends periodic ping_session to agent and tracks pong responses
 
 export function isRecentlyClosed(store, conversationId) {
   if (!store._closedAt?.[conversationId]) return false;
   return (Date.now() - store._closedAt[conversationId]) < 30000;
 }
 
+/**
+ * Start the processing watchdog for a conversation.
+ * After an initial 45s delay, sends ping_session every 30s.
+ * If no pong received within 10s, sets sessionHealth to agent-offline.
+ */
 export function startProcessingWatchdog(store, conversationId) {
   stopProcessingWatchdog(store, conversationId);
   if (!store._processingWatchdogs) store._processingWatchdogs = {};
-  store._processingWatchdogs[conversationId] = setTimeout(() => {
-    if (store.processingConversations[conversationId]) {
-      console.log(`[Watchdog] Processing timeout for ${conversationId}, sending refresh`);
-      const conv = store.conversations.find(c => c.id === conversationId);
-      store.sendWsMessage({
-        type: 'refresh_conversation',
-        conversationId,
-        agentId: conv?.agentId
-      });
-      // Give 10 more seconds for refresh response, then force clear
-      store._processingWatchdogs[conversationId] = setTimeout(() => {
-        if (store.processingConversations[conversationId]) {
-          console.log(`[Watchdog] Force clearing processing state for ${conversationId}`);
-          delete store.processingConversations[conversationId];
-          const status = store.executionStatusMap[conversationId];
-          if (status) status.currentTool = null;
-          store.finishStreamingForConversation(conversationId);
-        }
-        delete store._processingWatchdogs[conversationId];
-      }, 10000);
-    }
-  }, 90000); // 90 seconds
+
+  const sendPing = () => {
+    if (!store.processingConversations[conversationId]) return;
+    const conv = store.conversations.find(c => c.id === conversationId);
+    store.sendWsMessage({
+      type: 'ping_session',
+      conversationId,
+      agentId: conv?.agentId
+    });
+
+    // 10s timeout for pong response
+    const pongTimeout = setTimeout(() => {
+      if (store.processingConversations[conversationId]) {
+        console.log(`[Watchdog] No pong for ${conversationId}, marking agent-offline`);
+        if (!store.sessionHealth) store.sessionHealth = {};
+        store.sessionHealth[conversationId] = { status: 'agent-offline' };
+      }
+    }, 10000);
+
+    // Store pong timeout so resetProcessingWatchdog can clear it
+    if (!store._pongTimeouts) store._pongTimeouts = {};
+    store._pongTimeouts[conversationId] = pongTimeout;
+  };
+
+  // First ping after 45s, then every 30s
+  const initialTimer = setTimeout(() => {
+    if (!store.processingConversations[conversationId]) return;
+    sendPing();
+    store._processingWatchdogs[conversationId] = setInterval(() => {
+      if (!store.processingConversations[conversationId]) {
+        stopProcessingWatchdog(store, conversationId);
+        return;
+      }
+      sendPing();
+    }, 30000);
+  }, 45000);
+
+  store._processingWatchdogs[conversationId] = initialTimer;
 }
 
+/**
+ * Reset the watchdog when claude_output is received.
+ * Clears health warnings and restarts the 45s timer.
+ */
 export function resetProcessingWatchdog(store, conversationId) {
   if (store.processingConversations[conversationId] && store._processingWatchdogs?.[conversationId]) {
+    // Clear pong timeout
+    if (store._pongTimeouts?.[conversationId]) {
+      clearTimeout(store._pongTimeouts[conversationId]);
+      delete store._pongTimeouts[conversationId];
+    }
+    // Clear session health warning (got activity = healthy)
+    if (store.sessionHealth?.[conversationId]) {
+      delete store.sessionHealth[conversationId];
+    }
     startProcessingWatchdog(store, conversationId);
   }
 }
 
+/**
+ * Stop the watchdog and clean up all timers.
+ */
 export function stopProcessingWatchdog(store, conversationId) {
   if (store._processingWatchdogs?.[conversationId]) {
     clearTimeout(store._processingWatchdogs[conversationId]);
+    clearInterval(store._processingWatchdogs[conversationId]);
     delete store._processingWatchdogs[conversationId];
+  }
+  if (store._pongTimeouts?.[conversationId]) {
+    clearTimeout(store._pongTimeouts[conversationId]);
+    delete store._pongTimeouts[conversationId];
   }
 }

@@ -107,15 +107,25 @@ export default {
         </template>
 
         <!-- Typing dots: visible after user sends message, before AI responds -->
-        <div v-if="isWaitingResponse" class="typing-indicator" :class="'phase-' + (waitingPhase || 'normal')">
+        <div v-if="isWaitingResponse" class="typing-indicator" :class="waitingStatus ? ('status-' + waitingStatus) : ''">
           <span></span><span></span><span></span>
-          <span v-if="waitingPhase === 'slow'" class="typing-status-text">{{ $t('chat.waiting.slow') }}</span>
-          <span v-else-if="waitingPhase === 'stuck'" class="typing-status-text typing-status-warn">
-            {{ $t('chat.waiting.stuck') }}
+          <span v-if="waitingStatus === 'disconnected'" class="typing-status-text typing-status-error">
+            {{ $t('chat.waiting.disconnected') }}
+          </span>
+          <span v-else-if="waitingStatus === 'compacting'" class="typing-status-text typing-status-compact">
+            {{ $t('chat.waiting.compacting') }}
+          </span>
+          <span v-else-if="waitingStatus === 'agent-offline'" class="typing-status-text typing-status-error">
+            {{ $t('chat.waiting.agentOffline') }}
             <button class="typing-refresh-btn" @click="refreshCrewSession">{{ $t('chat.waiting.refresh') }}</button>
           </span>
-          <span v-else-if="waitingPhase === 'disconnected'" class="typing-status-text typing-status-error">
-            {{ $t('chat.waiting.disconnected') }}
+          <span v-else-if="waitingStatus === 'session-lost'" class="typing-status-text typing-status-warn">
+            {{ $t('chat.waiting.sessionLost') }}
+            <button class="typing-refresh-btn" @click="refreshCrewSession">{{ $t('chat.waiting.refresh') }}</button>
+          </span>
+          <span v-else-if="waitingStatus === 'cli-exited'" class="typing-status-text typing-status-warn">
+            {{ $t('chat.waiting.cliExited') }}
+            <button class="typing-refresh-btn" @click="refreshCrewSession">{{ $t('chat.waiting.refresh') }}</button>
           </span>
         </div>
 
@@ -336,17 +346,14 @@ export default {
       const lastMsg = messages[messages.length - 1];
       return lastMsg.role === 'human' && !lastMsg._sendFailed;
     },
-    waitingPhase() {
+    waitingStatus() {
       if (!this.isWaitingResponse) return null;
       if (this.store.connectionState !== 'connected') return 'disconnected';
       const convId = this.effectiveConvId;
-      const execStatus = this.store.executionStatusMap[convId];
-      const lastAct = execStatus?.lastActivity;
-      if (!lastAct) return 'normal';
-      const elapsed = this.nowTick - lastAct;
-      if (elapsed < 30000) return 'normal';
-      if (elapsed < 90000) return 'slow';
-      return 'stuck';
+      if (this.store.compactStatus?.conversationId === convId && this.store.compactStatus?.status === 'compacting') return 'compacting';
+      const health = this.store.sessionHealth?.[convId];
+      if (health) return health.status;
+      return null;
     },
     isInitializing() {
       return this.paneCrewStatus?.status === 'initializing';

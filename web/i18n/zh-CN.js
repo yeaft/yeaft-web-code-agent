@@ -176,10 +176,12 @@ export default {
   'message.loadMore': '↑ 点击或向上滚动加载更多',
 
   // ============ Typing Health ============
-  'chat.waiting.slow': '等待响应中...',
-  'chat.waiting.stuck': '响应可能已卡住',
-  'chat.waiting.refresh': '刷新',
   'chat.waiting.disconnected': '连接已断开',
+  'chat.waiting.compacting': '正在压缩上下文...',
+  'chat.waiting.agentOffline': 'Agent 已离线',
+  'chat.waiting.sessionLost': 'Agent 上的 session 已丢失',
+  'chat.waiting.cliExited': 'Claude 进程已退出',
+  'chat.waiting.refresh': '刷新',
 
   // ============ Message Item ============
   'message.copyContent': '复制内容',

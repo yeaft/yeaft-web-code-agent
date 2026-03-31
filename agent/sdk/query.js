@@ -144,6 +144,14 @@ export class Query {
                   // Forward only tool_use blocks (text already sent via deltas)
                   message.message.content = nonTextBlocks;
                   this.inputStream.enqueue(message);
+                } else {
+                  // Pure text message fully streamed — send finish-streaming signal
+                  // so frontend clears isStreaming and typing dots can reappear
+                  this.inputStream.enqueue({
+                    type: 'assistant',
+                    message: { role: 'assistant', content: [] },
+                    _finishStreaming: true
+                  });
                 }
                 // If only text blocks: skip entirely (all content already streamed)
               } else if (typeof content === 'string') {

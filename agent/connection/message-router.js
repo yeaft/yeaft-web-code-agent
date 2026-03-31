@@ -12,7 +12,8 @@ import {
   createConversation, resumeConversation, deleteConversation,
   handleRefreshConversation, handleCancelExecution,
   handleUserInput, handleUpdateConversationSettings, handleAskUserAnswer,
-  sendConversationList, handleBtwQuestion, preloadSlashCommands
+  sendConversationList, handleBtwQuestion, preloadSlashCommands,
+  handlePingSession
 } from '../conversation.js';
 import {
   createCrewSession, handleCrewHumanInput, handleCrewControl,
@@ -113,6 +114,10 @@ export async function handleMessage(msg) {
 
     case 'refresh_conversation':
       await handleRefreshConversation(msg);
+      break;
+
+    case 'ping_session':
+      handlePingSession(msg);
       break;
 
     // Terminal (PTY) messages
