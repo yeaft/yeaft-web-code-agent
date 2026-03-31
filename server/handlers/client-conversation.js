@@ -151,30 +151,38 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
 
     case 'delete_conversation': {
       if (!client.currentAgent) return;
-      if (!await checkAgentAccess(client.currentAgent)) return;
+
+      // ★ DB cleanup: always execute regardless of agent online status
+      // Use verifyConversationOwnership (checks DB) instead of checkAgentAccess (requires agent in memory)
+      // This ensures close/delete works even when the agent is offline
       if (!CONFIG.skipAuth && !verifyConversationOwnership(msg.conversationId, client.userId)) {
         console.warn(`[Security] User ${client.userId} attempted to delete conversation ${msg.conversationId} they don't own`);
         await sendToWebClient(client, { type: 'error', message: 'Permission denied' });
         return;
       }
 
-      // Server-side cleanup: always execute regardless of agent online status
-      const deleteAgent = agents.get(client.currentAgent);
-      if (deleteAgent) {
-        deleteAgent.conversations.delete(msg.conversationId);
-      }
+      // Always deactivate in DB — this is the critical fix
       try {
         sessionDb.setActive(msg.conversationId, false);
       } catch (e) {
         console.error('Failed to deactivate session in database:', e.message);
       }
+
+      // Remove from agent's in-memory conversations (if agent is online)
+      const deleteAgent = agents.get(client.currentAgent);
+      if (deleteAgent) {
+        deleteAgent.conversations.delete(msg.conversationId);
+      }
       await broadcastAgentList();
 
       // Forward to agent for resource cleanup (terminals, processes, etc.) — best effort
-      await forwardToAgent(client.currentAgent, {
-        type: 'delete_conversation',
-        conversationId: msg.conversationId
-      });
+      // Only attempt if agent is online with an open WebSocket
+      if (deleteAgent?.ws?.readyState === 1) {
+        await forwardToAgent(client.currentAgent, {
+          type: 'delete_conversation',
+          conversationId: msg.conversationId
+        });
+      }
       break;
     }
 
