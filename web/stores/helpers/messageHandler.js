@@ -259,6 +259,42 @@ export function handleMessage(store, msg) {
       }
       break;
 
+    case 'pong_session': {
+      const pongConvId = msg.conversationId;
+      if (!pongConvId) break;
+
+      // Clear pong timeout (watchdog sets it)
+      if (store._pongTimeouts?.[pongConvId]) {
+        clearTimeout(store._pongTimeouts[pongConvId]);
+        delete store._pongTimeouts[pongConvId];
+      }
+
+      if (msg.status === 'ok') {
+        // Clear health warning
+        if (store.sessionHealth?.[pongConvId]) {
+          delete store.sessionHealth[pongConvId];
+        }
+        // Sync processing state: if agent says not processing, clear frontend state
+        if (!msg.isProcessing && store.processingConversations[pongConvId]) {
+          console.log(`[Pong] Agent says not processing for ${pongConvId}, clearing`);
+          delete store.processingConversations[pongConvId];
+          stopProcessingWatchdog(store, pongConvId);
+          store.finishStreamingForConversation(pongConvId);
+        }
+      } else {
+        // session-lost, cli-exited, agent-offline
+        if (!store.sessionHealth) store.sessionHealth = {};
+        store.sessionHealth[pongConvId] = { status: msg.status };
+        // Clear processing state for terminal statuses
+        if (msg.status === 'session-lost' || msg.status === 'cli-exited') {
+          delete store.processingConversations[pongConvId];
+          stopProcessingWatchdog(store, pongConvId);
+          store.finishStreamingForConversation(pongConvId);
+        }
+      }
+      break;
+    }
+
     case 'ask_user_question':
       if (msg.conversationId) {
         const tryLink = () => {

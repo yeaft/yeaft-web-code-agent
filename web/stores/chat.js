@@ -50,6 +50,8 @@ export const useChatStore = defineStore('chat', {
     locale: localStorage.getItem('locale') || 'zh-CN',
     // Per-conversation 执行状态追踪：conversationId -> { currentTool, toolHistory, lastActivity }
     executionStatusMap: {},
+    // Per-conversation session health: conversationId -> { status: 'agent-offline'|'session-lost'|'cli-exited' }
+    sessionHealth: {},
     // 历史会话列表 (用于恢复对话框)
     historySessions: [],
     historySessionsLoading: false,

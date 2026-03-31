@@ -153,10 +153,12 @@
   30% { transform: translateY(-8px); opacity: 1; }
 }
 
-/* Typing Health Phases */
-.typing-indicator.phase-slow span:nth-child(-n+3) { background: var(--warning-yellow, #f5a623); }
-.typing-indicator.phase-stuck span:nth-child(-n+3) { background: var(--warning-orange, #e57c23); }
-.typing-indicator.phase-disconnected span:nth-child(-n+3) { background: var(--error-red, #e53935); }
+/* Typing Health Status Styles */
+.typing-indicator.status-disconnected span:nth-child(-n+3),
+.typing-indicator.status-agent-offline span:nth-child(-n+3) { background: var(--error-red, #e53935); }
+.typing-indicator.status-compacting span:nth-child(-n+3) { background: var(--accent-blue, #5b9bd5); }
+.typing-indicator.status-session-lost span:nth-child(-n+3),
+.typing-indicator.status-cli-exited span:nth-child(-n+3) { background: var(--warning-orange, #e57c23); }
 
 .typing-status-text {
   margin-left: 8px;
@@ -166,6 +168,7 @@
 }
 .typing-status-warn { color: var(--warning-orange, #e57c23); }
 .typing-status-error { color: var(--error-red, #e53935); }
+.typing-status-compact { color: var(--accent-blue, #5b9bd5); }
 
 .typing-refresh-btn {
   margin-left: 6px;

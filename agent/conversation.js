@@ -477,6 +477,45 @@ export function deleteConversation(msg) {
 }
 
 // 刷新会话状态 - 发送当前会话的处理状态
+/**
+ * Handle ping_session — report session real status back to client.
+ * Allows the frontend to distinguish: agent-offline, session-lost, cli-exited, ok.
+ */
+export function handlePingSession(msg) {
+  const { conversationId } = msg;
+  const conv = ctx.conversations.get(conversationId);
+
+  if (!conv) {
+    ctx.sendToServer({
+      type: 'pong_session',
+      conversationId,
+      clientId: msg.clientId,
+      status: 'session-lost'
+    });
+    return;
+  }
+
+  // CLI process exited (no active query)
+  if (!conv.query) {
+    ctx.sendToServer({
+      type: 'pong_session',
+      conversationId,
+      clientId: msg.clientId,
+      status: 'cli-exited'
+    });
+    return;
+  }
+
+  ctx.sendToServer({
+    type: 'pong_session',
+    conversationId,
+    clientId: msg.clientId,
+    status: 'ok',
+    isProcessing: !!conv.turnActive,
+    currentTool: conv.currentTool || null
+  });
+}
+
 export async function handleRefreshConversation(msg) {
   const { conversationId } = msg;
   const conv = ctx.conversations.get(conversationId);

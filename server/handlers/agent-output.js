@@ -244,6 +244,31 @@ export async function handleAgentOutput(agentId, agent, msg) {
       });
       break;
 
+    case 'pong_session': {
+      // Forward pong to specific client (if clientId provided) or broadcast
+      if (msg.clientId) {
+        const targetClient = webClients.get(msg.clientId);
+        if (targetClient) {
+          await sendToWebClient(targetClient, {
+            type: 'pong_session',
+            conversationId: msg.conversationId,
+            status: msg.status,
+            isProcessing: msg.isProcessing,
+            currentTool: msg.currentTool
+          });
+        }
+      } else {
+        await forwardToClients(agentId, msg.conversationId, {
+          type: 'pong_session',
+          conversationId: msg.conversationId,
+          status: msg.status,
+          isProcessing: msg.isProcessing,
+          currentTool: msg.currentTool
+        });
+      }
+      break;
+    }
+
     default:
       return false; // Not handled
   }
