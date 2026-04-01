@@ -13,3 +13,5 @@ Multi-role AI team collaboration with PM, Developer, Reviewer, and Tester roles 
 - **Role-based message grouping** — Decision-maker messages in main stream, grouped by role
 - **Parallel multi-agent execution** — Multiple agents work simultaneously across worktrees
 - **Smart completion detection** — Feature completion detection with auto-reactivation on new activity
+- **AskUserQuestion interactive cards** — Agents can prompt the user for decisions mid-task
+- **Typing indicator with health monitoring** — Event-driven status: agent offline / session lost / compacting

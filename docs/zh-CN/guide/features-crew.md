@@ -13,3 +13,5 @@
 - **角色分组消息** — 决策者消息在主流中直接显示，按角色分组
 - **多 Agent 并行执行** — 多 Agent 跨 worktree 并行执行
 - **智能完成检测** — Feature 完成检测，有新活动时自动重新激活
+- **AskUserQuestion 交互卡片** — Agent 可在任务进行中向用户请求决策
+- **Typing Indicator 健康监控** — 事件驱动状态：Agent 离线 / Session 丢失 / 正在压缩

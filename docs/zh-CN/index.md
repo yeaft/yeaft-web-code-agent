@@ -24,6 +24,10 @@ features:
     title: Chat 聊天
     details: ChatGPT 风格对话界面，实时工具追踪，会话管理和文件上传。
     link: /zh-CN/guide/features-chat
+  - icon: 🖥️
+    title: 分屏模式
+    details: 并排打开多个对话 — 最多同时显示 3 个面板，独立视图和活跃面板焦点追踪。
+    link: /zh-CN/guide/features-split-screen
   - icon: 🧠
     title: 帮帮团
     details: AI 专家团队辅助对话 — 选择一个团队，在侧边面板获取多视角建议。

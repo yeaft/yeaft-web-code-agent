@@ -42,6 +42,7 @@ export default defineConfig({
             text: 'Features',
             items: [
               { text: 'Chat', link: '/guide/features-chat' },
+              { text: 'Split Screen', link: '/guide/features-split-screen' },
               { text: 'Expert Panel', link: '/guide/features-expert-panel' },
               { text: 'Crew', link: '/guide/features-crew' },
               { text: 'Dashboard', link: '/guide/features-dashboard' },
@@ -89,6 +90,7 @@ export default defineConfig({
             text: '功能',
             items: [
               { text: 'Chat 聊天', link: '/zh-CN/guide/features-chat' },
+              { text: '分屏模式', link: '/zh-CN/guide/features-split-screen' },
               { text: '帮帮团', link: '/zh-CN/guide/features-expert-panel' },
               { text: 'Crew 多角色协作', link: '/zh-CN/guide/features-crew' },
               { text: '仪表板', link: '/zh-CN/guide/features-dashboard' },

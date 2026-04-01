@@ -24,6 +24,10 @@ features:
     title: Chat
     details: ChatGPT-style conversational interface with real-time tool tracking, session management, and file uploads.
     link: /guide/features-chat
+  - icon: 🖥️
+    title: Split Screen
+    details: Open multiple conversations side by side — up to 3 panels at once with independent views and active-panel focus.
+    link: /guide/features-split-screen
   - icon: 🧠
     title: Expert Panel
     details: AI expert teams assist your conversations — select a team and get multi-perspective advice in a side panel.

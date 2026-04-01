@@ -13,11 +13,25 @@ ChatGPT 风格对话界面，实时工具追踪，会话管理和文件上传。
 - Claude 响应实时流式输出
 - 可视化显示 Read、Edit、Bash 等工具操作
 - 斜杠命令（`/model`、`/memory`、`/skills` 等）+ 自动补全
+- `/btw` 侧边提问 — 在不打断当前任务的情况下快速追问
+- Sub-Agent 面板 — 实时监控和查看嵌套 Agent 工具调用
 - SQLite 会话持久化，支持历史恢复
+- 会话置顶 — 将重要对话固定在侧边栏顶部
 - 拖放上传文件和图片
+- 深色 / 浅色主题一键切换
+- 双语界面（English / 中文），运行时切换语言
 - 移动端响应式布局
 
 ![Chat](/images/zh-CN/chat.jpg)
+
+### 分屏模式（Split Screen）
+
+并排打开多个对话 — 最多同时显示 3 个面板。
+
+- 从侧边栏将任意 session 分屏到新面板
+- 每个面板是完全独立的对话视图
+- 活跃面板焦点指示器，便于键盘和侧边栏交互
+- 可逐个关闭面板；全部关闭后自动回到单面板模式
 
 ### 帮帮团（Expert Panel）
 
@@ -37,6 +51,8 @@ AI 专家团队辅助对话 — 选择一个团队（如写作、交易），在
 - 决策者消息在主流中直接显示，按角色分组
 - 多 Agent 跨 worktree 并行执行
 - Feature 完成检测，有新活动时自动重新激活
+- AskUserQuestion 交互卡片 — Agent 可在任务进行中向用户请求决策
+- Typing Indicator 事件驱动健康监控（Agent 离线 / Session 丢失 / 正在压缩）
 
 ![Crew Features](/images/zh-CN/crew-features.jpg)
 
@@ -75,6 +91,8 @@ AI 专家团队辅助对话 — 选择一个团队（如写作、交易），在
 - **Server**: Node.js, Express, ws, better-sqlite3, compression
 - **Frontend**: Vue 3, Pinia, xterm.js, CodeMirror 5, marked, highlight.js
 - **Build**: esbuild
+- **Testing**: Vitest（2,700+ 单元/集成测试），Playwright（E2E）
 - **Encryption**: TweetNaCl (XSalsa20-Poly1305)
 - **Auth**: JWT, bcrypt, speakeasy (TOTP), nodemailer
+- **Docs**: VitePress
 - **Deploy**: Docker 多阶段构建
