@@ -71,6 +71,9 @@ async function clearSingleRole(session, roleName) {
     session.humanMessageQueue = session.humanMessageQueue.filter(m => m.target !== roleName);
   }
 
+  // 保存 task 信息，clear 后恢复时传给 dispatchToRole（必须在 if 块外声明，恢复 dispatch 在块外引用）
+  const lastTask = roleState?.currentTask ? { ...roleState.currentTask } : null;
+
   if (roleState) {
     // 保存工作摘要到 task file（与 context_exceeded clear 一致）
     if (roleState.accumulatedText) {
@@ -135,7 +138,7 @@ async function clearSingleRole(session, roleName) {
       .map(msg => `[${msg.from} → ${msg.to}${msg.taskId ? ` (${msg.taskId})` : ''}] ${msg.content}`)
       .join('\n');
     const restorePrompt = `${m.memoryRestorePrompt}\n\n${summary}`;
-    await dispatchToRole(session, roleName, restorePrompt, 'system');
+    await dispatchToRole(session, roleName, restorePrompt, 'system', lastTask?.taskId, lastTask?.taskTitle);
   }
 }
 
