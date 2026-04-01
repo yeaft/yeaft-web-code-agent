@@ -484,6 +484,7 @@ export const useChatStore = defineStore('chat', {
                   }
                 }
                 localStorage.removeItem('splitPanesSaved');
+                this.saveOpenSessions();
                 return;
               }
             }
@@ -501,6 +502,7 @@ export const useChatStore = defineStore('chat', {
         const nextId = 'panel-' + Date.now();
         this.panels.push(makePanelState(nextId, null));
       }
+      this.saveOpenSessions();
     },
     removePanel(panelId) {
       const idx = this.panels.findIndex(p => p.id === panelId);
@@ -518,6 +520,7 @@ export const useChatStore = defineStore('chat', {
         // Active panel was removed, switch to first remaining
         this.activePanelId = this.panels[0]?.id || null;
       }
+      this.saveOpenSessions();
     },
     setPanelConversation(panelId, conversationId) {
       const panel = this.panels.find(p => p.id === panelId);
@@ -532,6 +535,7 @@ export const useChatStore = defineStore('chat', {
         this.messagesMap[conversationId] = [];
         this.sendWsMessage({ type: 'sync_messages', conversationId, turns: 5 });
       }
+      this.saveOpenSessions();
     },
     setActivePanel(panelId) {
       this.activePanelId = panelId;

@@ -4,7 +4,7 @@
  */
 
 import { isRecentlyClosed, stopProcessingWatchdog } from '../watchdog.js';
-import { clearSessionLoading } from '../session.js';
+import { clearSessionLoading, restorePanels } from '../session.js';
 
 /**
  * 恢复上次查看的 conversation（公共逻辑）。
@@ -371,4 +371,7 @@ export function handleAgentSelected(store, msg) {
       store.pendingRecovery = null;
     }
   }
+
+  // ★ Restore split-screen panels from localStorage (independent of conversation restore)
+  restorePanels(store);
 }
