@@ -104,6 +104,11 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
           slashCommands: agent.slashCommands || [],
           slashCommandDescriptions: agent.slashCommandDescriptions || {}
         });
+
+        // If slash commands cache is empty, ask Agent to reload from filesystem
+        if (!agent.slashCommands?.length) {
+          await forwardToAgent(msg.agentId, { type: 'request_slash_commands' });
+        }
       } else {
         await sendToWebClient(client, { type: 'error', message: 'Agent not found or offline' });
       }

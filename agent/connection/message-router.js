@@ -70,6 +70,10 @@ export async function handleMessage(msg) {
       await createConversation(msg);
       break;
 
+    case 'request_slash_commands':
+      preloadSlashCommands().catch(() => {});
+      break;
+
     case 'check_crew_context':
       handleCheckCrewContext(msg);
       break;
