@@ -499,6 +499,16 @@
   animation: spin 0.8s linear infinite;
 }
 
+/* Screenshot mode: recursively remove scrollbars from all child elements */
+.screenshot-mode,
+.screenshot-mode * {
+  overflow: visible !important;
+  overflow-x: visible !important;
+  overflow-y: visible !important;
+  max-height: none !important;
+  max-width: none !important;
+}
+
 /* Export MD Button */
 .export-md-btn {
   display: flex;
