@@ -188,6 +188,7 @@ export default {
   'message.copy': '复制内容',
   'message.copied': '已复制',
   'message.copyCode': '复制代码',
+  'message.copyAll': '复制全部',
   'message.askInput': '需要你的输入',
   'message.askAnswered': '✓ 已回答',
   'message.askCustom': '或输入自定义回答...',

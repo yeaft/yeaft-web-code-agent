@@ -69,11 +69,25 @@ export default {
       <div v-if="turn.askMsg" class="turn-ask">
         <AskCard :ask-msg="turn.askMsg" @submit="onAskSubmit" />
       </div>
+
+      <!-- 5. Copy full response button (visible on hover) -->
+      <div class="turn-footer" v-if="turn.textContent && !turn.isStreaming">
+        <button class="copy-full-btn" @click="copyFullResponse" :title="fullCopied ? $t('message.copied') : $t('message.copyAll')">
+          <svg v-if="!fullCopied" viewBox="0 0 24 24" width="14" height="14">
+            <path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+          </svg>
+          <svg v-else viewBox="0 0 24 24" width="14" height="14">
+            <path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+          </svg>
+          <span class="copy-full-label">{{ fullCopied ? $t('message.copied') : $t('message.copyAll') }}</span>
+        </button>
+      </div>
     </div>
   `,
   setup(props) {
     const store = Pinia.useChatStore();
     const copied = Vue.ref(false);
+    const fullCopied = Vue.ref(false);
     const expanded = Vue.ref(false);
     const t = Vue.inject('t');
 
@@ -196,6 +210,16 @@ export default {
       }
     };
 
+    const copyFullResponse = async () => {
+      try {
+        await navigator.clipboard.writeText(props.turn.textContent || '');
+        fullCopied.value = true;
+        setTimeout(() => { fullCopied.value = false; }, 2000);
+      } catch (e) {
+        console.error('Copy failed:', e);
+      }
+    };
+
     // Syntax highlighting
     Vue.onMounted(() => {
       if (!window.copyCodeBlock) {
@@ -236,6 +260,7 @@ export default {
 
     return {
       copied,
+      fullCopied,
       expanded,
       showToolActions,
       latestTool,
@@ -243,6 +268,7 @@ export default {
       toggleExpand,
       renderedContent,
       copyContent,
+      copyFullResponse,
       onAskSubmit
     };
   }
