@@ -129,7 +129,8 @@ export async function saveSessionMeta(session) {
     status: session.status,
     roles: Array.from(session.roles.values()).map(r => ({
       name: r.name, displayName: r.displayName, icon: r.icon,
-      description: r.description, isDecisionMaker: r.isDecisionMaker || false,
+      description: r.description, claudeMd: r.claudeMd || '',
+      isDecisionMaker: r.isDecisionMaker || false,
       groupIndex: r.groupIndex, roleType: r.roleType, model: r.model
     })),
     decisionMaker: session.decisionMaker,

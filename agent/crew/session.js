@@ -598,6 +598,7 @@ export async function handleUpdateCrewSession(msg) {
         existing.displayName = r.displayName;
         existing.icon = r.icon;
         existing.description = r.description;
+        existing.claudeMd = r.claudeMd;
         existing.isDecisionMaker = r.isDecisionMaker;
         existing.roleType = r.roleType;
         existing.groupIndex = r.groupIndex;
