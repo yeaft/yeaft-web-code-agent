@@ -141,9 +141,11 @@ async function _createRoleQueryInner(session, roleName) {
   // 尝试加载之前保存的 sessionId
   const savedSessionId = await loadRoleSessionId(session.sharedDir, roleName);
 
-  // cwd 设为角色目录（确保目录存在，否则 spawn() 会报误导性的 ENOENT）
-  const roleCwd = join(session.sharedDir, 'roles', roleName);
-  mkdirSync(roleCwd, { recursive: true });
+  // cwd 设为项目目录（确保 Claude CLI 能匹配项目级 MCP 配置）
+  // 角色的 CLAUDE.md 和工作路径已通过 appendSystemPrompt 注入
+  const roleCwd = session.projectDir || join(session.sharedDir, 'roles', roleName);
+  const roleDir = join(session.sharedDir, 'roles', roleName);
+  mkdirSync(roleDir, { recursive: true });
 
   // 继承全局 MCP disallowedTools，避免不必要的 tool schema token 消耗
   const globalDisallowed = ctx.CONFIG?.disallowedTools || [];
