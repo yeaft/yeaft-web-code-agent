@@ -47,6 +47,10 @@ export async function handleAgentSync(agentId, agent, msg) {
           if (!existing) {
             // Security: 强制使用 agent.ownerId
             sessionDb.create(s.sessionId, agentId, agent.name, s.workDir, s.sessionId, s.title, agent.ownerId || null);
+            // Auto-deactivate old sessions synced from disk (not modified in 2 days)
+            if (s.lastModified && s.lastModified < Date.now() - 2 * 24 * 60 * 60 * 1000) {
+              sessionDb.setActive(s.sessionId, false);
+            }
             created++;
           } else {
             if (s.lastModified > existing.updated_at) {

@@ -41,8 +41,15 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       }
       // Restore all active sessions for this user from DB (cross-client sync)
       if (client.userId) {
+        const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
+        const cutoff = Date.now() - TWO_DAYS_MS;
         const activeSessions = sessionDb.getActiveByUser(client.userId);
         for (const dbSession of activeSessions) {
+          // Auto-deactivate stale sessions (not updated in 2 days)
+          if (dbSession.updated_at < cutoff) {
+            try { sessionDb.setActive(dbSession.id, false); } catch (e) { /* ignore */ }
+            continue;
+          }
           const agent = agents.get(dbSession.agent_id);
           if (!agent) continue;
           if (agent.conversations.has(dbSession.id)) continue;
