@@ -259,25 +259,27 @@ export default {
         if (!contentEl) return;
 
         const bgColor = getComputedStyle(document.body).getPropertyValue('--bg-main').trim() || '#ffffff';
-        const dataUrl = await window.htmlToImage.toPng(contentEl, {
-          backgroundColor: bgColor,
-          pixelRatio: 3,
-          style: {
-            padding: '24px 32px',
-            overflow: 'visible',
-            maxHeight: 'none',
-            maxWidth: 'none',
-          },
-          filter: (node) => {
-            if (node.classList && (node.classList.contains('turn-header') || node.classList.contains('screenshot-btn'))) return false;
-            return true;
-          }
-        });
+        contentEl.classList.add('screenshot-mode');
+        try {
+          const dataUrl = await window.htmlToImage.toPng(contentEl, {
+            backgroundColor: bgColor,
+            pixelRatio: 3,
+            style: {
+              padding: '24px 32px',
+            },
+            filter: (node) => {
+              if (node.classList && (node.classList.contains('turn-header') || node.classList.contains('screenshot-btn'))) return false;
+              return true;
+            }
+          });
 
-        const link = document.createElement('a');
-        link.download = `response-${Date.now()}.png`;
-        link.href = dataUrl;
-        link.click();
+          const link = document.createElement('a');
+          link.download = `response-${Date.now()}.png`;
+          link.href = dataUrl;
+          link.click();
+        } finally {
+          contentEl.classList.remove('screenshot-mode');
+        }
       } catch (e) {
         console.error('Screenshot failed:', e);
       } finally {

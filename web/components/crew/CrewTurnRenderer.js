@@ -173,15 +173,20 @@ export default {
         const contentEl = msgBody?.querySelector('.crew-msg-content.markdown-body');
         if (!contentEl) return;
         const bgColor = getComputedStyle(document.body).getPropertyValue('--bg-main').trim() || '#ffffff';
-        const dataUrl = await window.htmlToImage.toPng(contentEl, {
-          backgroundColor: bgColor,
-          pixelRatio: 3,
-          style: { padding: '24px 32px', overflow: 'visible', maxHeight: 'none', maxWidth: 'none' }
-        });
-        const link = document.createElement('a');
-        link.download = `crew-response-${Date.now()}.png`;
-        link.href = dataUrl;
-        link.click();
+        contentEl.classList.add('screenshot-mode');
+        try {
+          const dataUrl = await window.htmlToImage.toPng(contentEl, {
+            backgroundColor: bgColor,
+            pixelRatio: 3,
+            style: { padding: '24px 32px' }
+          });
+          const link = document.createElement('a');
+          link.download = `crew-response-${Date.now()}.png`;
+          link.href = dataUrl;
+          link.click();
+        } finally {
+          contentEl.classList.remove('screenshot-mode');
+        }
       } catch (e) {
         console.error('Crew screenshot failed:', e);
       } finally {
