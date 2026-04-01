@@ -191,6 +191,7 @@ export default {
   'message.copyAll': '复制全部',
   'message.screenshot': '截图',
   'message.screenshotting': '正在截图...',
+  'message.exportMd': '导出 MD',
   'message.askInput': '需要你的输入',
   'message.askAnswered': '✓ 已回答',
   'message.askCustom': '或输入自定义回答...',

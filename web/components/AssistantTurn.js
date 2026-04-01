@@ -81,6 +81,12 @@ export default {
           </svg>
           <span class="screenshot-label">{{ screenshotting ? $t('message.screenshotting') : $t('message.screenshot') }}</span>
         </button>
+        <button class="export-md-btn" @click="exportMarkdown" :title="$t('message.exportMd')">
+          <svg viewBox="0 0 24 24" width="14" height="14">
+            <path fill="currentColor" d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
+          </svg>
+          <span class="export-md-label">{{ $t('message.exportMd') }}</span>
+        </button>
         <button class="copy-full-btn" @click="copyFullResponse" :title="fullCopied ? $t('message.copied') : $t('message.copyAll')">
           <svg v-if="!fullCopied" viewBox="0 0 24 24" width="14" height="14">
             <path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
@@ -231,6 +237,18 @@ export default {
       }
     };
 
+    const exportMarkdown = () => {
+      const text = props.turn.textContent || '';
+      if (!text) return;
+      const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.download = `response-${Date.now()}.md`;
+      link.href = url;
+      link.click();
+      URL.revokeObjectURL(url);
+    };
+
     const screenshotContent = async () => {
       if (screenshotting.value || !window.htmlToImage) return;
       screenshotting.value = true;
@@ -244,6 +262,9 @@ export default {
         const dataUrl = await window.htmlToImage.toPng(contentEl, {
           backgroundColor: bgColor,
           pixelRatio: 2,
+          style: {
+            padding: '24px 32px',
+          },
           filter: (node) => {
             if (node.classList && (node.classList.contains('turn-header') || node.classList.contains('screenshot-btn'))) return false;
             return true;
@@ -312,6 +333,7 @@ export default {
       renderedContent,
       copyContent,
       copyFullResponse,
+      exportMarkdown,
       screenshotContent,
       onAskSubmit
     };
