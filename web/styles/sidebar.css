@@ -511,6 +511,16 @@
   animation: pulse 1.5s ease-in-out infinite;
 }
 
+.pane-active-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  background: var(--accent);
+  border-radius: 50%;
+  margin-right: 6px;
+  flex-shrink: 0;
+}
+
 @keyframes pulse {
   0%, 100% { opacity: 0.4; }
   50% { opacity: 1; }
