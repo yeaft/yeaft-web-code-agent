@@ -181,15 +181,21 @@ export function handleClaudeOutput(store, conversationId, data) {
     execStatus.currentTool = null;
     markAllToolsCompleted(store, conversationId);
     const msgs = store.messagesMap[conversationId] || [];
-    // ★ Display result text only from result_text (slash commands like /skills, /context).
-    // Do NOT fall back to data.result — it contains the full assistant response text
-    // which was already streamed via 'assistant' messages, causing duplicate output.
+    // ★ Display result text only when no assistant message exists for this turn.
+    // Normal conversation: text was already streamed via 'assistant' messages,
+    // so result_text is a duplicate — skip it.
+    // Slash commands (/skills, /context): no assistant message was streamed,
+    // result_text is the only output — append it.
     const resultText = data.result_text || '';
     if (typeof resultText === 'string' && resultText.trim()) {
-      const hasStreamingAssistant = msgs.length > 0 &&
-        msgs[msgs.length - 1].type === 'assistant' &&
-        msgs[msgs.length - 1].isStreaming;
-      if (!hasStreamingAssistant) {
+      // Check if any assistant message exists in this turn (streaming or finished).
+      // Walk backwards from the end; stop at the first user/human message (turn boundary).
+      let hasAssistantInTurn = false;
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].type === 'assistant') { hasAssistantInTurn = true; break; }
+        if (msgs[i].type === 'user') break;
+      }
+      if (!hasAssistantInTurn) {
         store.appendToAssistantMessageForConversation(conversationId, resultText.trim());
       }
     }
