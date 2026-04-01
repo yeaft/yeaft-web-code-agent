@@ -57,6 +57,16 @@ export const messageDb = {
         : (Array.isArray(content) ? content.map(b => b.text || '').join('') : JSON.stringify(content));
     }
 
+    // Detect compact summary messages injected by Claude CLI after context compaction.
+    // These arrive as type:'user' but contain AI-generated context summaries, not real user input.
+    function isCompactSummary(text) {
+      if (!text) return false;
+      return (text.includes('<context>') && text.includes('</context>'))
+        || text.startsWith('Here is a summary of the conversation')
+        || text.includes('<compact-summary>')
+        || text.includes('This session is being continued from a previous conversation');
+    }
+
     let msgsToInsert = historyMessages;
     const lastUserMsg = this.getLastUserMessage(sessionId);
     let needsRebuild = false;
@@ -116,6 +126,10 @@ export const messageDb = {
         if (msg.type === 'user') {
           const text = extractUserText(msg);
           if (text) {
+            if (isCompactSummary(text)) {
+              console.log(`[bulkAddHistory] Skipping compact summary message (${text.length} chars) for ${sessionId}`);
+              continue;
+            }
             stmts.insertMessage.run(sessionId, 'user', text, 'user', null, null, ts, null);
             count++;
           }
