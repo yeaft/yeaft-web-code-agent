@@ -1,34 +1,28 @@
 /**
- * BtwOverlay — Ephemeral overlay for /btw side questions.
- * Shows question + streaming answer in a centered card with backdrop.
- * Closes on Esc / Enter / Space.
+ * BtwOverlay — Floating card for /btw side questions.
+ * Renders inline (no Teleport) as a flex child above ChatInput.
+ * Shows question + streaming answer. Closes on Esc / Ctrl+Enter.
  */
 
 export default {
   name: 'BtwOverlay',
   template: `
-    <Teleport to="body">
-      <div v-if="store.btwVisible" class="btw-overlay" @click.self="close" @keydown="onKeydown" tabindex="-1" ref="overlayRef">
-        <div class="btw-card">
-          <div class="btw-question">{{ store.btwQuestion }}</div>
-          <div class="btw-divider"></div>
-          <div class="btw-answer" ref="answerRef">
-            <div v-if="renderedAnswer" v-html="renderedAnswer" class="btw-answer-content markdown-body"></div>
-            <span v-if="store.btwLoading && !store.btwAnswer" class="btw-loading-dots">
-              <span></span><span></span><span></span>
-            </span>
-            <span v-if="store.btwLoading && store.btwAnswer" class="btw-cursor"></span>
-          </div>
-          <div class="btw-footer">
-            <span class="btw-hint">Press Esc to close</span>
-          </div>
+    <div v-if="store.btwVisible" class="btw-float" role="status" aria-live="polite" aria-label="Side question response">
+      <div class="btw-card">
+        <div class="btw-question">{{ store.btwQuestion }}</div>
+        <div class="btw-answer" ref="answerRef">
+          <div v-if="renderedAnswer" v-html="renderedAnswer" class="btw-answer-content markdown-body"></div>
+          <span v-if="store.btwLoading && !store.btwAnswer" class="btw-loading-dots">
+            <span></span><span></span><span></span>
+          </span>
+          <span v-if="store.btwLoading && store.btwAnswer" class="btw-cursor"></span>
         </div>
+        <div class="btw-hint">{{ $t('btw.hint') }}</div>
       </div>
-    </Teleport>
+    </div>
   `,
   setup() {
     const store = Pinia.useChatStore();
-    const overlayRef = Vue.ref(null);
     const answerRef = Vue.ref(null);
 
     const renderedAnswer = Vue.computed(() => {
@@ -49,33 +43,26 @@ export default {
       });
     });
 
-    // Focus overlay on mount for keyboard events
-    Vue.watch(() => store.btwVisible, (visible) => {
-      if (visible) {
-        Vue.nextTick(() => {
-          overlayRef.value?.focus();
-        });
-      }
-    });
-
-    function close() {
-      store.closeBtw();
-    }
-
-    function onKeydown(e) {
-      if (e.key === 'Escape' || (!store.btwLoading && (e.key === 'Enter' || e.key === ' '))) {
+    // Global keydown listener — no focus stealing
+    const onGlobalKeydown = (e) => {
+      if (!store.btwVisible) return;
+      if (e.key === 'Escape') {
         e.preventDefault();
-        close();
+        store.closeBtw();
       }
-    }
+      if (!store.btwLoading && e.key === 'Enter' && e.ctrlKey) {
+        e.preventDefault();
+        store.closeBtw();
+      }
+    };
+
+    Vue.onMounted(() => document.addEventListener('keydown', onGlobalKeydown));
+    Vue.onUnmounted(() => document.removeEventListener('keydown', onGlobalKeydown));
 
     return {
       store,
-      overlayRef,
       answerRef,
       renderedAnswer,
-      close,
-      onKeydown
     };
   }
 };
