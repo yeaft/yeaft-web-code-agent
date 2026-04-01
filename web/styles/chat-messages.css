@@ -499,6 +499,30 @@
   animation: spin 0.8s linear infinite;
 }
 
+/* Export MD Button */
+.export-md-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.export-md-btn:hover {
+  background: var(--bg-user-msg);
+  color: var(--text-primary);
+}
+
+.export-md-label {
+  font-size: 11px;
+}
+
 /* Syntax Highlighting Theme Overrides */
 .hljs {
   background: transparent !important;

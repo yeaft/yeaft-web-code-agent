@@ -450,6 +450,19 @@
   border-left: none;
 }
 
+/* Crew message footer — screenshot / export MD / copy (hover to show) */
+.crew-turn-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 2px 0 4px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.crew-message:hover .crew-turn-footer {
+  opacity: 1;
+}
+
 /* Crew Tool Message — uses shared .tool-line styles from MessageItem */
 .crew-msg-tool {
   padding: 2px 0;

@@ -192,6 +192,7 @@ export default {
   'message.copyAll': 'Copy all',
   'message.screenshot': 'Screenshot',
   'message.screenshotting': 'Taking screenshot...',
+  'message.exportMd': 'Export MD',
   'message.askInput': 'Your input needed',
   'message.askAnswered': '✓ Answered',
   'message.askCustom': 'Or type a custom answer...',
