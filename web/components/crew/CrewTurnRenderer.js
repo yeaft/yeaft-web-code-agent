@@ -178,7 +178,7 @@ export default {
           const dataUrl = await window.htmlToImage.toPng(contentEl, {
             backgroundColor: bgColor,
             pixelRatio: 3,
-            style: { padding: '24px 32px' }
+            style: { padding: '32px' }
           });
           const link = document.createElement('a');
           link.download = `crew-response-${Date.now()}.png`;

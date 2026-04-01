@@ -243,6 +243,7 @@ export default {
           :icons="icons"
           :role-color-map="roleColorMap"
           :get-role-display-name="getRoleDisplayName"
+          :persisted-feature-ids="persistedFeatureIds"
           @toggle-turn="toggleTurn"
           @expand-feature="expandFeature"
           @close-feature="closeFeature"
@@ -389,6 +390,10 @@ export default {
       const persistedFeatures = this.paneCrewStatus?.features || [];
       return collectActiveTasks(persistedFeatures, this.paneCrewMessages);
     },
+    persistedFeatureIds() {
+      const features = this.paneCrewStatus?.features || [];
+      return new Set(features.map(f => f.taskId));
+    },
     completedTaskIds() {
       return computeCompletedTaskIds(this.doneTasks, this.activeTasks);
     },
@@ -477,7 +482,9 @@ export default {
     kanbanFeatureCount() {
       // Count features with signals (messages, todos, streaming, activity).
       // Mirrors filteredFeatures filter in CrewFeaturePanel.
+      const persisted = this.persistedFeatureIds;
       return this.featureKanban.filter(f => {
+        if (persisted.has(f.taskId)) return true;
         const block = this.featureBlocks.find(
           b => b.type === 'feature' && b.taskId === f.taskId
         );
