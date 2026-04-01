@@ -175,8 +175,8 @@ export default {
         const bgColor = getComputedStyle(document.body).getPropertyValue('--bg-main').trim() || '#ffffff';
         const dataUrl = await window.htmlToImage.toPng(contentEl, {
           backgroundColor: bgColor,
-          pixelRatio: 2,
-          style: { padding: '24px 32px' }
+          pixelRatio: 3,
+          style: { padding: '24px 32px', overflow: 'visible', maxHeight: 'none', maxWidth: 'none' }
         });
         const link = document.createElement('a');
         link.download = `crew-response-${Date.now()}.png`;
