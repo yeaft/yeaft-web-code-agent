@@ -86,11 +86,11 @@ function createBtwStore(overrides = {}) {
 }
 
 describe('chat store — btw state fields', () => {
-  it('should define btwQuestion, btwAnswer, btwLoading, btwVisible in state', () => {
-    expect(storeSource).toContain('btwQuestion: null');
-    expect(storeSource).toContain("btwAnswer: ''");
+  it('should define btwMode, btwMessages, btwLoading, btwSessionId in state', () => {
+    expect(storeSource).toContain('btwMode: false');
+    expect(storeSource).toContain('btwMessages: []');
     expect(storeSource).toContain('btwLoading: false');
-    expect(storeSource).toContain('btwVisible: false');
+    expect(storeSource).toContain('btwSessionId: null');
   });
 });
 
@@ -199,9 +199,9 @@ describe('messageHandler — btw message cases', () => {
     expect(handlerSource).toContain('store.btwLoading = false');
   });
 
-  it('should have btw_error case that sets error message and stops loading', () => {
+  it('should have btw_error case that sets error in last assistant message', () => {
     expect(handlerSource).toContain("case 'btw_error':");
-    expect(handlerSource).toContain("store.btwAnswer = 'Error: ' + msg.error");
+    expect(handlerSource).toContain("'Error: ' + msg.error");
   });
 
   it('btw_stream should append delta text', () => {
@@ -244,16 +244,17 @@ describe('ChatInput — /btw interception', () => {
     expect(sendFn).toContain("trimmed.startsWith('/btw ')");
   });
 
-  it('should call store.sendBtwQuestion with text after /btw prefix', () => {
+  it('should call store.enterBtwMode and sendBtwQuestion for /btw with question', () => {
     const sendFn = chatInputSource.substring(chatInputSource.indexOf('const send ='));
-    expect(sendFn).toContain('store.sendBtwQuestion(trimmed.substring(5))');
+    expect(sendFn).toContain('store.enterBtwMode()');
+    expect(sendFn).toContain('store.sendBtwQuestion(question)');
   });
 
   it('should clear input and reset height after /btw interception', () => {
     const sendFn = chatInputSource.substring(chatInputSource.indexOf('const send ='));
     const btwBlock = sendFn.substring(
       sendFn.indexOf("startsWith('/btw ')"),
-      sendFn.indexOf("startsWith('/btw ')") + 300
+      sendFn.indexOf("startsWith('/btw ')") + 400
     );
     expect(btwBlock).toContain("inputText.value = ''");
     expect(btwBlock).toContain("style.height = 'auto'");
@@ -272,9 +273,20 @@ describe('ChatInput — /btw interception', () => {
     const sendFn = chatInputSource.substring(chatInputSource.indexOf('const send ='));
     const btwBlock = sendFn.substring(
       sendFn.indexOf("startsWith('/btw ')"),
-      sendFn.indexOf("startsWith('/btw ')") + 300
+      sendFn.indexOf("startsWith('/btw ')") + 400
     );
     expect(btwBlock).toContain('delete store.inputDrafts');
+  });
+
+  it('should handle btw mode sends through btw channel', () => {
+    const sendFn = chatInputSource.substring(chatInputSource.indexOf('const send ='));
+    expect(sendFn).toContain('store.btwMode');
+    expect(sendFn).toContain('store.sendBtwQuestion(trimmed)');
+  });
+
+  it('should exit btw mode on Escape key', () => {
+    expect(chatInputSource).toContain("e.key === 'Escape' && store.btwMode");
+    expect(chatInputSource).toContain('store.closeBtw()');
   });
 });
 
@@ -287,16 +299,16 @@ describe('crewInput — /btw interception', () => {
     expect(sendFn).toContain("text.startsWith('/btw ')");
   });
 
-  it('should call store.sendBtwQuestion with text after /btw prefix', () => {
+  it('should call store.enterBtwMode for /btw commands', () => {
     const sendFn = crewInputSource.substring(crewInputSource.indexOf('function sendMessage'));
-    expect(sendFn).toContain('store.sendBtwQuestion(text.substring(5))');
+    expect(sendFn).toContain('store.enterBtwMode()');
   });
 
   it('should clear input and reset height after /btw interception', () => {
     const sendFn = crewInputSource.substring(crewInputSource.indexOf('function sendMessage'));
     const btwBlock = sendFn.substring(
       sendFn.indexOf("startsWith('/btw ')"),
-      sendFn.indexOf("startsWith('/btw ')") + 300
+      sendFn.indexOf("startsWith('/btw ')") + 400
     );
     expect(btwBlock).toContain("inputText.value = ''");
     expect(btwBlock).toContain("style.height = 'auto'");
@@ -308,6 +320,11 @@ describe('crewInput — /btw interception', () => {
     const returnIdx = sendFn.indexOf('return;', btwIdx);
     const crewSendIdx = sendFn.indexOf('store.sendCrewMessage(', btwIdx);
     expect(returnIdx).toBeLessThan(crewSendIdx);
+  });
+
+  it('should exit btw mode on Escape key', () => {
+    expect(crewInputSource).toContain("e.key === 'Escape' && store.btwMode");
+    expect(crewInputSource).toContain('store.closeBtw()');
   });
 });
 
@@ -391,42 +408,46 @@ describe('BtwOverlay — component structure', () => {
     expect(overlaySource).not.toContain('<Teleport');
   });
 
-  it('should display question from store.btwQuestion', () => {
-    expect(overlaySource).toContain('store.btwQuestion');
+  it('should render multi-turn messages from store.btwMessages', () => {
+    expect(overlaySource).toContain('store.btwMessages');
+    expect(overlaySource).toContain('v-for="(msg, idx) in store.btwMessages"');
   });
 
-  it('should use v-if="store.btwVisible" to control visibility', () => {
-    expect(overlaySource).toContain('v-if="store.btwVisible"');
+  it('should use v-if="store.btwMode" to control visibility', () => {
+    expect(overlaySource).toContain('v-if="store.btwMode"');
   });
 
-  it('should use marked.parse for markdown rendering', () => {
-    expect(overlaySource).toContain('marked.parse(store.btwAnswer)');
+  it('should use marked.parse for markdown rendering via renderedContents', () => {
+    expect(overlaySource).toContain('marked.parse(msg.content)');
+    expect(overlaySource).toContain('renderedContents[idx]');
   });
 
-  it('should show loading dots when loading and no answer yet', () => {
-    expect(overlaySource).toContain('v-if="store.btwLoading && !store.btwAnswer"');
+  it('should show loading dots when loading last assistant message with no content', () => {
+    expect(overlaySource).toContain('store.btwLoading && idx === store.btwMessages.length - 1 && !msg.content');
     expect(overlaySource).toContain('btw-loading-dots');
   });
 
-  it('should show cursor when loading with partial answer', () => {
-    expect(overlaySource).toContain('v-if="store.btwLoading && store.btwAnswer"');
+  it('should show cursor when loading last assistant message with partial content', () => {
+    expect(overlaySource).toContain('store.btwLoading && idx === store.btwMessages.length - 1 && msg.content');
     expect(overlaySource).toContain('btw-cursor');
   });
 
-  it('should use global keydown listener instead of backdrop click', () => {
-    expect(overlaySource).toContain("document.addEventListener('keydown'");
-    expect(overlaySource).not.toContain('@click.self');
+  it('should have close button instead of global keydown listener', () => {
+    expect(overlaySource).toContain('btw-close-btn');
+    expect(overlaySource).toContain('store.closeBtw()');
+    expect(overlaySource).not.toContain("document.addEventListener('keydown'");
   });
 
-  it('should close on Esc via global keydown listener', () => {
-    expect(overlaySource).toContain("e.key === 'Escape'");
-    expect(overlaySource).toContain('store.closeBtw()');
+  it('should have header with BTW label and close button', () => {
+    expect(overlaySource).toContain('btw-header');
+    expect(overlaySource).toContain('btw-header-label');
+    expect(overlaySource).toContain('&times;');
   });
 
   it('should gracefully handle marked.parse failure', () => {
-    // The component has a try/catch that falls back to raw btwAnswer
+    // The component has a try/catch that falls back to raw msg.content
     expect(overlaySource).toContain('catch');
-    expect(overlaySource).toContain('return store.btwAnswer');
+    expect(overlaySource).toContain('return msg.content');
   });
 });
 
@@ -445,7 +466,7 @@ describe('btw.css — mobile responsive', () => {
 
   it('should use smaller padding on mobile card', () => {
     const mobileBlock = cssSource.substring(cssSource.indexOf('@media (max-width: 768px)'));
-    expect(mobileBlock).toContain('padding: 12px 16px');
+    expect(mobileBlock).toContain('padding: 10px 14px');
   });
 
   it('should use smaller border-radius on mobile card', () => {

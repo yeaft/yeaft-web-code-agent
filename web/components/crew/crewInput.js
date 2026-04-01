@@ -132,6 +132,12 @@ export function createCrewInput(store, authStore, { getInputRef, getFileInputRef
   }
 
   function handleKeydown(e, sendMessage) {
+    // Esc exits btw mode
+    if (e.key === 'Escape' && store.btwMode) {
+      e.preventDefault();
+      store.closeBtw();
+      return;
+    }
     // Slash command autocomplete keyboard navigation
     if (slashMenuVisible.value && slashFilteredCommands.value.length > 0) {
       if (e.key === 'ArrowDown') {
@@ -264,9 +270,21 @@ export function createCrewInput(store, authStore, { getInputRef, getFileInputRef
     const text = inputText.value.trim();
     const convId = getConversationId ? getConversationId() : store.currentConversation;
 
-    // Intercept /btw side question
-    if (text.startsWith('/btw ')) {
-      store.sendBtwQuestion(text.substring(5));
+    // Intercept /btw — enter btw mode (with or without initial question)
+    if (text === '/btw' || text.startsWith('/btw ')) {
+      const question = text.substring(4).trim();
+      store.enterBtwMode();
+      if (question) store.sendBtwQuestion(question);
+      inputText.value = '';
+      delete store.inputDrafts[convId];
+      const textarea = getInputRef();
+      if (textarea) textarea.style.height = 'auto';
+      return;
+    }
+
+    // In btw mode, all sends go through btw channel
+    if (store.btwMode) {
+      store.sendBtwQuestion(text);
       inputText.value = '';
       delete store.inputDrafts[convId];
       const textarea = getInputRef();
