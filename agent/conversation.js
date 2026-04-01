@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from 'fs';
+import { readFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import ctx from './context.js';
@@ -25,9 +25,11 @@ const BUILTIN_COMMAND_DESCRIPTIONS = {
 };
 
 /**
- * Load command descriptions from installed plugin commands/*.md files.
+ * Load command and skill descriptions from installed plugins.
+ * Scans commands/*.md and skills/ ** /SKILL.md (recursively) for each plugin.
  * Parses YAML frontmatter to extract name and description fields.
  * Results are cached in ctx.slashCommandDescriptions.
+ * Also populates ctx.slashCommands from the loaded descriptions.
  */
 export function loadPluginCommandDescriptions() {
   if (Object.keys(ctx.slashCommandDescriptions).length > 0) return; // already loaded
@@ -40,11 +42,12 @@ export function loadPluginCommandDescriptions() {
       // pluginKey: "yeaft-skills@yeaft-skills-dev"
       const pluginName = pluginKey.split('@')[0]; // "yeaft-skills"
       for (const entry of entries) {
+        // --- Scan commands/*.md ---
         const commandsDir = join(entry.installPath, 'commands');
         let files;
         try {
           files = readdirSync(commandsDir).filter(f => f.endsWith('.md'));
-        } catch { continue; }
+        } catch { files = []; }
 
         for (const file of files) {
           try {
@@ -59,19 +62,63 @@ export function loadPluginCommandDescriptions() {
             }
           } catch { /* skip unparseable files */ }
         }
+
+        // --- Scan skills/*/SKILL.md (recursive) ---
+        const skillsDir = join(entry.installPath, 'skills');
+        scanSkillsDir(skillsDir, pluginName);
       }
     }
 
-    // Add builtin descriptions
+    // Add builtin descriptions as fallback
     for (const [name, desc] of Object.entries(BUILTIN_COMMAND_DESCRIPTIONS)) {
       if (!ctx.slashCommandDescriptions[name]) {
         ctx.slashCommandDescriptions[name] = desc;
       }
     }
 
-    console.log(`[Preload] Loaded ${Object.keys(ctx.slashCommandDescriptions).length} command descriptions`);
+    // Build ctx.slashCommands from the loaded descriptions
+    // This populates the command list without needing a CLI spawn
+    if (ctx.slashCommands.length === 0) {
+      ctx.slashCommands = Object.keys(ctx.slashCommandDescriptions);
+    }
+
+    console.log(`[Preload] Loaded ${Object.keys(ctx.slashCommandDescriptions).length} command/skill descriptions from filesystem`);
   } catch (err) {
     console.warn('[Preload] Failed to load plugin command descriptions:', err.message);
+  }
+}
+
+/**
+ * Recursively scan a skills directory for SKILL.md files.
+ * Handles nested structures like skills/personas/pm-jobs/SKILL.md.
+ */
+function scanSkillsDir(dir, pluginName) {
+  let entries;
+  try {
+    entries = readdirSync(dir);
+  } catch { return; }
+
+  for (const entry of entries) {
+    const fullPath = join(dir, entry);
+    let stat;
+    try { stat = statSync(fullPath); } catch { continue; }
+
+    if (stat.isDirectory()) {
+      // Check for SKILL.md in this subdirectory
+      const skillFile = join(fullPath, 'SKILL.md');
+      try {
+        const content = readFileSync(skillFile, 'utf-8');
+        const fm = parseFrontmatter(content);
+        if (fm.name && fm.description) {
+          const cliName = `${pluginName}:${fm.name}`;
+          const desc = fm.description.split('\n')[0].trim();
+          ctx.slashCommandDescriptions[cliName] = desc;
+        }
+      } catch { /* no SKILL.md or unparseable — continue into subdirectories */ }
+
+      // Recurse into subdirectories (handles nested skills like personas/pm-jobs/)
+      scanSkillsDir(fullPath, pluginName);
+    }
   }
 }
 
@@ -133,10 +180,13 @@ function prestartClaude(conversationId, workDir, resumeSessionId) {
 }
 
 /**
- * Preload slash commands from Claude CLI (fire-and-forget).
- * Spawns a minimal CLI process with a cheap built-in command (/cost)
- * to trigger the system init message, captures slash_commands,
- * then aborts immediately (no API tokens consumed).
+ * Preload slash commands — filesystem-first, CLI-spawn as optional fallback.
+ *
+ * 1. Load command/skill descriptions from plugin filesystem (instant, no process spawn).
+ *    This also populates ctx.slashCommands from the loaded descriptions.
+ * 2. Send slash_commands_update to frontend immediately.
+ * 3. If ctx.slashCommands was already populated by filesystem, skip CLI spawn entirely.
+ *    Otherwise fall back to spawning a CLI process to get commands from system init.
  *
  * @param {string} [workDir] - Project directory (default: agent workDir)
  * @param {string} [targetId] - conversationId to key the update to
@@ -145,9 +195,22 @@ function prestartClaude(conversationId, workDir, resumeSessionId) {
 export async function preloadSlashCommands(workDir, targetId = '__preload__') {
   const effectiveWorkDir = workDir || ctx.CONFIG.workDir;
 
-  // Eagerly load plugin command descriptions (cached, runs once)
+  // Step 1: Load from filesystem (cached, runs once)
   loadPluginCommandDescriptions();
 
+  // Step 2: If filesystem loaded commands, send update immediately (no CLI needed)
+  if (ctx.slashCommands.length > 0) {
+    ctx.sendToServer({
+      type: 'slash_commands_update',
+      conversationId: targetId,
+      slashCommands: ctx.slashCommands,
+      slashCommandDescriptions: ctx.slashCommandDescriptions
+    });
+    console.log(`[Preload] ${targetId}: ${ctx.slashCommands.length} slash commands ready from filesystem (no CLI spawn needed)`);
+    return;
+  }
+
+  // Step 3: Fallback — spawn CLI to get slash commands from system init
   try {
     const abortController = new AbortController();
     // Use --print with a cheap built-in command to trigger system init.
@@ -177,7 +240,7 @@ export async function preloadSlashCommands(workDir, targetId = '__preload__') {
             slashCommands,
             slashCommandDescriptions: ctx.slashCommandDescriptions
           });
-          console.log(`[Preload] ${targetId}: loaded ${slashCommands.length} slash commands from ${effectiveWorkDir}`);
+          console.log(`[Preload] ${targetId}: loaded ${slashCommands.length} slash commands from CLI fallback`);
         }
         abortController.abort();
         break;
