@@ -188,6 +188,7 @@ export default {
   'message.copy': 'Copy content',
   'message.copied': 'Copied',
   'message.copyCode': 'Copy code',
+  'message.copyAll': 'Copy all',
   'message.askInput': 'Your input needed',
   'message.askAnswered': '✓ Answered',
   'message.askCustom': 'Or type a custom answer...',
