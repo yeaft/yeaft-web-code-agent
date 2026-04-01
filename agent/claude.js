@@ -351,6 +351,9 @@ async function processClaudeOutput(conversationId, claudeQuery, state) {
       // 捕获 compact 相关的 system 消息
       // Claude Code 在 context 不足时会自动 compact
       if (message.type === 'system') {
+        // Debug: log all system messages for compact signal analysis
+        console.log(`[${conversationId}] System msg: subtype=${message.subtype}, status=${message.status}, message=${(message.message || '').substring(0, 80)}`);
+
         // 新格式: subtype: 'status', status: 'compacting'
         if (message.subtype === 'status' && message.status === 'compacting') {
           state._compacting = true;
@@ -394,6 +397,19 @@ async function processClaudeOutput(conversationId, claudeQuery, state) {
             conversationId,
             status: 'completed',
             message: message.message || 'Context compacted successfully'
+          });
+        }
+        // 文本兜底: message.message 包含 compact/compacting 关键词
+        if (!state._compacting && typeof message.message === 'string'
+            && /compact/i.test(message.message)
+            && !/compacted successfully/i.test(message.message)) {
+          state._compacting = true;
+          console.log(`[${conversationId}] Compact started (text fallback: ${message.message.substring(0, 60)})`);
+          ctx.sendToServer({
+            type: 'compact_status',
+            conversationId,
+            status: 'compacting',
+            message: message.message
           });
         }
       }

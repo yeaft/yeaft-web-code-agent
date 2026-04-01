@@ -182,6 +182,7 @@ export default {
   'chat.waiting.sessionLost': 'Session lost, refreshed, waiting for update...',
   'chat.waiting.cliExited': 'Claude process exited, refreshed, waiting for update...',
   'chat.waiting.refresh': 'Refresh',
+  'chat.waiting.thinking': 'AI is thinking, please wait...',
 
   // ============ Message Item ============
   'message.copyContent': 'Copy content',
