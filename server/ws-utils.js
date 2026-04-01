@@ -98,6 +98,10 @@ export async function broadcastAgentList() {
                 // Crew sessions store name as title in DB
                 if (c.type === 'crew' && !c.name) c.name = dbSession.title;
               }
+              if (dbSession) c.pinned = !!dbSession.is_pinned;
+            } else {
+              const dbSession = sessionDb.get(c.id);
+              if (dbSession) c.pinned = !!dbSession.is_pinned;
             }
             return c;
           })
@@ -125,6 +129,10 @@ export async function sendConversationList(clientId, agentId) {
           c.title = c.title || dbSession.title;
           if (c.type === 'crew' && !c.name) c.name = dbSession.title;
         }
+        if (dbSession) c.pinned = !!dbSession.is_pinned;
+      } else {
+        const dbSession = sessionDb.get(c.id);
+        if (dbSession) c.pinned = !!dbSession.is_pinned;
       }
       return c;
     });

@@ -528,13 +528,20 @@ export const useChatStore = defineStore('chat', {
     },
     // ★ Session Pin
     togglePin(sessionId) {
-      const idx = this.pinnedSessions.indexOf(sessionId);
-      if (idx >= 0) {
-        this.pinnedSessions.splice(idx, 1);
+      const isPinned = this.pinnedSessions.includes(sessionId);
+      if (isPinned) {
+        const idx = this.pinnedSessions.indexOf(sessionId);
+        if (idx >= 0) this.pinnedSessions.splice(idx, 1);
       } else {
         this.pinnedSessions.unshift(sessionId);
       }
+      // Persist to localStorage as fallback
       localStorage.setItem('pinned-sessions', JSON.stringify(this.pinnedSessions));
+      // Persist to server
+      this.sendWsMessage({
+        type: isPinned ? 'unpin_session' : 'pin_session',
+        conversationId: sessionId
+      });
     },
     isSessionPinned(sessionId) {
       return this.pinnedSessions.includes(sessionId);
