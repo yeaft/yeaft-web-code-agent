@@ -489,18 +489,6 @@
   background: var(--session-active);
 }
 
-.session-item.is-pinned {
-  background: var(--session-pinned);
-}
-
-.session-item.is-pinned:hover {
-  background: var(--sidebar-hover);
-}
-
-.session-item.is-pinned.active {
-  background: var(--session-active);
-}
-
 .session-item.processing .title {
   color: var(--text-secondary);
 }
@@ -568,10 +556,27 @@
   flex-shrink: 0;
 }
 
-.session-delete-btn {
-  width: 20px;
-  height: 20px;
+/* Session pin icon — small indicator before title for pinned items */
+.session-pin-icon {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  color: var(--text-muted);
+}
+
+.session-pin-icon svg {
+  width: 12px;
+  height: 12px;
+  fill: currentColor;
+  display: block;
+}
+
+/* Session dots button — ⋮ menu trigger */
+.session-dots-btn {
+  width: 24px;
+  height: 24px;
   border: none;
+  border-radius: 6px;
   background: transparent;
   cursor: pointer;
   padding: 0;
@@ -579,149 +584,77 @@
   align-items: center;
   justify-content: center;
   opacity: 0;
-  transition: opacity 0.15s;
+  transition: opacity 0.15s, background 0.15s;
   color: var(--text-secondary);
   flex-shrink: 0;
-  position: absolute;
-  right: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 1;
-  padding-left: 8px;
-  box-sizing: content-box;
-  background: linear-gradient(to right, transparent 0px, var(--sidebar-hover) 8px);
 }
 
-.session-item.active .session-delete-btn {
-  background: linear-gradient(to right, transparent 0px, var(--session-active) 8px);
-}
-
-.session-item:hover .session-delete-btn {
+.session-item:hover .session-dots-btn,
+.session-dots-btn.menu-open {
   opacity: 1;
 }
 
-.session-delete-btn:hover {
+.session-dots-btn:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.session-dots-btn svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
+/* Session dropdown menu — positioned below dots button */
+.session-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  min-width: 160px;
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  z-index: 200;
+  padding: 4px;
+  animation: fadeSlideDown 0.12s ease-out;
+}
+
+.session-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  transition: background 0.12s;
+}
+
+.session-menu-item:hover {
+  background: var(--sidebar-hover);
+}
+
+.session-menu-item svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.session-menu-item.danger {
   color: var(--error);
 }
 
-.session-delete-btn svg {
-  width: 14px;
-  height: 14px;
-  fill: currentColor;
-}
-
-/* Chat session rename button — positioned left of delete button */
-.session-rename-btn {
-  width: 20px;
-  height: 20px;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  padding: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0;
-  transition: opacity 0.15s;
-  color: var(--text-secondary);
-  flex-shrink: 0;
-  position: absolute;
-  right: 22px;
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 1;
-  padding-left: 8px;
-  box-sizing: content-box;
-  background: linear-gradient(to right, transparent 0px, var(--sidebar-hover) 8px);
-}
-
-.session-item.active .session-rename-btn {
-  background: linear-gradient(to right, transparent 0px, var(--session-active) 8px);
-}
-
-.session-item:hover .session-rename-btn {
-  opacity: 1;
-}
-
-.session-rename-btn:hover {
-  color: var(--accent);
-}
-
-.session-rename-btn svg {
-  width: 14px;
-  height: 14px;
-  fill: currentColor;
-}
-
-/* Session pin button — positioned left of rename button */
-.session-pin-btn {
-  width: 20px;
-  height: 20px;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  padding: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0;
-  transition: opacity 0.15s;
-  color: var(--text-secondary);
-  flex-shrink: 0;
-  position: absolute;
-  right: 44px;
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 1;
-  padding-left: 8px;
-  box-sizing: content-box;
-  background: linear-gradient(to right, transparent 0px, var(--sidebar-hover) 8px);
-}
-
-.session-item.active .session-pin-btn {
-  background: linear-gradient(to right, transparent 0px, var(--session-active) 8px);
-}
-
-.session-item:hover .session-pin-btn {
-  opacity: 1;
-}
-
-.session-pin-btn:hover {
-  color: var(--accent-blue, #4a9eff);
-}
-
-/* Already pinned — accent color but hidden until hover */
-.session-item.is-pinned .session-pin-btn {
-  background: linear-gradient(to right, transparent 0px, var(--session-pinned) 8px);
-  color: var(--accent-blue, #4a9eff);
-}
-
-.session-item.is-pinned .session-delete-btn {
-  background: linear-gradient(to right, transparent 0px, var(--session-pinned) 8px);
-}
-
-.session-item.is-pinned .session-rename-btn {
-  background: linear-gradient(to right, transparent 0px, var(--session-pinned) 8px);
-}
-
-/* Crew session pin button — no rename btn, so position left of delete */
-.session-pin-btn-crew {
-  right: 22px;
-}
-
-/* Pin divider between pinned and unpinned groups */
-.session-pin-divider {
-  height: 1px;
-  background: var(--border-color);
-  margin: 4px 12px;
-  opacity: 0.5;
-}
-
-/* Mobile: pin button hidden by default */
-@media (max-width: 768px) {
-  .session-pin-btn {
-    opacity: 0;
-  }
+.session-menu-item.danger svg {
+  color: var(--error);
 }
 
 /* PaneTopBar pin icon for pinned items */
