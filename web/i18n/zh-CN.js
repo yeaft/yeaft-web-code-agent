@@ -184,6 +184,9 @@ export default {
   'chat.waiting.refresh': '刷新',
   'chat.waiting.thinking': 'AI 正在思考中，请稍候...',
 
+  // ============ /btw Side Question ============
+  'btw.hint': 'esc 关闭',
+
   // ============ Message Item ============
   'message.copyContent': '复制内容',
   'message.copy': '复制内容',

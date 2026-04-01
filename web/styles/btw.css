@@ -1,59 +1,69 @@
-/* /btw side question overlay */
+/* /btw side question — floating card above input */
 
-.btw-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 9999;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(2px);
-  outline: none;
+/* Container: flex child between MessageList and ChatInput */
+.btw-float {
+  width: min(90%, 960px);
+  margin: 0 auto 8px;
+  flex-shrink: 0;
+  animation: btw-slide-up 0.2s ease-out;
 }
 
+@keyframes btw-slide-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Card */
 .btw-card {
-  width: 90%;
-  max-width: 600px;
-  max-height: 70vh;
+  background: var(--bg-input-wrapper);
+  border-radius: 16px;
+  padding: 16px 20px;
   display: flex;
   flex-direction: column;
-  background: var(--bg-sidebar);
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  gap: 0;
+  max-height: 50vh;
   overflow: hidden;
+  box-shadow: 0 -2px 16px rgba(0, 0, 0, 0.08);
 }
 
+[data-theme="dark"] .btw-card {
+  box-shadow: 0 -2px 16px rgba(0, 0, 0, 0.2);
+}
+
+/* Question */
 .btw-question {
-  padding: 16px 20px 12px;
   font-size: 13px;
   color: var(--text-muted);
   line-height: 1.5;
   word-break: break-word;
+  margin-bottom: 12px;
+  flex-shrink: 0;
 }
 
-.btw-divider {
-  height: 1px;
-  background: var(--border-color);
-  margin: 0 20px;
+.btw-question::before {
+  content: '/btw';
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  opacity: 0.6;
+  margin-right: 6px;
+  font-family: monospace;
 }
 
+/* Answer */
 .btw-answer {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 20px;
-  font-size: 14px;
+  font-size: 15px;
   color: var(--text-primary);
-  line-height: 1.7;
-  min-height: 60px;
+  line-height: 1.6;
+  min-height: 24px;
 }
 
 .btw-answer-content {
   word-break: break-word;
 }
 
-/* Reuse markdown styles inline */
 .btw-answer-content p {
   margin: 0 0 8px;
 }
@@ -63,18 +73,19 @@
 }
 
 .btw-answer-content code {
-  background: rgba(128, 128, 128, 0.15);
+  background: rgba(128, 128, 128, 0.12);
   padding: 1px 4px;
-  border-radius: 3px;
+  border-radius: 4px;
   font-size: 13px;
 }
 
 .btw-answer-content pre {
-  background: rgba(0, 0, 0, 0.2);
-  border-radius: 6px;
+  background: var(--bg-sidebar);
+  border-radius: 8px;
   padding: 12px;
   overflow-x: auto;
   margin: 8px 0;
+  font-size: 13px;
 }
 
 .btw-answer-content pre code {
@@ -92,7 +103,7 @@
   margin: 4px 0;
 }
 
-/* Blinking cursor during streaming */
+/* Streaming cursor */
 .btw-cursor {
   display: inline-block;
   width: 2px;
@@ -108,7 +119,7 @@
   50% { opacity: 0; }
 }
 
-/* Loading dots before any content arrives */
+/* Loading dots */
 .btw-loading-dots {
   display: inline-flex;
   gap: 4px;
@@ -117,54 +128,45 @@
 
 .btw-loading-dots span {
   display: inline-block;
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
   background: var(--text-muted);
-  animation: btw-dot-bounce 1.2s ease-in-out infinite;
+  animation: btw-dot-pulse 1.2s ease-in-out infinite;
 }
 
-.btw-loading-dots span:nth-child(2) {
-  animation-delay: 0.2s;
+.btw-loading-dots span:nth-child(2) { animation-delay: 0.2s; }
+.btw-loading-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes btw-dot-pulse {
+  0%, 60%, 100% { opacity: 0.3; }
+  30%           { opacity: 1; }
 }
 
-.btw-loading-dots span:nth-child(3) {
-  animation-delay: 0.4s;
-}
-
-@keyframes btw-dot-bounce {
-  0%, 60%, 100% {
-    transform: translateY(0);
-    opacity: 0.4;
-  }
-  30% {
-    transform: translateY(-6px);
-    opacity: 1;
-  }
-}
-
-.btw-footer {
-  padding: 10px 20px;
-  border-top: 1px solid var(--border-color);
-  text-align: center;
-}
-
+/* Hint */
 .btw-hint {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-muted);
-  opacity: 0.7;
+  opacity: 0.4;
+  text-align: right;
+  margin-top: 8px;
+  flex-shrink: 0;
 }
 
-/* Mobile: card sticks to bottom, full width */
+/* Mobile */
 @media (max-width: 768px) {
-  .btw-overlay {
-    align-items: flex-end;
+  .btw-float {
+    width: calc(100% - 16px);
+    margin-left: 8px;
+    margin-right: 8px;
   }
 
   .btw-card {
-    width: 100%;
-    max-width: 100%;
-    border-radius: 12px 12px 0 0;
-    max-height: 80vh;
+    border-radius: 12px;
+    padding: 12px 16px;
+  }
+
+  .btw-answer {
+    max-height: 40vh;
   }
 }

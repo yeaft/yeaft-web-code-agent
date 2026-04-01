@@ -184,6 +184,9 @@ export default {
   'chat.waiting.refresh': 'Refresh',
   'chat.waiting.thinking': 'AI is thinking, please wait...',
 
+  // ============ /btw Side Question ============
+  'btw.hint': 'esc to close',
+
   // ============ Message Item ============
   'message.copyContent': 'Copy content',
   'message.copy': 'Copy content',

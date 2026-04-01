@@ -386,8 +386,9 @@ describe('BtwOverlay — keyboard close logic', () => {
 });
 
 describe('BtwOverlay — component structure', () => {
-  it('should use Teleport to body', () => {
-    expect(overlaySource).toContain('<Teleport to="body">');
+  it('should render as inline float (no Teleport)', () => {
+    expect(overlaySource).toContain('class="btw-float"');
+    expect(overlaySource).not.toContain('<Teleport');
   });
 
   it('should display question from store.btwQuestion', () => {
@@ -412,12 +413,14 @@ describe('BtwOverlay — component structure', () => {
     expect(overlaySource).toContain('btw-cursor');
   });
 
-  it('should close on backdrop click via @click.self', () => {
-    expect(overlaySource).toContain('@click.self="close"');
+  it('should use global keydown listener instead of backdrop click', () => {
+    expect(overlaySource).toContain("document.addEventListener('keydown'");
+    expect(overlaySource).not.toContain('@click.self');
   });
 
-  it('should listen for keydown events', () => {
-    expect(overlaySource).toContain('@keydown="onKeydown"');
+  it('should close on Esc via global keydown listener', () => {
+    expect(overlaySource).toContain("e.key === 'Escape'");
+    expect(overlaySource).toContain('store.closeBtw()');
   });
 
   it('should gracefully handle marked.parse failure', () => {
@@ -435,20 +438,18 @@ describe('btw.css — mobile responsive', () => {
     expect(cssSource).toContain('@media (max-width: 768px)');
   });
 
-  it('should align overlay to bottom on mobile', () => {
-    // Extract mobile media query block
+  it('should use narrower width on mobile', () => {
     const mobileBlock = cssSource.substring(cssSource.indexOf('@media (max-width: 768px)'));
-    expect(mobileBlock).toContain('align-items: flex-end');
+    expect(mobileBlock).toContain('width: calc(100% - 16px)');
   });
 
-  it('should make card full width on mobile', () => {
+  it('should use smaller padding on mobile card', () => {
     const mobileBlock = cssSource.substring(cssSource.indexOf('@media (max-width: 768px)'));
-    expect(mobileBlock).toContain('width: 100%');
-    expect(mobileBlock).toContain('max-width: 100%');
+    expect(mobileBlock).toContain('padding: 12px 16px');
   });
 
-  it('should use top-only border-radius on mobile card', () => {
+  it('should use smaller border-radius on mobile card', () => {
     const mobileBlock = cssSource.substring(cssSource.indexOf('@media (max-width: 768px)'));
-    expect(mobileBlock).toContain('border-radius: 12px 12px 0 0');
+    expect(mobileBlock).toContain('border-radius: 12px');
   });
 });

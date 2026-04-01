@@ -423,6 +423,7 @@ export default {
                 @resume-conversation="openConversationModalResume"
                 @open-settings="showSettingsPanel = true"
               />
+              <BtwOverlay />
               <ChatInput />
             </div>
             <!-- Right Panel overlay (mobile only) -->
@@ -456,9 +457,6 @@ export default {
 
       <!-- Settings (floating modal) -->
       <SettingsPanel :visible="showSettingsPanel" @close="showSettingsPanel = false" />
-
-      <!-- /btw side question overlay -->
-      <BtwOverlay />
 
       <!-- Crew Config Panel -->
       <CrewConfigPanel
