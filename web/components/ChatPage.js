@@ -151,11 +151,12 @@ export default {
               <div
                 v-for="conv in pinnedChatConversations"
                 :key="conv.id"
-                class="session-item is-pinned"
+                class="session-item"
                 :class="{ active: conv.id === store.currentConversation, processing: store.isConversationProcessing(conv.id), 'agent-offline': conv.agentOnline === false }"
                 @click="editingChatId !== conv.id && onSessionClick(conv)"
               >
                 <div class="session-item-header">
+                  <span class="session-pin-icon"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg></span>
                   <div class="title" :title="getConversationFullTitle(conv)">
                     <span v-if="store.isConversationProcessing(conv.id)" class="processing-dot"></span>
                     <span v-else-if="store.isSplitMode && store.isInAnyPanel(conv.id)" class="pane-active-dot"></span>
@@ -172,18 +173,27 @@ export default {
                     <span v-else>{{ getConversationTitle(conv) }}</span>
                   </div>
                   <span class="session-time">{{ getConversationTime(conv) }}</span>
-                  <button class="session-pin-btn" @click.stop="store.togglePin(conv.id)" :title="$t('chat.sidebar.unpin')">
-                    <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>
+                  <button class="session-dots-btn" :class="{ 'menu-open': activeSessionMenu === conv.id }" @click.stop="toggleSessionMenu(conv.id)">
+                    <svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
                   </button>
-                  <button class="session-split-btn" @click.stop="splitToPanel(conv.id)" :title="$t('splitScreen.splitToPanel')" v-if="!store.isInAnyPanel(conv.id)">
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
-                  </button>
-                  <button class="session-rename-btn" @click.stop="startChatRename(conv)" :title="$t('chat.sidebar.renameConv')">
-                    <svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
-                  </button>
-                  <button class="session-delete-btn" @click.stop="closeSession(conv.id, conv.agentId)" :title="$t('chat.sidebar.closeConv')">
-                    <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-                  </button>
+                  <div class="session-menu" v-if="activeSessionMenu === conv.id" @click.stop>
+                    <button class="session-menu-item" @click.stop="store.togglePin(conv.id); closeSessionMenu()">
+                      <svg viewBox="0 0 24 24"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>
+                      {{ $t('chat.sidebar.unpin') }}
+                    </button>
+                    <button class="session-menu-item" v-if="!store.isInAnyPanel(conv.id)" @click.stop="splitToPanel(conv.id); closeSessionMenu()">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+                      {{ $t('splitScreen.splitToPanel') }}
+                    </button>
+                    <button class="session-menu-item" @click.stop="startChatRename(conv); closeSessionMenu()">
+                      <svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+                      {{ $t('chat.sidebar.renameConv') }}
+                    </button>
+                    <button class="session-menu-item danger" @click.stop="closeSession(conv.id, conv.agentId); closeSessionMenu()">
+                      <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                      {{ $t('chat.sidebar.closeConv') }}
+                    </button>
+                  </div>
                 </div>
                 <div class="session-info">
                   <span class="session-path">{{ shortenPath(conv.workDir) }}</span>
@@ -194,7 +204,6 @@ export default {
                   </span>
                 </div>
               </div>
-              <div class="session-pin-divider" v-if="pinnedChatConversations.length > 0 && unpinnedChatConversations.length > 0" role="separator"></div>
               <div
                 v-for="conv in unpinnedChatConversations"
                 :key="conv.id"
@@ -219,18 +228,27 @@ export default {
                     <span v-else>{{ getConversationTitle(conv) }}</span>
                   </div>
                   <span class="session-time">{{ getConversationTime(conv) }}</span>
-                  <button class="session-pin-btn" @click.stop="store.togglePin(conv.id)" :title="$t('chat.sidebar.pin')">
-                    <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>
+                  <button class="session-dots-btn" :class="{ 'menu-open': activeSessionMenu === conv.id }" @click.stop="toggleSessionMenu(conv.id)">
+                    <svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
                   </button>
-                  <button class="session-split-btn" @click.stop="splitToPanel(conv.id)" :title="$t('splitScreen.splitToPanel')" v-if="!store.isInAnyPanel(conv.id)">
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
-                  </button>
-                  <button class="session-rename-btn" @click.stop="startChatRename(conv)" :title="$t('chat.sidebar.renameConv')">
-                    <svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
-                  </button>
-                  <button class="session-delete-btn" @click.stop="closeSession(conv.id, conv.agentId)" :title="$t('chat.sidebar.closeConv')">
-                    <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-                  </button>
+                  <div class="session-menu" v-if="activeSessionMenu === conv.id" @click.stop>
+                    <button class="session-menu-item" @click.stop="store.togglePin(conv.id); closeSessionMenu()">
+                      <svg viewBox="0 0 24 24"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>
+                      {{ $t('chat.sidebar.pin') }}
+                    </button>
+                    <button class="session-menu-item" v-if="!store.isInAnyPanel(conv.id)" @click.stop="splitToPanel(conv.id); closeSessionMenu()">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+                      {{ $t('splitScreen.splitToPanel') }}
+                    </button>
+                    <button class="session-menu-item" @click.stop="startChatRename(conv); closeSessionMenu()">
+                      <svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+                      {{ $t('chat.sidebar.renameConv') }}
+                    </button>
+                    <button class="session-menu-item danger" @click.stop="closeSession(conv.id, conv.agentId); closeSessionMenu()">
+                      <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                      {{ $t('chat.sidebar.closeConv') }}
+                    </button>
+                  </div>
                 </div>
                 <div class="session-info">
                   <span class="session-path">{{ shortenPath(conv.workDir) }}</span>
@@ -260,11 +278,12 @@ export default {
               <div
                 v-for="conv in pinnedCrewConversations"
                 :key="conv.id"
-                class="session-item session-item-crew is-pinned"
+                class="session-item session-item-crew"
                 :class="{ active: conv.id === store.currentConversation, processing: store.isConversationProcessing(conv.id), 'agent-offline': conv.agentOnline === false }"
                 @click="editingCrewId !== conv.id && onSessionClick(conv)"
               >
                 <div class="session-item-header">
+                  <span class="session-pin-icon"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg></span>
                   <div class="title" :title="getConversationFullTitle(conv)">
                     <span v-if="store.isConversationProcessing(conv.id)" class="processing-dot"></span>
                     <span v-else-if="store.isSplitMode && store.isInAnyPanel(conv.id)" class="pane-active-dot"></span>
@@ -286,15 +305,23 @@ export default {
                     >{{ getCrewTitle(conv) }}</span>
                   </div>
                   <span class="session-time">{{ getConversationTime(conv) }}</span>
-                  <button class="session-pin-btn session-pin-btn-crew" @click.stop="store.togglePin(conv.id)" :title="$t('chat.sidebar.unpin')">
-                    <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>
+                  <button class="session-dots-btn" :class="{ 'menu-open': activeSessionMenu === conv.id }" @click.stop="toggleSessionMenu(conv.id)">
+                    <svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
                   </button>
-                  <button class="session-split-btn session-split-btn-crew" @click.stop="splitToPanel(conv.id)" :title="$t('splitScreen.splitToPanel')" v-if="!store.isInAnyPanel(conv.id)">
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
-                  </button>
-                  <button class="session-delete-btn" @click.stop="closeSession(conv.id, conv.agentId)" :title="$t('chat.sidebar.closeConv')">
-                    <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-                  </button>
+                  <div class="session-menu" v-if="activeSessionMenu === conv.id" @click.stop>
+                    <button class="session-menu-item" @click.stop="store.togglePin(conv.id); closeSessionMenu()">
+                      <svg viewBox="0 0 24 24"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>
+                      {{ $t('chat.sidebar.unpin') }}
+                    </button>
+                    <button class="session-menu-item" v-if="!store.isInAnyPanel(conv.id)" @click.stop="splitToPanel(conv.id); closeSessionMenu()">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+                      {{ $t('splitScreen.splitToPanel') }}
+                    </button>
+                    <button class="session-menu-item danger" @click.stop="closeSession(conv.id, conv.agentId); closeSessionMenu()">
+                      <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                      {{ $t('chat.sidebar.closeConv') }}
+                    </button>
+                  </div>
                 </div>
                 <div class="session-info">
                   <span class="session-path">{{ shortenPath(conv.workDir) }}</span>
@@ -305,7 +332,6 @@ export default {
                   </span>
                 </div>
               </div>
-              <div class="session-pin-divider" v-if="pinnedCrewConversations.length > 0 && unpinnedCrewConversations.length > 0" role="separator"></div>
               <div
                 v-for="conv in unpinnedCrewConversations"
                 :key="conv.id"
@@ -335,15 +361,23 @@ export default {
                     >{{ getCrewTitle(conv) }}</span>
                   </div>
                   <span class="session-time">{{ getConversationTime(conv) }}</span>
-                  <button class="session-pin-btn session-pin-btn-crew" @click.stop="store.togglePin(conv.id)" :title="$t('chat.sidebar.pin')">
-                    <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>
+                  <button class="session-dots-btn" :class="{ 'menu-open': activeSessionMenu === conv.id }" @click.stop="toggleSessionMenu(conv.id)">
+                    <svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
                   </button>
-                  <button class="session-split-btn session-split-btn-crew" @click.stop="splitToPanel(conv.id)" :title="$t('splitScreen.splitToPanel')" v-if="!store.isInAnyPanel(conv.id)">
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
-                  </button>
-                  <button class="session-delete-btn" @click.stop="closeSession(conv.id, conv.agentId)" :title="$t('chat.sidebar.closeConv')">
-                    <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-                  </button>
+                  <div class="session-menu" v-if="activeSessionMenu === conv.id" @click.stop>
+                    <button class="session-menu-item" @click.stop="store.togglePin(conv.id); closeSessionMenu()">
+                      <svg viewBox="0 0 24 24"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>
+                      {{ $t('chat.sidebar.pin') }}
+                    </button>
+                    <button class="session-menu-item" v-if="!store.isInAnyPanel(conv.id)" @click.stop="splitToPanel(conv.id); closeSessionMenu()">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+                      {{ $t('splitScreen.splitToPanel') }}
+                    </button>
+                    <button class="session-menu-item danger" @click.stop="closeSession(conv.id, conv.agentId); closeSessionMenu()">
+                      <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                      {{ $t('chat.sidebar.closeConv') }}
+                    </button>
+                  </div>
                 </div>
                 <div class="session-info">
                   <span class="session-path">{{ shortenPath(conv.workDir) }}</span>
@@ -631,7 +665,8 @@ export default {
       editingCrewId: null,
       editingCrewName: '',
       editingChatId: null,
-      editingChatName: ''
+      editingChatName: '',
+      activeSessionMenu: null
     };
   },
   computed: {
@@ -983,6 +1018,12 @@ export default {
       this.editingChatId = null;
       this.editingChatName = '';
     },
+    toggleSessionMenu(convId) {
+      this.activeSessionMenu = this.activeSessionMenu === convId ? null : convId;
+    },
+    closeSessionMenu() {
+      this.activeSessionMenu = null;
+    },
     getConversationTime(conv) {
       // 优先显示最后活动时间，其次创建时间
       const execStatus = this.store.executionStatusMap[conv.id];
@@ -1197,6 +1238,9 @@ export default {
       }
       if (!e.target.closest('.agent-dropdown-trigger') && !e.target.closest('.agent-dropdown')) {
         this.agentManagerOpen = false;
+      }
+      if (!e.target.closest('.session-dots-btn') && !e.target.closest('.session-menu')) {
+        this.activeSessionMenu = null;
       }
     };
     document.addEventListener('click', this._clickOutsideHandler);

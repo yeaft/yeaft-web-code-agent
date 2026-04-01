@@ -429,38 +429,38 @@ describe('CSS/Template — split button and active panel', () => {
   const chatPageJs = readFile('components/ChatPage.js');
   const splitPaneJs = readFile('components/SplitPane.js');
 
-  it('should define .session-split-btn CSS rule', () => {
-    expect(splitScreenCss).toMatch(/\.session-split-btn\s*\{/);
+  it('should have split action in session dots menu (replacing standalone split button)', () => {
+    expect(chatPageJs).toContain('splitToPanel(conv.id); closeSessionMenu()');
   });
 
-  it('should start split button with opacity: 0 (hidden until hover)', () => {
-    const rule = splitScreenCss.match(/\.session-split-btn\s*\{[^}]+\}/);
-    expect(rule).not.toBeNull();
-    expect(rule[0]).toContain('opacity: 0');
+  it('should have session-dots-btn in ChatPage template', () => {
+    expect(chatPageJs).toContain('class="session-dots-btn"');
   });
 
-  it('should show split button on session-item hover', () => {
-    expect(splitScreenCss).toMatch(/\.session-item:hover\s+\.session-split-btn/);
+  it('should have session-menu dropdown in ChatPage template', () => {
+    expect(chatPageJs).toContain('class="session-menu"');
   });
 
   it('should NOT have active-panel visual style (removed for equal pane heights)', () => {
     expect(splitScreenCss).not.toMatch(/\.split-pane\.active-panel/);
   });
 
-  it('should have session-split-btn in ChatPage template for Chat sessions', () => {
-    expect(chatPageJs).toContain('class="session-split-btn"');
+  it('should have splitToPanel in session menu items for Chat sessions', () => {
+    expect(chatPageJs).toContain('splitToPanel(conv.id)');
   });
 
-  it('should have session-split-btn-crew in ChatPage template for Crew sessions', () => {
-    expect(chatPageJs).toContain('class="session-split-btn session-split-btn-crew"');
+  it('should have splitToPanel in session menu items for Crew sessions', () => {
+    // Crew sessions also have splitToPanel in their dots menu
+    const crewSection = chatPageJs.split('Crew Sessions').slice(2).join('Crew Sessions');
+    expect(crewSection).toContain('splitToPanel(conv.id)');
   });
 
   it('should guard split button with v-if="!store.isInAnyPanel(conv.id)"', () => {
     expect(chatPageJs).toContain('v-if="!store.isInAnyPanel(conv.id)"');
   });
 
-  it('should call splitToPanel on split button click', () => {
-    expect(chatPageJs).toContain('@click.stop="splitToPanel(conv.id)"');
+  it('should call splitToPanel from session dots menu', () => {
+    expect(chatPageJs).toContain('splitToPanel(conv.id); closeSessionMenu()');
   });
 
   it('should have panels-container in ChatPage for multi-panel mode', () => {
