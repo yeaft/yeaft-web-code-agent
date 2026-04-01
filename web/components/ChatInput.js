@@ -15,8 +15,8 @@ export default {
   },
   template: `
     <footer class="input-area" ref="inputAreaRef">
-      <!-- Expert chips bar (above attachments) — hidden in custom send mode -->
-      <div class="expert-chips-bar" v-if="!sendFn && expertSelections.length > 0">
+      <!-- Expert chips bar (above attachments) — hidden in custom send mode and btw mode -->
+      <div class="expert-chips-bar" v-if="!sendFn && !store.btwMode && expertSelections.length > 0">
         <span
           v-for="(sel, index) in expertSelections"
           :key="sel.role + (sel.action || '')"
@@ -26,7 +26,7 @@ export default {
           <button class="chip-remove" @click="removeExpertSelection(index)">&times;</button>
         </span>
       </div>
-      <div class="attachments-preview" v-if="attachments.length > 0">
+      <div class="attachments-preview" v-if="!store.btwMode && attachments.length > 0">
         <div class="attachment-item" v-for="(file, index) in attachments" :key="index">
           <img v-if="file.preview" :src="file.preview" class="attachment-thumb" />
           <span v-else class="attachment-icon">\u{1F4CE}</span>
@@ -34,8 +34,9 @@ export default {
           <button class="attachment-remove" @click="removeAttachment(index)">&times;</button>
         </div>
       </div>
-      <div class="input-wrapper">
+      <div class="input-wrapper" :class="{ 'btw-active': store.btwMode }">
         <input
+          v-if="!store.btwMode"
           type="file"
           ref="fileInput"
           id="chat-file-input"
@@ -44,14 +45,15 @@ export default {
           accept="image/*,text/*,.pdf,.doc,.docx,.xls,.xlsx,.json,.md,.py,.js,.ts,.css,.html"
           class="file-input-hidden"
         />
-        <label class="attach-btn" for="chat-file-input" :title="$t('chatInput.upload')">
+        <label v-if="!store.btwMode" class="attach-btn" for="chat-file-input" :title="$t('chatInput.upload')">
           <svg viewBox="0 0 24 24" width="20" height="20">
             <path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"/>
           </svg>
         </label>
+        <span v-if="store.btwMode" class="btw-input-tag">BTW</span>
         <div class="textarea-wrapper">
           <!-- Slash command autocomplete -->
-          <div class="slash-autocomplete" v-if="showAutocomplete && flatItems.length > 0" ref="autocompleteRef">
+          <div class="slash-autocomplete" v-if="!store.btwMode && showAutocomplete && flatItems.length > 0" ref="autocompleteRef">
             <template v-for="group in groupedCommands" :key="group.label">
               <div class="slash-group-label">{{ group.label }}</div>
               <div
@@ -69,7 +71,7 @@ export default {
             </template>
           </div>
           <!-- @ Expert autocomplete -->
-          <div class="slash-autocomplete expert-autocomplete" v-if="showExpertAutocomplete && expertAutocompleteFiltered.length > 0" ref="expertAutocompleteRef">
+          <div class="slash-autocomplete expert-autocomplete" v-if="!store.btwMode && showExpertAutocomplete && expertAutocompleteFiltered.length > 0" ref="expertAutocompleteRef">
             <div class="slash-group-label">Experts</div>
             <div
               v-for="(item, idx) in expertAutocompleteFiltered"
@@ -90,7 +92,7 @@ export default {
             @keydown="handleKeydown"
             @paste="handlePaste"
             @blur="onBlur"
-            :placeholder="isCompacting ? $t('chatHeader.compacting') : $t(effectivePlaceholderKey)"
+            :placeholder="store.btwMode ? $t('btw.placeholder') : (isCompacting ? $t('chatHeader.compacting') : $t(effectivePlaceholderKey))"
             :disabled="isCompacting"
             rows="1"
           ></textarea>
@@ -447,9 +449,20 @@ export default {
         return;
       }
 
-      // Intercept /btw side question
-      if (trimmed.startsWith('/btw ')) {
-        store.sendBtwQuestion(trimmed.substring(5));
+      // Intercept /btw — enter btw mode (with or without initial question)
+      if (trimmed === '/btw' || trimmed.startsWith('/btw ')) {
+        const question = trimmed.substring(4).trim();
+        store.enterBtwMode();
+        if (question) store.sendBtwQuestion(question);
+        inputText.value = '';
+        delete store.inputDrafts[store.currentConversation];
+        if (inputRef.value) inputRef.value.style.height = 'auto';
+        return;
+      }
+
+      // In btw mode, all sends go through btw channel
+      if (store.btwMode) {
+        store.sendBtwQuestion(trimmed);
         inputText.value = '';
         delete store.inputDrafts[store.currentConversation];
         if (inputRef.value) inputRef.value.style.height = 'auto';
@@ -480,6 +493,12 @@ export default {
     };
 
     const handleKeydown = (e) => {
+      // Esc exits btw mode
+      if (e.key === 'Escape' && store.btwMode) {
+        e.preventDefault();
+        store.closeBtw();
+        return;
+      }
       // @ Expert autocomplete keyboard nav
       if (showExpertAutocomplete.value && expertAutocompleteFiltered.value.length > 0) {
         if (e.key === 'ArrowDown') {

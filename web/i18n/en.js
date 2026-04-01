@@ -185,7 +185,9 @@ export default {
   'chat.waiting.thinking': 'AI is thinking, please wait...',
 
   // ============ /btw Side Question ============
-  'btw.hint': 'esc to close',
+  'btw.hint': 'esc to exit',
+  'btw.placeholder': 'Ask a side question...',
+  'btw.close': 'Exit BTW mode',
 
   // ============ Message Item ============
   'message.copyContent': 'Copy content',

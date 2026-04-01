@@ -441,19 +441,25 @@ export function handleMessage(store, msg) {
       clearRefreshTimeout();
       break;
 
-    // /btw side question streaming
+    // /btw mode streaming
     case 'btw_stream':
       store.appendBtwDelta(msg.delta);
       break;
 
     case 'btw_done':
       store.btwLoading = false;
+      if (msg.btwSessionId) store.btwSessionId = msg.btwSessionId;
       break;
 
-    case 'btw_error':
-      store.btwAnswer = 'Error: ' + msg.error;
+    case 'btw_error': {
+      // Append error as the last assistant message content
+      const lastBtw = store.btwMessages[store.btwMessages.length - 1];
+      if (lastBtw && lastBtw.role === 'assistant') {
+        lastBtw.content = 'Error: ' + msg.error;
+      }
       store.btwLoading = false;
       break;
+    }
 
     // Background task tracking (legacy — kept for server compatibility)
     case 'background_task_started':

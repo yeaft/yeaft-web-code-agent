@@ -581,7 +581,8 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       await forwardToAgent(client.currentAgent, {
         type: 'btw_question',
         conversationId: btwConvId,
-        question: msg.question
+        question: msg.question,
+        btwSessionId: msg.btwSessionId || null
       });
       break;
     }

@@ -185,7 +185,9 @@ export default {
   'chat.waiting.thinking': 'AI 正在思考中，请稍候...',
 
   // ============ /btw Side Question ============
-  'btw.hint': 'esc 关闭',
+  'btw.hint': 'esc 退出',
+  'btw.placeholder': '问个顺便的问题...',
+  'btw.close': '退出 BTW 模式',
 
   // ============ Message Item ============
   'message.copyContent': '复制内容',

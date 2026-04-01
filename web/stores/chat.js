@@ -102,11 +102,11 @@ export const useChatStore = defineStore('chat', {
     // MCP servers 配置: agentId -> [{ name, enabled, source }]
     mcpServers: {},
 
-    // /btw side question state (ephemeral overlay)
-    btwQuestion: null,
-    btwAnswer: '',
-    btwLoading: false,
-    btwVisible: false,
+    // /btw mode state (multi-turn side question)
+    btwMode: false,              // whether in btw mode
+    btwMessages: [],             // [{ role: 'user'|'assistant', content }]
+    btwLoading: false,           // waiting for assistant reply
+    btwSessionId: null,          // forked session ID for multi-turn
 
     // Per-conversation MCP servers: conversationId -> [{ name, enabled, source }]
     conversationMcpServers: {},
@@ -327,28 +327,37 @@ export const useChatStore = defineStore('chat', {
     },
 
     // =====================
-    // /btw side question
+    // /btw mode (multi-turn side question)
     // =====================
+    enterBtwMode() {
+      this.btwMode = true;
+      this.btwMessages = [];
+      this.btwLoading = false;
+      this.btwSessionId = null;
+    },
     sendBtwQuestion(question) {
       if (!this.currentConversation) return;
-      this.btwQuestion = question;
-      this.btwAnswer = '';
+      this.btwMessages.push({ role: 'user', content: question });
+      this.btwMessages.push({ role: 'assistant', content: '' }); // placeholder for streaming
       this.btwLoading = true;
-      this.btwVisible = true;
       this.sendWsMessage({
         type: 'btw_question',
         conversationId: this.currentConversation,
-        question
+        question,
+        btwSessionId: this.btwSessionId  // null for first question, reuse for subsequent
       });
     },
     closeBtw() {
-      this.btwQuestion = null;
-      this.btwAnswer = '';
+      this.btwMode = false;
+      this.btwMessages = [];
       this.btwLoading = false;
-      this.btwVisible = false;
+      this.btwSessionId = null;
     },
     appendBtwDelta(delta) {
-      this.btwAnswer += delta;
+      const lastMsg = this.btwMessages[this.btwMessages.length - 1];
+      if (lastMsg && lastMsg.role === 'assistant') {
+        lastMsg.content += delta;
+      }
     },
 
     // =====================

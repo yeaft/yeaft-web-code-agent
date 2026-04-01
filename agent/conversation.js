@@ -859,28 +859,59 @@ export function handleAskUserAnswer(msg) {
 }
 
 /**
- * Handle /btw side question — ephemeral, no history pollution.
- * Spawns an independent CLI process with --resume + --fork-session so
- * the answer has full context but writes nothing back to the original session.
+ * Handle /btw side question — supports multi-turn and Crew mode.
+ *
+ * Multi-turn: First question forks the session (forkSession: true).
+ * Subsequent questions resume the forked session (no fork).
+ * The forked session ID is captured from system init and returned in btw_done.
+ *
+ * Crew mode: If conversationId is a crew session, use the decision maker's
+ * claudeSessionId as the base for forking.
  */
 export async function handleBtwQuestion(msg) {
-  const { conversationId, question } = msg;
-  const state = ctx.conversations.get(conversationId);
+  const { conversationId, question, btwSessionId } = msg;
 
-  if (!state?.claudeSessionId) {
-    ctx.sendToServer({ type: 'btw_error', conversationId, question, error: 'No active session' });
+  // 1. Find the base session — Chat or Crew decision maker
+  let baseSessionId = null;
+  let workDir = null;
+
+  const chatState = ctx.conversations.get(conversationId);
+  if (chatState?.claudeSessionId) {
+    baseSessionId = chatState.claudeSessionId;
+    workDir = chatState.workDir;
+  } else {
+    // Crew mode: find decision maker's session
+    const crewSession = crewSessions.get(conversationId);
+    if (crewSession) {
+      const dmName = crewSession.decisionMaker;
+      const dmState = dmName ? crewSession.roleStates.get(dmName) : null;
+      if (dmState?.claudeSessionId) {
+        baseSessionId = dmState.claudeSessionId;
+        workDir = crewSession.projectDir;
+      }
+    }
+  }
+
+  if (!baseSessionId) {
+    ctx.sendToServer({ type: 'btw_error', conversationId, error: 'No active session' });
     return;
   }
 
-  console.log(`[btw] ${conversationId} question: ${question.substring(0, 80)}`);
+  // 2. Determine resume target: multi-turn reuses btwSessionId, first question forks
+  const resumeTarget = btwSessionId || baseSessionId;
+  const shouldFork = !btwSessionId;
+
+  console.log(`[btw] ${conversationId} question: ${question.substring(0, 80)} (fork: ${shouldFork}, session: ${resumeTarget.substring(0, 20)}...)`);
+
+  let newBtwSessionId = btwSessionId; // default: keep existing
 
   try {
     const btwQuery = query({
       prompt: question,
       options: {
-        cwd: state.workDir,
-        resume: state.claudeSessionId,
-        forkSession: true,
+        cwd: workDir || ctx.CONFIG.workDir,
+        resume: resumeTarget,
+        forkSession: shouldFork,
         maxTurns: 1,
         permissionMode: 'bypassPermissions',
         disallowedTools: [
@@ -894,6 +925,11 @@ export async function handleBtwQuestion(msg) {
     });
 
     for await (const message of btwQuery) {
+      // Capture forked session ID from system init
+      if (message.type === 'system' && message.session_id) {
+        newBtwSessionId = message.session_id;
+      }
+
       if (message.type === 'assistant') {
         const content = message.message?.content;
         let delta = '';
@@ -908,12 +944,15 @@ export async function handleBtwQuestion(msg) {
           ctx.sendToServer({ type: 'btw_stream', conversationId, delta });
         }
       }
-      // result / system messages — ignored (no usage tracking for btw)
     }
 
-    ctx.sendToServer({ type: 'btw_done', conversationId, question });
+    ctx.sendToServer({
+      type: 'btw_done',
+      conversationId,
+      btwSessionId: newBtwSessionId
+    });
   } catch (err) {
     console.error(`[btw] ${conversationId} error:`, err.message);
-    ctx.sendToServer({ type: 'btw_error', conversationId, question, error: err.message });
+    ctx.sendToServer({ type: 'btw_error', conversationId, error: err.message });
   }
 }
