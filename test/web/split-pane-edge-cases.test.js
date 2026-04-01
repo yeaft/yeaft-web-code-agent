@@ -18,7 +18,7 @@ import path from 'path';
 
 function createStore(overrides = {}) {
   return {
-    splitPanes: [],
+    panels: [],
     activeConversations: [],
     conversations: [],
     messagesMap: {},
@@ -64,8 +64,8 @@ function simulateCloseSession(store, conversationId) {
     store.activeConversations.splice(activeIdx, 1);
   }
 
-  // KEY FIX: Clear from splitPanes if present
-  for (const pane of store.splitPanes) {
+  // KEY FIX: Clear from panels if present
+  for (const pane of store.panels) {
     if (pane.conversationId === conversationId) {
       pane.conversationId = null;
     }
@@ -80,8 +80,8 @@ function simulateDeleteConversation(store, conversationId) {
     store.activeConversations.splice(delIdx, 1);
   }
 
-  // KEY FIX: Clear from splitPanes if present
-  for (const pane of store.splitPanes) {
+  // KEY FIX: Clear from panels if present
+  for (const pane of store.panels) {
     if (pane.conversationId === conversationId) {
       pane.conversationId = null;
     }
@@ -100,8 +100,8 @@ function simulateHandleConversationDeleted(store, msg) {
     store.activeConversations.splice(delIdx, 1);
   }
 
-  // KEY FIX: Clear from splitPanes if present
-  for (const pane of store.splitPanes) {
+  // KEY FIX: Clear from panels if present
+  for (const pane of store.panels) {
     if (pane.conversationId === msg.conversationId) {
       pane.conversationId = null;
     }
@@ -118,8 +118,8 @@ function simulateConversationCreated(store, msg) {
   });
 
   // KEY FIX: Split mode logic
-  if (store.splitPanes.length > 1) {
-    const emptyPane = store.splitPanes.find(p => !p.conversationId);
+  if (store.panels.length > 1) {
+    const emptyPane = store.panels.find(p => !p.conversationId);
     if (emptyPane) {
       emptyPane.conversationId = msg.conversationId;
     }
@@ -143,8 +143,8 @@ function simulateConversationResumed(store, msg) {
   });
 
   // KEY FIX: Split mode logic
-  if (store.splitPanes.length > 1) {
-    const emptyPane = store.splitPanes.find(p => !p.conversationId);
+  if (store.panels.length > 1) {
+    const emptyPane = store.panels.find(p => !p.conversationId);
     if (emptyPane) {
       emptyPane.conversationId = msg.conversationId;
     }
@@ -157,23 +157,30 @@ function simulateConversationResumed(store, msg) {
   store.messagesMap[msg.conversationId] = [];
 }
 
-// Simulate selectConversation with split mode no-op
+// Simulate selectConversation with split mode routing to active panel
 function simulateSelectConversation(store, conversationId) {
-  // KEY FIX: no-op in split mode
-  if (store.splitPanes.length > 1) return;
+  // In split mode, route to active panel instead of being a no-op
+  if (store.panels.length > 1) {
+    const targetPanelId = store.activePanelId || store.panels[0]?.id;
+    if (targetPanelId) {
+      const targetPane = store.panels.find(p => p.id === targetPanelId);
+      if (targetPane) targetPane.conversationId = conversationId;
+    }
+    return;
+  }
 
   if (conversationId === store.currentConversation) return;
   store.activeConversations = [conversationId];
 }
 
 // =====================================================================
-// 1. closeSession clears splitPanes
+// 1. closeSession clears panels
 // =====================================================================
 
-describe('closeSession — splitPanes cleanup', () => {
+describe('closeSession — panels cleanup', () => {
   it('should set pane.conversationId to null when matching session is closed', () => {
     const store = createStore({
-      splitPanes: [
+      panels: [
         { conversationId: 'conv-1' },
         { conversationId: 'conv-2' }
       ],
@@ -184,13 +191,13 @@ describe('closeSession — splitPanes cleanup', () => {
 
     simulateCloseSession(store, 'conv-1');
 
-    expect(store.splitPanes[0].conversationId).toBeNull();
-    expect(store.splitPanes[1].conversationId).toBe('conv-2');
+    expect(store.panels[0].conversationId).toBeNull();
+    expect(store.panels[1].conversationId).toBe('conv-2');
   });
 
   it('should not affect panes with different conversationId', () => {
     const store = createStore({
-      splitPanes: [
+      panels: [
         { conversationId: 'conv-1' },
         { conversationId: 'conv-2' }
       ],
@@ -201,13 +208,13 @@ describe('closeSession — splitPanes cleanup', () => {
 
     simulateCloseSession(store, 'conv-3');
 
-    expect(store.splitPanes[0].conversationId).toBe('conv-1');
-    expect(store.splitPanes[1].conversationId).toBe('conv-2');
+    expect(store.panels[0].conversationId).toBe('conv-1');
+    expect(store.panels[1].conversationId).toBe('conv-2');
   });
 
   it('should handle closing session that appears in multiple panes', () => {
     const store = createStore({
-      splitPanes: [
+      panels: [
         { conversationId: 'conv-1' },
         { conversationId: 'conv-1' }
       ],
@@ -218,13 +225,13 @@ describe('closeSession — splitPanes cleanup', () => {
 
     simulateCloseSession(store, 'conv-1');
 
-    expect(store.splitPanes[0].conversationId).toBeNull();
-    expect(store.splitPanes[1].conversationId).toBeNull();
+    expect(store.panels[0].conversationId).toBeNull();
+    expect(store.panels[1].conversationId).toBeNull();
   });
 
-  it('should work with empty splitPanes array (non-split mode)', () => {
+  it('should work with empty panels array (non-split mode)', () => {
     const store = createStore({
-      splitPanes: [],
+      panels: [],
       activeConversations: ['conv-1'],
       conversations: [{ id: 'conv-1' }],
       messagesMap: { 'conv-1': [] }
@@ -232,19 +239,19 @@ describe('closeSession — splitPanes cleanup', () => {
 
     simulateCloseSession(store, 'conv-1');
 
-    expect(store.splitPanes).toEqual([]);
+    expect(store.panels).toEqual([]);
     expect(store.activeConversations).toEqual([]);
   });
 });
 
 // =====================================================================
-// 2. deleteConversation clears splitPanes
+// 2. deleteConversation clears panels
 // =====================================================================
 
-describe('deleteConversation — splitPanes cleanup', () => {
+describe('deleteConversation — panels cleanup', () => {
   it('should set pane.conversationId to null when matching conversation is deleted', () => {
     const store = createStore({
-      splitPanes: [
+      panels: [
         { conversationId: 'conv-1' },
         { conversationId: 'conv-2' }
       ],
@@ -254,13 +261,13 @@ describe('deleteConversation — splitPanes cleanup', () => {
 
     simulateDeleteConversation(store, 'conv-2');
 
-    expect(store.splitPanes[0].conversationId).toBe('conv-1');
-    expect(store.splitPanes[1].conversationId).toBeNull();
+    expect(store.panels[0].conversationId).toBe('conv-1');
+    expect(store.panels[1].conversationId).toBeNull();
   });
 
-  it('should remove from activeConversations AND clear splitPanes', () => {
+  it('should remove from activeConversations AND clear panels', () => {
     const store = createStore({
-      splitPanes: [
+      panels: [
         { conversationId: 'conv-1' },
         { conversationId: 'conv-2' }
       ],
@@ -271,18 +278,18 @@ describe('deleteConversation — splitPanes cleanup', () => {
     simulateDeleteConversation(store, 'conv-1');
 
     expect(store.activeConversations).toEqual(['conv-2']);
-    expect(store.splitPanes[0].conversationId).toBeNull();
+    expect(store.panels[0].conversationId).toBeNull();
   });
 });
 
 // =====================================================================
-// 3. handleConversationDeleted clears splitPanes
+// 3. handleConversationDeleted clears panels
 // =====================================================================
 
-describe('handleConversationDeleted — splitPanes cleanup', () => {
+describe('handleConversationDeleted — panels cleanup', () => {
   it('should set pane.conversationId to null on server-side delete notification', () => {
     const store = createStore({
-      splitPanes: [
+      panels: [
         { conversationId: 'conv-1' },
         { conversationId: 'conv-2' }
       ],
@@ -293,13 +300,13 @@ describe('handleConversationDeleted — splitPanes cleanup', () => {
 
     simulateHandleConversationDeleted(store, { conversationId: 'conv-1' });
 
-    expect(store.splitPanes[0].conversationId).toBeNull();
-    expect(store.splitPanes[1].conversationId).toBe('conv-2');
+    expect(store.panels[0].conversationId).toBeNull();
+    expect(store.panels[1].conversationId).toBe('conv-2');
   });
 
   it('should handle deleting conversation not in any pane', () => {
     const store = createStore({
-      splitPanes: [
+      panels: [
         { conversationId: 'conv-1' },
         { conversationId: 'conv-2' }
       ],
@@ -310,8 +317,8 @@ describe('handleConversationDeleted — splitPanes cleanup', () => {
 
     simulateHandleConversationDeleted(store, { conversationId: 'conv-3' });
 
-    expect(store.splitPanes[0].conversationId).toBe('conv-1');
-    expect(store.splitPanes[1].conversationId).toBe('conv-2');
+    expect(store.panels[0].conversationId).toBe('conv-1');
+    expect(store.panels[1].conversationId).toBe('conv-2');
   });
 });
 
@@ -322,7 +329,7 @@ describe('handleConversationDeleted — splitPanes cleanup', () => {
 describe('conversation_created — split mode', () => {
   it('should fill first empty pane instead of overwriting activeConversations', () => {
     const store = createStore({
-      splitPanes: [
+      panels: [
         { conversationId: 'conv-1' },
         { conversationId: null }
       ],
@@ -335,14 +342,14 @@ describe('conversation_created — split mode', () => {
       workDir: '/home'
     });
 
-    expect(store.splitPanes[1].conversationId).toBe('conv-new');
+    expect(store.panels[1].conversationId).toBe('conv-new');
     expect(store.activeConversations).toContain('conv-1');
     expect(store.activeConversations).toContain('conv-new');
   });
 
   it('should not overwrite existing pane conversations', () => {
     const store = createStore({
-      splitPanes: [
+      panels: [
         { conversationId: 'conv-1' },
         { conversationId: null }
       ],
@@ -355,12 +362,12 @@ describe('conversation_created — split mode', () => {
       workDir: '/home'
     });
 
-    expect(store.splitPanes[0].conversationId).toBe('conv-1');
+    expect(store.panels[0].conversationId).toBe('conv-1');
   });
 
   it('should push to activeConversations, not replace', () => {
     const store = createStore({
-      splitPanes: [
+      panels: [
         { conversationId: 'conv-1' },
         { conversationId: null }
       ],
@@ -380,7 +387,7 @@ describe('conversation_created — split mode', () => {
 
   it('should not crash when all panes are occupied', () => {
     const store = createStore({
-      splitPanes: [
+      panels: [
         { conversationId: 'conv-1' },
         { conversationId: 'conv-2' }
       ],
@@ -396,13 +403,13 @@ describe('conversation_created — split mode', () => {
     // No empty pane found — still adds to activeConversations
     expect(store.activeConversations).toContain('conv-new');
     // Both existing panes should be unchanged
-    expect(store.splitPanes[0].conversationId).toBe('conv-1');
-    expect(store.splitPanes[1].conversationId).toBe('conv-2');
+    expect(store.panels[0].conversationId).toBe('conv-1');
+    expect(store.panels[1].conversationId).toBe('conv-2');
   });
 
   it('should not duplicate in activeConversations if already present', () => {
     const store = createStore({
-      splitPanes: [
+      panels: [
         { conversationId: 'conv-1' },
         { conversationId: null }
       ],
@@ -427,7 +434,7 @@ describe('conversation_created — split mode', () => {
 describe('conversation_resumed — split mode', () => {
   it('should fill first empty pane on resume', () => {
     const store = createStore({
-      splitPanes: [
+      panels: [
         { conversationId: 'conv-1' },
         { conversationId: null }
       ],
@@ -441,14 +448,14 @@ describe('conversation_resumed — split mode', () => {
       claudeSessionId: 'session-abc'
     });
 
-    expect(store.splitPanes[1].conversationId).toBe('conv-resumed');
+    expect(store.panels[1].conversationId).toBe('conv-resumed');
     expect(store.activeConversations).toContain('conv-resumed');
     expect(store.activeConversations).toContain('conv-1');
   });
 
   it('should push to activeConversations without replacing', () => {
     const store = createStore({
-      splitPanes: [
+      panels: [
         { conversationId: 'conv-1' },
         { conversationId: null }
       ],
@@ -467,7 +474,7 @@ describe('conversation_resumed — split mode', () => {
 
   it('should not crash when no empty pane available', () => {
     const store = createStore({
-      splitPanes: [
+      panels: [
         { conversationId: 'conv-1' },
         { conversationId: 'conv-2' }
       ],
@@ -483,50 +490,54 @@ describe('conversation_resumed — split mode', () => {
 
     // Should not crash, adds to activeConversations
     expect(store.activeConversations).toContain('conv-resumed');
-    expect(store.splitPanes[0].conversationId).toBe('conv-1');
-    expect(store.splitPanes[1].conversationId).toBe('conv-2');
+    expect(store.panels[0].conversationId).toBe('conv-1');
+    expect(store.panels[1].conversationId).toBe('conv-2');
   });
 });
 
 // =====================================================================
-// 6. selectConversation is no-op in split mode
+// 6. selectConversation routes to active panel in split mode
 // =====================================================================
 
-describe('selectConversation — split mode no-op', () => {
-  it('should not change activeConversations in split mode', () => {
+describe('selectConversation — split mode panel routing', () => {
+  it('should route conversation to active panel in split mode', () => {
     const store = createStore({
-      splitPanes: [
-        { conversationId: 'conv-1' },
-        { conversationId: 'conv-2' }
+      panels: [
+        { id: 'panel-0', conversationId: 'conv-1' },
+        { id: 'panel-1', conversationId: 'conv-2' }
       ],
+      activePanelId: 'panel-1',
       activeConversations: ['conv-1', 'conv-2'],
       currentConversation: 'conv-1'
     });
 
     simulateSelectConversation(store, 'conv-3');
 
-    expect(store.activeConversations).toEqual(['conv-1', 'conv-2']);
+    // Should route conv-3 to the active panel (panel-1)
+    expect(store.panels[1].conversationId).toBe('conv-3');
+    // Panel-0 should be unchanged
+    expect(store.panels[0].conversationId).toBe('conv-1');
   });
 
-  it('should return early without modifying state in split mode', () => {
+  it('should fall back to first panel when no activePanelId', () => {
     const store = createStore({
-      splitPanes: [
-        { conversationId: 'conv-1' },
-        { conversationId: 'conv-2' }
+      panels: [
+        { id: 'panel-0', conversationId: 'conv-1' },
+        { id: 'panel-1', conversationId: 'conv-2' }
       ],
+      activePanelId: null,
       activeConversations: ['conv-1', 'conv-2'],
       currentConversation: 'conv-1'
     });
 
-    const before = [...store.activeConversations];
     simulateSelectConversation(store, 'conv-new');
 
-    expect(store.activeConversations).toEqual(before);
+    expect(store.panels[0].conversationId).toBe('conv-new');
   });
 
-  it('should work normally when splitPanes has only 1 pane (not split mode)', () => {
+  it('should work normally when panels has only 1 pane (not split mode)', () => {
     const store = createStore({
-      splitPanes: [{ conversationId: 'conv-1' }],
+      panels: [{ id: 'panel-0', conversationId: 'conv-1' }],
       activeConversations: ['conv-1'],
       currentConversation: 'conv-1'
     });
@@ -544,7 +555,7 @@ describe('selectConversation — split mode no-op', () => {
 describe('non-split mode — regression', () => {
   it('conversation_created should overwrite activeConversations (single pane)', () => {
     const store = createStore({
-      splitPanes: [{ conversationId: 'conv-1' }],
+      panels: [{ conversationId: 'conv-1' }],
       activeConversations: ['conv-1']
     });
 
@@ -559,7 +570,7 @@ describe('non-split mode — regression', () => {
 
   it('conversation_created should overwrite activeConversations (empty splitPanes)', () => {
     const store = createStore({
-      splitPanes: [],
+      panels: [],
       activeConversations: ['conv-1']
     });
 
@@ -574,7 +585,7 @@ describe('non-split mode — regression', () => {
 
   it('conversation_resumed should overwrite activeConversations in non-split mode', () => {
     const store = createStore({
-      splitPanes: [],
+      panels: [],
       activeConversations: ['conv-1']
     });
 
@@ -590,7 +601,7 @@ describe('non-split mode — regression', () => {
 
   it('selectConversation should work normally in non-split mode', () => {
     const store = createStore({
-      splitPanes: [],
+      panels: [],
       activeConversations: ['conv-1'],
       currentConversation: 'conv-1'
     });
@@ -600,9 +611,9 @@ describe('non-split mode — regression', () => {
     expect(store.activeConversations).toEqual(['conv-2']);
   });
 
-  it('closeSession should work normally without splitPanes', () => {
+  it('closeSession should work normally without panels', () => {
     const store = createStore({
-      splitPanes: [],
+      panels: [],
       activeConversations: ['conv-1'],
       conversations: [{ id: 'conv-1' }],
       messagesMap: { 'conv-1': [] }
@@ -634,61 +645,62 @@ describe('source code verification', () => {
     );
   });
 
-  // closeSession splitPanes cleanup
-  it('closeSession should iterate splitPanes to clear matching conversationId', () => {
+  // closeSession panels cleanup
+  it('closeSession should iterate panels to clear matching conversationId', () => {
     const fnStart = convSource.indexOf('export function closeSession');
     const fnEnd = convSource.indexOf('export function deleteConversation');
     const fn = convSource.slice(fnStart, fnEnd);
-    expect(fn).toContain('for (const pane of store.splitPanes)');
+    expect(fn).toContain('for (const pane of store.panels)');
     expect(fn).toContain('pane.conversationId === conversationId');
     expect(fn).toContain('pane.conversationId = null');
   });
 
-  // deleteConversation splitPanes cleanup
-  it('deleteConversation should iterate splitPanes to clear matching conversationId', () => {
+  // deleteConversation panels cleanup
+  it('deleteConversation should iterate panels to clear matching conversationId', () => {
     const fnStart = convSource.indexOf('export function deleteConversation');
     const fnEnd = convSource.indexOf('export function sendMessage');
     const fn = convSource.slice(fnStart, fnEnd);
-    expect(fn).toContain('for (const pane of store.splitPanes)');
+    expect(fn).toContain('for (const pane of store.panels)');
     expect(fn).toContain('pane.conversationId === conversationId');
     expect(fn).toContain('pane.conversationId = null');
   });
 
-  // selectConversation split mode guard
-  it('selectConversation should return early when splitPanes.length > 1', () => {
+  // selectConversation split mode — routes to active panel
+  it('selectConversation should route to active panel when panels.length > 1', () => {
     const fnStart = convSource.indexOf('export function selectConversation');
     const fnEnd = convSource.indexOf('export function updateConversationSettings');
     const fn = convSource.slice(fnStart, fnEnd);
-    expect(fn).toContain('store.splitPanes.length > 1');
+    expect(fn).toContain('store.panels.length > 1');
+    expect(fn).toContain('setPanelConversation');
     expect(fn).toContain('return');
   });
 
   // handleConversationCreated split mode
-  it('handleConversationCreated should check splitPanes.length > 1', () => {
+  it('handleConversationCreated should check panels.length > 1', () => {
     const fnStart = handlerSource.indexOf('export function handleConversationCreated');
     const fnEnd = handlerSource.indexOf('export function handleConversationResumed');
     const fn = handlerSource.slice(fnStart, fnEnd);
-    expect(fn).toContain('store.splitPanes.length > 1');
-    expect(fn).toContain('emptyPane = store.splitPanes.find');
+    expect(fn).toContain('store.panels.length > 1');
+    expect(fn).toContain('emptyPane = store.panels.find');
     expect(fn).toContain('activeConversations.push');
   });
 
   // handleConversationResumed split mode
-  it('handleConversationResumed should check splitPanes.length > 1', () => {
+  it('handleConversationResumed should check panels.length > 1', () => {
     const fnStart = handlerSource.indexOf('export function handleConversationResumed');
     const fnEnd = handlerSource.indexOf('export function handleConversationDeleted');
     const fn = handlerSource.slice(fnStart, fnEnd);
-    expect(fn).toContain('store.splitPanes.length > 1');
-    expect(fn).toContain('emptyPane = store.splitPanes.find');
+    expect(fn).toContain('store.panels.length > 1');
+    expect(fn).toContain('emptyPane = store.panels.find');
     expect(fn).toContain('activeConversations.push');
   });
 
-  // handleConversationDeleted splitPanes cleanup
-  it('handleConversationDeleted should iterate splitPanes to clear matching conversationId', () => {
+  // handleConversationDeleted panels cleanup
+  it('handleConversationDeleted should iterate panels to clear matching conversationId', () => {
     const fnStart = handlerSource.indexOf('export function handleConversationDeleted');
     const fnEnd = handlerSource.indexOf('export function handleTurnCompleted');
     const fn = handlerSource.slice(fnStart, fnEnd);
-    expect(fn).toContain('for (const pane of store.splitPanes)');
+    expect(fn).toContain('for (const pane of store.panels)');
     expect(fn).toContain('pane.conversationId === msg.conversationId');
     expect(fn).toContain('pane.conversationId = null');
   });
@@ -709,27 +721,27 @@ describe('source code verification', () => {
     expect(fn).toContain('store.activeConversations = [msg.conversationId]');
   });
 
-  // All 3 delete paths have splitPanes cleanup
-  it('all delete paths (closeSession, deleteConversation, handleConversationDeleted) have splitPanes cleanup', () => {
+  // All 3 delete paths have panels cleanup
+  it('all delete paths (closeSession, deleteConversation, handleConversationDeleted) have panels cleanup', () => {
     // closeSession
     const cs = convSource.slice(
       convSource.indexOf('export function closeSession'),
       convSource.indexOf('export function deleteConversation')
     );
-    expect(cs).toContain('store.splitPanes');
+    expect(cs).toContain('store.panels');
 
     // deleteConversation
     const dc = convSource.slice(
       convSource.indexOf('export function deleteConversation'),
       convSource.indexOf('export function sendMessage')
     );
-    expect(dc).toContain('store.splitPanes');
+    expect(dc).toContain('store.panels');
 
     // handleConversationDeleted
     const hcd = handlerSource.slice(
       handlerSource.indexOf('export function handleConversationDeleted'),
       handlerSource.indexOf('export function handleTurnCompleted')
     );
-    expect(hcd).toContain('store.splitPanes');
+    expect(hcd).toContain('store.panels');
   });
 });

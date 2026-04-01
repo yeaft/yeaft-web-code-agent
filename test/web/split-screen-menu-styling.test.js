@@ -284,21 +284,17 @@ describe('SplitPane does NOT use PaneTopBar', () => {
 });
 
 // =====================================================================
-// 7. app.js uses GlobalSidebar
+// 7. app.js — simplified layout (no GlobalSidebar in split mode)
 // =====================================================================
-describe('app.js uses GlobalSidebar', () => {
+describe('app.js simplified layout', () => {
   const appJs = readFile('app.js');
 
-  it('should import GlobalSidebar', () => {
-    expect(appJs).toContain("import GlobalSidebar from './components/GlobalSidebar.js'");
+  it('should NOT import GlobalSidebar (removed in unified panel refactor)', () => {
+    expect(appJs).not.toContain("import GlobalSidebar from './components/GlobalSidebar.js'");
   });
 
-  it('should register GlobalSidebar component', () => {
-    expect(appJs).toContain('GlobalSidebar');
-  });
-
-  it('should render GlobalSidebar in split mode', () => {
-    expect(appJs).toContain('<GlobalSidebar');
+  it('should NOT render GlobalSidebar in split mode', () => {
+    expect(appJs).not.toContain('<GlobalSidebar');
   });
 
   it('should NOT import GlobalToolbar', () => {
@@ -309,8 +305,12 @@ describe('app.js uses GlobalSidebar', () => {
     expect(appJs).not.toContain('<GlobalToolbar');
   });
 
-  it('should keep split-screen-layout wrapper', () => {
-    expect(appJs).toContain('class="split-screen-layout"');
+  it('should NOT have split-screen-layout wrapper (unified via ChatPage)', () => {
+    expect(appJs).not.toContain('class="split-screen-layout"');
+  });
+
+  it('should render ChatPage as the main layout component', () => {
+    expect(appJs).toContain('<ChatPage');
   });
 });
 
@@ -393,8 +393,8 @@ describe('Empty pane state', () => {
     expect(splitPaneJs).toContain('class="pane-empty-state"');
   });
 
-  it('should display selectSession text in empty state', () => {
-    expect(splitPaneJs).toContain("$t('splitScreen.selectSession')");
+  it('should display selectFromSidebar text in empty state', () => {
+    expect(splitPaneJs).toContain("$t('splitScreen.selectFromSidebar')");
   });
 
   it('should have CSS for pane-empty-state', () => {
@@ -412,18 +412,26 @@ describe('Empty pane state', () => {
 });
 
 // =====================================================================
-// 11. Non-split mode not affected — ChatPage.js zero changes
+// 11. ChatPage.js handles both single and multi-panel modes
 // =====================================================================
-describe('ChatPage.js not modified', () => {
+describe('ChatPage.js unified layout', () => {
   const chatPageJs = readFile('components/ChatPage.js');
+
+  it('should import SplitPane for multi-panel mode', () => {
+    expect(chatPageJs).toContain("import SplitPane from './SplitPane.js'");
+  });
 
   it('should NOT import PaneTopBar or GlobalSidebar', () => {
     expect(chatPageJs).not.toContain('PaneTopBar');
     expect(chatPageJs).not.toContain('GlobalSidebar');
   });
 
-  it('should NOT reference splitPanes', () => {
+  it('should NOT reference splitPanes (renamed to panels)', () => {
     expect(chatPageJs).not.toContain('splitPanes');
+  });
+
+  it('should have panels-container for multi-panel layout', () => {
+    expect(chatPageJs).toContain('panels-container');
   });
 
   it('should still use regular sidebar classes', () => {
@@ -461,8 +469,8 @@ describe('PaneTopBar outside click behavior', () => {
 describe('SplitPane close pane', () => {
   const splitPaneJs = readFile('components/SplitPane.js');
 
-  it('should call store.removePane with paneId', () => {
-    expect(splitPaneJs).toContain('store.removePane(props.paneId)');
+  it('should call store.removePanel with paneId', () => {
+    expect(splitPaneJs).toContain('store.removePanel(props.paneId)');
   });
 
   it('should emit close-pane from PaneTopBar to trigger closePane', () => {

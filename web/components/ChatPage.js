@@ -8,11 +8,12 @@ import CrewChatView from './CrewChatView.js';
 import ExpertPanel from './ExpertPanel.js';
 import SubAgentPanel from './SubAgentPanel.js';
 import BtwOverlay from './BtwOverlay.js';
+import SplitPane from './SplitPane.js';
 import { useAuthStore } from '../stores/auth.js';
 
 export default {
   name: 'ChatPage',
-  components: { ChatHeader, MessageList, ChatInput, WorkbenchPanel, SettingsPanel, CrewConfigPanel, CrewChatView, ExpertPanel, SubAgentPanel, BtwOverlay },
+  components: { ChatHeader, MessageList, ChatInput, WorkbenchPanel, SettingsPanel, CrewConfigPanel, CrewChatView, ExpertPanel, SubAgentPanel, BtwOverlay, SplitPane },
   template: `
     <div class="chat-page" :class="{ 'show-sidebar': showMobileSidebar }">
 
@@ -29,7 +30,7 @@ export default {
           <button v-if="canUseWorkbench" class="collapsed-icon-btn" :class="{ active: store.workbenchExpanded }" @click="store.toggleWorkbench()" :title="$t('chat.sidebar.workbench')">
             <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M20 3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H4V5h16v14zM6 7h5v2H6V7zm0 4h5v2H6v-2zm0 4h5v2H6v-2zm7-8h5v10h-5V7z"/></svg>
           </button>
-          <button class="collapsed-icon-btn" @click="store.addPane()" :title="$t('splitScreen.split')">
+          <button class="collapsed-icon-btn" @click="store.addPanel()" :title="$t('splitScreen.split')">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/>
             </svg>
@@ -105,7 +106,7 @@ export default {
                 <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M20 3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H4V5h16v14zM6 7h5v2H6V7zm0 4h5v2H6v-2zm0 4h5v2H6v-2zm7-8h5v10h-5V7z"/></svg>
                 <span class="action-badge" v-if="store.runningSubagentCount > 0">{{ store.runningSubagentCount }}</span>
               </button>
-              <button class="sidebar-icon-btn" @click="store.addPane()" :title="$t('splitScreen.split')">
+              <button class="sidebar-icon-btn" @click="store.addPanel()" :title="$t('splitScreen.split')">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/>
                 </svg>
@@ -173,6 +174,9 @@ export default {
                   <button class="session-pin-btn" @click.stop="store.togglePin(conv.id)" :title="$t('chat.sidebar.unpin')">
                     <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>
                   </button>
+                  <button class="session-split-btn" @click.stop="splitToPanel(conv.id)" :title="$t('splitScreen.splitToPanel')" v-if="!store.isInAnyPanel(conv.id)">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+                  </button>
                   <button class="session-rename-btn" @click.stop="startChatRename(conv)" :title="$t('chat.sidebar.renameConv')">
                     <svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
                   </button>
@@ -215,6 +219,9 @@ export default {
                   <span class="session-time">{{ getConversationTime(conv) }}</span>
                   <button class="session-pin-btn" @click.stop="store.togglePin(conv.id)" :title="$t('chat.sidebar.pin')">
                     <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>
+                  </button>
+                  <button class="session-split-btn" @click.stop="splitToPanel(conv.id)" :title="$t('splitScreen.splitToPanel')" v-if="!store.isInAnyPanel(conv.id)">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
                   </button>
                   <button class="session-rename-btn" @click.stop="startChatRename(conv)" :title="$t('chat.sidebar.renameConv')">
                     <svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
@@ -279,6 +286,9 @@ export default {
                   <button class="session-pin-btn session-pin-btn-crew" @click.stop="store.togglePin(conv.id)" :title="$t('chat.sidebar.unpin')">
                     <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>
                   </button>
+                  <button class="session-split-btn session-split-btn-crew" @click.stop="splitToPanel(conv.id)" :title="$t('splitScreen.splitToPanel')" v-if="!store.isInAnyPanel(conv.id)">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+                  </button>
                   <button class="session-delete-btn" @click.stop="closeSession(conv.id, conv.agentId)" :title="$t('chat.sidebar.closeConv')">
                     <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
                   </button>
@@ -324,6 +334,9 @@ export default {
                   <button class="session-pin-btn session-pin-btn-crew" @click.stop="store.togglePin(conv.id)" :title="$t('chat.sidebar.pin')">
                     <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>
                   </button>
+                  <button class="session-split-btn session-split-btn-crew" @click.stop="splitToPanel(conv.id)" :title="$t('splitScreen.splitToPanel')" v-if="!store.isInAnyPanel(conv.id)">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+                  </button>
                   <button class="session-delete-btn" @click.stop="closeSession(conv.id, conv.agentId)" :title="$t('chat.sidebar.closeConv')">
                     <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
                   </button>
@@ -350,13 +363,13 @@ export default {
       </aside>
 
       <!-- Sidebar / Workbench 分隔线 -->
-      <div class="sidebar-workbench-divider" v-if="canUseWorkbench && store.workbenchExpanded && !store.sidebarCollapsed"></div>
+      <div class="sidebar-workbench-divider" v-if="canUseWorkbench && store.workbenchExpanded && !store.sidebarCollapsed && !store.isSplitMode"></div>
 
-      <!-- Workbench Panel (Middle) -->
-      <WorkbenchPanel v-if="canUseWorkbench" />
+      <!-- Workbench Panel (Middle) — only in single mode -->
+      <WorkbenchPanel v-if="canUseWorkbench && !store.isSplitMode" />
 
-      <!-- Main Chat Area (Right) -->
-      <main class="main-content" :class="{ 'workbench-active': canUseWorkbench && store.workbenchExpanded, 'workbench-maximized': canUseWorkbench && store.workbenchMaximized && store.workbenchExpanded }">
+      <!-- Single-panel Main Chat Area -->
+      <main v-if="!store.isSplitMode" class="main-content" :class="{ 'workbench-active': canUseWorkbench && store.workbenchExpanded, 'workbench-maximized': canUseWorkbench && store.workbenchMaximized && store.workbenchExpanded }">
         <!-- Crew Conversation -->
         <template v-if="isCurrentCrewConversation">
           <ChatHeader @toggle-sidebar="showMobileSidebar = !showMobileSidebar" />
@@ -391,6 +404,17 @@ export default {
           </div>
         </template>
       </main>
+
+      <!-- Multi-panel mode: SplitPane ×N -->
+      <div v-else class="panels-container" :class="'panes-' + store.panels.length">
+        <SplitPane
+          v-for="(panel, idx) in store.panels"
+          :key="panel.id"
+          :paneId="panel.id"
+          :paneIndex="idx"
+          :paneCount="store.panels.length"
+        />
+      </div>
 
       <!-- Settings (floating modal) -->
       <SettingsPanel :visible="showSettingsPanel" @close="showSettingsPanel = false" />
@@ -842,7 +866,16 @@ export default {
         this.store.addMessage({ type: 'system', content: this.$t('chat.session.agentOffline') });
         return;
       }
+      // In multi-panel mode, route to the active panel
+      if (this.store.isSplitMode && this.store.activePanelId) {
+        this.store.setPanelConversation(this.store.activePanelId, conv.id);
+        this.showMobileSidebar = false;
+        return;
+      }
       this.selectConversation(conv.id, conv.agentId);
+    },
+    splitToPanel(conversationId) {
+      this.store.splitToPanel(conversationId);
     },
     closeSession(conversationId, agentId) {
       this.store.closeSession(conversationId, agentId);

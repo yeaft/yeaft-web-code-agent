@@ -647,4 +647,6 @@ export default {
   'splitScreen.occupied': '已打开',
   'splitScreen.pane': '面板',
   'splitScreen.assignSession': '分配会话到面板',
+  'splitScreen.splitToPanel': '在新面板中打开',
+  'splitScreen.selectFromSidebar': '从左侧选择对话',
 };

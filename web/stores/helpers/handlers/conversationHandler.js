@@ -40,14 +40,14 @@ export function handleConversationCreated(store, msg) {
   store.currentAgentInfo = createdAgent;
   // In split mode, assign new conversation to the requesting pane (via _pendingPaneId)
   // or fall back to first empty pane. Never overwrite activeConversations wholesale.
-  if (store.splitPanes.length > 1) {
+  if (store.panels.length > 1) {
     const pendingPaneId = store._pendingPaneId;
     store._pendingPaneId = null;
     if (pendingPaneId) {
-      const targetPane = store.splitPanes.find(p => p.id === pendingPaneId);
+      const targetPane = store.panels.find(p => p.id === pendingPaneId);
       if (targetPane) targetPane.conversationId = msg.conversationId;
     } else {
-      const emptyPane = store.splitPanes.find(p => !p.conversationId);
+      const emptyPane = store.panels.find(p => !p.conversationId);
       if (emptyPane) emptyPane.conversationId = msg.conversationId;
     }
     if (!store.activeConversations.includes(msg.conversationId)) {
@@ -91,14 +91,14 @@ export function handleConversationResumed(store, msg) {
   store.currentAgentInfo = resumedAgent;
   // In split mode, assign resumed conversation to the requesting pane (via _pendingPaneId)
   // or fall back to first empty pane.
-  if (store.splitPanes.length > 1) {
+  if (store.panels.length > 1) {
     const pendingPaneId = store._pendingPaneId;
     store._pendingPaneId = null;
     if (pendingPaneId) {
-      const targetPane = store.splitPanes.find(p => p.id === pendingPaneId);
+      const targetPane = store.panels.find(p => p.id === pendingPaneId);
       if (targetPane) targetPane.conversationId = msg.conversationId;
     } else {
-      const emptyPane = store.splitPanes.find(p => !p.conversationId);
+      const emptyPane = store.panels.find(p => !p.conversationId);
       if (emptyPane) emptyPane.conversationId = msg.conversationId;
     }
     if (!store.activeConversations.includes(msg.conversationId)) {
@@ -163,7 +163,7 @@ export function handleConversationDeleted(store, msg) {
     }
   }
   // Clear from splitPanes if present
-  for (const pane of store.splitPanes) {
+  for (const pane of store.panels) {
     if (pane.conversationId === msg.conversationId) {
       pane.conversationId = null;
     }

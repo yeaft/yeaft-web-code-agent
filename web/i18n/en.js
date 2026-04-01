@@ -647,4 +647,6 @@ export default {
   'splitScreen.occupied': 'Opened',
   'splitScreen.pane': 'Pane',
   'splitScreen.assignSession': 'Assign sessions to panes',
+  'splitScreen.splitToPanel': 'Open in new panel',
+  'splitScreen.selectFromSidebar': 'Select a conversation from the sidebar',
 };

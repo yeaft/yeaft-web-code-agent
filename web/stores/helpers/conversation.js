@@ -62,9 +62,14 @@ export function resumeConversation(store, claudeSessionId, workDir, agentId = nu
 }
 
 export function selectConversation(store, conversationId, agentId) {
-  // In split mode, selectConversation from sidebar is not applicable —
-  // panes are managed via setPaneConversation. Treat as no-op.
-  if (store.splitPanes.length > 1) return;
+  // In split mode, selectConversation from sidebar routes to the active panel
+  if (store.panels.length > 1) {
+    const targetPanelId = store.activePanelId || store.panels[0]?.id;
+    if (targetPanelId) {
+      store.setPanelConversation(targetPanelId, conversationId);
+    }
+    return;
+  }
 
   if (conversationId === store.currentConversation) return;
 
@@ -98,7 +103,7 @@ export function selectConversation(store, conversationId, agentId) {
   }
 
   // Split mode aware — don't nuke other panes' conversations
-  if (store.splitPanes.length > 1) {
+  if (store.panels.length > 1) {
     if (!store.activeConversations.includes(conversationId)) {
       store.activeConversations.push(conversationId);
     }
@@ -230,7 +235,7 @@ export function closeSession(store, conversationId, agentId) {
   }
 
   // Clear from splitPanes if present
-  for (const pane of store.splitPanes) {
+  for (const pane of store.panels) {
     if (pane.conversationId === conversationId) {
       pane.conversationId = null;
     }
@@ -292,7 +297,7 @@ export function deleteConversation(store, conversationId, agentId) {
   }
 
   // Clear from splitPanes if present
-  for (const pane of store.splitPanes) {
+  for (const pane of store.panels) {
     if (pane.conversationId === conversationId) {
       pane.conversationId = null;
     }
