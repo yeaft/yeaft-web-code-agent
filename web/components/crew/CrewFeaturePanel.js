@@ -31,7 +31,8 @@ export default {
     nowTick: { type: Number, required: true },
     icons: { type: Object, required: true },
     roleColorMap: { type: Object, default: () => ({}) },
-    getRoleDisplayName: { type: Function, default: (name) => name }
+    getRoleDisplayName: { type: Function, default: (name) => name },
+    persistedFeatureIds: { type: Set, default: () => new Set() }
   },
   emits: ['toggle-turn', 'expand-feature', 'close-feature', 'ask-submit'],
   data() {
@@ -89,6 +90,8 @@ export default {
       const _blocks = this.featureBlocks; // explicit dependency for Vue reactivity
       return [...this.featureKanban]
         .filter(f => {
+          // Persisted on Agent — always show (messages may be in shard files, not in memory)
+          if (this.persistedFeatureIds.has(f.taskId)) return true;
           // Has messages — always show (core fix from v0.1.179)
           if (this.hasFeatureMessages(f.taskId)) return true;
           // Has todo progress — keep

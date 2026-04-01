@@ -265,7 +265,7 @@ export default {
             backgroundColor: bgColor,
             pixelRatio: 3,
             style: {
-              padding: '24px 32px',
+              padding: '32px',
             },
             filter: (node) => {
               if (node.classList && (node.classList.contains('turn-header') || node.classList.contains('screenshot-btn'))) return false;
