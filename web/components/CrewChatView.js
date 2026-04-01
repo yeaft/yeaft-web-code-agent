@@ -125,6 +125,9 @@ export default {
           <span v-else-if="waitingStatus === 'cli-exited'" class="typing-status-text typing-status-warn">
             {{ $t('chat.waiting.cliExited') }}
           </span>
+          <span v-else-if="waitingStatus === 'thinking'" class="typing-status-text typing-status-thinking">
+            {{ $t('chat.waiting.thinking') }}
+          </span>
         </div>
 
         <div class="crew-scroll-bottom"
@@ -293,6 +296,7 @@ export default {
       expandedHistories: {},
       expandedFeatureTaskId: null,
       nowTick: Date.now(),
+      typingStartTime: 0,
       newRole: this.getEmptyRole(),
       rolePresets
     };
@@ -351,6 +355,7 @@ export default {
       if (this.store.compactStatus?.conversationId === convId && this.store.compactStatus?.status === 'compacting') return 'compacting';
       const health = this.store.sessionHealth?.[convId];
       if (health) return health.status;
+      if (this.typingStartTime && this.nowTick - this.typingStartTime > 8000) return 'thinking';
       return null;
     },
     isInitializing() {
@@ -491,6 +496,9 @@ export default {
   watch: {
     '$route'() {
       this.store.setPaneMobilePanel(this.paneId, null);
+    },
+    isWaitingResponse(val) {
+      this.typingStartTime = val ? Date.now() : 0;
     },
     kanbanFeatureCount(val) {
       this.store.crewInProgressCount = val;

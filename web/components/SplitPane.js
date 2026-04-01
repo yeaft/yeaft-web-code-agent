@@ -65,6 +65,9 @@ export default {
                     <span v-else-if="waitingStatus === 'cli-exited'" class="typing-status-text typing-status-warn">
                       {{ $t('chat.waiting.cliExited') }}
                     </span>
+                    <span v-else-if="waitingStatus === 'thinking'" class="typing-status-text typing-status-thinking">
+                      {{ $t('chat.waiting.thinking') }}
+                    </span>
                   </div>
                 </div>
               </main>
@@ -148,6 +151,26 @@ export default {
       return isProcessing.value && !hasStreamingMessage.value;
     });
 
+    // Reactive timer for long-processing fallback status
+    const typingStartTime = Vue.ref(0);
+    const now = Vue.ref(Date.now());
+    let typingTimer = null;
+
+    Vue.watch(showTypingDots, (show) => {
+      if (show) {
+        typingStartTime.value = Date.now();
+        now.value = Date.now();
+        typingTimer = setInterval(() => { now.value = Date.now(); }, 1000);
+      } else {
+        typingStartTime.value = 0;
+        if (typingTimer) { clearInterval(typingTimer); typingTimer = null; }
+      }
+    });
+
+    Vue.onUnmounted(() => {
+      if (typingTimer) { clearInterval(typingTimer); typingTimer = null; }
+    });
+
     // Event-driven waiting status
     const waitingStatus = Vue.computed(() => {
       if (!isProcessing.value) return null;
@@ -156,6 +179,7 @@ export default {
       if (store.compactStatus?.conversationId === convId && store.compactStatus?.status === 'compacting') return 'compacting';
       const health = store.sessionHealth?.[convId];
       if (health) return health.status;
+      if (typingStartTime.value && now.value - typingStartTime.value > 8000) return 'thinking';
       return null;
     });
 

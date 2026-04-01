@@ -169,6 +169,7 @@
 .typing-status-warn { color: rgba(229, 124, 35, 0.85); }
 .typing-status-error { color: rgba(229, 57, 53, 0.85); }
 .typing-status-compact { color: rgba(91, 155, 213, 0.85); }
+.typing-status-thinking { color: var(--text-muted); }
 
 .typing-refresh-btn {
   margin-left: 6px;
