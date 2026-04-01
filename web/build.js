@@ -61,7 +61,8 @@ const separateVendorJs = [
   'jszip.min.js',
   'docx-preview.min.js',
   'xlsx.min.js',
-  'mermaid.min.js'
+  'mermaid.min.js',
+  'html-to-image.min.js'
 ];
 for (const file of separateVendorJs) {
   const src = join(vendorDir, file);
@@ -163,6 +164,7 @@ const indexHtml = `<!DOCTYPE html>
   <script defer src="docx-preview.min.js"></script>
   <script defer src="xlsx.min.js"></script>
   <script defer src="mermaid.min.js"></script>
+  <script defer src="html-to-image.min.js"></script>
 </head>
 <body>
   <div id="app"></div>
