@@ -16,16 +16,23 @@ Open `http://localhost:3456` — dev mode skips authentication.
 ## Project Structure
 
 - `server/` — Central WebSocket server (Express + ws)
-- `agent/` — Worker machine agent (manages Claude CLI)
+- `agent/` — Worker machine agent (manages Claude CLI, Crew coordination)
 - `web/` — Vue 3 frontend (no build step in dev)
+- `test/` — Vitest unit & integration tests
+- `e2e/` — Playwright end-to-end tests
+- `docs/` — VitePress documentation site
 
 ## Running Tests
 
 ```bash
+# Unit & integration tests
 npm test
+
+# End-to-end tests (requires Playwright browsers installed)
+npm run test:e2e
 ```
 
-264 tests covering server, agent, and integration scenarios.
+2,700+ tests covering server, agent, frontend, and integration scenarios across 68 test files.
 
 ## Building Frontend
 
@@ -54,8 +61,9 @@ Use [GitHub Issues](https://github.com/yeaft/claude-web-chat/issues). Include:
 
 - ES Modules (`import`/`export`) throughout
 - No build step for web in development — browser-native ES modules
-- CSS variables for all colors (both themes must work)
+- CSS variables for all colors (both dark and light themes must work)
 - Inline SVGs for icons (`fill="currentColor"`)
+- Bilingual — all user-facing strings go through `web/i18n/` (en + zh-CN)
 
 ## License
 

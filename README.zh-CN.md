@@ -23,11 +23,25 @@ ChatGPT 风格对话界面，实时工具追踪，会话管理和文件上传。
 - Claude 响应实时流式输出
 - 可视化显示 Read、Edit、Bash 等工具操作
 - 斜杠命令（`/model`、`/memory`、`/skills` 等）+ 自动补全
+- `/btw` 侧边提问 — 在不打断当前任务的情况下快速追问
+- Sub-Agent 面板 — 实时监控和查看嵌套 Agent 工具调用
 - SQLite 会话持久化，支持历史恢复
+- 会话置顶 — 将重要对话固定在侧边栏顶部
 - 拖放上传文件和图片
+- 深色 / 浅色主题一键切换
+- 双语界面（English / 中文），运行时切换语言
 - 移动端响应式布局
 
 ![Chat](docs/images/zh-CN/chat.jpg)
+
+### 分屏模式（Split Screen）
+
+并排打开多个对话 — 最多同时显示 3 个面板。
+
+- 从侧边栏将任意 session 分屏到新面板
+- 每个面板是完全独立的对话视图
+- 活跃面板焦点指示器，便于键盘和侧边栏交互
+- 可逐个关闭面板；全部关闭后自动回到单面板模式
 
 ### 帮帮团（Expert Panel）
 
@@ -47,6 +61,8 @@ AI 专家团队辅助对话 — 选择一个团队（如写作、交易），在
 - 决策者消息在主流中直接显示，按角色分组
 - 多 Agent 跨 worktree 并行执行
 - Feature 完成检测，有新活动时自动重新激活
+- AskUserQuestion 交互卡片 — Agent 可在任务进行中向用户请求决策
+- Typing Indicator 事件驱动健康监控（Agent 离线 / Session 丢失 / 正在压缩）
 
 ![Crew Features](docs/images/zh-CN/crew-features.jpg)
 
@@ -100,10 +116,12 @@ AI 专家团队辅助对话 — 选择一个团队（如写作、交易），在
 │ @yeaft/       │      │    (web/)       │
 │ webchat-agent │      │                 │
 │               │      │ - Vue 3 + Pinia │
-│ - 管理 Claude │      │ - ChatGPT 风格  │
-│   CLI 进程    │      │   三栏布局      │
-│ - 终端 / Git  │      │ - 端到端加密    │
-│ - 文件管理    │      │ - 文件上传      │
+│ - 管理 Claude │      │ - 分屏多面板    │
+│   CLI 进程    │      │ - 端到端加密    │
+│ - Crew 多角色 │      │ - 深色/浅色主题 │
+│   协调        │      │ - 中英双语      │
+│ - 终端 / Git  │      │ - 文件上传      │
+│ - 文件管理    │      │                 │
 └───────────────┘      └─────────────────┘
 ```
 
@@ -358,32 +376,36 @@ npm run build
 
 ```
 claude-web-chat/
-├── server/           # 中央 WebSocket 服务器
-│   ├── index.js      # 入口
-│   ├── ws-agent.js   # Agent 连接与消息处理
-│   ├── ws-client.js  # Web 客户端连接与消息处理
-│   ├── ws-utils.js   # 共享 WS 工具与权限校验
-│   ├── api.js        # REST 接口（认证、会话、用户）
-│   ├── proxy.js      # 端口代理转发
-│   ├── database.js   # SQLite 存储
-│   └── auth.js       # JWT + TOTP + 邮箱验证
-├── agent/            # 工作机器 Agent
-│   ├── cli.js        # CLI 入口（yeaft-agent 命令）
-│   ├── index.js      # 启动与能力检测
-│   ├── connection.js # WebSocket 连接与认证
-│   ├── claude.js     # Claude CLI 进程管理
-│   ├── conversation.js # 会话生命周期
-│   ├── terminal.js   # PTY 终端 (node-pty)
-│   ├── workbench.js  # Git + 文件操作
-│   └── sdk/          # Claude CLI stream-json SDK
-├── web/              # Vue 3 前端
-│   ├── app.js        # Vue 应用入口
-│   ├── build.js      # 生产构建脚本（esbuild）
-│   ├── components/   # Vue 组件
-│   ├── stores/       # Pinia 状态管理 + helpers
-│   └── vendor/       # 第三方库（本地加载，无 CDN）
-├── Dockerfile        # 多阶段生产构建
-└── LICENSE           # MIT
+├── server/              # 中央 WebSocket 服务器
+│   ├── index.js         # 入口
+│   ├── handlers/        # 消息处理器（agent↔client 路由）
+│   ├── api.js           # REST 接口（认证、会话、用户）
+│   ├── proxy.js         # 端口代理转发
+│   ├── database.js      # SQLite 存储
+│   └── auth.js          # JWT + TOTP + 邮箱验证
+├── agent/               # 工作机器 Agent
+│   ├── cli.js           # CLI 入口（yeaft-agent 命令）
+│   ├── index.js         # 启动与能力检测
+│   ├── connection/      # WebSocket 连接、认证与消息路由
+│   ├── claude.js        # Claude CLI 进程管理
+│   ├── conversation.js  # 会话生命周期与斜杠命令
+│   ├── crew/            # 多角色 Crew 协调（13 个模块）
+│   ├── sdk/             # Claude CLI stream-json SDK
+│   ├── terminal.js      # PTY 终端 (node-pty)
+│   └── workbench/       # Git + 文件操作
+├── web/                 # Vue 3 前端
+│   ├── app.js           # Vue 应用入口
+│   ├── build.js         # 生产构建脚本（esbuild）
+│   ├── components/      # Vue 组件（25 个顶级 + crew/ 子目录）
+│   ├── stores/          # Pinia 状态管理 + helpers
+│   ├── styles/          # CSS（23 个样式表，深色/浅色主题）
+│   ├── i18n/            # 国际化翻译（en、zh-CN）
+│   └── vendor/          # 第三方库（本地加载，无 CDN）
+├── test/                # Vitest 单元/集成测试（68 文件，2700+ 用例）
+├── e2e/                 # Playwright 端到端测试
+├── docs/                # VitePress 文档站点
+├── Dockerfile           # 多阶段生产构建
+└── LICENSE              # MIT
 ```
 
 ## 技术栈
@@ -391,22 +413,24 @@ claude-web-chat/
 - **Server**: Node.js, Express, ws, better-sqlite3, compression
 - **Frontend**: Vue 3, Pinia, xterm.js, CodeMirror 5, marked, highlight.js
 - **Build**: esbuild
+- **Testing**: Vitest（2,700+ 单元/集成测试），Playwright（E2E）
 - **Encryption**: TweetNaCl (XSalsa20-Poly1305)
 - **Auth**: JWT, bcrypt, speakeasy (TOTP), nodemailer
+- **Docs**: VitePress
 - **Deploy**: Docker 多阶段构建
 
 ## CI/CD
 
 内置 GitHub Actions 工作流：
 
-- **CI** (`ci.yml`): 每次 push/PR 在 Node 18/20/22 上运行测试 + 构建前端
-- **Release** (`release.yml`): 推送 `v*` tag 时自动发布 npm 包 + Docker 镜像 + GitHub Release
+- **CI** (`ci.yml`): 在 Node 18/20/22 上运行测试 + 构建前端（手动触发 `workflow_dispatch`）
+- **Release** (`release.yml`): 推送 `release-*` tag 时自动发布 npm 包 + Docker 镜像 + GitHub Release
 
 ### 发布新版本
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git tag release-v0.1.294
+git push origin release-v0.1.294
 # GitHub Actions 自动完成后续工作
 ```
 
