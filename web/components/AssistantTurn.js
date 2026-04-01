@@ -261,9 +261,12 @@ export default {
         const bgColor = getComputedStyle(document.body).getPropertyValue('--bg-main').trim() || '#ffffff';
         const dataUrl = await window.htmlToImage.toPng(contentEl, {
           backgroundColor: bgColor,
-          pixelRatio: 2,
+          pixelRatio: 3,
           style: {
             padding: '24px 32px',
+            overflow: 'visible',
+            maxHeight: 'none',
+            maxWidth: 'none',
           },
           filter: (node) => {
             if (node.classList && (node.classList.contains('turn-header') || node.classList.contains('screenshot-btn'))) return false;
