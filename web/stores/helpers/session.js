@@ -134,16 +134,16 @@ export function autoRestoreConversation(store, conversationId) {
     conversationId
   });
 
-  // ★ Restore panels from localStorage (split-screen persistence)
-  restorePanels(store);
+  // ★ Restore panels is now called directly from agentHandler after conversation restore
 }
 
 /**
  * Restore panels from localStorage.
  * Filters out panels with conversationIds that no longer exist in store.conversations.
  * If only 0-1 valid panels remain, exit split mode (empty array).
+ * Exported so agentHandler can call it independently of autoRestoreConversation.
  */
-function restorePanels(store) {
+export function restorePanels(store) {
   // Only restore once per session — skip if already in split mode
   if (store.panels.length > 0) return;
 
@@ -191,7 +191,23 @@ function restorePanels(store) {
       }
       if (!store.messagesMap[panel.conversationId]) {
         store.messagesMap[panel.conversationId] = [];
-        store.sendWsMessage({ type: 'sync_messages', conversationId: panel.conversationId, turns: 5 });
+      }
+      const conv = store.conversations.find(c => c.id === panel.conversationId);
+      if (conv?.type === 'crew') {
+        // Crew conversations: init crew messages + resume session
+        if (!store.crewMessagesMap[panel.conversationId]) {
+          store.crewMessagesMap[panel.conversationId] = [];
+        }
+        store.sendWsMessage({
+          type: 'resume_crew_session',
+          sessionId: panel.conversationId,
+          agentId: conv.agentId || store.currentAgent
+        });
+      } else {
+        // Chat conversations: sync recent messages
+        if (!store.messagesMap[panel.conversationId].length) {
+          store.sendWsMessage({ type: 'sync_messages', conversationId: panel.conversationId, turns: 5 });
+        }
       }
     }
   }
