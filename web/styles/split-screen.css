@@ -77,11 +77,6 @@
   border-left: 1px solid var(--border-color);
 }
 
-/* Active panel highlight in multi-panel mode */
-.split-pane.active-panel {
-  border-top: 2px solid var(--accent);
-}
-
 /* ===== GlobalSidebar divider ===== */
 .gs-divider {
   width: 24px;

@@ -23,7 +23,7 @@ export default {
     paneCount: { type: Number, default: 2 }
   },
   template: `
-    <div class="split-pane" :class="{ 'active-panel': isActivePanel }" @click="setActive">
+    <div class="split-pane" @click="setActive">
       <!-- ChatHeader — always visible, with close-pane button -->
       <ChatHeader
         :conversationId="conversationId"

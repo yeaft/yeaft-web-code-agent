@@ -443,12 +443,8 @@ describe('CSS/Template — split button and active panel', () => {
     expect(splitScreenCss).toMatch(/\.session-item:hover\s+\.session-split-btn/);
   });
 
-  it('should define .active-panel CSS with accent border-top', () => {
-    expect(splitScreenCss).toMatch(/\.split-pane\.active-panel/);
-    const rule = splitScreenCss.match(/\.split-pane\.active-panel\s*\{[^}]+\}/);
-    expect(rule).not.toBeNull();
-    expect(rule[0]).toContain('border-top');
-    expect(rule[0]).toContain('var(--accent)');
+  it('should NOT have active-panel visual style (removed for equal pane heights)', () => {
+    expect(splitScreenCss).not.toMatch(/\.split-pane\.active-panel/);
   });
 
   it('should have session-split-btn in ChatPage template for Chat sessions', () => {
@@ -479,8 +475,9 @@ describe('CSS/Template — split button and active panel', () => {
     expect(chatPageJs).toContain('v-for="(panel, idx) in store.panels"');
   });
 
-  it('should toggle active-panel class on SplitPane click', () => {
-    expect(splitPaneJs).toContain("'active-panel': isActivePanel");
+  it('should set active panel on SplitPane click (without visual style)', () => {
+    // active-panel class removed for equal pane heights; click handler remains for focus routing
+    expect(splitPaneJs).not.toContain("'active-panel': isActivePanel");
     expect(splitPaneJs).toContain('@click="setActive"');
   });
 
