@@ -23,6 +23,10 @@ export const sessionDb = {
     stmts.updateSessionActive.run(active ? 1 : 0, Date.now(), id);
   },
 
+  setPinned(id, pinned) {
+    stmts.updateSessionPinned.run(pinned ? 1 : 0, Date.now(), id);
+  },
+
   get(id) {
     return stmts.getSession.get(id);
   },

@@ -112,7 +112,8 @@ const migrations = [
   `ALTER TABLE users ADD COLUMN email TEXT`,
   `ALTER TABLE users ADD COLUMN agent_secret TEXT`,
   `ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'user'`,
-  `ALTER TABLE messages ADD COLUMN metadata TEXT`
+  `ALTER TABLE messages ADD COLUMN metadata TEXT`,
+  `ALTER TABLE sessions ADD COLUMN is_pinned INTEGER DEFAULT 0`
 ];
 
 for (const migration of migrations) {
@@ -249,6 +250,10 @@ export const stmts = {
 
   updateSessionActive: db.prepare(`
     UPDATE sessions SET is_active = ?, updated_at = ? WHERE id = ?
+  `),
+
+  updateSessionPinned: db.prepare(`
+    UPDATE sessions SET is_pinned = ?, updated_at = ? WHERE id = ?
   `),
 
   getSession: db.prepare(`

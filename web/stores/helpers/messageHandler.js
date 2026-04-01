@@ -214,6 +214,10 @@ export function handleMessage(store, msg) {
       handleConversationRefresh(store, msg);
       break;
 
+    case 'session_pinned':
+      // Server confirms pin state — already applied optimistically
+      break;
+
     case 'execution_cancelled':
       handleExecutionCancelled(store, msg);
       break;

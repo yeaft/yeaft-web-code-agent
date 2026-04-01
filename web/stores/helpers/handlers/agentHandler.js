@@ -121,6 +121,10 @@ export function handleAgentList(store, msg) {
       } else {
         store.conversations.push(serverConv);
       }
+      // Sync pin state from server (server is source of truth)
+      if (serverConv.pinned && !store.pinnedSessions.includes(serverConv.id)) {
+        store.pinnedSessions.push(serverConv.id);
+      }
     }
     // Mark conversations not in server list as agent offline —
     // but only if their agent is truly offline (not just missing from conversation list).
@@ -163,6 +167,8 @@ export function handleAgentList(store, msg) {
       }
     }
   }
+  // Sync pinned sessions to localStorage (server is source of truth)
+  localStorage.setItem('pinned-sessions', JSON.stringify(store.pinnedSessions));
   // ★ Reconnect: 清空客户端残留状态
   store._turnCompletedConvs?.clear();
   store._closedAt = {};

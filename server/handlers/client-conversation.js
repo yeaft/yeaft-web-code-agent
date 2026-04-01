@@ -45,8 +45,11 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         const cutoff = Date.now() - TWO_DAYS_MS;
         const activeSessions = sessionDb.getActiveByUser(client.userId);
         for (const dbSession of activeSessions) {
-          // Auto-deactivate stale sessions (not updated in 2 days)
-          if (dbSession.updated_at < cutoff) {
+          // Pinned sessions never auto-expire
+          if (dbSession.is_pinned) {
+            // Still need to restore pinned sessions to agent memory
+          } else if (dbSession.updated_at < cutoff) {
+            // Auto-deactivate stale sessions (not updated in 2 days)
             try { sessionDb.setActive(dbSession.id, false); } catch (e) { /* ignore */ }
             continue;
           }
@@ -205,6 +208,21 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         conversationId: msg.conversationId
       });
       break;
+
+    case 'pin_session':
+    case 'unpin_session': {
+      const pinConvId = msg.conversationId;
+      if (!pinConvId) break;
+      if (!CONFIG.skipAuth && !verifyConversationOwnership(pinConvId, client.userId)) break;
+      const isPinned = msg.type === 'pin_session';
+      try {
+        sessionDb.setPinned(pinConvId, isPinned);
+        // If pinning, also ensure session is active (reactivate if it was auto-deactivated)
+        if (isPinned) sessionDb.setActive(pinConvId, true);
+      } catch (e) { /* ignore */ }
+      await sendToWebClient(client, { type: 'session_pinned', conversationId: pinConvId, pinned: isPinned });
+      break;
+    }
 
     case 'sync_messages':
       if (msg.conversationId) {
