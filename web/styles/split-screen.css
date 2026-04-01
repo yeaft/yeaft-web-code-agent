@@ -72,6 +72,10 @@
   min-height: 0;
   overflow: hidden;
   position: relative;
+  box-shadow: 0 0 12px rgba(0, 0, 0, 0.08);
+}
+[data-theme="dark"] .split-pane {
+  box-shadow: 0 0 12px rgba(0, 0, 0, 0.2);
 }
 .split-pane + .split-pane {
   border-left: 1px solid var(--border-color);
@@ -268,23 +272,23 @@
   top: 0;
   bottom: 0;
   z-index: 100;
-  width: min(260px, 80%);
   transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* Left panel: slide from left */
+/* Left panel (roles): compact width */
 .split-pane .crew-panel-left {
+  width: min(260px, 80%);
   left: 0;
   transform: translateX(-100%);
   box-shadow: 2px 0 12px rgba(0, 0, 0, 0.15);
 }
 
-/* Right panel: slide from right */
+/* Right panel (features): full pane width — already overlays conversation */
 .split-pane .crew-panel-right {
+  width: 100%;
   left: auto;
   right: 0;
   transform: translateX(100%);
-  box-shadow: -2px 0 12px rgba(0, 0, 0, 0.15);
 }
 
 /* Show panels when mobile-panel class is set */
@@ -304,7 +308,7 @@
   border: unset;
 }
 .split-pane .crew-workspace.hide-features .crew-panel-right {
-  width: min(260px, 80%) !important;
+  width: 100% !important;
   min-width: auto;
   padding: unset;
   border: unset;
