@@ -470,6 +470,34 @@
   font-size: 11px;
 }
 
+/* Screenshot Button */
+.screenshot-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.screenshot-btn:hover {
+  background: var(--bg-user-msg);
+  color: var(--text-primary);
+}
+
+.screenshot-label {
+  font-size: 11px;
+}
+
+.screenshot-spinner {
+  animation: spin 0.8s linear infinite;
+}
+
 /* Syntax Highlighting Theme Overrides */
 .hljs {
   background: transparent !important;

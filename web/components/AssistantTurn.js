@@ -15,7 +15,7 @@ export default {
     }
   },
   template: `
-    <div class="assistant-turn" :class="{ streaming: turn.isStreaming }">
+    <div class="assistant-turn" ref="turnRef" :class="{ streaming: turn.isStreaming }">
       <!-- 1. Text content -->
       <div v-if="turn.textContent" class="turn-content">
         <div class="turn-header">
@@ -72,6 +72,15 @@ export default {
 
       <!-- 5. Copy full response button (visible on hover) -->
       <div class="turn-footer" v-if="turn.textContent && !turn.isStreaming">
+        <button class="screenshot-btn" @click="screenshotContent" :title="screenshotting ? $t('message.screenshotting') : $t('message.screenshot')">
+          <svg v-if="!screenshotting" viewBox="0 0 24 24" width="14" height="14">
+            <path fill="currentColor" d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
+          </svg>
+          <svg v-else class="screenshot-spinner" viewBox="0 0 24 24" width="14" height="14">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none" stroke-dasharray="30 70" />
+          </svg>
+          <span class="screenshot-label">{{ screenshotting ? $t('message.screenshotting') : $t('message.screenshot') }}</span>
+        </button>
         <button class="copy-full-btn" @click="copyFullResponse" :title="fullCopied ? $t('message.copied') : $t('message.copyAll')">
           <svg v-if="!fullCopied" viewBox="0 0 24 24" width="14" height="14">
             <path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
@@ -89,6 +98,8 @@ export default {
     const copied = Vue.ref(false);
     const fullCopied = Vue.ref(false);
     const expanded = Vue.ref(false);
+    const screenshotting = Vue.ref(false);
+    const turnRef = Vue.ref(null);
     const t = Vue.inject('t');
 
     // AskUserQuestion — delegate to AskCard component
@@ -220,6 +231,36 @@ export default {
       }
     };
 
+    const screenshotContent = async () => {
+      if (screenshotting.value || !window.htmlToImage) return;
+      screenshotting.value = true;
+      try {
+        const el = turnRef.value;
+        if (!el) return;
+        const contentEl = el.querySelector('.turn-content');
+        if (!contentEl) return;
+
+        const bgColor = getComputedStyle(document.body).getPropertyValue('--bg-main').trim() || '#ffffff';
+        const dataUrl = await window.htmlToImage.toPng(contentEl, {
+          backgroundColor: bgColor,
+          pixelRatio: 2,
+          filter: (node) => {
+            if (node.classList && (node.classList.contains('turn-header') || node.classList.contains('screenshot-btn'))) return false;
+            return true;
+          }
+        });
+
+        const link = document.createElement('a');
+        link.download = `response-${Date.now()}.png`;
+        link.href = dataUrl;
+        link.click();
+      } catch (e) {
+        console.error('Screenshot failed:', e);
+      } finally {
+        screenshotting.value = false;
+      }
+    };
+
     // Syntax highlighting
     Vue.onMounted(() => {
       if (!window.copyCodeBlock) {
@@ -262,6 +303,8 @@ export default {
       copied,
       fullCopied,
       expanded,
+      screenshotting,
+      turnRef,
       showToolActions,
       latestTool,
       historyTools,
@@ -269,6 +312,7 @@ export default {
       renderedContent,
       copyContent,
       copyFullResponse,
+      screenshotContent,
       onAskSubmit
     };
   }
