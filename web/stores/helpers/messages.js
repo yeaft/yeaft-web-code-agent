@@ -146,6 +146,10 @@ export function formatDbMessage(dbMsg) {
           result.askQuestions = meta.askQuestions;
           result.askAnswered = !!meta.askAnswered;
           result.selectedAnswers = meta.selectedAnswers || null;
+          // Unanswered AskUserQuestion should remain interactive, not history
+          if (!meta.askAnswered) {
+            result.isHistory = false;
+          }
         }
       } catch { /* invalid metadata JSON, ignore */ }
     }

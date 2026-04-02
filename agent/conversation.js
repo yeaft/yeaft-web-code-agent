@@ -840,12 +840,30 @@ export function handleAskUserQuestion(conversationId, input, toolCtx) {
 
 /**
  * 处理 Web UI 的 AskUserQuestion 回答
+ *
+ * Fallback: 如果 requestId 精确匹配失败（例如页面刷新后 agent 重启，
+ * Claude 进程 resume 后重新发起了 AskUserQuestion，产生了新的 requestId），
+ * 则按 conversationId 查找该 conversation 下唯一的 pending question 并 resolve。
  */
 export function handleAskUserAnswer(msg) {
-  const pending = ctx.pendingUserQuestions.get(msg.requestId);
+  let pending = ctx.pendingUserQuestions.get(msg.requestId);
+  let matchedRequestId = msg.requestId;
+
+  if (!pending && msg.conversationId) {
+    // Fallback: find any pending question for this conversation
+    for (const [reqId, entry] of ctx.pendingUserQuestions) {
+      if (entry.conversationId === msg.conversationId) {
+        console.log(`[AskUser] Fallback: requestId ${msg.requestId} not found, using pending ${reqId} for conversation ${msg.conversationId}`);
+        pending = entry;
+        matchedRequestId = reqId;
+        break;
+      }
+    }
+  }
+
   if (pending) {
-    console.log(`[AskUser] Received answer for ${msg.requestId}`);
-    ctx.pendingUserQuestions.delete(msg.requestId);
+    console.log(`[AskUser] Received answer for ${matchedRequestId}`);
+    ctx.pendingUserQuestions.delete(matchedRequestId);
     pending.resolve({
       behavior: 'allow',
       updatedInput: {
@@ -854,7 +872,7 @@ export function handleAskUserAnswer(msg) {
       }
     });
   } else {
-    console.log(`[AskUser] No pending question for requestId: ${msg.requestId}`);
+    console.log(`[AskUser] No pending question for requestId: ${msg.requestId}, conversationId: ${msg.conversationId || 'unknown'}`);
   }
 }
 
