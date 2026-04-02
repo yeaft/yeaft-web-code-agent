@@ -128,7 +128,7 @@ export const useChatStore = defineStore('chat', {
     crewConfigOpen: false,        // crew 配置面板是否打开
     crewConfigMode: 'create',    // 'create' | 'edit'
     crewMobilePanel: null,       // null | 'roles' | 'features' — 移动端 Drawer 状态
-    crewPanelVisible: { roles: true, features: true }, // 桌面端面板可见性
+    crewPanelVisible: { roles: false, features: true }, // 桌面端面板可见性
     crewInProgressCount: 0,      // 进行中 Feature 数量（由 CrewChatView 同步）
 
     // =====================
@@ -453,7 +453,7 @@ export const useChatStore = defineStore('chat', {
         id,
         conversationId,
         // Panel-local state (split mode only; non-split reads global store)
-        crewPanelVisible: { roles: true, features: true },
+        crewPanelVisible: { roles: false, features: true },
         activeRightPanel: null,
         crewMobilePanel: null
       });
@@ -556,7 +556,7 @@ export const useChatStore = defineStore('chat', {
       const makePanelState = (id, convId) => ({
         id,
         conversationId: convId,
-        crewPanelVisible: { roles: true, features: true },
+        crewPanelVisible: { roles: false, features: true },
         activeRightPanel: null,
         crewMobilePanel: null
       });

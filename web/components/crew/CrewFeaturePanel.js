@@ -448,8 +448,14 @@ export default {
     /**
      * Cached accessor for getLatestMessageSummary — avoids calling it 4x per card in template.
      * Cache invalidated via featureBlocks reference identity.
+     * For streaming features, always recompute (skip cache) so text updates in real-time.
      */
     getSummary(taskId) {
+      // Skip cache for streaming features — they update continuously
+      const feature = this.featureKanban.find(f => f.taskId === taskId);
+      if (feature && feature.hasStreaming) {
+        return this.getLatestMessageSummary(taskId);
+      }
       if (!this._summaryCache || this._summaryCacheRef !== this.featureBlocks) {
         this._summaryCache = {};
         this._summaryCacheRef = this.featureBlocks;
@@ -472,7 +478,7 @@ export default {
       const turns = this.getBlockTurns(block);
       if (!turns || turns.length === 0) return null;
 
-      // Walk backward through turns to find the latest visible content (text or route)
+      // Walk backward through turns to find the latest visible content (text, route, or tool-use)
       for (let i = turns.length - 1; i >= 0; i--) {
         const turn = turns[i];
         if (turn.type === 'turn') {
@@ -500,6 +506,20 @@ export default {
               text: `→ ${this.getRoleDisplayName(rm.routeTo)}: ${this.truncateText(rm.routeSummary, 60)}`,
               time: rm.timestamp ? formatTime(rm.timestamp) : '',
               actions: []
+            };
+          }
+          // Tool-use-only turn (no text yet) — show tool name as placeholder
+          if (turn.toolMsgs && turn.toolMsgs.length > 0) {
+            const lastTool = turn.toolMsgs[turn.toolMsgs.length - 1];
+            const rawRole = turn.role || turn.roleName || '';
+            const timestamp = lastTool.timestamp || turn.messages?.[0]?.timestamp;
+            return {
+              icon: turn.roleIcon || '',
+              roleName: this.getRoleDisplayName(rawRole),
+              role: rawRole,
+              text: `🔧 ${lastTool.toolName || 'tool'}...`,
+              time: timestamp ? formatTime(timestamp) : '',
+              actions: (turn.toolMsgs || []).map(t => t.toolName).filter(Boolean)
             };
           }
         }

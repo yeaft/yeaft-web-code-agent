@@ -1291,6 +1291,15 @@
   white-space: nowrap;
 }
 
+/* Streaming shimmer effect for live-updating summary text */
+.crew-feature-card.has-streaming .crew-feature-summary-text {
+  animation: summary-shimmer 2s ease-in-out infinite;
+}
+@keyframes summary-shimmer {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
 /* Feature Expanded Mode — 50/50 layout */
 .crew-workspace.feature-expanded .crew-panel-center {
   flex: 1;
