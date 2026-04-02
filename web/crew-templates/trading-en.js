@@ -144,8 +144,8 @@ All four met = 100% completion; any unmet item deducts proportionally
 # ROUTE format (strict compliance, no improvisation)
 
 **CRITICAL**: ROUTE is a system communication protocol. The format must match exactly, or messages will not be delivered.
-- Must start with `---ROUTE---` and end with `---END_ROUTE---` (three hyphens, not arrow symbols)
-- Do NOT use `ROUTE →`, `ROUTE:`, `→` or any freeform format — the system will not recognize them
+- Must start with \`---ROUTE---\` and end with \`---END_ROUTE---\` (three hyphens, not arrow symbols)
+- Do NOT use \`ROUTE →\`, \`ROUTE:\`, \`→\` or any freeform format — the system will not recognize them
 - Field order: to → task → taskTitle → summary (summary goes last, can be multi-line)
 Parallel dispatch for analysis:
 ---ROUTE---
@@ -242,8 +242,8 @@ Every technical analysis must output this format:
 # ROUTE format (strict compliance, no improvisation)
 
 **CRITICAL**: ROUTE is a system communication protocol. The format must match exactly, or messages will not be delivered.
-- Must start with `---ROUTE---` and end with `---END_ROUTE---` (three hyphens, not arrow symbols)
-- Do NOT use `ROUTE →`, `ROUTE:`, `→` or any freeform format — the system will not recognize them
+- Must start with \`---ROUTE---\` and end with \`---END_ROUTE---\` (three hyphens, not arrow symbols)
+- Do NOT use \`ROUTE →\`, \`ROUTE:\`, \`→\` or any freeform format — the system will not recognize them
 - Field order: to → task → taskTitle → summary (summary goes last, can be multi-line)
 Analysis complete, ROUTE to strategist:
 ---ROUTE---
@@ -309,8 +309,8 @@ Every macro analysis must output this structure:
 # ROUTE format (strict compliance, no improvisation)
 
 **CRITICAL**: ROUTE is a system communication protocol. The format must match exactly, or messages will not be delivered.
-- Must start with `---ROUTE---` and end with `---END_ROUTE---` (three hyphens, not arrow symbols)
-- Do NOT use `ROUTE →`, `ROUTE:`, `→` or any freeform format — the system will not recognize them
+- Must start with \`---ROUTE---\` and end with \`---END_ROUTE---\` (three hyphens, not arrow symbols)
+- Do NOT use \`ROUTE →\`, \`ROUTE:\`, \`→\` or any freeform format — the system will not recognize them
 - Field order: to → task → taskTitle → summary (summary goes last, can be multi-line)
 Research complete, ROUTE to strategist:
 ---ROUTE---
@@ -364,8 +364,8 @@ The strategist believes he can see market cognitive biases and profit from them 
 # ROUTE format (strict compliance, no improvisation)
 
 **CRITICAL**: ROUTE is a system communication protocol. The format must match exactly, or messages will not be delivered.
-- Must start with `---ROUTE---` and end with `---END_ROUTE---` (three hyphens, not arrow symbols)
-- Do NOT use `ROUTE →`, `ROUTE:`, `→` or any freeform format — the system will not recognize them
+- Must start with \`---ROUTE---\` and end with \`---END_ROUTE---\` (three hyphens, not arrow symbols)
+- Do NOT use \`ROUTE →\`, \`ROUTE:\`, \`→\` or any freeform format — the system will not recognize them
 - Field order: to → task → taskTitle → summary (summary goes last, can be multi-line)
 Risk approved, ROUTE back to strategist:
 ---ROUTE---
@@ -439,8 +439,8 @@ When detecting the following, immediately notify strategist and analyst:
 # ROUTE format (strict compliance, no improvisation)
 
 **CRITICAL**: ROUTE is a system communication protocol. The format must match exactly, or messages will not be delivered.
-- Must start with `---ROUTE---` and end with `---END_ROUTE---` (three hyphens, not arrow symbols)
-- Do NOT use `ROUTE →`, `ROUTE:`, `→` or any freeform format — the system will not recognize them
+- Must start with \`---ROUTE---\` and end with \`---END_ROUTE---\` (three hyphens, not arrow symbols)
+- Do NOT use \`ROUTE →\`, \`ROUTE:\`, \`→\` or any freeform format — the system will not recognize them
 - Field order: to → task → taskTitle → summary (summary goes last, can be multi-line)
 Execution complete, ROUTE to strategist:
 ---ROUTE---
@@ -525,8 +525,8 @@ Every analysis must output this structure:
 # ROUTE format (strict compliance, no improvisation)
 
 **CRITICAL**: ROUTE is a system communication protocol. The format must match exactly, or messages will not be delivered.
-- Must start with `---ROUTE---` and end with `---END_ROUTE---` (three hyphens, not arrow symbols)
-- Do NOT use `ROUTE →`, `ROUTE:`, `→` or any freeform format — the system will not recognize them
+- Must start with \`---ROUTE---\` and end with \`---END_ROUTE---\` (three hyphens, not arrow symbols)
+- Do NOT use \`ROUTE →\`, \`ROUTE:\`, \`→\` or any freeform format — the system will not recognize them
 - Field order: to → task → taskTitle → summary (summary goes last, can be multi-line)
 Analysis complete, ROUTE to strategist:
 ---ROUTE---

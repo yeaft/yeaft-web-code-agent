@@ -96,6 +96,158 @@ describe('Agent Registration', () => {
       expect(agents.get('agent1').conversations.size).toBe(1);
       expect(agents.get('agent1').proxyPorts[0].enabled).toBe(false);
     });
+
+    it('should preserve slashCommands and slashCommandDescriptions on reconnect (task-216)', () => {
+      const agents = new Map();
+      const agentId = 'agent_slash';
+
+      // Step 1: Agent first connects
+      agents.set(agentId, {
+        ws: new MockWebSocket(),
+        name: 'SlashAgent',
+        workDir: '/work',
+        conversations: new Map(),
+        sessionKey: null,
+        isAlive: true,
+        capabilities: ['terminal'],
+        proxyPorts: [],
+        slashCommands: [],
+        slashCommandDescriptions: {},
+        status: 'ready',
+        ownerId: 'user1',
+        ownerUsername: 'tester'
+      });
+
+      // Step 2: Agent reports dynamic skills via slash_commands_update
+      const agent = agents.get(agentId);
+      agent.slashCommands = ['/brainstorming', '/review-code', '/sprint'];
+      agent.slashCommandDescriptions = {
+        '/brainstorming': 'Before any creative work',
+        '/review-code': 'Code review',
+        '/sprint': 'Full sprint pipeline'
+      };
+
+      // Step 3: Agent disconnects and reconnects — simulate completeAgentRegistration
+      const existingAgent = agents.get(agentId);
+      const conversations = existingAgent?.conversations || new Map();
+      const proxyPorts = (existingAgent?.proxyPorts || []).map(p => ({ ...p, enabled: false }));
+      const slashCommands = existingAgent?.slashCommands || [];
+      const slashCommandDescriptions = existingAgent?.slashCommandDescriptions || {};
+
+      agents.set(agentId, {
+        ws: new MockWebSocket(),
+        name: 'SlashAgent',
+        workDir: '/work',
+        conversations,
+        sessionKey: null,
+        isAlive: true,
+        capabilities: ['terminal'],
+        proxyPorts,
+        slashCommands,
+        slashCommandDescriptions,
+        status: 'syncing',
+        ownerId: 'user1',
+        ownerUsername: 'tester'
+      });
+
+      // Step 4: Verify slashCommands preserved
+      const reconnected = agents.get(agentId);
+      expect(reconnected.slashCommands).toEqual(['/brainstorming', '/review-code', '/sprint']);
+      expect(reconnected.slashCommandDescriptions).toEqual({
+        '/brainstorming': 'Before any creative work',
+        '/review-code': 'Code review',
+        '/sprint': 'Full sprint pipeline'
+      });
+      expect(reconnected.status).toBe('syncing');
+    });
+
+    it('should default to empty slashCommands when no existingAgent (task-216)', () => {
+      const agents = new Map();
+      const agentId = 'agent_fresh_slash';
+
+      // No existing agent — fresh connect
+      const existingAgent = agents.get(agentId);
+      const slashCommands = existingAgent?.slashCommands || [];
+      const slashCommandDescriptions = existingAgent?.slashCommandDescriptions || {};
+
+      agents.set(agentId, {
+        ws: new MockWebSocket(),
+        name: 'FreshAgent',
+        workDir: '/work',
+        conversations: new Map(),
+        sessionKey: null,
+        isAlive: true,
+        capabilities: ['terminal'],
+        proxyPorts: [],
+        slashCommands,
+        slashCommandDescriptions,
+        status: 'syncing',
+        ownerId: null,
+        ownerUsername: null
+      });
+
+      const fresh = agents.get(agentId);
+      expect(fresh.slashCommands).toEqual([]);
+      expect(fresh.slashCommandDescriptions).toEqual({});
+    });
+
+    it('should include slashCommands in agent_selected response after reconnect (task-216)', () => {
+      const agents = new Map();
+      const agentId = 'agent_selected_slash';
+
+      // Agent with cached slash commands (from previous slash_commands_update)
+      agents.set(agentId, {
+        ws: new MockWebSocket(),
+        name: 'SkillAgent',
+        workDir: '/work',
+        conversations: new Map(),
+        slashCommands: ['/tdd', '/debug'],
+        slashCommandDescriptions: {
+          '/tdd': 'Test-driven development',
+          '/debug': 'Systematic debugging'
+        },
+        capabilities: ['terminal', 'file_editor', 'background_tasks'],
+        status: 'ready',
+        ownerId: 'user1'
+      });
+
+      // Simulate reconnect — preserve slash commands
+      const existingAgent = agents.get(agentId);
+      const slashCommands = existingAgent?.slashCommands || [];
+      const slashCommandDescriptions = existingAgent?.slashCommandDescriptions || {};
+
+      agents.set(agentId, {
+        ws: new MockWebSocket(),
+        name: 'SkillAgent',
+        workDir: '/work',
+        conversations: new Map(),
+        slashCommands,
+        slashCommandDescriptions,
+        capabilities: ['terminal', 'file_editor', 'background_tasks'],
+        proxyPorts: [],
+        status: 'syncing',
+        ownerId: 'user1'
+      });
+
+      // Simulate agent_selected handler building the response
+      const agent = agents.get(agentId);
+      const agentSelectedMsg = {
+        type: 'agent_selected',
+        agentId,
+        agentName: agent.name,
+        workDir: agent.workDir,
+        capabilities: agent.capabilities || ['terminal', 'file_editor', 'background_tasks'],
+        conversations: [],
+        slashCommands: agent.slashCommands || [],
+        slashCommandDescriptions: agent.slashCommandDescriptions || {}
+      };
+
+      expect(agentSelectedMsg.slashCommands).toEqual(['/tdd', '/debug']);
+      expect(agentSelectedMsg.slashCommandDescriptions).toEqual({
+        '/tdd': 'Test-driven development',
+        '/debug': 'Systematic debugging'
+      });
+    });
   });
 });
 
@@ -905,6 +1057,292 @@ describe('Server Restart: DB conversation recovery (task-37/task-44)', () => {
       expect(conversations.has('live_2')).toBe(true);
       expect(conversations.has('db_sess_1')).toBe(false);
       expect(conversations.get('live_1').processing).toBe(true);
+    });
+  });
+});
+
+describe('Slash Commands Preservation on Reconnect (task-216)', () => {
+  describe('slash_commands_update caching', () => {
+    it('should cache slashCommands on agent object via slash_commands_update', () => {
+      const agent = createMockAgent();
+
+      // Simulate slash_commands_update handler (agent-output.js L143-148)
+      const msg = {
+        slashCommands: ['/brainstorming', '/review-code', '/sprint'],
+        slashCommandDescriptions: {
+          '/brainstorming': 'Before any creative work',
+          '/review-code': 'Code review',
+          '/sprint': 'Full sprint pipeline'
+        }
+      };
+      agent.slashCommands = msg.slashCommands || [];
+      if (msg.slashCommandDescriptions) {
+        agent.slashCommandDescriptions = { ...agent.slashCommandDescriptions, ...msg.slashCommandDescriptions };
+      }
+
+      expect(agent.slashCommands).toEqual(['/brainstorming', '/review-code', '/sprint']);
+      expect(agent.slashCommandDescriptions['/brainstorming']).toBe('Before any creative work');
+    });
+
+    it('should merge slashCommandDescriptions across multiple updates', () => {
+      const agent = createMockAgent();
+      agent.slashCommandDescriptions = {};
+
+      // First update
+      agent.slashCommands = ['/foo'];
+      agent.slashCommandDescriptions = { ...agent.slashCommandDescriptions, '/foo': 'Foo skill' };
+
+      // Second update adds more
+      const msg2 = {
+        slashCommands: ['/foo', '/bar'],
+        slashCommandDescriptions: { '/bar': 'Bar skill' }
+      };
+      agent.slashCommands = msg2.slashCommands;
+      agent.slashCommandDescriptions = { ...agent.slashCommandDescriptions, ...msg2.slashCommandDescriptions };
+
+      expect(agent.slashCommands).toEqual(['/foo', '/bar']);
+      expect(agent.slashCommandDescriptions['/foo']).toBe('Foo skill');
+      expect(agent.slashCommandDescriptions['/bar']).toBe('Bar skill');
+    });
+  });
+
+  describe('completeAgentRegistration preserves slash commands', () => {
+    it('should preserve slashCommands from existingAgent on reconnect', () => {
+      const agents = new Map();
+      const agentId = 'agent_reconnect_slash';
+
+      // Agent connected and has cached slash commands
+      agents.set(agentId, {
+        ws: new MockWebSocket(),
+        name: 'TestAgent',
+        workDir: '/work',
+        conversations: new Map(),
+        proxyPorts: [{ port: 3000, enabled: true }],
+        slashCommands: ['/tdd', '/debug', '/review-code'],
+        slashCommandDescriptions: {
+          '/tdd': 'Test-driven development',
+          '/debug': 'Systematic debugging',
+          '/review-code': 'Code review'
+        },
+        status: 'ready'
+      });
+
+      // Simulate completeAgentRegistration on reconnect (ws-agent.js L167-195)
+      const existingAgent = agents.get(agentId);
+      const conversations = existingAgent?.conversations || new Map();
+      const proxyPorts = (existingAgent?.proxyPorts || []).map(p => ({ ...p, enabled: false }));
+      const slashCommands = existingAgent?.slashCommands || [];
+      const slashCommandDescriptions = existingAgent?.slashCommandDescriptions || {};
+
+      agents.set(agentId, {
+        ws: new MockWebSocket(), // new WS connection
+        name: 'TestAgent',
+        workDir: '/work',
+        conversations,
+        sessionKey: null,
+        isAlive: true,
+        capabilities: ['terminal'],
+        proxyPorts,
+        slashCommands,
+        slashCommandDescriptions,
+        status: 'syncing',
+        ownerId: null,
+        ownerUsername: null,
+        version: '1.0.0'
+      });
+
+      const reconnected = agents.get(agentId);
+      expect(reconnected.slashCommands).toEqual(['/tdd', '/debug', '/review-code']);
+      expect(reconnected.slashCommandDescriptions).toEqual({
+        '/tdd': 'Test-driven development',
+        '/debug': 'Systematic debugging',
+        '/review-code': 'Code review'
+      });
+      expect(reconnected.status).toBe('syncing');
+      expect(reconnected.proxyPorts[0].enabled).toBe(false);
+      expect(reconnected.conversations).toBe(conversations);
+    });
+
+    it('should default to empty when no existingAgent (server restart)', () => {
+      const agents = new Map();
+      const agentId = 'agent_no_existing';
+
+      const existingAgent = agents.get(agentId); // undefined
+      const slashCommands = existingAgent?.slashCommands || [];
+      const slashCommandDescriptions = existingAgent?.slashCommandDescriptions || {};
+
+      agents.set(agentId, {
+        ws: new MockWebSocket(),
+        name: 'FreshAgent',
+        workDir: '/work',
+        conversations: new Map(),
+        slashCommands,
+        slashCommandDescriptions,
+        status: 'syncing'
+      });
+
+      expect(agents.get(agentId).slashCommands).toEqual([]);
+      expect(agents.get(agentId).slashCommandDescriptions).toEqual({});
+    });
+
+    it('should handle existingAgent with no slashCommands property (upgrade path)', () => {
+      const agents = new Map();
+      const agentId = 'agent_old';
+
+      // Old agent object created before task-216 fix — no slashCommands fields
+      agents.set(agentId, {
+        ws: new MockWebSocket(),
+        name: 'OldAgent',
+        workDir: '/work',
+        conversations: new Map(),
+        proxyPorts: [],
+        status: 'ready'
+        // Note: no slashCommands or slashCommandDescriptions
+      });
+
+      const existingAgent = agents.get(agentId);
+      const slashCommands = existingAgent?.slashCommands || [];
+      const slashCommandDescriptions = existingAgent?.slashCommandDescriptions || {};
+
+      agents.set(agentId, {
+        ws: new MockWebSocket(),
+        name: 'OldAgent',
+        workDir: '/work',
+        conversations: existingAgent.conversations,
+        proxyPorts: [],
+        slashCommands,
+        slashCommandDescriptions,
+        status: 'syncing'
+      });
+
+      expect(agents.get(agentId).slashCommands).toEqual([]);
+      expect(agents.get(agentId).slashCommandDescriptions).toEqual({});
+    });
+  });
+
+  describe('end-to-end: slash_commands_update → disconnect → reconnect → agent_selected', () => {
+    it('should preserve dynamic skills through full reconnection cycle', () => {
+      const agents = new Map();
+      const agentId = 'agent_e2e_slash';
+
+      // 1. Agent first connects (completeAgentRegistration)
+      agents.set(agentId, {
+        ws: new MockWebSocket(),
+        name: 'E2EAgent',
+        workDir: '/project',
+        conversations: new Map(),
+        sessionKey: 'sk_123',
+        isAlive: true,
+        capabilities: ['terminal', 'file_editor'],
+        proxyPorts: [],
+        slashCommands: [],
+        slashCommandDescriptions: {},
+        status: 'ready',
+        ownerId: 'owner1',
+        ownerUsername: 'alice',
+        version: '2.0.0'
+      });
+
+      // 2. Agent reports skills via slash_commands_update
+      const agent = agents.get(agentId);
+      agent.slashCommands = ['/brainstorming', '/tdd', '/sprint', '/review-code'];
+      agent.slashCommandDescriptions = {
+        '/brainstorming': 'Before any creative work — features, components, designs',
+        '/tdd': 'Writing tests or doing test-driven development',
+        '/sprint': 'Running a full sprint pipeline',
+        '/review-code': 'Reviewing code changes (pre-landing review)'
+      };
+
+      // 3. Agent reconnects — completeAgentRegistration rebuilds the object
+      const existingAgent = agents.get(agentId);
+      const conversations = existingAgent?.conversations || new Map();
+      const proxyPorts = (existingAgent?.proxyPorts || []).map(p => ({ ...p, enabled: false }));
+      const slashCommands = existingAgent?.slashCommands || [];
+      const slashCommandDescriptions = existingAgent?.slashCommandDescriptions || {};
+
+      const newWs = new MockWebSocket();
+      agents.set(agentId, {
+        ws: newWs,
+        name: 'E2EAgent',
+        workDir: '/project',
+        conversations,
+        sessionKey: 'sk_123',
+        isAlive: true,
+        capabilities: ['terminal', 'file_editor'],
+        proxyPorts,
+        slashCommands,
+        slashCommandDescriptions,
+        status: 'syncing',
+        ownerId: 'owner1',
+        ownerUsername: 'alice',
+        version: '2.0.0'
+      });
+
+      // 4. Frontend sends select_agent → server builds agent_selected response
+      const reconnectedAgent = agents.get(agentId);
+      const agentSelectedMsg = {
+        type: 'agent_selected',
+        agentId,
+        agentName: reconnectedAgent.name,
+        workDir: reconnectedAgent.workDir,
+        capabilities: reconnectedAgent.capabilities || ['terminal', 'file_editor', 'background_tasks'],
+        conversations: [...reconnectedAgent.conversations.values()],
+        slashCommands: reconnectedAgent.slashCommands || [],
+        slashCommandDescriptions: reconnectedAgent.slashCommandDescriptions || {}
+      };
+
+      // 5. Verify: frontend receives full slash command list
+      expect(agentSelectedMsg.slashCommands).toEqual([
+        '/brainstorming', '/tdd', '/sprint', '/review-code'
+      ]);
+      expect(agentSelectedMsg.slashCommandDescriptions).toEqual({
+        '/brainstorming': 'Before any creative work — features, components, designs',
+        '/tdd': 'Writing tests or doing test-driven development',
+        '/sprint': 'Running a full sprint pipeline',
+        '/review-code': 'Reviewing code changes (pre-landing review)'
+      });
+      expect(agentSelectedMsg.type).toBe('agent_selected');
+      expect(agentSelectedMsg.agentName).toBe('E2EAgent');
+    });
+
+    it('should preserve slash commands alongside conversations and proxyPorts', () => {
+      const agents = new Map();
+      const agentId = 'agent_all_fields';
+
+      const convs = new Map();
+      convs.set('conv1', { id: 'conv1', workDir: '/w', processing: true });
+
+      agents.set(agentId, {
+        ws: new MockWebSocket(),
+        name: 'MultiFieldAgent',
+        workDir: '/work',
+        conversations: convs,
+        proxyPorts: [{ port: 3000, enabled: true, label: 'dev' }],
+        slashCommands: ['/skill1', '/skill2'],
+        slashCommandDescriptions: { '/skill1': 'Skill one', '/skill2': 'Skill two' },
+        status: 'ready'
+      });
+
+      // Reconnect
+      const existingAgent = agents.get(agentId);
+      agents.set(agentId, {
+        ws: new MockWebSocket(),
+        name: 'MultiFieldAgent',
+        workDir: '/work',
+        conversations: existingAgent?.conversations || new Map(),
+        proxyPorts: (existingAgent?.proxyPorts || []).map(p => ({ ...p, enabled: false })),
+        slashCommands: existingAgent?.slashCommands || [],
+        slashCommandDescriptions: existingAgent?.slashCommandDescriptions || {},
+        status: 'syncing'
+      });
+
+      const a = agents.get(agentId);
+      // All three preserved fields should be intact
+      expect(a.conversations.size).toBe(1);
+      expect(a.conversations.get('conv1').processing).toBe(true);
+      expect(a.proxyPorts[0].enabled).toBe(false);
+      expect(a.slashCommands).toEqual(['/skill1', '/skill2']);
+      expect(a.slashCommandDescriptions).toEqual({ '/skill1': 'Skill one', '/skill2': 'Skill two' });
     });
   });
 });
