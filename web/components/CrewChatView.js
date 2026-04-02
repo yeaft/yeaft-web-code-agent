@@ -542,7 +542,8 @@ export default {
       this.typingStartTime = val ? Date.now() : 0;
     },
     kanbanFeatureCount(val) {
-      this.store.crewInProgressCount = val;
+      const convId = this.effectiveConvId;
+      if (convId) this.store.crewInProgressCounts[convId] = val;
     },
     'effectiveConvId'(newId, oldId) {
       this.store.setPaneMobilePanel(this.paneId, null);

@@ -131,7 +131,7 @@ export default {
                 :class="{ active: isCrewPanelActive('features') }"
                 @click="onCrewPanelToggle('features')">
           <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM7 12h2v5H7zm4-3h2v8h-2zm4-3h2v11h-2z"/></svg>
-          <span v-if="store.crewInProgressCount > 0" class="nav-badge">{{ store.crewInProgressCount }}</span>
+          <span v-if="crewFeatureCount > 0" class="nav-badge">{{ crewFeatureCount }}</span>
         </button>
         <button class="crew-header-nav-btn"
                 :class="{ 'btn-loading': store.refreshingSession }"
@@ -391,6 +391,11 @@ export default {
       return store.runningSubagentCount;
     });
 
+    const crewFeatureCount = Vue.computed(() => {
+      const convId = effectiveConvId.value;
+      return convId ? (store.crewInProgressCounts[convId] || 0) : 0;
+    });
+
     const toggleMcpServer = (serverName, enabled) => {
       store.toggleConversationMcp(serverName, enabled);
     };
@@ -409,6 +414,6 @@ export default {
       document.removeEventListener('click', closeMcpOnOutsideClick);
     });
 
-    return { store, effectiveConvId, effectiveRightPanel, isCrew, headerTitle, agentName, folderPath, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, hasStreamingRoles, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, openCrewEdit, onCrewPanelToggle, isCrewPanelActive, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel, toggleSubAgentPanel, runningSubagentCount };
+    return { store, effectiveConvId, effectiveRightPanel, isCrew, headerTitle, agentName, folderPath, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, hasStreamingRoles, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, openCrewEdit, onCrewPanelToggle, isCrewPanelActive, crewFeatureCount, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel, toggleSubAgentPanel, runningSubagentCount };
   }
 };

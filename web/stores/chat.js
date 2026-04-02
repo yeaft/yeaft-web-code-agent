@@ -129,7 +129,7 @@ export const useChatStore = defineStore('chat', {
     crewConfigMode: 'create',    // 'create' | 'edit'
     crewMobilePanel: null,       // null | 'roles' | 'features' — 移动端 Drawer 状态
     crewPanelVisible: { roles: true, features: true }, // 桌面端面板可见性
-    crewInProgressCount: 0,      // 进行中 Feature 数量（由 CrewChatView 同步）
+    crewInProgressCounts: {},    // { [conversationId]: number } — 进行中 Feature 数量（由 CrewChatView 同步）
 
     // =====================
     // Expert Panel (帮帮团) 状态
