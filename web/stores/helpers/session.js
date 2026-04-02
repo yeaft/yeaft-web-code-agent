@@ -75,12 +75,6 @@ export function dismissRecovery(store) {
 }
 
 export function autoRestoreConversation(store, conversationId) {
-  // 跳过已删除的 crew session，防止 autoRestore 复活
-  if (store._deletedCrewSessionIds?.has(conversationId)) {
-    console.log('[AutoRestore] Skipping deleted crew session:', conversationId);
-    return;
-  }
-
   const conv = store.conversations.find(c => c.id === conversationId);
   if (!conv) return;
 

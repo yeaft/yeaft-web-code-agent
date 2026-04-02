@@ -8,7 +8,7 @@ import { getMessages } from '../crew-i18n.js';
 import { initWorktrees } from './worktree.js';
 import { initSharedDir, writeRoleClaudeMd, updateSharedClaudeMd, backupMemoryContent } from './shared-dir.js';
 import {
-  loadCrewIndex, upsertCrewIndex, removeFromCrewIndex, unhideCrewSession,
+  loadCrewIndex, upsertCrewIndex, removeFromCrewIndex,
   loadSessionMeta, saveSessionMeta, loadSessionMessages, getMaxShardIndex
 } from './persistence.js';
 import { sendCrewMessage, sendCrewOutput, sendStatusUpdate } from './ui-messages.js';
@@ -122,7 +122,6 @@ async function findExistingSessionByProjectDir(projectDir) {
     e.projectDir.replace(/\/+$/, '') === normalizedDir
     && (!agentId || !e.agentId || e.agentId === agentId)
     && e.status !== 'completed'
-    && !e.hidden
   );
 
   if (match) {
@@ -432,9 +431,6 @@ export async function handleDeleteCrewDir(msg) {
  */
 export async function resumeCrewSession(msg) {
   const { sessionId, userId, username } = msg;
-
-  // 用户主动恢复 → 清除 hidden 标记（如果有的话）
-  await unhideCrewSession(sessionId);
 
   if (crewSessions.has(sessionId)) {
     const session = crewSessions.get(sessionId);

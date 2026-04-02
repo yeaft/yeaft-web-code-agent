@@ -696,10 +696,10 @@ export default {
       return this.windowWidth < 640;
     },
     crewConversations() {
-      return this.sortByActivity(this.store.conversations.filter(c => c.type === 'crew'));
+      return this.sortByActivity(this.store.conversations.filter(c => c.type === 'crew' && c.agentOnline !== false));
     },
     normalConversations() {
-      return this.sortByActivity(this.store.conversations.filter(c => c.type !== 'crew'));
+      return this.sortByActivity(this.store.conversations.filter(c => c.type !== 'crew' && c.agentOnline !== false));
     },
     pinnedChatConversations() {
       const pinned = this.store.conversations.filter(c => c.type !== 'crew' && c.agentOnline !== false && this.store.isSessionPinned(c.id));

@@ -29,7 +29,6 @@ export {
 export {
   loadCrewIndex,
   removeFromCrewIndex,
-  hideCrewSession,
   handleLoadCrewHistory
 } from './crew/persistence.js';
 

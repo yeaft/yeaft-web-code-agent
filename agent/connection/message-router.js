@@ -18,7 +18,7 @@ import {
 import {
   createCrewSession, handleCrewHumanInput, handleCrewControl,
   addRoleToSession, removeRoleFromSession,
-  handleListCrewSessions, handleCheckCrewExists, handleDeleteCrewDir, resumeCrewSession, removeFromCrewIndex, hideCrewSession,
+  handleListCrewSessions, handleCheckCrewExists, handleDeleteCrewDir, resumeCrewSession, removeFromCrewIndex,
   handleLoadCrewHistory, handleCheckCrewContext
 } from '../crew.js';
 import { sendToServer, flushMessageBuffer } from './buffer.js';
@@ -252,7 +252,7 @@ export async function handleMessage(msg) {
       break;
 
     case 'delete_crew_session':
-      await hideCrewSession(msg.sessionId);
+      await removeFromCrewIndex(msg.sessionId);
       (await import('../conversation.js')).sendConversationList();
       break;
 

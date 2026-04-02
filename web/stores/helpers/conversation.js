@@ -277,10 +277,7 @@ export function deleteConversation(store, conversationId, agentId) {
     delete store.crewMessagesMap?.[conversationId];
     delete store.crewOlderMessages?.[conversationId];
     delete store.crewStatuses?.[conversationId];
-    // 记录已删除的 crew session，防止 conversation_list 同步时重新加入
-    if (!store._deletedCrewSessionIds) store._deletedCrewSessionIds = new Set();
-    store._deletedCrewSessionIds.add(conversationId);
-    // 从 agent 的 crew index 中隐藏（不是真删），防止 sendConversationList 重新加载
+    // Remove from agent's crew index so it won't reappear
     store.sendWsMessage({
       type: 'delete_crew_session',
       sessionId: conversationId,

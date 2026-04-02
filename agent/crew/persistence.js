@@ -76,44 +76,6 @@ export async function removeFromCrewIndex(sessionId) {
   // 这些文件在 recreate 时会被复用（合并统计数据 + 恢复消息历史）
 }
 
-/**
- * 隐藏 crew session（UI 删除 = 隐藏，不是真删）
- * 在 crew-index 条目上标记 hidden: true + hiddenAt 时间戳，
- * 同时从内存 crewSessions Map 中移除（停止运行态）。
- * 不修改 session.json，不从 index 中移除条目。
- */
-export async function hideCrewSession(sessionId) {
-  const { crewSessions } = await import('./session.js');
-
-  const index = await loadCrewIndex();
-  const entry = index.find(e => e.sessionId === sessionId);
-  if (entry) {
-    entry.hidden = true;
-    entry.hiddenAt = Date.now();
-    await saveCrewIndex(index);
-    console.log(`[Crew] Hidden session ${sessionId} in index`);
-  }
-  // 从内存中移除（停止运行态，防止 sendConversationList 加入）
-  if (crewSessions.has(sessionId)) {
-    crewSessions.delete(sessionId);
-    console.log(`[Crew] Removed session ${sessionId} from active sessions`);
-  }
-}
-
-/**
- * 取消隐藏 crew session（用户主动恢复时调用）
- */
-export async function unhideCrewSession(sessionId) {
-  const index = await loadCrewIndex();
-  const entry = index.find(e => e.sessionId === sessionId);
-  if (entry && entry.hidden) {
-    delete entry.hidden;
-    delete entry.hiddenAt;
-    await saveCrewIndex(index);
-    console.log(`[Crew] Unhidden session ${sessionId} in index`);
-  }
-}
-
 // =====================================================================
 // Session Metadata (.crew/session.json)
 // =====================================================================
