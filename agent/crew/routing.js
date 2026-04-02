@@ -19,7 +19,8 @@ function roleLabel(r) {
  */
 export function parseRoutes(text) {
   const routes = [];
-  const regex = /---ROUTE---\s*\n([\s\S]*?)---END_ROUTE---/g;
+  // ★ Tolerate both underscore and space variants: ---END_ROUTE--- or ---END ROUTE---
+  const regex = /---ROUTE---\s*\n([\s\S]*?)---END[_ ]ROUTE---/g;
   let match;
 
   while ((match = regex.exec(text)) !== null) {
