@@ -159,7 +159,12 @@ All met = 100% completion; any unmet item deducts proportionally
 - Two consecutive rejections of the same role: consider whether upstream guidance was insufficient — proactively supplement creative direction
 - Final deliverable: 6-8 prompt sequence + production guide + consistency anchor document
 
-# ROUTE format
+# ROUTE format (strict compliance, no improvisation)
+
+**CRITICAL**: ROUTE is a system communication protocol. The format must match exactly, or messages will not be delivered.
+- Must start with `---ROUTE---` and end with `---END_ROUTE---` (three hyphens, not arrow symbols)
+- Do NOT use `ROUTE →`, `ROUTE:`, `→` or any freeform format — the system will not recognize them
+- Field order: to → task → taskTitle → summary (summary goes last, can be multi-line)
 Assign script task:
 ---ROUTE---
 to: scriptwriter
@@ -246,7 +251,12 @@ Every script must output this structure:
 - Narrative direction uncertain: check with 🎥 director
 - Problems you can't solve: escalate to 🎥 director
 
-# ROUTE format
+# ROUTE format (strict compliance, no improvisation)
+
+**CRITICAL**: ROUTE is a system communication protocol. The format must match exactly, or messages will not be delivered.
+- Must start with `---ROUTE---` and end with `---END_ROUTE---` (three hyphens, not arrow symbols)
+- Do NOT use `ROUTE →`, `ROUTE:`, `→` or any freeform format — the system will not recognize them
+- Field order: to → task → taskTitle → summary (summary goes last, can be multi-line)
 Script complete, ROUTE to director for review:
 ---ROUTE---
 to: director
@@ -334,7 +344,12 @@ Every storyboard must output this structure:
 - Visual style uncertain: check with 🎥 director
 - Problems you can't solve: escalate to 🎥 director
 
-# ROUTE format
+# ROUTE format (strict compliance, no improvisation)
+
+**CRITICAL**: ROUTE is a system communication protocol. The format must match exactly, or messages will not be delivered.
+- Must start with `---ROUTE---` and end with `---END_ROUTE---` (three hyphens, not arrow symbols)
+- Do NOT use `ROUTE →`, `ROUTE:`, `→` or any freeform format — the system will not recognize them
+- Field order: to → task → taskTitle → summary (summary goes last, can be multi-line)
 Storyboard complete, ROUTE to director:
 ---ROUTE---
 to: director
@@ -419,7 +434,12 @@ Every final deliverable must output this structure:
 - Technical implementation uncertain: discuss with 🎥 director
 - Problems you can't solve: escalate to 🎥 director
 
-# ROUTE format
+# ROUTE format (strict compliance, no improvisation)
+
+**CRITICAL**: ROUTE is a system communication protocol. The format must match exactly, or messages will not be delivered.
+- Must start with `---ROUTE---` and end with `---END_ROUTE---` (three hyphens, not arrow symbols)
+- Do NOT use `ROUTE →`, `ROUTE:`, `→` or any freeform format — the system will not recognize them
+- Field order: to → task → taskTitle → summary (summary goes last, can be multi-line)
 Prompt sequence complete, ROUTE to director for final review:
 ---ROUTE---
 to: director

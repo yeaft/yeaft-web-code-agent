@@ -159,7 +159,12 @@ export default [
 - 连续打回同一角色两次：考虑是上游指导不够，主动补充创作方向说明
 - 最终产出标准：6-8段prompt序列 + 制作指南 + 一致性锚点文档
 
-# ROUTE 格式
+# ROUTE 格式（严格遵守，不可变通）
+
+**CRITICAL**: ROUTE 是系统通信协议，格式必须精确匹配，否则消息无法送达。
+- 必须用 `---ROUTE---` 开头、`---END_ROUTE---` 结尾（三个短横线，不是箭头符号）
+- 不要用 `ROUTE →`、`ROUTE:`、`→` 等自由格式——系统不识别
+- 字段顺序：to → task → taskTitle → summary（summary 放最后，可多行）
 分配脚本任务：
 ---ROUTE---
 to: scriptwriter
@@ -246,7 +251,12 @@ summary: 分镜已审核通过，请组装最终 prompt 序列...
 - 叙事方向不确定：找 🎥 导演(director) 确认
 - 遇到自己无法解决的问题：交给 🎥 导演(director) 决策
 
-# ROUTE 格式
+# ROUTE 格式（严格遵守，不可变通）
+
+**CRITICAL**: ROUTE 是系统通信协议，格式必须精确匹配，否则消息无法送达。
+- 必须用 `---ROUTE---` 开头、`---END_ROUTE---` 结尾（三个短横线，不是箭头符号）
+- 不要用 `ROUTE →`、`ROUTE:`、`→` 等自由格式——系统不识别
+- 字段顺序：to → task → taskTitle → summary（summary 放最后，可多行）
 脚本完成后，ROUTE 给导演审核：
 ---ROUTE---
 to: director
@@ -334,7 +344,12 @@ summary: 已按修改意见调整第3-4段脚本，请重新审核
 - 视觉风格不确定：找 🎥 导演(director) 确认
 - 遇到自己无法解决的问题：交给 🎥 导演(director) 决策
 
-# ROUTE 格式
+# ROUTE 格式（严格遵守，不可变通）
+
+**CRITICAL**: ROUTE 是系统通信协议，格式必须精确匹配，否则消息无法送达。
+- 必须用 `---ROUTE---` 开头、`---END_ROUTE---` 结尾（三个短横线，不是箭头符号）
+- 不要用 `ROUTE →`、`ROUTE:`、`→` 等自由格式——系统不识别
+- 字段顺序：to → task → taskTitle → summary（summary 放最后，可多行）
 分镜完成后，ROUTE 给导演审核：
 ---ROUTE---
 to: director
@@ -419,7 +434,12 @@ summary: 分镜已通过导演审核，请组装最终 AI 视频 prompt 序列
 - 技术实现不确定：找 🎥 导演(director) 讨论
 - 遇到自己无法解决的问题：交给 🎥 导演(director) 决策
 
-# ROUTE 格式
+# ROUTE 格式（严格遵守，不可变通）
+
+**CRITICAL**: ROUTE 是系统通信协议，格式必须精确匹配，否则消息无法送达。
+- 必须用 `---ROUTE---` 开头、`---END_ROUTE---` 结尾（三个短横线，不是箭头符号）
+- 不要用 `ROUTE →`、`ROUTE:`、`→` 等自由格式——系统不识别
+- 字段顺序：to → task → taskTitle → summary（summary 放最后，可多行）
 prompt 序列完成后，ROUTE 给导演做最终审核：
 ---ROUTE---
 to: director

@@ -186,6 +186,15 @@ export async function processRoleOutput(session, roleName, roleQuery, roleState)
             }
           }
 
+          // 通知前端进入 routing 状态
+          sendCrewMessage({
+            type: 'crew_routing',
+            sessionId: session.id,
+            fromRole: roleName,
+            routes: routes.map(r => ({ to: r.to, taskId: r.taskId, taskTitle: r.taskTitle })),
+            status: 'routing'
+          });
+
           const results = await Promise.allSettled(routes.map(route =>
             executeRoute(session, roleName, route)
           ));
@@ -194,6 +203,15 @@ export async function processRoleOutput(session, roleName, roleQuery, roleState)
               console.warn(`[Crew] Route execution failed:`, r.reason);
             }
           }
+
+          // routing 完成，通知前端恢复正常状态
+          sendCrewMessage({
+            type: 'crew_routing',
+            sessionId: session.id,
+            fromRole: roleName,
+            status: 'done'
+          });
+          sendStatusUpdate(session);
         } else {
           const { processHumanQueue } = await import('./human-interaction.js');
           await processHumanQueue(session);
