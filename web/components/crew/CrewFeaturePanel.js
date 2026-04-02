@@ -9,7 +9,7 @@
  *      followed by full message thread using CrewTurnRenderer.
  */
 import {
-  formatDuration, formatTime, getRoleStyle as getRoleStyleFn, shortName
+  formatTime, getRoleStyle as getRoleStyleFn, shortName
 } from './crewHelpers.js';
 import {
   shouldShowTurnDivider, getMaxRound
@@ -254,7 +254,11 @@ export default {
                 <span class="crew-feature-card-count">
                   {{ feature.doneCount }} / {{ feature.totalCount }}
                 </span>
-                <span v-if="feature.createdAt" class="crew-feature-card-elapsed">{{ $t('crew.elapsed', { duration: formatDuration(nowTick - feature.createdAt) }) }}</span>
+                <span v-if="feature.createdAt" class="crew-feature-card-time-range">
+                  <span class="crew-feature-card-time">{{ formatTime(feature.createdAt) }}</span>
+                  <span v-if="feature.lastActivityAt" class="crew-feature-card-time-arrow">&rarr;</span>
+                  <span v-if="feature.lastActivityAt" class="crew-feature-card-time">{{ formatTime(feature.lastActivityAt) }}</span>
+                </span>
               </div>
               <div class="crew-feature-card-bar">
                 <div class="crew-feature-card-bar-fill"
@@ -268,10 +272,6 @@ export default {
                   <span class="crew-feature-summary-time">{{ getSummary(feature.taskId).time }}</span>
                 </div>
                 <div class="crew-feature-summary-text">{{ getSummary(feature.taskId).text }}</div>
-                <div v-if="getSummary(feature.taskId).actions.length > 0" class="crew-feature-summary-actions">
-                  <span class="crew-feature-summary-actions-count">{{ getSummary(feature.taskId).actions.length }} actions</span>
-                  <span class="crew-feature-summary-actions-list">{{ getSummary(feature.taskId).actions.join(', ') }}</span>
-                </div>
               </div>
               <div v-if="getFeatureRoutes(feature.taskId).length > 0" class="crew-feature-route-pipeline">
                 <template v-for="(r, ri) in getFeatureRoutes(feature.taskId)" :key="r.id || ri">
@@ -306,7 +306,11 @@ export default {
                   <span class="crew-feature-card-count">
                     {{ feature.doneCount }} / {{ feature.totalCount }}
                   </span>
-                  <span v-if="feature.createdAt && feature.lastActivityAt" class="crew-feature-card-elapsed">{{ $t('crew.elapsed', { duration: formatDuration(feature.lastActivityAt - feature.createdAt) }) }}</span>
+                  <span v-if="feature.createdAt" class="crew-feature-card-time-range">
+                    <span class="crew-feature-card-time">{{ formatTime(feature.createdAt) }}</span>
+                    <span v-if="feature.lastActivityAt" class="crew-feature-card-time-arrow">&rarr;</span>
+                    <span v-if="feature.lastActivityAt" class="crew-feature-card-time">{{ formatTime(feature.lastActivityAt) }}</span>
+                  </span>
                 </div>
                 <div class="crew-feature-card-bar">
                   <div class="crew-feature-card-bar-fill"
@@ -320,10 +324,6 @@ export default {
                     <span class="crew-feature-summary-time">{{ getSummary(feature.taskId).time }}</span>
                   </div>
                   <div class="crew-feature-summary-text">{{ getSummary(feature.taskId).text }}</div>
-                  <div v-if="getSummary(feature.taskId).actions.length > 0" class="crew-feature-summary-actions">
-                    <span class="crew-feature-summary-actions-count">{{ getSummary(feature.taskId).actions.length }} actions</span>
-                    <span class="crew-feature-summary-actions-list">{{ getSummary(feature.taskId).actions.join(', ') }}</span>
-                  </div>
                 </div>
                 <div v-if="getFeatureRoutes(feature.taskId).length > 0" class="crew-feature-route-pipeline">
                   <template v-for="(r, ri) in getFeatureRoutes(feature.taskId)" :key="r.id || ri">
@@ -351,7 +351,6 @@ export default {
     </aside>
   `,
   methods: {
-    formatDuration,
     formatTime,
     shortNameFn: shortName,
     getRoleStyle(roleName) {

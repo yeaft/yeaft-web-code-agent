@@ -1118,13 +1118,25 @@
   font-weight: 500;
 }
 
-.crew-feature-card-elapsed {
-  font-size: 10px;
-  color: var(--text-muted);
+.crew-feature-card-time-range {
+  display: flex;
+  align-items: center;
+  gap: 3px;
   margin-left: auto;
   flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text-muted);
   font-variant-numeric: tabular-nums;
   opacity: 0.7;
+}
+
+.crew-feature-card-time {
+  white-space: nowrap;
+}
+
+.crew-feature-card-time-arrow {
+  font-size: 9px;
+  opacity: 0.6;
 }
 
 /* Progress Bar */
@@ -1274,26 +1286,6 @@
 }
 
 .crew-feature-summary-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.crew-feature-summary-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  color: var(--text-muted);
-  overflow: hidden;
-}
-
-.crew-feature-summary-actions-count {
-  flex-shrink: 0;
-  font-weight: 500;
-}
-
-.crew-feature-summary-actions-list {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
