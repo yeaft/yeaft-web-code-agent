@@ -209,6 +209,19 @@ export function sendCrewOutput(session, roleName, outputType, rawMessage, extra 
 }
 
 /**
+ * 从当前活跃 messages（不含历史 shard）中提取有消息的 features。
+ * 避免发送全量 features 到前端导致 feature panel 渲染卡顿。
+ */
+function getActiveFeatures(session) {
+  const activeTaskIds = new Set();
+  for (const m of session.uiMessages) {
+    if (m.taskId) activeTaskIds.add(m.taskId);
+  }
+  return Array.from(session.features.values())
+    .filter(f => activeTaskIds.has(f.taskId));
+}
+
+/**
  * 发送 session 状态更新
  */
 export function sendStatusUpdate(session) {
@@ -241,7 +254,7 @@ export function sendStatusUpdate(session) {
         .filter(([, s]) => s.turnActive && s.currentTool)
         .map(([name, s]) => [name, s.currentTool])
     ),
-    features: Array.from(session.features.values()),
+    features: getActiveFeatures(session),
     initProgress: session.initProgress || null
   });
 
