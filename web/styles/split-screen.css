@@ -180,14 +180,6 @@
   }
 }
 
-/* ===== Pane Sidebar Toggle (hamburger in split mode) ===== */
-.pane-sidebar-toggle {
-  display: flex !important;
-  position: absolute;
-  left: 8px;
-  top: 50%;
-  transform: translateY(-50%);
-}
 
 /* ===== Pane Sidebar Overlay ===== */
 .pane-sidebar-overlay {

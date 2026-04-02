@@ -1301,6 +1301,16 @@
   flex-shrink: 0;
 }
 
+/* Split-pane: feature expanded keeps same width as list mode (no 50% expansion) */
+.split-pane .crew-workspace.feature-expanded .crew-panel-center {
+  flex: unset;
+}
+
+.split-pane .crew-workspace.feature-expanded .crew-panel-right {
+  width: auto;
+  flex-shrink: unset;
+}
+
 /* Expanded Feature Header */
 .crew-feature-expanded-header {
   display: flex;
