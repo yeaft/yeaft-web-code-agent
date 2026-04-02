@@ -612,6 +612,13 @@
   max-width: none !important;
 }
 
+/* Screenshot mode: reset turn-content padding-right (normally 40px for hover buttons)
+   so html-to-image clones the element with symmetric padding.
+   The toPng style option then applies uniform padding: 32px on the clone. */
+.turn-content.screenshot-mode {
+  padding-right: 0 !important;
+}
+
 /* Export MD Button */
 .export-md-btn {
   display: flex;
