@@ -77,7 +77,7 @@ export function renderMarkdown(text) {
   if (!text || typeof text !== 'string') return '';
   // Strip ROUTE blocks and TASKS blocks (tasks shown in dedicated panel)
   // First strip complete blocks, then strip partial/unclosed blocks (visible during streaming)
-  text = text.replace(/---ROUTE---[\s\S]*?---END_ROUTE---/g, '').trim();
+  text = text.replace(/---ROUTE---[\s\S]*?---END[_ ]ROUTE---/g, '').trim();
   text = text.replace(/---TASKS---[\s\S]*?---END_TASKS---/g, '').trim();
   text = text.replace(/---ROUTE---[\s\S]*$/g, '').trim();
   text = text.replace(/---TASKS---[\s\S]*$/g, '').trim();
