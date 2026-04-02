@@ -1,6 +1,6 @@
 export default {
   name: 'ChatHeader',
-  emits: ['toggle-sidebar', 'close-pane', 'toggle-pane-sidebar'],
+  emits: ['toggle-sidebar', 'close-pane'],
   props: {
     conversationId: { type: String, default: null },
     paneId: { type: String, default: null },
@@ -11,13 +11,6 @@ export default {
       <!-- Mobile sidebar toggle — hidden on desktop and in split mode -->
       <button class="header-sidebar-toggle" v-if="!store.isSplitMode"
               @click="$emit('toggle-sidebar')">
-        <svg viewBox="0 0 24 24" width="16" height="16">
-          <path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/>
-        </svg>
-      </button>
-      <!-- Split-mode pane sidebar toggle -->
-      <button class="header-sidebar-toggle pane-sidebar-toggle" v-if="store.isSplitMode && paneId"
-              @click="$emit('toggle-pane-sidebar')">
         <svg viewBox="0 0 24 24" width="16" height="16">
           <path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/>
         </svg>
