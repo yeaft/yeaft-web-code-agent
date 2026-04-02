@@ -187,6 +187,8 @@ async function resumeSession(session) {
     message: { role: 'assistant', content: [{ type: 'text', text: 'Session 已恢复' }] }
   });
   sendStatusUpdate(session);
+  // Status changed to running — persist
+  saveSessionMeta(session).catch(e => console.warn('[Crew] Failed to save after resume:', e.message));
 
   if (session.pendingRoutes.length > 0) {
     const pending = session.pendingRoutes.slice();

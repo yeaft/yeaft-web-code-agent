@@ -6,6 +6,7 @@ import { join } from 'path';
 import { sendCrewMessage, sendCrewOutput, sendStatusUpdate } from './ui-messages.js';
 import { ensureTaskFile, appendTaskRecord, readTaskFile, updateKanban, readKanban, saveRoleWorkSummary } from './task-files.js';
 import { createRoleQuery, clearRoleSessionId } from './role-query.js';
+import { saveSessionMeta } from './persistence.js';
 import ctx from '../context.js';
 
 /** Format role label */
@@ -169,6 +170,8 @@ export async function executeRoute(session, fromRole, route) {
       message: summary
     });
     sendStatusUpdate(session);
+    // Status changed to waiting_human — persist
+    saveSessionMeta(session).catch(e => console.warn('[Crew] Failed to save after →human:', e.message));
     return;
   }
 

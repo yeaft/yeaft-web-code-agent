@@ -119,6 +119,24 @@ export async function unhideCrewSession(sessionId) {
 // =====================================================================
 
 const MESSAGE_SHARD_SIZE = 256 * 1024; // 256KB per shard
+const SAVE_DEBOUNCE_MS = 10_000; // 10 seconds
+
+/**
+ * Debounced version of saveSessionMeta.
+ * Coalesces rapid-fire calls (e.g. multiple role turn-ends) into a single
+ * disk write per session, at most once every SAVE_DEBOUNCE_MS.
+ */
+export function debouncedSaveSessionMeta(session) {
+  if (session._saveDebounceTimer) {
+    clearTimeout(session._saveDebounceTimer);
+  }
+  session._saveDebounceTimer = setTimeout(() => {
+    session._saveDebounceTimer = null;
+    saveSessionMeta(session).catch(e =>
+      console.warn('[Crew] Debounced save failed:', e.message)
+    );
+  }, SAVE_DEBOUNCE_MS);
+}
 
 export async function saveSessionMeta(session) {
   const meta = {

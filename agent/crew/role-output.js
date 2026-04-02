@@ -6,6 +6,7 @@ import { sendCrewMessage, sendCrewOutput, sendStatusUpdate, endRoleStreaming } f
 import { saveRoleSessionId, clearRoleSessionId, classifyRoleError, createRoleQuery } from './role-query.js';
 import { parseRoutes, executeRoute, dispatchToRole } from './routing.js';
 import { parseCompletedTasks, updateFeatureIndex, appendChangelog, saveRoleWorkSummary, updateKanban } from './task-files.js';
+import { debouncedSaveSessionMeta, saveSessionMeta } from './persistence.js';
 import ctx from '../context.js';
 
 // Context 使用率常量（运行时从 ctx.CONFIG 读取）
@@ -170,6 +171,8 @@ export async function processRoleOutput(session, roleName, roleQuery, roleState)
         });
 
         sendStatusUpdate(session);
+        // Cost/tokens/messages updated — debounced persist (coalesces rapid turn-ends)
+        debouncedSaveSessionMeta(session);
 
         // 执行路由
         if (routes.length > 0) {
@@ -267,6 +270,8 @@ export async function processRoleOutput(session, roleName, roleQuery, roleState)
             message: errDetail
           });
           sendStatusUpdate(session);
+          // Status changed to waiting_human — persist
+          saveSessionMeta(session).catch(e => console.warn('[Crew] Failed to save after error→human:', e.message));
         }
         return;
       }

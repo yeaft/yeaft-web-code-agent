@@ -5,6 +5,7 @@
 import { initRoleDir, updateSharedClaudeMd } from './shared-dir.js';
 import { saveRoleSessionId } from './role-query.js';
 import { sendCrewMessage, sendCrewOutput, sendStatusUpdate } from './ui-messages.js';
+import { saveSessionMeta, upsertCrewIndex } from './persistence.js';
 
 /** Format role label */
 function roleLabel(r) {
@@ -94,6 +95,9 @@ export async function addRoleToSession(msg) {
   }
 
   sendStatusUpdate(session);
+  // Roles changed — persist
+  saveSessionMeta(session).catch(e => console.warn('[Crew] Failed to save after addRole:', e.message));
+  upsertCrewIndex(session).catch(e => console.warn('[Crew] Failed to update index after addRole:', e.message));
 }
 
 /**
@@ -152,4 +156,7 @@ export async function removeRoleFromSession(msg) {
   });
 
   sendStatusUpdate(session);
+  // Roles changed — persist
+  saveSessionMeta(session).catch(e => console.warn('[Crew] Failed to save after removeRole:', e.message));
+  upsertCrewIndex(session).catch(e => console.warn('[Crew] Failed to update index after removeRole:', e.message));
 }

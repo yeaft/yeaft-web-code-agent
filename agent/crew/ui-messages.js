@@ -3,7 +3,6 @@
  * sendCrewMessage, sendCrewOutput, sendStatusUpdate, endRoleStreaming, findActiveRole
  */
 import ctx from '../context.js';
-import { upsertCrewIndex, saveSessionMeta } from './persistence.js';
 
 /**
  * 发送 crew 消息到 server（透传到 Web）
@@ -257,8 +256,6 @@ export function sendStatusUpdate(session) {
     features: getActiveFeatures(session),
     initProgress: session.initProgress || null
   });
-
-  // 异步更新持久化
-  upsertCrewIndex(session).catch(e => console.warn('[Crew] Failed to update index:', e.message));
-  saveSessionMeta(session).catch(e => console.warn('[Crew] Failed to save session meta:', e.message));
+  // Persist is NOT called here — callers that change persistent state
+  // (status, roles, cost, messages) must call saveSessionMeta explicitly.
 }
