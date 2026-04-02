@@ -1398,6 +1398,11 @@
     display: flex;
   }
 
+  /* Hide "Open in new panel" menu item on mobile — split screen not available */
+  .split-to-panel-item {
+    display: none !important;
+  }
+
   /* Show sidebar header on mobile */
   .sidebar-header-mobile {
     display: flex;
@@ -1429,6 +1434,24 @@
   /* Adjust header for mobile — no extra padding needed, sidebar toggle is inline */
   .chat-header {
     min-height: 48px;
+  }
+
+  /* Mobile: center title single-line, hide work dir path */
+  .chat-title-group {
+    text-align: center;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .chat-title-path {
+    display: none;
+  }
+
+  .chat-title {
+    font-size: 14px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .chat-header h1 {

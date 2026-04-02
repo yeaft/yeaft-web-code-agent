@@ -27,10 +27,10 @@ export default {
               @click="reloadPage"
               title="Reload page">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/>
+          <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
         </svg>
       </button>
-      <div class="chat-title-group">
+      <div class="chat-title-group" :title="folderPath">
         <div class="chat-title">{{ headerTitle }}</div>
         <div v-if="folderPath || (store.isSplitMode && agentName)" class="chat-title-path">
           <span v-if="store.isSplitMode && agentName" class="chat-title-agent">{{ agentName }}</span>
