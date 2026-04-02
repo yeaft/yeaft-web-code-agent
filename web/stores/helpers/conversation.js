@@ -3,6 +3,7 @@
 import { startProcessingWatchdog, stopProcessingWatchdog } from './watchdog.js';
 import { setSessionLoading, saveOpenSessions } from './session.js';
 import { ensureConnected } from './websocket.js';
+import { markAllToolsCompleted } from './handlers/conversationHandler.js';
 import { t } from '../../utils/i18n.js';
 
 export function selectAgent(store, agentId) {
@@ -420,6 +421,7 @@ export function cancelExecution(store) {
   const status = store.executionStatusMap[convId];
   if (status) status.currentTool = null;
   store.finishStreamingForConversation(convId);
+  markAllToolsCompleted(store, convId);
 
   store.addMessage({
     type: 'system',
@@ -585,6 +587,7 @@ export function cancelExecutionForConversation(store, conversationId) {
   const status = store.executionStatusMap[conversationId];
   if (status) status.currentTool = null;
   store.finishStreamingForConversation(conversationId);
+  markAllToolsCompleted(store, conversationId);
 
   store.addMessageToConversation(conversationId, {
     type: 'system',

@@ -17,6 +17,11 @@ export function markAllToolsCompleted(store, convId) {
   for (const msg of msgs) {
     if (msg.type === 'tool-use' && !msg.hasResult) {
       msg.hasResult = true;
+      // Expire unanswered AskUserQuestion cards so they show expired state
+      if (msg.toolName === 'AskUserQuestion' && !msg.askAnswered && !msg.selectedAnswers) {
+        msg.isHistory = true;
+        msg.askRequestId = null;
+      }
     }
   }
 }
