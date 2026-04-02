@@ -244,7 +244,7 @@ ${m.routingIntro}
 \`\`\`
 ---ROUTE---
 to: <roleName>
-summary: <brief description>
+summary: <必须填写具体内容：你完成了什么、需要对方做什么。禁止留空！>
 ---END_ROUTE---
 \`\`\`
 
