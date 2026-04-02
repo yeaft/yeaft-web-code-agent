@@ -311,11 +311,11 @@ export async function sendConversationList() {
       type: 'crew',
     });
   }
-  // 追加索引中已停止的 crew sessions（不重复，跳过 hidden）
+  // 追加索引中已停止的 crew sessions（不重复）
   try {
     const index = await loadCrewIndex();
     for (const entry of index) {
-      if (!activeCrewIds.has(entry.sessionId) && !entry.hidden) {
+      if (!activeCrewIds.has(entry.sessionId)) {
         list.push({
           id: entry.sessionId,
           workDir: entry.projectDir,
