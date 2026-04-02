@@ -4,6 +4,7 @@
  */
 import { dispatchToRole } from './routing.js';
 import { sendStatusUpdate } from './ui-messages.js';
+import { debouncedSaveSessionMeta } from './persistence.js';
 
 /**
  * 处理人的输入
@@ -50,6 +51,8 @@ export async function handleCrewHumanInput(msg) {
     session.status = 'running';
     session.waitingHumanContext = null;
     sendStatusUpdate(session);
+    // Status changed + new human message — persist (debounced, dispatch will follow)
+    debouncedSaveSessionMeta(session);
 
     const target = targetRole || waitingContext?.fromRole || session.decisionMaker;
     await dispatchToRole(session, target, buildHumanContent('人工回复:', content), 'human');
