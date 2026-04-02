@@ -111,13 +111,33 @@ export default {
         <!-- Typing dots: visible after user sends message, before AI responds -->
         <div v-if="isWaitingResponse" class="typing-indicator" :class="waitingStatus ? ('status-' + waitingStatus) : ''">
           <span></span><span></span><span></span>
-          <span class="running-cat" aria-hidden="true">
-            <span class="cat-body">
-              <span class="cat-head"><span class="cat-ear cat-ear-l"></span><span class="cat-ear cat-ear-r"></span></span>
-              <span class="cat-tail"></span>
-              <span class="cat-leg cat-leg-front"></span>
-              <span class="cat-leg cat-leg-back"></span>
-            </span>
+          <span class="svg-running-cat" aria-hidden="true">
+            <svg viewBox="0 0 34 28" xmlns="http://www.w3.org/2000/svg">
+              <g class="svg-cat-tail-group">
+                <path class="svg-cat-tail" d="M6 15 Q1 10 3 5 Q4 3 6 4" stroke-width="1.8"/>
+              </g>
+              <g class="svg-cat-leg-bl"><path class="svg-cat-leg" d="M10 18 L8 24 Q8 25.5 9.5 25.5 L10.5 25.5" stroke-width="0" /></g>
+              <g class="svg-cat-leg-br"><path class="svg-cat-leg" d="M8 18 L6 24 Q6 25.5 7.5 25.5 L8.5 25.5" stroke-width="0" /></g>
+              <ellipse class="svg-cat-body" cx="15" cy="16" rx="9" ry="4.5"/>
+              <g class="svg-cat-leg-fl"><path class="svg-cat-leg" d="M22 18 L24 24 Q24 25.5 22.5 25.5 L21.5 25.5" stroke-width="0" /></g>
+              <g class="svg-cat-leg-fr"><path class="svg-cat-leg" d="M20 18 L22 24 Q22 25.5 20.5 25.5 L19.5 25.5" stroke-width="0" /></g>
+              <circle class="svg-cat-head" cx="24" cy="10" r="5.5"/>
+              <g class="svg-cat-ear-l"><polygon class="svg-cat-ear" points="19,7 21,1 23,6"/></g>
+              <g class="svg-cat-ear-r"><polygon class="svg-cat-ear" points="25,6 27,1 29,7"/></g>
+              <polygon class="svg-cat-nose" points="19.8,6.5 21.2,2 22.3,5.8" opacity="0.25"/>
+              <polygon class="svg-cat-nose" points="25.7,5.8 26.8,2 28.2,6.5" opacity="0.25"/>
+              <ellipse class="svg-cat-eye" cx="22.2" cy="9.5" rx="1.5" ry="1.7"/>
+              <ellipse class="svg-cat-eye" cx="26.5" cy="9.5" rx="1.5" ry="1.7"/>
+              <ellipse class="svg-cat-pupil" cx="22.6" cy="9.8" rx="0.8" ry="1.0"/>
+              <ellipse class="svg-cat-pupil" cx="26.9" cy="9.8" rx="0.8" ry="1.0"/>
+              <ellipse class="svg-cat-nose" cx="24.5" cy="12" rx="0.8" ry="0.5"/>
+              <path class="svg-cat-mouth" d="M24.5 12.5 Q24 13.5 23.2 13.2" stroke-width="0.5"/>
+              <path class="svg-cat-mouth" d="M24.5 12.5 Q25 13.5 25.8 13.2" stroke-width="0.5"/>
+              <line class="svg-cat-whisker" x1="20" y1="11" x2="16" y2="10" stroke-width="0.4"/>
+              <line class="svg-cat-whisker" x1="20" y1="12" x2="16" y2="12.5" stroke-width="0.4"/>
+              <line class="svg-cat-whisker" x1="28.5" y1="11" x2="32.5" y2="10" stroke-width="0.4"/>
+              <line class="svg-cat-whisker" x1="28.5" y1="12" x2="32.5" y2="12.5" stroke-width="0.4"/>
+            </svg>
           </span>
           <span v-if="waitingStatus === 'disconnected'" class="typing-status-text typing-status-error">
             {{ $t('chat.waiting.disconnected') }}
@@ -134,9 +154,6 @@ export default {
           </span>
           <span v-else-if="waitingStatus === 'cli-exited'" class="typing-status-text typing-status-warn">
             {{ $t('chat.waiting.cliExited') }}
-          </span>
-          <span v-else-if="waitingStatus === 'thinking'" class="typing-status-text typing-status-thinking">
-            {{ $t('chat.waiting.thinking') }}
           </span>
         </div>
 
