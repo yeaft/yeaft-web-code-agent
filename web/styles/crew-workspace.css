@@ -1424,7 +1424,51 @@
   margin-top: 6px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 2px;
+}
+
+/* Task group within Route Activity */
+.crew-route-task-group {
+  border-bottom: 1px solid var(--border-color-subtle, rgba(255,255,255,0.04));
+  padding-bottom: 4px;
+}
+.crew-route-task-group:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.crew-route-task-group-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  padding: 4px 0;
+  user-select: none;
+}
+
+.crew-route-task-group-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.crew-route-task-group-count {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.crew-route-task-group-items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 14px;
 }
 
 .crew-route-activity-item {
@@ -1433,21 +1477,11 @@
   gap: 2px;
   font-size: 11px;
   color: var(--text-secondary);
-  padding: 4px 0;
-  border-bottom: 1px solid var(--border-color-subtle, rgba(255,255,255,0.04));
+  padding: 2px 0;
 }
 
 .crew-route-activity-item:last-child {
   border-bottom: none;
-}
-
-.crew-route-activity-task-line {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .crew-route-activity-route-line {
@@ -1465,7 +1499,7 @@
 
 .crew-route-activity-from {
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--role-color, var(--text-primary));
 }
 
 .crew-route-activity-arrow {
@@ -1475,7 +1509,7 @@
 
 .crew-route-activity-to {
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--role-color, var(--text-primary));
 }
 
 .crew-route-activity-time {
