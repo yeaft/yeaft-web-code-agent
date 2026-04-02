@@ -213,9 +213,6 @@ export function closeSession(store, conversationId, agentId) {
       type: 'delete_crew_session',
       sessionId: conversationId
     });
-    // Blacklist this session so incoming conversation_list won't resurrect it
-    if (!store._deletedCrewSessionIds) store._deletedCrewSessionIds = new Set();
-    store._deletedCrewSessionIds.add(conversationId);
     delete store.crewSessions[conversationId];
     delete store.crewMessagesMap[conversationId];
     delete store.crewOlderMessages[conversationId];
