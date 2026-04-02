@@ -221,8 +221,8 @@ Do NOT @human for:
 # ROUTE format (strict compliance, no improvisation)
 
 **CRITICAL**: ROUTE is a system communication protocol. The format must match exactly, or messages will not be delivered.
-- Must start with `---ROUTE---` and end with `---END_ROUTE---` (three hyphens, not arrow symbols)
-- Do NOT use `ROUTE →`, `ROUTE:`, `→` or any freeform format — the system will not recognize them
+- Must start with \`---ROUTE---\` and end with \`---END_ROUTE---\` (three hyphens, not arrow symbols)
+- Do NOT use \`ROUTE →\`, \`ROUTE:\`, \`→\` or any freeform format — the system will not recognize them
 - Field order: to → task → taskTitle → summary (summary goes last, can be multi-line)
 
 Assign to developer:
@@ -397,8 +397,8 @@ When escalating, state: what task you're on, where you're stuck, who you think c
 # ROUTE format (strict compliance, no improvisation)
 
 **CRITICAL**: ROUTE is a system communication protocol. The format must match exactly, or messages will not be delivered.
-- Must start with `---ROUTE---` and end with `---END_ROUTE---` (three hyphens, not arrow symbols)
-- Do NOT use `ROUTE →`, `ROUTE:`, `→` or any freeform format — the system will not recognize them
+- Must start with \`---ROUTE---\` and end with \`---END_ROUTE---\` (three hyphens, not arrow symbols)
+- Do NOT use \`ROUTE →\`, \`ROUTE:\`, \`→\` or any freeform format — the system will not recognize them
 - Field order: to → task → taskTitle → summary (summary goes last, can be multi-line)
 
 After code is complete, send two ROUTE blocks simultaneously:
@@ -553,8 +553,8 @@ ROUTE to PM when:
 # ROUTE format (strict compliance, no improvisation)
 
 **CRITICAL**: ROUTE is a system communication protocol. The format must match exactly, or messages will not be delivered.
-- Must start with `---ROUTE---` and end with `---END_ROUTE---` (three hyphens, not arrow symbols)
-- Do NOT use `ROUTE →`, `ROUTE:`, `→` or any freeform format — the system will not recognize them
+- Must start with \`---ROUTE---\` and end with \`---END_ROUTE---\` (three hyphens, not arrow symbols)
+- Do NOT use \`ROUTE →\`, \`ROUTE:\`, \`→\` or any freeform format — the system will not recognize them
 - Field order: to → task → taskTitle → summary (summary goes last, can be multi-line)
 
 After review passes, ROUTE to PM:
@@ -729,8 +729,8 @@ ROUTE to PM when:
 # ROUTE format (strict compliance, no improvisation)
 
 **CRITICAL**: ROUTE is a system communication protocol. The format must match exactly, or messages will not be delivered.
-- Must start with `---ROUTE---` and end with `---END_ROUTE---` (three hyphens, not arrow symbols)
-- Do NOT use `ROUTE →`, `ROUTE:`, `→` or any freeform format — the system will not recognize them
+- Must start with \`---ROUTE---\` and end with \`---END_ROUTE---\` (three hyphens, not arrow symbols)
+- Do NOT use \`ROUTE →\`, \`ROUTE:\`, \`→\` or any freeform format — the system will not recognize them
 - Field order: to → task → taskTitle → summary (summary goes last, can be multi-line)
 
 Tests pass, ROUTE to PM:
@@ -948,8 +948,8 @@ ROUTE to PM when:
 # ROUTE format (strict compliance, no improvisation)
 
 **CRITICAL**: ROUTE is a system communication protocol. The format must match exactly, or messages will not be delivered.
-- Must start with `---ROUTE---` and end with `---END_ROUTE---` (three hyphens, not arrow symbols)
-- Do NOT use `ROUTE →`, `ROUTE:`, `→` or any freeform format — the system will not recognize them
+- Must start with \`---ROUTE---\` and end with \`---END_ROUTE---\` (three hyphens, not arrow symbols)
+- Do NOT use \`ROUTE →\`, \`ROUTE:\`, \`→\` or any freeform format — the system will not recognize them
 - Field order: to → task → taskTitle → summary (summary goes last, can be multi-line)
 
 Design complete, ROUTE to PM for review:

@@ -176,8 +176,8 @@ All met = 100% completion; any unmet item deducts proportionally
 # ROUTE format (strict compliance, no improvisation)
 
 **CRITICAL**: ROUTE is a system communication protocol. The format must match exactly, or messages will not be delivered.
-- Must start with `---ROUTE---` and end with `---END_ROUTE---` (three hyphens, not arrow symbols)
-- Do NOT use `ROUTE →`, `ROUTE:`, `→` or any freeform format — the system will not recognize them
+- Must start with \`---ROUTE---\` and end with \`---END_ROUTE---\` (three hyphens, not arrow symbols)
+- Do NOT use \`ROUTE →\`, \`ROUTE:\`, \`→\` or any freeform format — the system will not recognize them
 - Field order: to → task → taskTitle → summary (summary goes last, can be multi-line)
 Assign pacing design:
 ---ROUTE---
@@ -282,8 +282,8 @@ Every volume pacing plan must output this structure:
 # ROUTE format (strict compliance, no improvisation)
 
 **CRITICAL**: ROUTE is a system communication protocol. The format must match exactly, or messages will not be delivered.
-- Must start with `---ROUTE---` and end with `---END_ROUTE---` (three hyphens, not arrow symbols)
-- Do NOT use `ROUTE →`, `ROUTE:`, `→` or any freeform format — the system will not recognize them
+- Must start with \`---ROUTE---\` and end with \`---END_ROUTE---\` (three hyphens, not arrow symbols)
+- Do NOT use \`ROUTE →\`, \`ROUTE:\`, \`→\` or any freeform format — the system will not recognize them
 - Field order: to → task → taskTitle → summary (summary goes last, can be multi-line)
 Pacing plan complete, ROUTE to architect:
 ---ROUTE---
@@ -366,8 +366,8 @@ After completing each chapter, attach this self-check:
 # ROUTE format (strict compliance, no improvisation)
 
 **CRITICAL**: ROUTE is a system communication protocol. The format must match exactly, or messages will not be delivered.
-- Must start with `---ROUTE---` and end with `---END_ROUTE---` (three hyphens, not arrow symbols)
-- Do NOT use `ROUTE →`, `ROUTE:`, `→` or any freeform format — the system will not recognize them
+- Must start with \`---ROUTE---\` and end with \`---END_ROUTE---\` (three hyphens, not arrow symbols)
+- Do NOT use \`ROUTE →\`, \`ROUTE:\`, \`→\` or any freeform format — the system will not recognize them
 - Field order: to → task → taskTitle → summary (summary goes last, can be multi-line)
 Writing complete, ROUTE to editor:
 ---ROUTE---
@@ -462,8 +462,8 @@ Every editing pass must output this structure:
 # ROUTE format (strict compliance, no improvisation)
 
 **CRITICAL**: ROUTE is a system communication protocol. The format must match exactly, or messages will not be delivered.
-- Must start with `---ROUTE---` and end with `---END_ROUTE---` (three hyphens, not arrow symbols)
-- Do NOT use `ROUTE →`, `ROUTE:`, `→` or any freeform format — the system will not recognize them
+- Must start with \`---ROUTE---\` and end with \`---END_ROUTE---\` (three hyphens, not arrow symbols)
+- Do NOT use \`ROUTE →\`, \`ROUTE:\`, \`→\` or any freeform format — the system will not recognize them
 - Field order: to → task → taskTitle → summary (summary goes last, can be multi-line)
 Editing approved, ROUTE to architect:
 ---ROUTE---

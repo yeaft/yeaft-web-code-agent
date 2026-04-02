@@ -144,8 +144,8 @@ export default [
 # ROUTE 格式（严格遵守，不可变通）
 
 **CRITICAL**: ROUTE 是系统通信协议，格式必须精确匹配，否则消息无法送达。
-- 必须用 `---ROUTE---` 开头、`---END_ROUTE---` 结尾（三个短横线，不是箭头符号）
-- 不要用 `ROUTE →`、`ROUTE:`、`→` 等自由格式——系统不识别
+- 必须用 \`---ROUTE---\` 开头、\`---END_ROUTE---\` 结尾（三个短横线，不是箭头符号）
+- 不要用 \`ROUTE →\`、\`ROUTE:\`、\`→\` 等自由格式——系统不识别
 - 字段顺序：to → task → taskTitle → summary（summary 放最后，可多行）
 并行分配分析任务：
 ---ROUTE---
@@ -242,8 +242,8 @@ summary: 请执行以下交易指令...
 # ROUTE 格式（严格遵守，不可变通）
 
 **CRITICAL**: ROUTE 是系统通信协议，格式必须精确匹配，否则消息无法送达。
-- 必须用 `---ROUTE---` 开头、`---END_ROUTE---` 结尾（三个短横线，不是箭头符号）
-- 不要用 `ROUTE →`、`ROUTE:`、`→` 等自由格式——系统不识别
+- 必须用 \`---ROUTE---\` 开头、\`---END_ROUTE---\` 结尾（三个短横线，不是箭头符号）
+- 不要用 \`ROUTE →\`、\`ROUTE:\`、\`→\` 等自由格式——系统不识别
 - 字段顺序：to → task → taskTitle → summary（summary 放最后，可多行）
 分析完成后，ROUTE 给策略师：
 ---ROUTE---
@@ -309,8 +309,8 @@ summary: 价格接近关键阻力位 XXXX，需关注突破情况
 # ROUTE 格式（严格遵守，不可变通）
 
 **CRITICAL**: ROUTE 是系统通信协议，格式必须精确匹配，否则消息无法送达。
-- 必须用 `---ROUTE---` 开头、`---END_ROUTE---` 结尾（三个短横线，不是箭头符号）
-- 不要用 `ROUTE →`、`ROUTE:`、`→` 等自由格式——系统不识别
+- 必须用 \`---ROUTE---\` 开头、\`---END_ROUTE---\` 结尾（三个短横线，不是箭头符号）
+- 不要用 \`ROUTE →\`、\`ROUTE:\`、\`→\` 等自由格式——系统不识别
 - 字段顺序：to → task → taskTitle → summary（summary 放最后，可多行）
 研究完成后，ROUTE 给策略师：
 ---ROUTE---
@@ -364,8 +364,8 @@ summary: 宏观逻辑与价格走势需交叉验证，请确认...
 # ROUTE 格式（严格遵守，不可变通）
 
 **CRITICAL**: ROUTE 是系统通信协议，格式必须精确匹配，否则消息无法送达。
-- 必须用 `---ROUTE---` 开头、`---END_ROUTE---` 结尾（三个短横线，不是箭头符号）
-- 不要用 `ROUTE →`、`ROUTE:`、`→` 等自由格式——系统不识别
+- 必须用 \`---ROUTE---\` 开头、\`---END_ROUTE---\` 结尾（三个短横线，不是箭头符号）
+- 不要用 \`ROUTE →\`、\`ROUTE:\`、\`→\` 等自由格式——系统不识别
 - 字段顺序：to → task → taskTitle → summary（summary 放最后，可多行）
 风控通过，ROUTE 回策略师：
 ---ROUTE---
@@ -439,8 +439,8 @@ summary: 持仓风险预警：波动率异常上升，建议减仓...
 # ROUTE 格式（严格遵守，不可变通）
 
 **CRITICAL**: ROUTE 是系统通信协议，格式必须精确匹配，否则消息无法送达。
-- 必须用 `---ROUTE---` 开头、`---END_ROUTE---` 结尾（三个短横线，不是箭头符号）
-- 不要用 `ROUTE →`、`ROUTE:`、`→` 等自由格式——系统不识别
+- 必须用 \`---ROUTE---\` 开头、\`---END_ROUTE---\` 结尾（三个短横线，不是箭头符号）
+- 不要用 \`ROUTE →\`、\`ROUTE:\`、\`→\` 等自由格式——系统不识别
 - 字段顺序：to → task → taskTitle → summary（summary 放最后，可多行）
 执行完成后，ROUTE 给策略师：
 ---ROUTE---
@@ -525,8 +525,8 @@ summary: 价格触及关键价位 XXXX，请更新技术分析
 # ROUTE 格式（严格遵守，不可变通）
 
 **CRITICAL**: ROUTE 是系统通信协议，格式必须精确匹配，否则消息无法送达。
-- 必须用 `---ROUTE---` 开头、`---END_ROUTE---` 结尾（三个短横线，不是箭头符号）
-- 不要用 `ROUTE →`、`ROUTE:`、`→` 等自由格式——系统不识别
+- 必须用 \`---ROUTE---\` 开头、\`---END_ROUTE---\` 结尾（三个短横线，不是箭头符号）
+- 不要用 \`ROUTE →\`、\`ROUTE:\`、\`→\` 等自由格式——系统不识别
 - 字段顺序：to → task → taskTitle → summary（summary 放最后，可多行）
 分析完成后，ROUTE 给策略师：
 ---ROUTE---
