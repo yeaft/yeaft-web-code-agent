@@ -559,6 +559,7 @@ export default {
   'crew.confirmClear': 'Are you sure you want to clear all conversations? Role configuration will be kept, but all chat history will be reset.',
   'crew.confirmRemoveRole': 'Are you sure you want to remove {name}? Role memory will be preserved.',
   'crew.elapsed': 'Elapsed {duration}',
+  'crew.routeActivity': 'Route Activity',
 
   // ============ Crew Config Panel ============
   'crewConfig.selectAgent': 'Select Agent',

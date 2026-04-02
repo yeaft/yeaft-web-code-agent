@@ -1432,16 +1432,38 @@
   margin-top: 6px;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 8px;
 }
 
 .crew-route-activity-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border-color-subtle, rgba(255,255,255,0.04));
+}
+
+.crew-route-activity-item:last-child {
+  border-bottom: none;
+}
+
+.crew-route-activity-task-line {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crew-route-activity-route-line {
   display: flex;
   align-items: center;
   gap: 4px;
   font-size: 11px;
   color: var(--text-secondary);
-  padding: 2px 0;
 }
 
 .crew-route-activity-icon {
@@ -1462,14 +1484,6 @@
 .crew-route-activity-to {
   font-weight: 600;
   color: var(--text-primary);
-}
-
-.crew-route-activity-task {
-  color: var(--text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 120px;
 }
 
 .crew-route-activity-time {

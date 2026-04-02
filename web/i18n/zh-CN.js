@@ -559,6 +559,7 @@ export default {
   'crew.confirmClear': '确定要清空所有对话？角色配置将保留，但所有对话历史将被重置。',
   'crew.confirmRemoveRole': '确定要移除 {name}？角色的 Memory 将保留。',
   'crew.elapsed': '总耗时 {duration}',
+  'crew.routeActivity': '消息流转',
 
   // ============ Crew Config Panel ============
   'crewConfig.selectAgent': '选择 Agent',

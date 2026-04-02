@@ -195,17 +195,19 @@ export default {
               <svg class="crew-route-activity-chevron" :class="{ 'is-expanded': showRouteActivity }" viewBox="0 0 24 24" width="12" height="12">
                 <path fill="currentColor" d="M10 6l6 6-6 6z"/>
               </svg>
-              <span class="crew-route-activity-title">Route Activity</span>
+              <span class="crew-route-activity-title">{{ $t('crew.routeActivity') }}</span>
               <span class="crew-route-activity-count">({{ recentRoutes.length }})</span>
             </div>
             <div v-if="showRouteActivity" class="crew-route-activity-list">
               <div v-for="r in recentRoutes" :key="r.id || r.timestamp" class="crew-route-activity-item">
-                <span v-if="r.roleIcon" class="crew-route-activity-icon">{{ r.roleIcon }}</span>
-                <span class="crew-route-activity-from">{{ shortNameFn(r.roleName) }}</span>
-                <span class="crew-route-activity-arrow">&rarr;</span>
-                <span class="crew-route-activity-to">{{ r.routeTo }}</span>
-                <span v-if="r.taskTitle" class="crew-route-activity-task">&middot; {{ r.taskTitle }}</span>
-                <span class="crew-route-activity-time">{{ formatTime(r.timestamp) }}</span>
+                <div class="crew-route-activity-task-line">{{ r.taskTitle || $t('crew.globalTask') }}</div>
+                <div class="crew-route-activity-route-line">
+                  <span v-if="r.roleIcon" class="crew-route-activity-icon">{{ r.roleIcon }}</span>
+                  <span class="crew-route-activity-from">{{ shortNameFn(r.roleName) }}</span>
+                  <span class="crew-route-activity-arrow">&rarr;</span>
+                  <span class="crew-route-activity-to">{{ r.routeTo }}</span>
+                  <span class="crew-route-activity-time">{{ formatTime(r.timestamp) }}</span>
+                </div>
               </div>
             </div>
           </div>
