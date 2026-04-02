@@ -70,10 +70,10 @@ export function computeCompletedTaskIds(doneTasks, activeTasks) {
  */
 export function collectActiveTasks(persistedFeatures, messages) {
   const taskMap = new Map();
-  for (const f of persistedFeatures) {
+  for (const f of (persistedFeatures || [])) {
     taskMap.set(f.taskId, { title: f.taskTitle, createdAt: f.createdAt || 0 });
   }
-  for (const msg of messages) {
+  for (const msg of (messages || [])) {
     if (msg.taskId && msg.taskTitle && !taskMap.has(msg.taskId)) {
       taskMap.set(msg.taskId, { title: msg.taskTitle, createdAt: msg.timestamp || 0 });
     }
@@ -92,16 +92,19 @@ export function buildTodosByFeature(messages) {
 
   for (const m of messages) {
     if (m.type !== 'tool' || m.toolName !== 'TodoWrite' || !m.toolInput?.todos) continue;
+    // Defensive: ensure todos is an array
+    const todos = Array.isArray(m.toolInput.todos) ? m.toolInput.todos : [];
+    if (todos.length === 0) continue;
     const key = `${m.taskId || 'global'}::${m.role}`;
 
     if (!historyMap.has(key)) historyMap.set(key, []);
-    historyMap.get(key).push({ timestamp: m.timestamp, todos: m.toolInput.todos });
+    historyMap.get(key).push({ timestamp: m.timestamp, todos });
 
     latestMap.set(key, {
       taskId: m.taskId || null,
       taskTitle: m.taskTitle || null,
       role: m.role, roleIcon: m.roleIcon, roleName: m.roleName,
-      todos: m.toolInput.todos,
+      todos,
       timestamp: m.timestamp,
     });
   }
@@ -112,7 +115,9 @@ export function buildTodosByFeature(messages) {
       if (todo.status !== 'in_progress') return todo;
       let startedAt = entry.timestamp;
       for (const snapshot of history) {
-        const match = snapshot.todos.find(t => t.content === todo.content);
+        // Defensive: snapshot.todos may not be an array
+        const snapshotTodos = Array.isArray(snapshot.todos) ? snapshot.todos : [];
+        const match = snapshotTodos.find(t => t.content === todo.content);
         if (match && match.status === 'in_progress') {
           startedAt = snapshot.timestamp;
           break;
@@ -140,7 +145,7 @@ export function buildTodosByFeature(messages) {
 export function buildFeatureKanban(activeTasks, todosByFeature, featureBlocks, completedTaskIds, globalTaskLabel) {
   const features = new Map();
 
-  for (const task of activeTasks) {
+  for (const task of (activeTasks || [])) {
     features.set(task.id, {
       taskId: task.id,
       taskTitle: task.title,
@@ -155,7 +160,7 @@ export function buildFeatureKanban(activeTasks, todosByFeature, featureBlocks, c
     });
   }
 
-  for (const group of todosByFeature) {
+  for (const group of (todosByFeature || [])) {
     const tid = group.taskId || '_global';
     let feature = features.get(tid);
     if (!feature) {
@@ -174,7 +179,7 @@ export function buildFeatureKanban(activeTasks, todosByFeature, featureBlocks, c
       features.set(tid, feature);
     }
     for (const entry of group.entries) {
-      for (const todo of entry.todos) {
+      for (const todo of (entry.todos || [])) {
         feature.todos.push({
           ...todo,
           roleIcon: entry.roleIcon,
@@ -187,7 +192,7 @@ export function buildFeatureKanban(activeTasks, todosByFeature, featureBlocks, c
     }
   }
 
-  for (const block of featureBlocks) {
+  for (const block of (featureBlocks || [])) {
     if (block.type !== 'feature') continue;
     const feature = features.get(block.taskId);
     if (feature) {
@@ -208,6 +213,7 @@ export function buildFeatureKanban(activeTasks, todosByFeature, featureBlocks, c
 export function groupKanban(featureKanban) {
   const inProgress = [];
   const completed = [];
+  if (!Array.isArray(featureKanban)) return { inProgress, completed };
   for (const f of featureKanban) {
     if (f.isCompleted) {
       completed.push(f);
@@ -223,6 +229,7 @@ export function groupKanban(featureKanban) {
  */
 export function kanbanProgress(featureKanban) {
   let total = 0, done = 0;
+  if (!Array.isArray(featureKanban)) return { total, done };
   for (const f of featureKanban) {
     total += f.totalCount;
     done += f.doneCount;
