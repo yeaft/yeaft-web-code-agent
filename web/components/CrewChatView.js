@@ -32,9 +32,11 @@ import CrewTurnRenderer from './crew/CrewTurnRenderer.js';
 import CrewRolePanel from './crew/CrewRolePanel.js';
 import CrewFeaturePanel from './crew/CrewFeaturePanel.js';
 
+import CrewNotifications from './crew/CrewNotifications.js';
+
 export default {
   name: 'CrewChatView',
-  components: { CrewTurnRenderer, CrewRolePanel, CrewFeaturePanel },
+  components: { CrewTurnRenderer, CrewRolePanel, CrewFeaturePanel, CrewNotifications },
   props: {
     conversationId: { type: String, default: null },
     paneId: { type: String, default: null }
@@ -252,12 +254,19 @@ export default {
           :role-color-map="roleColorMap"
           :get-role-display-name="getRoleDisplayName"
           :persisted-feature-ids="persistedFeatureIds"
+          :crew-messages="paneCrewMessages"
           @toggle-turn="toggleTurn"
           @expand-feature="expandFeature"
           @close-feature="closeFeature"
           @ask-submit="onAskSubmit"
         />
       </div><!-- /crew-workspace -->
+
+      <!-- Route Notification Toasts -->
+      <crew-notifications
+        :notifications="store.crewNotifications"
+        @dismiss="dismissNotification"
+      />
 
       <!-- Add Role Modal -->
       <div v-if="showAddRole" class="crew-add-role-overlay" @click.self="showAddRole = false">
@@ -552,6 +561,11 @@ export default {
     formatTokens,
     shouldShowTurnDivider,
     getMaxRound,
+
+    dismissNotification(id) {
+      const idx = this.store.crewNotifications.findIndex(n => n.id === id);
+      if (idx !== -1) this.store.crewNotifications.splice(idx, 1);
+    },
 
     clearMobilePanel() {
       this.store.setPaneMobilePanel(this.paneId, null);

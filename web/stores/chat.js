@@ -122,6 +122,7 @@ export const useChatStore = defineStore('chat', {
     crewMessagesMap: {},          // { [sessionId]: messages[] }
     crewOlderMessages: {},       // { [sessionId]: { hasMore, nextShard, loading } }
     crewStatuses: {},             // { [sessionId]: { status, currentRole, round, costUsd, activeRoles } }
+    crewNotifications: [],        // [{ id, fromRole, fromIcon, fromName, toRole, toIcon, toName, taskId, taskTitle, timestamp }]
     crewExistsResult: null,       // check_crew_exists 结果: { exists, projectDir, sessionInfo }
     splitConvModalOpen: false,    // 分屏模式下新建会话 modal 是否打开
     crewConfigOpen: false,        // crew 配置面板是否打开
