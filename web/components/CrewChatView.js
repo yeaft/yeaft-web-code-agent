@@ -109,6 +109,14 @@ export default {
         <!-- Typing dots: visible after user sends message, before AI responds -->
         <div v-if="isWaitingResponse" class="typing-indicator" :class="waitingStatus ? ('status-' + waitingStatus) : ''">
           <span></span><span></span><span></span>
+          <span class="running-cat" aria-hidden="true">
+            <span class="cat-body">
+              <span class="cat-head"><span class="cat-ear cat-ear-l"></span><span class="cat-ear cat-ear-r"></span></span>
+              <span class="cat-tail"></span>
+              <span class="cat-leg cat-leg-front"></span>
+              <span class="cat-leg cat-leg-back"></span>
+            </span>
+          </span>
           <span v-if="waitingStatus === 'disconnected'" class="typing-status-text typing-status-error">
             {{ $t('chat.waiting.disconnected') }}
           </span>
