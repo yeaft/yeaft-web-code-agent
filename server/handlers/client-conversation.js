@@ -538,15 +538,18 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       // Persist answered state into the AskUserQuestion tool_use DB record
       try {
         if (answerConvId && msg.requestId) {
-          const recent = messageDb.getRecent(answerConvId, 20);
-          const askMsg = recent.find(m => {
-            if (m.message_type !== 'tool_use' || m.tool_name !== 'AskUserQuestion') return false;
-            if (!m.metadata) return false;
+          const recent = messageDb.getRecent(answerConvId, 100);
+          // Search from newest to oldest for the matching requestId
+          let askMsg = null;
+          for (let i = recent.length - 1; i >= 0; i--) {
+            const m = recent[i];
+            if (m.message_type !== 'tool_use' || m.tool_name !== 'AskUserQuestion') continue;
+            if (!m.metadata) continue;
             try {
               const meta = JSON.parse(m.metadata);
-              return meta.askRequestId === msg.requestId;
-            } catch { return false; }
-          });
+              if (meta.askRequestId === msg.requestId) { askMsg = m; break; }
+            } catch { /* skip */ }
+          }
           if (askMsg) {
             const meta = JSON.parse(askMsg.metadata);
             messageDb.updateMetadata(askMsg.id, JSON.stringify({

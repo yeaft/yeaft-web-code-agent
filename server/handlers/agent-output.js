@@ -184,8 +184,25 @@ export async function handleAgentOutput(agentId, agent, msg) {
       // Persist requestId + questions into the AskUserQuestion tool_use DB record
       try {
         if (msg.conversationId && msg.requestId) {
-          const recent = messageDb.getRecent(msg.conversationId, 20);
-          const askMsg = recent.find(m => m.message_type === 'tool_use' && m.tool_name === 'AskUserQuestion');
+          // Search enough messages to find the tool_use record (may be far from latest
+          // if there was a lot of streaming output between tool_use and ask_user_question)
+          const recent = messageDb.getRecent(msg.conversationId, 100);
+          // Find the LATEST unlinked AskUserQuestion (search from newest to oldest)
+          let askMsg = null;
+          for (let i = recent.length - 1; i >= 0; i--) {
+            const m = recent[i];
+            if (m.message_type === 'tool_use' && m.tool_name === 'AskUserQuestion') {
+              // Check if already linked to a different requestId
+              if (m.metadata) {
+                try {
+                  const existing = JSON.parse(m.metadata);
+                  if (existing.askRequestId && existing.askRequestId !== msg.requestId) continue;
+                } catch { /* proceed */ }
+              }
+              askMsg = m;
+              break;
+            }
+          }
           if (askMsg) {
             messageDb.updateMetadata(askMsg.id, JSON.stringify({
               askRequestId: msg.requestId,
