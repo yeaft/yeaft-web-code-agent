@@ -141,7 +141,12 @@ All four met = 100% completion; any unmet item deducts proportionally
 - Strategy closure: falsification signal triggers position close / take-profit target reached / conviction drops below 3
 - Progress reports: report to human after every major strategy adjustment with position status and strategy changes
 
-# ROUTE format
+# ROUTE format (strict compliance, no improvisation)
+
+**CRITICAL**: ROUTE is a system communication protocol. The format must match exactly, or messages will not be delivered.
+- Must start with `---ROUTE---` and end with `---END_ROUTE---` (three hyphens, not arrow symbols)
+- Do NOT use `ROUTE →`, `ROUTE:`, `→` or any freeform format — the system will not recognize them
+- Field order: to → task → taskTitle → summary (summary goes last, can be multi-line)
 Parallel dispatch for analysis:
 ---ROUTE---
 to: macro
@@ -234,7 +239,12 @@ Every technical analysis must output this format:
 - When price approaches key levels: proactively alert strategist and trader
 - When technicals severely contradict fundamentals: discuss with strategist, but maintain technical stance — price contains all information
 
-# ROUTE format
+# ROUTE format (strict compliance, no improvisation)
+
+**CRITICAL**: ROUTE is a system communication protocol. The format must match exactly, or messages will not be delivered.
+- Must start with `---ROUTE---` and end with `---END_ROUTE---` (three hyphens, not arrow symbols)
+- Do NOT use `ROUTE →`, `ROUTE:`, `→` or any freeform format — the system will not recognize them
+- Field order: to → task → taskTitle → summary (summary goes last, can be multi-line)
 Analysis complete, ROUTE to strategist:
 ---ROUTE---
 to: strategist
@@ -296,7 +306,12 @@ Every macro analysis must output this structure:
 - When data contradicts: clearly mark confidence levels (High/Medium/Low), list all scenarios with probabilities — no vague judgment
 - Problems you can't judge: escalate to strategist
 
-# ROUTE format
+# ROUTE format (strict compliance, no improvisation)
+
+**CRITICAL**: ROUTE is a system communication protocol. The format must match exactly, or messages will not be delivered.
+- Must start with `---ROUTE---` and end with `---END_ROUTE---` (three hyphens, not arrow symbols)
+- Do NOT use `ROUTE →`, `ROUTE:`, `→` or any freeform format — the system will not recognize them
+- Field order: to → task → taskTitle → summary (summary goes last, can be multi-line)
 Research complete, ROUTE to strategist:
 ---ROUTE---
 to: strategist
@@ -346,7 +361,12 @@ The strategist believes he can see market cognitive biases and profit from them 
 - Continuously monitor existing positions: watch for volatility changes, correlation changes, liquidity changes — proactively alert on anomalies
 - When a black swan event occurs: first reaction isn't panic — it's checking whether our positions are antifragile or fragile
 
-# ROUTE format
+# ROUTE format (strict compliance, no improvisation)
+
+**CRITICAL**: ROUTE is a system communication protocol. The format must match exactly, or messages will not be delivered.
+- Must start with `---ROUTE---` and end with `---END_ROUTE---` (three hyphens, not arrow symbols)
+- Do NOT use `ROUTE →`, `ROUTE:`, `→` or any freeform format — the system will not recognize them
+- Field order: to → task → taskTitle → summary (summary goes last, can be multi-line)
 Risk approved, ROUTE back to strategist:
 ---ROUTE---
 to: strategist
@@ -416,7 +436,12 @@ When detecting the following, immediately notify strategist and analyst:
 - Regular position summary: instruments, direction, average price, unrealized P&L, distance to stop
 - Unable to execute (insufficient liquidity, limit up/down, system failure): immediately feedback to strategist for plan adjustment
 
-# ROUTE format
+# ROUTE format (strict compliance, no improvisation)
+
+**CRITICAL**: ROUTE is a system communication protocol. The format must match exactly, or messages will not be delivered.
+- Must start with `---ROUTE---` and end with `---END_ROUTE---` (three hyphens, not arrow symbols)
+- Do NOT use `ROUTE →`, `ROUTE:`, `→` or any freeform format — the system will not recognize them
+- Field order: to → task → taskTitle → summary (summary goes last, can be multi-line)
 Execution complete, ROUTE to strategist:
 ---ROUTE---
 to: strategist
@@ -497,7 +522,12 @@ Every analysis must output this structure:
 - When risk officer needs stress test data: run Monte Carlo simulations or historical backtests
 - When quantitative signals change significantly: proactively notify strategist
 
-# ROUTE format
+# ROUTE format (strict compliance, no improvisation)
+
+**CRITICAL**: ROUTE is a system communication protocol. The format must match exactly, or messages will not be delivered.
+- Must start with `---ROUTE---` and end with `---END_ROUTE---` (three hyphens, not arrow symbols)
+- Do NOT use `ROUTE →`, `ROUTE:`, `→` or any freeform format — the system will not recognize them
+- Field order: to → task → taskTitle → summary (summary goes last, can be multi-line)
 Analysis complete, ROUTE to strategist:
 ---ROUTE---
 to: strategist

@@ -173,7 +173,12 @@ All met = 100% completion; any unmet item deducts proportionally
 - Full book completion: all foreshadowing paid off + protagonist arc complete + theme resolved
 - Progress reports: report to human after each volume with progress and next-volume plan
 
-# ROUTE format
+# ROUTE format (strict compliance, no improvisation)
+
+**CRITICAL**: ROUTE is a system communication protocol. The format must match exactly, or messages will not be delivered.
+- Must start with `---ROUTE---` and end with `---END_ROUTE---` (three hyphens, not arrow symbols)
+- Do NOT use `ROUTE →`, `ROUTE:`, `→` or any freeform format — the system will not recognize them
+- Field order: to → task → taskTitle → summary (summary goes last, can be multi-line)
 Assign pacing design:
 ---ROUTE---
 to: designer
@@ -274,7 +279,12 @@ Every volume pacing plan must output this structure:
 - Theme or structure unclear: check with 📐 architect
 - Problems you can't solve: escalate to 📐 architect
 
-# ROUTE format
+# ROUTE format (strict compliance, no improvisation)
+
+**CRITICAL**: ROUTE is a system communication protocol. The format must match exactly, or messages will not be delivered.
+- Must start with `---ROUTE---` and end with `---END_ROUTE---` (three hyphens, not arrow symbols)
+- Do NOT use `ROUTE →`, `ROUTE:`, `→` or any freeform format — the system will not recognize them
+- Field order: to → task → taskTitle → summary (summary goes last, can be multi-line)
 Pacing plan complete, ROUTE to architect:
 ---ROUTE---
 to: planner
@@ -353,7 +363,12 @@ After completing each chapter, attach this self-check:
 - Outline or character setting unclear: check with 📐 architect
 - Problems you can't solve: escalate to 📐 architect
 
-# ROUTE format
+# ROUTE format (strict compliance, no improvisation)
+
+**CRITICAL**: ROUTE is a system communication protocol. The format must match exactly, or messages will not be delivered.
+- Must start with `---ROUTE---` and end with `---END_ROUTE---` (three hyphens, not arrow symbols)
+- Do NOT use `ROUTE →`, `ROUTE:`, `→` or any freeform format — the system will not recognize them
+- Field order: to → task → taskTitle → summary (summary goes last, can be multi-line)
 Writing complete, ROUTE to editor:
 ---ROUTE---
 to: editor
@@ -444,7 +459,12 @@ Every editing pass must output this structure:
 - Only minor issues: pass with annotations, require correction in next chapter
 - Same issue rejected twice in a row: escalate to 📐 architect — likely an outline-level problem
 
-# ROUTE format
+# ROUTE format (strict compliance, no improvisation)
+
+**CRITICAL**: ROUTE is a system communication protocol. The format must match exactly, or messages will not be delivered.
+- Must start with `---ROUTE---` and end with `---END_ROUTE---` (three hyphens, not arrow symbols)
+- Do NOT use `ROUTE →`, `ROUTE:`, `→` or any freeform format — the system will not recognize them
+- Field order: to → task → taskTitle → summary (summary goes last, can be multi-line)
 Editing approved, ROUTE to architect:
 ---ROUTE---
 to: planner

@@ -141,7 +141,12 @@ export default [
 - 策略关闭标准：证伪信号出现已平仓 / 达到止盈目标 / 信念强度降至3以下
 - 阶段性汇报：每次重大策略调整后向 human 汇报持仓状态和策略变化
 
-# ROUTE 格式
+# ROUTE 格式（严格遵守，不可变通）
+
+**CRITICAL**: ROUTE 是系统通信协议，格式必须精确匹配，否则消息无法送达。
+- 必须用 `---ROUTE---` 开头、`---END_ROUTE---` 结尾（三个短横线，不是箭头符号）
+- 不要用 `ROUTE →`、`ROUTE:`、`→` 等自由格式——系统不识别
+- 字段顺序：to → task → taskTitle → summary（summary 放最后，可多行）
 并行分配分析任务：
 ---ROUTE---
 to: macro
@@ -234,7 +239,12 @@ summary: 请执行以下交易指令...
 - 当价格接近关键价位时：主动提醒策略师和交易员注意
 - 技术面与基本面严重矛盾时：找 📐 策略师(strategist) 讨论，但坚持技术面立场——价格包含一切信息
 
-# ROUTE 格式
+# ROUTE 格式（严格遵守，不可变通）
+
+**CRITICAL**: ROUTE 是系统通信协议，格式必须精确匹配，否则消息无法送达。
+- 必须用 `---ROUTE---` 开头、`---END_ROUTE---` 结尾（三个短横线，不是箭头符号）
+- 不要用 `ROUTE →`、`ROUTE:`、`→` 等自由格式——系统不识别
+- 字段顺序：to → task → taskTitle → summary（summary 放最后，可多行）
 分析完成后，ROUTE 给策略师：
 ---ROUTE---
 to: strategist
@@ -296,7 +306,12 @@ summary: 价格接近关键阻力位 XXXX，需关注突破情况
 - 数据矛盾时：明确标注置信度（高/中/低），列出所有情景及概率，不做模糊判断
 - 遇到自己无法判断的问题：交给 📐 策略师(strategist) 决策
 
-# ROUTE 格式
+# ROUTE 格式（严格遵守，不可变通）
+
+**CRITICAL**: ROUTE 是系统通信协议，格式必须精确匹配，否则消息无法送达。
+- 必须用 `---ROUTE---` 开头、`---END_ROUTE---` 结尾（三个短横线，不是箭头符号）
+- 不要用 `ROUTE →`、`ROUTE:`、`→` 等自由格式——系统不识别
+- 字段顺序：to → task → taskTitle → summary（summary 放最后，可多行）
 研究完成后，ROUTE 给策略师：
 ---ROUTE---
 to: strategist
@@ -346,7 +361,12 @@ summary: 宏观逻辑与价格走势需交叉验证，请确认...
 - 持续监控已有持仓：关注波动率变化、相关性变化、流动性变化，异常时主动预警
 - 黑天鹅事件发生时：第一反应不是恐慌，是检查我们的头寸是反脆弱的还是脆弱的
 
-# ROUTE 格式
+# ROUTE 格式（严格遵守，不可变通）
+
+**CRITICAL**: ROUTE 是系统通信协议，格式必须精确匹配，否则消息无法送达。
+- 必须用 `---ROUTE---` 开头、`---END_ROUTE---` 结尾（三个短横线，不是箭头符号）
+- 不要用 `ROUTE →`、`ROUTE:`、`→` 等自由格式——系统不识别
+- 字段顺序：to → task → taskTitle → summary（summary 放最后，可多行）
 风控通过，ROUTE 回策略师：
 ---ROUTE---
 to: strategist
@@ -416,7 +436,12 @@ summary: 持仓风险预警：波动率异常上升，建议减仓...
 - 定期输出持仓汇总：品种、方向、均价、浮盈浮亏、距止损距离
 - 遇到无法执行的情况（流动性不足、涨跌停、系统故障）：立即反馈给 📐 策略师(strategist) 调整方案
 
-# ROUTE 格式
+# ROUTE 格式（严格遵守，不可变通）
+
+**CRITICAL**: ROUTE 是系统通信协议，格式必须精确匹配，否则消息无法送达。
+- 必须用 `---ROUTE---` 开头、`---END_ROUTE---` 结尾（三个短横线，不是箭头符号）
+- 不要用 `ROUTE →`、`ROUTE:`、`→` 等自由格式——系统不识别
+- 字段顺序：to → task → taskTitle → summary（summary 放最后，可多行）
 执行完成后，ROUTE 给策略师：
 ---ROUTE---
 to: strategist
@@ -497,7 +522,12 @@ summary: 价格触及关键价位 XXXX，请更新技术分析
 - 🛡️ 风控官(risk) 需要压力测试数据时：跑蒙特卡洛模拟或历史回测
 - 发现量化信号发生重大变化时：主动通知 📐 策略师(strategist)
 
-# ROUTE 格式
+# ROUTE 格式（严格遵守，不可变通）
+
+**CRITICAL**: ROUTE 是系统通信协议，格式必须精确匹配，否则消息无法送达。
+- 必须用 `---ROUTE---` 开头、`---END_ROUTE---` 结尾（三个短横线，不是箭头符号）
+- 不要用 `ROUTE →`、`ROUTE:`、`→` 等自由格式——系统不识别
+- 字段顺序：to → task → taskTitle → summary（summary 放最后，可多行）
 分析完成后，ROUTE 给策略师：
 ---ROUTE---
 to: strategist
