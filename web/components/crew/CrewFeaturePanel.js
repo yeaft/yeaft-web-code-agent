@@ -9,7 +9,7 @@
  *      followed by full message thread using CrewTurnRenderer.
  */
 import {
-  formatDuration, formatTime, getRoleStyle as getRoleStyleFn
+  formatDuration, formatTime, getRoleStyle as getRoleStyleFn, shortName
 } from './crewHelpers.js';
 import {
   shouldShowTurnDivider, getMaxRound
@@ -32,12 +32,14 @@ export default {
     icons: { type: Object, required: true },
     roleColorMap: { type: Object, default: () => ({}) },
     getRoleDisplayName: { type: Function, default: (name) => name },
-    persistedFeatureIds: { type: Set, default: () => new Set() }
+    persistedFeatureIds: { type: Set, default: () => new Set() },
+    crewMessages: { type: Array, default: () => [] }
   },
   emits: ['toggle-turn', 'expand-feature', 'close-feature', 'ask-submit'],
   data() {
     return {
       showCompletedFeatures: false,
+      showRouteActivity: true,
       expandedVisibleCount: 20
     };
   },
@@ -115,6 +117,17 @@ export default {
     },
     filteredCompleted() {
       return this.filteredFeatures.filter(f => this.isFeatureCompleted(f));
+    },
+    // Recent route events from crewMessages (last 8)
+    recentRoutes() {
+      const routes = [];
+      for (let i = this.crewMessages.length - 1; i >= 0 && routes.length < 8; i--) {
+        const m = this.crewMessages[i];
+        if (m.type === 'route') {
+          routes.push(m);
+        }
+      }
+      return routes;
     }
   },
   template: `
@@ -176,6 +189,27 @@ export default {
 
         <!-- ===== LIST MODE: Feature cards with active/completed groups ===== -->
         <template v-else>
+          <!-- Route Activity -->
+          <div v-if="recentRoutes.length > 0" class="crew-route-activity">
+            <div class="crew-route-activity-header" @click="showRouteActivity = !showRouteActivity">
+              <svg class="crew-route-activity-chevron" :class="{ 'is-expanded': showRouteActivity }" viewBox="0 0 24 24" width="12" height="12">
+                <path fill="currentColor" d="M10 6l6 6-6 6z"/>
+              </svg>
+              <span class="crew-route-activity-title">Route Activity</span>
+              <span class="crew-route-activity-count">({{ recentRoutes.length }})</span>
+            </div>
+            <div v-if="showRouteActivity" class="crew-route-activity-list">
+              <div v-for="r in recentRoutes" :key="r.id || r.timestamp" class="crew-route-activity-item">
+                <span v-if="r.roleIcon" class="crew-route-activity-icon">{{ r.roleIcon }}</span>
+                <span class="crew-route-activity-from">{{ shortNameFn(r.roleName) }}</span>
+                <span class="crew-route-activity-arrow">&rarr;</span>
+                <span class="crew-route-activity-to">{{ r.routeTo }}</span>
+                <span v-if="r.taskTitle" class="crew-route-activity-task">&middot; {{ r.taskTitle }}</span>
+                <span class="crew-route-activity-time">{{ formatTime(r.timestamp) }}</span>
+              </div>
+            </div>
+          </div>
+
           <div v-if="filteredInProgress.length > 0" class="crew-kanban-group">
             <div class="crew-kanban-group-header is-active">
               <span class="crew-kanban-group-dot is-active"></span>
@@ -208,6 +242,19 @@ export default {
                   <span class="crew-feature-summary-actions-count">{{ getSummary(feature.taskId).actions.length }} actions</span>
                   <span class="crew-feature-summary-actions-list">{{ getSummary(feature.taskId).actions.join(', ') }}</span>
                 </div>
+              </div>
+              <div v-if="getFeatureRoutes(feature.taskId).length > 0" class="crew-feature-route-pipeline">
+                <template v-for="(r, ri) in getFeatureRoutes(feature.taskId)" :key="r.id || ri">
+                  <span v-if="ri > 0" class="crew-route-step-arrow">&rarr;</span>
+                  <span class="crew-route-step">
+                    <span v-if="r.roleIcon" class="crew-route-step-icon">{{ r.roleIcon }}</span>
+                    <span class="crew-route-step-name">{{ shortNameFn(r.roleName) }}</span>
+                  </span>
+                </template>
+                <span class="crew-route-step-arrow">&rarr;</span>
+                <span class="crew-route-step">
+                  <span class="crew-route-step-name">{{ getFeatureRoutes(feature.taskId).slice(-1)[0]?.routeTo }}</span>
+                </span>
               </div>
             </div>
           </div>
@@ -248,6 +295,19 @@ export default {
                     <span class="crew-feature-summary-actions-list">{{ getSummary(feature.taskId).actions.join(', ') }}</span>
                   </div>
                 </div>
+                <div v-if="getFeatureRoutes(feature.taskId).length > 0" class="crew-feature-route-pipeline">
+                  <template v-for="(r, ri) in getFeatureRoutes(feature.taskId)" :key="r.id || ri">
+                    <span v-if="ri > 0" class="crew-route-step-arrow">&rarr;</span>
+                    <span class="crew-route-step">
+                      <span v-if="r.roleIcon" class="crew-route-step-icon">{{ r.roleIcon }}</span>
+                      <span class="crew-route-step-name">{{ shortNameFn(r.roleName) }}</span>
+                    </span>
+                  </template>
+                  <span class="crew-route-step-arrow">&rarr;</span>
+                  <span class="crew-route-step">
+                    <span class="crew-route-step-name">{{ getFeatureRoutes(feature.taskId).slice(-1)[0]?.routeTo }}</span>
+                  </span>
+                </div>
               </div>
             </template>
           </div>
@@ -263,11 +323,26 @@ export default {
   methods: {
     formatDuration,
     formatTime,
+    shortNameFn: shortName,
     getRoleStyle(roleName) {
       return getRoleStyleFn(roleName, this.roleColorMap[roleName]);
     },
     shouldShowTurnDivider,
     getMaxRound,
+
+    /**
+     * Get the last 3 route events for a specific task (for per-feature pipeline).
+     */
+    getFeatureRoutes(taskId) {
+      const routes = [];
+      for (let i = this.crewMessages.length - 1; i >= 0 && routes.length < 3; i--) {
+        const m = this.crewMessages[i];
+        if (m.type === 'route' && m.taskId === taskId) {
+          routes.unshift(m); // keep chronological order
+        }
+      }
+      return routes;
+    },
 
     /**
      * Check if a feature has any messages (used to hide empty features).

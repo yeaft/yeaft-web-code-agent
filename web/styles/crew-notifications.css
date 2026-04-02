@@ -1,0 +1,70 @@
+/* =============================================
+   Crew Route Notifications — top-right toasts
+   ============================================= */
+
+.crew-notifications {
+  position: fixed;
+  top: 12px;
+  right: 16px;
+  z-index: 1100;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.crew-notif-toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 14px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--text-primary);
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 3px 14px rgba(0, 0, 0, 0.10);
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 320px;
+}
+
+.crew-notif-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.crew-notif-name {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.crew-notif-arrow {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.crew-notif-task {
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 140px;
+}
+
+/* Transition animations — slide in from right */
+.crew-notif-enter-active {
+  animation: crewNotifIn 0.22s ease;
+}
+.crew-notif-leave-active {
+  animation: crewNotifIn 0.15s ease reverse;
+}
+.crew-notif-move {
+  transition: transform 0.2s ease;
+}
+
+@keyframes crewNotifIn {
+  from { opacity: 0; transform: translateX(30px); }
+  to   { opacity: 1; transform: translateX(0); }
+}

@@ -1391,6 +1391,128 @@
   color: var(--text-muted);
 }
 
+/* =============================================
+   Route Activity — top of Feature Panel list mode
+   ============================================= */
+
+.crew-route-activity {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.crew-route-activity-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+.crew-route-activity-chevron {
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+.crew-route-activity-chevron.is-expanded {
+  transform: rotate(90deg);
+}
+
+.crew-route-activity-title {
+  flex-shrink: 0;
+}
+
+.crew-route-activity-count {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.crew-route-activity-list {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.crew-route-activity-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 2px 0;
+}
+
+.crew-route-activity-icon {
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.crew-route-activity-from {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.crew-route-activity-arrow {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.crew-route-activity-to {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.crew-route-activity-task {
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 120px;
+}
+
+.crew-route-activity-time {
+  margin-left: auto;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+/* =============================================
+   Per-feature Route Pipeline — inside feature cards
+   ============================================= */
+
+.crew-feature-route-pipeline {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 0;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+
+.crew-route-step {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.crew-route-step-icon {
+  font-size: 11px;
+}
+
+.crew-route-step-name {
+  font-weight: 500;
+}
+
+.crew-route-step-arrow {
+  color: var(--text-muted);
+  font-size: 9px;
+  margin: 0 1px;
+}
+
 /* Kanban group sections */
 .crew-kanban-group {
   margin-bottom: 4px;

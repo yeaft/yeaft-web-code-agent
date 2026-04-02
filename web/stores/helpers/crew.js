@@ -713,6 +713,30 @@ export function handleCrewOutput(store, msg) {
     return;
   }
 
+  if (msg.type === 'crew_routing') {
+    // Show route notification toasts
+    if (msg.status === 'routing' && msg.routes && msg.routes.length > 0) {
+      const sessionRoles = store.crewSessions[sid]?.roles || [];
+      const fromRoleObj = sessionRoles.find(r => r.name === msg.fromRole);
+      for (const route of msg.routes) {
+        const toRoleObj = sessionRoles.find(r => r.name === route.to);
+        store.crewNotifications.push({
+          id: Date.now() + Math.random(),
+          fromRole: msg.fromRole,
+          fromIcon: fromRoleObj?.icon || '',
+          fromName: fromRoleObj?.displayName || msg.fromRole,
+          toRole: route.to,
+          toIcon: toRoleObj?.icon || '',
+          toName: toRoleObj?.displayName || route.to,
+          taskId: route.taskId || null,
+          taskTitle: route.taskTitle || null,
+          timestamp: Date.now()
+        });
+      }
+    }
+    return;
+  }
+
   if (msg.type === 'crew_session_cleared') {
     // 清空前端消息和 feature/task 数据，保留 session 配置
     store.crewMessagesMap[sid] = [];
@@ -721,6 +745,7 @@ export function handleCrewOutput(store, msg) {
     if (store.crewStatuses[sid]) {
       store.crewStatuses[sid].features = [];
     }
+    store.crewNotifications = [];
     return;
   }
 
