@@ -124,6 +124,13 @@ export async function processRoleOutput(session, roleName, roleQuery, roleState)
 
         // 解析路由
         const routes = parseRoutes(roleState.accumulatedText);
+        // Fallback: 如果 route summary 仍为空占位符，用 accumulatedText 末尾 500 字符
+        for (const route of routes) {
+          if (route.summary === '[该角色未提供消息摘要]' && roleState.accumulatedText) {
+            const tail = roleState.accumulatedText.slice(-500).trim();
+            if (tail) route.summary = `[auto-extracted]\n${tail}`;
+          }
+        }
 
         // 决策者 turn 完成：检测 TASKS block 中新完成的任务
         const roleConfig = session.roles.get(roleName);

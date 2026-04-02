@@ -39,9 +39,14 @@ export function parseRoutes(text) {
     const taskMatch = block.match(/^task:\s*(.+)/im);
     const taskTitleMatch = block.match(/^taskTitle:\s*(.+)/im);
 
+    let summary = summaryMatch ? summaryMatch[1].trim() : '';
+    if (!summary) {
+      summary = '[该角色未提供消息摘要]';
+    }
+
     routes.push({
       to: toClean,
-      summary: summaryMatch ? summaryMatch[1].trim() : '',
+      summary,
       taskId: taskMatch ? taskMatch[1].trim() : null,
       taskTitle: taskTitleMatch ? taskTitleMatch[1].trim() : null
     });
