@@ -332,8 +332,10 @@ export function handleCrewOutput(store, msg) {
       store.crewMessagesMap[sid] = msg.uiMessages.map(m => {
         // Dynamically compute isDecisionMaker from session roles (same as real-time crew_output)
         const senderRole = effectiveRoles.find(r => r.name === m.role);
-        // Restored AskUserQuestion without askRequestId → mark as expired history
-        const isHistoryAsk = m.type === 'tool' && m.toolName === 'AskUserQuestion' && !m.askRequestId;
+        // Restored AskUserQuestion: expire only if no askRequestId at all.
+        // If askRequestId exists but askAnswered is false → keep interactive so user can still submit.
+        const isAsk = m.type === 'tool' && m.toolName === 'AskUserQuestion';
+        const isHistoryAsk = isAsk && !m.askRequestId;
         return {
           id: m.timestamp || Date.now() + Math.random(),
           role: m.role,
@@ -350,6 +352,11 @@ export function handleCrewOutput(store, msg) {
           toolResult: null,
           hasResult: m.hasResult || false,
           isHistory: isHistoryAsk || undefined,
+          // Preserve ask state for unanswered questions so UI keeps them interactive
+          askRequestId: (isAsk && m.askRequestId) ? m.askRequestId : undefined,
+          askAnswered: (isAsk && m.askRequestId) ? !!m.askAnswered : undefined,
+          askQuestions: (isAsk && m.askQuestions) ? m.askQuestions : undefined,
+          selectedAnswers: (isAsk && m.selectedAnswers) ? m.selectedAnswers : undefined,
           taskId: m.taskId || null,
           taskTitle: m.taskTitle || null,
           isDecisionMaker: !!(senderRole && senderRole.isDecisionMaker),
