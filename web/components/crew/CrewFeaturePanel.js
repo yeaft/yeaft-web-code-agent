@@ -40,6 +40,7 @@ export default {
     return {
       showCompletedFeatures: false,
       showRouteActivity: true,
+      expandedRouteTasks: {},  // { taskId: true/false } — default all expanded
       expandedVisibleCount: 20
     };
   },
@@ -118,16 +119,33 @@ export default {
     filteredCompleted() {
       return this.filteredFeatures.filter(f => this.isFeatureCompleted(f));
     },
-    // Recent route events from crewMessages (last 8)
+    // Recent route events from crewMessages (last 20)
     recentRoutes() {
       const routes = [];
-      for (let i = this.crewMessages.length - 1; i >= 0 && routes.length < 8; i--) {
+      for (let i = this.crewMessages.length - 1; i >= 0 && routes.length < 20; i--) {
         const m = this.crewMessages[i];
         if (m.type === 'route') {
           routes.push(m);
         }
       }
       return routes;
+    },
+    // Group recentRoutes by taskId for collapsible display
+    routesByTask() {
+      const map = {};
+      for (const r of this.recentRoutes) {
+        const key = r.taskId || '__global__';
+        if (!map[key]) {
+          map[key] = {
+            taskId: r.taskId || null,
+            taskTitle: r.taskTitle || null,
+            routes: []
+          };
+        }
+        map[key].routes.push(r);
+      }
+      // Return as array, most recent group first (by first route timestamp)
+      return Object.values(map);
     }
   },
   template: `
@@ -189,7 +207,7 @@ export default {
 
         <!-- ===== LIST MODE: Feature cards with active/completed groups ===== -->
         <template v-else>
-          <!-- Route Activity -->
+          <!-- Route Activity — grouped by task -->
           <div v-if="recentRoutes.length > 0" class="crew-route-activity">
             <div class="crew-route-activity-header" @click="showRouteActivity = !showRouteActivity">
               <svg class="crew-route-activity-chevron" :class="{ 'is-expanded': showRouteActivity }" viewBox="0 0 24 24" width="12" height="12">
@@ -199,14 +217,24 @@ export default {
               <span class="crew-route-activity-count">({{ recentRoutes.length }})</span>
             </div>
             <div v-if="showRouteActivity" class="crew-route-activity-list">
-              <div v-for="r in recentRoutes" :key="r.id || r.timestamp" class="crew-route-activity-item">
-                <div class="crew-route-activity-task-line">{{ r.taskTitle || $t('crew.globalTask') }}</div>
-                <div class="crew-route-activity-route-line">
-                  <span v-if="r.roleIcon" class="crew-route-activity-icon">{{ r.roleIcon }}</span>
-                  <span class="crew-route-activity-from">{{ shortNameFn(r.roleName) }}</span>
-                  <span class="crew-route-activity-arrow">&rarr;</span>
-                  <span class="crew-route-activity-to">{{ r.routeTo }}</span>
-                  <span class="crew-route-activity-time">{{ formatTime(r.timestamp) }}</span>
+              <div v-for="group in routesByTask" :key="group.taskId || '__global__'" class="crew-route-task-group">
+                <div class="crew-route-task-group-header" @click="toggleRouteTask(group.taskId || '__global__')">
+                  <svg class="crew-route-activity-chevron" :class="{ 'is-expanded': isRouteTaskExpanded(group.taskId || '__global__') }" viewBox="0 0 24 24" width="10" height="10">
+                    <path fill="currentColor" d="M10 6l6 6-6 6z"/>
+                  </svg>
+                  <span class="crew-route-task-group-title">{{ group.taskTitle || $t('crew.globalTask') }}</span>
+                  <span class="crew-route-task-group-count">({{ group.routes.length }})</span>
+                </div>
+                <div v-if="isRouteTaskExpanded(group.taskId || '__global__')" class="crew-route-task-group-items">
+                  <div v-for="r in group.routes" :key="r.id || r.timestamp" class="crew-route-activity-item">
+                    <div class="crew-route-activity-route-line">
+                      <span v-if="r.roleIcon" class="crew-route-activity-icon">{{ r.roleIcon }}</span>
+                      <span class="crew-route-activity-from" :style="getRoleStyle(r.role)">{{ shortNameFn(r.roleName) }}</span>
+                      <span class="crew-route-activity-arrow">&rarr;</span>
+                      <span class="crew-route-activity-to" :style="getRoleStyle(r.routeTo)">{{ r.routeTo }}</span>
+                      <span class="crew-route-activity-time">{{ formatTime(r.timestamp) }}</span>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -331,6 +359,14 @@ export default {
     },
     shouldShowTurnDivider,
     getMaxRound,
+
+    // Route task group expand/collapse (default expanded)
+    isRouteTaskExpanded(key) {
+      return this.expandedRouteTasks[key] !== false;
+    },
+    toggleRouteTask(key) {
+      this.expandedRouteTasks[key] = !this.isRouteTaskExpanded(key);
+    },
 
     /**
      * Get the last 3 route events for a specific task (for per-feature pipeline).
