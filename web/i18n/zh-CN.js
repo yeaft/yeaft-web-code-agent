@@ -560,6 +560,7 @@ export default {
   'crew.confirmRemoveRole': '确定要移除 {name}？角色的 Memory 将保留。',
   'crew.elapsed': '总耗时 {duration}',
   'crew.routeActivity': '消息流转',
+  'crew.showMoreRoutes': '显示更多 (剩余 {count})',
 
   // ============ Crew Config Panel ============
   'crewConfig.selectAgent': '选择 Agent',

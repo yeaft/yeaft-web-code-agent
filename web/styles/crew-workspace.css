@@ -1471,6 +1471,21 @@
   padding-left: 14px;
 }
 
+.crew-route-show-more {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  cursor: pointer;
+  padding: 3px 0;
+  text-align: left;
+}
+
+.crew-route-show-more:hover {
+  color: var(--text-primary);
+  text-decoration: underline;
+}
+
 .crew-route-activity-item {
   display: flex;
   flex-direction: column;

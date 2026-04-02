@@ -41,6 +41,7 @@ export default {
       showCompletedFeatures: false,
       showRouteActivity: true,
       expandedRouteTasks: {},  // { taskId: true/false } — default all expanded
+      routeVisibleCounts: {},  // { taskId: number } — per-task visible route count (default 5)
       expandedVisibleCount: 20
     };
   },
@@ -226,7 +227,7 @@ export default {
                   <span class="crew-route-task-group-count">({{ group.routes.length }})</span>
                 </div>
                 <div v-if="isRouteTaskExpanded(group.taskId || '__global__')" class="crew-route-task-group-items">
-                  <div v-for="r in group.routes" :key="r.id || r.timestamp" class="crew-route-activity-item">
+                  <div v-for="r in group.routes.slice(0, getRouteVisibleCount(group.taskId || '__global__'))" :key="r.id || r.timestamp" class="crew-route-activity-item">
                     <div class="crew-route-activity-route-line">
                       <span v-if="r.roleIcon" class="crew-route-activity-icon">{{ r.roleIcon }}</span>
                       <span class="crew-route-activity-from" :style="getRoleStyle(r.role)">{{ shortNameFn(r.roleName) }}</span>
@@ -235,6 +236,11 @@ export default {
                       <span class="crew-route-activity-time">{{ formatTime(r.timestamp) }}</span>
                     </div>
                   </div>
+                  <button v-if="group.routes.length > getRouteVisibleCount(group.taskId || '__global__')"
+                          class="crew-route-show-more"
+                          @click.stop="showMoreRoutes(group.taskId || '__global__')">
+                    {{ $t('crew.showMoreRoutes', { count: group.routes.length - getRouteVisibleCount(group.taskId || '__global__') }) }}
+                  </button>
                 </div>
               </div>
             </div>
@@ -365,6 +371,13 @@ export default {
     },
     toggleRouteTask(key) {
       this.expandedRouteTasks[key] = !this.isRouteTaskExpanded(key);
+    },
+    // Per-task route pagination (default 5 visible)
+    getRouteVisibleCount(key) {
+      return this.routeVisibleCounts[key] || 5;
+    },
+    showMoreRoutes(key) {
+      this.routeVisibleCounts[key] = (this.routeVisibleCounts[key] || 5) + 5;
     },
 
     /**
