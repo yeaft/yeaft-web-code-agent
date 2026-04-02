@@ -199,14 +199,18 @@ export function toggleConversationMcp(store, serverName, enabled) {
 export function closeSession(store, conversationId, agentId) {
   const conv = store.conversations.find(c => c.id === conversationId);
 
-  // Crew sessions: stop all roles + clean crew data, but do NOT send delete_crew_session
-  // (crew data preserved in DB for future recovery)
+  // Crew sessions: stop all roles + mark hidden on agent side + clean crew data
   if (conv?.type === 'crew' && store.crewSessions[conversationId]) {
     store.sendWsMessage({
       type: 'crew_control',
       sessionId: conversationId,
       action: 'stop_all',
       agentId
+    });
+    // Mark session as hidden on agent side so it won't reappear after page refresh
+    store.sendWsMessage({
+      type: 'delete_crew_session',
+      sessionId: conversationId
     });
     delete store.crewSessions[conversationId];
     delete store.crewMessagesMap[conversationId];
