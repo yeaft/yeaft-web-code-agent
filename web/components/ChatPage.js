@@ -696,24 +696,24 @@ export default {
       return this.windowWidth < 640;
     },
     crewConversations() {
-      return this.sortByActivity(this.store.conversations.filter(c => c.type === 'crew'));
+      return this.sortByActivity(this.store.conversations.filter(c => c.type === 'crew' && c.agentOnline !== false));
     },
     normalConversations() {
-      return this.sortByActivity(this.store.conversations.filter(c => c.type !== 'crew'));
+      return this.sortByActivity(this.store.conversations.filter(c => c.type !== 'crew' && c.agentOnline !== false));
     },
     pinnedChatConversations() {
-      const pinned = this.store.conversations.filter(c => c.type !== 'crew' && this.store.isSessionPinned(c.id));
+      const pinned = this.store.conversations.filter(c => c.type !== 'crew' && c.agentOnline !== false && this.store.isSessionPinned(c.id));
       return pinned.sort((a, b) => this.store.pinnedSessions.indexOf(a.id) - this.store.pinnedSessions.indexOf(b.id));
     },
     unpinnedChatConversations() {
-      return this.sortByActivity(this.store.conversations.filter(c => c.type !== 'crew' && !this.store.isSessionPinned(c.id)));
+      return this.sortByActivity(this.store.conversations.filter(c => c.type !== 'crew' && c.agentOnline !== false && !this.store.isSessionPinned(c.id)));
     },
     pinnedCrewConversations() {
-      const pinned = this.store.conversations.filter(c => c.type === 'crew' && this.store.isSessionPinned(c.id));
+      const pinned = this.store.conversations.filter(c => c.type === 'crew' && c.agentOnline !== false && this.store.isSessionPinned(c.id));
       return pinned.sort((a, b) => this.store.pinnedSessions.indexOf(a.id) - this.store.pinnedSessions.indexOf(b.id));
     },
     unpinnedCrewConversations() {
-      return this.sortByActivity(this.store.conversations.filter(c => c.type === 'crew' && !this.store.isSessionPinned(c.id)));
+      return this.sortByActivity(this.store.conversations.filter(c => c.type === 'crew' && c.agentOnline !== false && !this.store.isSessionPinned(c.id)));
     }
   },
   methods: {
