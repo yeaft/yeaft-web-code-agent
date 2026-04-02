@@ -169,6 +169,8 @@ function completeAgentRegistration(ws, agentId, agentName, workDir, sessionKey, 
   const existingAgent = agents.get(agentId);
   const conversations = existingAgent?.conversations || new Map();
   const proxyPorts = (existingAgent?.proxyPorts || []).map(p => ({ ...p, enabled: false }));
+  const slashCommands = existingAgent?.slashCommands || [];
+  const slashCommandDescriptions = existingAgent?.slashCommandDescriptions || {};
 
   // 兼容旧版 agent：未上报 capabilities 时默认全部开启
   const effectiveCapabilities = capabilities.length > 0
@@ -184,6 +186,8 @@ function completeAgentRegistration(ws, agentId, agentName, workDir, sessionKey, 
     isAlive: true,
     capabilities: effectiveCapabilities,
     proxyPorts,
+    slashCommands,
+    slashCommandDescriptions,
     status: 'syncing',
     ownerId,
     ownerUsername,
