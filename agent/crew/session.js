@@ -488,6 +488,8 @@ export async function resumeCrewSession(msg) {
   }
 
   const roles = meta.roles || [];
+  // Migration: strip claudeMd from legacy session.json (now persisted in per-role CLAUDE.md files)
+  for (const r of roles) delete r.claudeMd;
   if (roles.length === 0) {
     console.warn(`[Crew] resumeCrewSession: session ${sessionId} has empty roles in session.json`);
   }
@@ -594,11 +596,11 @@ export async function handleUpdateCrewSession(msg) {
         console.log(`[Crew] Role added during update: ${r.name} (${r.displayName})`);
       } else {
         // Existing role — update metadata (displayName, icon, etc.) but preserve roleState
+        // claudeMd is NOT updated here — it's managed via CLAUDE.md files, not through edit session
         const existing = session.roles.get(r.name);
         existing.displayName = r.displayName;
         existing.icon = r.icon;
         existing.description = r.description;
-        existing.claudeMd = r.claudeMd;
         existing.isDecisionMaker = r.isDecisionMaker;
         existing.roleType = r.roleType;
         existing.groupIndex = r.groupIndex;
