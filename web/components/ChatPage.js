@@ -177,7 +177,7 @@ export default {
                       {{ $t('chat.sidebar.unpin') }}
                     </button>
                     <button class="session-menu-item" v-if="!store.isInAnyPanel(conv.id)" @click.stop="splitToPanel(conv.id); closeSessionMenu()">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+                      <svg viewBox="0 0 24 24"><path fill="currentColor" d="M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>
                       {{ $t('splitScreen.splitToPanel') }}
                     </button>
                     <button class="session-menu-item" @click.stop="startChatRename(conv); closeSessionMenu()">
@@ -232,7 +232,7 @@ export default {
                       {{ $t('chat.sidebar.pin') }}
                     </button>
                     <button class="session-menu-item" v-if="!store.isInAnyPanel(conv.id)" @click.stop="splitToPanel(conv.id); closeSessionMenu()">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+                      <svg viewBox="0 0 24 24"><path fill="currentColor" d="M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>
                       {{ $t('splitScreen.splitToPanel') }}
                     </button>
                     <button class="session-menu-item" @click.stop="startChatRename(conv); closeSessionMenu()">
@@ -309,7 +309,7 @@ export default {
                       {{ $t('chat.sidebar.unpin') }}
                     </button>
                     <button class="session-menu-item" v-if="!store.isInAnyPanel(conv.id)" @click.stop="splitToPanel(conv.id); closeSessionMenu()">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+                      <svg viewBox="0 0 24 24"><path fill="currentColor" d="M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>
                       {{ $t('splitScreen.splitToPanel') }}
                     </button>
                     <button class="session-menu-item danger" @click.stop="closeSession(conv.id, conv.agentId); closeSessionMenu()">
@@ -365,7 +365,7 @@ export default {
                       {{ $t('chat.sidebar.pin') }}
                     </button>
                     <button class="session-menu-item" v-if="!store.isInAnyPanel(conv.id)" @click.stop="splitToPanel(conv.id); closeSessionMenu()">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+                      <svg viewBox="0 0 24 24"><path fill="currentColor" d="M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>
                       {{ $t('splitScreen.splitToPanel') }}
                     </button>
                     <button class="session-menu-item danger" @click.stop="closeSession(conv.id, conv.agentId); closeSessionMenu()">
