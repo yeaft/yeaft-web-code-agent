@@ -608,5 +608,22 @@ const BUILTIN_ROLES = [
   { name: 'designer', displayName: '设计师-拉姆斯', icon: '', description: '用户交互设计和页面视觉设计', claudeMd: '' },
   { name: 'architect', displayName: '架构师-福勒', icon: '', description: '系统架构设计和技术决策', claudeMd: '' },
   { name: 'devops', displayName: '运维-凤凰', icon: '', description: 'CI/CD 流水线和部署管理', claudeMd: '' },
-  { name: 'researcher', displayName: '研究员', icon: '', description: '技术调研和可行性分析', claudeMd: '' }
+  { name: 'researcher', displayName: '研究员', icon: '', description: '技术调研和可行性分析', claudeMd: '' },
+  { name: 'developer-cunningham', displayName: '开发者-Cunningham', icon: '', description: 'SQL Server 查询优化和执行引擎专家', claudeMd: '' },
+  { name: 'developer-randal', displayName: '开发者-Randal', icon: '', description: 'SQL Server 存储引擎和数据库内核专家', claudeMd: '' },
+  { name: 'reviewer-tripp', displayName: '审查者-Tripp', icon: '', description: 'SQL Server 性能审查和索引优化专家', claudeMd: '' },
+  { name: 'developer-carmack', displayName: '开发者-卡马克', icon: '', description: '极致性能优化和底层编程', claudeMd: '' },
+  { name: 'developer-gosling', displayName: '开发者-高斯林', icon: '', description: '工程化设计和跨平台架构', claudeMd: '' },
+  { name: 'architect-knuth', displayName: '架构师-高德纳', icon: '', description: '算法分析和计算机科学理论', claudeMd: '' },
+  { name: 'designer-norman', displayName: '设计师-诺曼', icon: '', description: '用户中心设计和认知心理学', claudeMd: '' },
+  { name: 'tester-beck', displayName: '测试-肯特贝克', icon: '', description: '测试驱动开发和极限编程', claudeMd: '' },
+  { name: 'researcher-feynman', displayName: '研究员-费曼', icon: '', description: '第一性原理分析和深入浅出解释', claudeMd: '' },
+  { name: 'manager-musk', displayName: '管理者-马斯克', icon: '', description: '第一性原理思维，激进创新推动', claudeMd: '' },
+  { name: 'manager-grove', displayName: '管理者-格鲁夫', icon: '', description: '目标导向管理，危机应对决策', claudeMd: '' },
+  { name: 'strategist-munger', displayName: '策略师-芒格', icon: '', description: '多元思维模型和跨学科分析', claudeMd: '' },
+  { name: 'strategist-buffett', displayName: '策略师-巴菲特', icon: '', description: '价值投资和长期主义', claudeMd: '' },
+  { name: 'analyst-simons', displayName: '分析师-西蒙斯', icon: '', description: '量化模型和数据驱动决策', claudeMd: '' },
+  { name: 'writer-orwell', displayName: '写作-奥威尔', icon: '', description: '简洁有力的写作风格', claudeMd: '' },
+  { name: 'writer', displayName: '写作-Procida', icon: '', description: '技术文档和 API 文档编写', claudeMd: '' },
+  { name: 'strategist-sunzi', displayName: '策略师-孙子', icon: '', description: '兵法策略和博弈思维', claudeMd: '' }
 ];
