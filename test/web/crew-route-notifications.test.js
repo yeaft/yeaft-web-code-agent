@@ -296,9 +296,9 @@ describe('Subtask B: Feature Panel Route Activity', () => {
     expect(featurePanelSource).toContain("m.type === 'route'");
   });
 
-  it('recentRoutes limits to 8 entries', () => {
-    // The loop condition checks routes.length < 8
-    expect(featurePanelSource).toContain('routes.length < 8');
+  it('recentRoutes limits to 20 entries', () => {
+    // The loop condition checks routes.length < 20
+    expect(featurePanelSource).toContain('routes.length < 20');
   });
 
   it('recentRoutes iterates backward (newest first)', () => {
@@ -334,11 +334,12 @@ describe('Subtask B: Feature Panel Route Activity', () => {
     expect(featurePanelSource).toContain('crew-route-activity-count');
   });
 
-  it('shows route items with from/to/task/time info', () => {
+  it('shows route items with from/to/time info and task in group header', () => {
     expect(featurePanelSource).toContain('crew-route-activity-from');
     expect(featurePanelSource).toContain('crew-route-activity-arrow');
     expect(featurePanelSource).toContain('crew-route-activity-to');
-    expect(featurePanelSource).toContain('crew-route-activity-task');
+    // Task info is in group header, not per-item
+    expect(featurePanelSource).toContain('crew-route-task-group-title');
     expect(featurePanelSource).toContain('crew-route-activity-time');
   });
 

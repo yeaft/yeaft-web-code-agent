@@ -560,6 +560,7 @@ export default {
   'crew.confirmRemoveRole': 'Are you sure you want to remove {name}? Role memory will be preserved.',
   'crew.elapsed': 'Elapsed {duration}',
   'crew.routeActivity': 'Route Activity',
+  'crew.showMoreRoutes': 'Show more ({count} remaining)',
 
   // ============ Crew Config Panel ============
   'crewConfig.selectAgent': 'Select Agent',
