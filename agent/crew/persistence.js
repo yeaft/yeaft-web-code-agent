@@ -127,9 +127,11 @@ export async function saveSessionMeta(session) {
     sharedDir: session.sharedDir,
     name: session.name || '',
     status: session.status,
+    // claudeMd is intentionally excluded — it's large and already persisted
+    // in per-role CLAUDE.md files under .crew/roles/<name>/CLAUDE.md
     roles: Array.from(session.roles.values()).map(r => ({
       name: r.name, displayName: r.displayName, icon: r.icon,
-      description: r.description, claudeMd: r.claudeMd || '',
+      description: r.description,
       isDecisionMaker: r.isDecisionMaker || false,
       groupIndex: r.groupIndex, roleType: r.roleType, model: r.model
     })),

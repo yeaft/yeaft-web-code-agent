@@ -196,9 +196,9 @@ export default {
                       <span class="crew-concurrency-follow">{{ $t('crewConfig.followDev', { count: editDevCount }) }}</span>
                     </template>
                   </div>
-                  <details class="crew-role-advanced">
+                  <details v-if="role._isNew" class="crew-role-advanced">
                     <summary>{{ $t('crewConfig.advancedSettings') }}</summary>
-                    <textarea class="crew-config-textarea" v-model="role.claudeMd" :placeholder="$t('crewConfig.customPrompt')" rows="3" :disabled="!role._isNew"></textarea>
+                    <textarea class="crew-config-textarea" v-model="role.claudeMd" :placeholder="$t('crewConfig.customPrompt')" rows="3"></textarea>
                   </details>
                 </div>
               </div>
@@ -562,7 +562,6 @@ export default {
             displayName: r.displayName.replace(/-\d+$/, ''),
             icon: r.icon,
             description: r.description,
-            claudeMd: r.claudeMd || '',
             model: r.model,
             isDecisionMaker: r.isDecisionMaker || false,
             count: this.isExpandableRole(type) ? this._editDevCount : 1
