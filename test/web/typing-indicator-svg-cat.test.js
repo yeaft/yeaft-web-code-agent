@@ -366,12 +366,12 @@ describe('Scenario 5: Dark theme color adaptation via CSS variables', () => {
     expect(chatMessagesCss).toMatch(/\.svg-cat-ear\b[^{]*\{[^}]*fill:\s*var\(--text-secondary\)/);
   });
 
-  it('cat eye uses var(--bg-primary) for sclera (white in light, dark bg in dark)', () => {
-    expect(chatMessagesCss).toMatch(/\.svg-cat-eye\s*\{[^}]*fill:\s*var\(--bg-primary/);
+  it('cat eye uses var(--cat-eye-fill) for sclera (themed per light/dark)', () => {
+    expect(chatMessagesCss).toMatch(/\.svg-cat-eye\s*\{[^}]*fill:\s*var\(--cat-eye-fill\)/);
   });
 
-  it('cat pupil uses var(--text-primary) for contrast', () => {
-    expect(chatMessagesCss).toMatch(/\.svg-cat-pupil\s*\{[^}]*fill:\s*var\(--text-primary\)/);
+  it('cat pupil uses var(--cat-pupil-fill) for contrast (themed per light/dark)', () => {
+    expect(chatMessagesCss).toMatch(/\.svg-cat-pupil\s*\{[^}]*fill:\s*var\(--cat-pupil-fill\)/);
   });
 
   it('cat whiskers use var(--text-secondary)', () => {
