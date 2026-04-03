@@ -30,12 +30,12 @@ beforeAll(() => {
 // 1. Refresh button — business logic
 // =====================================================================
 describe('refresh button — business logic', () => {
-  it('refresh button has btn-loading class binding for refreshingSession', () => {
-    expect(headerSource).toContain("'btn-loading': store.refreshingSession");
+  it('refresh button has btn-loading class binding for isRefreshing', () => {
+    expect(headerSource).toContain("'btn-loading': isRefreshing");
   });
 
-  it('refresh button is disabled when refreshingSession', () => {
-    expect(headerSource).toContain('store.refreshingSession');
+  it('refresh button is disabled when isRefreshing', () => {
+    expect(headerSource).toContain('isRefreshing');
     expect(headerSource).toContain(':disabled="!canRefresh');
   });
 
@@ -46,11 +46,11 @@ describe('refresh button — business logic', () => {
     expect(fnBody).toContain('messagesMap[effectiveConvId.value] = []');
   });
 
-  it('refreshSession sets refreshingSession to true', () => {
+  it('refreshSession sets refreshingSession via per-conversation setter', () => {
     const setupSection = headerSource.split(/setup\s*\([^)]*\)/)[1] || '';
     const fnStart = setupSection.indexOf('refreshSession');
     const fnBody = setupSection.substring(fnStart, fnStart + 300);
-    expect(fnBody).toContain('store.refreshingSession = true');
+    expect(fnBody).toContain('setRefreshingSession');
   });
 
   it('refreshSession sends sync_messages with turns: 5', () => {
@@ -72,7 +72,7 @@ describe('refresh button — business logic', () => {
     const setupSection = headerSource.split(/setup\s*\([^)]*\)/)[1] || '';
     const fnStart = setupSection.indexOf('refreshSession');
     const fnBody = setupSection.substring(fnStart, fnStart + 300);
-    expect(fnBody).toContain('refreshingSession');
+    expect(fnBody).toContain('isRefreshingSession');
     expect(fnBody).toContain('effectiveConvId');
   });
 });
@@ -95,11 +95,11 @@ describe('canRefresh computed', () => {
     expect(fnBody).toContain('processingConversations');
   });
 
-  it('canRefresh checks refreshingSession', () => {
+  it('canRefresh checks isRefreshingSession', () => {
     const setupSection = headerSource.split(/setup\s*\([^)]*\)/)[1] || '';
     const fnStart = setupSection.indexOf('canRefresh');
     const fnBody = setupSection.substring(fnStart, fnStart + 300);
-    expect(fnBody).toContain('refreshingSession');
+    expect(fnBody).toContain('isRefreshingSession');
   });
 });
 
@@ -188,8 +188,9 @@ describe('store — new state fields', () => {
     expect(storeSource).toContain('clearStatus: null');
   });
 
-  it('store has refreshingSession field initialized to false', () => {
+  it('store has refreshingSession field and per-conversation map', () => {
     expect(storeSource).toContain('refreshingSession: false');
+    expect(storeSource).toContain('refreshingSessionMap');
   });
 });
 
@@ -225,7 +226,7 @@ describe('conversationHandler — clear completion detection', () => {
     expect(fnBody).toContain("status === 'completed'");
   });
 
-  it('handleSyncMessagesResult resets refreshingSession', () => {
-    expect(handlerSource).toContain('store.refreshingSession = false');
+  it('handleSyncMessagesResult resets refreshingSession via per-conversation setter', () => {
+    expect(handlerSource).toContain('setRefreshingSession');
   });
 });

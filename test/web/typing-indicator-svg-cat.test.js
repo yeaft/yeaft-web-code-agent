@@ -388,7 +388,10 @@ describe('Scenario 5: Dark theme color adaptation via CSS variables', () => {
 
   it('no hardcoded colors — all fills/strokes use CSS variables', () => {
     // Extract all fill/stroke declarations in svg-cat classes
-    const catStyles = chatMessagesCss.match(/\.svg-cat[^{]*\{[^}]*\}/g) || [];
+    // Exclude status-override rules (e.g., .typing-indicator.status-* .svg-cat-body)
+    // which intentionally use hardcoded rgba colors to match dot status colors
+    const catStyles = (chatMessagesCss.match(/\.svg-cat[^{]*\{[^}]*\}/g) || [])
+      .filter(s => !s.includes('.typing-indicator'));
     for (const style of catStyles) {
       const fills = style.match(/fill:\s*[^;]+/g) || [];
       const strokes = style.match(/stroke:\s*[^;]+/g) || [];
