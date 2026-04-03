@@ -326,4 +326,11 @@
   height: 16px;
 }
 
+/* Mobile: more bottom padding for input area */
+@media (max-width: 768px) {
+  .input-area {
+    padding-bottom: calc(32px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
 

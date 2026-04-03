@@ -1648,3 +1648,10 @@
   color: var(--warning, #f59e0b);
 }
 
+/* Mobile: wider horizontal padding for message area */
+@media (max-width: 768px) {
+  .chat-container {
+    padding: 16px 12px;
+  }
+}
+
