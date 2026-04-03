@@ -168,6 +168,10 @@ select option:checked {
   --diff-del-text: #b93535;
   --diff-line-num: #7a7a7a;
   --diff-header-bg: #f3f2ee;
+
+  /* SVG cat typing indicator */
+  --cat-eye-fill: var(--bg-primary, #fff);
+  --cat-pupil-fill: var(--text-primary);
 }
 
 /* Dark Theme - warm, eye-friendly tones */
@@ -282,6 +286,10 @@ select option:checked {
   --crew-color-fallback-7-bg: rgba(173, 186, 120, 0.10);
   --crew-color-fallback-7-border: rgba(173, 186, 120, 0.25);
   --crew-color-fallback-7-bg-glow: rgba(173, 186, 120, 0.18);
+
+  /* SVG cat typing indicator — softer eyes in dark mode */
+  --cat-eye-fill: rgba(255, 255, 255, 0.15);
+  --cat-pupil-fill: rgba(255, 255, 255, 0.5);
 }
 
 html {
