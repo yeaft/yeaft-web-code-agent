@@ -292,5 +292,5 @@ export function handleSyncMessagesResult(store, msg) {
     clearSessionLoading(store);
   }
   store.loadingMoreMessages = false;
-  store.refreshingSession = false;
+  store.setRefreshingSession(msg.conversationId, false);
 }
