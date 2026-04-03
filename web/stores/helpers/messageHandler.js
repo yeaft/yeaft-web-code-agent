@@ -437,8 +437,8 @@ export function handleMessage(store, msg) {
     // Crew session restore failed — reset refreshingSession flag
     case 'crew_session_restore_failed':
       console.warn('[Crew] Session restore failed:', msg.message);
-      store.refreshingSession = false;
-      clearRefreshTimeout();
+      store.setRefreshingSession(msg.sessionId, false);
+      clearRefreshTimeout(msg.sessionId);
       break;
 
     // /btw mode streaming

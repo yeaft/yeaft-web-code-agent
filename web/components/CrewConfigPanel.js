@@ -588,8 +588,8 @@ export default {
       this.$emit('close');
 
       // Trigger session reload to pick up role changes
-      this.store.refreshingSession = true;
-      this.store.startRefreshTimeout();
+      this.store.setRefreshingSession(sid, true);
+      this.store.startRefreshTimeout(sid);
       this.store.sendWsMessage({
         type: 'resume_crew_session',
         sessionId: sid,

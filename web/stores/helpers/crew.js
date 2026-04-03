@@ -4,20 +4,22 @@
  */
 
 // Timeout guard for refreshingSession — auto-reset after 15s if response never arrives
-let _refreshTimer = null;
+// Per-conversation timers to avoid cross-pane interference
+const _refreshTimers = {};
 
-export function startRefreshTimeout(store) {
-  clearRefreshTimeout();
-  _refreshTimer = setTimeout(() => {
-    store.refreshingSession = false;
-    _refreshTimer = null;
+export function startRefreshTimeout(store, convId) {
+  clearRefreshTimeout(convId);
+  _refreshTimers[convId || '_global'] = setTimeout(() => {
+    store.setRefreshingSession(convId, false);
+    delete _refreshTimers[convId || '_global'];
   }, 15000);
 }
 
-export function clearRefreshTimeout() {
-  if (_refreshTimer) {
-    clearTimeout(_refreshTimer);
-    _refreshTimer = null;
+export function clearRefreshTimeout(convId) {
+  const key = convId || '_global';
+  if (_refreshTimers[key]) {
+    clearTimeout(_refreshTimers[key]);
+    delete _refreshTimers[key];
   }
 }
 
@@ -420,8 +422,8 @@ export function handleCrewOutput(store, msg) {
     }
     store.saveOpenSessions();
     // ★ Reset refreshingSession flag — crew_session_restored completes a refresh cycle
-    store.refreshingSession = false;
-    clearRefreshTimeout();
+    store.setRefreshingSession(sid, false);
+    clearRefreshTimeout(sid);
     return;
   }
 

@@ -86,7 +86,8 @@ export const useChatStore = defineStore('chat', {
     // Context clear 状态: { conversationId, status: 'clearing'|'completed' }
     clearStatus: null,
     // Refresh session loading 状态
-    refreshingSession: false,
+    refreshingSession: false,       // legacy global fallback for non-split mode
+    refreshingSessionMap: {},       // per-conversation: { [convId]: boolean }
     // 代理端口映射: agentId → [{port, label, enabled}]
     proxyPorts: {},
     // ★ Phase 6: 消息分页状态
@@ -129,7 +130,8 @@ export const useChatStore = defineStore('chat', {
     crewConfigMode: 'create',    // 'create' | 'edit'
     crewMobilePanel: null,       // null | 'roles' | 'features' — 移动端 Drawer 状态
     crewPanelVisible: { roles: false, features: true }, // 桌面端面板可见性
-    crewInProgressCount: 0,      // 进行中 Feature 数量（由 CrewChatView 同步）
+    crewInProgressCount: 0,      // legacy global fallback for non-split mode
+    crewInProgressCountMap: {},   // per-conversation: { [convId]: number }
 
     // =====================
     // Expert Panel (帮帮团) 状态
@@ -325,6 +327,26 @@ export const useChatStore = defineStore('chat', {
         if (pane) { pane.activeRightPanel = value; return; }
       }
       this.activeRightPanel = value;
+    },
+
+    // =====================
+    // Per-conversation crew state (split-pane safe)
+    // =====================
+    getCrewInProgressCount(convId) {
+      if (convId) return this.crewInProgressCountMap[convId] || 0;
+      return this.crewInProgressCount;
+    },
+    setCrewInProgressCount(convId, value) {
+      if (convId) { this.crewInProgressCountMap[convId] = value; }
+      this.crewInProgressCount = value;
+    },
+    isRefreshingSession(convId) {
+      if (convId) return !!this.refreshingSessionMap[convId];
+      return this.refreshingSession;
+    },
+    setRefreshingSession(convId, value) {
+      if (convId) { this.refreshingSessionMap[convId] = value; }
+      this.refreshingSession = value;
     },
 
     // =====================
@@ -738,7 +760,7 @@ export const useChatStore = defineStore('chat', {
       }
     },
     handleCrewOutput(msg) { crewHelpers.handleCrewOutput(this, msg); },
-    startRefreshTimeout() { crewHelpers.startRefreshTimeout(this); },
+    startRefreshTimeout(convId) { crewHelpers.startRefreshTimeout(this, convId); },
 
     openFileInExplorer(filePath) {
       if (!this.currentConversation) return;

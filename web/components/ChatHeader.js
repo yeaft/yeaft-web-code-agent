@@ -93,7 +93,7 @@ export default {
             </div>
           </div>
         </Teleport>
-        <button class="header-action-btn" :class="{ 'btn-loading': store.refreshingSession }" @click="refreshSession" :disabled="!canRefresh || store.refreshingSession" :title="$t('chatHeader.refresh')" v-if="canRefresh">
+        <button class="header-action-btn" :class="{ 'btn-loading': isRefreshing }" @click="refreshSession" :disabled="!canRefresh || isRefreshing" :title="$t('chatHeader.refresh')" v-if="canRefresh">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
           </svg>
@@ -124,12 +124,12 @@ export default {
                 :class="{ active: isCrewPanelActive('features') }"
                 @click="onCrewPanelToggle('features')">
           <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM7 12h2v5H7zm4-3h2v8h-2zm4-3h2v11h-2z"/></svg>
-          <span v-if="store.crewInProgressCount > 0" class="nav-badge">{{ store.crewInProgressCount }}</span>
+          <span v-if="crewInProgress > 0" class="nav-badge">{{ crewInProgress }}</span>
         </button>
         <button class="crew-header-nav-btn"
-                :class="{ 'btn-loading': store.refreshingSession }"
+                :class="{ 'btn-loading': isRefreshing }"
                 @click="refreshSession"
-                :disabled="store.refreshingSession"
+                :disabled="isRefreshing"
                 :title="$t('chatHeader.refresh')">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
@@ -269,6 +269,11 @@ export default {
       return activeRoles && activeRoles.length > 0;
     });
 
+    // Per-conversation refresh state (split-pane safe)
+    const isRefreshing = Vue.computed(() => store.isRefreshingSession(effectiveConvId.value));
+    // Per-conversation crew in-progress count (split-pane safe)
+    const crewInProgress = Vue.computed(() => store.getCrewInProgressCount(effectiveConvId.value));
+
     const isCompacting = Vue.computed(() => {
       return store.compactStatus?.status === 'compacting'
         && store.compactStatus?.conversationId === effectiveConvId.value;
@@ -282,13 +287,13 @@ export default {
     const canRefresh = Vue.computed(() => {
       if (!effectiveConvId.value) return false;
       return !store.processingConversations[effectiveConvId.value]
-        && !store.refreshingSession;
+        && !store.isRefreshingSession(effectiveConvId.value);
     });
 
     const refreshSession = () => {
-      if (store.refreshingSession || !effectiveConvId.value) return;
-      store.refreshingSession = true;
-      store.startRefreshTimeout();
+      if (store.isRefreshingSession(effectiveConvId.value) || !effectiveConvId.value) return;
+      store.setRefreshingSession(effectiveConvId.value, true);
+      store.startRefreshTimeout(effectiveConvId.value);
       if (isCrew.value) {
         // Crew: resume session to reload roles + messages
         store.sendWsMessage({
@@ -402,6 +407,6 @@ export default {
       document.removeEventListener('click', closeMcpOnOutsideClick);
     });
 
-    return { store, effectiveConvId, effectiveRightPanel, isCrew, headerTitle, agentName, folderPath, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, hasStreamingRoles, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, openCrewEdit, onCrewPanelToggle, isCrewPanelActive, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel, toggleSubAgentPanel, runningSubagentCount };
+    return { store, effectiveConvId, effectiveRightPanel, isCrew, headerTitle, agentName, folderPath, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, hasStreamingRoles, isRefreshing, crewInProgress, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, openCrewEdit, onCrewPanelToggle, isCrewPanelActive, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel, toggleSubAgentPanel, runningSubagentCount };
   }
 };
