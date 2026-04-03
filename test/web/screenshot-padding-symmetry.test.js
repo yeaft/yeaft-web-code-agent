@@ -104,9 +104,12 @@ describe('Normal mode: hover buttons unaffected', () => {
 // AssistantTurn screenshot: toPng with uniform padding
 // =====================================================================
 describe('AssistantTurn screenshot: toPng configuration', () => {
-  it('toPng style should apply padding: 32px (uniform)', () => {
-    // The inline style on the clone should be uniform 32px
-    expect(assistantTurnJs).toContain("padding: '32px'");
+  it('toPng style should apply padding with 32px value', () => {
+    // Uses const pad = 32 and padding: `${pad}px` for uniform 32px
+    expect(assistantTurnJs).toContain('const pad = 32');
+    // Should explicitly set width/height to compensate for padding
+    expect(assistantTurnJs).toContain('rect.width + pad * 2');
+    expect(assistantTurnJs).toContain('rect.height + pad * 2');
   });
 
   it('should NOT have old asymmetric padding 24px 32px', () => {
@@ -142,8 +145,10 @@ describe('CrewTurnRenderer screenshot: no padding-right issue', () => {
     expect(crewTurnRendererJs).toContain('.crew-msg-content.markdown-body');
   });
 
-  it('CrewTurnRenderer also uses padding: 32px', () => {
-    expect(crewTurnRendererJs).toContain("padding: '32px'");
+  it('CrewTurnRenderer also uses 32px padding with width/height compensation', () => {
+    expect(crewTurnRendererJs).toContain('const pad = 32');
+    expect(crewTurnRendererJs).toContain('rect.width + pad * 2');
+    expect(crewTurnRendererJs).toContain('rect.height + pad * 2');
   });
 
   it('CrewTurnRenderer also uses screenshot-mode class', () => {
@@ -163,15 +168,16 @@ describe('Padding symmetry analysis', () => {
     expect(turnContentRule[1]).toContain('padding-right: 40px');
   });
 
-  it('in screenshot-mode: right=0 (reset), then toPng adds 32px all sides', () => {
+  it('in screenshot-mode: right=0 (reset), then toPng adds 32px all sides with canvas compensation', () => {
     // Step 1: .turn-content.screenshot-mode { padding-right: 0 !important }
     // → computed padding: 0 0 0 0
-    // Step 2: toPng style: { padding: '32px' }
-    // → final padding: 32px 32px 32px 32px (symmetric!)
+    // Step 2: toPng style: { padding: `${pad}px` } with width/height += pad*2
+    // → final padding: 32px 32px 32px 32px (symmetric!) on a properly sized canvas
     const screenshotRule = chatMessagesCss.match(/\.turn-content\.screenshot-mode\s*\{([^}]*)\}/);
     expect(screenshotRule[1]).toContain('padding-right: 0 !important');
-    expect(assistantTurnJs).toContain("padding: '32px'");
-    // Together they produce symmetric padding
+    expect(assistantTurnJs).toContain('const pad = 32');
+    expect(assistantTurnJs).toContain('rect.width + pad * 2');
+    // Together they produce symmetric padding on a canvas large enough to hold content + padding
   });
 });
 
@@ -179,11 +185,11 @@ describe('Padding symmetry analysis', () => {
 // Change scope: only 1 file modified
 // =====================================================================
 describe('Change scope', () => {
-  it('only chat-messages.css is modified (no JS changes needed)', () => {
-    // The fix is CSS-only — the JS already had the correct padding: 32px
-    // and screenshot-mode class toggling
-    expect(chatMessagesCss).toContain('.turn-content.screenshot-mode');
-    // AssistantTurn.js already had padding: '32px' (not '24px 32px')
-    expect(assistantTurnJs).toContain("padding: '32px'");
+  it('JS files use getBoundingClientRect + pad compensation for correct canvas sizing', () => {
+    // The fix adds width/height parameters to compensate for padding
+    expect(assistantTurnJs).toContain('getBoundingClientRect()');
+    expect(assistantTurnJs).toContain('rect.width + pad * 2');
+    expect(crewTurnRendererJs).toContain('getBoundingClientRect()');
+    expect(crewTurnRendererJs).toContain('rect.width + pad * 2');
   });
 });

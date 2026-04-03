@@ -261,11 +261,15 @@ export default {
         const bgColor = getComputedStyle(document.body).getPropertyValue('--bg-main').trim() || '#ffffff';
         contentEl.classList.add('screenshot-mode');
         try {
+          const pad = 32;
+          const rect = contentEl.getBoundingClientRect();
           const dataUrl = await window.htmlToImage.toPng(contentEl, {
             backgroundColor: bgColor,
             pixelRatio: 3,
+            width: rect.width + pad * 2,
+            height: rect.height + pad * 2,
             style: {
-              padding: '32px',
+              padding: `${pad}px`,
             },
             filter: (node) => {
               if (node.classList && (node.classList.contains('turn-header') || node.classList.contains('screenshot-btn'))) return false;

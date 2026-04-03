@@ -175,10 +175,14 @@ export default {
         const bgColor = getComputedStyle(document.body).getPropertyValue('--bg-main').trim() || '#ffffff';
         contentEl.classList.add('screenshot-mode');
         try {
+          const pad = 32;
+          const rect = contentEl.getBoundingClientRect();
           const dataUrl = await window.htmlToImage.toPng(contentEl, {
             backgroundColor: bgColor,
             pixelRatio: 3,
-            style: { padding: '32px' }
+            width: rect.width + pad * 2,
+            height: rect.height + pad * 2,
+            style: { padding: `${pad}px` }
           });
           const link = document.createElement('a');
           link.download = `crew-response-${Date.now()}.png`;
