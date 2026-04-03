@@ -160,6 +160,35 @@
 .typing-indicator.status-session-lost > span:nth-child(-n+3),
 .typing-indicator.status-cli-exited > span:nth-child(-n+3) { background: rgba(229, 124, 35, 0.6); }
 
+/* Cat body color follows dot status */
+.typing-indicator.status-disconnected .svg-cat-body,
+.typing-indicator.status-disconnected .svg-cat-head,
+.typing-indicator.status-disconnected .svg-cat-ear,
+.typing-indicator.status-disconnected .svg-cat-leg,
+.typing-indicator.status-disconnected .svg-cat-tail,
+.typing-indicator.status-agent-offline .svg-cat-body,
+.typing-indicator.status-agent-offline .svg-cat-head,
+.typing-indicator.status-agent-offline .svg-cat-ear,
+.typing-indicator.status-agent-offline .svg-cat-leg,
+.typing-indicator.status-agent-offline .svg-cat-tail { fill: rgba(229, 57, 53, 0.6); stroke: rgba(229, 57, 53, 0.6); }
+
+.typing-indicator.status-compacting .svg-cat-body,
+.typing-indicator.status-compacting .svg-cat-head,
+.typing-indicator.status-compacting .svg-cat-ear,
+.typing-indicator.status-compacting .svg-cat-leg,
+.typing-indicator.status-compacting .svg-cat-tail { fill: rgba(91, 155, 213, 0.6); stroke: rgba(91, 155, 213, 0.6); }
+
+.typing-indicator.status-session-lost .svg-cat-body,
+.typing-indicator.status-session-lost .svg-cat-head,
+.typing-indicator.status-session-lost .svg-cat-ear,
+.typing-indicator.status-session-lost .svg-cat-leg,
+.typing-indicator.status-session-lost .svg-cat-tail,
+.typing-indicator.status-cli-exited .svg-cat-body,
+.typing-indicator.status-cli-exited .svg-cat-head,
+.typing-indicator.status-cli-exited .svg-cat-ear,
+.typing-indicator.status-cli-exited .svg-cat-leg,
+.typing-indicator.status-cli-exited .svg-cat-tail { fill: rgba(229, 124, 35, 0.6); stroke: rgba(229, 124, 35, 0.6); }
+
 .typing-status-text {
   margin-left: 8px;
   font-size: 12px;
