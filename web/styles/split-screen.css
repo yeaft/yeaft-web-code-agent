@@ -311,14 +311,26 @@
   padding-right: 0;
 }
 
-/* Crew typing dots: reduce oversized left padding in narrow split panes */
+/* Crew typing dots: constrain width like chat mode in narrow split panes */
 .split-pane .crew-streaming-indicator {
-  padding: 8px 12px;
+  max-width: 90%;
+  padding-left: 24px;
 }
 
-/* Crew input: add side margin so input-wrapper doesn't hug pane edges */
-.split-pane .crew-input-area {
-  padding: 4px 12px;
+/* Crew input: restore max-width constraint so input doesn't fill edge-to-edge */
+.split-pane .crew-input-area .input-wrapper {
+  max-width: 90%;
+  margin: 0 auto;
+}
+.split-pane .crew-input-area .input-hints {
+  max-width: 90%;
+  margin-left: auto;
+  margin-right: auto;
+}
+.split-pane .crew-input-area .crew-input-hints {
+  max-width: 90%;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 /* Backdrop overlay in split mode */
