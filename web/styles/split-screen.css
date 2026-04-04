@@ -311,6 +311,16 @@
   padding-right: 0;
 }
 
+/* Crew typing dots: reduce oversized left padding in narrow split panes */
+.split-pane .crew-streaming-indicator {
+  padding: 8px 12px;
+}
+
+/* Crew input: add side margin so input-wrapper doesn't hug pane edges */
+.split-pane .crew-input-area {
+  padding: 4px 12px;
+}
+
 /* Backdrop overlay in split mode */
 .split-pane .crew-mobile-overlay {
   display: block;
