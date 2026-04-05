@@ -3,6 +3,8 @@ import { describe, it, expect } from 'vitest';
 /**
  * Tests for task-241: Cat-dog fight SVG animation in typing indicator
  *
+ * The fight scene REPLACES the running cat (not appended alongside it).
+ *
  * Validates:
  * 1. All 3 components contain .svg-fight-scene with identical SVG
  * 2. CSS has .svg-fight-scene styles and animations
@@ -10,6 +12,7 @@ import { describe, it, expect } from 'vitest';
  * 4. Status color overrides exist for fight scene
  * 5. :not() selectors exclude .svg-fight-scene from dot animation
  * 6. Fight SVG has both cat and dog groups
+ * 7. Dog has corgi-specific features (snout, large ears, short tail)
  */
 
 import { readFileSync } from 'fs';
@@ -104,9 +107,17 @@ describe('Fight SVG structure', () => {
     expect(messageListJs).toContain('svg-fight-cat-tail');
   });
 
-  it('dog has tail and snout', () => {
+  it('dog has tail and snout (corgi features)', () => {
     expect(messageListJs).toContain('svg-fight-dog-tail');
     expect(messageListJs).toContain('svg-fight-dog-snout');
+  });
+
+  it('dog has nose (distinct from cat)', () => {
+    expect(messageListJs).toContain('svg-fight-dog-nose');
+  });
+
+  it('dog does NOT have whiskers (dogs don\'t have prominent whiskers like cats)', () => {
+    expect(messageListJs).not.toContain('svg-fight-dog-whisker');
   });
 
   it('fight scene has aria-hidden="true"', () => {
@@ -115,15 +126,15 @@ describe('Fight SVG structure', () => {
 });
 
 // =====================================================================
-// CSS: fight scene container styles
+// CSS: fight scene container styles (96x72 — larger size)
 // =====================================================================
 describe('CSS: fight scene container', () => {
-  it('.svg-fight-scene has correct dimensions (64x52)', () => {
+  it('.svg-fight-scene has correct dimensions (96x72)', () => {
     expect(chatMessagesCss).toContain('.svg-fight-scene');
     const sceneRule = chatMessagesCss.match(/\.svg-fight-scene\s*\{([^}]*)\}/);
     expect(sceneRule).not.toBeNull();
-    expect(sceneRule[1]).toContain('width: 64px');
-    expect(sceneRule[1]).toContain('height: 52px');
+    expect(sceneRule[1]).toContain('width: 96px');
+    expect(sceneRule[1]).toContain('height: 72px');
   });
 
   it('.svg-fight-scene has margin-left: 12px', () => {
@@ -196,6 +207,28 @@ describe('CSS: fight animations', () => {
     expect(chatMessagesCss).toMatch(/\.svg-fight-dog-arm-upper\s*\{[^}]*animation:/);
     expect(chatMessagesCss).toMatch(/\.svg-fight-dog-arm-lower\s*\{[^}]*animation:/);
   });
+
+  it('fight animations are fast (sway ≤ 0.5s, punch ≤ 0.3s)', () => {
+    // Cat sway
+    const catSway = chatMessagesCss.match(/\.svg-fight-cat\s*\{[^}]*animation:\s*svg-fight-cat-sway\s+(\d+\.?\d*)s/);
+    expect(catSway).not.toBeNull();
+    expect(parseFloat(catSway[1])).toBeLessThanOrEqual(0.5);
+
+    // Dog sway
+    const dogSway = chatMessagesCss.match(/\.svg-fight-dog\s*\{[^}]*animation:\s*svg-fight-dog-sway\s+(\d+\.?\d*)s/);
+    expect(dogSway).not.toBeNull();
+    expect(parseFloat(dogSway[1])).toBeLessThanOrEqual(0.5);
+
+    // Cat punch
+    const catPunch = chatMessagesCss.match(/\.svg-fight-cat-arm-upper\s*\{[^}]*animation:\s*svg-fight-punch-cat-upper\s+(\d+\.?\d*)s/);
+    expect(catPunch).not.toBeNull();
+    expect(parseFloat(catPunch[1])).toBeLessThanOrEqual(0.3);
+
+    // Dog punch
+    const dogPunch = chatMessagesCss.match(/\.svg-fight-dog-arm-upper\s*\{[^}]*animation:\s*svg-fight-punch-dog-upper\s+(\d+\.?\d*)s/);
+    expect(dogPunch).not.toBeNull();
+    expect(parseFloat(dogPunch[1])).toBeLessThanOrEqual(0.3);
+  });
 });
 
 // =====================================================================
@@ -216,10 +249,6 @@ describe('CSS: status color overrides', () => {
     expect(chatMessagesCss).toContain('.typing-indicator.status-compacting .svg-fight-cat-body');
     expect(chatMessagesCss).toContain('.typing-indicator.status-compacting .svg-fight-dog-body');
     // Verify it uses blue color
-    const compactSection = chatMessagesCss.match(
-      /\.typing-indicator\.status-compacting\s+\.svg-fight-cat-body[\s\S]*?\{([^}]*)\}/
-    );
-    // Should contain the blue color
     expect(chatMessagesCss).toMatch(/status-compacting[\s\S]*?svg-fight[\s\S]*?91,\s*155,\s*213/);
   });
 
@@ -239,56 +268,56 @@ describe('CSS: status color overrides', () => {
 });
 
 // =====================================================================
-// CSS: :not() selectors exclude .svg-fight-scene
+// CSS: :not() selectors exclude .svg-fight-scene (no .svg-running-cat)
 // =====================================================================
 describe('CSS: dot animation :not() selectors', () => {
   it('dot animation selector excludes .svg-fight-scene', () => {
     expect(chatMessagesCss).toContain(':not(.svg-fight-scene)');
   });
 
-  it('base dot selector has all 3 exclusions', () => {
+  it('dot animation selector does NOT reference .svg-running-cat (removed)', () => {
+    expect(chatMessagesCss).not.toContain(':not(.svg-running-cat)');
+  });
+
+  it('base dot selector has correct exclusions', () => {
     const baseSelector = chatMessagesCss.match(
-      /\.typing-indicator > span:not\(\.typing-status-text\):not\(\.svg-running-cat\):not\(\.svg-fight-scene\)\s*\{/
+      /\.typing-indicator > span:not\(\.typing-status-text\):not\(\.svg-fight-scene\)\s*\{/
     );
     expect(baseSelector).not.toBeNull();
   });
 
-  it('nth-child(2) selector has all 3 exclusions', () => {
+  it('nth-child(2) selector has correct exclusions', () => {
     const nthSelector = chatMessagesCss.match(
-      /\.typing-indicator > span:not\(\.typing-status-text\):not\(\.svg-running-cat\):not\(\.svg-fight-scene\):nth-child\(2\)/
+      /\.typing-indicator > span:not\(\.typing-status-text\):not\(\.svg-fight-scene\):nth-child\(2\)/
     );
     expect(nthSelector).not.toBeNull();
   });
 
-  it('nth-child(3) selector has all 3 exclusions', () => {
+  it('nth-child(3) selector has correct exclusions', () => {
     const nthSelector = chatMessagesCss.match(
-      /\.typing-indicator > span:not\(\.typing-status-text\):not\(\.svg-running-cat\):not\(\.svg-fight-scene\):nth-child\(3\)/
+      /\.typing-indicator > span:not\(\.typing-status-text\):not\(\.svg-fight-scene\):nth-child\(3\)/
     );
     expect(nthSelector).not.toBeNull();
   });
 });
 
 // =====================================================================
-// Layout: fight scene comes after running cat
+// No running cat: fight scene is the sole animation
 // =====================================================================
-describe('Layout: fight scene after running cat', () => {
-  it('MessageList.js: .svg-fight-scene comes after .svg-running-cat', () => {
-    const catIdx = messageListJs.indexOf('class="svg-running-cat"');
-    const fightIdx = messageListJs.indexOf('class="svg-fight-scene"');
-    expect(catIdx).toBeGreaterThan(-1);
-    expect(fightIdx).toBeGreaterThan(-1);
-    expect(fightIdx).toBeGreaterThan(catIdx);
+describe('Running cat fully removed — fight scene is sole animation', () => {
+  it('no .svg-running-cat in any component', () => {
+    expect(messageListJs).not.toContain('svg-running-cat');
+    expect(splitPaneJs).not.toContain('svg-running-cat');
+    expect(crewChatViewJs).not.toContain('svg-running-cat');
   });
 
-  it('SplitPane.js: .svg-fight-scene comes after .svg-running-cat', () => {
-    const catIdx = splitPaneJs.indexOf('class="svg-running-cat"');
-    const fightIdx = splitPaneJs.indexOf('class="svg-fight-scene"');
-    expect(fightIdx).toBeGreaterThan(catIdx);
+  it('no .svg-running-cat in CSS', () => {
+    expect(chatMessagesCss).not.toContain('svg-running-cat');
   });
 
-  it('CrewChatView.js: .svg-fight-scene comes after .svg-running-cat', () => {
-    const catIdx = crewChatViewJs.indexOf('class="svg-running-cat"');
-    const fightIdx = crewChatViewJs.indexOf('class="svg-fight-scene"');
-    expect(fightIdx).toBeGreaterThan(catIdx);
+  it('no viewBox="0 0 34 28" (old running cat viewBox) in any component', () => {
+    expect(messageListJs).not.toContain('viewBox="0 0 34 28"');
+    expect(splitPaneJs).not.toContain('viewBox="0 0 34 28"');
+    expect(crewChatViewJs).not.toContain('viewBox="0 0 34 28"');
   });
 });
