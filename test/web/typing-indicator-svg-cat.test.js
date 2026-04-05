@@ -1,14 +1,18 @@
 /**
- * task-224 / task-241: Typing indicator — SVG fight scene replaces running cat.
- *
- * The running cat SVG was fully removed. The cat-dog fight scene is now the
- * sole SVG animation in the typing indicator.
+ * task-224: Typing indicator — SVG cat animation + remove thinking text.
  *
  * Test scenarios:
- * 1-3. All 3 components: typing indicator has 3 dots + fight scene, no text, no running cat
- * 4. Disconnected → dots + fight scene + "disconnected" text still displayed
- * 5. Old CSS cat classes fully removed from stylesheet
- * 6. Dot animation :not() selectors updated (no .svg-running-cat reference)
+ * 1. Main chat → typing indicator has 3 dots + SVG cat, no text
+ * 2. Split pane → same
+ * 3. Crew chat → same
+ * 4. Disconnected → dots + cat + "disconnected" text still displayed
+ * 5. Dark theme → cat uses CSS variables for correct color adaptation
+ *
+ * Also verifies:
+ * - Old CSS cat classes fully removed
+ * - SVG cat markup consistent across all 3 components
+ * - All non-thinking status texts preserved
+ * - CSS animations defined for SVG cat
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import { readFileSync } from 'fs';
@@ -33,6 +37,7 @@ beforeAll(() => {
 function extractTypingIndicator(src) {
   const start = src.indexOf('class="typing-indicator"');
   if (start === -1) return '';
+  // Find the closing </div> of the typing-indicator
   let depth = 0;
   let divStart = src.lastIndexOf('<div', start);
   for (let i = divStart; i < src.length; i++) {
@@ -44,7 +49,7 @@ function extractTypingIndicator(src) {
 }
 
 // =============================================================================
-// 1. Main chat (MessageList.js): 3 dots + fight scene, no running cat
+// 1. Main chat (MessageList.js): 3 dots + SVG cat, no thinking text
 // =============================================================================
 describe('Scenario 1: MessageList.js typing indicator', () => {
   it('has typing-indicator div with showTypingDots condition', () => {
@@ -58,21 +63,25 @@ describe('Scenario 1: MessageList.js typing indicator', () => {
     expect(dotSpans.length).toBeGreaterThanOrEqual(3);
   });
 
-  it('has svg-fight-scene span (replaced running cat)', () => {
-    expect(messageListSrc).toContain('class="svg-fight-scene"');
-    expect(messageListSrc).toContain('viewBox="0 0 80 60"');
+  it('has svg-running-cat span with inline SVG', () => {
+    expect(messageListSrc).toContain('class="svg-running-cat"');
+    expect(messageListSrc).toContain('<svg viewBox="0 0 34 28"');
   });
 
-  it('does NOT have old svg-running-cat', () => {
-    expect(messageListSrc).not.toContain('class="svg-running-cat"');
-    expect(messageListSrc).not.toContain('viewBox="0 0 34 28"');
+  it('SVG cat has body, head, legs, tail, eyes, whiskers', () => {
+    expect(messageListSrc).toContain('class="svg-cat-body"');
+    expect(messageListSrc).toContain('class="svg-cat-head"');
+    expect(messageListSrc).toContain('class="svg-cat-leg"');
+    expect(messageListSrc).toContain('class="svg-cat-tail"');
+    expect(messageListSrc).toContain('class="svg-cat-eye"');
+    expect(messageListSrc).toContain('class="svg-cat-whisker"');
   });
 
-  it('does NOT have old running-cat class markup', () => {
-    expect(messageListSrc).not.toContain('class="running-cat"');
-    expect(messageListSrc).not.toContain('svg-cat-body');
-    expect(messageListSrc).not.toContain('svg-cat-head');
-    expect(messageListSrc).not.toContain('svg-cat-whisker');
+  it('SVG cat has ears, pupils, nose, mouth', () => {
+    expect(messageListSrc).toContain('class="svg-cat-ear"');
+    expect(messageListSrc).toContain('class="svg-cat-pupil"');
+    expect(messageListSrc).toContain('class="svg-cat-nose"');
+    expect(messageListSrc).toContain('class="svg-cat-mouth"');
   });
 
   it('does NOT show thinking text', () => {
@@ -80,50 +89,116 @@ describe('Scenario 1: MessageList.js typing indicator', () => {
     expect(messageListSrc).not.toContain('typing-status-thinking');
     expect(messageListSrc).not.toContain('chat.waiting.thinking');
   });
+
+  it('does NOT use old CSS-only cat markup (non-SVG)', () => {
+    // Old CSS cat used class="running-cat" (not svg-running-cat)
+    expect(messageListSrc).not.toContain('class="running-cat"');
+    // Old CSS cat used div-based legs: cat-leg-front, cat-leg-back (not svg-cat-leg-*)
+    expect(messageListSrc).not.toContain('cat-leg-front');
+    expect(messageListSrc).not.toContain('cat-leg-back');
+    // Old CSS cat used div elements with class="cat-body" etc. — SVG uses svg-cat-* prefix
+    expect(messageListSrc).not.toMatch(/class="cat-body"/);
+    expect(messageListSrc).not.toMatch(/class="cat-head"/);
+    expect(messageListSrc).not.toMatch(/class="cat-ear"/);
+  });
+
+  it('SVG cat has aria-hidden for accessibility', () => {
+    expect(messageListSrc).toContain('class="svg-running-cat" aria-hidden="true"');
+  });
 });
 
 // =============================================================================
-// 2. Split pane (SplitPane.js): same — fight scene, no running cat
+// 2. Split pane (SplitPane.js): same SVG cat, no thinking text
 // =============================================================================
 describe('Scenario 2: SplitPane.js typing indicator', () => {
   it('has typing-indicator div', () => {
     expect(splitPaneSrc).toContain('class="typing-indicator"');
   });
 
-  it('has svg-fight-scene (not svg-running-cat)', () => {
-    expect(splitPaneSrc).toContain('class="svg-fight-scene"');
-    expect(splitPaneSrc).not.toContain('class="svg-running-cat"');
-    expect(splitPaneSrc).not.toContain('viewBox="0 0 34 28"');
+  it('has svg-running-cat with inline SVG', () => {
+    expect(splitPaneSrc).toContain('class="svg-running-cat"');
+    expect(splitPaneSrc).toContain('<svg viewBox="0 0 34 28"');
+  });
+
+  it('has all SVG cat parts', () => {
+    expect(splitPaneSrc).toContain('svg-cat-body');
+    expect(splitPaneSrc).toContain('svg-cat-head');
+    expect(splitPaneSrc).toContain('svg-cat-tail');
+    expect(splitPaneSrc).toContain('svg-cat-eye');
+    expect(splitPaneSrc).toContain('svg-cat-whisker');
+    expect(splitPaneSrc).toContain('svg-cat-ear');
+    expect(splitPaneSrc).toContain('svg-cat-pupil');
   });
 
   it('does NOT show thinking text', () => {
     expect(splitPaneSrc).not.toContain("waitingStatus === 'thinking'");
     expect(splitPaneSrc).not.toContain('typing-status-thinking');
   });
+
+  it('does NOT use old CSS cat markup', () => {
+    expect(splitPaneSrc).not.toContain('class="running-cat"');
+  });
 });
 
 // =============================================================================
-// 3. Crew chat (CrewChatView.js): same — fight scene, no running cat
+// 3. Crew chat (CrewChatView.js): same SVG cat, no thinking text
 // =============================================================================
 describe('Scenario 3: CrewChatView.js typing indicator', () => {
   it('has typing-indicator div', () => {
     expect(crewChatViewSrc).toContain('class="typing-indicator"');
   });
 
-  it('has svg-fight-scene (not svg-running-cat)', () => {
-    expect(crewChatViewSrc).toContain('class="svg-fight-scene"');
-    expect(crewChatViewSrc).not.toContain('class="svg-running-cat"');
-    expect(crewChatViewSrc).not.toContain('viewBox="0 0 34 28"');
+  it('has svg-running-cat with inline SVG', () => {
+    expect(crewChatViewSrc).toContain('class="svg-running-cat"');
+    expect(crewChatViewSrc).toContain('<svg viewBox="0 0 34 28"');
+  });
+
+  it('has all SVG cat parts', () => {
+    expect(crewChatViewSrc).toContain('svg-cat-body');
+    expect(crewChatViewSrc).toContain('svg-cat-head');
+    expect(crewChatViewSrc).toContain('svg-cat-tail');
+    expect(crewChatViewSrc).toContain('svg-cat-eye');
+    expect(crewChatViewSrc).toContain('svg-cat-whisker');
   });
 
   it('does NOT show thinking text', () => {
     expect(crewChatViewSrc).not.toContain("waitingStatus === 'thinking'");
     expect(crewChatViewSrc).not.toContain('typing-status-thinking');
   });
+
+  it('does NOT use old CSS cat markup', () => {
+    expect(crewChatViewSrc).not.toContain('class="running-cat"');
+  });
 });
 
 // =============================================================================
-// 4. Non-thinking status texts preserved
+// 4. SVG cat consistency — identical across all 3 components
+// =============================================================================
+describe('SVG cat consistency across components', () => {
+  function extractCatSvg(src) {
+    const match = src.match(/<svg viewBox="0 0 34 28"[\s\S]*?<\/svg>/);
+    if (!match) return '';
+    // Normalize: remove comments and whitespace
+    return match[0].replace(/<!--.*?-->/g, '').replace(/\s+/g, ' ').trim();
+  }
+
+  it('all 3 components have the cat SVG', () => {
+    expect(extractCatSvg(messageListSrc).length).toBeGreaterThan(100);
+    expect(extractCatSvg(splitPaneSrc).length).toBeGreaterThan(100);
+    expect(extractCatSvg(crewChatViewSrc).length).toBeGreaterThan(100);
+  });
+
+  it('SplitPane SVG is identical to MessageList SVG', () => {
+    expect(extractCatSvg(splitPaneSrc)).toBe(extractCatSvg(messageListSrc));
+  });
+
+  it('CrewChatView SVG is identical to MessageList SVG', () => {
+    expect(extractCatSvg(crewChatViewSrc)).toBe(extractCatSvg(messageListSrc));
+  });
+});
+
+// =============================================================================
+// 5. Disconnected + other status texts still displayed
 // =============================================================================
 describe('Scenario 4: Non-thinking status texts preserved', () => {
   const components = [
@@ -162,78 +237,204 @@ describe('Scenario 4: Non-thinking status texts preserved', () => {
 });
 
 // =============================================================================
-// 5. CSS: All old running cat styles fully removed
+// 6. CSS: Old CSS cat fully removed, new SVG cat styles present
 // =============================================================================
-describe('CSS: Old running cat styles fully removed', () => {
-  it('no .svg-running-cat class in CSS', () => {
-    expect(chatMessagesCss).not.toContain('.svg-running-cat');
-  });
-
-  it('no .svg-cat-body / .svg-cat-head / .svg-cat-ear CSS rules', () => {
-    expect(chatMessagesCss).not.toContain('.svg-cat-body');
-    expect(chatMessagesCss).not.toContain('.svg-cat-head');
-    expect(chatMessagesCss).not.toContain('.svg-cat-ear');
-    expect(chatMessagesCss).not.toContain('.svg-cat-eye');
-    expect(chatMessagesCss).not.toContain('.svg-cat-pupil');
-    expect(chatMessagesCss).not.toContain('.svg-cat-nose');
-    expect(chatMessagesCss).not.toContain('.svg-cat-mouth');
-    expect(chatMessagesCss).not.toContain('.svg-cat-whisker');
-    expect(chatMessagesCss).not.toContain('.svg-cat-tail');
-    expect(chatMessagesCss).not.toContain('.svg-cat-leg');
-  });
-
-  it('no running cat keyframe animations', () => {
-    expect(chatMessagesCss).not.toContain('@keyframes svg-cat-bounce');
-    expect(chatMessagesCss).not.toContain('@keyframes svg-leg-front-l');
-    expect(chatMessagesCss).not.toContain('@keyframes svg-leg-front-r');
-    expect(chatMessagesCss).not.toContain('@keyframes svg-leg-back-l');
-    expect(chatMessagesCss).not.toContain('@keyframes svg-leg-back-r');
-    expect(chatMessagesCss).not.toContain('@keyframes svg-tail-wag');
-    expect(chatMessagesCss).not.toContain('@keyframes svg-ear-twitch-l');
-    expect(chatMessagesCss).not.toContain('@keyframes svg-ear-twitch-r');
-  });
-
+describe('CSS: Old cat removed, new SVG cat styles', () => {
   it('old .running-cat class removed', () => {
+    // Should NOT have the old class definition (not as substring of .svg-running-cat)
     expect(chatMessagesCss).not.toMatch(/^\.running-cat\s*\{/m);
   });
 
-  it('old cat-bounce, cat-leg-run, cat-tail-wag keyframes removed', () => {
+  it('old .cat-body class removed (only svg-cat-body remains)', () => {
+    // Match .cat-body NOT preceded by "svg-" — the old standalone class
+    expect(chatMessagesCss).not.toMatch(/(?<!svg-)\.cat-body/);
+  });
+
+  it('old .cat-head class removed (only svg-cat-head remains)', () => {
+    expect(chatMessagesCss).not.toMatch(/(?<!svg-)\.cat-head/);
+  });
+
+  it('old .cat-ear class removed', () => {
+    expect(chatMessagesCss).not.toMatch(/\.cat-ear[^-]/);
+  });
+
+  it('old .cat-tail class removed', () => {
+    expect(chatMessagesCss).not.toMatch(/\.cat-tail[^-]/);
+  });
+
+  it('old .cat-leg class removed', () => {
+    expect(chatMessagesCss).not.toMatch(/\.cat-leg[^-]/);
+  });
+
+  it('old cat-bounce keyframes removed', () => {
     expect(chatMessagesCss).not.toContain('@keyframes cat-bounce');
+  });
+
+  it('old cat-leg-run keyframes removed', () => {
     expect(chatMessagesCss).not.toContain('@keyframes cat-leg-run');
+  });
+
+  it('old cat-tail-wag keyframes removed', () => {
     expect(chatMessagesCss).not.toContain('@keyframes cat-tail-wag');
+  });
+
+  it('new .svg-running-cat class exists', () => {
+    expect(chatMessagesCss).toContain('.svg-running-cat');
+  });
+
+  it('new SVG cat body styles exist', () => {
+    expect(chatMessagesCss).toContain('.svg-cat-body');
+    expect(chatMessagesCss).toContain('.svg-cat-head');
+    expect(chatMessagesCss).toContain('.svg-cat-ear');
+    expect(chatMessagesCss).toContain('.svg-cat-eye');
+    expect(chatMessagesCss).toContain('.svg-cat-pupil');
+    expect(chatMessagesCss).toContain('.svg-cat-nose');
+    expect(chatMessagesCss).toContain('.svg-cat-mouth');
+    expect(chatMessagesCss).toContain('.svg-cat-whisker');
+    expect(chatMessagesCss).toContain('.svg-cat-tail');
+    expect(chatMessagesCss).toContain('.svg-cat-leg');
   });
 });
 
 // =============================================================================
-// 6. Dot animation selectors — no .svg-running-cat, only .svg-fight-scene
+// 7. CSS animations for SVG cat
+// =============================================================================
+describe('CSS: SVG cat animations', () => {
+  it('has bounce animation', () => {
+    expect(chatMessagesCss).toContain('@keyframes svg-cat-bounce');
+  });
+
+  it('has front leg animations (left + right)', () => {
+    expect(chatMessagesCss).toContain('@keyframes svg-leg-front-l');
+    expect(chatMessagesCss).toContain('@keyframes svg-leg-front-r');
+  });
+
+  it('has back leg animations (left + right)', () => {
+    expect(chatMessagesCss).toContain('@keyframes svg-leg-back-l');
+    expect(chatMessagesCss).toContain('@keyframes svg-leg-back-r');
+  });
+
+  it('has tail wag animation', () => {
+    expect(chatMessagesCss).toContain('@keyframes svg-tail-wag');
+  });
+
+  it('has ear twitch animations (left + right)', () => {
+    expect(chatMessagesCss).toContain('@keyframes svg-ear-twitch-l');
+    expect(chatMessagesCss).toContain('@keyframes svg-ear-twitch-r');
+  });
+
+  it('legs use transform-origin for rotation pivot', () => {
+    expect(chatMessagesCss).toContain('.svg-cat-leg-fl { transform-origin:');
+    expect(chatMessagesCss).toContain('.svg-cat-leg-fr { transform-origin:');
+    expect(chatMessagesCss).toContain('.svg-cat-leg-bl { transform-origin:');
+    expect(chatMessagesCss).toContain('.svg-cat-leg-br { transform-origin:');
+  });
+
+  it('tail group has animation', () => {
+    expect(chatMessagesCss).toContain('.svg-cat-tail-group { transform-origin:');
+    expect(chatMessagesCss).toContain('animation: svg-tail-wag');
+  });
+
+  it('ears have independent animation timings', () => {
+    const earL = chatMessagesCss.match(/\.svg-cat-ear-l\s*\{[^}]*animation:[^}]*(\d+\.?\d*)s/);
+    const earR = chatMessagesCss.match(/\.svg-cat-ear-r\s*\{[^}]*animation:[^}]*(\d+\.?\d*)s/);
+    expect(earL).toBeTruthy();
+    expect(earR).toBeTruthy();
+    // Ears should have different timings for natural look
+    expect(earL[1]).not.toBe(earR[1]);
+  });
+
+  it('front legs alternate phases (alternate vs alternate-reverse)', () => {
+    expect(chatMessagesCss).toMatch(/svg-cat-leg-fl[\s\S]*?infinite\s+alternate(?!-)/);
+    expect(chatMessagesCss).toMatch(/svg-cat-leg-fr[\s\S]*?alternate-reverse/);
+  });
+});
+
+// =============================================================================
+// 8. Scenario 5: Dark theme — cat uses CSS variables
+// =============================================================================
+describe('Scenario 5: Dark theme color adaptation via CSS variables', () => {
+  it('cat body uses var(--text-secondary)', () => {
+    expect(chatMessagesCss).toMatch(/\.svg-cat-body\s*\{[^}]*fill:\s*var\(--text-secondary\)/);
+  });
+
+  it('cat head uses var(--text-secondary)', () => {
+    expect(chatMessagesCss).toMatch(/\.svg-cat-head\s*\{[^}]*fill:\s*var\(--text-secondary\)/);
+  });
+
+  it('cat ear uses var(--text-secondary)', () => {
+    expect(chatMessagesCss).toMatch(/\.svg-cat-ear\b[^{]*\{[^}]*fill:\s*var\(--text-secondary\)/);
+  });
+
+  it('cat eye uses var(--cat-eye-fill) for sclera (themed per light/dark)', () => {
+    expect(chatMessagesCss).toMatch(/\.svg-cat-eye\s*\{[^}]*fill:\s*var\(--cat-eye-fill\)/);
+  });
+
+  it('cat pupil uses var(--cat-pupil-fill) for contrast (themed per light/dark)', () => {
+    expect(chatMessagesCss).toMatch(/\.svg-cat-pupil\s*\{[^}]*fill:\s*var\(--cat-pupil-fill\)/);
+  });
+
+  it('cat whiskers use var(--text-secondary)', () => {
+    expect(chatMessagesCss).toMatch(/\.svg-cat-whisker\s*\{[^}]*stroke:\s*var\(--text-secondary\)/);
+  });
+
+  it('cat tail uses var(--text-secondary) stroke', () => {
+    expect(chatMessagesCss).toMatch(/\.svg-cat-tail\b[^{]*\{[^}]*stroke:\s*var\(--text-secondary\)/);
+  });
+
+  it('cat legs use var(--text-secondary)', () => {
+    expect(chatMessagesCss).toMatch(/\.svg-cat-leg\b[^{]*\{[^}]*fill:\s*var\(--text-secondary\)/);
+  });
+
+  it('no hardcoded colors — all fills/strokes use CSS variables', () => {
+    // Extract all fill/stroke declarations in svg-cat classes
+    // Exclude status-override rules (e.g., .typing-indicator.status-* .svg-cat-body)
+    // which intentionally use hardcoded rgba colors to match dot status colors
+    const catStyles = (chatMessagesCss.match(/\.svg-cat[^{]*\{[^}]*\}/g) || [])
+      .filter(s => !s.includes('.typing-indicator'));
+    for (const style of catStyles) {
+      const fills = style.match(/fill:\s*[^;]+/g) || [];
+      const strokes = style.match(/stroke:\s*[^;]+/g) || [];
+      for (const decl of [...fills, ...strokes]) {
+        // Each fill/stroke should use var() or 'none'
+        expect(decl).toMatch(/var\(--|none/);
+      }
+    }
+  });
+});
+
+// =============================================================================
+// 9. Dot animation selector updated from .running-cat to .svg-running-cat
 // =============================================================================
 describe('Dot animation selector updated', () => {
-  it('dot animation excludes .svg-fight-scene', () => {
-    expect(chatMessagesCss).toContain(':not(.svg-fight-scene)');
+  it('dot animation excludes .svg-running-cat (not old .running-cat)', () => {
+    expect(chatMessagesCss).toContain(':not(.svg-running-cat)');
+    expect(chatMessagesCss).not.toContain(':not(.running-cat)');
   });
 
-  it('dot animation does NOT reference .svg-running-cat', () => {
-    expect(chatMessagesCss).not.toContain(':not(.svg-running-cat)');
+  it('nth-child selectors for dot delays use updated exclusion', () => {
+    expect(chatMessagesCss).toContain(':not(.svg-running-cat):nth-child(2)');
+    expect(chatMessagesCss).toContain(':not(.svg-running-cat):nth-child(3)');
+  });
+});
+
+// =============================================================================
+// 10. SVG cat sizing
+// =============================================================================
+describe('SVG cat sizing', () => {
+  it('cat container width is 32px (within 24-32px range)', () => {
+    expect(chatMessagesCss).toMatch(/\.svg-running-cat\s*\{[^}]*width:\s*32px/);
   });
 
-  it('base dot selector has correct exclusions', () => {
-    const baseSelector = chatMessagesCss.match(
-      /\.typing-indicator > span:not\(\.typing-status-text\):not\(\.svg-fight-scene\)\s*\{/
-    );
-    expect(baseSelector).not.toBeNull();
+  it('cat container height is 26px (within 24-32px range)', () => {
+    expect(chatMessagesCss).toMatch(/\.svg-running-cat\s*\{[^}]*height:\s*26px/);
   });
 
-  it('nth-child(2) selector has correct exclusions', () => {
-    const nthSelector = chatMessagesCss.match(
-      /\.typing-indicator > span:not\(\.typing-status-text\):not\(\.svg-fight-scene\):nth-child\(2\)/
-    );
-    expect(nthSelector).not.toBeNull();
+  it('cat has margin-left for spacing from dots', () => {
+    expect(chatMessagesCss).toMatch(/\.svg-running-cat\s*\{[^}]*margin-left:\s*8px/);
   });
 
-  it('nth-child(3) selector has correct exclusions', () => {
-    const nthSelector = chatMessagesCss.match(
-      /\.typing-indicator > span:not\(\.typing-status-text\):not\(\.svg-fight-scene\):nth-child\(3\)/
-    );
-    expect(nthSelector).not.toBeNull();
+  it('SVG overflow is visible (for animations that extend beyond viewBox)', () => {
+    expect(chatMessagesCss).toContain('overflow: visible');
   });
 });
