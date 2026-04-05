@@ -114,6 +114,9 @@ export function handleAgentList(store, msg) {
         // Preserve crew session name from server; keep existing if server has none
         if (serverConv.name !== undefined) existing.name = serverConv.name;
       } else {
+        // Skip sessions recently deleted by the user (race condition guard)
+        const deletedAt = store._recentlyDeletedSessions?.[serverConv.id];
+        if (deletedAt && (Date.now() - deletedAt) < 15000) continue;
         store.conversations.push(serverConv);
       }
       // Sync pin state from server (server is source of truth)
