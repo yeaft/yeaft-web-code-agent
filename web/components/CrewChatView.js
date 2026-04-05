@@ -139,6 +139,66 @@ export default {
               <line class="svg-cat-whisker" x1="28.5" y1="12" x2="32.5" y2="12.5" stroke-width="0.4"/>
             </svg>
           </span>
+          <span class="svg-fight-scene" aria-hidden="true">
+            <svg viewBox="0 0 80 60" xmlns="http://www.w3.org/2000/svg">
+              <!-- Cat (left, facing right) -->
+              <g class="svg-fight-cat">
+                <path class="svg-fight-cat-tail" d="M8 38 Q2 30 4 22 Q5 19 7 21" stroke-width="1.8"/>
+                <ellipse class="svg-fight-cat-body" cx="18" cy="38" rx="10" ry="7"/>
+                <path class="svg-fight-cat-leg" d="M12 44 L10 54 Q10 56 12 56 L13 56" stroke-width="0"/>
+                <path class="svg-fight-cat-leg" d="M22 44 L24 54 Q24 56 22 56 L21 56" stroke-width="0"/>
+                <circle class="svg-fight-cat-head" cx="26" cy="24" r="8"/>
+                <polygon class="svg-fight-cat-ear" points="19,20 22,10 25,19"/>
+                <polygon class="svg-fight-cat-ear" points="27,19 30,10 33,20"/>
+                <ellipse class="svg-fight-cat-eye" cx="23.5" cy="23" rx="1.5" ry="1.8"/>
+                <ellipse class="svg-fight-cat-eye" cx="28.5" cy="23" rx="1.5" ry="1.8"/>
+                <ellipse class="svg-fight-cat-pupil" cx="24" cy="23.3" rx="0.8" ry="1.0"/>
+                <ellipse class="svg-fight-cat-pupil" cx="29" cy="23.3" rx="0.8" ry="1.0"/>
+                <ellipse class="svg-fight-cat-nose" cx="26" cy="26.5" rx="1" ry="0.6"/>
+                <path class="svg-fight-cat-mouth" d="M26 27.1 Q25.3 28.2 24.5 27.8" stroke-width="0.5"/>
+                <path class="svg-fight-cat-mouth" d="M26 27.1 Q26.7 28.2 27.5 27.8" stroke-width="0.5"/>
+                <line class="svg-fight-cat-whisker" x1="21" y1="25.5" x2="14" y2="24.5" stroke-width="0.4"/>
+                <line class="svg-fight-cat-whisker" x1="21" y1="26.5" x2="14" y2="27" stroke-width="0.4"/>
+                <line class="svg-fight-cat-whisker" x1="31" y1="25.5" x2="36" y2="24.5" stroke-width="0.4"/>
+                <line class="svg-fight-cat-whisker" x1="31" y1="26.5" x2="36" y2="27" stroke-width="0.4"/>
+                <g class="svg-fight-cat-arm-upper">
+                  <path class="svg-fight-cat-arm" d="M28 32 Q34 28 36 26"/>
+                  <circle class="svg-fight-cat-fist" cx="36" cy="26" r="2.5"/>
+                </g>
+                <g class="svg-fight-cat-arm-lower">
+                  <path class="svg-fight-cat-arm" d="M27 35 Q33 33 35 31"/>
+                  <circle class="svg-fight-cat-fist" cx="35" cy="31" r="2.2"/>
+                </g>
+              </g>
+              <!-- Dog/Corgi (right, facing left) -->
+              <g class="svg-fight-dog">
+                <path class="svg-fight-dog-tail" d="M72 36 Q78 28 75 22 Q74 19 72 21" stroke-width="1.8"/>
+                <ellipse class="svg-fight-dog-body" cx="62" cy="38" rx="10" ry="7"/>
+                <path class="svg-fight-dog-leg" d="M56 44 L54 54 Q54 56 56 56 L57 56" stroke-width="0"/>
+                <path class="svg-fight-dog-leg" d="M66 44 L68 54 Q68 56 66 56 L65 56" stroke-width="0"/>
+                <circle class="svg-fight-dog-head" cx="54" cy="24" r="8"/>
+                <path class="svg-fight-dog-ear" d="M47 20 Q44 13 47 17 L49 20" stroke-width="0"/>
+                <path class="svg-fight-dog-ear" d="M59 20 Q62 13 61 17 L59 20" stroke-width="0"/>
+                <ellipse class="svg-fight-dog-ear" cx="47.5" cy="17" rx="2.5" ry="4" transform="rotate(-10 47.5 17)"/>
+                <ellipse class="svg-fight-dog-ear" cx="60.5" cy="17" rx="2.5" ry="4" transform="rotate(10 60.5 17)"/>
+                <ellipse class="svg-fight-dog-eye" cx="51.5" cy="23" rx="1.5" ry="1.8"/>
+                <ellipse class="svg-fight-dog-eye" cx="56.5" cy="23" rx="1.5" ry="1.8"/>
+                <ellipse class="svg-fight-dog-pupil" cx="51" cy="23.3" rx="0.8" ry="1.0"/>
+                <ellipse class="svg-fight-dog-pupil" cx="56" cy="23.3" rx="0.8" ry="1.0"/>
+                <ellipse class="svg-fight-dog-nose" cx="54" cy="27" rx="1.5" ry="1"/>
+                <path class="svg-fight-dog-mouth" d="M54 28 Q52.5 29.5 51.5 29" stroke-width="0.6"/>
+                <path class="svg-fight-dog-snout" d="M51 25.5 Q54 30 57 25.5" stroke-width="0.5"/>
+                <g class="svg-fight-dog-arm-upper">
+                  <path class="svg-fight-dog-arm" d="M52 32 Q46 28 44 26"/>
+                  <circle class="svg-fight-dog-fist" cx="44" cy="26" r="2.5"/>
+                </g>
+                <g class="svg-fight-dog-arm-lower">
+                  <path class="svg-fight-dog-arm" d="M53 35 Q47 33 45 31"/>
+                  <circle class="svg-fight-dog-fist" cx="45" cy="31" r="2.2"/>
+                </g>
+              </g>
+            </svg>
+          </span>
           <span v-if="waitingStatus === 'disconnected'" class="typing-status-text typing-status-error">
             {{ $t('chat.waiting.disconnected') }}
           </span>
