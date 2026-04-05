@@ -30,7 +30,7 @@
 
 /* Attachments Preview */
 .attachments-preview {
-  max-width: 90%;
+  max-width: 60%;
   margin: 0 auto 12px;
   display: flex;
   flex-wrap: wrap;
@@ -92,7 +92,7 @@
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  max-width: 90%;
+  max-width: 60%;
   margin: 0 auto 4px;
   gap: 8px;
   font-size: 12px;
@@ -104,7 +104,7 @@
 
 .input-wrapper {
   position: relative;
-  max-width: 90%;
+  max-width: 60%;
   margin: 0 auto;
   display: flex;
   align-items: center;
@@ -330,6 +330,11 @@
 @media (max-width: 768px) {
   .input-area {
     padding-bottom: calc(32px + env(safe-area-inset-bottom, 0px));
+  }
+  .attachments-preview,
+  .input-hints,
+  .input-wrapper {
+    max-width: 90%;
   }
 }
 

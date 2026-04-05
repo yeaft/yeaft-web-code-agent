@@ -1411,7 +1411,7 @@
 }
 
 .messages {
-  max-width: 90%;
+  max-width: 60%;
   width: 100%;
   margin: 0 auto;
   padding: 0 24px;
@@ -1652,6 +1652,9 @@
 @media (max-width: 768px) {
   .chat-container {
     padding: 16px 12px;
+  }
+  .messages {
+    max-width: 90%;
   }
 }
 

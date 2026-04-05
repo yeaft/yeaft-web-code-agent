@@ -142,6 +142,7 @@
 }
 .split-pane-messages .messages {
   padding: 8px 0;
+  max-width: 90%;
 }
 /* Compact messages in split pane */
 .split-pane .message {
@@ -155,6 +156,11 @@
 /* ===== Split pane compact input ===== */
 .split-pane .input-area {
   padding: 4px 8px;
+}
+.split-pane .input-wrapper,
+.split-pane .input-hints,
+.split-pane .attachments-preview {
+  max-width: 90%;
 }
 
 /* ===== Split Screen Button in ChatHeader ===== */
