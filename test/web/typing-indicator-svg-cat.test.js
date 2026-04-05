@@ -413,8 +413,8 @@ describe('Dot animation selector updated', () => {
   });
 
   it('nth-child selectors for dot delays use updated exclusion', () => {
-    expect(chatMessagesCss).toContain(':not(.svg-running-cat):nth-child(2)');
-    expect(chatMessagesCss).toContain(':not(.svg-running-cat):nth-child(3)');
+    expect(chatMessagesCss).toContain(':not(.svg-running-cat):not(.svg-fight-scene):nth-child(2)');
+    expect(chatMessagesCss).toContain(':not(.svg-running-cat):not(.svg-fight-scene):nth-child(3)');
   });
 });
 

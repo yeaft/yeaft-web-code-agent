@@ -137,7 +137,7 @@
   padding: 16px 0;
 }
 
-.typing-indicator > span:not(.typing-status-text):not(.svg-running-cat) {
+.typing-indicator > span:not(.typing-status-text):not(.svg-running-cat):not(.svg-fight-scene) {
   width: 8px;
   height: 8px;
   background: var(--text-secondary);
@@ -145,8 +145,8 @@
   animation: typing 1.4s infinite;
 }
 
-.typing-indicator > span:not(.typing-status-text):not(.svg-running-cat):nth-child(2) { animation-delay: 0.2s; }
-.typing-indicator > span:not(.typing-status-text):not(.svg-running-cat):nth-child(3) { animation-delay: 0.4s; }
+.typing-indicator > span:not(.typing-status-text):not(.svg-running-cat):not(.svg-fight-scene):nth-child(2) { animation-delay: 0.2s; }
+.typing-indicator > span:not(.typing-status-text):not(.svg-running-cat):not(.svg-fight-scene):nth-child(3) { animation-delay: 0.4s; }
 
 @keyframes typing {
   0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
@@ -292,6 +292,178 @@
   0%, 80%, 100% { transform: rotate(0deg); }
   88% { transform: rotate(8deg); }
 }
+
+/* ========== SVG Fight Scene (Cat vs Dog) ========== */
+.svg-fight-scene {
+  display: inline-block;
+  width: 64px;
+  height: 52px;
+  margin-left: 12px;
+  vertical-align: middle;
+}
+
+.svg-fight-scene svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+/* Cat (left) body parts */
+.svg-fight-cat-body { fill: var(--text-secondary); opacity: 0.6; }
+.svg-fight-cat-head { fill: var(--text-secondary); opacity: 0.65; }
+.svg-fight-cat-ear { fill: var(--text-secondary); opacity: 0.55; }
+.svg-fight-cat-eye { fill: var(--cat-eye-fill, #ffffff); }
+.svg-fight-cat-pupil { fill: var(--cat-pupil-fill, #333333); opacity: 0.7; }
+.svg-fight-cat-nose { fill: var(--text-secondary); opacity: 0.5; }
+.svg-fight-cat-mouth { stroke: var(--text-secondary); opacity: 0.4; fill: none; }
+.svg-fight-cat-whisker { stroke: var(--text-secondary); opacity: 0.35; fill: none; }
+.svg-fight-cat-tail { fill: none; stroke: var(--text-secondary); opacity: 0.55; stroke-linecap: round; }
+.svg-fight-cat-leg { fill: var(--text-secondary); opacity: 0.55; }
+.svg-fight-cat-arm { fill: none; stroke: var(--text-secondary); opacity: 0.55; stroke-width: 1.5; stroke-linecap: round; }
+.svg-fight-cat-fist { fill: var(--text-secondary); opacity: 0.6; }
+
+/* Dog (right) body parts */
+.svg-fight-dog-body { fill: var(--text-secondary); opacity: 0.6; }
+.svg-fight-dog-head { fill: var(--text-secondary); opacity: 0.65; }
+.svg-fight-dog-ear { fill: var(--text-secondary); opacity: 0.5; }
+.svg-fight-dog-eye { fill: var(--cat-eye-fill, #ffffff); }
+.svg-fight-dog-pupil { fill: var(--cat-pupil-fill, #333333); opacity: 0.7; }
+.svg-fight-dog-nose { fill: var(--text-secondary); opacity: 0.6; }
+.svg-fight-dog-mouth { stroke: var(--text-secondary); opacity: 0.4; fill: none; }
+.svg-fight-dog-snout { stroke: var(--text-secondary); opacity: 0.3; fill: none; }
+.svg-fight-dog-tail { fill: none; stroke: var(--text-secondary); opacity: 0.55; stroke-linecap: round; }
+.svg-fight-dog-leg { fill: var(--text-secondary); opacity: 0.55; }
+.svg-fight-dog-arm { fill: none; stroke: var(--text-secondary); opacity: 0.55; stroke-width: 1.5; stroke-linecap: round; }
+.svg-fight-dog-fist { fill: var(--text-secondary); opacity: 0.6; }
+
+/* Fight animations: body sway */
+.svg-fight-cat { transform-origin: 18px 40px; animation: svg-fight-cat-sway 0.8s ease-in-out infinite alternate; }
+.svg-fight-dog { transform-origin: 62px 40px; animation: svg-fight-dog-sway 0.8s ease-in-out infinite alternate-reverse; }
+
+/* Fight animations: punching arms */
+.svg-fight-cat-arm-upper { transform-origin: 28px 32px; animation: svg-fight-punch-cat-upper 0.5s ease-in-out infinite alternate; }
+.svg-fight-cat-arm-lower { transform-origin: 27px 35px; animation: svg-fight-punch-cat-lower 0.5s ease-in-out infinite alternate-reverse; }
+.svg-fight-dog-arm-upper { transform-origin: 52px 32px; animation: svg-fight-punch-dog-upper 0.5s ease-in-out infinite alternate-reverse; }
+.svg-fight-dog-arm-lower { transform-origin: 53px 35px; animation: svg-fight-punch-dog-lower 0.5s ease-in-out infinite alternate; }
+
+/* Fight animations: tail wag */
+.svg-fight-cat-tail { transform-origin: 8px 38px; animation: svg-fight-tail-cat 0.6s ease-in-out infinite alternate; }
+.svg-fight-dog-tail { transform-origin: 72px 36px; animation: svg-fight-tail-dog 0.6s ease-in-out infinite alternate-reverse; }
+
+@keyframes svg-fight-cat-sway {
+  0% { transform: translateX(0) rotate(0deg); }
+  100% { transform: translateX(2px) rotate(2deg); }
+}
+
+@keyframes svg-fight-dog-sway {
+  0% { transform: translateX(0) rotate(0deg); }
+  100% { transform: translateX(-2px) rotate(-2deg); }
+}
+
+@keyframes svg-fight-punch-cat-upper {
+  0% { transform: rotate(-5deg) translateX(0); }
+  100% { transform: rotate(15deg) translateX(4px); }
+}
+
+@keyframes svg-fight-punch-cat-lower {
+  0% { transform: rotate(5deg) translateX(0); }
+  100% { transform: rotate(-10deg) translateX(3px); }
+}
+
+@keyframes svg-fight-punch-dog-upper {
+  0% { transform: rotate(5deg) translateX(0); }
+  100% { transform: rotate(-15deg) translateX(-4px); }
+}
+
+@keyframes svg-fight-punch-dog-lower {
+  0% { transform: rotate(-5deg) translateX(0); }
+  100% { transform: rotate(10deg) translateX(-3px); }
+}
+
+@keyframes svg-fight-tail-cat {
+  0% { transform: rotate(-10deg); }
+  100% { transform: rotate(15deg); }
+}
+
+@keyframes svg-fight-tail-dog {
+  0% { transform: rotate(10deg); }
+  100% { transform: rotate(-15deg); }
+}
+
+/* Fight scene: status color overrides (same pattern as running cat) */
+.typing-indicator.status-disconnected .svg-fight-cat-body,
+.typing-indicator.status-disconnected .svg-fight-cat-head,
+.typing-indicator.status-disconnected .svg-fight-cat-ear,
+.typing-indicator.status-disconnected .svg-fight-cat-leg,
+.typing-indicator.status-disconnected .svg-fight-cat-tail,
+.typing-indicator.status-disconnected .svg-fight-cat-arm,
+.typing-indicator.status-disconnected .svg-fight-cat-fist,
+.typing-indicator.status-disconnected .svg-fight-dog-body,
+.typing-indicator.status-disconnected .svg-fight-dog-head,
+.typing-indicator.status-disconnected .svg-fight-dog-ear,
+.typing-indicator.status-disconnected .svg-fight-dog-leg,
+.typing-indicator.status-disconnected .svg-fight-dog-tail,
+.typing-indicator.status-disconnected .svg-fight-dog-arm,
+.typing-indicator.status-disconnected .svg-fight-dog-fist,
+.typing-indicator.status-agent-offline .svg-fight-cat-body,
+.typing-indicator.status-agent-offline .svg-fight-cat-head,
+.typing-indicator.status-agent-offline .svg-fight-cat-ear,
+.typing-indicator.status-agent-offline .svg-fight-cat-leg,
+.typing-indicator.status-agent-offline .svg-fight-cat-tail,
+.typing-indicator.status-agent-offline .svg-fight-cat-arm,
+.typing-indicator.status-agent-offline .svg-fight-cat-fist,
+.typing-indicator.status-agent-offline .svg-fight-dog-body,
+.typing-indicator.status-agent-offline .svg-fight-dog-head,
+.typing-indicator.status-agent-offline .svg-fight-dog-ear,
+.typing-indicator.status-agent-offline .svg-fight-dog-leg,
+.typing-indicator.status-agent-offline .svg-fight-dog-tail,
+.typing-indicator.status-agent-offline .svg-fight-dog-arm,
+.typing-indicator.status-agent-offline .svg-fight-dog-fist { fill: rgba(229, 57, 53, 0.6); stroke: rgba(229, 57, 53, 0.6); }
+
+.typing-indicator.status-compacting .svg-fight-cat-body,
+.typing-indicator.status-compacting .svg-fight-cat-head,
+.typing-indicator.status-compacting .svg-fight-cat-ear,
+.typing-indicator.status-compacting .svg-fight-cat-leg,
+.typing-indicator.status-compacting .svg-fight-cat-tail,
+.typing-indicator.status-compacting .svg-fight-cat-arm,
+.typing-indicator.status-compacting .svg-fight-cat-fist,
+.typing-indicator.status-compacting .svg-fight-dog-body,
+.typing-indicator.status-compacting .svg-fight-dog-head,
+.typing-indicator.status-compacting .svg-fight-dog-ear,
+.typing-indicator.status-compacting .svg-fight-dog-leg,
+.typing-indicator.status-compacting .svg-fight-dog-tail,
+.typing-indicator.status-compacting .svg-fight-dog-arm,
+.typing-indicator.status-compacting .svg-fight-dog-fist { fill: rgba(91, 155, 213, 0.6); stroke: rgba(91, 155, 213, 0.6); }
+
+.typing-indicator.status-session-lost .svg-fight-cat-body,
+.typing-indicator.status-session-lost .svg-fight-cat-head,
+.typing-indicator.status-session-lost .svg-fight-cat-ear,
+.typing-indicator.status-session-lost .svg-fight-cat-leg,
+.typing-indicator.status-session-lost .svg-fight-cat-tail,
+.typing-indicator.status-session-lost .svg-fight-cat-arm,
+.typing-indicator.status-session-lost .svg-fight-cat-fist,
+.typing-indicator.status-session-lost .svg-fight-dog-body,
+.typing-indicator.status-session-lost .svg-fight-dog-head,
+.typing-indicator.status-session-lost .svg-fight-dog-ear,
+.typing-indicator.status-session-lost .svg-fight-dog-leg,
+.typing-indicator.status-session-lost .svg-fight-dog-tail,
+.typing-indicator.status-session-lost .svg-fight-dog-arm,
+.typing-indicator.status-session-lost .svg-fight-dog-fist,
+.typing-indicator.status-cli-exited .svg-fight-cat-body,
+.typing-indicator.status-cli-exited .svg-fight-cat-head,
+.typing-indicator.status-cli-exited .svg-fight-cat-ear,
+.typing-indicator.status-cli-exited .svg-fight-cat-leg,
+.typing-indicator.status-cli-exited .svg-fight-cat-tail,
+.typing-indicator.status-cli-exited .svg-fight-cat-arm,
+.typing-indicator.status-cli-exited .svg-fight-cat-fist,
+.typing-indicator.status-cli-exited .svg-fight-dog-body,
+.typing-indicator.status-cli-exited .svg-fight-dog-head,
+.typing-indicator.status-cli-exited .svg-fight-dog-ear,
+.typing-indicator.status-cli-exited .svg-fight-dog-leg,
+.typing-indicator.status-cli-exited .svg-fight-dog-tail,
+.typing-indicator.status-cli-exited .svg-fight-dog-arm,
+.typing-indicator.status-cli-exited .svg-fight-dog-fist { fill: rgba(229, 124, 35, 0.6); stroke: rgba(229, 124, 35, 0.6); }
+
 .typing-refresh-btn:hover {
   background: var(--sidebar-hover);
   color: var(--text-primary);
