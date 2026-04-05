@@ -219,6 +219,10 @@ export function closeSession(store, conversationId, agentId) {
     delete store.crewStatuses[conversationId];
   }
 
+  // Mark as recently deleted to prevent handleAgentList from re-adding it
+  if (!store._recentlyDeletedSessions) store._recentlyDeletedSessions = {};
+  store._recentlyDeletedSessions[conversationId] = Date.now();
+
   // Optimistically remove from local conversations list
   store.conversations = store.conversations.filter(c => c.id !== conversationId);
 
@@ -284,6 +288,10 @@ export function deleteConversation(store, conversationId, agentId) {
       agentId: agentId || store.currentAgent
     });
   }
+
+  // Mark as recently deleted to prevent handleAgentList from re-adding it
+  if (!store._recentlyDeletedSessions) store._recentlyDeletedSessions = {};
+  store._recentlyDeletedSessions[conversationId] = Date.now();
 
   // 立即从本地列表移除（不等 server 同步）
   store.conversations = store.conversations.filter(c => c.id !== conversationId);
