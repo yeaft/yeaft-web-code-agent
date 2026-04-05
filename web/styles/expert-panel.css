@@ -313,7 +313,7 @@
   flex-wrap: wrap;
   gap: 6px;
   padding: 6px 20px 4px;
-  max-width: min(90%, 960px);
+  max-width: 90%;
   margin: 0 auto;
 }
 

@@ -2,7 +2,7 @@
 
 /* Container: flex child between MessageList and ChatInput */
 .btw-float {
-  width: min(90%, 960px);
+  width: 90%;
   margin: 0 auto 8px;
   flex-shrink: 0;
   animation: btw-slide-up 0.2s ease-out;

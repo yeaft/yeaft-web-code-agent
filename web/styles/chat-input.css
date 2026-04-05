@@ -30,7 +30,7 @@
 
 /* Attachments Preview */
 .attachments-preview {
-  max-width: min(90%, 960px);
+  max-width: 90%;
   margin: 0 auto 12px;
   display: flex;
   flex-wrap: wrap;
@@ -92,7 +92,7 @@
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  max-width: min(90%, 960px);
+  max-width: 90%;
   margin: 0 auto 4px;
   gap: 8px;
   font-size: 12px;
@@ -104,7 +104,7 @@
 
 .input-wrapper {
   position: relative;
-  max-width: min(90%, 960px);
+  max-width: 90%;
   margin: 0 auto;
   display: flex;
   align-items: center;
