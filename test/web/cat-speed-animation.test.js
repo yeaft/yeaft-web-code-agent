@@ -204,7 +204,7 @@ describe('CSS: speed variant styles', () => {
   });
 
   it('speed-crazy shows leg blur', () => {
-    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur[\s\S]*?opacity:\s*0\.4/);
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur[\s\S]*?opacity:\s*0\.55/);
   });
 
   it('speed-fast makes legs faster (shorter animation-duration)', () => {
