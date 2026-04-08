@@ -275,7 +275,7 @@
 .svg-cat-whisker { stroke: var(--text-secondary); opacity: 0.35; fill: none; }
 .svg-cat-tail { fill: none; stroke: var(--text-secondary); opacity: 0.55; stroke-linecap: round; }
 
-/* Leg blur (turbo shimmer + crazy rotate) — hidden by default */
+/* Leg blur (turbo trail + crazy wobble halo) — hidden by default */
 .svg-cat-leg-blur { fill: var(--text-secondary); opacity: 0; }
 .svg-cat-leg-blur-inner { opacity: 0; }
 
@@ -340,24 +340,24 @@
 .svg-running-cat.speed-fast .svg-cat-leg-bl { animation-duration: 0.25s; }
 .svg-running-cat.speed-fast .svg-cat-leg-br { animation-duration: 0.25s; }
 .svg-running-cat.speed-fast .svg-cat-tail-group { animation-duration: 0.3s; }
-.svg-running-cat.speed-fast .svg-cat-body { transform: scaleY(0.9); transform-origin: 15px 17px; }
+.svg-running-cat.speed-fast .svg-cat-body { transform: scaleY(0.92); transform-origin: 15px 17px; }
 
 @keyframes svg-cat-bounce-fast {
   0% { transform: scale(1.2) translateY(0) translateX(0); }
   100% { transform: scale(1.2) translateY(-2px) translateX(1px); }
 }
 
-/* ========== Speed: Turbo (4-6s) — shimmer blur legs ========== */
-.svg-running-cat.speed-turbo { animation: svg-cat-bounce-turbo 0.3s ease-in-out infinite alternate; }
-.svg-running-cat.speed-turbo .svg-cat-leg-fl,
-.svg-running-cat.speed-turbo .svg-cat-leg-fr,
-.svg-running-cat.speed-turbo .svg-cat-leg-bl,
-.svg-running-cat.speed-turbo .svg-cat-leg-br { opacity: 0; }
-.svg-running-cat.speed-turbo .svg-cat-leg-blur { opacity: 0.55; animation: svg-leg-blur-shimmer 0.22s ease-in-out infinite alternate; }
-.svg-running-cat.speed-turbo .svg-cat-tail-group { animation-duration: 0.2s; }
-.svg-running-cat.speed-turbo .svg-cat-body { transform: scaleY(0.85) translateY(1px); transform-origin: 15px 17px; }
-.svg-running-cat.speed-turbo .svg-cat-ear-l { animation-duration: 0.6s; }
-.svg-running-cat.speed-turbo .svg-cat-ear-r { animation-duration: 0.5s; }
+/* ========== Speed: Turbo (4-6s) — very fast legs ±35°, blur as faint trail ========== */
+.svg-running-cat.speed-turbo { animation: svg-cat-bounce-turbo 0.28s ease-in-out infinite alternate; }
+.svg-running-cat.speed-turbo .svg-cat-leg-fl { animation: svg-leg-turbo-fl 0.14s ease-in-out infinite alternate; }
+.svg-running-cat.speed-turbo .svg-cat-leg-fr { animation: svg-leg-turbo-fr 0.14s ease-in-out infinite alternate-reverse; }
+.svg-running-cat.speed-turbo .svg-cat-leg-bl { animation: svg-leg-turbo-bl 0.14s ease-in-out infinite alternate-reverse; }
+.svg-running-cat.speed-turbo .svg-cat-leg-br { animation: svg-leg-turbo-br 0.14s ease-in-out infinite alternate; }
+.svg-running-cat.speed-turbo .svg-cat-leg-blur { opacity: 0.2; animation: svg-leg-blur-trail 0.28s ease-in-out infinite alternate; }
+.svg-running-cat.speed-turbo .svg-cat-tail-group { animation-duration: 0.18s; }
+.svg-running-cat.speed-turbo .svg-cat-body { transform: scaleY(0.87) translateY(1px); transform-origin: 15px 17px; }
+.svg-running-cat.speed-turbo .svg-cat-ear-l { animation: svg-ear-flatten 0.28s ease-in-out infinite alternate; }
+.svg-running-cat.speed-turbo .svg-cat-ear-r { animation: svg-ear-flatten 0.28s ease-in-out infinite alternate-reverse; }
 
 @keyframes svg-cat-bounce-turbo {
   0% { transform: scale(1.2) translateY(0) translateX(0); }
@@ -365,54 +365,84 @@
   100% { transform: scale(1.2) translateY(-1px) translateX(-0.5px); }
 }
 
-/* ========== Speed: Crazy (6s+) — Tom & Jerry small rotating blur under body ========== */
-.svg-running-cat.speed-crazy { animation: svg-cat-bounce-crazy 0.2s ease-in-out infinite alternate; }
-.svg-running-cat.speed-crazy .svg-cat-body { transform: scaleY(0.85) translateY(1px); transform-origin: 15px 17px; }
+@keyframes svg-leg-turbo-fl {
+  0% { transform: rotate(35deg); }
+  100% { transform: rotate(-35deg); }
+}
+@keyframes svg-leg-turbo-fr {
+  0% { transform: rotate(35deg); }
+  100% { transform: rotate(-35deg); }
+}
+@keyframes svg-leg-turbo-bl {
+  0% { transform: rotate(-35deg); }
+  100% { transform: rotate(35deg); }
+}
+@keyframes svg-leg-turbo-br {
+  0% { transform: rotate(-35deg); }
+  100% { transform: rotate(35deg); }
+}
 
-/* Hide real legs, show rotating blur ellipses */
-.svg-running-cat.speed-crazy .svg-cat-leg-fl,
-.svg-running-cat.speed-crazy .svg-cat-leg-fr,
-.svg-running-cat.speed-crazy .svg-cat-leg-bl,
-.svg-running-cat.speed-crazy .svg-cat-leg-br { opacity: 0; }
-/* Outer blur pair — orbit around body center (15,22) */
-.svg-running-cat.speed-crazy .svg-cat-leg-blur { opacity: 0.5; transform-origin: 15px 22px; animation: svg-leg-rotate 0.18s linear infinite; }
-/* Inner blur pair — counter-orbit for swirl effect */
-.svg-running-cat.speed-crazy .svg-cat-leg-blur-inner { opacity: 0.35; transform-origin: 15px 22px; animation: svg-leg-rotate-reverse 0.14s linear infinite; }
+@keyframes svg-leg-blur-trail {
+  0% { opacity: 0.15; transform: scaleX(0.8); }
+  100% { opacity: 0.25; transform: scaleX(1.2); }
+}
 
-.svg-running-cat.speed-crazy .svg-cat-tail-group { animation: svg-tail-wag-crazy 0.15s linear infinite alternate; }
-.svg-running-cat.speed-crazy .svg-cat-ear-l { animation: svg-ear-twitch-crazy 0.3s ease-in-out infinite; }
-.svg-running-cat.speed-crazy .svg-cat-ear-r { animation: svg-ear-twitch-crazy 0.3s ease-in-out infinite 0.1s; }
+@keyframes svg-ear-flatten {
+  0% { transform: rotate(-12deg); }
+  100% { transform: rotate(12deg); }
+}
+
+/* ========== Speed: Crazy (6s+) — ultra-fast legs ±42°, semi-transparent, wobble blur ========== */
+.svg-running-cat.speed-crazy { animation: svg-cat-bounce-crazy 0.18s ease-in-out infinite alternate; }
+.svg-running-cat.speed-crazy .svg-cat-body { transform: scaleY(0.82) scaleX(1.03) translateY(1px); transform-origin: 15px 17px; }
+/* Legs still visible but semi-transparent (fast-motion blur feel) */
+.svg-running-cat.speed-crazy .svg-cat-leg-fl { animation: svg-leg-crazy-fl 0.08s ease-in-out infinite alternate; opacity: 0.3; }
+.svg-running-cat.speed-crazy .svg-cat-leg-fr { animation: svg-leg-crazy-fr 0.08s ease-in-out infinite alternate-reverse; opacity: 0.3; }
+.svg-running-cat.speed-crazy .svg-cat-leg-bl { animation: svg-leg-crazy-bl 0.08s ease-in-out infinite alternate-reverse; opacity: 0.3; }
+.svg-running-cat.speed-crazy .svg-cat-leg-br { animation: svg-leg-crazy-br 0.08s ease-in-out infinite alternate; opacity: 0.3; }
+/* Blur as wobble halo — no rotate */
+.svg-running-cat.speed-crazy .svg-cat-leg-blur { opacity: 0.35; animation: svg-leg-blur-wobble 0.1s ease-in-out infinite alternate; }
+.svg-running-cat.speed-crazy .svg-cat-leg-blur-inner { opacity: 0.2; animation: svg-leg-blur-wobble-reverse 0.08s ease-in-out infinite alternate; }
+.svg-running-cat.speed-crazy .svg-cat-tail-group { animation: svg-tail-wag-crazy 0.12s linear infinite alternate; }
+.svg-running-cat.speed-crazy .svg-cat-ear-l { animation: svg-ear-flatten 0.18s ease-in-out infinite alternate; }
+.svg-running-cat.speed-crazy .svg-cat-ear-r { animation: svg-ear-flatten 0.18s ease-in-out infinite alternate-reverse; }
 
 @keyframes svg-cat-bounce-crazy {
   0% { transform: scale(1.2) translateY(0) translateX(0); }
-  50% { transform: scale(1.2) translateY(-3px) translateX(2px); }
+  40% { transform: scale(1.2) translateY(-3px) translateX(2px); }
   100% { transform: scale(1.2) translateY(-1px) translateX(-1px); }
 }
 
-@keyframes svg-leg-blur-shimmer {
-  0% { transform: translateX(-2.5px) scaleX(0.6); opacity: 0.4; }
-  100% { transform: translateX(2.5px) scaleX(1.5); opacity: 0.6; }
+@keyframes svg-leg-crazy-fl {
+  0% { transform: rotate(42deg); }
+  100% { transform: rotate(-42deg); }
+}
+@keyframes svg-leg-crazy-fr {
+  0% { transform: rotate(42deg); }
+  100% { transform: rotate(-42deg); }
+}
+@keyframes svg-leg-crazy-bl {
+  0% { transform: rotate(-42deg); }
+  100% { transform: rotate(42deg); }
+}
+@keyframes svg-leg-crazy-br {
+  0% { transform: rotate(-42deg); }
+  100% { transform: rotate(42deg); }
 }
 
-@keyframes svg-leg-rotate {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+@keyframes svg-leg-blur-wobble {
+  0% { transform: scaleX(0.7) scaleY(1.3); opacity: 0.35; }
+  100% { transform: scaleX(1.4) scaleY(0.7); opacity: 0.5; }
 }
 
-@keyframes svg-leg-rotate-reverse {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(-360deg); }
+@keyframes svg-leg-blur-wobble-reverse {
+  0% { transform: scaleX(1.3) scaleY(0.7); opacity: 0.2; }
+  100% { transform: scaleX(0.7) scaleY(1.3); opacity: 0.35; }
 }
 
 @keyframes svg-tail-wag-crazy {
-  0% { transform: rotate(-25deg); }
+  0% { transform: rotate(-30deg); }
   100% { transform: rotate(30deg); }
-}
-
-@keyframes svg-ear-twitch-crazy {
-  0%, 100% { transform: rotate(0deg); }
-  25% { transform: rotate(-12deg); }
-  75% { transform: rotate(12deg); }
 }
 
 .typing-refresh-btn:hover {
