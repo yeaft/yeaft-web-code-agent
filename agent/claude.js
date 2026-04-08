@@ -616,7 +616,7 @@ async function processClaudeOutput(conversationId, claudeQuery, state) {
 
 /**
  * Extract image content blocks from a Claude SDK message, save to local files,
- * and send chat_image messages to server. Images are persisted under workDir/.claude-web-chat/images/.
+ * and send chat_image messages to server. Images are persisted under workDir/.data/images/.
  * Handles both assistant messages (image blocks) and user/tool_result messages (screenshot results).
  */
 let _imageCounter = 0;
@@ -639,7 +639,7 @@ async function extractAndSendChatImages(conversationId, state, message) {
       try {
         const mimeType = block.source.media_type || 'image/png';
         const ext = (mimeType.split('/')[1] || 'png').replace('jpeg', 'jpg');
-        const imageDir = join(state.workDir, '.claude-web-chat', 'images');
+        const imageDir = join(state.workDir, '.data', 'images');
         await mkdir(imageDir, { recursive: true });
 
         const filename = `chat-${Date.now()}-${++_imageCounter}.${ext}`;
