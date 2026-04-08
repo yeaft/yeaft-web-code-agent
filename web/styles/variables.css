@@ -287,9 +287,9 @@ select option:checked {
   --crew-color-fallback-7-border: rgba(173, 186, 120, 0.25);
   --crew-color-fallback-7-bg-glow: rgba(173, 186, 120, 0.18);
 
-  /* SVG cat typing indicator — softer eyes in dark mode */
-  --cat-eye-fill: rgba(255, 255, 255, 0.15);
-  --cat-pupil-fill: rgba(255, 255, 255, 0.5);
+  /* SVG cat typing indicator — visible eyes in dark mode (not too bright, not invisible) */
+  --cat-eye-fill: rgba(255, 255, 255, 0.7);
+  --cat-pupil-fill: #1a1a1a;
 }
 
 html {
