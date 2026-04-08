@@ -570,6 +570,7 @@ export function handleCrewOutput(store, msg) {
         type: 'route',
         routeTo: msg.routeTo,
         routeSummary: msg.routeSummary || '',
+        routeImages: msg.routeImages || [],  // [{fileId, previewToken, mimeType}]
         round: store.crewStatuses[sid]?.round || 0,
         content: `→ @${msg.routeTo} ${msg.routeSummary || ''}`
       });

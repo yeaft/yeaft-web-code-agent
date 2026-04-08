@@ -15,6 +15,24 @@ function roleLabel(r) {
 }
 
 /**
+ * Append text to content — works for both string and multimodal array content.
+ * For arrays, appends to the last text block (or adds a new one).
+ */
+function _appendTextToContent(content, text) {
+  if (typeof content === 'string') return content + text;
+  // Multimodal array: find last text block and append
+  for (let i = content.length - 1; i >= 0; i--) {
+    if (content[i].type === 'text') {
+      content[i].text += text;
+      return content;
+    }
+  }
+  // No text block found — add one
+  content.push({ type: 'text', text });
+  return content;
+}
+
+/**
  * 从累积文本中解析所有 ROUTE 块（支持多 ROUTE + task 字段）
  * @returns {Array<{ to, summary, taskId, taskTitle }>}
  */
@@ -110,8 +128,9 @@ export function resolveRoleName(to, session, fromRole) {
 
 /**
  * 执行路由
+ * @param {Array<{mimeType, data}>} [turnImages] - auto-attached images from the turn (max 3)
  */
-export async function executeRoute(session, fromRole, route) {
+export async function executeRoute(session, fromRole, route, turnImages = []) {
   const { to, summary, taskId, taskTitle } = route;
 
   // 如果 session 已暂停或停止，保存为 pendingRoutes
@@ -156,7 +175,12 @@ export async function executeRoute(session, fromRole, route) {
   sendCrewOutput(session, fromRole, 'route', null, {
     routeTo: to, routeSummary: summary,
     taskId: taskId || undefined,
-    taskTitle: taskTitle || undefined
+    taskTitle: taskTitle || undefined,
+    // ★ Auto-attach turn images (base64) — server will cache and convert to fileId/previewToken
+    routeImages: turnImages.length > 0 ? turnImages.map(img => ({
+      mimeType: img.mimeType,
+      data: img.data
+    })) : undefined
   });
 
   // 路由到 human
@@ -187,7 +211,7 @@ export async function executeRoute(session, fromRole, route) {
       const { processHumanQueue } = await import('./human-interaction.js');
       await processHumanQueue(session);
     } else {
-      const taskPrompt = buildRoutePrompt(fromRole, summary, session);
+      const taskPrompt = buildRoutePrompt(fromRole, summary, session, turnImages);
       await dispatchToRole(session, resolvedTo, taskPrompt, fromRole, taskId, taskTitle);
     }
   } else {
@@ -198,12 +222,27 @@ export async function executeRoute(session, fromRole, route) {
 }
 
 /**
- * 构建路由转发的 prompt
+ * 构建路由转发的 prompt（支持多模态 — 自动附加 turn 截图）
+ * @param {Array<{mimeType, data}>} [turnImages] - auto-attached images
+ * @returns {string|Array} text string, or multimodal content array when images present
  */
-export function buildRoutePrompt(fromRole, summary, session) {
+export function buildRoutePrompt(fromRole, summary, session, turnImages = []) {
   const fromRoleConfig = session.roles.get(fromRole);
   const fromName = fromRoleConfig ? roleLabel(fromRoleConfig) : fromRole;
-  return `来自 ${fromName} 的消息:\n${summary}\n\n请开始你的工作。完成后通过 ROUTE 块传递给下一个角色。`;
+  const text = `来自 ${fromName} 的消息:\n${summary}\n\n请开始你的工作。完成后通过 ROUTE 块传递给下一个角色。`;
+
+  if (turnImages.length === 0) return text;
+
+  // Build multimodal content: images first, then text
+  const blocks = [];
+  for (const img of turnImages) {
+    blocks.push({
+      type: 'image',
+      source: { type: 'base64', media_type: img.mimeType, data: img.data }
+    });
+  }
+  blocks.push({ type: 'text', text });
+  return blocks;
 }
 
 /**
@@ -229,38 +268,44 @@ export async function dispatchToRole(session, roleName, content, fromSource, tas
 
   // Task 上下文注入
   const effectiveTaskId = taskId || roleState.currentTask?.taskId;
-  if (effectiveTaskId && typeof content === 'string') {
+  if (effectiveTaskId) {
     const taskContent = await readTaskFile(session, effectiveTaskId);
     if (taskContent) {
-      content = `${content}\n\n---\n<task-context file=".crew/context/features/${effectiveTaskId}.md">\n${taskContent}\n</task-context>`;
+      const ctx = `\n\n---\n<task-context file=".crew/context/features/${effectiveTaskId}.md">\n${taskContent}\n</task-context>`;
+      content = _appendTextToContent(content, ctx);
     }
   }
 
   // 看板上下文注入（角色重启后知道全局状态）
-  if (typeof content === 'string') {
+  {
     const kanbanContent = await readKanban(session);
     if (kanbanContent) {
-      content = `${content}\n\n---\n<kanban file=".crew/context/kanban.md">\n${kanbanContent}\n</kanban>`;
+      const ctx = `\n\n---\n<kanban file=".crew/context/kanban.md">\n${kanbanContent}\n</kanban>`;
+      content = _appendTextToContent(content, ctx);
     }
   }
 
   // 最近路由消息注入（帮助 clear 后的角色恢复上下文）
-  if (typeof content === 'string' && session.messageHistory.length > 0) {
+  if (session.messageHistory.length > 0) {
     const recentRoutes = session.messageHistory
       .filter(m => m.from !== 'system')
       .slice(-5)
       .map(m => `[${m.from} → ${m.to}${m.taskId ? ` (${m.taskId})` : ''}] ${m.content}`)
       .join('\n');
     if (recentRoutes) {
-      content = `${content}\n\n---\n<recent-routes>\n${recentRoutes}\n</recent-routes>`;
+      const ctx = `\n\n---\n<recent-routes>\n${recentRoutes}\n</recent-routes>`;
+      content = _appendTextToContent(content, ctx);
     }
   }
 
   // 记录消息历史
+  const historyContent = typeof content === 'string'
+    ? content.substring(0, 200)
+    : (Array.isArray(content) ? content.filter(b => b.type === 'text').map(b => b.text).join('').substring(0, 200) + (content.some(b => b.type === 'image') ? ' [+images]' : '') : '...');
   session.messageHistory.push({
     from: fromSource,
     to: roleName,
-    content: typeof content === 'string' ? content.substring(0, 200) : '...',
+    content: historyContent,
     taskId: taskId || roleState.currentTask?.taskId || null,
     timestamp: Date.now()
   });
