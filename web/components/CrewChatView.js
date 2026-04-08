@@ -400,8 +400,9 @@ export default {
     catSpeed() {
       if (!this.typingStartTime) return 'speed-normal';
       const elapsed = this.nowTick - this.typingStartTime;
-      if (elapsed >= 15000) return 'speed-crazy';
-      if (elapsed >= 5000) return 'speed-fast';
+      if (elapsed >= 6000) return 'speed-crazy';
+      if (elapsed >= 4000) return 'speed-turbo';
+      if (elapsed >= 2000) return 'speed-fast';
       return 'speed-normal';
     },
     isInitializing() {

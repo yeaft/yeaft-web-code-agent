@@ -251,6 +251,8 @@
   height: 26px;
   margin-left: 8px;
   vertical-align: middle;
+  transform: scale(1.2);
+  transform-origin: center bottom;
   animation: svg-cat-bounce 0.6s ease-in-out infinite alternate;
 }
 
@@ -291,8 +293,8 @@
 .svg-cat-ear-r { transform-origin: 28px 5px; animation: svg-ear-twitch-r 1.6s ease-in-out infinite; }
 
 @keyframes svg-cat-bounce {
-  0% { transform: translateY(0); }
-  100% { transform: translateY(-1.5px); }
+  0% { transform: scale(1.2) translateY(0); }
+  100% { transform: scale(1.2) translateY(-1.5px); }
 }
 
 @keyframes svg-leg-front-l {
@@ -330,7 +332,7 @@
   88% { transform: rotate(8deg); }
 }
 
-/* ========== Speed: Fast (5s+) — faster legs, body lower ========== */
+/* ========== Speed: Fast (2-4s) — faster legs, body lower ========== */
 .svg-running-cat.speed-fast { animation: svg-cat-bounce-fast 0.4s ease-in-out infinite alternate; }
 .svg-running-cat.speed-fast .svg-cat-leg-fl { animation-duration: 0.25s; }
 .svg-running-cat.speed-fast .svg-cat-leg-fr { animation-duration: 0.25s; }
@@ -340,11 +342,28 @@
 .svg-running-cat.speed-fast .svg-cat-body { transform: scaleY(0.9); transform-origin: 15px 17px; }
 
 @keyframes svg-cat-bounce-fast {
-  0% { transform: translateY(0) translateX(0); }
-  100% { transform: translateY(-2px) translateX(1px); }
+  0% { transform: scale(1.2) translateY(0) translateX(0); }
+  100% { transform: scale(1.2) translateY(-2px) translateX(1px); }
 }
 
-/* ========== Speed: Crazy (15s+) — Tom & Jerry spinning legs ========== */
+/* ========== Speed: Turbo (4-6s) — ultra-fast legs, body very low ========== */
+.svg-running-cat.speed-turbo { animation: svg-cat-bounce-turbo 0.3s ease-in-out infinite alternate; }
+.svg-running-cat.speed-turbo .svg-cat-leg-fl { animation-duration: 0.12s; }
+.svg-running-cat.speed-turbo .svg-cat-leg-fr { animation-duration: 0.12s; }
+.svg-running-cat.speed-turbo .svg-cat-leg-bl { animation-duration: 0.12s; }
+.svg-running-cat.speed-turbo .svg-cat-leg-br { animation-duration: 0.12s; }
+.svg-running-cat.speed-turbo .svg-cat-tail-group { animation-duration: 0.2s; }
+.svg-running-cat.speed-turbo .svg-cat-body { transform: scaleY(0.85) translateY(1px); transform-origin: 15px 17px; }
+.svg-running-cat.speed-turbo .svg-cat-ear-l { animation-duration: 0.6s; }
+.svg-running-cat.speed-turbo .svg-cat-ear-r { animation-duration: 0.5s; }
+
+@keyframes svg-cat-bounce-turbo {
+  0% { transform: scale(1.2) translateY(0) translateX(0); }
+  50% { transform: scale(1.2) translateY(-2px) translateX(1px); }
+  100% { transform: scale(1.2) translateY(-1px) translateX(-0.5px); }
+}
+
+/* ========== Speed: Crazy (6s+) — Tom & Jerry blur legs ========== */
 .svg-running-cat.speed-crazy { animation: svg-cat-bounce-crazy 0.2s ease-in-out infinite alternate; }
 .svg-running-cat.speed-crazy .svg-cat-body { transform: scaleY(0.85) translateY(1px); transform-origin: 15px 17px; }
 
@@ -353,24 +372,21 @@
 .svg-running-cat.speed-crazy .svg-cat-leg-fr,
 .svg-running-cat.speed-crazy .svg-cat-leg-bl,
 .svg-running-cat.speed-crazy .svg-cat-leg-br { opacity: 0; }
-.svg-running-cat.speed-crazy .svg-cat-leg-blur { opacity: 0.55; animation: svg-leg-spin 0.15s linear infinite; }
+.svg-running-cat.speed-crazy .svg-cat-leg-blur { opacity: 0.55; animation: svg-leg-blur-shimmer 0.1s ease-in-out infinite alternate; }
 
 .svg-running-cat.speed-crazy .svg-cat-tail-group { animation: svg-tail-wag-crazy 0.15s linear infinite alternate; }
 .svg-running-cat.speed-crazy .svg-cat-ear-l { animation: svg-ear-twitch-crazy 0.3s ease-in-out infinite; }
 .svg-running-cat.speed-crazy .svg-cat-ear-r { animation: svg-ear-twitch-crazy 0.3s ease-in-out infinite 0.1s; }
 
 @keyframes svg-cat-bounce-crazy {
-  0% { transform: translateY(0) translateX(0); }
-  50% { transform: translateY(-3px) translateX(2px); }
-  100% { transform: translateY(-1px) translateX(-1px); }
+  0% { transform: scale(1.2) translateY(0) translateX(0); }
+  50% { transform: scale(1.2) translateY(-3px) translateX(2px); }
+  100% { transform: scale(1.2) translateY(-1px) translateX(-1px); }
 }
 
-@keyframes svg-leg-spin {
-  0% { transform: rotate(0deg); }
-  25% { transform: rotate(90deg); }
-  50% { transform: rotate(180deg); }
-  75% { transform: rotate(270deg); }
-  100% { transform: rotate(360deg); }
+@keyframes svg-leg-blur-shimmer {
+  0% { transform: translateX(-1.5px) scaleX(0.6); opacity: 0.45; }
+  100% { transform: translateX(1.5px) scaleX(1.4); opacity: 0.6; }
 }
 
 @keyframes svg-tail-wag-crazy {
