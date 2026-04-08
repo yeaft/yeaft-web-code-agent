@@ -197,6 +197,11 @@ export async function handleAgentConversation(agentId, agent, msg) {
           workDir: msg.workDir
         });
 
+        // ★ Remove from agent's in-memory conversations after marking inactive in DB.
+        // This prevents closed sessions from accumulating in agent_list broadcasts
+        // and reappearing in the sidebar. Session can be restored from DB if needed.
+        agent.conversations.delete(msg.conversationId);
+
         await broadcastAgentList();
       }
       break;
