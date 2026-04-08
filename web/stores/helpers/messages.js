@@ -41,9 +41,15 @@ export function finishStreamingForConversation(store, conversationId) {
 
   const msgs = store.messagesMap[conversationId];
   if (msgs && msgs.length > 0) {
-    const lastMsg = msgs[msgs.length - 1];
-    if (lastMsg && lastMsg.isStreaming) {
-      lastMsg.isStreaming = false;
+    // ★ Finish ALL streaming messages in the current turn, not just the last one.
+    // Non-streaming messages (chat-image, tool-use) can be appended after
+    // a streaming assistant message, leaving it stuck with isStreaming: true.
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].isStreaming) {
+        msgs[i].isStreaming = false;
+      }
+      // Stop at the last user message (turn boundary) — no need to go further
+      if (msgs[i].type === 'user') break;
     }
   }
 }
