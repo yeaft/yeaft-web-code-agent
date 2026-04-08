@@ -65,12 +65,21 @@ export default {
         </div>
       </div>
 
-      <!-- 4. AskUserQuestion interactive card -->
+      <!-- 4. Images from Claude response (screenshots, etc.) -->
+      <div v-if="turn.imageMsgs && turn.imageMsgs.length > 0" class="turn-images">
+        <div v-for="img in turn.imageMsgs" :key="img.id" class="turn-image-item">
+          <img v-if="img.fileId" :src="getImageUrl(img)" class="chat-screenshot"
+               @error="handleImageError($event)"
+               @click="openImagePreview(getImageUrl(img))" />
+        </div>
+      </div>
+
+      <!-- 5. AskUserQuestion interactive card -->
       <div v-if="turn.askMsg" class="turn-ask">
         <AskCard :ask-msg="turn.askMsg" @submit="onAskSubmit" />
       </div>
 
-      <!-- 5. Copy full response button (visible on hover) -->
+      <!-- 6. Copy full response button (visible on hover) -->
       <div class="turn-footer" v-if="turn.textContent && !turn.isStreaming">
         <button class="screenshot-btn" @click="screenshotContent" :title="screenshotting ? $t('message.screenshotting') : $t('message.screenshot')">
           <svg v-if="!screenshotting" viewBox="0 0 24 24" width="14" height="14">
@@ -329,6 +338,21 @@ export default {
       });
     });
 
+    // Image helpers (reuse crew pattern)
+    const getImageUrl = (msg) => {
+      if (!msg.fileId) return '';
+      const token = msg.previewToken || '';
+      return `/api/preview/${msg.fileId}?token=${token}`;
+    };
+
+    const handleImageError = (event) => {
+      event.target.style.display = 'none';
+    };
+
+    const openImagePreview = (url) => {
+      window.open(url, '_blank');
+    };
+
     return {
       copied,
       fullCopied,
@@ -344,7 +368,10 @@ export default {
       copyFullResponse,
       exportMarkdown,
       screenshotContent,
-      onAskSubmit
+      onAskSubmit,
+      getImageUrl,
+      handleImageError,
+      openImagePreview
     };
   }
 };

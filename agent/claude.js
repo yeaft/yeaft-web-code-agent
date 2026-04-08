@@ -1,3 +1,5 @@
+import { writeFile, mkdir } from 'fs/promises';
+import { join } from 'path';
 import { query, Stream } from './sdk/index.js';
 import ctx from './context.js';
 import { sendConversationList, sendOutput, sendError, handleAskUserQuestion } from './conversation.js';
@@ -511,6 +513,9 @@ async function processClaudeOutput(conversationId, claudeQuery, state) {
       // 检测后台任务
       detectAndTrackBackgroundTask(conversationId, state, message);
 
+      // Extract image blocks from assistant/tool_result messages, save locally, forward to server
+      await extractAndSendChatImages(conversationId, state, message);
+
       // Debug: log assistant messages to help diagnose duplicate output issues
       if (message.type === 'assistant') {
         const text = typeof message.message?.content === 'string'
@@ -606,6 +611,63 @@ async function processClaudeOutput(conversationId, claudeQuery, state) {
     // wasCancelled 时由 handleCancelExecution 已发送 execution_cancelled
 
     sendConversationList();
+  }
+}
+
+/**
+ * Extract image content blocks from a Claude SDK message, save to local files,
+ * and send chat_image messages to server. Images are persisted under workDir/.data/images/.
+ * Handles both assistant messages (image blocks) and user/tool_result messages (screenshot results).
+ */
+let _imageCounter = 0;
+async function extractAndSendChatImages(conversationId, state, message) {
+  let contentBlocks = null;
+
+  // assistant messages: image blocks in message.message.content
+  if (message.type === 'assistant' && Array.isArray(message.message?.content)) {
+    contentBlocks = message.message.content;
+  }
+  // user/tool_result messages: image blocks in message.message.content (tool results with screenshots)
+  if (message.type === 'user' && Array.isArray(message.message?.content)) {
+    contentBlocks = message.message.content;
+  }
+
+  if (!contentBlocks) return;
+
+  for (const block of contentBlocks) {
+    if (block.type === 'image' && block.source?.type === 'base64' && block.source?.data) {
+      try {
+        const mimeType = block.source.media_type || 'image/png';
+        const ext = (mimeType.split('/')[1] || 'png').replace('jpeg', 'jpg');
+        const imageDir = join(state.workDir, '.data', 'images');
+        await mkdir(imageDir, { recursive: true });
+
+        const filename = `chat-${Date.now()}-${++_imageCounter}.${ext}`;
+        const filePath = join(imageDir, filename);
+        const buffer = Buffer.from(block.source.data, 'base64');
+
+        // Size check: skip images larger than 10MB
+        if (buffer.length > 10 * 1024 * 1024) {
+          console.warn(`[Chat Image] Image too large: ${buffer.length} bytes, skipping`);
+          continue;
+        }
+
+        await writeFile(filePath, buffer);
+        console.log(`[Chat Image] Saved: ${filePath} (${buffer.length} bytes, ${mimeType})`);
+
+        // Send to server with base64 data for immediate serving + filePath for persistence reference
+        ctx.sendToServer({
+          type: 'chat_image',
+          conversationId,
+          mimeType,
+          data: block.source.data,
+          filePath,
+          filename
+        });
+      } catch (err) {
+        console.error(`[Chat Image] Failed to save image:`, err.message);
+      }
+    }
   }
 }
 

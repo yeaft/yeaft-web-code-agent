@@ -1,11 +1,12 @@
+import { randomUUID } from 'crypto';
 import { messageDb } from '../database.js';
 import { broadcastAgentList, forwardToClients, sendToWebClient } from '../ws-utils.js';
-import { trackMessage, webClients } from '../context.js';
+import { trackMessage, webClients, previewFiles } from '../context.js';
 import { CONFIG } from '../config.js';
 
 /**
  * Handle Claude output and interaction messages from agent.
- * Types: claude_output, context_usage, execution_cancelled,
+ * Types: claude_output, chat_image, context_usage, execution_cancelled,
  *        background_task_started, background_task_output,
  *        slash_commands_update, compact_status, ask_user_question,
  *        conversation_mcp_update, error,
@@ -283,6 +284,34 @@ export async function handleAgentOutput(agentId, agent, msg) {
           currentTool: msg.currentTool
         });
       }
+      break;
+    }
+
+    case 'chat_image': {
+      // Image from Claude response (tool screenshots, etc.) — persisted on agent side,
+      // cached on server in previewFiles for web client serving via /api/preview/:fileId
+      const dataSize = msg.data ? Buffer.byteLength(msg.data, 'base64') : 0;
+      if (dataSize > 10 * 1024 * 1024) {
+        console.warn(`[Server] Chat image too large: ${dataSize} bytes, skipping`);
+        break;
+      }
+      const fileId = randomUUID();
+      const token = randomUUID();
+      previewFiles.set(fileId, {
+        buffer: Buffer.from(msg.data, 'base64'),
+        mimeType: msg.mimeType,
+        filename: msg.filename || `chat-${Date.now()}.png`,
+        createdAt: Date.now(),
+        token
+      });
+      await forwardToClients(agentId, msg.conversationId, {
+        type: 'chat_image',
+        conversationId: msg.conversationId,
+        fileId,
+        previewToken: token,
+        mimeType: msg.mimeType
+      });
+      console.log(`[Server] Cached chat image: fileId=${fileId}, conv=${msg.conversationId}, mime=${msg.mimeType}`);
       break;
     }
 
