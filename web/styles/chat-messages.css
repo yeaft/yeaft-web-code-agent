@@ -353,7 +353,7 @@
 .svg-running-cat.speed-crazy .svg-cat-leg-fr,
 .svg-running-cat.speed-crazy .svg-cat-leg-bl,
 .svg-running-cat.speed-crazy .svg-cat-leg-br { opacity: 0; }
-.svg-running-cat.speed-crazy .svg-cat-leg-blur { opacity: 0.4; animation: svg-leg-spin 0.15s linear infinite; }
+.svg-running-cat.speed-crazy .svg-cat-leg-blur { opacity: 0.55; animation: svg-leg-spin 0.15s linear infinite; }
 
 .svg-running-cat.speed-crazy .svg-cat-tail-group { animation: svg-tail-wag-crazy 0.15s linear infinite alternate; }
 .svg-running-cat.speed-crazy .svg-cat-ear-l { animation: svg-ear-twitch-crazy 0.3s ease-in-out infinite; }
@@ -366,7 +366,7 @@
 }
 
 @keyframes svg-leg-spin {
-  0% { transform: rotate(0deg); rx: 4; ry: 2.5; }
+  0% { transform: rotate(0deg); }
   25% { transform: rotate(90deg); }
   50% { transform: rotate(180deg); }
   75% { transform: rotate(270deg); }
