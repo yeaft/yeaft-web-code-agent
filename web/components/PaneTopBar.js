@@ -169,8 +169,8 @@ export default {
 
     function sortByActivity(conversations) {
       return [...conversations].sort((a, b) => {
-        const aTime = a.lastMessageAt || 0;
-        const bTime = b.lastMessageAt || 0;
+        const aTime = a.lastMessageAt || a.createdAt || 0;
+        const bTime = b.lastMessageAt || b.createdAt || 0;
         return bTime - aTime;
       });
     }

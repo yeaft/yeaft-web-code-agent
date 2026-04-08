@@ -719,9 +719,9 @@ export default {
   methods: {
     sortByActivity(conversations) {
       return [...conversations].sort((a, b) => {
-        // Sort by lastMessageAt (set when user sends a message), descending
-        const aTime = a.lastMessageAt || 0;
-        const bTime = b.lastMessageAt || 0;
+        // Sort by lastMessageAt (set when user sends a message), fall back to createdAt, descending
+        const aTime = a.lastMessageAt || a.createdAt || 0;
+        const bTime = b.lastMessageAt || b.createdAt || 0;
         return bTime - aTime;
       });
     },
