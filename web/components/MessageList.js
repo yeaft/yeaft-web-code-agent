@@ -90,8 +90,8 @@ export default {
               <g class="svg-cat-leg-fl"><path class="svg-cat-leg" d="M21 20 L23 25 Q23 26.5 21.5 26.5 L20.5 26.5" stroke-width="0"/></g>
               <g class="svg-cat-leg-fr"><path class="svg-cat-leg" d="M19 20 L21 25 Q21 26.5 19.5 26.5 L18.5 26.5" stroke-width="0"/></g>
               <!-- Crazy-mode spinning legs (hidden by default) -->
-              <ellipse class="svg-cat-leg-blur" cx="10" cy="23" rx="4" ry="2.5"/>
-              <ellipse class="svg-cat-leg-blur" cx="20" cy="23" rx="4" ry="2.5"/>
+              <ellipse class="svg-cat-leg-blur" cx="10" cy="22" rx="2" ry="1.5"/>
+              <ellipse class="svg-cat-leg-blur" cx="20" cy="22" rx="2" ry="1.5"/>
               <!-- Head (bigger, more chibi) -->
               <circle class="svg-cat-head" cx="24" cy="10" r="7"/>
               <!-- Ears (taller, pointier) -->
