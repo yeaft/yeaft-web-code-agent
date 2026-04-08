@@ -134,6 +134,14 @@ export default {
               <span class="crew-route-target-name">{{ rm.routeToName || getRoleDisplayName(rm.routeTo) }}</span>
             </div>
             <div v-if="rm.routeSummary" class="crew-route-summary">{{ rm.routeSummary }}</div>
+            <div v-if="rm.routeImages && rm.routeImages.length > 0" class="crew-route-images">
+              <img v-for="(img, idx) in rm.routeImages" :key="idx"
+                :src="getRouteImageUrl(img)"
+                class="crew-route-thumbnail"
+                @click="openImagePreview(getRouteImageUrl(img))"
+                @error="handleImageError($event)"
+                :alt="'Attached image ' + (idx + 1)" />
+            </div>
           </div>
         </div>
       </div>
@@ -152,6 +160,10 @@ export default {
       return getRoleStyleFn(roleName, this.roleColorMap[roleName]);
     },
     getImageUrl,
+    getRouteImageUrl(img) {
+      if (!img.fileId) return '';
+      return `/api/preview/${img.fileId}?token=${img.previewToken || ''}`;
+    },
     mdRender: renderMarkdown,
 
     openImagePreview,

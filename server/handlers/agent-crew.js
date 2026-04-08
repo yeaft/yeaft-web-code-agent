@@ -63,9 +63,30 @@ export async function handleAgentCrew(agentId, agent, msg) {
       break;
     }
 
-    case 'crew_output':
+    case 'crew_output': {
+      // ★ Convert routeImages base64 to fileId/previewToken for route messages
+      if (msg.outputType === 'route' && Array.isArray(msg.routeImages) && msg.routeImages.length > 0) {
+        const converted = [];
+        for (const img of msg.routeImages) {
+          const dataSize = img.data ? Buffer.byteLength(img.data, 'base64') : 0;
+          if (dataSize > 10 * 1024 * 1024) continue; // skip oversized
+          const fileId = randomUUID();
+          const token = randomUUID();
+          previewFiles.set(fileId, {
+            buffer: Buffer.from(img.data, 'base64'),
+            mimeType: img.mimeType,
+            filename: `crew-route-${msg.role}-${Date.now()}.${(img.mimeType || 'image/png').split('/')[1] || 'png'}`,
+            createdAt: Date.now(),
+            token
+          });
+          converted.push({ fileId, previewToken: token, mimeType: img.mimeType });
+        }
+        // Replace base64 data with fileId references (don't send base64 to web clients)
+        msg.routeImages = converted.length > 0 ? converted : undefined;
+      }
       await forwardToClients(agentId, msg.sessionId, msg);
       break;
+    }
 
     case 'crew_image': {
       // Size check

@@ -580,6 +580,29 @@
   border: 1px dashed var(--border-color);
 }
 
+/* Route attached image thumbnails */
+.crew-route-images {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.crew-route-thumbnail {
+  width: 80px;
+  height: 60px;
+  object-fit: cover;
+  border-radius: 4px;
+  cursor: pointer;
+  border: 1px solid var(--border-color);
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.crew-route-thumbnail:hover {
+  transform: scale(1.05);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
 /* Crew Task Panel */
 .crew-task-panel {
   padding: 0 24px;

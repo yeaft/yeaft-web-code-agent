@@ -11,6 +11,7 @@
 import {
   formatTime, getRoleStyle as getRoleStyleFn, shortName
 } from './crewHelpers.js';
+import { openImagePreview } from '../../utils/imagePreview.js';
 import {
   shouldShowTurnDivider, getMaxRound
 } from './crewMessageGrouping.js';
@@ -278,6 +279,13 @@ export default {
                   <span class="crew-feature-summary-time">{{ getSummary(feature.taskId).time }}</span>
                 </div>
                 <div class="crew-feature-summary-text">{{ getSummary(feature.taskId).text }}</div>
+                <div v-if="getSummary(feature.taskId).routeImages && getSummary(feature.taskId).routeImages.length > 0" class="crew-route-images">
+                  <img v-for="(img, idx) in getSummary(feature.taskId).routeImages" :key="idx"
+                    :src="'/api/preview/' + img.fileId + '?token=' + (img.previewToken || '')"
+                    class="crew-route-thumbnail"
+                    @click.stop="openRouteImage('/api/preview/' + img.fileId + '?token=' + (img.previewToken || ''))"
+                    :alt="'Attached ' + (idx + 1)" />
+                </div>
               </div>
               <div v-if="getFeatureRoutes(feature.taskId).length > 0" class="crew-feature-route-pipeline">
                 <template v-for="(r, ri) in getFeatureRoutes(feature.taskId)" :key="r.id || ri">
@@ -330,6 +338,13 @@ export default {
                     <span class="crew-feature-summary-time">{{ getSummary(feature.taskId).time }}</span>
                   </div>
                   <div class="crew-feature-summary-text">{{ getSummary(feature.taskId).text }}</div>
+                  <div v-if="getSummary(feature.taskId).routeImages && getSummary(feature.taskId).routeImages.length > 0" class="crew-route-images">
+                    <img v-for="(img, idx) in getSummary(feature.taskId).routeImages" :key="idx"
+                      :src="'/api/preview/' + img.fileId + '?token=' + (img.previewToken || '')"
+                      class="crew-route-thumbnail"
+                      @click.stop="openRouteImage('/api/preview/' + img.fileId + '?token=' + (img.previewToken || ''))"
+                      :alt="'Attached ' + (idx + 1)" />
+                  </div>
                 </div>
                 <div v-if="getFeatureRoutes(feature.taskId).length > 0" class="crew-feature-route-pipeline">
                   <template v-for="(r, ri) in getFeatureRoutes(feature.taskId)" :key="r.id || ri">
@@ -364,6 +379,9 @@ export default {
     },
     shouldShowTurnDivider,
     getMaxRound,
+    openRouteImage(url) {
+      openImagePreview(url);
+    },
 
     // Route task group expand/collapse (default expanded)
     isRouteTaskExpanded(key) {
@@ -505,7 +523,8 @@ export default {
               role: rawRole,
               text: `→ ${this.getRoleDisplayName(rm.routeTo)}: ${this.truncateText(rm.routeSummary, 60)}`,
               time: rm.timestamp ? formatTime(rm.timestamp) : '',
-              actions: []
+              actions: [],
+              routeImages: rm.routeImages || []
             };
           }
           // Tool-use-only turn (no text yet) — show tool name as placeholder
