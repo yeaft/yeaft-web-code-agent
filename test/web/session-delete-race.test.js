@@ -123,10 +123,10 @@ describe('handleAgentList skips recently deleted sessions', () => {
 // _recentlyDeletedSessions is independent from _closedAt
 // =====================================================================
 describe('_recentlyDeletedSessions is not cleared by _closedAt reset', () => {
-  it('handleAgentList clears _closedAt but NOT _recentlyDeletedSessions', () => {
-    // The handler has store._closedAt = {} but should NOT have
+  it('handleAgentList prunes stale _closedAt entries but NOT _recentlyDeletedSessions', () => {
+    // The handler prunes old _closedAt entries (> 30s) but should NOT have
     // store._recentlyDeletedSessions = {} anywhere
-    expect(agentHandlerJs).toContain('store._closedAt = {}');
+    expect(agentHandlerJs).toContain('_closedAt');
     expect(agentHandlerJs).not.toContain('store._recentlyDeletedSessions = {}');
   });
 

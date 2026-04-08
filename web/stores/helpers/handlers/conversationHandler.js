@@ -183,6 +183,9 @@ export function handleTurnCompleted(store, msg) {
     stopProcessingWatchdog(store, convId);
     if (!store._closedAt) store._closedAt = {};
     store._closedAt[convId] = Date.now();
+    // ★ Persistent guard: prevent agent_list from re-setting processing until next sendMessage
+    if (!store._turnCompletedConvs) store._turnCompletedConvs = new Set();
+    store._turnCompletedConvs.add(convId);
     const status = store.executionStatusMap[convId];
     if (status) {
       status.currentTool = null;
@@ -214,6 +217,8 @@ export function handleConversationClosed(store, msg) {
     stopProcessingWatchdog(store, convId);
     if (!store._closedAt) store._closedAt = {};
     store._closedAt[convId] = Date.now();
+    if (!store._turnCompletedConvs) store._turnCompletedConvs = new Set();
+    store._turnCompletedConvs.add(convId);
     const status = store.executionStatusMap[convId];
     if (status) {
       status.currentTool = null;
@@ -231,7 +236,8 @@ export function handleConversationClosed(store, msg) {
 
 export function handleConversationRefresh(store, msg) {
   if (msg.conversationId) {
-    if (msg.isProcessing && !isRecentlyClosed(store, msg.conversationId)) {
+    if (msg.isProcessing && !isRecentlyClosed(store, msg.conversationId)
+        && !store._turnCompletedConvs?.has(msg.conversationId)) {
       store.processingConversations[msg.conversationId] = true;
     } else if (store.processingConversations[msg.conversationId]) {
       delete store.processingConversations[msg.conversationId];
@@ -250,6 +256,8 @@ export function handleExecutionCancelled(store, msg) {
     stopProcessingWatchdog(store, convId);
     if (!store._closedAt) store._closedAt = {};
     store._closedAt[convId] = Date.now();
+    if (!store._turnCompletedConvs) store._turnCompletedConvs = new Set();
+    store._turnCompletedConvs.add(convId);
     const status = store.executionStatusMap[convId];
     if (status) {
       status.currentTool = null;

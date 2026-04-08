@@ -167,9 +167,19 @@ export function handleAgentList(store, msg) {
   }
   // Sync pinned sessions to localStorage (server is source of truth)
   localStorage.setItem('pinned-sessions', JSON.stringify(store.pinnedSessions));
-  // ★ Reconnect: 清空客户端残留状态
-  store._turnCompletedConvs?.clear();
-  store._closedAt = {};
+  // ★ Prune stale guards — only clear entries older than 30s to prevent
+  // agent_list from re-setting processing on recently-completed conversations.
+  // Old code cleared ALL guards on every agent_list, which destroyed the
+  // protection window and caused typing indicator to get stuck.
+  if (store._closedAt) {
+    const now = Date.now();
+    for (const convId of Object.keys(store._closedAt)) {
+      if (now - store._closedAt[convId] > 30000) {
+        delete store._closedAt[convId];
+        store._turnCompletedConvs?.delete(convId);
+      }
+    }
+  }
   // ★ Reconnect 恢复
   if (store.currentAgent) {
     const agent = msg.agents.find(a => a.id === store.currentAgent && a.online);
