@@ -124,20 +124,34 @@ export function handleAgentList(store, msg) {
         store.pinnedSessions.push(serverConv.id);
       }
     }
-    // Mark conversations not in server list as agent offline —
-    // but only if their agent is truly offline (not just missing from conversation list).
-    // This prevents graying out sessions that the server hasn't restored from DB yet.
-    const onlineAgentIds = new Set(msg.agents.filter(a => a.online).map(a => a.id));
-    for (const conv of store.conversations) {
-      if (!allServerConvIds.has(conv.id)) {
-        // If the conv's agent is online, keep agentOnline true (server may just not have the session in memory)
-        if (conv.agentId && onlineAgentIds.has(conv.agentId)) {
-          conv.agentOnline = true;
-        } else {
-          conv.agentOnline = false;
-        }
+    // ★ Remove stale conversations no longer reported by the server.
+    // If a session's agent is in the agent_list but the session is NOT,
+    // the server has actively removed it (is_active=0 in DB or agent cleaned up).
+    // Previously this just set agentOnline=true which kept dead sessions visible forever.
+    const listedAgentIds = new Set(msg.agents.map(a => a.id));
+    store.conversations = store.conversations.filter(conv => {
+      if (allServerConvIds.has(conv.id)) return true; // still in server list
+      // Don't remove conversations the user is currently viewing
+      if (store.activeConversations.includes(conv.id)) return true;
+      // Session's agent is in the agent_list but session is not → stale, remove
+      if (conv.agentId && listedAgentIds.has(conv.agentId)) {
+        // Respect recently-deleted guard (prevent flicker on close → agent_list race)
+        const deletedAt = store._recentlyDeletedSessions?.[conv.id];
+        if (deletedAt && (Date.now() - deletedAt) < 15000) return false; // already being deleted
+        console.log(`[agent_list] Removing stale session ${conv.id} (not in server list, agent ${conv.agentId} online)`);
+        // Clean up associated state
+        delete store.messagesMap[conv.id];
+        delete store.processingConversations[conv.id];
+        stopProcessingWatchdog(store, conv.id);
+        delete store.executionStatusMap[conv.id];
+        return false;
       }
-    }
+      // Agent not in list at all (different agent, offline) → keep but mark offline
+      if (conv.agentId && !listedAgentIds.has(conv.agentId)) {
+        conv.agentOnline = false;
+      }
+      return true;
+    });
 
     for (const serverConv of allServerConvs) {
       const isStaleCrewProcessing = serverConv.processing && serverConv.type === 'crew'
