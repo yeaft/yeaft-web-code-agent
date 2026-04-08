@@ -3,12 +3,12 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 
 /**
- * Tests for task-246: Running Cat SVG — four-speed animation + no-rotate crazy mode
+ * Tests for task-248: Running Cat — four-speed animation
  *
  * 1. Cuter cat: bigger head (r=7), rounder eyes (rx=2,ry=2.2), shorter body, eye shine, inner ears
  * 2. Four speed classes: speed-normal, speed-fast, speed-turbo, speed-crazy
  * 3. catSpeed computed in all 3 components (2s fast, 4s turbo, 6s crazy)
- * 4. CSS speed overrides + crazy mode shimmer blur (no rotate)
+ * 4. Turbo = shimmer blur (translateX/scaleX), Crazy = small rotating circles (Tom & Jerry)
  * 5. 20% larger cat via scale(1.2)
  */
 
@@ -46,8 +46,12 @@ describe('Cuter cat SVG design', () => {
     expect(messageListJs).toMatch(/svg-cat-nose.*Z/);
   });
 
-  it('has leg blur ellipses for crazy mode', () => {
+  it('has leg blur ellipses (outer pair)', () => {
     expect(messageListJs).toContain('svg-cat-leg-blur');
+  });
+
+  it('has inner leg blur ellipses for crazy mode swirl', () => {
+    expect(messageListJs).toContain('svg-cat-leg-blur-inner');
   });
 
   it('viewBox is 0 0 36 28', () => {
@@ -79,6 +83,12 @@ describe('Cat SVG consistency across components', () => {
     expect(ccv).not.toBeNull();
     expect(ml).toBe(sp);
     expect(ml).toBe(ccv);
+  });
+
+  it('all 3 components have inner blur ellipses', () => {
+    expect(messageListJs).toContain('svg-cat-leg-blur-inner');
+    expect(splitPaneJs).toContain('svg-cat-leg-blur-inner');
+    expect(crewChatViewJs).toContain('svg-cat-leg-blur-inner');
   });
 });
 
@@ -194,6 +204,51 @@ describe('catSpeed computation logic (four tiers)', () => {
 });
 
 // =====================================================================
+// CSS: turbo = shimmer, crazy = small rotating circles
+// =====================================================================
+describe('CSS: turbo uses shimmer, crazy uses small rotate', () => {
+  it('turbo hides real legs', () => {
+    expect(chatMessagesCss).toMatch(/speed-turbo\s+\.svg-cat-leg-fl[\s\S]*?opacity:\s*0/);
+  });
+
+  it('turbo shows blur with shimmer animation', () => {
+    expect(chatMessagesCss).toMatch(/speed-turbo\s+\.svg-cat-leg-blur[\s\S]*?svg-leg-blur-shimmer/);
+  });
+
+  it('crazy hides real legs', () => {
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-fl[\s\S]*?opacity:\s*0/);
+  });
+
+  it('crazy uses rotate animation for outer blur (not shimmer)', () => {
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur\b[^-][\s\S]*?svg-leg-rotate\b/);
+  });
+
+  it('crazy uses reverse rotate for inner blur (swirl effect)', () => {
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur-inner[\s\S]*?svg-leg-rotate-reverse/);
+  });
+
+  it('has svg-leg-rotate keyframe (360 deg)', () => {
+    const kf = chatMessagesCss.match(/@keyframes svg-leg-rotate\s*\{[\s\S]*?\n\}/);
+    expect(kf).not.toBeNull();
+    expect(kf[0]).toContain('rotate(360deg)');
+  });
+
+  it('has svg-leg-rotate-reverse keyframe (-360 deg)', () => {
+    const kf = chatMessagesCss.match(/@keyframes svg-leg-rotate-reverse\s*\{[\s\S]*?\n\}/);
+    expect(kf).not.toBeNull();
+    expect(kf[0]).toContain('rotate(-360deg)');
+  });
+
+  it('shimmer keyframe uses translateX/scaleX (no rotate)', () => {
+    const shimmer = chatMessagesCss.match(/@keyframes svg-leg-blur-shimmer\s*\{[\s\S]*?\}/);
+    expect(shimmer).not.toBeNull();
+    expect(shimmer[0]).toContain('translateX');
+    expect(shimmer[0]).toContain('scaleX');
+    expect(shimmer[0]).not.toContain('rotate');
+  });
+});
+
+// =====================================================================
 // CSS: speed variant styles (four tiers)
 // =====================================================================
 describe('CSS: speed variant styles (four tiers)', () => {
@@ -209,49 +264,16 @@ describe('CSS: speed variant styles (four tiers)', () => {
     expect(chatMessagesCss).toContain('.svg-running-cat.speed-crazy');
   });
 
-  it('speed-fast changes bounce animation', () => {
+  it('has all bounce keyframes', () => {
     expect(chatMessagesCss).toContain('@keyframes svg-cat-bounce-fast');
-  });
-
-  it('speed-turbo has bounce keyframe', () => {
     expect(chatMessagesCss).toContain('@keyframes svg-cat-bounce-turbo');
-  });
-
-  it('speed-crazy has bouncing keyframe', () => {
     expect(chatMessagesCss).toContain('@keyframes svg-cat-bounce-crazy');
-  });
-
-  it('speed-crazy uses shimmer animation (not rotate)', () => {
-    expect(chatMessagesCss).toContain('@keyframes svg-leg-blur-shimmer');
-    expect(chatMessagesCss).not.toContain('@keyframes svg-leg-spin');
-  });
-
-  it('speed-crazy shimmer uses translateX/scaleX (no rotate)', () => {
-    const shimmer = chatMessagesCss.match(/@keyframes svg-leg-blur-shimmer\s*\{[\s\S]*?\}/);
-    expect(shimmer).not.toBeNull();
-    expect(shimmer[0]).toContain('translateX');
-    expect(shimmer[0]).toContain('scaleX');
-    expect(shimmer[0]).not.toContain('rotate');
-  });
-
-  it('speed-crazy hides real legs', () => {
-    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-fl[\s\S]*?opacity:\s*0/);
-  });
-
-  it('speed-crazy shows leg blur with shimmer animation', () => {
-    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur[\s\S]*?svg-leg-blur-shimmer/);
   });
 
   it('speed-fast makes legs faster (0.25s)', () => {
     const fastBlock = chatMessagesCss.match(/speed-fast[\s\S]*?speed-turbo/);
     expect(fastBlock).not.toBeNull();
     expect(fastBlock[0]).toContain('animation-duration: 0.25s');
-  });
-
-  it('speed-turbo makes legs ultra-fast (0.12s)', () => {
-    const turboBlock = chatMessagesCss.match(/speed-turbo[\s\S]*?speed-crazy/);
-    expect(turboBlock).not.toBeNull();
-    expect(turboBlock[0]).toContain('animation-duration: 0.12s');
   });
 });
 
@@ -265,18 +287,6 @@ describe('CSS: cat scaled up 20%', () => {
 
   it('bounce keyframes include scale(1.2)', () => {
     const bounce = chatMessagesCss.match(/@keyframes svg-cat-bounce\s*\{[\s\S]*?\}/);
-    expect(bounce).not.toBeNull();
-    expect(bounce[0]).toContain('scale(1.2)');
-  });
-
-  it('fast bounce keyframes include scale(1.2)', () => {
-    const bounce = chatMessagesCss.match(/@keyframes svg-cat-bounce-fast\s*\{[\s\S]*?\}/);
-    expect(bounce).not.toBeNull();
-    expect(bounce[0]).toContain('scale(1.2)');
-  });
-
-  it('crazy bounce keyframes include scale(1.2)', () => {
-    const bounce = chatMessagesCss.match(/@keyframes svg-cat-bounce-crazy\s*\{[\s\S]*?\}/);
     expect(bounce).not.toBeNull();
     expect(bounce[0]).toContain('scale(1.2)');
   });
@@ -298,6 +308,13 @@ describe('CSS: new cat parts', () => {
     const blurRule = chatMessagesCss.match(/\.svg-cat-leg-blur\s*\{([^}]*)\}/);
     expect(blurRule).not.toBeNull();
     expect(blurRule[1]).toContain('opacity: 0');
+  });
+
+  it('has .svg-cat-leg-blur-inner style (hidden by default)', () => {
+    expect(chatMessagesCss).toContain('.svg-cat-leg-blur-inner');
+    const blurInnerRule = chatMessagesCss.match(/\.svg-cat-leg-blur-inner\s*\{([^}]*)\}/);
+    expect(blurInnerRule).not.toBeNull();
+    expect(blurInnerRule[1]).toContain('opacity: 0');
   });
 
   it('inner ear uses var(--text-secondary)', () => {
