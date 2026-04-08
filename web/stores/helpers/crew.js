@@ -330,7 +330,15 @@ export function handleCrewOutput(store, msg) {
       decisionMaker: msg.decisionMaker
     };
     // 恢复 UI 消息历史
-    if (msg.uiMessages && msg.uiMessages.length > 0) {
+    // ★ Only replace messages when this is an explicit user-initiated restore
+    // (_pendingCrewRestore is set) or the local session has no messages.
+    // During normal operation, agent_list triggers resume_crew_session which
+    // sends crew_session_restored. Replacing messages mid-turn would wipe the
+    // local human message and make the typing indicator disappear prematurely.
+    const localMsgs = store.crewMessagesMap[sid];
+    const isUserInitiatedRestore = store._pendingCrewRestore === sid;
+    const hasLocalMessages = localMsgs && localMsgs.length > 0;
+    if (msg.uiMessages && msg.uiMessages.length > 0 && (!hasLocalMessages || isUserInitiatedRestore)) {
       store.crewMessagesMap[sid] = msg.uiMessages.map(m => {
         // Dynamically compute isDecisionMaker from session roles (same as real-time crew_output)
         const senderRole = effectiveRoles.find(r => r.name === m.role);

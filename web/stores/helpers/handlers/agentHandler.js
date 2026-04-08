@@ -191,12 +191,20 @@ export function handleAgentList(store, msg) {
         const conv = store.conversations.find(c => c.id === store.currentConversation);
         store.sendWsMessage({ type: 'select_conversation', conversationId: store.currentConversation });
         if (conv?.type === 'crew') {
-          console.log('[Reconnect] Crew conversation detected, resuming crew session:', store.currentConversation);
-          store.sendWsMessage({
-            type: 'resume_crew_session',
-            sessionId: store.currentConversation,
-            agentId: store.currentAgent
-          });
+          // ★ Only send resume_crew_session when the local session is NOT already
+          // active with messages. During normal operation, agent_list arrives
+          // frequently (after every status change) and re-sending resume would
+          // trigger crew_session_restored which replaces crewMessagesMap,
+          // wiping the local human message and making the typing indicator disappear.
+          const crewMsgs = store.crewMessagesMap[store.currentConversation];
+          if (!crewMsgs || crewMsgs.length === 0) {
+            console.log('[Reconnect] Crew conversation detected, resuming crew session:', store.currentConversation);
+            store.sendWsMessage({
+              type: 'resume_crew_session',
+              sessionId: store.currentConversation,
+              agentId: store.currentAgent
+            });
+          }
         } else {
           const currentMsgs = store.messagesMap[store.currentConversation] || [];
           if (currentMsgs.length > 0) {
