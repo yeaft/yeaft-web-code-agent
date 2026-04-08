@@ -82,6 +82,28 @@
   flex-shrink: 0;
 }
 
+/* Turn: Images (screenshots from Claude tools) */
+.turn-images {
+  padding: 8px 12px;
+}
+
+.turn-image-item {
+  margin: 4px 0;
+}
+
+.chat-screenshot {
+  max-width: 100%;
+  max-height: 400px;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid var(--border-color);
+  transition: opacity 0.2s;
+}
+
+.chat-screenshot:hover {
+  opacity: 0.9;
+}
+
 /* Turn: AskUserQuestion */
 .turn-ask {
   border-top: 1px solid var(--border-light);

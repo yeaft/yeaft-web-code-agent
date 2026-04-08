@@ -136,6 +136,18 @@ export function handleMessage(store, msg) {
       store.handleClaudeOutput(msg.conversationId, msg.data);
       break;
 
+    case 'chat_image':
+      // Image from Claude response (tool screenshots, etc.)
+      if (msg.conversationId && msg.fileId) {
+        store.addMessageToConversation(msg.conversationId, {
+          type: 'chat-image',
+          fileId: msg.fileId,
+          previewToken: msg.previewToken,
+          mimeType: msg.mimeType
+        });
+      }
+      break;
+
     case 'error': {
       const errorConvId = msg.conversationId || store.currentConversation;
       const isSystemError = ['Permission denied', 'Agent not found', 'No conversation selected', 'Agent is still syncing', 'Agent access denied'].some(

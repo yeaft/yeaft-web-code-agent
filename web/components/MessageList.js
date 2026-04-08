@@ -159,8 +159,8 @@ export default {
 
       const finishTurn = () => {
         if (currentTurn) {
-          // Skip empty turns (no text, no tools, no todo, no ask)
-          if (currentTurn.textContent || currentTurn.toolMsgs.length > 0 || currentTurn.todoMsg || currentTurn.askMsg) {
+          // Skip empty turns (no text, no tools, no todo, no ask, no images)
+          if (currentTurn.textContent || currentTurn.toolMsgs.length > 0 || currentTurn.todoMsg || currentTurn.askMsg || currentTurn.imageMsgs.length > 0) {
             result.push(currentTurn);
           }
           currentTurn = null;
@@ -176,6 +176,7 @@ export default {
           isStreaming: false,
           todoMsg: null,
           toolMsgs: [],
+          imageMsgs: [],
           askMsg: null,
           messages: []
         };
@@ -236,6 +237,13 @@ export default {
           } else {
             currentTurn.toolMsgs.push(toolEntry);
           }
+          currentTurn.messages.push(msg);
+          continue;
+        }
+
+        if (msg.type === 'chat-image') {
+          if (!currentTurn) startTurn();
+          currentTurn.imageMsgs.push(msg);
           currentTurn.messages.push(msg);
           continue;
         }
