@@ -89,9 +89,11 @@ export default {
               <!-- Front legs -->
               <g class="svg-cat-leg-fl"><path class="svg-cat-leg" d="M21 20 L23 25 Q23 26.5 21.5 26.5 L20.5 26.5" stroke-width="0"/></g>
               <g class="svg-cat-leg-fr"><path class="svg-cat-leg" d="M19 20 L21 25 Q21 26.5 19.5 26.5 L18.5 26.5" stroke-width="0"/></g>
-              <!-- Crazy-mode spinning legs (hidden by default) -->
+              <!-- Blur legs for turbo (shimmer) + crazy (rotate) modes — hidden by default -->
               <ellipse class="svg-cat-leg-blur" cx="10" cy="22" rx="2" ry="1.5"/>
               <ellipse class="svg-cat-leg-blur" cx="20" cy="22" rx="2" ry="1.5"/>
+              <ellipse class="svg-cat-leg-blur svg-cat-leg-blur-inner" cx="13" cy="22" rx="2.5" ry="1"/>
+              <ellipse class="svg-cat-leg-blur svg-cat-leg-blur-inner" cx="17" cy="22" rx="2.5" ry="1"/>
               <!-- Head (bigger, more chibi) -->
               <circle class="svg-cat-head" cx="24" cy="10" r="7"/>
               <!-- Ears (taller, pointier) -->

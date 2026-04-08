@@ -275,8 +275,9 @@
 .svg-cat-whisker { stroke: var(--text-secondary); opacity: 0.35; fill: none; }
 .svg-cat-tail { fill: none; stroke: var(--text-secondary); opacity: 0.55; stroke-linecap: round; }
 
-/* Leg blur (spinning legs for crazy mode) — hidden by default */
+/* Leg blur (turbo shimmer + crazy rotate) — hidden by default */
 .svg-cat-leg-blur { fill: var(--text-secondary); opacity: 0; }
+.svg-cat-leg-blur-inner { opacity: 0; }
 
 /* Leg animations — normal speed (0.5s cycle) */
 .svg-cat-leg-fl { transform-origin: 21px 20px; animation: svg-leg-front-l 0.5s ease-in-out infinite alternate; }
@@ -346,12 +347,13 @@
   100% { transform: scale(1.2) translateY(-2px) translateX(1px); }
 }
 
-/* ========== Speed: Turbo (4-6s) — ultra-fast legs, body very low ========== */
+/* ========== Speed: Turbo (4-6s) — shimmer blur legs ========== */
 .svg-running-cat.speed-turbo { animation: svg-cat-bounce-turbo 0.3s ease-in-out infinite alternate; }
-.svg-running-cat.speed-turbo .svg-cat-leg-fl { animation-duration: 0.12s; }
-.svg-running-cat.speed-turbo .svg-cat-leg-fr { animation-duration: 0.12s; }
-.svg-running-cat.speed-turbo .svg-cat-leg-bl { animation-duration: 0.12s; }
-.svg-running-cat.speed-turbo .svg-cat-leg-br { animation-duration: 0.12s; }
+.svg-running-cat.speed-turbo .svg-cat-leg-fl,
+.svg-running-cat.speed-turbo .svg-cat-leg-fr,
+.svg-running-cat.speed-turbo .svg-cat-leg-bl,
+.svg-running-cat.speed-turbo .svg-cat-leg-br { opacity: 0; }
+.svg-running-cat.speed-turbo .svg-cat-leg-blur { opacity: 0.55; animation: svg-leg-blur-shimmer 0.1s ease-in-out infinite alternate; }
 .svg-running-cat.speed-turbo .svg-cat-tail-group { animation-duration: 0.2s; }
 .svg-running-cat.speed-turbo .svg-cat-body { transform: scaleY(0.85) translateY(1px); transform-origin: 15px 17px; }
 .svg-running-cat.speed-turbo .svg-cat-ear-l { animation-duration: 0.6s; }
@@ -363,16 +365,19 @@
   100% { transform: scale(1.2) translateY(-1px) translateX(-0.5px); }
 }
 
-/* ========== Speed: Crazy (6s+) — Tom & Jerry blur legs ========== */
+/* ========== Speed: Crazy (6s+) — Tom & Jerry small rotating blur under body ========== */
 .svg-running-cat.speed-crazy { animation: svg-cat-bounce-crazy 0.2s ease-in-out infinite alternate; }
 .svg-running-cat.speed-crazy .svg-cat-body { transform: scaleY(0.85) translateY(1px); transform-origin: 15px 17px; }
 
-/* Hide real legs, show spinning blur ellipses */
+/* Hide real legs, show rotating blur ellipses */
 .svg-running-cat.speed-crazy .svg-cat-leg-fl,
 .svg-running-cat.speed-crazy .svg-cat-leg-fr,
 .svg-running-cat.speed-crazy .svg-cat-leg-bl,
 .svg-running-cat.speed-crazy .svg-cat-leg-br { opacity: 0; }
-.svg-running-cat.speed-crazy .svg-cat-leg-blur { opacity: 0.55; animation: svg-leg-blur-shimmer 0.1s ease-in-out infinite alternate; }
+/* Outer blur pair — rotate at edges of body */
+.svg-running-cat.speed-crazy .svg-cat-leg-blur { opacity: 0.5; animation: svg-leg-rotate 0.18s linear infinite; }
+/* Inner blur pair — counter-rotate for swirl effect */
+.svg-running-cat.speed-crazy .svg-cat-leg-blur-inner { opacity: 0.35; animation: svg-leg-rotate-reverse 0.14s linear infinite; }
 
 .svg-running-cat.speed-crazy .svg-cat-tail-group { animation: svg-tail-wag-crazy 0.15s linear infinite alternate; }
 .svg-running-cat.speed-crazy .svg-cat-ear-l { animation: svg-ear-twitch-crazy 0.3s ease-in-out infinite; }
@@ -387,6 +392,16 @@
 @keyframes svg-leg-blur-shimmer {
   0% { transform: translateX(-1.5px) scaleX(0.6); opacity: 0.45; }
   100% { transform: translateX(1.5px) scaleX(1.4); opacity: 0.6; }
+}
+
+@keyframes svg-leg-rotate {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes svg-leg-rotate-reverse {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(-360deg); }
 }
 
 @keyframes svg-tail-wag-crazy {
