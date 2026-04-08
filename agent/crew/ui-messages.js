@@ -200,6 +200,19 @@ export function sendCrewOutput(session, roleName, outputType, rawMessage, extra 
             taskId, taskTitle, isDecisionMaker,
             timestamp: Date.now()
           });
+          // ★ Collect turn images for auto-attach on ROUTE (last 3 per turn)
+          const roleState = session.roleStates.get(roleName);
+          if (roleState) {
+            if (!roleState.turnImages) roleState.turnImages = [];
+            roleState.turnImages.push({
+              mimeType: item.source.media_type,
+              data: item.source.data
+            });
+            // Cap at last 3 images per turn
+            if (roleState.turnImages.length > 3) {
+              roleState.turnImages = roleState.turnImages.slice(-3);
+            }
+          }
         }
       }
     }

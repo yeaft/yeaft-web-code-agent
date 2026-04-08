@@ -185,6 +185,10 @@ export async function processRoleOutput(session, roleName, roleQuery, roleState)
         if (routes.length > 0) {
           session.round++;
 
+          // ★ Collect turn images for auto-attach (last 3, then clear)
+          const turnImages = roleState.turnImages || [];
+          roleState.turnImages = [];
+
           const currentTask = roleState.currentTask;
           for (const route of routes) {
             if (!route.taskId && currentTask) {
@@ -203,7 +207,7 @@ export async function processRoleOutput(session, roleName, roleQuery, roleState)
           });
 
           const results = await Promise.allSettled(routes.map(route =>
-            executeRoute(session, roleName, route)
+            executeRoute(session, roleName, route, turnImages)
           ));
           for (const r of results) {
             if (r.status === 'rejected') {
