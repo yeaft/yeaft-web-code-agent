@@ -111,32 +111,36 @@ export default {
         <!-- Typing dots: visible after user sends message, before AI responds -->
         <div v-if="isWaitingResponse" class="typing-indicator" :class="waitingStatus ? ('status-' + waitingStatus) : ''">
           <span></span><span></span><span></span>
-          <span class="svg-running-cat" aria-hidden="true">
-            <svg viewBox="0 0 34 28" xmlns="http://www.w3.org/2000/svg">
+          <span class="svg-running-cat" :class="catSpeed" aria-hidden="true">
+            <svg viewBox="0 0 36 28" xmlns="http://www.w3.org/2000/svg">
               <g class="svg-cat-tail-group">
-                <path class="svg-cat-tail" d="M6 15 Q1 10 3 5 Q4 3 6 4" stroke-width="1.8"/>
+                <path class="svg-cat-tail" d="M5 16 Q0 11 2 5 Q3 2 5 4" stroke-width="2"/>
               </g>
-              <g class="svg-cat-leg-bl"><path class="svg-cat-leg" d="M10 18 L8 24 Q8 25.5 9.5 25.5 L10.5 25.5" stroke-width="0" /></g>
-              <g class="svg-cat-leg-br"><path class="svg-cat-leg" d="M8 18 L6 24 Q6 25.5 7.5 25.5 L8.5 25.5" stroke-width="0" /></g>
-              <ellipse class="svg-cat-body" cx="15" cy="16" rx="9" ry="4.5"/>
-              <g class="svg-cat-leg-fl"><path class="svg-cat-leg" d="M22 18 L24 24 Q24 25.5 22.5 25.5 L21.5 25.5" stroke-width="0" /></g>
-              <g class="svg-cat-leg-fr"><path class="svg-cat-leg" d="M20 18 L22 24 Q22 25.5 20.5 25.5 L19.5 25.5" stroke-width="0" /></g>
-              <circle class="svg-cat-head" cx="24" cy="10" r="5.5"/>
-              <g class="svg-cat-ear-l"><polygon class="svg-cat-ear" points="19,7 21,1 23,6"/></g>
-              <g class="svg-cat-ear-r"><polygon class="svg-cat-ear" points="25,6 27,1 29,7"/></g>
-              <polygon class="svg-cat-nose" points="19.8,6.5 21.2,2 22.3,5.8" opacity="0.25"/>
-              <polygon class="svg-cat-nose" points="25.7,5.8 26.8,2 28.2,6.5" opacity="0.25"/>
-              <ellipse class="svg-cat-eye" cx="22.2" cy="9.5" rx="1.5" ry="1.7"/>
-              <ellipse class="svg-cat-eye" cx="26.5" cy="9.5" rx="1.5" ry="1.7"/>
-              <ellipse class="svg-cat-pupil" cx="22.6" cy="9.8" rx="0.8" ry="1.0"/>
-              <ellipse class="svg-cat-pupil" cx="26.9" cy="9.8" rx="0.8" ry="1.0"/>
-              <ellipse class="svg-cat-nose" cx="24.5" cy="12" rx="0.8" ry="0.5"/>
-              <path class="svg-cat-mouth" d="M24.5 12.5 Q24 13.5 23.2 13.2" stroke-width="0.5"/>
-              <path class="svg-cat-mouth" d="M24.5 12.5 Q25 13.5 25.8 13.2" stroke-width="0.5"/>
-              <line class="svg-cat-whisker" x1="20" y1="11" x2="16" y2="10" stroke-width="0.4"/>
-              <line class="svg-cat-whisker" x1="20" y1="12" x2="16" y2="12.5" stroke-width="0.4"/>
-              <line class="svg-cat-whisker" x1="28.5" y1="11" x2="32.5" y2="10" stroke-width="0.4"/>
-              <line class="svg-cat-whisker" x1="28.5" y1="12" x2="32.5" y2="12.5" stroke-width="0.4"/>
+              <g class="svg-cat-leg-bl"><path class="svg-cat-leg" d="M10 20 L8 25 Q8 26.5 9.5 26.5 L10.5 26.5" stroke-width="0"/></g>
+              <g class="svg-cat-leg-br"><path class="svg-cat-leg" d="M8 20 L6 25 Q6 26.5 7.5 26.5 L8.5 26.5" stroke-width="0"/></g>
+              <ellipse class="svg-cat-body" cx="15" cy="17" rx="7.5" ry="5"/>
+              <g class="svg-cat-leg-fl"><path class="svg-cat-leg" d="M21 20 L23 25 Q23 26.5 21.5 26.5 L20.5 26.5" stroke-width="0"/></g>
+              <g class="svg-cat-leg-fr"><path class="svg-cat-leg" d="M19 20 L21 25 Q21 26.5 19.5 26.5 L18.5 26.5" stroke-width="0"/></g>
+              <ellipse class="svg-cat-leg-blur" cx="10" cy="23" rx="4" ry="2.5"/>
+              <ellipse class="svg-cat-leg-blur" cx="20" cy="23" rx="4" ry="2.5"/>
+              <circle class="svg-cat-head" cx="24" cy="10" r="7"/>
+              <g class="svg-cat-ear-l"><polygon class="svg-cat-ear" points="18,8 20,0 23,7"/></g>
+              <g class="svg-cat-ear-r"><polygon class="svg-cat-ear" points="25,7 28,0 30,8"/></g>
+              <polygon class="svg-cat-inner-ear" points="19,7.5 20.5,1.5 22,6.5"/>
+              <polygon class="svg-cat-inner-ear" points="26,6.5 27.5,1.5 29,7.5"/>
+              <ellipse class="svg-cat-eye" cx="21.5" cy="9.5" rx="2" ry="2.2"/>
+              <ellipse class="svg-cat-eye" cx="27" cy="9.5" rx="2" ry="2.2"/>
+              <ellipse class="svg-cat-pupil" cx="22" cy="9.8" rx="1.1" ry="1.3"/>
+              <ellipse class="svg-cat-pupil" cx="27.5" cy="9.8" rx="1.1" ry="1.3"/>
+              <circle class="svg-cat-eye-shine" cx="21.2" cy="8.8" r="0.6"/>
+              <circle class="svg-cat-eye-shine" cx="26.7" cy="8.8" r="0.6"/>
+              <path class="svg-cat-nose" d="M23.5 12.5 L24.2 13.2 L25 12.5 Z"/>
+              <path class="svg-cat-mouth" d="M23 13.5 Q24.2 14.8 24.2 13.5" stroke-width="0.5"/>
+              <path class="svg-cat-mouth" d="M24.3 13.5 Q24.3 14.8 25.5 13.5" stroke-width="0.5"/>
+              <line class="svg-cat-whisker" x1="19.5" y1="12" x2="14" y2="11" stroke-width="0.4"/>
+              <line class="svg-cat-whisker" x1="19.5" y1="13" x2="14" y2="13.5" stroke-width="0.4"/>
+              <line class="svg-cat-whisker" x1="29" y1="12" x2="34" y2="11" stroke-width="0.4"/>
+              <line class="svg-cat-whisker" x1="29" y1="13" x2="34" y2="13.5" stroke-width="0.4"/>
             </svg>
           </span>
           <span v-if="waitingStatus === 'disconnected'" class="typing-status-text typing-status-error">
@@ -392,6 +396,13 @@ export default {
       if (health) return health.status;
       if (this.typingStartTime && this.nowTick - this.typingStartTime > 8000) return 'thinking';
       return null;
+    },
+    catSpeed() {
+      if (!this.typingStartTime) return 'speed-normal';
+      const elapsed = this.nowTick - this.typingStartTime;
+      if (elapsed >= 15000) return 'speed-crazy';
+      if (elapsed >= 5000) return 'speed-fast';
+      return 'speed-normal';
     },
     isInitializing() {
       return this.paneCrewStatus?.status === 'initializing';

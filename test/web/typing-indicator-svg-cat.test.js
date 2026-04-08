@@ -65,7 +65,7 @@ describe('Scenario 1: MessageList.js typing indicator', () => {
 
   it('has svg-running-cat span with inline SVG', () => {
     expect(messageListSrc).toContain('class="svg-running-cat"');
-    expect(messageListSrc).toContain('<svg viewBox="0 0 34 28"');
+    expect(messageListSrc).toContain('<svg viewBox="0 0 36 28"');
   });
 
   it('SVG cat has body, head, legs, tail, eyes, whiskers', () => {
@@ -103,7 +103,8 @@ describe('Scenario 1: MessageList.js typing indicator', () => {
   });
 
   it('SVG cat has aria-hidden for accessibility', () => {
-    expect(messageListSrc).toContain('class="svg-running-cat" aria-hidden="true"');
+    expect(messageListSrc).toContain('aria-hidden="true"');
+    expect(messageListSrc).toContain('class="svg-running-cat"');
   });
 });
 
@@ -117,7 +118,7 @@ describe('Scenario 2: SplitPane.js typing indicator', () => {
 
   it('has svg-running-cat with inline SVG', () => {
     expect(splitPaneSrc).toContain('class="svg-running-cat"');
-    expect(splitPaneSrc).toContain('<svg viewBox="0 0 34 28"');
+    expect(splitPaneSrc).toContain('<svg viewBox="0 0 36 28"');
   });
 
   it('has all SVG cat parts', () => {
@@ -150,7 +151,7 @@ describe('Scenario 3: CrewChatView.js typing indicator', () => {
 
   it('has svg-running-cat with inline SVG', () => {
     expect(crewChatViewSrc).toContain('class="svg-running-cat"');
-    expect(crewChatViewSrc).toContain('<svg viewBox="0 0 34 28"');
+    expect(crewChatViewSrc).toContain('<svg viewBox="0 0 36 28"');
   });
 
   it('has all SVG cat parts', () => {
@@ -176,7 +177,7 @@ describe('Scenario 3: CrewChatView.js typing indicator', () => {
 // =============================================================================
 describe('SVG cat consistency across components', () => {
   function extractCatSvg(src) {
-    const match = src.match(/<svg viewBox="0 0 34 28"[\s\S]*?<\/svg>/);
+    const match = src.match(/<svg viewBox="0 0 36 28"[\s\S]*?<\/svg>/);
     if (!match) return '';
     // Normalize: remove comments and whitespace
     return match[0].replace(/<!--.*?-->/g, '').replace(/\s+/g, ' ').trim();
