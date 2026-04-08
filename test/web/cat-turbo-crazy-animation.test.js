@@ -1,11 +1,12 @@
 /**
- * task-248 supplementary tests: Running Cat turbo shimmer + crazy Tom&Jerry vortex.
+ * task-252 supplementary tests: Running Cat four-speed redesign.
  *
- * Test scenarios from PM:
- * 1. Turbo (4-6s) shimmer speed 明显比 crazy 慢
- * 2. Crazy (6s+) 漩涡旋转在身体正下方，不超出身体轮廓
- * 3. 四档变速 0-2-4-6s 过渡自然
- * 4. scale(1.2) 放大效果不变
+ * Core principle: LEGS ALWAYS VISIBLE in all four tiers.
+ * Test scenarios:
+ * 1. Turbo (4-6s): real legs at 0.14s/±35° with faint blur trail
+ * 2. Crazy (6s+): semi-transparent legs at 0.08s/±42° with wobble blur (no rotate)
+ * 3. Four-speed 0-2-4-6s progression: speed ramps naturally
+ * 4. scale(1.2) preserved across all tiers
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import { readFileSync } from 'fs';
@@ -27,64 +28,95 @@ beforeAll(() => {
 });
 
 // =============================================================================
-// 1. Turbo shimmer speed is visibly slower than crazy rotate
+// 1. Turbo: real legs with increased swing + faint blur trail
 // =============================================================================
-describe('Scenario 1: Turbo shimmer speed slower than crazy', () => {
-  it('turbo shimmer animation duration is 0.22s', () => {
-    expect(chatMessagesCss).toMatch(/speed-turbo\s+\.svg-cat-leg-blur\b[^-][\s\S]*?0\.22s/);
+describe('Scenario 1: Turbo legs visible with blur trail', () => {
+  it('turbo leg animation uses dedicated keyframes at 0.14s', () => {
+    expect(chatMessagesCss).toMatch(/speed-turbo\s+\.svg-cat-leg-fl\s*\{[^}]*svg-leg-turbo-fl\s+0\.14s/);
   });
 
-  it('crazy rotate animation duration is 0.18s (outer)', () => {
-    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur\b[^-][\s\S]*?0\.18s/);
+  it('turbo legs have ±35° swing (wider than fast ±20°)', () => {
+    const kf = chatMessagesCss.match(/@keyframes svg-leg-turbo-fl\s*\{[\s\S]*?\n\}/);
+    expect(kf).not.toBeNull();
+    expect(kf[0]).toContain('rotate(35deg)');
+    expect(kf[0]).toContain('rotate(-35deg)');
   });
 
-  it('crazy reverse rotate is even faster: 0.14s (inner)', () => {
-    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur-inner[\s\S]*?0\.14s/);
+  it('turbo blur trail has low opacity (0.2) — not replacing legs', () => {
+    expect(chatMessagesCss).toMatch(/speed-turbo\s+\.svg-cat-leg-blur\s*\{[^}]*opacity:\s*0\.2/);
   });
 
-  it('turbo shimmer (0.22s) > crazy outer (0.18s) > crazy inner (0.14s)', () => {
-    // Extract animation durations
-    const turboMatch = chatMessagesCss.match(/speed-turbo\s+\.svg-cat-leg-blur\b[^-][^}]*?(\d+\.?\d*)s/);
-    const crazyOuterMatch = chatMessagesCss.match(/speed-crazy\s+\.svg-cat-leg-blur\b[^-][^}]*?(\d+\.?\d*)s.*?linear/);
-    const crazyInnerMatch = chatMessagesCss.match(/speed-crazy\s+\.svg-cat-leg-blur-inner[^}]*?(\d+\.?\d*)s/);
-
-    expect(turboMatch).toBeTruthy();
-    expect(crazyOuterMatch).toBeTruthy();
-    expect(crazyInnerMatch).toBeTruthy();
-
-    const turboDuration = parseFloat(turboMatch[1]);
-    const crazyOuterDuration = parseFloat(crazyOuterMatch[1]);
-    const crazyInnerDuration = parseFloat(crazyInnerMatch[1]);
-
-    // Turbo should be slower (longer duration) than crazy
-    expect(turboDuration).toBeGreaterThan(crazyOuterDuration);
-    expect(crazyOuterDuration).toBeGreaterThan(crazyInnerDuration);
+  it('turbo blur uses trail animation (scaleX pulse), not shimmer/rotate', () => {
+    expect(chatMessagesCss).toMatch(/speed-turbo\s+\.svg-cat-leg-blur[\s\S]*?svg-leg-blur-trail/);
+    // Trail keyframe should have scaleX but no rotate
+    const kf = chatMessagesCss.match(/@keyframes svg-leg-blur-trail\s*\{[\s\S]*?\n\}/);
+    expect(kf).not.toBeNull();
+    expect(kf[0]).toContain('scaleX');
+    expect(kf[0]).not.toContain('rotate');
   });
 
-  it('turbo uses shimmer (translateX/scaleX), not rotate', () => {
-    // Turbo uses svg-leg-blur-shimmer which has translateX/scaleX
-    expect(chatMessagesCss).toMatch(/speed-turbo\s+\.svg-cat-leg-blur\b[^-][\s\S]*?svg-leg-blur-shimmer/);
-    // And the shimmer keyframe has no rotate
-    const shimmer = chatMessagesCss.match(/@keyframes svg-leg-blur-shimmer\s*\{[\s\S]*?\}/);
-    expect(shimmer[0]).toContain('translateX');
-    expect(shimmer[0]).toContain('scaleX');
-    expect(shimmer[0]).not.toContain('rotate');
+  it('turbo ears flatten in the wind (svg-ear-flatten)', () => {
+    expect(chatMessagesCss).toMatch(/speed-turbo\s+\.svg-cat-ear-l[\s\S]*?svg-ear-flatten/);
   });
 
-  it('crazy uses rotate (not shimmer)', () => {
-    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur\b[^-][\s\S]*?svg-leg-rotate\b/);
-    // The rotate keyframe has rotate() not translateX/scaleX
-    const rotate = chatMessagesCss.match(/@keyframes svg-leg-rotate\s*\{[\s\S]*?\n\}/);
-    expect(rotate[0]).toContain('rotate(360deg)');
-    expect(rotate[0]).not.toContain('translateX');
+  it('turbo body crouches: scaleY(0.87)', () => {
+    expect(chatMessagesCss).toMatch(/speed-turbo\s+\.svg-cat-body[\s\S]*?scaleY\(0\.87\)/);
   });
 });
 
 // =============================================================================
-// 2. Crazy vortex stays under body, doesn't exceed body width
+// 2. Crazy: semi-transparent legs + wobble blur (NO rotate)
 // =============================================================================
-describe('Scenario 2: Crazy vortex within body bounds', () => {
-  // Body: cx=15, rx=7.5 → left edge = 7.5, right edge = 22.5
+describe('Scenario 2: Crazy semi-transparent legs with wobble', () => {
+  it('crazy legs are semi-transparent (opacity: 0.3), not hidden', () => {
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-fl\s*\{[^}]*opacity:\s*0\.3/);
+  });
+
+  it('crazy legs run at 0.08s with ±42° swing', () => {
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-fl\s*\{[^}]*0\.08s/);
+    const kf = chatMessagesCss.match(/@keyframes svg-leg-crazy-fl\s*\{[\s\S]*?\n\}/);
+    expect(kf).not.toBeNull();
+    expect(kf[0]).toContain('rotate(42deg)');
+    expect(kf[0]).toContain('rotate(-42deg)');
+  });
+
+  it('crazy blur uses wobble (scaleX/scaleY), NOT rotate', () => {
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur\s*\{[^}]*svg-leg-blur-wobble\b/);
+    const kf = chatMessagesCss.match(/@keyframes svg-leg-blur-wobble\s*\{[\s\S]*?\n\}/);
+    expect(kf).not.toBeNull();
+    expect(kf[0]).toContain('scaleX');
+    expect(kf[0]).toContain('scaleY');
+    expect(kf[0]).not.toContain('rotate');
+  });
+
+  it('crazy inner blur uses reverse wobble for layered effect', () => {
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur-inner[\s\S]*?svg-leg-blur-wobble-reverse/);
+  });
+
+  it('crazy body extremely crouched + stretched: scaleY(0.82) scaleX(1.03)', () => {
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-body[\s\S]*?scaleY\(0\.82\)/);
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-body[\s\S]*?scaleX\(1\.03\)/);
+  });
+
+  it('crazy tail wag is frantic at 0.12s', () => {
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-tail-group[\s\S]*?svg-tail-wag-crazy\s+0\.12s/);
+  });
+
+  it('crazy ears flatten at 0.18s', () => {
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-ear-l[\s\S]*?svg-ear-flatten\s+0\.18s/);
+  });
+
+  it('no rotate animation in crazy mode (no svg-leg-rotate)', () => {
+    const crazySection = chatMessagesCss.match(/Speed: Crazy[\s\S]*?\.typing-refresh/);
+    expect(crazySection).not.toBeNull();
+    expect(crazySection[0]).not.toContain('svg-leg-rotate');
+  });
+});
+
+// =============================================================================
+// 2b. Blur ellipse positions within body bounds
+// =============================================================================
+describe('Scenario 2b: Blur ellipses within body bounds', () => {
   const bodyLeft = 15 - 7.5;  // 7.5
   const bodyRight = 15 + 7.5; // 22.5
 
@@ -122,7 +154,6 @@ describe('Scenario 2: Crazy vortex within body bounds', () => {
   });
 
   it('all blur ellipses are at cy=22 (under body cy=17)', () => {
-    // Body cy=17, blur cy=22 — below the body
     const blurs = messageListJs.match(/svg-cat-leg-blur[^"]*"[^/]*cy="(\d+)"/g);
     expect(blurs).not.toBeNull();
     for (const m of blurs) {
@@ -131,31 +162,9 @@ describe('Scenario 2: Crazy vortex within body bounds', () => {
     }
   });
 
-  it('transform-origin is at body center (15px 22px) for orbit', () => {
-    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur\b[^-][\s\S]*?transform-origin:\s*15px 22px/);
-    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur-inner[\s\S]*?transform-origin:\s*15px 22px/);
-  });
-
   it('outer and inner pairs are symmetric around body center (x=15)', () => {
-    // Outer: 12.5 and 17.5 → distances from center: 2.5 and 2.5 ✓
     expect(15 - 12.5).toBe(17.5 - 15);
-    // Inner: 14 and 16 → distances from center: 1 and 1 ✓
     expect(15 - 14).toBe(16 - 15);
-  });
-
-  it('inner ellipses are smaller than outer (more compact center)', () => {
-    // Outer rx=1.8, inner rx=1.5
-    expect(1.5).toBeLessThan(1.8);
-    // Outer ry=1.2, inner ry=1.0
-    expect(1.0).toBeLessThan(1.2);
-  });
-
-  it('counter-rotating inner pair creates swirl visual effect', () => {
-    // Outer rotates forward (360deg), inner rotates backward (-360deg)
-    const rotate = chatMessagesCss.match(/@keyframes svg-leg-rotate\s*\{[\s\S]*?\n\}/);
-    const rotateRev = chatMessagesCss.match(/@keyframes svg-leg-rotate-reverse\s*\{[\s\S]*?\n\}/);
-    expect(rotate[0]).toContain('rotate(360deg)');
-    expect(rotateRev[0]).toContain('rotate(-360deg)');
   });
 });
 
@@ -171,20 +180,17 @@ describe('Scenario 3: Four-speed 0-2-4-6s transitions', () => {
     expect(chatMessagesCss).toMatch(/speed-fast.*animation-duration:\s*0\.25s/);
   });
 
-  it('turbo mode (4-6s): legs hidden, shimmer at 0.22s', () => {
-    // Legs hidden
-    expect(chatMessagesCss).toMatch(/speed-turbo[\s\S]*?svg-cat-leg-fl[\s\S]*?opacity:\s*0/);
-    // Shimmer visible
-    expect(chatMessagesCss).toMatch(/speed-turbo\s+\.svg-cat-leg-blur\b[^-][\s\S]*?opacity:\s*0\.55/);
+  it('turbo mode (4-6s): legs at 0.14s with ±35° swing + faint blur trail', () => {
+    expect(chatMessagesCss).toMatch(/speed-turbo\s+\.svg-cat-leg-fl\s*\{[^}]*0\.14s/);
+    expect(chatMessagesCss).toMatch(/speed-turbo\s+\.svg-cat-leg-blur\s*\{[^}]*opacity:\s*0\.2/);
   });
 
-  it('crazy mode (6s+): legs hidden, rotating blur visible', () => {
-    expect(chatMessagesCss).toMatch(/speed-crazy[\s\S]*?svg-cat-leg-fl[\s\S]*?opacity:\s*0/);
-    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur\b[^-][\s\S]*?opacity:\s*0\.5/);
+  it('crazy mode (6s+): legs at 0.08s semi-transparent + wobble blur', () => {
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-fl\s*\{[^}]*0\.08s[^}]*opacity:\s*0\.3/);
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur\s*\{[^}]*svg-leg-blur-wobble\b/);
   });
 
   it('bounce durations decrease with speed: normal > fast > turbo > crazy', () => {
-    // Normal: 0.5s, Fast: 0.4s, Turbo: 0.3s, Crazy: 0.2s
     const normalMatch = chatMessagesCss.match(/\.svg-running-cat\s*\{[^}]*svg-cat-bounce\s+(\d+\.?\d*)s/);
     const fastMatch = chatMessagesCss.match(/speed-fast\s*\{[^}]*svg-cat-bounce-fast\s+(\d+\.?\d*)s/);
     const turboMatch = chatMessagesCss.match(/speed-turbo\s*\{[^}]*svg-cat-bounce-turbo\s+(\d+\.?\d*)s/);
@@ -206,7 +212,6 @@ describe('Scenario 3: Four-speed 0-2-4-6s transitions', () => {
   });
 
   it('catSpeed computed uses correct thresholds in all 3 components', () => {
-    // All three should have: 6000 → speed-crazy, 4000 → speed-turbo, 2000 → speed-fast
     for (const src of [messageListJs, splitPaneJs, crewChatViewJs]) {
       expect(src).toContain('6000');
       expect(src).toContain('4000');
@@ -269,7 +274,7 @@ describe('Supplemental: SVG blur ellipses consistent across components', () => {
     for (const src of [messageListJs, splitPaneJs, crewChatViewJs]) {
       const blurs = src.match(/svg-cat-leg-blur[^"]*"\s*cx="[\d.]+" cy="(\d+)"/g);
       expect(blurs).not.toBeNull();
-      expect(blurs.length).toBe(4); // 2 outer + 2 inner
+      expect(blurs.length).toBe(4);
       for (const m of blurs) {
         expect(m).toContain('cy="22"');
       }
@@ -293,8 +298,7 @@ describe('Supplemental: blur ellipses hidden by default', () => {
     expect(rule[1]).toContain('opacity: 0');
   });
 
-  it('inner blur is not visible in turbo mode (only outer shimmer)', () => {
-    // Turbo only activates .svg-cat-leg-blur, not .svg-cat-leg-blur-inner
+  it('inner blur is not visible in turbo mode (only outer trail)', () => {
     const turboSection = chatMessagesCss.match(/Speed: Turbo[\s\S]*?Speed: Crazy/);
     expect(turboSection).not.toBeNull();
     expect(turboSection[0]).not.toContain('svg-cat-leg-blur-inner');

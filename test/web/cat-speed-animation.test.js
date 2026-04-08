@@ -3,12 +3,14 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 
 /**
- * Tests for task-248: Running Cat — four-speed animation
+ * Tests for task-252: Running Cat — four-speed animation redesign
  *
  * 1. Cuter cat: bigger head (r=7), rounder eyes (rx=2,ry=2.2), shorter body, eye shine, inner ears
  * 2. Four speed classes: speed-normal, speed-fast, speed-turbo, speed-crazy
  * 3. catSpeed computed in all 3 components (2s fast, 4s turbo, 6s crazy)
- * 4. Turbo = shimmer blur (translateX/scaleX), Crazy = small rotating circles (Tom & Jerry)
+ * 4. Core principle: LEGS ALWAYS VISIBLE in all four tiers
+ *    - Turbo: real legs at 0.14s/±35°, blur as faint trail (opacity 0.2)
+ *    - Crazy: semi-transparent legs (opacity 0.3) at 0.08s/±42°, wobble blur (no rotate)
  * 5. 20% larger cat via scale(1.2)
  */
 
@@ -50,7 +52,7 @@ describe('Cuter cat SVG design', () => {
     expect(messageListJs).toContain('svg-cat-leg-blur');
   });
 
-  it('has inner leg blur ellipses for crazy mode swirl', () => {
+  it('has inner leg blur ellipses for crazy mode wobble', () => {
     expect(messageListJs).toContain('svg-cat-leg-blur-inner');
   });
 
@@ -204,55 +206,131 @@ describe('catSpeed computation logic (four tiers)', () => {
 });
 
 // =====================================================================
-// CSS: turbo = shimmer, crazy = small rotating circles
+// CSS: turbo = fast real legs ±35° with faint blur trail
 // =====================================================================
-describe('CSS: turbo uses shimmer, crazy uses small rotate', () => {
-  it('turbo hides real legs', () => {
-    expect(chatMessagesCss).toMatch(/speed-turbo\s+\.svg-cat-leg-fl[\s\S]*?opacity:\s*0/);
+describe('CSS: turbo has real legs with blur trail', () => {
+  it('turbo legs use dedicated turbo keyframes (not just duration override)', () => {
+    expect(chatMessagesCss).toMatch(/speed-turbo\s+\.svg-cat-leg-fl[\s\S]*?svg-leg-turbo-fl/);
+    expect(chatMessagesCss).toMatch(/speed-turbo\s+\.svg-cat-leg-fr[\s\S]*?svg-leg-turbo-fr/);
   });
 
-  it('turbo shows blur with shimmer animation', () => {
-    expect(chatMessagesCss).toMatch(/speed-turbo\s+\.svg-cat-leg-blur[\s\S]*?svg-leg-blur-shimmer/);
+  it('turbo does NOT hide legs (no opacity: 0 on real legs)', () => {
+    // Turbo leg rules should not set opacity: 0 (legs hidden)
+    // Check each leg rule individually — the rule is on one line
+    const turboLegFl = chatMessagesCss.match(/speed-turbo\s+\.svg-cat-leg-fl\s*\{([^}]*)\}/);
+    expect(turboLegFl).not.toBeNull();
+    expect(turboLegFl[1]).not.toMatch(/opacity:\s*0\b/);
   });
 
-  it('crazy hides real legs', () => {
-    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-fl[\s\S]*?opacity:\s*0/);
+  it('turbo leg period is 0.14s', () => {
+    expect(chatMessagesCss).toMatch(/speed-turbo\s+\.svg-cat-leg-fl\s*\{[^}]*0\.14s/);
   });
 
-  it('crazy uses rotate animation for outer blur (not shimmer)', () => {
-    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur\b[^-][\s\S]*?svg-leg-rotate\b/);
-  });
-
-  it('crazy blur orbits around body center (transform-origin: 15px 22px)', () => {
-    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur\b[^-][\s\S]*?transform-origin:\s*15px 22px/);
-  });
-
-  it('crazy uses reverse rotate for inner blur (swirl effect)', () => {
-    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur-inner[\s\S]*?svg-leg-rotate-reverse/);
-  });
-
-  it('crazy inner blur orbits around body center (transform-origin: 15px 22px)', () => {
-    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur-inner[\s\S]*?transform-origin:\s*15px 22px/);
-  });
-
-  it('has svg-leg-rotate keyframe (360 deg)', () => {
-    const kf = chatMessagesCss.match(/@keyframes svg-leg-rotate\s*\{[\s\S]*?\n\}/);
+  it('turbo leg swing is ±35deg', () => {
+    const kf = chatMessagesCss.match(/@keyframes svg-leg-turbo-fl\s*\{[\s\S]*?\n\}/);
     expect(kf).not.toBeNull();
-    expect(kf[0]).toContain('rotate(360deg)');
+    expect(kf[0]).toContain('rotate(35deg)');
+    expect(kf[0]).toContain('rotate(-35deg)');
   });
 
-  it('has svg-leg-rotate-reverse keyframe (-360 deg)', () => {
-    const kf = chatMessagesCss.match(/@keyframes svg-leg-rotate-reverse\s*\{[\s\S]*?\n\}/);
+  it('turbo blur is faint trail (opacity 0.2)', () => {
+    expect(chatMessagesCss).toMatch(/speed-turbo\s+\.svg-cat-leg-blur\s*\{[^}]*opacity:\s*0\.2/);
+  });
+
+  it('turbo blur uses trail animation (not shimmer/rotate)', () => {
+    expect(chatMessagesCss).toMatch(/speed-turbo\s+\.svg-cat-leg-blur[\s\S]*?svg-leg-blur-trail/);
+  });
+
+  it('turbo body is scaleY(0.87)', () => {
+    expect(chatMessagesCss).toMatch(/speed-turbo\s+\.svg-cat-body[\s\S]*?scaleY\(0\.87\)/);
+  });
+
+  it('turbo ears use flatten animation', () => {
+    expect(chatMessagesCss).toMatch(/speed-turbo\s+\.svg-cat-ear-l[\s\S]*?svg-ear-flatten/);
+  });
+
+  it('has svg-leg-blur-trail keyframe', () => {
+    expect(chatMessagesCss).toContain('@keyframes svg-leg-blur-trail');
+  });
+
+  it('has svg-ear-flatten keyframe (±12deg)', () => {
+    const kf = chatMessagesCss.match(/@keyframes svg-ear-flatten\s*\{[\s\S]*?\n\}/);
     expect(kf).not.toBeNull();
-    expect(kf[0]).toContain('rotate(-360deg)');
+    expect(kf[0]).toContain('rotate(-12deg)');
+    expect(kf[0]).toContain('rotate(12deg)');
+  });
+});
+
+// =====================================================================
+// CSS: crazy = ultra-fast semi-transparent legs ±42° with wobble blur
+// =====================================================================
+describe('CSS: crazy has semi-transparent legs with wobble blur', () => {
+  it('crazy legs are semi-transparent (opacity: 0.3), NOT hidden', () => {
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-fl\s*\{[^}]*opacity:\s*0\.3/);
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-fr\s*\{[^}]*opacity:\s*0\.3/);
   });
 
-  it('shimmer keyframe uses translateX/scaleX (no rotate)', () => {
-    const shimmer = chatMessagesCss.match(/@keyframes svg-leg-blur-shimmer\s*\{[\s\S]*?\}/);
-    expect(shimmer).not.toBeNull();
-    expect(shimmer[0]).toContain('translateX');
-    expect(shimmer[0]).toContain('scaleX');
-    expect(shimmer[0]).not.toContain('rotate');
+  it('crazy legs use dedicated crazy keyframes', () => {
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-fl[\s\S]*?svg-leg-crazy-fl/);
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-bl[\s\S]*?svg-leg-crazy-bl/);
+  });
+
+  it('crazy leg period is 0.08s', () => {
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-fl\s*\{[^}]*0\.08s/);
+  });
+
+  it('crazy leg swing is ±42deg', () => {
+    const kf = chatMessagesCss.match(/@keyframes svg-leg-crazy-fl\s*\{[\s\S]*?\n\}/);
+    expect(kf).not.toBeNull();
+    expect(kf[0]).toContain('rotate(42deg)');
+    expect(kf[0]).toContain('rotate(-42deg)');
+  });
+
+  it('crazy blur uses wobble animation (not rotate)', () => {
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur\s*\{[^}]*svg-leg-blur-wobble\b/);
+  });
+
+  it('crazy inner blur uses reverse wobble', () => {
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur-inner[\s\S]*?svg-leg-blur-wobble-reverse/);
+  });
+
+  it('crazy body is extremely crouched: scaleY(0.82) scaleX(1.03)', () => {
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-body[\s\S]*?scaleY\(0\.82\)/);
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-body[\s\S]*?scaleX\(1\.03\)/);
+  });
+
+  it('crazy tail wag is 0.12s', () => {
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-tail-group[\s\S]*?svg-tail-wag-crazy\s+0\.12s/);
+  });
+
+  it('crazy ears use flatten animation at 0.18s', () => {
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-ear-l[\s\S]*?svg-ear-flatten\s+0\.18s/);
+  });
+
+  it('no rotate animation in crazy mode', () => {
+    // The crazy section should NOT contain svg-leg-rotate
+    const crazySection = chatMessagesCss.match(/Speed: Crazy[\s\S]*?\.typing-refresh/);
+    expect(crazySection).not.toBeNull();
+    expect(crazySection[0]).not.toContain('svg-leg-rotate');
+  });
+
+  it('has svg-leg-blur-wobble keyframe (scaleX/scaleY, no rotate)', () => {
+    const kf = chatMessagesCss.match(/@keyframes svg-leg-blur-wobble\s*\{[\s\S]*?\n\}/);
+    expect(kf).not.toBeNull();
+    expect(kf[0]).toContain('scaleX');
+    expect(kf[0]).toContain('scaleY');
+    expect(kf[0]).not.toContain('rotate');
+  });
+
+  it('has svg-leg-blur-wobble-reverse keyframe', () => {
+    expect(chatMessagesCss).toContain('@keyframes svg-leg-blur-wobble-reverse');
+  });
+
+  it('has svg-tail-wag-crazy keyframe (±30deg)', () => {
+    const kf = chatMessagesCss.match(/@keyframes svg-tail-wag-crazy\s*\{[\s\S]*?\n\}/);
+    expect(kf).not.toBeNull();
+    expect(kf[0]).toContain('rotate(-30deg)');
+    expect(kf[0]).toContain('rotate(30deg)');
   });
 });
 
@@ -282,6 +360,14 @@ describe('CSS: speed variant styles (four tiers)', () => {
     const fastBlock = chatMessagesCss.match(/speed-fast[\s\S]*?speed-turbo/);
     expect(fastBlock).not.toBeNull();
     expect(fastBlock[0]).toContain('animation-duration: 0.25s');
+  });
+
+  it('speed progression: normal 0.5s > fast 0.25s > turbo 0.14s > crazy 0.08s', () => {
+    // Verify the leg animation durations are progressively faster
+    expect(chatMessagesCss).toMatch(/svg-cat-leg-fl\s*\{[^}]*0\.5s/);      // normal
+    expect(chatMessagesCss).toMatch(/speed-fast[^}]*leg-fl[^}]*0\.25s/);    // fast
+    expect(chatMessagesCss).toMatch(/speed-turbo[^}]*leg-fl[^}]*0\.14s/);   // turbo
+    expect(chatMessagesCss).toMatch(/speed-crazy[^}]*leg-fl[^}]*0\.08s/);   // crazy
   });
 });
 
@@ -359,7 +445,8 @@ describe('CSS: normal speed animation timing', () => {
     expect(chatMessagesCss).toMatch(/\.svg-cat-leg-fl\s*\{[^}]*0\.5s/);
   });
 
-  it('crazy tail wag uses 0.15s', () => {
+  it('crazy tail wag uses 0.12s', () => {
     expect(chatMessagesCss).toContain('@keyframes svg-tail-wag-crazy');
+    expect(chatMessagesCss).toMatch(/speed-crazy[^}]*tail-group[^}]*0\.12s/);
   });
 });
