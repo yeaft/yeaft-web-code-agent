@@ -223,8 +223,16 @@ describe('CSS: turbo uses shimmer, crazy uses small rotate', () => {
     expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur\b[^-][\s\S]*?svg-leg-rotate\b/);
   });
 
+  it('crazy blur orbits around body center (transform-origin: 15px 22px)', () => {
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur\b[^-][\s\S]*?transform-origin:\s*15px 22px/);
+  });
+
   it('crazy uses reverse rotate for inner blur (swirl effect)', () => {
     expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur-inner[\s\S]*?svg-leg-rotate-reverse/);
+  });
+
+  it('crazy inner blur orbits around body center (transform-origin: 15px 22px)', () => {
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur-inner[\s\S]*?transform-origin:\s*15px 22px/);
   });
 
   it('has svg-leg-rotate keyframe (360 deg)', () => {

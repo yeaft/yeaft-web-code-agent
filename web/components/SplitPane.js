@@ -59,10 +59,10 @@ export default {
                         <ellipse class="svg-cat-body" cx="15" cy="17" rx="7.5" ry="5"/>
                         <g class="svg-cat-leg-fl"><path class="svg-cat-leg" d="M21 20 L23 25 Q23 26.5 21.5 26.5 L20.5 26.5" stroke-width="0"/></g>
                         <g class="svg-cat-leg-fr"><path class="svg-cat-leg" d="M19 20 L21 25 Q21 26.5 19.5 26.5 L18.5 26.5" stroke-width="0"/></g>
-                        <ellipse class="svg-cat-leg-blur" cx="10" cy="22" rx="2" ry="1.5"/>
-                        <ellipse class="svg-cat-leg-blur" cx="20" cy="22" rx="2" ry="1.5"/>
-                        <ellipse class="svg-cat-leg-blur svg-cat-leg-blur-inner" cx="13" cy="22" rx="2.5" ry="1"/>
-                        <ellipse class="svg-cat-leg-blur svg-cat-leg-blur-inner" cx="17" cy="22" rx="2.5" ry="1"/>
+                        <ellipse class="svg-cat-leg-blur" cx="12.5" cy="22" rx="1.8" ry="1.2"/>
+                        <ellipse class="svg-cat-leg-blur" cx="17.5" cy="22" rx="1.8" ry="1.2"/>
+                        <ellipse class="svg-cat-leg-blur svg-cat-leg-blur-inner" cx="14" cy="22" rx="1.5" ry="1"/>
+                        <ellipse class="svg-cat-leg-blur svg-cat-leg-blur-inner" cx="16" cy="22" rx="1.5" ry="1"/>
                         <circle class="svg-cat-head" cx="24" cy="10" r="7"/>
                         <g class="svg-cat-ear-l"><polygon class="svg-cat-ear" points="18,8 20,0 23,7"/></g>
                         <g class="svg-cat-ear-r"><polygon class="svg-cat-ear" points="25,7 28,0 30,8"/></g>
