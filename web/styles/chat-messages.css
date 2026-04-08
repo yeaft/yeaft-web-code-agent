@@ -353,7 +353,7 @@
 .svg-running-cat.speed-turbo .svg-cat-leg-fr,
 .svg-running-cat.speed-turbo .svg-cat-leg-bl,
 .svg-running-cat.speed-turbo .svg-cat-leg-br { opacity: 0; }
-.svg-running-cat.speed-turbo .svg-cat-leg-blur { opacity: 0.55; animation: svg-leg-blur-shimmer 0.1s ease-in-out infinite alternate; }
+.svg-running-cat.speed-turbo .svg-cat-leg-blur { opacity: 0.55; animation: svg-leg-blur-shimmer 0.22s ease-in-out infinite alternate; }
 .svg-running-cat.speed-turbo .svg-cat-tail-group { animation-duration: 0.2s; }
 .svg-running-cat.speed-turbo .svg-cat-body { transform: scaleY(0.85) translateY(1px); transform-origin: 15px 17px; }
 .svg-running-cat.speed-turbo .svg-cat-ear-l { animation-duration: 0.6s; }
@@ -374,10 +374,10 @@
 .svg-running-cat.speed-crazy .svg-cat-leg-fr,
 .svg-running-cat.speed-crazy .svg-cat-leg-bl,
 .svg-running-cat.speed-crazy .svg-cat-leg-br { opacity: 0; }
-/* Outer blur pair — rotate at edges of body */
-.svg-running-cat.speed-crazy .svg-cat-leg-blur { opacity: 0.5; animation: svg-leg-rotate 0.18s linear infinite; }
-/* Inner blur pair — counter-rotate for swirl effect */
-.svg-running-cat.speed-crazy .svg-cat-leg-blur-inner { opacity: 0.35; animation: svg-leg-rotate-reverse 0.14s linear infinite; }
+/* Outer blur pair — orbit around body center (15,22) */
+.svg-running-cat.speed-crazy .svg-cat-leg-blur { opacity: 0.5; transform-origin: 15px 22px; animation: svg-leg-rotate 0.18s linear infinite; }
+/* Inner blur pair — counter-orbit for swirl effect */
+.svg-running-cat.speed-crazy .svg-cat-leg-blur-inner { opacity: 0.35; transform-origin: 15px 22px; animation: svg-leg-rotate-reverse 0.14s linear infinite; }
 
 .svg-running-cat.speed-crazy .svg-cat-tail-group { animation: svg-tail-wag-crazy 0.15s linear infinite alternate; }
 .svg-running-cat.speed-crazy .svg-cat-ear-l { animation: svg-ear-twitch-crazy 0.3s ease-in-out infinite; }
@@ -390,8 +390,8 @@
 }
 
 @keyframes svg-leg-blur-shimmer {
-  0% { transform: translateX(-1.5px) scaleX(0.6); opacity: 0.45; }
-  100% { transform: translateX(1.5px) scaleX(1.4); opacity: 0.6; }
+  0% { transform: translateX(-2.5px) scaleX(0.6); opacity: 0.4; }
+  100% { transform: translateX(2.5px) scaleX(1.5); opacity: 0.6; }
 }
 
 @keyframes svg-leg-rotate {
