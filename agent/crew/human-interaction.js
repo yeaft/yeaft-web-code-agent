@@ -11,13 +11,23 @@ import { debouncedSaveSessionMeta } from './persistence.js';
  */
 export async function handleCrewHumanInput(msg) {
   // Lazy import to avoid circular dependency
-  const { crewSessions } = await import('./session.js');
+  const { crewSessions, resumeCrewSession } = await import('./session.js');
 
   const { sessionId, content, targetRole, files } = msg;
-  const session = crewSessions.get(sessionId);
+  let session = crewSessions.get(sessionId);
   if (!session) {
-    console.warn(`[Crew] Session not found: ${sessionId}`);
-    return;
+    // Auto-resume: try to restore from disk before giving up
+    console.log(`[Crew] Session ${sessionId} not in memory, attempting auto-resume...`);
+    try {
+      await resumeCrewSession({ sessionId });
+      session = crewSessions.get(sessionId);
+    } catch (e) {
+      console.warn(`[Crew] Auto-resume failed for ${sessionId}:`, e.message);
+    }
+    if (!session) {
+      console.warn(`[Crew] Session not found: ${sessionId} (even after auto-resume)`);
+      return;
+    }
   }
 
   // Build dispatch content (supports image attachments)

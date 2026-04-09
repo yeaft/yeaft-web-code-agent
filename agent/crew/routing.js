@@ -50,7 +50,8 @@ export function parseRoutes(text) {
     // ★ Clean `to` value: take only the first word (strip parenthetical notes, extra text)
     // e.g. "pm (决策者)" → "pm", "dev-1 // main dev" → "dev-1"
     const toRaw = toMatch[1].trim().toLowerCase();
-    const toClean = toRaw.split(/[\s(]/)[0];
+    // Strip trailing punctuation (commas, semicolons, colons, etc.)
+    const toClean = toRaw.split(/[\s(]/)[0].replace(/[,;:!?。，；：!？]+$/, '');
 
     // ★ summary: match until next known field (task:/taskTitle:) or end of block
     const summaryMatch = block.match(/summary:\s*([\s\S]+?)(?=\n\s*(?:task|taskTitle)\s*:|$)/i);
@@ -114,9 +115,28 @@ export function resolveRoleName(to, session, fromRole) {
     }
   }
 
+  // 4. displayName match (e.g. "乔布斯" → pm)
+  if (candidates.length === 0) {
+    for (const [name, config] of session.roles) {
+      if (config.displayName && config.displayName.toLowerCase() === to) {
+        candidates.push({ name, groupIndex: config.groupIndex || 0 });
+      }
+    }
+  }
+
+  // 5. name-displayName compound match (e.g. "pm-乔布斯" → pm)
+  //    Claude sometimes concatenates role name + display name with a hyphen
+  if (candidates.length === 0) {
+    for (const [name, config] of session.roles) {
+      if (to.startsWith(name + '-') && to.length > name.length + 1) {
+        candidates.push({ name, groupIndex: config.groupIndex || 0 });
+      }
+    }
+  }
+
   if (candidates.length === 0) return null;
 
-  // 4. Prefer same groupIndex as sender
+  // 6. Prefer same groupIndex as sender
   if (fromGroupIndex > 0) {
     const sameGroup = candidates.find(c => c.groupIndex === fromGroupIndex);
     if (sameGroup) return sameGroup.name;
@@ -215,8 +235,9 @@ export async function executeRoute(session, fromRole, route, turnImages = []) {
       await dispatchToRole(session, resolvedTo, taskPrompt, fromRole, taskId, taskTitle);
     }
   } else {
-    console.warn(`[Crew] Unknown route target: ${to}`);
-    const errorMsg = `路由目标 "${to}" 不存在。来自 ${fromRole} 的消息: ${summary}`;
+    const availableRoles = Array.from(session.roles.keys()).join(', ');
+    console.warn(`[Crew] Unknown route target: ${to} (available: ${availableRoles})`);
+    const errorMsg = `路由目标 "${to}" 不存在。可用角色: ${availableRoles}\n来自 ${fromRole} 的消息: ${summary}`;
     await dispatchToRole(session, session.decisionMaker, errorMsg, 'system');
   }
 }

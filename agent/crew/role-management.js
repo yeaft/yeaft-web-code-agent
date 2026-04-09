@@ -17,13 +17,23 @@ function roleLabel(r) {
  */
 export async function addRoleToSession(msg) {
   // Lazy import to avoid circular dependency
-  const { crewSessions, expandRoles } = await import('./session.js');
+  const { crewSessions, expandRoles, resumeCrewSession } = await import('./session.js');
 
   const { sessionId, role } = msg;
-  const session = crewSessions.get(sessionId);
+  let session = crewSessions.get(sessionId);
   if (!session) {
-    console.warn(`[Crew] Session not found: ${sessionId}`);
-    return;
+    // Auto-resume: try to restore from disk before giving up
+    console.log(`[Crew] Session ${sessionId} not in memory, attempting auto-resume...`);
+    try {
+      await resumeCrewSession({ sessionId });
+      session = crewSessions.get(sessionId);
+    } catch (e) {
+      console.warn(`[Crew] Auto-resume failed for ${sessionId}:`, e.message);
+    }
+    if (!session) {
+      console.warn(`[Crew] Session not found: ${sessionId} (even after auto-resume)`);
+      return;
+    }
   }
 
   const rolesToAdd = expandRoles([role]);
@@ -104,13 +114,23 @@ export async function addRoleToSession(msg) {
  * 从 session 移除角色
  */
 export async function removeRoleFromSession(msg) {
-  const { crewSessions } = await import('./session.js');
+  const { crewSessions, resumeCrewSession } = await import('./session.js');
 
   const { sessionId, roleName } = msg;
-  const session = crewSessions.get(sessionId);
+  let session = crewSessions.get(sessionId);
   if (!session) {
-    console.warn(`[Crew] Session not found: ${sessionId}`);
-    return;
+    // Auto-resume: try to restore from disk before giving up
+    console.log(`[Crew] Session ${sessionId} not in memory, attempting auto-resume...`);
+    try {
+      await resumeCrewSession({ sessionId });
+      session = crewSessions.get(sessionId);
+    } catch (e) {
+      console.warn(`[Crew] Auto-resume failed for ${sessionId}:`, e.message);
+    }
+    if (!session) {
+      console.warn(`[Crew] Session not found: ${sessionId} (even after auto-resume)`);
+      return;
+    }
   }
 
   const role = session.roles.get(roleName);
