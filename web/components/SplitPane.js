@@ -205,10 +205,18 @@ export default {
       now.value = Date.now();
       const elapsed = (now.value - typingStartTime.value) % 13000;
       if (elapsed < 6000) {
-        catPosition.value = (elapsed / 6000) * 100;
+        let pos;
+        if (elapsed < 2000) {
+          pos = (elapsed / 2000) * 15;
+        } else if (elapsed < 4000) {
+          pos = 15 + ((elapsed - 2000) / 2000) * 30;
+        } else {
+          pos = 45 + ((elapsed - 4000) / 2000) * 55;
+        }
+        catPosition.value = pos;
         catDirection.value = 1;
-      } else if (elapsed < 10000) {
-        catPosition.value = (1 - (elapsed - 6000) / 4000) * 100;
+      } else if (elapsed < 9000) {
+        catPosition.value = (1 - (elapsed - 6000) / 3000) * 100;
         catDirection.value = -1;
       } else {
         catPosition.value = 0;
@@ -252,7 +260,7 @@ export default {
     const catSpeed = Vue.computed(() => {
       if (!typingStartTime.value) return 'speed-normal';
       const elapsed = (now.value - typingStartTime.value) % 13000;
-      if (elapsed >= 10000) return 'speed-tired';
+      if (elapsed >= 9000) return 'speed-tired';
       if (elapsed >= 6000) return 'speed-crazy';
       if (elapsed >= 4000) return 'speed-turbo';
       if (elapsed >= 2000) return 'speed-fast';

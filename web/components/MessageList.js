@@ -294,15 +294,24 @@ export default {
       const elapsed = (now.value - typingStartTime.value) % 13000;
 
       if (elapsed < 6000) {
-        // 0-6s: walk forward — smooth linear progress
-        catPosition.value = (elapsed / 6000) * 100;
+        // 0-6s: walk forward with accelerating speed per tier
+        // Normal (0-2s): 15% distance, Fast (2-4s): 30%, Turbo (4-6s): 55%
+        let pos;
+        if (elapsed < 2000) {
+          pos = (elapsed / 2000) * 15;                     // 0→15%
+        } else if (elapsed < 4000) {
+          pos = 15 + ((elapsed - 2000) / 2000) * 30;      // 15→45%
+        } else {
+          pos = 45 + ((elapsed - 4000) / 2000) * 55;      // 45→100%
+        }
+        catPosition.value = pos;
         catDirection.value = 1;
-      } else if (elapsed < 10000) {
-        // 6-10s (crazy): sprint back — smooth linear return
-        catPosition.value = (1 - (elapsed - 6000) / 4000) * 100;
+      } else if (elapsed < 9000) {
+        // 6-9s (crazy): sprint back at top speed — 100% in 3s
+        catPosition.value = (1 - (elapsed - 6000) / 3000) * 100;
         catDirection.value = -1;
       } else {
-        // 10-13s (tired): stay at start, pant in place
+        // 9-13s (tired): stay at start, pant in place
         catPosition.value = 0;
         catDirection.value = 1;
       }
@@ -342,7 +351,7 @@ export default {
     const catSpeed = Vue.computed(() => {
       if (!typingStartTime.value) return 'speed-normal';
       const elapsed = (now.value - typingStartTime.value) % 13000;
-      if (elapsed >= 10000) return 'speed-tired';
+      if (elapsed >= 9000) return 'speed-tired';
       if (elapsed >= 6000) return 'speed-crazy';
       if (elapsed >= 4000) return 'speed-turbo';
       if (elapsed >= 2000) return 'speed-fast';

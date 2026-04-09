@@ -81,13 +81,8 @@ describe('Scenario 2: Crazy semi-transparent legs with wobble', () => {
     expect(kf[0]).toContain('rotate(-42deg)');
   });
 
-  it('crazy blur uses wobble (scaleX/scaleY), NOT rotate', () => {
-    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur\s*\{[^}]*svg-leg-blur-wobble\b/);
-    const kf = chatMessagesCss.match(/@keyframes svg-leg-blur-wobble\s*\{[\s\S]*?\n\}/);
-    expect(kf).not.toBeNull();
-    expect(kf[0]).toContain('scaleX');
-    expect(kf[0]).toContain('scaleY');
-    expect(kf[0]).not.toContain('rotate');
+  it('crazy blur is fully hidden (opacity 0, no stray dots)', () => {
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur\s*\{[^}]*opacity:\s*0[^.]/);
   });
 
   it('crazy inner blur is hidden (no stray dots at small size)', () => {
@@ -186,12 +181,12 @@ describe('Scenario 3: Five-speed 13s cycle transitions', () => {
     expect(chatMessagesCss).toMatch(/speed-turbo\s+\.svg-cat-leg-blur\s*\{[^}]*opacity:\s*0\.2/);
   });
 
-  it('crazy mode (6-10s): legs at 0.08s semi-transparent + wobble blur', () => {
+  it('crazy mode (6-9s): legs at 0.08s semi-transparent, blur hidden', () => {
     expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-fl\s*\{[^}]*0\.08s[^}]*opacity:\s*0\.5/);
-    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur\s*\{[^}]*svg-leg-blur-wobble\b/);
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur\s*\{[^}]*opacity:\s*0[^.]/);
   });
 
-  it('tired mode (10-13s): wobbly legs at 1.4s breathing rhythm, blur hidden', () => {
+  it('tired mode (9-13s): wobbly legs at 1.4s breathing rhythm, blur hidden', () => {
     expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-leg-fl\s*\{[^}]*1\.4s/);
     expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-leg-blur\s*\{[^}]*opacity:\s*0/);
   });
@@ -225,7 +220,7 @@ describe('Scenario 3: Five-speed 13s cycle transitions', () => {
 
   it('catSpeed computed uses correct thresholds in all 3 components', () => {
     for (const src of [messageListJs, splitPaneJs, crewChatViewJs]) {
-      expect(src).toContain('10000');
+      expect(src).toContain('9000');
       expect(src).toContain('6000');
       expect(src).toContain('4000');
       expect(src).toContain('2000');

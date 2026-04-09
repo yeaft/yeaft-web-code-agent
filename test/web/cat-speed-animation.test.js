@@ -145,8 +145,8 @@ describe('catSpeed computed property (five tiers)', () => {
     expect(crewChatViewJs).toContain('% 13000');
   });
 
-  it('speed-tired triggers at 10000ms', () => {
-    expect(messageListJs).toContain('10000');
+  it('speed-tired triggers at 9000ms', () => {
+    expect(messageListJs).toContain('9000');
   });
 
   it('speed-fast triggers at 2000ms', () => {
@@ -181,7 +181,7 @@ describe('catSpeed computation logic (five tiers, 13s cycle)', () => {
   function computeCatSpeed(typingStartTime, now) {
     if (!typingStartTime) return 'speed-normal';
     const elapsed = (now - typingStartTime) % 13000;
-    if (elapsed >= 10000) return 'speed-tired';
+    if (elapsed >= 9000) return 'speed-tired';
     if (elapsed >= 6000) return 'speed-crazy';
     if (elapsed >= 4000) return 'speed-turbo';
     if (elapsed >= 2000) return 'speed-fast';
@@ -212,16 +212,16 @@ describe('catSpeed computation logic (five tiers, 13s cycle)', () => {
     expect(computeCatSpeed(now - 5999, now)).toBe('speed-turbo');
   });
 
-  it('returns speed-crazy when elapsed is 6-9.999s', () => {
+  it('returns speed-crazy when elapsed is 6-8.999s', () => {
     const now = Date.now();
     expect(computeCatSpeed(now - 6000, now)).toBe('speed-crazy');
     expect(computeCatSpeed(now - 8000, now)).toBe('speed-crazy');
-    expect(computeCatSpeed(now - 9999, now)).toBe('speed-crazy');
+    expect(computeCatSpeed(now - 8999, now)).toBe('speed-crazy');
   });
 
-  it('returns speed-tired when elapsed is 10-12.999s', () => {
+  it('returns speed-tired when elapsed is 9-12.999s', () => {
     const now = Date.now();
-    expect(computeCatSpeed(now - 10000, now)).toBe('speed-tired');
+    expect(computeCatSpeed(now - 9000, now)).toBe('speed-tired');
     expect(computeCatSpeed(now - 11000, now)).toBe('speed-tired');
     expect(computeCatSpeed(now - 12999, now)).toBe('speed-tired');
   });
@@ -237,7 +237,7 @@ describe('catSpeed computation logic (five tiers, 13s cycle)', () => {
     expect(computeCatSpeed(now - 15000, now)).toBe('speed-fast');   // 15000 % 13000 = 2000
     expect(computeCatSpeed(now - 17000, now)).toBe('speed-turbo');  // 17000 % 13000 = 4000
     expect(computeCatSpeed(now - 19000, now)).toBe('speed-crazy');  // 19000 % 13000 = 6000
-    expect(computeCatSpeed(now - 23000, now)).toBe('speed-tired');  // 23000 % 13000 = 10000
+    expect(computeCatSpeed(now - 23000, now)).toBe('speed-tired');  // 23000 % 13000 = 10000 → ≥9000
     expect(computeCatSpeed(now - 26000, now)).toBe('speed-normal'); // 26000 % 13000 = 0
   });
 });
@@ -323,8 +323,8 @@ describe('CSS: crazy has semi-transparent legs with wobble blur', () => {
     expect(kf[0]).toContain('rotate(-42deg)');
   });
 
-  it('crazy blur uses wobble animation (not rotate)', () => {
-    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur\s*\{[^}]*svg-leg-blur-wobble\b/);
+  it('crazy blur is fully hidden (no stray dots)', () => {
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur\s*\{[^}]*opacity:\s*0[^.]/);
   });
 
   it('crazy inner blur is hidden (no stray dots)', () => {

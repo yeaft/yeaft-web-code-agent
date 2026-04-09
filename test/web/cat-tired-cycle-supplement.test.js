@@ -35,7 +35,7 @@ beforeAll(() => {
 function computeCatSpeed(typingStartTime, now) {
   if (!typingStartTime) return 'speed-normal';
   const elapsed = (now - typingStartTime) % 13000;
-  if (elapsed >= 10000) return 'speed-tired';
+  if (elapsed >= 9000) return 'speed-tired';
   if (elapsed >= 6000) return 'speed-crazy';
   if (elapsed >= 4000) return 'speed-turbo';
   if (elapsed >= 2000) return 'speed-fast';
@@ -107,15 +107,15 @@ describe('Cycle boundary precision', () => {
   });
 
   it('9999ms = crazy (last ms before tired)', () => {
-    expect(computeCatSpeed(base, base + 9999)).toBe('speed-crazy');
+    expect(computeCatSpeed(base, base + 8999)).toBe('speed-crazy');
   });
 
-  it('10000ms = tired (exact tired boundary)', () => {
-    expect(computeCatSpeed(base, base + 10000)).toBe('speed-tired');
+  it('9000ms = tired (exact tired boundary)', () => {
+    expect(computeCatSpeed(base, base + 9000)).toBe('speed-tired');
   });
 
-  it('10001ms = tired (first ms of tired)', () => {
-    expect(computeCatSpeed(base, base + 10001)).toBe('speed-tired');
+  it('9001ms = tired (first ms after tired boundary)', () => {
+    expect(computeCatSpeed(base, base + 9001)).toBe('speed-tired');
   });
 
   it('5999ms = turbo (last ms before crazy)', () => {
@@ -260,8 +260,8 @@ describe('Tired → Normal transition semantics', () => {
 // 5. Crazy → Tired transition: blur disappears, panting kicks in
 // =============================================================================
 describe('Crazy → Tired transition semantics', () => {
-  it('crazy has blur faintly visible (opacity 0.15), tired hides it (opacity 0)', () => {
-    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur\s*\{[^}]*opacity:\s*0\.15/);
+  it('crazy has blur fully hidden (opacity 0), tired also hides it (opacity 0)', () => {
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur\s*\{[^}]*opacity:\s*0[^.]/);
     expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-leg-blur\s*\{[^}]*opacity:\s*0[^.]/);
   });
 
@@ -352,10 +352,10 @@ describe('Three-component consistency for tired + 13s cycle', () => {
     expect(crewChatViewJs).toContain('% 13000');
   });
 
-  it('all 3 components check >= 10000 for tired', () => {
-    expect(messageListJs).toContain('10000');
-    expect(splitPaneJs).toContain('10000');
-    expect(crewChatViewJs).toContain('10000');
+  it('all 3 components check >= 9000 for tired', () => {
+    expect(messageListJs).toContain('9000');
+    expect(splitPaneJs).toContain('9000');
+    expect(crewChatViewJs).toContain('9000');
   });
 
   it('all 3 components return speed-tired string', () => {
@@ -384,7 +384,7 @@ describe('Three-component consistency for tired + 13s cycle', () => {
     }
   });
 
-  it('all 3 use same threshold order: tired(10000) > crazy(6000) > turbo(4000) > fast(2000)', () => {
+  it('all 3 use same threshold order: tired(9000) > crazy(6000) > turbo(4000) > fast(2000)', () => {
     for (const src of [messageListJs, splitPaneJs, crewChatViewJs]) {
       // Find the catSpeed function by looking for 'speed-tired' which is unique to the speed tier logic
       const anchorIdx = src.indexOf("'speed-tired'");
@@ -393,7 +393,7 @@ describe('Three-component consistency for tired + 13s cycle', () => {
       const regionStart = Math.max(0, anchorIdx - 200);
       const regionEnd = Math.min(src.length, anchorIdx + 200);
       const region = src.slice(regionStart, regionEnd);
-      const tiredIdx = region.indexOf('10000');
+      const tiredIdx = region.indexOf('9000');
       const crazyIdx = region.indexOf('6000');
       const turboIdx = region.indexOf('4000');
       const fastIdx = region.indexOf('2000');
@@ -492,22 +492,22 @@ describe('Timing duration accuracy within 13s cycle', () => {
     expect(computeCatSpeed(base, base + 6000)).not.toBe('speed-turbo');
   });
 
-  it('crazy tier lasts exactly 4s (6000-9999ms)', () => {
+  it('crazy tier lasts exactly 3s (6000-8999ms)', () => {
     expect(computeCatSpeed(base, base + 6000)).toBe('speed-crazy');
     expect(computeCatSpeed(base, base + 8000)).toBe('speed-crazy');
-    expect(computeCatSpeed(base, base + 9999)).toBe('speed-crazy');
-    expect(computeCatSpeed(base, base + 10000)).not.toBe('speed-crazy');
+    expect(computeCatSpeed(base, base + 8999)).toBe('speed-crazy');
+    expect(computeCatSpeed(base, base + 9000)).not.toBe('speed-crazy');
   });
 
-  it('tired tier lasts exactly 3s (10000-12999ms)', () => {
-    expect(computeCatSpeed(base, base + 10000)).toBe('speed-tired');
+  it('tired tier lasts exactly 4s (9000-12999ms)', () => {
+    expect(computeCatSpeed(base, base + 9000)).toBe('speed-tired');
     expect(computeCatSpeed(base, base + 11500)).toBe('speed-tired');
     expect(computeCatSpeed(base, base + 12999)).toBe('speed-tired');
     expect(computeCatSpeed(base, base + 13000)).not.toBe('speed-tired');
   });
 
-  it('total cycle is exactly 13s: 2+2+2+4+3 = 13', () => {
-    expect(2 + 2 + 2 + 4 + 3).toBe(13);
+  it('total cycle is exactly 13s: 2+2+2+3+4 = 13', () => {
+    expect(2 + 2 + 2 + 3 + 4).toBe(13);
   });
 
   it('cycle seamlessly wraps: ms 12999 = tired, ms 13000 = normal', () => {

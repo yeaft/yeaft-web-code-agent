@@ -414,7 +414,7 @@ export default {
     catSpeed() {
       if (!this.typingStartTime) return 'speed-normal';
       const elapsed = (this.nowTick - this.typingStartTime) % 13000;
-      if (elapsed >= 10000) return 'speed-tired';
+      if (elapsed >= 9000) return 'speed-tired';
       if (elapsed >= 6000) return 'speed-crazy';
       if (elapsed >= 4000) return 'speed-turbo';
       if (elapsed >= 2000) return 'speed-fast';
@@ -629,10 +629,18 @@ export default {
       this.nowTick = Date.now();
       const elapsed = (this.nowTick - this.typingStartTime) % 13000;
       if (elapsed < 6000) {
-        this.catPosition = (elapsed / 6000) * 100;
+        let pos;
+        if (elapsed < 2000) {
+          pos = (elapsed / 2000) * 15;
+        } else if (elapsed < 4000) {
+          pos = 15 + ((elapsed - 2000) / 2000) * 30;
+        } else {
+          pos = 45 + ((elapsed - 4000) / 2000) * 55;
+        }
+        this.catPosition = pos;
         this.catDirection = 1;
-      } else if (elapsed < 10000) {
-        this.catPosition = (1 - (elapsed - 6000) / 4000) * 100;
+      } else if (elapsed < 9000) {
+        this.catPosition = (1 - (elapsed - 6000) / 3000) * 100;
         this.catDirection = -1;
       } else {
         this.catPosition = 0;

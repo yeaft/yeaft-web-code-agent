@@ -413,7 +413,7 @@
 .svg-running-cat.speed-crazy .svg-cat-leg-bl { animation: svg-leg-crazy-bl 0.08s ease-in-out infinite alternate-reverse; opacity: 0.5; }
 .svg-running-cat.speed-crazy .svg-cat-leg-br { animation: svg-leg-crazy-br 0.08s ease-in-out infinite alternate; opacity: 0.5; }
 /* Blur as subtle wobble halo — very faint so it doesn't look like a stray dot */
-.svg-running-cat.speed-crazy .svg-cat-leg-blur { opacity: 0.15; animation: svg-leg-blur-wobble 0.1s ease-in-out infinite alternate; }
+.svg-running-cat.speed-crazy .svg-cat-leg-blur { opacity: 0; }
 .svg-running-cat.speed-crazy .svg-cat-leg-blur-inner { opacity: 0; }
 .svg-running-cat.speed-crazy .svg-cat-tail-group { animation: svg-tail-wag-crazy 0.12s linear infinite alternate; }
 .svg-running-cat.speed-crazy .svg-cat-ear-l { animation: svg-ear-flatten 0.18s ease-in-out infinite alternate; }
