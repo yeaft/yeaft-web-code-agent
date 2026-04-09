@@ -174,28 +174,28 @@ describe('Tired visual details (panting redesign)', () => {
     expect(kf[0]).toContain('scale(1.2)');
   });
 
-  it('body-panting: inhale expands (scaleY 1.04), exhale compresses (scaleY 0.88)', () => {
+  it('body-panting: inhale expands (scaleY 1.02), exhale compresses (scaleY 0.94)', () => {
     const kf = chatMessagesCss.match(/@keyframes svg-body-panting\s*\{[\s\S]*?\n\}/);
     expect(kf).not.toBeNull();
-    expect(kf[0]).toContain('scaleY(1.04)');
-    expect(kf[0]).toContain('scaleY(0.88)');
+    expect(kf[0]).toContain('scaleY(1.02)');
+    expect(kf[0]).toContain('scaleY(0.94)');
   });
 
-  it('head droops on exhale: rotate(8deg) translateY(3px)', () => {
+  it('head droops gently on exhale: rotate(4deg) translateY(1.5px)', () => {
     const kf = chatMessagesCss.match(/@keyframes svg-head-panting\s*\{[\s\S]*?\n\}/);
     expect(kf).not.toBeNull();
-    expect(kf[0]).toContain('rotate(8deg)');
-    expect(kf[0]).toContain('translateY(3px)');
+    expect(kf[0]).toContain('rotate(4deg)');
+    expect(kf[0]).toContain('translateY(1.5px)');
   });
 
-  it('head has transform-origin at 20px 12px', () => {
-    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-head\s*\{[^}]*transform-origin:\s*20px 12px/);
+  it('head has transform-origin at neck junction (20px 14px)', () => {
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-head\s*\{[^}]*transform-origin:\s*20px 14px/);
   });
 
-  it('tail limp sway: -28° to -15° (always negative = hanging low)', () => {
+  it('tail limp sway: -25° to -15° (always negative = hanging low)', () => {
     const kf = chatMessagesCss.match(/@keyframes svg-tail-tired-limp\s*\{[\s\S]*?\n\}/);
     expect(kf).not.toBeNull();
-    expect(kf[0]).toContain('rotate(-28deg)');
+    expect(kf[0]).toContain('rotate(-25deg)');
     expect(kf[0]).toContain('rotate(-15deg)');
   });
 
@@ -215,9 +215,14 @@ describe('Tired visual details (panting redesign)', () => {
     expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-ear-r\s*\{[^}]*svg-ear-tired-droop-r\s+1\.4s/);
   });
 
-  it('ears have distinct transform-origins for natural droop', () => {
-    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-ear-l\s*\{[^}]*transform-origin:\s*12px 8px/);
-    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-ear-r\s*\{[^}]*transform-origin:\s*18px 8px/);
+  it('ears inherit base transform-origins (no override in tired mode)', () => {
+    // Tired ear rules should NOT override transform-origin — they inherit 20px 5px / 28px 5px from base
+    const tiredEarL = chatMessagesCss.match(/speed-tired\s+\.svg-cat-ear-l\s*\{([^}]*)\}/);
+    const tiredEarR = chatMessagesCss.match(/speed-tired\s+\.svg-cat-ear-r\s*\{([^}]*)\}/);
+    expect(tiredEarL).not.toBeNull();
+    expect(tiredEarR).not.toBeNull();
+    expect(tiredEarL[1]).not.toContain('transform-origin');
+    expect(tiredEarR[1]).not.toContain('transform-origin');
   });
 });
 
@@ -530,11 +535,11 @@ describe('Tired panting-bob preserves scale(1.2)', () => {
     expect(kf[0]).toContain('100%');
   });
 
-  it('panting-bob inhale lifts (-3px) and exhale drops (+2px)', () => {
+  it('panting-bob inhale lifts (-1.5px) and exhale drops (+1px)', () => {
     const kf = chatMessagesCss.match(/@keyframes svg-cat-panting-bob\s*\{[\s\S]*?\n\}/);
     expect(kf).not.toBeNull();
-    expect(kf[0]).toContain('translateY(-3px)');
-    expect(kf[0]).toContain('translateY(2px)');
+    expect(kf[0]).toContain('translateY(-1.5px)');
+    expect(kf[0]).toContain('translateY(1px)');
   });
 
   it('panting-bob returns to translateY(0) at start and end', () => {

@@ -379,11 +379,11 @@ describe('CSS: tired has panting breath, wobbly legs, droopy head/ears', () => {
     expect(chatMessagesCss).toMatch(/speed-tired\s*\{[^}]*svg-cat-panting-bob\s+1\.4s/);
   });
 
-  it('panting-bob keyframe has visible up/down heave (translateY -3px to 2px)', () => {
+  it('panting-bob keyframe has subtle up/down heave (translateY -1.5px to 1px)', () => {
     const kf = chatMessagesCss.match(/@keyframes svg-cat-panting-bob\s*\{[\s\S]*?\n\}/);
     expect(kf).not.toBeNull();
-    expect(kf[0]).toContain('translateY(-3px)');
-    expect(kf[0]).toContain('translateY(2px)');
+    expect(kf[0]).toContain('translateY(-1.5px)');
+    expect(kf[0]).toContain('translateY(1px)');
     expect(kf[0]).toContain('scale(1.2)');
   });
 
@@ -394,10 +394,10 @@ describe('CSS: tired has panting breath, wobbly legs, droopy head/ears', () => {
   it('body-panting keyframe has visible scaleY changes (inhale/exhale)', () => {
     const kf = chatMessagesCss.match(/@keyframes svg-body-panting\s*\{[\s\S]*?\n\}/);
     expect(kf).not.toBeNull();
-    // Inhale: chest expands
-    expect(kf[0]).toContain('scaleY(1.04)');
-    // Exhale: chest compresses
-    expect(kf[0]).toContain('scaleY(0.88)');
+    // Inhale: chest expands slightly
+    expect(kf[0]).toContain('scaleY(1.02)');
+    // Exhale: chest compresses slightly
+    expect(kf[0]).toContain('scaleY(0.94)');
   });
 
   it('tired legs use wobble animations (not uniform swing)', () => {
@@ -418,18 +418,18 @@ describe('CSS: tired has panting breath, wobbly legs, droopy head/ears', () => {
     expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-head\s*\{[^}]*svg-head-panting\s+1\.4s/);
   });
 
-  it('head-panting keyframe has visible droop (rotate 8deg, translateY 3px)', () => {
+  it('head-panting keyframe has gentle droop (rotate 4deg, translateY 1.5px)', () => {
     const kf = chatMessagesCss.match(/@keyframes svg-head-panting\s*\{[\s\S]*?\n\}/);
     expect(kf).not.toBeNull();
-    expect(kf[0]).toContain('rotate(8deg)');
-    expect(kf[0]).toContain('translateY(3px)');
+    expect(kf[0]).toContain('rotate(4deg)');
+    expect(kf[0]).toContain('translateY(1.5px)');
   });
 
-  it('tired tail hangs limp (-28° to -15°)', () => {
+  it('tired tail hangs limp (-25° to -15°)', () => {
     expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-tail-group[\s\S]*?svg-tail-tired-limp/);
     const kf = chatMessagesCss.match(/@keyframes svg-tail-tired-limp\s*\{[\s\S]*?\n\}/);
     expect(kf).not.toBeNull();
-    expect(kf[0]).toContain('rotate(-28deg)');
+    expect(kf[0]).toContain('rotate(-25deg)');
     expect(kf[0]).toContain('rotate(-15deg)');
   });
 
