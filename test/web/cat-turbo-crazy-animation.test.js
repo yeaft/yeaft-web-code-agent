@@ -191,8 +191,8 @@ describe('Scenario 3: Five-speed 13s cycle transitions', () => {
     expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur\s*\{[^}]*svg-leg-blur-wobble\b/);
   });
 
-  it('tired mode (10-13s): slow legs at 0.9s, blur hidden', () => {
-    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-leg-fl\s*\{[^}]*0\.9s/);
+  it('tired mode (10-13s): wobbly legs at 1.4s breathing rhythm, blur hidden', () => {
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-leg-fl\s*\{[^}]*1\.4s/);
     expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-leg-blur\s*\{[^}]*opacity:\s*0/);
   });
 
@@ -217,10 +217,10 @@ describe('Scenario 3: Five-speed 13s cycle transitions', () => {
     expect(turbo).toBeGreaterThan(crazy);
   });
 
-  it('tired bounce is slowest (1.2s > normal 0.6s)', () => {
-    const tiredMatch = chatMessagesCss.match(/speed-tired\s*\{[^}]*svg-cat-bounce-tired\s+(\d+\.?\d*)s/);
+  it('tired panting-bob is slowest (1.4s > normal 0.6s)', () => {
+    const tiredMatch = chatMessagesCss.match(/speed-tired\s*\{[^}]*svg-cat-panting-bob\s+(\d+\.?\d*)s/);
     expect(tiredMatch).toBeTruthy();
-    expect(parseFloat(tiredMatch[1])).toBe(1.2);
+    expect(parseFloat(tiredMatch[1])).toBe(1.4);
   });
 
   it('catSpeed computed uses correct thresholds in all 3 components', () => {
@@ -266,8 +266,8 @@ describe('Scenario 4: scale(1.2) preserved', () => {
     expect(kf[0]).toContain('scale(1.2)');
   });
 
-  it('tired bounce has scale(1.2)', () => {
-    const kf = chatMessagesCss.match(/@keyframes svg-cat-bounce-tired\s*\{[\s\S]*?\n\}/);
+  it('tired panting-bob has scale(1.2)', () => {
+    const kf = chatMessagesCss.match(/@keyframes svg-cat-panting-bob\s*\{[\s\S]*?\n\}/);
     expect(kf).not.toBeNull();
     expect(kf[0]).toContain('scale(1.2)');
   });

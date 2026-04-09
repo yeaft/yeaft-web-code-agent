@@ -144,53 +144,64 @@ describe('Cycle boundary precision', () => {
 });
 
 // =============================================================================
-// 3. Tired visual details: head nod, tail droop, ear angles
+// 3. Tired visual details: panting breath, wobbly legs, droopy head/ears
 // =============================================================================
-describe('Tired visual details', () => {
-  it('head nod uses 1.5s cycle (slow, gentle bobbing)', () => {
-    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-head\s*\{[^}]*1\.5s/);
+describe('Tired visual details (panting redesign)', () => {
+  it('panting bob uses 1.4s breathing cycle', () => {
+    expect(chatMessagesCss).toMatch(/speed-tired\s*\{[^}]*svg-cat-panting-bob\s+1\.4s/);
   });
 
-  it('head nod has transform-origin at 15px 12px (head center)', () => {
-    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-head\s*\{[^}]*transform-origin:\s*15px 12px/);
+  it('body heaves with 1.4s breathing cycle', () => {
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-body\s*\{[^}]*svg-body-panting\s+1\.4s/);
   });
 
-  it('head nod keyframe: 3-step cycle (0% → 50% peak → 100% return)', () => {
-    const kf = chatMessagesCss.match(/@keyframes svg-head-tired-nod\s*\{[\s\S]*?\n\}/);
+  it('body has transform-origin at 15px 17px', () => {
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-body\s*\{[^}]*transform-origin:\s*15px 17px/);
+  });
+
+  it('panting-bob keyframe has 4-step cycle (0%, 30%, 60%, 100%)', () => {
+    const kf = chatMessagesCss.match(/@keyframes svg-cat-panting-bob\s*\{[\s\S]*?\n\}/);
     expect(kf).not.toBeNull();
     expect(kf[0]).toContain('0%');
-    expect(kf[0]).toContain('50%');
+    expect(kf[0]).toContain('30%');
+    expect(kf[0]).toContain('60%');
     expect(kf[0]).toContain('100%');
   });
 
-  it('head nod peak: rotate(5deg) + translateY(1px) (subtle forward droop)', () => {
-    const kf = chatMessagesCss.match(/@keyframes svg-head-tired-nod\s*\{[\s\S]*?\n\}/);
+  it('panting-bob preserves scale(1.2) at all keyframes', () => {
+    const kf = chatMessagesCss.match(/@keyframes svg-cat-panting-bob\s*\{[\s\S]*?\n\}/);
     expect(kf).not.toBeNull();
-    expect(kf[0]).toContain('rotate(5deg)');
-    expect(kf[0]).toContain('translateY(1px)');
+    expect(kf[0]).toContain('scale(1.2)');
   });
 
-  it('head nod start and end: rotate(0deg) (returns to neutral)', () => {
-    const kf = chatMessagesCss.match(/@keyframes svg-head-tired-nod\s*\{[\s\S]*?\n\}/);
+  it('body-panting: inhale expands (scaleY 1.04), exhale compresses (scaleY 0.88)', () => {
+    const kf = chatMessagesCss.match(/@keyframes svg-body-panting\s*\{[\s\S]*?\n\}/);
     expect(kf).not.toBeNull();
-    expect(kf[0]).toContain('rotate(0deg)');
+    expect(kf[0]).toContain('scaleY(1.04)');
+    expect(kf[0]).toContain('scaleY(0.88)');
   });
 
-  it('tail droop uses 2s cycle (very slow sway)', () => {
-    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-tail-group\s*\{[^}]*svg-tail-tired\s+2s/);
+  it('head droops on exhale: rotate(8deg) translateY(3px)', () => {
+    const kf = chatMessagesCss.match(/@keyframes svg-head-panting\s*\{[\s\S]*?\n\}/);
+    expect(kf).not.toBeNull();
+    expect(kf[0]).toContain('rotate(8deg)');
+    expect(kf[0]).toContain('translateY(3px)');
   });
 
-  it('tail droop range: -25° to -12° (both negative = hanging low)', () => {
-    const kf = chatMessagesCss.match(/@keyframes svg-tail-tired\s*\{[\s\S]*?\n\}/);
-    expect(kf).not.toBeNull();
-    expect(kf[0]).toContain('rotate(-25deg)');
-    expect(kf[0]).toContain('rotate(-12deg)');
+  it('head has transform-origin at 20px 12px', () => {
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-head\s*\{[^}]*transform-origin:\s*20px 12px/);
   });
 
-  it('tail stays in negative range (always drooping, never perky)', () => {
-    const kf = chatMessagesCss.match(/@keyframes svg-tail-tired\s*\{[\s\S]*?\n\}/);
+  it('tail limp sway: -28° to -15° (always negative = hanging low)', () => {
+    const kf = chatMessagesCss.match(/@keyframes svg-tail-tired-limp\s*\{[\s\S]*?\n\}/);
     expect(kf).not.toBeNull();
-    // Should NOT contain any positive rotate values
+    expect(kf[0]).toContain('rotate(-28deg)');
+    expect(kf[0]).toContain('rotate(-15deg)');
+  });
+
+  it('tail stays in negative range (always drooping)', () => {
+    const kf = chatMessagesCss.match(/@keyframes svg-tail-tired-limp\s*\{[\s\S]*?\n\}/);
+    expect(kf).not.toBeNull();
     const rotateMatches = kf[0].match(/rotate\((-?\d+)deg\)/g);
     expect(rotateMatches).not.toBeNull();
     for (const m of rotateMatches) {
@@ -199,24 +210,14 @@ describe('Tired visual details', () => {
     }
   });
 
-  it('ears are symmetric: left +8° and right -8°', () => {
-    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-ear-l\s*\{[^}]*rotate\(8deg\)/);
-    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-ear-r\s*\{[^}]*rotate\(-8deg\)/);
-  });
-
-  it('ears have animation: none (static droop, no twitching)', () => {
-    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-ear-l\s*\{[^}]*animation:\s*none/);
-    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-ear-r\s*\{[^}]*animation:\s*none/);
+  it('ears flop with breathing: animated with 1.4s droop cycle', () => {
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-ear-l\s*\{[^}]*svg-ear-tired-droop-l\s+1\.4s/);
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-ear-r\s*\{[^}]*svg-ear-tired-droop-r\s+1\.4s/);
   });
 
   it('ears have distinct transform-origins for natural droop', () => {
     expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-ear-l\s*\{[^}]*transform-origin:\s*12px 8px/);
     expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-ear-r\s*\{[^}]*transform-origin:\s*18px 8px/);
-  });
-
-  it('body slumps: scaleY(0.95) translateY(2px)', () => {
-    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-body\s*\{[^}]*scaleY\(0\.95\)/);
-    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-body\s*\{[^}]*translateY\(2px\)/);
   });
 });
 
@@ -251,7 +252,7 @@ describe('Tired → Normal transition semantics', () => {
 });
 
 // =============================================================================
-// 5. Crazy → Tired transition: blur disappears, speed drops dramatically
+// 5. Crazy → Tired transition: blur disappears, panting kicks in
 // =============================================================================
 describe('Crazy → Tired transition semantics', () => {
   it('crazy has blur visible (opacity 0.35), tired hides it (opacity 0)', () => {
@@ -259,48 +260,38 @@ describe('Crazy → Tired transition semantics', () => {
     expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-leg-blur\s*\{[^}]*opacity:\s*0[^.]/);
   });
 
-  it('crazy legs at 0.08s, tired legs at 0.9s (dramatically slower)', () => {
-    // Tired 0.9s vs crazy 0.08s — tired is ~11x slower
-    const crazyDuration = 0.08;
-    const tiredDuration = 0.9;
-    expect(tiredDuration).toBeGreaterThan(crazyDuration);
-    expect(tiredDuration / crazyDuration).toBeGreaterThan(10);
-    // Verify from CSS that these values exist
+  it('crazy legs at 0.08s, tired legs at 1.4s breathing wobble (dramatically slower)', () => {
     expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-fl\s*\{[^}]*0\.08s/);
-    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-leg-fl\s*\{[^}]*0\.9s/);
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-leg-fl\s*\{[^}]*1\.4s/);
   });
 
-  it('crazy swing ±42°, tired swing ±8° (5.25x narrower)', () => {
-    expect(42 / 8).toBeGreaterThan(5);
-  });
-
-  it('crazy bounce 0.18s, tired bounce 1.2s (6.67x slower)', () => {
+  it('crazy bounce 0.18s, tired panting-bob 1.4s (7.8x slower)', () => {
     const crazyBounce = chatMessagesCss.match(/speed-crazy\s*\{[^}]*svg-cat-bounce-crazy\s+(\d+\.?\d*)s/);
-    const tiredBounce = chatMessagesCss.match(/speed-tired\s*\{[^}]*svg-cat-bounce-tired\s+(\d+\.?\d*)s/);
+    const tiredBob = chatMessagesCss.match(/speed-tired\s*\{[^}]*svg-cat-panting-bob\s+(\d+\.?\d*)s/);
     expect(crazyBounce).not.toBeNull();
-    expect(tiredBounce).not.toBeNull();
-    expect(parseFloat(tiredBounce[1])).toBeGreaterThan(parseFloat(crazyBounce[1]) * 5);
+    expect(tiredBob).not.toBeNull();
+    expect(parseFloat(tiredBob[1])).toBeGreaterThan(parseFloat(crazyBounce[1]) * 5);
   });
 
-  it('head nod is tired-exclusive (not in any other tier)', () => {
-    expect(chatMessagesCss).toContain('svg-head-tired-nod');
-    // Only tired should reference head nod animation
+  it('head panting is tired-exclusive (not in any other tier)', () => {
+    expect(chatMessagesCss).toContain('svg-head-panting');
+    // Only tired should reference head panting animation
     const tiredSection = chatMessagesCss.match(/Speed: Tired[\s\S]*?\.typing-refresh/);
     expect(tiredSection).not.toBeNull();
-    expect(tiredSection[0]).toContain('svg-head-tired-nod');
+    expect(tiredSection[0]).toContain('svg-head-panting');
 
-    // Fast/turbo/crazy sections should NOT have head animation
+    // Fast/turbo/crazy sections should NOT have head panting animation
     const fastSection = chatMessagesCss.match(/Speed: Fast[\s\S]*?Speed: Turbo/);
     expect(fastSection).not.toBeNull();
-    expect(fastSection[0]).not.toContain('svg-head-tired-nod');
+    expect(fastSection[0]).not.toContain('svg-head-panting');
 
     const turboSection = chatMessagesCss.match(/Speed: Turbo[\s\S]*?Speed: Crazy/);
     expect(turboSection).not.toBeNull();
-    expect(turboSection[0]).not.toContain('svg-head-tired-nod');
+    expect(turboSection[0]).not.toContain('svg-head-panting');
 
     const crazySection = chatMessagesCss.match(/Speed: Crazy[\s\S]*?Speed: Tired/);
     expect(crazySection).not.toBeNull();
-    expect(crazySection[0]).not.toContain('svg-head-tired-nod');
+    expect(crazySection[0]).not.toContain('svg-head-panting');
   });
 });
 
@@ -448,31 +439,24 @@ describe('Core principle: legs always visible in tired mode', () => {
     expect(tiredSection[0]).not.toContain('visibility: hidden');
   });
 
-  it('tired legs still swing (±8°, not 0°)', () => {
-    const kf = chatMessagesCss.match(/@keyframes svg-leg-tired-fl\s*\{[\s\S]*?\n\}/);
-    expect(kf).not.toBeNull();
-    expect(kf[0]).toContain('rotate(8deg)');
-    expect(kf[0]).toContain('rotate(-8deg)');
+  it('tired legs wobble unevenly (4-step keyframe, not uniform swing)', () => {
+    const kfA = chatMessagesCss.match(/@keyframes svg-leg-tired-wobble-a\s*\{[\s\S]*?\n\}/);
+    expect(kfA).not.toBeNull();
+    expect(kfA[0]).toContain('25%');
+    expect(kfA[0]).toContain('50%');
+    expect(kfA[0]).toContain('75%');
   });
 
-  it('all four tired leg keyframes exist', () => {
-    expect(chatMessagesCss).toContain('@keyframes svg-leg-tired-fl');
-    expect(chatMessagesCss).toContain('@keyframes svg-leg-tired-fr');
-    expect(chatMessagesCss).toContain('@keyframes svg-leg-tired-bl');
-    expect(chatMessagesCss).toContain('@keyframes svg-leg-tired-br');
+  it('tired wobble-a and wobble-b exist (two patterns for asymmetry)', () => {
+    expect(chatMessagesCss).toContain('@keyframes svg-leg-tired-wobble-a');
+    expect(chatMessagesCss).toContain('@keyframes svg-leg-tired-wobble-b');
   });
 
-  it('tired back legs swing in opposite direction from front', () => {
-    const frontKf = chatMessagesCss.match(/@keyframes svg-leg-tired-fl\s*\{[\s\S]*?\n\}/);
-    const backKf = chatMessagesCss.match(/@keyframes svg-leg-tired-bl\s*\{[\s\S]*?\n\}/);
-    expect(frontKf).not.toBeNull();
-    expect(backKf).not.toBeNull();
-    // Front: 0% → 8deg, 100% → -8deg
-    // Back: 0% → -8deg, 100% → 8deg (opposite)
-    expect(frontKf[0]).toMatch(/0%.*rotate\(8deg\)/);
-    expect(frontKf[0]).toMatch(/100%.*rotate\(-8deg\)/);
-    expect(backKf[0]).toMatch(/0%.*rotate\(-8deg\)/);
-    expect(backKf[0]).toMatch(/100%.*rotate\(8deg\)/);
+  it('front-left and back-right share wobble-a, front-right and back-left share wobble-b', () => {
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-leg-fl\s*\{[^}]*wobble-a/);
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-leg-br\s*\{[^}]*wobble-a/);
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-leg-fr\s*\{[^}]*wobble-b/);
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-leg-bl\s*\{[^}]*wobble-b/);
   });
 });
 
@@ -528,36 +512,34 @@ describe('Timing duration accuracy within 13s cycle', () => {
 });
 
 // =============================================================================
-// 10. Tired bounce: scale(1.2) preserved (consistent with other tiers)
+// 10. Tired panting-bob: scale(1.2) preserved + breathing rhythm
 // =============================================================================
-describe('Tired bounce preserves scale(1.2)', () => {
-  it('tired bounce keyframe has scale(1.2) at 0%', () => {
-    const kf = chatMessagesCss.match(/@keyframes svg-cat-bounce-tired\s*\{[\s\S]*?\n\}/);
+describe('Tired panting-bob preserves scale(1.2)', () => {
+  it('panting-bob keyframe has scale(1.2) at 0%', () => {
+    const kf = chatMessagesCss.match(/@keyframes svg-cat-panting-bob\s*\{[\s\S]*?\n\}/);
     expect(kf).not.toBeNull();
     expect(kf[0]).toContain('scale(1.2)');
   });
 
-  it('tired bounce is 3-step (0%, 50%, 100%) for gentle bobbing', () => {
-    const kf = chatMessagesCss.match(/@keyframes svg-cat-bounce-tired\s*\{[\s\S]*?\n\}/);
+  it('panting-bob is 4-step (0%, 30%, 60%, 100%) for breathing rhythm', () => {
+    const kf = chatMessagesCss.match(/@keyframes svg-cat-panting-bob\s*\{[\s\S]*?\n\}/);
     expect(kf).not.toBeNull();
     expect(kf[0]).toContain('0%');
-    expect(kf[0]).toContain('50%');
+    expect(kf[0]).toContain('30%');
+    expect(kf[0]).toContain('60%');
     expect(kf[0]).toContain('100%');
   });
 
-  it('tired bounce has minimal translateY (-1px max, gentler than other tiers)', () => {
-    const kf = chatMessagesCss.match(/@keyframes svg-cat-bounce-tired\s*\{[\s\S]*?\n\}/);
+  it('panting-bob inhale lifts (-3px) and exhale drops (+2px)', () => {
+    const kf = chatMessagesCss.match(/@keyframes svg-cat-panting-bob\s*\{[\s\S]*?\n\}/);
     expect(kf).not.toBeNull();
-    expect(kf[0]).toContain('translateY(-1px)');
-    // Should not have -2px or -3px (those are faster tiers)
-    expect(kf[0]).not.toContain('translateY(-2px)');
-    expect(kf[0]).not.toContain('translateY(-3px)');
+    expect(kf[0]).toContain('translateY(-3px)');
+    expect(kf[0]).toContain('translateY(2px)');
   });
 
-  it('tired bounce returns to translateY(0) (start and end match)', () => {
-    const kf = chatMessagesCss.match(/@keyframes svg-cat-bounce-tired\s*\{[\s\S]*?\n\}/);
+  it('panting-bob returns to translateY(0) at start and end', () => {
+    const kf = chatMessagesCss.match(/@keyframes svg-cat-panting-bob\s*\{[\s\S]*?\n\}/);
     expect(kf).not.toBeNull();
-    // Both 0% and 100% should have translateY(0)
     expect(kf[0]).toContain('translateY(0)');
   });
 });
@@ -566,33 +548,34 @@ describe('Tired bounce preserves scale(1.2)', () => {
 // 11. Speed comparison: tired is the slowest tier
 // =============================================================================
 describe('Tired is the slowest animation tier', () => {
-  it('tired leg 0.9s is slower than normal 0.5s', () => {
-    expect(0.9).toBeGreaterThan(0.5);
+  it('tired leg 1.4s is slower than normal 0.5s', () => {
+    expect(1.4).toBeGreaterThan(0.5);
   });
 
-  it('tired bounce 1.2s is slower than normal 0.6s', () => {
-    expect(1.2).toBeGreaterThan(0.6);
+  it('tired panting-bob 1.4s is slower than normal 0.6s', () => {
+    expect(1.4).toBeGreaterThan(0.6);
   });
 
-  it('tired swing ±8° is narrower than normal ±20°', () => {
-    expect(8).toBeLessThan(20);
+  it('tired wobble is narrower than normal ±20° swing', () => {
+    // wobble-a peaks at ±5deg, much less than normal ±20deg
+    expect(5).toBeLessThan(20);
   });
 
-  it('tired tail 2s is slower than normal 0.5s', () => {
-    expect(2).toBeGreaterThan(0.5);
+  it('tired tail 2.8s is slower than normal 0.5s', () => {
+    expect(2.8).toBeGreaterThan(0.5);
   });
 
-  it('complete speed ladder: tired < normal < fast < turbo < crazy (by leg duration)', () => {
-    // Leg durations: tired 0.9, normal 0.5, fast 0.25, turbo 0.14, crazy 0.08
-    const durations = [0.9, 0.5, 0.25, 0.14, 0.08];
+  it('complete speed ladder: tired < normal < fast < turbo < crazy (by animation duration)', () => {
+    // Tired 1.4, normal 0.5, fast 0.25, turbo 0.14, crazy 0.08
+    const durations = [1.4, 0.5, 0.25, 0.14, 0.08];
     for (let i = 0; i < durations.length - 1; i++) {
       expect(durations[i]).toBeGreaterThan(durations[i + 1]);
     }
   });
 
   it('complete swing ladder: tired < normal < turbo < crazy (by angle)', () => {
-    // Swing angles: tired ±8°, normal ±20°, turbo ±35°, crazy ±42°
-    const angles = [8, 20, 35, 42];
+    // Swing angles: tired wobble ±5°, normal ±20°, turbo ±35°, crazy ±42°
+    const angles = [5, 20, 35, 42];
     for (let i = 0; i < angles.length - 1; i++) {
       expect(angles[i]).toBeLessThan(angles[i + 1]);
     }

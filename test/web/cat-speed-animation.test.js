@@ -372,66 +372,75 @@ describe('CSS: crazy has semi-transparent legs with wobble blur', () => {
 });
 
 // =====================================================================
-// CSS: tired = slow plodding legs, head nod, droopy tail/ears
+// CSS: tired = panting exhausted cat with breathing rhythm
 // =====================================================================
-describe('CSS: tired has slow legs, head nod, droopy tail/ears', () => {
-  it('tired legs are slow at 0.9s with ±8° swing', () => {
-    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-leg-fl\s*\{[^}]*0\.9s/);
-    const kf = chatMessagesCss.match(/@keyframes svg-leg-tired-fl\s*\{[\s\S]*?\n\}/);
+describe('CSS: tired has panting breath, wobbly legs, droopy head/ears', () => {
+  it('tired uses panting-bob animation (1.4s breathing cycle)', () => {
+    expect(chatMessagesCss).toMatch(/speed-tired\s*\{[^}]*svg-cat-panting-bob\s+1\.4s/);
+  });
+
+  it('panting-bob keyframe has visible up/down heave (translateY -3px to 2px)', () => {
+    const kf = chatMessagesCss.match(/@keyframes svg-cat-panting-bob\s*\{[\s\S]*?\n\}/);
     expect(kf).not.toBeNull();
-    expect(kf[0]).toContain('rotate(8deg)');
-    expect(kf[0]).toContain('rotate(-8deg)');
-  });
-
-  it('tired has all 4 leg keyframes', () => {
-    expect(chatMessagesCss).toContain('@keyframes svg-leg-tired-fl');
-    expect(chatMessagesCss).toContain('@keyframes svg-leg-tired-fr');
-    expect(chatMessagesCss).toContain('@keyframes svg-leg-tired-bl');
-    expect(chatMessagesCss).toContain('@keyframes svg-leg-tired-br');
-  });
-
-  it('tired bounce is slow at 1.2s', () => {
-    expect(chatMessagesCss).toMatch(/speed-tired\s*\{[^}]*svg-cat-bounce-tired\s+1\.2s/);
-  });
-
-  it('tired bounce has scale(1.2)', () => {
-    const kf = chatMessagesCss.match(/@keyframes svg-cat-bounce-tired\s*\{[\s\S]*?\n\}/);
-    expect(kf).not.toBeNull();
+    expect(kf[0]).toContain('translateY(-3px)');
+    expect(kf[0]).toContain('translateY(2px)');
     expect(kf[0]).toContain('scale(1.2)');
   });
 
-  it('tired has head nod animation (svg-head-tired-nod)', () => {
-    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-head[\s\S]*?svg-head-tired-nod/);
+  it('tired body has panting animation (expanding/contracting)', () => {
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-body\s*\{[^}]*svg-body-panting\s+1\.4s/);
   });
 
-  it('head nod keyframe has gentle rotate(5deg)', () => {
-    const kf = chatMessagesCss.match(/@keyframes svg-head-tired-nod\s*\{[\s\S]*?\n\}/);
+  it('body-panting keyframe has visible scaleY changes (inhale/exhale)', () => {
+    const kf = chatMessagesCss.match(/@keyframes svg-body-panting\s*\{[\s\S]*?\n\}/);
     expect(kf).not.toBeNull();
-    expect(kf[0]).toContain('rotate(5deg)');
+    // Inhale: chest expands
+    expect(kf[0]).toContain('scaleY(1.04)');
+    // Exhale: chest compresses
+    expect(kf[0]).toContain('scaleY(0.88)');
   });
 
-  it('tired tail droops low (-25° to -12°)', () => {
-    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-tail-group[\s\S]*?svg-tail-tired/);
-    const kf = chatMessagesCss.match(/@keyframes svg-tail-tired\s*\{[\s\S]*?\n\}/);
+  it('tired legs use wobble animations (not uniform swing)', () => {
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-leg-fl\s*\{[^}]*svg-leg-tired-wobble-a/);
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-leg-fr\s*\{[^}]*svg-leg-tired-wobble-b/);
+  });
+
+  it('wobble-a has multi-step uneven rotation', () => {
+    const kf = chatMessagesCss.match(/@keyframes svg-leg-tired-wobble-a\s*\{[\s\S]*?\n\}/);
     expect(kf).not.toBeNull();
-    expect(kf[0]).toContain('rotate(-25deg)');
-    expect(kf[0]).toContain('rotate(-12deg)');
+    // Should have 4+ keyframe steps (not just 0%/100%)
+    expect(kf[0]).toContain('25%');
+    expect(kf[0]).toContain('50%');
+    expect(kf[0]).toContain('75%');
   });
 
-  it('tired ears are statically droopy (no animation)', () => {
-    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-ear-l\s*\{[^}]*rotate\(8deg\)/);
-    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-ear-r\s*\{[^}]*rotate\(-8deg\)/);
-    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-ear-l\s*\{[^}]*animation:\s*none/);
-    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-ear-r\s*\{[^}]*animation:\s*none/);
+  it('tired head has panting droop animation', () => {
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-head\s*\{[^}]*svg-head-panting\s+1\.4s/);
+  });
+
+  it('head-panting keyframe has visible droop (rotate 8deg, translateY 3px)', () => {
+    const kf = chatMessagesCss.match(/@keyframes svg-head-panting\s*\{[\s\S]*?\n\}/);
+    expect(kf).not.toBeNull();
+    expect(kf[0]).toContain('rotate(8deg)');
+    expect(kf[0]).toContain('translateY(3px)');
+  });
+
+  it('tired tail hangs limp (-28° to -15°)', () => {
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-tail-group[\s\S]*?svg-tail-tired-limp/);
+    const kf = chatMessagesCss.match(/@keyframes svg-tail-tired-limp\s*\{[\s\S]*?\n\}/);
+    expect(kf).not.toBeNull();
+    expect(kf[0]).toContain('rotate(-28deg)');
+    expect(kf[0]).toContain('rotate(-15deg)');
+  });
+
+  it('tired ears have droop animation synced with breathing', () => {
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-ear-l\s*\{[^}]*svg-ear-tired-droop-l\s+1\.4s/);
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-ear-r\s*\{[^}]*svg-ear-tired-droop-r\s+1\.4s/);
   });
 
   it('tired blur is hidden (opacity: 0)', () => {
     expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-leg-blur\s*\{[^}]*opacity:\s*0/);
     expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-leg-blur-inner\s*\{[^}]*opacity:\s*0/);
-  });
-
-  it('tired body is slightly slumped: scaleY(0.95)', () => {
-    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-body[\s\S]*?scaleY\(0\.95\)/);
   });
 });
 
@@ -459,7 +468,7 @@ describe('CSS: speed variant styles (five tiers)', () => {
     expect(chatMessagesCss).toContain('@keyframes svg-cat-bounce-fast');
     expect(chatMessagesCss).toContain('@keyframes svg-cat-bounce-turbo');
     expect(chatMessagesCss).toContain('@keyframes svg-cat-bounce-crazy');
-    expect(chatMessagesCss).toContain('@keyframes svg-cat-bounce-tired');
+    expect(chatMessagesCss).toContain('@keyframes svg-cat-panting-bob');
   });
 
   it('speed-fast makes legs faster (0.25s)', () => {
@@ -476,8 +485,8 @@ describe('CSS: speed variant styles (five tiers)', () => {
     expect(chatMessagesCss).toMatch(/speed-crazy[^}]*leg-fl[^}]*0\.08s/);   // crazy
   });
 
-  it('tired legs are slow at 0.9s (slower than normal)', () => {
-    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-leg-fl\s*\{[^}]*0\.9s/);
+  it('tired legs wobble at 1.4s breathing rhythm', () => {
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-leg-fl\s*\{[^}]*1\.4s/);
   });
 });
 

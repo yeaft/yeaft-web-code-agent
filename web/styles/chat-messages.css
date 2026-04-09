@@ -445,57 +445,95 @@
   100% { transform: rotate(30deg); }
 }
 
-/* ========== Speed: Tired (10-13s) — exhausted cat winding down ========== */
-.svg-running-cat.speed-tired { animation: svg-cat-bounce-tired 1.2s ease-in-out infinite alternate; }
-.svg-running-cat.speed-tired .svg-cat-body { transform: scaleY(0.95) translateY(2px); transform-origin: 15px 17px; }
-/* Slow plodding legs — barely moving ±8° */
-.svg-running-cat.speed-tired .svg-cat-leg-fl { animation: svg-leg-tired-fl 0.9s ease-in-out infinite alternate; }
-.svg-running-cat.speed-tired .svg-cat-leg-fr { animation: svg-leg-tired-fr 0.9s ease-in-out infinite alternate-reverse; }
-.svg-running-cat.speed-tired .svg-cat-leg-bl { animation: svg-leg-tired-bl 0.9s ease-in-out infinite alternate-reverse; }
-.svg-running-cat.speed-tired .svg-cat-leg-br { animation: svg-leg-tired-br 0.9s ease-in-out infinite alternate; }
-/* Blur hidden in tired mode — no motion blur needed */
+/* ========== Speed: Tired (10-13s) — exhausted panting cat ========== */
+/* Core breathing rhythm: 1.4s cycle = inhale(quick) + exhale(slow) */
+.svg-running-cat.speed-tired { animation: svg-cat-panting-bob 1.4s ease-in-out infinite; }
+/* Body heaves with breath — expands/contracts visibly */
+.svg-running-cat.speed-tired .svg-cat-body {
+  animation: svg-body-panting 1.4s ease-in-out infinite;
+  transform-origin: 15px 17px;
+}
+/* Legs wobbly — uneven, shaky, barely holding up */
+.svg-running-cat.speed-tired .svg-cat-leg-fl { animation: svg-leg-tired-wobble-a 1.4s ease-in-out infinite; }
+.svg-running-cat.speed-tired .svg-cat-leg-fr { animation: svg-leg-tired-wobble-b 1.4s ease-in-out infinite; }
+.svg-running-cat.speed-tired .svg-cat-leg-bl { animation: svg-leg-tired-wobble-b 1.4s ease-in-out infinite; }
+.svg-running-cat.speed-tired .svg-cat-leg-br { animation: svg-leg-tired-wobble-a 1.4s ease-in-out infinite; }
+/* Blur hidden in tired mode */
 .svg-running-cat.speed-tired .svg-cat-leg-blur { opacity: 0; }
 .svg-running-cat.speed-tired .svg-cat-leg-blur-inner { opacity: 0; }
-/* Head nod — gentle bobbing */
-.svg-running-cat.speed-tired .svg-cat-head { animation: svg-head-tired-nod 1.5s ease-in-out infinite; transform-origin: 15px 12px; }
-/* Droopy tail — hangs low, slow sway */
-.svg-running-cat.speed-tired .svg-cat-tail-group { animation: svg-tail-tired 2s ease-in-out infinite alternate; }
-/* Droopy ears — static droop, no animation */
-.svg-running-cat.speed-tired .svg-cat-ear-l { transform: rotate(8deg); transform-origin: 12px 8px; animation: none; }
-.svg-running-cat.speed-tired .svg-cat-ear-r { transform: rotate(-8deg); transform-origin: 18px 8px; animation: none; }
+/* Head droops down with each exhale, rises slightly on inhale */
+.svg-running-cat.speed-tired .svg-cat-head { animation: svg-head-panting 1.4s ease-in-out infinite; transform-origin: 20px 12px; }
+/* Tail hangs low, barely moves — limp sway */
+.svg-running-cat.speed-tired .svg-cat-tail-group { animation: svg-tail-tired-limp 2.8s ease-in-out infinite alternate; }
+/* Ears droop — slightly animated, flopping with each breath */
+.svg-running-cat.speed-tired .svg-cat-ear-l { animation: svg-ear-tired-droop-l 1.4s ease-in-out infinite; transform-origin: 12px 8px; }
+.svg-running-cat.speed-tired .svg-cat-ear-r { animation: svg-ear-tired-droop-r 1.4s ease-in-out infinite; transform-origin: 18px 8px; }
 
-@keyframes svg-cat-bounce-tired {
-  0% { transform: scale(1.2) translateY(0); }
-  50% { transform: scale(1.2) translateY(-1px); }
+/* Whole body bobs up/down with panting rhythm */
+@keyframes svg-cat-panting-bob {
+  0%   { transform: scale(1.2) translateY(0); }
+  /* Quick inhale — body lifts slightly */
+  30%  { transform: scale(1.2) translateY(-3px); }
+  /* Exhale peak — body drops lower than rest, the "gasp" */
+  60%  { transform: scale(1.2) translateY(2px); }
+  /* Slow settle back */
   100% { transform: scale(1.2) translateY(0); }
 }
 
-@keyframes svg-leg-tired-fl {
-  0% { transform: rotate(8deg); }
-  100% { transform: rotate(-8deg); }
-}
-@keyframes svg-leg-tired-fr {
-  0% { transform: rotate(8deg); }
-  100% { transform: rotate(-8deg); }
-}
-@keyframes svg-leg-tired-bl {
-  0% { transform: rotate(-8deg); }
-  100% { transform: rotate(8deg); }
-}
-@keyframes svg-leg-tired-br {
-  0% { transform: rotate(-8deg); }
-  100% { transform: rotate(8deg); }
+/* Body heaving — chest expands on inhale, squishes on exhale */
+@keyframes svg-body-panting {
+  0%   { transform: scaleY(0.93) scaleX(1.0) translateY(1px); }
+  /* Inhale: chest expands */
+  30%  { transform: scaleY(1.04) scaleX(0.96) translateY(0); }
+  /* Exhale: chest compresses, wider */
+  60%  { transform: scaleY(0.88) scaleX(1.06) translateY(3px); }
+  100% { transform: scaleY(0.93) scaleX(1.0) translateY(1px); }
 }
 
-@keyframes svg-head-tired-nod {
-  0% { transform: rotate(0deg); }
-  50% { transform: rotate(5deg) translateY(1px); }
-  100% { transform: rotate(0deg); }
+/* Legs wobbly — not walking, just trembling under the weight */
+@keyframes svg-leg-tired-wobble-a {
+  0%   { transform: rotate(3deg); }
+  25%  { transform: rotate(-4deg); }
+  50%  { transform: rotate(5deg); }
+  75%  { transform: rotate(-2deg); }
+  100% { transform: rotate(3deg); }
+}
+@keyframes svg-leg-tired-wobble-b {
+  0%   { transform: rotate(-3deg); }
+  25%  { transform: rotate(5deg); }
+  50%  { transform: rotate(-4deg); }
+  75%  { transform: rotate(2deg); }
+  100% { transform: rotate(-3deg); }
 }
 
-@keyframes svg-tail-tired {
-  0% { transform: rotate(-25deg); }
-  100% { transform: rotate(-12deg); }
+/* Head droops on exhale, lifts on inhale */
+@keyframes svg-head-panting {
+  0%   { transform: rotate(3deg) translateY(1px); }
+  /* Inhale: head lifts */
+  30%  { transform: rotate(-2deg) translateY(-1px); }
+  /* Exhale: head drops heavy */
+  60%  { transform: rotate(8deg) translateY(3px); }
+  100% { transform: rotate(3deg) translateY(1px); }
+}
+
+/* Tail limp — barely swaying */
+@keyframes svg-tail-tired-limp {
+  0%   { transform: rotate(-28deg); }
+  100% { transform: rotate(-15deg); }
+}
+
+/* Ears flop with breathing */
+@keyframes svg-ear-tired-droop-l {
+  0%   { transform: rotate(6deg); }
+  30%  { transform: rotate(3deg); }
+  60%  { transform: rotate(10deg); }
+  100% { transform: rotate(6deg); }
+}
+@keyframes svg-ear-tired-droop-r {
+  0%   { transform: rotate(-6deg); }
+  30%  { transform: rotate(-3deg); }
+  60%  { transform: rotate(-10deg); }
+  100% { transform: rotate(-6deg); }
 }
 
 .typing-refresh-btn:hover {
