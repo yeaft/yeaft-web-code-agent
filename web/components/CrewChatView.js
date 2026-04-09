@@ -178,16 +178,21 @@ export default {
               <!-- Left post -->
               <rect class="svg-dog-post" x="1" y="18" width="2" height="8" rx="0.5"/>
               <!-- Left leash (Spike) -->
-              <path class="svg-dog-leash svg-dog-leash-l" :d="leashPathL" stroke-width="0.8"/>
-              <!-- Spike (left, big dog, faces right) -->
-              <g :transform="'translate(' + spikeX + ', 0)'">
+              <path class="svg-dog-leash svg-dog-leash-l" :d="leashPathL" stroke-width="0.8" :style="{ opacity: leashOpacityL }"/>
+              <!-- Left snap FX near left post -->
+              <g class="svg-dog-snap-fx" :style="{ transformOrigin: '3px 20px' }">
+                <line class="svg-dog-snap-line" x1="0" y1="16" x2="6" y2="24"/>
+                <line class="svg-dog-snap-line" x1="6" y1="16" x2="0" y2="24"/>
+              </g>
+              <!-- Spike (left, big dog) — dynamic transform -->
+              <g :transform="spikeTransform">
                 <g class="svg-dog-silhouette">
-                  <g class="svg-dog-tail-group"><path class="svg-dog-tail" d="M-1 13 Q-3 9 -1 6" stroke-width="2.2"/></g>
-                  <g class="svg-dog-leg-bl"><path class="svg-dog-leg" d="M2 18 L1 24 Q1 25.5 2.5 25.5" stroke-width="0"/></g>
-                  <g class="svg-dog-leg-br"><path class="svg-dog-leg" d="M4 18 L3 24 Q3 25.5 4.5 25.5" stroke-width="0"/></g>
+                  <g class="svg-dog-tail-group" style="transform-origin: -1px 13px"><path class="svg-dog-tail" d="M-1 13 Q-3 9 -1 6" stroke-width="2.2"/></g>
+                  <g class="svg-dog-leg-bl" style="transform-origin: 2px 18px"><path class="svg-dog-leg" d="M2 18 L1 24 Q1 25.5 2.5 25.5" stroke-width="0"/></g>
+                  <g class="svg-dog-leg-br" style="transform-origin: 4px 18px"><path class="svg-dog-leg" d="M4 18 L3 24 Q3 25.5 4.5 25.5" stroke-width="0"/></g>
                   <ellipse class="svg-dog-body" cx="8" cy="14" rx="7" ry="5"/>
-                  <g class="svg-dog-leg-fl"><path class="svg-dog-leg" d="M13 18 L14 24 Q14 25.5 12.5 25.5" stroke-width="0"/></g>
-                  <g class="svg-dog-leg-fr"><path class="svg-dog-leg" d="M11 18 L12 24 Q12 25.5 10.5 25.5" stroke-width="0"/></g>
+                  <g class="svg-dog-leg-fl" style="transform-origin: 13px 18px"><path class="svg-dog-leg" d="M13 18 L14 24 Q14 25.5 12.5 25.5" stroke-width="0"/></g>
+                  <g class="svg-dog-leg-fr" style="transform-origin: 11px 18px"><path class="svg-dog-leg" d="M11 18 L12 24 Q12 25.5 10.5 25.5" stroke-width="0"/></g>
                   <rect class="svg-dog-collar" x="12" y="9.5" width="3.5" height="2" rx="0.5"/>
                   <polygon class="svg-dog-spike-stud" points="13,9.5 13.4,8.5 13.8,9.5"/>
                   <polygon class="svg-dog-spike-stud" points="14.5,9.5 14.9,8.5 15.3,9.5"/>
@@ -209,24 +214,24 @@ export default {
                   </g>
                 </g>
               </g>
-              <!-- Snap FX (center) -->
-              <g class="svg-dog-snap-fx">
-                <line class="svg-dog-snap-line" x1="56" y1="8" x2="64" y2="18"/>
-                <line class="svg-dog-snap-line" x1="64" y1="8" x2="56" y2="18"/>
-              </g>
               <!-- Right post -->
               <rect class="svg-dog-post" x="117" y="18" width="2" height="8" rx="0.5"/>
               <!-- Right leash (Teddy) -->
-              <path class="svg-dog-leash svg-dog-leash-r" :d="leashPathR" stroke-width="0.8"/>
-              <!-- Teddy (right, small dog, faces left = scaleX -1) -->
-              <g :transform="'translate(' + teddyX + ', 2) scale(-1, 1)'">
+              <path class="svg-dog-leash svg-dog-leash-r" :d="leashPathR" stroke-width="0.8" :style="{ opacity: leashOpacityR }"/>
+              <!-- Right snap FX near right post -->
+              <g class="svg-dog-snap-fx" :style="{ transformOrigin: '118px 20px' }">
+                <line class="svg-dog-snap-line" x1="115" y1="16" x2="121" y2="24"/>
+                <line class="svg-dog-snap-line" x1="121" y1="16" x2="115" y2="24"/>
+              </g>
+              <!-- Teddy (right, small dog) — dynamic transform -->
+              <g :transform="teddyTransform">
                 <g class="svg-dog-silhouette">
-                  <g class="svg-dog-tail-group"><path class="svg-dog-tail" d="M-1 11 Q-3 7 -1 5 Q1 3 0 6" stroke-width="1.5"/></g>
-                  <g class="svg-dog-leg-bl"><path class="svg-dog-leg" d="M2 14 L1.5 22 Q1.5 23.5 3 23.5" stroke-width="0"/></g>
-                  <g class="svg-dog-leg-br"><path class="svg-dog-leg" d="M3.5 14 L3 22 Q3 23.5 4.5 23.5" stroke-width="0"/></g>
+                  <g class="svg-dog-tail-group" style="transform-origin: -1px 11px"><path class="svg-dog-tail" d="M-1 11 Q-3 7 -1 5 Q1 3 0 6" stroke-width="1.5"/></g>
+                  <g class="svg-dog-leg-bl" style="transform-origin: 2px 14px"><path class="svg-dog-leg" d="M2 14 L1.5 22 Q1.5 23.5 3 23.5" stroke-width="0"/></g>
+                  <g class="svg-dog-leg-br" style="transform-origin: 3.5px 14px"><path class="svg-dog-leg" d="M3.5 14 L3 22 Q3 23.5 4.5 23.5" stroke-width="0"/></g>
                   <ellipse class="svg-dog-body" cx="6" cy="12" rx="5" ry="3.5"/>
-                  <g class="svg-dog-leg-fl"><path class="svg-dog-leg" d="M10 14 L10.5 22 Q10.5 23.5 9 23.5" stroke-width="0"/></g>
-                  <g class="svg-dog-leg-fr"><path class="svg-dog-leg" d="M8.5 14 L9 22 Q9 23.5 7.5 23.5" stroke-width="0"/></g>
+                  <g class="svg-dog-leg-fl" style="transform-origin: 10px 14px"><path class="svg-dog-leg" d="M10 14 L10.5 22 Q10.5 23.5 9 23.5" stroke-width="0"/></g>
+                  <g class="svg-dog-leg-fr" style="transform-origin: 8.5px 14px"><path class="svg-dog-leg" d="M8.5 14 L9 22 Q9 23.5 7.5 23.5" stroke-width="0"/></g>
                   <rect class="svg-dog-collar" x="9.5" y="7.5" width="2.5" height="1.5" rx="0.5"/>
                   <g class="svg-dog-head-group">
                     <circle class="svg-dog-head" cx="12.5" cy="5.5" r="5"/>
@@ -450,7 +455,9 @@ export default {
       animationType: 'cat',
       dogPosL: 5,
       dogPosR: 95,
-      dogPhase: 'bark',
+      dogPhase: 'bark-both',
+      dogFlipL: 1,    // 1 = face right, -1 = face left
+      dogFlipR: -1,   // -1 = face left, 1 = face right
       newRole: this.getEmptyRole(),
       rolePresets
     };
@@ -531,20 +538,60 @@ export default {
       if (dir < 0) style.transform = 'scaleX(-1)';
       return style;
     },
-    spikeX() { return this.dogPosL * 1.14; },
-    teddyX() { return this.dogPosR * 1.14 + 16; },
+    spikeTransform() {
+      const collarSvgX = this.dogPosL * 1.2;
+      if (this.dogFlipL < 0) {
+        return `translate(${collarSvgX + 13.5}, 0) scale(-1, 1)`;
+      }
+      return `translate(${collarSvgX - 13.5}, 0)`;
+    },
+    teddyTransform() {
+      const collarSvgX = this.dogPosR * 1.2;
+      if (this.dogFlipR > 0) {
+        return `translate(${collarSvgX - 10.5}, 2)`;
+      }
+      return `translate(${collarSvgX + 10.5}, 2) scale(-1, 1)`;
+    },
+    leashConnected() {
+      const p = this.dogPhase;
+      return p === 'bark-both' || p === 'left-approach' || p === 'right-approach' || p === 'both-approach' || p === 'reset';
+    },
     leashPathL() {
-      const dx = this.dogPosL * 1.14 + 13;
-      const sag = Math.max(0, (dx - 3) * 0.15);
-      return `M3,22 Q${(3 + dx) / 2},${22 + sag} ${dx},10`;
+      const collarSvgX = this.dogPosL * 1.2;
+      const collarY = 10;
+      if (this.leashConnected) {
+        const sag = Math.max(0, (collarSvgX - 3) * 0.12);
+        return `M3,18 Q${(3 + collarSvgX) / 2},${18 + sag} ${collarSvgX},${collarY}`;
+      }
+      if (this.dogPhase === 'rehang') {
+        return `M${collarSvgX},${collarY} Q${collarSvgX - 3},20 3,18`;
+      }
+      const dragDir = this.dogFlipL < 0 ? 1 : -1;
+      const dragX = collarSvgX + dragDir * 8;
+      return `M${collarSvgX},${collarY} Q${collarSvgX},18 ${dragX},22`;
     },
     leashPathR() {
-      const dx = this.dogPosR * 1.14 + 3;
-      const sag = Math.max(0, (118 - dx) * 0.15);
-      return `M118,22 Q${(118 + dx) / 2},${22 + sag} ${dx},10`;
+      const collarSvgX = this.dogPosR * 1.2;
+      const collarY = 10;
+      if (this.leashConnected) {
+        const sag = Math.max(0, (118 - collarSvgX) * 0.12);
+        return `M118,18 Q${(118 + collarSvgX) / 2},${18 + sag} ${collarSvgX},${collarY}`;
+      }
+      if (this.dogPhase === 'rehang') {
+        return `M${collarSvgX},${collarY} Q${collarSvgX + 3},20 118,18`;
+      }
+      const dragDir = this.dogFlipR > 0 ? -1 : 1;
+      const dragX = collarSvgX + dragDir * 8;
+      return `M${collarSvgX},${collarY} Q${collarSvgX},18 ${dragX},22`;
     },
-    questionLX() { return this.dogPosL * 1.14 + 10; },
-    questionRX() { return this.dogPosR * 1.14 + 6; },
+    leashOpacityL() {
+      return this.dogPhase === 'snap' ? 0.2 : 0.4;
+    },
+    leashOpacityR() {
+      return this.dogPhase === 'snap' ? 0.2 : 0.4;
+    },
+    questionLX() { return this.dogPosL * 1.2; },
+    questionRX() { return this.dogPosR * 1.2; },
     previewIsWaitingResponse() {
       const urlPreview = new URLSearchParams(window.location.search).get('preview');
       if (urlPreview === 'cat' || urlPreview === 'dog' || urlPreview === 'animation') return true;
@@ -702,7 +749,8 @@ export default {
           this.animationType = Math.random() < 0.5 ? 'cat' : 'dog';
           this.catPosition = 0;
           this.catDirection = 1;
-          this.dogPosL = 5; this.dogPosR = 95; this.dogPhase = 'bark';
+          this.dogPosL = 5; this.dogPosR = 95; this.dogPhase = 'bark-both';
+          this.dogFlipL = 1; this.dogFlipR = -1;
           if (this.animationType === 'cat') {
             this._startCatWalk();
           } else {
@@ -802,24 +850,47 @@ export default {
     _updateDogWalk() {
       if (!this.typingStartTime || this.animationType !== 'dog') return;
       this.nowTick = Date.now();
-      const elapsed = (this.nowTick - this.typingStartTime) % 14000;
+      const elapsed = (this.nowTick - this.typingStartTime) % 18000;
 
-      if (elapsed < 3000) {
-        this.dogPosL = 5; this.dogPosR = 95; this.dogPhase = 'bark';
+      if (elapsed < 2000) {
+        this.dogPosL = 5; this.dogPosR = 95; this.dogPhase = 'bark-both';
+        this.dogFlipL = 1; this.dogFlipR = -1;
+      } else if (elapsed < 5000) {
+        const t = (elapsed - 2000) / 3000;
+        this.dogPosL = 5 + t * 25; this.dogPosR = 95;
+        this.dogPhase = 'left-approach';
+        this.dogFlipL = 1; this.dogFlipR = -1;
       } else if (elapsed < 8000) {
-        const t = (elapsed - 3000) / 5000;
-        this.dogPosL = 5 + t * 37; this.dogPosR = 95 - t * 37;
-        this.dogPhase = 'approach';
-      } else if (elapsed < 9000) {
-        const t = (elapsed - 8000) / 1000;
-        this.dogPosL = 42 + t * 6; this.dogPosR = 58 - t * 6;
-        this.dogPhase = 'snap';
+        const t = (elapsed - 5000) / 3000;
+        this.dogPosL = 30; this.dogPosR = 95 - t * 25;
+        this.dogPhase = 'right-approach';
+        this.dogFlipL = 1; this.dogFlipR = -1;
+      } else if (elapsed < 10000) {
+        const t = (elapsed - 8000) / 2000;
+        this.dogPosL = 30 + t * 13; this.dogPosR = 70 - t * 13;
+        this.dogPhase = 'both-approach';
+        this.dogFlipL = 1; this.dogFlipR = -1;
       } else if (elapsed < 11000) {
-        this.dogPosL = 48; this.dogPosR = 52; this.dogPhase = 'stunned';
-      } else {
-        const t = (elapsed - 11000) / 3000;
-        this.dogPosL = 48 - t * 43; this.dogPosR = 52 + t * 43;
+        this.dogPosL = 43; this.dogPosR = 57;
+        this.dogPhase = 'snap';
+        this.dogFlipL = 1; this.dogFlipR = -1;
+      } else if (elapsed < 12500) {
+        this.dogPosL = 43; this.dogPosR = 57;
+        this.dogPhase = 'stunned';
+        this.dogFlipL = 1; this.dogFlipR = -1;
+      } else if (elapsed < 15000) {
+        const t = (elapsed - 12500) / 2500;
+        this.dogPosL = 43 - t * 38; this.dogPosR = 57 + t * 38;
         this.dogPhase = 'retreat';
+        this.dogFlipL = -1; this.dogFlipR = 1;
+      } else if (elapsed < 17000) {
+        this.dogPosL = 5; this.dogPosR = 95;
+        this.dogPhase = 'rehang';
+        this.dogFlipL = -1; this.dogFlipR = 1;
+      } else {
+        this.dogPosL = 5; this.dogPosR = 95;
+        this.dogPhase = 'reset';
+        this.dogFlipL = 1; this.dogFlipR = -1;
       }
       this._dogRafId = requestAnimationFrame(() => this._updateDogWalk());
     },
@@ -977,7 +1048,8 @@ export default {
       if (this.animationType === 'cat') {
         this._startCatWalk();
       } else {
-        this.dogPosL = 5; this.dogPosR = 95; this.dogPhase = 'bark';
+        this.dogPosL = 5; this.dogPosR = 95; this.dogPhase = 'bark-both';
+        this.dogFlipL = 1; this.dogFlipR = -1;
         this._startDogWalk();
       }
     }

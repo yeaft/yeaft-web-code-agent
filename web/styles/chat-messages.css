@@ -786,15 +786,15 @@
    DOG ANIMATION — Spike (big) + Teddy (small) leashed standoff
    ================================================================ */
 
-/* Dog scene container — spans full typing indicator width */
+/* Dog scene container — fixed-width scene centered in typing indicator */
 .svg-dog-scene {
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 2px;
   display: inline-block;
-  width: 100%;
-  height: 28px;
+  width: 360px;
+  height: 84px;
 }
 .svg-dog-scene svg { width: 100%; height: 100%; overflow: visible; }
 
@@ -822,49 +822,66 @@
 .svg-dog-snap-line { stroke: var(--text-secondary); stroke-width: 1.5; opacity: 0.8; }
 .svg-dog-question { fill: var(--text-secondary); opacity: 0; font-weight: bold; font-family: sans-serif; }
 
-/* Default: legs have walking animation */
-.svg-dog-leg-fl, .svg-dog-leg-fr, .svg-dog-leg-bl, .svg-dog-leg-br {
-  transform-origin: center top;
-}
+/* Leg transform-origins are set inline on each SVG <g> element
+   (each dog has different hip coordinates) */
 
-/* ========== Dog Phase: Bark (0-3s) — at edges, barking ========== */
-.dog-phase-bark .svg-dog-bark-mouth { opacity: 0.6; animation: svg-dog-bark-open 0.4s ease-in-out infinite; }
-.dog-phase-bark .svg-dog-tongue { opacity: 0.5; animation: svg-dog-bark-open 0.4s ease-in-out infinite; }
-.dog-phase-bark .svg-dog-mouth { opacity: 0; }
-.dog-phase-bark .svg-dog-tail-group { animation: svg-dog-tail-wag 0.25s ease-in-out infinite alternate; }
-.dog-phase-bark .svg-dog-head-group { animation: svg-dog-bark-head 0.4s ease-in-out infinite; }
-.dog-phase-bark .svg-dog-body { animation: svg-dog-bark-lunge 0.4s ease-in-out infinite; }
+/* ========== Dog Phase: bark-both (0-2s) — both at edges, barking ========== */
+.dog-phase-bark-both .svg-dog-bark-mouth { opacity: 0.6; animation: svg-dog-bark-open 0.4s ease-in-out infinite; }
+.dog-phase-bark-both .svg-dog-tongue { opacity: 0.5; animation: svg-dog-bark-open 0.4s ease-in-out infinite; }
+.dog-phase-bark-both .svg-dog-mouth { opacity: 0; }
+.dog-phase-bark-both .svg-dog-tail-group { animation: svg-dog-tail-wag 0.25s ease-in-out infinite alternate; }
+.dog-phase-bark-both .svg-dog-head-group { animation: svg-dog-bark-head 0.4s ease-in-out infinite; }
+.dog-phase-bark-both .svg-dog-body { animation: svg-dog-bark-lunge 0.4s ease-in-out infinite; }
 
-/* ========== Dog Phase: Approach (3-8s) — walking toward center ========== */
-.dog-phase-approach .svg-dog-bark-mouth { opacity: 0.5; animation: svg-dog-bark-open 0.6s ease-in-out infinite; }
-.dog-phase-approach .svg-dog-tongue { opacity: 0.4; animation: svg-dog-bark-open 0.6s ease-in-out infinite; }
-.dog-phase-approach .svg-dog-mouth { opacity: 0; }
-.dog-phase-approach .svg-dog-leg-fl { animation: svg-dog-walk-a 0.4s ease-in-out infinite; }
-.dog-phase-approach .svg-dog-leg-fr { animation: svg-dog-walk-b 0.4s ease-in-out infinite; }
-.dog-phase-approach .svg-dog-leg-bl { animation: svg-dog-walk-b 0.4s ease-in-out infinite; }
-.dog-phase-approach .svg-dog-leg-br { animation: svg-dog-walk-a 0.4s ease-in-out infinite; }
-.dog-phase-approach .svg-dog-tail-group { animation: svg-dog-tail-wag 0.3s ease-in-out infinite alternate; }
-.dog-phase-approach .svg-dog-head-group { animation: svg-dog-bark-head 0.6s ease-in-out infinite; }
+/* ========== Dog Phase: left-approach (2-5s) — left walks + barks, right barks in place ========== */
+.dog-phase-left-approach .svg-dog-bark-mouth { opacity: 0.5; animation: svg-dog-bark-open 0.5s ease-in-out infinite; }
+.dog-phase-left-approach .svg-dog-tongue { opacity: 0.4; animation: svg-dog-bark-open 0.5s ease-in-out infinite; }
+.dog-phase-left-approach .svg-dog-mouth { opacity: 0; }
+.dog-phase-left-approach .svg-dog-leg-fl { animation: svg-dog-walk-a 0.4s ease-in-out infinite; }
+.dog-phase-left-approach .svg-dog-leg-fr { animation: svg-dog-walk-b 0.4s ease-in-out infinite; }
+.dog-phase-left-approach .svg-dog-leg-bl { animation: svg-dog-walk-b 0.4s ease-in-out infinite; }
+.dog-phase-left-approach .svg-dog-leg-br { animation: svg-dog-walk-a 0.4s ease-in-out infinite; }
+.dog-phase-left-approach .svg-dog-tail-group { animation: svg-dog-tail-wag 0.3s ease-in-out infinite alternate; }
+.dog-phase-left-approach .svg-dog-head-group { animation: svg-dog-bark-head 0.5s ease-in-out infinite; }
 
-/* ========== Dog Phase: Snap (8-9s) — leash breaks ========== */
-.dog-phase-snap .svg-dog-leash { opacity: 0; }
+/* ========== Dog Phase: right-approach (5-8s) — right walks + barks, left barks in place ========== */
+.dog-phase-right-approach .svg-dog-bark-mouth { opacity: 0.5; animation: svg-dog-bark-open 0.5s ease-in-out infinite; }
+.dog-phase-right-approach .svg-dog-tongue { opacity: 0.4; animation: svg-dog-bark-open 0.5s ease-in-out infinite; }
+.dog-phase-right-approach .svg-dog-mouth { opacity: 0; }
+.dog-phase-right-approach .svg-dog-leg-fl { animation: svg-dog-walk-a 0.4s ease-in-out infinite; }
+.dog-phase-right-approach .svg-dog-leg-fr { animation: svg-dog-walk-b 0.4s ease-in-out infinite; }
+.dog-phase-right-approach .svg-dog-leg-bl { animation: svg-dog-walk-b 0.4s ease-in-out infinite; }
+.dog-phase-right-approach .svg-dog-leg-br { animation: svg-dog-walk-a 0.4s ease-in-out infinite; }
+.dog-phase-right-approach .svg-dog-tail-group { animation: svg-dog-tail-wag 0.3s ease-in-out infinite alternate; }
+.dog-phase-right-approach .svg-dog-head-group { animation: svg-dog-bark-head 0.5s ease-in-out infinite; }
+
+/* ========== Dog Phase: both-approach (8-10s) — both walk toward each other ========== */
+.dog-phase-both-approach .svg-dog-bark-mouth { opacity: 0.4; animation: svg-dog-bark-open 0.6s ease-in-out infinite; }
+.dog-phase-both-approach .svg-dog-tongue { opacity: 0.3; animation: svg-dog-bark-open 0.6s ease-in-out infinite; }
+.dog-phase-both-approach .svg-dog-mouth { opacity: 0; }
+.dog-phase-both-approach .svg-dog-leg-fl { animation: svg-dog-walk-a 0.35s ease-in-out infinite; }
+.dog-phase-both-approach .svg-dog-leg-fr { animation: svg-dog-walk-b 0.35s ease-in-out infinite; }
+.dog-phase-both-approach .svg-dog-leg-bl { animation: svg-dog-walk-b 0.35s ease-in-out infinite; }
+.dog-phase-both-approach .svg-dog-leg-br { animation: svg-dog-walk-a 0.35s ease-in-out infinite; }
+.dog-phase-both-approach .svg-dog-tail-group { animation: svg-dog-tail-wag 0.3s ease-in-out infinite alternate; }
+.dog-phase-both-approach .svg-dog-head-group { animation: svg-dog-bark-head 0.6s ease-in-out infinite; }
+
+/* ========== Dog Phase: snap (10-11s) — leash breaks at post ========== */
 .dog-phase-snap .svg-dog-snap-fx { opacity: 1; animation: svg-dog-snap-burst 1s ease-out forwards; }
 .dog-phase-snap .svg-dog-bark-mouth { opacity: 0; }
 .dog-phase-snap .svg-dog-tongue { opacity: 0; }
 .dog-phase-snap .svg-dog-head-group { animation: svg-dog-stumble 1s ease-out; }
 .dog-phase-snap .svg-dog-body { animation: svg-dog-stumble-body 1s ease-out; }
 
-/* ========== Dog Phase: Stunned (9-11s) — frozen, "?" ========== */
-.dog-phase-stunned .svg-dog-leash { opacity: 0; }
+/* ========== Dog Phase: stunned (11-12.5s) — frozen, head dip, "?" ========== */
 .dog-phase-stunned .svg-dog-bark-mouth { opacity: 0; }
 .dog-phase-stunned .svg-dog-tongue { opacity: 0; }
 .dog-phase-stunned .svg-dog-pupil { transform: scale(1.5); transform-origin: center; }
-.dog-phase-stunned .svg-dog-head-group { animation: svg-dog-stun-dip 2s ease-in-out; }
-.dog-phase-stunned .svg-dog-question { opacity: 1; animation: svg-dog-question-pop 2s ease-in-out; }
-.dog-phase-stunned .svg-dog-tail-group { animation: svg-dog-tail-droop 2s ease-in-out forwards; }
+.dog-phase-stunned .svg-dog-head-group { animation: svg-dog-stun-dip 1.5s ease-in-out; }
+.dog-phase-stunned .svg-dog-question { opacity: 1; animation: svg-dog-question-pop 1.5s ease-in-out; }
+.dog-phase-stunned .svg-dog-tail-group { animation: svg-dog-tail-droop 1.5s ease-in-out forwards; }
 
-/* ========== Dog Phase: Retreat (11-14s) — walk back ========== */
-.dog-phase-retreat .svg-dog-leash { opacity: 0; }
+/* ========== Dog Phase: retreat (12.5-15s) — turn around, walk back ========== */
 .dog-phase-retreat .svg-dog-bark-mouth { opacity: 0; }
 .dog-phase-retreat .svg-dog-tongue { opacity: 0; }
 .dog-phase-retreat .svg-dog-leg-fl { animation: svg-dog-walk-a 0.5s ease-in-out infinite; }
@@ -873,39 +890,56 @@
 .dog-phase-retreat .svg-dog-leg-br { animation: svg-dog-walk-a 0.5s ease-in-out infinite; }
 .dog-phase-retreat .svg-dog-tail-group { animation: svg-dog-tail-slow 0.8s ease-in-out infinite alternate; }
 
+/* ========== Dog Phase: rehang (15-17s) — at post, hang leash back ========== */
+.dog-phase-rehang .svg-dog-bark-mouth { opacity: 0; }
+.dog-phase-rehang .svg-dog-tongue { opacity: 0; }
+.dog-phase-rehang .svg-dog-head-group { animation: svg-dog-rehang-dip 2s ease-in-out; }
+.dog-phase-rehang .svg-dog-tail-group { animation: svg-dog-tail-slow 1.2s ease-in-out infinite alternate; }
+
+/* ========== Dog Phase: reset (17-18s) — turn back to face each other ========== */
+.dog-phase-reset .svg-dog-bark-mouth { opacity: 0; }
+.dog-phase-reset .svg-dog-tongue { opacity: 0; }
+.dog-phase-reset .svg-dog-tail-group { animation: svg-dog-tail-slow 1s ease-in-out infinite alternate; }
+
 /* ========== Dog Keyframes ========== */
 /* Bark: mouth opens/closes */
 @keyframes svg-dog-bark-open {
   0%, 100% { transform: scaleY(0.3); opacity: 0.2; }
   50%      { transform: scaleY(1); opacity: 0.7; }
 }
-/* Bark head: lunge forward */
+/* Bark head: lunge forward with slight body bounce */
 @keyframes svg-dog-bark-head {
-  0%, 100% { transform: translateX(0); }
-  40%      { transform: translateX(1.5px) rotate(-3deg); }
+  0%, 100% { transform: translateX(0) translateY(0); }
+  20%      { transform: translateX(1.5px) translateY(-0.5px) rotate(-3deg); }
+  40%      { transform: translateX(0.5px) translateY(0.3px) rotate(-1deg); }
 }
 /* Bark body: lunge forward */
 @keyframes svg-dog-bark-lunge {
   0%, 100% { transform: translateX(0); }
-  40%      { transform: translateX(0.8px); }
+  20%      { transform: translateX(0.8px); }
+  40%      { transform: translateX(0.2px); }
 }
-/* Walking legs */
+/* Walking legs — alternating gait with foot-lift curve */
 @keyframes svg-dog-walk-a {
-  0%   { transform: rotate(15deg); }
-  50%  { transform: rotate(-15deg); }
-  100% { transform: rotate(15deg); }
+  0%   { transform: rotate(20deg); }
+  25%  { transform: rotate(5deg); }
+  50%  { transform: rotate(-20deg); }
+  75%  { transform: rotate(-5deg); }
+  100% { transform: rotate(20deg); }
 }
 @keyframes svg-dog-walk-b {
-  0%   { transform: rotate(-15deg); }
-  50%  { transform: rotate(15deg); }
-  100% { transform: rotate(-15deg); }
+  0%   { transform: rotate(-20deg); }
+  25%  { transform: rotate(-5deg); }
+  50%  { transform: rotate(20deg); }
+  75%  { transform: rotate(5deg); }
+  100% { transform: rotate(-20deg); }
 }
 /* Tail wag: fast during bark */
 @keyframes svg-dog-tail-wag {
   0%   { transform: rotate(15deg); }
   100% { transform: rotate(-15deg); }
 }
-/* Tail slow wag during retreat */
+/* Tail slow wag during retreat/rehang */
 @keyframes svg-dog-tail-slow {
   0%   { transform: rotate(5deg); }
   100% { transform: rotate(-8deg); }
@@ -915,7 +949,7 @@
   0%   { transform: rotate(0deg); }
   100% { transform: rotate(-20deg); }
 }
-/* Snap burst */
+/* Snap burst — at post */
 @keyframes svg-dog-snap-burst {
   0%   { opacity: 1; transform: scale(0.5); }
   30%  { opacity: 1; transform: scale(1.2); }
@@ -948,6 +982,13 @@
   40%  { opacity: 1; transform: translateY(-1px) scale(1); }
   80%  { opacity: 1; transform: translateY(0) scale(1); }
   100% { opacity: 0; transform: translateY(-2px) scale(0.8); }
+}
+/* Rehang: dog dips head to "hang" leash, then lifts */
+@keyframes svg-dog-rehang-dip {
+  0%   { transform: translateY(0) rotate(0deg); }
+  40%  { transform: translateY(3px) rotate(8deg); }
+  70%  { transform: translateY(1px) rotate(3deg); }
+  100% { transform: translateY(0) rotate(0deg); }
 }
 
 .typing-refresh-btn:hover {

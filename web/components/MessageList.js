@@ -151,16 +151,21 @@ export default {
               <!-- Left post -->
               <rect class="svg-dog-post" x="1" y="18" width="2" height="8" rx="0.5"/>
               <!-- Left leash (Spike) -->
-              <path class="svg-dog-leash svg-dog-leash-l" :d="leashPathL" stroke-width="0.8"/>
-              <!-- Spike (left, big dog, faces right) -->
-              <g :transform="'translate(' + spikeX + ', 0)'">
+              <path class="svg-dog-leash svg-dog-leash-l" :d="leashPathL" stroke-width="0.8" :style="{ opacity: leashOpacityL }"/>
+              <!-- Left snap FX (at left post) -->
+              <g class="svg-dog-snap-fx" :style="{ transformOrigin: '3px 20px' }">
+                <line class="svg-dog-snap-line" x1="0" y1="16" x2="6" y2="24"/>
+                <line class="svg-dog-snap-line" x1="6" y1="16" x2="0" y2="24"/>
+              </g>
+              <!-- Spike (left, big dog) -->
+              <g :transform="spikeTransform">
                 <g class="svg-dog-silhouette">
-                  <g class="svg-dog-tail-group"><path class="svg-dog-tail" d="M-1 13 Q-3 9 -1 6" stroke-width="2.2"/></g>
-                  <g class="svg-dog-leg-bl"><path class="svg-dog-leg" d="M2 18 L1 24 Q1 25.5 2.5 25.5" stroke-width="0"/></g>
-                  <g class="svg-dog-leg-br"><path class="svg-dog-leg" d="M4 18 L3 24 Q3 25.5 4.5 25.5" stroke-width="0"/></g>
+                  <g class="svg-dog-tail-group" style="transform-origin: -1px 13px"><path class="svg-dog-tail" d="M-1 13 Q-3 9 -1 6" stroke-width="2.2"/></g>
+                  <g class="svg-dog-leg-bl" style="transform-origin: 2px 18px"><path class="svg-dog-leg" d="M2 18 L1 24 Q1 25.5 2.5 25.5" stroke-width="0"/></g>
+                  <g class="svg-dog-leg-br" style="transform-origin: 4px 18px"><path class="svg-dog-leg" d="M4 18 L3 24 Q3 25.5 4.5 25.5" stroke-width="0"/></g>
                   <ellipse class="svg-dog-body" cx="8" cy="14" rx="7" ry="5"/>
-                  <g class="svg-dog-leg-fl"><path class="svg-dog-leg" d="M13 18 L14 24 Q14 25.5 12.5 25.5" stroke-width="0"/></g>
-                  <g class="svg-dog-leg-fr"><path class="svg-dog-leg" d="M11 18 L12 24 Q12 25.5 10.5 25.5" stroke-width="0"/></g>
+                  <g class="svg-dog-leg-fl" style="transform-origin: 13px 18px"><path class="svg-dog-leg" d="M13 18 L14 24 Q14 25.5 12.5 25.5" stroke-width="0"/></g>
+                  <g class="svg-dog-leg-fr" style="transform-origin: 11px 18px"><path class="svg-dog-leg" d="M11 18 L12 24 Q12 25.5 10.5 25.5" stroke-width="0"/></g>
                   <rect class="svg-dog-collar" x="12" y="9.5" width="3.5" height="2" rx="0.5"/>
                   <polygon class="svg-dog-spike-stud" points="13,9.5 13.4,8.5 13.8,9.5"/>
                   <polygon class="svg-dog-spike-stud" points="14.5,9.5 14.9,8.5 15.3,9.5"/>
@@ -182,24 +187,24 @@ export default {
                   </g>
                 </g>
               </g>
-              <!-- Snap FX (center) -->
-              <g class="svg-dog-snap-fx">
-                <line class="svg-dog-snap-line" x1="56" y1="8" x2="64" y2="18"/>
-                <line class="svg-dog-snap-line" x1="64" y1="8" x2="56" y2="18"/>
-              </g>
               <!-- Right post -->
               <rect class="svg-dog-post" x="117" y="18" width="2" height="8" rx="0.5"/>
               <!-- Right leash (Teddy) -->
-              <path class="svg-dog-leash svg-dog-leash-r" :d="leashPathR" stroke-width="0.8"/>
-              <!-- Teddy (right, small dog, faces left = scaleX -1) -->
-              <g :transform="'translate(' + teddyX + ', 2) scale(-1, 1)'">
+              <path class="svg-dog-leash svg-dog-leash-r" :d="leashPathR" stroke-width="0.8" :style="{ opacity: leashOpacityR }"/>
+              <!-- Right snap FX (at right post) -->
+              <g class="svg-dog-snap-fx" :style="{ transformOrigin: '118px 20px' }">
+                <line class="svg-dog-snap-line" x1="115" y1="16" x2="121" y2="24"/>
+                <line class="svg-dog-snap-line" x1="121" y1="16" x2="115" y2="24"/>
+              </g>
+              <!-- Teddy (right, small dog) -->
+              <g :transform="teddyTransform">
                 <g class="svg-dog-silhouette">
-                  <g class="svg-dog-tail-group"><path class="svg-dog-tail" d="M-1 11 Q-3 7 -1 5 Q1 3 0 6" stroke-width="1.5"/></g>
-                  <g class="svg-dog-leg-bl"><path class="svg-dog-leg" d="M2 14 L1.5 22 Q1.5 23.5 3 23.5" stroke-width="0"/></g>
-                  <g class="svg-dog-leg-br"><path class="svg-dog-leg" d="M3.5 14 L3 22 Q3 23.5 4.5 23.5" stroke-width="0"/></g>
+                  <g class="svg-dog-tail-group" style="transform-origin: -1px 11px"><path class="svg-dog-tail" d="M-1 11 Q-3 7 -1 5 Q1 3 0 6" stroke-width="1.5"/></g>
+                  <g class="svg-dog-leg-bl" style="transform-origin: 2px 14px"><path class="svg-dog-leg" d="M2 14 L1.5 22 Q1.5 23.5 3 23.5" stroke-width="0"/></g>
+                  <g class="svg-dog-leg-br" style="transform-origin: 3.5px 14px"><path class="svg-dog-leg" d="M3.5 14 L3 22 Q3 23.5 4.5 23.5" stroke-width="0"/></g>
                   <ellipse class="svg-dog-body" cx="6" cy="12" rx="5" ry="3.5"/>
-                  <g class="svg-dog-leg-fl"><path class="svg-dog-leg" d="M10 14 L10.5 22 Q10.5 23.5 9 23.5" stroke-width="0"/></g>
-                  <g class="svg-dog-leg-fr"><path class="svg-dog-leg" d="M8.5 14 L9 22 Q9 23.5 7.5 23.5" stroke-width="0"/></g>
+                  <g class="svg-dog-leg-fl" style="transform-origin: 10px 14px"><path class="svg-dog-leg" d="M10 14 L10.5 22 Q10.5 23.5 9 23.5" stroke-width="0"/></g>
+                  <g class="svg-dog-leg-fr" style="transform-origin: 8.5px 14px"><path class="svg-dog-leg" d="M8.5 14 L9 22 Q9 23.5 7.5 23.5" stroke-width="0"/></g>
                   <rect class="svg-dog-collar" x="9.5" y="7.5" width="2.5" height="1.5" rx="0.5"/>
                   <g class="svg-dog-head-group">
                     <circle class="svg-dog-head" cx="12.5" cy="5.5" r="5"/>
@@ -307,15 +312,19 @@ export default {
         <span class="svg-dog-scene" :class="'dog-phase-' + dogPhase" aria-hidden="true">
           <svg viewBox="0 0 120 28" xmlns="http://www.w3.org/2000/svg">
             <rect class="svg-dog-post" x="1" y="18" width="2" height="8" rx="0.5"/>
-            <path class="svg-dog-leash svg-dog-leash-l" :d="leashPathL" stroke-width="0.8"/>
-            <g :transform="'translate(' + spikeX + ', 0)'">
+            <path class="svg-dog-leash svg-dog-leash-l" :d="leashPathL" stroke-width="0.8" :style="{ opacity: leashOpacityL }"/>
+            <g class="svg-dog-snap-fx" :style="{ transformOrigin: '3px 20px' }">
+              <line class="svg-dog-snap-line" x1="0" y1="16" x2="6" y2="24"/>
+              <line class="svg-dog-snap-line" x1="6" y1="16" x2="0" y2="24"/>
+            </g>
+            <g :transform="spikeTransform">
               <g class="svg-dog-silhouette">
-                <g class="svg-dog-tail-group"><path class="svg-dog-tail" d="M-1 13 Q-3 9 -1 6" stroke-width="2.2"/></g>
-                <g class="svg-dog-leg-bl"><path class="svg-dog-leg" d="M2 18 L1 24 Q1 25.5 2.5 25.5" stroke-width="0"/></g>
-                <g class="svg-dog-leg-br"><path class="svg-dog-leg" d="M4 18 L3 24 Q3 25.5 4.5 25.5" stroke-width="0"/></g>
+                <g class="svg-dog-tail-group" style="transform-origin: -1px 13px"><path class="svg-dog-tail" d="M-1 13 Q-3 9 -1 6" stroke-width="2.2"/></g>
+                <g class="svg-dog-leg-bl" style="transform-origin: 2px 18px"><path class="svg-dog-leg" d="M2 18 L1 24 Q1 25.5 2.5 25.5" stroke-width="0"/></g>
+                <g class="svg-dog-leg-br" style="transform-origin: 4px 18px"><path class="svg-dog-leg" d="M4 18 L3 24 Q3 25.5 4.5 25.5" stroke-width="0"/></g>
                 <ellipse class="svg-dog-body" cx="8" cy="14" rx="7" ry="5"/>
-                <g class="svg-dog-leg-fl"><path class="svg-dog-leg" d="M13 18 L14 24 Q14 25.5 12.5 25.5" stroke-width="0"/></g>
-                <g class="svg-dog-leg-fr"><path class="svg-dog-leg" d="M11 18 L12 24 Q12 25.5 10.5 25.5" stroke-width="0"/></g>
+                <g class="svg-dog-leg-fl" style="transform-origin: 13px 18px"><path class="svg-dog-leg" d="M13 18 L14 24 Q14 25.5 12.5 25.5" stroke-width="0"/></g>
+                <g class="svg-dog-leg-fr" style="transform-origin: 11px 18px"><path class="svg-dog-leg" d="M11 18 L12 24 Q12 25.5 10.5 25.5" stroke-width="0"/></g>
                 <rect class="svg-dog-collar" x="12" y="9.5" width="3.5" height="2" rx="0.5"/>
                 <polygon class="svg-dog-spike-stud" points="13,9.5 13.4,8.5 13.8,9.5"/>
                 <polygon class="svg-dog-spike-stud" points="14.5,9.5 14.9,8.5 15.3,9.5"/>
@@ -337,20 +346,20 @@ export default {
                 </g>
               </g>
             </g>
-            <g class="svg-dog-snap-fx">
-              <line class="svg-dog-snap-line" x1="56" y1="8" x2="64" y2="18"/>
-              <line class="svg-dog-snap-line" x1="64" y1="8" x2="56" y2="18"/>
-            </g>
             <rect class="svg-dog-post" x="117" y="18" width="2" height="8" rx="0.5"/>
-            <path class="svg-dog-leash svg-dog-leash-r" :d="leashPathR" stroke-width="0.8"/>
-            <g :transform="'translate(' + teddyX + ', 2) scale(-1, 1)'">
+            <path class="svg-dog-leash svg-dog-leash-r" :d="leashPathR" stroke-width="0.8" :style="{ opacity: leashOpacityR }"/>
+            <g class="svg-dog-snap-fx" :style="{ transformOrigin: '118px 20px' }">
+              <line class="svg-dog-snap-line" x1="115" y1="16" x2="121" y2="24"/>
+              <line class="svg-dog-snap-line" x1="121" y1="16" x2="115" y2="24"/>
+            </g>
+            <g :transform="teddyTransform">
               <g class="svg-dog-silhouette">
-                <g class="svg-dog-tail-group"><path class="svg-dog-tail" d="M-1 11 Q-3 7 -1 5 Q1 3 0 6" stroke-width="1.5"/></g>
-                <g class="svg-dog-leg-bl"><path class="svg-dog-leg" d="M2 14 L1.5 22 Q1.5 23.5 3 23.5" stroke-width="0"/></g>
-                <g class="svg-dog-leg-br"><path class="svg-dog-leg" d="M3.5 14 L3 22 Q3 23.5 4.5 23.5" stroke-width="0"/></g>
+                <g class="svg-dog-tail-group" style="transform-origin: -1px 11px"><path class="svg-dog-tail" d="M-1 11 Q-3 7 -1 5 Q1 3 0 6" stroke-width="1.5"/></g>
+                <g class="svg-dog-leg-bl" style="transform-origin: 2px 14px"><path class="svg-dog-leg" d="M2 14 L1.5 22 Q1.5 23.5 3 23.5" stroke-width="0"/></g>
+                <g class="svg-dog-leg-br" style="transform-origin: 3.5px 14px"><path class="svg-dog-leg" d="M3.5 14 L3 22 Q3 23.5 4.5 23.5" stroke-width="0"/></g>
                 <ellipse class="svg-dog-body" cx="6" cy="12" rx="5" ry="3.5"/>
-                <g class="svg-dog-leg-fl"><path class="svg-dog-leg" d="M10 14 L10.5 22 Q10.5 23.5 9 23.5" stroke-width="0"/></g>
-                <g class="svg-dog-leg-fr"><path class="svg-dog-leg" d="M8.5 14 L9 22 Q9 23.5 7.5 23.5" stroke-width="0"/></g>
+                <g class="svg-dog-leg-fl" style="transform-origin: 10px 14px"><path class="svg-dog-leg" d="M10 14 L10.5 22 Q10.5 23.5 9 23.5" stroke-width="0"/></g>
+                <g class="svg-dog-leg-fr" style="transform-origin: 8.5px 14px"><path class="svg-dog-leg" d="M8.5 14 L9 22 Q9 23.5 7.5 23.5" stroke-width="0"/></g>
                 <rect class="svg-dog-collar" x="9.5" y="7.5" width="2.5" height="1.5" rx="0.5"/>
                 <g class="svg-dog-head-group">
                   <circle class="svg-dog-head" cx="12.5" cy="5.5" r="5"/>
@@ -526,7 +535,9 @@ export default {
     // Dog walk state
     const dogPosL = Vue.ref(5);
     const dogPosR = Vue.ref(95);
-    const dogPhase = Vue.ref('bark');
+    const dogPhase = Vue.ref('bark-both');
+    const dogFlipL = Vue.ref(1);   // 1 = face right, -1 = face left
+    const dogFlipR = Vue.ref(-1);  // -1 = face left, 1 = face right
     let dogRafId = null;
 
     function updateCatWalk() {
@@ -568,48 +579,127 @@ export default {
     function updateDogWalk() {
       if (!typingStartTime.value || animationType.value !== 'dog') return;
       now.value = Date.now();
-      const elapsed = (now.value - typingStartTime.value) % 14000;
+      const elapsed = (now.value - typingStartTime.value) % 18000;
 
-      if (elapsed < 3000) {
-        // 0-3s: bark at edges
-        dogPosL.value = 5; dogPosR.value = 95; dogPhase.value = 'bark';
+      if (elapsed < 2000) {
+        // 0-2s: both bark at edges
+        dogPosL.value = 5; dogPosR.value = 95; dogPhase.value = 'bark-both';
+        dogFlipL.value = 1; dogFlipR.value = -1;
+      } else if (elapsed < 5000) {
+        // 2-5s: left dog walks forward (5% → 30%), right barks in place
+        const t = (elapsed - 2000) / 3000;
+        dogPosL.value = 5 + t * 25; dogPosR.value = 95;
+        dogPhase.value = 'left-approach';
+        dogFlipL.value = 1; dogFlipR.value = -1;
       } else if (elapsed < 8000) {
-        // 3-8s: approach center
-        const t = (elapsed - 3000) / 5000;
-        dogPosL.value = 5 + t * 37; dogPosR.value = 95 - t * 37;
-        dogPhase.value = 'approach';
-      } else if (elapsed < 9000) {
-        // 8-9s: leash snaps, stumble forward
-        const t = (elapsed - 8000) / 1000;
-        dogPosL.value = 42 + t * 6; dogPosR.value = 58 - t * 6;
-        dogPhase.value = 'snap';
+        // 5-8s: right dog walks forward (95% → 70%), left barks in place
+        const t = (elapsed - 5000) / 3000;
+        dogPosL.value = 30; dogPosR.value = 95 - t * 25;
+        dogPhase.value = 'right-approach';
+        dogFlipL.value = 1; dogFlipR.value = -1;
+      } else if (elapsed < 10000) {
+        // 8-10s: both walk toward each other (30→43, 70→57)
+        const t = (elapsed - 8000) / 2000;
+        dogPosL.value = 30 + t * 13; dogPosR.value = 70 - t * 13;
+        dogPhase.value = 'both-approach';
+        dogFlipL.value = 1; dogFlipR.value = -1;
       } else if (elapsed < 11000) {
-        // 9-11s: stunned
-        dogPosL.value = 48; dogPosR.value = 52; dogPhase.value = 'stunned';
-      } else {
-        // 11-14s: retreat to edges
-        const t = (elapsed - 11000) / 3000;
-        dogPosL.value = 48 - t * 43; dogPosR.value = 52 + t * 43;
+        // 10-11s: leash snaps at posts
+        dogPosL.value = 43; dogPosR.value = 57;
+        dogPhase.value = 'snap';
+        dogFlipL.value = 1; dogFlipR.value = -1;
+      } else if (elapsed < 12500) {
+        // 11-12.5s: stunned
+        dogPosL.value = 43; dogPosR.value = 57;
+        dogPhase.value = 'stunned';
+        dogFlipL.value = 1; dogFlipR.value = -1;
+      } else if (elapsed < 15000) {
+        // 12.5-15s: retreat (turn around, walk back)
+        const t = (elapsed - 12500) / 2500;
+        dogPosL.value = 43 - t * 38; dogPosR.value = 57 + t * 38;
         dogPhase.value = 'retreat';
+        dogFlipL.value = -1; dogFlipR.value = 1; // flipped — walking back
+      } else if (elapsed < 17000) {
+        // 15-17s: at post, rehang leash
+        dogPosL.value = 5; dogPosR.value = 95;
+        dogPhase.value = 'rehang';
+        dogFlipL.value = -1; dogFlipR.value = 1; // still facing post
+      } else {
+        // 17-18s: turn back to face each other
+        dogPosL.value = 5; dogPosR.value = 95;
+        dogPhase.value = 'reset';
+        dogFlipL.value = 1; dogFlipR.value = -1; // back to normal
       }
       dogRafId = requestAnimationFrame(updateDogWalk);
     }
 
     // Dog computed properties — map 0-100% position to SVG viewBox x coordinates
-    const spikeX = Vue.computed(() => dogPosL.value * 1.14);
-    const teddyX = Vue.computed(() => dogPosR.value * 1.14 + 16);
+    // Spike collar at local x=13.5, Teddy collar at local x=10.5
+    // Position represents where the collar should be in SVG coords (pos * 1.2)
+    const spikeTransform = Vue.computed(() => {
+      const collarSvgX = dogPosL.value * 1.2;
+      if (dogFlipL.value < 0) {
+        // Facing left: mirror around collar point
+        return `translate(${collarSvgX + 13.5}, 0) scale(-1, 1)`;
+      }
+      // Facing right: collar at local x=13.5
+      return `translate(${collarSvgX - 13.5}, 0)`;
+    });
+    const teddyTransform = Vue.computed(() => {
+      const collarSvgX = dogPosR.value * 1.2;
+      if (dogFlipR.value > 0) {
+        // Facing right (retreat): collar at local x=10.5
+        return `translate(${collarSvgX - 10.5}, 2)`;
+      }
+      // Facing left (default): mirror around collar point
+      return `translate(${collarSvgX + 10.5}, 2) scale(-1, 1)`;
+    });
+    // Leash paths depend on phase: connected to post vs dragging
+    const leashConnected = Vue.computed(() => {
+      const p = dogPhase.value;
+      return p === 'bark-both' || p === 'left-approach' || p === 'right-approach' || p === 'both-approach' || p === 'reset';
+    });
     const leashPathL = Vue.computed(() => {
-      const dx = dogPosL.value * 1.14 + 13;
-      const sag = Math.max(0, (dx - 3) * 0.15);
-      return `M3,22 Q${(3 + dx) / 2},${22 + sag} ${dx},10`;
+      const collarSvgX = dogPosL.value * 1.2;
+      const collarY = 10;
+      if (leashConnected.value) {
+        // Post top (3, 18) to collar
+        const sag = Math.max(0, (collarSvgX - 3) * 0.12);
+        return `M3,18 Q${(3 + collarSvgX) / 2},${18 + sag} ${collarSvgX},${collarY}`;
+      }
+      if (dogPhase.value === 'rehang') {
+        // During rehang, leash goes from collar down to near post then up to post top
+        return `M${collarSvgX},${collarY} Q${collarSvgX - 3},20 3,18`;
+      }
+      // Snap/stunned/retreat: leash hangs from collar, drags trailing behind/below
+      const dragDir = dogFlipL.value < 0 ? 1 : -1;
+      const dragX = collarSvgX + dragDir * 8;
+      return `M${collarSvgX},${collarY} Q${collarSvgX},18 ${dragX},22`;
     });
     const leashPathR = Vue.computed(() => {
-      const dx = dogPosR.value * 1.14 + 3;
-      const sag = Math.max(0, (118 - dx) * 0.15);
-      return `M118,22 Q${(118 + dx) / 2},${22 + sag} ${dx},10`;
+      const collarSvgX = dogPosR.value * 1.2;
+      const collarY = 10;
+      if (leashConnected.value) {
+        // Post top (118, 18) to collar
+        const sag = Math.max(0, (118 - collarSvgX) * 0.12);
+        return `M118,18 Q${(118 + collarSvgX) / 2},${18 + sag} ${collarSvgX},${collarY}`;
+      }
+      if (dogPhase.value === 'rehang') {
+        return `M${collarSvgX},${collarY} Q${collarSvgX + 3},20 118,18`;
+      }
+      // Snap/stunned/retreat: leash hangs from collar
+      const dragDir = dogFlipR.value > 0 ? -1 : 1;
+      const dragX = collarSvgX + dragDir * 8;
+      return `M${collarSvgX},${collarY} Q${collarSvgX},18 ${dragX},22`;
     });
-    const questionLX = Vue.computed(() => dogPosL.value * 1.14 + 10);
-    const questionRX = Vue.computed(() => dogPosR.value * 1.14 + 6);
+    const leashOpacityL = Vue.computed(() => {
+      return dogPhase.value === 'snap' ? 0.2 : 0.4;
+    });
+    const leashOpacityR = Vue.computed(() => {
+      return dogPhase.value === 'snap' ? 0.2 : 0.4;
+    });
+    const questionLX = Vue.computed(() => dogPosL.value * 1.2);
+    const questionRX = Vue.computed(() => dogPosR.value * 1.2);
 
     // Preview mode: ?preview=cat|dog|animation forces typing indicator permanently
     const isPreviewMode = urlPreview === 'cat' || urlPreview === 'dog' || urlPreview === 'animation';
@@ -626,7 +716,8 @@ export default {
         animationType.value = Math.random() < 0.5 ? 'cat' : 'dog';
         catPosition.value = 0;
         catDirection.value = 1;
-        dogPosL.value = 5; dogPosR.value = 95; dogPhase.value = 'bark';
+        dogPosL.value = 5; dogPosR.value = 95; dogPhase.value = 'bark-both';
+        dogFlipL.value = 1; dogFlipR.value = -1;
         if (animationType.value === 'cat') {
           catRafId = requestAnimationFrame(updateCatWalk);
         } else {
@@ -655,7 +746,8 @@ export default {
       if (animationType.value === 'cat') {
         catRafId = requestAnimationFrame(updateCatWalk);
       } else {
-        dogPosL.value = 5; dogPosR.value = 95; dogPhase.value = 'bark';
+        dogPosL.value = 5; dogPosR.value = 95; dogPhase.value = 'bark-both';
+        dogFlipL.value = 1; dogFlipR.value = -1;
         dogRafId = requestAnimationFrame(updateDogWalk);
       }
     }
@@ -789,10 +881,12 @@ export default {
       catSpeed,
       catStyle,
       dogPhase,
-      spikeX,
-      teddyX,
+      spikeTransform,
+      teddyTransform,
       leashPathL,
       leashPathR,
+      leashOpacityL,
+      leashOpacityR,
       questionLX,
       questionRX,
       refreshSession,

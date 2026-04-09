@@ -676,105 +676,147 @@ describe('animationType selection', () => {
 });
 
 // =====================================================================
-// Dog animation: phase logic (14s cycle)
+// Dog animation: phase logic (18s cycle, 9 phases)
 // =====================================================================
-describe('Dog phase computation logic (14s cycle)', () => {
+describe('Dog phase computation logic (18s cycle)', () => {
   function computeDogPhase(typingStartTime, now) {
-    const elapsed = (now - typingStartTime) % 14000;
-    if (elapsed < 3000) return 'bark';
-    if (elapsed < 8000) return 'approach';
-    if (elapsed < 9000) return 'snap';
-    if (elapsed < 11000) return 'stunned';
-    return 'retreat';
+    const elapsed = (now - typingStartTime) % 18000;
+    if (elapsed < 2000) return 'bark-both';
+    if (elapsed < 5000) return 'left-approach';
+    if (elapsed < 8000) return 'right-approach';
+    if (elapsed < 10000) return 'both-approach';
+    if (elapsed < 11000) return 'snap';
+    if (elapsed < 12500) return 'stunned';
+    if (elapsed < 15000) return 'retreat';
+    if (elapsed < 17000) return 'rehang';
+    return 'reset';
   }
 
-  it('returns bark when elapsed < 3s', () => {
+  it('returns bark-both when elapsed < 2s', () => {
     const now = Date.now();
-    expect(computeDogPhase(now - 0, now)).toBe('bark');
-    expect(computeDogPhase(now - 2999, now)).toBe('bark');
+    expect(computeDogPhase(now - 0, now)).toBe('bark-both');
+    expect(computeDogPhase(now - 1999, now)).toBe('bark-both');
   });
 
-  it('returns approach when elapsed is 3-7.999s', () => {
+  it('returns left-approach when elapsed is 2-4.999s', () => {
     const now = Date.now();
-    expect(computeDogPhase(now - 3000, now)).toBe('approach');
-    expect(computeDogPhase(now - 5000, now)).toBe('approach');
-    expect(computeDogPhase(now - 7999, now)).toBe('approach');
+    expect(computeDogPhase(now - 2000, now)).toBe('left-approach');
+    expect(computeDogPhase(now - 4999, now)).toBe('left-approach');
   });
 
-  it('returns snap when elapsed is 8-8.999s', () => {
+  it('returns right-approach when elapsed is 5-7.999s', () => {
     const now = Date.now();
-    expect(computeDogPhase(now - 8000, now)).toBe('snap');
-    expect(computeDogPhase(now - 8999, now)).toBe('snap');
+    expect(computeDogPhase(now - 5000, now)).toBe('right-approach');
+    expect(computeDogPhase(now - 7999, now)).toBe('right-approach');
   });
 
-  it('returns stunned when elapsed is 9-10.999s', () => {
+  it('returns both-approach when elapsed is 8-9.999s', () => {
     const now = Date.now();
-    expect(computeDogPhase(now - 9000, now)).toBe('stunned');
-    expect(computeDogPhase(now - 10999, now)).toBe('stunned');
+    expect(computeDogPhase(now - 8000, now)).toBe('both-approach');
+    expect(computeDogPhase(now - 9999, now)).toBe('both-approach');
   });
 
-  it('returns retreat when elapsed is 11-13.999s', () => {
+  it('returns snap when elapsed is 10-10.999s', () => {
     const now = Date.now();
-    expect(computeDogPhase(now - 11000, now)).toBe('retreat');
-    expect(computeDogPhase(now - 13999, now)).toBe('retreat');
+    expect(computeDogPhase(now - 10000, now)).toBe('snap');
+    expect(computeDogPhase(now - 10999, now)).toBe('snap');
   });
 
-  it('cycles back to bark at 14s', () => {
+  it('returns stunned when elapsed is 11-12.499s', () => {
     const now = Date.now();
-    expect(computeDogPhase(now - 14000, now)).toBe('bark');
-    expect(computeDogPhase(now - 15000, now)).toBe('bark');
+    expect(computeDogPhase(now - 11000, now)).toBe('stunned');
+    expect(computeDogPhase(now - 12499, now)).toBe('stunned');
+  });
+
+  it('returns retreat when elapsed is 12.5-14.999s', () => {
+    const now = Date.now();
+    expect(computeDogPhase(now - 12500, now)).toBe('retreat');
+    expect(computeDogPhase(now - 14999, now)).toBe('retreat');
+  });
+
+  it('returns rehang when elapsed is 15-16.999s', () => {
+    const now = Date.now();
+    expect(computeDogPhase(now - 15000, now)).toBe('rehang');
+    expect(computeDogPhase(now - 16999, now)).toBe('rehang');
+  });
+
+  it('returns reset when elapsed is 17-17.999s', () => {
+    const now = Date.now();
+    expect(computeDogPhase(now - 17000, now)).toBe('reset');
+    expect(computeDogPhase(now - 17999, now)).toBe('reset');
+  });
+
+  it('cycles back to bark-both at 18s', () => {
+    const now = Date.now();
+    expect(computeDogPhase(now - 18000, now)).toBe('bark-both');
+    expect(computeDogPhase(now - 19000, now)).toBe('bark-both');
   });
 });
 
 // =====================================================================
-// Dog position logic
+// Dog position logic (18s cycle)
 // =====================================================================
 describe('Dog position computation', () => {
   function computeDogPositions(typingStartTime, now) {
-    const elapsed = (now - typingStartTime) % 14000;
+    const elapsed = (now - typingStartTime) % 18000;
     let posL, posR;
-    if (elapsed < 3000) {
+    if (elapsed < 2000) {
       posL = 5; posR = 95;
+    } else if (elapsed < 5000) {
+      const t = (elapsed - 2000) / 3000;
+      posL = 5 + t * 25; posR = 95;
     } else if (elapsed < 8000) {
-      const t = (elapsed - 3000) / 5000;
-      posL = 5 + t * 37; posR = 95 - t * 37;
-    } else if (elapsed < 9000) {
-      const t = (elapsed - 8000) / 1000;
-      posL = 42 + t * 6; posR = 58 - t * 6;
+      const t = (elapsed - 5000) / 3000;
+      posL = 30; posR = 95 - t * 25;
+    } else if (elapsed < 10000) {
+      const t = (elapsed - 8000) / 2000;
+      posL = 30 + t * 13; posR = 70 - t * 13;
     } else if (elapsed < 11000) {
-      posL = 48; posR = 52;
+      posL = 43; posR = 57;
+    } else if (elapsed < 12500) {
+      posL = 43; posR = 57;
+    } else if (elapsed < 15000) {
+      const t = (elapsed - 12500) / 2500;
+      posL = 43 - t * 38; posR = 57 + t * 38;
     } else {
-      const t = (elapsed - 11000) / 3000;
-      posL = 48 - t * 43; posR = 52 + t * 43;
+      posL = 5; posR = 95;
     }
     return { posL, posR };
   }
 
-  it('dogs start at edges (5/95) during bark', () => {
+  it('dogs start at edges (5/95) during bark-both', () => {
     const now = Date.now();
     const { posL, posR } = computeDogPositions(now - 1000, now);
     expect(posL).toBe(5);
     expect(posR).toBe(95);
   });
 
-  it('dogs approach center during approach phase', () => {
+  it('left dog approaches during left-approach, right stays', () => {
     const now = Date.now();
-    const { posL, posR } = computeDogPositions(now - 5500, now);
+    const { posL, posR } = computeDogPositions(now - 3500, now);
     expect(posL).toBeGreaterThan(5);
-    expect(posR).toBeLessThan(95);
-    expect(posL).toBeLessThan(posR);
+    expect(posL).toBeLessThan(30);
+    expect(posR).toBe(95);
   });
 
-  it('dogs are close together during stunned', () => {
+  it('right dog approaches during right-approach, left stays', () => {
     const now = Date.now();
-    const { posL, posR } = computeDogPositions(now - 10000, now);
-    expect(posL).toBe(48);
-    expect(posR).toBe(52);
+    const { posL, posR } = computeDogPositions(now - 6500, now);
+    expect(posL).toBe(30);
+    expect(posR).toBeLessThan(95);
+    expect(posR).toBeGreaterThan(70);
+  });
+
+  it('dogs are at snap positions during snap', () => {
+    const now = Date.now();
+    const { posL, posR } = computeDogPositions(now - 10500, now);
+    expect(posL).toBe(43);
+    expect(posR).toBe(57);
   });
 
   it('dogs return to edges after full cycle', () => {
     const now = Date.now();
-    const { posL, posR } = computeDogPositions(now - 14000, now);
+    const { posL, posR } = computeDogPositions(now - 18000, now);
     expect(posL).toBe(5);
     expect(posR).toBe(95);
   });
@@ -784,12 +826,20 @@ describe('Dog position computation', () => {
 // Dog CSS: phase classes and keyframes
 // =====================================================================
 describe('Dog CSS: phase classes and keyframes', () => {
-  it('has dog-phase-bark class', () => {
-    expect(chatMessagesCss).toContain('.dog-phase-bark');
+  it('has dog-phase-bark-both class', () => {
+    expect(chatMessagesCss).toContain('.dog-phase-bark-both');
   });
 
-  it('has dog-phase-approach class', () => {
-    expect(chatMessagesCss).toContain('.dog-phase-approach');
+  it('has dog-phase-left-approach class', () => {
+    expect(chatMessagesCss).toContain('.dog-phase-left-approach');
+  });
+
+  it('has dog-phase-right-approach class', () => {
+    expect(chatMessagesCss).toContain('.dog-phase-right-approach');
+  });
+
+  it('has dog-phase-both-approach class', () => {
+    expect(chatMessagesCss).toContain('.dog-phase-both-approach');
   });
 
   it('has dog-phase-snap class', () => {
@@ -802,6 +852,14 @@ describe('Dog CSS: phase classes and keyframes', () => {
 
   it('has dog-phase-retreat class', () => {
     expect(chatMessagesCss).toContain('.dog-phase-retreat');
+  });
+
+  it('has dog-phase-rehang class', () => {
+    expect(chatMessagesCss).toContain('.dog-phase-rehang');
+  });
+
+  it('has dog-phase-reset class', () => {
+    expect(chatMessagesCss).toContain('.dog-phase-reset');
   });
 
   it('has dog bark-open keyframe', () => {
@@ -833,20 +891,24 @@ describe('Dog CSS: phase classes and keyframes', () => {
     expect(chatMessagesCss).toContain('@keyframes svg-dog-walk-b');
   });
 
-  it('bark phase shows bark mouth', () => {
-    expect(chatMessagesCss).toMatch(/dog-phase-bark\s+\.svg-dog-bark-mouth[^}]*opacity/);
+  it('has dog rehang-dip keyframe', () => {
+    expect(chatMessagesCss).toContain('@keyframes svg-dog-rehang-dip');
   });
 
-  it('snap phase hides leash', () => {
-    expect(chatMessagesCss).toMatch(/dog-phase-snap\s+\.svg-dog-leash[^}]*opacity:\s*0/);
+  it('bark-both phase shows bark mouth', () => {
+    expect(chatMessagesCss).toMatch(/dog-phase-bark-both\s+\.svg-dog-bark-mouth[^}]*opacity/);
+  });
+
+  it('snap phase has snap burst animation', () => {
+    expect(chatMessagesCss).toMatch(/dog-phase-snap\s+\.svg-dog-snap-fx[^}]*opacity:\s*1/);
   });
 
   it('stunned phase shows question marks', () => {
     expect(chatMessagesCss).toMatch(/dog-phase-stunned\s+\.svg-dog-question[^}]*opacity:\s*1/);
   });
 
-  it('retreat phase hides leash', () => {
-    expect(chatMessagesCss).toMatch(/dog-phase-retreat\s+\.svg-dog-leash[^}]*opacity:\s*0/);
+  it('retreat phase has walking leg animations', () => {
+    expect(chatMessagesCss).toMatch(/dog-phase-retreat\s+\.svg-dog-leg-fl[^}]*animation/);
   });
 });
 
