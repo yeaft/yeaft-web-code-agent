@@ -670,9 +670,9 @@ export default {
         this.catPosition = (1 - (elapsed - 11500) / 2500) * 100;
         this.catDirection = -1;
       } else {
-        // 14-19s: tired + petted — stay at start
+        // 14-19s: tired + petted — stay at start, face right
         this.catPosition = 0;
-        this.catDirection = -1;
+        this.catDirection = 1;
       }
       this._catRafId = requestAnimationFrame(() => this._updateCatWalk());
     },

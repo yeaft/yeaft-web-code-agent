@@ -331,9 +331,9 @@ export default {
         catPosition.value = (1 - (elapsed - 11500) / 2500) * 100;
         catDirection.value = -1;
       } else {
-        // 14-19s (tired + petted): stay at start, face left
+        // 14-19s (tired + petted): stay at start, face right (same as napping)
         catPosition.value = 0;
-        catDirection.value = -1;
+        catDirection.value = 1;
       }
 
       catRafId = requestAnimationFrame(updateCatWalk);

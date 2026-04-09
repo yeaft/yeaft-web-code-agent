@@ -239,7 +239,7 @@ export default {
         catDirection.value = -1;
       } else {
         catPosition.value = 0;
-        catDirection.value = -1;
+        catDirection.value = 1;
       }
       catRafId = requestAnimationFrame(updateCatWalk);
     }
