@@ -166,6 +166,7 @@
   left: 0;
   bottom: 8px;
   display: inline-block;
+  transition: transform 0.3s ease-in-out;
 }
 
 .typing-indicator > span:not(.typing-status-text):not(.svg-cat-walk) {
@@ -567,6 +568,72 @@
   35%      { opacity: 0.25; transform: translate(0.3px, 0.2px) scale(1.05); }
   60%      { opacity: 0.12; transform: translate(1.2px, -0.3px) scale(1.2); }
   80%, 100% { opacity: 0; transform: translate(2px, -0.5px) scale(1.35); }
+}
+
+/* ========== Petting hand — hidden by default ========== */
+.svg-cat-petting-hand { opacity: 0; }
+.svg-cat-hand { fill: var(--text-secondary); opacity: 0.6; }
+.svg-cat-finger { stroke: var(--text-secondary); opacity: 0.6; fill: none; }
+
+/* ========== Speed: Petted (11-13s) — tired cat being petted ========== */
+/* Inherits tired panting body + shows petting hand with stroking animation.
+   Cat is facing left (scaleX(-1) on walk wrapper), hand strokes head. */
+.svg-running-cat.speed-petted { animation: svg-cat-panting-bob 1.4s ease-in-out infinite; }
+.svg-running-cat.speed-petted .svg-cat-body {
+  animation: svg-body-panting 1.4s ease-in-out infinite;
+  transform-origin: 15px 17px;
+}
+/* Legs wobbly — same as tired */
+.svg-running-cat.speed-petted .svg-cat-leg-fl { animation: svg-leg-tired-wobble-a 1.4s ease-in-out infinite; }
+.svg-running-cat.speed-petted .svg-cat-leg-fr { animation: svg-leg-tired-wobble-b 1.4s ease-in-out infinite; }
+.svg-running-cat.speed-petted .svg-cat-leg-bl { animation: svg-leg-tired-wobble-b 1.4s ease-in-out infinite; }
+.svg-running-cat.speed-petted .svg-cat-leg-br { animation: svg-leg-tired-wobble-a 1.4s ease-in-out infinite; }
+/* Blur hidden */
+.svg-running-cat.speed-petted .svg-cat-leg-blur { opacity: 0; }
+.svg-running-cat.speed-petted .svg-cat-leg-blur-inner { opacity: 0; }
+/* Head group droops more — cat enjoys being petted, lowers head */
+.svg-running-cat.speed-petted .svg-cat-head-group { animation: svg-head-petted 1.4s ease-in-out infinite; transform-origin: 20px 13px; }
+/* Eyes close happily — squinted shut */
+.svg-running-cat.speed-petted .svg-cat-eye { animation: svg-eye-squint 1.4s ease-in-out infinite; }
+.svg-running-cat.speed-petted .svg-cat-pupil { animation: svg-eye-squint 1.4s ease-in-out infinite; }
+.svg-running-cat.speed-petted .svg-cat-eye-shine { opacity: 0.3; }
+/* Tail limp */
+.svg-running-cat.speed-petted .svg-cat-tail-group { animation: svg-tail-tired-limp 2.8s ease-in-out infinite alternate; }
+/* Ears droop */
+.svg-running-cat.speed-petted .svg-cat-ear-l { animation: svg-ear-tired-droop-l 1.4s ease-in-out infinite; }
+.svg-running-cat.speed-petted .svg-cat-ear-r { animation: svg-ear-tired-droop-r 1.4s ease-in-out infinite; }
+/* Breath puffs — continue from tired */
+.svg-running-cat.speed-petted .svg-cat-breath-1 { animation: svg-breath-puff-1 1.4s ease-out infinite; }
+.svg-running-cat.speed-petted .svg-cat-breath-2 { animation: svg-breath-puff-2 1.4s ease-out 0.15s infinite; }
+.svg-running-cat.speed-petted .svg-cat-breath-3 { animation: svg-breath-puff-3 1.4s ease-out 0.3s infinite; }
+/* Petting hand: fade in + stroke animation */
+.svg-running-cat.speed-petted .svg-cat-petting-hand {
+  opacity: 1;
+  animation: svg-hand-pet 0.8s ease-in-out infinite;
+  transform-origin: 24px -2px;
+}
+
+/* Hand stroking — gentle back-and-forth, touching cat head top */
+@keyframes svg-hand-pet {
+  0%   { transform: translate(-1.5px, 0) rotate(-5deg); opacity: 0.9; }
+  50%  { transform: translate(1.5px, 0.5px) rotate(5deg); opacity: 1; }
+  100% { transform: translate(-1.5px, 0) rotate(-5deg); opacity: 0.9; }
+}
+
+/* Head droops lower while petted — cat leans into the hand */
+@keyframes svg-head-petted {
+  0%   { transform: rotate(3deg) translateY(0.5px); }
+  30%  { transform: rotate(1deg) translateY(0); }
+  60%  { transform: rotate(5deg) translateY(2px); }
+  100% { transform: rotate(3deg) translateY(0.5px); }
+}
+
+/* Eyes squint happily — scaleY shrinks to simulate closed eyes */
+@keyframes svg-eye-squint {
+  0%   { transform: scaleY(0.3); }
+  40%  { transform: scaleY(0.15); }
+  70%  { transform: scaleY(0.35); }
+  100% { transform: scaleY(0.3); }
 }
 
 .typing-refresh-btn:hover {

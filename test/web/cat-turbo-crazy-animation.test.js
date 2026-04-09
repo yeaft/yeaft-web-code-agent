@@ -225,6 +225,7 @@ describe('Scenario 3: Five-speed 13s cycle transitions', () => {
       expect(src).toContain('4000');
       expect(src).toContain('2000');
       expect(src).toContain('13000');
+      expect(src).toContain("'speed-petted'");
       expect(src).toContain("'speed-tired'");
       expect(src).toContain("'speed-crazy'");
       expect(src).toContain("'speed-turbo'");

@@ -152,6 +152,14 @@ export default {
               <ellipse class="svg-cat-leg-blur" cx="17.5" cy="22" rx="1.8" ry="1.2"/>
               <ellipse class="svg-cat-leg-blur svg-cat-leg-blur-inner" cx="14" cy="22" rx="1.5" ry="1"/>
               <ellipse class="svg-cat-leg-blur svg-cat-leg-blur-inner" cx="16" cy="22" rx="1.5" ry="1"/>
+              <!-- Petting hand — only visible in speed-petted mode -->
+              <g class="svg-cat-petting-hand">
+                <path class="svg-cat-hand" d="M21 -2 Q24 -4 27 -2 Q28 -1 27 0.5 L24.5 2 Q24 2.5 23 2 L21 0.5 Q20 -1 21 -2 Z"/>
+                <line class="svg-cat-finger" x1="22" y1="-2" x2="21.5" y2="-4" stroke-width="0.8" stroke-linecap="round"/>
+                <line class="svg-cat-finger" x1="23.5" y1="-2.5" x2="23" y2="-5" stroke-width="0.8" stroke-linecap="round"/>
+                <line class="svg-cat-finger" x1="25" y1="-2.5" x2="25" y2="-5" stroke-width="0.8" stroke-linecap="round"/>
+                <line class="svg-cat-finger" x1="26.5" y1="-2" x2="27" y2="-4" stroke-width="0.8" stroke-linecap="round"/>
+              </g>
             </svg>
           </span>
           </span>
@@ -414,6 +422,7 @@ export default {
     catSpeed() {
       if (!this.typingStartTime) return 'speed-normal';
       const elapsed = (this.nowTick - this.typingStartTime) % 13000;
+      if (elapsed >= 11000) return 'speed-petted';
       if (elapsed >= 9000) return 'speed-tired';
       if (elapsed >= 6000) return 'speed-crazy';
       if (elapsed >= 4000) return 'speed-turbo';
@@ -629,22 +638,26 @@ export default {
       this.nowTick = Date.now();
       const elapsed = (this.nowTick - this.typingStartTime) % 13000;
       if (elapsed < 6000) {
+        // 0-6s: walk forward with accelerating speed per tier
+        // Normal (0-2s): 10%, Fast (2-4s): 22%, Turbo (4-6s): 68%
         let pos;
         if (elapsed < 2000) {
-          pos = (elapsed / 2000) * 15;
+          pos = (elapsed / 2000) * 10;
         } else if (elapsed < 4000) {
-          pos = 15 + ((elapsed - 2000) / 2000) * 30;
+          pos = 10 + ((elapsed - 2000) / 2000) * 22;
         } else {
-          pos = 45 + ((elapsed - 4000) / 2000) * 55;
+          pos = 32 + ((elapsed - 4000) / 2000) * 68;
         }
         this.catPosition = pos;
         this.catDirection = 1;
       } else if (elapsed < 9000) {
+        // 6-9s (crazy): sprint back at top speed — 100% in 3s
         this.catPosition = (1 - (elapsed - 6000) / 3000) * 100;
         this.catDirection = -1;
       } else {
+        // 9-13s (tired + petted): stay at start, face left
         this.catPosition = 0;
-        this.catDirection = 1;
+        this.catDirection = -1;
       }
       this._catRafId = requestAnimationFrame(() => this._updateCatWalk());
     },

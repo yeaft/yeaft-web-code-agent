@@ -35,6 +35,7 @@ beforeAll(() => {
 function computeCatSpeed(typingStartTime, now) {
   if (!typingStartTime) return 'speed-normal';
   const elapsed = (now - typingStartTime) % 13000;
+  if (elapsed >= 11000) return 'speed-petted';
   if (elapsed >= 9000) return 'speed-tired';
   if (elapsed >= 6000) return 'speed-crazy';
   if (elapsed >= 4000) return 'speed-turbo';
@@ -48,20 +49,21 @@ function computeCatSpeed(typingStartTime, now) {
 describe('Multi-cycle: 13s loop repeats correctly', () => {
   const base = 1000000;
 
-  it('first cycle: full 5-tier progression (0-13s)', () => {
+  it('first cycle: full 6-tier progression (0-13s)', () => {
     expect(computeCatSpeed(base, base + 500)).toBe('speed-normal');
     expect(computeCatSpeed(base, base + 2500)).toBe('speed-fast');
     expect(computeCatSpeed(base, base + 4500)).toBe('speed-turbo');
     expect(computeCatSpeed(base, base + 7000)).toBe('speed-crazy');
-    expect(computeCatSpeed(base, base + 11000)).toBe('speed-tired');
+    expect(computeCatSpeed(base, base + 10000)).toBe('speed-tired');
+    expect(computeCatSpeed(base, base + 11500)).toBe('speed-petted');
   });
 
-  it('second cycle (13-26s): repeats all 5 tiers', () => {
+  it('second cycle (13-26s): repeats all 6 tiers', () => {
     expect(computeCatSpeed(base, base + 13500)).toBe('speed-normal');   // 13500 % 13000 = 500
     expect(computeCatSpeed(base, base + 15500)).toBe('speed-fast');     // 15500 % 13000 = 2500
     expect(computeCatSpeed(base, base + 17500)).toBe('speed-turbo');    // 17500 % 13000 = 4500
     expect(computeCatSpeed(base, base + 20000)).toBe('speed-crazy');    // 20000 % 13000 = 7000
-    expect(computeCatSpeed(base, base + 24000)).toBe('speed-tired');    // 24000 % 13000 = 11000
+    expect(computeCatSpeed(base, base + 24000)).toBe('speed-petted');    // 24000 % 13000 = 11000
   });
 
   it('third cycle (26-39s): still correct', () => {
@@ -69,7 +71,7 @@ describe('Multi-cycle: 13s loop repeats correctly', () => {
     expect(computeCatSpeed(base, base + 28500)).toBe('speed-fast');     // 28500 % 13000 = 2500
     expect(computeCatSpeed(base, base + 30500)).toBe('speed-turbo');    // 30500 % 13000 = 4500
     expect(computeCatSpeed(base, base + 33000)).toBe('speed-crazy');    // 33000 % 13000 = 7000
-    expect(computeCatSpeed(base, base + 37000)).toBe('speed-tired');    // 37000 % 13000 = 11000
+    expect(computeCatSpeed(base, base + 37000)).toBe('speed-petted');   // 37000 % 13000 = 11000
   });
 
   it('10th cycle (117-130s): long-running session still cycles', () => {
@@ -78,13 +80,13 @@ describe('Multi-cycle: 13s loop repeats correctly', () => {
     expect(computeCatSpeed(base, base + offset + 2500)).toBe('speed-fast');
     expect(computeCatSpeed(base, base + offset + 4500)).toBe('speed-turbo');
     expect(computeCatSpeed(base, base + offset + 7000)).toBe('speed-crazy');
-    expect(computeCatSpeed(base, base + offset + 11000)).toBe('speed-tired');
+    expect(computeCatSpeed(base, base + offset + 11000)).toBe('speed-petted');
   });
 
   it('100th cycle: extreme long running session still works', () => {
     const offset = 99 * 13000; // 1287000
     expect(computeCatSpeed(base, base + offset + 500)).toBe('speed-normal');
-    expect(computeCatSpeed(base, base + offset + 11500)).toBe('speed-tired');
+    expect(computeCatSpeed(base, base + offset + 11500)).toBe('speed-petted');
   });
 });
 
@@ -94,8 +96,8 @@ describe('Multi-cycle: 13s loop repeats correctly', () => {
 describe('Cycle boundary precision', () => {
   const base = 1000000;
 
-  it('12999ms = still tired (last ms of tired)', () => {
-    expect(computeCatSpeed(base, base + 12999)).toBe('speed-tired');
+  it('12999ms = still petted (last ms of cycle)', () => {
+    expect(computeCatSpeed(base, base + 12999)).toBe('speed-petted');
   });
 
   it('13000ms = normal (exact cycle boundary)', () => {
@@ -408,9 +410,9 @@ describe('Three-component consistency for tired + 13s cycle', () => {
     }
   });
 
-  it('all 3 components have "5 tiers, 13s cycle" comment', () => {
+  it('all 3 components have "6 tiers, 13s cycle" comment', () => {
     for (const src of [messageListJs, splitPaneJs]) {
-      expect(src).toContain('5 tiers, 13s cycle');
+      expect(src).toContain('6 tiers, 13s cycle');
     }
   });
 });
@@ -499,19 +501,26 @@ describe('Timing duration accuracy within 13s cycle', () => {
     expect(computeCatSpeed(base, base + 9000)).not.toBe('speed-crazy');
   });
 
-  it('tired tier lasts exactly 4s (9000-12999ms)', () => {
+  it('tired tier lasts exactly 2s (9000-10999ms)', () => {
     expect(computeCatSpeed(base, base + 9000)).toBe('speed-tired');
-    expect(computeCatSpeed(base, base + 11500)).toBe('speed-tired');
-    expect(computeCatSpeed(base, base + 12999)).toBe('speed-tired');
-    expect(computeCatSpeed(base, base + 13000)).not.toBe('speed-tired');
+    expect(computeCatSpeed(base, base + 10000)).toBe('speed-tired');
+    expect(computeCatSpeed(base, base + 10999)).toBe('speed-tired');
+    expect(computeCatSpeed(base, base + 11000)).not.toBe('speed-tired');
   });
 
-  it('total cycle is exactly 13s: 2+2+2+3+4 = 13', () => {
-    expect(2 + 2 + 2 + 3 + 4).toBe(13);
+  it('petted tier lasts exactly 2s (11000-12999ms)', () => {
+    expect(computeCatSpeed(base, base + 11000)).toBe('speed-petted');
+    expect(computeCatSpeed(base, base + 12000)).toBe('speed-petted');
+    expect(computeCatSpeed(base, base + 12999)).toBe('speed-petted');
+    expect(computeCatSpeed(base, base + 13000)).not.toBe('speed-petted');
   });
 
-  it('cycle seamlessly wraps: ms 12999 = tired, ms 13000 = normal', () => {
-    expect(computeCatSpeed(base, base + 12999)).toBe('speed-tired');
+  it('total cycle is exactly 13s: 2+2+2+3+2+2 = 13', () => {
+    expect(2 + 2 + 2 + 3 + 2 + 2).toBe(13);
+  });
+
+  it('cycle seamlessly wraps: ms 12999 = petted, ms 13000 = normal', () => {
+    expect(computeCatSpeed(base, base + 12999)).toBe('speed-petted');
     expect(computeCatSpeed(base, base + 13000)).toBe('speed-normal');
   });
 });

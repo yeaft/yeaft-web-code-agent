@@ -123,20 +123,23 @@ describe('catSpeed computed property (five tiers)', () => {
     expect(messageListJs).toContain("'speed-turbo'");
     expect(messageListJs).toContain("'speed-crazy'");
     expect(messageListJs).toContain("'speed-tired'");
+    expect(messageListJs).toContain("'speed-petted'");
   });
 
-  it('SplitPane.js has all five speed classes', () => {
+  it('SplitPane.js has all six speed classes', () => {
     expect(splitPaneJs).toContain('catSpeed');
     expect(splitPaneJs).toContain("'speed-turbo'");
     expect(splitPaneJs).toContain("'speed-crazy'");
     expect(splitPaneJs).toContain("'speed-tired'");
+    expect(splitPaneJs).toContain("'speed-petted'");
   });
 
-  it('CrewChatView.js has all five speed classes', () => {
+  it('CrewChatView.js has all six speed classes', () => {
     expect(crewChatViewJs).toContain('catSpeed');
     expect(crewChatViewJs).toContain("'speed-turbo'");
     expect(crewChatViewJs).toContain("'speed-crazy'");
     expect(crewChatViewJs).toContain("'speed-tired'");
+    expect(crewChatViewJs).toContain("'speed-petted'");
   });
 
   it('uses % 13000 modulo cycle in all 3 components', () => {
@@ -175,12 +178,13 @@ describe('catSpeed computed property (five tiers)', () => {
 });
 
 // =====================================================================
-// catSpeed behavioral tests (five tiers, 13s cycle)
+// catSpeed behavioral tests (six tiers, 13s cycle)
 // =====================================================================
-describe('catSpeed computation logic (five tiers, 13s cycle)', () => {
+describe('catSpeed computation logic (six tiers, 13s cycle)', () => {
   function computeCatSpeed(typingStartTime, now) {
     if (!typingStartTime) return 'speed-normal';
     const elapsed = (now - typingStartTime) % 13000;
+    if (elapsed >= 11000) return 'speed-petted';
     if (elapsed >= 9000) return 'speed-tired';
     if (elapsed >= 6000) return 'speed-crazy';
     if (elapsed >= 4000) return 'speed-turbo';
@@ -219,11 +223,18 @@ describe('catSpeed computation logic (five tiers, 13s cycle)', () => {
     expect(computeCatSpeed(now - 8999, now)).toBe('speed-crazy');
   });
 
-  it('returns speed-tired when elapsed is 9-12.999s', () => {
+  it('returns speed-tired when elapsed is 9-10.999s', () => {
     const now = Date.now();
     expect(computeCatSpeed(now - 9000, now)).toBe('speed-tired');
-    expect(computeCatSpeed(now - 11000, now)).toBe('speed-tired');
-    expect(computeCatSpeed(now - 12999, now)).toBe('speed-tired');
+    expect(computeCatSpeed(now - 10000, now)).toBe('speed-tired');
+    expect(computeCatSpeed(now - 10999, now)).toBe('speed-tired');
+  });
+
+  it('returns speed-petted when elapsed is 11-12.999s', () => {
+    const now = Date.now();
+    expect(computeCatSpeed(now - 11000, now)).toBe('speed-petted');
+    expect(computeCatSpeed(now - 12000, now)).toBe('speed-petted');
+    expect(computeCatSpeed(now - 12999, now)).toBe('speed-petted');
   });
 
   it('cycles back to speed-normal at 13s (modulo 13000)', () => {

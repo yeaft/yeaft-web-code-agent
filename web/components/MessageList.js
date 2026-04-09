@@ -125,6 +125,14 @@ export default {
               <ellipse class="svg-cat-leg-blur" cx="17.5" cy="22" rx="1.8" ry="1.2"/>
               <ellipse class="svg-cat-leg-blur svg-cat-leg-blur-inner" cx="14" cy="22" rx="1.5" ry="1"/>
               <ellipse class="svg-cat-leg-blur svg-cat-leg-blur-inner" cx="16" cy="22" rx="1.5" ry="1"/>
+              <!-- Petting hand — only visible in speed-petted mode -->
+              <g class="svg-cat-petting-hand">
+                <path class="svg-cat-hand" d="M21 -2 Q24 -4 27 -2 Q28 -1 27 0.5 L24.5 2 Q24 2.5 23 2 L21 0.5 Q20 -1 21 -2 Z"/>
+                <line class="svg-cat-finger" x1="22" y1="-2" x2="21.5" y2="-4" stroke-width="0.8" stroke-linecap="round"/>
+                <line class="svg-cat-finger" x1="23.5" y1="-2.5" x2="23" y2="-5" stroke-width="0.8" stroke-linecap="round"/>
+                <line class="svg-cat-finger" x1="25" y1="-2.5" x2="25" y2="-5" stroke-width="0.8" stroke-linecap="round"/>
+                <line class="svg-cat-finger" x1="26.5" y1="-2" x2="27" y2="-4" stroke-width="0.8" stroke-linecap="round"/>
+              </g>
             </svg>
           </span>
           </span>
@@ -295,14 +303,14 @@ export default {
 
       if (elapsed < 6000) {
         // 0-6s: walk forward with accelerating speed per tier
-        // Normal (0-2s): 15% distance, Fast (2-4s): 30%, Turbo (4-6s): 55%
+        // Normal (0-2s): 10%, Fast (2-4s): 22%, Turbo (4-6s): 68%
         let pos;
         if (elapsed < 2000) {
-          pos = (elapsed / 2000) * 15;                     // 0→15%
+          pos = (elapsed / 2000) * 10;                     // 0→10%
         } else if (elapsed < 4000) {
-          pos = 15 + ((elapsed - 2000) / 2000) * 30;      // 15→45%
+          pos = 10 + ((elapsed - 2000) / 2000) * 22;      // 10→32%
         } else {
-          pos = 45 + ((elapsed - 4000) / 2000) * 55;      // 45→100%
+          pos = 32 + ((elapsed - 4000) / 2000) * 68;      // 32→100%
         }
         catPosition.value = pos;
         catDirection.value = 1;
@@ -311,9 +319,9 @@ export default {
         catPosition.value = (1 - (elapsed - 6000) / 3000) * 100;
         catDirection.value = -1;
       } else {
-        // 9-13s (tired): stay at start, pant in place
+        // 9-13s (tired + petted): stay at start, face left
         catPosition.value = 0;
-        catDirection.value = 1;
+        catDirection.value = -1;
       }
 
       catRafId = requestAnimationFrame(updateCatWalk);
@@ -347,10 +355,11 @@ export default {
       return null;
     });
 
-    // Cat running speed based on waiting time (5 tiers, 13s cycle)
+    // Cat running speed based on waiting time (6 tiers, 13s cycle)
     const catSpeed = Vue.computed(() => {
       if (!typingStartTime.value) return 'speed-normal';
       const elapsed = (now.value - typingStartTime.value) % 13000;
+      if (elapsed >= 11000) return 'speed-petted';
       if (elapsed >= 9000) return 'speed-tired';
       if (elapsed >= 6000) return 'speed-crazy';
       if (elapsed >= 4000) return 'speed-turbo';
