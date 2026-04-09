@@ -158,16 +158,15 @@
   gap: 4px;
   padding: 16px 0;
   position: relative;
-  perspective: 200px;
 }
 
-/* Cat walk wrapper — positions the cat across typing indicator width */
+/* Cat walk wrapper — positions the cat across typing indicator width.
+   No transition on transform — flip should be instant (not animated). */
 .svg-cat-walk {
   position: absolute;
   left: 0;
   bottom: 8px;
   display: inline-block;
-  transition: transform 0.4s ease-in-out;
 }
 
 .typing-indicator > span:not(.typing-status-text):not(.svg-cat-walk) {

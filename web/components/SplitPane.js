@@ -294,7 +294,7 @@ export default {
       const dir = catDirection.value;
       const frac = pos / 100;
       const style = { left: `calc(40px + (100% - 80px) * ${frac})` };
-      if (dir < 0) style.transform = 'rotateY(180deg)';
+      if (dir < 0) style.transform = 'scaleX(-1)';
       return style;
     });
 
