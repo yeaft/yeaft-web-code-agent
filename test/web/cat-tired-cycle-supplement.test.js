@@ -188,8 +188,8 @@ describe('Tired visual details (panting redesign)', () => {
     expect(kf[0]).toContain('translateY(1.5px)');
   });
 
-  it('head has transform-origin at neck junction (20px 14px)', () => {
-    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-head\s*\{[^}]*transform-origin:\s*20px 14px/);
+  it('head group has transform-origin at neck junction (20px 13px)', () => {
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-head-group\s*\{[^}]*transform-origin:\s*20px 13px/);
   });
 
   it('tail limp sway: -25° to -15° (always negative = hanging low)', () => {

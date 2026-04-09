@@ -53,36 +53,38 @@ export default {
                       <svg viewBox="0 0 36 28" xmlns="http://www.w3.org/2000/svg">
                         <g class="svg-cat-silhouette">
                           <g class="svg-cat-tail-group">
-                            <path class="svg-cat-tail" d="M5 16 Q0 11 2 5 Q3 2 5 4" stroke-width="2"/>
+                            <path class="svg-cat-tail" d="M7.5 17 Q3 12 4 6 Q4.5 3 6 5" stroke-width="2"/>
                           </g>
                           <g class="svg-cat-leg-bl"><path class="svg-cat-leg" d="M10 20 L8 25 Q8 26.5 9.5 26.5 L10.5 26.5" stroke-width="0"/></g>
                           <g class="svg-cat-leg-br"><path class="svg-cat-leg" d="M8 20 L6 25 Q6 26.5 7.5 26.5 L8.5 26.5" stroke-width="0"/></g>
                           <ellipse class="svg-cat-body" cx="15" cy="17" rx="7.5" ry="5"/>
                           <g class="svg-cat-leg-fl"><path class="svg-cat-leg" d="M21 20 L23 25 Q23 26.5 21.5 26.5 L20.5 26.5" stroke-width="0"/></g>
                           <g class="svg-cat-leg-fr"><path class="svg-cat-leg" d="M19 20 L21 25 Q21 26.5 19.5 26.5 L18.5 26.5" stroke-width="0"/></g>
-                          <circle class="svg-cat-head" cx="24" cy="10" r="7"/>
-                          <g class="svg-cat-ear-l"><polygon class="svg-cat-ear" points="18,8 20,0 23,7"/></g>
-                          <g class="svg-cat-ear-r"><polygon class="svg-cat-ear" points="25,7 28,0 30,8"/></g>
+                          <g class="svg-cat-head-group">
+                            <circle class="svg-cat-head" cx="24" cy="9" r="7"/>
+                            <g class="svg-cat-ear-l"><polygon class="svg-cat-ear" points="18,7 20,-1 23,6"/></g>
+                            <g class="svg-cat-ear-r"><polygon class="svg-cat-ear" points="25,6 28,-1 30,7"/></g>
+                            <polygon class="svg-cat-inner-ear" points="19,6.5 20.5,0.5 22,5.5"/>
+                            <polygon class="svg-cat-inner-ear" points="26,5.5 27.5,0.5 29,6.5"/>
+                            <ellipse class="svg-cat-eye" cx="21.5" cy="8.5" rx="2" ry="2.2"/>
+                            <ellipse class="svg-cat-eye" cx="27" cy="8.5" rx="2" ry="2.2"/>
+                            <ellipse class="svg-cat-pupil" cx="22" cy="8.8" rx="1.1" ry="1.3"/>
+                            <ellipse class="svg-cat-pupil" cx="27.5" cy="8.8" rx="1.1" ry="1.3"/>
+                            <circle class="svg-cat-eye-shine" cx="21.2" cy="7.8" r="0.6"/>
+                            <circle class="svg-cat-eye-shine" cx="26.7" cy="7.8" r="0.6"/>
+                            <path class="svg-cat-nose" d="M23.5 11.5 L24.2 12.2 L25 11.5 Z"/>
+                            <path class="svg-cat-mouth" d="M23 12.5 Q24.2 13.8 24.2 12.5" stroke-width="0.5"/>
+                            <path class="svg-cat-mouth" d="M24.3 12.5 Q24.3 13.8 25.5 12.5" stroke-width="0.5"/>
+                            <line class="svg-cat-whisker" x1="19.5" y1="11" x2="14" y2="10" stroke-width="0.4"/>
+                            <line class="svg-cat-whisker" x1="19.5" y1="12" x2="14" y2="12.5" stroke-width="0.4"/>
+                            <line class="svg-cat-whisker" x1="29" y1="11" x2="34" y2="10" stroke-width="0.4"/>
+                            <line class="svg-cat-whisker" x1="29" y1="12" x2="34" y2="12.5" stroke-width="0.4"/>
+                          </g>
                         </g>
                         <ellipse class="svg-cat-leg-blur" cx="12.5" cy="22" rx="1.8" ry="1.2"/>
                         <ellipse class="svg-cat-leg-blur" cx="17.5" cy="22" rx="1.8" ry="1.2"/>
                         <ellipse class="svg-cat-leg-blur svg-cat-leg-blur-inner" cx="14" cy="22" rx="1.5" ry="1"/>
                         <ellipse class="svg-cat-leg-blur svg-cat-leg-blur-inner" cx="16" cy="22" rx="1.5" ry="1"/>
-                        <polygon class="svg-cat-inner-ear" points="19,7.5 20.5,1.5 22,6.5"/>
-                        <polygon class="svg-cat-inner-ear" points="26,6.5 27.5,1.5 29,7.5"/>
-                        <ellipse class="svg-cat-eye" cx="21.5" cy="9.5" rx="2" ry="2.2"/>
-                        <ellipse class="svg-cat-eye" cx="27" cy="9.5" rx="2" ry="2.2"/>
-                        <ellipse class="svg-cat-pupil" cx="22" cy="9.8" rx="1.1" ry="1.3"/>
-                        <ellipse class="svg-cat-pupil" cx="27.5" cy="9.8" rx="1.1" ry="1.3"/>
-                        <circle class="svg-cat-eye-shine" cx="21.2" cy="8.8" r="0.6"/>
-                        <circle class="svg-cat-eye-shine" cx="26.7" cy="8.8" r="0.6"/>
-                        <path class="svg-cat-nose" d="M23.5 12.5 L24.2 13.2 L25 12.5 Z"/>
-                        <path class="svg-cat-mouth" d="M23 13.5 Q24.2 14.8 24.2 13.5" stroke-width="0.5"/>
-                        <path class="svg-cat-mouth" d="M24.3 13.5 Q24.3 14.8 25.5 13.5" stroke-width="0.5"/>
-                        <line class="svg-cat-whisker" x1="19.5" y1="12" x2="14" y2="11" stroke-width="0.4"/>
-                        <line class="svg-cat-whisker" x1="19.5" y1="13" x2="14" y2="13.5" stroke-width="0.4"/>
-                        <line class="svg-cat-whisker" x1="29" y1="12" x2="34" y2="11" stroke-width="0.4"/>
-                        <line class="svg-cat-whisker" x1="29" y1="13" x2="34" y2="13.5" stroke-width="0.4"/>
                       </svg>
                     </span>
                     <span v-if="waitingStatus === 'disconnected'" class="typing-status-text typing-status-error">

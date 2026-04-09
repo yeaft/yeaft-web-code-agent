@@ -414,8 +414,8 @@ describe('CSS: tired has panting breath, wobbly legs, droopy head/ears', () => {
     expect(kf[0]).toContain('75%');
   });
 
-  it('tired head has panting droop animation', () => {
-    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-head\s*\{[^}]*svg-head-panting\s+1\.4s/);
+  it('tired head group has panting droop animation', () => {
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-head-group\s*\{[^}]*svg-head-panting\s+1\.4s/);
   });
 
   it('head-panting keyframe has gentle droop (rotate 4deg, translateY 1.5px)', () => {

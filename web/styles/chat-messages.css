@@ -287,12 +287,12 @@
 .svg-cat-leg-br { transform-origin: 8px 20px; animation: svg-leg-back-r 0.5s ease-in-out infinite alternate; }
 .svg-cat-leg { fill: var(--text-secondary); }
 
-/* Tail wag */
-.svg-cat-tail-group { transform-origin: 5px 16px; animation: svg-tail-wag 0.5s ease-in-out infinite alternate; }
+/* Tail wag — origin at body edge where tail connects */
+.svg-cat-tail-group { transform-origin: 7.5px 17px; animation: svg-tail-wag 0.5s ease-in-out infinite alternate; }
 
 /* Ear twitch */
-.svg-cat-ear-l { transform-origin: 20px 5px; animation: svg-ear-twitch-l 1.2s ease-in-out infinite; }
-.svg-cat-ear-r { transform-origin: 28px 5px; animation: svg-ear-twitch-r 1.6s ease-in-out infinite; }
+.svg-cat-ear-l { transform-origin: 20px 4px; animation: svg-ear-twitch-l 1.2s ease-in-out infinite; }
+.svg-cat-ear-r { transform-origin: 28px 4px; animation: svg-ear-twitch-r 1.6s ease-in-out infinite; }
 
 @keyframes svg-cat-bounce {
   0% { transform: scale(1.2) translateY(0); }
@@ -464,8 +464,8 @@
 /* Blur hidden — no speed blur when exhausted */
 .svg-running-cat.speed-tired .svg-cat-leg-blur { opacity: 0; }
 .svg-running-cat.speed-tired .svg-cat-leg-blur-inner { opacity: 0; }
-/* Head droops gently on exhale — transform-origin at neck junction */
-.svg-running-cat.speed-tired .svg-cat-head { animation: svg-head-panting 1.4s ease-in-out infinite; transform-origin: 20px 14px; }
+/* Head group droops gently on exhale — moves head + face details together */
+.svg-running-cat.speed-tired .svg-cat-head-group { animation: svg-head-panting 1.4s ease-in-out infinite; transform-origin: 20px 13px; }
 /* Tail hangs low, limp sway */
 .svg-running-cat.speed-tired .svg-cat-tail-group { animation: svg-tail-tired-limp 2.8s ease-in-out infinite alternate; }
 /* Ears: keep base transform-origin (20px 5px / 28px 5px), just add small droop */
