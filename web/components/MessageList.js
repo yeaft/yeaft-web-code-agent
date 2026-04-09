@@ -107,6 +107,9 @@ export default {
                   <ellipse class="svg-cat-pupil" cx="27.5" cy="8.8" rx="1.1" ry="1.3"/>
                   <circle class="svg-cat-eye-shine" cx="21.2" cy="7.8" r="0.6"/>
                   <circle class="svg-cat-eye-shine" cx="26.7" cy="7.8" r="0.6"/>
+                  <!-- Closed happy eyes — curved ∪ lines, only visible in petted mode -->
+                  <path class="svg-cat-closed-eye" d="M19.8 8.5 Q21.5 10.5 23.2 8.5" stroke-width="0.8" fill="none"/>
+                  <path class="svg-cat-closed-eye" d="M25.3 8.5 Q27 10.5 28.7 8.5" stroke-width="0.8" fill="none"/>
                   <path class="svg-cat-nose" d="M23.5 11.5 L24.2 12.2 L25 11.5 Z"/>
                   <path class="svg-cat-mouth" d="M23 12.5 Q24.2 13.8 24.2 12.5" stroke-width="0.7"/>
                   <path class="svg-cat-mouth" d="M24.3 12.5 Q24.3 13.8 25.5 12.5" stroke-width="0.7"/>
@@ -127,11 +130,13 @@ export default {
               <ellipse class="svg-cat-leg-blur svg-cat-leg-blur-inner" cx="16" cy="22" rx="1.5" ry="1"/>
               <!-- Petting hand — only visible in speed-petted mode -->
               <g class="svg-cat-petting-hand">
-                <path class="svg-cat-hand" d="M21 -2 Q24 -4 27 -2 Q28 -1 27 0.5 L24.5 2 Q24 2.5 23 2 L21 0.5 Q20 -1 21 -2 Z"/>
-                <line class="svg-cat-finger" x1="22" y1="-2" x2="21.5" y2="-4" stroke-width="0.8" stroke-linecap="round"/>
-                <line class="svg-cat-finger" x1="23.5" y1="-2.5" x2="23" y2="-5" stroke-width="0.8" stroke-linecap="round"/>
-                <line class="svg-cat-finger" x1="25" y1="-2.5" x2="25" y2="-5" stroke-width="0.8" stroke-linecap="round"/>
-                <line class="svg-cat-finger" x1="26.5" y1="-2" x2="27" y2="-4" stroke-width="0.8" stroke-linecap="round"/>
+                <line class="svg-cat-hand-arm" x1="24" y1="-10" x2="24" y2="-4" stroke-width="2.5" stroke-linecap="round"/>
+                <path class="svg-cat-hand-palm" d="M21 -4 Q24 -3 27 -4 Q27.5 -3.5 27 -2 L24 0 L21 -2 Q20.5 -3.5 21 -4 Z"/>
+                <line class="svg-cat-finger" x1="21.5" y1="-3" x2="21" y2="1" stroke-width="0.8" stroke-linecap="round"/>
+                <line class="svg-cat-finger" x1="23" y1="-3.5" x2="22.5" y2="1.5" stroke-width="0.8" stroke-linecap="round"/>
+                <line class="svg-cat-finger" x1="24.5" y1="-3.5" x2="24.5" y2="1.5" stroke-width="0.8" stroke-linecap="round"/>
+                <line class="svg-cat-finger" x1="26" y1="-3.5" x2="26.5" y2="1.5" stroke-width="0.8" stroke-linecap="round"/>
+                <line class="svg-cat-finger" x1="27" y1="-3" x2="27.5" y2="1" stroke-width="0.8" stroke-linecap="round"/>
               </g>
             </svg>
           </span>
@@ -303,14 +308,15 @@ export default {
 
       if (elapsed < 6000) {
         // 0-6s: walk forward with accelerating speed per tier
-        // Normal (0-2s): 10%, Fast (2-4s): 22%, Turbo (4-6s): 68%
+        // Speed feel: Normal ~10%, Fast ~18%, Turbo ~25%
+        // Distance: Normal 19%, Fast 34%, Turbo 47% (ratio 10:18:25)
         let pos;
         if (elapsed < 2000) {
-          pos = (elapsed / 2000) * 10;                     // 0→10%
+          pos = (elapsed / 2000) * 19;                     // 0→19%
         } else if (elapsed < 4000) {
-          pos = 10 + ((elapsed - 2000) / 2000) * 22;      // 10→32%
+          pos = 19 + ((elapsed - 2000) / 2000) * 34;      // 19→53%
         } else {
-          pos = 32 + ((elapsed - 4000) / 2000) * 68;      // 32→100%
+          pos = 53 + ((elapsed - 4000) / 2000) * 47;      // 53→100%
         }
         catPosition.value = pos;
         catDirection.value = 1;

@@ -572,8 +572,11 @@
 
 /* ========== Petting hand — hidden by default ========== */
 .svg-cat-petting-hand { opacity: 0; }
-.svg-cat-hand { fill: var(--text-secondary); opacity: 0.6; }
+.svg-cat-hand-palm { fill: var(--text-secondary); opacity: 0.6; }
+.svg-cat-hand-arm { stroke: var(--text-secondary); opacity: 0.6; }
 .svg-cat-finger { stroke: var(--text-secondary); opacity: 0.6; fill: none; }
+/* Closed eyes — hidden by default */
+.svg-cat-closed-eye { opacity: 0; stroke: var(--cat-eye, #3a3a3a); }
 
 /* ========== Speed: Petted (11-13s) — tired cat being petted ========== */
 /* Inherits tired panting body + shows petting hand with stroking animation.
@@ -593,10 +596,11 @@
 .svg-running-cat.speed-petted .svg-cat-leg-blur-inner { opacity: 0; }
 /* Head group droops more — cat enjoys being petted, lowers head */
 .svg-running-cat.speed-petted .svg-cat-head-group { animation: svg-head-petted 1.4s ease-in-out infinite; transform-origin: 20px 13px; }
-/* Eyes close happily — squinted shut */
-.svg-running-cat.speed-petted .svg-cat-eye { animation: svg-eye-squint 1.4s ease-in-out infinite; }
-.svg-running-cat.speed-petted .svg-cat-pupil { animation: svg-eye-squint 1.4s ease-in-out infinite; }
-.svg-running-cat.speed-petted .svg-cat-eye-shine { opacity: 0.3; }
+/* Eyes close happily — hide open eyes, show curved ∪ lines */
+.svg-running-cat.speed-petted .svg-cat-eye { opacity: 0; }
+.svg-running-cat.speed-petted .svg-cat-pupil { opacity: 0; }
+.svg-running-cat.speed-petted .svg-cat-eye-shine { opacity: 0; }
+.svg-running-cat.speed-petted .svg-cat-closed-eye { opacity: 1; }
 /* Tail limp */
 .svg-running-cat.speed-petted .svg-cat-tail-group { animation: svg-tail-tired-limp 2.8s ease-in-out infinite alternate; }
 /* Ears droop */
@@ -610,14 +614,14 @@
 .svg-running-cat.speed-petted .svg-cat-petting-hand {
   opacity: 1;
   animation: svg-hand-pet 0.8s ease-in-out infinite;
-  transform-origin: 24px -2px;
+  transform-origin: 24px -6px;
 }
 
-/* Hand stroking — gentle back-and-forth, touching cat head top */
+/* Hand stroking — gentle side-to-side, fingertips brush across head top */
 @keyframes svg-hand-pet {
-  0%   { transform: translate(-1.5px, 0) rotate(-5deg); opacity: 0.9; }
-  50%  { transform: translate(1.5px, 0.5px) rotate(5deg); opacity: 1; }
-  100% { transform: translate(-1.5px, 0) rotate(-5deg); opacity: 0.9; }
+  0%   { transform: translate(-2px, 0) rotate(-3deg); }
+  50%  { transform: translate(2px, 0.5px) rotate(3deg); }
+  100% { transform: translate(-2px, 0) rotate(-3deg); }
 }
 
 /* Head droops lower while petted — cat leans into the hand */
@@ -626,14 +630,6 @@
   30%  { transform: rotate(1deg) translateY(0); }
   60%  { transform: rotate(5deg) translateY(2px); }
   100% { transform: rotate(3deg) translateY(0.5px); }
-}
-
-/* Eyes squint happily — scaleY shrinks to simulate closed eyes */
-@keyframes svg-eye-squint {
-  0%   { transform: scaleY(0.3); }
-  40%  { transform: scaleY(0.15); }
-  70%  { transform: scaleY(0.35); }
-  100% { transform: scaleY(0.3); }
 }
 
 .typing-refresh-btn:hover {
