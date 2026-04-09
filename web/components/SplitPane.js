@@ -217,21 +217,20 @@ export default {
       if (!typingStartTime.value) return;
       now.value = Date.now();
       const elapsed = (now.value - typingStartTime.value) % 13000;
-      if (elapsed < 6000) {
-        // Speed feel: Normal ~10%, Fast ~18%, Turbo ~25%
-        // Distance: Normal 19%, Fast 34%, Turbo 47% (ratio 10:18:25)
+      if (elapsed < 7500) {
+        // 0-7.5s: walk forward — Normal 2.5s, Fast 2.5s, Turbo 2.5s
         let pos;
-        if (elapsed < 2000) {
-          pos = (elapsed / 2000) * 19;
-        } else if (elapsed < 4000) {
-          pos = 19 + ((elapsed - 2000) / 2000) * 34;
+        if (elapsed < 2500) {
+          pos = (elapsed / 2500) * 16;
+        } else if (elapsed < 5000) {
+          pos = 16 + ((elapsed - 2500) / 2500) * 29;
         } else {
-          pos = 53 + ((elapsed - 4000) / 2000) * 47;
+          pos = 45 + ((elapsed - 5000) / 2500) * 55;
         }
         catPosition.value = pos;
         catDirection.value = 1;
-      } else if (elapsed < 9000) {
-        catPosition.value = (1 - (elapsed - 6000) / 3000) * 100;
+      } else if (elapsed < 10000) {
+        catPosition.value = (1 - (elapsed - 7500) / 2500) * 100;
         catDirection.value = -1;
       } else {
         catPosition.value = 0;
@@ -253,7 +252,7 @@ export default {
         catDirection.value = 1;
         if (catRafId) { cancelAnimationFrame(catRafId); catRafId = null; }
       }
-    });
+    }, { immediate: true });
 
     Vue.onUnmounted(() => {
       if (catRafId) { cancelAnimationFrame(catRafId); catRafId = null; }
@@ -275,11 +274,11 @@ export default {
     const catSpeed = Vue.computed(() => {
       if (!typingStartTime.value) return 'speed-normal';
       const elapsed = (now.value - typingStartTime.value) % 13000;
-      if (elapsed >= 11000) return 'speed-petted';
-      if (elapsed >= 9000) return 'speed-tired';
-      if (elapsed >= 6000) return 'speed-crazy';
-      if (elapsed >= 4000) return 'speed-turbo';
-      if (elapsed >= 2000) return 'speed-fast';
+      if (elapsed >= 11500) return 'speed-petted';
+      if (elapsed >= 10000) return 'speed-tired';
+      if (elapsed >= 7500) return 'speed-crazy';
+      if (elapsed >= 5000) return 'speed-turbo';
+      if (elapsed >= 2500) return 'speed-fast';
       return 'speed-normal';
     });
 
@@ -288,7 +287,7 @@ export default {
       const dir = catDirection.value;
       const frac = pos / 100;
       const style = { left: `calc(40px + (100% - 80px) * ${frac})` };
-      if (dir < 0) style.transform = 'scaleX(-1)';
+      if (dir < 0) style.transform = 'rotateY(180deg)';
       return style;
     });
 

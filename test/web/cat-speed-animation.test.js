@@ -148,20 +148,20 @@ describe('catSpeed computed property (five tiers)', () => {
     expect(crewChatViewJs).toContain('% 13000');
   });
 
-  it('speed-tired triggers at 9000ms', () => {
-    expect(messageListJs).toContain('9000');
+  it('speed-tired triggers at 10000ms', () => {
+    expect(messageListJs).toContain('10000');
   });
 
-  it('speed-fast triggers at 2000ms', () => {
-    expect(messageListJs).toContain('2000');
+  it('speed-fast triggers at 2500ms', () => {
+    expect(messageListJs).toContain('2500');
   });
 
-  it('speed-turbo triggers at 4000ms', () => {
-    expect(messageListJs).toContain('4000');
+  it('speed-turbo triggers at 5000ms', () => {
+    expect(messageListJs).toContain('5000');
   });
 
-  it('speed-crazy triggers at 6000ms', () => {
-    expect(messageListJs).toContain('6000');
+  it('speed-crazy triggers at 7500ms', () => {
+    expect(messageListJs).toContain('7500');
   });
 
   it('catSpeed is in the return object (MessageList.js)', () => {
@@ -184,11 +184,11 @@ describe('catSpeed computation logic (six tiers, 13s cycle)', () => {
   function computeCatSpeed(typingStartTime, now) {
     if (!typingStartTime) return 'speed-normal';
     const elapsed = (now - typingStartTime) % 13000;
-    if (elapsed >= 11000) return 'speed-petted';
-    if (elapsed >= 9000) return 'speed-tired';
-    if (elapsed >= 6000) return 'speed-crazy';
-    if (elapsed >= 4000) return 'speed-turbo';
-    if (elapsed >= 2000) return 'speed-fast';
+    if (elapsed >= 11500) return 'speed-petted';
+    if (elapsed >= 10000) return 'speed-tired';
+    if (elapsed >= 7500) return 'speed-crazy';
+    if (elapsed >= 5000) return 'speed-turbo';
+    if (elapsed >= 2500) return 'speed-fast';
     return 'speed-normal';
   }
 
@@ -196,43 +196,43 @@ describe('catSpeed computation logic (six tiers, 13s cycle)', () => {
     expect(computeCatSpeed(0, Date.now())).toBe('speed-normal');
   });
 
-  it('returns speed-normal when elapsed < 2s', () => {
+  it('returns speed-normal when elapsed < 2.5s', () => {
     const now = Date.now();
     expect(computeCatSpeed(now - 1000, now)).toBe('speed-normal');
-    expect(computeCatSpeed(now - 1999, now)).toBe('speed-normal');
+    expect(computeCatSpeed(now - 2499, now)).toBe('speed-normal');
   });
 
-  it('returns speed-fast when elapsed is 2-3.999s', () => {
+  it('returns speed-fast when elapsed is 2.5-4.999s', () => {
     const now = Date.now();
-    expect(computeCatSpeed(now - 2000, now)).toBe('speed-fast');
-    expect(computeCatSpeed(now - 3000, now)).toBe('speed-fast');
-    expect(computeCatSpeed(now - 3999, now)).toBe('speed-fast');
+    expect(computeCatSpeed(now - 2500, now)).toBe('speed-fast');
+    expect(computeCatSpeed(now - 3500, now)).toBe('speed-fast');
+    expect(computeCatSpeed(now - 4999, now)).toBe('speed-fast');
   });
 
-  it('returns speed-turbo when elapsed is 4-5.999s', () => {
+  it('returns speed-turbo when elapsed is 5-7.499s', () => {
     const now = Date.now();
-    expect(computeCatSpeed(now - 4000, now)).toBe('speed-turbo');
     expect(computeCatSpeed(now - 5000, now)).toBe('speed-turbo');
-    expect(computeCatSpeed(now - 5999, now)).toBe('speed-turbo');
+    expect(computeCatSpeed(now - 6000, now)).toBe('speed-turbo');
+    expect(computeCatSpeed(now - 7499, now)).toBe('speed-turbo');
   });
 
-  it('returns speed-crazy when elapsed is 6-8.999s', () => {
+  it('returns speed-crazy when elapsed is 7.5-9.999s', () => {
     const now = Date.now();
-    expect(computeCatSpeed(now - 6000, now)).toBe('speed-crazy');
-    expect(computeCatSpeed(now - 8000, now)).toBe('speed-crazy');
-    expect(computeCatSpeed(now - 8999, now)).toBe('speed-crazy');
+    expect(computeCatSpeed(now - 7500, now)).toBe('speed-crazy');
+    expect(computeCatSpeed(now - 9000, now)).toBe('speed-crazy');
+    expect(computeCatSpeed(now - 9999, now)).toBe('speed-crazy');
   });
 
-  it('returns speed-tired when elapsed is 9-10.999s', () => {
+  it('returns speed-tired when elapsed is 10-11.499s', () => {
     const now = Date.now();
-    expect(computeCatSpeed(now - 9000, now)).toBe('speed-tired');
     expect(computeCatSpeed(now - 10000, now)).toBe('speed-tired');
-    expect(computeCatSpeed(now - 10999, now)).toBe('speed-tired');
+    expect(computeCatSpeed(now - 11000, now)).toBe('speed-tired');
+    expect(computeCatSpeed(now - 11499, now)).toBe('speed-tired');
   });
 
-  it('returns speed-petted when elapsed is 11-12.999s', () => {
+  it('returns speed-petted when elapsed is 11.5-12.999s', () => {
     const now = Date.now();
-    expect(computeCatSpeed(now - 11000, now)).toBe('speed-petted');
+    expect(computeCatSpeed(now - 11500, now)).toBe('speed-petted');
     expect(computeCatSpeed(now - 12000, now)).toBe('speed-petted');
     expect(computeCatSpeed(now - 12999, now)).toBe('speed-petted');
   });
@@ -245,10 +245,10 @@ describe('catSpeed computation logic (six tiers, 13s cycle)', () => {
 
   it('cycles back through all tiers on second cycle', () => {
     const now = Date.now();
-    expect(computeCatSpeed(now - 15000, now)).toBe('speed-fast');   // 15000 % 13000 = 2000
-    expect(computeCatSpeed(now - 17000, now)).toBe('speed-turbo');  // 17000 % 13000 = 4000
-    expect(computeCatSpeed(now - 19000, now)).toBe('speed-crazy');  // 19000 % 13000 = 6000
-    expect(computeCatSpeed(now - 23000, now)).toBe('speed-tired');  // 23000 % 13000 = 10000 → ≥9000
+    expect(computeCatSpeed(now - 15500, now)).toBe('speed-fast');   // 15500 % 13000 = 2500
+    expect(computeCatSpeed(now - 18000, now)).toBe('speed-turbo');  // 18000 % 13000 = 5000
+    expect(computeCatSpeed(now - 20500, now)).toBe('speed-crazy');  // 20500 % 13000 = 7500
+    expect(computeCatSpeed(now - 23000, now)).toBe('speed-tired');  // 23000 % 13000 = 10000 → ≥10000
     expect(computeCatSpeed(now - 26000, now)).toBe('speed-normal'); // 26000 % 13000 = 0
   });
 });

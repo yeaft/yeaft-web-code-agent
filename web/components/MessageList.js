@@ -306,26 +306,25 @@ export default {
       now.value = Date.now();
       const elapsed = (now.value - typingStartTime.value) % 13000;
 
-      if (elapsed < 6000) {
-        // 0-6s: walk forward with accelerating speed per tier
-        // Speed feel: Normal ~10%, Fast ~18%, Turbo ~25%
-        // Distance: Normal 19%, Fast 34%, Turbo 47% (ratio 10:18:25)
+      if (elapsed < 7500) {
+        // 0-7.5s: walk forward — Normal 2.5s, Fast 2.5s, Turbo 2.5s
+        // Distance: Normal 16%, Fast 29%, Turbo 55%
         let pos;
-        if (elapsed < 2000) {
-          pos = (elapsed / 2000) * 19;                     // 0→19%
-        } else if (elapsed < 4000) {
-          pos = 19 + ((elapsed - 2000) / 2000) * 34;      // 19→53%
+        if (elapsed < 2500) {
+          pos = (elapsed / 2500) * 16;                     // 0→16%
+        } else if (elapsed < 5000) {
+          pos = 16 + ((elapsed - 2500) / 2500) * 29;      // 16→45%
         } else {
-          pos = 53 + ((elapsed - 4000) / 2000) * 47;      // 53→100%
+          pos = 45 + ((elapsed - 5000) / 2500) * 55;      // 45→100%
         }
         catPosition.value = pos;
         catDirection.value = 1;
-      } else if (elapsed < 9000) {
-        // 6-9s (crazy): sprint back at top speed — 100% in 3s
-        catPosition.value = (1 - (elapsed - 6000) / 3000) * 100;
+      } else if (elapsed < 10000) {
+        // 7.5-10s (crazy): sprint back — 100% in 2.5s
+        catPosition.value = (1 - (elapsed - 7500) / 2500) * 100;
         catDirection.value = -1;
       } else {
-        // 9-13s (tired + petted): stay at start, face left
+        // 10-13s (tired + petted): stay at start, face left
         catPosition.value = 0;
         catDirection.value = -1;
       }
@@ -346,7 +345,7 @@ export default {
         catDirection.value = 1;
         if (catRafId) { cancelAnimationFrame(catRafId); catRafId = null; }
       }
-    });
+    }, { immediate: true });
 
     // Event-driven waiting status (replaces time-based waitingPhase)
     const waitingStatus = Vue.computed(() => {
@@ -365,11 +364,11 @@ export default {
     const catSpeed = Vue.computed(() => {
       if (!typingStartTime.value) return 'speed-normal';
       const elapsed = (now.value - typingStartTime.value) % 13000;
-      if (elapsed >= 11000) return 'speed-petted';
-      if (elapsed >= 9000) return 'speed-tired';
-      if (elapsed >= 6000) return 'speed-crazy';
-      if (elapsed >= 4000) return 'speed-turbo';
-      if (elapsed >= 2000) return 'speed-fast';
+      if (elapsed >= 11500) return 'speed-petted';
+      if (elapsed >= 10000) return 'speed-tired';
+      if (elapsed >= 7500) return 'speed-crazy';
+      if (elapsed >= 5000) return 'speed-turbo';
+      if (elapsed >= 2500) return 'speed-fast';
       return 'speed-normal';
     });
 
@@ -379,7 +378,7 @@ export default {
       const dir = catDirection.value;
       const frac = pos / 100;
       const style = { left: `calc(40px + (100% - 80px) * ${frac})` };
-      if (dir < 0) style.transform = 'scaleX(-1)';
+      if (dir < 0) style.transform = 'rotateY(180deg)';
       return style;
     });
 
@@ -460,6 +459,7 @@ export default {
         containerRef.value.removeEventListener('scroll', onScroll);
       }
       if (typingTimer) { clearInterval(typingTimer); typingTimer = null; }
+      if (catRafId) { cancelAnimationFrame(catRafId); catRafId = null; }
     });
 
     return {
