@@ -242,13 +242,14 @@ describe('Dark mode: CSS variables for all cat parts (no regression)', () => {
 // 5. Leg visibility: legs never hidden (CORE PRINCIPLE)
 // =============================================================================
 describe('Core principle: legs always visible in all tiers', () => {
-  it('normal mode: legs have no opacity override', () => {
+  it('normal mode: legs have no individual opacity (opacity on silhouette group)', () => {
+    // With group opacity, individual legs don't need opacity
     const baseLeg = chatMessagesCss.match(/\.svg-cat-leg\s*\{([^}]*)\}/);
     expect(baseLeg).not.toBeNull();
-    expect(baseLeg[1]).toContain('opacity: 0.55');
+    expect(baseLeg[1]).not.toContain('opacity');
   });
 
-  it('fast mode: legs have no opacity override (use normal 0.55)', () => {
+  it('fast mode: legs have no opacity override', () => {
     const fastLegRules = chatMessagesCss.match(/speed-fast\s+\.svg-cat-leg-f[lr]\s*\{([^}]*)\}/g);
     expect(fastLegRules).not.toBeNull();
     for (const rule of fastLegRules) {
@@ -262,11 +263,11 @@ describe('Core principle: legs always visible in all tiers', () => {
     expect(turboLegFl[1]).not.toContain('opacity');
   });
 
-  it('crazy mode: legs have opacity: 0.3 (semi-transparent but VISIBLE)', () => {
+  it('crazy mode: legs have opacity: 0.5 (semi-transparent within silhouette group, effective ~0.3)', () => {
     const crazyLegFl = chatMessagesCss.match(/speed-crazy\s+\.svg-cat-leg-fl\s*\{([^}]*)\}/);
     expect(crazyLegFl).not.toBeNull();
-    expect(crazyLegFl[1]).toContain('opacity: 0.3');
-    // 0.3 is still visible (not 0 or near-zero)
+    expect(crazyLegFl[1]).toContain('opacity: 0.5');
+    // 0.5 within silhouette group (0.6) = ~0.3 effective, still clearly visible
     const opMatch = crazyLegFl[1].match(/opacity:\s*([\d.]+)/);
     expect(parseFloat(opMatch[1])).toBeGreaterThanOrEqual(0.2);
   });

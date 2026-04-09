@@ -69,8 +69,8 @@ describe('Scenario 1: Turbo legs visible with blur trail', () => {
 // 2. Crazy: semi-transparent legs + wobble blur (NO rotate)
 // =============================================================================
 describe('Scenario 2: Crazy semi-transparent legs with wobble', () => {
-  it('crazy legs are semi-transparent (opacity: 0.3), not hidden', () => {
-    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-fl\s*\{[^}]*opacity:\s*0\.3/);
+  it('crazy legs are semi-transparent (opacity: 0.5 within silhouette group), not hidden', () => {
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-fl\s*\{[^}]*opacity:\s*0\.5/);
   });
 
   it('crazy legs run at 0.08s with ±42° swing', () => {
@@ -187,7 +187,7 @@ describe('Scenario 3: Five-speed 13s cycle transitions', () => {
   });
 
   it('crazy mode (6-10s): legs at 0.08s semi-transparent + wobble blur', () => {
-    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-fl\s*\{[^}]*0\.08s[^}]*opacity:\s*0\.3/);
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-fl\s*\{[^}]*0\.08s[^}]*opacity:\s*0\.5/);
     expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur\s*\{[^}]*svg-leg-blur-wobble\b/);
   });
 
@@ -308,7 +308,8 @@ describe('Supplemental: SVG blur ellipses consistent across components', () => {
 // =============================================================================
 describe('Supplemental: blur ellipses hidden by default', () => {
   it('.svg-cat-leg-blur has opacity: 0 by default', () => {
-    const rule = chatMessagesCss.match(/\.svg-cat-leg-blur\s*\{([^}]*)\}/);
+    // Match the base rule (starts at line beginning, not status-override combined selectors)
+    const rule = chatMessagesCss.match(/^\.svg-cat-leg-blur\s*\{([^}]*)\}/m);
     expect(rule).not.toBeNull();
     expect(rule[1]).toContain('opacity: 0');
   });

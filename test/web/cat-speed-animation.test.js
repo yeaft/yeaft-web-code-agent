@@ -302,9 +302,9 @@ describe('CSS: turbo has real legs with blur trail', () => {
 // CSS: crazy = ultra-fast semi-transparent legs ±42° with wobble blur
 // =====================================================================
 describe('CSS: crazy has semi-transparent legs with wobble blur', () => {
-  it('crazy legs are semi-transparent (opacity: 0.3), NOT hidden', () => {
-    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-fl\s*\{[^}]*opacity:\s*0\.3/);
-    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-fr\s*\{[^}]*opacity:\s*0\.3/);
+  it('crazy legs are semi-transparent (opacity: 0.5 inside silhouette group), NOT hidden', () => {
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-fl\s*\{[^}]*opacity:\s*0\.5/);
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-fr\s*\{[^}]*opacity:\s*0\.5/);
   });
 
   it('crazy legs use dedicated crazy keyframes', () => {
@@ -518,7 +518,7 @@ describe('CSS: new cat parts', () => {
   });
 
   it('has .svg-cat-leg-blur style (hidden by default)', () => {
-    const blurRule = chatMessagesCss.match(/\.svg-cat-leg-blur\s*\{([^}]*)\}/);
+    const blurRule = chatMessagesCss.match(/^\.svg-cat-leg-blur\s*\{([^}]*)\}/m);
     expect(blurRule).not.toBeNull();
     expect(blurRule[1]).toContain('opacity: 0');
   });

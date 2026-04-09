@@ -388,14 +388,20 @@ describe('Scenario 5: Dark theme color adaptation via CSS variables', () => {
   });
 
   it('no hardcoded colors — all fills/strokes use CSS variables', () => {
-    // Extract all fill/stroke declarations in svg-cat classes
-    // Exclude status-override rules (e.g., .typing-indicator.status-* .svg-cat-body)
-    // which intentionally use hardcoded rgba colors to match dot status colors
-    const catStyles = (chatMessagesCss.match(/\.svg-cat[^{]*\{[^}]*\}/g) || [])
-      .filter(s => !s.includes('.typing-indicator'));
-    for (const style of catStyles) {
-      const fills = style.match(/fill:\s*[^;]+/g) || [];
-      const strokes = style.match(/stroke:\s*[^;]+/g) || [];
+    // Extract all svg-cat rule blocks from CSS
+    // Use line-start matching to capture full selectors including status prefixes
+    const allLines = chatMessagesCss.split('\n');
+    const catStyles = [];
+    for (const line of allLines) {
+      // Match lines that define svg-cat rules with { ... }
+      const m = line.match(/^([^{]*\.svg-cat[^{]*)\{([^}]*)\}/);
+      if (m) catStyles.push({ selector: m[1], body: m[2] });
+    }
+    // Exclude status-override rules which intentionally use hardcoded rgba colors
+    const baseStyles = catStyles.filter(s => !s.selector.includes('.typing-indicator'));
+    for (const { body } of baseStyles) {
+      const fills = body.match(/fill:\s*[^;]+/g) || [];
+      const strokes = body.match(/stroke:\s*[^;]+/g) || [];
       for (const decl of [...fills, ...strokes]) {
         // Each fill/stroke should use var() or 'none'
         expect(decl).toMatch(/var\(--|none/);

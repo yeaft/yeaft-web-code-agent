@@ -77,45 +77,43 @@ export default {
           <span></span><span></span><span></span>
           <span class="svg-running-cat" :class="catSpeed" aria-hidden="true">
             <svg viewBox="0 0 36 28" xmlns="http://www.w3.org/2000/svg">
-              <!-- Tail -->
-              <g class="svg-cat-tail-group">
-                <path class="svg-cat-tail" d="M5 16 Q0 11 2 5 Q3 2 5 4" stroke-width="2"/>
+              <!-- Silhouette group: single opacity prevents overlap darkening -->
+              <g class="svg-cat-silhouette">
+                <!-- Tail -->
+                <g class="svg-cat-tail-group">
+                  <path class="svg-cat-tail" d="M5 16 Q0 11 2 5 Q3 2 5 4" stroke-width="2"/>
+                </g>
+                <!-- Back legs -->
+                <g class="svg-cat-leg-bl"><path class="svg-cat-leg" d="M10 20 L8 25 Q8 26.5 9.5 26.5 L10.5 26.5" stroke-width="0"/></g>
+                <g class="svg-cat-leg-br"><path class="svg-cat-leg" d="M8 20 L6 25 Q6 26.5 7.5 26.5 L8.5 26.5" stroke-width="0"/></g>
+                <!-- Body -->
+                <ellipse class="svg-cat-body" cx="15" cy="17" rx="7.5" ry="5"/>
+                <!-- Front legs -->
+                <g class="svg-cat-leg-fl"><path class="svg-cat-leg" d="M21 20 L23 25 Q23 26.5 21.5 26.5 L20.5 26.5" stroke-width="0"/></g>
+                <g class="svg-cat-leg-fr"><path class="svg-cat-leg" d="M19 20 L21 25 Q21 26.5 19.5 26.5 L18.5 26.5" stroke-width="0"/></g>
+                <!-- Head -->
+                <circle class="svg-cat-head" cx="24" cy="10" r="7"/>
+                <!-- Ears -->
+                <g class="svg-cat-ear-l"><polygon class="svg-cat-ear" points="18,8 20,0 23,7"/></g>
+                <g class="svg-cat-ear-r"><polygon class="svg-cat-ear" points="25,7 28,0 30,8"/></g>
               </g>
-              <!-- Back legs -->
-              <g class="svg-cat-leg-bl"><path class="svg-cat-leg" d="M10 20 L8 25 Q8 26.5 9.5 26.5 L10.5 26.5" stroke-width="0"/></g>
-              <g class="svg-cat-leg-br"><path class="svg-cat-leg" d="M8 20 L6 25 Q6 26.5 7.5 26.5 L8.5 26.5" stroke-width="0"/></g>
-              <!-- Body (shorter, rounder) -->
-              <ellipse class="svg-cat-body" cx="15" cy="17" rx="7.5" ry="5"/>
-              <!-- Front legs -->
-              <g class="svg-cat-leg-fl"><path class="svg-cat-leg" d="M21 20 L23 25 Q23 26.5 21.5 26.5 L20.5 26.5" stroke-width="0"/></g>
-              <g class="svg-cat-leg-fr"><path class="svg-cat-leg" d="M19 20 L21 25 Q21 26.5 19.5 26.5 L18.5 26.5" stroke-width="0"/></g>
-              <!-- Blur legs for turbo (shimmer) + crazy (rotate) — centered under body, hidden by default -->
+              <!-- Blur legs (outside silhouette — has own opacity control) -->
               <ellipse class="svg-cat-leg-blur" cx="12.5" cy="22" rx="1.8" ry="1.2"/>
               <ellipse class="svg-cat-leg-blur" cx="17.5" cy="22" rx="1.8" ry="1.2"/>
               <ellipse class="svg-cat-leg-blur svg-cat-leg-blur-inner" cx="14" cy="22" rx="1.5" ry="1"/>
               <ellipse class="svg-cat-leg-blur svg-cat-leg-blur-inner" cx="16" cy="22" rx="1.5" ry="1"/>
-              <!-- Head (bigger, more chibi) -->
-              <circle class="svg-cat-head" cx="24" cy="10" r="7"/>
-              <!-- Ears (taller, pointier) -->
-              <g class="svg-cat-ear-l"><polygon class="svg-cat-ear" points="18,8 20,0 23,7"/></g>
-              <g class="svg-cat-ear-r"><polygon class="svg-cat-ear" points="25,7 28,0 30,8"/></g>
-              <!-- Inner ears (pink patches) -->
+              <!-- Face details (on top of silhouette) -->
               <polygon class="svg-cat-inner-ear" points="19,7.5 20.5,1.5 22,6.5"/>
               <polygon class="svg-cat-inner-ear" points="26,6.5 27.5,1.5 29,7.5"/>
-              <!-- Eyes (bigger, rounder, cuter) -->
               <ellipse class="svg-cat-eye" cx="21.5" cy="9.5" rx="2" ry="2.2"/>
               <ellipse class="svg-cat-eye" cx="27" cy="9.5" rx="2" ry="2.2"/>
               <ellipse class="svg-cat-pupil" cx="22" cy="9.8" rx="1.1" ry="1.3"/>
               <ellipse class="svg-cat-pupil" cx="27.5" cy="9.8" rx="1.1" ry="1.3"/>
-              <!-- Eye shine -->
               <circle class="svg-cat-eye-shine" cx="21.2" cy="8.8" r="0.6"/>
               <circle class="svg-cat-eye-shine" cx="26.7" cy="8.8" r="0.6"/>
-              <!-- Nose -->
               <path class="svg-cat-nose" d="M23.5 12.5 L24.2 13.2 L25 12.5 Z"/>
-              <!-- Mouth (cute W shape) -->
               <path class="svg-cat-mouth" d="M23 13.5 Q24.2 14.8 24.2 13.5" stroke-width="0.5"/>
               <path class="svg-cat-mouth" d="M24.3 13.5 Q24.3 14.8 25.5 13.5" stroke-width="0.5"/>
-              <!-- Whiskers -->
               <line class="svg-cat-whisker" x1="19.5" y1="12" x2="14" y2="11" stroke-width="0.4"/>
               <line class="svg-cat-whisker" x1="19.5" y1="13" x2="14" y2="13.5" stroke-width="0.4"/>
               <line class="svg-cat-whisker" x1="29" y1="12" x2="34" y2="11" stroke-width="0.4"/>

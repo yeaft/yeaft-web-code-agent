@@ -113,21 +113,23 @@ export default {
           <span></span><span></span><span></span>
           <span class="svg-running-cat" :class="catSpeed" aria-hidden="true">
             <svg viewBox="0 0 36 28" xmlns="http://www.w3.org/2000/svg">
-              <g class="svg-cat-tail-group">
-                <path class="svg-cat-tail" d="M5 16 Q0 11 2 5 Q3 2 5 4" stroke-width="2"/>
+              <g class="svg-cat-silhouette">
+                <g class="svg-cat-tail-group">
+                  <path class="svg-cat-tail" d="M5 16 Q0 11 2 5 Q3 2 5 4" stroke-width="2"/>
+                </g>
+                <g class="svg-cat-leg-bl"><path class="svg-cat-leg" d="M10 20 L8 25 Q8 26.5 9.5 26.5 L10.5 26.5" stroke-width="0"/></g>
+                <g class="svg-cat-leg-br"><path class="svg-cat-leg" d="M8 20 L6 25 Q6 26.5 7.5 26.5 L8.5 26.5" stroke-width="0"/></g>
+                <ellipse class="svg-cat-body" cx="15" cy="17" rx="7.5" ry="5"/>
+                <g class="svg-cat-leg-fl"><path class="svg-cat-leg" d="M21 20 L23 25 Q23 26.5 21.5 26.5 L20.5 26.5" stroke-width="0"/></g>
+                <g class="svg-cat-leg-fr"><path class="svg-cat-leg" d="M19 20 L21 25 Q21 26.5 19.5 26.5 L18.5 26.5" stroke-width="0"/></g>
+                <circle class="svg-cat-head" cx="24" cy="10" r="7"/>
+                <g class="svg-cat-ear-l"><polygon class="svg-cat-ear" points="18,8 20,0 23,7"/></g>
+                <g class="svg-cat-ear-r"><polygon class="svg-cat-ear" points="25,7 28,0 30,8"/></g>
               </g>
-              <g class="svg-cat-leg-bl"><path class="svg-cat-leg" d="M10 20 L8 25 Q8 26.5 9.5 26.5 L10.5 26.5" stroke-width="0"/></g>
-              <g class="svg-cat-leg-br"><path class="svg-cat-leg" d="M8 20 L6 25 Q6 26.5 7.5 26.5 L8.5 26.5" stroke-width="0"/></g>
-              <ellipse class="svg-cat-body" cx="15" cy="17" rx="7.5" ry="5"/>
-              <g class="svg-cat-leg-fl"><path class="svg-cat-leg" d="M21 20 L23 25 Q23 26.5 21.5 26.5 L20.5 26.5" stroke-width="0"/></g>
-              <g class="svg-cat-leg-fr"><path class="svg-cat-leg" d="M19 20 L21 25 Q21 26.5 19.5 26.5 L18.5 26.5" stroke-width="0"/></g>
               <ellipse class="svg-cat-leg-blur" cx="12.5" cy="22" rx="1.8" ry="1.2"/>
               <ellipse class="svg-cat-leg-blur" cx="17.5" cy="22" rx="1.8" ry="1.2"/>
               <ellipse class="svg-cat-leg-blur svg-cat-leg-blur-inner" cx="14" cy="22" rx="1.5" ry="1"/>
               <ellipse class="svg-cat-leg-blur svg-cat-leg-blur-inner" cx="16" cy="22" rx="1.5" ry="1"/>
-              <circle class="svg-cat-head" cx="24" cy="10" r="7"/>
-              <g class="svg-cat-ear-l"><polygon class="svg-cat-ear" points="18,8 20,0 23,7"/></g>
-              <g class="svg-cat-ear-r"><polygon class="svg-cat-ear" points="25,7 28,0 30,8"/></g>
               <polygon class="svg-cat-inner-ear" points="19,7.5 20.5,1.5 22,6.5"/>
               <polygon class="svg-cat-inner-ear" points="26,6.5 27.5,1.5 29,7.5"/>
               <ellipse class="svg-cat-eye" cx="21.5" cy="9.5" rx="2" ry="2.2"/>
