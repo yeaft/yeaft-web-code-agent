@@ -79,6 +79,10 @@ export default {
                             <line class="svg-cat-whisker" x1="19.5" y1="12" x2="14" y2="12.5" stroke-width="0.4"/>
                             <line class="svg-cat-whisker" x1="29" y1="11" x2="34" y2="10" stroke-width="0.4"/>
                             <line class="svg-cat-whisker" x1="29" y1="12" x2="34" y2="12.5" stroke-width="0.4"/>
+                            <!-- Breath puffs — only visible in tired mode -->
+                            <circle class="svg-cat-breath svg-cat-breath-1" cx="27" cy="14" r="0.8"/>
+                            <circle class="svg-cat-breath svg-cat-breath-2" cx="28" cy="13.5" r="0.6"/>
+                            <circle class="svg-cat-breath svg-cat-breath-3" cx="29" cy="14.5" r="0.5"/>
                           </g>
                         </g>
                         <ellipse class="svg-cat-leg-blur" cx="12.5" cy="22" rx="1.8" ry="1.2"/>
