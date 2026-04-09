@@ -149,8 +149,12 @@ async function _createRoleQueryInner(session, roleName) {
 
   // 继承全局 MCP disallowedTools，避免不必要的 tool schema token 消耗
   const globalDisallowed = ctx.CONFIG?.disallowedTools || [];
-  // Crew 角色禁用 Agent 工具，强制通过 ROUTE 块协作
-  const crewDisallowed = ['Agent'];
+  // Crew 角色禁用 Agent 和 Skill 工具：
+  // - Agent: 角色间协作必须通过 ROUTE 块，不能自行启动 sub-agent
+  // - Skill: skills 的 trigger 词会和角色职能冲突（如 review-code、commit），
+  //   导致 Claude 调用 Skill 而不是输出 ROUTE 块。从 schema 层面移除比
+  //   canCallTool throw 更可靠（完全不消耗 tool schema token）
+  const crewDisallowed = ['Agent', 'Skill'];
   const effectiveDisallowed = [...globalDisallowed, ...crewDisallowed];
 
   const queryOptions = {
@@ -164,13 +168,10 @@ async function _createRoleQueryInner(session, roleName) {
 
   // Intercept AskUserQuestion for all roles — forward to Web UI for interactive answering.
   // Without this, non-DM roles' AskCard buttons stay disabled (no askRequestId).
-  // Also block yeaft-skills in crew mode — they inject personas/workflows that interfere with role behavior.
+  // Note: Skill tool is fully disallowed via disallowedTools above, so no canCallTool guard needed.
   queryOptions.canCallTool = async (toolName, input, toolCtx) => {
     if (toolName === 'AskUserQuestion') {
       return await handleAskUserQuestion(session.id, input, toolCtx);
-    }
-    if (toolName === 'Skill' && input?.skill && input.skill.startsWith('yeaft')) {
-      throw new Error('yeaft-skills are disabled in crew mode — crew roles use ROUTE protocol instead');
     }
     return input;
   };
