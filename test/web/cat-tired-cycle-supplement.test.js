@@ -386,12 +386,12 @@ describe('Three-component consistency for tired + 13s cycle', () => {
 
   it('all 3 use same threshold order: tired(10000) > crazy(6000) > turbo(4000) > fast(2000)', () => {
     for (const src of [messageListJs, splitPaneJs, crewChatViewJs]) {
-      // Find the catSpeed function by looking for the '% 13000' modulo — unique to catSpeed
-      const moduloIdx = src.indexOf('% 13000');
-      expect(moduloIdx).toBeGreaterThan(-1);
-      // Extract a region around the catSpeed function (100 chars before, 300 after)
-      const regionStart = Math.max(0, moduloIdx - 100);
-      const regionEnd = Math.min(src.length, moduloIdx + 300);
+      // Find the catSpeed function by looking for 'speed-tired' which is unique to the speed tier logic
+      const anchorIdx = src.indexOf("'speed-tired'");
+      expect(anchorIdx).toBeGreaterThan(-1);
+      // Extract a region around the catSpeed function (200 chars before, 200 after)
+      const regionStart = Math.max(0, anchorIdx - 200);
+      const regionEnd = Math.min(src.length, anchorIdx + 200);
       const region = src.slice(regionStart, regionEnd);
       const tiredIdx = region.indexOf('10000');
       const crazyIdx = region.indexOf('6000');

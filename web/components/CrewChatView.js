@@ -111,6 +111,7 @@ export default {
         <!-- Typing dots: visible after user sends message, before AI responds -->
         <div v-if="isWaitingResponse" class="typing-indicator" :class="waitingStatus ? ('status-' + waitingStatus) : ''">
           <span></span><span></span><span></span>
+          <span class="svg-cat-walk" :style="catStyle">
           <span class="svg-running-cat" :class="catSpeed" aria-hidden="true">
             <svg viewBox="0 0 36 28" xmlns="http://www.w3.org/2000/svg">
               <g class="svg-cat-silhouette">
@@ -152,6 +153,7 @@ export default {
               <ellipse class="svg-cat-leg-blur svg-cat-leg-blur-inner" cx="14" cy="22" rx="1.5" ry="1"/>
               <ellipse class="svg-cat-leg-blur svg-cat-leg-blur-inner" cx="16" cy="22" rx="1.5" ry="1"/>
             </svg>
+          </span>
           </span>
           <span v-if="waitingStatus === 'disconnected'" class="typing-status-text typing-status-error">
             {{ $t('chat.waiting.disconnected') }}
@@ -346,6 +348,8 @@ export default {
       expandedFeatureTaskId: null,
       nowTick: Date.now(),
       typingStartTime: 0,
+      catPosition: 0,
+      catDirection: 1,
       newRole: this.getEmptyRole(),
       rolePresets
     };
@@ -415,6 +419,13 @@ export default {
       if (elapsed >= 4000) return 'speed-turbo';
       if (elapsed >= 2000) return 'speed-fast';
       return 'speed-normal';
+    },
+    catStyle() {
+      const pos = this.catPosition;
+      const dir = this.catDirection;
+      const style = { left: pos + '%' };
+      if (dir < 0) style.transform = 'scaleX(-1)';
+      return style;
     },
     isInitializing() {
       return this.paneCrewStatus?.status === 'initializing';
@@ -562,7 +573,17 @@ export default {
       this.store.setPaneMobilePanel(this.paneId, null);
     },
     isWaitingResponse(val) {
-      this.typingStartTime = val ? Date.now() : 0;
+      if (val) {
+        this.typingStartTime = Date.now();
+        this.catPosition = 0;
+        this.catDirection = 1;
+        this._startCatWalk();
+      } else {
+        this.typingStartTime = 0;
+        this.catPosition = 0;
+        this.catDirection = 1;
+        this._stopCatWalk();
+      }
     },
     kanbanFeatureCount(val) {
       this.store.setCrewInProgressCount(this.effectiveConvId, val);
@@ -601,6 +622,34 @@ export default {
     formatTokens,
     shouldShowTurnDivider,
     getMaxRound,
+
+    _updateCatWalk() {
+      if (!this.typingStartTime) return;
+      this.nowTick = Date.now();
+      const elapsed = (this.nowTick - this.typingStartTime) % 13000;
+      if (elapsed < 6000) {
+        this.catPosition = (elapsed / 6000) * 100;
+        this.catDirection = 1;
+      } else if (elapsed < 10000) {
+        const crazyProgress = (elapsed - 6000) / 4000;
+        this.catPosition = (1 - crazyProgress) * 100;
+        this.catDirection = -1;
+      } else {
+        this.catPosition = 0;
+        this.catDirection = 1;
+      }
+      this._catRafId = requestAnimationFrame(() => this._updateCatWalk());
+    },
+    _startCatWalk() {
+      this._stopCatWalk();
+      this._catRafId = requestAnimationFrame(() => this._updateCatWalk());
+    },
+    _stopCatWalk() {
+      if (this._catRafId) {
+        cancelAnimationFrame(this._catRafId);
+        this._catRafId = null;
+      }
+    },
 
     dismissNotification(id) {
       const idx = this.store.crewNotifications.findIndex(n => n.id === id);
@@ -739,6 +788,7 @@ export default {
     if (this._elapsedTimer) {
       clearInterval(this._elapsedTimer);
     }
+    this._stopCatWalk();
     const convId = this._draftConvId || this.effectiveConvId;
     this.input.saveDraft(convId);
   }

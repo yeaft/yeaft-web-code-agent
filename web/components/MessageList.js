@@ -75,6 +75,7 @@ export default {
         <!-- Typing dots: visible when processing but not streaming text -->
         <div v-if="showTypingDots" class="typing-indicator" :class="waitingStatus ? ('status-' + waitingStatus) : ''">
           <span></span><span></span><span></span>
+          <span class="svg-cat-walk" :style="catStyle">
           <span class="svg-running-cat" :class="catSpeed" aria-hidden="true">
             <svg viewBox="0 0 36 28" xmlns="http://www.w3.org/2000/svg">
               <!-- Silhouette group: single opacity prevents overlap darkening -->
@@ -125,6 +126,7 @@ export default {
               <ellipse class="svg-cat-leg-blur svg-cat-leg-blur-inner" cx="14" cy="22" rx="1.5" ry="1"/>
               <ellipse class="svg-cat-leg-blur svg-cat-leg-blur-inner" cx="16" cy="22" rx="1.5" ry="1"/>
             </svg>
+          </span>
           </span>
           <span v-if="waitingStatus === 'disconnected'" class="typing-status-text typing-status-error">
             {{ $t('chat.waiting.disconnected') }}
@@ -280,15 +282,47 @@ export default {
     const typingStartTime = Vue.ref(0);
     const now = Vue.ref(Date.now());
     let typingTimer = null;
+    let catRafId = null;
+
+    // Cat walk position (0-100%) and direction (1=right, -1=left)
+    const catPosition = Vue.ref(0);
+    const catDirection = Vue.ref(1);
+
+    function updateCatWalk() {
+      if (!typingStartTime.value) return;
+      now.value = Date.now();
+      const elapsed = (now.value - typingStartTime.value) % 13000;
+
+      if (elapsed < 6000) {
+        // 0-6s: walk forward 0% → 100% (accelerating across normal/fast/turbo)
+        catPosition.value = (elapsed / 6000) * 100;
+        catDirection.value = 1;
+      } else if (elapsed < 10000) {
+        // 6-10s (crazy): sprint back 100% → 0%
+        const crazyProgress = (elapsed - 6000) / 4000;
+        catPosition.value = (1 - crazyProgress) * 100;
+        catDirection.value = -1;
+      } else {
+        // 10-13s (tired): stay at 0%, pant in place
+        catPosition.value = 0;
+        catDirection.value = 1;
+      }
+
+      catRafId = requestAnimationFrame(updateCatWalk);
+    }
 
     Vue.watch(showTypingDots, (show) => {
       if (show) {
         typingStartTime.value = Date.now();
         now.value = Date.now();
-        typingTimer = setInterval(() => { now.value = Date.now(); }, 1000);
+        catPosition.value = 0;
+        catDirection.value = 1;
+        catRafId = requestAnimationFrame(updateCatWalk);
       } else {
         typingStartTime.value = 0;
-        if (typingTimer) { clearInterval(typingTimer); typingTimer = null; }
+        catPosition.value = 0;
+        catDirection.value = 1;
+        if (catRafId) { cancelAnimationFrame(catRafId); catRafId = null; }
       }
     });
 
@@ -314,6 +348,15 @@ export default {
       if (elapsed >= 4000) return 'speed-turbo';
       if (elapsed >= 2000) return 'speed-fast';
       return 'speed-normal';
+    });
+
+    // Cat walk style — applied to walk wrapper span (position + flip)
+    const catStyle = Vue.computed(() => {
+      const pos = catPosition.value;
+      const dir = catDirection.value;
+      const style = { left: pos + '%' };
+      if (dir < 0) style.transform = 'scaleX(-1)';
+      return style;
     });
 
     function refreshSession() {
@@ -402,6 +445,7 @@ export default {
       showTypingDots,
       waitingStatus,
       catSpeed,
+      catStyle,
       refreshSession,
       onlineAgents,
       turnGroups
