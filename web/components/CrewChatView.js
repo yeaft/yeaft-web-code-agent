@@ -157,14 +157,17 @@ export default {
               <ellipse class="svg-cat-leg-blur svg-cat-leg-blur-inner" cx="16" cy="22" rx="1.5" ry="1"/>
               <!-- Petting hand — only visible in speed-petted mode -->
               <g class="svg-cat-petting-hand">
-                <line class="svg-cat-hand-arm" x1="24" y1="-10" x2="24" y2="-4" stroke-width="2.5" stroke-linecap="round"/>
-                <path class="svg-cat-hand-palm" d="M21 -4 Q24 -3 27 -4 Q27.5 -3.5 27 -2 L24 0 L21 -2 Q20.5 -3.5 21 -4 Z"/>
-                <line class="svg-cat-finger" x1="21.5" y1="-3" x2="21" y2="1" stroke-width="0.8" stroke-linecap="round"/>
-                <line class="svg-cat-finger" x1="23" y1="-3.5" x2="22.5" y2="1.5" stroke-width="0.8" stroke-linecap="round"/>
-                <line class="svg-cat-finger" x1="24.5" y1="-3.5" x2="24.5" y2="1.5" stroke-width="0.8" stroke-linecap="round"/>
-                <line class="svg-cat-finger" x1="26" y1="-3.5" x2="26.5" y2="1.5" stroke-width="0.8" stroke-linecap="round"/>
-                <line class="svg-cat-finger" x1="27" y1="-3" x2="27.5" y2="1" stroke-width="0.8" stroke-linecap="round"/>
+                <line class="svg-cat-hand-arm" x1="24" y1="-8" x2="24" y2="-1" stroke-width="3" stroke-linecap="round"/>
+                <ellipse class="svg-cat-hand-palm" cx="24" cy="0.5" rx="4" ry="2.5"/>
+                <ellipse class="svg-cat-finger" cx="20.8" cy="2.8" rx="1" ry="1.5"/>
+                <ellipse class="svg-cat-finger" cx="22.8" cy="3.3" rx="0.9" ry="1.6"/>
+                <ellipse class="svg-cat-finger" cx="25" cy="3.3" rx="0.9" ry="1.6"/>
+                <ellipse class="svg-cat-finger" cx="27" cy="2.8" rx="1" ry="1.5"/>
               </g>
+              <!-- Napping bed — soft oval cushion, only visible in napping mode -->
+              <ellipse class="svg-cat-bed" cx="15" cy="24" rx="12" ry="3"/>
+              <!-- Drool — tiny droplet near mouth, only visible in napping mode -->
+              <circle class="svg-cat-drool" cx="26.5" cy="14" r="0.6"/>
             </svg>
           </span>
           </span>
@@ -425,14 +428,15 @@ export default {
       return null;
     },
     catSpeed() {
-      if (!this.typingStartTime) return 'speed-normal';
-      const elapsed = (this.nowTick - this.typingStartTime) % 13000;
-      if (elapsed >= 11500) return 'speed-petted';
-      if (elapsed >= 10000) return 'speed-tired';
-      if (elapsed >= 7500) return 'speed-crazy';
-      if (elapsed >= 5000) return 'speed-turbo';
-      if (elapsed >= 2500) return 'speed-fast';
-      return 'speed-normal';
+      if (!this.typingStartTime) return 'speed-napping';
+      const elapsed = (this.nowTick - this.typingStartTime) % 16500;
+      if (elapsed >= 14500) return 'speed-petted';
+      if (elapsed >= 12500) return 'speed-tired';
+      if (elapsed >= 10000) return 'speed-crazy';
+      if (elapsed >= 7500) return 'speed-turbo';
+      if (elapsed >= 5000) return 'speed-fast';
+      if (elapsed >= 2500) return 'speed-normal';
+      return 'speed-napping';
     },
     catStyle() {
       const pos = this.catPosition;
@@ -644,26 +648,30 @@ export default {
     _updateCatWalk() {
       if (!this.typingStartTime) return;
       this.nowTick = Date.now();
-      const elapsed = (this.nowTick - this.typingStartTime) % 13000;
-      if (elapsed < 7500) {
-        // 0-7.5s: walk forward — Normal 2.5s, Fast 2.5s, Turbo 2.5s
-        // Distance: Normal 16%, Fast 29%, Turbo 55%
+      const elapsed = (this.nowTick - this.typingStartTime) % 16500;
+      if (elapsed < 2500) {
+        // 0-2.5s: napping — stay at start
+        this.catPosition = 0;
+        this.catDirection = 1;
+      } else if (elapsed < 10000) {
+        // 2.5-10s: walk forward — Normal 2.5s, Fast 2.5s, Turbo 2.5s
+        const walkElapsed = elapsed - 2500;
         let pos;
-        if (elapsed < 2500) {
-          pos = (elapsed / 2500) * 16;                     // 0→16%
-        } else if (elapsed < 5000) {
-          pos = 16 + ((elapsed - 2500) / 2500) * 29;      // 16→45%
+        if (walkElapsed < 2500) {
+          pos = (walkElapsed / 2500) * 16;
+        } else if (walkElapsed < 5000) {
+          pos = 16 + ((walkElapsed - 2500) / 2500) * 29;
         } else {
-          pos = 45 + ((elapsed - 5000) / 2500) * 55;      // 45→100%
+          pos = 45 + ((walkElapsed - 5000) / 2500) * 55;
         }
         this.catPosition = pos;
         this.catDirection = 1;
-      } else if (elapsed < 10000) {
-        // 7.5-10s (crazy): sprint back — 100% in 2.5s
-        this.catPosition = (1 - (elapsed - 7500) / 2500) * 100;
+      } else if (elapsed < 12500) {
+        // 10-12.5s: crazy sprint back
+        this.catPosition = (1 - (elapsed - 10000) / 2500) * 100;
         this.catDirection = -1;
       } else {
-        // 10-13s (tired + petted): stay at start, face left
+        // 12.5-16.5s: tired + petted — stay at start
         this.catPosition = 0;
         this.catDirection = -1;
       }

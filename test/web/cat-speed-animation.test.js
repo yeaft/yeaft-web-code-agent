@@ -7,7 +7,7 @@ import { join } from 'path';
  *
  * 1. Cuter cat: bigger head (r=7), rounder eyes (rx=2,ry=2.2), shorter body, eye shine, inner ears
  * 2. Five speed classes: speed-normal, speed-fast, speed-turbo, speed-crazy, speed-tired
- * 3. catSpeed computed in all 3 components (13s cycle via % 13000)
+ * 3. catSpeed computed in all 3 components (16.5s cycle via % 16500)
  * 4. Core principle: LEGS ALWAYS VISIBLE in all five tiers
  *    - Turbo: real legs at 0.14s/±35°, blur as faint trail (opacity 0.2)
  *    - Crazy: semi-transparent legs (opacity 0.3) at 0.08s/±42°, wobble blur (no rotate)
@@ -115,9 +115,10 @@ describe('Speed class binding in templates', () => {
 // =====================================================================
 // catSpeed computed property — five tiers (13s cycle)
 // =====================================================================
-describe('catSpeed computed property (five tiers)', () => {
-  it('MessageList.js has all five speed classes', () => {
+describe('catSpeed computed property (seven tiers)', () => {
+  it('MessageList.js has all seven speed classes', () => {
     expect(messageListJs).toContain('catSpeed');
+    expect(messageListJs).toContain("'speed-napping'");
     expect(messageListJs).toContain("'speed-normal'");
     expect(messageListJs).toContain("'speed-fast'");
     expect(messageListJs).toContain("'speed-turbo'");
@@ -126,42 +127,44 @@ describe('catSpeed computed property (five tiers)', () => {
     expect(messageListJs).toContain("'speed-petted'");
   });
 
-  it('SplitPane.js has all six speed classes', () => {
+  it('SplitPane.js has all seven speed classes', () => {
     expect(splitPaneJs).toContain('catSpeed');
+    expect(splitPaneJs).toContain("'speed-napping'");
     expect(splitPaneJs).toContain("'speed-turbo'");
     expect(splitPaneJs).toContain("'speed-crazy'");
     expect(splitPaneJs).toContain("'speed-tired'");
     expect(splitPaneJs).toContain("'speed-petted'");
   });
 
-  it('CrewChatView.js has all six speed classes', () => {
+  it('CrewChatView.js has all seven speed classes', () => {
     expect(crewChatViewJs).toContain('catSpeed');
+    expect(crewChatViewJs).toContain("'speed-napping'");
     expect(crewChatViewJs).toContain("'speed-turbo'");
     expect(crewChatViewJs).toContain("'speed-crazy'");
     expect(crewChatViewJs).toContain("'speed-tired'");
     expect(crewChatViewJs).toContain("'speed-petted'");
   });
 
-  it('uses % 13000 modulo cycle in all 3 components', () => {
-    expect(messageListJs).toContain('% 13000');
-    expect(splitPaneJs).toContain('% 13000');
-    expect(crewChatViewJs).toContain('% 13000');
+  it('uses % 16500 modulo cycle in all 3 components', () => {
+    expect(messageListJs).toContain('% 16500');
+    expect(splitPaneJs).toContain('% 16500');
+    expect(crewChatViewJs).toContain('% 16500');
   });
 
-  it('speed-tired triggers at 10000ms', () => {
-    expect(messageListJs).toContain('10000');
+  it('speed-tired triggers at 12500ms', () => {
+    expect(messageListJs).toContain('12500');
   });
 
-  it('speed-fast triggers at 2500ms', () => {
-    expect(messageListJs).toContain('2500');
-  });
-
-  it('speed-turbo triggers at 5000ms', () => {
+  it('speed-fast triggers at 5000ms', () => {
     expect(messageListJs).toContain('5000');
   });
 
-  it('speed-crazy triggers at 7500ms', () => {
+  it('speed-turbo triggers at 7500ms', () => {
     expect(messageListJs).toContain('7500');
+  });
+
+  it('speed-crazy triggers at 10000ms', () => {
+    expect(messageListJs).toContain('10000');
   });
 
   it('catSpeed is in the return object (MessageList.js)', () => {
@@ -178,78 +181,86 @@ describe('catSpeed computed property (five tiers)', () => {
 });
 
 // =====================================================================
-// catSpeed behavioral tests (six tiers, 13s cycle)
+// catSpeed behavioral tests (seven tiers, 16.5s cycle)
 // =====================================================================
-describe('catSpeed computation logic (six tiers, 13s cycle)', () => {
+describe('catSpeed computation logic (seven tiers, 16.5s cycle)', () => {
   function computeCatSpeed(typingStartTime, now) {
-    if (!typingStartTime) return 'speed-normal';
-    const elapsed = (now - typingStartTime) % 13000;
-    if (elapsed >= 11500) return 'speed-petted';
-    if (elapsed >= 10000) return 'speed-tired';
-    if (elapsed >= 7500) return 'speed-crazy';
-    if (elapsed >= 5000) return 'speed-turbo';
-    if (elapsed >= 2500) return 'speed-fast';
-    return 'speed-normal';
+    if (!typingStartTime) return 'speed-napping';
+    const elapsed = (now - typingStartTime) % 16500;
+    if (elapsed >= 14500) return 'speed-petted';
+    if (elapsed >= 12500) return 'speed-tired';
+    if (elapsed >= 10000) return 'speed-crazy';
+    if (elapsed >= 7500) return 'speed-turbo';
+    if (elapsed >= 5000) return 'speed-fast';
+    if (elapsed >= 2500) return 'speed-normal';
+    return 'speed-napping';
   }
 
-  it('returns speed-normal when typingStartTime is 0', () => {
-    expect(computeCatSpeed(0, Date.now())).toBe('speed-normal');
+  it('returns speed-napping when typingStartTime is 0', () => {
+    expect(computeCatSpeed(0, Date.now())).toBe('speed-napping');
   });
 
-  it('returns speed-normal when elapsed < 2.5s', () => {
+  it('returns speed-napping when elapsed < 2.5s', () => {
     const now = Date.now();
-    expect(computeCatSpeed(now - 1000, now)).toBe('speed-normal');
-    expect(computeCatSpeed(now - 2499, now)).toBe('speed-normal');
+    expect(computeCatSpeed(now - 1000, now)).toBe('speed-napping');
+    expect(computeCatSpeed(now - 2499, now)).toBe('speed-napping');
   });
 
-  it('returns speed-fast when elapsed is 2.5-4.999s', () => {
+  it('returns speed-normal when elapsed is 2.5-4.999s', () => {
     const now = Date.now();
-    expect(computeCatSpeed(now - 2500, now)).toBe('speed-fast');
-    expect(computeCatSpeed(now - 3500, now)).toBe('speed-fast');
-    expect(computeCatSpeed(now - 4999, now)).toBe('speed-fast');
+    expect(computeCatSpeed(now - 2500, now)).toBe('speed-normal');
+    expect(computeCatSpeed(now - 3500, now)).toBe('speed-normal');
+    expect(computeCatSpeed(now - 4999, now)).toBe('speed-normal');
   });
 
-  it('returns speed-turbo when elapsed is 5-7.499s', () => {
+  it('returns speed-fast when elapsed is 5-7.499s', () => {
     const now = Date.now();
-    expect(computeCatSpeed(now - 5000, now)).toBe('speed-turbo');
-    expect(computeCatSpeed(now - 6000, now)).toBe('speed-turbo');
-    expect(computeCatSpeed(now - 7499, now)).toBe('speed-turbo');
+    expect(computeCatSpeed(now - 5000, now)).toBe('speed-fast');
+    expect(computeCatSpeed(now - 6000, now)).toBe('speed-fast');
+    expect(computeCatSpeed(now - 7499, now)).toBe('speed-fast');
   });
 
-  it('returns speed-crazy when elapsed is 7.5-9.999s', () => {
+  it('returns speed-turbo when elapsed is 7.5-9.999s', () => {
     const now = Date.now();
-    expect(computeCatSpeed(now - 7500, now)).toBe('speed-crazy');
-    expect(computeCatSpeed(now - 9000, now)).toBe('speed-crazy');
-    expect(computeCatSpeed(now - 9999, now)).toBe('speed-crazy');
+    expect(computeCatSpeed(now - 7500, now)).toBe('speed-turbo');
+    expect(computeCatSpeed(now - 9000, now)).toBe('speed-turbo');
+    expect(computeCatSpeed(now - 9999, now)).toBe('speed-turbo');
   });
 
-  it('returns speed-tired when elapsed is 10-11.499s', () => {
+  it('returns speed-crazy when elapsed is 10-12.499s', () => {
     const now = Date.now();
-    expect(computeCatSpeed(now - 10000, now)).toBe('speed-tired');
-    expect(computeCatSpeed(now - 11000, now)).toBe('speed-tired');
-    expect(computeCatSpeed(now - 11499, now)).toBe('speed-tired');
+    expect(computeCatSpeed(now - 10000, now)).toBe('speed-crazy');
+    expect(computeCatSpeed(now - 11000, now)).toBe('speed-crazy');
+    expect(computeCatSpeed(now - 12499, now)).toBe('speed-crazy');
   });
 
-  it('returns speed-petted when elapsed is 11.5-12.999s', () => {
+  it('returns speed-tired when elapsed is 12.5-14.499s', () => {
     const now = Date.now();
-    expect(computeCatSpeed(now - 11500, now)).toBe('speed-petted');
-    expect(computeCatSpeed(now - 12000, now)).toBe('speed-petted');
-    expect(computeCatSpeed(now - 12999, now)).toBe('speed-petted');
+    expect(computeCatSpeed(now - 12500, now)).toBe('speed-tired');
+    expect(computeCatSpeed(now - 13500, now)).toBe('speed-tired');
+    expect(computeCatSpeed(now - 14499, now)).toBe('speed-tired');
   });
 
-  it('cycles back to speed-normal at 13s (modulo 13000)', () => {
+  it('returns speed-petted when elapsed is 14.5-16.499s', () => {
     const now = Date.now();
-    expect(computeCatSpeed(now - 13000, now)).toBe('speed-normal');
-    expect(computeCatSpeed(now - 13500, now)).toBe('speed-normal');
+    expect(computeCatSpeed(now - 14500, now)).toBe('speed-petted');
+    expect(computeCatSpeed(now - 15500, now)).toBe('speed-petted');
+    expect(computeCatSpeed(now - 16499, now)).toBe('speed-petted');
+  });
+
+  it('cycles back to speed-napping at 16.5s (modulo 16500)', () => {
+    const now = Date.now();
+    expect(computeCatSpeed(now - 16500, now)).toBe('speed-napping');
+    expect(computeCatSpeed(now - 17000, now)).toBe('speed-napping');
   });
 
   it('cycles back through all tiers on second cycle', () => {
     const now = Date.now();
-    expect(computeCatSpeed(now - 15500, now)).toBe('speed-fast');   // 15500 % 13000 = 2500
-    expect(computeCatSpeed(now - 18000, now)).toBe('speed-turbo');  // 18000 % 13000 = 5000
-    expect(computeCatSpeed(now - 20500, now)).toBe('speed-crazy');  // 20500 % 13000 = 7500
-    expect(computeCatSpeed(now - 23000, now)).toBe('speed-tired');  // 23000 % 13000 = 10000 → ≥10000
-    expect(computeCatSpeed(now - 26000, now)).toBe('speed-normal'); // 26000 % 13000 = 0
+    expect(computeCatSpeed(now - 19000, now)).toBe('speed-normal');  // 19000 % 16500 = 2500
+    expect(computeCatSpeed(now - 21500, now)).toBe('speed-fast');    // 21500 % 16500 = 5000
+    expect(computeCatSpeed(now - 24000, now)).toBe('speed-turbo');   // 24000 % 16500 = 7500
+    expect(computeCatSpeed(now - 26500, now)).toBe('speed-crazy');   // 26500 % 16500 = 10000
+    expect(computeCatSpeed(now - 33000, now)).toBe('speed-napping'); // 33000 % 16500 = 0
   });
 });
 
