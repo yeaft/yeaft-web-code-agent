@@ -102,6 +102,11 @@ app.use(express.static(webDir, {
   }
 }));
 
+// SPA fallback for OAuth callback routes (MSAL popup redirect)
+app.get('/auth/callback', (req, res) => {
+  res.sendFile(join(webDir, 'index.html'));
+});
+
 // Port proxy routes (must be before express.json() to get raw body)
 registerProxyRoutes(app);
 
