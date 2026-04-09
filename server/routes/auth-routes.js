@@ -1,16 +1,22 @@
-import { CONFIG, isEmailConfigured, isTotpEnabled } from '../config.js';
-import { loginStep1, loginStep2, logout, verifyTotpStep, completeTotpSetup, register } from '../auth.js';
+import { CONFIG, isEmailConfigured, isTotpEnabled, isAadEnabled } from '../config.js';
+import { loginStep1, loginStep2, logout, verifyTotpStep, completeTotpSetup, register, loginWithAad } from '../auth.js';
 
 /**
  * Register authentication-related API routes.
  */
 export function registerAuthRoutes(app, { requireAuth, checkRateLimit }) {
   app.get('/api/auth/mode', (req, res) => {
+    const aadEnabled = isAadEnabled();
     res.json({
       skipAuth: CONFIG.skipAuth,
       emailVerification: isEmailConfigured(),
       totpEnabled: isTotpEnabled(),
-      registrationEnabled: !CONFIG.skipAuth
+      registrationEnabled: !CONFIG.skipAuth,
+      aadEnabled,
+      ...(aadEnabled && {
+        aadClientId: CONFIG.aad.clientId,
+        aadTenantId: CONFIG.aad.tenantId
+      })
     });
   });
 
@@ -96,6 +102,24 @@ export function registerAuthRoutes(app, { requireAuth, checkRateLimit }) {
       res.json(result);
     } catch (err) {
       console.error('Registration error:', err);
+      res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+  });
+
+  // Azure AD (Microsoft Entra ID) SSO login
+  app.post('/api/auth/aad', async (req, res) => {
+    if (!checkRateLimit(req.ip)) {
+      return res.status(429).json({ success: false, error: 'Too many attempts, please try again later' });
+    }
+    const { idToken } = req.body;
+    if (!idToken) {
+      return res.status(400).json({ success: false, error: 'id_token is required' });
+    }
+    try {
+      const result = await loginWithAad(idToken);
+      res.json(result);
+    } catch (err) {
+      console.error('AAD login error:', err);
       res.status(500).json({ success: false, error: 'Internal server error' });
     }
   });

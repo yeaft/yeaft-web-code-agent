@@ -12,6 +12,9 @@ export const useAuthStore = defineStore('auth', {
     emailVerification: false,
     totpEnabled: false,
     registrationEnabled: false,
+    aadEnabled: false,
+    aadClientId: null,
+    aadTenantId: null,
 
     // Current auth state
     isAuthenticated: false,
@@ -47,6 +50,9 @@ export const useAuthStore = defineStore('auth', {
         this.emailVerification = data.emailVerification;
         this.totpEnabled = data.totpEnabled;
         this.registrationEnabled = data.registrationEnabled || false;
+        this.aadEnabled = data.aadEnabled || false;
+        this.aadClientId = data.aadClientId || null;
+        this.aadTenantId = data.aadTenantId || null;
 
         if (this.skipAuth) {
           // In skip auth mode, we're automatically authenticated
@@ -117,6 +123,89 @@ export const useAuthStore = defineStore('auth', {
         return true;
       } catch (err) {
         this.error = err.message || 'Network error';
+        return false;
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    /**
+     * Login with Microsoft (Azure AD) via MSAL.js popup
+     */
+    async loginWithMicrosoft() {
+      if (!this.aadEnabled || !this.aadClientId || !this.aadTenantId) {
+        this.error = 'Microsoft login is not configured';
+        return false;
+      }
+
+      // Check if MSAL library is loaded
+      if (typeof msal === 'undefined' || !msal.PublicClientApplication) {
+        this.error = 'Microsoft authentication library not loaded';
+        return false;
+      }
+
+      this.loading = true;
+      this.error = null;
+
+      try {
+        // Initialize MSAL instance
+        const msalConfig = {
+          auth: {
+            clientId: this.aadClientId,
+            authority: `https://login.microsoftonline.com/${this.aadTenantId}`,
+            redirectUri: window.location.origin
+          },
+          cache: {
+            cacheLocation: 'sessionStorage',
+            storeAuthStateInCookie: false
+          }
+        };
+
+        const msalInstance = new msal.PublicClientApplication(msalConfig);
+        await msalInstance.initialize();
+
+        // Login via popup
+        const loginResponse = await msalInstance.loginPopup({
+          scopes: ['openid', 'profile', 'email']
+        });
+
+        if (!loginResponse || !loginResponse.idToken) {
+          this.error = 'Microsoft login failed: no token received';
+          return false;
+        }
+
+        // Send id_token to our backend for verification
+        const response = await fetch('/api/auth/aad', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ idToken: loginResponse.idToken })
+        });
+
+        const data = await response.json();
+
+        if (!data.success) {
+          this.error = data.error || 'Microsoft login failed';
+          return false;
+        }
+
+        // Login complete
+        this.token = data.token;
+        this.sessionKey = data.sessionKey ? decodeKey(data.sessionKey) : null;
+        this.role = data.role || 'pro';
+        this.isAuthenticated = true;
+        this.loginStep = 'authenticated';
+
+        localStorage.setItem('authToken', data.token);
+        console.log('[Auth] Microsoft AAD login successful, token saved');
+        return true;
+      } catch (err) {
+        // MSAL popup cancelled by user
+        if (err.errorCode === 'user_cancelled' || err.name === 'BrowserAuthError') {
+          this.error = null; // Don't show error for user cancellation
+          return false;
+        }
+        console.error('[Auth] Microsoft login error:', err);
+        this.error = err.message || 'Microsoft login failed';
         return false;
       } finally {
         this.loading = false;

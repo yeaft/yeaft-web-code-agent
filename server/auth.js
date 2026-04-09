@@ -5,3 +5,4 @@ export { verifyTotpStep, completeTotpSetup } from './auth/totp-auth.js';
 export { verifyToken, logout } from './auth/token.js';
 export { verifyAgent, register } from './auth/register.js';
 export { hashPassword, generateSkipAuthSession } from './auth/utils.js';
+export { loginWithAad } from './auth/aad.js';

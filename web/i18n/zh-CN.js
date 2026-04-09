@@ -30,6 +30,8 @@ export default {
   'login.enterPassword': '请输入密码',
   'login.noAccount': '没有账号？',
   'login.registerWithCode': '注册新账号',
+  'login.or': '或',
+  'login.microsoft': '使用 Microsoft 账号登录',
 
   // Login - Errors (used in JS validation)
   'login.error.enterUsername': '请输入用户名',

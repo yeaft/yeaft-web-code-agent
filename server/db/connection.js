@@ -113,7 +113,8 @@ const migrations = [
   `ALTER TABLE users ADD COLUMN agent_secret TEXT`,
   `ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'user'`,
   `ALTER TABLE messages ADD COLUMN metadata TEXT`,
-  `ALTER TABLE sessions ADD COLUMN is_pinned INTEGER DEFAULT 0`
+  `ALTER TABLE sessions ADD COLUMN is_pinned INTEGER DEFAULT 0`,
+  `ALTER TABLE users ADD COLUMN aad_oid TEXT`
 ];
 
 for (const migration of migrations) {
@@ -127,7 +128,8 @@ for (const migration of migrations) {
 // 创建依赖迁移列的索引（在迁移后）
 const postMigrationIndexes = [
   `CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_users_agent_secret ON users(agent_secret)`
+  `CREATE INDEX IF NOT EXISTS idx_users_agent_secret ON users(agent_secret)`,
+  `CREATE INDEX IF NOT EXISTS idx_users_aad_oid ON users(aad_oid)`
 ];
 for (const idx of postMigrationIndexes) {
   try { db.exec(idx); } catch (e) { /* 索引已存在 */ }
@@ -202,6 +204,14 @@ export const stmts = {
 
   getUserTotp: db.prepare(`
     SELECT totp_secret, totp_enabled FROM users WHERE username = ?
+  `),
+
+  getUserByAadOid: db.prepare(`
+    SELECT * FROM users WHERE aad_oid = ?
+  `),
+
+  updateUserAadOid: db.prepare(`
+    UPDATE users SET aad_oid = ? WHERE id = ?
   `),
 
   // Invitation 操作

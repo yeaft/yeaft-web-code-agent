@@ -118,6 +118,15 @@ export const CONFIG = {
     enabled: process.env.TOTP_ENABLED !== 'false', // Enable by default
     issuer: process.env.TOTP_ISSUER || 'Claude Web Chat',
     window: parseInt(process.env.TOTP_WINDOW, 10) || 1 // Allow 1 step before/after
+  },
+
+  // Azure AD (Microsoft Entra ID) SSO settings
+  aad: {
+    enabled: process.env.AAD_ENABLED === 'true',
+    clientId: process.env.AAD_CLIENT_ID || '',
+    tenantId: process.env.AAD_TENANT_ID || '',
+    autoCreateUser: process.env.AAD_AUTO_CREATE_USER !== 'false', // Auto-create local user on first AAD login
+    defaultRole: process.env.AAD_DEFAULT_ROLE || 'pro' // Default role for auto-created AAD users
   }
 };
 
@@ -215,6 +224,14 @@ export function validateProductionConfig() {
   }
 
   return { valid: true, warnings: warnings.length > 0 ? warnings : undefined };
+}
+
+/**
+ * Check if Azure AD SSO is configured
+ * @returns {boolean}
+ */
+export function isAadEnabled() {
+  return CONFIG.aad?.enabled && !!CONFIG.aad.clientId && !!CONFIG.aad.tenantId;
 }
 
 export default CONFIG;

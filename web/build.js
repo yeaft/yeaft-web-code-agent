@@ -62,7 +62,8 @@ const separateVendorJs = [
   'docx-preview.min.js',
   'xlsx.min.js',
   'mermaid.min.js',
-  'html-to-image.min.js'
+  'html-to-image.min.js',
+  'msal-browser.min.js'
 ];
 for (const file of separateVendorJs) {
   const src = join(vendorDir, file);

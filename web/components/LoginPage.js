@@ -33,6 +33,20 @@ export default {
           <button @click="login" :disabled="authStore.loading">
             {{ authStore.loading ? $t('login.loggingIn') : $t('login.login') }}
           </button>
+          <template v-if="authStore.aadEnabled">
+            <div class="login-divider">
+              <span>{{ $t('login.or') }}</span>
+            </div>
+            <button class="ms-login-btn" @click="loginWithMicrosoft" :disabled="authStore.loading">
+              <svg class="ms-logo" viewBox="0 0 21 21" xmlns="http://www.w3.org/2000/svg">
+                <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
+                <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>
+                <rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
+                <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
+              </svg>
+              {{ $t('login.microsoft') }}
+            </button>
+          </template>
           <p v-if="authStore.registrationEnabled" class="register-link">
             {{ $t('login.noAccount') }}<a href="#" @click.prevent="authStore.showRegister()">{{ $t('login.registerWithCode') }}</a>
           </p>
@@ -221,6 +235,11 @@ export default {
       });
     };
 
+    const loginWithMicrosoft = async () => {
+      localError.value = '';
+      await authStore.loginWithMicrosoft();
+    };
+
     const verifyTotp = async () => {
       if (!totpCode.value || totpCode.value.length !== 6) {
         localError.value = t('login.error.enter6Digit');
@@ -354,6 +373,7 @@ export default {
       registerSuccess,
       focusPassword,
       login,
+      loginWithMicrosoft,
       verify,
       verifyTotp,
       setupTotp,

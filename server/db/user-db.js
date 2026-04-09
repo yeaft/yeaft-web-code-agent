@@ -97,5 +97,26 @@ export const userDb = {
     }
     stmts.updateUserTotp.run(totpSecret, totpEnabled ? 1 : 0, username);
     return true;
+  },
+
+  getByAadOid(aadOid) {
+    if (!aadOid) return null;
+    return stmts.getUserByAadOid.get(aadOid) || null;
+  },
+
+  updateAadOid(userId, aadOid) {
+    stmts.updateUserAadOid.run(aadOid, userId);
+  },
+
+  /**
+   * Create a user from AAD profile (no password, linked by aad_oid)
+   */
+  createFromAad(username, email, aadOid, role = 'pro') {
+    const id = generateUserId();
+    const now = Date.now();
+    const agentSecret = generateAgentSecret();
+    stmts.insertUserFull.run(id, username, username, null, email, agentSecret, role, now);
+    stmts.updateUserAadOid.run(aadOid, id);
+    return { id, username, display_name: username, email, aad_oid: aadOid, agent_secret: agentSecret, role, created_at: now };
   }
 };

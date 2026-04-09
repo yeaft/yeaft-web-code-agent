@@ -30,6 +30,8 @@ export default {
   'login.enterPassword': 'Please enter your password',
   'login.noAccount': "Don't have an account?",
   'login.registerWithCode': 'Register',
+  'login.or': 'or',
+  'login.microsoft': 'Sign in with Microsoft',
 
   // Login - Errors (used in JS validation)
   'login.error.enterUsername': 'Please enter your username',

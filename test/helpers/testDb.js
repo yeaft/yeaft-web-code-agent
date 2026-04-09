@@ -81,6 +81,10 @@ const MIGRATIONS = [
   'ALTER TABLE users ADD COLUMN role TEXT DEFAULT \'user\''
 ];
 
+const MIGRATIONS_NEW = [
+  'ALTER TABLE users ADD COLUMN aad_oid TEXT'
+];
+
 const POST_INDEXES = [
   'CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)',
   'CREATE INDEX IF NOT EXISTS idx_users_agent_secret ON users(agent_secret)'
@@ -96,6 +100,9 @@ export function createTestDb() {
   db.pragma('foreign_keys = OFF');
   db.exec(SCHEMA);
   for (const m of MIGRATIONS) {
+    try { db.exec(m); } catch (e) { /* column already exists */ }
+  }
+  for (const m of MIGRATIONS_NEW) {
     try { db.exec(m); } catch (e) { /* column already exists */ }
   }
   for (const idx of POST_INDEXES) {
@@ -144,6 +151,8 @@ export function createDbOperations(db) {
     getAllUsers: db.prepare('SELECT * FROM users ORDER BY created_at DESC'),
     updateUserTotp: db.prepare('UPDATE users SET totp_secret = ?, totp_enabled = ? WHERE username = ?'),
     getUserTotp: db.prepare('SELECT totp_secret, totp_enabled FROM users WHERE username = ?'),
+    getUserByAadOid: db.prepare('SELECT * FROM users WHERE aad_oid = ?'),
+    updateUserAadOid: db.prepare('UPDATE users SET aad_oid = ? WHERE id = ?'),
     insertInvitation: db.prepare('INSERT INTO invitations (id, created_by, created_at, expires_at, role) VALUES (?, ?, ?, ?, ?)'),
     getInvitation: db.prepare('SELECT * FROM invitations WHERE id = ?'),
     useInvitation: db.prepare('UPDATE invitations SET used_by = ?, used_at = ? WHERE id = ?'),
@@ -233,6 +242,21 @@ export function createDbOperations(db) {
       }
       stmts.updateUserTotp.run(totpSecret, totpEnabled ? 1 : 0, username);
       return true;
+    },
+    getByAadOid(aadOid) {
+      if (!aadOid) return null;
+      return stmts.getUserByAadOid.get(aadOid) || null;
+    },
+    updateAadOid(userId, aadOid) {
+      stmts.updateUserAadOid.run(aadOid, userId);
+    },
+    createFromAad(username, email, aadOid, role = 'pro') {
+      const id = generateUserId();
+      const now = Date.now();
+      const agentSecret = generateAgentSecret();
+      stmts.insertUserFull.run(id, username, username, null, email, agentSecret, role, now);
+      stmts.updateUserAadOid.run(aadOid, id);
+      return { id, username, display_name: username, email, aad_oid: aadOid, agent_secret: agentSecret, role, created_at: now };
     }
   };
 
