@@ -591,3 +591,339 @@ describe('CSS: normal speed animation timing', () => {
     expect(chatMessagesCss).toMatch(/speed-crazy[^}]*tail-group[^}]*0\.12s/);
   });
 });
+
+// =====================================================================
+// Dog animation: SVG presence + consistency
+// =====================================================================
+describe('Dog SVG elements present in all 3 components', () => {
+  it('all 3 components have the dog SVG viewBox', () => {
+    expect(messageListJs).toContain('viewBox="0 0 120 28"');
+    expect(splitPaneJs).toContain('viewBox="0 0 120 28"');
+    expect(crewChatViewJs).toContain('viewBox="0 0 120 28"');
+  });
+
+  it('all 3 components have svg-dog-scene class', () => {
+    expect(messageListJs).toContain('svg-dog-scene');
+    expect(splitPaneJs).toContain('svg-dog-scene');
+    expect(crewChatViewJs).toContain('svg-dog-scene');
+  });
+
+  it('all 3 components have Spike (big dog) elements', () => {
+    expect(messageListJs).toContain('svg-dog-spike-stud');
+    expect(splitPaneJs).toContain('svg-dog-spike-stud');
+    expect(crewChatViewJs).toContain('svg-dog-spike-stud');
+  });
+
+  it('all 3 components have Teddy (small dog) fluff element', () => {
+    expect(messageListJs).toContain('svg-dog-fluff');
+    expect(splitPaneJs).toContain('svg-dog-fluff');
+    expect(crewChatViewJs).toContain('svg-dog-fluff');
+  });
+
+  it('all 3 components have dog leash paths', () => {
+    expect(messageListJs).toContain('svg-dog-leash-l');
+    expect(messageListJs).toContain('svg-dog-leash-r');
+    expect(splitPaneJs).toContain('svg-dog-leash-l');
+    expect(splitPaneJs).toContain('svg-dog-leash-r');
+    expect(crewChatViewJs).toContain('svg-dog-leash-l');
+    expect(crewChatViewJs).toContain('svg-dog-leash-r');
+  });
+
+  it('all 3 components have snap FX', () => {
+    expect(messageListJs).toContain('svg-dog-snap-fx');
+    expect(splitPaneJs).toContain('svg-dog-snap-fx');
+    expect(crewChatViewJs).toContain('svg-dog-snap-fx');
+  });
+
+  it('all 3 components have question marks for stunned phase', () => {
+    expect(messageListJs).toContain('svg-dog-question-l');
+    expect(messageListJs).toContain('svg-dog-question-r');
+    expect(splitPaneJs).toContain('svg-dog-question-l');
+    expect(crewChatViewJs).toContain('svg-dog-question-l');
+  });
+
+  it('all 3 components have dog posts', () => {
+    expect(messageListJs).toContain('svg-dog-post');
+    expect(splitPaneJs).toContain('svg-dog-post');
+    expect(crewChatViewJs).toContain('svg-dog-post');
+  });
+});
+
+// =====================================================================
+// Dog animation: animationType ref/data
+// =====================================================================
+describe('animationType selection', () => {
+  it('MessageList.js has animationType ref', () => {
+    expect(messageListJs).toContain("animationType");
+    expect(messageListJs).toContain("Math.random() < 0.5");
+  });
+
+  it('SplitPane.js has animationType ref', () => {
+    expect(splitPaneJs).toContain("animationType");
+    expect(splitPaneJs).toContain("Math.random() < 0.5");
+  });
+
+  it('CrewChatView.js has animationType data', () => {
+    expect(crewChatViewJs).toContain("animationType");
+    expect(crewChatViewJs).toContain("Math.random() < 0.5");
+  });
+
+  it('all 3 components use v-if for cat/dog template switching', () => {
+    expect(messageListJs).toContain("animationType === 'cat'");
+    expect(splitPaneJs).toContain("animationType === 'cat'");
+    expect(crewChatViewJs).toContain("animationType === 'cat'");
+  });
+});
+
+// =====================================================================
+// Dog animation: phase logic (14s cycle)
+// =====================================================================
+describe('Dog phase computation logic (14s cycle)', () => {
+  function computeDogPhase(typingStartTime, now) {
+    const elapsed = (now - typingStartTime) % 14000;
+    if (elapsed < 3000) return 'bark';
+    if (elapsed < 8000) return 'approach';
+    if (elapsed < 9000) return 'snap';
+    if (elapsed < 11000) return 'stunned';
+    return 'retreat';
+  }
+
+  it('returns bark when elapsed < 3s', () => {
+    const now = Date.now();
+    expect(computeDogPhase(now - 0, now)).toBe('bark');
+    expect(computeDogPhase(now - 2999, now)).toBe('bark');
+  });
+
+  it('returns approach when elapsed is 3-7.999s', () => {
+    const now = Date.now();
+    expect(computeDogPhase(now - 3000, now)).toBe('approach');
+    expect(computeDogPhase(now - 5000, now)).toBe('approach');
+    expect(computeDogPhase(now - 7999, now)).toBe('approach');
+  });
+
+  it('returns snap when elapsed is 8-8.999s', () => {
+    const now = Date.now();
+    expect(computeDogPhase(now - 8000, now)).toBe('snap');
+    expect(computeDogPhase(now - 8999, now)).toBe('snap');
+  });
+
+  it('returns stunned when elapsed is 9-10.999s', () => {
+    const now = Date.now();
+    expect(computeDogPhase(now - 9000, now)).toBe('stunned');
+    expect(computeDogPhase(now - 10999, now)).toBe('stunned');
+  });
+
+  it('returns retreat when elapsed is 11-13.999s', () => {
+    const now = Date.now();
+    expect(computeDogPhase(now - 11000, now)).toBe('retreat');
+    expect(computeDogPhase(now - 13999, now)).toBe('retreat');
+  });
+
+  it('cycles back to bark at 14s', () => {
+    const now = Date.now();
+    expect(computeDogPhase(now - 14000, now)).toBe('bark');
+    expect(computeDogPhase(now - 15000, now)).toBe('bark');
+  });
+});
+
+// =====================================================================
+// Dog position logic
+// =====================================================================
+describe('Dog position computation', () => {
+  function computeDogPositions(typingStartTime, now) {
+    const elapsed = (now - typingStartTime) % 14000;
+    let posL, posR;
+    if (elapsed < 3000) {
+      posL = 5; posR = 95;
+    } else if (elapsed < 8000) {
+      const t = (elapsed - 3000) / 5000;
+      posL = 5 + t * 37; posR = 95 - t * 37;
+    } else if (elapsed < 9000) {
+      const t = (elapsed - 8000) / 1000;
+      posL = 42 + t * 6; posR = 58 - t * 6;
+    } else if (elapsed < 11000) {
+      posL = 48; posR = 52;
+    } else {
+      const t = (elapsed - 11000) / 3000;
+      posL = 48 - t * 43; posR = 52 + t * 43;
+    }
+    return { posL, posR };
+  }
+
+  it('dogs start at edges (5/95) during bark', () => {
+    const now = Date.now();
+    const { posL, posR } = computeDogPositions(now - 1000, now);
+    expect(posL).toBe(5);
+    expect(posR).toBe(95);
+  });
+
+  it('dogs approach center during approach phase', () => {
+    const now = Date.now();
+    const { posL, posR } = computeDogPositions(now - 5500, now);
+    expect(posL).toBeGreaterThan(5);
+    expect(posR).toBeLessThan(95);
+    expect(posL).toBeLessThan(posR);
+  });
+
+  it('dogs are close together during stunned', () => {
+    const now = Date.now();
+    const { posL, posR } = computeDogPositions(now - 10000, now);
+    expect(posL).toBe(48);
+    expect(posR).toBe(52);
+  });
+
+  it('dogs return to edges after full cycle', () => {
+    const now = Date.now();
+    const { posL, posR } = computeDogPositions(now - 14000, now);
+    expect(posL).toBe(5);
+    expect(posR).toBe(95);
+  });
+});
+
+// =====================================================================
+// Dog CSS: phase classes and keyframes
+// =====================================================================
+describe('Dog CSS: phase classes and keyframes', () => {
+  it('has dog-phase-bark class', () => {
+    expect(chatMessagesCss).toContain('.dog-phase-bark');
+  });
+
+  it('has dog-phase-approach class', () => {
+    expect(chatMessagesCss).toContain('.dog-phase-approach');
+  });
+
+  it('has dog-phase-snap class', () => {
+    expect(chatMessagesCss).toContain('.dog-phase-snap');
+  });
+
+  it('has dog-phase-stunned class', () => {
+    expect(chatMessagesCss).toContain('.dog-phase-stunned');
+  });
+
+  it('has dog-phase-retreat class', () => {
+    expect(chatMessagesCss).toContain('.dog-phase-retreat');
+  });
+
+  it('has dog bark-open keyframe', () => {
+    expect(chatMessagesCss).toContain('@keyframes svg-dog-bark-open');
+  });
+
+  it('has dog bark-head keyframe', () => {
+    expect(chatMessagesCss).toContain('@keyframes svg-dog-bark-head');
+  });
+
+  it('has dog tail-wag keyframe', () => {
+    expect(chatMessagesCss).toContain('@keyframes svg-dog-tail-wag');
+  });
+
+  it('has dog snap-burst keyframe', () => {
+    expect(chatMessagesCss).toContain('@keyframes svg-dog-snap-burst');
+  });
+
+  it('has dog stun-dip keyframe', () => {
+    expect(chatMessagesCss).toContain('@keyframes svg-dog-stun-dip');
+  });
+
+  it('has dog question-pop keyframe', () => {
+    expect(chatMessagesCss).toContain('@keyframes svg-dog-question-pop');
+  });
+
+  it('has dog walk keyframes', () => {
+    expect(chatMessagesCss).toContain('@keyframes svg-dog-walk-a');
+    expect(chatMessagesCss).toContain('@keyframes svg-dog-walk-b');
+  });
+
+  it('bark phase shows bark mouth', () => {
+    expect(chatMessagesCss).toMatch(/dog-phase-bark\s+\.svg-dog-bark-mouth[^}]*opacity/);
+  });
+
+  it('snap phase hides leash', () => {
+    expect(chatMessagesCss).toMatch(/dog-phase-snap\s+\.svg-dog-leash[^}]*opacity:\s*0/);
+  });
+
+  it('stunned phase shows question marks', () => {
+    expect(chatMessagesCss).toMatch(/dog-phase-stunned\s+\.svg-dog-question[^}]*opacity:\s*1/);
+  });
+
+  it('retreat phase hides leash', () => {
+    expect(chatMessagesCss).toMatch(/dog-phase-retreat\s+\.svg-dog-leash[^}]*opacity:\s*0/);
+  });
+});
+
+// =====================================================================
+// Dog CSS: base styles
+// =====================================================================
+describe('Dog CSS: base styles', () => {
+  it('has svg-dog-scene style', () => {
+    expect(chatMessagesCss).toContain('.svg-dog-scene');
+  });
+
+  it('has svg-dog-silhouette opacity', () => {
+    expect(chatMessagesCss).toMatch(/\.svg-dog-silhouette\s*\{[^}]*opacity/);
+  });
+
+  it('has svg-dog-body fill', () => {
+    expect(chatMessagesCss).toMatch(/\.svg-dog-body[^{]*\{[^}]*fill/);
+  });
+
+  it('has svg-dog-fluff style', () => {
+    expect(chatMessagesCss).toContain('.svg-dog-fluff');
+  });
+
+  it('has svg-dog-bark-mouth hidden by default', () => {
+    expect(chatMessagesCss).toMatch(/\.svg-dog-bark-mouth\s*\{[^}]*opacity:\s*0/);
+  });
+
+  it('has svg-dog-question hidden by default', () => {
+    expect(chatMessagesCss).toMatch(/\.svg-dog-question\s*\{[^}]*opacity:\s*0/);
+  });
+});
+
+// =====================================================================
+// Dog CSS: status colors
+// =====================================================================
+describe('Dog CSS: status colors', () => {
+  it('disconnected status includes dog body', () => {
+    expect(chatMessagesCss).toContain('.typing-indicator.status-disconnected .svg-dog-body');
+  });
+
+  it('disconnected status includes dog head', () => {
+    expect(chatMessagesCss).toContain('.typing-indicator.status-disconnected .svg-dog-head');
+  });
+
+  it('compacting status includes dog body', () => {
+    expect(chatMessagesCss).toContain('.typing-indicator.status-compacting .svg-dog-body');
+  });
+
+  it('session-lost status includes dog body', () => {
+    expect(chatMessagesCss).toContain('.typing-indicator.status-session-lost .svg-dog-body');
+  });
+});
+
+// =====================================================================
+// Preview mode: ?preview=animation URL param
+// =====================================================================
+describe('Preview mode URL parameter', () => {
+  it('MessageList.js reads preview URL param', () => {
+    expect(messageListJs).toContain("get('preview')");
+    expect(messageListJs).toContain("previewShowTypingDots");
+  });
+
+  it('SplitPane.js reads preview URL param', () => {
+    expect(splitPaneJs).toContain("get('preview')");
+    expect(splitPaneJs).toContain("previewShowTypingDots");
+  });
+
+  it('CrewChatView.js reads preview URL param', () => {
+    expect(crewChatViewJs).toContain("get('preview')");
+    expect(crewChatViewJs).toContain("previewIsWaitingResponse");
+  });
+
+  it('all 3 support cat, dog, and animation preview values', () => {
+    for (const src of [messageListJs, splitPaneJs, crewChatViewJs]) {
+      expect(src).toContain("'cat'");
+      expect(src).toContain("'dog'");
+      expect(src).toContain("'animation'");
+    }
+  });
+});

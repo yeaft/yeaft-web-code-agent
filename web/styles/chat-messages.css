@@ -231,6 +231,40 @@
 .typing-indicator.status-session-lost .svg-cat-leg-blur,
 .typing-indicator.status-cli-exited .svg-cat-leg-blur { fill: rgba(229, 124, 35, 0.6); stroke: rgba(229, 124, 35, 0.6); }
 
+/* Dog body color follows dot status — same pattern as cat */
+.typing-indicator.status-disconnected .svg-dog-body,
+.typing-indicator.status-disconnected .svg-dog-head,
+.typing-indicator.status-disconnected .svg-dog-ear,
+.typing-indicator.status-disconnected .svg-dog-jaw,
+.typing-indicator.status-disconnected .svg-dog-leg,
+.typing-indicator.status-disconnected .svg-dog-tail,
+.typing-indicator.status-agent-offline .svg-dog-body,
+.typing-indicator.status-agent-offline .svg-dog-head,
+.typing-indicator.status-agent-offline .svg-dog-ear,
+.typing-indicator.status-agent-offline .svg-dog-jaw,
+.typing-indicator.status-agent-offline .svg-dog-leg,
+.typing-indicator.status-agent-offline .svg-dog-tail { fill: rgba(229, 57, 53, 1); stroke: rgba(229, 57, 53, 1); }
+
+.typing-indicator.status-compacting .svg-dog-body,
+.typing-indicator.status-compacting .svg-dog-head,
+.typing-indicator.status-compacting .svg-dog-ear,
+.typing-indicator.status-compacting .svg-dog-jaw,
+.typing-indicator.status-compacting .svg-dog-leg,
+.typing-indicator.status-compacting .svg-dog-tail { fill: rgba(91, 155, 213, 1); stroke: rgba(91, 155, 213, 1); }
+
+.typing-indicator.status-session-lost .svg-dog-body,
+.typing-indicator.status-session-lost .svg-dog-head,
+.typing-indicator.status-session-lost .svg-dog-ear,
+.typing-indicator.status-session-lost .svg-dog-jaw,
+.typing-indicator.status-session-lost .svg-dog-leg,
+.typing-indicator.status-session-lost .svg-dog-tail,
+.typing-indicator.status-cli-exited .svg-dog-body,
+.typing-indicator.status-cli-exited .svg-dog-head,
+.typing-indicator.status-cli-exited .svg-dog-ear,
+.typing-indicator.status-cli-exited .svg-dog-jaw,
+.typing-indicator.status-cli-exited .svg-dog-leg,
+.typing-indicator.status-cli-exited .svg-dog-tail { fill: rgba(229, 124, 35, 1); stroke: rgba(229, 124, 35, 1); }
+
 .typing-status-text {
   margin-left: 8px;
   font-size: 12px;
@@ -746,6 +780,174 @@
   78%      { transform: scaleY(3.2) translateY(1.5px); opacity: 0.25; }
   82%      { transform: scaleY(0.5) translateY(0); opacity: 0.1; }
   90%, 100% { transform: scaleY(1) translateY(0); opacity: 0.35; }
+}
+
+/* ================================================================
+   DOG ANIMATION — Spike (big) + Teddy (small) leashed standoff
+   ================================================================ */
+
+/* Dog scene container — spans full typing indicator width */
+.svg-dog-scene {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 8px;
+  display: inline-block;
+  width: 100%;
+  height: 28px;
+}
+.svg-dog-scene svg { width: 100%; height: 100%; overflow: visible; }
+
+/* Dog body parts — silhouette group prevents overlap */
+.svg-dog-silhouette { opacity: 0.6; }
+.svg-dog-body { fill: var(--text-secondary); }
+.svg-dog-head { fill: var(--text-secondary); }
+.svg-dog-fluff { fill: var(--text-secondary); opacity: 0.25; }
+.svg-dog-ear { fill: var(--text-secondary); }
+.svg-dog-jaw { fill: var(--text-secondary); opacity: 0.8; }
+.svg-dog-leg { fill: var(--text-secondary); }
+.svg-dog-tail { fill: none; stroke: var(--text-secondary); stroke-linecap: round; }
+.svg-dog-collar { fill: var(--text-secondary); opacity: 0.7; }
+.svg-dog-spike-stud { fill: var(--text-secondary); opacity: 0.5; }
+.svg-dog-eye { fill: var(--cat-eye-fill); }
+.svg-dog-pupil { fill: var(--cat-pupil-fill); opacity: 0.7; }
+.svg-dog-eye-shine { fill: var(--cat-eye-shine, #ffffff); opacity: 0.8; }
+.svg-dog-nose { fill: var(--text-secondary); opacity: 0.7; }
+.svg-dog-mouth { stroke: var(--text-secondary); opacity: 0.5; fill: none; }
+.svg-dog-bark-mouth { fill: var(--text-secondary); opacity: 0; }
+.svg-dog-tongue { fill: var(--text-secondary); opacity: 0; }
+.svg-dog-leash { stroke: var(--text-secondary); opacity: 0.4; fill: none; stroke-linecap: round; }
+.svg-dog-post { fill: var(--text-secondary); opacity: 0.3; }
+.svg-dog-snap-fx { opacity: 0; }
+.svg-dog-snap-line { stroke: var(--text-secondary); stroke-width: 1.5; opacity: 0.8; }
+.svg-dog-question { fill: var(--text-secondary); opacity: 0; font-weight: bold; font-family: sans-serif; }
+
+/* Default: legs have walking animation */
+.svg-dog-leg-fl, .svg-dog-leg-fr, .svg-dog-leg-bl, .svg-dog-leg-br {
+  transform-origin: center top;
+}
+
+/* ========== Dog Phase: Bark (0-3s) — at edges, barking ========== */
+.dog-phase-bark .svg-dog-bark-mouth { opacity: 0.6; animation: svg-dog-bark-open 0.4s ease-in-out infinite; }
+.dog-phase-bark .svg-dog-tongue { opacity: 0.5; animation: svg-dog-bark-open 0.4s ease-in-out infinite; }
+.dog-phase-bark .svg-dog-mouth { opacity: 0; }
+.dog-phase-bark .svg-dog-tail-group { animation: svg-dog-tail-wag 0.25s ease-in-out infinite alternate; }
+.dog-phase-bark .svg-dog-head-group { animation: svg-dog-bark-head 0.4s ease-in-out infinite; }
+.dog-phase-bark .svg-dog-body { animation: svg-dog-bark-lunge 0.4s ease-in-out infinite; }
+
+/* ========== Dog Phase: Approach (3-8s) — walking toward center ========== */
+.dog-phase-approach .svg-dog-bark-mouth { opacity: 0.5; animation: svg-dog-bark-open 0.6s ease-in-out infinite; }
+.dog-phase-approach .svg-dog-tongue { opacity: 0.4; animation: svg-dog-bark-open 0.6s ease-in-out infinite; }
+.dog-phase-approach .svg-dog-mouth { opacity: 0; }
+.dog-phase-approach .svg-dog-leg-fl { animation: svg-dog-walk-a 0.4s ease-in-out infinite; }
+.dog-phase-approach .svg-dog-leg-fr { animation: svg-dog-walk-b 0.4s ease-in-out infinite; }
+.dog-phase-approach .svg-dog-leg-bl { animation: svg-dog-walk-b 0.4s ease-in-out infinite; }
+.dog-phase-approach .svg-dog-leg-br { animation: svg-dog-walk-a 0.4s ease-in-out infinite; }
+.dog-phase-approach .svg-dog-tail-group { animation: svg-dog-tail-wag 0.3s ease-in-out infinite alternate; }
+.dog-phase-approach .svg-dog-head-group { animation: svg-dog-bark-head 0.6s ease-in-out infinite; }
+
+/* ========== Dog Phase: Snap (8-9s) — leash breaks ========== */
+.dog-phase-snap .svg-dog-leash { opacity: 0; }
+.dog-phase-snap .svg-dog-snap-fx { opacity: 1; animation: svg-dog-snap-burst 1s ease-out forwards; }
+.dog-phase-snap .svg-dog-bark-mouth { opacity: 0; }
+.dog-phase-snap .svg-dog-tongue { opacity: 0; }
+.dog-phase-snap .svg-dog-head-group { animation: svg-dog-stumble 1s ease-out; }
+.dog-phase-snap .svg-dog-body { animation: svg-dog-stumble-body 1s ease-out; }
+
+/* ========== Dog Phase: Stunned (9-11s) — frozen, "?" ========== */
+.dog-phase-stunned .svg-dog-leash { opacity: 0; }
+.dog-phase-stunned .svg-dog-bark-mouth { opacity: 0; }
+.dog-phase-stunned .svg-dog-tongue { opacity: 0; }
+.dog-phase-stunned .svg-dog-pupil { transform: scale(1.5); transform-origin: center; }
+.dog-phase-stunned .svg-dog-head-group { animation: svg-dog-stun-dip 2s ease-in-out; }
+.dog-phase-stunned .svg-dog-question { opacity: 1; animation: svg-dog-question-pop 2s ease-in-out; }
+.dog-phase-stunned .svg-dog-tail-group { animation: svg-dog-tail-droop 2s ease-in-out forwards; }
+
+/* ========== Dog Phase: Retreat (11-14s) — walk back ========== */
+.dog-phase-retreat .svg-dog-leash { opacity: 0; }
+.dog-phase-retreat .svg-dog-bark-mouth { opacity: 0; }
+.dog-phase-retreat .svg-dog-tongue { opacity: 0; }
+.dog-phase-retreat .svg-dog-leg-fl { animation: svg-dog-walk-a 0.5s ease-in-out infinite; }
+.dog-phase-retreat .svg-dog-leg-fr { animation: svg-dog-walk-b 0.5s ease-in-out infinite; }
+.dog-phase-retreat .svg-dog-leg-bl { animation: svg-dog-walk-b 0.5s ease-in-out infinite; }
+.dog-phase-retreat .svg-dog-leg-br { animation: svg-dog-walk-a 0.5s ease-in-out infinite; }
+.dog-phase-retreat .svg-dog-tail-group { animation: svg-dog-tail-slow 0.8s ease-in-out infinite alternate; }
+
+/* ========== Dog Keyframes ========== */
+/* Bark: mouth opens/closes */
+@keyframes svg-dog-bark-open {
+  0%, 100% { transform: scaleY(0.3); opacity: 0.2; }
+  50%      { transform: scaleY(1); opacity: 0.7; }
+}
+/* Bark head: lunge forward */
+@keyframes svg-dog-bark-head {
+  0%, 100% { transform: translateX(0); }
+  40%      { transform: translateX(1.5px) rotate(-3deg); }
+}
+/* Bark body: lunge forward */
+@keyframes svg-dog-bark-lunge {
+  0%, 100% { transform: translateX(0); }
+  40%      { transform: translateX(0.8px); }
+}
+/* Walking legs */
+@keyframes svg-dog-walk-a {
+  0%   { transform: rotate(15deg); }
+  50%  { transform: rotate(-15deg); }
+  100% { transform: rotate(15deg); }
+}
+@keyframes svg-dog-walk-b {
+  0%   { transform: rotate(-15deg); }
+  50%  { transform: rotate(15deg); }
+  100% { transform: rotate(-15deg); }
+}
+/* Tail wag: fast during bark */
+@keyframes svg-dog-tail-wag {
+  0%   { transform: rotate(15deg); }
+  100% { transform: rotate(-15deg); }
+}
+/* Tail slow wag during retreat */
+@keyframes svg-dog-tail-slow {
+  0%   { transform: rotate(5deg); }
+  100% { transform: rotate(-8deg); }
+}
+/* Tail droop when stunned */
+@keyframes svg-dog-tail-droop {
+  0%   { transform: rotate(0deg); }
+  100% { transform: rotate(-20deg); }
+}
+/* Snap burst */
+@keyframes svg-dog-snap-burst {
+  0%   { opacity: 1; transform: scale(0.5); }
+  30%  { opacity: 1; transform: scale(1.2); }
+  100% { opacity: 0; transform: scale(1.5); }
+}
+/* Stumble head on snap */
+@keyframes svg-dog-stumble {
+  0%   { transform: translateX(0); }
+  30%  { transform: translateX(3px) rotate(-5deg); }
+  60%  { transform: translateX(1px) rotate(2deg); }
+  100% { transform: translateX(0) rotate(0deg); }
+}
+/* Stumble body on snap */
+@keyframes svg-dog-stumble-body {
+  0%   { transform: translateX(0); }
+  30%  { transform: translateX(2px); }
+  100% { transform: translateX(0); }
+}
+/* Stunned head dip */
+@keyframes svg-dog-stun-dip {
+  0%   { transform: translateY(0) rotate(0deg); }
+  40%  { transform: translateY(2px) rotate(5deg); }
+  70%  { transform: translateY(1px) rotate(3deg); }
+  100% { transform: translateY(0) rotate(0deg); }
+}
+/* Question mark pop */
+@keyframes svg-dog-question-pop {
+  0%   { opacity: 0; transform: translateY(3px) scale(0.5); }
+  20%  { opacity: 1; transform: translateY(0) scale(1.2); }
+  40%  { opacity: 1; transform: translateY(-1px) scale(1); }
+  80%  { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateY(-2px) scale(0.8); }
 }
 
 .typing-refresh-btn:hover {
