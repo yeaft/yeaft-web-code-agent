@@ -294,13 +294,24 @@ export default {
       const elapsed = (now.value - typingStartTime.value) % 13000;
 
       if (elapsed < 6000) {
-        // 0-6s: walk forward 0% → 100% (accelerating across normal/fast/turbo)
-        catPosition.value = (elapsed / 6000) * 100;
+        // 0-6s: walk forward 0% → 100% with step-synced micro-oscillation
+        const base = (elapsed / 6000) * 100;
+        // Step frequency matches leg animation: normal 0.5s, fast 0.25s, turbo 0.14s
+        let stepPeriod = 500;
+        if (elapsed >= 4000) stepPeriod = 140;
+        else if (elapsed >= 2000) stepPeriod = 250;
+        const stepPhase = (elapsed % stepPeriod) / stepPeriod;
+        // Sine wave: push-off gives +1.5% advance, plant phase gives -1.5% pause
+        const stepOffset = Math.sin(stepPhase * Math.PI * 2) * 1.5;
+        catPosition.value = Math.max(0, Math.min(100, base + stepOffset));
         catDirection.value = 1;
       } else if (elapsed < 10000) {
-        // 6-10s (crazy): sprint back 100% → 0%
+        // 6-10s (crazy): sprint back 100% → 0% with rapid step oscillation
         const crazyProgress = (elapsed - 6000) / 4000;
-        catPosition.value = (1 - crazyProgress) * 100;
+        const base = (1 - crazyProgress) * 100;
+        const stepPhase = ((elapsed - 6000) % 80) / 80;
+        const stepOffset = Math.sin(stepPhase * Math.PI * 2) * 1.0;
+        catPosition.value = Math.max(0, Math.min(100, base + stepOffset));
         catDirection.value = -1;
       } else {
         // 10-13s (tired): stay at 0%, pant in place

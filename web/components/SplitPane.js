@@ -205,10 +205,20 @@ export default {
       now.value = Date.now();
       const elapsed = (now.value - typingStartTime.value) % 13000;
       if (elapsed < 6000) {
-        catPosition.value = (elapsed / 6000) * 100;
+        const base = (elapsed / 6000) * 100;
+        let stepPeriod = 500;
+        if (elapsed >= 4000) stepPeriod = 140;
+        else if (elapsed >= 2000) stepPeriod = 250;
+        const stepPhase = (elapsed % stepPeriod) / stepPeriod;
+        const stepOffset = Math.sin(stepPhase * Math.PI * 2) * 1.5;
+        catPosition.value = Math.max(0, Math.min(100, base + stepOffset));
         catDirection.value = 1;
       } else if (elapsed < 10000) {
-        catPosition.value = (1 - (elapsed - 6000) / 4000) * 100;
+        const crazyProgress = (elapsed - 6000) / 4000;
+        const base = (1 - crazyProgress) * 100;
+        const stepPhase = ((elapsed - 6000) % 80) / 80;
+        const stepOffset = Math.sin(stepPhase * Math.PI * 2) * 1.0;
+        catPosition.value = Math.max(0, Math.min(100, base + stepOffset));
         catDirection.value = -1;
       } else {
         catPosition.value = 0;

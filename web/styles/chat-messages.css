@@ -168,7 +168,7 @@
   display: inline-block;
 }
 
-.typing-indicator > span:not(.typing-status-text):not(.svg-running-cat) {
+.typing-indicator > span:not(.typing-status-text):not(.svg-cat-walk) {
   width: 8px;
   height: 8px;
   background: var(--text-secondary);
@@ -176,8 +176,8 @@
   animation: typing 1.4s infinite;
 }
 
-.typing-indicator > span:not(.typing-status-text):not(.svg-running-cat):nth-child(2) { animation-delay: 0.2s; }
-.typing-indicator > span:not(.typing-status-text):not(.svg-running-cat):nth-child(3) { animation-delay: 0.4s; }
+.typing-indicator > span:not(.typing-status-text):not(.svg-cat-walk):nth-child(2) { animation-delay: 0.2s; }
+.typing-indicator > span:not(.typing-status-text):not(.svg-cat-walk):nth-child(3) { animation-delay: 0.4s; }
 
 @keyframes typing {
   0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
@@ -306,8 +306,8 @@
 .svg-cat-ear-r { transform-origin: 28px 4px; animation: svg-ear-twitch-r 1.6s ease-in-out infinite; }
 
 @keyframes svg-cat-bounce {
-  0% { transform: scale(1.2) translateY(0); }
-  100% { transform: scale(1.2) translateY(-1.5px); }
+  0% { transform: scale(1.2); }
+  100% { transform: scale(1.2) translateY(-0.5px); }
 }
 
 @keyframes svg-leg-front-l {
@@ -355,8 +355,8 @@
 .svg-running-cat.speed-fast .svg-cat-body { transform: scaleY(0.92); transform-origin: 15px 17px; }
 
 @keyframes svg-cat-bounce-fast {
-  0% { transform: scale(1.2) translateY(0) translateX(0); }
-  100% { transform: scale(1.2) translateY(-2px) translateX(1px); }
+  0% { transform: scale(1.2); }
+  100% { transform: scale(1.2) translateY(-0.5px); }
 }
 
 /* ========== Speed: Turbo (4-6s) — very fast legs ±35°, blur as faint trail ========== */
@@ -372,9 +372,9 @@
 .svg-running-cat.speed-turbo .svg-cat-ear-r { animation: svg-ear-flatten 0.28s ease-in-out infinite alternate-reverse; }
 
 @keyframes svg-cat-bounce-turbo {
-  0% { transform: scale(1.2) translateY(0) translateX(0); }
-  50% { transform: scale(1.2) translateY(-2px) translateX(1px); }
-  100% { transform: scale(1.2) translateY(-1px) translateX(-0.5px); }
+  0% { transform: scale(1.2); }
+  50% { transform: scale(1.2) translateY(-0.5px); }
+  100% { transform: scale(1.2); }
 }
 
 @keyframes svg-leg-turbo-fl {
@@ -420,9 +420,9 @@
 .svg-running-cat.speed-crazy .svg-cat-ear-r { animation: svg-ear-flatten 0.18s ease-in-out infinite alternate-reverse; }
 
 @keyframes svg-cat-bounce-crazy {
-  0% { transform: scale(1.2) translateY(0) translateX(0); }
-  40% { transform: scale(1.2) translateY(-3px) translateX(2px); }
-  100% { transform: scale(1.2) translateY(-1px) translateX(-1px); }
+  0% { transform: scale(1.2); }
+  40% { transform: scale(1.2) translateY(-0.5px); }
+  100% { transform: scale(1.2); }
 }
 
 @keyframes svg-leg-crazy-fl {

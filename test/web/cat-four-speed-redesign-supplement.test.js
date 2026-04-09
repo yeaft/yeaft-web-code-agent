@@ -332,36 +332,35 @@ describe('Speed class assignment in all 3 components', () => {
 // =============================================================================
 // 7. Bounce keyframe progression: amplitude increases with speed
 // =============================================================================
-describe('Bounce amplitude increases with speed tier', () => {
-  it('normal bounce: translateY(-1.5px) — subtle', () => {
+describe('Bounce amplitude consistent across speed tiers (level ground)', () => {
+  it('normal bounce: subtle translateY — max 0.5px for consistent height', () => {
     const kf = chatMessagesCss.match(/@keyframes svg-cat-bounce\s*\{[\s\S]*?\n\}/);
     expect(kf).not.toBeNull();
-    expect(kf[0]).toContain('translateY(-1.5px)');
+    expect(kf[0]).toContain('translateY(-0.5px)');
   });
 
-  it('fast bounce: translateY(-2px) — more active', () => {
+  it('fast bounce: same subtle translateY as normal', () => {
     const kf = chatMessagesCss.match(/@keyframes svg-cat-bounce-fast\s*\{[\s\S]*?\n\}/);
     expect(kf).not.toBeNull();
-    expect(kf[0]).toContain('translateY(-2px)');
+    expect(kf[0]).toContain('translateY(-0.5px)');
   });
 
-  it('turbo bounce: translateY(-2px) — same height, adds X wobble', () => {
+  it('turbo bounce: same subtle translateY', () => {
     const kf = chatMessagesCss.match(/@keyframes svg-cat-bounce-turbo\s*\{[\s\S]*?\n\}/);
     expect(kf).not.toBeNull();
-    expect(kf[0]).toContain('translateY(-2px)');
-    expect(kf[0]).toContain('translateX');
+    expect(kf[0]).toContain('translateY(-0.5px)');
   });
 
-  it('crazy bounce: translateY(-3px) — maximum bounce', () => {
+  it('crazy bounce: same subtle translateY', () => {
     const kf = chatMessagesCss.match(/@keyframes svg-cat-bounce-crazy\s*\{[\s\S]*?\n\}/);
     expect(kf).not.toBeNull();
-    expect(kf[0]).toContain('translateY(-3px)');
+    expect(kf[0]).toContain('translateY(-0.5px)');
   });
 
-  it('fast bounce adds X movement (side-to-side)', () => {
-    const kf = chatMessagesCss.match(/@keyframes svg-cat-bounce-fast\s*\{[\s\S]*?\n\}/);
-    expect(kf).not.toBeNull();
-    expect(kf[0]).toContain('translateX(1px)');
+  it('no horizontal drift in bounce keyframes (removed translateX)', () => {
+    const kfFast = chatMessagesCss.match(/@keyframes svg-cat-bounce-fast\s*\{[\s\S]*?\n\}/);
+    expect(kfFast).not.toBeNull();
+    expect(kfFast[0]).not.toContain('translateX');
   });
 
   it('crazy bounce has 3-step keyframe (more erratic)', () => {

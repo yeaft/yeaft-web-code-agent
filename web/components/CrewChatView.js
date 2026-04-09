@@ -628,11 +628,20 @@ export default {
       this.nowTick = Date.now();
       const elapsed = (this.nowTick - this.typingStartTime) % 13000;
       if (elapsed < 6000) {
-        this.catPosition = (elapsed / 6000) * 100;
+        const base = (elapsed / 6000) * 100;
+        let stepPeriod = 500;
+        if (elapsed >= 4000) stepPeriod = 140;
+        else if (elapsed >= 2000) stepPeriod = 250;
+        const stepPhase = (elapsed % stepPeriod) / stepPeriod;
+        const stepOffset = Math.sin(stepPhase * Math.PI * 2) * 1.5;
+        this.catPosition = Math.max(0, Math.min(100, base + stepOffset));
         this.catDirection = 1;
       } else if (elapsed < 10000) {
         const crazyProgress = (elapsed - 6000) / 4000;
-        this.catPosition = (1 - crazyProgress) * 100;
+        const base = (1 - crazyProgress) * 100;
+        const stepPhase = ((elapsed - 6000) % 80) / 80;
+        const stepOffset = Math.sin(stepPhase * Math.PI * 2) * 1.0;
+        this.catPosition = Math.max(0, Math.min(100, base + stepOffset));
         this.catDirection = -1;
       } else {
         this.catPosition = 0;

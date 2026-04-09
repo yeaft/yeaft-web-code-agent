@@ -411,17 +411,17 @@ describe('Scenario 5: Dark theme color adaptation via CSS variables', () => {
 });
 
 // =============================================================================
-// 9. Dot animation selector updated from .running-cat to .svg-running-cat
+// 9. Dot animation selector updated — excludes .svg-cat-walk (walk wrapper is direct child of typing-indicator)
 // =============================================================================
 describe('Dot animation selector updated', () => {
-  it('dot animation excludes .svg-running-cat (not old .running-cat)', () => {
-    expect(chatMessagesCss).toContain(':not(.svg-running-cat)');
+  it('dot animation excludes .svg-cat-walk (walk wrapper that is direct child)', () => {
+    expect(chatMessagesCss).toContain(':not(.svg-cat-walk)');
     expect(chatMessagesCss).not.toContain(':not(.running-cat)');
   });
 
   it('nth-child selectors for dot delays use updated exclusion', () => {
-    expect(chatMessagesCss).toContain(':not(.svg-running-cat):nth-child(2)');
-    expect(chatMessagesCss).toContain(':not(.svg-running-cat):nth-child(3)');
+    expect(chatMessagesCss).toContain(':not(.svg-cat-walk):nth-child(2)');
+    expect(chatMessagesCss).toContain(':not(.svg-cat-walk):nth-child(3)');
   });
 });
 
