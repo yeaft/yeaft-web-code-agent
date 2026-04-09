@@ -294,27 +294,15 @@ export default {
       const elapsed = (now.value - typingStartTime.value) % 13000;
 
       if (elapsed < 6000) {
-        // 0-6s: walk forward 0% → 100% with step-synced micro-oscillation
-        const base = (elapsed / 6000) * 100;
-        // Step frequency matches leg animation: normal 0.5s, fast 0.25s, turbo 0.14s
-        let stepPeriod = 500;
-        if (elapsed >= 4000) stepPeriod = 140;
-        else if (elapsed >= 2000) stepPeriod = 250;
-        const stepPhase = (elapsed % stepPeriod) / stepPeriod;
-        // Sine wave: push-off gives +1.5% advance, plant phase gives -1.5% pause
-        const stepOffset = Math.sin(stepPhase * Math.PI * 2) * 1.5;
-        catPosition.value = Math.max(0, Math.min(100, base + stepOffset));
+        // 0-6s: walk forward — smooth linear progress
+        catPosition.value = (elapsed / 6000) * 100;
         catDirection.value = 1;
       } else if (elapsed < 10000) {
-        // 6-10s (crazy): sprint back 100% → 0% with rapid step oscillation
-        const crazyProgress = (elapsed - 6000) / 4000;
-        const base = (1 - crazyProgress) * 100;
-        const stepPhase = ((elapsed - 6000) % 80) / 80;
-        const stepOffset = Math.sin(stepPhase * Math.PI * 2) * 1.0;
-        catPosition.value = Math.max(0, Math.min(100, base + stepOffset));
+        // 6-10s (crazy): sprint back — smooth linear return
+        catPosition.value = (1 - (elapsed - 6000) / 4000) * 100;
         catDirection.value = -1;
       } else {
-        // 10-13s (tired): stay at 0%, pant in place
+        // 10-13s (tired): stay at start, pant in place
         catPosition.value = 0;
         catDirection.value = 1;
       }
@@ -361,11 +349,12 @@ export default {
       return 'speed-normal';
     });
 
-    // Cat walk style — applied to walk wrapper span (position + flip)
+    // Cat walk style — position range: 40px (after dots) to calc(100% - 40px)
     const catStyle = Vue.computed(() => {
       const pos = catPosition.value;
       const dir = catDirection.value;
-      const style = { left: pos + '%' };
+      const frac = pos / 100;
+      const style = { left: `calc(40px + (100% - 80px) * ${frac})` };
       if (dir < 0) style.transform = 'scaleX(-1)';
       return style;
     });
