@@ -157,12 +157,11 @@ export default {
               <ellipse class="svg-cat-leg-blur svg-cat-leg-blur-inner" cx="16" cy="22" rx="1.5" ry="1"/>
               <!-- Petting hand — only visible in speed-petted mode -->
               <g class="svg-cat-petting-hand">
-                <line class="svg-cat-hand-arm" x1="24" y1="-8" x2="24" y2="-1" stroke-width="3" stroke-linecap="round"/>
-                <ellipse class="svg-cat-hand-palm" cx="24" cy="0.5" rx="4" ry="2.5"/>
-                <ellipse class="svg-cat-finger" cx="20.8" cy="2.8" rx="1" ry="1.5"/>
-                <ellipse class="svg-cat-finger" cx="22.8" cy="3.3" rx="0.9" ry="1.6"/>
-                <ellipse class="svg-cat-finger" cx="25" cy="3.3" rx="0.9" ry="1.6"/>
-                <ellipse class="svg-cat-finger" cx="27" cy="2.8" rx="1" ry="1.5"/>
+                <line class="svg-cat-hand-arm" x1="24" y1="-3" x2="24" y2="0" stroke-width="2.5" stroke-linecap="round"/>
+                <ellipse class="svg-cat-hand-palm" cx="24" cy="1.5" rx="3.5" ry="2"/>
+                <ellipse class="svg-cat-finger" cx="21.5" cy="3.2" rx="0.9" ry="1.2"/>
+                <ellipse class="svg-cat-finger" cx="24" cy="3.5" rx="0.9" ry="1.3"/>
+                <ellipse class="svg-cat-finger" cx="26.5" cy="3.2" rx="0.9" ry="1.2"/>
               </g>
               <!-- Napping bed — soft oval cushion, only visible in napping mode -->
               <ellipse class="svg-cat-bed" cx="15" cy="24" rx="12" ry="3"/>
@@ -429,13 +428,13 @@ export default {
     },
     catSpeed() {
       if (!this.typingStartTime) return 'speed-napping';
-      const elapsed = (this.nowTick - this.typingStartTime) % 16500;
-      if (elapsed >= 14500) return 'speed-petted';
-      if (elapsed >= 12500) return 'speed-tired';
-      if (elapsed >= 10000) return 'speed-crazy';
-      if (elapsed >= 7500) return 'speed-turbo';
-      if (elapsed >= 5000) return 'speed-fast';
-      if (elapsed >= 2500) return 'speed-normal';
+      const elapsed = (this.nowTick - this.typingStartTime) % 19000;
+      if (elapsed >= 16000) return 'speed-petted';
+      if (elapsed >= 14000) return 'speed-tired';
+      if (elapsed >= 11500) return 'speed-crazy';
+      if (elapsed >= 9000) return 'speed-turbo';
+      if (elapsed >= 6500) return 'speed-fast';
+      if (elapsed >= 4000) return 'speed-normal';
       return 'speed-napping';
     },
     catStyle() {
@@ -648,14 +647,14 @@ export default {
     _updateCatWalk() {
       if (!this.typingStartTime) return;
       this.nowTick = Date.now();
-      const elapsed = (this.nowTick - this.typingStartTime) % 16500;
-      if (elapsed < 2500) {
-        // 0-2.5s: napping — stay at start
+      const elapsed = (this.nowTick - this.typingStartTime) % 19000;
+      if (elapsed < 4000) {
+        // 0-4s: napping — stay at start
         this.catPosition = 0;
         this.catDirection = 1;
-      } else if (elapsed < 10000) {
-        // 2.5-10s: walk forward — Normal 2.5s, Fast 2.5s, Turbo 2.5s
-        const walkElapsed = elapsed - 2500;
+      } else if (elapsed < 11500) {
+        // 4-11.5s: walk forward — Normal 2.5s, Fast 2.5s, Turbo 2.5s
+        const walkElapsed = elapsed - 4000;
         let pos;
         if (walkElapsed < 2500) {
           pos = (walkElapsed / 2500) * 16;
@@ -666,12 +665,12 @@ export default {
         }
         this.catPosition = pos;
         this.catDirection = 1;
-      } else if (elapsed < 12500) {
-        // 10-12.5s: crazy sprint back
-        this.catPosition = (1 - (elapsed - 10000) / 2500) * 100;
+      } else if (elapsed < 14000) {
+        // 11.5-14s: crazy sprint back
+        this.catPosition = (1 - (elapsed - 11500) / 2500) * 100;
         this.catDirection = -1;
       } else {
-        // 12.5-16.5s: tired + petted — stay at start
+        // 14-19s: tired + petted — stay at start
         this.catPosition = 0;
         this.catDirection = -1;
       }

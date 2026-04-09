@@ -577,7 +577,7 @@
 .svg-cat-finger { fill: var(--text-secondary); opacity: 0.5; }
 /* Napping bed + drool — hidden by default */
 .svg-cat-bed { fill: var(--text-secondary); opacity: 0; }
-.svg-cat-drool { fill: var(--text-secondary); opacity: 0; }
+.svg-cat-drool { fill: var(--text-secondary); opacity: 0; transform-origin: 26.5px 14px; }
 /* Closed eyes — hidden by default */
 .svg-cat-closed-eye { opacity: 0; stroke: var(--cat-eye, #3a3a3a); }
 
@@ -589,11 +589,11 @@
   animation: svg-body-panting 1.4s ease-in-out infinite;
   transform-origin: 15px 17px;
 }
-/* Legs wobbly — same as tired */
-.svg-running-cat.speed-petted .svg-cat-leg-fl { animation: svg-leg-tired-wobble-a 1.4s ease-in-out infinite; }
-.svg-running-cat.speed-petted .svg-cat-leg-fr { animation: svg-leg-tired-wobble-b 1.4s ease-in-out infinite; }
-.svg-running-cat.speed-petted .svg-cat-leg-bl { animation: svg-leg-tired-wobble-b 1.4s ease-in-out infinite; }
-.svg-running-cat.speed-petted .svg-cat-leg-br { animation: svg-leg-tired-wobble-a 1.4s ease-in-out infinite; }
+/* Legs wobbly then tuck (standing 0-2s, curling up 2-3s) */
+.svg-running-cat.speed-petted .svg-cat-leg-fl { animation: svg-leg-tired-wobble-a 1.4s ease-in-out infinite, svg-pet-leg-tuck 3s ease-in-out forwards; }
+.svg-running-cat.speed-petted .svg-cat-leg-fr { animation: svg-leg-tired-wobble-b 1.4s ease-in-out infinite, svg-pet-leg-tuck 3s ease-in-out forwards; }
+.svg-running-cat.speed-petted .svg-cat-leg-bl { animation: svg-leg-tired-wobble-b 1.4s ease-in-out infinite, svg-pet-leg-tuck 3s ease-in-out forwards; }
+.svg-running-cat.speed-petted .svg-cat-leg-br { animation: svg-leg-tired-wobble-a 1.4s ease-in-out infinite, svg-pet-leg-tuck 3s ease-in-out forwards; }
 /* Blur hidden */
 .svg-running-cat.speed-petted .svg-cat-leg-blur { opacity: 0; }
 .svg-running-cat.speed-petted .svg-cat-leg-blur-inner { opacity: 0; }
@@ -613,11 +613,11 @@
 .svg-running-cat.speed-petted .svg-cat-breath-1 { animation: svg-breath-puff-1 1.4s ease-out infinite; }
 .svg-running-cat.speed-petted .svg-cat-breath-2 { animation: svg-breath-puff-2 1.4s ease-out 0.15s infinite; }
 .svg-running-cat.speed-petted .svg-cat-breath-3 { animation: svg-breath-puff-3 1.4s ease-out 0.3s infinite; }
-/* Petting hand: fade in + stroke animation — fingers rest on head (y=2-5) */
+/* Petting hand: fade in + stroke animation — compact hand rests on head */
 .svg-running-cat.speed-petted .svg-cat-petting-hand {
   opacity: 1;
-  animation: svg-hand-pet 1s ease-in-out infinite;
-  transform-origin: 24px -4px;
+  animation: svg-hand-pet 1.4s ease-in-out infinite;
+  transform-origin: 24px 0px;
 }
 
 /* Hand stroking — gentle side-to-side, fingers brush across head top */
@@ -634,17 +634,24 @@
   60%  { transform: rotate(5deg) translateY(2px); }
   100% { transform: rotate(3deg) translateY(0.5px); }
 }
+/* Legs gradually tuck under body during petting (3s forwards) */
+@keyframes svg-pet-leg-tuck {
+  0%, 55%   { opacity: 1; }
+  70%       { opacity: 0.3; }
+  85%, 100% { opacity: 0; }
+}
 
-/* ========== Speed: Napping (0-2.5s) — cat curled up sleeping in bed ========== */
+/* ========== Speed: Napping (0-4s) — cat curled up sleeping, then waking ========== */
+/* Phase: 0-2.5s sleep (breathe), 2.5-4s wake (eye blinks) */
 /* Whole cat: gentle breathing rise/fall */
-.svg-running-cat.speed-napping { animation: svg-nap-breathe 2.5s ease-in-out infinite; }
+.svg-running-cat.speed-napping { animation: svg-nap-breathe 2s ease-in-out infinite; }
 /* Bed visible */
 .svg-running-cat.speed-napping .svg-cat-bed { opacity: 0.12; }
 /* Drool droplet */
 .svg-running-cat.speed-napping .svg-cat-drool { animation: svg-drool-drip 3s ease-in-out infinite; }
 /* Body: gentle breathing pulse */
 .svg-running-cat.speed-napping .svg-cat-body {
-  animation: svg-nap-breathe-body 2.5s ease-in-out infinite;
+  animation: svg-nap-breathe-body 2s ease-in-out infinite;
   transform-origin: 15px 17px;
 }
 /* Legs: tucked under body */
@@ -656,14 +663,14 @@
 .svg-running-cat.speed-napping .svg-cat-leg-blur-inner { opacity: 0; }
 /* Head: lowered, resting */
 .svg-running-cat.speed-napping .svg-cat-head-group {
-  animation: svg-nap-breathe-head 2.5s ease-in-out infinite;
+  animation: svg-nap-breathe-head 2s ease-in-out infinite;
   transform-origin: 20px 13px;
 }
-/* Closed eyes */
-.svg-running-cat.speed-napping .svg-cat-eye { opacity: 0; }
-.svg-running-cat.speed-napping .svg-cat-pupil { opacity: 0; }
-.svg-running-cat.speed-napping .svg-cat-eye-shine { opacity: 0; }
-.svg-running-cat.speed-napping .svg-cat-closed-eye { opacity: 1; }
+/* Eyes: closed during sleep, blink open during wakeup (4s cycle) */
+.svg-running-cat.speed-napping .svg-cat-eye { animation: svg-nap-eye-open 4s ease-in-out infinite; }
+.svg-running-cat.speed-napping .svg-cat-pupil { animation: svg-nap-eye-open 4s ease-in-out infinite; }
+.svg-running-cat.speed-napping .svg-cat-eye-shine { animation: svg-nap-eye-open 4s ease-in-out infinite; }
+.svg-running-cat.speed-napping .svg-cat-closed-eye { animation: svg-nap-eye-close 4s ease-in-out infinite; }
 /* Tail: curled around body, very slow sway */
 .svg-running-cat.speed-napping .svg-cat-tail-group { animation: svg-tail-nap-curl 3s ease-in-out infinite; }
 /* Ears: very gentle twitch (sleeping cat's ears still twitch) */
@@ -709,12 +716,36 @@
   50%  { transform: rotate(-5deg); }
   100% { transform: rotate(-3deg); }
 }
-/* Drool: droplet grows, falls, resets */
+/* Eyes: closed during sleep (0-62.5%), blink twice (62.5-93.75%), open (93.75-100%) */
+@keyframes svg-nap-eye-open {
+  0%, 62.5%    { opacity: 0; }
+  65%          { opacity: 1; }
+  68%          { opacity: 0; }
+  75%          { opacity: 1; }
+  78%          { opacity: 0; }
+  85%          { opacity: 1; }
+  88%          { opacity: 0; }
+  93.75%, 100% { opacity: 1; }
+}
+/* Closed eye lines: inverse — visible during sleep, blink off during wake */
+@keyframes svg-nap-eye-close {
+  0%, 62.5%    { opacity: 1; }
+  65%          { opacity: 0; }
+  68%          { opacity: 1; }
+  75%          { opacity: 0; }
+  78%          { opacity: 1; }
+  85%          { opacity: 0; }
+  88%          { opacity: 1; }
+  93.75%, 100% { opacity: 0; }
+}
+/* Drool: hangs from mouth, slowly stretches down, snaps back */
 @keyframes svg-drool-drip {
-  0%, 50% { transform: translateY(0) scale(1); opacity: 0.35; }
-  70%     { transform: translateY(1.5px) scale(1.3); opacity: 0.3; }
-  85%     { transform: translateY(3px) scale(0.6); opacity: 0.15; }
-  95%, 100% { transform: translateY(0) scale(0.8); opacity: 0; }
+  0%       { transform: scaleY(1) translateY(0); opacity: 0.35; }
+  40%      { transform: scaleY(1.8) translateY(0.5px); opacity: 0.35; }
+  65%      { transform: scaleY(2.5) translateY(1px); opacity: 0.3; }
+  78%      { transform: scaleY(3.2) translateY(1.5px); opacity: 0.25; }
+  82%      { transform: scaleY(0.5) translateY(0); opacity: 0.1; }
+  90%, 100% { transform: scaleY(1) translateY(0); opacity: 0.35; }
 }
 
 .typing-refresh-btn:hover {
