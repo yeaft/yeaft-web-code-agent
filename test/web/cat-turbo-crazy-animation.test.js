@@ -1,12 +1,13 @@
 /**
- * task-252 supplementary tests: Running Cat four-speed redesign.
+ * task-252/255 supplementary tests: Running Cat five-speed redesign with tired cycle.
  *
- * Core principle: LEGS ALWAYS VISIBLE in all four tiers.
+ * Core principle: LEGS ALWAYS VISIBLE in all five tiers.
  * Test scenarios:
  * 1. Turbo (4-6s): real legs at 0.14s/±35° with faint blur trail
- * 2. Crazy (6s+): semi-transparent legs at 0.08s/±42° with wobble blur (no rotate)
- * 3. Four-speed 0-2-4-6s progression: speed ramps naturally
+ * 2. Crazy (6-10s): semi-transparent legs at 0.08s/±42° with wobble blur (no rotate)
+ * 3. Five-speed 0-2-4-6-10-13s progression with 13s cycle
  * 4. scale(1.2) preserved across all tiers
+ * 5. Tired (10-13s): slow legs 0.9s/±8°, head nod, droopy tail/ears
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import { readFileSync } from 'fs';
@@ -107,7 +108,7 @@ describe('Scenario 2: Crazy semi-transparent legs with wobble', () => {
   });
 
   it('no rotate animation in crazy mode (no svg-leg-rotate)', () => {
-    const crazySection = chatMessagesCss.match(/Speed: Crazy[\s\S]*?\.typing-refresh/);
+    const crazySection = chatMessagesCss.match(/Speed: Crazy[\s\S]*?Speed: Tired/);
     expect(crazySection).not.toBeNull();
     expect(crazySection[0]).not.toContain('svg-leg-rotate');
   });
@@ -169,9 +170,9 @@ describe('Scenario 2b: Blur ellipses within body bounds', () => {
 });
 
 // =============================================================================
-// 3. Four-speed transitions: 0-2-4-6s natural progression
+// 3. Five-speed transitions: 0-2-4-6-10-13s cycle
 // =============================================================================
-describe('Scenario 3: Four-speed 0-2-4-6s transitions', () => {
+describe('Scenario 3: Five-speed 13s cycle transitions', () => {
   it('normal mode: standard leg animation (0.5s)', () => {
     expect(chatMessagesCss).toMatch(/\.svg-cat-leg-fl\s*\{[^}]*animation:.*0\.5s/);
   });
@@ -185,9 +186,14 @@ describe('Scenario 3: Four-speed 0-2-4-6s transitions', () => {
     expect(chatMessagesCss).toMatch(/speed-turbo\s+\.svg-cat-leg-blur\s*\{[^}]*opacity:\s*0\.2/);
   });
 
-  it('crazy mode (6s+): legs at 0.08s semi-transparent + wobble blur', () => {
+  it('crazy mode (6-10s): legs at 0.08s semi-transparent + wobble blur', () => {
     expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-fl\s*\{[^}]*0\.08s[^}]*opacity:\s*0\.3/);
     expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur\s*\{[^}]*svg-leg-blur-wobble\b/);
+  });
+
+  it('tired mode (10-13s): slow legs at 0.9s, blur hidden', () => {
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-leg-fl\s*\{[^}]*0\.9s/);
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-leg-blur\s*\{[^}]*opacity:\s*0/);
   });
 
   it('bounce durations decrease with speed: normal > fast > turbo > crazy', () => {
@@ -211,11 +217,20 @@ describe('Scenario 3: Four-speed 0-2-4-6s transitions', () => {
     expect(turbo).toBeGreaterThan(crazy);
   });
 
+  it('tired bounce is slowest (1.2s > normal 0.6s)', () => {
+    const tiredMatch = chatMessagesCss.match(/speed-tired\s*\{[^}]*svg-cat-bounce-tired\s+(\d+\.?\d*)s/);
+    expect(tiredMatch).toBeTruthy();
+    expect(parseFloat(tiredMatch[1])).toBe(1.2);
+  });
+
   it('catSpeed computed uses correct thresholds in all 3 components', () => {
     for (const src of [messageListJs, splitPaneJs, crewChatViewJs]) {
+      expect(src).toContain('10000');
       expect(src).toContain('6000');
       expect(src).toContain('4000');
       expect(src).toContain('2000');
+      expect(src).toContain('13000');
+      expect(src).toContain("'speed-tired'");
       expect(src).toContain("'speed-crazy'");
       expect(src).toContain("'speed-turbo'");
       expect(src).toContain("'speed-fast'");
@@ -247,6 +262,12 @@ describe('Scenario 4: scale(1.2) preserved', () => {
 
   it('crazy bounce has scale(1.2)', () => {
     const kf = chatMessagesCss.match(/@keyframes svg-cat-bounce-crazy\s*\{[\s\S]*?\n\}/);
+    expect(kf).not.toBeNull();
+    expect(kf[0]).toContain('scale(1.2)');
+  });
+
+  it('tired bounce has scale(1.2)', () => {
+    const kf = chatMessagesCss.match(/@keyframes svg-cat-bounce-tired\s*\{[\s\S]*?\n\}/);
     expect(kf).not.toBeNull();
     expect(kf[0]).toContain('scale(1.2)');
   });
