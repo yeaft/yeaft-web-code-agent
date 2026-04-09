@@ -153,7 +153,7 @@ export const useAuthStore = defineStore('auth', {
           auth: {
             clientId: this.aadClientId,
             authority: `https://login.microsoftonline.com/${this.aadTenantId}`,
-            redirectUri: window.location.origin
+            redirectUri: window.location.origin + '/auth/callback'
           },
           cache: {
             cacheLocation: 'sessionStorage',
