@@ -445,6 +445,59 @@
   100% { transform: rotate(30deg); }
 }
 
+/* ========== Speed: Tired (10-13s) — exhausted cat winding down ========== */
+.svg-running-cat.speed-tired { animation: svg-cat-bounce-tired 1.2s ease-in-out infinite alternate; }
+.svg-running-cat.speed-tired .svg-cat-body { transform: scaleY(0.95) translateY(2px); transform-origin: 15px 17px; }
+/* Slow plodding legs — barely moving ±8° */
+.svg-running-cat.speed-tired .svg-cat-leg-fl { animation: svg-leg-tired-fl 0.9s ease-in-out infinite alternate; }
+.svg-running-cat.speed-tired .svg-cat-leg-fr { animation: svg-leg-tired-fr 0.9s ease-in-out infinite alternate-reverse; }
+.svg-running-cat.speed-tired .svg-cat-leg-bl { animation: svg-leg-tired-bl 0.9s ease-in-out infinite alternate-reverse; }
+.svg-running-cat.speed-tired .svg-cat-leg-br { animation: svg-leg-tired-br 0.9s ease-in-out infinite alternate; }
+/* Blur hidden in tired mode — no motion blur needed */
+.svg-running-cat.speed-tired .svg-cat-leg-blur { opacity: 0; }
+.svg-running-cat.speed-tired .svg-cat-leg-blur-inner { opacity: 0; }
+/* Head nod — gentle bobbing */
+.svg-running-cat.speed-tired .svg-cat-head { animation: svg-head-tired-nod 1.5s ease-in-out infinite; transform-origin: 15px 12px; }
+/* Droopy tail — hangs low, slow sway */
+.svg-running-cat.speed-tired .svg-cat-tail-group { animation: svg-tail-tired 2s ease-in-out infinite alternate; }
+/* Droopy ears — static droop, no animation */
+.svg-running-cat.speed-tired .svg-cat-ear-l { transform: rotate(8deg); transform-origin: 12px 8px; animation: none; }
+.svg-running-cat.speed-tired .svg-cat-ear-r { transform: rotate(-8deg); transform-origin: 18px 8px; animation: none; }
+
+@keyframes svg-cat-bounce-tired {
+  0% { transform: scale(1.2) translateY(0); }
+  50% { transform: scale(1.2) translateY(-1px); }
+  100% { transform: scale(1.2) translateY(0); }
+}
+
+@keyframes svg-leg-tired-fl {
+  0% { transform: rotate(8deg); }
+  100% { transform: rotate(-8deg); }
+}
+@keyframes svg-leg-tired-fr {
+  0% { transform: rotate(8deg); }
+  100% { transform: rotate(-8deg); }
+}
+@keyframes svg-leg-tired-bl {
+  0% { transform: rotate(-8deg); }
+  100% { transform: rotate(8deg); }
+}
+@keyframes svg-leg-tired-br {
+  0% { transform: rotate(-8deg); }
+  100% { transform: rotate(8deg); }
+}
+
+@keyframes svg-head-tired-nod {
+  0% { transform: rotate(0deg); }
+  50% { transform: rotate(5deg) translateY(1px); }
+  100% { transform: rotate(0deg); }
+}
+
+@keyframes svg-tail-tired {
+  0% { transform: rotate(-25deg); }
+  100% { transform: rotate(-12deg); }
+}
+
 .typing-refresh-btn:hover {
   background: var(--sidebar-hover);
   color: var(--text-primary);

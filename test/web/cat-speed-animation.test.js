@@ -3,14 +3,15 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 
 /**
- * Tests for task-252: Running Cat — four-speed animation redesign
+ * Tests for task-252/255: Running Cat — five-speed animation with tired cycle
  *
  * 1. Cuter cat: bigger head (r=7), rounder eyes (rx=2,ry=2.2), shorter body, eye shine, inner ears
- * 2. Four speed classes: speed-normal, speed-fast, speed-turbo, speed-crazy
- * 3. catSpeed computed in all 3 components (2s fast, 4s turbo, 6s crazy)
- * 4. Core principle: LEGS ALWAYS VISIBLE in all four tiers
+ * 2. Five speed classes: speed-normal, speed-fast, speed-turbo, speed-crazy, speed-tired
+ * 3. catSpeed computed in all 3 components (13s cycle via % 13000)
+ * 4. Core principle: LEGS ALWAYS VISIBLE in all five tiers
  *    - Turbo: real legs at 0.14s/±35°, blur as faint trail (opacity 0.2)
  *    - Crazy: semi-transparent legs (opacity 0.3) at 0.08s/±42°, wobble blur (no rotate)
+ *    - Tired: slow legs at 0.9s/±8°, head nod, droopy tail/ears, no blur
  * 5. 20% larger cat via scale(1.2)
  */
 
@@ -112,27 +113,40 @@ describe('Speed class binding in templates', () => {
 });
 
 // =====================================================================
-// catSpeed computed property — four tiers (0-2-4-6s)
+// catSpeed computed property — five tiers (13s cycle)
 // =====================================================================
-describe('catSpeed computed property (four tiers)', () => {
-  it('MessageList.js has all four speed classes', () => {
+describe('catSpeed computed property (five tiers)', () => {
+  it('MessageList.js has all five speed classes', () => {
     expect(messageListJs).toContain('catSpeed');
     expect(messageListJs).toContain("'speed-normal'");
     expect(messageListJs).toContain("'speed-fast'");
     expect(messageListJs).toContain("'speed-turbo'");
     expect(messageListJs).toContain("'speed-crazy'");
+    expect(messageListJs).toContain("'speed-tired'");
   });
 
-  it('SplitPane.js has all four speed classes', () => {
+  it('SplitPane.js has all five speed classes', () => {
     expect(splitPaneJs).toContain('catSpeed');
     expect(splitPaneJs).toContain("'speed-turbo'");
     expect(splitPaneJs).toContain("'speed-crazy'");
+    expect(splitPaneJs).toContain("'speed-tired'");
   });
 
-  it('CrewChatView.js has all four speed classes', () => {
+  it('CrewChatView.js has all five speed classes', () => {
     expect(crewChatViewJs).toContain('catSpeed');
     expect(crewChatViewJs).toContain("'speed-turbo'");
     expect(crewChatViewJs).toContain("'speed-crazy'");
+    expect(crewChatViewJs).toContain("'speed-tired'");
+  });
+
+  it('uses % 13000 modulo cycle in all 3 components', () => {
+    expect(messageListJs).toContain('% 13000');
+    expect(splitPaneJs).toContain('% 13000');
+    expect(crewChatViewJs).toContain('% 13000');
+  });
+
+  it('speed-tired triggers at 10000ms', () => {
+    expect(messageListJs).toContain('10000');
   });
 
   it('speed-fast triggers at 2000ms', () => {
@@ -161,12 +175,13 @@ describe('catSpeed computed property (four tiers)', () => {
 });
 
 // =====================================================================
-// catSpeed behavioral tests (four tiers)
+// catSpeed behavioral tests (five tiers, 13s cycle)
 // =====================================================================
-describe('catSpeed computation logic (four tiers)', () => {
+describe('catSpeed computation logic (five tiers, 13s cycle)', () => {
   function computeCatSpeed(typingStartTime, now) {
     if (!typingStartTime) return 'speed-normal';
-    const elapsed = now - typingStartTime;
+    const elapsed = (now - typingStartTime) % 13000;
+    if (elapsed >= 10000) return 'speed-tired';
     if (elapsed >= 6000) return 'speed-crazy';
     if (elapsed >= 4000) return 'speed-turbo';
     if (elapsed >= 2000) return 'speed-fast';
@@ -197,11 +212,33 @@ describe('catSpeed computation logic (four tiers)', () => {
     expect(computeCatSpeed(now - 5999, now)).toBe('speed-turbo');
   });
 
-  it('returns speed-crazy when elapsed >= 6s', () => {
+  it('returns speed-crazy when elapsed is 6-9.999s', () => {
     const now = Date.now();
     expect(computeCatSpeed(now - 6000, now)).toBe('speed-crazy');
-    expect(computeCatSpeed(now - 10000, now)).toBe('speed-crazy');
-    expect(computeCatSpeed(now - 30000, now)).toBe('speed-crazy');
+    expect(computeCatSpeed(now - 8000, now)).toBe('speed-crazy');
+    expect(computeCatSpeed(now - 9999, now)).toBe('speed-crazy');
+  });
+
+  it('returns speed-tired when elapsed is 10-12.999s', () => {
+    const now = Date.now();
+    expect(computeCatSpeed(now - 10000, now)).toBe('speed-tired');
+    expect(computeCatSpeed(now - 11000, now)).toBe('speed-tired');
+    expect(computeCatSpeed(now - 12999, now)).toBe('speed-tired');
+  });
+
+  it('cycles back to speed-normal at 13s (modulo 13000)', () => {
+    const now = Date.now();
+    expect(computeCatSpeed(now - 13000, now)).toBe('speed-normal');
+    expect(computeCatSpeed(now - 13500, now)).toBe('speed-normal');
+  });
+
+  it('cycles back through all tiers on second cycle', () => {
+    const now = Date.now();
+    expect(computeCatSpeed(now - 15000, now)).toBe('speed-fast');   // 15000 % 13000 = 2000
+    expect(computeCatSpeed(now - 17000, now)).toBe('speed-turbo');  // 17000 % 13000 = 4000
+    expect(computeCatSpeed(now - 19000, now)).toBe('speed-crazy');  // 19000 % 13000 = 6000
+    expect(computeCatSpeed(now - 23000, now)).toBe('speed-tired');  // 23000 % 13000 = 10000
+    expect(computeCatSpeed(now - 26000, now)).toBe('speed-normal'); // 26000 % 13000 = 0
   });
 });
 
@@ -309,7 +346,7 @@ describe('CSS: crazy has semi-transparent legs with wobble blur', () => {
 
   it('no rotate animation in crazy mode', () => {
     // The crazy section should NOT contain svg-leg-rotate
-    const crazySection = chatMessagesCss.match(/Speed: Crazy[\s\S]*?\.typing-refresh/);
+    const crazySection = chatMessagesCss.match(/Speed: Crazy[\s\S]*?Speed: Tired/);
     expect(crazySection).not.toBeNull();
     expect(crazySection[0]).not.toContain('svg-leg-rotate');
   });
@@ -335,9 +372,73 @@ describe('CSS: crazy has semi-transparent legs with wobble blur', () => {
 });
 
 // =====================================================================
-// CSS: speed variant styles (four tiers)
+// CSS: tired = slow plodding legs, head nod, droopy tail/ears
 // =====================================================================
-describe('CSS: speed variant styles (four tiers)', () => {
+describe('CSS: tired has slow legs, head nod, droopy tail/ears', () => {
+  it('tired legs are slow at 0.9s with ±8° swing', () => {
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-leg-fl\s*\{[^}]*0\.9s/);
+    const kf = chatMessagesCss.match(/@keyframes svg-leg-tired-fl\s*\{[\s\S]*?\n\}/);
+    expect(kf).not.toBeNull();
+    expect(kf[0]).toContain('rotate(8deg)');
+    expect(kf[0]).toContain('rotate(-8deg)');
+  });
+
+  it('tired has all 4 leg keyframes', () => {
+    expect(chatMessagesCss).toContain('@keyframes svg-leg-tired-fl');
+    expect(chatMessagesCss).toContain('@keyframes svg-leg-tired-fr');
+    expect(chatMessagesCss).toContain('@keyframes svg-leg-tired-bl');
+    expect(chatMessagesCss).toContain('@keyframes svg-leg-tired-br');
+  });
+
+  it('tired bounce is slow at 1.2s', () => {
+    expect(chatMessagesCss).toMatch(/speed-tired\s*\{[^}]*svg-cat-bounce-tired\s+1\.2s/);
+  });
+
+  it('tired bounce has scale(1.2)', () => {
+    const kf = chatMessagesCss.match(/@keyframes svg-cat-bounce-tired\s*\{[\s\S]*?\n\}/);
+    expect(kf).not.toBeNull();
+    expect(kf[0]).toContain('scale(1.2)');
+  });
+
+  it('tired has head nod animation (svg-head-tired-nod)', () => {
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-head[\s\S]*?svg-head-tired-nod/);
+  });
+
+  it('head nod keyframe has gentle rotate(5deg)', () => {
+    const kf = chatMessagesCss.match(/@keyframes svg-head-tired-nod\s*\{[\s\S]*?\n\}/);
+    expect(kf).not.toBeNull();
+    expect(kf[0]).toContain('rotate(5deg)');
+  });
+
+  it('tired tail droops low (-25° to -12°)', () => {
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-tail-group[\s\S]*?svg-tail-tired/);
+    const kf = chatMessagesCss.match(/@keyframes svg-tail-tired\s*\{[\s\S]*?\n\}/);
+    expect(kf).not.toBeNull();
+    expect(kf[0]).toContain('rotate(-25deg)');
+    expect(kf[0]).toContain('rotate(-12deg)');
+  });
+
+  it('tired ears are statically droopy (no animation)', () => {
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-ear-l\s*\{[^}]*rotate\(8deg\)/);
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-ear-r\s*\{[^}]*rotate\(-8deg\)/);
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-ear-l\s*\{[^}]*animation:\s*none/);
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-ear-r\s*\{[^}]*animation:\s*none/);
+  });
+
+  it('tired blur is hidden (opacity: 0)', () => {
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-leg-blur\s*\{[^}]*opacity:\s*0/);
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-leg-blur-inner\s*\{[^}]*opacity:\s*0/);
+  });
+
+  it('tired body is slightly slumped: scaleY(0.95)', () => {
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-body[\s\S]*?scaleY\(0\.95\)/);
+  });
+});
+
+// =====================================================================
+// CSS: speed variant styles (five tiers)
+// =====================================================================
+describe('CSS: speed variant styles (five tiers)', () => {
   it('has speed-fast class overrides', () => {
     expect(chatMessagesCss).toContain('.svg-running-cat.speed-fast');
   });
@@ -350,10 +451,15 @@ describe('CSS: speed variant styles (four tiers)', () => {
     expect(chatMessagesCss).toContain('.svg-running-cat.speed-crazy');
   });
 
+  it('has speed-tired class overrides', () => {
+    expect(chatMessagesCss).toContain('.svg-running-cat.speed-tired');
+  });
+
   it('has all bounce keyframes', () => {
     expect(chatMessagesCss).toContain('@keyframes svg-cat-bounce-fast');
     expect(chatMessagesCss).toContain('@keyframes svg-cat-bounce-turbo');
     expect(chatMessagesCss).toContain('@keyframes svg-cat-bounce-crazy');
+    expect(chatMessagesCss).toContain('@keyframes svg-cat-bounce-tired');
   });
 
   it('speed-fast makes legs faster (0.25s)', () => {
@@ -368,6 +474,10 @@ describe('CSS: speed variant styles (four tiers)', () => {
     expect(chatMessagesCss).toMatch(/speed-fast[^}]*leg-fl[^}]*0\.25s/);    // fast
     expect(chatMessagesCss).toMatch(/speed-turbo[^}]*leg-fl[^}]*0\.14s/);   // turbo
     expect(chatMessagesCss).toMatch(/speed-crazy[^}]*leg-fl[^}]*0\.08s/);   // crazy
+  });
+
+  it('tired legs are slow at 0.9s (slower than normal)', () => {
+    expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-leg-fl\s*\{[^}]*0\.9s/);
   });
 });
 

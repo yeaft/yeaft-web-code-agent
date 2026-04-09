@@ -401,7 +401,8 @@ export default {
     },
     catSpeed() {
       if (!this.typingStartTime) return 'speed-normal';
-      const elapsed = this.nowTick - this.typingStartTime;
+      const elapsed = (this.nowTick - this.typingStartTime) % 13000;
+      if (elapsed >= 10000) return 'speed-tired';
       if (elapsed >= 6000) return 'speed-crazy';
       if (elapsed >= 4000) return 'speed-turbo';
       if (elapsed >= 2000) return 'speed-fast';

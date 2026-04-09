@@ -214,10 +214,11 @@ export default {
       return null;
     });
 
-    // Cat running speed based on waiting time (4 tiers, every 2s)
+    // Cat running speed based on waiting time (5 tiers, 13s cycle)
     const catSpeed = Vue.computed(() => {
       if (!typingStartTime.value) return 'speed-normal';
-      const elapsed = now.value - typingStartTime.value;
+      const elapsed = (now.value - typingStartTime.value) % 13000;
+      if (elapsed >= 10000) return 'speed-tired';
       if (elapsed >= 6000) return 'speed-crazy';
       if (elapsed >= 4000) return 'speed-turbo';
       if (elapsed >= 2000) return 'speed-fast';
