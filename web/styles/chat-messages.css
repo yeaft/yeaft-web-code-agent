@@ -272,8 +272,8 @@
 .svg-cat-pupil { fill: var(--cat-pupil-fill); opacity: 0.7; }
 .svg-cat-eye-shine { fill: var(--cat-eye-shine, #ffffff); opacity: 0.8; }
 .svg-cat-nose { fill: var(--text-secondary); opacity: 0.5; }
-.svg-cat-mouth { stroke: var(--text-secondary); opacity: 0.4; fill: none; }
-.svg-cat-whisker { stroke: var(--text-secondary); opacity: 0.35; fill: none; }
+.svg-cat-mouth { stroke: var(--text-secondary); opacity: 0.6; fill: none; }
+.svg-cat-whisker { stroke: var(--text-secondary); opacity: 0.5; fill: none; }
 .svg-cat-tail { fill: none; stroke: var(--text-secondary); stroke-linecap: round; }
 /* Breath puffs — hidden by default, only visible in tired mode */
 .svg-cat-breath { fill: var(--text-secondary); opacity: 0; }
@@ -403,9 +403,9 @@
 .svg-running-cat.speed-crazy .svg-cat-leg-fr { animation: svg-leg-crazy-fr 0.08s ease-in-out infinite alternate-reverse; opacity: 0.5; }
 .svg-running-cat.speed-crazy .svg-cat-leg-bl { animation: svg-leg-crazy-bl 0.08s ease-in-out infinite alternate-reverse; opacity: 0.5; }
 .svg-running-cat.speed-crazy .svg-cat-leg-br { animation: svg-leg-crazy-br 0.08s ease-in-out infinite alternate; opacity: 0.5; }
-/* Blur as wobble halo — no rotate */
-.svg-running-cat.speed-crazy .svg-cat-leg-blur { opacity: 0.35; animation: svg-leg-blur-wobble 0.1s ease-in-out infinite alternate; }
-.svg-running-cat.speed-crazy .svg-cat-leg-blur-inner { opacity: 0.2; animation: svg-leg-blur-wobble-reverse 0.08s ease-in-out infinite alternate; }
+/* Blur as subtle wobble halo — very faint so it doesn't look like a stray dot */
+.svg-running-cat.speed-crazy .svg-cat-leg-blur { opacity: 0.15; animation: svg-leg-blur-wobble 0.1s ease-in-out infinite alternate; }
+.svg-running-cat.speed-crazy .svg-cat-leg-blur-inner { opacity: 0; }
 .svg-running-cat.speed-crazy .svg-cat-tail-group { animation: svg-tail-wag-crazy 0.12s linear infinite alternate; }
 .svg-running-cat.speed-crazy .svg-cat-ear-l { animation: svg-ear-flatten 0.18s ease-in-out infinite alternate; }
 .svg-running-cat.speed-crazy .svg-cat-ear-r { animation: svg-ear-flatten 0.18s ease-in-out infinite alternate-reverse; }

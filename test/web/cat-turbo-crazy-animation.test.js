@@ -90,8 +90,8 @@ describe('Scenario 2: Crazy semi-transparent legs with wobble', () => {
     expect(kf[0]).not.toContain('rotate');
   });
 
-  it('crazy inner blur uses reverse wobble for layered effect', () => {
-    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur-inner[\s\S]*?svg-leg-blur-wobble-reverse/);
+  it('crazy inner blur is hidden (no stray dots at small size)', () => {
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur-inner\s*\{[^}]*opacity:\s*0[^.]/);
   });
 
   it('crazy body extremely crouched + stretched: scaleY(0.82) scaleX(1.03)', () => {

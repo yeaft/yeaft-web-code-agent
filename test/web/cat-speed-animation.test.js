@@ -327,8 +327,8 @@ describe('CSS: crazy has semi-transparent legs with wobble blur', () => {
     expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur\s*\{[^}]*svg-leg-blur-wobble\b/);
   });
 
-  it('crazy inner blur uses reverse wobble', () => {
-    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur-inner[\s\S]*?svg-leg-blur-wobble-reverse/);
+  it('crazy inner blur is hidden (no stray dots)', () => {
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur-inner\s*\{[^}]*opacity:\s*0[^.]/);
   });
 
   it('crazy body is extremely crouched: scaleY(0.82) scaleX(1.03)', () => {

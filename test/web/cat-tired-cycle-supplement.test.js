@@ -260,8 +260,8 @@ describe('Tired → Normal transition semantics', () => {
 // 5. Crazy → Tired transition: blur disappears, panting kicks in
 // =============================================================================
 describe('Crazy → Tired transition semantics', () => {
-  it('crazy has blur visible (opacity 0.35), tired hides it (opacity 0)', () => {
-    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur\s*\{[^}]*opacity:\s*0\.35/);
+  it('crazy has blur faintly visible (opacity 0.15), tired hides it (opacity 0)', () => {
+    expect(chatMessagesCss).toMatch(/speed-crazy\s+\.svg-cat-leg-blur\s*\{[^}]*opacity:\s*0\.15/);
     expect(chatMessagesCss).toMatch(/speed-tired\s+\.svg-cat-leg-blur\s*\{[^}]*opacity:\s*0[^.]/);
   });
 
