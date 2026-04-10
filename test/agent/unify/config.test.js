@@ -19,6 +19,7 @@ beforeEach(() => {
   delete process.env.YEAFT_BASE_URL;
   delete process.env.YEAFT_FALLBACK_MODEL;
   delete process.env.YEAFT_MAX_CONTEXT;
+  delete process.env.YEAFT_LANGUAGE;
 });
 
 afterEach(() => {
@@ -36,6 +37,7 @@ afterEach(() => {
   delete process.env.YEAFT_BASE_URL;
   delete process.env.YEAFT_FALLBACK_MODEL;
   delete process.env.YEAFT_MAX_CONTEXT;
+  delete process.env.YEAFT_LANGUAGE;
 });
 
 describe('parseFrontmatter', () => {
@@ -170,5 +172,31 @@ model: gpt-5
     process.env.YEAFT_MAX_CONTEXT = '150000';
     const config = loadConfig({ dir: TEST_DIR });
     expect(config.maxContextTokens).toBe(150000);
+  });
+
+  it('should default language to en', () => {
+    const config = loadConfig({ dir: TEST_DIR });
+    expect(config.language).toBe('en');
+  });
+
+  it('should read language from YEAFT_LANGUAGE env var', () => {
+    process.env.YEAFT_LANGUAGE = 'zh';
+    const config = loadConfig({ dir: TEST_DIR });
+    expect(config.language).toBe('zh');
+  });
+
+  it('should read language from config.md', () => {
+    writeFileSync(join(TEST_DIR, 'config.md'), `---
+language: zh
+---
+`);
+    const config = loadConfig({ dir: TEST_DIR });
+    expect(config.language).toBe('zh');
+  });
+
+  it('should allow CLI override for language', () => {
+    process.env.YEAFT_LANGUAGE = 'en';
+    const config = loadConfig({ dir: TEST_DIR, language: 'zh' });
+    expect(config.language).toBe('zh');
   });
 });

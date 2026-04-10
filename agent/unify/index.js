@@ -17,4 +17,5 @@ export {
   createLLMAdapter,
 } from './llm/adapter.js';
 export { MODEL_REGISTRY, resolveModel, listModels, isKnownModel } from './models.js';
+export { buildSystemPrompt, SUPPORTED_LANGUAGES } from './prompts.js';
 export { Engine } from './engine.js';

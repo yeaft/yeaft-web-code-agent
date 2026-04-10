@@ -26,6 +26,7 @@ const SUBDIRS = [
 /** Default config.md content (YAML frontmatter + markdown body). */
 const DEFAULT_CONFIG = `---
 model: claude-sonnet-4-20250514
+language: en
 debug: false
 maxContextTokens: 200000
 ---
@@ -35,6 +36,12 @@ maxContextTokens: 200000
 Edit the YAML frontmatter above to change settings.
 The \`model\` field is a model ID (e.g. \`gpt-5\`, \`claude-sonnet-4-20250514\`).
 Yeaft auto-detects the correct API adapter and endpoint from the model ID.
+
+## Language
+
+Set \`language\` in frontmatter or \`YEAFT_LANGUAGE\` env var:
+- \`en\` — English system prompts (default)
+- \`zh\` — Chinese system prompts (中文系统提示)
 
 ## Model IDs
 
@@ -60,6 +67,7 @@ YEAFT_OPENAI_API_KEY=sk-...       # OpenAI / DeepSeek / Gemini
 Shell env vars take precedence over .env and config.md:
 
 - \`YEAFT_MODEL\` — override model ID
+- \`YEAFT_LANGUAGE\` — language for system prompts (en/zh)
 - \`YEAFT_API_KEY\` — Anthropic API key
 - \`YEAFT_OPENAI_API_KEY\` — OpenAI-compatible API key
 - \`YEAFT_PROXY_URL\` — CopilotProxy URL (default: http://localhost:6628)

@@ -798,4 +798,75 @@ describe('Engine', () => {
       expect(call.tools).toBeUndefined();
     });
   });
+
+  describe('language in system prompt', () => {
+    it('should use English system prompt by default', async () => {
+      mockAdapter.pushResponse([
+        { type: 'text_delta', text: 'ok' },
+        { type: 'stop', stopReason: 'end_turn' },
+      ]);
+
+      const engine = new Engine({
+        adapter: mockAdapter,
+        trace,
+        config: { model: 'test-model', maxOutputTokens: 1024 },
+      });
+
+      for await (const _event of engine.query({ prompt: 'test' })) {
+        // consume
+      }
+
+      const call = mockAdapter.callLog[0];
+      expect(call.system).toContain('You are Yeaft');
+      expect(call.system).not.toContain('你是 Yeaft');
+    });
+
+    it('should use Chinese system prompt when language is zh', async () => {
+      mockAdapter.pushResponse([
+        { type: 'text_delta', text: 'ok' },
+        { type: 'stop', stopReason: 'end_turn' },
+      ]);
+
+      const engine = new Engine({
+        adapter: mockAdapter,
+        trace,
+        config: { model: 'test-model', maxOutputTokens: 1024, language: 'zh' },
+      });
+
+      for await (const _event of engine.query({ prompt: 'test' })) {
+        // consume
+      }
+
+      const call = mockAdapter.callLog[0];
+      expect(call.system).toContain('你是 Yeaft');
+      expect(call.system).toContain('当前模式：chat');
+    });
+
+    it('should include tool names in system prompt for configured language', async () => {
+      mockAdapter.pushResponse([
+        { type: 'text_delta', text: 'ok' },
+        { type: 'stop', stopReason: 'end_turn' },
+      ]);
+
+      const engine = new Engine({
+        adapter: mockAdapter,
+        trace,
+        config: { model: 'test-model', maxOutputTokens: 1024, language: 'zh' },
+      });
+
+      engine.registerTool({
+        name: 'search',
+        description: 'Search',
+        parameters: {},
+        execute: async () => 'results',
+      });
+
+      for await (const _event of engine.query({ prompt: 'test' })) {
+        // consume
+      }
+
+      const call = mockAdapter.callLog[0];
+      expect(call.system).toContain('可用工具：search');
+    });
+  });
 });

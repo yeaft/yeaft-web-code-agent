@@ -13,6 +13,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { buildSystemPrompt } from './prompts.js';
 
 /** Maximum number of turns before the engine stops to prevent infinite loops. */
 const MAX_TURNS = 25;
@@ -99,29 +100,11 @@ export class Engine {
    * @returns {string}
    */
   #buildSystemPrompt(mode) {
-    const parts = [
-      'You are Yeaft, a helpful AI assistant.',
-      `Current mode: ${mode}`,
-      `Date: ${new Date().toISOString().split('T')[0]}`,
-    ];
-
-    if (mode === 'work') {
-      parts.push(
-        'You are in work mode. Break tasks into steps, execute them using tools, and report progress.',
-      );
-    } else if (mode === 'dream') {
-      parts.push(
-        'You are in dream mode. Reflect on past conversations and consolidate memories.',
-      );
-    }
-
-    // List available tools
-    if (this.#tools.size > 0) {
-      const toolNames = Array.from(this.#tools.keys()).join(', ');
-      parts.push(`Available tools: ${toolNames}`);
-    }
-
-    return parts.join('\n\n');
+    return buildSystemPrompt({
+      language: this.#config.language || 'en',
+      mode,
+      toolNames: Array.from(this.#tools.keys()),
+    });
   }
 
   /**

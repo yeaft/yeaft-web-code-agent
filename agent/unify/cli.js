@@ -17,6 +17,7 @@ import { DebugTrace, NullTrace, createTrace } from './debug-trace.js';
 import { createLLMAdapter } from './llm/adapter.js';
 import { Engine } from './engine.js';
 import { listModels, resolveModel } from './models.js';
+import { buildSystemPrompt } from './prompts.js';
 
 // ─── Argument parsing ──────────────────────────────────────────
 
@@ -27,6 +28,7 @@ function parseArgs(argv) {
     interactive: false,
     verbose: false,
     model: null,
+    language: null,
     trace: null,     // 'stats' | 'recent' | 'search' | 'tools' | null
     traceArg: null,  // search keyword or tool name
     dryRun: false,
@@ -57,6 +59,9 @@ function parseArgs(argv) {
         break;
       case '--model':
         args.model = rest[++i] || null;
+        break;
+      case '--language':
+        args.language = rest[++i] || null;
         break;
       case '--trace':
         args.trace = rest[++i] || 'stats';
@@ -149,7 +154,7 @@ function handleTraceQuery(args, config) {
 // ─── Dry-run handler ───────────────────────────────────────────
 
 function handleDryRun(args, config) {
-  const systemPrompt = buildSystemPrompt(config, args.mode);
+  const systemPrompt = buildSystemPrompt({ language: config.language, mode: args.mode });
   const messages = [];
 
   if (args.prompt) {
@@ -176,28 +181,6 @@ function handleDryRun(args, config) {
   }
   console.log();
   console.log('=== END DRY RUN ===');
-}
-
-// ─── System prompt builder (Phase 0: basic) ────────────────────
-
-function buildSystemPrompt(config, mode) {
-  const parts = [
-    `You are Yeaft, a helpful AI assistant.`,
-    `Current mode: ${mode}`,
-    `Date: ${new Date().toISOString().split('T')[0]}`,
-  ];
-
-  if (mode === 'work') {
-    parts.push(
-      'You are in work mode. Break tasks into steps, execute them, and report progress.',
-    );
-  } else if (mode === 'dream') {
-    parts.push(
-      'You are in dream mode. Reflect on past conversations and consolidate memories.',
-    );
-  }
-
-  return parts.join('\n\n');
 }
 
 // ─── REPL ──────────────────────────────────────────────────────
@@ -256,6 +239,7 @@ async function runREPL(config, args) {
           console.log('  /stats                   — Show session stats');
           console.log('  /model <name>            — Switch model');
           console.log('  /models                  — List available models');
+          console.log('  /language <en|zh>        — Switch language');
           console.log('  /clear                   — Clear conversation history');
           console.log('  /quit                    — Exit');
           break;
@@ -293,8 +277,9 @@ async function runREPL(config, args) {
           console.log(`Context info:`);
           console.log(`  Model: ${config.model}`);
           console.log(`  Mode: ${currentMode}`);
+          console.log(`  Language: ${config.language}`);
           console.log(`  Max context: ${config.maxContextTokens} tokens`);
-          console.log(`  System prompt: ${buildSystemPrompt(config, currentMode).length} chars`);
+          console.log(`  System prompt: ${buildSystemPrompt({ language: config.language, mode: currentMode }).length} chars`);
           break;
 
         case 'dry-run':
@@ -343,6 +328,16 @@ async function runREPL(config, args) {
           }
           break;
         }
+
+        case 'language':
+        case 'lang':
+          if (cmdArgs[0]) {
+            config.language = cmdArgs[0];
+            console.log(`Language switched to: ${config.language}`);
+          } else {
+            console.log(`Current language: ${config.language}`);
+          }
+          break;
 
         case 'clear':
           conversationMessages = [];
@@ -476,6 +471,7 @@ async function main() {
   // Load config with CLI overrides
   const config = loadConfig({
     model: args.model,
+    language: args.language,
     debug: args.debug || undefined,
   });
 
@@ -530,6 +526,7 @@ async function main() {
   console.log('  -i, --interactive   Start REPL');
   console.log('  -v, --verbose       Verbose output');
   console.log('  --model <name>      Override model');
+  console.log('  --language <code>   Language: en, zh (default: en)');
   console.log('  --trace <cmd>       Query debug trace');
   console.log('  --dry-run           Show prompt without calling LLM');
 }

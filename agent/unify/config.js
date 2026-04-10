@@ -16,6 +16,7 @@ import { resolveModel } from './models.js';
 const DEFAULTS = {
   model: 'claude-sonnet-4-20250514',
   fallbackModel: null,
+  language: 'en', // 'en' | 'zh'
   apiKey: null,
   openaiApiKey: null,
   proxyUrl: 'http://localhost:6628',
@@ -158,6 +159,12 @@ export function loadConfig(overrides = {}) {
       env.YEAFT_FALLBACK_MODEL ||
       fileConfig.fallbackModel ||
       DEFAULTS.fallbackModel,
+
+    language:
+      overrides.language ||
+      env.YEAFT_LANGUAGE ||
+      fileConfig.language ||
+      DEFAULTS.language,
 
     apiKey:
       overrides.apiKey ||
