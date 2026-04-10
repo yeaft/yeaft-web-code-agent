@@ -25,6 +25,7 @@ export function createMockLLMServer() {
   let httpServer = null;
   let port = 0;
   let responseEvents = [];
+  let errorResponse = null; // { statusCode, body } — if set, return error instead of normal response
   const requests = [];
 
   function handleRequest(req, res) {
@@ -40,6 +41,13 @@ export function createMockLLMServer() {
         headers: req.headers,
         body: parsed,
       });
+
+      // Return error if configured
+      if (errorResponse) {
+        res.writeHead(errorResponse.statusCode, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(errorResponse.body || { error: 'Mock error' }));
+        return;
+      }
 
       // Detect API format from URL
       if (req.url.includes('/v1/messages')) {
@@ -230,6 +238,20 @@ export function createMockLLMServer() {
     /** Clear recorded requests. */
     clearRequests() {
       requests.length = 0;
+    },
+
+    /**
+     * Configure the server to return an HTTP error on next request(s).
+     * @param {number} statusCode — HTTP status (e.g. 401, 429, 500)
+     * @param {object} [body] — JSON response body
+     */
+    setError(statusCode, body) {
+      errorResponse = { statusCode, body: body || { error: { message: `Mock ${statusCode} error` } } };
+    },
+
+    /** Clear any configured error — resume normal responses. */
+    clearError() {
+      errorResponse = null;
     },
 
     /** Start the server on the given port (0 = random). */

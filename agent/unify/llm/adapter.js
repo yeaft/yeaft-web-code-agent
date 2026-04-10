@@ -147,7 +147,8 @@ export class LLMAdapter {
  * @returns {Promise<LLMAdapter>}
  */
 export async function createLLMAdapter(config) {
-  const adapter = config.adapter;
+  // Normalize adapter name — accept 'chat-completions' as alias for 'openai'
+  const adapter = config.adapter === 'chat-completions' ? 'openai' : config.adapter;
 
   if (adapter === 'anthropic' || (!adapter && config.apiKey)) {
     if (!config.apiKey) {

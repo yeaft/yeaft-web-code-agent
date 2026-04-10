@@ -420,6 +420,191 @@ describe('Engine', () => {
       expect(turnEnds).toHaveLength(1);
       expect(turnEnds[0].stopReason).toBe('error');
     });
+
+    it('should mark LLMRateLimitError as retryable', async () => {
+      const { LLMRateLimitError } = await import('../../../agent/unify/llm/adapter.js');
+
+      const engine = new Engine({
+        adapter: {
+          async *stream() {
+            throw new LLMRateLimitError('Too fast', 429);
+          },
+        },
+        trace,
+        config: { model: 'test-model', maxOutputTokens: 1024 },
+      });
+
+      const events = [];
+      for await (const event of engine.query({ prompt: 'hello' })) {
+        events.push(event);
+      }
+
+      const errorEvents = events.filter(e => e.type === 'error');
+      expect(errorEvents).toHaveLength(1);
+      expect(errorEvents[0].retryable).toBe(true);
+    });
+
+    it('should mark LLMServerError as retryable', async () => {
+      const { LLMServerError } = await import('../../../agent/unify/llm/adapter.js');
+
+      const engine = new Engine({
+        adapter: {
+          async *stream() {
+            throw new LLMServerError('Internal error', 500);
+          },
+        },
+        trace,
+        config: { model: 'test-model', maxOutputTokens: 1024 },
+      });
+
+      const events = [];
+      for await (const event of engine.query({ prompt: 'hello' })) {
+        events.push(event);
+      }
+
+      const errorEvents = events.filter(e => e.type === 'error');
+      expect(errorEvents).toHaveLength(1);
+      expect(errorEvents[0].retryable).toBe(true);
+    });
+  });
+
+  describe('max_tokens stop reason', () => {
+    it('should yield turn_end with max_tokens when output is truncated', async () => {
+      mockAdapter.pushResponse([
+        { type: 'text_delta', text: 'This response was cut short because—' },
+        { type: 'usage', inputTokens: 50, outputTokens: 16384 },
+        { type: 'stop', stopReason: 'max_tokens' },
+      ]);
+
+      const engine = new Engine({
+        adapter: mockAdapter,
+        trace,
+        config: { model: 'test-model', maxOutputTokens: 16384 },
+      });
+
+      const events = [];
+      for await (const event of engine.query({ prompt: 'write a long essay' })) {
+        events.push(event);
+      }
+
+      // Should have stop event with max_tokens
+      const stopEvents = events.filter(e => e.type === 'stop');
+      expect(stopEvents).toHaveLength(1);
+      expect(stopEvents[0].stopReason).toBe('max_tokens');
+
+      // turn_end should also reflect max_tokens
+      const turnEnd = events.find(e => e.type === 'turn_end');
+      expect(turnEnd.stopReason).toBe('max_tokens');
+      expect(turnEnd.turnNumber).toBe(1);
+
+      // Should NOT loop (max_tokens means done, not tool_use)
+      const turnStarts = events.filter(e => e.type === 'turn_start');
+      expect(turnStarts).toHaveLength(1);
+    });
+  });
+
+  describe('abort signal', () => {
+    it('should propagate abort signal to adapter', async () => {
+      const ac = new AbortController();
+      let receivedSignal = null;
+
+      const abortAdapter = {
+        async *stream(params) {
+          receivedSignal = params.signal;
+          // Simulate checking the signal
+          if (params.signal?.aborted) {
+            throw new Error('Request aborted');
+          }
+          yield { type: 'text_delta', text: 'Hello' };
+          yield { type: 'stop', stopReason: 'end_turn' };
+        },
+      };
+
+      const engine = new Engine({
+        adapter: abortAdapter,
+        trace,
+        config: { model: 'test-model', maxOutputTokens: 1024 },
+      });
+
+      const events = [];
+      for await (const event of engine.query({ prompt: 'hello', signal: ac.signal })) {
+        events.push(event);
+      }
+
+      // Verify signal was passed to adapter
+      expect(receivedSignal).toBe(ac.signal);
+      // Verify normal completion when signal is not aborted
+      const textEvents = events.filter(e => e.type === 'text_delta');
+      expect(textEvents).toHaveLength(1);
+    });
+
+    it('should handle pre-aborted signal', async () => {
+      const ac = new AbortController();
+      ac.abort(); // Pre-abort
+
+      const abortAdapter = {
+        async *stream(params) {
+          if (params.signal?.aborted) {
+            throw new Error('Request aborted');
+          }
+          yield { type: 'text_delta', text: 'Should not reach' };
+          yield { type: 'stop', stopReason: 'end_turn' };
+        },
+      };
+
+      const engine = new Engine({
+        adapter: abortAdapter,
+        trace,
+        config: { model: 'test-model', maxOutputTokens: 1024 },
+      });
+
+      const events = [];
+      for await (const event of engine.query({ prompt: 'hello', signal: ac.signal })) {
+        events.push(event);
+      }
+
+      // Should get error event from the abort
+      const errorEvents = events.filter(e => e.type === 'error');
+      expect(errorEvents).toHaveLength(1);
+      expect(errorEvents[0].error.message).toContain('aborted');
+    });
+
+    it('should pass signal to tool execute function', async () => {
+      const ac = new AbortController();
+      let toolReceivedSignal = null;
+
+      mockAdapter.pushResponse([
+        { type: 'tool_call', id: 'call_1', name: 'slow_tool', input: {} },
+        { type: 'stop', stopReason: 'tool_use' },
+      ]);
+
+      mockAdapter.pushResponse([
+        { type: 'text_delta', text: 'Done.' },
+        { type: 'stop', stopReason: 'end_turn' },
+      ]);
+
+      const engine = new Engine({
+        adapter: mockAdapter,
+        trace,
+        config: { model: 'test-model', maxOutputTokens: 1024 },
+      });
+
+      engine.registerTool({
+        name: 'slow_tool',
+        description: 'A slow tool',
+        parameters: {},
+        execute: async (input, ctx) => {
+          toolReceivedSignal = ctx?.signal;
+          return 'done';
+        },
+      });
+
+      for await (const _event of engine.query({ prompt: 'use tool', signal: ac.signal })) {
+        // consume
+      }
+
+      expect(toolReceivedSignal).toBe(ac.signal);
+    });
   });
 
   describe('debug trace integration', () => {

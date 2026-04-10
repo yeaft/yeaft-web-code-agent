@@ -87,9 +87,11 @@ function loadEnvFile(dir) {
   try {
     const content = readFileSync(envPath, 'utf8');
     for (const line of content.split('\n')) {
-      const trimmed = line.trim();
+      let trimmed = line.trim();
       // Skip empty lines and comments
       if (!trimmed || trimmed.startsWith('#')) continue;
+      // Strip optional 'export ' prefix (common in .env files)
+      if (trimmed.startsWith('export ')) trimmed = trimmed.slice(7);
       const eqIdx = trimmed.indexOf('=');
       if (eqIdx === -1) continue;
 
@@ -194,14 +196,14 @@ export function loadConfig(overrides = {}) {
     dir,
 
     maxContextTokens:
-      overrides.maxContextTokens ||
-      (env.YEAFT_MAX_CONTEXT ? parseInt(env.YEAFT_MAX_CONTEXT, 10) : null) ||
-      fileConfig.maxContextTokens ||
+      overrides.maxContextTokens ??
+      (env.YEAFT_MAX_CONTEXT ? parseInt(env.YEAFT_MAX_CONTEXT, 10) : null) ??
+      fileConfig.maxContextTokens ??
       DEFAULTS.maxContextTokens,
 
     maxOutputTokens:
-      overrides.maxOutputTokens ||
-      fileConfig.maxOutputTokens ||
+      overrides.maxOutputTokens ??
+      fileConfig.maxOutputTokens ??
       DEFAULTS.maxOutputTokens,
   };
 

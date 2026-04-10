@@ -119,14 +119,32 @@ describe('createLLMAdapter factory', () => {
   });
 });
 
-describe('ChatCompletionsAdapter — tool translation', () => {
-  it('should correctly translate unified messages to Chat Completions format', async () => {
-    const { ChatCompletionsAdapter } = await import('../../../../agent/unify/llm/chat-completions.js');
-    const adapter = new ChatCompletionsAdapter({ apiKey: 'test', baseUrl: 'http://localhost:1234/v1' });
+describe('createLLMAdapter — adapter alias', () => {
+  it('should accept chat-completions as alias for openai', async () => {
+    const adapter = await createLLMAdapter({
+      adapter: 'chat-completions',
+      openaiApiKey: 'test-key',
+      baseUrl: 'http://localhost:1234/v1',
+    });
+    expect(adapter.constructor.name).toBe('ChatCompletionsAdapter');
+  });
 
-    // Test the internal translation by checking call() request construction
-    // We can't easily test private methods, so we'll test via the mock stream test below
-    expect(adapter).toBeTruthy();
+  it('should use config.baseUrl for openai adapter when provided', async () => {
+    const adapter = await createLLMAdapter({
+      adapter: 'openai',
+      openaiApiKey: 'test-key',
+      baseUrl: 'http://custom-server:8080/v1',
+    });
+    expect(adapter.constructor.name).toBe('ChatCompletionsAdapter');
+  });
+
+  it('should use config.baseUrl for anthropic adapter when provided', async () => {
+    const adapter = await createLLMAdapter({
+      adapter: 'anthropic',
+      apiKey: 'sk-ant-test',
+      baseUrl: 'http://custom-anthropic:9090',
+    });
+    expect(adapter.constructor.name).toBe('AnthropicAdapter');
   });
 });
 

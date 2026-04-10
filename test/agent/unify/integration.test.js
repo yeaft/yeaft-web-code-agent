@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { existsSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -6,7 +6,7 @@ import { createMockLLMServer } from './mock-llm-server.js';
 import { Engine } from '../../../agent/unify/engine.js';
 import { NullTrace, DebugTrace } from '../../../agent/unify/debug-trace.js';
 import { loadConfig } from '../../../agent/unify/config.js';
-import { createLLMAdapter } from '../../../agent/unify/llm/adapter.js';
+import { createLLMAdapter, LLMAuthError, LLMRateLimitError, LLMServerError } from '../../../agent/unify/llm/adapter.js';
 
 // ─── Shared test infrastructure ──────────────────────────────
 
@@ -28,6 +28,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   mockServer.clearRequests();
+  mockServer.clearError();
   // Clean env vars
   delete process.env.YEAFT_API_KEY;
   delete process.env.YEAFT_OPENAI_API_KEY;
@@ -35,6 +36,24 @@ beforeEach(() => {
   delete process.env.YEAFT_MODEL;
   delete process.env.YEAFT_ADAPTER;
   delete process.env.YEAFT_BASE_URL;
+  delete process.env.YEAFT_DEBUG;
+  delete process.env.YEAFT_DIR;
+  delete process.env.YEAFT_FALLBACK_MODEL;
+  delete process.env.YEAFT_MAX_CONTEXT;
+});
+
+afterEach(() => {
+  // Cleanup env vars that loadEnvFile() may have set
+  delete process.env.YEAFT_API_KEY;
+  delete process.env.YEAFT_OPENAI_API_KEY;
+  delete process.env.YEAFT_PROXY_URL;
+  delete process.env.YEAFT_MODEL;
+  delete process.env.YEAFT_ADAPTER;
+  delete process.env.YEAFT_BASE_URL;
+  delete process.env.YEAFT_DEBUG;
+  delete process.env.YEAFT_DIR;
+  delete process.env.YEAFT_FALLBACK_MODEL;
+  delete process.env.YEAFT_MAX_CONTEXT;
 });
 
 // ─── Integration: Engine + Real Adapters + Mock Server ───────
@@ -413,5 +432,127 @@ describe('Integration: Debug trace recording', () => {
       const p = dbPath + suffix;
       if (existsSync(p)) rmSync(p);
     }
+  });
+});
+
+// ─── Integration: Error handling via Mock Server ──────────────
+
+describe('Integration: Error handling via Mock Server', () => {
+  it('should throw LLMAuthError for 401 from ChatCompletions', async () => {
+    mockServer.setError(401, { error: { message: 'Invalid API key' } });
+
+    const config = loadConfig({
+      dir: TEST_DIR,
+      model: 'gpt-5',
+      adapter: 'openai',
+      openaiApiKey: 'bad-key',
+      baseUrl: `http://127.0.0.1:${mockServer.port}/v1`,
+    });
+
+    const adapter = await createLLMAdapter(config);
+
+    await expect(
+      adapter.call({
+        model: 'gpt-5',
+        system: 'test',
+        messages: [{ role: 'user', content: 'hi' }],
+      })
+    ).rejects.toThrow(LLMAuthError);
+  });
+
+  it('should throw LLMRateLimitError for 429 from ChatCompletions', async () => {
+    mockServer.setError(429, { error: { message: 'Rate limit exceeded' } });
+
+    const config = loadConfig({
+      dir: TEST_DIR,
+      model: 'gpt-5',
+      adapter: 'openai',
+      openaiApiKey: 'test-key',
+      baseUrl: `http://127.0.0.1:${mockServer.port}/v1`,
+    });
+
+    const adapter = await createLLMAdapter(config);
+
+    await expect(
+      adapter.call({
+        model: 'gpt-5',
+        system: 'test',
+        messages: [{ role: 'user', content: 'hi' }],
+      })
+    ).rejects.toThrow(LLMRateLimitError);
+  });
+
+  it('should throw LLMServerError for 500 from ChatCompletions', async () => {
+    mockServer.setError(500, { error: { message: 'Internal server error' } });
+
+    const config = loadConfig({
+      dir: TEST_DIR,
+      model: 'gpt-5',
+      adapter: 'openai',
+      openaiApiKey: 'test-key',
+      baseUrl: `http://127.0.0.1:${mockServer.port}/v1`,
+    });
+
+    const adapter = await createLLMAdapter(config);
+
+    await expect(
+      adapter.call({
+        model: 'gpt-5',
+        system: 'test',
+        messages: [{ role: 'user', content: 'hi' }],
+      })
+    ).rejects.toThrow(LLMServerError);
+  });
+
+  it('should throw LLMAuthError for 401 from Anthropic', async () => {
+    mockServer.setError(401, { error: { message: 'Invalid API key' } });
+
+    const config = loadConfig({
+      dir: TEST_DIR,
+      model: 'claude-sonnet-4-20250514',
+      adapter: 'anthropic',
+      apiKey: 'bad-key',
+      baseUrl: `http://127.0.0.1:${mockServer.port}`,
+    });
+
+    const adapter = await createLLMAdapter(config);
+
+    await expect(
+      adapter.call({
+        model: 'claude-sonnet-4-20250514',
+        system: 'test',
+        messages: [{ role: 'user', content: 'hi' }],
+      })
+    ).rejects.toThrow(LLMAuthError);
+  });
+
+  it('should surface error through engine query loop', async () => {
+    mockServer.setError(500, { error: { message: 'Server down' } });
+
+    const config = loadConfig({
+      dir: TEST_DIR,
+      model: 'gpt-5',
+      adapter: 'openai',
+      openaiApiKey: 'test-key',
+      baseUrl: `http://127.0.0.1:${mockServer.port}/v1`,
+    });
+
+    const adapter = await createLLMAdapter(config);
+    const engine = new Engine({ adapter, trace: new NullTrace(), config });
+
+    const events = [];
+    for await (const event of engine.query({ prompt: 'hello' })) {
+      events.push(event);
+    }
+
+    // Engine should catch the adapter error and emit error + turn_end events
+    const errorEvents = events.filter(e => e.type === 'error');
+    expect(errorEvents).toHaveLength(1);
+    expect(errorEvents[0].error).toBeInstanceOf(LLMServerError);
+    expect(errorEvents[0].retryable).toBe(true);
+
+    const turnEnds = events.filter(e => e.type === 'turn_end');
+    expect(turnEnds).toHaveLength(1);
+    expect(turnEnds[0].stopReason).toBe('error');
   });
 });

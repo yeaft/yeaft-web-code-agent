@@ -73,15 +73,25 @@ export class AnthropicAdapter extends LLMAdapter {
         }
         result.push({ role: 'assistant', content });
       } else if (msg.role === 'tool') {
-        result.push({
-          role: 'user',
-          content: [{
-            type: 'tool_result',
-            tool_use_id: msg.toolCallId,
-            content: msg.content,
-            is_error: msg.isError || false,
-          }],
-        });
+        // Anthropic requires all tool_results from the same turn in a single
+        // user message. Merge consecutive tool messages into one.
+        const toolResult = {
+          type: 'tool_result',
+          tool_use_id: msg.toolCallId,
+          content: msg.content,
+          is_error: msg.isError || false,
+        };
+        const prev = result[result.length - 1];
+        if (prev && prev.role === 'user' && Array.isArray(prev.content) &&
+            prev.content.length > 0 && prev.content[0].type === 'tool_result') {
+          // Append to existing tool_result user message
+          prev.content.push(toolResult);
+        } else {
+          result.push({
+            role: 'user',
+            content: [toolResult],
+          });
+        }
       }
     }
     return result;

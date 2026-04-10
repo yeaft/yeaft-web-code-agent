@@ -77,7 +77,8 @@ export class ChatCompletionsAdapter extends LLMAdapter {
         result.push({ role: 'user', content: msg.content });
       } else if (msg.role === 'assistant') {
         const entry = { role: 'assistant' };
-        if (msg.content) entry.content = msg.content;
+        // Some OpenAI-compatible APIs require `content: null` when tool_calls are present
+        entry.content = msg.content || null;
         if (msg.toolCalls && msg.toolCalls.length > 0) {
           entry.tool_calls = msg.toolCalls.map(tc => ({
             id: tc.id,

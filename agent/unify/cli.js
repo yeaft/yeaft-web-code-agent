@@ -87,8 +87,7 @@ function handleTraceQuery(args, config) {
   try {
     trace = new DebugTrace(dbPath);
   } catch (e) {
-    console.error(`Cannot open debug database at ${dbPath}: ${e.message}`);
-    process.exit(1);
+    throw new Error(`Cannot open debug database at ${dbPath}: ${e.message}`);
   }
 
   try {
@@ -118,8 +117,7 @@ function handleTraceQuery(args, config) {
       }
       case 'search': {
         if (!args.traceArg) {
-          console.error('Usage: --trace search <keyword>');
-          process.exit(1);
+          throw new Error('Usage: --trace search <keyword>');
         }
         const results = trace.search(args.traceArg);
         console.log(`Found ${results.length} turns matching "${args.traceArg}":`);
@@ -141,9 +139,7 @@ function handleTraceQuery(args, config) {
         break;
       }
       default:
-        console.error(`Unknown trace command: ${args.trace}`);
-        console.error('Available: stats, recent, search <keyword>, tools [name]');
-        process.exit(1);
+        throw new Error(`Unknown trace command: ${args.trace}. Available: stats, recent, search <keyword>, tools [name]`);
     }
   } finally {
     trace.close();
@@ -281,7 +277,11 @@ async function runREPL(config, args) {
 
         case 'trace': {
           const subcmd = cmdArgs[0] || 'stats';
-          handleTraceQuery({ trace: subcmd, traceArg: cmdArgs[1] }, config);
+          try {
+            handleTraceQuery({ trace: subcmd, traceArg: cmdArgs[1] }, config);
+          } catch (e) {
+            console.error(`Trace error: ${e.message}`);
+          }
           break;
         }
 
@@ -314,10 +314,20 @@ async function runREPL(config, args) {
         case 'model':
           if (cmdArgs[0]) {
             config.model = cmdArgs[0];
-            engine = null; // Force re-creation with new model
-            console.log(`Model switched to: ${config.model}`);
+            // Re-resolve adapter and baseUrl from model registry
+            const { resolveModel } = await import('./models.js');
+            const newModelInfo = resolveModel(config.model);
+            if (newModelInfo) {
+              config.adapter = newModelInfo.adapter === 'anthropic' ? 'anthropic' : 'openai';
+              config.baseUrl = newModelInfo.baseUrl;
+              config.maxContextTokens = newModelInfo.contextWindow;
+              config.maxOutputTokens = newModelInfo.maxOutputTokens;
+              config.modelInfo = newModelInfo;
+            }
+            engine = null; // Force re-creation with new model + adapter
+            console.log(`Model switched to: ${config.model} (adapter: ${config.adapter})`);
           } else {
-            console.log(`Current model: ${config.model}`);
+            console.log(`Current model: ${config.model} (adapter: ${config.adapter})`);
           }
           break;
 
@@ -354,6 +364,7 @@ async function runREPL(config, args) {
     // Regular input → engine.query
     try {
       const eng = await ensureEngine();
+      let responseText = '';
 
       for await (const event of eng.query({
         prompt: input,
@@ -362,6 +373,7 @@ async function runREPL(config, args) {
       })) {
         switch (event.type) {
           case 'text_delta':
+            responseText += event.text;
             process.stdout.write(event.text);
             break;
           case 'tool_start':
@@ -387,10 +399,11 @@ async function runREPL(config, args) {
       }
       console.log(); // newline after response
 
-      // Save to conversation history for context
+      // Save both user and assistant messages for multi-turn context
       conversationMessages.push({ role: 'user', content: input });
-      // Note: the engine manages its own internal conversation for the query loop,
-      // but we track it here too for REPL multi-turn context
+      if (responseText) {
+        conversationMessages.push({ role: 'assistant', content: responseText });
+      }
     } catch (err) {
       console.error(`Error: ${err.message}`);
     }
