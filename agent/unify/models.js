@@ -1,11 +1,15 @@
 /**
- * models.js — Model registry for Yeaft Unify
+ * models.js — Model ID registry for Yeaft Unify
  *
- * Maps model names to their adapter type, API base URL, and capabilities.
- * This allows `YEAFT_MODEL=gpt-5` to automatically resolve the correct
- * adapter and endpoint without setting YEAFT_ADAPTER or YEAFT_BASE_URL.
+ * Maps model IDs (e.g. "gpt-5", "claude-sonnet-4-20250514") to their
+ * adapter type, API base URL, and capabilities.
  *
- * Unknown models return null — caller falls back to env-based detection.
+ * Yeaft does not provide its own models. The "model" field is always a
+ * model ID from an external provider. This registry lets Yeaft auto-detect
+ * the correct adapter and endpoint from just the model ID, so users only
+ * need to set YEAFT_MODEL=gpt-5 without configuring adapter/baseUrl separately.
+ *
+ * Unknown model IDs return null — caller falls back to env-based detection.
  */
 
 /**

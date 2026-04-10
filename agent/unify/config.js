@@ -1,7 +1,10 @@
 /**
  * config.js — Yeaft configuration management
  *
- * Priority (high → low): CLI overrides > ENV vars > config.md frontmatter > defaults
+ * Priority (high → low): CLI overrides > ENV vars > .env file > config.md frontmatter > defaults
+ *
+ * Note: "model" in Yeaft always means a model ID (e.g. "gpt-5", "claude-sonnet-4-20250514").
+ * Yeaft does not provide its own models — it routes to external LLM providers via adapters.
  */
 
 import { existsSync, readFileSync } from 'fs';
@@ -72,6 +75,43 @@ function loadConfigFile(dir) {
 }
 
 /**
+ * Load .env file from a directory. Sets process.env for any keys
+ * not already defined (env vars take precedence over .env file).
+ *
+ * @param {string} dir — Directory containing .env file
+ */
+function loadEnvFile(dir) {
+  const envPath = join(dir, '.env');
+  if (!existsSync(envPath)) return;
+
+  try {
+    const content = readFileSync(envPath, 'utf8');
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      // Skip empty lines and comments
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eqIdx = trimmed.indexOf('=');
+      if (eqIdx === -1) continue;
+
+      const key = trimmed.slice(0, eqIdx).trim();
+      let value = trimmed.slice(eqIdx + 1).trim();
+      // Remove surrounding quotes if present
+      if ((value.startsWith('"') && value.endsWith('"')) ||
+          (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1);
+      }
+
+      // Only set if not already defined (shell env takes precedence)
+      if (process.env[key] === undefined) {
+        process.env[key] = value;
+      }
+    }
+  } catch {
+    // Silently ignore .env read errors
+  }
+}
+
+/**
  * Helper: check if an env var is truthy.
  * @param {string|undefined} val
  * @returns {boolean}
@@ -89,8 +129,11 @@ function isTruthy(val) {
 export function loadConfig(overrides = {}) {
   const env = process.env;
 
-  // Determine data directory first (needed to load config.md)
+  // Determine data directory first (needed to load .env and config.md)
   const dir = overrides.dir || env.YEAFT_DIR || DEFAULTS.dir;
+
+  // Load .env file (sets process.env for undefined keys — shell env takes precedence)
+  loadEnvFile(dir);
 
   // Load from config.md
   const fileConfig = loadConfigFile(dir);

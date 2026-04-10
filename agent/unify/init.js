@@ -32,24 +32,39 @@ maxContextTokens: 200000
 
 # Yeaft Config
 
-This file configures your Yeaft agent. Edit the YAML frontmatter above to change settings.
+Edit the YAML frontmatter above to change settings.
+The \`model\` field is a model ID (e.g. \`gpt-5\`, \`claude-sonnet-4-20250514\`).
+Yeaft auto-detects the correct API adapter and endpoint from the model ID.
 
-## Available Models
+## Model IDs
 
 - \`claude-sonnet-4-20250514\` (default)
-- \`gpt-5\`
-- \`gpt-5.4\`
-- \`deepseek-chat\`
+- \`claude-opus-4-20250514\`
+- \`gpt-5\`, \`gpt-5.4\`, \`gpt-4.1\`, \`gpt-4.1-mini\`
+- \`o3\`, \`o4-mini\`
+- \`deepseek-chat\`, \`deepseek-reasoner\`
+- \`gemini-2.5-pro\`, \`gemini-2.5-flash\`
+
+## API Keys
+
+Store API keys in \`~/.yeaft/.env\` (recommended) or export as env vars:
+
+\`\`\`bash
+# ~/.yeaft/.env
+YEAFT_API_KEY=sk-ant-...          # Anthropic
+YEAFT_OPENAI_API_KEY=sk-...       # OpenAI / DeepSeek / Gemini
+\`\`\`
 
 ## Environment Variables
 
-Environment variables take precedence over this file:
+Shell env vars take precedence over .env and config.md:
 
-- \`YEAFT_MODEL\` — override model
+- \`YEAFT_MODEL\` — override model ID
 - \`YEAFT_API_KEY\` — Anthropic API key
-- \`YEAFT_OPENAI_API_KEY\` — OpenAI API key
-- \`YEAFT_PROXY_URL\` — CopilotProxy URL
-- \`YEAFT_DEBUG\` — enable debug mode
+- \`YEAFT_OPENAI_API_KEY\` — OpenAI-compatible API key
+- \`YEAFT_PROXY_URL\` — CopilotProxy URL (default: http://localhost:6628)
+- \`YEAFT_DEBUG\` — enable debug mode (1/true)
+- \`YEAFT_DIR\` — data directory (default: ~/.yeaft)
 `;
 
 /** Default MEMORY.md content. */
