@@ -149,12 +149,13 @@ async function _createRoleQueryInner(session, roleName) {
 
   // 继承全局 MCP disallowedTools，避免不必要的 tool schema token 消耗
   const globalDisallowed = ctx.CONFIG?.disallowedTools || [];
-  // Crew 角色禁用 Agent 和 Skill 工具：
-  // - Agent: 角色间协作必须通过 ROUTE 块，不能自行启动 sub-agent
-  // - Skill: skills 的 trigger 词会和角色职能冲突（如 review-code、commit），
-  //   导致 Claude 调用 Skill 而不是输出 ROUTE 块。从 schema 层面移除比
-  //   canCallTool throw 更可靠（完全不消耗 tool schema token）
-  const crewDisallowed = ['Agent', 'Skill'];
+  // Developer 角色保留 skills（tdd、commit 等对开发有帮助），
+  // 其他角色（pm、reviewer、tester）禁用 skills 以避免和 ROUTE 冲突
+  const isDeveloper = role.roleType === 'developer';
+  // Crew 角色禁用 Agent 工具：角色间协作必须通过 ROUTE 块，不能自行启动 sub-agent
+  // 非 developer 角色额外禁用 Skill 工具：skills 的 trigger 词会和角色职能冲突
+  //   （如 review-code、commit），导致 Claude 调用 Skill 而不是输出 ROUTE 块
+  const crewDisallowed = isDeveloper ? ['Agent'] : ['Agent', 'Skill'];
   const effectiveDisallowed = [...globalDisallowed, ...crewDisallowed];
 
   const queryOptions = {
@@ -163,6 +164,9 @@ async function _createRoleQueryInner(session, roleName) {
     abort: abortController.signal,
     model: role.model || undefined,
     appendSystemPrompt: systemPrompt,
+    // 非 developer 角色禁用 skills（--disable-slash-commands），
+    // 从 CLI 层面阻止 skills 系统 prompt 注入，避免和 ROUTE 冲突
+    ...(!isDeveloper && { disableSlashCommands: true }),
     ...(effectiveDisallowed.length > 0 && { disallowedTools: effectiveDisallowed })
   };
 

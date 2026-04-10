@@ -319,8 +319,7 @@ process.on('SIGTERM', () => {
 // 启动 - 先确保依赖，再检测能力，再连接
 (async () => {
   await ensureDependencies();
-  // yeaft-skills now managed at project level (.claude/settings.json), not global
-  // await ensureYeaftSkills();
+  await ensureYeaftSkills();
   ctx.agentCapabilities = await detectCapabilities();
   connect();
 })();

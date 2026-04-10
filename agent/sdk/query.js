@@ -350,7 +350,8 @@ export function query(config) {
       model,
       canCallTool,
       abort,
-      noSessionPersistence
+      noSessionPersistence,
+      disableSlashCommands
     } = {}
   } = config;
 
@@ -374,6 +375,7 @@ export function query(config) {
   if (disallowedTools.length > 0) args.push('--disallowedTools', ...disallowedTools);
   if (permissionMode) args.push('--permission-mode', permissionMode);
   if (noSessionPersistence) args.push('--no-session-persistence');
+  if (disableSlashCommands) args.push('--disable-slash-commands');
 
   // Handle prompt input
   if (typeof prompt === 'string') {
