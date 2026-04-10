@@ -746,7 +746,7 @@ export default {
       handler(val) {
         if (val) {
           this.typingStartTime = Date.now();
-          this.animationType = Math.random() < 0.5 ? 'cat' : 'dog';
+          this.animationType = 'cat'; // Dog needs more polish; preview via ?preview=dog
           this.catPosition = 0;
           this.catDirection = 1;
           this.dogPosL = 5; this.dogPosR = 95; this.dogPhase = 'bark-both';
@@ -1043,7 +1043,7 @@ export default {
       } else if (urlPreview === 'cat') {
         this.animationType = 'cat';
       } else {
-        this.animationType = Math.random() < 0.5 ? 'cat' : 'dog';
+        this.animationType = 'cat';
       }
       if (this.animationType === 'cat') {
         this._startCatWalk();

@@ -655,17 +655,18 @@ describe('Dog SVG elements present in all 3 components', () => {
 describe('animationType selection', () => {
   it('MessageList.js has animationType ref', () => {
     expect(messageListJs).toContain("animationType");
-    expect(messageListJs).toContain("Math.random() < 0.5");
+    // Dog disabled by default — always cat, but dog still available via ?preview=dog
+    expect(messageListJs).toContain("animationType.value = 'cat'");
   });
 
   it('SplitPane.js has animationType ref', () => {
     expect(splitPaneJs).toContain("animationType");
-    expect(splitPaneJs).toContain("Math.random() < 0.5");
+    expect(splitPaneJs).toContain("animationType.value = 'cat'");
   });
 
   it('CrewChatView.js has animationType data', () => {
     expect(crewChatViewJs).toContain("animationType");
-    expect(crewChatViewJs).toContain("Math.random() < 0.5");
+    expect(crewChatViewJs).toContain("this.animationType = 'cat'");
   });
 
   it('all 3 components use v-if for cat/dog template switching', () => {

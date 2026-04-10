@@ -712,8 +712,9 @@ export default {
       if (show) {
         typingStartTime.value = Date.now();
         now.value = Date.now();
-        // Randomly choose animation type
-        animationType.value = Math.random() < 0.5 ? 'cat' : 'dog';
+        // Always use cat for now; dog animation needs more polish
+        // Dog can still be previewed via ?preview=dog
+        animationType.value = 'cat';
         catPosition.value = 0;
         catDirection.value = 1;
         dogPosL.value = 5; dogPosR.value = 95; dogPhase.value = 'bark-both';
@@ -741,7 +742,7 @@ export default {
       } else if (urlPreview === 'cat') {
         animationType.value = 'cat';
       } else {
-        animationType.value = Math.random() < 0.5 ? 'cat' : 'dog';
+        animationType.value = 'cat';
       }
       if (animationType.value === 'cat') {
         catRafId = requestAnimationFrame(updateCatWalk);
