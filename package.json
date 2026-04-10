@@ -54,5 +54,8 @@
     "webchat"
   ],
   "license": "MIT",
-  "author": "Yeaft"
+  "author": "Yeaft",
+  "dependencies": {
+    "better-sqlite3": "^12.8.0"
+  }
 }
