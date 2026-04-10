@@ -7,6 +7,7 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { DEFAULT_YEAFT_DIR } from './init.js';
+import { resolveModel } from './models.js';
 
 /** Default configuration values. */
 const DEFAULTS = {
@@ -161,16 +162,38 @@ export function loadConfig(overrides = {}) {
       DEFAULTS.maxOutputTokens,
   };
 
-  // Auto-detect adapter if not explicitly set
+  // Auto-detect adapter using model registry + credential fallback
   if (!config.adapter) {
-    if (config.apiKey) {
-      config.adapter = 'anthropic';
-    } else if (config.openaiApiKey) {
-      config.adapter = 'openai';
-    } else if (config.proxyUrl) {
-      config.adapter = 'proxy';
+    const modelInfo = resolveModel(config.model);
+    if (modelInfo) {
+      // Known model → set adapter from registry
+      config.adapter = modelInfo.adapter === 'anthropic' ? 'anthropic' : 'openai';
+      // Use registry baseUrl if not explicitly overridden
+      if (!config.baseUrl) {
+        config.baseUrl = modelInfo.baseUrl;
+      }
+      // Use registry contextWindow if still at default
+      if (config.maxContextTokens === DEFAULTS.maxContextTokens) {
+        config.maxContextTokens = modelInfo.contextWindow;
+      }
+      // Use registry maxOutputTokens if still at default
+      if (config.maxOutputTokens === DEFAULTS.maxOutputTokens) {
+        config.maxOutputTokens = modelInfo.maxOutputTokens;
+      }
+    } else {
+      // Unknown model → fallback to credential-based detection
+      if (config.apiKey) {
+        config.adapter = 'anthropic';
+      } else if (config.openaiApiKey) {
+        config.adapter = 'openai';
+      } else if (config.proxyUrl) {
+        config.adapter = 'proxy';
+      }
     }
   }
+
+  // Store resolved model info for reference
+  config.modelInfo = resolveModel(config.model) || null;
 
   return config;
 }

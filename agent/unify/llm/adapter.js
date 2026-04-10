@@ -156,16 +156,17 @@ export async function createLLMAdapter(config) {
     const { AnthropicAdapter } = await import('./anthropic.js');
     return new AnthropicAdapter({
       apiKey: config.apiKey,
+      baseUrl: config.baseUrl || undefined, // AnthropicAdapter has its own default
     });
   }
 
   if (adapter === 'openai' || (!adapter && config.openaiApiKey)) {
-    if (!config.openaiApiKey) {
+    if (!config.openaiApiKey && !config.apiKey) {
       throw new Error('OpenAI adapter requires YEAFT_OPENAI_API_KEY');
     }
     const { ChatCompletionsAdapter } = await import('./chat-completions.js');
     return new ChatCompletionsAdapter({
-      apiKey: config.openaiApiKey,
+      apiKey: config.openaiApiKey || config.apiKey,
       baseUrl: config.baseUrl || 'https://api.openai.com/v1',
     });
   }

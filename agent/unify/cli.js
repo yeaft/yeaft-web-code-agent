@@ -15,6 +15,8 @@ import { initYeaftDir } from './init.js';
 import { loadConfig } from './config.js';
 import { DebugTrace, NullTrace, createTrace } from './debug-trace.js';
 import { createLLMAdapter } from './llm/adapter.js';
+import { Engine } from './engine.js';
+import { listModels } from './models.js';
 
 // ─── Argument parsing ──────────────────────────────────────────
 
@@ -210,7 +212,19 @@ async function runREPL(config, args) {
     dbPath: join(config.dir, 'debug.db'),
   });
 
+  let adapter;
+  let engine;
   let currentMode = args.mode;
+  let conversationMessages = []; // persistent conversation for REPL
+
+  // Lazy adapter creation (don't fail on start if no API key for --trace-only usage)
+  async function ensureEngine() {
+    if (!engine) {
+      adapter = await createLLMAdapter(config);
+      engine = new Engine({ adapter, trace, config });
+    }
+    return engine;
+  }
 
   console.log(`Yeaft Unify REPL (model: ${config.model}, mode: ${currentMode})`);
   console.log('Type /help for commands, /quit to exit.');
@@ -245,6 +259,8 @@ async function runREPL(config, args) {
           console.log('  /dry-run                 — Toggle dry-run mode');
           console.log('  /stats                   — Show session stats');
           console.log('  /model <name>            — Switch model');
+          console.log('  /models                  — List available models');
+          console.log('  /clear                   — Clear conversation history');
           console.log('  /quit                    — Exit');
           break;
 
@@ -298,10 +314,26 @@ async function runREPL(config, args) {
         case 'model':
           if (cmdArgs[0]) {
             config.model = cmdArgs[0];
+            engine = null; // Force re-creation with new model
             console.log(`Model switched to: ${config.model}`);
           } else {
             console.log(`Current model: ${config.model}`);
           }
+          break;
+
+        case 'models': {
+          const models = listModels();
+          console.log('Available models:');
+          for (const m of models) {
+            const current = m.name === config.model ? ' ← current' : '';
+            console.log(`  ${m.name} (${m.displayName}) — ${m.adapter}, ${(m.contextWindow / 1000).toFixed(0)}K ctx${current}`);
+          }
+          break;
+        }
+
+        case 'clear':
+          conversationMessages = [];
+          console.log('Conversation history cleared.');
           break;
 
         case 'quit':
@@ -319,9 +351,49 @@ async function runREPL(config, args) {
       return;
     }
 
-    // Regular input → engine.query (Phase 1 stub)
-    console.log(`[engine not yet implemented — Phase 1]`);
-    console.log(`Would send to ${config.model}: "${input}"`);
+    // Regular input → engine.query
+    try {
+      const eng = await ensureEngine();
+
+      for await (const event of eng.query({
+        prompt: input,
+        mode: currentMode,
+        messages: conversationMessages,
+      })) {
+        switch (event.type) {
+          case 'text_delta':
+            process.stdout.write(event.text);
+            break;
+          case 'tool_start':
+            if (config.debug) {
+              process.stderr.write(`\n[tool] ${event.name}(${JSON.stringify(event.input)})\n`);
+            }
+            break;
+          case 'tool_end':
+            if (config.debug) {
+              const status = event.isError ? 'ERROR' : 'OK';
+              process.stderr.write(`[tool] ${event.name} → ${status}\n`);
+            }
+            break;
+          case 'error':
+            process.stderr.write(`\nError: ${event.error.message}\n`);
+            break;
+          case 'turn_start':
+            if (config.debug && event.turnNumber > 1) {
+              process.stderr.write(`\n--- Turn ${event.turnNumber} ---\n`);
+            }
+            break;
+        }
+      }
+      console.log(); // newline after response
+
+      // Save to conversation history for context
+      conversationMessages.push({ role: 'user', content: input });
+      // Note: the engine manages its own internal conversation for the query loop,
+      // but we track it here too for REPL multi-turn context
+    } catch (err) {
+      console.error(`Error: ${err.message}`);
+    }
     rl.prompt();
   });
 
@@ -346,9 +418,37 @@ async function runOnce(config, args) {
       return;
     }
 
-    // Phase 1 stub
-    console.log(`[engine not yet implemented — Phase 1]`);
-    console.log(`Would send to ${config.model}: "${args.prompt}"`);
+    const adapter = await createLLMAdapter(config);
+    const engine = new Engine({ adapter, trace, config });
+
+    for await (const event of engine.query({ prompt: args.prompt, mode: args.mode })) {
+      switch (event.type) {
+        case 'text_delta':
+          process.stdout.write(event.text);
+          break;
+        case 'tool_start':
+          if (args.verbose) {
+            process.stderr.write(`\n[tool] ${event.name}(${JSON.stringify(event.input)})\n`);
+          }
+          break;
+        case 'tool_end':
+          if (args.verbose) {
+            const status = event.isError ? 'ERROR' : 'OK';
+            process.stderr.write(`[tool] ${event.name} → ${status}\n`);
+          }
+          break;
+        case 'error':
+          process.stderr.write(`\nError: ${event.error.message}\n`);
+          break;
+        case 'turn_start':
+          if (args.verbose && event.turnNumber > 1) {
+            process.stderr.write(`\n--- Turn ${event.turnNumber} ---\n`);
+          }
+          break;
+      }
+    }
+    // Final newline after streaming text
+    console.log();
   } finally {
     trace.close();
   }
