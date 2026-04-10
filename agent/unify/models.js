@@ -138,7 +138,9 @@ export const MODEL_REGISTRY = new Map([
  */
 export function resolveModel(modelName) {
   if (!modelName) return null;
-  return MODEL_REGISTRY.get(modelName) || null;
+  const info = MODEL_REGISTRY.get(modelName);
+  // Return a shallow copy so callers can't mutate the registry
+  return info ? { ...info } : null;
 }
 
 /**

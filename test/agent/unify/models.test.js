@@ -101,6 +101,22 @@ describe('resolveModel', () => {
     expect(info.baseUrl).toContain('googleapis.com');
     expect(info.contextWindow).toBe(1048576);
   });
+
+  it('should return a copy, not a reference to the registry entry', () => {
+    const info1 = resolveModel('gpt-5');
+    const info2 = resolveModel('gpt-5');
+
+    // Should be equal in value
+    expect(info1).toEqual(info2);
+
+    // But not the same object
+    expect(info1).not.toBe(info2);
+
+    // Mutating the copy should NOT affect the registry
+    info1.contextWindow = 999;
+    const info3 = resolveModel('gpt-5');
+    expect(info3.contextWindow).toBe(256000); // original value unchanged
+  });
 });
 
 describe('listModels', () => {

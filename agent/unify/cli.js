@@ -16,7 +16,7 @@ import { loadConfig } from './config.js';
 import { DebugTrace, NullTrace, createTrace } from './debug-trace.js';
 import { createLLMAdapter } from './llm/adapter.js';
 import { Engine } from './engine.js';
-import { listModels } from './models.js';
+import { listModels, resolveModel } from './models.js';
 
 // ─── Argument parsing ──────────────────────────────────────────
 
@@ -313,19 +313,22 @@ async function runREPL(config, args) {
 
         case 'model':
           if (cmdArgs[0]) {
-            config.model = cmdArgs[0];
-            // Re-resolve adapter and baseUrl from model registry
-            const { resolveModel } = await import('./models.js');
-            const newModelInfo = resolveModel(config.model);
-            if (newModelInfo) {
-              config.adapter = newModelInfo.adapter === 'anthropic' ? 'anthropic' : 'openai';
-              config.baseUrl = newModelInfo.baseUrl;
-              config.maxContextTokens = newModelInfo.contextWindow;
-              config.maxOutputTokens = newModelInfo.maxOutputTokens;
-              config.modelInfo = newModelInfo;
+            try {
+              config.model = cmdArgs[0];
+              // Re-resolve adapter and baseUrl from model registry
+              const newModelInfo = resolveModel(config.model);
+              if (newModelInfo) {
+                config.adapter = newModelInfo.adapter === 'anthropic' ? 'anthropic' : 'openai';
+                config.baseUrl = newModelInfo.baseUrl;
+                config.maxContextTokens = newModelInfo.contextWindow;
+                config.maxOutputTokens = newModelInfo.maxOutputTokens;
+                config.modelInfo = newModelInfo;
+              }
+              engine = null; // Force re-creation with new model + adapter
+              console.log(`Model switched to: ${config.model} (adapter: ${config.adapter})`);
+            } catch (e) {
+              console.error(`Error switching model: ${e.message}`);
             }
-            engine = null; // Force re-creation with new model + adapter
-            console.log(`Model switched to: ${config.model} (adapter: ${config.adapter})`);
           } else {
             console.log(`Current model: ${config.model} (adapter: ${config.adapter})`);
           }
@@ -349,10 +352,8 @@ async function runREPL(config, args) {
         case 'quit':
         case 'exit':
         case 'q':
-          trace.close();
-          rl.close();
-          process.exit(0);
-          break;
+          rl.close(); // close handler does trace.close() + process.exit()
+          return; // don't call rl.prompt() below
 
         default:
           console.log(`Unknown command: /${cmd}. Type /help for commands.`);

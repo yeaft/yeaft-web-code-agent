@@ -134,6 +134,15 @@ export class Engine {
    * @yields {EngineEvent}
    */
   async *query({ prompt, mode = 'chat', messages = [], signal }) {
+    if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
+      yield {
+        type: 'error',
+        error: new Error('prompt is required and must be a non-empty string'),
+        retryable: false,
+      };
+      return;
+    }
+
     const systemPrompt = this.#buildSystemPrompt(mode);
 
     // Build conversation: existing messages + new user message

@@ -78,6 +78,11 @@ function loadConfigFile(dir) {
  * Load .env file from a directory. Sets process.env for any keys
  * not already defined (env vars take precedence over .env file).
  *
+ * ⚠️ Side-effect: mutates process.env globally. Values set by a previous
+ * call persist across subsequent loadConfig() calls within the same process.
+ * This is by design (matches dotenv behavior), but callers that need isolation
+ * (e.g. tests) must manually delete keys from process.env between calls.
+ *
  * @param {string} dir — Directory containing .env file
  */
 function loadEnvFile(dir) {

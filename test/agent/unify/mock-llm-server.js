@@ -199,6 +199,10 @@ export function createMockLLMServer() {
   function buildAnthropicNonStreamResponse() {
     const textParts = responseEvents.filter(e => e.type === 'text');
     return {
+      id: 'msg_mock_001',
+      type: 'message',
+      role: 'assistant',
+      model: 'mock-model',
       content: textParts.map(e => ({ type: 'text', text: e.text })),
       usage: { input_tokens: 50, output_tokens: 25 },
       stop_reason: 'end_turn',
@@ -208,14 +212,18 @@ export function createMockLLMServer() {
   function buildChatCompletionsNonStreamResponse() {
     const textParts = responseEvents.filter(e => e.type === 'text');
     return {
+      id: 'chatcmpl-mock-001',
+      object: 'chat.completion',
+      model: 'mock-model',
       choices: [{
         message: {
           role: 'assistant',
           content: textParts.map(e => e.text).join(''),
         },
+        index: 0,
         finish_reason: 'stop',
       }],
-      usage: { prompt_tokens: 50, completion_tokens: 25 },
+      usage: { prompt_tokens: 50, completion_tokens: 25, total_tokens: 75 },
     };
   }
 

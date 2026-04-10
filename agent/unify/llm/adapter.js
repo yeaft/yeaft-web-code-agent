@@ -163,7 +163,7 @@ export async function createLLMAdapter(config) {
 
   if (adapter === 'openai' || (!adapter && config.openaiApiKey)) {
     if (!config.openaiApiKey && !config.apiKey) {
-      throw new Error('OpenAI adapter requires YEAFT_OPENAI_API_KEY');
+      throw new Error('OpenAI adapter requires YEAFT_OPENAI_API_KEY (or YEAFT_API_KEY as fallback)');
     }
     const { ChatCompletionsAdapter } = await import('./chat-completions.js');
     return new ChatCompletionsAdapter({

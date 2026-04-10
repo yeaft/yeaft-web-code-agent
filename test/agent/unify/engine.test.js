@@ -110,6 +110,59 @@ describe('Engine', () => {
     });
   });
 
+  describe('input validation', () => {
+    it('should yield error for empty prompt', async () => {
+      const engine = new Engine({
+        adapter: mockAdapter,
+        trace,
+        config: { model: 'test-model', maxOutputTokens: 1024 },
+      });
+
+      const events = [];
+      for await (const event of engine.query({ prompt: '' })) {
+        events.push(event);
+      }
+
+      expect(events).toHaveLength(1);
+      expect(events[0].type).toBe('error');
+      expect(events[0].error.message).toContain('prompt is required');
+      // Should NOT have called adapter
+      expect(mockAdapter.callLog).toHaveLength(0);
+    });
+
+    it('should yield error for null prompt', async () => {
+      const engine = new Engine({
+        adapter: mockAdapter,
+        trace,
+        config: { model: 'test-model', maxOutputTokens: 1024 },
+      });
+
+      const events = [];
+      for await (const event of engine.query({ prompt: null })) {
+        events.push(event);
+      }
+
+      expect(events).toHaveLength(1);
+      expect(events[0].type).toBe('error');
+    });
+
+    it('should yield error for whitespace-only prompt', async () => {
+      const engine = new Engine({
+        adapter: mockAdapter,
+        trace,
+        config: { model: 'test-model', maxOutputTokens: 1024 },
+      });
+
+      const events = [];
+      for await (const event of engine.query({ prompt: '   ' })) {
+        events.push(event);
+      }
+
+      expect(events).toHaveLength(1);
+      expect(events[0].type).toBe('error');
+    });
+  });
+
   describe('simple query (no tools)', () => {
     it('should yield text events and complete', async () => {
       mockAdapter.pushResponse([
