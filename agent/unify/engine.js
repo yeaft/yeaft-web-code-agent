@@ -2,21 +2,32 @@
  * engine.js — Yeaft query loop
  *
  * The engine is the core orchestrator:
- *   1. Build messages array
- *   2. Call adapter.stream()
- *   3. Collect text + tool_calls from stream events
- *   4. If tool_calls → execute tools → append results → goto 2
- *   5. If end_turn → done
- *   6. If max_tokens → done (Phase 2: auto-continue)
+ *   1. Before first turn: recall memories → inject into system prompt
+ *   2. Build messages array (with compact summary if available)
+ *   3. Call adapter.stream()
+ *   4. Collect text + tool_calls from stream events
+ *   5. If tool_calls → execute tools → append results → goto 3
+ *   6. If end_turn → persist messages → check consolidation → done
+ *   7. If max_tokens → auto-continue (up to maxContinueTurns)
+ *   8. On LLMContextError → force compact → retry
+ *   9. On retryable error with fallbackModel → switch model → retry
  *
  * Pattern derived from Claude Code's query loop (src/query.ts).
+ *
+ * Reference: yeaft-unify-implementation-plan.md §3.1, §4 (Phase 2)
  */
 
 import { randomUUID } from 'crypto';
 import { buildSystemPrompt } from './prompts.js';
+import { LLMContextError } from './llm/adapter.js';
+import { recall } from './memory/recall.js';
+import { shouldConsolidate, consolidate } from './memory/consolidate.js';
 
 /** Maximum number of turns before the engine stops to prevent infinite loops. */
 const MAX_TURNS = 25;
+
+/** Maximum auto-continue turns when stopReason is 'max_tokens'. */
+const MAX_CONTINUE_TURNS = 3;
 
 // ─── Engine Events (superset of adapter events) ──────────────────
 
@@ -25,8 +36,11 @@ const MAX_TURNS = 25;
  * @typedef {{ type: 'turn_end', turnNumber: number, stopReason: string }} TurnEndEvent
  * @typedef {{ type: 'tool_start', id: string, name: string, input: object }} ToolStartEvent
  * @typedef {{ type: 'tool_end', id: string, name: string, output: string, isError: boolean }} ToolEndEvent
+ * @typedef {{ type: 'consolidate', archivedCount: number, extractedCount: number }} ConsolidateEvent
+ * @typedef {{ type: 'recall', entryCount: number, cached: boolean }} RecallEvent
+ * @typedef {{ type: 'fallback', from: string, to: string, reason: string }} FallbackEvent
  *
- * @typedef {import('./llm/adapter.js').StreamEvent | TurnStartEvent | TurnEndEvent | ToolStartEvent | ToolEndEvent} EngineEvent
+ * @typedef {import('./llm/adapter.js').StreamEvent | TurnStartEvent | TurnEndEvent | ToolStartEvent | ToolEndEvent | ConsolidateEvent | RecallEvent | FallbackEvent} EngineEvent
  */
 
 // ─── Engine ──────────────────────────────────────────────────────
@@ -47,15 +61,29 @@ export class Engine {
   /** @type {string} */
   #traceId;
 
+  /** @type {import('./conversation/persist.js').ConversationStore|null} */
+  #conversationStore;
+
+  /** @type {import('./memory/store.js').MemoryStore|null} */
+  #memoryStore;
+
   /**
-   * @param {{ adapter: import('./llm/adapter.js').LLMAdapter, trace: object, config: object }} params
+   * @param {{
+   *   adapter: import('./llm/adapter.js').LLMAdapter,
+   *   trace: object,
+   *   config: object,
+   *   conversationStore?: import('./conversation/persist.js').ConversationStore,
+   *   memoryStore?: import('./memory/store.js').MemoryStore
+   * }} params
    */
-  constructor({ adapter, trace, config }) {
+  constructor({ adapter, trace, config, conversationStore, memoryStore }) {
     this.#adapter = adapter;
     this.#trace = trace;
     this.#config = config;
     this.#tools = new Map();
     this.#traceId = randomUUID();
+    this.#conversationStore = conversationStore || null;
+    this.#memoryStore = memoryStore || null;
   }
 
   /**
@@ -94,17 +122,118 @@ export class Engine {
   }
 
   /**
-   * Build the system prompt.
+   * Build the system prompt with memory and compact summary.
    *
-   * @param {string} mode — 'chat' | 'work' | 'dream'
+   * @param {string} mode
+   * @param {{ profile?: string, entries?: object[] }} [memory]
+   * @param {string} [compactSummary]
    * @returns {string}
    */
-  #buildSystemPrompt(mode) {
+  #buildSystemPrompt(mode, memory, compactSummary) {
     return buildSystemPrompt({
       language: this.#config.language || 'en',
       mode,
       toolNames: Array.from(this.#tools.keys()),
+      memory,
+      compactSummary,
     });
+  }
+
+  /**
+   * Perform memory recall for a given prompt.
+   *
+   * @param {string} prompt
+   * @returns {Promise<{ profile: string, entries: object[] }|null>}
+   */
+  async #recallMemory(prompt) {
+    if (!this.#memoryStore) return null;
+
+    const memory = { profile: '', entries: [] };
+
+    // Read user profile
+    memory.profile = this.#memoryStore.readProfile();
+
+    // Recall relevant entries
+    try {
+      const result = await recall({
+        prompt,
+        adapter: this.#adapter,
+        config: this.#config,
+        memoryStore: this.#memoryStore,
+      });
+      memory.entries = result.entries;
+    } catch {
+      // Recall failure is non-critical
+    }
+
+    return memory;
+  }
+
+  /**
+   * Read compact summary from conversation store.
+   *
+   * @returns {string}
+   */
+  #getCompactSummary() {
+    if (!this.#conversationStore) return '';
+    return this.#conversationStore.readCompactSummary();
+  }
+
+  /**
+   * Persist user message and assistant response to conversation store.
+   *
+   * @param {string} userContent
+   * @param {string} assistantContent
+   * @param {string} mode
+   * @param {object[]} [toolCalls]
+   */
+  #persistMessages(userContent, assistantContent, mode, toolCalls) {
+    if (!this.#conversationStore) return;
+
+    // Persist user message
+    this.#conversationStore.append({
+      role: 'user',
+      content: userContent,
+      mode,
+    });
+
+    // Persist assistant message
+    const assistantMsg = {
+      role: 'assistant',
+      content: assistantContent,
+      mode,
+      model: this.#config.model,
+    };
+    if (toolCalls && toolCalls.length > 0) {
+      assistantMsg.toolCalls = toolCalls;
+    }
+    this.#conversationStore.append(assistantMsg);
+  }
+
+  /**
+   * Check and trigger consolidation if needed.
+   *
+   * @returns {Promise<{ archivedCount: number, extractedCount: number }|null>}
+   */
+  async #maybeConsolidate() {
+    if (!this.#conversationStore || !this.#memoryStore) return null;
+
+    const budget = this.#config.messageTokenBudget || 8192;
+    if (!shouldConsolidate(this.#conversationStore, budget)) return null;
+
+    try {
+      const result = await consolidate({
+        conversationStore: this.#conversationStore,
+        memoryStore: this.#memoryStore,
+        adapter: this.#adapter,
+        config: this.#config,
+        budget,
+      });
+      return { archivedCount: result.archivedCount, extractedCount: result.extractedEntries.length };
+    } catch {
+      // Consolidation failure is non-critical
+      return null;
+    }
   }
 
   /**
@@ -126,7 +255,14 @@ export class Engine {
       return;
     }
 
-    const systemPrompt = this.#buildSystemPrompt(mode);
+    // ─── Pre-query: Recall + Compact Summary ────────────────
+    const memory = await this.#recallMemory(prompt);
+    if (memory && memory.entries.length > 0) {
+      yield { type: 'recall', entryCount: memory.entries.length, cached: false };
+    }
+
+    const compactSummary = this.#getCompactSummary();
+    const systemPrompt = this.#buildSystemPrompt(mode, memory, compactSummary);
 
     // Build conversation: existing messages + new user message
     const conversationMessages = [
@@ -136,6 +272,9 @@ export class Engine {
 
     const toolDefs = this.#getToolDefs();
     let turnNumber = 0;
+    let continueTurns = 0; // auto-continue counter
+    let fullResponseText = '';
+    let currentModel = this.#config.model;
 
     while (true) {
       turnNumber++;
@@ -166,9 +305,8 @@ export class Engine {
 
       try {
         // Stream from adapter
-        // Note: pass a snapshot of messages so later mutations don't affect the adapter
         for await (const event of this.#adapter.stream({
-          model: this.#config.model,
+          model: currentModel,
           system: systemPrompt,
           messages: [...conversationMessages],
           tools: toolDefs.length > 0 ? toolDefs : undefined,
@@ -202,16 +340,35 @@ export class Engine {
           }
         }
       } catch (err) {
-        // Adapter threw an exception (network, auth, etc.)
         const latencyMs = Date.now() - startTime;
         this.#trace.endTurn(turnId, {
-          model: this.#config.model,
+          model: currentModel,
           inputTokens: totalUsage.inputTokens,
           outputTokens: totalUsage.outputTokens,
           stopReason: 'error',
           latencyMs,
           responseText,
         });
+
+        // ─── LLMContextError → force compact → retry ──────
+        if (err instanceof LLMContextError && this.#conversationStore && this.#memoryStore) {
+          const consolidated = await this.#maybeConsolidate();
+          if (consolidated && consolidated.archivedCount > 0) {
+            yield { type: 'consolidate', archivedCount: consolidated.archivedCount, extractedCount: consolidated.extractedCount };
+            yield { type: 'turn_end', turnNumber, stopReason: 'context_overflow_retry' };
+            continue; // retry with fewer messages
+          }
+        }
+
+        // ─── Fallback model ──────────────────────────────
+        const fallbackModel = this.#config.fallbackModel;
+        if (fallbackModel && fallbackModel !== currentModel &&
+            (err.name === 'LLMRateLimitError' || err.name === 'LLMServerError')) {
+          yield { type: 'fallback', from: currentModel, to: fallbackModel, reason: err.message };
+          currentModel = fallbackModel;
+          yield { type: 'turn_end', turnNumber, stopReason: 'fallback_retry' };
+          continue; // retry with fallback model
+        }
 
         yield {
           type: 'error',
@@ -226,7 +383,7 @@ export class Engine {
 
       // Record turn in debug trace
       this.#trace.endTurn(turnId, {
-        model: this.#config.model,
+        model: currentModel,
         inputTokens: totalUsage.inputTokens,
         outputTokens: totalUsage.outputTokens,
         stopReason,
@@ -244,10 +401,29 @@ export class Engine {
         }));
       }
       conversationMessages.push(assistantMsg);
+      fullResponseText += responseText;
+
+      // ─── Handle max_tokens → auto-continue ────────────
+      if (stopReason === 'max_tokens' && continueTurns < MAX_CONTINUE_TURNS) {
+        continueTurns++;
+        // Append a "Continue" user message
+        conversationMessages.push({ role: 'user', content: 'Continue' });
+        yield { type: 'turn_end', turnNumber, stopReason: 'max_tokens_continue' };
+        continue; // loop back to call adapter again
+      }
 
       // If no tool calls, we're done
       if (stopReason !== 'tool_use' || toolCalls.length === 0) {
         yield { type: 'turn_end', turnNumber, stopReason };
+
+        // ─── Post-query: Persist + Consolidate ────────────
+        this.#persistMessages(prompt, fullResponseText, mode, assistantMsg.toolCalls);
+
+        const consolidated = await this.#maybeConsolidate();
+        if (consolidated && consolidated.archivedCount > 0) {
+          yield { type: 'consolidate', archivedCount: consolidated.archivedCount, extractedCount: consolidated.extractedCount };
+        }
+
         break;
       }
 
@@ -315,5 +491,21 @@ export class Engine {
    */
   get toolNames() {
     return Array.from(this.#tools.keys());
+  }
+
+  /**
+   * Get the conversation store (for external access, e.g., CLI commands).
+   * @returns {import('./conversation/persist.js').ConversationStore|null}
+   */
+  get conversationStore() {
+    return this.#conversationStore;
+  }
+
+  /**
+   * Get the memory store (for external access, e.g., CLI commands).
+   * @returns {import('./memory/store.js').MemoryStore|null}
+   */
+  get memoryStore() {
+    return this.#memoryStore;
   }
 }

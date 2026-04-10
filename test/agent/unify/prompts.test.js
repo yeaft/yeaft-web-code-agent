@@ -118,4 +118,70 @@ describe('buildSystemPrompt', () => {
     const parts = prompt.split('\n\n');
     expect(parts.length).toBeGreaterThanOrEqual(3); // identity, mode, date
   });
+
+  // ─── Memory injection (Phase 2) ──────────────────────────────
+
+  it('should include user profile in memory section', () => {
+    const prompt = buildSystemPrompt({
+      language: 'en',
+      mode: 'chat',
+      memory: { profile: 'Senior TypeScript developer. Prefers dark mode.' },
+    });
+    expect(prompt).toContain('## User Memory');
+    expect(prompt).toContain('### User Profile');
+    expect(prompt).toContain('Senior TypeScript developer');
+  });
+
+  it('should include recalled memory entries', () => {
+    const prompt = buildSystemPrompt({
+      language: 'en',
+      mode: 'chat',
+      memory: {
+        entries: [
+          { name: 'ts-generics', kind: 'skill', tags: ['typescript'], content: 'TS generics patterns' },
+          { name: 'auth-bug', kind: 'lesson', tags: ['auth', 'bugfix'], content: 'Auth null check fix' },
+        ],
+      },
+    });
+    expect(prompt).toContain('### Recalled Memories');
+    expect(prompt).toContain('ts-generics');
+    expect(prompt).toContain('auth-bug');
+    expect(prompt).toContain('TS generics patterns');
+  });
+
+  it('should include compact summary', () => {
+    const prompt = buildSystemPrompt({
+      language: 'en',
+      mode: 'chat',
+      compactSummary: 'User discussed TypeScript patterns and auth module bugs.',
+    });
+    expect(prompt).toContain('## Conversation History Summary');
+    expect(prompt).toContain('User discussed TypeScript patterns');
+  });
+
+  it('should include memory section in Chinese', () => {
+    const prompt = buildSystemPrompt({
+      language: 'zh',
+      mode: 'chat',
+      memory: { profile: '高级 TypeScript 开发者' },
+    });
+    expect(prompt).toContain('## 用户记忆');
+    expect(prompt).toContain('### 用户画像');
+    expect(prompt).toContain('高级 TypeScript 开发者');
+  });
+
+  it('should not include memory section when no memory', () => {
+    const prompt = buildSystemPrompt({ language: 'en', mode: 'chat' });
+    expect(prompt).not.toContain('## User Memory');
+    expect(prompt).not.toContain('## Conversation History Summary');
+  });
+
+  it('should not include memory section when memory is empty', () => {
+    const prompt = buildSystemPrompt({
+      language: 'en',
+      mode: 'chat',
+      memory: { profile: '', entries: [] },
+    });
+    expect(prompt).not.toContain('## User Memory');
+  });
 });

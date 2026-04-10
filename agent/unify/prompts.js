@@ -4,7 +4,11 @@
  * Single source of truth for system prompts. Both engine.js and cli.js
  * import buildSystemPrompt() from here. Supports 'en' and 'zh'.
  *
- * To add a new language: add a new key to PROMPTS with all required fields.
+ * Phase 2 additions:
+ *   - Memory section (user profile + recalled entries)
+ *   - Compact summary section (conversation history summary)
+ *
+ * Reference: yeaft-unify-system-prompt-budget.md — Static + Dynamic + Context layers
  */
 
 // ─── Prompt Templates ─────────────────────────────────────────
@@ -17,6 +21,10 @@ const PROMPTS = {
     work: 'You are in work mode. Break tasks into steps, execute them using tools, and report progress.',
     dream: 'You are in dream mode. Reflect on past conversations and consolidate memories.',
     tools: (names) => `Available tools: ${names}`,
+    memoryHeader: '## User Memory',
+    profileHeader: '### User Profile',
+    recalledHeader: '### Recalled Memories',
+    compactHeader: '## Conversation History Summary',
   },
   zh: {
     identity: '你是 Yeaft，一个有用的 AI 助手。',
@@ -25,6 +33,10 @@ const PROMPTS = {
     work: '你处于工作模式。将任务分解为步骤，使用工具执行，并报告进度。',
     dream: '你处于梦境模式。回顾过去的对话，整理和巩固记忆。',
     tools: (names) => `可用工具：${names}`,
+    memoryHeader: '## 用户记忆',
+    profileHeader: '### 用户画像',
+    recalledHeader: '### 相关记忆',
+    compactHeader: '## 对话历史摘要',
   },
 };
 
@@ -34,10 +46,22 @@ export const SUPPORTED_LANGUAGES = Object.keys(PROMPTS);
 /**
  * Build the system prompt for a given language and mode.
  *
- * @param {{ language?: string, mode?: string, toolNames?: string[] }} params
+ * @param {{
+ *   language?: string,
+ *   mode?: string,
+ *   toolNames?: string[],
+ *   memory?: { profile?: string, entries?: object[] },
+ *   compactSummary?: string
+ * }} params
  * @returns {string}
  */
-export function buildSystemPrompt({ language = 'en', mode = 'chat', toolNames = [] } = {}) {
+export function buildSystemPrompt({
+  language = 'en',
+  mode = 'chat',
+  toolNames = [],
+  memory,
+  compactSummary,
+} = {}) {
   // Fallback to English for unknown languages
   const lang = PROMPTS[language] || PROMPTS.en;
 
@@ -55,6 +79,30 @@ export function buildSystemPrompt({ language = 'en', mode = 'chat', toolNames = 
 
   if (toolNames.length > 0) {
     parts.push(lang.tools(toolNames.join(', ')));
+  }
+
+  // ─── Memory Section ─────────────────────────────────────
+  if (memory && (memory.profile || (memory.entries && memory.entries.length > 0))) {
+    const memoryParts = [lang.memoryHeader];
+
+    if (memory.profile) {
+      memoryParts.push(`${lang.profileHeader}\n${memory.profile}`);
+    }
+
+    if (memory.entries && memory.entries.length > 0) {
+      const entryLines = memory.entries.map(e => {
+        const tags = (e.tags && e.tags.length > 0) ? ` [${e.tags.join(', ')}]` : '';
+        return `- **${e.name}** (${e.kind}): ${e.content}${tags}`;
+      });
+      memoryParts.push(`${lang.recalledHeader}\n${entryLines.join('\n')}`);
+    }
+
+    parts.push(memoryParts.join('\n\n'));
+  }
+
+  // ─── Compact Summary Section ────────────────────────────
+  if (compactSummary) {
+    parts.push(`${lang.compactHeader}\n${compactSummary}`);
   }
 
   return parts.join('\n\n');

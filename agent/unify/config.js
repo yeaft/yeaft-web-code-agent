@@ -26,6 +26,8 @@ const DEFAULTS = {
   dir: DEFAULT_YEAFT_DIR,
   maxContextTokens: 200000,
   maxOutputTokens: 16384,
+  messageTokenBudget: 8192, // Phase 2: context * 4%, triggers consolidation
+  maxContinueTurns: 3,      // Phase 2: auto-continue on max_tokens
 };
 
 /**
@@ -217,6 +219,17 @@ export function loadConfig(overrides = {}) {
       overrides.maxOutputTokens ??
       fileConfig.maxOutputTokens ??
       DEFAULTS.maxOutputTokens,
+
+    messageTokenBudget:
+      overrides.messageTokenBudget ??
+      (env.YEAFT_MESSAGE_TOKEN_BUDGET ? parseInt(env.YEAFT_MESSAGE_TOKEN_BUDGET, 10) : null) ??
+      fileConfig.messageTokenBudget ??
+      DEFAULTS.messageTokenBudget,
+
+    maxContinueTurns:
+      overrides.maxContinueTurns ??
+      fileConfig.maxContinueTurns ??
+      DEFAULTS.maxContinueTurns,
   };
 
   // Auto-detect adapter using model registry + credential fallback
