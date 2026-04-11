@@ -5,7 +5,7 @@
  */
 
 export { initYeaftDir, DEFAULT_YEAFT_DIR } from './init.js';
-export { loadConfig, parseFrontmatter } from './config.js';
+export { loadConfig, parseFrontmatter, loadMCPConfig } from './config.js';
 export { DebugTrace, NullTrace, createTrace } from './debug-trace.js';
 export {
   LLMAdapter,
@@ -36,4 +36,5 @@ export { MCPManager, createMCPManager } from './mcp.js';
 export { SkillManager, createSkillManager, parseSkill, serializeSkill } from './skills.js';
 export { defineTool } from './tools/types.js';
 export { ToolRegistry, createEmptyRegistry } from './tools/registry.js';
+export { loadSession } from './session.js';
 

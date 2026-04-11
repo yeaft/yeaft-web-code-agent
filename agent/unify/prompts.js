@@ -61,6 +61,7 @@ export function buildSystemPrompt({
   toolNames = [],
   memory,
   compactSummary,
+  skillContent,
 } = {}) {
   // Fallback to English for unknown languages
   const lang = PROMPTS[language] || PROMPTS.en;
@@ -79,6 +80,11 @@ export function buildSystemPrompt({
 
   if (toolNames.length > 0) {
     parts.push(lang.tools(toolNames.join(', ')));
+  }
+
+  // ─── Skills Section ─────────────────────────────────────
+  if (skillContent) {
+    parts.push(skillContent);
   }
 
   // ─── Memory Section ─────────────────────────────────────

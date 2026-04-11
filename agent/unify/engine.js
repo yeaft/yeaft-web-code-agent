@@ -22,6 +22,7 @@ import { buildSystemPrompt } from './prompts.js';
 import { LLMContextError } from './llm/adapter.js';
 import { recall } from './memory/recall.js';
 import { shouldConsolidate, consolidate } from './memory/consolidate.js';
+import { runStopHooks } from './stop-hooks.js';
 
 /** Maximum number of turns before the engine stops to prevent infinite loops. */
 const MAX_TURNS = 25;
@@ -67,16 +68,32 @@ export class Engine {
   /** @type {import('./memory/store.js').MemoryStore|null} */
   #memoryStore;
 
+  /** @type {import('./tools/registry.js').ToolRegistry|null} */
+  #toolRegistry;
+
+  /** @type {import('./skills.js').SkillManager|null} */
+  #skillManager;
+
+  /** @type {import('./mcp.js').MCPManager|null} */
+  #mcpManager;
+
+  /** @type {string|null} */
+  #yeaftDir;
+
   /**
    * @param {{
    *   adapter: import('./llm/adapter.js').LLMAdapter,
    *   trace: object,
    *   config: object,
    *   conversationStore?: import('./conversation/persist.js').ConversationStore,
-   *   memoryStore?: import('./memory/store.js').MemoryStore
+   *   memoryStore?: import('./memory/store.js').MemoryStore,
+   *   toolRegistry?: import('./tools/registry.js').ToolRegistry,
+   *   skillManager?: import('./skills.js').SkillManager,
+   *   mcpManager?: import('./mcp.js').MCPManager,
+   *   yeaftDir?: string,
    * }} params
    */
-  constructor({ adapter, trace, config, conversationStore, memoryStore }) {
+  constructor({ adapter, trace, config, conversationStore, memoryStore, toolRegistry, skillManager, mcpManager, yeaftDir }) {
     this.#adapter = adapter;
     this.#trace = trace;
     this.#config = config;
@@ -84,6 +101,10 @@ export class Engine {
     this.#traceId = randomUUID();
     this.#conversationStore = conversationStore || null;
     this.#memoryStore = memoryStore || null;
+    this.#toolRegistry = toolRegistry || null;
+    this.#skillManager = skillManager || null;
+    this.#mcpManager = mcpManager || null;
+    this.#yeaftDir = yeaftDir || null;
   }
 
   /**
@@ -106,10 +127,16 @@ export class Engine {
 
   /**
    * Get the list of registered tool definitions (for passing to the adapter).
+   * Prefers ToolRegistry (mode-aware) when available, falls back to legacy #tools Map.
    *
+   * @param {string} [mode]
    * @returns {import('./llm/adapter.js').UnifiedToolDef[]}
    */
-  #getToolDefs() {
+  #getToolDefs(mode) {
+    if (this.#toolRegistry) {
+      return this.#toolRegistry.getToolDefs(mode || 'chat');
+    }
+    // Legacy path: no mode filtering
     const defs = [];
     for (const [, tool] of this.#tools) {
       defs.push({
@@ -122,21 +149,56 @@ export class Engine {
   }
 
   /**
-   * Build the system prompt with memory and compact summary.
+   * Build the system prompt with memory, compact summary, and skill content.
    *
    * @param {string} mode
    * @param {{ profile?: string, entries?: object[] }} [memory]
    * @param {string} [compactSummary]
+   * @param {string} [prompt] — user prompt (for skill relevance matching)
    * @returns {string}
    */
-  #buildSystemPrompt(mode, memory, compactSummary) {
+  #buildSystemPrompt(mode, memory, compactSummary, prompt) {
+    // Get relevant skill content if SkillManager is wired
+    let skillContent = '';
+    if (this.#skillManager && prompt) {
+      skillContent = this.#skillManager.getRelevantPromptContent(prompt, mode);
+    }
+
+    // Get tool names from the appropriate source
+    const toolNames = this.#toolRegistry
+      ? this.#toolRegistry.getToolNames(mode || 'chat')
+      : Array.from(this.#tools.keys());
+
     return buildSystemPrompt({
       language: this.#config.language || 'en',
       mode,
-      toolNames: Array.from(this.#tools.keys()),
+      toolNames,
       memory,
       compactSummary,
+      skillContent,
     });
+  }
+
+  /**
+   * Build the full tool context for Phase 5 tools.
+   *
+   * @param {AbortSignal} [signal]
+   * @param {string} [mode]
+   * @returns {object}
+   */
+  #buildToolContext(signal, mode) {
+    return {
+      signal,
+      yeaftDir: this.#yeaftDir,
+      cwd: process.cwd(),
+      mcpManager: this.#mcpManager,
+      skillManager: this.#skillManager,
+      memoryStore: this.#memoryStore,
+      conversationStore: this.#conversationStore,
+      adapter: this.#adapter,
+      config: this.#config,
+      mode,
+    };
   }
 
   /**
@@ -262,7 +324,7 @@ export class Engine {
     }
 
     const compactSummary = this.#getCompactSummary();
-    const systemPrompt = this.#buildSystemPrompt(mode, memory, compactSummary);
+    const systemPrompt = this.#buildSystemPrompt(mode, memory, compactSummary, prompt);
 
     // Build conversation: existing messages + new user message
     const conversationMessages = [
@@ -270,7 +332,7 @@ export class Engine {
       { role: 'user', content: prompt },
     ];
 
-    const toolDefs = this.#getToolDefs();
+    const toolDefs = this.#getToolDefs(mode);
     let turnNumber = 0;
     let continueTurns = 0; // auto-continue counter
     let fullResponseText = '';
@@ -416,33 +478,66 @@ export class Engine {
       if (stopReason !== 'tool_use' || toolCalls.length === 0) {
         yield { type: 'turn_end', turnNumber, stopReason };
 
-        // ─── Post-query: Persist + Consolidate ────────────
-        this.#persistMessages(prompt, fullResponseText, mode, assistantMsg.toolCalls);
+        // ─── Post-query: StopHooks or Legacy ─────────────
+        if (this.#yeaftDir && this.#conversationStore) {
+          // Full pipeline: persist + consolidate + dream gate
+          const hookResult = await runStopHooks({
+            yeaftDir: this.#yeaftDir,
+            mode,
+            conversationStore: this.#conversationStore,
+            memoryStore: this.#memoryStore,
+            adapter: this.#adapter,
+            config: this.#config,
+            messages: conversationMessages,
+            trace: this.#trace,
+          });
 
-        const consolidated = await this.#maybeConsolidate();
-        if (consolidated && consolidated.archivedCount > 0) {
-          yield { type: 'consolidate', archivedCount: consolidated.archivedCount, extractedCount: consolidated.extractedCount };
+          if (hookResult.consolidated) {
+            yield { type: 'consolidate', archivedCount: 0, extractedCount: 0 };
+          }
+          if (hookResult.dreamTriggered) {
+            yield { type: 'dream_triggered' };
+          }
+        } else {
+          // Legacy path (no yeaftDir → use old behavior)
+          this.#persistMessages(prompt, fullResponseText, mode, assistantMsg.toolCalls);
+
+          const consolidated = await this.#maybeConsolidate();
+          if (consolidated && consolidated.archivedCount > 0) {
+            yield { type: 'consolidate', archivedCount: consolidated.archivedCount, extractedCount: consolidated.extractedCount };
+          }
         }
 
         break;
       }
 
       // Execute tool calls and feed results back
+      const toolCtx = this.#buildToolContext(signal, mode);
+
       for (const tc of toolCalls) {
-        const tool = this.#tools.get(tc.name);
         const toolStartTime = Date.now();
 
         let output;
         let isError = false;
 
-        if (!tool) {
+        // Resolve tool: prefer ToolRegistry, fallback to legacy #tools Map
+        const hasTool = this.#toolRegistry
+          ? this.#toolRegistry.has(tc.name)
+          : this.#tools.has(tc.name);
+
+        if (!hasTool) {
           output = `Error: unknown tool "${tc.name}"`;
           isError = true;
           yield { type: 'tool_end', id: tc.id, name: tc.name, output, isError: true };
         } else {
           try {
             yield { type: 'tool_start', id: tc.id, name: tc.name, input: tc.input };
-            output = await tool.execute(tc.input, { signal });
+            if (this.#toolRegistry) {
+              output = await this.#toolRegistry.execute(tc.name, tc.input, toolCtx);
+            } else {
+              const tool = this.#tools.get(tc.name);
+              output = await tool.execute(tc.input, { signal });
+            }
             yield { type: 'tool_end', id: tc.id, name: tc.name, output, isError: false };
           } catch (err) {
             output = `Error: ${err.message}`;
@@ -490,6 +585,7 @@ export class Engine {
    * @returns {string[]}
    */
   get toolNames() {
+    if (this.#toolRegistry) return this.#toolRegistry.names;
     return Array.from(this.#tools.keys());
   }
 
@@ -508,4 +604,16 @@ export class Engine {
   get memoryStore() {
     return this.#memoryStore;
   }
+
+  /** @returns {import('./tools/registry.js').ToolRegistry|null} */
+  get toolRegistry() { return this.#toolRegistry; }
+
+  /** @returns {import('./skills.js').SkillManager|null} */
+  get skillManager() { return this.#skillManager; }
+
+  /** @returns {import('./mcp.js').MCPManager|null} */
+  get mcpManager() { return this.#mcpManager; }
+
+  /** @returns {string|null} */
+  get yeaftDir() { return this.#yeaftDir; }
 }

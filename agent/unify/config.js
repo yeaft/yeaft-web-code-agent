@@ -267,3 +267,39 @@ export function loadConfig(overrides = {}) {
 
   return config;
 }
+
+/**
+ * Load MCP server configuration from ~/.yeaft/mcp.json.
+ *
+ * JSON format (frontmatter parser can't handle nested objects):
+ * {
+ *   "servers": [
+ *     {
+ *       "name": "github",
+ *       "command": "npx",
+ *       "args": ["@mcp/github"],
+ *       "env": { "GITHUB_TOKEN": "ghp_..." }
+ *     }
+ *   ]
+ * }
+ *
+ * @param {string} yeaftDir — e.g. ~/.yeaft
+ * @returns {{ servers: object[] }}
+ */
+export function loadMCPConfig(yeaftDir) {
+  const mcpPath = join(yeaftDir, 'mcp.json');
+  if (!existsSync(mcpPath)) return { servers: [] };
+
+  try {
+    const raw = readFileSync(mcpPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!parsed.servers || !Array.isArray(parsed.servers)) {
+      return { servers: [] };
+    }
+    // Each server must have at least name + command
+    const valid = parsed.servers.filter(s => s.name && s.command);
+    return { servers: valid };
+  } catch {
+    return { servers: [] };
+  }
+}
