@@ -354,6 +354,7 @@ export default {
   // Settings - LLM 配置
   'settings.tabs.llm': 'LLM',
   'settings.llm.noAgent': '请先选择一个 Agent 以管理 LLM 配置。',
+  'settings.llm.agentOffline': 'Agent 当前离线，无法加载 LLM 配置。请等待 Agent 上线后重试。',
   'settings.llm.loading': '正在加载配置...',
   'settings.llm.loadError': '加载配置失败',
   'settings.llm.providersTitle': '服务商',

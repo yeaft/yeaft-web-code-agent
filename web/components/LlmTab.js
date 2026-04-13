@@ -7,6 +7,11 @@ export default {
         {{ $t('settings.llm.noAgent') }}
       </div>
 
+      <!-- Agent offline -->
+      <div v-else-if="!agentOnline" class="sp-desc">
+        {{ $t('settings.llm.agentOffline') }}
+      </div>
+
       <!-- Loading -->
       <div v-else-if="loading" class="sp-desc">
         {{ $t('settings.llm.loading') }}
@@ -201,6 +206,12 @@ export default {
     chatStore() {
       return Pinia.useChatStore();
     },
+    agentOnline() {
+      const agentId = this.chatStore.currentAgent;
+      if (!agentId) return false;
+      const agent = this.chatStore.agents.find(a => a.id === agentId);
+      return agent ? agent.online : false;
+    },
     currentConfig() {
       const agentId = this.chatStore.currentAgent;
       if (!agentId) return null;
@@ -225,6 +236,12 @@ export default {
       },
       immediate: true
     },
+    agentOnline(online) {
+      // Auto-retry when agent comes online (and we haven't loaded yet)
+      if (online && !this.currentConfig && this.chatStore.currentAgent) {
+        this.requestConfig();
+      }
+    },
     currentConfig: {
       handler(config) {
         if (config && config.loaded) {
@@ -238,19 +255,27 @@ export default {
     requestConfig() {
       const agentId = this.chatStore.currentAgent;
       if (!agentId) return;
+
+      // Check if agent is online before sending request
+      if (!this.agentOnline) {
+        this.loading = false;
+        this.loadError = null;
+        return;
+      }
+
       this.loading = true;
       this.loadError = null;
       this.chatStore.sendWsMessage({
         type: 'get_llm_config',
         agentId
       });
-      // Timeout: if no response in 10s, show error
+      // Timeout: if no response in 5s, show error
       this._loadTimeout = setTimeout(() => {
         if (this.loading) {
           this.loading = false;
           this.loadError = 'Timeout';
         }
-      }, 10000);
+      }, 5000);
     },
 
     loadFromConfig(config) {

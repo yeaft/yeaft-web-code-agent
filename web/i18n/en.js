@@ -354,6 +354,7 @@ export default {
   // Settings - LLM Configuration
   'settings.tabs.llm': 'LLM',
   'settings.llm.noAgent': 'Please select an Agent first to manage LLM configuration.',
+  'settings.llm.agentOffline': 'Agent is currently offline. LLM configuration will load when the agent comes online.',
   'settings.llm.loading': 'Loading configuration...',
   'settings.llm.loadError': 'Failed to load configuration',
   'settings.llm.providersTitle': 'Providers',
