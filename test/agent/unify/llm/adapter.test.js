@@ -183,6 +183,7 @@ describe('Mock stream test', () => {
 
     // Mock fetch to return SSE stream
     const originalFetch = global.fetch;
+    let capturedBody = null;
     const sseLines = [
       'data: {"id":"1","choices":[{"delta":{"role":"assistant","content":"Hello"},"index":0}]}',
       'data: {"id":"1","choices":[{"delta":{"content":" world"},"index":0}]}',
@@ -202,11 +203,14 @@ describe('Mock stream test', () => {
       },
     });
 
-    global.fetch = async () => ({
-      ok: true,
-      status: 200,
-      body: stream,
-    });
+    global.fetch = async (url, opts) => {
+      capturedBody = JSON.parse(opts.body);
+      return {
+        ok: true,
+        status: 200,
+        body: stream,
+      };
+    };
 
     try {
       const adapter = new ChatCompletionsAdapter({ apiKey: 'test', baseUrl: 'http://localhost' });
@@ -219,6 +223,10 @@ describe('Mock stream test', () => {
       })) {
         events.push(event);
       }
+
+      // Verify both max_tokens and max_completion_tokens are sent
+      expect(capturedBody.max_tokens).toBe(16384);
+      expect(capturedBody.max_completion_tokens).toBe(16384);
 
       // Check text deltas
       const textEvents = events.filter(e => e.type === 'text_delta');
@@ -237,6 +245,39 @@ describe('Mock stream test', () => {
       const stopEvents = events.filter(e => e.type === 'stop');
       expect(stopEvents).toHaveLength(1);
       expect(stopEvents[0].stopReason).toBe('tool_use');
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  it('should send both max_tokens and max_completion_tokens in call()', async () => {
+    const { ChatCompletionsAdapter } = await import('../../../../agent/unify/llm/chat-completions.js');
+
+    const originalFetch = global.fetch;
+    let capturedBody = null;
+
+    global.fetch = async (url, opts) => {
+      capturedBody = JSON.parse(opts.body);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ choices: [{ message: { content: 'hi' } }], usage: { prompt_tokens: 5, completion_tokens: 1 } }),
+      };
+    };
+
+    try {
+      const adapter = new ChatCompletionsAdapter({ apiKey: 'test', baseUrl: 'http://localhost' });
+      await adapter.call({
+        model: 'gpt-5',
+        system: 'You are helpful',
+        messages: [{ role: 'user', content: 'hello' }],
+        maxTokens: 8192,
+      });
+
+      expect(capturedBody.max_tokens).toBe(8192);
+      expect(capturedBody.max_completion_tokens).toBe(8192);
+      // Should NOT have stream set
+      expect(capturedBody.stream).toBeUndefined();
     } finally {
       global.fetch = originalFetch;
     }

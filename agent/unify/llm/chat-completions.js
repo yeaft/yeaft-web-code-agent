@@ -12,6 +12,13 @@
  *   Response: delta.tool_calls[i].function.arguments (JSON string) → accumulate → JSON.parse → UnifiedToolCall
  *   Result:   UnifiedToolResult → { role: "tool", tool_call_id, content }
  *   Finish:   "tool_calls" → "tool_use", "stop" → "end_turn", "length" → "max_tokens"
+ *
+ * max_tokens strategy:
+ *   OpenAI new API (GPT-4.1+, o-series, GPT-5+) uses "max_completion_tokens".
+ *   DeepSeek and other OpenAI-compatible servers only support "max_tokens".
+ *   CopilotProxy transparently forwards whatever the client sends.
+ *   We auto-detect which to use based on baseUrl, and callers can override
+ *   via extraBody to pass any parameter directly.
  */
 
 import {
@@ -22,6 +29,24 @@ import {
   LLMServerError,
   LLMAbortError,
 } from './adapter.js';
+
+/**
+ * Detect whether a baseUrl points to a provider that only supports the
+ * legacy "max_tokens" parameter (i.e. does NOT support "max_completion_tokens").
+ *
+ * @param {string} baseUrl
+ * @returns {boolean} true = use max_tokens, false = use max_completion_tokens
+ */
+function useLegacyMaxTokens(baseUrl) {
+  // DeepSeek only documents max_tokens
+  if (baseUrl.includes('deepseek.com')) return true;
+  // Local servers (Ollama, LMStudio, etc.) typically only support max_tokens,
+  // except CopilotProxy on port 6628 which transparently forwards both
+  if ((baseUrl.includes('localhost') || baseUrl.includes('127.0.0.1')) && !baseUrl.includes('6628')) {
+    return true;
+  }
+  return false;
+}
 
 /**
  * ChatCompletionsAdapter — Talks to OpenAI Chat Completions API and compatibles.
@@ -37,6 +62,23 @@ export class ChatCompletionsAdapter extends LLMAdapter {
     super({ apiKey, baseUrl });
     this.#apiKey = apiKey;
     this.#baseUrl = baseUrl.replace(/\/+$/, ''); // strip trailing slash
+  }
+
+  /** Expose baseUrl for testing. */
+  get baseUrl() { return this.#baseUrl; }
+
+  /**
+   * Build the max-tokens portion of the request body.
+   * Uses max_completion_tokens for OpenAI/CopilotProxy, max_tokens for legacy providers.
+   *
+   * @param {number} maxTokens
+   * @returns {object}
+   */
+  #maxTokensBody(maxTokens) {
+    if (useLegacyMaxTokens(this.#baseUrl)) {
+      return { max_tokens: maxTokens };
+    }
+    return { max_completion_tokens: maxTokens };
   }
 
   /**
@@ -140,22 +182,25 @@ export class ChatCompletionsAdapter extends LLMAdapter {
   }
 
   /**
-   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, signal?: AbortSignal }} params
+   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, extraBody?: object, signal?: AbortSignal }} params
    * @returns {AsyncGenerator<import('./adapter.js').StreamEvent>}
    */
-  async *stream({ model, system, messages, tools, maxTokens = 16384, signal }) {
+  async *stream({ model, system, messages, tools, maxTokens = 16384, extraBody, signal }) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const body = {
       model,
       messages: this.#translateMessages(system, messages),
-      max_tokens: maxTokens,
+      ...this.#maxTokensBody(maxTokens),
       stream: true,
       stream_options: { include_usage: true },
     };
 
     const translatedTools = this.#translateTools(tools);
     if (translatedTools) body.tools = translatedTools;
+
+    // extraBody allows callers to pass through any additional/override parameters
+    if (extraBody) Object.assign(body, extraBody);
 
     const response = await fetch(`${this.#baseUrl}/chat/completions`, {
       method: 'POST',
@@ -277,14 +322,17 @@ export class ChatCompletionsAdapter extends LLMAdapter {
   /**
    * Non-streaming call for side queries.
    */
-  async call({ model, system, messages, maxTokens = 4096, signal }) {
+  async call({ model, system, messages, maxTokens = 4096, extraBody, signal }) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const body = {
       model,
       messages: this.#translateMessages(system, messages),
-      max_tokens: maxTokens,
+      ...this.#maxTokensBody(maxTokens),
     };
+
+    // extraBody allows callers to pass through any additional/override parameters
+    if (extraBody) Object.assign(body, extraBody);
 
     const response = await fetch(`${this.#baseUrl}/chat/completions`, {
       method: 'POST',
