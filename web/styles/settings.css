@@ -207,10 +207,10 @@
 
 .settings-dialog {
   display: flex;
-  width: 780px;
-  max-width: 90vw;
-  height: 600px;
-  max-height: 85vh;
+  width: 900px;
+  max-width: 92vw;
+  height: 680px;
+  max-height: 90vh;
   background: var(--bg-main);
   border-radius: 16px;
   box-shadow: 0 16px 70px rgba(0, 0, 0, 0.25);
@@ -1014,9 +1014,14 @@
   gap: 0;
 }
 
+/* Allow inputs inside LLM cards to use full width */
+.llm-tab .sp-input {
+  max-width: 100%;
+}
+
 .llm-provider-card {
-  background: var(--bg-secondary, #f5f5f5);
-  border: 1px solid var(--border-color, #e0e0e0);
+  background: var(--sidebar-hover);
+  border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 14px;
   margin-bottom: 10px;
@@ -1042,7 +1047,7 @@
 }
 .llm-remove-btn:hover {
   opacity: 1;
-  color: #ef4444;
+  color: var(--error);
 }
 
 .llm-field {
@@ -1140,29 +1145,30 @@
   gap: 10px;
   margin-top: 8px;
   padding-top: 10px;
-  border-top: 1px solid var(--border-color, #e0e0e0);
+  border-top: 1px solid var(--border-color);
 }
 
 .llm-dirty-hint {
   font-size: 12px;
-  color: #f59e0b;
+  color: var(--text-secondary);
 }
 
 .sp-btn-primary {
-  background: #2563eb;
+  background: var(--accent-blue);
   color: #fff;
-  border-color: #2563eb;
+  border-color: var(--accent-blue);
 }
 .sp-btn-primary:hover {
-  background: #1d4ed8;
+  background: var(--accent-blue-hover);
+  border-color: var(--accent-blue-hover);
 }
 .sp-btn-primary:disabled {
-  background: #93c5fd;
-  border-color: #93c5fd;
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .sp-error-text {
-  color: #ef4444;
+  color: var(--error);
 }
 
 /* LLM Setup Banner */
@@ -1170,15 +1176,15 @@
   display: flex;
   gap: 12px;
   padding: 14px 16px;
-  background: #fef3c7;
-  border: 1px solid #f59e0b;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.3);
   border-radius: 8px;
   margin-bottom: 16px;
 }
 
 [data-theme="dark"] .llm-setup-banner {
-  background: rgba(245, 158, 11, 0.1);
-  border-color: rgba(245, 158, 11, 0.4);
+  background: rgba(245, 158, 11, 0.06);
+  border-color: rgba(245, 158, 11, 0.25);
 }
 
 .llm-setup-icon {
@@ -1187,25 +1193,29 @@
   padding-top: 2px;
 }
 
+[data-theme="dark"] .llm-setup-icon {
+  color: #fbbf24;
+}
+
 .llm-setup-text strong {
   display: block;
   font-size: 13px;
-  color: #92400e;
+  color: var(--text-primary);
   margin-bottom: 4px;
-}
-
-[data-theme="dark"] .llm-setup-text strong {
-  color: #fbbf24;
 }
 
 .llm-setup-text p {
   font-size: 12px;
-  color: #78350f;
+  color: var(--text-secondary);
   margin: 0;
   line-height: 1.5;
 }
 
-[data-theme="dark"] .llm-setup-text p {
-  color: #fde68a;
+/* LLM Models hint text */
+.llm-models-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 0 0 6px;
+  line-height: 1.5;
 }
 

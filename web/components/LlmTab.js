@@ -58,12 +58,12 @@ export default {
                   </button>
                   <div class="sp-custom-select-menu" v-show="openDropdown === 'protocol-' + idx">
                     <div class="sp-custom-select-option" :class="{ active: !provider.protocol || provider.protocol === 'openai' }"
-                      @click="provider.protocol = 'openai'; closeDropdown('protocol-' + idx); markDirty()">
+                      @click="setProtocol(idx, 'openai'); closeDropdown('protocol-' + idx)">
                       {{ $t('settings.llm.protocolOpenAI') }}
                       <svg v-if="!provider.protocol || provider.protocol === 'openai'" class="sp-custom-select-check" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
                     </div>
                     <div class="sp-custom-select-option" :class="{ active: provider.protocol === 'anthropic' }"
-                      @click="provider.protocol = 'anthropic'; closeDropdown('protocol-' + idx); markDirty()">
+                      @click="setProtocol(idx, 'anthropic'); closeDropdown('protocol-' + idx)">
                       {{ $t('settings.llm.protocolAnthropic') }}
                       <svg v-if="provider.protocol === 'anthropic'" class="sp-custom-select-check" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
                     </div>
@@ -92,6 +92,7 @@ export default {
 
             <div class="llm-field">
               <label class="llm-field-label">{{ $t('settings.llm.models') }}</label>
+              <p class="llm-models-hint">{{ $t('settings.llm.modelsHint') }}</p>
               <textarea class="sp-input llm-models-textarea" v-model="providerModelsText[idx]"
                 :placeholder="$t('settings.llm.modelsPlaceholder')"
                 @input="onModelsTextChange(idx, $event)" rows="3"></textarea>
@@ -273,9 +274,9 @@ export default {
         models: Array.isArray(p.models) ? [...p.models] : []
       }));
 
-      // Build text representations for model textareas
+      // Build text representations for model textareas (comma-separated)
       this.providerModelsText = this.localProviders.map(p =>
-        (p.models || []).join('\n')
+        (p.models || []).join(', ')
       );
 
       this.localPrimaryModel = config.primaryModel || null;
@@ -316,12 +317,36 @@ export default {
     onModelsTextChange(idx, event) {
       const text = event.target.value;
       this.providerModelsText[idx] = text;
-      // Parse text → models array
+      // Parse text → models array (support both newline and comma separators)
       this.localProviders[idx].models = text
-        .split('\n')
+        .split(/[\n,]+/)
         .map(l => l.trim())
         .filter(l => l);
       this.markDirty();
+    },
+
+    setProtocol(idx, protocol) {
+      const prev = this.localProviders[idx].protocol;
+      this.localProviders[idx].protocol = protocol;
+      this.markDirty();
+
+      // Auto-fill model presets if the models field is empty
+      const currentModels = (this.localProviders[idx].models || []).filter(m => m);
+      if (currentModels.length === 0 && protocol !== prev) {
+        const presets = this._getModelPresets(protocol);
+        if (presets.length > 0) {
+          this.localProviders[idx].models = [...presets];
+          this.providerModelsText[idx] = presets.join(', ');
+        }
+      }
+    },
+
+    _getModelPresets(protocol) {
+      if (protocol === 'anthropic') {
+        return ['claude-sonnet-4-20250514', 'claude-opus-4-20250514', 'claude-haiku-3-20250414'];
+      }
+      // Default: OpenAI-compatible presets
+      return ['gpt-5', 'gpt-4.1', 'gpt-4.1-mini', 'o3', 'o4-mini'];
     },
 
     toggleApiKeyVisibility(idx) {
