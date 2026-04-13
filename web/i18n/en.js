@@ -90,9 +90,7 @@ export default {
   'chat.agent.upgradeConfirm': 'Upgrade Agent "{name}" to the latest version?\nThe agent will restart after upgrading.',
   'chat.agent.alreadyLatest': 'Agent is already at the latest version (v{version}), no upgrade needed.',
   'chat.agent.online': '{count} Agent(s) online',
-  'chat.agent.unify': 'Unify Chat',
   'chat.agent.selectFirst': 'Please select an Agent first',
-  'chat.unify.empty': 'No Unify conversations. Click + to start.',
 
   // Chat - Session lifecycle
   'chat.session.creating': 'Creating conversation...',

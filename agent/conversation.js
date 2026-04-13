@@ -6,7 +6,6 @@ import { query } from './sdk/index.js';
 import { loadSessionHistory } from './history.js';
 import { startClaudeQuery } from './claude.js';
 import { crewSessions, loadCrewIndex } from './crew.js';
-import { handleUnifyInput } from './unify/web-bridge.js';
 
 // 不支持的斜杠命令（真正需要交互式 CLI 的命令）
 const UNSUPPORTED_SLASH_COMMANDS = ['/help', '/bug', '/login', '/logout', '/terminal-setup', '/vim', '/config'];
@@ -294,8 +293,7 @@ export async function sendConversationList() {
       createdAt: state.createdAt,
       processing: !!state.turnActive,
       userId: state.userId,
-      username: state.username,
-      mode: state.mode || null
+      username: state.username
     };
     list.push(entry);
   }
@@ -356,7 +354,7 @@ export function sendError(conversationId, message) {
 
 // 创建新的 conversation (延迟启动 Claude，等待用户发送第一条消息)
 export async function createConversation(msg) {
-  const { conversationId, workDir, userId, username, disallowedTools, mode } = msg;
+  const { conversationId, workDir, userId, username, disallowedTools } = msg;
   const effectiveWorkDir = workDir || ctx.CONFIG.workDir;
 
   console.log(`Creating conversation: ${conversationId} in ${effectiveWorkDir} (lazy start)`);
@@ -377,7 +375,6 @@ export async function createConversation(msg) {
     userId,
     username,
     disallowedTools: disallowedTools || null,  // null = 使用全局默认
-    mode: mode || 'claude',  // 'claude' (default) or 'unify'
     usage: {
       inputTokens: 0,
       outputTokens: 0,
@@ -393,8 +390,7 @@ export async function createConversation(msg) {
     workDir: effectiveWorkDir,
     userId,
     username,
-    disallowedTools: disallowedTools || null,
-    mode: mode || 'claude'
+    disallowedTools: disallowedTools || null
   });
 
   // 立即发送 agent 级别的 MCP servers 列表（从 ~/.claude.json 读取的）
@@ -417,11 +413,8 @@ export async function createConversation(msg) {
   sendConversationList();
 
   // ★ Prestart Claude CLI in background to eagerly fetch skills/tools/model
-  // Skip prestart for unify mode — it doesn't use Claude CLI
-  if (mode !== 'unify') {
-    // Fire-and-forget: failure just degrades to lazy-start behavior
-    prestartClaude(conversationId, effectiveWorkDir, null);
-  }
+  // Fire-and-forget: failure just degrades to lazy-start behavior
+  prestartClaude(conversationId, effectiveWorkDir, null);
 }
 
 // Resume 历史 conversation (延迟启动 Claude，等待用户发送第一条消息)
@@ -668,12 +661,6 @@ export async function handleCancelExecution(msg) {
 // 处理用户输入
 export async function handleUserInput(msg) {
   const { conversationId, prompt, workDir, claudeSessionId } = msg;
-
-  // ★ Unify mode: route to Unify Engine instead of Claude CLI
-  const state = ctx.conversations.get(conversationId);
-  if (state?.mode === 'unify') {
-    return handleUnifyInput(msg);
-  }
 
   // 解析斜杠命令
   const slashCommand = parseSlashCommand(prompt);

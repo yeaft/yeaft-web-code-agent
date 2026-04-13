@@ -74,8 +74,7 @@ export async function handleAgentConversation(agentId, agent, msg) {
         userId: trustedUserId,
         username: trustedUsername,
         createdAt: Date.now(),
-        processing: false,
-        mode: msg.mode || null
+        processing: false
       });
       try {
         if (msg.type === 'conversation_created') {
