@@ -13,12 +13,11 @@
  *   Result:   UnifiedToolResult → { role: "tool", tool_call_id, content }
  *   Finish:   "tool_calls" → "tool_use", "stop" → "end_turn", "length" → "max_tokens"
  *
- * max_tokens strategy:
- *   OpenAI new API (GPT-4.1+, o-series, GPT-5+) uses "max_completion_tokens".
- *   DeepSeek and other OpenAI-compatible servers only support "max_tokens".
+ * max_tokens strategy (based on model ID):
+ *   OpenAI models (gpt-*, o1*, o3*, o4*) use "max_completion_tokens" (new standard).
+ *   All other models (DeepSeek, Gemini, etc.) use "max_tokens" (legacy/compat).
  *   CopilotProxy transparently forwards whatever the client sends.
- *   We auto-detect which to use based on baseUrl, and callers can override
- *   via extraBody to pass any parameter directly.
+ *   Callers can override via extraBody to pass any parameter directly.
  */
 
 import {
@@ -31,20 +30,22 @@ import {
 } from './adapter.js';
 
 /**
- * Detect whether a baseUrl points to a provider that only supports the
- * legacy "max_tokens" parameter (i.e. does NOT support "max_completion_tokens").
+ * Check if a model ID is an OpenAI model that supports max_completion_tokens.
+ * OpenAI introduced max_completion_tokens with o1 and made it standard for
+ * GPT-4.1+, o-series, and GPT-5+. Other OpenAI-compatible APIs (DeepSeek,
+ * Gemini, Ollama) still only understand max_tokens.
  *
- * @param {string} baseUrl
- * @returns {boolean} true = use max_tokens, false = use max_completion_tokens
+ * @param {string} model — The model ID (e.g. "gpt-5", "deepseek-chat", "o3")
+ * @returns {boolean} true = use max_completion_tokens
  */
-function useLegacyMaxTokens(baseUrl) {
-  // DeepSeek only documents max_tokens
-  if (baseUrl.includes('deepseek.com')) return true;
-  // Local servers (Ollama, LMStudio, etc.) typically only support max_tokens,
-  // except CopilotProxy on port 6628 which transparently forwards both
-  if ((baseUrl.includes('localhost') || baseUrl.includes('127.0.0.1')) && !baseUrl.includes('6628')) {
-    return true;
-  }
+export function useNewMaxTokensParam(model) {
+  if (!model) return false;
+  const m = model.toLowerCase();
+  // GPT-4.1+ and GPT-5+
+  if (m.startsWith('gpt-')) return true;
+  // o-series reasoning models (o1, o3, o4-mini, etc.)
+  if (/^o\d/.test(m)) return true;
+  // Everything else (deepseek-*, gemini-*, claude-*, custom models): legacy
   return false;
 }
 
@@ -69,16 +70,17 @@ export class ChatCompletionsAdapter extends LLMAdapter {
 
   /**
    * Build the max-tokens portion of the request body.
-   * Uses max_completion_tokens for OpenAI/CopilotProxy, max_tokens for legacy providers.
+   * Uses max_completion_tokens for OpenAI models, max_tokens for others.
    *
+   * @param {string} model
    * @param {number} maxTokens
    * @returns {object}
    */
-  #maxTokensBody(maxTokens) {
-    if (useLegacyMaxTokens(this.#baseUrl)) {
-      return { max_tokens: maxTokens };
+  #maxTokensBody(model, maxTokens) {
+    if (useNewMaxTokensParam(model)) {
+      return { max_completion_tokens: maxTokens };
     }
-    return { max_completion_tokens: maxTokens };
+    return { max_tokens: maxTokens };
   }
 
   /**
@@ -191,7 +193,7 @@ export class ChatCompletionsAdapter extends LLMAdapter {
     const body = {
       model,
       messages: this.#translateMessages(system, messages),
-      ...this.#maxTokensBody(maxTokens),
+      ...this.#maxTokensBody(model, maxTokens),
       stream: true,
       stream_options: { include_usage: true },
     };
@@ -328,7 +330,7 @@ export class ChatCompletionsAdapter extends LLMAdapter {
     const body = {
       model,
       messages: this.#translateMessages(system, messages),
-      ...this.#maxTokensBody(maxTokens),
+      ...this.#maxTokensBody(model, maxTokens),
     };
 
     // extraBody allows callers to pass through any additional/override parameters

@@ -224,9 +224,9 @@ describe('Mock stream test', () => {
         events.push(event);
       }
 
-      // Verify both max_tokens and max_completion_tokens are sent
-      expect(capturedBody.max_tokens).toBe(16384);
+      // gpt-5 is an OpenAI model → should use max_completion_tokens
       expect(capturedBody.max_completion_tokens).toBe(16384);
+      expect(capturedBody.max_tokens).toBeUndefined();
 
       // Check text deltas
       const textEvents = events.filter(e => e.type === 'text_delta');
@@ -250,7 +250,7 @@ describe('Mock stream test', () => {
     }
   });
 
-  it('should send both max_tokens and max_completion_tokens in call()', async () => {
+  it('should send max_completion_tokens for OpenAI model in call()', async () => {
     const { ChatCompletionsAdapter } = await import('../../../../agent/unify/llm/chat-completions.js');
 
     const originalFetch = global.fetch;
@@ -266,7 +266,7 @@ describe('Mock stream test', () => {
     };
 
     try {
-      const adapter = new ChatCompletionsAdapter({ apiKey: 'test', baseUrl: 'http://localhost' });
+      const adapter = new ChatCompletionsAdapter({ apiKey: 'test', baseUrl: 'http://localhost:1234' });
       await adapter.call({
         model: 'gpt-5',
         system: 'You are helpful',
@@ -274,15 +274,212 @@ describe('Mock stream test', () => {
         maxTokens: 8192,
       });
 
-      expect(capturedBody.max_tokens).toBe(8192);
+      // gpt-5 is an OpenAI model → should use max_completion_tokens
       expect(capturedBody.max_completion_tokens).toBe(8192);
+      expect(capturedBody.max_tokens).toBeUndefined();
       // Should NOT have stream set
       expect(capturedBody.stream).toBeUndefined();
     } finally {
       global.fetch = originalFetch;
     }
   });
+});
 
+describe('max_tokens parameter selection (model-based)', () => {
+  const mockJsonResponse = () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ choices: [{ message: { content: 'ok' } }], usage: { prompt_tokens: 1, completion_tokens: 1 } }),
+  });
+
+  it('should send max_completion_tokens for gpt-5', async () => {
+    const { ChatCompletionsAdapter } = await import('../../../../agent/unify/llm/chat-completions.js');
+    const originalFetch = global.fetch;
+    let body;
+    global.fetch = async (_, opts) => { body = JSON.parse(opts.body); return mockJsonResponse(); };
+    try {
+      const adapter = new ChatCompletionsAdapter({ apiKey: 'sk-test', baseUrl: 'https://api.openai.com/v1' });
+      await adapter.call({ model: 'gpt-5', system: '', messages: [{ role: 'user', content: 'hi' }], maxTokens: 1024 });
+      expect(body.max_completion_tokens).toBe(1024);
+      expect(body.max_tokens).toBeUndefined();
+    } finally { global.fetch = originalFetch; }
+  });
+
+  it('should send max_completion_tokens for gpt-4.1', async () => {
+    const { ChatCompletionsAdapter } = await import('../../../../agent/unify/llm/chat-completions.js');
+    const originalFetch = global.fetch;
+    let body;
+    global.fetch = async (_, opts) => { body = JSON.parse(opts.body); return mockJsonResponse(); };
+    try {
+      const adapter = new ChatCompletionsAdapter({ apiKey: 'sk-test', baseUrl: 'https://api.openai.com/v1' });
+      await adapter.call({ model: 'gpt-4.1-mini', system: '', messages: [{ role: 'user', content: 'hi' }], maxTokens: 1024 });
+      expect(body.max_completion_tokens).toBe(1024);
+      expect(body.max_tokens).toBeUndefined();
+    } finally { global.fetch = originalFetch; }
+  });
+
+  it('should send max_completion_tokens for o3', async () => {
+    const { ChatCompletionsAdapter } = await import('../../../../agent/unify/llm/chat-completions.js');
+    const originalFetch = global.fetch;
+    let body;
+    global.fetch = async (_, opts) => { body = JSON.parse(opts.body); return mockJsonResponse(); };
+    try {
+      const adapter = new ChatCompletionsAdapter({ apiKey: 'sk-test', baseUrl: 'https://api.openai.com/v1' });
+      await adapter.call({ model: 'o3', system: '', messages: [{ role: 'user', content: 'hi' }], maxTokens: 2048 });
+      expect(body.max_completion_tokens).toBe(2048);
+      expect(body.max_tokens).toBeUndefined();
+    } finally { global.fetch = originalFetch; }
+  });
+
+  it('should send max_completion_tokens for o4-mini', async () => {
+    const { ChatCompletionsAdapter } = await import('../../../../agent/unify/llm/chat-completions.js');
+    const originalFetch = global.fetch;
+    let body;
+    global.fetch = async (_, opts) => { body = JSON.parse(opts.body); return mockJsonResponse(); };
+    try {
+      const adapter = new ChatCompletionsAdapter({ apiKey: 'proxy', baseUrl: 'http://localhost:6628/v1' });
+      await adapter.call({ model: 'o4-mini', system: '', messages: [{ role: 'user', content: 'hi' }], maxTokens: 4096 });
+      expect(body.max_completion_tokens).toBe(4096);
+      expect(body.max_tokens).toBeUndefined();
+    } finally { global.fetch = originalFetch; }
+  });
+
+  it('should send max_tokens for deepseek-chat', async () => {
+    const { ChatCompletionsAdapter } = await import('../../../../agent/unify/llm/chat-completions.js');
+    const originalFetch = global.fetch;
+    let body;
+    global.fetch = async (_, opts) => { body = JSON.parse(opts.body); return mockJsonResponse(); };
+    try {
+      const adapter = new ChatCompletionsAdapter({ apiKey: 'sk-test', baseUrl: 'https://api.deepseek.com' });
+      await adapter.call({ model: 'deepseek-chat', system: '', messages: [{ role: 'user', content: 'hi' }], maxTokens: 1024 });
+      expect(body.max_tokens).toBe(1024);
+      expect(body.max_completion_tokens).toBeUndefined();
+    } finally { global.fetch = originalFetch; }
+  });
+
+  it('should send max_tokens for deepseek-reasoner', async () => {
+    const { ChatCompletionsAdapter } = await import('../../../../agent/unify/llm/chat-completions.js');
+    const originalFetch = global.fetch;
+    let body;
+    global.fetch = async (_, opts) => { body = JSON.parse(opts.body); return mockJsonResponse(); };
+    try {
+      const adapter = new ChatCompletionsAdapter({ apiKey: 'sk-test', baseUrl: 'https://api.deepseek.com' });
+      await adapter.call({ model: 'deepseek-reasoner', system: '', messages: [{ role: 'user', content: 'hi' }], maxTokens: 1024 });
+      expect(body.max_tokens).toBe(1024);
+      expect(body.max_completion_tokens).toBeUndefined();
+    } finally { global.fetch = originalFetch; }
+  });
+
+  it('should send max_tokens for gemini models', async () => {
+    const { ChatCompletionsAdapter } = await import('../../../../agent/unify/llm/chat-completions.js');
+    const originalFetch = global.fetch;
+    let body;
+    global.fetch = async (_, opts) => { body = JSON.parse(opts.body); return mockJsonResponse(); };
+    try {
+      const adapter = new ChatCompletionsAdapter({ apiKey: 'test', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai' });
+      await adapter.call({ model: 'gemini-2.5-pro', system: '', messages: [{ role: 'user', content: 'hi' }], maxTokens: 1024 });
+      expect(body.max_tokens).toBe(1024);
+      expect(body.max_completion_tokens).toBeUndefined();
+    } finally { global.fetch = originalFetch; }
+  });
+
+  it('should send max_completion_tokens for GPT model even via CopilotProxy', async () => {
+    const { ChatCompletionsAdapter } = await import('../../../../agent/unify/llm/chat-completions.js');
+    const originalFetch = global.fetch;
+    let body;
+    global.fetch = async (_, opts) => { body = JSON.parse(opts.body); return mockJsonResponse(); };
+    try {
+      // Through proxy but model is gpt → new param
+      const adapter = new ChatCompletionsAdapter({ apiKey: 'proxy', baseUrl: 'http://localhost:6628/v1' });
+      await adapter.call({ model: 'gpt-5.4', system: '', messages: [{ role: 'user', content: 'hi' }], maxTokens: 1024 });
+      expect(body.max_completion_tokens).toBe(1024);
+      expect(body.max_tokens).toBeUndefined();
+    } finally { global.fetch = originalFetch; }
+  });
+
+  it('should send max_tokens for unknown/custom models', async () => {
+    const { ChatCompletionsAdapter } = await import('../../../../agent/unify/llm/chat-completions.js');
+    const originalFetch = global.fetch;
+    let body;
+    global.fetch = async (_, opts) => { body = JSON.parse(opts.body); return mockJsonResponse(); };
+    try {
+      const adapter = new ChatCompletionsAdapter({ apiKey: 'test', baseUrl: 'http://localhost:11434/v1' });
+      await adapter.call({ model: 'llama-3.1-70b', system: '', messages: [{ role: 'user', content: 'hi' }], maxTokens: 1024 });
+      expect(body.max_tokens).toBe(1024);
+      expect(body.max_completion_tokens).toBeUndefined();
+    } finally { global.fetch = originalFetch; }
+  });
+
+  it('should allow extraBody to override max tokens parameter', async () => {
+    const { ChatCompletionsAdapter } = await import('../../../../agent/unify/llm/chat-completions.js');
+    const originalFetch = global.fetch;
+    let body;
+    global.fetch = async (_, opts) => { body = JSON.parse(opts.body); return mockJsonResponse(); };
+    try {
+      // deepseek-chat would normally send max_tokens, but extraBody overrides
+      const adapter = new ChatCompletionsAdapter({ apiKey: 'test', baseUrl: 'https://api.deepseek.com' });
+      await adapter.call({ model: 'deepseek-chat', system: '', messages: [{ role: 'user', content: 'hi' }], maxTokens: 1024, extraBody: { max_completion_tokens: 2048, max_tokens: undefined } });
+      expect(body.max_completion_tokens).toBe(2048);
+    } finally { global.fetch = originalFetch; }
+  });
+
+  it('should allow extraBody to pass arbitrary parameters', async () => {
+    const { ChatCompletionsAdapter } = await import('../../../../agent/unify/llm/chat-completions.js');
+    const originalFetch = global.fetch;
+    let body;
+    global.fetch = async (_, opts) => { body = JSON.parse(opts.body); return mockJsonResponse(); };
+    try {
+      const adapter = new ChatCompletionsAdapter({ apiKey: 'test', baseUrl: 'https://api.openai.com/v1' });
+      await adapter.call({ model: 'gpt-5', system: '', messages: [{ role: 'user', content: 'hi' }], maxTokens: 1024, extraBody: { temperature: 0.7, response_format: { type: 'json_object' } } });
+      expect(body.temperature).toBe(0.7);
+      expect(body.response_format).toEqual({ type: 'json_object' });
+    } finally { global.fetch = originalFetch; }
+  });
+});
+
+describe('useNewMaxTokensParam — model ID detection', () => {
+  let useNewMaxTokensParam;
+  beforeEach(async () => {
+    ({ useNewMaxTokensParam } = await import('../../../../agent/unify/llm/chat-completions.js'));
+  });
+
+  it('returns true for GPT models', () => {
+    expect(useNewMaxTokensParam('gpt-5')).toBe(true);
+    expect(useNewMaxTokensParam('gpt-5.4')).toBe(true);
+    expect(useNewMaxTokensParam('gpt-4.1')).toBe(true);
+    expect(useNewMaxTokensParam('gpt-4.1-mini')).toBe(true);
+    expect(useNewMaxTokensParam('gpt-4.1-nano')).toBe(true);
+  });
+
+  it('returns true for o-series reasoning models', () => {
+    expect(useNewMaxTokensParam('o1')).toBe(true);
+    expect(useNewMaxTokensParam('o3')).toBe(true);
+    expect(useNewMaxTokensParam('o4-mini')).toBe(true);
+  });
+
+  it('returns false for DeepSeek models', () => {
+    expect(useNewMaxTokensParam('deepseek-chat')).toBe(false);
+    expect(useNewMaxTokensParam('deepseek-reasoner')).toBe(false);
+  });
+
+  it('returns false for Gemini models', () => {
+    expect(useNewMaxTokensParam('gemini-2.5-pro')).toBe(false);
+    expect(useNewMaxTokensParam('gemini-2.5-flash')).toBe(false);
+  });
+
+  it('returns false for unknown/custom models', () => {
+    expect(useNewMaxTokensParam('llama-3.1-70b')).toBe(false);
+    expect(useNewMaxTokensParam('my-custom-model')).toBe(false);
+  });
+
+  it('returns false for null/undefined/empty', () => {
+    expect(useNewMaxTokensParam(null)).toBe(false);
+    expect(useNewMaxTokensParam(undefined)).toBe(false);
+    expect(useNewMaxTokensParam('')).toBe(false);
+  });
+});
+
+describe('Mock stream test — Anthropic', () => {
   it('should handle Anthropic SSE stream with tool_use', async () => {
     const { AnthropicAdapter } = await import('../../../../agent/unify/llm/anthropic.js');
 
