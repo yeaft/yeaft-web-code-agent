@@ -1,0 +1,49 @@
+#!/bin/bash
+#
+# pre-push hook: block pushing version tags from non-main branches.
+#
+# Tags (v* and release-*) MUST only be created and pushed from the main branch.
+# This prevents accidental tagging on feature/worktree branches which causes
+# version mismatches between dev and production.
+#
+# Install: cp hooks/pre-push .git/hooks/pre-push && chmod +x .git/hooks/pre-push
+# Or run: scripts/install-hooks.sh
+
+CURRENT_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null)
+
+while read local_ref local_sha remote_ref remote_sha; do
+  # Check if pushing a version tag (v* or release-*)
+  if echo "$local_ref" | grep -qE '^refs/tags/(v|release-)'; then
+    TAG_NAME=$(echo "$local_ref" | sed 's|refs/tags/||')
+
+    if [ "$CURRENT_BRANCH" != "main" ]; then
+      echo ""
+      echo "  ERROR: Cannot push tag '$TAG_NAME' from branch '$CURRENT_BRANCH'"
+      echo ""
+      echo "  Tags MUST only be pushed from the 'main' branch."
+      echo "  Switch to main first:"
+      echo ""
+      echo "    git checkout main"
+      echo "    git tag $TAG_NAME"
+      echo "    git push origin $TAG_NAME"
+      echo ""
+      exit 1
+    fi
+
+    # Also verify the tagged commit is reachable from main
+    TAG_COMMIT=$(git rev-list -n 1 "$TAG_NAME" 2>/dev/null)
+    if [ -n "$TAG_COMMIT" ]; then
+      if ! git merge-base --is-ancestor "$TAG_COMMIT" main 2>/dev/null; then
+        echo ""
+        echo "  ERROR: Tag '$TAG_NAME' points to a commit not on 'main'"
+        echo ""
+        echo "  The tagged commit ($TAG_COMMIT) is not reachable from main."
+        echo "  Push your changes to main first, then tag."
+        echo ""
+        exit 1
+      fi
+    fi
+  fi
+done
+
+exit 0

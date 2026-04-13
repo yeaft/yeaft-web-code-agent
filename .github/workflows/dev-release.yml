@@ -14,8 +14,36 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  # Ensure tag is on main branch — reject tags from feature branches
+  validate-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify tag commit is on main
+        run: |
+          TAG_COMMIT=${{ github.sha }}
+          echo "Tag: ${{ github.ref_name }}"
+          echo "Commit: $TAG_COMMIT"
+
+          # Check if the tagged commit is reachable from origin/main
+          if ! git merge-base --is-ancestor "$TAG_COMMIT" origin/main; then
+            echo ""
+            echo "::error::Tag '${{ github.ref_name }}' points to commit $TAG_COMMIT which is NOT on the main branch."
+            echo "::error::Tags MUST only be created from the main branch."
+            echo ""
+            echo "Branches containing this commit:"
+            git branch -r --contains "$TAG_COMMIT"
+            exit 1
+          fi
+
+          echo "Tag is on main branch."
+
   test:
     runs-on: ubuntu-latest
+    needs: validate-tag
     steps:
       - uses: actions/checkout@v4
 
