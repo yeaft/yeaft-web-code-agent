@@ -136,6 +136,10 @@ export function handleMessage(store, msg) {
       store.handleClaudeOutput(msg.conversationId, msg.data);
       break;
 
+    case 'unify_output':
+      store.handleUnifyOutput(msg.event);
+      break;
+
     case 'chat_image':
       // Image from Claude response (tool screenshots, etc.)
       if (msg.conversationId && msg.fileId) {

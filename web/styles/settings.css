@@ -111,7 +111,8 @@
 }
 
 .agent-dropdown-restart-btn,
-.agent-dropdown-upgrade-btn {
+.agent-dropdown-upgrade-btn,
+.agent-dropdown-unify-btn {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -132,8 +133,14 @@
   color: var(--accent-color, #3b82f6);
 }
 
+.agent-dropdown-unify-btn:hover:not(:disabled) {
+  background: rgba(217, 119, 6, 0.1);
+  color: #d97706;
+}
+
 .agent-dropdown-restart-btn:disabled,
-.agent-dropdown-upgrade-btn:disabled {
+.agent-dropdown-upgrade-btn:disabled,
+.agent-dropdown-unify-btn:disabled {
   opacity: 0.3;
   cursor: not-allowed;
 }

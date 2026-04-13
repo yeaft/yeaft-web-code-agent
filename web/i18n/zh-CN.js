@@ -91,6 +91,15 @@ export default {
   'chat.agent.alreadyLatest': 'Agent 已是最新版本 (v{version})，无需升级。',
   'chat.agent.online': '{count} 个 Agent 在线',
   'chat.agent.selectFirst': '请先选择一个 Agent',
+  'chat.agent.unify': 'Unify 对话',
+
+  // ============ Unify 页面 ============
+  'unify.back': '返回',
+  'unify.chat': '对话',
+  'unify.work': '工作',
+  'unify.model': '模型',
+  'unify.placeholder': '问我任何问题...',
+  'unify.clearConfirm': '清空所有消息？',
 
   // Chat - Session lifecycle
   'chat.session.creating': '正在创建会话...',

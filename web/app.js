@@ -5,6 +5,7 @@ import zhCN from './i18n/zh-CN.js';
 import en from './i18n/en.js';
 import LoginPage from './components/LoginPage.js';
 import ChatPage from './components/ChatPage.js';
+import UnifyPage from './components/UnifyPage.js';
 import SplitPane from './components/SplitPane.js';
 import ToolLine from './components/ToolLine.js';
 import CrewConfigPanel from './components/CrewConfigPanel.js';
@@ -17,12 +18,12 @@ window.Pinia = {
 };
 
 const App = {
-  components: { LoginPage, ChatPage, CrewConfigPanel },
+  components: { LoginPage, ChatPage, UnifyPage, CrewConfigPanel },
   template: `
     <LoginPage v-if="!authStore.isAuthenticated" />
     <template v-else>
-      <!-- Unified layout: ChatPage handles both single and multi-panel modes -->
-      <ChatPage />
+      <UnifyPage v-if="chatStore.currentView === 'unify'" />
+      <ChatPage v-else />
     </template>
   `,
   setup() {

@@ -255,6 +255,13 @@ export default {
       if (isCompacting.value) return false;
       const hasText = !!inputText.value.trim();
       const hasAttachments = attachments.value.length > 0;
+
+      // Custom send mode (e.g. Unify page): simplified check — no conversation needed
+      if (isCustomSend.value) {
+        const notUploading = !uploading.value && attachments.value.every(a => a.fileId);
+        return (hasText || hasAttachments) && notUploading;
+      }
+
       const hasExperts = expertSelections.value.length > 0;
       // Can send if: (text OR attachments OR (experts with action — pure role needs text))
       const hasActionExpert = expertSelections.value.some(s => s.action);

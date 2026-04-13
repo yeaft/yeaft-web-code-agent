@@ -590,6 +590,22 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       break;
     }
 
+    case 'unify_chat': {
+      const unifyAgentId = msg.agentId || client.currentAgent;
+      if (!unifyAgentId) {
+        await sendToWebClient(client, { type: 'error', message: 'No agent selected' });
+        return;
+      }
+      if (!await checkAgentAccess(unifyAgentId)) return;
+      await forwardToAgent(unifyAgentId, {
+        type: 'unify_chat',
+        prompt: msg.prompt,
+        userId: client.userId,
+        username: client.username
+      });
+      break;
+    }
+
     default:
       return false; // Not handled
   }

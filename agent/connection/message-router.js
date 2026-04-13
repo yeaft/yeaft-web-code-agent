@@ -25,6 +25,7 @@ import { sendToServer, flushMessageBuffer } from './buffer.js';
 import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
 import { getLlmConfig, updateLlmConfig } from '../unify/config-api.js';
+import { handleUnifyChat } from '../unify/web-bridge.js';
 
 export async function handleMessage(msg) {
   switch (msg.type) {
@@ -318,5 +319,10 @@ export async function handleMessage(msg) {
       sendToServer({ type: 'llm_config_updated', ...result });
       break;
     }
+
+    // Unify — independent chat via Engine
+    case 'unify_chat':
+      await handleUnifyChat(msg);
+      break;
   }
 }

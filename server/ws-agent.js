@@ -242,7 +242,7 @@ async function handleAgentMessage(agentId, msg) {
     'agent_sync_complete', 'sync_sessions', 'proxy_response', 'proxy_response_chunk',
     'proxy_response_end', 'proxy_ports_update', 'proxy_ws_opened', 'proxy_ws_message',
     'proxy_ws_closed', 'proxy_ws_error', 'restart_agent_ack', 'upgrade_agent_ack',
-    'directory_listing', 'folders_list'
+    'directory_listing', 'folders_list', 'unify_output'
   ]);
   if (msg.conversationId && !CONV_EXEMPT_TYPES.has(msg.type)) {
     if (!agent.conversations.has(msg.conversationId)) {

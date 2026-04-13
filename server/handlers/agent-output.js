@@ -315,6 +315,15 @@ export async function handleAgentOutput(agentId, agent, msg) {
       break;
     }
 
+    case 'unify_output':
+      // Forward to all authenticated clients of this agent's owner (no conversationId)
+      for (const [cId, c] of webClients) {
+        if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
+          await sendToWebClient(c, { type: 'unify_output', event: msg.event });
+        }
+      }
+      break;
+
     default:
       return false; // Not handled
   }

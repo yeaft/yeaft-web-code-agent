@@ -91,6 +91,15 @@ export default {
   'chat.agent.alreadyLatest': 'Agent is already at the latest version (v{version}), no upgrade needed.',
   'chat.agent.online': '{count} Agent(s) online',
   'chat.agent.selectFirst': 'Please select an Agent first',
+  'chat.agent.unify': 'Unify Chat',
+
+  // ============ Unify Page ============
+  'unify.back': 'Back',
+  'unify.chat': 'Chat',
+  'unify.work': 'Work',
+  'unify.model': 'Model',
+  'unify.placeholder': 'Ask anything...',
+  'unify.clearConfirm': 'Clear all messages?',
 
   // Chat - Session lifecycle
   'chat.session.creating': 'Creating conversation...',

@@ -152,6 +152,16 @@ export const useChatStore = defineStore('chat', {
     // Session Pin 置顶
     // =====================
     pinnedSessions: JSON.parse(localStorage.getItem('pinned-sessions') || '[]'),
+
+    // =====================
+    // Unify 独立页面状态
+    // =====================
+    currentView: 'chat',           // 'chat' | 'unify' — 顶级页面切换
+    unifyMessages: [],             // [{ role: 'user'|'assistant', content, timestamp }]
+    unifyProcessing: false,        // 是否正在流式接收
+    unifyCurrentText: '',          // 流式接收中的文本累积
+    unifyModel: null,              // 当前 Unify 模型名（从 agent 获取）
+    unifyAgentId: null,            // 绑定的 agent ID
   }),
 
   getters: {
@@ -272,6 +282,69 @@ export const useChatStore = defineStore('chat', {
   },
 
   actions: {
+    // =====================
+    // Unify 页面
+    // =====================
+    enterUnify(agentId = null) {
+      this.currentView = 'unify';
+      if (agentId) this.unifyAgentId = agentId;
+      else if (!this.unifyAgentId) {
+        const online = this.agents.find(a => a.online);
+        if (online) this.unifyAgentId = online.id;
+      }
+    },
+    leaveUnify() {
+      this.currentView = 'chat';
+    },
+    sendUnifyChat(prompt) {
+      if (!prompt?.trim() || !this.unifyAgentId) return;
+      this.unifyMessages.push({ role: 'user', content: prompt, timestamp: Date.now() });
+      this.unifyProcessing = true;
+      this.unifyCurrentText = '';
+      this.sendWsMessage({
+        type: 'unify_chat',
+        prompt,
+        agentId: this.unifyAgentId
+      });
+    },
+    handleUnifyOutput(event) {
+      if (!event) return;
+      switch (event.type) {
+        case 'text_delta':
+          this.unifyCurrentText += event.text;
+          break;
+        case 'error':
+          this.unifyMessages.push({
+            role: 'assistant',
+            content: event.message || 'Error occurred',
+            timestamp: Date.now(),
+            isError: true
+          });
+          this.unifyProcessing = false;
+          this.unifyCurrentText = '';
+          break;
+        case 'model_info':
+          if (event.model) this.unifyModel = event.model;
+          break;
+        case 'done':
+          if (this.unifyCurrentText) {
+            this.unifyMessages.push({
+              role: 'assistant',
+              content: this.unifyCurrentText,
+              timestamp: Date.now()
+            });
+          }
+          this.unifyProcessing = false;
+          this.unifyCurrentText = '';
+          break;
+      }
+    },
+    clearUnifyMessages() {
+      this.unifyMessages = [];
+      this.unifyCurrentText = '';
+      this.unifyProcessing = false;
+    },
+
     // =====================
     // Crew panel toggle
     // =====================
