@@ -157,11 +157,12 @@ export const useChatStore = defineStore('chat', {
     // Unify 独立页面状态
     // =====================
     currentView: 'chat',           // 'chat' | 'unify' — 顶级页面切换
-    unifyMessages: [],             // [{ role: 'user'|'assistant', content, timestamp }]
-    unifyProcessing: false,        // 是否正在流式接收
-    unifyCurrentText: '',          // 流式接收中的文本累积
-    unifyModel: null,              // 当前 Unify 模型名（从 agent 获取）
+    unifyConversationId: null,     // 虚拟 conversationId（从 agent session_ready 获取）
+    unifyModel: null,              // 当前 Unify 模型名
     unifyAgentId: null,            // 绑定的 agent ID
+    unifyMode: 'chat',            // 'chat' | 'work' — Unify 模式切换
+    unifySessionReady: false,     // Session 是否已初始化
+    unifyStatus: null,            // { skills, mcpServers, tools } 从 session_ready 获取
   }),
 
   getters: {
@@ -292,57 +293,157 @@ export const useChatStore = defineStore('chat', {
         const online = this.agents.find(a => a.online);
         if (online) this.unifyAgentId = online.id;
       }
+      // Create a local conversationId immediately so MessageList has something to render
+      if (!this.unifyConversationId) {
+        this.unifyConversationId = `unify-local-${Date.now()}`;
+      }
+      if (!this.messagesMap[this.unifyConversationId]) {
+        this.messagesMap[this.unifyConversationId] = [];
+      }
+      // Save current activeConversations for restoration in leaveUnify
+      this._savedActiveConversations = [...this.activeConversations];
+      // Set the virtual conversationId as the active one so MessageList reads from it
+      this.activeConversations = [this.unifyConversationId];
     },
     leaveUnify() {
       this.currentView = 'chat';
+      // Restore the original activeConversations
+      if (this._savedActiveConversations) {
+        this.activeConversations = this._savedActiveConversations;
+        this._savedActiveConversations = null;
+      }
     },
     sendUnifyChat(prompt) {
       if (!prompt?.trim() || !this.unifyAgentId) return;
-      this.unifyMessages.push({ role: 'user', content: prompt, timestamp: Date.now() });
-      this.unifyProcessing = true;
-      this.unifyCurrentText = '';
+
+      // If we have a conversationId, use standard messagesMap pipeline
+      if (this.unifyConversationId) {
+        this.addMessageToConversation(this.unifyConversationId, {
+          type: 'user',
+          content: prompt,
+        });
+        this.processingConversations[this.unifyConversationId] = true;
+        this._turnCompletedConvs?.delete(this.unifyConversationId);
+        if (this._closedAt?.[this.unifyConversationId]) {
+          delete this._closedAt[this.unifyConversationId];
+        }
+        this.getOrCreateExecutionStatus(this.unifyConversationId);
+      }
+
       this.sendWsMessage({
         type: 'unify_chat',
         prompt,
-        agentId: this.unifyAgentId
+        mode: this.unifyMode,
+        agentId: this.unifyAgentId,
       });
     },
-    handleUnifyOutput(event) {
-      if (!event) return;
-      switch (event.type) {
-        case 'text_delta':
-          this.unifyCurrentText += event.text;
-          break;
-        case 'error':
-          this.unifyMessages.push({
-            role: 'assistant',
-            content: event.message || 'Error occurred',
-            timestamp: Date.now(),
-            isError: true
-          });
-          this.unifyProcessing = false;
-          this.unifyCurrentText = '';
-          break;
-        case 'model_info':
-          if (event.model) this.unifyModel = event.model;
-          break;
-        case 'done':
-          if (this.unifyCurrentText) {
-            this.unifyMessages.push({
-              role: 'assistant',
-              content: this.unifyCurrentText,
-              timestamp: Date.now()
-            });
+    handleUnifyOutput(msg) {
+      if (!msg) return;
+
+      // ── claude_output-format data: dispatch through standard pipeline ──
+      if (msg.data) {
+        const conversationId = msg.conversationId || this.unifyConversationId;
+        if (conversationId) {
+          // Ensure messagesMap exists for this conversation
+          if (!this.messagesMap[conversationId]) {
+            this.messagesMap[conversationId] = [];
           }
-          this.unifyProcessing = false;
-          this.unifyCurrentText = '';
+          // Store the conversationId if we didn't have it yet
+          if (!this.unifyConversationId) {
+            this.unifyConversationId = conversationId;
+          }
+          this.handleClaudeOutput(conversationId, msg.data);
+        }
+        return;
+      }
+
+      // ── Metadata events ──
+      const event = msg.event;
+      if (!event) return;
+
+      switch (event.type) {
+        case 'session_ready': {
+          const agentConvId = event.conversationId;
+          const localConvId = this.unifyConversationId;
+
+          // Migrate messages from local placeholder to agent's conversationId
+          if (localConvId && localConvId !== agentConvId) {
+            const existingMsgs = this.messagesMap[localConvId] || [];
+            this.messagesMap[agentConvId] = existingMsgs;
+            delete this.messagesMap[localConvId];
+            // Migrate processing state
+            if (this.processingConversations[localConvId]) {
+              this.processingConversations[agentConvId] = true;
+              delete this.processingConversations[localConvId];
+            }
+            // Migrate execution status
+            if (this.executionStatusMap[localConvId]) {
+              this.executionStatusMap[agentConvId] = this.executionStatusMap[localConvId];
+              delete this.executionStatusMap[localConvId];
+            }
+          } else if (!this.messagesMap[agentConvId]) {
+            this.messagesMap[agentConvId] = [];
+          }
+
+          this.unifyConversationId = agentConvId;
+          this.unifyModel = event.model;
+          this.unifySessionReady = true;
+          this.unifyStatus = {
+            skills: event.skills,
+            mcpServers: event.mcpServers,
+            tools: event.tools,
+          };
+
+          // Update activeConversations to point to the agent's conversationId
+          if (this.currentView === 'unify') {
+            this.activeConversations = [agentConvId];
+          }
+          break;
+        }
+
+        case 'context_usage':
+          // Could display token usage in UI later
+          break;
+
+        case 'recall':
+        case 'consolidate':
+        case 'fallback':
+        case 'thinking_delta':
+          // Future: display these in UI
           break;
       }
     },
+    setUnifyMode(mode) {
+      if (mode !== 'chat' && mode !== 'work') return;
+      this.unifyMode = mode;
+      this.sendWsMessage({
+        type: 'unify_mode_switch',
+        mode,
+        agentId: this.unifyAgentId,
+      });
+    },
     clearUnifyMessages() {
-      this.unifyMessages = [];
-      this.unifyCurrentText = '';
-      this.unifyProcessing = false;
+      const oldConvId = this.unifyConversationId;
+      if (oldConvId) {
+        delete this.messagesMap[oldConvId];
+        delete this.processingConversations[oldConvId];
+        delete this.executionStatusMap[oldConvId];
+      }
+      // Create a fresh local conversationId
+      this.unifyConversationId = `unify-local-${Date.now()}`;
+      this.messagesMap[this.unifyConversationId] = [];
+      this.activeConversations = [this.unifyConversationId];
+      this.unifySessionReady = false;
+      this.unifyModel = null;
+      this.unifyStatus = null;
+      this.unifyMode = 'chat';
+      // Tell agent to reset session so Engine gets a fresh start
+      if (this.unifyAgentId) {
+        this.sendWsMessage({
+          type: 'unify_reset',
+          agentId: this.unifyAgentId,
+        });
+      }
     },
 
     // =====================

@@ -600,8 +600,30 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       await forwardToAgent(unifyAgentId, {
         type: 'unify_chat',
         prompt: msg.prompt,
+        mode: msg.mode,
         userId: client.userId,
         username: client.username
+      });
+      break;
+    }
+
+    case 'unify_mode_switch': {
+      const modeAgentId = msg.agentId || client.currentAgent;
+      if (!modeAgentId) return;
+      if (!await checkAgentAccess(modeAgentId)) return;
+      await forwardToAgent(modeAgentId, {
+        type: 'unify_mode_switch',
+        mode: msg.mode,
+      });
+      break;
+    }
+
+    case 'unify_reset': {
+      const resetAgentId = msg.agentId || client.currentAgent;
+      if (!resetAgentId) return;
+      if (!await checkAgentAccess(resetAgentId)) return;
+      await forwardToAgent(resetAgentId, {
+        type: 'unify_reset',
       });
       break;
     }

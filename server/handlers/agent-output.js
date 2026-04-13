@@ -316,10 +316,16 @@ export async function handleAgentOutput(agentId, agent, msg) {
     }
 
     case 'unify_output':
-      // Forward to all authenticated clients of this agent's owner (no conversationId)
+      // Forward Unify output to all authenticated clients of this agent's owner.
+      // Payload carries { conversationId, data } (claude_output format) or { event } (metadata).
       for (const [cId, c] of webClients) {
         if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
-          await sendToWebClient(c, { type: 'unify_output', event: msg.event });
+          await sendToWebClient(c, {
+            type: 'unify_output',
+            conversationId: msg.conversationId,
+            data: msg.data,
+            event: msg.event,
+          });
         }
       }
       break;

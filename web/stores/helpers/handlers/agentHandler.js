@@ -170,6 +170,8 @@ export function handleAgentList(store, msg) {
     }
     for (const convId of Object.keys(store.processingConversations)) {
       if (!allServerConvIds.has(convId)) {
+        // Skip Unify virtual conversations — they're not tracked by the server's agent conversation list
+        if (convId.startsWith('unify-')) continue;
         console.log(`[agent_list] Clearing stale processing state for ${convId}`);
         delete store.processingConversations[convId];
         stopProcessingWatchdog(store, convId);
@@ -360,6 +362,8 @@ export function handleAgentSelected(store, msg) {
   }
   for (const convId of Object.keys(store.processingConversations)) {
     if (!agentConvIds.has(convId)) {
+      // Skip Unify virtual conversations — they're not tracked by the server's agent conversation list
+      if (convId.startsWith('unify-')) continue;
       const isOtherAgent = otherAgentConvs.some(c => c.id === convId);
       if (!isOtherAgent) {
         console.log(`[agent_selected] Clearing stale processing state for ${convId}`);

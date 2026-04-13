@@ -137,7 +137,7 @@ export function handleMessage(store, msg) {
       break;
 
     case 'unify_output':
-      store.handleUnifyOutput(msg.event);
+      store.handleUnifyOutput(msg);
       break;
 
     case 'chat_image':

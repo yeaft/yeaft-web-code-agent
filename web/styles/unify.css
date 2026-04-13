@@ -1,5 +1,6 @@
 /* ========================================
-   Unify Page — Independent Fullscreen Chat
+   Unify Page — Topbar + Layout
+   Message rendering is handled by standard Chat components.
    ======================================== */
 
 .unify-page {
@@ -94,6 +95,14 @@
   font-weight: 500;
 }
 
+.unify-status-badge {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-input-wrapper);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
 .unify-clear-btn {
   display: flex;
   align-items: center;
@@ -110,197 +119,6 @@
 .unify-clear-btn:hover {
   background: var(--sidebar-hover);
   color: var(--error);
-}
-
-/* ── Messages Area ── */
-
-.unify-messages {
-  flex: 1;
-  overflow-y: auto;
-  padding: 24px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  max-width: 800px;
-  width: 100%;
-  margin: 0 auto;
-}
-
-/* Welcome */
-
-.unify-welcome {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  flex: 1;
-  gap: 12px;
-  opacity: 0.7;
-}
-
-.unify-welcome-icon {
-  margin-bottom: 4px;
-}
-
-.unify-welcome-title {
-  font-size: 22px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.unify-welcome-sub {
-  font-size: 14px;
-  color: var(--text-muted);
-}
-
-/* Message Bubbles */
-
-.unify-msg {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-}
-
-.unify-msg-avatar {
-  flex-shrink: 0;
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.unify-avatar-user {
-  background: var(--bg-user-msg);
-  color: var(--text-secondary);
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-}
-
-.unify-avatar-assistant {
-  background: #d97706;
-  color: white;
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-}
-
-.unify-msg-body {
-  flex: 1;
-  min-width: 0;
-}
-
-.unify-msg-user .unify-msg-content {
-  background: var(--bg-user-msg);
-  padding: 10px 14px;
-  border-radius: 14px 14px 14px 4px;
-  font-size: 14px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
-  display: inline-block;
-}
-
-.unify-msg-assistant .unify-msg-content {
-  font-size: 14px;
-  line-height: 1.6;
-  padding: 4px 0;
-}
-
-.unify-msg-error .unify-msg-content {
-  color: var(--error);
-}
-
-/* Markdown content styling */
-.unify-md {
-  word-break: break-word;
-}
-
-.unify-md p {
-  margin: 0 0 8px 0;
-}
-
-.unify-md p:last-child {
-  margin-bottom: 0;
-}
-
-.unify-md pre {
-  background: var(--code-bg);
-  color: var(--code-text);
-  padding: 12px 16px;
-  border-radius: 8px;
-  overflow-x: auto;
-  margin: 8px 0;
-  font-size: 13px;
-}
-
-.unify-md code {
-  font-family: 'SF Mono', Monaco, Consolas, monospace;
-  font-size: 0.9em;
-}
-
-.unify-md :not(pre) > code {
-  background: var(--inline-code-bg);
-  padding: 2px 5px;
-  border-radius: 4px;
-}
-
-.unify-md ul, .unify-md ol {
-  margin: 4px 0;
-  padding-left: 20px;
-}
-
-.unify-md blockquote {
-  border-left: 3px solid var(--border-color);
-  padding-left: 12px;
-  color: var(--text-secondary);
-  margin: 8px 0;
-}
-
-/* Streaming message pulse */
-.unify-msg-streaming .unify-msg-content::after {
-  content: '\25CF';
-  animation: unify-blink 1s infinite;
-  color: #d97706;
-  margin-left: 2px;
-}
-
-@keyframes unify-blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
-}
-
-/* Typing dots */
-.unify-typing {
-  display: flex;
-  gap: 4px;
-  padding: 10px 0;
-}
-
-.unify-typing span {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--text-muted);
-  animation: unify-dot 1.4s infinite;
-}
-
-.unify-typing span:nth-child(2) { animation-delay: 0.2s; }
-.unify-typing span:nth-child(3) { animation-delay: 0.4s; }
-
-@keyframes unify-dot {
-  0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
-  40% { opacity: 1; transform: scale(1); }
 }
 
 /* ── Input Area Override for Unify ── */
@@ -321,10 +139,6 @@
 
   .unify-back-text {
     display: none;
-  }
-
-  .unify-messages {
-    padding: 16px 10px;
   }
 
   .unify-mode-btn {
