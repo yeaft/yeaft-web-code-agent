@@ -92,6 +92,7 @@ export default {
   'chat.agent.online': '{count} Agent(s) online',
   'chat.agent.unify': 'Unify Chat',
   'chat.agent.selectFirst': 'Please select an Agent first',
+  'chat.unify.empty': 'No Unify conversations. Click + to start.',
 
   // Chat - Session lifecycle
   'chat.session.creating': 'Creating conversation...',

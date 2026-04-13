@@ -92,6 +92,7 @@ export default {
   'chat.agent.online': '{count} 个 Agent 在线',
   'chat.agent.unify': '统一对话',
   'chat.agent.selectFirst': '请先选择一个 Agent',
+  'chat.unify.empty': '暂无统一对话，点击 + 开始',
 
   // Chat - Session lifecycle
   'chat.session.creating': '正在创建会话...',

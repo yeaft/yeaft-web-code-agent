@@ -146,6 +146,14 @@ export default {
               <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
             </button>
           </div>
+          <div class="session-tab" :class="{ active: sidebarTab === 'unify' }" @click="sidebarTab = 'unify'">
+            <svg class="session-tab-icon" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M7 2v11h3v9l7-12h-4l4-8z"/></svg>
+            <span>Unify</span>
+            <span class="session-tab-count" v-if="unifySessionCount > 0">{{ unifySessionCount }}</span>
+            <button class="session-tab-add-btn" @click.stop="newUnifyConversation()" :class="{ disabled: onlineAgentCount === 0 }" :title="$t('chat.agent.unify')">
+              <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+            </button>
+          </div>
           <div class="session-tab" :class="{ active: sidebarTab === 'crew' }" @click="sidebarTab = 'crew'">
             <svg class="session-tab-icon" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
             <span>Crew</span>
@@ -270,6 +278,72 @@ export default {
                     {{ getAgentLatency(conv.agentId) }}ms
                   </span>
                 </div>
+              </div>
+            </div>
+
+          <!-- Unify Sessions (visible when unify tab active) -->
+          <div class="session-panel-list" v-show="sidebarTab === 'unify'">
+              <div
+                v-for="conv in pinnedUnifyConversations"
+                :key="conv.id"
+                class="session-item session-item-unify"
+                :class="{ active: conv.id === store.currentConversation, processing: store.isConversationProcessing(conv.id), 'agent-offline': conv.agentOnline === false }"
+                @click="onSessionClick(conv)"
+              >
+                <div class="session-item-header">
+                  <span class="session-pin-icon"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg></span>
+                  <div class="title" :title="getConversationFullTitle(conv)">
+                    <span v-if="store.isConversationProcessing(conv.id)" class="processing-dot"></span>
+                    <span v-else-if="store.isSplitMode && store.isInAnyPanel(conv.id)" class="pane-active-dot"></span>
+                    <span>{{ getConversationTitle(conv) }}</span>
+                  </div>
+                  <span class="session-time">{{ getConversationTime(conv) }}</span>
+                  <button class="session-dots-btn" :class="{ 'menu-open': activeSessionMenu === conv.id }" @click.stop="toggleSessionMenu(conv.id)">
+                    <svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
+                  </button>
+                  <div class="session-menu" v-if="activeSessionMenu === conv.id" @click.stop>
+                    <button class="session-menu-item" @click.stop="store.togglePin(conv.id); closeSessionMenu()">
+                      <svg viewBox="0 0 24 24"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>
+                      {{ $t('chat.sidebar.unpin') }}
+                    </button>
+                    <button class="session-menu-item danger" @click.stop="closeSession(conv.id, conv.agentId); closeSessionMenu()">
+                      <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                      {{ $t('chat.sidebar.closeConv') }}
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div
+                v-for="conv in unpinnedUnifyConversations"
+                :key="conv.id"
+                class="session-item session-item-unify"
+                :class="{ active: conv.id === store.currentConversation, processing: store.isConversationProcessing(conv.id), 'agent-offline': conv.agentOnline === false }"
+                @click="onSessionClick(conv)"
+              >
+                <div class="session-item-header">
+                  <div class="title" :title="getConversationFullTitle(conv)">
+                    <span v-if="store.isConversationProcessing(conv.id)" class="processing-dot"></span>
+                    <span v-else-if="store.isSplitMode && store.isInAnyPanel(conv.id)" class="pane-active-dot"></span>
+                    <span>{{ getConversationTitle(conv) }}</span>
+                  </div>
+                  <span class="session-time">{{ getConversationTime(conv) }}</span>
+                  <button class="session-dots-btn" :class="{ 'menu-open': activeSessionMenu === conv.id }" @click.stop="toggleSessionMenu(conv.id)">
+                    <svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
+                  </button>
+                  <div class="session-menu" v-if="activeSessionMenu === conv.id" @click.stop>
+                    <button class="session-menu-item" @click.stop="store.togglePin(conv.id); closeSessionMenu()">
+                      <svg viewBox="0 0 24 24"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>
+                      {{ $t('chat.sidebar.pin') }}
+                    </button>
+                    <button class="session-menu-item danger" @click.stop="closeSession(conv.id, conv.agentId); closeSessionMenu()">
+                      <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                      {{ $t('chat.sidebar.closeConv') }}
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div v-if="unifySessionCount === 0" class="session-panel-empty">
+                {{ $t('chat.unify.empty') }}
               </div>
             </div>
 
@@ -704,14 +778,14 @@ export default {
       return this.sortByActivity(this.store.conversations.filter(c => c.type === 'crew' && c.agentOnline !== false));
     },
     normalConversations() {
-      return this.sortByActivity(this.store.conversations.filter(c => c.type !== 'crew' && c.agentOnline !== false));
+      return this.sortByActivity(this.store.conversations.filter(c => c.type !== 'crew' && c.mode !== 'unify' && c.agentOnline !== false));
     },
     pinnedChatConversations() {
-      const pinned = this.store.conversations.filter(c => c.type !== 'crew' && c.agentOnline !== false && this.store.isSessionPinned(c.id));
+      const pinned = this.store.conversations.filter(c => c.type !== 'crew' && c.mode !== 'unify' && c.agentOnline !== false && this.store.isSessionPinned(c.id));
       return pinned.sort((a, b) => this.store.pinnedSessions.indexOf(a.id) - this.store.pinnedSessions.indexOf(b.id));
     },
     unpinnedChatConversations() {
-      return this.sortByActivity(this.store.conversations.filter(c => c.type !== 'crew' && c.agentOnline !== false && !this.store.isSessionPinned(c.id)));
+      return this.sortByActivity(this.store.conversations.filter(c => c.type !== 'crew' && c.mode !== 'unify' && c.agentOnline !== false && !this.store.isSessionPinned(c.id)));
     },
     pinnedCrewConversations() {
       const pinned = this.store.conversations.filter(c => c.type === 'crew' && c.agentOnline !== false && this.store.isSessionPinned(c.id));
@@ -720,11 +794,21 @@ export default {
     unpinnedCrewConversations() {
       return this.sortByActivity(this.store.conversations.filter(c => c.type === 'crew' && c.agentOnline !== false && !this.store.isSessionPinned(c.id)));
     },
+    pinnedUnifyConversations() {
+      const pinned = this.store.conversations.filter(c => c.mode === 'unify' && c.agentOnline !== false && this.store.isSessionPinned(c.id));
+      return pinned.sort((a, b) => this.store.pinnedSessions.indexOf(a.id) - this.store.pinnedSessions.indexOf(b.id));
+    },
+    unpinnedUnifyConversations() {
+      return this.sortByActivity(this.store.conversations.filter(c => c.mode === 'unify' && c.agentOnline !== false && !this.store.isSessionPinned(c.id)));
+    },
     chatSessionCount() {
-      return this.store.conversations.filter(c => c.type !== 'crew' && c.agentOnline !== false).length;
+      return this.store.conversations.filter(c => c.type !== 'crew' && c.mode !== 'unify' && c.agentOnline !== false).length;
     },
     crewSessionCount() {
       return this.store.conversations.filter(c => c.type === 'crew' && c.agentOnline !== false).length;
+    },
+    unifySessionCount() {
+      return this.store.conversations.filter(c => c.mode === 'unify' && c.agentOnline !== false).length;
     }
   },
   methods: {
@@ -872,7 +956,15 @@ export default {
     startUnifyConversation(agentId) {
       this.store.selectAgent(agentId);
       this.agentManagerOpen = false;
+      this.sidebarTab = 'unify';
       this.store.createConversation(null, agentId, null, 'unify');
+    },
+    newUnifyConversation() {
+      if (this.onlineAgentCount === 0) return;
+      const agent = this.store.agents.find(a => a.online);
+      if (!agent) return;
+      this.store.selectAgent(agent.id);
+      this.store.createConversation(null, agent.id, null, 'unify');
     },
     resumeSession(session) {
       if (!this.convModalAgent) return;
@@ -951,19 +1043,16 @@ export default {
       }
     },
     getConversationTitle(conv) {
-      // Unify mode prefix
-      const prefix = conv.mode === 'unify' ? '\u26a1 ' : '';
       // 优先使用 store 中缓存的标题（最新用户消息）
       const cachedTitle = this.store.getConversationTitle(conv.id);
       if (cachedTitle) {
-        const title = cachedTitle.length > 30 ? cachedTitle.slice(0, 30) + '...' : cachedTitle;
-        return prefix + title;
+        return cachedTitle.length > 30 ? cachedTitle.slice(0, 30) + '...' : cachedTitle;
       }
       // 其次显示简短的 session ID
       if (conv.claudeSessionId) {
-        return prefix + conv.claudeSessionId.slice(0, 8) + '...';
+        return conv.claudeSessionId.slice(0, 8) + '...';
       }
-      return prefix + (conv.id.slice(0, 8) + '...');
+      return conv.id.slice(0, 8) + '...';
     },
     getConversationFullTitle(conv) {
       if (conv.type === 'crew') {
