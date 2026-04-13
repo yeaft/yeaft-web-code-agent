@@ -158,6 +158,49 @@ export async function handleAgentSync(agentId, agent, msg) {
       break;
     }
 
+    // LLM config response from agent — relay to owner clients
+    case 'llm_config': {
+      for (const [, client] of webClients) {
+        if (client.authenticated && (CONFIG.skipAuth ||
+          (agent.ownerId && client.userId === agent.ownerId) ||
+          (!agent.ownerId && client.role === 'admin')
+        )) {
+          await sendToWebClient(client, {
+            type: 'llm_config',
+            agentId,
+            providers: msg.providers,
+            primaryModel: msg.primaryModel,
+            fastModel: msg.fastModel,
+            language: msg.language,
+            needsSetup: msg.needsSetup,
+            error: msg.error
+          });
+        }
+      }
+      break;
+    }
+
+    // LLM config updated acknowledgement from agent
+    case 'llm_config_updated': {
+      for (const [, client] of webClients) {
+        if (client.authenticated && (CONFIG.skipAuth ||
+          (agent.ownerId && client.userId === agent.ownerId) ||
+          (!agent.ownerId && client.role === 'admin')
+        )) {
+          await sendToWebClient(client, {
+            type: 'llm_config_updated',
+            agentId,
+            providers: msg.providers,
+            primaryModel: msg.primaryModel,
+            fastModel: msg.fastModel,
+            language: msg.language,
+            error: msg.error
+          });
+        }
+      }
+      break;
+    }
+
     default:
       return false; // Not handled
   }

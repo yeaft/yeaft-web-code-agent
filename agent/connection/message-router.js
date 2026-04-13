@@ -24,6 +24,7 @@ import {
 import { sendToServer, flushMessageBuffer } from './buffer.js';
 import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
+import { getLlmConfig, updateLlmConfig } from '../unify/config-api.js';
 
 export async function handleMessage(msg) {
   switch (msg.type) {
@@ -302,6 +303,19 @@ export async function handleMessage(msg) {
     case 'update_mcp_config': {
       const updated = updateMcpConfig(msg.config || {});
       sendToServer({ type: 'mcp_config_updated', servers: updated });
+      break;
+    }
+
+    // LLM configuration (read/write ~/.yeaft/config.json)
+    case 'get_llm_config': {
+      const config = getLlmConfig(ctx.CONFIG?.yeaftDir);
+      sendToServer({ type: 'llm_config', ...config });
+      break;
+    }
+
+    case 'update_llm_config': {
+      const result = updateLlmConfig(msg.config || {}, ctx.CONFIG?.yeaftDir);
+      sendToServer({ type: 'llm_config_updated', ...result });
       break;
     }
   }

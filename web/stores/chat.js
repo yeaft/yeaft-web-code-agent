@@ -103,6 +103,9 @@ export const useChatStore = defineStore('chat', {
     // MCP servers 配置: agentId -> [{ name, enabled, source }]
     mcpServers: {},
 
+    // LLM config: agentId -> { providers, primaryModel, fastModel, language, loaded }
+    llmConfig: {},
+
     // /btw mode state (multi-turn side question)
     btwMode: false,              // whether in btw mode
     btwMessages: [],             // [{ role: 'user'|'assistant', content }]

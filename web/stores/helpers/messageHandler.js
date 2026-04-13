@@ -419,6 +419,22 @@ export function handleMessage(store, msg) {
       }
       break;
 
+    // LLM configuration from agent
+    case 'llm_config':
+    case 'llm_config_updated':
+      if (msg.agentId) {
+        store.llmConfig[msg.agentId] = {
+          providers: msg.providers || [],
+          primaryModel: msg.primaryModel || null,
+          fastModel: msg.fastModel || null,
+          language: msg.language || 'en',
+          needsSetup: msg.needsSetup || false,
+          error: msg.error || null,
+          loaded: true
+        };
+      }
+      break;
+
     // Per-conversation MCP servers (from Claude CLI init)
     case 'conversation_mcp_update':
       if (msg.conversationId && msg.servers) {

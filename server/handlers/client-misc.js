@@ -101,6 +101,26 @@ export async function handleClientMisc(clientId, client, msg, checkAgentAccess) 
       break;
     }
 
+    // LLM configuration — relay to agent
+    case 'get_llm_config': {
+      const llmAgentId = msg.agentId || client.currentAgent;
+      if (!llmAgentId) break;
+      if (!await checkAgentAccess(llmAgentId)) break;
+      await forwardToAgent(llmAgentId, { type: 'get_llm_config' });
+      break;
+    }
+
+    case 'update_llm_config': {
+      const llmUpdateAgentId = msg.agentId || client.currentAgent;
+      if (!llmUpdateAgentId) break;
+      if (!await checkAgentAccess(llmUpdateAgentId)) break;
+      await forwardToAgent(llmUpdateAgentId, {
+        type: 'update_llm_config',
+        config: msg.config || {}
+      });
+      break;
+    }
+
     default:
       return false; // Not handled
   }
