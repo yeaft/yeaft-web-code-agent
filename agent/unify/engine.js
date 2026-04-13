@@ -80,6 +80,9 @@ export class Engine {
   /** @type {string|null} */
   #yeaftDir;
 
+  /** @type {object|null} — Config override for internal tasks (recall, consolidation, dream) using fastModel */
+  #fastConfig;
+
   /**
    * @param {{
    *   adapter: import('./llm/adapter.js').LLMAdapter,
@@ -105,6 +108,15 @@ export class Engine {
     this.#skillManager = skillManager || null;
     this.#mcpManager = mcpManager || null;
     this.#yeaftDir = yeaftDir || null;
+
+    // Build fast config: uses fastModelId for internal tasks (recall, consolidation, dream)
+    // Falls back to primary model if no fastModel configured
+    const fastModelId = config.fastModelId || config.model;
+    if (fastModelId !== config.model) {
+      this.#fastConfig = { ...config, model: fastModelId };
+    } else {
+      this.#fastConfig = config;
+    }
   }
 
   /**
@@ -215,12 +227,12 @@ export class Engine {
     // Read user profile
     memory.profile = this.#memoryStore.readProfile();
 
-    // Recall relevant entries
+    // Recall relevant entries (uses fastModel for cheaper/faster side-queries)
     try {
       const result = await recall({
         prompt,
         adapter: this.#adapter,
-        config: this.#config,
+        config: this.#fastConfig,
         memoryStore: this.#memoryStore,
       });
       memory.entries = result.entries;
@@ -288,7 +300,7 @@ export class Engine {
         conversationStore: this.#conversationStore,
         memoryStore: this.#memoryStore,
         adapter: this.#adapter,
-        config: this.#config,
+        config: this.#fastConfig,
         budget,
       });
       return { archivedCount: result.archivedCount, extractedCount: result.extractedEntries.length };
@@ -481,13 +493,16 @@ export class Engine {
         // ─── Post-query: StopHooks or Legacy ─────────────
         if (this.#yeaftDir && this.#conversationStore) {
           // Full pipeline: persist + consolidate + dream gate
+          // Note: stopHooks uses fastConfig for consolidation/dream (cheaper internal tasks)
+          // but receives both configs — messages are persisted with primary model name
           const hookResult = await runStopHooks({
             yeaftDir: this.#yeaftDir,
             mode,
             conversationStore: this.#conversationStore,
             memoryStore: this.#memoryStore,
             adapter: this.#adapter,
-            config: this.#config,
+            config: this.#fastConfig,
+            primaryModel: this.#config.model,
             messages: conversationMessages,
             trace: this.#trace,
           });
@@ -616,4 +631,7 @@ export class Engine {
 
   /** @returns {string|null} */
   get yeaftDir() { return this.#yeaftDir; }
+
+  /** @returns {object} — Config with fastModel as model (for internal tasks) */
+  get fastConfig() { return this.#fastConfig; }
 }

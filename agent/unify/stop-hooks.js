@@ -23,6 +23,7 @@ import { checkDreamGate, incrementQueryCount, dream } from './memory/dream.js';
  *   memoryStore: import('./memory/store.js').MemoryStore,
  *   adapter: object,
  *   config: object,
+ *   primaryModel?: string,
  *   messages?: object[],
  *   taskId?: string,
  *   workerId?: string,
@@ -38,10 +39,14 @@ export async function runStopHooks(context) {
     memoryStore,
     adapter,
     config,
+    primaryModel,
     messages = [],
     taskId,
     trace,
   } = context;
+
+  // Model name for persisted messages: use primaryModel if provided, else config.model
+  const persistModel = primaryModel || config?.model;
 
   const result = {
     messagesPersisted: 0,
@@ -65,7 +70,7 @@ export async function runStopHooks(context) {
             role: msg.role,
             content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
             mode,
-            model: config.model,
+            model: persistModel,
           });
           result.messagesPersisted++;
         }

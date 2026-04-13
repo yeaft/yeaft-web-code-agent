@@ -5,7 +5,8 @@
   "main": "index.js",
   "type": "module",
   "bin": {
-    "yeaft-agent": "./cli.js"
+    "yeaft-agent": "./cli.js",
+    "yeaft": "./unify/cli.js"
   },
   "scripts": {
     "start": "node index.js",

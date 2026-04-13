@@ -16,7 +16,8 @@ export {
   LLMAbortError,
   createLLMAdapter,
 } from './llm/adapter.js';
-export { MODEL_REGISTRY, resolveModel, listModels, isKnownModel } from './models.js';
+export { AdapterRouter } from './llm/router.js';
+export { MODEL_REGISTRY, resolveModel, listModels, isKnownModel, getProviderForModel, parseModelRef } from './models.js';
 export { buildSystemPrompt, SUPPORTED_LANGUAGES } from './prompts.js';
 export { Engine } from './engine.js';
 export { ConversationStore, parseMessage, estimateTokens } from './conversation/persist.js';

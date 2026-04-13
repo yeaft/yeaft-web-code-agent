@@ -14,8 +14,9 @@
 
 /**
  * @typedef {Object} ModelInfo
- * @property {'anthropic' | 'chat-completions'} adapter — Which adapter to use
- * @property {string} baseUrl — API endpoint base URL
+ * @property {'anthropic' | 'openai' | 'deepseek' | 'google'} provider — Which provider this model belongs to
+ * @property {'anthropic' | 'chat-completions'} adapter — Which wire protocol to use
+ * @property {string} baseUrl — Official API endpoint base URL
  * @property {number} contextWindow — Max context tokens
  * @property {number} maxOutputTokens — Max output tokens
  * @property {string} displayName — Human-readable model name
@@ -25,6 +26,7 @@
 export const MODEL_REGISTRY = new Map([
   // ── Anthropic ──────────────────────────────────────────────────
   ['claude-sonnet-4-20250514', {
+    provider: 'anthropic',
     adapter: 'anthropic',
     baseUrl: 'https://api.anthropic.com',
     contextWindow: 200000,
@@ -32,6 +34,7 @@ export const MODEL_REGISTRY = new Map([
     displayName: 'Claude Sonnet 4',
   }],
   ['claude-opus-4-20250514', {
+    provider: 'anthropic',
     adapter: 'anthropic',
     baseUrl: 'https://api.anthropic.com',
     contextWindow: 200000,
@@ -39,6 +42,7 @@ export const MODEL_REGISTRY = new Map([
     displayName: 'Claude Opus 4',
   }],
   ['claude-haiku-3-20250414', {
+    provider: 'anthropic',
     adapter: 'anthropic',
     baseUrl: 'https://api.anthropic.com',
     contextWindow: 200000,
@@ -48,6 +52,7 @@ export const MODEL_REGISTRY = new Map([
 
   // ── OpenAI ─────────────────────────────────────────────────────
   ['gpt-5', {
+    provider: 'openai',
     adapter: 'chat-completions',
     baseUrl: 'https://api.openai.com/v1',
     contextWindow: 256000,
@@ -55,6 +60,7 @@ export const MODEL_REGISTRY = new Map([
     displayName: 'GPT-5',
   }],
   ['gpt-5.4', {
+    provider: 'openai',
     adapter: 'chat-completions',
     baseUrl: 'https://api.openai.com/v1',
     contextWindow: 272000,
@@ -62,6 +68,7 @@ export const MODEL_REGISTRY = new Map([
     displayName: 'GPT-5.4',
   }],
   ['gpt-4.1', {
+    provider: 'openai',
     adapter: 'chat-completions',
     baseUrl: 'https://api.openai.com/v1',
     contextWindow: 1047576,
@@ -69,6 +76,7 @@ export const MODEL_REGISTRY = new Map([
     displayName: 'GPT-4.1',
   }],
   ['gpt-4.1-mini', {
+    provider: 'openai',
     adapter: 'chat-completions',
     baseUrl: 'https://api.openai.com/v1',
     contextWindow: 1047576,
@@ -76,6 +84,7 @@ export const MODEL_REGISTRY = new Map([
     displayName: 'GPT-4.1 Mini',
   }],
   ['gpt-4.1-nano', {
+    provider: 'openai',
     adapter: 'chat-completions',
     baseUrl: 'https://api.openai.com/v1',
     contextWindow: 1047576,
@@ -83,6 +92,7 @@ export const MODEL_REGISTRY = new Map([
     displayName: 'GPT-4.1 Nano',
   }],
   ['o3', {
+    provider: 'openai',
     adapter: 'chat-completions',
     baseUrl: 'https://api.openai.com/v1',
     contextWindow: 200000,
@@ -90,6 +100,7 @@ export const MODEL_REGISTRY = new Map([
     displayName: 'o3',
   }],
   ['o4-mini', {
+    provider: 'openai',
     adapter: 'chat-completions',
     baseUrl: 'https://api.openai.com/v1',
     contextWindow: 200000,
@@ -99,6 +110,7 @@ export const MODEL_REGISTRY = new Map([
 
   // ── DeepSeek ───────────────────────────────────────────────────
   ['deepseek-chat', {
+    provider: 'deepseek',
     adapter: 'chat-completions',
     baseUrl: 'https://api.deepseek.com',
     contextWindow: 131072,
@@ -106,6 +118,7 @@ export const MODEL_REGISTRY = new Map([
     displayName: 'DeepSeek Chat',
   }],
   ['deepseek-reasoner', {
+    provider: 'deepseek',
     adapter: 'chat-completions',
     baseUrl: 'https://api.deepseek.com',
     contextWindow: 131072,
@@ -115,6 +128,7 @@ export const MODEL_REGISTRY = new Map([
 
   // ── Google (via OpenAI-compatible API) ─────────────────────────
   ['gemini-2.5-pro', {
+    provider: 'google',
     adapter: 'chat-completions',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
     contextWindow: 1048576,
@@ -122,6 +136,7 @@ export const MODEL_REGISTRY = new Map([
     displayName: 'Gemini 2.5 Pro',
   }],
   ['gemini-2.5-flash', {
+    provider: 'google',
     adapter: 'chat-completions',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
     contextWindow: 1048576,
@@ -164,4 +179,33 @@ export function listModels() {
  */
 export function isKnownModel(modelName) {
   return MODEL_REGISTRY.has(modelName);
+}
+
+/**
+ * Get the provider name for a model.
+ *
+ * @param {string} modelName
+ * @returns {string|null} — Provider name ('anthropic', 'openai', 'deepseek', 'google') or null
+ */
+export function getProviderForModel(modelName) {
+  const info = MODEL_REGISTRY.get(modelName);
+  return info ? info.provider : null;
+}
+
+/**
+ * Parse a model reference in "providerName/modelId" format.
+ *
+ * @param {string} ref — e.g. "my-proxy/claude-sonnet-4-20250514" or "claude-sonnet-4-20250514"
+ * @returns {{ providerName: string|null, modelId: string }}
+ */
+export function parseModelRef(ref) {
+  if (!ref) return { providerName: null, modelId: '' };
+  const slashIdx = ref.indexOf('/');
+  if (slashIdx === -1) {
+    return { providerName: null, modelId: ref };
+  }
+  return {
+    providerName: ref.slice(0, slashIdx),
+    modelId: ref.slice(slashIdx + 1),
+  };
 }

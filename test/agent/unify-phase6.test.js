@@ -716,7 +716,7 @@ describe('loadSession', () => {
       expect(existsSync(join(freshDir, 'conversation', 'messages'))).toBe(true);
       expect(existsSync(join(freshDir, 'skills'))).toBe(true);
       expect(existsSync(join(freshDir, 'dream'))).toBe(true);
-      expect(existsSync(join(freshDir, 'config.md'))).toBe(true);
+      expect(existsSync(join(freshDir, 'config.json'))).toBe(true);
     } finally {
       await session.shutdown();
     }

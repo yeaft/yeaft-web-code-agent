@@ -23,56 +23,28 @@ const SUBDIRS = [
   'skills',
 ];
 
-/** Default config.md content (YAML frontmatter + markdown body). */
-const DEFAULT_CONFIG = `---
-model: claude-sonnet-4-20250514
-language: en
-debug: false
-maxContextTokens: 200000
----
-
-# Yeaft Config
-
-Edit the YAML frontmatter above to change settings.
-The \`model\` field is a model ID (e.g. \`gpt-5\`, \`claude-sonnet-4-20250514\`).
-Yeaft auto-detects the correct API adapter and endpoint from the model ID.
-
-## Language
-
-Set \`language\` in frontmatter or \`YEAFT_LANGUAGE\` env var:
-- \`en\` — English system prompts (default)
-- \`zh\` — Chinese system prompts (中文系统提示)
-
-## Model IDs
-
-- \`claude-sonnet-4-20250514\` (default)
-- \`claude-opus-4-20250514\`
-- \`gpt-5\`, \`gpt-5.4\`, \`gpt-4.1\`, \`gpt-4.1-mini\`
-- \`o3\`, \`o4-mini\`
-- \`deepseek-chat\`, \`deepseek-reasoner\`
-- \`gemini-2.5-pro\`, \`gemini-2.5-flash\`
-
-## API Keys
-
-Store API keys in \`~/.yeaft/.env\` (recommended) or export as env vars:
-
-\`\`\`bash
-# ~/.yeaft/.env
-YEAFT_API_KEY=sk-ant-...          # Anthropic
-YEAFT_OPENAI_API_KEY=sk-...       # OpenAI / DeepSeek / Gemini
-\`\`\`
-
-## Environment Variables
-
-Shell env vars take precedence over .env and config.md:
-
-- \`YEAFT_MODEL\` — override model ID
-- \`YEAFT_LANGUAGE\` — language for system prompts (en/zh)
-- \`YEAFT_API_KEY\` — Anthropic API key
-- \`YEAFT_OPENAI_API_KEY\` — OpenAI-compatible API key
-- \`YEAFT_PROXY_URL\` — CopilotProxy URL (default: http://localhost:6628)
-- \`YEAFT_DEBUG\` — enable debug mode (1/true)
-- \`YEAFT_DIR\` — data directory (default: ~/.yeaft)
+/** Default config.json — generated on first init as default configuration. */
+const DEFAULT_CONFIG_JSON = `{
+  "providers": [
+    {
+      "name": "my-proxy",
+      "baseUrl": "http://localhost:6628/v1",
+      "apiKey": "proxy",
+      "models": [
+        "claude-sonnet-4-20250514",
+        "claude-haiku-3-20250414",
+        "gpt-5",
+        "deepseek-chat"
+      ]
+    }
+  ],
+  "primaryModel": "my-proxy/claude-sonnet-4-20250514",
+  "fastModel": "my-proxy/claude-sonnet-4-20250514",
+  "language": "en",
+  "debug": false,
+  "maxContextTokens": 200000,
+  "messageTokenBudget": 8192
+}
 `;
 
 /** Default MEMORY.md content. */
@@ -86,6 +58,23 @@ This file stores persistent memory entries. The agent will read and update this 
 
 ## Project Context
 
+`;
+
+/** Default mcp.json example — generated as reference for MCP server configuration. */
+const DEFAULT_MCP_EXAMPLE = `{
+  "_comment": "MCP server configuration. Rename to mcp.json to enable.",
+  "_docs": "Each server needs 'name' + 'command'. Optional: 'args', 'env'.",
+  "servers": [
+    {
+      "name": "example-github",
+      "command": "npx",
+      "args": ["@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_TOKEN": "ghp_your_token_here"
+      }
+    }
+  ]
+}
 `;
 
 /** Default conversation/index.md content. */
@@ -125,10 +114,11 @@ export function initYeaftDir(dir) {
   }
 
   // Create default files if they don't exist
-  const configPath = join(root, 'config.md');
-  if (!existsSync(configPath)) {
-    writeFileSync(configPath, DEFAULT_CONFIG, 'utf8');
-    created.push(configPath);
+  // config.json — default configuration (user edits this directly)
+  const configJsonPath = join(root, 'config.json');
+  if (!existsSync(configJsonPath)) {
+    writeFileSync(configJsonPath, DEFAULT_CONFIG_JSON, 'utf8');
+    created.push(configJsonPath);
   }
 
   const memoryPath = join(root, 'memory', 'MEMORY.md');
@@ -141,6 +131,13 @@ export function initYeaftDir(dir) {
   if (!existsSync(indexPath)) {
     writeFileSync(indexPath, DEFAULT_CONVERSATION_INDEX, 'utf8');
     created.push(indexPath);
+  }
+
+  // mcp.json.example — reference template for MCP server configuration
+  const mcpExamplePath = join(root, 'mcp.json.example');
+  if (!existsSync(mcpExamplePath)) {
+    writeFileSync(mcpExamplePath, DEFAULT_MCP_EXAMPLE, 'utf8');
+    created.push(mcpExamplePath);
   }
 
   return { dir: root, created };

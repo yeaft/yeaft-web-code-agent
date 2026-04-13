@@ -148,6 +148,33 @@ describe('createLLMAdapter — adapter alias', () => {
   });
 });
 
+describe('createLLMAdapter — providers path', () => {
+  it('should create AdapterRouter when providers are configured', async () => {
+    const adapter = await createLLMAdapter({
+      providers: [
+        { name: 'proxy', baseUrl: 'http://localhost:6628/v1', apiKey: 'proxy', models: ['gpt-5'] },
+      ],
+    });
+    expect(adapter.constructor.name).toBe('AdapterRouter');
+  });
+
+  it('should fall back to legacy when providers is empty', async () => {
+    const adapter = await createLLMAdapter({
+      providers: [],
+      apiKey: 'sk-ant-test',
+    });
+    expect(adapter.constructor.name).toBe('AnthropicAdapter');
+  });
+
+  it('should fall back to legacy when providers is null', async () => {
+    const adapter = await createLLMAdapter({
+      providers: null,
+      openaiApiKey: 'sk-test',
+    });
+    expect(adapter.constructor.name).toBe('ChatCompletionsAdapter');
+  });
+});
+
 describe('Mock stream test', () => {
   it('should handle a simulated stream with text and tool_calls', async () => {
     // This tests that the ChatCompletionsAdapter can parse SSE chunks correctly

@@ -143,10 +143,22 @@ export class LLMAdapter {
 /**
  * Create an LLM adapter based on configuration.
  *
+ * If config.providers exists (config.json path), creates an AdapterRouter
+ * that routes requests to the correct provider based on model ID.
+ *
+ * Otherwise falls back to legacy single-adapter creation from env vars.
+ *
  * @param {object} config — From loadConfig()
  * @returns {Promise<LLMAdapter>}
  */
 export async function createLLMAdapter(config) {
+  // ─── New path: config.json with providers ─────────────
+  if (config.providers && config.providers.length > 0) {
+    const { AdapterRouter } = await import('./router.js');
+    return new AdapterRouter({ providers: config.providers });
+  }
+
+  // ─── Legacy path: single adapter from env vars ────────
   // Normalize adapter name — accept 'chat-completions' as alias for 'openai'
   const adapter = config.adapter === 'chat-completions' ? 'openai' : config.adapter;
 

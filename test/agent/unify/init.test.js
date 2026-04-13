@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { existsSync, rmSync, readFileSync } from 'fs';
+import { existsSync, rmSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { initYeaftDir } from '../../../agent/unify/init.js';
@@ -34,15 +34,22 @@ describe('initYeaftDir', () => {
     }
   });
 
-  it('should create default config.md with YAML frontmatter', () => {
+  it('should create config.json with provider template', () => {
     initYeaftDir(TEST_DIR);
-    const configPath = join(TEST_DIR, 'config.md');
+    const configPath = join(TEST_DIR, 'config.json');
     expect(existsSync(configPath)).toBe(true);
 
     const content = readFileSync(configPath, 'utf8');
-    expect(content).toContain('---');
-    expect(content).toContain('model: claude-sonnet-4-20250514');
-    expect(content).toContain('debug: false');
+    const parsed = JSON.parse(content);
+    expect(parsed.providers).toBeDefined();
+    expect(Array.isArray(parsed.providers)).toBe(true);
+    expect(parsed.providers[0].name).toBeDefined();
+    expect(parsed.providers[0].baseUrl).toBeDefined();
+    expect(parsed.providers[0].apiKey).toBeDefined();
+    expect(parsed.providers[0].models).toBeDefined();
+    expect(parsed.primaryModel).toBeDefined();
+    expect(parsed.fastModel).toBeDefined();
+    expect(parsed.language).toBe('en');
   });
 
   it('should create default MEMORY.md', () => {
@@ -61,6 +68,42 @@ describe('initYeaftDir', () => {
 
     const content = readFileSync(indexPath, 'utf8');
     expect(content).toContain('# Conversation Index');
+  });
+
+  it('should create mcp.json.example with server template', () => {
+    initYeaftDir(TEST_DIR);
+    const mcpExamplePath = join(TEST_DIR, 'mcp.json.example');
+    expect(existsSync(mcpExamplePath)).toBe(true);
+
+    const content = readFileSync(mcpExamplePath, 'utf8');
+    const parsed = JSON.parse(content);
+    expect(parsed.servers).toBeDefined();
+    expect(Array.isArray(parsed.servers)).toBe(true);
+    expect(parsed.servers[0].name).toBe('example-github');
+    expect(parsed.servers[0].command).toBe('npx');
+  });
+
+  it('should NOT create config.md (legacy)', () => {
+    initYeaftDir(TEST_DIR);
+    expect(existsSync(join(TEST_DIR, 'config.md'))).toBe(false);
+  });
+
+  it('should NOT create .env.example (legacy)', () => {
+    initYeaftDir(TEST_DIR);
+    expect(existsSync(join(TEST_DIR, '.env.example'))).toBe(false);
+  });
+
+  it('should not overwrite existing config.json', () => {
+    // User has a custom config.json
+    mkdirSync(TEST_DIR, { recursive: true });
+    writeFileSync(join(TEST_DIR, 'config.json'), JSON.stringify({ language: 'zh' }));
+
+    initYeaftDir(TEST_DIR);
+
+    // Should NOT overwrite
+    const content = JSON.parse(readFileSync(join(TEST_DIR, 'config.json'), 'utf8'));
+    expect(content.language).toBe('zh');
+    expect(content.providers).toBeUndefined(); // user's custom, not the default
   });
 
   it('should be idempotent — second call does not overwrite files', () => {

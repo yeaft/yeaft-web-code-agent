@@ -13,7 +13,7 @@
  * a fully wired Session ready for queries.
  */
 
-import { initYeaftDir } from './init.js';
+import { initYeaftDir, DEFAULT_YEAFT_DIR } from './init.js';
 import { loadConfig, loadMCPConfig } from './config.js';
 import { createTrace } from './debug-trace.js';
 import { createLLMAdapter } from './llm/adapter.js';
@@ -46,6 +46,7 @@ import exitWorktree from './tools/exit-worktree.js';
 /**
  * @typedef {Object} Session
  * @property {Engine} engine — The wired engine, ready for .query()
+ * @property {import('./llm/adapter.js').LLMAdapter} adapter — The LLM adapter
  * @property {object} config — Resolved configuration
  * @property {ConversationStore} conversationStore — Conversation persistence
  * @property {MemoryStore} memoryStore — Memory persistence
@@ -80,18 +81,21 @@ export async function loadSession(options = {}) {
     configOverrides = {},
   } = options;
 
-  // ─── 1. Load config (determines yeaftDir) ──────────────
+  // ─── 1. Determine yeaftDir + ensure directory structure ──
+  //        Must happen BEFORE loadConfig so that first-run
+  //        generates a default config.json that loadConfig can read.
   const overrides = { ...configOverrides };
   if (dir) overrides.dir = dir;
   if (model) overrides.model = model;
   if (language) overrides.language = language;
   if (debug !== undefined) overrides.debug = debug;
 
-  const config = loadConfig(overrides);
-  const yeaftDir = config.dir;
-
-  // ─── 2. Ensure directory structure ─────────────────────
+  const yeaftDir = overrides.dir || process.env.YEAFT_DIR || DEFAULT_YEAFT_DIR;
   initYeaftDir(yeaftDir);
+  overrides.dir = yeaftDir;
+
+  // ─── 2. Load config ───────────────────────────────────
+  const config = loadConfig(overrides);
 
   // ─── 3. Create debug trace ─────────────────────────────
   const trace = createTrace({
@@ -177,6 +181,7 @@ export async function loadSession(options = {}) {
 
   return {
     engine,
+    adapter,
     config,
     conversationStore,
     memoryStore,

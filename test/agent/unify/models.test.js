@@ -4,6 +4,8 @@ import {
   resolveModel,
   listModels,
   isKnownModel,
+  getProviderForModel,
+  parseModelRef,
 } from '../../../agent/unify/models.js';
 
 describe('MODEL_REGISTRY', () => {
@@ -150,5 +152,75 @@ describe('isKnownModel', () => {
   it('should return false for unknown models', () => {
     expect(isKnownModel('nonexistent')).toBe(false);
     expect(isKnownModel('')).toBe(false);
+  });
+});
+
+describe('MODEL_REGISTRY provider field', () => {
+  it('should have provider field on all models', () => {
+    for (const [name, info] of MODEL_REGISTRY) {
+      expect(info.provider).toBeTruthy();
+      expect(['anthropic', 'openai', 'deepseek', 'google']).toContain(info.provider);
+    }
+  });
+
+  it('should have provider=anthropic for Claude models', () => {
+    expect(MODEL_REGISTRY.get('claude-sonnet-4-20250514').provider).toBe('anthropic');
+    expect(MODEL_REGISTRY.get('claude-opus-4-20250514').provider).toBe('anthropic');
+    expect(MODEL_REGISTRY.get('claude-haiku-3-20250414').provider).toBe('anthropic');
+  });
+
+  it('should have provider=openai for GPT models', () => {
+    expect(MODEL_REGISTRY.get('gpt-5').provider).toBe('openai');
+    expect(MODEL_REGISTRY.get('gpt-4.1').provider).toBe('openai');
+    expect(MODEL_REGISTRY.get('o3').provider).toBe('openai');
+  });
+
+  it('should have provider=deepseek for DeepSeek models', () => {
+    expect(MODEL_REGISTRY.get('deepseek-chat').provider).toBe('deepseek');
+    expect(MODEL_REGISTRY.get('deepseek-reasoner').provider).toBe('deepseek');
+  });
+
+  it('should have provider=google for Gemini models', () => {
+    expect(MODEL_REGISTRY.get('gemini-2.5-pro').provider).toBe('google');
+    expect(MODEL_REGISTRY.get('gemini-2.5-flash').provider).toBe('google');
+  });
+});
+
+describe('getProviderForModel', () => {
+  it('should return provider for known models', () => {
+    expect(getProviderForModel('gpt-5')).toBe('openai');
+    expect(getProviderForModel('claude-sonnet-4-20250514')).toBe('anthropic');
+    expect(getProviderForModel('deepseek-chat')).toBe('deepseek');
+    expect(getProviderForModel('gemini-2.5-pro')).toBe('google');
+  });
+
+  it('should return null for unknown models', () => {
+    expect(getProviderForModel('nonexistent')).toBeNull();
+  });
+});
+
+describe('parseModelRef', () => {
+  it('should parse provider/model format', () => {
+    const result = parseModelRef('my-proxy/claude-sonnet-4-20250514');
+    expect(result.providerName).toBe('my-proxy');
+    expect(result.modelId).toBe('claude-sonnet-4-20250514');
+  });
+
+  it('should handle bare model ID (no provider)', () => {
+    const result = parseModelRef('gpt-5');
+    expect(result.providerName).toBeNull();
+    expect(result.modelId).toBe('gpt-5');
+  });
+
+  it('should handle null/undefined', () => {
+    expect(parseModelRef(null)).toEqual({ providerName: null, modelId: '' });
+    expect(parseModelRef(undefined)).toEqual({ providerName: null, modelId: '' });
+    expect(parseModelRef('')).toEqual({ providerName: null, modelId: '' });
+  });
+
+  it('should handle model IDs with multiple slashes', () => {
+    const result = parseModelRef('org/models/v1');
+    expect(result.providerName).toBe('org');
+    expect(result.modelId).toBe('models/v1');
   });
 });

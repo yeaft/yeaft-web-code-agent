@@ -9,6 +9,7 @@ import {
   saveServiceConfig, loadServiceConfig,
   parseServiceArgs, validateConfig
 } from './config.js';
+import { initYeaftDir } from '../unify/init.js';
 import { getSystemdServicePath, linuxInstall, linuxUninstall, linuxStart, linuxStop, linuxRestart, linuxStatus, linuxLogs } from './linux.js';
 import { getLaunchdPlistPath, macInstall, macUninstall, macStart, macStop, macRestart, macStatus, macLogs } from './macos.js';
 import { winInstall, winUninstall, winStart, winStop, winRestart, winStatus, winLogs } from './windows.js';
@@ -41,6 +42,15 @@ export function install(args) {
   const config = parseServiceArgs(args);
   validateConfig(config);
   saveServiceConfig(config);
+
+  // Initialize ~/.yeaft/ directory + default config.json
+  // so `yeaft` CLI is ready to use immediately after install
+  const { dir, created } = initYeaftDir();
+  if (created.length > 0) {
+    console.log(`Initialized ${dir}`);
+    console.log(`  Edit ${dir}/config.json to configure LLM providers.`);
+    console.log('');
+  }
 
   console.log(`Installing ${SERVICE_NAME} service...`);
   console.log(`  Server: ${config.serverUrl}`);

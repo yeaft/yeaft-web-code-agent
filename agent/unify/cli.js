@@ -2,33 +2,36 @@
 /**
  * cli.js — Yeaft Unify CLI entry point
  *
+ * Uses loadSession() to wire all subsystems (Engine, ToolRegistry, SkillManager,
+ * MCPManager, Dream, StopHooks, Memory) into a single session.
+ *
  * Features:
  *   --dry-run "prompt"   — Assemble system prompt + messages, don't call LLM
  *   --trace stats|recent|search <keyword>  — Query debug.db
  *   -i / --interactive   — REPL mode with / commands
  *   <prompt>             — One-shot query (Phase 1: engine.query)
+ *   --skip-mcp           — Skip MCP server connections (faster startup)
+ *   --skip-skills        — Skip skill loading
  *
- * Phase 2 additions:
+ * REPL commands:
  *   /memory              — Show memory status or manage entries
  *   /history [n]         — Show last N messages from conversation
  *   /search <keyword>    — Search conversation history
  *   /compact             — Trigger manual consolidation
+ *   /tools               — List registered tools
+ *   /skills              — List loaded skills
  *   Conversation persistence across REPL sessions
  */
 
 import { createInterface } from 'readline';
 import { join } from 'path';
-import { initYeaftDir } from './init.js';
 import { loadConfig } from './config.js';
-import { DebugTrace, NullTrace, createTrace } from './debug-trace.js';
-import { createLLMAdapter } from './llm/adapter.js';
-import { Engine } from './engine.js';
-import { listModels, resolveModel } from './models.js';
+import { DebugTrace } from './debug-trace.js';
+import { loadSession } from './session.js';
+import { listModels, resolveModel, parseModelRef } from './models.js';
 import { buildSystemPrompt } from './prompts.js';
-import { ConversationStore } from './conversation/persist.js';
 import { searchMessages } from './conversation/search.js';
-import { MemoryStore } from './memory/store.js';
-import { shouldConsolidate, consolidate } from './memory/consolidate.js';
+import { consolidate } from './memory/consolidate.js';
 
 // ─── Argument parsing ──────────────────────────────────────────
 
@@ -43,6 +46,8 @@ function parseArgs(argv) {
     trace: null,     // 'stats' | 'recent' | 'search' | 'tools' | null
     traceArg: null,  // search keyword or tool name
     dryRun: false,
+    skipMCP: false,
+    skipSkills: false,
     prompt: null,
   };
 
@@ -82,6 +87,12 @@ function parseArgs(argv) {
         break;
       case '--dry-run':
         args.dryRun = true;
+        break;
+      case '--skip-mcp':
+        args.skipMCP = true;
+        break;
+      case '--skip-skills':
+        args.skipSkills = true;
         break;
       default:
         if (!arg.startsWith('-') && !args.prompt) {
@@ -197,17 +208,16 @@ function handleDryRun(args, config) {
 // ─── REPL ──────────────────────────────────────────────────────
 
 async function runREPL(config, args) {
-  const trace = createTrace({
-    enabled: config.debug,
-    dbPath: join(config.dir, 'debug.db'),
+  // Use loadSession() to wire all subsystems
+  const session = await loadSession({
+    model: args.model || config.model,
+    language: args.language || config.language,
+    debug: args.debug || config.debug,
+    skipMCP: args.skipMCP,
+    skipSkills: args.skipSkills,
   });
 
-  // Initialize conversation and memory stores
-  const conversationStore = new ConversationStore(config.dir);
-  const memoryStore = new MemoryStore(config.dir);
-
-  let adapter;
-  let engine;
+  const { engine, conversationStore, memoryStore, trace, skillManager, mcpManager, toolRegistry } = session;
   let currentMode = args.mode;
 
   // Load persisted conversation as initial messages
@@ -218,21 +228,19 @@ async function runREPL(config, args) {
     ...(m.toolCalls && { toolCalls: m.toolCalls }),
   }));
 
-  // Lazy adapter creation (don't fail on start if no API key for --trace-only usage)
-  async function ensureEngine() {
-    if (!engine) {
-      adapter = await createLLMAdapter(config);
-      engine = new Engine({ adapter, trace, config, conversationStore, memoryStore });
-    }
-    return engine;
-  }
-
   const hotCount = conversationStore.countHot();
   const coldCount = conversationStore.countCold();
   const memStats = memoryStore.stats();
 
-  console.log(`Yeaft Unify REPL (model: ${config.model}, mode: ${currentMode})`);
+  console.log(`Yeaft Unify REPL (model: ${session.config.model}, mode: ${currentMode})`);
   console.log(`Conversation: ${hotCount} hot, ${coldCount} cold | Memory: ${memStats.entryCount} entries`);
+  console.log(`Tools: ${session.status.tools} | Skills: ${session.status.skills}`);
+  if (session.status.mcpServers.length > 0) {
+    console.log(`MCP: ${session.status.mcpServers.join(', ')}`);
+  }
+  if (session.status.mcpFailed.length > 0) {
+    console.log(`MCP failed: ${session.status.mcpFailed.map(f => f.name || f).join(', ')}`);
+  }
   console.log('Type /help for commands, /quit to exit.');
   console.log();
 
@@ -267,9 +275,12 @@ async function runREPL(config, args) {
           console.log('  /context                 — Show context info');
           console.log('  /dry-run                 — Toggle dry-run mode');
           console.log('  /stats                   — Show session stats');
-          console.log('  /model <name>            — Switch model');
+          console.log('  /model <name>            — Switch model (supports provider/model)');
           console.log('  /models                  — List available models');
+          console.log('  /providers               — List configured providers');
           console.log('  /language <en|zh>        — Switch language');
+          console.log('  /tools                   — List registered tools');
+          console.log('  /skills                  — List loaded skills');
           console.log('  /clear                   — Clear conversation history');
           console.log('  /quit                    — Exit');
           break;
@@ -285,14 +296,14 @@ async function runREPL(config, args) {
           break;
 
         case 'debug':
-          config.debug = !config.debug;
-          console.log(`Debug mode: ${config.debug ? 'ON' : 'OFF'}`);
+          session.config.debug = !session.config.debug;
+          console.log(`Debug mode: ${session.config.debug ? 'ON' : 'OFF'}`);
           break;
 
         case 'trace': {
           const subcmd = cmdArgs[0] || 'stats';
           try {
-            handleTraceQuery({ trace: subcmd, traceArg: cmdArgs[1] }, config);
+            handleTraceQuery({ trace: subcmd, traceArg: cmdArgs[1] }, session.config);
           } catch (e) {
             console.error(`Trace error: ${e.message}`);
           }
@@ -373,7 +384,7 @@ async function runREPL(config, args) {
           if (!keyword) {
             console.log('Usage: /search <keyword>');
           } else {
-            const results = searchMessages(config.dir, keyword, 20);
+            const results = searchMessages(session.yeaftDir, keyword, 20);
             if (results.length === 0) {
               console.log(`No messages matching "${keyword}".`);
             } else {
@@ -390,8 +401,7 @@ async function runREPL(config, args) {
 
         case 'compact': {
           try {
-            const eng = await ensureEngine();
-            const budget = config.messageTokenBudget || 8192;
+            const budget = session.config.messageTokenBudget || 8192;
             const hotTokens = conversationStore.hotTokens();
             console.log(`Hot tokens: ${hotTokens} / budget: ${budget}`);
 
@@ -404,8 +414,8 @@ async function runREPL(config, args) {
             const result = await consolidate({
               conversationStore,
               memoryStore,
-              adapter: adapter || await createLLMAdapter(config),
-              config,
+              adapter: session.adapter,
+              config: session.config,
               budget: Math.min(budget, hotTokens), // force trigger
             });
             console.log(`Consolidation complete:`);
@@ -422,63 +432,115 @@ async function runREPL(config, args) {
 
         case 'context':
           console.log(`Context info:`);
-          console.log(`  Model: ${config.model}`);
+          console.log(`  Model: ${session.config.model}`);
           console.log(`  Mode: ${currentMode}`);
-          console.log(`  Language: ${config.language}`);
-          console.log(`  Max context: ${config.maxContextTokens} tokens`);
-          console.log(`  System prompt: ${buildSystemPrompt({ language: config.language, mode: currentMode }).length} chars`);
+          console.log(`  Language: ${session.config.language}`);
+          console.log(`  Max context: ${session.config.maxContextTokens} tokens`);
+          console.log(`  System prompt: ${buildSystemPrompt({ language: session.config.language, mode: currentMode }).length} chars`);
           console.log(`  Hot messages: ${conversationStore.countHot()}`);
           console.log(`  Hot tokens: ${conversationStore.hotTokens()}`);
           console.log(`  Cold messages: ${conversationStore.countCold()}`);
           console.log(`  Memory entries: ${memoryStore.stats().entryCount}`);
+          console.log(`  Tools: ${toolRegistry.size}`);
+          console.log(`  Skills: ${skillManager.size}`);
           break;
 
         case 'dry-run':
-          handleDryRun({ ...args, mode: currentMode, prompt: cmdArgs.join(' ') || null }, config);
+          handleDryRun({ ...args, mode: currentMode, prompt: cmdArgs.join(' ') || null }, session.config);
           break;
 
         case 'stats': {
           const s = trace.stats();
           console.log(`Session stats:`);
           console.log(`  Mode: ${currentMode}`);
-          console.log(`  Debug: ${config.debug}`);
+          console.log(`  Debug: ${session.config.debug}`);
           console.log(`  Turns: ${s.turnCount}`);
           console.log(`  Tools: ${s.toolCount}`);
           console.log(`  Hot messages: ${conversationStore.countHot()}`);
           console.log(`  Cold messages: ${conversationStore.countCold()}`);
           console.log(`  Memory entries: ${memoryStore.stats().entryCount}`);
+          console.log(`  Registered tools: ${toolRegistry.size}`);
+          console.log(`  Loaded skills: ${skillManager.size}`);
           break;
         }
 
         case 'model':
           if (cmdArgs[0]) {
             try {
-              config.model = cmdArgs[0];
-              // Re-resolve adapter and baseUrl from model registry
-              const newModelInfo = resolveModel(config.model);
-              if (newModelInfo) {
-                config.adapter = newModelInfo.adapter === 'anthropic' ? 'anthropic' : 'openai';
-                config.baseUrl = newModelInfo.baseUrl;
-                config.maxContextTokens = newModelInfo.contextWindow;
-                config.maxOutputTokens = newModelInfo.maxOutputTokens;
-                config.modelInfo = newModelInfo;
+              const modelRef = cmdArgs[0];
+              const { providerName, modelId } = parseModelRef(modelRef);
+
+              if (providerName) {
+                // Full ref: provider/model — update primaryModel
+                session.config.model = modelId;
+                session.config.primaryModel = modelRef;
+              } else {
+                // Bare model ID
+                session.config.model = modelRef;
               }
-              engine = null; // Force re-creation with new model + adapter
-              console.log(`Model switched to: ${config.model} (adapter: ${config.adapter})`);
+
+              // Re-resolve model info from registry
+              const newModelInfo = resolveModel(session.config.model);
+              if (newModelInfo) {
+                session.config.maxContextTokens = newModelInfo.contextWindow;
+                session.config.maxOutputTokens = newModelInfo.maxOutputTokens;
+                session.config.modelInfo = newModelInfo;
+              }
+              const providerStr = providerName ? ` (provider: ${providerName})` : '';
+              console.log(`Model switched to: ${session.config.model}${providerStr}`);
+              console.log('Note: Model change takes effect on next query.');
             } catch (e) {
               console.error(`Error switching model: ${e.message}`);
             }
           } else {
-            console.log(`Current model: ${config.model} (adapter: ${config.adapter})`);
+            const primaryRef = session.config.primaryModel || session.config.model;
+            console.log(`Current model: ${primaryRef}`);
+            if (session.config.fastModel && session.config.fastModel !== session.config.primaryModel) {
+              console.log(`Fast model: ${session.config.fastModel}`);
+            }
           }
           break;
 
         case 'models': {
           const models = listModels();
-          console.log('Available models:');
-          for (const m of models) {
-            const current = m.name === config.model ? ' ← current' : '';
-            console.log(`  ${m.name} (${m.displayName}) — ${m.adapter}, ${(m.contextWindow / 1000).toFixed(0)}K ctx${current}`);
+          // If providers are configured, show provider-based model list
+          if (session.config.providers && session.config.providers.length > 0) {
+            console.log('Available models (from providers):');
+            for (const provider of session.config.providers) {
+              console.log(`  [${provider.name}] ${provider.baseUrl}`);
+              if (Array.isArray(provider.models)) {
+                for (const m of provider.models) {
+                  const current = (`${provider.name}/${m}` === session.config.primaryModel) ? ' ← primary' :
+                    (`${provider.name}/${m}` === session.config.fastModel) ? ' ← fast' : '';
+                  const info = resolveModel(m);
+                  const displayName = info ? ` (${info.displayName})` : '';
+                  console.log(`    ${provider.name}/${m}${displayName}${current}`);
+                }
+              }
+            }
+          } else {
+            // Legacy: show registry models
+            console.log('Available models (from registry):');
+            for (const m of models) {
+              const current = m.name === session.config.model ? ' ← current' : '';
+              console.log(`  ${m.name} (${m.displayName}) — ${m.adapter}, ${(m.contextWindow / 1000).toFixed(0)}K ctx${current}`);
+            }
+          }
+          break;
+        }
+
+        case 'providers': {
+          const providers = session.config.providers;
+          if (!providers || providers.length === 0) {
+            console.log('No providers configured. Using legacy adapter mode.');
+            console.log('Add providers to ~/.yeaft/config.json to enable provider routing.');
+          } else {
+            console.log(`Configured providers (${providers.length}):`);
+            for (const p of providers) {
+              const protocol = p.protocol || 'openai';
+              const modelCount = Array.isArray(p.models) ? p.models.length : 0;
+              console.log(`  ${p.name} — ${p.baseUrl} (${protocol}, ${modelCount} models)`);
+            }
           }
           break;
         }
@@ -486,12 +548,39 @@ async function runREPL(config, args) {
         case 'language':
         case 'lang':
           if (cmdArgs[0]) {
-            config.language = cmdArgs[0];
-            console.log(`Language switched to: ${config.language}`);
+            session.config.language = cmdArgs[0];
+            console.log(`Language switched to: ${session.config.language}`);
           } else {
-            console.log(`Current language: ${config.language}`);
+            console.log(`Current language: ${session.config.language}`);
           }
           break;
+
+        case 'tools': {
+          const names = toolRegistry.names || [];
+          if (names.length === 0) {
+            console.log('No tools registered.');
+          } else {
+            console.log(`Registered tools (${names.length}):`);
+            for (const name of names) {
+              console.log(`  - ${name}`);
+            }
+          }
+          break;
+        }
+
+        case 'skills': {
+          const skillList = skillManager.list() || [];
+          if (skillList.length === 0) {
+            console.log('No skills loaded.');
+          } else {
+            console.log(`Loaded skills (${skillList.length}):`);
+            for (const skill of skillList) {
+              const desc = skill.description ? ` — ${skill.description}` : '';
+              console.log(`  - ${skill.name}${desc}`);
+            }
+          }
+          break;
+        }
 
         case 'clear':
           conversationStore.clear();
@@ -502,7 +591,7 @@ async function runREPL(config, args) {
         case 'quit':
         case 'exit':
         case 'q':
-          rl.close(); // close handler does trace.close() + process.exit()
+          rl.close(); // close handler does shutdown + process.exit()
           return; // don't call rl.prompt() below
 
         default:
@@ -514,10 +603,9 @@ async function runREPL(config, args) {
 
     // Regular input → engine.query
     try {
-      const eng = await ensureEngine();
       let responseText = '';
 
-      for await (const event of eng.query({
+      for await (const event of engine.query({
         prompt: input,
         mode: currentMode,
         messages: conversationMessages,
@@ -528,24 +616,33 @@ async function runREPL(config, args) {
             process.stdout.write(event.text);
             break;
           case 'tool_start':
-            if (config.debug) {
+            if (session.config.debug) {
               process.stderr.write(`\n[tool] ${event.name}(${JSON.stringify(event.input)})\n`);
+            } else {
+              process.stderr.write(`\n⚙ ${event.name}...\n`);
             }
             break;
           case 'tool_end':
-            if (config.debug) {
+            if (session.config.debug) {
               const status = event.isError ? 'ERROR' : 'OK';
               process.stderr.write(`[tool] ${event.name} → ${status}\n`);
             }
             break;
           case 'recall':
-            if (config.debug) {
+            if (session.config.debug) {
               process.stderr.write(`[recall] ${event.entryCount} entries${event.cached ? ' (cached)' : ''}\n`);
             }
             break;
           case 'consolidate':
-            if (config.debug) {
+            if (session.config.debug) {
               process.stderr.write(`[consolidate] archived=${event.archivedCount}, extracted=${event.extractedCount}\n`);
+            } else {
+              process.stderr.write(`[compact] Memory consolidated\n`);
+            }
+            break;
+          case 'dream_triggered':
+            if (session.config.debug) {
+              process.stderr.write(`[dream] Dream cycle triggered (background)\n`);
             }
             break;
           case 'fallback':
@@ -555,7 +652,7 @@ async function runREPL(config, args) {
             process.stderr.write(`\nError: ${event.error.message}\n`);
             break;
           case 'turn_start':
-            if (config.debug && event.turnNumber > 1) {
+            if (session.config.debug && event.turnNumber > 1) {
               process.stderr.write(`\n--- Turn ${event.turnNumber} ---\n`);
             }
             break;
@@ -564,7 +661,7 @@ async function runREPL(config, args) {
       console.log(); // newline after response
 
       // Update in-memory conversation for multi-turn context
-      // (engine.js already persists to disk via conversationStore)
+      // (engine.js already persists to disk via StopHooks when yeaftDir is set)
       conversationMessages.push({ role: 'user', content: input });
       if (responseText) {
         conversationMessages.push({ role: 'assistant', content: responseText });
@@ -575,8 +672,8 @@ async function runREPL(config, args) {
     rl.prompt();
   });
 
-  rl.on('close', () => {
-    trace.close();
+  rl.on('close', async () => {
+    await session.shutdown();
     console.log('\nBye!');
     process.exit(0);
   });
@@ -585,24 +682,23 @@ async function runREPL(config, args) {
 // ─── One-shot handler ──────────────────────────────────────────
 
 async function runOnce(config, args) {
-  const trace = createTrace({
-    enabled: config.debug,
-    dbPath: join(config.dir, 'debug.db'),
+  if (args.dryRun) {
+    handleDryRun(args, config);
+    return;
+  }
+
+  // Use loadSession() to wire all subsystems
+  const session = await loadSession({
+    model: args.model || config.model,
+    language: args.language || config.language,
+    debug: args.debug || config.debug,
+    skipMCP: args.skipMCP,
+    skipSkills: args.skipSkills,
   });
 
-  // Initialize stores for persistence
-  const conversationStore = new ConversationStore(config.dir);
-  const memoryStore = new MemoryStore(config.dir);
+  const { engine, conversationStore } = session;
 
   try {
-    if (args.dryRun) {
-      handleDryRun(args, config);
-      return;
-    }
-
-    const adapter = await createLLMAdapter(config);
-    const engine = new Engine({ adapter, trace, config, conversationStore, memoryStore });
-
     // Load recent conversation as context
     const priorMessages = conversationStore.loadRecent(20).map(m => ({
       role: m.role,
@@ -621,12 +717,14 @@ async function runOnce(config, args) {
           process.stdout.write(event.text);
           break;
         case 'tool_start':
-          if (args.verbose) {
+          if (args.verbose || args.debug) {
             process.stderr.write(`\n[tool] ${event.name}(${JSON.stringify(event.input)})\n`);
+          } else {
+            process.stderr.write(`\n⚙ ${event.name}...\n`);
           }
           break;
         case 'tool_end':
-          if (args.verbose) {
+          if (args.verbose || args.debug) {
             const status = event.isError ? 'ERROR' : 'OK';
             process.stderr.write(`[tool] ${event.name} → ${status}\n`);
           }
@@ -639,6 +737,11 @@ async function runOnce(config, args) {
         case 'consolidate':
           if (args.verbose || args.debug) {
             process.stderr.write(`[consolidate] archived=${event.archivedCount}, extracted=${event.extractedCount}\n`);
+          }
+          break;
+        case 'dream_triggered':
+          if (args.verbose || args.debug) {
+            process.stderr.write(`[dream] Dream cycle triggered (background)\n`);
           }
           break;
         case 'fallback':
@@ -657,7 +760,7 @@ async function runOnce(config, args) {
     // Final newline after streaming text
     console.log();
   } finally {
-    trace.close();
+    await session.shutdown();
   }
 }
 
@@ -666,17 +769,14 @@ async function runOnce(config, args) {
 async function main() {
   const args = parseArgs(process.argv);
 
-  // Load config with CLI overrides
+  // Load config with CLI overrides (for --trace queries and dry-run, no session needed)
   const config = loadConfig({
     model: args.model,
     language: args.language,
     debug: args.debug || undefined,
   });
 
-  // Initialize directory structure
-  initYeaftDir(config.dir);
-
-  // Handle --trace queries (no LLM needed)
+  // Handle --trace queries (no LLM needed, no session needed)
   if (args.trace) {
     handleTraceQuery(args, config);
     return;
@@ -711,22 +811,24 @@ async function main() {
   console.log('Yeaft Unify CLI');
   console.log();
   console.log('Usage:');
-  console.log('  node cli.js "your prompt"           — One-shot query');
-  console.log('  node cli.js -i                      — Interactive REPL');
-  console.log('  node cli.js --dry-run "prompt"       — Show what would be sent');
-  console.log('  node cli.js --trace stats            — Debug trace statistics');
+  console.log('  node cli.js "your prompt"            — One-shot query');
+  console.log('  node cli.js -i                       — Interactive REPL');
+  console.log('  node cli.js --dry-run "prompt"        — Show what would be sent');
+  console.log('  node cli.js --trace stats             — Debug trace statistics');
   console.log('  node cli.js --trace recent            — Recent turns');
   console.log('  node cli.js --trace search "keyword"  — Search traces');
   console.log();
   console.log('Options:');
-  console.log('  -m, --mode <mode>   Mode: chat, work, dream (default: chat)');
-  console.log('  -d, --debug         Enable debug tracing');
-  console.log('  -i, --interactive   Start REPL');
-  console.log('  -v, --verbose       Verbose output');
-  console.log('  --model <name>      Override model');
-  console.log('  --language <code>   Language: en, zh (default: en)');
-  console.log('  --trace <cmd>       Query debug trace');
-  console.log('  --dry-run           Show prompt without calling LLM');
+  console.log('  -m, --mode <mode>     Mode: chat, work, dream (default: chat)');
+  console.log('  -d, --debug           Enable debug tracing');
+  console.log('  -i, --interactive     Start REPL');
+  console.log('  -v, --verbose         Verbose output');
+  console.log('  --model <name>        Override model');
+  console.log('  --language <code>     Language: en, zh (default: en)');
+  console.log('  --trace <cmd>         Query debug trace');
+  console.log('  --dry-run             Show prompt without calling LLM');
+  console.log('  --skip-mcp            Skip MCP server connections');
+  console.log('  --skip-skills         Skip skill loading');
 }
 
 main().catch(err => {
