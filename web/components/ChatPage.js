@@ -128,21 +128,30 @@ export default {
 
         </div>
 
-        <!-- Session Panels — adaptive scroll layout -->
+        <!-- Session Tab Bar -->
+        <div class="session-tab-bar">
+          <div class="session-tab" :class="{ active: sidebarTab === 'chat' }" @click="sidebarTab = 'chat'">
+            <svg class="session-tab-icon" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/></svg>
+            <span>Chat</span>
+            <span class="session-tab-count" v-if="chatSessionCount > 0">{{ chatSessionCount }}</span>
+            <button class="session-tab-add-btn" @click.stop="onlineAgentCount > 0 && openConversationModal()" :class="{ disabled: onlineAgentCount === 0 }" :title="$t('chat.sidebar.newConv')">
+              <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+            </button>
+          </div>
+          <div class="session-tab" :class="{ active: sidebarTab === 'crew' }" @click="sidebarTab = 'crew'">
+            <svg class="session-tab-icon" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+            <span>Crew</span>
+            <span class="session-tab-count" v-if="crewSessionCount > 0">{{ crewSessionCount }}</span>
+            <button class="session-tab-add-btn" @click.stop="newCrewSession" :title="$t('chat.sidebar.newCrew')">
+              <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- Session List — tab content -->
         <div class="session-panels">
-          <!-- Chat Sessions Panel -->
-          <div class="session-panel" :class="{ collapsed: chatGroupCollapsed }">
-            <div class="session-group-header">
-              <div class="session-group-title-area" @click="chatGroupCollapsed = !chatGroupCollapsed">
-                <svg class="session-collapse-arrow" :class="{ collapsed: chatGroupCollapsed }" viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
-                <svg class="session-group-icon" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/></svg>
-                <span>{{ $t('chat.sidebar.recentChats') }}</span>
-              </div>
-              <button class="session-header-add-btn" @click.stop="onlineAgentCount > 0 && openConversationModal()" :class="{ disabled: onlineAgentCount === 0 }" :title="$t('chat.sidebar.newConv')">
-                <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-              </button>
-            </div>
-            <div class="session-panel-list" v-show="!chatGroupCollapsed">
+          <!-- Chat Sessions (visible when chat tab active) -->
+          <div class="session-panel-list" v-show="sidebarTab === 'chat'">
               <div
                 v-for="conv in pinnedChatConversations"
                 :key="conv.id"
@@ -255,21 +264,9 @@ export default {
                 </div>
               </div>
             </div>
-          </div>
 
-          <!-- Crew Sessions Panel -->
-          <div class="session-panel" :class="{ collapsed: crewGroupCollapsed }">
-            <div class="session-group-header">
-              <div class="session-group-title-area" @click="crewGroupCollapsed = !crewGroupCollapsed">
-                <svg class="session-collapse-arrow" :class="{ collapsed: crewGroupCollapsed }" viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
-                <svg class="session-group-icon" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
-                <span>Crew Sessions</span>
-              </div>
-              <button class="session-header-add-btn" @click.stop="newCrewSession" :title="$t('chat.sidebar.newCrew')">
-                <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-              </button>
-            </div>
-            <div class="session-panel-list" v-show="!crewGroupCollapsed">
+          <!-- Crew Sessions (visible when crew tab active) -->
+          <div class="session-panel-list" v-show="sidebarTab === 'crew'">
               <div
                 v-for="conv in pinnedCrewConversations"
                 :key="conv.id"
@@ -383,7 +380,6 @@ export default {
                   </span>
                 </div>
               </div>
-            </div>
           </div>
         </div>
         <div class="sidebar-bottom">
@@ -654,6 +650,7 @@ export default {
       serverVersion: '',
       chatGroupCollapsed: false,
       crewGroupCollapsed: false,
+      sidebarTab: 'chat',
       // Inline rename state
       editingCrewId: null,
       editingCrewName: '',
@@ -714,6 +711,12 @@ export default {
     },
     unpinnedCrewConversations() {
       return this.sortByActivity(this.store.conversations.filter(c => c.type === 'crew' && c.agentOnline !== false && !this.store.isSessionPinned(c.id)));
+    },
+    chatSessionCount() {
+      return this.store.conversations.filter(c => c.type !== 'crew' && c.agentOnline !== false).length;
+    },
+    crewSessionCount() {
+      return this.store.conversations.filter(c => c.type === 'crew' && c.agentOnline !== false).length;
     }
   },
   methods: {
@@ -727,6 +730,7 @@ export default {
     },
     // Crew mode methods
     newCrewSession() {
+      this.sidebarTab = 'crew';
       this.store.enterCrewMode();
     },
     startCrewSession(config) {
