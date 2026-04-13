@@ -19,7 +19,7 @@ export function selectAgent(store, agentId) {
   });
 }
 
-export function createConversation(store, workDir, agentId = null, disallowedTools = null) {
+export function createConversation(store, workDir, agentId = null, disallowedTools = null, mode = null) {
   const targetAgent = agentId || store.currentAgent;
   if (!targetAgent) {
     store.addMessage({
@@ -36,6 +36,9 @@ export function createConversation(store, workDir, agentId = null, disallowedToo
   };
   if (disallowedTools !== null) {
     msg.disallowedTools = disallowedTools;
+  }
+  if (mode) {
+    msg.mode = mode;
   }
   store.sendWsMessage(msg);
 }

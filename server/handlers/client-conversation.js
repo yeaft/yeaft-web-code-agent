@@ -134,7 +134,8 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         workDir: msg.workDir,
         userId: client.userId,
         username: client.username,
-        disallowedTools: msg.disallowedTools
+        disallowedTools: msg.disallowedTools,
+        mode: msg.mode || null
       });
       break;
     }
@@ -363,7 +364,8 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
           workDir: msg.workDir || convInfo?.workDir,
           claudeSessionId: convInfo?.claudeSessionId,
           targetRole: msg.targetRole || null,
-          expertSelections: msg.expertSelections || null
+          expertSelections: msg.expertSelections || null,
+          mode: convInfo?.mode || null
         });
       } else {
         await forwardToAgent(chatAgentId, {
@@ -373,7 +375,8 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
           workDir: msg.workDir || convInfo?.workDir,
           claudeSessionId: convInfo?.claudeSessionId,
           targetRole: msg.targetRole || null,
-          expertSelections: msg.expertSelections || null
+          expertSelections: msg.expertSelections || null,
+          mode: convInfo?.mode || null
         });
       }
       break;

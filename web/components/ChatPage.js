@@ -94,6 +94,14 @@ export default {
                     <span v-if="restartingAgents[agent.id]" class="spinner-mini"></span>
                     <svg v-else viewBox="0 0 24 24" width="13" height="13"><path fill="currentColor" d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
                   </button>
+                  <button
+                    class="agent-dropdown-unify-btn"
+                    @click.stop="startUnifyConversation(agent.id)"
+                    :disabled="!agent.online || restartingAgents[agent.id] || upgradingAgents[agent.id]"
+                    :title="$t('chat.agent.unify')"
+                  >
+                    <svg viewBox="0 0 24 24" width="13" height="13"><path fill="currentColor" d="M7 2v11h3v9l7-12h-4l4-8z"/></svg>
+                  </button>
                 </div>
                 <div v-if="onlineAgents.length === 0" class="agent-dropdown-empty">{{ $t('chat.agent.none') }}</div>
               </div>
@@ -861,6 +869,11 @@ export default {
       this.store.createConversation(workDir, this.convModalAgent);
       this.closeConversationModal();
     },
+    startUnifyConversation(agentId) {
+      this.store.selectAgent(agentId);
+      this.agentManagerOpen = false;
+      this.store.createConversation(null, agentId, null, 'unify');
+    },
     resumeSession(session) {
       if (!this.convModalAgent) return;
       this.store.selectAgent(this.convModalAgent);
@@ -938,16 +951,19 @@ export default {
       }
     },
     getConversationTitle(conv) {
+      // Unify mode prefix
+      const prefix = conv.mode === 'unify' ? '\u26a1 ' : '';
       // 优先使用 store 中缓存的标题（最新用户消息）
       const cachedTitle = this.store.getConversationTitle(conv.id);
       if (cachedTitle) {
-        return cachedTitle.length > 30 ? cachedTitle.slice(0, 30) + '...' : cachedTitle;
+        const title = cachedTitle.length > 30 ? cachedTitle.slice(0, 30) + '...' : cachedTitle;
+        return prefix + title;
       }
       // 其次显示简短的 session ID
       if (conv.claudeSessionId) {
-        return conv.claudeSessionId.slice(0, 8) + '...';
+        return prefix + conv.claudeSessionId.slice(0, 8) + '...';
       }
-      return conv.id.slice(0, 8) + '...';
+      return prefix + (conv.id.slice(0, 8) + '...');
     },
     getConversationFullTitle(conv) {
       if (conv.type === 'crew') {
