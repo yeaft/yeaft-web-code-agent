@@ -133,8 +133,8 @@ describe('Right detail panel', () => {
     expect(unifyPageJs).toContain('unify-detail-placeholder');
   });
 
-  it('has border-left', () => {
-    expect(unifyCss).toMatch(/\.unify-detail\s*\{[^}]*border-left/);
+  it('does NOT have border-left (no divider lines)', () => {
+    expect(unifyCss).not.toMatch(/\.unify-detail\s*\{[^}]*border-left/);
   });
 });
 

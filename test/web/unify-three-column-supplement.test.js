@@ -90,8 +90,8 @@ describe('Sidebar collapse CSS mechanism', () => {
     expect(unifyCss).toMatch(/\.unify-sidebar\.collapsed\s*\{[^}]*pointer-events:\s*none/);
   });
 
-  it('collapsed sidebar removes border-right', () => {
-    expect(unifyCss).toMatch(/\.unify-sidebar\.collapsed\s*\{[^}]*border-right:\s*none/);
+  it('collapsed sidebar does NOT reference border-right (no borders to remove)', () => {
+    expect(unifyCss).not.toMatch(/\.unify-sidebar\.collapsed\s*\{[^}]*border-right/);
   });
 
   it('sidebar has CSS transition for smooth collapse', () => {
@@ -175,8 +175,8 @@ describe('Three-column CSS layout details', () => {
     expect(unifyCss).toMatch(/\.unify-detail\s*\{[^}]*var\(--bg-sidebar\)/);
   });
 
-  it('sidebar has border-right', () => {
-    expect(unifyCss).toMatch(/\.unify-sidebar\s*\{[^}]*border-right.*var\(--border-color\)/);
+  it('sidebar does NOT have border-right (no divider lines)', () => {
+    expect(unifyCss).not.toMatch(/\.unify-sidebar\s*\{[^}]*border-right/);
   });
 });
 
@@ -451,6 +451,30 @@ describe('CSS section spacing (no borders)', () => {
 
   it('sidebar sections do NOT have border-bottom', () => {
     expect(unifyCss).not.toMatch(/\.unify-sidebar-section\s*\{[^}]*border-bottom/);
+  });
+
+  it('sidebar does NOT have border-right', () => {
+    expect(unifyCss).not.toMatch(/\.unify-sidebar\s*\{[^}]*border-right/);
+  });
+
+  it('topbar does NOT have border-bottom', () => {
+    expect(unifyCss).not.toMatch(/\.unify-topbar\s*\{[^}]*border-bottom/);
+  });
+
+  it('detail panel does NOT have border-left', () => {
+    expect(unifyCss).not.toMatch(/\.unify-detail\s*\{[^}]*border-left/);
+  });
+
+  it('debug header does NOT have border-bottom', () => {
+    expect(unifyCss).not.toMatch(/\.unify-debug-header\s*\{[^}]*border-bottom/);
+  });
+
+  it('debug turn body does NOT have border-top', () => {
+    expect(unifyCss).not.toMatch(/\.unify-debug-turn-body\s*\{[^}]*border-top/);
+  });
+
+  it('NO directional borders exist anywhere in unify.css', () => {
+    expect(unifyCss).not.toMatch(/border-(top|bottom|left|right):\s*1px/);
   });
 
   it('sidebar sections have padding', () => {
