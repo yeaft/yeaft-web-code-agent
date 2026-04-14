@@ -265,6 +265,46 @@
 .typing-indicator.status-cli-exited .svg-dog-leg,
 .typing-indicator.status-cli-exited .svg-dog-tail { fill: rgba(229, 124, 35, 1); stroke: rgba(229, 124, 35, 1); }
 
+/* Waiting status banner — shown at top of message area */
+.typing-status-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 16px;
+  font-size: 12px;
+  border-radius: 8px;
+  margin: 0 8px 8px;
+  gap: 6px;
+  animation: typing-banner-in 0.25s ease-out;
+}
+
+.typing-status-banner-disconnected,
+.typing-status-banner-agent-offline {
+  background: rgba(229, 57, 53, 0.08);
+  border: 1px solid rgba(229, 57, 53, 0.2);
+}
+
+.typing-status-banner-compacting {
+  background: rgba(91, 155, 213, 0.08);
+  border: 1px solid rgba(91, 155, 213, 0.2);
+}
+
+.typing-status-banner-session-lost,
+.typing-status-banner-cli-exited {
+  background: rgba(229, 124, 35, 0.08);
+  border: 1px solid rgba(229, 124, 35, 0.2);
+}
+
+@keyframes typing-banner-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.typing-status-banner .spinner-mini {
+  width: 12px;
+  height: 12px;
+}
+
 .typing-status-text {
   margin-left: 8px;
   font-size: 12px;

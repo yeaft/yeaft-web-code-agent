@@ -63,6 +63,25 @@ export default {
 
       <!-- Messages when in conversation -->
       <div v-else class="messages">
+        <!-- Waiting status banner (shown above messages, not overlapping cat animation) -->
+        <div v-if="waitingStatus && waitingStatus !== 'normal'" class="typing-status-banner" :class="'typing-status-banner-' + waitingStatus">
+          <span v-if="waitingStatus === 'disconnected'" class="typing-status-text typing-status-error">
+            {{ $t('chat.waiting.disconnected') }}
+          </span>
+          <span v-else-if="waitingStatus === 'compacting'" class="typing-status-text typing-status-compact">
+            <span class="spinner-mini"></span> {{ $t('chat.waiting.compacting') }}
+          </span>
+          <span v-else-if="waitingStatus === 'agent-offline'" class="typing-status-text typing-status-error">
+            {{ $t('chat.waiting.agentOffline') }}
+            <button class="typing-refresh-btn" @click="refreshSession">{{ $t('chat.waiting.refresh') }}</button>
+          </span>
+          <span v-else-if="waitingStatus === 'session-lost'" class="typing-status-text typing-status-warn">
+            {{ $t('chat.waiting.sessionLost') }}
+          </span>
+          <span v-else-if="waitingStatus === 'cli-exited'" class="typing-status-text typing-status-warn">
+            {{ $t('chat.waiting.cliExited') }}
+          </span>
+        </div>
         <div v-if="store.loadingMoreMessages" class="loading-more">{{ $t('message.loadingMore') }}</div>
         <div v-else-if="store.hasMoreMessages" class="load-more-hint" @click="store.loadMoreMessages()">{{ $t('message.loadMore') }}</div>
         <template v-for="item in turnGroups" :key="item.id">
@@ -230,22 +249,6 @@ export default {
             </svg>
           </span>
           </template>
-          <span v-if="waitingStatus === 'disconnected'" class="typing-status-text typing-status-error">
-            {{ $t('chat.waiting.disconnected') }}
-          </span>
-          <span v-else-if="waitingStatus === 'compacting'" class="typing-status-text typing-status-compact">
-            {{ $t('chat.waiting.compacting') }}
-          </span>
-          <span v-else-if="waitingStatus === 'agent-offline'" class="typing-status-text typing-status-error">
-            {{ $t('chat.waiting.agentOffline') }}
-            <button class="typing-refresh-btn" @click="refreshSession">{{ $t('chat.waiting.refresh') }}</button>
-          </span>
-          <span v-else-if="waitingStatus === 'session-lost'" class="typing-status-text typing-status-warn">
-            {{ $t('chat.waiting.sessionLost') }}
-          </span>
-          <span v-else-if="waitingStatus === 'cli-exited'" class="typing-status-text typing-status-warn">
-            {{ $t('chat.waiting.cliExited') }}
-          </span>
         </div>
       </div>
 
