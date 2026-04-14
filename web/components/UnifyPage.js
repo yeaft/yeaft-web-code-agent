@@ -117,7 +117,7 @@ export default {
             <div class="unify-debug-turn" v-for="(turn, idx) in store.unifyDebugTurns" :key="idx">
               <div class="unify-debug-turn-header" @click="toggleTurnExpand(idx)">
                 <svg class="unify-debug-turn-chevron" :class="{ expanded: expandedTurns[idx] }" viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
-                <span class="unify-debug-turn-num">{{ $t('unify.turn') }} {{ turn.turnNumber }}</span>
+                <span class="unify-debug-turn-num">{{ $t('unify.turn').replace('{n}', turn.turnNumber) }}</span>
                 <span class="unify-debug-turn-model">{{ turn.model }}</span>
                 <span class="unify-debug-turn-stats">
                   <span>{{ turn.latencyMs }}ms</span>

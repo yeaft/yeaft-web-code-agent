@@ -196,6 +196,11 @@ describe('Debug panel in detail aside', () => {
     expect(unifyPageJs).toContain('unify-debug-turn-stats');
   });
 
+  it('turn number uses .replace for i18n interpolation (not string concat)', () => {
+    // Must use $t('unify.turn').replace('{n}', ...) so zh-CN "第 {n} 轮" works
+    expect(unifyPageJs).toContain("$t('unify.turn').replace('{n}', turn.turnNumber)");
+  });
+
   it('turn body is conditional on expansion state', () => {
     expect(unifyPageJs).toContain('v-if="expandedTurns[idx]"');
   });
@@ -363,5 +368,13 @@ describe('i18n debug keys', () => {
     for (const key of requiredKeys) {
       expect(zhI18n).toContain(`'${key}'`);
     }
+  });
+
+  it('en.js unify.turn uses {n} placeholder for interpolation', () => {
+    expect(enI18n).toMatch(/'unify\.turn':\s*'Turn \{n\}'/);
+  });
+
+  it('zh-CN.js unify.turn uses {n} placeholder for interpolation', () => {
+    expect(zhI18n).toMatch(/'unify\.turn':\s*'第 \{n\} 轮'/);
   });
 });
