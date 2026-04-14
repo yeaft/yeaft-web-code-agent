@@ -21,15 +21,9 @@ import { ConversationStore } from './conversation/persist.js';
 import { MemoryStore } from './memory/store.js';
 import { SkillManager, createSkillManager } from './skills.js';
 import { MCPManager } from './mcp.js';
-import { createEmptyRegistry } from './tools/registry.js';
+import { createFullRegistry } from './tools/index.js';
 import { Engine } from './engine.js';
 import { join } from 'path';
-
-// Built-in tools
-import mcpTools from './tools/mcp-tools.js';
-import skillTool from './tools/skill.js';
-import enterWorktree from './tools/enter-worktree.js';
-import exitWorktree from './tools/exit-worktree.js';
 
 /**
  * @typedef {Object} SessionOptions
@@ -129,15 +123,7 @@ export async function loadSession(options = {}) {
   }
 
   // ─── 8. Build tool registry ────────────────────────────
-  const toolRegistry = createEmptyRegistry();
-
-  // Register built-in tools
-  for (const tool of mcpTools) {
-    toolRegistry.register(tool);
-  }
-  toolRegistry.register(skillTool);
-  toolRegistry.register(enterWorktree);
-  toolRegistry.register(exitWorktree);
+  const toolRegistry = createFullRegistry();
 
   // Register any extra tools from caller
   for (const tool of extraTools) {

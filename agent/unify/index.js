@@ -37,5 +37,6 @@ export { MCPManager, createMCPManager } from './mcp.js';
 export { SkillManager, createSkillManager, parseSkill, serializeSkill } from './skills.js';
 export { defineTool } from './tools/types.js';
 export { ToolRegistry, createEmptyRegistry } from './tools/registry.js';
+export { createFullRegistry, allTools } from './tools/index.js';
 export { loadSession } from './session.js';
 
