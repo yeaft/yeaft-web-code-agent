@@ -402,13 +402,13 @@ describe('Agent info in sidebar', () => {
 // 11. Session status indicator
 // =============================================================================
 describe('Session status indicator', () => {
-  it('shows "Connecting..." when session not ready', () => {
-    expect(unifyPageJs).toContain('Connecting...');
+  it('shows connecting status via $t() when session not ready', () => {
+    expect(unifyPageJs).toContain("$t('unify.connecting')");
     expect(unifyPageJs).toContain('!store.unifySessionReady');
   });
 
-  it('shows "Ready" when session is ready', () => {
-    expect(unifyPageJs).toContain('Ready');
+  it('shows ready status via $t() when session is ready', () => {
+    expect(unifyPageJs).toContain("$t('unify.ready')");
   });
 
   it('status dot has pulse animation when connecting', () => {
