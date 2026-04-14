@@ -454,6 +454,7 @@ export function handleMessage(store, msg) {
     case 'crew_session_restored':
     case 'crew_output':
     case 'crew_status':
+    case 'crew_routing':
     case 'crew_turn_completed':
     case 'crew_human_needed':
     case 'crew_message_queued':

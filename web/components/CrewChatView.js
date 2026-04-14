@@ -504,6 +504,8 @@ export default {
       return this.store.crewMessagesMap[convId] || [];
     },
     isWaitingResponse() {
+      // Safety net: completed sessions should never show typing indicator
+      if (this.paneCrewStatus?.status === 'completed') return false;
       const messages = this.paneCrewMessages;
       if (!messages || messages.length === 0) return false;
       const lastMsg = messages[messages.length - 1];
