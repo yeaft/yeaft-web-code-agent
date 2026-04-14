@@ -23,6 +23,9 @@ let session = null;
 /** @type {AbortController | null} */
 let currentAbort = null;
 
+/** Query timeout in ms — abort if LLM doesn't respond within this window */
+const QUERY_TIMEOUT_MS = 120_000;
+
 /** Virtual conversationId for the Unify session */
 let unifyConversationId = null;
 
@@ -100,12 +103,29 @@ export async function handleUnifyChat(msg) {
 
     currentAbort = new AbortController();
 
+    // ─── Timeout guard: abort query if LLM hangs beyond threshold ──
+    // Resets on every event — fires only after prolonged silence.
+    let queryTimer = null;
+    const resetQueryTimer = () => {
+      if (queryTimer) clearTimeout(queryTimer);
+      queryTimer = setTimeout(() => {
+        if (currentAbort) {
+          console.error(`[Unify] query timeout after ${QUERY_TIMEOUT_MS / 1000}s of silence — aborting`);
+          currentAbort.abort();
+        }
+      }, QUERY_TIMEOUT_MS);
+    };
+    resetQueryTimer();
+
+    try {
     // ─── Stream Engine events → claude_output format ──
     for await (const event of session.engine.query({
       prompt,
       mode: currentMode,
       signal: currentAbort.signal,
     })) {
+      // Reset timeout on every event — activity means the query is alive
+      resetQueryTimer();
       switch (event.type) {
         // ── Text streaming ──
         case 'text_delta':
@@ -261,9 +281,29 @@ export async function handleUnifyChat(msg) {
       result_text: '',
     });
 
+    } finally {
+      // Always clear the timeout guard
+      if (queryTimer) clearTimeout(queryTimer);
+    }
+
   } catch (err) {
-    // Don't report abort errors
-    if (err.name === 'AbortError') return;
+    // Don't report abort errors — but still send result to unblock frontend
+    if (err.name === 'AbortError') {
+      sendUnifyOutput({
+        type: 'assistant',
+        message: {
+          content: [{
+            type: 'text',
+            text: '⚠️ Query timed out — no response from LLM. Please try again.',
+          }],
+        },
+      });
+      sendUnifyOutput({
+        type: 'result',
+        result_text: '',
+      });
+      return;
+    }
 
     console.error('[Unify] query error:', err.message);
     sendUnifyOutput({

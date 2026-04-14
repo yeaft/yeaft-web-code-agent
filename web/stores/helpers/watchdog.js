@@ -56,7 +56,7 @@ export function startProcessingWatchdog(store, conversationId) {
 
 /**
  * Reset the watchdog when claude_output is received.
- * Clears health warnings and restarts the 45s timer.
+ * Clears health warnings and restarts the appropriate watchdog type.
  */
 export function resetProcessingWatchdog(store, conversationId) {
   if (store.processingConversations[conversationId] && store._processingWatchdogs?.[conversationId]) {
@@ -69,7 +69,12 @@ export function resetProcessingWatchdog(store, conversationId) {
     if (store.sessionHealth?.[conversationId]) {
       delete store.sessionHealth[conversationId];
     }
-    startProcessingWatchdog(store, conversationId);
+    // Restart the correct watchdog type
+    if (store._unifyWatchdogConvs?.has(conversationId)) {
+      startUnifyWatchdog(store, conversationId);
+    } else {
+      startProcessingWatchdog(store, conversationId);
+    }
   }
 }
 
@@ -94,6 +99,8 @@ export function stopProcessingWatchdog(store, conversationId) {
   if (store._autoRefreshed?.[conversationId]) {
     delete store._autoRefreshed[conversationId];
   }
+  // Clean up Unify watchdog tracking
+  store._unifyWatchdogConvs?.delete(conversationId);
 }
 
 /**
@@ -123,4 +130,32 @@ export function startLegacyWatchdog(store, conversationId) {
       }, 10000);
     }
   }, 90000);
+}
+
+/**
+ * Unify watchdog — simpler than ping-based watchdog since Unify
+ * doesn't support ping_session. After 150s of silence (no events
+ * received), force-clears processing state. The 150s is deliberately
+ * longer than the 120s agent-side query timeout, so the agent aborts
+ * first under normal conditions. This is a last-resort safety net.
+ *
+ * Reuses the same _processingWatchdogs slot so resetProcessingWatchdog
+ * (called from handleClaudeOutput on every event) keeps resetting it.
+ */
+export function startUnifyWatchdog(store, conversationId) {
+  stopProcessingWatchdog(store, conversationId);
+  if (!store._processingWatchdogs) store._processingWatchdogs = {};
+  // Track this as a Unify watchdog so resetProcessingWatchdog restarts the correct type
+  if (!store._unifyWatchdogConvs) store._unifyWatchdogConvs = new Set();
+  store._unifyWatchdogConvs.add(conversationId);
+  store._processingWatchdogs[conversationId] = setTimeout(() => {
+    if (store.processingConversations[conversationId]) {
+      console.warn(`[Unify Watchdog] Force-clearing stale processing state for ${conversationId} after 150s`);
+      delete store.processingConversations[conversationId];
+      const status = store.executionStatusMap[conversationId];
+      if (status) status.currentTool = null;
+      store.finishStreamingForConversation(conversationId);
+    }
+    delete store._processingWatchdogs[conversationId];
+  }, 150000);
 }

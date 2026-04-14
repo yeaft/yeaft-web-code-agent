@@ -329,6 +329,8 @@ export const useChatStore = defineStore('chat', {
           delete this._closedAt[this.unifyConversationId];
         }
         this.getOrCreateExecutionStatus(this.unifyConversationId);
+        // Start Unify watchdog — safety net to force-clear processing after 150s of silence
+        watchdogHelpers.startUnifyWatchdog(this, this.unifyConversationId);
       }
 
       this.sendWsMessage({

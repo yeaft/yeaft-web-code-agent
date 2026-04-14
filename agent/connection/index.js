@@ -56,7 +56,9 @@ export function connect() {
 
     const msg = await parseMessage(data);
     if (msg) {
-      handleMessage(msg);
+      handleMessage(msg).catch(err => {
+        console.error('[WS] handleMessage error:', err.message || err);
+      });
     }
   });
 
