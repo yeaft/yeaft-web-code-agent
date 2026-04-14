@@ -1,34 +1,50 @@
 /* ========================================
-   Unify Page — Topbar + Layout
-   Message rendering is handled by standard Chat components.
+   Unify Page — Three-Column Layout
+   Left sidebar + Center conversation + Right detail panel.
+   Conversation area reuses standard Chat components (MessageList + ChatInput).
    ======================================== */
 
 .unify-page {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   height: 100vh;
   height: 100dvh;
   background: var(--bg-main);
   color: var(--text-primary);
 }
 
-/* ── Top Bar ── */
+/* ── Left Sidebar ── */
 
-.unify-topbar {
+.unify-sidebar {
+  width: 240px;
+  min-width: 240px;
   display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--border-color);
+  flex-direction: column;
   background: var(--bg-sidebar);
-  min-height: 48px;
+  border-right: 1px solid var(--border-color);
+  overflow-y: auto;
   flex-shrink: 0;
+  transition: width 0.2s ease, min-width 0.2s ease, opacity 0.2s ease;
+}
+
+.unify-sidebar.collapsed {
+  width: 0;
+  min-width: 0;
+  overflow: hidden;
+  border-right: none;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.unify-sidebar-header {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color);
 }
 
 .unify-back-btn {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   background: none;
   border: none;
   color: var(--text-secondary);
@@ -36,6 +52,7 @@
   padding: 6px 10px;
   border-radius: 8px;
   font-size: 13px;
+  width: 100%;
   transition: background 0.15s, color 0.15s;
 }
 
@@ -48,6 +65,24 @@
   flex-shrink: 0;
 }
 
+/* Sidebar sections */
+
+.unify-sidebar-section {
+  padding: 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.unify-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+/* Mode toggle */
+
 .unify-mode-toggle {
   display: flex;
   background: var(--bg-input-wrapper);
@@ -57,7 +92,8 @@
 }
 
 .unify-mode-btn {
-  padding: 5px 16px;
+  flex: 1;
+  padding: 5px 12px;
   border: none;
   border-radius: 6px;
   font-size: 13px;
@@ -79,11 +115,95 @@
   cursor: not-allowed;
 }
 
-.unify-topbar-right {
-  margin-left: auto;
+/* Agent info */
+
+.unify-agent-info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.unify-agent-row {
   display: flex;
   align-items: center;
   gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.unify-agent-row svg {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+/* Session status */
+
+.unify-session-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.unify-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex-shrink: 0;
+  animation: unify-pulse 1.5s ease-in-out infinite;
+}
+
+.unify-status-dot.ready {
+  background: var(--status-active);
+  animation: none;
+}
+
+@keyframes unify-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+/* ── Center Conversation ── */
+
+.unify-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Simplified topbar — just model badge + clear */
+
+.unify-topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-sidebar);
+  min-height: 48px;
+  flex-shrink: 0;
+}
+
+.unify-sidebar-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 6px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.unify-sidebar-toggle:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
 }
 
 .unify-model-badge {
@@ -95,12 +215,11 @@
   font-weight: 500;
 }
 
-.unify-status-badge {
-  font-size: 11px;
-  color: var(--text-muted);
-  background: var(--bg-input-wrapper);
-  padding: 2px 8px;
-  border-radius: 10px;
+.unify-topbar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .unify-clear-btn {
@@ -121,20 +240,63 @@
   color: var(--error);
 }
 
-/* ── Input Area Override for Unify ── */
+/* ── Right Detail Panel ── */
 
-.unify-page .input-area {
-  max-width: 800px;
-  width: 100%;
-  margin: 0 auto;
-  padding: 8px 16px 16px;
+.unify-detail {
+  width: 280px;
+  min-width: 280px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-sidebar);
+  border-left: 1px solid var(--border-color);
+  flex-shrink: 0;
 }
 
-/* ── Mobile ── */
+.unify-detail-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 100%;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.unify-detail-hint {
+  font-size: 11px;
+  opacity: 0.5;
+}
+
+/* ── Mobile Responsive ── */
+
+@media (max-width: 1024px) {
+  /* Hide right panel on tablet/narrow screens */
+  .unify-detail {
+    display: none;
+  }
+}
 
 @media (max-width: 768px) {
-  .unify-topbar {
-    padding: 6px 10px;
+  /* Hide right panel */
+  .unify-detail {
+    display: none;
+  }
+
+  /* Left sidebar becomes collapsible overlay */
+  .unify-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 100;
+    height: 100vh;
+    height: 100dvh;
+    box-shadow: 4px 0 16px rgba(0, 0, 0, 0.2);
+  }
+
+  .unify-sidebar.collapsed {
+    width: 0;
+    box-shadow: none;
   }
 
   .unify-back-text {
@@ -142,11 +304,11 @@
   }
 
   .unify-mode-btn {
-    padding: 5px 12px;
+    padding: 5px 10px;
     font-size: 12px;
   }
 
-  .unify-page .input-area {
-    padding: 6px 10px 12px;
+  .unify-topbar {
+    padding: 6px 10px;
   }
 }
