@@ -153,11 +153,11 @@ export function resolveRoleName(to, session, fromRole) {
 export async function executeRoute(session, fromRole, route, turnImages = []) {
   const { to, summary, taskId, taskTitle } = route;
 
-  // 如果 session 已暂停或停止，保存为 pendingRoutes
+  // Auto-resume: paused/stopped → running (route execution means work should continue)
   if (session.status === 'paused' || session.status === 'stopped') {
-    session.pendingRoutes.push({ fromRole, route });
-    console.log(`[Crew] Session ${session.status}, route saved as pending: ${fromRole} -> ${to}`);
-    return;
+    console.log(`[Crew] Auto-resuming session from ${session.status} to running (route from ${fromRole} to ${to})`);
+    session.status = 'running';
+    sendStatusUpdate(session);
   }
 
   // Task 文件自动管理（fire-and-forget）
@@ -270,9 +270,17 @@ export function buildRoutePrompt(fromRole, summary, session, turnImages = []) {
  * 向角色发送消息
  */
 export async function dispatchToRole(session, roleName, content, fromSource, taskId, taskTitle) {
-  if (session.status === 'paused' || session.status === 'stopped' || session.status === 'initializing') {
-    console.log(`[Crew] Session ${session.status}, skipping dispatch to ${roleName}`);
+  // Only block during initialization (roles not ready yet)
+  if (session.status === 'initializing') {
+    console.log(`[Crew] Session initializing, skipping dispatch to ${roleName}`);
     return;
+  }
+
+  // Auto-resume: paused/stopped → running (dispatch means work should continue)
+  if (session.status === 'paused' || session.status === 'stopped') {
+    console.log(`[Crew] Auto-resuming session from ${session.status} to running (dispatch to ${roleName})`);
+    session.status = 'running';
+    sendStatusUpdate(session);
   }
 
   let roleState = session.roleStates.get(roleName);

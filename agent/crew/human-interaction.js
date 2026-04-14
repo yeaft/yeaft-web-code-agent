@@ -30,6 +30,14 @@ export async function handleCrewHumanInput(msg) {
     }
   }
 
+  // Auto-resume: user sending a message = intent to continue → restore to running
+  if (session.status === 'paused' || session.status === 'stopped' || session.status === 'completed') {
+    console.log(`[Crew] Auto-resuming session from ${session.status} to running (user sent message)`);
+    session.status = 'running';
+    sendStatusUpdate(session);
+    debouncedSaveSessionMeta(session);
+  }
+
   // Build dispatch content (supports image attachments)
   function buildHumanContent(prefix, text) {
     if (files && files.length > 0) {
@@ -90,10 +98,6 @@ export async function handleCrewHumanInput(msg) {
     if (target) {
       // 检测纯 skill 命令（如 /context, /simplify），直接发送不加前缀
       if (/^\/[a-zA-Z0-9_-]+(?:\s+.*)?$/s.test(message)) {
-        if (session.status === 'paused' || session.status === 'stopped' || session.status === 'initializing') {
-          console.log(`[Crew] Session ${session.status}, skipping skill dispatch to ${target}`);
-          return;
-        }
         let roleState = session.roleStates.get(target);
         if (!roleState || !roleState.query || !roleState.inputStream) {
           const { createRoleQuery } = await import('./role-query.js');
