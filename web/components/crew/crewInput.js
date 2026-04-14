@@ -305,7 +305,23 @@ export function createCrewInput(store, authStore, { getInputRef, getFileInputRef
     // AskUserQuestion answers are now handled by AskCard component's submit event,
     // no longer intercepted here in the input handler.
 
-    store.sendCrewMessage(text, null, attachmentInfos.length > 0 ? attachmentInfos : undefined, convId);
+    // Parse @role mention from content to set targetRole for direct routing
+    let targetRole = null;
+    const atMatch = text.match(/^@(\S+)\s/);
+    if (atMatch) {
+      const atTarget = atMatch[1];
+      const convId2 = getConversationId ? getConversationId() : store.currentConversation;
+      const session = convId2 ? store.crewSessions[convId2] : null;
+      const roles = session?.roles || [];
+      for (const role of roles) {
+        if (role.name === atTarget.toLowerCase() || role.displayName === atTarget) {
+          targetRole = role.name;
+          break;
+        }
+      }
+    }
+
+    store.sendCrewMessage(text, targetRole, attachmentInfos.length > 0 ? attachmentInfos : undefined, convId);
     inputText.value = '';
     attachments.value = [];
     delete store.inputDrafts[convId];

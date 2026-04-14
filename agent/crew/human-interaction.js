@@ -7,6 +7,33 @@ import { sendStatusUpdate } from './ui-messages.js';
 import { debouncedSaveSessionMeta } from './persistence.js';
 
 /**
+ * Resolve @role mention from message content.
+ * Returns { target, message } if a valid role is found, null otherwise.
+ */
+export function resolveAtMention(content, session) {
+  const atMatch = content.match(/^@(\S+)\s*([\s\S]*)/);
+  if (!atMatch) return null;
+
+  const atTarget = atMatch[1];
+  const message = atMatch[2].trim() || content;
+
+  for (const [name, role] of session.roles) {
+    if (name === atTarget.toLowerCase()) {
+      return { target: name, message };
+    }
+    if (role.displayName === atTarget) {
+      return { target: name, message };
+    }
+    // Fuzzy: compound "name-displayName" pattern (e.g. "dev-1-托瓦兹" or partial displayName)
+    const compound = `${name}-${role.displayName}`;
+    if (compound.toLowerCase() === atTarget.toLowerCase()) {
+      return { target: name, message };
+    }
+  }
+  return null;
+}
+
+/**
  * 处理人的输入
  */
 export async function handleCrewHumanInput(msg) {
@@ -37,6 +64,13 @@ export async function handleCrewHumanInput(msg) {
     sendStatusUpdate(session);
     debouncedSaveSessionMeta(session);
   }
+
+  // Resolve @role mention from content (works regardless of targetRole from frontend)
+  const atMention = resolveAtMention(content, session);
+  // Effective target: explicit targetRole from frontend > @mention from content > null
+  const effectiveTargetRole = targetRole || (atMention ? atMention.target : null);
+  // If @mention found, use the stripped message (without @prefix); otherwise use original content
+  const effectiveContent = atMention ? atMention.message : content;
 
   // Build dispatch content (supports image attachments)
   function buildHumanContent(prefix, text) {
@@ -72,55 +106,35 @@ export async function handleCrewHumanInput(msg) {
     // Status changed + new human message — persist (debounced, dispatch will follow)
     debouncedSaveSessionMeta(session);
 
-    const target = targetRole || waitingContext?.fromRole || session.decisionMaker;
-    await dispatchToRole(session, target, buildHumanContent('人工回复:', content), 'human');
+    const target = effectiveTargetRole || waitingContext?.fromRole || session.decisionMaker;
+    if (effectiveTargetRole) {
+      console.log(`[Crew] @mention override in waiting_human: routing to ${target} instead of ${waitingContext?.fromRole || session.decisionMaker}`);
+    }
+    await dispatchToRole(session, target, buildHumanContent('人工回复:', effectiveContent), 'human');
     return;
   }
 
-  // 解析 @role 指令
-  const atMatch = content.match(/^@(\S+)\s*([\s\S]*)/);
-  if (atMatch) {
-    const atTarget = atMatch[1];
-    const message = atMatch[2].trim() || content;
+  // @role 指令 — effectiveTargetRole already resolved above
+  if (atMention && effectiveTargetRole) {
+    const target = effectiveTargetRole;
+    const message = effectiveContent;
 
-    let target = null;
-    for (const [name, role] of session.roles) {
-      if (name === atTarget.toLowerCase()) {
-        target = name;
-        break;
+    // 检测纯 skill 命令（如 /context, /simplify），直接发送不加前缀
+    if (/^\/[a-zA-Z0-9_-]+(?:\s+.*)?$/s.test(message)) {
+      let roleState = session.roleStates.get(target);
+      if (!roleState || !roleState.query || !roleState.inputStream) {
+        const { createRoleQuery } = await import('./role-query.js');
+        roleState = await createRoleQuery(session, target);
       }
-      if (role.displayName === atTarget) {
-        target = name;
-        break;
-      }
-    }
-
-    if (target) {
-      // 检测纯 skill 命令（如 /context, /simplify），直接发送不加前缀
-      if (/^\/[a-zA-Z0-9_-]+(?:\s+.*)?$/s.test(message)) {
-        let roleState = session.roleStates.get(target);
-        if (!roleState || !roleState.query || !roleState.inputStream) {
-          const { createRoleQuery } = await import('./role-query.js');
-          roleState = await createRoleQuery(session, target);
-        }
-        // P1-4: 守卫 stream.enqueue
-        try {
-          if (roleState.inputStream && !roleState.inputStream.isDone) {
-            roleState.inputStream.enqueue({
-              type: 'user',
-              message: { role: 'user', content: message }
-            });
-          } else {
-            console.warn(`[Crew] Skill dispatch: stream closed for ${target}, recreating`);
-            const { createRoleQuery } = await import('./role-query.js');
-            roleState = await createRoleQuery(session, target);
-            roleState.inputStream.enqueue({
-              type: 'user',
-              message: { role: 'user', content: message }
-            });
-          }
-        } catch (enqueueErr) {
-          console.error(`[Crew] Skill dispatch enqueue failed for ${target}:`, enqueueErr.message);
+      // P1-4: 守卫 stream.enqueue
+      try {
+        if (roleState.inputStream && !roleState.inputStream.isDone) {
+          roleState.inputStream.enqueue({
+            type: 'user',
+            message: { role: 'user', content: message }
+          });
+        } else {
+          console.warn(`[Crew] Skill dispatch: stream closed for ${target}, recreating`);
           const { createRoleQuery } = await import('./role-query.js');
           roleState = await createRoleQuery(session, target);
           roleState.inputStream.enqueue({
@@ -128,18 +142,27 @@ export async function handleCrewHumanInput(msg) {
             message: { role: 'user', content: message }
           });
         }
-        sendStatusUpdate(session);
-        console.log(`[Crew] Skill command dispatched to ${target}: ${message}`);
-        return;
+      } catch (enqueueErr) {
+        console.error(`[Crew] Skill dispatch enqueue failed for ${target}:`, enqueueErr.message);
+        const { createRoleQuery } = await import('./role-query.js');
+        roleState = await createRoleQuery(session, target);
+        roleState.inputStream.enqueue({
+          type: 'user',
+          message: { role: 'user', content: message }
+        });
       }
-      await dispatchToRole(session, target, buildHumanContent('人工消息:', message), 'human');
+      sendStatusUpdate(session);
+      console.log(`[Crew] Skill command dispatched to ${target}: ${message}`);
       return;
     }
+    console.log(`[Crew] @mention routing to ${target}: ${message.substring(0, 50)}...`);
+    await dispatchToRole(session, target, buildHumanContent('人工消息:', message), 'human');
+    return;
   }
 
   // 默认发给决策者
-  const target = targetRole || session.decisionMaker;
-  await dispatchToRole(session, target, buildHumanContent('人工消息:', content), 'human');
+  const target = effectiveTargetRole || session.decisionMaker;
+  await dispatchToRole(session, target, buildHumanContent('人工消息:', effectiveContent), 'human');
 }
 
 /**
