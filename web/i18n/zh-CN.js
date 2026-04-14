@@ -100,6 +100,17 @@ export default {
   'unify.model': '模型',
   'unify.placeholder': '问我任何问题...',
   'unify.clearConfirm': '清空所有消息？',
+  'unify.mode': '模式',
+  'unify.agent': '智能体',
+  'unify.connecting': '连接中...',
+  'unify.ready': '就绪',
+  'unify.tools': '个工具',
+  'unify.skills': '个技能',
+  'unify.mcp': '个 MCP',
+  'unify.tasksMemory': '任务与记忆',
+  'unify.comingSoon': '即将推出',
+  'unify.showSidebar': '显示侧栏',
+  'unify.hideSidebar': '隐藏侧栏',
 
   // Chat - Session lifecycle
   'chat.session.creating': '正在创建会话...',

@@ -100,6 +100,17 @@ export default {
   'unify.model': 'Model',
   'unify.placeholder': 'Ask anything...',
   'unify.clearConfirm': 'Clear all messages?',
+  'unify.mode': 'Mode',
+  'unify.agent': 'Agent',
+  'unify.connecting': 'Connecting...',
+  'unify.ready': 'Ready',
+  'unify.tools': 'tools',
+  'unify.skills': 'skills',
+  'unify.mcp': 'MCP',
+  'unify.tasksMemory': 'Tasks & Memory',
+  'unify.comingSoon': 'Coming soon',
+  'unify.showSidebar': 'Show sidebar',
+  'unify.hideSidebar': 'Hide sidebar',
 
   // Chat - Session lifecycle
   'chat.session.creating': 'Creating conversation...',

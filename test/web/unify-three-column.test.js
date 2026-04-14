@@ -12,6 +12,8 @@ import { join } from 'path';
 const rootDir = join(import.meta.dirname, '..', '..');
 const unifyPageJs = readFileSync(join(rootDir, 'web/components/UnifyPage.js'), 'utf8');
 const unifyCss = readFileSync(join(rootDir, 'web/styles/unify.css'), 'utf8');
+const enI18n = readFileSync(join(rootDir, 'web/i18n/en.js'), 'utf8');
+const zhI18n = readFileSync(join(rootDir, 'web/i18n/zh-CN.js'), 'utf8');
 
 // =====================================================================
 // 1. Three-column layout structure
@@ -128,7 +130,6 @@ describe('Right detail panel', () => {
 
   it('has placeholder content', () => {
     expect(unifyPageJs).toContain('unify-detail-placeholder');
-    expect(unifyPageJs).toContain('Coming soon');
   });
 
   it('has border-left', () => {
@@ -166,6 +167,37 @@ describe('Mobile responsive', () => {
     expect(mediaBlock[0]).toContain('.unify-back-text');
     expect(mediaBlock[0]).toContain('display: none');
   });
+
+  it('has sidebar overlay element in template', () => {
+    expect(unifyPageJs).toContain('unify-sidebar-overlay');
+  });
+
+  it('overlay closes sidebar on click', () => {
+    expect(unifyPageJs).toMatch(/unify-sidebar-overlay.*@click.*sidebarCollapsed\s*=\s*true/s);
+  });
+
+  it('overlay is shown only on mobile when sidebar is open', () => {
+    expect(unifyPageJs).toContain('v-if="!sidebarCollapsed && isMobile"');
+  });
+
+  it('has overlay CSS with semi-transparent background', () => {
+    expect(unifyCss).toContain('.unify-sidebar-overlay');
+    expect(unifyCss).toMatch(/\.unify-sidebar-overlay\s*\{[^}]*background:\s*rgba\(0,\s*0,\s*0,\s*0\.5\)/);
+  });
+
+  it('overlay is display:block on mobile (768px)', () => {
+    const mediaBlock = unifyCss.match(/@media\s*\(max-width:\s*768px\)\s*\{[\s\S]*?\n\}/);
+    expect(mediaBlock).not.toBeNull();
+    expect(mediaBlock[0]).toContain('.unify-sidebar-overlay');
+    expect(mediaBlock[0]).toContain('display: block');
+  });
+
+  it('has isMobile reactive ref with resize listener', () => {
+    expect(unifyPageJs).toContain('isMobile');
+    expect(unifyPageJs).toContain("window.innerWidth <= 768");
+    expect(unifyPageJs).toContain("addEventListener('resize'");
+    expect(unifyPageJs).toContain("removeEventListener('resize'");
+  });
 });
 
 // =====================================================================
@@ -201,5 +233,73 @@ describe('Setup logic', () => {
     expect(unifyPageJs).toContain('clearMessages');
     expect(unifyPageJs).toContain('hasMessages');
     expect(unifyPageJs).toContain('isProcessing');
+  });
+});
+
+// =====================================================================
+// 8. i18n — no hardcoded English labels in sidebar
+// =====================================================================
+describe('i18n — sidebar labels use $t()', () => {
+  it('mode label uses $t()', () => {
+    expect(unifyPageJs).toContain("$t('unify.mode')");
+  });
+
+  it('agent label uses $t()', () => {
+    expect(unifyPageJs).toContain("$t('unify.agent')");
+  });
+
+  it('tools/skills/mcp labels use $t()', () => {
+    expect(unifyPageJs).toContain("$t('unify.tools')");
+    expect(unifyPageJs).toContain("$t('unify.skills')");
+    expect(unifyPageJs).toContain("$t('unify.mcp')");
+  });
+
+  it('session status labels use $t()', () => {
+    expect(unifyPageJs).toContain("$t('unify.connecting')");
+    expect(unifyPageJs).toContain("$t('unify.ready')");
+  });
+
+  it('right panel placeholder uses $t()', () => {
+    expect(unifyPageJs).toContain("$t('unify.tasksMemory')");
+    expect(unifyPageJs).toContain("$t('unify.comingSoon')");
+  });
+
+  it('sidebar toggle titles use $t()', () => {
+    expect(unifyPageJs).toContain("$t('unify.showSidebar')");
+    expect(unifyPageJs).toContain("$t('unify.hideSidebar')");
+  });
+
+  it('no hardcoded English labels remain in sidebar sections', () => {
+    // These strings should be replaced with $t() calls
+    expect(unifyPageJs).not.toMatch(/>Mode</);
+    expect(unifyPageJs).not.toMatch(/>Agent</);
+    expect(unifyPageJs).not.toMatch(/>Connecting\.\.\.</);
+    expect(unifyPageJs).not.toMatch(/>Ready</);
+    expect(unifyPageJs).not.toMatch(/>Tasks & Memory</);
+    expect(unifyPageJs).not.toMatch(/>Coming soon</);
+  });
+
+  it('en.js has all required unify i18n keys', () => {
+    const requiredKeys = [
+      'unify.mode', 'unify.agent', 'unify.connecting', 'unify.ready',
+      'unify.tools', 'unify.skills', 'unify.mcp',
+      'unify.tasksMemory', 'unify.comingSoon',
+      'unify.showSidebar', 'unify.hideSidebar',
+    ];
+    for (const key of requiredKeys) {
+      expect(enI18n).toContain(`'${key}'`);
+    }
+  });
+
+  it('zh-CN.js has all required unify i18n keys', () => {
+    const requiredKeys = [
+      'unify.mode', 'unify.agent', 'unify.connecting', 'unify.ready',
+      'unify.tools', 'unify.skills', 'unify.mcp',
+      'unify.tasksMemory', 'unify.comingSoon',
+      'unify.showSidebar', 'unify.hideSidebar',
+    ];
+    for (const key of requiredKeys) {
+      expect(zhI18n).toContain(`'${key}'`);
+    }
   });
 });
