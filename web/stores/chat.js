@@ -163,6 +163,7 @@ export const useChatStore = defineStore('chat', {
     unifyMode: 'chat',            // 'chat' | 'work' — Unify 模式切换
     unifySessionReady: false,     // Session 是否已初始化
     unifyStatus: null,            // { skills, mcpServers, tools } 从 session_ready 获取
+    unifyDebugTurns: [],          // Debug panel: per-turn debug info from engine
   }),
 
   getters: {
@@ -405,6 +406,20 @@ export const useChatStore = defineStore('chat', {
           // Could display token usage in UI later
           break;
 
+        case 'debug_turn':
+          this.unifyDebugTurns.push({
+            turnNumber: event.turnNumber,
+            model: event.model,
+            systemPrompt: event.systemPrompt,
+            messages: event.messages,
+            response: event.response,
+            toolCalls: event.toolCalls,
+            usage: event.usage,
+            latencyMs: event.latencyMs,
+            stopReason: event.stopReason,
+          });
+          break;
+
         case 'recall':
         case 'consolidate':
         case 'fallback':
@@ -436,6 +451,7 @@ export const useChatStore = defineStore('chat', {
       this.unifySessionReady = false;
       this.unifyModel = null;
       this.unifyStatus = null;
+      this.unifyDebugTurns = [];
       this.unifyMode = 'chat';
       // Tell agent to reset session so Engine gets a fresh start
       if (this.unifyAgentId) {

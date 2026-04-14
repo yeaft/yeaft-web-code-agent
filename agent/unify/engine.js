@@ -424,6 +424,20 @@ export class Engine {
           responseText,
         });
 
+        // Emit debug_turn for error path too
+        yield {
+          type: 'debug_turn',
+          turnNumber,
+          model: currentModel,
+          systemPrompt,
+          messages: conversationMessages.map(m => ({ role: m.role, content: typeof m.content === 'string' ? m.content.slice(0, 50000) : m.content })),
+          response: responseText || `Error: ${err.message}`,
+          toolCalls: toolCalls.map(tc => ({ id: tc.id, name: tc.name, input: tc.input })),
+          usage: { inputTokens: totalUsage.inputTokens, outputTokens: totalUsage.outputTokens },
+          latencyMs,
+          stopReason: 'error',
+        };
+
         // ─── LLMContextError → force compact → retry ──────
         if (err instanceof LLMContextError && this.#conversationStore && this.#memoryStore) {
           const consolidated = await this.#maybeConsolidate();
@@ -464,6 +478,21 @@ export class Engine {
         latencyMs,
         responseText,
       });
+
+      // Emit debug_turn event for web UI debug panel
+      // (conversationMessages does NOT yet include the assistant response at this point)
+      yield {
+        type: 'debug_turn',
+        turnNumber,
+        model: currentModel,
+        systemPrompt,
+        messages: conversationMessages.map(m => ({ role: m.role, content: typeof m.content === 'string' ? m.content.slice(0, 50000) : m.content })),
+        response: responseText,
+        toolCalls: toolCalls.map(tc => ({ id: tc.id, name: tc.name, input: tc.input })),
+        usage: { inputTokens: totalUsage.inputTokens, outputTokens: totalUsage.outputTokens },
+        latencyMs,
+        stopReason,
+      };
 
       // Append assistant message to conversation
       const assistantMsg = { role: 'assistant', content: responseText };

@@ -77,6 +77,14 @@ export default {
               <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
             </button>
             <button
+              class="unify-debug-btn"
+              :class="{ active: debugMode }"
+              @click="toggleDebug"
+              :title="debugMode ? $t('unify.hideDebug') : $t('unify.showDebug')"
+            >
+              <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M20 8h-2.81c-.45-.78-1.07-1.45-1.82-1.96L17 4.41 15.59 3l-2.17 2.17C12.96 5.06 12.49 5 12 5s-.96.06-1.41.17L8.41 3 7 4.41l1.62 1.63C7.88 6.55 7.26 7.22 6.81 8H4v2h2.09c-.05.33-.09.66-.09 1v1H4v2h2v1c0 .34.04.67.09 1H4v2h2.81c1.04 1.79 2.97 3 5.19 3s4.15-1.21 5.19-3H20v-2h-2.09c.05-.33.09-.66.09-1v-1h2v-2h-2v-1c0-.34-.04-.67-.09-1H20V8zm-6 8h-4v-2h4v2zm0-4h-4v-2h4v2z"/></svg>
+            </button>
+            <button
               class="unify-detail-toggle"
               @click="toggleDetail"
               :title="detailCollapsed ? $t('unify.showDetail') : $t('unify.hideDetail')"
@@ -97,9 +105,65 @@ export default {
         />
       </div>
 
-      <!-- Right Detail Panel (placeholder for future Tasks/Memory) -->
+      <!-- Right Detail Panel -->
       <aside class="unify-detail" :class="{ collapsed: detailCollapsed }">
-        <div class="unify-detail-placeholder">
+        <!-- Debug Mode: show per-turn debug info -->
+        <div v-if="debugMode" class="unify-debug-panel">
+          <div class="unify-debug-header">
+            <span class="unify-debug-title">{{ $t('unify.debug') }}</span>
+            <span class="unify-debug-count" v-if="store.unifyDebugTurns.length > 0">{{ store.unifyDebugTurns.length }} {{ $t('unify.debugTurns') }}</span>
+          </div>
+          <div class="unify-debug-turns" v-if="store.unifyDebugTurns.length > 0">
+            <div class="unify-debug-turn" v-for="(turn, idx) in store.unifyDebugTurns" :key="idx">
+              <div class="unify-debug-turn-header" @click="toggleTurnExpand(idx)">
+                <svg class="unify-debug-turn-chevron" :class="{ expanded: expandedTurns[idx] }" viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
+                <span class="unify-debug-turn-num">{{ $t('unify.turn') }} {{ turn.turnNumber }}</span>
+                <span class="unify-debug-turn-model">{{ turn.model }}</span>
+                <span class="unify-debug-turn-stats">
+                  <span>{{ turn.latencyMs }}ms</span>
+                  <span>↑{{ turn.usage?.inputTokens || 0 }}</span>
+                  <span>↓{{ turn.usage?.outputTokens || 0 }}</span>
+                </span>
+              </div>
+              <div class="unify-debug-turn-body" v-if="expandedTurns[idx]">
+                <!-- Token usage -->
+                <div class="unify-debug-section">
+                  <div class="unify-debug-section-title">{{ $t('unify.duration') }} / Tokens</div>
+                  <div class="unify-debug-token-row">
+                    <span><span class="unify-debug-token-label">{{ $t('unify.duration') }}:</span> {{ turn.latencyMs }}ms</span>
+                    <span><span class="unify-debug-token-label">{{ $t('unify.inputTokens') }}:</span> {{ turn.usage?.inputTokens || 0 }}</span>
+                    <span><span class="unify-debug-token-label">{{ $t('unify.outputTokens') }}:</span> {{ turn.usage?.outputTokens || 0 }}</span>
+                  </div>
+                </div>
+                <!-- System Prompt -->
+                <div class="unify-debug-section">
+                  <div class="unify-debug-section-title">{{ $t('unify.systemPrompt') }}</div>
+                  <pre class="unify-debug-pre">{{ turn.systemPrompt || '(empty)' }}</pre>
+                </div>
+                <!-- Messages -->
+                <div class="unify-debug-section">
+                  <div class="unify-debug-section-title">{{ $t('unify.messagesLabel') }} ({{ turn.messages?.length || 0 }})</div>
+                  <pre class="unify-debug-pre">{{ formatMessages(turn.messages) }}</pre>
+                </div>
+                <!-- Response -->
+                <div class="unify-debug-section">
+                  <div class="unify-debug-section-title">{{ $t('unify.response') }}</div>
+                  <pre class="unify-debug-pre">{{ turn.response || '(empty)' }}</pre>
+                </div>
+                <!-- Tool Calls -->
+                <div class="unify-debug-section" v-if="turn.toolCalls && turn.toolCalls.length > 0">
+                  <div class="unify-debug-section-title">{{ $t('unify.toolCalls') }} ({{ turn.toolCalls.length }})</div>
+                  <pre class="unify-debug-pre">{{ formatToolCalls(turn.toolCalls) }}</pre>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="unify-debug-empty" v-else>
+            {{ $t('unify.noDebugData') }}
+          </div>
+        </div>
+        <!-- Default: placeholder -->
+        <div v-else class="unify-detail-placeholder">
           <svg viewBox="0 0 24 24" width="24" height="24" opacity="0.3"><path fill="currentColor" d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
           <span>{{ $t('unify.tasksMemory') }}</span>
           <span class="unify-detail-hint">{{ $t('unify.comingSoon') }}</span>
@@ -112,6 +176,8 @@ export default {
 
     const sidebarCollapsed = Vue.ref(false);
     const detailCollapsed = Vue.ref(false);
+    const debugMode = Vue.ref(false);
+    const expandedTurns = Vue.reactive({});
 
     // Detect mobile for overlay behavior
     const isMobile = Vue.ref(window.innerWidth <= 768);
@@ -165,10 +231,41 @@ export default {
       detailCollapsed.value = !detailCollapsed.value;
     };
 
+    const toggleDebug = () => {
+      debugMode.value = !debugMode.value;
+      // Open detail panel if activating debug and panel is collapsed
+      if (debugMode.value && detailCollapsed.value) {
+        detailCollapsed.value = false;
+      }
+    };
+
+    const toggleTurnExpand = (idx) => {
+      expandedTurns[idx] = !expandedTurns[idx];
+    };
+
+    const formatMessages = (messages) => {
+      if (!messages || messages.length === 0) return '(no messages)';
+      return messages.map(m => {
+        const content = typeof m.content === 'string'
+          ? m.content.slice(0, 500) + (m.content.length > 500 ? '...' : '')
+          : JSON.stringify(m.content).slice(0, 500);
+        return `[${m.role}] ${content}`;
+      }).join('\n\n');
+    };
+
+    const formatToolCalls = (toolCalls) => {
+      if (!toolCalls || toolCalls.length === 0) return '(none)';
+      return toolCalls.map(tc =>
+        `${tc.name}(${JSON.stringify(tc.input, null, 2)})`
+      ).join('\n\n');
+    };
+
     return {
       store,
       sidebarCollapsed,
       detailCollapsed,
+      debugMode,
+      expandedTurns,
       isMobile,
       hasMessages,
       isProcessing,
@@ -178,6 +275,10 @@ export default {
       clearMessages,
       toggleSidebar,
       toggleDetail,
+      toggleDebug,
+      toggleTurnExpand,
+      formatMessages,
+      formatToolCalls,
     };
   }
 };
