@@ -111,6 +111,8 @@ export default {
   'unify.comingSoon': 'Coming soon',
   'unify.showSidebar': 'Show sidebar',
   'unify.hideSidebar': 'Hide sidebar',
+  'unify.showDetail': 'Show tasks panel',
+  'unify.hideDetail': 'Hide tasks panel',
 
   // Chat - Session lifecycle
   'chat.session.creating': 'Creating conversation...',

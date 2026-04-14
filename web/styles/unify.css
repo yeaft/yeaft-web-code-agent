@@ -38,7 +38,6 @@
 
 .unify-sidebar-header {
   padding: 10px 12px;
-  border-bottom: 1px solid var(--border-color);
 }
 
 .unify-back-btn {
@@ -68,8 +67,7 @@
 /* Sidebar sections */
 
 .unify-sidebar-section {
-  padding: 12px;
-  border-bottom: 1px solid var(--border-color);
+  padding: 8px 12px;
 }
 
 .unify-section-label {
@@ -136,35 +134,6 @@
   color: var(--text-muted);
 }
 
-/* Session status */
-
-.unify-session-status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.unify-status-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--text-muted);
-  flex-shrink: 0;
-  animation: unify-pulse 1.5s ease-in-out infinite;
-}
-
-.unify-status-dot.ready {
-  background: var(--status-active);
-  animation: none;
-}
-
-@keyframes unify-pulse {
-  0%, 100% { opacity: 0.4; }
-  50% { opacity: 1; }
-}
-
 /* ── Center Conversation ── */
 
 .unify-main {
@@ -183,7 +152,7 @@
   gap: 12px;
   padding: 8px 16px;
   border-bottom: 1px solid var(--border-color);
-  background: var(--bg-sidebar);
+  background: var(--bg-main);
   min-height: 48px;
   flex-shrink: 0;
 }
@@ -240,6 +209,24 @@
   color: var(--error);
 }
 
+.unify-detail-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 6px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.unify-detail-toggle:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
 /* ── Right Detail Panel ── */
 
 .unify-detail {
@@ -250,6 +237,16 @@
   background: var(--bg-sidebar);
   border-left: 1px solid var(--border-color);
   flex-shrink: 0;
+  transition: width 0.2s ease, min-width 0.2s ease, opacity 0.2s ease;
+}
+
+.unify-detail.collapsed {
+  width: 0;
+  min-width: 0;
+  overflow: hidden;
+  border-left: none;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .unify-detail-placeholder {

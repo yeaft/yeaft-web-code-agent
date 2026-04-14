@@ -7,11 +7,13 @@
  * 3. Toggle button wiring: toggleSidebar function + :class binding
  * 4. Three-column CSS specifics: flex-shrink, min-width, overflow
  * 5. Dark mode: all CSS uses CSS variables, no hardcoded colors
- * 6. Sidebar content ordering: back → mode → agent → status
+ * 6. Sidebar content ordering: back → mode → agent
  * 7. Mode toggle structural location: inside sidebar, not topbar
  * 8. Mobile overlay: z-index, box-shadow, fixed positioning
  * 9. Template DOM ordering: sidebar → main → detail
  * 10. Desktop panel dimensions consistency
+ * 11. Detail panel collapse + toggle
+ * 12. CSS section spacing (no borders, consistent with Chat)
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import { readFileSync } from 'fs';
@@ -214,41 +216,39 @@ describe('Dark mode: CSS variables throughout', () => {
     expect(unifyCss).toMatch(/\.unify-agent-row\s*\{[^}]*var\(--text-secondary\)/);
   });
 
-  it('status dot uses var(--status-active) when ready', () => {
-    expect(unifyCss).toMatch(/\.unify-status-dot\.ready\s*\{[^}]*var\(--status-active\)/);
-  });
-
-  it('topbar background uses var(--bg-sidebar)', () => {
-    expect(unifyCss).toMatch(/\.unify-topbar\s*\{[^}]*var\(--bg-sidebar\)/);
+  it('topbar background uses var(--bg-main)', () => {
+    expect(unifyCss).toMatch(/\.unify-topbar\s*\{[^}]*var\(--bg-main\)/);
   });
 });
 
 // =============================================================================
-// 6. Sidebar content ordering: back → mode → agent → status
+// 6. Sidebar content ordering: back → mode → agent
 // =============================================================================
 describe('Sidebar content ordering', () => {
-  it('sidebar-header (back) comes first', () => {
+  it('sidebar-header (back) comes first, then mode, then agent', () => {
     const sidebarStart = unifyPageJs.indexOf('class="unify-sidebar"');
     const headerIdx = unifyPageJs.indexOf('unify-sidebar-header', sidebarStart);
     const modeIdx = unifyPageJs.indexOf('unify-mode-toggle', sidebarStart);
     const agentIdx = unifyPageJs.indexOf('unify-agent-info', sidebarStart);
-    const statusIdx = unifyPageJs.indexOf('unify-session-status', sidebarStart);
 
     expect(headerIdx).toBeGreaterThan(-1);
     expect(modeIdx).toBeGreaterThan(-1);
     expect(agentIdx).toBeGreaterThan(-1);
-    expect(statusIdx).toBeGreaterThan(-1);
 
     expect(headerIdx).toBeLessThan(modeIdx);
     expect(modeIdx).toBeLessThan(agentIdx);
-    expect(agentIdx).toBeLessThan(statusIdx);
+  });
+
+  it('session status is removed from sidebar', () => {
+    expect(unifyPageJs).not.toContain('unify-session-status');
+    expect(unifyPageJs).not.toContain('unify-status-dot');
   });
 
   it('each section is wrapped in unify-sidebar-section', () => {
     const sectionMatches = unifyPageJs.match(/class="unify-sidebar-section"/g);
     expect(sectionMatches).not.toBeNull();
-    // At least 3 sections: mode, agent, status
-    expect(sectionMatches.length).toBeGreaterThanOrEqual(3);
+    // 2 sections: mode, agent
+    expect(sectionMatches.length).toBeGreaterThanOrEqual(2);
   });
 
   it('section labels use unify-section-label class', () => {
@@ -399,42 +399,62 @@ describe('Agent info in sidebar', () => {
 });
 
 // =============================================================================
-// 11. Session status indicator
+// 11. Detail panel collapse + toggle
 // =============================================================================
-describe('Session status indicator', () => {
-  it('shows connecting status via $t() when session not ready', () => {
-    expect(unifyPageJs).toContain("$t('unify.connecting')");
-    expect(unifyPageJs).toContain('!store.unifySessionReady');
+describe('Detail panel collapse + toggle', () => {
+  it('detail panel has :class binding for collapsed', () => {
+    expect(unifyPageJs).toContain(':class="{ collapsed: detailCollapsed }"');
   });
 
-  it('shows ready status via $t() when session is ready', () => {
-    expect(unifyPageJs).toContain("$t('unify.ready')");
+  it('topbar has detail toggle button', () => {
+    expect(unifyPageJs).toContain('unify-detail-toggle');
+    expect(unifyPageJs).toContain('toggleDetail');
   });
 
-  it('status dot has pulse animation when connecting', () => {
-    expect(unifyCss).toContain('@keyframes unify-pulse');
-    expect(unifyCss).toMatch(/\.unify-status-dot\s*\{[^}]*animation:.*unify-pulse/);
+  it('detail toggle uses i18n titles', () => {
+    expect(unifyPageJs).toContain("$t('unify.showDetail')");
+    expect(unifyPageJs).toContain("$t('unify.hideDetail')");
   });
 
-  it('status dot stops pulsing when ready', () => {
-    expect(unifyCss).toMatch(/\.unify-status-dot\.ready\s*\{[^}]*animation:\s*none/);
+  it('detailCollapsed is a Vue ref', () => {
+    expect(unifyPageJs).toContain('detailCollapsed');
+  });
+
+  it('toggleDetail flips detailCollapsed value', () => {
+    expect(unifyPageJs).toContain('detailCollapsed.value = !detailCollapsed.value');
+  });
+
+  it('collapsed detail panel has CSS with width: 0', () => {
+    expect(unifyCss).toMatch(/\.unify-detail\.collapsed\s*\{[^}]*width:\s*0/);
+  });
+
+  it('collapsed detail panel has opacity: 0', () => {
+    expect(unifyCss).toMatch(/\.unify-detail\.collapsed\s*\{[^}]*opacity:\s*0/);
+  });
+
+  it('detail panel has smooth transition', () => {
+    expect(unifyCss).toMatch(/\.unify-detail\s*\{[^}]*transition:/);
+  });
+
+  it('detail toggle button has CSS style', () => {
+    expect(unifyCss).toContain('.unify-detail-toggle');
   });
 });
 
 // =============================================================================
-// 12. CSS section borders and spacing
+// 12. CSS section spacing (no borders, consistent with Chat)
 // =============================================================================
-describe('CSS section borders and spacing', () => {
-  it('sidebar header has bottom border', () => {
-    expect(unifyCss).toMatch(/\.unify-sidebar-header\s*\{[^}]*border-bottom/);
+describe('CSS section spacing (no borders)', () => {
+  it('sidebar header does NOT have border-bottom', () => {
+    expect(unifyCss).not.toMatch(/\.unify-sidebar-header\s*\{[^}]*border-bottom/);
   });
 
-  it('sidebar sections have bottom border', () => {
-    expect(unifyCss).toMatch(/\.unify-sidebar-section\s*\{[^}]*border-bottom/);
+  it('sidebar sections do NOT have border-bottom', () => {
+    expect(unifyCss).not.toMatch(/\.unify-sidebar-section\s*\{[^}]*border-bottom/);
   });
 
   it('sidebar sections have padding', () => {
-    expect(unifyCss).toMatch(/\.unify-sidebar-section\s*\{[^}]*padding:\s*12px/);
+    expect(unifyCss).toMatch(/\.unify-sidebar-section\s*\{[^}]*padding/);
   });
 
   it('section labels have uppercase text transform', () => {
@@ -443,5 +463,11 @@ describe('CSS section borders and spacing', () => {
 
   it('section labels have letter-spacing', () => {
     expect(unifyCss).toMatch(/\.unify-section-label\s*\{[^}]*letter-spacing/);
+  });
+
+  it('session status CSS is fully removed', () => {
+    expect(unifyCss).not.toContain('.unify-session-status');
+    expect(unifyCss).not.toContain('.unify-status-dot');
+    expect(unifyCss).not.toContain('unify-pulse');
   });
 });

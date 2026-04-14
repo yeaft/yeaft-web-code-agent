@@ -57,20 +57,6 @@ export default {
             </div>
           </div>
         </div>
-
-        <!-- Session not ready -->
-        <div class="unify-sidebar-section" v-if="!store.unifySessionReady">
-          <div class="unify-session-status">
-            <span class="unify-status-dot"></span>
-            <span>{{ $t('unify.connecting') }}</span>
-          </div>
-        </div>
-        <div class="unify-sidebar-section" v-else>
-          <div class="unify-session-status ready">
-            <span class="unify-status-dot ready"></span>
-            <span>{{ $t('unify.ready') }}</span>
-          </div>
-        </div>
       </aside>
 
       <!-- Center Conversation -->
@@ -90,6 +76,13 @@ export default {
             >
               <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
             </button>
+            <button
+              class="unify-detail-toggle"
+              @click="toggleDetail"
+              :title="detailCollapsed ? $t('unify.showDetail') : $t('unify.hideDetail')"
+            >
+              <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
+            </button>
           </div>
         </div>
 
@@ -105,7 +98,7 @@ export default {
       </div>
 
       <!-- Right Detail Panel (placeholder for future Tasks/Memory) -->
-      <aside class="unify-detail">
+      <aside class="unify-detail" :class="{ collapsed: detailCollapsed }">
         <div class="unify-detail-placeholder">
           <svg viewBox="0 0 24 24" width="24" height="24" opacity="0.3"><path fill="currentColor" d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
           <span>{{ $t('unify.tasksMemory') }}</span>
@@ -118,6 +111,7 @@ export default {
     const store = Pinia.useChatStore();
 
     const sidebarCollapsed = Vue.ref(false);
+    const detailCollapsed = Vue.ref(false);
 
     // Detect mobile for overlay behavior
     const isMobile = Vue.ref(window.innerWidth <= 768);
@@ -167,9 +161,14 @@ export default {
       sidebarCollapsed.value = !sidebarCollapsed.value;
     };
 
+    const toggleDetail = () => {
+      detailCollapsed.value = !detailCollapsed.value;
+    };
+
     return {
       store,
       sidebarCollapsed,
+      detailCollapsed,
       isMobile,
       hasMessages,
       isProcessing,
@@ -178,6 +177,7 @@ export default {
       setMode,
       clearMessages,
       toggleSidebar,
+      toggleDetail,
     };
   }
 };

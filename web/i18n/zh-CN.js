@@ -111,6 +111,8 @@ export default {
   'unify.comingSoon': '即将推出',
   'unify.showSidebar': '显示侧栏',
   'unify.hideSidebar': '隐藏侧栏',
+  'unify.showDetail': '显示任务面板',
+  'unify.hideDetail': '隐藏任务面板',
 
   // Chat - Session lifecycle
   'chat.session.creating': '正在创建会话...',

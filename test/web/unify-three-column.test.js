@@ -62,9 +62,9 @@ describe('Left sidebar content', () => {
     expect(unifyPageJs).toContain('store.unifyStatus');
   });
 
-  it('has session status indicator', () => {
-    expect(unifyPageJs).toContain('unify-session-status');
-    expect(unifyPageJs).toContain('unify-status-dot');
+  it('does NOT have session status indicator (removed)', () => {
+    expect(unifyPageJs).not.toContain('unify-session-status');
+    expect(unifyPageJs).not.toContain('unify-status-dot');
   });
 
   it('sidebar is 240px wide', () => {
@@ -101,10 +101,11 @@ describe('Center conversation area', () => {
     expect(unifyCss).not.toMatch(/\.input-area[^{]*\{[^}]*max-width:\s*800px/);
   });
 
-  it('topbar is simplified (model badge + clear)', () => {
+  it('topbar is simplified (model badge + clear + detail toggle)', () => {
     expect(unifyPageJs).toContain('unify-topbar');
     expect(unifyPageJs).toContain('unify-model-badge');
     expect(unifyPageJs).toContain('unify-clear-btn');
+    expect(unifyPageJs).toContain('unify-detail-toggle');
   });
 
   it('topbar does NOT contain mode toggle (moved to sidebar)', () => {
@@ -211,6 +212,20 @@ describe('CSS cleanup', () => {
   it('does not have old .unify-page .input-area override', () => {
     expect(unifyCss).not.toContain('.unify-page .input-area');
   });
+
+  it('sidebar sections do NOT have border-bottom (consistent with Chat)', () => {
+    expect(unifyCss).not.toMatch(/\.unify-sidebar-section\s*\{[^}]*border-bottom/);
+  });
+
+  it('sidebar header does NOT have border-bottom (consistent with Chat)', () => {
+    expect(unifyCss).not.toMatch(/\.unify-sidebar-header\s*\{[^}]*border-bottom/);
+  });
+
+  it('session status CSS is removed', () => {
+    expect(unifyCss).not.toContain('.unify-session-status');
+    expect(unifyCss).not.toContain('.unify-status-dot');
+    expect(unifyCss).not.toContain('unify-pulse');
+  });
 });
 
 // =====================================================================
@@ -222,8 +237,16 @@ describe('Setup logic', () => {
     expect(unifyPageJs).toContain('Vue.ref(false)');
   });
 
+  it('has detailCollapsed ref', () => {
+    expect(unifyPageJs).toContain('detailCollapsed');
+  });
+
   it('returns toggleSidebar function', () => {
     expect(unifyPageJs).toContain('toggleSidebar');
+  });
+
+  it('returns toggleDetail function', () => {
+    expect(unifyPageJs).toContain('toggleDetail');
   });
 
   it('returns all necessary functions and state', () => {
@@ -254,9 +277,9 @@ describe('i18n — sidebar labels use $t()', () => {
     expect(unifyPageJs).toContain("$t('unify.mcp')");
   });
 
-  it('session status labels use $t()', () => {
-    expect(unifyPageJs).toContain("$t('unify.connecting')");
-    expect(unifyPageJs).toContain("$t('unify.ready')");
+  it('session status labels removed (no longer in sidebar)', () => {
+    expect(unifyPageJs).not.toContain("$t('unify.connecting')");
+    expect(unifyPageJs).not.toContain("$t('unify.ready')");
   });
 
   it('right panel placeholder uses $t()', () => {
@@ -269,22 +292,26 @@ describe('i18n — sidebar labels use $t()', () => {
     expect(unifyPageJs).toContain("$t('unify.hideSidebar')");
   });
 
+  it('detail toggle titles use $t()', () => {
+    expect(unifyPageJs).toContain("$t('unify.showDetail')");
+    expect(unifyPageJs).toContain("$t('unify.hideDetail')");
+  });
+
   it('no hardcoded English labels remain in sidebar sections', () => {
     // These strings should be replaced with $t() calls
     expect(unifyPageJs).not.toMatch(/>Mode</);
     expect(unifyPageJs).not.toMatch(/>Agent</);
-    expect(unifyPageJs).not.toMatch(/>Connecting\.\.\.</);
-    expect(unifyPageJs).not.toMatch(/>Ready</);
     expect(unifyPageJs).not.toMatch(/>Tasks & Memory</);
     expect(unifyPageJs).not.toMatch(/>Coming soon</);
   });
 
   it('en.js has all required unify i18n keys', () => {
     const requiredKeys = [
-      'unify.mode', 'unify.agent', 'unify.connecting', 'unify.ready',
+      'unify.mode', 'unify.agent',
       'unify.tools', 'unify.skills', 'unify.mcp',
       'unify.tasksMemory', 'unify.comingSoon',
       'unify.showSidebar', 'unify.hideSidebar',
+      'unify.showDetail', 'unify.hideDetail',
     ];
     for (const key of requiredKeys) {
       expect(enI18n).toContain(`'${key}'`);
@@ -293,10 +320,11 @@ describe('i18n — sidebar labels use $t()', () => {
 
   it('zh-CN.js has all required unify i18n keys', () => {
     const requiredKeys = [
-      'unify.mode', 'unify.agent', 'unify.connecting', 'unify.ready',
+      'unify.mode', 'unify.agent',
       'unify.tools', 'unify.skills', 'unify.mcp',
       'unify.tasksMemory', 'unify.comingSoon',
       'unify.showSidebar', 'unify.hideSidebar',
+      'unify.showDetail', 'unify.hideDetail',
     ];
     for (const key of requiredKeys) {
       expect(zhI18n).toContain(`'${key}'`);
