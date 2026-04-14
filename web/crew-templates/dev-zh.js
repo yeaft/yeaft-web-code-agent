@@ -393,15 +393,20 @@ summary: 请设计登录页面的交互方案和视觉设计
 3. \`git push -u origin <branch>\` 推送分支
 4. \`gh pr create\` 创建 PR，包含清晰的 Summary 和 Test plan
 
-## STEP 6: 交付给审查者和测试者
-代码完成后，**必须同时发两个 ROUTE 块**（缺一不可）：
+## STEP 6: 交付给审查者（ROUTE 是必须的！）
+代码完成后，**必须 ROUTE 给审查者**（缺一不可）：
 - 给审查者：说明改了什么、为什么改、关键设计决策
-- 给测试者：说明测试要点、边界条件、需要覆盖的场景
+
+🚨 **严禁以下行为**：
+- **严禁直接 push 到 main 分支** — 所有代码必须通过 PR + review 流程
+- **严禁自己打 tag** — tag 只能由 PM 或 reviewer 合并后打
+- **严禁跳过 ROUTE** — 完成后必须 ROUTE 给 reviewer，不 ROUTE 等于没完成
+- 即使是小修复、一行改动，也必须走 PR + review 流程
 
 ## STEP 7: 处理反馈
 - 审查者打回：认真对待每个反馈，修改后重新提交
 - 测试者发现 bug：优先修复，bug fix 不算返工
-- 审查 + 测试都通过后：自己执行 \`gh pr merge --squash --delete-branch\`
+- 审查 + 测试都通过后：由审查者或 PM 执行合并和打 tag，**dev 不自己合并**
 
 ---
 

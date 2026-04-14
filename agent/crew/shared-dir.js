@@ -156,6 +156,12 @@ ${roles.length > 0 ? roles.map(r => `- ${roleLabel(r)}(${r.name}): ${r.descripti
 ${m.workConventions}
 ${m.workConventionsContent}
 
+${m.mergeRules}
+${m.mergeRulesContent}
+
+${m.taskSplitRules}
+${m.taskSplitRulesContent}
+
 ${m.stuckRules}
 ${m.stuckRulesContent}
 

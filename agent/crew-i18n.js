@@ -179,7 +179,19 @@ UI/交互方案不确定时找设计师确认。需求不明确时找决策者 "
     workConventionsContent: `- 文档产出写入 .crew/context/ 目录
 - 重要决策记录在 .crew/context/decisions.md
 - 代码修改使用项目代码路径的绝对路径
-- **Plan mode 自动退出**：可以进入 plan mode 梳理思路和写计划，但计划写完后必须立即调用 ExitPlanMode 自动退出并直接开始执行，不要等待用户审批。只有在方案有重大歧义、需要用户做选择时才停下来确认`,
+- **Plan mode 自动退出**：可以进入 plan mode 梳理思路和写计划，但计划写完后必须立即调用 ExitPlanMode 自动退出并直接开始执行，不要等待用户审批。只有在方案有重大歧义、需要用户做选择时才停下来确认
+- **PM 委派优先（Delegation-First）**：PM 收到 bug 报告或技术问题时，不自己分析代码，直接转发给空闲的 dev 分析根因和提方案。PM 等方案回来后做判断和决策。PM 的工作是"转发给合适的人"+"做决策"，不是"自己分析技术细节"。
+- **PM 主动巡检（Task Progress Polling）**：PM 在分配任务后，必须每 3-5 分钟主动检查任务进度（读取 feature 文件和 kanban）。如果某个角色 5 分钟内没有新进展，PM 需要 ping 对应角色确认状态。连续两次无响应则考虑转派任务或上报 human。这确保任务不会因角色掉线或卡住而停滞。`,
+    mergeRules: '# 🚨 代码合并与发布规则（全角色必须遵守）',
+    mergeRulesContent: `- **Dev 严禁直接 push 到 main** — 所有代码必须通过 PR + reviewer review 流程
+- **Dev 严禁自己打 tag** — tag 只能由 PM 或 reviewer 合并后打
+- **Dev 完成后必须 ROUTE 给 reviewer** — 不 ROUTE 等于没完成，消息无法传递
+- **即使是小修复（一行改动），也必须走 PR + review 流程**
+- **合并和打 tag 由 reviewer 或 PM 执行**，dev 不自己合并`,
+    taskSplitRules: '# 任务拆分原则',
+    taskSplitRulesContent: `- **不相干的修改必须分给不同的 dev，产出独立的 PR**。严禁把两个不相关的 bug fix / feature 放在同一个 PR 中。
+- 即使两个改动看似相关（如同一个 bug 的两个方面），如果它们改的文件不同、逻辑独立，也应该拆成独立 task + 独立 PR。
+- 原因：混合 PR 无法单独 revert，也无法单独合并其中一个改动。一个改动被 block 会导致另一个也无法合并。`,
     stuckRules: '# 卡住上报规则',
     stuckRulesContent: `当你遇到以下情况时，不要自己空转或反复重试，立即 ROUTE 给 PM（pm）请求协调：
 1. 缺少前置依赖（如需要的文件、目录、代码不存在）
@@ -425,7 +437,19 @@ After development is complete, send two ROUTE blocks simultaneously to ${revName
     workConventions: '# Work Conventions',
     workConventionsContent: `- Write documentation output to .crew/context/ directory
 - Record important decisions in .crew/context/decisions.md
-- Use the project code path (absolute path) for code changes`,
+- Use the project code path (absolute path) for code changes
+- **PM Delegation-First**: When PM receives bug reports or technical issues, do not analyze code yourself. Forward to an idle dev for root cause analysis and proposed solution. PM waits for the analysis, then makes judgment and decisions.
+- **PM Task Progress Polling**: After assigning tasks, PM must check task progress every 3-5 minutes (read feature files and kanban). If a role has no new progress within 5 minutes, PM pings the role to confirm status. Two consecutive no-responses → consider reassigning or escalating to human.`,
+    mergeRules: '# 🚨 Code Merge & Release Rules (All roles must follow)',
+    mergeRulesContent: `- **Dev must never push directly to main** — All code must go through PR + reviewer review workflow
+- **Dev must never create tags** — Tags can only be created by PM or reviewer after merge
+- **Dev must ROUTE to reviewer after completion** — Not ROUTEing = work not delivered, message cannot be passed
+- **Even small fixes (single-line changes) must go through PR + review workflow**
+- **Merge and tagging are done by reviewer or PM** — dev does not merge themselves`,
+    taskSplitRules: '# Task Split Principles',
+    taskSplitRulesContent: `- **Unrelated changes must go to different devs with independent PRs**. Never put two unrelated bug fixes / features in the same PR.
+- Even if two changes seem related (e.g., two aspects of the same bug), if they modify different files and have independent logic, they should be split into independent tasks + independent PRs.
+- Reason: Mixed PRs cannot be individually reverted, nor can one change be merged independently. One blocked change prevents the other from merging.`,
     stuckRules: '# Escalation Rules',
     stuckRulesContent: `When you encounter the following situations, do not spin or retry repeatedly — immediately ROUTE to PM (pm) for coordination:
 1. Missing prerequisites (required files, directories, or code don't exist)

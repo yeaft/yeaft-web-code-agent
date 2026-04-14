@@ -341,15 +341,20 @@ Before submitting code, run through this checklist:
 3. \`git push -u origin <branch>\` to push the branch
 4. \`gh pr create\` with clear Summary and Test plan
 
-## STEP 6: Deliver to Reviewer and Tester
-After code is complete, **must send two ROUTE blocks simultaneously** (both required):
+## STEP 6: Deliver to Reviewer (ROUTE is mandatory!)
+After code is complete, **must ROUTE to reviewer** (required):
 - To reviewer: explain what changed, why, key design decisions
-- To tester: explain testing focus, edge cases, scenarios to cover
+
+🚨 **Strictly prohibited behaviors**:
+- **Never push directly to main branch** — All code must go through PR + review workflow
+- **Never create tags yourself** — Tags can only be created by PM or reviewer after merge
+- **Never skip ROUTE** — Must ROUTE to reviewer after completion, no ROUTE = work not delivered
+- Even small fixes (single-line changes) must go through PR + review workflow
 
 ## STEP 7: Handle Feedback
 - Reviewer rejects: Take every piece of feedback seriously, fix and resubmit
 - Tester finds bugs: Fix them first — bug fixes don't count as rework
-- Both review + test pass: Execute \`gh pr merge --squash --delete-branch\` yourself
+- Both review + test pass: Merge and tagging are done by reviewer or PM — **dev does not merge themselves**
 
 ---
 
