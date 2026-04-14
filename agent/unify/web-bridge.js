@@ -214,6 +214,22 @@ export async function handleUnifyChat(msg) {
           });
           break;
 
+        // ── Debug turn data for web debug panel ──
+        case 'debug_turn':
+          sendUnifyEvent({
+            type: 'debug_turn',
+            turnNumber: event.turnNumber,
+            model: event.model,
+            systemPrompt: event.systemPrompt,
+            messages: event.messages,
+            response: event.response,
+            toolCalls: event.toolCalls,
+            usage: event.usage,
+            latencyMs: event.latencyMs,
+            stopReason: event.stopReason,
+          });
+          break;
+
         // ── Errors ──
         case 'error':
           sendUnifyOutput({

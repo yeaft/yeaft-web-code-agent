@@ -265,6 +265,176 @@
   opacity: 0.5;
 }
 
+/* ── Debug Button ── */
+
+.unify-debug-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 6px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.unify-debug-btn:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.unify-debug-btn.active {
+  color: var(--accent);
+  background: var(--bg-input-wrapper);
+}
+
+/* ── Debug Panel ── */
+
+.unify-debug-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.unify-debug-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.unify-debug-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.unify-debug-count {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-input-wrapper);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.unify-debug-turns {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.unify-debug-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.unify-debug-turn {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  margin-bottom: 6px;
+  overflow: hidden;
+}
+
+.unify-debug-turn-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-input-wrapper);
+  user-select: none;
+  transition: background 0.15s;
+}
+
+.unify-debug-turn-header:hover {
+  background: var(--sidebar-hover);
+}
+
+.unify-debug-turn-chevron {
+  flex-shrink: 0;
+  transition: transform 0.15s;
+}
+
+.unify-debug-turn-chevron.expanded {
+  transform: rotate(90deg);
+}
+
+.unify-debug-turn-num {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.unify-debug-turn-model {
+  color: var(--text-muted);
+}
+
+.unify-debug-turn-stats {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.unify-debug-turn-body {
+  padding: 8px 10px;
+  border-top: 1px solid var(--border-color);
+}
+
+.unify-debug-section {
+  margin-bottom: 8px;
+}
+
+.unify-debug-section:last-child {
+  margin-bottom: 0;
+}
+
+.unify-debug-section-title {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.unify-debug-pre {
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 8px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.unify-debug-token-row {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.unify-debug-token-label {
+  color: var(--text-muted);
+}
+
 /* ── Mobile Sidebar Overlay ── */
 
 .unify-sidebar-overlay {
