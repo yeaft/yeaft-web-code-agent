@@ -103,6 +103,9 @@ export const useChatStore = defineStore('chat', {
     // MCP servers 配置: agentId -> [{ name, enabled, source }]
     mcpServers: {},
 
+    // Expert role definitions (from agent): { [roleId]: { name, messagePrefix, messagePrefixEn, actions } }
+    expertRoleDefinitions: null,
+
     // LLM config: agentId -> { providers, primaryModel, fastModel, language, loaded }
     llmConfig: {},
 
@@ -429,6 +432,15 @@ export const useChatStore = defineStore('chat', {
           // Future: display these in UI
           break;
       }
+    },
+    fetchExpertRoleDefinitions() {
+      if (this.expertRoleDefinitions) return; // Already cached
+      const agentId = this.currentAgent?.id;
+      if (!agentId) return;
+      this.sendWsMessage({
+        type: 'get_expert_roles',
+        agentId,
+      });
     },
     setUnifyMode(mode) {
       if (mode !== 'chat' && mode !== 'work') return;

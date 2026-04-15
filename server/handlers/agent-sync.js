@@ -140,6 +140,23 @@ export async function handleAgentSync(agentId, agent, msg) {
       break;
     }
 
+    // Expert roles definition from agent — forward to owner clients
+    case 'expert_roles_list': {
+      for (const [, client] of webClients) {
+        if (client.authenticated && (CONFIG.skipAuth ||
+          (agent.ownerId && client.userId === agent.ownerId) ||
+          (!agent.ownerId && client.role === 'admin')
+        )) {
+          await sendToWebClient(client, {
+            type: 'expert_roles_list',
+            agentId,
+            roles: msg.roles
+          });
+        }
+      }
+      break;
+    }
+
     // MCP config updated acknowledgement from agent
     case 'mcp_config_updated': {
       agent.mcpServers = msg.servers || [];

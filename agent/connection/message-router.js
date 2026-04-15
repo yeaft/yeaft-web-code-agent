@@ -332,5 +332,12 @@ export async function handleMessage(msg) {
     case 'unify_reset':
       await resetUnifySession();
       break;
+
+    // Expert roles definition (for ExpertPanel detail view)
+    case 'get_expert_roles': {
+      const { getExpertRolesDefinition } = await import('../expert-roles.js');
+      sendToServer({ type: 'expert_roles_list', roles: getExpertRolesDefinition() });
+      break;
+    }
   }
 }

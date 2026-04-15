@@ -877,4 +877,40 @@ export function buildExpertMessage(selections, userText, language = 'zh-CN') {
   return buildMultiExpertMessage(selections, userText, isZh);
 }
 
+/**
+ * Return the full EXPERT_ROLES definition (including prompt content)
+ * for the web debug/admin panel.
+ *
+ * Format per role:
+ * {
+ *   name, messagePrefix, messagePrefixEn,
+ *   actions: { [actionId]: { name, nameEn, messageTemplate, messageTemplateEn, defaultMessage, defaultMessageEn } }
+ * }
+ *
+ * @returns {Object.<string, object>}
+ */
+export function getExpertRolesDefinition() {
+  const result = {};
+  for (const [roleId, roleDef] of Object.entries(EXPERT_ROLES)) {
+    const actions = {};
+    for (const [actionId, actionDef] of Object.entries(roleDef.actions)) {
+      actions[actionId] = {
+        name: actionDef.name,
+        nameEn: actionDef.nameEn,
+        messageTemplate: actionDef.messageTemplate,
+        messageTemplateEn: actionDef.messageTemplateEn,
+        defaultMessage: actionDef.defaultMessage,
+        defaultMessageEn: actionDef.defaultMessageEn,
+      };
+    }
+    result[roleId] = {
+      name: roleDef.name,
+      messagePrefix: roleDef.messagePrefix,
+      messagePrefixEn: roleDef.messagePrefixEn,
+      actions,
+    };
+  }
+  return result;
+}
+
 export { EXPERT_ROLES };
