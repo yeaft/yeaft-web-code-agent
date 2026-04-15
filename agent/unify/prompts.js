@@ -41,8 +41,11 @@ function readTemplate(name) {
 
 /**
  * Extract the section for a given language from a bilingual template.
- * Templates use `---` as a separator between English (first) and Chinese (second).
- * If no separator exists, returns the full content regardless of language.
+ * Templates use `<!-- lang:en -->` / `<!-- lang:zh -->` HTML comment markers
+ * to delimit language sections. Returns the content between the matching
+ * marker and the next marker (or EOF).
+ *
+ * If no markers exist, returns the full content regardless of language.
  *
  * @param {string} content — full template content
  * @param {string} language — 'en' or 'zh'
@@ -51,21 +54,35 @@ function readTemplate(name) {
 function extractLangSection(content, language) {
   if (!content) return '';
 
-  // Split on the horizontal rule separator (--- on its own line between sections)
-  // The separator is a line that is exactly "---" surrounded by blank lines
-  const separatorIdx = content.indexOf('\n---\n\n#');
-  if (separatorIdx === -1) {
-    // No bilingual separator found — return full content
-    return content;
+  const marker = `<!-- lang:${language} -->`;
+  const markerIdx = content.indexOf(marker);
+
+  if (markerIdx === -1) {
+    // No marker for this language — if language is 'zh', try 'en' fallback
+    if (language === 'zh') {
+      const enMarker = '<!-- lang:en -->';
+      const enIdx = content.indexOf(enMarker);
+      if (enIdx !== -1) {
+        // Has en marker but no zh — return en section as fallback
+        return extractLangSection(content, 'en');
+      }
+    }
+    // No markers at all — return full content
+    if (!content.includes('<!-- lang:')) return content;
+    // Has markers but not for this language — fallback to en
+    return extractLangSection(content, 'en');
   }
 
-  if (language === 'zh') {
-    // Chinese section is after the separator
-    return content.slice(separatorIdx + 5).trim();
+  // Extract from after the marker to the next <!-- lang: marker or EOF
+  const sectionStart = markerIdx + marker.length;
+  const nextMarkerIdx = content.indexOf('<!-- lang:', sectionStart);
+
+  if (nextMarkerIdx === -1) {
+    // This is the last section — take everything after the marker
+    return content.slice(sectionStart).trim();
   }
 
-  // English section is before the separator
-  return content.slice(0, separatorIdx).trim();
+  return content.slice(sectionStart, nextMarkerIdx).trim();
 }
 
 /** Loaded templates — read once at module load time. */
