@@ -32,6 +32,11 @@ let unifyConversationId = null;
 /** Current query mode: 'chat' or 'work' */
 let currentMode = 'chat';
 
+/** Accumulated conversation messages for context continuity across queries.
+ *  Each entry is { role: 'user'|'assistant', content: string|Array }.
+ *  Cleared on session reset or consolidation. */
+let conversationMessages = [];
+
 /** Whether we've already sent a permission warning to the UI */
 let _permissionDiagnosticSent = false;
 
@@ -133,10 +138,14 @@ export async function handleUnifyChat(msg) {
     resetQueryTimer();
 
     try {
+    // ─── Collect assistant response for conversation history ──
+    let assistantTextParts = [];
+
     // ─── Stream Engine events → claude_output format ──
     for await (const event of session.engine.query({
       prompt,
       mode: currentMode,
+      messages: conversationMessages,
       signal: currentAbort.signal,
     })) {
       // Reset timeout on every event — activity means the query is alive
@@ -144,6 +153,7 @@ export async function handleUnifyChat(msg) {
       switch (event.type) {
         // ── Text streaming ──
         case 'text_delta':
+          assistantTextParts.push(event.text);
           sendUnifyOutput({
             type: 'assistant',
             message: {
@@ -232,6 +242,9 @@ export async function handleUnifyChat(msg) {
 
         // ── Context consolidation ──
         case 'consolidate':
+          // Engine has compressed the context — clear our accumulated history.
+          // The engine's compactSummary will provide context on next query.
+          conversationMessages = [];
           sendUnifyEvent({
             type: 'consolidate',
             archivedCount: event.archivedCount,
@@ -303,7 +316,15 @@ export async function handleUnifyChat(msg) {
       }
     }
 
-    // ─── Query complete — signal turn end ──
+    // ─── Query complete — accumulate messages for context continuity ──
+    conversationMessages.push({ role: 'user', content: prompt });
+
+    const fullText = assistantTextParts.join('');
+    if (fullText) {
+      conversationMessages.push({ role: 'assistant', content: fullText });
+    }
+
+    // ─── Signal turn end to UI ──
     // Finish any streaming text
     sendUnifyOutput({
       type: 'assistant',
@@ -426,4 +447,5 @@ export async function resetUnifySession() {
   }
   unifyConversationId = null;
   currentMode = 'chat';
+  conversationMessages = [];
 }
