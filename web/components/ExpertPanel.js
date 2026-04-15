@@ -49,8 +49,10 @@ export default {
           <div class="expert-prompt-section" v-for="(actionDef, actionId) in viewingRoleDef.actions" :key="actionId">
             <div class="expert-prompt-label">{{ isZh ? actionDef.name : actionDef.nameEn }}</div>
             <div class="expert-prompt-sublabel">{{ $t('expertPanel.template') }}</div>
+            <div class="expert-prompt-hint">{{ $t('expertPanel.templateHint') }}</div>
             <pre class="expert-prompt-content">{{ isZh ? actionDef.messageTemplate : actionDef.messageTemplateEn }}</pre>
             <div class="expert-prompt-sublabel">{{ $t('expertPanel.defaultMsg') }}</div>
+            <div class="expert-prompt-hint">{{ $t('expertPanel.defaultMsgHint') }}</div>
             <pre class="expert-prompt-content">{{ isZh ? actionDef.defaultMessage : actionDef.defaultMessageEn }}</pre>
           </div>
         </div>
@@ -63,8 +65,10 @@ export default {
           <div class="expert-prompt-section" v-for="action in viewingCustomRole.actions" :key="action.id">
             <div class="expert-prompt-label">{{ isZh ? action.name : (action.nameEn || action.name) }}</div>
             <div class="expert-prompt-sublabel" v-if="action.messageTemplate || action.messageTemplateEn">{{ $t('expertPanel.template') }}</div>
+            <div class="expert-prompt-hint" v-if="action.messageTemplate || action.messageTemplateEn">{{ $t('expertPanel.templateHint') }}</div>
             <pre class="expert-prompt-content" v-if="action.messageTemplate || action.messageTemplateEn">{{ isZh ? action.messageTemplate : (action.messageTemplateEn || action.messageTemplate) }}</pre>
             <div class="expert-prompt-sublabel" v-if="action.defaultMessage || action.defaultMessageEn">{{ $t('expertPanel.defaultMsg') }}</div>
+            <div class="expert-prompt-hint" v-if="action.defaultMessage || action.defaultMessageEn">{{ $t('expertPanel.defaultMsgHint') }}</div>
             <pre class="expert-prompt-content" v-if="action.defaultMessage || action.defaultMessageEn">{{ isZh ? action.defaultMessage : (action.defaultMessageEn || action.defaultMessage) }}</pre>
           </div>
           <div class="expert-prompt-section" v-if="!viewingCustomRole.actions || viewingCustomRole.actions.length === 0">
