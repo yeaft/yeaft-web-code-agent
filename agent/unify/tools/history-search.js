@@ -1,0 +1,69 @@
+/**
+ * history-search.js — Search conversation history.
+ *
+ * Searches through persisted conversation messages for keywords.
+ * Uses the ConversationStore's search functionality.
+ */
+
+import { defineTool } from './types.js';
+import { searchMessages } from '../conversation/search.js';
+
+export default defineTool({
+  name: 'HistorySearch',
+  description: `Search through past conversation history.
+
+Searches for keywords in previously persisted conversation messages.
+Useful for finding previous discussions, decisions, or code snippets.
+
+Results are returned newest-first with message role and content.`,
+  parameters: {
+    type: 'object',
+    properties: {
+      keyword: {
+        type: 'string',
+        description: 'Search keyword (case-insensitive)',
+      },
+      limit: {
+        type: 'number',
+        description: 'Maximum number of results (default: 20)',
+      },
+    },
+    required: ['keyword'],
+  },
+  modes: ['chat', 'work'],
+  isConcurrencySafe: () => true,
+  isReadOnly: () => true,
+  async execute(input, ctx) {
+    const { keyword, limit = 20 } = input;
+    if (!keyword) return JSON.stringify({ error: 'keyword is required' });
+
+    const yeaftDir = ctx?.yeaftDir;
+    if (!yeaftDir) {
+      return JSON.stringify({ error: 'Yeaft directory not configured — no conversation history available' });
+    }
+
+    try {
+      const results = searchMessages(yeaftDir, keyword, limit);
+
+      if (results.length === 0) {
+        return JSON.stringify({
+          results: [],
+          message: `No matches found for "${keyword}"`,
+        });
+      }
+
+      return JSON.stringify({
+        results: results.map(msg => ({
+          role: msg.role,
+          content: msg.content?.slice(0, 2000) + (msg.content?.length > 2000 ? '...' : ''),
+          mode: msg.mode,
+          timestamp: msg.timestamp,
+        })),
+        totalResults: results.length,
+        keyword,
+      }, null, 2);
+    } catch (err) {
+      return JSON.stringify({ error: `History search failed: ${err.message}` });
+    }
+  },
+});
