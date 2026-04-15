@@ -103,6 +103,7 @@ export async function handleUnifyChat(msg) {
         type: 'session_ready',
         conversationId: unifyConversationId,
         model: session.config.model,
+        availableModels: session.config.availableModels || [],
         skills: session.status.skills,
         mcpServers: session.status.mcpServers,
         tools: session.status.tools,
@@ -383,6 +384,32 @@ export function handleUnifyModeSwitch(msg) {
   if (msg.mode === 'chat' || msg.mode === 'work') {
     currentMode = msg.mode;
   }
+}
+
+/**
+ * Handle model switch from the web UI.
+ * Updates Engine's config so the next query uses the new model.
+ * @param {{ model: string }} msg
+ */
+export function handleUnifyModelSwitch(msg) {
+  if (!session || !msg.model) return;
+
+  // Validate: model must be in availableModels list
+  const available = session.config.availableModels || [];
+  const found = available.some(m => m.id === msg.model);
+  if (!found) {
+    console.warn(`[Unify] model switch rejected — "${msg.model}" not in availableModels`);
+    return;
+  }
+
+  // Update Engine's model for subsequent queries
+  session.config.model = msg.model;
+
+  // Confirm switch to frontend
+  sendUnifyEvent({
+    type: 'model_switched',
+    model: msg.model,
+  });
 }
 
 /**

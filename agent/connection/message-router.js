@@ -25,7 +25,7 @@ import { sendToServer, flushMessageBuffer } from './buffer.js';
 import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
 import { getLlmConfig, updateLlmConfig } from '../unify/config-api.js';
-import { handleUnifyChat, handleUnifyModeSwitch, resetUnifySession } from '../unify/web-bridge.js';
+import { handleUnifyChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession } from '../unify/web-bridge.js';
 
 export async function handleMessage(msg) {
   switch (msg.type) {
@@ -327,6 +327,10 @@ export async function handleMessage(msg) {
 
     case 'unify_mode_switch':
       handleUnifyModeSwitch(msg);
+      break;
+
+    case 'unify_model_switch':
+      handleUnifyModelSwitch(msg);
       break;
 
     case 'unify_reset':
