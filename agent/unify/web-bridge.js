@@ -139,7 +139,6 @@ export async function handleUnifyChat(msg) {
     try {
     // ─── Collect assistant response for conversation history ──
     let assistantTextParts = [];
-    let assistantToolUseBlocks = [];
 
     // ─── Stream Engine events → claude_output format ──
     for await (const event of session.engine.query({
@@ -170,12 +169,6 @@ export async function handleUnifyChat(msg) {
 
         // ── Tool call announced by LLM ──
         case 'tool_call':
-          assistantToolUseBlocks.push({
-            type: 'tool_use',
-            id: event.id,
-            name: event.name,
-            input: event.input,
-          });
           // Finish any in-progress text streaming so UI shows typing dots
           sendUnifyOutput({
             type: 'assistant',
@@ -325,16 +318,9 @@ export async function handleUnifyChat(msg) {
     // ─── Query complete — accumulate messages for context continuity ──
     conversationMessages.push({ role: 'user', content: prompt });
 
-    const assistantContent = [];
     const fullText = assistantTextParts.join('');
     if (fullText) {
-      assistantContent.push({ type: 'text', text: fullText });
-    }
-    for (const block of assistantToolUseBlocks) {
-      assistantContent.push(block);
-    }
-    if (assistantContent.length > 0) {
-      conversationMessages.push({ role: 'assistant', content: assistantContent });
+      conversationMessages.push({ role: 'assistant', content: fullText });
     }
 
     // ─── Signal turn end to UI ──

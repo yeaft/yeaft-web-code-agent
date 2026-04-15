@@ -35,26 +35,24 @@ describe('web-bridge conversation history (code structure)', () => {
     expect(src).toContain('assistantTextParts.push(event.text)');
   });
 
-  it('collects tool_use blocks from tool_call events', () => {
-    // Should accumulate tool_use blocks
-    expect(src).toContain('assistantToolUseBlocks.push(');
-  });
-
   it('appends user message to conversationMessages after query', () => {
-    // After the query loop, should push user message
+    // After the query loop, should push user message with plain string content
     expect(src).toContain("conversationMessages.push({ role: 'user', content: prompt })");
   });
 
-  it('appends assistant message to conversationMessages after query', () => {
-    // After the query loop, should push assembled assistant content
-    expect(src).toContain("conversationMessages.push({ role: 'assistant', content: assistantContent })");
+  it('appends assistant message with plain text content to conversationMessages after query', () => {
+    // After the query loop, should push plain string content (not content-block array)
+    expect(src).toContain("conversationMessages.push({ role: 'assistant', content: fullText })");
   });
 
-  it('builds assistant content from collected text and tool blocks', () => {
+  it('builds fullText from collected text parts', () => {
     // Should join text parts into full text
     expect(src).toContain('assistantTextParts.join');
-    // Should push text block
-    expect(src).toMatch(/assistantContent\.push\(\{\s*type:\s*'text'/);
+  });
+
+  it('only appends assistant message when fullText is non-empty', () => {
+    // Should check fullText before pushing
+    expect(src).toContain('if (fullText)');
   });
 
   it('clears conversationMessages on consolidation event', () => {
@@ -75,9 +73,16 @@ describe('web-bridge conversation history (code structure)', () => {
     expect(resetSection).toContain('conversationMessages = []');
   });
 
-  it('only appends assistant message when content is non-empty', () => {
-    // Should check assistantContent.length > 0 before pushing
-    expect(src).toContain('if (assistantContent.length > 0)');
+  it('does NOT collect tool_use blocks into conversationMessages (regression guard)', () => {
+    // After the fix, web-bridge should NOT accumulate tool_use blocks.
+    // Engine manages intra-query tool loops internally.
+    expect(src).not.toContain('assistantToolUseBlocks');
+  });
+
+  it('stores assistant content as plain string, not content-block array', () => {
+    // Must NOT use assistantContent array format — engine expects content: 'string'
+    expect(src).not.toContain("assistantContent.push({ type: 'text'");
+    expect(src).not.toContain("content: assistantContent");
   });
 });
 
