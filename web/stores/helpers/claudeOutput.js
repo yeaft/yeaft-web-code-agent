@@ -102,8 +102,24 @@ export function handleClaudeOutput(store, conversationId, data) {
     const userContent = data.message?.content;
 
     // 过滤 compact summary 消息（compact 后的上下文摘要，不应显示在 UI 中）
-    if (typeof userContent === 'string' && userContent.includes('This session is being continued from a previous conversation')) {
-      return;
+    // Claude Code compact summary 特征检测 — 兜底防线，即使 agent 端没过滤也不会泄漏到 UI
+    if (typeof userContent === 'string' && userContent.length > 200) {
+      if (userContent.includes('This session is being continued from a previous conversation')
+          || userContent.includes('The summary below covers the earlier portion of the conversation')
+          || /Summary:[\s\S]*\d+\.\s*(Primary Request|Key Technical|Current Work)/m.test(userContent)) {
+        return;
+      }
+    }
+    // content 可能是数组形式（每个 block 是 { type: 'text', text: '...' }）
+    if (Array.isArray(userContent)) {
+      const fullText = userContent.map(b => (typeof b === 'string' ? b : b?.text || '')).join('');
+      if (fullText.length > 200 && (
+        fullText.includes('This session is being continued from a previous conversation')
+        || fullText.includes('The summary below covers the earlier portion of the conversation')
+        || /Summary:[\s\S]*\d+\.\s*(Primary Request|Key Technical|Current Work)/m.test(fullText)
+      )) {
+        return;
+      }
     }
 
     // 过滤 Claude CLI 内部消息（不应显示在 UI 中）

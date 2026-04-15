@@ -6,6 +6,24 @@ import { sendConversationList, sendOutput, sendError, handleAskUserQuestion } fr
 import { startSubagentWatcher, stopSubagentWatcher, cleanupSubagentWatchers } from './subagent.js';
 
 /**
+ * Detect whether a user message is a Claude Code compact summary.
+ * These appear after context compaction and should not be displayed in the UI.
+ *
+ * @param {string} text — user message content
+ * @returns {boolean}
+ */
+function isCompactSummary(text) {
+  if (!text || text.length < 200) return false;
+  // Claude Code compact summary always starts with this exact text
+  if (text.includes('This session is being continued from a previous conversation')) return true;
+  // Alternate compact summary indicator (Claude Code uses <system-reminder> blocks)
+  if (text.includes('The summary below covers the earlier portion of the conversation')) return true;
+  // Context compaction with numbered sections (1. Primary Request, 2. Key Technical Concepts, etc.)
+  if (/^[\s\S]*Summary:[\s\S]*\d+\.\s+(Primary Request|Key Technical|Current Work)/m.test(text)) return true;
+  return false;
+}
+
+/**
  * Determine maxContextTokens and autoCompactThreshold from model name.
  * Returns defaults suitable for the model's context window size.
  *
@@ -423,12 +441,34 @@ async function processClaudeOutput(conversationId, claudeQuery, state) {
 
       // 过滤 compact summary 消息（compact_boundary 之后的 user 消息）
       if (message.type === 'user' && state._compactSummaryPending) {
-        console.log(`[${conversationId}] Filtering compact summary message`);
+        console.log(`[${conversationId}] Filtering compact summary message (pending flag)`);
         continue;
       }
       // compact 后的 <local-command-stdout>Compacted </local-command-stdout> 标记 summary 结束
       if (state._compactSummaryPending && message.type !== 'user') {
         state._compactSummaryPending = false;
+      }
+
+      // 兜底过滤: Claude Code 的 compact summary 有时不触发 compact_boundary,
+      // 直接以 user 消息形式出现。通过内容特征检测过滤。
+      if (message.type === 'user') {
+        const userText = typeof message.content === 'string'
+          ? message.content
+          : (Array.isArray(message.content) ? message.content.map(b => b.text || '').join('') : '');
+        if (userText && isCompactSummary(userText)) {
+          console.log(`[${conversationId}] Filtering compact summary message (content match)`);
+          // 补发 compact 完成通知（如果之前没发过）
+          if (!state._compactCompleteSent) {
+            state._compactCompleteSent = true;
+            ctx.sendToServer({
+              type: 'compact_status',
+              conversationId,
+              status: 'completed',
+              message: 'Context compacted successfully'
+            });
+          }
+          continue;
+        }
       }
 
       // 捕获 result 消息中的 usage 信息
