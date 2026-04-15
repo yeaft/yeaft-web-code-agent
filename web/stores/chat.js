@@ -436,7 +436,7 @@ export const useChatStore = defineStore('chat', {
     },
     fetchExpertRoleDefinitions() {
       if (this.expertRoleDefinitions) return; // Already cached
-      const agentId = this.currentAgent?.id;
+      const agentId = this.currentAgent;
       if (!agentId) return;
       this.sendWsMessage({
         type: 'get_expert_roles',
