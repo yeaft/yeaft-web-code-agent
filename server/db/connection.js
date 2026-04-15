@@ -125,6 +125,43 @@ for (const migration of migrations) {
   }
 }
 
+// Custom expert roles tables (帮帮团自定义角色)
+const customExpertTables = `
+  CREATE TABLE IF NOT EXISTS custom_expert_roles (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id),
+    role_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    full_name TEXT,
+    title TEXT NOT NULL,
+    title_en TEXT,
+    group_id TEXT NOT NULL DEFAULT 'custom',
+    icon TEXT,
+    message_prefix TEXT,
+    message_prefix_en TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(user_id, role_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS custom_expert_actions (
+    id TEXT PRIMARY KEY,
+    role_row_id TEXT NOT NULL REFERENCES custom_expert_roles(id) ON DELETE CASCADE,
+    action_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    name_en TEXT,
+    message_template TEXT,
+    message_template_en TEXT,
+    default_message TEXT,
+    default_message_en TEXT,
+    UNIQUE(role_row_id, action_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_custom_expert_roles_user ON custom_expert_roles(user_id);
+  CREATE INDEX IF NOT EXISTS idx_custom_expert_actions_role ON custom_expert_actions(role_row_id);
+`;
+try { db.exec(customExpertTables); } catch (e) { /* tables already exist */ }
+
 // 创建依赖迁移列的索引（在迁移后）
 const postMigrationIndexes = [
   `CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)`,

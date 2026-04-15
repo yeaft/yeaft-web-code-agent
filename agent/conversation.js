@@ -719,7 +719,10 @@ export async function handleUserInput(msg) {
 
   // ★ Expert Panel: construct expert message if selections provided
   const expertSelections = msg.expertSelections;
-  if (expertSelections?.length > 0) {
+  if (msg.expertMessage) {
+    // Custom expert role: frontend already built the full prompt
+    effectivePrompt = msg.expertMessage;
+  } else if (expertSelections?.length > 0) {
     const { buildExpertMessage } = await import('./expert-roles.js');
     const expertResult = buildExpertMessage(expertSelections, effectivePrompt, msg.language || 'zh-CN');
     effectivePrompt = expertResult.effectivePrompt;
