@@ -817,8 +817,8 @@ describe('Engine', () => {
       }
 
       const call = mockAdapter.callLog[0];
-      expect(call.system).toContain('You are Yeaft');
-      expect(call.system).not.toContain('你是 Yeaft');
+      expect(call.system).toContain('Yeaft');
+      expect(call.system).not.toContain('核心原则');
     });
 
     it('should use Chinese system prompt when language is zh', async () => {
@@ -838,7 +838,8 @@ describe('Engine', () => {
       }
 
       const call = mockAdapter.callLog[0];
-      expect(call.system).toContain('你是 Yeaft');
+      expect(call.system).toContain('Yeaft');
+      expect(call.system).toContain('核心原则');
       expect(call.system).toContain('当前模式：chat');
     });
 
