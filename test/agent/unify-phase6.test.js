@@ -551,13 +551,13 @@ describe('loadSession', () => {
     });
 
     try {
-      // 5 built-in tools: mcp_list_tools, mcp_call_tool, Skill, EnterWorktree, ExitWorktree
+      // 39 built-in tools (5 original + 34 newly implemented)
       expect(session.toolRegistry.has('mcp_list_tools')).toBe(true);
       expect(session.toolRegistry.has('mcp_call_tool')).toBe(true);
       expect(session.toolRegistry.has('Skill')).toBe(true);
       expect(session.toolRegistry.has('EnterWorktree')).toBe(true);
       expect(session.toolRegistry.has('ExitWorktree')).toBe(true);
-      expect(session.status.tools).toBe(5);
+      expect(session.status.tools).toBe(39);
     } finally {
       await session.shutdown();
     }
@@ -584,7 +584,7 @@ describe('loadSession', () => {
 
     try {
       expect(session.toolRegistry.has('custom_tool')).toBe(true);
-      expect(session.status.tools).toBe(6); // 5 built-in + 1 extra
+      expect(session.status.tools).toBe(40); // 39 built-in + 1 extra
     } finally {
       await session.shutdown();
     }

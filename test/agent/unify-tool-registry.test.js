@@ -16,15 +16,14 @@ describe('tools/index.js createFullRegistry', () => {
     const { createFullRegistry } = await import('../../agent/unify/tools/index.js');
     const registry = createFullRegistry();
 
-    // Should have all 5 built-in tools:
-    // mcp_list_tools, mcp_call_tool, skill, enter_worktree, exit_worktree
-    expect(registry.size).toBeGreaterThanOrEqual(5);
+    // Should have all 39 built-in tools (5 original + 34 newly implemented)
+    expect(registry.size).toBeGreaterThanOrEqual(39);
   });
 
   it('allTools array contains all built-in tools', async () => {
     const { allTools } = await import('../../agent/unify/tools/index.js');
 
-    expect(allTools.length).toBeGreaterThanOrEqual(5);
+    expect(allTools.length).toBeGreaterThanOrEqual(39);
 
     const names = allTools.map(t => t.name);
     expect(names).toContain('mcp_list_tools');
