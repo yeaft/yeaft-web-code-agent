@@ -385,8 +385,9 @@ export function getRolesByTeam() {
 /**
  * Build autocomplete items for @ mention search.
  * Returns flat list of { roleId, roleName, actionId?, actionName?, searchText, displayText }
+ * @param {Array} [customRoles] - optional custom roles to include
  */
-export function buildAutocompleteItems() {
+export function buildAutocompleteItems(customRoles) {
   const items = [];
   for (const role of Object.values(EXPERT_ROLES)) {
     // Pure role entry (no action)
@@ -414,20 +415,65 @@ export function buildAutocompleteItems() {
       });
     }
   }
+  // Include custom roles if provided
+  if (customRoles && customRoles.length > 0) {
+    for (const role of customRoles) {
+      items.push({
+        roleId: role.id,
+        roleName: role.name,
+        roleTitle: role.title,
+        actionId: null,
+        actionName: null,
+        searchText: `${role.name} ${role.fullName || ''} ${role.title} ${role.titleEn || ''}`.toLowerCase(),
+        displayText: role.name,
+        group: 'custom'
+      });
+      if (role.actions) {
+        for (const action of role.actions) {
+          items.push({
+            roleId: role.id,
+            roleName: role.name,
+            roleTitle: role.title,
+            actionId: action.id,
+            actionName: action.name,
+            searchText: `${role.name} ${role.fullName || ''} ${role.title} ${action.name} ${action.nameEn || ''}`.toLowerCase(),
+            displayText: `${role.name}\u00B7${action.name}`,
+            group: 'custom'
+          });
+        }
+      }
+    }
+  }
   return items;
 }
 
 /**
  * Get display label for a selection { role, action }
+ * @param {object} selection - { role: string, action?: string }
+ * @param {Array} [customRoles] - optional array of custom roles to look up
  */
-export function getSelectionLabel(selection) {
+export function getSelectionLabel(selection, customRoles) {
+  // Try built-in first
   const role = EXPERT_ROLES[selection.role];
-  if (!role) return selection.role;
-  if (selection.action) {
-    const action = role.actions.find(a => a.id === selection.action);
-    return action ? `${role.name}\u00B7${action.name}` : role.name;
+  if (role) {
+    if (selection.action) {
+      const action = role.actions.find(a => a.id === selection.action);
+      return action ? `${role.name}\u00B7${action.name}` : role.name;
+    }
+    return role.name;
   }
-  return role.name;
+  // Try custom roles
+  if (customRoles) {
+    const custom = customRoles.find(r => r.id === selection.role);
+    if (custom) {
+      if (selection.action) {
+        const action = custom.actions?.find(a => a.id === selection.action);
+        return action ? `${custom.name}\u00B7${action.name}` : custom.name;
+      }
+      return custom.name;
+    }
+  }
+  return selection.role;
 }
 
 /**

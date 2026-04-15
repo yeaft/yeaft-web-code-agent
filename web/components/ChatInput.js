@@ -146,14 +146,14 @@ export default {
     // @ expert autocomplete state
     const showExpertAutocomplete = Vue.ref(false);
     const expertSelectedIndex = Vue.ref(0);
-    const allExpertItems = buildExpertAutocomplete();
+    const allExpertItems = Vue.computed(() => buildExpertAutocomplete(store.customExpertRoles));
 
     const expertAutocompleteFiltered = Vue.computed(() => {
       const text = inputText.value;
       const atIdx = text.lastIndexOf('@');
       if (atIdx === -1 || !showExpertAutocomplete.value) return [];
       const query = text.slice(atIdx + 1).toLowerCase();
-      return allExpertItems
+      return allExpertItems.value
         .filter(item => {
           if (!query) return true;
           return item.searchText.includes(query);
@@ -185,7 +185,7 @@ export default {
       store.expertSelections = arr;
     };
 
-    const getExpertLabel = (sel) => getSelectionLabel(sel);
+    const getExpertLabel = (sel) => getSelectionLabel(sel, store.customExpertRoles);
 
     // 恢复当前会话的草稿
     if (store.currentConversation && store.inputDrafts[store.currentConversation]) {
