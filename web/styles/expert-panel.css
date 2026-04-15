@@ -429,6 +429,376 @@
   font-size: 13px;
 }
 
+/* ---- Custom Role Cards — toolbar buttons ---- */
+.role-card-actions-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.role-edit-btn,
+.role-delete-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 3px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s, background 0.15s;
+  flex-shrink: 0;
+}
+
+.expert-role-card:hover .role-edit-btn,
+.expert-role-card:hover .role-delete-btn {
+  opacity: 1;
+}
+
+.role-edit-btn:hover {
+  color: var(--accent-blue);
+  background: var(--sidebar-hover);
+}
+
+.role-delete-btn:hover {
+  color: #e74c3c;
+  background: rgba(231, 76, 60, 0.08);
+}
+
+/* ---- Custom Role — Add Button ---- */
+.expert-add-role-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--accent-blue);
+  padding: 2px 6px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+  margin-left: auto;
+  transition: background 0.15s;
+}
+
+.expert-add-role-btn:hover {
+  background: var(--sidebar-hover);
+}
+
+/* ---- Custom Role — Empty State ---- */
+.expert-custom-empty {
+  padding: 24px 16px;
+  text-align: center;
+}
+
+.expert-custom-empty-text {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+
+.expert-custom-empty-btn {
+  background: var(--accent-blue);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 16px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.expert-custom-empty-btn:hover {
+  opacity: 0.9;
+}
+
+/* ---- Expert Role Editor Modal ---- */
+.expert-editor-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.expert-editor-modal {
+  background: var(--bg-main);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+  width: 100%;
+  max-width: 560px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.expert-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  flex-shrink: 0;
+}
+
+.expert-editor-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.expert-editor-close {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 20px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.expert-editor-close:hover {
+  color: var(--text-primary);
+  background: var(--sidebar-hover);
+}
+
+.expert-editor-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 18px 16px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.expert-editor-section {
+  margin-bottom: 20px;
+}
+
+.expert-editor-section-title {
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: 10px;
+}
+
+.expert-editor-field {
+  margin-bottom: 10px;
+}
+
+.expert-editor-field label {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.expert-editor-field label .required {
+  color: #e74c3c;
+}
+
+.expert-editor-field input,
+.expert-editor-field textarea {
+  width: 100%;
+  padding: 7px 10px;
+  font-size: 13px;
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  background: var(--bg-main);
+  color: var(--text-primary);
+  font-family: inherit;
+  resize: vertical;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+
+.expert-editor-field input:focus,
+.expert-editor-field textarea:focus {
+  outline: none;
+  border-color: var(--accent-blue);
+}
+
+.expert-editor-field textarea {
+  font-family: 'SF Mono', 'Fira Code', 'Fira Mono', 'Roboto Mono', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  min-height: 50px;
+}
+
+.expert-editor-row {
+  display: flex;
+  gap: 10px;
+}
+
+/* ---- Editor Action Card ---- */
+.expert-editor-action-card {
+  background: var(--sidebar-hover);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+
+.expert-editor-action-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.expert-editor-action-num {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.expert-editor-action-remove {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 16px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.expert-editor-action-remove:hover {
+  color: #e74c3c;
+  background: rgba(231, 76, 60, 0.08);
+}
+
+.expert-editor-add-action {
+  background: none;
+  border: 1px dashed var(--border-light);
+  cursor: pointer;
+  color: var(--accent-blue);
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  margin-left: auto;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.expert-editor-add-action:hover {
+  background: var(--sidebar-hover);
+  border-color: var(--accent-blue);
+}
+
+/* ---- Editor Footer ---- */
+.expert-editor-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 18px;
+  flex-shrink: 0;
+}
+
+.expert-editor-cancel {
+  background: var(--sidebar-hover);
+  border: 1px solid var(--border-light);
+  color: var(--text-primary);
+  border-radius: 6px;
+  padding: 7px 16px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.expert-editor-cancel:hover {
+  background: var(--bg-main);
+}
+
+.expert-editor-save {
+  background: var(--accent-blue);
+  border: none;
+  color: #fff;
+  border-radius: 6px;
+  padding: 7px 20px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.expert-editor-save:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.expert-editor-save:not(:disabled):hover {
+  opacity: 0.9;
+}
+
+/* ---- Delete Confirmation ---- */
+.expert-delete-confirm {
+  background: var(--bg-main);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+  padding: 24px;
+  max-width: 360px;
+  width: 100%;
+}
+
+.expert-delete-confirm-text {
+  font-size: 14px;
+  color: var(--text-primary);
+  margin-bottom: 18px;
+  line-height: 1.5;
+}
+
+.expert-delete-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.expert-delete-confirm-btn {
+  background: #e74c3c;
+  border: none;
+  color: #fff;
+  border-radius: 6px;
+  padding: 7px 20px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.expert-delete-confirm-btn:hover {
+  opacity: 0.9;
+}
+
+/* ---- Dark theme overrides for editor ---- */
+[data-theme="dark"] .expert-editor-modal,
+.dark .expert-editor-modal {
+  border: 1px solid var(--border-light);
+}
+
+[data-theme="dark"] .expert-editor-action-card,
+.dark .expert-editor-action-card {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+[data-theme="dark"] .expert-editor-field input,
+[data-theme="dark"] .expert-editor-field textarea,
+.dark .expert-editor-field input,
+.dark .expert-editor-field textarea {
+  background: var(--bg-input-wrapper);
+}
+
+[data-theme="dark"] .expert-delete-confirm,
+.dark .expert-delete-confirm {
+  border: 1px solid var(--border-light);
+}
+
 /* ---- Expert Chips in ChatInput ---- */
 .expert-chips-bar {
   display: flex;

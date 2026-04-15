@@ -67,6 +67,7 @@ export default {
     </div>
   `,
   setup(props) {
+    const store = Pinia.useChatStore();
     const showAttachments = Vue.ref(false);
     const t = Vue.inject('t');
 
@@ -79,7 +80,7 @@ export default {
     };
 
     const formatExpertLabel = (sel) => {
-      return getSelectionLabel(sel);
+      return getSelectionLabel(sel, store.customExpertRoles);
     };
 
     const getAttachmentsText = (attachments) => {
