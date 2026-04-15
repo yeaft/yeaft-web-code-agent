@@ -5,6 +5,7 @@ import { setSessionLoading, saveOpenSessions } from './session.js';
 import { ensureConnected } from './websocket.js';
 import { markAllToolsCompleted } from './handlers/conversationHandler.js';
 import { t } from '../../utils/i18n.js';
+import { EXPERT_ROLES, buildClientExpertMessage } from '../../utils/expert-roles.js';
 
 export function selectAgent(store, agentId) {
   if (agentId === store.currentAgent) {
@@ -391,6 +392,16 @@ export function sendMessage(store, text, attachments = [], options = {}) {
   // Pass expertSelections for 帮帮团
   if (hasExpertSelections) {
     wsMsg.expertSelections = options.expertSelections;
+    // For custom roles, build the prompt on the client side
+    const customResult = buildClientExpertMessage(
+      options.expertSelections,
+      store.customExpertRoles,
+      text,
+      store.language || 'zh-CN'
+    );
+    if (customResult) {
+      wsMsg.expertMessage = customResult.effectivePrompt;
+    }
   }
 
   // Try send; if WS not connected, auto-reconnect and retry
@@ -559,6 +570,16 @@ export function sendMessageToConversation(store, conversationId, text, attachmen
   }
   if (hasExpertSelections) {
     wsMsg.expertSelections = options.expertSelections;
+    // For custom roles, build the prompt on the client side
+    const customResult = buildClientExpertMessage(
+      options.expertSelections,
+      store.customExpertRoles,
+      text,
+      store.language || 'zh-CN'
+    );
+    if (customResult) {
+      wsMsg.expertMessage = customResult.effectivePrompt;
+    }
   }
 
   if (!store.sendWsMessage(wsMsg)) {

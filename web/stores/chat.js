@@ -140,6 +140,7 @@ export const useChatStore = defineStore('chat', {
     // Expert Panel (帮帮团) 状态
     // =====================
     expertSelections: [],             // 当前已选的角色/Action: [{ role: string, action: string|null }]
+    customExpertRoles: [],            // 自定义帮帮团角色 (from server DB)
 
     // =====================
     // Sub-Agent 状态 (JSONL watcher)
@@ -904,6 +905,97 @@ export const useChatStore = defineStore('chat', {
     changeLocale(locale) {
       this.locale = locale;
       setLocale(locale);
+    },
+
+    // =====================
+    // Custom expert roles CRUD
+    // =====================
+    async fetchCustomExpertRoles() {
+      const authStore = useAuthStore();
+      try {
+        const headers = {};
+        if (authStore.token) headers['Authorization'] = `Bearer ${authStore.token}`;
+        const response = await fetch('/api/expert-roles/custom', { headers });
+        if (response.ok) {
+          const data = await response.json();
+          this.customExpertRoles = data.roles || [];
+        }
+      } catch (err) {
+        console.error('Failed to fetch custom expert roles:', err);
+      }
+    },
+
+    async createCustomExpertRole(role) {
+      const authStore = useAuthStore();
+      try {
+        const headers = { 'Content-Type': 'application/json' };
+        if (authStore.token) headers['Authorization'] = `Bearer ${authStore.token}`;
+        const response = await fetch('/api/expert-roles/custom', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(role)
+        });
+        if (response.ok) {
+          const data = await response.json();
+          this.customExpertRoles.push(data.role);
+          return data.role;
+        } else {
+          const err = await response.json().catch(() => ({}));
+          throw new Error(err.error || 'Failed to create custom expert role');
+        }
+      } catch (err) {
+        console.error('Failed to create custom expert role:', err);
+        throw err;
+      }
+    },
+
+    async updateCustomExpertRole(roleId, role) {
+      const authStore = useAuthStore();
+      try {
+        const headers = { 'Content-Type': 'application/json' };
+        if (authStore.token) headers['Authorization'] = `Bearer ${authStore.token}`;
+        const response = await fetch(`/api/expert-roles/custom/${roleId}`, {
+          method: 'PUT',
+          headers,
+          body: JSON.stringify(role)
+        });
+        if (response.ok) {
+          const data = await response.json();
+          const idx = this.customExpertRoles.findIndex(r => r.id === roleId);
+          if (idx !== -1) {
+            this.customExpertRoles[idx] = data.role;
+          }
+          return data.role;
+        } else {
+          const err = await response.json().catch(() => ({}));
+          throw new Error(err.error || 'Failed to update custom expert role');
+        }
+      } catch (err) {
+        console.error('Failed to update custom expert role:', err);
+        throw err;
+      }
+    },
+
+    async deleteCustomExpertRole(roleId) {
+      const authStore = useAuthStore();
+      try {
+        const headers = {};
+        if (authStore.token) headers['Authorization'] = `Bearer ${authStore.token}`;
+        const response = await fetch(`/api/expert-roles/custom/${roleId}`, {
+          method: 'DELETE',
+          headers
+        });
+        if (response.ok) {
+          this.customExpertRoles = this.customExpertRoles.filter(r => r.id !== roleId);
+          return true;
+        } else {
+          const err = await response.json().catch(() => ({}));
+          throw new Error(err.error || 'Failed to delete custom expert role');
+        }
+      } catch (err) {
+        console.error('Failed to delete custom expert role:', err);
+        throw err;
+      }
     },
 
     toggleWorkbench() {

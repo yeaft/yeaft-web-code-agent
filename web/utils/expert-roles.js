@@ -441,6 +441,89 @@ export const DEFAULT_TEAM = 'dev';
 export const MAX_SELECTIONS = 3;
 
 /**
+ * Build the effective prompt for a custom expert role on the client side.
+ * For custom roles (not in EXPERT_ROLES), the frontend constructs the full prompt
+ * so the agent doesn't need the custom role definitions.
+ *
+ * @param {Array<{role: string, action?: string}>} selections
+ * @param {Array} customRoles - custom roles from server (with messagePrefix, actions, etc.)
+ * @param {string} userText - user's typed message
+ * @param {string} language - 'zh-CN' or 'en'
+ * @returns {{ effectivePrompt: string } | null} - null if not a custom role (let agent handle it)
+ */
+export function buildClientExpertMessage(selections, customRoles, userText, language = 'zh-CN') {
+  if (!selections || selections.length === 0 || !customRoles || customRoles.length === 0) {
+    return null;
+  }
+
+  const isZh = language === 'zh-CN';
+
+  // Check if any selection is a custom role
+  const hasCustomRole = selections.some(s => {
+    return !EXPERT_ROLES[s.role] && customRoles.some(cr => cr.id === s.role);
+  });
+
+  if (!hasCustomRole) return null;
+
+  // Build prompt for custom roles (single selection only for now)
+  if (selections.length === 1) {
+    const { role, action } = selections[0];
+    const customRole = customRoles.find(cr => cr.id === role);
+    if (!customRole) return null;
+
+    let effectivePrompt;
+
+    if (action && customRole.actions) {
+      const actionDef = customRole.actions.find(a => a.id === action);
+      if (actionDef) {
+        if (userText) {
+          // Action + user text
+          effectivePrompt = (isZh ? actionDef.messageTemplate : actionDef.messageTemplateEn) || '';
+          effectivePrompt += userText;
+        } else {
+          // Action + no text
+          effectivePrompt = (isZh ? actionDef.defaultMessage : actionDef.defaultMessageEn) || '';
+        }
+      } else {
+        // Action not found, fall back to role prefix
+        effectivePrompt = ((isZh ? customRole.messagePrefix : customRole.messagePrefixEn) || '') + (userText || '');
+      }
+    } else {
+      // Pure role + user text
+      effectivePrompt = ((isZh ? customRole.messagePrefix : customRole.messagePrefixEn) || '') + (userText || '');
+    }
+
+    return { effectivePrompt };
+  }
+
+  // Multi-selection with custom roles: build combined prompt
+  const parts = [];
+  for (const { role, action } of selections) {
+    const customRole = customRoles.find(cr => cr.id === role);
+    const builtinRole = EXPERT_ROLES[role];
+
+    if (customRole) {
+      if (action) {
+        const actionDef = customRole.actions?.find(a => a.id === action);
+        if (actionDef) {
+          parts.push((isZh ? actionDef.messageTemplate : actionDef.messageTemplateEn) || '');
+        }
+      } else {
+        parts.push((isZh ? customRole.messagePrefix : customRole.messagePrefixEn) || '');
+      }
+    } else if (builtinRole) {
+      // Built-in roles are handled by the agent, skip
+      return null;
+    }
+  }
+
+  if (parts.length === 0) return null;
+
+  const combined = parts.join('\n---\n\n');
+  return { effectivePrompt: combined + (userText || '') };
+}
+
+/**
  * Get teams visible to the current user.
  * Non-admin users only see teams without adminOnly flag.
  * @param {boolean} isAdmin
