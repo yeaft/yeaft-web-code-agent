@@ -4,6 +4,9 @@
  * Single source of truth for system prompts. Both engine.js and cli.js
  * import buildSystemPrompt() from here. Supports 'en' and 'zh'.
  *
+ * Template files from agent/unify/templates/ are loaded once at startup
+ * and used to enrich the system prompt beyond the hardcoded fallbacks.
+ *
  * Phase 2 additions:
  *   - Memory section (user profile + recalled entries)
  *   - Compact summary section (conversation history summary)
@@ -11,7 +14,82 @@
  * Reference: yeaft-unify-system-prompt-budget.md — Static + Dynamic + Context layers
  */
 
-// ─── Prompt Templates ─────────────────────────────────────────
+import { readFileSync, existsSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+// ─── Template Loading (one-time at startup) ──────────────────────
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const TEMPLATES_DIR = join(__dirname, 'templates');
+
+/**
+ * Read a template file from the templates/ directory.
+ * Returns empty string if file doesn't exist or can't be read.
+ * @param {string} name — filename (e.g. 'base.md')
+ * @returns {string}
+ */
+function readTemplate(name) {
+  const path = join(TEMPLATES_DIR, name);
+  if (!existsSync(path)) return '';
+  try {
+    return readFileSync(path, 'utf8').trim();
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Extract the section for a given language from a bilingual template.
+ * Templates use `---` as a separator between English (first) and Chinese (second).
+ * If no separator exists, returns the full content regardless of language.
+ *
+ * @param {string} content — full template content
+ * @param {string} language — 'en' or 'zh'
+ * @returns {string}
+ */
+function extractLangSection(content, language) {
+  if (!content) return '';
+
+  // Split on the horizontal rule separator (--- on its own line between sections)
+  // The separator is a line that is exactly "---" surrounded by blank lines
+  const separatorIdx = content.indexOf('\n---\n\n#');
+  if (separatorIdx === -1) {
+    // No bilingual separator found — return full content
+    return content;
+  }
+
+  if (language === 'zh') {
+    // Chinese section is after the separator
+    return content.slice(separatorIdx + 5).trim();
+  }
+
+  // English section is before the separator
+  return content.slice(0, separatorIdx).trim();
+}
+
+/** Loaded templates — read once at module load time. */
+const RAW_TEMPLATES = {
+  base: readTemplate('base.md'),
+  modeChat: readTemplate('mode-chat.md'),
+  modeWorker: readTemplate('mode-worker.md'),
+  modeDream: readTemplate('mode-dream.md'),
+  toolGuidance: readTemplate('tool-guidance.md'),
+};
+
+/**
+ * Get a template section for the given language.
+ * @param {string} key — template key (e.g. 'base', 'modeChat')
+ * @param {string} language — 'en' or 'zh'
+ * @returns {string}
+ */
+function getTemplate(key, language) {
+  const raw = RAW_TEMPLATES[key];
+  if (!raw) return '';
+  return extractLangSection(raw, language);
+}
+
+// ─── Prompt Templates (hardcoded fallbacks) ──────────────────────
 
 const PROMPTS = {
   en: {
@@ -46,12 +124,22 @@ export const SUPPORTED_LANGUAGES = Object.keys(PROMPTS);
 /**
  * Build the system prompt for a given language and mode.
  *
+ * Prompt structure:
+ *   1. Core identity (from template or fallback)
+ *   2. Mode + date metadata
+ *   3. Mode-specific behavioral instructions (from template or fallback)
+ *   4. Tool list + tool guidance (from template)
+ *   5. Skills section
+ *   6. Memory section
+ *   7. Compact summary section
+ *
  * @param {{
  *   language?: string,
  *   mode?: string,
  *   toolNames?: string[],
  *   memory?: { profile?: string, entries?: object[] },
- *   compactSummary?: string
+ *   compactSummary?: string,
+ *   skillContent?: string,
  * }} params
  * @returns {string}
  */
@@ -65,29 +153,54 @@ export function buildSystemPrompt({
 } = {}) {
   // Fallback to English for unknown languages
   const lang = PROMPTS[language] || PROMPTS.en;
+  const effectiveLang = PROMPTS[language] ? language : 'en';
 
-  const parts = [
-    lang.identity,
-    lang.mode(mode),
-    lang.date(new Date().toISOString().split('T')[0]),
-  ];
+  const parts = [];
 
-  if (mode === 'work') {
-    parts.push(lang.work);
-  } else if (mode === 'dream') {
-    parts.push(lang.dream);
+  // ─── 1. Core Identity ──────────────────────────────────
+  // Use template if available, otherwise fallback to hardcoded one-liner
+  const baseTemplate = getTemplate('base', effectiveLang);
+  if (baseTemplate) {
+    parts.push(baseTemplate);
+  } else {
+    parts.push(lang.identity);
   }
 
+  // ─── 2. Mode + Date Metadata ───────────────────────────
+  parts.push(lang.mode(mode));
+  parts.push(lang.date(new Date().toISOString().split('T')[0]));
+
+  // ─── 3. Mode-Specific Instructions ─────────────────────
+  if (mode === 'work') {
+    const workerTemplate = getTemplate('modeWorker', effectiveLang);
+    parts.push(workerTemplate || lang.work);
+  } else if (mode === 'dream') {
+    const dreamTemplate = getTemplate('modeDream', effectiveLang);
+    parts.push(dreamTemplate || lang.dream);
+  } else if (mode === 'chat') {
+    const chatTemplate = getTemplate('modeChat', effectiveLang);
+    if (chatTemplate) {
+      parts.push(chatTemplate);
+    }
+    // No fallback needed — chat mode previously had no instructions
+  }
+
+  // ─── 4. Tools + Tool Guidance ──────────────────────────
   if (toolNames.length > 0) {
     parts.push(lang.tools(toolNames.join(', ')));
+
+    const toolGuidanceTemplate = getTemplate('toolGuidance', effectiveLang);
+    if (toolGuidanceTemplate) {
+      parts.push(toolGuidanceTemplate);
+    }
   }
 
-  // ─── Skills Section ─────────────────────────────────────
+  // ─── 5. Skills Section ─────────────────────────────────
   if (skillContent) {
     parts.push(skillContent);
   }
 
-  // ─── Memory Section ─────────────────────────────────────
+  // ─── 6. Memory Section ─────────────────────────────────
   if (memory && (memory.profile || (memory.entries && memory.entries.length > 0))) {
     const memoryParts = [lang.memoryHeader];
 
@@ -106,7 +219,7 @@ export function buildSystemPrompt({
     parts.push(memoryParts.join('\n\n'));
   }
 
-  // ─── Compact Summary Section ────────────────────────────
+  // ─── 7. Compact Summary Section ────────────────────────
   if (compactSummary) {
     parts.push(`${lang.compactHeader}\n${compactSummary}`);
   }

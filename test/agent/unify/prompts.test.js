@@ -13,27 +13,33 @@ describe('buildSystemPrompt', () => {
 
   it('should build English prompt by default', () => {
     const prompt = buildSystemPrompt();
-    expect(prompt).toContain('You are Yeaft');
+    // Template-based: should contain Yeaft identity
+    expect(prompt).toContain('Yeaft');
     expect(prompt).toContain('Current mode: chat');
     expect(prompt).toContain('Date:');
   });
 
   it('should build English prompt when language is en', () => {
     const prompt = buildSystemPrompt({ language: 'en', mode: 'chat' });
-    expect(prompt).toContain('You are Yeaft, a helpful AI assistant.');
+    // With templates loaded: rich identity from base.md
+    expect(prompt).toContain('Yeaft');
     expect(prompt).toContain('Current mode: chat');
   });
 
   it('should include work mode instruction in English', () => {
     const prompt = buildSystemPrompt({ language: 'en', mode: 'work' });
-    expect(prompt).toContain('You are in work mode');
-    expect(prompt).toContain('Break tasks into steps');
+    // Template-based: mode-worker.md has "work mode" content
+    expect(prompt.toLowerCase()).toContain('work mode');
+    // Should contain task execution guidance
+    expect(prompt).toContain('tool');
   });
 
   it('should include dream mode instruction in English', () => {
     const prompt = buildSystemPrompt({ language: 'en', mode: 'dream' });
-    expect(prompt).toContain('You are in dream mode');
-    expect(prompt).toContain('Reflect on past conversations');
+    // Template-based: mode-dream.md has "dream mode" content
+    expect(prompt.toLowerCase()).toContain('dream mode');
+    // Should contain memory maintenance guidance
+    expect(prompt.toLowerCase()).toContain('memor');
   });
 
   it('should include tool names in English', () => {
@@ -55,21 +61,24 @@ describe('buildSystemPrompt', () => {
 
   it('should build Chinese prompt when language is zh', () => {
     const prompt = buildSystemPrompt({ language: 'zh', mode: 'chat' });
-    expect(prompt).toContain('你是 Yeaft');
+    // Template-based: Chinese section from base.md
+    expect(prompt).toContain('Yeaft');
     expect(prompt).toContain('当前模式：chat');
     expect(prompt).toContain('日期：');
   });
 
   it('should include work mode instruction in Chinese', () => {
     const prompt = buildSystemPrompt({ language: 'zh', mode: 'work' });
-    expect(prompt).toContain('你处于工作模式');
-    expect(prompt).toContain('将任务分解为步骤');
+    // Template-based: Chinese section from mode-worker.md
+    expect(prompt).toContain('工作模式');
+    expect(prompt).toContain('工具');
   });
 
   it('should include dream mode instruction in Chinese', () => {
     const prompt = buildSystemPrompt({ language: 'zh', mode: 'dream' });
-    expect(prompt).toContain('你处于梦境模式');
-    expect(prompt).toContain('回顾过去的对话');
+    // Template-based: Chinese section from mode-dream.md
+    expect(prompt).toContain('梦境模式');
+    expect(prompt).toContain('记忆');
   });
 
   it('should include tool names in Chinese', () => {
@@ -85,26 +94,29 @@ describe('buildSystemPrompt', () => {
 
   it('should fallback to English for unknown language', () => {
     const prompt = buildSystemPrompt({ language: 'fr', mode: 'chat' });
-    expect(prompt).toContain('You are Yeaft');
-    expect(prompt).not.toContain('你是 Yeaft');
+    // Fallback to English template
+    expect(prompt).toContain('Yeaft');
+    // Should NOT contain Chinese identity markers
+    expect(prompt).not.toContain('核心身份');
   });
 
   it('should fallback to English for null language', () => {
     const prompt = buildSystemPrompt({ language: null, mode: 'chat' });
-    expect(prompt).toContain('You are Yeaft');
+    expect(prompt).toContain('Yeaft');
   });
 
   it('should fallback to English for undefined language', () => {
     const prompt = buildSystemPrompt({ language: undefined, mode: 'chat' });
-    expect(prompt).toContain('You are Yeaft');
+    expect(prompt).toContain('Yeaft');
   });
 
   // ─── Edge cases ───────────────────────────────────────────────
 
-  it('should not include mode-specific instruction for chat mode', () => {
+  it('should not include work/dream mode instructions for chat mode', () => {
     const prompt = buildSystemPrompt({ language: 'en', mode: 'chat' });
-    expect(prompt).not.toContain('work mode');
-    expect(prompt).not.toContain('dream mode');
+    // Should not have worker or dream specific content
+    expect(prompt).not.toContain('Work Mode — Autonomous Task Executor');
+    expect(prompt).not.toContain('Dream Mode — Memory Maintenance');
   });
 
   it('should include today date', () => {
@@ -183,5 +195,91 @@ describe('buildSystemPrompt', () => {
       memory: { profile: '', entries: [] },
     });
     expect(prompt).not.toContain('## User Memory');
+  });
+
+  // ─── Template-specific tests ──────────────────────────────────
+
+  it('should include rich identity from base.md template', () => {
+    const prompt = buildSystemPrompt({ language: 'en', mode: 'chat' });
+    // base.md contains these specific sections
+    expect(prompt).toContain('Core Capabilities');
+    expect(prompt).toContain('Interaction Principles');
+    expect(prompt).toContain('Safety');
+  });
+
+  it('should include chat mode instructions from mode-chat.md template', () => {
+    const prompt = buildSystemPrompt({ language: 'en', mode: 'chat' });
+    // mode-chat.md has specific content
+    expect(prompt).toContain('Chat Mode');
+    expect(prompt).toContain('Response Style');
+  });
+
+  it('should include work mode instructions from mode-worker.md template', () => {
+    const prompt = buildSystemPrompt({ language: 'en', mode: 'work' });
+    expect(prompt).toContain('Work Mode');
+    expect(prompt).toContain('Task Execution Strategy');
+  });
+
+  it('should include dream mode instructions from mode-dream.md template', () => {
+    const prompt = buildSystemPrompt({ language: 'en', mode: 'dream' });
+    expect(prompt).toContain('Dream Mode');
+    expect(prompt).toContain('Memory Maintenance');
+  });
+
+  it('should include tool guidance when tools are provided', () => {
+    const prompt = buildSystemPrompt({
+      language: 'en',
+      mode: 'chat',
+      toolNames: ['Bash', 'FileRead'],
+    });
+    // tool-guidance.md content
+    expect(prompt).toContain('Tool Usage Guidance');
+    expect(prompt).toContain('Anti-Patterns');
+  });
+
+  it('should not include tool guidance when no tools', () => {
+    const prompt = buildSystemPrompt({ language: 'en', mode: 'chat', toolNames: [] });
+    expect(prompt).not.toContain('Tool Usage Guidance');
+  });
+
+  it('should use Chinese sections for zh language', () => {
+    const prompt = buildSystemPrompt({ language: 'zh', mode: 'chat' });
+    expect(prompt).toContain('核心身份与原则');
+    expect(prompt).toContain('交互原则');
+    // Should NOT contain English section headers
+    expect(prompt).not.toContain('Core Identity & Principles');
+  });
+
+  it('should use Chinese work mode for zh language', () => {
+    const prompt = buildSystemPrompt({ language: 'zh', mode: 'work' });
+    expect(prompt).toContain('自主任务执行器');
+    expect(prompt).toContain('任务执行策略');
+  });
+
+  it('should use Chinese tool guidance for zh language', () => {
+    const prompt = buildSystemPrompt({
+      language: 'zh',
+      mode: 'chat',
+      toolNames: ['Bash'],
+    });
+    expect(prompt).toContain('工具使用指导');
+    expect(prompt).toContain('反模式');
+  });
+
+  it('should include skill content after tools', () => {
+    const prompt = buildSystemPrompt({
+      language: 'en',
+      mode: 'chat',
+      toolNames: ['Bash'],
+      skillContent: '## Custom Skill\nDo something special.',
+    });
+    expect(prompt).toContain('## Custom Skill');
+    expect(prompt).toContain('Do something special.');
+  });
+
+  it('should produce significantly longer prompt than fallback', () => {
+    const prompt = buildSystemPrompt({ language: 'en', mode: 'work' });
+    // The old prompt was ~150 chars. With templates it should be much richer.
+    expect(prompt.length).toBeGreaterThan(500);
   });
 });
