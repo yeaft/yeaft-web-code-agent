@@ -390,10 +390,10 @@ describe('Agent info in sidebar', () => {
   });
 
   it('each agent row has an SVG icon', () => {
-    const agentSection = unifyPageJs.match(/unify-agent-info[\s\S]*?<\/div>\s*<\/div>/);
+    const agentSection = unifyPageJs.match(/unify-agent-info[\s\S]*?<\/div>\s*<\/aside>/);
     expect(agentSection).not.toBeNull();
     const svgCount = (agentSection[0].match(/<svg/g) || []).length;
-    // At least 3 SVGs for model, tools, skills
+    // At least 3 SVGs for model, tools, skills (model row may include chevron SVG)
     expect(svgCount).toBeGreaterThanOrEqual(3);
   });
 });

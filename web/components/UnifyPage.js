@@ -39,9 +39,25 @@ export default {
         <div class="unify-sidebar-section" v-if="store.unifyModel || (store.unifyStatus && store.unifyStatus.tools > 0)">
           <div class="unify-section-label">{{ $t('unify.agent') }}</div>
           <div class="unify-agent-info">
-            <div class="unify-agent-row" v-if="store.unifyModel">
+            <div class="unify-agent-row unify-model-row" v-if="store.unifyModel" @click="toggleModelDropdown" :title="$t('unify.switchModel')">
               <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M21 10.12h-6.78l2.74-2.82c-2.73-2.7-7.15-2.8-9.88-.1-2.73 2.71-2.73 7.08 0 9.79s7.15 2.71 9.88 0C18.32 15.65 19 14.08 19 12.1h2c0 1.98-.88 4.55-2.64 6.29-3.51 3.48-9.21 3.48-12.72 0-3.5-3.47-3.5-9.11 0-12.58 3.51-3.47 9.14-3.49 12.65-.06L21 3v7.12z"/></svg>
-              <span>{{ store.unifyModel }}</span>
+              <span class="unify-model-name">{{ store.unifyModel }}</span>
+              <svg v-if="store.unifyAvailableModels.length > 1" class="unify-model-chevron" :class="{ open: modelDropdownOpen }" viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
+            </div>
+            <!-- Model selector dropdown -->
+            <div class="unify-model-dropdown" v-if="modelDropdownOpen && store.unifyAvailableModels.length > 1">
+              <div
+                class="unify-model-option"
+                :class="{ active: m.id === store.unifyModel }"
+                v-for="m in store.unifyAvailableModels"
+                :key="m.id"
+                @click="selectModel(m.id)"
+              >
+                <span class="unify-model-check" v-if="m.id === store.unifyModel">&#10003;</span>
+                <span class="unify-model-check" v-else></span>
+                <span class="unify-model-option-label">{{ m.label || m.id }}</span>
+                <span class="unify-model-option-provider" v-if="m.provider">{{ m.provider }}</span>
+              </div>
             </div>
             <div class="unify-agent-row" v-if="store.unifyStatus && store.unifyStatus.tools > 0">
               <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z"/></svg>
@@ -178,12 +194,19 @@ export default {
     const detailCollapsed = Vue.ref(false);
     const debugMode = Vue.ref(false);
     const expandedTurns = Vue.reactive({});
+    const modelDropdownOpen = Vue.ref(false);
 
     // Detect mobile for overlay behavior
     const isMobile = Vue.ref(window.innerWidth <= 768);
     const onResize = () => { isMobile.value = window.innerWidth <= 768; };
-    Vue.onMounted(() => window.addEventListener('resize', onResize));
-    Vue.onUnmounted(() => window.removeEventListener('resize', onResize));
+    Vue.onMounted(() => {
+      window.addEventListener('resize', onResize);
+      document.addEventListener('click', closeModelDropdownOutside);
+    });
+    Vue.onUnmounted(() => {
+      window.removeEventListener('resize', onResize);
+      document.removeEventListener('click', closeModelDropdownOutside);
+    });
 
     // Watch for conversationId changes (session_ready migrates local -> agent ID)
     Vue.watch(() => store.unifyConversationId, (newId) => {
@@ -260,12 +283,35 @@ export default {
       ).join('\n\n');
     };
 
+    const toggleModelDropdown = (e) => {
+      e.stopPropagation();
+      if (store.unifyAvailableModels.length <= 1) return;
+      modelDropdownOpen.value = !modelDropdownOpen.value;
+    };
+
+    const selectModel = (modelId) => {
+      if (modelId === store.unifyModel) {
+        modelDropdownOpen.value = false;
+        return;
+      }
+      store.switchUnifyModel(modelId);
+      modelDropdownOpen.value = false;
+    };
+
+    const closeModelDropdownOutside = (e) => {
+      if (!modelDropdownOpen.value) return;
+      // Close if click is outside the model row / dropdown
+      const row = e.target.closest('.unify-model-row, .unify-model-dropdown');
+      if (!row) modelDropdownOpen.value = false;
+    };
+
     return {
       store,
       sidebarCollapsed,
       detailCollapsed,
       debugMode,
       expandedTurns,
+      modelDropdownOpen,
       isMobile,
       hasMessages,
       isProcessing,
@@ -277,6 +323,8 @@ export default {
       toggleDetail,
       toggleDebug,
       toggleTurnExpand,
+      toggleModelDropdown,
+      selectModel,
       formatMessages,
       formatToolCalls,
     };

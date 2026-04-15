@@ -260,6 +260,24 @@ export function loadConfig(overrides = {}) {
     adapter: null,
   };
 
+  // Aggregate all available models from providers
+  config.availableModels = [];
+  if (providers) {
+    for (const p of providers) {
+      if (!Array.isArray(p.models)) continue;
+      for (const m of p.models) {
+        // Avoid duplicates (first provider wins)
+        if (!config.availableModels.some(am => am.id === m)) {
+          config.availableModels.push({
+            id: m,
+            provider: p.name,
+            label: m,
+          });
+        }
+      }
+    }
+  }
+
   return config;
 }
 

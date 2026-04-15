@@ -620,6 +620,17 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       break;
     }
 
+    case 'unify_model_switch': {
+      const modelAgentId = msg.agentId || client.currentAgent;
+      if (!modelAgentId) return;
+      if (!await checkAgentAccess(modelAgentId)) return;
+      await forwardToAgent(modelAgentId, {
+        type: 'unify_model_switch',
+        model: msg.model,
+      });
+      break;
+    }
+
     case 'unify_reset': {
       const resetAgentId = msg.agentId || client.currentAgent;
       if (!resetAgentId) return;

@@ -167,6 +167,7 @@ export const useChatStore = defineStore('chat', {
     unifyMode: 'chat',            // 'chat' | 'work' — Unify 模式切换
     unifySessionReady: false,     // Session 是否已初始化
     unifyStatus: null,            // { skills, mcpServers, tools } 从 session_ready 获取
+    unifyAvailableModels: [],     // 可用模型列表 [{ id, provider, label }]
     unifyDebugTurns: [],          // Debug panel: per-turn debug info from engine
   }),
 
@@ -395,6 +396,7 @@ export const useChatStore = defineStore('chat', {
           this.unifyConversationId = agentConvId;
           this.unifyModel = event.model;
           this.unifySessionReady = true;
+          this.unifyAvailableModels = event.availableModels || [];
           this.unifyStatus = {
             skills: event.skills,
             mcpServers: event.mcpServers,
@@ -432,6 +434,10 @@ export const useChatStore = defineStore('chat', {
         case 'thinking_delta':
           // Future: display these in UI
           break;
+
+        case 'model_switched':
+          this.unifyModel = event.model;
+          break;
       }
     },
     fetchExpertRoleDefinitions() {
@@ -452,6 +458,14 @@ export const useChatStore = defineStore('chat', {
         agentId: this.unifyAgentId,
       });
     },
+    switchUnifyModel(modelId) {
+      if (!modelId || !this.unifyAgentId) return;
+      this.sendWsMessage({
+        type: 'unify_model_switch',
+        model: modelId,
+        agentId: this.unifyAgentId,
+      });
+    },
     clearUnifyMessages() {
       const oldConvId = this.unifyConversationId;
       if (oldConvId) {
@@ -465,6 +479,7 @@ export const useChatStore = defineStore('chat', {
       this.activeConversations = [this.unifyConversationId];
       this.unifySessionReady = false;
       this.unifyModel = null;
+      this.unifyAvailableModels = [];
       this.unifyStatus = null;
       this.unifyDebugTurns = [];
       this.unifyMode = 'chat';
