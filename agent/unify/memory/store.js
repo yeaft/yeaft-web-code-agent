@@ -25,6 +25,7 @@
 
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, unlinkSync } from 'fs';
 import { join, basename } from 'path';
+import { isPermissionError } from '../init.js';
 
 // ─── Constants ──────────────────────────────────────────────────
 
@@ -36,6 +37,9 @@ export const MAX_ENTRIES = 200;
 
 /** Maximum MEMORY.md line count. */
 export const MAX_MEMORY_LINES = 200;
+
+/** Whether a permission warning has been logged for this store. */
+let _permissionWarned = false;
 
 // ─── Entry Parsing ──────────────────────────────────────────────
 
@@ -157,9 +161,20 @@ export class MemoryStore {
     this.#memoryPath = join(dir, 'memory', 'MEMORY.md');
     this.#scopesPath = join(dir, 'memory', 'scopes.md');
 
-    // Ensure directories exist
+    // Ensure directories exist (graceful on permission errors)
     for (const d of [this.#memoryDir, this.#entriesDir]) {
-      if (!existsSync(d)) mkdirSync(d, { recursive: true });
+      try {
+        if (!existsSync(d)) mkdirSync(d, { recursive: true, mode: 0o755 });
+      } catch (err) {
+        if (isPermissionError(err)) {
+          if (!_permissionWarned) {
+            console.warn(`[Yeaft] Cannot create directory ${d}: ${err.code} — memory persistence disabled`);
+            _permissionWarned = true;
+          }
+        } else {
+          throw err;
+        }
+      }
     }
   }
 
@@ -179,7 +194,18 @@ export class MemoryStore {
    * @param {string} content
    */
   writeProfile(content) {
-    writeFileSync(this.#memoryPath, content, 'utf8');
+    try {
+      writeFileSync(this.#memoryPath, content, { encoding: 'utf8', mode: 0o644 });
+    } catch (err) {
+      if (isPermissionError(err)) {
+        if (!_permissionWarned) {
+          console.warn(`[Yeaft] Cannot write MEMORY.md: ${err.code}`);
+          _permissionWarned = true;
+        }
+      } else {
+        throw err;
+      }
+    }
   }
 
   /**
@@ -286,7 +312,18 @@ export class MemoryStore {
       lines.push(`| ${scope} | ${info.count} | ${info.lastUpdated} |`);
     }
 
-    writeFileSync(this.#scopesPath, lines.join('\n') + '\n', 'utf8');
+    try {
+      writeFileSync(this.#scopesPath, lines.join('\n') + '\n', { encoding: 'utf8', mode: 0o644 });
+    } catch (err) {
+      if (isPermissionError(err)) {
+        if (!_permissionWarned) {
+          console.warn(`[Yeaft] Cannot write scopes.md: ${err.code}`);
+          _permissionWarned = true;
+        }
+      } else {
+        throw err;
+      }
+    }
   }
 
   // ─── Entries CRUD ─────────────────────────────────────
@@ -342,7 +379,18 @@ export class MemoryStore {
     };
 
     const filePath = join(this.#entriesDir, `${slug}.md`);
-    writeFileSync(filePath, serializeEntry(fullEntry), 'utf8');
+    try {
+      writeFileSync(filePath, serializeEntry(fullEntry), { encoding: 'utf8', mode: 0o644 });
+    } catch (err) {
+      if (isPermissionError(err)) {
+        if (!_permissionWarned) {
+          console.warn(`[Yeaft] Cannot write memory entry ${slug}: ${err.code}`);
+          _permissionWarned = true;
+        }
+        return slug; // Return slug but don't persist
+      }
+      throw err;
+    }
 
     return slug;
   }
@@ -378,7 +426,18 @@ export class MemoryStore {
     entry.frequency = (entry.frequency || 1) + 1;
     entry.updated_at = new Date().toISOString();
     const filePath = join(this.#entriesDir, `${name}.md`);
-    writeFileSync(filePath, serializeEntry(entry), 'utf8');
+    try {
+      writeFileSync(filePath, serializeEntry(entry), { encoding: 'utf8', mode: 0o644 });
+    } catch (err) {
+      if (isPermissionError(err)) {
+        if (!_permissionWarned) {
+          console.warn(`[Yeaft] Cannot bump frequency for ${name}: ${err.code}`);
+          _permissionWarned = true;
+        }
+      } else {
+        throw err;
+      }
+    }
   }
 
   // ─── Search / Filter ──────────────────────────────────
@@ -489,19 +548,31 @@ export class MemoryStore {
     if (existsSync(this.#entriesDir)) {
       for (const file of readdirSync(this.#entriesDir)) {
         if (file.endsWith('.md')) {
-          unlinkSync(join(this.#entriesDir, file));
+          try {
+            unlinkSync(join(this.#entriesDir, file));
+          } catch (err) {
+            if (!isPermissionError(err)) throw err;
+          }
         }
       }
     }
 
     // Clear MEMORY.md
     if (existsSync(this.#memoryPath)) {
-      writeFileSync(this.#memoryPath, '', 'utf8');
+      try {
+        writeFileSync(this.#memoryPath, '', { encoding: 'utf8', mode: 0o644 });
+      } catch (err) {
+        if (!isPermissionError(err)) throw err;
+      }
     }
 
     // Clear scopes.md
     if (existsSync(this.#scopesPath)) {
-      unlinkSync(this.#scopesPath);
+      try {
+        unlinkSync(this.#scopesPath);
+      } catch (err) {
+        if (!isPermissionError(err)) throw err;
+      }
     }
   }
 }

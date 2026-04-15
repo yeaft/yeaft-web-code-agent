@@ -32,6 +32,20 @@ let unifyConversationId = null;
 /** Current query mode: 'chat' or 'work' */
 let currentMode = 'chat';
 
+/** Whether we've already sent a permission warning to the UI */
+let _permissionDiagnosticSent = false;
+
+/**
+ * Check if an error message is a permission error.
+ * @param {string} msg
+ * @returns {boolean}
+ */
+function isPermissionErrorMsg(msg) {
+  if (!msg) return false;
+  const lower = msg.toLowerCase();
+  return lower.includes('eacces') || lower.includes('eperm') || lower.includes('permission denied');
+}
+
 /**
  * Send a unify_output message carrying claude_output-format data.
  * The server forwards this as-is to the web client.
@@ -251,17 +265,36 @@ export async function handleUnifyChat(msg) {
           break;
 
         // ── Errors ──
-        case 'error':
-          sendUnifyOutput({
-            type: 'assistant',
-            message: {
-              content: [{
-                type: 'text',
-                text: `⚠️ Error: ${event.error?.message || 'Unknown error'}`,
-              }],
-            },
-          });
+        case 'error': {
+          const errMsg = event.error?.message || 'Unknown error';
+          // Filter permission errors: show friendly one-time diagnostic instead of raw error
+          if (isPermissionErrorMsg(errMsg)) {
+            if (!_permissionDiagnosticSent) {
+              _permissionDiagnosticSent = true;
+              sendUnifyOutput({
+                type: 'assistant',
+                message: {
+                  content: [{
+                    type: 'text',
+                    text: '⚠️ Cannot write to ~/.yeaft/ directory — some features (memory, history) are unavailable. Please check directory permissions: `chmod -R u+rw ~/.yeaft/`',
+                  }],
+                },
+              });
+            }
+            // Don't show subsequent permission errors
+          } else {
+            sendUnifyOutput({
+              type: 'assistant',
+              message: {
+                content: [{
+                  type: 'text',
+                  text: `⚠️ Error: ${errMsg}`,
+                }],
+              },
+            });
+          }
           break;
+        }
 
         default:
           // Silently consume unknown events
@@ -306,15 +339,32 @@ export async function handleUnifyChat(msg) {
     }
 
     console.error('[Unify] query error:', err.message);
-    sendUnifyOutput({
-      type: 'assistant',
-      message: {
-        content: [{
-          type: 'text',
-          text: `⚠️ Session error: ${err.message}`,
-        }],
-      },
-    });
+
+    // Filter permission errors at the session level too
+    if (isPermissionErrorMsg(err.message)) {
+      if (!_permissionDiagnosticSent) {
+        _permissionDiagnosticSent = true;
+        sendUnifyOutput({
+          type: 'assistant',
+          message: {
+            content: [{
+              type: 'text',
+              text: '⚠️ Cannot write to ~/.yeaft/ directory — some features (memory, history) are unavailable. Please check directory permissions: `chmod -R u+rw ~/.yeaft/`',
+            }],
+          },
+        });
+      }
+    } else {
+      sendUnifyOutput({
+        type: 'assistant',
+        message: {
+          content: [{
+            type: 'text',
+            text: `⚠️ Session error: ${err.message}`,
+          }],
+        },
+      });
+    }
     // Still send result to clear processing state
     sendUnifyOutput({
       type: 'result',

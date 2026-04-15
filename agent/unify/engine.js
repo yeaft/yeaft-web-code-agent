@@ -255,6 +255,7 @@ export class Engine {
 
   /**
    * Persist user message and assistant response to conversation store.
+   * Skipped in read-only mode (config._readOnly).
    *
    * @param {string} userContent
    * @param {string} assistantContent
@@ -263,6 +264,7 @@ export class Engine {
    */
   #persistMessages(userContent, assistantContent, mode, toolCalls) {
     if (!this.#conversationStore) return;
+    if (this.#config._readOnly) return;
 
     // Persist user message
     this.#conversationStore.append({
@@ -286,11 +288,13 @@ export class Engine {
 
   /**
    * Check and trigger consolidation if needed.
+   * Skipped in read-only mode.
    *
    * @returns {Promise<{ archivedCount: number, extractedCount: number }|null>}
    */
   async #maybeConsolidate() {
     if (!this.#conversationStore || !this.#memoryStore) return null;
+    if (this.#config._readOnly) return null;
 
     const budget = this.#config.messageTokenBudget || 8192;
     if (!shouldConsolidate(this.#conversationStore, budget)) return null;
@@ -520,7 +524,9 @@ export class Engine {
         yield { type: 'turn_end', turnNumber, stopReason };
 
         // ─── Post-query: StopHooks or Legacy ─────────────
-        if (this.#yeaftDir && this.#conversationStore) {
+        if (this.#config._readOnly) {
+          // Read-only mode: skip all persistence operations
+        } else if (this.#yeaftDir && this.#conversationStore) {
           // Full pipeline: persist + consolidate + dream gate
           // Note: stopHooks uses fastConfig for consolidation/dream (cheaper internal tasks)
           // but receives both configs — messages are persisted with primary model name
