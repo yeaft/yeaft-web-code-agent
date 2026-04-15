@@ -12,6 +12,10 @@
 
 import { shouldConsolidate, consolidate } from './memory/consolidate.js';
 import { checkDreamGate, incrementQueryCount, dream } from './memory/dream.js';
+import { isPermissionError } from './init.js';
+
+/** Track whether we've already warned about permission issues in stop hooks. */
+let _permissionWarned = false;
 
 /**
  * Run all stop hooks after a query completes.
@@ -77,7 +81,14 @@ export async function runStopHooks(context) {
       }
     }
   } catch (err) {
-    result.errors.push(`Persist failed: ${err.message}`);
+    if (isPermissionError(err)) {
+      if (!_permissionWarned) {
+        result.errors.push('Cannot write to ~/.yeaft/ — check directory permissions');
+        _permissionWarned = true;
+      }
+    } else {
+      result.errors.push(`Persist failed: ${err.message}`);
+    }
   }
 
   // 2. Consolidate check (non-blocking, but awaited for correctness)
@@ -102,7 +113,14 @@ export async function runStopHooks(context) {
       }
     }
   } catch (err) {
-    result.errors.push(`Consolidate failed: ${err.message}`);
+    if (isPermissionError(err)) {
+      if (!_permissionWarned) {
+        result.errors.push('Cannot write to ~/.yeaft/ — consolidation skipped');
+        _permissionWarned = true;
+      }
+    } else {
+      result.errors.push(`Consolidate failed: ${err.message}`);
+    }
   }
 
   // 3. Increment dream query counter
@@ -111,7 +129,11 @@ export async function runStopHooks(context) {
       incrementQueryCount(yeaftDir);
     }
   } catch (err) {
-    result.errors.push(`Dream counter failed: ${err.message}`);
+    if (isPermissionError(err)) {
+      // Silent — already warned about permission issues
+    } else {
+      result.errors.push(`Dream counter failed: ${err.message}`);
+    }
   }
 
   // 4. Dream gate check (fire-and-forget, background)
@@ -136,7 +158,9 @@ export async function runStopHooks(context) {
       }
     }
   } catch (err) {
-    result.errors.push(`Dream gate check failed: ${err.message}`);
+    if (!isPermissionError(err)) {
+      result.errors.push(`Dream gate check failed: ${err.message}`);
+    }
   }
 
   return result;

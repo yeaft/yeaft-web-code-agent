@@ -20,8 +20,15 @@
 
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, renameSync, unlinkSync } from 'fs';
 import { join, basename } from 'path';
+import { isPermissionError } from '../init.js';
 
 // ─── Token estimation ────────────────────────────────────────
+
+/**
+ * Whether a permission warning has already been logged for this store instance.
+ * Used to avoid spamming the console with repeated warnings.
+ */
+let _permissionWarned = false;
 
 /** Rough token estimation: ~4 chars per token. */
 export function estimateTokens(text) {
@@ -169,9 +176,20 @@ export class ConversationStore {
     this.#compactPath = join(dir, 'conversation', 'compact.md');
     this.#nextSeq = null;
 
-    // Ensure directories exist
+    // Ensure directories exist (graceful on permission errors)
     for (const d of [this.#convDir, this.#msgDir, this.#coldDir]) {
-      if (!existsSync(d)) mkdirSync(d, { recursive: true });
+      try {
+        if (!existsSync(d)) mkdirSync(d, { recursive: true, mode: 0o755 });
+      } catch (err) {
+        if (isPermissionError(err)) {
+          if (!_permissionWarned) {
+            console.warn(`[Yeaft] Cannot create directory ${d}: ${err.code} — persistence disabled`);
+            _permissionWarned = true;
+          }
+        } else {
+          throw err;
+        }
+      }
     }
   }
 
@@ -194,7 +212,18 @@ export class ConversationStore {
     };
 
     const filePath = join(this.#msgDir, `${id}.md`);
-    writeFileSync(filePath, serializeMessage(fullMsg), 'utf8');
+    try {
+      writeFileSync(filePath, serializeMessage(fullMsg), { encoding: 'utf8', mode: 0o644 });
+    } catch (err) {
+      if (isPermissionError(err)) {
+        if (!_permissionWarned) {
+          console.warn(`[Yeaft] Cannot write message ${id}: ${err.code} — message not persisted`);
+          _permissionWarned = true;
+        }
+        return fullMsg; // Return the message but don't persist
+      }
+      throw err;
+    }
 
     this.#nextSeq = seq + 1;
 
@@ -220,7 +249,18 @@ export class ConversationStore {
     const src = join(this.#msgDir, `${id}.md`);
     const dst = join(this.#coldDir, `${id}.md`);
     if (existsSync(src)) {
-      renameSync(src, dst);
+      try {
+        renameSync(src, dst);
+      } catch (err) {
+        if (isPermissionError(err)) {
+          if (!_permissionWarned) {
+            console.warn(`[Yeaft] Cannot move message ${id} to cold: ${err.code}`);
+            _permissionWarned = true;
+          }
+        } else {
+          throw err;
+        }
+      }
     }
   }
 
@@ -248,7 +288,18 @@ export class ConversationStore {
 
     const date = new Date().toISOString().split('T')[0];
     const entry = `\n## ${date}\n\n${summary}\n`;
-    writeFileSync(this.#compactPath, existing + entry, 'utf8');
+    try {
+      writeFileSync(this.#compactPath, existing + entry, { encoding: 'utf8', mode: 0o644 });
+    } catch (err) {
+      if (isPermissionError(err)) {
+        if (!_permissionWarned) {
+          console.warn(`[Yeaft] Cannot write compact summary: ${err.code}`);
+          _permissionWarned = true;
+        }
+      } else {
+        throw err;
+      }
+    }
   }
 
   /**
@@ -285,7 +336,18 @@ export class ConversationStore {
       'This file tracks the conversation state for the "one eternal conversation" model.',
     ].join('\n');
 
-    writeFileSync(this.#indexPath, content, 'utf8');
+    try {
+      writeFileSync(this.#indexPath, content, { encoding: 'utf8', mode: 0o644 });
+    } catch (err) {
+      if (isPermissionError(err)) {
+        if (!_permissionWarned) {
+          console.warn(`[Yeaft] Cannot write conversation index: ${err.code}`);
+          _permissionWarned = true;
+        }
+      } else {
+        throw err;
+      }
+    }
   }
 
   /**
@@ -296,14 +358,22 @@ export class ConversationStore {
       if (existsSync(dir)) {
         for (const file of readdirSync(dir)) {
           if (file.endsWith('.md')) {
-            unlinkSync(join(dir, file));
+            try {
+              unlinkSync(join(dir, file));
+            } catch (err) {
+              if (!isPermissionError(err)) throw err;
+            }
           }
         }
       }
     }
     // Reset compact
     if (existsSync(this.#compactPath)) {
-      writeFileSync(this.#compactPath, '', 'utf8');
+      try {
+        writeFileSync(this.#compactPath, '', { encoding: 'utf8', mode: 0o644 });
+      } catch (err) {
+        if (!isPermissionError(err)) throw err;
+      }
     }
     this.#nextSeq = 1;
     this.updateIndex({ totalMessages: 0, lastMessageId: null });

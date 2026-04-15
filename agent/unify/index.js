@@ -4,7 +4,7 @@
  * Re-exports all public APIs for external consumption.
  */
 
-export { initYeaftDir, DEFAULT_YEAFT_DIR } from './init.js';
+export { initYeaftDir, DEFAULT_YEAFT_DIR, isWritable, isPermissionError } from './init.js';
 export { loadConfig, parseFrontmatter, loadMCPConfig } from './config.js';
 export { DebugTrace, NullTrace, createTrace } from './debug-trace.js';
 export {

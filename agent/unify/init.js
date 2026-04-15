@@ -5,9 +5,69 @@
  * Creates default config.md, MEMORY.md, and conversation/index.md if missing.
  */
 
-import { existsSync, mkdirSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, accessSync, constants } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+
+/**
+ * Check if an error is a permission error (EACCES or EPERM).
+ * @param {Error} err
+ * @returns {boolean}
+ */
+export function isPermissionError(err) {
+  return err?.code === 'EACCES' || err?.code === 'EPERM';
+}
+
+/**
+ * Try to write a file, catching permission errors gracefully.
+ * @param {string} filePath
+ * @param {string} content
+ * @param {string[]} warnings — array to push warning messages into
+ */
+function safeWriteFile(filePath, content, warnings) {
+  try {
+    writeFileSync(filePath, content, { encoding: 'utf8', mode: 0o644 });
+  } catch (err) {
+    if (isPermissionError(err)) {
+      warnings.push(`Cannot write ${filePath}: ${err.code}`);
+    } else {
+      throw err;
+    }
+  }
+}
+
+/**
+ * Try to create a directory, catching permission errors gracefully.
+ * @param {string} dirPath
+ * @param {string[]} warnings — array to push warning messages into
+ * @returns {boolean} — true if directory exists (created or already existed)
+ */
+function safeMkdir(dirPath, warnings) {
+  try {
+    mkdirSync(dirPath, { recursive: true, mode: 0o755 });
+    return true;
+  } catch (err) {
+    if (isPermissionError(err)) {
+      warnings.push(`Cannot create directory ${dirPath}: ${err.code}`);
+      return existsSync(dirPath);
+    }
+    throw err;
+  }
+}
+
+/**
+ * Check if a directory is writable.
+ * @param {string} dirPath
+ * @returns {boolean}
+ */
+export function isWritable(dirPath) {
+  try {
+    accessSync(dirPath, constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** Default directory for Yeaft data. */
 export const DEFAULT_YEAFT_DIR = join(homedir(), '.yeaft');
@@ -92,24 +152,34 @@ This file tracks the conversation state for the "one eternal conversation" model
  * Initialize the Yeaft data directory structure.
  *
  * @param {string} [dir] — Root directory path. Defaults to ~/.yeaft/
- * @returns {{ dir: string, created: string[] }} — The root dir and list of created paths
+ * @returns {{ dir: string, created: string[], writable: boolean, warnings: string[] }} — The root dir, list of created paths, writability status, and any warnings
  */
 export function initYeaftDir(dir) {
   const root = dir || DEFAULT_YEAFT_DIR;
   const created = [];
+  const warnings = [];
 
   // Ensure root exists
   if (!existsSync(root)) {
-    mkdirSync(root, { recursive: true });
-    created.push(root);
+    if (safeMkdir(root, warnings)) {
+      created.push(root);
+    }
+  }
+
+  // Check if root is writable early — if not, skip file creation
+  const writable = isWritable(root);
+  if (!writable) {
+    warnings.push(`Directory ${root} is not writable — session will run in read-only mode`);
+    return { dir: root, created, writable, warnings };
   }
 
   // Ensure all subdirectories exist
   for (const sub of SUBDIRS) {
     const fullPath = join(root, sub);
     if (!existsSync(fullPath)) {
-      mkdirSync(fullPath, { recursive: true });
-      created.push(fullPath);
+      if (safeMkdir(fullPath, warnings)) {
+        created.push(fullPath);
+      }
     }
   }
 
@@ -117,28 +187,28 @@ export function initYeaftDir(dir) {
   // config.json — default configuration (user edits this directly)
   const configJsonPath = join(root, 'config.json');
   if (!existsSync(configJsonPath)) {
-    writeFileSync(configJsonPath, DEFAULT_CONFIG_JSON, 'utf8');
+    safeWriteFile(configJsonPath, DEFAULT_CONFIG_JSON, warnings);
     created.push(configJsonPath);
   }
 
   const memoryPath = join(root, 'memory', 'MEMORY.md');
   if (!existsSync(memoryPath)) {
-    writeFileSync(memoryPath, DEFAULT_MEMORY, 'utf8');
+    safeWriteFile(memoryPath, DEFAULT_MEMORY, warnings);
     created.push(memoryPath);
   }
 
   const indexPath = join(root, 'conversation', 'index.md');
   if (!existsSync(indexPath)) {
-    writeFileSync(indexPath, DEFAULT_CONVERSATION_INDEX, 'utf8');
+    safeWriteFile(indexPath, DEFAULT_CONVERSATION_INDEX, warnings);
     created.push(indexPath);
   }
 
   // mcp.json.example — reference template for MCP server configuration
   const mcpExamplePath = join(root, 'mcp.json.example');
   if (!existsSync(mcpExamplePath)) {
-    writeFileSync(mcpExamplePath, DEFAULT_MCP_EXAMPLE, 'utf8');
+    safeWriteFile(mcpExamplePath, DEFAULT_MCP_EXAMPLE, warnings);
     created.push(mcpExamplePath);
   }
 
-  return { dir: root, created };
+  return { dir: root, created, writable, warnings };
 }

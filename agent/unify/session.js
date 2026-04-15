@@ -13,7 +13,7 @@
  * a fully wired Session ready for queries.
  */
 
-import { initYeaftDir, DEFAULT_YEAFT_DIR } from './init.js';
+import { initYeaftDir, DEFAULT_YEAFT_DIR, isWritable } from './init.js';
 import { loadConfig, loadMCPConfig } from './config.js';
 import { createTrace } from './debug-trace.js';
 import { createLLMAdapter } from './llm/adapter.js';
@@ -85,11 +85,24 @@ export async function loadSession(options = {}) {
   if (debug !== undefined) overrides.debug = debug;
 
   const yeaftDir = overrides.dir || process.env.YEAFT_DIR || DEFAULT_YEAFT_DIR;
-  initYeaftDir(yeaftDir);
+  const initResult = initYeaftDir(yeaftDir);
   overrides.dir = yeaftDir;
+
+  // Log any warnings from directory initialization
+  for (const w of initResult.warnings) {
+    console.warn(`[Yeaft] ${w}`);
+  }
 
   // ─── 2. Load config ───────────────────────────────────
   const config = loadConfig(overrides);
+
+  // ─── 2a. Permission pre-check ─────────────────────────
+  //         If the data dir is not writable, mark session as read-only.
+  //         Persistence (conversation, memory, dream) is skipped in this mode.
+  if (!initResult.writable) {
+    config._readOnly = true;
+    console.warn(`[Yeaft] ${yeaftDir} is not writable — running in read-only mode`);
+  }
 
   // ─── 3. Create debug trace ─────────────────────────────
   const trace = createTrace({
