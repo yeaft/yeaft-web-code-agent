@@ -423,6 +423,13 @@ export function handleMessage(store, msg) {
       }
       break;
 
+    // Expert roles definition from agent
+    case 'expert_roles_list':
+      if (msg.roles) {
+        store.expertRoleDefinitions = msg.roles;
+      }
+      break;
+
     // LLM configuration from agent
     case 'llm_config':
     case 'llm_config_updated':

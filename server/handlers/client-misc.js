@@ -90,6 +90,15 @@ export async function handleClientMisc(clientId, client, msg, checkAgentAccess) 
       break;
     }
 
+    // Expert roles definition (forward to agent)
+    case 'get_expert_roles': {
+      const expertAgentId = msg.agentId || client.currentAgent;
+      if (!expertAgentId) break;
+      if (!await checkAgentAccess(expertAgentId)) break;
+      await forwardToAgent(expertAgentId, { type: 'get_expert_roles' });
+      break;
+    }
+
     case 'update_mcp_config': {
       const configAgentId = msg.agentId || client.currentAgent;
       if (!configAgentId) break;

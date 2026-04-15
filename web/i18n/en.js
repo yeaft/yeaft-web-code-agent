@@ -711,6 +711,11 @@ export default {
   'expertPanel.search': 'Search roles or actions...',
   'expertPanel.noResults': 'No results',
   'expertPanel.clearAll': 'Clear',
+  'expertPanel.persona': 'Persona Prompt',
+  'expertPanel.template': 'Message Template',
+  'expertPanel.defaultMsg': 'Default Message',
+  'expertPanel.loading': 'Loading role definitions...',
+  'expertPanel.viewPrompt': 'View prompt',
 
   // ============ Sub-Agent Panel ============
   'subAgentPanel.title': 'Sub-Agents',

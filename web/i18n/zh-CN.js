@@ -711,6 +711,11 @@ export default {
   'expertPanel.search': '搜索角色或 Action...',
   'expertPanel.noResults': '没有匹配结果',
   'expertPanel.clearAll': '清空',
+  'expertPanel.persona': '角色人设',
+  'expertPanel.template': '消息模板',
+  'expertPanel.defaultMsg': '默认消息',
+  'expertPanel.loading': '正在加载角色定义...',
+  'expertPanel.viewPrompt': '查看提示词',
 
   // ============ 子代理面板 (Sub-Agent Panel) ============
   'subAgentPanel.title': '子代理',

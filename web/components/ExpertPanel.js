@@ -30,8 +30,36 @@ export default {
         </button>
       </div>
 
-      <!-- Role List -->
-      <div class="expert-role-list" ref="roleListRef">
+      <!-- Role Detail View (shown when viewing a role's prompt) -->
+      <div v-if="viewingRoleId" class="expert-role-detail">
+        <div class="expert-role-detail-header">
+          <button class="expert-role-detail-back" @click="viewingRoleId = null">
+            <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+          </button>
+          <span class="expert-role-detail-name">{{ viewingRoleMeta?.title }}·{{ viewingRoleMeta?.name }}</span>
+        </div>
+        <div class="expert-role-detail-body" v-if="viewingRoleDef">
+          <!-- Role Persona Prompt -->
+          <div class="expert-prompt-section">
+            <div class="expert-prompt-label">{{ $t('expertPanel.persona') }}</div>
+            <pre class="expert-prompt-content">{{ isZh ? viewingRoleDef.messagePrefix : viewingRoleDef.messagePrefixEn }}</pre>
+          </div>
+          <!-- Actions -->
+          <div class="expert-prompt-section" v-for="(actionDef, actionId) in viewingRoleDef.actions" :key="actionId">
+            <div class="expert-prompt-label">{{ isZh ? actionDef.name : actionDef.nameEn }}</div>
+            <div class="expert-prompt-sublabel">{{ $t('expertPanel.template') }}</div>
+            <pre class="expert-prompt-content">{{ isZh ? actionDef.messageTemplate : actionDef.messageTemplateEn }}</pre>
+            <div class="expert-prompt-sublabel">{{ $t('expertPanel.defaultMsg') }}</div>
+            <pre class="expert-prompt-content">{{ isZh ? actionDef.defaultMessage : actionDef.defaultMessageEn }}</pre>
+          </div>
+        </div>
+        <div class="expert-role-detail-body" v-else>
+          <div class="expert-prompt-loading">{{ $t('expertPanel.loading') }}</div>
+        </div>
+      </div>
+
+      <!-- Role List (hidden when viewing detail) -->
+      <div class="expert-role-list" ref="roleListRef" v-show="!viewingRoleId">
           <!-- Team grouped mode -->
           <div v-for="group in filteredGroups" :key="group.teamId" class="expert-team-group">
             <div class="expert-team-header">
@@ -50,6 +78,13 @@ export default {
                   :class="{ selected: isRoleOnlySelected(role.id), disabled: isRoleDisabled(role.id) }"
                   @click="toggleRoleOnly(role)"
                 >{{ role.title }}\u00B7{{ role.name }}</span>
+                <button
+                  class="role-view-btn"
+                  @click="viewRole(role.id)"
+                  :title="$t('expertPanel.viewPrompt')"
+                >
+                  <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
+                </button>
               </div>
               <div class="role-card-actions">
                 <button
@@ -65,7 +100,7 @@ export default {
       </div>
 
       <!-- Selected Summary (bottom) -->
-      <div class="expert-panel-footer" v-if="selections.length > 0">
+      <div class="expert-panel-footer" v-if="selections.length > 0 && !viewingRoleId">
         <div class="expert-selected-chips">
           <span
             v-for="(sel, index) in selections"
@@ -95,6 +130,24 @@ export default {
     // Whether current user is admin
     const isAdmin = Vue.computed(() => authStore.role === 'admin');
 
+    // Language detection
+    const isZh = Vue.computed(() => (store.locale || 'zh-CN') === 'zh-CN');
+
+    // Currently viewing role detail (null = role list view)
+    const viewingRoleId = Vue.ref(null);
+
+    // Metadata for the viewed role (from frontend EXPERT_ROLES)
+    const viewingRoleMeta = Vue.computed(() => {
+      if (!viewingRoleId.value) return null;
+      return EXPERT_ROLES[viewingRoleId.value] || null;
+    });
+
+    // Definition for the viewed role (from agent, with prompt content)
+    const viewingRoleDef = Vue.computed(() => {
+      if (!viewingRoleId.value || !store.expertRoleDefinitions) return null;
+      return store.expertRoleDefinitions[viewingRoleId.value] || null;
+    });
+
     // Teams the user has enabled (loaded)
     const enabledTeams = Vue.ref(new Set([DEFAULT_TEAM]));
 
@@ -117,6 +170,20 @@ export default {
         visibleTeamIds.value.has(g.teamId) && enabledTeams.value.has(g.teamId)
       );
     });
+
+    // Auto-fetch expert role definitions when panel opens
+    Vue.watch(() => props.visible, (val) => {
+      if (val) {
+        store.fetchExpertRoleDefinitions();
+      }
+    });
+
+    // View role detail
+    const viewRole = (roleId) => {
+      viewingRoleId.value = roleId;
+      // Ensure definitions are fetched
+      store.fetchExpertRoleDefinitions();
+    };
 
     // Team management
     const toggleTeam = (teamId) => {
@@ -219,6 +286,11 @@ export default {
       selections,
       availableTeams,
       filteredGroups,
+      isZh,
+      viewingRoleId,
+      viewingRoleMeta,
+      viewingRoleDef,
+      viewRole,
       toggleTeam,
       isSelected,
       isRoleOnlySelected,
