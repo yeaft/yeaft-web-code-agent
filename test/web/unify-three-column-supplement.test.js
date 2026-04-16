@@ -1,19 +1,11 @@
 /**
- * task-257 supplementary tests: Unify UI three-column layout redesign.
+ * Supplementary tests: Unify UI three-column layout.
  *
- * Supplements dev's unify-three-column.test.js with:
- * 1. Message width: 60% max-width default not overridden
- * 2. Sidebar collapse CSS: transition, opacity, pointer-events, width:0
- * 3. Toggle button wiring: toggleSidebar function + :class binding
- * 4. Three-column CSS specifics: flex-shrink, min-width, overflow
- * 5. Dark mode: all CSS uses CSS variables, no hardcoded colors
- * 6. Sidebar content ordering: back → mode → agent
- * 7. Mode toggle structural location: inside sidebar, not topbar
- * 8. Mobile overlay: z-index, box-shadow, fixed positioning
- * 9. Template DOM ordering: sidebar → main → detail
- * 10. Desktop panel dimensions consistency
- * 11. Detail panel collapse + toggle
- * 12. CSS section spacing (no borders, consistent with Chat)
+ * After task-279 sidebar redesign:
+ * - Sidebar is minimal (56px): back button + bottom settings gear
+ * - Mode toggle moved to topbar
+ * - Model selector moved to topbar
+ * - Skills/MCP counts removed
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import { readFileSync } from 'fs';
@@ -57,9 +49,7 @@ describe('Unify conversation area is wider than Chat default', () => {
   });
 
   it('MessageList component is used without wrapper constraints', () => {
-    // MessageList is directly inside unify-main, not wrapped in a constrained div
     expect(unifyPageJs).toContain('<MessageList');
-    // Check it's not wrapped in a max-width div
     const mainSection = unifyPageJs.match(/class="unify-main"[\s\S]*?<MessageList/);
     expect(mainSection).not.toBeNull();
     expect(mainSection[0]).not.toContain('max-width');
@@ -78,20 +68,12 @@ describe('Sidebar collapse CSS mechanism', () => {
     expect(unifyCss).toMatch(/\.unify-sidebar\.collapsed\s*\{[^}]*min-width:\s*0/);
   });
 
-  it('collapsed sidebar has overflow: hidden', () => {
-    expect(unifyCss).toMatch(/\.unify-sidebar\.collapsed\s*\{[^}]*overflow:\s*hidden/);
-  });
-
   it('collapsed sidebar has opacity: 0', () => {
     expect(unifyCss).toMatch(/\.unify-sidebar\.collapsed\s*\{[^}]*opacity:\s*0/);
   });
 
   it('collapsed sidebar has pointer-events: none', () => {
     expect(unifyCss).toMatch(/\.unify-sidebar\.collapsed\s*\{[^}]*pointer-events:\s*none/);
-  });
-
-  it('collapsed sidebar does NOT reference border-right (no borders to remove)', () => {
-    expect(unifyCss).not.toMatch(/\.unify-sidebar\.collapsed\s*\{[^}]*border-right/);
   });
 
   it('sidebar has CSS transition for smooth collapse', () => {
@@ -143,8 +125,8 @@ describe('Three-column CSS layout details', () => {
     expect(unifyCss).toMatch(/\.unify-sidebar\s*\{[^}]*flex-shrink:\s*0/);
   });
 
-  it('sidebar has min-width: 240px', () => {
-    expect(unifyCss).toMatch(/\.unify-sidebar\s*\{[^}]*min-width:\s*240px/);
+  it('sidebar has min-width: 56px', () => {
+    expect(unifyCss).toMatch(/\.unify-sidebar\s*\{[^}]*min-width:\s*56px/);
   });
 
   it('detail panel is flex-shrink: 0 (fixed width)', () => {
@@ -161,10 +143,6 @@ describe('Three-column CSS layout details', () => {
 
   it('main area has overflow: hidden', () => {
     expect(unifyCss).toMatch(/\.unify-main\s*\{[^}]*overflow:\s*hidden/);
-  });
-
-  it('sidebar has overflow-y: auto (scrollable content)', () => {
-    expect(unifyCss).toMatch(/\.unify-sidebar\s*\{[^}]*overflow-y:\s*auto/);
   });
 
   it('sidebar uses bg-sidebar background', () => {
@@ -192,18 +170,6 @@ describe('Dark mode: CSS variables throughout', () => {
     expect(unifyCss).toMatch(/\.unify-page\s*\{[^}]*var\(--text-primary\)/);
   });
 
-  it('no hardcoded hex colors in layout rules', () => {
-    // Check for hex colors in non-shadow/non-rgba contexts
-    const layoutRules = unifyCss.match(/\.unify-(?:page|sidebar|main|detail|topbar)[^{]*\{[^}]*\}/g);
-    expect(layoutRules).not.toBeNull();
-    for (const rule of layoutRules) {
-      // Allow rgba in box-shadow, skip if it's a shadow
-      if (rule.includes('box-shadow')) continue;
-      const hexColors = rule.match(/(?:color|background|border):\s*#[0-9a-fA-F]+/g);
-      expect(hexColors).toBeNull();
-    }
-  });
-
   it('back button uses var(--text-secondary)', () => {
     expect(unifyCss).toMatch(/\.unify-back-btn\s*\{[^}]*var\(--text-secondary\)/);
   });
@@ -212,77 +178,56 @@ describe('Dark mode: CSS variables throughout', () => {
     expect(unifyCss).toMatch(/\.unify-section-label\s*\{[^}]*var\(--text-muted\)/);
   });
 
-  it('agent info text uses var(--text-secondary)', () => {
-    expect(unifyCss).toMatch(/\.unify-agent-row\s*\{[^}]*var\(--text-secondary\)/);
-  });
-
   it('topbar background uses var(--bg-main)', () => {
     expect(unifyCss).toMatch(/\.unify-topbar\s*\{[^}]*var\(--bg-main\)/);
   });
 });
 
 // =============================================================================
-// 6. Sidebar content ordering: back → mode → agent
+// 6. Sidebar content ordering: back at top, settings at bottom
 // =============================================================================
 describe('Sidebar content ordering', () => {
-  it('sidebar-header (back) comes first, then mode, then agent', () => {
+  it('sidebar-header (back) comes before sidebar-footer (settings)', () => {
     const sidebarStart = unifyPageJs.indexOf('class="unify-sidebar"');
     const headerIdx = unifyPageJs.indexOf('unify-sidebar-header', sidebarStart);
-    const modeIdx = unifyPageJs.indexOf('unify-mode-toggle', sidebarStart);
-    const agentIdx = unifyPageJs.indexOf('unify-agent-info', sidebarStart);
+    const spacerIdx = unifyPageJs.indexOf('unify-sidebar-spacer', sidebarStart);
+    const footerIdx = unifyPageJs.indexOf('unify-sidebar-footer', sidebarStart);
 
     expect(headerIdx).toBeGreaterThan(-1);
-    expect(modeIdx).toBeGreaterThan(-1);
-    expect(agentIdx).toBeGreaterThan(-1);
+    expect(spacerIdx).toBeGreaterThan(-1);
+    expect(footerIdx).toBeGreaterThan(-1);
 
-    expect(headerIdx).toBeLessThan(modeIdx);
-    expect(modeIdx).toBeLessThan(agentIdx);
+    expect(headerIdx).toBeLessThan(spacerIdx);
+    expect(spacerIdx).toBeLessThan(footerIdx);
   });
 
   it('session status is removed from sidebar', () => {
     expect(unifyPageJs).not.toContain('unify-session-status');
     expect(unifyPageJs).not.toContain('unify-status-dot');
   });
-
-  it('each section is wrapped in unify-sidebar-section', () => {
-    const sectionMatches = unifyPageJs.match(/class="unify-sidebar-section"/g);
-    expect(sectionMatches).not.toBeNull();
-    // 2 sections: mode, agent
-    expect(sectionMatches.length).toBeGreaterThanOrEqual(2);
-  });
-
-  it('section labels use unify-section-label class', () => {
-    expect(unifyPageJs).toContain('unify-section-label');
-    // Should have Mode and Agent labels
-    const labels = unifyPageJs.match(/class="unify-section-label"[^>]*>([^<]*)</g);
-    expect(labels).not.toBeNull();
-    expect(labels.length).toBeGreaterThanOrEqual(2);
-  });
 });
 
 // =============================================================================
-// 7. Mode toggle is in sidebar, not topbar
+// 7. Mode toggle is in topbar (not sidebar)
 // =============================================================================
-describe('Mode toggle in sidebar (not topbar)', () => {
-  it('mode toggle is inside sidebar section', () => {
+describe('Mode toggle in topbar', () => {
+  it('mode toggle is inside topbar', () => {
+    const topbarStart = unifyPageJs.indexOf('class="unify-topbar"');
+    const topbarSection = unifyPageJs.slice(topbarStart, topbarStart + 1500);
+    expect(topbarSection).toContain('unify-topbar-mode');
+  });
+
+  it('mode toggle is NOT in sidebar', () => {
     const sidebarStart = unifyPageJs.indexOf('class="unify-sidebar"');
     const sidebarEnd = unifyPageJs.indexOf('</aside>', sidebarStart);
-    const modeToggleIdx = unifyPageJs.indexOf('unify-mode-toggle', sidebarStart);
-
-    expect(modeToggleIdx).toBeGreaterThan(sidebarStart);
-    expect(modeToggleIdx).toBeLessThan(sidebarEnd);
+    const sidebarContent = unifyPageJs.slice(sidebarStart, sidebarEnd);
+    expect(sidebarContent).not.toContain('unify-topbar-mode');
+    expect(sidebarContent).not.toContain('unify-mode-toggle');
   });
 
-  it('topbar does NOT contain mode toggle', () => {
-    const topbarStart = unifyPageJs.indexOf('class="unify-topbar"');
-    const topbarEnd = unifyPageJs.indexOf('</div>', topbarStart + 50);
-    // Find the closest </div> that closes the topbar
-    const topbarSection = unifyPageJs.slice(topbarStart, topbarStart + 500);
-    expect(topbarSection).not.toContain('unify-mode-toggle');
-  });
-
-  it('mode toggle CSS has flex: 1 on buttons (fill width)', () => {
-    expect(unifyCss).toMatch(/\.unify-mode-btn\s*\{[^}]*flex:\s*1/);
+  it('topbar mode toggle CSS has compact styling', () => {
+    expect(unifyCss).toContain('.unify-topbar-mode');
+    expect(unifyCss).toContain('.unify-topbar-mode-btn');
   });
 });
 
@@ -364,37 +309,33 @@ describe('Template DOM ordering', () => {
 });
 
 // =============================================================================
-// 10. Agent info display
+// 10. Model selector in topbar
 // =============================================================================
-describe('Agent info in sidebar', () => {
+describe('Model selector in topbar', () => {
   it('shows model name from store.unifyModel', () => {
     expect(unifyPageJs).toContain('store.unifyModel');
   });
 
-  it('shows tools count from store.unifyStatus.tools', () => {
-    expect(unifyPageJs).toContain('store.unifyStatus.tools');
+  it('model selector is in topbar (not sidebar)', () => {
+    const topbarStart = unifyPageJs.indexOf('class="unify-topbar"');
+    const topbarSection = unifyPageJs.slice(topbarStart, topbarStart + 1500);
+    expect(topbarSection).toContain('unify-topbar-model');
   });
 
-  it('shows skills count from store.unifyStatus.skills', () => {
-    expect(unifyPageJs).toContain('store.unifyStatus.skills');
+  it('model dropdown opens on click', () => {
+    expect(unifyPageJs).toContain('toggleModelDropdown');
+    expect(unifyPageJs).toContain('modelDropdownOpen');
   });
 
-  it('shows MCP servers count from store.unifyStatus.mcpServers', () => {
-    expect(unifyPageJs).toContain('store.unifyStatus.mcpServers');
+  it('model dropdown shows available models', () => {
+    expect(unifyPageJs).toContain('store.unifyAvailableModels');
+    expect(unifyPageJs).toContain('selectModel');
   });
 
-  it('agent info conditionally renders when model or tools exist', () => {
-    expect(unifyPageJs).toMatch(
-      /v-if="store\.unifyModel\s*\|\|\s*\(store\.unifyStatus\s*&&\s*store\.unifyStatus\.tools\s*>\s*0\)"/
-    );
-  });
-
-  it('each agent row has an SVG icon', () => {
-    const agentSection = unifyPageJs.match(/unify-agent-info[\s\S]*?<\/div>\s*<\/aside>/);
-    expect(agentSection).not.toBeNull();
-    const svgCount = (agentSection[0].match(/<svg/g) || []).length;
-    // At least 3 SVGs for model, tools, skills (model row may include chevron SVG)
-    expect(svgCount).toBeGreaterThanOrEqual(3);
+  it('has CSS for topbar model selector', () => {
+    expect(unifyCss).toContain('.unify-topbar-model');
+    expect(unifyCss).toContain('.unify-topbar-model-name');
+    expect(unifyCss).toContain('.unify-topbar-model-dropdown');
   });
 });
 

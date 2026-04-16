@@ -854,7 +854,8 @@ describe('tools/skill.js', () => {
 
   it('should list skills from manager', async () => {
     const mockManager = {
-      list: () => [{ name: 'sk1', description: 'Skill 1', trigger: 'trigger', mode: 'both' }],
+      list: () => [{ name: 'sk1', description: 'Skill 1', trigger: 'trigger', mode: 'both', source: 'file', hasReferences: false, hasTemplates: false }],
+      listCategories: () => [],
     };
 
     const result = await skillTool.execute({ action: 'list' }, { skillManager: mockManager });
@@ -865,16 +866,19 @@ describe('tools/skill.js', () => {
 
   it('should load a specific skill', async () => {
     const mockManager = {
-      getPromptContent: (name) => name === 'test' ? '## Skill: test\nContent' : '',
+      view: (name) => name === 'test' ? { skill: { name: 'test', description: '', mode: 'both', _source: 'file', content: 'Content' }, references: [], templates: [] } : null,
+      list: () => [],
     };
 
     const result = await skillTool.execute({ action: 'load', name: 'test' }, { skillManager: mockManager });
-    expect(result).toContain('## Skill: test');
+    const parsed = JSON.parse(result);
+    expect(parsed.name).toBe('test');
+    expect(parsed.content).toBe('Content');
   });
 
   it('should search skills', async () => {
     const mockManager = {
-      findRelevant: () => [{ name: 'found', description: 'Found skill', trigger: 'testing' }],
+      findRelevant: () => [{ name: 'found', description: 'Found skill', trigger: 'testing', _source: 'file' }],
     };
 
     const result = await skillTool.execute({ action: 'search', query: 'testing' }, { skillManager: mockManager });
