@@ -58,9 +58,9 @@ describe('Unify History Loading — Agent (web-bridge.js)', () => {
     expect(webBridge).toContain("m.role === 'user' || m.role === 'assistant'");
   });
 
-  it('sends user messages with type user and content', () => {
+  it('sends user messages with message wrapper for handleClaudeOutput compatibility', () => {
     const fnBody = webBridge.slice(webBridge.indexOf('async function handleUnifyLoadHistory'));
-    expect(fnBody).toContain("sendUnifyOutput({ type: 'user', content: m.content })");
+    expect(fnBody).toContain("sendUnifyOutput({ type: 'user', message: { content: m.content } })");
   });
 
   it('sends assistant messages with text block format', () => {
@@ -125,12 +125,11 @@ describe('Unify History Loading — Frontend (chat.js)', () => {
     expect(block).toContain("type: 'unify_load_history'");
   });
 
-  it('sends agentId and limit in history request', () => {
+  it('only sends history request when messagesMap is empty (prevents duplicates)', () => {
     const idx = chatStore.indexOf('enterUnify(');
     const endIdx = chatStore.indexOf('leaveUnify()', idx);
     const block = chatStore.slice(idx, endIdx);
-    expect(block).toContain('agentId: this.unifyAgentId');
-    expect(block).toContain('limit: 50');
+    expect(block).toContain('existing.length === 0');
   });
 
   it('handles history_loaded event in handleUnifyOutput', () => {

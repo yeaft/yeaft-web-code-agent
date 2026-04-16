@@ -482,7 +482,7 @@ export async function handleUnifyLoadHistory(msg) {
   // Send each message through standard claude_output rendering pipeline
   for (const m of messages) {
     if (m.role === 'user') {
-      sendUnifyOutput({ type: 'user', content: m.content });
+      sendUnifyOutput({ type: 'user', message: { content: m.content } });
     } else if (m.role === 'assistant') {
       sendUnifyOutput({
         type: 'assistant',

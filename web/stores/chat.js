@@ -311,8 +311,9 @@ export const useChatStore = defineStore('chat', {
       // Set the virtual conversationId as the active one so MessageList reads from it
       this.activeConversations = [this.unifyConversationId];
 
-      // Request history from agent
-      if (this.unifyAgentId) {
+      // Request history from agent (only if messagesMap is empty to avoid duplicates on re-entry)
+      const existing = this.messagesMap[this.unifyConversationId];
+      if (this.unifyAgentId && (!existing || existing.length === 0)) {
         this.sendWsMessage({
           type: 'unify_load_history',
           agentId: this.unifyAgentId,
