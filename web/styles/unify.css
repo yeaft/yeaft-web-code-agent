@@ -16,8 +16,8 @@
 /* ── Left Sidebar (minimal: back + settings) ── */
 
 .unify-sidebar {
-  width: 56px;
-  min-width: 56px;
+  width: 260px;
+  min-width: 260px;
   display: flex;
   flex-direction: column;
   background: var(--bg-sidebar);

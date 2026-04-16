@@ -2,7 +2,7 @@
  * Supplementary tests: Unify UI three-column layout.
  *
  * After task-279 sidebar redesign:
- * - Sidebar is minimal (56px): back button + bottom settings gear
+ * - Sidebar is 260px wide: back button + bottom settings gear
  * - Mode toggle moved to topbar
  * - Model selector moved to topbar
  * - Skills/MCP counts removed
@@ -125,8 +125,8 @@ describe('Three-column CSS layout details', () => {
     expect(unifyCss).toMatch(/\.unify-sidebar\s*\{[^}]*flex-shrink:\s*0/);
   });
 
-  it('sidebar has min-width: 56px', () => {
-    expect(unifyCss).toMatch(/\.unify-sidebar\s*\{[^}]*min-width:\s*56px/);
+  it('sidebar has min-width: 260px', () => {
+    expect(unifyCss).toMatch(/\.unify-sidebar\s*\{[^}]*min-width:\s*260px/);
   });
 
   it('detail panel is flex-shrink: 0 (fixed width)', () => {
