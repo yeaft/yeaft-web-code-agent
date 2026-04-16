@@ -127,6 +127,7 @@ export default {
   'unify.showDebug': '显示调试面板',
   'unify.hideDebug': '隐藏调试面板',
   'unify.switchModel': '切换模型',
+  'unify.settings.title': '设置',
 
   // Chat - Session lifecycle
   'chat.session.creating': '正在创建会话...',

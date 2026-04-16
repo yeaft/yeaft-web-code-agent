@@ -517,6 +517,293 @@
   color: var(--text-muted);
 }
 
+/* ── Settings Button (sidebar) ── */
+
+.unify-settings-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  width: 100%;
+  transition: background 0.15s, color 0.15s;
+}
+
+.unify-settings-btn:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.unify-settings-btn.active {
+  color: var(--accent);
+  background: var(--bg-input-wrapper);
+}
+
+.unify-settings-btn svg {
+  flex-shrink: 0;
+}
+
+/* ── UnifySettings Panel ── */
+
+.unify-settings {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.unify-settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  flex-shrink: 0;
+}
+
+.unify-settings-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.unify-settings-close-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 6px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.unify-settings-close-btn:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.unify-settings-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 20px 20px;
+}
+
+.unify-settings-status {
+  padding: 20px 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.unify-settings-error {
+  color: var(--error);
+}
+
+.unify-settings-success {
+  color: var(--accent);
+}
+
+.unify-settings-banner {
+  display: flex;
+  gap: 10px;
+  padding: 12px;
+  background: var(--bg-input-wrapper);
+  border-radius: 8px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.unify-settings-banner svg {
+  flex-shrink: 0;
+  color: var(--accent);
+  margin-top: 2px;
+}
+
+.unify-settings-banner p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.unify-settings-group {
+  margin-bottom: 20px;
+}
+
+.unify-settings-group-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.unify-settings-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0 0 10px;
+}
+
+.unify-settings-provider {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 8px;
+}
+
+.unify-settings-provider-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.unify-settings-provider-idx {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.unify-settings-icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.unify-settings-icon-btn:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.unify-settings-row {
+  display: flex;
+  gap: 10px;
+}
+
+.unify-settings-field {
+  margin-bottom: 8px;
+}
+
+.unify-settings-field label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.unify-settings-field input,
+.unify-settings-field select,
+.unify-settings-field textarea {
+  width: 100%;
+  padding: 6px 10px;
+  background: var(--bg-input-wrapper);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s;
+  box-sizing: border-box;
+}
+
+.unify-settings-field input:focus,
+.unify-settings-field select:focus,
+.unify-settings-field textarea:focus {
+  border-color: var(--accent);
+}
+
+.unify-settings-field textarea {
+  resize: vertical;
+  min-height: 60px;
+}
+
+.unify-settings-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 0 0 4px;
+}
+
+.unify-settings-secret {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.unify-settings-secret input {
+  flex: 1;
+}
+
+.unify-settings-add-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: 1px dashed var(--border-color);
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  width: 100%;
+  justify-content: center;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.unify-settings-add-btn:hover {
+  background: var(--bg-input-wrapper);
+  border-color: var(--text-muted);
+}
+
+.unify-settings-save-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding-top: 8px;
+}
+
+.unify-settings-dirty {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.unify-settings-save-btn {
+  padding: 6px 18px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-input-wrapper);
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.unify-settings-save-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.unify-settings-save-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* ── Mobile Sidebar Overlay ── */
 
 .unify-sidebar-overlay {

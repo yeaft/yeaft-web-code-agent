@@ -1,9 +1,10 @@
 import ChatInput from './ChatInput.js';
 import MessageList from './MessageList.js';
+import UnifySettings from './UnifySettings.js';
 
 export default {
   name: 'UnifyPage',
-  components: { ChatInput, MessageList },
+  components: { ChatInput, MessageList, UnifySettings },
   template: `
     <div class="unify-page">
       <!-- Mobile sidebar overlay -->
@@ -73,6 +74,14 @@ export default {
             </div>
           </div>
         </div>
+
+        <!-- Settings button -->
+        <div class="unify-sidebar-section">
+          <button class="unify-settings-btn" :class="{ active: showSettings }" @click="toggleSettings">
+            <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.488.488 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+            <span>{{ $t('unify.settings.title') }}</span>
+          </button>
+        </div>
       </aside>
 
       <!-- Center Conversation -->
@@ -111,10 +120,14 @@ export default {
         </div>
 
         <!-- Messages Area — reuse standard MessageList for identical rendering -->
-        <MessageList />
+        <MessageList v-if="!showSettings" />
+
+        <!-- Settings Panel -->
+        <UnifySettings v-if="showSettings" @close="showSettings = false" @saved="onSettingsSaved" />
 
         <!-- Input Area -->
         <ChatInput
+          v-if="!showSettings"
           :send-fn="sendMessage"
           :show-stop="isProcessing"
           placeholder-key="unify.placeholder"
@@ -195,6 +208,7 @@ export default {
     const debugMode = Vue.ref(false);
     const expandedTurns = Vue.reactive({});
     const modelDropdownOpen = Vue.ref(false);
+    const showSettings = Vue.ref(false);
 
     // Detect mobile for overlay behavior
     const isMobile = Vue.ref(window.innerWidth <= 768);
@@ -305,6 +319,16 @@ export default {
       if (!row) modelDropdownOpen.value = false;
     };
 
+    const toggleSettings = () => {
+      showSettings.value = !showSettings.value;
+    };
+
+    const onSettingsSaved = () => {
+      // After saving LLM config, reset Unify session so Engine picks up new config
+      // The UnifySettings component already sends unify_reset
+      showSettings.value = false;
+    };
+
     return {
       store,
       sidebarCollapsed,
@@ -312,6 +336,7 @@ export default {
       debugMode,
       expandedTurns,
       modelDropdownOpen,
+      showSettings,
       isMobile,
       hasMessages,
       isProcessing,
@@ -325,6 +350,8 @@ export default {
       toggleTurnExpand,
       toggleModelDropdown,
       selectModel,
+      toggleSettings,
+      onSettingsSaved,
       formatMessages,
       formatToolCalls,
     };
