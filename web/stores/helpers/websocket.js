@@ -17,10 +17,35 @@ function _settleConnectResolvers(success) {
   }
 }
 
+// Message types that operate on server-backed conversations (sessionDb).
+// Unify uses a purely client-side virtual conversationId ('unify-<ts>') that has
+// no server-side state, so sending these in Unify view triggers
+// verifyConversationOwnership → 'Permission denied' replies.
+// Guard: silently skip these when currentView === 'unify'.
+const UNIFY_INCOMPATIBLE_TYPES = new Set([
+  'sync_messages',
+  'refresh_conversation',
+  'select_conversation',
+  'cancel_execution',
+  'update_conversation_settings',
+  'ask_user_answer',
+  'resume_crew_session',
+]);
+
 export function sendWsMessage(store, msg) {
   if (!store.ws || store.ws.readyState !== WebSocket.OPEN) {
     console.warn('[WS] Cannot send, connection not open:', msg.type);
     return false;
+  }
+
+  // A: Short-circuit server-sync messages while in Unify view. These
+  // operate on server-registered conversations; Unify's virtual id has
+  // no DB row and would produce 'Permission denied' noise.
+  if (store.currentView === 'unify' && UNIFY_INCOMPATIBLE_TYPES.has(msg.type)) {
+    const convId = msg.conversationId;
+    if (!convId || (typeof convId === 'string' && convId.startsWith('unify-')) || convId === store.unifyConversationId) {
+      return false;
+    }
   }
 
   try {

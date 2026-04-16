@@ -160,17 +160,61 @@ export function handleMessage(store, msg) {
       if (msg.message?.includes('Agent is still syncing') || msg.message?.includes('Agent not found')) {
         clearSessionLoading(store);
       }
+
+      // B: Dedup — collapse identical system error bubbles arriving within 3s.
+      // Keep the first, drop repeats, append " (×N)" counter to the kept bubble.
+      if (isSystemError && errorConvId) {
+        const msgs = store.messagesMap[errorConvId];
+        if (msgs && msgs.length > 0) {
+          // Find the most recent error bubble (scan from tail, short walk)
+          for (let i = msgs.length - 1; i >= 0 && i >= msgs.length - 5; i--) {
+            const last = msgs[i];
+            if (last && last.type === 'error' && last._sysErrBaseContent !== undefined) {
+              if (last._sysErrBaseContent === msg.message && (Date.now() - (last._sysErrFirstAt || 0)) <= 3000) {
+                last._sysErrCount = (last._sysErrCount || 1) + 1;
+                last.content = `${last._sysErrBaseContent} (×${last._sysErrCount})`;
+                // Extend auto-remove window so the counted bubble stays visible
+                if (last._sysErrRemoveTimer) {
+                  clearTimeout(last._sysErrRemoveTimer);
+                  last._sysErrRemoveTimer = setTimeout(() => {
+                    const cur = store.messagesMap[errorConvId];
+                    if (cur) {
+                      const idx = cur.findIndex(m => m.id === last.id);
+                      if (idx >= 0) cur.splice(idx, 1);
+                    }
+                  }, 5000);
+                }
+                return;
+              }
+              break;
+            }
+          }
+        }
+      }
+
       const errorId = Date.now().toString() + Math.random().toString(36).substr(2, 9);
-      store.addMessageToConversation(errorConvId, {
+      const newMsg = {
         type: 'error',
         content: msg.message,
         transient: isSystemError,
         dbMessageId: isSystemError ? ('err_' + errorId) : undefined
-      });
+      };
+      if (isSystemError) {
+        newMsg._sysErrBaseContent = msg.message;
+        newMsg._sysErrCount = 1;
+        newMsg._sysErrFirstAt = Date.now();
+      }
+      store.addMessageToConversation(errorConvId, newMsg);
+      // Resolve the actual pushed object (addMessageToConversation spreads into a new object)
+      let pushedMsg = null;
       if (isSystemError && errorConvId) {
+        const arr = store.messagesMap[errorConvId];
+        if (arr && arr.length > 0) pushedMsg = arr[arr.length - 1];
+      }
+      if (isSystemError && errorConvId && pushedMsg) {
         const convId = errorConvId;
         const errMsgId = 'err_' + errorId;
-        setTimeout(() => {
+        pushedMsg._sysErrRemoveTimer = setTimeout(() => {
           const msgs = store.messagesMap[convId];
           if (msgs) {
             const idx = msgs.findIndex(m => m.id === errMsgId);
