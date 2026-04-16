@@ -39,6 +39,10 @@ function _appendTextToContent(content, text) {
 export function parseRoutes(text) {
   const routes = [];
 
+  // ─── Pre-pass: Strip fenced code blocks to avoid parsing quoted ROUTE examples ──
+  // Replaces ```...``` content with whitespace of same length to preserve positions
+  text = text.replace(/```[\s\S]*?```/g, m => ' '.repeat(m.length));
+
   // ─── Phase 1: Standard ROUTE blocks (with END_ROUTE) ──────────
   // ★ Tolerate both underscore and space variants: ---END_ROUTE--- or ---END ROUTE---
   // ★ Use negative lookahead to not cross another ---ROUTE--- boundary

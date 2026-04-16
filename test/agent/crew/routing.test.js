@@ -174,4 +174,63 @@ ROUTE → pm: FYI this is done`;
   it('should return empty for empty string', () => {
     expect(parseRoutes('')).toHaveLength(0);
   });
+
+  // ─── Code block immunity ──────────────────────────────────────
+
+  it('should ignore ROUTE blocks inside fenced code blocks', () => {
+    const text = `Here is an example of ROUTE format:
+\`\`\`
+---ROUTE---
+to: dev-1
+summary: This is just an example
+---END_ROUTE---
+\`\`\`
+
+The real route is below:
+---ROUTE---
+to: rev-1
+summary: Please review PR #499
+---END_ROUTE---`;
+    const routes = parseRoutes(text);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].to).toBe('rev-1');
+    expect(routes[0].summary).toBe('Please review PR #499');
+  });
+
+  it('should ignore all ROUTE content inside code blocks', () => {
+    const text = `PM explaining ROUTE format to human:
+\`\`\`
+---ROUTE---
+to: rev-1
+summary: example
+---END_ROUTE---
+
+ROUTE → dev-1: another example
+\`\`\`
+
+No actual routes here.`;
+    const routes = parseRoutes(text);
+    expect(routes).toHaveLength(0);
+  });
+
+  it('should handle mixed: real route outside + example inside code block', () => {
+    const text = `I showed the format:
+\`\`\`
+---ROUTE---
+to: dev-1
+summary: fake
+---END_ROUTE---
+\`\`\`
+
+Now sending for real:
+---ROUTE---
+to: pm
+task: task-275
+summary: Work done, please check
+---END_ROUTE---`;
+    const routes = parseRoutes(text);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].to).toBe('pm');
+    expect(routes[0].taskId).toBe('task-275');
+  });
 });
