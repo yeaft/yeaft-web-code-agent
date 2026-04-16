@@ -127,6 +127,7 @@ export default {
   'unify.showDebug': 'Show debug panel',
   'unify.hideDebug': 'Hide debug panel',
   'unify.switchModel': 'Switch model',
+  'unify.settings.title': 'Settings',
 
   // Chat - Session lifecycle
   'chat.session.creating': 'Creating conversation...',
