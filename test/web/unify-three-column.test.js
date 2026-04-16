@@ -95,10 +95,9 @@ describe('Center conversation area', () => {
     expect(unifyCss).toMatch(/\.unify-main\s*\{[^}]*flex-direction:\s*column/);
   });
 
-  it('does NOT override input-area max-width (uses default 60%)', () => {
-    // The old .unify-page .input-area { max-width: 800px } should be removed
-    expect(unifyCss).not.toContain('.unify-page .input-area');
-    expect(unifyCss).not.toMatch(/\.input-area[^{]*\{[^}]*max-width:\s*800px/);
+  it('overrides messages and input max-width to 90% for wider content', () => {
+    expect(unifyCss).toMatch(/\.unify-page\s+\.messages[^{]*\{[^}]*max-width:\s*90%/);
+    expect(unifyCss).toMatch(/\.unify-page\s+\.input-wrapper[^{]*\{[^}]*max-width:\s*90%/);
   });
 
   it('topbar is simplified (model badge + clear + detail toggle)', () => {
@@ -209,8 +208,8 @@ describe('CSS cleanup', () => {
     expect(unifyCss).not.toContain('.unify-status-badge');
   });
 
-  it('does not have old .unify-page .input-area override', () => {
-    expect(unifyCss).not.toContain('.unify-page .input-area');
+  it('has .unify-page .input-area override for tighter padding', () => {
+    expect(unifyCss).toContain('.unify-page .input-area');
   });
 
   it('sidebar sections do NOT have border-bottom (consistent with Chat)', () => {
