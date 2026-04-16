@@ -135,7 +135,8 @@ export default {
       </div>
 
       <!-- Right Detail Panel -->
-      <aside class="unify-detail" :class="{ collapsed: detailCollapsed }">
+      <aside class="unify-detail" :class="{ collapsed: detailCollapsed, resizing: isResizingDetail }" :style="detailWidthStyle" ref="detailPanel">
+        <div class="unify-detail-drag-handle" :class="{ active: isResizingDetail }" @mousedown.prevent="startDetailResize"></div>
         <!-- Debug Mode: show per-turn debug info -->
         <div v-if="debugMode" class="unify-debug-panel">
           <div class="unify-debug-header">
@@ -211,6 +212,42 @@ export default {
     const expandedTurns = Vue.reactive({});
     const modelDropdownOpen = Vue.ref(false);
     const showSettings = Vue.ref(false);
+
+    // Detail panel resizable width
+    const detailPanel = Vue.ref(null);
+    const isResizingDetail = Vue.ref(false);
+    const DETAIL_MIN_WIDTH = 300;
+    const DETAIL_DEFAULT_WIDTH = Math.max(500, window.innerWidth * 0.35);
+    const savedDetailWidth = localStorage.getItem('unify-debug-width');
+    const detailWidth = Vue.ref(savedDetailWidth ? parseInt(savedDetailWidth, 10) : DETAIL_DEFAULT_WIDTH);
+
+    const detailWidthStyle = Vue.computed(() => {
+      return { '--unify-detail-width': detailWidth.value + 'px' };
+    });
+
+    const startDetailResize = (e) => {
+      isResizingDetail.value = true;
+      const startX = e.clientX;
+      const startWidth = detailWidth.value;
+      const maxWidth = window.innerWidth * 0.6;
+
+      const onMouseMove = (ev) => {
+        // Panel is on the right, so dragging left = wider
+        const delta = startX - ev.clientX;
+        const newWidth = Math.min(maxWidth, Math.max(DETAIL_MIN_WIDTH, startWidth + delta));
+        detailWidth.value = newWidth;
+      };
+
+      const onMouseUp = () => {
+        isResizingDetail.value = false;
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+        localStorage.setItem('unify-debug-width', String(detailWidth.value));
+      };
+
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+    };
 
     // Detect mobile for overlay behavior
     const isMobile = Vue.ref(window.innerWidth <= 768);
@@ -340,6 +377,10 @@ export default {
       modelDropdownOpen,
       showSettings,
       isMobile,
+      detailPanel,
+      isResizingDetail,
+      detailWidthStyle,
+      startDetailResize,
       hasMessages,
       isProcessing,
       goBack,

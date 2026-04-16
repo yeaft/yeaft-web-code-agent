@@ -125,8 +125,8 @@ describe('Center conversation area', () => {
 // 4. Right detail panel
 // =====================================================================
 describe('Right detail panel', () => {
-  it('is 280px wide', () => {
-    expect(unifyCss).toMatch(/\.unify-detail\s*\{[^}]*width:\s*280px/);
+  it('uses CSS variable for width (default 500px)', () => {
+    expect(unifyCss).toMatch(/\.unify-detail\s*\{[^}]*width:\s*var\(--unify-detail-width/);
   });
 
   it('has placeholder content', () => {

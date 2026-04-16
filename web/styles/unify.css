@@ -316,13 +316,38 @@
 /* ── Right Detail Panel ── */
 
 .unify-detail {
-  width: 280px;
-  min-width: 280px;
+  width: var(--unify-detail-width, 500px);
+  min-width: var(--unify-detail-width, 500px);
   display: flex;
   flex-direction: column;
   background: var(--bg-sidebar);
   flex-shrink: 0;
   transition: width 0.2s ease, min-width 0.2s ease, opacity 0.2s ease;
+  position: relative;
+}
+
+.unify-detail.resizing {
+  transition: none;
+  user-select: none;
+}
+
+/* Drag handle on left edge */
+.unify-detail-drag-handle {
+  position: absolute;
+  left: -3px;
+  top: 0;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 10;
+  background: transparent;
+  transition: background 0.15s;
+}
+
+.unify-detail-drag-handle:hover,
+.unify-detail-drag-handle.active {
+  background: var(--accent);
+  opacity: 0.5;
 }
 
 .unify-detail.collapsed {

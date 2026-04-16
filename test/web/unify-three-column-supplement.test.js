@@ -151,8 +151,8 @@ describe('Three-column CSS layout details', () => {
     expect(unifyCss).toMatch(/\.unify-detail\s*\{[^}]*flex-shrink:\s*0/);
   });
 
-  it('detail panel has min-width: 280px', () => {
-    expect(unifyCss).toMatch(/\.unify-detail\s*\{[^}]*min-width:\s*280px/);
+  it('detail panel has min-width using CSS variable', () => {
+    expect(unifyCss).toMatch(/\.unify-detail\s*\{[^}]*min-width:\s*var\(--unify-detail-width/);
   });
 
   it('main area has min-width: 0 (prevents overflow)', () => {
@@ -403,7 +403,7 @@ describe('Agent info in sidebar', () => {
 // =============================================================================
 describe('Detail panel collapse + toggle', () => {
   it('detail panel has :class binding for collapsed', () => {
-    expect(unifyPageJs).toContain(':class="{ collapsed: detailCollapsed }"');
+    expect(unifyPageJs).toContain('collapsed: detailCollapsed');
   });
 
   it('topbar has detail toggle button', () => {
