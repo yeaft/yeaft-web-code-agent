@@ -503,7 +503,9 @@ export async function handleUnifyLoadHistory(msg) {
 }
 
 /**
- * Reset Unify session (for clear messages).
+ * Reset Unify session (for clear messages or config change).
+ * After shutdown, immediately re-initializes the session and sends
+ * session_ready so the frontend picks up updated models/config.
  */
 export async function resetUnifySession() {
   if (currentAbort) {
@@ -517,4 +519,34 @@ export async function resetUnifySession() {
   unifyConversationId = null;
   currentMode = 'chat';
   conversationMessages = [];
+
+  // Re-initialize session immediately so frontend gets updated config
+  try {
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    session = await loadSession({
+      ...(yeaftDir && { dir: yeaftDir }),
+      skipMCP: false,
+      skipSkills: false,
+    });
+
+    unifyConversationId = `unify-${Date.now()}`;
+
+    // Restore conversation history for LLM context
+    const recent = session.conversationStore.loadRecent(50);
+    conversationMessages = recent
+      .filter(m => m.role === 'user' || m.role === 'assistant')
+      .map(m => ({ role: m.role, content: m.content }));
+
+    sendUnifyEvent({
+      type: 'session_ready',
+      conversationId: unifyConversationId,
+      model: session.config.model,
+      availableModels: session.config.availableModels || [],
+      skills: session.status.skills,
+      mcpServers: session.status.mcpServers,
+      tools: session.status.tools,
+    });
+  } catch (err) {
+    console.error('[Unify] Failed to re-initialize session after reset:', err.message);
+  }
 }
