@@ -103,6 +103,12 @@ export async function handleUnifyChat(msg) {
       // Create a stable conversationId for the Unify session
       unifyConversationId = `unify-${Date.now()}`;
 
+      // Restore conversationMessages from persisted history for LLM context
+      const recent = session.conversationStore.loadRecent(50);
+      conversationMessages = recent
+        .filter(m => m.role === 'user' || m.role === 'assistant')
+        .map(m => ({ role: m.role, content: m.content }));
+
       // Notify UI: session is ready with model info + conversationId
       sendUnifyEvent({
         type: 'session_ready',
@@ -430,6 +436,69 @@ export function handleUnifyModelSwitch(msg) {
   sendUnifyEvent({
     type: 'model_switched',
     model: msg.model,
+  });
+}
+
+/**
+ * Handle history load request from the web UI.
+ * Loads recent messages from ConversationStore and sends them through
+ * the standard claude_output rendering pipeline (sendUnifyOutput).
+ *
+ * @param {{ limit?: number }} msg
+ */
+export async function handleUnifyLoadHistory(msg) {
+  // Lazy-init session if needed (same logic as handleUnifyChat)
+  if (!session) {
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    session = await loadSession({
+      ...(yeaftDir && { dir: yeaftDir }),
+      skipMCP: false,
+      skipSkills: false,
+    });
+
+    unifyConversationId = `unify-${Date.now()}`;
+
+    // Restore conversationMessages from persisted history for LLM context
+    const recent = session.conversationStore.loadRecent(50);
+    conversationMessages = recent
+      .filter(m => m.role === 'user' || m.role === 'assistant')
+      .map(m => ({ role: m.role, content: m.content }));
+
+    sendUnifyEvent({
+      type: 'session_ready',
+      conversationId: unifyConversationId,
+      model: session.config.model,
+      availableModels: session.config.availableModels || [],
+      skills: session.status.skills,
+      mcpServers: session.status.mcpServers,
+      tools: session.status.tools,
+    });
+  }
+
+  const limit = msg.limit || 50;
+  const messages = session.conversationStore.loadRecent(limit);
+  const compactSummary = session.conversationStore.readCompactSummary();
+
+  // Send each message through standard claude_output rendering pipeline
+  for (const m of messages) {
+    if (m.role === 'user') {
+      sendUnifyOutput({ type: 'user', content: m.content });
+    } else if (m.role === 'assistant') {
+      sendUnifyOutput({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: m.content }] },
+      });
+      sendUnifyOutput({ type: 'result', result_text: '' });
+    }
+  }
+
+  // Signal history loading complete
+  sendUnifyEvent({
+    type: 'history_loaded',
+    count: messages.length,
+    hasCompactSummary: !!compactSummary,
+    totalHot: session.conversationStore.countHot(),
+    totalCold: session.conversationStore.countCold(),
   });
 }
 
