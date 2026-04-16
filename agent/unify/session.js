@@ -22,6 +22,7 @@ import { MemoryStore } from './memory/store.js';
 import { SkillManager, createSkillManager } from './skills.js';
 import { MCPManager } from './mcp.js';
 import { createFullRegistry } from './tools/index.js';
+import { initTaskStore } from './tools/task-tools.js';
 import { Engine } from './engine.js';
 import { join } from 'path';
 
@@ -116,6 +117,9 @@ export async function loadSession(options = {}) {
   // ─── 5. Create stores ──────────────────────────────────
   const conversationStore = new ConversationStore(yeaftDir);
   const memoryStore = new MemoryStore(yeaftDir);
+
+  // ─── 5a. Initialize task store ─────────────────────────
+  initTaskStore(yeaftDir, { readOnly: config._readOnly || false });
 
   // ─── 6. Load skills ────────────────────────────────────
   let skillManager;
