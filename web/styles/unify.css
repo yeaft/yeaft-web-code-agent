@@ -13,15 +13,15 @@
   color: var(--text-primary);
 }
 
-/* ── Left Sidebar ── */
+/* ── Left Sidebar (minimal: back + settings) ── */
 
 .unify-sidebar {
-  width: 240px;
-  min-width: 240px;
+  width: 56px;
+  min-width: 56px;
   display: flex;
   flex-direction: column;
   background: var(--bg-sidebar);
-  overflow-y: auto;
+  overflow: hidden;
   flex-shrink: 0;
   transition: width 0.2s ease, min-width 0.2s ease, opacity 0.2s ease;
 }
@@ -29,24 +29,24 @@
 .unify-sidebar.collapsed {
   width: 0;
   min-width: 0;
-  overflow: hidden;
   opacity: 0;
   pointer-events: none;
 }
 
 .unify-sidebar-header {
-  padding: 10px 12px;
+  padding: 10px 8px;
 }
 
 .unify-back-btn {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   background: none;
   border: none;
   color: var(--text-secondary);
   cursor: pointer;
-  padding: 6px 10px;
+  padding: 8px;
   border-radius: 8px;
   font-size: 13px;
   width: 100%;
@@ -62,7 +62,19 @@
   flex-shrink: 0;
 }
 
-/* Sidebar sections */
+.unify-back-text {
+  display: none;
+}
+
+.unify-sidebar-spacer {
+  flex: 1;
+}
+
+.unify-sidebar-footer {
+  padding: 8px;
+}
+
+/* Sidebar sections (kept for backward compat but simplified) */
 
 .unify-sidebar-section {
   padding: 8px 12px;
@@ -77,79 +89,104 @@
   margin-bottom: 8px;
 }
 
-/* Mode toggle */
+/* ── Settings Button (sidebar bottom — icon only) ── */
 
-.unify-mode-toggle {
+.unify-settings-btn {
   display: flex;
-  background: var(--bg-input-wrapper);
-  border-radius: 8px;
-  padding: 2px;
-  gap: 2px;
-}
-
-.unify-mode-btn {
-  flex: 1;
-  padding: 5px 12px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: none;
   border: none;
-  border-radius: 6px;
-  font-size: 13px;
-  font-weight: 500;
+  color: var(--text-secondary);
   cursor: pointer;
-  background: transparent;
-  color: var(--text-muted);
-  transition: all 0.15s;
+  padding: 8px;
+  border-radius: 8px;
+  font-size: 13px;
+  width: 100%;
+  transition: background 0.15s, color 0.15s;
 }
 
-.unify-mode-btn.active {
-  background: var(--bg-main);
+.unify-settings-btn span {
+  display: none;
+}
+
+.unify-settings-btn:hover {
+  background: var(--sidebar-hover);
   color: var(--text-primary);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
-.unify-mode-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
+.unify-settings-btn.active {
+  color: var(--accent);
+  background: var(--bg-input-wrapper);
 }
 
-/* Agent info */
+.unify-settings-btn svg {
+  flex-shrink: 0;
+}
 
-.unify-agent-info {
+/* ── Center Conversation ── */
+
+.unify-main {
+  flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
 }
 
-.unify-agent-row {
+/* Topbar — model selector + mode toggle + actions */
+
+.unify-topbar {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.unify-agent-row svg {
+  padding: 8px 16px;
+  background: var(--bg-main);
+  min-height: 48px;
   flex-shrink: 0;
-  color: var(--text-muted);
 }
 
-/* Model selector row — clickable when multiple models */
-
-.unify-model-row {
+.unify-sidebar-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
   cursor: pointer;
-  padding: 4px 6px;
+  padding: 6px;
   border-radius: 6px;
-  margin: -4px -6px;
-  transition: background 0.15s;
-  position: relative;
+  transition: background 0.15s, color 0.15s;
 }
 
-.unify-model-row:hover {
+.unify-sidebar-toggle:hover {
   background: var(--sidebar-hover);
+  color: var(--text-primary);
 }
 
-.unify-model-name {
-  flex: 1;
-  min-width: 0;
+/* ── Model Selector (topbar compact dropdown) ── */
+
+.unify-topbar-model {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  padding: 4px 10px;
+  border-radius: 8px;
+  position: relative;
+  transition: background 0.15s;
+}
+
+.unify-topbar-model:hover {
+  background: var(--bg-input-wrapper);
+}
+
+.unify-topbar-model-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -165,14 +202,22 @@
   transform: rotate(180deg);
 }
 
-/* Model dropdown */
+.unify-topbar-model-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  z-index: 50;
+  min-width: 220px;
+}
+
+/* Model dropdown (shared) */
 
 .unify-model-dropdown {
   background: var(--bg-main);
   border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 4px;
-  margin-top: 4px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
   max-height: 240px;
   overflow-y: auto;
@@ -221,45 +266,35 @@
   flex-shrink: 0;
 }
 
-/* ── Center Conversation ── */
+/* ── Mode Toggle (in topbar) ── */
 
-.unify-main {
-  flex: 1;
+.unify-topbar-mode {
   display: flex;
-  flex-direction: column;
-  min-width: 0;
-  overflow: hidden;
-}
-
-/* Simplified topbar — just model badge + clear */
-
-.unify-topbar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 16px;
-  background: var(--bg-main);
-  min-height: 48px;
-  flex-shrink: 0;
-}
-
-.unify-sidebar-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: none;
-  border: none;
-  color: var(--text-secondary);
-  cursor: pointer;
-  padding: 6px;
+  background: var(--bg-input-wrapper);
   border-radius: 6px;
-  transition: background 0.15s, color 0.15s;
+  padding: 2px;
+  gap: 1px;
 }
 
-.unify-sidebar-toggle:hover {
-  background: var(--sidebar-hover);
-  color: var(--text-primary);
+.unify-topbar-mode-btn {
+  padding: 3px 10px;
+  border: none;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  background: transparent;
+  color: var(--text-muted);
+  transition: all 0.15s;
 }
+
+.unify-topbar-mode-btn.active {
+  background: var(--bg-main);
+  color: var(--text-primary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+/* Legacy model badge (no longer used, kept for compat) */
 
 .unify-model-badge {
   font-size: 12px;
@@ -515,37 +550,6 @@
 
 .unify-debug-token-label {
   color: var(--text-muted);
-}
-
-/* ── Settings Button (sidebar) ── */
-
-.unify-settings-btn {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: none;
-  border: none;
-  color: var(--text-secondary);
-  cursor: pointer;
-  padding: 6px 10px;
-  border-radius: 8px;
-  font-size: 13px;
-  width: 100%;
-  transition: background 0.15s, color 0.15s;
-}
-
-.unify-settings-btn:hover {
-  background: var(--sidebar-hover);
-  color: var(--text-primary);
-}
-
-.unify-settings-btn.active {
-  color: var(--accent);
-  background: var(--bg-input-wrapper);
-}
-
-.unify-settings-btn svg {
-  flex-shrink: 0;
 }
 
 /* ── UnifySettings Panel ── */
@@ -894,12 +898,13 @@
     box-shadow: none;
   }
 
-  .unify-back-text {
-    display: none;
+  .unify-topbar-mode-btn {
+    padding: 3px 8px;
+    font-size: 11px;
   }
 
-  .unify-mode-btn {
-    padding: 5px 10px;
+  .unify-topbar-model-name {
+    max-width: 120px;
     font-size: 12px;
   }
 
