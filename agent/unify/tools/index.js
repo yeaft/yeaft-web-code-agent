@@ -48,6 +48,8 @@ import {
   taskUpdate,
   taskList,
   taskGet,
+  taskProgress,
+  taskMemory,
   followupTask,
   updatePlan,
 } from './task-tools.js';
@@ -104,6 +106,8 @@ export const allTools = [
   taskUpdate,
   taskList,
   taskGet,
+  taskProgress,
+  taskMemory,
   followupTask,
   updatePlan,
 

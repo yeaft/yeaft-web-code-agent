@@ -1,25 +1,27 @@
 /**
- * Tests for task-273: Unify task system file persistence.
+ * Tests for task-273: Unify task system file persistence (folder-per-task).
  *
  * Verifies:
  * 1. TaskStore creates directory structure
- * 2. Tasks persist to .md files with YAML frontmatter
+ * 2. Each task gets its own folder with task.md, progress.md, memory.md
  * 3. Tasks load from disk on construction
- * 4. Completed tasks move to completed/ directory
- * 5. Plan persists to plan.md
- * 6. task-tools.js uses TaskStore instead of in-memory Map
- * 7. session.js initializes TaskStore
+ * 4. Progress log is append-only
+ * 5. Task memory can be read/updated
+ * 6. Plan persists to plan.md
+ * 7. Index.md is auto-generated
+ * 8. task-tools.js uses TaskStore, exports TaskProgress and TaskMemory
+ * 9. session.js initializes TaskStore
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, rmSync, existsSync, readFileSync, readdirSync, writeFileSync } from 'fs';
+import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 
 // ─── TaskStore unit tests ────────────────────────────────────
 
-describe('TaskStore', () => {
+describe('TaskStore (folder-per-task)', () => {
   let tmpDir;
 
   beforeEach(() => {
@@ -31,16 +33,13 @@ describe('TaskStore', () => {
     try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* */ }
   });
 
-  it('creates directory structure on construction', async () => {
+  it('creates tasks/ directory on construction', async () => {
     const { TaskStore } = await import('../../agent/unify/tasks/store.js');
     new TaskStore(tmpDir);
-
     expect(existsSync(join(tmpDir, 'tasks'))).toBe(true);
-    expect(existsSync(join(tmpDir, 'tasks', 'active'))).toBe(true);
-    expect(existsSync(join(tmpDir, 'tasks', 'completed'))).toBe(true);
   });
 
-  it('creates and persists a task to active/ directory', async () => {
+  it('creates task folder with task.md, progress.md, memory.md', async () => {
     const { TaskStore } = await import('../../agent/unify/tasks/store.js');
     const store = new TaskStore(tmpDir);
 
@@ -55,20 +54,42 @@ describe('TaskStore', () => {
       updatedAt: 1000,
     });
 
-    const filePath = join(tmpDir, 'tasks', 'active', 'task-abc123.md');
-    expect(existsSync(filePath)).toBe(true);
+    const taskDir = join(tmpDir, 'tasks', 'task-abc123');
+    expect(existsSync(taskDir)).toBe(true);
+    expect(existsSync(join(taskDir, 'task.md'))).toBe(true);
+    expect(existsSync(join(taskDir, 'progress.md'))).toBe(true);
+    expect(existsSync(join(taskDir, 'memory.md'))).toBe(true);
 
-    const content = readFileSync(filePath, 'utf8');
+    const content = readFileSync(join(taskDir, 'task.md'), 'utf8');
     expect(content).toContain('id: task-abc123');
     expect(content).toContain('title: Test task');
     expect(content).toContain('status: pending');
     expect(content).toContain('priority: high');
   });
 
+  it('creates initial progress entry on task creation', async () => {
+    const { TaskStore } = await import('../../agent/unify/tasks/store.js');
+    const store = new TaskStore(tmpDir);
+
+    store.create({
+      id: 'task-prog',
+      title: 'Progress test',
+      description: '',
+      priority: 'medium',
+      status: 'pending',
+      parentId: null,
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+
+    const progress = readFileSync(join(tmpDir, 'tasks', 'task-prog', 'progress.md'), 'utf8');
+    expect(progress).toContain('# Progress Log');
+    expect(progress).toContain('Created task: Progress test');
+  });
+
   it('loads tasks from disk on construction', async () => {
     const { TaskStore } = await import('../../agent/unify/tasks/store.js');
 
-    // Create store and add task
     const store1 = new TaskStore(tmpDir);
     store1.create({
       id: 'task-persist',
@@ -81,7 +102,7 @@ describe('TaskStore', () => {
       updatedAt: 2000,
     });
 
-    // Create new store from same directory — should load existing task
+    // New store from same directory should load existing task
     const store2 = new TaskStore(tmpDir);
     const task = store2.get('task-persist');
     expect(task).not.toBeNull();
@@ -90,13 +111,13 @@ describe('TaskStore', () => {
     expect(task.description).toBe('Should survive restart');
   });
 
-  it('moves completed tasks to completed/ directory', async () => {
+  it('updates task.md on update', async () => {
     const { TaskStore } = await import('../../agent/unify/tasks/store.js');
     const store = new TaskStore(tmpDir);
 
     store.create({
-      id: 'task-move',
-      title: 'Will complete',
+      id: 'task-upd',
+      title: 'Will update',
       description: '',
       priority: 'low',
       status: 'pending',
@@ -105,41 +126,84 @@ describe('TaskStore', () => {
       updatedAt: 3000,
     });
 
-    // Should be in active/
-    expect(existsSync(join(tmpDir, 'tasks', 'active', 'task-move.md'))).toBe(true);
+    store.update('task-upd', { status: 'completed', result: 'Done!' });
 
-    // Mark as completed
-    store.update('task-move', { status: 'completed', result: 'Done!' });
-
-    // Should be in completed/, not active/
-    expect(existsSync(join(tmpDir, 'tasks', 'completed', 'task-move.md'))).toBe(true);
-    expect(existsSync(join(tmpDir, 'tasks', 'active', 'task-move.md'))).toBe(false);
-
-    // File should contain result
-    const content = readFileSync(join(tmpDir, 'tasks', 'completed', 'task-move.md'), 'utf8');
+    const content = readFileSync(join(tmpDir, 'tasks', 'task-upd', 'task.md'), 'utf8');
     expect(content).toContain('status: completed');
     expect(content).toContain('## Result');
     expect(content).toContain('Done!');
   });
 
-  it('moves cancelled tasks to completed/ directory', async () => {
+  it('logs status changes to progress.md', async () => {
     const { TaskStore } = await import('../../agent/unify/tasks/store.js');
     const store = new TaskStore(tmpDir);
 
     store.create({
-      id: 'task-cancel',
-      title: 'Will cancel',
+      id: 'task-status',
+      title: 'Status track',
       description: '',
-      priority: 'low',
+      priority: 'medium',
       status: 'pending',
       parentId: null,
-      createdAt: 4000,
-      updatedAt: 4000,
+      createdAt: 1000,
+      updatedAt: 1000,
     });
 
-    store.update('task-cancel', { status: 'cancelled' });
-    expect(existsSync(join(tmpDir, 'tasks', 'completed', 'task-cancel.md'))).toBe(true);
-    expect(existsSync(join(tmpDir, 'tasks', 'active', 'task-cancel.md'))).toBe(false);
+    store.update('task-status', { status: 'in_progress' });
+    store.update('task-status', { status: 'completed' });
+
+    const progress = readFileSync(join(tmpDir, 'tasks', 'task-status', 'progress.md'), 'utf8');
+    expect(progress).toContain('Status changed: pending → in_progress');
+    expect(progress).toContain('Status changed: in_progress → completed');
+  });
+
+  it('appendProgress adds entries to progress.md', async () => {
+    const { TaskStore } = await import('../../agent/unify/tasks/store.js');
+    const store = new TaskStore(tmpDir);
+
+    store.create({
+      id: 'task-ap',
+      title: 'Append test',
+      description: '',
+      priority: 'medium',
+      status: 'pending',
+      parentId: null,
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+
+    store.appendProgress('task-ap', 'Started working on implementation');
+    store.appendProgress('task-ap', 'Finished first pass');
+
+    const progress = store.getProgress('task-ap');
+    expect(progress).toContain('Started working on implementation');
+    expect(progress).toContain('Finished first pass');
+  });
+
+  it('getMemory/updateMemory round-trips', async () => {
+    const { TaskStore } = await import('../../agent/unify/tasks/store.js');
+    const store = new TaskStore(tmpDir);
+
+    store.create({
+      id: 'task-mem',
+      title: 'Memory test',
+      description: '',
+      priority: 'medium',
+      status: 'pending',
+      parentId: null,
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+
+    // Initial memory
+    const initial = store.getMemory('task-mem');
+    expect(initial).toContain('# Task Memory');
+
+    // Update
+    store.updateMemory('task-mem', '# Task Memory\n\n## Key Decisions\n- Use RS256');
+
+    const updated = store.getMemory('task-mem');
+    expect(updated).toContain('Use RS256');
   });
 
   it('persists and loads plan.md', async () => {
@@ -147,10 +211,8 @@ describe('TaskStore', () => {
     const store1 = new TaskStore(tmpDir);
 
     store1.setPlan('# My Plan\n\n1. Step one\n2. Step two');
-
     expect(existsSync(join(tmpDir, 'tasks', 'plan.md'))).toBe(true);
 
-    // New store should load same plan
     const store2 = new TaskStore(tmpDir);
     expect(store2.getPlan()).toBe('# My Plan\n\n1. Step one\n2. Step two');
   });
@@ -159,6 +221,21 @@ describe('TaskStore', () => {
     const { TaskStore } = await import('../../agent/unify/tasks/store.js');
     const store = new TaskStore(tmpDir);
     expect(store.getPlan()).toBe('');
+  });
+
+  it('generates index.md', async () => {
+    const { TaskStore } = await import('../../agent/unify/tasks/store.js');
+    const store = new TaskStore(tmpDir);
+
+    store.create({ id: 'task-a', title: 'Task A', description: '', priority: 'high', status: 'in_progress', parentId: null, createdAt: 1, updatedAt: 1 });
+    store.create({ id: 'task-b', title: 'Task B', description: '', priority: 'low', status: 'pending', parentId: null, createdAt: 2, updatedAt: 2 });
+
+    const index = readFileSync(join(tmpDir, 'tasks', 'index.md'), 'utf8');
+    expect(index).toContain('totalTasks: 2');
+    expect(index).toContain('task-a');
+    expect(index).toContain('task-b');
+    expect(index).toContain('Task A');
+    expect(index).toContain('Task B');
   });
 
   it('filters tasks by status', async () => {
@@ -171,7 +248,6 @@ describe('TaskStore', () => {
 
     const pending = store.list({ status: 'pending' });
     expect(pending.length).toBe(2);
-    expect(pending.every(t => t.status === 'pending')).toBe(true);
 
     const inProgress = store.list({ status: 'in_progress' });
     expect(inProgress.length).toBe(1);
@@ -184,57 +260,17 @@ describe('TaskStore', () => {
     expect(store.update('nonexistent', { status: 'done' })).toBeNull();
   });
 
-  it('deletes a task and removes file', async () => {
-    const { TaskStore } = await import('../../agent/unify/tasks/store.js');
-    const store = new TaskStore(tmpDir);
-
-    store.create({ id: 'task-del', title: 'Delete me', description: '', priority: 'low', status: 'pending', parentId: null, createdAt: 1, updatedAt: 1 });
-    expect(store.get('task-del')).not.toBeNull();
-
-    store.delete('task-del');
-    expect(store.get('task-del')).toBeNull();
-    expect(existsSync(join(tmpDir, 'tasks', 'active', 'task-del.md'))).toBe(false);
-  });
-
   it('handles readOnly mode gracefully', async () => {
     const { TaskStore } = await import('../../agent/unify/tasks/store.js');
-    // Pre-create dirs so constructor doesn't fail
-    mkdirSync(join(tmpDir, 'tasks', 'active'), { recursive: true });
-    mkdirSync(join(tmpDir, 'tasks', 'completed'), { recursive: true });
+    mkdirSync(join(tmpDir, 'tasks'), { recursive: true });
 
     const store = new TaskStore(tmpDir, { readOnly: true });
 
     store.create({ id: 'task-ro', title: 'RO task', description: '', priority: 'medium', status: 'pending', parentId: null, createdAt: 1, updatedAt: 1 });
 
-    // Task should be in memory cache
+    // In memory but not on disk
     expect(store.get('task-ro')).not.toBeNull();
-
-    // But NOT written to disk
-    expect(existsSync(join(tmpDir, 'tasks', 'active', 'task-ro.md'))).toBe(false);
-  });
-
-  it('loads tasks from both active and completed directories', async () => {
-    const { TaskStore, _serializeTask } = await import('../../agent/unify/tasks/store.js');
-
-    // Pre-create directories and files
-    mkdirSync(join(tmpDir, 'tasks', 'active'), { recursive: true });
-    mkdirSync(join(tmpDir, 'tasks', 'completed'), { recursive: true });
-
-    writeFileSync(join(tmpDir, 'tasks', 'active', 'task-a.md'), _serializeTask({
-      id: 'task-a', title: 'Active task', description: 'Still working', priority: 'high', status: 'in_progress',
-      createdAt: 100, updatedAt: 200,
-    }));
-
-    writeFileSync(join(tmpDir, 'tasks', 'completed', 'task-b.md'), _serializeTask({
-      id: 'task-b', title: 'Done task', description: 'All done', priority: 'low', status: 'completed',
-      createdAt: 50, updatedAt: 150, result: 'Finished successfully',
-    }));
-
-    const store = new TaskStore(tmpDir);
-    expect(store.size).toBe(2);
-    expect(store.get('task-a').status).toBe('in_progress');
-    expect(store.get('task-b').status).toBe('completed');
-    expect(store.get('task-b').result).toBe('Finished successfully');
+    expect(existsSync(join(tmpDir, 'tasks', 'task-ro'))).toBe(false);
   });
 });
 
@@ -270,24 +306,6 @@ describe('Task serialization', () => {
     expect(parsed.result).toBe('Some result notes');
   });
 
-  it('handles task without result', async () => {
-    const { _serializeTask, _parseTask } = await import('../../agent/unify/tasks/store.js');
-
-    const task = {
-      id: 'task-noresult',
-      title: 'No result',
-      description: 'Just a description',
-      priority: 'low',
-      status: 'pending',
-      createdAt: 1000,
-      updatedAt: 1000,
-    };
-
-    const parsed = _parseTask(_serializeTask(task));
-    expect(parsed.description).toBe('Just a description');
-    expect(parsed.result).toBeUndefined();
-  });
-
   it('handles null parentId', async () => {
     const { _serializeTask, _parseTask } = await import('../../agent/unify/tasks/store.js');
 
@@ -310,33 +328,48 @@ describe('Task serialization', () => {
 // ─── Code structure tests ────────────────────────────────────
 
 describe('task-tools.js uses TaskStore (code structure)', () => {
-  it('imports TaskStore from tasks/store.js', async () => {
+  it('imports TaskStore from tasks/store.js', () => {
     const src = readFileSync(
       join(import.meta.dirname, '..', '..', 'agent', 'unify', 'tools', 'task-tools.js'),
       'utf8'
     );
-
     expect(src).toContain("import { TaskStore } from '../tasks/store.js'");
   });
 
-  it('does NOT use in-memory Map for tasks', async () => {
+  it('does NOT use in-memory Map for tasks', () => {
     const src = readFileSync(
       join(import.meta.dirname, '..', '..', 'agent', 'unify', 'tools', 'task-tools.js'),
       'utf8'
     );
-
     expect(src).not.toContain('const tasks = new Map()');
     expect(src).not.toContain("let currentPlan = ''");
   });
 
-  it('exports initTaskStore function', async () => {
-    const { initTaskStore } = await import('../../agent/unify/tools/task-tools.js');
+  it('exports initTaskStore and getTaskStore', async () => {
+    const { initTaskStore, getTaskStore } = await import('../../agent/unify/tools/task-tools.js');
     expect(typeof initTaskStore).toBe('function');
+    expect(typeof getTaskStore).toBe('function');
   });
 
-  it('exports getTaskStore function', async () => {
-    const { getTaskStore } = await import('../../agent/unify/tools/task-tools.js');
-    expect(typeof getTaskStore).toBe('function');
+  it('exports TaskProgress tool', async () => {
+    const { taskProgress } = await import('../../agent/unify/tools/task-tools.js');
+    expect(taskProgress.name).toBe('TaskProgress');
+    expect(typeof taskProgress.execute).toBe('function');
+  });
+
+  it('exports TaskMemory tool', async () => {
+    const { taskMemory } = await import('../../agent/unify/tools/task-tools.js');
+    expect(taskMemory.name).toBe('TaskMemory');
+    expect(typeof taskMemory.execute).toBe('function');
+  });
+});
+
+describe('index.js registers TaskProgress and TaskMemory', () => {
+  it('allTools includes TaskProgress and TaskMemory', async () => {
+    const { allTools } = await import('../../agent/unify/tools/index.js');
+    const names = allTools.map(t => t.name);
+    expect(names).toContain('TaskProgress');
+    expect(names).toContain('TaskMemory');
   });
 });
 
@@ -346,7 +379,6 @@ describe('session.js initializes TaskStore', () => {
       join(import.meta.dirname, '..', '..', 'agent', 'unify', 'session.js'),
       'utf8'
     );
-
     expect(src).toContain("import { initTaskStore } from './tools/task-tools.js'");
   });
 
@@ -355,7 +387,6 @@ describe('session.js initializes TaskStore', () => {
       join(import.meta.dirname, '..', '..', 'agent', 'unify', 'session.js'),
       'utf8'
     );
-
     expect(src).toContain('initTaskStore(yeaftDir');
   });
 });

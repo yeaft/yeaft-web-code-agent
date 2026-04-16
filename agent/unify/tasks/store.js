@@ -1,26 +1,24 @@
 /**
  * store.js — File-system backed TaskStore for Yeaft Unify.
  *
- * Persists tasks to ~/.yeaft/tasks/ as .md files with YAML frontmatter.
+ * Persists tasks to ~/.yeaft/tasks/ with one folder per task.
  * Layout:
  *   ~/.yeaft/tasks/
- *     plan.md            — Current plan text
- *     active/            — Pending / in_progress / blocked tasks
- *       task-abc12345.md
- *     completed/         — Completed / cancelled tasks
- *       task-xyz99999.md
- *
- * On construction, loads all existing tasks into an in-memory Map cache.
- * All mutations write-through to disk immediately.
+ *     index.md              — Task index (auto-generated overview)
+ *     plan.md               — Global plan text
+ *     task-abc12345/         — One folder per task
+ *       task.md             — Task metadata (YAML frontmatter + description)
+ *       progress.md         — Progress log (append-only)
+ *       memory.md           — Task-specific context/notes
  */
 
-import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, renameSync, unlinkSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 
 // ─── YAML Frontmatter helpers ────────────────────────────────
 
 /**
- * Serialize a task object to YAML frontmatter + body.
+ * Serialize a task object to YAML frontmatter + body for task.md.
  * @param {object} task
  * @returns {string}
  */
@@ -54,7 +52,7 @@ function serializeTask(task) {
 }
 
 /**
- * Parse a task .md file (YAML frontmatter + body) into a task object.
+ * Parse a task.md file (YAML frontmatter + body) into a task object.
  * @param {string} raw — File contents
  * @returns {object|null}
  */
@@ -69,7 +67,6 @@ function parseTask(raw) {
 
   const task = {};
 
-  // Parse YAML-like key: value lines
   for (const line of frontmatter.split('\n')) {
     const colonIdx = line.indexOf(':');
     if (colonIdx === -1) continue;
@@ -103,17 +100,66 @@ function parseTask(raw) {
   return task;
 }
 
-// ─── TaskStore ───────────────────────────────────────────────
+// ─── Index generation ────────────────────────────────────────
 
-const DONE_STATUSES = new Set(['completed', 'cancelled']);
+/**
+ * Generate index.md content from all tasks.
+ * @param {Map<string, object>} tasks
+ * @returns {string}
+ */
+function generateIndex(tasks) {
+  const now = new Date().toISOString();
+  const lines = [
+    '---',
+    `totalTasks: ${tasks.size}`,
+    `lastUpdated: ${now}`,
+    '---',
+    '# Task Index',
+    '',
+    '| ID | Title | Status | Priority | Updated |',
+    '|----|-------|--------|----------|---------|',
+  ];
+
+  // Sort: in_progress first, then pending, then others
+  const ORDER = { in_progress: 0, pending: 1, blocked: 2, completed: 3, cancelled: 4 };
+  const sorted = [...tasks.values()].sort(
+    (a, b) => (ORDER[a.status] ?? 5) - (ORDER[b.status] ?? 5)
+  );
+
+  for (const t of sorted) {
+    const date = t.updatedAt ? new Date(t.updatedAt).toISOString().slice(0, 10) : '-';
+    lines.push(`| ${t.id} | ${t.title} | ${t.status} | ${t.priority || 'medium'} | ${date} |`);
+  }
+
+  return lines.join('\n') + '\n';
+}
+
+// ─── Progress log helpers ────────────────────────────────────
+
+/**
+ * Format a progress entry for appending to progress.md.
+ * @param {string} note
+ * @param {object} [meta]
+ * @returns {string}
+ */
+function formatProgressEntry(note, meta = {}) {
+  const now = new Date();
+  const ts = `${now.toISOString().slice(0, 10)} ${now.toISOString().slice(11, 16)}`;
+  const lines = [`## ${ts}`];
+  lines.push(`- ${note}`);
+  if (meta.status) lines.push(`- Status: ${meta.status}`);
+  if (meta.result) lines.push(`- Result: ${meta.result}`);
+  lines.push('');
+  return lines.join('\n');
+}
+
+// ─── TaskStore ───────────────────────────────────────────────
 
 export class TaskStore {
   /** @type {string} */
   #dir;
   /** @type {string} */
-  #activeDir;
-  /** @type {string} */
-  #doneDir;
+  #indexPath;
   /** @type {string} */
   #planPath;
   /** @type {Map<string, object>} */
@@ -127,23 +173,18 @@ export class TaskStore {
    */
   constructor(yeaftDir, opts = {}) {
     this.#dir = join(yeaftDir, 'tasks');
-    this.#activeDir = join(this.#dir, 'active');
-    this.#doneDir = join(this.#dir, 'completed');
+    this.#indexPath = join(this.#dir, 'index.md');
     this.#planPath = join(this.#dir, 'plan.md');
     this.#tasks = new Map();
     this.#readOnly = opts.readOnly || false;
 
-    // Ensure directories exist
+    // Ensure base directory exists
     if (!this.#readOnly) {
-      for (const d of [this.#dir, this.#activeDir, this.#doneDir]) {
-        if (!existsSync(d)) {
-          try {
-            mkdirSync(d, { recursive: true });
-          } catch {
-            // If we can't create dirs, go read-only
-            this.#readOnly = true;
-            break;
-          }
+      if (!existsSync(this.#dir)) {
+        try {
+          mkdirSync(this.#dir, { recursive: true });
+        } catch {
+          this.#readOnly = true;
         }
       }
     }
@@ -158,13 +199,27 @@ export class TaskStore {
   }
 
   /**
-   * Create a new task.
+   * Create a new task. Creates its folder with task.md, progress.md, memory.md.
    * @param {object} task — Must have .id, .title, .status
    * @returns {object} The created task
    */
   create(task) {
     this.#tasks.set(task.id, task);
-    this.#writeTask(task);
+
+    if (!this.#readOnly) {
+      const taskDir = join(this.#dir, task.id);
+      try {
+        mkdirSync(taskDir, { recursive: true });
+        writeFileSync(join(taskDir, 'task.md'), serializeTask(task), 'utf8');
+        writeFileSync(join(taskDir, 'progress.md'), '# Progress Log\n\n', 'utf8');
+        writeFileSync(join(taskDir, 'memory.md'), '# Task Memory\n', 'utf8');
+        this.#appendProgressInternal(task.id, `Created task: ${task.title}`, { status: 'pending' });
+        this.#updateIndex();
+      } catch {
+        // Best-effort write
+      }
+    }
+
     return task;
   }
 
@@ -181,16 +236,19 @@ export class TaskStore {
     const oldStatus = task.status;
     Object.assign(task, updates, { updatedAt: Date.now() });
 
-    // If status changed to done/cancelled, move file to completed dir
-    const wasDone = DONE_STATUSES.has(oldStatus);
-    const isDone = DONE_STATUSES.has(task.status);
+    if (!this.#readOnly) {
+      try {
+        const taskDir = join(this.#dir, id);
+        writeFileSync(join(taskDir, 'task.md'), serializeTask(task), 'utf8');
 
-    if (!wasDone && isDone) {
-      this.#moveToCompleted(task);
-    } else if (wasDone && !isDone) {
-      this.#moveToActive(task);
-    } else {
-      this.#writeTask(task);
+        // Log progress on status change
+        if (updates.status && updates.status !== oldStatus) {
+          this.#appendProgressInternal(id, `Status changed: ${oldStatus} → ${updates.status}`, updates);
+        }
+        this.#updateIndex();
+      } catch {
+        // Best-effort
+      }
     }
 
     return task;
@@ -218,16 +276,52 @@ export class TaskStore {
   }
 
   /**
-   * Delete a task by ID.
+   * Get progress log for a task.
    * @param {string} id
-   * @returns {boolean}
+   * @returns {string}
    */
-  delete(id) {
-    const task = this.#tasks.get(id);
-    if (!task) return false;
-    this.#tasks.delete(id);
-    this.#deleteFile(task);
-    return true;
+  getProgress(id) {
+    const path = join(this.#dir, id, 'progress.md');
+    try {
+      if (existsSync(path)) return readFileSync(path, 'utf8');
+    } catch { /* */ }
+    return '';
+  }
+
+  /**
+   * Append a progress note to a task's progress log.
+   * @param {string} id
+   * @param {string} note
+   * @param {object} [meta]
+   */
+  appendProgress(id, note, meta = {}) {
+    if (!this.#tasks.has(id)) return;
+    this.#appendProgressInternal(id, note, meta);
+  }
+
+  /**
+   * Get memory content for a task.
+   * @param {string} id
+   * @returns {string}
+   */
+  getMemory(id) {
+    const path = join(this.#dir, id, 'memory.md');
+    try {
+      if (existsSync(path)) return readFileSync(path, 'utf8');
+    } catch { /* */ }
+    return '';
+  }
+
+  /**
+   * Update memory content for a task.
+   * @param {string} id
+   * @param {string} content
+   */
+  updateMemory(id, content) {
+    if (this.#readOnly || !this.#tasks.has(id)) return;
+    try {
+      writeFileSync(join(this.#dir, id, 'memory.md'), content, 'utf8');
+    } catch { /* */ }
   }
 
   /**
@@ -236,12 +330,8 @@ export class TaskStore {
    */
   getPlan() {
     try {
-      if (existsSync(this.#planPath)) {
-        return readFileSync(this.#planPath, 'utf8');
-      }
-    } catch {
-      // Ignore read errors
-    }
+      if (existsSync(this.#planPath)) return readFileSync(this.#planPath, 'utf8');
+    } catch { /* */ }
     return '';
   }
 
@@ -253,99 +343,53 @@ export class TaskStore {
     if (this.#readOnly) return;
     try {
       writeFileSync(this.#planPath, text, 'utf8');
-    } catch {
-      // Ignore write errors in degraded mode
-    }
+    } catch { /* */ }
   }
 
   // ─── Internal methods ──────────────────────────────────────
 
-  /** Load all task files from active + completed directories. */
+  /** Load all task folders from disk. */
   #loadAll() {
-    this.#loadDir(this.#activeDir);
-    this.#loadDir(this.#doneDir);
-  }
-
-  /** Load tasks from a single directory. */
-  #loadDir(dir) {
-    if (!existsSync(dir)) return;
-    let files;
+    if (!existsSync(this.#dir)) return;
+    let entries;
     try {
-      files = readdirSync(dir);
+      entries = readdirSync(this.#dir, { withFileTypes: true });
     } catch {
       return;
     }
-    for (const f of files) {
-      if (!f.endsWith('.md')) continue;
+
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !entry.name.startsWith('task-')) continue;
+      const taskMdPath = join(this.#dir, entry.name, 'task.md');
       try {
-        const raw = readFileSync(join(dir, f), 'utf8');
+        if (!existsSync(taskMdPath)) continue;
+        const raw = readFileSync(taskMdPath, 'utf8');
         const task = parseTask(raw);
         if (task && task.id) {
           this.#tasks.set(task.id, task);
         }
       } catch {
-        // Skip corrupt files
+        // Skip corrupt task folders
       }
     }
   }
 
-  /** Write a task to the appropriate directory. */
-  #writeTask(task) {
+  /** Append to a task's progress.md. */
+  #appendProgressInternal(id, note, meta) {
     if (this.#readOnly) return;
-    const dir = DONE_STATUSES.has(task.status) ? this.#doneDir : this.#activeDir;
-    const filePath = join(dir, `${task.id}.md`);
+    const path = join(this.#dir, id, 'progress.md');
     try {
-      writeFileSync(filePath, serializeTask(task), 'utf8');
-    } catch {
-      // Ignore write errors
-    }
+      const existing = existsSync(path) ? readFileSync(path, 'utf8') : '# Progress Log\n\n';
+      writeFileSync(path, existing + formatProgressEntry(note, meta), 'utf8');
+    } catch { /* */ }
   }
 
-  /** Move a task file from active to completed. */
-  #moveToCompleted(task) {
-    if (this.#readOnly) {
-      return;
-    }
-    const src = join(this.#activeDir, `${task.id}.md`);
-    const dst = join(this.#doneDir, `${task.id}.md`);
-    try {
-      if (existsSync(src)) {
-        renameSync(src, dst);
-      }
-      // Always rewrite to update content
-      writeFileSync(dst, serializeTask(task), 'utf8');
-    } catch {
-      // Fallback: just write to completed
-      try { writeFileSync(dst, serializeTask(task), 'utf8'); } catch { /* */ }
-    }
-  }
-
-  /** Move a task file from completed back to active. */
-  #moveToActive(task) {
+  /** Regenerate index.md from all tasks. */
+  #updateIndex() {
     if (this.#readOnly) return;
-    const src = join(this.#doneDir, `${task.id}.md`);
-    const dst = join(this.#activeDir, `${task.id}.md`);
     try {
-      if (existsSync(src)) {
-        renameSync(src, dst);
-      }
-      writeFileSync(dst, serializeTask(task), 'utf8');
-    } catch {
-      try { writeFileSync(dst, serializeTask(task), 'utf8'); } catch { /* */ }
-    }
-  }
-
-  /** Delete a task file from disk. */
-  #deleteFile(task) {
-    if (this.#readOnly) return;
-    for (const dir of [this.#activeDir, this.#doneDir]) {
-      const filePath = join(dir, `${task.id}.md`);
-      try {
-        if (existsSync(filePath)) unlinkSync(filePath);
-      } catch {
-        // Ignore
-      }
-    }
+      writeFileSync(this.#indexPath, generateIndex(this.#tasks), 'utf8');
+    } catch { /* */ }
   }
 }
 

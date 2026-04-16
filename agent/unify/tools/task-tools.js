@@ -1,7 +1,7 @@
 /**
  * Task management tools — persistent task tracking for work mode.
  *
- * Tasks are persisted to ~/.yeaft/tasks/ via TaskStore.
+ * Tasks are persisted to ~/.yeaft/tasks/ via TaskStore (one folder per task).
  * Call initTaskStore(yeaftDir) during session init before tools are used.
  */
 
@@ -47,6 +47,7 @@ export const taskCreate = defineTool({
   description: `Create a new task for tracking work progress.
 
 Tasks have a title, description, priority, and status.
+Each task gets its own folder with task.md, progress.md, and memory.md.
 Use this to break down complex work into trackable items.`,
   parameters: {
     type: 'object',
@@ -235,7 +236,7 @@ Shows task IDs, titles, status, and priority. Filter by status if needed.`,
 
 export const taskGet = defineTool({
   name: 'TaskGet',
-  description: `Get detailed information about a specific task.`,
+  description: `Get detailed information about a specific task, including its progress log and memory.`,
   parameters: {
     type: 'object',
     properties: {
@@ -268,7 +269,120 @@ export const taskGet = defineTool({
     return JSON.stringify({
       ...task,
       subtasks,
+      hasProgress: !!taskStore.getProgress(task_id),
+      hasMemory: !!taskStore.getMemory(task_id),
     }, null, 2);
+  },
+});
+
+// ─── TaskProgress ───────────────────────────────────────
+
+export const taskProgress = defineTool({
+  name: 'TaskProgress',
+  description: `View or append to a task's progress log.
+
+The progress log is an append-only timeline of what happened during task execution.
+Use "view" to see the full log, or "append" to add a new entry.`,
+  parameters: {
+    type: 'object',
+    properties: {
+      task_id: {
+        type: 'string',
+        description: 'Task ID',
+      },
+      action: {
+        type: 'string',
+        enum: ['view', 'append'],
+        description: '"view" shows progress log, "append" adds an entry',
+      },
+      note: {
+        type: 'string',
+        description: 'Progress note to append (required for "append")',
+      },
+    },
+    required: ['task_id', 'action'],
+  },
+  modes: ['work'],
+  isConcurrencySafe: () => false,
+  isReadOnly: (input) => input?.action === 'view',
+  async execute(input, ctx) {
+    const err = requireStore();
+    if (err) return err;
+
+    const { task_id, action, note } = input;
+    if (!task_id) return JSON.stringify({ error: 'task_id is required' });
+
+    const task = taskStore.get(task_id);
+    if (!task) return JSON.stringify({ error: `Task not found: ${task_id}` });
+
+    switch (action) {
+      case 'view':
+        return taskStore.getProgress(task_id) || '(No progress entries yet)';
+
+      case 'append':
+        if (!note) return JSON.stringify({ error: 'note is required for "append"' });
+        taskStore.appendProgress(task_id, note, { status: task.status });
+        return JSON.stringify({ success: true, message: `Progress noted for "${task.title}"` });
+
+      default:
+        return JSON.stringify({ error: `Unknown action: ${action}` });
+    }
+  },
+});
+
+// ─── TaskMemory ─────────────────────────────────────────
+
+export const taskMemory = defineTool({
+  name: 'TaskMemory',
+  description: `View or update a task's memory (context notes, key decisions, references).
+
+Task memory stores persistent context relevant to the task — key decisions,
+references to files, architectural notes, etc. Unlike progress (append-only),
+memory can be rewritten to keep it current.`,
+  parameters: {
+    type: 'object',
+    properties: {
+      task_id: {
+        type: 'string',
+        description: 'Task ID',
+      },
+      action: {
+        type: 'string',
+        enum: ['view', 'update'],
+        description: '"view" shows memory, "update" replaces it',
+      },
+      content: {
+        type: 'string',
+        description: 'New memory content (required for "update")',
+      },
+    },
+    required: ['task_id', 'action'],
+  },
+  modes: ['work'],
+  isConcurrencySafe: () => false,
+  isReadOnly: (input) => input?.action === 'view',
+  async execute(input, ctx) {
+    const err = requireStore();
+    if (err) return err;
+
+    const { task_id, action, content } = input;
+    if (!task_id) return JSON.stringify({ error: 'task_id is required' });
+
+    const task = taskStore.get(task_id);
+    if (!task) return JSON.stringify({ error: `Task not found: ${task_id}` });
+
+    switch (action) {
+      case 'view':
+        return taskStore.getMemory(task_id) || '(No memory entries yet)';
+
+      case 'update':
+        if (!content) return JSON.stringify({ error: 'content is required for "update"' });
+        taskStore.updateMemory(task_id, content);
+        return JSON.stringify({ success: true, message: `Memory updated for "${task.title}"` });
+
+      default:
+        return JSON.stringify({ error: `Unknown action: ${action}` });
+    }
   },
 });
 
