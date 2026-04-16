@@ -378,3 +378,87 @@ describe('i18n debug keys', () => {
     expect(zhI18n).toMatch(/'unify\.turn':\s*'第 \{n\} 轮'/);
   });
 });
+
+// =====================================================================
+// 9. Resizable debug panel (task-277)
+// =====================================================================
+describe('Debug panel resizable width (task-277)', () => {
+  it('detail panel has drag handle element', () => {
+    expect(unifyPageJs).toContain('unify-detail-drag-handle');
+  });
+
+  it('drag handle has mousedown handler', () => {
+    expect(unifyPageJs).toContain('@mousedown.prevent="startDetailResize"');
+  });
+
+  it('has startDetailResize function', () => {
+    expect(unifyPageJs).toContain('startDetailResize');
+  });
+
+  it('has isResizingDetail ref', () => {
+    expect(unifyPageJs).toContain('isResizingDetail');
+  });
+
+  it('detail panel binds width style', () => {
+    expect(unifyPageJs).toContain(':style="detailWidthStyle"');
+  });
+
+  it('saves width to localStorage', () => {
+    expect(unifyPageJs).toContain("localStorage.setItem('unify-debug-width'");
+  });
+
+  it('reads saved width from localStorage', () => {
+    expect(unifyPageJs).toContain("localStorage.getItem('unify-debug-width')");
+  });
+
+  it('has min width constraint (300px)', () => {
+    expect(unifyPageJs).toContain('DETAIL_MIN_WIDTH');
+    expect(unifyPageJs).toMatch(/DETAIL_MIN_WIDTH\s*=\s*300/);
+  });
+
+  it('has max width constraint (60vw)', () => {
+    expect(unifyPageJs).toContain('window.innerWidth * 0.6');
+  });
+
+  it('default width is ~500px or 35vw', () => {
+    expect(unifyPageJs).toMatch(/Math\.max\(500,\s*window\.innerWidth\s*\*\s*0\.35\)/);
+  });
+
+  it('detail panel has resizing class binding', () => {
+    expect(unifyPageJs).toContain('resizing: isResizingDetail');
+  });
+
+  it('returns detailWidthStyle and startDetailResize', () => {
+    expect(unifyPageJs).toMatch(/return\s*\{[\s\S]*detailWidthStyle/);
+    expect(unifyPageJs).toMatch(/return\s*\{[\s\S]*startDetailResize/);
+  });
+});
+
+describe('CSS resizable debug panel styles (task-277)', () => {
+  it('uses CSS variable for detail width', () => {
+    expect(unifyCss).toContain('var(--unify-detail-width');
+  });
+
+  it('has drag handle style', () => {
+    expect(unifyCss).toContain('.unify-detail-drag-handle');
+  });
+
+  it('drag handle uses col-resize cursor', () => {
+    expect(unifyCss).toMatch(/\.unify-detail-drag-handle\s*\{[^}]*cursor:\s*col-resize/);
+  });
+
+  it('has resizing class that disables transitions', () => {
+    expect(unifyCss).toContain('.unify-detail.resizing');
+    expect(unifyCss).toMatch(/\.unify-detail\.resizing\s*\{[^}]*transition:\s*none/);
+  });
+
+  it('drag handle has hover/active highlight', () => {
+    expect(unifyCss).toContain('.unify-detail-drag-handle:hover');
+    expect(unifyCss).toContain('.unify-detail-drag-handle.active');
+  });
+
+  it('default width is 500px not 280px', () => {
+    expect(unifyCss).not.toMatch(/\.unify-detail\s*\{[^}]*width:\s*280px/);
+    expect(unifyCss).toContain('500px');
+  });
+});
