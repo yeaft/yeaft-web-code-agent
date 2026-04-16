@@ -113,8 +113,10 @@ describe('Center conversation area', () => {
     expect(unifyCss).toMatch(/\.unify-main\s*\{[^}]*flex-direction:\s*column/);
   });
 
-  it('does NOT override input-area max-width (uses default 60%)', () => {
-    expect(unifyCss).not.toContain('.unify-page .input-area');
+  it('overrides input-area padding (task-278 width optimization)', () => {
+    expect(unifyCss).toContain('.unify-page .input-area');
+    expect(unifyCss).toMatch(/\.unify-page\s+\.input-area\s*\{[^}]*padding:\s*12px\s+16px/);
+    // Should NOT have a hardcoded 800px max-width
     expect(unifyCss).not.toMatch(/\.input-area[^{]*\{[^}]*max-width:\s*800px/);
   });
 
