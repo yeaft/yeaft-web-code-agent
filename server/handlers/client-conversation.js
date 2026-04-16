@@ -609,6 +609,17 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       break;
     }
 
+    case 'unify_load_history': {
+      const histAgentId = msg.agentId || client.currentAgent;
+      if (!histAgentId) return;
+      if (!await checkAgentAccess(histAgentId)) return;
+      await forwardToAgent(histAgentId, {
+        type: 'unify_load_history',
+        limit: msg.limit,
+      });
+      break;
+    }
+
     case 'unify_mode_switch': {
       const modeAgentId = msg.agentId || client.currentAgent;
       if (!modeAgentId) return;

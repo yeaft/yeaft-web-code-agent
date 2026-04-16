@@ -310,6 +310,16 @@ export const useChatStore = defineStore('chat', {
       this._savedActiveConversations = [...this.activeConversations];
       // Set the virtual conversationId as the active one so MessageList reads from it
       this.activeConversations = [this.unifyConversationId];
+
+      // Request history from agent (only if messagesMap is empty to avoid duplicates on re-entry)
+      const existing = this.messagesMap[this.unifyConversationId];
+      if (this.unifyAgentId && (!existing || existing.length === 0)) {
+        this.sendWsMessage({
+          type: 'unify_load_history',
+          agentId: this.unifyAgentId,
+          limit: 50,
+        });
+      }
     },
     leaveUnify() {
       this.currentView = 'chat';
@@ -437,6 +447,11 @@ export const useChatStore = defineStore('chat', {
 
         case 'model_switched':
           this.unifyModel = event.model;
+          break;
+
+        case 'history_loaded':
+          // History messages already rendered via sendUnifyOutput (data path).
+          // This event just signals completion — no additional action needed.
           break;
       }
     },
