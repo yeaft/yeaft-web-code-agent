@@ -3,10 +3,11 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 
 /**
- * Tests for task-257: Unify UI three-column redesign.
+ * Tests for Unify UI three-column layout.
  *
- * Layout: left sidebar (240px) + center conversation + right detail (280px).
- * Conversation reuses standard MessageList + ChatInput with default 60% max-width.
+ * Layout: left sidebar (56px, minimal) + center conversation + right detail (280px).
+ * Sidebar is minimal: back button + bottom settings gear.
+ * Mode toggle and model selector are in the topbar.
  */
 
 const rootDir = join(import.meta.dirname, '..', '..');
@@ -42,7 +43,7 @@ describe('UnifyPage three-column structure', () => {
 });
 
 // =====================================================================
-// 2. Left sidebar content
+// 2. Left sidebar content (minimal: back + settings)
 // =====================================================================
 describe('Left sidebar content', () => {
   it('has back button', () => {
@@ -50,25 +51,42 @@ describe('Left sidebar content', () => {
     expect(unifyPageJs).toContain('goBack');
   });
 
-  it('has mode toggle (chat/work)', () => {
-    expect(unifyPageJs).toContain('unify-mode-toggle');
-    expect(unifyPageJs).toContain("setMode('chat')");
-    expect(unifyPageJs).toContain("setMode('work')");
+  it('has settings button at bottom', () => {
+    expect(unifyPageJs).toContain('unify-settings-btn');
+    expect(unifyPageJs).toContain('toggleSettings');
   });
 
-  it('has agent info section (model, tools, skills)', () => {
-    expect(unifyPageJs).toContain('unify-agent-info');
-    expect(unifyPageJs).toContain('store.unifyModel');
-    expect(unifyPageJs).toContain('store.unifyStatus');
+  it('has spacer to push settings to bottom', () => {
+    expect(unifyPageJs).toContain('unify-sidebar-spacer');
   });
 
-  it('does NOT have session status indicator (removed)', () => {
+  it('sidebar is 56px wide (minimal)', () => {
+    expect(unifyCss).toMatch(/\.unify-sidebar\s*\{[^}]*width:\s*56px/);
+  });
+
+  it('does NOT have mode toggle in sidebar (moved to topbar)', () => {
+    const sidebarStart = unifyPageJs.indexOf('class="unify-sidebar"');
+    const sidebarEnd = unifyPageJs.indexOf('</aside>', sidebarStart);
+    const sidebarContent = unifyPageJs.slice(sidebarStart, sidebarEnd);
+    expect(sidebarContent).not.toContain('unify-mode-toggle');
+    expect(sidebarContent).not.toContain('unify-topbar-mode');
+  });
+
+  it('does NOT have agent info section (removed)', () => {
+    expect(unifyPageJs).not.toContain('unify-agent-info');
+  });
+
+  it('does NOT show skills count', () => {
+    expect(unifyPageJs).not.toContain("store.unifyStatus.skills");
+  });
+
+  it('does NOT show MCP servers count', () => {
+    expect(unifyPageJs).not.toContain("store.unifyStatus.mcpServers");
+  });
+
+  it('does NOT have session status indicator', () => {
     expect(unifyPageJs).not.toContain('unify-session-status');
     expect(unifyPageJs).not.toContain('unify-status-dot');
-  });
-
-  it('sidebar is 240px wide', () => {
-    expect(unifyCss).toMatch(/\.unify-sidebar\s*\{[^}]*width:\s*240px/);
   });
 
   it('sidebar has collapsible support', () => {
@@ -96,24 +114,25 @@ describe('Center conversation area', () => {
   });
 
   it('does NOT override input-area max-width (uses default 60%)', () => {
-    // The old .unify-page .input-area { max-width: 800px } should be removed
     expect(unifyCss).not.toContain('.unify-page .input-area');
     expect(unifyCss).not.toMatch(/\.input-area[^{]*\{[^}]*max-width:\s*800px/);
   });
 
-  it('topbar is simplified (model badge + clear + detail toggle)', () => {
-    expect(unifyPageJs).toContain('unify-topbar');
-    expect(unifyPageJs).toContain('unify-model-badge');
-    expect(unifyPageJs).toContain('unify-clear-btn');
-    expect(unifyPageJs).toContain('unify-detail-toggle');
+  it('topbar has model selector dropdown', () => {
+    expect(unifyPageJs).toContain('unify-topbar-model');
+    expect(unifyPageJs).toContain('toggleModelDropdown');
   });
 
-  it('topbar does NOT contain mode toggle (moved to sidebar)', () => {
-    // The mode toggle should be in the sidebar section, not in unify-topbar
-    const topbarMatch = unifyPageJs.match(/class="unify-topbar"[\s\S]*?<\/div>\s*\n\s*<!--/);
-    if (topbarMatch) {
-      expect(topbarMatch[0]).not.toContain('unify-mode-toggle');
-    }
+  it('topbar has mode toggle', () => {
+    expect(unifyPageJs).toContain('unify-topbar-mode');
+    expect(unifyPageJs).toContain("setMode('chat')");
+    expect(unifyPageJs).toContain("setMode('work')");
+  });
+
+  it('topbar has clear, debug, and detail toggle buttons', () => {
+    expect(unifyPageJs).toContain('unify-clear-btn');
+    expect(unifyPageJs).toContain('unify-debug-btn');
+    expect(unifyPageJs).toContain('unify-detail-toggle');
   });
 
   it('has sidebar toggle button in topbar', () => {
@@ -160,13 +179,6 @@ describe('Mobile responsive', () => {
     expect(mediaBlock).not.toBeNull();
     expect(mediaBlock[0]).toContain('.unify-sidebar');
     expect(mediaBlock[0]).toContain('position: fixed');
-  });
-
-  it('hides back text on mobile', () => {
-    const mediaBlock = unifyCss.match(/@media\s*\(max-width:\s*768px\)\s*\{[\s\S]*?\n\}/);
-    expect(mediaBlock).not.toBeNull();
-    expect(mediaBlock[0]).toContain('.unify-back-text');
-    expect(mediaBlock[0]).toContain('display: none');
   });
 
   it('has sidebar overlay element in template', () => {
@@ -260,28 +272,9 @@ describe('Setup logic', () => {
 });
 
 // =====================================================================
-// 8. i18n — no hardcoded English labels in sidebar
+// 8. i18n — labels use $t()
 // =====================================================================
-describe('i18n — sidebar labels use $t()', () => {
-  it('mode label uses $t()', () => {
-    expect(unifyPageJs).toContain("$t('unify.mode')");
-  });
-
-  it('agent label uses $t()', () => {
-    expect(unifyPageJs).toContain("$t('unify.agent')");
-  });
-
-  it('tools/skills/mcp labels use $t()', () => {
-    expect(unifyPageJs).toContain("$t('unify.tools')");
-    expect(unifyPageJs).toContain("$t('unify.skills')");
-    expect(unifyPageJs).toContain("$t('unify.mcp')");
-  });
-
-  it('session status labels removed (no longer in sidebar)', () => {
-    expect(unifyPageJs).not.toContain("$t('unify.connecting')");
-    expect(unifyPageJs).not.toContain("$t('unify.ready')");
-  });
-
+describe('i18n — labels use $t()', () => {
   it('right panel placeholder uses $t()', () => {
     expect(unifyPageJs).toContain("$t('unify.tasksMemory')");
     expect(unifyPageJs).toContain("$t('unify.comingSoon')");
@@ -297,8 +290,20 @@ describe('i18n — sidebar labels use $t()', () => {
     expect(unifyPageJs).toContain("$t('unify.hideDetail')");
   });
 
+  it('mode toggle uses $t()', () => {
+    expect(unifyPageJs).toContain("$t('unify.chat')");
+    expect(unifyPageJs).toContain("$t('unify.work')");
+  });
+
+  it('model switch uses $t()', () => {
+    expect(unifyPageJs).toContain("$t('unify.switchModel')");
+  });
+
+  it('settings uses $t()', () => {
+    expect(unifyPageJs).toContain("$t('unify.settings.title')");
+  });
+
   it('no hardcoded English labels remain in sidebar sections', () => {
-    // These strings should be replaced with $t() calls
     expect(unifyPageJs).not.toMatch(/>Mode</);
     expect(unifyPageJs).not.toMatch(/>Agent</);
     expect(unifyPageJs).not.toMatch(/>Tasks & Memory</);
@@ -307,11 +312,11 @@ describe('i18n — sidebar labels use $t()', () => {
 
   it('en.js has all required unify i18n keys', () => {
     const requiredKeys = [
-      'unify.mode', 'unify.agent',
-      'unify.tools', 'unify.skills', 'unify.mcp',
+      'unify.chat', 'unify.work',
       'unify.tasksMemory', 'unify.comingSoon',
       'unify.showSidebar', 'unify.hideSidebar',
       'unify.showDetail', 'unify.hideDetail',
+      'unify.switchModel',
     ];
     for (const key of requiredKeys) {
       expect(enI18n).toContain(`'${key}'`);
@@ -320,11 +325,11 @@ describe('i18n — sidebar labels use $t()', () => {
 
   it('zh-CN.js has all required unify i18n keys', () => {
     const requiredKeys = [
-      'unify.mode', 'unify.agent',
-      'unify.tools', 'unify.skills', 'unify.mcp',
+      'unify.chat', 'unify.work',
       'unify.tasksMemory', 'unify.comingSoon',
       'unify.showSidebar', 'unify.hideSidebar',
       'unify.showDetail', 'unify.hideDetail',
+      'unify.switchModel',
     ];
     for (const key of requiredKeys) {
       expect(zhI18n).toContain(`'${key}'`);
