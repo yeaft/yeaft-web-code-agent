@@ -804,6 +804,28 @@
   cursor: not-allowed;
 }
 
+/* ── Unify Conversation Width Overrides ── */
+/* Shared .messages and .input-wrapper default to max-width: 60%.
+   In Unify, we want wider content — the sidebar already eats horizontal space. */
+
+.unify-page .messages {
+  max-width: 90%;
+  padding: 0 16px;
+}
+
+.unify-page .input-area {
+  padding: 12px 16px 20px;
+  padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+}
+
+.unify-page .input-wrapper {
+  max-width: 90%;
+}
+
+.unify-page .attachments-preview {
+  max-width: 90%;
+}
+
 /* ── Mobile Sidebar Overlay ── */
 
 .unify-sidebar-overlay {
@@ -827,6 +849,25 @@
 }
 
 @media (max-width: 768px) {
+  /* Unify conversation: narrower padding on mobile */
+  .unify-page .messages {
+    max-width: 100%;
+    padding: 0 10px;
+  }
+
+  .unify-page .input-area {
+    padding: 8px 10px 16px;
+    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .unify-page .input-wrapper {
+    max-width: 100%;
+  }
+
+  .unify-page .attachments-preview {
+    max-width: 100%;
+  }
+
   /* Hide right panel */
   .unify-detail {
     display: none;

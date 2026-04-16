@@ -33,23 +33,23 @@ beforeAll(() => {
 });
 
 // =============================================================================
-// 1. Message width: 60% default not overridden by Unify
+// 1. Unify conversation area uses wider width than Chat (90% vs 60%)
 // =============================================================================
-describe('Message width matches Chat mode (60% max-width)', () => {
-  it('no .unify-page .input-area override exists', () => {
-    expect(unifyCss).not.toContain('.unify-page .input-area');
+describe('Unify conversation area is wider than Chat default', () => {
+  it('.unify-page .input-area override exists for tighter padding', () => {
+    expect(unifyCss).toContain('.unify-page .input-area');
+  });
+
+  it('.unify-page .messages uses 90% max-width', () => {
+    expect(unifyCss).toMatch(/\.unify-page\s+\.messages[^{]*\{[^}]*max-width:\s*90%/);
+  });
+
+  it('.unify-page .input-wrapper uses 90% max-width', () => {
+    expect(unifyCss).toMatch(/\.unify-page\s+\.input-wrapper[^{]*\{[^}]*max-width:\s*90%/);
   });
 
   it('no max-width: 800px in unify.css', () => {
     expect(unifyCss).not.toContain('max-width: 800px');
-  });
-
-  it('no .unify-page .message-list width override', () => {
-    expect(unifyCss).not.toMatch(/\.unify-page\s+\.message-list/);
-  });
-
-  it('no .unify-page .turn-content width override', () => {
-    expect(unifyCss).not.toMatch(/\.unify-page\s+\.turn-content/);
   });
 
   it('chat-input.css defines the 60% max-width for input-wrapper', () => {
