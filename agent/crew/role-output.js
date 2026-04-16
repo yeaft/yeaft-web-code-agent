@@ -30,6 +30,9 @@ export function _detectRouteIntent(text) {
     /请\s*\S+\s*审查/,
     /转给\s*\S+/,
     /发给\s*\S+/,
+    /请\s*(?:rev|test)-\d+/i,            // 请 rev-1/test-2 (explicit role mention with request)
+    /PR\s*#\d+.*(?:请|review|审查)/i,    // PR #123 + review request
+    /(?:rev|test)-\d+\s*(?:审查|review|check|测试)/i, // rev-1 审查 / test-2 测试
     /route\s+to\s+\S+/i,
     /submit\s+to\s+\S+/i,
     /forward\s+to\s+\S+/i,
@@ -252,11 +255,17 @@ export async function processRoleOutput(session, roleName, roleQuery, roleState)
           });
           sendStatusUpdate(session);
         } else {
-          // ★ Route intent detection: if no ROUTE block but text suggests routing intent,
-          // auto-forward to PM so the message doesn't get lost
-          if (_detectRouteIntent(roleState.lastTurnText) && roleName !== session.decisionMaker) {
-            console.log(`[Crew] ${roleName} turn ended without ROUTE but has routing intent — auto-forwarding to PM`);
-            const autoSummary = `[auto-forward: ${roleName} 的输出包含路由意图但缺少 ROUTE 块]\n${(roleState.lastTurnText || '').slice(-500).trim()}`;
+          // ★ No ROUTE found — decide whether to auto-forward to PM
+          const isNonPM = roleName !== session.decisionMaker;
+          const hasActiveTask = !!roleState.currentTask;
+          const hasRouteIntent = _detectRouteIntent(roleState.lastTurnText);
+
+          if (isNonPM && (hasActiveTask || hasRouteIntent)) {
+            // Non-PM role with active task OR routing intent but no ROUTE block:
+            // auto-forward to PM so the message doesn't get lost
+            const reason = hasActiveTask ? 'has active task' : 'has routing intent';
+            console.log(`[Crew] ${roleName} turn ended without ROUTE (${reason}) — auto-forwarding to PM`);
+            const autoSummary = `[auto-forward: ${roleName} turn 结束但未输出 ROUTE 块 (${reason})]\n${(roleState.lastTurnText || '').slice(-800).trim()}`;
             await executeRoute(session, roleName, {
               to: session.decisionMaker,
               summary: autoSummary,

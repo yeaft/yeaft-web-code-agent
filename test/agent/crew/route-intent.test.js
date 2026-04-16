@@ -48,6 +48,32 @@ describe('_detectRouteIntent', () => {
     expect(_detectRouteIntent('hello')).toBe(false);
   });
 
+  // New patterns (B enhancement)
+  it('should detect: 请 rev-1 review', () => {
+    expect(_detectRouteIntent('PR #500 已提交，请 rev-1 review 一下')).toBe(true);
+  });
+
+  it('should detect: rev-2 审查', () => {
+    expect(_detectRouteIntent('代码完成了，rev-2 审查下')).toBe(true);
+  });
+
+  it('should detect: PR #123 + review request', () => {
+    expect(_detectRouteIntent('PR #123 已创建，请 review')).toBe(true);
+  });
+
+  it('should detect: 请 test-3 测试', () => {
+    expect(_detectRouteIntent('功能完成，请 test-3 测试')).toBe(true);
+  });
+
+  it('should NOT detect: casual mention of reviewer without request', () => {
+    // "rev-1 说过这个方案不行" — no request action, just mentioning
+    expect(_detectRouteIntent('rev-1 之前提过这个方案可能有问题，我已经改了')).toBe(false);
+  });
+
+  it('should NOT detect: LGTM in normal discussion', () => {
+    expect(_detectRouteIntent('这个改动看起来不错')).toBe(false);
+  });
+
   it('should only check last 1000 chars', () => {
     const longPrefix = 'x'.repeat(2000);
     // Intent only in the beginning (>1000 chars away from end) — should NOT detect
