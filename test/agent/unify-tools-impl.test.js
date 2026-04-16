@@ -657,7 +657,14 @@ describe('Agent tools', () => {
 
 describe('Task tools', () => {
   it('TaskCreate creates a task', async () => {
-    const { taskCreate } = await import(`${TOOLS_DIR}/task-tools.js`);
+    // Initialize task store with a temp directory before using task tools
+    const { initTaskStore, taskCreate } = await import(`${TOOLS_DIR}/task-tools.js`);
+    const { mkdirSync } = await import('fs');
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    const tmpDir = join(tmpdir(), `yeaft-test-tasks-${Date.now()}`);
+    mkdirSync(tmpDir, { recursive: true });
+    initTaskStore(tmpDir);
     const result = JSON.parse(await taskCreate.execute(
       { title: 'Test task', description: 'A test' },
       {}
