@@ -5,7 +5,7 @@ import { join } from 'path';
 /**
  * Tests for Unify UI three-column layout.
  *
- * Layout: left sidebar (56px, minimal) + center conversation + right detail (280px).
+ * Layout: left sidebar (260px) + center conversation + right detail (280px).
  * Sidebar is minimal: back button + bottom settings gear.
  * Mode toggle and model selector are in the topbar.
  */
@@ -60,8 +60,8 @@ describe('Left sidebar content', () => {
     expect(unifyPageJs).toContain('unify-sidebar-spacer');
   });
 
-  it('sidebar is 56px wide (minimal)', () => {
-    expect(unifyCss).toMatch(/\.unify-sidebar\s*\{[^}]*width:\s*56px/);
+  it('sidebar is 260px wide', () => {
+    expect(unifyCss).toMatch(/\.unify-sidebar\s*\{[^}]*width:\s*260px/);
   });
 
   it('does NOT have mode toggle in sidebar (moved to topbar)', () => {

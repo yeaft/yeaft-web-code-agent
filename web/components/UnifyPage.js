@@ -39,8 +39,8 @@ export default {
           </button>
 
           <!-- Model selector (compact dropdown in topbar) -->
-          <div class="unify-topbar-model" v-if="store.unifyModel" @click="toggleModelDropdown" :title="$t('unify.switchModel')">
-            <span class="unify-topbar-model-name">{{ store.unifyModel }}</span>
+          <div class="unify-topbar-model" @click="toggleModelDropdown" :title="$t('unify.switchModel')">
+            <span class="unify-topbar-model-name">{{ store.unifyModel || $t('settings.llm.selectModel') }}</span>
             <svg v-if="store.unifyAvailableModels.length > 1" class="unify-model-chevron" :class="{ open: modelDropdownOpen }" viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
             <!-- Dropdown -->
             <div class="unify-model-dropdown unify-topbar-model-dropdown" v-if="modelDropdownOpen && store.unifyAvailableModels.length > 1" @click.stop>
