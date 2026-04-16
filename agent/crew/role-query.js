@@ -150,7 +150,7 @@ async function _createRoleQueryInner(session, roleName) {
   // 继承全局 MCP disallowedTools，避免不必要的 tool schema token 消耗
   const globalDisallowed = ctx.CONFIG?.disallowedTools || [];
   // Developer 角色保留 skills（tdd、commit 等对开发有帮助），
-  // 其他角色（pm、reviewer、tester）禁用 skills 以避免和 ROUTE 冲突
+  // 其他角色（pm、reviewer、product-reviewer）禁用 skills 以避免和 ROUTE 冲突
   const isDeveloper = role.roleType === 'developer';
   // Crew 角色禁用 Agent 工具：角色间协作必须通过 ROUTE 块，不能自行启动 sub-agent
   // 非 developer 角色额外禁用 Skill 工具：skills 的 trigger 词会和角色职能冲突
@@ -369,10 +369,10 @@ ${m.contextRestartContent}`;
   if (role.groupIndex > 0 && role.roleType === 'developer') {
     const gi = role.groupIndex;
     const rev = allRoles.find(r => r.roleType === 'reviewer' && r.groupIndex === gi);
-    const test = allRoles.find(r => r.roleType === 'tester' && r.groupIndex === gi);
-    if (rev && test) {
+    const prev = allRoles.find(r => r.roleType === 'product-reviewer' && r.groupIndex === gi);
+    if (rev && prev) {
       prompt += `\n\n${m.devGroupBinding}
-${m.devGroupBindingContent(gi, roleLabel(rev), rev.name, roleLabel(test), test.name)}
+${m.devGroupBindingContent(gi, roleLabel(rev), rev.name, roleLabel(prev), prev.name)}
 
 \`\`\`
 ---ROUTE---
@@ -381,8 +381,8 @@ summary: ${m.reviewCode}
 ---END_ROUTE---
 
 ---ROUTE---
-to: ${test.name}
-summary: ${m.testFeature}
+to: ${prev.name}
+summary: ${m.productReviewFeature}
 ---END_ROUTE---
 \`\`\`
 

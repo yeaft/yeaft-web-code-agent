@@ -27,11 +27,11 @@ export const crewSessions = new Map();
 
 const SHORT_PREFIX = {
   developer: 'dev',
-  tester: 'test',
-  reviewer: 'rev'
+  reviewer: 'rev',
+  'product-reviewer': 'prev'
 };
 
-const EXPANDABLE_ROLES = new Set(['developer', 'tester', 'reviewer']);
+const EXPANDABLE_ROLES = new Set(['developer', 'reviewer', 'product-reviewer']);
 
 /**
  * 展开角色列表：count > 1 的执行者角色展开为多个实例
