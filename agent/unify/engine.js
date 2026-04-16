@@ -374,6 +374,7 @@ export class Engine {
       });
 
       const startTime = Date.now();
+      let ttfbMs = null;  // Time to first token
       let responseText = '';
       const toolCalls = [];
       let stopReason = 'end_turn';
@@ -393,6 +394,7 @@ export class Engine {
         })) {
           switch (event.type) {
             case 'text_delta':
+              if (ttfbMs === null) ttfbMs = Date.now() - startTime;
               responseText += event.text;
               yield event;
               break;
@@ -439,6 +441,7 @@ export class Engine {
           toolCalls: toolCalls.map(tc => ({ id: tc.id, name: tc.name, input: tc.input })),
           usage: { inputTokens: totalUsage.inputTokens, outputTokens: totalUsage.outputTokens },
           latencyMs,
+          ttfbMs,
           stopReason: 'error',
         };
 
@@ -495,6 +498,7 @@ export class Engine {
         toolCalls: toolCalls.map(tc => ({ id: tc.id, name: tc.name, input: tc.input })),
         usage: { inputTokens: totalUsage.inputTokens, outputTokens: totalUsage.outputTokens },
         latencyMs,
+        ttfbMs,
         stopReason,
       };
 

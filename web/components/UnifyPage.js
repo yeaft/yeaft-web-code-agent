@@ -149,9 +149,10 @@ export default {
                 <span class="unify-debug-turn-num">{{ $t('unify.turn').replace('{n}', turn.turnNumber) }}</span>
                 <span class="unify-debug-turn-model">{{ turn.model }}</span>
                 <span class="unify-debug-turn-stats">
+                  <span>{{ turn.ttfbMs != null ? turn.ttfbMs + 'ms' : '-' }}</span>
                   <span>{{ turn.latencyMs }}ms</span>
-                  <span>↑{{ turn.usage?.inputTokens || 0 }}</span>
-                  <span>↓{{ turn.usage?.outputTokens || 0 }}</span>
+                  <span>{{ turn.usage?.inputTokens || 0 }}</span>
+                  <span>{{ turn.usage?.outputTokens || 0 }}</span>
                 </span>
               </div>
               <div class="unify-debug-turn-body" v-if="expandedTurns[idx]">
@@ -159,6 +160,7 @@ export default {
                 <div class="unify-debug-section">
                   <div class="unify-debug-section-title">{{ $t('unify.duration') }} / Tokens</div>
                   <div class="unify-debug-token-row">
+                    <span><span class="unify-debug-token-label">TTFB:</span> {{ turn.ttfbMs != null ? turn.ttfbMs + 'ms' : '-' }}</span>
                     <span><span class="unify-debug-token-label">{{ $t('unify.duration') }}:</span> {{ turn.latencyMs }}ms</span>
                     <span><span class="unify-debug-token-label">{{ $t('unify.inputTokens') }}:</span> {{ turn.usage?.inputTokens || 0 }}</span>
                     <span><span class="unify-debug-token-label">{{ $t('unify.outputTokens') }}:</span> {{ turn.usage?.outputTokens || 0 }}</span>

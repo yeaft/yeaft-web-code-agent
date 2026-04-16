@@ -280,6 +280,7 @@ export async function handleUnifyChat(msg) {
             toolCalls: event.toolCalls,
             usage: event.usage,
             latencyMs: event.latencyMs,
+            ttfbMs: event.ttfbMs,
             stopReason: event.stopReason,
           });
           break;
