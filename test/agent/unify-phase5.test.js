@@ -785,7 +785,7 @@ describe('tools/enter-worktree.js', () => {
 
   it('should have correct tool definition', () => {
     expect(enterWorktree.name).toBe('EnterWorktree');
-    expect(enterWorktree.modes).toEqual(['work']);
+    expect(enterWorktree.modes).toEqual(['chat', 'work']);
     expect(enterWorktree.isDestructive()).toBe(false);
   });
 
@@ -808,7 +808,7 @@ describe('tools/exit-worktree.js', () => {
 
   it('should have correct tool definition', () => {
     expect(exitWorktree.name).toBe('ExitWorktree');
-    expect(exitWorktree.modes).toEqual(['work']);
+    expect(exitWorktree.modes).toEqual(['chat', 'work']);
   });
 
   it('should report error for non-existent path', async () => {

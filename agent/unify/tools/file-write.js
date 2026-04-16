@@ -34,7 +34,7 @@ Guidelines:
     },
     required: ['file_path', 'content'],
   },
-  modes: ['work'],
+  modes: ['chat', 'work'],
   isConcurrencySafe: () => false,
   isReadOnly: () => false,
   isDestructive: () => false,

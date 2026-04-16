@@ -37,7 +37,7 @@ The user must explicitly approve before you proceed.`,
     },
     required: ['operation'],
   },
-  modes: ['work'],
+  modes: ['chat', 'work'],
   isConcurrencySafe: () => false,
   isReadOnly: () => true,
   async execute(input, ctx) {

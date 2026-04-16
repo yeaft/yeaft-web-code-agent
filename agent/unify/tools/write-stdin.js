@@ -34,7 +34,7 @@ Note: For most use cases, pipe input via Bash: echo "input" | command`,
     },
     required: ['data'],
   },
-  modes: ['work'],
+  modes: ['chat', 'work'],
   isConcurrencySafe: () => false,
   isReadOnly: () => false,
   async execute(input, ctx) {

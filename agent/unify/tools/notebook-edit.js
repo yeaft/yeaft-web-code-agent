@@ -48,7 +48,7 @@ Cell types: "code" or "markdown"`,
     },
     required: ['notebook_path'],
   },
-  modes: ['work'],
+  modes: ['chat', 'work'],
   isConcurrencySafe: () => false,
   isReadOnly: (input) => input?.action === 'read',
   async execute(input, ctx) {

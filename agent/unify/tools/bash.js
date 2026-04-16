@@ -137,7 +137,7 @@ Guidelines:
     },
     required: ['command'],
   },
-  modes: ['work'],
+  modes: ['chat', 'work'],
   isConcurrencySafe: () => false,
   isReadOnly: () => false,
   isDestructive: (input) => {

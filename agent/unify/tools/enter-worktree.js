@@ -39,7 +39,7 @@ Returns the worktree path and branch name.`,
       },
     },
   },
-  modes: ['work'],
+  modes: ['chat', 'work'],
   isDestructive: () => false,
   async execute(input, ctx) {
     const cwd = ctx?.cwd || process.cwd();

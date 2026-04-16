@@ -79,12 +79,19 @@ describe('index.js tool registration', () => {
     expect(chatNames).toContain('ToolSearch');
     expect(chatNames).toContain('Skill');
 
-    // Work-only tools should NOT be in chat mode:
-    expect(chatNames).not.toContain('Bash');
-    expect(chatNames).not.toContain('FileRead');
-    expect(chatNames).not.toContain('FileWrite');
-    expect(chatNames).not.toContain('FileEdit');
+    // Work-only tools (coordination/task) should NOT be in chat mode:
     expect(chatNames).not.toContain('Agent');
+    expect(chatNames).not.toContain('SendMessage');
+    expect(chatNames).not.toContain('WaitAgent');
+    expect(chatNames).not.toContain('CloseAgent');
+
+    // Dev tools SHOULD be in chat mode:
+    expect(chatNames).toContain('Bash');
+    expect(chatNames).toContain('FileRead');
+    expect(chatNames).toContain('FileWrite');
+    expect(chatNames).toContain('FileEdit');
+    expect(chatNames).toContain('Glob');
+    expect(chatNames).toContain('Grep');
   });
 
   it('mode filtering: work mode has all tools', async () => {
@@ -894,10 +901,10 @@ describe('ToolSearch tool', () => {
   it('filters by mode', async () => {
     const mod = await import(`${TOOLS_DIR}/tool-search.js`);
     const result = JSON.parse(await mod.default.execute(
-      { query: 'Bash', mode: 'chat' },
+      { query: 'Agent', mode: 'chat' },
       {}
     ));
-    // Bash is work-only, so should not appear in chat mode
+    // Agent is work-only (coordination), so should not appear in chat mode
     expect(result.totalResults).toBe(0);
   });
 });

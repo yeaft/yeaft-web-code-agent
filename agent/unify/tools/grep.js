@@ -207,7 +207,7 @@ Guidelines:
     },
     required: ['pattern'],
   },
-  modes: ['work'],
+  modes: ['chat', 'work'],
   isConcurrencySafe: () => true,
   isReadOnly: () => true,
   async execute(input, ctx) {
