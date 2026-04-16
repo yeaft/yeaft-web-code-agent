@@ -1,8 +1,14 @@
 /**
- * skill.js — Skill invocation tool
+ * skill.js — Skill invocation tool (progressive disclosure)
  *
- * Allows the LLM to load and activate skills from the skill library.
- * Skills are specialized behaviors defined in ~/.yeaft/skills/*.md.
+ * Actions:
+ *   list   → metadata only (name, description, category, source)
+ *   view   → full skill content + linked files listing
+ *   search → find relevant skills for a query
+ *   load   → alias for view (backward compat)
+ *
+ * Directory-based skills (SKILL.md + references/ + templates/) support
+ * reading linked files via the view action's filePath parameter.
  *
  * Reference: yeaft-unify-design.md §8
  */
@@ -11,30 +17,41 @@ import { defineTool } from './types.js';
 
 export default defineTool({
   name: 'Skill',
-  description: `Load and activate a skill from the Yeaft skill library.
+  description: `Load and query skills from the Yeaft skill library.
 
-Skills are specialized behaviors or workflows defined in ~/.yeaft/skills/.
-Use this tool to:
-- List available skills
-- Load a specific skill's instructions
-- Find relevant skills for the current context
+Skills are specialized behaviors or workflows in ~/.yeaft/skills/.
+Two formats supported:
+- Single file: skills/my-skill.md
+- Directory: skills/my-skill/SKILL.md + references/ + templates/
 
-Skills provide domain-specific guidance and workflows that enhance your capabilities.`,
+Actions:
+- "list" — list all skills (metadata only: name, description, category)
+- "view" — view a skill's full content. For directory skills, also lists linked files. Pass filePath to read a specific reference/template.
+- "search" — find relevant skills for a query string
+- "load" — alias for "view" (backward compatible)`,
   parameters: {
     type: 'object',
     properties: {
       action: {
         type: 'string',
-        enum: ['list', 'load', 'search'],
-        description: '"list" lists all skills, "load" loads a specific skill, "search" finds relevant skills',
+        enum: ['list', 'view', 'load', 'search'],
+        description: '"list" lists all skills, "view"/"load" loads a specific skill, "search" finds relevant skills',
       },
       name: {
         type: 'string',
-        description: 'Skill name (for "load" action)',
+        description: 'Skill name (for "view"/"load" action)',
       },
       query: {
         type: 'string',
         description: 'Search query (for "search" action)',
+      },
+      filePath: {
+        type: 'string',
+        description: 'Read a linked file from a directory skill (e.g. "references/style-guide.md")',
+      },
+      category: {
+        type: 'string',
+        description: 'Filter by category (for "list" action)',
       },
     },
     required: ['action'],
@@ -53,36 +70,61 @@ Skills provide domain-specific guidance and workflows that enhance your capabili
 
     switch (input.action) {
       case 'list': {
-        const skills = skillManager.list();
+        let skills = skillManager.list();
         if (skills.length === 0) {
           return JSON.stringify({
             skills: [],
-            message: 'No skills found. Add .md files to ~/.yeaft/skills/ to create skills.',
+            categories: [],
+            message: 'No skills found. Add .md files or directories with SKILL.md to ~/.yeaft/skills/',
           });
         }
+        // Filter by category if specified
+        if (input.category) {
+          skills = skills.filter(s => s.category === input.category || (s.category && s.category.startsWith(input.category + '/')));
+        }
         return JSON.stringify({
-          skills: skills.map(s => ({
-            name: s.name,
-            description: s.description || '',
-            trigger: s.trigger || '',
-            mode: s.mode || 'both',
-          })),
+          skills,
+          categories: skillManager.listCategories(),
           totalCount: skills.length,
         }, null, 2);
       }
 
+      case 'view':
       case 'load': {
         if (!input.name) {
-          return JSON.stringify({ error: 'Skill name is required for "load" action' });
+          return JSON.stringify({ error: 'Skill name is required for "view" action' });
         }
-        const content = skillManager.getPromptContent(input.name);
-        if (!content) {
+        const result = skillManager.view(input.name, input.filePath);
+        if (!result) {
           return JSON.stringify({
             error: `Skill "${input.name}" not found`,
             available: skillManager.list().map(s => s.name),
           });
         }
-        return content;
+
+        // If reading a specific linked file, return just that content
+        if (input.filePath && result.linkedContent !== undefined) {
+          return result.linkedContent;
+        }
+
+        // Return full skill content + linked file listing
+        const output = {
+          name: result.skill.name,
+          description: result.skill.description || '',
+          mode: result.skill.mode,
+          category: result.skill.category || null,
+          source: result.skill._source,
+          content: result.skill.content,
+        };
+
+        if (result.references.length > 0) {
+          output.references = result.references;
+        }
+        if (result.templates.length > 0) {
+          output.templates = result.templates;
+        }
+
+        return JSON.stringify(output, null, 2);
       }
 
       case 'search': {
@@ -95,13 +137,15 @@ Skills provide domain-specific guidance and workflows that enhance your capabili
             name: s.name,
             description: s.description || '',
             trigger: s.trigger || '',
+            category: s.category || null,
+            source: s._source,
           })),
           totalResults: results.length,
         }, null, 2);
       }
 
       default:
-        return JSON.stringify({ error: `Unknown action: ${input.action}. Use "list", "load", or "search".` });
+        return JSON.stringify({ error: `Unknown action: ${input.action}. Use "list", "view", or "search".` });
     }
   },
 });
