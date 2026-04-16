@@ -240,7 +240,7 @@ export async function executeRoute(session, fromRole, route, turnImages = []) {
     if (toRoleConfig) {
       switch (toRoleConfig.roleType) {
         case 'reviewer': status = m.kanbanStatusReview; break;
-        case 'tester': status = m.kanbanStatusTest; break;
+        case 'product-reviewer': status = m.kanbanStatusProductReview; break;
         default:
           if (toRoleConfig.isDecisionMaker) status = m.kanbanStatusDecision;
       }

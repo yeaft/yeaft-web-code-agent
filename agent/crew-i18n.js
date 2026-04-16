@@ -154,13 +154,13 @@ UI/交互方案不确定时找设计师确认。需求不明确时找决策者 "
     },
 
     devGroupBinding: '# 开发组绑定',
-    devGroupBindingContent: (gi, revLabel, revName, testLabel, testName) =>
+    devGroupBindingContent: (gi, revLabel, revName, prevLabel, prevName) =>
       `你属于开发组 ${gi}。你的搭档：
-- 审查者: ${revLabel} (${revName})
-- 测试: ${testLabel} (${testName})
+- 技术审查: ${revLabel} (${revName})
+- 产品审查: ${prevLabel} (${prevName})
 
-开发完成后，请同时发两个 ROUTE 块分别给 ${revName} 和 ${testName}：`,
-    devGroupBindingNote: '审查者完成后 ROUTE 给测试者开始测试，测试者完成后 ROUTE 回 PM。',
+开发完成后，请同时发两个 ROUTE 块分别给 ${revName} 和 ${prevName}：`,
+    devGroupBindingNote: '技术审查和产品审查并行进行，各自完成后 ROUTE 回 PM。',
 
     implLoginPage: '实现登录页面',
     implLoginSummary: '请实现登录页面，包括表单验证和API调用',
@@ -168,6 +168,7 @@ UI/交互方案不确定时找设计师确认。需求不明确时找决策者 "
     implRegisterSummary: '请实现注册页面，包括邮箱验证',
     reviewCode: '请审查代码变更',
     testFeature: '请测试功能',
+    productReviewFeature: '请从产品/用户角度审查功能',
 
     // writeSharedClaudeMd
     projectGoal: '# 项目目标',
@@ -257,7 +258,7 @@ UI/交互方案不确定时找设计师确认。需求不明确时找决策者 "
     kanbanColSummary: '最新进展',
     kanbanStatusDev: '🔨 开发中',
     kanbanStatusReview: '📝 审查中',
-    kanbanStatusTest: '🧪 测试中',
+    kanbanStatusProductReview: '🔍 产品审查中',
     kanbanStatusDecision: '⏳ 待决策',
     kanbanAutoSave: '自动保存 - context 超限前',
 
@@ -413,13 +414,13 @@ Discuss with the decision maker when technical implementation is uncertain.`,
     },
 
     devGroupBinding: '# Dev Group Binding',
-    devGroupBindingContent: (gi, revLabel, revName, testLabel, testName) =>
+    devGroupBindingContent: (gi, revLabel, revName, prevLabel, prevName) =>
       `You belong to dev group ${gi}. Your partners:
-- Reviewer: ${revLabel} (${revName})
-- Tester: ${testLabel} (${testName})
+- Tech Reviewer: ${revLabel} (${revName})
+- Product Reviewer: ${prevLabel} (${prevName})
 
-After development is complete, send two ROUTE blocks simultaneously to ${revName} and ${testName}:`,
-    devGroupBindingNote: 'Reviewer ROUTEs to tester after review, tester ROUTEs back to PM after testing.',
+After development is complete, send two ROUTE blocks simultaneously to ${revName} and ${prevName}:`,
+    devGroupBindingNote: 'Tech review and product review run in parallel. Each ROUTEs back to PM after completion.',
 
     implLoginPage: 'Implement login page',
     implLoginSummary: 'Please implement the login page including form validation and API calls',
@@ -427,6 +428,7 @@ After development is complete, send two ROUTE blocks simultaneously to ${revName
     implRegisterSummary: 'Please implement the registration page including email verification',
     reviewCode: 'Please review code changes',
     testFeature: 'Please test the feature',
+    productReviewFeature: 'Please review from product/user perspective',
 
     // writeSharedClaudeMd
     projectGoal: '# Project Goal',
@@ -515,7 +517,7 @@ Roles don't need to manually create or update these files.`,
     kanbanColSummary: 'Latest Progress',
     kanbanStatusDev: '🔨 Developing',
     kanbanStatusReview: '📝 Reviewing',
-    kanbanStatusTest: '🧪 Testing',
+    kanbanStatusProductReview: '🔍 Product Reviewing',
     kanbanStatusDecision: '⏳ Pending Decision',
     kanbanAutoSave: 'Auto-save — before context limit',
 
