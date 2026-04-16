@@ -38,40 +38,96 @@ function _appendTextToContent(content, text) {
  */
 export function parseRoutes(text) {
   const routes = [];
+
+  // ─── Phase 1: Standard ROUTE blocks (with END_ROUTE) ──────────
   // ★ Tolerate both underscore and space variants: ---END_ROUTE--- or ---END ROUTE---
-  const regex = /---ROUTE---\s*\n([\s\S]*?)---END[_ ]ROUTE---/g;
+  // ★ Use negative lookahead to not cross another ---ROUTE--- boundary
+  const regex = /---ROUTE---\s*\n((?:(?!---ROUTE---)[\s\S])*?)---END[_ ]ROUTE---/g;
   let match;
+  const matchedRanges = []; // track matched ranges to avoid double-parsing
 
   while ((match = regex.exec(text)) !== null) {
-    const block = match[1];
-    const toMatch = block.match(/to:\s*(.+)/i);
-    if (!toMatch) continue;
+    matchedRanges.push({ start: match.index, end: match.index + match[0].length });
+    const parsed = _parseRouteBlock(match[1]);
+    if (parsed) routes.push(parsed);
+  }
 
-    // ★ Clean `to` value: take only the first word (strip parenthetical notes, extra text)
-    // e.g. "pm (决策者)" → "pm", "dev-1 // main dev" → "dev-1"
-    const toRaw = toMatch[1].trim().toLowerCase();
-    // Strip trailing punctuation (commas, semicolons, colons, etc.)
-    const toClean = toRaw.split(/[\s(]/)[0].replace(/[,;:!?。，；：!？]+$/, '');
+  // ─── Phase 2: Fallback — ROUTE block missing END_ROUTE ────────
+  // Match ---ROUTE--- without a closing ---END_ROUTE---
+  // Take content until next ---ROUTE--- or EOF
+  const openRegex = /---ROUTE---\s*\n/g;
+  while ((match = openRegex.exec(text)) !== null) {
+    // Skip if this range was already captured by Phase 1
+    const pos = match.index;
+    if (matchedRanges.some(r => pos >= r.start && pos < r.end)) continue;
 
-    // ★ summary: match until next known field (task:/taskTitle:) or end of block
-    const summaryMatch = block.match(/summary:\s*([\s\S]+?)(?=\n\s*(?:task|taskTitle)\s*:|$)/i);
-    const taskMatch = block.match(/^task:\s*(.+)/im);
-    const taskTitleMatch = block.match(/^taskTitle:\s*(.+)/im);
+    const blockStart = pos + match[0].length;
+    // End at next ---ROUTE--- or EOF
+    const nextRoute = text.indexOf('---ROUTE---', blockStart);
+    const blockEnd = nextRoute !== -1 ? nextRoute : text.length;
+    const block = text.slice(blockStart, blockEnd);
 
-    let summary = summaryMatch ? summaryMatch[1].trim() : '';
-    if (!summary) {
-      summary = '[该角色未提供消息摘要]';
-    }
+    const parsed = _parseRouteBlock(block);
+    if (parsed) routes.push(parsed);
+  }
 
-    routes.push({
-      to: toClean,
-      summary,
-      taskId: taskMatch ? taskMatch[1].trim() : null,
-      taskTitle: taskTitleMatch ? taskTitleMatch[1].trim() : null
-    });
+  // ─── Phase 3: Shorthand — "ROUTE → target" / "ROUTE: target" ─
+  // Matches single-line shorthands like: ROUTE → dev-1: summary here
+  // or: ROUTE: dev-1, summary here
+  const shorthandRegex = /^ROUTE\s*[→:]\s*(\S+)[,:\s]*(.*)$/gm;
+  while ((match = shorthandRegex.exec(text)) !== null) {
+    // Skip if inside an already-matched ROUTE block range
+    const pos = match.index;
+    if (matchedRanges.some(r => pos >= r.start && pos < r.end)) continue;
+    // Also skip if the line is inside a ---ROUTE--- block (even unclosed)
+    const precedingText = text.slice(0, pos);
+    const lastRouteOpen = precedingText.lastIndexOf('---ROUTE---');
+    const lastRouteClose = Math.max(
+      precedingText.lastIndexOf('---END_ROUTE---'),
+      precedingText.lastIndexOf('---END ROUTE---')
+    );
+    if (lastRouteOpen > lastRouteClose) continue; // inside an open block
+
+    const toRaw = match[1].trim().toLowerCase().replace(/[,;:!?。，；：!？]+$/, '');
+    const summary = match[2] ? match[2].trim() : '[该角色未提供消息摘要]';
+
+    routes.push({ to: toRaw, summary, taskId: null, taskTitle: null });
   }
 
   return routes;
+}
+
+/**
+ * Parse fields from a ROUTE block body (the content between ---ROUTE--- and ---END_ROUTE---).
+ * @param {string} block — raw block content
+ * @returns {{ to: string, summary: string, taskId: string|null, taskTitle: string|null } | null}
+ */
+function _parseRouteBlock(block) {
+  const toMatch = block.match(/to:\s*(.+)/i);
+  if (!toMatch) return null;
+
+  // ★ Clean `to` value: take only the first word (strip parenthetical notes, extra text)
+  // e.g. "pm (决策者)" → "pm", "dev-1 // main dev" → "dev-1"
+  const toRaw = toMatch[1].trim().toLowerCase();
+  // Strip trailing punctuation (commas, semicolons, colons, etc.)
+  const toClean = toRaw.split(/[\s(]/)[0].replace(/[,;:!?。，；：!？]+$/, '');
+
+  // ★ summary: match until next known field (task:/taskTitle:) or end of block
+  const summaryMatch = block.match(/summary:\s*([\s\S]+?)(?=\n\s*(?:task|taskTitle)\s*:|$)/i);
+  const taskMatch = block.match(/^task:\s*(.+)/im);
+  const taskTitleMatch = block.match(/^taskTitle:\s*(.+)/im);
+
+  let summary = summaryMatch ? summaryMatch[1].trim() : '';
+  if (!summary) {
+    summary = '[该角色未提供消息摘要]';
+  }
+
+  return {
+    to: toClean,
+    summary,
+    taskId: taskMatch ? taskMatch[1].trim() : null,
+    taskTitle: taskTitleMatch ? taskTitleMatch[1].trim() : null
+  };
 }
 
 /**

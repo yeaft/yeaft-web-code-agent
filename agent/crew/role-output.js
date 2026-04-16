@@ -13,6 +13,34 @@ import ctx from '../context.js';
 const getMaxContext = () => ctx.CONFIG?.maxContextTokens || 128000;
 
 /**
+ * Detect routing intent in text that lacks a proper ROUTE block.
+ * Returns true if keywords suggest the role intended to route to someone.
+ * @param {string} text
+ * @returns {boolean}
+ */
+export function _detectRouteIntent(text) {
+  if (!text || text.length < 10) return false;
+  // Check only the last 1000 chars (routing intent is usually at the end)
+  const tail = text.slice(-1000);
+  // Chinese patterns: 提交给/交给/请.*审查/转给/发给/route to
+  // English patterns: route to/submit to/forward to/hand off to/pass to
+  const intentPatterns = [
+    /提交给\s*\S+/,
+    /交给\s*\S+/,
+    /请\s*\S+\s*审查/,
+    /转给\s*\S+/,
+    /发给\s*\S+/,
+    /route\s+to\s+\S+/i,
+    /submit\s+to\s+\S+/i,
+    /forward\s+to\s+\S+/i,
+    /hand\s*off\s+to\s+\S+/i,
+    /pass\s+to\s+\S+/i,
+    /ROUTE[→:]\s*\S+/,  // shorthand that parseRoutes might have already caught, but as safety net
+  ];
+  return intentPatterns.some(p => p.test(tail));
+}
+
+/**
  * 处理角色的流式输出
  */
 export async function processRoleOutput(session, roleName, roleQuery, roleState) {
@@ -224,8 +252,21 @@ export async function processRoleOutput(session, roleName, roleQuery, roleState)
           });
           sendStatusUpdate(session);
         } else {
-          const { processHumanQueue } = await import('./human-interaction.js');
-          await processHumanQueue(session);
+          // ★ Route intent detection: if no ROUTE block but text suggests routing intent,
+          // auto-forward to PM so the message doesn't get lost
+          if (_detectRouteIntent(roleState.lastTurnText) && roleName !== session.decisionMaker) {
+            console.log(`[Crew] ${roleName} turn ended without ROUTE but has routing intent — auto-forwarding to PM`);
+            const autoSummary = `[auto-forward: ${roleName} 的输出包含路由意图但缺少 ROUTE 块]\n${(roleState.lastTurnText || '').slice(-500).trim()}`;
+            await executeRoute(session, roleName, {
+              to: session.decisionMaker,
+              summary: autoSummary,
+              taskId: roleState.currentTask?.taskId || null,
+              taskTitle: roleState.currentTask?.taskTitle || null,
+            });
+          } else {
+            const { processHumanQueue } = await import('./human-interaction.js');
+            await processHumanQueue(session);
+          }
         }
       }
     }
