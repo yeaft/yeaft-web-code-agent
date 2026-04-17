@@ -25,6 +25,8 @@ import { createFullRegistry } from './tools/index.js';
 import { initTaskStore } from './tools/task-tools.js';
 import { initThreadStore } from './threads/store.js';
 import { Engine } from './engine.js';
+import { createThreadEngineRegistry } from './threads/engine-registry.js';
+import { MAIN_THREAD_ID } from './threads/store.js';
 import { join } from 'path';
 
 /**
@@ -166,6 +168,25 @@ export async function loadSession(options = {}) {
     yeaftDir,
   });
 
+  // task-308 Phase 2: thread-aware engine registry.
+  // Each thread gets its own EngineInstance (lazy-created) that owns its
+  // messages array and tags all events with the bound threadId. Legacy
+  // single-engine callers keep working via `session.engine`; multi-thread
+  // callers use `session.engineRegistry.ensure(threadId)`.
+  const engineRegistry = createThreadEngineRegistry({
+    adapter,
+    trace,
+    config,
+    conversationStore,
+    memoryStore,
+    toolRegistry,
+    skillManager,
+    mcpManager,
+    yeaftDir,
+  });
+  // Seed the main-thread instance so listActive() is non-empty from T=0.
+  engineRegistry.ensure(MAIN_THREAD_ID);
+
   // ─── 10. Build session ─────────────────────────────────
   const status = {
     skills: skillManager.size,
@@ -176,6 +197,11 @@ export async function loadSession(options = {}) {
 
   /** Graceful shutdown: disconnect MCP, close trace DB. */
   async function shutdown() {
+    try {
+      engineRegistry.terminateAll();
+    } catch {
+      // Best-effort cleanup
+    }
     try {
       await mcpManager.disconnectAll();
     } catch {
@@ -190,6 +216,7 @@ export async function loadSession(options = {}) {
 
   return {
     engine,
+    engineRegistry,
     adapter,
     config,
     conversationStore,
