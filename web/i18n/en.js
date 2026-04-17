@@ -156,7 +156,7 @@ export default {
   'unify.settings.unifyTitle': 'Thread Concurrency & Archive',
   'unify.settings.unifyDesc': 'Tune how many threads can run at once and when idle threads are auto-archived.',
   'unify.settings.maxConcurrentLabel': 'Max concurrent threads',
-  'unify.settings.maxConcurrentHint': 'New threads beyond this cap are refused until an existing thread is archived or terminated. Range: 1-50.',
+  'unify.settings.maxConcurrentHint': 'Maximum number of live threads at once (includes the always-on main thread). New threads beyond this cap are refused until an existing thread is archived or terminated. Range: 1-50.',
   'unify.settings.archiveIdleDaysLabel': 'Auto-archive idle threads after (days)',
   'unify.settings.archiveIdleDaysHint': 'Threads with no activity for this many days will be archived. Range: 1-3650.',
   'unify.settings.unifySaveBtn': 'Save',

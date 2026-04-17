@@ -241,7 +241,7 @@ export default {
     let saveTimeout = null;
 
     // ─── task-318: Unify runtime settings state ───────────────
-    const localMaxConcurrent = Vue.ref(5);
+    const localMaxConcurrent = Vue.ref(6);
     const localArchiveIdleDays = Vue.ref(30);
     const unifyDirty = Vue.ref(false);
     const unifyLoading = Vue.ref(false);
@@ -294,7 +294,7 @@ export default {
         return;
       }
       unifyLoadError.value = null;
-      localMaxConcurrent.value = settings.maxConcurrentThreads ?? 5;
+      localMaxConcurrent.value = settings.maxConcurrentThreads ?? 6;
       localArchiveIdleDays.value = settings.autoArchiveIdleDays ?? 30;
       unifyDirty.value = false;
     }

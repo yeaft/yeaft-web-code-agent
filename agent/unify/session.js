@@ -262,6 +262,11 @@ export async function loadSession(options = {}) {
     toolRegistry,
     trace,
     yeaftDir,
+    // task-318 rev-1 fix: expose the live ThreadStore handle so callers
+    // (web-bridge, message-router via ctx) can invoke setIdleArchiveDays()
+    // on the exact instance that's wired into the dispatcher. Without this
+    // export the setter was effectively dead code.
+    threadStore: getThreadStore(),
     status,
     shutdown,
   };

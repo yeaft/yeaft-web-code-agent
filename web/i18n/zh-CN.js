@@ -156,7 +156,7 @@ export default {
   'unify.settings.unifyTitle': '线程并发与归档',
   'unify.settings.unifyDesc': '调整可同时运行的线程数量，以及闲置线程的自动归档时长。',
   'unify.settings.maxConcurrentLabel': '最大并发线程数',
-  'unify.settings.maxConcurrentHint': '超过此上限的新线程将被拒绝，直至已有线程被归档或终止。范围：1-50。',
+  'unify.settings.maxConcurrentHint': '同时在线的线程总数上限（含始终存在的 main 主线程）。超过此上限的新线程将被拒绝，直至已有线程被归档或终止。范围：1-50。',
   'unify.settings.archiveIdleDaysLabel': '闲置多久后自动归档线程（天）',
   'unify.settings.archiveIdleDaysHint': '无活动超过此天数的线程将被归档。范围：1-3650。',
   'unify.settings.unifySaveBtn': '保存',

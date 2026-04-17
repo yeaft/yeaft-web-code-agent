@@ -495,7 +495,7 @@ export function handleMessage(store, msg) {
     case 'unify_settings_updated':
       if (msg.agentId) {
         store.unifySettings[msg.agentId] = {
-          maxConcurrentThreads: msg.maxConcurrentThreads ?? 5,
+          maxConcurrentThreads: msg.maxConcurrentThreads ?? 6,
           autoArchiveIdleDays: msg.autoArchiveIdleDays ?? 30,
           error: msg.error || null,
           loaded: true,

@@ -27,24 +27,29 @@ afterEach(() => {
 describe('normaliseUnifySection', () => {
   it('returns defaults for null / undefined / malformed input', () => {
     expect(normaliseUnifySection(null)).toEqual({
-      maxConcurrentThreads: 5,
+      maxConcurrentThreads: 6,
       autoArchiveIdleDays: 30,
     });
     expect(normaliseUnifySection(undefined)).toEqual({
-      maxConcurrentThreads: 5,
+      maxConcurrentThreads: 6,
       autoArchiveIdleDays: 30,
     });
     expect(normaliseUnifySection('nope')).toEqual({
-      maxConcurrentThreads: 5,
+      maxConcurrentThreads: 6,
       autoArchiveIdleDays: 30,
     });
   });
 
-  it('clamps out-of-range values back to defaults', () => {
-    expect(normaliseUnifySection({ maxConcurrentThreads: 0 }).maxConcurrentThreads).toBe(5);
-    expect(normaliseUnifySection({ maxConcurrentThreads: 100 }).maxConcurrentThreads).toBe(5);
-    expect(normaliseUnifySection({ autoArchiveIdleDays: 0 }).autoArchiveIdleDays).toBe(30);
-    expect(normaliseUnifySection({ autoArchiveIdleDays: 5000 }).autoArchiveIdleDays).toBe(30);
+  it('clamps out-of-range numeric values (rather than reverting to default)', () => {
+    expect(normaliseUnifySection({ maxConcurrentThreads: 0 }).maxConcurrentThreads).toBe(1);
+    expect(normaliseUnifySection({ maxConcurrentThreads: 100 }).maxConcurrentThreads).toBe(50);
+    expect(normaliseUnifySection({ autoArchiveIdleDays: 0 }).autoArchiveIdleDays).toBe(1);
+    expect(normaliseUnifySection({ autoArchiveIdleDays: 5000 }).autoArchiveIdleDays).toBe(3650);
+  });
+
+  it('non-numeric values fall through to defaults (treated as "not set")', () => {
+    expect(normaliseUnifySection({ maxConcurrentThreads: 'nope' }).maxConcurrentThreads).toBe(6);
+    expect(normaliseUnifySection({ autoArchiveIdleDays: null }).autoArchiveIdleDays).toBe(30);
   });
 
   it('accepts valid values', () => {
@@ -59,7 +64,7 @@ describe('getUnifySettings', () => {
   it('returns defaults when no config.json exists', () => {
     const settings = getUnifySettings(TEST_DIR);
     expect(settings).toEqual({
-      maxConcurrentThreads: 5,
+      maxConcurrentThreads: 6,
       autoArchiveIdleDays: 30,
     });
   });
@@ -79,7 +84,7 @@ describe('getUnifySettings', () => {
       providers: [{ name: 'openai', baseUrl: 'x', apiKey: 'y', models: ['m'] }],
     }));
     const settings = getUnifySettings(TEST_DIR);
-    expect(settings.maxConcurrentThreads).toBe(5);
+    expect(settings.maxConcurrentThreads).toBe(6);
     expect(settings.autoArchiveIdleDays).toBe(30);
   });
 });
