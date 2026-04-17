@@ -122,6 +122,56 @@ export function budgetExceededResult(agent, reason) {
   };
 }
 
+/**
+ * Apply an incremental delta to an agent's usage, then check budget.
+ * If exceeded: abort the agent's signal, set result to the budget envelope,
+ * flip status to 'completed', and return the envelope. Otherwise returns null.
+ *
+ * Call this at each turn boundary inside the sub-agent's execution loop.
+ *
+ * @param {string} agentId
+ * @param {{ tokens?: number, turns?: number, partial_output?: string }} [delta]
+ * @param {number} [now=Date.now()]
+ * @returns {object|null} — budget envelope if exceeded, else null
+ */
+export function tickAgent(agentId, delta = {}, now = Date.now()) {
+  const agent = agents.get(agentId);
+  if (!agent) return null;
+  if (agent.status === 'completed' || agent.status === 'closed') return null;
+
+  if (typeof delta.tokens === 'number' && delta.tokens > 0) {
+    agent.usage.tokens += delta.tokens;
+  }
+  if (typeof delta.turns === 'number' && delta.turns > 0) {
+    agent.usage.turns += delta.turns;
+  }
+  if (typeof delta.partial_output === 'string' && delta.partial_output) {
+    agent.partial_output = delta.partial_output;
+  }
+
+  const check = checkBudget(agent, now);
+  if (!check.exceeded) return null;
+
+  const envelope = budgetExceededResult(agent, check.reason);
+  agent.result = envelope;
+  agent.status = 'completed';
+  agent.diagnostics.push({
+    type: 'budget_exceeded',
+    limit: check.limit,
+    reason: check.reason,
+    at: now,
+  });
+  // Signal any in-flight sub-agent work to stop
+  if (agent.abortController && !agent.abortController.signal.aborted) {
+    try {
+      agent.abortController.abort(check.reason);
+    } catch {
+      // ignore double-abort
+    }
+  }
+  return envelope;
+}
+
 export default defineTool({
   name: 'Agent',
   description: `Create a sub-agent to work on an independent task in parallel.
@@ -219,6 +269,7 @@ Guidelines:
       usage: { tokens: 0, turns: 0, startedAt: now },
       createdAt: now,
       trace: [],
+      abortController: new AbortController(),
     };
 
     agents.set(agentId, agent);
