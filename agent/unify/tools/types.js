@@ -24,7 +24,9 @@
  * @property {string} description — LLM-facing description
  * @property {object} parameters — JSON Schema for input
  * @property {(input: object, ctx?: ToolContext) => Promise<string>} execute — execution function
- * @property {string[]} modes — which modes can use this tool: ['chat', 'work']
+ * @property {string[]} [modes] — @deprecated since task-297. Legacy mode filter (['chat', 'work']).
+ *   Unify no longer has mode distinction; the ToolRegistry ignores this field and exposes every
+ *   registered tool to the engine. Retained only so existing tool definitions keep loading.
  * @property {(input?: object) => boolean} [isConcurrencySafe] — can run in parallel?
  * @property {(input?: object) => boolean} [isReadOnly] — read-only operation?
  * @property {(input?: object) => boolean} [isDestructive] — destructive operation?
@@ -38,7 +40,7 @@
  *   description: string,
  *   parameters: object,
  *   execute: (input: object, ctx?: ToolContext) => Promise<string>,
- *   modes?: string[],
+ *   modes?: string[],  // @deprecated since task-297 — ignored by ToolRegistry
  *   isConcurrencySafe?: (input?: object) => boolean,
  *   isReadOnly?: (input?: object) => boolean,
  *   isDestructive?: (input?: object) => boolean,

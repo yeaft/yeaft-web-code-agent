@@ -95,6 +95,9 @@ export default {
 
   // ============ Unify 页面 ============
   'unify.back': '返回',
+  'unify.breadcrumb.label': 'Thread 过滤',
+  'unify.breadcrumb.mainStream': '主流',
+  'unify.breadcrumb.backHint': '返回全流 (Esc)',
   'unify.model': '模型',
   'unify.placeholder': '问我任何问题...',
   // task-301: Sidebar V2 strings

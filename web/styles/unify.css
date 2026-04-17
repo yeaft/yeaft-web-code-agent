@@ -956,3 +956,60 @@
     padding: 6px 10px;
   }
 }
+
+/* =====================================================
+ * Unify Breadcrumb — dual-view chat stream filter banner
+ * =====================================================
+ * Shown above MessageList when a thread filter is active.
+ * Follows the project rule: NO horizontal border/divider.
+ * Uses background tint + padding to separate from topbar/messages.
+ */
+.unify-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  font-size: 13px;
+  color: var(--text-secondary, #555);
+  background: var(--bg-subtle, rgba(0, 0, 0, 0.025));
+  /* Intentionally no border-top / border-bottom — use spacing instead. */
+}
+
+.unify-breadcrumb-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--link-color, #2d7ff9);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.unify-breadcrumb-back:hover {
+  background: var(--bg-hover, rgba(45, 127, 249, 0.08));
+}
+
+.unify-breadcrumb-arrow {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.unify-breadcrumb-sep {
+  color: var(--text-tertiary, #bbb);
+  user-select: none;
+}
+
+.unify-breadcrumb-thread {
+  font-weight: 500;
+  color: var(--text-primary, #222);
+}
+
+.unify-breadcrumb-hash {
+  color: var(--text-tertiary, #999);
+  margin-right: 1px;
+}
+

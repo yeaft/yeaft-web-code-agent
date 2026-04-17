@@ -352,7 +352,13 @@ export class Engine {
    * Yields EngineEvent objects that the caller (CLI, web) can consume
    * to render output in real-time.
    *
-   * @param {{ prompt: string, mode?: string, messages?: Array, signal?: AbortSignal }} params
+   * @param {object} params
+   * @param {string} params.prompt - The user prompt (required, non-empty).
+   * @param {'dream'} [params.mode] - Optional mode flag. Since task-297 the only
+   *   value accepted / acted on is `'dream'` (memory maintenance system prompt).
+   *   Any other value is ignored and falls through to the unified system prompt.
+   * @param {Array} [params.messages] - Prior conversation messages.
+   * @param {AbortSignal} [params.signal] - Abort signal.
    * @yields {EngineEvent}
    */
   async *query({ prompt, mode, messages = [], signal }) {

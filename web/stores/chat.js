@@ -185,6 +185,10 @@ export const useChatStore = defineStore('chat', {
       } catch (_) { /* non-browser test env */ }
       return false;
     })(),
+
+    // ★ task-303: Chat stream dual view — active thread filter.
+    // null = 主流 (full stream) | threadId = 仅显示该 thread
+    unifyActiveThreadFilter: null,
   }),
 
   getters: {
@@ -193,7 +197,28 @@ export const useChatStore = defineStore('chat', {
     // ★ Multi-column: compatibility shim — reads messagesMap for primary conversation
     messages: (state) => {
       const convId = state.activeConversations[0];
+      const raw = convId ? (state.messagesMap[convId] || EMPTY_ARRAY) : EMPTY_ARRAY;
+      // Unify dual-view: when a thread filter is active, keep only messages whose
+      // threadId matches (user messages without a threadId are also kept so the
+      // prompt that spawned the thread stays visible).
+      if (state.currentView === 'unify' && state.unifyActiveThreadFilter) {
+        const target = state.unifyActiveThreadFilter;
+        return raw.filter(m => m && m.threadId === target);
+      }
+      return raw;
+    },
+    // ★ Unify: the raw message list for the active Unify conversation (no thread filter applied).
+    unifyAllMessages: (state) => {
+      const convId = state.unifyConversationId;
       return convId ? (state.messagesMap[convId] || EMPTY_ARRAY) : EMPTY_ARRAY;
+    },
+    // ★ Unify: the currently visible messages after applying unifyActiveThreadFilter.
+    unifyVisibleMessages: (state) => {
+      const convId = state.unifyConversationId;
+      const raw = convId ? (state.messagesMap[convId] || EMPTY_ARRAY) : EMPTY_ARRAY;
+      if (!state.unifyActiveThreadFilter) return raw;
+      const target = state.unifyActiveThreadFilter;
+      return raw.filter(m => m && m.threadId === target);
     },
     // ★ Multi-column: compatibility shim — alias for messagesMap
     messagesCache: (state) => state.messagesMap,
@@ -339,6 +364,7 @@ export const useChatStore = defineStore('chat', {
     },
     leaveUnify() {
       this.currentView = 'chat';
+      this.unifyActiveThreadFilter = null;
       // Restore the original activeConversations
       if (this._savedActiveConversations) {
         this.activeConversations = this._savedActiveConversations;
@@ -496,6 +522,13 @@ export const useChatStore = defineStore('chat', {
         }
       } catch (_) { /* ignore storage errors */ }
     },
+    // ★ task-303: Chat stream dual view — filter actions.
+    setUnifyThreadFilter(threadId) {
+      this.unifyActiveThreadFilter = threadId || null;
+    },
+    clearUnifyThreadFilter() {
+      this.unifyActiveThreadFilter = null;
+    },
     switchUnifyModel(modelId) {
       if (!modelId || !this.unifyAgentId) return;
       this.sendWsMessage({
@@ -520,6 +553,7 @@ export const useChatStore = defineStore('chat', {
       this.unifyAvailableModels = [];
       this.unifyStatus = null;
       this.unifyDebugTurns = [];
+      this.unifyActiveThreadFilter = null;
       // Tell agent to reset session so Engine gets a fresh start
       if (this.unifyAgentId) {
         this.sendWsMessage({

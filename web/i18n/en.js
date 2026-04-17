@@ -95,6 +95,9 @@ export default {
 
   // ============ Unify Page ============
   'unify.back': 'Back',
+  'unify.breadcrumb.label': 'Thread filter',
+  'unify.breadcrumb.mainStream': 'Main stream',
+  'unify.breadcrumb.backHint': 'Return to full stream (Esc)',
   'unify.model': 'Model',
   'unify.placeholder': 'Ask anything...',
   // task-301: Sidebar V2 strings

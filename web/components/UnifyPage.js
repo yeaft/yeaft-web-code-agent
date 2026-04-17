@@ -2,10 +2,11 @@ import ChatInput from './ChatInput.js';
 import MessageList from './MessageList.js';
 import UnifySettings from './UnifySettings.js';
 import UnifySidebarV2 from './UnifySidebarV2.js';
+import UnifyBreadcrumb from './UnifyBreadcrumb.js';
 
 export default {
   name: 'UnifyPage',
-  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2 },
+  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2, UnifyBreadcrumb },
   template: `
     <div class="unify-page">
       <!-- Mobile sidebar overlay -->
@@ -92,6 +93,14 @@ export default {
             </button>
           </div>
         </div>
+
+        <!-- Breadcrumb: visible only when a thread filter is active -->
+        <UnifyBreadcrumb
+          v-if="store.unifyActiveThreadFilter"
+          :thread-id="store.unifyActiveThreadFilter"
+          :thread-name="activeThreadName"
+          @back="clearThreadFilter"
+        />
 
         <!-- Messages Area — reuse standard MessageList for identical rendering -->
         <MessageList v-if="!showSettings" />
@@ -247,13 +256,23 @@ export default {
     // Detect mobile for overlay behavior
     const isMobile = Vue.ref(window.innerWidth <= 768);
     const onResize = () => { isMobile.value = window.innerWidth <= 768; };
+
+    // Esc clears the active thread filter (returns to full main stream)
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape' && store.unifyActiveThreadFilter) {
+        store.clearUnifyThreadFilter();
+      }
+    };
+
     Vue.onMounted(() => {
       window.addEventListener('resize', onResize);
       document.addEventListener('click', closeModelDropdownOutside);
+      document.addEventListener('keydown', onKeyDown);
     });
     Vue.onUnmounted(() => {
       window.removeEventListener('resize', onResize);
       document.removeEventListener('click', closeModelDropdownOutside);
+      document.removeEventListener('keydown', onKeyDown);
     });
 
     // Watch for conversationId changes (session_ready migrates local -> agent ID)
@@ -375,6 +394,20 @@ export default {
       showSettings.value = false;
     };
 
+    const clearThreadFilter = () => {
+      store.clearUnifyThreadFilter();
+    };
+
+    // Derive a human-readable label for the active thread, if any message carries a threadName.
+    const activeThreadName = Vue.computed(() => {
+      const tid = store.unifyActiveThreadFilter;
+      if (!tid) return '';
+      const convId = store.unifyConversationId;
+      const msgs = convId ? (store.messagesMap[convId] || []) : [];
+      const named = msgs.find(m => m && m.threadId === tid && m.threadName);
+      return named?.threadName || tid;
+    });
+
     return {
       store,
       sidebarCollapsed,
@@ -408,6 +441,8 @@ export default {
       sidebarV2Enabled,
       onSelectThreadV2,
       onSelectTaskV2,
+      clearThreadFilter,
+      activeThreadName,
     };
   }
 };
