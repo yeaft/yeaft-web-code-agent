@@ -23,7 +23,7 @@ const DAY_MS = 24 * HOUR_MS;
 
 export default {
   name: 'UnifySidebarV2',
-  emits: ['select-thread', 'select-task'],
+  emits: ['select-thread', 'select-task', 'jump-to-message', 'search-escape'],
   template: `
     <aside class="unify-sidebar-v2">
       <div class="usv2-search">
@@ -33,10 +33,47 @@ export default {
           class="usv2-search-input"
           v-model="searchQuery"
           :placeholder="placeholderText"
+          @keydown.esc.prevent="onSearchEscape"
+          ref="searchInput"
         />
+        <button
+          v-if="searchQuery"
+          type="button"
+          class="usv2-search-clear"
+          :title="label('clearSearch')"
+          @click="onSearchEscape"
+        >×</button>
       </div>
 
-      <div class="usv2-scroll">
+      <!-- task-312: unified search results list. Shown whenever a query is
+           active; hides the Active/Idle/Archived/Tasks sections so the user
+           sees a single flat ranked list with click-to-jump semantics. -->
+      <div class="usv2-scroll" v-if="searchActive">
+        <section class="usv2-group usv2-group-results">
+          <div class="usv2-group-header usv2-results-header">
+            <span class="usv2-group-label">{{ label('results') }}</span>
+            <span class="usv2-group-count">{{ searchResults.length }}</span>
+          </div>
+          <div class="usv2-group-body">
+            <div
+              v-for="r in searchResults"
+              :key="r.kind + ':' + r.id"
+              class="usv2-result"
+              :class="'usv2-result-' + r.kind"
+              @click="onSelectResult(r)"
+            >
+              <span class="usv2-result-kind">{{ label(r.kind === 'thread' ? 'kindThread' : 'kindTask') }}</span>
+              <span class="usv2-result-name" v-if="r.kind === 'thread'">#{{ threadDisplayName(r.thread) }}</span>
+              <span class="usv2-result-name" v-else>{{ r.task.id }}</span>
+              <span class="usv2-result-title">{{ r.title }}</span>
+              <span class="usv2-result-snippet" v-if="r.snippet">{{ r.snippet }}</span>
+            </div>
+            <div class="usv2-empty" v-if="searchResults.length === 0">{{ label('emptyResults') }}</div>
+          </div>
+        </section>
+      </div>
+
+      <div class="usv2-scroll" v-else>
         <!-- Active Threads -->
         <section class="usv2-group" :class="{ collapsed: !activeOpen }">
           <button type="button" class="usv2-group-header" @click="activeOpen = !activeOpen">
@@ -207,27 +244,61 @@ export default {
       }
       return 'Search… (#name for threads)';
     },
+    // task-312: parser now recognises three mutually-exclusive prefixes:
+    //   #<name>        → only match thread by name (hides tasks)
+    //   in:<field> kw  → scope the keyword to a single field
+    //   plain keyword  → full-text over name/title/goal/summary/preview
+    //
+    // Returned shape:
+    //   { keyword, threadPrefix, scopedField }
+    //   - keyword: lowercase search term (or '' when threadPrefix set)
+    //   - threadPrefix: lowercased name substring, or null
+    //   - scopedField: 'title' | 'summary' | null
     parsedQuery() {
       const raw = (this.searchQuery || '').trim();
-      if (!raw) return { keyword: '', threadPrefix: null };
+      if (!raw) return { keyword: '', threadPrefix: null, scopedField: null };
       if (raw.startsWith('#') && raw.length > 1) {
-        return { keyword: '', threadPrefix: raw.slice(1).toLowerCase() };
+        return { keyword: '', threadPrefix: raw.slice(1).toLowerCase(), scopedField: null };
       }
-      return { keyword: raw.toLowerCase(), threadPrefix: null };
+      // `in:<field> rest…` — field is bare alphanum identifier.
+      const inMatch = raw.match(/^in:([a-zA-Z]+)\s+(.+)$/);
+      if (inMatch) {
+        const field = inMatch[1].toLowerCase();
+        const kw = inMatch[2].trim().toLowerCase();
+        // Only whitelisted scope fields are honoured; anything else falls
+        // through to plain keyword to avoid silently dropping the query.
+        if (field === 'title' || field === 'summary') {
+          return { keyword: kw, threadPrefix: null, scopedField: field };
+        }
+      }
+      return { keyword: raw.toLowerCase(), threadPrefix: null, scopedField: null };
+    },
+    searchActive() {
+      const { keyword, threadPrefix } = this.parsedQuery;
+      return !!(keyword || threadPrefix);
     },
     threadOnlyQuery() {
       return this.parsedQuery.threadPrefix !== null;
     },
     filteredThreads() {
-      const { keyword, threadPrefix } = this.parsedQuery;
+      const { keyword, threadPrefix, scopedField } = this.parsedQuery;
       return this.threads.filter((t) => {
         if (threadPrefix !== null) {
           return (t.name || '').toLowerCase().includes(threadPrefix);
         }
         if (!keyword) return true;
+        if (scopedField === 'title') {
+          return (t.title || '').toLowerCase().includes(keyword);
+        }
+        if (scopedField === 'summary') {
+          // "summary" for a thread maps to its goal/preview long text.
+          return (t.goal || '').toLowerCase().includes(keyword)
+            || (t.preview || '').toLowerCase().includes(keyword);
+        }
         return (t.name || '').toLowerCase().includes(keyword)
           || (t.title || '').toLowerCase().includes(keyword)
-          || (t.goal || '').toLowerCase().includes(keyword);
+          || (t.goal || '').toLowerCase().includes(keyword)
+          || (t.preview || '').toLowerCase().includes(keyword);
       });
     },
     grouped() {
@@ -253,17 +324,67 @@ export default {
       return out;
     },
     filteredTasks() {
-      const { keyword, threadPrefix } = this.parsedQuery;
+      const { keyword, threadPrefix, scopedField } = this.parsedQuery;
       if (threadPrefix !== null) return [];
       if (!keyword) return this.tasks;
       const kw = keyword;
+      // scopedField semantics for tasks:
+      //   title   → match only task.title / task.id
+      //   summary → match only task.summary / task.description
+      //   null    → match any of the above (plus recursively children)
       const matches = (task) => {
-        const self = (task.title || '').toLowerCase().includes(kw)
-          || (task.id || '').toLowerCase().includes(kw);
+        let self = false;
+        if (scopedField === 'title') {
+          self = (task.title || '').toLowerCase().includes(kw)
+            || (task.id || '').toLowerCase().includes(kw);
+        } else if (scopedField === 'summary') {
+          self = (task.summary || '').toLowerCase().includes(kw)
+            || (task.description || '').toLowerCase().includes(kw);
+        } else {
+          self = (task.title || '').toLowerCase().includes(kw)
+            || (task.id || '').toLowerCase().includes(kw)
+            || (task.summary || '').toLowerCase().includes(kw)
+            || (task.description || '').toLowerCase().includes(kw);
+        }
         if (self) return true;
         return (task.children || []).some(matches);
       };
       return this.tasks.filter(matches);
+    },
+    // task-312: flat ranked result list used by the results panel.
+    // Threads come first, then tasks (including nested children matched
+    // by filteredTasks). Each entry carries a short snippet pulled from
+    // whichever field triggered the match, for visual confirmation.
+    searchResults() {
+      if (!this.searchActive) return [];
+      const { keyword, threadPrefix, scopedField } = this.parsedQuery;
+      const out = [];
+      for (const t of this.filteredThreads) {
+        out.push({
+          kind: 'thread',
+          id: t.id,
+          title: t.title || t.goal || '',
+          snippet: this.pickThreadSnippet(t, keyword, threadPrefix, scopedField),
+          thread: t,
+        });
+      }
+      if (threadPrefix === null) {
+        const flatten = (task, depth = 0) => {
+          const matched = this.taskMatchesDirect(task, keyword, scopedField);
+          if (matched) {
+            out.push({
+              kind: 'task',
+              id: task.id,
+              title: task.title || '',
+              snippet: this.pickTaskSnippet(task, keyword, scopedField),
+              task,
+            });
+          }
+          for (const c of (task.children || [])) flatten(c, depth + 1);
+        };
+        for (const task of this.filteredTasks) flatten(task, 0);
+      }
+      return out;
     }
   },
   methods: {
@@ -281,6 +402,11 @@ export default {
         emptyIdle: 'No idle threads',
         emptyArchived: 'No archived threads',
         emptyTasks: 'No tasks match',
+        results: 'Results',
+        emptyResults: 'No matches',
+        kindThread: 'thread',
+        kindTask: 'task',
+        clearSearch: 'Clear',
       };
       return fallback[key] || full;
     },
@@ -309,6 +435,79 @@ export default {
     },
     onSelectTask(task) {
       this.$emit('select-task', task.id);
+    },
+    // task-312: unified click-through from the Results list.
+    // Thread hit → select + ask MessageList to scroll/highlight the first
+    // message whose text matches the keyword. Task hit → delegate to the
+    // regular select-task path (task-detail deep-link lands in task-315).
+    onSelectResult(r) {
+      if (r.kind === 'thread') {
+        this.$emit('select-thread', r.id);
+        const kw = this.parsedQuery.keyword;
+        if (kw) {
+          this.$emit('jump-to-message', { threadId: r.id, keyword: kw });
+        }
+      } else {
+        this.$emit('select-task', r.id);
+      }
+    },
+    // task-312: Esc in the search box clears + asks parent to refocus
+    // the chat input. Plain string empty also exits the results view.
+    onSearchEscape() {
+      this.searchQuery = '';
+      this.$emit('search-escape');
+    },
+    // -------- snippet helpers (task-312) --------
+    pickThreadSnippet(t, keyword, threadPrefix, scopedField) {
+      if (threadPrefix) return '';
+      const kw = keyword || '';
+      if (!kw) return '';
+      const candidates = scopedField === 'title'
+        ? [t.title]
+        : scopedField === 'summary'
+          ? [t.goal, t.preview]
+          : [t.title, t.goal, t.preview];
+      for (const txt of candidates) {
+        if (txt && String(txt).toLowerCase().includes(kw)) {
+          return this.truncate(String(txt));
+        }
+      }
+      return '';
+    },
+    pickTaskSnippet(task, keyword, scopedField) {
+      const kw = keyword || '';
+      if (!kw) return '';
+      const candidates = scopedField === 'title'
+        ? [task.title]
+        : scopedField === 'summary'
+          ? [task.summary, task.description]
+          : [task.summary, task.description];
+      for (const txt of candidates) {
+        if (txt && String(txt).toLowerCase().includes(kw)) {
+          return this.truncate(String(txt));
+        }
+      }
+      return '';
+    },
+    taskMatchesDirect(task, keyword, scopedField) {
+      const kw = (keyword || '').toLowerCase();
+      if (!kw) return true;
+      if (scopedField === 'title') {
+        return (task.title || '').toLowerCase().includes(kw)
+          || (task.id || '').toLowerCase().includes(kw);
+      }
+      if (scopedField === 'summary') {
+        return (task.summary || '').toLowerCase().includes(kw)
+          || (task.description || '').toLowerCase().includes(kw);
+      }
+      return (task.title || '').toLowerCase().includes(kw)
+        || (task.id || '').toLowerCase().includes(kw)
+        || (task.summary || '').toLowerCase().includes(kw)
+        || (task.description || '').toLowerCase().includes(kw);
+    },
+    truncate(s, n = 80) {
+      if (!s) return '';
+      return s.length > n ? s.slice(0, n - 1) + '…' : s;
     }
   }
 };

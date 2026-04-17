@@ -115,7 +115,9 @@ describe('i18n dictionaries', () => {
   });
 
   it('placeholder key hints at # prefix syntax (en)', () => {
-    expect(enSrc).toMatch(/'unify\.sidebar\.searchPlaceholder':\s*'[^']*\(#name for threads\)/);
+    // task-312: placeholder now also surfaces the `in:title` prefix, but
+    // must still mention `#name` so users know the thread-only shortcut.
+    expect(enSrc).toMatch(/'unify\.sidebar\.searchPlaceholder':\s*'[^']*#name[^']*'/);
   });
 
   it('placeholder key hints at # prefix syntax (zh)', () => {

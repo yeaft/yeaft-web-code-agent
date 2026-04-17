@@ -85,11 +85,15 @@ export default {
         <div v-if="store.loadingMoreMessages" class="loading-more">{{ $t('message.loadingMore') }}</div>
         <div v-else-if="store.hasMoreMessages" class="load-more-hint" @click="store.loadMoreMessages()">{{ $t('message.loadMore') }}</div>
         <template v-for="item in turnGroups" :key="item.id">
-          <!-- User / system / error messages: rendered by MessageItem -->
-          <MessageItem v-if="item.type === 'user' || item.type === 'system' || item.type === 'error'" :message="item.message" />
+          <!-- task-312: wrapper carries data-msg-id so the Unify sidebar
+               jump-to-message feature can scroll/flash a specific row. -->
+          <div class="msg-row" :data-msg-id="item.id" :class="{ 'msg-flash': item.id === flashMsgId }">
+            <!-- User / system / error messages: rendered by MessageItem -->
+            <MessageItem v-if="item.type === 'user' || item.type === 'system' || item.type === 'error'" :message="item.message" />
 
-          <!-- Assistant Turn card: aggregated rendering -->
-          <AssistantTurn v-else-if="item.type === 'assistant-turn'" :turn="item" />
+            <!-- Assistant Turn card: aggregated rendering -->
+            <AssistantTurn v-else-if="item.type === 'assistant-turn'" :turn="item" />
+          </div>
         </template>
         <!-- Typing dots: visible when processing but not streaming text -->
         <div v-if="previewShowTypingDots" class="typing-indicator" :class="waitingStatus ? ('status-' + waitingStatus) : ''">
@@ -867,6 +871,44 @@ export default {
       }
     );
 
+    // ★ task-312: Unify sidebar jump-to-message. When the store's
+    // `unifyJumpTarget` is set, find the first message in the active
+    // Unify conversation whose text contains the keyword (inside the
+    // requested thread if threadId is provided) and scroll it into view
+    // with a brief flash. Then clear the target.
+    const flashMsgId = Vue.ref(null);
+    let flashTimer = null;
+    Vue.watch(
+      () => store.unifyJumpTarget,
+      (target) => {
+        if (!target || !target.keyword) return;
+        const convId = store.unifyConversationId;
+        if (!convId) return;
+        const msgs = store.messagesMap[convId] || [];
+        const kw = target.keyword;
+        const scan = (m) => {
+          if (!m) return false;
+          if (target.threadId && m.threadId !== target.threadId) return false;
+          const text = typeof m.content === 'string'
+            ? m.content
+            : (m.content ? JSON.stringify(m.content) : '');
+          return text.toLowerCase().includes(kw);
+        };
+        const hit = msgs.find(scan);
+        if (!hit || !hit.id) { store.clearUnifyJumpTarget(); return; }
+        Vue.nextTick(() => {
+          const el = document.querySelector(`[data-msg-id="${CSS.escape(hit.id)}"]`);
+          if (el && typeof el.scrollIntoView === 'function') {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+          flashMsgId.value = hit.id;
+          if (flashTimer) clearTimeout(flashTimer);
+          flashTimer = setTimeout(() => { flashMsgId.value = null; }, 1600);
+          store.clearUnifyJumpTarget();
+        });
+      }
+    );
+
     Vue.onMounted(() => {
       scrollToBottom();
       if (containerRef.value) {
@@ -886,6 +928,7 @@ export default {
     return {
       store,
       containerRef,
+      flashMsgId,
       hasStreamingMessage,
       showTypingDots,
       previewShowTypingDots,
