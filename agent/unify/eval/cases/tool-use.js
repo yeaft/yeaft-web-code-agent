@@ -33,7 +33,6 @@ const searchTool = defineTool({
     },
     required: ['query'],
   },
-  modes: ['chat', 'work'],
   async execute(input) {
     const q = (input.query || '').slice(0, 200);
     return JSON.stringify({
@@ -54,7 +53,6 @@ const calculatorTool = defineTool({
     },
     required: ['expression'],
   },
-  modes: ['chat', 'work'],
   async execute(input) {
     try {
       // Safe eval for basic math
@@ -76,7 +74,6 @@ const readFileTool = defineTool({
     },
     required: ['path'],
   },
-  modes: ['chat', 'work'],
   async execute(input) {
     // Mock file system
     const files = {
@@ -99,7 +96,6 @@ const writeFileTool = defineTool({
     },
     required: ['path', 'content'],
   },
-  modes: ['work'],
   async execute(input) {
     return `Successfully wrote ${input.content.length} bytes to ${input.path}`;
   },
@@ -115,7 +111,6 @@ const bashTool = defineTool({
     },
     required: ['command'],
   },
-  modes: ['work'],
   async execute(input) {
     // Mock bash responses
     const responses = {
