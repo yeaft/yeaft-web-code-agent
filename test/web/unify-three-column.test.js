@@ -125,10 +125,11 @@ describe('Center conversation area', () => {
     expect(unifyPageJs).toContain('toggleModelDropdown');
   });
 
-  it('topbar has mode toggle', () => {
-    expect(unifyPageJs).toContain('unify-topbar-mode');
-    expect(unifyPageJs).toContain("setMode('chat')");
-    expect(unifyPageJs).toContain("setMode('work')");
+  it('topbar does NOT have mode toggle (task-297: single unified mode)', () => {
+    expect(unifyPageJs).not.toContain('unify-topbar-mode-btn');
+    expect(unifyPageJs).not.toMatch(/class="unify-topbar-mode"/);
+    expect(unifyPageJs).not.toContain("setMode('chat')");
+    expect(unifyPageJs).not.toContain("setMode('work')");
   });
 
   it('topbar has clear, debug, and detail toggle buttons', () => {
@@ -263,10 +264,10 @@ describe('Setup logic', () => {
     expect(unifyPageJs).toContain('toggleDetail');
   });
 
-  it('returns all necessary functions and state', () => {
+  it('returns all necessary functions and state (task-297: no setMode)', () => {
     expect(unifyPageJs).toContain('goBack');
     expect(unifyPageJs).toContain('sendMessage');
-    expect(unifyPageJs).toContain('setMode');
+    expect(unifyPageJs).not.toContain('setMode');
     expect(unifyPageJs).toContain('clearMessages');
     expect(unifyPageJs).toContain('hasMessages');
     expect(unifyPageJs).toContain('isProcessing');
@@ -292,9 +293,9 @@ describe('i18n — labels use $t()', () => {
     expect(unifyPageJs).toContain("$t('unify.hideDetail')");
   });
 
-  it('mode toggle uses $t()', () => {
-    expect(unifyPageJs).toContain("$t('unify.chat')");
-    expect(unifyPageJs).toContain("$t('unify.work')");
+  it('mode toggle was removed (task-297)', () => {
+    expect(unifyPageJs).not.toContain("$t('unify.chat')");
+    expect(unifyPageJs).not.toContain("$t('unify.work')");
   });
 
   it('model switch uses $t()', () => {
@@ -314,7 +315,6 @@ describe('i18n — labels use $t()', () => {
 
   it('en.js has all required unify i18n keys', () => {
     const requiredKeys = [
-      'unify.chat', 'unify.work',
       'unify.tasksMemory', 'unify.comingSoon',
       'unify.showSidebar', 'unify.hideSidebar',
       'unify.showDetail', 'unify.hideDetail',
@@ -327,7 +327,6 @@ describe('i18n — labels use $t()', () => {
 
   it('zh-CN.js has all required unify i18n keys', () => {
     const requiredKeys = [
-      'unify.chat', 'unify.work',
       'unify.tasksMemory', 'unify.comingSoon',
       'unify.showSidebar', 'unify.hideSidebar',
       'unify.showDetail', 'unify.hideDetail',

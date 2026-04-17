@@ -60,20 +60,6 @@ export default {
             </div>
           </div>
 
-          <!-- Mode toggle (moved from sidebar) -->
-          <div class="unify-topbar-mode">
-            <button
-              class="unify-topbar-mode-btn"
-              :class="{ active: store.unifyMode === 'chat' }"
-              @click="setMode('chat')"
-            >{{ $t('unify.chat') }}</button>
-            <button
-              class="unify-topbar-mode-btn"
-              :class="{ active: store.unifyMode === 'work' }"
-              @click="setMode('work')"
-            >{{ $t('unify.work') }}</button>
-          </div>
-
           <div class="unify-topbar-right">
             <button
               class="unify-clear-btn"
@@ -270,10 +256,6 @@ export default {
       store.sendUnifyChat(text);
     };
 
-    const setMode = (mode) => {
-      store.setUnifyMode(mode);
-    };
-
     const clearMessages = () => {
       const { t } = Vue.getCurrentInstance().appContext.config.globalProperties;
       if (confirm(t('unify.clearConfirm'))) {
@@ -383,7 +365,6 @@ export default {
       isProcessing,
       goBack,
       sendMessage,
-      setMode,
       clearMessages,
       toggleSidebar,
       toggleDetail,

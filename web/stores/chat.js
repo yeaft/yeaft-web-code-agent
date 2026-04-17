@@ -164,7 +164,6 @@ export const useChatStore = defineStore('chat', {
     unifyConversationId: null,     // 虚拟 conversationId（从 agent session_ready 获取）
     unifyModel: null,              // 当前 Unify 模型名
     unifyAgentId: null,            // 绑定的 agent ID
-    unifyMode: 'chat',            // 'chat' | 'work' — Unify 模式切换
     unifySessionReady: false,     // Session 是否已初始化
     unifyStatus: null,            // { skills, mcpServers, tools } 从 session_ready 获取
     unifyAvailableModels: [],     // 可用模型列表 [{ id, provider, label }]
@@ -351,7 +350,6 @@ export const useChatStore = defineStore('chat', {
       this.sendWsMessage({
         type: 'unify_chat',
         prompt,
-        mode: this.unifyMode,
         agentId: this.unifyAgentId,
       });
     },
@@ -465,14 +463,12 @@ export const useChatStore = defineStore('chat', {
         agentId,
       });
     },
-    setUnifyMode(mode) {
-      if (mode !== 'chat' && mode !== 'work') return;
-      this.unifyMode = mode;
-      this.sendWsMessage({
-        type: 'unify_mode_switch',
-        mode,
-        agentId: this.unifyAgentId,
-      });
+    setUnifyMode(_mode) {
+      // Deprecated: Unify no longer has chat/work mode distinction.
+      // Retained as a no-op to avoid breaking callers during migration.
+      if (typeof console !== 'undefined' && console.warn) {
+        console.warn('[unify] setUnifyMode is deprecated; Unify now runs in a single unified mode.');
+      }
     },
     switchUnifyModel(modelId) {
       if (!modelId || !this.unifyAgentId) return;
@@ -498,7 +494,6 @@ export const useChatStore = defineStore('chat', {
       this.unifyAvailableModels = [];
       this.unifyStatus = null;
       this.unifyDebugTurns = [];
-      this.unifyMode = 'chat';
       // Tell agent to reset session so Engine gets a fresh start
       if (this.unifyAgentId) {
         this.sendWsMessage({

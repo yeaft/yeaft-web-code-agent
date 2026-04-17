@@ -208,26 +208,25 @@ describe('Sidebar content ordering', () => {
 });
 
 // =============================================================================
-// 7. Mode toggle is in topbar (not sidebar)
+// 7. Mode toggle removed (task-297: single unified mode)
 // =============================================================================
-describe('Mode toggle in topbar', () => {
-  it('mode toggle is inside topbar', () => {
-    const topbarStart = unifyPageJs.indexOf('class="unify-topbar"');
-    const topbarSection = unifyPageJs.slice(topbarStart, topbarStart + 1500);
-    expect(topbarSection).toContain('unify-topbar-mode');
+describe('Mode toggle removed (task-297)', () => {
+  it('mode toggle is not present in topbar', () => {
+    expect(unifyPageJs).not.toContain('unify-topbar-mode-btn');
+    expect(unifyPageJs).not.toMatch(/class="unify-topbar-mode"/);
   });
 
-  it('mode toggle is NOT in sidebar', () => {
+  it('mode toggle is NOT in sidebar either', () => {
     const sidebarStart = unifyPageJs.indexOf('class="unify-sidebar"');
     const sidebarEnd = unifyPageJs.indexOf('</aside>', sidebarStart);
     const sidebarContent = unifyPageJs.slice(sidebarStart, sidebarEnd);
-    expect(sidebarContent).not.toContain('unify-topbar-mode');
+    expect(sidebarContent).not.toContain('unify-topbar-mode-btn');
     expect(sidebarContent).not.toContain('unify-mode-toggle');
   });
 
-  it('topbar mode toggle CSS has compact styling', () => {
-    expect(unifyCss).toContain('.unify-topbar-mode');
-    expect(unifyCss).toContain('.unify-topbar-mode-btn');
+  it('mode toggle CSS was removed', () => {
+    expect(unifyCss).not.toContain('.unify-topbar-mode {');
+    expect(unifyCss).not.toContain('.unify-topbar-mode-btn {');
   });
 });
 

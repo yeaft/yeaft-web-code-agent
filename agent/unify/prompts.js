@@ -95,8 +95,7 @@ function extractLangSection(content, language) {
 /** Loaded templates — read once at module load time. */
 const RAW_TEMPLATES = {
   base: readTemplate('base.md'),
-  modeChat: readTemplate('mode-chat.md'),
-  modeWorker: readTemplate('mode-worker.md'),
+  modeUnified: readTemplate('mode-unified.md'),
   modeDream: readTemplate('mode-dream.md'),
   toolGuidance: readTemplate('tool-guidance.md'),
 };
@@ -118,9 +117,7 @@ function getTemplate(key, language) {
 const PROMPTS = {
   en: {
     identity: 'You are Yeaft, a helpful AI assistant.',
-    mode: (mode) => `Current mode: ${mode}`,
     date: (d) => `Date: ${d}`,
-    work: 'You are in work mode. Break tasks into steps, execute them using tools, and report progress.',
     dream: 'You are in dream mode. Reflect on past conversations and consolidate memories.',
     tools: (names) => `Available tools: ${names}`,
     memoryHeader: '## User Memory',
@@ -130,9 +127,7 @@ const PROMPTS = {
   },
   zh: {
     identity: '你是 Yeaft，一个有用的 AI 助手。',
-    mode: (mode) => `当前模式：${mode}`,
     date: (d) => `日期：${d}`,
-    work: '你处于工作模式。将任务分解为步骤，使用工具执行，并报告进度。',
     dream: '你处于梦境模式。回顾过去的对话，整理和巩固记忆。',
     tools: (names) => `可用工具：${names}`,
     memoryHeader: '## 用户记忆',
@@ -146,12 +141,17 @@ const PROMPTS = {
 export const SUPPORTED_LANGUAGES = Object.keys(PROMPTS);
 
 /**
- * Build the system prompt for a given language and mode.
+ * Build the system prompt for a given language.
+ *
+ * task-297: chat/work mode distinction was removed. The prompt now always uses
+ * the unified mode template. The `mode` param is retained for backward compat
+ * — only `mode === 'dream'` triggers the dream-mode template (used by background
+ * memory maintenance); all other values fall through to unified mode.
  *
  * Prompt structure:
  *   1. Core identity (from template or fallback)
- *   2. Mode + date metadata
- *   3. Mode-specific behavioral instructions (from template or fallback)
+ *   2. Date metadata
+ *   3. Mode-specific behavioral instructions (unified, or dream)
  *   4. Tool list + tool guidance (from template)
  *   5. Skills section
  *   6. Memory section
@@ -170,7 +170,7 @@ export const SUPPORTED_LANGUAGES = Object.keys(PROMPTS);
  */
 export function buildSystemPrompt({
   language = 'en',
-  mode = 'chat',
+  mode,
   toolNames = [],
   memory,
   memoryInjection,
@@ -192,23 +192,20 @@ export function buildSystemPrompt({
     parts.push(lang.identity);
   }
 
-  // ─── 2. Mode + Date Metadata ───────────────────────────
-  parts.push(lang.mode(mode));
+  // ─── 2. Date Metadata ──────────────────────────────────
   parts.push(lang.date(new Date().toISOString().split('T')[0]));
 
   // ─── 3. Mode-Specific Instructions ─────────────────────
-  if (mode === 'work') {
-    const workerTemplate = getTemplate('modeWorker', effectiveLang);
-    parts.push(workerTemplate || lang.work);
-  } else if (mode === 'dream') {
+  // task-297: single unified mode for all normal operation.
+  // `dream` is retained for background memory maintenance.
+  if (mode === 'dream') {
     const dreamTemplate = getTemplate('modeDream', effectiveLang);
     parts.push(dreamTemplate || lang.dream);
-  } else if (mode === 'chat') {
-    const chatTemplate = getTemplate('modeChat', effectiveLang);
-    if (chatTemplate) {
-      parts.push(chatTemplate);
+  } else {
+    const unifiedTemplate = getTemplate('modeUnified', effectiveLang);
+    if (unifiedTemplate) {
+      parts.push(unifiedTemplate);
     }
-    // No fallback needed — chat mode previously had no instructions
   }
 
   // ─── 4. Tools + Tool Guidance ──────────────────────────

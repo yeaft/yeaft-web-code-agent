@@ -95,8 +95,6 @@ export default {
 
   // ============ Unify 页面 ============
   'unify.back': '返回',
-  'unify.chat': '对话',
-  'unify.work': '工作',
   'unify.model': '模型',
   'unify.placeholder': '问我任何问题...',
   'unify.clearConfirm': '清空所有消息？',

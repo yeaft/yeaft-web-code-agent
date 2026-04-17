@@ -95,8 +95,6 @@ export default {
 
   // ============ Unify Page ============
   'unify.back': 'Back',
-  'unify.chat': 'Chat',
-  'unify.work': 'Work',
   'unify.model': 'Model',
   'unify.placeholder': 'Ask anything...',
   'unify.clearConfirm': 'Clear all messages?',

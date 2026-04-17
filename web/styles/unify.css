@@ -316,33 +316,7 @@
   line-height: 1.4;
 }
 
-/* ── Mode Toggle (in topbar) ── */
-
-.unify-topbar-mode {
-  display: flex;
-  background: var(--bg-input-wrapper);
-  border-radius: 6px;
-  padding: 2px;
-  gap: 1px;
-}
-
-.unify-topbar-mode-btn {
-  padding: 3px 10px;
-  border: none;
-  border-radius: 4px;
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  background: transparent;
-  color: var(--text-muted);
-  transition: all 0.15s;
-}
-
-.unify-topbar-mode-btn.active {
-  background: var(--bg-main);
-  color: var(--text-primary);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
-}
+/* ── Mode Toggle (removed — Unify is single-mode as of task-297) ── */
 
 /* Legacy model badge (no longer used, kept for compat) */
 
@@ -971,11 +945,6 @@
   .unify-sidebar.collapsed {
     width: 0;
     box-shadow: none;
-  }
-
-  .unify-topbar-mode-btn {
-    padding: 3px 8px;
-    font-size: 11px;
   }
 
   .unify-topbar-model-name {

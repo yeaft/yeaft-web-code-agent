@@ -1,19 +1,13 @@
 /**
  * registry.js — Tool registration center for Yeaft Unify
  *
- * Manages tool registration, mode-based filtering, and execution dispatch.
+ * Manages tool registration and execution dispatch.
  * The engine uses this to get tool definitions for the LLM and to execute tool calls.
+ *
+ * NOTE (task-297): Mode-based filtering (chat/work) has been removed. Unify now runs as
+ * a single unified mode where all registered tools are available. Tool definitions may
+ * still carry a `modes` field, but the registry ignores it.
  */
-
-/**
- * Mode normalization map.
- * 'coordinator' and 'worker' inherit 'work' tools.
- * 'dream' has no tools by design (returns empty).
- */
-const MODE_ALIASES = {
-  coordinator: 'work',
-  worker: 'work',
-};
 
 export class ToolRegistry {
   /** @type {Map<string, import('./types.js').ToolDef>} */
@@ -69,35 +63,20 @@ export class ToolRegistry {
   }
 
   /**
-   * Resolve a mode to its effective tool mode.
-   * @param {string} mode
-   * @returns {string}
-   */
-  static resolveMode(mode) {
-    return MODE_ALIASES[mode] || mode;
-  }
-
-  /**
-   * Get all tools available in a given mode.
-   * @param {string} mode
+   * Get all registered tools (unfiltered).
    * @returns {import('./types.js').ToolDef[]}
    */
-  getToolsForMode(mode) {
-    const effectiveMode = ToolRegistry.resolveMode(mode);
-    const result = [];
-    for (const [, tool] of this.#tools) {
-      if (tool.modes.includes(effectiveMode)) result.push(tool);
-    }
-    return result;
+  getAllTools() {
+    return Array.from(this.#tools.values());
   }
 
   /**
    * Get tool definitions for the LLM adapter.
-   * @param {string} mode
+   * Returns all registered tools — mode filtering was removed in task-297.
    * @returns {{ name: string, description: string, parameters: object }[]}
    */
-  getToolDefs(mode) {
-    return this.getToolsForMode(mode).map(t => ({
+  getToolDefs() {
+    return this.getAllTools().map(t => ({
       name: t.name,
       description: t.description,
       parameters: t.parameters,
@@ -105,12 +84,11 @@ export class ToolRegistry {
   }
 
   /**
-   * Get tool names available in a given mode.
-   * @param {string} mode
+   * Get all registered tool names.
    * @returns {string[]}
    */
-  getToolNames(mode) {
-    return this.getToolsForMode(mode).map(t => t.name);
+  getToolNames() {
+    return Array.from(this.#tools.keys());
   }
 
   /**

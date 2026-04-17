@@ -654,30 +654,23 @@ describe('tools/registry.js', () => {
     expect(registry.size).toBe(1);
   });
 
-  it('should filter by mode', () => {
+  it('should return all registered tools regardless of modes field (task-297: no mode filtering)', () => {
     const registry = new ToolRegistry();
     registry.register(defineTool({ name: 'ChatTool', execute: async () => '', modes: ['chat'] }));
     registry.register(defineTool({ name: 'WorkTool', execute: async () => '', modes: ['work'] }));
     registry.register(defineTool({ name: 'BothTool', execute: async () => '', modes: ['chat', 'work'] }));
 
-    expect(registry.getToolNames('chat')).toEqual(['ChatTool', 'BothTool']);
-    expect(registry.getToolNames('work')).toEqual(['WorkTool', 'BothTool']);
+    // All tools exposed — modes field is ignored
+    expect(registry.getToolNames()).toEqual(['ChatTool', 'WorkTool', 'BothTool']);
   });
 
-  it('should resolve coordinator/worker to work mode', () => {
-    const registry = new ToolRegistry();
-    registry.register(defineTool({ name: 'WorkTool', execute: async () => '', modes: ['work'] }));
-
-    expect(registry.getToolNames('coordinator')).toEqual(['WorkTool']);
-    expect(registry.getToolNames('worker')).toEqual(['WorkTool']);
-  });
-
-  it('should return empty for dream mode', () => {
+  it('should expose all tools regardless of any mode argument (task-297)', () => {
     const registry = new ToolRegistry();
     registry.register(defineTool({ name: 'WorkTool', execute: async () => '', modes: ['work'] }));
     registry.register(defineTool({ name: 'ChatTool', execute: async () => '', modes: ['chat'] }));
 
-    expect(registry.getToolNames('dream')).toEqual([]);
+    // getToolNames no longer accepts a mode argument; all registered tools are always returned.
+    expect(registry.getToolNames()).toEqual(['WorkTool', 'ChatTool']);
   });
 
   it('should unregister tools', () => {
@@ -698,7 +691,7 @@ describe('tools/registry.js', () => {
       modes: ['chat'],
     }));
 
-    const defs = registry.getToolDefs('chat');
+    const defs = registry.getToolDefs();
     expect(defs).toHaveLength(1);
     expect(defs[0]).toEqual({
       name: 'TestTool',

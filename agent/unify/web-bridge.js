@@ -29,9 +29,6 @@ const QUERY_TIMEOUT_MS = 120_000;
 /** Virtual conversationId for the Unify session */
 let unifyConversationId = null;
 
-/** Current query mode: 'chat' or 'work' */
-let currentMode = 'chat';
-
 /** Accumulated conversation messages for context continuity across queries.
  *  Each entry is { role: 'user'|'assistant', content: string|Array }.
  *  Cleared on session reset or consolidation. */
@@ -79,14 +76,16 @@ function sendUnifyEvent(event) {
  * Handle a unify_chat message from the web UI.
  *
  * @param {{ prompt: string, mode?: string, userId?: string, username?: string }} msg
+ *   NOTE: `mode` is deprecated (task-297) — Unify now runs in a single unified mode.
+ *   If present, a warning is logged and the field is ignored.
  */
 export async function handleUnifyChat(msg) {
   const { prompt, mode } = msg;
   if (!prompt?.trim()) return;
 
-  // Update mode if provided
-  if (mode === 'chat' || mode === 'work') {
-    currentMode = mode;
+  // Deprecation warning — task-297 removed chat/work mode distinction
+  if (mode !== undefined && mode !== null) {
+    console.warn('[Unify] unify_chat.mode is deprecated and ignored — Unify now runs in a single unified mode.');
   }
 
   try {
@@ -150,7 +149,6 @@ export async function handleUnifyChat(msg) {
     // ─── Stream Engine events → claude_output format ──
     for await (const event of session.engine.query({
       prompt,
-      mode: currentMode,
       messages: conversationMessages,
       signal: currentAbort.signal,
     })) {
@@ -410,12 +408,12 @@ export async function handleUnifyChat(msg) {
 
 /**
  * Handle mode switch from the web UI.
- * @param {{ mode: 'chat' | 'work' }} msg
+ * DEPRECATED (task-297): Unify no longer has chat/work mode distinction.
+ * Retained as a no-op with warning for backward compatibility.
+ * @param {{ mode?: string }} _msg
  */
-export function handleUnifyModeSwitch(msg) {
-  if (msg.mode === 'chat' || msg.mode === 'work') {
-    currentMode = msg.mode;
-  }
+export function handleUnifyModeSwitch(_msg) {
+  console.warn('[Unify] unify_mode_switch is deprecated and ignored — Unify now runs in a single unified mode.');
 }
 
 /**
@@ -522,7 +520,6 @@ export async function resetUnifySession() {
     session = null;
   }
   unifyConversationId = null;
-  currentMode = 'chat';
   conversationMessages = [];
 
   // Re-initialize session immediately so frontend gets updated config

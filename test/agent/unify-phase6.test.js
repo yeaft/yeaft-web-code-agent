@@ -219,11 +219,12 @@ describe('Engine — ToolRegistry integration', () => {
     expect(receivedCtx).toBeTruthy();
     expect(receivedCtx.yeaftDir).toBe(testDir);
     expect(receivedCtx.config).toBeTruthy();
-    expect(receivedCtx.mode).toBe('chat');
+    // task-297: mode is no longer threaded from web/engine.query; ctx.mode is undefined
+    expect(receivedCtx.mode).toBeUndefined();
     expect(typeof receivedCtx.cwd).toBe('string');
   });
 
-  it('should filter tools by mode when using registry', async () => {
+  it('should expose all registered tools regardless of modes field (task-297)', async () => {
     const registry = createEmptyRegistry();
     registry.register(defineTool({
       name: 'chat_only',
@@ -252,12 +253,12 @@ describe('Engine — ToolRegistry integration', () => {
       toolRegistry: registry,
     });
 
-    // Query in work mode — should only see work_only
-    for await (const _ of engine.query({ prompt: 'test', mode: 'work' })) { /* consume */ }
+    // Query without mode — all tools should be available
+    for await (const _ of engine.query({ prompt: 'test' })) { /* consume */ }
 
     const call = mockAdapter.callLog[0];
-    expect(call.tools).toHaveLength(1);
-    expect(call.tools[0].name).toBe('work_only');
+    const names = call.tools.map(t => t.name).sort();
+    expect(names).toEqual(['chat_only', 'work_only']);
   });
 
   it('should fall back to legacy #tools Map when no registry', async () => {

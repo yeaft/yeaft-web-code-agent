@@ -141,14 +141,16 @@ export class Engine {
 
   /**
    * Get the list of registered tool definitions (for passing to the adapter).
-   * Prefers ToolRegistry (mode-aware) when available, falls back to legacy #tools Map.
+   * Prefers ToolRegistry when available, falls back to legacy #tools Map.
    *
-   * @param {string} [mode]
+   * task-297: mode-based filtering was removed — all registered tools are
+   * always exposed to the LLM.
+   *
    * @returns {import('./llm/adapter.js').UnifiedToolDef[]}
    */
-  #getToolDefs(mode) {
+  #getToolDefs() {
     if (this.#toolRegistry) {
-      return this.#toolRegistry.getToolDefs(mode || 'chat');
+      return this.#toolRegistry.getToolDefs();
     }
     // Legacy path: no mode filtering
     const defs = [];
@@ -181,7 +183,7 @@ export class Engine {
 
     // Get tool names from the appropriate source
     const toolNames = this.#toolRegistry
-      ? this.#toolRegistry.getToolNames(mode || 'chat')
+      ? this.#toolRegistry.getToolNames()
       : Array.from(this.#tools.keys());
 
     return buildSystemPrompt({
@@ -339,7 +341,7 @@ export class Engine {
    * @param {{ prompt: string, mode?: string, messages?: Array, signal?: AbortSignal }} params
    * @yields {EngineEvent}
    */
-  async *query({ prompt, mode = 'chat', messages = [], signal }) {
+  async *query({ prompt, mode, messages = [], signal }) {
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       yield {
         type: 'error',
@@ -380,7 +382,7 @@ export class Engine {
       { role: 'user', content: prompt },
     ];
 
-    const toolDefs = this.#getToolDefs(mode);
+    const toolDefs = this.#getToolDefs();
     let turnNumber = 0;
     let continueTurns = 0; // auto-continue counter
     let fullResponseText = '';

@@ -58,48 +58,25 @@ describe('index.js tool registration', () => {
     }
   });
 
-  it('mode filtering: chat mode has correct tools', async () => {
-    const { createFullRegistry } = await import(`${TOOLS_DIR}/index.js`);
-    const registry = createFullRegistry();
-    const chatTools = registry.getToolsForMode('chat');
-    const chatNames = chatTools.map(t => t.name);
-
-    // Chat-mode tools should include:
-    expect(chatNames).toContain('AskUser');
-    expect(chatNames).toContain('MemoryRead');
-    expect(chatNames).toContain('MemoryWrite');
-    expect(chatNames).toContain('memory_search');
-    expect(chatNames).toContain('memory_query');
-    expect(chatNames).toContain('WebSearch');
-    expect(chatNames).toContain('WebFetch');
-    expect(chatNames).toContain('HistorySearch');
-    expect(chatNames).toContain('JsRepl');
-    expect(chatNames).toContain('JsReplReset');
-    expect(chatNames).toContain('ImageGeneration');
-    expect(chatNames).toContain('ViewImage');
-    expect(chatNames).toContain('ToolSearch');
-    expect(chatNames).toContain('Skill');
-
-    // Work-only tools (coordination/task) should NOT be in chat mode:
-    expect(chatNames).not.toContain('Agent');
-    expect(chatNames).not.toContain('SendMessage');
-    expect(chatNames).not.toContain('WaitAgent');
-    expect(chatNames).not.toContain('CloseAgent');
-
-    // Dev tools SHOULD be in chat mode:
-    expect(chatNames).toContain('Bash');
-    expect(chatNames).toContain('FileRead');
-    expect(chatNames).toContain('FileWrite');
-    expect(chatNames).toContain('FileEdit');
-    expect(chatNames).toContain('Glob');
-    expect(chatNames).toContain('Grep');
-  });
-
-  it('mode filtering: work mode has all tools', async () => {
+  it('task-297: all tools are exposed regardless of mode (no filtering)', async () => {
     const { createFullRegistry, allTools } = await import(`${TOOLS_DIR}/index.js`);
     const registry = createFullRegistry();
-    const workTools = registry.getToolsForMode('work');
-    expect(workTools.length).toBe(allTools.length);
+    // getToolDefs/getToolNames no longer accept a mode arg; all registered tools are returned.
+    const defs = registry.getToolDefs();
+    expect(defs.length).toBe(allTools.length);
+
+    const names = registry.getToolNames();
+    // Chat-side tools
+    expect(names).toContain('AskUser');
+    expect(names).toContain('MemoryRead');
+    expect(names).toContain('WebSearch');
+    // Previously work-only tools should also be available now
+    expect(names).toContain('Agent');
+    expect(names).toContain('SendMessage');
+    // Dev tools
+    expect(names).toContain('Bash');
+    expect(names).toContain('FileRead');
+    expect(names).toContain('Grep');
   });
 });
 
