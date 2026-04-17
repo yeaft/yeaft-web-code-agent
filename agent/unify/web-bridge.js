@@ -117,6 +117,240 @@ const THREAD_MUTATING_TOOLS = new Set([
 ]);
 
 /**
+ * task-310: parse a leading `@thread-<id>` or `@thread-<name>` marker on
+ * the user's input and return it as a dispatcher override. The marker
+ * itself is STRIPPED from the prompt before it reaches the engine — users
+ * don't want to see `@thread-foo` echoed back into their conversation.
+ *
+ * Returns { prompt, override? } where override = { threadId } if matched.
+ */
+function parseThreadPrefix(text) {
+  if (!text || typeof text !== 'string') return { prompt: text || '', override: null };
+  const m = text.match(/^\s*@(thread-[A-Za-z0-9_-]+)\b\s*/);
+  if (!m) return { prompt: text, override: null };
+  const rest = text.slice(m[0].length);
+  return { prompt: rest || text, override: { threadId: m[1] } };
+}
+
+/**
+ * Translate a pipeline event (from Dispatcher) into web-bridge outputs.
+ * Pipeline events are distinct from engine events — they carry queue /
+ * routing state for the UI. Engine events are unwrapped and forwarded
+ * through the existing sendUnifyOutput / sendUnifyEvent path.
+ *
+ * Returns whether the pipeline is complete (terminal error / no more).
+ */
+function forwardPipelineEvent(ev, ctx) {
+  if (!ev || typeof ev !== 'object') return false;
+  switch (ev.type) {
+    case 'input_queue_updated':
+      sendUnifyEvent({
+        type: 'input_queue_updated',
+        total: ev.total,
+        pending: ev.pending,
+        routing: ev.routing,
+        dispatched: ev.dispatched,
+        head: ev.head,
+      });
+      return false;
+    case 'routing_decision':
+      sendUnifyEvent({
+        type: 'routing_decision',
+        entryId: ev.entryId,
+        action: ev.action,
+        targetThreadId: ev.targetThreadId,
+        source: ev.source,
+        reason: ev.reason,
+      });
+      return false;
+    case 'thread_list_updated':
+      // Dispatcher built it already; just forward.
+      sendUnifyEvent({
+        type: 'thread_list_updated',
+        threads: ev.threads,
+        currentThreadId: ev.currentThreadId,
+      });
+      return false;
+    case 'engine_event':
+      ctx.onEngineEvent(ev.event, ev.threadId);
+      return false;
+    case 'error':
+      ctx.onError(ev.error);
+      return true;
+    default:
+      return false;
+  }
+}
+
+/**
+ * Handle a single engine event unwrapped from an `engine_event` pipeline
+ * envelope. Contains the event-type switch previously inlined in the
+ * streaming loop. `threadId` is propagated onto tool_use / tool_result
+ * blocks so the UI can render per-thread bubbles.
+ *
+ * @param {object} event — engine event (text_delta / tool_call / …)
+ * @param {string} threadId — owning thread id (from envelope)
+ * @param {{assistantTextParts:string[], resetQueryTimer:Function}} hctx
+ */
+function handleEngineEvent(event, threadId, hctx) {
+  hctx.resetQueryTimer();
+  switch (event.type) {
+    case 'text_delta':
+      hctx.assistantTextParts.push(event.text);
+      sendUnifyOutput({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: event.text }] },
+        threadId,
+      });
+      break;
+
+    case 'thinking_delta':
+      sendUnifyEvent({ type: 'thinking_delta', text: event.text, threadId });
+      break;
+
+    case 'tool_call':
+      // Finish any in-progress text streaming so UI shows typing dots
+      sendUnifyOutput({
+        type: 'assistant',
+        message: { content: [] },
+        threadId,
+      });
+      sendUnifyOutput({
+        type: 'assistant',
+        message: {
+          content: [{
+            type: 'tool_use',
+            id: event.id,
+            name: event.name,
+            input: event.input,
+          }],
+        },
+        threadId: event.threadId || threadId,
+      });
+      break;
+
+    case 'tool_start':
+      sendUnifyEvent({
+        type: 'tool_start',
+        id: event.id,
+        name: event.name,
+        threadId: event.threadId || threadId,
+      });
+      break;
+
+    case 'tool_end':
+      sendUnifyOutput({
+        type: 'user',
+        tool_use_result: [{
+          type: 'tool_result',
+          tool_use_id: event.id,
+          content: event.output || '',
+          is_error: event.isError || false,
+        }],
+        threadId: event.threadId || threadId,
+      });
+      if (THREAD_MUTATING_TOOLS.has(event.name)) {
+        sendThreadListUpdate();
+      }
+      break;
+
+    case 'turn_start':
+    case 'turn_end':
+    case 'stop':
+      // No UI action needed; outer loop sends the final result.
+      break;
+
+    case 'usage':
+      sendUnifyEvent({
+        type: 'context_usage',
+        inputTokens: event.inputTokens,
+        outputTokens: event.outputTokens,
+        threadId,
+      });
+      break;
+
+    case 'recall':
+      sendUnifyEvent({
+        type: 'recall',
+        entryCount: event.entryCount,
+        cached: event.cached,
+        threadId,
+      });
+      break;
+
+    case 'consolidate':
+      // Engine compressed the context — clear our accumulated history.
+      conversationMessages = [];
+      sendUnifyEvent({
+        type: 'consolidate',
+        archivedCount: event.archivedCount,
+        extractedCount: event.extractedCount,
+        threadId,
+      });
+      break;
+
+    case 'fallback':
+      sendUnifyEvent({
+        type: 'fallback',
+        from: event.from,
+        to: event.to,
+        reason: event.reason,
+        threadId,
+      });
+      break;
+
+    case 'debug_turn':
+      sendUnifyEvent({
+        type: 'debug_turn',
+        turnNumber: event.turnNumber,
+        model: event.model,
+        systemPrompt: event.systemPrompt,
+        messages: event.messages,
+        response: event.response,
+        toolCalls: event.toolCalls,
+        usage: event.usage,
+        latencyMs: event.latencyMs,
+        ttfbMs: event.ttfbMs,
+        stopReason: event.stopReason,
+        threadId,
+      });
+      break;
+
+    case 'error': {
+      const errMsg = event.error?.message || 'Unknown error';
+      if (isPermissionErrorMsg(errMsg)) {
+        if (!_permissionDiagnosticSent) {
+          _permissionDiagnosticSent = true;
+          sendUnifyOutput({
+            type: 'assistant',
+            message: {
+              content: [{
+                type: 'text',
+                text: '⚠️ Cannot write to ~/.yeaft/ directory — some features (memory, history) are unavailable. Please check directory permissions: `chmod -R u+rw ~/.yeaft/`',
+              }],
+            },
+            threadId,
+          });
+        }
+      } else {
+        sendUnifyOutput({
+          type: 'assistant',
+          message: {
+            content: [{ type: 'text', text: `⚠️ Error: ${errMsg}` }],
+          },
+          threadId,
+        });
+      }
+      break;
+    }
+
+    default:
+      // Silently consume unknown events.
+      break;
+  }
+}
+
+/**
  * Handle a unify_chat message from the web UI.
  *
  * @param {{ prompt: string, mode?: string, userId?: string, username?: string }} msg
@@ -193,192 +427,44 @@ export async function handleUnifyChat(msg) {
     // ─── Collect assistant response for conversation history ──
     let assistantTextParts = [];
 
-    // ─── Stream Engine events → claude_output format ──
-    for await (const event of session.engine.query({
-      prompt,
-      messages: conversationMessages,
-      signal: currentAbort.signal,
-    })) {
-      // Reset timeout on every event — activity means the query is alive
+    // task-310: route via Dispatcher pipeline (queue → router → registry →
+    // EngineInstance). The input is enqueued first so the UI observes the
+    // `input_queue_updated` snapshot before the router runs. An explicit
+    // `@thread-xxx` prefix on the message or an `override` field on the
+    // `unify_chat` payload becomes a dispatcher override — skipping the LLM.
+    const { prompt: cleanedPrompt, override: prefixOverride } = parseThreadPrefix(prompt);
+    const override = msg.override && typeof msg.override === 'object' && msg.override.threadId
+      ? msg.override
+      : prefixOverride;
+
+    const { entry } = session.dispatcher.submit(cleanedPrompt, {
+      messageId: msg.messageId,
+      override: override || undefined,
+    });
+    sendUnifyEvent({
+      type: 'input_queue_updated',
+      total: 1,
+      pending: 1,
+      routing: 0,
+      dispatched: 0,
+      head: { id: entry.id, status: entry.status, text: entry.text.slice(0, 80) },
+    });
+
+    const pipelineCtx = {
+      onEngineEvent: (event, threadId) => handleEngineEvent(event, threadId, {
+        assistantTextParts,
+        resetQueryTimer,
+      }),
+      onError: (err) => { throw err; },
+    };
+
+    for await (const pev of session.dispatcher.drain({ signal: currentAbort.signal })) {
       resetQueryTimer();
-      switch (event.type) {
-        // ── Text streaming ──
-        case 'text_delta':
-          assistantTextParts.push(event.text);
-          sendUnifyOutput({
-            type: 'assistant',
-            message: {
-              content: [{ type: 'text', text: event.text }],
-            },
-          });
-          break;
-
-        // ── Thinking streaming (extended thinking) ──
-        case 'thinking_delta':
-          // Currently not rendered in UI, but forward for future use
-          sendUnifyEvent({ type: 'thinking_delta', text: event.text });
-          break;
-
-        // ── Tool call announced by LLM ──
-        case 'tool_call':
-          // Finish any in-progress text streaming so UI shows typing dots
-          sendUnifyOutput({
-            type: 'assistant',
-            message: { content: [] },
-          });
-          // Send tool_use block
-          sendUnifyOutput({
-            type: 'assistant',
-            message: {
-              content: [{
-                type: 'tool_use',
-                id: event.id,
-                name: event.name,
-                input: event.input,
-              }],
-            },
-            threadId: event.threadId,
-          });
-          break;
-
-        // ── Tool execution started ──
-        case 'tool_start':
-          // Tool is running — the UI already shows it from tool_use block above.
-          // Forward threadId so the UI can group tool activity by thread (Phase 1).
-          sendUnifyEvent({ type: 'tool_start', id: event.id, name: event.name, threadId: event.threadId });
-          break;
-
-        // ── Tool execution completed ──
-        case 'tool_end':
-          // Send tool_result as a user message (matches Claude CLI format)
-          sendUnifyOutput({
-            type: 'user',
-            tool_use_result: [{
-              type: 'tool_result',
-              tool_use_id: event.id,
-              content: event.output || '',
-              is_error: event.isError || false,
-            }],
-            threadId: event.threadId,
-          });
-          // task-301 Part 2: if this tool mutates ThreadStore, push a
-          // fresh snapshot to the sidebar immediately.
-          if (THREAD_MUTATING_TOOLS.has(event.name)) {
-            sendThreadListUpdate();
-          }
-          break;
-
-        // ── Turn boundaries ──
-        case 'turn_start':
-          // No UI action needed
-          break;
-
-        case 'turn_end':
-          // Don't send result/done here — wait for the outermost loop to finish
-          break;
-
-        // ── Token usage ──
-        case 'usage':
-          sendUnifyEvent({
-            type: 'context_usage',
-            inputTokens: event.inputTokens,
-            outputTokens: event.outputTokens,
-          });
-          break;
-
-        // ── Stop reason from LLM ──
-        case 'stop':
-          // Intermediate signal — final done is sent after the loop
-          break;
-
-        // ── Memory recall ──
-        case 'recall':
-          sendUnifyEvent({
-            type: 'recall',
-            entryCount: event.entryCount,
-            cached: event.cached,
-          });
-          break;
-
-        // ── Context consolidation ──
-        case 'consolidate':
-          // Engine has compressed the context — clear our accumulated history.
-          // The engine's compactSummary will provide context on next query.
-          conversationMessages = [];
-          sendUnifyEvent({
-            type: 'consolidate',
-            archivedCount: event.archivedCount,
-            extractedCount: event.extractedCount,
-          });
-          break;
-
-        // ── Model fallback ──
-        case 'fallback':
-          sendUnifyEvent({
-            type: 'fallback',
-            from: event.from,
-            to: event.to,
-            reason: event.reason,
-          });
-          break;
-
-        // ── Debug turn data for web debug panel ──
-        case 'debug_turn':
-          sendUnifyEvent({
-            type: 'debug_turn',
-            turnNumber: event.turnNumber,
-            model: event.model,
-            systemPrompt: event.systemPrompt,
-            messages: event.messages,
-            response: event.response,
-            toolCalls: event.toolCalls,
-            usage: event.usage,
-            latencyMs: event.latencyMs,
-            ttfbMs: event.ttfbMs,
-            stopReason: event.stopReason,
-          });
-          break;
-
-        // ── Errors ──
-        case 'error': {
-          const errMsg = event.error?.message || 'Unknown error';
-          // Filter permission errors: show friendly one-time diagnostic instead of raw error
-          if (isPermissionErrorMsg(errMsg)) {
-            if (!_permissionDiagnosticSent) {
-              _permissionDiagnosticSent = true;
-              sendUnifyOutput({
-                type: 'assistant',
-                message: {
-                  content: [{
-                    type: 'text',
-                    text: '⚠️ Cannot write to ~/.yeaft/ directory — some features (memory, history) are unavailable. Please check directory permissions: `chmod -R u+rw ~/.yeaft/`',
-                  }],
-                },
-              });
-            }
-            // Don't show subsequent permission errors
-          } else {
-            sendUnifyOutput({
-              type: 'assistant',
-              message: {
-                content: [{
-                  type: 'text',
-                  text: `⚠️ Error: ${errMsg}`,
-                }],
-              },
-            });
-          }
-          break;
-        }
-
-        default:
-          // Silently consume unknown events
-          break;
-      }
+      forwardPipelineEvent(pev, pipelineCtx);
     }
 
     // ─── Query complete — accumulate messages for context continuity ──
-    conversationMessages.push({ role: 'user', content: prompt });
+    conversationMessages.push({ role: 'user', content: cleanedPrompt });
 
     const fullText = assistantTextParts.join('');
     if (fullText) {

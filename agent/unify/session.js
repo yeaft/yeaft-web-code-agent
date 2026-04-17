@@ -27,7 +27,10 @@ import { initThreadStore } from './threads/store.js';
 import { Engine } from './engine.js';
 import { createThreadEngineRegistry } from './threads/engine-registry.js';
 import { MAIN_THREAD_ID } from './threads/store.js';
+import { getThreadStore } from './threads/store.js';
 import { createIntentClassifier } from './router/intent-classifier.js';
+import { initInputQueueStore } from './input-queue/store.js';
+import { createDispatcher } from './pipeline/dispatcher.js';
 import { join } from 'path';
 
 /**
@@ -193,6 +196,22 @@ export async function loadSession(options = {}) {
   // config as the engines so it can use primaryModel for classification.
   const router = createIntentClassifier({ adapter, trace, config });
 
+  // task-310 Phase 2 integration: wire InputQueue + Dispatcher so the
+  // web-bridge can submit `unify_chat` inputs through the unified pipeline
+  // (queue → router → engineRegistry → EngineInstance). In read-only mode
+  // the queue is memory-only (no disk writes).
+  const inputQueue = initInputQueueStore({
+    yeaftDir: config._readOnly ? null : yeaftDir,
+    force: true,
+  });
+  const dispatcher = createDispatcher({
+    inputQueue,
+    router,
+    engineRegistry,
+    threadStore: getThreadStore(),
+    trace,
+  });
+
   // ─── 10. Build session ─────────────────────────────────
   const status = {
     skills: skillManager.size,
@@ -224,6 +243,8 @@ export async function loadSession(options = {}) {
     engine,
     engineRegistry,
     router,
+    inputQueue,
+    dispatcher,
     adapter,
     config,
     conversationStore,
