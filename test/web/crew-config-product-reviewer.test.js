@@ -61,6 +61,20 @@ describe('Crew dev templates — product-reviewer parity with reviewer', () => {
     expect(block).toMatch(/to:\s*developer/);
   });
 
+  it('dev-en.js product-reviewer claudeMd is substantive (not silently emptied)', () => {
+    const src = read('web/crew-templates/dev-en.js');
+    // Extract claudeMd content for the product-reviewer role — a template literal.
+    const prBlock = src.slice(src.indexOf("name: 'product-reviewer'"));
+    const md = prBlock.match(/claudeMd:\s*`([\s\S]*?)`\s*\n\s*\}/);
+    expect(md, 'product-reviewer claudeMd template literal should be present').not.toBeNull();
+    const content = md[1];
+    // Guard against future refactors silently clearing the prompt.
+    expect(content.length).toBeGreaterThan(500);
+    // Identity + routing keywords must remain.
+    expect(content).toMatch(/Product Review/);
+    expect(content).toMatch(/ROUTE/);
+  });
+
   it('dev-en.js no longer defines the tester role (task-281 dual-reviewer parity)', () => {
     const src = read('web/crew-templates/dev-en.js');
     // Role definition entry for tester must be gone.
