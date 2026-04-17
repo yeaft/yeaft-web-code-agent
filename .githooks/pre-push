@@ -1,0 +1,71 @@
+#!/bin/bash
+#
+# task-304: pre-push governance hook — dev tag guard.
+#
+# Blocks pushing version tags (v*, release-*) from any branch other than
+# `main`. Historical violation on 2026-04-17: a developer tagged a release
+# on a worktree branch instead of main, causing dev/prod version drift.
+# This hook is opt-in via:
+#
+#   git config core.hooksPath .githooks
+#
+# (See .githooks/README.md for details.)
+#
+# Rationale (see CONTRIBUTING.md "Tagging & Release" section):
+#   - v0.1.X dev tags and release-v0.1.X release tags MUST only exist on
+#     commits that are reachable from origin/main.
+#   - Pushing a tag from a feature/worktree branch pins production to a
+#     commit that was never merged — dev and prod diverge silently.
+#
+# The legacy hooks/pre-push (copied into .git/hooks/ via scripts/install-hooks.sh)
+# implements the same check for repos that opted into the copy-based install.
+# This file is the core.hooksPath-based alternative — both must stay in sync.
+
+set -eu
+
+CURRENT_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  # Only inspect version/release tag pushes.
+  case "$local_ref" in
+    refs/tags/v*|refs/tags/release-*)
+      ;;
+    *)
+      continue
+      ;;
+  esac
+
+  TAG_NAME=${local_ref#refs/tags/}
+
+  if [ "$CURRENT_BRANCH" != "main" ]; then
+    echo "" >&2
+    echo "  🚫 pre-push blocked: cannot push tag '$TAG_NAME' from branch '$CURRENT_BRANCH'" >&2
+    echo "" >&2
+    echo "  Tags MUST only be pushed from the 'main' branch." >&2
+    echo "  Historical precedent: 2026-04-17 dev tagged on a worktree branch →" >&2
+    echo "  production shipped from an un-merged commit. Do not repeat." >&2
+    echo "" >&2
+    echo "  Correct flow:" >&2
+    echo "    1. git push origin HEAD:main          # merge feature to main" >&2
+    echo "    2. git checkout main && git pull" >&2
+    echo "    3. git tag $TAG_NAME" >&2
+    echo "    4. git push origin $TAG_NAME" >&2
+    echo "" >&2
+    exit 1
+  fi
+
+  # Also require the tagged commit to be reachable from main — prevents
+  # tagging stale refs even while standing on main.
+  TAG_COMMIT=$(git rev-list -n 1 "$TAG_NAME" 2>/dev/null || echo "")
+  if [ -n "$TAG_COMMIT" ]; then
+    if ! git merge-base --is-ancestor "$TAG_COMMIT" main 2>/dev/null; then
+      echo "" >&2
+      echo "  🚫 pre-push blocked: tag '$TAG_NAME' points to $TAG_COMMIT," >&2
+      echo "  which is NOT reachable from main. Push the commit to main first." >&2
+      echo "" >&2
+      exit 1
+    fi
+  fi
+done
+
+exit 0

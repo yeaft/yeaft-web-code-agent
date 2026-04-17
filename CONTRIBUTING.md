@@ -42,6 +42,64 @@ npm run build
 
 Bundles `web/` into `web/dist/` via esbuild. Docker builds do this automatically.
 
+## 🚨 Tagging & Release Rules (Governance)
+
+> **RED RULE — read before you ever run `git tag`.**
+> **Version tags (`v0.1.X`) and release tags (`release-v0.1.X`) MUST only be
+> created on commits that are on `main`. Developers (including AI crew
+> `dev-*` roles) MUST NOT tag from a feature / worktree branch.**
+
+### Why this matters
+
+On **2026-04-17** an AI dev-role agent tagged a release directly from its
+own worktree branch instead of merging to `main` first. The tag shipped a
+commit that was never in `main`, causing production and the `main` branch
+to diverge silently until the next deploy investigation. The `pre-push`
+hook in this directory exists specifically to prevent a recurrence.
+
+### Correct flow
+
+```
+  worktree-feat-xxx  ──push──►  origin/main  ──tag──►  git tag v0.1.X
+        │                           ▲                         │
+        │                           │                         ▼
+        └───  (review + test)  ─────┘                   git push origin v0.1.X
+                                                       (only from `main`)
+```
+
+1. Develop on a worktree branch (`worktree-feat-...`).
+2. Run `npm test` — every test must pass.
+3. `git push origin HEAD:main` — merge the feature onto `main`.
+4. `git checkout main && git pull` — switch to `main` locally.
+5. `git tag v0.1.X` — tag the `main` commit.
+6. `git push origin v0.1.X` — publish the dev tag.
+7. Only when a production release is explicitly requested: repeat (5)–(6)
+   with `release-v0.1.X`.
+
+### Enforcement
+
+- **Local (opt-in):** `.githooks/pre-push` refuses to push a `v*` or
+  `release-*` tag from any branch other than `main`, and refuses tags
+  pointing at commits not reachable from `main`. Enable with:
+  `git config core.hooksPath .githooks`.
+- **Legacy copy-install:** `hooks/pre-push` + `scripts/install-hooks.sh`
+  (same check, for clones that prefer `.git/hooks/`).
+- **Server-side:** GitHub tag-protection rules on `v*` / `release-*`
+  provide the non-bypassable layer — the local hook is a convenience,
+  not the authoritative enforcement.
+
+### Checklist for AI dev roles (crew `dev-*`)
+
+Before any `git commit`:
+
+- [ ] Changes are in a worktree branch (`git branch --show-current`
+      ≠ `main`)
+- [ ] Commit message follows conventional commits (`feat:` / `fix:` / ...)
+- [ ] **No `git tag` invocations in this session unless the user
+      explicitly asked for a release.**
+- [ ] If a tag *is* required: the commit to tag has already been pushed
+      to `origin/main`.
+
 ## Pull Requests
 
 1. Fork the repo and create your branch from `main`
