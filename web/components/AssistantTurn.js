@@ -1,9 +1,10 @@
 import ToolLine from './ToolLine.js';
 import AskCard from './AskCard.js';
+import ThreadPill from './ThreadPill.js';
 
 export default {
   name: 'AssistantTurn',
-  components: { ToolLine, AskCard },
+  components: { ToolLine, AskCard, ThreadPill },
   props: {
     turn: {
       type: Object,
@@ -19,6 +20,10 @@ export default {
       <!-- 1. Text content -->
       <div v-if="turn.textContent" class="turn-content">
         <div class="turn-header">
+          <!-- task-302: thread pill — only renders when turn.threadId is a
+               non-main, non-empty value. Legacy Chat messages have no
+               threadId field → component skips render. -->
+          <ThreadPill :thread-id="turn.threadId" :thread-name="threadDisplayName" />
           <button class="copy-btn" @click="copyContent" :title="copied ? $t('message.copied') : $t('message.copy')">
             <svg v-if="!copied" viewBox="0 0 24 24" width="16" height="16">
               <path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
@@ -133,6 +138,17 @@ export default {
 
     const historyTools = Vue.computed(() => {
       return props.turn.toolMsgs.slice(0, -1);
+    });
+
+    // task-302: display-name lookup for ThreadPill. Phase 1 falls back to
+    // the raw threadId (e.g. 'design' → '#design') since ThreadStore data
+    // is not yet surfaced to the frontend. task-301 will wire the real
+    // threads store and replace this fallback.
+    const threadDisplayName = Vue.computed(() => {
+      const id = props.turn.threadId;
+      if (!id || id === 'main') return '';
+      // Hook point for future store lookup: store.threads?.get(id)?.name
+      return id;
     });
 
     const toggleExpand = () => {
@@ -362,6 +378,7 @@ export default {
       showToolActions,
       latestTool,
       historyTools,
+      threadDisplayName,
       toggleExpand,
       renderedContent,
       copyContent,

@@ -1,0 +1,22 @@
+/* task-302: Unify thread pill — tiny grey `#thread-name` marker.
+ *
+ * Design constraints (CLAUDE.md / task-264 Unify UI rules):
+ *   - No horizontal divider / no border
+ *   - No colored vertical bar (no border-left, no ::before accent)
+ *   - Extremely small, muted — must not compete with message text
+ *   - Aligns with existing Unify message header styling
+ */
+.unify-thread-pill {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  line-height: 1.2;
+  color: var(--text-muted);
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--bg-user-msg);
+  font-weight: 400;
+  letter-spacing: 0.2px;
+  user-select: none;
+  white-space: nowrap;
+}

@@ -428,7 +428,11 @@ export default {
           toolMsgs: [],
           imageMsgs: [],
           askMsg: null,
-          messages: []
+          messages: [],
+          // task-302: capture threadId on turn so ThreadPill can render
+          // when a non-main thread's reply appears in the all-stream view.
+          // Null on legacy Chat messages (no threadId field) → ThreadPill skips.
+          threadId: null,
         };
       };
 
@@ -463,6 +467,12 @@ export default {
           }
           if (msg.isStreaming) {
             currentTurn.isStreaming = true;
+          }
+          // task-302: first assistant message's threadId wins for the turn.
+          // Subsequent messages in the same turn should already carry the
+          // same threadId, but we only latch the first to avoid flicker.
+          if (!currentTurn.threadId && msg.threadId) {
+            currentTurn.threadId = msg.threadId;
           }
           currentTurn.messages.push(msg);
           continue;
