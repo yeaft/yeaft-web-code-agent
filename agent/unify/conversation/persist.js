@@ -524,6 +524,89 @@ export class ConversationStore {
   }
 
   /**
+   * Copy every message on `sourceId` whose sequence id is <= `atMessageId`
+   * into new message files stamped with `threadId: targetId` and
+   * `sourceThreadId: sourceId` (symmetric with reassignThread's pill).
+   *
+   * Implementation notes:
+   *  - Scans both hot (`messages/`) and cold (`cold/`) directories so a
+   *    fork off a partially-compacted thread still works.
+   *  - Copies are appended via `append()` so they receive fresh globally
+   *    unique ids (m{NNNN}) — chronological order is preserved because we
+   *    sort by filename before copying.
+   *  - The source is NEVER modified. This is the key invariant separating
+   *    fork from merge.
+   *  - Returns the number of messages copied. `atMessageId` is inclusive.
+   *
+   * @param {string} sourceId
+   * @param {string} targetId
+   * @param {string} atMessageId — e.g. "m0007"; copy stops after this id
+   * @returns {number} copied count
+   */
+  copyThreadUpTo(sourceId, targetId, atMessageId) {
+    if (!sourceId || !targetId || sourceId === targetId) return 0;
+    if (!atMessageId || typeof atMessageId !== 'string') return 0;
+    // Collect candidate files from both dirs, then sort by the m-id suffix
+    // so chronological order holds across hot/cold boundary.
+    const candidates = [];
+    for (const dir of [this.#coldDir, this.#msgDir]) {
+      if (!existsSync(dir)) continue;
+      let files;
+      try {
+        files = readdirSync(dir).filter(f => f.endsWith('.md'));
+      } catch (err) {
+        if (isPermissionError(err)) continue;
+        throw err;
+      }
+      for (const f of files) candidates.push(join(dir, f));
+    }
+    // Sort by the "m{NNNN}" basename, which is chronological.
+    candidates.sort((a, b) => {
+      const ma = a.match(/m(\d+)\.md$/);
+      const mb = b.match(/m(\d+)\.md$/);
+      if (!ma || !mb) return 0;
+      return parseInt(ma[1], 10) - parseInt(mb[1], 10);
+    });
+    const cutoffMatch = atMessageId.match(/^m?(\d+)$/);
+    if (!cutoffMatch) return 0;
+    const cutoffSeq = parseInt(cutoffMatch[1], 10);
+
+    let copied = 0;
+    for (const path of candidates) {
+      const fileMatch = path.match(/m(\d+)\.md$/);
+      if (!fileMatch) continue;
+      const seq = parseInt(fileMatch[1], 10);
+      if (seq > cutoffSeq) break; // ordered; past the cutoff → done
+      let raw;
+      try {
+        raw = readFileSync(path, 'utf8');
+      } catch (err) {
+        if (isPermissionError(err)) continue;
+        throw err;
+      }
+      const msg = parseMessage(raw);
+      if (!msg || msg.threadId !== sourceId) continue;
+      // Strip id/time — append() will mint a fresh sequence id for the
+      // copy. Stamp sourceThreadId (only if not already set; for
+      // fork-of-fork, keep the original source pill).
+      const { id: _id, ...rest } = msg;
+      const copy = {
+        ...rest,
+        threadId: targetId,
+        sourceThreadId: msg.sourceThreadId || sourceId,
+      };
+      try {
+        this.append(copy);
+        copied += 1;
+      } catch (err) {
+        if (isPermissionError(err)) continue;
+        throw err;
+      }
+    }
+    return copied;
+  }
+
+  /**
    * Load messages from a directory, sorted by filename, limited.
    * @param {string} dir
    * @param {number} limit

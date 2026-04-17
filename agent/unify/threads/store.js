@@ -68,6 +68,7 @@ const FLUSH_DEBOUNCE_MS = 8;
  * @returns {string}
  */
 function serializeThread(t) {
+  const forkedFrom = serializeForkedFrom(t.forkedFrom);
   const fm = [
     '---',
     `id: ${t.id}`,
@@ -77,6 +78,7 @@ function serializeThread(t) {
     `status: ${t.status}`,
     `archived: ${t.archived ? 'true' : 'false'}`,
     `mergedInto: ${t.mergedInto == null ? 'null' : t.mergedInto}`,
+    `forkedFrom: ${forkedFrom}`,
     `messageCount: ${t.messageCount | 0}`,
     `lastMessageAt: ${t.lastMessageAt == null ? 'null' : t.lastMessageAt}`,
     `lastActivityAt: ${t.lastActivityAt == null ? 'null' : t.lastActivityAt}`,
@@ -89,6 +91,31 @@ function serializeThread(t) {
   // Body is the preview (wrapped so the file remains human-readable).
   if (t.preview) fm.push(t.preview);
   return fm.join('\n') + '\n';
+}
+
+/**
+ * Serialise `forkedFrom` as a single-line scalar so the YAML stays flat.
+ * Shape: `{threadId}|{messageId}|{timestamp}`. Null becomes literal `null`.
+ */
+function serializeForkedFrom(ff) {
+  if (!ff || typeof ff !== 'object') return 'null';
+  if (!ff.threadId || !ff.messageId) return 'null';
+  const ts = Number.isFinite(ff.timestamp) ? ff.timestamp : 0;
+  return `${ff.threadId}|${ff.messageId}|${ts}`;
+}
+
+function parseForkedFrom(raw) {
+  if (!raw || raw === 'null') return null;
+  const parts = String(raw).split('|');
+  if (parts.length < 2) return null;
+  const [threadId, messageId, tsStr] = parts;
+  if (!threadId || !messageId) return null;
+  const ts = parseInt(tsStr || '0', 10);
+  return {
+    threadId,
+    messageId,
+    timestamp: Number.isFinite(ts) ? ts : 0,
+  };
 }
 
 function escapeScalar(v) {
@@ -134,6 +161,8 @@ function parseThread(raw) {
   if (!THREAD_STATUSES.includes(record.status)) record.status = 'active';
   record.archived = record.status === 'archived';
   if (!('mergedInto' in record)) record.mergedInto = null;
+  // forkedFrom is a packed scalar — decode back to {threadId, messageId, timestamp}.
+  record.forkedFrom = parseForkedFrom(record.forkedFrom);
   record.messageCount = Number.isFinite(record.messageCount) ? record.messageCount : 0;
   record.unread = Number.isFinite(record.unread) ? record.unread : 0;
   record.preview = body;
@@ -311,6 +340,7 @@ export class ThreadStore {
       lastActivityAt: null,
       archived: false,
       mergedInto: null,
+      forkedFrom: null,
       unread: 0,
       preview: '',
       ...base,
@@ -623,6 +653,56 @@ export class ThreadStore {
     this.#markDirty(sourceId);
     this.#markDirty(targetId);
     return { source, target };
+  }
+
+  /**
+   * Fork a new thread from an existing one at a specific message cursor.
+   * ThreadStore only creates the new thread record (with `forkedFrom`
+   * pointing at source + message + timestamp); the actual copying of
+   * messages up to `atMessageId` is done by ConversationStore.copyThreadUpTo
+   * — this keeps the two stores' responsibilities separate.
+   *
+   * Validation:
+   *  - source must exist
+   *  - source must not be archived (forking a dead thread is confusing)
+   *  - atMessageId must be a non-empty string (actual existence check is
+   *    the caller's responsibility, since ThreadStore doesn't own messages)
+   *  - source may itself be a fork (chain is supported)
+   *
+   * @param {string} sourceId
+   * @param {string} atMessageId
+   * @param {{ name?: string, title?: string, timestamp?: number }} [opts]
+   * @returns {Thread} the newly created forked thread record
+   */
+  forkThread(sourceId, atMessageId, opts = {}) {
+    if (!sourceId) throw new Error('forkThread: sourceId required');
+    if (!atMessageId || typeof atMessageId !== 'string') {
+      throw new Error('forkThread: atMessageId required');
+    }
+    const source = this.#threads.get(sourceId);
+    if (!source) throw new Error(`thread not found: ${sourceId}`);
+    if (source.archived || source.status === 'archived') {
+      throw new Error(`forkThread: cannot fork an archived thread (${sourceId})`);
+    }
+    const now = Date.now();
+    const id = `thr-${randomUUID().slice(0, 8)}`;
+    const defaultName = source.id === MAIN_THREAD_ID ? 'inbox-fork' : `${source.name}-fork`;
+    const thread = this.#newThreadRecord({
+      id,
+      name: (opts.name && opts.name.trim()) || defaultName,
+      goal: source.goal || '',
+      parentThreadId: sourceId,
+      createdAt: now,
+      updatedAt: now,
+      forkedFrom: {
+        threadId: sourceId,
+        messageId: atMessageId,
+        timestamp: Number.isFinite(opts.timestamp) ? opts.timestamp : now,
+      },
+    });
+    this.#threads.set(id, thread);
+    this.#markDirty(id);
+    return thread;
   }
 
   setStatus(id, status) {

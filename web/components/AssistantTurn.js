@@ -110,6 +110,20 @@ export default {
           </svg>
           <span class="copy-full-label">{{ fullCopied ? $t('message.copied') : $t('message.copyAll') }}</span>
         </button>
+        <!-- task-314: Fork from here — only rendered when this turn's
+             assistant message has a persisted m-id. Gesture creates a new
+             thread carrying the conversation up to this message. -->
+        <button
+          v-if="canFork"
+          class="fork-here-btn"
+          @click="forkFromHere"
+          :title="$t('message.forkFromHere') || 'Fork from here'"
+        >
+          <svg viewBox="0 0 24 24" width="14" height="14">
+            <path fill="currentColor" d="M6 4a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm12 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4zM6 16a2 2 0 1 1 0 4 2 2 0 0 1 0-4zM7 9v4a4 4 0 0 0 4 4h2v-2h-2a2 2 0 0 1-2-2V9H7zm10 0h-2v4h2V9z"/>
+          </svg>
+          <span class="fork-here-label">{{ $t('message.forkFromHere') || 'Fork from here' }}</span>
+        </button>
       </div>
     </div>
   `,
@@ -369,7 +383,21 @@ export default {
       window.open(url, '_blank');
     };
 
+    // task-314: Fork-from-here — only enabled when this turn has a persisted
+    // assistant message id (m0001-style) and the turn is no longer streaming.
+    const canFork = Vue.computed(() => {
+      return !!props.turn.atMessageId && !props.turn.isStreaming;
+    });
+
+    const forkFromHere = () => {
+      if (!canFork.value) return;
+      const sourceThreadId = props.turn.threadId || 'main';
+      store.forkUnifyThread(sourceThreadId, props.turn.atMessageId);
+    };
+
     return {
+      canFork,
+      forkFromHere,
       copied,
       fullCopied,
       expanded,

@@ -627,6 +627,75 @@ export function handleUnifyMergeThread(msg) {
 }
 
 /**
+ * task-314: fork a new thread from an existing one at a specific message.
+ * Copies every message up to (and including) `atMessageId` from the source
+ * thread onto a fresh thread, stamps `forkedFrom` on the new thread record,
+ * and broadcasts `thread_forked` + refreshed thread list. The source is not
+ * modified.
+ *
+ * @param {{ sourceThreadId: string, atMessageId: string, name?: string }} msg
+ */
+export function handleUnifyForkThread(msg) {
+  if (!session) {
+    console.warn('[Unify] unify_fork_thread received before session init — ignored');
+    return;
+  }
+  const { sourceThreadId, atMessageId, name } = msg || {};
+  if (!sourceThreadId || !atMessageId) {
+    sendUnifyEvent({
+      type: 'thread_fork_failed',
+      sourceThreadId,
+      atMessageId,
+      error: 'sourceThreadId and atMessageId required',
+    });
+    return;
+  }
+
+  let copied = 0;
+  let newThread;
+  try {
+    // 1. Create the fork record on ThreadStore (sets forkedFrom pointer).
+    const store = session.threadStore || getThreadStore();
+    newThread = store.forkThread(sourceThreadId, atMessageId, { name });
+    // 2. Copy messages up to the cursor (inclusive) into the new thread.
+    if (session.conversationStore && typeof session.conversationStore.copyThreadUpTo === 'function') {
+      copied = session.conversationStore.copyThreadUpTo(
+        sourceThreadId,
+        newThread.id,
+        atMessageId,
+      );
+    }
+    // 3. Roll cached counters on the new thread so the sidebar shows the
+    // copied messages without needing a rebuild pass.
+    if (copied > 0) {
+      newThread.messageCount = copied;
+      newThread.lastMessageAt = Date.now();
+      newThread.lastActivityAt = newThread.lastMessageAt;
+    }
+    // 4. Flush so the new thread is durable before the UI refreshes.
+    if (typeof store.flush === 'function') store.flush();
+  } catch (err) {
+    sendUnifyEvent({
+      type: 'thread_fork_failed',
+      sourceThreadId,
+      atMessageId,
+      error: err?.message || String(err),
+    });
+    return;
+  }
+
+  // 5. Broadcast the fork + refreshed thread list.
+  sendUnifyEvent({
+    type: 'thread_forked',
+    sourceThreadId,
+    targetThreadId: newThread.id,
+    forkedAtMessageId: atMessageId,
+    copiedMessages: copied,
+  });
+  sendThreadListUpdate();
+}
+
+/**
  * Handle model switch from the web UI.
  * Updates Engine's config so the next query uses the new model.
  * @param {{ model: string }} msg

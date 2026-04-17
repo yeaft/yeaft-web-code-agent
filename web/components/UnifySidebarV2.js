@@ -152,6 +152,9 @@ export default {
             >
               <span class="usv2-dot usv2-dot-active" :class="{ running: t.running }"></span>
               <span class="usv2-thread-name">#{{ threadDisplayName(t) }}</span>
+              <span v-if="t.forkedFrom" class="usv2-fork-icon" :title="forkSourceLabel(t)">
+                <svg viewBox="0 0 24 24" width="11" height="11"><path fill="currentColor" d="M6 4a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm12 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4zM6 16a2 2 0 1 1 0 4 2 2 0 0 1 0-4zM7 9v4a4 4 0 0 0 4 4h2v-2h-2a2 2 0 0 1-2-2V9H7zm10 0h-2v4h2V9z"/></svg>
+              </span>
               <span class="usv2-thread-title">{{ t.title || t.goal || '' }}</span>
               <span class="usv2-unread" v-if="t.unread > 0">{{ t.unread }}</span>
               <button
@@ -184,6 +187,9 @@ export default {
             >
               <span class="usv2-dot usv2-dot-idle"></span>
               <span class="usv2-thread-name">#{{ threadDisplayName(t) }}</span>
+              <span v-if="t.forkedFrom" class="usv2-fork-icon" :title="forkSourceLabel(t)">
+                <svg viewBox="0 0 24 24" width="11" height="11"><path fill="currentColor" d="M6 4a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm12 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4zM6 16a2 2 0 1 1 0 4 2 2 0 0 1 0-4zM7 9v4a4 4 0 0 0 4 4h2v-2h-2a2 2 0 0 1-2-2V9H7zm10 0h-2v4h2V9z"/></svg>
+              </span>
               <span class="usv2-thread-title">{{ t.title || t.goal || '' }}</span>
               <button
                 v-if="t.id !== 'main'"
@@ -578,6 +584,14 @@ export default {
     threadLinkLabel(threadId) {
       const match = this.threads.find((t) => t.id === threadId);
       return match ? match.name : threadId;
+    },
+    // task-314: tooltip for sidebar fork icon
+    forkSourceLabel(t) {
+      if (!t || !t.forkedFrom) return '';
+      const srcId = t.forkedFrom.threadId;
+      const src = this.threads.find((x) => x.id === srcId);
+      const name = src ? (src.id === 'main' ? 'Inbox' : src.name) : srcId;
+      return `Forked from #${name}`;
     },
     toggleTask(id) {
       this.expandedTasks = { ...this.expandedTasks, [id]: !this.expandedTasks[id] };
