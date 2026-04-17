@@ -1,18 +1,16 @@
 /**
- * UnifySidebarV2 — task-300 Phase 1 skeleton.
+ * UnifySidebarV2 — task-300 skeleton + task-301 i18n polish.
  *
  * Standalone sidebar component with:
- *   - top search box (keyword + `#thread-name` prefix)
- *   - Active / Idle / Archived thread groups (main pinned first in Active)
+ *   - top search box (keyword + `#thread-name` prefix), i18n placeholder
+ *   - Active / Idle / Archived thread groups (main pinned first in Active,
+ *     displayed as the localized "Inbox" label)
  *   - Tasks tree (expand/collapse, max 3 levels)
  *   - emits `select-thread` / `select-task` on row click
  *
- * Phase 1 is mock-only — data lives in component state. No dependency on
- * task-298 store. When the real store lands, swap the mock arrays for a
- * computed pulling from Pinia; the rest of the template stays identical.
- *
- * Unused prefixes (`task:N`, `status:`, `in:title`) are Phase 3; this file
- * implements only keyword + `#thread` per the PM task-300 scope cut.
+ * Phase 1 data is still mock (in component state). task-301 Part 2 swaps
+ * `threads`/`tasks` for props/computed reading the real Pinia store once
+ * task-299 ListThreads returns the full field set (unread/preview/etc).
  */
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -54,7 +52,7 @@ export default {
           type="text"
           class="usv2-search-input"
           v-model="searchQuery"
-          :placeholder="'Search threads, #thread, tasks…'"
+          :placeholder="placeholderText"
         />
       </div>
 
@@ -74,7 +72,7 @@ export default {
               @click="onSelectThread(t)"
             >
               <span class="usv2-dot usv2-dot-active" :class="{ running: t.running }"></span>
-              <span class="usv2-thread-name">#{{ t.name }}</span>
+              <span class="usv2-thread-name">#{{ threadDisplayName(t) }}</span>
               <span class="usv2-thread-title">{{ t.title }}</span>
               <span class="usv2-unread" v-if="t.unread > 0">{{ t.unread }}</span>
             </div>
@@ -97,7 +95,7 @@ export default {
               @click="onSelectThread(t)"
             >
               <span class="usv2-dot usv2-dot-idle"></span>
-              <span class="usv2-thread-name">#{{ t.name }}</span>
+              <span class="usv2-thread-name">#{{ threadDisplayName(t) }}</span>
               <span class="usv2-thread-title">{{ t.title }}</span>
             </div>
             <div class="usv2-empty" v-if="grouped.idle.length === 0">No idle threads</div>
@@ -119,7 +117,7 @@ export default {
               @click="onSelectThread(t)"
             >
               <span class="usv2-dot usv2-dot-archived"></span>
-              <span class="usv2-thread-name">#{{ t.name }}</span>
+              <span class="usv2-thread-name">#{{ threadDisplayName(t) }}</span>
               <span class="usv2-thread-title">{{ t.title }}</span>
             </div>
             <div class="usv2-empty" v-if="grouped.archived.length === 0">No archived threads</div>
@@ -192,6 +190,14 @@ export default {
     };
   },
   computed: {
+    // Localized placeholder. Falls back gracefully when $t is not injected
+    // (e.g. stand-alone unit tests that don't mount the component).
+    placeholderText() {
+      if (typeof this.$t === 'function') {
+        return this.$t('unify.sidebar.searchPlaceholder');
+      }
+      return 'Search… (#name for threads)';
+    },
     parsedQuery() {
       const raw = (this.searchQuery || '').trim();
       if (!raw) return { keyword: '', threadPrefix: null };
@@ -250,6 +256,16 @@ export default {
     }
   },
   methods: {
+    // Display label for a thread row. The "main" thread (internal id
+    // never changes) is shown as the localized "Inbox" label; all other
+    // threads use their `name`.
+    threadDisplayName(t) {
+      if (t && t.id === 'main') {
+        if (typeof this.$t === 'function') return this.$t('unify.inbox');
+        return 'Inbox';
+      }
+      return t ? t.name : '';
+    },
     isTaskExpanded(id) {
       return !!this.expandedTasks[id];
     },

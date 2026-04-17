@@ -1,17 +1,23 @@
 import ChatInput from './ChatInput.js';
 import MessageList from './MessageList.js';
 import UnifySettings from './UnifySettings.js';
+import UnifySidebarV2 from './UnifySidebarV2.js';
 
 export default {
   name: 'UnifyPage',
-  components: { ChatInput, MessageList, UnifySettings },
+  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2 },
   template: `
     <div class="unify-page">
       <!-- Mobile sidebar overlay -->
       <div class="unify-sidebar-overlay" v-if="!sidebarCollapsed && isMobile" @click="sidebarCollapsed = true"></div>
 
-      <!-- Left Sidebar (minimal: back + settings) -->
-      <aside class="unify-sidebar" :class="{ collapsed: sidebarCollapsed }">
+      <!-- Left Sidebar — V2 (experimental, feature-flag) OR legacy minimal. -->
+      <UnifySidebarV2
+        v-if="sidebarV2Enabled"
+        @select-thread="onSelectThreadV2"
+        @select-task="onSelectTaskV2"
+      />
+      <aside class="unify-sidebar" v-else :class="{ collapsed: sidebarCollapsed }">
         <div class="unify-sidebar-header">
           <button class="unify-back-btn" @click="goBack" :title="$t('unify.back')">
             <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
@@ -180,6 +186,27 @@ export default {
     const expandedTurns = Vue.reactive({});
     const modelDropdownOpen = Vue.ref(false);
     const showSettings = Vue.ref(false);
+
+    // task-301: feature-flag switch between legacy sidebar and V2.
+    // Source of truth is the store (persisted via localStorage). Computed
+    // so it reacts to Settings toggles without a page refresh.
+    const sidebarV2Enabled = Vue.computed(() => !!store.unifySidebarV2Enabled);
+
+    const onSelectThreadV2 = (threadId) => {
+      // Part 1: stub handler. Part 2 (post task-299) will call
+      // store.setActiveThread(threadId). For now, just surface via the
+      // Vue devtools event trail — no side effects.
+      if (typeof store.setActiveThread === 'function') {
+        store.setActiveThread(threadId);
+      }
+    };
+
+    const onSelectTaskV2 = (taskId) => {
+      // Part 1: stub handler. Part 2 will persist task-ui highlight state.
+      if (typeof store.setActiveTaskUi === 'function') {
+        store.setActiveTaskUi(taskId);
+      }
+    };
 
     // Detail panel resizable width
     const detailPanel = Vue.ref(null);
@@ -378,6 +405,9 @@ export default {
       onSettingsSaved,
       formatMessages,
       formatToolCalls,
+      sidebarV2Enabled,
+      onSelectThreadV2,
+      onSelectTaskV2,
     };
   }
 };

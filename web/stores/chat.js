@@ -168,6 +168,23 @@ export const useChatStore = defineStore('chat', {
     unifyStatus: null,            // { skills, mcpServers, tools } 从 session_ready 获取
     unifyAvailableModels: [],     // 可用模型列表 [{ id, provider, label }]
     unifyDebugTurns: [],          // Debug panel: per-turn debug info from engine
+
+    // ★ task-301: Experimental new sidebar V2 (thread list + task tree).
+    // Default off — opt-in via Unify Settings toggle or ?sidebarV2=1 URL
+    // query. Persisted to localStorage so page refresh keeps the choice.
+    unifySidebarV2Enabled: (() => {
+      try {
+        if (typeof window !== 'undefined') {
+          const params = new URLSearchParams(window.location.search);
+          if (params.get('sidebarV2') === '1') return true;
+          if (params.get('sidebarV2') === '0') return false;
+          const stored = localStorage.getItem('unify-sidebar-v2-enabled');
+          if (stored === 'true') return true;
+          if (stored === 'false') return false;
+        }
+      } catch (_) { /* non-browser test env */ }
+      return false;
+    })(),
   }),
 
   getters: {
@@ -469,6 +486,15 @@ export const useChatStore = defineStore('chat', {
       if (typeof console !== 'undefined' && console.warn) {
         console.warn('[unify] setUnifyMode is deprecated; Unify now runs in a single unified mode.');
       }
+    },
+    // ★ task-301: Toggle experimental Sidebar V2. Persisted so refresh keeps it.
+    setUnifySidebarV2Enabled(enabled) {
+      this.unifySidebarV2Enabled = !!enabled;
+      try {
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem('unify-sidebar-v2-enabled', this.unifySidebarV2Enabled ? 'true' : 'false');
+        }
+      } catch (_) { /* ignore storage errors */ }
     },
     switchUnifyModel(modelId) {
       if (!modelId || !this.unifyAgentId) return;
