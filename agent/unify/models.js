@@ -59,6 +59,33 @@ export const MODEL_REGISTRY = new Map([
     maxOutputTokens: 16384,
     displayName: 'GPT-5',
   }],
+  ['gpt-5-mini', {
+    provider: 'openai',
+    adapter: 'chat-completions',
+    baseUrl: 'https://api.openai.com/v1',
+    // TODO: verify exact limits against OpenAI docs on first real call
+    contextWindow: 400000,
+    maxOutputTokens: 128000,
+    displayName: 'GPT-5 Mini',
+  }],
+  ['gpt-5-nano', {
+    provider: 'openai',
+    adapter: 'chat-completions',
+    baseUrl: 'https://api.openai.com/v1',
+    // TODO: verify exact limits against OpenAI docs on first real call
+    contextWindow: 400000,
+    maxOutputTokens: 128000,
+    displayName: 'GPT-5 Nano',
+  }],
+  ['gpt-5-pro', {
+    provider: 'openai',
+    adapter: 'chat-completions',
+    baseUrl: 'https://api.openai.com/v1',
+    // TODO: verify exact limits against OpenAI docs on first real call
+    contextWindow: 400000,
+    maxOutputTokens: 128000,
+    displayName: 'GPT-5 Pro',
+  }],
   ['gpt-5.4', {
     provider: 'openai',
     adapter: 'chat-completions',

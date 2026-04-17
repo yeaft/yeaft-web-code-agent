@@ -195,9 +195,46 @@ describe('AdapterRouter adapter creation', () => {
     global.fetch = originalFetch;
   });
 
+  it('should create OpenAIResponsesAdapter for openai-responses protocol provider', async () => {
+    const RESPONSES_PROVIDER = {
+      name: 'openai-responses',
+      protocol: 'openai-responses',
+      baseUrl: 'https://api.openai.com/v1',
+      apiKey: 'sk-responses',
+      models: ['gpt-5'],
+    };
+    const router = new AdapterRouter({ providers: [RESPONSES_PROVIDER] });
+
+    const originalFetch = global.fetch;
+    let capturedUrl = null;
+    let capturedHeaders = null;
+    global.fetch = async (url, opts) => {
+      capturedUrl = url;
+      capturedHeaders = opts?.headers || {};
+      return {
+        ok: false,
+        status: 401,
+        headers: new Map(),
+        json: async () => ({ error: { message: 'test' } }),
+        text: async () => 'Unauthorized',
+      };
+    };
+
+    try {
+      await router.call({ model: 'gpt-5', system: 'test', messages: [{ role: 'user', content: 'hi' }] });
+    } catch {
+      // Expected 401
+    }
+
+    // Responses adapter hits /v1/responses
+    expect(capturedUrl).toBe('https://api.openai.com/v1/responses');
+    expect(capturedHeaders['Authorization']).toBe('Bearer sk-responses');
+
+    global.fetch = originalFetch;
+  });
+
   it('should cache adapters — same provider reuses adapter', async () => {
     const router = new AdapterRouter({ providers: [PROXY_PROVIDER] });
-
     const originalFetch = global.fetch;
     let fetchCount = 0;
 

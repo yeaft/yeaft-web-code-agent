@@ -79,6 +79,13 @@ export class AdapterRouter extends LLMAdapter {
         apiKey: provider.apiKey,
         baseUrl: provider.baseUrl,
       });
+    } else if (protocol === 'openai-responses') {
+      // OpenAI Responses API (/v1/responses) — next-gen, recommended for GPT-5+
+      const { OpenAIResponsesAdapter } = await import('./openai-responses.js');
+      adapter = new OpenAIResponsesAdapter({
+        apiKey: provider.apiKey,
+        baseUrl: provider.baseUrl,
+      });
     } else {
       // Default: openai (Chat Completions API) — covers proxy, OpenAI, DeepSeek, Gemini, etc.
       const { ChatCompletionsAdapter } = await import('./chat-completions.js');
