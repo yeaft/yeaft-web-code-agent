@@ -201,6 +201,9 @@ export const useChatStore = defineStore('chat', {
     unifyActiveThreadId: null,
     unifyActiveTaskId: null,
 
+    // ★ task-313: most recent merge result (ok/error) — UI shows a toast.
+    unifyLastMergeResult: null,
+
     // ★ task-312: jump-to-message highlight target. When the sidebar
     // search triggers a thread hit, the store records the matching
     // keyword here so MessageList can scroll to / flash the first
@@ -525,6 +528,36 @@ export const useChatStore = defineStore('chat', {
         case 'task_list_updated':
           this.unifyTasks = Array.isArray(event.tasks) ? event.tasks : [];
           break;
+
+        // ★ task-313: merge confirmation / failure toast hooks.
+        case 'thread_merged':
+          // Thread list refresh arrives as a separate `thread_list_updated`
+          // event. Here we just clear any per-thread UI state that pointed
+          // at the now-archived source.
+          if (this.unifyActiveThreadId === event.sourceId) {
+            this.unifyActiveThreadId = event.targetId || null;
+          }
+          if (this.unifyActiveThreadFilter === event.sourceId) {
+            this.unifyActiveThreadFilter = null;
+          }
+          this.unifyLastMergeResult = {
+            ok: true,
+            sourceId: event.sourceId,
+            targetId: event.targetId,
+            reassignedMessages: event.reassignedMessages || 0,
+            at: Date.now(),
+          };
+          break;
+
+        case 'thread_merge_failed':
+          this.unifyLastMergeResult = {
+            ok: false,
+            sourceId: event.sourceId,
+            targetId: event.targetId,
+            error: event.error,
+            at: Date.now(),
+          };
+          break;
       }
     },
     fetchExpertRoleDefinitions() {
@@ -551,6 +584,19 @@ export const useChatStore = defineStore('chat', {
     },
     clearUnifyThreadFilter() {
       this.unifyActiveThreadFilter = null;
+    },
+    // ★ task-313: merge a source thread into target via agent-side store.
+    // The UI resolves the target with a picker + confirm dialog before
+    // calling this. Idempotent — the agent rejects invalid merges.
+    mergeUnifyThread(sourceId, targetId) {
+      if (!sourceId || !targetId || sourceId === targetId) return;
+      if (!this.unifyAgentId) return;
+      this.sendWsMessage({
+        type: 'unify_merge_thread',
+        agentId: this.unifyAgentId,
+        sourceId,
+        targetId,
+      });
     },
     // ★ task-301 Part 2: Sidebar V2 selection actions.
     // setActiveThread additionally drives the chat-stream dual view filter

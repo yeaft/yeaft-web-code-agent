@@ -652,6 +652,18 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       break;
     }
 
+    case 'unify_merge_thread': {
+      const mergeAgentId = msg.agentId || client.currentAgent;
+      if (!mergeAgentId) return;
+      if (!await checkAgentAccess(mergeAgentId)) return;
+      await forwardToAgent(mergeAgentId, {
+        type: 'unify_merge_thread',
+        sourceId: msg.sourceId,
+        targetId: msg.targetId,
+      });
+      break;
+    }
+
     default:
       return false; // Not handled
   }

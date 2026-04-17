@@ -23,7 +23,7 @@ const DAY_MS = 24 * HOUR_MS;
 
 export default {
   name: 'UnifySidebarV2',
-  emits: ['select-thread', 'select-task', 'jump-to-message', 'search-escape'],
+  emits: ['select-thread', 'select-task', 'jump-to-message', 'search-escape', 'merge-thread'],
   template: `
     <aside class="unify-sidebar-v2">
       <div class="usv2-search">
@@ -88,11 +88,19 @@ export default {
               class="usv2-thread"
               :class="{ selected: t.id === activeThreadId }"
               @click="onSelectThread(t)"
+              @contextmenu.prevent="onRequestMerge(t)"
             >
               <span class="usv2-dot usv2-dot-active" :class="{ running: t.running }"></span>
               <span class="usv2-thread-name">#{{ threadDisplayName(t) }}</span>
               <span class="usv2-thread-title">{{ t.title || t.goal || '' }}</span>
               <span class="usv2-unread" v-if="t.unread > 0">{{ t.unread }}</span>
+              <button
+                v-if="t.id !== 'main'"
+                type="button"
+                class="usv2-thread-kebab"
+                :title="label('mergeInto')"
+                @click.stop="onRequestMerge(t)"
+              >⋯</button>
             </div>
             <div class="usv2-empty" v-if="grouped.active.length === 0">{{ label('emptyActive') }}</div>
           </div>
@@ -112,10 +120,18 @@ export default {
               class="usv2-thread"
               :class="{ selected: t.id === activeThreadId }"
               @click="onSelectThread(t)"
+              @contextmenu.prevent="onRequestMerge(t)"
             >
               <span class="usv2-dot usv2-dot-idle"></span>
               <span class="usv2-thread-name">#{{ threadDisplayName(t) }}</span>
               <span class="usv2-thread-title">{{ t.title || t.goal || '' }}</span>
+              <button
+                v-if="t.id !== 'main'"
+                type="button"
+                class="usv2-thread-kebab"
+                :title="label('mergeInto')"
+                @click.stop="onRequestMerge(t)"
+              >⋯</button>
             </div>
             <div class="usv2-empty" v-if="grouped.idle.length === 0">{{ label('emptyIdle') }}</div>
           </div>
@@ -188,6 +204,52 @@ export default {
           </div>
         </section>
       </div>
+
+      <!-- task-313: Merge target picker. Opens when the user triggers a merge
+           from a thread row (kebab click or right-click). Lists every other
+           non-archived thread as a candidate target. Selecting one advances
+           to the irreversible-confirm dialog. Clicking the backdrop cancels. -->
+      <div v-if="mergePicker.open" class="usv2-merge-overlay" @click.self="cancelMerge">
+        <div class="usv2-merge-panel">
+          <div class="usv2-merge-title">{{ label('mergeInto') }}</div>
+          <div class="usv2-merge-source">#{{ sourceDisplayName }}</div>
+          <div class="usv2-merge-body">
+            <div class="usv2-merge-empty" v-if="mergeCandidates.length === 0">{{ label('mergeNoCandidates') }}</div>
+            <button
+              v-for="c in mergeCandidates"
+              :key="c.id"
+              type="button"
+              class="usv2-merge-candidate"
+              @click="pickMergeTarget(c)"
+            >
+              <span class="usv2-merge-candidate-name">#{{ threadDisplayName(c) }}</span>
+              <span class="usv2-merge-candidate-title">{{ c.title || c.goal || '' }}</span>
+            </button>
+          </div>
+          <div class="usv2-merge-actions">
+            <button type="button" class="usv2-merge-cancel" @click="cancelMerge">{{ label('cancel') }}</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- task-313: Irreversible confirm dialog. The merge is permanent — the
+           source thread is archived and its messages are re-stamped onto the
+           target. We explicitly spell that out before the user commits. -->
+      <div v-if="mergeConfirm.open" class="usv2-merge-overlay usv2-merge-overlay-confirm" @click.self="cancelMerge">
+        <div class="usv2-merge-panel usv2-merge-panel-confirm">
+          <div class="usv2-merge-title">{{ label('mergeConfirmTitle') }}</div>
+          <div class="usv2-merge-warning">{{ label('mergeIrreversible') }}</div>
+          <div class="usv2-merge-summary">
+            <span>#{{ confirmSourceName }}</span>
+            <span class="usv2-merge-arrow">→</span>
+            <span>#{{ confirmTargetName }}</span>
+          </div>
+          <div class="usv2-merge-actions">
+            <button type="button" class="usv2-merge-cancel" @click="cancelMerge">{{ label('cancel') }}</button>
+            <button type="button" class="usv2-merge-confirm" @click="confirmMerge">{{ label('mergeConfirm') }}</button>
+          </div>
+        </div>
+      </div>
     </aside>
   `,
   props: {
@@ -205,6 +267,13 @@ export default {
       tasksOpen: true,
       expandedTasks: {},
       now: Date.now(),
+      // task-313: merge-into flow state.
+      //   mergePicker.open  — true while the target picker overlay is showing
+      //   mergePicker.sourceId — thread we're merging AWAY from
+      //   mergeConfirm.open — true while the irreversible-confirm dialog shows
+      //   mergeConfirm.targetId — thread we're merging INTO
+      mergePicker: { open: false, sourceId: null },
+      mergeConfirm: { open: false, sourceId: null, targetId: null },
     };
   },
   computed: {
@@ -385,6 +454,30 @@ export default {
         for (const task of this.filteredTasks) flatten(task, 0);
       }
       return out;
+    },
+    // task-313: merge target candidates. Excludes the source, the main
+    // thread is always eligible as a target (you can fold a side-thread
+    // back into the main inbox), archived threads are filtered out.
+    mergeCandidates() {
+      const src = this.mergePicker.sourceId;
+      if (!src) return [];
+      return this.threads.filter((t) => {
+        if (t.id === src) return false;
+        if (t.archived || t.status === 'archived') return false;
+        return true;
+      });
+    },
+    sourceDisplayName() {
+      const t = this.threads.find((x) => x.id === this.mergePicker.sourceId);
+      return t ? this.threadDisplayName(t) : '';
+    },
+    confirmSourceName() {
+      const t = this.threads.find((x) => x.id === this.mergeConfirm.sourceId);
+      return t ? this.threadDisplayName(t) : '';
+    },
+    confirmTargetName() {
+      const t = this.threads.find((x) => x.id === this.mergeConfirm.targetId);
+      return t ? this.threadDisplayName(t) : '';
     }
   },
   methods: {
@@ -407,6 +500,12 @@ export default {
         kindThread: 'thread',
         kindTask: 'task',
         clearSearch: 'Clear',
+        mergeInto: 'Merge into…',
+        mergeNoCandidates: 'No other threads to merge into',
+        mergeConfirmTitle: 'Merge this thread?',
+        mergeIrreversible: 'This cannot be undone. The source thread will be archived and its messages moved to the target.',
+        mergeConfirm: 'Merge',
+        cancel: 'Cancel',
       };
       return fallback[key] || full;
     },
@@ -508,6 +607,38 @@ export default {
     truncate(s, n = 80) {
       if (!s) return '';
       return s.length > n ? s.slice(0, n - 1) + '…' : s;
+    },
+    // -------- merge flow (task-313) --------
+    // Open the target-picker for `thread`. Main/inbox thread is not a valid
+    // source because its id is hard-coded everywhere; archived threads are
+    // also skipped so users don't re-merge something that is already merged.
+    onRequestMerge(thread) {
+      if (!thread || thread.id === 'main') return;
+      if (thread.archived || thread.status === 'archived') return;
+      this.mergePicker = { open: true, sourceId: thread.id };
+    },
+    pickMergeTarget(target) {
+      if (!target) return;
+      this.mergeConfirm = {
+        open: true,
+        sourceId: this.mergePicker.sourceId,
+        targetId: target.id,
+      };
+      this.mergePicker = { open: false, sourceId: null };
+    },
+    confirmMerge() {
+      const { sourceId, targetId } = this.mergeConfirm;
+      if (sourceId && targetId && sourceId !== targetId) {
+        this.$emit('merge-thread', { sourceId, targetId });
+        if (this.store && typeof this.store.mergeUnifyThread === 'function') {
+          this.store.mergeUnifyThread(sourceId, targetId);
+        }
+      }
+      this.mergeConfirm = { open: false, sourceId: null, targetId: null };
+    },
+    cancelMerge() {
+      this.mergePicker = { open: false, sourceId: null };
+      this.mergeConfirm = { open: false, sourceId: null, targetId: null };
     }
   }
 };
