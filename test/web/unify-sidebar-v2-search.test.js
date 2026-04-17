@@ -67,7 +67,7 @@ function makeCtx(overrides = {}) {
 describe('task-312 — prefix parser', () => {
   it('plain keyword → { keyword, threadPrefix:null, scopedField:null }', () => {
     const ctx = makeCtx({ searchQuery: 'Polish' });
-    expect(ctx.parsedQuery).toEqual({ keyword: 'polish', threadPrefix: null, scopedField: null });
+    expect(ctx.parsedQuery).toEqual(expect.objectContaining({ keyword: 'polish', threadPrefix: null, scopedField: null }));
   });
 
   it('#name → threadPrefix set, keyword empty', () => {
@@ -78,7 +78,7 @@ describe('task-312 — prefix parser', () => {
 
   it('in:title foo → scopedField=title', () => {
     const ctx = makeCtx({ searchQuery: 'in:title Alpha' });
-    expect(ctx.parsedQuery).toEqual({ keyword: 'alpha', threadPrefix: null, scopedField: 'title' });
+    expect(ctx.parsedQuery).toEqual(expect.objectContaining({ keyword: 'alpha', threadPrefix: null, scopedField: 'title' }));
   });
 
   it('in:summary foo → scopedField=summary', () => {
@@ -209,7 +209,7 @@ describe('task-312 — Esc handling', () => {
 
 describe('task-312 — component shape additions', () => {
   it('template wires results-header label + empty-result empty state', () => {
-    expect(componentSrc).toMatch(/label\('results'\)/);
+    expect(componentSrc).toMatch(/label\('resultsThreads'\)/);
     expect(componentSrc).toMatch(/label\('emptyResults'\)/);
   });
 

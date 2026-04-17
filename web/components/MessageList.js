@@ -881,20 +881,28 @@ export default {
     Vue.watch(
       () => store.unifyJumpTarget,
       (target) => {
-        if (!target || !target.keyword) return;
+        // task-316: target may carry an explicit messageId (message-hit
+        // click) OR a keyword to scan for (legacy thread-hit). Prefer
+        // messageId when present — it's unambiguous.
+        if (!target) return;
+        if (!target.messageId && !target.keyword) return;
         const convId = store.unifyConversationId;
         if (!convId) return;
         const msgs = store.messagesMap[convId] || [];
-        const kw = target.keyword;
-        const scan = (m) => {
-          if (!m) return false;
-          if (target.threadId && m.threadId !== target.threadId) return false;
-          const text = typeof m.content === 'string'
-            ? m.content
-            : (m.content ? JSON.stringify(m.content) : '');
-          return text.toLowerCase().includes(kw);
-        };
-        const hit = msgs.find(scan);
+        let hit = null;
+        if (target.messageId) {
+          hit = msgs.find(m => m && m.id === target.messageId) || null;
+        } else {
+          const kw = target.keyword;
+          hit = msgs.find((m) => {
+            if (!m) return false;
+            if (target.threadId && m.threadId !== target.threadId) return false;
+            const text = typeof m.content === 'string'
+              ? m.content
+              : (m.content ? JSON.stringify(m.content) : '');
+            return text.toLowerCase().includes(kw);
+          }) || null;
+        }
         if (!hit || !hit.id) { store.clearUnifyJumpTarget(); return; }
         Vue.nextTick(() => {
           const el = document.querySelector(`[data-msg-id="${CSS.escape(hit.id)}"]`);

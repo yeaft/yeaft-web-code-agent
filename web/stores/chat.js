@@ -608,12 +608,29 @@ export const useChatStore = defineStore('chat', {
     setActiveTaskUi(taskId) {
       this.unifyActiveTaskId = taskId || null;
     },
-    // ★ task-312: set jump target so MessageList can scroll to first
-    // message in `threadId` whose text contains `keyword`. No-op if
-    // either is missing.
-    setUnifyJumpTarget(threadId, keyword) {
-      if (!threadId || !keyword) { this.unifyJumpTarget = null; return; }
-      this.unifyJumpTarget = { threadId, keyword: String(keyword).toLowerCase(), at: Date.now() };
+    // ★ task-312/316: set jump target so MessageList can scroll to the
+    // first matching message. Two-mode API:
+    //   setUnifyJumpTarget(threadId, keyword)      — legacy keyword scan
+    //   setUnifyJumpTarget({ threadId, messageId, keyword }) — exact id
+    //     (task-316 message-hit click in the advanced search).
+    setUnifyJumpTarget(a, b) {
+      let target = null;
+      if (a && typeof a === 'object') {
+        const { threadId, messageId, keyword } = a;
+        if (!messageId && !keyword) { this.unifyJumpTarget = null; return; }
+        target = {
+          threadId: threadId || null,
+          messageId: messageId || null,
+          keyword: keyword ? String(keyword).toLowerCase() : '',
+          at: Date.now(),
+        };
+      } else {
+        const threadId = a;
+        const keyword = b;
+        if (!threadId || !keyword) { this.unifyJumpTarget = null; return; }
+        target = { threadId, messageId: null, keyword: String(keyword).toLowerCase(), at: Date.now() };
+      }
+      this.unifyJumpTarget = target;
     },
     clearUnifyJumpTarget() {
       this.unifyJumpTarget = null;
