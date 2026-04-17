@@ -125,9 +125,9 @@ export async function loadSession(options = {}) {
   initTaskStore(yeaftDir, { readOnly: config._readOnly || false });
 
   // ─── 5b. Initialize thread store (task-299 Phase 1) ────
-  //         In-memory only for Phase 1; replaced by a file-backed store
-  //         when task-298's data layer merges.
-  initThreadStore();
+  //         task-307a: now file-backed under ~/.yeaft/threads/. Passing the
+  //         yeaftDir switches on disk persistence; read-only mode is honoured.
+  initThreadStore(yeaftDir, { readOnly: config._readOnly || false, force: true });
 
   // ─── 6. Load skills ────────────────────────────────────
   let skillManager;
