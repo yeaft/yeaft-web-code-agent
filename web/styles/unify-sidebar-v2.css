@@ -119,6 +119,42 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* task-316: empty state with usage examples */
+.usv2-empty-with-hints {
+  padding: 12px;
+  font-style: normal;
+  text-align: left;
+}
+.usv2-empty-title {
+  color: var(--text-secondary, #515154);
+  font-weight: 500;
+  margin-bottom: 8px;
+  text-align: center;
+}
+.usv2-empty-hints {
+  font-size: 11px;
+  color: var(--text-muted, #86868b);
+}
+.usv2-empty-hint-label {
+  margin-bottom: 4px;
+  font-weight: 500;
+  color: var(--text-secondary, #515154);
+}
+.usv2-empty-hint {
+  padding: 2px 0;
+}
+.usv2-empty-hint code {
+  font-family: var(--font-mono, Menlo, monospace);
+  font-size: 10px;
+  padding: 1px 6px;
+  background: var(--sidebar-hover, rgba(0,0,0,0.05));
+  border-radius: 4px;
+  color: var(--text-primary, #1d1d1f);
+}
+/* message-kind result row — slight accent for easy distinction */
+.usv2-result-message .usv2-result-kind {
+  color: var(--accent, #007aff);
+}
 
 /* Scroll area -------------------------------------------------------------- */
 .usv2-scroll {

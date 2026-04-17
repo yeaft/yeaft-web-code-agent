@@ -21,6 +21,16 @@
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
+// task-316: pulled parser out into a standalone, unit-tested module.
+// The sidebar only consumes the typed ParsedQuery + the pure matchers.
+import {
+  parseSearchQuery,
+  hasActiveQuery,
+  threadMatches as _threadMatches,
+  taskMatches as _taskMatches,
+  messageMatches as _messageMatches,
+} from '../utils/search-parser.js';
+
 export default {
   name: 'UnifySidebarV2',
   emits: ['select-thread', 'select-task', 'jump-to-message', 'search-escape', 'merge-thread'],
@@ -45,32 +55,82 @@ export default {
         >×</button>
       </div>
 
-      <!-- task-312: unified search results list. Shown whenever a query is
-           active; hides the Active/Idle/Archived/Tasks sections so the user
-           sees a single flat ranked list with click-to-jump semantics. -->
+      <!-- task-312/316: unified search results list. Shown whenever a
+           query is active; hides the Active/Idle/Archived/Tasks sections
+           so the user sees labelled sections (Threads / Tasks / Messages)
+           with click-to-jump semantics. -->
       <div class="usv2-scroll" v-if="searchActive">
-        <section class="usv2-group usv2-group-results">
+        <!-- Threads group -->
+        <section class="usv2-group usv2-group-results" v-if="searchGroups.threads.length > 0">
           <div class="usv2-group-header usv2-results-header">
-            <span class="usv2-group-label">{{ label('results') }}</span>
-            <span class="usv2-group-count">{{ searchResults.length }}</span>
+            <span class="usv2-group-label">{{ label('resultsThreads') }}</span>
+            <span class="usv2-group-count">{{ searchGroups.threads.length }}</span>
           </div>
           <div class="usv2-group-body">
             <div
-              v-for="r in searchResults"
-              :key="r.kind + ':' + r.id"
-              class="usv2-result"
-              :class="'usv2-result-' + r.kind"
+              v-for="r in searchGroups.threads"
+              :key="'thread:' + r.id"
+              class="usv2-result usv2-result-thread"
               @click="onSelectResult(r)"
             >
-              <span class="usv2-result-kind">{{ label(r.kind === 'thread' ? 'kindThread' : 'kindTask') }}</span>
-              <span class="usv2-result-name" v-if="r.kind === 'thread'">#{{ threadDisplayName(r.thread) }}</span>
-              <span class="usv2-result-name" v-else>{{ r.task.id }}</span>
+              <span class="usv2-result-kind">{{ label('kindThread') }}</span>
+              <span class="usv2-result-name">#{{ threadDisplayName(r.thread) }}</span>
               <span class="usv2-result-title">{{ r.title }}</span>
               <span class="usv2-result-snippet" v-if="r.snippet">{{ r.snippet }}</span>
             </div>
-            <div class="usv2-empty" v-if="searchResults.length === 0">{{ label('emptyResults') }}</div>
           </div>
         </section>
+        <!-- Tasks group -->
+        <section class="usv2-group usv2-group-results" v-if="searchGroups.tasks.length > 0">
+          <div class="usv2-group-header usv2-results-header">
+            <span class="usv2-group-label">{{ label('resultsTasks') }}</span>
+            <span class="usv2-group-count">{{ searchGroups.tasks.length }}</span>
+          </div>
+          <div class="usv2-group-body">
+            <div
+              v-for="r in searchGroups.tasks"
+              :key="'task:' + r.id"
+              class="usv2-result usv2-result-task"
+              @click="onSelectResult(r)"
+            >
+              <span class="usv2-result-kind">{{ label('kindTask') }}</span>
+              <span class="usv2-result-name">{{ r.task.id }}</span>
+              <span class="usv2-result-title">{{ r.title }}</span>
+              <span class="usv2-result-snippet" v-if="r.snippet">{{ r.snippet }}</span>
+            </div>
+          </div>
+        </section>
+        <!-- Messages group (task-316) — only populated when query asks
+             for body-level match, e.g. in:body foo or task:N kw. -->
+        <section class="usv2-group usv2-group-results" v-if="searchGroups.messages.length > 0">
+          <div class="usv2-group-header usv2-results-header">
+            <span class="usv2-group-label">{{ label('resultsMessages') }}</span>
+            <span class="usv2-group-count">{{ searchGroups.messages.length }}</span>
+          </div>
+          <div class="usv2-group-body">
+            <div
+              v-for="r in searchGroups.messages"
+              :key="'msg:' + r.id"
+              class="usv2-result usv2-result-message"
+              @click="onSelectResult(r)"
+            >
+              <span class="usv2-result-kind">{{ label('kindMessage') }}</span>
+              <span class="usv2-result-title">{{ r.title }}</span>
+              <span class="usv2-result-snippet" v-if="r.snippet">{{ r.snippet }}</span>
+            </div>
+          </div>
+        </section>
+        <!-- Empty state with usage examples (task-316) -->
+        <div class="usv2-empty usv2-empty-with-hints" v-if="searchResults.length === 0">
+          <div class="usv2-empty-title">{{ label('emptyResults') }}</div>
+          <div class="usv2-empty-hints">
+            <div class="usv2-empty-hint-label">{{ label('examplesLabel') }}</div>
+            <div class="usv2-empty-hint"><code>#thread-name</code></div>
+            <div class="usv2-empty-hint"><code>task:42</code></div>
+            <div class="usv2-empty-hint"><code>in:title foo</code></div>
+            <div class="usv2-empty-hint"><code>status:open bar</code></div>
+          </div>
+        </div>
       </div>
 
       <div class="usv2-scroll" v-else>
@@ -257,6 +317,8 @@ export default {
     // mount Pinia. When null the component reads from store.
     threadsSource: { type: Array, default: null },
     tasksSource: { type: Array, default: null },
+    // task-316: let tests inject messages the same way.
+    messagesSource: { type: Array, default: null },
   },
   data() {
     return {
@@ -313,62 +375,24 @@ export default {
       }
       return 'Search… (#name for threads)';
     },
-    // task-312: parser now recognises three mutually-exclusive prefixes:
-    //   #<name>        → only match thread by name (hides tasks)
-    //   in:<field> kw  → scope the keyword to a single field
-    //   plain keyword  → full-text over name/title/goal/summary/preview
-    //
-    // Returned shape:
-    //   { keyword, threadPrefix, scopedField }
-    //   - keyword: lowercase search term (or '' when threadPrefix set)
-    //   - threadPrefix: lowercased name substring, or null
-    //   - scopedField: 'title' | 'summary' | null
+    // task-316: parser now lives in web/utils/search-parser.js.
+    // Returned shape expanded with taskId + status filters; sidebar only
+    // reads the fields it needs. Existing tests that depend on the
+    // `{ keyword, threadPrefix, scopedField }` subset still pass because
+    // those fields are still present.
     parsedQuery() {
-      const raw = (this.searchQuery || '').trim();
-      if (!raw) return { keyword: '', threadPrefix: null, scopedField: null };
-      if (raw.startsWith('#') && raw.length > 1) {
-        return { keyword: '', threadPrefix: raw.slice(1).toLowerCase(), scopedField: null };
-      }
-      // `in:<field> rest…` — field is bare alphanum identifier.
-      const inMatch = raw.match(/^in:([a-zA-Z]+)\s+(.+)$/);
-      if (inMatch) {
-        const field = inMatch[1].toLowerCase();
-        const kw = inMatch[2].trim().toLowerCase();
-        // Only whitelisted scope fields are honoured; anything else falls
-        // through to plain keyword to avoid silently dropping the query.
-        if (field === 'title' || field === 'summary') {
-          return { keyword: kw, threadPrefix: null, scopedField: field };
-        }
-      }
-      return { keyword: raw.toLowerCase(), threadPrefix: null, scopedField: null };
+      return parseSearchQuery(this.searchQuery || '');
     },
     searchActive() {
-      const { keyword, threadPrefix } = this.parsedQuery;
-      return !!(keyword || threadPrefix);
+      return hasActiveQuery(this.parsedQuery);
     },
     threadOnlyQuery() {
       return this.parsedQuery.threadPrefix !== null;
     },
     filteredThreads() {
-      const { keyword, threadPrefix, scopedField } = this.parsedQuery;
-      return this.threads.filter((t) => {
-        if (threadPrefix !== null) {
-          return (t.name || '').toLowerCase().includes(threadPrefix);
-        }
-        if (!keyword) return true;
-        if (scopedField === 'title') {
-          return (t.title || '').toLowerCase().includes(keyword);
-        }
-        if (scopedField === 'summary') {
-          // "summary" for a thread maps to its goal/preview long text.
-          return (t.goal || '').toLowerCase().includes(keyword)
-            || (t.preview || '').toLowerCase().includes(keyword);
-        }
-        return (t.name || '').toLowerCase().includes(keyword)
-          || (t.title || '').toLowerCase().includes(keyword)
-          || (t.goal || '').toLowerCase().includes(keyword)
-          || (t.preview || '').toLowerCase().includes(keyword);
-      });
+      const q = this.parsedQuery;
+      if (!hasActiveQuery(q)) return this.threads;
+      return this.threads.filter(t => _threadMatches(t, q));
     },
     grouped() {
       const out = { active: [], idle: [], archived: [] };
@@ -393,40 +417,27 @@ export default {
       return out;
     },
     filteredTasks() {
-      const { keyword, threadPrefix, scopedField } = this.parsedQuery;
-      if (threadPrefix !== null) return [];
-      if (!keyword) return this.tasks;
-      const kw = keyword;
-      // scopedField semantics for tasks:
-      //   title   → match only task.title / task.id
-      //   summary → match only task.summary / task.description
-      //   null    → match any of the above (plus recursively children)
+      const q = this.parsedQuery;
+      if (q.threadPrefix !== null) return [];
+      if (!hasActiveQuery(q)) return this.tasks;
+      // Keep task visible when itself OR any descendant matches so the
+      // expand-chevron still renders the parent chain in the tree view.
       const matches = (task) => {
-        let self = false;
-        if (scopedField === 'title') {
-          self = (task.title || '').toLowerCase().includes(kw)
-            || (task.id || '').toLowerCase().includes(kw);
-        } else if (scopedField === 'summary') {
-          self = (task.summary || '').toLowerCase().includes(kw)
-            || (task.description || '').toLowerCase().includes(kw);
-        } else {
-          self = (task.title || '').toLowerCase().includes(kw)
-            || (task.id || '').toLowerCase().includes(kw)
-            || (task.summary || '').toLowerCase().includes(kw)
-            || (task.description || '').toLowerCase().includes(kw);
-        }
-        if (self) return true;
+        if (_taskMatches(task, q)) return true;
         return (task.children || []).some(matches);
       };
       return this.tasks.filter(matches);
     },
-    // task-312: flat ranked result list used by the results panel.
-    // Threads come first, then tasks (including nested children matched
-    // by filteredTasks). Each entry carries a short snippet pulled from
-    // whichever field triggered the match, for visual confirmation.
+    // task-312/316: flat ranked result list used by the results panel.
+    // Threads come first, then tasks (nested children flattened), then
+    // — new in task-316 — matching messages when the query includes
+    // `in:body kw` or a plain keyword scoped by `task:N`. Grouping is
+    // reported separately via `searchGroups` so the template can render
+    // labelled sections without duplicating the flatten logic.
     searchResults() {
       if (!this.searchActive) return [];
-      const { keyword, threadPrefix, scopedField } = this.parsedQuery;
+      const q = this.parsedQuery;
+      const { keyword, threadPrefix, scopedField } = q;
       const out = [];
       for (const t of this.filteredThreads) {
         out.push({
@@ -438,9 +449,8 @@ export default {
         });
       }
       if (threadPrefix === null) {
-        const flatten = (task, depth = 0) => {
-          const matched = this.taskMatchesDirect(task, keyword, scopedField);
-          if (matched) {
+        const flatten = (task) => {
+          if (_taskMatches(task, q)) {
             out.push({
               kind: 'task',
               id: task.id,
@@ -449,9 +459,25 @@ export default {
               task,
             });
           }
-          for (const c of (task.children || [])) flatten(c, depth + 1);
+          for (const c of (task.children || [])) flatten(c);
         };
-        for (const task of this.filteredTasks) flatten(task, 0);
+        for (const task of this.filteredTasks) flatten(task);
+      }
+      // Message hits — only included when query could meaningfully
+      // match message content (task:N with any keyword, or in:body kw).
+      if (threadPrefix === null && (q.taskId || q.scopedField === 'body')) {
+        const msgs = this.messages || [];
+        for (const m of msgs) {
+          if (_messageMatches(m, q)) {
+            out.push({
+              kind: 'message',
+              id: m.id || `msg-${out.length}`,
+              title: this.truncate(typeof m.content === 'string' ? m.content : JSON.stringify(m.content || ''), 80),
+              snippet: m.threadName ? `#${m.threadName}` : (m.threadId || ''),
+              message: m,
+            });
+          }
+        }
       }
       return out;
     },
@@ -478,6 +504,28 @@ export default {
     confirmTargetName() {
       const t = this.threads.find((x) => x.id === this.mergeConfirm.targetId);
       return t ? this.threadDisplayName(t) : '';
+    },
+    // task-316: parallel grouping view for the template — splits the
+    // flat searchResults into {threads, tasks, messages}. Groups with
+    // zero entries are omitted by the template's v-if check.
+    searchGroups() {
+      const groups = { threads: [], tasks: [], messages: [] };
+      for (const r of this.searchResults) {
+        if (r.kind === 'thread') groups.threads.push(r);
+        else if (r.kind === 'task') groups.tasks.push(r);
+        else if (r.kind === 'message') groups.messages.push(r);
+      }
+      return groups;
+    },
+    // task-316: messages visible to the sidebar. Reads the active Unify
+    // conversation's message array directly from the store; unit tests
+    // that don't mount Pinia can inject via `messagesSource`.
+    messages() {
+      if (Array.isArray(this.messagesSource)) return this.messagesSource;
+      const s = this.store;
+      const convId = s?.unifyConversationId;
+      if (!convId) return [];
+      return (s.messagesMap && s.messagesMap[convId]) || [];
     }
   },
   methods: {
@@ -496,9 +544,13 @@ export default {
         emptyArchived: 'No archived threads',
         emptyTasks: 'No tasks match',
         results: 'Results',
+        resultsThreads: 'Threads',
+        resultsTasks: 'Tasks',
+        resultsMessages: 'Messages',
         emptyResults: 'No matches',
         kindThread: 'thread',
         kindTask: 'task',
+        kindMessage: 'msg',
         clearSearch: 'Clear',
         mergeInto: 'Merge into…',
         mergeNoCandidates: 'No other threads to merge into',
@@ -506,6 +558,7 @@ export default {
         mergeIrreversible: 'This cannot be undone. The source thread will be archived and its messages moved to the target.',
         mergeConfirm: 'Merge',
         cancel: 'Cancel',
+        examplesLabel: 'Try:',
       };
       return fallback[key] || full;
     },
@@ -535,10 +588,7 @@ export default {
     onSelectTask(task) {
       this.$emit('select-task', task.id);
     },
-    // task-312: unified click-through from the Results list.
-    // Thread hit → select + ask MessageList to scroll/highlight the first
-    // message whose text matches the keyword. Task hit → delegate to the
-    // regular select-task path (task-detail deep-link lands in task-315).
+    // task-312/316: unified click-through from the Results list.
     onSelectResult(r) {
       if (r.kind === 'thread') {
         this.$emit('select-thread', r.id);
@@ -546,6 +596,16 @@ export default {
         if (kw) {
           this.$emit('jump-to-message', { threadId: r.id, keyword: kw });
         }
+      } else if (r.kind === 'message') {
+        // Message hit → switch to its thread (if known) and ask the
+        // chat stream to scroll to this specific message id.
+        const tid = r.message && r.message.threadId;
+        if (tid) this.$emit('select-thread', tid);
+        this.$emit('jump-to-message', {
+          threadId: tid || null,
+          messageId: r.message && r.message.id,
+          keyword: this.parsedQuery.keyword || '',
+        });
       } else {
         this.$emit('select-task', r.id);
       }

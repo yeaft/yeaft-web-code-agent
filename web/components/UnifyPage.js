@@ -216,11 +216,13 @@ export default {
       store.setActiveTaskUi(taskId);
     };
 
-    // task-312: sidebar search results — jump to first matching message
-    // inside a thread. Records a jump-target on the store; MessageList
-    // watches `unifyJumpTarget` and performs the scroll+flash.
-    const onJumpToMessage = ({ threadId, keyword }) => {
-      store.setUnifyJumpTarget(threadId, keyword);
+    // task-312/316: sidebar search results — jump to first matching
+    // message inside a thread, or to a specific messageId for message
+    // hits from the advanced search (task-316).
+    const onJumpToMessage = (payload) => {
+      if (payload && typeof payload === 'object') {
+        store.setUnifyJumpTarget(payload);
+      }
     };
 
     // task-312: Esc in sidebar search box — refocus chat input. The
