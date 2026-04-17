@@ -13,6 +13,7 @@ import {
 } from './persistence.js';
 import { sendCrewMessage, sendCrewOutput, sendStatusUpdate } from './ui-messages.js';
 import { preloadSlashCommands } from '../conversation.js';
+import { sanitizeKanbanFile } from './task-files.js';
 
 // =====================================================================
 // Data Structures
@@ -220,6 +221,13 @@ export async function createCrewSession(msg) {
   }
 
   crewSessions.set(sessionId, session);
+
+  // Startup self-heal: rewrite kanban.md once to drop any historical dirty
+  // rows (placeholders, bare ids, multi-line summaries) even if no further
+  // task-update happens this session.
+  sanitizeKanbanFile(session).catch(e =>
+    console.warn('[Crew] Kanban startup migration failed:', e.message)
+  );
 
   // 如果有旧消息，检查是否有更早的分片
   const hasOlderMessages = oldMeta ? await getMaxShardIndex(sharedDir) > 0 : false;
@@ -518,6 +526,11 @@ export async function resumeCrewSession(msg) {
     createdAt: meta.createdAt || Date.now()
   };
   crewSessions.set(sessionId, session);
+
+  // Startup self-heal on resume as well
+  sanitizeKanbanFile(session).catch(e =>
+    console.warn('[Crew] Kanban startup migration failed:', e.message)
+  );
 
   const loaded = await loadSessionMessages(session.sharedDir);
   session.uiMessages = loaded.messages;

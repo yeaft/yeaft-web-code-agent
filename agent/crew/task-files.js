@@ -288,16 +288,20 @@ export function isValidTaskId(id) {
  * @param {number} [maxLen=80]
  * @returns {string}
  */
-export function sanitizeKanbanSummary(summary, maxLen = 80) {
+export function sanitizeKanbanSummary(summary, maxLen = 120) {
   if (!summary || typeof summary !== 'string') return '-';
   let s = summary;
-  // strip horizontal rule lines and heading markers
+  // strip horizontal rule lines and heading markers (start-of-line form)
   s = s.replace(/^\s*-{3,}\s*$/gm, ' ');
   s = s.replace(/^\s*#{1,6}\s+/gm, '');
   // strip leading list/quote markers on each line
   s = s.replace(/^\s*[-*>]\s+/gm, '');
   // newlines → space
   s = s.replace(/[\r\n]+/g, ' ');
+  // Also strip markdown structural artifacts that may appear mid-string
+  // after newline-folding (e.g. "priority: high --- ## obs").
+  s = s.replace(/(^|\s)-{3,}(\s|$)/g, ' ');
+  s = s.replace(/(^|\s)#{1,6}(\s|$)/g, ' ');
   // escape pipe chars so table doesn't break
   s = s.replace(/\|/g, '\\|');
   // collapse whitespace
@@ -306,6 +310,24 @@ export function sanitizeKanbanSummary(summary, maxLen = 80) {
   if (s.length > maxLen) {
     s = s.substring(0, Math.max(1, maxLen - 1)) + '…';
   }
+  return s;
+}
+
+/**
+ * 规范化非 summary 单元格（taskId / title / assignee / status）：
+ * 折行、转义 `|`、去首尾空白、限制到 120 字符。
+ *
+ * @param {string} v
+ * @returns {string}
+ */
+export function sanitizeKanbanCell(v) {
+  if (v === null || v === undefined) return '-';
+  let s = String(v);
+  s = s.replace(/[\r\n]+/g, ' ');
+  s = s.replace(/\|/g, '\\|');
+  s = s.replace(/\s+/g, ' ').trim();
+  if (!s) return '-';
+  if (s.length > 120) s = s.substring(0, 119) + '…';
   return s;
 }
 
@@ -434,12 +456,21 @@ export async function updateKanban(session, opts = {}) {
     const now = new Date().toLocaleString(locale, { timeZone: 'Asia/Shanghai' });
     let content = `${m.kanbanTitle}\n> ${m.lastUpdated}: ${now}\n`;
 
+    // Serialize-layer defense: sanitize every cell one last time so nothing
+    // bypasses the table via an unsanitized upstream write path.
+    const serializeCell = (v) => sanitizeKanbanCell(v);
+    const serializeSummary = (v) => {
+      const s = sanitizeKanbanSummary(v);
+      // sanitizeKanbanSummary returns "-" for empty, keep that
+      return s;
+    };
+
     const activeArr = Array.from(entries.values());
     content += `\n## 🔨 ${m.kanbanActive} (${activeArr.length})\n`;
     if (activeArr.length > 0) {
       content += `| ${m.colTaskId} | ${m.colTitle} | ${m.kanbanColAssignee} | ${m.kanbanColStatus} | ${m.kanbanColSummary} |\n|---------|------|--------|------|----------|\n`;
       for (const e of activeArr) {
-        content += `| ${e.taskId} | ${e.taskTitle} | ${e.assignee} | ${e.status} | ${e.summary} |\n`;
+        content += `| ${serializeCell(e.taskId)} | ${serializeCell(e.taskTitle)} | ${serializeCell(e.assignee)} | ${serializeCell(e.status)} | ${serializeSummary(e.summary)} |\n`;
       }
     }
 
@@ -448,7 +479,7 @@ export async function updateKanban(session, opts = {}) {
     if (doneArr.length > 0) {
       content += `| ${m.colTaskId} | ${m.colTitle} | ${m.kanbanColAssignee} |\n|---------|------|--------|\n`;
       for (const e of doneArr) {
-        content += `| ${e.taskId} | ${e.taskTitle} | ${e.assignee} |\n`;
+        content += `| ${serializeCell(e.taskId)} | ${serializeCell(e.taskTitle)} | ${serializeCell(e.assignee)} |\n`;
       }
     }
 
@@ -459,6 +490,29 @@ export async function updateKanban(session, opts = {}) {
   // 串行化写入
   _kanbanWriteLock = _kanbanWriteLock.then(doUpdate, doUpdate);
   return _kanbanWriteLock;
+}
+
+/**
+ * 启动自愈迁移：立即重写 kanban.md 一次。
+ * 触发完整 parse → filter → sanitize → serialize 流程，
+ * 不依赖下次 task-update 就能清除历史脏数据。
+ *
+ * 幂等：文件不存在时不创建。
+ *
+ * @param {object} session
+ * @returns {Promise<boolean>} 是否执行了清理
+ */
+export async function sanitizeKanbanFile(session) {
+  if (!session?.sharedDir) return false;
+  const kanbanPath = join(session.sharedDir, 'context', 'kanban.md');
+  try {
+    await fs.access(kanbanPath);
+  } catch {
+    return false; // 文件不存在，无需清理
+  }
+  await updateKanban(session, {}); // 无 opts → 纯重写
+  console.log(`[Crew] Kanban startup migration completed: ${kanbanPath}`);
+  return true;
 }
 
 /**
