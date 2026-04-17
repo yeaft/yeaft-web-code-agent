@@ -16,6 +16,7 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { Dispatcher, createDispatcher } from '../../../agent/unify/pipeline/dispatcher.js';
+import { parseThreadPrefix } from '../../../agent/unify/web-bridge.js';
 import {
   InputQueueStore,
   _resetInputQueueStoreForTests,
@@ -291,5 +292,76 @@ describe('Dispatcher — concurrent streams do not cross-contaminate', () => {
     // No text from A ever appears under B's threadId and vice versa.
     expect(bEvents.some(e => /^a/.test(e.event.text || ''))).toBe(false);
     expect(aEvents.some(e => /^b/.test(e.event.text || ''))).toBe(false);
+  });
+});
+
+describe('parseThreadPrefix — @thread-<id> parser (rev-1 nit fix)', () => {
+  it('matches @thread-main and returns threadId "main"', () => {
+    const r = parseThreadPrefix('@thread-main hello world');
+    expect(r.override).toEqual({ threadId: 'main' });
+    expect(r.prompt).toBe('hello world');
+  });
+
+  it('matches @thread-thr-abcd1234 and returns full thr-id', () => {
+    const r = parseThreadPrefix('@thread-thr-abcd1234 do the thing');
+    expect(r.override).toEqual({ threadId: 'thr-abcd1234' });
+    expect(r.prompt).toBe('do the thing');
+  });
+
+  it('tolerates leading whitespace', () => {
+    const r = parseThreadPrefix('   @thread-main    ping');
+    expect(r.override).toEqual({ threadId: 'main' });
+    expect(r.prompt).toBe('ping');
+  });
+
+  it('returns null override when no prefix', () => {
+    const r = parseThreadPrefix('plain message');
+    expect(r.override).toBe(null);
+    expect(r.prompt).toBe('plain message');
+  });
+
+  it('does NOT match @task- prefix (different router path)', () => {
+    const r = parseThreadPrefix('@task-123 hi');
+    expect(r.override).toBe(null);
+    expect(r.prompt).toBe('@task-123 hi');
+  });
+
+  it('handles empty / non-string input safely', () => {
+    expect(parseThreadPrefix('')).toEqual({ prompt: '', override: null });
+    expect(parseThreadPrefix(undefined)).toEqual({ prompt: '', override: null });
+    expect(parseThreadPrefix(null)).toEqual({ prompt: '', override: null });
+  });
+
+  it('override threadId from parser resolves correctly through Dispatcher (@thread-main ≡ MAIN_THREAD_ID)', async () => {
+    const { dispatcher, router, engineRegistry } = makeDispatcher();
+    const parsed = parseThreadPrefix('@thread-main continue with this');
+    engineRegistry.ensure(MAIN_THREAD_ID).push([{ type: 'stop' }]);
+    const { entry } = dispatcher.submit(parsed.prompt, { override: parsed.override });
+    const events = [];
+    for await (const ev of dispatcher.dispatch(entry)) events.push(ev);
+    // Router MUST NOT be consulted — the override is valid for the main thread.
+    expect(router.calls.length).toBe(0);
+    const decision = events.find(e => e.type === 'routing_decision');
+    expect(decision.source).toBe('override');
+    expect(decision.action).toBe('continue');
+    expect(decision.targetThreadId).toBe(MAIN_THREAD_ID);
+  });
+});
+
+describe('Dispatcher — transient metadata does not leak to persistence', () => {
+  it('override + messageId live off the entry object (no enumerable _* fields)', () => {
+    const { dispatcher } = makeDispatcher();
+    const { entry } = dispatcher.submit('hello', {
+      messageId: 'msg-42',
+      override: { threadId: MAIN_THREAD_ID },
+    });
+    // The entry that ends up persisted via JSON.stringify must not carry
+    // the transient fields — they live in a WeakMap keyed by the entry.
+    const serialized = JSON.parse(JSON.stringify(entry));
+    expect(serialized._messageId).toBeUndefined();
+    expect(serialized._override).toBeUndefined();
+    expect(Object.keys(serialized).sort()).toEqual(
+      ['createdAt', 'error', 'id', 'routedAt', 'routedTo', 'status', 'text'].sort()
+    );
   });
 });

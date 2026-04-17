@@ -119,17 +119,27 @@ const THREAD_MUTATING_TOOLS = new Set([
 /**
  * task-310: parse a leading `@thread-<id>` or `@thread-<name>` marker on
  * the user's input and return it as a dispatcher override. The marker
- * itself is STRIPPED from the prompt before it reaches the engine — users
- * don't want to see `@thread-foo` echoed back into their conversation.
+ * itself is STRIPPED from the prompt before it reaches the engine —
+ * users don't want to see `@thread-foo` echoed back into their
+ * conversation.
+ *
+ * Thread IDs are `main` or `thr-<8 hex>`, so the match captures the id
+ * name AFTER the literal `@thread-`. The returned `override.threadId`
+ * is the fully-qualified thread id (e.g. `thread-main`, `thread-thr-abcd1234`).
  *
  * Returns { prompt, override? } where override = { threadId } if matched.
  */
-function parseThreadPrefix(text) {
+export function parseThreadPrefix(text) {
   if (!text || typeof text !== 'string') return { prompt: text || '', override: null };
-  const m = text.match(/^\s*@(thread-[A-Za-z0-9_-]+)\b\s*/);
+  // Capture the id portion after the literal `@thread-` prefix.
+  const m = text.match(/^\s*@thread-([A-Za-z0-9_-]+)\b\s*/);
   if (!m) return { prompt: text, override: null };
   const rest = text.slice(m[0].length);
-  return { prompt: rest || text, override: { threadId: m[1] } };
+  // The captured id may already include a `thr-` sub-prefix (for non-main
+  // threads). For the canonical `main` thread, the override is the bare
+  // string `main`; for `thr-xxxxxxxx` threads, pass through verbatim.
+  const threadId = m[1];
+  return { prompt: rest || text, override: { threadId } };
 }
 
 /**

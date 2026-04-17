@@ -74,6 +74,16 @@
  */
 
 import { MAIN_THREAD_ID } from '../threads/store.js';
+import { getTaskStore } from '../tools/task-tools.js';
+
+/**
+ * Per-entry transient metadata (messageId, override) lives here — a
+ * WeakMap keyed by the queue entry object so it is NEVER persisted to
+ * disk by InputQueueStore.#writeEntry. Entries are GC'd together with
+ * the entry once the queue drops the strong reference.
+ * @type {WeakMap<object, {messageId?: string, override?: {threadId: string}}>}
+ */
+const transientMeta = new WeakMap();
 
 /**
  * @typedef {'continue'|'interrupt'|'fork'|'switch'} RouterAction
@@ -146,10 +156,15 @@ export class Dispatcher {
     }
     const { inputQueue } = this.#deps;
     const entry = inputQueue.enqueue(text);
-    // Attach transient metadata (not persisted) used only by this session.
-    // These fields are consulted once by dispatch() and then discarded.
-    entry._messageId = opts.messageId || null;
-    entry._override = opts.override || null;
+    // Transient metadata lives in a WeakMap keyed by the entry — it is
+    // intentionally off the entry object itself so InputQueueStore's
+    // JSON.stringify write path does NOT leak `_messageId`/`_override`
+    // to disk. The WeakMap entry is dropped when the queue releases the
+    // entry reference (after markRouted removes it from memory).
+    transientMeta.set(entry, {
+      messageId: opts.messageId || undefined,
+      override: opts.override || undefined,
+    });
     const snapshot = this.#queueSnapshot();
     return { entry, snapshot };
   }
@@ -209,7 +224,8 @@ export class Dispatcher {
     // ── Step 3: classify (explicit override > classifier) ──
     /** @type {import('../router/intent-classifier.js').RouterDecision} */
     let decision;
-    const ov = entry._override;
+    const meta = transientMeta.get(entry) || {};
+    const ov = meta.override;
     if (ov && typeof ov.threadId === 'string' && ov.threadId) {
       const known = allThreads.some(t => t.id === ov.threadId) || ov.threadId === currentThreadId;
       if (known) {
@@ -229,7 +245,7 @@ export class Dispatcher {
           currentThreadId,
           allThreads,
           pendingTasks,
-          messageId: entry._messageId || undefined,
+          messageId: meta.messageId || undefined,
         });
       } catch (err) {
         // Classifier is wrapped in its own try/catch already; reaching here
@@ -263,8 +279,10 @@ export class Dispatcher {
       }
     } else if (decision.action === 'switch') {
       // Move the ThreadStore cursor so subsequent tool-originated events
-      // see the right thread for persistence hooks.
-      if (threadStore.has && threadStore.has(targetThreadId)) {
+      // see the right thread for persistence hooks. Guard: not every
+      // ThreadStore implementation exposes has() (e.g. historic mocks).
+      const hasFn = typeof threadStore.has === 'function' ? (id) => threadStore.has(id) : () => true;
+      if (hasFn(targetThreadId)) {
         try { threadStore.switch(targetThreadId); } catch { /* ignore */ }
       }
     }
@@ -328,18 +346,18 @@ export class Dispatcher {
   }
 
   #listPendingTasks() {
-    // Best-effort: the TaskStore is a singleton; importing it lazily to
-    // keep this module decoupled for testing. If the task store isn't
-    // initialized (test env) we just return [].
+    // Best-effort: the TaskStore is a singleton initialised in loadSession().
+    // If the store isn't available (e.g. unit tests without a session) we
+    // just return []. Never let a TaskStore exception break routing.
     try {
-      // eslint-disable-next-line global-require
-      // dynamic import guard — classic try/catch pattern for optional deps
-      const mod = /** @type {any} */ (globalThis.__yeaft_taskStore);
-      if (mod && typeof mod.list === 'function') {
-        return mod.list().map(t => ({
-          id: t.id, title: t.title || '', threadId: t.threadId || null,
-        }));
-      }
+      const store = getTaskStore();
+      if (!store || typeof store.list !== 'function') return [];
+      const pending = store.list({ status: 'pending' }) || [];
+      return pending.map(t => ({
+        id: t.id,
+        title: t.title || '',
+        threadId: t.threadId || null,
+      }));
     } catch { /* ignore */ }
     return [];
   }
