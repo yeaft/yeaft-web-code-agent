@@ -17,9 +17,9 @@ const TOOLS_DIR = join(import.meta.dirname, '..', '..', 'agent', 'unify', 'tools
 // ──────────────────────────────────────────────
 
 describe('index.js tool registration', () => {
-  it('allTools has 41 tools (5 existing + 36 new)', async () => {
+  it('allTools has 42 tools (task-287 added memory_query)', async () => {
     const { allTools } = await import(`${TOOLS_DIR}/index.js`);
-    expect(allTools.length).toBe(41);
+    expect(allTools.length).toBe(42);
   });
 
   it('all 39 tools have valid name, description, parameters, and execute', async () => {
@@ -68,7 +68,8 @@ describe('index.js tool registration', () => {
     expect(chatNames).toContain('AskUser');
     expect(chatNames).toContain('MemoryRead');
     expect(chatNames).toContain('MemoryWrite');
-    expect(chatNames).toContain('MemorySearch');
+    expect(chatNames).toContain('memory_search');
+    expect(chatNames).toContain('memory_query');
     expect(chatNames).toContain('WebSearch');
     expect(chatNames).toContain('WebFetch');
     expect(chatNames).toContain('HistorySearch');
@@ -203,18 +204,30 @@ describe('MemoryWrite tool', () => {
   });
 });
 
-describe('MemorySearch tool', () => {
-  it('searches entries with keyword filter', async () => {
+describe('memory_search tool (task-287: path-based file loader)', () => {
+  it('errors when paths is empty', async () => {
     const mod = await import(`${TOOLS_DIR}/memory-search.js`);
+    const tool = mod.default;
+    const result = JSON.parse(await tool.execute(
+      { paths: [] },
+      { yeaftDir: '/tmp/nonexistent-yeaft-dir' }
+    ));
+    expect(result.error).toBeTruthy();
+  });
+});
+
+describe('memory_query tool (task-287: fuzzy atomic entry search)', () => {
+  it('searches entries via memoryStore.findByFilter', async () => {
+    const mod = await import(`${TOOLS_DIR}/memory-query.js`);
     const tool = mod.default;
     const mockStore = {
       findByFilter: () => [
-        { name: 'javascript-basics', kind: 'fact', content: 'JavaScript is a great language', scope: 'global', tags: [] },
-        { name: 'python-basics', kind: 'fact', content: 'Python is nice', scope: 'global', tags: [] },
+        { name: 'javascript-basics', kind: 'fact', content: 'JavaScript is a great language', scope: 'global', tags: [], _score: 2 },
       ],
+      search: () => [],
     };
     const result = JSON.parse(await tool.execute(
-      { keyword: 'JavaScript' },
+      { keywords: ['JavaScript'] },
       { memoryStore: mockStore }
     ));
     expect(result.results.length).toBeGreaterThanOrEqual(1);

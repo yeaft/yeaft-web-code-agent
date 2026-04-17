@@ -1,101 +1,102 @@
 /**
- * memory-search.js — Search memory entries by scope, tags, and keywords.
+ * memory-search.js — Load memory classification files by path.
  *
- * Uses the MemoryStore's findByFilter for structured search.
+ * New-layout tool (task-287 memory refactor).
+ *
+ * The system prompt injects `index.md` every turn, which lists all available
+ * classification files under `~/.yeaft/memory/` (single files + by-project /
+ * by-topic / timeline categories). When the LLM sees a path it wants,
+ * it calls this tool with `paths: [...]` to load one or more of those files
+ * in full.
+ *
+ * This is NOT a fuzzy search. It is a precise file loader. Use `memory_query`
+ * for fuzzy search over atomic entries.
+ *
+ * Only paths under `memory/` are accepted. `..` segments are rejected.
  */
 
 import { defineTool } from './types.js';
+import { readMemoryFile, listClassificationFiles } from '../memory/layout.js';
+
+const MAX_FILES_PER_CALL = 5;
+const MAX_BYTES_PER_FILE = 32000;
 
 export default defineTool({
-  name: 'MemorySearch',
-  description: `Search Yeaft's persistent memory for relevant entries.
+  name: 'memory_search',
+  description: `Load one or more memory classification files in full.
 
-Searches by scope, tags, kind, or keyword. Results are scored by relevance:
-- Exact scope match: highest score
-- Ancestor/descendant scope: medium score
-- Tag overlap: additional score per matching tag
-- Keyword in content: found via full-text scan
+Paths are relative to ~/.yeaft/memory/. Allowed targets:
+  - user-preferences.md           — merged user preferences
+  - by-project/<slug>.md          — per-project narrative summary
+  - by-topic/<slug>.md            — per-topic narrative summary
+  - timeline/<YYYY-MM>.md         — monthly narrative digest
 
-Use this to find previously learned information before asking the user again.`,
+See the "Memory Index" section of the system prompt for the current list
+of available files. Use this tool when the index suggests a file is relevant
+to the user's current request. For fuzzy search over atomic memory entries
+(facts, lessons, preferences), use the memory_query tool instead.
+
+Up to ${MAX_FILES_PER_CALL} files per call. Each file is capped at ${MAX_BYTES_PER_FILE} bytes.`,
   parameters: {
     type: 'object',
     properties: {
-      scope: {
-        type: 'string',
-        description: 'Memory scope to search in (e.g. "global", "work/my-project")',
-      },
-      tags: {
+      paths: {
         type: 'array',
         items: { type: 'string' },
-        description: 'Tags to filter by',
-      },
-      kind: {
-        type: 'string',
-        enum: ['fact', 'preference', 'skill', 'lesson', 'context', 'relation'],
-        description: 'Filter by memory kind',
-      },
-      keyword: {
-        type: 'string',
-        description: 'Keyword to search in entry content',
-      },
-      limit: {
-        type: 'number',
-        description: 'Maximum number of results (default: 15)',
+        description: 'Relative paths under memory/. Example: ["by-project/claude-web-chat.md", "user-preferences.md"]',
       },
     },
+    required: ['paths'],
   },
   modes: ['chat', 'work'],
   isConcurrencySafe: () => true,
   isReadOnly: () => true,
   async execute(input, ctx) {
-    const memoryStore = ctx?.memoryStore;
-    if (!memoryStore) {
-      return JSON.stringify({ error: 'Memory system not initialized' });
+    const yeaftDir = ctx?.yeaftDir;
+    if (!yeaftDir) {
+      return JSON.stringify({ error: 'Memory system not initialized (no yeaftDir in context)' });
     }
 
-    try {
-      const limit = input.limit || 15;
-
-      // Use findByFilter for scope + tag search
-      let results = memoryStore.findByFilter({
-        scope: input.scope,
-        tags: input.tags || [],
-        limit: limit * 2, // over-fetch for post-filtering
-      });
-
-      // Filter by kind if specified
-      if (input.kind) {
-        results = results.filter(e => e.kind === input.kind);
-      }
-
-      // Filter by keyword if specified
-      if (input.keyword) {
-        const kw = input.keyword.toLowerCase();
-        results = results.filter(e =>
-          (e.content && e.content.toLowerCase().includes(kw)) ||
-          (e.name && e.name.toLowerCase().includes(kw)) ||
-          (e.tags && e.tags.some(t => t.toLowerCase().includes(kw)))
-        );
-      }
-
-      // Trim to limit
-      results = results.slice(0, limit);
-
+    const paths = Array.isArray(input?.paths) ? input.paths : [];
+    if (paths.length === 0) {
       return JSON.stringify({
-        results: results.map(e => ({
-          name: e.name,
-          kind: e.kind,
-          scope: e.scope,
-          tags: e.tags,
-          importance: e.importance,
-          content: e.content?.slice(0, 500) + (e.content?.length > 500 ? '...' : ''),
-          updated_at: e.updated_at,
-          score: e._score,
-        })),
-        totalResults: results.length,
-      }, null, 2);
-    } catch (err) {
-      return JSON.stringify({ error: `Memory search failed: ${err.message}` });
+        error: 'paths is required and must be a non-empty string array',
+        availablePaths: listClassificationFiles(yeaftDir).map(f => f.path),
+      });
     }
+
+    const results = [];
+    const errors = [];
+
+    for (const rel of paths.slice(0, MAX_FILES_PER_CALL)) {
+      if (typeof rel !== 'string' || !rel.trim()) {
+        errors.push({ path: rel, error: 'not a non-empty string' });
+        continue;
+      }
+      if (rel.includes('..') || rel.startsWith('/')) {
+        errors.push({ path: rel, error: 'path must be relative and must not contain ..' });
+        continue;
+      }
+      if (!rel.endsWith('.md')) {
+        errors.push({ path: rel, error: 'only .md files are supported' });
+        continue;
+      }
+
+      const text = readMemoryFile(yeaftDir, rel);
+      if (!text) {
+        errors.push({ path: rel, error: 'file not found or empty' });
+        continue;
+      }
+
+      const truncated = text.length > MAX_BYTES_PER_FILE;
+      results.push({
+        path: rel,
+        content: truncated ? text.slice(0, MAX_BYTES_PER_FILE) : text,
+        truncated,
+        size: text.length,
+      });
+    }
+
+    return JSON.stringify({ results, errors }, null, 2);
   },
 });

@@ -22,6 +22,7 @@ import { buildSystemPrompt } from './prompts.js';
 import { LLMContextError } from './llm/adapter.js';
 import { recall } from './memory/recall.js';
 import { shouldConsolidate, consolidate } from './memory/consolidate.js';
+import { buildMemoryInjection } from './memory/layout.js';
 import { runStopHooks } from './stop-hooks.js';
 
 /** Maximum number of turns before the engine stops to prevent infinite loops. */
@@ -167,9 +168,10 @@ export class Engine {
    * @param {{ profile?: string, entries?: object[] }} [memory]
    * @param {string} [compactSummary]
    * @param {string} [prompt] — user prompt (for skill relevance matching)
+   * @param {string} [memoryInjection] — task-287: prebuilt memory block (index + prefs + project)
    * @returns {string}
    */
-  #buildSystemPrompt(mode, memory, compactSummary, prompt) {
+  #buildSystemPrompt(mode, memory, compactSummary, prompt, memoryInjection) {
     // Get relevant skill content if SkillManager is wired
     let skillContent = '';
     if (this.#skillManager && prompt) {
@@ -186,6 +188,7 @@ export class Engine {
       mode,
       toolNames,
       memory,
+      memoryInjection,
       compactSummary,
       skillContent,
     });
@@ -333,14 +336,30 @@ export class Engine {
       return;
     }
 
-    // ─── Pre-query: Recall + Compact Summary ────────────────
-    const memory = await this.#recallMemory(prompt);
-    if (memory && memory.entries.length > 0) {
-      yield { type: 'recall', entryCount: memory.entries.length, cached: false };
+    // ─── Pre-query: Memory Injection (task-287) + Compact Summary ──
+    // New layout: always inject Memory Index + user-preferences + project
+    // header excerpt. No per-turn fuzzy recall — LLM calls memory_search /
+    // memory_query on demand.
+    let memoryInjection = '';
+    if (this.#yeaftDir) {
+      try {
+        const entryCount = this.#memoryStore?.stats?.().entryCount ?? 0;
+        memoryInjection = buildMemoryInjection({
+          yeaftDir: this.#yeaftDir,
+          cwd: process.cwd(),
+          entryCount,
+          language: this.#config.language || 'en',
+        });
+      } catch {
+        // Injection failure is non-critical — fall back to empty.
+      }
+    }
+    if (memoryInjection) {
+      yield { type: 'recall', entryCount: 0, cached: false };
     }
 
     const compactSummary = this.#getCompactSummary();
-    const systemPrompt = this.#buildSystemPrompt(mode, memory, compactSummary, prompt);
+    const systemPrompt = this.#buildSystemPrompt(mode, undefined, compactSummary, prompt, memoryInjection);
 
     // Build conversation: existing messages + new user message
     const conversationMessages = [

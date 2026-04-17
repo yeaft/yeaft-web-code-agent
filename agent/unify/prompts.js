@@ -11,6 +11,13 @@
  *   - Memory section (user profile + recalled entries)
  *   - Compact summary section (conversation history summary)
  *
+ * task-287 refactor (tool-on-demand memory):
+ *   - New `memoryInjection` param carries prebuilt "Memory Index + user
+ *     preferences + project header" text (~1.5k tokens). Engine builds this
+ *     via memory/layout.buildMemoryInjection() and passes it every turn.
+ *   - Legacy `memory={profile,entries}` param still supported for callers
+ *     (tests, CLI) that have not migrated.
+ *
  * Reference: yeaft-unify-system-prompt-budget.md — Static + Dynamic + Context layers
  */
 
@@ -155,6 +162,7 @@ export const SUPPORTED_LANGUAGES = Object.keys(PROMPTS);
  *   mode?: string,
  *   toolNames?: string[],
  *   memory?: { profile?: string, entries?: object[] },
+ *   memoryInjection?: string,
  *   compactSummary?: string,
  *   skillContent?: string,
  * }} params
@@ -165,6 +173,7 @@ export function buildSystemPrompt({
   mode = 'chat',
   toolNames = [],
   memory,
+  memoryInjection,
   compactSummary,
   skillContent,
 } = {}) {
@@ -218,7 +227,12 @@ export function buildSystemPrompt({
   }
 
   // ─── 6. Memory Section ─────────────────────────────────
-  if (memory && (memory.profile || (memory.entries && memory.entries.length > 0))) {
+  if (memoryInjection && memoryInjection.trim()) {
+    // New path (task-287): prebuilt injection from memory/layout.buildMemoryInjection()
+    // Contains index.md + user-preferences.md + optional project header excerpt.
+    parts.push(memoryInjection.trim());
+  } else if (memory && (memory.profile || (memory.entries && memory.entries.length > 0))) {
+    // Legacy path — kept for callers (tests, CLI) that have not migrated yet.
     const memoryParts = [lang.memoryHeader];
 
     if (memory.profile) {

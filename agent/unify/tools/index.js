@@ -21,6 +21,7 @@ import askUser from './ask-user.js';
 import memoryRead from './memory-read.js';
 import memoryWrite from './memory-write.js';
 import memorySearch from './memory-search.js';
+import memoryQuery from './memory-query.js';
 import webSearch from './web-search.js';
 import webFetch from './web-fetch.js';
 import historySearch from './history-search.js';
@@ -80,6 +81,7 @@ export const allTools = [
   memoryRead,
   memoryWrite,
   memorySearch,
+  memoryQuery,
   webSearch,
   webFetch,
   historySearch,
