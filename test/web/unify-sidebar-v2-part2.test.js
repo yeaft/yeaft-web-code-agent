@@ -20,6 +20,7 @@ const componentSrc = readFileSync(join(rootDir, 'web/components/UnifySidebarV2.j
 const enSrc = readFileSync(join(rootDir, 'web/i18n/en.js'), 'utf8');
 const zhSrc = readFileSync(join(rootDir, 'web/i18n/zh-CN.js'), 'utf8');
 const bridgeSrc = readFileSync(join(rootDir, 'agent/unify/web-bridge.js'), 'utf8');
+const cssSrc = readFileSync(join(rootDir, 'web/styles/unify-sidebar-v2.css'), 'utf8');
 
 // --- Store: new state + actions + event handlers ----------------------------
 describe('store real-thread state (task-301 Part 2)', () => {
@@ -275,5 +276,16 @@ describe('E4 — thread_list_updated event → store.unifyThreads → UI', () =>
   it('UnifyPage wires emitted select-task to store.setActiveTaskUi(taskId)', () => {
     expect(pageSrc).toMatch(/@select-task="onSelectTaskV2"/);
     expect(pageSrc).toMatch(/store\.setActiveTaskUi\(taskId\)/);
+  });
+});
+
+// --- E4b: .selected visual feedback CSS (prev-1 blocker regression guard) ---
+describe('E4b — .selected rows have visual feedback in CSS', () => {
+  it('css defines a .usv2-thread.selected rule (background highlight)', () => {
+    expect(cssSrc).toMatch(/\.usv2-thread\.selected\s*\{[^}]*background\s*:/);
+  });
+
+  it('css defines a .usv2-task.selected rule (background highlight)', () => {
+    expect(cssSrc).toMatch(/\.usv2-task\.selected\s*\{[^}]*background\s*:/);
   });
 });

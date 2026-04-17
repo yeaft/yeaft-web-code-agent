@@ -96,6 +96,7 @@
   color: var(--text-primary, #1d1d1f);
 }
 .usv2-thread:hover { background: var(--sidebar-hover, rgba(0,0,0,0.05)); }
+.usv2-thread.selected { background: var(--sidebar-selected, rgba(0,122,255,0.14)); }
 .usv2-thread-archived { opacity: 0.6; }
 .usv2-thread-name {
   font-weight: 500;
@@ -166,6 +167,7 @@
   font-size: 12px;
 }
 .usv2-task:hover { background: var(--sidebar-hover, rgba(0,0,0,0.05)); }
+.usv2-task.selected { background: var(--sidebar-selected, rgba(0,122,255,0.14)); }
 .usv2-task-lvl-0 { padding-left: 10px; }
 .usv2-task-lvl-1 { padding-left: 28px; }
 .usv2-task-lvl-2 { padding-left: 46px; }
