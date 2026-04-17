@@ -48,15 +48,16 @@ describe('Crew dev templates — product-reviewer parity with reviewer', () => {
     expect(src).toMatch(/name:\s*'product-reviewer'/);
   });
 
-  it('dev-en.js either omits product-reviewer or defines it consistently', () => {
-    // dev-en.js may not include product-reviewer yet (task-281 was zh-focused).
-    // If present, it must have a name field. This test just documents the
-    // current state — expand when en template is synced.
+  it('dev-en.js defines product-reviewer role with matching fields', () => {
     const src = read('web/crew-templates/dev-en.js');
-    if (src.includes("name: 'product-reviewer'")) {
-      expect(src).toMatch(/name:\s*'product-reviewer'/);
-    } else {
-      expect(src).not.toContain("product-reviewer");
-    }
+    expect(src).toMatch(/name:\s*'product-reviewer'/);
+    // English displayName must keep the Linus reference to match zh parity.
+    expect(src).toMatch(/displayName:\s*'Product Reviewer-Linus'/);
+    // Must have isDecisionMaker: false like the zh version.
+    const block = src.slice(src.indexOf("name: 'product-reviewer'"));
+    expect(block).toMatch(/isDecisionMaker:\s*false/);
+    // Must include ROUTE examples to pm and developer (parity with zh).
+    expect(block).toMatch(/to:\s*pm/);
+    expect(block).toMatch(/to:\s*developer/);
   });
 });
