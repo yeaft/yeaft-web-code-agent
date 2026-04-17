@@ -23,7 +23,6 @@ const listProjectsTool = defineTool({
   name: 'list_projects',
   description: 'List all projects in the workspace.',
   parameters: { type: 'object', properties: {} },
-  modes: ['chat', 'work'],
   async execute() {
     return JSON.stringify({
       projects: ['my-app', 'shared-lib', 'docs-site'],
@@ -41,7 +40,6 @@ const getProjectInfoTool = defineTool({
     },
     required: ['name'],
   },
-  modes: ['chat', 'work'],
   async execute(input) {
     const projects = {
       'my-app': { name: 'my-app', language: 'TypeScript', framework: 'Express', tests: 142 },
