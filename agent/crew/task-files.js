@@ -255,6 +255,61 @@ export async function saveRoleWorkSummary(session, roleName, accumulatedText) {
 let _kanbanWriteLock = Promise.resolve();
 
 /**
+ * 校验 taskId 是否合法。
+ * 拒绝：占位符（<task-id>、task-XX）、纯数字、空/带尖括号。
+ * 允许：以字母开头、字母数字/连字符/下划线，例如 task-289、fix-crew-xxx。
+ *
+ * @param {string} id
+ * @returns {boolean}
+ */
+export function isValidTaskId(id) {
+  if (typeof id !== 'string') return false;
+  const s = id.trim();
+  if (!s) return false;
+  if (s.includes('<') || s.includes('>')) return false;
+  // explicit placeholder
+  if (/^task-x+$/i.test(s)) return false;
+  // pure digits (e.g. bare "279")
+  if (/^\d+$/.test(s)) return false;
+  // must start with a letter and contain only alnum/_/-
+  if (!/^[a-zA-Z][a-zA-Z0-9_-]{1,79}$/.test(s)) return false;
+  return true;
+}
+
+/**
+ * 规范化 "最新进展" 摘要：
+ * - 换行/回车合并为单空格
+ * - 去掉 markdown 分隔符 `---`、heading `##`
+ * - 转义 `|` 为 `\|`（避免撑坏表格）
+ * - 合并多余空白
+ * - 截断到 maxLen 字符（默认 80），超出追加 …
+ *
+ * @param {string} summary
+ * @param {number} [maxLen=80]
+ * @returns {string}
+ */
+export function sanitizeKanbanSummary(summary, maxLen = 80) {
+  if (!summary || typeof summary !== 'string') return '-';
+  let s = summary;
+  // strip horizontal rule lines and heading markers
+  s = s.replace(/^\s*-{3,}\s*$/gm, ' ');
+  s = s.replace(/^\s*#{1,6}\s+/gm, '');
+  // strip leading list/quote markers on each line
+  s = s.replace(/^\s*[-*>]\s+/gm, '');
+  // newlines → space
+  s = s.replace(/[\r\n]+/g, ' ');
+  // escape pipe chars so table doesn't break
+  s = s.replace(/\|/g, '\\|');
+  // collapse whitespace
+  s = s.replace(/\s+/g, ' ').trim();
+  if (!s) return '-';
+  if (s.length > maxLen) {
+    s = s.substring(0, Math.max(1, maxLen - 1)) + '…';
+  }
+  return s;
+}
+
+/**
  * 更新工作看板 .crew/context/kanban.md
  *
  * @param {object} session
@@ -286,12 +341,14 @@ export async function updateKanban(session, opts = {}) {
         else if (line.startsWith('|') && !line.startsWith('|--') && section) {
           const cols = line.split('|').map(c => c.trim()).filter(Boolean);
           if (cols.length >= 3 && cols[0] !== m.colTaskId && cols[0] !== 'task-id') {
+            // Skip illegal / placeholder rows (e.g. <task-id>, task-XX, bare "279")
+            if (!isValidTaskId(cols[0])) continue;
             const entry = {
               taskId: cols[0],
-              taskTitle: cols[1],
+              taskTitle: cols[1] || cols[0],
               assignee: cols[2] || '-',
               status: cols[3] || '-',
-              summary: cols[4] || '-'
+              summary: sanitizeKanbanSummary(cols[4] || '-')
             };
             if (section === 'completed') {
               completedEntries.set(entry.taskId, entry);
@@ -306,6 +363,7 @@ export async function updateKanban(session, opts = {}) {
     // 从 session.features 补充缺失的任务
     const completed = session._completedTaskIds || new Set();
     for (const [taskId, feature] of session.features) {
+      if (!isValidTaskId(taskId)) continue;
       if (completed.has(taskId)) {
         if (!completedEntries.has(taskId)) {
           completedEntries.set(taskId, {
@@ -330,11 +388,14 @@ export async function updateKanban(session, opts = {}) {
 
     // 应用更新
     if (opts.taskId) {
-      if (opts.completed) {
+      // Reject illegal task ids early (placeholders, bare numbers, angle brackets, etc.)
+      if (!isValidTaskId(opts.taskId)) {
+        console.warn(`[Crew] updateKanban: rejected invalid taskId "${opts.taskId}"`);
+      } else if (opts.completed) {
         const entry = entries.get(opts.taskId) || completedEntries.get(opts.taskId);
         if (entry) {
           entry.status = '✅';
-          if (opts.summary) entry.summary = opts.summary;
+          if (opts.summary) entry.summary = sanitizeKanbanSummary(opts.summary);
           completedEntries.set(opts.taskId, entry);
           entries.delete(opts.taskId);
         }
@@ -353,13 +414,19 @@ export async function updateKanban(session, opts = {}) {
         if (opts.assignee) entry.assignee = opts.assignee;
         if (opts.status) entry.status = opts.status;
         if (opts.summary) {
-          // 截取摘要
-          entry.summary = opts.summary.length > 100
-            ? opts.summary.substring(0, 97) + '...'
-            : opts.summary;
+          // 单行化、去 markdown、转义 |、截断到 80
+          entry.summary = sanitizeKanbanSummary(opts.summary);
         }
         entries.set(opts.taskId, entry);
       }
+    }
+
+    // Final safety: drop any lingering invalid ids before writing
+    for (const id of Array.from(entries.keys())) {
+      if (!isValidTaskId(id)) entries.delete(id);
+    }
+    for (const id of Array.from(completedEntries.keys())) {
+      if (!isValidTaskId(id)) completedEntries.delete(id);
     }
 
     // 生成看板文件

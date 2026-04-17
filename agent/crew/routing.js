@@ -247,7 +247,7 @@ export async function executeRoute(session, fromRole, route, turnImages = []) {
     }
     updateKanban(session, {
       taskId, taskTitle, assignee: resolvedKanbanTo || to,
-      status, summary: summary.substring(0, 100)
+      status, summary
     }).catch(e => console.warn(`[Crew] Failed to update kanban:`, e.message));
   }
 
