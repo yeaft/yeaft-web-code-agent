@@ -12,6 +12,7 @@ import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { DEFAULT_YEAFT_DIR } from './init.js';
 import { normalizeProviderModels, serializeModelForPersistence } from './models.js';
+import { normaliseUnifySection } from './config.js';
 
 /**
  * Read the LLM-relevant portion of config.json.
@@ -125,4 +126,92 @@ export function updateLlmConfig(update, dir) {
     fastModel: existing.fastModel || null,
     language: existing.language || 'en',
   };
+}
+
+// ─── Unify runtime settings (task-318) ────────────────────────────
+
+/**
+ * Read the Unify-section of config.json. Returns defaults when the file
+ * or section is absent. Callers (UI, registry, ThreadStore) rely on a
+ * stable shape — `normaliseUnifySection` guarantees that.
+ *
+ * @param {string} [dir] — Yeaft data directory
+ * @returns {{ maxConcurrentThreads: number, autoArchiveIdleDays: number } | { error: string }}
+ */
+export function getUnifySettings(dir) {
+  const root = dir || process.env.YEAFT_DIR || DEFAULT_YEAFT_DIR;
+  const configPath = join(root, 'config.json');
+  if (!existsSync(configPath)) return normaliseUnifySection(null);
+  try {
+    const raw = readFileSync(configPath, 'utf8');
+    const json = JSON.parse(raw);
+    return normaliseUnifySection(json.unify);
+  } catch (e) {
+    return { error: `Failed to read config.json: ${e.message}` };
+  }
+}
+
+/**
+ * Update the Unify-section of config.json. Merges into existing config
+ * (LLM provider / model fields are untouched) and validates each field:
+ * `maxConcurrentThreads` must be 1..50, `autoArchiveIdleDays` must be
+ * 1..3650. Invalid values are rejected outright so the UI sees an error
+ * rather than silently reverting — a silent revert would make "I set it
+ * to 100 and nothing happened" impossible to debug.
+ *
+ * @param {{ maxConcurrentThreads?: number, autoArchiveIdleDays?: number }} update
+ * @param {string} [dir]
+ * @returns {{ maxConcurrentThreads: number, autoArchiveIdleDays: number } | { error: string }}
+ */
+export function updateUnifySettings(update, dir) {
+  const root = dir || process.env.YEAFT_DIR || DEFAULT_YEAFT_DIR;
+  const configPath = join(root, 'config.json');
+
+  if (!update || typeof update !== 'object') {
+    return { error: 'update payload required' };
+  }
+
+  // Validate before touching the file. We enforce the same clamp bounds
+  // that `normaliseUnifySection` uses for reads so round-trip is stable.
+  if (update.maxConcurrentThreads !== undefined) {
+    const n = Number(update.maxConcurrentThreads);
+    if (!Number.isFinite(n) || n < 1 || n > 50) {
+      return { error: 'maxConcurrentThreads must be between 1 and 50' };
+    }
+  }
+  if (update.autoArchiveIdleDays !== undefined) {
+    const n = Number(update.autoArchiveIdleDays);
+    if (!Number.isFinite(n) || n < 1 || n > 3650) {
+      return { error: 'autoArchiveIdleDays must be between 1 and 3650' };
+    }
+  }
+
+  // Read existing config (preserve LLM and other top-level fields).
+  let existing = {};
+  if (existsSync(configPath)) {
+    try {
+      existing = JSON.parse(readFileSync(configPath, 'utf8'));
+    } catch {
+      existing = {};
+    }
+  }
+
+  const prev = normaliseUnifySection(existing.unify);
+  const merged = {
+    maxConcurrentThreads: update.maxConcurrentThreads !== undefined
+      ? Math.floor(Number(update.maxConcurrentThreads))
+      : prev.maxConcurrentThreads,
+    autoArchiveIdleDays: update.autoArchiveIdleDays !== undefined
+      ? Math.floor(Number(update.autoArchiveIdleDays))
+      : prev.autoArchiveIdleDays,
+  };
+  existing.unify = merged;
+
+  try {
+    writeFileSync(configPath, JSON.stringify(existing, null, 2) + '\n', 'utf8');
+  } catch (e) {
+    return { error: `Failed to write config.json: ${e.message}` };
+  }
+
+  return merged;
 }

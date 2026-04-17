@@ -29,6 +29,17 @@
 import { MAIN_THREAD_ID } from './store.js';
 import { createEngineInstance } from './engine-instance.js';
 
+/**
+ * Coerce a maxConcurrent input to either a positive integer or null
+ * (meaning "no cap"). Keeps the cap logic branch-free elsewhere.
+ */
+function normaliseMaxConcurrent(n) {
+  if (n === null || n === undefined) return null;
+  const v = Number(n);
+  if (!Number.isFinite(v) || v <= 0) return null;
+  return Math.floor(v);
+}
+
 export class ThreadEngineRegistry {
   /** @type {Map<string, import('./engine-instance.js').EngineInstance>} */
   #instances;
@@ -40,17 +51,32 @@ export class ThreadEngineRegistry {
   #currentThreadId;
 
   /**
+   * task-318: soft cap on concurrent live engine instances. When set,
+   * `ensure()` refuses to spawn a new instance beyond this many live
+   * entries. Already-live instances continue to serve query()s — the
+   * cap only gates net-new thread creation. Can be mutated at runtime
+   * by `setMaxConcurrent()` so the Settings UI takes effect without a
+   * session restart.
+   *
+   * Null / 0 / negative → unlimited (treat as "no cap").
+   * @type {number | null}
+   */
+  #maxConcurrent;
+
+  /**
    * @param {{
    *   factory: (threadId: string, opts?: object) => import('./engine-instance.js').EngineInstance,
+   *   maxConcurrent?: number | null,
    * }} params
    */
-  constructor({ factory } = {}) {
+  constructor({ factory, maxConcurrent } = {}) {
     if (typeof factory !== 'function') {
       throw new Error('ThreadEngineRegistry: factory function is required');
     }
     this.#instances = new Map();
     this.#factory = factory;
     this.#currentThreadId = MAIN_THREAD_ID;
+    this.#maxConcurrent = normaliseMaxConcurrent(maxConcurrent);
   }
 
   /** @returns {string} */
@@ -83,12 +109,53 @@ export class ThreadEngineRegistry {
     }
     const existing = this.#instances.get(threadId);
     if (existing && !existing.terminated) return existing;
+    // task-318: enforce concurrency cap before spawning a net-new
+    // instance. Replacing a terminated slot for the same threadId does
+    // NOT count against the cap — it's the same thread resuming.
+    if (!existing && this.#maxConcurrent !== null) {
+      const live = this.#countLive();
+      if (live >= this.#maxConcurrent) {
+        const err = new Error(
+          `ThreadEngineRegistry: concurrent thread limit reached (${live}/${this.#maxConcurrent}). ` +
+          `Archive or terminate an existing thread before starting a new one.`
+        );
+        err.code = 'ERR_MAX_CONCURRENT_THREADS';
+        err.limit = this.#maxConcurrent;
+        err.live = live;
+        throw err;
+      }
+    }
     const instance = this.#factory(threadId, opts);
     if (!instance || typeof instance.query !== 'function') {
       throw new Error(`ThreadEngineRegistry.ensure: factory did not return an EngineInstance for ${threadId}`);
     }
     this.#instances.set(threadId, instance);
     return instance;
+  }
+
+  /**
+   * Count currently non-terminated instances — the denominator for the
+   * concurrency cap. O(n) scan, n is small (≤ 50 in practice).
+   * @returns {number}
+   */
+  #countLive() {
+    let n = 0;
+    for (const inst of this.#instances.values()) {
+      if (!inst.terminated) n += 1;
+    }
+    return n;
+  }
+
+  /**
+   * task-318: read or update the concurrency cap. `setMaxConcurrent(null)`
+   * disables the cap entirely. Existing live instances are NOT terminated
+   * if the cap is lowered below their count — the cap only gates new
+   * `ensure()` calls going forward.
+   * @returns {number | null}
+   */
+  get maxConcurrent() { return this.#maxConcurrent; }
+  setMaxConcurrent(n) {
+    this.#maxConcurrent = normaliseMaxConcurrent(n);
   }
 
   /**
@@ -188,5 +255,6 @@ export function createThreadEngineRegistry(deps) {
       ...opts,
       threadId,
     }),
+    maxConcurrent: deps?.maxConcurrent ?? null,
   });
 }

@@ -33,6 +33,15 @@ const DEFAULTS = {
   maxOutputTokens: 16384,
   messageTokenBudget: 8192,
   maxContinueTurns: 3,
+  // task-318: Unify-specific runtime caps. `maxConcurrentThreads` gates
+  // how many ThreadEngineRegistry instances may be live at once; dispatch
+  // refuses new threads beyond this. The count INCLUDES the always-on
+  // `main` thread, so the default 6 gives users 5 user-initiated threads
+  // on top of main. `autoArchiveIdleDays` is consumed by ThreadStore's
+  // idle-archive pass (task-317 will wire the pass itself; here we just
+  // plumb the knob through so the UI can set it).
+  unifyMaxConcurrentThreads: 6,
+  unifyAutoArchiveIdleDays: 30,
 };
 
 // ─── config.json reader ─────────────────────────────────────────
@@ -135,6 +144,52 @@ function isTruthy(val) {
 }
 
 /**
+ * Clamp and normalise the `unify` config section. Missing / non-numeric
+ * inputs fall back to the DEFAULTS; numeric-but-out-of-range inputs are
+ * *clamped* to the valid range rather than silently reverting to the
+ * default. This keeps the read path aligned with `updateUnifySettings`,
+ * which rejects out-of-range writes up front — a hand-edited
+ * `config.json` with `maxConcurrentThreads: 100` now loads as 50 (the
+ * nearest valid value) instead of collapsing back to 5.
+ *
+ * Exported for tests and for `config-api.js` to share the same clamp
+ * bounds via `clampUnifyField`.
+ *
+ * @param {any} raw — jsonConfig.unify (may be undefined / malformed)
+ * @returns {{ maxConcurrentThreads: number, autoArchiveIdleDays: number }}
+ */
+export function normaliseUnifySection(raw) {
+  const out = {
+    maxConcurrentThreads: DEFAULTS.unifyMaxConcurrentThreads,
+    autoArchiveIdleDays: DEFAULTS.unifyAutoArchiveIdleDays,
+  };
+  if (!raw || typeof raw !== 'object') return out;
+  const mc = clampUnifyField(raw.maxConcurrentThreads, 'maxConcurrentThreads');
+  if (mc !== null) out.maxConcurrentThreads = mc;
+  const ad = clampUnifyField(raw.autoArchiveIdleDays, 'autoArchiveIdleDays');
+  if (ad !== null) out.autoArchiveIdleDays = ad;
+  return out;
+}
+
+/**
+ * Clamp a single unify field to its valid range. Returns `null` if the
+ * input is not a finite number (so callers can treat it as "not set" and
+ * keep the previous value). Centralises the bounds used on both read
+ * (`normaliseUnifySection`) and write (`updateUnifySettings` validation).
+ *
+ * @param {unknown} v
+ * @param {'maxConcurrentThreads'|'autoArchiveIdleDays'} field
+ * @returns {number | null}
+ */
+export function clampUnifyField(v, field) {
+  if (v === null || v === undefined) return null;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  const [lo, hi] = field === 'maxConcurrentThreads' ? [1, 50] : [1, 3650];
+  return Math.min(hi, Math.max(lo, Math.floor(n)));
+}
+
+/**
  * Build config from legacy config.md + .env + env vars.
  * @deprecated — used only when config.json doesn't exist.
  */
@@ -160,6 +215,8 @@ function loadLegacyConfig(dir, overrides) {
     maxOutputTokens: overrides.maxOutputTokens ?? fileConfig.maxOutputTokens ?? DEFAULTS.maxOutputTokens,
     messageTokenBudget: overrides.messageTokenBudget ?? (env.YEAFT_MESSAGE_TOKEN_BUDGET ? parseInt(env.YEAFT_MESSAGE_TOKEN_BUDGET, 10) : null) ?? fileConfig.messageTokenBudget ?? DEFAULTS.messageTokenBudget,
     maxContinueTurns: overrides.maxContinueTurns ?? fileConfig.maxContinueTurns ?? DEFAULTS.maxContinueTurns,
+    // task-318: legacy path never had the `unify` section — defaults.
+    unify: normaliseUnifySection(null),
     providers: null,
     primaryModel: null,
     fastModel: null,
@@ -251,6 +308,10 @@ export function loadConfig(overrides = {}) {
     maxOutputTokens: overrides.maxOutputTokens ?? jsonConfig.maxOutputTokens ?? modelInfo?.maxOutputTokens ?? DEFAULTS.maxOutputTokens,
     messageTokenBudget: overrides.messageTokenBudget ?? jsonConfig.messageTokenBudget ?? DEFAULTS.messageTokenBudget,
     maxContinueTurns: overrides.maxContinueTurns ?? jsonConfig.maxContinueTurns ?? DEFAULTS.maxContinueTurns,
+
+    // task-318: Unify runtime caps. `unify` is a nested section so we
+    // don't pollute the flat config namespace used by chat/crew code.
+    unify: normaliseUnifySection(jsonConfig.unify),
 
     // Legacy fields (null when using config.json)
     apiKey: overrides.apiKey || null,

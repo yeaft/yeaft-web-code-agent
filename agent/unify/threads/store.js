@@ -52,6 +52,18 @@ export const MAIN_THREAD_ID = 'main';
 /** Valid thread status values. Mirrors design doc §5. */
 export const THREAD_STATUSES = ['active', 'idle', 'archived'];
 
+/**
+ * task-318: Coerce an idle-archive days input to a non-negative integer
+ * (0 disables the feature). Anything invalid falls through to 0 so a
+ * malformed config can never silently enable auto-archive.
+ */
+function normaliseIdleDays(n) {
+  if (n === null || n === undefined) return 0;
+  const v = Number(n);
+  if (!Number.isFinite(v) || v <= 0) return 0;
+  return Math.floor(v);
+}
+
 /** Debounce window for grouped disk writes. Kept short so tests don't hang. */
 const FLUSH_DEBOUNCE_MS = 8;
 
@@ -275,10 +287,12 @@ export class ThreadStore {
   #dirtyAttachments;
   /** @type {any} NodeJS.Timeout */
   #flushTimer;
+  /** @type {number} task-318: days of inactivity before auto-archive (0 = disabled) */
+  #idleArchiveDays;
 
   /**
    * @param {string} [yeaftDir] — Base ~/.yeaft directory. Omit for in-memory mode.
-   * @param {{ readOnly?: boolean }} [opts]
+   * @param {{ readOnly?: boolean, idleArchiveDays?: number }} [opts]
    */
   constructor(yeaftDir, opts = {}) {
     this.#threads = new Map();
@@ -290,6 +304,11 @@ export class ThreadStore {
     this.#flushTimer = null;
 
     this.#readOnly = !!opts.readOnly;
+    // task-318: idle-archive threshold (days). Consumed by the archive
+    // pass in task-317; here we just accept + expose the knob so the
+    // config plumbing is testable end-to-end today. A value ≤ 0 means
+    // "no auto-archive" (feature disabled).
+    this.#idleArchiveDays = normaliseIdleDays(opts.idleArchiveDays);
     if (yeaftDir) {
       this.#dir = join(yeaftDir, 'threads');
       this.#indexPath = join(this.#dir, 'index.md');
@@ -486,6 +505,18 @@ export class ThreadStore {
 
   get currentId() { return this.#currentId; }
   get size() { return this.#threads.size; }
+
+  /**
+   * task-318: idle-archive threshold (days). 0 disables auto-archive.
+   * The actual archive pass is owned by task-317 — this accessor is the
+   * contract between config and that future consumer, plus a write path
+   * so the Settings UI takes effect without restarting the session.
+   * @returns {number}
+   */
+  get idleArchiveDays() { return this.#idleArchiveDays; }
+  setIdleArchiveDays(days) {
+    this.#idleArchiveDays = normaliseIdleDays(days);
+  }
 
   get(id) { return this.#threads.get(id) || null; }
   list() { return [...this.#threads.values()]; }

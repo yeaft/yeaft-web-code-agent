@@ -30,4 +30,9 @@ export default {
   sendToServer: null,
   // 由 index.js 注册的配置保存函数
   saveConfig: null,
+  // task-318: live Unify runtime caps. Mutated in-place by
+  // `update_unify_settings` so in-process consumers (web-bridge) can
+  // pick up the new values without a session restart. `null` until the
+  // Unify session has finished loading.
+  unifyRuntimeSettings: null,
 };

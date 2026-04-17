@@ -74,6 +74,38 @@ function sendUnifyEvent(event) {
 }
 
 /**
+ * task-318 rev-1 fix: install live-setter bridge between the session's
+ * runtime handles (engineRegistry + threadStore) and `ctx.unifyRuntimeSettings`,
+ * which message-router's `update_unify_settings` branch reads. Previously
+ * that object was null and the setters were dead code. Now every
+ * `update_unify_settings` mutation pushes the new caps into the live
+ * session within the same tick — no reload required.
+ *
+ * Exported so tests can drive the same wiring with a mock session.
+ *
+ * @param {import('./session.js').Session} s
+ */
+export function installUnifyRuntimeBridge(s) {
+  if (!s) return;
+  const initialMax = s.engineRegistry?.maxConcurrent ?? null;
+  const initialIdle = s.threadStore?.idleArchiveDays ?? 0;
+  ctx.unifyRuntimeSettings = {
+    get maxConcurrentThreads() { return s.engineRegistry?.maxConcurrent ?? initialMax; },
+    set maxConcurrentThreads(v) {
+      if (typeof s.engineRegistry?.setMaxConcurrent === 'function') {
+        s.engineRegistry.setMaxConcurrent(v);
+      }
+    },
+    get autoArchiveIdleDays() { return s.threadStore?.idleArchiveDays ?? initialIdle; },
+    set autoArchiveIdleDays(v) {
+      if (typeof s.threadStore?.setIdleArchiveDays === 'function') {
+        s.threadStore.setIdleArchiveDays(v);
+      }
+    },
+  };
+}
+
+/**
  * task-301 Part 2: push the full thread list snapshot to the web client.
  * Called after any ThreadStore-mutating tool completes and at turn_end so
  * the sidebar V2 always shows a fresh picture. Cheap — ThreadStore keeps
@@ -390,6 +422,14 @@ export async function handleUnifyChat(msg) {
         skipMCP: false,
         skipSkills: false,
       });
+
+      // task-318 rev-1 fix: expose live setters on ctx so message-router's
+      // update_unify_settings branch can push the new caps into the
+      // registry + thread store without a session reload. Previously this
+      // object was null and setMaxConcurrent/setIdleArchiveDays were dead
+      // code — the config file was updated on disk but the running
+      // session continued with the old caps until next restart.
+      installUnifyRuntimeBridge(session);
 
       // Create a stable conversationId for the Unify session
       unifyConversationId = `unify-${Date.now()}`;
@@ -737,6 +777,8 @@ export async function handleUnifyLoadHistory(msg) {
       skipMCP: false,
       skipSkills: false,
     });
+    // task-318 rev-1 fix: wire live setters; see handleUnifyChat.
+    installUnifyRuntimeBridge(session);
 
     unifyConversationId = `unify-${Date.now()}`;
 
@@ -811,6 +853,8 @@ export async function resetUnifySession() {
       skipMCP: false,
       skipSkills: false,
     });
+    // task-318 rev-1 fix: wire live setters; see handleUnifyChat.
+    installUnifyRuntimeBridge(session);
 
     unifyConversationId = `unify-${Date.now()}`;
 

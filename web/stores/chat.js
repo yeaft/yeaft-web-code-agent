@@ -109,6 +109,10 @@ export const useChatStore = defineStore('chat', {
     // LLM config: agentId -> { providers, primaryModel, fastModel, language, loaded }
     llmConfig: {},
 
+    // task-318: per-agent Unify runtime settings cache. Keyed by agentId.
+    // Shape: { maxConcurrentThreads, autoArchiveIdleDays, error, loaded, at }
+    unifySettings: {},
+
     // /btw mode state (multi-turn side question)
     btwMode: false,              // whether in btw mode
     btwMessages: [],             // [{ role: 'user'|'assistant', content }]

@@ -490,6 +490,20 @@ export function handleMessage(store, msg) {
       }
       break;
 
+    // task-318: Unify runtime settings (thread cap + auto-archive days)
+    case 'unify_settings':
+    case 'unify_settings_updated':
+      if (msg.agentId) {
+        store.unifySettings[msg.agentId] = {
+          maxConcurrentThreads: msg.maxConcurrentThreads ?? 6,
+          autoArchiveIdleDays: msg.autoArchiveIdleDays ?? 30,
+          error: msg.error || null,
+          loaded: true,
+          at: Date.now(),
+        };
+      }
+      break;
+
     // Per-conversation MCP servers (from Claude CLI init)
     case 'conversation_mcp_update':
       if (msg.conversationId && msg.servers) {

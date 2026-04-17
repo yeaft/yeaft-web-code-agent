@@ -24,7 +24,7 @@ import {
 import { sendToServer, flushMessageBuffer } from './buffer.js';
 import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
-import { getLlmConfig, updateLlmConfig } from '../unify/config-api.js';
+import { getLlmConfig, updateLlmConfig, getUnifySettings, updateUnifySettings } from '../unify/config-api.js';
 import { handleUnifyChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyMergeThread, handleUnifyForkThread } from '../unify/web-bridge.js';
 
 export async function handleMessage(msg) {
@@ -317,6 +317,30 @@ export async function handleMessage(msg) {
     case 'update_llm_config': {
       const result = updateLlmConfig(msg.config || {}, ctx.CONFIG?.yeaftDir);
       sendToServer({ type: 'llm_config_updated', ...result });
+      break;
+    }
+
+    // task-318: Unify runtime settings (thread concurrency + auto-archive).
+    // Read/write the nested `unify` section of config.json — LLM fields
+    // untouched. On update we broadcast a `unify_settings_updated` event
+    // so the UI reflects the new values and in-process consumers
+    // (ThreadEngineRegistry, ThreadStore) can reload their caps.
+    case 'get_unify_settings': {
+      const settings = getUnifySettings(ctx.CONFIG?.yeaftDir);
+      sendToServer({ type: 'unify_settings', ...settings });
+      break;
+    }
+
+    case 'update_unify_settings': {
+      const result = updateUnifySettings(msg.settings || msg.config || {}, ctx.CONFIG?.yeaftDir);
+      // Let live consumers pick up the new caps without a session restart.
+      // The registry/store are created per-session; we update the exported
+      // accessors so subsequent dispatches see the new values.
+      if (!result.error && ctx.unifyRuntimeSettings) {
+        ctx.unifyRuntimeSettings.maxConcurrentThreads = result.maxConcurrentThreads;
+        ctx.unifyRuntimeSettings.autoArchiveIdleDays = result.autoArchiveIdleDays;
+      }
+      sendToServer({ type: 'unify_settings_updated', ...result });
       break;
     }
 

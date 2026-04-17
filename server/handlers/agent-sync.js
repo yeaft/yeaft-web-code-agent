@@ -218,6 +218,26 @@ export async function handleAgentSync(agentId, agent, msg) {
       break;
     }
 
+    // task-318: Unify runtime settings read / update ack — relay to owner
+    case 'unify_settings':
+    case 'unify_settings_updated': {
+      for (const [, client] of webClients) {
+        if (client.authenticated && (CONFIG.skipAuth ||
+          (agent.ownerId && client.userId === agent.ownerId) ||
+          (!agent.ownerId && client.role === 'admin')
+        )) {
+          await sendToWebClient(client, {
+            type: msg.type,
+            agentId,
+            maxConcurrentThreads: msg.maxConcurrentThreads,
+            autoArchiveIdleDays: msg.autoArchiveIdleDays,
+            error: msg.error
+          });
+        }
+      }
+      break;
+    }
+
     default:
       return false; // Not handled
   }
