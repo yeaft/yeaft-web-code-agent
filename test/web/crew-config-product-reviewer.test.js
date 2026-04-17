@@ -120,3 +120,102 @@ describe('Crew dev templates — product-reviewer parity with reviewer', () => {
     expect(block).not.toMatch(/tester/i);
   });
 });
+
+// task-296: all non-developer roles (PM, reviewer, product-reviewer,
+// designer, architect) must not reference `tester` / `测试者` / `test-N`
+// as agent-routing targets either. The cheapest and strongest guarantee
+// is a full-file zero-match sweep for the agent-noun forms — genuine
+// action mentions like "run tests", "write test cases", "测试覆盖" are
+// not caught by these patterns.
+describe('Crew dev templates — zero tester ghost-routing references (task-296)', () => {
+  const agentNounPatterns = [
+    /\btester\b/i,        // English agent noun
+    /测试者/,              // Chinese agent noun
+    /测试人员/,            // Chinese alt spelling
+    /\btest-[0-9]+\b/,     // numbered tester-N id
+    /测试-[0-9]+/,         // numbered zh form
+  ];
+
+  it('dev-en.js has zero tester agent-noun references anywhere in file', () => {
+    const src = read('web/crew-templates/dev-en.js');
+    for (const p of agentNounPatterns) {
+      expect(src, `dev-en.js must not match ${p}`).not.toMatch(p);
+    }
+  });
+
+  it('dev-zh.js has zero tester agent-noun references anywhere in file', () => {
+    const src = read('web/crew-templates/dev-zh.js');
+    for (const p of agentNounPatterns) {
+      expect(src, `dev-zh.js must not match ${p}`).not.toMatch(p);
+    }
+  });
+
+  // Per-role targeted checks so that regressions are attributed clearly.
+  const sliceRole = (src, roleName, nextRoleName) => {
+    const start = src.indexOf(`name: '${roleName}'`);
+    if (start < 0) return '';
+    if (!nextRoleName) return src.slice(start);
+    const end = src.indexOf(`name: '${nextRoleName}'`, start);
+    return end < 0 ? src.slice(start) : src.slice(start, end);
+  };
+
+  const roleOrder = ['pm', 'developer', 'reviewer', 'product-reviewer', 'designer'];
+
+  for (const role of ['pm', 'reviewer', 'product-reviewer']) {
+    it(`dev-en.js role '${role}' claudeMd has zero tester agent-noun`, () => {
+      const src = read('web/crew-templates/dev-en.js');
+      const idx = roleOrder.indexOf(role);
+      const block = sliceRole(src, role, roleOrder[idx + 1]);
+      expect(block.length).toBeGreaterThan(0);
+      for (const p of agentNounPatterns) {
+        expect(block, `role ${role} in dev-en.js must not match ${p}`).not.toMatch(p);
+      }
+    });
+
+    it(`dev-zh.js role '${role}' claudeMd has zero tester agent-noun`, () => {
+      const src = read('web/crew-templates/dev-zh.js');
+      const idx = roleOrder.indexOf(role);
+      const block = sliceRole(src, role, roleOrder[idx + 1]);
+      expect(block.length).toBeGreaterThan(0);
+      for (const p of agentNounPatterns) {
+        expect(block, `role ${role} in dev-zh.js must not match ${p}`).not.toMatch(p);
+      }
+    });
+  }
+
+  // Spot-checks on specific high-signal phrases called out in rev-1 / prev-1:
+  it('PM block in dev-en.js uses product-reviewer (not tester) in cross-validation', () => {
+    const src = read('web/crew-templates/dev-en.js');
+    const pm = sliceRole(src, 'pm', 'developer');
+    expect(pm).toMatch(/reviewer and product-reviewer/);
+    expect(pm).not.toMatch(/reviewer and tester/);
+  });
+
+  it('PM block in dev-zh.js uses 产品审查者 (not 测试者) in cross-validation', () => {
+    const src = read('web/crew-templates/dev-zh.js');
+    const pm = sliceRole(src, 'pm', 'developer');
+    expect(pm).toMatch(/审查者和产品审查者/);
+    expect(pm).not.toMatch(/审查者和测试者/);
+  });
+
+  it('reviewer block in dev-en.js does not offload test writing to a tester', () => {
+    const src = read('web/crew-templates/dev-en.js');
+    const rev = sliceRole(src, 'reviewer', 'product-reviewer');
+    expect(rev).not.toMatch(/tester/i);
+  });
+
+  it('reviewer block in dev-zh.js does not offload 编写测试用例 to 测试者', () => {
+    const src = read('web/crew-templates/dev-zh.js');
+    const rev = sliceRole(src, 'reviewer', 'product-reviewer');
+    expect(rev).not.toMatch(/测试者|测试人员/);
+  });
+
+  it('ROUTE examples use prev-N (not test-N) for paired assignment', () => {
+    const en = read('web/crew-templates/dev-en.js');
+    const zh = read('web/crew-templates/dev-zh.js');
+    expect(en).toMatch(/dev-1\/rev-1\/prev-1/);
+    expect(zh).toMatch(/dev-1\/rev-1\/prev-1/);
+    expect(en).not.toMatch(/rev-1\/test-1/);
+    expect(zh).not.toMatch(/rev-1\/test-1/);
+  });
+});
