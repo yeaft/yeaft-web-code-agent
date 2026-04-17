@@ -37,7 +37,6 @@ import { consolidate } from './memory/consolidate.js';
 
 function parseArgs(argv) {
   const args = {
-    mode: 'chat',
     debug: false,
     interactive: false,
     verbose: false,
@@ -57,10 +56,6 @@ function parseArgs(argv) {
   while (i < rest.length) {
     const arg = rest[i];
     switch (arg) {
-      case '-m':
-      case '--mode':
-        args.mode = rest[++i] || 'chat';
-        break;
       case '-d':
       case '--debug':
         args.debug = true;
@@ -176,7 +171,7 @@ function handleTraceQuery(args, config) {
 // ─── Dry-run handler ───────────────────────────────────────────
 
 function handleDryRun(args, config) {
-  const systemPrompt = buildSystemPrompt({ language: config.language, mode: args.mode });
+  const systemPrompt = buildSystemPrompt({ language: config.language });
   const messages = [];
 
   if (args.prompt) {
@@ -188,7 +183,6 @@ function handleDryRun(args, config) {
   console.log('--- Config ---');
   console.log(`  Model:    ${config.model}`);
   console.log(`  Adapter:  ${config.adapter || 'auto'}`);
-  console.log(`  Mode:     ${args.mode}`);
   console.log(`  Debug:    ${config.debug}`);
   console.log();
   console.log('--- System Prompt ---');
@@ -218,7 +212,6 @@ async function runREPL(config, args) {
   });
 
   const { engine, conversationStore, memoryStore, trace, skillManager, mcpManager, toolRegistry } = session;
-  let currentMode = args.mode;
 
   // Load persisted conversation as initial messages
   let conversationMessages = conversationStore.loadRecent(50).map(m => ({
@@ -232,7 +225,7 @@ async function runREPL(config, args) {
   const coldCount = conversationStore.countCold();
   const memStats = memoryStore.stats();
 
-  console.log(`Yeaft Unify REPL (model: ${session.config.model}, mode: ${currentMode})`);
+  console.log(`Yeaft Unify REPL (model: ${session.config.model})`);
   console.log(`Conversation: ${hotCount} hot, ${coldCount} cold | Memory: ${memStats.entryCount} entries`);
   console.log(`Tools: ${session.status.tools} | Skills: ${session.status.skills}`);
   if (session.status.mcpServers.length > 0) {
@@ -247,7 +240,7 @@ async function runREPL(config, args) {
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: `yeaft:${currentMode}> `,
+    prompt: `yeaft> `,
   });
 
   rl.prompt();
@@ -265,7 +258,6 @@ async function runREPL(config, args) {
       switch (cmd) {
         case 'help':
           console.log('Commands:');
-          console.log('  /mode <chat|work|dream>  — Switch mode');
           console.log('  /debug                   — Toggle debug mode');
           console.log('  /trace <stats|recent>    — Query debug trace');
           console.log('  /memory [add|clear|stats] — Memory management');
@@ -283,16 +275,6 @@ async function runREPL(config, args) {
           console.log('  /skills                  — List loaded skills');
           console.log('  /clear                   — Clear conversation history');
           console.log('  /quit                    — Exit');
-          break;
-
-        case 'mode':
-          if (cmdArgs[0]) {
-            currentMode = cmdArgs[0];
-            rl.setPrompt(`yeaft:${currentMode}> `);
-            console.log(`Mode switched to: ${currentMode}`);
-          } else {
-            console.log(`Current mode: ${currentMode}`);
-          }
           break;
 
         case 'debug':
@@ -433,10 +415,9 @@ async function runREPL(config, args) {
         case 'context':
           console.log(`Context info:`);
           console.log(`  Model: ${session.config.model}`);
-          console.log(`  Mode: ${currentMode}`);
           console.log(`  Language: ${session.config.language}`);
           console.log(`  Max context: ${session.config.maxContextTokens} tokens`);
-          console.log(`  System prompt: ${buildSystemPrompt({ language: session.config.language, mode: currentMode }).length} chars`);
+          console.log(`  System prompt: ${buildSystemPrompt({ language: session.config.language }).length} chars`);
           console.log(`  Hot messages: ${conversationStore.countHot()}`);
           console.log(`  Hot tokens: ${conversationStore.hotTokens()}`);
           console.log(`  Cold messages: ${conversationStore.countCold()}`);
@@ -446,13 +427,12 @@ async function runREPL(config, args) {
           break;
 
         case 'dry-run':
-          handleDryRun({ ...args, mode: currentMode, prompt: cmdArgs.join(' ') || null }, session.config);
+          handleDryRun({ ...args, prompt: cmdArgs.join(' ') || null }, session.config);
           break;
 
         case 'stats': {
           const s = trace.stats();
           console.log(`Session stats:`);
-          console.log(`  Mode: ${currentMode}`);
           console.log(`  Debug: ${session.config.debug}`);
           console.log(`  Turns: ${s.turnCount}`);
           console.log(`  Tools: ${s.toolCount}`);
@@ -607,7 +587,6 @@ async function runREPL(config, args) {
 
       for await (const event of engine.query({
         prompt: input,
-        mode: currentMode,
         messages: conversationMessages,
       })) {
         switch (event.type) {
@@ -709,7 +688,6 @@ async function runOnce(config, args) {
 
     for await (const event of engine.query({
       prompt: args.prompt,
-      mode: args.mode,
       messages: priorMessages,
     })) {
       switch (event.type) {
@@ -819,7 +797,6 @@ async function main() {
   console.log('  node cli.js --trace search "keyword"  — Search traces');
   console.log();
   console.log('Options:');
-  console.log('  -m, --mode <mode>     Mode: chat, work, dream (default: chat)');
   console.log('  -d, --debug           Enable debug tracing');
   console.log('  -i, --interactive     Start REPL');
   console.log('  -v, --verbose         Verbose output');

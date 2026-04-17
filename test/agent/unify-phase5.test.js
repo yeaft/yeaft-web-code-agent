@@ -415,7 +415,6 @@ describe('stop-hooks.js', () => {
   it('should handle missing stores gracefully', async () => {
     const result = await stopHooks.runStopHooks({
       yeaftDir: '/tmp/nonexistent',
-      mode: 'chat',
       config: {},
     });
     expect(result.errors.length).toBe(0);
@@ -529,8 +528,8 @@ Work content`);
       const manager = new skillsModule.SkillManager(tmpDir);
       manager.load();
 
-      expect(manager.list('chat')).toHaveLength(1);
-      expect(manager.list('work')).toHaveLength(1);
+      expect(manager.list('chat')).toHaveLength(2);
+      expect(manager.list('work')).toHaveLength(2);
       expect(manager.list()).toHaveLength(2);
     });
 
@@ -607,7 +606,6 @@ describe('tools/types.js', () => {
     });
 
     expect(tool.name).toBe('TestTool');
-    expect(tool.modes).toEqual(['chat', 'work']);
     expect(tool.isConcurrencySafe()).toBe(false);
     expect(tool.isReadOnly()).toBe(false);
     expect(tool.isDestructive()).toBe(false);
@@ -619,15 +617,6 @@ describe('tools/types.js', () => {
 
   it('should throw on missing execute', () => {
     expect(() => defineTool({ name: 'test' })).toThrow('execute');
-  });
-
-  it('should accept custom modes', () => {
-    const tool = defineTool({
-      name: 'WorkOnly',
-      execute: async () => '',
-      modes: ['work'],
-    });
-    expect(tool.modes).toEqual(['work']);
   });
 });
 
@@ -778,7 +767,6 @@ describe('tools/enter-worktree.js', () => {
 
   it('should have correct tool definition', () => {
     expect(enterWorktree.name).toBe('EnterWorktree');
-    expect(enterWorktree.modes).toEqual(['chat', 'work']);
     expect(enterWorktree.isDestructive()).toBe(false);
   });
 
@@ -801,7 +789,6 @@ describe('tools/exit-worktree.js', () => {
 
   it('should have correct tool definition', () => {
     expect(exitWorktree.name).toBe('ExitWorktree');
-    expect(exitWorktree.modes).toEqual(['chat', 'work']);
   });
 
   it('should report error for non-existent path', async () => {
@@ -835,7 +822,6 @@ describe('tools/skill.js', () => {
 
   it('should have correct tool definition', () => {
     expect(skillTool.name).toBe('Skill');
-    expect(skillTool.modes).toEqual(['chat', 'work']);
     expect(skillTool.isReadOnly()).toBe(true);
   });
 

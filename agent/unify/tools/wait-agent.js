@@ -25,7 +25,6 @@ Use after sending a task to an agent via SendMessage.`,
     },
     required: ['agent_id'],
   },
-  modes: ['work'],
   isConcurrencySafe: () => true,
   isReadOnly: () => true,
   async execute(input, ctx) {

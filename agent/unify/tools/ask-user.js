@@ -38,7 +38,6 @@ Guidelines:
     },
     required: ['question'],
   },
-  modes: ['chat', 'work'],
   isConcurrencySafe: () => false,
   isReadOnly: () => true,
   async execute(input, ctx) {

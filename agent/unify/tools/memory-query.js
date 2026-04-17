@@ -57,7 +57,6 @@ results sorted by score descending.`,
     },
     required: ['keywords'],
   },
-  modes: ['chat', 'work'],
   isConcurrencySafe: () => true,
   isReadOnly: () => true,
   async execute(input, ctx) {

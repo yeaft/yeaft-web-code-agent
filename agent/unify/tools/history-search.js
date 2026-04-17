@@ -30,7 +30,6 @@ Results are returned newest-first with message role and content.`,
     },
     required: ['keyword'],
   },
-  modes: ['chat', 'work'],
   isConcurrencySafe: () => true,
   isReadOnly: () => true,
   async execute(input, ctx) {

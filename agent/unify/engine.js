@@ -167,18 +167,17 @@ export class Engine {
   /**
    * Build the system prompt with memory, compact summary, and skill content.
    *
-   * @param {string} mode
    * @param {{ profile?: string, entries?: object[] }} [memory]
    * @param {string} [compactSummary]
    * @param {string} [prompt] — user prompt (for skill relevance matching)
    * @param {string} [memoryInjection] — task-287: prebuilt memory block (index + prefs + project)
    * @returns {string}
    */
-  #buildSystemPrompt(mode, memory, compactSummary, prompt, memoryInjection) {
+  #buildSystemPrompt(memory, compactSummary, prompt, memoryInjection) {
     // Get relevant skill content if SkillManager is wired
     let skillContent = '';
     if (this.#skillManager && prompt) {
-      skillContent = this.#skillManager.getRelevantPromptContent(prompt, mode);
+      skillContent = this.#skillManager.getRelevantPromptContent(prompt);
     }
 
     // Get tool names from the appropriate source
@@ -188,7 +187,6 @@ export class Engine {
 
     return buildSystemPrompt({
       language: this.#config.language || 'en',
-      mode,
       toolNames,
       memory,
       memoryInjection,
@@ -201,10 +199,9 @@ export class Engine {
    * Build the full tool context for Phase 5 tools.
    *
    * @param {AbortSignal} [signal]
-   * @param {string} [mode]
    * @returns {object}
    */
-  #buildToolContext(signal, mode) {
+  #buildToolContext(signal) {
     return {
       signal,
       yeaftDir: this.#yeaftDir,
@@ -215,7 +212,6 @@ export class Engine {
       conversationStore: this.#conversationStore,
       adapter: this.#adapter,
       config: this.#config,
-      mode,
     };
   }
 
@@ -265,10 +261,9 @@ export class Engine {
    *
    * @param {string} userContent
    * @param {string} assistantContent
-   * @param {string} mode
    * @param {object[]} [toolCalls]
    */
-  #persistMessages(userContent, assistantContent, mode, toolCalls) {
+  #persistMessages(userContent, assistantContent, toolCalls) {
     if (!this.#conversationStore) return;
     if (this.#config._readOnly) return;
 
@@ -288,7 +283,6 @@ export class Engine {
     this.#conversationStore.append({
       role: 'user',
       content: userContent,
-      mode,
       threadId,
     });
 
@@ -296,7 +290,6 @@ export class Engine {
     const assistantMsg = {
       role: 'assistant',
       content: assistantContent,
-      mode,
       model: this.#config.model,
       threadId,
     };
@@ -354,14 +347,11 @@ export class Engine {
    *
    * @param {object} params
    * @param {string} params.prompt - The user prompt (required, non-empty).
-   * @param {'dream'} [params.mode] - Optional mode flag. Since task-297 the only
-   *   value accepted / acted on is `'dream'` (memory maintenance system prompt).
-   *   Any other value is ignored and falls through to the unified system prompt.
    * @param {Array} [params.messages] - Prior conversation messages.
    * @param {AbortSignal} [params.signal] - Abort signal.
    * @yields {EngineEvent}
    */
-  async *query({ prompt, mode, messages = [], signal }) {
+  async *query({ prompt, messages = [], signal }) {
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       yield {
         type: 'error',
@@ -394,7 +384,7 @@ export class Engine {
     }
 
     const compactSummary = this.#getCompactSummary();
-    const systemPrompt = this.#buildSystemPrompt(mode, undefined, compactSummary, prompt, memoryInjection);
+    const systemPrompt = this.#buildSystemPrompt(undefined, compactSummary, prompt, memoryInjection);
 
     // Build conversation: existing messages + new user message
     const conversationMessages = [
@@ -423,7 +413,6 @@ export class Engine {
 
       const turnId = this.#trace.startTurn({
         traceId: this.#traceId,
-        mode,
         turnNumber,
       });
 
@@ -590,7 +579,6 @@ export class Engine {
           // but receives both configs — messages are persisted with primary model name
           const hookResult = await runStopHooks({
             yeaftDir: this.#yeaftDir,
-            mode,
             conversationStore: this.#conversationStore,
             memoryStore: this.#memoryStore,
             adapter: this.#adapter,
@@ -608,7 +596,7 @@ export class Engine {
           }
         } else {
           // Legacy path (no yeaftDir → use old behavior)
-          this.#persistMessages(prompt, fullResponseText, mode, assistantMsg.toolCalls);
+          this.#persistMessages(prompt, fullResponseText, assistantMsg.toolCalls);
 
           const consolidated = await this.#maybeConsolidate();
           if (consolidated && consolidated.archivedCount > 0) {
@@ -620,7 +608,7 @@ export class Engine {
       }
 
       // Execute tool calls and feed results back
-      const toolCtx = this.#buildToolContext(signal, mode);
+      const toolCtx = this.#buildToolContext(signal);
 
       for (const tc of toolCalls) {
         const toolStartTime = Date.now();

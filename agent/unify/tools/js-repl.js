@@ -69,7 +69,6 @@ Guidelines:
     },
     required: ['code'],
   },
-  modes: ['chat', 'work'],
   isConcurrencySafe: () => false,
   isReadOnly: () => true,
   async execute(input, ctx) {
@@ -112,7 +111,6 @@ Use when you want a clean slate.`,
     type: 'object',
     properties: {},
   },
-  modes: ['chat', 'work'],
   isConcurrencySafe: () => false,
   isReadOnly: () => false,
   async execute(input, ctx) {

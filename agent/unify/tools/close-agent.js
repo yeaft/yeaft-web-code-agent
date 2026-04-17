@@ -25,7 +25,6 @@ The agent's result (if any) is returned before closing.`,
     },
     required: ['agent_id'],
   },
-  modes: ['work'],
   isConcurrencySafe: () => false,
   isReadOnly: () => false,
   async execute(input, ctx) {

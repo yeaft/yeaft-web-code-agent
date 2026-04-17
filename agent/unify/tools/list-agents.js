@@ -20,7 +20,6 @@ and message counts. Use to monitor parallel task progress.`,
       },
     },
   },
-  modes: ['work'],
   isConcurrencySafe: () => true,
   isReadOnly: () => true,
   async execute(input, ctx) {

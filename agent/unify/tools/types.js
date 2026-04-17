@@ -5,6 +5,9 @@
  * This ensures consistent shape and API-format conversion.
  *
  * Reference: yeaft-unify-core-systems.md §3.1
+ *
+ * task-311: the legacy `modes` field (task-297 deprecated) is now fully
+ * removed — Unify runs in a single unified mode.
  */
 
 /**
@@ -24,9 +27,6 @@
  * @property {string} description — LLM-facing description
  * @property {object} parameters — JSON Schema for input
  * @property {(input: object, ctx?: ToolContext) => Promise<string>} execute — execution function
- * @property {string[]} [modes] — @deprecated since task-297. Legacy mode filter (['chat', 'work']).
- *   Unify no longer has mode distinction; the ToolRegistry ignores this field and exposes every
- *   registered tool to the engine. Retained only so existing tool definitions keep loading.
  * @property {(input?: object) => boolean} [isConcurrencySafe] — can run in parallel?
  * @property {(input?: object) => boolean} [isReadOnly] — read-only operation?
  * @property {(input?: object) => boolean} [isDestructive] — destructive operation?
@@ -40,7 +40,6 @@
  *   description: string,
  *   parameters: object,
  *   execute: (input: object, ctx?: ToolContext) => Promise<string>,
- *   modes?: string[],  // @deprecated since task-297 — ignored by ToolRegistry
  *   isConcurrencySafe?: (input?: object) => boolean,
  *   isReadOnly?: (input?: object) => boolean,
  *   isDestructive?: (input?: object) => boolean,
@@ -52,7 +51,6 @@ export function defineTool({
   description,
   parameters,
   execute,
-  modes = ['chat', 'work'],
   isConcurrencySafe = () => false,
   isReadOnly = () => false,
   isDestructive = () => false,
@@ -65,7 +63,6 @@ export function defineTool({
     description: description || `Tool: ${name}`,
     parameters: parameters || { type: 'object', properties: {} },
     execute,
-    modes,
     isConcurrencySafe,
     isReadOnly,
     isDestructive,

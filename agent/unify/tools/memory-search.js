@@ -48,7 +48,6 @@ Up to ${MAX_FILES_PER_CALL} files per call. Each file is capped at ${MAX_BYTES_P
     },
     required: ['paths'],
   },
-  modes: ['chat', 'work'],
   isConcurrencySafe: () => true,
   isReadOnly: () => true,
   async execute(input, ctx) {

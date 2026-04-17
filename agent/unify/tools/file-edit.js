@@ -46,7 +46,6 @@ Guidelines:
     },
     required: ['file_path', 'old_string', 'new_string'],
   },
-  modes: ['chat', 'work'],
   isConcurrencySafe: () => false,
   isReadOnly: () => false,
   isDestructive: () => false,

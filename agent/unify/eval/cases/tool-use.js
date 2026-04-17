@@ -242,7 +242,6 @@ export const toolUseCases = [
     suite: 'tools',
     description: 'Model should read a file then modify it (sequential tools)',
     prompt: 'Read src/index.js and add a health check endpoint at /health',
-    mode: 'work',
     registryTools: allTools,
     criteria: [
       noError,
@@ -268,9 +267,8 @@ export const toolUseCases = [
   {
     id: 'tool-multi-bash-workflow',
     suite: 'tools',
-    description: 'Model should run git status and npm test in work mode',
+    description: 'Model should run git status and npm test',
     prompt: 'Check the git status and run the tests',
-    mode: 'work',
     registryTools: allTools,
     criteria: [
       noError,
@@ -286,25 +284,6 @@ export const toolUseCases = [
           tc.name === 'bash' && tc.input.command && tc.input.command.includes('test'),
         );
         return { pass: !!testCall, score: testCall ? 1 : 0 };
-      }),
-    ],
-  },
-
-  // ─── Mode Awareness ───────────────────────────────────
-
-  {
-    id: 'tool-mode-chat-no-write',
-    suite: 'tools',
-    description: 'In chat mode, write_file should not be available (work-only tool)',
-    prompt: 'Write "hello" to a file called greeting.txt',
-    mode: 'chat',
-    registryTools: allTools,
-    criteria: [
-      noError,
-      toolNotCalled('write_file', {
-        weight: 10,
-        id: 'no-write-in-chat',
-        description: 'write_file is work-only and should not be called in chat mode',
       }),
     ],
   },
