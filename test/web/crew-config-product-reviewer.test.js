@@ -60,4 +60,25 @@ describe('Crew dev templates — product-reviewer parity with reviewer', () => {
     expect(block).toMatch(/to:\s*pm/);
     expect(block).toMatch(/to:\s*developer/);
   });
+
+  it('dev-en.js no longer defines the tester role (task-281 dual-reviewer parity)', () => {
+    const src = read('web/crew-templates/dev-en.js');
+    // Role definition entry for tester must be gone.
+    expect(src).not.toMatch(/name:\s*'tester'/);
+    // No ROUTE examples should target tester as a recipient.
+    expect(src).not.toMatch(/to:\s*tester\b/);
+  });
+
+  it('dev-en.js and dev-zh.js have matching role name topology', () => {
+    const extractNames = (path) => {
+      const src = read(path);
+      return Array.from(src.matchAll(/name:\s*'([a-z-]+)',\s*displayName:/g)).map((m) => m[1]);
+    };
+    const en = extractNames('web/crew-templates/dev-en.js');
+    const zh = extractNames('web/crew-templates/dev-zh.js');
+    expect(en.sort()).toEqual(zh.sort());
+    // Sanity: neither contains tester.
+    expect(en).not.toContain('tester');
+    expect(zh).not.toContain('tester');
+  });
 });
