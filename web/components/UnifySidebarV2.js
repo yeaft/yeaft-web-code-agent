@@ -1,5 +1,5 @@
 /**
- * UnifySidebarV2 — task-300 skeleton + task-301 i18n polish.
+ * UnifySidebarV2 — task-300 skeleton + task-301 Part 1/2 integration.
  *
  * Standalone sidebar component with:
  *   - top search box (keyword + `#thread-name` prefix), i18n placeholder
@@ -8,38 +8,18 @@
  *   - Tasks tree (expand/collapse, max 3 levels)
  *   - emits `select-thread` / `select-task` on row click
  *
- * Phase 1 data is still mock (in component state). task-301 Part 2 swaps
- * `threads`/`tasks` for props/computed reading the real Pinia store once
- * task-299 ListThreads returns the full field set (unread/preview/etc).
+ * Part 2 (task-301): Phase-1 mock data is gone. The component now reads
+ * `store.unifyThreads` / `store.unifyTasks` directly — those arrays are
+ * populated by `thread_list_updated` / `task_list_updated` events sent
+ * from agent/unify/web-bridge.js (which wraps task-299 ThreadStore /
+ * TaskStore snapshots).
+ *
+ * All group labels, empty-state strings and the search placeholder go
+ * through the `$t()` i18n helper; nothing is hardcoded in English.
  */
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
-
-function buildMockThreads(now) {
-  return [
-    { id: 'main', name: 'main', title: 'Main thread', running: false, unread: 0, archived: false, lastActivityAt: now - 2 * 60 * 1000, preview: 'Ready.' },
-    { id: 't-design', name: 'design', title: 'Sidebar redesign discussion', running: true, unread: 3, archived: false, lastActivityAt: now - 30 * 60 * 1000, preview: 'Three-column vs sidebar-first' },
-    { id: 't-fix-ui', name: 'fix-ui', title: 'Fix mobile drawer glitch', running: false, unread: 1, archived: false, lastActivityAt: now - 4 * HOUR_MS, preview: 'Overlay flicker on iOS Safari' },
-    { id: 't-old-refactor', name: 'old-refactor', title: 'Refactor memory store (stalled)', running: false, unread: 0, archived: false, lastActivityAt: now - 3 * DAY_MS, preview: 'Paused — decision pending' },
-    { id: 't-exp-prompt', name: 'exp-prompt', title: 'Experiment: pragmatic personality', running: false, unread: 0, archived: false, lastActivityAt: now - 5 * DAY_MS, preview: 'A/B friendly vs pragmatic tone' },
-    { id: 't-done-01', name: 'done-migration', title: 'Archived — v0.1.300 migration', running: false, unread: 0, archived: true, lastActivityAt: now - 14 * DAY_MS, preview: 'Archived after release' }
-  ];
-}
-
-function buildMockTasks() {
-  return [
-    {
-      id: 'task-297', title: 'Unify: remove chat/work split', status: 'in_progress', threadLink: 't-design',
-      children: [
-        { id: 'task-297.1', title: 'Drop mode toggle UI', status: 'in_progress', threadLink: 't-design', children: [] },
-        { id: 'task-297.2', title: 'Unify prompt template', status: 'pending', threadLink: 't-design', children: [] }
-      ]
-    },
-    { id: 'task-298', title: 'Data layer: threads/tasks/input queue', status: 'in_progress', threadLink: null, children: [] },
-    { id: 'task-296', title: 'Clean up tester residue', status: 'done', threadLink: 't-done-01', children: [] }
-  ];
-}
 
 export default {
   name: 'UnifySidebarV2',
@@ -61,7 +41,7 @@ export default {
         <section class="usv2-group" :class="{ collapsed: !activeOpen }">
           <button type="button" class="usv2-group-header" @click="activeOpen = !activeOpen">
             <svg class="usv2-chevron" :class="{ open: activeOpen }" viewBox="0 0 24 24" width="10" height="10"><path fill="currentColor" d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
-            <span class="usv2-group-label">Active</span>
+            <span class="usv2-group-label">{{ label('activeThreads') }}</span>
             <span class="usv2-group-count">{{ grouped.active.length }}</span>
           </button>
           <div class="usv2-group-body" v-show="activeOpen">
@@ -69,14 +49,15 @@ export default {
               v-for="t in grouped.active"
               :key="t.id"
               class="usv2-thread"
+              :class="{ selected: t.id === activeThreadId }"
               @click="onSelectThread(t)"
             >
               <span class="usv2-dot usv2-dot-active" :class="{ running: t.running }"></span>
               <span class="usv2-thread-name">#{{ threadDisplayName(t) }}</span>
-              <span class="usv2-thread-title">{{ t.title }}</span>
+              <span class="usv2-thread-title">{{ t.title || t.goal || '' }}</span>
               <span class="usv2-unread" v-if="t.unread > 0">{{ t.unread }}</span>
             </div>
-            <div class="usv2-empty" v-if="grouped.active.length === 0">No active threads</div>
+            <div class="usv2-empty" v-if="grouped.active.length === 0">{{ label('emptyActive') }}</div>
           </div>
         </section>
 
@@ -84,7 +65,7 @@ export default {
         <section class="usv2-group" :class="{ collapsed: !idleOpen }">
           <button type="button" class="usv2-group-header" @click="idleOpen = !idleOpen">
             <svg class="usv2-chevron" :class="{ open: idleOpen }" viewBox="0 0 24 24" width="10" height="10"><path fill="currentColor" d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
-            <span class="usv2-group-label">Idle</span>
+            <span class="usv2-group-label">{{ label('idleThreads') }}</span>
             <span class="usv2-group-count">{{ grouped.idle.length }}</span>
           </button>
           <div class="usv2-group-body" v-show="idleOpen">
@@ -92,13 +73,14 @@ export default {
               v-for="t in grouped.idle"
               :key="t.id"
               class="usv2-thread"
+              :class="{ selected: t.id === activeThreadId }"
               @click="onSelectThread(t)"
             >
               <span class="usv2-dot usv2-dot-idle"></span>
               <span class="usv2-thread-name">#{{ threadDisplayName(t) }}</span>
-              <span class="usv2-thread-title">{{ t.title }}</span>
+              <span class="usv2-thread-title">{{ t.title || t.goal || '' }}</span>
             </div>
-            <div class="usv2-empty" v-if="grouped.idle.length === 0">No idle threads</div>
+            <div class="usv2-empty" v-if="grouped.idle.length === 0">{{ label('emptyIdle') }}</div>
           </div>
         </section>
 
@@ -106,7 +88,7 @@ export default {
         <section class="usv2-group usv2-group-archived" :class="{ collapsed: !archivedOpen }">
           <button type="button" class="usv2-group-header" @click="archivedOpen = !archivedOpen">
             <svg class="usv2-chevron" :class="{ open: archivedOpen }" viewBox="0 0 24 24" width="10" height="10"><path fill="currentColor" d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
-            <span class="usv2-group-label">Archived</span>
+            <span class="usv2-group-label">{{ label('archivedThreads') }}</span>
             <span class="usv2-group-count">{{ grouped.archived.length }}</span>
           </button>
           <div class="usv2-group-body" v-show="archivedOpen">
@@ -114,13 +96,14 @@ export default {
               v-for="t in grouped.archived"
               :key="t.id"
               class="usv2-thread usv2-thread-archived"
+              :class="{ selected: t.id === activeThreadId }"
               @click="onSelectThread(t)"
             >
               <span class="usv2-dot usv2-dot-archived"></span>
               <span class="usv2-thread-name">#{{ threadDisplayName(t) }}</span>
-              <span class="usv2-thread-title">{{ t.title }}</span>
+              <span class="usv2-thread-title">{{ t.title || t.goal || '' }}</span>
             </div>
-            <div class="usv2-empty" v-if="grouped.archived.length === 0">No archived threads</div>
+            <div class="usv2-empty" v-if="grouped.archived.length === 0">{{ label('emptyArchived') }}</div>
           </div>
         </section>
 
@@ -128,14 +111,14 @@ export default {
         <section class="usv2-group usv2-group-tasks" v-if="!threadOnlyQuery" :class="{ collapsed: !tasksOpen }">
           <button type="button" class="usv2-group-header" @click="tasksOpen = !tasksOpen">
             <svg class="usv2-chevron" :class="{ open: tasksOpen }" viewBox="0 0 24 24" width="10" height="10"><path fill="currentColor" d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
-            <span class="usv2-group-label">Tasks</span>
+            <span class="usv2-group-label">{{ label('tasks') }}</span>
             <span class="usv2-group-count">{{ filteredTasks.length }}</span>
           </button>
           <div class="usv2-group-body" v-show="tasksOpen">
             <div v-for="task in filteredTasks" :key="task.id">
               <div
                 class="usv2-task usv2-task-lvl-0"
-                :class="'usv2-task-status-' + task.status"
+                :class="['usv2-task-status-' + (task.status || 'unknown'), { selected: task.id === activeTaskId }]"
                 @click="onSelectTask(task)"
               >
                 <span
@@ -155,7 +138,7 @@ export default {
                   v-for="child in task.children"
                   :key="child.id"
                   class="usv2-task usv2-task-lvl-1"
-                  :class="'usv2-task-status-' + child.status"
+                  :class="['usv2-task-status-' + (child.status || 'unknown'), { selected: child.id === activeTaskId }]"
                   @click="onSelectTask(child)"
                 >
                   <span class="usv2-task-toggle-spacer"></span>
@@ -164,32 +147,58 @@ export default {
                 </div>
               </div>
             </div>
-            <div class="usv2-empty" v-if="filteredTasks.length === 0">No tasks match</div>
+            <div class="usv2-empty" v-if="filteredTasks.length === 0">{{ label('emptyTasks') }}</div>
           </div>
         </section>
       </div>
     </aside>
   `,
+  props: {
+    // Optional injection hooks — primarily for unit tests that don't
+    // mount Pinia. When null the component reads from store.
+    threadsSource: { type: Array, default: null },
+    tasksSource: { type: Array, default: null },
+  },
   data() {
-    const now = Date.now();
-    const tasks = buildMockTasks();
-    // Expand the first task with children by default so the tree is
-    // non-empty on first render — without hard-coding a specific id.
-    const firstParent = tasks.find((t) => (t.children || []).length > 0);
-    const expandedTasks = firstParent ? { [firstParent.id]: true } : {};
     return {
-      now,
-      threads: buildMockThreads(now),
-      tasks,
       searchQuery: '',
       activeOpen: true,
       idleOpen: false,
       archivedOpen: false,
       tasksOpen: true,
-      expandedTasks
+      expandedTasks: {},
+      now: Date.now(),
     };
   },
   computed: {
+    // Resolve the Pinia store lazily. Guarded so unit tests that mount
+    // the component without Pinia can still exercise the logic via the
+    // *Source props.
+    store() {
+      try {
+        if (typeof Pinia !== 'undefined' && Pinia.useChatStore) {
+          return Pinia.useChatStore();
+        }
+      } catch (_) { /* no-pinia test env */ }
+      return null;
+    },
+    // task-301 Part 2: real-store threads (or injected for tests).
+    // Each thread is the serialised shape from
+    // agent/unify/web-bridge.js#sendThreadListUpdate.
+    threads() {
+      if (Array.isArray(this.threadsSource)) return this.threadsSource;
+      return this.store?.unifyThreads || [];
+    },
+    tasks() {
+      if (Array.isArray(this.tasksSource)) return this.tasksSource;
+      return this.store?.unifyTasks || [];
+    },
+    activeThreadId() {
+      return this.store?.unifyActiveThreadId || null;
+    },
+    activeTaskId() {
+      return this.store?.unifyActiveTaskId || null;
+    },
     // Localized placeholder. Falls back gracefully when $t is not injected
     // (e.g. stand-alone unit tests that don't mount the component).
     placeholderText() {
@@ -201,15 +210,12 @@ export default {
     parsedQuery() {
       const raw = (this.searchQuery || '').trim();
       if (!raw) return { keyword: '', threadPrefix: null };
-      // Only `#thread` prefix supported in Phase 1; leading `#` wins.
       if (raw.startsWith('#') && raw.length > 1) {
         return { keyword: '', threadPrefix: raw.slice(1).toLowerCase() };
       }
       return { keyword: raw.toLowerCase(), threadPrefix: null };
     },
     threadOnlyQuery() {
-      // When a `#thread` prefix is active, the Tasks section is hidden
-      // because the user is explicitly scoping to threads.
       return this.parsedQuery.threadPrefix !== null;
     },
     filteredThreads() {
@@ -220,20 +226,25 @@ export default {
         }
         if (!keyword) return true;
         return (t.name || '').toLowerCase().includes(keyword)
-          || (t.title || '').toLowerCase().includes(keyword);
+          || (t.title || '').toLowerCase().includes(keyword)
+          || (t.goal || '').toLowerCase().includes(keyword);
       });
     },
     grouped() {
       const out = { active: [], idle: [], archived: [] };
       for (const t of this.filteredThreads) {
-        if (t.archived) out.archived.push(t);
-        else if (t.running || (this.now - (t.lastActivityAt || 0)) <= DAY_MS) out.active.push(t);
-        else out.idle.push(t);
+        if (t.archived || t.status === 'archived') {
+          out.archived.push(t);
+        } else if (t.running || (this.now - (t.lastActivityAt || t.lastMessageAt || 0)) <= DAY_MS) {
+          out.active.push(t);
+        } else {
+          out.idle.push(t);
+        }
       }
-      const byActivity = (a, b) => (b.lastActivityAt || 0) - (a.lastActivityAt || 0);
+      const byActivity = (a, b) =>
+        (b.lastActivityAt || b.lastMessageAt || 0) - (a.lastActivityAt || a.lastMessageAt || 0);
       out.idle.sort(byActivity);
       out.archived.sort(byActivity);
-      // Active: pin "main" first
       out.active.sort((a, b) => {
         if (a.id === 'main') return -1;
         if (b.id === 'main') return 1;
@@ -256,6 +267,23 @@ export default {
     }
   },
   methods: {
+    // Unified i18n lookup for sidebar labels/empties. Falls back to a
+    // built-in English dictionary when $t is not available (unit tests).
+    label(key) {
+      const full = `unify.sidebar.${key}`;
+      if (typeof this.$t === 'function') return this.$t(full);
+      const fallback = {
+        activeThreads: 'Active',
+        idleThreads: 'Idle',
+        archivedThreads: 'Archived',
+        tasks: 'Tasks',
+        emptyActive: 'No active threads',
+        emptyIdle: 'No idle threads',
+        emptyArchived: 'No archived threads',
+        emptyTasks: 'No tasks match',
+      };
+      return fallback[key] || full;
+    },
     // Display label for a thread row. The "main" thread (internal id
     // never changes) is shown as the localized "Inbox" label; all other
     // threads use their `name`.
@@ -269,15 +297,11 @@ export default {
     isTaskExpanded(id) {
       return !!this.expandedTasks[id];
     },
-    // Resolve a task's threadLink id to its display name. Looks up the
-    // thread in state rather than string-stripping a `t-` prefix, so the
-    // label stays correct even if thread ids don't follow that convention.
     threadLinkLabel(threadId) {
       const match = this.threads.find((t) => t.id === threadId);
       return match ? match.name : threadId;
     },
     toggleTask(id) {
-      // Reactive object mutation via Vue 3 proxy.
       this.expandedTasks = { ...this.expandedTasks, [id]: !this.expandedTasks[id] };
     },
     onSelectThread(t) {

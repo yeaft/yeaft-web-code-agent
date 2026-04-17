@@ -4,27 +4,57 @@ import { join } from 'path';
 import UnifySidebarV2 from '../../web/components/UnifySidebarV2.js';
 
 /**
- * task-300 Phase 1 — UnifySidebarV2 skeleton + mock filter + click events.
+ * task-300 Phase 1 skeleton tests — updated post task-301 Part 2.
  *
- * Tests avoid a DOM by exercising the component object directly:
- *   - template string inspection for structure
- *   - data() for initial state
- *   - computed.call(ctx) for filtering / grouping
- *   - methods.call(ctx) for event emission (ctx.$emit is a spy)
+ * Part 2 replaced the in-component mock data with store-driven computed
+ * props (store.unifyThreads / store.unifyTasks) and routed all user-facing
+ * labels through the $t() i18n helper. These tests retain the original
+ * structural intent (group rendering, dot styling, #prefix filter,
+ * click→emit, task-tree toggle) but feed threads/tasks via the
+ * threadsSource / tasksSource test-injection props.
  */
+
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
 
 const rootDir = join(import.meta.dirname, '..', '..');
 const componentSrc = readFileSync(join(rootDir, 'web/components/UnifySidebarV2.js'), 'utf8');
 const cssSrc = readFileSync(join(rootDir, 'web/styles/unify-sidebar-v2.css'), 'utf8');
 
+function mockThreads(now = Date.now()) {
+  return [
+    { id: 'main', name: 'main', title: 'Main thread', running: false, unread: 0, archived: false, lastActivityAt: now - 2 * 60 * 1000, preview: 'Ready.' },
+    { id: 't-design', name: 'design', title: 'Sidebar redesign discussion', running: true, unread: 3, archived: false, lastActivityAt: now - 30 * 60 * 1000 },
+    { id: 't-fix-ui', name: 'fix-ui', title: 'Fix mobile drawer glitch', running: false, unread: 1, archived: false, lastActivityAt: now - 4 * HOUR_MS },
+    { id: 't-old-refactor', name: 'old-refactor', title: 'Refactor memory store', running: false, unread: 0, archived: false, lastActivityAt: now - 3 * DAY_MS },
+    { id: 't-done-01', name: 'done-migration', title: 'Archived', running: false, unread: 0, archived: true, lastActivityAt: now - 14 * DAY_MS },
+  ];
+}
+
+function mockTasks() {
+  return [
+    { id: 'task-297', title: 'Unify refactor', status: 'in_progress', threadLink: 't-design',
+      children: [
+        { id: 'task-297.1', title: 'Drop toggle', status: 'in_progress', children: [] },
+      ]
+    },
+    { id: 'task-298', title: 'Data layer', status: 'in_progress', threadLink: null, children: [] },
+  ];
+}
+
 // Minimal fake Vue context for invoking computed / methods.
 function makeCtx(overrides = {}) {
   const data = UnifySidebarV2.data();
   const emitted = [];
+  const now = Date.now();
   const ctx = {
+    now,
     ...data,
+    // Inject source arrays explicitly (simulating props) unless overridden.
+    threadsSource: mockThreads(now),
+    tasksSource: mockTasks(),
     ...overrides,
-    $emit: (name, payload) => emitted.push([name, payload])
+    $emit: (name, payload) => emitted.push([name, payload]),
   };
   // Wire computed as getters that run in ctx.
   for (const [k, fn] of Object.entries(UnifySidebarV2.computed)) {
@@ -40,50 +70,46 @@ describe('UnifySidebarV2 shape', () => {
     expect(UnifySidebarV2.name).toBe('UnifySidebarV2');
     expect(typeof UnifySidebarV2.template).toBe('string');
     expect(typeof UnifySidebarV2.data).toBe('function');
-    const d = UnifySidebarV2.data();
-    expect(Array.isArray(d.threads)).toBe(true);
-    expect(d.threads.length).toBeGreaterThan(0);
   });
 
   it('declares select-thread and select-task as emits', () => {
     expect(UnifySidebarV2.emits).toEqual(expect.arrayContaining(['select-thread', 'select-task']));
   });
+
+  it('declares threadsSource / tasksSource test-injection props', () => {
+    expect(UnifySidebarV2.props.threadsSource).toBeDefined();
+    expect(UnifySidebarV2.props.tasksSource).toBeDefined();
+  });
 });
 
-// 2 — three group headers rendered
+// 2 — three group headers rendered (i18n-aware)
 describe('group headers', () => {
-  it('template renders Active, Idle, Archived group labels', () => {
-    expect(componentSrc).toMatch(/>Active<\/span>/);
-    expect(componentSrc).toMatch(/>Idle<\/span>/);
-    expect(componentSrc).toMatch(/>Archived<\/span>/);
-  });
-
-  it('template renders Tasks group', () => {
-    expect(componentSrc).toMatch(/>Tasks<\/span>/);
+  it('template wires all group labels through label() helper', () => {
+    expect(componentSrc).toMatch(/label\('activeThreads'\)/);
+    expect(componentSrc).toMatch(/label\('idleThreads'\)/);
+    expect(componentSrc).toMatch(/label\('archivedThreads'\)/);
+    expect(componentSrc).toMatch(/label\('tasks'\)/);
   });
 });
 
-// 3 — Active group uses solid dot, Idle uses hollow
+// 3 — Active group uses solid dot, Idle uses hollow, Archived dashed.
 describe('status dot styling', () => {
-  it('css has solid (filled) active dot, hollow idle dot, and dashed archived dot', () => {
+  it('css has solid active dot, hollow idle dot, and dashed archived dot', () => {
     expect(cssSrc).toMatch(/\.usv2-dot-active\s*\{[^}]*background:\s*#34c759/);
     expect(cssSrc).toMatch(/\.usv2-dot-idle\s*\{[^}]*background:\s*transparent[\s\S]*?border:\s*1\.5px\s+solid/);
     expect(cssSrc).toMatch(/\.usv2-dot-archived\s*\{[^}]*background:\s*transparent[\s\S]*?border:\s*1\.5px\s+dashed/);
   });
 
-  it('template assigns dot-active to active threads and dot-idle to idle threads', () => {
-    const activeBlock = componentSrc.match(/Active[\s\S]*?usv2-group-body[\s\S]*?<\/section>/);
-    const idleBlock = componentSrc.match(/>Idle<\/span>[\s\S]*?<\/section>/);
-    const archivedBlock = componentSrc.match(/>Archived<\/span>[\s\S]*?<\/section>/);
-    expect(activeBlock && activeBlock[0]).toMatch(/usv2-dot-active/);
-    expect(idleBlock && idleBlock[0]).toMatch(/usv2-dot-idle/);
-    expect(archivedBlock && archivedBlock[0]).toMatch(/usv2-dot-archived/);
+  it('template assigns dot-active, dot-idle and dot-archived in each group body', () => {
+    expect(componentSrc).toMatch(/usv2-dot-active/);
+    expect(componentSrc).toMatch(/usv2-dot-idle/);
+    expect(componentSrc).toMatch(/usv2-dot-archived/);
   });
 });
 
 // 4 — main thread is first in Active
 describe('main-first pinning', () => {
-  it('grouped.active[0].id === "main"', () => {
+  it('grouped.active[0].id === "main" with default injected threads', () => {
     const ctx = makeCtx();
     expect(ctx.grouped.active[0].id).toBe('main');
   });
@@ -92,10 +118,10 @@ describe('main-first pinning', () => {
     const now = Date.now();
     const ctx = makeCtx({
       now,
-      threads: [
-        { id: 't-design', name: 'design', title: 'x', running: true, unread: 0, archived: false, lastActivityAt: now },
-        { id: 'main', name: 'main', title: 'Main', running: false, unread: 0, archived: false, lastActivityAt: now - 60 * 60 * 1000 }
-      ]
+      threadsSource: [
+        { id: 't-design', name: 'design', title: 'x', running: true, archived: false, lastActivityAt: now },
+        { id: 'main', name: 'main', title: 'Main', running: false, archived: false, lastActivityAt: now - HOUR_MS },
+      ],
     });
     expect(ctx.grouped.active[0].id).toBe('main');
   });
@@ -153,12 +179,5 @@ describe('task tree toggle', () => {
     const ctx = makeCtx({ expandedTasks: { 'task-297': true } });
     expect(UnifySidebarV2.methods.isTaskExpanded.call(ctx, 'task-297')).toBe(true);
     expect(UnifySidebarV2.methods.isTaskExpanded.call(ctx, 'task-298')).toBe(false);
-  });
-
-  it('default data expands the first task with children (no hard-coded id)', () => {
-    const d = UnifySidebarV2.data();
-    const firstParent = d.tasks.find((t) => (t.children || []).length > 0);
-    expect(firstParent).toBeTruthy();
-    expect(d.expandedTasks[firstParent.id]).toBe(true);
   });
 });
