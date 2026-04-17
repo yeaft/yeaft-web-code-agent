@@ -56,6 +56,10 @@ function serializeMessage(msg) {
   if (msg.turnNumber != null) fm.push(`turnNumber: ${msg.turnNumber}`);
   if (msg.toolCallId) fm.push(`toolCallId: ${msg.toolCallId}`);
   if (msg.isError) fm.push(`isError: true`);
+  // Thread/task wiring (task-298). threadId defaults to 'main' at append time.
+  if (msg.threadId) fm.push(`threadId: ${msg.threadId}`);
+  if (msg.taskId) fm.push(`taskId: ${msg.taskId}`);
+  if (msg.parentMessageId) fm.push(`parentMessageId: ${msg.parentMessageId}`);
 
   // Token estimate
   const content = msg.content || '';
@@ -111,6 +115,9 @@ export function parseMessage(raw) {
       case 'toolCallId': msg.toolCallId = value; break;
       case 'isError': msg.isError = value === 'true'; break;
       case 'tokens_est': msg.tokens_est = parseInt(value, 10); break;
+      case 'threadId': msg.threadId = value; break;
+      case 'taskId': msg.taskId = value === 'null' ? null : value; break;
+      case 'parentMessageId': msg.parentMessageId = value === 'null' ? null : value; break;
       // toolCalls are multi-line YAML — handled separately below
     }
   }
@@ -207,6 +214,11 @@ export class ConversationStore {
     const fullMsg = {
       ...msg,
       id,
+      // task-298: every message belongs to a thread. 'main' is the default
+      // thread created at session init. taskId/parentMessageId remain optional.
+      threadId: msg.threadId || 'main',
+      taskId: msg.taskId || null,
+      parentMessageId: msg.parentMessageId || null,
       time: msg.time || new Date().toISOString(),
       tokens_est: msg.tokens_est || estimateTokens(msg.content || ''),
     };
@@ -452,6 +464,60 @@ export class ConversationStore {
   }
 
   // ─── Internal ───────────────────────────────────────────
+
+  /**
+   * Migrate legacy messages that lack a threadId to the 'main' thread.
+   * task-298. Scans both hot and cold directories, rewrites frontmatter
+   * in place only when needed, and returns the count of migrated files.
+   * Idempotent — a second call returns 0 because all files now have
+   * threadId set.
+   *
+   * @param {string} [defaultThreadId='main']
+   * @returns {{ scanned: number, migrated: number }}
+   */
+  migrateMessagesToThread(defaultThreadId = 'main') {
+    let scanned = 0;
+    let migrated = 0;
+    for (const dir of [this.#msgDir, this.#coldDir]) {
+      if (!existsSync(dir)) continue;
+      let files;
+      try {
+        files = readdirSync(dir).filter(f => f.endsWith('.md'));
+      } catch (err) {
+        if (isPermissionError(err)) continue;
+        throw err;
+      }
+      for (const file of files) {
+        scanned++;
+        const filePath = join(dir, file);
+        let raw;
+        try {
+          raw = readFileSync(filePath, 'utf8');
+        } catch (err) {
+          if (isPermissionError(err)) continue;
+          throw err;
+        }
+        const parsed = parseMessage(raw);
+        if (!parsed || parsed.threadId) continue;
+        parsed.threadId = defaultThreadId;
+        // taskId/parentMessageId remain null unless explicitly set.
+        try {
+          writeFileSync(filePath, serializeMessage(parsed), { encoding: 'utf8', mode: 0o644 });
+          migrated++;
+        } catch (err) {
+          if (isPermissionError(err)) {
+            if (!_permissionWarned) {
+              console.warn(`[Yeaft] Cannot migrate message ${parsed.id}: ${err.code}`);
+              _permissionWarned = true;
+            }
+            continue;
+          }
+          throw err;
+        }
+      }
+    }
+    return { scanned, migrated };
+  }
 
   /**
    * Load messages from a directory, sorted by filename, limited.

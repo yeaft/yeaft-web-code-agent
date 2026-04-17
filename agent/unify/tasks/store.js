@@ -32,6 +32,10 @@ function serializeTask(task) {
   ];
 
   if (task.parentId) fm.push(`parentId: ${task.parentId}`);
+  // task-298: nested task support + thread linkage. Both optional for
+  // backward-compat with tasks created before this schema addition.
+  if (task.parentTaskId) fm.push(`parentTaskId: ${task.parentTaskId}`);
+  if (task.primaryThreadId) fm.push(`primaryThreadId: ${task.primaryThreadId}`);
   if (task.createdAt) fm.push(`createdAt: ${task.createdAt}`);
   if (task.updatedAt) fm.push(`updatedAt: ${task.updatedAt}`);
 
@@ -95,6 +99,13 @@ function parseTask(raw) {
   // Normalize parentId
   if (!task.parentId || task.parentId === 'null') {
     task.parentId = null;
+  }
+  // task-298 additions: normalize nullables.
+  if (!task.parentTaskId || task.parentTaskId === 'null') {
+    task.parentTaskId = null;
+  }
+  if (!task.primaryThreadId || task.primaryThreadId === 'null') {
+    task.primaryThreadId = null;
   }
 
   return task;
@@ -204,6 +215,9 @@ export class TaskStore {
    * @returns {object} The created task
    */
   create(task) {
+    // task-298: normalize new optional fields so absent → explicit null.
+    if (task.parentTaskId === undefined) task.parentTaskId = null;
+    if (task.primaryThreadId === undefined) task.primaryThreadId = null;
     this.#tasks.set(task.id, task);
 
     if (!this.#readOnly) {
@@ -273,6 +287,41 @@ export class TaskStore {
     if (filter?.status) results = results.filter(t => t.status === filter.status);
     if (filter?.priority) results = results.filter(t => t.priority === filter.priority);
     return results;
+  }
+
+  /**
+   * task-298: return direct children of a task (parentTaskId match),
+   * sorted by createdAt ascending. Numeric createdAt stored as epoch ms.
+   * @param {string} parentTaskId
+   * @returns {object[]}
+   */
+  children(parentTaskId) {
+    const kids = [...this.#tasks.values()].filter(t => t.parentTaskId === parentTaskId);
+    kids.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+    return kids;
+  }
+
+  /**
+   * task-298: return root tasks (parentTaskId is null) with a recursive
+   * `children` property attached to each node. Pure snapshot — not live.
+   * @returns {object[]}
+   */
+  tree() {
+    const all = [...this.#tasks.values()];
+    const byParent = new Map();
+    for (const t of all) {
+      const p = t.parentTaskId || null;
+      if (!byParent.has(p)) byParent.set(p, []);
+      byParent.get(p).push(t);
+    }
+    for (const arr of byParent.values()) {
+      arr.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+    }
+    const build = (node) => ({
+      ...node,
+      children: (byParent.get(node.id) || []).map(build),
+    });
+    return (byParent.get(null) || []).map(build);
   }
 
   /**
