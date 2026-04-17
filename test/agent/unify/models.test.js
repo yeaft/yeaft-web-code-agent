@@ -38,8 +38,12 @@ describe('MODEL_REGISTRY', () => {
     for (const [name, info] of MODEL_REGISTRY) {
       expect(['anthropic', 'chat-completions']).toContain(info.adapter);
       expect(info.baseUrl).toBeTruthy();
-      expect(info.contextWindow).toBeGreaterThan(0);
-      expect(info.maxOutputTokens).toBeGreaterThan(0);
+      // gpt-5-{mini,nano,pro} intentionally omit context/output — their real limits
+      // should come from provider config rather than unverified hardcoded values (task-284).
+      if (!['gpt-5-mini', 'gpt-5-nano', 'gpt-5-pro'].includes(name)) {
+        expect(info.contextWindow).toBeGreaterThan(0);
+        expect(info.maxOutputTokens).toBeGreaterThan(0);
+      }
       expect(info.displayName).toBeTruthy();
     }
   });
@@ -129,7 +133,10 @@ describe('listModels', () => {
       expect(m.name).toBeTruthy();
       expect(m.adapter).toBeTruthy();
       expect(m.baseUrl).toBeTruthy();
-      expect(m.contextWindow).toBeGreaterThan(0);
+      // See note above — gpt-5-{mini,nano,pro} omit hardcoded ctx/max.
+      if (!['gpt-5-mini', 'gpt-5-nano', 'gpt-5-pro'].includes(m.name)) {
+        expect(m.contextWindow).toBeGreaterThan(0);
+      }
       expect(m.displayName).toBeTruthy();
     }
   });

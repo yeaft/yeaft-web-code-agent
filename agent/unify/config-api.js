@@ -11,6 +11,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { DEFAULT_YEAFT_DIR } from './init.js';
+import { normalizeProviderModels, serializeModelForPersistence } from './models.js';
 
 /**
  * Read the LLM-relevant portion of config.json.
@@ -87,7 +88,17 @@ export function updateLlmConfig(update, dir) {
         return { error: `Provider "${p.name}" must have at least one model` };
       }
     }
-    existing.providers = update.providers;
+    // Normalize + re-serialize each provider's models so that:
+    //   - id-only entries are persisted as plain strings (back-compat)
+    //   - entries with ctx / maxOutput are persisted as objects
+    //   - empty / 0 / NaN values get stripped
+    existing.providers = update.providers.map(p => {
+      const normalized = normalizeProviderModels(p);
+      return {
+        ...p,
+        models: normalized.map(serializeModelForPersistence),
+      };
+    });
   }
 
   // Update model selections

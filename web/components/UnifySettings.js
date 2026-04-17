@@ -57,12 +57,14 @@ export default {
                   <label>{{ $t('settings.llm.providerName') }}</label>
                   <input type="text" v-model="provider.name" :placeholder="$t('settings.llm.providerNamePlaceholder')" @input="markDirty" />
                 </div>
-                <div class="unify-settings-field" style="flex:0 0 140px">
+                <div class="unify-settings-field" style="flex:0 0 180px">
                   <label>{{ $t('settings.llm.protocol') }}</label>
                   <select v-model="provider.protocol" @change="onProtocolChange(idx)">
                     <option value="openai">{{ $t('settings.llm.protocolOpenAI') }}</option>
+                    <option value="openai-responses">{{ $t('settings.llm.protocolOpenAIResponses') }}</option>
                     <option value="anthropic">{{ $t('settings.llm.protocolAnthropic') }}</option>
                   </select>
+                  <small class="unify-settings-hint unify-settings-protocol-hint">{{ protocolHint(provider.protocol) }}</small>
                 </div>
               </div>
 
@@ -85,8 +87,39 @@ export default {
               <div class="unify-settings-field">
                 <label>{{ $t('settings.llm.models') }}</label>
                 <p class="unify-settings-hint">{{ $t('settings.llm.modelsHint') }}</p>
-                <textarea v-model="providerModelsText[idx]" :placeholder="$t('settings.llm.modelsPlaceholder')"
-                  @input="onModelsTextChange(idx, $event)" rows="3"></textarea>
+                <div class="unify-settings-model-rows">
+                  <div class="unify-settings-model-row" v-for="(mrow, midx) in provider.models" :key="midx">
+                    <input
+                      class="unify-settings-model-id"
+                      type="text"
+                      v-model="mrow.id"
+                      :placeholder="$t('settings.llm.modelsPlaceholder')"
+                      @input="markDirty" />
+                    <input
+                      class="unify-settings-model-ctx llm-model-ctx"
+                      type="number"
+                      min="0"
+                      v-model.number="mrow.contextWindow"
+                      :placeholder="$t('settings.llm.modelCtxPlaceholder')"
+                      :title="$t('settings.llm.modelCtxPlaceholder')"
+                      @input="markDirty" />
+                    <input
+                      class="unify-settings-model-max llm-model-max"
+                      type="number"
+                      min="0"
+                      v-model.number="mrow.maxOutput"
+                      :placeholder="$t('settings.llm.modelMaxPlaceholder')"
+                      :title="$t('settings.llm.modelMaxPlaceholder')"
+                      @input="markDirty" />
+                    <button class="unify-settings-icon-btn" @click="removeModel(idx, midx)" :title="$t('settings.llm.removeProvider')">
+                      <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+                    </button>
+                  </div>
+                  <button class="unify-settings-add-btn" @click="addModel(idx)">
+                    <svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+                    {{ $t('settings.llm.addProvider') }}
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -138,6 +171,8 @@ export default {
   `,
   setup(props, { emit }) {
     const store = Pinia.useChatStore();
+    const instance = Vue.getCurrentInstance();
+    const $t = (key) => instance?.proxy?.$t?.(key) ?? key;
 
     const loading = Vue.ref(false);
     const loadError = Vue.ref(null);
@@ -159,8 +194,11 @@ export default {
       const refs = [];
       for (const p of localProviders.value) {
         if (!p.name) continue;
-        const models = Array.isArray(p.models) ? p.models.filter(m => m) : [];
-        for (const m of models) refs.push(`${p.name}/${m}`);
+        const models = Array.isArray(p.models) ? p.models : [];
+        for (const m of models) {
+          const id = m && typeof m === 'object' ? m.id : m;
+          if (id) refs.push(`${p.name}/${id}`);
+        }
       }
       return refs;
     });
@@ -188,18 +226,56 @@ export default {
       loadError.value = null;
       needsSetup.value = !!config.needsSetup;
 
+      // Normalize each model entry to `{ id, contextWindow?, maxOutput? }`
+      // so the UI can bind uniformly regardless of legacy string format.
       localProviders.value = (config.providers || []).map(p => ({
         name: p.name || '',
         baseUrl: p.baseUrl || '',
         apiKey: p.apiKey || '',
         protocol: p.protocol || 'openai',
-        models: Array.isArray(p.models) ? [...p.models] : [],
+        models: Array.isArray(p.models) ? p.models.map(toModelRow).filter(r => r) : [],
       }));
 
-      providerModelsText.value = localProviders.value.map(p => (p.models || []).join(', '));
+      providerModelsText.value = localProviders.value.map(() => '');
       localPrimaryModel.value = config.primaryModel || null;
       localFastModel.value = config.fastModel || null;
       isDirty.value = false;
+    }
+
+    // Convert a string or object model entry into a ui-friendly row.
+    function toModelRow(entry) {
+      if (typeof entry === 'string') {
+        const id = entry.trim();
+        return id ? { id, contextWindow: null, maxOutput: null } : null;
+      }
+      if (entry && typeof entry === 'object' && typeof entry.id === 'string') {
+        return {
+          id: entry.id,
+          contextWindow: toUiNumber(entry.contextWindow),
+          maxOutput: toUiNumber(entry.maxOutput),
+        };
+      }
+      return null;
+    }
+
+    function toUiNumber(v) {
+      if (v === null || v === undefined || v === '') return null;
+      const n = Number(v);
+      return Number.isFinite(n) && n > 0 ? n : null;
+    }
+
+    // Normalize a single model row for WS payload (used by save).
+    // id-only → string; with ctx/max → { id, contextWindow?, maxOutput? }.
+    function normalizeModelForSave(row) {
+      if (!row || !row.id || !String(row.id).trim()) return null;
+      const id = String(row.id).trim();
+      const ctx = toUiNumber(row.contextWindow);
+      const max = toUiNumber(row.maxOutput);
+      if (ctx == null && max == null) return id;
+      const obj = { id };
+      if (ctx != null) obj.contextWindow = ctx;
+      if (max != null) obj.maxOutput = max;
+      return obj;
     }
 
     // Watch for llmConfig updates from store
@@ -243,24 +319,48 @@ export default {
       markDirty();
     }
 
+    function addModel(idx) {
+      if (!Array.isArray(localProviders.value[idx].models)) {
+        localProviders.value[idx].models = [];
+      }
+      localProviders.value[idx].models.push({ id: '', contextWindow: null, maxOutput: null });
+      markDirty();
+    }
+
+    function removeModel(providerIdx, modelIdx) {
+      localProviders.value[providerIdx].models.splice(modelIdx, 1);
+      markDirty();
+    }
+
     function onModelsTextChange(idx, event) {
+      // Legacy textarea path — still parse for back-compat if anything calls this.
       const text = event.target.value;
       providerModelsText.value[idx] = text;
-      localProviders.value[idx].models = text.split(/[\n,]+/).map(l => l.trim()).filter(l => l);
+      localProviders.value[idx].models = text.split(/[\n,]+/)
+        .map(l => l.trim()).filter(l => l)
+        .map(id => ({ id, contextWindow: null, maxOutput: null }));
       markDirty();
     }
 
     function onProtocolChange(idx) {
       const provider = localProviders.value[idx];
-      const currentModels = (provider.models || []).filter(m => m);
+      const currentModels = (provider.models || []).filter(m => m && (typeof m === 'string' ? m : m.id));
       if (currentModels.length === 0) {
         const presets = provider.protocol === 'anthropic'
           ? ['claude-sonnet-4-20250514', 'claude-opus-4-20250514', 'claude-haiku-3-20250414']
-          : ['gpt-5', 'gpt-4.1', 'gpt-4.1-mini', 'o3', 'o4-mini'];
-        provider.models = [...presets];
-        providerModelsText.value[idx] = presets.join(', ');
+          : provider.protocol === 'openai-responses'
+            ? ['gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-pro']
+            : ['gpt-5', 'gpt-4.1', 'gpt-4.1-mini', 'o3', 'o4-mini'];
+        provider.models = presets.map(id => ({ id, contextWindow: null, maxOutput: null }));
+        providerModelsText.value[idx] = '';
       }
       markDirty();
+    }
+
+    function protocolHint(protocol) {
+      if (protocol === 'anthropic') return $t('settings.llm.protocolHint.anthropic');
+      if (protocol === 'openai-responses') return $t('settings.llm.protocolHint.openaiResponses');
+      return $t('settings.llm.protocolHint.openai');
     }
 
     function toggleApiKey(idx) {
@@ -277,11 +377,16 @@ export default {
       const providers = localProviders.value
         .filter(p => p.name && p.baseUrl)
         .map(p => {
+          // Serialize each model row: id-only → string; with ctx/max → object.
+          // This preserves back-compat with existing `models: ["gpt-4"]` configs.
+          const models = (p.models || [])
+            .map(normalizeModelForSave)
+            .filter(m => m);
           const clean = {
             name: p.name.trim(),
             baseUrl: p.baseUrl.trim(),
             apiKey: p.apiKey || '',
-            models: (p.models || []).filter(m => m),
+            models,
           };
           if (p.protocol && p.protocol !== 'openai') clean.protocol = p.protocol;
           return clean;
@@ -331,7 +436,9 @@ export default {
       allModelRefs, isDirty, saving, showApiKey,
       saveMessage, saveError,
       markDirty, addProvider, removeProvider,
+      addModel, removeModel,
       onModelsTextChange, onProtocolChange, toggleApiKey, saveConfig,
+      protocolHint,
     };
   },
 };

@@ -55,6 +55,7 @@ export default {
                 <span class="unify-model-check" v-else></span>
                 <span class="unify-model-option-label">{{ m.label || m.id }}</span>
                 <span class="unify-model-option-provider" v-if="m.provider">{{ m.provider }}</span>
+                <span class="unify-model-option-ctx" v-if="m.contextWindow">{{ formatModelCtx(m) }}</span>
               </div>
             </div>
           </div>
@@ -332,6 +333,25 @@ export default {
       modelDropdownOpen.value = false;
     };
 
+    // Format a token count compactly: 400000 → "400k", 1048576 → "1m", <1000 → raw.
+    const formatTokens = (n) => {
+      if (!n || !Number.isFinite(n) || n <= 0) return '';
+      if (n >= 1_000_000) return `${Math.round(n / 100_000) / 10}m`;
+      if (n >= 1000) return `${Math.round(n / 1000)}k`;
+      return String(n);
+    };
+
+    // Context line for a model-dropdown row:
+    //   both ctx + max → "400k · 128k out"
+    //   only ctx       → "400k"
+    //   neither        → "" (template uses v-if to hide the span entirely)
+    const formatModelCtx = (m) => {
+      const ctx = formatTokens(m?.contextWindow);
+      const max = formatTokens(m?.maxOutput);
+      if (ctx && max) return `${ctx} · ${max} out`;
+      return ctx;
+    };
+
     const closeModelDropdownOutside = (e) => {
       if (!modelDropdownOpen.value) return;
       const row = e.target.closest('.unify-topbar-model, .unify-topbar-model-dropdown');
@@ -371,6 +391,8 @@ export default {
       toggleTurnExpand,
       toggleModelDropdown,
       selectModel,
+      formatTokens,
+      formatModelCtx,
       toggleSettings,
       onSettingsSaved,
       formatMessages,
