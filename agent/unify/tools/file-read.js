@@ -60,7 +60,6 @@ Guidelines:
     },
     required: ['file_path'],
   },
-  modes: ['chat', 'work'],
   isConcurrencySafe: () => true,
   isReadOnly: () => true,
   async execute(input, ctx) {

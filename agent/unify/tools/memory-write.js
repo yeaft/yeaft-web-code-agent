@@ -51,7 +51,6 @@ Importance levels: low, normal, high, critical`,
     },
     required: ['action'],
   },
-  modes: ['chat', 'work'],
   isConcurrencySafe: () => false,
   isReadOnly: () => false,
   async execute(input, ctx) {

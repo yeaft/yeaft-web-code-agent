@@ -116,7 +116,6 @@ describe('buildSystemPrompt — skillContent', () => {
   it('should include skill content when provided', () => {
     const result = buildSystemPrompt({
       language: 'en',
-      mode: 'chat',
       skillContent: '## Skill: test-skill\n\nDo something useful.',
     });
     expect(result).toContain('## Skill: test-skill');
@@ -124,8 +123,8 @@ describe('buildSystemPrompt — skillContent', () => {
   });
 
   it('should not change output when skillContent is omitted', () => {
-    const withoutSkill = buildSystemPrompt({ language: 'en', mode: 'chat' });
-    const withEmptySkill = buildSystemPrompt({ language: 'en', mode: 'chat', skillContent: '' });
+    const withoutSkill = buildSystemPrompt({ language: 'en' });
+    const withEmptySkill = buildSystemPrompt({ language: 'en', skillContent: '' });
     // Both should be identical (falsy skillContent is skipped)
     expect(withoutSkill).toBe(withEmptySkill);
   });
@@ -133,7 +132,6 @@ describe('buildSystemPrompt — skillContent', () => {
   it('should place skill content after tools and before memory', () => {
     const result = buildSystemPrompt({
       language: 'en',
-      mode: 'chat',
       toolNames: ['search'],
       skillContent: '## Skill: my-skill\n\nInstructions here.',
       memory: { profile: 'User likes TypeScript' },
@@ -159,7 +157,7 @@ describe('Engine — ToolRegistry integration', () => {
       name: 'test_tool',
       description: 'A test tool',
       parameters: { type: 'object', properties: {} },
-      modes: ['chat', 'work'],
+
       execute: async () => 'ok',
     }));
 
@@ -190,7 +188,7 @@ describe('Engine — ToolRegistry integration', () => {
       name: 'ctx_tool',
       description: 'Captures context',
       parameters: { type: 'object', properties: {} },
-      modes: ['chat'],
+
       execute: async (input, ctx) => {
         receivedCtx = ctx;
         return 'done';
@@ -230,14 +228,14 @@ describe('Engine — ToolRegistry integration', () => {
       name: 'chat_only',
       description: 'Chat only',
       parameters: { type: 'object', properties: {} },
-      modes: ['chat'],
+
       execute: async () => 'ok',
     }));
     registry.register(defineTool({
       name: 'work_only',
       description: 'Work only',
       parameters: { type: 'object', properties: {} },
-      modes: ['work'],
+
       execute: async () => 'ok',
     }));
 
@@ -294,14 +292,14 @@ describe('Engine — ToolRegistry integration', () => {
       name: 'alpha',
       description: 'A',
       parameters: {},
-      modes: ['chat'],
+
       execute: async () => '',
     }));
     registry.register(defineTool({
       name: 'beta',
       description: 'B',
       parameters: {},
-      modes: ['work'],
+
       execute: async () => '',
     }));
 
@@ -569,7 +567,7 @@ describe('loadSession', () => {
       name: 'custom_tool',
       description: 'Custom',
       parameters: { type: 'object', properties: {} },
-      modes: ['chat'],
+
       execute: async () => 'custom',
     });
 

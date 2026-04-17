@@ -41,7 +41,6 @@ unless discard_changes is set to true.`,
     },
     required: ['path', 'action'],
   },
-  modes: ['chat', 'work'],
   isDestructive: (input) => input?.action === 'remove',
   async execute(input, ctx) {
     const worktreePath = resolve(input.path);

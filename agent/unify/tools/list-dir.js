@@ -37,7 +37,6 @@ This is better than using Bash with 'ls' because it provides structured output.`
       },
     },
   },
-  modes: ['chat', 'work'],
   isConcurrencySafe: () => true,
   isReadOnly: () => true,
   async execute(input, ctx) {

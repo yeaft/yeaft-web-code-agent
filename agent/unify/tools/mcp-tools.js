@@ -31,7 +31,6 @@ Usage guidelines:
       },
     },
   },
-  modes: ['chat', 'work'],
   isConcurrencySafe: () => true,
   isReadOnly: () => true,
   async execute(input, ctx) {
@@ -88,7 +87,6 @@ Usage guidelines:
     },
     required: ['tool_name'],
   },
-  modes: ['chat', 'work'],
   async execute(input, ctx) {
     const mcpManager = ctx?.mcpManager;
 

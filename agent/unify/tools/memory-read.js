@@ -32,7 +32,6 @@ Actions:
     },
     required: ['action'],
   },
-  modes: ['chat', 'work'],
   isConcurrencySafe: () => true,
   isReadOnly: () => true,
   async execute(input, ctx) {

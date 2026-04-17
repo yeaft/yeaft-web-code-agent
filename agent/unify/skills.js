@@ -381,17 +381,21 @@ export class SkillManager {
   }
 
   /**
-   * List all skills (metadata only — no content), optionally filtered by mode.
+   * List all skills (metadata only — no content).
    * This is the "progressive disclosure" list tier.
    *
-   * @param {string} [mode] — 'chat' | 'work' | undefined (all)
+   * task-311: the legacy `mode` parameter (chat/work filter) is accepted but
+   * ignored — Unify no longer has mode distinction, so every skill is treated
+   * as universally applicable. The `mode` field on each record is still
+   * surfaced for historic YAML compatibility.
+   *
+   * @param {string} [_mode] — deprecated, ignored
    * @returns {Array<{ name: string, description: string, trigger: string, mode: string, category?: string, platforms?: string[], keywords?: string[], source: string, hasReferences: boolean, hasTemplates: boolean }>}
    */
-  list(mode) {
+  list(_mode) {
     const skills = [...this.#skills.values()];
-    const filtered = mode ? skills.filter(s => s.mode === 'both' || s.mode === mode) : skills;
 
-    return filtered.map(s => ({
+    return skills.map(s => ({
       name: s.name,
       description: s.description || '',
       trigger: s.trigger || '',
@@ -447,20 +451,22 @@ export class SkillManager {
    * Find skills relevant to a prompt.
    * Enhanced matching: regex triggers, keyword lists, name/description match.
    *
+   * task-311: the `mode` parameter is accepted but ignored (all skills are
+   * considered universally applicable since mode distinction was removed).
+   *
    * @param {string} prompt — user's prompt
-   * @param {string} [mode] — filter by mode
+   * @param {string} [_mode] — deprecated, ignored
    * @returns {Skill[]}
    */
-  findRelevant(prompt, mode) {
+  findRelevant(prompt, _mode) {
     if (!prompt) return [];
 
     const lowerPrompt = prompt.toLowerCase();
     const cleanPrompt = lowerPrompt.replace(/[^\w\s]/g, '');
     const promptWords = cleanPrompt.split(/\s+/).filter(w => w.length > 2);
     const allSkills = [...this.#skills.values()];
-    const filtered = mode ? allSkills.filter(s => s.mode === 'both' || s.mode === mode) : allSkills;
 
-    return filtered.filter(skill => {
+    return allSkills.filter(skill => {
       // 1. Regex or keyword trigger match
       if (skill.trigger && matchTrigger(skill.trigger, lowerPrompt, promptWords)) {
         return true;

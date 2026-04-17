@@ -23,7 +23,7 @@ afterEach(() => {
 describe('DebugTrace', () => {
   describe('startTurn + endTurn', () => {
     it('should create and complete a turn', () => {
-      const turnId = trace.startTurn({ traceId: 't1', mode: 'chat', turnNumber: 1 });
+      const turnId = trace.startTurn({ traceId: 't1', turnNumber: 1 });
       expect(turnId).toBeTruthy();
 
       trace.endTurn(turnId, {

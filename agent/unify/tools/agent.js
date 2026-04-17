@@ -229,7 +229,6 @@ Guidelines:
     },
     required: ['name'],
   },
-  modes: ['work'],
   isConcurrencySafe: () => false,
   isReadOnly: () => false,
   async execute(input, ctx) {

@@ -529,13 +529,6 @@ export const useChatStore = defineStore('chat', {
         agentId,
       });
     },
-    setUnifyMode(_mode) {
-      // Deprecated: Unify no longer has chat/work mode distinction.
-      // Retained as a no-op to avoid breaking callers during migration.
-      if (typeof console !== 'undefined' && console.warn) {
-        console.warn('[unify] setUnifyMode is deprecated; Unify now runs in a single unified mode.');
-      }
-    },
     // ★ task-301: Toggle experimental Sidebar V2. Persisted so refresh keeps it.
     setUnifySidebarV2Enabled(enabled) {
       this.unifySidebarV2Enabled = !!enabled;

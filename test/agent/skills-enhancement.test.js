@@ -245,8 +245,8 @@ describe('SkillManager — directory-based skills', () => {
     expect(names).toContain('keyword-skill');
   });
 
-  it('findRelevant() filters by mode', () => {
-    const results = manager.findRelevant('review code', 'work');
+  it('findRelevant() returns all matching skills (mode filter removed by task-311)', () => {
+    const results = manager.findRelevant('review code');
     const names = results.map(s => s.name);
     expect(names).toContain('code-review');
   });

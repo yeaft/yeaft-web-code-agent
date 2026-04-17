@@ -63,7 +63,6 @@ Supports PNG, JPEG, GIF, BMP, WebP, SVG, and ICO.`,
     },
     required: ['file_path'],
   },
-  modes: ['chat', 'work'],
   isConcurrencySafe: () => true,
   isReadOnly: () => true,
   async execute(input, ctx) {

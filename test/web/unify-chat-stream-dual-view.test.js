@@ -190,16 +190,5 @@ describe('task-303 breadcrumb CSS', () => {
 });
 
 // =====================================================================
-// Bonus: task-297 JSDoc nits folded into this PR
+// task-311: chat/work mode toggle fully removed — JSDoc nits deleted
 // =====================================================================
-describe('task-297 JSDoc nits (consumed in task-303 PR)', () => {
-  it("Engine.query's mode param JSDoc calls out that only 'dream' is acted on", () => {
-    const src = readFileSync(path.join(ROOT, 'agent/unify/engine.js'), 'utf8');
-    expect(src).toMatch(/mode[\s\S]{0,200}['"`]dream['"`]/);
-  });
-
-  it('ToolDef.modes is marked @deprecated in tool types', () => {
-    const src = readFileSync(path.join(ROOT, 'agent/unify/tools/types.js'), 'utf8');
-    expect(src).toMatch(/@deprecated[\s\S]{0,200}modes|modes[\s\S]{0,200}@deprecated/);
-  });
-});

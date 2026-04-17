@@ -115,7 +115,6 @@ Guidelines:
     },
     required: ['patch'],
   },
-  modes: ['chat', 'work'],
   isConcurrencySafe: () => false,
   isReadOnly: () => false,
   isDestructive: () => false,

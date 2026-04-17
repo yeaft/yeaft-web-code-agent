@@ -374,7 +374,6 @@ describe('ConversationStore — normal operation (writable dir)', () => {
     const msg = store.append({
       role: 'user',
       content: 'Hello world',
-      mode: 'chat',
     });
 
     expect(msg.id).toMatch(/^m\d{4}$/);

@@ -25,7 +25,6 @@ The message is queued for the agent to process.`,
     },
     required: ['agent_id', 'message'],
   },
-  modes: ['work'],
   isConcurrencySafe: () => false,
   isReadOnly: () => false,
   async execute(input, ctx) {

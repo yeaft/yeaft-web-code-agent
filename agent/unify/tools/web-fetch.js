@@ -62,7 +62,6 @@ Guidelines:
     },
     required: ['url'],
   },
-  modes: ['chat', 'work'],
   isConcurrencySafe: () => true,
   isReadOnly: () => true,
   async execute(input, ctx) {

@@ -31,8 +31,6 @@ describe('index.js tool registration', () => {
       expect(typeof tool.description).toBe('string');
       expect(tool.parameters).toBeTruthy();
       expect(typeof tool.execute).toBe('function');
-      expect(Array.isArray(tool.modes)).toBe(true);
-      expect(tool.modes.length).toBeGreaterThan(0);
     }
   });
 
@@ -614,7 +612,7 @@ describe('Agent tools', () => {
     const agentMod = await import(`${TOOLS_DIR}/agent.js`);
     const tool = agentMod.default;
     const result = JSON.parse(await tool.execute(
-      { name: 'test-agent-create', task: 'Do something', mode: 'work' },
+      { name: 'test-agent-create', task: 'Do something' },
       {}
     ));
     expect(result.success).toBe(true);
@@ -886,16 +884,6 @@ describe('ToolSearch tool', () => {
       {}
     ));
     expect(result.totalResults).toBeGreaterThan(0);
-  });
-
-  it('filters by mode', async () => {
-    const mod = await import(`${TOOLS_DIR}/tool-search.js`);
-    const result = JSON.parse(await mod.default.execute(
-      { query: 'Agent', mode: 'chat' },
-      {}
-    ));
-    // Agent is work-only (coordination), so should not appear in chat mode
-    expect(result.totalResults).toBe(0);
   });
 });
 

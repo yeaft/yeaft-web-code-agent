@@ -216,7 +216,7 @@ describe('Engine', () => {
       });
 
       const events = [];
-      for await (const event of engine.query({ prompt: 'test', mode: 'work' })) {
+      for await (const event of engine.query({ prompt: 'test' })) {
         events.push(event);
       }
 
