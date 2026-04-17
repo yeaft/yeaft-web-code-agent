@@ -434,7 +434,10 @@ export default {
       return p;
     },
     isExpandableRole(name) {
-      return ['developer', 'tester', 'reviewer'].includes(name);
+      // Roles that expand by dev count (dev-1..dev-N, rev-1..rev-N, etc).
+      // TODO: replace this whitelist with an explicit `expandable: true` field
+      // on BUILTIN_ROLES / templates so UI doesn't need to track role names.
+      return ['developer', 'tester', 'reviewer', 'product-reviewer'].includes(name);
     },
     isFirstExpandableOfType(role, idx) {
       const type = role.roleType || role.name;
