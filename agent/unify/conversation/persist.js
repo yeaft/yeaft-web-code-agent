@@ -175,7 +175,8 @@ export class ConversationStore {
   #coldDir;     // ~/.yeaft/conversation/cold
   #indexPath;   // ~/.yeaft/conversation/index.md
   #compactPath; // ~/.yeaft/conversation/compact.md
-  #nextSeq;     // next message sequence number
+  #nextSeq;     // next message sequence number (global, legacy)
+  #nextSeqByThread; // Map<threadId, number> — per-thread counters (task-314)
 
   /**
    * @param {string} dir — Yeaft root directory (e.g. ~/.yeaft)
@@ -188,6 +189,7 @@ export class ConversationStore {
     this.#indexPath = join(dir, 'conversation', 'index.md');
     this.#compactPath = join(dir, 'conversation', 'compact.md');
     this.#nextSeq = null;
+    this.#nextSeqByThread = new Map();
 
     // Ensure directories exist (graceful on permission errors)
     for (const d of [this.#convDir, this.#msgDir, this.#coldDir]) {
@@ -546,8 +548,20 @@ export class ConversationStore {
   copyThreadUpTo(sourceId, targetId, atMessageId) {
     if (!sourceId || !targetId || sourceId === targetId) return 0;
     if (!atMessageId || typeof atMessageId !== 'string') return 0;
-    // Collect candidate files from both dirs, then sort by the m-id suffix
-    // so chronological order holds across hot/cold boundary.
+    // task-314 (rev-2 feedback): the target (forked) thread owns its own
+    // per-thread id namespace restarting at m0001. Source files are never
+    // touched, so there is no id-collision across threads (each thread
+    // loads from its own directory or by threadId filter on the shared
+    // legacy dir).
+    const targetDir = this.#threadMsgDir(targetId);
+    try {
+      if (!existsSync(targetDir)) mkdirSync(targetDir, { recursive: true, mode: 0o755 });
+    } catch (err) {
+      if (isPermissionError(err)) return 0;
+      throw err;
+    }
+
+    // Collect source-thread candidate files from both hot + cold dirs.
     const candidates = [];
     for (const dir of [this.#coldDir, this.#msgDir]) {
       if (!existsSync(dir)) continue;
@@ -560,7 +574,22 @@ export class ConversationStore {
       }
       for (const f of files) candidates.push(join(dir, f));
     }
-    // Sort by the "m{NNNN}" basename, which is chronological.
+    // Also pick up any already-forked sub-thread dir (chain fork).
+    const sourceSubDir = this.#threadMsgDir(sourceId);
+    if (existsSync(sourceSubDir)) {
+      try {
+        for (const f of readdirSync(sourceSubDir).filter(x => x.endsWith('.md'))) {
+          candidates.push(join(sourceSubDir, f));
+        }
+      } catch (err) {
+        if (!isPermissionError(err)) throw err;
+      }
+    }
+    // Sort by the "m{NNNN}" basename. For chain-fork, sub-thread ids also
+    // restart at m0001 so sorting by basename alone is ambiguous across
+    // dirs; but a given source thread stores messages in exactly ONE place
+    // (either legacy flat dir OR its sub-dir — see below), so ties never
+    // arise. Sorting by (path, seq) is still well-defined.
     candidates.sort((a, b) => {
       const ma = a.match(/m(\d+)\.md$/);
       const mb = b.match(/m(\d+)\.md$/);
@@ -576,7 +605,7 @@ export class ConversationStore {
       const fileMatch = path.match(/m(\d+)\.md$/);
       if (!fileMatch) continue;
       const seq = parseInt(fileMatch[1], 10);
-      if (seq > cutoffSeq) break; // ordered; past the cutoff → done
+      if (seq > cutoffSeq) continue; // do not break — sub-thread dir mixed in may interleave
       let raw;
       try {
         raw = readFileSync(path, 'utf8');
@@ -586,17 +615,23 @@ export class ConversationStore {
       }
       const msg = parseMessage(raw);
       if (!msg || msg.threadId !== sourceId) continue;
-      // Strip id/time — append() will mint a fresh sequence id for the
-      // copy. Stamp sourceThreadId (only if not already set; for
-      // fork-of-fork, keep the original source pill).
+      // Mint a fresh per-thread id restarting at m0001 under the target
+      // thread's own namespace.
+      const nextSeq = this.#getNextThreadSeq(targetId);
+      const newId = `m${String(nextSeq).padStart(4, '0')}`;
       const { id: _id, ...rest } = msg;
       const copy = {
         ...rest,
+        id: newId,
         threadId: targetId,
         sourceThreadId: msg.sourceThreadId || sourceId,
+        time: rest.time || new Date().toISOString(),
+        tokens_est: rest.tokens_est || estimateTokens(rest.content || ''),
       };
+      const filePath = join(targetDir, `${newId}.md`);
       try {
-        this.append(copy);
+        writeFileSync(filePath, serializeMessage(copy), { encoding: 'utf8', mode: 0o644 });
+        this.#nextSeqByThread.set(targetId, nextSeq + 1);
         copied += 1;
       } catch (err) {
         if (isPermissionError(err)) continue;
@@ -604,6 +639,85 @@ export class ConversationStore {
       }
     }
     return copied;
+  }
+
+  /**
+   * Load messages for a specific thread. Reads from the per-thread subdir
+   * (created by forkThread via copyThreadUpTo) if present, otherwise
+   * filters the legacy flat `messages/` + `cold/` dirs by `threadId`.
+   * Results are sorted chronologically by file sequence number.
+   *
+   * @param {string} threadId
+   * @returns {object[]}
+   */
+  load(threadId) {
+    if (!threadId) return [];
+    const subDir = this.#threadMsgDir(threadId);
+    if (existsSync(subDir)) {
+      // Per-thread namespace: just load the whole dir, filtered by
+      // threadId for safety (guards against hand-edited files).
+      const out = [];
+      for (const f of readdirSync(subDir).filter(x => x.endsWith('.md')).sort()) {
+        try {
+          const raw = readFileSync(join(subDir, f), 'utf8');
+          const msg = parseMessage(raw);
+          if (msg && msg.threadId === threadId) out.push(msg);
+        } catch (err) {
+          if (!isPermissionError(err)) throw err;
+        }
+      }
+      return out;
+    }
+    // Legacy: messages live in the flat dir stamped with threadId.
+    const collected = [];
+    for (const dir of [this.#coldDir, this.#msgDir]) {
+      if (!existsSync(dir)) continue;
+      for (const f of readdirSync(dir).filter(x => x.endsWith('.md'))) {
+        try {
+          const raw = readFileSync(join(dir, f), 'utf8');
+          const msg = parseMessage(raw);
+          if (msg && msg.threadId === threadId) collected.push({ msg, f });
+        } catch (err) {
+          if (!isPermissionError(err)) throw err;
+        }
+      }
+    }
+    collected.sort((a, b) => {
+      const ma = a.f.match(/m(\d+)\.md$/);
+      const mb = b.f.match(/m(\d+)\.md$/);
+      return (parseInt(ma?.[1] || '0', 10)) - (parseInt(mb?.[1] || '0', 10));
+    });
+    return collected.map(x => x.msg);
+  }
+
+  // task-314: per-thread sub-directory for forked threads.
+  #threadMsgDir(threadId) {
+    return join(this.#convDir, 'threads', threadId, 'messages');
+  }
+
+  // task-314: next per-thread sequence number, restarting at 1 for each
+  // new thread. Scans the per-thread sub-dir (not the global flat dir).
+  #getNextThreadSeq(threadId) {
+    const cached = this.#nextSeqByThread.get(threadId);
+    if (cached != null) return cached;
+    const dir = this.#threadMsgDir(threadId);
+    let maxSeq = 0;
+    if (existsSync(dir)) {
+      try {
+        for (const f of readdirSync(dir)) {
+          const m = f.match(/^m(\d+)\.md$/);
+          if (m) {
+            const s = parseInt(m[1], 10);
+            if (s > maxSeq) maxSeq = s;
+          }
+        }
+      } catch (err) {
+        if (!isPermissionError(err)) throw err;
+      }
+    }
+    const next = maxSeq + 1;
+    this.#nextSeqByThread.set(threadId, next);
+    return next;
   }
 
   /**

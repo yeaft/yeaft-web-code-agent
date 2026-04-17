@@ -109,7 +109,7 @@ describe('ConversationStore.copyThreadUpTo (task-314)', () => {
   beforeEach(() => { dir = scratch('yeaft-conv-fork-'); });
   afterEach(() => { try { rmSync(dir, { recursive: true, force: true }); } catch {} });
 
-  it('copies only source messages up to and including cutoff; other threads ignored', () => {
+  it('copies source messages into target per-thread namespace (m0001..mNNNN restart)', () => {
     const store = new ConversationStore(dir);
     const m1 = store.append({ role: 'user',      content: 'a', threadId: 'src' });   // m0001
     const m2 = store.append({ role: 'assistant', content: 'b', threadId: 'src' });   // m0002
@@ -119,57 +119,89 @@ describe('ConversationStore.copyThreadUpTo (task-314)', () => {
     const n = store.copyThreadUpTo('src', 'tgt', m2.id);
     expect(n).toBe(2);
 
-    const msgDir = join(dir, 'conversation', 'messages');
-    const onDisk = readdirSync(msgDir).filter(f => f.endsWith('.md')).sort();
-    // Expect originals plus 2 new copies appended with fresh ids.
-    expect(onDisk).toEqual(['m0001.md', 'm0002.md', 'm0003.md', 'm0004.md', 'm0005.md', 'm0006.md']);
+    // Legacy flat dir is UNCHANGED (source invariant).
+    const flatDir = join(dir, 'conversation', 'messages');
+    const flat = readdirSync(flatDir).filter(f => f.endsWith('.md')).sort();
+    expect(flat).toEqual(['m0001.md', 'm0002.md', 'm0003.md', 'm0004.md']);
 
-    // Source files untouched.
-    const src1 = parseMessage(readFileSync(join(msgDir, `${m1.id}.md`), 'utf8'));
-    const src2 = parseMessage(readFileSync(join(msgDir, `${m2.id}.md`), 'utf8'));
-    expect(src1.threadId).toBe('src');
-    expect(src1.sourceThreadId).toBeFalsy();
-    expect(src2.threadId).toBe('src');
-    expect(src2.sourceThreadId).toBeFalsy();
+    // Target thread owns its own namespace at conversation/threads/tgt/messages/
+    const tgtDir = join(dir, 'conversation', 'threads', 'tgt', 'messages');
+    const tgtFiles = readdirSync(tgtDir).filter(f => f.endsWith('.md')).sort();
+    expect(tgtFiles).toEqual(['m0001.md', 'm0002.md']);
 
-    // The two newest files are the copies → threadId=tgt, sourceThreadId=src.
-    const c5 = parseMessage(readFileSync(join(msgDir, 'm0005.md'), 'utf8'));
-    const c6 = parseMessage(readFileSync(join(msgDir, 'm0006.md'), 'utf8'));
-    expect(c5.threadId).toBe('tgt');
-    expect(c5.sourceThreadId).toBe('src');
-    expect(c6.threadId).toBe('tgt');
-    expect(c6.sourceThreadId).toBe('src');
-    // Chronological content preserved.
-    expect(c5.content).toBe('a');
-    expect(c6.content).toBe('b');
+    // Verify content + stamps on the new copies.
+    const c1 = parseMessage(readFileSync(join(tgtDir, 'm0001.md'), 'utf8'));
+    const c2 = parseMessage(readFileSync(join(tgtDir, 'm0002.md'), 'utf8'));
+    expect(c1).toMatchObject({ id: 'm0001', threadId: 'tgt', sourceThreadId: 'src', content: 'a' });
+    expect(c2).toMatchObject({ id: 'm0002', threadId: 'tgt', sourceThreadId: 'src', content: 'b' });
 
-    // m4 (post-cutoff src msg) was NOT copied.
-    const m4raw = parseMessage(readFileSync(join(msgDir, `${m4.id}.md`), 'utf8'));
+    // load(threadId) — returns per-thread scope only.
+    const loaded = store.load('tgt');
+    expect(loaded.map(m => m.id)).toEqual(['m0001', 'm0002']);
+    expect(loaded.every(m => m.threadId === 'tgt')).toBe(true);
+
+    // Source thread load still returns source files unchanged.
+    const srcLoaded = store.load('src');
+    expect(srcLoaded.map(m => m.id).sort()).toEqual(['m0001', 'm0002', 'm0004']);
+    expect(srcLoaded.every(m => m.sourceThreadId == null)).toBe(true);
+
+    // Unrelated 'other' thread untouched.
+    expect(store.load('other').map(m => m.id)).toEqual(['m0003']);
+
+    // m4 (post-cutoff src msg) was NOT copied to target.
+    const m4raw = parseMessage(readFileSync(join(flatDir, `${m4.id}.md`), 'utf8'));
     expect(m4raw.threadId).toBe('src');
+  });
+
+  it('cross-thread m0001 id collision: same basename, different directories, load() per-thread', () => {
+    const store = new ConversationStore(dir);
+    // Src exists as legacy flat file m0001.md.
+    store.append({ role: 'user', content: 'src-first', threadId: 'src' }); // m0001 in flat dir
+    // Fork 1: creates tgt-A/messages/m0001.md (same basename, different dir).
+    expect(store.copyThreadUpTo('src', 'tgt-A', 'm0001')).toBe(1);
+    // Fork 2: creates tgt-B/messages/m0001.md (another same-basename collision).
+    expect(store.copyThreadUpTo('src', 'tgt-B', 'm0001')).toBe(1);
+
+    // Every thread scopes cleanly by load(threadId) — no cross-contamination.
+    const srcMsgs = store.load('src');
+    const aMsgs = store.load('tgt-A');
+    const bMsgs = store.load('tgt-B');
+    expect(srcMsgs).toHaveLength(1);
+    expect(srcMsgs[0]).toMatchObject({ id: 'm0001', threadId: 'src', content: 'src-first' });
+    expect(aMsgs).toHaveLength(1);
+    expect(aMsgs[0]).toMatchObject({ id: 'm0001', threadId: 'tgt-A', sourceThreadId: 'src' });
+    expect(bMsgs).toHaveLength(1);
+    expect(bMsgs[0]).toMatchObject({ id: 'm0001', threadId: 'tgt-B', sourceThreadId: 'src' });
+
+    // Round-trip: reopen store, per-thread scope still holds.
+    const store2 = new ConversationStore(dir);
+    expect(store2.load('src').map(m => m.id)).toEqual(['m0001']);
+    expect(store2.load('tgt-A').map(m => m.id)).toEqual(['m0001']);
+    expect(store2.load('tgt-B').map(m => m.id)).toEqual(['m0001']);
   });
 
   it('chain fork preserves the original sourceThreadId pill', () => {
     const store = new ConversationStore(dir);
-    // First, seed a message that itself was sourced from an earlier thread
-    // (simulating a message already in a fork of a fork).
+    // Seed fork-A with a message sourced from 'origin' (simulating a
+    // message already in a fork of a fork).
     store.append({ role: 'user', content: 'orig', threadId: 'fork-A', sourceThreadId: 'origin' });
-    const cutoff = 'm0001';
 
-    const n = store.copyThreadUpTo('fork-A', 'fork-B', cutoff);
+    const n = store.copyThreadUpTo('fork-A', 'fork-B', 'm0001');
     expect(n).toBe(1);
 
-    const msgDir = join(dir, 'conversation', 'messages');
-    const copy = parseMessage(readFileSync(join(msgDir, 'm0002.md'), 'utf8'));
+    const copy = store.load('fork-B')[0];
+    expect(copy.id).toBe('m0001'); // per-thread restart
     expect(copy.threadId).toBe('fork-B');
     // IMPORTANT: keep the ORIGINAL source, not the immediate one.
     expect(copy.sourceThreadId).toBe('origin');
   });
 
-  it('tolerates numeric-only atMessageId (e.g. "7" for m0007)', () => {
+  it('tolerates numeric-only atMessageId (e.g. "1" for m0001)', () => {
     const store = new ConversationStore(dir);
     store.append({ role: 'user', content: 'a', threadId: 'src' }); // m0001
     store.append({ role: 'user', content: 'b', threadId: 'src' }); // m0002
     expect(store.copyThreadUpTo('src', 'tgt', '1')).toBe(1);
+    expect(store.load('tgt').map(m => m.id)).toEqual(['m0001']);
   });
 
   it('no-op for invalid args (empty / same-id / malformed cutoff)', () => {
