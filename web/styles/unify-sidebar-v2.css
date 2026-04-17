@@ -220,6 +220,15 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.usv2-fork-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted, #86868b);
+  margin-right: 2px;
+  opacity: 0.8;
+}
+.usv2-fork-icon:hover { opacity: 1; }
 .usv2-thread-title {
   flex: 1 1 auto;
   overflow: hidden;

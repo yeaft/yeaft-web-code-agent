@@ -204,6 +204,9 @@ export const useChatStore = defineStore('chat', {
     // ★ task-313: most recent merge result (ok/error) — UI shows a toast.
     unifyLastMergeResult: null,
 
+    // ★ task-314: most recent fork result (ok/error + target thread id).
+    unifyLastForkResult: null,
+
     // ★ task-312: jump-to-message highlight target. When the sidebar
     // search triggers a thread hit, the store records the matching
     // keyword here so MessageList can scroll to / flash the first
@@ -558,6 +561,33 @@ export const useChatStore = defineStore('chat', {
             at: Date.now(),
           };
           break;
+
+        // ★ task-314: fork confirmation / failure toast hooks.
+        case 'thread_forked':
+          this.unifyLastForkResult = {
+            ok: true,
+            sourceThreadId: event.sourceThreadId,
+            targetThreadId: event.targetThreadId,
+            forkedAtMessageId: event.forkedAtMessageId,
+            copiedMessages: event.copiedMessages || 0,
+            at: Date.now(),
+          };
+          // Navigate the UI to the newly forked thread so the user sees
+          // the copied context immediately.
+          if (event.targetThreadId) {
+            this.unifyActiveThreadId = event.targetThreadId;
+          }
+          break;
+
+        case 'thread_fork_failed':
+          this.unifyLastForkResult = {
+            ok: false,
+            sourceThreadId: event.sourceThreadId,
+            atMessageId: event.atMessageId,
+            error: event.error,
+            at: Date.now(),
+          };
+          break;
       }
     },
     fetchExpertRoleDefinitions() {
@@ -596,6 +626,21 @@ export const useChatStore = defineStore('chat', {
         agentId: this.unifyAgentId,
         sourceId,
         targetId,
+      });
+    },
+    // ★ task-314: fork a new thread from `sourceThreadId` at `atMessageId`.
+    // Messages up to and including atMessageId are copied onto the new
+    // thread; the source is untouched. The agent rejects invalid forks
+    // (archived source / missing ids).
+    forkUnifyThread(sourceThreadId, atMessageId, name) {
+      if (!sourceThreadId || !atMessageId) return;
+      if (!this.unifyAgentId) return;
+      this.sendWsMessage({
+        type: 'unify_fork_thread',
+        agentId: this.unifyAgentId,
+        sourceThreadId,
+        atMessageId,
+        ...(name ? { name } : {}),
       });
     },
     // ★ task-301 Part 2: Sidebar V2 selection actions.

@@ -437,6 +437,10 @@ export default {
           // when a non-main thread's reply appears in the all-stream view.
           // Null on legacy Chat messages (no threadId field) → ThreadPill skips.
           threadId: null,
+          // task-314: persisted message id (`m{NNNN}`) for the last
+          // assistant chunk in this turn — used as the fork cursor when
+          // the user clicks "Fork from here".
+          atMessageId: null,
         };
       };
 
@@ -477,6 +481,13 @@ export default {
           // same threadId, but we only latch the first to avoid flicker.
           if (!currentTurn.threadId && msg.threadId) {
             currentTurn.threadId = msg.threadId;
+          }
+          // task-314: remember the persisted message id for this turn so a
+          // "Fork from here" click can tell the agent which message to cut
+          // at. We latch the LAST assistant message id — forking from the
+          // turn cuts after the full assistant reply has been received.
+          if (msg.id && /^m\d+$/.test(msg.id)) {
+            currentTurn.atMessageId = msg.id;
           }
           currentTurn.messages.push(msg);
           continue;

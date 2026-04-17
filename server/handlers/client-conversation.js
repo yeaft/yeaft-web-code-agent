@@ -664,6 +664,19 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       break;
     }
 
+    case 'unify_fork_thread': {
+      const forkAgentId = msg.agentId || client.currentAgent;
+      if (!forkAgentId) return;
+      if (!await checkAgentAccess(forkAgentId)) return;
+      await forwardToAgent(forkAgentId, {
+        type: 'unify_fork_thread',
+        sourceThreadId: msg.sourceThreadId,
+        atMessageId: msg.atMessageId,
+        name: msg.name,
+      });
+      break;
+    }
+
     default:
       return false; // Not handled
   }
