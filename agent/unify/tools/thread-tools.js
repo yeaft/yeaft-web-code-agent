@@ -1,20 +1,25 @@
 /**
  * thread-tools.js — Thread-spawning tools for Unify Engine (Phase 1).
  *
- * Phase 1 scope (task-299):
- *   - SpawnThread        — create a new thread
- *   - SwitchThread       — set the engine's currentThreadId marker
- *   - ListThreads        — list threads + current marker
- *   - AttachThreadToTask — bind a thread to an existing task
+ * Phase 1 scope (task-299 rework):
+ *   - SpawnThread         — create a new thread
+ *   - SwitchThread        — set the engine's currentThreadId marker
+ *   - ListThreads         — list threads + current marker + cached stats
+ *   - AttachThreadToTask  — bind a thread to an existing task
+ *   - SpawnTask           — create a task or subtask (parent_task_id optional)
+ *   - ReadThreadSummary   — cross-reference: summary of a thread (id/name/
+ *                           status/messageCount/lastMessageAt/task)
+ *   - ReadThreadRecent    — cross-reference: last N messages of a thread
  *
  * Phase 1 uses the in-memory ThreadStore (agent/unify/threads/store.js)
- * so these tools can ship and be tested before task-298's file-backed
- * data layer merges. The tool surface is designed to remain stable when
- * the store is replaced.
+ * and the existing ConversationStore for messages. When task-298 merges,
+ * ThreadStore becomes file-backed with the SAME API, so these tools
+ * continue to work unchanged.
  */
 
 import { defineTool } from './types.js';
-import { getThreadStore } from '../threads/store.js';
+import { randomUUID } from 'crypto';
+import { getThreadStore, MAIN_THREAD_ID } from '../threads/store.js';
 import { getTaskStore } from './task-tools.js';
 
 // ─── SpawnThread ─────────────────────────────────────────
@@ -57,6 +62,7 @@ engine to the new thread — call SwitchThread to activate it.`,
           name: t.name,
           goal: t.goal,
           parentThreadId: t.parentThreadId,
+          status: t.status,
         },
         message: `Thread created: ${t.name} (${t.id})`,
       });
@@ -107,7 +113,12 @@ thread.`,
 
 export const listThreads = defineTool({
   name: 'ListThreads',
-  description: `List all threads and the engine's current thread marker.`,
+  description: `List all threads with cached status / messageCount / lastMessageAt.
+
+Returns the data needed by the Phase 2 sidebar (task-300): each entry
+exposes id, name, goal, parentThreadId, status ('active'|'idle'|'archived'),
+messageCount, lastMessageAt, archived, attachedTaskId. Reads only cached
+fields — does not scan messages.`,
   parameters: { type: 'object', properties: {} },
   modes: ['work'],
   isConcurrencySafe: () => true,
@@ -119,6 +130,13 @@ export const listThreads = defineTool({
       name: t.name,
       goal: t.goal,
       parentThreadId: t.parentThreadId,
+      status: t.status,
+      messageCount: t.messageCount,
+      lastMessageAt: t.lastMessageAt,
+      lastActivityAt: t.lastActivityAt ?? t.lastMessageAt,
+      archived: t.archived,
+      unread: t.unread || 0,
+      preview: t.preview || '',
       attachedTaskId: store.attachedTask(t.id),
     }));
     return JSON.stringify(
@@ -159,9 +177,6 @@ the same thread.`,
     if (!task_id) return JSON.stringify({ error: 'task_id is required' });
 
     const taskStore = getTaskStore();
-    // If the task store is initialized, validate the task exists; if not
-    // initialized (e.g. Phase 1 unit tests running before session bootstrap),
-    // skip the task existence check — we still enforce thread existence.
     if (taskStore) {
       const task = taskStore.get(task_id);
       if (!task) return JSON.stringify({ error: `Task not found: ${task_id}` });
@@ -179,5 +194,177 @@ the same thread.`,
     } catch (err) {
       return JSON.stringify({ error: err.message || String(err) });
     }
+  },
+});
+
+// ─── SpawnTask (merged — subtask via parent_task_id) ────
+
+/**
+ * SpawnTask replaces both the old SpawnTask and the separate SpawnSubtask:
+ * pass `parent_task_id` when you want a subtask, omit it for top-level.
+ * Per prev-1 rework note: eliminating two tools with the same effect.
+ */
+export const spawnTask = defineTool({
+  name: 'SpawnTask',
+  description: `Spawn a new task. Pass parent_task_id to create a subtask.
+
+When parent_task_id is omitted → top-level task.
+When parent_task_id is provided → subtask under that parent (parent must exist).
+This replaces the deprecated SpawnSubtask tool.`,
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string' },
+      description: { type: 'string' },
+      priority: {
+        type: 'string',
+        enum: ['low', 'medium', 'high', 'critical'],
+      },
+      parent_task_id: {
+        type: 'string',
+        description: 'Optional parent task id; when present, a subtask is created',
+      },
+    },
+    required: ['title'],
+  },
+  modes: ['work'],
+  isConcurrencySafe: () => false,
+  isReadOnly: () => false,
+  async execute(input) {
+    const store = getTaskStore();
+    if (!store) {
+      return JSON.stringify({ error: 'Task store not initialized. Session may still be loading.' });
+    }
+    const { title, description = '', priority = 'medium', parent_task_id } = input || {};
+    if (!title) return JSON.stringify({ error: 'title is required' });
+
+    if (parent_task_id) {
+      const parent = store.get(parent_task_id);
+      if (!parent) return JSON.stringify({ error: `Parent task not found: ${parent_task_id}` });
+    }
+
+    const id = `task-${randomUUID().slice(0, 8)}`;
+    const now = Date.now();
+    store.create({
+      id,
+      title,
+      description,
+      priority,
+      status: 'pending',
+      parentId: parent_task_id || null,
+      parentTaskId: parent_task_id || null, // design §5 canonical field; kept in sync with parentId
+      createdAt: now,
+      updatedAt: now,
+    });
+    return JSON.stringify({
+      success: true,
+      task: {
+        id,
+        title,
+        priority,
+        status: 'pending',
+        parentTaskId: parent_task_id || null,
+      },
+      message: parent_task_id
+        ? `Subtask spawned: ${title} (${id}) under ${parent_task_id}`
+        : `Task spawned: ${title} (${id})`,
+    });
+  },
+});
+
+// ─── ReadThreadSummary (cross-reference, design §6 Q5) ──
+
+export const readThreadSummary = defineTool({
+  name: 'ReadThreadSummary',
+  description: `Return a one-shot summary of a thread: id, name, goal, status,
+messageCount, lastMessageAt, parentThreadId, attachedTaskId.
+
+Use this to cross-reference work on another thread without switching.`,
+  parameters: {
+    type: 'object',
+    properties: {
+      thread_id: { type: 'string' },
+    },
+    required: ['thread_id'],
+  },
+  modes: ['work'],
+  isConcurrencySafe: () => true,
+  isReadOnly: () => true,
+  async execute(input) {
+    const { thread_id } = input || {};
+    if (!thread_id) return JSON.stringify({ error: 'thread_id is required' });
+    const store = getThreadStore();
+    const t = store.get(thread_id);
+    if (!t) return JSON.stringify({ error: `Thread not found: ${thread_id}` });
+    return JSON.stringify(
+      {
+        id: t.id,
+        name: t.name,
+        goal: t.goal,
+        status: t.status,
+        archived: t.archived,
+        messageCount: t.messageCount,
+        lastMessageAt: t.lastMessageAt,
+        parentThreadId: t.parentThreadId,
+        attachedTaskId: store.attachedTask(t.id),
+        createdAt: t.createdAt,
+        updatedAt: t.updatedAt,
+      },
+      null,
+      2,
+    );
+  },
+});
+
+// ─── ReadThreadRecent (cross-reference, design §6 Q5) ───
+
+export const readThreadRecent = defineTool({
+  name: 'ReadThreadRecent',
+  description: `Return the last N messages on a specific thread.
+
+Requires an engine ConversationStore in context (ctx.conversationStore).
+Reads conversation history and filters by threadId. Default N=20, max 200.
+Use this to review another thread's recent activity without switching.`,
+  parameters: {
+    type: 'object',
+    properties: {
+      thread_id: { type: 'string' },
+      limit: { type: 'number', description: 'Max messages to return (default 20, max 200)' },
+    },
+    required: ['thread_id'],
+  },
+  modes: ['work'],
+  isConcurrencySafe: () => true,
+  isReadOnly: () => true,
+  async execute(input, ctx) {
+    const { thread_id, limit } = input || {};
+    if (!thread_id) return JSON.stringify({ error: 'thread_id is required' });
+    const store = getThreadStore();
+    if (!store.has(thread_id)) {
+      return JSON.stringify({ error: `Thread not found: ${thread_id}` });
+    }
+    const conv = ctx?.conversationStore;
+    if (!conv || typeof conv.loadRecent !== 'function') {
+      return JSON.stringify({
+        error: 'conversation store unavailable in tool context',
+      });
+    }
+    const cap = Math.max(1, Math.min(Number(limit) || 20, 200));
+    // Over-fetch then filter by thread, so N still applies post-filter.
+    const raw = conv.loadRecent(cap * 4);
+    const filtered = raw
+      .filter(m => (m.threadId || MAIN_THREAD_ID) === thread_id)
+      .slice(-cap)
+      .map(m => ({
+        role: m.role,
+        content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+        createdAt: m.createdAt || null,
+        threadId: m.threadId || MAIN_THREAD_ID,
+      }));
+    return JSON.stringify(
+      { threadId: thread_id, count: filtered.length, messages: filtered },
+      null,
+      2,
+    );
   },
 });

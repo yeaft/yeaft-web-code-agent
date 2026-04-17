@@ -61,8 +61,10 @@ import {
   switchThread,
   listThreads,
   attachThreadToTask,
+  spawnTask,
+  readThreadSummary,
+  readThreadRecent,
 } from './thread-tools.js';
-import { spawnTask, spawnSubtask } from './spawn-task-tools.js';
 
 // --- P2 Auxiliary tools ---
 import { jsRepl, jsReplReset } from './js-repl.js';
@@ -128,7 +130,8 @@ export const allTools = [
   listThreads,
   attachThreadToTask,
   spawnTask,
-  spawnSubtask,
+  readThreadSummary,
+  readThreadRecent,
 
   // P2 Auxiliary
   jsRepl,

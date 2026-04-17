@@ -275,8 +275,10 @@ export class Engine {
     // task-299 Phase 1: tag persisted messages with the current thread.
     // getThreadStore() lazily seeds a default 'main' thread if not yet init'd.
     let threadId = MAIN_THREAD_ID;
+    let threadStore = null;
     try {
-      threadId = getThreadStore().currentId || MAIN_THREAD_ID;
+      threadStore = getThreadStore();
+      threadId = threadStore.currentId || MAIN_THREAD_ID;
     } catch {
       // Defensive: any store failure falls back to 'main' so persistence
       // never breaks because of thread bookkeeping.
@@ -302,6 +304,18 @@ export class Engine {
       assistantMsg.toolCalls = toolCalls;
     }
     this.#conversationStore.append(assistantMsg);
+
+    // task-299 Phase 1 cached-field update: bump thread counters twice
+    // (once for user, once for assistant). Any exception is swallowed so
+    // bookkeeping never blocks the main persist path.
+    try {
+      if (threadStore) {
+        threadStore.noteMessage(threadId);
+        threadStore.noteMessage(threadId);
+      }
+    } catch {
+      // Non-critical; counters can be rebuilt via rebuildFromMessages().
+    }
   }
 
   /**

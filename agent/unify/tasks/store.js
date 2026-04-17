@@ -31,7 +31,12 @@ function serializeTask(task) {
     `priority: ${task.priority || 'medium'}`,
   ];
 
+  // task-299 (Q3 rework): parentTaskId is the canonical field per design §5.
+  // parentId is kept as a legacy mirror for backward compat with any tool
+  // that still reads it; both are always in sync after migration.
+  if (task.parentTaskId) fm.push(`parentTaskId: ${task.parentTaskId}`);
   if (task.parentId) fm.push(`parentId: ${task.parentId}`);
+  if (task.primaryThreadId) fm.push(`primaryThreadId: ${task.primaryThreadId}`);
   if (task.createdAt) fm.push(`createdAt: ${task.createdAt}`);
   if (task.updatedAt) fm.push(`updatedAt: ${task.updatedAt}`);
 
@@ -92,9 +97,19 @@ function parseTask(raw) {
     task.description = body;
   }
 
-  // Normalize parentId
-  if (!task.parentId || task.parentId === 'null') {
-    task.parentId = null;
+  // Normalize parentId / parentTaskId (design §5 canonical is parentTaskId).
+  // If only legacy parentId is present, promote it to parentTaskId so
+  // anything that reads the canonical field sees a value. Null/"null"
+  // strings become real null.
+  if (!task.parentId || task.parentId === 'null') task.parentId = null;
+  if (!task.parentTaskId || task.parentTaskId === 'null') task.parentTaskId = null;
+  if (!task.parentTaskId && task.parentId) task.parentTaskId = task.parentId;
+  if (!task.parentId && task.parentTaskId) task.parentId = task.parentTaskId;
+
+  // primaryThreadId: per design §5 clarification (task-299 Q4), null means
+  // "unbound / orphan" — it does NOT implicitly equal 'main'. Keep null as null.
+  if (!task.primaryThreadId || task.primaryThreadId === 'null') {
+    task.primaryThreadId = null;
   }
 
   return task;
@@ -191,6 +206,12 @@ export class TaskStore {
 
     // Load existing tasks from disk
     this.#loadAll();
+
+    // task-299 (Q3, rework): run a one-shot backfill that promotes legacy
+    // `parentId` to the canonical `parentTaskId` field (design §5). A
+    // marker file (.migrations/parentTaskId) records completion so the
+    // migration is skipped on subsequent boots and is idempotent.
+    this.#migrateParentTaskId();
   }
 
   /** Number of tasks in the store. */
@@ -273,6 +294,30 @@ export class TaskStore {
     if (filter?.status) results = results.filter(t => t.status === filter.status);
     if (filter?.priority) results = results.filter(t => t.priority === filter.priority);
     return results;
+  }
+
+  /**
+   * Return tasks grouped as a tree. Tasks with no parent (parentTaskId == null)
+   * are "roots"; each non-root task becomes a child of its parent.
+   *
+   * Used by task-298/task-300 to render task hierarchies. Critical for the
+   * Q3 migration test: before the backfill, old tasks stored only `parentId`
+   * and `tree()` would see every task as a root.
+   *
+   * @returns {{ roots: object[], orphans: object[] }}
+   *   - roots   : tasks whose parentTaskId is null
+   *   - orphans : tasks whose parentTaskId points to an id that no longer exists
+   */
+  tree() {
+    const all = [...this.#tasks.values()];
+    const byId = new Map(all.map(t => [t.id, t]));
+    const roots = [];
+    const orphans = [];
+    for (const t of all) {
+      if (!t.parentTaskId) roots.push(t);
+      else if (!byId.has(t.parentTaskId)) orphans.push(t);
+    }
+    return { roots, orphans };
   }
 
   /**
@@ -390,6 +435,75 @@ export class TaskStore {
     try {
       writeFileSync(this.#indexPath, generateIndex(this.#tasks), 'utf8');
     } catch { /* */ }
+  }
+
+  /**
+   * task-299 Q3 migration — one-shot backfill from legacy `parentId` to
+   * canonical `parentTaskId` (design §5).
+   *
+   * Behaviour:
+   *   - Reads .migrations/parentTaskId meta marker. If present, returns
+   *     immediately (skips). → guarantees idempotency on repeated boots.
+   *   - Otherwise: for every loaded task, if parentId is set but
+   *     parentTaskId is not, copy parentId → parentTaskId and rewrite
+   *     task.md so the new field survives future loads.
+   *   - Writes the meta marker on success. Read-only mode is a no-op.
+   *
+   * Exposed publicly as `migrateParentTaskId()` so tests can re-run it.
+   *
+   * @returns {{ ran: boolean, migratedCount: number }}
+   */
+  migrateParentTaskId() {
+    return this.#migrateParentTaskId();
+  }
+
+  #migrateParentTaskId() {
+    if (this.#readOnly) return { ran: false, migratedCount: 0 };
+
+    const markerDir = join(this.#dir, '.migrations');
+    const markerPath = join(markerDir, 'parentTaskId');
+
+    try {
+      if (existsSync(markerPath)) return { ran: false, migratedCount: 0 };
+    } catch {
+      // If existsSync throws (pathological FS), proceed cautiously — the
+      // migration itself is idempotent on per-task level.
+    }
+
+    let migratedCount = 0;
+    for (const task of this.#tasks.values()) {
+      // parseTask() already promotes parentId → parentTaskId in memory,
+      // but the on-disk YAML still lacks the canonical field for old
+      // tasks. Rewriting guarantees future loads see parentTaskId and
+      // makes the migration visible.
+      if (task.parentId && !task.__parentTaskIdWritten) {
+        // Ensure the canonical field is set (parseTask normalised this,
+        // but handle the edge case where parseTask wasn't used).
+        if (!task.parentTaskId) task.parentTaskId = task.parentId;
+        const taskDir = join(this.#dir, task.id);
+        try {
+          writeFileSync(join(taskDir, 'task.md'), serializeTask(task), 'utf8');
+          task.__parentTaskIdWritten = true;
+          migratedCount += 1;
+        } catch {
+          // Best-effort; marker is only written if the pass completes.
+        }
+      }
+    }
+
+    try {
+      mkdirSync(markerDir, { recursive: true });
+      writeFileSync(
+        markerPath,
+        `migrated: ${new Date().toISOString()}\ncount: ${migratedCount}\n`,
+        'utf8',
+      );
+    } catch {
+      // Without the marker the migration may re-run; since it's idempotent
+      // that is acceptable but not ideal. Log silently.
+    }
+
+    return { ran: true, migratedCount };
   }
 }
 

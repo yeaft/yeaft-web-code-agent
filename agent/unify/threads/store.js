@@ -6,8 +6,14 @@
  * filesystem layer is merged. When task-298 merges, this module will be
  * replaced (or promoted to a shim) by a file-backed store with the same API.
  *
+ * Cached fields (task-299 rework, prev-2 suggestion):
+ *   - messageCount, lastMessageAt, archived are maintained incrementally via
+ *     noteMessage()/archive()/setStatus() so that ListThreads does NOT need
+ *     to scan every message on each call. A rebuildFromMessages(messages)
+ *     helper exists for sanity / crash-recovery reconciliation.
+ *
  * Responsibilities (Phase 1):
- *   - Maintain a map of threadId → thread metadata.
+ *   - Maintain a map of threadId → thread metadata + cached counters.
  *   - Track a "currentThreadId" marker for the engine.
  *   - Maintain attachments from threadId → taskId.
  *
@@ -20,12 +26,19 @@ import { randomUUID } from 'crypto';
 /** Default / root thread id — every fresh ThreadStore has one. */
 export const MAIN_THREAD_ID = 'main';
 
+/** Valid thread status values. Mirrors design doc §5. */
+export const THREAD_STATUSES = ['active', 'idle', 'archived'];
+
 /**
  * @typedef {Object} Thread
  * @property {string} id
  * @property {string} name
  * @property {string} [goal]
  * @property {string|null} parentThreadId
+ * @property {'active'|'idle'|'archived'} status — cached; initial 'active'
+ * @property {number} messageCount — cached counter, incremented via noteMessage
+ * @property {number|null} lastMessageAt — cached timestamp of last noted message
+ * @property {boolean} archived — convenience mirror of (status === 'archived')
  * @property {number} createdAt
  * @property {number} updatedAt
  */
@@ -45,16 +58,29 @@ export class ThreadStore {
     this.#attachments = new Map();
 
     const now = Date.now();
-    const main = {
+    this.#threads.set(MAIN_THREAD_ID, this.#newThreadRecord({
       id: MAIN_THREAD_ID,
       name: 'main',
       goal: '',
       parentThreadId: null,
       createdAt: now,
       updatedAt: now,
+    }));
+    this.#currentId = MAIN_THREAD_ID;
+  }
+
+  /** Internal: build a thread record with default cached fields. */
+  #newThreadRecord(base) {
+    return {
+      status: 'active',
+      messageCount: 0,
+      lastMessageAt: null,
+      lastActivityAt: null, // task-300 sidebar: latest of lastMessageAt/updatedAt
+      archived: false,
+      unread: 0,            // task-300 sidebar: messages since last read marker
+      preview: '',          // task-300 sidebar: short excerpt of latest content
+      ...base,
     };
-    this.#threads.set(main.id, main);
-    this.#currentId = main.id;
   }
 
   /** Get current thread id (defaults to 'main'). */
@@ -81,14 +107,14 @@ export class ThreadStore {
     }
     const id = `thr-${randomUUID().slice(0, 8)}`;
     const now = Date.now();
-    const thread = {
+    const thread = this.#newThreadRecord({
       id,
       name: name.trim(),
       goal: goal || '',
       parentThreadId: parentThreadId || null,
       createdAt: now,
       updatedAt: now,
-    };
+    });
     this.#threads.set(id, thread);
     return thread;
   }
@@ -119,6 +145,112 @@ export class ThreadStore {
     this.#currentId = id;
     const t = this.#threads.get(id);
     t.updatedAt = Date.now();
+  }
+
+  /**
+   * Record that a message has been persisted on a thread. Increments the
+   * cached messageCount and updates lastMessageAt. Safe to call repeatedly;
+   * unknown threadIds are silently ignored (defense: bookkeeping must never
+   * block the main persist path).
+   *
+   * @param {string} threadId
+   * @param {number} [at=Date.now()]
+   */
+  noteMessage(threadId, at = Date.now(), opts = {}) {
+    const t = this.#threads.get(threadId);
+    if (!t) return;
+    t.messageCount += 1;
+    t.lastMessageAt = at;
+    t.lastActivityAt = at;
+    t.updatedAt = at;
+    // task-300 sidebar unread counter: any new message not originating from the
+    // user themselves counts as unread until markRead() is called. Callers may
+    // pass { countsAsUnread: false } (e.g. for user's own messages).
+    if (opts.countsAsUnread !== false) {
+      t.unread += 1;
+    }
+    // Short preview for sidebar hover / list (capped at 160 chars).
+    if (typeof opts.preview === 'string' && opts.preview.length > 0) {
+      const p = opts.preview.replace(/\s+/g, ' ').trim();
+      t.preview = p.length > 160 ? p.slice(0, 157) + '...' : p;
+    }
+    // Any activity bumps archived back to active.
+    if (t.status === 'archived') {
+      t.status = 'active';
+      t.archived = false;
+    }
+  }
+
+  /**
+   * Mark a thread as read — resets unread counter to 0. Safe on unknown id.
+   * @param {string} threadId
+   */
+  markRead(threadId) {
+    const t = this.#threads.get(threadId);
+    if (!t) return;
+    t.unread = 0;
+  }
+
+  /**
+   * Mark a thread archived. 'main' cannot be archived.
+   * @param {string} id
+   */
+  archive(id) {
+    const t = this.#threads.get(id);
+    if (!t) throw new Error(`thread not found: ${id}`);
+    if (id === MAIN_THREAD_ID) throw new Error('cannot archive main thread');
+    t.status = 'archived';
+    t.archived = true;
+    t.updatedAt = Date.now();
+  }
+
+  /**
+   * Set thread status explicitly. Must be one of THREAD_STATUSES.
+   * @param {string} id
+   * @param {'active'|'idle'|'archived'} status
+   */
+  setStatus(id, status) {
+    if (!THREAD_STATUSES.includes(status)) {
+      throw new Error(`invalid status: ${status}`);
+    }
+    const t = this.#threads.get(id);
+    if (!t) throw new Error(`thread not found: ${id}`);
+    if (id === MAIN_THREAD_ID && status === 'archived') {
+      throw new Error('cannot archive main thread');
+    }
+    t.status = status;
+    t.archived = status === 'archived';
+    t.updatedAt = Date.now();
+  }
+
+  /**
+   * Rebuild cached fields (messageCount/lastMessageAt) from a flat messages
+   * list. Used for crash recovery or as a sanity check in tests. Each
+   * message must have { threadId, createdAt? }; missing threadId is treated
+   * as MAIN_THREAD_ID (matches design doc §5 default).
+   *
+   * Counts per thread are reset to zero first to guarantee idempotency.
+   *
+   * @param {Array<{threadId?: string, createdAt?: number}>} messages
+   */
+  rebuildFromMessages(messages) {
+    // Reset counters
+    for (const t of this.#threads.values()) {
+      t.messageCount = 0;
+      t.lastMessageAt = null;
+      t.lastActivityAt = null;
+    }
+    for (const m of messages || []) {
+      const tid = m.threadId || MAIN_THREAD_ID;
+      const t = this.#threads.get(tid);
+      if (!t) continue;
+      t.messageCount += 1;
+      const ts = typeof m.createdAt === 'number' ? m.createdAt : Date.now();
+      if (!t.lastMessageAt || ts > t.lastMessageAt) {
+        t.lastMessageAt = ts;
+        t.lastActivityAt = ts;
+      }
+    }
   }
 
   /**
