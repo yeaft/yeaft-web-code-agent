@@ -202,19 +202,16 @@ export default {
     const sidebarV2Enabled = Vue.computed(() => !!store.unifySidebarV2Enabled);
 
     const onSelectThreadV2 = (threadId) => {
-      // Part 1: stub handler. Part 2 (post task-299) will call
-      // store.setActiveThread(threadId). For now, just surface via the
-      // Vue devtools event trail — no side effects.
-      if (typeof store.setActiveThread === 'function') {
-        store.setActiveThread(threadId);
-      }
+      // task-301 Part 2: delegate to store. setActiveThread also drives
+      // the task-303 chat-stream dual view filter, so clicking a thread
+      // narrows the conversation to that thread's messages.
+      store.setActiveThread(threadId);
     };
 
     const onSelectTaskV2 = (taskId) => {
-      // Part 1: stub handler. Part 2 will persist task-ui highlight state.
-      if (typeof store.setActiveTaskUi === 'function') {
-        store.setActiveTaskUi(taskId);
-      }
+      // task-301 Part 2: sidebar-row highlight only. Deep-linking to a
+      // task-detail pane lands in a later task (Phase 2).
+      store.setActiveTaskUi(taskId);
     };
 
     // Detail panel resizable width

@@ -16,6 +16,7 @@
 import { loadSession } from './session.js';
 import { sendToServer } from '../connection/buffer.js';
 import ctx from '../context.js';
+import { getThreadStore } from './threads/store.js';
 
 /** @type {import('./session.js').Session | null} */
 let session = null;
@@ -73,6 +74,49 @@ function sendUnifyEvent(event) {
 }
 
 /**
+ * task-301 Part 2: push the full thread list snapshot to the web client.
+ * Called after any ThreadStore-mutating tool completes and at turn_end so
+ * the sidebar V2 always shows a fresh picture. Cheap — ThreadStore keeps
+ * cached counters so list() is O(n) over a small n.
+ */
+function sendThreadListUpdate() {
+  try {
+    const store = getThreadStore();
+    const threads = store.list().map(t => ({
+      id: t.id,
+      name: t.name,
+      goal: t.goal || '',
+      parentThreadId: t.parentThreadId || null,
+      status: t.status,
+      archived: !!t.archived,
+      messageCount: t.messageCount || 0,
+      lastMessageAt: t.lastMessageAt || null,
+      lastActivityAt: t.lastActivityAt || t.lastMessageAt || t.updatedAt || null,
+      unread: t.unread || 0,
+      preview: t.preview || '',
+      createdAt: t.createdAt,
+      updatedAt: t.updatedAt,
+      // `running` — the thread whose id equals the store's currentId is
+      // considered the active/running track. The UI uses this for the
+      // green halo in the Active group.
+      running: t.id === store.currentId,
+    }));
+    sendUnifyEvent({ type: 'thread_list_updated', threads, currentThreadId: store.currentId });
+  } catch (err) {
+    // Best-effort; sidebar update must never block the main query path.
+    console.warn('[Unify] sendThreadListUpdate failed:', err?.message || err);
+  }
+}
+
+/** Tool names that mutate ThreadStore. After any of these we push an update. */
+const THREAD_MUTATING_TOOLS = new Set([
+  'SpawnThread',
+  'SwitchThread',
+  'ArchiveThread',
+  'AttachThreadToTask',
+]);
+
+/**
  * Handle a unify_chat message from the web UI.
  *
  * @param {{ prompt: string, mode?: string, userId?: string, username?: string }} msg
@@ -118,6 +162,9 @@ export async function handleUnifyChat(msg) {
         mcpServers: session.status.mcpServers,
         tools: session.status.tools,
       });
+      // task-301 Part 2: initial thread snapshot so sidebar V2 renders
+      // the real 'main' thread (and any restored threads) right away.
+      sendThreadListUpdate();
     }
 
     // ─── Cancel any in-flight query ──
@@ -214,6 +261,11 @@ export async function handleUnifyChat(msg) {
             }],
             threadId: event.threadId,
           });
+          // task-301 Part 2: if this tool mutates ThreadStore, push a
+          // fresh snapshot to the sidebar immediately.
+          if (THREAD_MUTATING_TOOLS.has(event.name)) {
+            sendThreadListUpdate();
+          }
           break;
 
         // ── Turn boundaries ──
@@ -476,6 +528,8 @@ export async function handleUnifyLoadHistory(msg) {
       mcpServers: session.status.mcpServers,
       tools: session.status.tools,
     });
+    // task-301 Part 2: initial thread snapshot for history-load session.
+    sendThreadListUpdate();
   }
 
   const limit = msg.limit || 50;
@@ -548,6 +602,8 @@ export async function resetUnifySession() {
       mcpServers: session.status.mcpServers,
       tools: session.status.tools,
     });
+    // task-301 Part 2: re-push thread snapshot after session reset.
+    sendThreadListUpdate();
   } catch (err) {
     console.error('[Unify] Failed to re-initialize session after reset:', err.message);
   }

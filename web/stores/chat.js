@@ -189,6 +189,17 @@ export const useChatStore = defineStore('chat', {
     // ★ task-303: Chat stream dual view — active thread filter.
     // null = 主流 (full stream) | threadId = 仅显示该 thread
     unifyActiveThreadFilter: null,
+
+    // ★ task-301 Part 2: real thread/task state driven by agent-side
+    // ThreadStore / TaskStore. Populated by thread_list_updated /
+    // task_list_updated events (unify_output metadata channel).
+    // UnifySidebarV2 reads these instead of its Phase-1 mock data.
+    unifyThreads: [],
+    unifyTasks: [],
+
+    // Currently selected thread / task in the sidebar (UI-only highlight).
+    unifyActiveThreadId: null,
+    unifyActiveTaskId: null,
   }),
 
   getters: {
@@ -495,6 +506,18 @@ export const useChatStore = defineStore('chat', {
           // History messages already rendered via sendUnifyOutput (data path).
           // This event just signals completion — no additional action needed.
           break;
+
+        // ★ task-301 Part 2: real-store push from agent.
+        // Agent's ThreadStore changes (SpawnThread / SwitchThread /
+        // ArchiveThread / AttachThreadToTask) → web-bridge serialises the
+        // full thread list → here.
+        case 'thread_list_updated':
+          this.unifyThreads = Array.isArray(event.threads) ? event.threads : [];
+          break;
+
+        case 'task_list_updated':
+          this.unifyTasks = Array.isArray(event.tasks) ? event.tasks : [];
+          break;
       }
     },
     fetchExpertRoleDefinitions() {
@@ -529,6 +552,16 @@ export const useChatStore = defineStore('chat', {
     clearUnifyThreadFilter() {
       this.unifyActiveThreadFilter = null;
     },
+    // ★ task-301 Part 2: Sidebar V2 selection actions.
+    // setActiveThread additionally drives the chat-stream dual view filter
+    // (matches task-303 semantics — clicking a thread narrows the stream).
+    setActiveThread(threadId) {
+      this.unifyActiveThreadId = threadId || null;
+      this.unifyActiveThreadFilter = threadId || null;
+    },
+    setActiveTaskUi(taskId) {
+      this.unifyActiveTaskId = taskId || null;
+    },
     switchUnifyModel(modelId) {
       if (!modelId || !this.unifyAgentId) return;
       this.sendWsMessage({
@@ -554,6 +587,11 @@ export const useChatStore = defineStore('chat', {
       this.unifyStatus = null;
       this.unifyDebugTurns = [];
       this.unifyActiveThreadFilter = null;
+      // task-301 Part 2: reset sidebar V2 state too
+      this.unifyThreads = [];
+      this.unifyTasks = [];
+      this.unifyActiveThreadId = null;
+      this.unifyActiveTaskId = null;
       // Tell agent to reset session so Engine gets a fresh start
       if (this.unifyAgentId) {
         this.sendWsMessage({
