@@ -397,6 +397,8 @@ export default {
   'settings.llm.providersTitle': 'Providers',
   'settings.llm.providersDesc': 'Configure LLM provider connections. Each provider defines a base URL, API key, and available models.',
   'settings.llm.addProvider': 'Add Provider',
+  'settings.llm.addModel': 'Add Model',
+  'settings.llm.removeModel': 'Remove Model',
   'settings.llm.providerName': 'Name',
   'settings.llm.providerNamePlaceholder': 'e.g. my-proxy',
   'settings.llm.baseUrl': 'Base URL',

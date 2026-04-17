@@ -1,3 +1,5 @@
+import { PROTOCOL_PRESET_MODELS } from '../utils/protocolPresets.js';
+
 export default {
   name: 'LlmTab',
   template: `
@@ -385,11 +387,7 @@ export default {
     },
 
     _getModelPresets(protocol) {
-      if (protocol === 'anthropic') {
-        return ['claude-sonnet-4-20250514', 'claude-opus-4-20250514', 'claude-haiku-3-20250414'];
-      }
-      // Default: OpenAI-compatible presets
-      return ['gpt-5', 'gpt-4.1', 'gpt-4.1-mini', 'o3', 'o4-mini'];
+      return PROTOCOL_PRESET_MODELS[protocol] || PROTOCOL_PRESET_MODELS.openai;
     },
 
     toggleApiKeyVisibility(idx) {

@@ -5,6 +5,8 @@
  * the Unify agent (store.unifyAgentId). Embedded in UnifyPage's
  * main area when the user clicks the settings gear button.
  */
+import { PROTOCOL_PRESET_MODELS } from '../utils/protocolPresets.js';
+
 export default {
   name: 'UnifySettings',
   emits: ['close', 'saved'],
@@ -111,13 +113,13 @@ export default {
                       :placeholder="$t('settings.llm.modelMaxPlaceholder')"
                       :title="$t('settings.llm.modelMaxPlaceholder')"
                       @input="markDirty" />
-                    <button class="unify-settings-icon-btn" @click="removeModel(idx, midx)" :title="$t('settings.llm.removeProvider')">
+                    <button class="unify-settings-icon-btn" @click="removeModel(idx, midx)" :title="$t('settings.llm.removeModel')">
                       <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
                     </button>
                   </div>
                   <button class="unify-settings-add-btn" @click="addModel(idx)">
                     <svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-                    {{ $t('settings.llm.addProvider') }}
+                    {{ $t('settings.llm.addModel') }}
                   </button>
                 </div>
               </div>
@@ -178,7 +180,6 @@ export default {
     const loadError = Vue.ref(null);
     const needsSetup = Vue.ref(false);
     const localProviders = Vue.ref([]);
-    const providerModelsText = Vue.ref([]);
     const localPrimaryModel = Vue.ref(null);
     const localFastModel = Vue.ref(null);
     const isDirty = Vue.ref(false);
@@ -236,7 +237,6 @@ export default {
         models: Array.isArray(p.models) ? p.models.map(toModelRow).filter(r => r) : [],
       }));
 
-      providerModelsText.value = localProviders.value.map(() => '');
       localPrimaryModel.value = config.primaryModel || null;
       localFastModel.value = config.fastModel || null;
       isDirty.value = false;
@@ -309,13 +309,11 @@ export default {
 
     function addProvider() {
       localProviders.value.push({ name: '', baseUrl: '', apiKey: '', protocol: 'openai', models: [] });
-      providerModelsText.value.push('');
       markDirty();
     }
 
     function removeProvider(idx) {
       localProviders.value.splice(idx, 1);
-      providerModelsText.value.splice(idx, 1);
       markDirty();
     }
 
@@ -332,27 +330,12 @@ export default {
       markDirty();
     }
 
-    function onModelsTextChange(idx, event) {
-      // Legacy textarea path — still parse for back-compat if anything calls this.
-      const text = event.target.value;
-      providerModelsText.value[idx] = text;
-      localProviders.value[idx].models = text.split(/[\n,]+/)
-        .map(l => l.trim()).filter(l => l)
-        .map(id => ({ id, contextWindow: null, maxOutput: null }));
-      markDirty();
-    }
-
     function onProtocolChange(idx) {
       const provider = localProviders.value[idx];
       const currentModels = (provider.models || []).filter(m => m && (typeof m === 'string' ? m : m.id));
       if (currentModels.length === 0) {
-        const presets = provider.protocol === 'anthropic'
-          ? ['claude-sonnet-4-20250514', 'claude-opus-4-20250514', 'claude-haiku-3-20250414']
-          : provider.protocol === 'openai-responses'
-            ? ['gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-pro']
-            : ['gpt-5', 'gpt-4.1', 'gpt-4.1-mini', 'o3', 'o4-mini'];
+        const presets = PROTOCOL_PRESET_MODELS[provider.protocol] || PROTOCOL_PRESET_MODELS.openai;
         provider.models = presets.map(id => ({ id, contextWindow: null, maxOutput: null }));
-        providerModelsText.value[idx] = '';
       }
       markDirty();
     }
@@ -432,12 +415,12 @@ export default {
 
     return {
       store, loading, loadError, needsSetup,
-      localProviders, providerModelsText, localPrimaryModel, localFastModel,
+      localProviders, localPrimaryModel, localFastModel,
       allModelRefs, isDirty, saving, showApiKey,
       saveMessage, saveError,
       markDirty, addProvider, removeProvider,
       addModel, removeModel,
-      onModelsTextChange, onProtocolChange, toggleApiKey, saveConfig,
+      onProtocolChange, toggleApiKey, saveConfig,
       protocolHint,
     };
   },

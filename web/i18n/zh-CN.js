@@ -397,6 +397,8 @@ export default {
   'settings.llm.providersTitle': '服务商',
   'settings.llm.providersDesc': '配置 LLM 服务商连接。每个服务商定义一个 Base URL、API Key 和可用模型。',
   'settings.llm.addProvider': '添加服务商',
+  'settings.llm.addModel': '添加模型',
+  'settings.llm.removeModel': '移除模型',
   'settings.llm.providerName': '名称',
   'settings.llm.providerNamePlaceholder': '例如 my-proxy',
   'settings.llm.baseUrl': 'Base URL',
