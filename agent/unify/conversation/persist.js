@@ -56,6 +56,10 @@ function serializeMessage(msg) {
   if (msg.turnNumber != null) fm.push(`turnNumber: ${msg.turnNumber}`);
   if (msg.toolCallId) fm.push(`toolCallId: ${msg.toolCallId}`);
   if (msg.isError) fm.push(`isError: true`);
+  // task-307: every message is stamped with a threadId so multi-thread
+  // routing can filter/replay by thread without rescanning JSON blobs.
+  // Defaults to 'main' for legacy messages (see migrate-messages-threadid.js).
+  fm.push(`threadId: ${msg.threadId || 'main'}`);
 
   // Token estimate
   const content = msg.content || '';
@@ -111,9 +115,13 @@ export function parseMessage(raw) {
       case 'toolCallId': msg.toolCallId = value; break;
       case 'isError': msg.isError = value === 'true'; break;
       case 'tokens_est': msg.tokens_est = parseInt(value, 10); break;
+      case 'threadId': msg.threadId = value; break;
       // toolCalls are multi-line YAML — handled separately below
     }
   }
+
+  // task-307: legacy messages written before threadId existed default to 'main'.
+  if (!msg.threadId) msg.threadId = 'main';
 
   // Parse toolCalls if present (simplified multi-line YAML)
   if (frontmatter.includes('toolCalls:')) {
