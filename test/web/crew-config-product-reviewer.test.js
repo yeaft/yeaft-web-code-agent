@@ -95,4 +95,28 @@ describe('Crew dev templates — product-reviewer parity with reviewer', () => {
     expect(en).not.toContain('tester');
     expect(zh).not.toContain('tester');
   });
+
+  // task-294: developer role claudeMd must not reference the removed tester role,
+  // otherwise devs will produce invalid ROUTEs to a non-existent recipient.
+  // Extract the full developer claudeMd by slicing between role markers rather than
+  // a regex, since the template literal contains escaped backticks (\`) which would
+  // otherwise terminate a naive `([\s\S]*?)` capture early.
+  const extractDeveloperClaudeMd = (src) => {
+    const start = src.indexOf("name: 'developer'");
+    expect(start, 'developer role should exist').toBeGreaterThan(-1);
+    const end = src.indexOf("name: 'reviewer'", start);
+    expect(end, 'reviewer role should exist after developer').toBeGreaterThan(start);
+    return src.slice(start, end);
+  };
+
+  it('developer role in dev-en.js has zero tester prose residues', () => {
+    const block = extractDeveloperClaudeMd(read('web/crew-templates/dev-en.js'));
+    expect(block).not.toMatch(/tester/i);
+  });
+
+  it('developer role in dev-zh.js has zero tester prose residues', () => {
+    const block = extractDeveloperClaudeMd(read('web/crew-templates/dev-zh.js'));
+    expect(block).not.toMatch(/测试者|测试人员/);
+    expect(block).not.toMatch(/tester/i);
+  });
 });

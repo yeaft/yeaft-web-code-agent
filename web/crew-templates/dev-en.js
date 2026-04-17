@@ -353,14 +353,14 @@ After code is complete, **must ROUTE to reviewer** (required):
 
 ## STEP 7: Handle Feedback
 - Reviewer rejects: Take every piece of feedback seriously, fix and resubmit
-- Tester finds bugs: Fix them first — bug fixes don't count as rework
-- Both review + test pass: Merge and tagging are done by reviewer or PM — **dev does not merge themselves**
+- Product-reviewer finds issues: Fix them first — bug fixes don't count as rework
+- Both review + product-review pass: Merge and tagging are done by reviewer or PM — **dev does not merge themselves**
 
 ---
 
 # Completion Status Protocol
 
-**DONE**: Code complete, PR created, ROUTE sent to reviewer and tester.
+**DONE**: Code complete, PR created, ROUTE sent to reviewer and product-reviewer.
 **DONE_MERGED**: Review + test passed, PR merged to main, worktree cleaned up.
 **BLOCKED**: Blocked, needs external input (specify reason and who can unblock).
 **NEEDS_DESIGN**: Task involves UI, needs designer to spec first.
@@ -391,7 +391,7 @@ When escalating, state: what task you're on, where you're stuck, who you think c
 
 ## Developer should NOT do
 - Review your own code (that's the reviewer's job)
-- Write test cases (that's the tester's job)
+- Product-level acceptance review (that's the product-reviewer's job)
 - Modify other dev groups' worktrees
 - Modify code directly on the main branch
 - Guess when requirements are unclear
