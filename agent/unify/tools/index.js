@@ -55,6 +55,15 @@ import {
   updatePlan,
 } from './task-tools.js';
 
+// --- P1 Thread tools (task-299 Phase 1) ---
+import {
+  spawnThread,
+  switchThread,
+  listThreads,
+  attachThreadToTask,
+} from './thread-tools.js';
+import { spawnTask, spawnSubtask } from './spawn-task-tools.js';
+
 // --- P2 Auxiliary tools ---
 import { jsRepl, jsReplReset } from './js-repl.js';
 import notebookEdit from './notebook-edit.js';
@@ -112,6 +121,14 @@ export const allTools = [
   taskMemory,
   followupTask,
   updatePlan,
+
+  // P1 Thread (task-299 Phase 1)
+  spawnThread,
+  switchThread,
+  listThreads,
+  attachThreadToTask,
+  spawnTask,
+  spawnSubtask,
 
   // P2 Auxiliary
   jsRepl,

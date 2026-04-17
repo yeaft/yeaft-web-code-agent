@@ -23,6 +23,7 @@ import { SkillManager, createSkillManager } from './skills.js';
 import { MCPManager } from './mcp.js';
 import { createFullRegistry } from './tools/index.js';
 import { initTaskStore } from './tools/task-tools.js';
+import { initThreadStore } from './threads/store.js';
 import { Engine } from './engine.js';
 import { join } from 'path';
 
@@ -120,6 +121,11 @@ export async function loadSession(options = {}) {
 
   // ─── 5a. Initialize task store ─────────────────────────
   initTaskStore(yeaftDir, { readOnly: config._readOnly || false });
+
+  // ─── 5b. Initialize thread store (task-299 Phase 1) ────
+  //         In-memory only for Phase 1; replaced by a file-backed store
+  //         when task-298's data layer merges.
+  initThreadStore();
 
   // ─── 6. Load skills ────────────────────────────────────
   let skillManager;

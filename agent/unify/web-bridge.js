@@ -192,12 +192,15 @@ export async function handleUnifyChat(msg) {
                 input: event.input,
               }],
             },
+            threadId: event.threadId,
           });
           break;
 
         // ── Tool execution started ──
         case 'tool_start':
-          // Tool is running — the UI already shows it from tool_use block above
+          // Tool is running — the UI already shows it from tool_use block above.
+          // Forward threadId so the UI can group tool activity by thread (Phase 1).
+          sendUnifyEvent({ type: 'tool_start', id: event.id, name: event.name, threadId: event.threadId });
           break;
 
         // ── Tool execution completed ──
@@ -211,6 +214,7 @@ export async function handleUnifyChat(msg) {
               content: event.output || '',
               is_error: event.isError || false,
             }],
+            threadId: event.threadId,
           });
           break;
 

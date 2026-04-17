@@ -24,6 +24,7 @@ import { recall } from './memory/recall.js';
 import { shouldConsolidate, consolidate } from './memory/consolidate.js';
 import { buildMemoryInjection } from './memory/layout.js';
 import { runStopHooks } from './stop-hooks.js';
+import { getThreadStore, MAIN_THREAD_ID } from './threads/store.js';
 
 /** Maximum number of turns before the engine stops to prevent infinite loops. */
 const MAX_TURNS = 25;
@@ -269,11 +270,22 @@ export class Engine {
     if (!this.#conversationStore) return;
     if (this.#config._readOnly) return;
 
+    // task-299 Phase 1: tag persisted messages with the current thread.
+    // getThreadStore() lazily seeds a default 'main' thread if not yet init'd.
+    let threadId = MAIN_THREAD_ID;
+    try {
+      threadId = getThreadStore().currentId || MAIN_THREAD_ID;
+    } catch {
+      // Defensive: any store failure falls back to 'main' so persistence
+      // never breaks because of thread bookkeeping.
+    }
+
     // Persist user message
     this.#conversationStore.append({
       role: 'user',
       content: userContent,
       mode,
+      threadId,
     });
 
     // Persist assistant message
@@ -282,6 +294,7 @@ export class Engine {
       content: assistantContent,
       mode,
       model: this.#config.model,
+      threadId,
     };
     if (toolCalls && toolCalls.length > 0) {
       assistantMsg.toolCalls = toolCalls;
@@ -601,21 +614,21 @@ export class Engine {
         if (!hasTool) {
           output = `Error: unknown tool "${tc.name}"`;
           isError = true;
-          yield { type: 'tool_end', id: tc.id, name: tc.name, output, isError: true };
+          yield { type: 'tool_end', id: tc.id, name: tc.name, output, isError: true, threadId: this.currentThreadId };
         } else {
           try {
-            yield { type: 'tool_start', id: tc.id, name: tc.name, input: tc.input };
+            yield { type: 'tool_start', id: tc.id, name: tc.name, input: tc.input, threadId: this.currentThreadId };
             if (this.#toolRegistry) {
               output = await this.#toolRegistry.execute(tc.name, tc.input, toolCtx);
             } else {
               const tool = this.#tools.get(tc.name);
               output = await tool.execute(tc.input, { signal });
             }
-            yield { type: 'tool_end', id: tc.id, name: tc.name, output, isError: false };
+            yield { type: 'tool_end', id: tc.id, name: tc.name, output, isError: false, threadId: this.currentThreadId };
           } catch (err) {
             output = `Error: ${err.message}`;
             isError = true;
-            yield { type: 'tool_end', id: tc.id, name: tc.name, output, isError: true };
+            yield { type: 'tool_end', id: tc.id, name: tc.name, output, isError: true, threadId: this.currentThreadId };
           }
         }
 
@@ -686,6 +699,19 @@ export class Engine {
 
   /** @returns {import('./mcp.js').MCPManager|null} */
   get mcpManager() { return this.#mcpManager; }
+
+  /**
+   * task-299 Phase 1: the engine's current thread marker.
+   * Defaults to 'main' if the thread store is unreachable for any reason.
+   * @returns {string}
+   */
+  get currentThreadId() {
+    try {
+      return getThreadStore().currentId || MAIN_THREAD_ID;
+    } catch {
+      return MAIN_THREAD_ID;
+    }
+  }
 
   /** @returns {string|null} */
   get yeaftDir() { return this.#yeaftDir; }
