@@ -233,4 +233,110 @@ summary: Work done, please check
     expect(routes[0].to).toBe('pm');
     expect(routes[0].taskId).toBe('task-275');
   });
+
+  // ─── task-319: bare ---END--- closer + bare-body summary + blank-line cutoff ──
+
+  describe('task-319 — bare ---END--- closer / bare-body / Phase 2 cutoff', () => {
+    it('should accept bare ---END--- closer (not just ---END_ROUTE---)', () => {
+      const text = `---ROUTE---
+to: rev-1
+summary: Please review
+---END---`;
+      const routes = parseRoutes(text);
+      expect(routes).toHaveLength(1);
+      expect(routes[0].to).toBe('rev-1');
+      expect(routes[0].summary).toBe('Please review');
+    });
+
+    it('should use bare body as summary when `summary:` label is omitted', () => {
+      const text = `---ROUTE---
+to: pm
+Work is done, please check and merge.
+---END---`;
+      const routes = parseRoutes(text);
+      expect(routes).toHaveLength(1);
+      expect(routes[0].to).toBe('pm');
+      expect(routes[0].summary).toBe('Work is done, please check and merge.');
+    });
+
+    it('should collect multi-line bare body as summary', () => {
+      const text = `---ROUTE---
+to: dev-1
+Line one of the message.
+Line two of the message.
+---END---`;
+      const routes = parseRoutes(text);
+      expect(routes).toHaveLength(1);
+      expect(routes[0].summary).toBe('Line one of the message.\nLine two of the message.');
+    });
+
+    it('Phase 2 fallback: blank line stops summary so kanban/recent-routes are not swallowed', () => {
+      const text = `---ROUTE---
+to: pm
+summary: Shipped v0.1.420
+
+---
+<kanban file=".crew/context/kanban.md">
+| task-100 | Add dark mode | dev-1 | In Review |
+</kanban>
+
+---
+<recent-routes>
+[pm → dev-1] Please implement dark mode
+</recent-routes>`;
+      const routes = parseRoutes(text);
+      expect(routes).toHaveLength(1);
+      expect(routes[0].to).toBe('pm');
+      expect(routes[0].summary).toBe('Shipped v0.1.420');
+      expect(routes[0].summary).not.toContain('kanban');
+      expect(routes[0].summary).not.toContain('recent-routes');
+    });
+
+    it('Phase 2 fallback with bare body: blank-line cutoff still applies', () => {
+      const text = `---ROUTE---
+to: pm
+Work done, submitting.
+
+---
+<kanban>garbage context</kanban>`;
+      const routes = parseRoutes(text);
+      expect(routes).toHaveLength(1);
+      expect(routes[0].to).toBe('pm');
+      expect(routes[0].summary).toBe('Work done, submitting.');
+    });
+
+    it('should default summary placeholder when block has only `to:` and nothing else', () => {
+      const text = `---ROUTE---
+to: pm
+---END---`;
+      const routes = parseRoutes(text);
+      expect(routes).toHaveLength(1);
+      expect(routes[0].summary).toBe('[该角色未提供消息摘要]');
+    });
+
+    it('should not parse inline "ROUTE → x" shorthand inside a bare-END ROUTE block', () => {
+      const text = `---ROUTE---
+to: dev-1
+summary: work mentions ROUTE → pm but that is content, not a shorthand
+---END---`;
+      const routes = parseRoutes(text);
+      expect(routes).toHaveLength(1);
+      expect(routes[0].to).toBe('dev-1');
+    });
+
+    it('bare-body fallback does not overwrite an explicit `summary:` label', () => {
+      // When `summary:` is present, _parseRouteBlock captures it and the
+      // bare-body branch must be skipped entirely — otherwise the labelled
+      // summary could be replaced by whatever free text lives below.
+      const text = `---ROUTE---
+to: pm
+summary: Real summary
+task: task-42
+---END---`;
+      const routes = parseRoutes(text);
+      expect(routes).toHaveLength(1);
+      expect(routes[0].summary).toBe('Real summary');
+      expect(routes[0].taskId).toBe('task-42');
+    });
+  });
 });

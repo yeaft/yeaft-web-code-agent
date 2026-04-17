@@ -43,10 +43,13 @@ export function parseRoutes(text) {
   // Replaces ```...``` content with whitespace of same length to preserve positions
   text = text.replace(/```[\s\S]*?```/g, m => ' '.repeat(m.length));
 
-  // ─── Phase 1: Standard ROUTE blocks (with END_ROUTE) ──────────
-  // ★ Tolerate both underscore and space variants: ---END_ROUTE--- or ---END ROUTE---
-  // ★ Use negative lookahead to not cross another ---ROUTE--- boundary
-  const regex = /---ROUTE---\s*\n((?:(?!---ROUTE---)[\s\S])*?)---END[_ ]ROUTE---/g;
+  // ─── Phase 1: Standard ROUTE blocks (with closing marker) ─────
+  // ★ Tolerate closer variants:
+  //     ---END_ROUTE---   (underscore)
+  //     ---END ROUTE---   (space)
+  //     ---END---         (bare — users / PM often write this)
+  // ★ Use negative lookahead to not cross another ---ROUTE--- boundary.
+  const regex = /---ROUTE---\s*\n((?:(?!---ROUTE---)[\s\S])*?)---END(?:[_ ]ROUTE)?---/g;
   let match;
   const matchedRanges = []; // track matched ranges to avoid double-parsing
 
@@ -56,9 +59,12 @@ export function parseRoutes(text) {
     if (parsed) routes.push(parsed);
   }
 
-  // ─── Phase 2: Fallback — ROUTE block missing END_ROUTE ────────
-  // Match ---ROUTE--- without a closing ---END_ROUTE---
-  // Take content until next ---ROUTE--- or EOF
+  // ─── Phase 2: Fallback — ROUTE block missing any closing marker ──
+  // Take content until (a) next ---ROUTE--- boundary, (b) first blank
+  // line (summary is almost always a single paragraph — anything after
+  // a blank line is kanban/recent-routes/task-context noise injected
+  // by the crew runtime), or (c) EOF. The blank-line cutoff prevents
+  // the whole back-injected blob from being swallowed as the summary.
   const openRegex = /---ROUTE---\s*\n/g;
   while ((match = openRegex.exec(text)) !== null) {
     // Skip if this range was already captured by Phase 1
@@ -68,7 +74,10 @@ export function parseRoutes(text) {
     const blockStart = pos + match[0].length;
     // End at next ---ROUTE--- or EOF
     const nextRoute = text.indexOf('---ROUTE---', blockStart);
-    const blockEnd = nextRoute !== -1 ? nextRoute : text.length;
+    const hardEnd = nextRoute !== -1 ? nextRoute : text.length;
+    // Soft end: first blank line (two or more newlines with only whitespace in between).
+    const blank = text.slice(blockStart, hardEnd).search(/\n[ \t]*\n/);
+    const blockEnd = blank !== -1 ? blockStart + blank : hardEnd;
     const block = text.slice(blockStart, blockEnd);
 
     const parsed = _parseRouteBlock(block);
@@ -88,7 +97,8 @@ export function parseRoutes(text) {
     const lastRouteOpen = precedingText.lastIndexOf('---ROUTE---');
     const lastRouteClose = Math.max(
       precedingText.lastIndexOf('---END_ROUTE---'),
-      precedingText.lastIndexOf('---END ROUTE---')
+      precedingText.lastIndexOf('---END ROUTE---'),
+      precedingText.lastIndexOf('---END---')
     );
     if (lastRouteOpen > lastRouteClose) continue; // inside an open block
 
@@ -122,6 +132,20 @@ function _parseRouteBlock(block) {
   const taskTitleMatch = block.match(/^taskTitle:\s*(.+)/im);
 
   let summary = summaryMatch ? summaryMatch[1].trim() : '';
+
+  // ★ Bare-body fallback — PM / humans often omit the `summary:` label and
+  //   just write the message as free text AFTER the known fields. Collect
+  //   everything that is NOT a recognised field line as the body.
+  if (!summary) {
+    const KNOWN_FIELD = /^\s*(?:to|task|taskTitle|summary)\s*:/i;
+    const bare = block
+      .split(/\r?\n/)
+      .filter(line => !KNOWN_FIELD.test(line))
+      .join('\n')
+      .trim();
+    if (bare) summary = bare;
+  }
+
   if (!summary) {
     summary = '[该角色未提供消息摘要]';
   }
