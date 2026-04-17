@@ -97,6 +97,11 @@ export default {
   'unify.back': '返回',
   'unify.model': '模型',
   'unify.placeholder': '问我任何问题...',
+  // task-301: Sidebar V2 strings
+  'unify.inbox': '收件箱',
+  'unify.sidebar.searchPlaceholder': '搜索… (#名称 只过滤 thread)',
+  'unify.settings.sidebarV2': '实验功能：侧边栏 V2',
+  'unify.settings.sidebarV2Hint': 'Thread 列表 + 任务树（预览）。',
   'unify.clearConfirm': '清空所有消息？',
   'unify.mode': '模式',
   'unify.agent': '智能体',

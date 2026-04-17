@@ -97,6 +97,11 @@ export default {
   'unify.back': 'Back',
   'unify.model': 'Model',
   'unify.placeholder': 'Ask anything...',
+  // task-301: Sidebar V2 strings
+  'unify.inbox': 'Inbox',
+  'unify.sidebar.searchPlaceholder': 'Search… (#name for threads)',
+  'unify.settings.sidebarV2': 'Experimental: Sidebar V2',
+  'unify.settings.sidebarV2Hint': 'Thread list + task tree (preview).',
   'unify.clearConfirm': 'Clear all messages?',
   'unify.mode': 'Mode',
   'unify.agent': 'Agent',
