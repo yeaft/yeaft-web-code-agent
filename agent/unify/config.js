@@ -33,6 +33,13 @@ const DEFAULTS = {
   maxOutputTokens: 16384,
   messageTokenBudget: 8192,
   maxContinueTurns: 3,
+  // task-318: Unify-specific runtime caps. `maxConcurrentThreads` gates
+  // how many ThreadEngineRegistry instances may be live at once; dispatch
+  // refuses new threads beyond this. `autoArchiveIdleDays` is consumed by
+  // ThreadStore's idle-archive pass (task-317 will wire the pass itself;
+  // here we just plumb the knob through so the UI can set it).
+  unifyMaxConcurrentThreads: 5,
+  unifyAutoArchiveIdleDays: 30,
 };
 
 // ─── config.json reader ─────────────────────────────────────────
@@ -135,6 +142,32 @@ function isTruthy(val) {
 }
 
 /**
+ * Clamp and normalise the `unify` config section. Missing or invalid
+ * values fall back to the DEFAULTS so callers can always read a stable
+ * shape. Exported for tests and for `config-api.js` to share the same
+ * validation path on write.
+ *
+ * @param {any} raw — jsonConfig.unify (may be undefined / malformed)
+ * @returns {{ maxConcurrentThreads: number, autoArchiveIdleDays: number }}
+ */
+export function normaliseUnifySection(raw) {
+  const out = {
+    maxConcurrentThreads: DEFAULTS.unifyMaxConcurrentThreads,
+    autoArchiveIdleDays: DEFAULTS.unifyAutoArchiveIdleDays,
+  };
+  if (!raw || typeof raw !== 'object') return out;
+  const mc = Number(raw.maxConcurrentThreads);
+  if (Number.isFinite(mc) && mc >= 1 && mc <= 50) {
+    out.maxConcurrentThreads = Math.floor(mc);
+  }
+  const ad = Number(raw.autoArchiveIdleDays);
+  if (Number.isFinite(ad) && ad >= 1 && ad <= 3650) {
+    out.autoArchiveIdleDays = Math.floor(ad);
+  }
+  return out;
+}
+
+/**
  * Build config from legacy config.md + .env + env vars.
  * @deprecated — used only when config.json doesn't exist.
  */
@@ -160,6 +193,8 @@ function loadLegacyConfig(dir, overrides) {
     maxOutputTokens: overrides.maxOutputTokens ?? fileConfig.maxOutputTokens ?? DEFAULTS.maxOutputTokens,
     messageTokenBudget: overrides.messageTokenBudget ?? (env.YEAFT_MESSAGE_TOKEN_BUDGET ? parseInt(env.YEAFT_MESSAGE_TOKEN_BUDGET, 10) : null) ?? fileConfig.messageTokenBudget ?? DEFAULTS.messageTokenBudget,
     maxContinueTurns: overrides.maxContinueTurns ?? fileConfig.maxContinueTurns ?? DEFAULTS.maxContinueTurns,
+    // task-318: legacy path never had the `unify` section — defaults.
+    unify: normaliseUnifySection(null),
     providers: null,
     primaryModel: null,
     fastModel: null,
@@ -251,6 +286,10 @@ export function loadConfig(overrides = {}) {
     maxOutputTokens: overrides.maxOutputTokens ?? jsonConfig.maxOutputTokens ?? modelInfo?.maxOutputTokens ?? DEFAULTS.maxOutputTokens,
     messageTokenBudget: overrides.messageTokenBudget ?? jsonConfig.messageTokenBudget ?? DEFAULTS.messageTokenBudget,
     maxContinueTurns: overrides.maxContinueTurns ?? jsonConfig.maxContinueTurns ?? DEFAULTS.maxContinueTurns,
+
+    // task-318: Unify runtime caps. `unify` is a nested section so we
+    // don't pollute the flat config namespace used by chat/crew code.
+    unify: normaliseUnifySection(jsonConfig.unify),
 
     // Legacy fields (null when using config.json)
     apiKey: overrides.apiKey || null,

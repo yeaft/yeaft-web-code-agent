@@ -152,6 +152,21 @@ export default {
   'unify.hideDebug': 'Hide debug panel',
   'unify.switchModel': 'Switch model',
   'unify.settings.title': 'Settings',
+  // task-318: Unify runtime settings
+  'unify.settings.unifyTitle': 'Thread Concurrency & Archive',
+  'unify.settings.unifyDesc': 'Tune how many threads can run at once and when idle threads are auto-archived.',
+  'unify.settings.maxConcurrentLabel': 'Max concurrent threads',
+  'unify.settings.maxConcurrentHint': 'New threads beyond this cap are refused until an existing thread is archived or terminated. Range: 1-50.',
+  'unify.settings.archiveIdleDaysLabel': 'Auto-archive idle threads after (days)',
+  'unify.settings.archiveIdleDaysHint': 'Threads with no activity for this many days will be archived. Range: 1-3650.',
+  'unify.settings.unifySaveBtn': 'Save',
+  'unify.settings.unifySaving': 'Saving...',
+  'unify.settings.unifySaved': 'Saved',
+  'unify.settings.unifyLoading': 'Loading...',
+  'unify.settings.unifyLoadError': 'Failed to load Unify settings',
+  'unify.settings.unifySaveError': 'Failed to save Unify settings',
+  'unify.settings.rangeErrorConcurrent': 'Must be between 1 and 50',
+  'unify.settings.rangeErrorArchive': 'Must be between 1 and 3650',
 
   // Chat - Session lifecycle
   'chat.session.creating': 'Creating conversation...',

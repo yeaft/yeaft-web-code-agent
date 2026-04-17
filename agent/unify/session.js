@@ -131,7 +131,13 @@ export async function loadSession(options = {}) {
   // ─── 5b. Initialize thread store (task-299 Phase 1) ────
   //         task-307a: now file-backed under ~/.yeaft/threads/. Passing the
   //         yeaftDir switches on disk persistence; read-only mode is honoured.
-  initThreadStore(yeaftDir, { readOnly: config._readOnly || false, force: true });
+  //         task-318: forward the Unify autoArchiveIdleDays knob so the
+  //         archive pass (owned by task-317) can read it off the store.
+  initThreadStore(yeaftDir, {
+    readOnly: config._readOnly || false,
+    force: true,
+    idleArchiveDays: config.unify?.autoArchiveIdleDays ?? 0,
+  });
 
   // ─── 6. Load skills ────────────────────────────────────
   let skillManager;
@@ -187,6 +193,8 @@ export async function loadSession(options = {}) {
     skillManager,
     mcpManager,
     yeaftDir,
+    // task-318: concurrent-thread cap (UI-adjustable via Settings).
+    maxConcurrent: config.unify?.maxConcurrentThreads ?? null,
   });
   // Seed the main-thread instance so listActive() is non-empty from T=0.
   engineRegistry.ensure(MAIN_THREAD_ID);

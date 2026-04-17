@@ -159,6 +159,55 @@ export default {
             </div>
           </div>
 
+          <!-- task-318: Unify runtime settings (thread cap + archive) -->
+          <div class="unify-settings-group">
+            <div class="unify-settings-group-title">{{ $t('unify.settings.unifyTitle') }}</div>
+            <p class="unify-settings-desc">{{ $t('unify.settings.unifyDesc') }}</p>
+
+            <div v-if="unifyLoading" class="unify-settings-status">
+              {{ $t('unify.settings.unifyLoading') }}
+            </div>
+            <div v-else-if="unifyLoadError" class="unify-settings-status unify-settings-error">
+              {{ $t('unify.settings.unifyLoadError') }}: {{ unifyLoadError }}
+            </div>
+            <div v-else class="unify-settings-row">
+              <div class="unify-settings-field" style="flex:1">
+                <label>{{ $t('unify.settings.maxConcurrentLabel') }}</label>
+                <p class="unify-settings-hint">{{ $t('unify.settings.maxConcurrentHint') }}</p>
+                <input
+                  type="number"
+                  min="1"
+                  max="50"
+                  v-model.number="localMaxConcurrent"
+                  @input="onUnifyInput" />
+                <small v-if="maxConcurrentError" class="unify-settings-error">{{ maxConcurrentError }}</small>
+              </div>
+              <div class="unify-settings-field" style="flex:1">
+                <label>{{ $t('unify.settings.archiveIdleDaysLabel') }}</label>
+                <p class="unify-settings-hint">{{ $t('unify.settings.archiveIdleDaysHint') }}</p>
+                <input
+                  type="number"
+                  min="1"
+                  max="3650"
+                  v-model.number="localArchiveIdleDays"
+                  @input="onUnifyInput" />
+                <small v-if="archiveIdleDaysError" class="unify-settings-error">{{ archiveIdleDaysError }}</small>
+              </div>
+            </div>
+
+            <div class="unify-settings-save-row">
+              <span v-if="unifySaveMessage" :class="unifySaveError ? 'unify-settings-error' : 'unify-settings-success'">{{ unifySaveMessage }}</span>
+              <span v-else-if="unifyDirty" class="unify-settings-dirty">{{ $t('settings.llm.unsavedChanges') }}</span>
+              <button
+                class="unify-settings-save-btn"
+                :class="{ primary: unifyDirty }"
+                @click="saveUnifySettings"
+                :disabled="unifySaving || !unifyDirty || !!maxConcurrentError || !!archiveIdleDaysError">
+                {{ unifySaving ? $t('unify.settings.unifySaving') : $t('unify.settings.unifySaveBtn') }}
+              </button>
+            </div>
+          </div>
+
           <!-- Save -->
           <div class="unify-settings-save-row">
             <span v-if="saveMessage" :class="saveError ? 'unify-settings-error' : 'unify-settings-success'">{{ saveMessage }}</span>
@@ -190,6 +239,121 @@ export default {
 
     let loadTimeout = null;
     let saveTimeout = null;
+
+    // ─── task-318: Unify runtime settings state ───────────────
+    const localMaxConcurrent = Vue.ref(5);
+    const localArchiveIdleDays = Vue.ref(30);
+    const unifyDirty = Vue.ref(false);
+    const unifyLoading = Vue.ref(false);
+    const unifyLoadError = Vue.ref(null);
+    const unifySaving = Vue.ref(false);
+    const unifySaveMessage = Vue.ref('');
+    const unifySaveError = Vue.ref(false);
+    let unifyLoadTimeout = null;
+    let unifySaveTimeout = null;
+
+    const maxConcurrentError = Vue.computed(() => {
+      const n = Number(localMaxConcurrent.value);
+      if (!Number.isFinite(n) || n < 1 || n > 50) {
+        return $t('unify.settings.rangeErrorConcurrent');
+      }
+      return '';
+    });
+    const archiveIdleDaysError = Vue.computed(() => {
+      const n = Number(localArchiveIdleDays.value);
+      if (!Number.isFinite(n) || n < 1 || n > 3650) {
+        return $t('unify.settings.rangeErrorArchive');
+      }
+      return '';
+    });
+
+    function onUnifyInput() {
+      unifyDirty.value = true;
+      unifySaveMessage.value = '';
+    }
+
+    function requestUnifySettings() {
+      const agentId = store.unifyAgentId;
+      if (!agentId) return;
+      unifyLoading.value = true;
+      unifyLoadError.value = null;
+      store.sendWsMessage({ type: 'get_unify_settings', agentId });
+      unifyLoadTimeout = setTimeout(() => {
+        if (unifyLoading.value) {
+          unifyLoading.value = false;
+          unifyLoadError.value = 'Timeout';
+        }
+      }, 5000);
+    }
+
+    function loadFromUnifySettings(settings) {
+      if (unifyLoadTimeout) { clearTimeout(unifyLoadTimeout); unifyLoadTimeout = null; }
+      unifyLoading.value = false;
+      if (settings.error) {
+        unifyLoadError.value = settings.error;
+        return;
+      }
+      unifyLoadError.value = null;
+      localMaxConcurrent.value = settings.maxConcurrentThreads ?? 5;
+      localArchiveIdleDays.value = settings.autoArchiveIdleDays ?? 30;
+      unifyDirty.value = false;
+    }
+
+    Vue.watch(
+      () => {
+        const agentId = store.unifyAgentId;
+        return agentId ? store.unifySettings[agentId] : null;
+      },
+      (settings) => {
+        if (settings && settings.loaded) loadFromUnifySettings(settings);
+      },
+      { deep: true }
+    );
+
+    function saveUnifySettings() {
+      const agentId = store.unifyAgentId;
+      if (!agentId || unifySaving.value) return;
+      if (maxConcurrentError.value || archiveIdleDaysError.value) return;
+
+      unifySaving.value = true;
+      unifySaveMessage.value = '';
+      unifySaveError.value = false;
+
+      store.sendWsMessage({
+        type: 'update_unify_settings',
+        agentId,
+        settings: {
+          maxConcurrentThreads: Math.floor(Number(localMaxConcurrent.value)),
+          autoArchiveIdleDays: Math.floor(Number(localArchiveIdleDays.value)),
+        },
+      });
+
+      unifySaveTimeout = setTimeout(() => {
+        unifySaving.value = false;
+        unifySaveMessage.value = $t('unify.settings.unifySaveError');
+        unifySaveError.value = true;
+      }, 10000);
+
+      const unwatch = Vue.watch(
+        () => store.unifySettings[agentId],
+        (settings) => {
+          if (settings && settings.loaded) {
+            if (unifySaveTimeout) { clearTimeout(unifySaveTimeout); unifySaveTimeout = null; }
+            unifySaving.value = false;
+            if (settings.error) {
+              unifySaveMessage.value = settings.error;
+              unifySaveError.value = true;
+            } else {
+              unifyDirty.value = false;
+              unifySaveMessage.value = $t('unify.settings.unifySaved');
+              unifySaveError.value = false;
+            }
+            unwatch();
+          }
+        },
+        { deep: true }
+      );
+    }
 
     const allModelRefs = Vue.computed(() => {
       const refs = [];
@@ -297,12 +461,18 @@ export default {
         const existing = store.llmConfig[agentId];
         if (existing && existing.loaded) loadFromConfig(existing);
         else requestConfig();
+        // task-318: also load Unify runtime settings
+        const existingUnify = store.unifySettings[agentId];
+        if (existingUnify && existingUnify.loaded) loadFromUnifySettings(existingUnify);
+        else requestUnifySettings();
       }
     });
 
     Vue.onUnmounted(() => {
       if (loadTimeout) clearTimeout(loadTimeout);
       if (saveTimeout) clearTimeout(saveTimeout);
+      if (unifyLoadTimeout) clearTimeout(unifyLoadTimeout);
+      if (unifySaveTimeout) clearTimeout(unifySaveTimeout);
     });
 
     function markDirty() { isDirty.value = true; saveMessage.value = ''; }
@@ -422,6 +592,12 @@ export default {
       addModel, removeModel,
       onProtocolChange, toggleApiKey, saveConfig,
       protocolHint,
+      // task-318: Unify runtime settings
+      localMaxConcurrent, localArchiveIdleDays,
+      unifyLoading, unifyLoadError, unifyDirty,
+      unifySaving, unifySaveMessage, unifySaveError,
+      maxConcurrentError, archiveIdleDaysError,
+      onUnifyInput, saveUnifySettings,
     };
   },
 };

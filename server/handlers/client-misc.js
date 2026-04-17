@@ -130,6 +130,26 @@ export async function handleClientMisc(clientId, client, msg, checkAgentAccess) 
       break;
     }
 
+    // task-318: Unify runtime settings (thread cap + archive threshold)
+    case 'get_unify_settings': {
+      const unifyAgentId = msg.agentId || client.currentAgent;
+      if (!unifyAgentId) break;
+      if (!await checkAgentAccess(unifyAgentId)) break;
+      await forwardToAgent(unifyAgentId, { type: 'get_unify_settings' });
+      break;
+    }
+
+    case 'update_unify_settings': {
+      const unifyUpdateAgentId = msg.agentId || client.currentAgent;
+      if (!unifyUpdateAgentId) break;
+      if (!await checkAgentAccess(unifyUpdateAgentId)) break;
+      await forwardToAgent(unifyUpdateAgentId, {
+        type: 'update_unify_settings',
+        settings: msg.settings || msg.config || {}
+      });
+      break;
+    }
+
     default:
       return false; // Not handled
   }
