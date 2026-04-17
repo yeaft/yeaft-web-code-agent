@@ -59,31 +59,25 @@ export const MODEL_REGISTRY = new Map([
     maxOutputTokens: 16384,
     displayName: 'GPT-5',
   }],
+  // gpt-5-mini/-nano/-pro: keep id + family/protocol metadata so they appear
+  // as known models, but do NOT hardcode context/maxOutput — the real limits
+  // should come from provider config (user-supplied) instead of guesses.
   ['gpt-5-mini', {
     provider: 'openai',
     adapter: 'chat-completions',
     baseUrl: 'https://api.openai.com/v1',
-    // TODO: verify exact limits against OpenAI docs on first real call
-    contextWindow: 400000,
-    maxOutputTokens: 128000,
     displayName: 'GPT-5 Mini',
   }],
   ['gpt-5-nano', {
     provider: 'openai',
     adapter: 'chat-completions',
     baseUrl: 'https://api.openai.com/v1',
-    // TODO: verify exact limits against OpenAI docs on first real call
-    contextWindow: 400000,
-    maxOutputTokens: 128000,
     displayName: 'GPT-5 Nano',
   }],
   ['gpt-5-pro', {
     provider: 'openai',
     adapter: 'chat-completions',
     baseUrl: 'https://api.openai.com/v1',
-    // TODO: verify exact limits against OpenAI docs on first real call
-    contextWindow: 400000,
-    maxOutputTokens: 128000,
     displayName: 'GPT-5 Pro',
   }],
   ['gpt-5.4', {
@@ -235,4 +229,109 @@ export function parseModelRef(ref) {
     providerName: ref.slice(0, slashIdx),
     modelId: ref.slice(slashIdx + 1),
   };
+}
+
+// ─── task-284: config-driven context / maxOutput ────────────────
+
+/**
+ * Coerce a possibly-stringy numeric value to a positive integer, or
+ * `undefined` if it's empty / zero / NaN / negative / non-finite.
+ *
+ * @param {*} v
+ * @returns {number | undefined}
+ */
+function coercePositiveInt(v) {
+  if (v === null || v === undefined || v === '') return undefined;
+  const n = typeof v === 'number' ? v : Number(v);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return Math.floor(n);
+}
+
+/**
+ * Normalize a provider's `models` field into an in-memory array of
+ * `{ id, contextWindow?, maxOutput? }` objects.
+ *
+ * Accepts legacy `string[]` and new object form `{id, contextWindow, maxOutput}`.
+ * Empty / 0 / NaN / negative context/max values are treated as unset (dropped).
+ *
+ * @param {{ models?: Array<string | object> } | null | undefined} provider
+ * @returns {Array<{ id: string, contextWindow?: number, maxOutput?: number }>}
+ */
+export function normalizeProviderModels(provider) {
+  if (!provider || !Array.isArray(provider.models)) return [];
+  const out = [];
+  for (const entry of provider.models) {
+    if (typeof entry === 'string') {
+      const id = entry.trim();
+      if (id) out.push({ id });
+      continue;
+    }
+    if (entry && typeof entry === 'object' && typeof entry.id === 'string' && entry.id.trim()) {
+      const norm = { id: entry.id.trim() };
+      const ctx = coercePositiveInt(entry.contextWindow);
+      const max = coercePositiveInt(entry.maxOutput);
+      if (ctx !== undefined) norm.contextWindow = ctx;
+      if (max !== undefined) norm.maxOutput = max;
+      out.push(norm);
+    }
+    // silently skip anything else (null / missing id / numbers)
+  }
+  return out;
+}
+
+/**
+ * Serialize a normalized model entry back for persistence.
+ * - id-only → plain string (back-compat with existing configs)
+ * - with ctx or max → object with only the fields that are set
+ *
+ * @param {{ id: string, contextWindow?: number, maxOutput?: number }} entry
+ * @returns {string | object}
+ */
+export function serializeModelForPersistence(entry) {
+  if (!entry || typeof entry !== 'object') return entry;
+  const ctx = coercePositiveInt(entry.contextWindow);
+  const max = coercePositiveInt(entry.maxOutput);
+  if (ctx === undefined && max === undefined) return entry.id;
+  const obj = { id: entry.id };
+  if (ctx !== undefined) obj.contextWindow = ctx;
+  if (max !== undefined) obj.maxOutput = max;
+  return obj;
+}
+
+/**
+ * Resolve model info with per-provider override.
+ *
+ * Lookup order:
+ *   1. provider-config fields (contextWindow / maxOutput) — highest priority
+ *   2. MODEL_REGISTRY entry (contextWindow / maxOutputTokens)
+ *   3. undefined if neither has any info
+ *
+ * Returns a normalized shape: `{ id, contextWindow?, maxOutput?, provider?, adapter?, baseUrl?, displayName? }`.
+ *
+ * @param {string} model
+ * @param {{ id?: string, contextWindow?: number, maxOutput?: number } | null} [providerConfig]
+ * @returns {object | undefined}
+ */
+export function getModelInfo(model, providerConfig) {
+  if (!model) return undefined;
+  const reg = MODEL_REGISTRY.get(model);
+  const overrideCtx = coercePositiveInt(providerConfig?.contextWindow);
+  const overrideMax = coercePositiveInt(providerConfig?.maxOutput);
+
+  const ctx = overrideCtx ?? reg?.contextWindow;
+  const max = overrideMax ?? reg?.maxOutputTokens;
+
+  // If we have literally no information, return undefined
+  if (!reg && ctx === undefined && max === undefined) return undefined;
+
+  const info = { id: model };
+  if (reg) {
+    if (reg.provider) info.provider = reg.provider;
+    if (reg.adapter) info.adapter = reg.adapter;
+    if (reg.baseUrl) info.baseUrl = reg.baseUrl;
+    if (reg.displayName) info.displayName = reg.displayName;
+  }
+  if (ctx !== undefined) info.contextWindow = ctx;
+  if (max !== undefined) info.maxOutput = max;
+  return info;
 }

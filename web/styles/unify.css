@@ -266,6 +266,56 @@
   flex-shrink: 0;
 }
 
+.unify-model-option-ctx {
+  font-size: 10px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  opacity: 0.75;
+  margin-left: 4px;
+}
+
+/* ── Provider edit — per-model row (id + ctx + max) ── */
+
+.unify-settings-model-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.unify-settings-model-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.unify-settings-model-row .unify-settings-model-id {
+  flex: 1;
+  min-width: 160px;
+}
+
+.unify-settings-model-row .unify-settings-model-ctx,
+.unify-settings-model-row .unify-settings-model-max {
+  flex: 0 0 80px;
+  width: 80px;
+}
+
+.unify-settings-protocol-hint {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.llm-protocol-hint {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 /* ── Mode Toggle (in topbar) ── */
 
 .unify-topbar-mode {

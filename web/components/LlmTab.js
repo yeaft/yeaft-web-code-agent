@@ -58,7 +58,7 @@ export default {
                 <label class="llm-field-label">{{ $t('settings.llm.protocol') }}</label>
                 <div class="sp-custom-select" :class="{ open: openDropdown === 'protocol-' + idx }" v-click-outside="() => closeDropdown('protocol-' + idx)">
                   <button class="sp-custom-select-trigger" @click="toggleDropdown('protocol-' + idx)">
-                    <span>{{ provider.protocol === 'anthropic' ? $t('settings.llm.protocolAnthropic') : $t('settings.llm.protocolOpenAI') }}</span>
+                    <span>{{ protocolLabel(provider.protocol) }}</span>
                     <svg class="sp-custom-select-chevron" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
                   </button>
                   <div class="sp-custom-select-menu" v-show="openDropdown === 'protocol-' + idx">
@@ -67,6 +67,11 @@ export default {
                       {{ $t('settings.llm.protocolOpenAI') }}
                       <svg v-if="!provider.protocol || provider.protocol === 'openai'" class="sp-custom-select-check" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
                     </div>
+                    <div class="sp-custom-select-option" :class="{ active: provider.protocol === 'openai-responses' }"
+                      @click="setProtocol(idx, 'openai-responses'); closeDropdown('protocol-' + idx)">
+                      {{ $t('settings.llm.protocolOpenAIResponses') }}
+                      <svg v-if="provider.protocol === 'openai-responses'" class="sp-custom-select-check" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                    </div>
                     <div class="sp-custom-select-option" :class="{ active: provider.protocol === 'anthropic' }"
                       @click="setProtocol(idx, 'anthropic'); closeDropdown('protocol-' + idx)">
                       {{ $t('settings.llm.protocolAnthropic') }}
@@ -74,6 +79,7 @@ export default {
                     </div>
                   </div>
                 </div>
+                <small class="llm-field-hint llm-protocol-hint">{{ protocolHint(provider.protocol) }}</small>
               </div>
             </div>
 
@@ -364,6 +370,18 @@ export default {
           this.providerModelsText[idx] = presets.join(', ');
         }
       }
+    },
+
+    protocolLabel(protocol) {
+      if (protocol === 'anthropic') return this.$t('settings.llm.protocolAnthropic');
+      if (protocol === 'openai-responses') return this.$t('settings.llm.protocolOpenAIResponses');
+      return this.$t('settings.llm.protocolOpenAI');
+    },
+
+    protocolHint(protocol) {
+      if (protocol === 'anthropic') return this.$t('settings.llm.protocolHint.anthropic');
+      if (protocol === 'openai-responses') return this.$t('settings.llm.protocolHint.openaiResponses');
+      return this.$t('settings.llm.protocolHint.openai');
     },
 
     _getModelPresets(protocol) {

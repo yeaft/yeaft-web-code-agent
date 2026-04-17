@@ -22,7 +22,7 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { DEFAULT_YEAFT_DIR } from './init.js';
-import { resolveModel, parseModelRef } from './models.js';
+import { resolveModel, parseModelRef, normalizeProviderModels } from './models.js';
 
 /** Default configuration values. */
 const DEFAULTS = {
@@ -260,19 +260,24 @@ export function loadConfig(overrides = {}) {
     adapter: null,
   };
 
-  // Aggregate all available models from providers
+  // Aggregate all available models from providers.
+  // Normalizes each provider's `models` into `{ id, contextWindow?, maxOutput? }`
+  // so consumers never have to deal with raw string / object ambiguity.
   config.availableModels = [];
   if (providers) {
     for (const p of providers) {
-      if (!Array.isArray(p.models)) continue;
-      for (const m of p.models) {
+      const normalized = normalizeProviderModels(p);
+      for (const m of normalized) {
         // Avoid duplicates (first provider wins)
-        if (!config.availableModels.some(am => am.id === m)) {
-          config.availableModels.push({
-            id: m,
+        if (!config.availableModels.some(am => am.id === m.id)) {
+          const entry = {
+            id: m.id,
             provider: p.name,
-            label: m,
-          });
+            label: m.id,
+          };
+          if (m.contextWindow !== undefined) entry.contextWindow = m.contextWindow;
+          if (m.maxOutput !== undefined) entry.maxOutput = m.maxOutput;
+          config.availableModels.push(entry);
         }
       }
     }
