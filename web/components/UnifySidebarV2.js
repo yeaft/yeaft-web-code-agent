@@ -54,7 +54,7 @@ export default {
           type="text"
           class="usv2-search-input"
           v-model="searchQuery"
-          :placeholder="searchPlaceholder"
+          :placeholder="'Search threads, #thread, tasks…'"
         />
       </div>
 
@@ -150,7 +150,7 @@ export default {
                 <span class="usv2-task-toggle-spacer" v-else></span>
                 <span class="usv2-task-id">{{ task.id }}</span>
                 <span class="usv2-task-title">{{ task.title }}</span>
-                <span class="usv2-task-link" v-if="task.threadLink">→ #{{ task.threadLink.replace(/^t-/, '') }}</span>
+                <span class="usv2-task-link" v-if="task.threadLink">→ #{{ threadLinkLabel(task.threadLink) }}</span>
               </div>
               <div v-if="isTaskExpanded(task.id) && task.children && task.children.length > 0">
                 <div
@@ -174,22 +174,24 @@ export default {
   `,
   data() {
     const now = Date.now();
+    const tasks = buildMockTasks();
+    // Expand the first task with children by default so the tree is
+    // non-empty on first render — without hard-coding a specific id.
+    const firstParent = tasks.find((t) => (t.children || []).length > 0);
+    const expandedTasks = firstParent ? { [firstParent.id]: true } : {};
     return {
       now,
       threads: buildMockThreads(now),
-      tasks: buildMockTasks(),
+      tasks,
       searchQuery: '',
       activeOpen: true,
       idleOpen: false,
       archivedOpen: false,
       tasksOpen: true,
-      expandedTasks: { 'task-297': true }
+      expandedTasks
     };
   },
   computed: {
-    searchPlaceholder() {
-      return 'Search threads, #thread, tasks…';
-    },
     parsedQuery() {
       const raw = (this.searchQuery || '').trim();
       if (!raw) return { keyword: '', threadPrefix: null };
@@ -251,18 +253,21 @@ export default {
     isTaskExpanded(id) {
       return !!this.expandedTasks[id];
     },
+    // Resolve a task's threadLink id to its display name. Looks up the
+    // thread in state rather than string-stripping a `t-` prefix, so the
+    // label stays correct even if thread ids don't follow that convention.
+    threadLinkLabel(threadId) {
+      const match = this.threads.find((t) => t.id === threadId);
+      return match ? match.name : threadId;
+    },
     toggleTask(id) {
       // Reactive object mutation via Vue 3 proxy.
       this.expandedTasks = { ...this.expandedTasks, [id]: !this.expandedTasks[id] };
     },
     onSelectThread(t) {
-      // eslint-disable-next-line no-console
-      console.log('[UnifySidebarV2] select-thread', t.id);
       this.$emit('select-thread', t.id);
     },
     onSelectTask(task) {
-      // eslint-disable-next-line no-console
-      console.log('[UnifySidebarV2] select-task', task.id);
       this.$emit('select-task', task.id);
     }
   }

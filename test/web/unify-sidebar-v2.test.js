@@ -65,16 +65,19 @@ describe('group headers', () => {
 
 // 3 — Active group uses solid dot, Idle uses hollow
 describe('status dot styling', () => {
-  it('css has solid (filled) active dot and hollow idle dot', () => {
+  it('css has solid (filled) active dot, hollow idle dot, and dashed archived dot', () => {
     expect(cssSrc).toMatch(/\.usv2-dot-active\s*\{[^}]*background:\s*#34c759/);
     expect(cssSrc).toMatch(/\.usv2-dot-idle\s*\{[^}]*background:\s*transparent[\s\S]*?border:\s*1\.5px\s+solid/);
+    expect(cssSrc).toMatch(/\.usv2-dot-archived\s*\{[^}]*background:\s*transparent[\s\S]*?border:\s*1\.5px\s+dashed/);
   });
 
   it('template assigns dot-active to active threads and dot-idle to idle threads', () => {
     const activeBlock = componentSrc.match(/Active[\s\S]*?usv2-group-body[\s\S]*?<\/section>/);
     const idleBlock = componentSrc.match(/>Idle<\/span>[\s\S]*?<\/section>/);
+    const archivedBlock = componentSrc.match(/>Archived<\/span>[\s\S]*?<\/section>/);
     expect(activeBlock && activeBlock[0]).toMatch(/usv2-dot-active/);
     expect(idleBlock && idleBlock[0]).toMatch(/usv2-dot-idle/);
+    expect(archivedBlock && archivedBlock[0]).toMatch(/usv2-dot-archived/);
   });
 });
 
@@ -152,8 +155,10 @@ describe('task tree toggle', () => {
     expect(UnifySidebarV2.methods.isTaskExpanded.call(ctx, 'task-298')).toBe(false);
   });
 
-  it('default data has task-297 expanded so subtasks are visible', () => {
+  it('default data expands the first task with children (no hard-coded id)', () => {
     const d = UnifySidebarV2.data();
-    expect(d.expandedTasks['task-297']).toBe(true);
+    const firstParent = d.tasks.find((t) => (t.children || []).length > 0);
+    expect(firstParent).toBeTruthy();
+    expect(d.expandedTasks[firstParent.id]).toBe(true);
   });
 });
