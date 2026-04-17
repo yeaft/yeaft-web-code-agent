@@ -17,6 +17,8 @@ export default {
         v-if="sidebarV2Enabled"
         @select-thread="onSelectThreadV2"
         @select-task="onSelectTaskV2"
+        @jump-to-message="onJumpToMessage"
+        @search-escape="onSearchEscape"
       />
       <aside class="unify-sidebar" v-else :class="{ collapsed: sidebarCollapsed }">
         <div class="unify-sidebar-header">
@@ -212,6 +214,26 @@ export default {
       // task-301 Part 2: sidebar-row highlight only. Deep-linking to a
       // task-detail pane lands in a later task (Phase 2).
       store.setActiveTaskUi(taskId);
+    };
+
+    // task-312: sidebar search results — jump to first matching message
+    // inside a thread. Records a jump-target on the store; MessageList
+    // watches `unifyJumpTarget` and performs the scroll+flash.
+    const onJumpToMessage = ({ threadId, keyword }) => {
+      store.setUnifyJumpTarget(threadId, keyword);
+    };
+
+    // task-312: Esc in sidebar search box — refocus chat input. The
+    // sidebar has already cleared its own query string by the time this
+    // fires. We rely on document-level keydown listener below to
+    // additionally clear any thread filter, so nothing else is needed
+    // here beyond moving focus.
+    const onSearchEscape = () => {
+      // Small timeout so the input[type=text] blur completes first.
+      Vue.nextTick(() => {
+        const el = document.querySelector('.input-area textarea, .input-area input[type="text"]');
+        if (el && typeof el.focus === 'function') el.focus();
+      });
     };
 
     // Detail panel resizable width
@@ -438,6 +460,8 @@ export default {
       sidebarV2Enabled,
       onSelectThreadV2,
       onSelectTaskV2,
+      onJumpToMessage,
+      onSearchEscape,
       clearThreadFilter,
       activeThreadName,
     };

@@ -200,6 +200,13 @@ export const useChatStore = defineStore('chat', {
     // Currently selected thread / task in the sidebar (UI-only highlight).
     unifyActiveThreadId: null,
     unifyActiveTaskId: null,
+
+    // ★ task-312: jump-to-message highlight target. When the sidebar
+    // search triggers a thread hit, the store records the matching
+    // keyword here so MessageList can scroll to / flash the first
+    // matching message in the active thread. Consumed once then
+    // cleared by the component via clearUnifyJumpTarget().
+    unifyJumpTarget: null,
   }),
 
   getters: {
@@ -554,6 +561,16 @@ export const useChatStore = defineStore('chat', {
     },
     setActiveTaskUi(taskId) {
       this.unifyActiveTaskId = taskId || null;
+    },
+    // ★ task-312: set jump target so MessageList can scroll to first
+    // message in `threadId` whose text contains `keyword`. No-op if
+    // either is missing.
+    setUnifyJumpTarget(threadId, keyword) {
+      if (!threadId || !keyword) { this.unifyJumpTarget = null; return; }
+      this.unifyJumpTarget = { threadId, keyword: String(keyword).toLowerCase(), at: Date.now() };
+    },
+    clearUnifyJumpTarget() {
+      this.unifyJumpTarget = null;
     },
     switchUnifyModel(modelId) {
       if (!modelId || !this.unifyAgentId) return;
