@@ -1,0 +1,214 @@
+/* ===========================================================================
+   UnifySidebarV2 (task-300 Phase 1)
+   No horizontal dividers — groups separated by padding only.
+   =========================================================================== */
+
+.unify-sidebar-v2 {
+  display: flex;
+  flex-direction: column;
+  width: 260px;
+  min-width: 260px;
+  height: 100%;
+  background: var(--bg-sidebar, #f5f5f7);
+  color: var(--text-primary, #1d1d1f);
+  overflow: hidden;
+  font-size: 13px;
+}
+
+/* Search ------------------------------------------------------------------- */
+.usv2-search {
+  position: relative;
+  padding: 10px 12px 8px 12px;
+  flex: 0 0 auto;
+}
+.usv2-search-icon {
+  position: absolute;
+  left: 22px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted, #86868b);
+  pointer-events: none;
+}
+.usv2-search-input {
+  width: 100%;
+  background: var(--bg-input-wrapper, #ffffff);
+  color: var(--text-primary, #1d1d1f);
+  border: none;
+  border-radius: 6px;
+  padding: 6px 8px 6px 28px;
+  font-size: 12px;
+  outline: none;
+}
+.usv2-search-input:focus {
+  box-shadow: 0 0 0 2px var(--accent, #007aff);
+}
+
+/* Scroll area -------------------------------------------------------------- */
+.usv2-scroll {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 4px 6px 16px 6px;
+}
+
+/* Groups (no borders — padding gives separation) --------------------------- */
+.usv2-group {
+  padding: 6px 0 12px 0;
+}
+.usv2-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary, #515154);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.usv2-group-header:hover { color: var(--text-primary, #1d1d1f); }
+.usv2-chevron {
+  transition: transform 0.12s ease;
+  color: var(--text-muted, #86868b);
+}
+.usv2-chevron.open { transform: rotate(90deg); }
+.usv2-group-label { flex: 0 0 auto; }
+.usv2-group-count {
+  margin-left: auto;
+  font-weight: 400;
+  color: var(--text-muted, #86868b);
+}
+.usv2-group-body {
+  padding: 2px 0;
+}
+
+/* Thread row --------------------------------------------------------------- */
+.usv2-thread {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px 5px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text-primary, #1d1d1f);
+}
+.usv2-thread:hover { background: var(--sidebar-hover, rgba(0,0,0,0.05)); }
+.usv2-thread-archived { opacity: 0.6; }
+.usv2-thread-name {
+  font-weight: 500;
+  color: var(--text-secondary, #515154);
+  flex: 0 0 auto;
+  max-width: 70px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.usv2-thread-title {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted, #86868b);
+  font-size: 12px;
+}
+.usv2-unread {
+  flex: 0 0 auto;
+  background: var(--accent, #007aff);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 10px;
+  min-width: 16px;
+  text-align: center;
+}
+
+/* Status dot --------------------------------------------------------------- */
+.usv2-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.usv2-dot-active {
+  background: #34c759; /* solid — active */
+}
+.usv2-dot-active.running {
+  background: #ff9500;
+  box-shadow: 0 0 0 2px rgba(255,149,0,0.25);
+}
+.usv2-dot-idle {
+  background: transparent;
+  border: 1.5px solid var(--text-muted, #86868b); /* hollow — idle */
+  box-sizing: border-box;
+}
+.usv2-dot-archived {
+  background: transparent;
+  border: 1.5px dashed var(--text-muted, #86868b);
+  box-sizing: border-box;
+  opacity: 0.5;
+}
+
+/* Task tree ---------------------------------------------------------------- */
+.usv2-group-tasks .usv2-group-body {
+  padding-top: 4px;
+}
+.usv2-task {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.usv2-task:hover { background: var(--sidebar-hover, rgba(0,0,0,0.05)); }
+.usv2-task-lvl-0 { padding-left: 10px; }
+.usv2-task-lvl-1 { padding-left: 28px; }
+.usv2-task-lvl-2 { padding-left: 46px; }
+.usv2-task-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+.usv2-task-toggle-spacer { width: 12px; flex: 0 0 auto; }
+.usv2-task-id {
+  font-family: var(--font-mono, Menlo, monospace);
+  font-size: 10px;
+  color: var(--text-muted, #86868b);
+  flex: 0 0 auto;
+}
+.usv2-task-title {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary, #1d1d1f);
+}
+.usv2-task-link {
+  font-size: 10px;
+  color: var(--accent, #007aff);
+  flex: 0 0 auto;
+}
+.usv2-task-status-done .usv2-task-title { text-decoration: line-through; opacity: 0.5; }
+.usv2-task-status-in_progress .usv2-task-id { color: var(--accent, #007aff); }
+
+/* Empty state -------------------------------------------------------------- */
+.usv2-empty {
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--text-muted, #86868b);
+  font-style: italic;
+}
+
+/* Mobile ------------------------------------------------------------------- */
+@media (max-width: 768px) {
+  .unify-sidebar-v2 { width: 85vw; min-width: 240px; }
+}
