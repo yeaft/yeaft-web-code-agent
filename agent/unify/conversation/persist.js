@@ -60,6 +60,10 @@ function serializeMessage(msg) {
   // routing can filter/replay by thread without rescanning JSON blobs.
   // Defaults to 'main' for legacy messages (see migrate-messages-threadid.js).
   fm.push(`threadId: ${msg.threadId || 'main'}`);
+  // task-313: when a thread is merged into another, the messages keep
+  // their original thread id in `sourceThreadId` so the UI can still
+  // render a small "#source" pill next to each bubble.
+  if (msg.sourceThreadId) fm.push(`sourceThreadId: ${msg.sourceThreadId}`);
 
   // Token estimate
   const content = msg.content || '';
@@ -116,6 +120,7 @@ export function parseMessage(raw) {
       case 'isError': msg.isError = value === 'true'; break;
       case 'tokens_est': msg.tokens_est = parseInt(value, 10); break;
       case 'threadId': msg.threadId = value; break;
+      case 'sourceThreadId': msg.sourceThreadId = value; break;
       // toolCalls are multi-line YAML — handled separately below
     }
   }
@@ -460,6 +465,63 @@ export class ConversationStore {
   }
 
   // ─── Internal ───────────────────────────────────────────
+
+  /**
+   * Reassign every message in this store whose `threadId === sourceId`
+   * to `targetId`. The original thread id is preserved in
+   * `sourceThreadId` so the UI can still render a "#source" pill.
+   * Scans both hot (`messages/`) and cold (`cold/`) directories.
+   *
+   * Idempotent: messages already carrying `sourceThreadId` are not
+   * overwritten, and messages not on `sourceId` are skipped.
+   *
+   * @param {string} sourceId
+   * @param {string} targetId
+   * @returns {number} number of messages rewritten
+   */
+  reassignThread(sourceId, targetId) {
+    if (!sourceId || !targetId || sourceId === targetId) return 0;
+    let rewritten = 0;
+    for (const dir of [this.#msgDir, this.#coldDir]) {
+      if (!existsSync(dir)) continue;
+      let files;
+      try {
+        files = readdirSync(dir).filter(f => f.endsWith('.md'));
+      } catch (err) {
+        if (isPermissionError(err)) continue;
+        throw err;
+      }
+      for (const file of files) {
+        const path = join(dir, file);
+        let raw;
+        try {
+          raw = readFileSync(path, 'utf8');
+        } catch (err) {
+          if (isPermissionError(err)) continue;
+          throw err;
+        }
+        const msg = parseMessage(raw);
+        if (!msg || msg.threadId !== sourceId) continue;
+        // Preserve original thread id for UI pill; only stamp once.
+        if (!msg.sourceThreadId) msg.sourceThreadId = sourceId;
+        msg.threadId = targetId;
+        try {
+          writeFileSync(path, serializeMessage(msg), { encoding: 'utf8', mode: 0o644 });
+          rewritten += 1;
+        } catch (err) {
+          if (isPermissionError(err)) {
+            if (!_permissionWarned) {
+              console.warn(`[Yeaft] Cannot rewrite message ${file}: ${err.code}`);
+              _permissionWarned = true;
+            }
+            continue;
+          }
+          throw err;
+        }
+      }
+    }
+    return rewritten;
+  }
 
   /**
    * Load messages from a directory, sorted by filename, limited.

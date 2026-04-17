@@ -76,6 +76,7 @@ function serializeThread(t) {
     `parentThreadId: ${t.parentThreadId == null ? 'null' : t.parentThreadId}`,
     `status: ${t.status}`,
     `archived: ${t.archived ? 'true' : 'false'}`,
+    `mergedInto: ${t.mergedInto == null ? 'null' : t.mergedInto}`,
     `messageCount: ${t.messageCount | 0}`,
     `lastMessageAt: ${t.lastMessageAt == null ? 'null' : t.lastMessageAt}`,
     `lastActivityAt: ${t.lastActivityAt == null ? 'null' : t.lastActivityAt}`,
@@ -132,6 +133,7 @@ function parseThread(raw) {
   // Default to safe values if the file pre-dates a field.
   if (!THREAD_STATUSES.includes(record.status)) record.status = 'active';
   record.archived = record.status === 'archived';
+  if (!('mergedInto' in record)) record.mergedInto = null;
   record.messageCount = Number.isFinite(record.messageCount) ? record.messageCount : 0;
   record.unread = Number.isFinite(record.unread) ? record.unread : 0;
   record.preview = body;
@@ -308,6 +310,7 @@ export class ThreadStore {
       lastMessageAt: null,
       lastActivityAt: null,
       archived: false,
+      mergedInto: null,
       unread: 0,
       preview: '',
       ...base,
@@ -541,6 +544,85 @@ export class ThreadStore {
     t.archived = true;
     t.updatedAt = Date.now();
     this.#markDirty(id);
+  }
+
+  /**
+   * Merge the source thread into the target (task-313). The source is
+   * marked archived and gets `mergedInto: targetId`; target's cached
+   * counters pick up the source's message count and activity. Callers
+   * are still expected to reassign the actual messages on disk via
+   * `ConversationStore.reassignThread(sourceId, targetId)`.
+   *
+   * Constraints:
+   *  - source !== target
+   *  - both threads must exist
+   *  - source cannot be the main thread (main cannot be archived)
+   *  - source cannot already have been merged elsewhere (idempotency)
+   *
+   * @param {string} sourceId
+   * @param {string} targetId
+   * @returns {{ source: Thread, target: Thread }}
+   */
+  mergeThread(sourceId, targetId) {
+    if (!sourceId || !targetId) {
+      throw new Error('mergeThread: sourceId and targetId required');
+    }
+    if (sourceId === targetId) {
+      throw new Error('mergeThread: cannot merge a thread into itself');
+    }
+    if (sourceId === MAIN_THREAD_ID) {
+      throw new Error('mergeThread: cannot merge the main thread into another');
+    }
+    const source = this.#threads.get(sourceId);
+    if (!source) throw new Error(`thread not found: ${sourceId}`);
+    const target = this.#threads.get(targetId);
+    if (!target) throw new Error(`thread not found: ${targetId}`);
+    if (source.mergedInto) {
+      throw new Error(`thread ${sourceId} already merged into ${source.mergedInto}`);
+    }
+
+    const now = Date.now();
+
+    // Accumulate counters onto target.
+    target.messageCount += source.messageCount;
+    if (source.lastMessageAt && (!target.lastMessageAt || source.lastMessageAt > target.lastMessageAt)) {
+      target.lastMessageAt = source.lastMessageAt;
+    }
+    if (source.lastActivityAt && (!target.lastActivityAt || source.lastActivityAt > target.lastActivityAt)) {
+      target.lastActivityAt = source.lastActivityAt;
+    }
+    target.updatedAt = now;
+    // Revive target if it was archived — a merge is an activity signal.
+    if (target.status === 'archived') {
+      target.status = 'active';
+      target.archived = false;
+    }
+
+    // Mark source as archived + pointer to target.
+    source.status = 'archived';
+    source.archived = true;
+    source.mergedInto = targetId;
+    source.updatedAt = now;
+
+    // If source was current, move the pointer to target.
+    if (this.#currentId === sourceId) {
+      this.#currentId = targetId;
+    }
+
+    // Drop any task attachment on source (it now belongs to target).
+    if (this.#attachments.has(sourceId)) {
+      const taskId = this.#attachments.get(sourceId);
+      this.#attachments.delete(sourceId);
+      // Preserve attachment on target if it had none; otherwise keep target's.
+      if (!this.#attachments.has(targetId)) {
+        this.#attachments.set(targetId, taskId);
+      }
+      this.#markAttachmentsDirty();
+    }
+
+    this.#markDirty(sourceId);
+    this.#markDirty(targetId);
+    return { source, target };
   }
 
   setStatus(id, status) {

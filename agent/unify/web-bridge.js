@@ -569,6 +569,64 @@ export function handleUnifyModeSwitch(_msg) {
 }
 
 /**
+ * task-313: merge a source thread into a target thread.
+ * Reassigns messages, archives source with `mergedInto`, terminates source
+ * engine instance, broadcasts `thread_merged` + `thread_list_updated`.
+ *
+ * @param {{ sourceId: string, targetId: string }} msg
+ */
+export function handleUnifyMergeThread(msg) {
+  if (!session) {
+    console.warn('[Unify] unify_merge_thread received before session init — ignored');
+    return;
+  }
+  const { sourceId, targetId } = msg || {};
+  if (!sourceId || !targetId) {
+    sendUnifyEvent({ type: 'thread_merge_failed', sourceId, targetId, error: 'sourceId and targetId required' });
+    return;
+  }
+
+  let reassigned = 0;
+  try {
+    // 1. Reassign messages (ConversationStore) — preserves sourceThreadId pill.
+    if (session.conversationStore && typeof session.conversationStore.reassignThread === 'function') {
+      reassigned = session.conversationStore.reassignThread(sourceId, targetId);
+    }
+    // 2. Mutate ThreadStore (mergedInto + archived + counter rollup).
+    const store = session.threadStore || getThreadStore();
+    store.mergeThread(sourceId, targetId);
+    // 3. Terminate + forget the source engine instance — releases its slot.
+    if (session.engineRegistry) {
+      session.engineRegistry.delete(sourceId);
+      // If the registry was tracking source as current, move to target.
+      if (typeof session.engineRegistry.setCurrent === 'function'
+          && session.engineRegistry.currentThreadId === sourceId) {
+        session.engineRegistry.setCurrent(targetId);
+      }
+    }
+    // 4. Flush ThreadStore so the merge is durable before the UI refreshes.
+    if (typeof store.flush === 'function') store.flush();
+  } catch (err) {
+    sendUnifyEvent({
+      type: 'thread_merge_failed',
+      sourceId,
+      targetId,
+      error: err?.message || String(err),
+    });
+    return;
+  }
+
+  // 5. Broadcast the merge + refreshed thread list.
+  sendUnifyEvent({
+    type: 'thread_merged',
+    sourceId,
+    targetId,
+    reassignedMessages: reassigned,
+  });
+  sendThreadListUpdate();
+}
+
+/**
  * Handle model switch from the web UI.
  * Updates Engine's config so the next query uses the new model.
  * @param {{ model: string }} msg
