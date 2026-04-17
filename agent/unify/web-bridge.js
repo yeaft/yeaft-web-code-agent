@@ -328,6 +328,9 @@ function handleEngineEvent(event, threadId, hctx) {
 
     case 'error': {
       const errMsg = event.error?.message || 'Unknown error';
+      // Filter permission errors: show friendly one-time diagnostic
+      // instead of raw error. Subsequent permission errors are suppressed
+      // — the user already saw the actionable message once.
       if (isPermissionErrorMsg(errMsg)) {
         if (!_permissionDiagnosticSent) {
           _permissionDiagnosticSent = true;
@@ -342,6 +345,7 @@ function handleEngineEvent(event, threadId, hctx) {
             threadId,
           });
         }
+        // Don't show subsequent permission errors.
       } else {
         sendUnifyOutput({
           type: 'assistant',
