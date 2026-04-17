@@ -27,6 +27,7 @@ import { initThreadStore } from './threads/store.js';
 import { Engine } from './engine.js';
 import { createThreadEngineRegistry } from './threads/engine-registry.js';
 import { MAIN_THREAD_ID } from './threads/store.js';
+import { createIntentClassifier } from './router/intent-classifier.js';
 import { join } from 'path';
 
 /**
@@ -187,6 +188,11 @@ export async function loadSession(options = {}) {
   // Seed the main-thread instance so listActive() is non-empty from T=0.
   engineRegistry.ensure(MAIN_THREAD_ID);
 
+  // task-309 Phase 2 router: intent classifier that routes incoming user
+  // messages to the right EngineInstance. Shares the same adapter/trace/
+  // config as the engines so it can use primaryModel for classification.
+  const router = createIntentClassifier({ adapter, trace, config });
+
   // ─── 10. Build session ─────────────────────────────────
   const status = {
     skills: skillManager.size,
@@ -217,6 +223,7 @@ export async function loadSession(options = {}) {
   return {
     engine,
     engineRegistry,
+    router,
     adapter,
     config,
     conversationStore,
