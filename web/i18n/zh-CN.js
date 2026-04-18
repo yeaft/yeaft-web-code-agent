@@ -98,6 +98,12 @@ export default {
   'unify.breadcrumb.label': 'Thread 过滤',
   'unify.breadcrumb.mainStream': '主流',
   'unify.breadcrumb.backHint': '返回全流 (Esc)',
+  // task-315: Task 详情视图（跨 thread 消息聚合）
+  'unify.taskDetail.ariaLabel': 'Task 详情',
+  'unify.taskDetail.replyTo': '回复到:',
+  'unify.taskDetail.forkHint': '该 task 暂无活跃 thread — 请 fork 新 thread 后回复。',
+  'unify.taskDetail.empty': '该 task 暂无消息。',
+  'unify.taskDetail.threadPillHint': '打开 thread',
   'unify.model': '模型',
   'unify.placeholder': '问我任何问题...',
   // task-301: Sidebar V2 strings

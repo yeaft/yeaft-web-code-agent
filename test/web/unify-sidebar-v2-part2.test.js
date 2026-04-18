@@ -71,9 +71,12 @@ describe('UnifyPage handlers delegate directly (no typeof guard)', () => {
     expect(pageSrc).not.toMatch(/typeof store\.setActiveThread === 'function'/);
   });
 
-  it('onSelectTaskV2 calls store.setActiveTaskUi unconditionally', () => {
-    expect(pageSrc).toMatch(/onSelectTaskV2\s*=\s*\(taskId\)\s*=>\s*\{\s*(?:\/\/[^\n]*\n\s*)*store\.setActiveTaskUi\(taskId\);/);
-    expect(pageSrc).not.toMatch(/typeof store\.setActiveTaskUi === 'function'/);
+  it('onSelectTaskV2 enters the task detail view (task-315 supersedes setActiveTaskUi)', () => {
+    // task-315: clicking a task now enters the Task Detail View instead of
+    // just setting a UI highlight. enterTaskDetailView internally updates
+    // the active-task state.
+    expect(pageSrc).toMatch(/onSelectTaskV2\s*=\s*\(taskId\)\s*=>\s*\{[\s\S]*?store\.enterTaskDetailView\(taskId\)/);
+    expect(pageSrc).not.toMatch(/typeof store\.enterTaskDetailView === 'function'/);
   });
 });
 
@@ -273,9 +276,9 @@ describe('E4 — thread_list_updated event → store.unifyThreads → UI', () =>
     expect(pageSrc).toMatch(/store\.setActiveThread\(threadId\)/);
   });
 
-  it('UnifyPage wires emitted select-task to store.setActiveTaskUi(taskId)', () => {
+  it('UnifyPage wires emitted select-task to store.enterTaskDetailView(taskId) (task-315)', () => {
     expect(pageSrc).toMatch(/@select-task="onSelectTaskV2"/);
-    expect(pageSrc).toMatch(/store\.setActiveTaskUi\(taskId\)/);
+    expect(pageSrc).toMatch(/store\.enterTaskDetailView\(taskId\)/);
   });
 });
 

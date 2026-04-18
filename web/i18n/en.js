@@ -98,6 +98,12 @@ export default {
   'unify.breadcrumb.label': 'Thread filter',
   'unify.breadcrumb.mainStream': 'Main stream',
   'unify.breadcrumb.backHint': 'Return to full stream (Esc)',
+  // task-315: Task Detail View (cross-thread message aggregation)
+  'unify.taskDetail.ariaLabel': 'Task detail',
+  'unify.taskDetail.replyTo': 'Reply in:',
+  'unify.taskDetail.forkHint': 'No active thread — fork a new one to reply.',
+  'unify.taskDetail.empty': 'No messages for this task yet.',
+  'unify.taskDetail.threadPillHint': 'Open thread',
   'unify.model': 'Model',
   'unify.placeholder': 'Ask anything...',
   // task-301: Sidebar V2 strings
