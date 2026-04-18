@@ -13,6 +13,47 @@
  */
 
 import { LLMAdapter } from './adapter.js';
+import { getThinkingCapability, normalizeEffort } from '../models.js';
+
+/**
+ * task-327a: feature-flag accessor. Read lazily so tests can flip.
+ */
+function thinkingV1Enabled() {
+  return process.env.UNIFY_THINKING_V1 === '1';
+}
+
+/**
+ * task-327a: router-level effort filter.
+ *
+ * Strips `effort` from the outgoing params when:
+ *   - feature flag is off (thinkingV1 == off)
+ *   - effort value is unknown
+ *   - model capability is `thinkingProtocol: 'none'` (silently drop)
+ *
+ * Adapter-level guards also enforce these rules; this is defense in depth
+ * so a no-op path stays consistently a no-op regardless of adapter.
+ *
+ * @param {object} params
+ * @returns {object} new params object with effort possibly removed
+ */
+export function filterEffortForModel(params) {
+  if (!params || !('effort' in params)) return params;
+  if (!thinkingV1Enabled()) {
+    const { effort: _drop, ...rest } = params;
+    return rest;
+  }
+  const norm = normalizeEffort(params.effort);
+  if (!norm) {
+    const { effort: _drop, ...rest } = params;
+    return rest;
+  }
+  const cap = getThinkingCapability(params.model);
+  if (!cap.supportsThinking || cap.thinkingProtocol === 'none') {
+    const { effort: _drop, ...rest } = params;
+    return rest;
+  }
+  return { ...params, effort: norm };
+}
 
 /**
  * AdapterRouter — Implements LLMAdapter, routes by model → provider.
@@ -106,8 +147,9 @@ export class AdapterRouter extends LLMAdapter {
    * @returns {AsyncGenerator<import('./adapter.js').StreamEvent>}
    */
   async *stream(params) {
-    const adapter = await this.#resolveAdapter(params.model);
-    yield* adapter.stream(params);
+    const filtered = filterEffortForModel(params);
+    const adapter = await this.#resolveAdapter(filtered.model);
+    yield* adapter.stream(filtered);
   }
 
   /**
@@ -117,8 +159,9 @@ export class AdapterRouter extends LLMAdapter {
    * @returns {Promise<{ text: string, usage: { inputTokens: number, outputTokens: number } }>}
    */
   async call(params) {
-    const adapter = await this.#resolveAdapter(params.model);
-    return adapter.call(params);
+    const filtered = filterEffortForModel(params);
+    const adapter = await this.#resolveAdapter(filtered.model);
+    return adapter.call(filtered);
   }
 
   /**

@@ -20,6 +20,16 @@
  * @property {number} contextWindow — Max context tokens
  * @property {number} maxOutputTokens — Max output tokens
  * @property {string} displayName — Human-readable model name
+ * @property {boolean} [supportsThinking] — task-327a: model supports thinking/reasoning effort.
+ * @property {'anthropic' | 'openai-reasoning' | 'none'} [thinkingProtocol] — task-327a:
+ *   'anthropic' → thinking:{type:'enabled', budget_tokens:N}
+ *   'openai-reasoning' → reasoning:{effort:'low'|'medium'|'high'}
+ *   'none' (default) → parameter silently dropped by router
+ * @property {'low' | 'medium' | 'high' | 'max' | null} [defaultEffort] — task-327a: adapter-level default
+ *   when caller doesn't specify effort (null = no default / decision-tree decides).
+ * @property {number} [maxBudgetTokens] — task-327a: for anthropic protocol, the cap used when
+ *   effort='max' (e.g. Opus 4 = 64K, Sonnet 4 = 32K). For openai-reasoning this field is unused
+ *   because the provider only exposes 3 enum levels.
  */
 
 /** @type {Map<string, ModelInfo>} */
@@ -32,6 +42,11 @@ export const MODEL_REGISTRY = new Map([
     contextWindow: 200000,
     maxOutputTokens: 16384,
     displayName: 'Claude Sonnet 4',
+    // task-327a: extended thinking supported; budget caps at 32K on Sonnet.
+    supportsThinking: true,
+    thinkingProtocol: 'anthropic',
+    defaultEffort: null,
+    maxBudgetTokens: 32000,
   }],
   ['claude-opus-4-20250514', {
     provider: 'anthropic',
@@ -40,6 +55,11 @@ export const MODEL_REGISTRY = new Map([
     contextWindow: 200000,
     maxOutputTokens: 16384,
     displayName: 'Claude Opus 4',
+    // task-327a: PM decision — Opus max budget = 64K.
+    supportsThinking: true,
+    thinkingProtocol: 'anthropic',
+    defaultEffort: null,
+    maxBudgetTokens: 64000,
   }],
   ['claude-haiku-3-20250414', {
     provider: 'anthropic',
@@ -48,6 +68,9 @@ export const MODEL_REGISTRY = new Map([
     contextWindow: 200000,
     maxOutputTokens: 8192,
     displayName: 'Claude Haiku 3',
+    // task-327a: Haiku 3 does not support extended thinking — effort is dropped.
+    supportsThinking: false,
+    thinkingProtocol: 'none',
   }],
 
   // ── OpenAI ─────────────────────────────────────────────────────
@@ -58,6 +81,10 @@ export const MODEL_REGISTRY = new Map([
     contextWindow: 256000,
     maxOutputTokens: 16384,
     displayName: 'GPT-5',
+    // task-327a: GPT-5 supports reasoning.effort (low/medium/high). No 'max'.
+    supportsThinking: true,
+    thinkingProtocol: 'openai-reasoning',
+    defaultEffort: null,
   }],
   // gpt-5-mini/-nano/-pro: keep id + family/protocol metadata so they appear
   // as known models, but do NOT hardcode context/maxOutput — the real limits
@@ -119,6 +146,10 @@ export const MODEL_REGISTRY = new Map([
     contextWindow: 200000,
     maxOutputTokens: 100000,
     displayName: 'o3',
+    // task-327a: o-series reasoning models use reasoning.effort.
+    supportsThinking: true,
+    thinkingProtocol: 'openai-reasoning',
+    defaultEffort: null,
   }],
   ['o4-mini', {
     provider: 'openai',
@@ -127,6 +158,9 @@ export const MODEL_REGISTRY = new Map([
     contextWindow: 200000,
     maxOutputTokens: 100000,
     displayName: 'o4-mini',
+    supportsThinking: true,
+    thinkingProtocol: 'openai-reasoning',
+    defaultEffort: null,
   }],
 
   // ── DeepSeek ───────────────────────────────────────────────────
@@ -231,7 +265,110 @@ export function parseModelRef(ref) {
   };
 }
 
-// ─── task-284: config-driven context / maxOutput ────────────────
+// ─── task-327a: thinking / reasoning capability ─────────────────
+
+/**
+ * Valid effort levels accepted by Unify adapters.
+ * @typedef {'low' | 'medium' | 'high' | 'max'} Effort
+ */
+
+/**
+ * Budget-token map for the Anthropic extended-thinking protocol.
+ * 'max' is model-specific (override via ModelInfo.maxBudgetTokens).
+ *
+ * These numbers are adapter defaults — `thinkingBudgetForEffort()` below
+ * consults the registry entry first before falling back to this table.
+ */
+export const ANTHROPIC_THINKING_BUDGETS = {
+  low: 4096,
+  medium: 8192,
+  high: 16384,
+  // 'max' resolves per-model; default fallback if model has no maxBudgetTokens.
+  max: 32000,
+};
+
+/**
+ * Map a Unify effort level to the OpenAI reasoning.effort enum. OpenAI does
+ * not expose a 'max' level — callers that pass 'max' get 'high' (the highest
+ * available on that protocol). The router/engine should log this downgrade
+ * but the adapter MUST NOT error.
+ *
+ * @param {Effort} effort
+ * @returns {'low' | 'medium' | 'high' | null}
+ */
+export function mapEffortToOpenAIReasoning(effort) {
+  if (!effort) return null;
+  switch (effort) {
+    case 'low': return 'low';
+    case 'medium': return 'medium';
+    case 'high': return 'high';
+    // OpenAI doesn't support 'max'; degrade to 'high'. Engine may emit a
+    // debug line noting the downgrade — adapter level stays silent.
+    case 'max': return 'high';
+    default: return null;
+  }
+}
+
+/**
+ * Resolve the Anthropic thinking budget_tokens value for a given (model, effort).
+ *
+ * Priority:
+ *   1. Registry ModelInfo.maxBudgetTokens when effort === 'max'
+ *   2. ANTHROPIC_THINKING_BUDGETS[effort]
+ *
+ * @param {string} model
+ * @param {Effort} effort
+ * @returns {number | null} Null when effort is unknown/falsy.
+ */
+export function thinkingBudgetForEffort(model, effort) {
+  if (!effort) return null;
+  if (effort === 'max') {
+    const info = MODEL_REGISTRY.get(model);
+    if (info?.maxBudgetTokens) return info.maxBudgetTokens;
+    return ANTHROPIC_THINKING_BUDGETS.max;
+  }
+  return ANTHROPIC_THINKING_BUDGETS[effort] ?? null;
+}
+
+/**
+ * Get the thinking capability for a model. Models not in the registry or
+ * explicitly marked supportsThinking:false return a noop capability — the
+ * router uses this to silently drop the `effort` parameter for unsupported
+ * models (red line: never error on unsupported).
+ *
+ * @param {string} model
+ * @returns {{ supportsThinking: boolean, thinkingProtocol: 'anthropic' | 'openai-reasoning' | 'none', defaultEffort: Effort | null, maxBudgetTokens: number | null }}
+ */
+export function getThinkingCapability(model) {
+  const info = MODEL_REGISTRY.get(model);
+  if (!info || !info.supportsThinking) {
+    return {
+      supportsThinking: false,
+      thinkingProtocol: 'none',
+      defaultEffort: null,
+      maxBudgetTokens: null,
+    };
+  }
+  return {
+    supportsThinking: true,
+    thinkingProtocol: info.thinkingProtocol || 'none',
+    defaultEffort: info.defaultEffort ?? null,
+    maxBudgetTokens: info.maxBudgetTokens ?? null,
+  };
+}
+
+/**
+ * Valid-effort guard. Unknown values → null (caller should treat as "no effort").
+ *
+ * @param {unknown} effort
+ * @returns {Effort | null}
+ */
+export function normalizeEffort(effort) {
+  if (effort === 'low' || effort === 'medium' || effort === 'high' || effort === 'max') {
+    return effort;
+  }
+  return null;
+}
 
 /**
  * Coerce a possibly-stringy numeric value to a positive integer, or
