@@ -1432,8 +1432,11 @@
   }
 
   /* Adjust header for mobile — no extra padding needed, sidebar toggle is inline */
+  /* task-329: flex-shrink:0 prevents iOS Safari from compressing header to 0
+     height when viewport briefly returns stale 100dvh after visibilitychange. */
   .chat-header {
     min-height: 48px;
+    flex-shrink: 0;
   }
 
   /* Mobile: center title single-line, hide work dir path */
