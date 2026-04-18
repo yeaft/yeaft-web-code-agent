@@ -33,82 +33,257 @@ function _appendTextToContent(content, text) {
 }
 
 /**
- * 从累积文本中解析所有 ROUTE 块（支持多 ROUTE + task 字段）
- * @returns {Array<{ to, summary, taskId, taskTitle }>}
+ * 从累积文本中解析所有 ROUTE 块（支持多 ROUTE + task 字段）。
+ *
+ * task-328 — Returns a structured result:
+ *   { routes, displayBody }
+ *
+ * - `routes`      — Array<{to, summary, taskId, taskTitle}> (same shape as before)
+ * - `displayBody` — original text MINUS the exact matched ROUTE ranges
+ *                   (including any surrounding ```fence``` that wraps the
+ *                   ROUTE block), preserving everything else verbatim.
+ *
+ * Backward compatibility: the returned object is also iterable as an array
+ * of routes for any legacy caller that does `for (const r of parseRoutes(...))`
+ * or `parseRoutes(...).length` — we attach `[Symbol.iterator]`, `length`, and
+ * numeric index properties mirroring `routes`. New callers should use the
+ * named `.routes` / `.displayBody` fields.
+ *
+ * Scope A — ROUTE parser tolerance (task-328):
+ *   (1) Markdown fence-wrapped ROUTE blocks are still parsed AND the fence
+ *       lines are stripped from displayBody (so the user doesn't see an
+ *       empty ```…```).
+ *   (2) END variants accepted:  ---END_ROUTE--- / ---END ROUTE--- /
+ *       ---END--- / ---END:--- / ---END-ROUTE--- / ---endroute---.
+ *   (3) `to:` accepts:  `to:` `to ：` `to：` `TO:` with any casing.
+ *   (4) Phase 2 soft-end is a STRUCTURAL signal (blank line + `---`, or
+ *       `<kanban>` / `<recent-routes>` / `<task-context>`), NOT a bare blank
+ *       line — so multi-paragraph summaries are not truncated.
+ *   (5) Pre-pass: fenced code is MASKED (positions preserved) but a fence
+ *       that contains `---ROUTE---` is NOT masked — the ROUTE inside the
+ *       fence is the real one (matches what users write).
+ *
+ * Scope B — non-ROUTE body preservation (task-328):
+ *   - `displayBody` = original minus the EXACT matched ROUTE ranges.
+ *     No greedy "strip-to-EOF" anymore — post-ROUTE text survives.
+ *
+ * @param {string} text - Raw role output (may contain 0+ ROUTE blocks)
+ * @returns {{ routes: Array<{to:string,summary:string,taskId:string|null,taskTitle:string|null}>, displayBody: string } & Iterable}
  */
 export function parseRoutes(text) {
+  const input = typeof text === 'string' ? text : '';
   const routes = [];
+  // Exact character ranges (in ORIGINAL `input`) to remove from displayBody.
+  // Each entry: { start, end } — half-open, end exclusive.
+  const strippedRanges = [];
 
-  // ─── Pre-pass: Strip fenced code blocks to avoid parsing quoted ROUTE examples ──
-  // Replaces ```...``` content with whitespace of same length to preserve positions
-  text = text.replace(/```[\s\S]*?```/g, m => ' '.repeat(m.length));
+  if (!input) return _wrapParseResult(routes, '', strippedRanges);
+
+  // ─── Pre-pass §2: mask fenced code WITHOUT stripping from original ──
+  // We build a boolean mask the same length as `input`. Fences are walked
+  // left-to-right. A fence containing `---ROUTE---` is SKIPPED (not masked)
+  // so the real ROUTE inside it can be parsed by Phase 1. Non-ROUTE fences
+  // are masked so any ```example``` won't pollute Phase 1/2/3 matching.
+  //
+  // We also remember the start/end of each "ROUTE-carrying fence" so the
+  // displayBody calculation can extend a ROUTE match to cover its fence
+  // lines — otherwise the user would see an empty ```…``` left behind.
+  const masked = _maskNonRouteFences(input);
+  const maskedText = masked.text;               // original chars or ' ' for masked regions
+  const routeFences = masked.routeFences;       // [{start, end, innerStart, innerEnd}, ...]
 
   // ─── Phase 1: Standard ROUTE blocks (with closing marker) ─────
-  // ★ Tolerate closer variants:
-  //     ---END_ROUTE---   (underscore)
-  //     ---END ROUTE---   (space)
-  //     ---END---         (bare — users / PM often write this)
-  // ★ Use negative lookahead to not cross another ---ROUTE--- boundary.
-  const regex = /---ROUTE---\s*\n((?:(?!---ROUTE---)[\s\S])*?)---END(?:[_ ]ROUTE)?---/g;
+  // Accept END variants:  END_ROUTE | END ROUTE | END-ROUTE | END: | END | endroute
+  // Body capture uses negative lookahead to avoid crossing another opener.
+  // We run regex on `maskedText` so quoted examples (in non-ROUTE fences)
+  // don't match, but we use match.index to index into the ORIGINAL input
+  // when computing the strip range.
+  const closedRegex = /---\s*ROUTE\s*---\s*\r?\n((?:(?!---\s*ROUTE\s*---)[\s\S])*?)---\s*(?:END[_ \-]?ROUTE|ENDROUTE|END)\s*:?\s*---/gi;
   let match;
-  const matchedRanges = []; // track matched ranges to avoid double-parsing
-
-  while ((match = regex.exec(text)) !== null) {
-    matchedRanges.push({ start: match.index, end: match.index + match[0].length });
+  while ((match = closedRegex.exec(maskedText)) !== null) {
     const parsed = _parseRouteBlock(match[1]);
+    let rangeStart = match.index;
+    let rangeEnd = match.index + match[0].length;
+    // §5: if this match lives inside a ROUTE-carrying fence, extend the
+    // strip to cover the fence lines (so the UI doesn't see empty ```…```).
+    const fence = routeFences.find(f => rangeStart >= f.innerStart && rangeEnd <= f.innerEnd);
+    if (fence) { rangeStart = fence.start; rangeEnd = fence.end; }
+    strippedRanges.push({ start: rangeStart, end: rangeEnd });
     if (parsed) routes.push(parsed);
   }
 
-  // ─── Phase 2: Fallback — ROUTE block missing any closing marker ──
-  // Take content until (a) next ---ROUTE--- boundary, (b) first blank
-  // line (summary is almost always a single paragraph — anything after
-  // a blank line is kanban/recent-routes/task-context noise injected
-  // by the crew runtime), or (c) EOF. The blank-line cutoff prevents
-  // the whole back-injected blob from being swallowed as the summary.
-  const openRegex = /---ROUTE---\s*\n/g;
-  while ((match = openRegex.exec(text)) !== null) {
-    // Skip if this range was already captured by Phase 1
-    const pos = match.index;
-    if (matchedRanges.some(r => pos >= r.start && pos < r.end)) continue;
+  // ─── Phase 2: Fallback — ROUTE block with no closing marker ──
+  // Soft-end uses a STRUCTURAL signal, not a bare blank line. A summary
+  // can span multiple paragraphs — it ends only when we see:
+  //   (a) another ---ROUTE--- opener, or
+  //   (b) EOF, or
+  //   (c) a structural separator after ≥2 consecutive newlines:
+  //       `\n\s*\n+---` (blank line + ---)
+  //       `\n\s*\n+<(kanban|recent-routes|task-context|EOF)`
+  //   (d) the 2048-char hard cap (safety valve for runaway blocks).
+  const openRegex = /---\s*ROUTE\s*---\s*\r?\n/gi;
+  while ((match = openRegex.exec(maskedText)) !== null) {
+    const openStart = match.index;
+    // Skip if this opener was already consumed by a Phase 1 match.
+    if (strippedRanges.some(r => openStart >= r.start && openStart < r.end)) continue;
 
-    const blockStart = pos + match[0].length;
-    // End at next ---ROUTE--- or EOF
-    const nextRoute = text.indexOf('---ROUTE---', blockStart);
-    const hardEnd = nextRoute !== -1 ? nextRoute : text.length;
-    // Soft end: first blank line (two or more newlines with only whitespace in between).
-    const blank = text.slice(blockStart, hardEnd).search(/\n[ \t]*\n/);
-    const blockEnd = blank !== -1 ? blockStart + blank : hardEnd;
-    const block = text.slice(blockStart, blockEnd);
+    const blockStart = openStart + match[0].length;
+    // (a) next opener?
+    const nextOpen = maskedText.indexOf('---ROUTE---', blockStart);
+    const hardEnd = nextOpen !== -1 ? nextOpen : maskedText.length;
+    const scope = maskedText.slice(blockStart, hardEnd);
 
+    // (c) structural cutoff — scan for the first structural signal after
+    //     ≥2 consecutive newlines (blank line + structure).
+    const SOFT_END_RE = /\n[ \t]*\n+(?:---(?!\s*ROUTE)|<(?:kanban|recent-routes|task-context)\b)/;
+    const softMatch = scope.match(SOFT_END_RE);
+    let blockEnd = hardEnd;
+    if (softMatch && softMatch.index != null) {
+      blockEnd = blockStart + softMatch.index;
+    }
+
+    // (d) 2048-char hard cap — protect against runaway unclosed blocks.
+    const SUMMARY_CAP = 2048;
+    if (blockEnd - blockStart > SUMMARY_CAP) blockEnd = blockStart + SUMMARY_CAP;
+
+    const block = maskedText.slice(blockStart, blockEnd);
     const parsed = _parseRouteBlock(block);
+
+    let rangeStart = openStart;
+    let rangeEnd = blockEnd;
+    // Extend to fence if wrapped.
+    const fence = routeFences.find(f => rangeStart >= f.innerStart && rangeEnd <= f.innerEnd);
+    if (fence) { rangeStart = fence.start; rangeEnd = fence.end; }
+    strippedRanges.push({ start: rangeStart, end: rangeEnd });
     if (parsed) routes.push(parsed);
   }
 
   // ─── Phase 3: Shorthand — "ROUTE → target" / "ROUTE: target" ─
-  // Matches single-line shorthands like: ROUTE → dev-1: summary here
-  // or: ROUTE: dev-1, summary here
+  // Only matches a single line and only outside any ROUTE block. We also
+  // run this on maskedText so shorthand inside quoted fences is ignored.
   const shorthandRegex = /^ROUTE\s*[→:]\s*(\S+)[,:\s]*(.*)$/gm;
-  while ((match = shorthandRegex.exec(text)) !== null) {
-    // Skip if inside an already-matched ROUTE block range
+  while ((match = shorthandRegex.exec(maskedText)) !== null) {
     const pos = match.index;
-    if (matchedRanges.some(r => pos >= r.start && pos < r.end)) continue;
-    // Also skip if the line is inside a ---ROUTE--- block (even unclosed)
-    const precedingText = text.slice(0, pos);
-    const lastRouteOpen = precedingText.lastIndexOf('---ROUTE---');
-    const lastRouteClose = Math.max(
+    if (strippedRanges.some(r => pos >= r.start && pos < r.end)) continue;
+
+    // Also skip if inside an open ---ROUTE--- block (even unclosed).
+    const precedingText = maskedText.slice(0, pos);
+    const lastRouteOpen = precedingText.search(/---\s*ROUTE\s*---(?![\s\S]*---\s*ROUTE\s*---)/i);
+    const lastRouteOpenIdx = precedingText.lastIndexOf('---ROUTE---');
+    const lastRouteCloseIdx = Math.max(
       precedingText.lastIndexOf('---END_ROUTE---'),
       precedingText.lastIndexOf('---END ROUTE---'),
-      precedingText.lastIndexOf('---END---')
+      precedingText.lastIndexOf('---END-ROUTE---'),
+      precedingText.lastIndexOf('---END---'),
     );
-    if (lastRouteOpen > lastRouteClose) continue; // inside an open block
+    if (lastRouteOpenIdx > lastRouteCloseIdx) continue;
+    void lastRouteOpen; // silence unused
 
     const toRaw = match[1].trim().toLowerCase().replace(/[,;:!?。，；：!？]+$/, '');
     const summary = match[2] ? match[2].trim() : '[该角色未提供消息摘要]';
 
     routes.push({ to: toRaw, summary, taskId: null, taskTitle: null });
+    // Shorthand is a single line — strip the whole line.
+    const lineEnd = maskedText.indexOf('\n', pos);
+    strippedRanges.push({
+      start: pos,
+      end: lineEnd === -1 ? maskedText.length : lineEnd,
+    });
   }
 
-  return routes;
+  const displayBody = _removeRanges(input, strippedRanges);
+  return _wrapParseResult(routes, displayBody, strippedRanges);
+}
+
+/**
+ * Wrap the parse result in an object that is ALSO iterable as an array
+ * of routes (for legacy `for (const r of parseRoutes(x))` callers) and
+ * supports `.length` / numeric index. New fields: `.routes`, `.displayBody`.
+ * @private
+ */
+function _wrapParseResult(routes, displayBody, rangesForDebug) {
+  // Start from a real Array so `Array.isArray()` and iteration/indexing
+  // "just work". Decorate with named fields that new callers prefer.
+  const arr = routes.slice();
+  Object.defineProperty(arr, 'routes', { value: routes, enumerable: false });
+  Object.defineProperty(arr, 'displayBody', { value: displayBody, enumerable: false });
+  Object.defineProperty(arr, 'strippedRanges', { value: rangesForDebug, enumerable: false });
+  return arr;
+}
+
+/**
+ * §2 helper — build a mask of `input` that replaces non-ROUTE fenced
+ * code with spaces (length-preserving), and records the positions of
+ * fences that DO contain a ROUTE opener (so Phase 1/2 can extend their
+ * strip range to swallow the fence lines).
+ *
+ * @param {string} input
+ * @returns {{ text: string, routeFences: Array<{start:number,end:number,innerStart:number,innerEnd:number}> }}
+ * @private
+ */
+function _maskNonRouteFences(input) {
+  const FENCE_RE = /```[^\n]*\n([\s\S]*?)```/g;
+  let m;
+  let out = '';
+  let lastIdx = 0;
+  const routeFences = [];
+  while ((m = FENCE_RE.exec(input)) !== null) {
+    const fenceStart = m.index;
+    const fenceEnd = m.index + m[0].length;
+    const innerStart = fenceStart + m[0].indexOf('\n') + 1;
+    const innerEnd = fenceEnd - 3; // strip trailing ```
+    const fenceContent = m[1];
+    const hasRoute = /---\s*ROUTE\s*---/i.test(fenceContent);
+    // Copy unchanged text up to fence start
+    out += input.slice(lastIdx, fenceStart);
+    if (hasRoute) {
+      // Keep the fence content intact so Phase 1 sees the ROUTE; record
+      // the fence range for the displayBody extender.
+      out += input.slice(fenceStart, fenceEnd);
+      routeFences.push({ start: fenceStart, end: fenceEnd, innerStart, innerEnd });
+    } else {
+      // Mask entire fence (including markers) with spaces of equal length
+      // so positions line up with the original string.
+      out += ' '.repeat(fenceEnd - fenceStart);
+    }
+    lastIdx = fenceEnd;
+  }
+  out += input.slice(lastIdx);
+  return { text: out, routeFences };
+}
+
+/**
+ * Remove a list of (possibly overlapping) character ranges from `input`.
+ * Also trims leading/trailing whitespace from the resulting blocks so the
+ * displayBody doesn't keep lonely blank lines where a ROUTE used to be.
+ *
+ * @param {string} input
+ * @param {Array<{start:number, end:number}>} ranges
+ * @returns {string}
+ * @private
+ */
+function _removeRanges(input, ranges) {
+  if (!ranges || ranges.length === 0) return input;
+  // Merge overlapping/adjacent ranges.
+  const sorted = ranges.slice().sort((a, b) => a.start - b.start);
+  const merged = [sorted[0]];
+  for (let i = 1; i < sorted.length; i++) {
+    const prev = merged[merged.length - 1];
+    const cur = sorted[i];
+    if (cur.start <= prev.end) prev.end = Math.max(prev.end, cur.end);
+    else merged.push({ ...cur });
+  }
+  // Build output by keeping the gaps between merged ranges.
+  let out = '';
+  let cursor = 0;
+  for (const r of merged) {
+    out += input.slice(cursor, r.start);
+    cursor = r.end;
+  }
+  out += input.slice(cursor);
+  // Collapse 3+ consecutive newlines (left by a removal) to a double newline.
+  out = out.replace(/\n{3,}/g, '\n\n');
+  return out.trim();
 }
 
 /**
@@ -117,7 +292,10 @@ export function parseRoutes(text) {
  * @returns {{ to: string, summary: string, taskId: string|null, taskTitle: string|null } | null}
  */
 function _parseRouteBlock(block) {
-  const toMatch = block.match(/to:\s*(.+)/i);
+  // task-328 §3: tolerate Chinese full-width colon (`to：` / `task：` / `summary：`)
+  // and stray whitespace before the colon (`to :`). All field separators accept
+  // either ASCII `:` or Chinese `：`.
+  const toMatch = block.match(/to\s*[:：]\s*(.+)/i);
   if (!toMatch) return null;
 
   // ★ Clean `to` value: take only the first word (strip parenthetical notes, extra text)
@@ -126,10 +304,11 @@ function _parseRouteBlock(block) {
   // Strip trailing punctuation (commas, semicolons, colons, etc.)
   const toClean = toRaw.split(/[\s(]/)[0].replace(/[,;:!?。，；：!？]+$/, '');
 
-  // ★ summary: match until next known field (task:/taskTitle:) or end of block
-  const summaryMatch = block.match(/summary:\s*([\s\S]+?)(?=\n\s*(?:task|taskTitle)\s*:|$)/i);
-  const taskMatch = block.match(/^task:\s*(.+)/im);
-  const taskTitleMatch = block.match(/^taskTitle:\s*(.+)/im);
+  // ★ summary: match until next known field (task:/taskTitle:) or end of block.
+  //   Field separator accepts ASCII `:` or Chinese `：`.
+  const summaryMatch = block.match(/summary\s*[:：]\s*([\s\S]+?)(?=\n\s*(?:task|taskTitle)\s*[:：]|$)/i);
+  const taskMatch = block.match(/^task\s*[:：]\s*(.+)/im);
+  const taskTitleMatch = block.match(/^taskTitle\s*[:：]\s*(.+)/im);
 
   let summary = summaryMatch ? summaryMatch[1].trim() : '';
 
@@ -137,7 +316,7 @@ function _parseRouteBlock(block) {
   //   just write the message as free text AFTER the known fields. Collect
   //   everything that is NOT a recognised field line as the body.
   if (!summary) {
-    const KNOWN_FIELD = /^\s*(?:to|task|taskTitle|summary)\s*:/i;
+    const KNOWN_FIELD = /^\s*(?:to|task|taskTitle|summary)\s*[:：]/i;
     const bare = block
       .split(/\r?\n/)
       .filter(line => !KNOWN_FIELD.test(line))
