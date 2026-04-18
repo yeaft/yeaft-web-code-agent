@@ -921,19 +921,30 @@ export async function handleUnifyLoadHistory(msg) {
       const bucket = getThreadMessages(tid);
       bucket.push({ role: m.role, content: m.content });
     }
-
-    sendUnifyEvent({
-      type: 'session_ready',
-      conversationId: unifyConversationId,
-      model: session.config.model,
-      availableModels: session.config.availableModels || [],
-      skills: session.status.skills,
-      mcpServers: session.status.mcpServers,
-      tools: session.status.tools,
-    });
-    // task-301 Part 2: initial thread snapshot for history-load session.
-    sendThreadListUpdate();
   }
+
+  // task-322: replay `session_ready` + `thread_list_updated` UNCONDITIONALLY
+  // on every load-history call. The module-level `session` is a process-wide
+  // singleton — on page refresh the agent reuses it, so the lazy-init block
+  // above is skipped. The frontend's `enterUnify()` resets
+  // `unifyModel=null`, `unifyThreads=[]`, `unifySessionReady=false` every
+  // time, so without this replay the UI is left with the model selector
+  // stuck on the placeholder, sidebar empty, and the local→agent
+  // conversationId migration never triggers (leaving the main pane blank).
+  //
+  // Frontend is idempotent: the `session_ready` handler either migrates
+  // local→agent convId (first time) or just updates model/status fields
+  // (repeat) — receiving it twice is a no-op on state invariants.
+  sendUnifyEvent({
+    type: 'session_ready',
+    conversationId: unifyConversationId,
+    model: session.config.model,
+    availableModels: session.config.availableModels || [],
+    skills: session.status.skills,
+    mcpServers: session.status.mcpServers,
+    tools: session.status.tools,
+  });
+  sendThreadListUpdate();
 
   const limit = msg.limit || 50;
   const messages = session.conversationStore.loadRecent(limit);
