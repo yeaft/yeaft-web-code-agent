@@ -15,6 +15,7 @@
  */
 
 import { extractMemories } from './extract.js';
+import { pickEffort } from '../effort.js';
 
 // ─── Constants ──────────────────────────────────────────────────
 
@@ -103,6 +104,11 @@ async function generateSummary(messages, adapter, config) {
       system,
       messages: [{ role: 'user', content: `Summarize this conversation:\n\n${conversation}` }],
       maxTokens: 1024,
+      // task-327c: consolidate is a high-complexity side-query; flag as
+      // 'max' effort so supported models use extended thinking / reasoning.
+      // Router/adapter silently drops the param for models that don't
+      // support thinking, or when UNIFY_THINKING_V1 is off.
+      effort: pickEffort({ scenario: 'consolidate' }),
     });
     return result.text.trim();
   } catch {
