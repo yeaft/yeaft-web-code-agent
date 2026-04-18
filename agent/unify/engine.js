@@ -26,8 +26,17 @@ import { buildMemoryInjection } from './memory/layout.js';
 import { runStopHooks } from './stop-hooks.js';
 import { getThreadStore, MAIN_THREAD_ID } from './threads/store.js';
 
-/** Maximum number of turns before the engine stops to prevent infinite loops. */
-const MAX_TURNS = 25;
+/**
+ * task-324 — Turn cap removed.
+ *
+ * Previously MAX_TURNS=25 broke the query loop out of long tool-driven
+ * conversations (user report: Unify loop errored at the cap). The engine
+ * now runs until the LLM itself returns stopReason='end_turn' or a
+ * non-retryable error surfaces. Real runaway loops are still bounded by:
+ *   • provider rate limits / context window (LLMContextError → compact)
+ *   • user-initiated abort (AbortController / cancel)
+ *   • MAX_CONTINUE_TURNS for the max_tokens auto-continue path
+ */
 
 /** Maximum auto-continue turns when stopReason is 'max_tokens'. */
 const MAX_CONTINUE_TURNS = 3;
@@ -401,15 +410,9 @@ export class Engine {
     while (true) {
       turnNumber++;
 
-      // Safety: prevent infinite loops
-      if (turnNumber > MAX_TURNS) {
-        yield {
-          type: 'error',
-          error: new Error(`Max turns (${MAX_TURNS}) reached — stopping to prevent infinite loop`),
-          retryable: false,
-        };
-        break;
-      }
+      // task-324: no hard MAX_TURNS cap. Loop terminates on end_turn,
+      // non-retryable error, LLMContextError (after compact retry), or
+      // caller abort. Keeping this comment so the removal is traceable.
 
       const turnId = this.#trace.startTurn({
         traceId: this.#traceId,
