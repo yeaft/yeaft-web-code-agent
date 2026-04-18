@@ -7,6 +7,8 @@ import { saveRoleSessionId, clearRoleSessionId, classifyRoleError, createRoleQue
 import { parseRoutes, executeRoute, dispatchToRole } from './routing.js';
 import { parseCompletedTasks, updateFeatureIndex, appendChangelog, saveRoleWorkSummary, updateKanban } from './task-files.js';
 import { debouncedSaveSessionMeta, saveSessionMeta } from './persistence.js';
+import { recordRoutingEvent } from './routing-metrics.js';
+import { resolveFallbackTarget } from './routing-fallback.js';
 import ctx from '../context.js';
 
 // Context 使用率常量（运行时从 ctx.CONFIG 读取）
@@ -160,6 +162,17 @@ export async function processRoleOutput(session, roleName, roleQuery, roleState)
         const parseResult = parseRoutes(roleState.accumulatedText);
         const routes = parseResult;
         const displayBody = parseResult.displayBody || roleState.accumulatedText;
+        // task-330b §B item 1: detect "parse-fail" — text mentions a ROUTE
+        // opener but nothing parseable came out. Counts as a separate metric
+        // from plain missing-route so dashboards can split malformed-block
+        // (likely template/prompt drift) from forgot-to-write-block.
+        if (routes.length === 0 && /---\s*ROUTE\s*---/i.test(roleState.accumulatedText || '')) {
+          recordRoutingEvent(session, 'parse-fail', {
+            fromRole: roleName,
+            taskId: roleState.currentTask?.taskId || null,
+            note: 'ROUTE opener present but no parseable block',
+          });
+        }
         // Fallback: 如果 route summary 仍为空占位符，用 accumulatedText 末尾 500 字符
         for (const route of routes) {
           if (route.summary === '[该角色未提供消息摘要]' && roleState.accumulatedText) {
@@ -265,27 +278,59 @@ export async function processRoleOutput(session, roleName, roleQuery, roleState)
           });
           sendStatusUpdate(session);
         } else {
-          // ★ No ROUTE found — decide whether to auto-forward to PM
-          const isNonPM = roleName !== session.decisionMaker;
+          // ★ No ROUTE found — resolve via the single fallback policy
+          // (task-330b §B item 3). The resolver enforces:
+          //   - PM never auto-forwards to itself (parks pending instead)
+          //   - non-PM with active task / routing intent → PM (auto-forward)
+          //   - everyone else → null (process human queue)
           const hasActiveTask = !!roleState.currentTask;
           const hasRouteIntent = _detectRouteIntent(roleState.lastTurnText);
+          const fallbackTo = resolveFallbackTarget(session, roleName, 'missing-route', {
+            hasActiveTask,
+            hasRouteIntent,
+          });
 
-          if (isNonPM && (hasActiveTask || hasRouteIntent)) {
-            // Non-PM role with active task OR routing intent but no ROUTE block:
-            // auto-forward to PM so the message doesn't get lost.
+          if (fallbackTo) {
+            // §B item 1 — record the metric on every fallback dispatch.
+            const reason = hasActiveTask ? 'has active task' : 'has routing intent';
+            recordRoutingEvent(session, 'fallback-forward', {
+              fromRole: roleName,
+              toRole: fallbackTo,
+              taskId: roleState.currentTask?.taskId || null,
+              note: reason,
+            });
+            // Also record the upstream cause so dashboards can split
+            // "missing ROUTE" events from the auto-forward dispatches.
+            recordRoutingEvent(session, 'missing-route', {
+              fromRole: roleName,
+              taskId: roleState.currentTask?.taskId || null,
+              note: reason,
+            });
             // task-328: forward parser-clean displayBody (ROUTE residue removed)
             // so PM sees the actual prose, not stray END markers.
-            const reason = hasActiveTask ? 'has active task' : 'has routing intent';
-            console.log(`[Crew] ${roleName} turn ended without ROUTE (${reason}) — auto-forwarding to PM`);
+            console.log(`[Crew] ${roleName} turn ended without ROUTE (${reason}) — auto-forwarding to ${fallbackTo}`);
             const forwardSource = roleState.lastTurnDisplayBody || roleState.lastTurnText || '';
             const autoSummary = `[auto-forward: ${roleName} turn 结束但未输出 ROUTE 块 (${reason})]\n${forwardSource.slice(-800).trim()}`;
             await executeRoute(session, roleName, {
-              to: session.decisionMaker,
+              to: fallbackTo,
               summary: autoSummary,
               taskId: roleState.currentTask?.taskId || null,
               taskTitle: roleState.currentTask?.taskTitle || null,
             });
           } else {
+            // §B item 2 — PM no-auto-forward: when PM ends a turn without
+            // ROUTE we DO NOT self-route. Instead we record the metric and
+            // park the session (effectively pending) so the user's next
+            // input drives the next step. Same applies to non-PM roles
+            // with no active task / no routing intent.
+            if (roleName === session.decisionMaker && (hasActiveTask || hasRouteIntent)) {
+              recordRoutingEvent(session, 'missing-route', {
+                fromRole: roleName,
+                taskId: roleState.currentTask?.taskId || null,
+                note: 'pm-pending (no auto-forward)',
+              });
+              console.log(`[Crew] ${roleName} (PM) turn ended without ROUTE — staying pending (no self-forward)`);
+            }
             const { processHumanQueue } = await import('./human-interaction.js');
             await processHumanQueue(session);
           }
