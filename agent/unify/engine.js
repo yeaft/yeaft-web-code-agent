@@ -25,6 +25,7 @@ import { shouldConsolidate, consolidate } from './memory/consolidate.js';
 import { buildMemoryInjection } from './memory/layout.js';
 import { runStopHooks } from './stop-hooks.js';
 import { getThreadStore, MAIN_THREAD_ID } from './threads/store.js';
+import { pickEffort, parseEffortPrefix } from './effort.js';
 
 /**
  * task-324 — Turn cap removed.
@@ -424,9 +425,16 @@ export class Engine {
    * @param {string} params.prompt - The user prompt (required, non-empty).
    * @param {Array} [params.messages] - Prior conversation messages.
    * @param {AbortSignal} [params.signal] - Abort signal.
+   * @param {'low'|'medium'|'high'|'max'|null} [params.userEffort] -
+   *   task-327b: explicit per-query effort override (from Settings or
+   *   API caller). `/max`/`/high`/`/medium`/`/low` prefixes in prompt
+   *   also set this. Null/invalid → scenario decision tree decides.
+   * @param {string} [params.scenario='chat'] - task-327b: scenario tag
+   *   forwarded to the effort decision tree. See effort.js
+   *   SCENARIO_EFFORT. Unknown values fall through to 'high'.
    * @yields {EngineEvent}
    */
-  async *query({ prompt, messages = [], signal }) {
+  async *query({ prompt, messages = [], signal, userEffort = null, scenario = 'chat' }) {
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       yield {
         type: 'error',
@@ -435,6 +443,12 @@ export class Engine {
       };
       return;
     }
+
+    // task-327b: `/max` / `/high` / `/medium` / `/low` prefix override.
+    // Explicit caller-supplied userEffort wins over the prefix.
+    const parsed = parseEffortPrefix(prompt);
+    const effectivePrompt = parsed.cleanedPrompt;
+    const effectiveUserEffort = userEffort || parsed.effort || null;
 
     // ─── task-325a: engine-owned AbortController ─────────────
     // We create our own controller for this query run so `engine.abort()`
@@ -468,7 +482,7 @@ export class Engine {
     const runSignal = abortCtrl.signal;
 
     try {
-      yield* this.#runQuery({ prompt, messages, signal: runSignal });
+      yield* this.#runQuery({ prompt: effectivePrompt, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario });
     } finally {
       if (signal) {
         try { signal.removeEventListener('abort', onExternalAbort); } catch { /* ignore */ }
@@ -486,7 +500,7 @@ export class Engine {
    * in a try/finally without indenting the whole loop.
    * @private
    */
-  async *#runQuery({ prompt, messages, signal }) {
+  async *#runQuery({ prompt, messages, signal, userEffort = null, scenario = 'chat' }) {
 
     // ─── Pre-query: Memory Injection (task-287) + Compact Summary ──
     // New layout: always inject Memory Index + user-preferences + project
@@ -522,6 +536,7 @@ export class Engine {
     const toolDefs = this.#getToolDefs();
     let turnNumber = 0;
     let continueTurns = 0; // auto-continue counter
+    let toolLoopTurns = 0; // task-327b: tool-use turns for long-loop auto-bump
     let fullResponseText = '';
     let currentModel = this.#config.model;
 
@@ -557,6 +572,10 @@ export class Engine {
       yield { type: 'turn_start', turnNumber };
 
       try {
+        // task-327b: resolve effort per-turn so the long-loop auto-bump
+        // kicks in once toolLoopTurns crosses the threshold.
+        const resolvedEffort = pickEffort({ scenario, toolLoopTurns, userEffort });
+
         // Stream from adapter
         for await (const event of this.#adapter.stream({
           model: currentModel,
@@ -564,6 +583,7 @@ export class Engine {
           messages: [...conversationMessages],
           tools: toolDefs.length > 0 ? toolDefs : undefined,
           maxTokens: this.#config.maxOutputTokens || 16384,
+          effort: resolvedEffort,
           signal,
         })) {
           switch (event.type) {
@@ -833,6 +853,11 @@ export class Engine {
       }
 
       yield { type: 'turn_end', turnNumber, stopReason: 'tool_use' };
+
+      // task-327b: count this as a tool-loop turn. Next iteration's
+      // pickEffort() will see the bumped counter and upgrade to 'max'
+      // once LONG_LOOP_TURN_THRESHOLD is reached.
+      toolLoopTurns++;
 
       // Loop back to call adapter again with tool results
     }
