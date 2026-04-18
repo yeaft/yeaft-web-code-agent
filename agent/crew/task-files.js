@@ -59,15 +59,41 @@ ${m.workRecord}
 
 /**
  * 追加工作记录到 task 文件
+ *
+ * task-321: auto-create the feature file if it doesn't exist yet. Previously
+ * a missing file silently dropped the record, which meant that whenever a
+ * non-PM role was first to mention a taskId, the file was never created and
+ * every subsequent record — including from PM — would also be dropped. We
+ * now recover a title from opts.taskTitle → session.features cache → taskId
+ * itself, and create the file on the fly.
+ *
+ * @param {object} session
+ * @param {string} taskId
+ * @param {string} roleName
+ * @param {string} summary
+ * @param {{ taskTitle?: string|null, assignee?: string|null }} [opts]
  */
-export async function appendTaskRecord(session, taskId, roleName, summary) {
+export async function appendTaskRecord(session, taskId, roleName, summary, opts = {}) {
   const filePath = join(session.sharedDir, 'context', 'features', `${taskId}.md`);
 
+  let exists = true;
   try {
     await fs.access(filePath);
   } catch {
-    // 文件不存在，跳过
-    return;
+    exists = false;
+  }
+
+  if (!exists) {
+    const recoveredTitle = opts.taskTitle
+      || session.features?.get(taskId)?.taskTitle
+      || taskId;
+    const assignee = opts.assignee || roleName;
+    try {
+      await ensureTaskFile(session, taskId, recoveredTitle, assignee, summary);
+    } catch (e) {
+      console.warn(`[Crew] Failed to auto-create task file ${taskId} on append:`, e.message);
+      return;
+    }
   }
 
   const role = session.roles.get(roleName);
