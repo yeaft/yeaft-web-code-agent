@@ -19,7 +19,7 @@
 
 import { randomUUID } from 'crypto';
 import { buildSystemPrompt } from './prompts.js';
-import { LLMContextError } from './llm/adapter.js';
+import { LLMContextError, LLMAbortError } from './llm/adapter.js';
 import { recall } from './memory/recall.js';
 import { shouldConsolidate, consolidate } from './memory/consolidate.js';
 import { buildMemoryInjection } from './memory/layout.js';
@@ -95,6 +95,32 @@ export class Engine {
   #fastConfig;
 
   /**
+   * task-325a — abort state.
+   *
+   * The engine exposes a first-class abort surface: `engine.abort(reason)`
+   * aborts the currently running `query()` loop. Internally we keep:
+   *
+   *   • `#currentAbortCtrl` — the per-query AbortController created (or
+   *     reused from the caller's signal) when query() starts. Used to
+   *     propagate abort to the LLM adapter stream and to tool execution.
+   *   • `#abortReason`       — the reason string passed to abort(), surfaced
+   *     on the emitted `aborted` event so the UI can render a meaningful
+   *     stop banner (`user`, `timeout`, `thread_reset`, etc.).
+   *
+   * State machine convergence: when the signal fires, the loop catches the
+   * LLMAbortError (or a synthetic abort check) and yields exactly one pair
+   * of events — `{type:'aborted', reason}` followed by
+   * `{type:'turn_end', stopReason:'aborted'}` — then returns without
+   * persisting partial tool calls, consolidation, or stop-hook side-effects.
+   *
+   * @type {AbortController|null}
+   */
+  #currentAbortCtrl = null;
+
+  /** @type {string|null} */
+  #abortReason = null;
+
+  /**
    * @param {{
    *   adapter: import('./llm/adapter.js').LLMAdapter,
    *   trace: object,
@@ -138,6 +164,46 @@ export class Engine {
   registerTool(tool) {
     this.#tools.set(tool.name, tool);
   }
+
+  /**
+   * task-325a — abort the currently running query().
+   *
+   * Idempotent and safe to call when no query is in flight (no-op).
+   * The abort is cooperative: the in-flight adapter stream receives the
+   * signal immediately (fetch aborts), the tool loop checks the signal
+   * between invocations, and the loop emits a typed `aborted` event
+   * before returning so the caller can distinguish "user stopped" from
+   * "LLM returned end_turn".
+   *
+   * @param {string} [reason='user'] — Human-tagged reason surfaced on the
+   *   emitted `aborted` event. Common values: `'user'`, `'timeout'`,
+   *   `'thread_reset'`, `'session_reset'`.
+   * @returns {boolean} true if an in-flight query was aborted, false if
+   *   nothing was running (no-op).
+   */
+  abort(reason = 'user') {
+    if (!this.#currentAbortCtrl) return false;
+    if (this.#currentAbortCtrl.signal.aborted) return false;
+    this.#abortReason = reason || 'user';
+    try {
+      this.#currentAbortCtrl.abort();
+    } catch {
+      // AbortController.abort never throws in practice, but swallow
+      // defensively so abort() never takes down the caller.
+    }
+    return true;
+  }
+
+  /**
+   * task-325a — whether there is an in-flight query that has NOT been
+   * aborted. Useful for callers that want to know "is this engine busy?"
+   * without racing on the signal.
+   * @returns {boolean}
+   */
+  get isRunning() {
+    return !!this.#currentAbortCtrl && !this.#currentAbortCtrl.signal.aborted;
+  }
+
 
   /**
    * Unregister a tool.
@@ -370,6 +436,58 @@ export class Engine {
       return;
     }
 
+    // ─── task-325a: engine-owned AbortController ─────────────
+    // We create our own controller for this query run so `engine.abort()`
+    // can trigger cancellation without requiring the caller to hand in a
+    // signal. If the caller DID provide a signal, we mirror its state onto
+    // our controller (honouring both entry points). The linked signal
+    // forwarded to the adapter/tools is always `abortCtrl.signal`, so
+    // there is exactly one place that actually stops work in flight.
+    const abortCtrl = new AbortController();
+    this.#currentAbortCtrl = abortCtrl;
+    this.#abortReason = null;
+
+    const onExternalAbort = () => {
+      if (!abortCtrl.signal.aborted) {
+        // Tag the reason so the emitted `aborted` event reflects the
+        // external trigger. Callers that pass a signal without invoking
+        // engine.abort() get the neutral tag 'external'.
+        if (!this.#abortReason) this.#abortReason = 'external';
+        try { abortCtrl.abort(); } catch { /* ignore */ }
+      }
+    };
+    if (signal) {
+      if (signal.aborted) {
+        this.#abortReason = 'external';
+        try { abortCtrl.abort(); } catch { /* ignore */ }
+      } else {
+        signal.addEventListener('abort', onExternalAbort, { once: true });
+      }
+    }
+    // The signal passed down to adapter.stream() + tool execution.
+    const runSignal = abortCtrl.signal;
+
+    try {
+      yield* this.#runQuery({ prompt, messages, signal: runSignal });
+    } finally {
+      if (signal) {
+        try { signal.removeEventListener('abort', onExternalAbort); } catch { /* ignore */ }
+      }
+      // Clear current-run state so engine.isRunning flips back to false
+      // and a subsequent query() starts with a clean slate.
+      this.#currentAbortCtrl = null;
+      this.#abortReason = null;
+    }
+  }
+
+  /**
+   * Internal: the original query loop body. Split out of `query()` so the
+   * public method can own the per-run AbortController + abort lifecycle
+   * in a try/finally without indenting the whole loop.
+   * @private
+   */
+  async *#runQuery({ prompt, messages, signal }) {
+
     // ─── Pre-query: Memory Injection (task-287) + Compact Summary ──
     // New layout: always inject Memory Index + user-preferences + project
     // header excerpt. No per-turn fuzzy recall — LLM calls memory_search /
@@ -413,6 +531,16 @@ export class Engine {
       // task-324: no hard MAX_TURNS cap. Loop terminates on end_turn,
       // non-retryable error, LLMContextError (after compact retry), or
       // caller abort. Keeping this comment so the removal is traceable.
+
+      // task-325a: check for user abort at the top of every turn so a
+      // signal that fires between turns (e.g. during tool execution in
+      // the previous iteration) cleanly ends the loop instead of
+      // launching another adapter stream.
+      if (signal?.aborted) {
+        yield { type: 'aborted', reason: this.#abortReason || 'external', turnNumber };
+        yield { type: 'turn_end', turnNumber, stopReason: 'aborted' };
+        break;
+      }
 
       const turnId = this.#trace.startTurn({
         traceId: this.#traceId,
@@ -490,6 +618,22 @@ export class Engine {
           ttfbMs,
           stopReason: 'error',
         };
+
+        // ─── task-325a: abort short-circuit ────────────────
+        // If the adapter threw LLMAbortError, or the signal fired during
+        // stream() (fetch throws AbortError / DOMException), we converge
+        // the state machine on the 'aborted' terminal state — no retry,
+        // no fallback, no persistence. One `aborted` event + one
+        // `turn_end` with stopReason='aborted' and we're done.
+        const isAbort = err instanceof LLMAbortError
+          || err?.name === 'AbortError'
+          || err?.name === 'LLMAbortError'
+          || (signal?.aborted && /abort/i.test(err?.message || ''));
+        if (isAbort || signal?.aborted) {
+          yield { type: 'aborted', reason: this.#abortReason || 'external', turnNumber };
+          yield { type: 'turn_end', turnNumber, stopReason: 'aborted' };
+          break;
+        }
 
         // ─── LLMContextError → force compact → retry ──────
         if (err instanceof LLMContextError && this.#conversationStore && this.#memoryStore) {
@@ -613,7 +757,21 @@ export class Engine {
       // Execute tool calls and feed results back
       const toolCtx = this.#buildToolContext(signal);
 
+      // task-325a: track whether we aborted mid tool-loop so we can
+      // break out of the outer while-loop cleanly once the current
+      // tool batch finishes reporting.
+      let abortedDuringTools = false;
+
       for (const tc of toolCalls) {
+        // task-325a: honour abort between tools. We don't cancel a tool
+        // that's already running (the signal is passed in, tools decide
+        // themselves whether to bail early), but we stop dispatching
+        // any remaining tools the moment abort fires.
+        if (signal?.aborted) {
+          abortedDuringTools = true;
+          break;
+        }
+
         const toolStartTime = Date.now();
 
         let output;
@@ -663,6 +821,15 @@ export class Engine {
           content: output,
           isError,
         });
+      }
+
+      // task-325a: if abort fired between tools, converge now — emit
+      // the typed `aborted` event + a final turn_end with stopReason
+      // 'aborted' instead of looping back to a new adapter call.
+      if (abortedDuringTools || signal?.aborted) {
+        yield { type: 'aborted', reason: this.#abortReason || 'external', turnNumber };
+        yield { type: 'turn_end', turnNumber, stopReason: 'aborted' };
+        break;
       }
 
       yield { type: 'turn_end', turnNumber, stopReason: 'tool_use' };
