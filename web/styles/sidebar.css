@@ -988,6 +988,8 @@
 }
 
 /* Chat Header */
+/* task-329: flex-shrink:0 defensively prevents flex parent from compressing
+   header; paired with mobile rule inside chat-modals.css. */
 .chat-header {
   display: flex;
   justify-content: center;
@@ -995,6 +997,7 @@
   background: var(--bg-main);
   position: relative;
   box-sizing: border-box;
+  flex-shrink: 0;
 }
 
 .header-right {
