@@ -595,8 +595,11 @@ describe('Engine', () => {
         events.push(event);
       }
 
-      // Verify signal was passed to adapter
-      expect(receivedSignal).toBe(ac.signal);
+      // task-325a: the engine now owns an internal AbortController that
+      // mirrors the caller-provided signal, so the adapter receives the
+      // engine's linked signal (not the caller's identity). Verify that
+      // a valid AbortSignal was propagated rather than identity.
+      expect(receivedSignal).toBeInstanceOf(AbortSignal);
       // Verify normal completion when signal is not aborted
       const textEvents = events.filter(e => e.type === 'text_delta');
       expect(textEvents).toHaveLength(1);
@@ -627,10 +630,14 @@ describe('Engine', () => {
         events.push(event);
       }
 
-      // Should get error event from the abort
-      const errorEvents = events.filter(e => e.type === 'error');
-      expect(errorEvents).toHaveLength(1);
-      expect(errorEvents[0].error.message).toContain('aborted');
+      // task-325a: pre-aborted external signal now converges on the
+      // typed `aborted` event (not a generic `error`), and the turn
+      // ends with stopReason 'aborted'.
+      const abortedEvents = events.filter(e => e.type === 'aborted');
+      expect(abortedEvents).toHaveLength(1);
+      expect(abortedEvents[0].reason).toBe('external');
+      const turnEnds = events.filter(e => e.type === 'turn_end');
+      expect(turnEnds.at(-1).stopReason).toBe('aborted');
     });
 
     it('should pass signal to tool execute function', async () => {
@@ -667,7 +674,9 @@ describe('Engine', () => {
         // consume
       }
 
-      expect(toolReceivedSignal).toBe(ac.signal);
+      // task-325a: engine's internal linked signal is forwarded, so the
+      // tool receives an AbortSignal — not the caller's identity.
+      expect(toolReceivedSignal).toBeInstanceOf(AbortSignal);
     });
   });
 
