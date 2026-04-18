@@ -132,6 +132,7 @@ export default {
               <span class="crew-route-from">{{ shortName(turn.roleName) }}</span>
               <span class="crew-route-arrow">→</span>
               <span class="crew-route-target-name">{{ rm.routeToName || getRoleDisplayName(rm.routeTo) }}</span>
+              <span v-if="rm.timestamp" class="crew-route-time">{{ formatTime(rm.timestamp) }}</span>
             </div>
             <div v-if="rm.routeSummary" class="crew-route-summary">{{ rm.routeSummary }}</div>
             <div v-if="rm.routeImages && rm.routeImages.length > 0" class="crew-route-images">

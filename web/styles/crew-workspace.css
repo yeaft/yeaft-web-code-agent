@@ -537,6 +537,13 @@
   flex-shrink: 0;
 }
 
+.crew-route-time {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: 6px;
+  flex-shrink: 0;
+}
+
 .crew-route-summary {
   color: var(--text-secondary);
   white-space: normal;
