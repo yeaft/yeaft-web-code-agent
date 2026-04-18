@@ -417,18 +417,63 @@ export function resolveRoleName(to, session, fromRole) {
 export async function executeRoute(session, fromRole, route, turnImages = []) {
   let { to, summary, taskId, taskTitle } = route;
 
-  // task-330b §B item 1: self-route metric. §A (task-330a) owns the actual
-  // rejection; here we only record the event so the counter still increments
-  // even if §A lands later or in a different code path. Comparison is on
-  // the RAW `to` string — resolution to a different name (e.g. roleType
-  // expansion) is treated as a different routing decision.
-  if (typeof to === 'string' && to === fromRole) {
-    recordRoutingEvent(session, 'self-route', {
-      fromRole,
-      toRole: to,
-      taskId: taskId || null,
-      note: 'route.to === fromRole at executeRoute entry',
-    });
+  // ─── task-330a §A + task-330b §B: self-route hard-reject + metric ───
+  // 福勒 Final Spec §A — `route.to` 等同于发送方时直接拒绝，不消费 turn、
+  // 不写 kanban、不 dispatch、不 round++（round 已由 role-output 计数）。
+  // 解析顺序：先尝试用 resolveRoleName 还原 alias（pm/dev/displayName/
+  // pm-乔布斯 等），命中即比较；未命中则退回原始字符串大小写不敏感比较。
+  // 拒绝时：先写 330b 的 routing-metrics.json 持久化 metric（observer 路径），
+  // 再 emit 330a 的 sendCrewMessage UI 卡片，最后 return（不消费 turn）。
+  // alias self-route 漏记 metric 已记入 PM backlog 作 follow-up（330b 的
+  // raw 比较 `to === fromRole` 仅命中字面相同的情况；alias 形式由 330a
+  // 的 isSelf 兜底，但 330b 的 raw 检查保留为快速路径 + 兼容）。
+  if (to !== 'human') {
+    const resolvedSelfCheck = resolveRoleName(to, session, fromRole);
+    const isSelf = resolvedSelfCheck === fromRole
+      || (typeof to === 'string' && to.toLowerCase() === String(fromRole).toLowerCase());
+    if (isSelf) {
+      console.warn(`[Crew] Self-route rejected: ${fromRole} → ${to} (taskId=${taskId || '-'})`);
+      // 330b path — persistent metric counter (routing-metrics.json + ring).
+      // Always-safe; never throws (recordRoutingEvent degrades to console.warn).
+      recordRoutingEvent(session, 'self-route', {
+        fromRole,
+        toRole: to,
+        taskId: taskId || null,
+        note: 'route.to === fromRole at executeRoute entry (rejected by §A)',
+      });
+      // 330a path — UI broadcast so the role sees rejection in transcript.
+      try {
+        sendCrewMessage({
+          type: 'routing-metrics',
+          sessionId: session.id,
+          event: 'route_rejected',
+          reason: 'self-route',
+          fromRole,
+          to,
+          taskId: taskId || null,
+          timestamp: Date.now(),
+        });
+      } catch (e) {
+        console.warn('[Crew] Failed to emit routing-metrics:', e.message);
+      }
+      try {
+        sendCrewMessage({
+          type: 'crew_route_rejected',
+          sessionId: session.id,
+          fromRole,
+          to,
+          reason: 'self-route',
+          message: `自路由被拒绝：${fromRole} 不能给自己发消息。请改用 task_close(taskId, summary) 关闭任务，或 role_standby(role) 进入待命，或选择其他角色作为 ROUTE 目标。`,
+          taskId: taskId || null,
+        });
+      } catch (e) {
+        console.warn('[Crew] Failed to emit crew_route_rejected:', e.message);
+      }
+      // Do NOT decrement session.round — role-output.js already incremented
+      // it for this whole turn batch; one rejected route doesn't undo the
+      // turn (other routes in the same batch may still be valid).
+      return;
+    }
   }
 
   // task-330b §B item 1: state-stopped metric — message arrived while
