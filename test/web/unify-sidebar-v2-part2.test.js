@@ -83,7 +83,7 @@ describe('UnifyPage handlers delegate directly (no typeof guard)', () => {
 // --- Agent web-bridge: thread_list_updated emission -------------------------
 describe('agent web-bridge emits thread_list_updated (task-301 Part 2)', () => {
   it('imports getThreadStore from the threads store module', () => {
-    expect(bridgeSrc).toMatch(/import\s+\{\s*getThreadStore\s*\}\s+from\s+['"]\.\/threads\/store\.js['"]/);
+    expect(bridgeSrc).toMatch(/import\s+\{[^}]*\bgetThreadStore\b[^}]*\}\s+from\s+['"]\.\/threads\/store\.js['"]/);
   });
 
   it('defines sendThreadListUpdate helper that emits thread_list_updated', () => {
