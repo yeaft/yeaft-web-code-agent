@@ -407,15 +407,22 @@ describe('Engine', () => {
     });
   });
 
-  describe('max turns safety', () => {
-    it('should stop after MAX_TURNS to prevent infinite loops', async () => {
-      // Push 26 tool_use responses (exceeds MAX_TURNS of 25)
-      for (let i = 0; i < 26; i++) {
+  describe('no max turns cap (task-324)', () => {
+    it('should run past the old MAX_TURNS=25 cap when tool loop continues', async () => {
+      // Push 30 tool_use responses, then a final end_turn — old behavior
+      // would error at turn 26, new behavior runs all 30 tool turns + 1
+      // final response turn.
+      for (let i = 0; i < 30; i++) {
         mockAdapter.pushResponse([
           { type: 'tool_call', id: `call_${i}`, name: 'echo', input: { msg: `${i}` } },
           { type: 'stop', stopReason: 'tool_use' },
         ]);
       }
+      // Final turn: end_turn (no tool calls) to let the loop exit cleanly.
+      mockAdapter.pushResponse([
+        { type: 'text_delta', delta: 'done' },
+        { type: 'stop', stopReason: 'end_turn' },
+      ]);
 
       const engine = new Engine({
         adapter: mockAdapter,
@@ -431,18 +438,22 @@ describe('Engine', () => {
       });
 
       const events = [];
-      for await (const event of engine.query({ prompt: 'loop forever' })) {
+      for await (const event of engine.query({ prompt: 'loop past old cap' })) {
         events.push(event);
       }
 
-      // Should have an error event about max turns
+      // No "Max turns" error event should be emitted.
       const errorEvents = events.filter(e => e.type === 'error');
-      expect(errorEvents).toHaveLength(1);
-      expect(errorEvents[0].error.message).toContain('Max turns');
+      const maxTurnsErrors = errorEvents.filter(e =>
+        e.error && /Max turns/.test(e.error.message || '')
+      );
+      expect(maxTurnsErrors).toHaveLength(0);
 
-      // Should have completed 25 turns (not 26)
+      // Turns executed should exceed the old cap of 25.
       const turnStarts = events.filter(e => e.type === 'turn_start');
-      expect(turnStarts).toHaveLength(25);
+      expect(turnStarts.length).toBeGreaterThan(25);
+      // And should include the final end_turn turn (31 total).
+      expect(turnStarts.length).toBe(31);
     });
   });
 
