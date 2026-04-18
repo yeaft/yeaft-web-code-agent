@@ -1,6 +1,17 @@
 /**
  * Crew — 路由解析与执行
  * parseRoutes, executeRoute, buildRoutePrompt, dispatchToRole
+ *
+ * task-330c — Greedy-strip guard:
+ *   ⚠️ ROUTE-block stripping lives in `parseRoutes()` ONLY. Callers that
+ *      want the role's prose without ROUTE blocks must consume
+ *      `parseRoutes(text).displayBody` — never run a second
+ *      `text.replace(/---ROUTE---[\s\S]*$/g, '')` style strip on already
+ *      parser-cleaned text. A second strip would (a) re-process text
+ *      that no longer has ROUTE markers (no-op at best, miscut at worst),
+ *      (b) reintroduce the greedy tail-eating bug fixed by task-328.
+ *      The summary-fallback in role-output.js and the recent-routes
+ *      injector below both honour this contract.
  */
 import { join } from 'path';
 import { sendCrewMessage, sendCrewOutput, sendStatusUpdate } from './ui-messages.js';
@@ -13,6 +24,54 @@ import ctx from '../context.js';
 /** Format role label */
 function roleLabel(r) {
   return r.icon ? `${r.icon} ${r.displayName}` : r.displayName;
+}
+
+/**
+ * task-330c — Smart truncate for recent-routes / history snippets.
+ *
+ * Cuts at a sentence/line boundary when possible to avoid mid-sentence
+ * truncation; falls back to a hard cut when no good boundary exists in
+ * the candidate window. Always appends a marker so downstream readers
+ * (LLM roles seeing recent-routes context) know the full text lives
+ * elsewhere (feature file).
+ *
+ * Boundary detection: looks for the last period (`.` `。` `!` `?` `！` `？`)
+ * or newline inside the window `[Math.floor(max*0.7), max)`. The 70% lower
+ * bound is a quality floor — we don't want to cut so early that we lose
+ * meaningful tail context just to hit a clean boundary.
+ *
+ * Idempotent: text already short enough is returned unchanged (no marker).
+ *
+ * @param {string} text — input string (may be any length)
+ * @param {number} max  — maximum chars before truncation
+ * @returns {string}    — original text or `<truncated>…(truncated, full in feature file)`
+ */
+const TRUNCATE_MARKER = '…(truncated, full in feature file)';
+export function smartTruncate(text, max) {
+  if (typeof text !== 'string') return '';
+  if (!Number.isFinite(max) || max <= 0) return '';
+  if (text.length <= max) return text;
+
+  // Search window: prefer cuts in the last 30% of the limit.
+  const windowStart = Math.floor(max * 0.7);
+  const windowSlice = text.slice(windowStart, max);
+  // Last sentence boundary in window — period family OR newline.
+  // We accept a boundary char and cut AFTER it so the sentence stays whole.
+  const BOUNDARY_RE = /[.。!?！？\n]/g;
+  let bestIdx = -1;
+  let m;
+  while ((m = BOUNDARY_RE.exec(windowSlice)) !== null) {
+    bestIdx = m.index;
+  }
+  let cutEnd;
+  if (bestIdx !== -1) {
+    cutEnd = windowStart + bestIdx + 1; // include the boundary char itself
+  } else {
+    cutEnd = max; // no boundary in window → hard cut
+  }
+  // Trim trailing whitespace from the cut piece for cleaner output.
+  const head = text.slice(0, cutEnd).replace(/\s+$/, '');
+  return `${head}${TRUNCATE_MARKER}`;
 }
 
 /**
@@ -647,11 +706,21 @@ export async function dispatchToRole(session, roleName, content, fromSource, tas
   }
 
   // 最近路由消息注入（帮助 clear 后的角色恢复上下文）
+  // task-330c: each entry is smart-truncated to 400 chars at a sentence
+  // boundary (period/newline) so we don't slice key info mid-sentence.
+  // The full content lives in the feature file — the marker tells the
+  // role where to look if they need more context. The pre-stored
+  // `m.content` was already truncated to 200 (history step below) until
+  // task-330c bumped it to 400 + smart boundary.
+  // ⚠️ DO NOT pass `m.content` through any greedy `.replace(/.../g, '')`
+  //    here — it has already been derived from displayBody at message
+  //    time (parser-stripped), and a second strip would re-process
+  //    text that no longer holds ROUTE markers. See _appendHistory below.
   if (session.messageHistory.length > 0) {
     const recentRoutes = session.messageHistory
       .filter(m => m.from !== 'system')
       .slice(-5)
-      .map(m => `[${m.from} → ${m.to}${m.taskId ? ` (${m.taskId})` : ''}] ${m.content}`)
+      .map(m => `[${m.from} → ${m.to}${m.taskId ? ` (${m.taskId})` : ''}] ${smartTruncate(m.content, 400)}`)
       .join('\n');
     if (recentRoutes) {
       const ctx = `\n\n---\n<recent-routes>\n${recentRoutes}\n</recent-routes>`;

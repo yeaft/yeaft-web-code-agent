@@ -1,3 +1,14 @@
+/**
+ * message-router.js — Server-bound message dispatcher.
+ *
+ * task-330c lint guard:
+ *   ⚠️ DO NOT introduce greedy `text.replace(/---ROUTE---[\s\S]*$/g, '')`
+ *      style strips on routed message payloads. Crew ROUTE stripping is
+ *      owned EXCLUSIVELY by `agent/crew/routing.js` `parseRoutes()` which
+ *      returns `{routes, displayBody}` with exact ranges removed. A second
+ *      strip here would re-process already-cleaned text and risks both
+ *      double-strip artefacts and the trailing-prose bug fixed by task-328.
+ */
 import ctx from '../context.js';
 import { decodeKey } from '../encryption.js';
 import { handleTerminalCreate, handleTerminalInput, handleTerminalResize, handleTerminalClose } from '../terminal.js';

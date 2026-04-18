@@ -11,6 +11,15 @@
  *   3. Engine.query() yields events → translated into unify_output messages
  *      that carry { conversationId, data } in claude_output format.
  *   4. The frontend's handleUnifyOutput dispatches them through handleClaudeOutput.
+ *
+ * task-330c lint guard:
+ *   ⚠️ DO NOT introduce greedy `text.replace(/---ROUTE---[\s\S]*$/g, '')`
+ *      style strips on incoming/outgoing message bodies. Crew ROUTE
+ *      stripping is owned EXCLUSIVELY by `agent/crew/routing.js`
+ *      `parseRoutes()` which returns `{routes, displayBody}` with exact
+ *      ranges removed. Re-stripping here would (a) double-eat content
+ *      that has already been parser-cleaned, (b) reintroduce the bug
+ *      task-328 fixed (greedy tail-strip ate trailing prose).
  */
 
 import { loadSession } from './session.js';
