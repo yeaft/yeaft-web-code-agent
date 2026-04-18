@@ -269,5 +269,13 @@ export async function loadSession(options = {}) {
     threadStore: getThreadStore(),
     status,
     shutdown,
+    // task-325c: user-initiated abort API. Delegates to web-bridge which
+    // owns the per-thread AbortController registry (`abortByThread`).
+    // Lazy-imported to avoid a hard cycle with web-bridge.js (which already
+    // imports this module to call loadSession).
+    async abort(opts = {}) {
+      const { abortUnifySession } = await import('./web-bridge.js');
+      return abortUnifySession(opts);
+    },
   };
 }

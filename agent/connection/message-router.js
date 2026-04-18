@@ -25,7 +25,7 @@ import { sendToServer, flushMessageBuffer } from './buffer.js';
 import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
 import { getLlmConfig, updateLlmConfig, getUnifySettings, updateUnifySettings } from '../unify/config-api.js';
-import { handleUnifyChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyMergeThread, handleUnifyForkThread } from '../unify/web-bridge.js';
+import { handleUnifyChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyMergeThread, handleUnifyForkThread, handleUnifyAbortThread, handleUnifyAbortAll } from '../unify/web-bridge.js';
 
 export async function handleMessage(msg) {
   switch (msg.type) {
@@ -371,6 +371,19 @@ export async function handleMessage(msg) {
 
     case 'unify_fork_thread':
       handleUnifyForkThread(msg);
+      break;
+
+    case 'unify_abort_thread':
+      // task-325c: user-initiated abort of a single thread's in-flight
+      // query. Payload `{ threadId }`. Silent no-op when the thread has
+      // no in-flight controller.
+      handleUnifyAbortThread(msg);
+      break;
+
+    case 'unify_abort_all':
+      // task-325c: user-initiated abort of ALL in-flight queries across
+      // every thread. Always emits `unify_aborted` ack.
+      handleUnifyAbortAll();
       break;
 
     // Expert roles definition (for ExpertPanel detail view)

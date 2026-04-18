@@ -725,6 +725,90 @@ export async function handleUnifyChat(msg) {
 }
 
 /**
+ * task-325c: user-initiated abort of an in-flight Unify query on ONE thread.
+ *
+ * Cancels the AbortController registered for `msg.threadId` (if any). Silent
+ * no-op when the thread has no in-flight round — users clicking Stop on an
+ * already-idle thread should not trigger an error bubble. Emits an
+ * `unify_aborted` event for UI acknowledgement and a fresh
+ * `thread_list_updated` so inflight pills clear immediately.
+ *
+ * Red line (PM): the `thread_list_updated` event name is preserved; no
+ * new per-thread abort signal leaks into `Engine.abort()`'s signature.
+ *
+ * @param {{ threadId?: string }} msg
+ * @returns {{ aborted: string[], all: boolean }}
+ */
+export function handleUnifyAbortThread(msg = {}) {
+  const aborted = [];
+  const threadId = msg && msg.threadId;
+  if (threadId) {
+    const ctrl = abortByThread.get(threadId);
+    if (ctrl) {
+      try { ctrl.abort(); } catch { /* best-effort */ }
+      abortByThread.delete(threadId);
+      aborted.push(threadId);
+    }
+  }
+  sendUnifyEvent({ type: 'unify_aborted', aborted, all: false });
+  sendThreadListUpdate();
+  return { aborted, all: false };
+}
+
+/**
+ * task-325c: user-initiated abort of ALL in-flight Unify queries.
+ *
+ * Iterates every registered controller, aborts it, then clears the map.
+ * Always emits `unify_aborted` with `all:true` (even when nothing was
+ * running) so the UI can confirm the click landed.
+ *
+ * @returns {{ aborted: string[], all: boolean }}
+ */
+export function handleUnifyAbortAll() {
+  const aborted = [];
+  for (const [threadId, ctrl] of abortByThread.entries()) {
+    try { ctrl.abort(); } catch { /* best-effort */ }
+    aborted.push(threadId);
+  }
+  abortByThread.clear();
+  sendUnifyEvent({ type: 'unify_aborted', aborted, all: true });
+  sendThreadListUpdate();
+  return { aborted, all: true };
+}
+
+/**
+ * Unified dispatcher bound onto `session.abort({ threadId?, all? })`.
+ * Routes to {@link handleUnifyAbortThread} or {@link handleUnifyAbortAll}
+ * per input. Kept exported so message-router and tests can call it too.
+ *
+ * @param {{ threadId?: string, all?: boolean }} [opts]
+ */
+export function abortUnifySession(opts = {}) {
+  if (opts && opts.all) return handleUnifyAbortAll();
+  if (opts && opts.threadId) return handleUnifyAbortThread({ threadId: opts.threadId });
+  // No payload — conservative default: abort nothing, just emit ack so
+  // callers see the no-op round-trip. Matches PM "don't accidentally
+  // nuke everything on a bare click".
+  sendUnifyEvent({ type: 'unify_aborted', aborted: [], all: false });
+  return { aborted: [], all: false };
+}
+
+/**
+ * Test-only: seed / inspect the abort registry without spinning up a
+ * full session. Never use from production code — the prod registry is
+ * managed by handleUnifyChat's per-query controller lifecycle.
+ * @private
+ */
+export function __testSeedAbortController(threadId, ctrl) {
+  abortByThread.set(threadId, ctrl);
+}
+
+/** Test-only: returns the set of thread ids currently registered. */
+export function __testGetRegisteredThreadIds() {
+  return [...abortByThread.keys()];
+}
+
+/**
  * Handle mode switch from the web UI.
  * DEPRECATED (task-297): Unify no longer has chat/work mode distinction.
  * Retained as a no-op with warning for backward compatibility.

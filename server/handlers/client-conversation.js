@@ -677,6 +677,29 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       break;
     }
 
+    case 'unify_abort_thread': {
+      // task-325c: relay targeted abort command to the agent. Payload
+      // carries `threadId` only — no extra fields. Unknown thread is a
+      // silent no-op on the agent side, so we forward unconditionally.
+      const abortAgentId = msg.agentId || client.currentAgent;
+      if (!abortAgentId) return;
+      if (!await checkAgentAccess(abortAgentId)) return;
+      await forwardToAgent(abortAgentId, {
+        type: 'unify_abort_thread',
+        threadId: msg.threadId,
+      });
+      break;
+    }
+
+    case 'unify_abort_all': {
+      // task-325c: relay "abort everything" command. Empty payload.
+      const abortAllAgentId = msg.agentId || client.currentAgent;
+      if (!abortAllAgentId) return;
+      if (!await checkAgentAccess(abortAllAgentId)) return;
+      await forwardToAgent(abortAllAgentId, { type: 'unify_abort_all' });
+      break;
+    }
+
     default:
       return false; // Not handled
   }
