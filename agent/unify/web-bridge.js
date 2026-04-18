@@ -244,6 +244,109 @@ const THREAD_MUTATING_TOOLS = new Set([
 ]);
 
 /**
+ * task-325b — Working Status event stream.
+ *
+ * Surfaces Engine lifecycle events (emitted by 325a) as a single
+ * `thread_status` event for the frontend Working Status panel, plus
+ * `thread_list_snapshot` for cold-start / reconnect.
+ *
+ * Contract (aligned with designer spec):
+ *   thread_status   → { type: 'thread_status', threadId, state,
+ *                       startedAt?, completedAt?, toolName?, reason? }
+ *     state ∈ 'running' | 'idle' | 'aborted' | 'error'
+ *   thread_list_snapshot → { type: 'thread_list_snapshot', threads[],
+ *                            currentThreadId, serverTime }
+ *
+ * Red lines (per PM): do NOT mutate engine state; this layer is a pure
+ * observer + translator. Event names match designer doc verbatim.
+ */
+
+/** Map Engine event name → Working Status state string. */
+function engineEventToState(engineEventType) {
+  switch (engineEventType) {
+    case 'thread_started':   return 'running';
+    case 'thread_completed': return 'idle';
+    case 'thread_aborted':   return 'aborted';
+    case 'thread_error':     return 'error';
+    default:                 return null;
+  }
+}
+
+/**
+ * Build and broadcast a `thread_status` payload translated from a raw
+ * engine lifecycle event. The engine event shape (325a) is:
+ *   { type, threadId, startedAt?, completedAt?, toolName?, reason? }
+ * Unknown fields pass through untouched so future engine additions
+ * (e.g. `attempt`) flow to the UI without another bridge change.
+ *
+ * @param {object} ev — engine event
+ * @returns {boolean} true if a thread_status was emitted
+ */
+function emitThreadStatusFromEngineEvent(ev) {
+  if (!ev || typeof ev !== 'object') return false;
+  const state = engineEventToState(ev.type);
+  if (!state) return false;
+  const payload = { type: 'thread_status', threadId: ev.threadId, state };
+  if (ev.startedAt != null)   payload.startedAt   = ev.startedAt;
+  if (ev.completedAt != null) payload.completedAt = ev.completedAt;
+  if (ev.toolName)            payload.toolName    = ev.toolName;
+  if (ev.reason)              payload.reason      = ev.reason;
+  if (ev.error?.message)      payload.error       = ev.error.message;
+  sendUnifyEvent(payload);
+  return true;
+}
+
+/**
+ * task-325b: full-snapshot push distinct from `thread_list_updated`.
+ * Emits `thread_list_snapshot` — a complete state dump the client uses
+ * on page load / WebSocket reconnect to rebuild the Working Status panel
+ * without missing any in-flight thread.
+ *
+ * Snapshot includes per-thread `state` (idle / running / aborted) resolved
+ * from the engine registry's live inflight set. Threads the registry has
+ * no entry for default to 'idle'.
+ */
+function sendThreadListSnapshot() {
+  try {
+    const store = getThreadStore();
+    const registry = session?.engineRegistry || null;
+    const inflight = new Set(
+      typeof registry?.inflightThreadIds === 'function'
+        ? registry.inflightThreadIds()
+        : [],
+    );
+    const threads = store.list().map(t => ({
+      id: t.id,
+      name: t.name,
+      goal: t.goal || '',
+      parentThreadId: t.parentThreadId || null,
+      status: t.status,
+      archived: !!t.archived,
+      messageCount: t.messageCount || 0,
+      lastMessageAt: t.lastMessageAt || null,
+      lastActivityAt: t.lastActivityAt || t.lastMessageAt || t.updatedAt || null,
+      unread: t.unread || 0,
+      preview: t.preview || '',
+      createdAt: t.createdAt,
+      updatedAt: t.updatedAt,
+      taskId: (typeof store.attachedTask === 'function')
+        ? (store.attachedTask(t.id) || null)
+        : null,
+      running: t.id === store.currentId,
+      state: inflight.has(t.id) ? 'running' : 'idle',
+    }));
+    sendUnifyEvent({
+      type: 'thread_list_snapshot',
+      threads,
+      currentThreadId: store.currentId,
+      serverTime: Date.now(),
+    });
+  } catch (err) {
+    console.warn('[Unify] sendThreadListSnapshot failed:', err?.message || err);
+  }
+}
+
+/**
  * task-310: parse a leading `@thread-<id>` or `@thread-<name>` marker on
  * the user's input and return it as a dispatcher override. The marker
  * itself is STRIPPED from the prompt before it reaches the engine —
@@ -331,6 +434,23 @@ function forwardPipelineEvent(ev, ctx) {
  */
 function handleEngineEvent(event, threadId, hctx) {
   hctx.resetQueryTimer();
+
+  // task-325b: translate Engine lifecycle events into a single
+  // `thread_status` event for the frontend Working Status panel. These
+  // events are observer-only — they never mutate bridge state. The raw
+  // engine event is NOT forwarded further; the switch below handles
+  // anything the UI still needs.
+  if (event && (
+    event.type === 'thread_started' ||
+    event.type === 'thread_completed' ||
+    event.type === 'thread_aborted' ||
+    event.type === 'thread_error'
+  )) {
+    // Engine events carry their own threadId; fall back to envelope id.
+    emitThreadStatusFromEngineEvent({ ...event, threadId: event.threadId || threadId });
+    return;
+  }
+
   switch (event.type) {
     case 'text_delta':
       hctx.assistantTextParts.push(event.text);
@@ -562,6 +682,10 @@ export async function handleUnifyChat(msg) {
       // task-301 Part 2: initial thread snapshot so sidebar V2 renders
       // the real 'main' thread (and any restored threads) right away.
       sendThreadListUpdate();
+      // task-325b: full Working Status snapshot (superset with state +
+      // serverTime) so a freshly-connected client can restore inflight
+      // status without waiting for the next engine event.
+      sendThreadListSnapshot();
     }
 
     // ─── Per-call AbortController (task-320) ──
@@ -945,6 +1069,12 @@ export async function handleUnifyLoadHistory(msg) {
     tools: session.status.tools,
   });
   sendThreadListUpdate();
+  // task-325b: after a page refresh / reconnect the frontend needs the
+  // full Working Status snapshot to rebuild the panel (which thread is
+  // running, idle, aborted). `thread_list_updated` is intentionally a
+  // mutation-delta stream; `thread_list_snapshot` is the single
+  // authoritative "everything right now" payload.
+  sendThreadListSnapshot();
 
   const limit = msg.limit || 50;
   const messages = session.conversationStore.loadRecent(limit);
@@ -1030,6 +1160,9 @@ export async function resetUnifySession() {
     });
     // task-301 Part 2: re-push thread snapshot after session reset.
     sendThreadListUpdate();
+    // task-325b: also push the full Working Status snapshot so the UI
+    // doesn't retain stale "running" badges from the prior session.
+    sendThreadListSnapshot();
   } catch (err) {
     console.error('[Unify] Failed to re-initialize session after reset:', err.message);
   }
