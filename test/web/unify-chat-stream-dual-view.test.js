@@ -133,7 +133,10 @@ describe('UnifyPage integration', () => {
   });
 
   it('renders <UnifyBreadcrumb> only when store.unifyActiveThreadFilter is truthy', () => {
-    expect(src).toMatch(/<UnifyBreadcrumb[\s\S]*?v-if="store\.unifyActiveThreadFilter"/);
+    // task-315 extends this: the thread-filter breadcrumb is also hidden
+    // while the Task Detail view owns the main pane. Assertion matches
+    // either the original v-if or the task-315 extended form.
+    expect(src).toMatch(/<UnifyBreadcrumb[\s\S]*?v-if="store\.unifyActiveThreadFilter(?:\s*&&\s*!store\.unifyActiveTaskDetailId)?"/);
   });
 
   it('forwards @back to clearThreadFilter', () => {
@@ -143,7 +146,9 @@ describe('UnifyPage integration', () => {
 
   it('registers a global Esc keydown handler that clears the filter', () => {
     expect(src).toMatch(/document\.addEventListener\(['"]keydown['"]/);
-    expect(src).toMatch(/e\.key\s*===\s*['"]Escape['"][\s\S]*?clearUnifyThreadFilter/);
+    // task-315 restructured the handler: early-returns on non-Escape,
+    // then cascades detail view → thread filter. Accept either form.
+    expect(src).toMatch(/(e\.key\s*===\s*['"]Escape['"][\s\S]*?clearUnifyThreadFilter|e\.key\s*!==\s*['"]Escape['"][\s\S]*?clearUnifyThreadFilter)/);
   });
 
   it('removes the keydown handler on unmount', () => {

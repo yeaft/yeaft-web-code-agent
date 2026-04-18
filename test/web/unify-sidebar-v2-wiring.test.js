@@ -64,9 +64,10 @@ describe('UnifyPage wiring', () => {
     expect(pageSrc).toMatch(/sidebarV2Enabled,\s*\n\s*onSelectThreadV2,/);
   });
 
-  it('select handlers delegate to store setters (guarded for part-1 stub)', () => {
+  it('select handlers delegate to store setters (task-315: task click → detail view)', () => {
     expect(pageSrc).toMatch(/store\.setActiveThread/);
-    expect(pageSrc).toMatch(/store\.setActiveTaskUi/);
+    // task-315 supersedes setActiveTaskUi with enterTaskDetailView.
+    expect(pageSrc).toMatch(/store\.enterTaskDetailView/);
   });
 });
 

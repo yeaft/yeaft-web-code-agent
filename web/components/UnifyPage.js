@@ -3,10 +3,11 @@ import MessageList from './MessageList.js';
 import UnifySettings from './UnifySettings.js';
 import UnifySidebarV2 from './UnifySidebarV2.js';
 import UnifyBreadcrumb from './UnifyBreadcrumb.js';
+import UnifyTaskDetailView from './UnifyTaskDetailView.js';
 
 export default {
   name: 'UnifyPage',
-  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2, UnifyBreadcrumb },
+  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2, UnifyBreadcrumb, UnifyTaskDetailView },
   template: `
     <div class="unify-page">
       <!-- Mobile sidebar overlay -->
@@ -96,16 +97,25 @@ export default {
           </div>
         </div>
 
-        <!-- Breadcrumb: visible only when a thread filter is active -->
+        <!-- Breadcrumb: visible only when a thread filter is active AND not in task detail view -->
         <UnifyBreadcrumb
-          v-if="store.unifyActiveThreadFilter"
+          v-if="store.unifyActiveThreadFilter && !store.unifyActiveTaskDetailId"
           :thread-id="store.unifyActiveThreadFilter"
           :thread-name="activeThreadName"
           @back="clearThreadFilter"
         />
 
+        <!-- task-315: Task Detail View replaces the message list when a
+             sidebar task is selected. Owns its own breadcrumb + reply
+             thread selector. -->
+        <UnifyTaskDetailView
+          v-if="!showSettings && store.unifyActiveTaskDetailId"
+          @back="exitTaskDetailView"
+          @switch-to-thread="onSwitchToThreadFromTaskDetail"
+        />
+
         <!-- Messages Area — reuse standard MessageList for identical rendering -->
-        <MessageList v-if="!showSettings" />
+        <MessageList v-if="!showSettings && !store.unifyActiveTaskDetailId" />
 
         <!-- Settings Panel -->
         <UnifySettings v-if="showSettings" @close="showSettings = false" @saved="onSettingsSaved" />
@@ -211,9 +221,25 @@ export default {
     };
 
     const onSelectTaskV2 = (taskId) => {
-      // task-301 Part 2: sidebar-row highlight only. Deep-linking to a
-      // task-detail pane lands in a later task (Phase 2).
-      store.setActiveTaskUi(taskId);
+      // task-315: clicking a task row enters the Task Detail View —
+      // replaces the main pane with a cross-thread aggregated message
+      // list. Also keeps the sidebar row highlighted (store handles
+      // both flags in enterTaskDetailView).
+      store.enterTaskDetailView(taskId);
+    };
+
+    // task-315: exit the task-detail view back to the main stream.
+    const exitTaskDetailView = () => {
+      store.leaveTaskDetailView();
+    };
+
+    // task-315: clicking a source-thread pill inside the detail view
+    // switches to that thread's dual-view (task-303) and leaves the
+    // task-detail view behind.
+    const onSwitchToThreadFromTaskDetail = (threadId) => {
+      if (!threadId) return;
+      store.leaveTaskDetailView();
+      store.setActiveThread(threadId);
     };
 
     // task-312/316: sidebar search results — jump to first matching
@@ -278,9 +304,18 @@ export default {
     const isMobile = Vue.ref(window.innerWidth <= 768);
     const onResize = () => { isMobile.value = window.innerWidth <= 768; };
 
-    // Esc clears the active thread filter (returns to full main stream)
+    // Esc cascade (task-315 extends task-303):
+    //   1) task-detail view active → exit it first (back to main stream)
+    //   2) thread filter active    → clear it (standard dual-view behaviour)
+    // Only one layer is popped per keystroke so the user always sees
+    // a single, predictable transition.
     const onKeyDown = (e) => {
-      if (e.key === 'Escape' && store.unifyActiveThreadFilter) {
+      if (e.key !== 'Escape') return;
+      if (store.unifyActiveTaskDetailId) {
+        store.leaveTaskDetailView();
+        return;
+      }
+      if (store.unifyActiveThreadFilter) {
         store.clearUnifyThreadFilter();
       }
     };
@@ -462,6 +497,8 @@ export default {
       sidebarV2Enabled,
       onSelectThreadV2,
       onSelectTaskV2,
+      exitTaskDetailView,
+      onSwitchToThreadFromTaskDetail,
       onJumpToMessage,
       onSearchEscape,
       clearThreadFilter,

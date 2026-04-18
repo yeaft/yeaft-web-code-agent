@@ -128,6 +128,12 @@ function sendThreadListUpdate() {
       preview: t.preview || '',
       createdAt: t.createdAt,
       updatedAt: t.updatedAt,
+      // task-315: attached taskId (if any) so the UI can aggregate all
+      // messages belonging to a task across multiple threads. null when
+      // the thread has no attached task.
+      taskId: (typeof store.attachedTask === 'function')
+        ? (store.attachedTask(t.id) || null)
+        : null,
       // `running` — the thread whose id equals the store's currentId is
       // considered the active/running track. The UI uses this for the
       // green halo in the Active group.
