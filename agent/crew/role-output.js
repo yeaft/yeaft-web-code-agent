@@ -173,10 +173,18 @@ export async function processRoleOutput(session, roleName, roleQuery, roleState)
             note: 'ROUTE opener present but no parseable block',
           });
         }
-        // Fallback: 如果 route summary 仍为空占位符，用 accumulatedText 末尾 500 字符
+        // Fallback: 如果 route summary 仍为空占位符，用 displayBody 末尾 500 字符
+        // task-330c: source switched from `accumulatedText.slice(-500)` to
+        // `displayBody.slice(-500)` — accumulatedText still contains
+        // ---ROUTE--- markers; using it would re-strip already-stripped text
+        // and risk truncating mid-marker. displayBody is the parser's
+        // post-strip prose and is the single source of truth for "what the
+        // role said outside its routing blocks".
+        // ⚠️ DO NOT add any further `.replace(/---ROUTE---.../g, '')` on
+        //    `displayBody` here or downstream — it is already strip-clean.
         for (const route of routes) {
-          if (route.summary === '[该角色未提供消息摘要]' && roleState.accumulatedText) {
-            const tail = roleState.accumulatedText.slice(-500).trim();
+          if (route.summary === '[该角色未提供消息摘要]' && displayBody) {
+            const tail = displayBody.slice(-500).trim();
             if (tail) route.summary = `[auto-extracted]\n${tail}`;
           }
         }
