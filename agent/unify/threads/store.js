@@ -518,6 +518,44 @@ export class ThreadStore {
     this.#idleArchiveDays = normaliseIdleDays(days);
   }
 
+  /**
+   * task-317: auto-archive pass. Scans every non-archived thread (except
+   * `main`, which is never auto-archived) and archives those whose
+   * `lastMessageAt` (fallback: `lastActivityAt`, fallback: `createdAt`)
+   * is older than `now - idleArchiveDays * 86400000 ms`.
+   *
+   * Returns the list of newly-archived thread ids so callers can decide
+   * whether to broadcast a UI update (no archived → no broadcast).
+   *
+   * Constraints:
+   *  - `idleArchiveDays === 0` disables the feature entirely (returns []).
+   *  - The main thread is NEVER archived regardless of its activity.
+   *  - Already-archived threads are skipped (idempotent).
+   *  - Threads with no recorded activity fall back to `createdAt`; a
+   *    thread created 100 days ago with zero messages IS archived when
+   *    idleArchiveDays ≤ 100 — silent threads aren't a special case.
+   *
+   * @param {number} [now] — override the clock for tests
+   * @returns {{ archived: string[] }}
+   */
+  runArchivePass(now = Date.now()) {
+    if (this.#idleArchiveDays <= 0) return { archived: [] };
+    const cutoff = now - this.#idleArchiveDays * 86400000;
+    const archived = [];
+    for (const t of this.#threads.values()) {
+      if (t.id === MAIN_THREAD_ID) continue;
+      if (t.archived || t.status === 'archived') continue;
+      const ref = t.lastMessageAt ?? t.lastActivityAt ?? t.createdAt ?? now;
+      if (ref > cutoff) continue;
+      t.status = 'archived';
+      t.archived = true;
+      t.updatedAt = now;
+      this.#markDirty(t.id);
+      archived.push(t.id);
+    }
+    return { archived };
+  }
+
   get(id) { return this.#threads.get(id) || null; }
   list() { return [...this.#threads.values()]; }
   has(id) { return this.#threads.has(id); }

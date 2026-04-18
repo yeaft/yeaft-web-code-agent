@@ -101,8 +101,76 @@ export function installUnifyRuntimeBridge(s) {
       if (typeof s.threadStore?.setIdleArchiveDays === 'function') {
         s.threadStore.setIdleArchiveDays(v);
       }
+      // task-317: re-sweep right after the cap changes so a user who
+      // lowers the threshold sees stale threads disappear immediately
+      // rather than having to wait for the hourly tick.
+      runAutoArchiveSweep(s);
     },
   };
+}
+
+/**
+ * task-317: idle thread auto-archive.
+ *
+ * A single sweep = ask the ThreadStore to archive every non-main,
+ * non-archived thread whose last activity predates the configured idle
+ * window. When any thread is archived we push a fresh `thread_list_updated`
+ * so the sidebar reflects reality within the same tick.
+ *
+ * Safe on stores with `idleArchiveDays === 0` (returns no-op) and on
+ * sessions missing a threadStore handle (defensive; should never happen
+ * once `installUnifyRuntimeBridge` has run).
+ *
+ * @param {import('./session.js').Session|null} s
+ * @returns {string[]} archived thread ids (empty when nothing changed)
+ */
+export function runAutoArchiveSweep(s) {
+  try {
+    const store = s?.threadStore ?? (typeof getThreadStore === 'function' ? getThreadStore() : null);
+    if (!store || typeof store.runArchivePass !== 'function') return [];
+    const { archived } = store.runArchivePass();
+    if (archived && archived.length > 0) {
+      sendThreadListUpdate();
+    }
+    return archived || [];
+  } catch (err) {
+    console.warn('[Unify] runAutoArchiveSweep failed:', err?.message || err);
+    return [];
+  }
+}
+
+/**
+ * task-317: schedule the hourly auto-archive tick bound to the given
+ * session. Returns the `Timeout` handle so tests can assert / clear it.
+ * Re-calling replaces any prior timer (idempotent per-session).
+ *
+ * The timer is `unref()`'d so a pending tick never keeps the Node loop
+ * alive during shutdown; an explicit `clearAutoArchiveSchedule()` is
+ * provided for tests.
+ */
+let autoArchiveTimer = null;
+const AUTO_ARCHIVE_TICK_MS = 60 * 60 * 1000; // 1h
+
+export function scheduleAutoArchive(s, { intervalMs = AUTO_ARCHIVE_TICK_MS } = {}) {
+  if (autoArchiveTimer) {
+    clearInterval(autoArchiveTimer);
+    autoArchiveTimer = null;
+  }
+  if (!s) return null;
+  autoArchiveTimer = setInterval(() => {
+    runAutoArchiveSweep(s);
+  }, intervalMs);
+  if (autoArchiveTimer && typeof autoArchiveTimer.unref === 'function') {
+    autoArchiveTimer.unref();
+  }
+  return autoArchiveTimer;
+}
+
+export function clearAutoArchiveSchedule() {
+  if (autoArchiveTimer) {
+    clearInterval(autoArchiveTimer);
+    autoArchiveTimer = null;
+  }
 }
 
 /**
@@ -436,6 +504,10 @@ export async function handleUnifyChat(msg) {
       // code — the config file was updated on disk but the running
       // session continued with the old caps until next restart.
       installUnifyRuntimeBridge(session);
+      // task-317: run one idle-archive sweep at bootstrap, then schedule
+      // the hourly tick bound to this session.
+      runAutoArchiveSweep(session);
+      scheduleAutoArchive(session);
 
       // Create a stable conversationId for the Unify session
       unifyConversationId = `unify-${Date.now()}`;
@@ -785,6 +857,9 @@ export async function handleUnifyLoadHistory(msg) {
     });
     // task-318 rev-1 fix: wire live setters; see handleUnifyChat.
     installUnifyRuntimeBridge(session);
+    // task-317: sweep + schedule auto-archive on history-load path too.
+    runAutoArchiveSweep(session);
+    scheduleAutoArchive(session);
 
     unifyConversationId = `unify-${Date.now()}`;
 
@@ -861,6 +936,11 @@ export async function resetUnifySession() {
     });
     // task-318 rev-1 fix: wire live setters; see handleUnifyChat.
     installUnifyRuntimeBridge(session);
+    // task-317: sweep + re-schedule auto-archive on reset too (the old
+    // interval was bound to the previous session; reschedule against the
+    // fresh one so timer references don't dangle).
+    runAutoArchiveSweep(session);
+    scheduleAutoArchive(session);
 
     unifyConversationId = `unify-${Date.now()}`;
 
