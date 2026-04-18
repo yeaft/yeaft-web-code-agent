@@ -46,16 +46,17 @@ describe('Unify History Loading — Agent (web-bridge.js)', () => {
     expect(webBridge).toContain('totalCold:');
   });
 
-  it('restores conversationMessages from ConversationStore on session init in handleUnifyChat', () => {
-    // The lazy-init block in handleUnifyChat should restore conversationMessages
+  it('restores per-thread history from ConversationStore on session init in handleUnifyChat (task-320)', () => {
+    // The lazy-init block in handleUnifyChat should restore messagesByThread
     const chatFn = webBridge.slice(webBridge.indexOf('async function handleUnifyChat'));
-    const initBlock = chatFn.slice(0, chatFn.indexOf('Cancel any in-flight query'));
+    const initBlock = chatFn.slice(0, chatFn.indexOf('Per-call AbortController'));
     expect(initBlock).toContain('conversationStore.loadRecent');
-    expect(initBlock).toContain('conversationMessages = recent');
+    expect(initBlock).toContain('messagesByThread.clear()');
+    expect(initBlock).toContain('getThreadMessages(');
   });
 
-  it('filters only user/assistant roles when restoring conversationMessages', () => {
-    expect(webBridge).toContain("m.role === 'user' || m.role === 'assistant'");
+  it('filters only user/assistant roles when restoring per-thread history', () => {
+    expect(webBridge).toContain("m.role !== 'user' && m.role !== 'assistant'");
   });
 
   it('sends user messages with message wrapper for handleClaudeOutput compatibility', () => {

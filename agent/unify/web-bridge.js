@@ -16,13 +16,22 @@
 import { loadSession } from './session.js';
 import { sendToServer } from '../connection/buffer.js';
 import ctx from '../context.js';
-import { getThreadStore } from './threads/store.js';
+import { getThreadStore, MAIN_THREAD_ID } from './threads/store.js';
 
 /** @type {import('./session.js').Session | null} */
 let session = null;
 
-/** @type {AbortController | null} */
-let currentAbort = null;
+/**
+ * task-320: per-thread in-flight AbortController registry.
+ *
+ * A new message only cancels the prior round on the SAME thread; a message
+ * routed to a different thread runs concurrently without aliasing. Keyed by
+ * the resolved `targetThreadId` from the dispatcher's `routing_decision`
+ * event (we don't know the thread until the router has classified).
+ *
+ * @type {Map<string, AbortController>}
+ */
+const abortByThread = new Map();
 
 /** Query timeout in ms — abort if LLM doesn't respond within this window */
 const QUERY_TIMEOUT_MS = 120_000;
@@ -30,10 +39,22 @@ const QUERY_TIMEOUT_MS = 120_000;
 /** Virtual conversationId for the Unify session */
 let unifyConversationId = null;
 
-/** Accumulated conversation messages for context continuity across queries.
- *  Each entry is { role: 'user'|'assistant', content: string|Array }.
- *  Cleared on session reset or consolidation. */
-let conversationMessages = [];
+/**
+ * task-320: per-thread accumulated conversation messages for context
+ * continuity. Previously a single flat array — which cross-contaminated
+ * history across threads. Keyed by threadId. Cleared on session reset or
+ * by a `consolidate` event for that thread only.
+ *
+ * @type {Map<string, Array<{role: 'user'|'assistant', content: string|Array}>>}
+ */
+const messagesByThread = new Map();
+
+function getThreadMessages(threadId) {
+  if (!threadId) return [];
+  let arr = messagesByThread.get(threadId);
+  if (!arr) { arr = []; messagesByThread.set(threadId, arr); }
+  return arr;
+}
 
 /** Whether we've already sent a permission warning to the UI */
 let _permissionDiagnosticSent = false;
@@ -395,8 +416,13 @@ function handleEngineEvent(event, threadId, hctx) {
       break;
 
     case 'consolidate':
-      // Engine compressed the context — clear our accumulated history.
-      conversationMessages = [];
+      // Engine compressed the context — clear our accumulated history for
+      // THIS thread only (task-320: per-thread history map).
+      if (threadId) {
+        messagesByThread.set(threadId, []);
+      } else {
+        messagesByThread.clear();
+      }
       sendUnifyEvent({
         type: 'consolidate',
         archivedCount: event.archivedCount,
@@ -512,11 +538,16 @@ export async function handleUnifyChat(msg) {
       // Create a stable conversationId for the Unify session
       unifyConversationId = `unify-${Date.now()}`;
 
-      // Restore conversationMessages from persisted history for LLM context
+      // Restore per-thread history from persisted conversation store.
+      // task-320: bucket by threadId so each thread keeps its own context.
+      messagesByThread.clear();
       const recent = session.conversationStore.loadRecent(50);
-      conversationMessages = recent
-        .filter(m => m.role === 'user' || m.role === 'assistant')
-        .map(m => ({ role: m.role, content: m.content }));
+      for (const m of recent) {
+        if (m.role !== 'user' && m.role !== 'assistant') continue;
+        const tid = m.threadId || MAIN_THREAD_ID;
+        const bucket = getThreadMessages(tid);
+        bucket.push({ role: m.role, content: m.content });
+      }
 
       // Notify UI: session is ready with model info + conversationId
       sendUnifyEvent({
@@ -533,13 +564,14 @@ export async function handleUnifyChat(msg) {
       sendThreadListUpdate();
     }
 
-    // ─── Cancel any in-flight query ──
-    if (currentAbort) {
-      currentAbort.abort();
-      currentAbort = null;
-    }
-
-    currentAbort = new AbortController();
+    // ─── Per-call AbortController (task-320) ──
+    // Each call owns its own controller. Only once the router resolves the
+    // target thread do we register it into `abortByThread` and abort any
+    // prior controller on THAT same thread. Messages routed to different
+    // threads never alias each other's signals.
+    const abortCtrl = new AbortController();
+    /** @type {string | null} — set on routing_decision */
+    let resolvedThreadId = null;
 
     // ─── Timeout guard: abort query if LLM hangs beyond threshold ──
     // Resets on every event — fires only after prolonged silence.
@@ -547,9 +579,9 @@ export async function handleUnifyChat(msg) {
     const resetQueryTimer = () => {
       if (queryTimer) clearTimeout(queryTimer);
       queryTimer = setTimeout(() => {
-        if (currentAbort) {
+        if (!abortCtrl.signal.aborted) {
           console.error(`[Unify] query timeout after ${QUERY_TIMEOUT_MS / 1000}s of silence — aborting`);
-          currentAbort.abort();
+          abortCtrl.abort();
         }
       }, QUERY_TIMEOUT_MS);
     };
@@ -590,17 +622,31 @@ export async function handleUnifyChat(msg) {
       onError: (err) => { throw err; },
     };
 
-    for await (const pev of session.dispatcher.drain({ signal: currentAbort.signal })) {
+    for await (const pev of session.dispatcher.drain({ signal: abortCtrl.signal })) {
       resetQueryTimer();
+      // task-320: on routing_decision, bind this abort controller to the
+      // resolved target thread and abort any prior in-flight controller
+      // owned by that thread. Different threads don't alias.
+      if (pev && pev.type === 'routing_decision' && pev.targetThreadId && !resolvedThreadId) {
+        resolvedThreadId = pev.targetThreadId;
+        const prior = abortByThread.get(resolvedThreadId);
+        if (prior && prior !== abortCtrl) {
+          prior.abort();
+        }
+        abortByThread.set(resolvedThreadId, abortCtrl);
+      }
       forwardPipelineEvent(pev, pipelineCtx);
     }
 
     // ─── Query complete — accumulate messages for context continuity ──
-    conversationMessages.push({ role: 'user', content: cleanedPrompt });
+    // task-320: per-thread history (no cross-thread contamination).
+    const historyThread = resolvedThreadId || MAIN_THREAD_ID;
+    const threadMessages = getThreadMessages(historyThread);
+    threadMessages.push({ role: 'user', content: cleanedPrompt });
 
     const fullText = assistantTextParts.join('');
     if (fullText) {
-      conversationMessages.push({ role: 'assistant', content: fullText });
+      threadMessages.push({ role: 'assistant', content: fullText });
     }
 
     // ─── Signal turn end to UI ──
@@ -621,17 +667,14 @@ export async function handleUnifyChat(msg) {
     }
 
   } catch (err) {
-    // Don't report abort errors — but still send result to unblock frontend
-    if (err.name === 'AbortError') {
-      sendUnifyOutput({
-        type: 'assistant',
-        message: {
-          content: [{
-            type: 'text',
-            text: '⚠️ Query timed out — no response from LLM. Please try again.',
-          }],
-        },
-      });
+    // task-320: classify both DOM AbortError and LLMAbortError as
+    // "aborted" — LLMAbortError is thrown by the LLM adapters when the
+    // signal trips and must NOT render as a session error bubble.
+    const isAbort = err && (err.name === 'AbortError' || err.name === 'LLMAbortError');
+    if (isAbort) {
+      // Silent abort — the new in-flight round (on the same thread) will
+      // produce its own output. Still send `result` so the frontend's
+      // processing spinner for this exact send clears.
       sendUnifyOutput({
         type: 'result',
         result_text: '',
@@ -672,7 +715,12 @@ export async function handleUnifyChat(msg) {
       result_text: '',
     });
   } finally {
-    currentAbort = null;
+    // task-320: only clear the per-thread slot if THIS controller is still
+    // the registered one. If a newer message already overwrote it, leaving
+    // the newer controller in the map is the correct state.
+    if (resolvedThreadId && abortByThread.get(resolvedThreadId) === abortCtrl) {
+      abortByThread.delete(resolvedThreadId);
+    }
   }
 }
 
@@ -863,11 +911,16 @@ export async function handleUnifyLoadHistory(msg) {
 
     unifyConversationId = `unify-${Date.now()}`;
 
-    // Restore conversationMessages from persisted history for LLM context
+    // Restore per-thread history from persisted conversation store.
+    // task-320: bucket by threadId so each thread keeps its own context.
+    messagesByThread.clear();
     const recent = session.conversationStore.loadRecent(50);
-    conversationMessages = recent
-      .filter(m => m.role === 'user' || m.role === 'assistant')
-      .map(m => ({ role: m.role, content: m.content }));
+    for (const m of recent) {
+      if (m.role !== 'user' && m.role !== 'assistant') continue;
+      const tid = m.threadId || MAIN_THREAD_ID;
+      const bucket = getThreadMessages(tid);
+      bucket.push({ role: m.role, content: m.content });
+    }
 
     sendUnifyEvent({
       type: 'session_ready',
@@ -915,16 +968,19 @@ export async function handleUnifyLoadHistory(msg) {
  * session_ready so the frontend picks up updated models/config.
  */
 export async function resetUnifySession() {
-  if (currentAbort) {
-    currentAbort.abort();
-    currentAbort = null;
+  // task-320: abort ALL in-flight controllers (every thread) before
+  // tearing down the session. Leaves no dangling round still writing
+  // to stdout after shutdown.
+  for (const ctrl of abortByThread.values()) {
+    try { ctrl.abort(); } catch { /* ignore */ }
   }
+  abortByThread.clear();
   if (session) {
     await session.shutdown();
     session = null;
   }
   unifyConversationId = null;
-  conversationMessages = [];
+  messagesByThread.clear();
 
   // Re-initialize session immediately so frontend gets updated config
   try {
@@ -944,11 +1000,13 @@ export async function resetUnifySession() {
 
     unifyConversationId = `unify-${Date.now()}`;
 
-    // Restore conversation history for LLM context
+    // Restore per-thread history for LLM context (task-320).
     const recent = session.conversationStore.loadRecent(50);
-    conversationMessages = recent
-      .filter(m => m.role === 'user' || m.role === 'assistant')
-      .map(m => ({ role: m.role, content: m.content }));
+    for (const m of recent) {
+      if (m.role !== 'user' && m.role !== 'assistant') continue;
+      const tid = m.threadId || MAIN_THREAD_ID;
+      getThreadMessages(tid).push({ role: m.role, content: m.content });
+    }
 
     sendUnifyEvent({
       type: 'session_ready',
