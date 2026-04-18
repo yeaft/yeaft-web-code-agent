@@ -235,7 +235,7 @@ export function resolveRoleName(to, session, fromRole) {
  * @param {Array<{mimeType, data}>} [turnImages] - auto-attached images from the turn (max 3)
  */
 export async function executeRoute(session, fromRole, route, turnImages = []) {
-  const { to, summary, taskId, taskTitle } = route;
+  let { to, summary, taskId, taskTitle } = route;
 
   // Auto-resume: paused/stopped → running (route execution means work should continue)
   if (session.status === 'paused' || session.status === 'stopped') {
@@ -244,14 +244,51 @@ export async function executeRoute(session, fromRole, route, turnImages = []) {
     sendStatusUpdate(session);
   }
 
+  // ─── task-321: taskId fallback chain ─────────────────────────────
+  // When a ROUTE omits `task:` (shorthand, bare dispatch, human messages,
+  // PM forgetting the field), fall back to:
+  //   (a) the sender's currentTask.taskId
+  //   (b) the most recent non-system entry in session.messageHistory
+  // This keeps prev-* / designer / architect / shorthand messages from
+  // becoming taskId=null orphans that never appear on any feature card.
+  if (!taskId) {
+    const fromRoleState = session.roleStates?.get(fromRole);
+    if (fromRoleState?.currentTask?.taskId) {
+      taskId = fromRoleState.currentTask.taskId;
+      taskTitle = taskTitle || fromRoleState.currentTask.taskTitle || null;
+    } else if (Array.isArray(session.messageHistory) && session.messageHistory.length > 0) {
+      for (let i = session.messageHistory.length - 1; i >= 0; i--) {
+        const h = session.messageHistory[i];
+        if (h && h.from !== 'system' && h.taskId) {
+          taskId = h.taskId;
+          break;
+        }
+      }
+    }
+    // Mirror the fallback back into the route object so downstream
+    // consumers (dispatchToRole / sendCrewOutput) see the inferred id.
+    if (taskId) {
+      route.taskId = taskId;
+      if (taskTitle) route.taskTitle = taskTitle;
+    }
+  }
+
   // Task 文件自动管理（fire-and-forget）
   if (taskId && summary) {
     const fromRoleConfig = session.roles.get(fromRole);
-    if (fromRoleConfig?.isDecisionMaker && taskTitle && to !== 'human') {
-      ensureTaskFile(session, taskId, taskTitle, to, summary)
+    // task-321: Auto-create feature file even when a non-PM role is the
+    // first to mention the taskId. Any role carrying a taskId (PM, devs,
+    // reviewers, designer, architect) now triggers creation — not just PM
+    // with explicit taskTitle. appendTaskRecord itself also creates the
+    // file if missing, so this is a best-effort fast path.
+    const effectiveTitle = taskTitle
+      || session.features?.get(taskId)?.taskTitle
+      || null;
+    if (effectiveTitle && to !== 'human') {
+      ensureTaskFile(session, taskId, effectiveTitle, fromRoleConfig?.isDecisionMaker ? to : fromRole, summary)
         .catch(e => console.warn(`[Crew] Failed to create task file ${taskId}:`, e.message));
     }
-    appendTaskRecord(session, taskId, fromRole, summary)
+    appendTaskRecord(session, taskId, fromRole, summary, { taskTitle: effectiveTitle })
       .catch(e => console.warn(`[Crew] Failed to append task record ${taskId}:`, e.message));
 
     // 更新工作看板：推断状态
@@ -375,8 +412,13 @@ export async function dispatchToRole(session, roleName, content, fromSource, tas
   }
 
   // 设置 task
+  // task-321: keep currentTask sticky. A new taskId updates it; a dispatch
+  // without taskId preserves the previous currentTask so subsequent
+  // sendCrewOutput calls (which read roleState.currentTask.taskId) keep
+  // attaching to the right feature card — instead of falling back to null
+  // the moment the sender omits the `task:` field.
   if (taskId) {
-    roleState.currentTask = { taskId, taskTitle };
+    roleState.currentTask = { taskId, taskTitle: taskTitle || roleState.currentTask?.taskTitle || null };
   }
 
   // Task 上下文注入
