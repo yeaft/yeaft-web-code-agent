@@ -8,7 +8,7 @@
  *   expandedTurns   — reactive map for tool expansion state
  *   icons           — icon SVG strings
  */
-import { renderMarkdown } from '../../utils/markdown.js';
+import { renderMarkdown, stripRouteBlocks } from '../../utils/markdown.js';
 import { openImagePreview } from '../../utils/imagePreview.js';
 import {
   formatTime, shortName, getRoleStyle as getRoleStyleFn, getImageUrl
@@ -165,7 +165,13 @@ export default {
       if (!img.fileId) return '';
       return `/api/preview/${img.fileId}?token=${img.previewToken || ''}`;
     },
-    mdRender: renderMarkdown,
+    // task-328: explicit "displayBody" pipeline — strip ROUTE/TASKS markers
+    // before markdown so multi-paragraph prose around a ROUTE block stays
+    // intact in the rendered turn body. Route metadata is rendered separately
+    // via `turn.routeMsgs` and is not duplicated in the prose.
+    mdRender(text) {
+      return renderMarkdown(stripRouteBlocks(text));
+    },
 
     openImagePreview,
 

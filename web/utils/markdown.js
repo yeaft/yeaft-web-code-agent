@@ -64,6 +64,38 @@ export function simpleMarkdownFallback(text) {
 }
 
 /**
+ * Strip ROUTE/TASKS blocks from raw role text.
+ *
+ * task-328 — extracted as a dedicated export so consumers (e.g. the Crew
+ * turn renderer) can mirror the agent-side parser's `displayBody` semantics
+ * before piping content through markdown rendering. Behaviour:
+ *
+ *   1. Closed ROUTE / TASKS blocks — tolerate END variants
+ *      (END_ROUTE / END ROUTE / END-ROUTE / ENDROUTE / END / END:).
+ *   2. Streaming / unclosed ROUTE/TASKS — strip ONLY up to a structural
+ *      cutoff (blank line + `---` or `<kanban|recent-routes|task-context>`)
+ *      OR end-of-string. Bounded: post-ROUTE prose in its own paragraph
+ *      survives.
+ *
+ * Returns the cleaned string (trimmed). Pure and side-effect free.
+ */
+export function stripRouteBlocks(text) {
+  if (!text || typeof text !== 'string') return '';
+  let out = text;
+  out = out.replace(/---\s*ROUTE\s*---[\s\S]*?---\s*(?:END[_ \-]?ROUTE|ENDROUTE|END)\s*:?\s*---/gi, '').trim();
+  out = out.replace(/---\s*TASKS\s*---[\s\S]*?---\s*(?:END[_ \-]?TASKS|ENDTASKS|END)\s*:?\s*---/gi, '').trim();
+  out = out.replace(
+    /---\s*ROUTE\s*---[\s\S]*?(?=\n[ \t]*\n+(?:---(?!\s*ROUTE)|<(?:kanban|recent-routes|task-context)\b)|$)/gi,
+    ''
+  ).trim();
+  out = out.replace(
+    /---\s*TASKS\s*---[\s\S]*?(?=\n[ \t]*\n+(?:---(?!\s*TASKS)|<(?:kanban|recent-routes|task-context)\b)|$)/gi,
+    ''
+  ).trim();
+  return out;
+}
+
+/**
  * Render markdown text to HTML.
  * Strips ROUTE/TASKS blocks (complete and partial/streaming),
  * uses marked.js with code highlighting,
@@ -75,12 +107,11 @@ const _MD_CACHE_MAX = 2000;
 
 export function renderMarkdown(text) {
   if (!text || typeof text !== 'string') return '';
-  // Strip ROUTE blocks and TASKS blocks (tasks shown in dedicated panel)
-  // First strip complete blocks, then strip partial/unclosed blocks (visible during streaming)
-  text = text.replace(/---ROUTE---[\s\S]*?---END[_ ]ROUTE---/g, '').trim();
-  text = text.replace(/---TASKS---[\s\S]*?---END_TASKS---/g, '').trim();
-  text = text.replace(/---ROUTE---[\s\S]*$/g, '').trim();
-  text = text.replace(/---TASKS---[\s\S]*$/g, '').trim();
+  // task-328: defensive strip — Crew renderer normally pre-cleans via
+  // `stripRouteBlocks`, but other callers (Chat / Unify) and streaming
+  // bursts may still arrive with raw ROUTE/TASKS markers. The strip is
+  // bounded so post-ROUTE prose is preserved.
+  text = stripRouteBlocks(text);
   if (!text) return '';
 
   const cached = _mdCache.get(text);

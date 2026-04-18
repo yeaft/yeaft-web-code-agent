@@ -153,8 +153,13 @@ export async function processRoleOutput(session, roleName, roleQuery, roleState)
           });
         }
 
-        // 解析路由
-        const routes = parseRoutes(roleState.accumulatedText);
+        // 解析路由 — task-328: parseRoutes returns a decorated Array
+        // (`.routes`/`.displayBody`/`.strippedRanges`). We keep treating it as
+        // an Array for routing iteration, but use `.displayBody` whenever we
+        // need the role's prose with ROUTE blocks accurately removed.
+        const parseResult = parseRoutes(roleState.accumulatedText);
+        const routes = parseResult;
+        const displayBody = parseResult.displayBody || roleState.accumulatedText;
         // Fallback: 如果 route summary 仍为空占位符，用 accumulatedText 末尾 500 字符
         for (const route of routes) {
           if (route.summary === '[该角色未提供消息摘要]' && roleState.accumulatedText) {
@@ -191,7 +196,12 @@ export async function processRoleOutput(session, roleName, roleQuery, roleState)
         }
 
         // 保存本 turn 文本（供 routing.js 预检时 saveRoleWorkSummary 使用）
+        // task-328: lastTurnText keeps the raw transcript (consumers may need
+        // ROUTE blocks for analysis); lastTurnDisplayBody is the parser-clean
+        // body used by auto-forward/UI logic to avoid sending broken ROUTE
+        // residue downstream.
         roleState.lastTurnText = roleState.accumulatedText;
+        roleState.lastTurnDisplayBody = displayBody;
         roleState.accumulatedText = '';
         roleState.turnActive = false;
 
@@ -262,10 +272,13 @@ export async function processRoleOutput(session, roleName, roleQuery, roleState)
 
           if (isNonPM && (hasActiveTask || hasRouteIntent)) {
             // Non-PM role with active task OR routing intent but no ROUTE block:
-            // auto-forward to PM so the message doesn't get lost
+            // auto-forward to PM so the message doesn't get lost.
+            // task-328: forward parser-clean displayBody (ROUTE residue removed)
+            // so PM sees the actual prose, not stray END markers.
             const reason = hasActiveTask ? 'has active task' : 'has routing intent';
             console.log(`[Crew] ${roleName} turn ended without ROUTE (${reason}) — auto-forwarding to PM`);
-            const autoSummary = `[auto-forward: ${roleName} turn 结束但未输出 ROUTE 块 (${reason})]\n${(roleState.lastTurnText || '').slice(-800).trim()}`;
+            const forwardSource = roleState.lastTurnDisplayBody || roleState.lastTurnText || '';
+            const autoSummary = `[auto-forward: ${roleName} turn 结束但未输出 ROUTE 块 (${reason})]\n${forwardSource.slice(-800).trim()}`;
             await executeRoute(session, roleName, {
               to: session.decisionMaker,
               summary: autoSummary,
