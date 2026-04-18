@@ -14,6 +14,19 @@ import {
   LLMServerError,
   LLMAbortError,
 } from './adapter.js';
+import {
+  normalizeEffort,
+  thinkingBudgetForEffort,
+  getThinkingCapability,
+} from '../models.js';
+
+/**
+ * task-327a: feature-flag accessor. thinkingV1 is OFF by default; set
+ * env UNIFY_THINKING_V1=1 to enable. Read lazily so tests can flip.
+ */
+function thinkingV1Enabled() {
+  return process.env.UNIFY_THINKING_V1 === '1';
+}
 
 const DEFAULT_BASE_URL = 'https://api.anthropic.com';
 const API_VERSION = '2023-06-01';
@@ -123,10 +136,10 @@ export class AnthropicAdapter extends LLMAdapter {
   }
 
   /**
-   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, signal?: AbortSignal }} params
+   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, effort?: 'low'|'medium'|'high'|'max', signal?: AbortSignal }} params
    * @returns {AsyncGenerator<import('./adapter.js').StreamEvent>}
    */
-  async *stream({ model, system, messages, tools, maxTokens = 16384, signal }) {
+  async *stream({ model, system, messages, tools, maxTokens = 16384, effort, signal }) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const body = {
@@ -136,6 +149,26 @@ export class AnthropicAdapter extends LLMAdapter {
       messages: this.#translateMessages(messages),
       stream: true,
     };
+
+    // task-327a: inject extended-thinking only when feature flag on, effort is
+    // a valid value, and the model's registry entry says it supports the
+    // 'anthropic' thinking protocol. Unknown models or non-thinking models
+    // silently drop the parameter — red line: never error on unsupported.
+    const normEffort = normalizeEffort(effort);
+    if (thinkingV1Enabled() && normEffort) {
+      const cap = getThinkingCapability(model);
+      if (cap.supportsThinking && cap.thinkingProtocol === 'anthropic') {
+        const budget = thinkingBudgetForEffort(model, normEffort);
+        if (budget && budget > 0) {
+          // Anthropic requires max_tokens > budget_tokens. Widen max_tokens
+          // if the caller's value is too small to fit the thinking budget
+          // plus a sane reply margin (1024 tokens).
+          const minMax = budget + 1024;
+          if (body.max_tokens < minMax) body.max_tokens = minMax;
+          body.thinking = { type: 'enabled', budget_tokens: budget };
+        }
+      }
+    }
 
     const translatedTools = this.#translateTools(tools);
     if (translatedTools) body.tools = translatedTools;

@@ -28,6 +28,18 @@ import {
   LLMServerError,
   LLMAbortError,
 } from './adapter.js';
+import {
+  normalizeEffort,
+  mapEffortToOpenAIReasoning,
+  getThinkingCapability,
+} from '../models.js';
+
+/**
+ * task-327a: feature-flag accessor. Read lazily so tests can flip.
+ */
+function thinkingV1Enabled() {
+  return process.env.UNIFY_THINKING_V1 === '1';
+}
 
 /**
  * Check if a model ID is an OpenAI model that supports max_completion_tokens.
@@ -184,10 +196,10 @@ export class ChatCompletionsAdapter extends LLMAdapter {
   }
 
   /**
-   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, extraBody?: object, signal?: AbortSignal }} params
+   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, effort?: 'low'|'medium'|'high'|'max', extraBody?: object, signal?: AbortSignal }} params
    * @returns {AsyncGenerator<import('./adapter.js').StreamEvent>}
    */
-  async *stream({ model, system, messages, tools, maxTokens = 16384, extraBody, signal }) {
+  async *stream({ model, system, messages, tools, maxTokens = 16384, effort, extraBody, signal }) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const body = {
@@ -197,6 +209,21 @@ export class ChatCompletionsAdapter extends LLMAdapter {
       stream: true,
       stream_options: { include_usage: true },
     };
+
+    // task-327a: inject OpenAI reasoning.effort when feature flag on, effort is
+    // valid, and model's registry entry flags openai-reasoning protocol.
+    // 'max' downgrades to 'high' (OpenAI has no 'max' enum). Unknown / unsupported
+    // models silently drop the parameter.
+    const normEffort = normalizeEffort(effort);
+    if (thinkingV1Enabled() && normEffort) {
+      const cap = getThinkingCapability(model);
+      if (cap.supportsThinking && cap.thinkingProtocol === 'openai-reasoning') {
+        const reasoningEffort = mapEffortToOpenAIReasoning(normEffort);
+        if (reasoningEffort) {
+          body.reasoning = { effort: reasoningEffort };
+        }
+      }
+    }
 
     const translatedTools = this.#translateTools(tools);
     if (translatedTools) body.tools = translatedTools;
