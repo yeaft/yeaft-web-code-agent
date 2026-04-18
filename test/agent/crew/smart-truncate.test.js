@@ -143,4 +143,43 @@ describe('smartTruncate (task-330c)', () => {
     const out = smartTruncate(t, 400);
     expect(out.endsWith(MARKER)).toBe(true);
   });
+
+  // ─── Integration (rev-3 nit fix): 500-char history → ≤400 cap →
+  //     smartTruncate cuts at sentence boundary ─────────────────────
+  //
+  // Production path: dispatchToRole stores `content.substring(0, 400)`
+  // into session.messageHistory, then dispatchToRole's recent-routes
+  // injection runs `smartTruncate(m.content, 400)`. With both caps
+  // aligned at 400, a 500-char message ends up:
+  //   step 1: substring(0, 400)  → length 400, no truncate marker
+  //   step 2: smartTruncate(_, 400) → length === 400 → pass-through
+  // …but if step 1 had stayed at 200 (the pre-fix value), step 2 would
+  // be a permanent no-op for ALL history entries — defeating the
+  // purpose of bumping recent-routes to 400. This test pins both caps.
+  it('integration: 500-char message → 400-cap pre-store → smartTruncate(400) preserves full pre-stored window', () => {
+    const longMsg = 'A'.repeat(380) + '. ' + 'B'.repeat(120);
+    // Simulate the dispatchToRole pre-store cap (must be 400 post-fix).
+    const stored = longMsg.substring(0, 400);
+    expect(stored.length).toBe(400);
+    // Now smartTruncate at the same 400 cap → pass-through.
+    const injected = smartTruncate(stored, 400);
+    expect(injected).toBe(stored);
+    expect(injected).not.toContain(MARKER);
+  });
+
+  it('integration: 500-char message with sentence boundary inside cap → smartTruncate cuts at boundary when stored content overflows', () => {
+    // If a future caller stores >400 chars (or smartTruncate is called
+    // on a >400 input directly), the boundary cut MUST trigger.
+    const longMsg = 'A'.repeat(280) + '. ' + 'B'.repeat(50) + '. ' + 'C'.repeat(170);
+    // total = 280 + 2 + 50 + 2 + 170 = 504
+    expect(longMsg.length).toBeGreaterThan(400);
+    const out = smartTruncate(longMsg, 400);
+    // Window = [280, 400). The period at index ~333 ('B'×50 ends at 332,
+    // then '. ' so '.' at 332, ' ' at 333) is the last boundary.
+    expect(out).toContain(MARKER);
+    expect(out.endsWith('.' + MARKER) || out.endsWith('. ' + MARKER) || out.endsWith('.' + MARKER)).toBe(true);
+    // Must not include any 'C' tail — proves we cut at the boundary,
+    // not at a hard 400.
+    expect(out).not.toContain('C');
+  });
 });

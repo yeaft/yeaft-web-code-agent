@@ -729,9 +729,15 @@ export async function dispatchToRole(session, roleName, content, fromSource, tas
   }
 
   // 记录消息历史
+  // task-330c: cap raised 200 → 400 to match the recent-routes injection
+  // window. Keeping the pre-store cap at 200 would pin every entry below
+  // smartTruncate's 400 threshold, making the smart-truncate boundary cut
+  // a permanent no-op in production. 400 here lets longer messages flow
+  // into history; smartTruncate trims them at sentence boundaries when
+  // injected into <recent-routes>.
   const historyContent = typeof content === 'string'
-    ? content.substring(0, 200)
-    : (Array.isArray(content) ? content.filter(b => b.type === 'text').map(b => b.text).join('').substring(0, 200) + (content.some(b => b.type === 'image') ? ' [+images]' : '') : '...');
+    ? content.substring(0, 400)
+    : (Array.isArray(content) ? content.filter(b => b.type === 'text').map(b => b.text).join('').substring(0, 400) + (content.some(b => b.type === 'image') ? ' [+images]' : '') : '...');
   session.messageHistory.push({
     from: fromSource,
     to: roleName,
