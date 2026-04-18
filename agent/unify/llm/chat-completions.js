@@ -350,8 +350,12 @@ export class ChatCompletionsAdapter extends LLMAdapter {
 
   /**
    * Non-streaming call for side queries.
+   *
+   * task-327c: accepts `effort` for internal scenario-tagged calls
+   * (consolidate/dream/recall/light). Feature-flag + capability guards
+   * mirror stream() exactly; unsupported models silently drop the param.
    */
-  async call({ model, system, messages, maxTokens = 4096, extraBody, signal }) {
+  async call({ model, system, messages, maxTokens = 4096, effort, extraBody, signal }) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const body = {
@@ -359,6 +363,18 @@ export class ChatCompletionsAdapter extends LLMAdapter {
       messages: this.#translateMessages(system, messages),
       ...this.#maxTokensBody(model, maxTokens),
     };
+
+    // task-327c: mirror stream()'s reasoning.effort injection for side queries.
+    const normEffort = normalizeEffort(effort);
+    if (thinkingV1Enabled() && normEffort) {
+      const cap = getThinkingCapability(model);
+      if (cap.supportsThinking && cap.thinkingProtocol === 'openai-reasoning') {
+        const reasoningEffort = mapEffortToOpenAIReasoning(normEffort);
+        if (reasoningEffort) {
+          body.reasoning = { effort: reasoningEffort };
+        }
+      }
+    }
 
     // extraBody allows callers to pass through any additional/override parameters
     if (extraBody) Object.assign(body, extraBody);

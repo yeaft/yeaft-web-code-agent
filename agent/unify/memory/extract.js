@@ -9,6 +9,7 @@
  */
 
 import { MEMORY_KINDS } from './store.js';
+import { pickEffort } from '../effort.js';
 
 /**
  * Build the extraction prompt.
@@ -69,6 +70,9 @@ export async function extractMemories({ messages, adapter, config }) {
       system,
       messages: [{ role: 'user', content: extractionPrompt }],
       maxTokens: 2048,
+      // task-327c: extract runs inside the consolidate pipeline — the
+      // JSON-structured output benefits from the same 'max' thinking tier.
+      effort: pickEffort({ scenario: 'consolidate' }),
     });
 
     const text = result.text.trim();

@@ -26,6 +26,7 @@ import { buildMemoryInjection } from './memory/layout.js';
 import { runStopHooks } from './stop-hooks.js';
 import { getThreadStore, MAIN_THREAD_ID } from './threads/store.js';
 import { pickEffort, parseEffortPrefix } from './effort.js';
+import { normalizeEffort } from './models.js';
 
 /**
  * task-324 — Turn cap removed.
@@ -446,9 +447,12 @@ export class Engine {
 
     // task-327b: `/max` / `/high` / `/medium` / `/low` prefix override.
     // Explicit caller-supplied userEffort wins over the prefix.
+    // task-327c nit: defensively normalize caller-supplied userEffort BEFORE
+    // the merge, so an invalid caller value (e.g. 'ULTRA') does not shadow a
+    // valid prompt prefix.
     const parsed = parseEffortPrefix(prompt);
     const effectivePrompt = parsed.cleanedPrompt;
-    const effectiveUserEffort = userEffort || parsed.effort || null;
+    const effectiveUserEffort = normalizeEffort(userEffort) || parsed.effort || null;
 
     // ─── task-325a: engine-owned AbortController ─────────────
     // We create our own controller for this query run so `engine.abort()`

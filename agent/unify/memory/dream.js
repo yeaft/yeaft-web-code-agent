@@ -16,6 +16,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, unlink
 import { join } from 'path';
 import { scanEntries, findStaleEntries, findDuplicateGroups, summarizeScan } from './scan.js';
 import { MAX_ENTRIES } from './store.js';
+import { pickEffort } from '../effort.js';
 import {
   ensureLayout,
   renderIndex,
@@ -399,6 +400,9 @@ async function llmCall(adapter, config, system, prompt) {
       system,
       messages: [{ role: 'user', content: prompt }],
       maxTokens: 4096,
+      // task-327c: dream is self-reflective memory maintenance — flag 'max'
+      // so supported models use the full thinking budget.
+      effort: pickEffort({ scenario: 'dream' }),
     });
 
     const text = result.text.trim();
@@ -761,6 +765,9 @@ Write the narrative as Markdown with:
       system,
       messages: [{ role: 'user', content: prompt }],
       maxTokens: 2048,
+      // task-327c: dream narrative synthesis — same 'max' tier as the
+      // dream phase above; both pass through dream's self-reflection loop.
+      effort: pickEffort({ scenario: 'dream' }),
     });
     const text = (result?.text || '').trim();
     if (!text) return null;

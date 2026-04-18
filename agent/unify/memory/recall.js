@@ -14,6 +14,7 @@
  */
 
 import { createHash } from 'crypto';
+import { pickEffort } from '../effort.js';
 
 // ─── Constants ──────────────────────────────────────────────────
 
@@ -148,6 +149,9 @@ Select the ${MAX_RECALL_RESULTS} most relevant entries. Return a JSON array of e
       system,
       messages,
       maxTokens: 512,
+      // task-327c: recall step-3 is a cheap classifier pass (pick N out of
+      // 15 candidates). Flag 'low' so supported models skip deep reasoning.
+      effort: pickEffort({ scenario: 'recall' }),
     });
 
     // Parse the JSON array from the response

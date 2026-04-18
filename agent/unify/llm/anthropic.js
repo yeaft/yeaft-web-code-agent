@@ -297,8 +297,13 @@ export class AnthropicAdapter extends LLMAdapter {
 
   /**
    * Non-streaming call for side queries.
+   *
+   * task-327c: accepts `effort` for internal scenario-tagged calls
+   * (consolidate/dream/recall/light). Guards mirror stream() — unsupported
+   * models silently drop the param. max_tokens auto-widens to budget+1024
+   * when needed.
    */
-  async call({ model, system, messages, maxTokens = 4096, signal }) {
+  async call({ model, system, messages, maxTokens = 4096, effort, signal }) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const body = {
@@ -307,6 +312,20 @@ export class AnthropicAdapter extends LLMAdapter {
       system,
       messages: this.#translateMessages(messages),
     };
+
+    // task-327c: mirror stream()'s thinking injection for side queries.
+    const normEffort = normalizeEffort(effort);
+    if (thinkingV1Enabled() && normEffort) {
+      const cap = getThinkingCapability(model);
+      if (cap.supportsThinking && cap.thinkingProtocol === 'anthropic') {
+        const budget = thinkingBudgetForEffort(model, normEffort);
+        if (budget && budget > 0) {
+          const minMax = budget + 1024;
+          if (body.max_tokens < minMax) body.max_tokens = minMax;
+          body.thinking = { type: 'enabled', budget_tokens: budget };
+        }
+      }
+    }
 
     const response = await fetch(`${this.#baseUrl}/v1/messages`, {
       method: 'POST',
