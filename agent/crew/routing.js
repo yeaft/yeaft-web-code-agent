@@ -7,6 +7,7 @@ import { sendCrewMessage, sendCrewOutput, sendStatusUpdate } from './ui-messages
 import { ensureTaskFile, appendTaskRecord, readTaskFile, updateKanban, readKanban, saveRoleWorkSummary } from './task-files.js';
 import { createRoleQuery, clearRoleSessionId } from './role-query.js';
 import { saveSessionMeta } from './persistence.js';
+import { recordRoutingEvent } from './routing-metrics.js';
 import ctx from '../context.js';
 
 /** Format role label */
@@ -415,6 +416,32 @@ export function resolveRoleName(to, session, fromRole) {
  */
 export async function executeRoute(session, fromRole, route, turnImages = []) {
   let { to, summary, taskId, taskTitle } = route;
+
+  // task-330b §B item 1: self-route metric. §A (task-330a) owns the actual
+  // rejection; here we only record the event so the counter still increments
+  // even if §A lands later or in a different code path. Comparison is on
+  // the RAW `to` string — resolution to a different name (e.g. roleType
+  // expansion) is treated as a different routing decision.
+  if (typeof to === 'string' && to === fromRole) {
+    recordRoutingEvent(session, 'self-route', {
+      fromRole,
+      toRole: to,
+      taskId: taskId || null,
+      note: 'route.to === fromRole at executeRoute entry',
+    });
+  }
+
+  // task-330b §B item 1: state-stopped metric — message arrived while
+  // session was paused/stopped. Behaviour (auto-resume) is unchanged for
+  // backward compat; this is observer-only.
+  if (session.status === 'paused' || session.status === 'stopped') {
+    recordRoutingEvent(session, 'state-stopped', {
+      fromRole,
+      toRole: to,
+      taskId: taskId || null,
+      note: `session.status=${session.status} at executeRoute entry`,
+    });
+  }
 
   // Auto-resume: paused/stopped → running (route execution means work should continue)
   if (session.status === 'paused' || session.status === 'stopped') {
