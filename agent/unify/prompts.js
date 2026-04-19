@@ -151,6 +151,7 @@ export const SUPPORTED_LANGUAGES = Object.keys(PROMPTS);
  * Prompt structure:
  *   1. Core identity (from template or fallback)
  *   2. Date metadata
+ *   2b. Environment context (OS/CWD/branch/…) — optional, task-332 F1
  *   3. Mode-specific behavioral instructions (unified, or dream)
  *   4. Tool list + tool guidance (from template)
  *   5. Skills section
@@ -165,6 +166,7 @@ export const SUPPORTED_LANGUAGES = Object.keys(PROMPTS);
  *   memoryInjection?: string,
  *   compactSummary?: string,
  *   skillContent?: string,
+ *   envContext?: { os?: string, cwd?: string, branch?: string, repo?: string, shell?: string, nodeVersion?: string },
  * }} params
  * @returns {string}
  */
@@ -176,6 +178,7 @@ export function buildSystemPrompt({
   memoryInjection,
   compactSummary,
   skillContent,
+  envContext,
 } = {}) {
   // Fallback to English for unknown languages
   const lang = PROMPTS[language] || PROMPTS.en;
@@ -194,6 +197,23 @@ export function buildSystemPrompt({
 
   // ─── 2. Date Metadata ──────────────────────────────────
   parts.push(lang.date(new Date().toISOString().split('T')[0]));
+
+  // ─── 2b. Environment Context (task-332 F1) ─────────────
+  // Optional host/project metadata so the model doesn't have to rediscover
+  // CWD/branch/OS each turn. Only emitted when caller supplies envContext.
+  if (envContext && typeof envContext === 'object') {
+    const envLines = [];
+    if (envContext.os) envLines.push(`OS: ${envContext.os}`);
+    if (envContext.shell) envLines.push(`Shell: ${envContext.shell}`);
+    if (envContext.nodeVersion) envLines.push(`Node: ${envContext.nodeVersion}`);
+    if (envContext.cwd) envLines.push(`CWD: ${envContext.cwd}`);
+    if (envContext.repo) envLines.push(`Repo: ${envContext.repo}`);
+    if (envContext.branch) envLines.push(`Branch: ${envContext.branch}`);
+    if (envLines.length > 0) {
+      const header = effectiveLang === 'zh' ? '## 环境' : '## Environment';
+      parts.push(`${header}\n${envLines.join('\n')}`);
+    }
+  }
 
   // ─── 3. Mode-Specific Instructions ─────────────────────
   // task-297: single unified mode for all normal operation.

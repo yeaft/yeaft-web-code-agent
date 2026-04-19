@@ -208,7 +208,8 @@ describe('buildSystemPrompt', () => {
       toolNames: ['Bash', 'FileRead'],
     });
     expect(prompt).toContain('Tool Usage Guidance');
-    expect(prompt).toContain('Error Handling');
+    // task-332 F1: rewrote tool-guidance to a catalog; assert a catalog marker.
+    expect(prompt).toContain('Tool Catalog by Category');
   });
 
   it('should not include tool guidance when no tools', () => {
@@ -229,7 +230,8 @@ describe('buildSystemPrompt', () => {
       toolNames: ['Bash'],
     });
     expect(prompt).toContain('工具使用指引');
-    expect(prompt).toContain('错误处理');
+    // task-332 F1: rewrote zh tool-guidance to a catalog.
+    expect(prompt).toContain('工具目录');
   });
 
   it('should include skill content after tools', () => {
@@ -245,5 +247,105 @@ describe('buildSystemPrompt', () => {
   it('should produce significantly longer prompt than fallback', () => {
     const prompt = buildSystemPrompt({ language: 'en' });
     expect(prompt.length).toBeGreaterThan(500);
+  });
+
+  // ─── task-332 F1: thickened templates + envContext ───────────
+
+  it('base.md advertises persistent memory capability', () => {
+    const prompt = buildSystemPrompt({ language: 'en' });
+    expect(prompt).toMatch(/Persistent memory/);
+    expect(prompt).toMatch(/multi-agent crew|Multi-agent crew/);
+  });
+
+  it('base.md names the four personas (explorer/implementer/researcher/reviewer)', () => {
+    const prompt = buildSystemPrompt({ language: 'en' });
+    expect(prompt).toMatch(/explorer/);
+    expect(prompt).toMatch(/implementer/);
+    expect(prompt).toMatch(/researcher/);
+    expect(prompt).toMatch(/reviewer/);
+  });
+
+  it('mode-unified.md contains plan-before-act + batch + turn-end etiquette', () => {
+    const prompt = buildSystemPrompt({ language: 'en' });
+    expect(prompt).toMatch(/Plan Before You Act/);
+    expect(prompt).toMatch(/Batch Your Tool Calls/);
+    expect(prompt).toMatch(/Turn-End Etiquette/);
+  });
+
+  it('tool-guidance.md contains per-tool catalog (file-edit, memory-query, agent, skill)', () => {
+    const prompt = buildSystemPrompt({ language: 'en', toolNames: ['bash'] });
+    expect(prompt).toMatch(/`file-edit`/);
+    expect(prompt).toMatch(/`memory-query`/);
+    expect(prompt).toMatch(/`agent`/);
+    expect(prompt).toMatch(/`skill`/);
+  });
+
+  it('tool-guidance.md Chinese variant has per-tool catalog', () => {
+    const prompt = buildSystemPrompt({ language: 'zh', toolNames: ['bash'] });
+    expect(prompt).toMatch(/工具目录/);
+    expect(prompt).toMatch(/`memory-query`/);
+  });
+
+  it('envContext emits an Environment block with provided fields', () => {
+    const prompt = buildSystemPrompt({
+      language: 'en',
+      envContext: { os: 'linux', cwd: '/work/app', branch: 'main', repo: 'app' },
+    });
+    expect(prompt).toMatch(/## Environment/);
+    expect(prompt).toMatch(/OS: linux/);
+    expect(prompt).toMatch(/CWD: \/work\/app/);
+    expect(prompt).toMatch(/Branch: main/);
+    expect(prompt).toMatch(/Repo: app/);
+  });
+
+  it('envContext omits fields that are not provided', () => {
+    const prompt = buildSystemPrompt({
+      language: 'en',
+      envContext: { cwd: '/work/app' },
+    });
+    expect(prompt).toMatch(/CWD: \/work\/app/);
+    expect(prompt).not.toMatch(/OS:/);
+    expect(prompt).not.toMatch(/Branch:/);
+  });
+
+  it('envContext block is omitted when all fields are empty', () => {
+    const prompt = buildSystemPrompt({ language: 'en', envContext: {} });
+    expect(prompt).not.toMatch(/## Environment/);
+  });
+
+  it('envContext block is omitted when envContext is undefined', () => {
+    const prompt = buildSystemPrompt({ language: 'en' });
+    expect(prompt).not.toMatch(/## Environment/);
+  });
+
+  it('envContext header is Chinese when language is zh', () => {
+    const prompt = buildSystemPrompt({
+      language: 'zh',
+      envContext: { cwd: '/work/app' },
+    });
+    expect(prompt).toMatch(/## 环境/);
+    expect(prompt).toMatch(/CWD: \/work\/app/);
+  });
+
+  it('full assembled prompt stays under ~8k static token budget', () => {
+    // Worst case: full tool list + envContext + skill content, no memory/summary.
+    const toolNames = [
+      'bash','file-read','file-write','file-edit','apply-patch','glob','grep','list-dir',
+      'js-repl','js-repl-reset','notebook-edit','memory-read','memory-write','memory-query',
+      'memory-search','web-search','web-fetch','history-search','agent','send-message',
+      'wait-agent','close-agent','list-agents','task-create','task-update','task-list',
+      'task-get','task-progress','task-memory','followup-task','update-plan',
+      'spawn-thread','switch-thread','list-threads','attach-thread-to-task','spawn-task',
+      'read-thread-summary','read-thread-recent','skill','ask-user','enter-worktree',
+      'exit-worktree','image-generation','view-image','tool-search','request-permissions',
+      'write-stdin',
+    ];
+    const prompt = buildSystemPrompt({
+      language: 'en',
+      toolNames,
+      envContext: { os: 'linux', cwd: '/x', branch: 'main', repo: 'r' },
+    });
+    // Rough token estimate: chars/4. Budget red-line: 8k tokens = 32000 chars.
+    expect(prompt.length).toBeLessThan(32000);
   });
 });
