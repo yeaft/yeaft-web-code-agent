@@ -330,6 +330,13 @@ export class Engine {
       conversationStore: this.#conversationStore,
       adapter: this.#adapter,
       config: this.#config,
+      // ViewImage (task-333b PR-B rev-3 P1-A): expose size cap + allowlist
+      // via tool ctx so hosts can override via ~/.yeaft/config.json without
+      // touching the tool impl.
+      maxImageBytes: this.#config?.unify?.maxImageBytes,
+      imageAllowlist: Array.isArray(this.#config?.unify?.imageAllowlist)
+        ? this.#config.unify.imageAllowlist
+        : [],
     };
   }
 

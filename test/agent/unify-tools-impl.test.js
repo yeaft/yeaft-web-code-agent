@@ -921,6 +921,9 @@ describe('ViewImage tool', () => {
       { cwd: tmpDir }
     ));
     expect(result.error).toMatch(/allowlist|outside/i);
+    // prev-3 P2: error text must nudge the user toward a concrete fix.
+    expect(result.error).toMatch(/Absolute path/);
+    expect(result.error).toMatch(/imageAllowlist/);
   });
 
   it('honours ctx.imageAllowlist for explicit external dirs', async () => {
@@ -955,20 +958,44 @@ describe('ViewImage tool', () => {
     expect(result.supported).toContain('.png');
   });
 
-  it('rejects files larger than 10 MiB', async () => {
+  it('rejects files larger than the configured size cap', async () => {
     const mod = await import(`${TOOLS_DIR}/view-image.js`);
     const tool = mod.default;
     const bigPath = join(tmpDir, 'big.png');
-    // Write >10 MiB of zeros — content doesn't need to be a real PNG
-    // because the size check precedes the header read.
-    const bytes = 10 * 1024 * 1024 + 1;
+    // Write >1 MiB of zeros and inject a 1 MiB cap via ctx — avoids
+    // writing 20 MiB to the test disk while still exercising the check.
+    const bytes = 1 * 1024 * 1024 + 1;
     writeFileSync(bigPath, Buffer.alloc(bytes));
     const result = JSON.parse(await tool.execute(
       { file_path: bigPath },
+      { cwd: tmpDir, maxImageBytes: 1 * 1024 * 1024 }
+    ));
+    expect(result.error).toMatch(/exceeds/i);
+    // prev-3 P1-A: error must include a resize/crop nudge + config.json hint.
+    expect(result.error).toMatch(/resize|crop/i);
+    expect(result.error).toMatch(/maxImageBytes/);
+    expect(result.error).toMatch(/config\.json/);
+    expect(result.size).toBe(bytes);
+    expect(result.maxSize).toBe(1 * 1024 * 1024);
+  });
+
+  it('default max size is 20 MiB when ctx.maxImageBytes is not set', async () => {
+    const mod = await import(`${TOOLS_DIR}/view-image.js`);
+    const tool = mod.default;
+    // Just under the default cap to confirm the default is 20 MiB (not 10).
+    // 11 MiB would have been rejected by the pre-config 10-MiB cap; 11 MiB
+    // under the 20-MiB default must now pass the size check.
+    const mediumPath = join(tmpDir, 'medium.png');
+    // Start with the valid PNG header so format/dimension checks pass,
+    // then pad to 11 MiB.
+    const pad = Buffer.alloc(11 * 1024 * 1024 - PNG_1x1.length);
+    writeFileSync(mediumPath, Buffer.concat([PNG_1x1, pad]));
+    const result = JSON.parse(await tool.execute(
+      { file_path: mediumPath },
       { cwd: tmpDir }
     ));
-    expect(result.error).toMatch(/too large/i);
-    expect(result.size).toBe(bytes);
+    expect(result.error).toBeUndefined();
+    expect(result.media_type).toBe('image/png');
   });
 
   it('rejects directories', async () => {
@@ -990,6 +1017,64 @@ describe('ViewImage tool', () => {
     expect(r1.error).toMatch(/required/i);
     const r2 = JSON.parse(await tool.execute({ file_path: 123 }, { cwd: tmpDir }));
     expect(r2.error).toMatch(/required/i);
+  });
+
+  it('HEIC gets a specific conversion hint, not generic "unsupported"', async () => {
+    const mod = await import(`${TOOLS_DIR}/view-image.js`);
+    const tool = mod.default;
+    const heicPath = join(tmpDir, 'iphone.heic');
+    writeFileSync(heicPath, Buffer.alloc(16)); // content irrelevant
+    const result = JSON.parse(await tool.execute(
+      { file_path: heicPath },
+      { cwd: tmpDir }
+    ));
+    expect(result.error).toMatch(/HEIC/);
+    expect(result.error).toMatch(/sips/i);
+    // Must NOT be the generic "Unsupported image format" bucket.
+    expect(result.error).not.toMatch(/^Unsupported image format/);
+  });
+
+  it('.jfif is recognised as JPEG', async () => {
+    const mod = await import(`${TOOLS_DIR}/view-image.js`);
+    const tool = mod.default;
+    // Minimal JPEG (SOI + SOF0 + EOI), saved as .jfif.
+    const jpg = Buffer.from([
+      0xFF, 0xD8,
+      0xFF, 0xC0, 0x00, 0x11, 0x08, 0x00, 0x01, 0x00, 0x01,
+      0xFF, 0xD9,
+    ]);
+    const p = join(tmpDir, 'paste.jfif');
+    writeFileSync(p, jpg);
+    const result = JSON.parse(await tool.execute(
+      { file_path: p },
+      { cwd: tmpDir }
+    ));
+    expect(result.error).toBeUndefined();
+    expect(result.media_type).toBe('image/jpeg');
+    expect(result.format).toBe('JPEG');
+  });
+
+  it('`..` rejection includes a self-correcting hint', async () => {
+    // prev-3 P2 defense-in-depth: the `..` error should tell the LLM
+    // what to do instead, not just what went wrong.
+    const mod = await import(`${TOOLS_DIR}/view-image.js`);
+    const tool = mod.default;
+    const result = JSON.parse(await tool.execute(
+      { file_path: '../escape.png' },
+      { cwd: tmpDir }
+    ));
+    expect(result.error).toMatch(/\.\./);
+    expect(result.error).toMatch(/relative|allowlisted/i);
+  });
+
+  it('description includes when-to-call / when-not / path examples (prev-3 P1-B)', async () => {
+    const mod = await import(`${TOOLS_DIR}/view-image.js`);
+    const tool = mod.default;
+    const desc = tool.description || '';
+    expect(desc).toMatch(/when to call/i);
+    expect(desc).toMatch(/when not to call/i);
+    // At least one concrete path example
+    expect(desc).toMatch(/screenshots|docs\/assets|Downloads/);
   });
 });
 

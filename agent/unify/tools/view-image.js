@@ -8,15 +8,20 @@
  *   - `media_type`: the canonical MIME (image/png, image/jpeg, ...)
  *   - `format`, `width`, `height`, `size`, `sizeFormatted`, `path`
  *
- * Safety rules (per PM 乔布斯 PR-B spec):
+ * Safety rules (per PM 乔布斯 PR-B spec + prev-3 product review):
  *   - Path safety: no `..`, no absolute paths escaping cwd unless the
  *     resolved path lives under ctx.imageAllowlist[] (absolute dirs
  *     provided by the host).
- *   - Size cap: MAX_IMAGE_BYTES = 10 MiB. Larger files are rejected.
- *   - MIME whitelist: png / jpeg / gif / webp. SVG / BMP / ICO are
- *     intentionally excluded — they either aren't multimodal-LLM-safe
- *     (SVG = embedded script surface) or aren't supported by the
- *     mainstream vision endpoints.
+ *   - Size cap: configurable via ctx.maxImageBytes (default 20 MiB).
+ *     Larger files are rejected with a self-correcting error message
+ *     that nudges resize/crop or config.json tuning.
+ *   - MIME whitelist: png / jpeg / gif / webp / jfif. SVG / BMP / ICO /
+ *     TIFF are intentionally excluded — they either aren't multimodal-
+ *     LLM-safe (SVG = embedded script surface) or aren't supported by
+ *     the mainstream vision endpoints.
+ *   - HEIC is special-cased: we cannot decode it server-side, but the
+ *     error nudges the user to convert via `sips -s format jpeg` (mac)
+ *     instead of a generic "Unsupported format".
  */
 
 import { defineTool } from './types.js';
@@ -24,17 +29,19 @@ import { stat, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { resolve, extname, isAbsolute, relative } from 'path';
 
-/** Max allowed image size in bytes (10 MiB). */
-const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+/** Default max image size in bytes (20 MiB). Override via ctx.maxImageBytes. */
+const DEFAULT_MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 
 /**
  * Extension → canonical MIME type.
  * The keys are the whitelist; anything else is rejected.
+ * `.jfif` (common Windows paste extension) maps to image/jpeg.
  */
 const EXT_TO_MIME = Object.freeze({
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
+  '.jfif': 'image/jpeg',
   '.gif': 'image/gif',
   '.webp': 'image/webp',
 });
@@ -54,7 +61,7 @@ function parseImageDimensions(buffer, ext) {
       // PNG: width at offset 16, height at 20 (big-endian 32-bit)
       return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
     }
-    if ((ext === '.jpg' || ext === '.jpeg') && buffer.length > 10) {
+    if ((ext === '.jpg' || ext === '.jpeg' || ext === '.jfif') && buffer.length > 10) {
       // JPEG: scan for SOF0 (0xFFC0) / SOF2 (0xFFC2) marker
       for (let i = 0; i < buffer.length - 9; i++) {
         if (buffer[i] === 0xFF && (buffer[i + 1] === 0xC0 || buffer[i + 1] === 0xC2)) {
@@ -104,8 +111,10 @@ function parseImageDimensions(buffer, ext) {
 
 /**
  * Check whether `absPath` is allowed given a project `cwd` and an optional
- * allowlist of absolute directories. Returns null on success, or a string
- * error message.
+ * allowlist of absolute directories. Returns `null` on success, or an object
+ * `{ kind, message }` describing the failure. The `kind` field lets callers
+ * tailor the error text (see prev-3 P2: distinguish "absolute path outside
+ * project" from "relative path containing ..").
  */
 function checkPathAllowed(absPath, cwd, allowlist) {
   // Reject if the resolved path lives inside the project (good).
@@ -122,7 +131,13 @@ function checkPathAllowed(absPath, cwd, allowlist) {
     }
   }
 
-  return 'Path is outside the project directory and not on the image allowlist';
+  return {
+    kind: 'path_outside',
+    message:
+      'Path is outside the project directory and not on the image allowlist. ' +
+      'Either move the file into the project, or ask the user to add its parent ' +
+      'directory to ctx.imageAllowlist (set via ~/.yeaft/config.json imageAllowlist[]).',
+  };
 }
 
 function formatBytes(n) {
@@ -139,9 +154,29 @@ Returns a base64 data URI (\`image\` field) plus metadata (format, dimensions,
 size). The caller/bridge is responsible for turning the data URI into the
 provider-specific image content block.
 
-Supported formats: PNG, JPEG, GIF, WebP.
-Max size: 10 MiB.
-Path must live under the project directory (or an explicit host allowlist).`,
+When to call:
+  - User references a local image path (screenshot, design, log/chart) and
+    asks you to read, analyse, or describe it.
+  - User says "look at this file" / "check the screenshot at ..." / "what's
+    in docs/assets/arch.png?".
+
+When NOT to call:
+  - The image is already attached to the current message (the host has
+    already uploaded it — you can see it without this tool).
+  - The image is a remote URL (http/https). ViewImage only reads local
+    files; use a fetch-style tool for URLs.
+  - You only need the file's existence / mtime / size — use Read or a
+    filesystem tool instead; ViewImage loads the full bytes into memory.
+
+Path examples:
+  - Relative (resolved against project cwd): "./screenshots/bug.png",
+    "docs/assets/arch.png"
+  - Absolute inside an allowlisted dir: "/home/user/Downloads/error.png"
+    (only works when the host added that dir to ctx.imageAllowlist)
+
+Supported formats: PNG, JPEG (.jpg/.jpeg/.jfif), GIF, WebP.
+Max size: 20 MiB by default (configurable via ctx.maxImageBytes).
+Path must live under the project directory or an explicit host allowlist.`,
   parameters: {
     type: 'object',
     properties: {
@@ -161,19 +196,59 @@ Path must live under the project directory (or an explicit host allowlist).`,
     }
 
     // Reject `..` segments explicitly before path resolution — catches the
-    // cases where resolve() might still land inside cwd by accident.
+    // cases where resolve() might still land inside cwd by accident. This
+    // also gives LLMs a self-correcting error ("don't use ../") distinct
+    // from the "path outside project" message for absolute paths.
     if (file_path.split(/[/\\]/).some(seg => seg === '..')) {
-      return JSON.stringify({ error: 'file_path must not contain `..` segments' });
+      return JSON.stringify({
+        error:
+          'file_path must not contain `..` segments. Use a path relative to the ' +
+          'project (e.g. "docs/assets/foo.png") or an absolute path under an ' +
+          'allowlisted directory.',
+      });
     }
 
     const cwd = ctx?.cwd || process.cwd();
     const allowlist = Array.isArray(ctx?.imageAllowlist) ? ctx.imageAllowlist : [];
+    // Size cap: ctx.maxImageBytes (host-injected from config.json) wins,
+    // falling back to 20 MiB. A non-finite / non-positive override is ignored.
+    const maxBytes =
+      Number.isFinite(ctx?.maxImageBytes) && ctx.maxImageBytes > 0
+        ? Math.floor(ctx.maxImageBytes)
+        : DEFAULT_MAX_IMAGE_BYTES;
     const absPath = resolve(cwd, file_path);
 
     const pathErr = checkPathAllowed(absPath, cwd, allowlist);
-    if (pathErr) return JSON.stringify({ error: pathErr, path: absPath });
+    if (pathErr) {
+      // prev-3 P2: split "absolute outside project" from "relative ..".
+      // The `..` case is already handled above, so anything reaching here
+      // is either an absolute path outside cwd/allowlist or a relative
+      // path that resolve() pushed outside cwd (rare). Either way, the
+      // host-level fix is the same, so we keep one nudge message.
+      const isAbs = isAbsolute(file_path);
+      const hint = isAbs
+        ? 'Absolute path is outside the project directory. '
+        : 'Resolved path is outside the project directory. ';
+      return JSON.stringify({
+        error: hint + pathErr.message,
+        path: absPath,
+      });
+    }
 
     const ext = extname(absPath).toLowerCase();
+    // HEIC special-case: iPhone screenshots default to HEIC and silently
+    // fail today. Give users a concrete one-liner to fix it instead of a
+    // generic "Unsupported format".
+    if (ext === '.heic' || ext === '.heif') {
+      return JSON.stringify({
+        error:
+          'HEIC images need to be converted to JPEG first. ' +
+          'Use `sips -s format jpeg <file> --out <file>.jpg` on macOS ' +
+          '(or an equivalent tool like ImageMagick on Linux/Windows), then retry.',
+        format: ext.slice(1).toUpperCase(),
+        supported: ALLOWED_EXTS,
+      });
+    }
     if (!(ext in EXT_TO_MIME)) {
       return JSON.stringify({
         error: `Unsupported image format: ${ext || '(none)'}`,
@@ -196,11 +271,14 @@ Path must live under the project directory (or an explicit host allowlist).`,
       return JSON.stringify({ error: 'file_path does not point to a regular file' });
     }
 
-    if (fileStat.size > MAX_IMAGE_BYTES) {
+    if (fileStat.size > maxBytes) {
       return JSON.stringify({
-        error: `Image too large: ${formatBytes(fileStat.size)} (max ${formatBytes(MAX_IMAGE_BYTES)})`,
+        error:
+          `Image exceeds ${formatBytes(maxBytes)} (${formatBytes(fileStat.size)} actual). ` +
+          `Reduce image size (resize/crop), or set \`maxImageBytes\` in ` +
+          `~/.yeaft/config.json if your LLM supports more.`,
         size: fileStat.size,
-        maxSize: MAX_IMAGE_BYTES,
+        maxSize: maxBytes,
       });
     }
 
@@ -225,6 +303,8 @@ Path must live under the project directory (or an explicit host allowlist).`,
       modified: fileStat.mtime.toISOString(),
       image: dataUri,
     };
+    // Normalise .jfif to JPEG in display format too, for consistency.
+    if (ext === '.jfif') result.format = 'JPEG';
     if (dimensions) {
       result.width = dimensions.width;
       result.height = dimensions.height;
