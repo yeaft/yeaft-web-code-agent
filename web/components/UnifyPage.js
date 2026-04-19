@@ -170,12 +170,50 @@ export default {
                 <!-- Messages -->
                 <div class="unify-debug-section">
                   <div class="unify-debug-section-title">{{ $t('unify.messagesLabel') }} ({{ turn.messages?.length || 0 }})</div>
-                  <pre class="unify-debug-pre">{{ formatMessages(turn.messages) }}</pre>
+                  <div class="unify-debug-messages">
+                    <div v-for="(m, mi) in (turn.messages || [])" :key="mi" class="unify-debug-msg" :class="'role-' + m.role">
+                      <div class="unify-debug-msg-head">
+                        <span class="unify-debug-msg-role">[{{ m.role }}]</span>
+                        <span v-if="m.toolCallId" class="unify-debug-msg-callid">call_id={{ m.toolCallId }}</span>
+                        <span v-if="m.isError" class="unify-debug-msg-err">isError</span>
+                      </div>
+                      <pre class="unify-debug-pre" v-if="formatMsgContent(m)">{{ formatMsgContent(m) }}</pre>
+                      <details v-for="(tc, ti) in (m.toolCalls || [])" :key="'tc-' + ti" class="unify-debug-tc">
+                        <summary>→ call_{{ ti + 1 }} {{ tc.name }} <span class="unify-debug-tc-id">({{ tc.id }})</span></summary>
+                        <pre class="unify-debug-pre unify-debug-pre-args">{{ prettyJson(tc.input) }}</pre>
+                      </details>
+                    </div>
+                    <div v-if="!(turn.messages && turn.messages.length)" class="unify-debug-empty-inline">(none)</div>
+                  </div>
                 </div>
                 <!-- Response -->
                 <div class="unify-debug-section">
                   <div class="unify-debug-section-title">{{ $t('unify.response') }}</div>
                   <pre class="unify-debug-pre">{{ turn.response || '(empty)' }}</pre>
+                </div>
+                <!-- Function Calls (task-331): request + paired response -->
+                <div class="unify-debug-section" v-if="getFunctionCallPairs(turn).length > 0">
+                  <div class="unify-debug-section-title">{{ $t('unify.functionCalls') }} ({{ getFunctionCallPairs(turn).length }})</div>
+                  <div class="unify-debug-fncalls">
+                    <div v-for="(pair, pi) in getFunctionCallPairs(turn)" :key="pi" class="unify-debug-fncall">
+                      <div class="unify-debug-fncall-head">
+                        <span class="unify-debug-fncall-num">#{{ pi + 1 }}</span>
+                        <span class="unify-debug-fncall-name">{{ pair.name }}</span>
+                        <span class="unify-debug-fncall-id">({{ pair.id }})</span>
+                        <span v-if="pair.response == null" class="unify-debug-fncall-pending">{{ $t('unify.pending') }}</span>
+                        <span v-else-if="pair.isError" class="unify-debug-fncall-err">✗</span>
+                        <span v-else class="unify-debug-fncall-ok">✓</span>
+                      </div>
+                      <details open>
+                        <summary>{{ $t('unify.request') }} (arguments)</summary>
+                        <pre class="unify-debug-pre unify-debug-pre-args">{{ prettyJson(pair.input) }}</pre>
+                      </details>
+                      <details>
+                        <summary>{{ $t('unify.response') }}</summary>
+                        <pre class="unify-debug-pre">{{ pair.response != null ? formatToolOutput(pair.response) : '(pending)' }}</pre>
+                      </details>
+                    </div>
+                  </div>
                 </div>
                 <!-- Tool Calls -->
                 <div class="unify-debug-section" v-if="turn.toolCalls && turn.toolCalls.length > 0">
@@ -391,8 +429,102 @@ export default {
         const content = typeof m.content === 'string'
           ? m.content.slice(0, 500) + (m.content.length > 500 ? '...' : '')
           : JSON.stringify(m.content).slice(0, 500);
-        return `[${m.role}] ${content}`;
+        const head = m.toolCallId ? `[${m.role} call_id=${m.toolCallId}]` : `[${m.role}]`;
+        const body = content || '(empty)';
+        const calls = Array.isArray(m.toolCalls) && m.toolCalls.length
+          ? m.toolCalls.map((tc, i) =>
+              `\n  → call_${i + 1} ${tc.name}(${JSON.stringify(tc.input)})`
+            ).join('')
+          : '';
+        return `${head} ${body}${calls}`;
       }).join('\n\n');
+    };
+
+    // task-331: content renderer for a single debug message — returns the
+    // text body only (function_call details render separately as <details>
+    // blocks, tool_result body falls through the same pre).
+    const formatMsgContent = (m) => {
+      if (!m) return '';
+      if (typeof m.content === 'string') {
+        const s = m.content;
+        return s.length > 2000 ? s.slice(0, 2000) + '…' : s;
+      }
+      if (m.content == null) return '';
+      try {
+        const s = JSON.stringify(m.content);
+        return s.length > 2000 ? s.slice(0, 2000) + '…' : s;
+      } catch {
+        return String(m.content);
+      }
+    };
+
+    // task-331: pretty-print a tool_call input blob.
+    const prettyJson = (v) => {
+      if (v == null) return '';
+      try {
+        return JSON.stringify(v, null, 2);
+      } catch {
+        return String(v);
+      }
+    };
+
+    // task-331: format a tool_result output — may be a string or structured.
+    const formatToolOutput = (out) => {
+      if (out == null) return '';
+      if (typeof out === 'string') {
+        return out.length > 4000 ? out.slice(0, 4000) + '…' : out;
+      }
+      try {
+        const s = JSON.stringify(out, null, 2);
+        return s.length > 4000 ? s.slice(0, 4000) + '…' : s;
+      } catch {
+        return String(out);
+      }
+    };
+
+    // task-331: walk a turn's messages, pairing each assistant `toolCalls`
+    // entry with the matching `role:'tool'` message that shares the same
+    // id. Returns [{id, name, input, response, isError}, ...] with
+    // `response`/`isError` undefined when no paired result (pending).
+    const getFunctionCallPairs = (turn) => {
+      const pairs = [];
+      const msgs = turn?.messages || [];
+      // Build index: toolCallId → tool message
+      const toolByCallId = new Map();
+      for (const m of msgs) {
+        if (m.role === 'tool' && m.toolCallId) toolByCallId.set(m.toolCallId, m);
+      }
+      for (const m of msgs) {
+        if (m.role !== 'assistant' || !Array.isArray(m.toolCalls)) continue;
+        for (const tc of m.toolCalls) {
+          const paired = toolByCallId.get(tc.id);
+          pairs.push({
+            id: tc.id,
+            name: tc.name,
+            input: tc.input,
+            response: paired ? paired.content : null,
+            isError: paired ? !!paired.isError : false,
+          });
+        }
+      }
+      // Also surface the CURRENT turn's tool_call requests (toolCalls[]),
+      // which haven't been pushed into conversationMessages yet when
+      // `debug_turn` fires. These will never have a paired response in
+      // THIS turn's snapshot — responses land in the NEXT debug_turn.
+      if (Array.isArray(turn?.toolCalls)) {
+        const alreadySeen = new Set(pairs.map(p => p.id));
+        for (const tc of turn.toolCalls) {
+          if (alreadySeen.has(tc.id)) continue;
+          pairs.push({
+            id: tc.id,
+            name: tc.name,
+            input: tc.input,
+            response: null,
+            isError: false,
+          });
+        }
+      }
+      return pairs;
     };
 
     const formatToolCalls = (toolCalls) => {
@@ -494,6 +626,10 @@ export default {
       onSettingsSaved,
       formatMessages,
       formatToolCalls,
+      formatMsgContent,
+      prettyJson,
+      formatToolOutput,
+      getFunctionCallPairs,
       sidebarV2Enabled,
       onSelectThreadV2,
       onSelectTaskV2,
