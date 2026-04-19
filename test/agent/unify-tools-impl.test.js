@@ -827,22 +827,22 @@ describe('ViewImage tool', () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  // Minimal valid 1x1 PNG header (enough bytes for dim parsing).
+  const PNG_1x1 = Buffer.from([
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
+    0x00, 0x00, 0x00, 0x0D, // IHDR chunk length
+    0x49, 0x48, 0x44, 0x52, // IHDR
+    0x00, 0x00, 0x00, 0x01, // width = 1
+    0x00, 0x00, 0x00, 0x01, // height = 1
+    0x08, 0x02,             // bit depth, color type
+    0x00, 0x00, 0x00,       // compression, filter, interlace
+  ]);
+
   it('reads PNG metadata and dimensions', async () => {
     const mod = await import(`${TOOLS_DIR}/view-image.js`);
     const tool = mod.default;
-
-    // Create a minimal valid PNG file (1x1 pixel)
-    const pngHeader = Buffer.from([
-      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
-      0x00, 0x00, 0x00, 0x0D, // IHDR chunk length
-      0x49, 0x48, 0x44, 0x52, // IHDR
-      0x00, 0x00, 0x00, 0x01, // width = 1
-      0x00, 0x00, 0x00, 0x01, // height = 1
-      0x08, 0x02,             // bit depth, color type
-      0x00, 0x00, 0x00,       // compression, filter, interlace
-    ]);
     const pngPath = join(tmpDir, 'test.png');
-    writeFileSync(pngPath, pngHeader);
+    writeFileSync(pngPath, PNG_1x1);
 
     const result = JSON.parse(await tool.execute(
       { file_path: pngPath },
@@ -853,6 +853,43 @@ describe('ViewImage tool', () => {
     expect(result.height).toBe(1);
   });
 
+  it('returns a base64 data URI usable as an LLM image block', async () => {
+    const mod = await import(`${TOOLS_DIR}/view-image.js`);
+    const tool = mod.default;
+    const pngPath = join(tmpDir, 'test.png');
+    writeFileSync(pngPath, PNG_1x1);
+
+    const result = JSON.parse(await tool.execute(
+      { file_path: pngPath },
+      { cwd: tmpDir }
+    ));
+    expect(result.media_type).toBe('image/png');
+    expect(typeof result.image).toBe('string');
+    expect(result.image.startsWith('data:image/png;base64,')).toBe(true);
+    // Round-trip: the base64 payload decodes back to the original bytes.
+    const b64 = result.image.slice('data:image/png;base64,'.length);
+    expect(Buffer.from(b64, 'base64').equals(PNG_1x1)).toBe(true);
+  });
+
+  it('maps jpg and jpeg to image/jpeg media_type', async () => {
+    const mod = await import(`${TOOLS_DIR}/view-image.js`);
+    const tool = mod.default;
+    // Minimal JPEG SOI+EOI with SOF0 marker giving dim 1x1.
+    const jpg = Buffer.from([
+      0xFF, 0xD8, // SOI
+      0xFF, 0xC0, 0x00, 0x11, 0x08, 0x00, 0x01, 0x00, 0x01, // SOF0 w=1 h=1
+      0xFF, 0xD9, // EOI
+    ]);
+    const jpgPath = join(tmpDir, 'test.jpg');
+    writeFileSync(jpgPath, jpg);
+    const result = JSON.parse(await tool.execute(
+      { file_path: jpgPath },
+      { cwd: tmpDir }
+    ));
+    expect(result.format).toBe('JPEG');
+    expect(result.media_type).toBe('image/jpeg');
+  });
+
   it('returns error for non-existent image', async () => {
     const mod = await import(`${TOOLS_DIR}/view-image.js`);
     const tool = mod.default;
@@ -861,6 +898,183 @@ describe('ViewImage tool', () => {
       { cwd: tmpDir }
     ));
     expect(result.error).toBeTruthy();
+    expect(result.error).toMatch(/not found/i);
+  });
+
+  it('rejects `..` path segments outright', async () => {
+    const mod = await import(`${TOOLS_DIR}/view-image.js`);
+    const tool = mod.default;
+    const result = JSON.parse(await tool.execute(
+      { file_path: '../../../etc/passwd' },
+      { cwd: tmpDir }
+    ));
+    expect(result.error).toMatch(/\.\./);
+  });
+
+  it('rejects absolute paths outside cwd and allowlist', async () => {
+    const mod = await import(`${TOOLS_DIR}/view-image.js`);
+    const tool = mod.default;
+    // Pick an absolute path that is NOT under tmpDir.
+    const foreign = '/tmp/definitely-not-under-the-project.png';
+    const result = JSON.parse(await tool.execute(
+      { file_path: foreign },
+      { cwd: tmpDir }
+    ));
+    expect(result.error).toMatch(/allowlist|outside/i);
+    // prev-3 P2: error text must nudge the user toward a concrete fix.
+    expect(result.error).toMatch(/Absolute path/);
+    expect(result.error).toMatch(/imageAllowlist/);
+  });
+
+  it('honours ctx.imageAllowlist for explicit external dirs', async () => {
+    const mod = await import(`${TOOLS_DIR}/view-image.js`);
+    const tool = mod.default;
+    // Put the image in tmpDir but use a *different* cwd, then whitelist tmpDir.
+    const pngPath = join(tmpDir, 'ok.png');
+    writeFileSync(pngPath, PNG_1x1);
+    const otherCwd = mkdtempSync(join(tmpdir(), 'unify-other-'));
+    try {
+      const result = JSON.parse(await tool.execute(
+        { file_path: pngPath },
+        { cwd: otherCwd, imageAllowlist: [tmpDir] }
+      ));
+      expect(result.error).toBeUndefined();
+      expect(result.format).toBe('PNG');
+    } finally {
+      rmSync(otherCwd, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects unsupported formats (svg, bmp, ico)', async () => {
+    const mod = await import(`${TOOLS_DIR}/view-image.js`);
+    const tool = mod.default;
+    const svgPath = join(tmpDir, 'test.svg');
+    writeFileSync(svgPath, '<svg/>');
+    const result = JSON.parse(await tool.execute(
+      { file_path: svgPath },
+      { cwd: tmpDir }
+    ));
+    expect(result.error).toMatch(/unsupported/i);
+    expect(result.supported).toContain('.png');
+  });
+
+  it('rejects files larger than the configured size cap', async () => {
+    const mod = await import(`${TOOLS_DIR}/view-image.js`);
+    const tool = mod.default;
+    const bigPath = join(tmpDir, 'big.png');
+    // Write >1 MiB of zeros and inject a 1 MiB cap via ctx — avoids
+    // writing 20 MiB to the test disk while still exercising the check.
+    const bytes = 1 * 1024 * 1024 + 1;
+    writeFileSync(bigPath, Buffer.alloc(bytes));
+    const result = JSON.parse(await tool.execute(
+      { file_path: bigPath },
+      { cwd: tmpDir, maxImageBytes: 1 * 1024 * 1024 }
+    ));
+    expect(result.error).toMatch(/exceeds/i);
+    // prev-3 P1-A: error must include a resize/crop nudge + config.json hint.
+    expect(result.error).toMatch(/resize|crop/i);
+    expect(result.error).toMatch(/maxImageBytes/);
+    expect(result.error).toMatch(/config\.json/);
+    expect(result.size).toBe(bytes);
+    expect(result.maxSize).toBe(1 * 1024 * 1024);
+  });
+
+  it('default max size is 20 MiB when ctx.maxImageBytes is not set', async () => {
+    const mod = await import(`${TOOLS_DIR}/view-image.js`);
+    const tool = mod.default;
+    // Just under the default cap to confirm the default is 20 MiB (not 10).
+    // 11 MiB would have been rejected by the pre-config 10-MiB cap; 11 MiB
+    // under the 20-MiB default must now pass the size check.
+    const mediumPath = join(tmpDir, 'medium.png');
+    // Start with the valid PNG header so format/dimension checks pass,
+    // then pad to 11 MiB.
+    const pad = Buffer.alloc(11 * 1024 * 1024 - PNG_1x1.length);
+    writeFileSync(mediumPath, Buffer.concat([PNG_1x1, pad]));
+    const result = JSON.parse(await tool.execute(
+      { file_path: mediumPath },
+      { cwd: tmpDir }
+    ));
+    expect(result.error).toBeUndefined();
+    expect(result.media_type).toBe('image/png');
+  });
+
+  it('rejects directories', async () => {
+    const mod = await import(`${TOOLS_DIR}/view-image.js`);
+    const tool = mod.default;
+    const dir = join(tmpDir, 'adir.png');
+    mkdirSync(dir);
+    const result = JSON.parse(await tool.execute(
+      { file_path: dir },
+      { cwd: tmpDir }
+    ));
+    expect(result.error).toMatch(/regular file/i);
+  });
+
+  it('errors when file_path is missing or not a string', async () => {
+    const mod = await import(`${TOOLS_DIR}/view-image.js`);
+    const tool = mod.default;
+    const r1 = JSON.parse(await tool.execute({}, { cwd: tmpDir }));
+    expect(r1.error).toMatch(/required/i);
+    const r2 = JSON.parse(await tool.execute({ file_path: 123 }, { cwd: tmpDir }));
+    expect(r2.error).toMatch(/required/i);
+  });
+
+  it('HEIC gets a specific conversion hint, not generic "unsupported"', async () => {
+    const mod = await import(`${TOOLS_DIR}/view-image.js`);
+    const tool = mod.default;
+    const heicPath = join(tmpDir, 'iphone.heic');
+    writeFileSync(heicPath, Buffer.alloc(16)); // content irrelevant
+    const result = JSON.parse(await tool.execute(
+      { file_path: heicPath },
+      { cwd: tmpDir }
+    ));
+    expect(result.error).toMatch(/HEIC/);
+    expect(result.error).toMatch(/sips/i);
+    // Must NOT be the generic "Unsupported image format" bucket.
+    expect(result.error).not.toMatch(/^Unsupported image format/);
+  });
+
+  it('.jfif is recognised as JPEG', async () => {
+    const mod = await import(`${TOOLS_DIR}/view-image.js`);
+    const tool = mod.default;
+    // Minimal JPEG (SOI + SOF0 + EOI), saved as .jfif.
+    const jpg = Buffer.from([
+      0xFF, 0xD8,
+      0xFF, 0xC0, 0x00, 0x11, 0x08, 0x00, 0x01, 0x00, 0x01,
+      0xFF, 0xD9,
+    ]);
+    const p = join(tmpDir, 'paste.jfif');
+    writeFileSync(p, jpg);
+    const result = JSON.parse(await tool.execute(
+      { file_path: p },
+      { cwd: tmpDir }
+    ));
+    expect(result.error).toBeUndefined();
+    expect(result.media_type).toBe('image/jpeg');
+    expect(result.format).toBe('JPEG');
+  });
+
+  it('`..` rejection includes a self-correcting hint', async () => {
+    // prev-3 P2 defense-in-depth: the `..` error should tell the LLM
+    // what to do instead, not just what went wrong.
+    const mod = await import(`${TOOLS_DIR}/view-image.js`);
+    const tool = mod.default;
+    const result = JSON.parse(await tool.execute(
+      { file_path: '../escape.png' },
+      { cwd: tmpDir }
+    ));
+    expect(result.error).toMatch(/\.\./);
+    expect(result.error).toMatch(/relative|allowlisted/i);
+  });
+
+  it('description includes when-to-call / when-not / path examples (prev-3 P1-B)', async () => {
+    const mod = await import(`${TOOLS_DIR}/view-image.js`);
+    const tool = mod.default;
+    const desc = tool.description || '';
+    expect(desc).toMatch(/when to call/i);
+    expect(desc).toMatch(/when not to call/i);
+    // At least one concrete path example
+    expect(desc).toMatch(/screenshots|docs\/assets|Downloads/);
   });
 });
 
