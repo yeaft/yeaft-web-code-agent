@@ -508,8 +508,8 @@ export class Engine {
 
     // ─── Pre-query: Memory Injection (task-287) + Compact Summary ──
     // New layout: always inject Memory Index + user-preferences + project
-    // header excerpt. No per-turn fuzzy recall — LLM calls memory_search /
-    // memory_query on demand.
+    // header excerpt. No per-turn fuzzy recall — LLM calls memory_load /
+    // memory_query on demand (memory_search still works as a deprecated alias).
     let memoryInjection = '';
     if (this.#yeaftDir) {
       try {

@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { existsSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import memorySearch from '../../../agent/unify/tools/memory-search.js';
+import memorySearch, { memorySearchAlias } from '../../../agent/unify/tools/memory-search.js';
 import memoryQuery from '../../../agent/unify/tools/memory-query.js';
 import { writeMemoryFile, ensureLayout } from '../../../agent/unify/memory/layout.js';
 import { MemoryStore } from '../../../agent/unify/memory/store.js';
@@ -23,11 +23,11 @@ afterEach(() => {
   if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true, force: true });
 });
 
-// ─── memory_search (path-based file loader) ────────────────
+// ─── memory_load (canonical path-based file loader, was memory_search pre-task-333b) ─
 
-describe('memory_search tool', () => {
+describe('memory_load tool (canonical — was memory_search before task-333b)', () => {
   it('has correct name and required paths param', () => {
-    expect(memorySearch.name).toBe('memory_search');
+    expect(memorySearch.name).toBe('memory_load');
     expect(memorySearch.parameters.required).toContain('paths');
   });
 
@@ -103,6 +103,26 @@ describe('memory_search tool', () => {
     const parsed = JSON.parse(out);
     expect(parsed.error).toMatch(/required/);
     expect(parsed.availablePaths).toContain('user-preferences.md');
+  });
+});
+
+// ─── memory_search deprecated alias (task-333b) ───────────
+
+describe('memory_search deprecated alias (task-333b)', () => {
+  it('registers under the old name for backwards compatibility', () => {
+    expect(memorySearchAlias.name).toBe('memory_search');
+    expect(memorySearchAlias.description).toMatch(/DEPRECATED/);
+  });
+
+  it('delegates to the same executor and loads files', async () => {
+    writeMemoryFile(TEST_DIR, 'user-preferences.md', '# Prefs\n- x\n');
+    const out = await memorySearchAlias.execute(
+      { paths: ['user-preferences.md'] },
+      { yeaftDir: TEST_DIR },
+    );
+    const parsed = JSON.parse(out);
+    expect(parsed.results).toHaveLength(1);
+    expect(parsed.results[0].path).toBe('user-preferences.md');
   });
 });
 

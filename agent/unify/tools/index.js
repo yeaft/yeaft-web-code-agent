@@ -20,7 +20,7 @@ import exitWorktree from './exit-worktree.js';
 import askUser from './ask-user.js';
 import memoryRead from './memory-read.js';
 import memoryWrite from './memory-write.js';
-import memorySearch from './memory-search.js';
+import memorySearch, { memorySearchAlias } from './memory-search.js';
 import memoryQuery from './memory-query.js';
 import webSearch from './web-search.js';
 import webFetch from './web-fetch.js';
@@ -93,6 +93,7 @@ export const allTools = [
   memoryRead,
   memoryWrite,
   memorySearch,
+  memorySearchAlias,
   memoryQuery,
   webSearch,
   webFetch,

@@ -265,7 +265,7 @@ export function renderIndex(yeaftDir, entryCount) {
   lines.push('## entries', '', `- ${entryCount} atomic entries (use memory_query to search)`, '');
 
   lines.push(
-    '_Note: use the `memory_search` tool with one or more paths to load a classification',
+    '_Note: use the `memory_load` tool with one or more paths to load a classification',
     'file in full, or `memory_query` to search atomic entries by keywords/tags._',
   );
 
