@@ -32,18 +32,53 @@ const TEMPLATES_DIR = join(__dirname, 'templates');
 
 /**
  * Read a template file from the templates/ directory.
- * Returns empty string if file doesn't exist or can't be read.
+ *
+ * task-332c F3 — missing-template guard:
+ * Required templates MUST be present. If a required template is missing or
+ * unreadable, throw a clear error instead of silently degrading to the
+ * hardcoded fallback. Silent skip previously hid misconfigured deployments
+ * (empty prompts shipped to production), so we now fail fast at load time.
+ *
+ * Non-required templates (passed with { required: false }) retain the old
+ * "return empty string on absence" behavior for optional inclusions.
+ *
  * @param {string} name — filename (e.g. 'base.md')
+ * @param {{ required?: boolean }} [opts]
  * @returns {string}
+ * @throws {Error} when required=true and the file is missing / unreadable / empty
  */
-function readTemplate(name) {
+function readTemplate(name, { required = true } = {}) {
   const path = join(TEMPLATES_DIR, name);
-  if (!existsSync(path)) return '';
-  try {
-    return readFileSync(path, 'utf8').trim();
-  } catch {
+  if (!existsSync(path)) {
+    if (required) {
+      throw new Error(
+        `[prompts] Required template missing: ${name} ` +
+        `(expected at ${path}). Templates are part of the agent package — ` +
+        `check the install or build output.`
+      );
+    }
     return '';
   }
+  let content;
+  try {
+    content = readFileSync(path, 'utf8');
+  } catch (e) {
+    if (required) {
+      throw new Error(
+        `[prompts] Required template unreadable: ${name} ` +
+        `(at ${path}): ${e.message}`
+      );
+    }
+    return '';
+  }
+  const trimmed = content.trim();
+  if (!trimmed && required) {
+    throw new Error(
+      `[prompts] Required template is empty: ${name} (at ${path}). ` +
+      `An empty system prompt template would ship a degenerate prompt to the LLM.`
+    );
+  }
+  return trimmed;
 }
 
 /**
