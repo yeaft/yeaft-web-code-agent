@@ -67,13 +67,14 @@ import {
 } from './thread-tools.js';
 
 // --- P2 Auxiliary tools ---
+// task-333b L1 delete: ToolSearch and WriteStdin removed — the function-call
+// schema already exposes all tools, so ToolSearch was redundant; WriteStdin
+// was a stub returning a hint about Bash piping.
 import { jsRepl, jsReplReset } from './js-repl.js';
 import notebookEdit from './notebook-edit.js';
 import imageGeneration from './image-generation.js';
 import viewImage from './view-image.js';
-import toolSearch from './tool-search.js';
 import requestPermissions from './request-permissions.js';
-import writeStdin from './write-stdin.js';
 
 /**
  * All built-in tools, flattened into a single array.
@@ -139,9 +140,7 @@ export const allTools = [
   notebookEdit,
   imageGeneration,
   viewImage,
-  toolSearch,
   requestPermissions,
-  writeStdin,
 ];
 
 /**
