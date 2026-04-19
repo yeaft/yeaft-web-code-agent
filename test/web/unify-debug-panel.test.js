@@ -212,7 +212,10 @@ describe('Debug panel in detail aside', () => {
 
   it('shows messages section', () => {
     expect(unifyPageJs).toContain("$t('unify.messagesLabel')");
-    expect(unifyPageJs).toContain('formatMessages(turn.messages)');
+    // task-331: moved from plain pre+formatMessages to per-message render
+    // with <details> blocks for each toolCall. Assert the new structure.
+    expect(unifyPageJs).toContain('unify-debug-messages');
+    expect(unifyPageJs).toContain('formatMsgContent(m)');
   });
 
   it('shows response section', () => {
@@ -222,6 +225,8 @@ describe('Debug panel in detail aside', () => {
 
   it('shows tool calls section conditionally', () => {
     expect(unifyPageJs).toContain("$t('unify.toolCalls')");
+    // task-331: the legacy per-turn Tool Calls pre is still rendered via
+    // formatToolCalls; the new per-pair function-call view is separate.
     expect(unifyPageJs).toContain('formatToolCalls(turn.toolCalls)');
   });
 
@@ -460,5 +465,74 @@ describe('CSS resizable debug panel styles (task-277)', () => {
   it('default width is 500px not 280px', () => {
     expect(unifyCss).not.toMatch(/\.unify-detail\s*\{[^}]*width:\s*280px/);
     expect(unifyCss).toContain('500px');
+  });
+});
+
+// =====================================================================
+// 10. task-331 — function_call request + paired response display
+// =====================================================================
+describe('task-331 — Function Calls panel', () => {
+  it('Engine mapDebugMessage is exported for reuse', () => {
+    expect(engineJs).toMatch(/export\s+function\s+mapDebugMessage/);
+  });
+
+  it('mapDebugMessage preserves assistant.toolCalls', () => {
+    expect(engineJs).toMatch(/m\.toolCalls[\s\S]{0,200}out\.toolCalls/);
+  });
+
+  it('mapDebugMessage preserves tool.toolCallId', () => {
+    expect(engineJs).toMatch(/m\.toolCallId[\s\S]{0,100}out\.toolCallId/);
+  });
+
+  it('debug_turn success path uses mapDebugMessage', () => {
+    // Both success and error path should call the shared mapper.
+    const matches = engineJs.match(/messages:\s*conversationMessages\.map\(mapDebugMessage\)/g);
+    expect(matches).not.toBeNull();
+    expect(matches.length).toBeGreaterThanOrEqual(2); // success + error paths
+  });
+
+  it('UnifyPage renders toolCalls as <details> blocks per message', () => {
+    expect(unifyPageJs).toContain('unify-debug-tc');
+    expect(unifyPageJs).toContain("for=\"(tc, ti) in (m.toolCalls || [])\"");
+  });
+
+  it('UnifyPage has Function Calls section gated on pairs', () => {
+    expect(unifyPageJs).toContain("$t('unify.functionCalls')");
+    expect(unifyPageJs).toContain('getFunctionCallPairs(turn)');
+  });
+
+  it('UnifyPage exposes prettyJson helper for pretty-printed arguments', () => {
+    expect(unifyPageJs).toContain('const prettyJson');
+    expect(unifyPageJs).toMatch(/JSON\.stringify\(v,\s*null,\s*2\)/);
+  });
+
+  it('UnifyPage pairs request + response as nested <details>', () => {
+    // Request (arguments) and Response both inside unify-debug-fncall.
+    expect(unifyPageJs).toContain('unify-debug-fncall');
+    expect(unifyPageJs).toContain("$t('unify.request')");
+  });
+
+  it('UnifyPage marks pending pairs with (pending)', () => {
+    expect(unifyPageJs).toContain("$t('unify.pending')");
+    expect(unifyPageJs).toContain('unify-debug-fncall-pending');
+  });
+
+  it('getFunctionCallPairs pairs assistant.toolCalls with role:tool by id', () => {
+    // Simple structural match — the pairing uses a Map keyed by toolCallId.
+    expect(unifyPageJs).toContain('toolByCallId');
+    expect(unifyPageJs).toMatch(/toolByCallId\.set\(m\.toolCallId,\s*m\)/);
+    expect(unifyPageJs).toMatch(/toolByCallId\.get\(tc\.id\)/);
+  });
+
+  it('i18n has unify.functionCalls key in both locales', () => {
+    expect(enI18n).toContain("'unify.functionCalls'");
+    expect(zhI18n).toContain("'unify.functionCalls'");
+  });
+
+  it('i18n has unify.request + unify.pending keys in both locales', () => {
+    expect(enI18n).toContain("'unify.request'");
+    expect(enI18n).toContain("'unify.pending'");
+    expect(zhI18n).toContain("'unify.request'");
+    expect(zhI18n).toContain("'unify.pending'");
   });
 });

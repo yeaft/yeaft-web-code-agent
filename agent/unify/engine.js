@@ -43,6 +43,47 @@ import { normalizeEffort } from './models.js';
 /** Maximum auto-continue turns when stopReason is 'max_tokens'. */
 const MAX_CONTINUE_TURNS = 3;
 
+/**
+ * task-331 — Map a conversationMessages entry into the snapshot shape used
+ * by `debug_turn.messages`. Preserves the function-calling metadata that
+ * the Debug panel needs to render:
+ *   - `toolCalls` on assistant turns (the LLM's function_call requests)
+ *   - `toolCallId` + `isError` on tool turns (the paired tool_result)
+ *
+ * Content is truncated at 50000 chars; each tool_call input is JSON-stringified
+ * + sliced at 10000 chars before being re-parsed, so a runaway `input` blob
+ * can't blow past the WebSocket frame budget. Unknown roles pass through
+ * unchanged.
+ *
+ * Pure function — no side effects on the input message.
+ *
+ * @param {{ role: string, content?: any, toolCalls?: Array, toolCallId?: string, isError?: boolean }} m
+ * @returns {{ role: string, content: any, toolCalls?: Array, toolCallId?: string, isError?: boolean }}
+ */
+export function mapDebugMessage(m) {
+  const out = { role: m.role };
+  out.content = typeof m.content === 'string' ? m.content.slice(0, 50000) : m.content;
+  if (Array.isArray(m.toolCalls) && m.toolCalls.length > 0) {
+    out.toolCalls = m.toolCalls.map(tc => {
+      let input = tc.input;
+      try {
+        const s = JSON.stringify(input);
+        if (typeof s === 'string' && s.length > 10000) {
+          input = { __truncated: true, preview: s.slice(0, 10000) };
+        }
+      } catch {
+        // Non-serializable input — fall through with raw reference; the
+        // frontend's JSON.stringify will hit the same failure and replace
+        // it with a placeholder string.
+      }
+      return { id: tc.id, name: tc.name, input };
+    });
+  }
+  if (m.toolCallId) out.toolCallId = m.toolCallId;
+  if (m.isError != null) out.isError = m.isError;
+  return out;
+}
+
 // ─── Engine Events (superset of adapter events) ──────────────────
 
 /**
@@ -634,7 +675,7 @@ export class Engine {
           turnNumber,
           model: currentModel,
           systemPrompt,
-          messages: conversationMessages.map(m => ({ role: m.role, content: typeof m.content === 'string' ? m.content.slice(0, 50000) : m.content })),
+          messages: conversationMessages.map(mapDebugMessage),
           response: responseText || `Error: ${err.message}`,
           toolCalls: toolCalls.map(tc => ({ id: tc.id, name: tc.name, input: tc.input })),
           usage: { inputTokens: totalUsage.inputTokens, outputTokens: totalUsage.outputTokens },
@@ -702,12 +743,15 @@ export class Engine {
 
       // Emit debug_turn event for web UI debug panel
       // (conversationMessages does NOT yet include the assistant response at this point)
+      // task-331: preserve toolCalls / toolCallId / isError on each message so
+      // the Debug panel can render function_call requests and their paired
+      // tool_result responses across turns.
       yield {
         type: 'debug_turn',
         turnNumber,
         model: currentModel,
         systemPrompt,
-        messages: conversationMessages.map(m => ({ role: m.role, content: typeof m.content === 'string' ? m.content.slice(0, 50000) : m.content })),
+        messages: conversationMessages.map(mapDebugMessage),
         response: responseText,
         toolCalls: toolCalls.map(tc => ({ id: tc.id, name: tc.name, input: tc.input })),
         usage: { inputTokens: totalUsage.inputTokens, outputTokens: totalUsage.outputTokens },

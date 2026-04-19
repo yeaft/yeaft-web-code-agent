@@ -601,6 +601,105 @@
   color: var(--text-muted);
 }
 
+/* ── task-331: Function Calls panel + structured message rendering ── */
+
+.unify-debug-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.unify-debug-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+}
+.unify-debug-msg-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 11px;
+}
+.unify-debug-msg-role {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.unify-debug-msg-callid {
+  color: var(--text-muted);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 10px;
+}
+.unify-debug-msg-err {
+  color: #d14;
+  font-size: 10px;
+}
+.unify-debug-tc {
+  margin-top: 2px;
+}
+.unify-debug-tc > summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 2px 0;
+}
+.unify-debug-tc-id {
+  color: var(--text-muted);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 10px;
+}
+.unify-debug-pre-args {
+  max-height: 300px;
+}
+
+.unify-debug-fncalls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.unify-debug-fncall {
+  padding: 6px 8px;
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+}
+.unify-debug-fncall-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin-bottom: 4px;
+  font-size: 11px;
+}
+.unify-debug-fncall-num {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.unify-debug-fncall-name {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+.unify-debug-fncall-id {
+  color: var(--text-muted);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 10px;
+}
+.unify-debug-fncall-pending { color: var(--text-muted); font-size: 10px; }
+.unify-debug-fncall-ok      { color: #1a7f37; font-size: 11px; }
+.unify-debug-fncall-err     { color: #d14; font-size: 11px; }
+.unify-debug-fncall > details > summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 2px 0;
+}
+.unify-debug-empty-inline {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 4px 0;
+}
+
 /* ── UnifySettings Panel ── */
 
 .unify-settings {
