@@ -763,12 +763,22 @@ describe('JsRepl tool', () => {
     expect(result).toContain('100');
   });
 
-  it('JsReplReset clears state', async () => {
-    const { jsRepl, jsReplReset } = await import(`${TOOLS_DIR}/js-repl.js`);
+  it('JsRepl reset:true clears state (task-333b merged behaviour)', async () => {
+    const { jsRepl } = await import(`${TOOLS_DIR}/js-repl.js`);
     await jsRepl.execute({ code: 'var resetMe = 1;' }, {});
-    await jsReplReset.execute({}, {});
+    await jsRepl.execute({ reset: true }, {});
     const result = await jsRepl.execute({ code: 'typeof resetMe' }, {});
     expect(result).toContain('undefined');
+  });
+
+  it('JsReplReset deprecated alias still works and is marked DEPRECATED (task-333b)', async () => {
+    const { jsRepl, jsReplReset } = await import(`${TOOLS_DIR}/js-repl.js`);
+    expect(jsReplReset.name).toBe('JsReplReset');
+    expect(jsReplReset.description).toContain('DEPRECATED');
+    await jsRepl.execute({ code: 'var aliasReset = 42;' }, {});
+    await jsReplReset.execute({}, {});
+    const after = await jsRepl.execute({ code: 'typeof aliasReset' }, {});
+    expect(after).toContain('undefined');
   });
 });
 

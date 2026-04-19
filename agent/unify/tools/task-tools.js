@@ -48,7 +48,10 @@ export const taskCreate = defineTool({
 
 Tasks have a title, description, priority, and status.
 Each task gets its own folder with task.md, progress.md, and memory.md.
-Use this to break down complex work into trackable items.`,
+Use this to break down complex work into trackable items.
+
+task-333b: absorbed the former \`SpawnTask\` tool. Pass \`parent_task_id\`
+(or equivalently \`parent_id\`) to create a subtask under an existing task.`,
   parameters: {
     type: 'object',
     properties: {
@@ -69,6 +72,10 @@ Use this to break down complex work into trackable items.`,
         type: 'string',
         description: 'Parent task ID for subtasks',
       },
+      parent_task_id: {
+        type: 'string',
+        description: 'Alias of parent_id (absorbed from the former SpawnTask tool).',
+      },
     },
     required: ['title'],
   },
@@ -78,8 +85,16 @@ Use this to break down complex work into trackable items.`,
     const err = requireStore();
     if (err) return err;
 
-    const { title, description, priority = 'medium', parent_id } = input;
+    const { title, description, priority = 'medium', parent_id, parent_task_id } = input;
     if (!title) return JSON.stringify({ error: 'title is required' });
+
+    // task-333b: accept either `parent_id` (original TaskCreate field) or
+    // `parent_task_id` (the former SpawnTask field). When both are present,
+    // parent_id wins.
+    const parentId = parent_id || parent_task_id || null;
+    if (parentId && !taskStore.get(parentId)) {
+      return JSON.stringify({ error: `Parent task not found: ${parentId}` });
+    }
 
     const id = `task-${randomUUID().slice(0, 8)}`;
     const task = {
@@ -88,7 +103,8 @@ Use this to break down complex work into trackable items.`,
       description: description || '',
       priority,
       status: 'pending',
-      parentId: parent_id || null,
+      parentId,
+      parentTaskId: parentId, // design §5 canonical field
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -97,8 +113,10 @@ Use this to break down complex work into trackable items.`,
 
     return JSON.stringify({
       success: true,
-      task: { id, title, priority, status: 'pending' },
-      message: `Task created: ${title} (${id})`,
+      task: { id, title, priority, status: 'pending', parentTaskId: parentId },
+      message: parentId
+        ? `Subtask created: ${title} (${id}) under ${parentId}`
+        : `Task created: ${title} (${id})`,
     });
   },
 });

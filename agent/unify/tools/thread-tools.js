@@ -193,20 +193,27 @@ the same thread.`,
   },
 });
 
-// ─── SpawnTask (merged — subtask via parent_task_id) ────
+// ─── SpawnTask (deprecated alias — task-333b) ──────────────
+//
+// task-333b folded SpawnTask into TaskCreate (see task-tools.js). Kept
+// registered for one release as a deprecated alias per PM constraint:
+// LLM calls still resolve, but a one-time console.warn nudges migration.
+// Prefer TaskCreate with `parent_task_id` for all new call sites.
 
-/**
- * SpawnTask replaces both the old SpawnTask and the separate SpawnSubtask:
- * pass `parent_task_id` when you want a subtask, omit it for top-level.
- * Per prev-1 rework note: eliminating two tools with the same effect.
- */
+const _spawnTaskWarned = { v: false };
+function warnSpawnTaskDeprecated() {
+  if (_spawnTaskWarned.v) return;
+  _spawnTaskWarned.v = true;
+  // eslint-disable-next-line no-console
+  console.warn('[deprecated] SpawnTask → TaskCreate. Pass parent_task_id to TaskCreate for subtasks.');
+}
+
 export const spawnTask = defineTool({
   name: 'SpawnTask',
-  description: `Spawn a new task. Pass parent_task_id to create a subtask.
-
-When parent_task_id is omitted → top-level task.
-When parent_task_id is provided → subtask under that parent (parent must exist).
-This replaces the deprecated SpawnSubtask tool.`,
+  description: `DEPRECATED (task-333b) — use TaskCreate with parent_task_id instead.
+Retained as a thin alias for backwards compatibility; delegates to the same
+task store. When parent_task_id is omitted this behaves like TaskCreate;
+when provided it creates a subtask under that parent (parent must exist).`,
   parameters: {
     type: 'object',
     properties: {
@@ -226,6 +233,7 @@ This replaces the deprecated SpawnSubtask tool.`,
   isConcurrencySafe: () => false,
   isReadOnly: () => false,
   async execute(input) {
+    warnSpawnTaskDeprecated();
     const store = getTaskStore();
     if (!store) {
       return JSON.stringify({ error: 'Task store not initialized. Session may still be loading.' });

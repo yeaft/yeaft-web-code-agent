@@ -3,6 +3,11 @@
  *
  * Runs JavaScript code in a persistent VM context, allowing
  * state to be maintained across calls.
+ *
+ * task-333b: merged the former `JsReplReset` tool into this one as a
+ * `reset: true` parameter. A single tool with a reset flag eliminates a
+ * duplicate schema entry in the function-call catalogue. The old
+ * JsReplReset name is kept below as a deprecated alias for one release.
  */
 
 import { defineTool } from './types.js';
@@ -55,7 +60,9 @@ defined in one call are available in subsequent calls.
 
 Guidelines:
 - Use for calculations, data transformations, and quick experiments
-- State is preserved between calls (use JsReplReset to clear)
+- State is preserved between calls
+- Pass \`reset: true\` to wipe all state before evaluating (clean slate).
+  \`code\` becomes optional in this mode — pass reset alone to just clear.
 - console.log output is captured and returned
 - Returns the last expression's value plus any console output
 - No filesystem or network access from within the REPL`,
@@ -64,16 +71,27 @@ Guidelines:
     properties: {
       code: {
         type: 'string',
-        description: 'JavaScript code to evaluate',
+        description: 'JavaScript code to evaluate. Optional when reset=true and you only want to clear state.',
+      },
+      reset: {
+        type: 'boolean',
+        description: 'When true, reset the REPL context BEFORE evaluating `code`. If `code` is omitted, just resets.',
       },
     },
-    required: ['code'],
   },
   isConcurrencySafe: () => false,
   isReadOnly: () => true,
   async execute(input, ctx) {
-    const { code } = input;
-    if (!code) return JSON.stringify({ error: 'code is required' });
+    const { code, reset } = input || {};
+
+    if (reset) {
+      vmContext = null;
+      if (!code) {
+        return JSON.stringify({ success: true, message: 'REPL context reset' });
+      }
+    }
+
+    if (!code) return JSON.stringify({ error: 'code is required (or pass reset=true to clear state)' });
 
     const vmCtx = getContext();
 
@@ -87,6 +105,7 @@ Guidelines:
       const resultStr = result === undefined ? '' : String(result);
 
       const parts = [];
+      if (reset) parts.push('(REPL context reset)');
       if (output.length > 0) parts.push(output.join('\n'));
       if (resultStr) parts.push(`→ ${resultStr}`);
 
@@ -101,20 +120,28 @@ Guidelines:
   },
 });
 
+/**
+ * Deprecated alias — `JsReplReset`. task-333b merged reset behaviour into
+ * `JsRepl` via `reset: true`. Kept registered for one release so older
+ * prompts / saved tool calls still resolve. Emits a one-time deprecation
+ * warning on first invocation, then delegates to jsRepl.execute with reset.
+ */
+const _jsReplResetWarned = { v: false };
+function warnJsReplResetDeprecated() {
+  if (_jsReplResetWarned.v) return;
+  _jsReplResetWarned.v = true;
+  // eslint-disable-next-line no-console
+  console.warn('[deprecated] JsReplReset → JsRepl. Call JsRepl with { reset: true } to clear REPL state.');
+}
+
 export const jsReplReset = defineTool({
   name: 'JsReplReset',
-  description: `Reset the JavaScript REPL environment.
-
-Clears all variables and state from previous evaluations.
-Use when you want a clean slate.`,
-  parameters: {
-    type: 'object',
-    properties: {},
-  },
+  description: 'DEPRECATED (task-333b) — use JsRepl with `reset: true` instead. Resets the persistent REPL context. This alias will be removed in a future release.',
+  parameters: { type: 'object', properties: {} },
   isConcurrencySafe: () => false,
   isReadOnly: () => false,
   async execute(input, ctx) {
-    vmContext = null;
-    return JSON.stringify({ success: true, message: 'REPL context reset' });
+    warnJsReplResetDeprecated();
+    return jsRepl.execute({ reset: true }, ctx);
   },
 });
