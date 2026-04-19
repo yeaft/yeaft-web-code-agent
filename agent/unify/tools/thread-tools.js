@@ -210,10 +210,7 @@ function warnSpawnTaskDeprecated() {
 
 export const spawnTask = defineTool({
   name: 'SpawnTask',
-  description: `DEPRECATED (task-333b) — use TaskCreate with parent_task_id instead.
-Retained as a thin alias for backwards compatibility; delegates to the same
-task store. When parent_task_id is omitted this behaves like TaskCreate;
-when provided it creates a subtask under that parent (parent must exist).`,
+  description: `DEPRECATED — use TaskCreate with parent_id instead. Retained as a thin alias for backwards compatibility; delegates to the same task store. When parent_task_id is omitted this behaves like TaskCreate; when provided it creates a subtask under that parent (parent must exist). Removal target: v0.2.0.`,
   parameters: {
     type: 'object',
     properties: {

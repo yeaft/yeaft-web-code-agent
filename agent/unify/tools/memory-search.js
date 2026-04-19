@@ -130,7 +130,7 @@ async function executeLoadWithWarn(input, ctx) {
 
 export const memorySearchAlias = defineTool({
   name: 'memory_search',
-  description: `DEPRECATED alias of memory_load (renamed in task-333b). ${DESCRIPTION}`,
+  description: 'DEPRECATED — use memory_load. Same params. Removal target: v0.2.0.',
   parameters: PARAMETERS,
   isConcurrencySafe: () => true,
   isReadOnly: () => true,

@@ -50,8 +50,7 @@ Tasks have a title, description, priority, and status.
 Each task gets its own folder with task.md, progress.md, and memory.md.
 Use this to break down complex work into trackable items.
 
-task-333b: absorbed the former \`SpawnTask\` tool. Pass \`parent_task_id\`
-(or equivalently \`parent_id\`) to create a subtask under an existing task.`,
+Pass \`parent_id\` to create a subtask under an existing task.`,
   parameters: {
     type: 'object',
     properties: {
@@ -72,10 +71,10 @@ task-333b: absorbed the former \`SpawnTask\` tool. Pass \`parent_task_id\`
         type: 'string',
         description: 'Parent task ID for subtasks',
       },
-      parent_task_id: {
-        type: 'string',
-        description: 'Alias of parent_id (absorbed from the former SpawnTask tool).',
-      },
+      // Note (task-333b): `parent_task_id` is accepted by execute() as a
+      // soft-compat alias for `parent_id` (absorbed from the former
+      // SpawnTask tool) but intentionally NOT advertised in the schema to
+      // avoid giving the LLM two live params for one field.
     },
     required: ['title'],
   },

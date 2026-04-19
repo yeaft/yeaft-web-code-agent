@@ -136,7 +136,7 @@ function warnJsReplResetDeprecated() {
 
 export const jsReplReset = defineTool({
   name: 'JsReplReset',
-  description: 'DEPRECATED (task-333b) — use JsRepl with `reset: true` instead. Resets the persistent REPL context. This alias will be removed in a future release.',
+  description: 'DEPRECATED — use JsRepl with `reset: true` instead. Resets the persistent REPL context. Removal target: v0.2.0.',
   parameters: { type: 'object', properties: {} },
   isConcurrencySafe: () => false,
   isReadOnly: () => false,
