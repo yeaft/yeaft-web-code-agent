@@ -17,9 +17,9 @@ const TOOLS_DIR = join(import.meta.dirname, '..', '..', 'agent', 'unify', 'tools
 // ──────────────────────────────────────────────
 
 describe('index.js tool registration', () => {
-  it('allTools has 49 tools (task-299 rework: -SpawnSubtask +ReadThreadSummary +ReadThreadRecent)', async () => {
+  it('allTools has 48 tools (task-333b: -ToolSearch -WriteStdin +memorySearchAlias)', async () => {
     const { allTools } = await import(`${TOOLS_DIR}/index.js`);
-    expect(allTools.length).toBe(49);
+    expect(allTools.length).toBe(48);
   });
 
   it('all 39 tools have valid name, description, parameters, and execute', async () => {
@@ -763,12 +763,22 @@ describe('JsRepl tool', () => {
     expect(result).toContain('100');
   });
 
-  it('JsReplReset clears state', async () => {
-    const { jsRepl, jsReplReset } = await import(`${TOOLS_DIR}/js-repl.js`);
+  it('JsRepl reset:true clears state (task-333b merged behaviour)', async () => {
+    const { jsRepl } = await import(`${TOOLS_DIR}/js-repl.js`);
     await jsRepl.execute({ code: 'var resetMe = 1;' }, {});
-    await jsReplReset.execute({}, {});
+    await jsRepl.execute({ reset: true }, {});
     const result = await jsRepl.execute({ code: 'typeof resetMe' }, {});
     expect(result).toContain('undefined');
+  });
+
+  it('JsReplReset deprecated alias still works and is marked DEPRECATED (task-333b)', async () => {
+    const { jsRepl, jsReplReset } = await import(`${TOOLS_DIR}/js-repl.js`);
+    expect(jsReplReset.name).toBe('JsReplReset');
+    expect(jsReplReset.description).toContain('DEPRECATED');
+    await jsRepl.execute({ code: 'var aliasReset = 42;' }, {});
+    await jsReplReset.execute({}, {});
+    const after = await jsRepl.execute({ code: 'typeof aliasReset' }, {});
+    expect(after).toContain('undefined');
   });
 });
 
@@ -866,24 +876,10 @@ describe('ImageGeneration tool', () => {
   });
 });
 
-describe('ToolSearch tool', () => {
-  it('finds tools by name', async () => {
-    const mod = await import(`${TOOLS_DIR}/tool-search.js`);
-    const result = JSON.parse(await mod.default.execute(
-      { query: 'Bash' },
-      {}
-    ));
-    expect(result.totalResults).toBeGreaterThan(0);
-    expect(result.results[0].name).toBe('Bash');
-  });
-
-  it('finds tools by description keyword', async () => {
-    const mod = await import(`${TOOLS_DIR}/tool-search.js`);
-    const result = JSON.parse(await mod.default.execute(
-      { query: 'memory' },
-      {}
-    ));
-    expect(result.totalResults).toBeGreaterThan(0);
+describe('ToolSearch tool (removed in task-333b)', () => {
+  it('is no longer registered in allTools', async () => {
+    const { allTools } = await import(`${TOOLS_DIR}/index.js`);
+    expect(allTools.find(t => t.name === 'ToolSearch')).toBeUndefined();
   });
 });
 
@@ -900,15 +896,10 @@ describe('RequestPermissions tool', () => {
   });
 });
 
-describe('WriteStdin tool', () => {
-  it('returns guidance message with pipe syntax', async () => {
-    const mod = await import(`${TOOLS_DIR}/write-stdin.js`);
-    const result = JSON.parse(await mod.default.execute(
-      { data: 'hello' },
-      {}
-    ));
-    expect(result.hint).toBeTruthy();
-    expect(result.example).toContain('hello');
+describe('WriteStdin tool (removed in task-333b)', () => {
+  it('is no longer registered in allTools', async () => {
+    const { allTools } = await import(`${TOOLS_DIR}/index.js`);
+    expect(allTools.find(t => t.name === 'WriteStdin')).toBeUndefined();
   });
 });
 
@@ -933,7 +924,7 @@ describe('Tool properties', () => {
     const { allTools } = await import(`${TOOLS_DIR}/index.js`);
     const readOnlyTools = ['MemoryRead', 'MemorySearch', 'WebSearch', 'WebFetch',
       'HistorySearch', 'FileRead', 'Glob', 'Grep', 'ListDir', 'ViewImage',
-      'ToolSearch', 'RequestPermissions'];
+      'RequestPermissions'];
 
     for (const name of readOnlyTools) {
       const tool = allTools.find(t => t.name === name);

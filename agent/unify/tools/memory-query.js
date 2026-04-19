@@ -10,7 +10,9 @@
  *   3. Returns a compact list suitable for LLM consumption
  *
  * Use this for fuzzy discovery over atomic entries. For loading a known
- * classification file in full, use `memory_search` instead.
+ * classification file in full, use `memory_load` instead (renamed from
+ * the old `memory_search` in task-333b; the old name still works as a
+ * deprecated alias for one release).
  */
 
 import { defineTool } from './types.js';

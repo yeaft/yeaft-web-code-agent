@@ -20,7 +20,7 @@ import exitWorktree from './exit-worktree.js';
 import askUser from './ask-user.js';
 import memoryRead from './memory-read.js';
 import memoryWrite from './memory-write.js';
-import memorySearch from './memory-search.js';
+import memorySearch, { memorySearchAlias } from './memory-search.js';
 import memoryQuery from './memory-query.js';
 import webSearch from './web-search.js';
 import webFetch from './web-fetch.js';
@@ -67,13 +67,14 @@ import {
 } from './thread-tools.js';
 
 // --- P2 Auxiliary tools ---
+// task-333b L1 delete: ToolSearch and WriteStdin removed — the function-call
+// schema already exposes all tools, so ToolSearch was redundant; WriteStdin
+// was a stub returning a hint about Bash piping.
 import { jsRepl, jsReplReset } from './js-repl.js';
 import notebookEdit from './notebook-edit.js';
 import imageGeneration from './image-generation.js';
 import viewImage from './view-image.js';
-import toolSearch from './tool-search.js';
 import requestPermissions from './request-permissions.js';
-import writeStdin from './write-stdin.js';
 
 /**
  * All built-in tools, flattened into a single array.
@@ -92,6 +93,7 @@ export const allTools = [
   memoryRead,
   memoryWrite,
   memorySearch,
+  memorySearchAlias,
   memoryQuery,
   webSearch,
   webFetch,
@@ -139,9 +141,7 @@ export const allTools = [
   notebookEdit,
   imageGeneration,
   viewImage,
-  toolSearch,
   requestPermissions,
-  writeStdin,
 ];
 
 /**
