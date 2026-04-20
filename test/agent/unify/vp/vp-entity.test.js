@@ -116,6 +116,25 @@ describe('vp-store.loadVpFromDir / scanVpLibrary / count', () => {
   it('count returns 0 for missing library dir', () => {
     expect(count({ dir: join(root, 'does-not-exist') })).toBe(0);
   });
+
+  it('personaHash is sha256(body).slice(0,8); same body → same hash', () => {
+    const d1 = writeVp(root, 'h1', { id: 'h1' }, 'persona body shared');
+    const d2 = writeVp(root, 'h2', { id: 'h2' }, 'persona body shared');
+    const v1 = loadVpFromDir(d1);
+    const v2 = loadVpFromDir(d2);
+    expect(v1.personaHash).toBeTruthy();
+    expect(v1.personaHash).toMatch(/^[0-9a-f]{8}$/);
+    expect(v1.personaHash).toBe(v2.personaHash);
+  });
+
+  it('personaHash changes when persona body changes', () => {
+    const dir = writeVp(root, 'changer', { id: 'changer' }, 'first body');
+    const before = loadVpFromDir(dir).personaHash;
+    writeFileSync(join(dir, 'role.md'), `---\nid: changer\n---\nsecond body different\n`);
+    const after = loadVpFromDir(dir).personaHash;
+    expect(after).toMatch(/^[0-9a-f]{8}$/);
+    expect(after).not.toBe(before);
+  });
 });
 
 describe('RoleInstance + Registry', () => {
