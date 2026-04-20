@@ -5,10 +5,11 @@ import UnifySidebarV2 from './UnifySidebarV2.js';
 import UnifyBreadcrumb from './UnifyBreadcrumb.js';
 import UnifyTaskDetailView from './UnifyTaskDetailView.js';
 import VpLibraryLink from './VpLibraryLink.js';
+import VpCrudModal from './VpCrudModal.js';
 
 export default {
   name: 'UnifyPage',
-  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2, UnifyBreadcrumb, UnifyTaskDetailView, VpLibraryLink },
+  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2, UnifyBreadcrumb, UnifyTaskDetailView, VpLibraryLink, VpCrudModal },
   template: `
     <div class="unify-page">
       <!-- Mobile sidebar overlay -->
@@ -236,6 +237,11 @@ export default {
           <span class="unify-detail-hint">{{ $t('unify.comingSoon') }}</span>
         </div>
       </aside>
+
+      <!-- task-334-ui-g: VP library CRUD modal. Mounted inside the root
+           container so Vue sees a single root; the overlay is fixed-position
+           and covers the viewport regardless of parent layout. -->
+      <VpCrudModal v-if="vpLibraryOpen" @close="vpLibraryOpen = false" />
     </div>
   `,
   setup() {
@@ -580,9 +586,10 @@ export default {
       showSettings.value = !showSettings.value;
     };
 
-    // task-334-ui-a: VP library link click. MVP — modal/wizard arrives in 334-ui-g.
+    // task-334-ui-g: VP library modal open state.
+    const vpLibraryOpen = Vue.ref(false);
     const onOpenVpLibrary = () => {
-      console.log('[334-ui-a] VP library open requested — modal pending 334-ui-g');
+      vpLibraryOpen.value = true;
     };
 
     const onSettingsSaved = () => {
@@ -632,6 +639,7 @@ export default {
       toggleSettings,
       onSettingsSaved,
       onOpenVpLibrary,
+      vpLibraryOpen,
       formatMessages,
       formatToolCalls,
       formatMsgContent,

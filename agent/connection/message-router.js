@@ -36,7 +36,7 @@ import { sendToServer, flushMessageBuffer } from './buffer.js';
 import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
 import { getLlmConfig, updateLlmConfig, getUnifySettings, updateUnifySettings } from '../unify/config-api.js';
-import { handleUnifyChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyMergeThread, handleUnifyForkThread, handleUnifyAbortThread, handleUnifyAbortAll, handleUnifyVpSubscribe } from '../unify/web-bridge.js';
+import { handleUnifyChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyMergeThread, handleUnifyForkThread, handleUnifyAbortThread, handleUnifyAbortAll, handleUnifyVpSubscribe, handleUnifyVpCreate, handleUnifyVpUpdate, handleUnifyVpDelete, handleUnifyVpRead } from '../unify/web-bridge.js';
 
 export async function handleMessage(msg) {
   switch (msg.type) {
@@ -401,6 +401,23 @@ export async function handleMessage(msg) {
     // vp_snapshot event. Live diff (vp_updated/vp_removed) deferred to 334h.
     case 'unify_vp_subscribe':
       handleUnifyVpSubscribe(msg);
+      break;
+
+    // task-334-ui-g: VP CRUD (create / update / delete / read-single).
+    // All four reply via `vp_crud_result`; VpLoader's rescan emits the
+    // authoritative `vp_updated` / `vp_removed` events so the store stays
+    // in sync without a bespoke ack path.
+    case 'unify_vp_create':
+      handleUnifyVpCreate(msg);
+      break;
+    case 'unify_vp_update':
+      handleUnifyVpUpdate(msg);
+      break;
+    case 'unify_vp_delete':
+      handleUnifyVpDelete(msg);
+      break;
+    case 'unify_vp_read':
+      handleUnifyVpRead(msg);
       break;
 
     // Expert roles definition (for ExpertPanel detail view)

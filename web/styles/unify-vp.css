@@ -206,3 +206,262 @@
 .assistant-turn.has-vp-speaker > .turn-content {
   margin-top: 2px;
 }
+
+/* =========================================================================
+ * VpCrudModal — task-334-ui-g
+ * List + form view inside a centred modal. Matches the flat / no-divider
+ * aesthetic of Unify (CLAUDE.md "Unify UI Design Rules"): spacing not lines.
+ * ========================================================================= */
+.vp-crud-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 24px;
+}
+
+.vp-crud-modal {
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #1f2937);
+  border-radius: 12px;
+  width: min(720px, 100%);
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+}
+
+.vp-crud-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 22px 6px;
+}
+
+.vp-crud-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.vp-crud-close {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--text-secondary, #6b7280);
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+.vp-crud-close:hover { background: var(--bg-hover, #f3f4f6); color: var(--text-primary, #111827); }
+
+.vp-crud-body {
+  padding: 12px 22px 22px;
+  overflow-y: auto;
+}
+
+/* ---------- List view ---------- */
+.vp-crud-list-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
+.vp-crud-empty {
+  text-align: center;
+  padding: 48px 0 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+.vp-crud-empty-text {
+  color: var(--text-secondary, #6b7280);
+  max-width: 420px;
+}
+
+.vp-crud-card-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.vp-crud-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--bg-secondary, #f9fafb);
+}
+
+.vp-crud-card-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.vp-crud-card-meta {
+  flex: 1;
+  min-width: 0;
+}
+.vp-crud-card-name { font-weight: 600; }
+.vp-crud-card-id {
+  font-size: 12px;
+  color: var(--text-secondary, #6b7280);
+}
+.vp-crud-card-role {
+  font-size: 13px;
+  color: var(--text-secondary, #6b7280);
+  margin-top: 2px;
+}
+
+.vp-crud-card-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* ---------- Form view ---------- */
+.vp-crud-form-header {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.vp-crud-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 14px;
+}
+
+.vp-crud-field-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary, #1f2937);
+}
+
+.vp-crud-input,
+.vp-crud-textarea {
+  font: inherit;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color, #d1d5db);
+  border-radius: 6px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #1f2937);
+  outline: none;
+  transition: border-color .15s, box-shadow .15s;
+}
+.vp-crud-input:focus,
+.vp-crud-textarea:focus {
+  border-color: var(--accent-color, #3b82f6);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+}
+.vp-crud-input:disabled,
+.vp-crud-input[readonly] {
+  background: var(--bg-secondary, #f3f4f6);
+  color: var(--text-secondary, #6b7280);
+}
+
+.vp-crud-input.is-error {
+  border-color: #dc2626;
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.12);
+}
+.vp-crud-input.is-ok {
+  border-color: #16a34a;
+  box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.12);
+}
+
+.vp-crud-textarea {
+  min-height: 140px;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.vp-crud-hint {
+  font-size: 12px;
+  color: var(--text-secondary, #6b7280);
+}
+.vp-crud-hint-muted { opacity: .8; }
+
+.vp-crud-field-error {
+  font-size: 12px;
+  color: #dc2626;
+}
+.vp-crud-field-ok {
+  font-size: 12px;
+  color: #16a34a;
+}
+
+.vp-crud-form-error {
+  color: #dc2626;
+  background: rgba(220, 38, 38, 0.08);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+
+.vp-crud-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+/* ---------- Buttons ---------- */
+.vp-crud-primary-btn {
+  background: var(--accent-color, #3b82f6);
+  color: #fff;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background .15s, opacity .15s;
+}
+.vp-crud-primary-btn:hover:not(:disabled) { filter: brightness(1.05); }
+.vp-crud-primary-btn:disabled { opacity: .55; cursor: not-allowed; }
+
+.vp-crud-link-btn {
+  background: transparent;
+  color: var(--text-primary, #1f2937);
+  border: 1px solid var(--border-color, #d1d5db);
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.vp-crud-link-btn:hover:not(:disabled) { background: var(--bg-hover, #f3f4f6); }
+.vp-crud-link-btn:disabled { opacity: .55; cursor: not-allowed; }
+.vp-crud-link-btn.is-danger { color: #b91c1c; }
+.vp-crud-link-btn.is-danger:hover:not(:disabled) {
+  background: rgba(220, 38, 38, 0.08);
+  border-color: #dc2626;
+}
+
+/* Dark mode overrides */
+[data-theme="dark"] .vp-crud-modal {
+  background: var(--bg-primary, #1f2937);
+  color: var(--text-primary, #f3f4f6);
+}
+[data-theme="dark"] .vp-crud-card {
+  background: var(--bg-secondary, #111827);
+}
+[data-theme="dark"] .vp-crud-input,
+[data-theme="dark"] .vp-crud-textarea {
+  background: var(--bg-secondary, #111827);
+  color: var(--text-primary, #f3f4f6);
+  border-color: var(--border-color, #374151);
+}
