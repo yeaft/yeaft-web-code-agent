@@ -26,6 +26,7 @@ import { loadSession } from './session.js';
 import { sendToServer } from '../connection/buffer.js';
 import ctx from '../context.js';
 import { getThreadStore, MAIN_THREAD_ID } from './threads/store.js';
+import { handleVpSubscribe } from './vp/vp-bridge.js';
 
 /** @type {import('./session.js').Session | null} */
 let session = null;
@@ -101,6 +102,15 @@ function sendUnifyEvent(event) {
     conversationId: unifyConversationId,
     event,
   });
+}
+
+/**
+ * task-334-ui-a: respond to `unify_vp_subscribe` from the web client by
+ * pushing a one-shot `vp_snapshot` event. Live diff (vp_updated /
+ * vp_removed) is intentionally deferred to 334h per ruling §3.
+ */
+export function handleUnifyVpSubscribe(_msg) {
+  handleVpSubscribe(sendUnifyEvent);
 }
 
 /**

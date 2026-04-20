@@ -847,4 +847,10 @@ export default {
   'splitScreen.assignSession': '分配会话到面板',
   'splitScreen.splitToPanel': '在新面板中打开',
   'splitScreen.selectFromSidebar': '从左侧选择对话',
+
+  // ============ Unify VP 库 (task-334-ui-a) ============
+  'unify.vp.library': '角色库',
+  'unify.vp.createFirst': '+ 创建你的第一个角色',
+  'unify.vp.empty.aria': '尚无角色',
+  'unify.vp.avatar.aria': '{name} 头像',
 };
