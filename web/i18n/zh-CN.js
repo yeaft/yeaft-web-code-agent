@@ -857,8 +857,7 @@ export default {
   // ============ Unify VP 发言头 (task-334-ui-b) ============
   'unify.vp.speaker.stateCauseAria': '状态变更：{cause}',
 
-  // ============ Unify VP 增删改查 (task-334-ui-g) ============
-  'unify.vp.crud.title': '角色库',
+  // ============ Unify VP 增删改查 (task-334-ui-g) =====  'unify.vp.crud.title': '角色库',
   'unify.vp.crud.close': '关闭',
   'unify.vp.crud.addNew': '+ 新建角色',
   'unify.vp.crud.empty': '还没有角色。创建第一个角色开始协作吧。',
@@ -896,4 +895,35 @@ export default {
   'unify.vp.idError.pure_digits': '角色 ID 不能是纯数字。',
   'unify.vp.idError.reserved': '角色 ID 不能用保留名（all / user / system / everyone）。',
   'unify.vp.idError.duplicate': '已经存在同 ID 的角色。',
+
+  // ============ Unify VP 详情页 (task-334-ui-c) ============
+  'unify.vp.detail.title': '角色详情',
+  'unify.vp.detail.back': '返回角色库',
+  'unify.vp.detail.backAria': '返回角色库（Esc）',
+  'unify.vp.detail.role': '角色',
+  'unify.vp.detail.traits': '特征',
+  'unify.vp.detail.modelHint': '模型偏好',
+  'unify.vp.detail.persona': '人设',
+  'unify.vp.detail.personaEmpty': '（未载入人设正文）',
+  'unify.vp.detail.activity': '最近活动',
+  'unify.vp.detail.activityEmpty': '该角色暂无最近消息。',
+  'unify.vp.detail.activityPrivate': '任务私信 — 即将推出。',
+  'unify.vp.detail.editHint': '在「角色库 → 编辑」中修改（task-334-ui-g）。',
+  'unify.vp.detail.personaHashAria': '人设内容哈希 {hash}',
+  'unify.vp.detail.notFound': '未找到该角色 — 可能已被移除。',
+  'unify.vp.detail.traitsEmpty': '（无特征）',
+  'unify.vp.detail.modelHintEmpty': '（默认）',
+
+  // ============ Unify VP live-diff 事件原因 (task-334-ui-c / O4) ============
+  // vp_updated / vp_removed 事件到达时显示给用户的人话文案。
+  // 取代 snake_case 分类标签，避免在 toast / 活动列表中泄漏。
+  'unify.vp.reason.personaEdit': '人设已更新',
+  'unify.vp.reason.traitsEdit': '特征已更新',
+  'unify.vp.reason.manualReload': '已重新载入',
+  'unify.vp.reason.fileRemoved': '已移除',
+  'unify.vp.reason.toast.updated': '{name}：{reason}',
+  'unify.vp.reason.toast.removed': '{name} 已被移除',
+
+  // ============ Unify 每条消息 hover 时间戳 (task-334-ui-c / prev-2 backlog) ============
+  'unify.message.timeAria': '发送于 {time}',
 };

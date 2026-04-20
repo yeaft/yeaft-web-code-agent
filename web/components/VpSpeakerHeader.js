@@ -25,6 +25,7 @@ import VpBadge from './VpBadge.js';
 export default {
   name: 'VpSpeakerHeader',
   components: { VpBadge },
+  emits: ['open-detail'],
   props: {
     vpId: { type: String, required: true },
     timestamp: { type: Number, default: 0 },
@@ -32,7 +33,13 @@ export default {
   },
   template: `
     <div class="vp-speaker-header" :data-vp-id="vpId">
-      <VpBadge :vp-id="vpId" :size="24" :show-subtitle="true" />
+      <VpBadge
+        :vp-id="vpId"
+        :size="24"
+        :show-subtitle="true"
+        :clickable="true"
+        @open-detail="$emit('open-detail', $event)"
+      />
       <span
         v-if="stateCause"
         class="vp-speaker-state-cause"
