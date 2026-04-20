@@ -69,3 +69,61 @@ export class ReservedVpIdError extends Error {
     this.vpId = vpId;
   }
 }
+
+/**
+ * Character + shape whitelist for a user-facing vpId. Stricter than
+ * `parseMentions` (Postel's law: be lenient on input, be strict on storage).
+ *
+ * Rules (task-334d, absorbing 334b follow-up #1):
+ *   - Must be a non-empty string
+ *   - Length 1..40
+ *   - Characters: `[A-Za-z0-9_-]` only
+ *   - Must NOT start with `_` (underscore reserved for future system roles)
+ *   - Must NOT be purely digits
+ *   - Must NOT be a reserved vpId (delegates to isReservedVpId)
+ *
+ * Returns `{ ok, reason? }`. The callsites that want a boolean use
+ * `isValidVpId(id)` (truthy only when ok). Error strings are stable so UI
+ * can key on them for i18n (prev-1 nit: UX-friendly messages come later;
+ * this layer exposes raw reasons).
+ */
+const VP_ID_RE = /^[A-Za-z0-9_-]+$/;
+const PURE_DIGITS_RE = /^[0-9]+$/;
+const VP_ID_MAX_LEN = 40;
+
+export function validateVpId(id) {
+  if (!id || typeof id !== 'string') {
+    return { ok: false, reason: 'empty_or_non_string' };
+  }
+  if (id.length > VP_ID_MAX_LEN) {
+    return { ok: false, reason: 'too_long' };
+  }
+  if (!VP_ID_RE.test(id)) {
+    return { ok: false, reason: 'illegal_character' };
+  }
+  if (id.startsWith('_')) {
+    return { ok: false, reason: 'underscore_prefix_reserved' };
+  }
+  if (PURE_DIGITS_RE.test(id)) {
+    return { ok: false, reason: 'pure_digits' };
+  }
+  if (isReservedVpId(id)) {
+    return { ok: false, reason: 'reserved' };
+  }
+  return { ok: true };
+}
+
+/** Convenience boolean wrapper for call-sites that don't care about the reason. */
+export function isValidVpId(id) {
+  return validateVpId(id).ok;
+}
+
+/** Thrown by CRUD entry points on an invalid (non-reserved) vpId shape. */
+export class InvalidVpIdError extends Error {
+  constructor(vpId, reason) {
+    super(`vpId "${vpId}" is invalid (${reason})`);
+    this.name = 'InvalidVpIdError';
+    this.vpId = vpId;
+    this.reason = reason;
+  }
+}

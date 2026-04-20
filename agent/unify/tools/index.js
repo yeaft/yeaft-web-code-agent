@@ -43,6 +43,9 @@ import waitAgent from './wait-agent.js';
 import closeAgent from './close-agent.js';
 import listAgents from './list-agents.js';
 
+// --- P1 Routing tools (task-334d) ---
+import routeForward from './route-forward.js';
+
 // --- P1 Task tools ---
 import {
   taskCreate,
@@ -115,6 +118,9 @@ export const allTools = [
   waitAgent,
   closeAgent,
   listAgents,
+
+  // P1 Routing (task-334d)
+  routeForward,
 
   // P1 Task
   taskCreate,

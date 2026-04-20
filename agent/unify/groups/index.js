@@ -44,4 +44,7 @@ export {
   isReservedVpId,
   RESERVED_VP_IDS,
   ReservedVpIdError,
+  isValidVpId,
+  validateVpId,
+  InvalidVpIdError,
 } from './ids.js';
