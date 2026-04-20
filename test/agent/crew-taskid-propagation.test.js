@@ -62,10 +62,21 @@ describe('dispatchToRole — sticky currentTask across dispatches', () => {
 // 2. executeRoute: taskId fallback chain (task-321 fix 3)
 // =====================================================================
 describe('executeRoute — taskId fallback when ROUTE omits `task:`', () => {
-  const fn = routingJs.match(/export async function executeRoute\b[\s\S]*?^}/m)?.[0] || '';
+  // task-335: per-target dispatch logic was extracted into _dispatchOneTarget.
+  // The fallback chain still lives in executeRoute (run once per fan-out),
+  // but the per-target ensureTaskFile / appendTaskRecord lines moved to the
+  // helper. Match both bodies to keep coverage stable across the refactor.
+  const fnExec = routingJs.match(/export async function executeRoute\b[\s\S]*?^}/m)?.[0] || '';
+  const fnDispatch = routingJs.match(/async function _dispatchOneTarget\b[\s\S]*?^}/m)?.[0] || '';
+  const fn = fnExec + '\n' + fnDispatch;
 
-  it('destructures `to, summary, taskId, taskTitle` with let (re-assignable)', () => {
-    expect(fn).toMatch(/let\s+\{\s*to,\s*summary,\s*taskId,\s*taskTitle\s*\}\s*=\s*route/);
+  it('destructures `to, summary, taskId, taskTitle` (re-assignable for fallback)', () => {
+    // task-335: `to` is now derived from `route.toList[]` (loop variable),
+    // so the executeRoute body destructures `summary, taskId, taskTitle`
+    // and pulls `to` per-iteration. The intent — re-assignable bindings
+    // for the fallback chain — is preserved.
+    expect(fnExec).toMatch(/let\s+\{\s*summary,\s*taskId,\s*taskTitle\s*\}\s*=\s*route/);
+    expect(fnExec).toMatch(/for\s*\(\s*const\s+to\s+of\s+toList\s*\)/);
   });
 
   it('consults sender roleState.currentTask when taskId missing', () => {
