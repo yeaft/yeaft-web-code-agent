@@ -32,6 +32,7 @@ import { createIntentClassifier } from './router/intent-classifier.js';
 import { initInputQueueStore } from './input-queue/store.js';
 import { createDispatcher } from './pipeline/dispatcher.js';
 import { join } from 'path';
+import { existsSync as existsSyncSafe, readFileSync as readFileSyncSafe } from 'fs';
 
 /**
  * @typedef {Object} SessionOptions
@@ -103,6 +104,30 @@ export async function loadSession(options = {}) {
 
   // ─── 2. Load config ───────────────────────────────────
   const config = loadConfig(overrides);
+
+  // ─── 2.1 Migration state check (task-334i) ────────────
+  //        If the group-chat feature flag is on but migration has not
+  //        completed, warn the user. Do NOT auto-run migration: that is
+  //        an explicit action via bin/yeaft-migrate.js.
+  try {
+    if (config?.features?.unifyGroupChat === true) {
+      const stateFile = join(yeaftDir, '.migration-state.json');
+      let completed = false;
+      if (existsSyncSafe(stateFile)) {
+        try {
+          const raw = readFileSyncSafe(stateFile, 'utf8');
+          const state = JSON.parse(raw || '{}');
+          completed = Boolean(state && state.completedAt);
+        } catch { /* malformed state → treat as not completed */ }
+      }
+      if (!completed) {
+        console.warn(
+          '[Yeaft] features.unifyGroupChat=true but storage migration is not complete. ' +
+          'Run `yeaft-migrate` before using the new group-chat tree, or unset the flag.',
+        );
+      }
+    }
+  } catch { /* never let this warn path block session load */ }
 
   // ─── 2a. Permission pre-check ─────────────────────────
   //         If the data dir is not writable, mark session as read-only.
