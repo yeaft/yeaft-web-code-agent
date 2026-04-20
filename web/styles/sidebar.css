@@ -1545,9 +1545,9 @@
 }
 
 .message.user {
-  background: var(--bg-user-msg);
-  padding: 10px 16px;
-  border-radius: 18px;
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
   align-self: flex-end;
   max-width: 80%;
   font-size: 15px;
