@@ -1,0 +1,148 @@
+/* ============================================================
+ * unify-vp.css — task-334-ui-a §5
+ * VP avatar + badge + library link.
+ * ============================================================ */
+
+:root {
+  --vp-palette-1:  #5B8DEF;
+  --vp-palette-2:  #E07A5F;
+  --vp-palette-3:  #81B29A;
+  --vp-palette-4:  #F2CC8F;
+  --vp-palette-5:  #8367C7;
+  --vp-palette-6:  #5DB6A8;
+  --vp-palette-7:  #E8A87C;
+  --vp-palette-8:  #C38D9E;
+  --vp-palette-9:  #3D5A80;
+  --vp-palette-10: #EE6C4D;
+  --vp-palette-11: #98C1D9;
+  --vp-palette-12: #293241;
+
+  --vp-avatar-fg: #ffffff;
+  --vp-status-online: #3fb950;
+  --vp-status-busy:   #f2994a;
+
+  --vp-badge-subtitle-fg: var(--text-secondary, #6b7280);
+}
+
+[data-theme="dark"] {
+  --vp-status-online: #56d364;
+  --vp-status-busy:   #ff9e2c;
+}
+
+/* ─── VpAvatar ───────────────────────────────────────────── */
+.vp-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--vp-avatar-fg);
+  font-weight: 600;
+  font-family: var(--font-sans, system-ui, sans-serif);
+  position: relative;
+  flex-shrink: 0;
+  line-height: 1;
+  user-select: none;
+}
+
+.vp-avatar-letter {
+  display: inline-block;
+  transform: translateY(-0.5px);
+}
+
+.vp-avatar-status-dot {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 2px solid var(--bg-main, #ffffff);
+  box-sizing: content-box;
+}
+.vp-avatar-status-dot.status-online { background: var(--vp-status-online); }
+.vp-avatar-status-dot.status-busy {
+  background: var(--vp-status-busy);
+  animation: vp-busy-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes vp-busy-pulse {
+  0%, 100% { opacity: 1;    transform: scale(1); }
+  50%      { opacity: 0.55; transform: scale(0.85); }
+}
+
+/* ─── VpBadge ────────────────────────────────────────────── */
+.vp-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.vp-badge.compact { gap: 6px; }
+
+.vp-badge-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.2;
+}
+.vp-badge-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vp-badge-subtitle {
+  font-size: 12px;
+  color: var(--vp-badge-subtitle-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ─── VpLibraryLink ──────────────────────────────────────── */
+.vp-library-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text-primary);
+  font-size: 13px;
+  text-align: left;
+  transition: background 120ms ease;
+}
+.vp-library-link:hover {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+}
+.vp-library-link:focus-visible {
+  outline: 2px solid var(--accent, #5B8DEF);
+  outline-offset: 1px;
+}
+.vp-library-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+.vp-library-label {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vp-library-count {
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 1px 6px;
+  background: var(--bg-subtle, rgba(0, 0, 0, 0.05));
+  border-radius: 8px;
+}
+.vp-library-arrow {
+  color: var(--text-secondary);
+  opacity: 0.6;
+}
+.vp-library-link.is-empty .vp-library-arrow { opacity: 0.4; }

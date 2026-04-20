@@ -847,4 +847,10 @@ export default {
   'splitScreen.assignSession': 'Assign sessions to panes',
   'splitScreen.splitToPanel': 'Open in new panel',
   'splitScreen.selectFromSidebar': 'Select a conversation from the sidebar',
+
+  // ============ Unify VP Library (task-334-ui-a) ============
+  'unify.vp.library': 'VP Library',
+  'unify.vp.createFirst': '+ Create your first role',
+  'unify.vp.empty.aria': 'No virtual persons yet',
+  'unify.vp.avatar.aria': '{name} avatar',
 };

@@ -36,7 +36,7 @@ import { sendToServer, flushMessageBuffer } from './buffer.js';
 import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
 import { getLlmConfig, updateLlmConfig, getUnifySettings, updateUnifySettings } from '../unify/config-api.js';
-import { handleUnifyChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyMergeThread, handleUnifyForkThread, handleUnifyAbortThread, handleUnifyAbortAll } from '../unify/web-bridge.js';
+import { handleUnifyChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyMergeThread, handleUnifyForkThread, handleUnifyAbortThread, handleUnifyAbortAll, handleUnifyVpSubscribe } from '../unify/web-bridge.js';
 
 export async function handleMessage(msg) {
   switch (msg.type) {
@@ -395,6 +395,12 @@ export async function handleMessage(msg) {
       // task-325c: user-initiated abort of ALL in-flight queries across
       // every thread. Always emits `unify_aborted` ack.
       handleUnifyAbortAll();
+      break;
+
+    // task-334-ui-a: VP library subscribe — replies with one-shot
+    // vp_snapshot event. Live diff (vp_updated/vp_removed) deferred to 334h.
+    case 'unify_vp_subscribe':
+      handleUnifyVpSubscribe(msg);
       break;
 
     // Expert roles definition (for ExpertPanel detail view)

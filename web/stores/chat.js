@@ -583,6 +583,11 @@ export const useChatStore = defineStore('chat', {
           if (this.currentView === 'unify') {
             this.activeConversations = [agentConvId];
           }
+
+          // ★ task-334-ui-a: subscribe to VP library snapshot.
+          // Snapshot-only this slice; live diff (vp_updated/vp_removed)
+          // arrives via the same channel once 334h ships.
+          this.sendWsMessage({ type: 'unify_vp_subscribe' });
           break;
         }
 
@@ -620,6 +625,26 @@ export const useChatStore = defineStore('chat', {
           // History messages already rendered via sendUnifyOutput (data path).
           // This event just signals completion — no additional action needed.
           break;
+
+        // ★ task-334-ui-a: VP library snapshot + (stub) live diff.
+        case 'vp_snapshot': {
+          // Lazy import to avoid circular dep at module load.
+          const vp = window.Pinia?.useVpStore?.() || (window.__useVpStore && window.__useVpStore());
+          if (vp) vp.applySnapshot(event);
+          break;
+        }
+        case 'vp_updated': {
+          // TODO(334h): live diff path — wire VpLoader.onChange in vp-bridge.js.
+          const vp = window.Pinia?.useVpStore?.() || (window.__useVpStore && window.__useVpStore());
+          if (vp && event.vp) vp.upsert(event.vp);
+          break;
+        }
+        case 'vp_removed': {
+          // TODO(334h): live diff path — wire VpLoader.onChange in vp-bridge.js.
+          const vp = window.Pinia?.useVpStore?.() || (window.__useVpStore && window.__useVpStore());
+          if (vp && event.vpId) vp.remove(event.vpId);
+          break;
+        }
 
         // ★ task-301 Part 2: real-store push from agent.
         // Agent's ThreadStore changes (SpawnThread / SwitchThread /
