@@ -41,4 +41,7 @@ export {
   nextMsgId,
   nextGroupId,
   newUlidLite,
+  isReservedVpId,
+  RESERVED_VP_IDS,
+  ReservedVpIdError,
 } from './ids.js';

@@ -26,7 +26,7 @@ import {
 } from 'fs';
 import { join } from 'path';
 import { writeAtomic, openLog } from '../storage/index.js';
-import { nextMsgId } from './ids.js';
+import { nextMsgId, isReservedVpId, ReservedVpIdError } from './ids.js';
 
 const GROUP_FILE = 'group.json';
 const MESSAGES_DIR = 'messages';
@@ -110,10 +110,17 @@ export function createGroup(groupsRoot, spec) {
   if (h.getMeta()) {
     throw new Error(`group ${spec.id} already exists`);
   }
+  const roster = Array.isArray(spec.roster) ? spec.roster.slice() : [];
+  for (const v of roster) {
+    if (isReservedVpId(v)) throw new ReservedVpIdError(v);
+  }
+  if (spec.defaultVpId && isReservedVpId(spec.defaultVpId)) {
+    throw new ReservedVpIdError(spec.defaultVpId);
+  }
   const meta = {
     id: spec.id,
     name: spec.name || spec.id,
-    roster: Array.isArray(spec.roster) ? spec.roster.slice() : [],
+    roster,
     defaultVpId: spec.defaultVpId || null,
     createdAt: spec.createdAt || new Date().toISOString(),
   };

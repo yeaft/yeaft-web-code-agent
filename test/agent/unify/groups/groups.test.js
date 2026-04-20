@@ -20,6 +20,9 @@ import {
   DEFAULT_GROUP_ID,
   nextMsgId,
   nextGroupId,
+  isReservedVpId,
+  RESERVED_VP_IDS,
+  ReservedVpIdError,
 } from '../../../../agent/unify/groups/index.js';
 
 let root;
@@ -47,6 +50,19 @@ describe('ids', () => {
   it('nextGroupId slugifies input', () => {
     expect(nextGroupId('My Team!')).toBe('grp_my-team-');
     expect(nextGroupId('')).toBe('grp_group');
+  });
+
+  it('isReservedVpId flags sentinels (case-insensitive) and exports the set', () => {
+    expect(RESERVED_VP_IDS).toContain('all');
+    expect(RESERVED_VP_IDS).toContain('user');
+    for (const id of ['all', 'All', 'USER', 'system', 'everyone']) {
+      expect(isReservedVpId(id)).toBe(true);
+    }
+    for (const id of ['architect', 'alice', 'bob', 'all_hands', '']) {
+      expect(isReservedVpId(id)).toBe(false);
+    }
+    expect(isReservedVpId(null)).toBe(false);
+    expect(isReservedVpId(undefined)).toBe(false);
   });
 });
 
@@ -102,6 +118,18 @@ describe('group-store', () => {
     const h = createGroup(groupsRoot, { id: 'grp_a', roster: [] });
     expect(() => h.saveMeta({ id: 'grp_a', roster: 'bad' })).toThrow(/roster/);
     expect(() => h.saveMeta({ id: 'grp_a', roster: [42] })).toThrow(/roster/);
+  });
+
+  it('createGroup rejects reserved vpIds in initial roster / defaultVpId', () => {
+    expect(() => createGroup(groupsRoot, { id: 'grp_r1', roster: ['all'] }))
+      .toThrow(ReservedVpIdError);
+    expect(() => createGroup(groupsRoot, { id: 'grp_r2', roster: ['alice', 'system'] }))
+      .toThrow(/reserved/);
+    expect(() => createGroup(groupsRoot, { id: 'grp_r3', roster: ['alice'], defaultVpId: 'user' }))
+      .toThrow(ReservedVpIdError);
+    // Non-reserved roster proceeds normally.
+    const h = createGroup(groupsRoot, { id: 'grp_ok', roster: ['architect'], defaultVpId: 'architect' });
+    expect(h.getMeta().roster).toEqual(['architect']);
   });
 });
 
@@ -159,6 +187,14 @@ describe('roster', () => {
     const m = addVp(base, 'alice');
     expect(isMember(m, 'alice')).toBe(true);
     expect(isMember(m, 'stranger')).toBe(false);
+  });
+
+  it('addVp throws ReservedVpIdError on reserved vpId (e.g. "all")', () => {
+    expect(() => addVp(base, 'all')).toThrow(ReservedVpIdError);
+    expect(() => addVp(base, 'user')).toThrow(/reserved/);
+    // Non-reserved id (including names containing reserved substrings) pass.
+    expect(addVp(base, 'architect').roster).toEqual(['architect']);
+    expect(addVp(base, 'all_hands').roster).toEqual(['all_hands']);
   });
 });
 

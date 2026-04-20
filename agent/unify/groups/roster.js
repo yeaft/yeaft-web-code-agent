@@ -12,10 +12,15 @@
  * and optionally notify listeners.
  */
 
+import { isReservedVpId, ReservedVpIdError } from './ids.js';
+
 /** Returns a cloned roster array with `vpId` appended if not already present. */
 export function addVp(meta, vpId) {
   if (!vpId || typeof vpId !== 'string') {
     throw new Error('addVp: vpId required (string)');
+  }
+  if (isReservedVpId(vpId)) {
+    throw new ReservedVpIdError(vpId);
   }
   const roster = meta.roster.slice();
   if (!roster.includes(vpId)) roster.push(vpId);

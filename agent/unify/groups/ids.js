@@ -42,3 +42,30 @@ export function nextGroupId(slug = 'default') {
   const safe = String(slug).toLowerCase().replace(/[^a-z0-9_-]+/g, '-').slice(0, 32) || 'group';
   return `grp_${safe}`;
 }
+
+/**
+ * Reserved vpIds that must never be used as actual VP identifiers — they
+ * collide with coordinator-level sentinels (`@all` broadcast, `user`/`system`
+ * sender roles) and would cause silent footguns (a vpId=`all` VP would be
+ * absorbed into broadcast). Enforced at CRUD boundaries (addVp, createGroup).
+ *
+ * prev-1 nit #4 (blocker-fix): @foo/@all/@user are the mental bedrock of all
+ * future UI — protecting the names here prevents dirty data from reaching the
+ * Engine and requiring a migration slice later.
+ */
+export const RESERVED_VP_IDS = Object.freeze(['all', 'user', 'system', 'everyone']);
+
+/** True iff `id` (case-insensitive) is a reserved vp identifier. */
+export function isReservedVpId(id) {
+  if (!id || typeof id !== 'string') return false;
+  return RESERVED_VP_IDS.includes(id.toLowerCase());
+}
+
+/** Thrown by CRUD entry points when a reserved vpId is supplied. */
+export class ReservedVpIdError extends Error {
+  constructor(vpId) {
+    super(`vpId "${vpId}" is reserved (${RESERVED_VP_IDS.join(', ')})`);
+    this.name = 'ReservedVpIdError';
+    this.vpId = vpId;
+  }
+}
