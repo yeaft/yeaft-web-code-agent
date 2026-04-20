@@ -27,6 +27,7 @@ import { sendToServer } from '../connection/buffer.js';
 import ctx from '../context.js';
 import { getThreadStore, MAIN_THREAD_ID } from './threads/store.js';
 import { handleVpSubscribe } from './vp/vp-bridge.js';
+import { createVp, updateVp, deleteVp, readVp, VpCrudError } from './vp/vp-crud.js';
 
 /** @type {import('./session.js').Session | null} */
 let session = null;
@@ -112,6 +113,105 @@ function sendUnifyEvent(event) {
  */
 export function handleUnifyVpSubscribe(_msg) {
   handleVpSubscribe(sendUnifyEvent);
+}
+
+/**
+ * task-334-ui-g: VP CRUD from the web client.
+ *
+ * Thin dispatcher over agent/unify/vp/vp-crud.js. We never throw on the WS
+ * path — each op reports via `unify_output` with a structured payload so
+ * the UI can surface errors as i18n strings keyed by `error.code`. VpLoader
+ * picks up the on-disk change on its next debounced rescan (default 500ms)
+ * and fans out `vp_updated` / `vp_removed` events to every subscriber, so
+ * we do not need to emit an extra snapshot here.
+ *
+ * Message shapes (wire):
+ *   unify_vp_create  { payload: {vpId, displayName, role, traits, modelHint, persona}, requestId? }
+ *   unify_vp_update  { payload: {...}, requestId? }
+ *   unify_vp_delete  { vpId, requestId? }
+ *   unify_vp_read    { vpId, requestId? }
+ *
+ * Replies (all sent through sendUnifyEvent):
+ *   { type: 'vp_crud_result', op, requestId, ok, vpId?, vp?, error?: {code, vpId?} }
+ */
+function sendVpCrudResult(payload) {
+  sendUnifyEvent({ type: 'vp_crud_result', ...payload });
+}
+
+export function handleUnifyVpCreate(msg) {
+  const requestId = msg && msg.requestId;
+  const payload = msg && msg.payload;
+  try {
+    const { vpId } = createVp(payload || {});
+    sendVpCrudResult({ op: 'create', requestId, ok: true, vpId });
+  } catch (err) {
+    sendVpCrudResult({
+      op: 'create',
+      requestId,
+      ok: false,
+      error: {
+        code: err instanceof VpCrudError ? err.code : 'unknown',
+        vpId: err && err.vpId,
+        message: err && err.message,
+      },
+    });
+  }
+}
+
+export function handleUnifyVpUpdate(msg) {
+  const requestId = msg && msg.requestId;
+  const payload = msg && msg.payload;
+  try {
+    const { vpId } = updateVp(payload || {});
+    sendVpCrudResult({ op: 'update', requestId, ok: true, vpId });
+  } catch (err) {
+    sendVpCrudResult({
+      op: 'update',
+      requestId,
+      ok: false,
+      error: {
+        code: err instanceof VpCrudError ? err.code : 'unknown',
+        vpId: err && err.vpId,
+        message: err && err.message,
+      },
+    });
+  }
+}
+
+export function handleUnifyVpDelete(msg) {
+  const requestId = msg && msg.requestId;
+  const vpId = msg && msg.vpId;
+  try {
+    deleteVp(vpId);
+    sendVpCrudResult({ op: 'delete', requestId, ok: true, vpId });
+  } catch (err) {
+    sendVpCrudResult({
+      op: 'delete',
+      requestId,
+      ok: false,
+      error: {
+        code: err instanceof VpCrudError ? err.code : 'unknown',
+        vpId: err && err.vpId,
+        message: err && err.message,
+      },
+    });
+  }
+}
+
+export function handleUnifyVpRead(msg) {
+  const requestId = msg && msg.requestId;
+  const vpId = msg && msg.vpId;
+  const vp = readVp(vpId);
+  if (!vp) {
+    sendVpCrudResult({
+      op: 'read',
+      requestId,
+      ok: false,
+      error: { code: 'not_found', vpId },
+    });
+    return;
+  }
+  sendVpCrudResult({ op: 'read', requestId, ok: true, vpId, vp });
 }
 
 /**

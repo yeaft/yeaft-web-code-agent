@@ -1,0 +1,201 @@
+/**
+ * vp-crud.js — filesystem CRUD for VP library (task-334-ui-g).
+ *
+ * Writes / updates / deletes `<lib>/<vpId>/role.md`. VpLoader's hot-reload
+ * picks up the change on its next debounced rescan and fans out
+ * vp_updated / vp_removed WS events to subscribers (334h).
+ *
+ * Hard constraints:
+ *   (a) zero touch on ids.js contract — we only *read* validateVpId;
+ *   (b) zero modification to registry.js / roster.js internals — the
+ *       entity layer sees changes only via VpLoader rescan;
+ *   (c) no Storage-Layer (334o) imports — stays on the entity side.
+ *
+ * Error codes returned to the caller (wire-visible):
+ *   'duplicate'      — vpId already exists (on create)
+ *   'not_found'      — vpId does not exist on disk (on update/delete)
+ *   <reason from validateVpId> — invalid shape
+ */
+
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { join } from 'path';
+import { validateVpId } from '../groups/ids.js';
+import { DEFAULT_VP_LIB_DIR, parseRoleMd } from './vp-store.js';
+
+/**
+ * Error thrown by CRUD entry points. Has stable `.code` so callers can map
+ * to i18n / WS payload without string-parsing the message.
+ */
+export class VpCrudError extends Error {
+  constructor(code, vpId, message) {
+    super(message || `${code}: ${vpId}`);
+    this.name = 'VpCrudError';
+    this.code = code;
+    this.vpId = vpId;
+  }
+}
+
+function ensureLibDir(libDir) {
+  if (!existsSync(libDir)) mkdirSync(libDir, { recursive: true });
+}
+
+function vpDirFor(libDir, vpId) {
+  return join(libDir, vpId);
+}
+
+function vpRolePathFor(libDir, vpId) {
+  return join(vpDirFor(libDir, vpId), 'role.md');
+}
+
+/**
+ * Serialise a VP payload into role.md text with YAML frontmatter matching
+ * the parser in vp-store.js.
+ *
+ * @param {{vpId:string, displayName?:string, role?:string, traits?:string[], modelHint?:string, persona?:string}} p
+ * @returns {string}
+ */
+export function buildRoleMd(p) {
+  const id = String(p.vpId);
+  const name = p.displayName != null ? String(p.displayName) : id;
+  const role = p.role != null ? String(p.role) : '';
+  const traits = Array.isArray(p.traits) ? p.traits.map(t => String(t)).filter(Boolean) : [];
+  const modelHint = p.modelHint === 'primary' || p.modelHint === 'fast' ? p.modelHint : null;
+  const body = typeof p.persona === 'string' ? p.persona : '';
+
+  const lines = ['---', `id: ${id}`, `name: ${yamlScalar(name)}`, `role: ${yamlScalar(role)}`];
+  if (modelHint) lines.push(`modelHint: ${modelHint}`);
+  if (traits.length > 0) {
+    lines.push('traits:');
+    for (const t of traits) lines.push(`  - ${yamlScalar(t)}`);
+  }
+  lines.push('---', '', body.trim(), '');
+  return lines.join('\n');
+}
+
+function yamlScalar(v) {
+  const s = String(v);
+  // Quote anything that the minimal parser might mis-read: colons, leading
+  // dashes, or surrounding whitespace. Plain text passes through unquoted.
+  if (/^[\s]|[\s]$|^[-:]|[:#]/.test(s)) {
+    return `"${s.replace(/"/g, '\\"')}"`;
+  }
+  return s;
+}
+
+/**
+ * Create a new VP. Writes `<lib>/<vpId>/role.md` and ensures `memory/` dir.
+ *
+ * @param {object} payload
+ * @param {string} payload.vpId
+ * @param {string} [payload.displayName]
+ * @param {string} [payload.role]
+ * @param {string[]} [payload.traits]
+ * @param {'primary'|'fast'} [payload.modelHint]
+ * @param {string} [payload.persona]
+ * @param {object} [options]
+ * @param {string} [options.libDir]
+ * @returns {{vpId:string, dir:string}}
+ */
+export function createVp(payload, options = {}) {
+  const libDir = options.libDir || DEFAULT_VP_LIB_DIR;
+  const vpId = payload && payload.vpId;
+
+  const v = validateVpId(vpId);
+  if (!v.ok) throw new VpCrudError(v.reason, vpId);
+
+  ensureLibDir(libDir);
+  const dir = vpDirFor(libDir, vpId);
+  if (existsSync(dir)) {
+    // Directory already present. Treat as duplicate regardless of whether
+    // role.md is inside — prevents CRUD stomping on a half-created entry
+    // or a user-authored dir with no frontmatter yet.
+    throw new VpCrudError('duplicate', vpId);
+  }
+
+  mkdirSync(dir, { recursive: true });
+  mkdirSync(join(dir, 'memory'), { recursive: true });
+  writeFileSync(vpRolePathFor(libDir, vpId), buildRoleMd({ ...payload, vpId }), 'utf-8');
+  return { vpId, dir };
+}
+
+/**
+ * Update an existing VP. vpId is immutable — the dir is keyed by it; if the
+ * user wants a rename they must delete + create.
+ *
+ * @param {object} payload  same shape as createVp, vpId must match existing dir
+ * @param {object} [options]
+ * @returns {{vpId:string, dir:string}}
+ */
+export function updateVp(payload, options = {}) {
+  const libDir = options.libDir || DEFAULT_VP_LIB_DIR;
+  const vpId = payload && payload.vpId;
+
+  const v = validateVpId(vpId);
+  if (!v.ok) throw new VpCrudError(v.reason, vpId);
+
+  const dir = vpDirFor(libDir, vpId);
+  if (!existsSync(dir) || !existsSync(vpRolePathFor(libDir, vpId))) {
+    throw new VpCrudError('not_found', vpId);
+  }
+  writeFileSync(vpRolePathFor(libDir, vpId), buildRoleMd({ ...payload, vpId }), 'utf-8');
+  return { vpId, dir };
+}
+
+/**
+ * Delete a VP — removes the entire VP dir (role.md + memory/).
+ *
+ * Hard constraint: `memory/` contents are scoped to this VP; removing them
+ * with the role is the intended CRUD semantic (UX rule is the confirm
+ * dialog upstream, not here).
+ *
+ * @param {string} vpId
+ * @param {object} [options]
+ * @returns {{vpId:string}}
+ */
+export function deleteVp(vpId, options = {}) {
+  const libDir = options.libDir || DEFAULT_VP_LIB_DIR;
+  // We do NOT run validateVpId here — deleting an already-legacy bad id is
+  // legitimate cleanup. But we DO refuse obviously unsafe inputs.
+  if (!vpId || typeof vpId !== 'string' || vpId.includes('/') || vpId.includes('\\') || vpId === '..' || vpId === '.') {
+    throw new VpCrudError('illegal_character', vpId);
+  }
+  const dir = vpDirFor(libDir, vpId);
+  if (!existsSync(dir)) {
+    throw new VpCrudError('not_found', vpId);
+  }
+  rmSync(dir, { recursive: true, force: true });
+  return { vpId };
+}
+
+/**
+ * Read the full editable shape of an existing VP (for populating the edit
+ * form). Parses role.md directly via the same parser vp-store uses, without
+ * dragging in the mtime / memoryDir side effects of loadVpFromDir.
+ *
+ * @param {string} vpId
+ * @param {object} [options]
+ * @returns {?{vpId:string, displayName:string, role:string, traits:string[], modelHint:?string, persona:string}}
+ */
+export function readVp(vpId, options = {}) {
+  const libDir = options.libDir || DEFAULT_VP_LIB_DIR;
+  const rolePath = vpRolePathFor(libDir, vpId);
+  if (!existsSync(rolePath)) return null;
+  let source;
+  try {
+    source = readFileSync(rolePath, 'utf-8');
+  } catch {
+    return null;
+  }
+  const { meta, body } = parseRoleMd(source);
+  const id = String(meta.id || vpId).trim() || vpId;
+  const modelHintRaw = typeof meta.modelHint === 'string' ? meta.modelHint : null;
+  const modelHint = modelHintRaw === 'primary' || modelHintRaw === 'fast' ? modelHintRaw : null;
+  return {
+    vpId: id,
+    displayName: String(meta.name || id),
+    role: String(meta.role || ''),
+    traits: Array.isArray(meta.traits) ? meta.traits.map(String) : [],
+    modelHint,
+    persona: body,
+  };
+}

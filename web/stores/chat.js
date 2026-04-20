@@ -201,6 +201,14 @@ export const useChatStore = defineStore('chat', {
     unifyThreads: [],
     unifyTasks: [],
 
+    // ★ task-334-ui-g: VP CRUD pending-request map.
+    // Each `vpCrudRequest()` stashes its resolver here keyed by requestId;
+    // the `vp_crud_result` event looks it up and resolves the caller. Using
+    // a Map (not a plain object) because request IDs are ephemeral and we
+    // want O(1) delete on resolve. Guarded with lazy-init in the action so
+    // hydration from SSR / rehydration doesn't trip on a non-Map value.
+    _vpCrudPending: null,
+
     // Currently selected thread / task in the sidebar (UI-only highlight).
     unifyActiveThreadId: null,
     unifyActiveTaskId: null,
@@ -653,6 +661,23 @@ export const useChatStore = defineStore('chat', {
           break;
         }
 
+        // ★ task-334-ui-g: CRUD ack. Each pending request resolves via the
+        // requestId map set up by `vpCrudRequest`.
+        case 'vp_crud_result': {
+          const pending = this._vpCrudPending && this._vpCrudPending.get(event.requestId);
+          if (pending) {
+            this._vpCrudPending.delete(event.requestId);
+            pending.resolve({
+              ok: !!event.ok,
+              op: event.op,
+              vpId: event.vpId,
+              vp: event.vp,
+              error: event.error || null,
+            });
+          }
+          break;
+        }
+
         // ★ task-301 Part 2: real-store push from agent.
         // Agent's ThreadStore changes (SpawnThread / SwitchThread /
         // ArchiveThread / AttachThreadToTask) → web-bridge serialises the
@@ -774,6 +799,50 @@ export const useChatStore = defineStore('chat', {
         sourceThreadId,
         atMessageId,
         ...(name ? { name } : {}),
+      });
+    },
+
+    // ★ task-334-ui-g: VP CRUD request dispatcher.
+    // Wraps `unify_vp_{create,update,delete,read}` in a Promise that
+    // resolves when the matching `vp_crud_result` arrives (or times out
+    // after 10s so the modal never hangs on a dropped WS). Returns a
+    // uniform `{ok, op, vpId, vp?, error?}` shape regardless of op.
+    //
+    //   op      data shape
+    //   create  { vpId, displayName, role, traits, modelHint, persona }
+    //   update  same (vpId immutable)
+    //   delete  vpId (string)
+    //   read    vpId (string)
+    vpCrudRequest(op, data) {
+      if (!this._vpCrudPending || typeof this._vpCrudPending.get !== 'function') {
+        this._vpCrudPending = new Map();
+      }
+      const requestId = 'vpc_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+      const typeMap = {
+        create: 'unify_vp_create',
+        update: 'unify_vp_update',
+        delete: 'unify_vp_delete',
+        read: 'unify_vp_read',
+      };
+      const type = typeMap[op];
+      if (!type) {
+        return Promise.resolve({ ok: false, op, error: { code: 'bad_op', message: 'unknown op: ' + op } });
+      }
+      const msg = { type, requestId };
+      if (op === 'create' || op === 'update') msg.payload = data || {};
+      else msg.vpId = data;
+
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          if (this._vpCrudPending && this._vpCrudPending.has(requestId)) {
+            this._vpCrudPending.delete(requestId);
+            resolve({ ok: false, op, error: { code: 'timeout', message: 'vp_crud timeout' } });
+          }
+        }, 10000);
+        this._vpCrudPending.set(requestId, {
+          resolve: (result) => { clearTimeout(timer); resolve(result); },
+        });
+        this.sendWsMessage(msg);
       });
     },
     // ★ task-301 Part 2: Sidebar V2 selection actions.
