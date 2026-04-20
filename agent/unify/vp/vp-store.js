@@ -23,6 +23,7 @@
 import { readFileSync, readdirSync, statSync, mkdirSync, existsSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
+import { createHash } from 'crypto';
 
 /**
  * @typedef {Object} VP
@@ -32,6 +33,7 @@ import { join } from 'path';
  * @property {string[]} traits
  * @property {'fast'|'primary'|undefined} modelHint
  * @property {string} persona         — markdown body (persona / system prompt seed)
+ * @property {string} personaHash     — sha256(persona).slice(0,8); changes when persona body changes
  * @property {string} dir             — absolute path to VP dir
  * @property {string} memoryDir       — absolute path to VP memory dir
  * @property {number} mtimeMs         — role.md mtime (for hot-reload)
@@ -116,6 +118,11 @@ export function loadVpFromDir(dir) {
   const modelHintRaw = typeof meta.modelHint === 'string' ? meta.modelHint : undefined;
   const modelHint = modelHintRaw === 'primary' || modelHintRaw === 'fast' ? modelHintRaw : undefined;
 
+  // personaHash: sync sha256 of persona body, first 8 hex chars.
+  // Computed at load time (not lazy) so downstream consumers (system prompt
+  // builders, web-bridge live-diff in 334h) can compare cheaply.
+  const personaHash = createHash('sha256').update(body).digest('hex').slice(0, 8);
+
   /** @type {VP} */
   return {
     id,
@@ -124,6 +131,7 @@ export function loadVpFromDir(dir) {
     traits: Array.isArray(meta.traits) ? meta.traits.map(String) : [],
     modelHint,
     persona: body,
+    personaHash,
     dir,
     memoryDir,
     mtimeMs: st.mtimeMs,
