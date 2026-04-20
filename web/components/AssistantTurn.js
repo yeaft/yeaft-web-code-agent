@@ -1,10 +1,11 @@
 import ToolLine from './ToolLine.js';
 import AskCard from './AskCard.js';
 import ThreadPill from './ThreadPill.js';
+import VpSpeakerHeader from './VpSpeakerHeader.js';
 
 export default {
   name: 'AssistantTurn',
-  components: { ToolLine, AskCard, ThreadPill },
+  components: { ToolLine, AskCard, ThreadPill, VpSpeakerHeader },
   props: {
     turn: {
       type: Object,
@@ -16,7 +17,18 @@ export default {
     }
   },
   template: `
-    <div class="assistant-turn" ref="turnRef" :class="{ streaming: turn.isStreaming }">
+    <div class="assistant-turn" ref="turnRef" :class="{ streaming: turn.isStreaming, 'has-vp-speaker': !!turn.speakerVpId }">
+      <!-- 0. task-334-ui-b: VP speaker header — only when a speakerVpId is
+           bound (multi-VP mode) AND the upstream consecutive-collapse
+           decided this turn should show the attribution. Legacy 1:1 chat
+           turns set showSpeakerHeader=false → this branch is inert. -->
+      <VpSpeakerHeader
+        v-if="turn.showSpeakerHeader && turn.speakerVpId"
+        :vp-id="turn.speakerVpId"
+        :timestamp="turn.speakerTimestamp || 0"
+        :state-cause="turn.speakerStateCause || ''"
+      />
+
       <!-- 1. Text content -->
       <div v-if="turn.textContent" class="turn-content">
         <div class="turn-header">

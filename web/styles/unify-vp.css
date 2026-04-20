@@ -146,3 +146,63 @@
   opacity: 0.6;
 }
 .vp-library-link.is-empty .vp-library-arrow { opacity: 0.4; }
+
+/* ─── VpSpeakerHeader (task-334-ui-b) ─────────────────────
+ * Speaker attribution strip sitting above a VP assistant bubble.
+ *
+ * Design notes (§17 Designer-Diff):
+ *   • Visual weight stays LIGHT — this is metadata, not content. The
+ *     bubble itself should still be the reading focus.
+ *   • No horizontal rule / no border; spacing separates sections
+ *     (consistent with the Unify UI rules in CLAUDE.md).
+ *   • Subtitle (role) sits under the name inside VpBadge, matching the
+ *     Slack-style "Name / role" two-liner.
+ *   • Dark-mode uses existing --text-secondary / --vp-status-* vars so
+ *     no new theme tokens are introduced.
+ * ---------------------------------------------------------- */
+.vp-speaker-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 6px;
+  padding: 0;
+  min-width: 0;
+  /* the header itself is metadata — keep its tap surface minimal. */
+  pointer-events: none;
+}
+.vp-speaker-header .vp-badge {
+  /* Re-enable pointer for the badge so future hover-tooltips still work. */
+  pointer-events: auto;
+}
+
+.vp-speaker-state-cause {
+  font-size: 10px;
+  line-height: 1;
+  color: var(--vp-status-busy, #f2994a);
+  cursor: help;
+  pointer-events: auto;
+  flex-shrink: 0;
+  /* Dot glyph is already a solid filled circle; no extra chrome. */
+}
+
+.vp-speaker-time {
+  font-size: 11px;
+  color: var(--text-secondary, #6b7280);
+  margin-left: auto;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Dark-mode: the time gets a slightly brighter muted tone so it doesn't
+ * wash out against the bubble. `.vp-speaker-state-cause` already uses
+ * the dark-mode --vp-status-busy token defined above. */
+[data-theme="dark"] .vp-speaker-time {
+  color: var(--text-secondary, #9ca3af);
+}
+
+/* When the speaker header is rendered, tighten the bubble's top padding
+ * just a touch so the name→content vertical rhythm feels intentional
+ * instead of accidentally doubled. */
+.assistant-turn.has-vp-speaker > .turn-content {
+  margin-top: 2px;
+}
