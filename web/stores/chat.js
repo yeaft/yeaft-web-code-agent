@@ -631,7 +631,7 @@ export const useChatStore = defineStore('chat', {
           // This event just signals completion — no additional action needed.
           break;
 
-        // ★ task-334-ui-a: VP library snapshot + (stub) live diff.
+        // ★ task-334-ui-a + 334h: VP library snapshot + live diff.
         case 'vp_snapshot': {
           // Lazy import to avoid circular dep at module load.
           const vp = window.Pinia?.useVpStore?.() || (window.__useVpStore && window.__useVpStore());
@@ -639,15 +639,17 @@ export const useChatStore = defineStore('chat', {
           break;
         }
         case 'vp_updated': {
-          // TODO(334h): live diff path — wire VpLoader.onChange in vp-bridge.js.
+          // task-334h: live diff. `event.reason` (persona.edit / traits.edit /
+          // manual.reload) is surfaced through the store for 334-ui-b badge
+          // refresh cues. Missing reason is tolerated (back-compat).
           const vp = window.Pinia?.useVpStore?.() || (window.__useVpStore && window.__useVpStore());
-          if (vp && event.vp) vp.upsert(event.vp);
+          if (vp && event.vp) vp.upsert(event.vp, event.reason);
           break;
         }
         case 'vp_removed': {
-          // TODO(334h): live diff path — wire VpLoader.onChange in vp-bridge.js.
+          // task-334h: live diff. Reason is always 'file.removed' on-wire.
           const vp = window.Pinia?.useVpStore?.() || (window.__useVpStore && window.__useVpStore());
-          if (vp && event.vpId) vp.remove(event.vpId);
+          if (vp && event.vpId) vp.remove(event.vpId, event.reason);
           break;
         }
 
