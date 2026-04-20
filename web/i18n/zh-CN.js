@@ -853,4 +853,7 @@ export default {
   'unify.vp.createFirst': '+ 创建你的第一个角色',
   'unify.vp.empty.aria': '尚无角色',
   'unify.vp.avatar.aria': '{name} 头像',
+
+  // ============ Unify VP 发言头 (task-334-ui-b) ============
+  'unify.vp.speaker.stateCauseAria': '状态变更：{cause}',
 };

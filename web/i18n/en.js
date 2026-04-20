@@ -853,4 +853,7 @@ export default {
   'unify.vp.createFirst': '+ Create your first role',
   'unify.vp.empty.aria': 'No virtual persons yet',
   'unify.vp.avatar.aria': '{name} avatar',
+
+  // ============ Unify VP Speaker Header (task-334-ui-b) ============
+  'unify.vp.speaker.stateCauseAria': 'State change: {cause}',
 };

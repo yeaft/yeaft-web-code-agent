@@ -577,6 +577,11 @@ export const useChatStore = defineStore('chat', {
             skills: event.skills,
             mcpServers: event.mcpServers,
             tools: event.tools,
+            // task-334-ui-b: expose multi-VP feature flag surface so
+            // MessageList can decide whether to render VP speaker headers.
+            // Agent side (334c + feature-flag.js) determines the boolean;
+            // web just mirrors it. Absent → falsy → legacy 1:1 UI.
+            multiVp: !!event.multiVp,
           };
 
           // Update activeConversations to point to the agent's conversationId

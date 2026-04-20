@@ -404,17 +404,40 @@ export default {
       return store.agents.filter(a => a.online);
     });
 
+    // task-334-ui-b: gate VP speaker header rendering on the multi-VP
+    // feature flag. Until ops toggles it on, legacy 1:1 turns render the
+    // pre-existing layout exactly as before (zero-diff UX for chat mode).
+    const multiVpEnabled = Vue.computed(() => {
+      return !!(store.unifyStatus && store.unifyStatus.multiVp);
+    });
+
     // Turn aggregation: group flat messages into turn groups
     const turnGroups = Vue.computed(() => {
       const messages = store.messages;
       const result = [];
       let currentTurn = null;
       let turnCounter = 0;
+      // task-334-ui-b: track the most recent VP speaker we actually rendered
+      // a header for, so consecutive turns from the same VP collapse
+      // (the WeChat/Slack group-chat convention). Reset whenever a user or
+      // system row is emitted — a non-VP row breaks the "consecutive VP"
+      // streak, same as in any other group chat.
+      let lastShownSpeakerVpId = null;
 
       const finishTurn = () => {
         if (currentTurn) {
           // Skip empty turns (no text, no tools, no todo, no ask, no images)
           if (currentTurn.textContent || currentTurn.toolMsgs.length > 0 || currentTurn.todoMsg || currentTurn.askMsg || currentTurn.imageMsgs.length > 0) {
+            // task-334-ui-b: resolve speaker header visibility at the point
+            // we flush the turn, AFTER all messages in it have been visited
+            // (so speakerVpId has latched). Collapse same-speaker-in-a-row.
+            if (multiVpEnabled.value && currentTurn.speakerVpId) {
+              currentTurn.showSpeakerHeader =
+                currentTurn.speakerVpId !== lastShownSpeakerVpId;
+              lastShownSpeakerVpId = currentTurn.speakerVpId;
+            } else {
+              currentTurn.showSpeakerHeader = false;
+            }
             result.push(currentTurn);
           }
           currentTurn = null;
@@ -441,6 +464,14 @@ export default {
           // assistant chunk in this turn — used as the fork cursor when
           // the user clicks "Fork from here".
           atMessageId: null,
+          // task-334-ui-b: speaker attribution. `speakerVpId` latches from
+          // the first assistant message carrying it; `speakerTimestamp` /
+          // `speakerStateCause` read from the same message. `showSpeakerHeader`
+          // is set at finishTurn() so we can collapse same-speaker streaks.
+          speakerVpId: null,
+          speakerTimestamp: 0,
+          speakerStateCause: '',
+          showSpeakerHeader: false,
         };
       };
 
@@ -453,12 +484,17 @@ export default {
             continue;
           }
           finishTurn();
+          // task-334-ui-b: a non-VP row resets the consecutive-speaker streak.
+          lastShownSpeakerVpId = null;
           result.push({ type: 'user', id: msg.id || 'u_' + i, message: msg });
           continue;
         }
 
         if (msg.type === 'system' || msg.type === 'error') {
           finishTurn();
+          // task-334-ui-b: same reset as for user rows — any non-VP row
+          // breaks the streak so the next VP turn re-shows its header.
+          lastShownSpeakerVpId = null;
           result.push({ type: msg.type, id: msg.id || 's_' + i, message: msg });
           continue;
         }
@@ -488,6 +524,22 @@ export default {
           // turn cuts after the full assistant reply has been received.
           if (msg.id && /^m\d+$/.test(msg.id)) {
             currentTurn.atMessageId = msg.id;
+          }
+          // task-334-ui-b: latch speaker attribution from the first
+          // assistant message that carries a VP id. Subsequent messages in
+          // the same turn should have the same speaker; we don't overwrite
+          // to avoid flicker mid-stream. `lastStateChangeCause` (334c O2)
+          // is read opportunistically — if 334h hasn't wired it yet, the
+          // field is simply undefined and we render no tooltip dot.
+          if (!currentTurn.speakerVpId && msg.speakerVpId) {
+            currentTurn.speakerVpId = msg.speakerVpId;
+            currentTurn.speakerTimestamp =
+              (typeof msg.timestamp === 'number' && msg.timestamp > 0)
+                ? msg.timestamp
+                : (typeof msg.createdAt === 'number' ? msg.createdAt : 0);
+            if (typeof msg.lastStateChangeCause === 'string') {
+              currentTurn.speakerStateCause = msg.lastStateChangeCause;
+            }
           }
           currentTurn.messages.push(msg);
           continue;
