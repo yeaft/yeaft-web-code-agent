@@ -18,6 +18,22 @@
  * The guard is a pure in-memory helper — no persistence — because the
  * threat model is one runaway turn storm within a single process tick.
  *
+ * Long-running process hygiene (N1, task-334d-followup):
+ *   The `hits` Map is keyed by "groupId::vpId" and would otherwise grow
+ *   unboundedly over a long session. Two complementary bounds:
+ *     - TTL sweep: on each NEW key insert, drop entries whose most
+ *       recent hit is older than `ttlMultiplier × windowMs` (default 2×).
+ *       Those entries can never throttle anyone regardless — their rate
+ *       window is already fully expired. Amortised O(n) but only on new
+ *       keys, so normal hot-path cost stays O(1).
+ *     - LRU cap: after the TTL sweep, if size > maxKeys (default 1000)
+ *       the Map's insertion-order head (oldest-used key) is evicted until
+ *       back under the cap. `check()` and `record()` both `touch()` a key
+ *       (delete+re-set) so recency is refreshed on every access.
+ *   Behavior invariants preserved: the `'all'` broadcast sentinel, the
+ *   `now()` injection seam, and the chain-depth check are untouched — only
+ *   the eviction path is new.
+ *
  * Integration contract (routing/router.js):
  *   - router stamps envelope.meta.causedBy = [...prevChain, currentMsgId]
  *   - router calls `guard.check({ groupId, targetVpId, chain })` BEFORE
@@ -30,6 +46,8 @@
 export const MAX_CHAIN_DEPTH = 10;
 export const DEFAULT_WINDOW_MS = 5_000;
 export const DEFAULT_MAX_HITS_PER_WINDOW = 8;
+export const DEFAULT_MAX_KEYS = 1_000;
+export const DEFAULT_TTL_MULTIPLIER = 2;
 
 /**
  * Build a new loop guard. Safe to share across a single web-bridge process.
@@ -38,17 +56,24 @@ export const DEFAULT_MAX_HITS_PER_WINDOW = 8;
  *   maxChainDepth?: number,
  *   windowMs?: number,
  *   maxHitsPerWindow?: number,
- *   now?: () => number,   // injectable for tests
+ *   maxKeys?: number,                  // N1: LRU cap (default 1000)
+ *   ttlMultiplier?: number,            // N1: evict keys idle > ttlMultiplier*windowMs
+ *   now?: () => number,                // injectable for tests
  * }} [options]
  */
 export function createLoopGuard(options = {}) {
   const maxChainDepth = options.maxChainDepth ?? MAX_CHAIN_DEPTH;
   const windowMs = options.windowMs ?? DEFAULT_WINDOW_MS;
   const maxHits = options.maxHitsPerWindow ?? DEFAULT_MAX_HITS_PER_WINDOW;
+  const maxKeys = options.maxKeys ?? DEFAULT_MAX_KEYS;
+  const ttlMultiplier = options.ttlMultiplier ?? DEFAULT_TTL_MULTIPLIER;
   const now = typeof options.now === 'function' ? options.now : Date.now;
 
-  /** Map<"groupId::vpId", number[]> — sorted ascending timestamps. */
+  /** Map<"groupId::vpId", number[]> — sorted ascending timestamps.
+   * Map insertion order doubles as LRU recency: touching (delete+set) on
+   * every access keeps the oldest-used entry at the front for eviction. */
   const hits = new Map();
+  let evictions = 0;
 
   function key(groupId, vpId) { return `${groupId}::${vpId}`; }
 
@@ -56,6 +81,47 @@ export function createLoopGuard(options = {}) {
     let i = 0;
     while (i < arr.length && arr[i] < cutoff) i += 1;
     if (i > 0) arr.splice(0, i);
+  }
+
+  /**
+   * Touch a key → move to the Map's insertion tail (most-recently-used).
+   * Used on BOTH check() and record() paths so a blocked-but-checked
+   * target is kept warm as long as something keeps referencing it.
+   */
+  function touch(k, arr) {
+    hits.delete(k);
+    hits.set(k, arr);
+  }
+
+  /**
+   * Opportunistic TTL sweep: drop keys whose last hit is older than
+   * ttlMultiplier × windowMs (i.e. their rate window is fully expired and
+   * stale). Called on insert to amortise cleanup across normal traffic,
+   * so we never scan on the hot read path.
+   */
+  function sweepExpired() {
+    const ttlCutoff = now() - ttlMultiplier * windowMs;
+    for (const [k, arr] of hits) {
+      // arr is sorted ascending; the tail is the most-recent hit.
+      const last = arr.length > 0 ? arr[arr.length - 1] : -Infinity;
+      if (last < ttlCutoff) {
+        hits.delete(k);
+        evictions += 1;
+      }
+    }
+  }
+
+  /**
+   * Enforce the hard LRU cap. Called on insert AFTER sweepExpired so
+   * only genuinely hot but stale-enough entries get evicted.
+   */
+  function enforceCap() {
+    while (hits.size > maxKeys) {
+      const oldest = hits.keys().next().value;
+      if (oldest === undefined) break;
+      hits.delete(oldest);
+      evictions += 1;
+    }
   }
 
   return {
@@ -83,6 +149,9 @@ export function createLoopGuard(options = {}) {
       if (arr) {
         const cutoff = now() - windowMs;
         trim(arr, cutoff);
+        // Refresh LRU recency — a repeatedly-probed hot target should not
+        // be evicted just because it never crosses into record().
+        touch(k, arr);
         if (arr.length >= maxHits) {
           return {
             ok: false,
@@ -99,6 +168,7 @@ export function createLoopGuard(options = {}) {
       if (!groupId || !targetVpId) return;
       const k = key(groupId, targetVpId);
       let arr = hits.get(k);
+      const creating = !arr;
       if (!arr) {
         arr = [];
         hits.set(k, arr);
@@ -106,17 +176,36 @@ export function createLoopGuard(options = {}) {
       const cutoff = now() - windowMs;
       trim(arr, cutoff);
       arr.push(now());
+      // Refresh LRU recency for both existing and new keys.
+      touch(k, arr);
+      // On *new* key creation, opportunistically clean up: first drop
+      // fully-expired entries (cheap, bounds unbounded growth), then
+      // enforce the hard cap. Skip on the update path to keep hot-loop
+      // cost O(1).
+      if (creating) {
+        sweepExpired();
+        enforceCap();
+      }
     },
 
     /** Snapshot for tests / debug. */
     snapshot() {
       const out = {};
       for (const [k, arr] of hits) out[k] = arr.slice();
-      return { hits: out, maxChainDepth, windowMs, maxHits };
+      return {
+        hits: out,
+        maxChainDepth,
+        windowMs,
+        maxHits,
+        maxKeys,
+        ttlMultiplier,
+        size: hits.size,
+        evictions,
+      };
     },
 
     /** Wipe all counters (tests). */
-    reset() { hits.clear(); },
+    reset() { hits.clear(); evictions = 0; },
   };
 }
 

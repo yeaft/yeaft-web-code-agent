@@ -15,5 +15,7 @@ export {
   MAX_CHAIN_DEPTH,
   DEFAULT_WINDOW_MS,
   DEFAULT_MAX_HITS_PER_WINDOW,
+  DEFAULT_MAX_KEYS,
+  DEFAULT_TTL_MULTIPLIER,
 } from './loop-guard.js';
 export { createRouter } from './router.js';
