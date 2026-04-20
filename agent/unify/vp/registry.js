@@ -56,6 +56,11 @@ export class Registry {
     cur.traits = next.traits;
     cur.modelHint = next.modelHint;
     cur.persona = next.persona;
+    // task-334c: personaHash must track persona body. 334a-followup added
+    // the field; this is the in-place update mirror. (Originally recorded
+    // as a 334h nit, but 334c's system-prompt block names the hash in
+    // STATIC — carrying a stale hash would bleed into the prompt.)
+    cur.personaHash = next.personaHash;
     cur.mtimeMs = next.mtimeMs;
     // dir / memoryDir / id stable
     return cur;
