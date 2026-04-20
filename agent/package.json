@@ -33,7 +33,8 @@
     "url": "https://github.com/yeaft/claude-web-chat/issues"
   },
   "files": [
-    "**/*.js"
+    "**/*.js",
+    "unify/templates/**/*.md"
   ],
   "license": "MIT",
   "author": "Yeaft",
