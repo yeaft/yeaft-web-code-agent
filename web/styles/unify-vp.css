@@ -565,8 +565,8 @@
   display: flex;
   align-items: flex-start;
   gap: 14px;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--border, #e5e7eb);
+  padding: 12px 0 20px;
+  /* Unify 无横向分割线铁律 — 用 padding 创造呼吸感分段，禁用 border-bottom */
 }
 
 .vp-detail-hero-text {
@@ -681,11 +681,18 @@
   grid-template-columns: 90px 1fr auto;
   gap: 8px;
   align-items: baseline;
-  padding: 4px 0;
+  padding: 6px 8px;
+  border-radius: 4px;
   font-size: 13px;
-  border-bottom: 1px dashed var(--border-subtle, rgba(0, 0, 0, 0.05));
+  transition: background-color 120ms ease;
+  /* Unify 无横向分割线铁律 — 用 zebra + hover 背景替代 border-bottom */
 }
-.vp-detail-activity-row:last-child { border-bottom: 0; }
+.vp-detail-activity-row:nth-child(even) {
+  background: var(--chip-bg, rgba(0, 0, 0, 0.025));
+}
+.vp-detail-activity-row:hover {
+  background: var(--hover-bg, rgba(0, 0, 0, 0.05));
+}
 
 .vp-detail-activity-row.kind-diff-updated,
 .vp-detail-activity-row.kind-diff-removed {
@@ -727,8 +734,7 @@
   color: var(--text-secondary, #6b7280);
 }
 
-/* Dark-mode overrides */
-[data-theme="dark"] .vp-detail-hero { border-bottom-color: var(--border, #374151); }
+/* Dark-mode overrides — no horizontal dividers (Unify rule) */
 [data-theme="dark"] .vp-detail-persona,
 [data-theme="dark"] .vp-detail-model-hint code { background: rgba(255, 255, 255, 0.04); border-color: var(--border, #374151); }
 [data-theme="dark"] .vp-detail-trait-chip,
@@ -736,7 +742,8 @@
 [data-theme="dark"] .vp-detail-persona-hash { background: rgba(255, 255, 255, 0.06); }
 [data-theme="dark"] .vp-detail-back { border-color: var(--border, #374151); }
 [data-theme="dark"] .vp-detail-back:hover { background: rgba(255, 255, 255, 0.05); }
-[data-theme="dark"] .vp-detail-activity-row { border-bottom-color: rgba(255, 255, 255, 0.05); }
+[data-theme="dark"] .vp-detail-activity-row:nth-child(even) { background: rgba(255, 255, 255, 0.03); }
+[data-theme="dark"] .vp-detail-activity-row:hover { background: rgba(255, 255, 255, 0.06); }
 
 /* Mobile responsive — collapse the activity row grid and tighten padding */
 @media (max-width: 640px) {

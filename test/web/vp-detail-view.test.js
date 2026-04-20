@@ -250,7 +250,10 @@ describe('S-c9: unify-vp.css new selectors', () => {
     expect(unifyVpCssSrc).toMatch(/\.turn-footer:hover\s+\.turn-time/);
   });
   it('includes dark-mode overrides for detail view', () => {
-    expect(unifyVpCssSrc).toMatch(/\[data-theme="dark"\]\s+\.vp-detail-hero/);
+    // Unify 无横向分割线铁律 — hero/activity-row borders removed; dark-mode
+    // coverage now asserted via persona + activity-row zebra/hover overrides.
+    expect(unifyVpCssSrc).toMatch(/\[data-theme="dark"\]\s+\.vp-detail-persona/);
+    expect(unifyVpCssSrc).toMatch(/\[data-theme="dark"\]\s+\.vp-detail-activity-row:hover/);
   });
   it('includes mobile @media query', () => {
     expect(unifyVpCssSrc).toMatch(/@media\s*\(max-width:\s*640px\)/);
