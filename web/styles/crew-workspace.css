@@ -278,6 +278,15 @@
   background: transparent;
 }
 
+.crew-message.crew-msg-human-bubble .crew-bubble-time {
+  display: block;
+  text-align: right;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  user-select: none;
+}
+
 /* Turn divider between different roles */
 .crew-turn-divider {
   width: 100%;

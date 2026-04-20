@@ -1538,6 +1538,11 @@
 }
 
 /* Messages */
+.msg-row {
+  display: flex;
+  flex-direction: column;
+}
+
 .message {
   line-height: 1.6;
   word-wrap: break-word;
@@ -1546,11 +1551,22 @@
 
 .message.user {
   background: var(--bg-user-msg-subtle);
-  padding: 10px 16px;
+  padding: 10px 16px 6px;
   border-radius: 18px;
   align-self: flex-end;
+  margin-left: auto;
   max-width: 80%;
   font-size: 15px;
+  position: relative;
+}
+
+.message.user .message-time {
+  display: block;
+  text-align: right;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  user-select: none;
 }
 
 .message.system {

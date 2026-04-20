@@ -22,6 +22,7 @@ export default {
           >{{ formatExpertLabel(sel) }}</span>
         </div>
         <div class="message-content" v-if="message.content">{{ message.content }}</div>
+        <span v-if="messageTime" class="message-time" :title="messageTimeFull">{{ messageTime }}</span>
         <!-- Attachments indicator -->
         <div class="user-attachments-indicator" v-if="message.attachments && message.attachments.length > 0">
           <span class="attachments-badge" @click="toggleAttachments">
@@ -75,6 +76,27 @@ export default {
       return ['message', props.message.type];
     });
 
+    const _timeSource = () => {
+      const m = props.message;
+      if (typeof m.timestamp === 'number' && m.timestamp > 0) return m.timestamp;
+      if (typeof m.createdAt === 'number' && m.createdAt > 0) return m.createdAt;
+      return null;
+    };
+
+    const messageTime = Vue.computed(() => {
+      const ts = _timeSource();
+      if (!ts) return '';
+      try {
+        return new Date(ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+      } catch { return ''; }
+    });
+
+    const messageTimeFull = Vue.computed(() => {
+      const ts = _timeSource();
+      if (!ts) return '';
+      try { return new Date(ts).toLocaleString(); } catch { return ''; }
+    });
+
     const toggleAttachments = () => {
       showAttachments.value = !showAttachments.value;
     };
@@ -109,6 +131,8 @@ export default {
 
     return {
       messageClass,
+      messageTime,
+      messageTimeFull,
       showAttachments,
       toggleAttachments,
       formatExpertLabel,

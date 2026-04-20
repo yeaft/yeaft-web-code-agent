@@ -49,7 +49,7 @@ export default {
           <span class="crew-error-icon">{{ turn.message.recoverable ? '🔄' : '❌' }}</span>
           <span>{{ turn.message.content }}</span>
         </div>
-        <div v-else-if="turn.message.type === 'text' && turn.message.role === 'human'" class="crew-msg-content user-text-content">{{ turn.message.content }}</div>
+        <div v-else-if="turn.message.type === 'text' && turn.message.role === 'human'" class="crew-msg-content user-text-content">{{ turn.message.content }}<span v-if="showHumanBubble && turn.message.timestamp" class="message-time crew-bubble-time" :title="formatTime(turn.message.timestamp)">{{ formatTime(turn.message.timestamp) }}</span></div>
         <div v-else-if="turn.message.type === 'text'" class="crew-msg-content markdown-body" v-html="mdRender(turn.message.content)"></div>
         <div v-if="turn.message.type === 'text' && turn.message.role !== 'human' && turn.message.role !== 'system' && turn.message.content" class="crew-turn-footer">
           <button class="screenshot-btn" @click="crewScreenshot($event, turn.message.content)" :title="crewScreenshotting ? $t('message.screenshotting') : $t('message.screenshot')">

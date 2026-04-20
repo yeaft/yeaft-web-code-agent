@@ -5,6 +5,7 @@ export function addMessageToConversation(store, conversationId, msg) {
 
   const newMsg = {
     id: msg.dbMessageId || Date.now().toString() + Math.random().toString(36).substr(2, 9),
+    timestamp: Date.now(),
     ...msg
   };
 
