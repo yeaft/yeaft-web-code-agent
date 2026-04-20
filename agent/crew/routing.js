@@ -242,7 +242,7 @@ export function parseRoutes(text) {
     const toRaw = match[1].trim().toLowerCase().replace(/[,;:!?。，；：!？]+$/, '');
     const summary = match[2] ? match[2].trim() : '[该角色未提供消息摘要]';
 
-    routes.push({ to: toRaw, summary, taskId: null, taskTitle: null });
+    routes.push({ to: toRaw, toList: [toRaw], summary, taskId: null, taskTitle: null });
     // Shorthand is a single line — strip the whole line.
     const lineEnd = maskedText.indexOf('\n', pos);
     strippedRanges.push({
@@ -348,8 +348,21 @@ function _removeRanges(input, ranges) {
 
 /**
  * Parse fields from a ROUTE block body (the content between ---ROUTE--- and ---END_ROUTE---).
+ *
+ * task-335 — multi-target `to:` support. The `to:` line is split on
+ * common multi-target separators (`,`, `+`, `、`, `；`, `;`, ` and `) so
+ * `to: rev-1, rev-3` / `to: rev-1 + rev-3` / `to: rev-1、rev-3` all
+ * resolve to two distinct targets. Each target is normalised the same
+ * way single-target was normalised before (strip parenthetical notes,
+ * trailing punctuation, lowercase).
+ *
+ * Backward-compat shape: `route.to` is still a STRING (the first
+ * target) so the 20+ existing tests that assert `route.to === 'dev-1'`
+ * keep working. `route.toList` is the new authoritative list and is
+ * always at least one element. `executeRoute` consumes `toList`.
+ *
  * @param {string} block — raw block content
- * @returns {{ to: string, summary: string, taskId: string|null, taskTitle: string|null } | null}
+ * @returns {{ to: string, toList: string[], summary: string, taskId: string|null, taskTitle: string|null } | null}
  */
 function _parseRouteBlock(block) {
   // task-328 §3: tolerate Chinese full-width colon (`to：` / `task：` / `summary：`)
@@ -358,11 +371,29 @@ function _parseRouteBlock(block) {
   const toMatch = block.match(/to\s*[:：]\s*(.+)/i);
   if (!toMatch) return null;
 
-  // ★ Clean `to` value: take only the first word (strip parenthetical notes, extra text)
-  // e.g. "pm (决策者)" → "pm", "dev-1 // main dev" → "dev-1"
-  const toRaw = toMatch[1].trim().toLowerCase();
-  // Strip trailing punctuation (commas, semicolons, colons, etc.)
-  const toClean = toRaw.split(/[\s(]/)[0].replace(/[,;:!?。，；：!？]+$/, '');
+  const toLine = toMatch[1].trim();
+  // task-335: split multi-target `to:` lines. Separators recognised:
+  //   ASCII comma `,`, ASCII plus `+`, ASCII semicolon `;`, ` and `
+  //   Chinese full-width comma `，`, ideographic comma `、`, full-width
+  //   semicolon `；`, slash `/`. Whitespace around separators is fine.
+  const MULTI_TARGET_SEP = /\s*(?:,|\+|;|、|，|；|\/|\s+and\s+)\s*/i;
+  const rawTargets = toLine.split(MULTI_TARGET_SEP);
+
+  const cleaned = [];
+  const seen = new Set();
+  for (const raw of rawTargets) {
+    const trimmed = raw.trim().toLowerCase();
+    if (!trimmed) continue;
+    // ★ Clean a single target value: take only the first word (strip
+    // parenthetical notes, trailing punctuation).
+    // e.g. "pm (决策者)" → "pm", "dev-1 // main dev" → "dev-1"
+    const oneWord = trimmed.split(/[\s(]/)[0].replace(/[,;:!?。，；：!？]+$/, '');
+    if (!oneWord) continue;
+    if (seen.has(oneWord)) continue;
+    seen.add(oneWord);
+    cleaned.push(oneWord);
+  }
+  if (cleaned.length === 0) return null;
 
   // ★ summary: match until next known field (task:/taskTitle:) or end of block.
   //   Field separator accepts ASCII `:` or Chinese `：`.
@@ -390,7 +421,8 @@ function _parseRouteBlock(block) {
   }
 
   return {
-    to: toClean,
+    to: cleaned[0],
+    toList: cleaned,
     summary,
     taskId: taskMatch ? taskMatch[1].trim() : null,
     taskTitle: taskTitleMatch ? taskTitleMatch[1].trim() : null
@@ -471,11 +503,101 @@ export function resolveRoleName(to, session, fromRole) {
 
 /**
  * 执行路由
+ *
+ * task-335 — multi-target fan-out. `route.toList` (string[]) is the
+ * authoritative list of targets; `route.to` is kept as the first target
+ * for backward-compat with downstream consumers (kanban / sendCrewOutput
+ * still see a single primary `to`). Each target is dispatched as if it
+ * were its own ROUTE: self-route reject is per-target (one bad target
+ * does not kill the whole fan-out), unknown-target fallback is
+ * per-target, dispatch + kanban update + sendCrewOutput happen
+ * per-target.
+ *
+ * Side-effects done ONCE per call (not per target):
+ *   - taskId fallback resolution
+ *   - auto-resume from paused/stopped
+ *   - state-stopped metric
+ *
  * @param {Array<{mimeType, data}>} [turnImages] - auto-attached images from the turn (max 3)
  */
 export async function executeRoute(session, fromRole, route, turnImages = []) {
-  let { to, summary, taskId, taskTitle } = route;
+  let { summary, taskId, taskTitle } = route;
 
+  // task-335: normalise to a list. Accept legacy callers that still pass
+  // `to: 'pm'` (string) without `toList`.
+  let toList = Array.isArray(route.toList) && route.toList.length > 0
+    ? route.toList.slice()
+    : (typeof route.to === 'string' ? [route.to] : []);
+  if (toList.length === 0) {
+    console.warn(`[Crew] executeRoute called with no targets (fromRole=${fromRole})`);
+    return;
+  }
+
+  // task-330b §B item 1: state-stopped metric — message arrived while
+  // session was paused/stopped. Behaviour (auto-resume) is unchanged for
+  // backward compat; this is observer-only. Recorded ONCE per fan-out.
+  if (session.status === 'paused' || session.status === 'stopped') {
+    recordRoutingEvent(session, 'state-stopped', {
+      fromRole,
+      toRole: toList.join(','),
+      taskId: taskId || null,
+      note: `session.status=${session.status} at executeRoute entry`,
+    });
+  }
+
+  // Auto-resume: paused/stopped → running (route execution means work should continue)
+  if (session.status === 'paused' || session.status === 'stopped') {
+    console.log(`[Crew] Auto-resuming session from ${session.status} to running (route from ${fromRole} to ${toList.join(',')})`);
+    session.status = 'running';
+    sendStatusUpdate(session);
+  }
+
+  // ─── task-321: taskId fallback chain ─────────────────────────────
+  // When a ROUTE omits `task:` (shorthand, bare dispatch, human messages,
+  // PM forgetting the field), fall back to:
+  //   (a) the sender's currentTask.taskId
+  //   (b) the most recent non-system entry in session.messageHistory
+  // This keeps prev-* / designer / architect / shorthand messages from
+  // becoming taskId=null orphans that never appear on any feature card.
+  // Done ONCE per fan-out — all targets share the same inferred taskId.
+  if (!taskId) {
+    const fromRoleState = session.roleStates?.get(fromRole);
+    if (fromRoleState?.currentTask?.taskId) {
+      taskId = fromRoleState.currentTask.taskId;
+      taskTitle = taskTitle || fromRoleState.currentTask.taskTitle || null;
+    } else if (Array.isArray(session.messageHistory) && session.messageHistory.length > 0) {
+      for (let i = session.messageHistory.length - 1; i >= 0; i--) {
+        const h = session.messageHistory[i];
+        if (h && h.from !== 'system' && h.taskId) {
+          taskId = h.taskId;
+          break;
+        }
+      }
+    }
+    // Mirror the fallback back into the route object so downstream
+    // consumers (dispatchToRole / sendCrewOutput) see the inferred id.
+    if (taskId) {
+      route.taskId = taskId;
+      if (taskTitle) route.taskTitle = taskTitle;
+    }
+  }
+
+  // ─── Fan-out over targets ─────────────────────────────────────────
+  for (const to of toList) {
+    await _dispatchOneTarget(session, fromRole, to, summary, taskId, taskTitle, toList.length, turnImages);
+  }
+}
+
+/**
+ * task-335 helper — dispatch ONE resolved target. Carries the per-target
+ * self-route reject + unknown-target fallback + kanban + UI emit +
+ * actual dispatchToRole. Failures on one target do NOT abort the rest.
+ *
+ * @param {number} batchSize — how many targets in the parent fan-out
+ *                             (used for log clarity; not behavioural)
+ * @private
+ */
+async function _dispatchOneTarget(session, fromRole, to, summary, taskId, taskTitle, batchSize, turnImages) {
   // ─── task-330a §A + task-330b §B: self-route hard-reject + metric ───
   // 福勒 Final Spec §A — `route.to` 等同于发送方时直接拒绝，不消费 turn、
   // 不写 kanban、不 dispatch、不 round++（round 已由 role-output 计数）。
@@ -486,21 +608,22 @@ export async function executeRoute(session, fromRole, route, turnImages = []) {
   // alias self-route 漏记 metric 已记入 PM backlog 作 follow-up（330b 的
   // raw 比较 `to === fromRole` 仅命中字面相同的情况；alias 形式由 330a
   // 的 isSelf 兜底，但 330b 的 raw 检查保留为快速路径 + 兼容）。
+  //
+  // task-335: now per-target. A self-route to one target in a multi-
+  // target ROUTE only rejects THAT target; the other targets fan out
+  // normally.
   if (to !== 'human') {
     const resolvedSelfCheck = resolveRoleName(to, session, fromRole);
     const isSelf = resolvedSelfCheck === fromRole
       || (typeof to === 'string' && to.toLowerCase() === String(fromRole).toLowerCase());
     if (isSelf) {
-      console.warn(`[Crew] Self-route rejected: ${fromRole} → ${to} (taskId=${taskId || '-'})`);
-      // 330b path — persistent metric counter (routing-metrics.json + ring).
-      // Always-safe; never throws (recordRoutingEvent degrades to console.warn).
+      console.warn(`[Crew] Self-route rejected: ${fromRole} → ${to} (taskId=${taskId || '-'}, batch=${batchSize})`);
       recordRoutingEvent(session, 'self-route', {
         fromRole,
         toRole: to,
         taskId: taskId || null,
         note: 'route.to === fromRole at executeRoute entry (rejected by §A)',
       });
-      // 330a path — UI broadcast so the role sees rejection in transcript.
       try {
         sendCrewMessage({
           type: 'routing-metrics',
@@ -530,60 +653,13 @@ export async function executeRoute(session, fromRole, route, turnImages = []) {
       }
       // Do NOT decrement session.round — role-output.js already incremented
       // it for this whole turn batch; one rejected route doesn't undo the
-      // turn (other routes in the same batch may still be valid).
+      // turn (other routes/targets in the same batch may still be valid).
       return;
     }
   }
 
-  // task-330b §B item 1: state-stopped metric — message arrived while
-  // session was paused/stopped. Behaviour (auto-resume) is unchanged for
-  // backward compat; this is observer-only.
-  if (session.status === 'paused' || session.status === 'stopped') {
-    recordRoutingEvent(session, 'state-stopped', {
-      fromRole,
-      toRole: to,
-      taskId: taskId || null,
-      note: `session.status=${session.status} at executeRoute entry`,
-    });
-  }
-
-  // Auto-resume: paused/stopped → running (route execution means work should continue)
-  if (session.status === 'paused' || session.status === 'stopped') {
-    console.log(`[Crew] Auto-resuming session from ${session.status} to running (route from ${fromRole} to ${to})`);
-    session.status = 'running';
-    sendStatusUpdate(session);
-  }
-
-  // ─── task-321: taskId fallback chain ─────────────────────────────
-  // When a ROUTE omits `task:` (shorthand, bare dispatch, human messages,
-  // PM forgetting the field), fall back to:
-  //   (a) the sender's currentTask.taskId
-  //   (b) the most recent non-system entry in session.messageHistory
-  // This keeps prev-* / designer / architect / shorthand messages from
-  // becoming taskId=null orphans that never appear on any feature card.
-  if (!taskId) {
-    const fromRoleState = session.roleStates?.get(fromRole);
-    if (fromRoleState?.currentTask?.taskId) {
-      taskId = fromRoleState.currentTask.taskId;
-      taskTitle = taskTitle || fromRoleState.currentTask.taskTitle || null;
-    } else if (Array.isArray(session.messageHistory) && session.messageHistory.length > 0) {
-      for (let i = session.messageHistory.length - 1; i >= 0; i--) {
-        const h = session.messageHistory[i];
-        if (h && h.from !== 'system' && h.taskId) {
-          taskId = h.taskId;
-          break;
-        }
-      }
-    }
-    // Mirror the fallback back into the route object so downstream
-    // consumers (dispatchToRole / sendCrewOutput) see the inferred id.
-    if (taskId) {
-      route.taskId = taskId;
-      if (taskTitle) route.taskTitle = taskTitle;
-    }
-  }
-
-  // Task 文件自动管理（fire-and-forget）
+  // Task 文件自动管理（fire-and-forget） — per-target so each target gets
+  // a kanban entry assigned to it.
   if (taskId && summary) {
     const fromRoleConfig = session.roles.get(fromRole);
     // task-321: Auto-create feature file even when a non-PM role is the
@@ -622,7 +698,8 @@ export async function executeRoute(session, fromRole, route, turnImages = []) {
     }).catch(e => console.warn(`[Crew] Failed to update kanban:`, e.message));
   }
 
-  // 发送路由消息（UI 显示）
+  // 发送路由消息（UI 显示） — per-target so the transcript shows one
+  // route card per fan-out leg, mirroring how single-target ROUTEs render.
   sendCrewOutput(session, fromRole, 'route', null, {
     routeTo: to, routeSummary: summary,
     taskId: taskId || undefined,

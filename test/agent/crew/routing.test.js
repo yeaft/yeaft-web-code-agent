@@ -581,3 +581,62 @@ summary: routed before kanban dump
     });
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────
+// task-335 — multi-target ROUTE (`to: rev-1, rev-3` / `+` / `、` / etc.)
+// ─────────────────────────────────────────────────────────────────────
+describe('task-335 — multi-target `to:` parsing', () => {
+  it('case 1: comma-separated targets', () => {
+    const text = `---ROUTE---\nto: rev-1, rev-3\nsummary: please both review\n---END_ROUTE---`;
+    const r = parseRoutes(text);
+    expect(r).toHaveLength(1);
+    expect(r[0].to).toBe('rev-1');                 // backward-compat: first target
+    expect(r[0].toList).toEqual(['rev-1', 'rev-3']);
+    expect(r[0].summary).toBe('please both review');
+  });
+
+  it('case 2: `+`-separated targets', () => {
+    const text = `---ROUTE---\nto: rev-1 + rev-3\nsummary: dual review\n---END_ROUTE---`;
+    const r = parseRoutes(text);
+    expect(r[0].toList).toEqual(['rev-1', 'rev-3']);
+  });
+
+  it('case 3: ideographic comma `、` separator', () => {
+    const text = `---ROUTE---\nto: rev-1、rev-3\nsummary: shuangshen\n---END_ROUTE---`;
+    const r = parseRoutes(text);
+    expect(r[0].toList).toEqual(['rev-1', 'rev-3']);
+  });
+
+  it('case 4: many targets, mixed separators, deduped', () => {
+    const text = `---ROUTE---\nto: rev-1, rev-2 + rev-3、dev-2, rev-1\nsummary: everyone please look\n---END_ROUTE---`;
+    const r = parseRoutes(text);
+    expect(r[0].toList).toEqual(['rev-1', 'rev-2', 'rev-3', 'dev-2']);
+  });
+
+  it('case 5: includes an unknown target — kept verbatim, parser does not validate', () => {
+    const text = `---ROUTE---\nto: rev-1, ghost-99\nsummary: with unknown\n---END_ROUTE---`;
+    const r = parseRoutes(text);
+    expect(r[0].toList).toEqual(['rev-1', 'ghost-99']);
+  });
+
+  it('case 6: includes the sender itself — parser keeps it; executeRoute self-rejects per-target', () => {
+    const text = `---ROUTE---\nto: dev-1, rev-1\nsummary: self plus reviewer\n---END_ROUTE---`;
+    const r = parseRoutes(text);
+    expect(r[0].toList).toEqual(['dev-1', 'rev-1']);
+  });
+
+  it('backward-compat: single target still has toList: [to]', () => {
+    const text = `---ROUTE---\nto: dev-1\nsummary: single\n---END_ROUTE---`;
+    const r = parseRoutes(text);
+    expect(r[0].to).toBe('dev-1');
+    expect(r[0].toList).toEqual(['dev-1']);
+  });
+
+  it('shorthand ROUTE → target also exposes toList', () => {
+    const text = `ROUTE → dev-1, just a quick ping`;
+    const r = parseRoutes(text);
+    expect(r).toHaveLength(1);
+    expect(r[0].to).toBe('dev-1');
+    expect(r[0].toList).toEqual(['dev-1']);
+  });
+});
