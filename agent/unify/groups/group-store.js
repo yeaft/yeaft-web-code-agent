@@ -26,7 +26,7 @@ import {
 } from 'fs';
 import { join } from 'path';
 import { writeAtomic, openLog } from '../storage/index.js';
-import { nextMsgId, isReservedVpId, ReservedVpIdError } from './ids.js';
+import { nextMsgId, isReservedVpId, ReservedVpIdError, validateVpId, InvalidVpIdError } from './ids.js';
 
 const GROUP_FILE = 'group.json';
 const MESSAGES_DIR = 'messages';
@@ -113,9 +113,13 @@ export function createGroup(groupsRoot, spec) {
   const roster = Array.isArray(spec.roster) ? spec.roster.slice() : [];
   for (const v of roster) {
     if (isReservedVpId(v)) throw new ReservedVpIdError(v);
+    const verdict = validateVpId(v);
+    if (!verdict.ok) throw new InvalidVpIdError(v, verdict.reason);
   }
-  if (spec.defaultVpId && isReservedVpId(spec.defaultVpId)) {
-    throw new ReservedVpIdError(spec.defaultVpId);
+  if (spec.defaultVpId) {
+    if (isReservedVpId(spec.defaultVpId)) throw new ReservedVpIdError(spec.defaultVpId);
+    const dverdict = validateVpId(spec.defaultVpId);
+    if (!dverdict.ok) throw new InvalidVpIdError(spec.defaultVpId, dverdict.reason);
   }
   const meta = {
     id: spec.id,
