@@ -62,6 +62,7 @@ select option:checked {
   --bg-sidebar: #f3f3f0;
   --bg-workbench: #f6f5f3;
   --bg-user-msg: #eeeee9;
+  --bg-user-msg-subtle: #f4f3ef;
   --bg-assistant-msg: transparent;
   --bg-input: #fafaf8;
   --bg-input-wrapper: #eeeee9;
@@ -180,6 +181,7 @@ select option:checked {
   --bg-sidebar: #141414;
   --bg-workbench: #171716;
   --bg-user-msg: #2a2a28;
+  --bg-user-msg-subtle: #242321;
   --bg-assistant-msg: transparent;
   --bg-input: #2a2a28;
   --bg-input-wrapper: #2a2a28;
