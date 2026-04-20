@@ -857,8 +857,7 @@ export default {
   // ============ Unify VP Speaker Header (task-334-ui-b) ============
   'unify.vp.speaker.stateCauseAria': 'State change: {cause}',
 
-  // ============ Unify VP CRUD (task-334-ui-g) ============
-  'unify.vp.crud.title': 'VP Library',
+  // ============ Unify VP CRUD (task-334-ui-g) =====  'unify.vp.crud.title': 'VP Library',
   'unify.vp.crud.close': 'Close',
   'unify.vp.crud.addNew': '+ New role',
   'unify.vp.crud.empty': 'No virtual persons yet. Create your first role to start collaborating.',
@@ -896,4 +895,35 @@ export default {
   'unify.vp.idError.pure_digits': 'VP id cannot be all digits.',
   'unify.vp.idError.reserved': 'VP id cannot be one of the reserved names (all, user, system, everyone).',
   'unify.vp.idError.duplicate': 'A role with this VP id already exists.',
+
+  // ============ Unify VP Detail View (task-334-ui-c) ============
+  'unify.vp.detail.title': 'VP Detail',
+  'unify.vp.detail.back': 'Back to VP Library',
+  'unify.vp.detail.backAria': 'Return to VP Library (Esc)',
+  'unify.vp.detail.role': 'Role',
+  'unify.vp.detail.traits': 'Traits',
+  'unify.vp.detail.modelHint': 'Model Hint',
+  'unify.vp.detail.persona': 'Persona',
+  'unify.vp.detail.personaEmpty': '(no persona body loaded)',
+  'unify.vp.detail.activity': 'Recent Activity',
+  'unify.vp.detail.activityEmpty': 'No recent messages from this VP.',
+  'unify.vp.detail.activityPrivate': 'Task-private messages — coming soon.',
+  'unify.vp.detail.editHint': 'Edit via VP Library → CRUD (task-334-ui-g).',
+  'unify.vp.detail.personaHashAria': 'Persona content hash {hash}',
+  'unify.vp.detail.notFound': 'VP not found — it may have been removed.',
+  'unify.vp.detail.traitsEmpty': '(no traits)',
+  'unify.vp.detail.modelHintEmpty': '(default)',
+
+  // ============ Unify VP Live-diff Reasons (task-334-ui-c / O4) ============
+  // Friendly messages surfaced when vp_updated / vp_removed events arrive.
+  // Used in toasts + activity rows so snake_case classifier tags never leak.
+  'unify.vp.reason.personaEdit': 'Persona updated',
+  'unify.vp.reason.traitsEdit': 'Traits updated',
+  'unify.vp.reason.manualReload': 'Reloaded',
+  'unify.vp.reason.fileRemoved': 'Removed',
+  'unify.vp.reason.toast.updated': '{name}: {reason}',
+  'unify.vp.reason.toast.removed': '{name} was removed',
+
+  // ============ Unify per-message hover timestamp (task-334-ui-c / prev-2 backlog) ============
+  'unify.message.timeAria': 'Sent at {time}',
 };

@@ -227,6 +227,13 @@ export const useChatStore = defineStore('chat', {
     unifyActiveTaskDetailId: null,
     unifyTaskReplyThreadId: null,
 
+    // ★ task-334-ui-c: VP detail view. When non-null, UnifyPage switches
+    // the center pane to the VpDetailView component (mirrors the
+    // task-315 pattern). Esc / breadcrumb back clears. Stays null in
+    // legacy 1:1 mode — only entered by clicking a VpAvatar/VpBadge in
+    // a VP-speaker-headed turn or a VP library row.
+    unifyActiveVpDetailId: null,
+
     // ★ task-313: most recent merge result (ok/error) — UI shows a toast.
     unifyLastMergeResult: null,
 
@@ -876,6 +883,24 @@ export const useChatStore = defineStore('chat', {
     leaveTaskDetailView() {
       this.unifyActiveTaskDetailId = null;
       this.unifyTaskReplyThreadId = null;
+    },
+    // ★ task-334-ui-c: VP detail view entry / exit. Mirrors the
+    // task-detail pair above; no side effects on thread filter because
+    // the detail view is a read-only lookup into the VP store — no
+    // sending / no reply thread semantics.
+    enterVpDetailView(vpId) {
+      if (!vpId) return;
+      this.unifyActiveVpDetailId = String(vpId);
+      // Exiting the task-detail view at the same time keeps the
+      // "one fullscreen panel at a time" invariant consistent with
+      // task-315.
+      if (this.unifyActiveTaskDetailId) {
+        this.unifyActiveTaskDetailId = null;
+        this.unifyTaskReplyThreadId = null;
+      }
+    },
+    leaveVpDetailView() {
+      this.unifyActiveVpDetailId = null;
     },
     setUnifyTaskReplyThreadId(threadId) {
       this.unifyTaskReplyThreadId = threadId || null;

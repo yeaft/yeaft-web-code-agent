@@ -6,6 +6,7 @@ import VpSpeakerHeader from './VpSpeakerHeader.js';
 export default {
   name: 'AssistantTurn',
   components: { ToolLine, AskCard, ThreadPill, VpSpeakerHeader },
+  emits: ['open-vp-detail'],
   props: {
     turn: {
       type: Object,
@@ -27,6 +28,7 @@ export default {
         :vp-id="turn.speakerVpId"
         :timestamp="turn.speakerTimestamp || 0"
         :state-cause="turn.speakerStateCause || ''"
+        @open-detail="onOpenVpDetail"
       />
 
       <!-- 1. Text content -->
@@ -98,6 +100,12 @@ export default {
 
       <!-- 6. Copy full response button (visible on hover) -->
       <div class="turn-footer" v-if="turn.textContent && !turn.isStreaming">
+        <span
+          v-if="turnTime"
+          class="turn-time"
+          :title="turnTimeFull"
+          :aria-label="$t('unify.message.timeAria', { time: turnTimeFull })"
+        >{{ turnTime }}</span>
         <button class="screenshot-btn" @click="screenshotContent" :title="screenshotting ? $t('message.screenshotting') : $t('message.screenshot')">
           <svg v-if="!screenshotting" viewBox="0 0 24 24" width="14" height="14">
             <path fill="currentColor" d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
@@ -407,9 +415,52 @@ export default {
       store.forkUnifyThread(sourceThreadId, props.turn.atMessageId);
     };
 
+    // task-334-ui-c: forward VP speaker click → parent (MessageList →
+    // UnifyPage → chatStore.enterVpDetailView). Kept opt-in via the
+    // speaker header's `clickable` path so legacy 1:1 turns are unaffected.
+    const onOpenVpDetail = (vpId) => {
+      if (!vpId) return;
+      // Emit for MessageList/UnifyPage to handle; fall back to direct store
+      // call if the enclosing page did not wire the listener.
+      try {
+        if (typeof store.enterVpDetailView === 'function') {
+          store.enterVpDetailView(vpId);
+        }
+      } catch (e) {
+        console.error('[AssistantTurn] enterVpDetailView failed:', e);
+      }
+    };
+
+    // task-334-ui-c (C): per-message hover timestamp — mirrors MessageItem's
+    // messageTime / messageTimeFull pattern. Hidden by default via CSS; the
+    // `.turn-footer:hover .turn-time` rule reveals it on hover.
+    const _turnTimeSource = () => {
+      const t = props.turn;
+      if (!t) return null;
+      if (typeof t.timestamp === 'number' && t.timestamp > 0) return t.timestamp;
+      if (typeof t.createdAt === 'number' && t.createdAt > 0) return t.createdAt;
+      if (typeof t.speakerTimestamp === 'number' && t.speakerTimestamp > 0) return t.speakerTimestamp;
+      return null;
+    };
+    const turnTime = Vue.computed(() => {
+      const ts = _turnTimeSource();
+      if (!ts) return '';
+      try {
+        return new Date(ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+      } catch { return ''; }
+    });
+    const turnTimeFull = Vue.computed(() => {
+      const ts = _turnTimeSource();
+      if (!ts) return '';
+      try { return new Date(ts).toLocaleString(); } catch { return ''; }
+    });
+
     return {
       canFork,
       forkFromHere,
+      onOpenVpDetail,
+      turnTime,
+      turnTimeFull,
       copied,
       fullCopied,
       expanded,

@@ -262,11 +262,11 @@ describe('task-315 UnifyPage wiring', () => {
   });
 
   it('renders UnifyTaskDetailView only when store.unifyActiveTaskDetailId is truthy and settings closed', () => {
-    expect(src).toMatch(/<UnifyTaskDetailView[\s\S]*?v-if="!showSettings && store\.unifyActiveTaskDetailId"/);
+    expect(src).toMatch(/<UnifyTaskDetailView[\s\S]*?v-if="!showSettings && store\.unifyActiveTaskDetailId(?:[^"]*)"/);
   });
 
   it('hides MessageList when task detail view is active', () => {
-    expect(src).toMatch(/<MessageList[\s\S]*?v-if="!showSettings && !store\.unifyActiveTaskDetailId"/);
+    expect(src).toMatch(/<MessageList[\s\S]*?v-if="!showSettings && !store\.unifyActiveTaskDetailId(?:[^"]*)"/);
   });
 
   it('hides the thread-filter breadcrumb while task detail view is active', () => {

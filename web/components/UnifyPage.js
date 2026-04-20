@@ -6,10 +6,11 @@ import UnifyBreadcrumb from './UnifyBreadcrumb.js';
 import UnifyTaskDetailView from './UnifyTaskDetailView.js';
 import VpLibraryLink from './VpLibraryLink.js';
 import VpCrudModal from './VpCrudModal.js';
+import VpDetailView from './VpDetailView.js';
 
 export default {
   name: 'UnifyPage',
-  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2, UnifyBreadcrumb, UnifyTaskDetailView, VpLibraryLink, VpCrudModal },
+  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2, UnifyBreadcrumb, UnifyTaskDetailView, VpLibraryLink, VpCrudModal, VpDetailView },
   template: `
     <div class="unify-page">
       <!-- Mobile sidebar overlay -->
@@ -112,13 +113,24 @@ export default {
              sidebar task is selected. Owns its own breadcrumb + reply
              thread selector. -->
         <UnifyTaskDetailView
-          v-if="!showSettings && store.unifyActiveTaskDetailId"
+          v-if="!showSettings && store.unifyActiveTaskDetailId && !store.unifyActiveVpDetailId"
           @back="exitTaskDetailView"
           @switch-to-thread="onSwitchToThreadFromTaskDetail"
         />
 
+        <!-- task-334-ui-c: VP Detail View replaces the message list when
+             a VP badge / library row has been clicked. Takes precedence
+             over the task-detail view so clicking a VP inside a task
+             pane feels like a drill-down. Esc returns to previous layer
+             via the shared keydown cascade. -->
+        <VpDetailView
+          v-if="!showSettings && store.unifyActiveVpDetailId"
+          :vp-id="store.unifyActiveVpDetailId"
+          @back="exitVpDetailView"
+        />
+
         <!-- Messages Area — reuse standard MessageList for identical rendering -->
-        <MessageList v-if="!showSettings && !store.unifyActiveTaskDetailId" />
+        <MessageList v-if="!showSettings && !store.unifyActiveTaskDetailId && !store.unifyActiveVpDetailId" />
 
         <!-- Settings Panel -->
         <UnifySettings v-if="showSettings" @close="showSettings = false" @saved="onSettingsSaved" />
@@ -279,6 +291,11 @@ export default {
       store.leaveTaskDetailView();
     };
 
+    // task-334-ui-c: exit the VP-detail view back to prior layer.
+    const exitVpDetailView = () => {
+      store.leaveVpDetailView();
+    };
+
     // task-315: clicking a source-thread pill inside the detail view
     // switches to that thread's dual-view (task-303) and leaves the
     // task-detail view behind.
@@ -350,13 +367,18 @@ export default {
     const isMobile = Vue.ref(window.innerWidth <= 768);
     const onResize = () => { isMobile.value = window.innerWidth <= 768; };
 
-    // Esc cascade (task-315 extends task-303):
-    //   1) task-detail view active → exit it first (back to main stream)
-    //   2) thread filter active    → clear it (standard dual-view behaviour)
+    // Esc cascade (task-334-ui-c extends task-315 extends task-303):
+    //   1) vp-detail view active → exit it first
+    //   2) task-detail view active → exit it (back to main stream)
+    //   3) thread filter active    → clear it (standard dual-view behaviour)
     // Only one layer is popped per keystroke so the user always sees
     // a single, predictable transition.
     const onKeyDown = (e) => {
       if (e.key !== 'Escape') return;
+      if (store.unifyActiveVpDetailId) {
+        store.leaveVpDetailView();
+        return;
+      }
       if (store.unifyActiveTaskDetailId) {
         store.leaveTaskDetailView();
         return;
@@ -650,6 +672,7 @@ export default {
       onSelectThreadV2,
       onSelectTaskV2,
       exitTaskDetailView,
+      exitVpDetailView,
       onSwitchToThreadFromTaskDetail,
       onJumpToMessage,
       onSearchEscape,
