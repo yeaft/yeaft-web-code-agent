@@ -1,8 +1,8 @@
 /**
- * vp.js — Virtual Person (VP) store. task-334-ui-a §3.1.
+ * vp.js — Virtual Person (VP) store. task-334-ui-a §3.1 + 334h live-diff.
  *
- * Receives `vp_snapshot` (one-shot, snapshot-only this slice) plus stub
- * upsert/remove paths reserved for 334h live-diff.
+ * Receives `vp_snapshot` (one-shot) plus `vp_updated` / `vp_removed` live
+ * diff events from the agent VpLoader (see agent/unify/vp/vp-bridge.js).
  *
  * Per ruling §1 (D1=(b)): wire-format payloads from agent already use
  * `vpId / displayName`; this store consumes them as-is.
@@ -12,6 +12,10 @@
  *   • avatar → web-derived (displayName[0] / vpId[0])
  *   • subtitle → agent-sent (= role)
  *   • personaHash → agent-sent (dev-1 334a-followup)
+ *
+ * task-334h: `lastChange` records the most recent live-diff event so
+ * components (e.g. 334-ui-b badge) can react to persona.edit vs traits.edit
+ * vs manual.reload vs file.removed without re-reading the full store.
  */
 
 const { defineStore } = Pinia;
@@ -47,6 +51,13 @@ export const useVpStore = defineStore('vp', {
     vpOrder: [],      // insertion order
     emptyLibrary: false,
     lastSnapshotAt: 0,
+    /**
+     * task-334h: last live-diff event observed. Shape:
+     *   { vpId: string, kind: 'updated'|'removed', reason: string|null, at: number }
+     * Consumers watch this for badge refresh / toast cues without
+     * recomputing the full list. null before any live event.
+     */
+    lastChange: null,
   }),
 
   getters: {
@@ -84,16 +95,30 @@ export const useVpStore = defineStore('vp', {
       this.lastSnapshotAt = Date.now();
     },
 
-    /** Insert or merge a single VP record (live-diff seam — 334h). */
-    upsert(vp) {
+    /** Insert or merge a single VP record (live-diff — 334h). */
+    upsert(vp, reason = null) {
       this._upsertInternal(vp);
+      if (vp && vp.vpId) {
+        this.lastChange = {
+          vpId: vp.vpId,
+          kind: 'updated',
+          reason: reason || null,
+          at: Date.now(),
+        };
+      }
     },
 
-    /** Remove a VP by id (live-diff seam — 334h). */
-    remove(vpId) {
+    /** Remove a VP by id (live-diff — 334h). */
+    remove(vpId, reason = null) {
       if (!vpId) return;
       delete this.vps[vpId];
       this.vpOrder = this.vpOrder.filter(id => id !== vpId);
+      this.lastChange = {
+        vpId,
+        kind: 'removed',
+        reason: reason || 'file.removed',
+        at: Date.now(),
+      };
     },
 
     _upsertInternal(vp) {

@@ -114,9 +114,9 @@ describe('agent wiring — unify_vp_subscribe routed end-to-end', () => {
     expect(webBridgeSrc).toContain("from './vp/vp-bridge.js'");
   });
 
-  it('vp-bridge leaves a TODO marker for 334h live diff', () => {
+  it('vp-bridge no longer carries 334h TODO (live diff landed)', () => {
     const src = read('agent/unify/vp/vp-bridge.js');
-    expect(src).toMatch(/TODO\(334h\)/);
+    expect(src).not.toMatch(/TODO\(334h\)/);
   });
 });
 
@@ -146,7 +146,7 @@ describe('web/stores/vp.js — store contract', () => {
   it('exposes applySnapshot / upsert / remove actions', () => {
     expect(vpStoreSrc).toContain('applySnapshot(');
     expect(vpStoreSrc).toContain('upsert(');
-    expect(vpStoreSrc).toMatch(/remove\(vpId\)/);
+    expect(vpStoreSrc).toMatch(/remove\(vpId/);
   });
 
   it('exposes vpCount / vpLabel / vpInitial / vpColor getters', () => {
@@ -195,13 +195,16 @@ describe('chat.js — vp_* event dispatch & subscribe', () => {
     expect(chatStoreSrc).toContain("case 'vp_removed'");
   });
 
-  it('vp_updated and vp_removed leave 334h TODO breadcrumbs', () => {
+  it('vp_updated and vp_removed no longer carry 334h TODO (live diff landed)', () => {
     const updIdx = chatStoreSrc.indexOf("case 'vp_updated'");
     const remIdx = chatStoreSrc.indexOf("case 'vp_removed'");
     const updBlock = chatStoreSrc.slice(updIdx, updIdx + 400);
     const remBlock = chatStoreSrc.slice(remIdx, remIdx + 400);
-    expect(updBlock).toMatch(/TODO\(334h\)/);
-    expect(remBlock).toMatch(/TODO\(334h\)/);
+    expect(updBlock).not.toMatch(/TODO\(334h\)/);
+    expect(remBlock).not.toMatch(/TODO\(334h\)/);
+    // reason is plumbed through to the store for 334-ui-b consumption.
+    expect(updBlock).toContain('event.reason');
+    expect(remBlock).toContain('event.reason');
   });
 
   it('sends unify_vp_subscribe on session_ready', () => {

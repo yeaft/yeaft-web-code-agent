@@ -105,9 +105,10 @@ function sendUnifyEvent(event) {
 }
 
 /**
- * task-334-ui-a: respond to `unify_vp_subscribe` from the web client by
- * pushing a one-shot `vp_snapshot` event. Live diff (vp_updated /
- * vp_removed) is intentionally deferred to 334h per ruling §3.
+ * task-334-ui-a + task-334h: respond to `unify_vp_subscribe` from the web
+ * client by pushing a one-shot `vp_snapshot` event AND registering this
+ * socket as a live-diff subscriber. VpLoader's debounced rescan fans out
+ * `vp_updated` / `vp_removed` events to every active subscriber.
  */
 export function handleUnifyVpSubscribe(_msg) {
   handleVpSubscribe(sendUnifyEvent);
