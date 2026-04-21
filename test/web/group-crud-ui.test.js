@@ -235,6 +235,16 @@ describe('UnifySidebarV2 Groups section (designer R6 §6)', () => {
     expect(sidebarSrc).toMatch(/startRenameGroup/);
     expect(sidebarSrc).toMatch(/startArchiveGroup/);
   });
+  it('kebab button + menu expose a11y roles (rev-3 follow-up — a11y nit)', () => {
+    // The kebab button must declare it opens a menu and reflect open state
+    // via aria-expanded for screen readers.
+    expect(sidebarSrc).toMatch(/class="usv2-group-row-kebab"[\s\S]*?aria-haspopup="menu"/);
+    expect(sidebarSrc).toMatch(/class="usv2-group-row-kebab"[\s\S]*?:aria-expanded=/);
+    // The menu itself must be role="menu" with role="menuitem" children so
+    // assistive tech groups rename/archive correctly.
+    expect(sidebarSrc).toMatch(/role="menu"[^>]*class="usv2-group-row-menu"|class="usv2-group-row-menu"[^>]*role="menu"/);
+    expect(sidebarSrc).toMatch(/role="menuitem"[^>]*class="usv2-group-row-menu-item"|class="usv2-group-row-menu-item"[^>]*role="menuitem"/);
+  });
   it('has archive-confirm + rename modals wired to groupCrudRequest', () => {
     expect(sidebarSrc).toMatch(/confirmArchiveGroup/);
     expect(sidebarSrc).toMatch(/confirmRenameGroup/);
