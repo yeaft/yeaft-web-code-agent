@@ -23,7 +23,7 @@
 
 import { dreamShard } from './dream-shard.js';
 import { checkRecompression } from './recompression.js';
-import { dreamExtract } from './dream-extract.js';
+import { runUserDreamJob } from './user-memory-store.js';
 
 /** Default idle timeout before dream triggers (ms). */
 export const DREAM_IDLE_MS = 30 * 60 * 1000; // 30 min
@@ -36,6 +36,8 @@ const MAX_CONCURRENT_DREAMS = 2;
  *
  * @param {{
  *   memoryShardStore: object | null,
+ *   userMemoryStore: object | null,
+ *   conversationStore: object | null,
  *   adapter: object | null,
  *   config: object,
  *   group?: import('../groups/group-store.js').GroupHandle | null,
@@ -50,6 +52,8 @@ const MAX_CONCURRENT_DREAMS = 2;
 export function createDreamScheduler(opts = {}) {
   const {
     memoryShardStore,
+    userMemoryStore,
+    conversationStore,
     adapter,
     config,
     group = null,
@@ -123,24 +127,7 @@ export function createDreamScheduler(opts = {}) {
     try {
       onDreamStart?.(vpId);
 
-      // Phase A: Extract new memories from conversation (§Δ26)
-      let extractResult = null;
-      if (group && memoryDir) {
-        try {
-          extractResult = await dreamExtract({
-            group,
-            shardStore: memoryShardStore,
-            adapter,
-            config: { model: config?.primaryModel || config?.model || 'default' },
-            memoryDir,
-          });
-        } catch (err) {
-          // Non-fatal — proceed to compact even if extract fails
-          extractResult = { error: err.message };
-        }
-      }
-
-      // Phase B: Shard-based compact/merge/prune
+      // Shard-based compact/merge/prune
       const result = await dreamShard({
         shardStore: memoryShardStore,
         adapter,
@@ -158,8 +145,18 @@ export function createDreamScheduler(opts = {}) {
         // Non-fatal
       }
 
-      // Attach extract result
-      result.extract = extractResult;
+      // Post-dream: run user-memory extract + compact (334-w7b)
+      try {
+        const userDreamResult = await runUserDreamJob({
+          store: userMemoryStore || undefined,
+          conversationStore: conversationStore || undefined,
+          adapter: adapter || undefined,
+          config: { model: config?.primaryModel || config?.model || 'default' },
+        });
+        result.userDream = userDreamResult;
+      } catch {
+        // Non-fatal
+      }
 
       messagesSinceLastDream = 0;
       lastDreamAt = Date.now();

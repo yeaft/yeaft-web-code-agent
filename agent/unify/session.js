@@ -34,6 +34,7 @@ import { initInputQueueStore } from './input-queue/store.js';
 import { createDispatcher } from './pipeline/dispatcher.js';
 import { ensureDefaultGroupIfEmpty } from './groups/group-crud.js';
 import { createDreamScheduler } from './memory/dream-scheduler.js';
+import { getUserMemoryStore } from './memory/user-memory-store.js';
 import { join } from 'path';
 import { existsSync as existsSyncSafe, readFileSync as readFileSyncSafe } from 'fs';
 
@@ -236,6 +237,8 @@ export async function loadSession(options = {}) {
   // ─── 9a. Create dream scheduler (wave-6b) ─────────────
   const dreamScheduler = createDreamScheduler({
     memoryShardStore,
+    userMemoryStore: getUserMemoryStore(),
+    conversationStore,
     adapter,
     config,
     onDreamStart: (vpId) => {
