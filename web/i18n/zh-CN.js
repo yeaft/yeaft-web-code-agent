@@ -986,4 +986,25 @@ export default {
   'unify.group.invite.body': '「{name}」当前为空，请从角色库添加一位 VP 以开始对话。',
   'unify.group.invite.openLibrary': '打开角色库',
   'unify.group.invite.dismiss': '暂不',
+
+  // ===== task-334j: 群聊视图（@ 提及 / 引用回复 / 发送拒绝） =====
+  'unify.vp.mention.placeholder': '按 id 或名称搜索角色\u2026',
+  'unify.vp.mention.noMatch': '没有匹配的角色',
+  'unify.vp.mention.count': '已 @{count} 人',
+
+  'unify.task.reply.aria': '回复该消息',
+  'unify.task.reply.to': '回复 @{vpId}',
+  'unify.task.reply.cancel': '取消回复',
+  'unify.task.reply.originalDeleted': '（原消息已删除）',
+
+  'unify.task.reject.missing_group_id': '发送失败：未指定群组。',
+  'unify.task.reject.missing_task_id': '发送失败：任务上下文丢失。',
+  'unify.task.reject.missing_vp_id': '发送失败：未设置发言者。',
+  'unify.task.reject.invalid_vp_id': '发送失败：发言者 id 非法。',
+  'unify.task.reject.empty_text': '发送失败：内容为空。',
+  'unify.task.reject.text_too_long': '发送失败：内容过长（上限 16 KiB）。',
+  'unify.task.reject.unknown': '发送失败。',
+
+  'unify.task.pill.label': '任务',
+  'unify.task.messageTime.aria': '发送于 {time}',
 };

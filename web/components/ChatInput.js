@@ -1,8 +1,12 @@
 import { DEFAULT_SLASH_COMMANDS, getCommandDescription, buildGroupedCommands } from '../utils/slash-commands.js';
 import { buildAutocompleteItems as buildExpertAutocomplete, getSelectionLabel, EXPERT_ROLES, MAX_SELECTIONS } from '../utils/expert-roles.js';
+import { parseMentions } from '../utils/parseMentions.js';
+import VpMentionAutocomplete, { filterVpMentions, applyMentionSelection } from './VpMentionAutocomplete.js';
+import ReplyToCard from './ReplyToCard.js';
 
 export default {
   name: 'ChatInput',
+  components: { VpMentionAutocomplete, ReplyToCard },
   props: {
     /** Custom send function: (text, attachmentInfos) => void. Overrides store.sendMessage. */
     sendFn: { type: Function, default: null },
@@ -34,6 +38,13 @@ export default {
           <button class="attachment-remove" @click="removeAttachment(index)">&times;</button>
         </div>
       </div>
+      <!-- task-334j: reply-to quote card above input -->
+      <ReplyToCard
+        v-if="replyToActive"
+        :vp-id="replyToActive.vpId"
+        :text-preview="replyToActive.textPreview"
+        @cancel="clearReply"
+      />
       <div class="input-wrapper" :class="{ 'btw-active': store.btwMode }">
         <input
           v-if="!store.btwMode"
@@ -85,6 +96,15 @@ export default {
               <span class="slash-cmd-desc">{{ item.roleTitle }}</span>
             </div>
           </div>
+          <!-- task-334j: VP @ autocomplete (mutually exclusive with expert) -->
+          <VpMentionAutocomplete
+            v-if="!store.btwMode && showVpAutocomplete && !showExpertAutocomplete"
+            :vps="vpStore.vpList"
+            :query="vpMentionQuery"
+            :selected-index="vpSelectedIndex"
+            @select="selectVpMention"
+            @hover-index="vpSelectedIndex = $event"
+          />
           <textarea
             ref="inputRef"
             v-model="inputText"
@@ -119,6 +139,7 @@ export default {
   setup(props) {
     const store = Pinia.useChatStore();
     const authStore = Pinia.useAuthStore();
+    const vpStore = Pinia.useVpStore();
     const inputText = Vue.ref('');
     const inputRef = Vue.ref(null);
     const fileInput = Vue.ref(null);
@@ -186,6 +207,47 @@ export default {
     };
 
     const getExpertLabel = (sel) => getSelectionLabel(sel, store.customExpertRoles);
+
+    // ★ task-334j: VP @ autocomplete state (mutually exclusive with expert autocomplete).
+    // Gating: show VP autocomplete when in Unify multi-VP context; otherwise expert.
+    const showVpAutocomplete = Vue.ref(false);
+    const vpSelectedIndex = Vue.ref(0);
+
+    const isInUnifyGroupContext = () => {
+      return !!(store.unifyActiveTaskDetailId || (store.currentView === 'unify' && vpStore.vpList.length > 0));
+    };
+
+    const vpMentionQuery = Vue.computed(() => {
+      const text = inputText.value;
+      const atIdx = text.lastIndexOf('@');
+      if (atIdx < 0 || !showVpAutocomplete.value) return '';
+      return text.slice(atIdx + 1);
+    });
+
+    const selectVpMention = (vp) => {
+      if (!vp || !vp.vpId) return;
+      inputText.value = applyMentionSelection(inputText.value, vp.vpId);
+      showVpAutocomplete.value = false;
+      vpSelectedIndex.value = 0;
+      Vue.nextTick(() => inputRef.value?.focus());
+    };
+
+    // ★ task-334j: reply-to state for task-message context.
+    const taskReplyKey = () => {
+      const taskId = store.unifyActiveTaskDetailId;
+      return taskId ? 'task:' + taskId : null;
+    };
+
+    const replyToActive = Vue.computed(() => {
+      const key = taskReplyKey();
+      if (!key) return null;
+      return store.replyToMap[key] || null;
+    });
+
+    const clearReply = () => {
+      const key = taskReplyKey();
+      if (key) store.clearReplyTo(key);
+    };
 
     // 恢复当前会话的草稿
     if (store.currentConversation && store.inputDrafts[store.currentConversation]) {
@@ -289,20 +351,28 @@ export default {
       } else {
         showAutocomplete.value = false;
       }
-      // @ Expert autocomplete: check if there's an @ in current input
+      // @ autocomplete: VP (task-334j) vs Expert — mutually exclusive.
       const rawText = inputText.value;
       const atIdx = rawText.lastIndexOf('@');
       if (atIdx !== -1 && !showAutocomplete.value) {
-        // Only trigger if @ is at start or preceded by whitespace
         const charBefore = atIdx > 0 ? rawText[atIdx - 1] : ' ';
         if (charBefore === ' ' || charBefore === '\n' || atIdx === 0) {
-          showExpertAutocomplete.value = true;
-          expertSelectedIndex.value = 0;
+          if (isInUnifyGroupContext()) {
+            showVpAutocomplete.value = true;
+            vpSelectedIndex.value = 0;
+            showExpertAutocomplete.value = false;
+          } else {
+            showExpertAutocomplete.value = true;
+            expertSelectedIndex.value = 0;
+            showVpAutocomplete.value = false;
+          }
         } else {
           showExpertAutocomplete.value = false;
+          showVpAutocomplete.value = false;
         }
       } else if (atIdx === -1) {
         showExpertAutocomplete.value = false;
+        showVpAutocomplete.value = false;
       }
     };
 
@@ -319,6 +389,7 @@ export default {
       setTimeout(() => {
         showAutocomplete.value = false;
         showExpertAutocomplete.value = false;
+        showVpAutocomplete.value = false;
       }, 150);
     };
 
@@ -432,6 +503,7 @@ export default {
 
       showAutocomplete.value = false;
       showExpertAutocomplete.value = false;
+      showVpAutocomplete.value = false;
 
       const trimmed = inputText.value.trim();
 
@@ -476,6 +548,27 @@ export default {
         return;
       }
 
+      // ★ task-334j: task-context branch — send as task message.
+      if (store.unifyActiveTaskDetailId && trimmed) {
+        const mentions = parseMentions(trimmed).mentions;
+        const taskId = store.unifyActiveTaskDetailId;
+        const groupId = store.unifyConversationId;
+        if (!groupId) return;
+        const replyToKey = 'task:' + taskId;
+        const replyTo = store.replyToMap[replyToKey]?.msgId || null;
+        const requestId = 'tm_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+        store.sendUnifyTaskMessage({
+          groupId, taskId, vpId: 'user',
+          text: trimmed, mentions, replyTo, requestId,
+        });
+        inputText.value = '';
+        store.clearReplyTo(replyToKey);
+        store.expertSelections = [];
+        delete store.inputDrafts[store.currentConversation];
+        if (inputRef.value) inputRef.value.style.height = 'auto';
+        return;
+      }
+
       const attachmentInfos = attachments.value
         .filter(a => a.fileId)
         .map(a => ({
@@ -505,6 +598,32 @@ export default {
         e.preventDefault();
         store.closeBtw();
         return;
+      }
+      // ★ task-334j: VP autocomplete keyboard nav (before expert, same contract)
+      if (showVpAutocomplete.value) {
+        const vpList = filterVpMentions(vpStore.vpList, vpMentionQuery.value);
+        if (vpList.length > 0) {
+          if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            vpSelectedIndex.value = (vpSelectedIndex.value + 1) % vpList.length;
+            return;
+          }
+          if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            vpSelectedIndex.value = (vpSelectedIndex.value - 1 + vpList.length) % vpList.length;
+            return;
+          }
+          if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+            e.preventDefault();
+            selectVpMention(vpList[vpSelectedIndex.value]);
+            return;
+          }
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          showVpAutocomplete.value = false;
+          return;
+        }
       }
       // @ Expert autocomplete keyboard nav
       if (showExpertAutocomplete.value && expertAutocompleteFiltered.value.length > 0) {
@@ -606,7 +725,15 @@ export default {
       removeAttachment,
       send,
       handleKeydown,
-      cancelExecution
+      cancelExecution,
+      // task-334j: VP autocomplete + reply-to
+      vpStore,
+      showVpAutocomplete,
+      vpSelectedIndex,
+      vpMentionQuery,
+      selectVpMention,
+      replyToActive,
+      clearReply,
     };
   }
 };
