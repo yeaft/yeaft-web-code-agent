@@ -18,12 +18,37 @@
  *   - Legacy `memory={profile,entries}` param still supported for callers
  *     (tests, CLI) that have not migrated.
  *
+ * task-334e additions (R6 §Δ24.5 / §Δ27.3 / §Δ31.4 / §Δ29.3):
+ *   - `taskCtx` param → renders a `## task_ctx` block with:
+ *       * task-memory top-5 bodies with semantic shard prefix `[shard]`
+ *         (no sourceRef — memory_trace opens the trail on demand)
+ *       * `### related tasks` sub-section — `relatedTaskIds` top-3 (sorted
+ *         by updatedAt desc) + per-task top-2 memory; ACL-gated by
+ *         `target.members` ∋ currentVpId (§Δ31.4)
+ *       * `### summary reminder` soft nudge — condition (§Δ27.3):
+ *           non-summary msgs ≥ 3 AND since-lastSummary > 15min AND
+ *           currentVpId == task.initiatorVpId → emits a DYNAMIC hint
+ *   - `userProfile` param → renders a `## user_profile` block. Stub
+ *     implementation: when not passed explicitly, we fall back to reading
+ *     `~/.yeaft/user/profile.json` ({ "content": "…string…" }) if present
+ *     (§Δ29.3 placeholder until 334l wires real user-memory recall).
+ *   - `coreMemory` param → renders a `## core_memory` block with recall
+ *     top-7 memory bodies (no sourceRef) and a trailing meta line pointing
+ *     at `memory_trace` as the way to open the original message.
+ *
+ * Hard constraints (task-334e contract):
+ *   - Does NOT modify engine.js turn loop.
+ *   - Does NOT implement memory_trace / open_source_message (task-334f).
+ *   - Does NOT implement task_summary_post (task-334n).
+ *   - Changes limited to prompts.js + templates/.
+ *
  * Reference: yeaft-unify-system-prompt-budget.md — Static + Dynamic + Context layers
  */
 
 import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { homedir } from 'os';
 
 // ─── Template Loading (one-time at startup) ──────────────────────
 
@@ -159,6 +184,14 @@ const PROMPTS = {
     profileHeader: '### User Profile',
     recalledHeader: '### Recalled Memories',
     compactHeader: '## Conversation History Summary',
+    // task-334e — new section headers
+    taskCtxHeader: '## task_ctx',
+    taskCtxRelatedHeader: '### related tasks',
+    taskCtxSummaryReminder: (min, count) =>
+      `💡 ${min}min since last summary (+${count} new messages). Consider calling \`task_summary_post\`.`,
+    userProfileHeader: '## user_profile',
+    coreMemoryHeader: '## core_memory',
+    coreMemoryMeta: 'To open the original message behind any entry above, call `memory_trace`.',
   },
   zh: {
     identity: '你是 Yeaft，一个有用的 AI 助手。',
@@ -169,6 +202,14 @@ const PROMPTS = {
     profileHeader: '### 用户画像',
     recalledHeader: '### 相关记忆',
     compactHeader: '## 对话历史摘要',
+    // task-334e — new section headers
+    taskCtxHeader: '## task_ctx',
+    taskCtxRelatedHeader: '### 相关任务',
+    taskCtxSummaryReminder: (min, count) =>
+      `💡 距上次 summary 已过 ${min}min，新增 ${count} 条消息，建议调用 \`task_summary_post\`。`,
+    userProfileHeader: '## user_profile',
+    coreMemoryHeader: '## core_memory',
+    coreMemoryMeta: '如需原始 message，调 `memory_trace`。',
   },
 };
 
@@ -191,6 +232,29 @@ export const SUPPORTED_LANGUAGES = Object.keys(PROMPTS);
  *   5. Skills section
  *   6. Memory section
  *   7. Compact summary section
+ *   8. Task context section (task-334e §Δ24.5 + §Δ27.3 + §Δ31.4)
+ *   9. User profile section (task-334e §Δ29.3 stub)
+ *  10. Core memory section (task-334e §Δ24.5)
+ *
+ * task-334e params:
+ *   @param {object} [taskCtx] — per-task context
+ *   @param {string} [taskCtx.taskId]
+ *   @param {string} [taskCtx.currentVpId] — used for ACL + initiator check
+ *   @param {string} [taskCtx.initiatorVpId] — task initiator VP id
+ *   @param {Array<{body:string, shard?:string}>} [taskCtx.memories] — task-memory top-5
+ *   @param {Array<{id:string, title?:string, members?:string[], updatedAt?:number,
+ *                  memories?:Array<{body:string, shard?:string}>}>} [taskCtx.relatedTasks]
+ *          — related tasks; we take top-3 by updatedAt desc, top-2 mem each,
+ *            ACL-gated (members must include currentVpId)
+ *   @param {object} [taskCtx.summaryReminder]
+ *   @param {number} [taskCtx.summaryReminder.nonSummaryCount] — msgs since last summary
+ *   @param {number} [taskCtx.summaryReminder.lastSummaryAt] — epoch ms (0/missing = never)
+ *   @param {number} [taskCtx.summaryReminder.now] — override clock (tests), default Date.now()
+ *
+ *   @param {string} [userProfile] — explicit profile content (334l path);
+ *     when omitted we read `~/.yeaft/user/profile.json` `{ content }` as stub.
+ *   @param {{ entries?: Array<{body:string, shard?:string}>, max?: number }} [coreMemory]
+ *     — recalled memory entries; we render top-7 bodies + meta line.
  *
  * @param {{
  *   language?: string,
@@ -200,6 +264,9 @@ export const SUPPORTED_LANGUAGES = Object.keys(PROMPTS);
  *   memoryInjection?: string,
  *   compactSummary?: string,
  *   skillContent?: string,
+ *   taskCtx?: object,
+ *   userProfile?: string,
+ *   coreMemory?: object,
  * }} params
  * @returns {string}
  */
@@ -211,6 +278,9 @@ export function buildSystemPrompt({
   memoryInjection,
   compactSummary,
   skillContent,
+  taskCtx,
+  userProfile,
+  coreMemory,
 } = {}) {
   // Fallback to English for unknown languages
   const lang = PROMPTS[language] || PROMPTS.en;
@@ -287,5 +357,199 @@ export function buildSystemPrompt({
     parts.push(`${lang.compactHeader}\n${compactSummary}`);
   }
 
+  // ─── 8. Task Context Section (task-334e §Δ24.5 / §Δ27.3 / §Δ31.4) ─
+  const taskCtxBlock = renderTaskCtx(taskCtx, lang);
+  if (taskCtxBlock) parts.push(taskCtxBlock);
+
+  // ─── 9. User Profile Section (task-334e §Δ29.3 stub) ───
+  const profileBlock = renderUserProfile(userProfile, lang);
+  if (profileBlock) parts.push(profileBlock);
+
+  // ─── 10. Core Memory Section (task-334e §Δ24.5) ────────
+  const coreMemBlock = renderCoreMemory(coreMemory, lang);
+  if (coreMemBlock) parts.push(coreMemBlock);
+
   return parts.join('\n\n');
+}
+
+// ─── task-334e helpers ───────────────────────────────────────────
+
+const DEFAULT_TASK_MEMORY_TOP = 5;
+const DEFAULT_RELATED_TASK_TOP = 3;
+const DEFAULT_RELATED_TASK_MEMORY_TOP = 2;
+const DEFAULT_CORE_MEMORY_TOP = 7;
+const SUMMARY_REMINDER_MIN_MESSAGES = 3;
+const SUMMARY_REMINDER_MIN_AGE_MS = 15 * 60 * 1000; // 15 minutes
+
+/**
+ * Render `## task_ctx` block. Never throws on malformed input — missing
+ * fields degrade to omission. The block is only emitted when at least one
+ * of { memories, relatedTasks (post-ACL), summaryReminder } has content.
+ */
+function renderTaskCtx(taskCtx, lang) {
+  if (!taskCtx || typeof taskCtx !== 'object') return '';
+
+  const memLines = renderTaskMemories(taskCtx.memories);
+  const relatedLines = renderRelatedTasks(
+    taskCtx.relatedTasks,
+    taskCtx.currentVpId,
+    lang,
+  );
+  const reminderLine = renderSummaryReminder(taskCtx, lang);
+
+  if (!memLines && !relatedLines && !reminderLine) return '';
+
+  const out = [lang.taskCtxHeader];
+  if (taskCtx.taskId) out.push(`taskId: ${taskCtx.taskId}`);
+  if (memLines) out.push(memLines);
+  if (relatedLines) out.push(relatedLines);
+  if (reminderLine) out.push(reminderLine);
+  return out.join('\n');
+}
+
+/** Render task-memory top-N bodies with `[shard]` prefix, no sourceRef. */
+function renderTaskMemories(memories) {
+  if (!Array.isArray(memories) || memories.length === 0) return '';
+  const lines = [];
+  for (const m of memories.slice(0, DEFAULT_TASK_MEMORY_TOP)) {
+    const body = typeof m?.body === 'string' ? m.body.trim() : '';
+    if (!body) continue;
+    const shard = typeof m?.shard === 'string' && m.shard.trim() ? m.shard.trim() : 'general';
+    lines.push(`- [${shard}] ${body}`);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Render `### related tasks` sub-block. §Δ31.4 ACL: a related task is only
+ * included if `task.members` contains `currentVpId`. Missing `members` is
+ * treated as private (excluded) — fail-closed.
+ *
+ * Ordering: by `updatedAt` desc (undefined treated as 0). Top-3 tasks, top-2
+ * memory each.
+ */
+function renderRelatedTasks(relatedTasks, currentVpId, lang) {
+  if (!Array.isArray(relatedTasks) || relatedTasks.length === 0) return '';
+  if (!currentVpId) return ''; // no ACL subject → fail-closed
+
+  const allowed = relatedTasks.filter((t) => {
+    if (!t || typeof t !== 'object') return false;
+    const members = Array.isArray(t.members) ? t.members : null;
+    if (!members) return false; // fail-closed on missing ACL
+    return members.includes(currentVpId);
+  });
+  if (allowed.length === 0) return '';
+
+  // Sort by updatedAt desc; undefined coerces to 0 (i.e. pushed to the end).
+  const sorted = allowed
+    .slice()
+    .sort((a, b) => (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0));
+
+  const out = [lang.taskCtxRelatedHeader];
+  for (const t of sorted.slice(0, DEFAULT_RELATED_TASK_TOP)) {
+    const title = typeof t.title === 'string' && t.title.trim() ? t.title.trim() : t.id;
+    out.push(`- **${t.id}** · ${title}`);
+    const mems = Array.isArray(t.memories) ? t.memories : [];
+    for (const m of mems.slice(0, DEFAULT_RELATED_TASK_MEMORY_TOP)) {
+      const body = typeof m?.body === 'string' ? m.body.trim() : '';
+      if (!body) continue;
+      const shard = typeof m?.shard === 'string' && m.shard.trim() ? m.shard.trim() : 'general';
+      out.push(`  - [${shard}] ${body}`);
+    }
+  }
+  // If every allowed task had zero usable memory, we still keep the header +
+  // task list — the related-task identifiers themselves are useful context.
+  return out.join('\n');
+}
+
+/**
+ * Render the summary-reminder line (§Δ27.3).
+ *
+ * Conditions (ALL must hold):
+ *   (a) currentVpId === task.initiatorVpId
+ *   (b) summaryReminder.nonSummaryCount ≥ 3
+ *   (c) (now - lastSummaryAt) > 15 minutes
+ *       (lastSummaryAt == 0 / missing is treated as "never summarized":
+ *        only triggers if nonSummaryCount ≥ 3)
+ */
+function renderSummaryReminder(taskCtx, lang) {
+  const r = taskCtx && taskCtx.summaryReminder;
+  if (!r || typeof r !== 'object') return '';
+  if (!taskCtx.currentVpId || !taskCtx.initiatorVpId) return '';
+  if (taskCtx.currentVpId !== taskCtx.initiatorVpId) return '';
+
+  const count = Number(r.nonSummaryCount) || 0;
+  if (count < SUMMARY_REMINDER_MIN_MESSAGES) return '';
+
+  const now = Number(r.now) || Date.now();
+  const lastAt = Number(r.lastSummaryAt) || 0;
+  const ageMs = lastAt > 0 ? now - lastAt : Number.POSITIVE_INFINITY;
+  if (lastAt > 0 && ageMs <= SUMMARY_REMINDER_MIN_AGE_MS) return '';
+
+  // For "never summarized" (lastAt==0) we report age as nonSummaryCount's
+  // session-coarse proxy: we print a dash so the prompt does not lie about
+  // an exact minute count. The hint still carries the count of new msgs.
+  const minStr = lastAt > 0 ? String(Math.round(ageMs / 60000)) : '—';
+  return lang.taskCtxSummaryReminder(minStr, count);
+}
+
+/**
+ * Render `## user_profile` block. If the caller passed an explicit string,
+ * we use it verbatim (that's the 334l path). Otherwise we stub-read from
+ * `~/.yeaft/user/profile.json` (`{ content: "..." }`) per §Δ29.3. Any IO
+ * error is swallowed — this is best-effort context, not critical path.
+ */
+function renderUserProfile(userProfile, lang) {
+  let content = '';
+  if (typeof userProfile === 'string' && userProfile.trim()) {
+    content = userProfile.trim();
+  } else if (userProfile == null) {
+    content = readUserProfileStub();
+  }
+  if (!content) return '';
+  return `${lang.userProfileHeader}\n${content}`;
+}
+
+function readUserProfileStub() {
+  try {
+    const path = join(homedir(), '.yeaft', 'user', 'profile.json');
+    if (!existsSync(path)) return '';
+    const raw = readFileSync(path, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed.content === 'string') return parsed.content.trim();
+    return '';
+  } catch {
+    // File missing, unreadable, malformed JSON, or non-string content.
+    // Stub is best-effort — fall through silently.
+    return '';
+  }
+}
+
+/**
+ * Render `## core_memory` block with recall top-7 bodies + meta line.
+ * Accepts `{ entries: [{body,shard}], max?: number }`. Never renders
+ * `sourceRef`; the meta line points at `memory_trace` for the origin.
+ */
+function renderCoreMemory(coreMemory, lang) {
+  if (!coreMemory || typeof coreMemory !== 'object') return '';
+  const entries = Array.isArray(coreMemory.entries) ? coreMemory.entries : [];
+  if (entries.length === 0) return '';
+  const max = Number.isFinite(coreMemory.max) && coreMemory.max > 0
+    ? Math.floor(coreMemory.max)
+    : DEFAULT_CORE_MEMORY_TOP;
+
+  const lines = [lang.coreMemoryHeader];
+  let shown = 0;
+  for (const e of entries) {
+    if (shown >= max) break;
+    const body = typeof e?.body === 'string' ? e.body.trim() : '';
+    if (!body) continue;
+    const shard = typeof e?.shard === 'string' && e.shard.trim() ? e.shard.trim() : 'general';
+    lines.push(`- [${shard}] ${body}`);
+    shown += 1;
+  }
+  if (shown === 0) return '';
+  lines.push('');
+  lines.push(lang.coreMemoryMeta);
+  return lines.join('\n');
 }
