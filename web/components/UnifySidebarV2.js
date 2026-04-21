@@ -292,13 +292,30 @@ export default {
               class="usv2-group-row"
               :class="{ selected: g.id === activeGroupId }"
               @click="onSelectGroup(g)"
+              @contextmenu.prevent="openGroupMenu(g, $event)"
             >
-              <span class="usv2-group-row-name">{{ g.name || g.id }}</span>
+              <span class="usv2-group-row-name">{{ groupDisplayName(g) }}</span>
               <span class="usv2-group-row-members">
                 <template v-if="g.roster && g.roster.length === 1">{{ $t('unify.group.oneMember') }}</template>
                 <template v-else-if="g.roster && g.roster.length > 1">{{ $t('unify.group.membersCount', { count: g.roster.length }) }}</template>
                 <template v-else>{{ $t('unify.group.noMembers') }}</template>
               </span>
+              <button
+                type="button"
+                class="usv2-group-row-kebab"
+                :title="$t('unify.group.moreActions')"
+                :aria-label="$t('unify.group.moreActions')"
+                @click.stop="openGroupMenu(g, $event)"
+              >⋯</button>
+              <!-- Per-row action menu (Rename / Archive). -->
+              <div v-if="groupMenu.open && groupMenu.groupId === g.id" class="usv2-group-row-menu" @click.stop>
+                <button type="button" class="usv2-group-row-menu-item" @click="startRenameGroup(g)">
+                  {{ $t('unify.group.rename') }}
+                </button>
+                <button type="button" class="usv2-group-row-menu-item usv2-group-row-menu-danger" @click="startArchiveGroup(g)">
+                  {{ $t('unify.group.archive') }}
+                </button>
+              </div>
             </div>
           </div>
         </section>
@@ -355,6 +372,51 @@ export default {
         @close="groupWizardOpen = false"
         @created="onGroupCreated"
       />
+
+      <!-- task-334m: Archive confirm modal (destructive 2nd-confirm). -->
+      <div v-if="archiveConfirm.open" class="usv2-merge-overlay usv2-merge-overlay-confirm" @click.self="cancelGroupAction">
+        <div class="usv2-merge-panel usv2-merge-panel-confirm">
+          <div class="usv2-merge-title">{{ $t('unify.group.archive') }}</div>
+          <div class="usv2-merge-warning">{{ $t('unify.group.archiveConfirm', { name: archiveConfirm.name }) }}</div>
+          <div class="usv2-merge-actions">
+            <button type="button" class="usv2-merge-cancel" @click="cancelGroupAction" :disabled="archiveConfirm.busy">
+              {{ label('cancel') }}
+            </button>
+            <button type="button" class="usv2-merge-confirm" @click="confirmArchiveGroup" :disabled="archiveConfirm.busy">
+              {{ archiveConfirm.busy ? $t('unify.group.archivingEllipsis') : $t('unify.group.archive') }}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- task-334m: Rename modal (inline, mirrors archive-confirm chrome). -->
+      <div v-if="renameModal.open" class="usv2-merge-overlay" @click.self="cancelGroupAction">
+        <div class="usv2-merge-panel">
+          <div class="usv2-merge-title">{{ $t('unify.group.rename') }}</div>
+          <div class="usv2-merge-body">
+            <label class="usv2-rename-label">
+              {{ $t('unify.group.renamePrompt', { name: renameModal.original }) }}
+              <input
+                type="text"
+                v-model.trim="renameModal.value"
+                class="usv2-rename-input"
+                maxlength="60"
+                @keydown.enter.prevent="confirmRenameGroup"
+                ref="renameInput"
+              />
+            </label>
+            <div v-if="renameModal.error" class="usv2-rename-error" role="alert">{{ renameModal.error }}</div>
+          </div>
+          <div class="usv2-merge-actions">
+            <button type="button" class="usv2-merge-cancel" @click="cancelGroupAction" :disabled="renameModal.busy">
+              {{ label('cancel') }}
+            </button>
+            <button type="button" class="usv2-merge-confirm" @click="confirmRenameGroup" :disabled="renameModal.busy || !canCommitRename">
+              {{ renameModal.busy ? $t('unify.group.renamingEllipsis') : $t('unify.group.rename') }}
+            </button>
+          </div>
+        </div>
+      </div>
     </aside>
   `,
   props: {
@@ -384,6 +446,10 @@ export default {
       // task-334m: group-create wizard visibility.
       groupWizardOpen: false,
       groupsOpen: true,
+      // task-334m prev-2 rev: per-row action menu + rename/archive modals.
+      groupMenu: { open: false, groupId: null },
+      archiveConfirm: { open: false, groupId: null, name: '', busy: false },
+      renameModal: { open: false, groupId: null, original: '', value: '', error: '', busy: false },
     };
   },
   computed: {
@@ -409,6 +475,21 @@ export default {
     },
     groupList() { return this.groupsStore?.groupList || []; },
     activeGroupId() { return this.groupsStore?.activeGroupId || null; },
+    chatStore() {
+      // Needed for `groupCrudRequest`. Reuses the same guarded lookup
+      // as `store` above but via window.Pinia for consistency with the
+      // groups-store lookup.
+      try {
+        if (typeof window !== 'undefined' && window.Pinia?.useChatStore) {
+          return window.Pinia.useChatStore();
+        }
+      } catch (_) {}
+      return null;
+    },
+    canCommitRename() {
+      const v = (this.renameModal.value || '').trim();
+      return v.length > 0 && v !== this.renameModal.original;
+    },
     // task-301 Part 2: real-store threads (or injected for tests).
     // Each thread is the serialised shape from
     // agent/unify/web-bridge.js#sendThreadListUpdate.
@@ -634,10 +715,109 @@ export default {
     },
     groupDisplayName(g) {
       if (!g) return '';
+      // D1 seed sentinel: replace raw 'Default' on grp_default with i18n label.
+      if (g.id === 'grp_default' && (g.name === 'Default' || !g.name)) {
+        return this.$t('unify.group.defaultName');
+      }
       return g.name || g.id || '';
     },
     groupMemberCount(g) {
       return Array.isArray(g?.roster) ? g.roster.length : 0;
+    },
+    // task-334m prev-2 rev: per-row kebab + rename/archive wiring.
+    openGroupMenu(g, evt) {
+      if (!g || !g.id) return;
+      // Toggle when clicking the same row again.
+      if (this.groupMenu.open && this.groupMenu.groupId === g.id) {
+        this.groupMenu = { open: false, groupId: null };
+        return;
+      }
+      this.groupMenu = { open: true, groupId: g.id };
+      // Close on next outside click.
+      const close = (ev) => {
+        if (ev && ev.target && ev.target.closest && ev.target.closest('.usv2-group-row-menu')) return;
+        this.groupMenu = { open: false, groupId: null };
+        window.removeEventListener('click', close, true);
+      };
+      setTimeout(() => window.addEventListener('click', close, true), 0);
+      if (evt && typeof evt.stopPropagation === 'function') evt.stopPropagation();
+    },
+    startRenameGroup(g) {
+      this.groupMenu = { open: false, groupId: null };
+      if (!g || !g.id) return;
+      const display = this.groupDisplayName(g);
+      this.renameModal = {
+        open: true, groupId: g.id,
+        original: display,
+        value: display,
+        error: '', busy: false,
+      };
+      this.$nextTick(() => {
+        const el = this.$refs.renameInput;
+        if (el && typeof el.focus === 'function') el.focus();
+      });
+    },
+    startArchiveGroup(g) {
+      this.groupMenu = { open: false, groupId: null };
+      if (!g || !g.id) return;
+      this.archiveConfirm = {
+        open: true, groupId: g.id,
+        name: this.groupDisplayName(g),
+        busy: false,
+      };
+    },
+    cancelGroupAction() {
+      if (this.archiveConfirm.busy || this.renameModal.busy) return;
+      this.archiveConfirm = { open: false, groupId: null, name: '', busy: false };
+      this.renameModal = { open: false, groupId: null, original: '', value: '', error: '', busy: false };
+    },
+    async confirmArchiveGroup() {
+      const id = this.archiveConfirm.groupId;
+      if (!id || this.archiveConfirm.busy) return;
+      const chat = this.chatStore;
+      if (!chat || typeof chat.groupCrudRequest !== 'function') {
+        this.archiveConfirm.open = false;
+        return;
+      }
+      this.archiveConfirm.busy = true;
+      try {
+        await chat.groupCrudRequest('archive', { groupId: id });
+      } finally {
+        this.archiveConfirm = { open: false, groupId: null, name: '', busy: false };
+      }
+    },
+    async confirmRenameGroup() {
+      if (!this.canCommitRename || this.renameModal.busy) return;
+      const id = this.renameModal.groupId;
+      const name = (this.renameModal.value || '').trim();
+      const chat = this.chatStore;
+      if (!chat || typeof chat.groupCrudRequest !== 'function') {
+        this.renameModal.open = false;
+        return;
+      }
+      this.renameModal.busy = true;
+      this.renameModal.error = '';
+      try {
+        const res = await chat.groupCrudRequest('rename', { groupId: id, name });
+        if (res && res.ok) {
+          this.renameModal = { open: false, groupId: null, original: '', value: '', error: '', busy: false };
+          return;
+        }
+        const code = (res && res.error && res.error.code) || 'unknown';
+        const key = `unify.group.error.${code}`;
+        const translated = typeof this.$t === 'function' ? this.$t(key) : key;
+        this.renameModal.error = translated === key
+          ? (typeof this.$t === 'function'
+              ? this.$t('unify.group.error.unknown', { message: (res && res.error && res.error.message) || '' })
+              : 'Operation failed')
+          : translated;
+      } catch (err) {
+        this.renameModal.error = typeof this.$t === 'function'
+          ? this.$t('unify.group.error.unknown', { message: err && err.message || String(err) })
+          : 'Operation failed';
+      } finally {
+        this.renameModal.busy = false;
+      }
     },
     // Display label for a thread row. The "main" thread (internal id
     // never changes) is shown as the localized "Inbox" label; all other

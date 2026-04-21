@@ -45,10 +45,24 @@ const I18N_KEYS = [
   'unify.group.oneMember',
   'unify.group.membersCount',
   'unify.group.noMembers',
+  'unify.group.defaultName',
+  'unify.group.moreActions',
+  'unify.group.archive',
+  'unify.group.archiveConfirm',
+  'unify.group.archivingEllipsis',
+  'unify.group.rename',
+  'unify.group.renamingEllipsis',
   'unify.group.wizard.title',
   'unify.group.wizard.close',
   'unify.group.wizard.step.name',
   'unify.group.wizard.step.members',
+  'unify.group.wizard.step.confirm',
+  'unify.group.wizard.confirmTitle',
+  'unify.group.wizard.confirmHint',
+  'unify.group.wizard.confirmNameLabel',
+  'unify.group.wizard.confirmMembersLabel',
+  'unify.group.wizard.confirmDefaultLabel',
+  'unify.group.wizard.confirmEmpty',
   'unify.group.wizard.namePlaceholder',
   'unify.group.wizard.nameHint',
   'unify.group.wizard.roster',
@@ -68,6 +82,10 @@ const I18N_KEYS = [
   'unify.group.error.not_found',
   'unify.group.error.duplicate',
   'unify.group.error.unknown',
+  'unify.group.invite.title',
+  'unify.group.invite.body',
+  'unify.group.invite.openLibrary',
+  'unify.group.invite.dismiss',
 ];
 
 // A key like `unify.group.wizard.title` maps to a leaf string inside the
@@ -140,10 +158,58 @@ describe('GroupCreateWizard', () => {
     // Fallback to `unknown` when the specific key has no translation.
     expect(wizardSrc).toMatch(/unify\.group\.error\.unknown/);
   });
-  it('2-step wizard: name then members', () => {
+  it('3-step wizard: members → name → confirm', () => {
     expect(wizardSrc).toContain('step: 1');
     expect(wizardSrc).toMatch(/v-if="step === 1"/);
-    expect(wizardSrc).toMatch(/v-else/);
+    expect(wizardSrc).toMatch(/v-else-if="step === 2"/);
+    // Step 3 is the final v-else — check summary markup is present.
+    expect(wizardSrc).toContain('group-wizard-summary');
+    expect(wizardSrc).toContain('confirmNameLabel');
+    expect(wizardSrc).toContain('confirmMembersLabel');
+    expect(wizardSrc).toContain('confirmDefaultLabel');
+  });
+});
+
+// ─── (4b) GroupInviteModal structural checks ────────────────
+
+const inviteModalSrc = read('web/components/GroupInviteModal.js');
+
+describe('GroupInviteModal (prev-2 BLOCKER-1)', () => {
+  it('emits open-library + dismiss', () => {
+    expect(inviteModalSrc).toMatch(/emits:\s*\[[^\]]*'open-library'[^\]]*'dismiss'/);
+  });
+  it('takes a groupName prop', () => {
+    expect(inviteModalSrc).toMatch(/groupName:\s*\{\s*type:\s*String/);
+  });
+  it('renders title/body/openLibrary/dismiss i18n keys', () => {
+    expect(inviteModalSrc).toContain("'unify.group.invite.title'");
+    expect(inviteModalSrc).toContain("'unify.group.invite.body'");
+    expect(inviteModalSrc).toContain("'unify.group.invite.openLibrary'");
+    expect(inviteModalSrc).toContain("'unify.group.invite.dismiss'");
+  });
+  it('closes on Escape key', () => {
+    expect(inviteModalSrc).toMatch(/e\.key === 'Escape'/);
+  });
+});
+
+// ─── (4c) UnifyPage wires the invite modal + send pre-check ───
+
+const unifyPageSrc = read('web/components/UnifyPage.js');
+
+describe('UnifyPage invite-modal integration (prev-2 BLOCKER-1)', () => {
+  it('imports and registers GroupInviteModal', () => {
+    expect(unifyPageSrc).toContain("import GroupInviteModal from './GroupInviteModal.js'");
+  });
+  it('exposes shouldShowInviteModal + inviteGroupName', () => {
+    expect(unifyPageSrc).toContain('shouldShowInviteModal');
+    expect(unifyPageSrc).toContain('inviteGroupName');
+  });
+  it('blocks sendMessage when activeNeedsInvite is true', () => {
+    expect(unifyPageSrc).toMatch(/activeNeedsInvite/);
+  });
+  it('translates grp_default sentinel via unify.group.defaultName', () => {
+    expect(unifyPageSrc).toContain('grp_default');
+    expect(unifyPageSrc).toContain('unify.group.defaultName');
   });
 });
 
@@ -162,6 +228,22 @@ describe('UnifySidebarV2 Groups section (designer R6 §6)', () => {
   });
   it('emits select-group', () => {
     expect(sidebarSrc).toMatch(/emits:\s*\[[^\]]*'select-group'/);
+  });
+  it('has per-row kebab + Rename/Archive menu (prev-2 BLOCKER-2)', () => {
+    expect(sidebarSrc).toContain('usv2-group-row-kebab');
+    expect(sidebarSrc).toContain('usv2-group-row-menu');
+    expect(sidebarSrc).toMatch(/startRenameGroup/);
+    expect(sidebarSrc).toMatch(/startArchiveGroup/);
+  });
+  it('has archive-confirm + rename modals wired to groupCrudRequest', () => {
+    expect(sidebarSrc).toMatch(/confirmArchiveGroup/);
+    expect(sidebarSrc).toMatch(/confirmRenameGroup/);
+    expect(sidebarSrc).toMatch(/groupCrudRequest\(['"]archive['"]/);
+    expect(sidebarSrc).toMatch(/groupCrudRequest\(['"]rename['"]/);
+  });
+  it('translates grp_default sentinel via unify.group.defaultName', () => {
+    expect(sidebarSrc).toContain('grp_default');
+    expect(sidebarSrc).toContain('unify.group.defaultName');
   });
 });
 
