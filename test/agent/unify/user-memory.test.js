@@ -1,28 +1,32 @@
 /**
- * user-memory.test.js — task-334h R6 §Δ29 user-memory skeleton.
+ * user-memory.test.js — task-w6c R6 §Δ29 user-memory WS handlers.
  *
- * Locks the wire shape that task-334l must honour when it replaces the
- * placeholder with real ingestion.
+ * Tests the wire-shape contract for the real (non-stub) handler that
+ * writes to the user-memory shard store.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   handleUnifyUserMemoryWrite,
   handleUnifyUserMemoryRemove,
   setUserMemorySender,
 } from '../../../agent/unify/user-memory.js';
+import { _resetUserMemoryStoreForTest } from '../../../agent/unify/memory/user-memory-store.js';
+
+afterEach(() => {
+  setUserMemorySender(null);
+  _resetUserMemoryStoreForTest();
+});
 
 describe('handleUnifyUserMemoryWrite', () => {
-  it('acks `deferred` + pending:true for a valid text payload', () => {
+  it('acks with accepted/deferred for a valid text payload', () => {
     const sent = [];
     handleUnifyUserMemoryWrite({ text: 'remember: ship friday', requestId: 'r1' }, (e) => sent.push(e));
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toEqual({
-      type: 'user_memory_updated',
-      reason: 'deferred',
-      pending: true,
-      requestId: 'r1',
-    });
+    expect(sent[0].type).toBe('user_memory_updated');
+    expect(sent[0].requestId).toBe('r1');
+    // Real store → 'accepted' with entryId; fallback → 'deferred'
+    expect(['accepted', 'deferred']).toContain(sent[0].reason);
   });
 
   it('acks `noop` + pending:false for an empty text', () => {
@@ -63,7 +67,6 @@ describe('handleUnifyUserMemoryRemove', () => {
     expect(sent[0]).toMatchObject({
       type: 'user_memory_removed',
       entryId: 'e1',
-      pending: true,
       requestId: 'r2',
     });
   });

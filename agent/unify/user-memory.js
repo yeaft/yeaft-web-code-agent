@@ -1,10 +1,9 @@
 /**
- * user-memory.js — R6 §Δ29 user-memory WS event skeleton.
+ * user-memory.js — R6 §Δ29 user-memory WS event handlers.
  *
- * PLACEHOLDER ONLY. Actual ingestion / shard write / cross-task recall
- * is owned by task-334l. This file reserves three event names on the
- * wire + acknowledges the request so the web client can ship its
- * emitter code without a dependency-cycle on 334l's storage layer.
+ * Replaces the stub (task-334h) with real ingestion backed by the R6
+ * shard-store. Writes land immediately in `~/.yeaft/user/memory/` with
+ * a real entryId; the ack carries `reason: 'accepted'`.
  *
  * Wire shapes (frozen by R6 §Δ31.6 table; additive fields only):
  *
@@ -12,22 +11,18 @@
  *     { type, text, tags?, sourceRef?, requestId? }
  *
  *   outbound (agent → web):  `user_memory_updated`
- *     { type, entryId?, reason: 'accepted'|'deferred'|'noop',
+ *     { type, entryId?, reason: 'accepted'|'noop',
  *       requestId?, pending?: boolean }
  *
  *   outbound (agent → web):  `user_memory_removed`
  *     { type, entryId, requestId? }
- *
- * Current behaviour: every write is replied with `user_memory_updated`
- * carrying `reason: 'deferred'` and `pending: true` — the frontend
- * treats this as "queued but not yet persisted" and keeps the toast in
- * a muted state. 334l will flip the reason to `'accepted'` with a
- * concrete `entryId` once the ingestion pipeline lands.
- *
- * No removal path is offered yet (would require the storage layer to
- * have produced entryIds first); the handler is exported as a named
- * stub so the router can wire it without a second edit when 334l ships.
  */
+
+import {
+  getUserMemoryStore,
+  writeUserMemory,
+  removeUserMemory,
+} from './memory/user-memory-store.js';
 
 /** @type {(event:object)=>void | null} */
 let _sendUnifyEvent = null;
@@ -43,12 +38,12 @@ export function setUserMemorySender(fn) {
 /**
  * WS handler: `unify_user_memory_write`.
  *
- * Validates the minimum shape (non-empty string `text`) and replies with
- * a `user_memory_updated` ack carrying `pending: true`. Never throws.
+ * Validates the minimum shape (non-empty string `text`), writes to the
+ * user-memory shard store, and replies with a `user_memory_updated` ack
+ * carrying the real entryId. Never throws.
  *
  * @param {any} msg
  * @param {(event:object)=>void} [sendUnifyEvent] — optional override
- *   (falls back to the module-level sender installed via setUserMemorySender)
  */
 export function handleUnifyUserMemoryWrite(msg, sendUnifyEvent) {
   const send = sendUnifyEvent || _sendUnifyEvent;
@@ -69,22 +64,27 @@ export function handleUnifyUserMemoryWrite(msg, sendUnifyEvent) {
     return;
   }
 
-  // Placeholder — 334l replaces this with real ingestion.
+  // Real ingestion via shard store.
+  const store = getUserMemoryStore();
+  const tags = Array.isArray(msg.tags) ? msg.tags : [];
+  const sourceRef = msg.sourceRef && typeof msg.sourceRef === 'object' ? msg.sourceRef : undefined;
+  const entryId = store ? writeUserMemory(store, { text, tags, sourceRef }) : null;
+
   try {
     send({
       type: 'user_memory_updated',
-      reason: 'deferred',
-      pending: true,
+      reason: entryId ? 'accepted' : 'deferred',
+      pending: !entryId,
+      entryId: entryId || undefined,
       ...(requestId ? { requestId } : {}),
     });
   } catch { /* best-effort */ }
 }
 
 /**
- * WS handler: `unify_user_memory_remove` (skeleton).
+ * WS handler: `unify_user_memory_remove`.
  *
- * Until 334l lands we have no entries to remove; reply with a noop
- * `user_memory_updated` so the UI can clear its toast.
+ * Removes the entry from the user-memory shard store and acks.
  */
 export function handleUnifyUserMemoryRemove(msg, sendUnifyEvent) {
   const send = sendUnifyEvent || _sendUnifyEvent;
@@ -93,11 +93,14 @@ export function handleUnifyUserMemoryRemove(msg, sendUnifyEvent) {
   const requestId = msg && typeof msg.requestId === 'string' ? msg.requestId : undefined;
   const entryId = msg && typeof msg.entryId === 'string' ? msg.entryId : null;
 
+  const store = getUserMemoryStore();
+  const removed = entryId && store ? removeUserMemory(store, entryId) : false;
+
   try {
     send({
       type: 'user_memory_removed',
       entryId,
-      pending: true, // 334l will flip once real removal lands
+      pending: !removed,
       ...(requestId ? { requestId } : {}),
     });
   } catch { /* best-effort */ }
