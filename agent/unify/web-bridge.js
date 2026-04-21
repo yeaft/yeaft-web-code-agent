@@ -65,6 +65,10 @@ const QUERY_TIMEOUT_MS = 120_000;
 /** Virtual conversationId for the Unify session */
 let unifyConversationId = null;
 
+/** task-334-followup-batch-b: stored unsubscribe fn from VP subscribe,
+ *  called on session reset to prevent stale subscriber leaks. */
+let _vpUnsubscribe = null;
+
 /**
  * task-320: per-thread accumulated conversation messages for context
  * continuity. Previously a single flat array — which cross-contaminated
@@ -127,7 +131,13 @@ function sendUnifyEvent(event) {
  * `vp_updated` / `vp_removed` events to every active subscriber.
  */
 export function handleUnifyVpSubscribe(_msg) {
-  handleVpSubscribe(sendUnifyEvent);
+  // Unsub any prior subscription before re-subscribing to prevent duplicate
+  // handler registration on reconnect / re-subscribe.
+  if (_vpUnsubscribe) {
+    try { _vpUnsubscribe(); } catch { /* ignore */ }
+    _vpUnsubscribe = null;
+  }
+  _vpUnsubscribe = handleVpSubscribe(sendUnifyEvent);
 }
 
 /**
@@ -1520,6 +1530,11 @@ export async function resetUnifySession() {
     try { ctrl.abort(); } catch { /* ignore */ }
   }
   abortByThread.clear();
+  // Clean up VP subscriber to prevent stale sends after reset.
+  if (_vpUnsubscribe) {
+    try { _vpUnsubscribe(); } catch { /* ignore */ }
+    _vpUnsubscribe = null;
+  }
   if (session) {
     await session.shutdown();
     session = null;

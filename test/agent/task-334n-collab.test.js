@@ -23,6 +23,7 @@ import {
   getRelatedTaskCtx,
   EXTRACT_MIN_ENTRIES,
   EXTRACT_MAX_ENTRIES,
+  PROGRESS_ANCHORS,
 } from '../../agent/unify/tasks/summary.js';
 import { TaskStore } from '../../agent/unify/tasks/store.js';
 import { buildSystemPrompt } from '../../agent/unify/prompts.js';
@@ -327,5 +328,129 @@ describe('task-334n — TaskStore addMember / removeMember events', () => {
     expect(events[0].vpId).toBe('vp-b');
     expect(events[0].members).toContain('vp-b');
     expect(events[1].members).not.toContain('vp-b');
+  });
+});
+
+// ─── F1 — progress semantic anchors ─────────────────────────────
+
+describe('task-334n F1 — progress accepts string semantic anchors', () => {
+  it('accepts "shipped" as a progress anchor', () => {
+    const { group, memoryDir, taskId } = setupGroupAndTask();
+    const res = postSummary({
+      group, taskId, fromVpId: 'vp-a',
+      body: '- progress: all done',
+      progress: 'shipped',
+      memoryDir,
+    });
+    expect(res.message.meta.progress).toBe('shipped');
+  });
+
+  it('rejects unknown string anchors', () => {
+    const { group, memoryDir, taskId } = setupGroupAndTask();
+    expect(() => postSummary({
+      group, taskId, fromVpId: 'vp-a',
+      body: '- progress: something',
+      progress: 'yolo',
+      memoryDir,
+    })).toThrow(/progress string must be one of/);
+  });
+
+  it('still accepts numeric progress 0-100', () => {
+    const { group, memoryDir, taskId } = setupGroupAndTask();
+    const res = postSummary({
+      group, taskId, fromVpId: 'vp-a',
+      body: '- progress: halfway',
+      progress: 50,
+      memoryDir,
+    });
+    expect(res.message.meta.progress).toBe(50);
+  });
+});
+
+// ─── F2 — recency decay ─────────────────────────────────────────
+
+describe('task-334n F2 — recency decay in buildTaskCtxMemories', () => {
+  it('recent entries score higher than old entries (all else equal)', () => {
+    const { group, memoryDir, taskId } = setupGroupAndTask();
+    const now = Date.now();
+    // Post two summaries with different timestamps via extractor override.
+    postSummary({
+      group, taskId, fromVpId: 'vp-a',
+      body: '- progress: old work',
+      memoryDir,
+      now: () => now - 48 * 60 * 60 * 1000, // 48h ago
+    });
+    postSummary({
+      group, taskId, fromVpId: 'vp-a',
+      body: '- progress: new work',
+      memoryDir,
+      now: () => now, // now
+    });
+    const mems = buildTaskCtxMemories(memoryDir, { top: 5, now });
+    expect(mems.length).toBeGreaterThanOrEqual(2);
+    // The first result should be "new work" (higher recency score).
+    expect(mems[0].body).toMatch(/new work/);
+  });
+});
+
+// ─── F3 — addedBy field ─────────────────────────────────────────
+
+describe('task-334n F3 — addMember addedBy provenance', () => {
+  it('emits addedBy in the task_member_added event', () => {
+    const store = new TaskStore(tmp);
+    store.create({
+      id: 'task-f3', title: 't', status: 'pending', priority: 'low',
+      initiator: 'vp-a', members: ['vp-a'], groupId: 'g-1',
+    });
+    const events = [];
+    store.onEvent((e) => events.push(e));
+    store.addMember('task-f3', 'vp-c', { addedBy: 'vp-a' });
+    expect(events[0].addedBy).toBe('vp-a');
+  });
+
+  it('addedBy defaults to null when not provided', () => {
+    const store = new TaskStore(tmp);
+    store.create({
+      id: 'task-f3b', title: 't', status: 'pending', priority: 'low',
+      initiator: 'vp-a', members: ['vp-a'], groupId: 'g-1',
+    });
+    const events = [];
+    store.onEvent((e) => events.push(e));
+    store.addMember('task-f3b', 'vp-d');
+    expect(events[0].addedBy).toBeNull();
+  });
+});
+
+// ─── F4 — authoredBy in buildTaskCtxMemories ─────────────────────
+
+describe('task-334n F4 — authoredBy exposed in task_ctx memories', () => {
+  it('buildTaskCtxMemories includes authoredBy when present', () => {
+    const { group, memoryDir, taskId } = setupGroupAndTask();
+    postSummary({
+      group, taskId, fromVpId: 'vp-a',
+      body: '- progress: wired up\n- progress: tested',
+      memoryDir,
+    });
+    const mems = buildTaskCtxMemories(memoryDir, { top: 5 });
+    expect(mems.length).toBeGreaterThan(0);
+    // postSummary writes authoredBy: AUTHORED_BY.SUMMARY
+    expect(mems.some((m) => m.authoredBy)).toBe(true);
+  });
+});
+
+// ─── F5 — extractor extreme fallback ─────────────────────────────
+
+describe('task-334n F5 — defaultExtractor extreme fallback', () => {
+  it('pads to EXTRACT_MIN_ENTRIES when body yields only 1 line', () => {
+    const out = defaultExtractor('single line body');
+    expect(out.length).toBeGreaterThanOrEqual(EXTRACT_MIN_ENTRIES);
+  });
+
+  it('returns [] for empty string', () => {
+    expect(defaultExtractor('')).toEqual([]);
+  });
+
+  it('returns [] for whitespace-only', () => {
+    expect(defaultExtractor('   \n   ')).toEqual([]);
   });
 });

@@ -895,6 +895,8 @@ export default {
   'unify.vp.idError.pure_digits': 'VP id cannot be all digits.',
   'unify.vp.idError.reserved': 'VP id cannot be one of the reserved names (all, user, system, everyone).',
   'unify.vp.idError.duplicate': 'A role with this VP id already exists.',
+  'unify.vp.idError.not_found': 'This VP does not exist — it may have been deleted.',
+  'unify.vp.idError.unknown': 'An unexpected error occurred. Please try again.',
 
   // ============ Unify VP Detail View (task-334-ui-c) ============
   'unify.vp.detail.title': 'VP Detail',

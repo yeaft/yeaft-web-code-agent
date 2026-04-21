@@ -301,9 +301,13 @@ export class TaskStore {
    *
    * If an `onEvent` callback was passed at construction time, emits a
    * `task_member_added` event synchronously after the write:
-   *   { type: 'task_member_added', taskId, vpId, members, ts }
+   *   { type: 'task_member_added', taskId, vpId, addedBy, members, ts }
+   *
+   * @param {string} id     — task id
+   * @param {string} vpId   — VP being added
+   * @param {{ addedBy?: string }} [opts] — provenance: who triggered the add
    */
-  addMember(id, vpId) {
+  addMember(id, vpId, opts) {
     const task = this.#tasks.get(id);
     if (!task) return { task: null, added: false };
     if (!vpId || typeof vpId !== 'string') {
@@ -315,10 +319,12 @@ export class TaskStore {
     }
     members.push(vpId);
     this.update(id, { members });
+    const addedBy = opts?.addedBy || null;
     this.#emit({
       type: 'task_member_added',
       taskId: id,
       vpId,
+      addedBy,
       members: members.slice(),
       ts: Date.now(),
     });

@@ -36,6 +36,11 @@ export const SUMMARY_REMINDER_MIN_AGE_MS   = 20 * 60 * 1000;
 export const EXTRACT_MIN_ENTRIES = 2;
 export const EXTRACT_MAX_ENTRIES = 5;
 
+/** Semantic progress anchors — string labels accepted alongside 0-100 number. */
+export const PROGRESS_ANCHORS = Object.freeze([
+  'blocked', 'planning', 'in-progress', 'review', 'milestone', 'shipped', 'done',
+]);
+
 /** Whitelist of R6 kinds emitted by the summary-extractor. */
 const EXTRACT_KINDS = Object.freeze(['progress', 'decision']);
 
@@ -56,7 +61,7 @@ const KIND_TO_SHARD = Object.freeze({
  *   taskId: string,
  *   fromVpId: string,
  *   body: string,
- *   progress?: number,            // 0..100
+ *   progress?: number|string,       // 0..100 or PROGRESS_ANCHORS string
  *   supersedes?: string[],        // prior summary msgIds being superseded
  *   memoryDir: string,            // groups/<g>/tasks/<t>/memory/
  *   now?: () => number,           // test clock
@@ -87,9 +92,15 @@ export function postSummary(opts) {
     throw new Error('postSummary: body required (non-empty string)');
   }
   if (progress != null) {
-    const p = Number(progress);
-    if (!Number.isFinite(p) || p < 0 || p > 100) {
-      throw new Error('postSummary: progress must be number in [0,100]');
+    if (typeof progress === 'string') {
+      if (!PROGRESS_ANCHORS.includes(progress)) {
+        throw new Error(`postSummary: progress string must be one of: ${PROGRESS_ANCHORS.join(', ')}`);
+      }
+    } else {
+      const p = Number(progress);
+      if (!Number.isFinite(p) || p < 0 || p > 100) {
+        throw new Error('postSummary: progress must be number in [0,100] or a semantic anchor string');
+      }
     }
   }
   const supersedesArr = Array.isArray(supersedes)
@@ -104,7 +115,7 @@ export function postSummary(opts) {
     taskId,
     meta: {
       type: 'summary',
-      progress: progress == null ? null : Number(progress),
+      progress: progress == null ? null : (typeof progress === 'string' ? progress : Number(progress)),
       supersedes: supersedesArr,
     },
   });
@@ -186,8 +197,12 @@ export function defaultExtractor(body) {
   // If we ended up with fewer than MIN and there was a body, collapse to
   // one "progress" entry carrying the trimmed full body so we never emit 0
   // when the caller gave us real content and asked for 2-5.
-  if (out.length < EXTRACT_MIN_ENTRIES && lines.length === 0 && body.trim()) {
-    out.push({ kind: 'progress', body: body.trim() });
+  if (out.length < EXTRACT_MIN_ENTRIES && body.trim()) {
+    // Pad up to EXTRACT_MIN_ENTRIES with the full trimmed body when
+    // the line-by-line pass yielded fewer entries than the minimum.
+    while (out.length < EXTRACT_MIN_ENTRIES) {
+      out.push({ kind: 'progress', body: body.trim() });
+    }
   }
   return out;
 }
@@ -255,11 +270,12 @@ export function buildSummaryReminder(input) {
  * @param {{ tags?: string[], top?: number }} [opts]
  *   tags : optional tag hints to boost relevance
  *   top  : default 5
- * @returns {Array<{body:string, shard:string}>}
+ * @returns {Array<{body:string, shard:string, authoredBy?:string}>}
  */
 export function buildTaskCtxMemories(memoryDir, opts = {}) {
   const top = Number.isFinite(opts.top) ? Number(opts.top) : 5;
   const tagHints = Array.isArray(opts.tags) ? opts.tags : [];
+  const nowMs = typeof opts.now === 'number' ? opts.now : Date.now();
   let results = [];
   try {
     const store = openMemoryShardStore(memoryDir, 'task');
@@ -277,6 +293,7 @@ export function buildTaskCtxMemories(memoryDir, opts = {}) {
           tags: Array.isArray(r.tags) ? r.tags : [],
           pinned: !!r.pinned,
           createdAt: full?.createdAt || null,
+          authoredBy: full?.authoredBy || null,
         };
       })
       .filter((r) => r.body && r.body.trim());
@@ -284,8 +301,13 @@ export function buildTaskCtxMemories(memoryDir, opts = {}) {
     const score = (r) => {
       let s = 0;
       if (r.pinned) s += 1000;
-      // recency proxy (ISO string compare works lexicographically)
-      if (r.createdAt) s += 10;
+      // Recency decay: half-life of 24h. Recent entries score up to +100,
+      // decaying toward 0 as they age.
+      if (r.createdAt) {
+        const ageMs = nowMs - new Date(r.createdAt).getTime();
+        const halfLifeMs = 24 * 60 * 60 * 1000; // 24 hours
+        s += Math.max(0, 100 * Math.pow(0.5, Math.max(0, ageMs) / halfLifeMs));
+      }
       // tag relevance
       for (const t of tagHints) if (r.tags.includes(t)) s += 5;
       return s;
@@ -296,7 +318,11 @@ export function buildTaskCtxMemories(memoryDir, opts = {}) {
       // stable recency tie-break
       return String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
     });
-    results = hits.slice(0, top).map((r) => ({ body: r.body, shard: r.shard }));
+    results = hits.slice(0, top).map((r) => ({
+      body: r.body,
+      shard: r.shard,
+      ...(r.authoredBy ? { authoredBy: r.authoredBy } : {}),
+    }));
   } catch {
     results = [];
   }

@@ -53,6 +53,8 @@ export const REASON_I18N_KEY = Object.freeze({
   reserved: 'unify.vp.idError.reserved',
   // Backend-only codes surfaced by vp-crud.js.
   duplicate: 'unify.vp.idError.duplicate',
+  not_found: 'unify.vp.idError.not_found',
+  unknown: 'unify.vp.idError.unknown',
 });
 
 /** Return the i18n key for a reason, or the reason itself as a fallback. */
