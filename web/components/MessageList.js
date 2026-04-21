@@ -1,9 +1,10 @@
 import MessageItem from './MessageItem.js';
 import AssistantTurn from './AssistantTurn.js';
+import TaskMessageItem from './TaskMessageItem.js';
 
 export default {
   name: 'MessageList',
-  components: { MessageItem, AssistantTurn },
+  components: { MessageItem, AssistantTurn, TaskMessageItem },
   template: `
     <main class="chat-container" ref="containerRef">
       <!-- Session Loading Overlay - only covers message area -->
@@ -90,6 +91,14 @@ export default {
           <div class="msg-row" :data-msg-id="item.id" :class="{ 'msg-flash': item.id === flashMsgId }">
             <!-- User / system / error messages: rendered by MessageItem -->
             <MessageItem v-if="item.type === 'user' || item.type === 'system' || item.type === 'error'" :message="item.message" />
+
+            <!-- task-334j: task-scoped group message row with VP attribution + [task] pill -->
+            <TaskMessageItem
+              v-else-if="item.type === 'task-message'"
+              :message="item.message"
+              @reply="onTaskMessageReply"
+              @open-detail="onOpenVpDetail"
+            />
 
             <!-- Assistant Turn card: aggregated rendering -->
             <AssistantTurn v-else-if="item.type === 'assistant-turn'" :turn="item" />
@@ -496,6 +505,16 @@ export default {
           // breaks the streak so the next VP turn re-shows its header.
           lastShownSpeakerVpId = null;
           result.push({ type: msg.type, id: msg.id || 's_' + i, message: msg });
+          continue;
+        }
+
+        // task-334j: task-scoped group message row. Breaks the assistant
+        // turn streak like a user/system row (distinct visual channel —
+        // avatar + [task] pill — not a continuation of an assistant turn).
+        if (msg.type === 'task-message') {
+          finishTurn();
+          lastShownSpeakerVpId = null;
+          result.push({ type: 'task-message', id: msg.id || 'tm_' + i, message: msg });
           continue;
         }
 
@@ -996,6 +1015,25 @@ export default {
       if (dogRafId) { cancelAnimationFrame(dogRafId); dogRafId = null; }
     });
 
+    // task-334j: task-message row handlers.
+    const onTaskMessageReply = (payload) => {
+      if (!payload || !payload.msgId) return;
+      // Scope reply-to by active taskId so it survives re-entry into the
+      // same task; ChatInput reads `task:${taskId}` on send.
+      const taskId = store.unifyActiveTaskDetailId;
+      if (!taskId) return;
+      store.setReplyTo('task:' + taskId, {
+        msgId: payload.msgId,
+        vpId: payload.vpId,
+        content: payload.textPreview,
+      });
+    };
+
+    const onOpenVpDetail = (vpId) => {
+      if (!vpId) return;
+      store.enterVpDetailView(vpId);
+    };
+
     return {
       store,
       containerRef,
@@ -1018,6 +1056,9 @@ export default {
       questionLX,
       questionRX,
       refreshSession,
+      // task-334j
+      onTaskMessageReply,
+      onOpenVpDetail,
       onlineAgents,
       turnGroups
     };

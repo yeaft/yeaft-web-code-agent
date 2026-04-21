@@ -240,6 +240,25 @@ export const useChatStore = defineStore('chat', {
     // ★ task-314: most recent fork result (ok/error + target thread id).
     unifyLastForkResult: null,
 
+    // ★ task-334j: task-scoped group-chat state (multi-VP message list).
+    //
+    // - taskMessagesMap: { [taskId]: TaskMessage[] } parallel cache keyed
+    //   by taskId. Each entry is the normalised record pushed by
+    //   handleUnifyOutput on a `task_message` event (agent echo of a
+    //   `unify_task_message` send; see agent/unify/task-message.js).
+    // - taskMessageRejects: transient toast queue. Each inbound
+    //   `task_message_rejected` event appends one entry; the toast
+    //   component auto-dismisses after 4s and calls
+    //   dismissTaskMessageReject to drain the array.
+    // - replyToMap: { [key]: { msgId, vpId, textPreview } } — active
+    //   reply-to state keyed by a caller-chosen scope key (e.g.
+    //   `task:<taskId>`). ChatInput reads replyToMap[taskReplyKey()]
+    //   when it builds a unify_task_message payload; ReplyToCard renders
+    //   the quote card above the textarea.
+    taskMessagesMap: {},
+    taskMessageRejects: [],
+    replyToMap: {},
+
     // ★ task-312: jump-to-message highlight target. When the sidebar
     // search triggers a thread hit, the store records the matching
     // keyword here so MessageList can scroll to / flash the first
@@ -782,6 +801,70 @@ export const useChatStore = defineStore('chat', {
             at: Date.now(),
           };
           break;
+
+        // ★ task-334j: task-scoped group-chat message arrival (R6 §Δ28).
+        //
+        // Server-side echo of a unify_task_message send (or a broadcast to
+        // another connected view). We push the record into two places:
+        //   1) taskMessagesMap[taskId] — parallel cache for task-scoped
+        //      reads (e.g. a future task-detail-only rail).
+        //   2) messagesMap[unifyConversationId] — mirror into the main
+        //      stream so MessageList's turnGroups aggregator picks it up
+        //      as a `task-message` row.
+        // Dedup by msgId so a reconnect-replay (future 334l persistence)
+        // does not double-insert (forward-compat, F-J1 from spec §13).
+        case 'task_message': {
+          if (!event || !event.msgId || !event.taskId) break;
+          const taskId = event.taskId;
+          if (!this.taskMessagesMap[taskId]) this.taskMessagesMap[taskId] = [];
+          const taskList = this.taskMessagesMap[taskId];
+          if (!taskList.some(m => m.msgId === event.msgId)) {
+            taskList.push({
+              msgId: event.msgId,
+              vpId: event.vpId,
+              text: event.text,
+              mentions: Array.isArray(event.mentions) ? event.mentions : [],
+              replyTo: event.replyTo || null,
+              ts: event.ts,
+              groupId: event.groupId,
+              taskId,
+            });
+          }
+          const convId = this.unifyConversationId;
+          if (convId) {
+            if (!this.messagesMap[convId]) this.messagesMap[convId] = [];
+            const stream = this.messagesMap[convId];
+            if (!stream.some(m => m && m.id === event.msgId)) {
+              stream.push({
+                type: 'task-message',
+                id: event.msgId,
+                taskId,
+                groupId: event.groupId,
+                vpId: event.vpId,
+                content: event.text,
+                mentions: Array.isArray(event.mentions) ? event.mentions : [],
+                replyTo: event.replyTo || null,
+                timestamp: typeof event.ts === 'number' ? event.ts : Date.now(),
+              });
+            }
+          }
+          break;
+        }
+
+        // ★ task-334j: rejected unify_task_message — surface as a toast.
+        case 'task_message_rejected': {
+          const id = 'tmr_' + Date.now().toString(36) + '_' +
+            Math.random().toString(36).slice(2, 8);
+          this.taskMessageRejects.push({
+            id,
+            code: typeof event.code === 'string' ? event.code : 'unknown',
+            groupId: event.groupId || null,
+            taskId: event.taskId || null,
+            requestId: event.requestId || null,
+            at: Date.now(),
+          });
+          break;
+        }
       }
     },
     fetchExpertRoleDefinitions() {
@@ -1045,6 +1128,10 @@ export const useChatStore = defineStore('chat', {
       this.unifyTasks = [];
       this.unifyActiveThreadId = null;
       this.unifyActiveTaskId = null;
+      // task-334j: drop any task-chat caches / in-flight reply state
+      this.taskMessagesMap = {};
+      this.taskMessageRejects = [];
+      this.replyToMap = {};
       // Tell agent to reset session so Engine gets a fresh start
       if (this.unifyAgentId) {
         this.sendWsMessage({
@@ -1052,6 +1139,66 @@ export const useChatStore = defineStore('chat', {
           agentId: this.unifyAgentId,
         });
       }
+    },
+
+    // =====================
+    // task-334j: group view send + reply state helpers
+    // =====================
+    /**
+     * Wire a unify_task_message send per R6 §Δ28 / §Δ31.6.
+     * Payload (agent/unify/task-message.js validates the mirror):
+     *   { type: 'unify_task_message', groupId, taskId, vpId, text,
+     *     mentions?, replyTo?, requestId? }
+     * No-ops when text is empty (agent would reject with empty_text).
+     */
+    sendUnifyTaskMessage({ groupId, taskId, vpId, text, mentions, replyTo, requestId }) {
+      if (!text || !text.trim()) return;
+      if (!groupId || !taskId || !vpId) return;
+      const msg = {
+        type: 'unify_task_message',
+        groupId,
+        taskId,
+        vpId,
+        text,
+      };
+      if (Array.isArray(mentions) && mentions.length > 0) msg.mentions = mentions;
+      if (replyTo) msg.replyTo = replyTo;
+      if (requestId) msg.requestId = requestId;
+      this.sendWsMessage(msg);
+    },
+
+    /**
+     * Set the active reply-to target for a scope `key` (e.g. `task:<id>`).
+     * `msg` can be either a task_message record (msgId/text) or a mirror
+     * stream row (id/content); we normalise onto msgId + textPreview.
+     * Pass a falsy `msg` to clear.
+     */
+    setReplyTo(key, msg) {
+      if (!key) return;
+      if (!msg) { delete this.replyToMap[key]; return; }
+      const msgId = msg.msgId || msg.id || null;
+      if (!msgId) { delete this.replyToMap[key]; return; }
+      const previewSrc = typeof msg.content === 'string' ? msg.content
+        : (typeof msg.text === 'string' ? msg.text : '');
+      this.replyToMap[key] = {
+        msgId,
+        vpId: msg.vpId || null,
+        textPreview: previewSrc.slice(0, 80),
+      };
+    },
+
+    clearReplyTo(key) {
+      if (!key) return;
+      delete this.replyToMap[key];
+    },
+
+    /**
+     * Dismiss (remove) a pending task_message_rejected toast by id.
+     * Called by TaskMessageRejectToast on timer expiry or click.
+     */
+    dismissTaskMessageReject(id) {
+      if (!id) return;
+      this.taskMessageRejects = this.taskMessageRejects.filter(r => r.id !== id);
     },
 
     // =====================

@@ -1242,3 +1242,191 @@
   font-style: italic;
 }
 
+
+/* ============================
+ * task-334j: Task Message Rows
+ * ============================ */
+.task-message-row {
+  padding: 8px 12px;
+  border: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.task-message-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.task-message-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--task-accent-bg, rgba(99, 102, 241, 0.1));
+  font-size: 11px;
+  color: var(--task-accent, #6366f1);
+  white-space: nowrap;
+}
+.task-message-pill-label {
+  font-weight: 600;
+}
+.task-message-pill-id {
+  opacity: 0.7;
+  font-family: monospace;
+  font-size: 10px;
+}
+.task-message-time {
+  font-size: 11px;
+  color: var(--text-tertiary, #999);
+  margin-left: auto;
+}
+.task-message-reply-btn {
+  opacity: 0;
+  transition: opacity 200ms ease;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--text-secondary, #666);
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+.task-message-row:hover .task-message-reply-btn {
+  opacity: 1;
+}
+.task-message-reply-btn:hover {
+  background: var(--surface-hover, rgba(0,0,0,0.05));
+}
+.task-message-quote {
+  display: flex;
+  gap: 4px;
+  padding: 4px 8px;
+  margin-left: 8px;
+  border-left: 2px solid var(--border-subtle, #ddd);
+  font-size: 12px;
+  color: var(--text-secondary, #666);
+  font-style: italic;
+}
+.task-message-quote-arrow {
+  color: var(--text-tertiary, #999);
+}
+.task-message-body {
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.task-message-mentions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+.task-message-mention-chip {
+  font-size: 11px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--mention-bg, rgba(99, 102, 241, 0.08));
+  color: var(--task-accent, #6366f1);
+}
+
+/* ============================
+ * task-334j: Reply-To Card
+ * ============================ */
+.reply-to-card {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  margin: 0 8px 4px 8px;
+  background: var(--surface-1, #f7f7f8);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-secondary, #666);
+}
+.reply-to-arrow {
+  color: var(--text-tertiary, #999);
+}
+.reply-to-label {
+  font-weight: 500;
+  color: var(--text-primary, #333);
+  white-space: nowrap;
+}
+.reply-to-preview {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-style: italic;
+}
+.reply-to-cancel {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 16px;
+  color: var(--text-tertiary, #999);
+  padding: 0 2px;
+  line-height: 1;
+}
+.reply-to-cancel:hover {
+  color: var(--text-primary, #333);
+}
+
+/* ============================
+ * task-334j: Reject Toast
+ * ============================ */
+.task-reject-toasts {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 8px;
+  pointer-events: none;
+}
+.task-reject-toast {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: var(--error-bg, #fef2f2);
+  color: var(--error-text, #b91c1c);
+  border-radius: 8px;
+  font-size: 13px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+  cursor: pointer;
+  pointer-events: auto;
+  max-width: 360px;
+}
+.task-reject-icon {
+  font-size: 16px;
+}
+.task-reject-toast-enter-active,
+.task-reject-toast-leave-active {
+  transition: all 300ms ease;
+}
+.task-reject-toast-enter-from {
+  opacity: 0;
+  transform: translateY(20px);
+}
+.task-reject-toast-leave-to {
+  opacity: 0;
+  transform: translateX(40px);
+}
+
+/* ============================
+ * task-334j: VP Mention Autocomplete
+ * ============================ */
+.vp-mention-autocomplete .vp-mention-id {
+  color: var(--text-tertiary, #999);
+  font-size: 12px;
+}
+.vp-mention-autocomplete .vp-mention-role {
+  font-size: 11px;
+  color: var(--text-tertiary, #aaa);
+  margin-left: auto;
+}

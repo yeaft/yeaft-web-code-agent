@@ -8,10 +8,11 @@ import VpLibraryLink from './VpLibraryLink.js';
 import VpCrudModal from './VpCrudModal.js';
 import VpDetailView from './VpDetailView.js';
 import GroupInviteModal from './GroupInviteModal.js';
+import TaskMessageRejectToast from './TaskMessageRejectToast.js';
 
 export default {
   name: 'UnifyPage',
-  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2, UnifyBreadcrumb, UnifyTaskDetailView, VpLibraryLink, VpCrudModal, VpDetailView, GroupInviteModal },
+  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2, UnifyBreadcrumb, UnifyTaskDetailView, VpLibraryLink, VpCrudModal, VpDetailView, GroupInviteModal, TaskMessageRejectToast },
   template: `
     <div class="unify-page">
       <!-- Mobile sidebar overlay -->
@@ -255,6 +256,9 @@ export default {
            container so Vue sees a single root; the overlay is fixed-position
            and covers the viewport regardless of parent layout. -->
       <VpCrudModal v-if="vpLibraryOpen" @close="vpLibraryOpen = false" />
+
+      <!-- task-334j: reject toast stack (bottom-right) -->
+      <TaskMessageRejectToast />
 
       <!-- task-334m: Group invite modal. Shown whenever the active group
            has no members + no defaultVpId (drives R6 §Δ10 hard constraint

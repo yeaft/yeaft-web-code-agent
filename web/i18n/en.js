@@ -984,4 +984,25 @@ export default {
   'unify.group.invite.body': '"{name}" has no members yet. Add a VP from your library to start chatting.',
   'unify.group.invite.openLibrary': 'Open VP Library',
   'unify.group.invite.dismiss': 'Not now',
+
+  // ===== task-334j: group view (mentions / replyTo / reject) =====
+  'unify.vp.mention.placeholder': 'Search role by id or name\u2026',
+  'unify.vp.mention.noMatch': 'No matching role',
+  'unify.vp.mention.count': '{count} mentions',
+
+  'unify.task.reply.aria': 'Reply to this message',
+  'unify.task.reply.to': 'Replying to @{vpId}',
+  'unify.task.reply.cancel': 'Cancel reply',
+  'unify.task.reply.originalDeleted': '(original message removed)',
+
+  'unify.task.reject.missing_group_id': 'Message send failed: group not specified.',
+  'unify.task.reject.missing_task_id': 'Message send failed: task context lost.',
+  'unify.task.reject.missing_vp_id': 'Message send failed: speaker not set.',
+  'unify.task.reject.invalid_vp_id': 'Message send failed: invalid speaker id.',
+  'unify.task.reject.empty_text': 'Message send failed: empty message.',
+  'unify.task.reject.text_too_long': 'Message send failed: text too long (max 16 KiB).',
+  'unify.task.reject.unknown': 'Message send failed.',
+
+  'unify.task.pill.label': 'task',
+  'unify.task.messageTime.aria': 'Sent at {time}',
 };
