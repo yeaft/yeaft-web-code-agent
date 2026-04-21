@@ -1,6 +1,7 @@
 import { useChatStore } from './stores/chat.js';
 import { useAuthStore } from './stores/auth.js';
 import { useVpStore } from './stores/vp.js';
+import { useGroupsStore } from './stores/groups.js';
 import { createI18n } from './utils/i18n.js';
 import zhCN from './i18n/zh-CN.js';
 import en from './i18n/en.js';
@@ -79,6 +80,7 @@ createI18n(app, { 'zh-CN': zhCN, en });
 window.Pinia.useChatStore = useChatStore;
 window.Pinia.useAuthStore = useAuthStore;
 window.Pinia.useVpStore = useVpStore;
+window.Pinia.useGroupsStore = useGroupsStore;
 
 // Register global components
 app.component('ToolLine', ToolLine);
