@@ -268,7 +268,7 @@ describe('Memory pipeline — wiring verification', () => {
   const toolsIndexSrc = readFileSync(pjoin(root, 'agent/unify/tools/index.js'), 'utf8');
 
   it('engine imports recall and consolidate', () => {
-    expect(engineSrc).toContain("from './memory/recall.js'");
+    expect(engineSrc).toContain("from './memory/recall-r6.js'");
     expect(engineSrc).toContain("from './memory/consolidate.js'");
   });
 

@@ -20,7 +20,7 @@
 import { randomUUID } from 'crypto';
 import { buildSystemPrompt } from './prompts.js';
 import { LLMContextError, LLMAbortError } from './llm/adapter.js';
-import { recall } from './memory/recall.js';
+import { recallR6, formatForInjection } from './memory/recall-r6.js';
 import { shouldConsolidate, consolidate } from './memory/consolidate.js';
 import { buildMemoryInjection } from './memory/layout.js';
 import { runStopHooks } from './stop-hooks.js';
@@ -350,29 +350,34 @@ export class Engine {
 
   /**
    * Perform memory recall for a given prompt.
+   * Uses recallR6 (R6 shard-based recall) when memoryShardStore is available,
+   * falling back to empty results if not.
    *
    * @param {string} prompt
-   * @returns {Promise<{ profile: string, entries: object[] }|null>}
+   * @returns {Promise<{ profile: string, entries: object[], formatted: string }|null>}
    */
   async #recallMemory(prompt) {
-    if (!this.#memoryStore) return null;
+    const memory = { profile: '', entries: [], formatted: '' };
 
-    const memory = { profile: '', entries: [] };
+    // Read user profile from legacy store if available
+    if (this.#memoryStore) {
+      memory.profile = this.#memoryStore.readProfile();
+    }
 
-    // Read user profile
-    memory.profile = this.#memoryStore.readProfile();
-
-    // Recall relevant entries (uses fastModel for cheaper/faster side-queries)
-    try {
-      const result = await recall({
-        prompt,
-        adapter: this.#adapter,
-        config: this.#fastConfig,
-        memoryStore: this.#memoryStore,
-      });
-      memory.entries = result.entries;
-    } catch {
-      // Recall failure is non-critical
+    // R6 shard-based recall (preferred path)
+    if (this.#memoryShardStore) {
+      try {
+        const result = await recallR6({
+          prompt,
+          memoryShardStore: this.#memoryShardStore,
+          adapter: this.#adapter,
+          fastModel: this.#fastConfig?.model,
+        });
+        memory.entries = result.entries;
+        memory.formatted = formatForInjection(result.entries);
+      } catch {
+        // Recall failure is non-critical
+      }
     }
 
     return memory;
@@ -563,10 +568,13 @@ export class Engine {
   async *#runQuery({ prompt, messages, signal, userEffort = null, scenario = 'chat' }) {
 
     // ─── Pre-query: Memory Injection (task-287) + Compact Summary ──
-    // New layout: always inject Memory Index + user-preferences + project
-    // header excerpt. No per-turn fuzzy recall — LLM calls memory_load /
+    // Two-layer recall:
+    //   1. Static memory index injection (buildMemoryInjection — always)
+    //   2. R6 shard-based recall (recallR6 — when memoryShardStore is wired)
+    // No per-turn fuzzy recall via old recall.js — LLM calls memory_load /
     // memory_query on demand (memory_search still works as a deprecated alias).
     let memoryInjection = '';
+    let recallEntryCount = 0;
     if (this.#yeaftDir) {
       try {
         const entryCount = this.#memoryStore?.stats?.().entryCount ?? 0;
@@ -580,8 +588,18 @@ export class Engine {
         // Injection failure is non-critical — fall back to empty.
       }
     }
+
+    // R6 recall: append shard-based recall results to memory injection
+    const recallResult = await this.#recallMemory(prompt);
+    if (recallResult && recallResult.formatted) {
+      memoryInjection = memoryInjection
+        ? memoryInjection + '\n\n' + recallResult.formatted
+        : recallResult.formatted;
+      recallEntryCount = recallResult.entries.length;
+    }
+
     if (memoryInjection) {
-      yield { type: 'recall', entryCount: 0, cached: false };
+      yield { type: 'recall', entryCount: recallEntryCount, cached: false };
     }
 
     const compactSummary = this.#getCompactSummary();
