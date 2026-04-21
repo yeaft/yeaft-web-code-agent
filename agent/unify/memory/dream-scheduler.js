@@ -40,6 +40,8 @@ const MAX_CONCURRENT_DREAMS = 2;
  *   conversationStore: object | null,
  *   adapter: object | null,
  *   config: object,
+ *   group?: import('../groups/group-store.js').GroupHandle | null,
+ *   memoryDir?: string | null,
  *   idleMs?: number,
  *   onDreamStart?: (vpId: string) => void,
  *   onDreamEnd?: (vpId: string, result: object) => void,
@@ -54,6 +56,8 @@ export function createDreamScheduler(opts = {}) {
     conversationStore,
     adapter,
     config,
+    group = null,
+    memoryDir = null,
     idleMs = DREAM_IDLE_MS,
     onDreamStart,
     onDreamEnd,
@@ -123,6 +127,7 @@ export function createDreamScheduler(opts = {}) {
     try {
       onDreamStart?.(vpId);
 
+      // Shard-based compact/merge/prune
       const result = await dreamShard({
         shardStore: memoryShardStore,
         adapter,
