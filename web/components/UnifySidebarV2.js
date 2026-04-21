@@ -305,14 +305,16 @@ export default {
                 class="usv2-group-row-kebab"
                 :title="$t('unify.group.moreActions')"
                 :aria-label="$t('unify.group.moreActions')"
+                aria-haspopup="menu"
+                :aria-expanded="groupMenu.open && groupMenu.groupId === g.id ? 'true' : 'false'"
                 @click.stop="openGroupMenu(g, $event)"
               >⋯</button>
               <!-- Per-row action menu (Rename / Archive). -->
-              <div v-if="groupMenu.open && groupMenu.groupId === g.id" class="usv2-group-row-menu" @click.stop>
-                <button type="button" class="usv2-group-row-menu-item" @click="startRenameGroup(g)">
+              <div v-if="groupMenu.open && groupMenu.groupId === g.id" class="usv2-group-row-menu" role="menu" @click.stop>
+                <button type="button" role="menuitem" class="usv2-group-row-menu-item" @click="startRenameGroup(g)">
                   {{ $t('unify.group.rename') }}
                 </button>
-                <button type="button" class="usv2-group-row-menu-item usv2-group-row-menu-danger" @click="startArchiveGroup(g)">
+                <button type="button" role="menuitem" class="usv2-group-row-menu-item usv2-group-row-menu-danger" @click="startArchiveGroup(g)">
                   {{ $t('unify.group.archive') }}
                 </button>
               </div>

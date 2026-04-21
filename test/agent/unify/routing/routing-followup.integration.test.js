@@ -305,4 +305,56 @@ describe('route_forward Engine ↔ Coordinator ↔ RoleInstance wiring (N3)', ()
     // sender not self-dispatched.
     expect(instances.get('alice').inputQueue).toHaveLength(0);
   });
+
+  // ── Follow-up Batch A supplementary N3 cases ─────────────────
+  // These extend B1/B2/B3 with two failure paths that also go end-to-end
+  // through router → coordinator → RoleInstance (no queue should receive
+  // anything on reject, and the tool still returns structured JSON).
+  it('B4: self-forward rejected — no queue receives the envelope', async () => {
+    const { router, instances } = makeStack();
+
+    const result = await engineCallsRouteForward({
+      router,
+      senderVpId: 'alice',
+      args: { to: 'alice', text: 'note to self' },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe('self_forward_rejected');
+    for (const id of ['alice', 'bob', 'carol']) {
+      expect(instances.get(id).inputQueue).toHaveLength(0);
+    }
+  });
+
+  it('B5: inbound envelope with chain at MAX depth → chain_depth_exceeded, no dispatch', async () => {
+    const { router, instances } = makeStack();
+
+    // Forge an inbound envelope already carrying MAX_CHAIN_DEPTH causedBy
+    // entries. The tool extends this chain with the inbound + outbound
+    // msgIds before asking the loop guard, so guard check must reject.
+    const deepChain = new Array(MAX_CHAIN_DEPTH).fill(0).map((_, i) => `msg_${i}`);
+    const inbound = {
+      groupId: 'grp_int',
+      trigger: 'mention',
+      msg: {
+        id: 'msg_inbound',
+        text: '@alice ping',
+        meta: { causedBy: deepChain },
+      },
+    };
+
+    const result = await engineCallsRouteForward({
+      router,
+      senderVpId: 'alice',
+      inboundEnvelope: inbound,
+      args: { to: 'bob', text: 'forwarded' },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe('chain_depth_exceeded');
+    // No downstream queue was touched.
+    for (const id of ['alice', 'bob', 'carol']) {
+      expect(instances.get(id).inputQueue).toHaveLength(0);
+    }
+  });
 });
