@@ -266,7 +266,7 @@ describe('task-315 UnifyPage wiring', () => {
   });
 
   it('hides MessageList when task detail view is active', () => {
-    expect(src).toMatch(/<MessageList[\s\S]*?v-if="!showSettings && !store\.unifyActiveTaskDetailId(?:[^"]*)"/);
+    expect(src).toMatch(/<MessageList[\s\S]*?v-if="!showSettings && (?:[^"]*?)!store\.unifyActiveTaskDetailId(?:[^"]*)"/);
   });
 
   it('hides the thread-filter breadcrumb while task detail view is active', () => {

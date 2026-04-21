@@ -733,6 +733,23 @@ export const useChatStore = defineStore('chat', {
           break;
         }
 
+        // ★ task-334-ui-d: User Memory events.
+        case 'user_memory_snapshot': {
+          const um = window.Pinia?.useUserMemoryStore?.();
+          if (um) um.applySnapshot(event.entries);
+          break;
+        }
+        case 'user_memory_updated': {
+          const um = window.Pinia?.useUserMemoryStore?.();
+          if (um) um.applyUpdate(event);
+          break;
+        }
+        case 'user_memory_removed': {
+          const um = window.Pinia?.useUserMemoryStore?.();
+          if (um) um.applyRemoval(event);
+          break;
+        }
+
         // ★ task-301 Part 2: real-store push from agent.
         // Agent's ThreadStore changes (SpawnThread / SwitchThread /
         // ArchiveThread / AttachThreadToTask) → web-bridge serialises the
