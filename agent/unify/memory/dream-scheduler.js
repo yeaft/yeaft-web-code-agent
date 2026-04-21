@@ -23,6 +23,7 @@
 
 import { dreamShard } from './dream-shard.js';
 import { checkRecompression } from './recompression.js';
+import { runUserDreamJob } from './user-memory-store.js';
 
 /** Default idle timeout before dream triggers (ms). */
 export const DREAM_IDLE_MS = 30 * 60 * 1000; // 30 min
@@ -35,6 +36,8 @@ const MAX_CONCURRENT_DREAMS = 2;
  *
  * @param {{
  *   memoryShardStore: object | null,
+ *   userMemoryStore: object | null,
+ *   conversationStore: object | null,
  *   adapter: object | null,
  *   config: object,
  *   idleMs?: number,
@@ -47,6 +50,8 @@ const MAX_CONCURRENT_DREAMS = 2;
 export function createDreamScheduler(opts = {}) {
   const {
     memoryShardStore,
+    userMemoryStore,
+    conversationStore,
     adapter,
     config,
     idleMs = DREAM_IDLE_MS,
@@ -131,6 +136,19 @@ export function createDreamScheduler(opts = {}) {
       try {
         const recompResult = checkRecompression(memoryShardStore);
         result.recompression = recompResult;
+      } catch {
+        // Non-fatal
+      }
+
+      // Post-dream: run user-memory extract + compact (334-w7b)
+      try {
+        const userDreamResult = await runUserDreamJob({
+          store: userMemoryStore || undefined,
+          conversationStore: conversationStore || undefined,
+          adapter: adapter || undefined,
+          config: { model: config?.primaryModel || config?.model || 'default' },
+        });
+        result.userDream = userDreamResult;
       } catch {
         // Non-fatal
       }

@@ -143,17 +143,17 @@ describe('buildUserProfile', () => {
 // ─── Dream Job ───────────────────────────────────────────────
 
 describe('runUserDreamJob', () => {
-  it('runs scan+compact on a store with entries', () => {
+  it('runs scan+compact on a store with entries', async () => {
     writeUserMemory(store, { text: 'entry one' });
     writeUserMemory(store, { text: 'entry two' });
-    const result = runUserDreamJob({ store });
+    const result = await runUserDreamJob({ store });
     expect(result).toBeTruthy();
     expect(result.scan.totalEntries).toBeGreaterThanOrEqual(2);
     expect(result.compact).toBeTruthy();
   });
 
-  it('returns null when store is unavailable', () => {
-    expect(runUserDreamJob({ store: null })).toBeNull();
+  it('returns null when store is unavailable', async () => {
+    expect(await runUserDreamJob({ store: null })).toBeNull();
   });
 });
 

@@ -15,10 +15,11 @@
 import { homedir } from 'os';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { openMemoryShardStore } from './shard-store.js';
 import { USER_SHARDS } from './schema.js';
 import { scanShards, runCompactJob } from './dream-shard.js';
+import { pickEffort } from '../effort.js';
 
 /** Default storage root for user memory. */
 export const USER_MEMORY_DIR = join(homedir(), '.yeaft', 'user', 'memory');
@@ -193,19 +194,45 @@ export function buildUserProfile(store, opts = {}) {
 // ─── Dream Job ───────────────────────────────────────────────
 
 /**
- * Run user-memory dream maintenance (compact low-utilization shards).
- * Reuses dream-shard.js compact framework — no LLM calls needed for
- * user-memory (user-authored entries don't need merge/prune by an LLM;
- * we only compact to reclaim superseded/removed tombstones).
+ * Run user-memory dream maintenance: extract phase + compact.
+ * Extract reads conversation messages since the last watermark, uses LLM to
+ * identify user-relevant facts, then writes them to the appropriate shards.
+ * Compact phase reclaims superseded/removed tombstones (unchanged from 334g).
  *
- * @param {{ store?: object, onPhase?: (phase:string, data:any) => void }} [opts]
- * @returns {{ scan: object, compact: object } | null}
+ * @param {{
+ *   store?: object,
+ *   conversationStore?: object,
+ *   adapter?: object,
+ *   config?: object,
+ *   onPhase?: (phase: string, data: any) => void,
+ * }} [opts]
+ * @returns {Promise<{ extract: object|null, scan: object, compact: object } | null>}
  */
-export function runUserDreamJob(opts = {}) {
+export async function runUserDreamJob(opts = {}) {
   const store = 'store' in opts ? opts.store : getUserMemoryStore();
   if (!store) return null;
 
+  let extractResult = null;
+
   try {
+    // ── Phase 1: Extract (LLM) ─────────────────────────────
+    if (opts.conversationStore && opts.adapter && opts.config) {
+      opts.onPhase?.('extract', 'starting');
+      try {
+        extractResult = await dreamExtract({
+          store,
+          conversationStore: opts.conversationStore,
+          adapter: opts.adapter,
+          config: opts.config,
+        });
+        opts.onPhase?.('extract', extractResult);
+      } catch (err) {
+        console.warn('[user-memory-store] extract phase failed:', err.message);
+        extractResult = { error: err.message, extracted: 0 };
+      }
+    }
+
+    // ── Phase 2: Compact ───────────────────────────────────
     const scan = scanShards(store);
     const compact = runCompactJob({
       shardStore: store,
@@ -214,9 +241,212 @@ export function runUserDreamJob(opts = {}) {
         ? (shard, r) => opts.onPhase('compact', { shard, ...r })
         : undefined,
     });
-    return { scan: { totalEntries: scan.totalEntries, totalBytes: scan.totalBytes }, compact };
+    return {
+      extract: extractResult,
+      scan: { totalEntries: scan.totalEntries, totalBytes: scan.totalBytes },
+      compact,
+    };
   } catch (err) {
     console.warn('[user-memory-store] dream job failed:', err.message);
     return null;
   }
+}
+
+// ─── Watermark ──────────────────────────────────────────────
+
+/**
+ * Watermark format (shared with 334-w7b):
+ *   { lastMessageId: string, lastMessageTs: number, updatedAt: string }
+ *
+ * Stored at <storeDir>/.watermark.json (alongside shard files).
+ */
+
+const WATERMARK_FILE = '.watermark.json';
+
+/**
+ * Read the extract watermark for a user-memory store.
+ * Returns null if no watermark exists yet.
+ *
+ * @param {string} dir — store directory (e.g. ~/.yeaft/user/memory)
+ * @returns {{ lastMessageId: string, lastMessageTs: number, updatedAt: string } | null}
+ */
+export function readWatermark(dir) {
+  try {
+    const p = join(dir, WATERMARK_FILE);
+    if (!existsSync(p)) return null;
+    return JSON.parse(readFileSync(p, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Write the extract watermark.
+ *
+ * @param {string} dir
+ * @param {{ lastMessageId: string, lastMessageTs: number }} wm
+ */
+export function writeWatermark(dir, wm) {
+  try {
+    const p = join(dir, WATERMARK_FILE);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(p, JSON.stringify({
+      lastMessageId: wm.lastMessageId,
+      lastMessageTs: wm.lastMessageTs,
+      updatedAt: new Date().toISOString(),
+    }, null, 2));
+  } catch (err) {
+    console.warn('[user-memory-store] writeWatermark failed:', err.message);
+  }
+}
+
+// ─── Extract Phase ──────────────────────────────────────────
+
+/** Max messages to process in a single extract pass. */
+const EXTRACT_MAX_MESSAGES = 50;
+
+/** Min messages required to trigger an extract. */
+const EXTRACT_MIN_MESSAGES = 3;
+
+/**
+ * Build the user-memory extraction prompt.
+ * Tailored for user-relevant facts (not VP/task memory).
+ *
+ * @param {object[]} messages
+ * @returns {string}
+ */
+export function buildUserExtractPrompt(messages) {
+  const conversation = messages.map(m => {
+    const prefix = m.role === 'user' ? 'User' : m.role === 'assistant' ? 'Assistant' : 'System';
+    return `[${prefix}]: ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`;
+  }).join('\n\n');
+
+  return `Analyze the following conversation and extract facts about THE USER that are worth remembering long-term.
+
+Focus on these categories:
+- **profile**: Name, job title, company, location, background, expertise areas
+- **preferences**: Coding style, tool preferences, language preferences, communication style
+- **projects**: Projects they work on, tech stacks, repositories, products
+- **goals**: Current goals, objectives, what they're trying to achieve
+- **relations**: Team members, colleagues, managers, collaborators mentioned
+
+For each fact, provide:
+- **shard**: One of: profile, preferences, projects, goals, relations
+- **body**: 1-2 sentences describing the fact clearly
+- **tags**: 1-3 keyword tags as an array
+
+Do NOT extract:
+- Specific code snippets or technical instructions
+- Temporary debugging context
+- Facts about the assistant (only about the user)
+- Information already implied by the conversation being about coding
+
+Return a JSON array. If nothing about the user is worth remembering, return [].
+
+Conversation:
+${conversation}`;
+}
+
+/**
+ * Extract user-relevant facts from conversation messages and write to user-memory shards.
+ *
+ * @param {{
+ *   store: object,
+ *   conversationStore: object,
+ *   adapter: object,
+ *   config: object,
+ *   dir?: string,
+ * }} params
+ * @returns {Promise<{ extracted: number, skipped: number, watermark: object|null }>}
+ */
+export async function dreamExtract({ store, conversationStore, adapter, config, dir }) {
+  const storeDir = dir || USER_MEMORY_DIR;
+  const wm = readWatermark(storeDir);
+
+  // Load all messages and filter to those after watermark
+  const allMessages = conversationStore.loadAll();
+  let newMessages;
+
+  if (wm && wm.lastMessageId) {
+    const idx = allMessages.findIndex(m => m.id === wm.lastMessageId);
+    newMessages = idx >= 0 ? allMessages.slice(idx + 1) : allMessages;
+  } else {
+    // No watermark — process all messages (first run)
+    newMessages = allMessages;
+  }
+
+  // Filter to user + assistant messages only (skip system)
+  newMessages = newMessages.filter(m => m.role === 'user' || m.role === 'assistant');
+
+  if (newMessages.length < EXTRACT_MIN_MESSAGES) {
+    return { extracted: 0, skipped: 0, watermark: wm };
+  }
+
+  // Cap to prevent huge LLM calls
+  const batch = newMessages.slice(-EXTRACT_MAX_MESSAGES);
+
+  // LLM extraction call
+  const system = 'You are a user profile extraction assistant. Analyze conversations and extract facts about the user. Return ONLY a valid JSON array, no other text.';
+  const prompt = buildUserExtractPrompt(batch);
+
+  let candidates = [];
+  try {
+    const result = await adapter.call({
+      model: config.model || config.primaryModel || 'default',
+      system,
+      messages: [{ role: 'user', content: prompt }],
+      maxTokens: 2048,
+      effort: pickEffort({ scenario: 'dream' }),
+    });
+
+    const text = result.text.trim();
+    const jsonMatch = text.match(/\[[\s\S]*\]/);
+    if (jsonMatch) {
+      candidates = JSON.parse(jsonMatch[0]);
+    }
+  } catch {
+    return { extracted: 0, skipped: 0, watermark: wm, error: 'llm_failed' };
+  }
+
+  if (!Array.isArray(candidates)) {
+    return { extracted: 0, skipped: 0, watermark: wm };
+  }
+
+  // Validate and write candidates
+  let extracted = 0;
+  let skipped = 0;
+
+  for (const c of candidates) {
+    if (!c || typeof c !== 'object' || !c.body) { skipped++; continue; }
+
+    // Use classifyUserMemoryShard if shard not provided or invalid
+    const shard = USER_SHARDS.includes(c.shard)
+      ? c.shard
+      : classifyUserMemoryShard(c.body, c.tags);
+
+    const id = writeUserMemory(store, {
+      text: c.body,
+      tags: Array.isArray(c.tags) ? c.tags.map(String) : [],
+      sourceRef: { origin: 'dream-extract' },
+    });
+
+    if (id) {
+      extracted++;
+    } else {
+      skipped++;
+    }
+  }
+
+  // Update watermark to last processed message
+  const lastMsg = batch[batch.length - 1];
+  if (lastMsg) {
+    const newWm = {
+      lastMessageId: lastMsg.id || '',
+      lastMessageTs: lastMsg.ts || Date.now(),
+    };
+    writeWatermark(storeDir, newWm);
+    return { extracted, skipped, watermark: newWm };
+  }
+
+  return { extracted, skipped, watermark: wm };
 }
