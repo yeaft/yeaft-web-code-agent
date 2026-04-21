@@ -23,6 +23,7 @@
 
 import { dreamShard } from './dream-shard.js';
 import { checkRecompression } from './recompression.js';
+import { dreamExtract } from './dream-extract.js';
 
 /** Default idle timeout before dream triggers (ms). */
 export const DREAM_IDLE_MS = 30 * 60 * 1000; // 30 min
@@ -37,6 +38,8 @@ const MAX_CONCURRENT_DREAMS = 2;
  *   memoryShardStore: object | null,
  *   adapter: object | null,
  *   config: object,
+ *   group?: import('../groups/group-store.js').GroupHandle | null,
+ *   memoryDir?: string | null,
  *   idleMs?: number,
  *   onDreamStart?: (vpId: string) => void,
  *   onDreamEnd?: (vpId: string, result: object) => void,
@@ -49,6 +52,8 @@ export function createDreamScheduler(opts = {}) {
     memoryShardStore,
     adapter,
     config,
+    group = null,
+    memoryDir = null,
     idleMs = DREAM_IDLE_MS,
     onDreamStart,
     onDreamEnd,
@@ -118,6 +123,24 @@ export function createDreamScheduler(opts = {}) {
     try {
       onDreamStart?.(vpId);
 
+      // Phase A: Extract new memories from conversation (§Δ26)
+      let extractResult = null;
+      if (group && memoryDir) {
+        try {
+          extractResult = await dreamExtract({
+            group,
+            shardStore: memoryShardStore,
+            adapter,
+            config: { model: config?.primaryModel || config?.model || 'default' },
+            memoryDir,
+          });
+        } catch (err) {
+          // Non-fatal — proceed to compact even if extract fails
+          extractResult = { error: err.message };
+        }
+      }
+
+      // Phase B: Shard-based compact/merge/prune
       const result = await dreamShard({
         shardStore: memoryShardStore,
         adapter,
@@ -134,6 +157,9 @@ export function createDreamScheduler(opts = {}) {
       } catch {
         // Non-fatal
       }
+
+      // Attach extract result
+      result.extract = extractResult;
 
       messagesSinceLastDream = 0;
       lastDreamAt = Date.now();
