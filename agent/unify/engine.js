@@ -310,6 +310,9 @@ export class Engine {
       memoryInjection,
       compactSummary,
       skillContent,
+      // task-334f: memory_trace tool is now registered (49 → 51 tools), so
+      // unlock the core_memory meta-line behind 334e's feature flag.
+      memoryTraceAvailable: true,
     });
   }
 
