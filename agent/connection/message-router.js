@@ -36,7 +36,7 @@ import { sendToServer, flushMessageBuffer } from './buffer.js';
 import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
 import { getLlmConfig, updateLlmConfig, getUnifySettings, updateUnifySettings } from '../unify/config-api.js';
-import { handleUnifyChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyMergeThread, handleUnifyForkThread, handleUnifyAbortThread, handleUnifyAbortAll, handleUnifyVpSubscribe, handleUnifyVpCreate, handleUnifyVpUpdate, handleUnifyVpDelete, handleUnifyVpRead, handleUnifyTaskMessage, handleUnifyUserMemoryWrite, handleUnifyUserMemoryRemove, handleUnifyListGroups, handleUnifyCreateGroup, handleUnifyRenameGroup, handleUnifyArchiveGroup, handleUnifyAddMember, handleUnifyRemoveMember, handleUnifySetDefaultVp } from '../unify/web-bridge.js';
+import { handleUnifyChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyMergeThread, handleUnifyForkThread, handleUnifyAbortThread, handleUnifyAbortAll, handleUnifyVpSubscribe, handleUnifyVpCreate, handleUnifyVpUpdate, handleUnifyVpDelete, handleUnifyVpRead, handleUnifyTaskMessage, handleUnifyUserMemoryWrite, handleUnifyUserMemoryRemove, handleUnifyListGroups, handleUnifyCreateGroup, handleUnifyRenameGroup, handleUnifyArchiveGroup, handleUnifyAddMember, handleUnifyRemoveMember, handleUnifySetDefaultVp, handleUnifyDreamTrigger } from '../unify/web-bridge.js';
 
 export async function handleMessage(msg) {
   switch (msg.type) {
@@ -460,6 +460,11 @@ export async function handleMessage(msg) {
       break;
     case 'unify_set_default_vp':
       handleUnifySetDefaultVp(msg);
+      break;
+
+    // wave-6b: manual dream trigger from VP detail page
+    case 'unify_dream_trigger':
+      await handleUnifyDreamTrigger(msg);
       break;
 
     // Expert roles definition (for ExpertPanel detail view)

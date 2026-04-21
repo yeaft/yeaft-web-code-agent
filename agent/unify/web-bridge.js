@@ -1016,6 +1016,11 @@ export async function handleUnifyChat(msg) {
       sendGroupSnapshotBroadcast();
     }
 
+    // wave-6b: notify dream scheduler of user activity
+    if (session?.dreamScheduler) {
+      session.dreamScheduler.noteUserMessage();
+    }
+
     // ─── Per-call AbortController (task-320) ──
     // Each call owns its own controller. Only once the router resolves the
     // target thread do we register it into `abortByThread` and abort any
@@ -1258,6 +1263,50 @@ export function __testSeedAbortController(threadId, ctrl) {
 /** Test-only: returns the set of thread ids currently registered. */
 export function __testGetRegisteredThreadIds() {
   return [...abortByThread.keys()];
+}
+
+/**
+ * wave-6b: Handle manual dream trigger from VP detail page.
+ * Payload: { vpId?: string } (optional, defaults to 'default').
+ * Emits unify_dream_result with the dream outcome.
+ *
+ * @param {{ vpId?: string }} msg
+ */
+export async function handleUnifyDreamTrigger(msg = {}) {
+  if (!session?.dreamScheduler) {
+    sendToServer({
+      type: 'unify_dream_result',
+      success: false,
+      error: 'Dream scheduler not initialized — session not loaded.',
+    });
+    return;
+  }
+
+  const vpId = msg.vpId || 'default';
+
+  try {
+    sendToServer({
+      type: 'unify_dream_status',
+      vpId,
+      status: 'running',
+    });
+
+    const result = await session.dreamScheduler.triggerDreamNow();
+
+    sendToServer({
+      type: 'unify_dream_result',
+      vpId,
+      success: !result.error && !result.skipped,
+      ...result,
+    });
+  } catch (err) {
+    sendToServer({
+      type: 'unify_dream_result',
+      vpId,
+      success: false,
+      error: err?.message || String(err),
+    });
+  }
 }
 
 /**

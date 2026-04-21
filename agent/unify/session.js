@@ -33,6 +33,7 @@ import { createIntentClassifier } from './router/intent-classifier.js';
 import { initInputQueueStore } from './input-queue/store.js';
 import { createDispatcher } from './pipeline/dispatcher.js';
 import { ensureDefaultGroupIfEmpty } from './groups/group-crud.js';
+import { createDreamScheduler } from './memory/dream-scheduler.js';
 import { join } from 'path';
 import { existsSync as existsSyncSafe, readFileSync as readFileSyncSafe } from 'fs';
 
@@ -232,6 +233,28 @@ export async function loadSession(options = {}) {
     yeaftDir,
   });
 
+  // ─── 9a. Create dream scheduler (wave-6b) ─────────────
+  const dreamScheduler = createDreamScheduler({
+    memoryShardStore,
+    adapter,
+    config,
+    onDreamStart: (vpId) => {
+      if (config.debug) console.log(`[Yeaft] Dream started for VP ${vpId}`);
+    },
+    onDreamEnd: (vpId, result) => {
+      if (config.debug) console.log(`[Yeaft] Dream ended for VP ${vpId}:`, JSON.stringify({
+        trigger: result.trigger,
+        entriesMerged: result.entriesMerged,
+        entriesPruned: result.entriesPruned,
+        bytesReclaimed: result.bytesReclaimed,
+        errors: result.errors?.length || 0,
+      }));
+    },
+    onError: (vpId, err) => {
+      console.warn(`[Yeaft] Dream error for VP ${vpId}:`, err?.message || err);
+    },
+  });
+
   // task-308 Phase 2: thread-aware engine registry.
   // Each thread gets its own EngineInstance (lazy-created) that owns its
   // messages array and tags all events with the bound threadId. Legacy
@@ -283,8 +306,13 @@ export async function loadSession(options = {}) {
     tools: toolRegistry.size,
   };
 
-  /** Graceful shutdown: disconnect MCP, close trace DB. */
+  /** Graceful shutdown: disconnect MCP, close trace DB, stop dream scheduler. */
   async function shutdown() {
+    try {
+      dreamScheduler.shutdown();
+    } catch {
+      // Best-effort cleanup
+    }
     try {
       engineRegistry.terminateAll();
     } catch {
@@ -313,6 +341,7 @@ export async function loadSession(options = {}) {
     conversationStore,
     memoryStore,
     memoryShardStore,
+    dreamScheduler,
     skillManager,
     mcpManager,
     toolRegistry,
