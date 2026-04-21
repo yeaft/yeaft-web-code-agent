@@ -312,7 +312,7 @@ describe('task-334e — user_profile section (§Δ29.3 stub)', () => {
 // ──────────────────────────────────────────────────────────────
 
 describe('task-334e — core_memory section (§Δ24.5)', () => {
-  it('renders top-7 entries + memory_trace meta line (en)', async () => {
+  it('renders top-7 entries + memory_trace meta line (en, flag=true)', async () => {
     const { buildSystemPrompt } = await freshImportPrompts();
     const entries = Array.from({ length: 10 }, (_, i) => ({
       body: `memory body ${i}`,
@@ -321,6 +321,7 @@ describe('task-334e — core_memory section (§Δ24.5)', () => {
     const prompt = buildSystemPrompt({
       language: 'en',
       coreMemory: { entries },
+      memoryTraceAvailable: true, // explicit opt-in; 334f flips via session.js
     });
     expect(prompt).toContain('## core_memory');
     expect(prompt).toContain('- [even] memory body 0');
@@ -332,7 +333,41 @@ describe('task-334e — core_memory section (§Δ24.5)', () => {
     expect(normalizeDate(prompt)).toMatchSnapshot();
   });
 
-  it('respects zh header + meta line', async () => {
+  it('default path (flag unset → false) renders entries WITHOUT meta line', async () => {
+    const { buildSystemPrompt } = await freshImportPrompts();
+    const prompt = buildSystemPrompt({
+      language: 'en',
+      coreMemory: {
+        entries: [
+          { body: 'alpha', shard: 'a' },
+          { body: 'beta', shard: 'b' },
+        ],
+      },
+    });
+    expect(prompt).toContain('## core_memory');
+    expect(prompt).toContain('- [a] alpha');
+    expect(prompt).toContain('- [b] beta');
+    // prev-3 Nit-2: meta line suppressed until memory_trace ships (334f)
+    expect(prompt).not.toContain('memory_trace');
+    expect(prompt).not.toContain('To open the original message');
+    expect(normalizeDate(prompt)).toMatchSnapshot();
+  });
+
+  it('explicit flag=true path renders meta line (zh)', async () => {
+    const { buildSystemPrompt } = await freshImportPrompts();
+    const prompt = buildSystemPrompt({
+      language: 'zh',
+      coreMemory: {
+        entries: [{ body: '用户喜欢深色主题', shard: 'pref' }],
+      },
+      memoryTraceAvailable: true,
+    });
+    expect(prompt).toContain('## core_memory');
+    expect(prompt).toContain('- [pref] 用户喜欢深色主题');
+    expect(prompt).toContain('如需原始 message，调 `memory_trace`。');
+  });
+
+  it('zh default path suppresses meta line', async () => {
     const { buildSystemPrompt } = await freshImportPrompts();
     const prompt = buildSystemPrompt({
       language: 'zh',
@@ -342,7 +377,8 @@ describe('task-334e — core_memory section (§Δ24.5)', () => {
     });
     expect(prompt).toContain('## core_memory');
     expect(prompt).toContain('- [pref] 用户喜欢深色主题');
-    expect(prompt).toContain('如需原始 message，调 `memory_trace`。');
+    expect(prompt).not.toContain('memory_trace');
+    expect(prompt).not.toContain('如需原始 message');
   });
 
   it('omits block entirely when all entries are empty bodies', async () => {

@@ -256,6 +256,12 @@ export const SUPPORTED_LANGUAGES = Object.keys(PROMPTS);
  *   @param {{ entries?: Array<{body:string, shard?:string}>, max?: number }} [coreMemory]
  *     — recalled memory entries; we render top-7 bodies + meta line.
  *
+ *   @param {boolean} [memoryTraceAvailable=false] — feature flag gating the
+ *     "call memory_trace" meta line in the core_memory block. Defaults to
+ *     false so we don't point VPs at an unimplemented tool (prev-3 Nit-2 /
+ *     PM-approved Option A). 334f will flip this to `true` from session.js
+ *     once `memory_trace` ships; this slice stays decoupled from session.js.
+ *
  * @param {{
  *   language?: string,
  *   mode?: string,
@@ -267,6 +273,7 @@ export const SUPPORTED_LANGUAGES = Object.keys(PROMPTS);
  *   taskCtx?: object,
  *   userProfile?: string,
  *   coreMemory?: object,
+ *   memoryTraceAvailable?: boolean,
  * }} params
  * @returns {string}
  */
@@ -281,6 +288,7 @@ export function buildSystemPrompt({
   taskCtx,
   userProfile,
   coreMemory,
+  memoryTraceAvailable = false,
 } = {}) {
   // Fallback to English for unknown languages
   const lang = PROMPTS[language] || PROMPTS.en;
@@ -366,7 +374,7 @@ export function buildSystemPrompt({
   if (profileBlock) parts.push(profileBlock);
 
   // ─── 10. Core Memory Section (task-334e §Δ24.5) ────────
-  const coreMemBlock = renderCoreMemory(coreMemory, lang);
+  const coreMemBlock = renderCoreMemory(coreMemory, lang, memoryTraceAvailable);
   if (coreMemBlock) parts.push(coreMemBlock);
 
   return parts.join('\n\n');
@@ -526,11 +534,16 @@ function readUserProfileStub() {
 }
 
 /**
- * Render `## core_memory` block with recall top-7 bodies + meta line.
+ * Render `## core_memory` block with recall top-7 bodies + (optional) meta line.
+ *
  * Accepts `{ entries: [{body,shard}], max?: number }`. Never renders
- * `sourceRef`; the meta line points at `memory_trace` for the origin.
+ * `sourceRef`. The "call memory_trace" meta line is gated by
+ * `memoryTraceAvailable` (prev-3 Nit-2 / PM-approved Option A): when the
+ * `memory_trace` tool is not yet implemented (334f), we omit the meta line
+ * entirely so the LLM does not try to call a non-existent tool. 334f will
+ * flip the flag to `true` when it wires session.js.
  */
-function renderCoreMemory(coreMemory, lang) {
+function renderCoreMemory(coreMemory, lang, memoryTraceAvailable) {
   if (!coreMemory || typeof coreMemory !== 'object') return '';
   const entries = Array.isArray(coreMemory.entries) ? coreMemory.entries : [];
   if (entries.length === 0) return '';
@@ -549,7 +562,9 @@ function renderCoreMemory(coreMemory, lang) {
     shown += 1;
   }
   if (shown === 0) return '';
-  lines.push('');
-  lines.push(lang.coreMemoryMeta);
+  if (memoryTraceAvailable) {
+    lines.push('');
+    lines.push(lang.coreMemoryMeta);
+  }
   return lines.join('\n');
 }
