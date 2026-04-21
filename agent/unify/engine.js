@@ -23,6 +23,7 @@ import { LLMContextError, LLMAbortError } from './llm/adapter.js';
 import { recallR6, formatForInjection } from './memory/recall-r6.js';
 import { shouldConsolidate, consolidate } from './memory/consolidate.js';
 import { buildMemoryInjection } from './memory/layout.js';
+import { buildUserProfile } from './memory/user-memory-store.js';
 import { runStopHooks } from './stop-hooks.js';
 import { getThreadStore, MAIN_THREAD_ID } from './threads/store.js';
 import { pickEffort, parseEffortPrefix } from './effort.js';
@@ -293,9 +294,10 @@ export class Engine {
    * @param {string} [compactSummary]
    * @param {string} [prompt] — user prompt (for skill relevance matching)
    * @param {string} [memoryInjection] — task-287: prebuilt memory block (index + prefs + project)
+   * @param {string} [userProfile] — user profile from user-memory shard store
    * @returns {string}
    */
-  #buildSystemPrompt(memory, compactSummary, prompt, memoryInjection) {
+  #buildSystemPrompt(memory, compactSummary, prompt, memoryInjection, userProfile) {
     // Get relevant skill content if SkillManager is wired
     let skillContent = '';
     if (this.#skillManager && prompt) {
@@ -314,6 +316,7 @@ export class Engine {
       memoryInjection,
       compactSummary,
       skillContent,
+      userProfile,
       // task-334f: memory_trace tool is now registered (49 → 51 tools), so
       // unlock the core_memory meta-line behind 334e's feature flag.
       memoryTraceAvailable: true,
@@ -359,9 +362,20 @@ export class Engine {
   async #recallMemory(prompt) {
     const memory = { profile: '', entries: [], formatted: '' };
 
-    // Read user profile from legacy store if available
-    if (this.#memoryStore) {
-      memory.profile = this.#memoryStore.readProfile();
+    // Build user profile from user-memory shard store (R6 path),
+    // falling back to legacy readProfile if shard store unavailable.
+    try {
+      const profile = buildUserProfile(this.#memoryShardStore);
+      if (profile) {
+        memory.profile = profile;
+      } else if (this.#memoryStore) {
+        memory.profile = this.#memoryStore.readProfile();
+      }
+    } catch {
+      // Non-critical — fall through to legacy
+      if (this.#memoryStore) {
+        try { memory.profile = this.#memoryStore.readProfile(); } catch { /* */ }
+      }
     }
 
     // R6 shard-based recall (preferred path)
@@ -603,7 +617,8 @@ export class Engine {
     }
 
     const compactSummary = this.#getCompactSummary();
-    const systemPrompt = this.#buildSystemPrompt(undefined, compactSummary, prompt, memoryInjection);
+    const userProfile = recallResult?.profile || '';
+    const systemPrompt = this.#buildSystemPrompt(undefined, compactSummary, prompt, memoryInjection, userProfile);
 
     // Build conversation: existing messages + new user message
     const conversationMessages = [
