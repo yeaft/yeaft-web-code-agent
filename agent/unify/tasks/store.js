@@ -37,6 +37,15 @@ function serializeTask(task) {
   if (task.parentTaskId) fm.push(`parentTaskId: ${task.parentTaskId}`);
   if (task.parentId) fm.push(`parentId: ${task.parentId}`);
   if (task.primaryThreadId) fm.push(`primaryThreadId: ${task.primaryThreadId}`);
+  // task-334n — multi-VP collaboration protocol fields.
+  // initiator: VP id that created the task (fallback target for ACL / reminder).
+  // members:  explicit VP roster for the task (supersedes group roster when set).
+  // groupId:  the group this task belongs to (null for legacy / standalone).
+  if (task.initiator) fm.push(`initiator: ${task.initiator}`);
+  if (Array.isArray(task.members) && task.members.length) {
+    fm.push(`members: [${task.members.join(', ')}]`);
+  }
+  if (task.groupId) fm.push(`groupId: ${task.groupId}`);
   if (task.createdAt) fm.push(`createdAt: ${task.createdAt}`);
   if (task.updatedAt) fm.push(`updatedAt: ${task.updatedAt}`);
 
@@ -81,6 +90,13 @@ function parseTask(raw) {
 
     if (key === 'createdAt' || key === 'updatedAt') {
       task[key] = parseInt(val, 10) || 0;
+    } else if (key === 'members') {
+      // task-334n — members: [vp-a, vp-b, ...]
+      task.members = val
+        .replace(/^\[|\]$/g, '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
     } else {
       task[key] = val;
     }
@@ -181,6 +197,8 @@ export class TaskStore {
   #tasks;
   /** @type {boolean} */
   #readOnly;
+  /** @type {Array<(evt:any)=>void>} */
+  #listeners;
 
   /**
    * @param {string} yeaftDir — Base ~/.yeaft directory
@@ -192,6 +210,7 @@ export class TaskStore {
     this.#planPath = join(this.#dir, 'plan.md');
     this.#tasks = new Map();
     this.#readOnly = opts.readOnly || false;
+    this.#listeners = [];
 
     // Ensure base directory exists
     if (!this.#readOnly) {
@@ -273,6 +292,122 @@ export class TaskStore {
     }
 
     return task;
+  }
+
+  /**
+   * task-334n — add a VP member to a task's collaboration roster.
+   * Idempotent: adding an existing member is a no-op (no event emitted).
+   * Returns `{ task, added: boolean }`.
+   *
+   * If an `onEvent` callback was passed at construction time, emits a
+   * `task_member_added` event synchronously after the write:
+   *   { type: 'task_member_added', taskId, vpId, members, ts }
+   */
+  addMember(id, vpId) {
+    const task = this.#tasks.get(id);
+    if (!task) return { task: null, added: false };
+    if (!vpId || typeof vpId !== 'string') {
+      throw new Error('addMember: vpId required (string)');
+    }
+    const members = Array.isArray(task.members) ? task.members.slice() : [];
+    if (members.includes(vpId)) {
+      return { task, added: false };
+    }
+    members.push(vpId);
+    this.update(id, { members });
+    this.#emit({
+      type: 'task_member_added',
+      taskId: id,
+      vpId,
+      members: members.slice(),
+      ts: Date.now(),
+    });
+    return { task: this.#tasks.get(id), added: true };
+  }
+
+  /**
+   * task-334n — remove a VP member from a task.
+   * Idempotent: removing a non-member is a no-op (no event emitted).
+   * Returns `{ task, removed: boolean }`.
+   * Emits `task_member_removed` on successful removal.
+   */
+  removeMember(id, vpId) {
+    const task = this.#tasks.get(id);
+    if (!task) return { task: null, removed: false };
+    if (!vpId || typeof vpId !== 'string') {
+      throw new Error('removeMember: vpId required (string)');
+    }
+    const members = Array.isArray(task.members) ? task.members.slice() : [];
+    const idx = members.indexOf(vpId);
+    if (idx === -1) return { task, removed: false };
+    members.splice(idx, 1);
+    this.update(id, { members });
+    this.#emit({
+      type: 'task_member_removed',
+      taskId: id,
+      vpId,
+      members: members.slice(),
+      ts: Date.now(),
+    });
+    return { task: this.#tasks.get(id), removed: true };
+  }
+
+  /**
+   * task-334n §Δ27.3 ACL — true iff `vpId` may read `otherTaskId`'s
+   * memory/summary. Pass grants when:
+   *   - both tasks share the same non-null groupId, OR
+   *   - members sets intersect on at least one vpId
+   * Fail-closed: missing task, missing groupId match, no intersection → false.
+   *
+   * @param {string} currentTaskId — task the caller is running in
+   * @param {string} otherTaskId   — task whose data the caller wants to read
+   * @param {string} [vpId]        — caller's vp id; if set, must also be
+   *   a member of currentTaskId (prevents stranger elevating via URL probe)
+   * @returns {boolean}
+   */
+  canAccessRelated(currentTaskId, otherTaskId, vpId) {
+    if (!currentTaskId || !otherTaskId || currentTaskId === otherTaskId) {
+      return false;
+    }
+    const cur = this.#tasks.get(currentTaskId);
+    const other = this.#tasks.get(otherTaskId);
+    if (!cur || !other) return false;
+
+    // If caller claims a vpId, they must be a member of the current task or
+    // its initiator. Otherwise this is a cross-context read — fail-closed.
+    if (vpId) {
+      const curMembers = Array.isArray(cur.members) ? cur.members : [];
+      const isInsider = curMembers.includes(vpId) || cur.initiator === vpId;
+      if (!isInsider) return false;
+    }
+
+    // Same-group rule.
+    if (cur.groupId && other.groupId && cur.groupId === other.groupId) {
+      return true;
+    }
+
+    // Members-intersection rule.
+    const a = Array.isArray(cur.members) ? cur.members : [];
+    const b = Array.isArray(other.members) ? other.members : [];
+    if (a.length === 0 || b.length === 0) return false;
+    const bSet = new Set(b);
+    for (const v of a) if (bSet.has(v)) return true;
+    return false;
+  }
+
+  /** Register an event listener (task-334n member events). */
+  onEvent(fn) {
+    if (typeof fn === 'function') this.#listeners.push(fn);
+    return () => {
+      const i = this.#listeners.indexOf(fn);
+      if (i >= 0) this.#listeners.splice(i, 1);
+    };
+  }
+
+  #emit(evt) {
+    for (const fn of this.#listeners) {
+      try { fn(evt); } catch { /* listener failures must not corrupt store */ }
+    }
   }
 
   /**

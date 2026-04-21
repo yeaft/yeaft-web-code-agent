@@ -386,8 +386,17 @@ const DEFAULT_TASK_MEMORY_TOP = 5;
 const DEFAULT_RELATED_TASK_TOP = 3;
 const DEFAULT_RELATED_TASK_MEMORY_TOP = 2;
 const DEFAULT_CORE_MEMORY_TOP = 7;
+// task-334n §Δ31.4 — tightened reminder gate:
+//   (a) currentVpId === initiatorVpId
+//   (b) task.members.length >= 2  (multi-VP only)
+//   (c) nonSummaryCount >= 10  OR  (now - lastSummaryAt) >= 20 min
+// 334e's earlier looser gate (3 msgs / 15 min) is preserved as a legacy
+// fallback path for callers that never set `summaryReminder.members`.
 const SUMMARY_REMINDER_MIN_MESSAGES = 3;
-const SUMMARY_REMINDER_MIN_AGE_MS = 15 * 60 * 1000; // 15 minutes
+const SUMMARY_REMINDER_MIN_AGE_MS = 15 * 60 * 1000; // 15 minutes (legacy)
+const SUMMARY_REMINDER_MIN_TURNS_334N = 10;
+const SUMMARY_REMINDER_MIN_AGE_MS_334N = 20 * 60 * 1000; // 20 minutes
+const SUMMARY_REMINDER_MIN_MEMBERS_334N = 2;
 
 /**
  * Render `## task_ctx` block. Never throws on malformed input — missing
@@ -402,6 +411,7 @@ function renderTaskCtx(taskCtx, lang) {
     taskCtx.relatedTasks,
     taskCtx.currentVpId,
     lang,
+    taskCtx.groupId,
   );
   const reminderLine = renderSummaryReminder(taskCtx, lang);
 
@@ -436,13 +446,17 @@ function renderTaskMemories(memories) {
  * Ordering: by `updatedAt` desc (undefined treated as 0). Top-3 tasks, top-2
  * memory each.
  */
-function renderRelatedTasks(relatedTasks, currentVpId, lang) {
+function renderRelatedTasks(relatedTasks, currentVpId, lang, currentTaskGroupId) {
   if (!Array.isArray(relatedTasks) || relatedTasks.length === 0) return '';
   if (!currentVpId) return ''; // no ACL subject → fail-closed
 
   const allowed = relatedTasks.filter((t) => {
     if (!t || typeof t !== 'object') return false;
     const members = Array.isArray(t.members) ? t.members : null;
+    // task-334n §Δ27.3 — either same-group OR members-intersection grants.
+    if (currentTaskGroupId && t.groupId && t.groupId === currentTaskGroupId) {
+      return true;
+    }
     if (!members) return false; // fail-closed on missing ACL
     return members.includes(currentVpId);
   });
@@ -487,16 +501,26 @@ function renderSummaryReminder(taskCtx, lang) {
   if (taskCtx.currentVpId !== taskCtx.initiatorVpId) return '';
 
   const count = Number(r.nonSummaryCount) || 0;
-  if (count < SUMMARY_REMINDER_MIN_MESSAGES) return '';
-
   const now = Number(r.now) || Date.now();
   const lastAt = Number(r.lastSummaryAt) || 0;
   const ageMs = lastAt > 0 ? now - lastAt : Number.POSITIVE_INFINITY;
-  if (lastAt > 0 && ageMs <= SUMMARY_REMINDER_MIN_AGE_MS) return '';
 
-  // For "never summarized" (lastAt==0) we report age as nonSummaryCount's
-  // session-coarse proxy: we print a dash so the prompt does not lie about
-  // an exact minute count. The hint still carries the count of new msgs.
+  // task-334n §Δ31.4 gate: when `members` is supplied, apply the strict
+  // multi-VP / 20min-or-10turn rule. Otherwise keep the legacy 334e gate
+  // so pre-334n callers still see reminders under the old thresholds.
+  const members = Array.isArray(r.members) ? r.members : null;
+  if (members) {
+    if (members.length < SUMMARY_REMINDER_MIN_MEMBERS_334N) return '';
+    const ageOk = lastAt > 0 && ageMs >= SUMMARY_REMINDER_MIN_AGE_MS_334N;
+    const turnsOk = count >= SUMMARY_REMINDER_MIN_TURNS_334N;
+    // `never summarised` (lastAt=0) only counts when turnsOk, otherwise we
+    // silently wait — aligns with §Δ31.4 "too-soon" reason code.
+    if (!ageOk && !turnsOk) return '';
+  } else {
+    if (count < SUMMARY_REMINDER_MIN_MESSAGES) return '';
+    if (lastAt > 0 && ageMs <= SUMMARY_REMINDER_MIN_AGE_MS) return '';
+  }
+
   const minStr = lastAt > 0 ? String(Math.round(ageMs / 60000)) : '—';
   return lang.taskCtxSummaryReminder(minStr, count);
 }
