@@ -685,6 +685,35 @@ export const useChatStore = defineStore('chat', {
           break;
         }
 
+        // ★ task-334m: Group snapshot + roster delta + CRUD ack.
+        case 'group_list_updated': {
+          const gs = window.Pinia?.useGroupsStore?.() || (window.__useGroupsStore && window.__useGroupsStore());
+          if (gs) gs.applySnapshot(event.groups);
+          break;
+        }
+        case 'group_roster_changed': {
+          const gs = window.Pinia?.useGroupsStore?.() || (window.__useGroupsStore && window.__useGroupsStore());
+          if (gs) gs.applyRosterChange(event);
+          break;
+        }
+        case 'group_crud_result': {
+          const gs = window.Pinia?.useGroupsStore?.() || (window.__useGroupsStore && window.__useGroupsStore());
+          if (gs) gs.applyCrudResult(event);
+          const pending = this._groupCrudPending && this._groupCrudPending.get(event.requestId);
+          if (pending) {
+            this._groupCrudPending.delete(event.requestId);
+            pending.resolve({
+              ok: !!event.ok,
+              op: event.op,
+              group: event.group || null,
+              groupId: event.groupId || null,
+              groups: event.groups || null,
+              error: event.error || null,
+            });
+          }
+          break;
+        }
+
         // ★ task-301 Part 2: real-store push from agent.
         // Agent's ThreadStore changes (SpawnThread / SwitchThread /
         // ArchiveThread / AttachThreadToTask) → web-bridge serialises the
@@ -852,6 +881,57 @@ export const useChatStore = defineStore('chat', {
         this.sendWsMessage(msg);
       });
     },
+    // ★ task-334m: Group CRUD request dispatcher. Mirrors vpCrudRequest.
+    // Supported ops: list / create / rename / archive / add_member /
+    // remove_member / set_default_vp.
+    //
+    //   op                data shape
+    //   list              (ignored)
+    //   create            { name, roster?, defaultVpId? }  → msg.payload
+    //   rename            { groupId, name }                → flat
+    //   archive           { groupId }                      → flat
+    //   add_member        { groupId, vpId }                → flat
+    //   remove_member     { groupId, vpId }                → flat
+    //   set_default_vp    { groupId, vpId }                → flat
+    groupCrudRequest(op, data) {
+      if (!this._groupCrudPending || typeof this._groupCrudPending.get !== 'function') {
+        this._groupCrudPending = new Map();
+      }
+      const requestId = 'grc_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+      const typeMap = {
+        list: 'unify_list_groups',
+        create: 'unify_create_group',
+        rename: 'unify_rename_group',
+        archive: 'unify_archive_group',
+        add_member: 'unify_add_member',
+        remove_member: 'unify_remove_member',
+        set_default_vp: 'unify_set_default_vp',
+      };
+      const type = typeMap[op];
+      if (!type) {
+        return Promise.resolve({ ok: false, op, error: { code: 'bad_op', message: 'unknown op: ' + op } });
+      }
+      const msg = { type, requestId };
+      if (op === 'create') msg.payload = data || {};
+      else if (data && typeof data === 'object') Object.assign(msg, data);
+
+      const gs = window.Pinia?.useGroupsStore?.() || (window.__useGroupsStore && window.__useGroupsStore());
+      if (gs) gs.markPending(requestId, op);
+
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          if (this._groupCrudPending && this._groupCrudPending.has(requestId)) {
+            this._groupCrudPending.delete(requestId);
+            resolve({ ok: false, op, error: { code: 'timeout', message: 'group_crud timeout' } });
+          }
+        }, 10000);
+        this._groupCrudPending.set(requestId, {
+          resolve: (result) => { clearTimeout(timer); resolve(result); },
+        });
+        this.sendWsMessage(msg);
+      });
+    },
+
     // ★ task-301 Part 2: Sidebar V2 selection actions.
     // setActiveThread additionally drives the chat-stream dual view filter
     // (matches task-303 semantics — clicking a thread narrows the stream).

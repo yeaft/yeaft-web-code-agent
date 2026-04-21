@@ -36,7 +36,7 @@ import { sendToServer, flushMessageBuffer } from './buffer.js';
 import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
 import { getLlmConfig, updateLlmConfig, getUnifySettings, updateUnifySettings } from '../unify/config-api.js';
-import { handleUnifyChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyMergeThread, handleUnifyForkThread, handleUnifyAbortThread, handleUnifyAbortAll, handleUnifyVpSubscribe, handleUnifyVpCreate, handleUnifyVpUpdate, handleUnifyVpDelete, handleUnifyVpRead, handleUnifyTaskMessage, handleUnifyUserMemoryWrite, handleUnifyUserMemoryRemove } from '../unify/web-bridge.js';
+import { handleUnifyChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyMergeThread, handleUnifyForkThread, handleUnifyAbortThread, handleUnifyAbortAll, handleUnifyVpSubscribe, handleUnifyVpCreate, handleUnifyVpUpdate, handleUnifyVpDelete, handleUnifyVpRead, handleUnifyTaskMessage, handleUnifyUserMemoryWrite, handleUnifyUserMemoryRemove, handleUnifyListGroups, handleUnifyCreateGroup, handleUnifyRenameGroup, handleUnifyArchiveGroup, handleUnifyAddMember, handleUnifyRemoveMember, handleUnifySetDefaultVp } from '../unify/web-bridge.js';
 
 export async function handleMessage(msg) {
   switch (msg.type) {
@@ -434,6 +434,32 @@ export async function handleMessage(msg) {
       break;
     case 'unify_user_memory_remove':
       handleUnifyUserMemoryRemove(msg);
+      break;
+
+    // task-334m: Group CRUD + D1 seed wiring (§Δ10 334m + R6 §Δ31.2).
+    // All handlers reply via `group_crud_result`; mutating ops additionally
+    // emit `group_roster_changed` (add/remove/default) or
+    // `group_list_updated` (create/rename/archive) for listener sync.
+    case 'unify_list_groups':
+      handleUnifyListGroups(msg);
+      break;
+    case 'unify_create_group':
+      handleUnifyCreateGroup(msg);
+      break;
+    case 'unify_rename_group':
+      handleUnifyRenameGroup(msg);
+      break;
+    case 'unify_archive_group':
+      handleUnifyArchiveGroup(msg);
+      break;
+    case 'unify_add_member':
+      handleUnifyAddMember(msg);
+      break;
+    case 'unify_remove_member':
+      handleUnifyRemoveMember(msg);
+      break;
+    case 'unify_set_default_vp':
+      handleUnifySetDefaultVp(msg);
       break;
 
     // Expert roles definition (for ExpertPanel detail view)

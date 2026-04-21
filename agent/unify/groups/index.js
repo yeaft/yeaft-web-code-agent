@@ -38,6 +38,18 @@ export {
   DEFAULT_GROUP_ID,
 } from './seed-default.js';
 export {
+  GroupCrudError,
+  makeGroupId,
+  ensureDefaultGroupIfEmpty,
+  createGroupFromSpec,
+  renameGroup,
+  archiveGroup,
+  addMember,
+  removeMember,
+  setGroupDefaultVp,
+  snapshotGroups,
+} from './group-crud.js';
+export {
   nextMsgId,
   nextGroupId,
   newUlidLite,

@@ -33,6 +33,16 @@ import {
   handleUnifyUserMemoryWrite as _handleUnifyUserMemoryWrite,
   handleUnifyUserMemoryRemove as _handleUnifyUserMemoryRemove,
 } from './user-memory.js';
+import {
+  GroupCrudError,
+  createGroupFromSpec,
+  renameGroup,
+  archiveGroup,
+  addMember,
+  removeMember,
+  setGroupDefaultVp,
+  snapshotGroups,
+} from './groups/group-crud.js';
 
 /** @type {import('./session.js').Session | null} */
 let session = null;
@@ -251,6 +261,151 @@ export function handleUnifyVpRead(msg) {
     return;
   }
   sendVpCrudResult({ op: 'read', requestId, ok: true, vpId, vp });
+}
+
+/**
+ * task-334m: Group CRUD wired to WS events (§Δ10 334m + R6 §Δ31.2).
+ *
+ * Message shapes (wire):
+ *   unify_list_groups    { requestId? }
+ *   unify_create_group   { payload: {name, roster?, defaultVpId?}, requestId? }
+ *   unify_rename_group   { groupId, name, requestId? }
+ *   unify_archive_group  { groupId, requestId? }
+ *   unify_add_member     { groupId, vpId, requestId? }
+ *   unify_remove_member  { groupId, vpId, requestId? }
+ *   unify_set_default_vp { groupId, vpId, requestId? }
+ *
+ * Replies (sendUnifyEvent):
+ *   { type: 'group_crud_result', op, requestId, ok, group?, groups?, error?: {code, groupId?, message?} }
+ *
+ * Post-change broadcast (when meta mutates):
+ *   { type: 'group_roster_changed', groupId, roster, defaultVpId, name }
+ */
+function sendGroupCrudResult(payload) {
+  sendUnifyEvent({ type: 'group_crud_result', ...payload });
+}
+
+function sendGroupSnapshotBroadcast() {
+  try {
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    if (!yeaftDir) return;
+    const groups = snapshotGroups(yeaftDir);
+    sendUnifyEvent({ type: 'group_list_updated', groups });
+  } catch (err) {
+    console.warn('[Unify] sendGroupSnapshotBroadcast failed:', err?.message || err);
+  }
+}
+
+function sendGroupRosterChanged(group) {
+  if (!group) return;
+  sendUnifyEvent({
+    type: 'group_roster_changed',
+    groupId: group.id,
+    name: group.name,
+    roster: group.roster,
+    defaultVpId: group.defaultVpId,
+  });
+}
+
+function groupErrorPayload(err) {
+  return {
+    code: err instanceof GroupCrudError ? err.code : 'unknown',
+    groupId: err && err.groupId,
+    message: err && err.message,
+  };
+}
+
+export function handleUnifyListGroups(msg) {
+  const requestId = msg && msg.requestId;
+  try {
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    const groups = snapshotGroups(yeaftDir);
+    sendGroupCrudResult({ op: 'list', requestId, ok: true, groups });
+  } catch (err) {
+    sendGroupCrudResult({ op: 'list', requestId, ok: false, error: groupErrorPayload(err) });
+  }
+}
+
+export function handleUnifyCreateGroup(msg) {
+  const requestId = msg && msg.requestId;
+  const payload = (msg && msg.payload) || {};
+  try {
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    const group = createGroupFromSpec(yeaftDir, payload);
+    sendGroupCrudResult({ op: 'create', requestId, ok: true, group });
+    sendGroupSnapshotBroadcast();
+  } catch (err) {
+    sendGroupCrudResult({ op: 'create', requestId, ok: false, error: groupErrorPayload(err) });
+  }
+}
+
+export function handleUnifyRenameGroup(msg) {
+  const requestId = msg && msg.requestId;
+  const groupId = msg && msg.groupId;
+  const name = msg && msg.name;
+  try {
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    const group = renameGroup(yeaftDir, groupId, name);
+    sendGroupCrudResult({ op: 'rename', requestId, ok: true, group });
+    sendGroupSnapshotBroadcast();
+  } catch (err) {
+    sendGroupCrudResult({ op: 'rename', requestId, ok: false, error: groupErrorPayload(err) });
+  }
+}
+
+export function handleUnifyArchiveGroup(msg) {
+  const requestId = msg && msg.requestId;
+  const groupId = msg && msg.groupId;
+  try {
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    const result = archiveGroup(yeaftDir, groupId);
+    sendGroupCrudResult({ op: 'archive', requestId, ok: true, groupId: result.groupId });
+    sendGroupSnapshotBroadcast();
+  } catch (err) {
+    sendGroupCrudResult({ op: 'archive', requestId, ok: false, error: groupErrorPayload(err) });
+  }
+}
+
+export function handleUnifyAddMember(msg) {
+  const requestId = msg && msg.requestId;
+  const groupId = msg && msg.groupId;
+  const vpId = msg && msg.vpId;
+  try {
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    const group = addMember(yeaftDir, groupId, vpId);
+    sendGroupCrudResult({ op: 'add_member', requestId, ok: true, group });
+    sendGroupRosterChanged(group);
+  } catch (err) {
+    sendGroupCrudResult({ op: 'add_member', requestId, ok: false, error: groupErrorPayload(err) });
+  }
+}
+
+export function handleUnifyRemoveMember(msg) {
+  const requestId = msg && msg.requestId;
+  const groupId = msg && msg.groupId;
+  const vpId = msg && msg.vpId;
+  try {
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    const group = removeMember(yeaftDir, groupId, vpId);
+    sendGroupCrudResult({ op: 'remove_member', requestId, ok: true, group });
+    sendGroupRosterChanged(group);
+  } catch (err) {
+    sendGroupCrudResult({ op: 'remove_member', requestId, ok: false, error: groupErrorPayload(err) });
+  }
+}
+
+export function handleUnifySetDefaultVp(msg) {
+  const requestId = msg && msg.requestId;
+  const groupId = msg && msg.groupId;
+  const vpId = msg && msg.vpId;
+  try {
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    const group = setGroupDefaultVp(yeaftDir, groupId, vpId);
+    sendGroupCrudResult({ op: 'set_default_vp', requestId, ok: true, group });
+    sendGroupRosterChanged(group);
+  } catch (err) {
+    sendGroupCrudResult({ op: 'set_default_vp', requestId, ok: false, error: groupErrorPayload(err) });
+  }
 }
 
 /**
@@ -845,6 +1000,10 @@ export async function handleUnifyChat(msg) {
       // serverTime) so a freshly-connected client can restore inflight
       // status without waiting for the next engine event.
       sendThreadListSnapshot();
+      // task-334m: push initial groups snapshot so the Sidebar Groups
+      // section renders the full list immediately (including the D1
+      // default group seeded during session bootstrap).
+      sendGroupSnapshotBroadcast();
     }
 
     // ─── Per-call AbortController (task-320) ──
@@ -1318,6 +1477,8 @@ export async function handleUnifyLoadHistory(msg) {
   // mutation-delta stream; `thread_list_snapshot` is the single
   // authoritative "everything right now" payload.
   sendThreadListSnapshot();
+  // task-334m: replay groups snapshot so Sidebar Groups rebuilds on refresh.
+  sendGroupSnapshotBroadcast();
 
   const limit = msg.limit || 50;
   const messages = session.conversationStore.loadRecent(limit);

@@ -7,10 +7,11 @@ import UnifyTaskDetailView from './UnifyTaskDetailView.js';
 import VpLibraryLink from './VpLibraryLink.js';
 import VpCrudModal from './VpCrudModal.js';
 import VpDetailView from './VpDetailView.js';
+import GroupInviteModal from './GroupInviteModal.js';
 
 export default {
   name: 'UnifyPage',
-  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2, UnifyBreadcrumb, UnifyTaskDetailView, VpLibraryLink, VpCrudModal, VpDetailView },
+  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2, UnifyBreadcrumb, UnifyTaskDetailView, VpLibraryLink, VpCrudModal, VpDetailView, GroupInviteModal },
   template: `
     <div class="unify-page">
       <!-- Mobile sidebar overlay -->
@@ -254,6 +255,16 @@ export default {
            container so Vue sees a single root; the overlay is fixed-position
            and covers the viewport regardless of parent layout. -->
       <VpCrudModal v-if="vpLibraryOpen" @close="vpLibraryOpen = false" />
+
+      <!-- task-334m: Group invite modal. Shown whenever the active group
+           has no members + no defaultVpId (drives R6 §Δ10 hard constraint
+           (c) default-VP fallback). CTA routes to the VP library modal. -->
+      <GroupInviteModal
+        v-if="shouldShowInviteModal"
+        :group-name="inviteGroupName"
+        @open-library="onInviteOpenLibrary"
+        @dismiss="onInviteDismiss"
+      />
     </div>
   `,
   setup() {
@@ -423,6 +434,16 @@ export default {
     };
 
     const sendMessage = (text) => {
+      // task-334m: Pre-check `no_default_vp` before the WS round-trip.
+      // If the active group has no roster + no defaultVpId, surface the
+      // invite modal instead of sending a message that would round-trip
+      // a `no_default_vp` error back as a silent toast.
+      const gs = groupsStore();
+      if (gs && gs.activeNeedsInvite) {
+        const g = gs.activeGroup;
+        if (g) inviteDismissedFor.delete(g.id); // force show
+        return;
+      }
       store.sendUnifyChat(text);
     };
 
@@ -614,6 +635,73 @@ export default {
       vpLibraryOpen.value = true;
     };
 
+    // task-334m: Group invite modal wiring. The modal is shown whenever
+    // the active group has no roster + no defaultVpId. A per-group
+    // `dismissed` set silences it mid-session until the roster changes
+    // (dismiss is sticky to the current `(groupId, rosterVersion)` — any
+    // roster mutation re-arms the prompt so adding then removing a VP
+    // correctly re-surfaces the invite on the next empty state).
+    const inviteDismissedFor = Vue.reactive(new Set());
+    const groupsStore = () => {
+      try {
+        return window.Pinia?.useGroupsStore?.() || null;
+      } catch { return null; }
+    };
+    const activeGroupForInvite = Vue.computed(() => {
+      const gs = groupsStore();
+      return gs ? gs.activeGroup : null;
+    });
+    const inviteGroupName = Vue.computed(() => {
+      const g = activeGroupForInvite.value;
+      if (!g) return '';
+      // D1 seed sentinel: translate raw 'Default' on grp_default via global i18n.
+      if (g.id === 'grp_default' && (g.name === 'Default' || !g.name)) {
+        try {
+          const globalI18n = (typeof window !== 'undefined') ? window.i18n : null;
+          if (globalI18n && globalI18n.global && typeof globalI18n.global.t === 'function') {
+            return globalI18n.global.t('unify.group.defaultName');
+          }
+        } catch (_) {}
+      }
+      return g.name || g.id || '';
+    });
+    const shouldShowInviteModal = Vue.computed(() => {
+      const gs = groupsStore();
+      if (!gs || !gs.activeNeedsInvite) return false;
+      const g = gs.activeGroup;
+      if (!g) return false;
+      // Skip if the user already dismissed THIS empty-roster state.
+      return !inviteDismissedFor.has(g.id);
+    });
+    const onInviteOpenLibrary = () => {
+      const g = activeGroupForInvite.value;
+      if (g) inviteDismissedFor.add(g.id);
+      vpLibraryOpen.value = true;
+    };
+    const onInviteDismiss = () => {
+      const g = activeGroupForInvite.value;
+      if (g) inviteDismissedFor.add(g.id);
+    };
+    // Re-arm the prompt whenever the active roster transitions back to
+    // empty (i.e. after the user removed the last member), so the modal
+    // fires again next time `activeNeedsInvite` flips true.
+    Vue.watch(
+      () => {
+        const g = activeGroupForInvite.value;
+        if (!g) return '';
+        return g.id + ':' + (Array.isArray(g.roster) ? g.roster.length : 0) + ':' + (g.defaultVpId || '');
+      },
+      (next, prev) => {
+        // When the roster changes non-trivially, clear the dismissed flag
+        // for whatever group id appears in `next` so a later empty state
+        // re-shows the modal.
+        const g = activeGroupForInvite.value;
+        if (g && next !== prev && Array.isArray(g.roster) && g.roster.length > 0) {
+          inviteDismissedFor.delete(g.id);
+        }
+      },
+    );
+
     const onSettingsSaved = () => {
       showSettings.value = false;
     };
@@ -678,6 +766,11 @@ export default {
       onSearchEscape,
       clearThreadFilter,
       activeThreadName,
+      // task-334m: invite modal bindings.
+      shouldShowInviteModal,
+      inviteGroupName,
+      onInviteOpenLibrary,
+      onInviteDismiss,
     };
   }
 };
