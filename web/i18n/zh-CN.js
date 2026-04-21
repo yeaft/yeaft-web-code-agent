@@ -895,6 +895,8 @@ export default {
   'unify.vp.idError.pure_digits': '角色 ID 不能是纯数字。',
   'unify.vp.idError.reserved': '角色 ID 不能用保留名（all / user / system / everyone）。',
   'unify.vp.idError.duplicate': '已经存在同 ID 的角色。',
+  'unify.vp.idError.not_found': '该 VP 不存在，可能已被删除。',
+  'unify.vp.idError.unknown': '发生未知错误，请重试。',
 
   // ============ Unify VP 详情页 (task-334-ui-c) ============
   'unify.vp.detail.title': '角色详情',

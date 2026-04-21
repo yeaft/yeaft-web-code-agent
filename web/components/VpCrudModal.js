@@ -255,8 +255,13 @@ export default {
       try {
         const res = await this.chatStore().vpCrudRequest('delete', vp.vpId);
         if (!res.ok) {
-          const msg = (res.error && res.error.code) || 'unknown';
-          this.formError = this.$t('unify.vp.crud.deleteFailed').replace('{error}', msg);
+          const code = (res.error && res.error.code) || 'unknown';
+          const key = i18nKeyForReason(code);
+          const translated = this.$t(key);
+          this.formError = this.$t('unify.vp.crud.deleteFailed').replace(
+            '{error}',
+            translated && translated !== key ? translated : ((res.error && res.error.message) || code),
+          );
         }
       } finally {
         this.busy = false;

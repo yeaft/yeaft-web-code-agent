@@ -42,6 +42,7 @@ function parseArgs(argv) {
     else if (arg.startsWith('--target=')) opts.target = arg.slice('--target='.length);
     else {
       console.error(`Unknown argument: ${arg}`);
+      opts._unknownArg = true;
       opts.help = true;
     }
   }
@@ -76,7 +77,7 @@ async function main() {
   const opts = parseArgs(process.argv);
   if (opts.help) {
     process.stdout.write(HELP);
-    process.exit(0);
+    process.exit(opts._unknownArg ? 1 : 0);
   }
   if (opts.target !== 'v1' && opts.target !== 'r6') {
     console.error(`--target must be 'v1' or 'r6' (got '${opts.target}')`);
@@ -93,7 +94,7 @@ async function main() {
   }
 
   const onStep = (step, info) => {
-    console.log(`[${step}]`, JSON.stringify(info));
+    console.log(`[${step}]`, JSON.stringify(info, null, 2));
   };
 
   try {
