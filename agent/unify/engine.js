@@ -122,6 +122,9 @@ export class Engine {
   /** @type {import('./memory/store.js').MemoryStore|null} */
   #memoryStore;
 
+  /** @type {object|null} — R6 memory shard store (task-334f) */
+  #memoryShardStore;
+
   /** @type {import('./tools/registry.js').ToolRegistry|null} */
   #toolRegistry;
 
@@ -176,7 +179,7 @@ export class Engine {
    *   yeaftDir?: string,
    * }} params
    */
-  constructor({ adapter, trace, config, conversationStore, memoryStore, toolRegistry, skillManager, mcpManager, yeaftDir }) {
+  constructor({ adapter, trace, config, conversationStore, memoryStore, memoryShardStore, toolRegistry, skillManager, mcpManager, yeaftDir }) {
     this.#adapter = adapter;
     this.#trace = trace;
     this.#config = config;
@@ -184,6 +187,7 @@ export class Engine {
     this.#traceId = randomUUID();
     this.#conversationStore = conversationStore || null;
     this.#memoryStore = memoryStore || null;
+    this.#memoryShardStore = memoryShardStore || null;
     this.#toolRegistry = toolRegistry || null;
     this.#skillManager = skillManager || null;
     this.#mcpManager = mcpManager || null;
@@ -330,6 +334,7 @@ export class Engine {
       mcpManager: this.#mcpManager,
       skillManager: this.#skillManager,
       memoryStore: this.#memoryStore,
+      memoryShardStore: this.#memoryShardStore,
       conversationStore: this.#conversationStore,
       adapter: this.#adapter,
       config: this.#config,
@@ -952,6 +957,11 @@ export class Engine {
    */
   get memoryStore() {
     return this.#memoryStore;
+  }
+
+  /** @returns {object|null} — R6 memory shard store (task-334f) */
+  get memoryShardStore() {
+    return this.#memoryShardStore;
   }
 
   /** @returns {import('./tools/registry.js').ToolRegistry|null} */

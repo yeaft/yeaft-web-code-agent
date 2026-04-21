@@ -19,6 +19,7 @@ import { createTrace } from './debug-trace.js';
 import { createLLMAdapter } from './llm/adapter.js';
 import { ConversationStore } from './conversation/persist.js';
 import { MemoryStore } from './memory/store.js';
+import { openMemoryShardStore } from './memory/shard-store.js';
 import { SkillManager, createSkillManager } from './skills.js';
 import { MCPManager } from './mcp.js';
 import { createFullRegistry } from './tools/index.js';
@@ -151,6 +152,18 @@ export async function loadSession(options = {}) {
   const conversationStore = new ConversationStore(yeaftDir);
   const memoryStore = new MemoryStore(yeaftDir);
 
+  // ─── 5-shard. Open R6 memory shard store (task-334f) ──────
+  //     VP-level memory shard store rooted at ~/.yeaft/memory/vp/default.
+  //     The 'default' VP matches the single-user Unify mode; R6 multi-VP
+  //     callers open per-VP stores via openMemoryShardStore() directly.
+  const memoryShardDir = join(yeaftDir, 'memory', 'vp', 'default');
+  let memoryShardStore = null;
+  try {
+    memoryShardStore = openMemoryShardStore(memoryShardDir, 'vp');
+  } catch (err) {
+    console.warn(`[Yeaft] Failed to open R6 memory shard store: ${err?.message || err}`);
+  }
+
   // ─── 5a. Initialize task store ─────────────────────────
   initTaskStore(yeaftDir, { readOnly: config._readOnly || false });
 
@@ -212,6 +225,7 @@ export async function loadSession(options = {}) {
     config,
     conversationStore,
     memoryStore,
+    memoryShardStore,
     toolRegistry,
     skillManager,
     mcpManager,
@@ -229,6 +243,7 @@ export async function loadSession(options = {}) {
     config,
     conversationStore,
     memoryStore,
+    memoryShardStore,
     toolRegistry,
     skillManager,
     mcpManager,
@@ -297,6 +312,7 @@ export async function loadSession(options = {}) {
     config,
     conversationStore,
     memoryStore,
+    memoryShardStore,
     skillManager,
     mcpManager,
     toolRegistry,

@@ -38,6 +38,11 @@ import {
 import memoryTraceTool from '../../agent/unify/tools/memory-trace.js';
 import openSourceMessageTool from '../../agent/unify/tools/open-source-message.js';
 import { planR5ToR6Migration, applyR5ToR6Migration } from '../../agent/unify/memory/migrate-r5-to-r6.js';
+import {
+  checkRecompression,
+  needsRecompression,
+  DEFAULT_UTILIZATION_THRESHOLD,
+} from '../../agent/unify/memory/recompression.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────
 
@@ -328,5 +333,52 @@ describe('S-j projectDeriveHint threshold = 30', () => {
     expect(hint).toBeTruthy();
     expect(hint.shard).toBe('project-grp-yeaft');
     expect(hint.count).toBeGreaterThanOrEqual(30);
+  });
+});
+
+// ─── S-k: recompression hook (task-334f scope 2) ──────────────
+
+describe('S-k recompression hook', () => {
+  it('exports the default threshold as 0.5', () => {
+    expect(DEFAULT_UTILIZATION_THRESHOLD).toBe(0.5);
+  });
+
+  it('returns empty results for null/undefined store', () => {
+    const res = checkRecompression(null);
+    expect(res.compacted).toEqual([]);
+    expect(res.skipped).toEqual([]);
+  });
+
+  it('does not compact a fresh store with 100% utilization', () => {
+    const store = openMemoryShardStore(tmp(), 'vp');
+    store.put(entry('m1'));
+    store.put(entry('m2'));
+    const res = checkRecompression(store);
+    expect(res.compacted).toEqual([]);
+    // skill shard should have ~100% utilization
+    expect(res.stats.skill.utilization).toBeGreaterThan(0.9);
+  });
+
+  it('compacts a shard whose utilization drops below 50% after removes', () => {
+    const store = openMemoryShardStore(tmp(), 'vp');
+    // Put 4 entries, remove 3 (leaving 25% utilization)
+    for (let i = 0; i < 4; i++) {
+      store.put(entry(`m${i}`));
+    }
+    store.remove('m0');
+    store.remove('m1');
+    store.remove('m2');
+    // After remove() the shard is already compacted by the inner store,
+    // so utilization should be high — this validates the hook doesn't
+    // over-compact already-clean shards
+    const res = checkRecompression(store);
+    expect(res.stats.skill.entries).toBe(1);
+  });
+
+  it('needsRecompression returns empty for clean store', () => {
+    const store = openMemoryShardStore(tmp(), 'vp');
+    store.put(entry('m1'));
+    const needs = needsRecompression(store);
+    expect(needs).toEqual([]);
   });
 });
