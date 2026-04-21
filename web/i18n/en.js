@@ -987,6 +987,21 @@ export default {
   'unify.group.invite.openLibrary': 'Open VP Library',
   'unify.group.invite.dismiss': 'Not now',
 
+  // ===== task-334-ui-d: User Memory browser =====
+  'unify.userMemory.sidebarTitle': 'User Memory',
+  'unify.userMemory.sidebarAria': 'User memory section',
+  'unify.userMemory.title': 'User Memory',
+  'unify.userMemory.backAria': 'Back from user memory',
+  'unify.userMemory.back': 'Back',
+  'unify.userMemory.count': '{count} entries',
+  'unify.userMemory.allShards': 'All',
+  'unify.userMemory.empty': 'No user memory entries yet.',
+  'unify.userMemory.emptyHint': 'User memory will be populated as the system learns about you through conversations.',
+  'unify.userMemory.pin': 'Pin entry',
+  'unify.userMemory.unpin': 'Unpin entry',
+  'unify.userMemory.delete': 'Delete entry',
+  'unify.userMemory.deleteConfirm': 'Delete this memory entry? This cannot be undone.',
+
   // ===== task-334j: group view (mentions / replyTo / reject) =====
   'unify.vp.mention.placeholder': 'Search role by id or name\u2026',
   'unify.vp.mention.noMatch': 'No matching role',

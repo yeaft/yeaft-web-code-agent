@@ -9,10 +9,11 @@ import VpCrudModal from './VpCrudModal.js';
 import VpDetailView from './VpDetailView.js';
 import GroupInviteModal from './GroupInviteModal.js';
 import TaskMessageRejectToast from './TaskMessageRejectToast.js';
+import UserMemoryPage from './UserMemoryPage.js';
 
 export default {
   name: 'UnifyPage',
-  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2, UnifyBreadcrumb, UnifyTaskDetailView, VpLibraryLink, VpCrudModal, VpDetailView, GroupInviteModal, TaskMessageRejectToast },
+  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2, UnifyBreadcrumb, UnifyTaskDetailView, VpLibraryLink, VpCrudModal, VpDetailView, GroupInviteModal, TaskMessageRejectToast, UserMemoryPage },
   template: `
     <div class="unify-page">
       <!-- Mobile sidebar overlay -->
@@ -25,6 +26,7 @@ export default {
         @select-task="onSelectTaskV2"
         @jump-to-message="onJumpToMessage"
         @search-escape="onSearchEscape"
+        @open-user-memory="onOpenUserMemory"
       />
       <aside class="unify-sidebar" v-else :class="{ collapsed: sidebarCollapsed }">
         <div class="unify-sidebar-header">
@@ -132,7 +134,8 @@ export default {
         />
 
         <!-- Messages Area — reuse standard MessageList for identical rendering -->
-        <MessageList v-if="!showSettings && !store.unifyActiveTaskDetailId && !store.unifyActiveVpDetailId" />
+        <UserMemoryPage v-if="!showSettings && userMemoryOpen && !store.unifyActiveVpDetailId" @back="userMemoryOpen = false" />
+        <MessageList v-if="!showSettings && !userMemoryOpen && !store.unifyActiveTaskDetailId && !store.unifyActiveVpDetailId" />
 
         <!-- Settings Panel -->
         <UnifySettings v-if="showSettings" @close="showSettings = false" @saved="onSettingsSaved" />
@@ -280,6 +283,7 @@ export default {
     const expandedTurns = Vue.reactive({});
     const modelDropdownOpen = Vue.ref(false);
     const showSettings = Vue.ref(false);
+    const userMemoryOpen = Vue.ref(false);
 
     // task-301: feature-flag switch between legacy sidebar and V2.
     // Source of truth is the store (persisted via localStorage). Computed
@@ -340,6 +344,13 @@ export default {
         const el = document.querySelector('.input-area textarea, .input-area input[type="text"]');
         if (el && typeof el.focus === 'function') el.focus();
       });
+    };
+
+    const onOpenUserMemory = () => {
+      userMemoryOpen.value = true;
+      showSettings.value = false;
+      store.unifyActiveTaskDetailId = null;
+      store.unifyActiveVpDetailId = null;
     };
 
     // Detail panel resizable width
@@ -775,6 +786,9 @@ export default {
       inviteGroupName,
       onInviteOpenLibrary,
       onInviteDismiss,
+      // task-334-ui-d: user memory
+      userMemoryOpen,
+      onOpenUserMemory,
     };
   }
 };

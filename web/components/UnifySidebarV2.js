@@ -35,7 +35,7 @@ import GroupCreateWizard from './GroupCreateWizard.js';
 export default {
   name: 'UnifySidebarV2',
   components: { GroupCreateWizard },
-  emits: ['select-thread', 'select-task', 'jump-to-message', 'search-escape', 'merge-thread', 'select-group'],
+  emits: ['select-thread', 'select-task', 'jump-to-message', 'search-escape', 'merge-thread', 'select-group', 'open-user-memory'],
   template: `
     <aside class="unify-sidebar-v2">
       <div class="usv2-search">
@@ -319,6 +319,13 @@ export default {
                 </button>
               </div>
             </div>
+          </div>
+        </section>
+
+        <!-- task-334-ui-d: User Memory section -->
+        <section class="usv2-group usv2-group-user-memory" :aria-label="$t('unify.userMemory.sidebarAria')">
+          <div class="usv2-group-header">
+            <span class="usv2-group-label usv2-user-memory-link" @click="$emit('open-user-memory')">📘 {{ $t('unify.userMemory.sidebarTitle') }}</span>
           </div>
         </section>
       </div>

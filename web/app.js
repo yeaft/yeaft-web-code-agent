@@ -2,6 +2,7 @@ import { useChatStore } from './stores/chat.js';
 import { useAuthStore } from './stores/auth.js';
 import { useVpStore } from './stores/vp.js';
 import { useGroupsStore } from './stores/groups.js';
+import { useUserMemoryStore } from './stores/user-memory.js';
 import { createI18n } from './utils/i18n.js';
 import zhCN from './i18n/zh-CN.js';
 import en from './i18n/en.js';
@@ -81,6 +82,7 @@ window.Pinia.useChatStore = useChatStore;
 window.Pinia.useAuthStore = useAuthStore;
 window.Pinia.useVpStore = useVpStore;
 window.Pinia.useGroupsStore = useGroupsStore;
+window.Pinia.useUserMemoryStore = useUserMemoryStore;
 
 // Register global components
 app.component('ToolLine', ToolLine);

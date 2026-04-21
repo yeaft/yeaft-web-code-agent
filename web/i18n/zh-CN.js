@@ -987,6 +987,21 @@ export default {
   'unify.group.invite.openLibrary': '打开角色库',
   'unify.group.invite.dismiss': '暂不',
 
+  // ===== task-334-ui-d: 用户记忆浏览器 =====
+  'unify.userMemory.sidebarTitle': '用户记忆',
+  'unify.userMemory.sidebarAria': '用户记忆区域',
+  'unify.userMemory.title': '用户记忆',
+  'unify.userMemory.backAria': '返回用户记忆',
+  'unify.userMemory.back': '返回',
+  'unify.userMemory.count': '{count} 条记录',
+  'unify.userMemory.allShards': '全部',
+  'unify.userMemory.empty': '暂无用户记忆条目。',
+  'unify.userMemory.emptyHint': '系统通过对话了解你后，用户记忆将自动填充。',
+  'unify.userMemory.pin': '置顶条目',
+  'unify.userMemory.unpin': '取消置顶',
+  'unify.userMemory.delete': '删除条目',
+  'unify.userMemory.deleteConfirm': '删除此记忆条目？此操作无法撤销。',
+
   // ===== task-334j: 群聊视图（@ 提及 / 引用回复 / 发送拒绝） =====
   'unify.vp.mention.placeholder': '按 id 或名称搜索角色\u2026',
   'unify.vp.mention.noMatch': '没有匹配的角色',
