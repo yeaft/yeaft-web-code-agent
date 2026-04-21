@@ -515,3 +515,88 @@ approach, steps, and status of the current work.`,
     }
   },
 });
+
+// ─── TaskSummaryPost (task-334n) ────────────────────────
+
+import { postSummary } from '../tasks/summary.js';
+import { openGroup } from '../groups/group-store.js';
+import { join } from 'path';
+
+/**
+ * task-334n §B — initiator posts a progress summary to the group log.
+ * Triggers the summary-extractor automatically (§C).
+ */
+export const taskSummaryPost = defineTool({
+  name: 'task_summary_post',
+  description: `Post a progress summary for a multi-VP task (task-334n).
+
+Only the task initiator should call this. The summary is written to the
+group message log as \`type=summary\` and auto-extracts 2-5 task-memory
+entries (kind=progress|decision) via the task-memory shard lib.
+
+To revise a prior summary, pass its msgId in \`supersedes\` — the old
+summary is marked \`supersededBy\` while staying on disk for audit.`,
+  parameters: {
+    type: 'object',
+    properties: {
+      taskId:   { type: 'string', description: 'Target task id' },
+      body:     { type: 'string', description: 'Summary body (markdown)' },
+      progress: { type: 'number', description: '0..100, optional' },
+      supersedes: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Prior summary msgIds this revision supersedes',
+      },
+    },
+    required: ['taskId', 'body'],
+  },
+  isConcurrencySafe: () => false,
+  isReadOnly: () => false,
+  async execute(input, ctx) {
+    const err = requireStore();
+    if (err) return err;
+    const { taskId, body, progress, supersedes } = input || {};
+    if (!taskId || !body) {
+      return JSON.stringify({ error: 'taskId and body are required' });
+    }
+    const task = taskStore.get(taskId);
+    if (!task) return JSON.stringify({ error: `task not found: ${taskId}` });
+    if (!task.groupId) {
+      return JSON.stringify({ error: 'task has no groupId; summary requires a group' });
+    }
+
+    const currentVpId = ctx?.currentVpId;
+    if (currentVpId && task.initiator && currentVpId !== task.initiator) {
+      return JSON.stringify({ error: 'only the task initiator may post summaries' });
+    }
+
+    const yeaftDir = ctx?.yeaftDir;
+    if (!yeaftDir) {
+      return JSON.stringify({ error: 'yeaftDir missing from tool context' });
+    }
+    const groupsRoot = join(yeaftDir, 'groups');
+    const memoryDir = join(groupsRoot, task.groupId, 'tasks', task.id, 'memory');
+
+    const group = openGroup(groupsRoot, task.groupId);
+    try {
+      const res = postSummary({
+        group,
+        taskId,
+        fromVpId: currentVpId || task.initiator || 'unknown',
+        body,
+        progress,
+        supersedes,
+        memoryDir,
+      });
+      return JSON.stringify({
+        success: true,
+        messageId: res.message.id,
+        memoryIds: res.memoryIds,
+        supersededSummaryIds: res.supersededSummaryIds,
+      });
+    } finally {
+      group.close();
+    }
+  },
+});
+
