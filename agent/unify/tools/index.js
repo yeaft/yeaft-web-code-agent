@@ -22,6 +22,8 @@ import memoryRead from './memory-read.js';
 import memoryWrite from './memory-write.js';
 import memorySearch, { memorySearchAlias } from './memory-search.js';
 import memoryQuery from './memory-query.js';
+import memoryTrace from './memory-trace.js';
+import openSourceMessage from './open-source-message.js';
 import webSearch from './web-search.js';
 import webFetch from './web-fetch.js';
 import historySearch from './history-search.js';
@@ -98,6 +100,8 @@ export const allTools = [
   memorySearch,
   memorySearchAlias,
   memoryQuery,
+  memoryTrace,
+  openSourceMessage,
   webSearch,
   webFetch,
   historySearch,
