@@ -27,6 +27,7 @@
  */
 
 import { buildSystemPrompt } from './system-prompt.js';
+import { buildTaskCtx, resolveTaskMemoryDir } from './task-ctx-builder.js';
 
 /**
  * Build a runner suitable for RoleInstance.drain().
@@ -39,6 +40,8 @@ import { buildSystemPrompt } from './system-prompt.js';
  *   capabilitiesLine?: string,
  *   onEvent?: (evt:any, ri:any) => void,
  *   buildPromptOverride?: typeof buildSystemPrompt,
+ *   taskStore?: import('../tasks/store.js').TaskStore,       // 334e: for task_ctx
+ *   groupsRoot?: string,                                     // 334e: for task_ctx
  * }} deps
  */
 export function createTurnRunner(deps = {}) {
@@ -50,6 +53,8 @@ export function createTurnRunner(deps = {}) {
     capabilitiesLine,
     onEvent,
     buildPromptOverride,
+    taskStore,
+    groupsRoot,
   } = deps;
 
   if (!binder || typeof binder.bind !== 'function') {
@@ -72,12 +77,30 @@ export function createTurnRunner(deps = {}) {
     const engine = binder.bind(ri);
 
     // Fresh system prompt per turn — DYNAMIC section changes every turn.
+    // 334e: build taskCtx if we have a taskId.
+    let taskCtx = null;
+    const taskId = envelope.taskId || null;
+    if (taskId && taskStore) {
+      const memoryDir = groupsRoot
+        ? resolveTaskMemoryDir({ groupsRoot, groupId: ri.groupId, taskId })
+        : null;
+      taskCtx = buildTaskCtx({
+        taskStore,
+        taskId,
+        currentVpId: ri.vpId,
+        groupId: ri.groupId,
+        groupsRoot,
+        memoryDir,
+      });
+    }
+
     const systemPrompt = await buildPrompt(ri, {
       registry,
       rosterMembers,
       capabilitiesLine,
+      taskCtx,
       runtimeCtx: {
-        taskId: envelope.taskId || null,
+        taskId,
         isDream: false,
       },
     });

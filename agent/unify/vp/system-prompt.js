@@ -42,6 +42,7 @@ const ROSTER_STATUS_BUSY = 'busy';
  *   capabilitiesLine?: string,          // 334d injects tool inventory
  *   userProfile?: string,               // 334l injects top-5 user-memory
  *   recentGroupChat?: string,           // 334h injects N recent msgs
+ *   taskCtx?: object,                   // 334e: task_ctx from buildTaskCtx()
  * }} opts
  * @returns {string}
  */
@@ -68,6 +69,7 @@ export async function buildSystemPrompt(ri, opts = {}) {
     ? `\n## recent_group_chat\n${opts.recentGroupChat.trim()}\n`
     : '';
   const coreMem = await buildCoreMemoryBlock(ri, ctx);
+  const taskCtxBlock = opts.taskCtx ? renderTaskCtxBlock(opts.taskCtx) : '';
 
   return [
     '# § STATIC',
@@ -81,6 +83,7 @@ export async function buildSystemPrompt(ri, opts = {}) {
     runtime,
     recent.trim() ? recent : '',
     coreMem,
+    taskCtxBlock,
   ]
     .filter(Boolean)
     .join('\n')
@@ -178,7 +181,7 @@ async function buildCoreMemoryBlock(ri, ctx) {
     limit: CORE_MEMORY_TOP_K,
   });
   if (!entries || entries.length === 0) return '';
-  void ctx; // task_ctx injection is 334n's scope; reserved param.
+  void ctx; // core_memory is VP-scoped, not task-scoped.
   const lines = ['## core_memory'];
   for (const e of entries) {
     const shard = e.shard || 'general';
@@ -188,4 +191,65 @@ async function buildCoreMemoryBlock(ri, ctx) {
   }
   if (lines.length === 1) return '';
   return lines.join('\n');
+}
+
+// ──────────────────────────────────────────────────────────────
+// DYNAMIC — Task Context (§334e)
+// ──────────────────────────────────────────────────────────────
+
+const SUMMARY_REMINDER_TURN_THRESHOLD = 10;
+const SUMMARY_REMINDER_AGE_MS = 20 * 60 * 1000; // 20 min
+
+/**
+ * Render the task_ctx block from a pre-built taskCtx object.
+ *
+ * @param {object} taskCtx — shape from task-ctx-builder.js
+ * @returns {string}
+ */
+function renderTaskCtxBlock(taskCtx) {
+  if (!taskCtx || !taskCtx.taskId) return '';
+  const out = ['## task_ctx'];
+  out.push(`taskId: ${taskCtx.taskId}`);
+  if (taskCtx.currentVpId) out.push(`currentVp: ${taskCtx.currentVpId}`);
+  if (taskCtx.initiatorVpId) out.push(`initiator: ${taskCtx.initiatorVpId}`);
+
+  // ── task-memory top-5 ─────────────────────────────────
+  if (taskCtx.memories && taskCtx.memories.length > 0) {
+    out.push('');
+    out.push('### task_memories');
+    for (const m of taskCtx.memories) {
+      const kind = m.kind || 'note';
+      const body = (m.body || '').trim();
+      if (!body) continue;
+      out.push(`- [${kind}] ${body}`);
+    }
+  }
+
+  // ── related tasks ─────────────────────────────────────
+  if (taskCtx.relatedTasks && taskCtx.relatedTasks.length > 0) {
+    out.push('');
+    out.push('### related_tasks');
+    for (const rt of taskCtx.relatedTasks) {
+      const status = rt.status || 'unknown';
+      out.push(`- ${rt.id}: ${rt.title || '(untitled)'} [${status}]`);
+      if (rt.memories && rt.memories.length > 0) {
+        for (const m of rt.memories) {
+          out.push(`  - [${m.kind || 'note'}] ${(m.body || '').trim()}`);
+        }
+      }
+    }
+  }
+
+  // ── summary reminder ──────────────────────────────────
+  if (taskCtx.summaryReminder) {
+    const sr = taskCtx.summaryReminder;
+    const count = sr.nonSummaryCount || 0;
+    const age = sr.now && sr.lastSummaryAt
+      ? Math.round((sr.now - sr.lastSummaryAt) / 60000)
+      : 0;
+    out.push('');
+    out.push(`⚡ Consider posting a task_summary_post — ${count} turns / ${age} min since last summary.`);
+  }
+
+  return out.join('\n');
 }
