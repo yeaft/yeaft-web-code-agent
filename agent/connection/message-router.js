@@ -36,7 +36,7 @@ import { sendToServer, flushMessageBuffer } from './buffer.js';
 import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
 import { getLlmConfig, updateLlmConfig, getUnifySettings, updateUnifySettings } from '../unify/config-api.js';
-import { handleUnifyChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyMergeThread, handleUnifyForkThread, handleUnifyAbortThread, handleUnifyAbortAll, handleUnifyVpSubscribe, handleUnifyVpCreate, handleUnifyVpUpdate, handleUnifyVpDelete, handleUnifyVpRead } from '../unify/web-bridge.js';
+import { handleUnifyChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyMergeThread, handleUnifyForkThread, handleUnifyAbortThread, handleUnifyAbortAll, handleUnifyVpSubscribe, handleUnifyVpCreate, handleUnifyVpUpdate, handleUnifyVpDelete, handleUnifyVpRead, handleUnifyTaskMessage, handleUnifyUserMemoryWrite, handleUnifyUserMemoryRemove } from '../unify/web-bridge.js';
 
 export async function handleMessage(msg) {
   switch (msg.type) {
@@ -418,6 +418,22 @@ export async function handleMessage(msg) {
       break;
     case 'unify_vp_read':
       handleUnifyVpRead(msg);
+      break;
+
+    // task-334h (R6 §Δ28 / §Δ31.6): task-scoped direct message echo.
+    // Replaces the withdrawn R3 `unify_task_private_chat`. Agent validates,
+    // stamps msgId + ts, and broadcasts the `task_message` mirror back.
+    case 'unify_task_message':
+      handleUnifyTaskMessage(msg);
+      break;
+
+    // task-334h (R6 §Δ29): user-memory skeleton. Payload schema + event
+    // names are wire-frozen here; real ingestion lands in task-334l.
+    case 'unify_user_memory_write':
+      handleUnifyUserMemoryWrite(msg);
+      break;
+    case 'unify_user_memory_remove':
+      handleUnifyUserMemoryRemove(msg);
       break;
 
     // Expert roles definition (for ExpertPanel detail view)

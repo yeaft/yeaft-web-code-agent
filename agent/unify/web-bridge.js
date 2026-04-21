@@ -28,6 +28,11 @@ import ctx from '../context.js';
 import { getThreadStore, MAIN_THREAD_ID } from './threads/store.js';
 import { handleVpSubscribe } from './vp/vp-bridge.js';
 import { createVp, updateVp, deleteVp, readVp, VpCrudError } from './vp/vp-crud.js';
+import { handleUnifyTaskMessage as _handleUnifyTaskMessage } from './task-message.js';
+import {
+  handleUnifyUserMemoryWrite as _handleUnifyUserMemoryWrite,
+  handleUnifyUserMemoryRemove as _handleUnifyUserMemoryRemove,
+} from './user-memory.js';
 
 /** @type {import('./session.js').Session | null} */
 let session = null;
@@ -196,6 +201,40 @@ export function handleUnifyVpDelete(msg) {
       },
     });
   }
+}
+
+/**
+ * task-334h (R6 §Δ28 / §Δ31.6): task-scoped direct message echo.
+ *
+ * Replaces the withdrawn R3 `unify_task_private_chat`. The agent acts as a
+ * relay: validate → stamp msgId + ts → broadcast `task_message`. Real
+ * persistence + task ACL lands in 334l.
+ *
+ * @param {any} msg
+ */
+export function handleUnifyTaskMessage(msg) {
+  _handleUnifyTaskMessage(msg, sendUnifyEvent);
+}
+
+/**
+ * task-334h (R6 §Δ29): user-memory write skeleton. Replies with a
+ * `user_memory_updated` ack carrying `pending: true`; 334l replaces the
+ * stub with real ingestion + entryId.
+ *
+ * @param {any} msg
+ */
+export function handleUnifyUserMemoryWrite(msg) {
+  _handleUnifyUserMemoryWrite(msg, sendUnifyEvent);
+}
+
+/**
+ * task-334h (R6 §Δ29): user-memory remove skeleton. Replies with
+ * `user_memory_removed` ack; 334l replaces the stub.
+ *
+ * @param {any} msg
+ */
+export function handleUnifyUserMemoryRemove(msg) {
+  _handleUnifyUserMemoryRemove(msg, sendUnifyEvent);
 }
 
 export function handleUnifyVpRead(msg) {
