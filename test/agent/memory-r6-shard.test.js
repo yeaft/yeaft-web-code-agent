@@ -302,8 +302,9 @@ describe('S-i migration stub — classifier + plan dry run', () => {
     expect(p.totalEntries).toBe(0);
     expect(p.plan).toEqual([]);
   });
-  it('applyR5ToR6Migration is a deferred stub — throws until 334i wires it', async () => {
-    await expect(applyR5ToR6Migration({})).rejects.toThrow(/334i/);
+  it('applyR5ToR6Migration requires yeaftDir (wired in 334i wave-4)', async () => {
+    // Previously a throw-stub; now implemented. Still rejects on missing opts.
+    await expect(applyR5ToR6Migration({})).rejects.toThrow(/yeaftDir/);
   });
 });
 
