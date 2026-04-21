@@ -31,6 +31,7 @@ import { getThreadStore } from './threads/store.js';
 import { createIntentClassifier } from './router/intent-classifier.js';
 import { initInputQueueStore } from './input-queue/store.js';
 import { createDispatcher } from './pipeline/dispatcher.js';
+import { ensureDefaultGroupIfEmpty } from './groups/group-crud.js';
 import { join } from 'path';
 import { existsSync as existsSyncSafe, readFileSync as readFileSyncSafe } from 'fs';
 
@@ -163,6 +164,20 @@ export async function loadSession(options = {}) {
     force: true,
     idleArchiveDays: config.unify?.autoArchiveIdleDays ?? 0,
   });
+
+  // ─── 5c. D1 first-boot seed (task-334m) ─────────────────
+  //         When no groups exist on disk AND we're not in read-only mode,
+  //         seed a default group with roster = all VPs in the library,
+  //         defaultVpId = alphabetically first. Idempotent — no-op when
+  //         any group already exists. Never throws; failure logs a warning
+  //         so session load always succeeds.
+  if (!config._readOnly) {
+    try {
+      ensureDefaultGroupIfEmpty(yeaftDir);
+    } catch (err) {
+      console.warn(`[Yeaft] ensureDefaultGroupIfEmpty failed: ${err?.message || err}`);
+    }
+  }
 
   // ─── 6. Load skills ────────────────────────────────────
   let skillManager;

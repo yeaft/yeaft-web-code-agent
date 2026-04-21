@@ -926,4 +926,51 @@ export default {
 
   // ============ Unify per-message hover timestamp (task-334-ui-c / prev-2 backlog) ============
   'unify.message.timeAria': 'Sent at {time}',
+
+  // ============ Unify Groups (task-334m) ============
+  'unify.group.sidebarTitle': 'Groups',
+  'unify.group.sidebarAria': 'Groups section',
+  'unify.group.newButton': '+ New group',
+  'unify.group.newButtonAria': 'Create a new group',
+  'unify.group.empty': 'No groups yet.',
+  'unify.group.membersCount': '{count} members',
+  'unify.group.oneMember': '1 member',
+  'unify.group.noMembers': 'Empty — invite a VP',
+  'unify.group.defaultBadge': 'default',
+  'unify.group.archive': 'Archive',
+  'unify.group.archiveConfirm': 'Archive "{name}"? You can recover it from disk later.',
+  'unify.group.rename': 'Rename',
+  'unify.group.renamePrompt': 'New name for "{name}":',
+
+  // Wizard
+  'unify.group.wizard.title': 'New group',
+  'unify.group.wizard.close': 'Close',
+  'unify.group.wizard.step.name': 'Name',
+  'unify.group.wizard.step.members': 'Members',
+  'unify.group.wizard.namePlaceholder': 'Group name',
+  'unify.group.wizard.nameHint': 'A short descriptive name.',
+  'unify.group.wizard.roster': 'Pick members',
+  'unify.group.wizard.rosterHint': 'Select one or more VPs. You can add more later.',
+  'unify.group.wizard.rosterEmpty': 'No VPs available — create one from the VP Library first.',
+  'unify.group.wizard.defaultVp': 'Default responder',
+  'unify.group.wizard.defaultVpHint': 'The VP that answers when no one is @-mentioned.',
+  'unify.group.wizard.cancel': 'Cancel',
+  'unify.group.wizard.create': 'Create group',
+  'unify.group.wizard.creating': 'Creating…',
+  'unify.group.wizard.back': 'Back',
+  'unify.group.wizard.next': 'Next',
+
+  // Error / no_default_vp invite modal
+  'unify.group.error.invalid_name': 'Group name cannot be empty.',
+  'unify.group.error.duplicate': 'A group with this id already exists.',
+  'unify.group.error.not_found': 'Group not found.',
+  'unify.group.error.default_not_in_roster': 'The default VP must be in the roster.',
+  'unify.group.error.no_default_vp': 'This group has no members. Add a VP to start chatting.',
+  'unify.group.error.reserved': 'One of the selected ids is reserved (all, user, system, everyone).',
+  'unify.group.error.unknown': 'Group operation failed: {message}',
+  'unify.group.error.timeout': 'Group operation timed out — try again.',
+  'unify.group.invite.title': 'Invite a VP',
+  'unify.group.invite.body': '"{name}" has no members yet. Add a VP from your library to start chatting.',
+  'unify.group.invite.openLibrary': 'Open VP Library',
+  'unify.group.invite.dismiss': 'Not now',
 };

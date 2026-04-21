@@ -30,10 +30,12 @@ import {
   taskMatches as _taskMatches,
   messageMatches as _messageMatches,
 } from '../utils/search-parser.js';
+import GroupCreateWizard from './GroupCreateWizard.js';
 
 export default {
   name: 'UnifySidebarV2',
-  emits: ['select-thread', 'select-task', 'jump-to-message', 'search-escape', 'merge-thread'],
+  components: { GroupCreateWizard },
+  emits: ['select-thread', 'select-task', 'jump-to-message', 'search-escape', 'merge-thread', 'select-group'],
   template: `
     <aside class="unify-sidebar-v2">
       <div class="usv2-search">
@@ -269,6 +271,37 @@ export default {
             <div class="usv2-empty" v-if="filteredTasks.length === 0">{{ label('emptyTasks') }}</div>
           </div>
         </section>
+
+        <!-- task-334m: Groups section (designer R6 §6) -->
+        <section class="usv2-group usv2-group-groups" :aria-label="$t('unify.group.sidebarAria')">
+          <div class="usv2-group-header">
+            <span class="usv2-group-label">📁 {{ $t('unify.group.sidebarTitle') }}</span>
+            <button
+              type="button"
+              class="usv2-group-action"
+              :title="$t('unify.group.newButtonAria')"
+              :aria-label="$t('unify.group.newButtonAria')"
+              @click="onOpenGroupWizard"
+            >+</button>
+          </div>
+          <div class="usv2-group-body">
+            <div class="usv2-empty" v-if="groupList.length === 0">{{ $t('unify.group.empty') }}</div>
+            <div
+              v-for="g in groupList"
+              :key="g.id"
+              class="usv2-group-row"
+              :class="{ selected: g.id === activeGroupId }"
+              @click="onSelectGroup(g)"
+            >
+              <span class="usv2-group-row-name">{{ g.name || g.id }}</span>
+              <span class="usv2-group-row-members">
+                <template v-if="g.roster && g.roster.length === 1">{{ $t('unify.group.oneMember') }}</template>
+                <template v-else-if="g.roster && g.roster.length > 1">{{ $t('unify.group.membersCount', { count: g.roster.length }) }}</template>
+                <template v-else>{{ $t('unify.group.noMembers') }}</template>
+              </span>
+            </div>
+          </div>
+        </section>
       </div>
 
       <!-- task-313: Merge target picker. Opens when the user triggers a merge
@@ -316,6 +349,12 @@ export default {
           </div>
         </div>
       </div>
+      <!-- task-334m: Create-group wizard (inline, modal overlay). -->
+      <GroupCreateWizard
+        v-if="groupWizardOpen"
+        @close="groupWizardOpen = false"
+        @created="onGroupCreated"
+      />
     </aside>
   `,
   props: {
@@ -342,6 +381,9 @@ export default {
       //   mergeConfirm.targetId — thread we're merging INTO
       mergePicker: { open: false, sourceId: null },
       mergeConfirm: { open: false, sourceId: null, targetId: null },
+      // task-334m: group-create wizard visibility.
+      groupWizardOpen: false,
+      groupsOpen: true,
     };
   },
   computed: {
@@ -356,6 +398,17 @@ export default {
       } catch (_) { /* no-pinia test env */ }
       return null;
     },
+    // task-334m: groups store lookup (lazy, guarded like `store`).
+    groupsStore() {
+      try {
+        if (typeof window !== 'undefined' && window.Pinia?.useGroupsStore) {
+          return window.Pinia.useGroupsStore();
+        }
+      } catch (_) { /* no-pinia test env */ }
+      return null;
+    },
+    groupList() { return this.groupsStore?.groupList || []; },
+    activeGroupId() { return this.groupsStore?.activeGroupId || null; },
     // task-301 Part 2: real-store threads (or injected for tests).
     // Each thread is the serialised shape from
     // agent/unify/web-bridge.js#sendThreadListUpdate.
@@ -567,6 +620,24 @@ export default {
         examplesLabel: 'Try:',
       };
       return fallback[key] || full;
+    },
+    // task-334m: group-wizard + selection handlers.
+    onOpenGroupWizard() { this.groupWizardOpen = true; },
+    onCloseGroupWizard() { this.groupWizardOpen = false; },
+    onSelectGroup(g) {
+      if (!g || !g.id) return;
+      if (this.groupsStore) this.groupsStore.setActive(g.id);
+      this.$emit('select-group', g);
+    },
+    onGroupCreated(_group) {
+      // Store auto-activates via applyCrudResult; wizard closes itself.
+    },
+    groupDisplayName(g) {
+      if (!g) return '';
+      return g.name || g.id || '';
+    },
+    groupMemberCount(g) {
+      return Array.isArray(g?.roster) ? g.roster.length : 0;
     },
     // Display label for a thread row. The "main" thread (internal id
     // never changes) is shown as the localized "Inbox" label; all other
