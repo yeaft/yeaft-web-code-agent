@@ -216,7 +216,10 @@ export default {
     const vpSelectedIndex = Vue.ref(0);
 
     const isInUnifyGroupContext = () => {
-      return !!(store.unifyActiveTaskDetailId || (store.currentView === 'unify' && vpStore.vpList.length > 0));
+      // task-338-F5: decouple gate from VP list hydration state so Unify
+      // view always routes `@` to VP candidates. Empty-state rendering is
+      // handled downstream by VpMentionAutocomplete.
+      return !!(store.unifyActiveTaskDetailId || store.currentView === 'unify');
     };
 
     const vpMentionQuery = Vue.computed(() => {
