@@ -963,76 +963,102 @@ export async function handleUnifyGroupChat(msg) {
   if (!text?.trim()) return;
   const mentions = Array.isArray(msg.mentions) ? msg.mentions : [];
 
-  // Resolve the group meta. If the group is missing / not found, fall back
-  // to legacy single-agent behavior so the send never silently drops.
-  let meta = null;
+  // Fallback path #1 (PM red-line): no groupId on payload → skip group
+  // resolution entirely and hand the text to the legacy single-agent
+  // dispatcher. Ensures backward-compat with old clients that never learned
+  // about groups.
+  if (!groupId) {
+    await handleUnifyChat({ ...msg, prompt: text });
+    return;
+  }
+
+  // Open the group handle (meta + jsonl log). Unresolvable groups take the
+  // legacy fallback — never silently drop the send.
+  let groupHandle = null;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
-    if (yeaftDir && groupId) {
+    if (yeaftDir) {
       const { openGroup, loadGroupMeta } = await import('./groups/group-store.js');
       const { join } = await import('node:path');
       const { existsSync } = await import('node:fs');
       const root = join(yeaftDir, 'groups');
       const dir = join(root, groupId);
       if (existsSync(dir) && loadGroupMeta(dir)) {
-        const handle = openGroup(root, groupId);
-        meta = handle.getMeta();
+        groupHandle = openGroup(root, groupId);
       }
     }
   } catch (err) {
-    console.warn('[Unify] unify_group_chat: group resolve failed', err?.message || err);
+    console.warn('[Unify] unify_group_chat: group open failed', err?.message || err);
   }
 
-  // Resolve target vpIds.
-  const roster = Array.isArray(meta?.roster) ? meta.roster : [];
-  let targets = [];
-  if (mentions.length > 0) {
-    // Intersect mentions with roster. Unknown mentions are ignored (not
-    // dispatched) — coordinator §6 "not_in_roster" semantics.
-    targets = mentions.filter((v) => roster.includes(v));
-  }
-  if (targets.length === 0 && meta?.defaultVpId && roster.includes(meta.defaultVpId)) {
-    targets = [meta.defaultVpId];
-  }
-
-  // Fallback: no target resolvable → behave as the legacy single-agent path
-  // so that the user's text still lands on the Engine.
-  if (targets.length === 0) {
-    await handleUnifyChat({
-      ...msg,
-      prompt: text,
-    });
+  if (!groupHandle) {
+    await handleUnifyChat({ ...msg, prompt: text });
     return;
   }
 
-  // Tag outbound events with vpId so the UI can attribute them per VP. One
-  // `group_message` event per target (mirrors coordinator.deliver() calls).
-  for (const vpId of targets) {
+  // Adapter layer (PM red-line: do NOT modify coordinator to fit this
+  // consumer). We drive `createCoordinator()` with a capturing `deliver`
+  // callback, collect its dispatched/fallback report, then translate each
+  // target into (a) a per-VP `group_message` event for the UI and (b) a
+  // per-VP prompt dispatched through the legacy `handleUnifyChat` path.
+  //
+  // Source of truth for mentions is the PAYLOAD (ChatInput parsed them
+  // once). We pass them through the coordinator's `input.meta` so the
+  // appended log carries the authoritative set — the coordinator will also
+  // run its own parse over `text` for routing, which matches the payload by
+  // construction (ChatInput's `parseMentions` is the same regex).
+  const { createCoordinator } = await import('./groups/coordinator.js');
+  const captured = [];
+  const coord = createCoordinator(groupHandle, {
+    deliver: (vpId, envelope) => { captured.push({ vpId, envelope }); },
+  });
+
+  let report;
+  try {
+    report = coord.ingest({
+      from: 'user',
+      role: 'user',
+      text,
+      meta: { mentions },
+    });
+  } catch (err) {
+    console.warn('[Unify] unify_group_chat: coord.ingest failed', err?.message || err);
+    await handleUnifyChat({ ...msg, prompt: text });
+    return;
+  }
+
+  // Fallback path #2: coordinator resolved no targets and no default VP.
+  // Hand off to the legacy single-agent path so the text still runs.
+  const dispatchedIds = Array.isArray(report?.dispatched) ? report.dispatched : [];
+  if (dispatchedIds.length === 0 && !report?.fallback) {
+    await handleUnifyChat({ ...msg, prompt: text });
+    return;
+  }
+
+  // Per target: emit `group_message` tagged with `speakerVpId` (the VP
+  // being addressed — F3's GroupSelector binding consumes this) + dispatch
+  // through the Engine via handleUnifyChat with an `@vp-<id>` prompt prefix.
+  for (const { vpId, envelope } of captured) {
     try {
       sendUnifyEvent({
         type: 'group_message',
         groupId,
         vpId,
+        speakerVpId: vpId,
         text,
         mentions,
-        trigger: mentions.includes(vpId) ? 'mention' : 'fallback',
+        trigger: envelope?.trigger || 'fallback',
         ts: Date.now(),
       });
     } catch { /* never crash WS pipeline */ }
-  }
 
-  // For each target, dispatch into the engine via handleUnifyChat. We prepend
-  // an `@vp-<id>` tag on the prompt so the Dispatcher can route per-VP when
-  // VP-bound Engine wiring lands (task-338-F2/F5); today handleUnifyChat
-  // still runs a single shared Engine, which preserves legacy behaviour.
-  for (const vpId of targets) {
-    const scoped = `@vp-${vpId} ${text}`;
     try {
       await handleUnifyChat({
         ...msg,
-        prompt: scoped,
+        prompt: `@vp-${vpId} ${text}`,
         groupId,
         vpId,
+        speakerVpId: vpId,
       });
     } catch (err) {
       console.warn('[Unify] unify_group_chat: per-vp dispatch failed', vpId, err?.message || err);
