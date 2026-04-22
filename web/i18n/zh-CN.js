@@ -857,7 +857,8 @@ export default {
   // ============ Unify VP 发言头 (task-334-ui-b) ============
   'unify.vp.speaker.stateCauseAria': '状态变更：{cause}',
 
-  // ============ Unify VP 增删改查 (task-334-ui-g) =====  'unify.vp.crud.title': '角色库',
+  // ============ Unify VP 增删改查 (task-334-ui-g) ============
+  'unify.vp.crud.title': '角色库',
   'unify.vp.crud.close': '关闭',
   'unify.vp.crud.addNew': '+ 新建角色',
   'unify.vp.crud.empty': '还没有角色。创建第一个角色开始协作吧。',

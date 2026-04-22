@@ -857,7 +857,8 @@ export default {
   // ============ Unify VP Speaker Header (task-334-ui-b) ============
   'unify.vp.speaker.stateCauseAria': 'State change: {cause}',
 
-  // ============ Unify VP CRUD (task-334-ui-g) =====  'unify.vp.crud.title': 'VP Library',
+  // ============ Unify VP CRUD (task-334-ui-g) ============
+  'unify.vp.crud.title': 'VP Library',
   'unify.vp.crud.close': 'Close',
   'unify.vp.crud.addNew': '+ New role',
   'unify.vp.crud.empty': 'No virtual persons yet. Create your first role to start collaborating.',
