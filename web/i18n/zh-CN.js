@@ -977,6 +977,7 @@ export default {
   'unify.group.wizard.roster': '选择成员',
   'unify.group.wizard.rosterHint': '选择一个或多个 VP，稍后可追加。',
   'unify.group.wizard.rosterEmpty': '暂无可用 VP — 请先到角色库创建。',
+  'unify.group.wizard.rosterLoading': 'VP 加载中…',
   'unify.group.wizard.defaultVp': '默认应答者',
   'unify.group.wizard.defaultVpHint': '当没有 @ 提及时默认回答的 VP。',
   'unify.group.wizard.cancel': '取消',

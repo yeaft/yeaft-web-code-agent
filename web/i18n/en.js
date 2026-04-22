@@ -977,6 +977,7 @@ export default {
   'unify.group.wizard.roster': 'Pick members',
   'unify.group.wizard.rosterHint': 'Select one or more VPs. You can add more later.',
   'unify.group.wizard.rosterEmpty': 'No VPs available — create one from the VP Library first.',
+  'unify.group.wizard.rosterLoading': 'Loading VPs…',
   'unify.group.wizard.defaultVp': 'Default responder',
   'unify.group.wizard.defaultVpHint': 'The VP that answers when no one is @-mentioned.',
   'unify.group.wizard.cancel': 'Cancel',

@@ -352,3 +352,45 @@
   60%  { background-color: rgba(255, 235, 59, 0.22); }
   100% { background-color: transparent; }
 }
+
+/* ===========================================================================
+   task-339-F1: Groups section hoisted to top of sidebar. The "new group" CTA
+   mirrors the Chat sidebar's .new-chat-btn chrome (transparent, rounded 8,
+   hover = var(--sidebar-hover)) so the two primary entry buttons look alike.
+   =========================================================================== */
+.usv2-new-group-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.usv2-new-group-btn:hover { background: var(--sidebar-hover); }
+.usv2-new-group-btn svg { flex-shrink: 0; color: var(--text-secondary); }
+
+/* Inline "+" new-group button in the Groups section header (when groups>0). */
+.usv2-group-new-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  margin-left: auto;
+  transition: background 0.15s, color 0.15s;
+}
+.usv2-group-new-btn:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}

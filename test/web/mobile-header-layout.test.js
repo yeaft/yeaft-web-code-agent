@@ -80,7 +80,10 @@ describe('task-329 — mobile header flex-shrink:0 defense', () => {
       const rule = css.match(/\n\.unify-topbar\s*\{[^}]*\}/);
       expect(rule).not.toBeNull();
       expect(rule[0]).toMatch(/flex-shrink:\s*0/);
-      expect(rule[0]).toMatch(/min-height:\s*48px/);
+      // task-339-F3: topbar slimmed from 48px → 40px now that the
+      // GroupSelector is out of it. flex-shrink:0 is still required so
+      // the bar doesn't get compressed on mobile.
+      expect(rule[0]).toMatch(/min-height:\s*40px/);
     });
   });
 });
