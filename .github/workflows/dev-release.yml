@@ -5,6 +5,10 @@ on:
     tags:
       - 'v*'
 
+concurrency:
+  group: dev-release
+  cancel-in-progress: true
+
 permissions:
   contents: read
   packages: write
