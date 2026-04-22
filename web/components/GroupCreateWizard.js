@@ -46,8 +46,11 @@ export default {
           <div class="group-wizard-field">
             <span class="group-wizard-field-label">{{ $t('unify.group.wizard.roster') }}</span>
             <span class="group-wizard-hint">{{ $t('unify.group.wizard.rosterHint') }}</span>
-            <div v-if="vpList.length === 0" class="group-wizard-empty">
+            <div v-if="vpList.length === 0 && vpLibraryEmpty" class="group-wizard-empty">
               {{ $t('unify.group.wizard.rosterEmpty') }}
+            </div>
+            <div v-else-if="vpList.length === 0" class="group-wizard-empty group-wizard-empty-loading">
+              {{ $t('unify.group.wizard.rosterLoading') }}
             </div>
             <ul v-else class="group-wizard-roster-list" role="listbox" aria-multiselectable="true">
               <li v-for="vp in vpList" :key="vp.vpId" class="group-wizard-roster-item" role="option" :aria-selected="form.roster.includes(vp.vpId)">
@@ -213,6 +216,16 @@ export default {
       return null;
     },
     vpList() { return this.vpStore?.vpList || []; },
+    // task-339-F2 defensive: distinguish "snapshot received and empty" (emptyLibrary=true)
+    // from "snapshot not received yet" (emptyLibrary=false && vpList=0 && lastSnapshotAt=0).
+    // When true → roster really is empty, show rosterEmpty. When false && vpList=0 → loading.
+    vpLibraryEmpty() {
+      const s = this.vpStore;
+      if (!s) return false;
+      if (s.emptyLibrary === true) return true;
+      // Snapshot already arrived but somehow empty → treat as genuine empty.
+      return !!(s.lastSnapshotAt && s.lastSnapshotAt > 0 && (s.vpOrder?.length || 0) === 0);
+    },
     canAdvanceFromName() { return (this.form.name || '').trim().length > 0; },
     summaryDefaultVpId() {
       return this.form.defaultVpId || this.form.roster[0] || null;

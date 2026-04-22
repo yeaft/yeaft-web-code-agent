@@ -8,13 +8,12 @@ import VpLibraryLink from './VpLibraryLink.js';
 import VpCrudModal from './VpCrudModal.js';
 import VpDetailView from './VpDetailView.js';
 import GroupInviteModal from './GroupInviteModal.js';
-import GroupSelector from './GroupSelector.js';
 import TaskMessageRejectToast from './TaskMessageRejectToast.js';
 import UserMemoryPage from './UserMemoryPage.js';
 
 export default {
   name: 'UnifyPage',
-  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2, UnifyBreadcrumb, UnifyTaskDetailView, VpLibraryLink, VpCrudModal, VpDetailView, GroupInviteModal, GroupSelector, TaskMessageRejectToast, UserMemoryPage },
+  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2, UnifyBreadcrumb, UnifyTaskDetailView, VpLibraryLink, VpCrudModal, VpDetailView, GroupInviteModal, TaskMessageRejectToast, UserMemoryPage },
   template: `
     <div class="unify-page">
       <!-- Mobile sidebar overlay -->
@@ -57,8 +56,7 @@ export default {
             <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>
           </button>
 
-          <!-- task-338-F3: Group selector (active group + switch + new) -->
-          <GroupSelector />
+        <!-- task-339-F1: GroupSelector removed from topbar — groups now surface via sidebar section. -->
 
           <!-- Model selector (compact dropdown in topbar) -->
           <div class="unify-topbar-model" @click="toggleModelDropdown" :title="$t('unify.switchModel')">

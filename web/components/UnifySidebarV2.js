@@ -136,6 +136,71 @@ export default {
       </div>
 
       <div class="usv2-scroll" v-else>
+        <!-- task-339-F1: Groups section hoisted ABOVE threads; hidden entirely when empty. -->
+        <section v-if="groupList.length > 0" class="usv2-group usv2-group-groups" :aria-label="$t('unify.group.sidebarAria')">
+          <div class="usv2-group-header">
+            <span class="usv2-group-label">{{ $t('unify.group.sidebarTitle') }}</span>
+            <span class="usv2-group-count">{{ groupList.length }}</span>
+            <button
+              type="button"
+              class="usv2-group-new-btn"
+              :title="$t('unify.group.newButtonAria')"
+              :aria-label="$t('unify.group.newButtonAria')"
+              @click="onOpenGroupWizard"
+            >
+              <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+            </button>
+          </div>
+          <div class="usv2-group-body">
+            <div
+              v-for="g in groupList"
+              :key="g.id"
+              class="usv2-group-row"
+              :class="{ selected: g.id === activeGroupId }"
+              @click="onSelectGroup(g)"
+              @contextmenu.prevent="openGroupMenu(g, $event)"
+            >
+              <span class="usv2-group-row-name">{{ groupDisplayName(g) }}</span>
+              <span class="usv2-group-row-members">
+                <template v-if="g.roster && g.roster.length === 1">{{ $t('unify.group.oneMember') }}</template>
+                <template v-else-if="g.roster && g.roster.length > 1">{{ $t('unify.group.membersCount', { count: g.roster.length }) }}</template>
+                <template v-else>{{ $t('unify.group.noMembers') }}</template>
+              </span>
+              <button
+                type="button"
+                class="usv2-group-row-kebab"
+                :title="$t('unify.group.moreActions')"
+                :aria-label="$t('unify.group.moreActions')"
+                aria-haspopup="menu"
+                :aria-expanded="groupMenu.open && groupMenu.groupId === g.id ? 'true' : 'false'"
+                @click.stop="openGroupMenu(g, $event)"
+              >⋯</button>
+              <div v-if="groupMenu.open && groupMenu.groupId === g.id" class="usv2-group-row-menu" role="menu" @click.stop>
+                <button type="button" role="menuitem" class="usv2-group-row-menu-item" @click="startRenameGroup(g)">
+                  {{ $t('unify.group.rename') }}
+                </button>
+                <button type="button" role="menuitem" class="usv2-group-row-menu-item usv2-group-row-menu-danger" @click="startArchiveGroup(g)">
+                  {{ $t('unify.group.archive') }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- task-339-F1: Create-group entry point — visible even when groups=0 so user
+             can still bootstrap. Mirrors .new-chat-btn chrome from the Chat sidebar. -->
+        <button
+          v-if="groupList.length === 0"
+          type="button"
+          class="usv2-new-group-btn"
+          :title="$t('unify.group.newButtonAria')"
+          :aria-label="$t('unify.group.newButtonAria')"
+          @click="onOpenGroupWizard"
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+          <span>{{ $t('unify.group.newButtonAria') }}</span>
+        </button>
+
         <!-- Active Threads -->
         <section class="usv2-group" :class="{ collapsed: !activeOpen }">
           <button type="button" class="usv2-group-header" @click="activeOpen = !activeOpen">
@@ -272,55 +337,7 @@ export default {
           </div>
         </section>
 
-        <!-- task-334m: Groups section (designer R6 §6) -->
-        <section class="usv2-group usv2-group-groups" :aria-label="$t('unify.group.sidebarAria')">
-          <div class="usv2-group-header">
-            <span class="usv2-group-label">📁 {{ $t('unify.group.sidebarTitle') }}</span>
-            <button
-              type="button"
-              class="usv2-group-action"
-              :title="$t('unify.group.newButtonAria')"
-              :aria-label="$t('unify.group.newButtonAria')"
-              @click="onOpenGroupWizard"
-            >+</button>
-          </div>
-          <div class="usv2-group-body">
-            <div class="usv2-empty" v-if="groupList.length === 0">{{ $t('unify.group.empty') }}</div>
-            <div
-              v-for="g in groupList"
-              :key="g.id"
-              class="usv2-group-row"
-              :class="{ selected: g.id === activeGroupId }"
-              @click="onSelectGroup(g)"
-              @contextmenu.prevent="openGroupMenu(g, $event)"
-            >
-              <span class="usv2-group-row-name">{{ groupDisplayName(g) }}</span>
-              <span class="usv2-group-row-members">
-                <template v-if="g.roster && g.roster.length === 1">{{ $t('unify.group.oneMember') }}</template>
-                <template v-else-if="g.roster && g.roster.length > 1">{{ $t('unify.group.membersCount', { count: g.roster.length }) }}</template>
-                <template v-else>{{ $t('unify.group.noMembers') }}</template>
-              </span>
-              <button
-                type="button"
-                class="usv2-group-row-kebab"
-                :title="$t('unify.group.moreActions')"
-                :aria-label="$t('unify.group.moreActions')"
-                aria-haspopup="menu"
-                :aria-expanded="groupMenu.open && groupMenu.groupId === g.id ? 'true' : 'false'"
-                @click.stop="openGroupMenu(g, $event)"
-              >⋯</button>
-              <!-- Per-row action menu (Rename / Archive). -->
-              <div v-if="groupMenu.open && groupMenu.groupId === g.id" class="usv2-group-row-menu" role="menu" @click.stop>
-                <button type="button" role="menuitem" class="usv2-group-row-menu-item" @click="startRenameGroup(g)">
-                  {{ $t('unify.group.rename') }}
-                </button>
-                <button type="button" role="menuitem" class="usv2-group-row-menu-item usv2-group-row-menu-danger" @click="startArchiveGroup(g)">
-                  {{ $t('unify.group.archive') }}
-                </button>
-              </div>
-            </div>
-          </div>
-        </section>
+        <!-- task-339-F1: Groups section moved to top of sidebar (see above). -->
 
         <!-- task-334-ui-d: User Memory section -->
         <section class="usv2-group usv2-group-user-memory" :aria-label="$t('unify.userMemory.sidebarAria')">

@@ -216,9 +216,10 @@ describe('UnifyPage invite-modal integration (prev-2 BLOCKER-1)', () => {
 // ─── (5) UnifySidebarV2 Groups section ──────────────────────
 
 describe('UnifySidebarV2 Groups section (designer R6 §6)', () => {
-  it('renders a Groups section with 📁 + new-button', () => {
+  it('renders a Groups section with new-button', () => {
+    // task-339-F1: the 📁 emoji was dropped when the section was hoisted
+    // to the top of the sidebar; the section class + wizard trigger remain.
     expect(sidebarSrc).toContain('usv2-group-groups');
-    expect(sidebarSrc).toContain('📁');
     expect(sidebarSrc).toMatch(/onOpenGroupWizard/);
   });
   it('registers GroupCreateWizard and toggles groupWizardOpen', () => {
