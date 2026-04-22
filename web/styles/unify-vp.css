@@ -118,10 +118,10 @@
   transition: background 120ms ease;
 }
 .vp-library-link:hover {
-  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+  background: var(--sidebar-hover);
 }
 .vp-library-link:focus-visible {
-  outline: 2px solid var(--accent, #5B8DEF);
+  outline: 2px solid var(--accent-blue);
   outline-offset: 1px;
 }
 .vp-library-icon {
@@ -138,7 +138,7 @@
   font-size: 11px;
   color: var(--text-secondary);
   padding: 1px 6px;
-  background: var(--bg-subtle, rgba(0, 0, 0, 0.05));
+  background: var(--inline-code-bg);
   border-radius: 8px;
 }
 .vp-library-arrow {
@@ -210,11 +210,14 @@
 /* ================================================================== * VpCrudModal — task-334-ui-g
  * List + form view inside a centred modal. Matches the flat / no-divider
  * aesthetic of Unify (CLAUDE.md "Unify UI Design Rules"): spacing not lines.
+ * Aligned to Yeaft design tokens (task-336): reuses modal/button/input
+ * patterns from chat-modals.css. No bespoke --accent-color; no hardcoded
+ * fallbacks that would mask a missing token.
  * ========================================================================= */
 .vp-crud-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.45);
+  background: rgba(0, 0, 0, 0.5);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -223,14 +226,15 @@
 }
 
 .vp-crud-modal {
-  background: var(--bg-primary, #fff);
-  color: var(--text-primary, #1f2937);
+  background: var(--bg-main);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
   border-radius: 12px;
   width: min(720px, 100%);
   max-height: calc(100vh - 48px);
   display: flex;
   flex-direction: column;
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
   overflow: hidden;
 }
 
@@ -238,28 +242,38 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 18px 22px 6px;
+  padding: 16px 20px;
 }
 
 .vp-crud-title {
   font-size: 16px;
   font-weight: 600;
+  margin: 0;
 }
 
 .vp-crud-close {
-  background: transparent;
+  background: none;
   border: none;
   cursor: pointer;
-  font-size: 22px;
+  font-size: 24px;
   line-height: 1;
-  color: var(--text-secondary, #6b7280);
-  padding: 4px 8px;
+  color: var(--text-secondary);
+  padding: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border-radius: 6px;
+  transition: background 0.2s, color 0.2s;
 }
-.vp-crud-close:hover { background: var(--bg-hover, #f3f4f6); color: var(--text-primary, #111827); }
+.vp-crud-close:hover {
+  background: var(--bg-user-msg);
+  color: var(--text-primary);
+}
 
 .vp-crud-body {
-  padding: 12px 22px 22px;
+  padding: 12px 20px 20px;
   overflow-y: auto;
 }
 
@@ -279,7 +293,7 @@
   gap: 14px;
 }
 .vp-crud-empty-text {
-  color: var(--text-secondary, #6b7280);
+  color: var(--text-secondary);
   max-width: 420px;
 }
 
@@ -295,7 +309,7 @@
   gap: 12px;
   padding: 12px;
   border-radius: 8px;
-  background: var(--bg-secondary, #f9fafb);
+  background: var(--bg-sidebar);
 }
 
 .vp-crud-card-avatar {
@@ -314,14 +328,14 @@
   flex: 1;
   min-width: 0;
 }
-.vp-crud-card-name { font-weight: 600; }
+.vp-crud-card-name { font-weight: 600; color: var(--text-primary); }
 .vp-crud-card-id {
   font-size: 12px;
-  color: var(--text-secondary, #6b7280);
+  color: var(--text-secondary);
 }
 .vp-crud-card-role {
   font-size: 13px;
-  color: var(--text-secondary, #6b7280);
+  color: var(--text-secondary);
   margin-top: 2px;
 }
 
@@ -336,50 +350,58 @@
   font-size: 15px;
   font-weight: 600;
   margin-bottom: 8px;
+  color: var(--text-primary);
 }
 
 .vp-crud-field {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  margin-bottom: 14px;
+  margin-bottom: 16px;
 }
 
 .vp-crud-field-label {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
-  color: var(--text-primary, #1f2937);
+  color: var(--text-primary);
 }
 
 .vp-crud-input,
 .vp-crud-textarea {
+  width: 100%;
+  box-sizing: border-box;
   font: inherit;
-  padding: 8px 10px;
-  border: 1px solid var(--border-color, #d1d5db);
-  border-radius: 6px;
-  background: var(--bg-primary, #fff);
-  color: var(--text-primary, #1f2937);
+  font-size: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-input);
+  color: var(--text-primary);
   outline: none;
-  transition: border-color .15s, box-shadow .15s;
+  transition: border-color 0.2s, box-shadow 0.2s;
 }
 .vp-crud-input:focus,
 .vp-crud-textarea:focus {
-  border-color: var(--accent-color, #3b82f6);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 3px rgba(74, 124, 201, 0.18);
+}
+.vp-crud-input::placeholder,
+.vp-crud-textarea::placeholder {
+  color: var(--text-secondary);
 }
 .vp-crud-input:disabled,
 .vp-crud-input[readonly] {
-  background: var(--bg-secondary, #f3f4f6);
-  color: var(--text-secondary, #6b7280);
+  background: var(--bg-user-msg);
+  color: var(--text-secondary);
 }
 
 .vp-crud-input.is-error {
-  border-color: #dc2626;
-  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.12);
+  border-color: var(--error);
+  box-shadow: 0 0 0 3px rgba(214, 93, 93, 0.15);
 }
 .vp-crud-input.is-ok {
-  border-color: #16a34a;
-  box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.12);
+  border-color: var(--success);
+  box-shadow: 0 0 0 3px rgba(74, 158, 92, 0.15);
 }
 
 .vp-crud-textarea {
@@ -390,83 +412,82 @@
 
 .vp-crud-hint {
   font-size: 12px;
-  color: var(--text-secondary, #6b7280);
+  color: var(--text-secondary);
 }
 .vp-crud-hint-muted { opacity: .8; }
 
 .vp-crud-field-error {
   font-size: 12px;
-  color: #dc2626;
+  color: var(--error);
 }
 .vp-crud-field-ok {
   font-size: 12px;
-  color: #16a34a;
+  color: var(--success);
 }
 
 .vp-crud-form-error {
-  color: #dc2626;
-  background: rgba(220, 38, 38, 0.08);
-  border-radius: 6px;
+  color: var(--error);
+  background: rgba(214, 93, 93, 0.08);
+  border-radius: 8px;
   padding: 8px 10px;
   font-size: 13px;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
 }
 
 .vp-crud-form-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  margin-top: 4px;
+  gap: 12px;
+  margin-top: 8px;
 }
 
-/* ---------- Buttons ---------- */
+/* ---------- Buttons ----------
+ * Align to Yeaft btn-primary / btn-secondary (chat-modals.css L217-255).
+ * Light mode primary is dark (#171717 bg / #fff color); dark mode primary is
+ * inverted. Secondary is transparent + border.
+ */
 .vp-crud-primary-btn {
-  background: var(--accent-color, #3b82f6);
-  color: #fff;
+  background: #ffffff;
+  color: #171717;
   border: none;
-  padding: 8px 16px;
-  border-radius: 6px;
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 14px;
   font-weight: 500;
   cursor: pointer;
-  transition: background .15s, opacity .15s;
+  transition: background 0.2s, opacity 0.2s;
 }
-.vp-crud-primary-btn:hover:not(:disabled) { filter: brightness(1.05); }
-.vp-crud-primary-btn:disabled { opacity: .55; cursor: not-allowed; }
+[data-theme="light"] .vp-crud-primary-btn {
+  background: #171717;
+  color: #ffffff;
+}
+.vp-crud-primary-btn:hover:not(:disabled) { opacity: 0.85; }
+.vp-crud-primary-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
 .vp-crud-link-btn {
   background: transparent;
-  color: var(--text-primary, #1f2937);
-  border: 1px solid var(--border-color, #d1d5db);
-  padding: 6px 12px;
-  border-radius: 6px;
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  padding: 10px 20px;
+  border-radius: 8px;
   cursor: pointer;
-  font-size: 13px;
+  font-size: 14px;
+  font-weight: 500;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
 }
-.vp-crud-link-btn:hover:not(:disabled) { background: var(--bg-hover, #f3f4f6); }
-.vp-crud-link-btn:disabled { opacity: .55; cursor: not-allowed; }
-.vp-crud-link-btn.is-danger { color: #b91c1c; }
+.vp-crud-link-btn:hover:not(:disabled) {
+  background: var(--bg-user-msg);
+}
+.vp-crud-link-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.vp-crud-link-btn.is-danger { color: var(--error); }
 .vp-crud-link-btn.is-danger:hover:not(:disabled) {
-  background: rgba(220, 38, 38, 0.08);
-  border-color: #dc2626;
-}
-
-/* Dark mode overrides */
-[data-theme="dark"] .vp-crud-modal {
-  background: var(--bg-primary, #1f2937);
-  color: var(--text-primary, #f3f4f6);
-}
-[data-theme="dark"] .vp-crud-card {
-  background: var(--bg-secondary, #111827);
-}
-[data-theme="dark"] .vp-crud-input,
-[data-theme="dark"] .vp-crud-textarea {
-  background: var(--bg-secondary, #111827);
-  color: var(--text-primary, #f3f4f6);
-  border-color: var(--border-color, #374151);
+  background: rgba(214, 93, 93, 0.08);
+  border-color: var(--error);
 }
 
 /* ─────────────────────────────────────────────────────────────
  * task-334-ui-c: VP detail view + clickable badge + hover time
+ * Aligned to Yeaft design tokens (task-336).
  * ───────────────────────────────────────────────────────────── */
 
 /* Clickable VpBadge — when consumers pass `clickable=true` (VpSpeakerHeader
@@ -487,20 +508,17 @@
   transition: background-color 120ms ease;
 }
 .vp-badge-clickable:hover {
-  background: var(--hover-bg, rgba(0, 0, 0, 0.05));
+  background: var(--sidebar-hover);
 }
 .vp-badge-clickable:focus-visible {
-  outline: 2px solid var(--focus-ring, #3b82f6);
+  outline: 2px solid var(--accent-blue);
   outline-offset: 1px;
-}
-[data-theme="dark"] .vp-badge-clickable:hover {
-  background: rgba(255, 255, 255, 0.06);
 }
 
 /* ── Per-turn hover timestamp (deliverable C) ─────────────── */
 .turn-time {
   font-size: 11px;
-  color: var(--text-secondary, #6b7280);
+  color: var(--text-secondary);
   margin-right: auto;
   opacity: 0;
   transition: opacity 120ms ease;
@@ -512,9 +530,6 @@
 .assistant-turn:hover .turn-footer .turn-time,
 .turn-time:focus-visible {
   opacity: 0.8;
-}
-[data-theme="dark"] .turn-time {
-  color: var(--text-secondary, #9ca3af);
 }
 
 /* ── VP Detail View ───────────────────────────────────────── */
@@ -539,19 +554,20 @@
   align-items: center;
   gap: 6px;
   background: transparent;
-  border: 1px solid var(--border, #e5e7eb);
-  color: var(--text-primary, #111827);
-  padding: 6px 10px;
-  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  padding: 8px 14px;
+  border-radius: 8px;
   cursor: pointer;
   font-size: 13px;
+  font-weight: 500;
   transition: background-color 120ms ease, border-color 120ms ease;
 }
 .vp-detail-back:hover {
-  background: var(--hover-bg, rgba(0, 0, 0, 0.04));
+  background: var(--bg-user-msg);
 }
 .vp-detail-back:focus-visible {
-  outline: 2px solid var(--focus-ring, #3b82f6);
+  outline: 2px solid var(--accent-blue);
   outline-offset: 1px;
 }
 
@@ -581,23 +597,23 @@
   margin: 0;
   font-size: 20px;
   font-weight: 600;
-  color: var(--text-primary, #111827);
+  color: var(--text-primary);
   word-break: break-word;
 }
 
 .vp-detail-role {
   margin: 0;
   font-size: 13px;
-  color: var(--text-secondary, #6b7280);
+  color: var(--text-secondary);
 }
 
 .vp-detail-persona-hash {
   display: inline-block;
   margin-top: 4px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
   font-size: 11px;
-  color: var(--text-tertiary, #9ca3af);
-  background: var(--chip-bg, rgba(0, 0, 0, 0.04));
+  color: var(--text-muted);
+  background: var(--inline-code-bg);
   border-radius: 4px;
   padding: 1px 6px;
   cursor: help;
@@ -616,7 +632,7 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--text-secondary, #6b7280);
+  color: var(--text-secondary);
 }
 
 .vp-detail-traits {
@@ -630,40 +646,42 @@
 
 .vp-detail-trait-chip {
   display: inline-block;
-  padding: 2px 8px;
+  padding: 2px 10px;
   font-size: 12px;
   border-radius: 999px;
-  background: var(--chip-bg, rgba(0, 0, 0, 0.05));
-  color: var(--text-primary, #111827);
+  background: var(--bg-sidebar);
+  color: var(--text-primary);
 }
 
 .vp-detail-model-hint code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
   font-size: 12px;
-  background: var(--code-bg, rgba(0, 0, 0, 0.05));
+  background: var(--inline-code-bg);
+  color: var(--text-primary);
   padding: 2px 6px;
   border-radius: 4px;
 }
 
 .vp-detail-persona {
   margin: 0;
-  padding: 10px 12px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 12px 14px;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
   font-size: 12px;
   line-height: 1.5;
-  background: var(--code-bg, rgba(0, 0, 0, 0.04));
-  border: 1px solid var(--border, #e5e7eb);
-  border-radius: 6px;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
   white-space: pre-wrap;
   word-break: break-word;
   max-height: 320px;
   overflow: auto;
+  color: var(--text-primary);
 }
 
 .vp-detail-empty {
   margin: 0;
   font-size: 12px;
-  color: var(--text-tertiary, #9ca3af);
+  color: var(--text-muted);
   font-style: italic;
 }
 
@@ -682,32 +700,32 @@
   gap: 8px;
   align-items: baseline;
   padding: 6px 8px;
-  border-radius: 4px;
+  border-radius: 6px;
   font-size: 13px;
   transition: background-color 120ms ease;
   /* Unify 无横向分割线铁律 — 用 zebra + hover 背景替代 border-bottom */
 }
 .vp-detail-activity-row:nth-child(even) {
-  background: var(--chip-bg, rgba(0, 0, 0, 0.025));
+  background: var(--bg-user-msg-subtle);
 }
 .vp-detail-activity-row:hover {
-  background: var(--hover-bg, rgba(0, 0, 0, 0.05));
+  background: var(--sidebar-hover);
 }
 
 .vp-detail-activity-row.kind-diff-updated,
 .vp-detail-activity-row.kind-diff-removed {
-  color: var(--accent, #2563eb);
+  color: var(--accent-blue);
   font-style: italic;
 }
 
 .vp-detail-activity-time {
   font-size: 11px;
-  color: var(--text-tertiary, #9ca3af);
+  color: var(--text-muted);
   white-space: nowrap;
 }
 
 .vp-detail-activity-text {
-  color: var(--text-primary, #111827);
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -715,8 +733,8 @@
 
 .vp-detail-activity-reason {
   font-size: 11px;
-  color: var(--text-secondary, #6b7280);
-  background: var(--chip-bg, rgba(0, 0, 0, 0.05));
+  color: var(--text-secondary);
+  background: var(--inline-code-bg);
   border-radius: 4px;
   padding: 1px 6px;
 }
@@ -725,25 +743,14 @@
 .vp-detail-edit-hint {
   margin: 0;
   font-size: 11px;
-  color: var(--text-tertiary, #9ca3af);
+  color: var(--text-muted);
 }
 
 .vp-detail-missing {
   padding: 24px;
   text-align: center;
-  color: var(--text-secondary, #6b7280);
+  color: var(--text-secondary);
 }
-
-/* Dark-mode overrides — no horizontal dividers (Unify rule) */
-[data-theme="dark"] .vp-detail-persona,
-[data-theme="dark"] .vp-detail-model-hint code { background: rgba(255, 255, 255, 0.04); border-color: var(--border, #374151); }
-[data-theme="dark"] .vp-detail-trait-chip,
-[data-theme="dark"] .vp-detail-activity-reason,
-[data-theme="dark"] .vp-detail-persona-hash { background: rgba(255, 255, 255, 0.06); }
-[data-theme="dark"] .vp-detail-back { border-color: var(--border, #374151); }
-[data-theme="dark"] .vp-detail-back:hover { background: rgba(255, 255, 255, 0.05); }
-[data-theme="dark"] .vp-detail-activity-row:nth-child(even) { background: rgba(255, 255, 255, 0.03); }
-[data-theme="dark"] .vp-detail-activity-row:hover { background: rgba(255, 255, 255, 0.06); }
 
 /* Mobile responsive — collapse the activity row grid and tighten padding */
 @media (max-width: 640px) {

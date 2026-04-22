@@ -249,11 +249,12 @@ describe('S-c9: unify-vp.css new selectors', () => {
     expect(unifyVpCssSrc).toMatch(/\.turn-time\s*\{[\s\S]*?opacity:\s*0/);
     expect(unifyVpCssSrc).toMatch(/\.turn-footer:hover\s+\.turn-time/);
   });
-  it('includes dark-mode overrides for detail view', () => {
-    // Unify 无横向分割线铁律 — hero/activity-row borders removed; dark-mode
-    // coverage now asserted via persona + activity-row zebra/hover overrides.
-    expect(unifyVpCssSrc).toMatch(/\[data-theme="dark"\]\s+\.vp-detail-persona/);
-    expect(unifyVpCssSrc).toMatch(/\[data-theme="dark"\]\s+\.vp-detail-activity-row:hover/);
+  it('uses Yeaft design tokens for dark-mode support (no hardcoded overrides)', () => {
+    // task-336: dark-mode is handled by CSS variables (variables.css defines
+    // [data-theme="dark"] token values). The unify-vp.css file consumes those
+    // tokens instead of duplicating dark-mode overrides.
+    expect(unifyVpCssSrc).toMatch(/\.vp-detail-persona[\s\S]*?var\(--bg-sidebar\)/);
+    expect(unifyVpCssSrc).toMatch(/\.vp-detail-activity-row:hover[\s\S]*?var\(--sidebar-hover\)/);
   });
   it('includes mobile @media query', () => {
     expect(unifyVpCssSrc).toMatch(/@media\s*\(max-width:\s*640px\)/);
