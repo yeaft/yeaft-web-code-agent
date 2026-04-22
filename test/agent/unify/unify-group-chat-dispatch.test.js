@@ -78,21 +78,34 @@ describe('task-338-F4: Unify group-chat routing', () => {
       expect(block[0]).toMatch(/text/);
       expect(block[0]).toMatch(/mentions/);
     });
-    it('resolves roster/defaultVpId and intersects mentions', () => {
+    it('delegates target resolution to createCoordinator (adapter layer)', () => {
       const block = bridgeSrc.match(/export\s+async\s+function\s+handleUnifyGroupChat[\s\S]*?\n\}\s*\n/)[0];
-      expect(block).toMatch(/roster/);
-      expect(block).toMatch(/defaultVpId/);
-      expect(block).toMatch(/mentions\.filter/);
+      expect(block).toMatch(/createCoordinator\s*\(/);
+      expect(block).toMatch(/coord\.ingest\s*\(/);
     });
-    it('falls back to handleUnifyChat when no target resolvable', () => {
+    it('feeds payload mentions into coord.ingest via input.meta (no re-parse from text)', () => {
       const block = bridgeSrc.match(/export\s+async\s+function\s+handleUnifyGroupChat[\s\S]*?\n\}\s*\n/)[0];
-      expect(block).toMatch(/targets\.length\s*===\s*0/);
+      // Adapter must NOT call parseMentions on the text itself — the
+      // source of truth is the payload's `mentions` field (ChatInput has
+      // already parsed once on the frontend).
+      expect(block).not.toMatch(/parseMentions\s*\(\s*text\s*\)/);
+      expect(block).toMatch(/meta:\s*\{\s*mentions\s*\}/);
+    });
+    it('takes legacy fallback path #1 when payload has no groupId', () => {
+      const block = bridgeSrc.match(/export\s+async\s+function\s+handleUnifyGroupChat[\s\S]*?\n\}\s*\n/)[0];
+      expect(block).toMatch(/if\s*\(\s*!groupId\s*\)/);
+    });
+    it('takes legacy fallback path #2 when coordinator reports no dispatch', () => {
+      const block = bridgeSrc.match(/export\s+async\s+function\s+handleUnifyGroupChat[\s\S]*?\n\}\s*\n/)[0];
+      // dispatched.length === 0 && !report.fallback → legacy
+      expect(block).toMatch(/dispatchedIds\.length\s*===\s*0/);
+      expect(block).toMatch(/report\?\.fallback/);
       expect(block).toMatch(/await\s+handleUnifyChat/);
     });
-    it('emits `group_message` events tagged with vpId per target', () => {
+    it('emits `group_message` tagged with vpId + speakerVpId per dispatched target', () => {
       const block = bridgeSrc.match(/export\s+async\s+function\s+handleUnifyGroupChat[\s\S]*?\n\}\s*\n/)[0];
       expect(block).toMatch(/type:\s*['"]group_message['"]/);
-      expect(block).toMatch(/vpId/);
+      expect(block).toMatch(/speakerVpId/);
     });
     it('prepends @vp-<id> prefix on the per-target dispatched prompt', () => {
       const block = bridgeSrc.match(/export\s+async\s+function\s+handleUnifyGroupChat[\s\S]*?\n\}\s*\n/)[0];
@@ -100,6 +113,19 @@ describe('task-338-F4: Unify group-chat routing', () => {
     });
     it('still defines the pre-existing handleUnifyChat export (not clobbered)', () => {
       expect(bridgeSrc).toMatch(/export\s+async\s+function\s+handleUnifyChat\s*\(/);
+    });
+  });
+
+  describe('coordinator (agent/unify/groups/coordinator.js) left untouched', () => {
+    // PM red-line: "不要改 coordinator 来迎合 — 在 web-bridge 里做 adapter 层".
+    // Guard that web-bridge does the adapting and coordinator source still
+    // exports the exact factory + parseMentions we rely on.
+    const coordSrc = readFileSync(path.join(ROOT, 'agent/unify/groups/coordinator.js'), 'utf8');
+    it('still exports createCoordinator factory', () => {
+      expect(coordSrc).toMatch(/export\s+function\s+createCoordinator\s*\(/);
+    });
+    it('still exports parseMentions', () => {
+      expect(coordSrc).toMatch(/export\s+function\s+parseMentions\s*\(/);
     });
   });
 });
