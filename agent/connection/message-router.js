@@ -36,7 +36,7 @@ import { sendToServer, flushMessageBuffer } from './buffer.js';
 import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
 import { getLlmConfig, updateLlmConfig, getUnifySettings, updateUnifySettings } from '../unify/config-api.js';
-import { handleUnifyChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyMergeThread, handleUnifyForkThread, handleUnifyAbortThread, handleUnifyAbortAll, handleUnifyVpSubscribe, handleUnifyVpCreate, handleUnifyVpUpdate, handleUnifyVpDelete, handleUnifyVpRead, handleUnifyTaskMessage, handleUnifyUserMemoryWrite, handleUnifyUserMemoryRemove, handleUnifyListGroups, handleUnifyCreateGroup, handleUnifyRenameGroup, handleUnifyArchiveGroup, handleUnifyAddMember, handleUnifyRemoveMember, handleUnifySetDefaultVp, handleUnifyDreamTrigger } from '../unify/web-bridge.js';
+import { handleUnifyChat, handleUnifyGroupChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyMergeThread, handleUnifyForkThread, handleUnifyAbortThread, handleUnifyAbortAll, handleUnifyVpSubscribe, handleUnifyVpCreate, handleUnifyVpUpdate, handleUnifyVpDelete, handleUnifyVpRead, handleUnifyTaskMessage, handleUnifyUserMemoryWrite, handleUnifyUserMemoryRemove, handleUnifyListGroups, handleUnifyCreateGroup, handleUnifyRenameGroup, handleUnifyArchiveGroup, handleUnifyAddMember, handleUnifyRemoveMember, handleUnifySetDefaultVp, handleUnifyDreamTrigger } from '../unify/web-bridge.js';
 
 export async function handleMessage(msg) {
   switch (msg.type) {
@@ -358,6 +358,11 @@ export async function handleMessage(msg) {
     // Unify — independent chat via Engine
     case 'unify_chat':
       await handleUnifyChat(msg);
+      break;
+
+    // task-338-F4: Unify group-chat dispatch via GroupCoordinator.
+    case 'unify_group_chat':
+      await handleUnifyGroupChat(msg);
       break;
 
     case 'unify_load_history':

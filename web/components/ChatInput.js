@@ -140,6 +140,8 @@ export default {
     const store = Pinia.useChatStore();
     const authStore = Pinia.useAuthStore();
     const vpStore = Pinia.useVpStore();
+    // task-338-F4: resolve groups store for Unify group-chat dispatch routing.
+    const groupsStore = (Pinia.useGroupsStore ? Pinia.useGroupsStore() : null);
     const inputText = Vue.ref('');
     const inputRef = Vue.ref(null);
     const fileInput = Vue.ref(null);
@@ -564,6 +566,20 @@ export default {
         inputText.value = '';
         store.clearReplyTo(replyToKey);
         store.expertSelections = [];
+        delete store.inputDrafts[store.currentConversation];
+        if (inputRef.value) inputRef.value.style.height = 'auto';
+        return;
+      }
+
+      // ★ task-338-F4: Unify group-chat branch — when the user is viewing
+      // Unify and an active group is selected, route through the group
+      // coordinator instead of the legacy single-agent pipeline. Falls back
+      // to `unify_chat` on the backend if no default VP is resolvable.
+      const activeGroupId = groupsStore?.activeGroupId || null;
+      if (store.currentView === 'unify' && activeGroupId && trimmed) {
+        const mentions = parseMentions(trimmed).mentions;
+        store.sendUnifyGroupChat({ groupId: activeGroupId, text: trimmed, mentions });
+        inputText.value = '';
         delete store.inputDrafts[store.currentConversation];
         if (inputRef.value) inputRef.value.style.height = 'auto';
         return;
