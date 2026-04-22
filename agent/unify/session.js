@@ -33,6 +33,7 @@ import { createIntentClassifier } from './router/intent-classifier.js';
 import { initInputQueueStore } from './input-queue/store.js';
 import { createDispatcher } from './pipeline/dispatcher.js';
 import { ensureDefaultGroupIfEmpty } from './groups/group-crud.js';
+import { seedDefaultVps } from './vp/seed-defaults.js';
 import { createDreamScheduler } from './memory/dream-scheduler.js';
 import { getUserMemoryStore } from './memory/user-memory-store.js';
 import { join } from 'path';
@@ -187,6 +188,17 @@ export async function loadSession(options = {}) {
   //         any group already exists. Never throws; failure logs a warning
   //         so session load always succeeds.
   if (!config._readOnly) {
+    // task-337: seed the 12 default VPs (steve, linus, martin, …) on a fresh
+    // install so the library is never empty. Idempotent — a no-op once the
+    // user has any VP on disk. Must run BEFORE ensureDefaultGroupIfEmpty so
+    // the default group's roster scan sees the seeded VPs. Must also run
+    // before any VpLoader.start() (VpLoader is lazy-started in vp-bridge.js
+    // on first subscribe, which happens strictly after loadSession returns).
+    try {
+      seedDefaultVps(join(yeaftDir, 'virtual-persons'));
+    } catch (err) {
+      console.warn(`[Yeaft] seedDefaultVps failed: ${err?.message || err}`);
+    }
     try {
       ensureDefaultGroupIfEmpty(yeaftDir);
     } catch (err) {
