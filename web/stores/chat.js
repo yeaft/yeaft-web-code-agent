@@ -555,6 +555,37 @@ export const useChatStore = defineStore('chat', {
         agentId: this.unifyAgentId,
       });
     },
+    /**
+     * task-338-F4: Send a group-scoped Unify chat message. Routes through the
+     * agent-side GroupCoordinator which fans out to the target VP(s) or falls
+     * back to the group's defaultVpId (and finally to the legacy single-agent
+     * handleUnifyChat path if no default is resolvable).
+     *
+     * @param {{groupId:string, text:string, mentions?:string[]}} payload
+     */
+    sendUnifyGroupChat({ groupId, text, mentions }) {
+      if (!groupId || !text?.trim() || !this.unifyAgentId) return;
+      if (this.unifyConversationId) {
+        this.addMessageToConversation(this.unifyConversationId, {
+          type: 'user',
+          content: text,
+        });
+        this.processingConversations[this.unifyConversationId] = true;
+        this._turnCompletedConvs?.delete(this.unifyConversationId);
+        if (this._closedAt?.[this.unifyConversationId]) {
+          delete this._closedAt[this.unifyConversationId];
+        }
+        this.getOrCreateExecutionStatus(this.unifyConversationId);
+        watchdogHelpers.startUnifyWatchdog(this, this.unifyConversationId);
+      }
+      this.sendWsMessage({
+        type: 'unify_group_chat',
+        agentId: this.unifyAgentId,
+        groupId,
+        text,
+        mentions: Array.isArray(mentions) ? mentions : [],
+      });
+    },
     handleUnifyOutput(msg) {
       if (!msg) return;
 

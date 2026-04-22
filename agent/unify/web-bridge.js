@@ -941,6 +941,106 @@ function handleEngineEvent(event, threadId, hctx) {
 }
 
 /**
+ * task-338-F4: Handle a unify_group_chat message from the web UI.
+ *
+ * Routes user text through the group coordinator's dispatch contract:
+ *   1. @-mentions → each mentioned vpId (intersected with group roster)
+ *   2. no mention → group.defaultVpId
+ *   3. no default VP → fallback to legacy single-agent handleUnifyChat
+ *
+ * Emits a `group_message` event tagged with `vpId` per dispatched target so
+ * frontend can render VP-scoped feedback. Does NOT itself run the engine —
+ * for each resolved target, it delegates into handleUnifyChat (which owns
+ * the Dispatcher + AbortController + timeout plumbing).
+ *
+ * Message shape: { type:'unify_group_chat', groupId, text, mentions? }
+ *
+ * @param {{groupId:string, text:string, mentions?:string[], agentId?:string, userId?:string, username?:string}} msg
+ */
+export async function handleUnifyGroupChat(msg) {
+  if (!msg || typeof msg !== 'object') return;
+  const { groupId, text } = msg;
+  if (!text?.trim()) return;
+  const mentions = Array.isArray(msg.mentions) ? msg.mentions : [];
+
+  // Resolve the group meta. If the group is missing / not found, fall back
+  // to legacy single-agent behavior so the send never silently drops.
+  let meta = null;
+  try {
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    if (yeaftDir && groupId) {
+      const { openGroup, loadGroupMeta } = await import('./groups/group-store.js');
+      const { join } = await import('node:path');
+      const { existsSync } = await import('node:fs');
+      const root = join(yeaftDir, 'groups');
+      const dir = join(root, groupId);
+      if (existsSync(dir) && loadGroupMeta(dir)) {
+        const handle = openGroup(root, groupId);
+        meta = handle.getMeta();
+      }
+    }
+  } catch (err) {
+    console.warn('[Unify] unify_group_chat: group resolve failed', err?.message || err);
+  }
+
+  // Resolve target vpIds.
+  const roster = Array.isArray(meta?.roster) ? meta.roster : [];
+  let targets = [];
+  if (mentions.length > 0) {
+    // Intersect mentions with roster. Unknown mentions are ignored (not
+    // dispatched) — coordinator §6 "not_in_roster" semantics.
+    targets = mentions.filter((v) => roster.includes(v));
+  }
+  if (targets.length === 0 && meta?.defaultVpId && roster.includes(meta.defaultVpId)) {
+    targets = [meta.defaultVpId];
+  }
+
+  // Fallback: no target resolvable → behave as the legacy single-agent path
+  // so that the user's text still lands on the Engine.
+  if (targets.length === 0) {
+    await handleUnifyChat({
+      ...msg,
+      prompt: text,
+    });
+    return;
+  }
+
+  // Tag outbound events with vpId so the UI can attribute them per VP. One
+  // `group_message` event per target (mirrors coordinator.deliver() calls).
+  for (const vpId of targets) {
+    try {
+      sendUnifyEvent({
+        type: 'group_message',
+        groupId,
+        vpId,
+        text,
+        mentions,
+        trigger: mentions.includes(vpId) ? 'mention' : 'fallback',
+        ts: Date.now(),
+      });
+    } catch { /* never crash WS pipeline */ }
+  }
+
+  // For each target, dispatch into the engine via handleUnifyChat. We prepend
+  // an `@vp-<id>` tag on the prompt so the Dispatcher can route per-VP when
+  // VP-bound Engine wiring lands (task-338-F2/F5); today handleUnifyChat
+  // still runs a single shared Engine, which preserves legacy behaviour.
+  for (const vpId of targets) {
+    const scoped = `@vp-${vpId} ${text}`;
+    try {
+      await handleUnifyChat({
+        ...msg,
+        prompt: scoped,
+        groupId,
+        vpId,
+      });
+    } catch (err) {
+      console.warn('[Unify] unify_group_chat: per-vp dispatch failed', vpId, err?.message || err);
+    }
+  }
+}
+
+/**
  * Handle a unify_chat message from the web UI.
  *
  * @param {{ prompt: string, mode?: string, userId?: string, username?: string }} msg
