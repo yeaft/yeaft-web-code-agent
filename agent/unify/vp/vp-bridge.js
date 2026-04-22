@@ -145,7 +145,7 @@ function _fanout(evt) {
 }
 
 function ensureLoader(registry = defaultRegistry) {
-  if (_loaderStarted) return _loader;
+  if (_loaderStarted) return { loader: _loader, fresh: false };
   _loaderStarted = true;
   try {
     _loader = new VpLoader({
@@ -158,7 +158,7 @@ function ensureLoader(registry = defaultRegistry) {
     // Hot-reload optional; subscribe still returns whatever scan loaded.
     _loader = null;
   }
-  return _loader;
+  return { loader: _loader, fresh: true };
 }
 
 /**
@@ -209,7 +209,19 @@ export function buildVpSnapshot(registry = defaultRegistry) {
  * @returns {() => void} unsubscribe fn
  */
 export function handleVpSubscribe(sendUnifyEvent, registry = defaultRegistry) {
-  ensureLoader(registry);
+  const { loader, fresh } = ensureLoader(registry);
+  // task-338-F2: replay semantics. The loader's own start() already scans
+  // on first creation, so on a `fresh` loader we skip the extra rescan (it
+  // would be redundant work and, more importantly, tests that seed the
+  // registry BEFORE subscribing would see their seeded entries wiped by
+  // a rescan against an unrelated DEFAULT_VP_LIB_DIR). On subsequent
+  // subscribes (page reload, reconnect, second web client), rescanNow()
+  // refreshes the registry so every client gets a snapshot that reflects
+  // current disk — catching the case where the FS watcher missed an
+  // event or VPs were added between the initial scan and this subscribe.
+  if (!fresh && loader && typeof loader.rescanNow === 'function') {
+    try { loader.rescanNow(); } catch { /* never crash subscribe on rescan */ }
+  }
   _subscribers.add(sendUnifyEvent);
   try {
     sendUnifyEvent(buildVpSnapshot(registry));
