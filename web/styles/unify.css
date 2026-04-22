@@ -450,7 +450,187 @@
 }
 
 .unify-topbar-group-menu-item.is-danger:hover {
-  background: rgba(220, 38, 38, 0.08);
+  background: var(--error-bg, rgba(214, 93, 93, 0.12));
+  color: var(--error);
+}
+
+/* N2+N5: keyboard-driven highlight (aria-activedescendant target) */
+.unify-topbar-group-option.is-highlighted {
+  background: var(--sidebar-hover);
+}
+
+/* N3: busy-state row — dim + disable pointer while WS CRUD is in flight */
+.unify-topbar-group-option.is-busy {
+  opacity: 0.7;
+  pointer-events: none;
+  cursor: progress;
+}
+
+.unify-topbar-group-spinner {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.unify-topbar-group-spinner-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--border-color);
+  border-top-color: var(--text-secondary);
+  animation: unify-topbar-group-spin 0.9s linear infinite;
+}
+
+@keyframes unify-topbar-group-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* N1: GroupEditModal — VpCrudModal-aligned overlay + card */
+.group-edit-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.group-edit-modal {
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.18);
+  width: min(420px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 40px);
+  overflow: hidden;
+}
+
+.group-edit-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  box-shadow: inset 0 -1px 0 var(--border-light);
+}
+
+.group-edit-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.group-edit-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+.group-edit-close:hover {
+  color: var(--text-primary);
+}
+
+.group-edit-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+}
+
+.group-edit-message {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.group-edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.group-edit-field-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.group-edit-input {
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 8px 10px;
+  outline: none;
+}
+
+.group-edit-input:focus {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 2px rgba(74, 158, 255, 0.12);
+}
+
+.group-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.group-edit-btn {
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.group-edit-btn:hover:not(:disabled) {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.group-edit-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.group-edit-btn.is-primary {
+  background: var(--accent);
+  color: var(--bg-main);
+  border-color: var(--accent);
+}
+
+.group-edit-btn.is-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  color: var(--bg-main);
+}
+
+.group-edit-btn.is-primary.is-danger {
+  background: var(--error);
+  border-color: var(--error);
+  color: var(--bg-main);
+}
+
+.group-edit-btn.is-primary.is-danger:hover:not(:disabled) {
+  background: var(--error);
+  filter: brightness(1.08);
 }
 
 .unify-topbar-group-sep {

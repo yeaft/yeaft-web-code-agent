@@ -949,6 +949,17 @@ export default {
   'unify.group.renamePrompt': '为「{name}」输入新名称：',
   'unify.group.renamingEllipsis': '重命名中…',
 
+  // 编辑弹窗（N1 — 取代 window.prompt/confirm）
+  'unify.group.editModal.renameTitle': '重命名群组',
+  'unify.group.editModal.renameBody': '为「{name}」选择一个新名称。',
+  'unify.group.editModal.renameSubmit': '保存',
+  'unify.group.editModal.archiveTitle': '归档群组',
+  'unify.group.editModal.archiveBody': '归档「{name}」？稍后可从磁盘恢复。',
+  'unify.group.editModal.archiveSubmit': '归档',
+  'unify.group.editModal.newNameLabel': '新名称',
+  'unify.group.editModal.cancel': '取消',
+  'unify.group.editModal.close': '关闭',
+
   // 建群向导
   'unify.group.wizard.title': '新建群组',
   'unify.group.wizard.close': '关闭',

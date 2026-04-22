@@ -949,6 +949,17 @@ export default {
   'unify.group.rename': 'Rename',
   'unify.group.renamePrompt': 'New name for "{name}":',
 
+  // Edit modal (N1 — replaces window.prompt/confirm)
+  'unify.group.editModal.renameTitle': 'Rename group',
+  'unify.group.editModal.renameBody': 'Choose a new name for "{name}".',
+  'unify.group.editModal.renameSubmit': 'Save',
+  'unify.group.editModal.archiveTitle': 'Archive group',
+  'unify.group.editModal.archiveBody': 'Archive "{name}"? You can recover it from disk later.',
+  'unify.group.editModal.archiveSubmit': 'Archive',
+  'unify.group.editModal.newNameLabel': 'New name',
+  'unify.group.editModal.cancel': 'Cancel',
+  'unify.group.editModal.close': 'Close',
+
   // Wizard
   'unify.group.wizard.title': 'New group',
   'unify.group.wizard.close': 'Close',
