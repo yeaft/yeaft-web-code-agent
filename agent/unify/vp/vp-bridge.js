@@ -210,16 +210,31 @@ export function buildVpSnapshot(registry = defaultRegistry) {
  */
 export function handleVpSubscribe(sendUnifyEvent, registry = defaultRegistry) {
   const { loader, fresh } = ensureLoader(registry);
-  // task-338-F2: replay semantics. The loader's own start() already scans
-  // on first creation, so on a `fresh` loader we skip the extra rescan (it
-  // would be redundant work and, more importantly, tests that seed the
-  // registry BEFORE subscribing would see their seeded entries wiped by
-  // a rescan against an unrelated DEFAULT_VP_LIB_DIR). On subsequent
-  // subscribes (page reload, reconnect, second web client), rescanNow()
-  // refreshes the registry so every client gets a snapshot that reflects
-  // current disk — catching the case where the FS watcher missed an
-  // event or VPs were added between the initial scan and this subscribe.
-  if (!fresh && loader && typeof loader.rescanNow === 'function') {
+  // task-338-F2 + task-339-followup: replay semantics.
+  //
+  // The loader's own start() already scans on first creation, so on a
+  // `fresh` loader an additional `rescanNow()` is normally redundant.
+  // HOWEVER — in production (registry === defaultRegistry) the first
+  // subscribe can arrive far enough after module import that the on-disk
+  // library has diverged from what the initial scan captured (e.g. a
+  // platform where `fs.watch` is unreliable, or a containerized
+  // bind-mount, or seedDefaultVps writing role.md files after the scan
+  // but before the first subscribe). We rescan defensively on the
+  // production path so the first snapshot always reflects current disk.
+  //
+  // For NON-default registries (unit tests that seed VPs manually), we
+  // MUST skip the rescan: rescan against DEFAULT_VP_LIB_DIR would call
+  // registry.removeVp() for seeded ids that don't exist on disk, wiping
+  // the test fixture. See vp-bridge-live-diff.test.js and
+  // vp-bridge-first-subscribe-replay.test.js (test-seed preservation).
+  //
+  // On subsequent subscribes (page reload, reconnect, second web client)
+  // rescanNow() refreshes the registry so every client gets a snapshot
+  // that reflects current disk — catching the case where the FS watcher
+  // missed an event or VPs were added between the initial scan and this
+  // subscribe.
+  const shouldRescan = (fresh && registry === defaultRegistry) || !fresh;
+  if (shouldRescan && loader && typeof loader.rescanNow === 'function') {
     try { loader.rescanNow(); } catch { /* never crash subscribe on rescan */ }
   }
   _subscribers.add(sendUnifyEvent);
