@@ -1130,6 +1130,11 @@ export async function handleUnifyGroupChat(msg) {
   // Per target: emit `group_message` tagged with `speakerVpId` (the VP
   // being addressed — F3's GroupSelector binding consumes this) + dispatch
   // through the Engine via handleUnifyChat with an `@vp-<id>` prompt prefix.
+  //
+  // task-fix: bracket each per-VP dispatch with `vp_typing_start` /
+  // `vp_typing_end` events so the frontend can render a per-speaker typing
+  // dot next to that VP's avatar (matching IM apps). Avoids the old
+  // "one global running cat for N concurrent speakers" ambiguity.
   for (const { vpId, envelope } of captured) {
     try {
       sendUnifyEvent({
@@ -1145,6 +1150,15 @@ export async function handleUnifyGroupChat(msg) {
     } catch { /* never crash WS pipeline */ }
 
     try {
+      sendUnifyEvent({
+        type: 'vp_typing_start',
+        groupId,
+        vpId,
+        ts: Date.now(),
+      });
+    } catch { /* never crash WS pipeline */ }
+
+    try {
       await handleUnifyChat({
         ...msg,
         prompt: `@vp-${vpId} ${text}`,
@@ -1154,6 +1168,15 @@ export async function handleUnifyGroupChat(msg) {
       });
     } catch (err) {
       console.warn('[Unify] unify_group_chat: per-vp dispatch failed', vpId, err?.message || err);
+    } finally {
+      try {
+        sendUnifyEvent({
+          type: 'vp_typing_end',
+          groupId,
+          vpId,
+          ts: Date.now(),
+        });
+      } catch { /* never crash WS pipeline */ }
     }
   }
 }

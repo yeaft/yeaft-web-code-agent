@@ -201,6 +201,17 @@ export const useChatStore = defineStore('chat', {
     unifyMemoryScopeEntries: [],
     unifyMemoryScopeLoaded: false,
 
+    // task-fix: per-VP typing indicator for Unify group chat.
+    //   Shape: { [vpId]: refCount }  — a small counter (not a boolean) so
+    //   overlapping sends to the same VP degrade gracefully (the dot stays
+    //   on until the last concurrent dispatch ends).
+    // Populated by `vp_typing_start` / `vp_typing_end` events emitted from
+    // the agent's handleUnifyGroupChat fan-out loop. Consumed by
+    // VpSpeakerHeader to render a three-dot animation next to the VP's
+    // avatar — replaces the old global "running cat" which was ambiguous
+    // when N VPs were speaking concurrently.
+    unifyVpTyping: {},
+
     // ★ task-334-ui-g: VP CRUD pending-request map.
     // Each `vpCrudRequest()` stashes its resolver here keyed by requestId;
     // the `vp_crud_result` event looks it up and resolves the caller. Using
@@ -924,6 +935,32 @@ export const useChatStore = defineStore('chat', {
             requestId: event.requestId || null,
             at: Date.now(),
           });
+          break;
+        }
+
+        // task-fix: per-VP typing indicator (group chat only).
+        //   vp_typing_start → increment unifyVpTyping[vpId]
+        //   vp_typing_end   → decrement; delete when 0 so the getter lookup
+        //                     returns falsy without retaining dead keys.
+        // We use `{ ...obj }` reassignment to ensure Pinia/Vue picks up the
+        // change (the state is declared as a plain object, not reactive
+        // per-key). Cheap because it only holds entries for VPs currently
+        // typing — usually 0–5.
+        case 'vp_typing_start': {
+          if (!event.vpId) break;
+          const next = { ...(this.unifyVpTyping || {}) };
+          next[event.vpId] = (next[event.vpId] || 0) + 1;
+          this.unifyVpTyping = next;
+          break;
+        }
+        case 'vp_typing_end': {
+          if (!event.vpId) break;
+          const cur = this.unifyVpTyping || {};
+          const c = (cur[event.vpId] || 0) - 1;
+          const next = { ...cur };
+          if (c <= 0) delete next[event.vpId];
+          else next[event.vpId] = c;
+          this.unifyVpTyping = next;
           break;
         }
       }

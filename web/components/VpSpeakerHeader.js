@@ -21,6 +21,7 @@
  *   stateCause — optional short string ("reason" payload for tooltip).
  */
 import VpBadge from './VpBadge.js';
+import { useChatStore } from '../stores/chat.js';
 
 export default {
   name: 'VpSpeakerHeader',
@@ -41,6 +42,12 @@ export default {
         @open-detail="$emit('open-detail', $event)"
       />
       <span
+        v-if="isTyping"
+        class="vp-speaker-typing"
+        :aria-label="$t ? $t('unify.vp.speaker.typingAria', { name: vpId }) : 'typing'"
+        role="status"
+      ><span class="dot"></span><span class="dot"></span><span class="dot"></span></span>
+      <span
         v-if="stateCause"
         class="vp-speaker-state-cause"
         :title="stateCause"
@@ -55,6 +62,11 @@ export default {
     </div>
   `,
   setup(props) {
+    const chat = useChatStore();
+    const isTyping = Vue.computed(() => {
+      const map = chat.unifyVpTyping || {};
+      return (map[props.vpId] || 0) > 0;
+    });
     const timestampText = Vue.computed(() => {
       if (!props.timestamp) return '';
       try {
@@ -67,6 +79,6 @@ export default {
       if (!props.timestamp) return '';
       try { return new Date(props.timestamp).toLocaleString(); } catch { return ''; }
     });
-    return { timestampText, timestampFullText };
+    return { isTyping, timestampText, timestampFullText };
   },
 };

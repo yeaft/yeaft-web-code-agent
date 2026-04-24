@@ -1,10 +1,11 @@
 import MessageItem from './MessageItem.js';
 import AssistantTurn from './AssistantTurn.js';
 import TaskMessageItem from './TaskMessageItem.js';
+import VpSpeakerHeader from './VpSpeakerHeader.js';
 
 export default {
   name: 'MessageList',
-  components: { MessageItem, AssistantTurn, TaskMessageItem },
+  components: { MessageItem, AssistantTurn, TaskMessageItem, VpSpeakerHeader },
   template: `
     <main class="chat-container" ref="containerRef">
       <!-- Session Loading Overlay - only covers message area -->
@@ -104,6 +105,27 @@ export default {
             <AssistantTurn v-else-if="item.type === 'assistant-turn'" :turn="item" />
           </div>
         </template>
+        <!--
+          task-fix: per-VP typing indicator for Unify group chat.
+
+          Rendered BEFORE the first streaming chunk arrives from the VP's
+          engine.query (gap between vp_typing_start and the first assistant
+          delta). Once that VP's AssistantTurn materialises, VpSpeakerHeader
+          continues showing the dots inline, so visually the indicator never
+          "jumps". We intentionally DO NOT show this when that VP already
+          has a streaming assistant turn at the tail — the header dots take
+          over from there.
+        -->
+        <div
+          v-for="vpId in vpTypingIds"
+          :key="'vp-typing-' + vpId"
+          class="vp-typing-row"
+        >
+          <VpSpeakerHeader :vp-id="vpId" :timestamp="0" state-cause="" />
+          <span class="vp-speaker-typing" role="status">
+            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+          </span>
+        </div>
         <!-- Typing dots: visible when processing but not streaming text -->
         <div v-if="previewShowTypingDots" class="typing-indicator" :class="waitingStatus ? ('status-' + waitingStatus) : ''">
           <span></span><span></span><span></span>
@@ -616,6 +638,26 @@ export default {
       return store.isProcessing && !hasStreamingMessage.value;
     });
 
+    // task-fix: per-VP typing indicator IDs (group chat). Suppress for a
+    // VP that already has a streaming turn at the tail — in that case
+    // VpSpeakerHeader's inline dots take over, so a duplicate standalone
+    // row would double-render the indicator.
+    const vpTypingIds = Vue.computed(() => {
+      const map = store.unifyVpTyping || {};
+      const ids = Object.keys(map).filter(vpId => (map[vpId] || 0) > 0);
+      if (ids.length === 0) return [];
+      // Find the tail streaming speakerVpId (if any) — skip it.
+      const msgs = store.messages;
+      let tailStreamingVpId = null;
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        const m = msgs[i];
+        if (!m) continue;
+        if (m.isStreaming && m.speakerVpId) { tailStreamingVpId = m.speakerVpId; break; }
+        if (m.type === 'user') break;
+      }
+      return tailStreamingVpId ? ids.filter(v => v !== tailStreamingVpId) : ids;
+    });
+
     // Reactive timer for long-processing fallback status
     const typingStartTime = Vue.ref(0);
     const now = Vue.ref(Date.now());
@@ -1080,6 +1122,7 @@ export default {
       flashMsgId,
       hasStreamingMessage,
       showTypingDots,
+      vpTypingIds,
       previewShowTypingDots,
       isPreviewMode,
       waitingStatus,

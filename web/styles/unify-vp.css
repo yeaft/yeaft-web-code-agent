@@ -141,6 +141,43 @@
   /* Dot glyph is already a solid filled circle; no extra chrome. */
 }
 
+/* task-fix: per-VP typing indicator — three animated dots rendered next to
+ * the speaker header while that VP is mid-dispatch in a group chat. Keeps
+ * attribution unambiguous when multiple VPs reply concurrently (no more
+ * single global "running cat" for N speakers). */
+.vp-typing-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  margin: 2px 0;
+}
+.vp-speaker-typing {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 2px;
+  flex-shrink: 0;
+}
+.vp-speaker-typing .dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--text-secondary, #6b7280);
+  opacity: 0.4;
+  animation: vp-typing-bounce 1.2s infinite ease-in-out both;
+}
+.vp-speaker-typing .dot:nth-child(1) { animation-delay: -0.32s; }
+.vp-speaker-typing .dot:nth-child(2) { animation-delay: -0.16s; }
+.vp-speaker-typing .dot:nth-child(3) { animation-delay: 0s; }
+@keyframes vp-typing-bounce {
+  0%, 80%, 100% { transform: scale(0.8); opacity: 0.4; }
+  40% { transform: scale(1.2); opacity: 1; }
+}
+[data-theme="dark"] .vp-speaker-typing .dot {
+  background: var(--text-secondary, #9ca3af);
+}
+
 .vp-speaker-time {
   font-size: 11px;
   color: var(--text-secondary, #6b7280);
