@@ -163,6 +163,9 @@ export default {
   'unify.hideDebug': 'Hide debug panel',
   'unify.switchModel': 'Switch model',
   'unify.settings.title': 'Settings',
+  // task-343: tab labels for the two-column Settings dialog
+  'unify.settings.tabs.llm': 'LLM',
+  'unify.settings.tabs.vp': 'VP Library',
   // task-318: Unify runtime settings
   'unify.settings.unifyTitle': 'Thread Concurrency & Archive',
   'unify.settings.unifyDesc': 'Tune how many threads can run at once and when idle threads are auto-archived.',

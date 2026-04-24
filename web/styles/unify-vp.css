@@ -101,51 +101,7 @@
   text-overflow: ellipsis;
 }
 
-/* ─── VpLibraryLink ──────────────────────────────────────── */
-.vp-library-link {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 8px 10px;
-  background: transparent;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  color: var(--text-primary);
-  font-size: 13px;
-  text-align: left;
-  transition: background 120ms ease;
-}
-.vp-library-link:hover {
-  background: var(--sidebar-hover);
-}
-.vp-library-link:focus-visible {
-  outline: 2px solid var(--accent-blue);
-  outline-offset: 1px;
-}
-.vp-library-icon {
-  font-size: 14px;
-  line-height: 1;
-}
-.vp-library-label {
-  flex: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.vp-library-count {
-  font-size: 11px;
-  color: var(--text-secondary);
-  padding: 1px 6px;
-  background: var(--inline-code-bg);
-  border-radius: 8px;
-}
-.vp-library-arrow {
-  color: var(--text-secondary);
-  opacity: 0.6;
-}
-.vp-library-link.is-empty .vp-library-arrow { opacity: 0.4; }
+/* ─── VpLibraryLink (removed in task-343 — VP is now a Settings tab) ─── */
 
 /* ─── VpSpeakerHeader (task-334-ui-b) ─────────────────────
  * Speaker attribution strip sitting above a VP assistant bubble.
@@ -207,70 +163,11 @@
   margin-top: 2px;
 }
 
-/* ================================================================== * VpCrudModal — task-334-ui-g
- * List + form view inside a centred modal. Matches the flat / no-divider
- * aesthetic of Unify (CLAUDE.md "Unify UI Design Rules"): spacing not lines.
- * Aligned to Yeaft design tokens (task-336): reuses modal/button/input
- * patterns from chat-modals.css. No bespoke --accent-color; no hardcoded
- * fallbacks that would mask a missing token.
+/* ================================================================== * VpCrudPanel — task-343 (was VpCrudModal)
+ * The panel lives inside UnifySettings's .settings-pane; the overlay /
+ * dialog chrome moved to .settings-overlay / .settings-dialog. Only the
+ * list + form body selectors remain (reused verbatim by VpCrudPanel).
  * ========================================================================= */
-.vp-crud-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-  padding: 24px;
-}
-
-.vp-crud-modal {
-  background: var(--bg-main);
-  color: var(--text-primary);
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  width: min(720px, 100%);
-  max-height: calc(100vh - 48px);
-  display: flex;
-  flex-direction: column;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-  overflow: hidden;
-}
-
-.vp-crud-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 20px;
-}
-
-.vp-crud-title {
-  font-size: 16px;
-  font-weight: 600;
-  margin: 0;
-}
-
-.vp-crud-close {
-  background: none;
-  border: none;
-  cursor: pointer;
-  font-size: 24px;
-  line-height: 1;
-  color: var(--text-secondary);
-  padding: 0;
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 6px;
-  transition: background 0.2s, color 0.2s;
-}
-.vp-crud-close:hover {
-  background: var(--bg-user-msg);
-  color: var(--text-primary);
-}
 
 .vp-crud-body {
   padding: 12px 20px 20px;

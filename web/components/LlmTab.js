@@ -2,10 +2,17 @@ import { PROTOCOL_PRESET_MODELS } from '../utils/protocolPresets.js';
 
 export default {
   name: 'LlmTab',
+  props: {
+    // task-343: 'chat' (default) binds provider CRUD to chatStore.currentAgent;
+    // 'unify' binds to chatStore.unifyAgentId so Unify settings can reuse
+    // this tab without cross-polluting the Chat agent config.
+    context: { type: String, default: 'chat' },
+  },
+  emits: ['message', 'saved'],
   template: `
     <div class="llm-tab">
       <!-- No agent selected -->
-      <div v-if="!chatStore.currentAgent" class="sp-desc">
+      <div v-if="!effectiveAgentId" class="sp-desc">
         {{ $t('settings.llm.noAgent') }}
       </div>
 
@@ -214,14 +221,25 @@ export default {
     chatStore() {
       return Pinia.useChatStore();
     },
+    // task-343: effective agent id depends on tab context. Swapping here
+    // cascades to agentOnline / currentConfig / requestConfig / saveConfig
+    // without any other call-site changes.
+    effectiveAgentId() {
+      return this.context === 'unify'
+        ? this.chatStore.unifyAgentId
+        : this.chatStore.currentAgent;
+    },
     agentOnline() {
-      const agentId = this.chatStore.currentAgent;
+      const agentId = this.effectiveAgentId;
       if (!agentId) return false;
+      // Unify context: the "agent" is the embedded unify runtime, which is
+      // always online when an agentId exists (no separate agent record).
+      if (this.context === 'unify') return true;
       const agent = this.chatStore.agents.find(a => a.id === agentId);
       return agent ? agent.online : false;
     },
     currentConfig() {
-      const agentId = this.chatStore.currentAgent;
+      const agentId = this.effectiveAgentId;
       if (!agentId) return null;
       return this.chatStore.llmConfig[agentId] || null;
     },
@@ -238,7 +256,7 @@ export default {
     }
   },
   watch: {
-    'chatStore.currentAgent': {
+    effectiveAgentId: {
       handler(agentId) {
         if (agentId) this.requestConfig();
       },
@@ -246,7 +264,7 @@ export default {
     },
     agentOnline(online) {
       // Auto-retry when agent comes online (and we haven't loaded yet)
-      if (online && !this.currentConfig && this.chatStore.currentAgent) {
+      if (online && !this.currentConfig && this.effectiveAgentId) {
         this.requestConfig();
       }
     },
@@ -261,7 +279,7 @@ export default {
   },
   methods: {
     requestConfig() {
-      const agentId = this.chatStore.currentAgent;
+      const agentId = this.effectiveAgentId;
       if (!agentId) return;
 
       // Check if agent is online before sending request
@@ -407,7 +425,7 @@ export default {
     },
 
     saveConfig() {
-      const agentId = this.chatStore.currentAgent;
+      const agentId = this.effectiveAgentId;
       if (!agentId || this.saving) return;
 
       this.saving = true;
@@ -458,6 +476,9 @@ export default {
           } else {
             this.isDirty = false;
             this.$emit('message', this.$t('settings.llm.saved'), false);
+            // task-343: notify host (e.g. UnifySettings) to dispatch
+            // unify_reset so the Engine picks up new provider config.
+            this.$emit('saved');
           }
           unwatch();
         }
