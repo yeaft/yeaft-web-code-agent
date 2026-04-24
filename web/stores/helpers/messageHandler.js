@@ -389,11 +389,17 @@ export function handleMessage(store, msg) {
               return true;
             }
           }
-          // Crew mode: msg.conversationId is the role's individual conversation ID,
-          // but crewMessagesMap is keyed by session ID (e.g. crew_XXXXX).
-          // Search all crew sessions to find the matching AskUserQuestion tool message.
+          // Crew mode: msg.conversationId IS the crew session id
+          // (agent/crew/role-query.js:178 passes session.id into
+          // handleAskUserQuestion, which forwards it verbatim as the
+          // conversationId on the ask_user_question event). So we look
+          // up the exact session bucket — NEVER iterate all sessions,
+          // which would randomly attach the question to the wrong crew
+          // (the bug: crew A asks, crew B shows the card, crew A stays
+          // stuck with a disabled card forever).
           if (store.crewMessagesMap) {
-            for (const crewMsgs of Object.values(store.crewMessagesMap)) {
+            const crewMsgs = store.crewMessagesMap[msg.conversationId];
+            if (Array.isArray(crewMsgs)) {
               for (let i = crewMsgs.length - 1; i >= 0; i--) {
                 if (crewMsgs[i].type === 'tool' && crewMsgs[i].toolName === 'AskUserQuestion' && !crewMsgs[i].askRequestId) {
                   crewMsgs[i].askRequestId = msg.requestId;
