@@ -147,6 +147,16 @@ function _fanout(evt) {
 function ensureLoader(registry = defaultRegistry) {
   if (_loaderStarted) return { loader: _loader, fresh: false };
   _loaderStarted = true;
+  // For NON-default registries (unit tests seeding VPs manually) we MUST NOT
+  // start VpLoader — its .start() scans DEFAULT_VP_LIB_DIR and push-imports
+  // every on-disk VP into the test registry, overwriting/augmenting the
+  // fixture. Tests don't need hot-reload anyway; `_broadcastChangeForTest`
+  // drives the diff path directly.
+  if (registry !== defaultRegistry) {
+    _loader = null;
+    captureState(registry);
+    return { loader: null, fresh: true };
+  }
   try {
     _loader = new VpLoader({
       registry,

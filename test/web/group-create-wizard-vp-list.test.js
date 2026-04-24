@@ -42,6 +42,11 @@ const global_ = {
       return key;
     },
   },
+  // task-347: wizard is wrapped in <Teleport to="body"> in production.
+  // In vitest (happy-dom) <body> exists so teleport works, but wrapper.html()
+  // returns only the teleport placeholder comments. Disable teleport so the
+  // content renders inline for assertion-based testing.
+  stubs: { teleport: true },
 };
 
 describe('GroupCreateWizard — task-339-F2 defensive empty-VP render', () => {

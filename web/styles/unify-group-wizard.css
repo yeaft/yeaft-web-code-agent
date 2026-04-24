@@ -1,0 +1,284 @@
+/* ===========================================================================
+   task-347: GroupCreateWizard — wizard-unique parts only.
+
+   The outer shell (overlay / modal / header / title / close) reuses
+   GroupEditModal's `.group-edit-*` selectors from unify.css so the two
+   modals stay visually aligned. This file only defines the wizard's
+   step-bar, roster list, default-vp list, summary chips, actions and
+   helper text.
+
+   HARD RULE: no border-top / border-bottom anywhere (Unify UI rules).
+   =========================================================================== */
+
+/* Step indicator row ------------------------------------------------------- */
+.group-wizard-steps {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.group-wizard-step {
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--bg-input);
+  color: var(--text-muted);
+}
+.group-wizard-step.is-active {
+  color: var(--accent);
+  background: rgba(74, 158, 255, 0.12);
+  font-weight: 600;
+}
+
+/* Body — one shared layout for all 3 steps --------------------------------- */
+.group-wizard-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  max-height: calc(100vh - 160px);
+  overflow-y: auto;
+}
+
+/* Field wrapper (label + hint + control) ----------------------------------- */
+.group-wizard-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.group-wizard-field-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.group-wizard-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+.group-wizard-error {
+  font-size: 12px;
+  color: #ff3b30;
+  line-height: 1.4;
+}
+
+/* Roster empty/loading placeholders ---------------------------------------- */
+.group-wizard-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 12px 4px;
+}
+.group-wizard-empty-loading {
+  color: var(--text-secondary);
+}
+
+/* Roster list (step 1) ----------------------------------------------------- */
+.group-wizard-roster-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.group-wizard-roster-item {
+  padding: 0;
+}
+.group-wizard-roster-item label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.group-wizard-roster-item label:hover {
+  background: var(--sidebar-hover);
+}
+.group-wizard-roster-item input[type="checkbox"] {
+  flex: 0 0 auto;
+}
+.group-wizard-roster-avatar {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+}
+.group-wizard-roster-name {
+  flex: 1 1 auto;
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.group-wizard-roster-id {
+  flex: 0 0 auto;
+  font-family: var(--font-mono, Menlo, monospace);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+/* Default-VP radio list (step 1) ------------------------------------------- */
+.group-wizard-default-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.group-wizard-default-list li label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.group-wizard-default-list li label:hover {
+  background: var(--sidebar-hover);
+}
+
+/* Text input (step 2) ------------------------------------------------------ */
+.group-wizard-input {
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 8px 10px;
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+.group-wizard-input:focus {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 2px rgba(74, 158, 255, 0.12);
+}
+.group-wizard-input.is-error {
+  border-color: #ff3b30;
+  box-shadow: 0 0 0 2px rgba(255, 59, 48, 0.12);
+}
+
+/* Summary (step 3) --------------------------------------------------------- */
+.group-wizard-summary {
+  margin: 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: 12px;
+  row-gap: 6px;
+  font-size: 13px;
+}
+.group-wizard-summary dt {
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  align-self: center;
+}
+.group-wizard-summary dd {
+  margin: 0;
+  color: var(--text-primary);
+}
+.group-wizard-summary-name {
+  font-weight: 600;
+}
+.group-wizard-summary-empty {
+  color: var(--text-muted);
+  font-style: italic;
+}
+.group-wizard-summary-chips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.group-wizard-summary-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 2px 2px;
+  background: var(--bg-input);
+  border-radius: 12px;
+  font-size: 12px;
+}
+.group-wizard-summary-avatar {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+}
+.group-wizard-summary-label {
+  color: var(--text-primary);
+}
+
+/* Actions row (each step)  ------------------------------------------------- */
+.group-wizard-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 4px;
+}
+.group-wizard-link-btn {
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.group-wizard-link-btn:hover:not(:disabled) {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+.group-wizard-link-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.group-wizard-primary-btn {
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--bg-main);
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.group-wizard-primary-btn:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+.group-wizard-primary-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
