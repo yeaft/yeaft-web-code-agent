@@ -35,7 +35,7 @@ import GroupCreateWizard from './GroupCreateWizard.js';
 export default {
   name: 'UnifySidebarV2',
   components: { GroupCreateWizard },
-  emits: ['select-thread', 'select-task', 'jump-to-message', 'search-escape', 'merge-thread', 'select-group', 'open-user-memory', 'toggle-sidebar', 'back'],
+  emits: ['select-thread', 'select-task', 'jump-to-message', 'search-escape', 'merge-thread', 'select-group', 'open-user-memory', 'toggle-sidebar', 'back', 'open-settings'],
   template: `
     <aside class="unify-sidebar-v2">
       <!-- task-341: sidebar header row — agent identifier + collapse/back/workbench. -->
@@ -463,6 +463,15 @@ export default {
           </div>
         </div>
       </div>
+
+      <!-- task-342: sidebar bottom — Settings entry + version badge. -->
+      <div class="sidebar-bottom">
+        <button class="sidebar-nav-item" @click="$emit('open-settings')">
+          <svg viewBox="0 0 24 24" width="20" height="20"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" fill="currentColor"/></svg>
+          <span>{{ tr('chat.sidebar.settings', 'Settings') }}</span>
+          <span v-if="serverVersion" class="sidebar-version">{{ serverVersion }}</span>
+        </button>
+      </div>
     </aside>
   `,
   props: {
@@ -496,7 +505,21 @@ export default {
       groupMenu: { open: false, groupId: null },
       archiveConfirm: { open: false, groupId: null, name: '', busy: false },
       renameModal: { open: false, groupId: null, original: '', value: '', error: '', busy: false },
+      // task-342: server version shown in sidebar-bottom (mirrors ChatPage).
+      serverVersion: '',
     };
+  },
+  created() {
+    // task-342: lazily fetch /api/version once; silently swallow failures
+    // (unit tests run without a server).
+    try {
+      if (typeof fetch === 'function') {
+        fetch('/api/version')
+          .then((r) => r.json())
+          .then((d) => { this.serverVersion = (d && d.version) || ''; })
+          .catch(() => {});
+      }
+    } catch (_) { /* no-fetch test env */ }
   },
   computed: {
     // Resolve the Pinia store lazily. Guarded so unit tests that mount

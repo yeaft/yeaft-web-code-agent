@@ -471,3 +471,26 @@
   background: var(--session-active, rgba(0,122,255,0.14));
   color: var(--accent-blue, var(--accent, #007aff));
 }
+
+/* ===========================================================================
+   task-342: Sidebar bottom — Settings entry + version badge.
+   Mirrors Chat sidebar's .sidebar-bottom (single row: nav-item left,
+   version right). The shared .sidebar-nav-item / .sidebar-bottom /
+   .sidebar-version selectors in sidebar.css apply by class; we scope a
+   few overrides inside .unify-sidebar-v2 so the flex-column layout
+   pushes this row to the bottom. HARD RULE: no border-top / border-bottom.
+   =========================================================================== */
+.unify-sidebar-v2 .sidebar-bottom {
+  margin-top: auto;
+  padding: 4px 12px 8px;
+  flex: 0 0 auto;
+}
+.unify-sidebar-v2 .sidebar-bottom .sidebar-nav-item {
+  justify-content: flex-start;
+}
+.unify-sidebar-v2 .sidebar-version {
+  font-size: 11px;
+  color: var(--text-secondary, #515154);
+  opacity: 0.5;
+  margin-left: auto;
+}
