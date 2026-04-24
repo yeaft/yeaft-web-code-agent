@@ -661,6 +661,13 @@ export class Engine {
       const toolCalls = [];
       let stopReason = 'end_turn';
       const totalUsage = { inputTokens: 0, outputTokens: 0 };
+      // task-344: capture redacted raw request / raw response for debug panel.
+      let rawRequest = null;
+      let rawResponse = null;
+      const captureRawExchange = (exchange) => {
+        if (exchange?.rawRequest) rawRequest = exchange.rawRequest;
+        if (exchange?.rawResponse) rawResponse = exchange.rawResponse;
+      };
 
       yield { type: 'turn_start', turnNumber };
 
@@ -678,6 +685,7 @@ export class Engine {
           maxTokens: this.#config.maxOutputTokens || 16384,
           effort: resolvedEffort,
           signal,
+          onRawExchange: captureRawExchange,
         })) {
           switch (event.type) {
             case 'text_delta':
@@ -730,6 +738,8 @@ export class Engine {
           latencyMs,
           ttfbMs,
           stopReason: 'error',
+          rawRequest,
+          rawResponse,
         };
 
         // ─── task-325a: abort short-circuit ────────────────
@@ -806,6 +816,8 @@ export class Engine {
         latencyMs,
         ttfbMs,
         stopReason,
+        rawRequest,
+        rawResponse,
       };
 
       // Append assistant message to conversation

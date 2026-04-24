@@ -166,6 +166,15 @@ export default {
           <div class="unify-debug-header">
             <span class="unify-debug-title">{{ $t('unify.debug') }}</span>
             <span class="unify-debug-count" v-if="store.unifyDebugTurns.length > 0">{{ store.unifyDebugTurns.length }} {{ $t('unify.debugTurns') }}</span>
+            <!-- task-344: detail / concise toggle (global, persisted) -->
+            <button
+              class="unify-debug-toggle-chip"
+              :class="{ active: store.unifyDebugDetailMode }"
+              @click="store.setUnifyDebugDetailMode(!store.unifyDebugDetailMode)"
+              :title="store.unifyDebugDetailMode ? ($t('unify.debugConcise') || 'Concise') : ($t('unify.debugDetail') || 'Detail')"
+            >
+              {{ store.unifyDebugDetailMode ? ($t('unify.debugDetail') || '详细') : ($t('unify.debugConcise') || '精简') }}
+            </button>
           </div>
           <div class="unify-debug-turns" v-if="store.unifyDebugTurns.length > 0">
             <div class="unify-debug-turn" v-for="(turn, idx) in store.unifyDebugTurns" :key="idx">
@@ -249,6 +258,23 @@ export default {
                   <div class="unify-debug-section-title">{{ $t('unify.toolCalls') }} ({{ turn.toolCalls.length }})</div>
                   <pre class="unify-debug-pre">{{ formatToolCalls(turn.toolCalls) }}</pre>
                 </div>
+                <!-- task-344: Raw API Request / Response (detail mode only) -->
+                <template v-if="store.unifyDebugDetailMode">
+                  <div class="unify-debug-section" v-if="turn.rawRequest">
+                    <div class="unify-debug-section-title">Raw Request</div>
+                    <details>
+                      <summary>{{ turn.rawRequest.method }} {{ turn.rawRequest.url }}</summary>
+                      <pre class="unify-debug-pre unify-debug-pre-raw">{{ prettyJson(turn.rawRequest) }}</pre>
+                    </details>
+                  </div>
+                  <div class="unify-debug-section" v-if="turn.rawResponse">
+                    <div class="unify-debug-section-title">Raw Response</div>
+                    <details>
+                      <summary>status={{ turn.rawResponse.status }}<span v-if="turn.rawResponse.format"> · {{ turn.rawResponse.format }}</span></summary>
+                      <pre class="unify-debug-pre unify-debug-pre-raw">{{ formatRawResponse(turn.rawResponse) }}</pre>
+                    </details>
+                  </div>
+                </template>
               </div>
             </div>
           </div>
@@ -616,6 +642,16 @@ export default {
       ).join('\n\n');
     };
 
+    // task-344: render raw API response — for SSE we show the raw text body;
+    // for JSON we pretty-print. Falls back to JSON.stringify of the envelope.
+    const formatRawResponse = (raw) => {
+      if (!raw) return '(empty)';
+      const body = raw.body;
+      if (typeof body === 'string') return body;
+      try { return JSON.stringify({ status: raw.status, headers: raw.headers, body }, null, 2); }
+      catch { return String(body); }
+    };
+
     const toggleModelDropdown = (e) => {
       e.stopPropagation();
       if (store.unifyAvailableModels.length <= 1) return;
@@ -785,6 +821,7 @@ export default {
       formatToolCalls,
       formatMsgContent,
       prettyJson,
+      formatRawResponse,
       formatToolOutput,
       getFunctionCallPairs,
       sidebarV2Enabled,
