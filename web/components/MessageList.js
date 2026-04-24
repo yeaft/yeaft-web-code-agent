@@ -802,13 +802,40 @@ export default {
 
     // Preview mode: ?preview=cat|dog|animation forces typing indicator permanently
     const isPreviewMode = urlPreview === 'cat' || urlPreview === 'dog' || urlPreview === 'animation';
+
+    // ★ task-346: Minimum visibility window for the typing indicator.
+    //
+    // Root cause: `showTypingDots = isProcessing && !hasStreamingMessage` is
+    // true only during the pre-TTFB window — from the user's send to the
+    // first `text_delta`. For low-latency providers (especially some routed
+    // through the Unify engine where the LLM proxy can respond in <100 ms),
+    // that window is shorter than a single browser paint frame, so the
+    // running-cat animation never becomes visible. Chat mode happens to
+    // avoid this because spawning the Claude CLI always adds ≥300 ms of
+    // startup latency.
+    //
+    // Fix: latch ON instantly when `showTypingDots` goes true, but defer
+    // latch-OFF until at least `MIN_VISIBLE_MS` has elapsed since the ON
+    // transition. This is purely presentational — it does NOT delay any
+    // store state, assistant rendering, or scroll behavior, and it affects
+    // both Chat and Unify identically (no mode-specific branching).
+    const MIN_VISIBLE_MS = 600;
+    const displayTypingDots = Vue.ref(false);
+    let typingHideTimer = null;
+
     const previewShowTypingDots = Vue.computed(() => {
       if (isPreviewMode) return true;
-      return showTypingDots.value;
+      return displayTypingDots.value;
     });
 
     Vue.watch(showTypingDots, (show) => {
       if (show) {
+        // Cancel any pending hide from a prior cycle — we're visible again.
+        if (typingHideTimer) {
+          clearTimeout(typingHideTimer);
+          typingHideTimer = null;
+        }
+        displayTypingDots.value = true;
         typingStartTime.value = Date.now();
         now.value = Date.now();
         // Always use cat for now; dog animation needs more polish
@@ -824,11 +851,23 @@ export default {
           dogRafId = requestAnimationFrame(updateDogWalk);
         }
       } else {
-        typingStartTime.value = 0;
-        catPosition.value = 0;
-        catDirection.value = 1;
-        if (catRafId) { cancelAnimationFrame(catRafId); catRafId = null; }
-        if (dogRafId) { cancelAnimationFrame(dogRafId); dogRafId = null; }
+        const elapsed = typingStartTime.value ? (Date.now() - typingStartTime.value) : MIN_VISIBLE_MS;
+        const remaining = Math.max(0, MIN_VISIBLE_MS - elapsed);
+        const finalize = () => {
+          typingHideTimer = null;
+          displayTypingDots.value = false;
+          typingStartTime.value = 0;
+          catPosition.value = 0;
+          catDirection.value = 1;
+          if (catRafId) { cancelAnimationFrame(catRafId); catRafId = null; }
+          if (dogRafId) { cancelAnimationFrame(dogRafId); dogRafId = null; }
+        };
+        if (remaining === 0) {
+          finalize();
+        } else {
+          if (typingHideTimer) clearTimeout(typingHideTimer);
+          typingHideTimer = setTimeout(finalize, remaining);
+        }
       }
     }, { immediate: true });
 
@@ -1011,6 +1050,7 @@ export default {
         containerRef.value.removeEventListener('scroll', onScroll);
       }
       if (typingTimer) { clearInterval(typingTimer); typingTimer = null; }
+      if (typingHideTimer) { clearTimeout(typingHideTimer); typingHideTimer = null; }
       if (catRafId) { cancelAnimationFrame(catRafId); catRafId = null; }
       if (dogRafId) { cancelAnimationFrame(dogRafId); dogRafId = null; }
     });
