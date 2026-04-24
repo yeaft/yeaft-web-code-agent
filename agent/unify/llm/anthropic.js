@@ -14,6 +14,9 @@ import {
   LLMServerError,
   LLMAbortError,
   redactRawRequest,
+  capRawRequest,
+  capRawString,
+  RAW_PAYLOAD_CAP_BYTES,
 } from './adapter.js';
 import {
   normalizeEffort,
@@ -182,7 +185,8 @@ export class AnthropicAdapter extends LLMAdapter {
     };
 
     // task-344: expose raw request (redacted) for debug panel.
-    const rawRequest = redactRawRequest({ url, method: 'POST', headers, body });
+    // task-344 follow-up (N2): cap body to RAW_PAYLOAD_CAP_BYTES.
+    const rawRequest = capRawRequest(redactRawRequest({ url, method: 'POST', headers, body }));
 
     const response = await fetch(url, {
       method: 'POST',
@@ -203,7 +207,8 @@ export class AnthropicAdapter extends LLMAdapter {
               headers: response.headers && typeof response.headers.entries === 'function'
                 ? Object.fromEntries(response.headers.entries())
                 : {},
-              body: errorBody,
+              // task-344 follow-up (N2): cap error body.
+              body: capRawString(errorBody),
             },
           });
         } catch { /* ignore */ }
@@ -219,7 +224,11 @@ export class AnthropicAdapter extends LLMAdapter {
     let currentToolName = null;
     let currentToolInput = '';
     // task-344: accumulate raw SSE body for debug exposure.
+    // task-344 follow-up (N2): cap growth — once past RAW_PAYLOAD_CAP_BYTES
+    // we freeze the captured body and record total-bytes-seen separately.
     let rawSseBody = '';
+    let rawSseTotalBytes = 0;
+    let rawSseCapped = false;
     const responseHeaders = response.headers && typeof response.headers.entries === 'function'
       ? Object.fromEntries(response.headers.entries())
       : {};
@@ -232,7 +241,20 @@ export class AnthropicAdapter extends LLMAdapter {
 
         const chunkText = decoder.decode(value, { stream: true });
         buffer += chunkText;
-        rawSseBody += chunkText;
+        // task-344 follow-up (N2): size-capped capture.
+        rawSseTotalBytes += value.byteLength;
+        if (!rawSseCapped) {
+          if (rawSseTotalBytes <= RAW_PAYLOAD_CAP_BYTES) {
+            rawSseBody += chunkText;
+          } else {
+            // Append enough of this chunk to meet the cap, then freeze.
+            const remaining = RAW_PAYLOAD_CAP_BYTES - (rawSseTotalBytes - value.byteLength);
+            if (remaining > 0) {
+              rawSseBody += chunkText.slice(0, remaining);
+            }
+            rawSseCapped = true;
+          }
+        }
         const lines = buffer.split('\n');
         buffer = lines.pop() || ''; // Keep incomplete line
 
@@ -325,12 +347,16 @@ export class AnthropicAdapter extends LLMAdapter {
       // task-344: emit raw exchange after stream completes (or errors).
       if (onRawExchange) {
         try {
+          // task-344 follow-up (N2): append truncation marker when capped.
+          const finalBody = rawSseCapped
+            ? `${rawSseBody}…[truncated, original ${rawSseTotalBytes} bytes]`
+            : rawSseBody;
           onRawExchange({
             rawRequest,
             rawResponse: {
               status: responseStatus,
               headers: responseHeaders,
-              body: rawSseBody,
+              body: finalBody,
               format: 'sse',
             },
           });
