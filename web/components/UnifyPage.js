@@ -10,10 +10,11 @@ import VpDetailView from './VpDetailView.js';
 import GroupInviteModal from './GroupInviteModal.js';
 import TaskMessageRejectToast from './TaskMessageRejectToast.js';
 import UserMemoryPage from './UserMemoryPage.js';
+import WorkbenchPanel from './WorkbenchPanel.js';
 
 export default {
   name: 'UnifyPage',
-  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2, UnifyBreadcrumb, UnifyTaskDetailView, VpLibraryLink, VpCrudModal, VpDetailView, GroupInviteModal, TaskMessageRejectToast, UserMemoryPage },
+  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2, UnifyBreadcrumb, UnifyTaskDetailView, VpLibraryLink, VpCrudModal, VpDetailView, GroupInviteModal, TaskMessageRejectToast, UserMemoryPage, WorkbenchPanel },
   template: `
     <div class="unify-page">
       <!-- Mobile sidebar overlay -->
@@ -42,14 +43,20 @@ export default {
         <!-- Settings at bottom -->
         <div class="unify-sidebar-footer">
           <VpLibraryLink @open-library="onOpenVpLibrary" />
+          <button v-if="canUseWorkbench" class="unify-settings-btn" :class="{ active: store.workbenchExpanded }" @click="store.toggleWorkbench()" :title="$t('chat.sidebar.workbench')">
+            <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M20 3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H4V5h16v14zM6 7h5v2H6V7zm0 4h5v2H6v-2zm0 4h5v2H6v-2zm7-8h5v10h-5V7z"/></svg>
+          </button>
           <button class="unify-settings-btn" :class="{ active: showSettings }" @click="toggleSettings" :title="$t('unify.settings.title')">
             <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.488.488 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
           </button>
         </div>
       </aside>
 
+      <!-- Workbench Panel (between sidebar and main) -->
+      <WorkbenchPanel v-if="canUseWorkbench" />
+
       <!-- Center Conversation -->
-      <div class="unify-main">
+      <div class="unify-main" :class="{ 'workbench-active': canUseWorkbench && store.workbenchExpanded, 'workbench-maximized': canUseWorkbench && store.workbenchMaximized && store.workbenchExpanded }">
         <!-- Conversation Header -->
         <div class="unify-topbar">
           <button class="unify-sidebar-toggle" @click="toggleSidebar" :title="sidebarCollapsed ? $t('unify.showSidebar') : $t('unify.hideSidebar')">
@@ -286,6 +293,13 @@ export default {
     const modelDropdownOpen = Vue.ref(false);
     const showSettings = Vue.ref(false);
     const userMemoryOpen = Vue.ref(false);
+
+    // task-340: Workbench capability gate — matches ChatPage.canUseWorkbench
+    // semantics via store.hasCapability. store.workbenchExpanded and
+    // workbenchMaximized are already shared across Chat/Unify pages.
+    const canUseWorkbench = Vue.computed(() =>
+      store.hasCapability('terminal') || store.hasCapability('file_editor')
+    );
 
     // task-301: feature-flag switch between legacy sidebar and V2.
     // Source of truth is the store (persisted via localStorage). Computed
@@ -783,6 +797,8 @@ export default {
       onSearchEscape,
       clearThreadFilter,
       activeThreadName,
+      // task-340: workbench capability gate
+      canUseWorkbench,
       // task-334m: invite modal bindings.
       shouldShowInviteModal,
       inviteGroupName,
