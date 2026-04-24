@@ -787,22 +787,24 @@
   overflow: hidden;
 }
 
+/* task-345: align header padding + title/count sizes to Chat right-panel tokens
+   (expert-panel-header / subagent-panel-header: padding 12px 16px; title 14/600; count 12px). */
 .unify-debug-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
+  padding: 12px 16px;
   flex-shrink: 0;
 }
 
 .unify-debug-title {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
 }
 
 .unify-debug-count {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-muted);
   background: var(--bg-input-wrapper);
   padding: 2px 8px;
@@ -821,7 +823,7 @@
   justify-content: center;
   height: 100%;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .unify-debug-turn {
@@ -831,13 +833,15 @@
   overflow: hidden;
 }
 
+/* task-345: align body font sizes to Chat right-panel tokens
+   (12px secondary lines; 11px for compact stats). Monospace reserved to JSON/ID regions. */
 .unify-debug-turn-header {
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 8px 10px;
   cursor: pointer;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-secondary);
   background: var(--bg-input-wrapper);
   user-select: none;
@@ -870,7 +874,7 @@
   margin-left: auto;
   display: flex;
   gap: 8px;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-muted);
 }
 
@@ -887,7 +891,7 @@
 }
 
 .unify-debug-section-title {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -913,7 +917,7 @@
 .unify-debug-token-row {
   display: flex;
   gap: 12px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-secondary);
 }
 
@@ -941,7 +945,7 @@
   display: flex;
   gap: 8px;
   align-items: baseline;
-  font-size: 11px;
+  font-size: 12px;
 }
 .unify-debug-msg-role {
   font-weight: 600;
@@ -961,7 +965,7 @@
 }
 .unify-debug-tc > summary {
   cursor: pointer;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-secondary);
   padding: 2px 0;
 }
@@ -990,7 +994,7 @@
   gap: 8px;
   align-items: baseline;
   margin-bottom: 4px;
-  font-size: 11px;
+  font-size: 12px;
 }
 .unify-debug-fncall-num {
   color: var(--text-muted);
@@ -1005,17 +1009,17 @@
   font-family: 'SF Mono', 'Fira Code', monospace;
   font-size: 10px;
 }
-.unify-debug-fncall-pending { color: var(--text-muted); font-size: 10px; }
-.unify-debug-fncall-ok      { color: #1a7f37; font-size: 11px; }
-.unify-debug-fncall-err     { color: #d14; font-size: 11px; }
+.unify-debug-fncall-pending { color: var(--text-muted); font-size: 11px; }
+.unify-debug-fncall-ok      { color: #1a7f37; font-size: 12px; }
+.unify-debug-fncall-err     { color: #d14; font-size: 12px; }
 .unify-debug-fncall > details > summary {
   cursor: pointer;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-secondary);
   padding: 2px 0;
 }
 .unify-debug-empty-inline {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-muted);
   padding: 4px 0;
 }

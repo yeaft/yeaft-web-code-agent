@@ -372,8 +372,12 @@ export default {
     // Detail panel resizable width
     const detailPanel = Vue.ref(null);
     const isResizingDetail = Vue.ref(false);
-    const DETAIL_MIN_WIDTH = 300;
-    const DETAIL_DEFAULT_WIDTH = Math.max(500, window.innerWidth * 0.35);
+    // task-345: Align to Chat right-panel tokens.
+    // - ExpertPanel.open fixed width: 320px (web/styles/expert-panel.css)
+    // - SubAgentPanel.open.expanded: width 40%, min 360, max 600 (web/styles/subagent-panel.css)
+    // Unify detail is resizable; MIN matches ExpertPanel base, DEFAULT clamped like SubAgentPanel expanded.
+    const DETAIL_MIN_WIDTH = 320;
+    const DETAIL_DEFAULT_WIDTH = Math.min(600, Math.max(360, Math.round(window.innerWidth * 0.4)));
     const savedDetailWidth = localStorage.getItem('unify-debug-width');
     const detailWidth = Vue.ref(savedDetailWidth ? parseInt(savedDetailWidth, 10) : DETAIL_DEFAULT_WIDTH);
 
