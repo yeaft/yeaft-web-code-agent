@@ -394,3 +394,80 @@
   background: var(--sidebar-hover);
   color: var(--text-primary);
 }
+
+/* ===========================================================================
+   task-341: Sidebar header row — mirrors ChatPage's .sidebar-header-row
+   pattern. Four slots: agent brand, collapse, back, workbench.
+   =========================================================================== */
+.usv2-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 10px 12px 4px 12px;
+  flex: 0 0 auto;
+}
+.usv2-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, #1d1d1f);
+}
+.usv2-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted, #86868b);
+  flex: 0 0 auto;
+}
+.usv2-status-dot.online {
+  background: #34c759;
+}
+.usv2-brand-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.usv2-latency {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 8px;
+  color: var(--text-muted, #86868b);
+  background: var(--sidebar-hover, rgba(0,0,0,0.05));
+}
+.usv2-latency.latency-good { color: #34c759; }
+.usv2-latency.latency-warn { color: #ff9500; }
+.usv2-latency.latency-bad  { color: #ff3b30; }
+
+.usv2-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+.usv2-icon-btn {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary, #515154);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.usv2-icon-btn:hover {
+  background: var(--sidebar-hover, rgba(0,0,0,0.06));
+  color: var(--text-primary, #1d1d1f);
+}
+.usv2-icon-btn.active {
+  background: var(--session-active, rgba(0,122,255,0.14));
+  color: var(--accent-blue, var(--accent, #007aff));
+}

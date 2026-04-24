@@ -274,12 +274,8 @@ describe('UnifyPage — sidebar footer integration', () => {
     expect(unifyPageSrc).toMatch(/components:\s*\{[^}]*VpLibraryLink/);
   });
 
-  it('places VpLibraryLink BEFORE the settings button', () => {
-    const linkIdx = unifyPageSrc.indexOf('<VpLibraryLink');
-    const settingsIdx = unifyPageSrc.indexOf('unify-settings-btn');
-    expect(linkIdx).toBeGreaterThan(-1);
-    expect(settingsIdx).toBeGreaterThan(-1);
-    expect(linkIdx).toBeLessThan(settingsIdx);
+  it('VpLibraryLink component is still imported (task-341: footer deleted, task-343 will rewire)', () => {
+    expect(unifyPageSrc).toContain("import VpLibraryLink from './VpLibraryLink.js'");
   });
 
   it('exposes onOpenVpLibrary handler', () => {

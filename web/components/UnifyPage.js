@@ -20,37 +20,16 @@ export default {
       <!-- Mobile sidebar overlay -->
       <div class="unify-sidebar-overlay" v-if="!sidebarCollapsed && isMobile" @click="sidebarCollapsed = true"></div>
 
-      <!-- Left Sidebar — V2 (experimental, feature-flag) OR legacy minimal. -->
+      <!-- Left Sidebar — V2 (task-341: V2 is the only sidebar now). -->
       <UnifySidebarV2
-        v-if="sidebarV2Enabled"
         @select-thread="onSelectThreadV2"
         @select-task="onSelectTaskV2"
         @jump-to-message="onJumpToMessage"
         @search-escape="onSearchEscape"
         @open-user-memory="onOpenUserMemory"
+        @toggle-sidebar="toggleSidebar"
+        @back="goBack"
       />
-      <aside class="unify-sidebar" v-else :class="{ collapsed: sidebarCollapsed }">
-        <div class="unify-sidebar-header">
-          <button class="unify-back-btn" @click="goBack" :title="$t('unify.back')">
-            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
-            <span class="unify-back-text">{{ $t('unify.back') }}</span>
-          </button>
-        </div>
-
-        <!-- Spacer pushes settings to bottom -->
-        <div class="unify-sidebar-spacer"></div>
-
-        <!-- Settings at bottom -->
-        <div class="unify-sidebar-footer">
-          <VpLibraryLink @open-library="onOpenVpLibrary" />
-          <button v-if="canUseWorkbench" class="unify-settings-btn" :class="{ active: store.workbenchExpanded }" @click="store.toggleWorkbench()" :title="$t('chat.sidebar.workbench')">
-            <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M20 3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H4V5h16v14zM6 7h5v2H6V7zm0 4h5v2H6v-2zm0 4h5v2H6v-2zm7-8h5v10h-5V7z"/></svg>
-          </button>
-          <button class="unify-settings-btn" :class="{ active: showSettings }" @click="toggleSettings" :title="$t('unify.settings.title')">
-            <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.488.488 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
-          </button>
-        </div>
-      </aside>
 
       <!-- Workbench Panel (between sidebar and main) -->
       <WorkbenchPanel v-if="canUseWorkbench" />
@@ -59,9 +38,7 @@ export default {
       <div class="unify-main" :class="{ 'workbench-active': canUseWorkbench && store.workbenchExpanded, 'workbench-maximized': canUseWorkbench && store.workbenchMaximized && store.workbenchExpanded }">
         <!-- Conversation Header -->
         <div class="unify-topbar">
-          <button class="unify-sidebar-toggle" @click="toggleSidebar" :title="sidebarCollapsed ? $t('unify.showSidebar') : $t('unify.hideSidebar')">
-            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>
-          </button>
+        <!-- task-341: sidebar-toggle moved from topbar into V2 sidebar header. -->
 
         <!-- task-339-F1: GroupSelector removed from topbar — groups now surface via sidebar section. -->
 
@@ -327,10 +304,9 @@ export default {
       store.hasCapability('terminal') || store.hasCapability('file_editor')
     );
 
-    // task-301: feature-flag switch between legacy sidebar and V2.
-    // Source of truth is the store (persisted via localStorage). Computed
-    // so it reacts to Settings toggles without a page refresh.
-    const sidebarV2Enabled = Vue.computed(() => !!store.unifySidebarV2Enabled);
+    // task-341: V2 sidebar is the only sidebar; flag kept as constant
+    // for callers that still read it.
+    const sidebarV2Enabled = Vue.computed(() => true);
 
     const onSelectThreadV2 = (threadId) => {
       // task-301 Part 2: delegate to store. setActiveThread also drives

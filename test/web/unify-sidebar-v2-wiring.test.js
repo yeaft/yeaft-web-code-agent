@@ -4,17 +4,14 @@ import { join } from 'path';
 import UnifySidebarV2 from '../../web/components/UnifySidebarV2.js';
 
 /**
- * task-301 Part 1 — feature-flag wiring + i18n polish.
+ * task-341 — V2 sidebar is the ONLY sidebar.
  *
- * Part 2 (store-driven threads/tasks) lands after task-299 dev-3 commit;
- * those assertions are added then. Current coverage:
- *   1. Store exposes feature-flag state + setter
- *   2. UnifyPage renders UnifySidebarV2 only when flag is on
- *   3. Legacy sidebar renders only when flag is off (mutual exclusion)
- *   4. onSelectThreadV2 / onSelectTaskV2 delegate to store setters
- *   5. "main" thread shows localized Inbox label (en + zh)
- *   6. Search placeholder reads from i18n key
- *   7. i18n keys present in both en and zh
+ * Legacy `<aside class="unify-sidebar">` block is deleted wholesale.
+ * The feature flag is kept as a constant `true` for field backward-compat
+ * but the URL/localStorage hydration is gone, the setter is a no-op stub.
+ *
+ * UnifyPage now mounts UnifySidebarV2 unconditionally and wires
+ * toggle-sidebar / back emits back to the page's own handlers.
  */
 
 const rootDir = join(import.meta.dirname, '..', '..');
@@ -24,54 +21,83 @@ const componentSrc = readFileSync(join(rootDir, 'web/components/UnifySidebarV2.j
 const enSrc = readFileSync(join(rootDir, 'web/i18n/en.js'), 'utf8');
 const zhSrc = readFileSync(join(rootDir, 'web/i18n/zh-CN.js'), 'utf8');
 
-// --- 1. Store flag ----------------------------------------------------------
-describe('store feature flag', () => {
-  it('declares unifySidebarV2Enabled in state with localStorage hydration', () => {
-    expect(storeSrc).toMatch(/unifySidebarV2Enabled/);
-    expect(storeSrc).toMatch(/unify-sidebar-v2-enabled/);
+// --- 1. Store flag (task-341: constant true, stub setter) -------------------
+describe('store feature flag (task-341: constant)', () => {
+  it('declares unifySidebarV2Enabled as a constant true', () => {
+    expect(storeSrc).toMatch(/unifySidebarV2Enabled:\s*true/);
   });
 
-  it('exposes setUnifySidebarV2Enabled action that writes localStorage', () => {
+  it('keeps setUnifySidebarV2Enabled stub for backward compat', () => {
     expect(storeSrc).toMatch(/setUnifySidebarV2Enabled\s*\(/);
-    expect(storeSrc).toMatch(/setItem\(['"]unify-sidebar-v2-enabled['"]/);
   });
 
-  it('honors ?sidebarV2=1 URL query', () => {
-    expect(storeSrc).toMatch(/sidebarV2/);
-    expect(storeSrc).toMatch(/URLSearchParams/);
+  it('setter sweeps the stale localStorage key', () => {
+    expect(storeSrc).toMatch(/removeItem\(['"]unify-sidebar-v2-enabled['"]/);
   });
 });
 
-// --- 2. UnifyPage mutual-exclusion wiring -----------------------------------
-describe('UnifyPage wiring', () => {
+// --- 2. UnifyPage wiring (V2 is the only sidebar) ---------------------------
+describe('UnifyPage wiring (task-341)', () => {
   it('imports UnifySidebarV2 and registers it as a component', () => {
     expect(pageSrc).toMatch(/import UnifySidebarV2 from/);
     expect(pageSrc).toMatch(/components:\s*\{[^}]*UnifySidebarV2[^}]*\}/);
   });
 
-  it('renders UnifySidebarV2 only when flag is on (v-if), legacy only when off (v-else)', () => {
-    // v-if on V2
-    expect(pageSrc).toMatch(/<UnifySidebarV2[\s\S]*?v-if="sidebarV2Enabled"/);
-    // v-else on legacy aside (attribute order is class then v-else)
-    expect(pageSrc).toMatch(/<aside\s+class="unify-sidebar"\s+v-else/);
+  it('renders UnifySidebarV2 unconditionally (no v-if / no v-else)', () => {
+    expect(pageSrc).toMatch(/<UnifySidebarV2[\s\S]*?@select-thread=/);
+    expect(pageSrc).not.toMatch(/<UnifySidebarV2[\s\S]*?v-if="sidebarV2Enabled"/);
+    expect(pageSrc).not.toMatch(/<aside\s+class="unify-sidebar"\s+v-else/);
   });
 
-  it('exposes sidebarV2Enabled + select handlers from setup()', () => {
-    expect(pageSrc).toMatch(/sidebarV2Enabled\s*=\s*Vue\.computed\(/);
-    expect(pageSrc).toMatch(/onSelectThreadV2\s*=/);
-    expect(pageSrc).toMatch(/onSelectTaskV2\s*=/);
-    // returned to template
-    expect(pageSrc).toMatch(/sidebarV2Enabled,\s*\n\s*onSelectThreadV2,/);
+  it('wires @toggle-sidebar and @back emits from the V2 sidebar', () => {
+    expect(pageSrc).toMatch(/@toggle-sidebar="toggleSidebar"/);
+    expect(pageSrc).toMatch(/@back="goBack"/);
   });
 
-  it('select handlers delegate to store setters (task-315: task click → detail view)', () => {
+  it('legacy unify-sidebar-toggle in topbar is removed', () => {
+    expect(pageSrc).not.toContain('unify-sidebar-toggle');
+  });
+
+  it('select handlers still delegate to store setters (task-315 preserved)', () => {
     expect(pageSrc).toMatch(/store\.setActiveThread/);
-    // task-315 supersedes setActiveTaskUi with enterTaskDetailView.
     expect(pageSrc).toMatch(/store\.enterTaskDetailView/);
   });
 });
 
-// --- 3. Component i18n polish (task-300 nits) -------------------------------
+// --- 3. V2 sidebar header row (task-341) ------------------------------------
+describe('V2 sidebar header row (task-341)', () => {
+  it('declares toggle-sidebar and back in emits', () => {
+    expect(componentSrc).toMatch(/emits:[\s\S]*?['"]toggle-sidebar['"]/);
+    expect(componentSrc).toMatch(/emits:[\s\S]*?['"]back['"]/);
+  });
+
+  it('renders a usv2-header-row with brand + actions', () => {
+    expect(componentSrc).toMatch(/class="usv2-header-row"/);
+    expect(componentSrc).toMatch(/class="usv2-brand"/);
+    expect(componentSrc).toMatch(/class="usv2-header-actions"/);
+  });
+
+  it('header has collapse and back buttons wired to emits', () => {
+    expect(componentSrc).toMatch(/@click="\$emit\('toggle-sidebar'\)"/);
+    expect(componentSrc).toMatch(/@click="\$emit\('back'\)"/);
+  });
+
+  it('header has conditional workbench button gated by canUseWorkbench', () => {
+    expect(componentSrc).toMatch(/v-if="canUseWorkbench"[\s\S]*?onToggleWorkbench/);
+  });
+
+  it('exposes canUseWorkbench + agent identity computeds', () => {
+    expect(componentSrc).toMatch(/canUseWorkbench\s*\(\)/);
+    expect(componentSrc).toMatch(/onlineAgentCount\s*\(\)/);
+    expect(componentSrc).toMatch(/currentAgentLatency\s*\(\)/);
+  });
+
+  it('exposes getLatencyClass method', () => {
+    expect(componentSrc).toMatch(/getLatencyClass\s*\(latency\)/);
+  });
+});
+
+// --- 4. Component i18n polish (preserved) -----------------------------------
 describe('sidebar v2 i18n polish', () => {
   it('placeholder binds to placeholderText computed (i18n-aware)', () => {
     expect(componentSrc).toMatch(/:placeholder="placeholderText"/);
@@ -80,12 +106,10 @@ describe('sidebar v2 i18n polish', () => {
 
   it('"main" thread rows use threadDisplayName returning Inbox label', () => {
     expect(componentSrc).toMatch(/threadDisplayName\s*\(t\)\s*\{[\s\S]*?id === 'main'[\s\S]*?unify\.inbox/);
-    // all three group rows use the helper (not raw t.name)
     const usages = componentSrc.match(/threadDisplayName\(t\)/g) || [];
     expect(usages.length).toBeGreaterThanOrEqual(3);
   });
 
-  // Behavioral check on threadDisplayName directly.
   it('threadDisplayName returns "Inbox" literal when $t absent and id is main', () => {
     const ctx = { threads: [], $t: null };
     const out = UnifySidebarV2.methods.threadDisplayName.call(ctx, { id: 'main', name: 'main' });
@@ -105,7 +129,7 @@ describe('sidebar v2 i18n polish', () => {
   });
 });
 
-// --- 4. i18n dictionaries ---------------------------------------------------
+// --- 5. i18n dictionaries ---------------------------------------------------
 describe('i18n dictionaries', () => {
   it('en.js has unify.inbox = "Inbox"', () => {
     expect(enSrc).toMatch(/'unify\.inbox':\s*'Inbox'/);
@@ -116,8 +140,6 @@ describe('i18n dictionaries', () => {
   });
 
   it('placeholder key hints at # prefix syntax (en)', () => {
-    // task-312: placeholder now also surfaces the `in:title` prefix, but
-    // must still mention `#name` so users know the thread-only shortcut.
     expect(enSrc).toMatch(/'unify\.sidebar\.searchPlaceholder':\s*'[^']*#name[^']*'/);
   });
 

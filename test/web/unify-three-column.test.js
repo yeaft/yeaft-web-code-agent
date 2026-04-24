@@ -20,8 +20,8 @@ const zhI18n = readFileSync(join(rootDir, 'web/i18n/zh-CN.js'), 'utf8');
 // 1. Three-column layout structure
 // =====================================================================
 describe('UnifyPage three-column structure', () => {
-  it('has left sidebar (unify-sidebar)', () => {
-    expect(unifyPageJs).toContain('class="unify-sidebar"');
+  it('has left sidebar (UnifySidebarV2 component — task-341)', () => {
+    expect(unifyPageJs).toMatch(/<UnifySidebarV2/);
   });
 
   it('has center conversation area (unify-main)', () => {
@@ -46,30 +46,29 @@ describe('UnifyPage three-column structure', () => {
 // 2. Left sidebar content (minimal: back + settings)
 // =====================================================================
 describe('Left sidebar content', () => {
-  it('has back button', () => {
-    expect(unifyPageJs).toContain('unify-back-btn');
+  it('has back emit wired from V2 sidebar (task-341)', () => {
+    expect(unifyPageJs).toContain('@back="goBack"');
     expect(unifyPageJs).toContain('goBack');
   });
 
-  it('has settings button at bottom', () => {
-    expect(unifyPageJs).toContain('unify-settings-btn');
-    expect(unifyPageJs).toContain('toggleSettings');
+  it('has toggle-sidebar emit wired from V2 sidebar (task-341)', () => {
+    expect(unifyPageJs).toContain('@toggle-sidebar="toggleSidebar"');
   });
 
-  it('has spacer to push settings to bottom', () => {
-    expect(unifyPageJs).toContain('unify-sidebar-spacer');
+  it('legacy unify-back-btn / unify-sidebar-spacer / unify-settings-btn removed', () => {
+    expect(unifyPageJs).not.toContain('unify-back-btn');
+    expect(unifyPageJs).not.toContain('unify-sidebar-spacer');
+    expect(unifyPageJs).not.toContain('unify-settings-btn');
   });
 
-  it('sidebar is 260px wide', () => {
-    expect(unifyCss).toMatch(/\.unify-sidebar\s*\{[^}]*width:\s*260px/);
+  it('sidebar V2 styles live in unify-sidebar-v2.css (260px)', () => {
+    const v2Css = readFileSync(join(rootDir, 'web/styles/unify-sidebar-v2.css'), 'utf8');
+    expect(v2Css).toMatch(/\.unify-sidebar-v2\s*\{[^}]*width:\s*260px/);
   });
 
-  it('does NOT have mode toggle in sidebar (moved to topbar)', () => {
-    const sidebarStart = unifyPageJs.indexOf('class="unify-sidebar"');
-    const sidebarEnd = unifyPageJs.indexOf('</aside>', sidebarStart);
-    const sidebarContent = unifyPageJs.slice(sidebarStart, sidebarEnd);
-    expect(sidebarContent).not.toContain('unify-mode-toggle');
-    expect(sidebarContent).not.toContain('unify-topbar-mode');
+  it('does NOT have mode toggle (removed, task-297)', () => {
+    expect(unifyPageJs).not.toContain('unify-mode-toggle');
+    expect(unifyPageJs).not.toMatch(/class="unify-topbar-mode"/);
   });
 
   it('does NOT have agent info section (removed)', () => {
@@ -84,15 +83,9 @@ describe('Left sidebar content', () => {
     expect(unifyPageJs).not.toContain("store.unifyStatus.mcpServers");
   });
 
-  it('does NOT have session status indicator', () => {
-    expect(unifyPageJs).not.toContain('unify-session-status');
-    expect(unifyPageJs).not.toContain('unify-status-dot');
-  });
-
-  it('sidebar has collapsible support', () => {
+  it('sidebar has collapsible support via toggleSidebar', () => {
     expect(unifyPageJs).toContain("sidebarCollapsed");
     expect(unifyPageJs).toContain("toggleSidebar");
-    expect(unifyCss).toContain('.unify-sidebar.collapsed');
   });
 });
 
@@ -138,8 +131,9 @@ describe('Center conversation area', () => {
     expect(unifyPageJs).toContain('unify-detail-toggle');
   });
 
-  it('has sidebar toggle button in topbar', () => {
-    expect(unifyPageJs).toContain('unify-sidebar-toggle');
+  it('sidebar toggle lives in V2 sidebar header (task-341, not topbar)', () => {
+    expect(unifyPageJs).not.toContain('unify-sidebar-toggle');
+    expect(unifyPageJs).toContain('@toggle-sidebar="toggleSidebar"');
   });
 });
 
@@ -283,9 +277,9 @@ describe('i18n — labels use $t()', () => {
     expect(unifyPageJs).toContain("$t('unify.comingSoon')");
   });
 
-  it('sidebar toggle titles use $t()', () => {
-    expect(unifyPageJs).toContain("$t('unify.showSidebar')");
-    expect(unifyPageJs).toContain("$t('unify.hideSidebar')");
+  it('sidebar toggle titles use $t() via V2 (chat.sidebar.collapse)', () => {
+    const v2Src = readFileSync(join(rootDir, 'web/components/UnifySidebarV2.js'), 'utf8');
+    expect(v2Src).toContain("'chat.sidebar.collapse'");
   });
 
   it('detail toggle titles use $t()', () => {
@@ -302,8 +296,9 @@ describe('i18n — labels use $t()', () => {
     expect(unifyPageJs).toContain("$t('unify.switchModel')");
   });
 
-  it('settings uses $t()', () => {
-    expect(unifyPageJs).toContain("$t('unify.settings.title')");
+  it('settings label i18n key exists in dictionaries (task-341: settings btn migrated)', () => {
+    expect(enI18n).toContain("'unify.settings.title'");
+    expect(zhI18n).toContain("'unify.settings.title'");
   });
 
   it('no hardcoded English labels remain in sidebar sections', () => {
