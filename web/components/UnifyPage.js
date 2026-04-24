@@ -29,6 +29,7 @@ export default {
         @open-user-memory="onOpenUserMemory"
         @toggle-sidebar="toggleSidebar"
         @back="goBack"
+        @open-settings="toggleSettings"
       />
 
       <!-- Workbench Panel (between sidebar and main) -->
