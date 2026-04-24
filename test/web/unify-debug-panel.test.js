@@ -416,17 +416,17 @@ describe('Debug panel resizable width (task-277)', () => {
     expect(unifyPageJs).toContain("localStorage.getItem('unify-debug-width')");
   });
 
-  it('has min width constraint (300px)', () => {
+  it('has min width constraint aligned to Chat ExpertPanel (320px)', () => {
     expect(unifyPageJs).toContain('DETAIL_MIN_WIDTH');
-    expect(unifyPageJs).toMatch(/DETAIL_MIN_WIDTH\s*=\s*300/);
+    expect(unifyPageJs).toMatch(/DETAIL_MIN_WIDTH\s*=\s*320/);
   });
 
   it('has max width constraint (60vw)', () => {
     expect(unifyPageJs).toContain('window.innerWidth * 0.6');
   });
 
-  it('default width is ~500px or 35vw', () => {
-    expect(unifyPageJs).toMatch(/Math\.max\(500,\s*window\.innerWidth\s*\*\s*0\.35\)/);
+  it('default width clamped like Chat SubAgentPanel expanded (min 360, max 600, ~40vw)', () => {
+    expect(unifyPageJs).toMatch(/Math\.min\(600,\s*Math\.max\(360,\s*Math\.round\(window\.innerWidth\s*\*\s*0\.4\)\)\)/);
   });
 
   it('detail panel has resizing class binding', () => {
