@@ -104,6 +104,58 @@ export class LLMAbortError extends Error {
 // ─── task-344: Raw payload redaction helper ────────────────────
 
 /**
+ * task-344 follow-up (N2): cap raw payload size exposed via onRawExchange.
+ * Prevents the web debug store from linear-growing when a single turn
+ * sends / receives megabytes of content. 256 KiB per field per turn.
+ */
+export const RAW_PAYLOAD_CAP_BYTES = 256 * 1024;
+
+/**
+ * Truncate a string to at most `cap` bytes (UTF-8). When within cap the
+ * original is returned; otherwise a prefix with a trailing
+ * `…[truncated, original N bytes]` marker. Non-string inputs pass through.
+ *
+ * @param {string} s
+ * @param {number} [cap=RAW_PAYLOAD_CAP_BYTES]
+ * @returns {string}
+ */
+export function capRawString(s, cap = RAW_PAYLOAD_CAP_BYTES) {
+  if (typeof s !== 'string') return s;
+  const encoder = new TextEncoder();
+  const fullBytes = encoder.encode(s);
+  if (fullBytes.length <= cap) return s;
+  const decoder = new TextDecoder('utf-8', { fatal: false });
+  const prefix = decoder.decode(fullBytes.slice(0, cap));
+  return `${prefix}…[truncated, original ${fullBytes.length} bytes]`;
+}
+
+/**
+ * Cap the `body` field of a rawRequest envelope. JSON-stringifies objects
+ * before sizing so an oversized `messages` array does not escape the cap.
+ * When truncation fires, body becomes a string (JSON prefix + marker);
+ * objects under cap stay objects.
+ *
+ * @param {{ url: string, method: string, headers: object, body: any }} req
+ * @param {number} [cap=RAW_PAYLOAD_CAP_BYTES]
+ * @returns {{ url: string, method: string, headers: object, body: any }}
+ */
+export function capRawRequest(req, cap = RAW_PAYLOAD_CAP_BYTES) {
+  if (!req || typeof req !== 'object') return req;
+  let body = req.body;
+  if (body != null && typeof body !== 'string') {
+    let serialized;
+    try { serialized = JSON.stringify(body); }
+    catch { serialized = String(body); }
+    if (typeof serialized === 'string' && new TextEncoder().encode(serialized).length > cap) {
+      body = capRawString(serialized, cap);
+    }
+  } else if (typeof body === 'string') {
+    body = capRawString(body, cap);
+  }
+  return { url: req.url, method: req.method, headers: req.headers, body };
+}
+
+/**
  * Redact sensitive headers (API keys / bearer tokens) from a raw request
  * shape before exposing it to debug UI. Always returns a NEW object — never
  * mutates the input.

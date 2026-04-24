@@ -13,7 +13,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { AnthropicAdapter } from '../../agent/unify/llm/anthropic.js';
 import { ChatCompletionsAdapter } from '../../agent/unify/llm/chat-completions.js';
-import { redactRawRequest } from '../../agent/unify/llm/adapter.js';
+import {
+  redactRawRequest,
+  capRawString,
+  capRawRequest,
+  RAW_PAYLOAD_CAP_BYTES,
+} from '../../agent/unify/llm/adapter.js';
 
 // ─── helpers ─────────────────────────────────────────────────────
 
@@ -185,5 +190,167 @@ describe('ChatCompletionsAdapter onRawExchange', () => {
     expect(captured.rawResponse.format).toBe('sse');
     expect(captured.rawResponse.body).toContain('"hi"');
     expect(captured.rawResponse.body).toContain('[DONE]');
+  });
+
+  // task-344 follow-up N1: ChatCompletions error path (symmetry with Anthropic 429)
+  it('emits rawResponse on non-2xx (429) before throwing', async () => {
+    globalThis.fetch = async () => ({
+      ok: false,
+      status: 429,
+      headers: new Headers({ 'retry-after': '1' }),
+      text: async () => '{"error":{"message":"Rate limit reached","type":"rate_limit_exceeded"}}',
+    });
+    const adapter = new ChatCompletionsAdapter({
+      apiKey: 'sk-topsecret',
+      baseUrl: 'https://api.openai.com/v1',
+    });
+    let captured = null;
+    await expect((async () => {
+      const gen = adapter.stream({
+        model: 'gpt-5',
+        system: '',
+        messages: [{ role: 'user', content: 'hi' }],
+        onRawExchange: (ex) => { captured = ex; },
+      });
+      await consume(gen);
+    })()).rejects.toThrow();
+    expect(captured).toBeTruthy();
+    expect(captured.rawResponse.status).toBe(429);
+    expect(captured.rawResponse.body).toContain('Rate limit reached');
+    // apiKey MUST NOT appear in the redacted envelope.
+    expect(captured.rawRequest.headers['Authorization']).toBe('***');
+    expect(JSON.stringify(captured.rawRequest).includes('sk-topsecret')).toBe(false);
+  });
+});
+
+// ─── task-344 follow-up N2: SSE body max-size cap ────────────────
+
+describe('capRawString / capRawRequest (N2)', () => {
+  it('passes through short strings', () => {
+    expect(capRawString('hello')).toBe('hello');
+    expect(capRawString('hello', 10)).toBe('hello');
+  });
+
+  it('truncates long strings and appends marker with original size', () => {
+    const s = 'x'.repeat(100);
+    const out = capRawString(s, 20);
+    expect(out.startsWith('x'.repeat(20))).toBe(true);
+    expect(out).toContain('…[truncated, original 100 bytes]');
+  });
+
+  it('handles non-string inputs', () => {
+    expect(capRawString(null)).toBe(null);
+    expect(capRawString(undefined)).toBe(undefined);
+    expect(capRawString(42)).toBe(42);
+  });
+
+  it('exports RAW_PAYLOAD_CAP_BYTES constant at 256 KiB', () => {
+    expect(RAW_PAYLOAD_CAP_BYTES).toBe(256 * 1024);
+  });
+
+  it('capRawRequest leaves small bodies alone (still object)', () => {
+    const req = { url: '/x', method: 'POST', headers: {}, body: { messages: ['hi'] } };
+    const out = capRawRequest(req);
+    expect(typeof out.body).toBe('object');
+    expect(out.body.messages[0]).toBe('hi');
+  });
+
+  it('capRawRequest stringifies + truncates oversize bodies', () => {
+    // Build a body that serializes larger than the cap.
+    const big = { messages: [{ role: 'user', content: 'y'.repeat(300 * 1024) }] };
+    const req = { url: '/x', method: 'POST', headers: {}, body: big };
+    const out = capRawRequest(req);
+    expect(typeof out.body).toBe('string');
+    expect(out.body).toContain('…[truncated, original');
+    expect(out.body.length).toBeLessThan(300 * 1024 + 200);
+  });
+});
+
+describe('Anthropic adapter SSE size cap (N2)', () => {
+  let origFetch;
+  beforeEach(() => { origFetch = globalThis.fetch; });
+  afterEach(() => { globalThis.fetch = origFetch; });
+
+  it('caps rawResponse body at RAW_PAYLOAD_CAP_BYTES + marker', async () => {
+    // Build a single huge text_delta SSE event (>cap).
+    const giant = 'A'.repeat(RAW_PAYLOAD_CAP_BYTES + 50000);
+    const payload = JSON.stringify({ type: 'content_block_delta', delta: { type: 'text_delta', text: giant } });
+    globalThis.fetch = async () => ({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'text/event-stream' }),
+      body: {
+        getReader() {
+          const encoder = new TextEncoder();
+          let sent = false;
+          return {
+            async read() {
+              if (sent) return { done: true, value: undefined };
+              sent = true;
+              return { done: false, value: encoder.encode(`data: ${payload}\n\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n`) };
+            },
+            releaseLock() {},
+          };
+        },
+      },
+    });
+    const adapter = new AnthropicAdapter({ apiKey: 'sk', baseUrl: 'https://api.anthropic.com' });
+    let captured = null;
+    const gen = adapter.stream({
+      model: 'claude-sonnet-4-20250514',
+      system: '',
+      messages: [{ role: 'user', content: 'hi' }],
+      onRawExchange: (ex) => { captured = ex; },
+    });
+    await consume(gen);
+    expect(captured).toBeTruthy();
+    expect(captured.rawResponse.body).toContain('…[truncated, original');
+    // Captured body must be ~ cap + marker (not the full giant).
+    expect(captured.rawResponse.body.length).toBeLessThan(RAW_PAYLOAD_CAP_BYTES + 200);
+  });
+});
+
+describe('ChatCompletions adapter SSE size cap (N2)', () => {
+  let origFetch;
+  beforeEach(() => { origFetch = globalThis.fetch; });
+  afterEach(() => { globalThis.fetch = origFetch; });
+
+  it('caps rawResponse body at RAW_PAYLOAD_CAP_BYTES + marker', async () => {
+    const giant = 'B'.repeat(RAW_PAYLOAD_CAP_BYTES + 50000);
+    const payload = JSON.stringify({ choices: [{ delta: { content: giant }, index: 0 }] });
+    globalThis.fetch = async () => ({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'text/event-stream' }),
+      body: {
+        getReader() {
+          const encoder = new TextEncoder();
+          let sent = false;
+          return {
+            async read() {
+              if (sent) return { done: true, value: undefined };
+              sent = true;
+              return { done: false, value: encoder.encode(`data: ${payload}\n\ndata: {"choices":[{"delta":{},"finish_reason":"stop","index":0}]}\n\ndata: [DONE]\n\n`) };
+            },
+            releaseLock() {},
+          };
+        },
+      },
+    });
+    const adapter = new ChatCompletionsAdapter({
+      apiKey: 'sk',
+      baseUrl: 'https://api.openai.com/v1',
+    });
+    let captured = null;
+    const gen = adapter.stream({
+      model: 'gpt-5',
+      system: '',
+      messages: [{ role: 'user', content: 'hi' }],
+      onRawExchange: (ex) => { captured = ex; },
+    });
+    await consume(gen);
+    expect(captured).toBeTruthy();
+    expect(captured.rawResponse.body).toContain('…[truncated, original');
+    expect(captured.rawResponse.body.length).toBeLessThan(RAW_PAYLOAD_CAP_BYTES + 200);
   });
 });
