@@ -127,6 +127,13 @@ export function loadVpFromDir(dir) {
   return {
     id,
     name: String(meta.name || id),
+    // task-fix (5-bugs): optional localized names + pinyin aliases for
+    // bilingual display + @-mention pinyin-prefix matching. Missing fields
+    // degrade gracefully to [] / ''.
+    nameZh: typeof meta.nameZh === 'string' ? String(meta.nameZh) : '',
+    aliases: Array.isArray(meta.aliases)
+      ? meta.aliases.map(String).map(s => s.trim()).filter(Boolean)
+      : [],
     role: String(meta.role || ''),
     traits: Array.isArray(meta.traits) ? meta.traits.map(String) : [],
     modelHint,

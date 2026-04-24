@@ -108,6 +108,7 @@ export default {
   'unify.placeholder': '问我任何问题...',
   // task-301: Sidebar V2 strings
   'unify.inbox': '收件箱',
+  'unify.inbox.tooltip': '你的默认对话线程 —— 与 Unify 的一对一聊天。可以为具体话题或任务创建新线程。',
   'unify.sidebar.searchPlaceholder': '搜索… (#名称 / task:N / in:title / status:open)',
   'unify.sidebar.activeThreads': '活跃',
   'unify.sidebar.idleThreads': '静默',

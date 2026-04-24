@@ -234,6 +234,7 @@ export default {
               :key="t.id"
               class="usv2-thread"
               :class="{ selected: t.id === activeThreadId }"
+              :title="threadTooltip(t)"
               @click="onSelectThread(t)"
               @contextmenu.prevent="onRequestMerge(t)"
             >
@@ -944,6 +945,16 @@ export default {
         return 'Inbox';
       }
       return t ? t.name : '';
+    },
+    // task-fix (5-bugs): explain what the Inbox thread is. Users asked
+    // "收件箱 is what?" — this tooltip makes it explicit that `main` is
+    // the default personal thread (1:1 with Unify), not a message queue.
+    threadTooltip(t) {
+      if (t && t.id === 'main') {
+        if (typeof this.$t === 'function') return this.$t('unify.inbox.tooltip');
+        return 'Your default thread — one-on-one chat with Unify.';
+      }
+      return t ? (t.title || t.goal || t.name || '') : '';
     },
     isTaskExpanded(id) {
       return !!this.expandedTasks[id];

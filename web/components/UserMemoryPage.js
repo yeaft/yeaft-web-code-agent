@@ -102,17 +102,22 @@ export default {
       </div>
 
       <!-- task-fix: Memory folder (scope tree) from MemoryStore.
-           User asked for "folder 结构" view of ~/.yeaft/memory/entries/*.md,
+           User asked for a folder-structure view of ~/.yeaft/memory/entries/*.md,
            which are organised by their 'scope' frontmatter
-           (e.g. "work/claude-web-chat/auth"). -->
-      <section class="um-scope-section" v-if="scopeLoaded || scopeEntries.length > 0">
+           (e.g. "work/claude-web-chat/auth"). Section always renders so the
+           refresh button + empty-state are visible before the snapshot lands. -->
+      <section class="um-scope-section">
         <header class="um-scope-header">
           <h3 class="um-scope-title">📁 Memory · folder view</h3>
           <span class="um-scope-count" v-if="scopeEntries.length > 0">{{ scopeEntries.length }}</span>
           <button type="button" class="um-scope-refresh" @click="refreshScope" title="Refresh">↻</button>
         </header>
 
-        <div class="um-scope-empty" v-if="scopeLoaded && scopeEntries.length === 0">
+        <div class="um-scope-empty" v-if="!scopeLoaded && scopeEntries.length === 0">
+          <p>Loading memory entries…</p>
+        </div>
+
+        <div class="um-scope-empty" v-else-if="scopeLoaded && scopeEntries.length === 0">
           <p>No memory entries yet. Entries accumulate under <code>~/.yeaft/memory/entries/</code> as the engine learns from conversation.</p>
         </div>
 
@@ -125,7 +130,13 @@ export default {
             </div>
             <div v-if="expanded[node.path]" class="um-scope-folder-body">
               <ul v-if="node.entries.length > 0" class="um-scope-entries">
-                <li v-for="entry in node.entries" :key="entry.name" class="um-scope-entry">
+                <li
+                  v-for="entry in node.entries"
+                  :key="entry.name"
+                  class="um-scope-entry"
+                  :class="{ 'is-open': openEntry === node.path + '/' + entry.name }"
+                  @click.stop="toggleEntry(node.path + '/' + entry.name)"
+                >
                   <div class="um-scope-entry-header">
                     <span class="um-scope-entry-name">{{ entry.name }}</span>
                     <span class="um-scope-entry-kind" v-if="entry.kind">{{ entry.kind }}</span>
@@ -134,19 +145,29 @@ export default {
                   <div class="um-scope-entry-tags" v-if="entry.tags && entry.tags.length">
                     <span class="um-scope-entry-tag" v-for="tag in entry.tags" :key="tag">#{{ tag }}</span>
                   </div>
-                  <div class="um-scope-entry-body" v-if="entry.content">{{ truncateBody(entry.content) }}</div>
+                  <div class="um-scope-entry-body" v-if="entry.content">
+                    {{ openEntry === node.path + '/' + entry.name
+                        ? fullBody(entry.content)
+                        : truncateBody(entry.content) }}
+                  </div>
                 </li>
               </ul>
               <ul v-if="node.children.length > 0" class="um-scope-children">
                 <li v-for="child in node.children" :key="child.path" class="um-scope-node">
-                  <div class="um-scope-folder" @click="toggleFolder(child.path)">
+                  <div class="um-scope-folder" @click.stop="toggleFolder(child.path)">
                     <span class="um-scope-toggle">{{ expanded[child.path] ? '▾' : '▸' }}</span>
                     <span class="um-scope-folder-name">{{ child.label }}</span>
                     <span class="um-scope-folder-count">({{ child.totalCount }})</span>
                   </div>
                   <div v-if="expanded[child.path]" class="um-scope-folder-body">
                     <ul v-if="child.entries.length > 0" class="um-scope-entries">
-                      <li v-for="entry in child.entries" :key="entry.name" class="um-scope-entry">
+                      <li
+                        v-for="entry in child.entries"
+                        :key="entry.name"
+                        class="um-scope-entry"
+                        :class="{ 'is-open': openEntry === child.path + '/' + entry.name }"
+                        @click.stop="toggleEntry(child.path + '/' + entry.name)"
+                      >
                         <div class="um-scope-entry-header">
                           <span class="um-scope-entry-name">{{ entry.name }}</span>
                           <span class="um-scope-entry-kind" v-if="entry.kind">{{ entry.kind }}</span>
@@ -154,7 +175,11 @@ export default {
                         <div class="um-scope-entry-tags" v-if="entry.tags && entry.tags.length">
                           <span class="um-scope-entry-tag" v-for="tag in entry.tags" :key="tag">#{{ tag }}</span>
                         </div>
-                        <div class="um-scope-entry-body" v-if="entry.content">{{ truncateBody(entry.content) }}</div>
+                        <div class="um-scope-entry-body" v-if="entry.content">
+                          {{ openEntry === child.path + '/' + entry.name
+                              ? fullBody(entry.content)
+                              : truncateBody(entry.content) }}
+                        </div>
                       </li>
                     </ul>
                   </div>
@@ -188,6 +213,8 @@ export default {
     const deleteConfirm = Vue.reactive({ open: false, entryId: null, body: '' });
     // task-fix: local expand state for the scope-tree folder view.
     const expanded = Vue.reactive({});
+    // task-fix: which scope entry is currently expanded to show full content.
+    const openEntry = Vue.ref(null);
 
     // ── Getters ───────────────────────────────────────────
 
@@ -362,6 +389,15 @@ export default {
       return s.slice(0, 200) + '…';
     }
 
+    function fullBody(text) {
+      if (!text) return '';
+      return String(text).replace(/^#+\s.*\n/, '').trim();
+    }
+
+    function toggleEntry(key) {
+      openEntry.value = openEntry.value === key ? null : key;
+    }
+
     // Auto-fetch on mount; agents that ignore the message keep the view
     // empty rather than breaking the page.
     Vue.onMounted(() => {
@@ -383,12 +419,15 @@ export default {
       confirmDelete,
       // task-fix: scope-tree folder view
       expanded,
+      openEntry,
       scopeEntries,
       scopeLoaded,
       scopeTree,
       toggleFolder,
+      toggleEntry,
       refreshScope,
       truncateBody,
+      fullBody,
     };
   },
 };

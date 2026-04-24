@@ -158,15 +158,13 @@ describe('GroupCreateWizard', () => {
     // Fallback to `unknown` when the specific key has no translation.
     expect(wizardSrc).toMatch(/unify\.group\.error\.unknown/);
   });
-  it('3-step wizard: members → name → confirm', () => {
+  it('2-step wizard: members → name (confirm step removed per task-fix)', () => {
     expect(wizardSrc).toContain('step: 1');
     expect(wizardSrc).toMatch(/v-if="step === 1"/);
-    expect(wizardSrc).toMatch(/v-else-if="step === 2"/);
-    // Step 3 is the final v-else — check summary markup is present.
-    expect(wizardSrc).toContain('group-wizard-summary');
-    expect(wizardSrc).toContain('confirmNameLabel');
-    expect(wizardSrc).toContain('confirmMembersLabel');
-    expect(wizardSrc).toContain('confirmDefaultLabel');
+    // task-fix (5-bugs): per user — "选好了就是选好了". Step 3 (confirm)
+    // removed; step 2 now has the name input plus the final submit button.
+    expect(wizardSrc).not.toMatch(/v-else-if="step === 2"/);
+    expect(wizardSrc).not.toContain('group-wizard-summary');
   });
 });
 

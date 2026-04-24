@@ -108,6 +108,7 @@ export default {
   'unify.placeholder': 'Ask anything...',
   // task-301: Sidebar V2 strings
   'unify.inbox': 'Inbox',
+  'unify.inbox.tooltip': 'Your default thread — one-on-one chat with Unify. New threads can be created for specific topics or tasks.',
   'unify.sidebar.searchPlaceholder': 'Search… (#name / task:N / in:title / status:open)',
   'unify.sidebar.activeThreads': 'Active',
   'unify.sidebar.idleThreads': 'Idle',

@@ -269,8 +269,12 @@ describe('wire-format back-compat (task-334h)', () => {
   it('serializeVpForWire keys unchanged from 334-ui-a', () => {
     const wire = serializeVpForWire(mkVp('o'));
     const keys = Object.keys(wire).sort();
+    // task-fix (5-bugs): `displayNameZh` + `aliases` added so web client
+    // can render bilingual labels and match `@` mentions on pinyin.
     expect(keys).toEqual([
+      'aliases',
       'displayName',
+      'displayNameZh',
       'modelHint',
       'personaHash',
       'role',

@@ -1,10 +1,12 @@
 /**
- * GroupCreateWizard — task-334m prev-2 rev.
+ * GroupCreateWizard — task-334m prev-2 rev (simplified to 2 steps).
  *
- * Three-step wizard for creating a new group:
- *   Step 1 (Members)  — multi-select VP roster + default-VP radio.
- *   Step 2 (Name)     — free-form name; required, trimmed.
- *   Step 3 (Confirm)  — summary of name, members (avatar chips), default VP.
+ * Two-step wizard for creating a new group:
+ *   Step 1 (Members) — multi-select VP roster + default-VP radio.
+ *   Step 2 (Name)    — free-form name; required, trimmed. Submits directly.
+ *
+ * The previous Step 3 (Confirm) was removed per user feedback — once the
+ * name is entered, the create button commits the group. "选好了就是选好了."
  *
  * Roster is authoritative — the wizard does NOT default to the full VP
  * library (D1 seed is the only place that auto-expands). An empty roster
@@ -37,9 +39,6 @@ export default {
           <span class="group-wizard-step" :class="{ 'is-active': step === 2 }" role="tab" :aria-selected="step === 2">
             2. {{ $t('unify.group.wizard.step.name') }}
           </span>
-          <span class="group-wizard-step" :class="{ 'is-active': step === 3 }" role="tab" :aria-selected="step === 3">
-            3. {{ $t('unify.group.wizard.step.confirm') }}
-          </span>
         </div>
 
         <!-- STEP 1: MEMBERS -->
@@ -65,7 +64,7 @@ export default {
                   <span class="group-wizard-roster-avatar" :style="{ background: vpColorFor(vp.vpId) }">
                     {{ vpInitialFor(vp.vpId) }}
                   </span>
-                  <span class="group-wizard-roster-name">{{ vp.displayName || vp.vpId }}</span>
+                  <span class="group-wizard-roster-name">{{ vpLabelFor(vp.vpId) }}</span>
                   <span class="group-wizard-roster-id">@{{ vp.vpId }}</span>
                 </label>
               </li>
@@ -101,8 +100,8 @@ export default {
           </div>
         </div>
 
-        <!-- STEP 2: NAME -->
-        <div v-else-if="step === 2" class="group-wizard-body">
+        <!-- STEP 2: NAME + SUBMIT -->
+        <div v-else class="group-wizard-body">
           <label class="group-wizard-field">
             <input
               type="text"
@@ -113,64 +112,26 @@ export default {
               class="group-wizard-input"
               :class="{ 'is-error': !!nameError }"
               ref="nameInput"
-              @keydown.enter.prevent="advanceFromName"
+              @keydown.enter.prevent="onSubmit"
             />
             <span class="group-wizard-hint">{{ $t('unify.group.wizard.nameHint') }}</span>
             <span v-if="nameError" class="group-wizard-error">{{ nameError }}</span>
           </label>
-
-          <div class="group-wizard-actions">
-            <button class="group-wizard-link-btn" type="button" @click="step = 1">
-              {{ $t('unify.group.wizard.back') }}
-            </button>
-            <button class="group-wizard-primary-btn" type="button" @click="advanceFromName" :disabled="!canAdvanceFromName">
-              {{ $t('unify.group.wizard.next') }}
-            </button>
-          </div>
-        </div>
-
-        <!-- STEP 3: CONFIRM -->
-        <div v-else class="group-wizard-body">
-          <div class="group-wizard-field">
-            <span class="group-wizard-field-label">{{ $t('unify.group.wizard.confirmTitle') }}</span>
-            <span class="group-wizard-hint">{{ $t('unify.group.wizard.confirmHint') }}</span>
-          </div>
-
-          <dl class="group-wizard-summary">
-            <dt>{{ $t('unify.group.wizard.confirmNameLabel') }}</dt>
-            <dd class="group-wizard-summary-name">{{ form.name.trim() }}</dd>
-
-            <dt>{{ $t('unify.group.wizard.confirmMembersLabel') }}</dt>
-            <dd>
-              <span v-if="form.roster.length === 0" class="group-wizard-summary-empty">
-                {{ $t('unify.group.wizard.confirmEmpty') }}
-              </span>
-              <ul v-else class="group-wizard-summary-chips">
-                <li v-for="vpId in form.roster" :key="vpId" class="group-wizard-summary-chip">
-                  <span class="group-wizard-summary-avatar" :style="{ background: vpColorFor(vpId) }">
-                    {{ vpInitialFor(vpId) }}
-                  </span>
-                  <span class="group-wizard-summary-label">{{ vpLabelFor(vpId) }}</span>
-                </li>
-              </ul>
-            </dd>
-
-            <dt>{{ $t('unify.group.wizard.confirmDefaultLabel') }}</dt>
-            <dd>
-              <span v-if="summaryDefaultVpId">{{ vpLabelFor(summaryDefaultVpId) }}</span>
-              <span v-else class="group-wizard-summary-empty">{{ $t('unify.group.wizard.confirmEmpty') }}</span>
-            </dd>
-          </dl>
 
           <div v-if="submitError" class="group-wizard-error" role="alert">
             {{ submitError }}
           </div>
 
           <div class="group-wizard-actions">
-            <button class="group-wizard-link-btn" type="button" @click="step = 2" :disabled="busy">
+            <button class="group-wizard-link-btn" type="button" @click="step = 1" :disabled="busy">
               {{ $t('unify.group.wizard.back') }}
             </button>
-            <button class="group-wizard-primary-btn" type="button" @click="onSubmit" :disabled="busy">
+            <button
+              class="group-wizard-primary-btn"
+              type="button"
+              @click="onSubmit"
+              :disabled="busy || !canAdvanceFromName"
+            >
               {{ busy ? $t('unify.group.wizard.creating') : $t('unify.group.wizard.create') }}
             </button>
           </div>
@@ -270,14 +231,6 @@ export default {
       if (!this.busy) this.requestClose();
     },
     requestClose() { this.$emit('close'); },
-    advanceFromName() {
-      this.nameError = '';
-      if (!this.canAdvanceFromName) {
-        this.nameError = this.$t('unify.group.error.invalid_name');
-        return;
-      }
-      this.step = 3;
-    },
     toggleMember(vpId, checked) {
       if (checked) {
         if (!this.form.roster.includes(vpId)) this.form.roster.push(vpId);
@@ -303,7 +256,12 @@ export default {
     },
     async onSubmit() {
       this.submitError = '';
+      this.nameError = '';
       if (this.busy) return;
+      if (!this.canAdvanceFromName) {
+        this.nameError = this.$t('unify.group.error.invalid_name');
+        return;
+      }
       this.busy = true;
       try {
         const defaultVpId = this.form.defaultVpId || this.form.roster[0] || null;
@@ -322,10 +280,15 @@ export default {
           return;
         }
         const code = (res && res.error && res.error.code) || 'unknown';
+        const message = (res && res.error && res.error.message) || '';
         const msgKey = `unify.group.error.${code}`;
-        const translated = this.$t(msgKey);
+        // Always pass `{ message }` so any translation containing the
+        // `{message}` placeholder (e.g. unify.group.error.unknown) gets
+        // interpolated. If the key is missing, $t falls back to the key
+        // itself — in that case, render the unknown fallback explicitly.
+        const translated = this.$t(msgKey, { message });
         if (translated === msgKey) {
-          this.submitError = this.$t('unify.group.error.unknown', { message: (res && res.error && res.error.message) || '' });
+          this.submitError = this.$t('unify.group.error.unknown', { message });
         } else {
           this.submitError = translated;
         }

@@ -28,10 +28,16 @@ import VpAvatar from './VpAvatar.js';
 export const VP_MENTION_MAX_RESULTS = 12;
 
 /**
- * Pure filter: prefer vpId-prefix hits, then displayName-substring hits.
+ * Pure filter: prefer vpId-prefix hits, then alias-prefix (pinyin), then
+ * displayName / displayNameZh substring hits.
+ *
+ * task-fix (5-bugs): aliases typically include pinyin transliterations
+ * (e.g. `qiaobusi` for 乔布斯). Typing "qi" or "qiao" picks up the seed
+ * VP Steve Jobs even though his canonical id is `steve`.
+ *
  * Exported so the test suite can exercise without mounting Vue.
  *
- * @param {object[]} vps — store.vpList (each has {vpId, displayName, role?})
+ * @param {object[]} vps — store.vpList (each has {vpId, displayName, displayNameZh?, aliases?, role?})
  * @param {string} query — raw query text (not yet lowercased)
  * @returns {object[]} up to VP_MENTION_MAX_RESULTS matches.
  */
@@ -43,16 +49,35 @@ export function filterVpMentions(vps, query) {
       .filter(v => v && v.vpId && v.vpId !== 'user')
       .slice(0, VP_MENTION_MAX_RESULTS);
   }
-  const prefix = [];
-  const substring = [];
+  const idPrefix = [];
+  const aliasPrefix = [];
+  const nameSubstring = [];
+  const seen = new Set();
+  const take = (vp, bucket) => {
+    if (seen.has(vp.vpId)) return;
+    seen.add(vp.vpId);
+    bucket.push(vp);
+  };
   for (const vp of list) {
     if (!vp || !vp.vpId || vp.vpId === 'user') continue;
     const idLower = String(vp.vpId).toLowerCase();
-    if (idLower.startsWith(q)) { prefix.push(vp); continue; }
+    if (idLower.startsWith(q)) { take(vp, idPrefix); continue; }
+
+    const aliases = Array.isArray(vp.aliases) ? vp.aliases : [];
+    let aliasHit = false;
+    for (const alias of aliases) {
+      const al = String(alias || '').toLowerCase();
+      if (al && al.startsWith(q)) { aliasHit = true; break; }
+    }
+    if (aliasHit) { take(vp, aliasPrefix); continue; }
+
     const dn = String(vp.displayName || '').toLowerCase();
-    if (dn.includes(q)) { substring.push(vp); }
+    const dnZh = String(vp.displayNameZh || ''); // Chinese — do not lowercase
+    if (dn.includes(q) || dnZh.includes(query || '')) {
+      take(vp, nameSubstring);
+    }
   }
-  return [...prefix, ...substring].slice(0, VP_MENTION_MAX_RESULTS);
+  return [...idPrefix, ...aliasPrefix, ...nameSubstring].slice(0, VP_MENTION_MAX_RESULTS);
 }
 
 /**
@@ -95,7 +120,7 @@ export default {
         @mouseenter="$emit('hover-index', idx)"
       >
         <VpAvatar :vp-id="vp.vpId" :size="20" />
-        <span class="slash-cmd-name">{{ vp.displayName || vp.vpId }}</span>
+        <span class="slash-cmd-name">{{ displayNameFor(vp) }}</span>
         <span class="slash-cmd-desc vp-mention-id">@{{ vp.vpId }}</span>
         <span v-if="vp.role" class="vp-mention-role">{{ vp.role }}</span>
       </div>
@@ -103,6 +128,13 @@ export default {
   `,
   setup(props) {
     const filteredList = Vue.computed(() => filterVpMentions(props.vps, props.query));
-    return { filteredList };
+    // task-fix (5-bugs): locale-aware display name. zh-* prefers displayNameZh.
+    function displayNameFor(vp) {
+      if (!vp) return '';
+      const locale = (typeof localStorage !== 'undefined' && localStorage.getItem('locale')) || '';
+      if (locale.startsWith('zh') && vp.displayNameZh) return vp.displayNameZh;
+      return vp.displayName || vp.vpId || '';
+    }
+    return { filteredList, displayNameFor };
   },
 };

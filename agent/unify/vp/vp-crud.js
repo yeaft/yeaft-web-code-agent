@@ -57,16 +57,24 @@ function vpRolePathFor(libDir, vpId) {
 export function buildRoleMd(p) {
   const id = String(p.vpId);
   const name = p.displayName != null ? String(p.displayName) : id;
+  const nameZh = p.displayNameZh != null ? String(p.displayNameZh) : '';
+  const aliases = Array.isArray(p.aliases) ? p.aliases.map(a => String(a)).filter(Boolean) : [];
   const role = p.role != null ? String(p.role) : '';
   const traits = Array.isArray(p.traits) ? p.traits.map(t => String(t)).filter(Boolean) : [];
   const modelHint = p.modelHint === 'primary' || p.modelHint === 'fast' ? p.modelHint : null;
   const body = typeof p.persona === 'string' ? p.persona : '';
 
-  const lines = ['---', `id: ${id}`, `name: ${yamlScalar(name)}`, `role: ${yamlScalar(role)}`];
+  const lines = ['---', `id: ${id}`, `name: ${yamlScalar(name)}`];
+  if (nameZh) lines.push(`nameZh: ${yamlScalar(nameZh)}`);
+  lines.push(`role: ${yamlScalar(role)}`);
   if (modelHint) lines.push(`modelHint: ${modelHint}`);
   if (traits.length > 0) {
     lines.push('traits:');
     for (const t of traits) lines.push(`  - ${yamlScalar(t)}`);
+  }
+  if (aliases.length > 0) {
+    lines.push('aliases:');
+    for (const a of aliases) lines.push(`  - ${yamlScalar(a)}`);
   }
   lines.push('---', '', body.trim(), '');
   return lines.join('\n');
@@ -193,6 +201,8 @@ export function readVp(vpId, options = {}) {
   return {
     vpId: id,
     displayName: String(meta.name || id),
+    displayNameZh: typeof meta.nameZh === 'string' ? String(meta.nameZh) : '',
+    aliases: Array.isArray(meta.aliases) ? meta.aliases.map(String) : [],
     role: String(meta.role || ''),
     traits: Array.isArray(meta.traits) ? meta.traits.map(String) : [],
     modelHint,

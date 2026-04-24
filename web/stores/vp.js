@@ -68,13 +68,25 @@ export const useVpStore = defineStore('vp', {
       return state.vpOrder.length;
     },
     vpById: (state) => (id) => state.vps[id] || null,
+    // task-fix (5-bugs): bilingual display. Locale is read from
+    // localStorage (same key the i18n module uses) so the getter stays
+    // pure-state but tracks user language choice. zh-* locales prefer
+    // displayNameZh; others fall back to displayName, then vpId.
     vpLabel: (state) => (id) => {
       const v = state.vps[id];
-      return v ? (v.displayName || v.vpId || id) : id;
+      if (!v) return id;
+      const locale = (typeof localStorage !== 'undefined' && localStorage.getItem('locale')) || '';
+      if (locale.startsWith('zh') && v.displayNameZh) return v.displayNameZh;
+      return v.displayName || v.vpId || id;
     },
     vpInitial: (state) => (id) => {
       const v = state.vps[id];
-      const src = (v && (v.avatar || v.displayName || v.vpId)) || id || '?';
+      const locale = (typeof localStorage !== 'undefined' && localStorage.getItem('locale')) || '';
+      const preferZh = locale.startsWith('zh');
+      const src = (v && (v.avatar
+        || (preferZh && v.displayNameZh)
+        || v.displayName
+        || v.vpId)) || id || '?';
       return String(src).charAt(0).toUpperCase() || '?';
     },
     vpColor: (state) => (id) => {

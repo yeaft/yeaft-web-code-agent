@@ -1,0 +1,453 @@
+/**
+ * unify-user-memory.css — User Memory page (Unify R6).
+ *
+ * Two panes:
+ *   1. Upper pane: shard-filtered entry list (pin / delete / timestamps).
+ *   2. Lower pane: "Memory folder view" — a scope-tree of MemoryStore
+ *      entries, clickable to expand + reveal content.
+ *
+ * Visual direction: matches the flat, borderless look of the rest of
+ * Unify (no horizontal dividers; spacing does the separating). All
+ * colors pull from --variables.css so the page adapts to light/dark.
+ */
+
+.user-memory-page {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 18px 24px 32px;
+  overflow-y: auto;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+/* ── Breadcrumb / header ──────────────────────────── */
+.um-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.um-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  color: var(--text-muted, #8b8b8b);
+  border: none;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.um-back:hover {
+  background: var(--hover-bg, rgba(0, 0, 0, 0.05));
+  color: var(--text-primary, #222);
+}
+
+.um-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary, #222);
+  margin: 0;
+}
+
+.um-count {
+  font-size: 12px;
+  color: var(--text-muted, #8b8b8b);
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--hover-bg, rgba(0, 0, 0, 0.04));
+}
+
+/* ── Shard filter tabs ────────────────────────────── */
+.um-shard-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.um-shard-tab {
+  background: transparent;
+  border: none;
+  color: var(--text-muted, #8b8b8b);
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: 14px;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.um-shard-tab:hover {
+  background: var(--hover-bg, rgba(0, 0, 0, 0.05));
+  color: var(--text-primary, #222);
+}
+
+.um-shard-tab.active {
+  background: var(--accent-bg, rgba(91, 141, 239, 0.15));
+  color: var(--accent-color, #5B8DEF);
+  font-weight: 500;
+}
+
+/* ── Entry cards (upper pane) ─────────────────────── */
+.um-entries {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.um-entry {
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--surface-bg, #ffffff);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  transition: box-shadow 160ms ease;
+}
+
+.um-entry:hover {
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+.um-entry.pinned {
+  background: var(--pinned-bg, rgba(242, 204, 143, 0.1));
+}
+
+.um-entry-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+
+.um-entry-shard,
+.um-entry-kind {
+  font-size: 11px;
+  color: var(--text-muted, #8b8b8b);
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--hover-bg, rgba(0, 0, 0, 0.04));
+}
+
+.um-entry-tags {
+  display: inline-flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.um-entry-tag {
+  font-size: 11px;
+  color: var(--accent-color, #5B8DEF);
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--accent-bg, rgba(91, 141, 239, 0.1));
+}
+
+.um-entry-spacer {
+  flex: 1;
+}
+
+.um-entry-pin,
+.um-entry-delete {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  opacity: 0.5;
+  transition: opacity 120ms ease, background 120ms ease;
+}
+
+.um-entry-pin:hover,
+.um-entry-delete:hover {
+  opacity: 1;
+  background: var(--hover-bg, rgba(0, 0, 0, 0.05));
+}
+
+.um-entry-pin.active {
+  opacity: 1;
+}
+
+.um-entry-body {
+  font-size: 13px;
+  color: var(--text-primary, #222);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.um-entry-meta {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-muted, #8b8b8b);
+}
+
+/* ── Empty state ──────────────────────────────────── */
+.um-empty {
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--text-muted, #8b8b8b);
+}
+
+.um-empty p {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.um-empty-hint {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+/* ── Scope-tree (folder view, lower pane) ─────────── */
+.um-scope-section {
+  margin-top: 8px;
+}
+
+.um-scope-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.um-scope-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary, #222);
+  margin: 0;
+}
+
+.um-scope-count {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--hover-bg, rgba(0, 0, 0, 0.04));
+  color: var(--text-muted, #8b8b8b);
+}
+
+.um-scope-refresh {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  color: var(--text-muted, #8b8b8b);
+}
+
+.um-scope-refresh:hover {
+  background: var(--hover-bg, rgba(0, 0, 0, 0.05));
+  color: var(--text-primary, #222);
+}
+
+.um-scope-empty {
+  padding: 16px;
+  font-size: 13px;
+  color: var(--text-muted, #8b8b8b);
+  background: var(--hover-bg, rgba(0, 0, 0, 0.03));
+  border-radius: 8px;
+}
+
+.um-scope-empty code {
+  font-family: 'SF Mono', Menlo, monospace;
+  font-size: 12px;
+  padding: 1px 4px;
+  background: var(--code-bg, rgba(0, 0, 0, 0.06));
+  border-radius: 3px;
+}
+
+.um-scope-tree,
+.um-scope-children,
+.um-scope-entries {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.um-scope-children {
+  margin-left: 18px;
+}
+
+.um-scope-node + .um-scope-node {
+  margin-top: 2px;
+}
+
+.um-scope-folder {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.um-scope-folder:hover {
+  background: var(--hover-bg, rgba(0, 0, 0, 0.05));
+}
+
+.um-scope-toggle {
+  display: inline-block;
+  width: 12px;
+  font-size: 11px;
+  color: var(--text-muted, #8b8b8b);
+}
+
+.um-scope-folder-name {
+  font-size: 13px;
+  color: var(--text-primary, #222);
+  font-weight: 500;
+}
+
+.um-scope-folder-count {
+  font-size: 11px;
+  color: var(--text-muted, #8b8b8b);
+}
+
+.um-scope-folder-body {
+  padding-left: 18px;
+  padding-top: 2px;
+  padding-bottom: 6px;
+}
+
+.um-scope-entry {
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.um-scope-entry:hover {
+  background: var(--hover-bg, rgba(0, 0, 0, 0.04));
+}
+
+.um-scope-entry.is-open {
+  background: var(--accent-bg, rgba(91, 141, 239, 0.08));
+}
+
+.um-scope-entry-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.um-scope-entry-name {
+  font-size: 12px;
+  font-family: 'SF Mono', Menlo, monospace;
+  color: var(--text-primary, #222);
+}
+
+.um-scope-entry-kind,
+.um-scope-entry-imp {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--hover-bg, rgba(0, 0, 0, 0.05));
+  color: var(--text-muted, #8b8b8b);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.um-scope-entry-tags {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.um-scope-entry-tag {
+  font-size: 10px;
+  color: var(--accent-color, #5B8DEF);
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--accent-bg, rgba(91, 141, 239, 0.1));
+}
+
+.um-scope-entry-body {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-primary, #222);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 8px;
+  background: var(--code-bg, rgba(0, 0, 0, 0.03));
+  border-radius: 6px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+/* ── Delete-confirm modal ─────────────────────────── */
+.um-delete-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.um-delete-panel {
+  background: var(--surface-bg, #ffffff);
+  padding: 20px;
+  border-radius: 10px;
+  min-width: 320px;
+  max-width: 460px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+}
+
+.um-delete-preview {
+  font-size: 12px;
+  color: var(--text-muted, #8b8b8b);
+  padding: 8px;
+  background: var(--hover-bg, rgba(0, 0, 0, 0.04));
+  border-radius: 6px;
+  margin: 12px 0;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.um-delete-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.um-delete-cancel,
+.um-delete-confirm {
+  padding: 6px 14px;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.um-delete-cancel {
+  background: transparent;
+  color: var(--text-muted, #8b8b8b);
+}
+
+.um-delete-cancel:hover {
+  background: var(--hover-bg, rgba(0, 0, 0, 0.05));
+}
+
+.um-delete-confirm {
+  background: var(--danger-color, #e07a5f);
+  color: #ffffff;
+}
+
+.um-delete-confirm:hover {
+  opacity: 0.9;
+}

@@ -182,6 +182,10 @@ export function serializeVpForWire(vp) {
   return {
     vpId: vp.id,
     displayName: vp.name,
+    // task-fix (5-bugs): carry bilingual name + aliases (incl. pinyin) to
+    // the frontend so @ mention matching + localised rendering work.
+    displayNameZh: typeof vp.nameZh === 'string' ? vp.nameZh : '',
+    aliases: Array.isArray(vp.aliases) ? vp.aliases.slice() : [],
     role: vp.role || '',
     subtitle: vp.role || '',
     traits: Array.isArray(vp.traits) ? vp.traits.slice() : [],
