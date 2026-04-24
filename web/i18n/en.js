@@ -145,6 +145,8 @@ export default {
   'unify.hideDetail': 'Hide tasks panel',
   'unify.debug': 'Debug',
   'unify.debugTurns': 'turns',
+  'unify.debugDetail': 'Detail',
+  'unify.debugConcise': 'Concise',
   'unify.turn': 'Turn {n}',
   'unify.systemPrompt': 'System Prompt',
   'unify.messagesLabel': 'Messages',

@@ -101,6 +101,29 @@ export class LLMAbortError extends Error {
   }
 }
 
+// ─── task-344: Raw payload redaction helper ────────────────────
+
+/**
+ * Redact sensitive headers (API keys / bearer tokens) from a raw request
+ * shape before exposing it to debug UI. Always returns a NEW object — never
+ * mutates the input.
+ *
+ * @param {{ url: string, method: string, headers: object, body: any }} req
+ * @returns {{ url: string, method: string, headers: object, body: any }}
+ */
+export function redactRawRequest(req) {
+  if (!req || typeof req !== 'object') return req;
+  const headers = { ...(req.headers || {}) };
+  // Common auth headers
+  for (const k of Object.keys(headers)) {
+    const lower = k.toLowerCase();
+    if (lower === 'x-api-key' || lower === 'authorization' || lower === 'api-key') {
+      headers[k] = '***';
+    }
+  }
+  return { url: req.url, method: req.method, headers, body: req.body };
+}
+
 // ─── Base Class ────────────────────────────────────────────────
 
 /**

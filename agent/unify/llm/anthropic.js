@@ -13,6 +13,7 @@ import {
   LLMContextError,
   LLMServerError,
   LLMAbortError,
+  redactRawRequest,
 } from './adapter.js';
 import {
   normalizeEffort,
@@ -139,7 +140,7 @@ export class AnthropicAdapter extends LLMAdapter {
    * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, effort?: 'low'|'medium'|'high'|'max', signal?: AbortSignal }} params
    * @returns {AsyncGenerator<import('./adapter.js').StreamEvent>}
    */
-  async *stream({ model, system, messages, tools, maxTokens = 16384, effort, signal }) {
+  async *stream({ model, system, messages, tools, maxTokens = 16384, effort, signal, onRawExchange }) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const body = {
@@ -173,19 +174,40 @@ export class AnthropicAdapter extends LLMAdapter {
     const translatedTools = this.#translateTools(tools);
     if (translatedTools) body.tools = translatedTools;
 
-    const response = await fetch(`${this.#baseUrl}/v1/messages`, {
+    const url = `${this.#baseUrl}/v1/messages`;
+    const headers = {
+      'Content-Type': 'application/json',
+      'x-api-key': this.#apiKey,
+      'anthropic-version': API_VERSION,
+    };
+
+    // task-344: expose raw request (redacted) for debug panel.
+    const rawRequest = redactRawRequest({ url, method: 'POST', headers, body });
+
+    const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': this.#apiKey,
-        'anthropic-version': API_VERSION,
-      },
+      headers,
       body: JSON.stringify(body),
       signal,
     });
 
     if (!response.ok) {
       const errorBody = await response.text();
+      // task-344: capture error response too, then throw.
+      if (onRawExchange) {
+        try {
+          onRawExchange({
+            rawRequest,
+            rawResponse: {
+              status: response.status,
+              headers: response.headers && typeof response.headers.entries === 'function'
+                ? Object.fromEntries(response.headers.entries())
+                : {},
+              body: errorBody,
+            },
+          });
+        } catch { /* ignore */ }
+      }
       throw this.#classifyError(response.status, errorBody);
     }
 
@@ -196,13 +218,21 @@ export class AnthropicAdapter extends LLMAdapter {
     let currentToolCallId = null;
     let currentToolName = null;
     let currentToolInput = '';
+    // task-344: accumulate raw SSE body for debug exposure.
+    let rawSseBody = '';
+    const responseHeaders = response.headers && typeof response.headers.entries === 'function'
+      ? Object.fromEntries(response.headers.entries())
+      : {};
+    const responseStatus = response.status;
 
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
+        const chunkText = decoder.decode(value, { stream: true });
+        buffer += chunkText;
+        rawSseBody += chunkText;
         const lines = buffer.split('\n');
         buffer = lines.pop() || ''; // Keep incomplete line
 
@@ -292,6 +322,20 @@ export class AnthropicAdapter extends LLMAdapter {
       }
     } finally {
       reader.releaseLock();
+      // task-344: emit raw exchange after stream completes (or errors).
+      if (onRawExchange) {
+        try {
+          onRawExchange({
+            rawRequest,
+            rawResponse: {
+              status: responseStatus,
+              headers: responseHeaders,
+              body: rawSseBody,
+              format: 'sse',
+            },
+          });
+        } catch { /* ignore */ }
+      }
     }
   }
 

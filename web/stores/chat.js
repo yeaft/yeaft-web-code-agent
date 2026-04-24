@@ -172,6 +172,12 @@ export const useChatStore = defineStore('chat', {
     unifyStatus: null,            // { skills, mcpServers, tools } 从 session_ready 获取
     unifyAvailableModels: [],     // 可用模型列表 [{ id, provider, label }]
     unifyDebugTurns: [],          // Debug panel: per-turn debug info from engine
+    // task-344: global toggle for detail (full raw API payload) vs concise
+    // debug view. Default concise. Persisted via localStorage.
+    unifyDebugDetailMode: (() => {
+      try { return localStorage.getItem('unifyDebugDetailMode') === '1'; }
+      catch { return false; }
+    })(),
 
     // ★ task-301: Experimental new sidebar V2 (thread list + task tree).
     // Default off — opt-in via Unify Settings toggle or ?sidebarV2=1 URL
@@ -677,6 +683,9 @@ export const useChatStore = defineStore('chat', {
             latencyMs: event.latencyMs,
             ttfbMs: event.ttfbMs,
             stopReason: event.stopReason,
+            // task-344: raw API request / response payload (redacted server-side).
+            rawRequest: event.rawRequest || null,
+            rawResponse: event.rawResponse || null,
           });
           break;
 
@@ -1151,6 +1160,14 @@ export const useChatStore = defineStore('chat', {
         agentId: this.unifyAgentId,
       });
     },
+    // task-344: toggle the Unify debug panel "detail" mode (shows full raw
+     // API request + response payload). Persisted to localStorage.
+    setUnifyDebugDetailMode(enabled) {
+      this.unifyDebugDetailMode = !!enabled;
+      try { localStorage.setItem('unifyDebugDetailMode', enabled ? '1' : '0'); }
+      catch { /* ignore */ }
+    },
+
     clearUnifyMessages() {
       const oldConvId = this.unifyConversationId;
       if (oldConvId) {

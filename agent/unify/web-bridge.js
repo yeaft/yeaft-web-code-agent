@@ -898,6 +898,9 @@ function handleEngineEvent(event, threadId, hctx) {
         latencyMs: event.latencyMs,
         ttfbMs: event.ttfbMs,
         stopReason: event.stopReason,
+        // task-344: forward raw request / response (redacted) to web debug panel.
+        rawRequest: event.rawRequest,
+        rawResponse: event.rawResponse,
         threadId,
       });
       break;

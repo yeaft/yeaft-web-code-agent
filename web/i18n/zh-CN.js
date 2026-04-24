@@ -145,6 +145,8 @@ export default {
   'unify.hideDetail': '隐藏任务面板',
   'unify.debug': '调试',
   'unify.debugTurns': '轮',
+  'unify.debugDetail': '详细',
+  'unify.debugConcise': '精简',
   'unify.turn': '第 {n} 轮',
   'unify.systemPrompt': '系统提示',
   'unify.messagesLabel': '消息',

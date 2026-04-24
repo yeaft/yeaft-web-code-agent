@@ -801,6 +801,40 @@
   color: var(--text-primary);
 }
 
+/* task-344: detail/concise toggle chip in debug header */
+.unify-debug-toggle-chip {
+  margin-left: auto;
+  padding: 2px 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  border: 1px solid var(--border-color, #ddd);
+  background: transparent;
+  color: var(--text-secondary, #666);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.unify-debug-toggle-chip:hover {
+  border-color: var(--accent, #0969da);
+  color: var(--accent, #0969da);
+}
+.unify-debug-toggle-chip.active {
+  background: var(--accent, #0969da);
+  color: #fff;
+  border-color: var(--accent, #0969da);
+}
+
+.unify-debug-pre-raw {
+  max-height: 400px;
+  overflow: auto;
+  font-size: 11px;
+  background: var(--bg-subtle, #f6f8fa);
+  padding: 8px;
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
 .unify-debug-count {
   font-size: 11px;
   color: var(--text-muted);

@@ -27,6 +27,7 @@ import {
   LLMContextError,
   LLMServerError,
   LLMAbortError,
+  redactRawRequest,
 } from './adapter.js';
 import {
   normalizeEffort,
@@ -199,7 +200,7 @@ export class ChatCompletionsAdapter extends LLMAdapter {
    * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, effort?: 'low'|'medium'|'high'|'max', extraBody?: object, signal?: AbortSignal }} params
    * @returns {AsyncGenerator<import('./adapter.js').StreamEvent>}
    */
-  async *stream({ model, system, messages, tools, maxTokens = 16384, effort, extraBody, signal }) {
+  async *stream({ model, system, messages, tools, maxTokens = 16384, effort, extraBody, signal, onRawExchange }) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const body = {
@@ -231,18 +232,38 @@ export class ChatCompletionsAdapter extends LLMAdapter {
     // extraBody allows callers to pass through any additional/override parameters
     if (extraBody) Object.assign(body, extraBody);
 
-    const response = await fetch(`${this.#baseUrl}/chat/completions`, {
+    const url = `${this.#baseUrl}/chat/completions`;
+    const headers = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${this.#apiKey}`,
+    };
+
+    // task-344: expose raw request (redacted) for debug panel.
+    const rawRequest = redactRawRequest({ url, method: 'POST', headers, body });
+
+    const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.#apiKey}`,
-      },
+      headers,
       body: JSON.stringify(body),
       signal,
     });
 
     if (!response.ok) {
       const errorBody = await response.text();
+      if (onRawExchange) {
+        try {
+          onRawExchange({
+            rawRequest,
+            rawResponse: {
+              status: response.status,
+              headers: response.headers && typeof response.headers.entries === 'function'
+                ? Object.fromEntries(response.headers.entries())
+                : {},
+              body: errorBody,
+            },
+          });
+        } catch { /* ignore */ }
+      }
       throw this.#classifyError(response.status, errorBody);
     }
 
@@ -250,6 +271,12 @@ export class ChatCompletionsAdapter extends LLMAdapter {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    // task-344: accumulate raw SSE body + headers/status for debug exposure.
+    let rawSseBody = '';
+    const responseHeaders = response.headers && typeof response.headers.entries === 'function'
+      ? Object.fromEntries(response.headers.entries())
+      : {};
+    const responseStatus = response.status;
 
     // Tool call accumulation — Chat Completions sends tool args as fragments
     // keyed by index within the delta.tool_calls array
@@ -261,7 +288,9 @@ export class ChatCompletionsAdapter extends LLMAdapter {
         const { done, value } = await reader.read();
         if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
+        const chunkText = decoder.decode(value, { stream: true });
+        buffer += chunkText;
+        rawSseBody += chunkText;
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
 
@@ -345,6 +374,20 @@ export class ChatCompletionsAdapter extends LLMAdapter {
       }
     } finally {
       reader.releaseLock();
+      // task-344: emit raw exchange after stream completes.
+      if (onRawExchange) {
+        try {
+          onRawExchange({
+            rawRequest,
+            rawResponse: {
+              status: responseStatus,
+              headers: responseHeaders,
+              body: rawSseBody,
+              format: 'sse',
+            },
+          });
+        } catch { /* ignore */ }
+      }
     }
   }
 
