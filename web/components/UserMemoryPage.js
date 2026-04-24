@@ -103,7 +103,7 @@ export default {
 
       <!-- task-fix: Memory folder (scope tree) from MemoryStore.
            User asked for "folder 结构" view of ~/.yeaft/memory/entries/*.md,
-           which are organised by their `scope` frontmatter
+           which are organised by their 'scope' frontmatter
            (e.g. "work/claude-web-chat/auth"). -->
       <section class="um-scope-section" v-if="scopeLoaded || scopeEntries.length > 0">
         <header class="um-scope-header">
