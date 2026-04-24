@@ -111,8 +111,67 @@ export class EngineInstance {
     // Snapshot of messages passed to the engine; the engine treats this
     // as read-only (it builds its own conversation array internally).
     const snapshot = [...this.#messages];
-    let assistantText = '';
-    const assistantToolCalls = [];
+
+    // task-fix: chat-completions protocol requires every `tool_call_id`
+    // on an assistant message to be paired with a matching `role:'tool'`
+    // message in history. Without this, turn N+1 sends `tool_calls`
+    // orphaned from their results and OpenAI-compatible proxies return
+    // `invalid_request_body: No tool output found for function call`.
+    //
+    // A single query may contain MULTIPLE internal iterations (assistant
+    // → tools → assistant → tools → … → assistant-final). We mirror
+    // engine.js's own conversationMessages structure so the same
+    // interleaved pairing is preserved for subsequent turns:
+    //
+    //   [user, assistant(text1, toolCalls1), tool r1a, tool r1b,
+    //          assistant(text2, toolCalls2), tool r2a,
+    //          assistant(finalText)]
+    //
+    // We flush one assistant message per `turn_end` boundary and
+    // append tool results as they stream in. Any assistant turn with
+    // toolCalls must have all its `role:'tool'` results paired before
+    // the NEXT assistant message (or placeholders — see below).
+    const newMessages = [];
+    let curText = '';
+    let curToolCalls = [];
+    let curToolResults = []; // buffered per-iteration, flushed AFTER assistant
+    const seenToolResults = new Set();
+
+    function flushAssistantTurn() {
+      // Emit the assistant message for the current iteration. Preserve
+      // an empty-content assistant (pure tool_calls) — some providers
+      // require content:'' rather than omission. The chat-completions
+      // adapter normalises either shape.
+      const assistantMsg = { role: 'assistant', content: curText };
+      if (curToolCalls.length > 0) {
+        assistantMsg.toolCalls = curToolCalls.map(tc => ({
+          id: tc.id, name: tc.name, input: tc.input,
+        }));
+      }
+      // Skip empty / no-op flushes (can happen on pre-first-turn boundaries).
+      if (curText || curToolCalls.length > 0) {
+        newMessages.push(assistantMsg);
+      }
+      // Any buffered tool results for THIS iteration must immediately
+      // follow the assistant that produced them — the adapter's history
+      // serialiser pairs by order-in-history.
+      for (const tr of curToolResults) newMessages.push(tr);
+      // Synthesize placeholders for unmatched toolCalls (abort paths).
+      for (const tc of curToolCalls) {
+        if (!seenToolResults.has(tc.id)) {
+          newMessages.push({
+            role: 'tool',
+            toolCallId: tc.id,
+            content: '[tool call did not produce a result — aborted or errored before completion]',
+            isError: true,
+          });
+          seenToolResults.add(tc.id);
+        }
+      }
+      curText = '';
+      curToolCalls = [];
+      curToolResults = [];
+    }
 
     for await (const event of this.#engine.query({ prompt, mode, messages: snapshot, signal })) {
       // Re-tag every event with the bound threadId. Non-object events
@@ -123,25 +182,58 @@ export class EngineInstance {
         : event;
       yield tagged;
 
-      // Track assistant reply to persist after stream ends. Only tag the
-      // natural stream types — not our injected turn_start/turn_end.
-      if (event && typeof event === 'object') {
-        if (event.type === 'text_delta' && typeof event.text === 'string') {
-          assistantText += event.text;
-        } else if (event.type === 'tool_call') {
-          assistantToolCalls.push({ id: event.id, name: event.name, input: event.input });
-        }
+      if (!event || typeof event !== 'object') continue;
+
+      switch (event.type) {
+        case 'text_delta':
+          if (typeof event.text === 'string') curText += event.text;
+          break;
+        case 'tool_call':
+          curToolCalls.push({ id: event.id, name: event.name, input: event.input });
+          break;
+        case 'tool_end':
+          if (event.id) {
+            // Mirror engine.js: tool result body is the `output` string;
+            // `isError:true` is carried forward. BUFFER here — flush
+            // places the assistant message FIRST, then these results,
+            // so the order [assistant(toolCalls), tool r1, tool r2]
+            // holds (required by OpenAI pairing rules).
+            const entry = {
+              role: 'tool',
+              toolCallId: event.id,
+              content: typeof event.output === 'string' ? event.output : String(event.output ?? ''),
+            };
+            if (event.isError) entry.isError = true;
+            curToolResults.push(entry);
+            seenToolResults.add(event.id);
+          }
+          break;
+        case 'turn_end':
+          // Boundary between internal iterations. engine.js order is:
+          //   [text_delta*] [tool_call*] [tool_start tool_end]*
+          //   then turn_end{stopReason:'tool_use'}   (or 'end_turn')
+          // Flushing here writes the assistant message, then its
+          // buffered tool results, then placeholders for any orphans.
+          flushAssistantTurn();
+          break;
+        default:
+          break;
       }
     }
 
-    // Append user + assistant to the owned messages array so subsequent
-    // queries on this thread carry conversational context.
-    this.#messages.push({ role: 'user', content: prompt });
-    const assistantMsg = { role: 'assistant', content: assistantText };
-    if (assistantToolCalls.length > 0) {
-      assistantMsg.toolCalls = assistantToolCalls;
+    // Final safety flush — if the engine terminated without a final
+    // turn_end (shouldn't happen in normal flows, but abort/error
+    // paths sometimes skip it), flush whatever we have.
+    if (curText || curToolCalls.length > 0 || curToolResults.length > 0) {
+      flushAssistantTurn();
     }
-    this.#messages.push(assistantMsg);
+
+    // Append user + all captured messages to the owned array so
+    // subsequent queries on this thread carry conversational context.
+    this.#messages.push({ role: 'user', content: prompt });
+    for (const m of newMessages) {
+      this.#messages.push(m);
+    }
   }
 
   /**
