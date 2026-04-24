@@ -47,16 +47,24 @@ describe('Unify History Loading — Agent (web-bridge.js)', () => {
   });
 
   it('restores per-thread history from ConversationStore on session init in handleUnifyChat (task-320)', () => {
-    // The lazy-init block in handleUnifyChat should restore messagesByThread
+    // The lazy-init block in handleUnifyChat should restore messagesByThread.
+    // task-fix (three-bugs): the inline restore loop was refactored into
+    // `restoreThreadHistoryFromRecent(recent)` so tool messages + toolCalls
+    // survive the restore. The helper still calls conversationStore.loadRecent
+    // and still clears + populates messagesByThread.
     const chatFn = webBridge.slice(webBridge.indexOf('async function handleUnifyChat'));
     const initBlock = chatFn.slice(0, chatFn.indexOf('Per-call AbortController'));
     expect(initBlock).toContain('conversationStore.loadRecent');
-    expect(initBlock).toContain('messagesByThread.clear()');
-    expect(initBlock).toContain('getThreadMessages(');
+    expect(initBlock).toContain('restoreThreadHistoryFromRecent');
+    // The helper itself must call the expected primitives.
+    expect(webBridge).toContain('messagesByThread.clear()');
+    expect(webBridge).toContain('getThreadMessages(');
   });
 
-  it('filters only user/assistant roles when restoring per-thread history', () => {
-    expect(webBridge).toContain("m.role !== 'user' && m.role !== 'assistant'");
+  it('filters to user/assistant/tool roles when restoring per-thread history', () => {
+    // task-fix (three-bugs): tool role is now retained so paired
+    // tool_call_id messages reach the next turn.
+    expect(webBridge).toContain("m.role !== 'user' && m.role !== 'assistant' && m.role !== 'tool'");
   });
 
   it('sends user messages with message wrapper for handleClaudeOutput compatibility', () => {

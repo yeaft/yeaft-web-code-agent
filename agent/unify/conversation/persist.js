@@ -71,11 +71,24 @@ function serializeMessage(msg) {
   fm.push(`tokens_est: ${tokensEst}`);
 
   // Tool calls as YAML array (simplified)
+  // task-fix: persist `input` as base64-encoded JSON so multi-line tool
+  // arguments round-trip safely (YAML string escaping is brittle for
+  // JSON blobs with newlines / quotes). Paired with the parser below.
   if (msg.toolCalls && msg.toolCalls.length > 0) {
     fm.push(`toolCalls:`);
     for (const tc of msg.toolCalls) {
       fm.push(`  - id: ${tc.id}`);
       fm.push(`    name: ${tc.name}`);
+      if (tc.input !== undefined) {
+        try {
+          const b64 = Buffer.from(JSON.stringify(tc.input)).toString('base64');
+          fm.push(`    inputB64: ${b64}`);
+        } catch {
+          // best-effort: if input isn't JSON-serializable, skip it;
+          // restoring a tool_call without input is still better than
+          // dropping the whole record.
+        }
+      }
     }
   }
 
@@ -138,13 +151,21 @@ export function parseMessage(raw) {
       for (const entry of entries) {
         const tc = {};
         for (const line of entry.split('\n')) {
-          const trimmed = line.trim();
+          // task-fix: the split regex only strips `\n  - ` between
+          // entries, leaving a leading `- ` on the first line of the
+          // first entry. Strip it here so `- id: xxx` parses as `id`.
+          const trimmed = line.trim().replace(/^-\s+/, '');
           const ci = trimmed.indexOf(':');
           if (ci === -1) continue;
           const k = trimmed.slice(0, ci).trim();
           const v = trimmed.slice(ci + 1).trim();
           if (k === 'id') tc.id = v;
           if (k === 'name') tc.name = v;
+          if (k === 'inputB64') {
+            try {
+              tc.input = JSON.parse(Buffer.from(v, 'base64').toString('utf8'));
+            } catch { /* best-effort: leave input undefined */ }
+          }
         }
         if (tc.id && tc.name) toolCalls.push(tc);
       }

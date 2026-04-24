@@ -67,15 +67,26 @@ describe('web-bridge conversation history (task-320 per-thread map)', () => {
   });
 
   it('appends assistant message with plain text content to the per-thread bucket', () => {
-    expect(src).toContain("threadMessages.push({ role: 'assistant', content: fullText })");
+    // task-fix (three-bugs): the assistant push was expanded from a
+    // single literal object to a mutable `assistantMsg` so toolCalls
+    // can be attached before the push. The invariant is unchanged:
+    // an assistant entry with `content: fullText` still ends up in
+    // threadMessages.
+    expect(src).toMatch(/const assistantMsg = \{ role: 'assistant', content: fullText \}/);
+    expect(src).toContain('threadMessages.push(assistantMsg)');
   });
 
   it('builds fullText from collected text parts', () => {
     expect(src).toContain('assistantTextParts.join');
   });
 
-  it('only appends assistant message when fullText is non-empty', () => {
-    expect(src).toContain('if (fullText)');
+  it('only appends assistant message when fullText or tool calls are present', () => {
+    // task-fix (three-bugs): the gate widened so tool-only turns
+    // (empty assistant text) still record the toolCalls. Without
+    // this, the next turn would omit the `tool_calls` array and
+    // the paired `role:'tool'` results would orphan → 400 from
+    // chat-completions.
+    expect(src).toMatch(/if \(fullText \|\| toolCallsAccum\.length > 0\)/);
   });
 
   it('clears per-thread history on consolidation event (scoped to the event thread)', () => {

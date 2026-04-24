@@ -700,8 +700,26 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       break;
     }
 
-    default:
+    default: {
+      // task-fix: generic relay for all `unify_*` messages so any new
+      // agent-router case (unify_vp_*, unify_user_memory_*, unify_*_group,
+      // unify_dream_*, etc.) works without a dedicated server case.
+      // Without this, messages like `unify_vp_subscribe` arrive at the
+      // server, fall through to default, return false, and are silently
+      // dropped — which is why the GroupCreateWizard's "VP 加载中..."
+      // hung forever.
+      if (typeof msg.type === 'string' && msg.type.startsWith('unify_')) {
+        const relayAgentId = msg.agentId || client.currentAgent;
+        if (!relayAgentId) return true; // swallow silently
+        if (!await checkAgentAccess(relayAgentId)) return true;
+        // Forward the entire message minus the agentId field; the agent
+        // router is the authoritative consumer of the payload shape.
+        const { agentId: _discard, ...rest } = msg;
+        await forwardToAgent(relayAgentId, rest);
+        return true;
+      }
       return false; // Not handled
+    }
   }
   return true; // Handled
 }

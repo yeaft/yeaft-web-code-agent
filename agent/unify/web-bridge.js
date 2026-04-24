@@ -86,6 +86,39 @@ function getThreadMessages(threadId) {
   return arr;
 }
 
+/**
+ * Restore per-thread message history from persisted conversation store.
+ *
+ * task-fix: accept `role:'tool'` messages AND preserve `toolCalls` /
+ * `toolCallId` fields. Without this, chat-completions serialization
+ * emits `tool_calls` without paired `role:'tool'` results, causing
+ * "No tool output found for function call" 400s after the first tool
+ * use across any restart / session-ready / model-switch event.
+ *
+ * @param {Array<object>} recent — output of conversationStore.loadRecent()
+ */
+function restoreThreadHistoryFromRecent(recent) {
+  messagesByThread.clear();
+  for (const m of recent) {
+    // Keep user, assistant, AND tool messages. Tool messages are required
+    // for the chat-completions `tool_call_id` pairing.
+    if (m.role !== 'user' && m.role !== 'assistant' && m.role !== 'tool') continue;
+    const tid = m.threadId || MAIN_THREAD_ID;
+    const bucket = getThreadMessages(tid);
+    const entry = { role: m.role, content: m.content };
+    if (m.toolCallId) entry.toolCallId = m.toolCallId;
+    if (Array.isArray(m.toolCalls) && m.toolCalls.length > 0) {
+      entry.toolCalls = m.toolCalls.map(tc => ({
+        id: tc.id,
+        name: tc.name,
+        input: tc.input,
+      }));
+    }
+    if (m.isError) entry.isError = true;
+    bucket.push(entry);
+  }
+}
+
 /** Whether we've already sent a permission warning to the UI */
 let _permissionDiagnosticSent = false;
 
@@ -255,6 +288,41 @@ export function handleUnifyUserMemoryWrite(msg) {
  */
 export function handleUnifyUserMemoryRemove(msg) {
   _handleUnifyUserMemoryRemove(msg, sendUnifyEvent);
+}
+
+/**
+ * task-fix: list MemoryStore entries as a scope-tree for the
+ * UserMemoryPage "folder view". Entries come from MemoryStore.listEntries()
+ * and are grouped client-side by their `scope` (a `/`-separated path like
+ * `work/claude-web-chat/auth`).
+ *
+ * Request shape:  { type: 'unify_memory_scope_list', requestId? }
+ * Reply shape:    { type: 'memory_scope_snapshot',
+ *                   entries: Array<{name,scope,kind,tags,importance,
+ *                                    frequency,created_at,updated_at,
+ *                                    content}>,
+ *                   requestId? }
+ */
+export function handleUnifyMemoryScopeList(msg) {
+  const requestId = msg && typeof msg.requestId === 'string' ? msg.requestId : undefined;
+  try {
+    const store = session && session.memoryStore;
+    const entries = store && typeof store.listEntries === 'function'
+      ? store.listEntries()
+      : [];
+    sendUnifyEvent({
+      type: 'memory_scope_snapshot',
+      entries,
+      ...(requestId ? { requestId } : {}),
+    });
+  } catch (err) {
+    sendUnifyEvent({
+      type: 'memory_scope_snapshot',
+      entries: [],
+      error: String(err && err.message || err),
+      ...(requestId ? { requestId } : {}),
+    });
+  }
 }
 
 export function handleUnifyVpRead(msg) {
@@ -754,7 +822,7 @@ function forwardPipelineEvent(ev, ctx) {
  *
  * @param {object} event — engine event (text_delta / tool_call / …)
  * @param {string} threadId — owning thread id (from envelope)
- * @param {{assistantTextParts:string[], resetQueryTimer:Function}} hctx
+ * @param {{assistantTextParts:string[], toolCallsAccum:Array, toolResultsAccum:Array, resetQueryTimer:Function}} hctx
  */
 function handleEngineEvent(event, threadId, hctx) {
   hctx.resetQueryTimer();
@@ -790,6 +858,16 @@ function handleEngineEvent(event, threadId, hctx) {
       break;
 
     case 'tool_call':
+      // Capture tool_call for the assistant message's toolCalls array so the
+      // next turn's history correctly pairs `tool_calls` with `role:'tool'`
+      // results (fixes "No tool output found for function call" 400s).
+      if (hctx.toolCallsAccum) {
+        hctx.toolCallsAccum.push({
+          id: event.id,
+          name: event.name,
+          input: event.input,
+        });
+      }
       // Finish any in-progress text streaming so UI shows typing dots
       sendUnifyOutput({
         type: 'assistant',
@@ -820,6 +898,17 @@ function handleEngineEvent(event, threadId, hctx) {
       break;
 
     case 'tool_end':
+      // Capture tool result for the next-turn history so the paired
+      // `role:'tool'` message is included when we hand `messages` back to
+      // engine.query() (chat-completions requires tool_call_id pairing).
+      if (hctx.toolResultsAccum) {
+        hctx.toolResultsAccum.push({
+          role: 'tool',
+          toolCallId: event.id,
+          content: typeof event.output === 'string' ? event.output : JSON.stringify(event.output ?? ''),
+          isError: !!event.isError,
+        });
+      }
       sendUnifyOutput({
         type: 'user',
         tool_use_result: [{
@@ -1113,14 +1202,9 @@ export async function handleUnifyChat(msg) {
 
       // Restore per-thread history from persisted conversation store.
       // task-320: bucket by threadId so each thread keeps its own context.
-      messagesByThread.clear();
-      const recent = session.conversationStore.loadRecent(50);
-      for (const m of recent) {
-        if (m.role !== 'user' && m.role !== 'assistant') continue;
-        const tid = m.threadId || MAIN_THREAD_ID;
-        const bucket = getThreadMessages(tid);
-        bucket.push({ role: m.role, content: m.content });
-      }
+      // task-fix: use restoreThreadHistoryFromRecent() so tool messages
+      // and toolCalls/toolCallId survive the restore.
+      restoreThreadHistoryFromRecent(session.conversationStore.loadRecent(50));
 
       // Notify UI: session is ready with model info + conversationId
       sendUnifyEvent({
@@ -1176,6 +1260,11 @@ export async function handleUnifyChat(msg) {
     try {
     // ─── Collect assistant response for conversation history ──
     let assistantTextParts = [];
+    // task-fix: preserve toolCalls + tool_result pairings across turns so
+    // the next engine.query({messages}) handoff stays valid for OpenAI
+    // chat-completions (avoids "No tool output found for function call").
+    const toolCallsAccum = [];
+    const toolResultsAccum = [];
 
     // task-310: route via Dispatcher pipeline (queue → router → registry →
     // EngineInstance). The input is enqueued first so the UI observes the
@@ -1203,6 +1292,8 @@ export async function handleUnifyChat(msg) {
     const pipelineCtx = {
       onEngineEvent: (event, threadId) => handleEngineEvent(event, threadId, {
         assistantTextParts,
+        toolCallsAccum,
+        toolResultsAccum,
         resetQueryTimer,
       }),
       onError: (err) => { throw err; },
@@ -1226,13 +1317,38 @@ export async function handleUnifyChat(msg) {
 
     // ─── Query complete — accumulate messages for context continuity ──
     // task-320: per-thread history (no cross-thread contamination).
+    // task-fix: when the turn made tool calls, the assistant message MUST
+    // carry `toolCalls` AND each paired `role:'tool'` result must be
+    // appended — otherwise the next turn's chat-completions serializer
+    // emits `tool_calls` without matching `tool` messages → proxy 400
+    // "No tool output found for function call call_xxx".
     const historyThread = resolvedThreadId || MAIN_THREAD_ID;
     const threadMessages = getThreadMessages(historyThread);
     threadMessages.push({ role: 'user', content: cleanedPrompt });
 
     const fullText = assistantTextParts.join('');
-    if (fullText) {
-      threadMessages.push({ role: 'assistant', content: fullText });
+    if (fullText || toolCallsAccum.length > 0) {
+      const assistantMsg = { role: 'assistant', content: fullText };
+      if (toolCallsAccum.length > 0) {
+        assistantMsg.toolCalls = toolCallsAccum.map(tc => ({
+          id: tc.id,
+          name: tc.name,
+          input: tc.input,
+        }));
+      }
+      threadMessages.push(assistantMsg);
+
+      // Append paired tool results, in order. Chat-completions requires
+      // one `role:'tool'` message per `tool_call_id` right after the
+      // assistant message that emitted them.
+      for (const tr of toolResultsAccum) {
+        threadMessages.push({
+          role: 'tool',
+          toolCallId: tr.toolCallId,
+          content: tr.content,
+          isError: tr.isError,
+        });
+      }
     }
 
     // ─── Signal turn end to UI ──
@@ -1627,14 +1743,9 @@ export async function handleUnifyLoadHistory(msg) {
 
     // Restore per-thread history from persisted conversation store.
     // task-320: bucket by threadId so each thread keeps its own context.
-    messagesByThread.clear();
-    const recent = session.conversationStore.loadRecent(50);
-    for (const m of recent) {
-      if (m.role !== 'user' && m.role !== 'assistant') continue;
-      const tid = m.threadId || MAIN_THREAD_ID;
-      const bucket = getThreadMessages(tid);
-      bucket.push({ role: m.role, content: m.content });
-    }
+    // task-fix: use restoreThreadHistoryFromRecent() so tool messages
+    // and toolCalls/toolCallId survive the restore.
+    restoreThreadHistoryFromRecent(session.conversationStore.loadRecent(50));
   }
 
   // task-322: replay `session_ready` + `thread_list_updated` UNCONDITIONALLY
@@ -1739,12 +1850,9 @@ export async function resetUnifySession() {
     unifyConversationId = `unify-${Date.now()}`;
 
     // Restore per-thread history for LLM context (task-320).
-    const recent = session.conversationStore.loadRecent(50);
-    for (const m of recent) {
-      if (m.role !== 'user' && m.role !== 'assistant') continue;
-      const tid = m.threadId || MAIN_THREAD_ID;
-      getThreadMessages(tid).push({ role: m.role, content: m.content });
-    }
+    // task-fix: use restoreThreadHistoryFromRecent() so tool messages
+    // and toolCalls/toolCallId survive the restore.
+    restoreThreadHistoryFromRecent(session.conversationStore.loadRecent(50));
 
     sendUnifyEvent({
       type: 'session_ready',

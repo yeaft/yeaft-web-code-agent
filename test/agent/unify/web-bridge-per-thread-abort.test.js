@@ -126,7 +126,10 @@ describe('task-320: per-thread conversation history (messagesByThread)', () => {
 
   it('appends to the per-thread bucket resolved from the router', () => {
     expect(src).toMatch(/threadMessages\.push\(\{\s*role:\s*'user',\s*content:\s*cleanedPrompt\s*\}\)/);
-    expect(src).toMatch(/threadMessages\.push\(\{\s*role:\s*'assistant',\s*content:\s*fullText\s*\}\)/);
+    // task-fix (three-bugs): the assistant push is now through an
+    // `assistantMsg` variable so toolCalls can be attached first.
+    expect(src).toMatch(/const assistantMsg = \{ role: 'assistant', content: fullText \}/);
+    expect(src).toContain('threadMessages.push(assistantMsg)');
   });
 
   it('consolidate event clears only the emitting thread\'s bucket', () => {

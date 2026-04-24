@@ -101,6 +101,70 @@ export default {
         <p class="um-empty-hint">{{ $t('unify.userMemory.emptyHint') }}</p>
       </div>
 
+      <!-- task-fix: Memory folder (scope tree) from MemoryStore.
+           User asked for "folder 结构" view of ~/.yeaft/memory/entries/*.md,
+           which are organised by their `scope` frontmatter
+           (e.g. "work/claude-web-chat/auth"). -->
+      <section class="um-scope-section" v-if="scopeLoaded || scopeEntries.length > 0">
+        <header class="um-scope-header">
+          <h3 class="um-scope-title">📁 Memory · folder view</h3>
+          <span class="um-scope-count" v-if="scopeEntries.length > 0">{{ scopeEntries.length }}</span>
+          <button type="button" class="um-scope-refresh" @click="refreshScope" title="Refresh">↻</button>
+        </header>
+
+        <div class="um-scope-empty" v-if="scopeLoaded && scopeEntries.length === 0">
+          <p>No memory entries yet. Entries accumulate under <code>~/.yeaft/memory/entries/</code> as the engine learns from conversation.</p>
+        </div>
+
+        <ul class="um-scope-tree" v-else>
+          <li v-for="node in scopeTree" :key="node.path" class="um-scope-node">
+            <div class="um-scope-folder" @click="toggleFolder(node.path)">
+              <span class="um-scope-toggle">{{ expanded[node.path] ? '▾' : '▸' }}</span>
+              <span class="um-scope-folder-name">{{ node.label }}</span>
+              <span class="um-scope-folder-count">({{ node.totalCount }})</span>
+            </div>
+            <div v-if="expanded[node.path]" class="um-scope-folder-body">
+              <ul v-if="node.entries.length > 0" class="um-scope-entries">
+                <li v-for="entry in node.entries" :key="entry.name" class="um-scope-entry">
+                  <div class="um-scope-entry-header">
+                    <span class="um-scope-entry-name">{{ entry.name }}</span>
+                    <span class="um-scope-entry-kind" v-if="entry.kind">{{ entry.kind }}</span>
+                    <span class="um-scope-entry-imp" v-if="entry.importance">{{ entry.importance }}</span>
+                  </div>
+                  <div class="um-scope-entry-tags" v-if="entry.tags && entry.tags.length">
+                    <span class="um-scope-entry-tag" v-for="tag in entry.tags" :key="tag">#{{ tag }}</span>
+                  </div>
+                  <div class="um-scope-entry-body" v-if="entry.content">{{ truncateBody(entry.content) }}</div>
+                </li>
+              </ul>
+              <ul v-if="node.children.length > 0" class="um-scope-children">
+                <li v-for="child in node.children" :key="child.path" class="um-scope-node">
+                  <div class="um-scope-folder" @click="toggleFolder(child.path)">
+                    <span class="um-scope-toggle">{{ expanded[child.path] ? '▾' : '▸' }}</span>
+                    <span class="um-scope-folder-name">{{ child.label }}</span>
+                    <span class="um-scope-folder-count">({{ child.totalCount }})</span>
+                  </div>
+                  <div v-if="expanded[child.path]" class="um-scope-folder-body">
+                    <ul v-if="child.entries.length > 0" class="um-scope-entries">
+                      <li v-for="entry in child.entries" :key="entry.name" class="um-scope-entry">
+                        <div class="um-scope-entry-header">
+                          <span class="um-scope-entry-name">{{ entry.name }}</span>
+                          <span class="um-scope-entry-kind" v-if="entry.kind">{{ entry.kind }}</span>
+                        </div>
+                        <div class="um-scope-entry-tags" v-if="entry.tags && entry.tags.length">
+                          <span class="um-scope-entry-tag" v-for="tag in entry.tags" :key="tag">#{{ tag }}</span>
+                        </div>
+                        <div class="um-scope-entry-body" v-if="entry.content">{{ truncateBody(entry.content) }}</div>
+                      </li>
+                    </ul>
+                  </div>
+                </li>
+              </ul>
+            </div>
+          </li>
+        </ul>
+      </section>
+
       <!-- Delete confirm modal -->
       <div v-if="deleteConfirm.open" class="um-delete-overlay" @click.self="cancelDelete">
         <div class="um-delete-panel">
@@ -122,6 +186,8 @@ export default {
 
     const activeShard = Vue.ref(null);
     const deleteConfirm = Vue.reactive({ open: false, entryId: null, body: '' });
+    // task-fix: local expand state for the scope-tree folder view.
+    const expanded = Vue.reactive({});
 
     // ── Getters ───────────────────────────────────────────
 
@@ -219,6 +285,89 @@ export default {
       } catch { /* best-effort */ }
     }
 
+    // ── task-fix: scope-tree (memory folder view) ─────────────
+
+    const scopeEntries = Vue.computed(() => store?.unifyMemoryScopeEntries || []);
+    const scopeLoaded = Vue.computed(() => !!store?.unifyMemoryScopeLoaded);
+
+    /**
+     * Build a folder tree from flat entry list.
+     * Entries are grouped by their `scope` path (e.g. "work/claude-web-chat/auth")
+     * into nested folders. Top-level grouping is on the first path segment;
+     * deeper segments collapse into a single child folder (simple two-level
+     * tree is enough for real usage; deeper paths flatten into the child).
+     */
+    const scopeTree = Vue.computed(() => {
+      const roots = new Map();
+      for (const e of scopeEntries.value) {
+        const scopePath = (e && typeof e.scope === 'string' && e.scope.length > 0)
+          ? e.scope
+          : 'uncategorized';
+        const parts = scopePath.split('/').filter(Boolean);
+        const top = parts[0] || 'uncategorized';
+        if (!roots.has(top)) {
+          roots.set(top, {
+            path: top,
+            label: top,
+            entries: [],
+            childMap: new Map(),
+            totalCount: 0,
+          });
+        }
+        const rootNode = roots.get(top);
+        rootNode.totalCount++;
+        if (parts.length <= 1) {
+          rootNode.entries.push(e);
+        } else {
+          const childKey = parts.slice(1).join('/');
+          if (!rootNode.childMap.has(childKey)) {
+            rootNode.childMap.set(childKey, {
+              path: `${top}/${childKey}`,
+              label: childKey,
+              entries: [],
+              totalCount: 0,
+              children: [],
+            });
+          }
+          const childNode = rootNode.childMap.get(childKey);
+          childNode.entries.push(e);
+          childNode.totalCount++;
+        }
+      }
+      return [...roots.values()]
+        .map(r => ({
+          path: r.path,
+          label: r.label,
+          entries: r.entries,
+          totalCount: r.totalCount,
+          children: [...r.childMap.values()].sort((a, b) => a.label.localeCompare(b.label)),
+        }))
+        .sort((a, b) => a.label.localeCompare(b.label));
+    });
+
+    function toggleFolder(path) {
+      expanded[path] = !expanded[path];
+    }
+
+    function refreshScope() {
+      if (store && typeof store.fetchUnifyMemoryScope === 'function') {
+        store.fetchUnifyMemoryScope();
+      }
+    }
+
+    function truncateBody(text) {
+      if (!text) return '';
+      const s = String(text).replace(/^#+\s.*\n/, '').trim();
+      if (s.length <= 200) return s;
+      return s.slice(0, 200) + '…';
+    }
+
+    // Auto-fetch on mount; agents that ignore the message keep the view
+    // empty rather than breaking the page.
+    Vue.onMounted(() => {
+      refreshScope();
+    });
+
     return {
       activeShard,
       deleteConfirm,
@@ -232,6 +381,14 @@ export default {
       onDelete,
       cancelDelete,
       confirmDelete,
+      // task-fix: scope-tree folder view
+      expanded,
+      scopeEntries,
+      scopeLoaded,
+      scopeTree,
+      toggleFolder,
+      refreshScope,
+      truncateBody,
     };
   },
 };

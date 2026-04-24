@@ -77,14 +77,15 @@ describe('task-322 structural: session_ready replay', () => {
     const fnStart = src.indexOf('async function handleUnifyLoadHistory');
     const fnBody = src.slice(fnStart, fnStart + 4000);
     const ifIdx = fnBody.indexOf('if (!session) {');
-    // Inside that block: loadSession + messagesByThread.clear() restore loop
-    // still present (we only HOISTED the session_ready emission, not broke
-    // the init path).
+    // Inside that block: loadSession + restore helper still present
+    // (task-fix three-bugs routed the per-thread restore through
+    // `restoreThreadHistoryFromRecent`; that helper still clears + repopulates
+    // messagesByThread so the init invariant holds).
     const blockEnd = fnBody.indexOf('// task-322', ifIdx);
     expect(blockEnd).toBeGreaterThan(ifIdx);
     const block = fnBody.slice(ifIdx, blockEnd);
     expect(block).toContain('loadSession(');
-    expect(block).toContain('messagesByThread.clear()');
+    expect(block).toContain('restoreThreadHistoryFromRecent');
   });
 });
 

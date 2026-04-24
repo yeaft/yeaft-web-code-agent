@@ -65,19 +65,53 @@ export async function runStopHooks(context) {
   }
 
   // 1. Persist latest messages
+  //
+  // task-fix: we must persist the complete new turn — including the
+  // assistant's `toolCalls` and each paired `role:'tool'` result —
+  // otherwise restoring history on session reload drops the pairing
+  // and causes "No tool output found for function call" 400s on the
+  // next chat-completions request. We walk back from the end of
+  // `messages` to find the first `role:'user'` that marks the start
+  // of the current turn, then persist everything from there forward.
   try {
     if (conversationStore && messages.length > 0) {
-      const recentMessages = messages.slice(-2); // last user + assistant pair
-      for (const msg of recentMessages) {
-        if (msg.role && msg.content) {
-          conversationStore.append({
-            role: msg.role,
-            content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
-            mode,
-            model: persistModel,
-          });
-          result.messagesPersisted++;
+      // Find the start of the latest turn — the last `role:'user'`
+      // message in the array. Everything from that index onward is
+      // new this turn (user + assistant[+toolCalls] + tool results).
+      let turnStart = messages.length - 1;
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i] && messages[i].role === 'user') {
+          turnStart = i;
+          break;
         }
+      }
+      const recentMessages = messages.slice(turnStart);
+      for (const msg of recentMessages) {
+        if (!msg || !msg.role) continue;
+        // Allow empty assistant content when toolCalls are present;
+        // tool messages have content by construction.
+        const hasContent =
+          (typeof msg.content === 'string' && msg.content.length > 0) ||
+          (msg.content && typeof msg.content !== 'string') ||
+          (Array.isArray(msg.toolCalls) && msg.toolCalls.length > 0) ||
+          msg.role === 'tool';
+        if (!hasContent) continue;
+
+        const record = {
+          role: msg.role,
+          content: typeof msg.content === 'string'
+            ? msg.content
+            : JSON.stringify(msg.content ?? ''),
+          mode,
+          model: persistModel,
+        };
+        if (msg.toolCallId) record.toolCallId = msg.toolCallId;
+        if (Array.isArray(msg.toolCalls) && msg.toolCalls.length > 0) {
+          record.toolCalls = msg.toolCalls;
+        }
+        if (msg.isError) record.isError = true;
+        conversationStore.append(record);
+        result.messagesPersisted++;
       }
     }
   } catch (err) {

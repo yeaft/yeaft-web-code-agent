@@ -195,6 +195,12 @@ export const useChatStore = defineStore('chat', {
     unifyThreads: [],
     unifyTasks: [],
 
+    // task-fix: MemoryStore scope-tree snapshot for the User Memory page.
+    // Populated by `memory_scope_snapshot` events; rendered as a folder
+    // tree grouped by `entry.scope` (e.g. `work/claude-web-chat/auth`).
+    unifyMemoryScopeEntries: [],
+    unifyMemoryScopeLoaded: false,
+
     // ★ task-334-ui-g: VP CRUD pending-request map.
     // Each `vpCrudRequest()` stashes its resolver here keyed by requestId;
     // the `vp_crud_result` event looks it up and resolves the caller. Using
@@ -778,6 +784,16 @@ export const useChatStore = defineStore('chat', {
           break;
         }
 
+        // task-fix: scope-tree snapshot for the Unify "User Memory" page.
+        // Agent reads MemoryStore.listEntries() and replies with the full
+        // entry list; the web store indexes by scope so the page can render
+        // a folder-style tree.
+        case 'memory_scope_snapshot': {
+          this.unifyMemoryScopeEntries = Array.isArray(event.entries) ? event.entries : [];
+          this.unifyMemoryScopeLoaded = true;
+          break;
+        }
+
         // ★ task-301 Part 2: real-store push from agent.
         // Agent's ThreadStore changes (SpawnThread / SwitchThread /
         // ArchiveThread / AttachThreadToTask) → web-bridge serialises the
@@ -1154,6 +1170,18 @@ export const useChatStore = defineStore('chat', {
       this.unifyDebugDetailMode = !!enabled;
       try { localStorage.setItem('unifyDebugDetailMode', enabled ? '1' : '0'); }
       catch { /* ignore */ }
+    },
+
+    // task-fix: request the MemoryStore scope-tree snapshot so the User
+    // Memory page can render a folder view. Agent replies via
+    // `memory_scope_snapshot` → populates unifyMemoryScopeEntries.
+    fetchUnifyMemoryScope() {
+      if (!this.unifyAgentId) return;
+      this.unifyMemoryScopeLoaded = false;
+      this.sendWsMessage({
+        type: 'unify_memory_scope_list',
+        agentId: this.unifyAgentId,
+      });
     },
 
     clearUnifyMessages() {

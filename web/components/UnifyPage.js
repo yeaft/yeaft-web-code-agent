@@ -126,8 +126,11 @@ export default {
         <UnifySettings v-if="showSettings" :initial-tab="settingsInitialTab" @close="showSettings = false" @saved="onSettingsSaved" />
 
         <!-- Input Area -->
+        <!-- task-fix: hide ChatInput on UserMemoryPage — a memory browser
+             has no conversational input, and leaving the chatbox visible
+             was explicitly flagged as wrong UX ("怎么还能有对话框"). -->
         <ChatInput
-          v-if="!showSettings"
+          v-if="!showSettings && !userMemoryOpen"
           :send-fn="sendMessage"
           :show-stop="isProcessing"
           placeholder-key="unify.placeholder"
