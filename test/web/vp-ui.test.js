@@ -31,7 +31,8 @@ const read = (p) => readFileSync(join(root, p), 'utf8');
 const vpStoreSrc        = read('web/stores/vp.js');
 const vpAvatarSrc       = read('web/components/VpAvatar.js');
 const vpBadgeSrc        = read('web/components/VpBadge.js');
-const vpLibLinkSrc      = read('web/components/VpLibraryLink.js');
+// task-343: VpLibraryLink + VpCrudModal deleted; VP library is now a tab
+// inside UnifySettings (VpCrudPanel). Legacy structural assertions removed.
 const unifyPageSrc      = read('web/components/UnifyPage.js');
 const chatStoreSrc      = read('web/stores/chat.js');
 const indexCssSrc       = read('web/styles/index.css');
@@ -247,39 +248,32 @@ describe('VpBadge — composes avatar + text', () => {
   });
 });
 
-describe('VpLibraryLink — empty-library fallback (E-a2)', () => {
-  it('switches icon and label when vpCount === 0', () => {
-    expect(vpLibLinkSrc).toMatch(/isEmpty\(\)\s*\{\s*return this\.vpStore\.vpCount === 0/);
-    expect(vpLibLinkSrc).toContain("'unify.vp.createFirst'");
-    expect(vpLibLinkSrc).toContain("'unify.vp.library'");
-  });
-  it('emits open-library on click', () => {
-    expect(vpLibLinkSrc).toMatch(/emits:\s*\['open-library'\]/);
-    expect(vpLibLinkSrc).toContain("$emit('open-library')");
-  });
-  it('hides the count pill when empty', () => {
-    expect(vpLibLinkSrc).toMatch(/v-if="!isEmpty && count > 0"/);
-  });
-  it('renders as a focusable native button (E-a8)', () => {
-    expect(vpLibLinkSrc).toMatch(/<button[\s\S]*type="button"/);
+describe('VpLibraryLink — removed in task-343 (VP now a Settings tab)', () => {
+  it('VpLibraryLink.js file is deleted', () => {
+    // Attempting to read deletes must fail. Use a try/catch because the
+    // module is consumed by fs.readFileSync above at load time otherwise.
+    let existed = true;
+    try { read('web/components/VpLibraryLink.js'); } catch { existed = false; }
+    expect(existed).toBe(false);
   });
 });
 
 // ─────────────────────────────────────────────────────────────
-// UnifyPage integration
+// UnifyPage integration (task-343 — VP via Settings tab)
 // ─────────────────────────────────────────────────────────────
-describe('UnifyPage — sidebar footer integration', () => {
-  it('imports and registers VpLibraryLink', () => {
-    expect(unifyPageSrc).toContain("import VpLibraryLink from './VpLibraryLink.js'");
-    expect(unifyPageSrc).toMatch(/components:\s*\{[^}]*VpLibraryLink/);
+describe('UnifyPage — task-343 VP-via-Settings wiring', () => {
+  it('does NOT import VpLibraryLink or VpCrudModal', () => {
+    expect(unifyPageSrc).not.toContain("from './VpLibraryLink.js'");
+    expect(unifyPageSrc).not.toContain("from './VpCrudModal.js'");
   });
 
-  it('VpLibraryLink component is still imported (task-341: footer deleted, task-343 will rewire)', () => {
-    expect(unifyPageSrc).toContain("import VpLibraryLink from './VpLibraryLink.js'");
+  it('onInviteOpenLibrary opens Settings at VP tab via openSettings helper', () => {
+    expect(unifyPageSrc).toMatch(/openSettings\(\s*\{\s*initialTab:\s*['"]vp['"]/);
   });
 
-  it('exposes onOpenVpLibrary handler', () => {
-    expect(unifyPageSrc).toContain('onOpenVpLibrary');
+  it('declares settingsInitialTab ref and passes to UnifySettings', () => {
+    expect(unifyPageSrc).toMatch(/settingsInitialTab\s*=\s*Vue\.ref\(['"]llm['"]\)/);
+    expect(unifyPageSrc).toMatch(/:initial-tab=["']settingsInitialTab["']/);
   });
 });
 

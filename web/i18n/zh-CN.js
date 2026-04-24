@@ -163,6 +163,9 @@ export default {
   'unify.hideDebug': '隐藏调试面板',
   'unify.switchModel': '切换模型',
   'unify.settings.title': '设置',
+  // task-343: tab labels for the two-column Settings dialog
+  'unify.settings.tabs.llm': 'LLM',
+  'unify.settings.tabs.vp': 'VP 库',
   // task-318: Unify runtime settings
   'unify.settings.unifyTitle': '线程并发与归档',
   'unify.settings.unifyDesc': '调整可同时运行的线程数量，以及闲置线程的自动归档时长。',

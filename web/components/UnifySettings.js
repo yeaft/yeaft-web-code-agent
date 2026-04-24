@@ -1,223 +1,128 @@
 /**
- * UnifySettings.js — LLM provider configuration panel for the Unify page.
+ * UnifySettings.js — task-343.
  *
- * Replicates the provider CRUD logic from LlmTab but scoped to
- * the Unify agent (store.unifyAgentId). Embedded in UnifyPage's
- * main area when the user clicks the settings gear button.
+ * Two-column tab dialog mirroring SettingsPanel sizing/tab tokens:
+ *   Tab 1 (LLM)     → <LlmTab context="unify"> + task-318 runtime settings
+ *   Tab 2 (VP 库)   → <VpCrudPanel>
+ *
+ * Reuses SettingsPanel's .settings-* class tokens directly (overlay /
+ * dialog / nav / content / pane) for zero-drift size alignment.
+ *
+ * Agent scoping:
+ *   Provider CRUD writes target store.unifyAgentId. LlmTab normally binds
+ *   to chatStore.currentAgent; the `context="unify"` prop swaps its
+ *   effective agent id to unifyAgentId without polluting Chat path.
+ *
+ * initialTab prop ('llm' | 'vp') lets callers open directly to the VP
+ * library (replaces the deprecated standalone VpCrudModal entry point).
  */
-import { PROTOCOL_PRESET_MODELS } from '../utils/protocolPresets.js';
+import LlmTab from './LlmTab.js';
+import VpCrudPanel from './VpCrudPanel.js';
 
 export default {
   name: 'UnifySettings',
+  components: { LlmTab, VpCrudPanel },
+  props: {
+    visible: { type: Boolean, default: true },
+    initialTab: { type: String, default: 'llm' }, // 'llm' | 'vp'
+  },
   emits: ['close', 'saved'],
   template: `
-    <div class="unify-settings">
-      <div class="unify-settings-header">
-        <span class="unify-settings-title">{{ $t('unify.settings.title') }}</span>
-        <button class="unify-settings-close-btn" @click="$emit('close')" :title="$t('common.close')">
-          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-        </button>
-      </div>
-
-      <div class="unify-settings-body">
-        <!-- Loading -->
-        <div v-if="loading" class="unify-settings-status">
-          {{ $t('settings.llm.loading') }}
+    <div class="settings-overlay" v-if="visible" @click.self="$emit('close')">
+      <div class="settings-dialog">
+        <!-- Left Navigation -->
+        <div class="settings-nav">
+          <div class="settings-nav-title">{{ $t('unify.settings.title') }}</div>
+          <button
+            v-for="tab in tabs"
+            :key="tab.key"
+            class="settings-nav-item"
+            :class="{ active: activeTab === tab.key }"
+            @click="activeTab = tab.key"
+          >
+            <svg v-if="tab.key === 'llm'" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M21 10.12h-6.78l2.74-2.82c-2.73-2.7-7.15-2.8-9.88-.1-2.73 2.71-2.73 7.08 0 9.79s7.15 2.71 9.88 0C18.32 15.65 19 14.08 19 12.1h2c0 1.98-.88 4.55-2.64 6.29-3.51 3.48-9.21 3.48-12.72 0-3.5-3.47-3.5-9.11 0-12.58 3.51-3.47 9.14-3.49 12.65-.06L21 3v7.12zM12.5 8v4.25l3.5 2.08-.72 1.21L11 13V8h1.5z"/></svg>
+            <svg v-else-if="tab.key === 'vp'" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+            <span>{{ tab.label }}</span>
+          </button>
         </div>
 
-        <!-- Error -->
-        <div v-else-if="loadError" class="unify-settings-status unify-settings-error">
-          {{ $t('settings.llm.loadError') }}: {{ loadError }}
-        </div>
-
-        <!-- Config loaded -->
-        <div v-else>
-          <!-- First-time setup banner -->
-          <div v-if="needsSetup" class="unify-settings-banner">
-            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
-            <div>
-              <strong>{{ $t('settings.llm.setupTitle') }}</strong>
-              <p>{{ $t('settings.llm.setupDesc') }}</p>
-            </div>
+        <!-- Right Content -->
+        <div class="settings-content">
+          <div class="settings-content-header">
+            <h2 class="settings-content-title">{{ currentTabLabel }}</h2>
+            <button class="settings-close" @click="$emit('close')" :title="$t('common.close')">
+              <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+            </button>
           </div>
+          <div class="settings-scroll">
+            <!-- LLM pane: provider CRUD + task-318 runtime settings -->
+            <div v-show="activeTab === 'llm'" class="settings-pane">
+              <LlmTab context="unify" @message="onLlmMessage" @saved="onLlmSaved" />
 
-          <!-- Providers -->
-          <div class="unify-settings-group">
-            <div class="unify-settings-group-title">{{ $t('settings.llm.providersTitle') }}</div>
-            <p class="unify-settings-desc">{{ $t('settings.llm.providersDesc') }}</p>
+              <!-- task-318: Unify runtime settings (thread cap + archive) -->
+              <div class="sp-group unify-settings-runtime">
+                <div class="sp-group-title">{{ $t('unify.settings.unifyTitle') }}</div>
+                <p class="sp-desc">{{ $t('unify.settings.unifyDesc') }}</p>
 
-            <div class="unify-settings-provider" v-for="(provider, idx) in localProviders" :key="idx">
-              <div class="unify-settings-provider-header">
-                <span class="unify-settings-provider-idx">#{{ idx + 1 }}</span>
-                <button class="unify-settings-icon-btn" @click="removeProvider(idx)" :title="$t('settings.llm.removeProvider')">
-                  <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
-                </button>
-              </div>
-
-              <div class="unify-settings-row">
-                <div class="unify-settings-field" style="flex:1">
-                  <label>{{ $t('settings.llm.providerName') }}</label>
-                  <input type="text" v-model="provider.name" :placeholder="$t('settings.llm.providerNamePlaceholder')" @input="markDirty" />
+                <div v-if="unifyLoading" class="sp-desc">
+                  {{ $t('unify.settings.unifyLoading') }}
                 </div>
-                <div class="unify-settings-field" style="flex:0 0 180px">
-                  <label>{{ $t('settings.llm.protocol') }}</label>
-                  <select v-model="provider.protocol" @change="onProtocolChange(idx)">
-                    <option value="openai">{{ $t('settings.llm.protocolOpenAI') }}</option>
-                    <option value="openai-responses">{{ $t('settings.llm.protocolOpenAIResponses') }}</option>
-                    <option value="anthropic">{{ $t('settings.llm.protocolAnthropic') }}</option>
-                  </select>
-                  <small class="unify-settings-hint unify-settings-protocol-hint">{{ protocolHint(provider.protocol) }}</small>
+                <div v-else-if="unifyLoadError" class="sp-desc sp-error-text">
+                  {{ $t('unify.settings.unifyLoadError') }}: {{ unifyLoadError }}
                 </div>
-              </div>
-
-              <div class="unify-settings-field">
-                <label>{{ $t('settings.llm.baseUrl') }}</label>
-                <input type="text" v-model="provider.baseUrl" :placeholder="$t('settings.llm.baseUrlPlaceholder')" @input="markDirty" />
-              </div>
-
-              <div class="unify-settings-field">
-                <label>{{ $t('settings.llm.apiKey') }}</label>
-                <div class="unify-settings-secret">
-                  <input :type="showApiKey[idx] ? 'text' : 'password'" v-model="provider.apiKey" :placeholder="$t('settings.llm.apiKeyPlaceholder')" @input="markDirty" />
-                  <button class="unify-settings-icon-btn" @click="toggleApiKey(idx)">
-                    <svg v-if="showApiKey[idx]" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
-                    <svg v-else viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.43-4.75-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46C3.08 8.3 1.78 10.02 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27zM7.53 9.8l1.55 1.55c-.05.21-.08.43-.08.65 0 1.66 1.34 3 3 3 .22 0 .44-.03.65-.08l1.55 1.55c-.67.33-1.41.53-2.2.53-2.76 0-5-2.24-5-5 0-.79.2-1.53.53-2.2zm4.31-.78l3.15 3.15.02-.16c0-1.66-1.34-3-3-3l-.17.01z"/></svg>
-                  </button>
-                </div>
-              </div>
-
-              <div class="unify-settings-field">
-                <label>{{ $t('settings.llm.models') }}</label>
-                <p class="unify-settings-hint">{{ $t('settings.llm.modelsHint') }}</p>
-                <div class="unify-settings-model-rows">
-                  <div class="unify-settings-model-row" v-for="(mrow, midx) in provider.models" :key="midx">
+                <div v-else class="unify-settings-runtime-row">
+                  <div class="unify-settings-runtime-field">
+                    <label class="llm-field-label">{{ $t('unify.settings.maxConcurrentLabel') }}</label>
+                    <p class="sp-desc llm-model-hint">{{ $t('unify.settings.maxConcurrentHint') }}</p>
                     <input
-                      class="unify-settings-model-id"
-                      type="text"
-                      v-model="mrow.id"
-                      :placeholder="$t('settings.llm.modelsPlaceholder')"
-                      @input="markDirty" />
-                    <input
-                      class="unify-settings-model-ctx llm-model-ctx"
                       type="number"
-                      min="0"
-                      v-model.number="mrow.contextWindow"
-                      :placeholder="$t('settings.llm.modelCtxPlaceholder')"
-                      :title="$t('settings.llm.modelCtxPlaceholder')"
-                      @input="markDirty" />
-                    <input
-                      class="unify-settings-model-max llm-model-max"
-                      type="number"
-                      min="0"
-                      v-model.number="mrow.maxOutput"
-                      :placeholder="$t('settings.llm.modelMaxPlaceholder')"
-                      :title="$t('settings.llm.modelMaxPlaceholder')"
-                      @input="markDirty" />
-                    <button class="unify-settings-icon-btn" @click="removeModel(idx, midx)" :title="$t('settings.llm.removeModel')">
-                      <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
-                    </button>
+                      min="1"
+                      max="50"
+                      class="sp-input"
+                      v-model.number="localMaxConcurrent"
+                      @input="onUnifyInput" />
+                    <small v-if="maxConcurrentError" class="sp-error-text">{{ maxConcurrentError }}</small>
                   </div>
-                  <button class="unify-settings-add-btn" @click="addModel(idx)">
-                    <svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-                    {{ $t('settings.llm.addModel') }}
+                  <div class="unify-settings-runtime-field">
+                    <label class="llm-field-label">{{ $t('unify.settings.archiveIdleDaysLabel') }}</label>
+                    <p class="sp-desc llm-model-hint">{{ $t('unify.settings.archiveIdleDaysHint') }}</p>
+                    <input
+                      type="number"
+                      min="1"
+                      max="3650"
+                      class="sp-input"
+                      v-model.number="localArchiveIdleDays"
+                      @input="onUnifyInput" />
+                    <small v-if="archiveIdleDaysError" class="sp-error-text">{{ archiveIdleDaysError }}</small>
+                  </div>
+                </div>
+
+                <div class="llm-save-row">
+                  <span v-if="unifySaveMessage" :class="unifySaveError ? 'sp-error-text' : 'llm-dirty-hint'">{{ unifySaveMessage }}</span>
+                  <span v-else-if="unifyDirty" class="llm-dirty-hint">{{ $t('settings.llm.unsavedChanges') }}</span>
+                  <button
+                    class="sp-btn"
+                    :class="{ 'sp-btn-primary': unifyDirty }"
+                    @click="saveUnifySettings"
+                    :disabled="unifySaving || !unifyDirty || !!maxConcurrentError || !!archiveIdleDaysError">
+                    {{ unifySaving ? $t('unify.settings.unifySaving') : $t('unify.settings.unifySaveBtn') }}
                   </button>
                 </div>
               </div>
             </div>
 
-            <button class="unify-settings-add-btn" @click="addProvider">
-              <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-              {{ $t('settings.llm.addProvider') }}
-            </button>
-          </div>
-
-          <!-- Model Selection -->
-          <div class="unify-settings-group">
-            <div class="unify-settings-group-title">{{ $t('settings.llm.modelSelectionTitle') }}</div>
-            <p class="unify-settings-desc">{{ $t('settings.llm.modelSelectionDesc') }}</p>
-
-            <div v-if="allModelRefs.length === 0" class="unify-settings-desc">
-              {{ $t('settings.llm.noModels') }}
+            <!-- VP Library pane -->
+            <div v-show="activeTab === 'vp'" class="settings-pane">
+              <VpCrudPanel />
             </div>
-            <div v-else class="unify-settings-row">
-              <div class="unify-settings-field" style="flex:1">
-                <label>{{ $t('settings.llm.primaryModel') }}</label>
-                <p class="unify-settings-hint">{{ $t('settings.llm.primaryModelDesc') }}</p>
-                <select v-model="localPrimaryModel" @change="markDirty">
-                  <option :value="null">{{ $t('settings.llm.selectModel') }}</option>
-                  <option v-for="ref in allModelRefs" :key="'p-'+ref" :value="ref">{{ ref }}</option>
-                </select>
-              </div>
-              <div class="unify-settings-field" style="flex:1">
-                <label>{{ $t('settings.llm.fastModel') }}</label>
-                <p class="unify-settings-hint">{{ $t('settings.llm.fastModelDesc') }}</p>
-                <select v-model="localFastModel" @change="markDirty">
-                  <option :value="null">{{ $t('settings.llm.selectModel') }}</option>
-                  <option v-for="ref in allModelRefs" :key="'f-'+ref" :value="ref">{{ ref }}</option>
-                </select>
-              </div>
-            </div>
-          </div>
-
-          <!-- task-318: Unify runtime settings (thread cap + archive) -->
-          <div class="unify-settings-group">
-            <div class="unify-settings-group-title">{{ $t('unify.settings.unifyTitle') }}</div>
-            <p class="unify-settings-desc">{{ $t('unify.settings.unifyDesc') }}</p>
-
-            <div v-if="unifyLoading" class="unify-settings-status">
-              {{ $t('unify.settings.unifyLoading') }}
-            </div>
-            <div v-else-if="unifyLoadError" class="unify-settings-status unify-settings-error">
-              {{ $t('unify.settings.unifyLoadError') }}: {{ unifyLoadError }}
-            </div>
-            <div v-else class="unify-settings-row">
-              <div class="unify-settings-field" style="flex:1">
-                <label>{{ $t('unify.settings.maxConcurrentLabel') }}</label>
-                <p class="unify-settings-hint">{{ $t('unify.settings.maxConcurrentHint') }}</p>
-                <input
-                  type="number"
-                  min="1"
-                  max="50"
-                  v-model.number="localMaxConcurrent"
-                  @input="onUnifyInput" />
-                <small v-if="maxConcurrentError" class="unify-settings-error">{{ maxConcurrentError }}</small>
-              </div>
-              <div class="unify-settings-field" style="flex:1">
-                <label>{{ $t('unify.settings.archiveIdleDaysLabel') }}</label>
-                <p class="unify-settings-hint">{{ $t('unify.settings.archiveIdleDaysHint') }}</p>
-                <input
-                  type="number"
-                  min="1"
-                  max="3650"
-                  v-model.number="localArchiveIdleDays"
-                  @input="onUnifyInput" />
-                <small v-if="archiveIdleDaysError" class="unify-settings-error">{{ archiveIdleDaysError }}</small>
-              </div>
-            </div>
-
-            <div class="unify-settings-save-row">
-              <span v-if="unifySaveMessage" :class="unifySaveError ? 'unify-settings-error' : 'unify-settings-success'">{{ unifySaveMessage }}</span>
-              <span v-else-if="unifyDirty" class="unify-settings-dirty">{{ $t('settings.llm.unsavedChanges') }}</span>
-              <button
-                class="unify-settings-save-btn"
-                :class="{ primary: unifyDirty }"
-                @click="saveUnifySettings"
-                :disabled="unifySaving || !unifyDirty || !!maxConcurrentError || !!archiveIdleDaysError">
-                {{ unifySaving ? $t('unify.settings.unifySaving') : $t('unify.settings.unifySaveBtn') }}
-              </button>
-            </div>
-          </div>
-
-          <!-- Save -->
-          <div class="unify-settings-save-row">
-            <span v-if="saveMessage" :class="saveError ? 'unify-settings-error' : 'unify-settings-success'">{{ saveMessage }}</span>
-            <span v-else-if="isDirty" class="unify-settings-dirty">{{ $t('settings.llm.unsavedChanges') }}</span>
-            <button class="unify-settings-save-btn" :class="{ primary: isDirty }" @click="saveConfig" :disabled="saving || !isDirty">
-              {{ saving ? $t('settings.llm.saving') : $t('settings.llm.save') }}
-            </button>
           </div>
         </div>
       </div>
+
+      <!-- Toast for LlmTab messages -->
+      <transition name="sp-toast">
+        <div v-if="toastMessage" class="sp-toast" :class="{ error: toastIsError }">{{ toastMessage }}</div>
+      </transition>
     </div>
   `,
   setup(props, { emit }) {
@@ -225,20 +130,42 @@ export default {
     const instance = Vue.getCurrentInstance();
     const $t = (key) => instance?.proxy?.$t?.(key) ?? key;
 
-    const loading = Vue.ref(false);
-    const loadError = Vue.ref(null);
-    const needsSetup = Vue.ref(false);
-    const localProviders = Vue.ref([]);
-    const localPrimaryModel = Vue.ref(null);
-    const localFastModel = Vue.ref(null);
-    const isDirty = Vue.ref(false);
-    const saving = Vue.ref(false);
-    const showApiKey = Vue.reactive({});
-    const saveMessage = Vue.ref('');
-    const saveError = Vue.ref(false);
+    // Active tab — seeded from initialTab, also reactive to prop changes so
+    // a host that flips initialTab='vp' after open lands on the VP tab.
+    const activeTab = Vue.ref(props.initialTab === 'vp' ? 'vp' : 'llm');
+    Vue.watch(() => props.initialTab, (next) => {
+      if (next === 'llm' || next === 'vp') activeTab.value = next;
+    });
 
-    let loadTimeout = null;
-    let saveTimeout = null;
+    const tabs = Vue.computed(() => [
+      { key: 'llm', label: $t('unify.settings.tabs.llm') },
+      { key: 'vp',  label: $t('unify.settings.tabs.vp') },
+    ]);
+    const currentTabLabel = Vue.computed(() => {
+      const t = tabs.value.find(x => x.key === activeTab.value);
+      return t ? t.label : '';
+    });
+
+    // Toast surface for LlmTab @message (matches SettingsPanel affordance)
+    const toastMessage = Vue.ref('');
+    const toastIsError = Vue.ref(false);
+    let toastTimer = null;
+    function onLlmMessage(text, isError) {
+      toastMessage.value = text || '';
+      toastIsError.value = !!isError;
+      if (toastTimer) clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { toastMessage.value = ''; }, 3000);
+    }
+
+    // LlmTab saved → dispatch unify_reset so Engine picks up new config,
+    // and propagate `saved` event to host (preserves task-275 behavior).
+    function onLlmSaved() {
+      const agentId = store.unifyAgentId;
+      if (agentId) {
+        store.sendWsMessage({ type: 'unify_reset', agentId });
+      }
+      emit('saved');
+    }
 
     // ─── task-318: Unify runtime settings state ───────────────
     const localMaxConcurrent = Vue.ref(6);
@@ -355,113 +282,9 @@ export default {
       );
     }
 
-    const allModelRefs = Vue.computed(() => {
-      const refs = [];
-      for (const p of localProviders.value) {
-        if (!p.name) continue;
-        const models = Array.isArray(p.models) ? p.models : [];
-        for (const m of models) {
-          const id = m && typeof m === 'object' ? m.id : m;
-          if (id) refs.push(`${p.name}/${id}`);
-        }
-      }
-      return refs;
-    });
-
-    function requestConfig() {
-      const agentId = store.unifyAgentId;
-      if (!agentId) return;
-
-      loading.value = true;
-      loadError.value = null;
-      store.sendWsMessage({ type: 'get_llm_config', agentId });
-
-      loadTimeout = setTimeout(() => {
-        if (loading.value) {
-          loading.value = false;
-          loadError.value = 'Timeout';
-        }
-      }, 5000);
-    }
-
-    function loadFromConfig(config) {
-      if (loadTimeout) { clearTimeout(loadTimeout); loadTimeout = null; }
-      loading.value = false;
-      if (config.error) { loadError.value = config.error; return; }
-      loadError.value = null;
-      needsSetup.value = !!config.needsSetup;
-
-      // Normalize each model entry to `{ id, contextWindow?, maxOutput? }`
-      // so the UI can bind uniformly regardless of legacy string format.
-      localProviders.value = (config.providers || []).map(p => ({
-        name: p.name || '',
-        baseUrl: p.baseUrl || '',
-        apiKey: p.apiKey || '',
-        protocol: p.protocol || 'openai',
-        models: Array.isArray(p.models) ? p.models.map(toModelRow).filter(r => r) : [],
-      }));
-
-      localPrimaryModel.value = config.primaryModel || null;
-      localFastModel.value = config.fastModel || null;
-      isDirty.value = false;
-    }
-
-    // Convert a string or object model entry into a ui-friendly row.
-    function toModelRow(entry) {
-      if (typeof entry === 'string') {
-        const id = entry.trim();
-        return id ? { id, contextWindow: null, maxOutput: null } : null;
-      }
-      if (entry && typeof entry === 'object' && typeof entry.id === 'string') {
-        return {
-          id: entry.id,
-          contextWindow: toUiNumber(entry.contextWindow),
-          maxOutput: toUiNumber(entry.maxOutput),
-        };
-      }
-      return null;
-    }
-
-    function toUiNumber(v) {
-      if (v === null || v === undefined || v === '') return null;
-      const n = Number(v);
-      return Number.isFinite(n) && n > 0 ? n : null;
-    }
-
-    // Normalize a single model row for WS payload (used by save).
-    // id-only → string; with ctx/max → { id, contextWindow?, maxOutput? }.
-    function normalizeModelForSave(row) {
-      if (!row || !row.id || !String(row.id).trim()) return null;
-      const id = String(row.id).trim();
-      const ctx = toUiNumber(row.contextWindow);
-      const max = toUiNumber(row.maxOutput);
-      if (ctx == null && max == null) return id;
-      const obj = { id };
-      if (ctx != null) obj.contextWindow = ctx;
-      if (max != null) obj.maxOutput = max;
-      return obj;
-    }
-
-    // Watch for llmConfig updates from store
-    Vue.watch(
-      () => {
-        const agentId = store.unifyAgentId;
-        return agentId ? store.llmConfig[agentId] : null;
-      },
-      (config) => {
-        if (config && config.loaded) loadFromConfig(config);
-      },
-      { deep: true }
-    );
-
-    // Request config on mount
     Vue.onMounted(() => {
       const agentId = store.unifyAgentId;
       if (agentId) {
-        const existing = store.llmConfig[agentId];
-        if (existing && existing.loaded) loadFromConfig(existing);
-        else requestConfig();
-        // task-318: also load Unify runtime settings
         const existingUnify = store.unifySettings[agentId];
         if (existingUnify && existingUnify.loaded) loadFromUnifySettings(existingUnify);
         else requestUnifySettings();
@@ -469,129 +292,15 @@ export default {
     });
 
     Vue.onUnmounted(() => {
-      if (loadTimeout) clearTimeout(loadTimeout);
-      if (saveTimeout) clearTimeout(saveTimeout);
       if (unifyLoadTimeout) clearTimeout(unifyLoadTimeout);
       if (unifySaveTimeout) clearTimeout(unifySaveTimeout);
+      if (toastTimer) clearTimeout(toastTimer);
     });
 
-    function markDirty() { isDirty.value = true; saveMessage.value = ''; }
-
-    function addProvider() {
-      localProviders.value.push({ name: '', baseUrl: '', apiKey: '', protocol: 'openai', models: [] });
-      markDirty();
-    }
-
-    function removeProvider(idx) {
-      localProviders.value.splice(idx, 1);
-      markDirty();
-    }
-
-    function addModel(idx) {
-      if (!Array.isArray(localProviders.value[idx].models)) {
-        localProviders.value[idx].models = [];
-      }
-      localProviders.value[idx].models.push({ id: '', contextWindow: null, maxOutput: null });
-      markDirty();
-    }
-
-    function removeModel(providerIdx, modelIdx) {
-      localProviders.value[providerIdx].models.splice(modelIdx, 1);
-      markDirty();
-    }
-
-    function onProtocolChange(idx) {
-      const provider = localProviders.value[idx];
-      const currentModels = (provider.models || []).filter(m => m && (typeof m === 'string' ? m : m.id));
-      if (currentModels.length === 0) {
-        const presets = PROTOCOL_PRESET_MODELS[provider.protocol] || PROTOCOL_PRESET_MODELS.openai;
-        provider.models = presets.map(id => ({ id, contextWindow: null, maxOutput: null }));
-      }
-      markDirty();
-    }
-
-    function protocolHint(protocol) {
-      if (protocol === 'anthropic') return $t('settings.llm.protocolHint.anthropic');
-      if (protocol === 'openai-responses') return $t('settings.llm.protocolHint.openaiResponses');
-      return $t('settings.llm.protocolHint.openai');
-    }
-
-    function toggleApiKey(idx) {
-      showApiKey[idx] = !showApiKey[idx];
-    }
-
-    function saveConfig() {
-      const agentId = store.unifyAgentId;
-      if (!agentId || saving.value) return;
-
-      saving.value = true;
-      saveMessage.value = '';
-
-      const providers = localProviders.value
-        .filter(p => p.name && p.baseUrl)
-        .map(p => {
-          // Serialize each model row: id-only → string; with ctx/max → object.
-          // This preserves back-compat with existing `models: ["gpt-4"]` configs.
-          const models = (p.models || [])
-            .map(normalizeModelForSave)
-            .filter(m => m);
-          const clean = {
-            name: p.name.trim(),
-            baseUrl: p.baseUrl.trim(),
-            apiKey: p.apiKey || '',
-            models,
-          };
-          if (p.protocol && p.protocol !== 'openai') clean.protocol = p.protocol;
-          return clean;
-        });
-
-      store.sendWsMessage({
-        type: 'update_llm_config',
-        agentId,
-        config: { providers, primaryModel: localPrimaryModel.value || null, fastModel: localFastModel.value || null },
-      });
-
-      // Timeout fallback
-      saveTimeout = setTimeout(() => {
-        saving.value = false;
-        saveMessage.value = store.$t ? store.$t('settings.llm.saveFailed') : 'Failed to save';
-        saveError.value = true;
-      }, 10000);
-
-      // Watch for config update
-      const unwatch = Vue.watch(
-        () => store.llmConfig[agentId],
-        (config) => {
-          if (config && config.loaded) {
-            if (saveTimeout) { clearTimeout(saveTimeout); saveTimeout = null; }
-            saving.value = false;
-            if (config.error) {
-              saveMessage.value = config.error;
-              saveError.value = true;
-            } else {
-              isDirty.value = false;
-              saveMessage.value = 'Saved';
-              saveError.value = false;
-              emit('saved');
-              // Trigger Unify session reset so Engine picks up new config
-              store.sendWsMessage({ type: 'unify_reset', agentId });
-            }
-            unwatch();
-          }
-        },
-        { deep: true }
-      );
-    }
-
     return {
-      store, loading, loadError, needsSetup,
-      localProviders, localPrimaryModel, localFastModel,
-      allModelRefs, isDirty, saving, showApiKey,
-      saveMessage, saveError,
-      markDirty, addProvider, removeProvider,
-      addModel, removeModel,
-      onProtocolChange, toggleApiKey, saveConfig,
-      protocolHint,
+      store,
+      activeTab, tabs, currentTabLabel,
+      toastMessage, toastIsError, onLlmMessage, onLlmSaved,
       // task-318: Unify runtime settings
       localMaxConcurrent, localArchiveIdleDays,
       unifyLoading, unifyLoadError, unifyDirty,

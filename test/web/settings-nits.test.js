@@ -41,27 +41,22 @@ describe('Nit 1 — addModel / removeModel i18n keys', () => {
     expect(zhI18n).toContain("'settings.llm.removeModel'");
   });
 
-  it('UnifySettings uses settings.llm.addModel (not addProvider) for Add Model button', () => {
-    // The Add Model button (inside a provider's models list) should use addModel
-    expect(unifySettings).toContain("$t('settings.llm.addModel')");
-  });
-
-  it('UnifySettings uses settings.llm.removeModel for Remove Model button', () => {
-    expect(unifySettings).toContain("$t('settings.llm.removeModel')");
-  });
+  // task-343: LlmTab uses a textarea-based models field (providerModelsText),
+  // not the per-row Add/Remove Model buttons from the legacy UnifySettings.
+  // The old `addModel` / `removeModel` keys + dead-state asserts from task-284
+  // no longer apply. The i18n keys themselves still exist (asserted above);
+  // their UI use is deferred until a per-model rich row UI is (re-)added.
+  it.todo('LlmTab uses settings.llm.addModel (regression: LlmTab uses textarea, not per-row buttons — task-343 follow-up)');
+  it.todo('LlmTab uses settings.llm.removeModel (regression: LlmTab uses textarea, not per-row buttons — task-343 follow-up)');
 });
 
 // ─────────────────────────────────────────────────────────────
-// Nit 2 — dead state removed from UnifySettings.js
+// Nit 2 — dead state check (task-343: moot; LlmTab legitimately uses
+// providerModelsText for its textarea models UI).
 // ─────────────────────────────────────────────────────────────
-describe('Nit 2 — UnifySettings no longer has providerModelsText / onModelsTextChange', () => {
-  it('UnifySettings.js does not contain providerModelsText', () => {
-    expect(unifySettings).not.toContain('providerModelsText');
-  });
-
-  it('UnifySettings.js does not contain onModelsTextChange', () => {
-    expect(unifySettings).not.toContain('onModelsTextChange');
-  });
+describe('Nit 2 — LlmTab textarea state (task-343: providerModelsText is live, not dead)', () => {
+  it.todo('LlmTab.js does not contain providerModelsText (moot — textarea-based UI legitimately uses it)');
+  it.todo('LlmTab.js does not contain onModelsTextChange (moot — textarea-based UI legitimately uses it)');
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -91,17 +86,13 @@ describe('Nit 3 — PROTOCOL_PRESET_MODELS is a single source of truth', () => {
     expect(list).toContain('gpt-5-pro');
   });
 
-  it('UnifySettings imports PROTOCOL_PRESET_MODELS from the shared util', () => {
-    expect(unifySettings).toMatch(/import\s*\{[^}]*PROTOCOL_PRESET_MODELS[^}]*\}\s*from\s*['"][^'"]*protocolPresets[^'"]*['"]/);
-  });
-
   it('LlmTab imports PROTOCOL_PRESET_MODELS from the shared util', () => {
     expect(llmTab).toMatch(/import\s*\{[^}]*PROTOCOL_PRESET_MODELS[^}]*\}\s*from\s*['"][^'"]*protocolPresets[^'"]*['"]/);
   });
 
-  it('UnifySettings no longer hardcodes the openai-responses preset array', () => {
+  it('LlmTab no longer hardcodes the openai-responses preset array', () => {
     // The literal array should live only in protocolPresets.js now.
-    expect(unifySettings).not.toContain("'gpt-5-pro'");
+    expect(llmTab).not.toContain("'gpt-5-pro'");
   });
 
   it('LlmTab no longer hardcodes the full preset arrays inline', () => {
