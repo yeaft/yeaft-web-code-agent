@@ -35,9 +35,29 @@ import GroupCreateWizard from './GroupCreateWizard.js';
 export default {
   name: 'UnifySidebarV2',
   components: { GroupCreateWizard },
-  emits: ['select-thread', 'select-task', 'jump-to-message', 'search-escape', 'merge-thread', 'select-group', 'open-user-memory'],
+  emits: ['select-thread', 'select-task', 'jump-to-message', 'search-escape', 'merge-thread', 'select-group', 'open-user-memory', 'toggle-sidebar', 'back'],
   template: `
     <aside class="unify-sidebar-v2">
+      <!-- task-341: sidebar header row — agent identifier + collapse/back/workbench. -->
+      <div class="usv2-header-row">
+        <div class="usv2-brand" :title="agentTitleText">
+          <span class="usv2-status-dot" :class="{ online: onlineAgentCount > 0 }"></span>
+          <span class="usv2-brand-label">{{ onlineAgentCount }} Agent</span>
+          <span v-if="currentAgentLatency != null" class="usv2-latency" :class="getLatencyClass(currentAgentLatency)">{{ currentAgentLatency }}ms</span>
+        </div>
+        <div class="usv2-header-actions">
+          <button class="usv2-icon-btn" :title="tr('chat.sidebar.collapse', 'Collapse')" @click="$emit('toggle-sidebar')">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>
+          </button>
+          <button class="usv2-icon-btn" :title="tr('unify.back', 'Back')" @click="$emit('back')">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+          </button>
+          <button v-if="canUseWorkbench" class="usv2-icon-btn" :class="{ active: chatStore && chatStore.workbenchExpanded }" :title="tr('chat.sidebar.workbench', 'Workbench')" @click="onToggleWorkbench">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M20 3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H4V5h16v14zM6 7h5v2H6V7zm0 4h5v2H6v-2zm0 4h5v2H6v-2zm7-8h5v10h-5V7z"/></svg>
+          </button>
+        </div>
+      </div>
+
       <div class="usv2-search">
         <svg class="usv2-search-icon" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
         <input
@@ -516,6 +536,33 @@ export default {
       const v = (this.renameModal.value || '').trim();
       return v.length > 0 && v !== this.renameModal.original;
     },
+    // task-341: header-row agent identifier + workbench gate.
+    onlineAgents() {
+      const s = this.chatStore || this.store;
+      if (!s || !Array.isArray(s.agents)) return [];
+      return s.agents.filter(a => a && a.online);
+    },
+    onlineAgentCount() {
+      return this.onlineAgents.length;
+    },
+    currentAgentLatency() {
+      const s = this.chatStore || this.store;
+      if (!s || !s.currentAgent || !Array.isArray(s.agents)) return null;
+      const agent = s.agents.find(a => a && a.id === s.currentAgent);
+      return (agent && agent.latency != null) ? agent.latency : null;
+    },
+    agentTitleText() {
+      const s = this.chatStore || this.store;
+      if (!s || !s.currentAgent) return '';
+      return String(s.currentAgent);
+    },
+    canUseWorkbench() {
+      const s = this.chatStore || this.store;
+      if (!s || typeof s.hasCapability !== 'function') return false;
+      try {
+        return !!(s.hasCapability('terminal') || s.hasCapability('file_editor'));
+      } catch (_) { return false; }
+    },
     // task-301 Part 2: real-store threads (or injected for tests).
     // Each thread is the serialised shape from
     // agent/unify/web-bridge.js#sendThreadListUpdate.
@@ -727,6 +774,26 @@ export default {
         examplesLabel: 'Try:',
       };
       return fallback[key] || full;
+    },
+    // task-341: i18n lookup for keys outside the unify.sidebar namespace.
+    tr(fullKey, fallback) {
+      if (typeof this.$t === 'function') {
+        const v = this.$t(fullKey);
+        if (v && v !== fullKey) return v;
+      }
+      return fallback;
+    },
+    // task-341: latency indicator colour mirrors ChatPage.
+    getLatencyClass(latency) {
+      if (latency == null) return '';
+      if (latency < 200) return 'latency-good';
+      if (latency < 500) return 'latency-warn';
+      return 'latency-bad';
+    },
+    // task-341: workbench toggle, guarded for test env.
+    onToggleWorkbench() {
+      const s = this.chatStore || this.store;
+      if (s && typeof s.toggleWorkbench === 'function') s.toggleWorkbench();
     },
     // task-334m: group-wizard + selection handlers.
     onOpenGroupWizard() { this.groupWizardOpen = true; },

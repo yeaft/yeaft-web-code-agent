@@ -173,22 +173,10 @@ export const useChatStore = defineStore('chat', {
     unifyAvailableModels: [],     // 可用模型列表 [{ id, provider, label }]
     unifyDebugTurns: [],          // Debug panel: per-turn debug info from engine
 
-    // ★ task-301: Experimental new sidebar V2 (thread list + task tree).
-    // Default off — opt-in via Unify Settings toggle or ?sidebarV2=1 URL
-    // query. Persisted to localStorage so page refresh keeps the choice.
-    unifySidebarV2Enabled: (() => {
-      try {
-        if (typeof window !== 'undefined') {
-          const params = new URLSearchParams(window.location.search);
-          if (params.get('sidebarV2') === '1') return true;
-          if (params.get('sidebarV2') === '0') return false;
-          const stored = localStorage.getItem('unify-sidebar-v2-enabled');
-          if (stored === 'true') return true;
-          if (stored === 'false') return false;
-        }
-      } catch (_) { /* non-browser test env */ }
-      return false;
-    })(),
+    // ★ task-341: Sidebar V2 is now the only sidebar. Flag kept as a
+    // constant `true` for backward-compat with any lingering reads.
+    // Legacy <aside class="unify-sidebar"> deleted in UnifyPage.
+    unifySidebarV2Enabled: true,
 
     // ★ task-303: Chat stream dual view — active thread filter.
     // null = 主流 (full stream) | threadId = 仅显示该 thread
@@ -924,12 +912,12 @@ export const useChatStore = defineStore('chat', {
         agentId,
       });
     },
-    // ★ task-301: Toggle experimental Sidebar V2. Persisted so refresh keeps it.
-    setUnifySidebarV2Enabled(enabled) {
-      this.unifySidebarV2Enabled = !!enabled;
+    // ★ task-341: V2 sidebar is the only sidebar. Setter kept as no-op
+    // for backward compat; also sweeps the stale localStorage key once.
+    setUnifySidebarV2Enabled(_enabled) {
       try {
         if (typeof localStorage !== 'undefined') {
-          localStorage.setItem('unify-sidebar-v2-enabled', this.unifySidebarV2Enabled ? 'true' : 'false');
+          localStorage.removeItem('unify-sidebar-v2-enabled');
         }
       } catch (_) { /* ignore storage errors */ }
     },

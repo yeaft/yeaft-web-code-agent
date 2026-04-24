@@ -73,9 +73,9 @@ describe('Unify Settings — UnifyPage.js integration', () => {
     expect(unifyPage).toContain('showSettings');
   });
 
-  it('has settings button in sidebar with gear icon', () => {
-    expect(unifyPage).toContain('unify-settings-btn');
+  it('has settings panel wiring via toggleSettings (task-341: button migrated out of sidebar)', () => {
     expect(unifyPage).toContain('toggleSettings');
+    expect(unifyPage).toContain('showSettings');
   });
 
   it('conditionally renders MessageList vs UnifySettings', () => {
