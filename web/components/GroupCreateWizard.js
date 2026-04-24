@@ -1,21 +1,23 @@
 /**
- * GroupCreateWizard — task-334m prev-2 rev (simplified to 2 steps).
+ * GroupCreateWizard — single-page version (task-fix 5-bugs v2).
  *
- * Two-step wizard for creating a new group:
- *   Step 1 (Members) — multi-select VP roster + default-VP radio.
- *   Step 2 (Name)    — free-form name; required, trimmed. Submits directly.
+ * One modal, one scroll:
+ *   - Name field on top
+ *   - Roster (VP checkboxes) below
+ *   - Default-VP radio beside each selected member (compact)
+ *   - Cancel + Create in the footer
  *
- * The previous Step 3 (Confirm) was removed per user feedback — once the
- * name is entered, the create button commits the group. "选好了就是选好了."
+ * Previous 2-step flow felt 罗嗦 (redundant). All fields are visible
+ * simultaneously now — if the user changes their mind about the name
+ * after picking members, they don't have to click "back".
  *
- * Roster is authoritative — the wizard does NOT default to the full VP
- * library (D1 seed is the only place that auto-expands). An empty roster
- * is permitted on create (the group just opens in the no_default_vp invite
- * state); the UI nudges with the invite modal on first send.
+ * Roster is authoritative — the wizard does NOT auto-expand to the full
+ * VP library (D1 seed is the only place that does). An empty roster is
+ * permitted; the group opens in the `no_default_vp` invite state and the
+ * invite modal nudges the user on first send.
  *
- * All data flows through useChatStore().groupCrudRequest('create', …) which
- * wraps the WS round-trip in a 10s-timeout Promise and resolves with a
- * uniform `{ok, op, group?, error?}` shape.
+ * Flow: useChatStore().groupCrudRequest('create', …) → 10s-timeout
+ * WS round-trip → `{ok, op, group?, error?}`.
  */
 // Stores are resolved lazily via window.Pinia to keep this module
 // importable in node-only unit tests that don't mount Pinia.
@@ -32,17 +34,26 @@ export default {
           <button class="group-edit-close" type="button" @click="requestClose" :aria-label="$t('unify.group.wizard.close')">×</button>
         </header>
 
-        <div class="group-wizard-steps" role="tablist">
-          <span class="group-wizard-step" :class="{ 'is-active': step === 1 }" role="tab" :aria-selected="step === 1">
-            1. {{ $t('unify.group.wizard.step.members') }}
-          </span>
-          <span class="group-wizard-step" :class="{ 'is-active': step === 2 }" role="tab" :aria-selected="step === 2">
-            2. {{ $t('unify.group.wizard.step.name') }}
-          </span>
-        </div>
+        <div class="group-wizard-body group-wizard-body-single">
+          <!-- NAME -->
+          <label class="group-wizard-field">
+            <span class="group-wizard-field-label">{{ $t('unify.group.wizard.step.name') }}</span>
+            <input
+              type="text"
+              v-model.trim="form.name"
+              :placeholder="$t('unify.group.wizard.namePlaceholder')"
+              maxlength="60"
+              autocomplete="off"
+              class="group-wizard-input"
+              :class="{ 'is-error': !!nameError }"
+              ref="nameInput"
+              @keydown.enter.prevent="onSubmit"
+            />
+            <span class="group-wizard-hint">{{ $t('unify.group.wizard.nameHint') }}</span>
+            <span v-if="nameError" class="group-wizard-error">{{ nameError }}</span>
+          </label>
 
-        <!-- STEP 1: MEMBERS -->
-        <div v-if="step === 1" class="group-wizard-body">
+          <!-- ROSTER -->
           <div class="group-wizard-field">
             <span class="group-wizard-field-label">{{ $t('unify.group.wizard.roster') }}</span>
             <span class="group-wizard-hint">{{ $t('unify.group.wizard.rosterHint') }}</span>
@@ -66,65 +77,30 @@ export default {
                   </span>
                   <span class="group-wizard-roster-name">{{ vpLabelFor(vp.vpId) }}</span>
                   <span class="group-wizard-roster-id">@{{ vp.vpId }}</span>
+                  <span v-if="form.roster.includes(vp.vpId)" class="group-wizard-default-radio">
+                    <input
+                      type="radio"
+                      name="group-wizard-default"
+                      :value="vp.vpId"
+                      :checked="form.defaultVpId === vp.vpId"
+                      @click.stop
+                      @change="form.defaultVpId = vp.vpId"
+                      :title="$t('unify.group.wizard.defaultVpHint')"
+                    />
+                    <span class="group-wizard-default-label">{{ $t('unify.group.wizard.defaultVp') }}</span>
+                  </span>
                 </label>
               </li>
             </ul>
           </div>
-
-          <div class="group-wizard-field" v-if="form.roster.length > 0">
-            <span class="group-wizard-field-label">{{ $t('unify.group.wizard.defaultVp') }}</span>
-            <span class="group-wizard-hint">{{ $t('unify.group.wizard.defaultVpHint') }}</span>
-            <ul class="group-wizard-default-list">
-              <li v-for="vpId in form.roster" :key="vpId">
-                <label>
-                  <input
-                    type="radio"
-                    name="group-wizard-default"
-                    :value="vpId"
-                    :checked="form.defaultVpId === vpId"
-                    @change="form.defaultVpId = vpId"
-                  />
-                  {{ vpLabelFor(vpId) }}
-                </label>
-              </li>
-            </ul>
-          </div>
-
-          <div class="group-wizard-actions">
-            <button class="group-wizard-link-btn" type="button" @click="requestClose">
-              {{ $t('unify.group.wizard.cancel') }}
-            </button>
-            <button class="group-wizard-primary-btn" type="button" @click="step = 2">
-              {{ $t('unify.group.wizard.next') }}
-            </button>
-          </div>
-        </div>
-
-        <!-- STEP 2: NAME + SUBMIT -->
-        <div v-else class="group-wizard-body">
-          <label class="group-wizard-field">
-            <input
-              type="text"
-              v-model.trim="form.name"
-              :placeholder="$t('unify.group.wizard.namePlaceholder')"
-              maxlength="60"
-              autocomplete="off"
-              class="group-wizard-input"
-              :class="{ 'is-error': !!nameError }"
-              ref="nameInput"
-              @keydown.enter.prevent="onSubmit"
-            />
-            <span class="group-wizard-hint">{{ $t('unify.group.wizard.nameHint') }}</span>
-            <span v-if="nameError" class="group-wizard-error">{{ nameError }}</span>
-          </label>
 
           <div v-if="submitError" class="group-wizard-error" role="alert">
             {{ submitError }}
           </div>
 
           <div class="group-wizard-actions">
-            <button class="group-wizard-link-btn" type="button" @click="step = 1" :disabled="busy">
-              {{ $t('unify.group.wizard.back') }}
+            <button class="group-wizard-link-btn" type="button" @click="requestClose" :disabled="busy">
+              {{ $t('unify.group.wizard.cancel') }}
             </button>
             <button
               class="group-wizard-primary-btn"
@@ -142,7 +118,6 @@ export default {
   `,
   data() {
     return {
-      step: 1,
       form: {
         name: '',
         roster: [],
@@ -181,36 +156,21 @@ export default {
     vpList() { return this.vpStore?.vpList || []; },
     // task-339-F2 defensive: distinguish "snapshot received and empty" (emptyLibrary=true)
     // from "snapshot not received yet" (emptyLibrary=false && vpList=0 && lastSnapshotAt=0).
-    // When true → roster really is empty, show rosterEmpty. When false && vpList=0 → loading.
     vpLibraryEmpty() {
       const s = this.vpStore;
       if (!s) return false;
       if (s.emptyLibrary === true) return true;
-      // Snapshot already arrived but somehow empty → treat as genuine empty.
       return !!(s.lastSnapshotAt && s.lastSnapshotAt > 0 && (s.vpOrder?.length || 0) === 0);
     },
     canAdvanceFromName() { return (this.form.name || '').trim().length > 0; },
-    summaryDefaultVpId() {
-      return this.form.defaultVpId || this.form.roster[0] || null;
-    },
-  },
-  watch: {
-    step(newStep) {
-      if (newStep === 2) {
-        this.$nextTick(() => {
-          const el = this.$refs.nameInput;
-          if (el && typeof el.focus === 'function') el.focus();
-        });
-      }
-    },
   },
   mounted() {
     window.addEventListener('keydown', this.onEsc);
+    this.$nextTick(() => {
+      const el = this.$refs.nameInput;
+      if (el && typeof el.focus === 'function') el.focus();
+    });
     // task-347 Fix 2: proactively subscribe to VP snapshot on mount.
-    // Agent side is idempotent (see test/agent/vp-bridge-reconnect-resend.test.js),
-    // so a second subscribe is safe even if session_ready already fired.
-    // This protects the wizard from being permanently stuck at "VP 加载中..."
-    // when the user opens it before the session handshake completes.
     try {
       if (this.vpStore && this.vpStore.lastSnapshotAt === 0) {
         const chat = this.chat;

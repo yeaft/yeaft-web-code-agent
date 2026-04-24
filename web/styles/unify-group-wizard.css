@@ -133,6 +133,34 @@
   color: var(--text-muted);
 }
 
+/* task-fix (5-bugs v2): inline "default VP" radio next to each selected
+   member so the wizard fits on one page — no separate step required. */
+.group-wizard-default-radio {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border-subtle, rgba(0,0,0,0.08));
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.group-wizard-default-radio input[type="radio"] {
+  flex: 0 0 auto;
+  margin: 0;
+}
+.group-wizard-default-label {
+  font-size: 10px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+/* Larger body stack when everything lives on one page. */
+.group-wizard-body.group-wizard-body-single {
+  gap: 14px;
+}
+
 /* Default-VP radio list (step 1) ------------------------------------------- */
 .group-wizard-default-list {
   list-style: none;

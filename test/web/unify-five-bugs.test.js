@@ -19,19 +19,32 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
 const read = (p) => readFileSync(path.join(repoRoot, p), 'utf8');
 
-// ─── Bug A: 2-step wizard (no confirm) ──────────────────────────
+// ─── Bug F: agent ensures yeaftDir exists + populates CONFIG.yeaftDir ──
 
-describe('Bug A: GroupCreateWizard is 2-step', () => {
+describe('Bug F: agent populates CONFIG.yeaftDir at load time', () => {
+  const src = read('agent/index.js');
+  it('derives YEAFT_DIR from env or ~/.yeaft', () => {
+    expect(src).toMatch(/YEAFT_DIR\s*=\s*process\.env\.YEAFT_DIR\s*\|\|.*\.yeaft/);
+  });
+  it('creates the yeaft dir if missing (mkdirSync recursive)', () => {
+    expect(src).toMatch(/mkdirSync\(YEAFT_DIR,\s*\{\s*recursive:\s*true\s*\}\)/);
+  });
+  it('assigns yeaftDir into the CONFIG object', () => {
+    expect(src).toMatch(/yeaftDir:\s*YEAFT_DIR/);
+  });
+});
+
+describe('Bug A: GroupCreateWizard is single-page', () => {
   const src = read('web/components/GroupCreateWizard.js');
-  it('only lists two step tabs in the tablist', () => {
-    const tabMatches = src.match(/class="group-wizard-step"/g) || [];
-    expect(tabMatches.length).toBe(2);
+  it('renders name + roster together in a single body', () => {
+    expect(src).toContain('group-wizard-body-single');
+    expect(src).not.toMatch(/v-if="step === 1"/);
+    expect(src).not.toMatch(/step === 2/);
   });
   it('has no confirm/summary block', () => {
     expect(src).not.toContain('group-wizard-summary');
-    expect(src).not.toMatch(/v-else-if="step === 2"/);
   });
-  it('step 2 name input submits via Enter', () => {
+  it('name input submits via Enter', () => {
     expect(src).toMatch(/@keydown\.enter\.prevent="onSubmit"/);
   });
 });

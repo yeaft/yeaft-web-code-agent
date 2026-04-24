@@ -57,10 +57,28 @@ function saveConfig(config) {
 }
 
 const fileConfig = loadConfig();
+
+// task-fix (5-bugs): the Unify web-bridge reads `ctx.CONFIG.yeaftDir`
+// for every group / VP / memory operation. If unset, `path.join(undefined, …)`
+// throws `The "path" argument must be of type string. Received undefined`
+// and the UI surfaces "群组操作失败: …" with a raw node error. Resolve the
+// default (`~/.yeaft`) here and make sure the directory exists before the
+// WebSocket connection goes live, so downstream code can assume a real path.
+const YEAFT_DIR = process.env.YEAFT_DIR || fileConfig.yeaftDir || join(homedir(), '.yeaft');
+try {
+  if (!existsSync(YEAFT_DIR)) {
+    mkdirSync(YEAFT_DIR, { recursive: true });
+    console.log(`[Agent] Created yeaft dir: ${YEAFT_DIR}`);
+  }
+} catch (err) {
+  console.warn(`[Agent] Could not ensure yeaft dir ${YEAFT_DIR}: ${err?.message || err}`);
+}
+
 const CONFIG = {
   serverUrl: process.env.SERVER_URL || fileConfig.serverUrl,
   agentName: process.env.AGENT_NAME || fileConfig.agentName,
   workDir: process.env.WORK_DIR || fileConfig.workDir || process.cwd(),
+  yeaftDir: YEAFT_DIR,
   reconnectInterval: fileConfig.reconnectInterval,
   agentSecret: process.env.AGENT_SECRET || fileConfig.agentSecret,
   // 显式禁用的工具（非 MCP 相关）

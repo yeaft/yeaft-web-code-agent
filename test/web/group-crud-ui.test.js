@@ -158,13 +158,17 @@ describe('GroupCreateWizard', () => {
     // Fallback to `unknown` when the specific key has no translation.
     expect(wizardSrc).toMatch(/unify\.group\.error\.unknown/);
   });
-  it('2-step wizard: members → name (confirm step removed per task-fix)', () => {
-    expect(wizardSrc).toContain('step: 1');
-    expect(wizardSrc).toMatch(/v-if="step === 1"/);
-    // task-fix (5-bugs): per user — "选好了就是选好了". Step 3 (confirm)
-    // removed; step 2 now has the name input plus the final submit button.
+  it('single-page wizard (members + name visible together, no step nav)', () => {
+    // task-fix (5-bugs v2): per user — "可以在一个页面呈现，不需要分两步，太罗嗦了".
+    // Wizard is now one panel; no `step` state, no step-nav buttons.
+    expect(wizardSrc).not.toMatch(/step: 1/);
+    expect(wizardSrc).not.toMatch(/v-if="step === 1"/);
     expect(wizardSrc).not.toMatch(/v-else-if="step === 2"/);
     expect(wizardSrc).not.toContain('group-wizard-summary');
+    // Both the name input and the roster list appear in the same body.
+    expect(wizardSrc).toContain('group-wizard-body-single');
+    expect(wizardSrc).toContain('group-wizard-roster-list');
+    expect(wizardSrc).toContain('ref="nameInput"');
   });
 });
 
