@@ -22,11 +22,12 @@ export default {
   name: 'GroupCreateWizard',
   emits: ['close', 'created'],
   template: `
-    <div class="group-wizard-overlay" @click.self="onOverlayClick" role="dialog" aria-modal="true" :aria-label="$t('unify.group.wizard.title')">
-      <div class="group-wizard-modal">
-        <header class="group-wizard-header">
-          <span class="group-wizard-title">{{ $t('unify.group.wizard.title') }}</span>
-          <button class="group-wizard-close" type="button" @click="requestClose" :aria-label="$t('unify.group.wizard.close')">×</button>
+    <Teleport to="body">
+    <div class="group-edit-overlay group-wizard-overlay" @click.self="onOverlayClick" role="dialog" aria-modal="true" :aria-label="$t('unify.group.wizard.title')">
+      <div class="group-edit-modal group-wizard-modal">
+        <header class="group-edit-header">
+          <span class="group-edit-title">{{ $t('unify.group.wizard.title') }}</span>
+          <button class="group-edit-close" type="button" @click="requestClose" :aria-label="$t('unify.group.wizard.close')">×</button>
         </header>
 
         <div class="group-wizard-steps" role="tablist">
@@ -176,6 +177,7 @@ export default {
         </div>
       </div>
     </div>
+    </Teleport>
   `,
   data() {
     return {
@@ -243,6 +245,19 @@ export default {
   },
   mounted() {
     window.addEventListener('keydown', this.onEsc);
+    // task-347 Fix 2: proactively subscribe to VP snapshot on mount.
+    // Agent side is idempotent (see test/agent/vp-bridge-reconnect-resend.test.js),
+    // so a second subscribe is safe even if session_ready already fired.
+    // This protects the wizard from being permanently stuck at "VP 加载中..."
+    // when the user opens it before the session handshake completes.
+    try {
+      if (this.vpStore && this.vpStore.lastSnapshotAt === 0) {
+        const chat = this.chat;
+        if (chat && typeof chat.sendWsMessage === 'function') {
+          chat.sendWsMessage({ type: 'unify_vp_subscribe' });
+        }
+      }
+    } catch (_) { /* test env without Pinia/ws — no-op */ }
   },
   beforeUnmount() {
     window.removeEventListener('keydown', this.onEsc);
