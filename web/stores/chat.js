@@ -188,6 +188,14 @@ export const useChatStore = defineStore('chat', {
     // null = 主流 (full stream) | threadId = 仅显示该 thread
     unifyActiveThreadFilter: null,
 
+    // ★ task-fix (group-switch): active group filter for the Unify stream.
+    // When a user clicks a group row in the sidebar, the main pane narrows
+    // to messages tagged with that groupId (both inbound agent messages
+    // and outbound user messages sent via the group-chat action). null =
+    // no group filter. Mutually exclusive with unifyActiveThreadFilter —
+    // setting one clears the other so the view has a single predicate.
+    unifyActiveGroupFilter: null,
+
     // ★ task-301 Part 2: real thread/task state driven by agent-side
     // ThreadStore / TaskStore. Populated by thread_list_updated /
     // task_list_updated events (unify_output metadata channel).
@@ -292,6 +300,11 @@ export const useChatStore = defineStore('chat', {
         const target = state.unifyActiveThreadFilter;
         return raw.filter(m => m && m.threadId === target);
       }
+      // task-fix (group-switch): group filter narrows the stream to one group.
+      if (state.currentView === 'unify' && state.unifyActiveGroupFilter) {
+        const target = state.unifyActiveGroupFilter;
+        return raw.filter(m => m && m.groupId === target);
+      }
       return raw;
     },
     // ★ Unify: the raw message list for the active Unify conversation (no thread filter applied).
@@ -303,9 +316,15 @@ export const useChatStore = defineStore('chat', {
     unifyVisibleMessages: (state) => {
       const convId = state.unifyConversationId;
       const raw = convId ? (state.messagesMap[convId] || EMPTY_ARRAY) : EMPTY_ARRAY;
-      if (!state.unifyActiveThreadFilter) return raw;
-      const target = state.unifyActiveThreadFilter;
-      return raw.filter(m => m && m.threadId === target);
+      if (state.unifyActiveThreadFilter) {
+        const target = state.unifyActiveThreadFilter;
+        return raw.filter(m => m && m.threadId === target);
+      }
+      if (state.unifyActiveGroupFilter) {
+        const target = state.unifyActiveGroupFilter;
+        return raw.filter(m => m && m.groupId === target);
+      }
+      return raw;
     },
     // ★ task-315: Cross-thread aggregation — all messages belonging to
     // the currently active Task Detail view, sorted by creation time
@@ -580,6 +599,7 @@ export const useChatStore = defineStore('chat', {
         this.addMessageToConversation(this.unifyConversationId, {
           type: 'user',
           content: text,
+          groupId,
         });
         this.processingConversations[this.unifyConversationId] = true;
         this._turnCompletedConvs?.delete(this.unifyConversationId);
@@ -1119,6 +1139,19 @@ export const useChatStore = defineStore('chat', {
     setActiveThread(threadId) {
       this.unifyActiveThreadId = threadId || null;
       this.unifyActiveThreadFilter = threadId || null;
+      // Thread + group filters are mutually exclusive.
+      if (threadId) this.unifyActiveGroupFilter = null;
+    },
+    // task-fix (group-switch): clicking a group row in the sidebar narrows
+    // the main pane to that group. Clears thread + task-detail filters so
+    // exactly one scope is active at a time.
+    setActiveGroupFilter(groupId) {
+      this.unifyActiveGroupFilter = groupId || null;
+      if (groupId) {
+        this.unifyActiveThreadId = null;
+        this.unifyActiveThreadFilter = null;
+        this.unifyActiveTaskDetailId = null;
+      }
     },
     setActiveTaskUi(taskId) {
       this.unifyActiveTaskId = taskId || null;

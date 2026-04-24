@@ -22,6 +22,7 @@ export default {
       <UnifySidebarV2
         @select-thread="onSelectThreadV2"
         @select-task="onSelectTaskV2"
+        @select-group="onSelectGroupV2"
         @jump-to-message="onJumpToMessage"
         @search-escape="onSearchEscape"
         @open-user-memory="onOpenUserMemory"
@@ -321,6 +322,18 @@ export default {
       // list. Also keeps the sidebar row highlighted (store handles
       // both flags in enterTaskDetailView).
       store.enterTaskDetailView(taskId);
+    };
+
+    // task-fix (group-switch): clicking a group row in the sidebar narrows
+    // the main pane to that group's messages. The store handles filter
+    // mutex (thread/task filters are cleared).
+    const onSelectGroupV2 = (g) => {
+      const id = g && g.id ? g.id : null;
+      if (!id) return;
+      store.setActiveGroupFilter(id);
+      // Also leave any detail views so the main stream is visible.
+      if (store.unifyActiveTaskDetailId) store.leaveTaskDetailView();
+      if (store.unifyActiveVpDetailId) store.leaveVpDetailView();
     };
 
     // task-315: exit the task-detail view back to the main stream.
@@ -809,6 +822,7 @@ export default {
       sidebarV2Enabled,
       onSelectThreadV2,
       onSelectTaskV2,
+      onSelectGroupV2,
       exitTaskDetailView,
       exitVpDetailView,
       onSwitchToThreadFromTaskDetail,

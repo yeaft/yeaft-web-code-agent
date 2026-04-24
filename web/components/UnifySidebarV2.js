@@ -175,13 +175,14 @@ export default {
             <div
               v-for="g in groupList"
               :key="g.id"
-              class="usv2-group-row"
+              class="usv2-thread usv2-group-row"
               :class="{ selected: g.id === activeGroupId }"
               @click="onSelectGroup(g)"
               @contextmenu.prevent="openGroupMenu(g, $event)"
             >
-              <span class="usv2-group-row-name">{{ groupDisplayName(g) }}</span>
-              <span class="usv2-group-row-members">
+              <span class="usv2-dot usv2-dot-group"></span>
+              <span class="usv2-thread-name">{{ groupDisplayName(g) }}</span>
+              <span class="usv2-thread-title">
                 <template v-if="g.roster && g.roster.length === 1">{{ $t('unify.group.oneMember') }}</template>
                 <template v-else-if="g.roster && g.roster.length > 1">{{ $t('unify.group.membersCount', { count: g.roster.length }) }}</template>
                 <template v-else>{{ $t('unify.group.noMembers') }}</template>

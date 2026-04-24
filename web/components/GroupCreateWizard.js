@@ -64,10 +64,18 @@ export default {
               {{ $t('unify.group.wizard.rosterLoading') }}
             </div>
             <ul v-else class="group-wizard-roster-list" role="listbox" aria-multiselectable="true">
-              <li v-for="vp in vpList" :key="vp.vpId" class="group-wizard-roster-item" role="option" :aria-selected="form.roster.includes(vp.vpId)">
-                <label>
+              <li
+                v-for="vp in vpList"
+                :key="vp.vpId"
+                class="group-wizard-roster-item"
+                :class="{ 'is-selected': form.roster.includes(vp.vpId), 'is-default': form.defaultVpId === vp.vpId }"
+                role="option"
+                :aria-selected="form.roster.includes(vp.vpId)"
+              >
+                <label class="group-wizard-roster-row">
                   <input
                     type="checkbox"
+                    class="group-wizard-roster-check"
                     :value="vp.vpId"
                     :checked="form.roster.includes(vp.vpId)"
                     @change="toggleMember(vp.vpId, $event.target.checked)"
@@ -76,20 +84,19 @@ export default {
                     {{ vpInitialFor(vp.vpId) }}
                   </span>
                   <span class="group-wizard-roster-name">{{ vpLabelFor(vp.vpId) }}</span>
-                  <span class="group-wizard-roster-id">@{{ vp.vpId }}</span>
-                  <span v-if="form.roster.includes(vp.vpId)" class="group-wizard-default-radio">
-                    <input
-                      type="radio"
-                      name="group-wizard-default"
-                      :value="vp.vpId"
-                      :checked="form.defaultVpId === vp.vpId"
-                      @click.stop
-                      @change="form.defaultVpId = vp.vpId"
-                      :title="$t('unify.group.wizard.defaultVpHint')"
-                    />
-                    <span class="group-wizard-default-label">{{ $t('unify.group.wizard.defaultVp') }}</span>
-                  </span>
                 </label>
+                <button
+                  v-if="form.roster.includes(vp.vpId)"
+                  type="button"
+                  class="group-wizard-default-star"
+                  :class="{ 'is-on': form.defaultVpId === vp.vpId }"
+                  :aria-label="$t('unify.group.wizard.defaultVpHint')"
+                  :aria-pressed="form.defaultVpId === vp.vpId"
+                  :title="$t('unify.group.wizard.defaultVpHint')"
+                  @click.stop="form.defaultVpId = vp.vpId"
+                >
+                  <span aria-hidden="true">{{ form.defaultVpId === vp.vpId ? '★' : '☆' }}</span>
+                </button>
               </li>
             </ul>
           </div>
