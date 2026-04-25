@@ -301,13 +301,12 @@ export const useChatStore = defineStore('chat', {
         return raw.filter(m => m && m.threadId === target);
       }
       // task-fix (group-switch): group filter narrows the stream to one group.
-      // task-fix (group-empty-history): only EXCLUDE messages tagged with a
-      // different groupId. Untagged messages (legacy chat/assistant turns,
-      // restored history from conversationStore) stay visible — switching
-      // into a group should not blank out an active conversation.
+      // Every Unify message is stamped with a groupId at creation time
+      // (addMessageToConversation defaults to grp_default), so strict
+      // equality is safe — no message can slip through "untagged".
       if (state.currentView === 'unify' && state.unifyActiveGroupFilter) {
         const target = state.unifyActiveGroupFilter;
-        return raw.filter(m => m && (!m.groupId || m.groupId === target));
+        return raw.filter(m => m && m.groupId === target);
       }
       return raw;
     },
@@ -326,7 +325,7 @@ export const useChatStore = defineStore('chat', {
       }
       if (state.unifyActiveGroupFilter) {
         const target = state.unifyActiveGroupFilter;
-        return raw.filter(m => m && (!m.groupId || m.groupId === target));
+        return raw.filter(m => m && m.groupId === target);
       }
       return raw;
     },

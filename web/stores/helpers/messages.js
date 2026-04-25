@@ -1,5 +1,12 @@
 // Message CRUD and streaming helpers
 
+// Default group identifier used by the Unify "Default" group seed
+// (mirrors agent/unify/groups/seed-default.js DEFAULT_GROUP_ID).
+// Every Unify message is tagged with a groupId — either the currently
+// active group filter or this default — so the group filter getters
+// can use strict equality without hiding "untagged" messages.
+const DEFAULT_GROUP_ID = 'grp_default';
+
 export function addMessageToConversation(store, conversationId, msg) {
   if (!conversationId) return;
 
@@ -8,6 +15,17 @@ export function addMessageToConversation(store, conversationId, msg) {
     timestamp: Date.now(),
     ...msg
   };
+
+  // Unify uniformity: stamp every message that lands in the active Unify
+  // conversation with a groupId. Never overwrite an explicit groupId set
+  // by the caller (e.g. sendUnifyGroupChat or task_message handler).
+  if (
+    store.currentView === 'unify'
+    && conversationId === store.unifyConversationId
+    && !newMsg.groupId
+  ) {
+    newMsg.groupId = store.unifyActiveGroupFilter || DEFAULT_GROUP_ID;
+  }
 
   if (!store.messagesMap[conversationId]) {
     store.messagesMap[conversationId] = [];
