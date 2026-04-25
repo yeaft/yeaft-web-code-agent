@@ -1,0 +1,194 @@
+/* ============================================================
+ * GroupInviteModal — empty-group "Invite a VP" prompt.
+ *
+ * Visual language matches `.modal-overlay` / `.modal` in
+ * chat-modals.css but stays self-contained so the component
+ * can be reused outside the legacy modal stack.
+ *
+ * Plus: empty-group hero state shown in the center pane when
+ * the active group has no roster members, and a sidebar accent
+ * for empty groups (especially the Default group).
+ * ============================================================ */
+
+.group-invite-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1100;
+  animation: gi-fade 0.18s ease-out;
+}
+
+.group-invite-modal {
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  width: min(440px, calc(100% - 48px));
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+  animation: gi-pop 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+
+.group-invite-header {
+  padding: 18px 22px 6px;
+}
+
+.group-invite-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: 0.01em;
+}
+
+.group-invite-body {
+  padding: 4px 22px 18px;
+}
+
+.group-invite-body p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+
+.group-invite-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 18px 18px;
+}
+
+.group-invite-dismiss,
+.group-invite-primary {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.05s;
+}
+
+.group-invite-dismiss {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.group-invite-dismiss:hover {
+  background: var(--bg-user-msg);
+  color: var(--text-primary);
+}
+
+.group-invite-primary {
+  background: var(--accent, #4f8cff);
+  border-color: var(--accent, #4f8cff);
+  color: #fff;
+}
+
+.group-invite-primary:hover {
+  filter: brightness(1.08);
+}
+
+.group-invite-primary:active,
+.group-invite-dismiss:active {
+  transform: translateY(1px);
+}
+
+@keyframes gi-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes gi-pop {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0)   scale(1); }
+}
+
+/* ------------------------------------------------------------
+ * Empty-group hero — shown in the center pane (replaces the
+ * blank MessageList) when the active group has no roster.
+ * Mirrors the calm tone of `.unify-detail-placeholder` but with
+ * a single primary CTA so the next step is obvious.
+ * ------------------------------------------------------------ */
+
+.unify-empty-group-hero {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 32px 24px;
+  gap: 14px;
+  color: var(--text-secondary);
+}
+
+.unify-empty-group-hero__icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--bg-user-msg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent, #4f8cff);
+}
+
+.unify-empty-group-hero__title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.unify-empty-group-hero__hint {
+  font-size: 13.5px;
+  line-height: 1.6;
+  max-width: 380px;
+  margin: 0;
+}
+
+.unify-empty-group-hero__cta {
+  margin-top: 6px;
+  background: var(--accent, #4f8cff);
+  border: 1px solid var(--accent, #4f8cff);
+  color: #fff;
+  border-radius: 8px;
+  padding: 8px 18px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: filter 0.15s, transform 0.05s;
+}
+
+.unify-empty-group-hero__cta:hover { filter: brightness(1.08); }
+.unify-empty-group-hero__cta:active { transform: translateY(1px); }
+
+/* ------------------------------------------------------------
+ * Sidebar empty-group accent — distinguishes "container waiting
+ * to be filled" from a populated group at a glance. The default
+ * group gets the strongest cue (dashed border + accent dot) since
+ * it is the user's first encounter with the concept.
+ * ------------------------------------------------------------ */
+
+.usv2-group-row.is-empty .usv2-dot-group {
+  background: var(--accent, #4f8cff);
+  opacity: 0.55;
+}
+
+.usv2-group-row.is-empty .usv2-thread-title {
+  color: var(--accent, #4f8cff);
+  opacity: 0.85;
+}
+
+.usv2-group-row.is-default-empty {
+  border: 1px dashed var(--border-color);
+  border-radius: 8px;
+}
+
+.usv2-group-row.is-default-empty.selected {
+  border-color: var(--accent, #4f8cff);
+  border-style: dashed;
+}

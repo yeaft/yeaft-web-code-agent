@@ -121,7 +121,26 @@ export default {
 
         <!-- Messages Area — reuse standard MessageList for identical rendering -->
         <UserMemoryPage v-if="!showSettings && userMemoryOpen && !store.unifyActiveVpDetailId" @back="userMemoryOpen = false" />
-        <MessageList v-if="!showSettings && !userMemoryOpen && !store.unifyActiveTaskDetailId && !store.unifyActiveVpDetailId" />
+        <!-- task-fix-empty-group: hero state replaces MessageList when the
+             active group has no roster — gives the user a single, clear
+             next step instead of a blank canvas. The modal still pops on
+             top for groups the user hasn't dismissed yet. -->
+        <div
+          v-if="!showSettings && !userMemoryOpen && !store.unifyActiveTaskDetailId && !store.unifyActiveVpDetailId && isActiveGroupEmpty"
+          class="unify-empty-group-hero"
+        >
+          <div class="unify-empty-group-hero__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="28" height="28"><path fill="currentColor" d="M16 11c1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3 1.34 3 3 3zm-8 0c1.66 0 3-1.34 3-3S9.66 5 8 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5C15 14.17 10.33 13 8 13zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+          </div>
+          <h2 class="unify-empty-group-hero__title">{{ $t('unify.group.empty.title') }}</h2>
+          <p class="unify-empty-group-hero__hint">
+            {{ $t('unify.group.empty.hint', { name: inviteGroupName || '' }) }}
+          </p>
+          <button type="button" class="unify-empty-group-hero__cta" @click="onInviteOpenLibrary">
+            {{ $t('unify.group.empty.cta') }}
+          </button>
+        </div>
+        <MessageList v-if="!showSettings && !userMemoryOpen && !store.unifyActiveTaskDetailId && !store.unifyActiveVpDetailId && !isActiveGroupEmpty" />
 
         <!-- Settings Panel -->
         <UnifySettings v-if="showSettings" :initial-tab="settingsInitialTab" @close="showSettings = false" @saved="onSettingsSaved" />
@@ -735,6 +754,13 @@ export default {
       // Skip if the user already dismissed THIS empty-roster state.
       return !inviteDismissedFor.has(g.id);
     });
+    // task-fix-empty-group: separate from `shouldShowInviteModal` because the
+    // hero state stays visible even after the user dismisses the modal —
+    // the empty group still needs a clear next step in the main pane.
+    const isActiveGroupEmpty = Vue.computed(() => {
+      const gs = groupsStore();
+      return !!(gs && gs.activeNeedsInvite);
+    });
     const onInviteOpenLibrary = () => {
       const g = activeGroupForInvite.value;
       if (g) inviteDismissedFor.add(g.id);
@@ -837,6 +863,7 @@ export default {
       inviteGroupName,
       onInviteOpenLibrary,
       onInviteDismiss,
+      isActiveGroupEmpty,
       // task-334-ui-d: user memory
       userMemoryOpen,
       onOpenUserMemory,

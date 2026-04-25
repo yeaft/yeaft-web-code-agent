@@ -176,7 +176,11 @@ export default {
               v-for="g in groupList"
               :key="g.id"
               class="usv2-thread usv2-group-row"
-              :class="{ selected: g.id === activeGroupId }"
+              :class="{
+                selected: g.id === activeGroupId,
+                'is-empty': !g.roster || g.roster.length === 0,
+                'is-default-empty': g.id === 'grp_default' && (!g.roster || g.roster.length === 0),
+              }"
               @click="onSelectGroup(g)"
               @contextmenu.prevent="openGroupMenu(g, $event)"
             >

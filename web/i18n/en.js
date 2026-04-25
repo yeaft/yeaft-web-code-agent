@@ -1005,6 +1005,9 @@ export default {
   'unify.group.invite.body': '"{name}" has no members yet. Add a VP from your library to start chatting.',
   'unify.group.invite.openLibrary': 'Open VP Library',
   'unify.group.invite.dismiss': 'Not now',
+  'unify.group.empty.title': 'Empty group',
+  'unify.group.empty.hint': '"{name}" has no members yet. Add a VP from your library to start chatting.',
+  'unify.group.empty.cta': 'Add a VP from library',
 
   // ===== task-334-ui-d: User Memory browser =====
   'unify.userMemory.sidebarTitle': 'User Memory',

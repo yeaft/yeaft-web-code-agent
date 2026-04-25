@@ -1005,6 +1005,9 @@ export default {
   'unify.group.invite.body': '「{name}」当前为空，请从角色库添加一位 VP 以开始对话。',
   'unify.group.invite.openLibrary': '打开角色库',
   'unify.group.invite.dismiss': '暂不',
+  'unify.group.empty.title': '空群组',
+  'unify.group.empty.hint': '「{name}」还没有成员。从角色库添加一位 VP 即可开始对话。',
+  'unify.group.empty.cta': '从角色库添加 VP',
 
   // ===== task-334-ui-d: 用户记忆浏览器 =====
   'unify.userMemory.sidebarTitle': '用户记忆',
