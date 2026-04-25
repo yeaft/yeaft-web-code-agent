@@ -6,13 +6,14 @@ import UnifyBreadcrumb from './UnifyBreadcrumb.js';
 import UnifyTaskDetailView from './UnifyTaskDetailView.js';
 import VpDetailView from './VpDetailView.js';
 import GroupInviteModal from './GroupInviteModal.js';
+import GroupMemberEditor from './GroupMemberEditor.js';
 import TaskMessageRejectToast from './TaskMessageRejectToast.js';
 import UserMemoryPage from './UserMemoryPage.js';
 import WorkbenchPanel from './WorkbenchPanel.js';
 
 export default {
   name: 'UnifyPage',
-  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2, UnifyBreadcrumb, UnifyTaskDetailView, VpDetailView, GroupInviteModal, TaskMessageRejectToast, UserMemoryPage, WorkbenchPanel },
+  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2, UnifyBreadcrumb, UnifyTaskDetailView, VpDetailView, GroupInviteModal, GroupMemberEditor, TaskMessageRejectToast, UserMemoryPage, WorkbenchPanel },
   template: `
     <div class="unify-page">
       <!-- Mobile sidebar overlay -->
@@ -30,6 +31,7 @@ export default {
         @toggle-sidebar="toggleSidebar"
         @back="goBack"
         @open-settings="toggleSettings"
+        @manage-members="openMemberEditor"
       />
 
       <!-- Workbench Panel (between sidebar and main) -->
@@ -295,14 +297,24 @@ export default {
       <!-- task-334j: reject toast stack (bottom-right) -->
       <TaskMessageRejectToast />
 
-      <!-- task-334m: Group invite modal. Shown whenever the active group
-           has no members + no defaultVpId (drives R6 §Δ10 hard constraint
-           (c) default-VP fallback). CTA routes to the VP library modal. -->
+      <!-- task-fix-group-member-editor: invite modal CTA now opens the
+           group's member editor directly (the previous flow dumped the
+           user into VP-Settings, where there was no add-to-group UI). -->
       <GroupInviteModal
         v-if="shouldShowInviteModal"
         :group-name="inviteGroupName"
         @open-library="onInviteOpenLibrary"
         @dismiss="onInviteDismiss"
+      />
+
+      <!-- task-fix-group-member-editor: roster manager for the active
+           group. Replaces the previous "open settings → VP library"
+           detour. Owned at this level so the empty-group hero, the
+           sidebar kebab, and the invite-modal CTA all converge here. -->
+      <GroupMemberEditor
+        v-if="memberEditorOpen && memberEditorGroupId"
+        :group-id="memberEditorGroupId"
+        @close="closeMemberEditor"
       />
     </div>
   `,
@@ -770,11 +782,29 @@ export default {
     const onInviteOpenLibrary = () => {
       const g = activeGroupForInvite.value;
       if (g) inviteDismissedFor.add(g.id);
-      openSettings({ initialTab: 'vp' });
+      // task-fix-group-member-editor: open the in-place member editor
+      // for the current group instead of routing through VP Settings.
+      // The "open-library" event name is preserved for backwards-compat
+      // with GroupInviteModal's emits but the destination has changed.
+      openMemberEditor(g ? g.id : null);
     };
     const onInviteDismiss = () => {
       const g = activeGroupForInvite.value;
       if (g) inviteDismissedFor.add(g.id);
+    };
+    // task-fix-group-member-editor: GroupMemberEditor state. Holds the
+    // groupId so callers (sidebar kebab, hero CTA, invite-modal CTA)
+    // can target any group, not just the active one.
+    const memberEditorOpen = Vue.ref(false);
+    const memberEditorGroupId = Vue.ref(null);
+    const openMemberEditor = (groupId) => {
+      if (!groupId) return;
+      memberEditorGroupId.value = groupId;
+      memberEditorOpen.value = true;
+    };
+    const closeMemberEditor = () => {
+      memberEditorOpen.value = false;
+      memberEditorGroupId.value = null;
     };
     // Re-arm the prompt whenever the active roster transitions back to
     // empty (i.e. after the user removed the last member), so the modal
@@ -870,6 +900,11 @@ export default {
       onInviteOpenLibrary,
       onInviteDismiss,
       isActiveGroupEmpty,
+      // task-fix-group-member-editor: roster editor bindings.
+      memberEditorOpen,
+      memberEditorGroupId,
+      openMemberEditor,
+      closeMemberEditor,
       // task-334-ui-d: user memory
       userMemoryOpen,
       onOpenUserMemory,

@@ -267,8 +267,13 @@ describe('UnifyPage — task-343 VP-via-Settings wiring', () => {
     expect(unifyPageSrc).not.toContain("from './VpCrudModal.js'");
   });
 
-  it('onInviteOpenLibrary opens Settings at VP tab via openSettings helper', () => {
-    expect(unifyPageSrc).toMatch(/openSettings\(\s*\{\s*initialTab:\s*['"]vp['"]/);
+  it('onInviteOpenLibrary now opens GroupMemberEditor (no Settings detour)', () => {
+    // task-fix-group-member-editor: the invite-modal CTA used to dump
+    // the user into Settings → VP library, where there was no add-to-
+    // group action. It now opens an in-place GroupMemberEditor for the
+    // current group via openMemberEditor(g.id).
+    expect(unifyPageSrc).toMatch(/onInviteOpenLibrary[\s\S]{0,400}openMemberEditor\(/);
+    expect(unifyPageSrc).not.toMatch(/onInviteOpenLibrary[\s\S]{0,200}initialTab:\s*['"]vp['"]/);
   });
 
   it('declares settingsInitialTab ref and passes to UnifySettings', () => {

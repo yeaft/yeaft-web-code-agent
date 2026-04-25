@@ -953,6 +953,7 @@ export default {
   'unify.group.archive': 'Archive',
   'unify.group.archiveConfirm': 'Archive "{name}"? You can recover it from disk later.',
   'unify.group.rename': 'Rename',
+  'unify.group.manageMembers': 'Manage members',
   'unify.group.renamePrompt': 'New name for "{name}":',
 
   // Edit modal (N1 — replaces window.prompt/confirm)
@@ -1006,12 +1007,17 @@ export default {
   'unify.group.invite.openLibrary': 'Open VP Library',
   'unify.group.invite.dismiss': 'Not now',
   'unify.group.empty.title': 'Empty group',
-  'unify.group.empty.hint': '"{name}" has no members yet. Add a VP from your library to start chatting.',
-  'unify.group.empty.cta': 'Add a VP from library',
-  'unify.vp.crud.addToGroup': 'Add to "{name}"',
-  'unify.vp.crud.alreadyInGroup': 'In "{name}"',
-  'unify.vp.crud.addToGroupFailed': 'Add failed: {error}',
-  'unify.vp.crud.addedToGroup': 'Added to "{name}"',
+  'unify.group.empty.hint': '"{name}" has no members yet. Add a VP to start chatting.',
+  'unify.group.empty.cta': 'Manage members',
+  'unify.group.members.title': 'Manage members of "{name}"',
+  'unify.group.members.aria': 'Group members manager',
+  'unify.group.members.close': 'Close',
+  'unify.group.members.done': 'Done',
+  'unify.group.members.empty': 'No VPs available — create one in the VP Library first.',
+  'unify.group.members.loading': 'Loading VPs…',
+  'unify.group.members.defaultHint': 'Default VP (replies when no @mention is given)',
+  'unify.group.members.memberCount': '{count} selected',
+  'unify.group.members.actionFailed': 'Action failed: {error}',
 
   // ===== task-334-ui-d: User Memory browser =====
   'unify.userMemory.sidebarTitle': 'User Memory',

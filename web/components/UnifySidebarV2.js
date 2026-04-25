@@ -35,7 +35,7 @@ import GroupCreateWizard from './GroupCreateWizard.js';
 export default {
   name: 'UnifySidebarV2',
   components: { GroupCreateWizard },
-  emits: ['select-thread', 'select-task', 'jump-to-message', 'search-escape', 'merge-thread', 'select-group', 'open-user-memory', 'toggle-sidebar', 'back', 'open-settings'],
+  emits: ['select-thread', 'select-task', 'jump-to-message', 'search-escape', 'merge-thread', 'select-group', 'open-user-memory', 'toggle-sidebar', 'back', 'open-settings', 'manage-members'],
   template: `
     <aside class="unify-sidebar-v2" :class="{ collapsed: collapsed }">
       <!-- task-341: sidebar header row — agent identifier + collapse/back/workbench. -->
@@ -201,6 +201,9 @@ export default {
                 @click.stop="openGroupMenu(g, $event)"
               >⋯</button>
               <div v-if="groupMenu.open && groupMenu.groupId === g.id" class="usv2-group-row-menu" role="menu" @click.stop>
+                <button type="button" role="menuitem" class="usv2-group-row-menu-item" @click="startManageMembers(g)">
+                  {{ $t('unify.group.manageMembers') }}
+                </button>
                 <button type="button" role="menuitem" class="usv2-group-row-menu-item" @click="startRenameGroup(g)">
                   {{ $t('unify.group.rename') }}
                 </button>
@@ -890,6 +893,14 @@ export default {
       };
       setTimeout(() => window.addEventListener('click', close, true), 0);
       if (evt && typeof evt.stopPropagation === 'function') evt.stopPropagation();
+    },
+    startManageMembers(g) {
+      // task-fix-group-member-editor: bubble up to UnifyPage which owns
+      // the GroupMemberEditor modal. Sidebar stays a pure trigger so the
+      // editor lifecycle is centralized at the page level.
+      this.groupMenu = { open: false, groupId: null };
+      if (!g || !g.id) return;
+      this.$emit('manage-members', g.id);
     },
     startRenameGroup(g) {
       this.groupMenu = { open: false, groupId: null };

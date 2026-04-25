@@ -43,20 +43,6 @@ export default {
                 <div class="vp-crud-card-role" v-if="vp.role">{{ vp.role }}</div>
               </div>
               <div class="vp-crud-card-actions">
-                <button
-                  v-if="targetGroup"
-                  class="vp-crud-link-btn is-primary"
-                  type="button"
-                  @click="addToTargetGroup(vp)"
-                  :disabled="busy || isInTargetGroup(vp)"
-                  :title="isInTargetGroup(vp)
-                    ? $t('unify.vp.crud.alreadyInGroup', { name: targetGroupDisplayName })
-                    : $t('unify.vp.crud.addToGroup', { name: targetGroupDisplayName })"
-                >
-                  {{ isInTargetGroup(vp)
-                      ? $t('unify.vp.crud.alreadyInGroup', { name: targetGroupDisplayName })
-                      : $t('unify.vp.crud.addToGroup', { name: targetGroupDisplayName }) }}
-                </button>
                 <button class="vp-crud-link-btn" type="button" @click="startEdit(vp)" :disabled="busy">
                   {{ $t('unify.vp.crud.edit') }}
                 </button>
@@ -181,27 +167,6 @@ export default {
       if (this.editing) return true;
       return this.idStatus === 'ok';
     },
-    /**
-     * task-fix-vp-add: the active group becomes the "target" of the
-     * "Add to group" CTA on each VP card. We surface the action only
-     * when there's a current group context — otherwise the button
-     * would be a no-op (no obvious group to add into).
-     */
-    targetGroup() {
-      const gs = (window.Pinia && window.Pinia.useGroupsStore && window.Pinia.useGroupsStore())
-        || (typeof Pinia !== 'undefined' && Pinia.useGroupsStore && Pinia.useGroupsStore());
-      return gs && gs.activeGroup ? gs.activeGroup : null;
-    },
-    targetGroupDisplayName() {
-      const g = this.targetGroup;
-      if (!g) return '';
-      // D1 seed: replace raw 'Default' on grp_default with the i18n label
-      // so the CTA never reads "Add to Default".
-      if (g.id === 'grp_default' && (g.name === 'Default' || !g.name)) {
-        return this.$t('unify.group.defaultName') || g.name || g.id;
-      }
-      return g.name || g.id;
-    },
   },
   methods: {
     blankForm() {
@@ -216,42 +181,6 @@ export default {
     },
     vpColorFor(vpId) { return this.vpStore.vpColor(vpId); },
     vpInitialFor(vpId) { return this.vpStore.vpInitial(vpId); },
-
-    /**
-     * task-fix-vp-add: roster membership check. Mirrors how the group
-     * store stores roster (an array of vpIds), so the CTA flips to a
-     * disabled "Already in group" affordance once the user adds.
-     */
-    isInTargetGroup(vp) {
-      const g = this.targetGroup;
-      if (!g || !Array.isArray(g.roster)) return false;
-      return g.roster.includes(vp.vpId);
-    },
-    /**
-     * task-fix-vp-add: dispatches `add_member` via the existing group
-     * CRUD pipeline. The store applies the optimistic update on
-     * `group_roster_changed`, so the button re-renders disabled
-     * automatically once the server acks.
-     */
-    async addToTargetGroup(vp) {
-      const g = this.targetGroup;
-      if (!g || this.busy || this.isInTargetGroup(vp)) return;
-      this.busy = true;
-      this.formError = '';
-      try {
-        const res = await this.chatStore().groupCrudRequest('add_member', {
-          groupId: g.id,
-          vpId: vp.vpId,
-        });
-        if (!res || !res.ok) {
-          const code = (res && res.error && res.error.code) || 'unknown';
-          const msg = (res && res.error && res.error.message) || code;
-          this.formError = this.$t('unify.vp.crud.addToGroupFailed').replace('{error}', msg);
-        }
-      } finally {
-        this.busy = false;
-      }
-    },
 
     startCreate() {
       this.editing = null;

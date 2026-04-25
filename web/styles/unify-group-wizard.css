@@ -310,3 +310,13 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* task-fix-group-member-editor: inline counter beside the roster label,
+ * mirroring how Settings panes show "(N)" suffixes. */
+.group-member-editor-count {
+  margin-left: 6px;
+  color: var(--text-muted);
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+}

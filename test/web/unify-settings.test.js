@@ -113,9 +113,11 @@ describe('UnifyPage — task-343 VP via Settings-tab wiring', () => {
     expect(unifyPage).not.toContain("from './VpLibraryLink.js'");
   });
 
-  it('exposes openSettings helper that routes to vp tab', () => {
+  it('still exposes openSettings helper (used by VP-tab navigation)', () => {
+    // task-fix-group-member-editor: the helper is still defined for
+    // the (rare) case where a user wants to jump to VP Settings, but
+    // the empty-group / invite flow no longer routes through it.
     expect(unifyPage).toContain('const openSettings');
-    expect(unifyPage).toMatch(/openSettings\(\s*\{\s*initialTab:\s*['"]vp['"]/);
   });
 
   it('has onSettingsSaved handler that closes settings', () => {
