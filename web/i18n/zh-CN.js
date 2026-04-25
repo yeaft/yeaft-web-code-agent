@@ -1008,6 +1008,10 @@ export default {
   'unify.group.empty.title': '空群组',
   'unify.group.empty.hint': '「{name}」还没有成员。从角色库添加一位 VP 即可开始对话。',
   'unify.group.empty.cta': '从角色库添加 VP',
+  'unify.vp.crud.addToGroup': '添加到「{name}」',
+  'unify.vp.crud.alreadyInGroup': '已在「{name}」',
+  'unify.vp.crud.addToGroupFailed': '添加失败：{error}',
+  'unify.vp.crud.addedToGroup': '已添加到「{name}」',
 
   // ===== task-334-ui-d: 用户记忆浏览器 =====
   'unify.userMemory.sidebarTitle': '用户记忆',

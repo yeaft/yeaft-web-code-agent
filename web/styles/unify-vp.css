@@ -418,6 +418,23 @@
   background: rgba(214, 93, 93, 0.08);
   border-color: var(--error);
 }
+/* task-fix-vp-add: primary "Add to group" CTA on each card. Filled
+ * accent state so the next-step action stands out from edit/delete. */
+.vp-crud-link-btn.is-primary {
+  background: var(--accent, #4f8cff);
+  border-color: var(--accent, #4f8cff);
+  color: #fff;
+}
+.vp-crud-link-btn.is-primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+  background: var(--accent, #4f8cff);
+}
+.vp-crud-link-btn.is-primary:disabled {
+  background: transparent;
+  color: var(--text-secondary);
+  border-color: var(--border-color);
+  opacity: 1;
+}
 
 /* ─────────────────────────────────────────────────────────────
  * task-334-ui-c: VP detail view + clickable badge + hover time

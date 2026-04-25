@@ -1008,6 +1008,10 @@ export default {
   'unify.group.empty.title': 'Empty group',
   'unify.group.empty.hint': '"{name}" has no members yet. Add a VP from your library to start chatting.',
   'unify.group.empty.cta': 'Add a VP from library',
+  'unify.vp.crud.addToGroup': 'Add to "{name}"',
+  'unify.vp.crud.alreadyInGroup': 'In "{name}"',
+  'unify.vp.crud.addToGroupFailed': 'Add failed: {error}',
+  'unify.vp.crud.addedToGroup': 'Added to "{name}"',
 
   // ===== task-334-ui-d: User Memory browser =====
   'unify.userMemory.sidebarTitle': 'User Memory',
