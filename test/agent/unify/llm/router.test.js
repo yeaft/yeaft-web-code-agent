@@ -299,3 +299,73 @@ describe('AdapterRouter multi-provider routing', () => {
     global.fetch = originalFetch;
   });
 });
+
+// ═══════════════════════════════════════════════════════════════
+// Mixed-protocol provider (e.g. copilot proxy) — claude-* on a
+// `openai-responses` provider must downgrade to chat-completions
+// because the Responses API does not support Anthropic models.
+// ═══════════════════════════════════════════════════════════════
+
+describe('AdapterRouter mixed-protocol provider', () => {
+  it('should route claude-* to /chat/completions even when provider declares openai-responses', async () => {
+    const COPILOT_PROVIDER = {
+      name: 'copilot',
+      protocol: 'openai-responses',
+      baseUrl: 'https://api.example.com/v1',
+      apiKey: 'sk-copilot',
+      models: ['gpt-5.4', 'claude-opus-4.7'],
+    };
+    const router = new AdapterRouter({ providers: [COPILOT_PROVIDER] });
+
+    const originalFetch = global.fetch;
+    const capturedUrls = [];
+    global.fetch = async (url) => {
+      capturedUrls.push(url);
+      return {
+        ok: false,
+        status: 401,
+        headers: new Map(),
+        json: async () => ({ error: { message: 'test' } }),
+        text: async () => 'Unauthorized',
+      };
+    };
+
+    // gpt-5.4 → Responses API (provider's declared protocol)
+    try { await router.call({ model: 'gpt-5.4', system: 't', messages: [{ role: 'user', content: 'a' }] }); } catch {}
+    expect(capturedUrls[0]).toBe('https://api.example.com/v1/responses');
+
+    // claude-opus-4.7 → chat-completions (downgraded; Responses API rejects Claude)
+    try { await router.call({ model: 'claude-opus-4.7', system: 't', messages: [{ role: 'user', content: 'b' }] }); } catch {}
+    expect(capturedUrls[1]).toBe('https://api.example.com/v1/chat/completions');
+
+    global.fetch = originalFetch;
+  });
+
+  it('should leave anthropic-protocol providers untouched for claude-* models', async () => {
+    const ANTHROPIC_DIRECT = {
+      name: 'anthropic-direct',
+      protocol: 'anthropic',
+      baseUrl: 'https://api.anthropic.com',
+      apiKey: 'sk-ant-test',
+      models: ['claude-opus-4-20250514'],
+    };
+    const router = new AdapterRouter({ providers: [ANTHROPIC_DIRECT] });
+
+    const originalFetch = global.fetch;
+    let capturedHeaders = null;
+    global.fetch = async (_url, opts) => {
+      capturedHeaders = opts?.headers || {};
+      return {
+        ok: false, status: 401, headers: new Map(),
+        json: async () => ({ error: { message: 'test' } }),
+        text: async () => 'Unauthorized',
+      };
+    };
+
+    try { await router.call({ model: 'claude-opus-4-20250514', system: 't', messages: [{ role: 'user', content: 'a' }] }); } catch {}
+    // AnthropicAdapter signature: x-api-key header must be present
+    expect(capturedHeaders['x-api-key']).toBe('sk-ant-test');
+
+    global.fetch = originalFetch;
+  });
+});
