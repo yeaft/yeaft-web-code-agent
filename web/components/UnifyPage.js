@@ -20,6 +20,7 @@ export default {
 
       <!-- Left Sidebar — V2 (task-341: V2 is the only sidebar now). -->
       <UnifySidebarV2
+        :collapsed="sidebarCollapsed"
         @select-thread="onSelectThreadV2"
         @select-task="onSelectTaskV2"
         @select-group="onSelectGroupV2"
@@ -333,6 +334,7 @@ export default {
       // the task-303 chat-stream dual view filter, so clicking a thread
       // narrows the conversation to that thread's messages.
       store.setActiveThread(threadId);
+      if (isMobile.value) sidebarCollapsed.value = true;
     };
 
     const onSelectTaskV2 = (taskId) => {
@@ -341,6 +343,7 @@ export default {
       // list. Also keeps the sidebar row highlighted (store handles
       // both flags in enterTaskDetailView).
       store.enterTaskDetailView(taskId);
+      if (isMobile.value) sidebarCollapsed.value = true;
     };
 
     // task-fix (group-switch): clicking a group row in the sidebar narrows
@@ -353,6 +356,7 @@ export default {
       // Also leave any detail views so the main stream is visible.
       if (store.unifyActiveTaskDetailId) store.leaveTaskDetailView();
       if (store.unifyActiveVpDetailId) store.leaveVpDetailView();
+      if (isMobile.value) sidebarCollapsed.value = true;
     };
 
     // task-315: exit the task-detail view back to the main stream.
@@ -372,6 +376,7 @@ export default {
       if (!threadId) return;
       store.leaveTaskDetailView();
       store.setActiveThread(threadId);
+      if (isMobile.value) sidebarCollapsed.value = true;
     };
 
     // task-312/316: sidebar search results — jump to first matching
@@ -381,6 +386,7 @@ export default {
       if (payload && typeof payload === 'object') {
         store.setUnifyJumpTarget(payload);
       }
+      if (isMobile.value) sidebarCollapsed.value = true;
     };
 
     // task-312: Esc in sidebar search box — refocus chat input. The

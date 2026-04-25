@@ -37,12 +37,12 @@ export default {
   components: { GroupCreateWizard },
   emits: ['select-thread', 'select-task', 'jump-to-message', 'search-escape', 'merge-thread', 'select-group', 'open-user-memory', 'toggle-sidebar', 'back', 'open-settings'],
   template: `
-    <aside class="unify-sidebar-v2">
+    <aside class="unify-sidebar-v2" :class="{ collapsed: collapsed }">
       <!-- task-341: sidebar header row — agent identifier + collapse/back/workbench. -->
       <div class="usv2-header-row">
         <div class="usv2-brand" :title="agentTitleText">
-          <span class="usv2-status-dot" :class="{ online: onlineAgentCount > 0 }"></span>
-          <span class="usv2-brand-label">{{ onlineAgentCount }} Agent</span>
+          <span class="usv2-status-dot" :class="{ online: currentAgentOnline }"></span>
+          <span class="usv2-brand-label">{{ currentAgentName }}</span>
           <span v-if="currentAgentLatency != null" class="usv2-latency" :class="getLatencyClass(currentAgentLatency)">{{ currentAgentLatency }}ms</span>
         </div>
         <div class="usv2-header-actions">
@@ -481,6 +481,9 @@ export default {
     </aside>
   `,
   props: {
+    // task-fix: collapsed flag from parent (UnifyPage). Used to drive
+    // the mobile slide-away behavior.
+    collapsed: { type: Boolean, default: false },
     // Optional injection hooks — primarily for unit tests that don't
     // mount Pinia. When null the component reads from store.
     threadsSource: { type: Array, default: null },
@@ -573,6 +576,30 @@ export default {
     },
     onlineAgentCount() {
       return this.onlineAgents.length;
+    },
+    currentAgentName() {
+      const s = this.chatStore || this.store;
+      if (!s || !Array.isArray(s.agents)) return '';
+      const id = s.currentAgent;
+      if (id) {
+        const agent = s.agents.find(a => a && a.id === id);
+        if (agent && agent.name) return String(agent.name);
+        if (agent && agent.id) return String(agent.id);
+      }
+      // Fallback: first online agent
+      const online = s.agents.find(a => a && a.online);
+      if (online) return String(online.name || online.id || '');
+      return 'Agent';
+    },
+    currentAgentOnline() {
+      const s = this.chatStore || this.store;
+      if (!s || !Array.isArray(s.agents)) return false;
+      const id = s.currentAgent;
+      if (id) {
+        const agent = s.agents.find(a => a && a.id === id);
+        if (agent) return !!agent.online;
+      }
+      return s.agents.some(a => a && a.online);
     },
     currentAgentLatency() {
       const s = this.chatStore || this.store;
