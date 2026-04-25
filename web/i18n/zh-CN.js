@@ -1019,6 +1019,7 @@ export default {
   'unify.userMemory.allShards': '全部',
   'unify.userMemory.empty': '暂无用户记忆条目。',
   'unify.userMemory.emptyHint': '系统通过对话了解你后，用户记忆将自动填充。',
+  'unify.userMemory.loading': '加载用户记忆中…',
   'unify.userMemory.pin': '置顶条目',
   'unify.userMemory.unpin': '取消置顶',
   'unify.userMemory.delete': '删除条目',

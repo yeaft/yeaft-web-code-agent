@@ -1246,7 +1246,13 @@ export const useChatStore = defineStore('chat', {
     // Memory page can render a folder view. Agent replies via
     // `memory_scope_snapshot` → populates unifyMemoryScopeEntries.
     fetchUnifyMemoryScope() {
-      if (!this.unifyAgentId) return;
+      if (!this.unifyAgentId) {
+        // task-fix: no agent connected → resolve into empty state instead
+        // of leaving the page stuck on "Loading memory entries…" forever.
+        this.unifyMemoryScopeEntries = [];
+        this.unifyMemoryScopeLoaded = true;
+        return;
+      }
       this.unifyMemoryScopeLoaded = false;
       this.sendWsMessage({
         type: 'unify_memory_scope_list',

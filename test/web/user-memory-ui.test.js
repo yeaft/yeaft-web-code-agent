@@ -122,30 +122,30 @@ describe('task-334-ui-d: User Memory UI', () => {
     it('emits back event', () => {
       expect(umPageSrc).toContain("emits: ['back']");
     });
-    it('sends unify_user_memory_write WS event for pin', () => {
-      expect(umPageSrc).toContain("type: 'unify_user_memory_write'");
+    // task-fix: the previous pinned-entries / shard-tabs / delete-modal
+    // skeleton (tests removed) was never wired to a real backend and
+    // confused users by stacking with the folder-view section. The page
+    // now renders a single unified scope-tree view; pin/remove/shard
+    // features are dropped until a real backend ships them.
+    it('renders the scope-tree as the unified view', () => {
+      expect(umPageSrc).toContain('um-scope-section');
+      expect(umPageSrc).toContain('um-scope-tree');
+      expect(umPageSrc).not.toContain('um-shard-tabs');
+      expect(umPageSrc).not.toContain('um-delete-overlay');
+      expect(umPageSrc).not.toContain("type: 'unify_user_memory_write'");
+      expect(umPageSrc).not.toContain("type: 'unify_user_memory_remove'");
     });
-    it('sends unify_user_memory_remove WS event for delete', () => {
-      expect(umPageSrc).toContain("type: 'unify_user_memory_remove'");
+    it('does NOT render two stacked sections (regression: empty + Loading)', () => {
+      // The fix collapses the duplicate empty state + folder section
+      // into one. Specifically the standalone "Memory · folder view"
+      // header (and its hard-coded Loading text) must be gone.
+      expect(umPageSrc).not.toContain('Memory · folder view');
+      expect(umPageSrc).not.toContain('Loading memory entries');
     });
-    it('renders shard filter tabs', () => {
-      expect(umPageSrc).toContain('um-shard-tabs');
-      expect(umPageSrc).toContain('um-shard-tab');
-    });
-    it('renders entry list with pin and delete buttons', () => {
-      expect(umPageSrc).toContain('um-entry-pin');
-      expect(umPageSrc).toContain('um-entry-delete');
-    });
-    it('renders delete confirm modal', () => {
-      expect(umPageSrc).toContain('um-delete-overlay');
-      expect(umPageSrc).toContain('um-delete-confirm');
-    });
-    it('has empty state', () => {
+    it('has loading + empty state keys', () => {
       expect(umPageSrc).toContain('um-empty');
       expect(umPageSrc).toContain('unify.userMemory.empty');
-    });
-    it('accesses useUserMemoryStore from window.Pinia', () => {
-      expect(umPageSrc).toContain('useUserMemoryStore');
+      expect(umPageSrc).toContain('unify.userMemory.loading');
     });
   });
 

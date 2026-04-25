@@ -1019,6 +1019,7 @@ export default {
   'unify.userMemory.allShards': 'All',
   'unify.userMemory.empty': 'No user memory entries yet.',
   'unify.userMemory.emptyHint': 'User memory will be populated as the system learns about you through conversations.',
+  'unify.userMemory.loading': 'Loading user memory…',
   'unify.userMemory.pin': 'Pin entry',
   'unify.userMemory.unpin': 'Unpin entry',
   'unify.userMemory.delete': 'Delete entry',
