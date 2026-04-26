@@ -1010,6 +1010,21 @@ export const useChatStore = defineStore('chat', {
           if (vp) vp.applyDreamResult(event);
           break;
         }
+
+        // ★ R6 G2: VP/Task memory browser. Read-only surface; the LLM
+        // owns memory recall via the memory_query tool, this is purely
+        // for the user to inspect what got merged into a VP/task's
+        // memory shard.
+        case 'unify_memory_query_result': {
+          const mem = window.Pinia?.useMemoryStore?.();
+          if (mem) mem.applyQueryResult(event);
+          break;
+        }
+        case 'unify_memory_trace_result': {
+          const mem = window.Pinia?.useMemoryStore?.();
+          if (mem) mem.applyTraceResult(event);
+          break;
+        }
       }
     },
     fetchExpertRoleDefinitions() {

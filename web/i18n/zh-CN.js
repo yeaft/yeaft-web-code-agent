@@ -934,6 +934,29 @@ export default {
   'unify.vp.dream.errored': '上次梦境 {relative} · 失败',
   'unify.vp.dream.failed': '梦境失败：{error}',
 
+  // R6 G2 — VP 记忆分片浏览
+  'unify.vp.detail.memory': '记忆',
+  'unify.vp.detail.memoryLoading': '加载记忆条目中…',
+  'unify.vp.detail.memoryEmpty': '该角色暂无记忆条目。梦境周期合并对话后会出现。',
+  'unify.vp.detail.memoryError': '加载记忆失败：{error}',
+  'unify.vp.detail.memoryRefresh': '刷新记忆',
+
+  // R6 G2 — MemoryCard / MemoryTraceModal
+  'unify.memory.card.aria': '记忆条目 {id}',
+  'unify.memory.card.importance': '重要度评分',
+  'unify.memory.card.trace': '追溯来源',
+  'unify.memory.card.traceTitle': '打开生成这条记忆的原始消息',
+  'unify.memory.card.traceUnavailable': '未记录来源',
+  'unify.memory.card.supersededBy': '已被 {id} 取代',
+  'unify.memory.trace.title': '记忆来源追溯',
+  'unify.memory.trace.close': '关闭',
+  'unify.memory.trace.loading': '加载来源引用中…',
+  'unify.memory.trace.error': '追溯失败：{error}',
+  'unify.memory.trace.entry': '条目',
+  'unify.memory.trace.source': '来源消息',
+  'unify.memory.trace.noSource': '该条目未记录来源引用。',
+  'unify.memory.trace.jump': '跳转到该消息',
+
   // ============ Unify VP live-diff 事件原因 (task-334-ui-c / O4) ============
   // vp_updated / vp_removed 事件到达时显示给用户的人话文案。
   // 取代 snake_case 分类标签，避免在 toast / 活动列表中泄漏。

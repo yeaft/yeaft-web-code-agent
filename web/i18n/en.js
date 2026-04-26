@@ -934,6 +934,29 @@ export default {
   'unify.vp.dream.errored': 'Last dream {relative} · failed',
   'unify.vp.dream.failed': 'Dream failed: {error}',
 
+  // R6 G2 — per-VP memory shard browser (VpDetailView "Memory" section).
+  'unify.vp.detail.memory': 'Memory',
+  'unify.vp.detail.memoryLoading': 'Loading memory entries…',
+  'unify.vp.detail.memoryEmpty': 'No memory entries for this VP yet. Entries appear after a dream cycle merges chat into the shard.',
+  'unify.vp.detail.memoryError': 'Could not load memory: {error}',
+  'unify.vp.detail.memoryRefresh': 'Refresh memory',
+
+  // R6 G2 — MemoryCard + MemoryTraceModal shared keys.
+  'unify.memory.card.aria': 'Memory entry {id}',
+  'unify.memory.card.importance': 'Importance score',
+  'unify.memory.card.trace': 'Trace source',
+  'unify.memory.card.traceTitle': 'Open the original message that produced this memory',
+  'unify.memory.card.traceUnavailable': 'No source reference recorded',
+  'unify.memory.card.supersededBy': 'superseded by {id}',
+  'unify.memory.trace.title': 'Memory trace',
+  'unify.memory.trace.close': 'Close',
+  'unify.memory.trace.loading': 'Loading source reference…',
+  'unify.memory.trace.error': 'Trace failed: {error}',
+  'unify.memory.trace.entry': 'Entry',
+  'unify.memory.trace.source': 'Source message',
+  'unify.memory.trace.noSource': 'This entry has no recorded source reference.',
+  'unify.memory.trace.jump': 'Jump to message',
+
   // ============ Unify VP Live-diff Reasons (task-334-ui-c / O4) ============
   // Friendly messages surfaced when vp_updated / vp_removed events arrive.
   // Used in toasts + activity rows so snake_case classifier tags never leak.

@@ -36,7 +36,7 @@ import { sendToServer, flushMessageBuffer } from './buffer.js';
 import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
 import { getLlmConfig, updateLlmConfig, getUnifySettings, updateUnifySettings } from '../unify/config-api.js';
-import { handleUnifyChat, handleUnifyGroupChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyMergeThread, handleUnifyForkThread, handleUnifyAbortThread, handleUnifyAbortAll, handleUnifyVpSubscribe, handleUnifyVpCreate, handleUnifyVpUpdate, handleUnifyVpDelete, handleUnifyVpRead, handleUnifyTaskMessage, handleUnifyUserMemoryWrite, handleUnifyUserMemoryRemove, handleUnifyMemoryScopeList, handleUnifyListGroups, handleUnifyCreateGroup, handleUnifyRenameGroup, handleUnifyArchiveGroup, handleUnifyAddMember, handleUnifyRemoveMember, handleUnifySetDefaultVp, handleUnifyDreamTrigger } from '../unify/web-bridge.js';
+import { handleUnifyChat, handleUnifyGroupChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyMergeThread, handleUnifyForkThread, handleUnifyAbortThread, handleUnifyAbortAll, handleUnifyVpSubscribe, handleUnifyVpCreate, handleUnifyVpUpdate, handleUnifyVpDelete, handleUnifyVpRead, handleUnifyTaskMessage, handleUnifyUserMemoryWrite, handleUnifyUserMemoryRemove, handleUnifyMemoryScopeList, handleUnifyMemoryQuery, handleUnifyMemoryTrace, handleUnifyListGroups, handleUnifyCreateGroup, handleUnifyRenameGroup, handleUnifyArchiveGroup, handleUnifyAddMember, handleUnifyRemoveMember, handleUnifySetDefaultVp, handleUnifyDreamTrigger } from '../unify/web-bridge.js';
 
 export async function handleMessage(msg) {
   switch (msg.type) {
@@ -444,6 +444,15 @@ export async function handleMessage(msg) {
     // Unify "User Memory" page. Replies with `memory_scope_snapshot`.
     case 'unify_memory_scope_list':
       handleUnifyMemoryScopeList(msg);
+      break;
+
+    // R6 G2 — VP/Task memory browser (read-only). Replies with
+    // unify_memory_query_result / unify_memory_trace_result.
+    case 'unify_memory_query':
+      handleUnifyMemoryQuery(msg);
+      break;
+    case 'unify_memory_trace':
+      handleUnifyMemoryTrace(msg);
       break;
 
     // task-334m: Group CRUD + D1 seed wiring (§Δ10 334m + R6 §Δ31.2).

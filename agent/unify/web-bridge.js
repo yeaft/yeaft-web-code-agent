@@ -1636,6 +1636,109 @@ export function handleUnifyModeSwitch(_msg) {
 }
 
 /**
+ * R6 G2 — VP/Task memory browser query.
+ *
+ * Reads from session.memoryShardStore (R6 shard-based memory) and replies
+ * with a time-sorted list of entries scoped to the requested vpId / taskId.
+ * The web UI's MemoryCard / MemoryTraceModal consume the reply.
+ *
+ * Request shape:
+ *   { type: 'unify_memory_query',
+ *     vpId?: string, taskId?: string,
+ *     limit?: number, requestId?: string }
+ *
+ * Reply shape:
+ *   { type: 'unify_memory_query_result',
+ *     scope: { vpId, taskId },
+ *     entries: Array<thinEntry>,   // shape from shard-store mapRecordToThinEntry
+ *     requestId? }
+ *
+ * Per D2 the query is scoped — the LLM owns memory recall via the
+ * memory_query tool; this surface is purely UI browsing (read-only).
+ *
+ * @param {{ vpId?: string, taskId?: string, limit?: number, requestId?: string }} msg
+ */
+export function handleUnifyMemoryQuery(msg = {}) {
+  const requestId = typeof msg.requestId === 'string' ? msg.requestId : undefined;
+  const vpId = typeof msg.vpId === 'string' ? msg.vpId : null;
+  const taskId = typeof msg.taskId === 'string' ? msg.taskId : null;
+  const limit = Number.isFinite(msg.limit) ? Math.max(1, Math.min(200, msg.limit)) : 50;
+
+  const reply = (extra = {}) => sendUnifyEvent({
+    type: 'unify_memory_query_result',
+    scope: { vpId, taskId },
+    ...extra,
+    ...(requestId ? { requestId } : {}),
+  });
+
+  if (!session || !session.memoryShardStore) {
+    reply({ entries: [], error: 'no_memory_store' });
+    return;
+  }
+
+  try {
+    const filter = {};
+    if (vpId) filter.vp = vpId;
+    if (taskId) filter.task = taskId;
+    const res = session.memoryShardStore.query(filter);
+    const list = Array.isArray(res?.results) ? res.results : [];
+    // Time-sorted desc on updatedAt / createdAt.
+    list.sort((a, b) => {
+      const ax = (a && (a.updatedAt || a.createdAt)) || 0;
+      const bx = (b && (b.updatedAt || b.createdAt)) || 0;
+      const at = typeof ax === 'string' ? Date.parse(ax) : ax;
+      const bt = typeof bx === 'string' ? Date.parse(bx) : bx;
+      return (bt || 0) - (at || 0);
+    });
+    reply({ entries: list.slice(0, limit) });
+  } catch (err) {
+    reply({ entries: [], error: String(err?.message || err) });
+  }
+}
+
+/**
+ * R6 G2 — Open the source message behind a memory entry (memory_trace).
+ *
+ * Resolves entry → sourceRef.{conversationId, messageId} (or threadId/range)
+ * via MemoryShardStore.get(entryId), then echoes the reference + the entry
+ * for the MemoryTraceModal to render. The trace itself is a read-only
+ * surface — the UI follows the conversationId/messageId to MessageList.
+ *
+ * Request shape:
+ *   { type: 'unify_memory_trace', entryId: string, requestId?: string }
+ *
+ * Reply shape:
+ *   { type: 'unify_memory_trace_result',
+ *     entryId, entry: object|null, sourceRef: object|null, requestId? }
+ *
+ * @param {{ entryId?: string, requestId?: string }} msg
+ */
+export function handleUnifyMemoryTrace(msg = {}) {
+  const requestId = typeof msg.requestId === 'string' ? msg.requestId : undefined;
+  const entryId = typeof msg.entryId === 'string' ? msg.entryId : null;
+
+  const reply = (extra = {}) => sendUnifyEvent({
+    type: 'unify_memory_trace_result',
+    entryId,
+    ...extra,
+    ...(requestId ? { requestId } : {}),
+  });
+
+  if (!entryId) { reply({ entry: null, sourceRef: null, error: 'missing_entry_id' }); return; }
+  if (!session || !session.memoryShardStore) {
+    reply({ entry: null, sourceRef: null, error: 'no_memory_store' });
+    return;
+  }
+  try {
+    const entry = session.memoryShardStore.get(entryId);
+    if (!entry) { reply({ entry: null, sourceRef: null, error: 'not_found' }); return; }
+    reply({ entry, sourceRef: entry.sourceRef || null });
+  } catch (err) {
+    reply({ entry: null, sourceRef: null, error: String(err?.message || err) });
+  }
+}
+
+/**
  * task-313: merge a source thread into a target thread.
  * Reassigns messages, archives source with `mergedInto`, terminates source
  * engine instance, broadcasts `thread_merged` + `thread_list_updated`.
