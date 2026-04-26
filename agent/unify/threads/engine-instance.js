@@ -97,7 +97,7 @@ export class EngineInstance {
    * @param {AbortSignal} [params.signal]
    * @yields {object} EngineEvent with { ...event, threadId }
    */
-  async *query({ prompt, mode, signal }) {
+  async *query({ prompt, mode, signal, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers } = {}) {
     if (this.#terminated) {
       yield {
         type: 'error',
@@ -173,7 +173,7 @@ export class EngineInstance {
       curToolResults = [];
     }
 
-    for await (const event of this.#engine.query({ prompt, mode, messages: snapshot, signal })) {
+    for await (const event of this.#engine.query({ prompt, mode, messages: snapshot, signal, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers })) {
       // Re-tag every event with the bound threadId. Non-object events
       // (shouldn't happen — all engine events are objects) are passed
       // through untouched.

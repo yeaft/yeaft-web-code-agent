@@ -164,6 +164,7 @@ export class Dispatcher {
     transientMeta.set(entry, {
       messageId: opts.messageId || undefined,
       override: opts.override || undefined,
+      queryOpts: opts.queryOpts || undefined,
     });
     const snapshot = this.#queueSnapshot();
     return { entry, snapshot };
@@ -299,7 +300,8 @@ export class Dispatcher {
     }
 
     try {
-      for await (const event of instance.query({ prompt: claimed.text, signal })) {
+      const queryOpts = (transientMeta.get(claimed) || {}).queryOpts || {};
+      for await (const event of instance.query({ prompt: claimed.text, signal, ...queryOpts })) {
         yield { type: 'engine_event', threadId: targetThreadId, event };
       }
       inputQueue.markRouted(claimed.id, targetThreadId);

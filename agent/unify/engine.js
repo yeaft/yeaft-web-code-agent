@@ -297,7 +297,7 @@ export class Engine {
    * @param {string} [userProfile] — user profile from user-memory shard store
    * @returns {string}
    */
-  #buildSystemPrompt(memory, compactSummary, prompt, memoryInjection, userProfile) {
+  #buildSystemPrompt(memory, compactSummary, prompt, memoryInjection, userProfile, vpPersona) {
     // Get relevant skill content if SkillManager is wired
     let skillContent = '';
     if (this.#skillManager && prompt) {
@@ -317,6 +317,7 @@ export class Engine {
       compactSummary,
       skillContent,
       userProfile,
+      vpPersona,
       // task-334f: memory_trace tool is now registered (49 → 51 tools), so
       // unlock the core_memory meta-line behind 334e's feature flag.
       memoryTraceAvailable: true,
@@ -329,7 +330,7 @@ export class Engine {
    * @param {AbortSignal} [signal]
    * @returns {object}
    */
-  #buildToolContext(signal) {
+  #buildToolContext(signal, vpCtx) {
     return {
       signal,
       yeaftDir: this.#yeaftDir,
@@ -348,6 +349,13 @@ export class Engine {
       imageAllowlist: Array.isArray(this.#config?.unify?.imageAllowlist)
         ? this.#config.unify.imageAllowlist
         : [],
+      // Bug 4 fix — VP / routing context for RouteForward (and any other
+      // VP-aware tool). Undefined when running in non-group / no-VP flows.
+      router: vpCtx?.router,
+      senderVpId: vpCtx?.senderVpId,
+      inboundEnvelope: vpCtx?.inboundEnvelope,
+      taskId: vpCtx?.taskId,
+      taskMembers: vpCtx?.taskMembers,
     };
   }
 
@@ -510,7 +518,7 @@ export class Engine {
    *   SCENARIO_EFFORT. Unknown values fall through to 'high'.
    * @yields {EngineEvent}
    */
-  async *query({ prompt, messages = [], signal, userEffort = null, scenario = 'chat' }) {
+  async *query({ prompt, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers } = {}) {
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       yield {
         type: 'error',
@@ -561,7 +569,7 @@ export class Engine {
     const runSignal = abortCtrl.signal;
 
     try {
-      yield* this.#runQuery({ prompt: effectivePrompt, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario });
+      yield* this.#runQuery({ prompt: effectivePrompt, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers });
     } finally {
       if (signal) {
         try { signal.removeEventListener('abort', onExternalAbort); } catch { /* ignore */ }
@@ -579,7 +587,7 @@ export class Engine {
    * in a try/finally without indenting the whole loop.
    * @private
    */
-  async *#runQuery({ prompt, messages, signal, userEffort = null, scenario = 'chat' }) {
+  async *#runQuery({ prompt, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers }) {
 
     // ─── Pre-query: Memory Injection (task-287) + Compact Summary ──
     // Two-layer recall:
@@ -618,7 +626,7 @@ export class Engine {
 
     const compactSummary = this.#getCompactSummary();
     const userProfile = recallResult?.profile || '';
-    const systemPrompt = this.#buildSystemPrompt(undefined, compactSummary, prompt, memoryInjection, userProfile);
+    const systemPrompt = this.#buildSystemPrompt(undefined, compactSummary, prompt, memoryInjection, userProfile, vpPersona);
 
     // Build conversation: existing messages + new user message
     const conversationMessages = [
@@ -883,7 +891,7 @@ export class Engine {
       }
 
       // Execute tool calls and feed results back
-      const toolCtx = this.#buildToolContext(signal);
+      const toolCtx = this.#buildToolContext(signal, { router, senderVpId, inboundEnvelope, taskId, taskMembers });
 
       // task-325a: track whether we aborted mid tool-loop so we can
       // break out of the outer while-loop cleanly once the current

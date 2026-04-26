@@ -192,6 +192,9 @@ const PROMPTS = {
     userProfileHeader: '## user_profile',
     coreMemoryHeader: '## core_memory',
     coreMemoryMeta: 'To open the original message behind any entry above, call `memory_trace`.',
+    vpPersonaHeader: '## active_persona',
+    vpPersonaIntro: (name, role) =>
+      `For this turn you are speaking as **${name}**${role ? ` (${role})` : ''}. Stay in character; the persona below overrides the generic Yeaft identity for tone, expertise, and decision style.`,
   },
   zh: {
     identity: '你是 Yeaft，一个有用的 AI 助手。',
@@ -210,6 +213,9 @@ const PROMPTS = {
     userProfileHeader: '## user_profile',
     coreMemoryHeader: '## core_memory',
     coreMemoryMeta: '如需原始 message，调 `memory_trace`。',
+    vpPersonaHeader: '## active_persona',
+    vpPersonaIntro: (name, role) =>
+      `本轮你以 **${name}**${role ? `（${role}）` : ''} 的身份说话。请保持人设：以下 persona 在语气、专业方向与判断风格上覆盖默认的 Yeaft 身份。`,
   },
 };
 
@@ -289,6 +295,7 @@ export function buildSystemPrompt({
   userProfile,
   coreMemory,
   memoryTraceAvailable = false,
+  vpPersona,
 } = {}) {
   // Fallback to English for unknown languages
   const lang = PROMPTS[language] || PROMPTS.en;
@@ -307,6 +314,14 @@ export function buildSystemPrompt({
 
   // ─── 2. Date Metadata ──────────────────────────────────
   parts.push(lang.date(new Date().toISOString().split('T')[0]));
+
+  // ─── 2.5 VP Persona Override (Bug 3 fix) ───────────────
+  // When the caller (web-bridge / dispatcher) addressed a specific VP via
+  // @-mention, inject that VP's persona body so the LLM stops speaking as
+  // generic Yeaft and adopts the VP's voice. Placed AFTER base identity so
+  // the persona section's directive ("override generic Yeaft") wins.
+  const vpBlock = renderVpPersona(vpPersona, lang);
+  if (vpBlock) parts.push(vpBlock);
 
   // ─── 3. Mode-Specific Instructions ─────────────────────
   // task-297: single unified mode for all normal operation.
@@ -381,6 +396,36 @@ export function buildSystemPrompt({
 }
 
 // ─── task-334e helpers ───────────────────────────────────────────
+
+/**
+ * Render the `## active_persona` block when the engine is running on
+ * behalf of an addressed VP. Accepts `{ displayName, role?, persona }` —
+ * `persona` is the body text from the VP's role.md (loaded by the engine
+ * via readVp). When `persona` is empty we still emit the intro line so
+ * the LLM at least knows whose voice to adopt; if even displayName is
+ * missing we omit the whole block (no useful signal).
+ *
+ * @param {object} vpPersona
+ * @param {string} vpPersona.displayName
+ * @param {string} [vpPersona.role]
+ * @param {string} [vpPersona.persona]
+ * @param {object} lang
+ * @returns {string}
+ */
+function renderVpPersona(vpPersona, lang) {
+  if (!vpPersona || typeof vpPersona !== 'object') return '';
+  const name = typeof vpPersona.displayName === 'string'
+    ? vpPersona.displayName.trim() : '';
+  if (!name) return '';
+  const role = typeof vpPersona.role === 'string' ? vpPersona.role.trim() : '';
+  const body = typeof vpPersona.persona === 'string' ? vpPersona.persona.trim() : '';
+  const lines = [
+    lang.vpPersonaHeader,
+    lang.vpPersonaIntro(name, role),
+  ];
+  if (body) lines.push('', body);
+  return lines.join('\n');
+}
 
 const DEFAULT_TASK_MEMORY_TOP = 5;
 const DEFAULT_RELATED_TASK_TOP = 3;

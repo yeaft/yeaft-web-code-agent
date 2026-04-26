@@ -28,6 +28,7 @@ import ctx from '../context.js';
 import { getThreadStore, MAIN_THREAD_ID } from './threads/store.js';
 import { handleVpSubscribe } from './vp/vp-bridge.js';
 import { createVp, updateVp, deleteVp, readVp, VpCrudError } from './vp/vp-crud.js';
+import { createRouter } from './routing/router.js';
 import { handleUnifyTaskMessage as _handleUnifyTaskMessage } from './task-message.js';
 import {
   handleUnifyUserMemoryWrite as _handleUnifyUserMemoryWrite,
@@ -1165,6 +1166,10 @@ export async function handleUnifyGroupChat(msg) {
         groupId,
         vpId,
         speakerVpId: vpId,
+        // Bug 4: hand the coordinator down so handleUnifyChat can build a
+        // Router for the RouteForward tool. Field is namespaced with `_`
+        // to mark it as an internal hop, never sent over WS.
+        _groupCoordinator: coord,
       });
     } catch (err) {
       console.warn('[Unify] unify_group_chat: per-vp dispatch failed', vpId, err?.message || err);
@@ -1182,6 +1187,42 @@ export async function handleUnifyGroupChat(msg) {
 }
 
 /**
+ * Build the per-query VP context for the Engine.
+ *
+ * - Loads the addressed VP's persona via readVp() so the system prompt
+ *   speaks in that VP's voice (Bug 3 fix).
+ * - When a GroupCoordinator handle is supplied, wraps it in a Router so
+ *   the RouteForward tool actually forwards instead of returning
+ *   `router_unavailable` (Bug 4 fix).
+ *
+ * Returns `undefined` when we have nothing to inject — keeps the legacy
+ * single-agent path identical to before.
+ */
+function buildVpQueryOpts({ vpId, groupCoordinator }) {
+  if (!vpId) return undefined;
+  const out = { senderVpId: vpId };
+  try {
+    const vp = readVp(vpId);
+    if (vp) {
+      out.vpPersona = {
+        displayName: vp.displayName || vpId,
+        role: vp.role || '',
+        persona: vp.persona || '',
+      };
+    }
+  } catch { /* persona load is best-effort */ }
+  if (groupCoordinator && typeof groupCoordinator.ingest === 'function') {
+    try {
+      out.router = createRouter({ coordinator: groupCoordinator });
+    } catch {
+      // Router build failure is non-fatal — RouteForward will report
+      // router_unavailable and the VP can pivot.
+    }
+  }
+  return out;
+}
+
+/**
  * Handle a unify_chat message from the web UI.
  *
  * @param {{ prompt: string, mode?: string, userId?: string, username?: string }} msg
@@ -1191,6 +1232,12 @@ export async function handleUnifyGroupChat(msg) {
 export async function handleUnifyChat(msg) {
   const { prompt, mode } = msg;
   if (!prompt?.trim()) return;
+  // Bug 3 / Bug 4 — when the upstream group dispatcher addresses a specific
+  // VP, it stamps `vpId` (and optionally a coordinator handle in
+  // `_groupCoordinator`). Hoist them now so they survive the lazy-init
+  // branch and reach the dispatcher.submit() queryOpts.
+  const vpId = typeof msg.vpId === 'string' && msg.vpId.trim() ? msg.vpId.trim() : null;
+  const groupCoordinator = msg._groupCoordinator || null;
 
   // Deprecation warning — task-297 removed chat/work mode distinction
   if (mode !== undefined && mode !== null) {
@@ -1302,6 +1349,7 @@ export async function handleUnifyChat(msg) {
     const { entry } = session.dispatcher.submit(cleanedPrompt, {
       messageId: msg.messageId,
       override: override || undefined,
+      queryOpts: buildVpQueryOpts({ vpId, groupCoordinator }),
     });
     sendUnifyEvent({
       type: 'input_queue_updated',
