@@ -99,7 +99,7 @@ export default {
           <!-- task-334j: VP @ autocomplete (mutually exclusive with expert) -->
           <VpMentionAutocomplete
             v-if="!store.btwMode && showVpAutocomplete && !showExpertAutocomplete"
-            :vps="vpStore.vpList"
+            :vps="mentionVpCandidates"
             :query="vpMentionQuery"
             :selected-index="vpSelectedIndex"
             @select="selectVpMention"
@@ -227,6 +227,22 @@ export default {
       const atIdx = text.lastIndexOf('@');
       if (atIdx < 0 || !showVpAutocomplete.value) return '';
       return text.slice(atIdx + 1);
+    });
+
+    // task-fix (vp-mention-roster): when an active group filter is set, the
+    // candidate list MUST be the group's roster — not the entire VP library.
+    // Falls back to the full library only when no group is selected (e.g.
+    // legacy single-agent Unify chat) so existing behaviour is preserved.
+    const mentionVpCandidates = Vue.computed(() => {
+      const fullList = Array.isArray(vpStore.vpList) ? vpStore.vpList : [];
+      if (!groupsStore) return fullList;
+      const activeGroupId = store.unifyActiveGroupFilter;
+      if (!activeGroupId) return fullList;
+      const group = groupsStore.groups?.[activeGroupId];
+      const roster = group && Array.isArray(group.roster) ? group.roster : null;
+      if (!roster || roster.length === 0) return fullList;
+      const allowed = new Set(roster);
+      return fullList.filter(vp => vp && vp.vpId && allowed.has(vp.vpId));
     });
 
     const selectVpMention = (vp) => {
@@ -620,7 +636,7 @@ export default {
       }
       // ★ task-334j: VP autocomplete keyboard nav (before expert, same contract)
       if (showVpAutocomplete.value) {
-        const vpList = filterVpMentions(vpStore.vpList, vpMentionQuery.value);
+        const vpList = filterVpMentions(mentionVpCandidates.value, vpMentionQuery.value);
         if (vpList.length > 0) {
           if (e.key === 'ArrowDown') {
             e.preventDefault();
@@ -750,6 +766,7 @@ export default {
       showVpAutocomplete,
       vpSelectedIndex,
       vpMentionQuery,
+      mentionVpCandidates,
       selectVpMention,
       replyToActive,
       clearReply,
