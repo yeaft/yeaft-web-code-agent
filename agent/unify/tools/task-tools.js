@@ -50,7 +50,15 @@ Tasks have a title, description, priority, and status.
 Each task gets its own folder with task.md, progress.md, and memory.md.
 Use this to break down complex work into trackable items.
 
-Pass \`parent_id\` to create a subtask under an existing task.`,
+Pass \`parent_id\` to create a subtask under an existing task.
+
+R6 multi-VP groups (Unify): pass \`group_id\` + \`members\` to create a
+collaborative task inside a group. The caller's vpId becomes the task
+\`initiator\`. \`members\` MUST be a subset of the group's roster — the
+tool validates this server-side and returns a \`not_in_roster\` error
+otherwise. The user owns invitations; the tool will not auto-invite.
+
+Use \`related_task_ids\` to soft-link to other tasks (cross-group OK).`,
   parameters: {
     type: 'object',
     properties: {
@@ -71,6 +79,20 @@ Pass \`parent_id\` to create a subtask under an existing task.`,
         type: 'string',
         description: 'Parent task ID for subtasks',
       },
+      group_id: {
+        type: 'string',
+        description: 'R6: group this task belongs to. Required for multi-VP collaboration tasks.',
+      },
+      members: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'R6: VP ids participating in this task (≥1). MUST be ⊆ group roster.',
+      },
+      related_task_ids: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'R6: soft-linked task ids (cross-group OK). See arch §14.',
+      },
       // Note (task-333b): `parent_task_id` is accepted by execute() as a
       // soft-compat alias for `parent_id` (absorbed from the former
       // SpawnTask tool) but intentionally NOT advertised in the schema to
@@ -84,7 +106,16 @@ Pass \`parent_id\` to create a subtask under an existing task.`,
     const err = requireStore();
     if (err) return err;
 
-    const { title, description, priority = 'medium', parent_id, parent_task_id } = input;
+    const {
+      title,
+      description,
+      priority = 'medium',
+      parent_id,
+      parent_task_id,
+      group_id,
+      members,
+      related_task_ids,
+    } = input;
     if (!title) return JSON.stringify({ error: 'title is required' });
 
     // task-333b: accept either `parent_id` (original TaskCreate field) or
@@ -93,6 +124,62 @@ Pass \`parent_id\` to create a subtask under an existing task.`,
     const parentId = parent_id || parent_task_id || null;
     if (parentId && !taskStore.get(parentId)) {
       return JSON.stringify({ error: `Parent task not found: ${parentId}` });
+    }
+
+    // R6 multi-VP fields — validated only when group_id is present, so
+    // legacy single-tenant TaskCreate calls keep working.
+    let groupId = null;
+    let normalizedMembers = null;
+    let initiator = null;
+    if (group_id) {
+      groupId = String(group_id);
+
+      // Validate members ⊆ roster. We resolve the roster via the tool ctx
+      // because the tool layer must not import group-store directly (loose
+      // coupling — ctx.getGroupRoster is wired in session.js).
+      let roster = null;
+      if (typeof ctx?.getGroupRoster === 'function') {
+        try { roster = ctx.getGroupRoster(groupId); } catch { roster = null; }
+      }
+      if (!Array.isArray(roster)) {
+        return JSON.stringify({
+          error: 'group_not_found',
+          hint: `group ${groupId} has no roster (group not loaded or doesn't exist)`,
+        });
+      }
+
+      // Default members to [initiator] if not given (R6 §1.5: members ≥ 1).
+      const callerVpId = ctx?.currentVpId || null;
+      const candidateMembers = Array.isArray(members) && members.length > 0
+        ? members.map(String)
+        : (callerVpId ? [callerVpId] : []);
+      if (candidateMembers.length === 0) {
+        return JSON.stringify({
+          error: 'no_members',
+          hint: 'Specify members[] (≥1) or call from a VP context (currentVpId resolves to self).',
+        });
+      }
+      const offRoster = candidateMembers.filter((m) => !roster.includes(m));
+      if (offRoster.length > 0) {
+        return JSON.stringify({
+          error: 'not_in_roster',
+          offRoster,
+          roster,
+          hint: 'These VP ids are not in the group roster. Ask the user to invite them first; do not auto-invite.',
+        });
+      }
+      // Always include the caller as a member (initiator must be ∈ members).
+      if (callerVpId && !candidateMembers.includes(callerVpId)) {
+        if (!roster.includes(callerVpId)) {
+          return JSON.stringify({
+            error: 'caller_not_in_roster',
+            hint: `caller VP ${callerVpId} is not in group ${groupId} roster.`,
+          });
+        }
+        candidateMembers.unshift(callerVpId);
+      }
+      normalizedMembers = Array.from(new Set(candidateMembers));
+      initiator = callerVpId;
     }
 
     const id = `task-${randomUUID().slice(0, 8)}`;
@@ -107,15 +194,34 @@ Pass \`parent_id\` to create a subtask under an existing task.`,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
+    if (groupId) {
+      task.groupId = groupId;
+      task.members = normalizedMembers;
+      if (initiator) task.initiator = initiator;
+      if (Array.isArray(related_task_ids) && related_task_ids.length) {
+        task.relatedTaskIds = related_task_ids.map(String);
+      }
+    }
 
     taskStore.create(task);
 
     return JSON.stringify({
       success: true,
-      task: { id, title, priority, status: 'pending', parentTaskId: parentId },
-      message: parentId
-        ? `Subtask created: ${title} (${id}) under ${parentId}`
-        : `Task created: ${title} (${id})`,
+      task: {
+        id,
+        title,
+        priority,
+        status: 'pending',
+        parentTaskId: parentId,
+        groupId: groupId || undefined,
+        members: normalizedMembers || undefined,
+        initiator: initiator || undefined,
+      },
+      message: groupId
+        ? `Task created in group ${groupId}: ${title} (${id}) with members [${(normalizedMembers || []).join(', ')}]`
+        : parentId
+          ? `Subtask created: ${title} (${id}) under ${parentId}`
+          : `Task created: ${title} (${id})`,
     });
   },
 });

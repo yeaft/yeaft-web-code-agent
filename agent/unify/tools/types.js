@@ -19,6 +19,11 @@
  * @property {object} [skillManager] — Skill manager
  * @property {object} [trace] — debug trace
  * @property {object} [config] — engine config
+ * @property {string} [currentVpId] — R6: VP id of the caller (set in multi-VP groups)
+ * @property {string} [currentGroupId] — R6: group id of the caller's RoleInstance
+ * @property {(groupId: string) => string[]|null} [getGroupRoster]
+ *   — R6: resolve a group's roster (used by TaskCreate / route_forward to
+ *   validate `members` ⊆ roster without importing group-store directly).
  */
 
 /**

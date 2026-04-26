@@ -29,6 +29,53 @@
 import { buildSystemPrompt } from './system-prompt.js';
 
 /**
+ * Build the taskCtx opt for buildSystemPrompt. Pulls active tasks for the
+ * VP's current group from the task store, plus the current task (if any).
+ * Returns null if no taskStore is wired (legacy / tests).
+ */
+function collectTaskCtx({ taskStore, groupId, currentTaskId }) {
+  if (!taskStore || !groupId) return null;
+  let allTasks;
+  try {
+    allTasks = taskStore.list();
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(allTasks)) return null;
+
+  const inGroup = allTasks.filter(
+    (t) => t && t.groupId === groupId && t.status !== 'completed' && t.status !== 'cancelled',
+  );
+  // Order by lastActivity / updatedAt desc so most-recent surface first.
+  inGroup.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
+  const activeTasks = inGroup.map((t) => ({
+    id: t.id,
+    title: t.title,
+    status: t.status,
+    members: Array.isArray(t.members) ? t.members.slice() : [],
+    initiator: t.initiator || null,
+    lastActivityAt: t.updatedAt || t.createdAt || 0,
+  }));
+
+  let currentTask = null;
+  if (currentTaskId) {
+    const t = allTasks.find((x) => x && x.id === currentTaskId);
+    if (t) {
+      currentTask = {
+        id: t.id,
+        title: t.title,
+        members: Array.isArray(t.members) ? t.members.slice() : [],
+        initiator: t.initiator || null,
+      };
+    }
+  }
+
+  if (activeTasks.length === 0 && !currentTask) return null;
+  return { activeTasks, currentTask };
+}
+
+/**
  * Build a runner suitable for RoleInstance.drain().
  *
  * @param {{
@@ -50,6 +97,7 @@ export function createTurnRunner(deps = {}) {
     capabilitiesLine,
     onEvent,
     buildPromptOverride,
+    taskStore,             // R6 §6 trigger #6: enables task_ctx affiliation hint
   } = deps;
 
   if (!binder || typeof binder.bind !== 'function') {
@@ -72,6 +120,11 @@ export function createTurnRunner(deps = {}) {
     const engine = binder.bind(ri);
 
     // Fresh system prompt per turn — DYNAMIC section changes every turn.
+    const taskCtx = collectTaskCtx({
+      taskStore,
+      groupId: ri.groupId,
+      currentTaskId: envelope.taskId || null,
+    });
     const systemPrompt = await buildPrompt(ri, {
       registry,
       rosterMembers,
@@ -80,6 +133,7 @@ export function createTurnRunner(deps = {}) {
         taskId: envelope.taskId || null,
         isDream: false,
       },
+      taskCtx,
     });
 
     // Prompt text = inbound message body. Engine.query spec:
