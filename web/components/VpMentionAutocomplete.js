@@ -115,14 +115,19 @@ export default {
         v-for="(vp, idx) in filteredList"
         :key="vp.vpId"
         class="slash-autocomplete-item"
-        :class="{ active: idx === selectedIndex }"
+        :class="{ active: idx === selectedIndex, 'vp-mention-off-roster': vp._offRoster }"
+        :aria-disabled="vp._offRoster ? 'true' : null"
+        :title="vp._offRoster ? $t('unify.vp.mention.offRosterHint', { vpId: vp.vpId }) : null"
         @mousedown.prevent="$emit('select', vp)"
         @mouseenter="$emit('hover-index', idx)"
       >
         <VpAvatar :vp-id="vp.vpId" :size="20" />
         <span class="slash-cmd-name">{{ displayNameFor(vp) }}</span>
         <span class="slash-cmd-desc vp-mention-id">@{{ vp.vpId }}</span>
-        <span v-if="vp.role" class="vp-mention-role">{{ vp.role }}</span>
+        <span v-if="vp.role && !vp._offRoster" class="vp-mention-role">{{ vp.role }}</span>
+        <span v-if="vp._offRoster" class="vp-mention-off-roster-badge">
+          {{ $t('unify.vp.mention.offRosterBadge') }}
+        </span>
       </div>
     </div>
   `,

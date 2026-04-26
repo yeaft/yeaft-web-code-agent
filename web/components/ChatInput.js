@@ -229,10 +229,12 @@ export default {
       return text.slice(atIdx + 1);
     });
 
-    // task-fix (vp-mention-roster): when an active group filter is set, the
-    // candidate list MUST be the group's roster — not the entire VP library.
-    // Falls back to the full library only when no group is selected (e.g.
-    // legacy single-agent Unify chat) so existing behaviour is preserved.
+    // task-fix (vp-mention-roster) + R6 G4: when an active group filter is
+    // set, IN-roster VPs are normal candidates; OFF-roster VPs are still
+    // surfaced but flagged `_offRoster: true` so the autocomplete can render
+    // them grayed with an "ask user to invite" hint (D4: never auto-invite,
+    // mirrors TaskCreate's not_in_roster behaviour). Falls back to the full
+    // library when no group filter is set (legacy single-agent path).
     const mentionVpCandidates = Vue.computed(() => {
       const fullList = Array.isArray(vpStore.vpList) ? vpStore.vpList : [];
       if (!groupsStore) return fullList;
@@ -242,11 +244,31 @@ export default {
       const roster = group && Array.isArray(group.roster) ? group.roster : null;
       if (!roster || roster.length === 0) return fullList;
       const allowed = new Set(roster);
-      return fullList.filter(vp => vp && vp.vpId && allowed.has(vp.vpId));
+      // R6 G4: keep both lists but tag off-roster. Order: in-roster first.
+      const inRoster = [];
+      const offRoster = [];
+      for (const vp of fullList) {
+        if (!vp || !vp.vpId) continue;
+        if (allowed.has(vp.vpId)) inRoster.push(vp);
+        else offRoster.push({ ...vp, _offRoster: true });
+      }
+      return [...inRoster, ...offRoster];
     });
 
     const selectVpMention = (vp) => {
       if (!vp || !vp.vpId) return;
+      // R6 G4: off-roster VPs cannot be @-mentioned (D4 — never auto-invite).
+      // Surface a non-blocking hint and abort the insert; the parent UI
+      // mirrors this through unifyMentionInviteHint so a toast can render.
+      if (vp._offRoster) {
+        if (typeof store.flashInviteHint === 'function') {
+          store.flashInviteHint(vp.vpId);
+        }
+        showVpAutocomplete.value = false;
+        vpSelectedIndex.value = 0;
+        Vue.nextTick(() => inputRef.value?.focus());
+        return;
+      }
       inputText.value = applyMentionSelection(inputText.value, vp.vpId);
       showVpAutocomplete.value = false;
       vpSelectedIndex.value = 0;

@@ -1050,6 +1050,10 @@ export default {
   'unify.vp.mention.placeholder': '按 id 或名称搜索角色\u2026',
   'unify.vp.mention.noMatch': '没有匹配的角色',
   'unify.vp.mention.count': '已 @{count} 人',
+  // R6 G4 — 跨群 @-mention 提示
+  'unify.vp.mention.offRosterBadge': '不在群里',
+  'unify.vp.mention.offRosterHint': '@{vpId} 不在当前群组中。请先让用户邀请他/她加入。',
+  'unify.vp.mention.inviteToast': '无法 @{vpId} — 该角色不在群里，请先在群组编辑器中添加。',
 
   'unify.task.reply.aria': '回复该消息',
   'unify.task.reply.to': '回复 @{vpId}',
