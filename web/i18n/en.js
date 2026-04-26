@@ -923,6 +923,17 @@ export default {
   'unify.vp.detail.traitsEmpty': '(no traits)',
   'unify.vp.detail.modelHintEmpty': '(default)',
 
+  // R6 G3 — dream activity status bar in VpDetailView.
+  'unify.vp.dream.aria': 'Dream activity',
+  'unify.vp.dream.runNow': 'Run dream now',
+  'unify.vp.dream.runNowAria': 'Manually trigger a dream cycle for this VP',
+  'unify.vp.dream.never': 'No dream cycle has run yet.',
+  'unify.vp.dream.running': 'Dream cycle running…',
+  'unify.vp.dream.lastRun': 'Last dream {relative} · {merged} memories merged',
+  'unify.vp.dream.skipped': 'Last dream skipped (nothing to merge).',
+  'unify.vp.dream.errored': 'Last dream {relative} · failed',
+  'unify.vp.dream.failed': 'Dream failed: {error}',
+
   // ============ Unify VP Live-diff Reasons (task-334-ui-c / O4) ============
   // Friendly messages surfaced when vp_updated / vp_removed events arrive.
   // Used in toasts + activity rows so snake_case classifier tags never leak.

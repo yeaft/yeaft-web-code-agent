@@ -58,6 +58,20 @@ export const useVpStore = defineStore('vp', {
      * recomputing the full list. null before any live event.
      */
     lastChange: null,
+    /**
+     * R6 G3 — per-VP dream activity state. Populated from
+     * unify_dream_status (status='running') and unify_dream_result
+     * (status='success' | 'error') events. Shape:
+     *   {
+     *     status: 'idle'|'running'|'success'|'error',
+     *     lastRunAt: number|null,    // set on success/error
+     *     lastResult: object|null,   // raw payload for success
+     *     lastError: string|null,    // error message
+     *   }
+     * VpDetailView reads this for the dream status bar + "Run now" CTA.
+     * @type {Record<string, object>}
+     */
+    dreamStatus: {},
   }),
 
   getters: {
@@ -93,6 +107,15 @@ export const useVpStore = defineStore('vp', {
       const v = state.vps[id];
       if (v && v.color) return v.color;
       return fallbackColor(id);
+    },
+    /** R6 G3 — dream status row for a vpId (always returns an object). */
+    dreamStatusFor: (state) => (id) => {
+      return state.dreamStatus[id] || {
+        status: 'idle',
+        lastRunAt: null,
+        lastResult: null,
+        lastError: null,
+      };
     },
   },
 
@@ -140,6 +163,66 @@ export const useVpStore = defineStore('vp', {
       if (!existed) this.vpOrder.push(vp.vpId);
       // emptyLibrary auto-clears once anything is inserted.
       if (this.emptyLibrary) this.emptyLibrary = false;
+    },
+
+    // ── R6 G3: Dream trigger + status ────────────────────────────
+    /**
+     * Send unify_dream_trigger over WS. Optimistically marks the VP as
+     * 'running'; the agent will subsequently emit unify_dream_status
+     * (running) and unify_dream_result (success|error).
+     *
+     * @param {string} vpId
+     */
+    triggerDream(vpId) {
+      if (!vpId) return;
+      this.dreamStatus = {
+        ...this.dreamStatus,
+        [vpId]: {
+          ...(this.dreamStatus[vpId] || {}),
+          status: 'running',
+          lastError: null,
+        },
+      };
+      const chat = (window.Pinia && window.Pinia.useChatStore)
+        ? window.Pinia.useChatStore()
+        : null;
+      if (chat && typeof chat.sendWsMessage === 'function') {
+        chat.sendWsMessage({ type: 'unify_dream_trigger', vpId });
+      }
+    },
+
+    /** Apply unify_dream_status event (status='running' from agent). */
+    applyDreamStatus(event) {
+      if (!event || !event.vpId) return;
+      const vpId = event.vpId;
+      this.dreamStatus = {
+        ...this.dreamStatus,
+        [vpId]: {
+          ...(this.dreamStatus[vpId] || {}),
+          status: event.status === 'running' ? 'running' : (event.status || 'idle'),
+        },
+      };
+    },
+
+    /** Apply unify_dream_result event (success or error). */
+    applyDreamResult(event) {
+      if (!event || !event.vpId) return;
+      const vpId = event.vpId;
+      const ok = !!event.success;
+      this.dreamStatus = {
+        ...this.dreamStatus,
+        [vpId]: {
+          status: ok ? 'success' : 'error',
+          lastRunAt: Date.now(),
+          lastResult: ok ? {
+            mergedCount: event.mergedCount ?? null,
+            extractedCount: event.extractedCount ?? null,
+            skipped: !!event.skipped,
+            skippedReason: event.skippedReason || null,
+          } : null,
+          lastError: ok ? null : (event.error || 'unknown'),
+        },
+      };
     },
   },
 });

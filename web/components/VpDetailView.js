@@ -61,6 +61,31 @@ export default {
           </div>
         </header>
 
+        <!-- R6 G3: dream activity status bar -->
+        <section
+          class="vp-detail-section vp-detail-dream"
+          :class="'dream-status-' + dreamStatus.status"
+          :aria-label="$t('unify.vp.dream.aria')"
+        >
+          <div class="vp-detail-dream-row">
+            <span class="vp-detail-dream-label">
+              <span v-if="dreamStatus.status === 'running'" class="vp-detail-dream-spinner" aria-hidden="true"></span>
+              {{ dreamStatusText }}
+            </span>
+            <button
+              class="vp-detail-dream-btn"
+              type="button"
+              :disabled="dreamStatus.status === 'running'"
+              :aria-label="$t('unify.vp.dream.runNowAria')"
+              @click="onRunDream"
+            >{{ $t('unify.vp.dream.runNow') }}</button>
+          </div>
+          <p
+            v-if="dreamStatus.status === 'error' && dreamStatus.lastError"
+            class="vp-detail-dream-error"
+          >{{ $t('unify.vp.dream.failed', { error: dreamStatus.lastError }) }}</p>
+        </section>
+
         <section class="vp-detail-section">
           <h3 class="vp-detail-section-title">{{ $t('unify.vp.detail.traits') }}</h3>
           <ul class="vp-detail-traits" v-if="traits.length">
@@ -188,6 +213,47 @@ export default {
       return rows;
     });
 
+    // ── R6 G3: Dream status + manual trigger ──────────────────
+    const dreamStatus = Vue.computed(() => {
+      if (!vpStore) {
+        return { status: 'idle', lastRunAt: null, lastResult: null, lastError: null };
+      }
+      return vpStore.dreamStatusFor(props.vpId);
+    });
+
+    const dreamStatusText = Vue.computed(() => {
+      const ds = dreamStatus.value;
+      const t = (key, params) => {
+        // Resolve translator robustly (Composition setup doesn't always
+        // expose $t in the same way Options API does).
+        const i18n = window.__i18n || (window.app && window.app.config && window.app.config.globalProperties);
+        if (i18n && typeof i18n.$t === 'function') return i18n.$t(key, params);
+        return key;
+      };
+      if (ds.status === 'running') return t('unify.vp.dream.running');
+      if (ds.status === 'success') {
+        const merged = ds.lastResult && ds.lastResult.mergedCount;
+        if (ds.lastResult && ds.lastResult.skipped) {
+          return t('unify.vp.dream.skipped');
+        }
+        return t('unify.vp.dream.lastRun', {
+          relative: relativeTime(ds.lastRunAt),
+          merged: merged != null ? merged : 0,
+        });
+      }
+      if (ds.status === 'error') {
+        return t('unify.vp.dream.errored', { relative: relativeTime(ds.lastRunAt) });
+      }
+      return t('unify.vp.dream.never');
+    });
+
+    function onRunDream() {
+      if (!vpStore) return;
+      const ds = vpStore.dreamStatusFor(props.vpId);
+      if (ds.status === 'running') return;
+      vpStore.triggerDream(props.vpId);
+    }
+
     return {
       vp,
       traits,
@@ -195,6 +261,9 @@ export default {
       shortHash,
       personaHashTitle,
       activityRows,
+      dreamStatus,
+      dreamStatusText,
+      onRunDream,
     };
   },
 };
@@ -220,4 +289,21 @@ function excerpt(m) {
     return s.length > 80 ? s.slice(0, 80) + '…' : s;
   }
   return '';
+}
+
+// R6 G3 — relative time formatter for dream status bar ("2m ago", "3h ago").
+// Falls back to absolute time after 24h.
+function relativeTime(ts) {
+  if (!ts) return '';
+  const diff = Date.now() - ts;
+  if (diff < 0) return '';
+  const sec = Math.floor(diff / 1000);
+  if (sec < 60) return sec + 's ago';
+  const min = Math.floor(sec / 60);
+  if (min < 60) return min + 'm ago';
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return hr + 'h ago';
+  try {
+    return new Date(ts).toLocaleDateString();
+  } catch { return ''; }
 }

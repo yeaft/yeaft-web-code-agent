@@ -923,6 +923,17 @@ export default {
   'unify.vp.detail.traitsEmpty': '（无特征）',
   'unify.vp.detail.modelHintEmpty': '（默认）',
 
+  // R6 G3 — 梦境活动状态栏
+  'unify.vp.dream.aria': '梦境活动',
+  'unify.vp.dream.runNow': '立即运行梦境',
+  'unify.vp.dream.runNowAria': '为该角色手动触发一次梦境周期',
+  'unify.vp.dream.never': '尚未运行过梦境周期。',
+  'unify.vp.dream.running': '梦境周期运行中…',
+  'unify.vp.dream.lastRun': '上次梦境 {relative} · 合并 {merged} 条记忆',
+  'unify.vp.dream.skipped': '上次梦境被跳过（无可合并内容）。',
+  'unify.vp.dream.errored': '上次梦境 {relative} · 失败',
+  'unify.vp.dream.failed': '梦境失败：{error}',
+
   // ============ Unify VP live-diff 事件原因 (task-334-ui-c / O4) ============
   // vp_updated / vp_removed 事件到达时显示给用户的人话文案。
   // 取代 snake_case 分类标签，避免在 toast / 活动列表中泄漏。

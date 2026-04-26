@@ -986,6 +986,23 @@ export const useChatStore = defineStore('chat', {
           this.unifyVpTyping = next;
           break;
         }
+
+        // ★ R6 G3: dream activity events. Forwarded from
+        // agent/unify/web-bridge.js handleUnifyDreamTrigger.
+        // unify_dream_status carries { vpId, status: 'running' } during the
+        // run; unify_dream_result carries { vpId, success, mergedCount, ... }
+        // when finished. Both flow into vpStore.dreamStatus[vpId] so the
+        // VpDetailView status bar can update without polling.
+        case 'unify_dream_status': {
+          const vp = window.Pinia?.useVpStore?.() || (window.__useVpStore && window.__useVpStore());
+          if (vp) vp.applyDreamStatus(event);
+          break;
+        }
+        case 'unify_dream_result': {
+          const vp = window.Pinia?.useVpStore?.() || (window.__useVpStore && window.__useVpStore());
+          if (vp) vp.applyDreamResult(event);
+          break;
+        }
       }
     },
     fetchExpertRoleDefinitions() {
