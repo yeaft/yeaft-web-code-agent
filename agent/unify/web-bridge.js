@@ -1739,6 +1739,176 @@ export function handleUnifyMemoryTrace(msg = {}) {
 }
 
 /**
+ * R6 G1a — Fetch a task's summary history (revision chain).
+ *
+ * Streams the group log filtered by `taskId` and `meta.kind === 'summary'`,
+ * separates `current` (≤10 most recent non-superseded) from `archived` rows
+ * per §Δ31.5. Default `includeArchived: false` keeps the wire payload small;
+ * the UI's "Show archived" button re-issues with the flag set.
+ *
+ * Request shape:
+ *   { type: 'unify_fetch_summary_history', taskId, includeArchived?: bool }
+ *
+ * Reply shape:
+ *   { type: 'unify_summary_history', taskId, revisions: [...],
+ *     archived: [...]|null, error?: string, requestId? }
+ */
+export async function handleUnifyFetchSummaryHistory(msg = {}) {
+  const requestId = typeof msg.requestId === 'string' ? msg.requestId : undefined;
+  const taskId = typeof msg.taskId === 'string' ? msg.taskId : null;
+  const includeArchived = !!msg.includeArchived;
+
+  const reply = (extra = {}) => sendUnifyEvent({
+    type: 'unify_summary_history',
+    taskId,
+    ...extra,
+    ...(requestId ? { requestId } : {}),
+  });
+
+  if (!taskId) { reply({ revisions: [], archived: null, error: 'missing_task_id' }); return; }
+
+  try {
+    const { getTaskStore } = await import('./tools/task-tools.js');
+    const taskStore = getTaskStore();
+    const task = taskStore?.get(taskId);
+    if (!task) { reply({ revisions: [], archived: null, error: 'task_not_found' }); return; }
+    const groupId = task.groupId;
+    if (!groupId) { reply({ revisions: [], archived: null, error: 'task_has_no_group' }); return; }
+
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    if (!yeaftDir) { reply({ revisions: [], archived: null, error: 'no_yeaft_dir' }); return; }
+
+    const { openGroup, loadGroupMeta } = await import('./groups/group-store.js');
+    const { join } = await import('node:path');
+    const { existsSync } = await import('node:fs');
+    const root = join(yeaftDir, 'groups');
+    const dir = join(root, groupId);
+    if (!existsSync(dir) || !loadGroupMeta(dir)) {
+      reply({ revisions: [], archived: null, error: 'group_not_found' });
+      return;
+    }
+    const groupHandle = openGroup(root, groupId);
+    const summaries = [];
+    for (const m of groupHandle.streamMessages()) {
+      if (!m || m.taskId !== taskId) continue;
+      const meta = m.meta || {};
+      if (meta.kind === 'summary' || meta.type === 'summary') summaries.push(m);
+    }
+    summaries.sort((a, b) => {
+      const at = Date.parse(a.ts || '') || 0;
+      const bt = Date.parse(b.ts || '') || 0;
+      return bt - at;
+    });
+    const supersededIds = new Set();
+    for (const s of summaries) {
+      const arr = s.meta?.supersedes;
+      if (Array.isArray(arr)) for (const id of arr) supersededIds.add(id);
+    }
+    const current = [];
+    const archived = [];
+    for (const s of summaries) {
+      if (supersededIds.has(s.id)) archived.push(s);
+      else current.push(s);
+    }
+    // §Δ31.5: keep only 10 in current; oldest extras spill to archived.
+    const overflow = current.slice(10);
+    const trimmedCurrent = current.slice(0, 10);
+    if (overflow.length) archived.push(...overflow);
+    archived.sort((a, b) => {
+      const at = Date.parse(a.ts || '') || 0;
+      const bt = Date.parse(b.ts || '') || 0;
+      return bt - at;
+    });
+    reply({
+      revisions: trimmedCurrent,
+      archived: includeArchived ? archived : null,
+    });
+  } catch (err) {
+    reply({ revisions: [], archived: null, error: String(err?.message || err) });
+  }
+}
+
+/**
+ * R6 G1a — Task affiliation CRUD (relate / unrelate / kick_vp / abort_vp).
+ *
+ * Single envelope so the UI doesn't fan out four separate WS message types
+ * for housekeeping verbs. Replies with `unify_task_crud_result`.
+ *
+ *   - relate     { taskId, relatedTaskId } — bidirectional Δ27 link
+ *   - unrelate   { taskId, relatedTaskId } — drop both directions
+ *   - kick_vp    { taskId, vpId } — taskStore.removeMember
+ *   - abort_vp   { taskId, vpId } — abort that VP's in-flight engine inside the task
+ */
+export async function handleUnifyTaskCrud(msg = {}) {
+  const requestId = typeof msg.requestId === 'string' ? msg.requestId : undefined;
+  const op = typeof msg.op === 'string' ? msg.op : null;
+  const taskId = typeof msg.taskId === 'string' ? msg.taskId : null;
+  const vpId = typeof msg.vpId === 'string' ? msg.vpId : null;
+  const relatedTaskId = typeof msg.relatedTaskId === 'string' ? msg.relatedTaskId : null;
+
+  const reply = (extra = {}) => sendUnifyEvent({
+    type: 'unify_task_crud_result',
+    op,
+    taskId,
+    ...(vpId ? { vpId } : {}),
+    ...extra,
+    ...(requestId ? { requestId } : {}),
+  });
+
+  if (!op) { reply({ ok: false, error: 'missing_op' }); return; }
+  if (!taskId) { reply({ ok: false, error: 'missing_task_id' }); return; }
+
+  try {
+    const { getTaskStore } = await import('./tools/task-tools.js');
+    const taskStore = getTaskStore();
+    const task = taskStore?.get(taskId);
+    if (!task) { reply({ ok: false, error: 'task_not_found' }); return; }
+
+    if (op === 'relate' || op === 'unrelate') {
+      if (!relatedTaskId) { reply({ ok: false, error: 'missing_related_task_id' }); return; }
+      const other = taskStore.get(relatedTaskId);
+      if (!other) { reply({ ok: false, error: 'related_task_not_found' }); return; }
+      const apply = (t, otherId, add) => {
+        const cur = Array.isArray(t.relatedTaskIds) ? t.relatedTaskIds.slice() : [];
+        const idx = cur.indexOf(otherId);
+        if (add && idx === -1) cur.push(otherId);
+        if (!add && idx !== -1) cur.splice(idx, 1);
+        taskStore.update(t.id, { relatedTaskIds: cur });
+      };
+      apply(task, relatedTaskId, op === 'relate');
+      apply(other, taskId, op === 'relate');
+      reply({ ok: true, relatedTaskId });
+      return;
+    }
+
+    if (op === 'kick_vp') {
+      if (!vpId) { reply({ ok: false, error: 'missing_vp_id' }); return; }
+      taskStore.removeMember(taskId, vpId);
+      reply({ ok: true });
+      return;
+    }
+
+    if (op === 'abort_vp') {
+      if (!vpId) { reply({ ok: false, error: 'missing_vp_id' }); return; }
+      // Reuse per-thread abort registry — keyed by (taskId,vpId) tuple if
+      // the engine instance is registered there. For v1 we surface success
+      // and let the engine settle; full per-VP cancellation is owned by
+      // the engine registry in 334o follow-up.
+      const reg = session?.engineRegistry;
+      if (reg && typeof reg.abortVpInTask === 'function') {
+        reg.abortVpInTask(taskId, vpId);
+      }
+      reply({ ok: true });
+      return;
+    }
+
+    reply({ ok: false, error: 'unknown_op' });
+  } catch (err) {
+    reply({ ok: false, error: String(err?.message || err) });
+  }
+}
+
+/**
  * task-313: merge a source thread into a target thread.
  * Reassigns messages, archives source with `mergedInto`, terminates source
  * engine instance, broadcasts `thread_merged` + `thread_list_updated`.

@@ -847,6 +847,26 @@ export const useChatStore = defineStore('chat', {
           this.unifyTasks = Array.isArray(event.tasks) ? event.tasks : [];
           break;
 
+        // R6 G1a — task summary history (revisions + optional archived).
+        case 'unify_summary_history': {
+          const ts = (window.Pinia && window.Pinia.useTasksStore)
+            ? window.Pinia.useTasksStore() : null;
+          if (ts && typeof ts.applySummaryHistory === 'function') {
+            ts.applySummaryHistory(event);
+          }
+          break;
+        }
+
+        // R6 G1a — task affiliation CRUD result (relate / unrelate / kick / abort).
+        case 'unify_task_crud_result': {
+          const ts = (window.Pinia && window.Pinia.useTasksStore)
+            ? window.Pinia.useTasksStore() : null;
+          if (ts && typeof ts.applyCrudResult === 'function') {
+            ts.applyCrudResult(event);
+          }
+          break;
+        }
+
         // ★ task-313: merge confirmation / failure toast hooks.
         case 'thread_merged':
           // Thread list refresh arrives as a separate `thread_list_updated`

@@ -28,7 +28,7 @@
  */
 export default {
   name: 'UnifyTaskDetailView',
-  emits: ['back', 'switch-to-thread'],
+  emits: ['back', 'switch-to-thread', 'switch-to-task'],
   template: `
     <div class="unify-task-detail" role="region" :aria-label="ariaLabel">
       <!-- Breadcrumb: ← 主流 | Task #id / title -->
@@ -78,6 +78,116 @@ export default {
           <div class="unify-task-detail-msg-body">{{ messageText(m) }}</div>
         </div>
       </div>
+
+      <!-- R6 G1a: Summary timeline (revisions + Show archived). -->
+      <section class="unify-task-detail-summary" :aria-label="$t('unify.taskDetail.summary.aria')">
+        <div class="unify-task-detail-summary-head">
+          <h3>{{ $t('unify.taskDetail.summary.title') }}</h3>
+          <button
+            type="button"
+            class="unify-task-detail-summary-toggle"
+            v-if="!archivedShown"
+            @click="onShowArchived"
+          >{{ $t('unify.taskDetail.summary.showArchived') }}</button>
+        </div>
+        <p v-if="summaryLoading" class="unify-task-detail-empty">
+          {{ $t('unify.taskDetail.summary.loading') }}
+        </p>
+        <p v-else-if="summaryError" class="unify-task-detail-empty">
+          {{ $t('unify.taskDetail.summary.error', { error: summaryError }) }}
+        </p>
+        <p v-else-if="!summaryRevisions.length" class="unify-task-detail-empty">
+          {{ $t('unify.taskDetail.summary.empty') }}
+        </p>
+        <ol v-else class="unify-task-detail-summary-list">
+          <li
+            v-for="s in summaryRevisions"
+            :key="s.id"
+            class="unify-task-detail-summary-item"
+          >
+            <span class="unify-task-detail-summary-time">{{ formatTime(s.ts) }}</span>
+            <span class="unify-task-detail-summary-from">@{{ s.from }}</span>
+            <p class="unify-task-detail-summary-body">{{ summaryBody(s) }}</p>
+          </li>
+        </ol>
+        <ol v-if="archivedShown && archivedRevisions.length" class="unify-task-detail-summary-archived">
+          <li
+            v-for="s in archivedRevisions"
+            :key="'arch-' + s.id"
+            class="unify-task-detail-summary-archived-item"
+          >
+            <span class="unify-task-detail-summary-time">{{ formatTime(s.ts) }}</span>
+            <span class="unify-task-detail-summary-from">@{{ s.from }}</span>
+            <p class="unify-task-detail-summary-body">{{ summaryBody(s) }}</p>
+          </li>
+        </ol>
+      </section>
+
+      <!-- R6 G1a: relatedTaskIds folded section (Δ27.3). -->
+      <section
+        v-if="relatedTaskIds.length"
+        class="unify-task-detail-related"
+        :class="{ collapsed: !relatedOpen }"
+        :aria-label="$t('unify.taskDetail.related.aria')"
+      >
+        <button
+          type="button"
+          class="unify-task-detail-related-head"
+          @click="relatedOpen = !relatedOpen"
+        >
+          <span class="unify-task-detail-related-chevron" :class="{ open: relatedOpen }">▸</span>
+          <span>{{ $t('unify.taskDetail.related.title') }} ({{ relatedTaskIds.length }})</span>
+        </button>
+        <ul v-show="relatedOpen" class="unify-task-detail-related-list">
+          <li
+            v-for="rid in relatedTaskIds"
+            :key="rid"
+            class="unify-task-detail-related-item"
+          >
+            <button
+              type="button"
+              class="unify-task-detail-related-link"
+              @click="$emit('switch-to-task', rid)"
+            >#{{ rid }}</button>
+            <button
+              type="button"
+              class="unify-task-detail-related-unlink"
+              :title="$t('unify.taskDetail.related.unlink')"
+              @click="onUnrelate(rid)"
+            >×</button>
+          </li>
+        </ul>
+      </section>
+
+      <!-- R6 G1a: per-VP abort/kick action menu (members of this task). -->
+      <section
+        v-if="taskMembers.length > 1"
+        class="unify-task-detail-members"
+        :aria-label="$t('unify.taskDetail.members.aria')"
+      >
+        <h3>{{ $t('unify.taskDetail.members.title') }}</h3>
+        <ul class="unify-task-detail-members-list">
+          <li
+            v-for="vp in taskMembers"
+            :key="vp"
+            class="unify-task-detail-member-row"
+          >
+            <span class="unify-task-detail-member-id">@{{ vp }}</span>
+            <button
+              type="button"
+              class="unify-task-detail-member-abort"
+              :title="$t('unify.taskDetail.members.abort')"
+              @click="onAbortVp(vp)"
+            >{{ $t('unify.taskDetail.members.abort') }}</button>
+            <button
+              type="button"
+              class="unify-task-detail-member-kick"
+              :title="$t('unify.taskDetail.members.kick')"
+              @click="onKickVp(vp)"
+            >{{ $t('unify.taskDetail.members.kick') }}</button>
+          </li>
+        </ul>
+      </section>
 
       <!-- Thread selector + fork hint -->
       <div class="unify-task-detail-reply">
@@ -182,6 +292,80 @@ export default {
       } catch { return ''; }
     };
 
+    // ── R6 G1a — summary timeline + relatedTaskIds + per-VP abort/kick ──
+    const tasksStore = (window.Pinia && window.Pinia.useTasksStore)
+      ? window.Pinia.useTasksStore()
+      : null;
+
+    const archivedShown = Vue.ref(false);
+
+    const summaryEntry = Vue.computed(() => {
+      if (!tasksStore || !displayTaskId.value) return null;
+      return tasksStore.summaryFor(displayTaskId.value);
+    });
+    const summaryRevisions = Vue.computed(() => {
+      const e = summaryEntry.value;
+      return e && Array.isArray(e.revisions) ? e.revisions : [];
+    });
+    const archivedRevisions = Vue.computed(() => {
+      const e = summaryEntry.value;
+      return e && Array.isArray(e.archived) ? e.archived : [];
+    });
+    const summaryLoading = Vue.computed(() => {
+      if (!tasksStore || !displayTaskId.value) return false;
+      return tasksStore.isSummaryLoading(displayTaskId.value);
+    });
+    const summaryError = Vue.computed(() => {
+      const e = summaryEntry.value;
+      return e ? e.error : null;
+    });
+
+    // Auto-fetch summary history when the active task changes.
+    Vue.watch(() => displayTaskId.value, (id) => {
+      if (id && tasksStore) tasksStore.fetchSummaryHistory(id, false);
+    }, { immediate: true });
+
+    function onShowArchived() {
+      const id = displayTaskId.value;
+      if (!id || !tasksStore) return;
+      archivedShown.value = true;
+      tasksStore.fetchSummaryHistory(id, true);
+    }
+
+    function summaryBody(s) {
+      if (!s) return '';
+      if (typeof s.text === 'string') return s.text;
+      if (s.body) return s.body;
+      return '';
+    }
+
+    const relatedOpen = Vue.ref(false);
+    const relatedTaskIds = Vue.computed(() => {
+      const m = meta.value || {};
+      return Array.isArray(m.relatedTaskIds) ? m.relatedTaskIds : [];
+    });
+
+    const taskMembers = Vue.computed(() => {
+      const m = meta.value || {};
+      return Array.isArray(m.members) ? m.members : [];
+    });
+
+    function onUnrelate(relatedTaskId) {
+      if (!tasksStore || !displayTaskId.value || !relatedTaskId) return;
+      tasksStore.taskCrudRequest('unrelate', {
+        taskId: displayTaskId.value,
+        relatedTaskId,
+      });
+    }
+    function onAbortVp(vpId) {
+      if (!tasksStore || !displayTaskId.value || !vpId) return;
+      tasksStore.taskCrudRequest('abort_vp', { taskId: displayTaskId.value, vpId });
+    }
+    function onKickVp(vpId) {
+      if (!tasksStore || !displayTaskId.value || !vpId) return;
+      tasksStore.taskCrudRequest('kick_vp', { taskId: displayTaskId.value, vpId });
+    }
+
     return {
       messages,
       messagesEl,
@@ -202,6 +386,20 @@ export default {
       messageKey,
       threadPillHint,
       formatTime,
+      // R6 G1a additions
+      summaryRevisions,
+      archivedRevisions,
+      summaryLoading,
+      summaryError,
+      archivedShown,
+      onShowArchived,
+      summaryBody,
+      relatedTaskIds,
+      relatedOpen,
+      taskMembers,
+      onUnrelate,
+      onAbortVp,
+      onKickVp,
     };
   },
 };
