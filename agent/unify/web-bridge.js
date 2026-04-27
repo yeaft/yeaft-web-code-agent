@@ -28,6 +28,7 @@ import ctx from '../context.js';
 import { getThreadStore, MAIN_THREAD_ID } from './threads/store.js';
 import { handleVpSubscribe } from './vp/vp-bridge.js';
 import { createVp, updateVp, deleteVp, readVp, VpCrudError } from './vp/vp-crud.js';
+import { scanVpLibrary } from './vp/vp-store.js';
 import { createRouter } from './routing/router.js';
 import { handleUnifyTaskMessage as _handleUnifyTaskMessage } from './task-message.js';
 import {
@@ -1256,18 +1257,54 @@ export async function handleUnifyGroupChat(msg) {
  * Returns `undefined` when we have nothing to inject — keeps the legacy
  * single-agent path identical to before.
  */
-function buildVpQueryOpts({ vpId, groupCoordinator, groupId }) {
-  if (!vpId) return undefined;
-  const out = { senderVpId: vpId };
+export function buildVpQueryOpts({ vpId, groupCoordinator, groupId }) {
+  // PR-G fix (Option A): when no vpId is supplied, resolve a default so the
+  // engine still receives a vpPersona and the system prompt speaks as the
+  // VP — not as legacy Yeaft. Resolution order:
+  //   1. caller-supplied vpId (group/coordinator dispatch)
+  //   2. open group's defaultVpId  (`groupCoordinator.group.getMeta()`)
+  //   3. session config `defaultVpId`  (~/.yeaft/config.json)
+  //   4. first VP in the local library (scanVpLibrary)
+  // Cold-start (empty library) returns undefined — engine then falls back
+  // to the legacy Yeaft identity, which is the intentional baseline only
+  // when no VP is available at all.
+  let resolvedVpId = vpId;
+  if (!resolvedVpId) {
+    try {
+      const meta = groupCoordinator && groupCoordinator.group
+        && typeof groupCoordinator.group.getMeta === 'function'
+        ? groupCoordinator.group.getMeta() : null;
+      if (meta && typeof meta.defaultVpId === 'string' && meta.defaultVpId) {
+        resolvedVpId = meta.defaultVpId;
+      }
+    } catch { /* coordinator inspection is best-effort */ }
+  }
+  if (!resolvedVpId) {
+    const cfgDefault = session?.config?.defaultVpId;
+    if (typeof cfgDefault === 'string' && cfgDefault.trim()) {
+      resolvedVpId = cfgDefault.trim();
+    }
+  }
+  if (!resolvedVpId) {
+    try {
+      const lib = scanVpLibrary();
+      if (Array.isArray(lib) && lib.length > 0 && lib[0].vpId) {
+        resolvedVpId = lib[0].vpId;
+      }
+    } catch { /* library scan is best-effort */ }
+  }
+  if (!resolvedVpId) return undefined;
+
+  const out = { senderVpId: resolvedVpId };
   if (typeof groupId === 'string' && groupId.trim()) {
     out.groupId = groupId.trim();
   }
   try {
-    const vp = readVp(vpId);
+    const vp = readVp(resolvedVpId);
     if (vp) {
       out.vpPersona = {
-        vpId,
-        displayName: vp.displayName || vpId,
+        vpId: resolvedVpId,
+        displayName: vp.displayName || resolvedVpId,
         role: vp.role || '',
         persona: vp.persona || '',
       };
