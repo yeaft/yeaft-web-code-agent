@@ -58,7 +58,7 @@
   ],
   "license": "MIT",
   "author": "Yeaft",
-  "dependencies": {
-    "better-sqlite3": "^12.8.0"
+  "engines": {
+    "node": ">=22.5.0"
   }
 }

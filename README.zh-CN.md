@@ -410,7 +410,7 @@ claude-web-chat/
 
 ## 技术栈
 
-- **Server**: Node.js, Express, ws, better-sqlite3, compression
+- **Server**: Node.js, Express, ws, node:sqlite, compression
 - **Frontend**: Vue 3, Pinia, xterm.js, CodeMirror 5, marked, highlight.js
 - **Build**: esbuild
 - **Testing**: Vitest（2,700+ 单元/集成测试），Playwright（E2E）

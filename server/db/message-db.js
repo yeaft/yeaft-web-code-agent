@@ -1,5 +1,5 @@
 import db from './connection.js';
-import { stmts } from './connection.js';
+import { stmts, transaction } from './connection.js';
 
 export const messageDb = {
   add(sessionId, role, content, messageType = null, toolName = null, toolInput = null, metadata = null) {
@@ -111,7 +111,7 @@ export const messageDb = {
       }
     }
 
-    const insertMany = db.transaction((msgs) => {
+    const insertMany = transaction((msgs) => {
       if (needsRebuild) {
         stmts.deleteMessagesBySession.run(sessionId);
       }

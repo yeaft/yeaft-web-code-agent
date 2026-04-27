@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import db from './connection.js';
+import { transaction } from './connection.js';
 
 // Prepared statements
 const stmts = {
@@ -38,7 +39,7 @@ const stmts = {
 };
 
 // Transaction wrappers
-const insertRoleWithActions = db.transaction((userId, roleData) => {
+const insertRoleWithActions = transaction((userId, roleData) => {
   const now = Date.now();
   const rowId = `cer_${randomUUID()}`;
   const roleId = roleData.roleId || `custom-${randomUUID().substring(0, 8)}`;
@@ -67,7 +68,7 @@ const insertRoleWithActions = db.transaction((userId, roleData) => {
   return { rowId, roleId };
 });
 
-const updateRoleWithActions = db.transaction((userId, roleId, roleData) => {
+const updateRoleWithActions = transaction((userId, roleId, roleData) => {
   const now = Date.now();
 
   stmts.updateRole.run(
