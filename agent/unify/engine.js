@@ -476,7 +476,7 @@ export class Engine {
    * @param {string} assistantContent
    * @param {object[]} [toolCalls]
    */
-  #persistMessages(userContent, assistantContent, toolCalls) {
+  #persistMessages(userContent, assistantContent, toolCalls, groupId) {
     if (!this.#conversationStore) return;
     if (this.#config._readOnly) return;
 
@@ -497,6 +497,8 @@ export class Engine {
       role: 'user',
       content: userContent,
       threadId,
+      // Bug 6: stamp groupId so history replay can route by group.
+      ...(groupId ? { groupId } : {}),
     });
 
     // Persist assistant message
@@ -505,6 +507,7 @@ export class Engine {
       content: assistantContent,
       model: this.#config.model,
       threadId,
+      ...(groupId ? { groupId } : {}),
     };
     if (toolCalls && toolCalls.length > 0) {
       assistantMsg.toolCalls = toolCalls;
@@ -1144,6 +1147,9 @@ export class Engine {
             primaryModel: this.#config.model,
             messages: conversationMessages,
             trace: this.#trace,
+            // Bug 6: tag persisted messages with the originating group so
+            // history replay can re-stamp them on reload.
+            groupId,
           });
 
           if (hookResult.consolidated) {
@@ -1154,7 +1160,7 @@ export class Engine {
           }
         } else {
           // Legacy path (no yeaftDir → use old behavior)
-          this.#persistMessages(prompt, fullResponseText, assistantMsg.toolCalls);
+          this.#persistMessages(prompt, fullResponseText, assistantMsg.toolCalls, groupId);
 
           const consolidated = await this.#maybeConsolidate();
           if (consolidated && consolidated.archivedCount > 0) {

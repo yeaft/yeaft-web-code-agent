@@ -64,6 +64,11 @@ function serializeMessage(msg) {
   // their original thread id in `sourceThreadId` so the UI can still
   // render a small "#source" pill next to each bubble.
   if (msg.sourceThreadId) fm.push(`sourceThreadId: ${msg.sourceThreadId}`);
+  // Bug 6: persist groupId so history replay can stamp messages with the
+  // group they originated in. Without this, every replayed message lands
+  // in the default group and switching back to the originating group
+  // shows an empty pane.
+  if (msg.groupId) fm.push(`groupId: ${msg.groupId}`);
 
   // Token estimate
   const content = msg.content || '';
@@ -134,6 +139,7 @@ export function parseMessage(raw) {
       case 'tokens_est': msg.tokens_est = parseInt(value, 10); break;
       case 'threadId': msg.threadId = value; break;
       case 'sourceThreadId': msg.sourceThreadId = value; break;
+      case 'groupId': msg.groupId = value; break;
       // toolCalls are multi-line YAML — handled separately below
     }
   }
