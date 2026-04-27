@@ -1006,6 +1006,24 @@ function handleEngineEvent(event, threadId, hctx) {
       }, gid);
       break;
 
+    case 'reflection':
+      // PR-L: V7 tool-history reflection event. Two phases per occurrence:
+      //   status: 'pending' — generation kicked off
+      //   status: 'ready'   — markdown content + durationMs
+      //   status: 'error'   — generation failed (history left unchanged)
+      sendUnifyEvent({
+        type: 'reflection',
+        trigger: event.trigger,
+        status: event.status,
+        loopRange: event.loopRange,
+        toolCount: event.toolCount,
+        content: event.content,
+        durationMs: event.durationMs,
+        error: event.error,
+        threadId,
+      }, gid);
+      break;
+
     case 'debug_turn':
       sendUnifyEvent({
         type: 'debug_turn',

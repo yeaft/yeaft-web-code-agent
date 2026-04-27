@@ -36,6 +36,20 @@ import { pickEffort, parseEffortPrefix } from './effort.js';
 import { normalizeEffort } from './models.js';
 import { attachRouterPlan, extractPriorPlan, stripMetaForWire } from './router/continuity.js';
 import { resolveThinking } from './router/thinking.js';
+import {
+  TOOL_BATCH_SIZE,
+  TURN_SUMMARY_THRESHOLD,
+  DUP_TOOL_THRESHOLD,
+  ExecLog,
+  buildEntry as buildExecLogEntry,
+  argsHashOf,
+  runT1Reflection,
+  runT2Reflection,
+  buildFallbackStub,
+  collapseRangeToReflection,
+  buildDuplicateReminder,
+  extractToolPairsFromRange,
+} from './tool-folding/index.js';
 
 /**
  * task-324 — Turn cap removed.
@@ -172,6 +186,26 @@ export class Engine {
    */
   #currentAbortCtrl = null;
 
+  /**
+   * PR-L — V7 Tool History Reflection state. Owned per Engine instance.
+   *
+   *   • `#execLog` — append-only log of every tool execution, used for
+   *     fallback-stub generation and duplicate-call detection. Persists
+   *     to <yeaftDir>/tool-log/<traceId>/<turnIdx>.jsonl when yeaftDir
+   *     is set; in-memory only otherwise.
+   *   • `#pendingT2` — Map<turnNumber, { promise, loopRange, count, ... }>
+   *     keyed by the turn number that triggered T2. The next query() call
+   *     non-blocking-checks this map; if the promise has resolved, the
+   *     prior turn's history is rewritten with the reflection. If still
+   *     pending, the engine falls back to the exec-log stub.
+   *   • `#reflectedTurns` — Set<turnNumber>; ensures T1 fires at most
+   *     once per turn (when toolCount crosses TOOL_BATCH_SIZE).
+   */
+  #execLog = null;
+  #pendingT2 = new Map();
+  #reflectedTurns = new Set();
+  #__queryCounter = 0;
+
   /** @type {string|null} */
   #abortReason = null;
 
@@ -201,6 +235,14 @@ export class Engine {
     this.#skillManager = skillManager || null;
     this.#mcpManager = mcpManager || null;
     this.#yeaftDir = yeaftDir || null;
+
+    // PR-L: tool history reflection log. Keyed by traceId so distinct
+    // engine instances don't stomp on each other's jsonl files. When
+    // yeaftDir is null the ExecLog still works — purely in-memory.
+    this.#execLog = new ExecLog({
+      yeaftDir: this.#yeaftDir,
+      conversationId: this.#traceId,
+    });
 
     // Build fast config: uses fastModelId for internal tasks (recall, consolidation, dream)
     // Falls back to primary model if no fastModel configured
@@ -846,6 +888,22 @@ export class Engine {
       { role: 'user', content: prompt },
     ];
 
+    // PR-L: T2 carry-forward. If a previous query()'s end-of-turn
+    // reflection has resolved, rewrite that turn's range in
+    // `conversationMessages` to a single assistant reflection message.
+    // If still pending, fall back to the exec-log stub — non-blocking,
+    // never wait. This runs BEFORE the first adapter.stream so the
+    // upcoming call sees the rewritten history.
+    yield* this.#applyPendingT2Reflections(conversationMessages, prompt);
+
+    // PR-L: track this query()'s tool-arc for reflection.
+    // `turnStartIdx` is where the current user message lives; the arc
+    // we may collapse spans (turnStartIdx + 1 .. last assistant/tool).
+    const turnStartIdx = conversationMessages.length - 1;
+    let queryToolCount = 0;
+    let t1Fired = false;
+    const queryNumber = (this.#__queryCounter = (this.#__queryCounter || 0) + 1);
+
     const toolDefs = this.#getToolDefs();
     let turnNumber = 0;
     let continueTurns = 0; // auto-continue counter
@@ -1196,6 +1254,46 @@ export class Engine {
           }
         }
 
+        // PR-L: T2 end-of-turn (asynchronous) reflection. Fires when the
+        // total tool count for this query() exceeds TURN_SUMMARY_THRESHOLD
+        // (5) AND T1 didn't already collapse the arc. Kicks off the
+        // primary-model call without await; the next query()'s
+        // `#applyPendingT2Reflections` carries the result forward.
+        if (queryToolCount > TURN_SUMMARY_THRESHOLD && !t1Fired) {
+          const arcStart = turnStartIdx + 1;
+          const arcEnd = conversationMessages.length - 1;
+          if (arcEnd > arcStart) {
+            const { pairs, assistantText } = extractToolPairsFromRange(
+              conversationMessages, arcStart, arcEnd,
+            );
+            yield {
+              type: 'reflection',
+              trigger: 't2',
+              status: 'pending',
+              loopRange: [arcStart, arcEnd],
+              toolCount: pairs.length,
+            };
+            const promise = runT2Reflection({
+              adapter: this.#adapter,
+              model: this.#config.model,
+              originalUserMsg: prompt,
+              toolPairs: pairs,
+              assistantText,
+              signal,
+            });
+            // Detach: never await. The promise outlives this query() and
+            // the next call will pick it up (or use the fallback stub if
+            // it hasn't resolved by then).
+            promise.catch(() => { /* swallow until carry-forward */ });
+            this.#pendingT2.set(queryNumber, {
+              promise,
+              loopRange: [arcStart, arcEnd],
+              count: pairs.length,
+              originalUserMsg: prompt,
+            });
+          }
+        }
+
         break;
       }
 
@@ -1206,6 +1304,8 @@ export class Engine {
       // break out of the outer while-loop cleanly once the current
       // tool batch finishes reporting.
       let abortedDuringTools = false;
+      /** @type {string[]} */
+      const pendingDupReminders = [];
 
       for (const tc of toolCalls) {
         // task-325a: honour abort between tools. We don't cancel a tool
@@ -1218,6 +1318,29 @@ export class Engine {
         }
 
         const toolStartTime = Date.now();
+
+        // PR-L: duplicate-call detection. If this exact (toolName,
+        // argsHash) pair has already been executed DUP_TOOL_THRESHOLD
+        // (3) times within the current turn + last 2 turns, queue a
+        // system reminder. We push the reminder AFTER the tool batch
+        // completes (not now) so the
+        // assistant(tool_use) → user(tool_result, …) pairing demanded
+        // by the Anthropic / OpenAI Responses APIs stays intact. We
+        // don't block the call — the LLM still decides.
+        const dupHash = argsHashOf(tc.input);
+        const dupInfo = this.#execLog.dupInfo({
+          toolName: tc.name,
+          argsHash: dupHash,
+          currentTurn: turnNumber,
+          lookbackTurns: 2,
+        });
+        if (dupInfo.count + 1 >= DUP_TOOL_THRESHOLD) {
+          pendingDupReminders.push(buildDuplicateReminder({
+            toolName: tc.name,
+            count: dupInfo.count + 1,
+            lastResultBrief: dupInfo.lastResultBrief,
+          }));
+        }
 
         let output;
         let isError = false;
@@ -1266,6 +1389,85 @@ export class Engine {
           content: output,
           isError,
         });
+
+        // PR-L: persist this execution to the exec-log for fallback-stub
+        // and duplicate-call detection. Best-effort — disk failures are
+        // swallowed inside ExecLog.append.
+        this.#execLog.append(turnNumber, buildExecLogEntry({
+          loopIdx: queryToolCount,
+          toolName: tc.name,
+          args: tc.input,
+          output,
+          isError,
+        }));
+        queryToolCount += 1;
+      }
+
+      // PR-L: flush any duplicate-call reminders queued during the batch.
+      // Pushed AFTER the for-loop so the tool_use → tool_result pairing
+      // is intact; the next adapter.stream() will see the reminder as a
+      // user message immediately after the last tool result.
+      for (const reminder of pendingDupReminders) {
+        conversationMessages.push({ role: 'user', content: reminder });
+      }
+
+      // PR-L: T1 in-turn (synchronous) reflection. Fires exactly once per
+      // query() lifetime, the moment queryToolCount crosses
+      // TOOL_BATCH_SIZE (13). Generates a markdown reflection over the
+      // assistant+tool arc since the user prompt and rewrites the history
+      // in place — collapsing it to a SINGLE assistant message — before
+      // the next adapter.stream() runs.
+      if (!t1Fired
+          && queryToolCount >= TOOL_BATCH_SIZE
+          && !this.#reflectedTurns.has(`${queryNumber}:t1`)
+          && !abortedDuringTools && !signal?.aborted) {
+        t1Fired = true;
+        this.#reflectedTurns.add(`${queryNumber}:t1`);
+        try {
+          const arcStart = turnStartIdx + 1;
+          const arcEnd = conversationMessages.length - 1;
+          const { pairs, assistantText } = extractToolPairsFromRange(
+            conversationMessages, arcStart, arcEnd,
+          );
+          yield {
+            type: 'reflection',
+            trigger: 't1',
+            status: 'pending',
+            loopRange: [arcStart, arcEnd],
+            toolCount: pairs.length,
+          };
+          const { content, durationMs } = await runT1Reflection({
+            adapter: this.#adapter,
+            model: this.#config.model,
+            originalUserMsg: prompt,
+            toolPairs: pairs,
+            assistantText,
+            signal,
+          });
+          const next = collapseRangeToReflection(
+            conversationMessages, arcStart, arcEnd, content,
+          );
+          conversationMessages.length = 0;
+          for (const m of next) conversationMessages.push(m);
+          yield {
+            type: 'reflection',
+            trigger: 't1',
+            status: 'ready',
+            loopRange: [arcStart, arcStart],
+            toolCount: pairs.length,
+            content,
+            durationMs,
+          };
+        } catch (err) {
+          // Best-effort. On failure leave history unchanged so the loop
+          // continues normally — never block the turn.
+          yield {
+            type: 'reflection',
+            trigger: 't1',
+            status: 'error',
+            error: err && err.message || String(err),
+          };
+        }
       }
 
       // task-325a: if abort fired between tools, converge now — emit
@@ -1334,6 +1536,86 @@ export class Engine {
 
   /** @returns {import('./mcp.js').MCPManager|null} */
   get mcpManager() { return this.#mcpManager; }
+
+  /**
+   * PR-L — V7 Tool History Reflection helpers.
+   *
+   * `#applyPendingT2Reflections` is called at the start of every
+   * `#runQuery` to carry forward any prior turn's async reflection. It is
+   * a generator so it can yield reflection events to the engine consumer.
+   * Non-blocking: never awaits a pending promise.
+   *
+   * @param {Array} conversationMessages
+   * @param {string} originalUserMsg
+   */
+  async *#applyPendingT2Reflections(conversationMessages, originalUserMsg) {
+    if (this.#pendingT2.size === 0) return;
+    // Drain in insertion order (Map preserves it). We process all entries
+    // because the user could send multiple prompts back-to-back before
+    // the engine resumes — each historical turn gets its rewrite.
+    const drained = [...this.#pendingT2.entries()];
+    this.#pendingT2.clear();
+
+    for (const [turnNumber, info] of drained) {
+      const range = info.loopRange;
+      if (!Array.isArray(range) || range.length !== 2) continue;
+      const [startIdx, endIdx] = range;
+      if (startIdx < 0 || endIdx < startIdx || endIdx >= conversationMessages.length) {
+        continue;
+      }
+
+      // Non-blocking readiness check: race the promise against an already-
+      // settled Promise.resolve(SENTINEL). If the reflection promise wins,
+      // it has resolved synchronously (microtask order). Otherwise it's
+      // still pending and we use the fallback stub.
+      const PENDING_SENTINEL = {};
+      const settled = await Promise.race([
+        info.promise.then((v) => ({ ok: true, content: v.content, durationMs: v.durationMs }))
+                    .catch((err) => ({ ok: false, err })),
+        Promise.resolve(PENDING_SENTINEL),
+      ]);
+
+      let content;
+      let trigger;
+      let durationMs = 0;
+      if (settled === PENDING_SENTINEL) {
+        // Stub fallback. Detach the unresolved promise so we don't keep
+        // holding it (caller may still observe it via .catch elsewhere).
+        info.promise.catch(() => { /* swallow late rejection */ });
+        const entries = this.#execLog ? this.#execLog.readTurn(turnNumber) : [];
+        content = buildFallbackStub({ execLogEntries: entries, originalUserMsg: info.originalUserMsg || originalUserMsg });
+        trigger = 't2-fallback';
+      } else if (settled.ok) {
+        content = settled.content;
+        trigger = 't2';
+        durationMs = settled.durationMs || 0;
+      } else {
+        // Promise rejected — leave history unchanged.
+        continue;
+      }
+
+      // Rewrite history.
+      const next = collapseRangeToReflection(conversationMessages, startIdx, endIdx, content);
+      // Mutate in place so caller's reference stays valid.
+      conversationMessages.length = 0;
+      for (const m of next) conversationMessages.push(m);
+
+      yield {
+        type: 'reflection',
+        trigger,
+        status: 'ready',
+        loopRange: [startIdx, endIdx],
+        toolCount: info.count || 0,
+        content,
+        durationMs,
+      };
+    }
+  }
+
+  /**
+   * PR-L — read-only accessor for tests.
+   */
+  get _execLog() { return this.#execLog; }
 
   /**
    * task-299 Phase 1: the engine's current thread marker.

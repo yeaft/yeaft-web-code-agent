@@ -1,0 +1,112 @@
+/**
+ * reflection.css — V7 tool-history reflection card (PR-L).
+ *
+ * Per CLAUDE.md "Unify UI Design Rules": no horizontal dividers between
+ * sections. Spacing only.
+ */
+
+.reflection-card {
+  margin: 12px 0;
+  padding: 12px 14px;
+  background: var(--surface-soft, #f6f7f9);
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary, #1f1f1f);
+}
+
+.reflection-card.is-pending {
+  opacity: 0.85;
+}
+
+.reflection-card.is-error {
+  background: var(--surface-warn, #fff3f0);
+  color: var(--text-warn, #b03a2e);
+}
+
+.reflection-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.reflection-icon {
+  font-size: 14px;
+  color: var(--accent, #4a6df5);
+}
+
+.reflection-label {
+  flex: 0 0 auto;
+}
+
+.reflection-meta {
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--text-secondary, #6b7280);
+}
+
+.reflection-pending {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary, #6b7280);
+  font-style: italic;
+}
+
+.reflection-spinner {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--accent, #4a6df5);
+  border-top-color: transparent;
+  animation: reflection-spin 0.9s linear infinite;
+}
+
+@keyframes reflection-spin {
+  to { transform: rotate(360deg); }
+}
+
+.reflection-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.reflection-section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-primary, #1f1f1f);
+  text-align: left;
+}
+
+.reflection-section-toggle:hover {
+  color: var(--accent, #4a6df5);
+}
+
+.reflection-caret {
+  font-size: 11px;
+  width: 10px;
+  display: inline-block;
+  color: var(--text-secondary, #6b7280);
+}
+
+.reflection-section-body {
+  margin: 6px 0 0 16px;
+  white-space: pre-wrap;
+  font-weight: 400;
+  color: var(--text-secondary, #4b5563);
+}
+
+.reflection-error {
+  font-size: 12px;
+}
