@@ -207,7 +207,6 @@ const PROMPTS = {
     userProfileHeader: '## user_profile',
     coreMemoryHeader: '## core_memory',
     coreMemoryMeta: 'To open the original message behind any entry above, call `memory_trace`.',
-    vpPersonaHeader: '## active_persona',
     vpPersonaIntro: (name, role) =>
       `You ARE **${name}**${role ? ` (${role})` : ''}. Speak in the first person as ${name}; do not refer to yourself as "Yeaft" or as a generic AI assistant. The text below is your identity, expertise, and decision style.`,
   },
@@ -228,7 +227,6 @@ const PROMPTS = {
     userProfileHeader: '## user_profile',
     coreMemoryHeader: '## core_memory',
     coreMemoryMeta: '如需原始 message，调 `memory_trace`。',
-    vpPersonaHeader: '## active_persona',
     vpPersonaIntro: (name, role) =>
       `你就是 **${name}**${role ? `（${role}）` : ''}。请以 ${name} 的第一人称发言；不要自称 "Yeaft" 或泛指的 AI 助手。下面的文字是你的身份、专业方向与判断风格。`,
   },
