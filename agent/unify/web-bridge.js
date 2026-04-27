@@ -1256,13 +1256,17 @@ export async function handleUnifyGroupChat(msg) {
  * Returns `undefined` when we have nothing to inject — keeps the legacy
  * single-agent path identical to before.
  */
-function buildVpQueryOpts({ vpId, groupCoordinator }) {
+function buildVpQueryOpts({ vpId, groupCoordinator, groupId }) {
   if (!vpId) return undefined;
   const out = { senderVpId: vpId };
+  if (typeof groupId === 'string' && groupId.trim()) {
+    out.groupId = groupId.trim();
+  }
   try {
     const vp = readVp(vpId);
     if (vp) {
       out.vpPersona = {
+        vpId,
         displayName: vp.displayName || vpId,
         role: vp.role || '',
         persona: vp.persona || '',
@@ -1411,7 +1415,7 @@ export async function handleUnifyChat(msg) {
     const { entry } = session.dispatcher.submit(cleanedPrompt, {
       messageId: msg.messageId,
       override: override || undefined,
-      queryOpts: buildVpQueryOpts({ vpId, groupCoordinator }),
+      queryOpts: buildVpQueryOpts({ vpId, groupCoordinator, groupId }),
     });
     sendUnifyEvent({
       type: 'input_queue_updated',

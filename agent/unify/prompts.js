@@ -155,6 +155,14 @@ function extractLangSection(content, language) {
 /** Loaded templates — read once at module load time. */
 const RAW_TEMPLATES = {
   base: readTemplate('base.md'),
+  // Phase 8 wire-up: split-out fragments for the persona-as-identity path.
+  // `identityYeaft` ships only when NO VP persona is active. `commonRules`
+  // ships every turn (with persona OR with Yeaft identity) — it carries
+  // output-format, code-editing, search, and frontend rules that are
+  // identity-independent. base.md remains as a back-compat bundle so any
+  // external snapshotter / test that reads the file directly keeps working.
+  identityYeaft: readTemplate('identity-yeaft.md', { required: false }),
+  commonRules: readTemplate('common-rules.md', { required: false }),
   modeUnified: readTemplate('mode-unified.md'),
   modeDream: readTemplate('mode-dream.md'),
   toolGuidance: readTemplate('tool-guidance.md'),
@@ -201,7 +209,7 @@ const PROMPTS = {
     coreMemoryMeta: 'To open the original message behind any entry above, call `memory_trace`.',
     vpPersonaHeader: '## active_persona',
     vpPersonaIntro: (name, role) =>
-      `For this turn you are speaking as **${name}**${role ? ` (${role})` : ''}. Stay in character; the persona below overrides the generic Yeaft identity for tone, expertise, and decision style.`,
+      `You ARE **${name}**${role ? ` (${role})` : ''}. Speak in the first person as ${name}; do not refer to yourself as "Yeaft" or as a generic AI assistant. The text below is your identity, expertise, and decision style.`,
   },
   zh: {
     identity: '你是 Yeaft，一个有用的 AI 助手。',
@@ -222,7 +230,7 @@ const PROMPTS = {
     coreMemoryMeta: '如需原始 message，调 `memory_trace`。',
     vpPersonaHeader: '## active_persona',
     vpPersonaIntro: (name, role) =>
-      `本轮你以 **${name}**${role ? `（${role}）` : ''} 的身份说话。请保持人设：以下 persona 在语气、专业方向与判断风格上覆盖默认的 Yeaft 身份。`,
+      `你就是 **${name}**${role ? `（${role}）` : ''}。请以 ${name} 的第一人称发言；不要自称 "Yeaft" 或泛指的 AI 助手。下面的文字是你的身份、专业方向与判断风格。`,
   },
 };
 
@@ -311,24 +319,27 @@ export function buildSystemPrompt({
   const parts = [];
 
   // ─── 1. Core Identity ──────────────────────────────────
-  // Use template if available, otherwise fallback to hardcoded one-liner
-  const baseTemplate = getTemplate('base', effectiveLang);
-  if (baseTemplate) {
-    parts.push(baseTemplate);
+  // Phase 8 wire-up: when a VP persona is active, the persona body REPLACES
+  // the Yeaft identity block (the LLM is that VP, not Yeaft pretending). When
+  // there is no persona, fall back to the legacy Yeaft identity bundle.
+  const personaBlock = renderVpPersona(vpPersona, lang);
+  if (personaBlock) {
+    parts.push(personaBlock);
+    // Common rules (output format, code editing, search, frontend) still
+    // apply to every turn, regardless of which VP is speaking.
+    const commonRules = getTemplate('commonRules', effectiveLang);
+    if (commonRules) parts.push(commonRules);
   } else {
-    parts.push(lang.identity);
+    const baseTemplate = getTemplate('base', effectiveLang);
+    if (baseTemplate) {
+      parts.push(baseTemplate);
+    } else {
+      parts.push(lang.identity);
+    }
   }
 
   // ─── 2. Date Metadata ──────────────────────────────────
   parts.push(lang.date(new Date().toISOString().split('T')[0]));
-
-  // ─── 2.5 VP Persona Override (Bug 3 fix) ───────────────
-  // When the caller (web-bridge / dispatcher) addressed a specific VP via
-  // @-mention, inject that VP's persona body so the LLM stops speaking as
-  // generic Yeaft and adopts the VP's voice. Placed AFTER base identity so
-  // the persona section's directive ("override generic Yeaft") wins.
-  const vpBlock = renderVpPersona(vpPersona, lang);
-  if (vpBlock) parts.push(vpBlock);
 
   // ─── 3. Mode-Specific Instructions ─────────────────────
   // task-297: single unified mode for all normal operation.
@@ -426,10 +437,14 @@ function renderVpPersona(vpPersona, lang) {
   if (!name) return '';
   const role = typeof vpPersona.role === 'string' ? vpPersona.role.trim() : '';
   const body = typeof vpPersona.persona === 'string' ? vpPersona.persona.trim() : '';
-  const lines = [
-    lang.vpPersonaHeader,
-    lang.vpPersonaIntro(name, role),
-  ];
+
+  // Phase 8 wire-up: persona is now the IDENTITY layer (not an overlay).
+  // Emit a `# <name> — <role>` H1 so the prompt opens with the VP's name,
+  // matching the legacy Yeaft identity shape but speaking as the VP. The
+  // first-person imperative ("you ARE X") replaces the old soft overlay
+  // language so the LLM does not slip back into Yeaft voice mid-turn.
+  const heading = role ? `# ${name} — ${role}` : `# ${name}`;
+  const lines = [heading, '', lang.vpPersonaIntro(name, role)];
   if (body) lines.push('', body);
   return lines.join('\n');
 }

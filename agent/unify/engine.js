@@ -18,16 +18,18 @@
  */
 
 import { randomUUID } from 'crypto';
-import { buildSystemPrompt } from './prompts.js';
+import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
 import { LLMContextError, LLMAbortError } from './llm/adapter.js';
 import { recallR6, formatForInjection } from './memory/recall-r6.js';
 import { shouldConsolidate, consolidate } from './memory/consolidate.js';
 import { buildMemoryInjection } from './memory/layout.js';
 import { buildUserProfile } from './memory/user-memory-store.js';
+import { readSummary as readScopeSummary } from './memory/scope-tree.js';
 import { runStopHooks } from './stop-hooks.js';
 import { getThreadStore, MAIN_THREAD_ID } from './threads/store.js';
 import { pickEffort, parseEffortPrefix } from './effort.js';
 import { normalizeEffort } from './models.js';
+import { attachRouterPlan, extractPriorPlan, stripMetaForWire } from './router/continuity.js';
 
 /**
  * task-324 — Turn cap removed.
@@ -288,16 +290,56 @@ export class Engine {
   }
 
   /**
-   * Build the system prompt with memory, compact summary, and skill content.
+   * Load Layer A scope summaries from `<memoryRoot>/<scope>/summary.md`.
+   *
+   * Scopes:
+   *   - user           → `user/summary.md`            (always attempted)
+   *   - group <gid>    → `groups/<gid>/summary.md`    (if groupId)
+   *   - vp <vpId>      → `vp/<vpId>/summary.md`       (if vpId)
+   *
+   * Each fetch is best-effort — missing files / read errors return ''. The
+   * dream tick (Phase 6) is what populates these; on a fresh install they
+   * all return ''.
+   *
+   * @param {{groupId?: string, vpId?: string}} ctx
+   * @returns {Promise<{user:string, group:string, vp:string}>}
+   */
+  async #loadLayerASummaries({ groupId, vpId } = {}) {
+    if (!this.#yeaftDir) return { user: '', group: '', vp: '' };
+    const memoryRoot = `${this.#yeaftDir}/memory`;
+    const tasks = [
+      readScopeSummary({ kind: 'user' }, { root: memoryRoot }).catch(() => ''),
+      groupId
+        ? readScopeSummary({ kind: 'group', id: groupId }, { root: memoryRoot }).catch(() => '')
+        : Promise.resolve(''),
+      vpId
+        ? readScopeSummary({ kind: 'vp', id: vpId }, { root: memoryRoot }).catch(() => '')
+        : Promise.resolve(''),
+    ];
+    const [user, group, vp] = await Promise.all(tasks);
+    return { user: user || '', group: group || '', vp: vp || '' };
+  }
+
+  /**
+   * Build the system prompt with memory, compact summary, skill content,
+   * and (Phase 8 wire-up) Layer-A scope summaries.
+   *
+   * Routes through `buildWorkerPrompt`, which:
+   *   - Lays in the persona-as-identity block (or Yeaft identity fallback)
+   *   - Concatenates Layer A summaries (`user/group/vp/summary.md`)
+   *   - Reserves Layer B / C / D placeholders for future wiring (router
+   *     preselected memory, task scope, turn scope)
    *
    * @param {{ profile?: string, entries?: object[] }} [memory]
    * @param {string} [compactSummary]
    * @param {string} [prompt] — user prompt (for skill relevance matching)
-   * @param {string} [memoryInjection] — task-287: prebuilt memory block (index + prefs + project)
+   * @param {string} [memoryInjection] — task-287: prebuilt memory block
    * @param {string} [userProfile] — user profile from user-memory shard store
+   * @param {object} [vpPersona]
+   * @param {{user?:string, group?:string, vp?:string}} [summaries]
    * @returns {string}
    */
-  #buildSystemPrompt(memory, compactSummary, prompt, memoryInjection, userProfile, vpPersona) {
+  #buildSystemPrompt(memory, compactSummary, prompt, memoryInjection, userProfile, vpPersona, summaries) {
     // Get relevant skill content if SkillManager is wired
     let skillContent = '';
     if (this.#skillManager && prompt) {
@@ -309,7 +351,7 @@ export class Engine {
       ? this.#toolRegistry.getToolNames()
       : Array.from(this.#tools.keys());
 
-    return buildSystemPrompt({
+    return buildWorkerPrompt({
       language: this.#config.language || 'en',
       toolNames,
       memory,
@@ -318,6 +360,11 @@ export class Engine {
       skillContent,
       userProfile,
       vpPersona,
+      summaries,
+      // Worker-shape harness is descriptive metadata for human inspection;
+      // production prompts skip it to save tokens. Re-enable via env when
+      // diagnosing prompt structure issues.
+      includeShape: process.env.UNIFY_PROMPT_INCLUDE_SHAPE === '1',
       // task-334f: memory_trace tool is now registered (49 → 51 tools), so
       // unlock the core_memory meta-line behind 334e's feature flag.
       memoryTraceAvailable: true,
@@ -518,7 +565,7 @@ export class Engine {
    *   SCENARIO_EFFORT. Unknown values fall through to 'high'.
    * @yields {EngineEvent}
    */
-  async *query({ prompt, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers } = {}) {
+  async *query({ prompt, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId } = {}) {
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       yield {
         type: 'error',
@@ -569,7 +616,7 @@ export class Engine {
     const runSignal = abortCtrl.signal;
 
     try {
-      yield* this.#runQuery({ prompt: effectivePrompt, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers });
+      yield* this.#runQuery({ prompt: effectivePrompt, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId });
     } finally {
       if (signal) {
         try { signal.removeEventListener('abort', onExternalAbort); } catch { /* ignore */ }
@@ -587,7 +634,7 @@ export class Engine {
    * in a try/finally without indenting the whole loop.
    * @private
    */
-  async *#runQuery({ prompt, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers }) {
+  async *#runQuery({ prompt, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId }) {
 
     // ─── Pre-query: Memory Injection (task-287) + Compact Summary ──
     // Two-layer recall:
@@ -626,7 +673,21 @@ export class Engine {
 
     const compactSummary = this.#getCompactSummary();
     const userProfile = recallResult?.profile || '';
-    const systemPrompt = this.#buildSystemPrompt(undefined, compactSummary, prompt, memoryInjection, userProfile, vpPersona);
+
+    // Phase 8 wire-up — Layer A scope summaries
+    // Load `summary.md` for the user / addressed group / addressed VP from
+    // the scoped memory tree (DESIGN.md §2). This is the rolling synopsis a
+    // dream tick maintains; we surface it to the worker prompt so the LLM
+    // has cheap, persistent context without paying the recall cost on every
+    // turn. Failures are non-fatal (cold-start / no memory dir).
+    const summaries = await this.#loadLayerASummaries({
+      groupId,
+      vpId: vpPersona && typeof vpPersona === 'object' && typeof vpPersona.vpId === 'string'
+        ? vpPersona.vpId
+        : (typeof senderVpId === 'string' ? senderVpId : undefined),
+    });
+
+    const systemPrompt = this.#buildSystemPrompt(undefined, compactSummary, prompt, memoryInjection, userProfile, vpPersona, summaries);
 
     // Build conversation: existing messages + new user message
     const conversationMessages = [
@@ -688,7 +749,7 @@ export class Engine {
         for await (const event of this.#adapter.stream({
           model: currentModel,
           system: systemPrompt,
-          messages: [...conversationMessages],
+          messages: stripMetaForWire([...conversationMessages]),
           tools: toolDefs.length > 0 ? toolDefs : undefined,
           maxTokens: this.#config.maxOutputTokens || 16384,
           effort: resolvedEffort,
@@ -836,6 +897,18 @@ export class Engine {
           name: tc.name,
           input: tc.input,
         }));
+      }
+      // Phase 8 (DESIGN.md §9.15): carry the router plan back on the
+      // assistant message that produced it. Stripped at the wire by
+      // stripMetaForWire — pure bookkeeping for priorPlan continuity.
+      if (vpPersona && vpPersona.vpId) {
+        attachRouterPlan(assistantMsg, {
+          vpId: vpPersona.vpId,
+          forwardQuery: { userOriginal: prompt || '', intent: '' },
+          preselect: undefined,
+          thinking: null,
+          thinkingReason: '',
+        });
       }
       conversationMessages.push(assistantMsg);
       fullResponseText += responseText;

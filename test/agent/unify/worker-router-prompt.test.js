@@ -67,7 +67,9 @@ describe('buildWorkerPrompt', () => {
     // Order: harness → base (with persona) → summaries → B → C → D
     const idx = (re) => out.search(re);
     const iHarness = idx(/Prompt Shape \(Worker\)/);
-    const iPersona = idx(/## active_persona/);
+    // Phase 8 wire-up: persona is now persona-as-identity (`# <name>`)
+    // not the legacy `## active_persona` overlay.
+    const iPersona = idx(/# Linus Torvalds/);
     const iSumU = idx(/## summary_user/);
     const iPre = idx(/## preselect/);
     const iTask = idx(/## task_scope/);
