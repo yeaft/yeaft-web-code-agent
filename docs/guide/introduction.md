@@ -88,7 +88,7 @@ Usage statistics and system monitoring for administrators.
 
 ## Tech Stack
 
-- **Server**: Node.js, Express, ws, better-sqlite3, compression
+- **Server**: Node.js, Express, ws, node:sqlite, compression
 - **Frontend**: Vue 3, Pinia, xterm.js, CodeMirror 5, marked, highlight.js
 - **Build**: esbuild (frontend bundling)
 - **Testing**: Vitest (2,700+ unit/integration tests), Playwright (E2E)

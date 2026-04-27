@@ -7,7 +7,7 @@
  *   beforeAll(() => setupTestDb());
  *   afterAll(() => cleanupTestDb());
  */
-import Database from 'better-sqlite3';
+import { DatabaseSync } from 'node:sqlite';
 import { randomBytes } from 'crypto';
 import { mkdirSync, existsSync, unlinkSync } from 'fs';
 import { join, dirname } from 'path';
@@ -95,9 +95,9 @@ export function createTestDb() {
     mkdirSync(TMP_DIR, { recursive: true });
   }
   const dbPath = join(TMP_DIR, `test_${randomBytes(8).toString('hex')}.db`);
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = OFF');
+  const db = new DatabaseSync(dbPath);
+  db.exec('PRAGMA journal_mode = WAL');
+  db.exec('PRAGMA foreign_keys = OFF');
   db.exec(SCHEMA);
   for (const m of MIGRATIONS) {
     try { db.exec(m); } catch (e) { /* column already exists */ }
@@ -356,42 +356,49 @@ export function createDbOperations(db) {
         }
       }
 
-      const insertMany = db.transaction((msgs) => {
-        if (needsRebuild) {
-          stmts.deleteMessagesBySession.run(sessionId);
-        }
-        let count = 0;
-        let lastTs = 0;
-        for (const msg of msgs) {
-          const rawTs = msg.timestamp ? new Date(msg.timestamp).getTime() : 0;
-          const ts = rawTs > lastTs ? rawTs : lastTs + 1;
-          lastTs = ts;
+      const insertMany = (msgs) => {
+        db.exec('BEGIN');
+        try {
+          if (needsRebuild) {
+            stmts.deleteMessagesBySession.run(sessionId);
+          }
+          let count = 0;
+          let lastTs = 0;
+          for (const msg of msgs) {
+            const rawTs = msg.timestamp ? new Date(msg.timestamp).getTime() : 0;
+            const ts = rawTs > lastTs ? rawTs : lastTs + 1;
+            lastTs = ts;
 
-          if (msg.type === 'user') {
-            const text = extractUserText(msg);
-            if (text) {
-              stmts.insertMessage.run(sessionId, 'user', text, 'user', null, null, ts);
-              count++;
-            }
-          } else if (msg.type === 'assistant') {
-            const content = msg.message?.content;
-            if (!content || !Array.isArray(content)) continue;
-            for (const block of content) {
-              if (block.type === 'text' && block.text) {
-                stmts.insertMessage.run(sessionId, 'assistant', block.text, 'assistant', null, null, ts);
+            if (msg.type === 'user') {
+              const text = extractUserText(msg);
+              if (text) {
+                stmts.insertMessage.run(sessionId, 'user', text, 'user', null, null, ts);
                 count++;
-              } else if (block.type === 'tool_use') {
-                stmts.insertMessage.run(
-                  sessionId, 'assistant', JSON.stringify(block.input || {}),
-                  'tool_use', block.name, JSON.stringify(block.input || {}), ts
-                );
-                count++;
+              }
+            } else if (msg.type === 'assistant') {
+              const content = msg.message?.content;
+              if (!content || !Array.isArray(content)) continue;
+              for (const block of content) {
+                if (block.type === 'text' && block.text) {
+                  stmts.insertMessage.run(sessionId, 'assistant', block.text, 'assistant', null, null, ts);
+                  count++;
+                } else if (block.type === 'tool_use') {
+                  stmts.insertMessage.run(
+                    sessionId, 'assistant', JSON.stringify(block.input || {}),
+                    'tool_use', block.name, JSON.stringify(block.input || {}), ts
+                  );
+                  count++;
+                }
               }
             }
           }
+          db.exec('COMMIT');
+          return count;
+        } catch (err) {
+          try { db.exec('ROLLBACK'); } catch {}
+          throw err;
         }
-        return count;
-      });
+      };
       return insertMany(msgsToInsert);
     }
   };

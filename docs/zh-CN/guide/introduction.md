@@ -88,7 +88,7 @@ AI 专家团队辅助对话 — 选择一个团队（如写作、交易），在
 
 ## 技术栈
 
-- **Server**: Node.js, Express, ws, better-sqlite3, compression
+- **Server**: Node.js, Express, ws, node:sqlite, compression
 - **Frontend**: Vue 3, Pinia, xterm.js, CodeMirror 5, marked, highlight.js
 - **Build**: esbuild
 - **Testing**: Vitest（2,700+ 单元/集成测试），Playwright（E2E）

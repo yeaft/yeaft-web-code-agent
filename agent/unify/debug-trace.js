@@ -7,7 +7,7 @@
  * Reference: server/db/connection.js — Database(path), pragma WAL
  */
 
-import Database from 'better-sqlite3';
+import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'crypto';
 import { statSync } from 'fs';
 
@@ -80,7 +80,7 @@ function truncate(str, max) {
  * DebugTrace — SQLite-backed debug trace.
  */
 export class DebugTrace {
-  /** @type {Database.Database} */
+  /** @type {import('node:sqlite').DatabaseSync} */
   #db;
 
   /** @type {string} */
@@ -94,9 +94,9 @@ export class DebugTrace {
    */
   constructor(dbPath) {
     this.#dbPath = dbPath;
-    this.#db = new Database(dbPath);
-    this.#db.pragma('journal_mode = WAL');
-    this.#db.pragma('foreign_keys = ON');
+    this.#db = new DatabaseSync(dbPath);
+    this.#db.exec('PRAGMA journal_mode = WAL');
+    this.#db.exec('PRAGMA foreign_keys = ON');
     this.#db.exec(SCHEMA);
   }
 
@@ -282,9 +282,9 @@ export class DebugTrace {
    * @returns {{ turnCount: number, toolCount: number, eventCount: number, dbSizeBytes: number }}
    */
   stats() {
-    const turnCount = this.#db.prepare('SELECT COUNT(*) as c FROM trace_turns').get().c;
-    const toolCount = this.#db.prepare('SELECT COUNT(*) as c FROM trace_tools').get().c;
-    const eventCount = this.#db.prepare('SELECT COUNT(*) as c FROM trace_events').get().c;
+    const turnCount = Number(this.#db.prepare('SELECT COUNT(*) as c FROM trace_turns').get().c);
+    const toolCount = Number(this.#db.prepare('SELECT COUNT(*) as c FROM trace_tools').get().c);
+    const eventCount = Number(this.#db.prepare('SELECT COUNT(*) as c FROM trace_events').get().c);
     let dbSizeBytes = 0;
     try {
       dbSizeBytes = statSync(this.#dbPath).size;
@@ -301,17 +301,17 @@ export class DebugTrace {
    */
   cleanup(retentionDays = 30) {
     const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
-    const deletedTools = this.#db.prepare(`
+    const deletedTools = Number(this.#db.prepare(`
       DELETE FROM trace_tools WHERE turn_id IN (
         SELECT id FROM trace_turns WHERE started_at < ?
       )
-    `).run(cutoff).changes;
-    const deletedTurns = this.#db.prepare(`
+    `).run(cutoff).changes);
+    const deletedTurns = Number(this.#db.prepare(`
       DELETE FROM trace_turns WHERE started_at < ?
-    `).run(cutoff).changes;
-    const deletedEvents = this.#db.prepare(`
+    `).run(cutoff).changes);
+    const deletedEvents = Number(this.#db.prepare(`
       DELETE FROM trace_events WHERE created_at < ?
-    `).run(cutoff).changes;
+    `).run(cutoff).changes);
     return { deletedTurns, deletedTools, deletedEvents };
   }
 
@@ -333,7 +333,7 @@ export class DebugTrace {
    * Get or create a prepared statement.
    * @param {string} key
    * @param {string} sql
-   * @returns {Database.Statement}
+   * @returns {import('node:sqlite').StatementSync}
    */
   #prepare(key, sql) {
     if (!this.#stmts[key]) {

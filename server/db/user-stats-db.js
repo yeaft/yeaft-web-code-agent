@@ -1,5 +1,5 @@
 import db from './connection.js';
-import { stmts } from './connection.js';
+import { stmts, transaction } from './connection.js';
 
 /**
  * Get today's date string in YYYY-MM-DD format (local time).
@@ -43,7 +43,7 @@ export const userStatsDb = {
 
     const now = Date.now();
     const today = todayStr();
-    const flush = db.transaction(() => {
+    const flush = transaction(() => {
       for (const [userId, delta] of deltaMap) {
         // Cumulative stats
         stmts.upsertUserStats.run(

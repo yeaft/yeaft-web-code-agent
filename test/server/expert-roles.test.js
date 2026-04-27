@@ -22,6 +22,20 @@ const ROOT = join(__dirname, '..', '..');
 let db;
 
 function createExpertDbOperations(db) {
+  // node:sqlite has no db.transaction(fn); wrap manually.
+  function txn(fn) {
+    return (...args) => {
+      db.exec('BEGIN');
+      try {
+        const r = fn(...args);
+        db.exec('COMMIT');
+        return r;
+      } catch (e) {
+        try { db.exec('ROLLBACK'); } catch {}
+        throw e;
+      }
+    };
+  }
   const stmts = {
     insertRole: db.prepare(`
       INSERT INTO custom_expert_roles (id, user_id, role_id, name, full_name, title, title_en, group_id, icon, message_prefix, message_prefix_en, created_at, updated_at)
@@ -54,7 +68,7 @@ function createExpertDbOperations(db) {
     `)
   };
 
-  const insertRoleWithActions = db.transaction((userId, roleData) => {
+  const insertRoleWithActions = txn((userId, roleData) => {
     const now = Date.now();
     const rowId = `cer_${randomUUID()}`;
     const roleId = roleData.roleId || `custom-${randomUUID().substring(0, 8)}`;
@@ -83,7 +97,7 @@ function createExpertDbOperations(db) {
     return { rowId, roleId };
   });
 
-  const updateRoleWithActions = db.transaction((userId, roleId, roleData) => {
+  const updateRoleWithActions = txn((userId, roleId, roleData) => {
     const now = Date.now();
 
     stmts.updateRole.run(
@@ -347,7 +361,7 @@ describe('expertDb CRUD', () => {
 
   it('should cascade-delete actions when role is deleted', () => {
     // Enable foreign keys for cascade to work
-    db.pragma('foreign_keys = ON');
+    db.exec('PRAGMA foreign_keys = ON');
 
     // Create a user first (needed with FK ON)
     const ops = createDbOperations(db);

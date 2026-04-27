@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3';
+import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, randomUUID } from 'crypto';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -16,11 +16,11 @@ if (!existsSync(DATA_DIR)) {
 }
 
 // 创建数据库连接
-const db = new Database(DB_PATH);
+const db = new DatabaseSync(DB_PATH);
 
 // 启用 WAL 模式提高性能
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+db.exec('PRAGMA journal_mode = WAL');
+db.exec('PRAGMA foreign_keys = ON');
 
 // 初始化表结构（不包含索引，索引在迁移后创建）
 db.exec(`
@@ -468,6 +468,33 @@ export const stmts = {
 // 关闭数据库连接（用于优雅退出）
 export function closeDb() {
   db.close();
+}
+
+/**
+ * Run a function inside a SQLite transaction.
+ * node:sqlite (DatabaseSync) does not provide better-sqlite3's `db.transaction(fn)`
+ * helper, so we wrap BEGIN/COMMIT/ROLLBACK manually.
+ *
+ * Returns a function with the same signature as `fn` (call it with the same args)
+ * to mirror the better-sqlite3 API.
+ *
+ * @template T
+ * @template {any[]} A
+ * @param {(...args: A) => T} fn
+ * @returns {(...args: A) => T}
+ */
+export function transaction(fn) {
+  return (...args) => {
+    db.exec('BEGIN');
+    try {
+      const result = fn(...args);
+      db.exec('COMMIT');
+      return result;
+    } catch (err) {
+      try { db.exec('ROLLBACK'); } catch { /* ignore rollback errors */ }
+      throw err;
+    }
+  };
 }
 
 // 进程退出时关闭数据库（兜底）
