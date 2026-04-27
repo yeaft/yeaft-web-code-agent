@@ -570,3 +570,162 @@
   opacity: 0.5;
   margin-left: auto;
 }
+
+/* ===========================================================================
+   task-fix-archive-modal: usv2 merge / archive / rename modal chrome.
+   These classes are reused across (1) merge-thread picker, (2) merge confirm,
+   (3) archive-group confirm, and (4) rename-group modal. Previously had no
+   CSS, so the dialog rendered as raw text floating on the sidebar. Aligned
+   with Yeaft's .modal-overlay / .btn-primary / .btn-secondary visual
+   language (chat-modals.css) — same overlay scrim, same panel chrome,
+   same button shapes — so Unify modals look and feel native.
+   =========================================================================== */
+.usv2-merge-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.usv2-merge-panel {
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  width: 90%;
+  max-width: 440px;
+  padding: 20px 22px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.usv2-merge-panel-confirm {
+  max-width: 400px;
+}
+.usv2-merge-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.usv2-merge-source {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.usv2-merge-warning {
+  font-size: 14px;
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+.usv2-merge-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+.usv2-merge-arrow {
+  color: var(--text-secondary);
+}
+.usv2-merge-body {
+  max-height: 280px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 -6px;
+}
+.usv2-merge-empty {
+  font-size: 13px;
+  color: var(--text-secondary);
+  padding: 16px 6px;
+  text-align: center;
+}
+.usv2-merge-candidate {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+  font-size: 13px;
+  transition: background 0.15s, border-color 0.15s;
+}
+.usv2-merge-candidate:hover {
+  background: var(--bg-user-msg);
+  border-color: var(--border-color);
+}
+.usv2-merge-candidate-name {
+  font-weight: 500;
+  flex: 0 0 auto;
+}
+.usv2-merge-candidate-title {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
+}
+.usv2-merge-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+}
+.usv2-merge-cancel,
+.usv2-merge-confirm {
+  padding: 9px 18px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s, opacity 0.2s, border-color 0.2s;
+  font-family: inherit;
+}
+.usv2-merge-cancel {
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+}
+.usv2-merge-cancel:hover:not(:disabled) {
+  background: var(--bg-user-msg);
+}
+.usv2-merge-confirm {
+  background: #ffffff;
+  color: #171717;
+  border: none;
+}
+[data-theme="light"] .usv2-merge-confirm {
+  background: #171717;
+  color: #ffffff;
+}
+.usv2-merge-confirm:hover:not(:disabled) {
+  opacity: 0.85;
+}
+.usv2-merge-cancel:disabled,
+.usv2-merge-confirm:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+/* Rename modal text input — mirrors Yeaft's .form-group input. */
+.usv2-merge-panel input[type="text"] {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: inherit;
+  transition: border-color 0.2s;
+  box-sizing: border-box;
+}
+.usv2-merge-panel input[type="text"]:focus {
+  outline: none;
+  border-color: var(--text-secondary);
+}

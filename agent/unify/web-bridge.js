@@ -2238,13 +2238,17 @@ export async function handleUnifyLoadHistory(msg) {
   // Send each message through standard claude_output rendering pipeline
   for (const m of messages) {
     if (m.role === 'user') {
-      sendUnifyOutput({ type: 'user', message: { content: m.content } });
+      // Bug 6: forward groupId per message so the frontend re-stamps
+      // replayed messages into their originating group instead of the
+      // user's current filter (which would otherwise hide them when
+      // switching groups).
+      sendUnifyOutput({ type: 'user', message: { content: m.content } }, m.groupId || null);
     } else if (m.role === 'assistant') {
       sendUnifyOutput({
         type: 'assistant',
         message: { content: [{ type: 'text', text: m.content }] },
-      });
-      sendUnifyOutput({ type: 'result', result_text: '' });
+      }, m.groupId || null);
+      sendUnifyOutput({ type: 'result', result_text: '' }, m.groupId || null);
     }
   }
 

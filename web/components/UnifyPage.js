@@ -155,6 +155,7 @@ export default {
         <ChatInput
           v-if="!showSettings && !userMemoryOpen"
           :send-fn="sendMessage"
+          :cancel-fn="cancelUnify"
           :show-stop="isProcessing"
           placeholder-key="unify.placeholder"
         />
@@ -534,6 +535,13 @@ export default {
       store.sendUnifyChat(text);
     };
 
+    // Bug 5: ChatInput's default cancel triggers Chat-mode cancel_execution,
+    // which is a no-op for Unify (no Claude CLI conversation, abort lives
+    // in the agent's per-thread registry). Route stop -> unify_abort_all.
+    const cancelUnify = () => {
+      store.cancelUnify();
+    };
+
     const clearMessages = () => {
       const { t } = Vue.getCurrentInstance().appContext.config.globalProperties;
       if (confirm(t('unify.clearConfirm'))) {
@@ -863,6 +871,7 @@ export default {
       isProcessing,
       goBack,
       sendMessage,
+      cancelUnify,
       clearMessages,
       toggleSidebar,
       toggleDetail,

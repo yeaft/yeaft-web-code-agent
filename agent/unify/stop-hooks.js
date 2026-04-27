@@ -47,6 +47,10 @@ export async function runStopHooks(context) {
     messages = [],
     taskId,
     trace,
+    // Bug 6: groupId/threadId stamped on every persisted message so
+    // history replay can route messages back into the originating group.
+    groupId,
+    threadId,
   } = context;
 
   // Model name for persisted messages: use primaryModel if provided, else config.model
@@ -110,6 +114,9 @@ export async function runStopHooks(context) {
           record.toolCalls = msg.toolCalls;
         }
         if (msg.isError) record.isError = true;
+        // Bug 6: stamp groupId / threadId so replay can re-route by group.
+        if (groupId) record.groupId = groupId;
+        if (threadId) record.threadId = threadId;
         conversationStore.append(record);
         result.messagesPersisted++;
       }

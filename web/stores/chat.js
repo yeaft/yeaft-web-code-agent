@@ -1848,6 +1848,29 @@ export const useChatStore = defineStore('chat', {
     },
     sendMessage(text, attachments = [], options = {}) { convHelpers.sendMessage(this, text, attachments, options); },
     cancelExecution() { convHelpers.cancelExecution(this); },
+    /**
+     * Bug 5: Unify-mode stop. ChatInput's default cancel calls
+     * cancelExecution() (Chat-mode), which sends `cancel_execution` keyed
+     * to a Claude-CLI conversationId — that is a no-op for Unify because
+     * Unify runs its own engine inside the agent and tracks abort
+     * controllers per-thread. Send `unify_abort_all` instead so every
+     * in-flight thread's AbortController fires. The agent emits
+     * `unify_aborted` ack which clears `processingConversations` via the
+     * standard pipeline.
+     */
+    cancelUnify() {
+      if (!this.unifyAgentId) return;
+      this.sendWsMessage({
+        type: 'unify_abort_all',
+        agentId: this.unifyAgentId,
+      });
+      // Optimistic UX: clear the local processing flag immediately so the
+      // stop button hides without waiting for the round-trip. The agent's
+      // unify_aborted event is idempotent.
+      if (this.unifyConversationId) {
+        this.processingConversations[this.unifyConversationId] = false;
+      }
+    },
     answerUserQuestion(requestId, answers, conversationId) { convHelpers.answerUserQuestion(this, requestId, answers, conversationId); },
     refreshAgents() { convHelpers.refreshAgents(this); },
     refreshConversation() { convHelpers.refreshConversation(this); },
