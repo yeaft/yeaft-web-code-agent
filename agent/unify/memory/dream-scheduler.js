@@ -24,6 +24,7 @@
 import { dreamShard } from './dream-shard.js';
 import { checkRecompression } from './recompression.js';
 import { runUserDreamJob } from './user-memory-store.js';
+import { runDreamTick } from '../dream-v2/tick.js';
 
 /** Default idle timeout before dream triggers (ms). */
 export const DREAM_IDLE_MS = 30 * 60 * 1000; // 30 min
@@ -156,6 +157,37 @@ export function createDreamScheduler(opts = {}) {
         result.userDream = userDreamResult;
       } catch {
         // Non-fatal
+      }
+
+      // Phase 8 PR-F: dream-v2 diff-gated scope-summary refresh
+      // (DESIGN.md §9.14). The legacy dreamShard pipeline above
+      // refreshed shard summaries; this final tick walks the scope
+      // tree (user/group/vp/task), computes per-scope sigs, and only
+      // re-runs the refresh hook for scopes whose content changed.
+      // Refresh-only in v1 (no prune/demote — DESIGN §8 line 395).
+      if (memoryDir) {
+        try {
+          const scopes = [{ kind: 'user', scopeDir: 'user' }];
+          if (group?.id) scopes.push({ kind: 'group', id: group.id, scopeDir: `groups/${group.id}` });
+          const tickResult = await runDreamTick({
+            root: memoryDir,
+            scopes,
+            refresh: async (_scope) => {
+              // v1 refresh hook: no-op placeholder. The actual scope
+              // summary refresh continues to flow through the legacy
+              // shard / user-dream paths above; this tick only
+              // exercises the diff-gate + cursor write so future hook
+              // implementations can plug in without re-wiring.
+            },
+          });
+          result.dreamV2Tick = {
+            ran: tickResult.ran.length,
+            skipped: tickResult.skipped.length,
+            errors: tickResult.errors.length,
+          };
+        } catch {
+          // Non-fatal
+        }
       }
 
       messagesSinceLastDream = 0;
