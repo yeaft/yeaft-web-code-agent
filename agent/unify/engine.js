@@ -21,7 +21,10 @@ import { randomUUID } from 'crypto';
 import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
 import { LLMContextError, LLMAbortError } from './llm/adapter.js';
 import { recallR6, formatForInjection } from './memory/recall-r6.js';
-import { shouldConsolidate, consolidate } from './memory/consolidate.js';
+import { shouldConsolidate, consolidate, partitionMessages } from './memory/consolidate.js';
+import { extractMemories } from './memory/extract.js';
+import { runCompact as runCompactOrchestrator } from './compact/orchestrator.js';
+import { evaluateCompactTriggers } from './compact/triggers.js';
 import { buildMemoryInjection } from './memory/layout.js';
 import { buildUserProfile } from './memory/user-memory-store.js';
 import { readSummary as readScopeSummary } from './memory/scope-tree.js';
@@ -530,6 +533,35 @@ export class Engine {
     if (this.#config._readOnly) return null;
 
     const budget = this.#config.messageTokenBudget || 8192;
+    const compactCfg = (this.#config && this.#config.compact) || {};
+
+    // Phase 8 PR-D: orchestrator opt-in. evaluateCompactTriggers (DESIGN
+    // §4.1) and runCompact (DESIGN §4.2) are the new path. Existing
+    // shouldConsolidate / consolidate stays as the default to preserve
+    // production behaviour; flip via config.compact.useOrchestrator=true.
+    if (compactCfg.useOrchestrator) {
+      return this.#runOrchestratorCompact(budget, compactCfg);
+    }
+
+    // Default path — surface trigger reasons via trace for observability
+    // even when we still fall through to the legacy consolidate.
+    try {
+      const messages = this.#conversationStore.loadAll();
+      const tokenCount = this.#conversationStore.hotTokens();
+      const trig = evaluateCompactTriggers({
+        messages,
+        tokenCount,
+        contextLimit: this.#config.maxContextTokens || 200000,
+        tokenRatio: compactCfg.tokenRatio,
+        maxMessages: compactCfg.maxMessages,
+      });
+      this.#trace.logEvent && this.#trace.logEvent({
+        traceId: 'compact_triggers_eval',
+        eventType: 'compact_triggers_eval',
+        eventData: { trigger: trig.trigger, reasons: trig.reasons },
+      });
+    } catch { /* observability only */ }
+
     if (!shouldConsolidate(this.#conversationStore, budget)) return null;
 
     try {
@@ -543,6 +575,101 @@ export class Engine {
       return { archivedCount: result.archivedCount, extractedCount: result.extractedEntries.length };
     } catch {
       // Consolidation failure is non-critical
+      return null;
+    }
+  }
+
+  /**
+   * Phase 8 PR-D: run compact via the new orchestrator (DESIGN §4.2).
+   * Hooks adapt the orchestrator's injectable contract to the existing
+   * conversationStore / memoryStore primitives, so behaviour matches
+   * the legacy `consolidate` path 1:1 while exercising the new
+   * triggers / turn-group / orchestrator code on the live path.
+   *
+   * @param {number} budget
+   * @param {object} compactCfg
+   * @returns {Promise<{archivedCount:number, extractedCount:number}|null>}
+   */
+  async #runOrchestratorCompact(budget, _compactCfg) {
+    const conversationStore = this.#conversationStore;
+    const memoryStore = this.#memoryStore;
+    const adapter = this.#adapter;
+    const fastConfig = this.#fastConfig;
+
+    let messages;
+    try {
+      messages = conversationStore.loadAll();
+    } catch { return null; }
+    if (!Array.isArray(messages) || messages.length === 0) return null;
+
+    const tokenCount = conversationStore.hotTokens();
+    const trig = evaluateCompactTriggers({
+      messages,
+      tokenCount,
+      contextLimit: this.#config.maxContextTokens || 200000,
+    });
+    if (!trig.trigger) return null;
+
+    // Use partitionMessages (the legacy primitive) to decide what is
+    // "cooling": orchestrator's own keepHot is a count, but we want to
+    // honour the token-budget partitioning the rest of the system uses.
+    const { toArchive } = partitionMessages(messages, budget);
+    if (toArchive.length === 0) return null;
+
+    const archiveIds = [];
+
+    const hooks = {
+      summarise: async () => {
+        // Reuse the legacy consolidate path's summary technique by
+        // invoking adapter directly with a fresh prompt. We keep the
+        // orchestrator's contract honoured: it takes the cooling slice
+        // and returns a string.
+        try {
+          const result = await adapter.call({
+            model: fastConfig.model,
+            system: 'You are a conversation summarizer. Summarize concisely in 2–3 paragraphs, preserving decisions, facts, and context.',
+            messages: [{ role: 'user', content: `Summarize:\n\n${toArchive.map(m => `[${m.role}] ${(m.content || '').slice(0, 500)}`).join('\n\n')}` }],
+            maxTokens: 1024,
+          });
+          return (result.text || '').trim();
+        } catch {
+          return '';
+        }
+      },
+      archive: async (_groupIdx, groupMsgs) => {
+        for (const m of groupMsgs) if (m.id) archiveIds.push(m.id);
+        return { turnId: groupMsgs[0]?.id || `g_${Date.now()}` };
+      },
+      extract: async (coolingMessages) => {
+        try {
+          const extracted = await extractMemories({
+            messages: coolingMessages, adapter, config: fastConfig,
+          });
+          for (const e of extracted) memoryStore.writeEntry(e);
+          if (extracted.length > 0) memoryStore.rebuildScopes();
+          return { written: extracted.length };
+        } catch {
+          return { written: 0 };
+        }
+      },
+    };
+
+    try {
+      const out = await runCompactOrchestrator({
+        messages, keepHot: 10, hooks,
+      });
+      // Apply side effects to the conversation store: move archived
+      // ids to cold, persist compact summary, update index.
+      if (archiveIds.length > 0) conversationStore.moveToColdBatch(archiveIds);
+      if (out.compactSummary) conversationStore.updateCompactSummary(out.compactSummary);
+      const lastKept = messages[messages.length - 1];
+      conversationStore.updateIndex({ lastMessageId: lastKept?.id || null });
+
+      return {
+        archivedCount: out.archivedMessages,
+        extractedCount: out.extractedCount,
+      };
+    } catch {
       return null;
     }
   }
