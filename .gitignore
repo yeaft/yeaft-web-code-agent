@@ -51,6 +51,5 @@ data/
 *.db-shm
 
 # Claude Code
-CLAUDE.md
 .claude/
 .crew/
