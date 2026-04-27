@@ -1201,6 +1201,7 @@ export const useChatStore = defineStore('chat', {
         create: 'unify_create_group',
         rename: 'unify_rename_group',
         archive: 'unify_archive_group',
+        delete: 'unify_delete_group',
         add_member: 'unify_add_member',
         remove_member: 'unify_remove_member',
         set_default_vp: 'unify_set_default_vp',

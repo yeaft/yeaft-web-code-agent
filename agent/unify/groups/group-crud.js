@@ -32,7 +32,7 @@
  *   'reserved'/'invalid_vp_id'/... — bubbled from ids.js validators
  */
 
-import { existsSync, renameSync } from 'fs';
+import { existsSync, renameSync, rmSync, readdirSync, statSync } from 'fs';
 import { randomBytes } from 'crypto';
 import { join } from 'path';
 import {
@@ -182,6 +182,74 @@ export function archiveGroup(yeaftDir, groupId) {
   const dstDir = join(root, `.archived-${ts}-${suffix}-${groupId}`);
   renameSync(srcDir, dstDir);
   return { groupId, archivedAs: dstDir };
+}
+
+/**
+ * (A.3.b) Delete — physically remove the group directory and all its
+ * contents (group.json, messages/, tasks/, vps/). Irreversible.
+ *
+ * Bug 8 fix: replaces the soft-archive flow that left `.archived-*` dirs
+ * lying around in `~/.yeaft/groups/`. Per user request, "delete" means
+ * physical deletion, not rename.
+ *
+ * Also sweeps any sibling `.archived-*-<groupId>` dirs that were left
+ * behind by the previous soft-archive implementation, so a single
+ * delete cleans up legacy state too.
+ */
+export function deleteGroup(yeaftDir, groupId) {
+  const root = groupsRoot(yeaftDir);
+  const srcDir = join(root, groupId);
+  const liveExists = existsSync(srcDir) && !!loadGroupMeta(srcDir);
+
+  // Collect any leftover soft-archive directories matching this groupId.
+  const legacyDirs = [];
+  if (existsSync(root)) {
+    for (const name of readdirSync(root)) {
+      if (!name.startsWith('.archived-')) continue;
+      // Soft-archive format: .archived-<ts>-<suffix>-<groupId>
+      if (!name.endsWith(`-${groupId}`)) continue;
+      const p = join(root, name);
+      try {
+        if (statSync(p).isDirectory()) legacyDirs.push(p);
+      } catch { /* skip */ }
+    }
+  }
+
+  if (!liveExists && legacyDirs.length === 0) {
+    throw new GroupCrudError('not_found', groupId);
+  }
+
+  if (liveExists) {
+    rmSync(srcDir, { recursive: true, force: true });
+  }
+  for (const dir of legacyDirs) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+
+  return { groupId, deleted: true, legacyCleanedUp: legacyDirs.length };
+}
+
+/**
+ * Sweep any leftover `.archived-*` directories under groups/ that are
+ * orphans of the old soft-archive flow. Used at boot so users don't see
+ * ghost groups in subsequent loads. Returns the list of removed paths.
+ */
+export function purgeArchivedGroups(yeaftDir) {
+  const root = groupsRoot(yeaftDir);
+  if (!existsSync(root)) return [];
+  const removed = [];
+  for (const name of readdirSync(root)) {
+    if (!name.startsWith('.archived-')) continue;
+    const p = join(root, name);
+    try {
+      if (!statSync(p).isDirectory()) continue;
+    } catch { continue; }
+    try {
+      rmSync(p, { recursive: true, force: true });
+      removed.push(p);
+    } catch { /* skip */ }
+  }
+  return removed;
 }
 
 /**

@@ -3,7 +3,7 @@
  *
  * Compact topbar dropdown that displays the active group, lists all
  * non-archived groups with member counts, allows switching via click or
- * keyboard, provides rename/archive actions via a per-row kebab (routed
+ * keyboard, provides rename/delete actions via a per-row kebab (routed
  * through <GroupEditModal>), and exposes a "+ New group" entry that mounts
  * the GroupCreateWizard.
  *
@@ -105,8 +105,8 @@ export default {
             <button type="button" class="unify-topbar-group-menu-item" @click="onRename(g)">
               {{ $t('unify.group.rename') }}
             </button>
-            <button type="button" class="unify-topbar-group-menu-item is-danger" @click="onArchive(g)">
-              {{ $t('unify.group.archive') }}
+            <button type="button" class="unify-topbar-group-menu-item is-danger" @click="onDelete(g)">
+              {{ $t('unify.group.delete') }}
             </button>
           </div>
         </div>
@@ -145,7 +145,7 @@ export default {
       menuFor: null,
       highlightIdx: -1,
       busyGroupIds: new Set(),
-      busyOpByGroup: {},                        // groupId -> 'rename' | 'archive'
+      busyOpByGroup: {},                        // groupId -> 'rename' | 'delete'
       editModal: { open: false, mode: null, group: null },
     };
   },
@@ -270,9 +270,9 @@ export default {
     },
     busyLabelFor(gid) {
       const op = this.busyOpByGroup[gid];
-      const key = op === 'archive' ? 'unify.group.archivingEllipsis' : 'unify.group.renamingEllipsis';
+      const key = op === 'delete' ? 'unify.group.deletingEllipsis' : 'unify.group.renamingEllipsis';
       if (typeof this.$t === 'function') return this.$t(key);
-      return op === 'archive' ? 'Archiving…' : 'Renaming…';
+      return op === 'delete' ? 'Deleting…' : 'Renaming…';
     },
     selectGroup(g) {
       if (!g || !g.id) return;
@@ -298,10 +298,10 @@ export default {
       if (!g || !g.id) return;
       this.editModal = { open: true, mode: 'rename', group: { id: g.id, name: g.name || '' } };
     },
-    onArchive(g) {
+    onDelete(g) {
       this.menuFor = null;
       if (!g || !g.id) return;
-      this.editModal = { open: true, mode: 'archive', group: { id: g.id, name: g.name || '' } };
+      this.editModal = { open: true, mode: 'delete', group: { id: g.id, name: g.name || '' } };
     },
     closeEditModal() {
       this.editModal = { open: false, mode: null, group: null };
@@ -315,8 +315,8 @@ export default {
       try {
         if (mode === 'rename') {
           await this.chatStore.groupCrudRequest('rename', { groupId, name });
-        } else if (mode === 'archive') {
-          await this.chatStore.groupCrudRequest('archive', { groupId });
+        } else if (mode === 'delete') {
+          await this.chatStore.groupCrudRequest('delete', { groupId });
         }
       } finally {
         this._clearBusy(groupId);

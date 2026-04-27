@@ -40,6 +40,8 @@ import {
   createGroupFromSpec,
   renameGroup,
   archiveGroup,
+  deleteGroup,
+  purgeArchivedGroups,
   addMember,
   removeMember,
   setGroupDefaultVp,
@@ -452,6 +454,23 @@ export function handleUnifyArchiveGroup(msg) {
     sendGroupSnapshotBroadcast();
   } catch (err) {
     sendGroupCrudResult({ op: 'archive', requestId, ok: false, error: groupErrorPayload(err) });
+  }
+}
+
+/**
+ * Bug 8: physical delete — removes the group dir and any legacy
+ * `.archived-*-<groupId>` siblings. Replies with op:'delete'.
+ */
+export function handleUnifyDeleteGroup(msg) {
+  const requestId = msg && msg.requestId;
+  const groupId = msg && msg.groupId;
+  try {
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    const result = deleteGroup(yeaftDir, groupId);
+    sendGroupCrudResult({ op: 'delete', requestId, ok: true, groupId: result.groupId });
+    sendGroupSnapshotBroadcast();
+  } catch (err) {
+    sendGroupCrudResult({ op: 'delete', requestId, ok: false, error: groupErrorPayload(err) });
   }
 }
 
@@ -1369,6 +1388,21 @@ export async function handleUnifyChat(msg) {
       // the hourly tick bound to this session.
       runAutoArchiveSweep(session);
       scheduleAutoArchive(session);
+
+      // Bug 8: clean up any legacy `.archived-*` group directories left
+      // behind by the previous soft-archive flow. This is a one-shot
+      // boot-time sweep — physical deletes after this point are immediate.
+      try {
+        const yeaftDir = ctx.CONFIG?.yeaftDir;
+        if (yeaftDir) {
+          const removed = purgeArchivedGroups(yeaftDir);
+          if (removed && removed.length > 0) {
+            console.log(`[Unify] purged ${removed.length} legacy .archived group dir(s)`);
+          }
+        }
+      } catch (err) {
+        console.warn('[Unify] purgeArchivedGroups failed:', err?.message || err);
+      }
 
       // Create a stable conversationId for the Unify session
       unifyConversationId = `unify-${Date.now()}`;
