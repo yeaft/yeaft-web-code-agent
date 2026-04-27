@@ -196,6 +196,13 @@ export const useChatStore = defineStore('chat', {
     // setting one clears the other so the view has a single predicate.
     unifyActiveGroupFilter: null,
 
+    // Bug 1: in-flight SEND-context group, set transiently by
+    // handleUnifyOutput before dispatching streaming chunks. Read by
+    // addMessageToConversation so arriving messages get stamped with the
+    // ORIGINATING group (carried in the unify_output envelope) rather than
+    // the user's CURRENT filter (which can change while a reply streams).
+    _currentUnifyGroupId: null,
+
     // ★ task-301 Part 2: real thread/task state driven by agent-side
     // ThreadStore / TaskStore. Populated by thread_list_updated /
     // task_list_updated events (unify_output metadata channel).
@@ -321,6 +328,15 @@ export const useChatStore = defineStore('chat', {
     unifyAllMessages: (state) => {
       const convId = state.unifyConversationId;
       return convId ? (state.messagesMap[convId] || EMPTY_ARRAY) : EMPTY_ARRAY;
+    },
+    // Bug 3: debug turns scoped to the user's active group filter so the
+    // right-hand panel mirrors what the message pane shows. Unfiltered
+    // when no group is active (legacy single-stream behaviour).
+    unifyDebugTurnsForActiveGroup: (state) => {
+      const all = state.unifyDebugTurns || EMPTY_ARRAY;
+      if (!state.unifyActiveGroupFilter) return all;
+      const target = state.unifyActiveGroupFilter;
+      return all.filter(t => t && (t.groupId === target || !t.groupId));
     },
     // ★ Unify: the currently visible messages after applying unifyActiveThreadFilter.
     unifyVisibleMessages: (state) => {
@@ -533,13 +549,21 @@ export const useChatStore = defineStore('chat', {
       // Set the virtual conversationId as the active one so MessageList reads from it
       this.activeConversations = [this.unifyConversationId];
 
-      // Request history from agent (only if messagesMap is empty to avoid duplicates on re-entry)
-      const existing = this.messagesMap[this.unifyConversationId];
-      if (this.unifyAgentId && (!existing || existing.length === 0)) {
+      // Always request a session_ready replay so model + status + groups
+      // snapshot are repopulated on every Unify entry. Backend's
+      // handleUnifyLoadHistory is idempotent: the session_ready handler
+      // either migrates the local convId (first time) or just refreshes
+      // model/status fields (re-entry). When messages already exist we
+      // only need the metadata replay, not the message stream — pass
+      // limit:0 so the agent skips re-emitting messages and just re-fires
+      // session_ready / thread_list_updated / group snapshot events.
+      if (this.unifyAgentId) {
+        const existing = this.messagesMap[this.unifyConversationId];
+        const needMessages = !existing || existing.length === 0;
         this.sendWsMessage({
           type: 'unify_load_history',
           agentId: this.unifyAgentId,
-          limit: 50,
+          limit: needMessages ? 50 : 0,
         });
       }
     },
@@ -642,7 +666,15 @@ export const useChatStore = defineStore('chat', {
           if (!this.unifyConversationId) {
             this.unifyConversationId = conversationId;
           }
-          this.handleClaudeOutput(conversationId, msg.data);
+          // Bug 1: stamp the in-flight SEND-context group so messages land
+          // in the originating group regardless of the user's current filter.
+          const prevGroup = this._currentUnifyGroupId;
+          if (msg.groupId) this._currentUnifyGroupId = msg.groupId;
+          try {
+            this.handleClaudeOutput(conversationId, msg.data);
+          } finally {
+            this._currentUnifyGroupId = prevGroup;
+          }
         }
         return;
       }
@@ -721,6 +753,9 @@ export const useChatStore = defineStore('chat', {
             // task-344: raw API request / response payload (redacted server-side).
             rawRequest: event.rawRequest || null,
             rawResponse: event.rawResponse || null,
+            // Bug 3: stamp groupId so the right-hand debug panel filter can
+            // narrow turns to the user's active group.
+            groupId: msg.groupId || null,
           });
           break;
 

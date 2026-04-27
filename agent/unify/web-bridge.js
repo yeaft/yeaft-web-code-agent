@@ -138,22 +138,31 @@ function isPermissionErrorMsg(msg) {
  * Send a unify_output message carrying claude_output-format data.
  * The server forwards this as-is to the web client.
  * The frontend's handleUnifyOutput will dispatch via handleClaudeOutput.
+ *
+ * Optional `groupId` tags every emitted assistant/tool/user mirror with
+ * the originating group so the frontend can stamp arriving messages with
+ * the SEND-context group instead of the user's CURRENT filter (which can
+ * change while the reply is in flight). Without this, switching groups
+ * mid-reply lands the assistant turn in the wrong group.
  */
-function sendUnifyOutput(data) {
+function sendUnifyOutput(data, groupId) {
   sendToServer({
     type: 'unify_output',
     conversationId: unifyConversationId,
+    ...(groupId ? { groupId } : {}),
     data,
   });
 }
 
 /**
  * Send a unify_output event (non-claude_output metadata).
+ * Optional `groupId` — see sendUnifyOutput for rationale.
  */
-function sendUnifyEvent(event) {
+function sendUnifyEvent(event, groupId) {
   sendToServer({
     type: 'unify_output',
     conversationId: unifyConversationId,
+    ...(groupId ? { groupId } : {}),
     event,
   });
 }
@@ -775,6 +784,7 @@ export function parseThreadPrefix(text) {
  */
 function forwardPipelineEvent(ev, ctx) {
   if (!ev || typeof ev !== 'object') return false;
+  const gid = ctx && ctx.groupId;
   switch (ev.type) {
     case 'input_queue_updated':
       sendUnifyEvent({
@@ -784,7 +794,7 @@ function forwardPipelineEvent(ev, ctx) {
         routing: ev.routing,
         dispatched: ev.dispatched,
         head: ev.head,
-      });
+      }, gid);
       return false;
     case 'routing_decision':
       sendUnifyEvent({
@@ -794,7 +804,7 @@ function forwardPipelineEvent(ev, ctx) {
         targetThreadId: ev.targetThreadId,
         source: ev.source,
         reason: ev.reason,
-      });
+      }, gid);
       return false;
     case 'thread_list_updated':
       // Dispatcher built it already; just forward.
@@ -802,7 +812,7 @@ function forwardPipelineEvent(ev, ctx) {
         type: 'thread_list_updated',
         threads: ev.threads,
         currentThreadId: ev.currentThreadId,
-      });
+      }, gid);
       return false;
     case 'engine_event':
       ctx.onEngineEvent(ev.event, ev.threadId);
@@ -827,6 +837,7 @@ function forwardPipelineEvent(ev, ctx) {
  */
 function handleEngineEvent(event, threadId, hctx) {
   hctx.resetQueryTimer();
+  const gid = hctx && hctx.groupId;
 
   // task-325b: translate Engine lifecycle events into a single
   // `thread_status` event for the frontend Working Status panel. These
@@ -851,11 +862,11 @@ function handleEngineEvent(event, threadId, hctx) {
         type: 'assistant',
         message: { content: [{ type: 'text', text: event.text }] },
         threadId,
-      });
+      }, gid);
       break;
 
     case 'thinking_delta':
-      sendUnifyEvent({ type: 'thinking_delta', text: event.text, threadId });
+      sendUnifyEvent({ type: 'thinking_delta', text: event.text, threadId }, gid);
       break;
 
     case 'tool_call':
@@ -874,7 +885,7 @@ function handleEngineEvent(event, threadId, hctx) {
         type: 'assistant',
         message: { content: [] },
         threadId,
-      });
+      }, gid);
       sendUnifyOutput({
         type: 'assistant',
         message: {
@@ -886,7 +897,7 @@ function handleEngineEvent(event, threadId, hctx) {
           }],
         },
         threadId: event.threadId || threadId,
-      });
+      }, gid);
       break;
 
     case 'tool_start':
@@ -895,7 +906,7 @@ function handleEngineEvent(event, threadId, hctx) {
         id: event.id,
         name: event.name,
         threadId: event.threadId || threadId,
-      });
+      }, gid);
       break;
 
     case 'tool_end':
@@ -919,7 +930,7 @@ function handleEngineEvent(event, threadId, hctx) {
           is_error: event.isError || false,
         }],
         threadId: event.threadId || threadId,
-      });
+      }, gid);
       if (THREAD_MUTATING_TOOLS.has(event.name)) {
         sendThreadListUpdate();
       }
@@ -937,7 +948,7 @@ function handleEngineEvent(event, threadId, hctx) {
         inputTokens: event.inputTokens,
         outputTokens: event.outputTokens,
         threadId,
-      });
+      }, gid);
       break;
 
     case 'recall':
@@ -946,7 +957,7 @@ function handleEngineEvent(event, threadId, hctx) {
         entryCount: event.entryCount,
         cached: event.cached,
         threadId,
-      });
+      }, gid);
       break;
 
     case 'consolidate':
@@ -962,7 +973,7 @@ function handleEngineEvent(event, threadId, hctx) {
         archivedCount: event.archivedCount,
         extractedCount: event.extractedCount,
         threadId,
-      });
+      }, gid);
       break;
 
     case 'fallback':
@@ -972,7 +983,7 @@ function handleEngineEvent(event, threadId, hctx) {
         to: event.to,
         reason: event.reason,
         threadId,
-      });
+      }, gid);
       break;
 
     case 'debug_turn':
@@ -992,7 +1003,7 @@ function handleEngineEvent(event, threadId, hctx) {
         rawRequest: event.rawRequest,
         rawResponse: event.rawResponse,
         threadId,
-      });
+      }, gid);
       break;
 
     case 'error': {
@@ -1012,7 +1023,7 @@ function handleEngineEvent(event, threadId, hctx) {
               }],
             },
             threadId,
-          });
+          }, gid);
         }
         // Don't show subsequent permission errors.
       } else {
@@ -1022,7 +1033,7 @@ function handleEngineEvent(event, threadId, hctx) {
             content: [{ type: 'text', text: `⚠️ Error: ${errMsg}` }],
           },
           threadId,
-        });
+        }, gid);
       }
       break;
     }
@@ -1087,6 +1098,53 @@ export async function handleUnifyGroupChat(msg) {
   if (!groupHandle) {
     await handleUnifyChat({ ...msg, prompt: text });
     return;
+  }
+
+  // Bug 2: When the user @-mentions a VP that exists in the library but is
+  // not yet in the group's roster, auto-add it. This is the natural "invite"
+  // gesture in group chat — failing here would punt to the legacy fallback
+  // and surface the misleading "only Yeaft is in this conversation" error
+  // even though the VP exists. We also ensure the group has a defaultVpId
+  // when its roster is non-empty, so unaddressed messages route correctly.
+  try {
+    const meta = groupHandle.getMeta();
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    const wantsAdd = mentions.filter(
+      (m) => m && m !== 'all' && !meta.roster.includes(m)
+    );
+    if (wantsAdd.length && yeaftDir) {
+      let mutated = false;
+      for (const vpId of wantsAdd) {
+        try {
+          const vp = readVp(vpId);
+          if (!vp) continue;
+          addMember(yeaftDir, groupId, vpId);
+          mutated = true;
+        } catch { /* skip strangers */ }
+      }
+      if (mutated) {
+        // Re-open with fresh meta so the coordinator sees the new roster.
+        try { groupHandle.close && groupHandle.close(); } catch { /* best-effort */ }
+        const { openGroup } = await import('./groups/group-store.js');
+        const { join } = await import('node:path');
+        groupHandle = openGroup(join(yeaftDir, 'groups'), groupId);
+        sendGroupRosterChanged(groupHandle.getMeta());
+      }
+    }
+    // Heal missing defaultVpId — pick roster[0] when one exists.
+    const meta2 = groupHandle.getMeta();
+    if (!meta2.defaultVpId && meta2.roster.length && yeaftDir) {
+      try {
+        setGroupDefaultVp(yeaftDir, groupId, meta2.roster[0]);
+        try { groupHandle.close && groupHandle.close(); } catch { /* best-effort */ }
+        const { openGroup } = await import('./groups/group-store.js');
+        const { join } = await import('node:path');
+        groupHandle = openGroup(join(yeaftDir, 'groups'), groupId);
+        sendGroupRosterChanged(groupHandle.getMeta());
+      } catch { /* best-effort */ }
+    }
+  } catch (err) {
+    console.warn('[Unify] unify_group_chat: auto-roster heal failed', err?.message || err);
   }
 
   // Adapter layer (PM red-line: do NOT modify coordinator to fit this
@@ -1238,6 +1296,10 @@ export async function handleUnifyChat(msg) {
   // branch and reach the dispatcher.submit() queryOpts.
   const vpId = typeof msg.vpId === 'string' && msg.vpId.trim() ? msg.vpId.trim() : null;
   const groupCoordinator = msg._groupCoordinator || null;
+  // Bug 1: every event we emit during this query must carry the originating
+  // groupId so the frontend stamps arriving messages with the SEND-context
+  // group, not the user's CURRENT filter (which can change mid-reply).
+  const groupId = typeof msg.groupId === 'string' && msg.groupId.trim() ? msg.groupId.trim() : null;
 
   // Deprecation warning — task-297 removed chat/work mode distinction
   if (mode !== undefined && mode !== null) {
@@ -1358,14 +1420,16 @@ export async function handleUnifyChat(msg) {
       routing: 0,
       dispatched: 0,
       head: { id: entry.id, status: entry.status, text: entry.text.slice(0, 80) },
-    });
+    }, groupId);
 
     const pipelineCtx = {
+      groupId,
       onEngineEvent: (event, threadId) => handleEngineEvent(event, threadId, {
         assistantTextParts,
         toolCallsAccum,
         toolResultsAccum,
         resetQueryTimer,
+        groupId,
       }),
       onError: (err) => { throw err; },
     };
@@ -1427,12 +1491,12 @@ export async function handleUnifyChat(msg) {
     sendUnifyOutput({
       type: 'assistant',
       message: { content: [] },
-    });
+    }, groupId);
     // Send result to clear processing state
     sendUnifyOutput({
       type: 'result',
       result_text: '',
-    });
+    }, groupId);
 
     } finally {
       // Always clear the timeout guard
@@ -1451,7 +1515,7 @@ export async function handleUnifyChat(msg) {
       sendUnifyOutput({
         type: 'result',
         result_text: '',
-      });
+      }, groupId);
       return;
     }
 
@@ -1469,7 +1533,7 @@ export async function handleUnifyChat(msg) {
               text: '⚠️ Cannot write to ~/.yeaft/ directory — some features (memory, history) are unavailable. Please check directory permissions: `chmod -R u+rw ~/.yeaft/`',
             }],
           },
-        });
+        }, groupId);
       }
     } else {
       sendUnifyOutput({
@@ -1480,13 +1544,13 @@ export async function handleUnifyChat(msg) {
             text: `⚠️ Session error: ${err.message}`,
           }],
         },
-      });
+      }, groupId);
     }
     // Still send result to clear processing state
     sendUnifyOutput({
       type: 'result',
       result_text: '',
-    });
+    }, groupId);
   } finally {
     // task-320: only clear the per-thread slot if THIS controller is still
     // the registered one. If a newer message already overwrote it, leaving
@@ -2123,8 +2187,11 @@ export async function handleUnifyLoadHistory(msg) {
   // task-334m: replay groups snapshot so Sidebar Groups rebuilds on refresh.
   sendGroupSnapshotBroadcast();
 
-  const limit = msg.limit || 50;
-  const messages = session.conversationStore.loadRecent(limit);
+  // Honor explicit limit:0 — frontend uses it on Unify re-entry to refresh
+  // metadata (model/status/group snapshot via the unconditional replay
+  // above) without re-streaming the message history.
+  const limit = (typeof msg.limit === 'number') ? msg.limit : 50;
+  const messages = limit > 0 ? session.conversationStore.loadRecent(limit) : [];
   const compactSummary = session.conversationStore.readCompactSummary();
 
   // Send each message through standard claude_output rendering pipeline

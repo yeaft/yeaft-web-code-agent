@@ -182,7 +182,7 @@ describe('Debug panel in detail aside', () => {
   });
 
   it('iterates over debug turns', () => {
-    expect(unifyPageJs).toContain('v-for="(turn, idx) in store.unifyDebugTurns"');
+    expect(unifyPageJs).toContain('v-for="(turn, idx) in store.unifyDebugTurnsForActiveGroup"');
   });
 
   it('has collapsible turn headers', () => {

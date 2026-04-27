@@ -167,7 +167,7 @@ export default {
         <div v-if="debugMode" class="unify-debug-panel">
           <div class="unify-debug-header">
             <span class="unify-debug-title">{{ $t('unify.debug') }}</span>
-            <span class="unify-debug-count" v-if="store.unifyDebugTurns.length > 0">{{ store.unifyDebugTurns.length }} {{ $t('unify.debugTurns') }}</span>
+            <span class="unify-debug-count" v-if="store.unifyDebugTurnsForActiveGroup.length > 0">{{ store.unifyDebugTurnsForActiveGroup.length }} {{ $t('unify.debugTurns') }}</span>
             <!-- task-344: detail / concise toggle (global, persisted) -->
             <button
               class="unify-debug-toggle-chip"
@@ -178,8 +178,8 @@ export default {
               {{ store.unifyDebugDetailMode ? ($t('unify.debugDetail') || '详细') : ($t('unify.debugConcise') || '精简') }}
             </button>
           </div>
-          <div class="unify-debug-turns" v-if="store.unifyDebugTurns.length > 0">
-            <div class="unify-debug-turn" v-for="(turn, idx) in store.unifyDebugTurns" :key="idx">
+          <div class="unify-debug-turns" v-if="store.unifyDebugTurnsForActiveGroup.length > 0">
+            <div class="unify-debug-turn" v-for="(turn, idx) in store.unifyDebugTurnsForActiveGroup" :key="idx">
               <div class="unify-debug-turn-header" @click="toggleTurnExpand(idx)">
                 <svg class="unify-debug-turn-chevron" :class="{ expanded: expandedTurns[idx] }" viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
                 <span class="unify-debug-turn-num">{{ $t('unify.turn').replace('{n}', turn.turnNumber) }}</span>

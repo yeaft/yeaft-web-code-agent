@@ -318,11 +318,14 @@ export async function handleAgentOutput(agentId, agent, msg) {
     case 'unify_output':
       // Forward Unify output to all authenticated clients of this agent's owner.
       // Payload carries { conversationId, data } (claude_output format) or { event } (metadata).
+      // Bug 1: also forward `groupId` so the frontend can stamp arriving messages
+      // with the originating group instead of the user's current filter.
       for (const [cId, c] of webClients) {
         if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
           await sendToWebClient(c, {
             type: 'unify_output',
             conversationId: msg.conversationId,
+            ...(msg.groupId ? { groupId: msg.groupId } : {}),
             data: msg.data,
             event: msg.event,
           });

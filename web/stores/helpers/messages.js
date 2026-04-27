@@ -19,12 +19,18 @@ export function addMessageToConversation(store, conversationId, msg) {
   // Unify uniformity: stamp every message that lands in the active Unify
   // conversation with a groupId. Never overwrite an explicit groupId set
   // by the caller (e.g. sendUnifyGroupChat or task_message handler).
+  // Bug 1: prefer `_currentUnifyGroupId` (the SEND-context group set by
+  // handleUnifyOutput before dispatching streaming chunks) over the user's
+  // current filter — otherwise messages arriving while the user has
+  // switched groups get stamped with the wrong group.
   if (
     store.currentView === 'unify'
     && conversationId === store.unifyConversationId
     && !newMsg.groupId
   ) {
-    newMsg.groupId = store.unifyActiveGroupFilter || DEFAULT_GROUP_ID;
+    newMsg.groupId = store._currentUnifyGroupId
+      || store.unifyActiveGroupFilter
+      || DEFAULT_GROUP_ID;
   }
 
   if (!store.messagesMap[conversationId]) {
