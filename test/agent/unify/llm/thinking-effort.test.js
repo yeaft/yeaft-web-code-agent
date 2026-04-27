@@ -30,7 +30,6 @@ import {
 } from '../../../../agent/unify/models.js';
 import { filterEffortForModel } from '../../../../agent/unify/llm/router.js';
 import { AnthropicAdapter } from '../../../../agent/unify/llm/anthropic.js';
-import { ChatCompletionsAdapter } from '../../../../agent/unify/llm/chat-completions.js';
 import { OpenAIResponsesAdapter } from '../../../../agent/unify/llm/openai-responses.js';
 
 // ─── registry field coverage ────────────────────────────────────
@@ -285,92 +284,8 @@ describe('task-327a: AnthropicAdapter body.thinking injection', () => {
   });
 });
 
-describe('task-327a: ChatCompletionsAdapter body.reasoning injection', () => {
-  let origFlag;
-  beforeEach(() => {
-    origFlag = process.env.UNIFY_THINKING_V1;
-    process.env.UNIFY_THINKING_V1 = '1';
-  });
-  afterEach(() => {
-    if (origFlag === undefined) delete process.env.UNIFY_THINKING_V1;
-    else process.env.UNIFY_THINKING_V1 = origFlag;
-  });
-
-  const mkAdapter = () => new ChatCompletionsAdapter({
-    apiKey: 'test',
-    baseUrl: 'https://stub/v1',
-  });
-
-  it('gpt-5 + effort=medium → reasoning.effort=medium', async () => {
-    const body = await captureBody(() => drainStream(mkAdapter().stream({
-      model: 'gpt-5',
-      system: 's',
-      messages: [{ role: 'user', content: 'hi' }],
-      effort: 'medium',
-    })));
-    expect(body.reasoning).toEqual({ effort: 'medium' });
-  });
-
-  it('o3 + effort=high → reasoning.effort=high', async () => {
-    const body = await captureBody(() => drainStream(mkAdapter().stream({
-      model: 'o3',
-      system: 's',
-      messages: [{ role: 'user', content: 'hi' }],
-      effort: 'high',
-    })));
-    expect(body.reasoning).toEqual({ effort: 'high' });
-  });
-
-  it('o4-mini + effort=low → reasoning.effort=low', async () => {
-    const body = await captureBody(() => drainStream(mkAdapter().stream({
-      model: 'o4-mini',
-      system: 's',
-      messages: [{ role: 'user', content: 'hi' }],
-      effort: 'low',
-    })));
-    expect(body.reasoning).toEqual({ effort: 'low' });
-  });
-
-  it('gpt-5 + effort=max → reasoning.effort=high (OpenAI has no max)', async () => {
-    const body = await captureBody(() => drainStream(mkAdapter().stream({
-      model: 'gpt-5',
-      system: 's',
-      messages: [{ role: 'user', content: 'hi' }],
-      effort: 'max',
-    })));
-    expect(body.reasoning).toEqual({ effort: 'high' });
-  });
-
-  it('noop on deepseek-chat (non-reasoning)', async () => {
-    const body = await captureBody(() => drainStream(mkAdapter().stream({
-      model: 'deepseek-chat',
-      system: 's',
-      messages: [{ role: 'user', content: 'hi' }],
-      effort: 'high',
-    })));
-    expect(body.reasoning).toBeUndefined();
-  });
-
-  it('noop when feature flag OFF', async () => {
-    delete process.env.UNIFY_THINKING_V1;
-    const body = await captureBody(() => drainStream(mkAdapter().stream({
-      model: 'gpt-5',
-      system: 's',
-      messages: [{ role: 'user', content: 'hi' }],
-      effort: 'high',
-    })));
-    expect(body.reasoning).toBeUndefined();
-  });
-
-  it('noop when no effort is passed', async () => {
-    const body = await captureBody(() => drainStream(mkAdapter().stream({
-      model: 'gpt-5',
-      system: 's',
-      messages: [{ role: 'user', content: 'hi' }],
-    })));
-    expect(body.reasoning).toBeUndefined();
-  });
-});
+// Phase 7: ChatCompletionsAdapter was deleted. Its body.reasoning injection
+// behaviour is fully covered by the OpenAIResponsesAdapter suite below.
 
 describe('OpenAIResponsesAdapter body.reasoning injection', () => {
   let origFlag;

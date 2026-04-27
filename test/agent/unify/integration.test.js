@@ -56,135 +56,11 @@ afterEach(() => {
   delete process.env.YEAFT_MAX_CONTEXT;
 });
 
-// ─── Integration: Engine + Real Adapters + Mock Server ───────
-
-describe('Integration: Engine + ChatCompletionsAdapter + Mock Server', () => {
-  it('should complete a simple text query', async () => {
-    mockServer.setResponse([
-      { type: 'text', text: 'Hello from mock LLM!' },
-    ]);
-
-    const config = loadConfig({
-      dir: TEST_DIR,
-      model: 'gpt-5',
-      adapter: 'openai',
-      openaiApiKey: 'test-key',
-      baseUrl: `http://127.0.0.1:${mockServer.port}/v1`,
-    });
-
-    const adapter = await createLLMAdapter(config);
-    const engine = new Engine({ adapter, trace: new NullTrace(), config });
-
-    const events = [];
-    for await (const event of engine.query({ prompt: 'hello' })) {
-      events.push(event);
-    }
-
-    // Check we got text
-    const textEvents = events.filter(e => e.type === 'text_delta');
-    expect(textEvents.length).toBeGreaterThan(0);
-    const fullText = textEvents.map(e => e.text).join('');
-    expect(fullText).toBe('Hello from mock LLM!');
-
-    // Check turn lifecycle
-    expect(events.find(e => e.type === 'turn_start')).toBeTruthy();
-    expect(events.find(e => e.type === 'turn_end')).toBeTruthy();
-    expect(events.find(e => e.type === 'turn_end').stopReason).toBe('end_turn');
-
-    // Check the mock server received the request
-    expect(mockServer.requests).toHaveLength(1);
-    expect(mockServer.requests[0].body.model).toBe('gpt-5');
-    expect(mockServer.requests[0].body.stream).toBe(true);
-  });
-
-  it('should handle tool calls end-to-end', async () => {
-    // First response: model wants to call a tool
-    mockServer.setResponse([
-      { type: 'text', text: 'Let me search for that.' },
-      { type: 'tool_call', id: 'call_123', name: 'web_search', input: { query: 'yeaft' } },
-    ]);
-
-    const config = loadConfig({
-      dir: TEST_DIR,
-      model: 'gpt-5',
-      adapter: 'openai',
-      openaiApiKey: 'test-key',
-      baseUrl: `http://127.0.0.1:${mockServer.port}/v1`,
-    });
-
-    const adapter = await createLLMAdapter(config);
-    const engine = new Engine({ adapter, trace: new NullTrace(), config });
-
-    engine.registerTool({
-      name: 'web_search',
-      description: 'Search the web',
-      parameters: { type: 'object', properties: { query: { type: 'string' } } },
-      execute: async (input) => {
-        // After tool executes, mock server should return final answer
-        mockServer.setResponse([
-          { type: 'text', text: `Found results for: ${input.query}` },
-        ]);
-        return `Results for ${input.query}: Yeaft is an AI agent framework.`;
-      },
-    });
-
-    const events = [];
-    for await (const event of engine.query({ prompt: 'what is yeaft?' })) {
-      events.push(event);
-    }
-
-    // Should have 2 turns
-    const turnStarts = events.filter(e => e.type === 'turn_start');
-    expect(turnStarts).toHaveLength(2);
-
-    // Should have tool execution
-    const toolStarts = events.filter(e => e.type === 'tool_start');
-    expect(toolStarts).toHaveLength(1);
-    expect(toolStarts[0].name).toBe('web_search');
-
-    const toolEnds = events.filter(e => e.type === 'tool_end');
-    expect(toolEnds).toHaveLength(1);
-    expect(toolEnds[0].isError).toBe(false);
-    expect(toolEnds[0].output).toContain('Yeaft is an AI agent framework');
-
-    // Second call should have tool result in messages
-    expect(mockServer.requests).toHaveLength(2);
-    const secondRequest = mockServer.requests[1].body;
-    const toolMsg = secondRequest.messages.find(m => m.role === 'tool');
-    expect(toolMsg).toBeTruthy();
-    expect(toolMsg.content).toContain('Yeaft is an AI agent framework');
-  });
-
-  it('should pass usage information through', async () => {
-    mockServer.setResponse([
-      { type: 'text', text: 'Usage test.' },
-    ]);
-
-    const config = loadConfig({
-      dir: TEST_DIR,
-      model: 'gpt-4.1-mini',
-      adapter: 'openai',
-      openaiApiKey: 'test-key',
-      baseUrl: `http://127.0.0.1:${mockServer.port}/v1`,
-    });
-
-    const adapter = await createLLMAdapter(config);
-    const engine = new Engine({ adapter, trace: new NullTrace(), config });
-
-    const events = [];
-    for await (const event of engine.query({ prompt: 'test' })) {
-      events.push(event);
-    }
-
-    const usageEvents = events.filter(e => e.type === 'usage');
-    expect(usageEvents.length).toBeGreaterThan(0);
-    // Mock server sends 50 prompt tokens + 25 completion tokens
-    const totalInput = usageEvents.reduce((sum, e) => sum + e.inputTokens, 0);
-    const totalOutput = usageEvents.reduce((sum, e) => sum + e.outputTokens, 0);
-    expect(totalInput).toBeGreaterThan(0);
-    expect(totalOutput).toBeGreaterThan(0);
-  });
-});
+// ─── Integration: Engine + AnthropicAdapter + Mock Server ────
+//
+// Phase 7 removed the ChatCompletionsAdapter. Engine + adapter + mock-server
+// integration is exercised end-to-end through the Anthropic path; the
+// OpenAIResponsesAdapter has its own dedicated SSE coverage.
 
 describe('Integration: Engine + AnthropicAdapter + Mock Server', () => {
   it('should complete a simple text query via Anthropic API', async () => {
@@ -242,7 +118,7 @@ describe('Integration: Engine + AnthropicAdapter + Mock Server', () => {
       name: 'calculator',
       description: 'Calculate math expressions',
       parameters: { type: 'object', properties: { expr: { type: 'string' } } },
-      execute: async (input) => {
+      execute: async (_input) => {
         mockServer.setResponse([
           { type: 'text', text: 'The answer is 4.' },
         ]);
@@ -270,6 +146,35 @@ describe('Integration: Engine + AnthropicAdapter + Mock Server', () => {
       Array.isArray(m.content) && m.content.some(c => c.type === 'tool_result')
     );
     expect(toolResultMsg).toBeTruthy();
+  });
+
+  it('should pass usage information through', async () => {
+    mockServer.setResponse([
+      { type: 'text', text: 'Usage test.' },
+    ]);
+
+    const config = loadConfig({
+      dir: TEST_DIR,
+      model: 'claude-sonnet-4-20250514',
+      adapter: 'anthropic',
+      apiKey: 'sk-ant-test',
+      baseUrl: `http://127.0.0.1:${mockServer.port}`,
+    });
+
+    const adapter = await createLLMAdapter(config);
+    const engine = new Engine({ adapter, trace: new NullTrace(), config });
+
+    const events = [];
+    for await (const event of engine.query({ prompt: 'test' })) {
+      events.push(event);
+    }
+
+    const usageEvents = events.filter(e => e.type === 'usage');
+    expect(usageEvents.length).toBeGreaterThan(0);
+    const totalInput = usageEvents.reduce((sum, e) => sum + e.inputTokens, 0);
+    const totalOutput = usageEvents.reduce((sum, e) => sum + e.outputTokens, 0);
+    expect(totalInput).toBeGreaterThan(0);
+    expect(totalOutput).toBeGreaterThan(0);
   });
 });
 
@@ -331,29 +236,6 @@ describe('Integration: Config + .env file', () => {
 });
 
 describe('Integration: Config + Model Registry auto-detection', () => {
-  it('should auto-detect OpenAI adapter for gpt-5 model', async () => {
-    const config = loadConfig({
-      dir: TEST_DIR,
-      model: 'gpt-5',
-      openaiApiKey: 'test-key',
-      baseUrl: `http://127.0.0.1:${mockServer.port}/v1`,
-    });
-
-    expect(config.adapter).toBe('openai');
-
-    // Should be able to create adapter and make a call
-    const adapter = await createLLMAdapter(config);
-    expect(adapter.constructor.name).toBe('ChatCompletionsAdapter');
-
-    mockServer.setResponse([{ type: 'text', text: 'OK' }]);
-    const result = await adapter.call({
-      model: 'gpt-5',
-      system: 'test',
-      messages: [{ role: 'user', content: 'hi' }],
-    });
-    expect(result.text).toBe('OK');
-  });
-
   it('should auto-detect Anthropic adapter for Claude model', async () => {
     const config = loadConfig({
       dir: TEST_DIR,
@@ -376,7 +258,11 @@ describe('Integration: Config + Model Registry auto-detection', () => {
     expect(result.text).toBe('Bonjour');
   });
 
-  it('should auto-detect DeepSeek endpoint for deepseek-chat', () => {
+  it('should auto-detect OpenAI-style adapter string for non-Claude model', () => {
+    // Phase 7: createLLMAdapter() rejects this combination at runtime, but
+    // the auto-detect *string* on the config object is preserved for
+    // diagnostics. Live OpenAI traffic must go through providers[] with
+    // protocol: "openai-responses".
     const config = loadConfig({
       dir: TEST_DIR,
       model: 'deepseek-chat',
@@ -399,10 +285,10 @@ describe('Integration: Debug trace recording', () => {
 
     const config = loadConfig({
       dir: TEST_DIR,
-      model: 'gpt-5',
-      adapter: 'openai',
-      openaiApiKey: 'test-key',
-      baseUrl: `http://127.0.0.1:${mockServer.port}/v1`,
+      model: 'claude-sonnet-4-20250514',
+      adapter: 'anthropic',
+      apiKey: 'sk-ant-test',
+      baseUrl: `http://127.0.0.1:${mockServer.port}`,
     });
 
     const trace = new DebugTrace(dbPath);
@@ -419,7 +305,7 @@ describe('Integration: Debug trace recording', () => {
 
     const recent = trace.queryRecent(1);
     expect(recent).toHaveLength(1);
-    expect(recent[0].model).toBe('gpt-5');
+    expect(recent[0].model).toBe('claude-sonnet-4-20250514');
     expect(recent[0].response_text).toBe('Traced response.');
     expect(recent[0].stop_reason).toBe('end_turn');
     expect(recent[0].latency_ms).toBeGreaterThan(0);
@@ -438,73 +324,7 @@ describe('Integration: Debug trace recording', () => {
 // ─── Integration: Error handling via Mock Server ──────────────
 
 describe('Integration: Error handling via Mock Server', () => {
-  it('should throw LLMAuthError for 401 from ChatCompletions', async () => {
-    mockServer.setError(401, { error: { message: 'Invalid API key' } });
-
-    const config = loadConfig({
-      dir: TEST_DIR,
-      model: 'gpt-5',
-      adapter: 'openai',
-      openaiApiKey: 'bad-key',
-      baseUrl: `http://127.0.0.1:${mockServer.port}/v1`,
-    });
-
-    const adapter = await createLLMAdapter(config);
-
-    await expect(
-      adapter.call({
-        model: 'gpt-5',
-        system: 'test',
-        messages: [{ role: 'user', content: 'hi' }],
-      })
-    ).rejects.toThrow(LLMAuthError);
-  });
-
-  it('should throw LLMRateLimitError for 429 from ChatCompletions', async () => {
-    mockServer.setError(429, { error: { message: 'Rate limit exceeded' } });
-
-    const config = loadConfig({
-      dir: TEST_DIR,
-      model: 'gpt-5',
-      adapter: 'openai',
-      openaiApiKey: 'test-key',
-      baseUrl: `http://127.0.0.1:${mockServer.port}/v1`,
-    });
-
-    const adapter = await createLLMAdapter(config);
-
-    await expect(
-      adapter.call({
-        model: 'gpt-5',
-        system: 'test',
-        messages: [{ role: 'user', content: 'hi' }],
-      })
-    ).rejects.toThrow(LLMRateLimitError);
-  });
-
-  it('should throw LLMServerError for 500 from ChatCompletions', async () => {
-    mockServer.setError(500, { error: { message: 'Internal server error' } });
-
-    const config = loadConfig({
-      dir: TEST_DIR,
-      model: 'gpt-5',
-      adapter: 'openai',
-      openaiApiKey: 'test-key',
-      baseUrl: `http://127.0.0.1:${mockServer.port}/v1`,
-    });
-
-    const adapter = await createLLMAdapter(config);
-
-    await expect(
-      adapter.call({
-        model: 'gpt-5',
-        system: 'test',
-        messages: [{ role: 'user', content: 'hi' }],
-      })
-    ).rejects.toThrow(LLMServerError);
-  });
-
-  it('should throw LLMAuthError for 401 from Anthropic', async () => {
+  it('should throw LLMAuthError for 401', async () => {
     mockServer.setError(401, { error: { message: 'Invalid API key' } });
 
     const config = loadConfig({
@@ -526,15 +346,59 @@ describe('Integration: Error handling via Mock Server', () => {
     ).rejects.toThrow(LLMAuthError);
   });
 
+  it('should throw LLMRateLimitError for 429', async () => {
+    mockServer.setError(429, { error: { message: 'Rate limit exceeded' } });
+
+    const config = loadConfig({
+      dir: TEST_DIR,
+      model: 'claude-sonnet-4-20250514',
+      adapter: 'anthropic',
+      apiKey: 'sk-ant-test',
+      baseUrl: `http://127.0.0.1:${mockServer.port}`,
+    });
+
+    const adapter = await createLLMAdapter(config);
+
+    await expect(
+      adapter.call({
+        model: 'claude-sonnet-4-20250514',
+        system: 'test',
+        messages: [{ role: 'user', content: 'hi' }],
+      })
+    ).rejects.toThrow(LLMRateLimitError);
+  });
+
+  it('should throw LLMServerError for 500', async () => {
+    mockServer.setError(500, { error: { message: 'Internal server error' } });
+
+    const config = loadConfig({
+      dir: TEST_DIR,
+      model: 'claude-sonnet-4-20250514',
+      adapter: 'anthropic',
+      apiKey: 'sk-ant-test',
+      baseUrl: `http://127.0.0.1:${mockServer.port}`,
+    });
+
+    const adapter = await createLLMAdapter(config);
+
+    await expect(
+      adapter.call({
+        model: 'claude-sonnet-4-20250514',
+        system: 'test',
+        messages: [{ role: 'user', content: 'hi' }],
+      })
+    ).rejects.toThrow(LLMServerError);
+  });
+
   it('should surface error through engine query loop', async () => {
     mockServer.setError(500, { error: { message: 'Server down' } });
 
     const config = loadConfig({
       dir: TEST_DIR,
-      model: 'gpt-5',
-      adapter: 'openai',
-      openaiApiKey: 'test-key',
-      baseUrl: `http://127.0.0.1:${mockServer.port}/v1`,
+      model: 'claude-sonnet-4-20250514',
+      adapter: 'anthropic',
+      apiKey: 'sk-ant-test',
+      baseUrl: `http://127.0.0.1:${mockServer.port}`,
     });
 
     const adapter = await createLLMAdapter(config);

@@ -19,7 +19,6 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { AnthropicAdapter } from '../../agent/unify/llm/anthropic.js';
-import { ChatCompletionsAdapter } from '../../agent/unify/llm/chat-completions.js';
 import { consolidate, DEFAULT_MESSAGE_TOKEN_BUDGET } from '../../agent/unify/memory/consolidate.js';
 import { extractMemories } from '../../agent/unify/memory/extract.js';
 import { recall, clearRecallCache } from '../../agent/unify/memory/recall.js';
@@ -128,60 +127,9 @@ describe('task-327c: AnthropicAdapter.call() effort injection', () => {
   });
 });
 
-describe('task-327c: ChatCompletionsAdapter.call() effort injection', () => {
-  let origFlag;
-  beforeEach(() => {
-    origFlag = process.env.UNIFY_THINKING_V1;
-    process.env.UNIFY_THINKING_V1 = '1';
-  });
-  afterEach(() => {
-    if (origFlag === undefined) delete process.env.UNIFY_THINKING_V1;
-    else process.env.UNIFY_THINKING_V1 = origFlag;
-  });
-
-  const mk = () => new ChatCompletionsAdapter({ apiKey: 't', baseUrl: 'https://stub/v1' });
-
-  it('gpt-5 + effort=low → reasoning.effort=low', async () => {
-    const body = await captureCallBody(() => mk().call({
-      model: 'gpt-5',
-      system: 's',
-      messages: [{ role: 'user', content: 'x' }],
-      effort: 'low',
-    }));
-    expect(body.reasoning).toEqual({ effort: 'low' });
-  });
-
-  it('o4-mini + effort=max → reasoning.effort=high (downgrade)', async () => {
-    const body = await captureCallBody(() => mk().call({
-      model: 'o4-mini',
-      system: 's',
-      messages: [{ role: 'user', content: 'x' }],
-      effort: 'max',
-    }));
-    expect(body.reasoning).toEqual({ effort: 'high' });
-  });
-
-  it('deepseek-chat (non-reasoning) silently drops', async () => {
-    const body = await captureCallBody(() => mk().call({
-      model: 'deepseek-chat',
-      system: 's',
-      messages: [{ role: 'user', content: 'x' }],
-      effort: 'max',
-    }));
-    expect(body.reasoning).toBeUndefined();
-  });
-
-  it('flag OFF → reasoning dropped', async () => {
-    delete process.env.UNIFY_THINKING_V1;
-    const body = await captureCallBody(() => mk().call({
-      model: 'gpt-5',
-      system: 's',
-      messages: [{ role: 'user', content: 'x' }],
-      effort: 'high',
-    }));
-    expect(body.reasoning).toBeUndefined();
-  });
-});
+// Phase 7: ChatCompletionsAdapter was deleted. body.reasoning injection
+// for the OpenAI path is verified in test/agent/unify/llm/thinking-effort.test.js
+// against the OpenAIResponsesAdapter, which is the canonical replacement.
 
 // ─── §2 call-site scenario tagging ──────────────────────────────
 

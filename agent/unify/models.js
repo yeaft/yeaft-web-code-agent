@@ -76,7 +76,7 @@ export const MODEL_REGISTRY = new Map([
   // ── OpenAI ─────────────────────────────────────────────────────
   ['gpt-5', {
     provider: 'openai',
-    adapter: 'chat-completions',
+    adapter: 'openai-responses',
     baseUrl: 'https://api.openai.com/v1',
     contextWindow: 256000,
     maxOutputTokens: 16384,
@@ -91,25 +91,25 @@ export const MODEL_REGISTRY = new Map([
   // should come from provider config (user-supplied) instead of guesses.
   ['gpt-5-mini', {
     provider: 'openai',
-    adapter: 'chat-completions',
+    adapter: 'openai-responses',
     baseUrl: 'https://api.openai.com/v1',
     displayName: 'GPT-5 Mini',
   }],
   ['gpt-5-nano', {
     provider: 'openai',
-    adapter: 'chat-completions',
+    adapter: 'openai-responses',
     baseUrl: 'https://api.openai.com/v1',
     displayName: 'GPT-5 Nano',
   }],
   ['gpt-5-pro', {
     provider: 'openai',
-    adapter: 'chat-completions',
+    adapter: 'openai-responses',
     baseUrl: 'https://api.openai.com/v1',
     displayName: 'GPT-5 Pro',
   }],
   ['gpt-5.4', {
     provider: 'openai',
-    adapter: 'chat-completions',
+    adapter: 'openai-responses',
     baseUrl: 'https://api.openai.com/v1',
     contextWindow: 272000,
     maxOutputTokens: 16384,
@@ -117,7 +117,7 @@ export const MODEL_REGISTRY = new Map([
   }],
   ['gpt-4.1', {
     provider: 'openai',
-    adapter: 'chat-completions',
+    adapter: 'openai-responses',
     baseUrl: 'https://api.openai.com/v1',
     contextWindow: 1047576,
     maxOutputTokens: 32768,
@@ -125,7 +125,7 @@ export const MODEL_REGISTRY = new Map([
   }],
   ['gpt-4.1-mini', {
     provider: 'openai',
-    adapter: 'chat-completions',
+    adapter: 'openai-responses',
     baseUrl: 'https://api.openai.com/v1',
     contextWindow: 1047576,
     maxOutputTokens: 16384,
@@ -133,7 +133,7 @@ export const MODEL_REGISTRY = new Map([
   }],
   ['gpt-4.1-nano', {
     provider: 'openai',
-    adapter: 'chat-completions',
+    adapter: 'openai-responses',
     baseUrl: 'https://api.openai.com/v1',
     contextWindow: 1047576,
     maxOutputTokens: 16384,
@@ -141,7 +141,7 @@ export const MODEL_REGISTRY = new Map([
   }],
   ['o3', {
     provider: 'openai',
-    adapter: 'chat-completions',
+    adapter: 'openai-responses',
     baseUrl: 'https://api.openai.com/v1',
     contextWindow: 200000,
     maxOutputTokens: 100000,
@@ -153,7 +153,7 @@ export const MODEL_REGISTRY = new Map([
   }],
   ['o4-mini', {
     provider: 'openai',
-    adapter: 'chat-completions',
+    adapter: 'openai-responses',
     baseUrl: 'https://api.openai.com/v1',
     contextWindow: 200000,
     maxOutputTokens: 100000,
@@ -166,7 +166,7 @@ export const MODEL_REGISTRY = new Map([
   // ── DeepSeek ───────────────────────────────────────────────────
   ['deepseek-chat', {
     provider: 'deepseek',
-    adapter: 'chat-completions',
+    adapter: 'openai-responses',
     baseUrl: 'https://api.deepseek.com',
     contextWindow: 131072,
     maxOutputTokens: 8192,
@@ -174,7 +174,7 @@ export const MODEL_REGISTRY = new Map([
   }],
   ['deepseek-reasoner', {
     provider: 'deepseek',
-    adapter: 'chat-completions',
+    adapter: 'openai-responses',
     baseUrl: 'https://api.deepseek.com',
     contextWindow: 131072,
     maxOutputTokens: 8192,
@@ -184,7 +184,7 @@ export const MODEL_REGISTRY = new Map([
   // ── Google (via OpenAI-compatible API) ─────────────────────────
   ['gemini-2.5-pro', {
     provider: 'google',
-    adapter: 'chat-completions',
+    adapter: 'openai-responses',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
     contextWindow: 1048576,
     maxOutputTokens: 65536,
@@ -192,7 +192,7 @@ export const MODEL_REGISTRY = new Map([
   }],
   ['gemini-2.5-flash', {
     provider: 'google',
-    adapter: 'chat-completions',
+    adapter: 'openai-responses',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
     contextWindow: 1048576,
     maxOutputTokens: 65536,

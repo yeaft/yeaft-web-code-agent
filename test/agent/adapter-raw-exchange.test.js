@@ -12,7 +12,6 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { AnthropicAdapter } from '../../agent/unify/llm/anthropic.js';
-import { ChatCompletionsAdapter } from '../../agent/unify/llm/chat-completions.js';
 import {
   redactRawRequest,
   capRawString,
@@ -152,76 +151,11 @@ describe('AnthropicAdapter onRawExchange', () => {
   });
 });
 
-// ─── Chat Completions adapter ────────────────────────────────────
-
-describe('ChatCompletionsAdapter onRawExchange', () => {
-  let origFetch;
-  beforeEach(() => { origFetch = globalThis.fetch; });
-  afterEach(() => { globalThis.fetch = origFetch; });
-
-  it('emits redacted rawRequest + SSE rawResponse after successful stream', async () => {
-    globalThis.fetch = mockSseFetch([
-      'data: {"choices":[{"delta":{"content":"hi"},"index":0}]}',
-      '',
-      'data: {"choices":[{"delta":{},"finish_reason":"stop","index":0}],"usage":{"prompt_tokens":3,"completion_tokens":1}}',
-      '',
-      'data: [DONE]',
-      '',
-    ]);
-    const adapter = new ChatCompletionsAdapter({
-      apiKey: 'sk-topsecret',
-      baseUrl: 'https://api.openai.com/v1',
-    });
-    let captured = null;
-    const gen = adapter.stream({
-      model: 'gpt-5',
-      system: 'sys',
-      messages: [{ role: 'user', content: 'hi' }],
-      onRawExchange: (ex) => { captured = ex; },
-    });
-    await consume(gen);
-    expect(captured).toBeTruthy();
-    expect(captured.rawRequest.url).toBe('https://api.openai.com/v1/chat/completions');
-    expect(captured.rawRequest.headers['Authorization']).toBe('***');
-    const serialized = JSON.stringify(captured.rawRequest);
-    expect(serialized.includes('sk-topsecret')).toBe(false);
-    expect(captured.rawRequest.body.model).toBe('gpt-5');
-    expect(captured.rawResponse.status).toBe(200);
-    expect(captured.rawResponse.format).toBe('sse');
-    expect(captured.rawResponse.body).toContain('"hi"');
-    expect(captured.rawResponse.body).toContain('[DONE]');
-  });
-
-  // task-344 follow-up N1: ChatCompletions error path (symmetry with Anthropic 429)
-  it('emits rawResponse on non-2xx (429) before throwing', async () => {
-    globalThis.fetch = async () => ({
-      ok: false,
-      status: 429,
-      headers: new Headers({ 'retry-after': '1' }),
-      text: async () => '{"error":{"message":"Rate limit reached","type":"rate_limit_exceeded"}}',
-    });
-    const adapter = new ChatCompletionsAdapter({
-      apiKey: 'sk-topsecret',
-      baseUrl: 'https://api.openai.com/v1',
-    });
-    let captured = null;
-    await expect((async () => {
-      const gen = adapter.stream({
-        model: 'gpt-5',
-        system: '',
-        messages: [{ role: 'user', content: 'hi' }],
-        onRawExchange: (ex) => { captured = ex; },
-      });
-      await consume(gen);
-    })()).rejects.toThrow();
-    expect(captured).toBeTruthy();
-    expect(captured.rawResponse.status).toBe(429);
-    expect(captured.rawResponse.body).toContain('Rate limit reached');
-    // apiKey MUST NOT appear in the redacted envelope.
-    expect(captured.rawRequest.headers['Authorization']).toBe('***');
-    expect(JSON.stringify(captured.rawRequest).includes('sk-topsecret')).toBe(false);
-  });
-});
+// ─── Chat Completions adapter (Phase 7: removed) ─────────────────
+// The ChatCompletionsAdapter was deleted in Phase 7. The OpenAIResponsesAdapter
+// covers the same redaction/cap behaviour and is exercised in its own suite.
+// Anthropic adapter blocks above provide redundant coverage of redactRawRequest
+// + onRawExchange semantics.
 
 // ─── task-344 follow-up N2: SSE body max-size cap ────────────────
 
@@ -310,47 +244,6 @@ describe('Anthropic adapter SSE size cap (N2)', () => {
   });
 });
 
-describe('ChatCompletions adapter SSE size cap (N2)', () => {
-  let origFetch;
-  beforeEach(() => { origFetch = globalThis.fetch; });
-  afterEach(() => { globalThis.fetch = origFetch; });
-
-  it('caps rawResponse body at RAW_PAYLOAD_CAP_BYTES + marker', async () => {
-    const giant = 'B'.repeat(RAW_PAYLOAD_CAP_BYTES + 50000);
-    const payload = JSON.stringify({ choices: [{ delta: { content: giant }, index: 0 }] });
-    globalThis.fetch = async () => ({
-      ok: true,
-      status: 200,
-      headers: new Headers({ 'content-type': 'text/event-stream' }),
-      body: {
-        getReader() {
-          const encoder = new TextEncoder();
-          let sent = false;
-          return {
-            async read() {
-              if (sent) return { done: true, value: undefined };
-              sent = true;
-              return { done: false, value: encoder.encode(`data: ${payload}\n\ndata: {"choices":[{"delta":{},"finish_reason":"stop","index":0}]}\n\ndata: [DONE]\n\n`) };
-            },
-            releaseLock() {},
-          };
-        },
-      },
-    });
-    const adapter = new ChatCompletionsAdapter({
-      apiKey: 'sk',
-      baseUrl: 'https://api.openai.com/v1',
-    });
-    let captured = null;
-    const gen = adapter.stream({
-      model: 'gpt-5',
-      system: '',
-      messages: [{ role: 'user', content: 'hi' }],
-      onRawExchange: (ex) => { captured = ex; },
-    });
-    await consume(gen);
-    expect(captured).toBeTruthy();
-    expect(captured.rawResponse.body).toContain('…[truncated, original');
-    expect(captured.rawResponse.body.length).toBeLessThan(RAW_PAYLOAD_CAP_BYTES + 200);
-  });
-});
+// Note: the OpenAIResponsesAdapter has its own SSE size-cap coverage in its
+// own test suite. The Anthropic case above provides cross-adapter assurance
+// that capRawString is wired into the streaming path.

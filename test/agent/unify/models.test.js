@@ -36,7 +36,7 @@ describe('MODEL_REGISTRY', () => {
 
   it('should have correct adapter types', () => {
     for (const [name, info] of MODEL_REGISTRY) {
-      expect(['anthropic', 'chat-completions']).toContain(info.adapter);
+      expect(['anthropic', 'openai-responses']).toContain(info.adapter);
       expect(info.baseUrl).toBeTruthy();
       // gpt-5-{mini,nano,pro} intentionally omit context/output — their real limits
       // should come from provider config rather than unverified hardcoded values (task-284).
@@ -57,10 +57,10 @@ describe('MODEL_REGISTRY', () => {
     }
   });
 
-  it('should use "chat-completions" adapter for non-Claude models', () => {
+  it('should use "openai-responses" adapter for non-Claude models', () => {
     for (const [name, info] of MODEL_REGISTRY) {
       if (!name.startsWith('claude-')) {
-        expect(info.adapter).toBe('chat-completions');
+        expect(info.adapter).toBe('openai-responses');
       }
     }
   });
@@ -70,7 +70,7 @@ describe('resolveModel', () => {
   it('should return ModelInfo for known models', () => {
     const info = resolveModel('gpt-5');
     expect(info).not.toBeNull();
-    expect(info.adapter).toBe('chat-completions');
+    expect(info.adapter).toBe('openai-responses');
     expect(info.baseUrl).toBe('https://api.openai.com/v1');
     expect(info.contextWindow).toBe(256000);
     expect(info.displayName).toBe('GPT-5');
@@ -96,14 +96,14 @@ describe('resolveModel', () => {
 
   it('should resolve DeepSeek models correctly', () => {
     const info = resolveModel('deepseek-chat');
-    expect(info.adapter).toBe('chat-completions');
+    expect(info.adapter).toBe('openai-responses');
     expect(info.baseUrl).toBe('https://api.deepseek.com');
     expect(info.contextWindow).toBe(131072);
   });
 
   it('should resolve Gemini models correctly', () => {
     const info = resolveModel('gemini-2.5-pro');
-    expect(info.adapter).toBe('chat-completions');
+    expect(info.adapter).toBe('openai-responses');
     expect(info.baseUrl).toContain('googleapis.com');
     expect(info.contextWindow).toBe(1048576);
   });
@@ -145,7 +145,7 @@ describe('listModels', () => {
     const models = listModels();
     const adapters = new Set(models.map(m => m.adapter));
     expect(adapters.has('anthropic')).toBe(true);
-    expect(adapters.has('chat-completions')).toBe(true);
+    expect(adapters.has('openai-responses')).toBe(true);
   });
 });
 

@@ -5,11 +5,14 @@
  *   [{ name, baseUrl, apiKey, protocol?, models[] }, ...]
  *
  * The router resolves model → provider, lazy-creates the right adapter
- * (AnthropicAdapter or ChatCompletionsAdapter based on protocol), caches it,
+ * (AnthropicAdapter or OpenAIResponsesAdapter based on protocol), caches it,
  * and forwards stream()/call() to the resolved adapter.
  *
- * protocol defaults to "openai" (Chat Completions API).
- * Set protocol: "anthropic" only for direct Anthropic API connections.
+ * protocol must be one of:
+ *   - "anthropic"        — Anthropic Messages API (required for claude-* models)
+ *   - "openai-responses" — OpenAI Responses API (default for everything else)
+ *
+ * Phase 7 removed the legacy "openai" (Chat Completions) protocol entirely.
  */
 
 import { LLMAdapter } from './adapter.js';
@@ -93,23 +96,25 @@ export class AdapterRouter extends LLMAdapter {
   /**
    * Resolve the effective wire protocol for a (provider, model) pair.
    *
-   * The provider's declared protocol is the default, but Anthropic-style
-   * model IDs (e.g. "claude-opus-4.7") cannot be served by the OpenAI
-   * Responses API even when the provider sits in front of both. Detect
-   * that mismatch and downgrade to chat-completions, which proxies like
-   * GitHub Copilot DO support for Claude models.
+   * Phase 7: only "anthropic" and "openai-responses" are supported. Claude
+   * model IDs require provider.protocol === "anthropic" — there is no
+   * chat-completions fallback any more.
    *
    * @param {object} provider — Provider config
    * @param {string} modelId
-   * @returns {'anthropic' | 'openai-responses' | 'openai'}
+   * @returns {'anthropic' | 'openai-responses'}
    */
   #effectiveProtocol(provider, modelId) {
-    const declared = provider.protocol || 'openai';
-    // Anthropic models — only 'anthropic' or 'openai' (chat-completions) make sense.
-    // Responses API does not support Claude → fall back to chat-completions.
+    const declared = provider.protocol || 'openai-responses';
     if (typeof modelId === 'string' && modelId.startsWith('claude-')) {
-      if (declared === 'openai-responses') return 'openai';
-      return declared; // anthropic / openai both fine
+      if (declared !== 'anthropic') {
+        throw new Error(
+          `Claude models require provider.protocol="anthropic"; ` +
+          `chat-completions fallback removed in Phase 7. ` +
+          `Provider "${provider.name}" declares protocol="${declared}" for model "${modelId}".`
+        );
+      }
+      return 'anthropic';
     }
     return declared;
   }
@@ -131,8 +136,8 @@ export class AdapterRouter extends LLMAdapter {
     }
 
     // Compute the effective protocol per model — a single provider may need
-    // two adapters (e.g. copilot proxy: openai-responses for gpt-5*,
-    // chat-completions for claude-*). Cache key includes the protocol.
+    // two adapters (e.g. mixed config: openai-responses for gpt-5*, anthropic
+    // for claude-*). Cache key includes the protocol.
     const protocol = this.#effectiveProtocol(provider, modelId);
     const cacheKey = `${provider.name}::${protocol}`;
     const cached = this.#adapterCache.get(cacheKey);
@@ -147,19 +152,18 @@ export class AdapterRouter extends LLMAdapter {
         baseUrl: provider.baseUrl,
       });
     } else if (protocol === 'openai-responses') {
-      // OpenAI Responses API (/v1/responses) — next-gen, recommended for GPT-5+
+      // OpenAI Responses API (/v1/responses) — canonical OpenAI-compatible path.
       const { OpenAIResponsesAdapter } = await import('./openai-responses.js');
       adapter = new OpenAIResponsesAdapter({
         apiKey: provider.apiKey,
         baseUrl: provider.baseUrl,
       });
     } else {
-      // Default: openai (Chat Completions API) — covers proxy, OpenAI, DeepSeek, Gemini, etc.
-      const { ChatCompletionsAdapter } = await import('./chat-completions.js');
-      adapter = new ChatCompletionsAdapter({
-        apiKey: provider.apiKey,
-        baseUrl: provider.baseUrl,
-      });
+      throw new Error(
+        `Unsupported protocol "${protocol}" for provider "${provider.name}". ` +
+        `Use protocol: "anthropic" or "openai-responses". ` +
+        `The chat-completions adapter was removed in Phase 7.`
+      );
     }
 
     this.#adapterCache.set(cacheKey, adapter);

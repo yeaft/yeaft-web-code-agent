@@ -85,7 +85,7 @@ describe('web-bridge conversation history (task-320 per-thread map)', () => {
     // (empty assistant text) still record the toolCalls. Without
     // this, the next turn would omit the `tool_calls` array and
     // the paired `role:'tool'` results would orphan → 400 from
-    // chat-completions.
+    // adapter 
     expect(src).toMatch(/if \(fullText \|\| toolCallsAccum\.length > 0\)/);
   });
 

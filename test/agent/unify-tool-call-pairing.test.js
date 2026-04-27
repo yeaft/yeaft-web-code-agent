@@ -7,7 +7,7 @@ import { EngineInstance } from '../../agent/unify/threads/engine-instance.js';
  * Bug: EngineInstance.query() used to append only
  *   [user, assistant(text+toolCalls)]
  * to #messages after each query. The `role:'tool'` result messages were
- * dropped entirely. On turn 2 the chat-completions adapter re-serialised
+ * dropped entirely. On turn 2 the OpenAI adapter re-serialised
  * history and sent an assistant message with `tool_calls` that had no
  * matching `role:'tool'` entries → OpenAI returned 400:
  *   "No tool output found for function call call_xyz"
