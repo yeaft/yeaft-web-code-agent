@@ -95,7 +95,7 @@ describe('group headers', () => {
 // 3 — Active group uses solid dot, Idle uses hollow, Archived dashed.
 describe('status dot styling', () => {
   it('css has solid active dot, hollow idle dot, and dashed archived dot', () => {
-    expect(cssSrc).toMatch(/\.usv2-dot-active\s*\{[^}]*background:\s*#34c759/);
+    expect(cssSrc).toMatch(/\.usv2-dot-active\s*\{[^}]*background:\s*var\(--status-online\)/);
     expect(cssSrc).toMatch(/\.usv2-dot-idle\s*\{[^}]*background:\s*transparent[\s\S]*?border:\s*1\.5px\s+solid/);
     expect(cssSrc).toMatch(/\.usv2-dot-archived\s*\{[^}]*background:\s*transparent[\s\S]*?border:\s*1\.5px\s+dashed/);
   });
