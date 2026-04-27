@@ -18,16 +18,24 @@
  */
 
 import { randomUUID } from 'crypto';
-import { buildSystemPrompt } from './prompts.js';
+import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
 import { LLMContextError, LLMAbortError } from './llm/adapter.js';
 import { recallR6, formatForInjection } from './memory/recall-r6.js';
-import { shouldConsolidate, consolidate } from './memory/consolidate.js';
+import { shouldConsolidate, consolidate, partitionMessages } from './memory/consolidate.js';
+import { extractMemories } from './memory/extract.js';
+import { runCompact as runCompactOrchestrator } from './compact/orchestrator.js';
+import { evaluateCompactTriggers } from './compact/triggers.js';
+import { archiveTurn } from './archive/turn-archive.js';
+import { archiveToolResults } from './archive/tool-results.js';
 import { buildMemoryInjection } from './memory/layout.js';
 import { buildUserProfile } from './memory/user-memory-store.js';
+import { readSummary as readScopeSummary } from './memory/scope-tree.js';
 import { runStopHooks } from './stop-hooks.js';
 import { getThreadStore, MAIN_THREAD_ID } from './threads/store.js';
 import { pickEffort, parseEffortPrefix } from './effort.js';
 import { normalizeEffort } from './models.js';
+import { attachRouterPlan, extractPriorPlan, stripMetaForWire } from './router/continuity.js';
+import { resolveThinking } from './router/thinking.js';
 
 /**
  * task-324 — Turn cap removed.
@@ -288,16 +296,56 @@ export class Engine {
   }
 
   /**
-   * Build the system prompt with memory, compact summary, and skill content.
+   * Load Layer A scope summaries from `<memoryRoot>/<scope>/summary.md`.
+   *
+   * Scopes:
+   *   - user           → `user/summary.md`            (always attempted)
+   *   - group <gid>    → `groups/<gid>/summary.md`    (if groupId)
+   *   - vp <vpId>      → `vp/<vpId>/summary.md`       (if vpId)
+   *
+   * Each fetch is best-effort — missing files / read errors return ''. The
+   * dream tick (Phase 6) is what populates these; on a fresh install they
+   * all return ''.
+   *
+   * @param {{groupId?: string, vpId?: string}} ctx
+   * @returns {Promise<{user:string, group:string, vp:string}>}
+   */
+  async #loadLayerASummaries({ groupId, vpId } = {}) {
+    if (!this.#yeaftDir) return { user: '', group: '', vp: '' };
+    const memoryRoot = `${this.#yeaftDir}/memory`;
+    const tasks = [
+      readScopeSummary({ kind: 'user' }, { root: memoryRoot }).catch(() => ''),
+      groupId
+        ? readScopeSummary({ kind: 'group', id: groupId }, { root: memoryRoot }).catch(() => '')
+        : Promise.resolve(''),
+      vpId
+        ? readScopeSummary({ kind: 'vp', id: vpId }, { root: memoryRoot }).catch(() => '')
+        : Promise.resolve(''),
+    ];
+    const [user, group, vp] = await Promise.all(tasks);
+    return { user: user || '', group: group || '', vp: vp || '' };
+  }
+
+  /**
+   * Build the system prompt with memory, compact summary, skill content,
+   * and (Phase 8 wire-up) Layer-A scope summaries.
+   *
+   * Routes through `buildWorkerPrompt`, which:
+   *   - Lays in the persona-as-identity block (or Yeaft identity fallback)
+   *   - Concatenates Layer A summaries (`user/group/vp/summary.md`)
+   *   - Reserves Layer B / C / D placeholders for future wiring (router
+   *     preselected memory, task scope, turn scope)
    *
    * @param {{ profile?: string, entries?: object[] }} [memory]
    * @param {string} [compactSummary]
    * @param {string} [prompt] — user prompt (for skill relevance matching)
-   * @param {string} [memoryInjection] — task-287: prebuilt memory block (index + prefs + project)
+   * @param {string} [memoryInjection] — task-287: prebuilt memory block
    * @param {string} [userProfile] — user profile from user-memory shard store
+   * @param {object} [vpPersona]
+   * @param {{user?:string, group?:string, vp?:string}} [summaries]
    * @returns {string}
    */
-  #buildSystemPrompt(memory, compactSummary, prompt, memoryInjection, userProfile, vpPersona) {
+  #buildSystemPrompt(memory, compactSummary, prompt, memoryInjection, userProfile, vpPersona, summaries) {
     // Get relevant skill content if SkillManager is wired
     let skillContent = '';
     if (this.#skillManager && prompt) {
@@ -309,7 +357,7 @@ export class Engine {
       ? this.#toolRegistry.getToolNames()
       : Array.from(this.#tools.keys());
 
-    return buildSystemPrompt({
+    return buildWorkerPrompt({
       language: this.#config.language || 'en',
       toolNames,
       memory,
@@ -318,6 +366,11 @@ export class Engine {
       skillContent,
       userProfile,
       vpPersona,
+      summaries,
+      // Worker-shape harness is descriptive metadata for human inspection;
+      // production prompts skip it to save tokens. Re-enable via env when
+      // diagnosing prompt structure issues.
+      includeShape: process.env.UNIFY_PROMPT_INCLUDE_SHAPE === '1',
       // task-334f: memory_trace tool is now registered (49 → 51 tools), so
       // unlock the core_memory meta-line behind 334e's feature flag.
       memoryTraceAvailable: true,
@@ -482,6 +535,35 @@ export class Engine {
     if (this.#config._readOnly) return null;
 
     const budget = this.#config.messageTokenBudget || 8192;
+    const compactCfg = (this.#config && this.#config.compact) || {};
+
+    // Phase 8 PR-D: orchestrator opt-in. evaluateCompactTriggers (DESIGN
+    // §4.1) and runCompact (DESIGN §4.2) are the new path. Existing
+    // shouldConsolidate / consolidate stays as the default to preserve
+    // production behaviour; flip via config.compact.useOrchestrator=true.
+    if (compactCfg.useOrchestrator) {
+      return this.#runOrchestratorCompact(budget, compactCfg);
+    }
+
+    // Default path — surface trigger reasons via trace for observability
+    // even when we still fall through to the legacy consolidate.
+    try {
+      const messages = this.#conversationStore.loadAll();
+      const tokenCount = this.#conversationStore.hotTokens();
+      const trig = evaluateCompactTriggers({
+        messages,
+        tokenCount,
+        contextLimit: this.#config.maxContextTokens || 200000,
+        tokenRatio: compactCfg.tokenRatio,
+        maxMessages: compactCfg.maxMessages,
+      });
+      this.#trace.logEvent && this.#trace.logEvent({
+        traceId: 'compact_triggers_eval',
+        eventType: 'compact_triggers_eval',
+        eventData: { trigger: trig.trigger, reasons: trig.reasons },
+      });
+    } catch { /* observability only */ }
+
     if (!shouldConsolidate(this.#conversationStore, budget)) return null;
 
     try {
@@ -495,6 +577,117 @@ export class Engine {
       return { archivedCount: result.archivedCount, extractedCount: result.extractedEntries.length };
     } catch {
       // Consolidation failure is non-critical
+      return null;
+    }
+  }
+
+  /**
+   * Phase 8 PR-D: run compact via the new orchestrator (DESIGN §4.2).
+   * Hooks adapt the orchestrator's injectable contract to the existing
+   * conversationStore / memoryStore primitives, so behaviour matches
+   * the legacy `consolidate` path 1:1 while exercising the new
+   * triggers / turn-group / orchestrator code on the live path.
+   *
+   * @param {number} budget
+   * @param {object} compactCfg
+   * @returns {Promise<{archivedCount:number, extractedCount:number}|null>}
+   */
+  async #runOrchestratorCompact(budget, _compactCfg) {
+    const conversationStore = this.#conversationStore;
+    const memoryStore = this.#memoryStore;
+    const adapter = this.#adapter;
+    const fastConfig = this.#fastConfig;
+
+    let messages;
+    try {
+      messages = conversationStore.loadAll();
+    } catch { return null; }
+    if (!Array.isArray(messages) || messages.length === 0) return null;
+
+    const tokenCount = conversationStore.hotTokens();
+    const trig = evaluateCompactTriggers({
+      messages,
+      tokenCount,
+      contextLimit: this.#config.maxContextTokens || 200000,
+    });
+    if (!trig.trigger) return null;
+
+    // Use partitionMessages (the legacy primitive) to decide what is
+    // "cooling": orchestrator's own keepHot is a count, but we want to
+    // honour the token-budget partitioning the rest of the system uses.
+    const { toArchive } = partitionMessages(messages, budget);
+    if (toArchive.length === 0) return null;
+
+    const archiveIds = [];
+
+    const hooks = {
+      summarise: async () => {
+        // Reuse the legacy consolidate path's summary technique by
+        // invoking adapter directly with a fresh prompt. We keep the
+        // orchestrator's contract honoured: it takes the cooling slice
+        // and returns a string.
+        try {
+          const result = await adapter.call({
+            model: fastConfig.model,
+            system: 'You are a conversation summarizer. Summarize concisely in 2–3 paragraphs, preserving decisions, facts, and context.',
+            messages: [{ role: 'user', content: `Summarize:\n\n${toArchive.map(m => `[${m.role}] ${(m.content || '').slice(0, 500)}`).join('\n\n')}` }],
+            maxTokens: 1024,
+          });
+          return (result.text || '').trim();
+        } catch {
+          return '';
+        }
+      },
+      archive: async (_groupIdx, groupMsgs) => {
+        for (const m of groupMsgs) if (m.id) archiveIds.push(m.id);
+        const turnId = groupMsgs[0]?.id || `g_${Date.now()}`;
+        // Phase 8 PR-E: persist the cooling turn to
+        // <yeaftDir>/memory/archive/<turnId>.md so message_trace can
+        // replay it later. Scope is "user/" by default — group/task
+        // scoping is a follow-up that will arrive with multi-VP archive
+        // routing. Best-effort: archive failure must not abort compact.
+        if (this.#yeaftDir) {
+          try {
+            await archiveTurn({
+              root: `${this.#yeaftDir}/memory`,
+              scopeDir: 'user',
+              turnId,
+              messages: groupMsgs,
+            });
+          } catch { /* best-effort */ }
+        }
+        return { turnId };
+      },
+      extract: async (coolingMessages) => {
+        try {
+          const extracted = await extractMemories({
+            messages: coolingMessages, adapter, config: fastConfig,
+          });
+          for (const e of extracted) memoryStore.writeEntry(e);
+          if (extracted.length > 0) memoryStore.rebuildScopes();
+          return { written: extracted.length };
+        } catch {
+          return { written: 0 };
+        }
+      },
+    };
+
+    try {
+      const out = await runCompactOrchestrator({
+        messages, keepHot: 10, hooks,
+      });
+      // Apply side effects to the conversation store: move archived
+      // ids to cold, persist compact summary, update index.
+      if (archiveIds.length > 0) conversationStore.moveToColdBatch(archiveIds);
+      if (out.compactSummary) conversationStore.updateCompactSummary(out.compactSummary);
+      const lastKept = messages[messages.length - 1];
+      conversationStore.updateIndex({ lastMessageId: lastKept?.id || null });
+
+      return {
+        archivedCount: out.archivedMessages,
+        extractedCount: out.extractedCount,
+      };
+    } catch {
       return null;
     }
   }
@@ -518,7 +711,7 @@ export class Engine {
    *   SCENARIO_EFFORT. Unknown values fall through to 'high'.
    * @yields {EngineEvent}
    */
-  async *query({ prompt, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers } = {}) {
+  async *query({ prompt, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId } = {}) {
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       yield {
         type: 'error',
@@ -569,7 +762,7 @@ export class Engine {
     const runSignal = abortCtrl.signal;
 
     try {
-      yield* this.#runQuery({ prompt: effectivePrompt, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers });
+      yield* this.#runQuery({ prompt: effectivePrompt, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId });
     } finally {
       if (signal) {
         try { signal.removeEventListener('abort', onExternalAbort); } catch { /* ignore */ }
@@ -587,7 +780,7 @@ export class Engine {
    * in a try/finally without indenting the whole loop.
    * @private
    */
-  async *#runQuery({ prompt, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers }) {
+  async *#runQuery({ prompt, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId }) {
 
     // ─── Pre-query: Memory Injection (task-287) + Compact Summary ──
     // Two-layer recall:
@@ -626,7 +819,21 @@ export class Engine {
 
     const compactSummary = this.#getCompactSummary();
     const userProfile = recallResult?.profile || '';
-    const systemPrompt = this.#buildSystemPrompt(undefined, compactSummary, prompt, memoryInjection, userProfile, vpPersona);
+
+    // Phase 8 wire-up — Layer A scope summaries
+    // Load `summary.md` for the user / addressed group / addressed VP from
+    // the scoped memory tree (DESIGN.md §2). This is the rolling synopsis a
+    // dream tick maintains; we surface it to the worker prompt so the LLM
+    // has cheap, persistent context without paying the recall cost on every
+    // turn. Failures are non-fatal (cold-start / no memory dir).
+    const summaries = await this.#loadLayerASummaries({
+      groupId,
+      vpId: vpPersona && typeof vpPersona === 'object' && typeof vpPersona.vpId === 'string'
+        ? vpPersona.vpId
+        : (typeof senderVpId === 'string' ? senderVpId : undefined),
+    });
+
+    const systemPrompt = this.#buildSystemPrompt(undefined, compactSummary, prompt, memoryInjection, userProfile, vpPersona, summaries);
 
     // Build conversation: existing messages + new user message
     const conversationMessages = [
@@ -682,13 +889,69 @@ export class Engine {
       try {
         // task-327b: resolve effort per-turn so the long-loop auto-bump
         // kicks in once toolLoopTurns crosses the threshold.
-        const resolvedEffort = pickEffort({ scenario, toolLoopTurns, userEffort });
+        let resolvedEffort = pickEffort({ scenario, toolLoopTurns, userEffort });
+
+        // DESIGN.md §9.16: thinking-mode precedence chain. When a VP
+        // persona is active, the router/continuity bookkeeping has more
+        // signal than the raw scenario tag — the prior assistant turn's
+        // routerPlan, the VP's role default, and the global config all
+        // outrank the scenario picker for `'high'|'max'`. UI/userEffort
+        // is already honoured by pickEffort (highest precedence).
+        if (vpPersona && vpPersona.vpId) {
+          const priorPlan = extractPriorPlan(conversationMessages, vpPersona.vpId);
+          const thinkingCfg = (this.#config && this.#config.thinking) || {};
+          const resolved = resolveThinking({
+            uiOverride: (userEffort === 'max' || userEffort === 'high') ? userEffort : null,
+            routerPlan: null, // PR-C scope: priorPlan continuity only;
+                              // live router-plan thinking is a follow-up.
+            priorPlan: priorPlan && priorPlan.thinking ? priorPlan.thinking : null,
+            vpDefault: typeof vpPersona.thinking === 'string' ? vpPersona.thinking : null,
+            globalDefault: typeof thinkingCfg.default === 'string' ? thinkingCfg.default : null,
+            allowRouterEscalate: thinkingCfg.allowRouterEscalate !== false,
+          });
+          // Only adopt the chain's choice when it strengthens the
+          // baseline. We never weaken below pickEffort (e.g. consolidate
+          // = 'max' must not be downgraded to 'high' just because the VP
+          // default is 'high').
+          if (resolved.value === 'max' || (resolved.value === 'high' && resolvedEffort === 'low')) {
+            resolvedEffort = resolved.value;
+          }
+        }
+
+        // Phase 8 PR-E: archive bulky tool results before they go on the
+        // wire. archiveToolResults walks the messages array and replaces
+        // any `role:'tool'` body older than turnAgeMin AND larger than
+        // lengthMin with a small stub, persisting the original to
+        // <yeaftDir>/memory/<scopeDir>/archive/tool-results/<id>.md so
+        // message_trace can fetch it on demand. The stub keeps the
+        // OpenAI/Anthropic toolCallId pairing intact.
+        let wireMessages = stripMetaForWire([...conversationMessages]);
+        if (this.#yeaftDir && (this.#config?.archive?.toolResults !== false)) {
+          try {
+            const swept = await archiveToolResults({
+              root: `${this.#yeaftDir}/memory`,
+              scopeDir: 'user',
+              messages: wireMessages,
+              turnAgeMin: this.#config?.archive?.turnAgeMin,
+              lengthMin: this.#config?.archive?.lengthMin,
+            });
+            wireMessages = swept.nextMessages;
+            // Mutate the in-memory conversation array so subsequent turns
+            // see the stub too — without this, the next turn re-archives
+            // the same body.
+            if (swept.archivedCount > 0) {
+              for (let i = 0; i < conversationMessages.length; i += 1) {
+                conversationMessages[i] = wireMessages[i];
+              }
+            }
+          } catch { /* best-effort */ }
+        }
 
         // Stream from adapter
         for await (const event of this.#adapter.stream({
           model: currentModel,
           system: systemPrompt,
-          messages: [...conversationMessages],
+          messages: wireMessages,
           tools: toolDefs.length > 0 ? toolDefs : undefined,
           maxTokens: this.#config.maxOutputTokens || 16384,
           effort: resolvedEffort,
@@ -836,6 +1099,18 @@ export class Engine {
           name: tc.name,
           input: tc.input,
         }));
+      }
+      // Phase 8 (DESIGN.md §9.15): carry the router plan back on the
+      // assistant message that produced it. Stripped at the wire by
+      // stripMetaForWire — pure bookkeeping for priorPlan continuity.
+      if (vpPersona && vpPersona.vpId) {
+        attachRouterPlan(assistantMsg, {
+          vpId: vpPersona.vpId,
+          forwardQuery: { userOriginal: prompt || '', intent: '' },
+          preselect: undefined,
+          thinking: null,
+          thinkingReason: '',
+        });
       }
       conversationMessages.push(assistantMsg);
       fullResponseText += responseText;
