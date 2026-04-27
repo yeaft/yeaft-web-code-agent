@@ -158,6 +158,11 @@ const RAW_TEMPLATES = {
   modeUnified: readTemplate('mode-unified.md'),
   modeDream: readTemplate('mode-dream.md'),
   toolGuidance: readTemplate('tool-guidance.md'),
+  // Phase 1 — DESIGN.md "Migration Plan" harness fragments. Optional so
+  // older deployments without the templates still boot; buildWorkerPrompt /
+  // buildRouterPrompt callers will simply omit the section.
+  harnessWorkerShape: readTemplate('harness/worker-shape.md', { required: false }),
+  harnessRouterShape: readTemplate('harness/router-shape.md', { required: false }),
 };
 
 /**
@@ -637,3 +642,164 @@ function renderCoreMemory(coreMemory, lang, memoryTraceAvailable) {
   }
   return lines.join('\n');
 }
+
+// ─── Phase 1: Worker / Router prompt splits ──────────────────────
+//
+// DESIGN.md (multi-VP redesign) describes two distinct prompt shapes:
+//
+//   • Worker prompt — what a VP sees when it executes a turn. Layered as
+//     A (identity + summaries) / B (router-preselected memory) / C (task
+//     scope) / D (turn scope).
+//   • Router prompt — what the per-VP Router sees before it decides
+//     plans[]. Identity-summary layer + recent group state, no task /
+//     turn-scope detail.
+//
+// To stay backwards-compatible with existing callers we KEEP
+// `buildSystemPrompt` and treat the two new entry points as thin wrappers
+// that:
+//   1) compose Layer-A summaries (user / group / vp) into the right
+//      headed sections, and
+//   2) prepend the matching harness/*-shape.md fragment when present.
+//
+// Subsequent phases will migrate engine.js / router.js to these entry
+// points and start filling Layers B / C with the new memory tree. For
+// now they exist primarily so tests can pin the contract.
+
+const LAYER_A_HEADERS = {
+  en: {
+    user: '## summary_user',
+    group: '## summary_group',
+    vp: '## summary_vp',
+  },
+  zh: {
+    user: '## 用户总结',
+    group: '## 群组总结',
+    vp: '## VP 总结',
+  },
+};
+
+/**
+ * Render Layer A's three rolling summaries (user / group / vp). Each is
+ * optional; missing or empty strings are skipped. Headers follow the
+ * `## summary_<scope>` convention so Layer-B/C/D headers don't collide.
+ *
+ * @param {{user?: string, group?: string, vp?: string}} summaries
+ * @param {'en'|'zh'} language
+ * @returns {string} concatenated block ('' when nothing to render)
+ */
+export function renderLayerASummaries(summaries, language = 'en') {
+  if (!summaries || typeof summaries !== 'object') return '';
+  const headers = LAYER_A_HEADERS[language] || LAYER_A_HEADERS.en;
+  const out = [];
+  for (const key of ['user', 'group', 'vp']) {
+    const body = typeof summaries[key] === 'string' ? summaries[key].trim() : '';
+    if (!body) continue;
+    out.push(`${headers[key]}\n${body}`);
+  }
+  return out.join('\n\n');
+}
+
+/**
+ * Worker prompt entry point (DESIGN.md Phase 1).
+ *
+ * Layered output:
+ *   harness/worker-shape   — what each layer means (optional fragment)
+ *   Layer A — buildSystemPrompt(...) output (identity + persona + Layer-A
+ *             summaries via `summaries`)
+ *   Layer B — `preselectedMemory` block (router-supplied)
+ *   Layer C — `taskScope` block (active task summary + related-task window)
+ *   Layer D — `turnScope` block (inbound envelope, in-flight turn notes)
+ *
+ * Layers B/C/D are passed in as already-rendered strings so this builder
+ * stays free of memory-store / task-store IO. Phase 2/3 will provide the
+ * real renderers; for now any caller can stub them.
+ *
+ * @param {{
+ *   language?: 'en'|'zh',
+ *   summaries?: {user?: string, group?: string, vp?: string},
+ *   preselectedMemory?: string,
+ *   taskScope?: string,
+ *   turnScope?: string,
+ *   includeShape?: boolean,
+ *   ...rest: import('./prompts.js').buildSystemPrompt
+ * }} params
+ * @returns {string}
+ */
+export function buildWorkerPrompt(params = {}) {
+  const {
+    language = 'en',
+    summaries,
+    preselectedMemory,
+    taskScope,
+    turnScope,
+    includeShape = true,
+    ...rest
+  } = params;
+
+  const parts = [];
+
+  // Optional harness — describes the layered shape.
+  if (includeShape) {
+    const shape = getTemplate('harnessWorkerShape', language);
+    if (shape) parts.push(shape);
+  }
+
+  // Layer A — base + persona + summaries.
+  const baseBlock = buildSystemPrompt({ ...rest, language });
+  if (baseBlock) parts.push(baseBlock);
+  const summaryBlock = renderLayerASummaries(summaries, language);
+  if (summaryBlock) parts.push(summaryBlock);
+
+  // Layer B — router-preselected memory entries (rendered upstream).
+  if (typeof preselectedMemory === 'string' && preselectedMemory.trim()) {
+    parts.push(preselectedMemory.trim());
+  }
+
+  // Layer C — task scope.
+  if (typeof taskScope === 'string' && taskScope.trim()) {
+    parts.push(taskScope.trim());
+  }
+
+  // Layer D — turn scope (inbound envelope, in-flight turn notes).
+  if (typeof turnScope === 'string' && turnScope.trim()) {
+    parts.push(turnScope.trim());
+  }
+
+  return parts.join('\n\n');
+}
+
+/**
+ * Router prompt entry point (DESIGN.md Phase 1).
+ *
+ * The Router sees identity context (no persona — it speaks as a routing
+ * brain, not as any specific VP), the three Layer-A summaries, and a
+ * `routerContext` block prepared upstream (group roster, recent turns,
+ * pending tasks). Output schema is enforced by the harness fragment.
+ *
+ * @param {{
+ *   language?: 'en'|'zh',
+ *   summaries?: {user?: string, group?: string, vp?: string},
+ *   routerContext?: string,
+ *   includeShape?: boolean,
+ * }} params
+ * @returns {string}
+ */
+export function buildRouterPrompt(params = {}) {
+  const { language = 'en', summaries, routerContext, includeShape = true } = params;
+  const parts = [];
+
+  if (includeShape) {
+    const shape = getTemplate('harnessRouterShape', language);
+    if (shape) parts.push(shape);
+  }
+
+  const summaryBlock = renderLayerASummaries(summaries, language);
+  if (summaryBlock) parts.push(summaryBlock);
+
+  if (typeof routerContext === 'string' && routerContext.trim()) {
+    parts.push(routerContext.trim());
+  }
+
+  return parts.join('\n\n');
+}
+
