@@ -30,6 +30,7 @@ import { getThreadStore, MAIN_THREAD_ID } from './threads/store.js';
 import { pickEffort, parseEffortPrefix } from './effort.js';
 import { normalizeEffort } from './models.js';
 import { attachRouterPlan, extractPriorPlan, stripMetaForWire } from './router/continuity.js';
+import { resolveThinking } from './router/thinking.js';
 
 /**
  * task-324 — Turn cap removed.
@@ -743,7 +744,34 @@ export class Engine {
       try {
         // task-327b: resolve effort per-turn so the long-loop auto-bump
         // kicks in once toolLoopTurns crosses the threshold.
-        const resolvedEffort = pickEffort({ scenario, toolLoopTurns, userEffort });
+        let resolvedEffort = pickEffort({ scenario, toolLoopTurns, userEffort });
+
+        // DESIGN.md §9.16: thinking-mode precedence chain. When a VP
+        // persona is active, the router/continuity bookkeeping has more
+        // signal than the raw scenario tag — the prior assistant turn's
+        // routerPlan, the VP's role default, and the global config all
+        // outrank the scenario picker for `'high'|'max'`. UI/userEffort
+        // is already honoured by pickEffort (highest precedence).
+        if (vpPersona && vpPersona.vpId) {
+          const priorPlan = extractPriorPlan(conversationMessages, vpPersona.vpId);
+          const thinkingCfg = (this.#config && this.#config.thinking) || {};
+          const resolved = resolveThinking({
+            uiOverride: (userEffort === 'max' || userEffort === 'high') ? userEffort : null,
+            routerPlan: null, // PR-C scope: priorPlan continuity only;
+                              // live router-plan thinking is a follow-up.
+            priorPlan: priorPlan && priorPlan.thinking ? priorPlan.thinking : null,
+            vpDefault: typeof vpPersona.thinking === 'string' ? vpPersona.thinking : null,
+            globalDefault: typeof thinkingCfg.default === 'string' ? thinkingCfg.default : null,
+            allowRouterEscalate: thinkingCfg.allowRouterEscalate !== false,
+          });
+          // Only adopt the chain's choice when it strengthens the
+          // baseline. We never weaken below pickEffort (e.g. consolidate
+          // = 'max' must not be downgraded to 'high' just because the VP
+          // default is 'high').
+          if (resolved.value === 'max' || (resolved.value === 'high' && resolvedEffort === 'low')) {
+            resolvedEffort = resolved.value;
+          }
+        }
 
         // Stream from adapter
         for await (const event of this.#adapter.stream({
