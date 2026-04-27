@@ -14,7 +14,7 @@ import { buildSystemPrompt } from '../../../agent/unify/prompts.js';
 import RouteForwardTool from '../../../agent/unify/tools/route-forward.js';
 
 describe('buildSystemPrompt — vpPersona block', () => {
-  it('renders ## active_persona with display name + role + persona body', () => {
+  it('renders persona-as-identity H1 with display name + role + persona body', () => {
     const out = buildSystemPrompt({
       language: 'en',
       vpPersona: {
@@ -23,10 +23,13 @@ describe('buildSystemPrompt — vpPersona block', () => {
         persona: 'I prefer working code over working theories.',
       },
     });
-    expect(out).toMatch(/## active_persona/);
-    expect(out).toMatch(/Linus Torvalds/);
-    expect(out).toMatch(/kernel hacker/);
+    // Phase 8 wire-up: persona is the IDENTITY layer, emitted as
+    // `# <name> — <role>` H1 (not the legacy `## active_persona` overlay).
+    expect(out).toMatch(/# Linus Torvalds — kernel hacker/);
     expect(out).toMatch(/working code over working theories/);
+    // The legacy Yeaft companion identity must NOT appear when a VP
+    // persona is active.
+    expect(out).not.toMatch(/Yeaft — AI Companion/);
   });
 
   it('omits the block when displayName is missing (no useful signal)', () => {
@@ -34,7 +37,6 @@ describe('buildSystemPrompt — vpPersona block', () => {
       language: 'en',
       vpPersona: { persona: 'orphan persona body' },
     });
-    expect(out).not.toMatch(/## active_persona/);
     expect(out).not.toMatch(/orphan persona body/);
   });
 
@@ -43,8 +45,9 @@ describe('buildSystemPrompt — vpPersona block', () => {
       language: 'en',
       vpPersona: { displayName: 'Grace Hopper' },
     });
-    expect(out).toMatch(/## active_persona/);
-    expect(out).toMatch(/Grace Hopper/);
+    expect(out).toMatch(/# Grace Hopper/);
+    // First-person identity assertion.
+    expect(out).toMatch(/You ARE \*\*Grace Hopper\*\*/);
   });
 
   it('zh language renders the zh persona intro', () => {
@@ -56,8 +59,8 @@ describe('buildSystemPrompt — vpPersona block', () => {
         persona: '只看代码。',
       },
     });
-    expect(out).toMatch(/## active_persona/);
-    expect(out).toMatch(/本轮你以/);
+    expect(out).toMatch(/# Linus Torvalds — kernel hacker/);
+    expect(out).toMatch(/你就是/);
     expect(out).toMatch(/只看代码/);
   });
 });
