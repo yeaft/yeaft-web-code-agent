@@ -280,3 +280,62 @@ export async function runPlansSequential(plans, runOne, opts = {}) {
   }
   return { results, errors };
 }
+
+/**
+ * Parallel fan-out runner (Phase 3.5). Calls `runOne(plan, index)` for each
+ * plan concurrently, with optional `concurrency` cap. Results are returned
+ * in input order regardless of completion order. Errors from `runOne` are
+ * caught per-plan and DO NOT abort siblings (DESIGN.md §9.1 — concurrent
+ * VP turns must be independent).
+ *
+ * NOTE: parallel mode loses the `prior[]` channel that the sequential
+ * runner provides. Callers that need plan N to read plan N-1's output must
+ * use `runPlansSequential`. The dispatcher chooses based on whether the
+ * plans share a `targetTaskId` (parallel-safe) or pipeline data
+ * (sequential-only).
+ *
+ * @param {VpPlan[]} plans
+ * @param {(plan: VpPlan, index: number) => Promise<*>} runOne
+ * @param {{ groupMemberIds?: string[], concurrency?: number }} [opts]
+ * @returns {Promise<{ results: any[], errors: Array<{ index: number, error: Error }> }>}
+ */
+export async function runPlansParallel(plans, runOne, opts = {}) {
+  if (!Array.isArray(plans)) throw new Error('runPlansParallel: plans array required');
+  if (typeof runOne !== 'function') throw new Error('runPlansParallel: runOne fn required');
+  const memberSet = Array.isArray(opts.groupMemberIds)
+    ? new Set(opts.groupMemberIds) : null;
+  const concurrency = Number.isFinite(opts.concurrency) && opts.concurrency > 0
+    ? Math.floor(opts.concurrency) : Infinity;
+
+  const results = new Array(plans.length);
+  const errors = [];
+  let nextIdx = 0;
+
+  const runSlot = async () => {
+    // Workers pull tasks from a shared queue index — preserves backpressure
+    // when concurrency < plans.length without per-task scheduling overhead.
+    while (true) {
+      const i = nextIdx;
+      nextIdx += 1;
+      if (i >= plans.length) return;
+      const plan = plans[i];
+      if (memberSet && !memberSet.has(plan.vpId)) {
+        results[i] = { index: i, vpId: plan.vpId, skipped: 'not_member' };
+        continue;
+      }
+      try {
+        results[i] = await runOne(plan, i);
+      } catch (err) {
+        errors.push({ index: i, error: err });
+        results[i] = { index: i, vpId: plan.vpId, error: err };
+      }
+    }
+  };
+
+  const workerCount = Math.min(plans.length, concurrency);
+  const workers = [];
+  for (let w = 0; w < workerCount; w += 1) workers.push(runSlot());
+  await Promise.all(workers);
+
+  return { results, errors };
+}

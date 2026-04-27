@@ -23,6 +23,7 @@ import {
   buildDirectDecision,
   wrapLegacyDecision,
   runPlansSequential,
+  runPlansParallel,
 } from '../../../../agent/unify/router/vp-planner.js';
 
 describe('validatePlan', () => {
@@ -303,6 +304,94 @@ describe('runPlansSequential', () => {
     const { results, errors } = await runPlansSequential([], runOne);
     expect(results).toEqual([]);
     expect(errors).toEqual([]);
+    expect(runOne).not.toHaveBeenCalled();
+  });
+});
+
+describe('runPlansParallel', () => {
+  const buildPlans = (n) =>
+    Array.from({ length: n }, (_, i) => validatePlan({ vpId: `vp${i}` }));
+
+  it('throws on bad inputs', async () => {
+    await expect(runPlansParallel(null, () => {})).rejects.toThrow(/plans array required/);
+    await expect(runPlansParallel([], 'nope')).rejects.toThrow(/runOne fn required/);
+  });
+
+  it('runs all plans and returns results in input order regardless of completion order', async () => {
+    const plans = buildPlans(4);
+    // Reverse-staggered delays so vp3 finishes first, vp0 last.
+    const runOne = async (plan, idx) => {
+      await new Promise(r => setTimeout(r, (plans.length - idx) * 5));
+      return { vp: plan.vpId, idx };
+    };
+    const { results, errors } = await runPlansParallel(plans, runOne);
+    expect(errors).toEqual([]);
+    expect(results.map(r => r.vp)).toEqual(['vp0', 'vp1', 'vp2', 'vp3']);
+  });
+
+  it('actually runs concurrently (peak in-flight > 1)', async () => {
+    const plans = buildPlans(4);
+    let inFlight = 0;
+    let peak = 0;
+    const runOne = async (plan) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise(r => setTimeout(r, 10));
+      inFlight -= 1;
+      return { vp: plan.vpId };
+    };
+    await runPlansParallel(plans, runOne);
+    expect(peak).toBeGreaterThan(1);
+  });
+
+  it('respects concurrency cap', async () => {
+    const plans = buildPlans(6);
+    let inFlight = 0;
+    let peak = 0;
+    const runOne = async (plan) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise(r => setTimeout(r, 10));
+      inFlight -= 1;
+      return { vp: plan.vpId };
+    };
+    await runPlansParallel(plans, runOne, { concurrency: 2 });
+    expect(peak).toBeLessThanOrEqual(2);
+    expect(peak).toBeGreaterThan(0);
+  });
+
+  it('captures per-plan errors without aborting siblings', async () => {
+    const plans = buildPlans(3);
+    const runOne = async (plan, idx) => {
+      if (idx === 1) throw new Error(`boom-${plan.vpId}`);
+      return { vp: plan.vpId };
+    };
+    const { results, errors } = await runPlansParallel(plans, runOne);
+    expect(errors).toHaveLength(1);
+    expect(errors[0].index).toBe(1);
+    expect(errors[0].error.message).toBe('boom-vp1');
+    expect(results[0]).toEqual({ vp: 'vp0' });
+    expect(results[1]).toMatchObject({ index: 1, vpId: 'vp1' });
+    expect(results[1].error.message).toBe('boom-vp1');
+    expect(results[2]).toEqual({ vp: 'vp2' });
+  });
+
+  it('skips non-members without invoking runOne', async () => {
+    const plans = buildPlans(3);
+    const runOne = vi.fn(async (plan) => ({ vp: plan.vpId }));
+    const { results } = await runPlansParallel(plans, runOne, {
+      groupMemberIds: ['vp0', 'vp2'],
+    });
+    expect(runOne).toHaveBeenCalledTimes(2);
+    expect(results[0]).toEqual({ vp: 'vp0' });
+    expect(results[1]).toMatchObject({ skipped: 'not_member', vpId: 'vp1', index: 1 });
+    expect(results[2]).toEqual({ vp: 'vp2' });
+  });
+
+  it('handles empty plans[] without launching workers', async () => {
+    const runOne = vi.fn();
+    const out = await runPlansParallel([], runOne);
+    expect(out).toEqual({ results: [], errors: [] });
     expect(runOne).not.toHaveBeenCalled();
   });
 });
