@@ -25,6 +25,8 @@ import { shouldConsolidate, consolidate, partitionMessages } from './memory/cons
 import { extractMemories } from './memory/extract.js';
 import { runCompact as runCompactOrchestrator } from './compact/orchestrator.js';
 import { evaluateCompactTriggers } from './compact/triggers.js';
+import { archiveTurn } from './archive/turn-archive.js';
+import { archiveToolResults } from './archive/tool-results.js';
 import { buildMemoryInjection } from './memory/layout.js';
 import { buildUserProfile } from './memory/user-memory-store.js';
 import { readSummary as readScopeSummary } from './memory/scope-tree.js';
@@ -638,7 +640,23 @@ export class Engine {
       },
       archive: async (_groupIdx, groupMsgs) => {
         for (const m of groupMsgs) if (m.id) archiveIds.push(m.id);
-        return { turnId: groupMsgs[0]?.id || `g_${Date.now()}` };
+        const turnId = groupMsgs[0]?.id || `g_${Date.now()}`;
+        // Phase 8 PR-E: persist the cooling turn to
+        // <yeaftDir>/memory/archive/<turnId>.md so message_trace can
+        // replay it later. Scope is "user/" by default — group/task
+        // scoping is a follow-up that will arrive with multi-VP archive
+        // routing. Best-effort: archive failure must not abort compact.
+        if (this.#yeaftDir) {
+          try {
+            await archiveTurn({
+              root: `${this.#yeaftDir}/memory`,
+              scopeDir: 'user',
+              turnId,
+              messages: groupMsgs,
+            });
+          } catch { /* best-effort */ }
+        }
+        return { turnId };
       },
       extract: async (coolingMessages) => {
         try {
@@ -900,11 +918,40 @@ export class Engine {
           }
         }
 
+        // Phase 8 PR-E: archive bulky tool results before they go on the
+        // wire. archiveToolResults walks the messages array and replaces
+        // any `role:'tool'` body older than turnAgeMin AND larger than
+        // lengthMin with a small stub, persisting the original to
+        // <yeaftDir>/memory/<scopeDir>/archive/tool-results/<id>.md so
+        // message_trace can fetch it on demand. The stub keeps the
+        // OpenAI/Anthropic toolCallId pairing intact.
+        let wireMessages = stripMetaForWire([...conversationMessages]);
+        if (this.#yeaftDir && (this.#config?.archive?.toolResults !== false)) {
+          try {
+            const swept = await archiveToolResults({
+              root: `${this.#yeaftDir}/memory`,
+              scopeDir: 'user',
+              messages: wireMessages,
+              turnAgeMin: this.#config?.archive?.turnAgeMin,
+              lengthMin: this.#config?.archive?.lengthMin,
+            });
+            wireMessages = swept.nextMessages;
+            // Mutate the in-memory conversation array so subsequent turns
+            // see the stub too — without this, the next turn re-archives
+            // the same body.
+            if (swept.archivedCount > 0) {
+              for (let i = 0; i < conversationMessages.length; i += 1) {
+                conversationMessages[i] = wireMessages[i];
+              }
+            }
+          } catch { /* best-effort */ }
+        }
+
         // Stream from adapter
         for await (const event of this.#adapter.stream({
           model: currentModel,
           system: systemPrompt,
-          messages: stripMetaForWire([...conversationMessages]),
+          messages: wireMessages,
           tools: toolDefs.length > 0 ? toolDefs : undefined,
           maxTokens: this.#config.maxOutputTokens || 16384,
           effort: resolvedEffort,
