@@ -40,7 +40,7 @@
   outline: none;
 }
 .usv2-search-input:focus {
-  box-shadow: 0 0 0 2px var(--accent, #007aff);
+  box-shadow: 0 0 0 2px var(--accent);
 }
 /* task-312: in-field clear button (appears only when query non-empty) */
 .usv2-search-clear {
@@ -153,7 +153,7 @@
 }
 /* message-kind result row — slight accent for easy distinction */
 .usv2-result-message .usv2-result-kind {
-  color: var(--accent, #007aff);
+  color: var(--accent);
 }
 
 /* Scroll area -------------------------------------------------------------- */
@@ -239,8 +239,8 @@
 }
 .usv2-unread {
   flex: 0 0 auto;
-  background: var(--accent, #007aff);
-  color: #fff;
+  background: var(--accent);
+  color: var(--accent-fg);
   font-size: 10px;
   font-weight: 600;
   padding: 1px 6px;
@@ -257,11 +257,11 @@
   flex: 0 0 auto;
 }
 .usv2-dot-active {
-  background: #34c759; /* solid — active */
+  background: var(--status-online); /* solid — active */
 }
 .usv2-dot-active.running {
-  background: #ff9500;
-  box-shadow: 0 0 0 2px rgba(255,149,0,0.25);
+  background: var(--status-busy);
+  box-shadow: 0 0 0 2px var(--warn-bg);
 }
 .usv2-dot-idle {
   background: transparent;
@@ -275,7 +275,7 @@
   opacity: 0.5;
 }
 .usv2-dot-group {
-  background: var(--accent, #007aff);
+  background: var(--accent);
   opacity: 0.75;
 }
 
@@ -330,7 +330,7 @@
   background: var(--sidebar-hover, rgba(0,0,0,0.05));
 }
 .usv2-group-row-menu-danger {
-  color: #ff3b30;
+  color: var(--error);
 }
 
 /* Task tree ---------------------------------------------------------------- */
@@ -376,11 +376,11 @@
 }
 .usv2-task-link {
   font-size: 10px;
-  color: var(--accent, #007aff);
+  color: var(--accent);
   flex: 0 0 auto;
 }
 .usv2-task-status-done .usv2-task-title { text-decoration: line-through; opacity: 0.5; }
-.usv2-task-status-in_progress .usv2-task-id { color: var(--accent, #007aff); }
+.usv2-task-status-in_progress .usv2-task-id { color: var(--accent); }
 
 /* Empty state -------------------------------------------------------------- */
 .usv2-empty {
@@ -501,7 +501,7 @@
   flex: 0 0 auto;
 }
 .usv2-status-dot.online {
-  background: #34c759;
+  background: var(--status-online);
 }
 .usv2-brand-label {
   overflow: hidden;
@@ -516,9 +516,9 @@
   color: var(--text-muted, #86868b);
   background: var(--sidebar-hover, rgba(0,0,0,0.05));
 }
-.usv2-latency.latency-good { color: #34c759; }
-.usv2-latency.latency-warn { color: #ff9500; }
-.usv2-latency.latency-bad  { color: #ff3b30; }
+.usv2-latency.latency-good { color: var(--status-online); }
+.usv2-latency.latency-warn { color: var(--status-busy); }
+.usv2-latency.latency-bad  { color: var(--status-error); }
 
 .usv2-header-actions {
   display: flex;
@@ -545,7 +545,7 @@
 }
 .usv2-icon-btn.active {
   background: var(--session-active, rgba(0,122,255,0.14));
-  color: var(--accent-blue, var(--accent, #007aff));
+  color: var(--accent-blue, var(--accent));
 }
 
 /* ===========================================================================

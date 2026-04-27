@@ -29,7 +29,7 @@
 }
 .group-wizard-step.is-active {
   color: var(--accent);
-  background: rgba(74, 158, 255, 0.12);
+  background: var(--focus-ring);
   font-weight: 600;
 }
 
@@ -62,7 +62,7 @@
 }
 .group-wizard-error {
   font-size: 12px;
-  color: #ff3b30;
+  color: var(--error);
   line-height: 1.4;
 }
 
@@ -104,7 +104,7 @@
   background: var(--sidebar-hover);
 }
 .group-wizard-roster-item.is-selected label {
-  background: rgba(74, 158, 255, 0.08);
+  background: var(--accent-bg);
 }
 .group-wizard-roster-item input[type="checkbox"] {
   flex: 0 0 auto;
@@ -120,7 +120,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
+  color: var(--accent-fg);
   font-size: 12px;
   font-weight: 600;
 }
@@ -162,7 +162,7 @@
   color: var(--text-primary);
 }
 .group-wizard-default-star.is-on {
-  color: #f5b400;
+  color: var(--warn-text);
 }
 .group-wizard-default-star:disabled {
   cursor: default;
@@ -248,11 +248,11 @@
 }
 .group-wizard-input:focus {
   border-color: var(--accent-blue);
-  box-shadow: 0 0 0 2px rgba(74, 158, 255, 0.12);
+  box-shadow: 0 0 0 2px var(--focus-ring);
 }
 .group-wizard-input.is-error {
-  border-color: #ff3b30;
-  box-shadow: 0 0 0 2px rgba(255, 59, 48, 0.12);
+  border-color: var(--error);
+  box-shadow: 0 0 0 2px var(--error-bg);
 }
 
 /* Summary (step 3) --------------------------------------------------------- */
@@ -306,7 +306,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
+  color: var(--accent-fg);
   font-size: 10px;
   font-weight: 600;
 }

@@ -73,6 +73,7 @@ select option:checked {
   --border-light: #eceae5;
   --accent: #2c2c2c;
   --accent-hover: #444444;
+  --accent-fg: #ffffff;
   --accent-blue: #4a7cc9;
   --accent-blue-hover: #3a6ab5;
   --error: #d65d5d;
@@ -173,6 +174,50 @@ select option:checked {
   /* SVG cat typing indicator */
   --cat-eye-fill: var(--bg-primary, #fff);
   --cat-pupil-fill: var(--text-primary);
+
+  /* ── Unified alias tokens (used by unify/* + crew/* + git/* CSS) ── */
+  /* Surfaces */
+  --surface-0: var(--bg-main);
+  --surface-1: var(--bg-workbench);
+  --surface-2: var(--bg-user-msg);
+  --surface-bg: var(--bg-sidebar);
+  --bg-subtle: var(--bg-user-msg-subtle);
+  --bg-panel: var(--bg-sidebar);
+  /* Hover */
+  --surface-hover: var(--sidebar-hover);
+  --bg-hover: var(--sidebar-hover);
+  --hover-bg: var(--sidebar-hover);
+  --sidebar-selected: var(--session-active);
+  /* Borders */
+  --border-subtle: var(--border-light);
+  --border-strong: var(--border-color);
+  /* Text */
+  --text-tertiary: var(--text-muted);
+  /* Accents */
+  --accent-color: var(--accent);
+  --accent-soft: rgba(74, 124, 201, 0.07);
+  --accent-bg: rgba(74, 124, 201, 0.07);
+  --mention-bg: rgba(74, 124, 201, 0.10);
+  --pinned-bg: rgba(163, 129, 51, 0.08);
+  --link-color: var(--accent-blue);
+  /* Task accent (used by Unify task chips) — reuse accent-blue */
+  --task-accent: var(--accent-blue);
+  --task-accent-bg: rgba(74, 124, 201, 0.10);
+  /* Status text/bg */
+  --error-text: var(--error);
+  --error-bg: rgba(214, 93, 93, 0.10);
+  --danger-color: var(--error);
+  --warn-text: #b07a1f;
+  --warn-bg: rgba(176, 122, 31, 0.10);
+  /* Focus ring (theme-aware replacement for hardcoded blue rings) */
+  --focus-ring: rgba(74, 124, 201, 0.18);
+  /* Status dots (warm-leaning, replaces Apple #34c759/#ff9500/#ff3b30) */
+  --status-online: #4a9e5c;
+  --status-busy:   #c98a3d;
+  --status-error:  #c45c52;
+  /* Fonts */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
 }
 
 /* Dark Theme - warm, eye-friendly tones */
@@ -192,6 +237,7 @@ select option:checked {
   --border-light: #2a2826;
   --accent: #d8d5d0;
   --accent-hover: #b5b2ad;
+  --accent-fg: #1a1a1a;
   --accent-blue: #b5b2ad;
   --accent-blue-hover: #9a9792;
   --error: #d09090;
@@ -292,6 +338,38 @@ select option:checked {
   /* SVG cat typing indicator — visible eyes in dark mode (not too bright, not invisible) */
   --cat-eye-fill: rgba(255, 255, 255, 0.7);
   --cat-pupil-fill: #1a1a1a;
+
+  /* ── Unified alias tokens — dark theme overrides ── */
+  --surface-0: var(--bg-main);
+  --surface-1: var(--bg-workbench);
+  --surface-2: var(--bg-user-msg);
+  --surface-bg: var(--bg-sidebar);
+  --bg-subtle: var(--bg-user-msg-subtle);
+  --bg-panel: var(--bg-sidebar);
+  --surface-hover: var(--sidebar-hover);
+  --bg-hover: var(--sidebar-hover);
+  --hover-bg: var(--sidebar-hover);
+  --sidebar-selected: var(--session-active);
+  --border-subtle: var(--border-light);
+  --border-strong: var(--border-color);
+  --text-tertiary: var(--text-muted);
+  --accent-color: var(--accent);
+  --accent-soft: rgba(181, 178, 173, 0.08);
+  --accent-bg: rgba(181, 178, 173, 0.08);
+  --mention-bg: rgba(181, 178, 173, 0.12);
+  --pinned-bg: rgba(205, 180, 121, 0.10);
+  --link-color: var(--accent-blue);
+  --task-accent: var(--accent-blue);
+  --task-accent-bg: rgba(181, 178, 173, 0.12);
+  --error-text: var(--error);
+  --error-bg: rgba(208, 144, 144, 0.12);
+  --danger-color: var(--error);
+  --warn-text: #d6b07a;
+  --warn-bg: rgba(214, 176, 122, 0.10);
+  --focus-ring: rgba(181, 178, 173, 0.22);
+  --status-online: #7ab87e;
+  --status-busy:   #cda284;
+  --status-error:  #d09090;
 }
 
 html {

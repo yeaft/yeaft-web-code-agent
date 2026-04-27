@@ -317,7 +317,7 @@
 .vp-crud-input:focus,
 .vp-crud-textarea:focus {
   border-color: var(--accent-blue);
-  box-shadow: 0 0 0 3px rgba(74, 124, 201, 0.18);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 .vp-crud-input::placeholder,
 .vp-crud-textarea::placeholder {
@@ -381,8 +381,8 @@
  * inverted. Secondary is transparent + border.
  */
 .vp-crud-primary-btn {
-  background: #ffffff;
-  color: #171717;
+  background: var(--accent);
+  color: var(--accent-fg);
   border: none;
   padding: 10px 20px;
   border-radius: 8px;
@@ -390,10 +390,6 @@
   font-weight: 500;
   cursor: pointer;
   transition: background 0.2s, opacity 0.2s;
-}
-[data-theme="light"] .vp-crud-primary-btn {
-  background: #171717;
-  color: #ffffff;
 }
 .vp-crud-primary-btn:hover:not(:disabled) { opacity: 0.85; }
 .vp-crud-primary-btn:disabled { opacity: 0.35; cursor: not-allowed; }
