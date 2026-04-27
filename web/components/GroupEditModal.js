@@ -2,11 +2,11 @@
  * GroupEditModal — task-338-F3 follow-up (N1).
  *
  * Modal replacement for the native window.prompt() / window.confirm() used
- * by GroupSelector for rename/archive. Styled after VpCrudModal's overlay
+ * by GroupSelector for rename/delete. Styled after VpCrudModal's overlay
  * pattern so the unify surface is coherent.
  *
  * Props:
- *   mode     — 'rename' | 'archive'
+ *   mode     — 'rename' | 'delete'
  *   group    — { id, name, ... }  (the row the user is acting on)
  *
  * Emits:
@@ -20,7 +20,7 @@
 export default {
   name: 'GroupEditModal',
   props: {
-    mode: { type: String, required: true },       // 'rename' | 'archive'
+    mode: { type: String, required: true },       // 'rename' | 'delete'
     group: { type: Object, required: true },
   },
   emits: ['close', 'confirm'],
@@ -35,11 +35,11 @@ export default {
       return (this.group && (this.group.name || this.group.id)) || '';
     },
     isRename() { return this.mode === 'rename'; },
-    isArchive() { return this.mode === 'archive'; },
+    isDelete() { return this.mode === 'delete'; },
     trimmed() { return String(this.nameDraft || '').trim(); },
     canSubmit() {
       if (this.submitted) return false;
-      if (this.isArchive) return true;
+      if (this.isDelete) return true;
       if (!this.trimmed) return false;
       // Disallow no-op rename (same as current name).
       if (this.trimmed === (this.group?.name || '')) return false;
@@ -48,17 +48,17 @@ export default {
     titleKey() {
       return this.isRename
         ? 'unify.group.editModal.renameTitle'
-        : 'unify.group.editModal.archiveTitle';
+        : 'unify.group.editModal.deleteTitle';
     },
     bodyKey() {
       return this.isRename
         ? 'unify.group.editModal.renameBody'
-        : 'unify.group.editModal.archiveBody';
+        : 'unify.group.editModal.deleteBody';
     },
     submitKey() {
       return this.isRename
         ? 'unify.group.editModal.renameSubmit'
-        : 'unify.group.editModal.archiveSubmit';
+        : 'unify.group.editModal.deleteSubmit';
     },
   },
   mounted() {
@@ -89,7 +89,7 @@ export default {
       if (this.isRename) {
         this.$emit('confirm', { mode: 'rename', groupId: this.group.id, name: this.trimmed });
       } else {
-        this.$emit('confirm', { mode: 'archive', groupId: this.group.id });
+        this.$emit('confirm', { mode: 'delete', groupId: this.group.id });
       }
     },
     tr(key, params) {
@@ -134,7 +134,7 @@ export default {
             <button
               type="submit"
               class="group-edit-btn is-primary"
-              :class="{ 'is-danger': isArchive }"
+              :class="{ 'is-danger': isDelete }"
               :disabled="!canSubmit"
             >
               {{ tr(submitKey) }}

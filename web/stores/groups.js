@@ -116,7 +116,7 @@ export const useGroupsStore = defineStore('groups', {
         this.applySnapshotUpsert(result.group);
         this.activeGroupId = result.group.id;
       }
-      if (result.ok && result.op === 'archive' && result.groupId) {
+      if (result.ok && (result.op === 'archive' || result.op === 'delete') && result.groupId) {
         delete this.groups[result.groupId];
         this.groupOrder = this.groupOrder.filter(id => id !== result.groupId);
         if (this.activeGroupId === result.groupId) {

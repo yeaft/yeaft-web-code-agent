@@ -207,8 +207,8 @@ export default {
                 <button type="button" role="menuitem" class="usv2-group-row-menu-item" @click="startRenameGroup(g)">
                   {{ $t('unify.group.rename') }}
                 </button>
-                <button type="button" role="menuitem" class="usv2-group-row-menu-item usv2-group-row-menu-danger" @click="startArchiveGroup(g)">
-                  {{ $t('unify.group.archive') }}
+                <button type="button" role="menuitem" class="usv2-group-row-menu-item usv2-group-row-menu-danger" @click="startDeleteGroup(g)">
+                  {{ $t('unify.group.delete') }}
                 </button>
               </div>
             </div>
@@ -428,23 +428,23 @@ export default {
         @created="onGroupCreated"
       />
 
-      <!-- task-334m: Archive confirm modal (destructive 2nd-confirm). -->
-      <div v-if="archiveConfirm.open" class="usv2-merge-overlay usv2-merge-overlay-confirm" @click.self="cancelGroupAction">
+      <!-- task-334m / Bug 8: Delete confirm modal (destructive 2nd-confirm). -->
+      <div v-if="deleteConfirm.open" class="usv2-merge-overlay usv2-merge-overlay-confirm" @click.self="cancelGroupAction">
         <div class="usv2-merge-panel usv2-merge-panel-confirm">
-          <div class="usv2-merge-title">{{ $t('unify.group.archive') }}</div>
-          <div class="usv2-merge-warning">{{ $t('unify.group.archiveConfirm', { name: archiveConfirm.name }) }}</div>
+          <div class="usv2-merge-title">{{ $t('unify.group.delete') }}</div>
+          <div class="usv2-merge-warning">{{ $t('unify.group.deleteConfirm', { name: deleteConfirm.name }) }}</div>
           <div class="usv2-merge-actions">
-            <button type="button" class="usv2-merge-cancel" @click="cancelGroupAction" :disabled="archiveConfirm.busy">
+            <button type="button" class="usv2-merge-cancel" @click="cancelGroupAction" :disabled="deleteConfirm.busy">
               {{ label('cancel') }}
             </button>
-            <button type="button" class="usv2-merge-confirm" @click="confirmArchiveGroup" :disabled="archiveConfirm.busy">
-              {{ archiveConfirm.busy ? $t('unify.group.archivingEllipsis') : $t('unify.group.archive') }}
+            <button type="button" class="usv2-merge-confirm" @click="confirmDeleteGroup" :disabled="deleteConfirm.busy">
+              {{ deleteConfirm.busy ? $t('unify.group.deletingEllipsis') : $t('unify.group.delete') }}
             </button>
           </div>
         </div>
       </div>
 
-      <!-- task-334m: Rename modal (inline, mirrors archive-confirm chrome). -->
+      <!-- task-334m: Rename modal (inline, mirrors delete-confirm chrome). -->
       <div v-if="renameModal.open" class="usv2-merge-overlay" @click.self="cancelGroupAction">
         <div class="usv2-merge-panel">
           <div class="usv2-merge-title">{{ $t('unify.group.rename') }}</div>
@@ -513,9 +513,9 @@ export default {
       // task-334m: group-create wizard visibility.
       groupWizardOpen: false,
       groupsOpen: true,
-      // task-334m prev-2 rev: per-row action menu + rename/archive modals.
+      // task-334m prev-2 rev: per-row action menu + rename/delete modals.
       groupMenu: { open: false, groupId: null },
-      archiveConfirm: { open: false, groupId: null, name: '', busy: false },
+      deleteConfirm: { open: false, groupId: null, name: '', busy: false },
       renameModal: { open: false, groupId: null, original: '', value: '', error: '', busy: false },
       // task-342: server version shown in sidebar-bottom (mirrors ChatPage).
       serverVersion: '',
@@ -876,7 +876,7 @@ export default {
     groupMemberCount(g) {
       return Array.isArray(g?.roster) ? g.roster.length : 0;
     },
-    // task-334m prev-2 rev: per-row kebab + rename/archive wiring.
+    // task-334m prev-2 rev: per-row kebab + rename/delete wiring.
     openGroupMenu(g, evt) {
       if (!g || !g.id) return;
       // Toggle when clicking the same row again.
@@ -917,33 +917,33 @@ export default {
         if (el && typeof el.focus === 'function') el.focus();
       });
     },
-    startArchiveGroup(g) {
+    startDeleteGroup(g) {
       this.groupMenu = { open: false, groupId: null };
       if (!g || !g.id) return;
-      this.archiveConfirm = {
+      this.deleteConfirm = {
         open: true, groupId: g.id,
         name: this.groupDisplayName(g),
         busy: false,
       };
     },
     cancelGroupAction() {
-      if (this.archiveConfirm.busy || this.renameModal.busy) return;
-      this.archiveConfirm = { open: false, groupId: null, name: '', busy: false };
+      if (this.deleteConfirm.busy || this.renameModal.busy) return;
+      this.deleteConfirm = { open: false, groupId: null, name: '', busy: false };
       this.renameModal = { open: false, groupId: null, original: '', value: '', error: '', busy: false };
     },
-    async confirmArchiveGroup() {
-      const id = this.archiveConfirm.groupId;
-      if (!id || this.archiveConfirm.busy) return;
+    async confirmDeleteGroup() {
+      const id = this.deleteConfirm.groupId;
+      if (!id || this.deleteConfirm.busy) return;
       const chat = this.chatStore;
       if (!chat || typeof chat.groupCrudRequest !== 'function') {
-        this.archiveConfirm.open = false;
+        this.deleteConfirm.open = false;
         return;
       }
-      this.archiveConfirm.busy = true;
+      this.deleteConfirm.busy = true;
       try {
-        await chat.groupCrudRequest('archive', { groupId: id });
+        await chat.groupCrudRequest('delete', { groupId: id });
       } finally {
-        this.archiveConfirm = { open: false, groupId: null, name: '', busy: false };
+        this.deleteConfirm = { open: false, groupId: null, name: '', busy: false };
       }
     },
     async confirmRenameGroup() {

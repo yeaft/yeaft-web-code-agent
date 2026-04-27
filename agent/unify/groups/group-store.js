@@ -151,6 +151,8 @@ export function listGroups(groupsRoot) {
   if (!existsSync(groupsRoot)) return [];
   const out = [];
   for (const name of readdirSync(groupsRoot)) {
+    // Skip dotfiles and legacy soft-archive dirs (`.archived-*`).
+    if (name.startsWith('.')) continue;
     const p = join(groupsRoot, name);
     try {
       if (!statSync(p).isDirectory()) continue;

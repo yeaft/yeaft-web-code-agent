@@ -44,6 +44,8 @@ export {
   createGroupFromSpec,
   renameGroup,
   archiveGroup,
+  deleteGroup,
+  purgeArchivedGroups,
   addMember,
   removeMember,
   setGroupDefaultVp,
