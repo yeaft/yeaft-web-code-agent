@@ -94,7 +94,7 @@ class CapturingTrace {
   logEvent(e) { this.events.push(e); }
 }
 
-function mkEngine({ orchestrator } = {}) {
+function mkEngine({ legacy } = {}) {
   const adapter = new CapturingAdapter();
   const trace = new CapturingTrace();
   const conversationStore = new FakeStore();
@@ -107,7 +107,7 @@ function mkEngine({ orchestrator } = {}) {
       maxOutputTokens: 1024,
       messageTokenBudget: 4000,
       maxContextTokens: 20000,
-      compact: orchestrator ? { useOrchestrator: true } : undefined,
+      compact: legacy ? { useLegacy: true } : undefined,
     },
     conversationStore,
     memoryStore,
@@ -115,11 +115,11 @@ function mkEngine({ orchestrator } = {}) {
   return { engine, adapter, trace, conversationStore, memoryStore };
 }
 
-describe('D-a useOrchestrator=true routes through runCompact', () => {
+describe('D-a default config routes through runCompact (PR-H flip)', () => {
   it('runCompact invoked, legacy consolidate not invoked', async () => {
     consolidate.mockClear();
     runCompactOrchestrator.mockClear();
-    const { engine } = mkEngine({ orchestrator: true });
+    const { engine } = mkEngine();
 
     const out = [];
     for await (const ev of engine.query({ prompt: 'hi', messages: [] })) out.push(ev);
@@ -129,11 +129,11 @@ describe('D-a useOrchestrator=true routes through runCompact', () => {
   });
 });
 
-describe('D-b default config keeps legacy consolidate', () => {
+describe('D-b useLegacy=true keeps legacy consolidate', () => {
   it('legacy consolidate invoked, orchestrator not invoked', async () => {
     consolidate.mockClear();
     runCompactOrchestrator.mockClear();
-    const { engine } = mkEngine();
+    const { engine } = mkEngine({ legacy: true });
 
     const out = [];
     for await (const ev of engine.query({ prompt: 'hi', messages: [] })) out.push(ev);
@@ -145,7 +145,7 @@ describe('D-b default config keeps legacy consolidate', () => {
 
 describe('D-c evaluateCompactTriggers logs to trace', () => {
   it('logEvent receives compact_triggers_eval on legacy path', async () => {
-    const { engine, trace } = mkEngine();
+    const { engine, trace } = mkEngine({ legacy: true });
     for await (const _ of engine.query({ prompt: 'hi', messages: [] })) { /* drain */ }
     const found = trace.events.find(e => e.eventType === 'compact_triggers_eval');
     expect(found).toBeTruthy();

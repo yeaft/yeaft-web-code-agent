@@ -537,11 +537,13 @@ export class Engine {
     const budget = this.#config.messageTokenBudget || 8192;
     const compactCfg = (this.#config && this.#config.compact) || {};
 
-    // Phase 8 PR-D: orchestrator opt-in. evaluateCompactTriggers (DESIGN
-    // §4.1) and runCompact (DESIGN §4.2) are the new path. Existing
-    // shouldConsolidate / consolidate stays as the default to preserve
-    // production behaviour; flip via config.compact.useOrchestrator=true.
-    if (compactCfg.useOrchestrator) {
+    // Phase 8 PR-H: orchestrator is now the default. The legacy
+    // shouldConsolidate / consolidate path remains reachable as an
+    // explicit fallback via `config.compact.useLegacy=true` for parity
+    // testing during migration. evaluateCompactTriggers (DESIGN §4.1)
+    // and runCompact (DESIGN §4.2) own the live path.
+    const useLegacy = compactCfg.useLegacy === true || compactCfg.useOrchestrator === false;
+    if (!useLegacy) {
       return this.#runOrchestratorCompact(budget, compactCfg);
     }
 
