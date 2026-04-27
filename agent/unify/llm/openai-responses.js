@@ -33,8 +33,33 @@ import {
   LLMServerError,
   LLMAbortError,
 } from './adapter.js';
+import {
+  normalizeEffort,
+  getThinkingCapability,
+} from '../models.js';
 
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
+
+/**
+ * Feature-flag accessor mirroring anthropic.js. UNIFY_THINKING_V1 is OFF by
+ * default; set env to '1' to enable thinking-mode field translation. Read
+ * lazily so tests can flip the flag between calls.
+ */
+function thinkingV1Enabled() {
+  return process.env.UNIFY_THINKING_V1 === '1';
+}
+
+/**
+ * Translate a normalised effort ('low'|'medium'|'high'|'max') into the value
+ * accepted by the OpenAI Responses `reasoning.effort` field. Responses today
+ * accepts 'low'|'medium'|'high' — 'max' degrades to 'high' to match the
+ * registry's normaliseEffort downgrade rule.
+ */
+function effortForResponses(effort) {
+  if (!effort) return null;
+  if (effort === 'max') return 'high';
+  return effort;
+}
 
 export class OpenAIResponsesAdapter extends LLMAdapter {
   #apiKey;
@@ -200,9 +225,9 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
   // ─── Streaming ──────────────────────────────────────────
 
   /**
-   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, extraBody?: object, signal?: AbortSignal }} params
+   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, effort?: 'low'|'medium'|'high'|'max', extraBody?: object, signal?: AbortSignal }} params
    */
-  async *stream({ model, system, messages, tools, maxTokens = 16384, extraBody, signal }) {
+  async *stream({ model, system, messages, tools, maxTokens = 16384, effort, extraBody, signal }) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const body = {
@@ -214,6 +239,20 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     if (system) body.instructions = system;
     const translatedTools = this.#translateTools(tools);
     if (translatedTools) body.tools = translatedTools;
+
+    // Inject Responses-API thinking-mode field. Mirrors anthropic.js gating:
+    // feature flag must be on, effort must be a known value, and the model's
+    // registry entry must declare thinkingProtocol === 'openai-reasoning'.
+    // Unknown / unsupported models silently drop the field.
+    const normEffort = normalizeEffort(effort);
+    if (thinkingV1Enabled() && normEffort) {
+      const cap = getThinkingCapability(model);
+      if (cap.supportsThinking && cap.thinkingProtocol === 'openai-reasoning') {
+        const wireEffort = effortForResponses(normEffort);
+        if (wireEffort) body.reasoning = { effort: wireEffort };
+      }
+    }
+
     if (extraBody) Object.assign(body, extraBody);
 
     let response;
@@ -375,7 +414,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
 
   // ─── Non-streaming call() ───────────────────────────────
 
-  async call({ model, system, messages, maxTokens = 4096, extraBody, signal }) {
+  async call({ model, system, messages, maxTokens = 4096, effort, extraBody, signal }) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const body = {
@@ -384,6 +423,17 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
       max_output_tokens: maxTokens,
     };
     if (system) body.instructions = system;
+
+    // Mirror stream()'s thinking injection for non-streaming side queries.
+    const normEffort = normalizeEffort(effort);
+    if (thinkingV1Enabled() && normEffort) {
+      const cap = getThinkingCapability(model);
+      if (cap.supportsThinking && cap.thinkingProtocol === 'openai-reasoning') {
+        const wireEffort = effortForResponses(normEffort);
+        if (wireEffort) body.reasoning = { effort: wireEffort };
+      }
+    }
+
     if (extraBody) Object.assign(body, extraBody);
 
     let response;

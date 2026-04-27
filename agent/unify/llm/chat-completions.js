@@ -46,6 +46,31 @@ function thinkingV1Enabled() {
 }
 
 /**
+ * task-DESIGN-v4: Chat Completions adapter is deprecated in favour of
+ * `openai-responses.js` (Responses API) for OpenAI-protocol providers and
+ * `anthropic.js` for Anthropic. This warning fires once per process the
+ * first time the adapter is instantiated, unless UNIFY_SUPPRESS_DEPRECATION=1.
+ * Removal is scheduled for Phase 7 of the multi-VP redesign — see
+ * `agent/unify/DESIGN.md` § "Migration Plan".
+ */
+let _chatCompletionsDeprecationWarned = false;
+function warnChatCompletionsDeprecated() {
+  if (_chatCompletionsDeprecationWarned) return;
+  if (process.env.UNIFY_SUPPRESS_DEPRECATION === '1') {
+    _chatCompletionsDeprecationWarned = true;
+    return;
+  }
+  _chatCompletionsDeprecationWarned = true;
+  // eslint-disable-next-line no-console
+  console.warn(
+    '[unify] ChatCompletionsAdapter is deprecated. Migrate OpenAI-protocol '
+    + 'providers to the Responses API (set provider.protocol="openai-responses"). '
+    + 'This adapter will be removed in a future release. Set '
+    + 'UNIFY_SUPPRESS_DEPRECATION=1 to silence this warning.'
+  );
+}
+
+/**
  * Check if a model ID is an OpenAI model that supports max_completion_tokens.
  * OpenAI introduced max_completion_tokens with o1 and made it standard for
  * GPT-4.1+, o-series, and GPT-5+. Other OpenAI-compatible APIs (DeepSeek,
@@ -79,6 +104,7 @@ export class ChatCompletionsAdapter extends LLMAdapter {
     super({ apiKey, baseUrl });
     this.#apiKey = apiKey;
     this.#baseUrl = baseUrl.replace(/\/+$/, ''); // strip trailing slash
+    warnChatCompletionsDeprecated();
   }
 
   /** Expose baseUrl for testing. */
