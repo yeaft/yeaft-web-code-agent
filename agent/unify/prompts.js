@@ -163,6 +163,8 @@ const RAW_TEMPLATES = {
   // buildRouterPrompt callers will simply omit the section.
   harnessWorkerShape: readTemplate('harness/worker-shape.md', { required: false }),
   harnessRouterShape: readTemplate('harness/router-shape.md', { required: false }),
+  // Phase 3b — coordinator harness rule for inter-VP forwarding.
+  harnessRouterHandoff: readTemplate('harness/router-handoff.md', { required: false }),
 };
 
 /**
@@ -769,6 +771,39 @@ export function buildWorkerPrompt(params = {}) {
 }
 
 /**
+ * Render the previous turn's router plan as a `## prior_plan` block, so
+ * the router can decide whether to extend it or start fresh
+ * (DESIGN.md §9.15). Returns '' when there is no prior plan to render.
+ *
+ * @param {object|null|undefined} priorPlan
+ * @param {'en'|'zh'} [language='en']
+ * @returns {string}
+ */
+export function renderPriorPlan(priorPlan, language = 'en') {
+  if (!priorPlan || typeof priorPlan !== 'object') return '';
+  const header = language === 'zh' ? '## 上一轮 plan' : '## prior_plan';
+  const lines = [];
+  if (priorPlan.vpId) lines.push(`vpId: ${priorPlan.vpId}`);
+  const fq = priorPlan.forwardQuery;
+  if (fq && (fq.userOriginal || fq.intent)) {
+    if (fq.intent) lines.push(`intent: ${fq.intent}`);
+    if (fq.userOriginal) lines.push(`userOriginal: ${fq.userOriginal}`);
+  }
+  const pre = priorPlan.preselect;
+  if (pre) {
+    if (Array.isArray(pre.memoryPaths) && pre.memoryPaths.length) {
+      lines.push(`memoryPaths: ${pre.memoryPaths.join(', ')}`);
+    }
+    if (Array.isArray(pre.taskIds) && pre.taskIds.length) {
+      lines.push(`taskIds: ${pre.taskIds.join(', ')}`);
+    }
+  }
+  if (priorPlan.thinking) lines.push(`thinking: ${priorPlan.thinking}`);
+  if (!lines.length) return '';
+  return `${header}\n${lines.join('\n')}`;
+}
+
+/**
  * Router prompt entry point (DESIGN.md Phase 1).
  *
  * The Router sees identity context (no persona — it speaks as a routing
@@ -780,12 +815,13 @@ export function buildWorkerPrompt(params = {}) {
  *   language?: 'en'|'zh',
  *   summaries?: {user?: string, group?: string, vp?: string},
  *   routerContext?: string,
+ *   priorPlan?: object|null,
  *   includeShape?: boolean,
  * }} params
  * @returns {string}
  */
 export function buildRouterPrompt(params = {}) {
-  const { language = 'en', summaries, routerContext, includeShape = true } = params;
+  const { language = 'en', summaries, routerContext, priorPlan, includeShape = true } = params;
   const parts = [];
 
   if (includeShape) {
@@ -795,6 +831,9 @@ export function buildRouterPrompt(params = {}) {
 
   const summaryBlock = renderLayerASummaries(summaries, language);
   if (summaryBlock) parts.push(summaryBlock);
+
+  const priorBlock = renderPriorPlan(priorPlan, language);
+  if (priorBlock) parts.push(priorBlock);
 
   if (typeof routerContext === 'string' && routerContext.trim()) {
     parts.push(routerContext.trim());
