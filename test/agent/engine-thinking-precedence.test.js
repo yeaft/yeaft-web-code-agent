@@ -100,3 +100,36 @@ describe('T-c no VP persona ⇒ scenario effort untouched', () => {
     expect(adapter.calls[0].effort).toBe('high');
   });
 });
+
+describe('T-d live routerPlan.thinking wins over vpDefault', () => {
+  it('vpPlan.thinking="max" with matching vpId overrides vpDefault="high"', async () => {
+    const adapter = new CapturingAdapter();
+    const engine = mkEngine(adapter);
+
+    for await (const _ of engine.query({
+      prompt: 'hi',
+      messages: [],
+      scenario: 'chat',
+      vpPersona: { vpId: 'vp-eng', displayName: 'Lin', thinking: 'high' },
+      vpPlan: { vpId: 'vp-eng', thinking: 'max', thinkingReason: 'router escalated' },
+    })) { /* drain */ }
+
+    expect(adapter.calls[0].effort).toBe('max');
+  });
+
+  it('vpPlan.thinking="max" with mismatched vpId is ignored', async () => {
+    const adapter = new CapturingAdapter();
+    const engine = mkEngine(adapter);
+
+    for await (const _ of engine.query({
+      prompt: 'hi',
+      messages: [],
+      scenario: 'chat',
+      vpPersona: { vpId: 'vp-eng', displayName: 'Lin' },
+      vpPlan: { vpId: 'vp-other', thinking: 'max' },
+    })) { /* drain */ }
+
+    // Falls through to default 'high' (no other signal raises it).
+    expect(adapter.calls[0].effort).toBe('high');
+  });
+});

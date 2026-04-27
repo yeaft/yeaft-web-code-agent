@@ -713,7 +713,7 @@ export class Engine {
    *   SCENARIO_EFFORT. Unknown values fall through to 'high'.
    * @yields {EngineEvent}
    */
-  async *query({ prompt, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId } = {}) {
+  async *query({ prompt, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan } = {}) {
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       yield {
         type: 'error',
@@ -764,7 +764,7 @@ export class Engine {
     const runSignal = abortCtrl.signal;
 
     try {
-      yield* this.#runQuery({ prompt: effectivePrompt, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId });
+      yield* this.#runQuery({ prompt: effectivePrompt, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan });
     } finally {
       if (signal) {
         try { signal.removeEventListener('abort', onExternalAbort); } catch { /* ignore */ }
@@ -782,7 +782,7 @@ export class Engine {
    * in a try/finally without indenting the whole loop.
    * @private
    */
-  async *#runQuery({ prompt, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId }) {
+  async *#runQuery({ prompt, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan }) {
 
     // ─── Pre-query: Memory Injection (task-287) + Compact Summary ──
     // Two-layer recall:
@@ -902,10 +902,19 @@ export class Engine {
         if (vpPersona && vpPersona.vpId) {
           const priorPlan = extractPriorPlan(conversationMessages, vpPersona.vpId);
           const thinkingCfg = (this.#config && this.#config.thinking) || {};
+          // PR-I: live routerPlan.thinking — when the dispatcher passes
+          // `vpPlan` for this turn (per-VP plan from the V2 router) and its
+          // `vpId` matches the active persona, surface its `thinking` field
+          // to resolveThinking. Mismatched vpId means the plan addresses a
+          // different VP — ignore it for this VP's thinking decision.
+          const liveRouterThinking = (vpPlan && typeof vpPlan === 'object'
+            && typeof vpPlan.vpId === 'string' && vpPlan.vpId === vpPersona.vpId
+            && (vpPlan.thinking === 'high' || vpPlan.thinking === 'max'))
+            ? vpPlan.thinking
+            : null;
           const resolved = resolveThinking({
             uiOverride: (userEffort === 'max' || userEffort === 'high') ? userEffort : null,
-            routerPlan: null, // PR-C scope: priorPlan continuity only;
-                              // live router-plan thinking is a follow-up.
+            routerPlan: liveRouterThinking,
             priorPlan: priorPlan && priorPlan.thinking ? priorPlan.thinking : null,
             vpDefault: typeof vpPersona.thinking === 'string' ? vpPersona.thinking : null,
             globalDefault: typeof thinkingCfg.default === 'string' ? thinkingCfg.default : null,
@@ -1106,12 +1115,29 @@ export class Engine {
       // assistant message that produced it. Stripped at the wire by
       // stripMetaForWire — pure bookkeeping for priorPlan continuity.
       if (vpPersona && vpPersona.vpId) {
+        // PR-I: when the dispatcher hands us a per-VP plan whose vpId matches
+        // the active persona, persist its `forwardQuery`, `preselect`, and
+        // `thinking` on the assistant message so the next turn's
+        // priorPlan continuity (DESIGN.md §9.15) sees the live router's
+        // decision — not a synthetic stub.
+        const planForThisVp = (vpPlan && typeof vpPlan === 'object'
+          && typeof vpPlan.vpId === 'string' && vpPlan.vpId === vpPersona.vpId)
+          ? vpPlan
+          : null;
         attachRouterPlan(assistantMsg, {
           vpId: vpPersona.vpId,
-          forwardQuery: { userOriginal: prompt || '', intent: '' },
-          preselect: undefined,
-          thinking: null,
-          thinkingReason: '',
+          forwardQuery: planForThisVp && planForThisVp.forwardQuery
+            ? planForThisVp.forwardQuery
+            : { userOriginal: prompt || '', intent: '' },
+          preselect: planForThisVp && planForThisVp.preselect
+            ? planForThisVp.preselect
+            : undefined,
+          thinking: planForThisVp && (planForThisVp.thinking === 'high' || planForThisVp.thinking === 'max')
+            ? planForThisVp.thinking
+            : null,
+          thinkingReason: planForThisVp && typeof planForThisVp.thinkingReason === 'string'
+            ? planForThisVp.thinkingReason
+            : '',
         });
       }
       conversationMessages.push(assistantMsg);
