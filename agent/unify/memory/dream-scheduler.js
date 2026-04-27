@@ -25,6 +25,7 @@ import { dreamShard } from './dream-shard.js';
 import { checkRecompression } from './recompression.js';
 import { runUserDreamJob } from './user-memory-store.js';
 import { runDreamTick } from '../dream-v2/tick.js';
+import { createScopeRefreshHook } from '../dream-v2/refresh.js';
 
 /** Default idle timeout before dream triggers (ms). */
 export const DREAM_IDLE_MS = 30 * 60 * 1000; // 30 min
@@ -169,16 +170,14 @@ export function createDreamScheduler(opts = {}) {
         try {
           const scopes = [{ kind: 'user', scopeDir: 'user' }];
           if (group?.id) scopes.push({ kind: 'group', id: group.id, scopeDir: `groups/${group.id}` });
+          // PR-J: real refresh hook — read each scope's `index.md`,
+          // render a deterministic top-N synopsis, atomically write
+          // `summary.md`. No LLM, refresh-only (DESIGN.md §8 line 395).
+          const refresh = createScopeRefreshHook({ root: memoryDir });
           const tickResult = await runDreamTick({
             root: memoryDir,
             scopes,
-            refresh: async (_scope) => {
-              // v1 refresh hook: no-op placeholder. The actual scope
-              // summary refresh continues to flow through the legacy
-              // shard / user-dream paths above; this tick only
-              // exercises the diff-gate + cursor write so future hook
-              // implementations can plug in without re-wiring.
-            },
+            refresh,
           });
           result.dreamV2Tick = {
             ran: tickResult.ran.length,
