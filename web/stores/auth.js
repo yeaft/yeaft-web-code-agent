@@ -43,7 +43,11 @@ export const useAuthStore = defineStore('auth', {
 
     // Error handling
     error: null,
-    loading: false
+    loading: false,
+
+    // SSO QR-scan flow (in-page QR for providers like Alipay/WeChat)
+    qrPanel: null, // { provider, authorizeUrl, state, status: 'pending'|'scanned'|'error', error? } | null
+    _qrPollTimer: null
   }),
 
   actions: {
@@ -410,6 +414,100 @@ export const useAuthStore = defineStore('auth', {
      */
     loginWithSso(provider) {
       window.location.href = `/api/auth/sso/${encodeURIComponent(provider)}/start`;
+    },
+
+    /**
+     * Server-driven SSO via in-page QR scan. PC frontend renders the QR code
+     * locally; user scans with phone; server's /poll endpoint reports back
+     * once the callback fires. Used for Alipay (and WeChat-PC in future).
+     *
+     * Returns true if the QR was successfully fetched and rendered.
+     */
+    async startSsoQr(provider, { intent = 'login' } = {}) {
+      this.cancelSsoQr();
+      this.error = null;
+      try {
+        const params = new URLSearchParams();
+        if (intent === 'bind') {
+          if (!this.token) {
+            this.error = 'You must be logged in to bind an identity';
+            return false;
+          }
+          params.set('intent', 'bind');
+          params.set('token', this.token);
+        }
+        const qs = params.toString();
+        const url = `/api/auth/sso/${encodeURIComponent(provider)}/start-qr${qs ? '?' + qs : ''}`;
+        const res = await fetch(url);
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          this.error = data.error || 'Failed to start QR login';
+          return false;
+        }
+        this.qrPanel = {
+          provider,
+          intent,
+          authorizeUrl: data.authorizeUrl,
+          state: data.state,
+          status: 'pending',
+          error: null
+        };
+        this._startQrPoll();
+        return true;
+      } catch (err) {
+        this.error = err.message || 'Network error';
+        return false;
+      }
+    },
+
+    _startQrPoll() {
+      if (this._qrPollTimer) clearInterval(this._qrPollTimer);
+      const tick = async () => {
+        if (!this.qrPanel) return;
+        const state = this.qrPanel.state;
+        try {
+          const res = await fetch(`/api/auth/sso/poll/${encodeURIComponent(state)}`);
+          const data = await res.json();
+          if (!this.qrPanel || this.qrPanel.state !== state) return; // cancelled
+
+          if (data.status === 'pending') return;
+          if (data.status === 'login') {
+            this.token = data.token;
+            this.sessionKey = data.sessionKey ? decodeKey(data.sessionKey) : null;
+            this.role = data.role || 'pro';
+            this.isAuthenticated = true;
+            this.loginStep = 'authenticated';
+            localStorage.setItem('authToken', data.token);
+            this.cancelSsoQr();
+            return;
+          }
+          if (data.status === 'bind') {
+            this.qrPanel = { ...this.qrPanel, status: 'bound' };
+            this._stopQrPollTimer();
+            // Settings page will reload identities when it sees this status.
+            return;
+          }
+          // error
+          this.qrPanel = { ...this.qrPanel, status: 'error', error: data.error || 'SSO failed' };
+          this._stopQrPollTimer();
+        } catch (err) {
+          // transient network failure — keep polling
+          console.warn('[Auth] QR poll error:', err.message);
+        }
+      };
+      this._qrPollTimer = setInterval(tick, 2000);
+    },
+
+    _stopQrPollTimer() {
+      if (this._qrPollTimer) {
+        clearInterval(this._qrPollTimer);
+        this._qrPollTimer = null;
+      }
+    },
+
+    cancelSsoQr() {
+      this._stopQrPollTimer();
+      this.qrPanel = null;
     },
 
     /**

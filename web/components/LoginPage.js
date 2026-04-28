@@ -13,7 +13,7 @@ export default {
         <p class="login-subtitle">{{ $t('login.subtitle') }}</p>
 
         <!-- Step 1: Username/Password -->
-        <template v-if="authStore.loginStep === 'credentials'">
+        <template v-if="authStore.loginStep === 'credentials' && !authStore.qrPanel">
           <input
             type="text"
             v-model="username"
@@ -58,7 +58,7 @@ export default {
               <svg viewBox="0 0 24 24" width="18" height="18"><path fill="#07C160" d="M9.5 4C5.36 4 2 6.91 2 10.5c0 2.07 1.13 3.91 2.86 5.09L4 18l2.7-1.41c.85.22 1.76.34 2.7.34h.51c-.13-.42-.21-.86-.21-1.32 0-3 2.91-5.43 6.5-5.43.32 0 .64.02.95.06C16.63 7.32 13.4 4 9.5 4zM7 8.5a1 1 0 110 2 1 1 0 010-2zm5 0a1 1 0 110 2 1 1 0 010-2zm4.21 3.66c-3.04 0-5.5 1.92-5.5 4.29 0 1.39.91 2.65 2.34 3.46l-.46 1.5 1.93-.95c.55.13 1.13.2 1.69.2 3.04 0 5.5-1.92 5.5-4.21 0-2.37-2.46-4.29-5.5-4.29zm-1.71 2.21a.75.75 0 110 1.5.75.75 0 010-1.5zm3.42 0a.75.75 0 110 1.5.75.75 0 010-1.5z"/></svg>
               {{ $t('login.wechat') }}
             </button>
-            <button v-if="authStore.ssoProviders.alipay" class="sso-btn sso-btn-alipay" @click="loginWithSso('alipay')" :disabled="authStore.loading">
+            <button v-if="authStore.ssoProviders.alipay" class="sso-btn sso-btn-alipay" @click="loginWithAlipayQr" :disabled="authStore.loading">
               <svg viewBox="0 0 24 24" width="18" height="18"><path fill="#1677FF" d="M21 15.4c-1.7-.6-3.5-1.2-5.4-2 .5-.9 1-1.9 1.3-3h-3.4v-1.1h4v-.6h-4V6.5h-1.7c-.3 0-.3.3-.3.3v1.9H7.3v.6h4.2v1.1H8v.6h6.7c-.2.7-.5 1.4-.8 2-2-.6-4-1-5.6-1-2.6 0-4.4 1.2-4.5 2.9-.1 1.6 1 3.5 4 3.5 2.1 0 4-1.1 5.5-3 2.6 1.2 5 2.4 7.8 3.4.4-.5.6-1 .8-1.4.2-.5.1-1-.1-1.5zM7.3 16.7c-2.1 0-2.7-1.5-2.5-2.3.1-.5.7-1.1 1.7-1.3.5-.1 1.6-.1 2.8.2 1 .2 2.1.6 3.2.9-.9 1.7-2.5 2.5-5.2 2.5z"/></svg>
               {{ $t('login.alipay') }}
             </button>
@@ -66,6 +66,23 @@ export default {
           <p v-if="authStore.registrationEnabled" class="register-link">
             {{ $t('login.noAccount') }}<a href="#" @click.prevent="authStore.showRegister()">{{ $t('login.registerWithCode') }}</a>
           </p>
+        </template>
+
+        <!-- SSO QR-scan panel (Alipay etc.) -->
+        <template v-if="authStore.qrPanel && authStore.loginStep === 'credentials'">
+          <div class="sso-qr-panel">
+            <p class="totp-title">{{ qrPanelTitle }}</p>
+            <p class="totp-hint">{{ $t('login.qr.hint') }}</p>
+            <div class="qr-container">
+              <canvas ref="qrCanvas" class="qr-code"></canvas>
+            </div>
+            <p v-if="authStore.qrPanel.status === 'error'" class="error">
+              {{ authStore.qrPanel.error }}
+            </p>
+            <button @click="authStore.cancelSsoQr()" class="back-button">
+              {{ $t('common.back') }}
+            </button>
+          </div>
         </template>
 
         <!-- Registration -->
@@ -260,6 +277,63 @@ export default {
       authStore.loginWithSso(provider);
     };
 
+    const qrCanvas = Vue.ref(null);
+
+    const loginWithAlipayQr = async () => {
+      localError.value = '';
+      const ok = await authStore.startSsoQr('alipay');
+      if (!ok) return;
+      Vue.nextTick(() => renderQrCode());
+    };
+
+    const renderQrCode = () => {
+      if (!authStore.qrPanel || !qrCanvas.value) return;
+      if (typeof qrcode !== 'function') {
+        console.error('[LoginPage] qrcode library not loaded');
+        return;
+      }
+      try {
+        // qrcode-generator: typeNumber=0 (auto), errorCorrectionLevel='M'
+        const qr = qrcode(0, 'M');
+        qr.addData(authStore.qrPanel.authorizeUrl);
+        qr.make();
+        const canvas = qrCanvas.value;
+        const moduleCount = qr.getModuleCount();
+        const cellSize = 6;
+        const margin = 4 * cellSize;
+        const size = moduleCount * cellSize + margin * 2;
+        canvas.width = size;
+        canvas.height = size;
+        canvas.style.width = '220px';
+        canvas.style.height = '220px';
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, size, size);
+        ctx.fillStyle = '#000';
+        for (let r = 0; r < moduleCount; r++) {
+          for (let c = 0; c < moduleCount; c++) {
+            if (qr.isDark(r, c)) {
+              ctx.fillRect(margin + c * cellSize, margin + r * cellSize, cellSize, cellSize);
+            }
+          }
+        }
+      } catch (err) {
+        console.error('[LoginPage] QR render failed:', err);
+      }
+    };
+
+    const qrPanelTitle = Vue.computed(() => {
+      const p = authStore.qrPanel?.provider;
+      if (p === 'alipay') return t('login.qr.titleAlipay');
+      if (p === 'wechat') return t('login.qr.titleWechat');
+      return t('login.qr.title');
+    });
+
+    // Re-render QR when panel changes (e.g. after retry)
+    Vue.watch(() => authStore.qrPanel?.authorizeUrl, (url) => {
+      if (url) Vue.nextTick(() => renderQrCode());
+    });
+
     const hasAnySso = Vue.computed(() =>
       authStore.aadEnabled ||
       authStore.ssoProviders.github ||
@@ -403,6 +477,9 @@ export default {
       login,
       loginWithMicrosoft,
       loginWithSso,
+      loginWithAlipayQr,
+      qrCanvas,
+      qrPanelTitle,
       hasAnySso,
       verify,
       verifyTotp,

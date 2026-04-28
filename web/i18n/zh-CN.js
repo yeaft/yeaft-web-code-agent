@@ -36,6 +36,10 @@ export default {
   'login.google': '使用 Google 账号登录',
   'login.wechat': '使用微信扫码登录',
   'login.alipay': '使用支付宝账号登录',
+  'login.qr.title': '扫码登录',
+  'login.qr.titleAlipay': '支付宝扫码登录',
+  'login.qr.titleWechat': '微信扫码登录',
+  'login.qr.hint': '请使用手机扫描二维码完成授权',
 
   // Login - Errors (used in JS validation)
   'login.error.enterUsername': '请输入用户名',

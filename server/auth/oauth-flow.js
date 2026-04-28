@@ -19,12 +19,21 @@ import { completeLogin } from './login.js';
 import { getProvider } from './providers/types.js';
 
 const STATE_TTL_MS = 10 * 60 * 1000;
-const _stateStore = new Map(); // state → { provider, intent, userId, createdAt }
+const _stateStore = new Map(); // state → { provider, intent, userId, createdAt, mode }
+
+// QR-mode pending-result store. When a QR-flow callback completes, we don't
+// redirect the (mobile) browser into the SPA — instead we park the result
+// here keyed by `state`, and the PC frontend polls /api/auth/sso/poll/:state
+// to retrieve it. Entries are auto-GC'd after the same TTL.
+const _pendingResults = new Map(); // state → { kind, ...result, createdAt }
 
 function _gcStates() {
   const now = Date.now();
   for (const [k, v] of _stateStore.entries()) {
     if (now - v.createdAt > STATE_TTL_MS) _stateStore.delete(k);
+  }
+  for (const [k, v] of _pendingResults.entries()) {
+    if (now - v.createdAt > STATE_TTL_MS) _pendingResults.delete(k);
   }
 }
 
@@ -32,11 +41,16 @@ function _gcStates() {
  * Allocate a state token. `intent` is either 'login' (logged-out user) or
  * 'bind' (logged-in user attaching another identity). For 'bind', `userId`
  * MUST be supplied so the callback knows which internal account to attach to.
+ *
+ * `mode` defaults to 'redirect' (the user's browser is the one going to the
+ * provider). Set it to 'qr' for the QR-scan flow where the callback fires on
+ * a different device (the user's phone) and the original PC frontend polls
+ * for completion.
  */
-export function createState({ provider, intent = 'login', userId = null }) {
+export function createState({ provider, intent = 'login', userId = null, mode = 'redirect' }) {
   _gcStates();
   const state = randomBytes(24).toString('hex');
-  _stateStore.set(state, { provider, intent, userId, createdAt: Date.now() });
+  _stateStore.set(state, { provider, intent, userId, mode, createdAt: Date.now() });
   return state;
 }
 
@@ -58,12 +72,42 @@ export function consumeState(state, expectedProvider) {
  * Build the provider's authorize redirect URL.
  * Throws if the provider is unknown or disabled.
  */
-export function buildAuthorizeUrl({ provider, intent = 'login', userId = null }) {
+export function buildAuthorizeUrl({ provider, intent = 'login', userId = null, mode = 'redirect' }) {
   const impl = getProvider(provider);
   if (!impl) throw new Error(`Unknown provider: ${provider}`);
   if (!impl.isEnabled()) throw new Error(`Provider not enabled: ${provider}`);
-  const state = createState({ provider, intent, userId });
-  return impl.getAuthorizeUrl(state, intent);
+  const state = createState({ provider, intent, userId, mode });
+  const url = impl.getAuthorizeUrl(state, intent);
+  return { url, state };
+}
+
+/**
+ * Park a completed QR-flow result so the PC frontend can poll for it.
+ */
+export function storePendingResult(state, result) {
+  _pendingResults.set(state, { ...result, createdAt: Date.now() });
+}
+
+/**
+ * Read (and delete on success) a parked QR-flow result.
+ * Returns null if not found / expired.
+ */
+export function consumePendingResult(state) {
+  _gcStates();
+  const r = _pendingResults.get(state);
+  if (!r) return null;
+  // Only one-shot for terminal kinds; pending shouldn't reach here.
+  _pendingResults.delete(state);
+  return r;
+}
+
+/**
+ * Inspect whether a state was issued in QR mode without consuming it.
+ * Used by the callback handler to decide whether to redirect or park-and-stop.
+ */
+export function peekStateMode(state) {
+  const e = _stateStore.get(state);
+  return e ? e.mode : null;
 }
 
 /**
