@@ -3,10 +3,11 @@ import AssistantTurn from './AssistantTurn.js';
 import TaskMessageItem from './TaskMessageItem.js';
 import VpSpeakerHeader from './VpSpeakerHeader.js';
 import ReflectionCard from './ReflectionCard.js';
+import SubAgentCard from './SubAgentCard.js';
 
 export default {
   name: 'MessageList',
-  components: { MessageItem, AssistantTurn, TaskMessageItem, VpSpeakerHeader, ReflectionCard },
+  components: { MessageItem, AssistantTurn, TaskMessageItem, VpSpeakerHeader, ReflectionCard, SubAgentCard },
   template: `
     <main class="chat-container" ref="containerRef">
       <!-- Session Loading Overlay - only covers message area -->
@@ -114,12 +115,23 @@ export default {
             :key="card.key"
             :card="card"
           />
+          <!-- PR-M3: sub-agent cards anchored to this row. -->
+          <SubAgentCard
+            v-for="card in subAgentCardsForRow(item)"
+            :key="card.key"
+            :card="card"
+          />
         </template>
         <!-- PR-L: orphaned reflection cards (anchor message not yet
              present, or scrolled out of the message window) flushed at
              the tail so they're never lost. -->
         <ReflectionCard
           v-for="card in orphanCards"
+          :key="card.key"
+          :card="card"
+        />
+        <SubAgentCard
+          v-for="card in orphanSubAgentCards"
           :key="card.key"
           :card="card"
         />
@@ -690,6 +702,40 @@ export default {
       return map.__orphans || [];
     });
 
+    // PR-M3: sub-agent cards anchored the same way reflection cards are.
+    const subAgentCardsByAnchor = Vue.computed(() => {
+      const map = store.unifySubAgentCards || {};
+      const convId = store.unifyConversationId;
+      const out = { __orphans: [] };
+      const sorted = Object.values(map)
+        .filter((c) => c && c.conversationId === convId)
+        .sort((a, b) => (a.anchorOrder || 0) - (b.anchorOrder || 0)
+          || (a.updatedAt || 0) - (b.updatedAt || 0));
+      const knownIds = new Set();
+      for (const m of (store.messages || [])) {
+        if (m && m.id) knownIds.add(m.id);
+      }
+      for (const card of sorted) {
+        if (card.anchorMsgId && knownIds.has(card.anchorMsgId)) {
+          if (!out[card.anchorMsgId]) out[card.anchorMsgId] = [];
+          out[card.anchorMsgId].push(card);
+        } else {
+          out.__orphans.push(card);
+        }
+      }
+      return out;
+    });
+    const subAgentCardsForRow = (item) => {
+      const id = rowAnchorId(item);
+      if (!id) return [];
+      const map = subAgentCardsByAnchor.value || {};
+      return map[id] || [];
+    };
+    const orphanSubAgentCards = Vue.computed(() => {
+      const map = subAgentCardsByAnchor.value || {};
+      return map.__orphans || [];
+    });
+
     // Track if user is at bottom (within threshold)
     const isAtBottom = Vue.ref(true);
     const SCROLL_THRESHOLD = 50;
@@ -1211,6 +1257,8 @@ export default {
       turnGroups,
       cardsForRow,
       orphanCards,
+      subAgentCardsForRow,
+      orphanSubAgentCards,
     };
   }
 };

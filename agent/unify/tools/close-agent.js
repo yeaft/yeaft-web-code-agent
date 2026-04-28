@@ -42,7 +42,15 @@ The agent's result (if any) is returned before closing.`,
       agent.result = result;
     }
 
-    const finalResult = agent.result;
+    // PR-M1: abort any in-flight engine.query so the driver loop exits
+    // promptly. This is cooperative — if the driver is mid-stream the
+    // adapter receives the signal; if it's idle, status flip ends the
+    // wait loop on the next 50ms tick.
+    if (agent.abortController && !agent.abortController.signal.aborted) {
+      try { agent.abortController.abort('closed'); } catch { /* ignore */ }
+    }
+
+    const finalResult = agent.result || agent.lastResult || '';
     agent.status = 'closed';
 
     return JSON.stringify({
@@ -51,6 +59,7 @@ The agent's result (if any) is returned before closing.`,
       name: agent.name,
       result: finalResult,
       messages: agent.messages.length,
+      turns: agent.usage?.turns || 0,
       message: `Agent "${agent.name}" closed`,
     });
   },

@@ -177,6 +177,12 @@ export const useChatStore = defineStore('chat', {
     // anchorMsgId, anchorOrder }. Rendered inline by MessageList — anchored
     // after the message present at first emit (`pending`).
     unifyReflectionCards: {},
+    // PR-M3: sub-agent cards. Keyed by `${conversationId}:${agentId}`.
+    // Each entry: { agentId, agentName, status, text, toolCalls[], turns,
+    // error, anchorMsgId, anchorOrder, expanded, updatedAt }.
+    // Populated by `sub_agent_event` handler — fed by Engine
+    // sub-agent event sink → web-bridge.js → unify_output.
+    unifySubAgentCards: {},
     // task-344: global toggle for detail (full raw API payload) vs concise
     // debug view. Default concise. Persisted via localStorage.
     unifyDebugDetailMode: (() => {
@@ -818,6 +824,97 @@ export const useChatStore = defineStore('chat', {
           this.unifyModel = event.model;
           break;
 
+        case 'sub_agent_event': {
+          // PR-M3: a sub-agent emitted an event. `agentId` identifies the
+          // sub-agent; `payload` is the underlying engine event (text_delta,
+          // tool_call, sub_agent_status, sub_agent_turn_end, etc.).
+          // We accumulate per-agent state into a single card keyed by
+          // ${convId}:${agentId} — anchored to the message present at the
+          // first emit so MessageList can render it inline.
+          const convId = msg.conversationId || this.unifyConversationId || 'unknown';
+          const agentId = event.agentId;
+          if (!agentId) break;
+          const payload = event.payload || {};
+          const key = `${convId}:${agentId}`;
+          const existing = this.unifySubAgentCards[key];
+          const tailMsgs = this.messagesMap[convId] || [];
+          const anchorMsgId = existing
+            ? existing.anchorMsgId
+            : (tailMsgs.length > 0 ? tailMsgs[tailMsgs.length - 1].id || null : null);
+          const anchorOrder = existing ? existing.anchorOrder : tailMsgs.length;
+
+          const next = existing ? { ...existing } : {
+            key,
+            conversationId: convId,
+            agentId,
+            agentName: payload.agentName || 'sub-agent',
+            status: 'running',
+            text: '',
+            toolCalls: [],
+            turns: 0,
+            error: null,
+            expanded: false,
+            anchorMsgId,
+            anchorOrder,
+            updatedAt: Date.now(),
+            groupId: msg.groupId || null,
+          };
+
+          if (payload.agentName && !next.agentName) next.agentName = payload.agentName;
+
+          switch (payload.type) {
+            case 'sub_agent_status':
+              next.status = payload.status || next.status;
+              if (payload.error) next.error = payload.error;
+              break;
+            case 'text_delta':
+              if (typeof payload.text === 'string') next.text += payload.text;
+              break;
+            case 'tool_start':
+            case 'tool_use':
+            case 'tool_call':
+              next.toolCalls = [
+                ...next.toolCalls,
+                {
+                  id: payload.id || `${agentId}-${next.toolCalls.length}`,
+                  name: payload.name || payload.toolName || 'tool',
+                  status: 'running',
+                },
+              ];
+              break;
+            case 'tool_result':
+            case 'tool_end': {
+              const idx = next.toolCalls.findIndex(
+                (t) => t.id === (payload.id || payload.toolUseId),
+              );
+              if (idx >= 0) {
+                const arr = next.toolCalls.slice();
+                arr[idx] = { ...arr[idx], status: payload.isError || payload.error ? 'error' : 'done' };
+                next.toolCalls = arr;
+              }
+              break;
+            }
+            case 'sub_agent_turn_end':
+              next.turns += 1;
+              if (typeof payload.content === 'string') next.text = payload.content;
+              if (next.status !== 'failed' && next.status !== 'closed') {
+                next.status = 'idle';
+              }
+              break;
+            case 'error':
+              if (payload.error) {
+                next.error = payload.error.message || String(payload.error);
+              }
+              break;
+            default:
+              break;
+          }
+
+          next.updatedAt = Date.now();
+          this.unifySubAgentCards = { ...this.unifySubAgentCards, [key]: next };
+          break;
+        }
+
         case 'history_loaded':
           // History messages already rendered via sendUnifyOutput (data path).
           // This event just signals completion — no additional action needed.
@@ -1406,6 +1503,15 @@ export const useChatStore = defineStore('chat', {
       });
     },
 
+    toggleSubAgentCardExpand(key) {
+      const card = this.unifySubAgentCards?.[key];
+      if (!card) return;
+      this.unifySubAgentCards = {
+        ...this.unifySubAgentCards,
+        [key]: { ...card, expanded: !card.expanded },
+      };
+    },
+
     clearUnifyMessages() {
       const oldConvId = this.unifyConversationId;
       if (oldConvId) {
@@ -1423,6 +1529,7 @@ export const useChatStore = defineStore('chat', {
       this.unifyStatus = null;
       this.unifyDebugTurns = [];
       this.unifyReflectionCards = {};
+      this.unifySubAgentCards = {};
       this.unifyActiveThreadFilter = null;
       // task-315: also exit the task detail view on a fresh Unify session
       this.unifyActiveTaskDetailId = null;

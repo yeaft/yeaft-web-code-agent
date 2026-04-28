@@ -23,6 +23,7 @@
 import { defineTool } from './types.js';
 import { randomUUID } from 'crypto';
 import { getPersona, listPersonaIds } from '../personas.js';
+import { startSubAgent } from '../sub-agent/runner.js';
 
 /** In-memory sub-agent registry. */
 const agents = new Map();
@@ -273,13 +274,35 @@ Guidelines:
 
     agents.set(agentId, agent);
 
+    // PR-M1: actually spawn the sub-agent driver. This is fire-and-forget;
+    // it returns immediately. The parent observes via WaitAgent (poll) or
+    // via the engine's sub-agent event sink (live UI streaming).
+    const deps = ctx?.parentEngineDeps;
+    if (deps && deps.adapter) {
+      try {
+        startSubAgent(agent, deps);
+      } catch (err) {
+        agent.status = 'failed';
+        agent.error = err && err.message ? err.message : String(err);
+        agent.diagnostics.push({ type: 'spawn_error', error: agent.error, at: Date.now() });
+        return JSON.stringify({
+          error: `Failed to start sub-agent: ${agent.error}`,
+          agentId,
+        });
+      }
+    } else {
+      // No parent engine deps — caller is in a non-engine context (legacy
+      // tests). Leave the record in 'created' so existing tests still work.
+    }
+
     return JSON.stringify({
       success: true,
       agentId,
       name,
       persona: spec.persona || null,
       budget: spec.budget || null,
-      message: `Sub-agent "${name}" created (${agentId}). Use SendMessage to give it work.`,
+      status: agent.status,
+      message: `Sub-agent "${name}" spawned (${agentId}). Use WaitAgent to collect its first turn output, SendMessage to give it more work, CloseAgent to finish.`,
     });
   },
 });

@@ -38,37 +38,41 @@ Use after sending a task to an agent via SendMessage.`,
       return JSON.stringify({ error: `Agent not found: ${agent_id}` });
     }
 
-    // If already completed, return result immediately
-    if (agent.status === 'completed' || agent.status === 'closed') {
+    // PR-M1: terminal states return immediately.
+    if (agent.status === 'completed' || agent.status === 'closed' || agent.status === 'failed') {
       return JSON.stringify({
         agentId: agent_id,
         name: agent.name,
         status: agent.status,
-        result: agent.result,
+        result: agent.result || agent.lastResult || '',
+        error: agent.error || null,
         messages: agent.messages.length,
+        turns: agent.usage?.turns || 0,
       });
     }
 
-    // Wait for completion with timeout
+    // PR-M1: 'idle' means the sub-agent finished its current turn and is
+    // waiting for the next SendMessage. That IS a useful return point for
+    // the parent — surface lastResult and let parent decide what's next.
     const deadline = Date.now() + timeout_ms;
     while (Date.now() < deadline) {
-      if (agent.status === 'completed' || agent.status === 'closed') {
+      if (agent.status === 'idle' || agent.status === 'completed' || agent.status === 'closed' || agent.status === 'failed') {
         return JSON.stringify({
           agentId: agent_id,
           name: agent.name,
           status: agent.status,
-          result: agent.result,
+          result: agent.result || agent.lastResult || '',
+          error: agent.error || null,
           messages: agent.messages.length,
+          turns: agent.usage?.turns || 0,
         });
       }
 
-      // Check abort signal
       if (ctx?.signal?.aborted) {
         return JSON.stringify({ error: 'Wait cancelled', agentId: agent_id });
       }
 
-      // Poll every 500ms
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise(r => setTimeout(r, 200));
     }
 
     return JSON.stringify({
@@ -77,7 +81,9 @@ Use after sending a task to an agent via SendMessage.`,
       status: agent.status,
       timedOut: true,
       message: `Agent "${agent.name}" is still running after ${timeout_ms}ms`,
+      result: agent.lastResult || '',
       messages: agent.messages.length,
+      turns: agent.usage?.turns || 0,
     });
   },
 });

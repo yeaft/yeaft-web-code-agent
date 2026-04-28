@@ -163,6 +163,9 @@ export class Engine {
   /** @type {object|null} — Config override for internal tasks (recall, consolidation, dream) using fastModel */
   #fastConfig;
 
+  /** @type {((agentId: string, evt: object) => void) | null} */
+  #subAgentEventSink = null;
+
   /**
    * task-325a — abort state.
    *
@@ -451,7 +454,37 @@ export class Engine {
       inboundEnvelope: vpCtx?.inboundEnvelope,
       taskId: vpCtx?.taskId,
       taskMembers: vpCtx?.taskMembers,
+      // Sub-agent plumbing — Agent tool needs these to spawn a child
+      // Engine that inherits the parent's adapter / stores / toolset.
+      parentEngineDeps: {
+        adapter: this.#adapter,
+        trace: this.#trace,
+        config: this.#config,
+        memoryStore: this.#memoryStore,
+        memoryShardStore: this.#memoryShardStore,
+        parentToolRegistry: this.#toolRegistry,
+        skillManager: this.#skillManager,
+        mcpManager: this.#mcpManager,
+        yeaftDir: this.#yeaftDir,
+        parentName: vpCtx?.senderVpId || 'parent',
+        parentVpId: vpCtx?.senderVpId || null,
+        parentVpPersona: vpCtx?.vpPersona || null,
+        onEvent: this.#subAgentEventSink || null,
+        language: this.#config?.language || 'en',
+      },
     };
+  }
+
+  /**
+   * Set a sub-agent event sink. Called by web-bridge so every event
+   * yielded by a sub-engine gets surfaced to the frontend tagged with
+   * the parent's conversation/turn so the UI can render it inside the
+   * spawning sub-agent card.
+   *
+   * @param {(agentId: string, evt: object) => void} sink
+   */
+  setSubAgentEventSink(sink) {
+    this.#subAgentEventSink = typeof sink === 'function' ? sink : null;
   }
 
   /**
@@ -1308,7 +1341,7 @@ export class Engine {
       }
 
       // Execute tool calls and feed results back
-      const toolCtx = this.#buildToolContext(signal, { router, senderVpId, inboundEnvelope, taskId, taskMembers });
+      const toolCtx = this.#buildToolContext(signal, { router, senderVpId, inboundEnvelope, taskId, taskMembers, vpPersona });
 
       // task-325a: track whether we aborted mid tool-loop so we can
       // break out of the outer while-loop cleanly once the current
