@@ -112,9 +112,17 @@ export function peekStateMode(state) {
 
 /**
  * Sanitize an arbitrary string into a username candidate.
+ *
+ * We allow Unicode letters/numbers (so a Chinese nickname like "张三" comes
+ * through intact instead of being collapsed to "__"), plus underscore and
+ * hyphen. Anything else (whitespace, emoji, punctuation) is replaced with
+ * underscore. Falls back to 'sso_user' if nothing usable remains.
  */
 function sanitizeUsername(raw) {
-  return String(raw || 'sso_user').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 32) || 'sso_user';
+  const cleaned = String(raw || '').replace(/[^\p{L}\p{N}_-]/gu, '_').slice(0, 32);
+  // Strip leading/trailing underscores so we don't end up with "_张三_".
+  const trimmed = cleaned.replace(/^_+|_+$/g, '');
+  return trimmed || 'sso_user';
 }
 
 /**
@@ -209,6 +217,12 @@ export async function handleCallback({ provider, code, state }) {
     if (!user) {
       return { kind: 'error', status: 500, error: 'Bound user no longer exists' };
     }
+    // Backfill display_name on subsequent logins if it was never set away
+    // from the auto-generated username (e.g. early logins before this code
+    // existed). Don't clobber a name the user has manually changed.
+    if (identity.displayName && user.display_name === user.username) {
+      userDb.updateDisplayName(user.id, identity.displayName);
+    }
     identityDb.touchLogin(existing.id);
     if (user.id) userDb.updateLogin(user.id);
     const sessionKey = generateSessionKey();
@@ -227,7 +241,13 @@ export async function handleCallback({ provider, code, state }) {
     identity.email ? identity.email.split('@')[0] : (identity.displayName || provider + '_user')
   );
   const username = uniqueUsername(base);
-  const newUser = userDb.createFromAad(username, identity.email, /* aadOid */ null, policy.defaultRole);
+  const newUser = userDb.createFromAad(
+    username,
+    identity.email,
+    /* aadOid */ null,
+    policy.defaultRole,
+    identity.displayName || null
+  );
 
   // Link the identity. createFromAad reuses null aad_oid for non-microsoft, and
   // we always insert into user_identities for the unified model.

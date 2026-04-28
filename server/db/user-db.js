@@ -62,6 +62,11 @@ export const userDb = {
     stmts.updateUserEmail.run(email, userId);
   },
 
+  updateDisplayName(userId, displayName) {
+    if (!displayName) return;
+    stmts.updateUserDisplayName.run(displayName, userId);
+  },
+
   getAgentSecret(userId) {
     const user = stmts.getUserById.get(userId);
     return user?.agent_secret || null;
@@ -109,14 +114,17 @@ export const userDb = {
   },
 
   /**
-   * Create a user from AAD profile (no password, linked by aad_oid)
+   * Create a user from AAD profile (no password, linked by aad_oid).
+   * `displayName` is used as a friendlier label (e.g. the Alipay nickname);
+   * falls back to the username when not provided.
    */
-  createFromAad(username, email, aadOid, role = 'pro') {
+  createFromAad(username, email, aadOid, role = 'pro', displayName = null) {
     const id = generateUserId();
     const now = Date.now();
     const agentSecret = generateAgentSecret();
-    stmts.insertUserFull.run(id, username, username, null, email, agentSecret, role, now);
+    const display = displayName || username;
+    stmts.insertUserFull.run(id, username, display, null, email, agentSecret, role, now);
     stmts.updateUserAadOid.run(aadOid, id);
-    return { id, username, display_name: username, email, aad_oid: aadOid, agent_secret: agentSecret, role, created_at: now };
+    return { id, username, display_name: display, email, aad_oid: aadOid, agent_secret: agentSecret, role, created_at: now };
   }
 };
