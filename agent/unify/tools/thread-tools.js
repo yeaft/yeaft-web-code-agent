@@ -2,14 +2,13 @@
  * thread-tools.js — Thread-spawning tools for Unify Engine (Phase 1).
  *
  * Phase 1 scope (task-299 rework):
- *   - SpawnThread         — create a new thread
- *   - SwitchThread        — set the engine's currentThreadId marker
- *   - ListThreads         — list threads + current marker + cached stats
- *   - AttachThreadToTask  — bind a thread to an existing task
- *   - SpawnTask           — create a task or subtask (parent_task_id optional)
- *   - ReadThreadSummary   — cross-reference: summary of a thread (id/name/
- *                           status/messageCount/lastMessageAt/task)
- *   - ReadThreadRecent    — cross-reference: last N messages of a thread
+ *   - SpawnThread             — create a new thread
+ *   - SwitchThread            — set the engine's currentThreadId marker
+ *   - ListThreads             — list threads + current marker + cached stats
+ *   - AttachThreadToFeature   — bind a thread to an existing feature
+ *   - ReadThreadSummary       — cross-reference: summary of a thread (id/name/
+ *                               status/messageCount/lastMessageAt/feature)
+ *   - ReadThreadRecent        — cross-reference: last N messages of a thread
  *
  * Phase 1 uses the in-memory ThreadStore (agent/unify/threads/store.js)
  * and the existing ConversationStore for messages. When task-298 merges,
@@ -18,9 +17,8 @@
  */
 
 import { defineTool } from './types.js';
-import { randomUUID } from 'crypto';
 import { getThreadStore, MAIN_THREAD_ID } from '../threads/store.js';
-import { getTaskStore } from './task-tools.js';
+import { getFeatureStore } from './feature-tools.js';
 
 // ─── SpawnThread ─────────────────────────────────────────
 
@@ -134,7 +132,7 @@ fields — does not scan messages.`,
       archived: t.archived,
       unread: t.unread || 0,
       preview: t.preview || '',
-      attachedTaskId: store.attachedTask(t.id),
+      attachedFeatureId: store.attachedFeature(t.id),
     }));
     return JSON.stringify(
       {
@@ -148,44 +146,44 @@ fields — does not scan messages.`,
   },
 });
 
-// ─── AttachThreadToTask ──────────────────────────────────
+// ─── AttachThreadToFeature ──────────────────────────────────
 
-export const attachThreadToTask = defineTool({
-  name: 'AttachThreadToTask',
-  description: `Link an existing thread to an existing task.
+export const attachThreadToFeature = defineTool({
+  name: 'AttachThreadToFeature',
+  description: `Link an existing thread to an existing feature.
 
-Use to record which thread is responsible for which task. The thread and
-the task must both already exist. Overwrites any previous attachment for
+Use to record which thread is responsible for which feature. The thread and
+the feature must both already exist. Overwrites any previous attachment for
 the same thread.`,
   parameters: {
     type: 'object',
     properties: {
       thread_id: { type: 'string' },
-      task_id: { type: 'string' },
+      feature_id: { type: 'string' },
     },
-    required: ['thread_id', 'task_id'],
+    required: ['thread_id', 'feature_id'],
   },
   isConcurrencySafe: () => false,
   isReadOnly: () => false,
   async execute(input) {
-    const { thread_id, task_id } = input || {};
+    const { thread_id, feature_id } = input || {};
     if (!thread_id) return JSON.stringify({ error: 'thread_id is required' });
-    if (!task_id) return JSON.stringify({ error: 'task_id is required' });
+    if (!feature_id) return JSON.stringify({ error: 'feature_id is required' });
 
-    const taskStore = getTaskStore();
-    if (taskStore) {
-      const task = taskStore.get(task_id);
-      if (!task) return JSON.stringify({ error: `Task not found: ${task_id}` });
+    const featureStore = getFeatureStore();
+    if (featureStore) {
+      const feature = featureStore.get(feature_id);
+      if (!feature) return JSON.stringify({ error: `Feature not found: ${feature_id}` });
     }
 
     try {
       const store = getThreadStore();
-      store.attachTask(thread_id, task_id);
+      store.attachFeature(thread_id, feature_id);
       return JSON.stringify({
         success: true,
         threadId: thread_id,
-        taskId: task_id,
-        message: `Thread ${thread_id} attached to task ${task_id}`,
+        featureId: feature_id,
+        message: `Thread ${thread_id} attached to feature ${feature_id}`,
       });
     } catch (err) {
       return JSON.stringify({ error: err.message || String(err) });
@@ -193,91 +191,14 @@ the same thread.`,
   },
 });
 
-// ─── SpawnTask (deprecated alias — task-333b) ──────────────
-//
-// task-333b folded SpawnTask into TaskCreate (see task-tools.js). Kept
-// registered for one release as a deprecated alias per PM constraint:
-// LLM calls still resolve, but a one-time console.warn nudges migration.
-// Prefer TaskCreate with `parent_task_id` for all new call sites.
-
-const _spawnTaskWarned = { v: false };
-function warnSpawnTaskDeprecated() {
-  if (_spawnTaskWarned.v) return;
-  _spawnTaskWarned.v = true;
-  // eslint-disable-next-line no-console
-  console.warn('[deprecated] SpawnTask → TaskCreate. Pass parent_task_id to TaskCreate for subtasks.');
-}
-
-export const spawnTask = defineTool({
-  name: 'SpawnTask',
-  description: `DEPRECATED — use TaskCreate with parent_id instead. Retained as a thin alias for backwards compatibility; delegates to the same task store. When parent_task_id is omitted this behaves like TaskCreate; when provided it creates a subtask under that parent (parent must exist). Removal target: v0.2.0.`,
-  parameters: {
-    type: 'object',
-    properties: {
-      title: { type: 'string' },
-      description: { type: 'string' },
-      priority: {
-        type: 'string',
-        enum: ['low', 'medium', 'high', 'critical'],
-      },
-      parent_task_id: {
-        type: 'string',
-        description: 'Optional parent task id; when present, a subtask is created',
-      },
-    },
-    required: ['title'],
-  },
-  isConcurrencySafe: () => false,
-  isReadOnly: () => false,
-  async execute(input) {
-    warnSpawnTaskDeprecated();
-    const store = getTaskStore();
-    if (!store) {
-      return JSON.stringify({ error: 'Task store not initialized. Session may still be loading.' });
-    }
-    const { title, description = '', priority = 'medium', parent_task_id } = input || {};
-    if (!title) return JSON.stringify({ error: 'title is required' });
-
-    if (parent_task_id) {
-      const parent = store.get(parent_task_id);
-      if (!parent) return JSON.stringify({ error: `Parent task not found: ${parent_task_id}` });
-    }
-
-    const id = `task-${randomUUID().slice(0, 8)}`;
-    const now = Date.now();
-    store.create({
-      id,
-      title,
-      description,
-      priority,
-      status: 'pending',
-      parentId: parent_task_id || null,
-      parentTaskId: parent_task_id || null, // design §5 canonical field; kept in sync with parentId
-      createdAt: now,
-      updatedAt: now,
-    });
-    return JSON.stringify({
-      success: true,
-      task: {
-        id,
-        title,
-        priority,
-        status: 'pending',
-        parentTaskId: parent_task_id || null,
-      },
-      message: parent_task_id
-        ? `Subtask spawned: ${title} (${id}) under ${parent_task_id}`
-        : `Task spawned: ${title} (${id})`,
-    });
-  },
-});
+// ─── SpawnTask removed (task-333b) — use FeatureCreate with parent_feature_id
 
 // ─── ReadThreadSummary (cross-reference, design §6 Q5) ──
 
 export const readThreadSummary = defineTool({
   name: 'ReadThreadSummary',
   description: `Return a one-shot summary of a thread: id, name, goal, status,
-messageCount, lastMessageAt, parentThreadId, attachedTaskId.
+messageCount, lastMessageAt, parentThreadId, attachedFeatureId.
 
 Use this to cross-reference work on another thread without switching.`,
   parameters: {
@@ -305,7 +226,7 @@ Use this to cross-reference work on another thread without switching.`,
         messageCount: t.messageCount,
         lastMessageAt: t.lastMessageAt,
         parentThreadId: t.parentThreadId,
-        attachedTaskId: store.attachedTask(t.id),
+        attachedFeatureId: store.attachedFeature(t.id),
         createdAt: t.createdAt,
         updatedAt: t.updatedAt,
       },

@@ -48,25 +48,24 @@ import listAgents from './list-agents.js';
 // --- P1 Routing tools (task-334d) ---
 import routeForward from './route-forward.js';
 
-// --- P1 Task tools ---
+// --- P1 Feature tools ---
 import {
-  taskCreate,
-  taskUpdate,
-  taskList,
-  taskGet,
-  taskProgress,
-  taskMemory,
-  followupTask,
+  featureCreate,
+  featureUpdate,
+  featureList,
+  featureGet,
+  featureProgress,
+  featureMemory,
+  followupFeature,
   updatePlan,
-} from './task-tools.js';
+} from './feature-tools.js';
 
 // --- P1 Thread tools (task-299 Phase 1) ---
 import {
   spawnThread,
   switchThread,
   listThreads,
-  attachThreadToTask,
-  spawnTask,
+  attachThreadToFeature,
   readThreadSummary,
   readThreadRecent,
 } from './thread-tools.js';
@@ -126,22 +125,21 @@ export const allTools = [
   // P1 Routing (task-334d)
   routeForward,
 
-  // P1 Task
-  taskCreate,
-  taskUpdate,
-  taskList,
-  taskGet,
-  taskProgress,
-  taskMemory,
-  followupTask,
+  // P1 Feature
+  featureCreate,
+  featureUpdate,
+  featureList,
+  featureGet,
+  featureProgress,
+  featureMemory,
+  followupFeature,
   updatePlan,
 
   // P1 Thread (task-299 Phase 1)
   spawnThread,
   switchThread,
   listThreads,
-  attachThreadToTask,
-  spawnTask,
+  attachThreadToFeature,
   readThreadSummary,
   readThreadRecent,
 

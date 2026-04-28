@@ -1,25 +1,25 @@
 /**
- * task-message.js — R6 §Δ28 / §Δ31.6 task-scoped direct messaging.
+ * feature-message.js — R6 §Δ28 / §Δ31.6 feature-scoped direct messaging.
  *
- * Replaces the withdrawn R3 `unify_task_private_chat` event with a simple
- * echo-able `task_message` pair:
+ * Replaces the withdrawn R3 `unify_feature_private_chat` event with a simple
+ * echo-able `feature_message` pair:
  *
- *   inbound  (web → agent):  `unify_task_message`
- *     { type, groupId, taskId, vpId, text, mentions?, replyTo?, requestId? }
- *   outbound (agent → web):  `task_message`
- *     { type, groupId, taskId, vpId, msgId, text, mentions, replyTo,
+ *   inbound  (web → agent):  `unify_feature_message`
+ *     { type, groupId, featureId, vpId, text, mentions?, replyTo?, requestId? }
+ *   outbound (agent → web):  `feature_message`
+ *     { type, groupId, featureId, vpId, msgId, text, mentions, replyTo,
  *       ts, requestId? }
  *
  * This module owns only the *wire adapter* — the payload is validated,
  * stamped with msgId + ts, and broadcast back so the sender's UI and any
- * other connected views converge on the same record. Persistence + task
+ * other connected views converge on the same record. Persistence + feature
  * ACL enforcement are deliberately deferred to task-334l (per PM dispatch:
- * "user_memory_* 实际 ingestion 归 334l"); the parallel task-private
+ * "user_memory_* 实际 ingestion 归 334l"); the parallel feature-private
  * storage hook follows the same phasing.
  *
  * Invariants:
  *   • Never throws on the WS hot path — bad payloads reply with a
- *     `task_message_rejected` event carrying a stable `code` string for
+ *     `feature_message_rejected` event carrying a stable `code` string for
  *     UI i18n (mirrors the vp_crud_result contract from 334-ui-g).
  *   • The outbound event field order and keys are considered wire-frozen
  *     per R6 §Δ31.6 table; additive fields only in future slices.
@@ -28,9 +28,9 @@
 import { nextMsgId, isValidVpId } from './groups/ids.js';
 
 /** Known `reject` codes — kept stable so 334-ui-* can key i18n on them. */
-export const TASK_MESSAGE_REJECT_CODES = Object.freeze({
+export const FEATURE_MESSAGE_REJECT_CODES = Object.freeze({
   MISSING_GROUP_ID: 'missing_group_id',
-  MISSING_TASK_ID: 'missing_task_id',
+  MISSING_FEATURE_ID: 'missing_feature_id',
   MISSING_VP_ID: 'missing_vp_id',
   INVALID_VP_ID: 'invalid_vp_id',
   EMPTY_TEXT: 'empty_text',
@@ -46,31 +46,31 @@ export const MAX_TEXT_LENGTH = 16_384;
  *
  * @param {any} msg — raw WS message from the web client
  */
-export function validateTaskMessage(msg) {
+export function validateFeatureMessage(msg) {
   if (!msg || typeof msg !== 'object') {
-    return { ok: false, code: TASK_MESSAGE_REJECT_CODES.MISSING_GROUP_ID };
+    return { ok: false, code: FEATURE_MESSAGE_REJECT_CODES.MISSING_GROUP_ID };
   }
-  const { groupId, taskId, vpId, text } = msg;
+  const { groupId, featureId, vpId, text } = msg;
   if (!groupId || typeof groupId !== 'string') {
-    return { ok: false, code: TASK_MESSAGE_REJECT_CODES.MISSING_GROUP_ID };
+    return { ok: false, code: FEATURE_MESSAGE_REJECT_CODES.MISSING_GROUP_ID };
   }
-  if (!taskId || typeof taskId !== 'string') {
-    return { ok: false, code: TASK_MESSAGE_REJECT_CODES.MISSING_TASK_ID };
+  if (!featureId || typeof featureId !== 'string') {
+    return { ok: false, code: FEATURE_MESSAGE_REJECT_CODES.MISSING_FEATURE_ID };
   }
   if (!vpId || typeof vpId !== 'string') {
-    return { ok: false, code: TASK_MESSAGE_REJECT_CODES.MISSING_VP_ID };
+    return { ok: false, code: FEATURE_MESSAGE_REJECT_CODES.MISSING_VP_ID };
   }
-  // Allow the reserved `user` sentinel as a speaker here — tasks can have
+  // Allow the reserved `user` sentinel as a speaker here — features can have
   // human-user messages alongside VP messages. Any other vpId must pass
   // the full shape check (rejects `all`, `system`, pure digits, etc.).
   if (vpId !== 'user' && !isValidVpId(vpId)) {
-    return { ok: false, code: TASK_MESSAGE_REJECT_CODES.INVALID_VP_ID };
+    return { ok: false, code: FEATURE_MESSAGE_REJECT_CODES.INVALID_VP_ID };
   }
   if (typeof text !== 'string' || text.length === 0) {
-    return { ok: false, code: TASK_MESSAGE_REJECT_CODES.EMPTY_TEXT };
+    return { ok: false, code: FEATURE_MESSAGE_REJECT_CODES.EMPTY_TEXT };
   }
   if (text.length > MAX_TEXT_LENGTH) {
-    return { ok: false, code: TASK_MESSAGE_REJECT_CODES.TEXT_TOO_LONG };
+    return { ok: false, code: FEATURE_MESSAGE_REJECT_CODES.TEXT_TOO_LONG };
   }
 
   const mentions = Array.isArray(msg.mentions)
@@ -82,25 +82,25 @@ export function validateTaskMessage(msg) {
 
   return {
     ok: true,
-    payload: { groupId, taskId, vpId, text, mentions, replyTo },
+    payload: { groupId, featureId, vpId, text, mentions, replyTo },
   };
 }
 
 /**
- * Build the outbound `task_message` event from a validated payload.
+ * Build the outbound `feature_message` event from a validated payload.
  * Exposed separately so tests can snapshot the wire shape without
  * needing a live send fn.
  *
- * @param {{groupId:string,taskId:string,vpId:string,text:string,mentions:string[],replyTo:?string}} payload
+ * @param {{groupId:string,featureId:string,vpId:string,text:string,mentions:string[],replyTo:?string}} payload
  * @param {{now?:()=>number, msgId?:()=>string, requestId?:string}} [opts]
  */
-export function buildTaskMessageEvent(payload, opts = {}) {
+export function buildFeatureMessageEvent(payload, opts = {}) {
   const now = typeof opts.now === 'function' ? opts.now : Date.now;
   const mkId = typeof opts.msgId === 'function' ? opts.msgId : nextMsgId;
   const evt = {
-    type: 'task_message',
+    type: 'feature_message',
     groupId: payload.groupId,
-    taskId: payload.taskId,
+    featureId: payload.featureId,
     vpId: payload.vpId,
     msgId: mkId(),
     text: payload.text,
@@ -113,15 +113,15 @@ export function buildTaskMessageEvent(payload, opts = {}) {
 }
 
 /**
- * Build the outbound `task_message_rejected` event.
- * @param {string} code — one of TASK_MESSAGE_REJECT_CODES
+ * Build the outbound `feature_message_rejected` event.
+ * @param {string} code — one of FEATURE_MESSAGE_REJECT_CODES
  * @param {any} msg — original inbound msg (for requestId echo)
  */
-export function buildTaskMessageRejected(code, msg) {
-  const evt = { type: 'task_message_rejected', code };
+export function buildFeatureMessageRejected(code, msg) {
+  const evt = { type: 'feature_message_rejected', code };
   if (msg && typeof msg.requestId === 'string') evt.requestId = msg.requestId;
   if (msg && typeof msg.groupId === 'string') evt.groupId = msg.groupId;
-  if (msg && typeof msg.taskId === 'string') evt.taskId = msg.taskId;
+  if (msg && typeof msg.featureId === 'string') evt.featureId = msg.featureId;
   return evt;
 }
 
@@ -132,13 +132,13 @@ export function buildTaskMessageRejected(code, msg) {
  * @param {(event:object)=>void} sendUnifyEvent
  * @param {{now?:()=>number, msgId?:()=>string}} [opts] — test seams
  */
-export function handleUnifyTaskMessage(msg, sendUnifyEvent, opts = {}) {
-  const result = validateTaskMessage(msg);
+export function handleUnifyFeatureMessage(msg, sendUnifyEvent, opts = {}) {
+  const result = validateFeatureMessage(msg);
   if (!result.ok) {
-    try { sendUnifyEvent(buildTaskMessageRejected(result.code, msg)); } catch { /* best-effort */ }
+    try { sendUnifyEvent(buildFeatureMessageRejected(result.code, msg)); } catch { /* best-effort */ }
     return;
   }
   const requestId = msg && typeof msg.requestId === 'string' ? msg.requestId : undefined;
-  const evt = buildTaskMessageEvent(result.payload, { ...opts, requestId });
+  const evt = buildFeatureMessageEvent(result.payload, { ...opts, requestId });
   try { sendUnifyEvent(evt); } catch { /* never crash WS pipeline */ }
 }

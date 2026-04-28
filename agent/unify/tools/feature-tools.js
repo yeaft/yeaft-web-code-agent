@@ -1,102 +1,111 @@
 /**
- * Task management tools — persistent task tracking for work mode.
+ * Feature management tools — persistent feature tracking for Unify work.
  *
- * Tasks are persisted to ~/.yeaft/tasks/ via TaskStore (one folder per task).
- * Call initTaskStore(yeaftDir) during session init before tools are used.
+ * Features are persisted to ~/.yeaft/features/ via FeatureStore (one folder
+ * per feature). Call initFeatureStore(yeaftDir) during session init before
+ * tools are used.
+ *
+ * NOTE (PR-1a refactor): renamed from task-tools.js. Tools renamed
+ * Task* → Feature*, exported symbols renamed (taskCreate → featureCreate,
+ * etc.), tool param `task_id` → `feature_id`, parent param `parent_id`
+ * is unchanged (still refers to a parent feature). The internal
+ * feature-store object field names (parentTaskId, taskId, relatedTaskIds,
+ * etc.) are still in use here — those rename to feature-equivalents in
+ * PR-1b along with the memory schema migration. No backwards-compat
+ * aliases are kept (per project policy).
  */
 
 import { defineTool } from './types.js';
 import { randomUUID } from 'crypto';
-import { TaskStore } from '../tasks/store.js';
+import { FeatureStore } from '../features/store.js';
 
-/** @type {TaskStore|null} */
-let taskStore = null;
+/** @type {FeatureStore|null} */
+let featureStore = null;
 
 /**
- * Initialize the task store with the yeaft directory.
- * Must be called during session startup before any task tools are used.
+ * Initialize the feature store with the yeaft directory.
+ * Must be called during session startup before any feature tools are used.
  * @param {string} yeaftDir — Base ~/.yeaft directory
  * @param {{ readOnly?: boolean }} [opts]
  */
-export function initTaskStore(yeaftDir, opts) {
-  taskStore = new TaskStore(yeaftDir, opts);
+export function initFeatureStore(yeaftDir, opts) {
+  featureStore = new FeatureStore(yeaftDir, opts);
 }
 
-/** Get the task store instance (for other tools/tests). */
-export function getTaskStore() {
-  return taskStore;
+/** Get the feature store instance (for other tools/tests). */
+export function getFeatureStore() {
+  return featureStore;
 }
 
 /** Get current plan text. */
 export function getPlan() {
-  return taskStore ? taskStore.getPlan() : '';
+  return featureStore ? featureStore.getPlan() : '';
 }
 
 /** Internal helper — ensure store is initialized. */
 function requireStore() {
-  if (!taskStore) {
-    return '{"error":"Task store not initialized. Session may still be loading."}';
+  if (!featureStore) {
+    return '{"error":"Feature store not initialized. Session may still be loading."}';
   }
   return null;
 }
 
-// ─── TaskCreate ─────────────────────────────────────────
+// ─── FeatureCreate ──────────────────────────────────────
 
-export const taskCreate = defineTool({
-  name: 'TaskCreate',
-  description: `Create a new task for tracking work progress.
+export const featureCreate = defineTool({
+  name: 'FeatureCreate',
+  description: `Create a new feature for tracking work progress.
 
-Tasks have a title, description, priority, and status.
-Each task gets its own folder with task.md, progress.md, and memory.md.
+Features have a title, description, priority, and status.
+Each feature gets its own folder with feature.md, progress.md, and memory.md.
 Use this to break down complex work into trackable items.
 
-Pass \`parent_id\` to create a subtask under an existing task.
+Pass \`parent_id\` to create a sub-feature under an existing feature.
 
 R6 multi-VP groups (Unify): pass \`group_id\` + \`members\` to create a
-collaborative task inside a group. The caller's vpId becomes the task
+collaborative feature inside a group. The caller's vpId becomes the feature
 \`initiator\`. \`members\` MUST be a subset of the group's roster — the
 tool validates this server-side and returns a \`not_in_roster\` error
 otherwise. The user owns invitations; the tool will not auto-invite.
 
-Use \`related_task_ids\` to soft-link to other tasks (cross-group OK).`,
+Use \`related_feature_ids\` to soft-link to other features (cross-group OK).`,
   parameters: {
     type: 'object',
     properties: {
       title: {
         type: 'string',
-        description: 'Short task title',
+        description: 'Short feature title',
       },
       description: {
         type: 'string',
-        description: 'Detailed task description',
+        description: 'Detailed feature description',
       },
       priority: {
         type: 'string',
         enum: ['low', 'medium', 'high', 'critical'],
-        description: 'Task priority (default: "medium")',
+        description: 'Feature priority (default: "medium")',
       },
       parent_id: {
         type: 'string',
-        description: 'Parent task ID for subtasks',
+        description: 'Parent feature ID for subtasks',
       },
       group_id: {
         type: 'string',
-        description: 'R6: group this task belongs to. Required for multi-VP collaboration tasks.',
+        description: 'R6: group this feature belongs to. Required for multi-VP collaboration features.',
       },
       members: {
         type: 'array',
         items: { type: 'string' },
-        description: 'R6: VP ids participating in this task (≥1). MUST be ⊆ group roster.',
+        description: 'R6: VP ids participating in this feature (≥1). MUST be ⊆ group roster.',
       },
-      related_task_ids: {
+      related_feature_ids: {
         type: 'array',
         items: { type: 'string' },
-        description: 'R6: soft-linked task ids (cross-group OK). See arch §14.',
+        description: 'R6: soft-linked feature ids (cross-group OK). See arch §14.',
       },
-      // Note (task-333b): `parent_task_id` is accepted by execute() as a
-      // soft-compat alias for `parent_id` (absorbed from the former
-      // SpawnTask tool) but intentionally NOT advertised in the schema to
-      // avoid giving the LLM two live params for one field.
+      // PR-1a: legacy `parent_feature_id` (originally `parent_task_id`,
+      // an alias absorbed from the former SpawnTask tool) was removed.
+      // Use `parent_id` to create a sub-feature.
     },
     required: ['title'],
   },
@@ -111,19 +120,15 @@ Use \`related_task_ids\` to soft-link to other tasks (cross-group OK).`,
       description,
       priority = 'medium',
       parent_id,
-      parent_task_id,
       group_id,
       members,
-      related_task_ids,
+      related_feature_ids,
     } = input;
     if (!title) return JSON.stringify({ error: 'title is required' });
 
-    // task-333b: accept either `parent_id` (original TaskCreate field) or
-    // `parent_task_id` (the former SpawnTask field). When both are present,
-    // parent_id wins.
-    const parentId = parent_id || parent_task_id || null;
-    if (parentId && !taskStore.get(parentId)) {
-      return JSON.stringify({ error: `Parent task not found: ${parentId}` });
+    const parentId = parent_id || null;
+    if (parentId && !featureStore.get(parentId)) {
+      return JSON.stringify({ error: `Parent feature not found: ${parentId}` });
     }
 
     // R6 multi-VP fields — validated only when group_id is present, so
@@ -182,8 +187,8 @@ Use \`related_task_ids\` to soft-link to other tasks (cross-group OK).`,
       initiator = callerVpId;
     }
 
-    const id = `task-${randomUUID().slice(0, 8)}`;
-    const task = {
+    const id = `feat-${randomUUID().slice(0, 8)}`;
+    const feature = {
       id,
       title,
       description: description || '',
@@ -195,19 +200,19 @@ Use \`related_task_ids\` to soft-link to other tasks (cross-group OK).`,
       updatedAt: Date.now(),
     };
     if (groupId) {
-      task.groupId = groupId;
-      task.members = normalizedMembers;
-      if (initiator) task.initiator = initiator;
-      if (Array.isArray(related_task_ids) && related_task_ids.length) {
-        task.relatedTaskIds = related_task_ids.map(String);
+      feature.groupId = groupId;
+      feature.members = normalizedMembers;
+      if (initiator) feature.initiator = initiator;
+      if (Array.isArray(related_feature_ids) && related_feature_ids.length) {
+        feature.relatedTaskIds = related_feature_ids.map(String);
       }
     }
 
-    taskStore.create(task);
+    featureStore.create(feature);
 
     return JSON.stringify({
       success: true,
-      task: {
+      feature: {
         id,
         title,
         priority,
@@ -218,32 +223,32 @@ Use \`related_task_ids\` to soft-link to other tasks (cross-group OK).`,
         initiator: initiator || undefined,
       },
       message: groupId
-        ? `Task created in group ${groupId}: ${title} (${id}) with members [${(normalizedMembers || []).join(', ')}]`
+        ? `Feature created in group ${groupId}: ${title} (${id}) with members [${(normalizedMembers || []).join(', ')}]`
         : parentId
-          ? `Subtask created: ${title} (${id}) under ${parentId}`
-          : `Task created: ${title} (${id})`,
+          ? `Sub-feature created: ${title} (${id}) under ${parentId}`
+          : `Feature created: ${title} (${id})`,
     });
   },
 });
 
-// ─── TaskUpdate ─────────────────────────────────────────
+// ─── FeatureUpdate ──────────────────────────────────────
 
-export const taskUpdate = defineTool({
-  name: 'TaskUpdate',
-  description: `Update a task's status, priority, or details.
+export const featureUpdate = defineTool({
+  name: 'FeatureUpdate',
+  description: `Update a feature's status, priority, or details.
 
 Status values: pending, in_progress, completed, blocked, cancelled`,
   parameters: {
     type: 'object',
     properties: {
-      task_id: {
+      feature_id: {
         type: 'string',
-        description: 'Task ID to update',
+        description: 'Feature ID to update',
       },
       status: {
         type: 'string',
         enum: ['pending', 'in_progress', 'completed', 'blocked', 'cancelled'],
-        description: 'New task status',
+        description: 'New feature status',
       },
       priority: {
         type: 'string',
@@ -260,10 +265,10 @@ Status values: pending, in_progress, completed, blocked, cancelled`,
       },
       result: {
         type: 'string',
-        description: 'Task result or completion notes',
+        description: 'Feature result or completion notes',
       },
     },
-    required: ['task_id'],
+    required: ['feature_id'],
   },
   isConcurrencySafe: () => false,
   isReadOnly: () => false,
@@ -271,8 +276,8 @@ Status values: pending, in_progress, completed, blocked, cancelled`,
     const err = requireStore();
     if (err) return err;
 
-    const { task_id, status, priority, title, description, result } = input;
-    if (!task_id) return JSON.stringify({ error: 'task_id is required' });
+    const { feature_id, status, priority, title, description, result } = input;
+    if (!feature_id) return JSON.stringify({ error: 'feature_id is required' });
 
     const updates = {};
     if (status) updates.status = status;
@@ -281,24 +286,24 @@ Status values: pending, in_progress, completed, blocked, cancelled`,
     if (description !== undefined) updates.description = description;
     if (result) updates.result = result;
 
-    const task = taskStore.update(task_id, updates);
-    if (!task) return JSON.stringify({ error: `Task not found: ${task_id}` });
+    const feature = featureStore.update(feature_id, updates);
+    if (!feature) return JSON.stringify({ error: `Feature not found: ${feature_id}` });
 
     return JSON.stringify({
       success: true,
-      task: { id: task.id, title: task.title, status: task.status, priority: task.priority },
-      message: `Task "${task.title}" updated`,
+      feature: { id: feature.id, title: feature.title, status: feature.status, priority: feature.priority },
+      message: `Feature "${feature.title}" updated`,
     });
   },
 });
 
-// ─── TaskList ───────────────────────────────────────────
+// ─── FeatureList ────────────────────────────────────────
 
-export const taskList = defineTool({
-  name: 'TaskList',
-  description: `List all tracked tasks with their status.
+export const featureList = defineTool({
+  name: 'FeatureList',
+  description: `List all tracked features with their status.
 
-Shows task IDs, titles, status, and priority. Filter by status if needed.`,
+Shows feature IDs, titles, status, and priority. Filter by status if needed.`,
   parameters: {
     type: 'object',
     properties: {
@@ -309,7 +314,7 @@ Shows task IDs, titles, status, and priority. Filter by status if needed.`,
       },
       include_completed: {
         type: 'boolean',
-        description: 'Include completed tasks (default: true)',
+        description: 'Include completed features (default: true)',
       },
     },
   },
@@ -321,7 +326,7 @@ Shows task IDs, titles, status, and priority. Filter by status if needed.`,
 
     const { status, include_completed = true } = input;
 
-    let results = taskStore.list(status ? { status } : undefined);
+    let results = featureStore.list(status ? { status } : undefined);
     if (!include_completed) {
       results = results.filter(t => t.status !== 'completed');
     }
@@ -340,7 +345,7 @@ Shows task IDs, titles, status, and priority. Filter by status if needed.`,
     taskItems.sort((a, b) => (ORDER[a.status] ?? 5) - (ORDER[b.status] ?? 5));
 
     return JSON.stringify({
-      tasks: taskItems,
+      features: taskItems,
       totalCount: taskItems.length,
       summary: {
         pending: taskItems.filter(t => t.status === 'pending').length,
@@ -352,20 +357,20 @@ Shows task IDs, titles, status, and priority. Filter by status if needed.`,
   },
 });
 
-// ─── TaskGet ────────────────────────────────────────────
+// ─── FeatureGet ─────────────────────────────────────────
 
-export const taskGet = defineTool({
-  name: 'TaskGet',
-  description: `Get detailed information about a specific task, including its progress log and memory.`,
+export const featureGet = defineTool({
+  name: 'FeatureGet',
+  description: `Get detailed information about a specific feature, including its progress log and memory.`,
   parameters: {
     type: 'object',
     properties: {
-      task_id: {
+      feature_id: {
         type: 'string',
-        description: 'Task ID to retrieve',
+        description: 'Feature ID to retrieve',
       },
     },
-    required: ['task_id'],
+    required: ['feature_id'],
   },
   isConcurrencySafe: () => true,
   isReadOnly: () => true,
@@ -373,41 +378,41 @@ export const taskGet = defineTool({
     const err = requireStore();
     if (err) return err;
 
-    const { task_id } = input;
-    if (!task_id) return JSON.stringify({ error: 'task_id is required' });
+    const { feature_id } = input;
+    if (!feature_id) return JSON.stringify({ error: 'feature_id is required' });
 
-    const task = taskStore.get(task_id);
-    if (!task) return JSON.stringify({ error: `Task not found: ${task_id}` });
+    const feature = featureStore.get(feature_id);
+    if (!feature) return JSON.stringify({ error: `Feature not found: ${feature_id}` });
 
     // Find subtasks
-    const allTasks = taskStore.list();
+    const allTasks = featureStore.list();
     const subtasks = allTasks
-      .filter(t => t.parentId === task_id)
+      .filter(t => t.parentId === feature_id)
       .map(t => ({ id: t.id, title: t.title, status: t.status }));
 
     return JSON.stringify({
-      ...task,
+      ...feature,
       subtasks,
-      hasProgress: !!taskStore.getProgress(task_id),
-      hasMemory: !!taskStore.getMemory(task_id),
+      hasProgress: !!featureStore.getProgress(feature_id),
+      hasMemory: !!featureStore.getMemory(feature_id),
     }, null, 2);
   },
 });
 
-// ─── TaskProgress ───────────────────────────────────────
+// ─── FeatureProgress ────────────────────────────────────
 
-export const taskProgress = defineTool({
-  name: 'TaskProgress',
-  description: `View or append to a task's progress log.
+export const featureProgress = defineTool({
+  name: 'FeatureProgress',
+  description: `View or append to a feature's progress log.
 
-The progress log is an append-only timeline of what happened during task execution.
+The progress log is an append-only timeline of what happened during feature execution.
 Use "view" to see the full log, or "append" to add a new entry.`,
   parameters: {
     type: 'object',
     properties: {
-      task_id: {
+      feature_id: {
         type: 'string',
-        description: 'Task ID',
+        description: 'Feature ID',
       },
       action: {
         type: 'string',
@@ -419,7 +424,7 @@ Use "view" to see the full log, or "append" to add a new entry.`,
         description: 'Progress note to append (required for "append")',
       },
     },
-    required: ['task_id', 'action'],
+    required: ['feature_id', 'action'],
   },
   isConcurrencySafe: () => false,
   isReadOnly: (input) => input?.action === 'view',
@@ -427,20 +432,20 @@ Use "view" to see the full log, or "append" to add a new entry.`,
     const err = requireStore();
     if (err) return err;
 
-    const { task_id, action, note } = input;
-    if (!task_id) return JSON.stringify({ error: 'task_id is required' });
+    const { feature_id, action, note } = input;
+    if (!feature_id) return JSON.stringify({ error: 'feature_id is required' });
 
-    const task = taskStore.get(task_id);
-    if (!task) return JSON.stringify({ error: `Task not found: ${task_id}` });
+    const feature = featureStore.get(feature_id);
+    if (!feature) return JSON.stringify({ error: `Feature not found: ${feature_id}` });
 
     switch (action) {
       case 'view':
-        return taskStore.getProgress(task_id) || '(No progress entries yet)';
+        return featureStore.getProgress(feature_id) || '(No progress entries yet)';
 
       case 'append':
         if (!note) return JSON.stringify({ error: 'note is required for "append"' });
-        taskStore.appendProgress(task_id, note, { status: task.status });
-        return JSON.stringify({ success: true, message: `Progress noted for "${task.title}"` });
+        featureStore.appendProgress(feature_id, note, { status: feature.status });
+        return JSON.stringify({ success: true, message: `Progress noted for "${feature.title}"` });
 
       default:
         return JSON.stringify({ error: `Unknown action: ${action}` });
@@ -448,21 +453,21 @@ Use "view" to see the full log, or "append" to add a new entry.`,
   },
 });
 
-// ─── TaskMemory ─────────────────────────────────────────
+// ─── FeatureMemory ──────────────────────────────────────
 
-export const taskMemory = defineTool({
-  name: 'TaskMemory',
-  description: `View or update a task's memory (context notes, key decisions, references).
+export const featureMemory = defineTool({
+  name: 'FeatureMemory',
+  description: `View or update a feature's memory (context notes, key decisions, references).
 
-Task memory stores persistent context relevant to the task — key decisions,
+Feature memory stores persistent context relevant to the feature — key decisions,
 references to files, architectural notes, etc. Unlike progress (append-only),
 memory can be rewritten to keep it current.`,
   parameters: {
     type: 'object',
     properties: {
-      task_id: {
+      feature_id: {
         type: 'string',
-        description: 'Task ID',
+        description: 'Feature ID',
       },
       action: {
         type: 'string',
@@ -474,7 +479,7 @@ memory can be rewritten to keep it current.`,
         description: 'New memory content (required for "update")',
       },
     },
-    required: ['task_id', 'action'],
+    required: ['feature_id', 'action'],
   },
   isConcurrencySafe: () => false,
   isReadOnly: (input) => input?.action === 'view',
@@ -482,20 +487,20 @@ memory can be rewritten to keep it current.`,
     const err = requireStore();
     if (err) return err;
 
-    const { task_id, action, content } = input;
-    if (!task_id) return JSON.stringify({ error: 'task_id is required' });
+    const { feature_id, action, content } = input;
+    if (!feature_id) return JSON.stringify({ error: 'feature_id is required' });
 
-    const task = taskStore.get(task_id);
-    if (!task) return JSON.stringify({ error: `Task not found: ${task_id}` });
+    const feature = featureStore.get(feature_id);
+    if (!feature) return JSON.stringify({ error: `Feature not found: ${feature_id}` });
 
     switch (action) {
       case 'view':
-        return taskStore.getMemory(task_id) || '(No memory entries yet)';
+        return featureStore.getMemory(feature_id) || '(No memory entries yet)';
 
       case 'update':
         if (!content) return JSON.stringify({ error: 'content is required for "update"' });
-        taskStore.updateMemory(task_id, content);
-        return JSON.stringify({ success: true, message: `Memory updated for "${task.title}"` });
+        featureStore.updateMemory(feature_id, content);
+        return JSON.stringify({ success: true, message: `Memory updated for "${feature.title}"` });
 
       default:
         return JSON.stringify({ error: `Unknown action: ${action}` });
@@ -503,24 +508,24 @@ memory can be rewritten to keep it current.`,
   },
 });
 
-// ─── FollowupTask ───────────────────────────────────────
+// ─── FollowupFeature ────────────────────────────────────
 
-export const followupTask = defineTool({
-  name: 'FollowupTask',
-  description: `Create a follow-up task linked to an existing task.
+export const followupFeature = defineTool({
+  name: 'FollowupFeature',
+  description: `Create a follow-up feature linked to an existing feature.
 
-Use when a completed task reveals additional work needed.
-The new task is linked as a child of the original.`,
+Use when a completed feature reveals additional work needed.
+The new feature is linked as a child of the original.`,
   parameters: {
     type: 'object',
     properties: {
-      parent_task_id: {
+      parent_feature_id: {
         type: 'string',
-        description: 'ID of the original task',
+        description: 'ID of the original feature',
       },
       title: {
         type: 'string',
-        description: 'Follow-up task title',
+        description: 'Follow-up feature title',
       },
       description: {
         type: 'string',
@@ -531,7 +536,7 @@ The new task is linked as a child of the original.`,
         enum: ['low', 'medium', 'high', 'critical'],
       },
     },
-    required: ['parent_task_id', 'title'],
+    required: ['parent_feature_id', 'title'],
   },
   isConcurrencySafe: () => false,
   isReadOnly: () => false,
@@ -539,31 +544,31 @@ The new task is linked as a child of the original.`,
     const err = requireStore();
     if (err) return err;
 
-    const { parent_task_id, title, description, priority = 'medium' } = input;
-    if (!parent_task_id) return JSON.stringify({ error: 'parent_task_id is required' });
+    const { parent_feature_id, title, description, priority = 'medium' } = input;
+    if (!parent_feature_id) return JSON.stringify({ error: 'parent_feature_id is required' });
     if (!title) return JSON.stringify({ error: 'title is required' });
 
-    const parent = taskStore.get(parent_task_id);
-    if (!parent) return JSON.stringify({ error: `Parent task not found: ${parent_task_id}` });
+    const parent = featureStore.get(parent_feature_id);
+    if (!parent) return JSON.stringify({ error: `Parent feature not found: ${parent_feature_id}` });
 
-    const id = `task-${randomUUID().slice(0, 8)}`;
-    const task = {
+    const id = `feat-${randomUUID().slice(0, 8)}`;
+    const feature = {
       id,
       title,
       description: description || `Follow-up to: ${parent.title}`,
       priority,
       status: 'pending',
-      parentId: parent_task_id,
+      parentId: parent_feature_id,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
 
-    taskStore.create(task);
+    featureStore.create(feature);
 
     return JSON.stringify({
       success: true,
-      task: { id, title, priority, status: 'pending', parentId: parent_task_id },
-      message: `Follow-up task created: ${title} (linked to ${parent.title})`,
+      feature: { id, title, priority, status: 'pending', parentId: parent_feature_id },
+      message: `Follow-up feature created: ${title} (linked to ${parent.title})`,
     });
   },
 });
@@ -601,18 +606,18 @@ approach, steps, and status of the current work.`,
 
     switch (action) {
       case 'view':
-        return taskStore.getPlan() || '(No plan set yet)';
+        return featureStore.getPlan() || '(No plan set yet)';
 
       case 'update':
         if (!content) return JSON.stringify({ error: 'content is required for "update"' });
-        taskStore.setPlan(content);
+        featureStore.setPlan(content);
         return JSON.stringify({ success: true, message: 'Plan updated', length: content.length });
 
       case 'append': {
         if (!content) return JSON.stringify({ error: 'content is required for "append"' });
-        const existing = taskStore.getPlan();
+        const existing = featureStore.getPlan();
         const newPlan = existing ? `${existing}\n\n${content}` : content;
-        taskStore.setPlan(newPlan);
+        featureStore.setPlan(newPlan);
         return JSON.stringify({ success: true, message: 'Plan updated (appended)', length: newPlan.length });
       }
 
@@ -622,9 +627,9 @@ approach, steps, and status of the current work.`,
   },
 });
 
-// ─── TaskSummaryPost (task-334n) ────────────────────────
+// ─── FeatureSummaryPost (task-334n) ─────────────────────
 
-import { postSummary } from '../tasks/summary.js';
+import { postSummary } from '../features/summary.js';
 import { openGroup } from '../groups/group-store.js';
 import { join } from 'path';
 
@@ -632,48 +637,48 @@ import { join } from 'path';
  * task-334n §B — initiator posts a progress summary to the group log.
  * Triggers the summary-extractor automatically (§C).
  */
-export const taskSummaryPost = defineTool({
-  name: 'task_summary_post',
-  description: `Post a progress summary for a multi-VP task (task-334n).
+export const featureSummaryPost = defineTool({
+  name: 'feature_summary_post',
+  description: `Post a progress summary for a multi-VP feature (task-334n).
 
-Only the task initiator should call this. The summary is written to the
-group message log as \`type=summary\` and auto-extracts 2-5 task-memory
-entries (kind=progress|decision) via the task-memory shard lib.
+Only the feature initiator should call this. The summary is written to the
+group message log as \`type=summary\` and auto-extracts 2-5 feature-memory
+entries (kind=progress|decision) via the feature-memory shard lib.
 
 To revise a prior summary, pass its msgId in \`supersedes\` — the old
 summary is marked \`supersededBy\` while staying on disk for audit.`,
   parameters: {
     type: 'object',
     properties: {
-      taskId:   { type: 'string', description: 'Target task id' },
-      body:     { type: 'string', description: 'Summary body (markdown)' },
-      progress: { type: 'number', description: '0..100, optional' },
+      feature_id: { type: 'string', description: 'Target feature id' },
+      body:       { type: 'string', description: 'Summary body (markdown)' },
+      progress:   { type: 'number', description: '0..100, optional' },
       supersedes: {
         type: 'array',
         items: { type: 'string' },
         description: 'Prior summary msgIds this revision supersedes',
       },
     },
-    required: ['taskId', 'body'],
+    required: ['feature_id', 'body'],
   },
   isConcurrencySafe: () => false,
   isReadOnly: () => false,
   async execute(input, ctx) {
     const err = requireStore();
     if (err) return err;
-    const { taskId, body, progress, supersedes } = input || {};
-    if (!taskId || !body) {
-      return JSON.stringify({ error: 'taskId and body are required' });
+    const { feature_id, body, progress, supersedes } = input || {};
+    if (!feature_id || !body) {
+      return JSON.stringify({ error: 'feature_id and body are required' });
     }
-    const task = taskStore.get(taskId);
-    if (!task) return JSON.stringify({ error: `task not found: ${taskId}` });
-    if (!task.groupId) {
-      return JSON.stringify({ error: 'task has no groupId; summary requires a group' });
+    const feature = featureStore.get(feature_id);
+    if (!feature) return JSON.stringify({ error: `feature not found: ${feature_id}` });
+    if (!feature.groupId) {
+      return JSON.stringify({ error: 'feature has no groupId; summary requires a group' });
     }
 
     const currentVpId = ctx?.currentVpId;
-    if (currentVpId && task.initiator && currentVpId !== task.initiator) {
-      return JSON.stringify({ error: 'only the task initiator may post summaries' });
+    if (currentVpId && feature.initiator && currentVpId !== feature.initiator) {
+      return JSON.stringify({ error: 'only the feature initiator may post summaries' });
     }
 
     const yeaftDir = ctx?.yeaftDir;
@@ -681,14 +686,14 @@ summary is marked \`supersededBy\` while staying on disk for audit.`,
       return JSON.stringify({ error: 'yeaftDir missing from tool context' });
     }
     const groupsRoot = join(yeaftDir, 'groups');
-    const memoryDir = join(groupsRoot, task.groupId, 'tasks', task.id, 'memory');
+    const memoryDir = join(groupsRoot, feature.groupId, 'features', feature.id, 'memory');
 
-    const group = openGroup(groupsRoot, task.groupId);
+    const group = openGroup(groupsRoot, feature.groupId);
     try {
       const res = postSummary({
         group,
-        taskId,
-        fromVpId: currentVpId || task.initiator || 'unknown',
+        featureId: feature_id,
+        fromVpId: currentVpId || feature.initiator || 'unknown',
         body,
         progress,
         supersedes,

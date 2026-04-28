@@ -210,10 +210,10 @@ function generateIndex(threads, currentId, attachments) {
     lines.push('');
     lines.push('## Attachments');
     lines.push('');
-    lines.push('| Thread | Task |');
-    lines.push('|--------|------|');
-    for (const [threadId, taskId] of attachments.entries()) {
-      lines.push(`| ${threadId} | ${taskId} |`);
+    lines.push('| Thread | Feature |');
+    lines.push('|--------|---------|');
+    for (const [threadId, featureId] of attachments.entries()) {
+      lines.push(`| ${threadId} | ${featureId} |`);
     }
   }
   return lines.join('\n') + '\n';
@@ -226,7 +226,7 @@ function generateIndex(threads, currentId, attachments) {
  */
 function serializeAttachments(attachments) {
   return JSON.stringify(
-    [...attachments.entries()].map(([threadId, taskId]) => ({ threadId, taskId })),
+    [...attachments.entries()].map(([threadId, featureId]) => ({ threadId, featureId })),
     null,
     2,
   ) + '\n';
@@ -237,7 +237,7 @@ function parseAttachments(raw) {
     const arr = JSON.parse(raw);
     if (!Array.isArray(arr)) return [];
     return arr.filter(
-      (e) => e && typeof e.threadId === 'string' && typeof e.taskId === 'string',
+      (e) => e && typeof e.threadId === 'string' && typeof e.featureId === 'string',
     );
   } catch {
     return [];
@@ -268,7 +268,7 @@ export class ThreadStore {
   #threads;
   /** @type {string} */
   #currentId;
-  /** @type {Map<string, string>} threadId → taskId */
+  /** @type {Map<string, string>} threadId → featureId */
   #attachments;
 
   /** @type {string|null} */
@@ -395,9 +395,9 @@ export class ThreadStore {
     try {
       if (this.#attachmentsPath && existsSync(this.#attachmentsPath)) {
         const raw = readFileSync(this.#attachmentsPath, 'utf8');
-        for (const { threadId, taskId } of parseAttachments(raw)) {
+        for (const { threadId, featureId } of parseAttachments(raw)) {
           if (this.#threads.has(threadId)) {
-            this.#attachments.set(threadId, taskId);
+            this.#attachments.set(threadId, featureId);
           }
         }
       }
@@ -708,13 +708,13 @@ export class ThreadStore {
       this.#currentId = targetId;
     }
 
-    // Drop any task attachment on source (it now belongs to target).
+    // Drop any feature attachment on source (it now belongs to target).
     if (this.#attachments.has(sourceId)) {
-      const taskId = this.#attachments.get(sourceId);
+      const featureId = this.#attachments.get(sourceId);
       this.#attachments.delete(sourceId);
       // Preserve attachment on target if it had none; otherwise keep target's.
       if (!this.#attachments.has(targetId)) {
-        this.#attachments.set(targetId, taskId);
+        this.#attachments.set(targetId, featureId);
       }
       this.#markAttachmentsDirty();
     }
@@ -814,23 +814,23 @@ export class ThreadStore {
     }
   }
 
-  attachTask(threadId, taskId) {
+  attachFeature(threadId, featureId) {
     if (!this.#threads.has(threadId)) {
       throw new Error(`thread not found: ${threadId}`);
     }
-    if (!taskId || typeof taskId !== 'string') {
-      throw new Error('taskId is required');
+    if (!featureId || typeof featureId !== 'string') {
+      throw new Error('featureId is required');
     }
-    this.#attachments.set(threadId, taskId);
+    this.#attachments.set(threadId, featureId);
     this.#markAttachmentsDirty();
   }
 
-  attachedTask(threadId) {
+  attachedFeature(threadId) {
     return this.#attachments.get(threadId) || null;
   }
 
   listAttachments() {
-    return [...this.#attachments.entries()].map(([threadId, taskId]) => ({ threadId, taskId }));
+    return [...this.#attachments.entries()].map(([threadId, featureId]) => ({ threadId, featureId }));
   }
 }
 

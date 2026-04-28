@@ -2,7 +2,7 @@
  * intent-classifier.js — task-309 (Phase 2 Router).
  *
  * Routes an incoming user message to one of four intents relative to the
- * current set of live threads + pending tasks:
+ * current set of live threads + pending features:
  *
  *   - 'continue'  — append to currentThreadId (default / most common)
  *   - 'interrupt' — steal focus on another LIVE thread (e.g. user replies
@@ -14,7 +14,7 @@
  *
  *   1. **Explicit signal parse** (no LLM):
  *      - Prefix `@thread-<id>` → switch/interrupt that thread (direct).
- *      - Prefix `@task-<nnn>` → switch to the thread attached to that task,
+ *      - Prefix `@feat-<nnn>` → switch to the thread attached to that task,
  *        if any; otherwise fall through to LLM.
  *   2. **User override lookup**: if UI previously called `.override(msgId,…)`
  *      for this message, return that decision verbatim.
@@ -53,7 +53,7 @@
  * @property {string} [goal]
  * @property {string} [status]
  *
- * @typedef {Object} PendingTask
+ * @typedef {Object} PendingFeature
  * @property {string} id
  * @property {string} [title]
  * @property {string} [threadId]  — attached thread, if any
@@ -63,7 +63,7 @@
  * @property {string} userMessage
  * @property {string} currentThreadId
  * @property {Array<ThreadSummary>} [allThreads]
- * @property {Array<PendingTask>} [pendingTasks]
+ * @property {Array<PendingFeature>} [pendingFeatures]
  * @property {string} [messageId] — if provided, any stored override for this
  *   id is consulted before the LLM path
  */
@@ -78,10 +78,10 @@ const VALID_ACTIONS = ['continue', 'interrupt', 'fork', 'switch'];
 const THREAD_PREFIX_RE = /^@(thread-[A-Za-z0-9_-]+)\b\s*/;
 
 /**
- * Match a leading `@task-NNN` marker. Captures the task id WITHOUT the `@`.
- * Example matches: "@task-309 ...", "@task-abc ..."
+ * Match a leading `@feat-NNN` marker. Captures the feature id WITHOUT the `@`.
+ * Example matches: "@feat-309 ...", "@feat-abc ..."
  */
-const TASK_PREFIX_RE = /^@(task-[A-Za-z0-9_-]+)\b\s*/;
+const FEATURE_PREFIX_RE = /^@(feat-[A-Za-z0-9_-]+)\b\s*/;
 
 export class IntentClassifier {
   /** @type {object} */            #adapter;
@@ -161,7 +161,7 @@ export class IntentClassifier {
       userMessage,
       currentThreadId,
       allThreads = [],
-      pendingTasks = [],
+      pendingFeatures = [],
       messageId,
     } = input || {};
 
@@ -181,14 +181,14 @@ export class IntentClassifier {
 
     // 2. Explicit signals (no LLM call).
     const explicit = this.#parseExplicit(userMessage, {
-      currentThreadId, allThreads, pendingTasks,
+      currentThreadId, allThreads, pendingFeatures,
     });
     if (explicit) return explicit;
 
     // 3. LLM classification (best-effort).
     try {
       const decision = await this.#classifyWithLLM({
-        userMessage, currentThreadId, allThreads, pendingTasks,
+        userMessage, currentThreadId, allThreads, pendingFeatures,
       });
       return this.#validateOrFallback(decision, {
         currentThreadId, allThreads, reason: 'llm',
@@ -205,10 +205,10 @@ export class IntentClassifier {
 
   /**
    * @param {string} msg
-   * @param {{ currentThreadId: string, allThreads: Array<ThreadSummary>, pendingTasks: Array<PendingTask> }} ctx
+   * @param {{ currentThreadId: string, allThreads: Array<ThreadSummary>, pendingFeatures: Array<PendingFeature> }} ctx
    * @returns {RouterDecision|null}
    */
-  #parseExplicit(msg, { currentThreadId, allThreads, pendingTasks }) {
+  #parseExplicit(msg, { currentThreadId, allThreads, pendingFeatures }) {
     const trimmed = msg.replace(/^\s+/, '');
 
     // @thread-xxx
@@ -233,21 +233,21 @@ export class IntentClassifier {
       };
     }
 
-    // @task-NNN
-    const mt = trimmed.match(TASK_PREFIX_RE);
+    // @feat-NNN
+    const mt = trimmed.match(FEATURE_PREFIX_RE);
     if (mt) {
-      const taskId = mt[1];
-      const task = pendingTasks.find(t => t && t.id === taskId);
-      if (task && task.threadId) {
-        const action = task.threadId === currentThreadId ? 'continue' : 'switch';
+      const featureId = mt[1];
+      const feature = pendingFeatures.find(t => t && t.id === featureId);
+      if (feature && feature.threadId) {
+        const action = feature.threadId === currentThreadId ? 'continue' : 'switch';
         return {
           action,
-          targetThreadId: task.threadId,
-          reason: `explicit @${taskId} → ${task.threadId}`,
+          targetThreadId: feature.threadId,
+          reason: `explicit @${featureId} → ${feature.threadId}`,
           source: 'explicit',
         };
       }
-      // Task unknown or not attached — fall through to LLM.
+      // Feature unknown or not attached — fall through to LLM.
       return null;
     }
 
@@ -259,7 +259,7 @@ export class IntentClassifier {
   // ──────────────────────────────────────────────────────────────
 
   /** Build the prompt/messages for the router LLM call. */
-  #buildMessages({ userMessage, currentThreadId, allThreads, pendingTasks }) {
+  #buildMessages({ userMessage, currentThreadId, allThreads, pendingFeatures }) {
     const system = [
       'You are a thread-routing classifier for a multi-thread AI chat.',
       'Given the user message and current thread context, pick exactly one action:',
@@ -286,7 +286,7 @@ export class IntentClassifier {
         goal: t.goal || '',
         status: t.status || 'active',
       })),
-      pendingTasks: (pendingTasks || []).map(t => ({
+      pendingFeatures: (pendingFeatures || []).map(t => ({
         id: t.id,
         title: t.title || '',
         threadId: t.threadId || null,
@@ -305,9 +305,9 @@ export class IntentClassifier {
   }
 
   /** @returns {Promise<RouterDecision>} */
-  async #classifyWithLLM({ userMessage, currentThreadId, allThreads, pendingTasks }) {
+  async #classifyWithLLM({ userMessage, currentThreadId, allThreads, pendingFeatures }) {
     const { system, messages } = this.#buildMessages({
-      userMessage, currentThreadId, allThreads, pendingTasks,
+      userMessage, currentThreadId, allThreads, pendingFeatures,
     });
     // Q2: router uses primaryModel (no fast-model split yet).
     const model = this.#config.primaryModel || this.#config.model;

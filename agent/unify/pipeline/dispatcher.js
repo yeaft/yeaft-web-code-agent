@@ -74,7 +74,7 @@
  */
 
 import { MAIN_THREAD_ID } from '../threads/store.js';
-import { getTaskStore } from '../tools/task-tools.js';
+import { getFeatureStore } from '../tools/feature-tools.js';
 
 /**
  * Per-entry transient metadata (messageId, override) lives here — a
@@ -220,7 +220,7 @@ export class Dispatcher {
     const allThreads = threadStore.list().map(t => ({
       id: t.id, name: t.name, goal: t.goal, status: t.status,
     }));
-    const pendingTasks = this.#listPendingTasks();
+    const pendingFeatures = this.#listPendingFeatures();
 
     // ── Step 3: classify (explicit override > classifier) ──
     /** @type {import('../router/intent-classifier.js').RouterDecision} */
@@ -245,7 +245,7 @@ export class Dispatcher {
           userMessage: claimed.text,
           currentThreadId,
           allThreads,
-          pendingTasks,
+          pendingFeatures,
           messageId: meta.messageId || undefined,
         });
       } catch (err) {
@@ -347,12 +347,12 @@ export class Dispatcher {
     }
   }
 
-  #listPendingTasks() {
-    // Best-effort: the TaskStore is a singleton initialised in loadSession().
+  #listPendingFeatures() {
+    // Best-effort: the FeatureStore is a singleton initialised in loadSession().
     // If the store isn't available (e.g. unit tests without a session) we
-    // just return []. Never let a TaskStore exception break routing.
+    // just return []. Never let a FeatureStore exception break routing.
     try {
-      const store = getTaskStore();
+      const store = getFeatureStore();
       if (!store || typeof store.list !== 'function') return [];
       const pending = store.list({ status: 'pending' }) || [];
       return pending.map(t => ({
