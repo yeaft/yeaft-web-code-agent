@@ -47,7 +47,8 @@ export const useChatStore = defineStore('chat', {
     customConversationTitles: {},
     // Per-conversation 处理状态：conversationId -> true (使用对象而非 Set 以确保响应式)
     processingConversations: {},
-    theme: localStorage.getItem('theme') || 'dark',
+    theme: localStorage.getItem('theme') || (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'),
+    themeFollowSystem: !localStorage.getItem('theme'),
     locale: localStorage.getItem('locale') || 'zh-CN',
     // Per-conversation 执行状态追踪：conversationId -> { currentTool, toolHistory, lastActivity }
     executionStatusMap: {},
@@ -2081,6 +2082,8 @@ export const useChatStore = defineStore('chat', {
     // =====================
     toggleTheme() {
       this.theme = this.theme === 'dark' ? 'light' : 'dark';
+      // User made an explicit choice — stop following the system from now on.
+      this.themeFollowSystem = false;
       localStorage.setItem('theme', this.theme);
       document.documentElement.setAttribute('data-theme', this.theme);
       document.documentElement.classList.toggle('light', this.theme === 'light');
@@ -2089,6 +2092,18 @@ export const useChatStore = defineStore('chat', {
     initTheme() {
       document.documentElement.setAttribute('data-theme', this.theme);
       document.documentElement.classList.toggle('light', this.theme === 'light');
+      // If the user has never explicitly picked a theme, follow the OS.
+      if (this.themeFollowSystem && typeof window !== 'undefined' && window.matchMedia) {
+        const mql = window.matchMedia('(prefers-color-scheme: dark)');
+        const apply = (e) => {
+          if (!this.themeFollowSystem) return;
+          this.theme = e.matches ? 'dark' : 'light';
+          document.documentElement.setAttribute('data-theme', this.theme);
+          document.documentElement.classList.toggle('light', this.theme === 'light');
+        };
+        if (mql.addEventListener) mql.addEventListener('change', apply);
+        else if (mql.addListener) mql.addListener(apply);
+      }
     },
 
     changeLocale(locale) {
