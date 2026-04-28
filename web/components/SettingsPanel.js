@@ -347,6 +347,30 @@ export default {
       <transition name="sp-toast">
         <div v-if="message" class="sp-toast" :class="{ error: isError }">{{ message }}</div>
       </transition>
+
+      <!-- SSO bind QR modal: reuses LoginPage's QR-scan UX so binding feels
+           identical to logging in. Only shown for QR providers (alipay/
+           wechat); other providers still use the redirect flow. -->
+      <div
+        v-if="authStore.qrPanel && authStore.qrPanel.intent === 'bind'"
+        class="settings-overlay sp-qr-overlay"
+        @click.self="cancelQrBind"
+      >
+        <div class="sp-qr-card">
+          <p class="totp-title">{{ qrModalTitle }}</p>
+          <p class="totp-hint">{{ $t('login.qr.hint') }}</p>
+          <div class="qr-container">
+            <img v-if="qrDataUrl" :src="qrDataUrl" alt="QR" class="qr-code">
+            <div v-else class="qr-code qr-placeholder"></div>
+          </div>
+          <p v-if="authStore.qrPanel.status === 'error'" class="error">
+            {{ authStore.qrPanel.error }}
+          </p>
+          <button class="sp-btn sp-btn-muted" @click="cancelQrBind">
+            {{ $t('common.back') }}
+          </button>
+        </div>
+      </div>
     </div>
   `,
   directives: {
@@ -384,7 +408,8 @@ export default {
       openDropdown: null,
       officePreviewMode: localStorage.getItem('officePreviewMode') || 'local',
       ssoBoundMessage: '',
-      ssoConflictMessage: ''
+      ssoConflictMessage: '',
+      qrDataUrl: ''
     };
   },
   computed: {
@@ -474,12 +499,21 @@ export default {
           linked: linked.has(r.key),
           identity: linked.get(r.key) || null
         }));
+    },
+    qrModalTitle() {
+      const p = this.authStore.qrPanel?.provider;
+      if (p === 'alipay') return this.$t('login.qr.titleAlipay');
+      if (p === 'wechat') return this.$t('login.qr.titleWechat');
+      return this.$t('login.qr.title');
     }
   },
   watch: {
     visible(val) {
       if (val) {
         this.loadData();
+      } else {
+        // Closing settings while a bind QR is up should tear it down too.
+        if (this.authStore.qrPanel) this.cancelQrBind();
       }
     },
     activeTab(val) {
@@ -488,6 +522,25 @@ export default {
           type: 'get_mcp_servers',
           agentId: this.chatStore.currentAgent
         });
+      }
+    },
+    // When the bind QR completes (server reports status='bound'), close the
+    // modal, refresh the linked-identities list, and surface a success toast.
+    'authStore.qrPanel.status'(status) {
+      if (status === 'bound') {
+        const provider = this.authStore.qrPanel?.provider;
+        this.authStore.cancelSsoQr();
+        this.qrDataUrl = '';
+        this.authStore.loadIdentities();
+        this.ssoBoundMessage = this.$t('settings.account.ssoBoundMsg', {
+          provider: provider ? this.$t('login.' + provider) : ''
+        });
+      }
+    },
+    // Re-render the QR if the authorize URL changes mid-flow (e.g. retry).
+    'authStore.qrPanel.authorizeUrl'(url) {
+      if (url && this.authStore.qrPanel?.intent === 'bind') {
+        this.renderQrCode();
       }
     }
   },
@@ -572,7 +625,45 @@ export default {
     bindSso(provider) {
       this.ssoBoundMessage = '';
       this.ssoConflictMessage = '';
-      this.authStore.bindSso(provider);
+      // QR providers (alipay, wechat) get the same in-page scan flow that
+      // login uses. Everything else goes through the OAuth redirect.
+      if (provider === 'alipay' || provider === 'wechat') {
+        this.startQrBind(provider);
+      } else {
+        this.authStore.bindSso(provider);
+      }
+    },
+
+    async startQrBind(provider) {
+      this.qrDataUrl = '';
+      const ok = await this.authStore.startSsoQr(provider, { intent: 'bind' });
+      if (!ok) {
+        this.ssoConflictMessage = this.authStore.error || this.$t('settings.account.bindFailed');
+        return;
+      }
+      this.renderQrCode();
+    },
+
+    cancelQrBind() {
+      this.authStore.cancelSsoQr();
+      this.qrDataUrl = '';
+    },
+
+    renderQrCode() {
+      const panel = this.authStore.qrPanel;
+      if (!panel || !panel.authorizeUrl) return;
+      if (typeof qrcode !== 'function') {
+        console.error('[SettingsPanel] qrcode library not loaded');
+        return;
+      }
+      try {
+        const qr = qrcode(0, 'M');
+        qr.addData(panel.authorizeUrl, 'Byte');
+        qr.make();
+        this.qrDataUrl = qr.createDataURL(6, 4);
+      } catch (err) {
+        console.error('[SettingsPanel] QR render failed:', err);
+      }
     },
 
     async unbindSso(provider) {
