@@ -1,3 +1,6 @@
+import { assertNodeVersion } from './check-node-version.js';
+assertNodeVersion({ component: '@yeaft/webchat-agent' });
+
 import 'dotenv/config';
 import { platform, homedir } from 'os';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, cpSync, chmodSync, readdirSync } from 'fs';

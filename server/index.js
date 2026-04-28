@@ -1,3 +1,6 @@
+import { assertNodeVersion } from './check-node-version.js';
+assertNodeVersion({ component: 'yeaft-server' });
+
 import express from 'express';
 import compression from 'compression';
 import { createServer } from 'http';

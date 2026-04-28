@@ -3,6 +3,9 @@
  * CLI entry point for @yeaft/webchat-agent
  * Parses command-line arguments and starts the agent or runs subcommands
  */
+import { assertNodeVersion } from './check-node-version.js';
+assertNodeVersion({ component: '@yeaft/webchat-agent' });
+
 import { execSync, spawn } from 'child_process';
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { dirname, join } from 'path';
