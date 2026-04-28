@@ -100,7 +100,8 @@ export default {
             <p class="totp-title">{{ qrPanelTitle }}</p>
             <p class="totp-hint">{{ $t('login.qr.hint') }}</p>
             <div class="qr-container">
-              <canvas ref="qrCanvas" class="qr-code"></canvas>
+              <img v-if="qrDataUrl" :src="qrDataUrl" alt="QR" class="qr-code">
+              <div v-else class="qr-code qr-placeholder"></div>
             </div>
             <p v-if="authStore.qrPanel.status === 'error'" class="error">
               {{ authStore.qrPanel.error }}
@@ -254,6 +255,7 @@ export default {
     const totpInput = Vue.ref(null);
     const regCodeInput = Vue.ref(null);
     const qrCanvas = Vue.ref(null);
+    const qrDataUrl = Vue.ref('');
 
     // Default to OAuth-first; remember last user choice for the session.
     const loginMode = Vue.ref(localStorage.getItem('loginMode') === 'credentials' ? 'credentials' : 'oauth');
@@ -311,7 +313,7 @@ export default {
       } else if (provider === 'alipay' || provider === 'wechat') {
         // QR-scan flow.
         authStore.startSsoQr(provider).then(ok => {
-          if (ok) Vue.nextTick(() => renderQrCode());
+          if (ok) renderQrCode();
         });
       } else {
         authStore.loginWithSso(provider);
@@ -340,21 +342,19 @@ export default {
     };
 
     /**
-     * Render the QR for the current authorize URL.
+     * Build a QR data URL for the current authorize URL.
      *
-     * Notes for the curious:
-     *   - We use the 'Byte' mode explicitly (the default 'Numeric' would
-     *     reject any URL).
-     *   - typeNumber=0 makes qrcode-generator pick the smallest size that
-     *     fits the data; this matters because Alipay URLs are long.
-     *   - We use error correction level 'M' (15% recovery) — enough for
-     *     phone scans on a screen, while keeping module count low.
-     *   - We override the canvas's actual pixel size every render rather
-     *     than rely on CSS, so the image is always crisp regardless of
-     *     theme/zoom.
+     * Why a data URL (and not a canvas)?
+     *   - The QR panel is rendered via v-if; the canvas ref is null on the
+     *     same tick the panel mounts, which leaves the canvas blank if the
+     *     watch fires before nextTick resolves. Using qrcode-generator's
+     *     built-in createDataURL() removes the timing dependency entirely —
+     *     the <img> just shows up in the next paint, no ref required.
+     *   - 'Byte' mode is required (the default 'Numeric' rejects URLs).
+     *   - typeNumber=0 → smallest size that fits; ec='M' → 15% recovery.
      */
     const renderQrCode = () => {
-      if (!authStore.qrPanel || !qrCanvas.value) return;
+      if (!authStore.qrPanel) return;
       if (typeof qrcode !== 'function') {
         console.error('[LoginPage] qrcode library not loaded');
         return;
@@ -363,32 +363,9 @@ export default {
         const qr = qrcode(0, 'M');
         qr.addData(authStore.qrPanel.authorizeUrl, 'Byte');
         qr.make();
-        const canvas = qrCanvas.value;
-        const moduleCount = qr.getModuleCount();
-        const cssSize = 220; // visual size in CSS pixels
-        const dpr = Math.max(1, window.devicePixelRatio || 1);
-        const pxSize = cssSize * dpr;
-        canvas.width = pxSize;
-        canvas.height = pxSize;
-        canvas.style.width = cssSize + 'px';
-        canvas.style.height = cssSize + 'px';
-        const ctx = canvas.getContext('2d');
-        const margin = 4; // modules of quiet zone
-        const totalModules = moduleCount + margin * 2;
-        const cellPx = pxSize / totalModules;
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, pxSize, pxSize);
-        ctx.fillStyle = '#000000';
-        for (let r = 0; r < moduleCount; r++) {
-          for (let c = 0; c < moduleCount; c++) {
-            if (qr.isDark(r, c)) {
-              const x = (margin + c) * cellPx;
-              const y = (margin + r) * cellPx;
-              // +1px overdraw to prevent sub-pixel gaps between modules.
-              ctx.fillRect(Math.floor(x), Math.floor(y), Math.ceil(cellPx) + 1, Math.ceil(cellPx) + 1);
-            }
-          }
-        }
+        // cellSize=6 → ~220px image at typical QR sizes; quiet zone of 4
+        // modules per spec. createDataURL returns a black/white GIF.
+        qrDataUrl.value = qr.createDataURL(6, 4);
       } catch (err) {
         console.error('[LoginPage] QR render failed:', err);
       }
@@ -402,7 +379,8 @@ export default {
     });
 
     Vue.watch(() => authStore.qrPanel?.authorizeUrl, (url) => {
-      if (url) Vue.nextTick(() => renderQrCode());
+      if (url) renderQrCode();
+      else qrDataUrl.value = '';
     });
 
     const verifyTotp = async () => {
@@ -515,6 +493,7 @@ export default {
       enabledProviders,
       handleProviderClick,
       qrCanvas,
+      qrDataUrl,
       qrPanelTitle,
       username,
       password,
