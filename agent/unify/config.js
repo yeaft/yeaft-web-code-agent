@@ -217,6 +217,8 @@ function loadLegacyConfig(dir, overrides) {
     maxContinueTurns: overrides.maxContinueTurns ?? fileConfig.maxContinueTurns ?? DEFAULTS.maxContinueTurns,
     // task-318: legacy path never had the `unify` section — defaults.
     unify: normaliseUnifySection(null),
+    // DESIGN-v2 feature flag. Default true (PR-E flipped). Override wins.
+    memoryV2: overrides.memoryV2 !== undefined ? !!overrides.memoryV2 : true,
     providers: null,
     primaryModel: null,
     fastModel: null,
@@ -312,6 +314,14 @@ export function loadConfig(overrides = {}) {
     // task-318: Unify runtime caps. `unify` is a nested section so we
     // don't pollute the flat config namespace used by chat/crew code.
     unify: normaliseUnifySection(jsonConfig.unify),
+
+    // DESIGN-v2 feature flag. When true the engine routes recall through
+    // memory/recall-v2.js (per-scope memory.md + summary.md) and the
+    // session wires the v2 dream pipeline (dream-v2/runner.js). PR-E
+    // flipped the default to true; users who need the legacy R6 paths
+    // can opt out via `"memoryV2": false` in ~/.yeaft/config.json.
+    memoryV2: overrides.memoryV2 !== undefined ? !!overrides.memoryV2
+      : (jsonConfig.memoryV2 !== undefined ? !!jsonConfig.memoryV2 : true),
 
     // Legacy fields (null when using config.json)
     apiKey: overrides.apiKey || null,

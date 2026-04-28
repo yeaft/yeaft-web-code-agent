@@ -376,3 +376,38 @@ describe('loadMCPConfig', () => {
     expect(result.servers[0].name).toBe('good');
   });
 });
+
+// ═══════════════════════════════════════════════════════════════
+// memoryV2 feature flag — DESIGN-v2 PR-E flipped the default to true
+// ═══════════════════════════════════════════════════════════════
+
+describe('loadConfig — memoryV2 flag', () => {
+  it('defaults memoryV2 to true (config.json with no flag)', () => {
+    writeFileSync(join(TEST_DIR, 'config.json'), JSON.stringify({
+      providers: [{ name: 'p', baseUrl: 'http://x/v1', apiKey: 'k', models: ['m'] }],
+      primaryModel: 'p/m',
+    }));
+    const config = loadConfig({ dir: TEST_DIR });
+    expect(config.memoryV2).toBe(true);
+  });
+
+  it('honours explicit false in config.json', () => {
+    writeFileSync(join(TEST_DIR, 'config.json'), JSON.stringify({
+      providers: [{ name: 'p', baseUrl: 'http://x/v1', apiKey: 'k', models: ['m'] }],
+      primaryModel: 'p/m',
+      memoryV2: false,
+    }));
+    const config = loadConfig({ dir: TEST_DIR });
+    expect(config.memoryV2).toBe(false);
+  });
+
+  it('override beats config.json', () => {
+    writeFileSync(join(TEST_DIR, 'config.json'), JSON.stringify({
+      providers: [{ name: 'p', baseUrl: 'http://x/v1', apiKey: 'k', models: ['m'] }],
+      primaryModel: 'p/m',
+      memoryV2: false,
+    }));
+    const config = loadConfig({ dir: TEST_DIR, memoryV2: true });
+    expect(config.memoryV2).toBe(true);
+  });
+});
