@@ -21,6 +21,7 @@ import { randomUUID } from 'crypto';
 import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
 import { LLMContextError, LLMAbortError } from './llm/adapter.js';
 import { recallR6, formatForInjection } from './memory/recall-r6.js';
+import { recallV2 } from './memory/recall-v2.js';
 import { shouldConsolidate, consolidate, partitionMessages } from './memory/consolidate.js';
 import { extractMemories } from './memory/extract.js';
 import { runCompact as runCompactOrchestrator } from './compact/orchestrator.js';
@@ -489,15 +490,40 @@ export class Engine {
 
   /**
    * Perform memory recall for a given prompt.
-   * Uses recallR6 (R6 shard-based recall) when memoryShardStore is available,
-   * falling back to empty results if not.
+   *
+   * Routes:
+   *   - config.memoryV2 === true → recall-v2 (per-scope memory.md + summary.md)
+   *   - else → R6 shard-based recall (legacy)
    *
    * @param {string} prompt
+   * @param {{ groupId?: string, vpId?: string, featureId?: string }} [ctx]
    * @returns {Promise<{ profile: string, entries: object[], formatted: string }|null>}
    */
-  async #recallMemory(prompt) {
+  async #recallMemory(prompt, ctx = {}) {
     const memory = { profile: '', entries: [], formatted: '' };
 
+    // ─── v2 path (DESIGN-v2) ───────────────────────────────────
+    if (this.#config && this.#config.memoryV2 && this.#yeaftDir) {
+      try {
+        const result = await recallV2({
+          prompt,
+          root: `${this.#yeaftDir}/memory`,
+          groupId: ctx.groupId,
+          vpId: ctx.vpId,
+          featureId: ctx.featureId,
+        });
+        memory.entries = result.sections || [];
+        memory.formatted = result.formatted || '';
+        // Profile concept: in v2 the user/memory.md IS the profile.
+        const userSec = (result.sections || []).find(s => s.kind === 'user');
+        memory.profile = userSec ? (userSec.summary || '') : '';
+      } catch {
+        // Fail soft — empty injection.
+      }
+      return memory;
+    }
+
+    // ─── R6 legacy path ────────────────────────────────────────
     // Build user profile from user-memory shard store (R6 path),
     // falling back to legacy readProfile if shard store unavailable.
     try {
@@ -885,7 +911,15 @@ export class Engine {
     }
 
     // R6 recall: append shard-based recall results to memory injection
-    const recallResult = await this.#recallMemory(prompt);
+    const recallResult = await this.#recallMemory(prompt, {
+      groupId,
+      vpId: vpPersona && typeof vpPersona === 'object' && typeof vpPersona.vpId === 'string'
+        ? vpPersona.vpId
+        : (typeof senderVpId === 'string' ? senderVpId : undefined),
+      featureId: typeof inboundEnvelope === 'object' && inboundEnvelope
+        ? inboundEnvelope.featureId
+        : undefined,
+    });
     if (recallResult && recallResult.formatted) {
       memoryInjection = memoryInjection
         ? memoryInjection + '\n\n' + recallResult.formatted
