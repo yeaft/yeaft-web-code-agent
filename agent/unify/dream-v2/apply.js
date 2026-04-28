@@ -26,6 +26,7 @@ import { withDreamMarker } from './state.js';
 import { batchSourcesForApply, needsBatchedApply, truncateMessage } from './segment.js';
 import { snapshotScope } from './snapshot.js';
 import { parseJsonSafe } from './triage.js';
+import { render } from './prompts/index.js';
 
 const SYSTEM = `You are the Apply stage of a dream pipeline. You rewrite a single scope's memory.md and summary.md based on recent group conversations. Reply with strict JSON only — no prose, no fences.`;
 
@@ -42,53 +43,17 @@ const SYSTEM = `You are the Apply stage of a dream pipeline. You rewrite a singl
  * }} ctx
  */
 export function buildUpdatePrompt(ctx) {
-  const lines = [];
-  lines.push('You are updating an existing memory scope.');
-  lines.push('');
-  lines.push(`Scope: ${ctx.target}`);
-  if (ctx.batchInfo && ctx.batchInfo.total > 1) {
-    lines.push(`This is batch ${ctx.batchInfo.index} of ${ctx.batchInfo.total}.`);
-    lines.push('Earlier batches have already been folded into the current memory.md below.');
-  }
-  lines.push('');
-  lines.push('Current memory.md:');
-  lines.push('"""');
-  lines.push(ctx.memoryMd || '');
-  lines.push('"""');
-  lines.push('');
-  lines.push('Current summary.md:');
-  lines.push('"""');
-  lines.push(ctx.summaryMd || '');
-  lines.push('"""');
-  lines.push('');
-  lines.push('Recent conversations:');
-  for (const src of (ctx.sources || [])) {
-    lines.push('');
-    lines.push(`[group/${src.groupId}]`);
-    for (const m of (src.diff || [])) {
-      const head = `[${m.role || 'message'}${m.kind === 'overlap' ? ' (already processed)' : ''}]`;
-      lines.push(head);
-      lines.push(truncateMessage(m.body || ''));
-    }
-  }
-  lines.push('');
-  lines.push('Task:');
-  lines.push('- Extract from these conversations what is relevant to THIS scope.');
-  lines.push('- Integrate it into memory.md (reorganize sections if needed).');
-  lines.push('- Drop stale or contradicted entries.');
-  lines.push('- Rewrite summary.md (1–3 sentences).');
-  lines.push('- The same conversations are being processed for OTHER scopes too.');
-  lines.push('  Only handle what is relevant here. Ignore the rest.');
-  lines.push('');
-  lines.push('Hard rules:');
-  lines.push('- Never read or reference any other scope\'s files.');
-  lines.push('- Never modify VP system-prompt, group charter, or user preferences.');
-  lines.push('- If something contradicts a charter, annotate with');
-  lines.push('  "⚠️ contradicts charter — verify which is current" and continue.');
-  lines.push('');
-  lines.push('Reply with strict JSON of the shape:');
-  lines.push('{ "memory_md": "...", "summary_md": "..." }');
-  return lines.join('\n');
+  const batchHeader = (ctx.batchInfo && ctx.batchInfo.total > 1)
+    ? `This is batch ${ctx.batchInfo.index} of ${ctx.batchInfo.total}.\nEarlier batches have already been folded into the current memory.md below.\n`
+    : '';
+  const sources = renderSourceBlocks(ctx.sources);
+  return render('update', {
+    target: ctx.target,
+    batchHeader,
+    memoryMd: ctx.memoryMd || '',
+    summaryMd: ctx.summaryMd || '',
+    sources,
+  });
 }
 
 /**
@@ -102,36 +67,40 @@ export function buildUpdatePrompt(ctx) {
  * }} ctx
  */
 export function buildCreatePrompt(ctx) {
-  const lines = [];
-  lines.push('You are creating a new memory scope from scratch.');
-  lines.push('');
-  lines.push(`Scope path: ${ctx.target}   (must be ≤2 levels)`);
-  lines.push('');
-  lines.push('Source conversations:');
-  for (const src of (ctx.sources || [])) {
+  const sources = renderSourceBlocks(ctx.sources);
+  let siblingsBlock = '';
+  if (ctx.siblingTopics && ctx.siblingTopics.length > 0) {
+    const lines = ['For tone reference, sibling/parent topic summaries:'];
+    for (const t of ctx.siblingTopics) lines.push(`  - ${t.path}: ${oneLine(t.summary)}`);
     lines.push('');
-    lines.push(`[group/${src.groupId}]`);
+    siblingsBlock = lines.join('\n');
+  }
+  return render('create', {
+    target: ctx.target,
+    sources,
+    siblingsBlock,
+  });
+}
+
+/**
+ * Render a list of `(groupId, diff)` source blocks for inclusion in the
+ * update / create prompts. Single-source aware: omits leading blank line
+ * if there's only one source, to keep small prompts compact.
+ *
+ * @param {Array<{ groupId: string, diff: Array<object> }>} sources
+ */
+function renderSourceBlocks(sources) {
+  const out = [];
+  for (const src of (sources || [])) {
+    out.push('');
+    out.push(`[group/${src.groupId}]`);
     for (const m of (src.diff || [])) {
       const head = `[${m.role || 'message'}${m.kind === 'overlap' ? ' (already processed)' : ''}]`;
-      lines.push(head);
-      lines.push(truncateMessage(m.body || ''));
+      out.push(head);
+      out.push(truncateMessage(m.body || ''));
     }
   }
-  lines.push('');
-  if (ctx.siblingTopics && ctx.siblingTopics.length > 0) {
-    lines.push('For tone reference, sibling/parent topic summaries:');
-    for (const t of ctx.siblingTopics) {
-      lines.push(`  - ${t.path}: ${oneLine(t.summary)}`);
-    }
-    lines.push('');
-  }
-  lines.push('Task:');
-  lines.push('1. Write memory.md from scratch with reasonable section structure.');
-  lines.push('2. Write summary.md (1–3 sentences).');
-  lines.push('');
-  lines.push('Reply with strict JSON of the shape:');
-  lines.push('{ "memory_md": "...", "summary_md": "..." }');
-  return lines.join('\n');
+  return out.join('\n').replace(/^\n/, '');
 }
 
 /**

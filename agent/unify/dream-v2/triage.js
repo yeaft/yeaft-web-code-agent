@@ -37,6 +37,7 @@
 
 import { isValidTopic } from '../memory/store-v2.js';
 import { truncateMessage } from './segment.js';
+import { render } from './prompts/index.js';
 
 const SYSTEM = `You are the Triage stage of a dream pipeline that decides which scopes a recent group conversation should affect. Reply with strict JSON only — no prose, no markdown fences.`;
 
@@ -87,38 +88,21 @@ export function applyHardRules({ groupId, messages }) {
  * @param {{ groupId: string, messages: Array<object>, topicSummaries: Array<{ path: string, summary: string }> }} ctx
  */
 export function buildPass1Prompt(ctx) {
-  const lines = [
-    'You are deciding whether a recent group conversation carries:',
-    '  - signals that should update the USER profile, and/or',
-    '  - signals that should update one or more TOPIC scopes.',
-    '',
-    'Do NOT mention vp/, group/, or feature/ scopes — those are handled by hard rules.',
-    '',
-    `Group: ${ctx.groupId}`,
-    '',
-    'Existing topic scopes (path — summary):',
-  ];
-  if (!ctx.topicSummaries || ctx.topicSummaries.length === 0) {
-    lines.push('  (none)');
-  } else {
-    for (const t of ctx.topicSummaries) {
-      lines.push(`  - ${t.path} — ${oneLine(t.summary)}`);
-    }
-  }
-  lines.push('', 'Conversation:');
+  const topicSummaries = (!ctx.topicSummaries || ctx.topicSummaries.length === 0)
+    ? '  (none)'
+    : ctx.topicSummaries.map(t => `  - ${t.path} — ${oneLine(t.summary)}`).join('\n');
+  const conv = [];
   for (const m of (ctx.messages || [])) {
     const head = `[${m.role || 'message'}${m.kind === 'overlap' ? ' (already processed)' : ''}]`;
-    lines.push(head);
-    lines.push(truncateMessage(m.body || ''));
-    lines.push('');
+    conv.push(head);
+    conv.push(truncateMessage(m.body || ''));
+    conv.push('');
   }
-  lines.push('Respond with strict JSON of the shape:');
-  lines.push('{');
-  lines.push('  "user_profile_signals": boolean,');
-  lines.push('  "topics": [ "<short category description>", ... ],');
-  lines.push('  "trivial_only": boolean');
-  lines.push('}');
-  return lines.join('\n');
+  return render('triagePass1', {
+    groupId: ctx.groupId,
+    topicSummaries,
+    conversation: conv.join('\n').trimEnd(),
+  });
 }
 
 /**
@@ -127,30 +111,13 @@ export function buildPass1Prompt(ctx) {
  * @param {{ description: string, existingTopics: Array<{ path: string, summary: string }> }} ctx
  */
 export function buildPass2Prompt(ctx) {
-  const lines = [
-    'Bind a free-form topic description to an exact path under topic/.',
-    'Rules:',
-    '  - At most TWO path segments. Reject any third level.',
-    '  - Segments may contain letters, digits, dashes, underscores, dots, CJK.',
-    '  - Prefer matching an existing path if the description fits.',
-    '',
-    `Description: ${ctx.description}`,
-    '',
-    'Existing topics:',
-  ];
-  if (!ctx.existingTopics || ctx.existingTopics.length === 0) {
-    lines.push('  (none)');
-  } else {
-    for (const t of ctx.existingTopics) {
-      lines.push(`  - ${t.path} — ${oneLine(t.summary)}`);
-    }
-  }
-  lines.push('');
-  lines.push('Reply with strict JSON, exactly one of:');
-  lines.push('  { "decision": "match", "path": "<existing path>" }');
-  lines.push('  { "decision": "new",   "path": "<new ≤2-segment path>" }');
-  lines.push('  { "decision": "none" }');
-  return lines.join('\n');
+  const existingTopics = (!ctx.existingTopics || ctx.existingTopics.length === 0)
+    ? '  (none)'
+    : ctx.existingTopics.map(t => `  - ${t.path} — ${oneLine(t.summary)}`).join('\n');
+  return render('triagePass2', {
+    description: ctx.description,
+    existingTopics,
+  });
 }
 
 /**
