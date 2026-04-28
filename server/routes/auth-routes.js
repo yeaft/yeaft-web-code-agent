@@ -1,6 +1,6 @@
 import { CONFIG, isEmailConfigured, isTotpEnabled, isAadEnabled, getEnabledSsoProviders, getUserByUsername } from '../config.js';
 import { loginStep1, loginStep2, logout, verifyTotpStep, completeTotpSetup, register, loginWithAad } from '../auth.js';
-import { buildAuthorizeUrl, handleCallback } from '../auth/oauth-flow.js';
+import { buildAuthorizeUrl, handleCallback, peekStateMode, storePendingResult, consumePendingResult } from '../auth/oauth-flow.js';
 import { verifyToken } from '../auth/token.js';
 import { identityDb, userDb } from '../database.js';
 
@@ -155,12 +155,50 @@ export function registerAuthRoutes(app, { requireAuth, checkRateLimit }) {
     }
 
     try {
-      const url = buildAuthorizeUrl({ provider, intent, userId });
+      const { url } = buildAuthorizeUrl({ provider, intent, userId });
       res.redirect(url);
     } catch (err) {
       console.error(`[SSO ${provider}] start error:`, err.message);
       res.status(400).send(`SSO start failed: ${err.message}`);
     }
+  });
+
+  // QR-flow start: returns the authorize URL + state in JSON instead of
+  // redirecting. The PC frontend renders the URL as a QR code, the user scans
+  // with their phone, and the PC polls /poll/:state for the result.
+  app.get('/api/auth/sso/:provider/start-qr', (req, res) => {
+    const { provider } = req.params;
+    const intent = req.query.intent === 'bind' ? 'bind' : 'login';
+    let userId = null;
+    if (intent === 'bind') {
+      const token = String(req.query.token || '');
+      const ver = verifyToken(token);
+      if (!ver.valid) return res.status(401).json({ success: false, error: 'auth required' });
+      const u = userDb.getByUsername(ver.username);
+      if (!u) return res.status(401).json({ success: false, error: 'user not found' });
+      userId = u.id;
+    }
+    try {
+      const { url, state } = buildAuthorizeUrl({ provider, intent, userId, mode: 'qr' });
+      res.json({ success: true, authorizeUrl: url, state });
+    } catch (err) {
+      console.error(`[SSO ${provider}] start-qr error:`, err.message);
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  // QR-flow poll: PC frontend hits this every ~2s with the state issued by
+  // /start-qr. Returns { status: 'pending' | 'login' | 'bind' | 'error', ... }.
+  app.get('/api/auth/sso/poll/:state', (req, res) => {
+    const r = consumePendingResult(req.params.state);
+    if (!r) return res.json({ status: 'pending' });
+    if (r.kind === 'login') {
+      return res.json({ status: 'login', token: r.token, sessionKey: r.sessionKey, role: r.role });
+    }
+    if (r.kind === 'bind') {
+      return res.json({ status: 'bind', provider: r.provider });
+    }
+    return res.json({ status: 'error', error: r.error || 'SSO failed', code: r.status || 400 });
   });
 
   app.get('/api/auth/sso/:provider/callback', async (req, res) => {
@@ -172,10 +210,24 @@ export function registerAuthRoutes(app, { requireAuth, checkRateLimit }) {
     if (!code || !state) {
       return res.status(400).send('Missing code or state');
     }
+    // Was this state issued in QR mode? If so, the PC browser is polling for
+    // the result — we park it under the state and show a tiny success page on
+    // the device that scanned (typically the user's phone).
+    const stateMode = peekStateMode(String(state));
     try {
       const result = await handleCallback({ provider, code: String(code), state: String(state) });
+
+      if (stateMode === 'qr') {
+        storePendingResult(String(state), result);
+        if (result.kind === 'error') {
+          return res.status(result.status || 400).send(`扫码登录失败: ${result.error}`);
+        }
+        // Minimal success page for the scanning device. The real session lands
+        // on the original PC tab once it finishes polling.
+        return res.send(`<!doctype html><meta charset="utf-8"><title>登录成功</title><style>body{font-family:-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;color:#222}.box{text-align:center}h1{font-size:20px;margin:0 0 8px}p{color:#666;margin:0}</style><div class=box><h1>✓ 已确认登录</h1><p>请回到电脑上继续操作，本页面可关闭。</p></div>`);
+      }
+
       if (result.kind === 'login') {
-        // Pass token + sessionKey + role through URL fragment so JS can store them.
         const params = new URLSearchParams({
           token: result.token,
           sessionKey: result.sessionKey,
@@ -186,8 +238,6 @@ export function registerAuthRoutes(app, { requireAuth, checkRateLimit }) {
       if (result.kind === 'bind') {
         return res.redirect(`/#/settings?ssoBound=${encodeURIComponent(provider)}`);
       }
-      // error
-      const msg = encodeURIComponent(result.error || 'SSO failed');
       const status = result.status || 400;
       if (status === 409) {
         return res.redirect(`/#/settings?ssoError=conflict&provider=${encodeURIComponent(provider)}`);

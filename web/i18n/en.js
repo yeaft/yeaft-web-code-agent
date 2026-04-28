@@ -36,6 +36,10 @@ export default {
   'login.google': 'Sign in with Google',
   'login.wechat': 'Sign in with WeChat',
   'login.alipay': 'Sign in with Alipay',
+  'login.qr.title': 'Scan to sign in',
+  'login.qr.titleAlipay': 'Sign in with Alipay',
+  'login.qr.titleWechat': 'Sign in with WeChat',
+  'login.qr.hint': 'Scan the QR code with your phone to authorize.',
 
   // Login - Errors (used in JS validation)
   'login.error.enterUsername': 'Please enter your username',
