@@ -165,7 +165,10 @@ export function registerAuthRoutes(app, { requireAuth, checkRateLimit }) {
 
   app.get('/api/auth/sso/:provider/callback', async (req, res) => {
     const { provider } = req.params;
-    const { code, state } = req.query;
+    // Alipay's web auth returns the code as `auth_code` (not the OAuth-standard
+    // `code`). Accept either to keep one route handling all providers.
+    const code = req.query.code || req.query.auth_code;
+    const { state } = req.query;
     if (!code || !state) {
       return res.status(400).send('Missing code or state');
     }
