@@ -11,11 +11,26 @@
  * covers RSA2 (SHA256withRSA), so no extra dependency is needed.
  */
 import { createSign } from 'crypto';
+import { readFileSync } from 'fs';
 import { CONFIG } from '../../config.js';
 
 export const name = 'alipay';
 
 const GATEWAY = 'https://openapi.alipay.com/gateway.do';
+
+/**
+ * Resolve the configured Alipay private key. Accepts either a PEM string
+ * (containing "BEGIN") or a filesystem path (starts with "/" or "file://").
+ * File mode keeps the secret out of env vars and process listings.
+ */
+function resolvePrivateKey() {
+  const raw = CONFIG.sso.alipay.privateKey || '';
+  if (raw.includes('BEGIN')) return raw;
+  if (raw.startsWith('file://')) return readFileSync(raw.slice(7), 'utf8');
+  if (raw.startsWith('/')) return readFileSync(raw, 'utf8');
+  // Bare base64 — wrap as PKCS#1 (legacy fallback for compactness in env vars).
+  return `-----BEGIN RSA PRIVATE KEY-----\n${raw}\n-----END RSA PRIVATE KEY-----`;
+}
 
 export function isEnabled() {
   const c = CONFIG.sso?.alipay;
@@ -58,10 +73,7 @@ async function alipayCall(method, bizContent) {
 
   const signer = createSign('RSA-SHA256');
   signer.update(signStr, 'utf8');
-  const privateKey = c.privateKey.includes('BEGIN')
-    ? c.privateKey
-    : `-----BEGIN RSA PRIVATE KEY-----\n${c.privateKey}\n-----END RSA PRIVATE KEY-----`;
-  const sign = signer.sign(privateKey, 'base64');
+  const sign = signer.sign(resolvePrivateKey(), 'base64');
 
   const body = new URLSearchParams({ ...params, sign });
   const res = await fetch(GATEWAY, {
@@ -96,8 +108,11 @@ export async function exchangeCode(code /* , state */) {
     throw new Error(`Alipay user info error ${userInner.code}: ${userInner.msg || ''}`);
   }
 
-  const subject = userInner.user_id || tokInner.user_id;
-  if (!subject) throw new Error('Alipay profile missing user_id');
+  // Prefer open_id (per-app stable ID under Alipay's privacy/openid mode, on by
+  // default for apps created since 2023). Fall back to user_id for legacy apps
+  // that haven't migrated. Either is a stable per-user subject for binding.
+  const subject = userInner.open_id || tokInner.open_id || userInner.user_id || tokInner.user_id;
+  if (!subject) throw new Error('Alipay profile missing open_id/user_id');
 
   return {
     subject,
