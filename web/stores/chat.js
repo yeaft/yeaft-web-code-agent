@@ -870,6 +870,7 @@ export const useChatStore = defineStore('chat', {
             case 'text_delta':
               if (typeof payload.text === 'string') next.text += payload.text;
               break;
+            case 'tool_start':
             case 'tool_use':
             case 'tool_call':
               next.toolCalls = [
@@ -888,7 +889,7 @@ export const useChatStore = defineStore('chat', {
               );
               if (idx >= 0) {
                 const arr = next.toolCalls.slice();
-                arr[idx] = { ...arr[idx], status: payload.error ? 'error' : 'done' };
+                arr[idx] = { ...arr[idx], status: payload.isError || payload.error ? 'error' : 'done' };
                 next.toolCalls = arr;
               }
               break;
