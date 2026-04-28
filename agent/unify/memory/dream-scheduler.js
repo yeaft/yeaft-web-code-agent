@@ -24,8 +24,6 @@
 import { dreamShard } from './dream-shard.js';
 import { checkRecompression } from './recompression.js';
 import { runUserDreamJob } from './user-memory-store.js';
-import { runDreamTick } from '../dream-v2/tick.js';
-import { createScopeRefreshHook } from '../dream-v2/refresh.js';
 
 /** Default idle timeout before dream triggers (ms). */
 export const DREAM_IDLE_MS = 30 * 60 * 1000; // 30 min
@@ -160,34 +158,12 @@ export function createDreamScheduler(opts = {}) {
         // Non-fatal
       }
 
-      // Phase 8 PR-F: dream-v2 diff-gated scope-summary refresh
-      // (DESIGN.md §9.14). The legacy dreamShard pipeline above
-      // refreshed shard summaries; this final tick walks the scope
-      // tree (user/group/vp/task), computes per-scope sigs, and only
-      // re-runs the refresh hook for scopes whose content changed.
-      // Refresh-only in v1 (no prune/demote — DESIGN §8 line 395).
-      if (memoryDir) {
-        try {
-          const scopes = [{ kind: 'user', scopeDir: 'user' }];
-          if (group?.id) scopes.push({ kind: 'group', id: group.id, scopeDir: `groups/${group.id}` });
-          // PR-J: real refresh hook — read each scope's `index.md`,
-          // render a deterministic top-N synopsis, atomically write
-          // `summary.md`. No LLM, refresh-only (DESIGN.md §8 line 395).
-          const refresh = createScopeRefreshHook({ root: memoryDir });
-          const tickResult = await runDreamTick({
-            root: memoryDir,
-            scopes,
-            refresh,
-          });
-          result.dreamV2Tick = {
-            ran: tickResult.ran.length,
-            skipped: tickResult.skipped.length,
-            errors: tickResult.errors.length,
-          };
-        } catch {
-          // Non-fatal
-        }
-      }
+      // Phase 8 PR-F dream-v2 diff-gated scope-summary refresh has been
+      // removed (DESIGN-v2 §13: replaced by 12h / manual trigger model).
+      // The new v2 dream pipeline lives in dream-v2/runner.js, wired via
+      // dream-v2/session-wiring.js when config.memoryV2 is on. This
+      // legacy scheduler only runs for memoryV2=false and is itself
+      // slated for deletion alongside the rest of the R6 stack.
 
       messagesSinceLastDream = 0;
       lastDreamAt = Date.now();
