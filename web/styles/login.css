@@ -127,19 +127,18 @@
   cursor: not-allowed;
 }
 
-/* The first button in the stack is the recommended action — give it the
-   accent treatment so it pulls focus immediately on page load. */
+/* The first button in the stack is the recommended action. We keep the same
+   surface as the rest of the stack (so light + dark both look natural) and
+   only nudge the weight + border to draw the eye. Reversing the colors —
+   black-on-white in light mode — looked aggressive and clashed with the
+   neighbouring buttons; consistency wins here. */
 .sso-btn.is-primary {
-  background: var(--accent);
-  color: var(--accent-fg);
-  border-color: var(--accent);
   font-weight: 600;
+  border-color: var(--text-secondary);
 }
 
 .sso-btn.is-primary:hover:not(:disabled) {
-  background: var(--accent-hover);
-  border-color: var(--accent-hover);
-  color: var(--accent-fg);
+  border-color: var(--text-primary);
 }
 
 .sso-btn-icon {
