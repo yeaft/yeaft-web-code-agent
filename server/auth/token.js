@@ -33,7 +33,8 @@ export function verifyToken(token) {
       username: decoded.username,
       sessionKey: session.sessionKey,
       role: user?.role === 'admin' ? 'admin' : 'pro',
-      exp: decoded.exp // seconds since epoch
+      exp: decoded.exp, // seconds since epoch
+      type: decoded.type // undefined for full session tokens; 'temp'/'totp'/'totp-setup' otherwise
     };
   } catch (err) {
     return { valid: false };
@@ -42,12 +43,16 @@ export function verifyToken(token) {
 
 /**
  * If `currentToken`'s remaining lifetime is below CONFIG.jwtRenewThresholdMs,
- * mint a fresh token for the same user, copy the session over, and revoke the
- * old one. Returns the new token, or `null` if the current one is still fresh
- * enough to keep using.
+ * mint a fresh token for the same user, copy the session over, and return it.
+ * Returns `null` if the current token is still fresh enough to keep using.
  *
- * Designed to be idempotent: if `expSeconds` is missing or far in the future,
- * the function is a no-op.
+ * The old token is intentionally NOT revoked — browsers fire parallel
+ * requests with the same Authorization header, and revoking would 401 every
+ * sibling request that races the renewal. The old token expires naturally on
+ * its original timeline (< jwtRenewThresholdMs from now), so the replay
+ * window is bounded by the threshold.
+ *
+ * Designed to be idempotent: missing exp or far-future exp is a no-op.
  */
 export function maybeRenewToken(currentToken, expSeconds, username) {
   if (!expSeconds) return null;
@@ -59,10 +64,10 @@ export function maybeRenewToken(currentToken, expSeconds, username) {
   const session = activeSessions.get(currentToken);
   if (session) {
     activeSessions.set(newToken, session);
-    activeSessions.delete(currentToken);
+    // Keep the old session entry intact so concurrent in-flight requests
+    // bearing the old token continue to find their session. It will be
+    // garbage-collected when the old token's natural exp passes.
   }
-  // Revoke the old token so a leaked copy can't outlive the renewal.
-  revokedTokens.add(currentToken);
   return newToken;
 }
 

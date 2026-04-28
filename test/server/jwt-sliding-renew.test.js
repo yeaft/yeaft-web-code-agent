@@ -67,13 +67,17 @@ describe('JWT sliding renewal', () => {
     const now = Math.floor(Date.now() / 1000);
     expect(decoded.exp - now).toBeGreaterThan(2 * 24 * 60 * 60); // > 2 days
 
-    // Old token is revoked; session moved to new token.
-    expect(revokedTokens.has(token)).toBe(true);
+    // New token has a session entry; old session is intentionally kept so
+    // parallel in-flight requests don't lose their session.
     expect(activeSessions.has(fresh)).toBe(true);
-    expect(activeSessions.has(token)).toBe(false);
+    expect(activeSessions.has(token)).toBe(true);
   });
 
-  it('rejects an old token after renewal (revocation enforced)', () => {
+  it('does not revoke the old token after renewal (parallel-request safety)', () => {
+    // Browsers commonly send several requests in parallel with the same
+    // Authorization header. If we revoked on renewal, every sibling request
+    // racing the first would 401 — so we deliberately keep the old token
+    // valid until its natural exp.
     const token = jwt.sign({ username: 'alice' }, SECRET, { expiresIn: '1h' });
     activeSessions.set(token, { username: 'alice', sessionKey: 'k' });
 
@@ -81,12 +85,12 @@ describe('JWT sliding renewal', () => {
     const fresh = maybeRenewToken(token, result.exp, result.username);
     expect(fresh).toBeTruthy();
 
-    // Reusing the old token should now fail (revoked even though signature
-    // is still valid for an hour).
+    // Old token still verifies (not revoked).
     const recheck = verifyToken(token);
-    expect(recheck.valid).toBe(false);
+    expect(recheck.valid).toBe(true);
+    expect(recheck.username).toBe('alice');
 
-    // The new token still works.
+    // The new token also works.
     const freshCheck = verifyToken(fresh);
     expect(freshCheck.valid).toBe(true);
     expect(freshCheck.username).toBe('alice');
@@ -110,5 +114,18 @@ describe('JWT sliding renewal', () => {
     const result = verifyToken(token);
     const fresh = maybeRenewToken(token, result.exp, result.username);
     expect(fresh).toBeNull();
+  });
+
+  it('verifyToken surfaces the type claim for non-session tokens', () => {
+    // The middleware uses result.type to skip renewal for temp/totp tokens.
+    // Verify the type claim makes it through verifyToken intact.
+    const totpTemp = jwt.sign({ username: 'alice', type: 'totp' }, SECRET, { expiresIn: '1h' });
+    const result = verifyToken(totpTemp);
+    expect(result.valid).toBe(true);
+    expect(result.type).toBe('totp');
+
+    const sessionTok = jwt.sign({ username: 'alice' }, SECRET, { expiresIn: '1h' });
+    const sessionResult = verifyToken(sessionTok);
+    expect(sessionResult.type).toBeUndefined();
   });
 });

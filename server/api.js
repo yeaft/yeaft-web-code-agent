@@ -59,11 +59,13 @@ function requireAuth(req, res, next) {
   // Sliding renewal: if the token is in the last `jwtRenewThresholdMs` of its
   // life, mint a fresh one and surface it to the client via X-New-Token. The
   // browser fetch wrapper picks this up and swaps localStorage transparently.
-  // Header is also exposed via Access-Control-Expose-Headers in the CORS layer
-  // so XHR/fetch can read it across origins.
-  const fresh = maybeRenewToken(token, result.exp, result.username);
-  if (fresh) {
-    res.setHeader('X-New-Token', fresh);
+  // Skip renewal for non-session tokens (temp/totp/totp-setup) — those have
+  // their own short-lived semantics and must not be promoted to full sessions.
+  if (!result.type) {
+    const fresh = maybeRenewToken(token, result.exp, result.username);
+    if (fresh) {
+      res.setHeader('X-New-Token', fresh);
+    }
   }
 
   req.user = { username: result.username, role: result.role === 'admin' ? 'admin' : 'pro' };
