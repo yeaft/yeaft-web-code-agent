@@ -1284,13 +1284,23 @@ export class Engine {
             // Detach: never await. The promise outlives this query() and
             // the next call will pick it up (or use the fallback stub if
             // it hasn't resolved by then).
-            promise.catch(() => { /* swallow until carry-forward */ });
-            this.#pendingT2.set(queryNumber, {
+            // PR-L follow-up: latch a synchronously-readable ready flag
+            // and result on the info record so `#applyPendingT2Reflections`
+            // can decide ready-vs-pending without racing microtasks.
+            const info = {
               promise,
               loopRange: [arcStart, arcEnd],
               count: pairs.length,
               originalUserMsg: prompt,
-            });
+              ready: false,
+              result: null,
+              error: null,
+            };
+            promise.then(
+              (v) => { info.ready = true; info.result = v; },
+              (err) => { info.ready = true; info.error = err; },
+            );
+            this.#pendingT2.set(queryNumber, info);
           }
         }
 
@@ -1328,10 +1338,16 @@ export class Engine {
         // by the Anthropic / OpenAI Responses APIs stays intact. We
         // don't block the call — the LLM still decides.
         const dupHash = argsHashOf(tc.input);
+        // PR-L follow-up: lookback is by user-conversation turn
+        // (`queryNumber`), NOT by inner adapter loop iteration. Each call
+        // to query() bumps queryNumber once, so "last 2 turns" means the
+        // current user turn + the previous two user turns — the natural
+        // semantic for "the model is stuck in a loop across the
+        // conversation."
         const dupInfo = this.#execLog.dupInfo({
           toolName: tc.name,
           argsHash: dupHash,
-          currentTurn: turnNumber,
+          currentTurn: queryNumber,
           lookbackTurns: 2,
         });
         if (dupInfo.count + 1 >= DUP_TOOL_THRESHOLD) {
@@ -1393,7 +1409,11 @@ export class Engine {
         // PR-L: persist this execution to the exec-log for fallback-stub
         // and duplicate-call detection. Best-effort — disk failures are
         // swallowed inside ExecLog.append.
-        this.#execLog.append(turnNumber, buildExecLogEntry({
+        // PR-L follow-up: persist under `queryNumber` (one entry-key per
+        // user-conversation turn), not the inner loop's turnNumber.
+        // Aligns exec-log layout with dup detection lookback and the
+        // T2 fallback-stub readTurn() call below.
+        this.#execLog.append(queryNumber, buildExecLogEntry({
           loopIdx: queryToolCount,
           toolName: tc.name,
           args: tc.input,
@@ -1567,33 +1587,29 @@ export class Engine {
         continue;
       }
 
-      // Non-blocking readiness check: race the promise against an already-
-      // settled Promise.resolve(SENTINEL). If the reflection promise wins,
-      // it has resolved synchronously (microtask order). Otherwise it's
-      // still pending and we use the fallback stub.
-      const PENDING_SENTINEL = {};
-      const settled = await Promise.race([
-        info.promise.then((v) => ({ ok: true, content: v.content, durationMs: v.durationMs }))
-                    .catch((err) => ({ ok: false, err })),
-        Promise.resolve(PENDING_SENTINEL),
-      ]);
-
+      // PR-L follow-up: deterministic readiness check. The info record
+      // carries `ready / result / error` flags that are flipped from the
+      // promise's then/catch handler; reading them here is purely
+      // synchronous bookkeeping — no microtask race.
       let content;
       let trigger;
       let durationMs = 0;
-      if (settled === PENDING_SENTINEL) {
-        // Stub fallback. Detach the unresolved promise so we don't keep
-        // holding it (caller may still observe it via .catch elsewhere).
-        info.promise.catch(() => { /* swallow late rejection */ });
+      if (!info.ready) {
+        // Still in flight — fall back to the exec-log stub. Detach the
+        // unresolved promise so we don't leak it (handlers above already
+        // swallow rejection by routing into info.error).
         const entries = this.#execLog ? this.#execLog.readTurn(turnNumber) : [];
         content = buildFallbackStub({ execLogEntries: entries, originalUserMsg: info.originalUserMsg || originalUserMsg });
         trigger = 't2-fallback';
-      } else if (settled.ok) {
-        content = settled.content;
+      } else if (info.error) {
+        // Promise rejected — leave history unchanged, no event.
+        continue;
+      } else if (info.result && typeof info.result.content === 'string' && info.result.content) {
+        content = info.result.content;
         trigger = 't2';
-        durationMs = settled.durationMs || 0;
+        durationMs = info.result.durationMs || 0;
       } else {
-        // Promise rejected — leave history unchanged.
+        // Resolved but with no usable content — defensively skip.
         continue;
       }
 

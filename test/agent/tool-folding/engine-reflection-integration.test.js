@@ -110,10 +110,9 @@ describe('PR-L T1 in-turn reflection — integration', () => {
     // adapter.call was invoked exactly once for the reflection.
     expect(adapter.callCalls).toHaveLength(1);
 
-    // Exec-log contains 13 entries total across the turns of this query
-    // (one per tool execution; persisted under the iter's turnNumber).
-    let totalEntries = 0;
-    for (let t = 1; t <= 13; t += 1) totalEntries += engine._execLog.readTurn(t).length;
+    // Exec-log contains 13 entries for this query, all keyed by queryNumber=1
+    // (the user-conversation turn counter, not the inner adapter loop counter).
+    const totalEntries = engine._execLog.readTurn(1).length;
     expect(totalEntries).toBe(13);
 
     // The 14th adapter.stream invocation (the one that produced 'end_turn')
