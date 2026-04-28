@@ -125,6 +125,51 @@ for (const migration of migrations) {
   }
 }
 
+// User identities table (multi-provider SSO + account binding)
+// One user can have multiple identities (microsoft / github / google / wechat / alipay).
+// UNIQUE(provider, subject) enforces "this provider account is bound to one user only".
+const identityTable = `
+  CREATE TABLE IF NOT EXISTS user_identities (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    email TEXT,
+    display_name TEXT,
+    created_at INTEGER NOT NULL,
+    last_login_at INTEGER,
+    UNIQUE(provider, subject)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_identities_user ON user_identities(user_id);
+  CREATE INDEX IF NOT EXISTS idx_identities_provider ON user_identities(provider);
+`;
+try { db.exec(identityTable); } catch (e) { /* tables already exist */ }
+
+// One-time backfill: copy existing users.aad_oid into user_identities so
+// legacy AAD users automatically participate in the new identity model.
+try {
+  const aadUsers = db.prepare("SELECT id, email FROM users WHERE aad_oid IS NOT NULL AND aad_oid != ''").all();
+  if (aadUsers.length > 0) {
+    const checkStmt = db.prepare(
+      "SELECT id FROM user_identities WHERE provider = 'microsoft' AND user_id = ?"
+    );
+    const insertStmt = db.prepare(
+      `INSERT OR IGNORE INTO user_identities (id, user_id, provider, subject, email, display_name, created_at)
+       VALUES (?, ?, 'microsoft', ?, ?, NULL, ?)`
+    );
+    const getOidStmt = db.prepare("SELECT aad_oid FROM users WHERE id = ?");
+    for (const u of aadUsers) {
+      if (checkStmt.get(u.id)) continue;
+      const oidRow = getOidStmt.get(u.id);
+      const oid = oidRow?.aad_oid;
+      if (!oid) continue;
+      const idVal = `idn_${randomUUID()}`;
+      try { insertStmt.run(idVal, u.id, oid, u.email || null, Date.now()); } catch (e) { /* unique conflict */ }
+    }
+  }
+} catch (e) { /* table missing or migration error — non-fatal */ }
+
 // Custom expert roles tables (帮帮团自定义角色)
 const customExpertTables = `
   CREATE TABLE IF NOT EXISTS custom_expert_roles (
@@ -454,6 +499,36 @@ export const stmts = {
 
   getUserStatsById: db.prepare(`
     SELECT * FROM user_stats WHERE user_id = ?
+  `),
+
+  // Identity 操作 (multi-provider SSO)
+  insertIdentity: db.prepare(`
+    INSERT INTO user_identities (id, user_id, provider, subject, email, display_name, created_at, last_login_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `),
+
+  getIdentityBySubject: db.prepare(`
+    SELECT * FROM user_identities WHERE provider = ? AND subject = ?
+  `),
+
+  getIdentitiesByUser: db.prepare(`
+    SELECT * FROM user_identities WHERE user_id = ? ORDER BY created_at ASC
+  `),
+
+  getIdentityForUser: db.prepare(`
+    SELECT * FROM user_identities WHERE user_id = ? AND provider = ?
+  `),
+
+  countIdentitiesByUser: db.prepare(`
+    SELECT COUNT(*) as count FROM user_identities WHERE user_id = ?
+  `),
+
+  updateIdentityLogin: db.prepare(`
+    UPDATE user_identities SET last_login_at = ? WHERE id = ?
+  `),
+
+  deleteIdentityForUser: db.prepare(`
+    DELETE FROM user_identities WHERE user_id = ? AND provider = ?
   `),
 
   // Dashboard 聚合

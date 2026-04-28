@@ -32,6 +32,10 @@ export default {
   'login.registerWithCode': '注册新账号',
   'login.or': '或',
   'login.microsoft': '使用 Microsoft 账号登录',
+  'login.github': '使用 GitHub 账号登录',
+  'login.google': '使用 Google 账号登录',
+  'login.wechat': '使用微信扫码登录',
+  'login.alipay': '使用支付宝账号登录',
 
   // Login - Errors (used in JS validation)
   'login.error.enterUsername': '请输入用户名',
@@ -400,6 +404,21 @@ export default {
   'settings.account.logout': '退出登录',
   'settings.account.roleAdmin': '管理员',
   'settings.account.rolePro': 'Pro',
+  'settings.account.linkedAccounts': '已关联账户',
+  'settings.account.linkedDesc': '关联第三方登录后，使用任意一种方式都能登录此账号。',
+  'settings.account.bind': '绑定',
+  'settings.account.unbind': '解绑',
+  'settings.account.linked': '已绑定',
+  'settings.account.providerDisabled': '未配置',
+  'settings.account.cantUnbindLast': '不能解绑唯一的登录方式',
+  'settings.account.unbindFailed': '解绑失败：{error}',
+  'settings.account.ssoBoundMsg': '已成功绑定 {provider}。',
+  'settings.account.ssoConflictMsg': '该 {provider} 账号已被其他用户绑定。',
+  'settings.account.providerMicrosoft': 'Microsoft',
+  'settings.account.providerGithub': 'GitHub',
+  'settings.account.providerGoogle': 'Google',
+  'settings.account.providerWechat': '微信',
+  'settings.account.providerAlipay': '支付宝',
 
   // Settings - Security
   'settings.security.agentKey': 'Agent 密钥',

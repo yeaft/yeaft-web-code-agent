@@ -45,8 +45,15 @@ const App = {
     Vue.onMounted(async () => {
       await authStore.checkAuthMode();
 
-      // Try to restore session from stored token (if not already authenticated via skip auth)
-      if (!authStore.isAuthenticated) {
+      // Consume an in-progress SSO callback (if the URL is /#/sso-complete?...)
+      // before falling back to the stored token.
+      let ssoConsumed = false;
+      if (typeof authStore.consumeSsoRedirect === 'function') {
+        ssoConsumed = authStore.consumeSsoRedirect();
+      }
+
+      // Try to restore session from stored token (if not already authenticated via skip auth or SSO)
+      if (!authStore.isAuthenticated && !ssoConsumed) {
         await authStore.restoreSession();
       }
 

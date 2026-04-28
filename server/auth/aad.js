@@ -1,7 +1,7 @@
 import jwt from 'jsonwebtoken';
 import { CONFIG, isAadEnabled, getUserByUsername } from '../config.js';
 import { generateSessionKey, encodeKey } from '../encryption.js';
-import { userDb } from '../database.js';
+import { userDb, identityDb } from '../database.js';
 import { completeLogin } from './login.js';
 
 /**
@@ -215,6 +215,20 @@ export async function loginWithAad(idToken) {
   // Update last login
   if (user.id) {
     userDb.updateLogin(user.id);
+  }
+
+  // Mirror this AAD login into the unified user_identities table so the
+  // multi-provider binding view works for legacy AAD users too.
+  try {
+    identityDb.upsert({
+      userId: user.id,
+      provider: 'microsoft',
+      subject: aadOid,
+      email,
+      displayName: name
+    });
+  } catch (e) {
+    console.warn('[AAD] failed to upsert user_identities row:', e.message);
   }
 
   return completeLogin(user.username, sessionKey, role);
