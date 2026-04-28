@@ -35,6 +35,7 @@ import { createDispatcher } from './pipeline/dispatcher.js';
 import { ensureDefaultGroupIfEmpty } from './groups/group-crud.js';
 import { seedDefaultVps } from './vp/seed-defaults.js';
 import { createDreamScheduler } from './memory/dream-scheduler.js';
+import { createV2DreamScheduler } from './dream-v2/session-wiring.js';
 import { getUserMemoryStore } from './memory/user-memory-store.js';
 import { join } from 'path';
 import { existsSync as existsSyncSafe, readFileSync as readFileSyncSafe } from 'fs';
@@ -246,29 +247,47 @@ export async function loadSession(options = {}) {
     yeaftDir,
   });
 
-  // ─── 9a. Create dream scheduler (wave-6b) ─────────────
-  const dreamScheduler = createDreamScheduler({
-    memoryShardStore,
-    userMemoryStore: getUserMemoryStore(),
-    conversationStore,
-    adapter,
-    config,
-    onDreamStart: (vpId) => {
-      if (config.debug) console.log(`[Yeaft] Dream started for VP ${vpId}`);
-    },
-    onDreamEnd: (vpId, result) => {
-      if (config.debug) console.log(`[Yeaft] Dream ended for VP ${vpId}:`, JSON.stringify({
-        trigger: result.trigger,
-        entriesMerged: result.entriesMerged,
-        entriesPruned: result.entriesPruned,
-        bytesReclaimed: result.bytesReclaimed,
-        errors: result.errors?.length || 0,
-      }));
-    },
-    onError: (vpId, err) => {
-      console.warn(`[Yeaft] Dream error for VP ${vpId}:`, err?.message || err);
-    },
-  });
+  // ─── 9a. Create dream scheduler (wave-6b / DESIGN-v2) ──
+  // When config.memoryV2 is on, route through the v2 pipeline (per-scope
+  // memory.md + summary.md). Otherwise keep the legacy R6 dream-scheduler.
+  let dreamScheduler;
+  if (config.memoryV2) {
+    // Build a partial session reference so the v2 wiring can see adapter,
+    // config, yeaftDir, engine, and trace. The scheduler's `run` closure
+    // dereferences these lazily, so mutating the object after this line
+    // (e.g. attaching engine) is safe.
+    const partialSession = {
+      yeaftDir,
+      adapter,
+      config,
+      engine,
+      trace,
+    };
+    dreamScheduler = createV2DreamScheduler(partialSession);
+  } else {
+    dreamScheduler = createDreamScheduler({
+      memoryShardStore,
+      userMemoryStore: getUserMemoryStore(),
+      conversationStore,
+      adapter,
+      config,
+      onDreamStart: (vpId) => {
+        if (config.debug) console.log(`[Yeaft] Dream started for VP ${vpId}`);
+      },
+      onDreamEnd: (vpId, result) => {
+        if (config.debug) console.log(`[Yeaft] Dream ended for VP ${vpId}:`, JSON.stringify({
+          trigger: result.trigger,
+          entriesMerged: result.entriesMerged,
+          entriesPruned: result.entriesPruned,
+          bytesReclaimed: result.bytesReclaimed,
+          errors: result.errors?.length || 0,
+        }));
+      },
+      onError: (vpId, err) => {
+        console.warn(`[Yeaft] Dream error for VP ${vpId}:`, err?.message || err);
+      },
+    });
+  }
 
   // task-308 Phase 2: thread-aware engine registry.
   // Each thread gets its own EngineInstance (lazy-created) that owns its
