@@ -51,7 +51,7 @@ export default {
                   <div class="sp-row-left">
                     <span class="sp-label">{{ $t('settings.account.username') }}</span>
                   </div>
-                  <span class="sp-value">{{ profile?.username || '-' }}</span>
+                  <span class="sp-value">{{ accountDisplayName }}</span>
                 </div>
                 <div class="sp-row">
                   <div class="sp-row-left">
@@ -422,6 +422,18 @@ export default {
     roleLabel() {
       const roles = { admin: this.$t('settings.account.roleAdmin'), pro: this.$t('settings.account.rolePro') };
       return roles[this.profile?.role] || this.$t('settings.account.rolePro');
+    },
+    /**
+     * What to show in the "用户名 / Username" row. Prefer displayName (e.g. the
+     * Alipay/Microsoft nickname) when it differs from the auto-generated
+     * internal username, since SSO-created usernames are often opaque
+     * (alipay_user, alipay_user_3). Falls back to username.
+     */
+    accountDisplayName() {
+      const p = this.profile;
+      if (!p) return '-';
+      if (p.displayName && p.displayName !== p.username) return p.displayName;
+      return p.username || '-';
     },
     visibleTabs() {
       const tabs = [

@@ -26,9 +26,10 @@ const fakeUserDb = {
   },
   updateLogin() {},
   updateAadOid(id, oid) { const u = _state.users.get(id); if (u) u.aad_oid = oid; },
-  createFromAad(username, email, aadOid, role = 'pro') {
+  updateDisplayName(id, name) { const u = _state.users.get(id); if (u && name) u.display_name = name; },
+  createFromAad(username, email, aadOid, role = 'pro', displayName = null) {
     const id = `u_${_state.users.size + 1}`;
-    const u = { id, username, email, aad_oid: aadOid, role, password_hash: null };
+    const u = { id, username, display_name: displayName || username, email, aad_oid: aadOid, role, password_hash: null };
     _state.users.set(id, u);
     return u;
   }
@@ -206,6 +207,51 @@ describe('Identity binding — conflict + last login guard', () => {
     const r2 = await handleCallback({ provider: 'github', code: 'c2', state });
     expect(r2.kind).toBe('error');
     expect(r2.status).toBe(400);
+  });
+
+  it('preserves provider displayName on auto-created user', async () => {
+    // Chinese nickname — used to get collapsed to "__" then "alipay_user".
+    _provider.exchangeCode.mockResolvedValue({ subject: 'gh-zh', email: null, displayName: '张三' });
+    const state = createState({ provider: 'github', intent: 'login' });
+    await handleCallback({ provider: 'github', code: 'c', state });
+    const user = [..._state.users.values()][0];
+    // username comes from sanitizeUsername which now keeps Unicode letters
+    expect(user.username).toBe('张三');
+    expect(user.display_name).toBe('张三');
+  });
+
+  it('backfills display_name on subsequent SSO login when previously equal to username', async () => {
+    // Simulate a user created back when displayName wasn't stored.
+    _state.users.set('u_legacy', {
+      id: 'u_legacy', username: 'alipay_user', display_name: 'alipay_user',
+      email: null, aad_oid: null, role: 'pro', password_hash: null
+    });
+    _state.identities.push({
+      id: 'idn_legacy', user_id: 'u_legacy', provider: 'github', subject: 'gh-legacy',
+      email: null, display_name: null, created_at: 0, last_login_at: 0
+    });
+
+    _provider.exchangeCode.mockResolvedValue({ subject: 'gh-legacy', email: null, displayName: 'Real Name' });
+    const state = createState({ provider: 'github', intent: 'login' });
+    const r = await handleCallback({ provider: 'github', code: 'c', state });
+    expect(r.kind).toBe('login');
+    expect(_state.users.get('u_legacy').display_name).toBe('Real Name');
+  });
+
+  it('does NOT overwrite a manually-set display_name on subsequent login', async () => {
+    _state.users.set('u_manual', {
+      id: 'u_manual', username: 'alipay_user', display_name: '我自己设的名字',
+      email: null, aad_oid: null, role: 'pro', password_hash: null
+    });
+    _state.identities.push({
+      id: 'idn_manual', user_id: 'u_manual', provider: 'github', subject: 'gh-manual',
+      email: null, display_name: null, created_at: 0, last_login_at: 0
+    });
+
+    _provider.exchangeCode.mockResolvedValue({ subject: 'gh-manual', email: null, displayName: 'Provider Name' });
+    const state = createState({ provider: 'github', intent: 'login' });
+    await handleCallback({ provider: 'github', code: 'c', state });
+    expect(_state.users.get('u_manual').display_name).toBe('我自己设的名字');
   });
 });
 

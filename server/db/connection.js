@@ -252,6 +252,10 @@ export const stmts = {
     UPDATE users SET email = ? WHERE id = ?
   `),
 
+  updateUserDisplayName: db.prepare(`
+    UPDATE users SET display_name = ? WHERE id = ?
+  `),
+
   updateUserAgentSecret: db.prepare(`
     UPDATE users SET agent_secret = ? WHERE id = ?
   `),
