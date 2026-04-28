@@ -2,7 +2,7 @@
 # Multi-stage build for production optimization
 
 # Stage 1: Build frontend
-FROM node:20-alpine AS builder
+FROM node:24-alpine AS builder
 
 WORKDIR /app
 
@@ -27,7 +27,7 @@ COPY web/crew-templates ./crew-templates/
 RUN npm run build
 
 # Stage 2: Production image
-FROM node:20-alpine
+FROM node:24-alpine
 
 ARG BUILD_VERSION=dev
 
