@@ -3,17 +3,17 @@ import MessageList from './MessageList.js';
 import UnifySettings from './UnifySettings.js';
 import UnifySidebarV2 from './UnifySidebarV2.js';
 import UnifyBreadcrumb from './UnifyBreadcrumb.js';
-import UnifyTaskDetailView from './UnifyTaskDetailView.js';
+import UnifyFeatureDetailView from './UnifyFeatureDetailView.js';
 import VpDetailView from './VpDetailView.js';
 import GroupInviteModal from './GroupInviteModal.js';
 import GroupMemberEditor from './GroupMemberEditor.js';
-import TaskMessageRejectToast from './TaskMessageRejectToast.js';
+import FeatureMessageRejectToast from './FeatureMessageRejectToast.js';
 import UserMemoryPage from './UserMemoryPage.js';
 import WorkbenchPanel from './WorkbenchPanel.js';
 
 export default {
   name: 'UnifyPage',
-  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2, UnifyBreadcrumb, UnifyTaskDetailView, VpDetailView, GroupInviteModal, GroupMemberEditor, TaskMessageRejectToast, UserMemoryPage, WorkbenchPanel },
+  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2, UnifyBreadcrumb, UnifyFeatureDetailView, VpDetailView, GroupInviteModal, GroupMemberEditor, FeatureMessageRejectToast, UserMemoryPage, WorkbenchPanel },
   template: `
     <div class="unify-page">
       <!-- Mobile sidebar overlay -->
@@ -96,7 +96,7 @@ export default {
 
         <!-- Breadcrumb: visible only when a thread filter is active AND not in task detail view -->
         <UnifyBreadcrumb
-          v-if="store.unifyActiveThreadFilter && !store.unifyActiveTaskDetailId"
+          v-if="store.unifyActiveThreadFilter && !store.unifyActiveFeatureDetailId"
           :thread-id="store.unifyActiveThreadFilter"
           :thread-name="activeThreadName"
           @back="clearThreadFilter"
@@ -105,8 +105,8 @@ export default {
         <!-- task-315: Task Detail View replaces the message list when a
              sidebar task is selected. Owns its own breadcrumb + reply
              thread selector. -->
-        <UnifyTaskDetailView
-          v-if="!showSettings && store.unifyActiveTaskDetailId && !store.unifyActiveVpDetailId"
+        <UnifyFeatureDetailView
+          v-if="!showSettings && store.unifyActiveFeatureDetailId && !store.unifyActiveVpDetailId"
           @back="exitTaskDetailView"
           @switch-to-thread="onSwitchToThreadFromTaskDetail"
         />
@@ -129,7 +129,7 @@ export default {
              next step instead of a blank canvas. The modal still pops on
              top for groups the user hasn't dismissed yet. -->
         <div
-          v-if="!showSettings && !userMemoryOpen && !store.unifyActiveTaskDetailId && !store.unifyActiveVpDetailId && isActiveGroupEmpty"
+          v-if="!showSettings && !userMemoryOpen && !store.unifyActiveFeatureDetailId && !store.unifyActiveVpDetailId && isActiveGroupEmpty"
           class="unify-empty-group-hero"
         >
           <div class="unify-empty-group-hero__icon" aria-hidden="true">
@@ -143,7 +143,7 @@ export default {
             {{ $t('unify.group.empty.cta') }}
           </button>
         </div>
-        <MessageList v-if="!showSettings && !userMemoryOpen && !store.unifyActiveTaskDetailId && !store.unifyActiveVpDetailId && !isActiveGroupEmpty" />
+        <MessageList v-if="!showSettings && !userMemoryOpen && !store.unifyActiveFeatureDetailId && !store.unifyActiveVpDetailId && !isActiveGroupEmpty" />
 
         <!-- Settings Panel -->
         <UnifySettings v-if="showSettings" :initial-tab="settingsInitialTab" @close="showSettings = false" @saved="onSettingsSaved" />
@@ -296,7 +296,7 @@ export default {
       <!-- task-343: VP library is now an in-Settings tab (initial-tab='vp'). -->
 
       <!-- task-334j: reject toast stack (bottom-right) -->
-      <TaskMessageRejectToast />
+      <FeatureMessageRejectToast />
 
       <!-- task-fix-group-member-editor: invite modal CTA now opens the
            group's member editor directly (the previous flow dumped the
@@ -350,12 +350,12 @@ export default {
       if (isMobile.value) sidebarCollapsed.value = true;
     };
 
-    const onSelectTaskV2 = (taskId) => {
+    const onSelectTaskV2 = (featureId) => {
       // task-315: clicking a task row enters the Task Detail View —
       // replaces the main pane with a cross-thread aggregated message
       // list. Also keeps the sidebar row highlighted (store handles
       // both flags in enterTaskDetailView).
-      store.enterTaskDetailView(taskId);
+      store.enterTaskDetailView(featureId);
       if (isMobile.value) sidebarCollapsed.value = true;
     };
 
@@ -367,7 +367,7 @@ export default {
       if (!id) return;
       store.setActiveGroupFilter(id);
       // Also leave any detail views so the main stream is visible.
-      if (store.unifyActiveTaskDetailId) store.leaveTaskDetailView();
+      if (store.unifyActiveFeatureDetailId) store.leaveTaskDetailView();
       if (store.unifyActiveVpDetailId) store.leaveVpDetailView();
       if (isMobile.value) sidebarCollapsed.value = true;
     };
@@ -418,7 +418,7 @@ export default {
     const onOpenUserMemory = () => {
       userMemoryOpen.value = true;
       showSettings.value = false;
-      store.unifyActiveTaskDetailId = null;
+      store.unifyActiveFeatureDetailId = null;
       store.unifyActiveVpDetailId = null;
     };
 
@@ -478,7 +478,7 @@ export default {
         store.leaveVpDetailView();
         return;
       }
-      if (store.unifyActiveTaskDetailId) {
+      if (store.unifyActiveFeatureDetailId) {
         store.leaveTaskDetailView();
         return;
       }

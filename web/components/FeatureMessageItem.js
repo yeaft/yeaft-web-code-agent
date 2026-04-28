@@ -1,21 +1,21 @@
 /**
- * TaskMessageItem — task-334j §A/§C/§E.
+ * FeatureMessageItem — task-334j §A/§C/§E (renamed from TaskMessageItem).
  *
- * Renders a single `task-message` stream row: a VP/user-attributed text
- * bubble, carrying a `[task]` pill that visually distinguishes it from
+ * Renders a single `feature-message` stream row: a VP/user-attributed text
+ * bubble, carrying a `[feature]` pill that visually distinguishes it from
  * regular group messages (which are rendered by MessageItem / AssistantTurn).
  *
- * The row carries a hover ↪ reply button (task-334j §E). Clicking it emits
- * `reply` with { msgId, vpId, textPreview } which the parent wires into
- * the store's `replyToMap` so ChatInput picks up `replyTo` on next send.
+ * The row carries a hover ↪ reply button. Clicking it emits `reply` with
+ * { msgId, vpId, textPreview } which the parent wires into the store's
+ * `replyToMap` so ChatInput picks up `replyTo` on next send.
  *
  * Respects the "No horizontal dividers" ironclad rule (CLAUDE.md): no
- * `border-top` / `border-bottom` on this row; task vs group visual split
+ * `border-top` / `border-bottom` on this row; feature vs group visual split
  * is carried by the avatar + pill + subtle background-tint only.
  *
  * Props:
  *   message — normalised stream row:
- *     { id, type: 'task-message', taskId, groupId, vpId, content,
+ *     { id, type: 'feature-message', featureId, groupId, vpId, content,
  *       mentions: string[], replyTo: string|null, timestamp: number }
  *
  * Emits:
@@ -25,7 +25,7 @@
 import VpBadge from './VpBadge.js';
 
 export default {
-  name: 'TaskMessageItem',
+  name: 'FeatureMessageItem',
   components: { VpBadge },
   emits: ['reply', 'open-detail'],
   props: {
@@ -35,8 +35,8 @@ export default {
     },
   },
   template: `
-    <div class="task-message-row" :data-msg-id="message.id" :data-task-id="message.taskId">
-      <div class="task-message-head">
+    <div class="feature-message-row" :data-msg-id="message.id" :data-feature-id="message.featureId">
+      <div class="feature-message-head">
         <VpBadge
           :vp-id="message.vpId"
           :size="24"
@@ -44,36 +44,36 @@ export default {
           :clickable="true"
           @open-detail="$emit('open-detail', $event)"
         />
-        <span class="task-message-pill" :title="taskPillTitle">
-          <span class="task-message-pill-label">{{ $t('unify.task.pill.label') }}</span>
-          <span class="task-message-pill-id">{{ shortTaskId }}</span>
+        <span class="feature-message-pill" :title="featurePillTitle">
+          <span class="feature-message-pill-label">{{ $t('unify.feature.pill.label') }}</span>
+          <span class="feature-message-pill-id">{{ shortFeatureId }}</span>
         </span>
         <span
           v-if="timestampText"
-          class="task-message-time"
+          class="feature-message-time"
           :title="timestampFullText"
-          :aria-label="$t('unify.task.messageTime.aria', { time: timestampFullText })"
+          :aria-label="$t('unify.feature.messageTime.aria', { time: timestampFullText })"
         >{{ timestampText }}</span>
         <button
-          class="task-message-reply-btn"
-          :title="$t('unify.task.reply.aria')"
-          :aria-label="$t('unify.task.reply.aria')"
+          class="feature-message-reply-btn"
+          :title="$t('unify.feature.reply.aria')"
+          :aria-label="$t('unify.feature.reply.aria')"
           @click.stop="onReplyClick"
         >↪</button>
       </div>
 
-      <div v-if="replyToPreviewText" class="task-message-quote">
-        <span class="task-message-quote-arrow">↪</span>
-        <span class="task-message-quote-body">{{ replyToPreviewText }}</span>
+      <div v-if="replyToPreviewText" class="feature-message-quote">
+        <span class="feature-message-quote-arrow">↪</span>
+        <span class="feature-message-quote-body">{{ replyToPreviewText }}</span>
       </div>
 
-      <div class="task-message-body">{{ message.content }}</div>
+      <div class="feature-message-body">{{ message.content }}</div>
 
-      <div v-if="mentionList.length > 0" class="task-message-mentions">
+      <div v-if="mentionList.length > 0" class="feature-message-mentions">
         <span
           v-for="vpId in mentionList"
           :key="vpId"
-          class="task-message-mention-chip"
+          class="feature-message-mention-chip"
         >@{{ vpId }}</span>
       </div>
     </div>
@@ -81,12 +81,12 @@ export default {
   setup(props, { emit }) {
     const store = Pinia.useChatStore();
 
-    const shortTaskId = Vue.computed(() => {
-      const id = props.message.taskId || '';
+    const shortFeatureId = Vue.computed(() => {
+      const id = props.message.featureId || '';
       return id.length > 8 ? id.slice(0, 8) : id;
     });
 
-    const taskPillTitle = Vue.computed(() => props.message.taskId || '');
+    const featurePillTitle = Vue.computed(() => props.message.featureId || '');
 
     const timestampText = Vue.computed(() => {
       const ts = props.message.timestamp;
@@ -109,12 +109,12 @@ export default {
       return Array.isArray(arr) ? arr : [];
     });
 
-    // When replyTo is set, look up the original msg in the taskMessagesMap
+    // When replyTo is set, look up the original msg in the featureMessagesMap
     // and render a short preview. Missing lookup → "(original removed)".
     const replyToPreviewText = Vue.computed(() => {
       const replyTo = props.message.replyTo;
       if (!replyTo) return '';
-      const list = store.taskMessagesMap[props.message.taskId] || [];
+      const list = store.featureMessagesMap[props.message.featureId] || [];
       const orig = list.find(m => m.msgId === replyTo);
       if (!orig) return '';  // Hidden entirely when the original isn't in cache
       const preview = (orig.text || '').slice(0, 80);
@@ -131,8 +131,8 @@ export default {
     };
 
     return {
-      shortTaskId,
-      taskPillTitle,
+      shortFeatureId,
+      featurePillTitle,
       timestampText,
       timestampFullText,
       mentionList,

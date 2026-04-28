@@ -219,7 +219,7 @@ export default {
       // task-338-F5: decouple gate from VP list hydration state so Unify
       // view always routes `@` to VP candidates. Empty-state rendering is
       // handled downstream by VpMentionAutocomplete.
-      return !!(store.unifyActiveTaskDetailId || store.currentView === 'unify');
+      return !!(store.unifyActiveFeatureDetailId || store.currentView === 'unify');
     };
 
     const vpMentionQuery = Vue.computed(() => {
@@ -277,8 +277,8 @@ export default {
 
     // ★ task-334j: reply-to state for task-message context.
     const taskReplyKey = () => {
-      const taskId = store.unifyActiveTaskDetailId;
-      return taskId ? 'task:' + taskId : null;
+      const featureId = store.unifyActiveFeatureDetailId;
+      return featureId ? 'task:' + featureId : null;
     };
 
     const replyToActive = Vue.computed(() => {
@@ -592,16 +592,16 @@ export default {
       }
 
       // ★ task-334j: task-context branch — send as task message.
-      if (store.unifyActiveTaskDetailId && trimmed) {
+      if (store.unifyActiveFeatureDetailId && trimmed) {
         const mentions = parseMentions(trimmed).mentions;
-        const taskId = store.unifyActiveTaskDetailId;
+        const featureId = store.unifyActiveFeatureDetailId;
         const groupId = store.unifyConversationId;
         if (!groupId) return;
-        const replyToKey = 'task:' + taskId;
+        const replyToKey = 'task:' + featureId;
         const replyTo = store.replyToMap[replyToKey]?.msgId || null;
         const requestId = 'tm_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-        store.sendUnifyTaskMessage({
-          groupId, taskId, vpId: 'user',
+        store.sendUnifyFeatureMessage({
+          groupId, featureId, vpId: 'user',
           text: trimmed, mentions, replyTo, requestId,
         });
         inputText.value = '';

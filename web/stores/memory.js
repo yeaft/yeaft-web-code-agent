@@ -9,13 +9,13 @@
  * Data flow:
  *   ChatStore receives unify_memory_query_result + unify_memory_trace_result
  *   over the WS, forwards the events to applyQueryResult / applyTraceResult.
- *   Components (VpDetailView Memory tab, UnifyTaskDetailView Task Memory
+ *   Components (VpDetailView Memory tab, UnifyFeatureDetailView Feature Memory
  *   section) read entriesFor / traceFor.
  *
  * Cache key:
  *   - VP scope:    `vp:<vpId>`
- *   - Task scope:  `task:<taskId>`
- *   - Combined:    `vp:<vpId>|task:<taskId>` (rare; both filters set)
+ *   - Task scope:  `task:<featureId>`
+ *   - Combined:    `vp:<vpId>|task:<featureId>` (rare; both filters set)
  */
 
 const { defineStore } = Pinia;
@@ -24,7 +24,7 @@ function scopeKey(scope) {
   if (!scope) return '';
   const parts = [];
   if (scope.vpId) parts.push('vp:' + scope.vpId);
-  if (scope.taskId) parts.push('task:' + scope.taskId);
+  if (scope.featureId) parts.push('task:' + scope.featureId);
   return parts.join('|');
 }
 
@@ -63,10 +63,10 @@ export const useMemoryStore = defineStore('memory', {
      * Issue a unify_memory_query for the given scope. No-op if a request
      * is already in flight for the same scope.
      *
-     * @param {{ vpId?: string, taskId?: string, limit?: number }} scope
+     * @param {{ vpId?: string, featureId?: string, limit?: number }} scope
      */
     queryScope(scope) {
-      if (!scope || (!scope.vpId && !scope.taskId)) return;
+      if (!scope || (!scope.vpId && !scope.featureId)) return;
       const k = scopeKey(scope);
       if (this.pendingScopes[k]) return;
       this.pendingScopes = { ...this.pendingScopes, [k]: Date.now() };
@@ -77,7 +77,7 @@ export const useMemoryStore = defineStore('memory', {
         chat.sendWsMessage({
           type: 'unify_memory_query',
           vpId: scope.vpId || null,
-          taskId: scope.taskId || null,
+          featureId: scope.featureId || null,
           limit: scope.limit || 50,
         });
       }

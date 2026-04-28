@@ -8,7 +8,7 @@
  *
  * Reused by:
  *   - VpDetailView "Memory" tab (per-VP shard)
- *   - UnifyTaskDetailView "Task Memory" section (per-task shard)
+ *   - UnifyFeatureDetailView "Feature Memory" section (per-feature shard)
  *   - UserMemoryPage (eventual refactor target — kept compatible)
  *
  * Props:
