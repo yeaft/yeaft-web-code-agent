@@ -180,4 +180,33 @@ describe('SSO providers — exchangeCode (mocked fetch)', () => {
     });
     await expect(alipay.exchangeCode('code')).rejects.toThrow(/open_id\/user_id/);
   });
+
+  it('Alipay: privateKey as filesystem path is read at sign time', async () => {
+    // Write the test PEM to a temp file, swap CONFIG.sso.alipay.privateKey to
+    // its absolute path, and verify the same exchangeCode path works.
+    const { writeFileSync, mkdtempSync } = await import('fs');
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    const dir = mkdtempSync(join(tmpdir(), 'alipay-key-'));
+    const path = join(dir, 'priv.pem');
+    writeFileSync(path, alipayPrivateKey, { mode: 0o600 });
+
+    const { CONFIG } = await import('../../server/config.js');
+    const orig = CONFIG.sso.alipay.privateKey;
+    CONFIG.sso.alipay.privateKey = path;
+    try {
+      let call = 0;
+      mockFetch({
+        'https://openapi.alipay.com/gateway.do': () => {
+          call++;
+          if (call === 1) return { ok: true, json: { alipay_system_oauth_token_response: { access_token: 't', open_id: 'op-file' } } };
+          return { ok: true, json: { alipay_user_info_share_response: { code: '10000', open_id: 'op-file', nick_name: 'F' } } };
+        }
+      });
+      const r = await alipay.exchangeCode('code');
+      expect(r.subject).toBe('op-file');
+    } finally {
+      CONFIG.sso.alipay.privateKey = orig;
+    }
+  });
 });
