@@ -22,12 +22,12 @@ export default {
   template: `
     <div class="reply-to-card">
       <span class="reply-to-arrow">↪</span>
-      <span class="reply-to-label">{{ $t('unify.task.reply.to', { vpId: vpId || '?' }) }}</span>
+      <span class="reply-to-label">{{ $t('unify.feature.reply.to', { vpId: vpId || '?' }) }}</span>
       <span class="reply-to-preview">{{ preview }}</span>
       <button
         class="reply-to-cancel"
-        :title="$t('unify.task.reply.cancel')"
-        :aria-label="$t('unify.task.reply.cancel')"
+        :title="$t('unify.feature.reply.cancel')"
+        :aria-label="$t('unify.feature.reply.cancel')"
         @click.stop="$emit('cancel')"
       >&times;</button>
     </div>

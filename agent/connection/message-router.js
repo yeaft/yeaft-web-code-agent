@@ -425,10 +425,10 @@ export async function handleMessage(msg) {
       handleUnifyVpRead(msg);
       break;
 
-    // task-334h (R6 §Δ28 / §Δ31.6): task-scoped direct message echo.
+    // task-334h (R6 §Δ28 / §Δ31.6): feature-scoped direct message echo.
     // Replaces the withdrawn R3 `unify_task_private_chat`. Agent validates,
-    // stamps msgId + ts, and broadcasts the `task_message` mirror back.
-    case 'unify_task_message':
+    // stamps msgId + ts, and broadcasts the `feature_message` mirror back.
+    case 'unify_feature_message':
       handleUnifyTaskMessage(msg);
       break;
 
@@ -455,11 +455,11 @@ export async function handleMessage(msg) {
       handleUnifyMemoryTrace(msg);
       break;
 
-    // R6 G1a — task summary history + task affiliation CRUD.
+    // R6 G1a — feature summary history + feature affiliation CRUD.
     case 'unify_fetch_summary_history':
       await handleUnifyFetchSummaryHistory(msg);
       break;
-    case 'unify_task_crud':
+    case 'unify_feature_crud':
       await handleUnifyTaskCrud(msg);
       break;
 

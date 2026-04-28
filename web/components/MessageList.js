@@ -1,13 +1,13 @@
 import MessageItem from './MessageItem.js';
 import AssistantTurn from './AssistantTurn.js';
-import TaskMessageItem from './TaskMessageItem.js';
+import FeatureMessageItem from './FeatureMessageItem.js';
 import VpSpeakerHeader from './VpSpeakerHeader.js';
 import ReflectionCard from './ReflectionCard.js';
 import SubAgentCard from './SubAgentCard.js';
 
 export default {
   name: 'MessageList',
-  components: { MessageItem, AssistantTurn, TaskMessageItem, VpSpeakerHeader, ReflectionCard, SubAgentCard },
+  components: { MessageItem, AssistantTurn, FeatureMessageItem, VpSpeakerHeader, ReflectionCard, SubAgentCard },
   template: `
     <main class="chat-container" ref="containerRef">
       <!-- Session Loading Overlay - only covers message area -->
@@ -96,10 +96,10 @@ export default {
             <MessageItem v-if="item.type === 'user' || item.type === 'system' || item.type === 'error'" :message="item.message" />
 
             <!-- task-334j: task-scoped group message row with VP attribution + [task] pill -->
-            <TaskMessageItem
-              v-else-if="item.type === 'task-message'"
+            <FeatureMessageItem
+              v-else-if="item.type === 'feature-message'"
               :message="item.message"
-              @reply="onTaskMessageReply"
+              @reply="onFeatureMessageReply"
               @open-detail="onOpenVpDetail"
             />
 
@@ -563,10 +563,10 @@ export default {
         // task-334j: task-scoped group message row. Breaks the assistant
         // turn streak like a user/system row (distinct visual channel —
         // avatar + [task] pill — not a continuation of an assistant turn).
-        if (msg.type === 'task-message') {
+        if (msg.type === 'feature-message') {
           finishTurn();
           lastShownSpeakerVpId = null;
-          result.push({ type: 'task-message', id: msg.id || 'tm_' + i, message: msg });
+          result.push({ type: 'feature-message', id: msg.id || 'tm_' + i, message: msg });
           continue;
         }
 
@@ -1209,13 +1209,13 @@ export default {
     });
 
     // task-334j: task-message row handlers.
-    const onTaskMessageReply = (payload) => {
+    const onFeatureMessageReply = (payload) => {
       if (!payload || !payload.msgId) return;
-      // Scope reply-to by active taskId so it survives re-entry into the
-      // same task; ChatInput reads `task:${taskId}` on send.
-      const taskId = store.unifyActiveTaskDetailId;
-      if (!taskId) return;
-      store.setReplyTo('task:' + taskId, {
+      // Scope reply-to by active featureId so it survives re-entry into the
+      // same task; ChatInput reads `task:${featureId}` on send.
+      const featureId = store.unifyActiveFeatureDetailId;
+      if (!featureId) return;
+      store.setReplyTo('task:' + featureId, {
         msgId: payload.msgId,
         vpId: payload.vpId,
         content: payload.textPreview,
@@ -1251,7 +1251,7 @@ export default {
       questionRX,
       refreshSession,
       // task-334j
-      onTaskMessageReply,
+      onFeatureMessageReply,
       onOpenVpDetail,
       onlineAgents,
       turnGroups,

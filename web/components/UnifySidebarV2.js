@@ -9,7 +9,7 @@
  *   - emits `select-thread` / `select-task` on row click
  *
  * Part 2 (task-301): Phase-1 mock data is gone. The component now reads
- * `store.unifyThreads` / `store.unifyTasks` directly — those arrays are
+ * `store.unifyThreads` / `store.unifyFeatures` directly — those arrays are
  * populated by `thread_list_updated` / `task_list_updated` events sent
  * from agent/unify/web-bridge.js (which wraps task-299 ThreadStore /
  * TaskStore snapshots).
@@ -631,13 +631,13 @@ export default {
     },
     tasks() {
       if (Array.isArray(this.tasksSource)) return this.tasksSource;
-      return this.store?.unifyTasks || [];
+      return this.store?.unifyFeatures || [];
     },
     activeThreadId() {
       return this.store?.unifyActiveThreadId || null;
     },
     activeTaskId() {
-      return this.store?.unifyActiveTaskId || null;
+      return this.store?.unifyActiveFeatureId || null;
     },
     // Localized placeholder. Falls back gracefully when $t is not injected
     // (e.g. stand-alone unit tests that don't mount the component).
@@ -648,7 +648,7 @@ export default {
       return 'Search… (#name for threads)';
     },
     // task-316: parser now lives in web/utils/search-parser.js.
-    // Returned shape expanded with taskId + status filters; sidebar only
+    // Returned shape expanded with featureId + status filters; sidebar only
     // reads the fields it needs. Existing tests that depend on the
     // `{ keyword, threadPrefix, scopedField }` subset still pass because
     // those fields are still present.
@@ -737,7 +737,7 @@ export default {
       }
       // Message hits — only included when query could meaningfully
       // match message content (task:N with any keyword, or in:body kw).
-      if (threadPrefix === null && (q.taskId || q.scopedField === 'body')) {
+      if (threadPrefix === null && (q.featureId || q.scopedField === 'body')) {
         const msgs = this.messages || [];
         for (const m of msgs) {
           if (_messageMatches(m, q)) {
