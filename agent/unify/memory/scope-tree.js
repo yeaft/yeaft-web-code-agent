@@ -10,7 +10,7 @@
  *       entries/<yyyy-mm-dd>-<slug>.md
  *     groups/<groupId>/    — same shape
  *     vp/<vpId>/           — same shape
- *     tasks/<taskId>/      — same shape, plus archive/
+ *     features/<featureId>/ — same shape, plus archive/
  *
  * This module is concerned ONLY with on-disk shape + atomic writes. It does
  * NOT do any LLM work (extraction, summarisation, dream maintenance) — those
@@ -50,12 +50,12 @@ import { homedir } from 'os';
 /** Default memory root. Tests override via `opts.root`. */
 export const DEFAULT_MEMORY_ROOT = join(homedir(), '.yeaft', 'memory');
 
-/** @typedef {'user'|'group'|'vp'|'task'} ScopeKind */
+/** @typedef {'user'|'group'|'vp'|'feature'} ScopeKind */
 /** @typedef {{kind: ScopeKind, id?: string}} Scope */
 
 /**
  * Compute the scope's path segment relative to the memory root.
- * `user/`, `groups/<id>/`, `vp/<id>/`, `tasks/<id>/`.
+ * `user/`, `groups/<id>/`, `vp/<id>/`, `features/<id>/`.
  *
  * @param {Scope} scope
  * @returns {string}
@@ -73,9 +73,9 @@ export function scopeDir(scope) {
     case 'vp':
       if (!scope.id) throw new Error('scopeDir: vp scope requires id');
       return `vp/${scope.id}`;
-    case 'task':
-      if (!scope.id) throw new Error('scopeDir: task scope requires id');
-      return `tasks/${scope.id}`;
+    case 'feature':
+      if (!scope.id) throw new Error('scopeDir: feature scope requires id');
+      return `features/${scope.id}`;
     default:
       throw new Error(`scopeDir: unknown kind ${JSON.stringify(scope.kind)}`);
   }

@@ -647,85 +647,82 @@ describe('Agent tools', () => {
 });
 
 // ──────────────────────────────────────────────
-// § P1 Task tools
+// § P1 Feature tools
 // ──────────────────────────────────────────────
 
-describe('Task tools', () => {
-  it('TaskCreate creates a task', async () => {
-    // Initialize task store with a temp directory before using task tools
-    const { initTaskStore, taskCreate } = await import(`${TOOLS_DIR}/task-tools.js`);
+describe('Feature tools', () => {
+  it('FeatureCreate creates a feature', async () => {
+    // Initialize feature store with a temp directory before using feature tools
+    const { initFeatureStore, featureCreate } = await import(`${TOOLS_DIR}/feature-tools.js`);
     const { mkdirSync } = await import('fs');
     const { tmpdir } = await import('os');
     const { join } = await import('path');
-    const tmpDir = join(tmpdir(), `yeaft-test-tasks-${Date.now()}`);
+    const tmpDir = join(tmpdir(), `yeaft-test-features-${Date.now()}`);
     mkdirSync(tmpDir, { recursive: true });
-    initTaskStore(tmpDir);
-    const result = JSON.parse(await taskCreate.execute(
-      { title: 'Test task', description: 'A test' },
+    initFeatureStore(tmpDir);
+    const result = JSON.parse(await featureCreate.execute(
+      { title: 'Test feature', description: 'A test' },
       {}
     ));
     expect(result.success).toBe(true);
-    expect(result.task.id).toBeTruthy();
-    expect(result.task.title).toBe('Test task');
-    expect(result.task.status).toBe('pending');
+    expect(result.feature.id).toBeTruthy();
+    expect(result.feature.title).toBe('Test feature');
+    expect(result.feature.status).toBe('pending');
   });
 
-  it('TaskUpdate updates task status', async () => {
-    const { taskCreate, taskUpdate } = await import(`${TOOLS_DIR}/task-tools.js`);
-    const created = JSON.parse(await taskCreate.execute(
+  it('FeatureUpdate updates feature status', async () => {
+    const { featureCreate, featureUpdate } = await import(`${TOOLS_DIR}/feature-tools.js`);
+    const created = JSON.parse(await featureCreate.execute(
       { title: 'Update me' },
       {}
     ));
-    // taskUpdate uses task_id parameter
-    const result = JSON.parse(await taskUpdate.execute(
-      { task_id: created.task.id, status: 'in_progress' },
+    const result = JSON.parse(await featureUpdate.execute(
+      { feature_id: created.feature.id, status: 'in_progress' },
       {}
     ));
     expect(result.success).toBe(true);
-    expect(result.task.status).toBe('in_progress');
+    expect(result.feature.status).toBe('in_progress');
   });
 
-  it('TaskList lists tasks', async () => {
-    const { taskCreate, taskList } = await import(`${TOOLS_DIR}/task-tools.js`);
-    await taskCreate.execute({ title: 'List test' }, {});
+  it('FeatureList lists features', async () => {
+    const { featureCreate, featureList } = await import(`${TOOLS_DIR}/feature-tools.js`);
+    await featureCreate.execute({ title: 'List test' }, {});
 
-    const result = JSON.parse(await taskList.execute({}, {}));
-    expect(result.tasks).toBeTruthy();
-    expect(result.tasks.length).toBeGreaterThan(0);
+    const result = JSON.parse(await featureList.execute({}, {}));
+    expect(result.features).toBeTruthy();
+    expect(result.features.length).toBeGreaterThan(0);
   });
 
-  it('TaskGet retrieves task details', async () => {
-    const { taskCreate, taskGet } = await import(`${TOOLS_DIR}/task-tools.js`);
-    const created = JSON.parse(await taskCreate.execute(
+  it('FeatureGet retrieves feature details', async () => {
+    const { featureCreate, featureGet } = await import(`${TOOLS_DIR}/feature-tools.js`);
+    const created = JSON.parse(await featureCreate.execute(
       { title: 'Get me', description: 'Details test' },
       {}
     ));
-    // taskGet uses task_id parameter
-    const result = JSON.parse(await taskGet.execute(
-      { task_id: created.task.id },
+    const result = JSON.parse(await featureGet.execute(
+      { feature_id: created.feature.id },
       {}
     ));
     expect(result.title).toBe('Get me');
     expect(result.description).toBe('Details test');
   });
 
-  it('FollowupTask creates linked task', async () => {
-    const { taskCreate, followupTask } = await import(`${TOOLS_DIR}/task-tools.js`);
-    const parent = JSON.parse(await taskCreate.execute(
+  it('FollowupFeature creates linked feature', async () => {
+    const { featureCreate, followupFeature } = await import(`${TOOLS_DIR}/feature-tools.js`);
+    const parent = JSON.parse(await featureCreate.execute(
       { title: 'Parent' },
       {}
     ));
-    // followupTask uses parent_task_id parameter
-    const result = JSON.parse(await followupTask.execute(
-      { parent_task_id: parent.task.id, title: 'Child task' },
+    const result = JSON.parse(await followupFeature.execute(
+      { parent_feature_id: parent.feature.id, title: 'Child feature' },
       {}
     ));
     expect(result.success).toBe(true);
-    expect(result.task.parentId).toBe(parent.task.id);
+    expect(result.feature.parentId).toBe(parent.feature.id);
   });
 
   it('UpdatePlan updates the plan', async () => {
-    const { updatePlan } = await import(`${TOOLS_DIR}/task-tools.js`);
+    const { updatePlan } = await import(`${TOOLS_DIR}/feature-tools.js`);
     const result = JSON.parse(await updatePlan.execute(
       { action: 'update', content: '# My Plan\n\n1. Step one\n2. Step two' },
       {}

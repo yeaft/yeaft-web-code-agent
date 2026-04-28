@@ -58,6 +58,7 @@ import {
   featureMemory,
   followupFeature,
   updatePlan,
+  featureSummaryPost,
 } from './feature-tools.js';
 
 // --- P1 Thread tools (task-299 Phase 1) ---
@@ -134,6 +135,7 @@ export const allTools = [
   featureMemory,
   followupFeature,
   updatePlan,
+  featureSummaryPost,
 
   // P1 Thread (task-299 Phase 1)
   spawnThread,
