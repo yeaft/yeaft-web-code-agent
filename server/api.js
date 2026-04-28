@@ -2,7 +2,7 @@ import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { CONFIG } from './config.js';
-import { verifyToken } from './auth.js';
+import { verifyToken, maybeRenewToken } from './auth.js';
 import { registerAuthRoutes } from './routes/auth-routes.js';
 import { registerInvitationRoutes } from './routes/invitation-routes.js';
 import { registerUserRoutes } from './routes/user-routes.js';
@@ -54,6 +54,18 @@ function requireAuth(req, res, next) {
 
   if (!result.valid) {
     return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+
+  // Sliding renewal: if the token is in the last `jwtRenewThresholdMs` of its
+  // life, mint a fresh one and surface it to the client via X-New-Token. The
+  // browser fetch wrapper picks this up and swaps localStorage transparently.
+  // Skip renewal for non-session tokens (temp/totp/totp-setup) — those have
+  // their own short-lived semantics and must not be promoted to full sessions.
+  if (!result.type) {
+    const fresh = maybeRenewToken(token, result.exp, result.username);
+    if (fresh) {
+      res.setHeader('X-New-Token', fresh);
+    }
   }
 
   req.user = { username: result.username, role: result.role === 'admin' ? 'admin' : 'pro' };
