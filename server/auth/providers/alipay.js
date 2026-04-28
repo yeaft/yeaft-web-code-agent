@@ -96,8 +96,11 @@ export async function exchangeCode(code /* , state */) {
     throw new Error(`Alipay user info error ${userInner.code}: ${userInner.msg || ''}`);
   }
 
-  const subject = userInner.user_id || tokInner.user_id;
-  if (!subject) throw new Error('Alipay profile missing user_id');
+  // Prefer open_id (per-app stable ID under Alipay's privacy/openid mode, on by
+  // default for apps created since 2023). Fall back to user_id for legacy apps
+  // that haven't migrated. Either is a stable per-user subject for binding.
+  const subject = userInner.open_id || tokInner.open_id || userInner.user_id || tokInner.user_id;
+  if (!subject) throw new Error('Alipay profile missing open_id/user_id');
 
   return {
     subject,

@@ -8,7 +8,16 @@
  * server-side tests in this repo.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { generateKeyPairSync } from 'crypto';
 import { mockFetch, restoreFetch, fakeIdToken } from '../helpers/ssoMocks.js';
+
+// Generate a throw-away RSA keypair for Alipay's RSA2 signing (real signing
+// happens — we just don't verify on the mocked gateway side).
+const { privateKey: alipayPrivateKey } = generateKeyPairSync('rsa', {
+  modulusLength: 2048,
+  privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+  publicKeyEncoding: { type: 'spki', format: 'pem' }
+});
 
 // Stub config.js so providers don't transitively import server/database.js
 // (which requires Node 22.5+ via node:sqlite).
@@ -18,7 +27,7 @@ vi.mock('../../server/config.js', () => ({
       github: { enabled: true, clientId: 'gh-client', clientSecret: 'gh-secret', callbackUrl: 'https://example.com/cb' },
       google: { enabled: true, clientId: 'g-client', clientSecret: 'g-secret', callbackUrl: 'https://example.com/cb' },
       wechat: { enabled: true, appId: 'wx-app', appSecret: 'wx-secret', callbackUrl: 'https://example.com/cb' },
-      alipay: { enabled: false }
+      alipay: { enabled: true, appId: 'ali-app', privateKey: alipayPrivateKey, alipayPublicKey: 'ignored', callbackUrl: 'https://example.com/cb' }
     }
   }
 }));
@@ -26,6 +35,7 @@ vi.mock('../../server/config.js', () => ({
 const github = await import('../../server/auth/providers/github.js');
 const google = await import('../../server/auth/providers/google.js');
 const wechat = await import('../../server/auth/providers/wechat.js');
+const alipay = await import('../../server/auth/providers/alipay.js');
 
 describe('SSO providers — getAuthorizeUrl', () => {
   it('GitHub authorize URL includes state + client_id + scope', () => {
@@ -124,5 +134,50 @@ describe('SSO providers — exchangeCode (mocked fetch)', () => {
     });
     const r = await wechat.exchangeCode('code');
     expect(r.subject).toBe('open-only');
+  });
+
+  it('Alipay: prefers open_id over user_id (privacy/openid mode)', async () => {
+    let call = 0;
+    mockFetch({
+      'https://openapi.alipay.com/gateway.do': () => {
+        call++;
+        if (call === 1) {
+          return { ok: true, json: { alipay_system_oauth_token_response: { access_token: 'ali-tok', open_id: 'ali-open-1', user_id: '' } } };
+        }
+        return { ok: true, json: { alipay_user_info_share_response: { code: '10000', open_id: 'ali-open-1', nick_name: '支付宝用户' } } };
+      }
+    });
+    const r = await alipay.exchangeCode('code');
+    expect(r.subject).toBe('ali-open-1');
+    expect(r.displayName).toBe('支付宝用户');
+  });
+
+  it('Alipay: falls back to user_id when open_id absent (legacy app)', async () => {
+    let call = 0;
+    mockFetch({
+      'https://openapi.alipay.com/gateway.do': () => {
+        call++;
+        if (call === 1) {
+          return { ok: true, json: { alipay_system_oauth_token_response: { access_token: 'ali-tok', user_id: '20881234' } } };
+        }
+        return { ok: true, json: { alipay_user_info_share_response: { code: '10000', user_id: '20881234', nick_name: 'Legacy' } } };
+      }
+    });
+    const r = await alipay.exchangeCode('code');
+    expect(r.subject).toBe('20881234');
+  });
+
+  it('Alipay: throws when both open_id and user_id are missing', async () => {
+    let call = 0;
+    mockFetch({
+      'https://openapi.alipay.com/gateway.do': () => {
+        call++;
+        if (call === 1) {
+          return { ok: true, json: { alipay_system_oauth_token_response: { access_token: 'ali-tok' } } };
+        }
+        return { ok: true, json: { alipay_user_info_share_response: { code: '10000', nick_name: 'NoId' } } };
+      }
+    });
+    await expect(alipay.exchangeCode('code')).rejects.toThrow(/open_id\/user_id/);
   });
 });
