@@ -33,11 +33,11 @@ export default {
           <button @click="login" :disabled="authStore.loading">
             {{ authStore.loading ? $t('login.loggingIn') : $t('login.login') }}
           </button>
-          <template v-if="authStore.aadEnabled">
+          <template v-if="hasAnySso">
             <div class="login-divider">
               <span>{{ $t('login.or') }}</span>
             </div>
-            <button class="ms-login-btn" @click="loginWithMicrosoft" :disabled="authStore.loading">
+            <button v-if="authStore.aadEnabled" class="ms-login-btn sso-btn sso-btn-microsoft" @click="loginWithMicrosoft" :disabled="authStore.loading">
               <svg class="ms-logo" viewBox="0 0 21 21" xmlns="http://www.w3.org/2000/svg">
                 <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
                 <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>
@@ -45,6 +45,22 @@ export default {
                 <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
               </svg>
               {{ $t('login.microsoft') }}
+            </button>
+            <button v-if="authStore.ssoProviders.github" class="sso-btn sso-btn-github" @click="loginWithSso('github')" :disabled="authStore.loading">
+              <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.5-1.4-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1.1 1.8 2.8 1.3 3.4 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.3.5-2.3 1.2-3.2-.1-.3-.5-1.5.1-3.2 0 0 1-.3 3.3 1.2A11.5 11.5 0 0 1 12 5.8c1 0 2 .1 3 .4 2.3-1.5 3.3-1.2 3.3-1.2.6 1.7.2 2.9.1 3.2.7.9 1.2 1.9 1.2 3.2 0 4.6-2.8 5.7-5.5 6 .4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3"/></svg>
+              {{ $t('login.github') }}
+            </button>
+            <button v-if="authStore.ssoProviders.google" class="sso-btn sso-btn-google" @click="loginWithSso('google')" :disabled="authStore.loading">
+              <svg viewBox="0 0 24 24" width="18" height="18"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A11 11 0 0 0 12 23z"/><path fill="#FBBC05" d="M5.84 14.1A6.6 6.6 0 0 1 5.5 12c0-.73.13-1.44.34-2.1V7.07H2.18A11 11 0 0 0 1 12c0 1.77.42 3.45 1.18 4.93l3.66-2.83z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1A11 11 0 0 0 2.18 7.07l3.66 2.83C6.71 7.31 9.14 5.38 12 5.38z"/></svg>
+              {{ $t('login.google') }}
+            </button>
+            <button v-if="authStore.ssoProviders.wechat" class="sso-btn sso-btn-wechat" @click="loginWithSso('wechat')" :disabled="authStore.loading">
+              <svg viewBox="0 0 24 24" width="18" height="18"><path fill="#07C160" d="M9.5 4C5.36 4 2 6.91 2 10.5c0 2.07 1.13 3.91 2.86 5.09L4 18l2.7-1.41c.85.22 1.76.34 2.7.34h.51c-.13-.42-.21-.86-.21-1.32 0-3 2.91-5.43 6.5-5.43.32 0 .64.02.95.06C16.63 7.32 13.4 4 9.5 4zM7 8.5a1 1 0 110 2 1 1 0 010-2zm5 0a1 1 0 110 2 1 1 0 010-2zm4.21 3.66c-3.04 0-5.5 1.92-5.5 4.29 0 1.39.91 2.65 2.34 3.46l-.46 1.5 1.93-.95c.55.13 1.13.2 1.69.2 3.04 0 5.5-1.92 5.5-4.21 0-2.37-2.46-4.29-5.5-4.29zm-1.71 2.21a.75.75 0 110 1.5.75.75 0 010-1.5zm3.42 0a.75.75 0 110 1.5.75.75 0 010-1.5z"/></svg>
+              {{ $t('login.wechat') }}
+            </button>
+            <button v-if="authStore.ssoProviders.alipay" class="sso-btn sso-btn-alipay" @click="loginWithSso('alipay')" :disabled="authStore.loading">
+              <svg viewBox="0 0 24 24" width="18" height="18"><path fill="#1677FF" d="M21 15.4c-1.7-.6-3.5-1.2-5.4-2 .5-.9 1-1.9 1.3-3h-3.4v-1.1h4v-.6h-4V6.5h-1.7c-.3 0-.3.3-.3.3v1.9H7.3v.6h4.2v1.1H8v.6h6.7c-.2.7-.5 1.4-.8 2-2-.6-4-1-5.6-1-2.6 0-4.4 1.2-4.5 2.9-.1 1.6 1 3.5 4 3.5 2.1 0 4-1.1 5.5-3 2.6 1.2 5 2.4 7.8 3.4.4-.5.6-1 .8-1.4.2-.5.1-1-.1-1.5zM7.3 16.7c-2.1 0-2.7-1.5-2.5-2.3.1-.5.7-1.1 1.7-1.3.5-.1 1.6-.1 2.8.2 1 .2 2.1.6 3.2.9-.9 1.7-2.5 2.5-5.2 2.5z"/></svg>
+              {{ $t('login.alipay') }}
             </button>
           </template>
           <p v-if="authStore.registrationEnabled" class="register-link">
@@ -240,6 +256,18 @@ export default {
       await authStore.loginWithMicrosoft();
     };
 
+    const loginWithSso = (provider) => {
+      authStore.loginWithSso(provider);
+    };
+
+    const hasAnySso = Vue.computed(() =>
+      authStore.aadEnabled ||
+      authStore.ssoProviders.github ||
+      authStore.ssoProviders.google ||
+      authStore.ssoProviders.wechat ||
+      authStore.ssoProviders.alipay
+    );
+
     const verifyTotp = async () => {
       if (!totpCode.value || totpCode.value.length !== 6) {
         localError.value = t('login.error.enter6Digit');
@@ -374,6 +402,8 @@ export default {
       focusPassword,
       login,
       loginWithMicrosoft,
+      loginWithSso,
+      hasAnySso,
       verify,
       verifyTotp,
       setupTotp,

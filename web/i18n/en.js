@@ -32,6 +32,10 @@ export default {
   'login.registerWithCode': 'Register',
   'login.or': 'or',
   'login.microsoft': 'Sign in with Microsoft',
+  'login.github': 'Sign in with GitHub',
+  'login.google': 'Sign in with Google',
+  'login.wechat': 'Sign in with WeChat',
+  'login.alipay': 'Sign in with Alipay',
 
   // Login - Errors (used in JS validation)
   'login.error.enterUsername': 'Please enter your username',
@@ -400,6 +404,21 @@ export default {
   'settings.account.logout': 'Log Out',
   'settings.account.roleAdmin': 'Admin',
   'settings.account.rolePro': 'Pro',
+  'settings.account.linkedAccounts': 'Linked Accounts',
+  'settings.account.linkedDesc': 'Link external sign-in providers so you can log in with any of them.',
+  'settings.account.bind': 'Link',
+  'settings.account.unbind': 'Unlink',
+  'settings.account.linked': 'Linked',
+  'settings.account.providerDisabled': 'Not configured',
+  'settings.account.cantUnbindLast': 'Cannot unlink the only login method',
+  'settings.account.unbindFailed': 'Failed to unlink: {error}',
+  'settings.account.ssoBoundMsg': 'Successfully linked {provider}.',
+  'settings.account.ssoConflictMsg': 'This {provider} account is already linked to another user.',
+  'settings.account.providerMicrosoft': 'Microsoft',
+  'settings.account.providerGithub': 'GitHub',
+  'settings.account.providerGoogle': 'Google',
+  'settings.account.providerWechat': 'WeChat',
+  'settings.account.providerAlipay': 'Alipay',
 
   // Settings - Security
   'settings.security.agentKey': 'Agent Secret',

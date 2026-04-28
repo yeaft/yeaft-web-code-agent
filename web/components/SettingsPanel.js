@@ -68,6 +68,42 @@ export default {
               </div>
 
               <div class="sp-group">
+                <div class="sp-group-title">{{ $t('settings.account.linkedAccounts') }}</div>
+                <p class="sp-desc">{{ $t('settings.account.linkedDesc') }}</p>
+                <div v-if="ssoBoundMessage" class="sp-info">{{ ssoBoundMessage }}</div>
+                <div v-if="ssoConflictMessage" class="sp-error">{{ ssoConflictMessage }}</div>
+                <div v-if="authStore.identitiesLoading" class="sp-desc">{{ $t('common.loading') }}</div>
+                <div v-else>
+                  <div v-for="p in ssoProviderRows" :key="p.key" class="sp-row">
+                    <div class="sp-row-left">
+                      <span class="sp-label">{{ p.label }}</span>
+                      <span class="sp-desc-small" v-if="p.linked && p.identity">
+                        {{ p.identity.email || p.identity.displayName || $t('settings.account.linked') }}
+                      </span>
+                    </div>
+                    <button
+                      v-if="!p.linked"
+                      class="sp-btn sp-btn-muted"
+                      :disabled="!p.enabled"
+                      :title="!p.enabled ? $t('settings.account.providerDisabled') : ''"
+                      @click="bindSso(p.key)"
+                    >
+                      {{ $t('settings.account.bind') }}
+                    </button>
+                    <button
+                      v-else
+                      class="sp-btn sp-btn-danger"
+                      :disabled="!canUnbind(p.key)"
+                      :title="!canUnbind(p.key) ? $t('settings.account.cantUnbindLast') : ''"
+                      @click="unbindSso(p.key)"
+                    >
+                      {{ $t('settings.account.unbind') }}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="sp-group">
                 <button class="sp-btn sp-btn-danger" @click="doLogout">{{ $t('settings.account.logout') }}</button>
               </div>
             </div>
@@ -345,7 +381,9 @@ export default {
       isError: false,
       selectedLocale: chatStore.locale,
       openDropdown: null,
-      officePreviewMode: localStorage.getItem('officePreviewMode') || 'local'
+      officePreviewMode: localStorage.getItem('officePreviewMode') || 'local',
+      ssoBoundMessage: '',
+      ssoConflictMessage: ''
     };
   },
   computed: {
@@ -411,6 +449,22 @@ export default {
       const agentId = this.chatStore.currentAgent;
       if (!agentId) return [];
       return this.chatStore.mcpServers[agentId] || [];
+    },
+    ssoProviderRows() {
+      const auth = this.authStore;
+      const linked = new Map((auth.linkedIdentities || []).map(i => [i.provider, i]));
+      const rows = [
+        { key: 'microsoft', label: this.$t('login.microsoft'), enabled: !!auth.aadEnabled },
+        { key: 'github',    label: this.$t('login.github'),    enabled: !!auth.ssoProviders.github },
+        { key: 'google',    label: this.$t('login.google'),    enabled: !!auth.ssoProviders.google },
+        { key: 'wechat',    label: this.$t('login.wechat'),    enabled: !!auth.ssoProviders.wechat },
+        { key: 'alipay',    label: this.$t('login.alipay'),    enabled: !!auth.ssoProviders.alipay }
+      ];
+      return rows.map(r => ({
+        ...r,
+        linked: linked.has(r.key),
+        identity: linked.get(r.key) || null
+      }));
     }
   },
   watch: {
@@ -459,6 +513,7 @@ export default {
 
     async loadData() {
       this.message = '';
+      this._consumeSsoQueryFlags();
       try {
         const headers = this.getHeaders();
         const [profileRes, secretRes] = await Promise.all([
@@ -475,9 +530,58 @@ export default {
         if (this.authStore.role === 'admin') {
           await this.loadInvitations();
         }
+        // Load linked SSO identities (best-effort).
+        try { await this.authStore.loadIdentities(); } catch {}
       } catch (e) {
         console.error('Failed to load settings data:', e);
       }
+    },
+
+    _consumeSsoQueryFlags() {
+      // Hash format from server callback: #/settings?ssoBound=github
+      // or #/settings?ssoError=conflict&provider=github
+      const hash = window.location.hash || '';
+      const idx = hash.indexOf('?');
+      if (idx < 0) return;
+      const params = new URLSearchParams(hash.slice(idx + 1));
+      const bound = params.get('ssoBound');
+      const err = params.get('ssoError');
+      const provider = params.get('provider');
+      if (bound) {
+        this.ssoBoundMessage = this.$t('settings.account.ssoBoundMsg', { provider: bound });
+        this.activeTab = 'account';
+      }
+      if (err === 'conflict') {
+        this.ssoConflictMessage = this.$t('settings.account.ssoConflictMsg', { provider: provider || '' });
+        this.activeTab = 'account';
+      }
+      if (bound || err) {
+        try { history.replaceState(null, '', window.location.pathname + window.location.search); } catch {}
+      }
+    },
+
+    bindSso(provider) {
+      this.ssoBoundMessage = '';
+      this.ssoConflictMessage = '';
+      this.authStore.bindSso(provider);
+    },
+
+    async unbindSso(provider) {
+      this.ssoBoundMessage = '';
+      this.ssoConflictMessage = '';
+      const ok = await this.authStore.unbindIdentity(provider);
+      if (!ok) {
+        this.ssoConflictMessage = this.authStore.identitiesError || this.$t('settings.account.unbindFailed');
+      }
+    },
+
+    canUnbind(provider) {
+      const linked = this.authStore.linkedIdentities || [];
+      const isLinked = linked.some(i => i.provider === provider);
+      if (!isLinked) return false;
+      // Can unbind unless it's the only login method.
+      if (this.authStore.hasPassword) return true;
+      return linked.length > 1;
     },
 
     async loadInvitations() {

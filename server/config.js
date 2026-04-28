@@ -127,6 +127,47 @@ export const CONFIG = {
     tenantId: process.env.AAD_TENANT_ID || '',
     autoCreateUser: process.env.AAD_AUTO_CREATE_USER !== 'false', // Auto-create local user on first AAD login
     defaultRole: process.env.AAD_DEFAULT_ROLE || 'pro' // Default role for auto-created AAD users
+  },
+
+  // Multi-provider SSO settings (server-driven OAuth code flow)
+  // Each provider follows the same shape: { enabled, clientId/secret, callbackUrl, autoCreateUser, defaultRole }
+  // Microsoft re-uses the existing aad.* block above and is included here for the unified UI listing only.
+  sso: {
+    github: {
+      enabled: process.env.SSO_GITHUB_ENABLED === 'true',
+      clientId: process.env.SSO_GITHUB_CLIENT_ID || '',
+      clientSecret: process.env.SSO_GITHUB_CLIENT_SECRET || '',
+      callbackUrl: process.env.SSO_GITHUB_CALLBACK_URL || '',
+      autoCreateUser: process.env.SSO_GITHUB_AUTO_CREATE_USER !== 'false',
+      defaultRole: process.env.SSO_GITHUB_DEFAULT_ROLE || 'pro'
+    },
+    google: {
+      enabled: process.env.SSO_GOOGLE_ENABLED === 'true',
+      clientId: process.env.SSO_GOOGLE_CLIENT_ID || '',
+      clientSecret: process.env.SSO_GOOGLE_CLIENT_SECRET || '',
+      callbackUrl: process.env.SSO_GOOGLE_CALLBACK_URL || '',
+      autoCreateUser: process.env.SSO_GOOGLE_AUTO_CREATE_USER !== 'false',
+      defaultRole: process.env.SSO_GOOGLE_DEFAULT_ROLE || 'pro'
+    },
+    wechat: {
+      // PC web 扫码 (Open Platform 网页扫码) — open.weixin.qq.com/connect/qrconnect
+      enabled: process.env.SSO_WECHAT_ENABLED === 'true',
+      appId: process.env.SSO_WECHAT_APP_ID || '',
+      appSecret: process.env.SSO_WECHAT_APP_SECRET || '',
+      callbackUrl: process.env.SSO_WECHAT_CALLBACK_URL || '',
+      autoCreateUser: process.env.SSO_WECHAT_AUTO_CREATE_USER !== 'false',
+      defaultRole: process.env.SSO_WECHAT_DEFAULT_ROLE || 'pro'
+    },
+    alipay: {
+      // 支付宝网页授权 — oauth2/publicAppAuthorize.htm (RSA2 signing)
+      enabled: process.env.SSO_ALIPAY_ENABLED === 'true',
+      appId: process.env.SSO_ALIPAY_APP_ID || '',
+      privateKey: process.env.SSO_ALIPAY_PRIVATE_KEY || '',
+      alipayPublicKey: process.env.SSO_ALIPAY_PUBLIC_KEY || '',
+      callbackUrl: process.env.SSO_ALIPAY_CALLBACK_URL || '',
+      autoCreateUser: process.env.SSO_ALIPAY_AUTO_CREATE_USER !== 'false',
+      defaultRole: process.env.SSO_ALIPAY_DEFAULT_ROLE || 'pro'
+    }
   }
 };
 
@@ -232,6 +273,21 @@ export function validateProductionConfig() {
  */
 export function isAadEnabled() {
   return CONFIG.aad?.enabled && !!CONFIG.aad.clientId && !!CONFIG.aad.tenantId;
+}
+
+/**
+ * Return the set of enabled SSO providers (excluding Microsoft, which is exposed via aadEnabled).
+ * Used by /api/auth/mode to drive the LoginPage button list.
+ * @returns {{ github: boolean, google: boolean, wechat: boolean, alipay: boolean }}
+ */
+export function getEnabledSsoProviders() {
+  const sso = CONFIG.sso || {};
+  return {
+    github: !!(sso.github?.enabled && sso.github.clientId && sso.github.clientSecret && sso.github.callbackUrl),
+    google: !!(sso.google?.enabled && sso.google.clientId && sso.google.clientSecret && sso.google.callbackUrl),
+    wechat: !!(sso.wechat?.enabled && sso.wechat.appId && sso.wechat.appSecret && sso.wechat.callbackUrl),
+    alipay: !!(sso.alipay?.enabled && sso.alipay.appId && sso.alipay.privateKey && sso.alipay.callbackUrl)
+  };
 }
 
 export default CONFIG;

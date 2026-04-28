@@ -15,6 +15,14 @@ export const useAuthStore = defineStore('auth', {
     aadEnabled: false,
     aadClientId: null,
     aadTenantId: null,
+    // Server-driven SSO providers (from /api/auth/mode → ssoProviders)
+    ssoProviders: { github: false, google: false, wechat: false, alipay: false },
+
+    // Linked identities for the logged-in user (loaded on demand)
+    linkedIdentities: [],
+    hasPassword: false,
+    identitiesLoading: false,
+    identitiesError: null,
 
     // Current auth state
     isAuthenticated: false,
@@ -53,6 +61,10 @@ export const useAuthStore = defineStore('auth', {
         this.aadEnabled = data.aadEnabled || false;
         this.aadClientId = data.aadClientId || null;
         this.aadTenantId = data.aadTenantId || null;
+        this.ssoProviders = Object.assign(
+          { github: false, google: false, wechat: false, alipay: false },
+          data.ssoProviders || {}
+        );
 
         if (this.skipAuth) {
           // In skip auth mode, we're automatically authenticated
@@ -390,6 +402,101 @@ export const useAuthStore = defineStore('auth', {
     showRegister() {
       this.loginStep = 'register';
       this.error = null;
+    },
+
+    /**
+     * Server-driven SSO: redirect to provider start URL.
+     * Works for github / google / wechat / alipay / microsoft.
+     */
+    loginWithSso(provider) {
+      window.location.href = `/api/auth/sso/${encodeURIComponent(provider)}/start`;
+    },
+
+    /**
+     * Bind an additional SSO identity to the currently logged-in user.
+     * Requires an existing token (passed via query param so the redirect
+     * endpoint can verify the user without an Authorization header).
+     */
+    bindSso(provider) {
+      if (!this.token) {
+        this.error = 'You must be logged in to bind an identity';
+        return;
+      }
+      const params = new URLSearchParams({ intent: 'bind', token: this.token });
+      window.location.href = `/api/auth/sso/${encodeURIComponent(provider)}/start?${params.toString()}`;
+    },
+
+    /**
+     * Consume an SSO redirect of the form `#/sso-complete?token=...&sessionKey=...&role=...`.
+     * Returns true if a token was found and applied. Safe to call on every page load.
+     */
+    consumeSsoRedirect() {
+      const hash = window.location.hash || '';
+      const idx = hash.indexOf('?');
+      if (!hash.startsWith('#/sso-complete') || idx < 0) return false;
+      const params = new URLSearchParams(hash.slice(idx + 1));
+      const token = params.get('token');
+      const sessionKey = params.get('sessionKey');
+      const role = params.get('role');
+      if (!token) return false;
+      this.token = token;
+      this.sessionKey = sessionKey ? decodeKey(sessionKey) : null;
+      this.role = role || 'pro';
+      this.isAuthenticated = true;
+      this.loginStep = 'authenticated';
+      localStorage.setItem('authToken', token);
+      // Clear the hash so the token never lingers in history.
+      try { history.replaceState(null, '', window.location.pathname + window.location.search); } catch {}
+      return true;
+    },
+
+    /**
+     * Load the current user's bound identities. Used by the Settings → Account tab.
+     */
+    async loadIdentities() {
+      if (!this.token) return;
+      this.identitiesLoading = true;
+      this.identitiesError = null;
+      try {
+        const res = await fetch('/api/auth/identities', {
+          headers: { 'Authorization': `Bearer ${this.token}` }
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          this.identitiesError = data.error || 'Failed to load identities';
+          return;
+        }
+        this.linkedIdentities = data.identities || [];
+        this.hasPassword = !!data.hasPassword;
+      } catch (err) {
+        this.identitiesError = err.message || 'Network error';
+      } finally {
+        this.identitiesLoading = false;
+      }
+    },
+
+    /**
+     * Unbind an SSO identity for the current user.
+     */
+    async unbindIdentity(provider) {
+      if (!this.token) return false;
+      this.identitiesError = null;
+      try {
+        const res = await fetch(`/api/auth/identities/${encodeURIComponent(provider)}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${this.token}` }
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          this.identitiesError = data.error || 'Failed to unbind';
+          return false;
+        }
+        this.linkedIdentities = this.linkedIdentities.filter(i => i.provider !== provider);
+        return true;
+      } catch (err) {
+        this.identitiesError = err.message || 'Network error';
+        return false;
+      }
     },
 
     /**
