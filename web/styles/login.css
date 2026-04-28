@@ -127,18 +127,12 @@
   cursor: not-allowed;
 }
 
-/* The first button in the stack is the recommended action. We keep the same
-   surface as the rest of the stack (so light + dark both look natural) and
-   only nudge the weight + border to draw the eye. Reversing the colors —
-   black-on-white in light mode — looked aggressive and clashed with the
-   neighbouring buttons; consistency wins here. */
+/* The first button in the stack used to get an extra emphasis treatment
+   (heavier border / weight). It looked like a "default selection" frame
+   and felt cluttered. All buttons now share one style — order alone is
+   the priority signal. */
 .sso-btn.is-primary {
-  font-weight: 600;
-  border-color: var(--text-secondary);
-}
-
-.sso-btn.is-primary:hover:not(:disabled) {
-  border-color: var(--text-primary);
+  /* intentionally empty */
 }
 
 .sso-btn-icon {
