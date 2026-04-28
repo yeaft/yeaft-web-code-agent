@@ -1,4 +1,14 @@
-/* Login Page - Modern ChatGPT Style */
+/* ==========================================================================
+   Login Page
+   ==========================================================================
+   - OAuth-first design: provider buttons in the main area, password form
+     hidden behind a small "use account & password" link.
+   - Themed via CSS variables; light + dark both inherit cleanly from the
+     global data-theme attribute set on <html>.
+   - All colors come from variables.css; no hard-coded #fff / #000 except
+     inside the QR canvas (which has to be black-on-white).
+   ========================================================================== */
+
 .login-page {
   flex: 1;
   display: flex;
@@ -7,6 +17,7 @@
   background: var(--bg-main);
   min-height: 100vh;
   position: relative;
+  padding: 24px;
 }
 
 .login-lang-toggle {
@@ -16,156 +27,289 @@
   padding: 6px 14px;
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  background: var(--bg-sidebar);
+  background: transparent;
   color: var(--text-secondary);
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
-  transition: color 0.2s, border-color 0.2s;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
 
 .login-lang-toggle:hover {
   color: var(--text-primary);
   border-color: var(--text-secondary);
+  background: var(--surface-hover);
 }
+
+/* ───── Card ────────────────────────────────────────────────────────────── */
 
 .login-container {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  padding: 48px 40px;
+  align-items: stretch;
+  padding: 40px 36px 32px;
   width: 100%;
-  max-width: 400px;
+  max-width: 420px;
   background: var(--bg-sidebar);
-  border-radius: 16px;
+  border-radius: 18px;
   border: 1px solid var(--border-color);
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.06);
 }
 
 [data-theme="dark"] .login-container {
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+}
+
+/* OAuth-first view is a touch narrower for a sleeker stack. */
+.login-container.is-narrow {
+  max-width: 380px;
+}
+
+/* ───── Brand block ─────────────────────────────────────────────────────── */
+
+.login-brand {
+  text-align: center;
+  margin-bottom: 28px;
 }
 
 .login-container h1 {
-  margin-bottom: 8px;
-  font-size: 28px;
+  font-size: 24px;
   font-weight: 700;
   color: var(--text-primary);
-  letter-spacing: -0.5px;
+  letter-spacing: -0.4px;
+  margin: 0 0 6px;
 }
 
 .login-container .login-subtitle {
   color: var(--text-secondary);
-  font-size: 14px;
-  margin-bottom: 32px;
+  font-size: 13px;
+  margin: 0;
 }
 
-.login-container input {
+/* ───── SSO stack (provider buttons) ───────────────────────────────────── */
+
+.sso-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.sso-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
   width: 100%;
-  padding: 14px 16px;
+  padding: 12px 16px;
   border: 1px solid var(--border-color);
   border-radius: 12px;
   background: var(--bg-main);
   color: var(--text-primary);
-  font-size: 16px;
-  margin-bottom: 16px;
-  transition: border-color 0.2s, box-shadow 0.2s;
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.08s;
+  font-family: inherit;
+}
+
+.sso-btn:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border-color: var(--text-secondary);
+}
+
+.sso-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.sso-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* The first button in the stack is the recommended action — give it the
+   accent treatment so it pulls focus immediately on page load. */
+.sso-btn.is-primary {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.sso-btn.is-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: var(--accent-fg);
+}
+
+.sso-btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.sso-btn-icon svg {
+  display: block;
+}
+
+.sso-btn-label {
+  flex: 1;
+  text-align: center;
+  /* The icon takes ~22px on the left; nudge label so it visually centers. */
+  margin-right: 22px;
+}
+
+/* ───── Toggle link between OAuth and credentials ──────────────────────── */
+
+.link-button {
+  background: none;
+  border: none;
+  padding: 8px 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: center;
+  width: 100%;
+  transition: color 0.15s;
+}
+
+.link-button:hover {
+  color: var(--text-primary);
+}
+
+.login-switch {
+  margin-top: 4px;
+}
+
+.login-empty {
+  color: var(--text-secondary);
+  font-size: 13px;
+  text-align: center;
+  padding: 20px 0;
+}
+
+/* ───── Inputs ─────────────────────────────────────────────────────────── */
+
+.login-container input {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-input, var(--bg-main));
+  color: var(--text-primary);
+  font-size: 15px;
+  margin-bottom: 12px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  font-family: inherit;
+}
+
+.login-container input::placeholder {
+  color: var(--text-muted);
 }
 
 .login-container input:focus {
   outline: none;
-  border-color: var(--accent-blue, #4a9eff);
-  box-shadow: 0 0 0 2px rgba(74, 158, 255, 0.15);
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
-[data-theme="dark"] .login-container input:focus {
-  border-color: var(--accent-blue, #4a9eff);
-  box-shadow: 0 0 0 2px rgba(74, 158, 255, 0.15);
-}
+/* ───── Primary submit button ──────────────────────────────────────────── */
 
-.login-container button {
+.login-container .primary-btn {
   width: 100%;
-  padding: 14px 16px;
-  border: none;
-  border-radius: 12px;
-  background: #ffffff;
-  color: #171717;
-  font-size: 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 15px;
   font-weight: 600;
   cursor: pointer;
-  transition: opacity 0.2s, transform 0.1s;
+  transition: background 0.15s, border-color 0.15s, transform 0.08s;
+  font-family: inherit;
+  margin-top: 4px;
 }
 
-[data-theme="light"] .login-container button {
-  background: #171717;
-  color: #ffffff;
+.login-container .primary-btn:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
 
-.login-container button:hover:not(:disabled) {
-  opacity: 0.85;
-  transform: translateY(-1px);
+.login-container .primary-btn:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
-.login-container button:active:not(:disabled) {
-  transform: translateY(0);
+.login-container .primary-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
+
+/* ───── Back / secondary ───────────────────────────────────────────────── */
+
+.login-container .back-button {
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px 14px;
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  font-family: inherit;
+}
+
+.login-container .back-button:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+
+/* ───── Messages ───────────────────────────────────────────────────────── */
 
 .login-container .error {
   color: var(--error);
-  margin-top: 16px;
-  font-size: 14px;
+  margin-top: 14px;
+  font-size: 13px;
   text-align: center;
-  padding: 12px 16px;
-  background: rgba(239, 68, 68, 0.1);
+  padding: 10px 14px;
+  background: var(--error-bg);
   border-radius: 8px;
   width: 100%;
 }
 
 .login-container .verification-hint {
   color: var(--text-secondary);
-  margin-bottom: 20px;
+  margin-bottom: 18px;
   font-size: 14px;
   text-align: center;
-  line-height: 1.5;
+  line-height: 1.55;
 }
 
 .login-container .code-input {
   text-align: center;
-  font-size: 28px;
+  font-size: 26px;
   font-weight: 600;
-  letter-spacing: 12px;
-  font-family: 'SF Mono', Monaco, 'Courier New', monospace;
-  padding-left: 20px;
-}
-
-.login-container .back-button {
-  margin-top: 12px;
-  background: transparent;
-  color: var(--text-secondary);
-  border: 1px solid var(--border-color);
-}
-
-.login-container .back-button:hover {
-  background: var(--sidebar-hover);
-  color: var(--text-primary);
-  transform: none;
-}
-
-.login-container button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-  transform: none;
+  letter-spacing: 10px;
+  font-family: var(--font-mono);
+  padding-left: 18px;
 }
 
 .login-container .register-link {
-  margin-top: 16px;
-  font-size: 14px;
+  margin-top: 14px;
+  font-size: 13px;
   color: var(--text-secondary);
+  text-align: center;
 }
 
 .login-container .register-link a {
-  color: var(--accent-color, #7c5cfc);
+  color: var(--link-color);
   text-decoration: none;
+  margin-left: 4px;
 }
 
 .login-container .register-link a:hover {
@@ -174,128 +318,77 @@
 
 .login-container .success-msg {
   margin-top: 12px;
-  color: #22c55e;
-  font-size: 14px;
-  font-weight: 500;
-}
-
-/* Login Divider (between password login and Microsoft login) */
-.login-divider {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  margin: 16px 0;
-  gap: 12px;
-}
-
-.login-divider::before,
-.login-divider::after {
-  content: '';
-  flex: 1;
-  height: 1px;
-  background: var(--border-color);
-}
-
-.login-divider span {
-  color: var(--text-muted);
+  color: var(--success);
   font-size: 13px;
-  white-space: nowrap;
-}
-
-/* Microsoft Login Button */
-.ms-login-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  width: 100%;
-  padding: 14px 16px;
-  border: 1px solid var(--border-color) !important;
-  border-radius: 12px;
-  background: var(--bg-main) !important;
-  color: var(--text-primary) !important;
-  font-size: 16px;
   font-weight: 500;
-  cursor: pointer;
-  transition: background 0.2s, border-color 0.2s, transform 0.1s;
+  text-align: center;
 }
 
-.ms-login-btn:hover:not(:disabled) {
-  background: var(--sidebar-hover) !important;
-  border-color: var(--text-secondary) !important;
-  opacity: 1 !important;
-  transform: translateY(-1px);
-}
+/* ───── TOTP setup / SSO QR panel ──────────────────────────────────────── */
 
-.ms-login-btn:active:not(:disabled) {
-  transform: translateY(0);
-}
-
-.ms-login-btn .ms-logo {
-  width: 20px;
-  height: 20px;
-  flex-shrink: 0;
-}
-
-/* TOTP Setup Styles - Modern */
-.totp-setup {
+.totp-setup,
+.sso-qr-panel {
   width: 100%;
   text-align: center;
 }
 
 .totp-title {
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 600;
   color: var(--text-primary);
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 .totp-hint {
   color: var(--text-secondary);
-  font-size: 14px;
-  margin-bottom: 24px;
-  line-height: 1.6;
+  font-size: 13px;
+  margin-bottom: 20px;
+  line-height: 1.55;
 }
 
 .qr-container {
   display: flex;
   justify-content: center;
-  margin-bottom: 24px;
+  margin-bottom: 20px;
 }
 
 .qr-code {
-  width: 180px;
-  height: 180px;
-  border-radius: 12px;
-  border: 1px solid var(--border-color);
-  background: white;
-  padding: 12px;
+  /* Force exact size so qrcode-generator's pixel buffer maps 1:1.
+     We let the canvas pick its own intrinsic dimensions in JS; this rule
+     is for the <img> variant used by TOTP setup as well as the canvas. */
+  width: 220px;
+  height: 220px;
+  border-radius: 14px;
+  background: #ffffff; /* QR has to scan; always white. */
+  padding: 8px;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+  /* Keep crisp — no AA on integer-aligned modules */
+  image-rendering: pixelated;
 }
 
 [data-theme="dark"] .qr-code {
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.5);
 }
 
 .secret-container {
-  margin-bottom: 24px;
-  padding: 16px;
+  margin-bottom: 20px;
+  padding: 14px;
   background: var(--bg-main);
-  border-radius: 12px;
+  border-radius: 10px;
   border: 1px solid var(--border-color);
 }
 
 .secret-label {
   color: var(--text-muted);
-  font-size: 12px;
-  margin-bottom: 8px;
+  font-size: 11px;
+  margin-bottom: 6px;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.6px;
 }
 
 .secret-key {
   display: block;
-  font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+  font-family: var(--font-mono);
   font-size: 13px;
   color: var(--text-primary);
   word-break: break-all;
@@ -304,6 +397,5 @@
   background: var(--bg-sidebar);
   padding: 10px 12px;
   border-radius: 8px;
-  margin-top: 8px;
+  margin-top: 6px;
 }
-

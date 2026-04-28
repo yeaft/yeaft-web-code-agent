@@ -73,6 +73,7 @@ export default {
                 <div v-if="ssoBoundMessage" class="sp-info">{{ ssoBoundMessage }}</div>
                 <div v-if="ssoConflictMessage" class="sp-error">{{ ssoConflictMessage }}</div>
                 <div v-if="authStore.identitiesLoading" class="sp-desc">{{ $t('common.loading') }}</div>
+                <div v-else-if="ssoProviderRows.length === 0" class="sp-desc">{{ $t('login.noProviders') }}</div>
                 <div v-else>
                   <div v-for="p in ssoProviderRows" :key="p.key" class="sp-row">
                     <div class="sp-row-left">
@@ -453,18 +454,26 @@ export default {
     ssoProviderRows() {
       const auth = this.authStore;
       const linked = new Map((auth.linkedIdentities || []).map(i => [i.provider, i]));
-      const rows = [
+      // Only render providers the server has enabled. We still keep the
+      // `enabled` flag for backwards compat with the template, but the
+      // filter step ensures disabled providers don't appear at all.
+      const all = [
+        { key: 'alipay',    label: this.$t('login.alipay'),    enabled: !!auth.ssoProviders.alipay },
         { key: 'microsoft', label: this.$t('login.microsoft'), enabled: !!auth.aadEnabled },
         { key: 'github',    label: this.$t('login.github'),    enabled: !!auth.ssoProviders.github },
         { key: 'google',    label: this.$t('login.google'),    enabled: !!auth.ssoProviders.google },
-        { key: 'wechat',    label: this.$t('login.wechat'),    enabled: !!auth.ssoProviders.wechat },
-        { key: 'alipay',    label: this.$t('login.alipay'),    enabled: !!auth.ssoProviders.alipay }
+        { key: 'wechat',    label: this.$t('login.wechat'),    enabled: !!auth.ssoProviders.wechat }
       ];
-      return rows.map(r => ({
-        ...r,
-        linked: linked.has(r.key),
-        identity: linked.get(r.key) || null
-      }));
+      // Show a row if either (a) the provider is enabled now, or (b) the
+      // user has a stale link to it (so they can still unbind even after
+      // an admin disables the provider).
+      return all
+        .filter(r => r.enabled || linked.has(r.key))
+        .map(r => ({
+          ...r,
+          linked: linked.has(r.key),
+          identity: linked.get(r.key) || null
+        }));
     }
   },
   watch: {

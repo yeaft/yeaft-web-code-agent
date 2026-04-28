@@ -1,6 +1,22 @@
 import { useAuthStore } from '../stores/auth.js';
 import { setLocale } from '../utils/i18n.js';
 
+/**
+ * LoginPage — OAuth-first design.
+ *
+ * Default view (mode='oauth'): brand + tagline + a stack of SSO buttons,
+ *   in priority order. Only providers whose server config marks them
+ *   enabled are rendered. Below the stack: a small "use account & password"
+ *   link that toggles to the credentials form.
+ *
+ * mode='credentials': the original username/password form, with a "back to
+ *   single-sign-on" link that returns to the OAuth view.
+ *
+ * QR mode (Alipay/WeChat) replaces the panel content entirely, same card.
+ *
+ * Theme: card and tokens come from CSS variables, so light/dark inherit
+ *   from the global data-theme attribute.
+ */
 export default {
   name: 'LoginPage',
   template: `
@@ -8,12 +24,44 @@ export default {
       <button class="login-lang-toggle" @click="toggleLang">
         {{ currentLocale === 'zh-CN' ? 'EN' : '中文' }}
       </button>
-      <div class="login-container">
-        <h1>Claude Web Chat</h1>
-        <p class="login-subtitle">{{ $t('login.subtitle') }}</p>
+      <div class="login-container" :class="{ 'is-narrow': loginMode === 'oauth' && !authStore.qrPanel }">
+        <div class="login-brand">
+          <h1>Claude Web Chat</h1>
+          <p class="login-subtitle">{{ $t('login.subtitle') }}</p>
+        </div>
 
-        <!-- Step 1: Username/Password -->
-        <template v-if="authStore.loginStep === 'credentials' && !authStore.qrPanel">
+        <!-- ─── OAuth-first view ─────────────────────────────────────── -->
+        <template v-if="loginMode === 'oauth' && authStore.loginStep === 'credentials' && !authStore.qrPanel">
+          <div v-if="enabledProviders.length === 0" class="login-empty">
+            {{ $t('login.noProviders') }}
+            <button class="link-button" @click="loginMode = 'credentials'">
+              {{ $t('login.usePassword') }}
+            </button>
+          </div>
+
+          <div v-else class="sso-stack">
+            <button
+              v-for="(p, idx) in enabledProviders"
+              :key="p.key"
+              :class="['sso-btn', 'sso-btn-' + p.key, idx === 0 ? 'is-primary' : '']"
+              :disabled="authStore.loading"
+              @click="handleProviderClick(p.key)"
+            >
+              <span class="sso-btn-icon" v-html="p.icon"></span>
+              <span class="sso-btn-label">{{ p.label }}</span>
+            </button>
+          </div>
+
+          <button class="link-button login-switch" @click="switchToCredentials">
+            {{ $t('login.usePassword') }} →
+          </button>
+
+          <p v-if="authStore.error" class="error">{{ authStore.error }}</p>
+          <p v-if="localError" class="error">{{ localError }}</p>
+        </template>
+
+        <!-- ─── Credentials view ─────────────────────────────────────── -->
+        <template v-else-if="loginMode === 'credentials' && authStore.loginStep === 'credentials' && !authStore.qrPanel">
           <input
             type="text"
             v-model="username"
@@ -30,45 +78,23 @@ export default {
             autocomplete="current-password"
             ref="passwordInput"
           >
-          <button @click="login" :disabled="authStore.loading">
+          <button class="primary-btn" @click="login" :disabled="authStore.loading">
             {{ authStore.loading ? $t('login.loggingIn') : $t('login.login') }}
           </button>
-          <template v-if="hasAnySso">
-            <div class="login-divider">
-              <span>{{ $t('login.or') }}</span>
-            </div>
-            <button v-if="authStore.aadEnabled" class="ms-login-btn sso-btn sso-btn-microsoft" @click="loginWithMicrosoft" :disabled="authStore.loading">
-              <svg class="ms-logo" viewBox="0 0 21 21" xmlns="http://www.w3.org/2000/svg">
-                <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
-                <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>
-                <rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
-                <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
-              </svg>
-              {{ $t('login.microsoft') }}
-            </button>
-            <button v-if="authStore.ssoProviders.github" class="sso-btn sso-btn-github" @click="loginWithSso('github')" :disabled="authStore.loading">
-              <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.5-1.4-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1.1 1.8 2.8 1.3 3.4 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.3.5-2.3 1.2-3.2-.1-.3-.5-1.5.1-3.2 0 0 1-.3 3.3 1.2A11.5 11.5 0 0 1 12 5.8c1 0 2 .1 3 .4 2.3-1.5 3.3-1.2 3.3-1.2.6 1.7.2 2.9.1 3.2.7.9 1.2 1.9 1.2 3.2 0 4.6-2.8 5.7-5.5 6 .4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3"/></svg>
-              {{ $t('login.github') }}
-            </button>
-            <button v-if="authStore.ssoProviders.google" class="sso-btn sso-btn-google" @click="loginWithSso('google')" :disabled="authStore.loading">
-              <svg viewBox="0 0 24 24" width="18" height="18"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A11 11 0 0 0 12 23z"/><path fill="#FBBC05" d="M5.84 14.1A6.6 6.6 0 0 1 5.5 12c0-.73.13-1.44.34-2.1V7.07H2.18A11 11 0 0 0 1 12c0 1.77.42 3.45 1.18 4.93l3.66-2.83z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1A11 11 0 0 0 2.18 7.07l3.66 2.83C6.71 7.31 9.14 5.38 12 5.38z"/></svg>
-              {{ $t('login.google') }}
-            </button>
-            <button v-if="authStore.ssoProviders.wechat" class="sso-btn sso-btn-wechat" @click="loginWithSso('wechat')" :disabled="authStore.loading">
-              <svg viewBox="0 0 24 24" width="18" height="18"><path fill="#07C160" d="M9.5 4C5.36 4 2 6.91 2 10.5c0 2.07 1.13 3.91 2.86 5.09L4 18l2.7-1.41c.85.22 1.76.34 2.7.34h.51c-.13-.42-.21-.86-.21-1.32 0-3 2.91-5.43 6.5-5.43.32 0 .64.02.95.06C16.63 7.32 13.4 4 9.5 4zM7 8.5a1 1 0 110 2 1 1 0 010-2zm5 0a1 1 0 110 2 1 1 0 010-2zm4.21 3.66c-3.04 0-5.5 1.92-5.5 4.29 0 1.39.91 2.65 2.34 3.46l-.46 1.5 1.93-.95c.55.13 1.13.2 1.69.2 3.04 0 5.5-1.92 5.5-4.21 0-2.37-2.46-4.29-5.5-4.29zm-1.71 2.21a.75.75 0 110 1.5.75.75 0 010-1.5zm3.42 0a.75.75 0 110 1.5.75.75 0 010-1.5z"/></svg>
-              {{ $t('login.wechat') }}
-            </button>
-            <button v-if="authStore.ssoProviders.alipay" class="sso-btn sso-btn-alipay" @click="loginWithAlipayQr" :disabled="authStore.loading">
-              <svg viewBox="0 0 24 24" width="18" height="18"><path fill="#1677FF" d="M21 15.4c-1.7-.6-3.5-1.2-5.4-2 .5-.9 1-1.9 1.3-3h-3.4v-1.1h4v-.6h-4V6.5h-1.7c-.3 0-.3.3-.3.3v1.9H7.3v.6h4.2v1.1H8v.6h6.7c-.2.7-.5 1.4-.8 2-2-.6-4-1-5.6-1-2.6 0-4.4 1.2-4.5 2.9-.1 1.6 1 3.5 4 3.5 2.1 0 4-1.1 5.5-3 2.6 1.2 5 2.4 7.8 3.4.4-.5.6-1 .8-1.4.2-.5.1-1-.1-1.5zM7.3 16.7c-2.1 0-2.7-1.5-2.5-2.3.1-.5.7-1.1 1.7-1.3.5-.1 1.6-.1 2.8.2 1 .2 2.1.6 3.2.9-.9 1.7-2.5 2.5-5.2 2.5z"/></svg>
-              {{ $t('login.alipay') }}
-            </button>
-          </template>
+
+          <button v-if="enabledProviders.length > 0" class="link-button login-switch" @click="loginMode = 'oauth'">
+            ← {{ $t('login.useSso') }}
+          </button>
+
           <p v-if="authStore.registrationEnabled" class="register-link">
             {{ $t('login.noAccount') }}<a href="#" @click.prevent="authStore.showRegister()">{{ $t('login.registerWithCode') }}</a>
           </p>
+
+          <p v-if="authStore.error" class="error">{{ authStore.error }}</p>
+          <p v-if="localError" class="error">{{ localError }}</p>
         </template>
 
-        <!-- SSO QR-scan panel (Alipay etc.) -->
+        <!-- ─── SSO QR-scan panel ────────────────────────────────────── -->
         <template v-if="authStore.qrPanel && authStore.loginStep === 'credentials'">
           <div class="sso-qr-panel">
             <p class="totp-title">{{ qrPanelTitle }}</p>
@@ -79,16 +105,15 @@ export default {
             <p v-if="authStore.qrPanel.status === 'error'" class="error">
               {{ authStore.qrPanel.error }}
             </p>
-            <button @click="authStore.cancelSsoQr()" class="back-button">
+            <button class="back-button" @click="authStore.cancelSsoQr()">
               {{ $t('common.back') }}
             </button>
           </div>
         </template>
 
-        <!-- Registration -->
+        <!-- ─── Registration ────────────────────────────────────────── -->
         <template v-else-if="authStore.loginStep === 'register'">
           <p class="totp-title">{{ $t('login.register.title') }}</p>
-          <!-- TODO: restore invitation code input — currently hidden for open registration -->
           <input
             v-if="false"
             type="text"
@@ -123,16 +148,18 @@ export default {
             :placeholder="$t('login.register.email')"
             autocomplete="email"
           >
-          <button @click="doRegister" :disabled="authStore.loading">
+          <button class="primary-btn" @click="doRegister" :disabled="authStore.loading">
             {{ authStore.loading ? $t('login.register.submitting') : $t('login.register.submit') }}
           </button>
-          <button @click="authStore.backToCredentials" class="back-button">
+          <button class="back-button" @click="authStore.backToCredentials">
             {{ $t('login.register.back') }}
           </button>
           <p v-if="registerSuccess" class="success-msg">{{ $t('login.register.success') }}</p>
+          <p v-if="authStore.error" class="error">{{ authStore.error }}</p>
+          <p v-if="localError" class="error">{{ localError }}</p>
         </template>
 
-        <!-- TOTP Setup (first time) -->
+        <!-- ─── TOTP Setup ──────────────────────────────────────────── -->
         <template v-else-if="authStore.loginStep === 'totp-setup'">
           <div class="totp-setup">
             <p class="totp-title">{{ $t('login.totp.setupTitle') }}</p>
@@ -155,20 +182,18 @@ export default {
               ref="totpInput"
               class="code-input"
             >
-            <button @click="setupTotp" :disabled="authStore.loading">
+            <button class="primary-btn" @click="setupTotp" :disabled="authStore.loading">
               {{ authStore.loading ? $t('login.totp.verifying') : $t('login.totp.complete') }}
             </button>
-            <button @click="authStore.backToCredentials" class="back-button">
+            <button class="back-button" @click="authStore.backToCredentials">
               {{ $t('common.back') }}
             </button>
           </div>
         </template>
 
-        <!-- TOTP Verification (returning user) -->
+        <!-- ─── TOTP Verification ───────────────────────────────────── -->
         <template v-else-if="authStore.loginStep === 'totp'">
-          <p class="verification-hint">
-            {{ $t('login.totp.prompt') }}
-          </p>
+          <p class="verification-hint">{{ $t('login.totp.prompt') }}</p>
           <input
             type="text"
             v-model="totpCode"
@@ -180,15 +205,15 @@ export default {
             ref="totpInput"
             class="code-input"
           >
-          <button @click="verifyTotp" :disabled="authStore.loading">
+          <button class="primary-btn" @click="verifyTotp" :disabled="authStore.loading">
             {{ authStore.loading ? $t('login.totp.verifying') : $t('login.totp.verify') }}
           </button>
-          <button @click="authStore.backToCredentials" class="back-button">
+          <button class="back-button" @click="authStore.backToCredentials">
             {{ $t('common.back') }}
           </button>
         </template>
 
-        <!-- Email Verification -->
+        <!-- ─── Email Verification ──────────────────────────────────── -->
         <template v-else-if="authStore.loginStep === 'verification'">
           <p class="verification-hint">
             {{ $t('login.email.codeSent', { email: authStore.emailHint }) }}
@@ -204,16 +229,13 @@ export default {
             ref="codeInput"
             class="code-input"
           >
-          <button @click="verify" :disabled="authStore.loading">
+          <button class="primary-btn" @click="verify" :disabled="authStore.loading">
             {{ authStore.loading ? $t('login.email.verifying') : $t('login.email.verify') }}
           </button>
-          <button @click="authStore.backToCredentials" class="back-button">
+          <button class="back-button" @click="authStore.backToCredentials">
             {{ $t('common.back') }}
           </button>
         </template>
-
-        <p v-if="authStore.error" class="error">{{ authStore.error }}</p>
-        <p v-if="localError" class="error">{{ localError }}</p>
       </div>
     </div>
   `,
@@ -231,6 +253,11 @@ export default {
     const codeInput = Vue.ref(null);
     const totpInput = Vue.ref(null);
     const regCodeInput = Vue.ref(null);
+    const qrCanvas = Vue.ref(null);
+
+    // Default to OAuth-first; remember last user choice for the session.
+    const loginMode = Vue.ref(localStorage.getItem('loginMode') === 'credentials' ? 'credentials' : 'oauth');
+    Vue.watch(loginMode, (v) => localStorage.setItem('loginMode', v));
 
     // Registration fields
     const regInvitationCode = Vue.ref('');
@@ -240,9 +267,54 @@ export default {
     const regEmail = Vue.ref('');
     const registerSuccess = Vue.ref(false);
 
+    // Provider definitions in fixed priority order. We use SVG icons inline
+    // (no external font / image deps) so light + dark themes both look right.
+    const PROVIDER_ICONS = {
+      alipay: '<svg viewBox="0 0 32 32" width="22" height="22" aria-hidden="true"><rect width="32" height="32" rx="6" fill="#1677FF"/><path fill="#fff" d="M25 18.6c-1.5-.5-3-1-4.6-1.7.4-.8.8-1.6 1.1-2.5h-2.9v-1h3.4v-.5h-3.4v-1.6h-1.4c-.3 0-.3.3-.3.3v1.3h-3.6v.5h3.6v1H11v.5h5.7c-.2.6-.4 1.2-.7 1.7-1.7-.5-3.4-.8-4.7-.8-2.2 0-3.7 1-3.8 2.5-.1 1.4.9 3 3.4 3 1.8 0 3.4-.9 4.7-2.5 2.2 1 4.2 2 6.6 2.9.3-.4.5-.8.7-1.2.2-.4.1-.9-.1-1.3zM11 19.7c-1.8 0-2.3-1.3-2.1-2 .1-.4.6-.9 1.4-1.1.4-.1 1.4-.1 2.4.2.9.2 1.8.5 2.7.8-.7 1.4-2.1 2.1-4.4 2.1z"/></svg>',
+      microsoft: '<svg viewBox="0 0 21 21" width="20" height="20" aria-hidden="true"><rect x="1" y="1" width="9" height="9" fill="#f25022"/><rect x="1" y="11" width="9" height="9" fill="#00a4ef"/><rect x="11" y="1" width="9" height="9" fill="#7fba00"/><rect x="11" y="11" width="9" height="9" fill="#ffb900"/></svg>',
+      github: '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.5-1.4-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1.1 1.8 2.8 1.3 3.4 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.3.5-2.3 1.2-3.2-.1-.3-.5-1.5.1-3.2 0 0 1-.3 3.3 1.2A11.5 11.5 0 0 1 12 5.8c1 0 2 .1 3 .4 2.3-1.5 3.3-1.2 3.3-1.2.6 1.7.2 2.9.1 3.2.7.9 1.2 1.9 1.2 3.2 0 4.6-2.8 5.7-5.5 6 .4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3"/></svg>',
+      google: '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A11 11 0 0 0 12 23z"/><path fill="#FBBC05" d="M5.84 14.1A6.6 6.6 0 0 1 5.5 12c0-.73.13-1.44.34-2.1V7.07H2.18A11 11 0 0 0 1 12c0 1.77.42 3.45 1.18 4.93l3.66-2.83z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1A11 11 0 0 0 2.18 7.07l3.66 2.83C6.71 7.31 9.14 5.38 12 5.38z"/></svg>',
+      wechat: '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="#07C160" d="M9.5 4C5.36 4 2 6.91 2 10.5c0 2.07 1.13 3.91 2.86 5.09L4 18l2.7-1.41c.85.22 1.76.34 2.7.34h.51c-.13-.42-.21-.86-.21-1.32 0-3 2.91-5.43 6.5-5.43.32 0 .64.02.95.06C16.63 7.32 13.4 4 9.5 4zM7 8.5a1 1 0 110 2 1 1 0 010-2zm5 0a1 1 0 110 2 1 1 0 010-2zm4.21 3.66c-3.04 0-5.5 1.92-5.5 4.29 0 1.39.91 2.65 2.34 3.46l-.46 1.5 1.93-.95c.55.13 1.13.2 1.69.2 3.04 0 5.5-1.92 5.5-4.21 0-2.37-2.46-4.29-5.5-4.29zm-1.71 2.21a.75.75 0 110 1.5.75.75 0 010-1.5zm3.42 0a.75.75 0 110 1.5.75.75 0 010-1.5z"/></svg>'
+    };
+
+    /**
+     * Build the list of providers we'll actually render. Order is fixed
+     * (alipay first per product decision), and we drop anything the server
+     * hasn't enabled. The first one becomes the visually emphasized button.
+     */
+    const enabledProviders = Vue.computed(() => {
+      const order = ['alipay', 'microsoft', 'github', 'google', 'wechat'];
+      return order
+        .filter(key => key === 'microsoft' ? authStore.aadEnabled : !!authStore.ssoProviders[key])
+        .map(key => ({
+          key,
+          label: t(`login.${key}`),
+          icon: PROVIDER_ICONS[key]
+        }));
+    });
+
     const focusPassword = () => {
-      if (passwordInput.value) {
-        passwordInput.value.focus();
+      if (passwordInput.value) passwordInput.value.focus();
+    };
+
+    const switchToCredentials = () => {
+      loginMode.value = 'credentials';
+      Vue.nextTick(() => {
+        if (usernameInput.value) usernameInput.value.focus();
+      });
+    };
+
+    const handleProviderClick = (provider) => {
+      localError.value = '';
+      if (provider === 'microsoft') {
+        authStore.loginWithMicrosoft();
+      } else if (provider === 'alipay' || provider === 'wechat') {
+        // QR-scan flow.
+        authStore.startSsoQr(provider).then(ok => {
+          if (ok) Vue.nextTick(() => renderQrCode());
+        });
+      } else {
+        authStore.loginWithSso(provider);
       }
     };
 
@@ -258,7 +330,6 @@ export default {
       localError.value = '';
       await authStore.login(username.value, password.value);
 
-      // Focus appropriate input based on next step
       Vue.nextTick(() => {
         if ((authStore.loginStep === 'totp' || authStore.loginStep === 'totp-setup') && totpInput.value) {
           totpInput.value.focus();
@@ -268,24 +339,20 @@ export default {
       });
     };
 
-    const loginWithMicrosoft = async () => {
-      localError.value = '';
-      await authStore.loginWithMicrosoft();
-    };
-
-    const loginWithSso = (provider) => {
-      authStore.loginWithSso(provider);
-    };
-
-    const qrCanvas = Vue.ref(null);
-
-    const loginWithAlipayQr = async () => {
-      localError.value = '';
-      const ok = await authStore.startSsoQr('alipay');
-      if (!ok) return;
-      Vue.nextTick(() => renderQrCode());
-    };
-
+    /**
+     * Render the QR for the current authorize URL.
+     *
+     * Notes for the curious:
+     *   - We use the 'Byte' mode explicitly (the default 'Numeric' would
+     *     reject any URL).
+     *   - typeNumber=0 makes qrcode-generator pick the smallest size that
+     *     fits the data; this matters because Alipay URLs are long.
+     *   - We use error correction level 'M' (15% recovery) — enough for
+     *     phone scans on a screen, while keeping module count low.
+     *   - We override the canvas's actual pixel size every render rather
+     *     than rely on CSS, so the image is always crisp regardless of
+     *     theme/zoom.
+     */
     const renderQrCode = () => {
       if (!authStore.qrPanel || !qrCanvas.value) return;
       if (typeof qrcode !== 'function') {
@@ -293,27 +360,32 @@ export default {
         return;
       }
       try {
-        // qrcode-generator: typeNumber=0 (auto), errorCorrectionLevel='M'
         const qr = qrcode(0, 'M');
-        qr.addData(authStore.qrPanel.authorizeUrl);
+        qr.addData(authStore.qrPanel.authorizeUrl, 'Byte');
         qr.make();
         const canvas = qrCanvas.value;
         const moduleCount = qr.getModuleCount();
-        const cellSize = 6;
-        const margin = 4 * cellSize;
-        const size = moduleCount * cellSize + margin * 2;
-        canvas.width = size;
-        canvas.height = size;
-        canvas.style.width = '220px';
-        canvas.style.height = '220px';
+        const cssSize = 220; // visual size in CSS pixels
+        const dpr = Math.max(1, window.devicePixelRatio || 1);
+        const pxSize = cssSize * dpr;
+        canvas.width = pxSize;
+        canvas.height = pxSize;
+        canvas.style.width = cssSize + 'px';
+        canvas.style.height = cssSize + 'px';
         const ctx = canvas.getContext('2d');
-        ctx.fillStyle = '#fff';
-        ctx.fillRect(0, 0, size, size);
-        ctx.fillStyle = '#000';
+        const margin = 4; // modules of quiet zone
+        const totalModules = moduleCount + margin * 2;
+        const cellPx = pxSize / totalModules;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, pxSize, pxSize);
+        ctx.fillStyle = '#000000';
         for (let r = 0; r < moduleCount; r++) {
           for (let c = 0; c < moduleCount; c++) {
             if (qr.isDark(r, c)) {
-              ctx.fillRect(margin + c * cellSize, margin + r * cellSize, cellSize, cellSize);
+              const x = (margin + c) * cellPx;
+              const y = (margin + r) * cellPx;
+              // +1px overdraw to prevent sub-pixel gaps between modules.
+              ctx.fillRect(Math.floor(x), Math.floor(y), Math.ceil(cellPx) + 1, Math.ceil(cellPx) + 1);
             }
           }
         }
@@ -329,18 +401,9 @@ export default {
       return t('login.qr.title');
     });
 
-    // Re-render QR when panel changes (e.g. after retry)
     Vue.watch(() => authStore.qrPanel?.authorizeUrl, (url) => {
       if (url) Vue.nextTick(() => renderQrCode());
     });
-
-    const hasAnySso = Vue.computed(() =>
-      authStore.aadEnabled ||
-      authStore.ssoProviders.github ||
-      authStore.ssoProviders.google ||
-      authStore.ssoProviders.wechat ||
-      authStore.ssoProviders.alipay
-    );
 
     const verifyTotp = async () => {
       if (!totpCode.value || totpCode.value.length !== 6) {
@@ -351,9 +414,7 @@ export default {
       const success = await authStore.verifyTotpCode(totpCode.value);
       if (success && authStore.loginStep === 'verification') {
         totpCode.value = '';
-        Vue.nextTick(() => {
-          if (codeInput.value) codeInput.value.focus();
-        });
+        Vue.nextTick(() => { if (codeInput.value) codeInput.value.focus(); });
       }
     };
 
@@ -366,21 +427,13 @@ export default {
       const success = await authStore.completeTotpSetup(totpCode.value);
       if (success && authStore.loginStep === 'verification') {
         totpCode.value = '';
-        Vue.nextTick(() => {
-          if (codeInput.value) codeInput.value.focus();
-        });
+        Vue.nextTick(() => { if (codeInput.value) codeInput.value.focus(); });
       }
     };
 
     const doRegister = async () => {
       localError.value = '';
       registerSuccess.value = false;
-
-      // TODO: restore invitation code validation — currently disabled for open registration
-      // if (!regInvitationCode.value) {
-      //   localError.value = t('login.error.enterInviteCode');
-      //   return;
-      // }
       if (!regUsername.value || regUsername.value.length < 2) {
         localError.value = t('login.error.usernameMinLen');
         return;
@@ -403,16 +456,13 @@ export default {
 
       if (success) {
         registerSuccess.value = true;
-        // Auto switch to login after a short delay
         username.value = regUsername.value;
         regInvitationCode.value = '';
         regUsername.value = '';
         regPassword.value = '';
         regPasswordConfirm.value = '';
         regEmail.value = '';
-        setTimeout(() => {
-          authStore.backToCredentials();
-        }, 1500);
+        setTimeout(() => authStore.backToCredentials(), 1500);
       }
     };
 
@@ -425,19 +475,22 @@ export default {
       await authStore.verifyCode(verificationCode.value);
     };
 
-    // Focus input on mount and check auth mode
     Vue.onMounted(async () => {
       await authStore.checkAuthMode();
 
-      if (authStore.loginStep === 'credentials' && usernameInput.value) {
+      // If no SSO provider is enabled, fall back to credentials view.
+      if (enabledProviders.value.length === 0 && loginMode.value === 'oauth') {
+        loginMode.value = 'credentials';
+      }
+
+      if (authStore.loginStep === 'credentials' && loginMode.value === 'credentials' && usernameInput.value) {
         usernameInput.value.focus();
       }
     });
 
-    // Watch for step changes to focus appropriate input
     Vue.watch(() => authStore.loginStep, (newStep) => {
       Vue.nextTick(() => {
-        if (newStep === 'credentials' && usernameInput.value) {
+        if (newStep === 'credentials' && loginMode.value === 'credentials' && usernameInput.value) {
           usernameInput.value.focus();
         } else if ((newStep === 'totp' || newStep === 'totp-setup') && totpInput.value) {
           totpInput.value.focus();
@@ -457,6 +510,12 @@ export default {
       authStore,
       currentLocale,
       toggleLang,
+      loginMode,
+      switchToCredentials,
+      enabledProviders,
+      handleProviderClick,
+      qrCanvas,
+      qrPanelTitle,
       username,
       password,
       verificationCode,
@@ -475,12 +534,6 @@ export default {
       registerSuccess,
       focusPassword,
       login,
-      loginWithMicrosoft,
-      loginWithSso,
-      loginWithAlipayQr,
-      qrCanvas,
-      qrPanelTitle,
-      hasAnySso,
       verify,
       verifyTotp,
       setupTotp,
