@@ -28,7 +28,7 @@
  */
 
 import { groupTurns, pickCoolingGroups, indicesFromGroups } from './turn-group.js';
-import { writeSummary } from '../memory/scope-tree.js';
+import { writeSummary } from '../memory/store-v2.js';
 
 /**
  * @typedef {{
