@@ -532,6 +532,17 @@ export function installUnifyRuntimeBridge(s) {
   if (!s) return;
   const initialMax = s.engineRegistry?.maxConcurrent ?? null;
   const initialIdle = s.threadStore?.idleArchiveDays ?? 0;
+
+  // DESIGN-v2 §19.4: forward dream pipeline progress events to the web
+  // client so the debug panel can render live state. Events flow through
+  // the same `unify_output` channel; no new WebSocket message type is
+  // introduced.
+  s._dreamProgressSink = (evt) => {
+    try {
+      sendUnifyEvent({ type: 'dream_progress', ...evt });
+    } catch { /* never let event delivery throw */ }
+  };
+
   ctx.unifyRuntimeSettings = {
     get maxConcurrentThreads() { return s.engineRegistry?.maxConcurrent ?? initialMax; },
     set maxConcurrentThreads(v) {
