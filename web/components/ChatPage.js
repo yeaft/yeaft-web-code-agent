@@ -1265,10 +1265,18 @@ export default {
 
     // 监听 agent 升级结果
     this._agentUpgradeAckHandler = (e) => {
-      const { agentId, success, error, alreadyLatest, version } = e.detail;
+      const { agentId, success, error, alreadyLatest, version, reason, currentNode, requiredNode } = e.detail;
       if (!success) {
         delete this.upgradingAgents[agentId];
-        alert(`Agent upgrade failed: ${error || 'Unknown error'}`);
+        if (reason === 'node_incompatible') {
+          alert(this.$t('chat.agent.nodeIncompatible', {
+            current: currentNode || '?',
+            required: requiredNode || '?',
+            version: version || '',
+          }));
+        } else {
+          alert(`Agent upgrade failed: ${error || 'Unknown error'}`);
+        }
       } else if (alreadyLatest) {
         delete this.upgradingAgents[agentId];
         alert(this.$t('chat.agent.alreadyLatest', { version: version || '' }));

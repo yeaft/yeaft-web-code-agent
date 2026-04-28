@@ -93,6 +93,7 @@ export default {
   'chat.agent.upgrading': 'Upgrading',
   'chat.agent.upgradeConfirm': 'Upgrade Agent "{name}" to the latest version?\nThe agent will restart after upgrading.',
   'chat.agent.alreadyLatest': 'Agent is already at the latest version (v{version}), no upgrade needed.',
+  'chat.agent.nodeIncompatible': 'Agent upgrade aborted: target version v{version} requires Node {required}, but this machine is running Node {current}. Please upgrade Node.js first, then retry.',
   'chat.agent.online': '{count} Agent(s) online',
   'chat.agent.selectFirst': 'Please select an Agent first',
   'chat.agent.unify': 'Unify Chat',
