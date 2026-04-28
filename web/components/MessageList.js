@@ -2,10 +2,11 @@ import MessageItem from './MessageItem.js';
 import AssistantTurn from './AssistantTurn.js';
 import TaskMessageItem from './TaskMessageItem.js';
 import VpSpeakerHeader from './VpSpeakerHeader.js';
+import ReflectionCard from './ReflectionCard.js';
 
 export default {
   name: 'MessageList',
-  components: { MessageItem, AssistantTurn, TaskMessageItem, VpSpeakerHeader },
+  components: { MessageItem, AssistantTurn, TaskMessageItem, VpSpeakerHeader, ReflectionCard },
   template: `
     <main class="chat-container" ref="containerRef">
       <!-- Session Loading Overlay - only covers message area -->
@@ -104,7 +105,24 @@ export default {
             <!-- Assistant Turn card: aggregated rendering -->
             <AssistantTurn v-else-if="item.type === 'assistant-turn'" :turn="item" />
           </div>
+          <!-- PR-L: V7 tool-history reflection cards anchored to this row.
+               Rendered inline so T1 (mid-turn) appears between tool runs and
+               the next assistant message; T2 appears after the turn it
+               summarizes. -->
+          <ReflectionCard
+            v-for="card in cardsForRow(item)"
+            :key="card.key"
+            :card="card"
+          />
         </template>
+        <!-- PR-L: orphaned reflection cards (anchor message not yet
+             present, or scrolled out of the message window) flushed at
+             the tail so they're never lost. -->
+        <ReflectionCard
+          v-for="card in orphanCards"
+          :key="card.key"
+          :card="card"
+        />
         <!--
           task-fix: per-VP typing indicator for Unify group chat.
 
@@ -625,6 +643,53 @@ export default {
       return result;
     });
 
+    // PR-L: reflection cards grouped by anchor (the message id present at the
+    // moment the `pending` event arrived). Cards whose anchor isn't in the
+    // current turn list (or never had one) are flushed at the tail of the
+    // stream so they're never lost.
+    const reflectionCardsByAnchor = Vue.computed(() => {
+      const map = store.unifyReflectionCards || {};
+      const convId = store.unifyConversationId;
+      const out = { __orphans: [] };
+      const sorted = Object.values(map)
+        .filter((c) => c && c.conversationId === convId)
+        .sort((a, b) => (a.anchorOrder || 0) - (b.anchorOrder || 0)
+          || (a.updatedAt || 0) - (b.updatedAt || 0));
+      const knownIds = new Set();
+      for (const m of (store.messages || [])) {
+        if (m && m.id) knownIds.add(m.id);
+      }
+      for (const card of sorted) {
+        if (card.anchorMsgId && knownIds.has(card.anchorMsgId)) {
+          if (!out[card.anchorMsgId]) out[card.anchorMsgId] = [];
+          out[card.anchorMsgId].push(card);
+        } else {
+          out.__orphans.push(card);
+        }
+      }
+      return out;
+    });
+
+    // For a given row item, return the message id this row "ends on" so we
+    // can attach reflection cards to it. Assistant turns latch
+    // `atMessageId` from their last assistant chunk; user/system/task rows
+    // carry `message.id` directly.
+    const rowAnchorId = (item) => {
+      if (!item) return null;
+      if (item.type === 'assistant-turn') return item.atMessageId || null;
+      return (item.message && item.message.id) || null;
+    };
+    const cardsForRow = (item) => {
+      const id = rowAnchorId(item);
+      if (!id) return [];
+      const map = reflectionCardsByAnchor.value || {};
+      return map[id] || [];
+    };
+    const orphanCards = Vue.computed(() => {
+      const map = reflectionCardsByAnchor.value || {};
+      return map.__orphans || [];
+    });
+
     // Track if user is at bottom (within threshold)
     const isAtBottom = Vue.ref(true);
     const SCROLL_THRESHOLD = 50;
@@ -1143,7 +1208,9 @@ export default {
       onTaskMessageReply,
       onOpenVpDetail,
       onlineAgents,
-      turnGroups
+      turnGroups,
+      cardsForRow,
+      orphanCards,
     };
   }
 };

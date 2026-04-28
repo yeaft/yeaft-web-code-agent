@@ -172,6 +172,11 @@ export const useChatStore = defineStore('chat', {
     unifyStatus: null,            // { skills, mcpServers, tools } 从 session_ready 获取
     unifyAvailableModels: [],     // 可用模型列表 [{ id, provider, label }]
     unifyDebugTurns: [],          // Debug panel: per-turn debug info from engine
+    // PR-L: V7 tool-history reflection cards. Keyed by `${conversationId}:${trigger}:${loopRange[0]}-${loopRange[1]}`.
+    // Each entry: { trigger, status, loopRange, toolCount, content, durationMs, error,
+    // anchorMsgId, anchorOrder }. Rendered inline by MessageList — anchored
+    // after the message present at first emit (`pending`).
+    unifyReflectionCards: {},
     // task-344: global toggle for detail (full raw API payload) vs concise
     // debug view. Default concise. Persisted via localStorage.
     unifyDebugDetailMode: (() => {
@@ -765,6 +770,49 @@ export const useChatStore = defineStore('chat', {
         case 'thinking_delta':
           // Future: display these in UI
           break;
+
+        case 'reflection': {
+          // PR-L: V7 tool-history reflection. Two phases per occurrence
+          // (pending → ready) plus an error phase if generation fails.
+          // We store the latest state keyed by conversationId + trigger
+          // + loopRange so the UI can swap "thinking…" placeholder for
+          // the rendered card.
+          const convId = msg.conversationId || this.unifyConversationId || 'unknown';
+          const range = Array.isArray(event.loopRange) ? event.loopRange : [0, 0];
+          const key = `${convId}:${event.trigger}:${range[0]}-${range[1]}`;
+          // Anchor the card to the current tail of the message list so
+          // MessageList can render it inline (right after the last
+          // message present at arrival time). Latch on first emit
+          // (`pending`); preserve across `ready`/`error` transitions so
+          // the card doesn't jump position when the body fills in.
+          const existing = this.unifyReflectionCards[key];
+          const tailMsgs = this.messagesMap[convId] || [];
+          const anchorMsgId = existing
+            ? existing.anchorMsgId
+            : (tailMsgs.length > 0 ? tailMsgs[tailMsgs.length - 1].id || null : null);
+          const anchorOrder = existing
+            ? existing.anchorOrder
+            : tailMsgs.length;
+          this.unifyReflectionCards = {
+            ...this.unifyReflectionCards,
+            [key]: {
+              key,
+              conversationId: convId,
+              trigger: event.trigger,
+              status: event.status,
+              loopRange: range,
+              toolCount: event.toolCount || 0,
+              content: event.content || '',
+              durationMs: event.durationMs || 0,
+              error: event.error || null,
+              groupId: msg.groupId || null,
+              anchorMsgId,
+              anchorOrder,
+              updatedAt: Date.now(),
+            },
+          };
+          break;
+        }
 
         case 'model_switched':
           this.unifyModel = event.model;
@@ -1374,6 +1422,7 @@ export const useChatStore = defineStore('chat', {
       this.unifyAvailableModels = [];
       this.unifyStatus = null;
       this.unifyDebugTurns = [];
+      this.unifyReflectionCards = {};
       this.unifyActiveThreadFilter = null;
       // task-315: also exit the task detail view on a fresh Unify session
       this.unifyActiveTaskDetailId = null;
