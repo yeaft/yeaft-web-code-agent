@@ -1452,8 +1452,11 @@ export class Engine {
           yield {
             type: 'reflection',
             trigger: 't1',
+            // PR-L bug fix: keep the same loopRange as the `pending` event
+            // so the frontend key stays stable across pending → ready and
+            // the spinner card is replaced in place (no orphan).
             status: 'ready',
-            loopRange: [arcStart, arcStart],
+            loopRange: [arcStart, arcEnd],
             toolCount: pairs.length,
             content,
             durationMs,
