@@ -217,6 +217,8 @@ function loadLegacyConfig(dir, overrides) {
     maxContinueTurns: overrides.maxContinueTurns ?? fileConfig.maxContinueTurns ?? DEFAULTS.maxContinueTurns,
     // task-318: legacy path never had the `unify` section — defaults.
     unify: normaliseUnifySection(null),
+    // DESIGN-v2 feature flag — opt-in via override only on legacy path.
+    memoryV2: !!overrides.memoryV2,
     providers: null,
     primaryModel: null,
     fastModel: null,
@@ -312,6 +314,13 @@ export function loadConfig(overrides = {}) {
     // task-318: Unify runtime caps. `unify` is a nested section so we
     // don't pollute the flat config namespace used by chat/crew code.
     unify: normaliseUnifySection(jsonConfig.unify),
+
+    // DESIGN-v2 feature flag. When true the engine routes recall through
+    // memory/recall-v2.js (per-scope memory.md + summary.md) and reads from
+    // the v2 store layout. Defaults to false during the rollout; PR-E flips
+    // the default and deletes the legacy paths.
+    memoryV2: overrides.memoryV2 !== undefined ? !!overrides.memoryV2
+      : (jsonConfig.memoryV2 !== undefined ? !!jsonConfig.memoryV2 : false),
 
     // Legacy fields (null when using config.json)
     apiKey: overrides.apiKey || null,
