@@ -787,6 +787,63 @@
 .sp-toast-enter-active { animation: spToastIn 0.2s ease; }
 .sp-toast-leave-active { animation: spToastIn 0.15s ease reverse; }
 
+/* SSO bind QR overlay — sits on top of the settings dialog. Reuses
+   .qr-code styles from login.css so the QR image looks identical to
+   the login flow. */
+.sp-qr-overlay {
+  z-index: 1100;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.sp-qr-card {
+  background: var(--bg-sidebar);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  padding: 28px 32px;
+  width: 100%;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+}
+
+.sp-qr-card .totp-title {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0 0 6px;
+}
+
+.sp-qr-card .totp-hint {
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin: 0 0 18px;
+}
+
+.sp-qr-card .qr-container {
+  margin-bottom: 18px;
+}
+
+.sp-qr-card .qr-placeholder {
+  background: #fff;
+}
+
+.sp-qr-card .error {
+  color: var(--error);
+  background: var(--error-bg);
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  margin-bottom: 12px;
+  width: 100%;
+}
+
+.sp-qr-card .sp-btn {
+  width: 100%;
+}
+
 @keyframes spToastIn {
   from { opacity: 0; transform: translateX(-50%) translateY(6px); }
   to { opacity: 1; transform: translateX(-50%) translateY(0); }

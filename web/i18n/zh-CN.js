@@ -420,6 +420,7 @@ export default {
   'settings.account.providerDisabled': '未配置',
   'settings.account.cantUnbindLast': '不能解绑唯一的登录方式',
   'settings.account.unbindFailed': '解绑失败：{error}',
+  'settings.account.bindFailed': '绑定失败',
   'settings.account.ssoBoundMsg': '已成功绑定 {provider}。',
   'settings.account.ssoConflictMsg': '该 {provider} 账号已被其他用户绑定。',
   'settings.account.providerMicrosoft': 'Microsoft',

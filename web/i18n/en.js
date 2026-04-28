@@ -420,6 +420,7 @@ export default {
   'settings.account.providerDisabled': 'Not configured',
   'settings.account.cantUnbindLast': 'Cannot unlink the only login method',
   'settings.account.unbindFailed': 'Failed to unlink: {error}',
+  'settings.account.bindFailed': 'Failed to link account',
   'settings.account.ssoBoundMsg': 'Successfully linked {provider}.',
   'settings.account.ssoConflictMsg': 'This {provider} account is already linked to another user.',
   'settings.account.providerMicrosoft': 'Microsoft',
