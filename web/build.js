@@ -30,6 +30,7 @@ const vendorJs = [
   'tweetnacl-util.min.js',
   'pako.min.js',
   'marked.min.js',
+  'qrcode.min.js',
   'highlight.min.js',
   'vue.global.prod.js',
   'vue-demi.iife.js',
