@@ -1,22 +1,22 @@
 /**
- * summary.js — task-334n: Task multi-VP collaboration summary protocol.
+ * summary.js — task-334n: Feature multi-VP collaboration summary protocol.
  *
  * Owns:
- *   - postSummary()       — write a `type=summary` message to the group jsonl
- *                           and run the extractor (B + C)
- *   - extractTaskMemory() — turn a summary body into 2-5 task-memory entries
- *                           via 334f task-memory shard lib (C)
+ *   - postSummary()          — write a `type=summary` message to the group jsonl
+ *                              and run the extractor (B + C)
+ *   - extractFeatureMemory() — turn a summary body into 2-5 feature-memory entries
+ *                              via 334f feature-memory shard lib (C)
  *   - buildSummaryReminder() — compute the §Δ31.4 3-AND soft reminder shape
- *                              consumed by 334e's `taskCtx.summaryReminder` (D)
- *   - buildTaskCtxMemories() — assemble task-memory top-5 (pinned + recent +
- *                              tag relevance) for task_ctx (E)
+ *                              consumed by 334e's `featureCtx.summaryReminder` (D)
+ *   - buildFeatureCtxMemories() — assemble feature-memory top-5 (pinned + recent +
+ *                                 tag relevance) for feature_ctx (E)
  *
  * Hard boundaries:
  *   - does NOT touch 334o jsonl rotation internals (calls group.appendMessage)
  *   - does NOT touch 334f shard-store impl (calls openMemoryShardStore API)
  *   - does NOT touch 334e prompts main frame (returns plain shapes that feed
- *     the existing renderTaskCtx contract)
- *   - does NOT self-loop-write VP-memory (extractor writes task-memory only;
+ *     the existing renderFeatureCtx contract)
+ *   - does NOT self-loop-write VP-memory (extractor writes feature-memory only;
  *     VP-level synthesis is deferred to 334g dream)
  *   - softCap overflow does NOT create new shards (334f already routes into
  *     dream queue via projectDeriveHint; we just surface `needsRecompression`)
@@ -44,7 +44,7 @@ export const PROGRESS_ANCHORS = Object.freeze([
 /** Whitelist of R6 kinds emitted by the summary-extractor. */
 const EXTRACT_KINDS = Object.freeze(['progress', 'decision']);
 
-/** Shard routing for each extracted kind (§Δ25.2 task-memory fixed set). */
+/** Shard routing for each extracted kind (§Δ25.2 feature-memory fixed set). */
 const KIND_TO_SHARD = Object.freeze({
   progress: 'progress',
   decision: 'decision',
@@ -54,26 +54,25 @@ const KIND_TO_SHARD = Object.freeze({
 
 /**
  * Write a `type=summary` message to the group log, then auto-run the
- * extractor to derive task-memory entries.
+ * extractor to derive feature-memory entries.
  *
  * @param {{
  *   group: import('../groups/group-store.js').GroupHandle,
- *   taskId: string,
+ *   featureId: string,
  *   fromVpId: string,
  *   body: string,
- *   progress?: number|string,       // 0..100 or PROGRESS_ANCHORS string
- *   supersedes?: string[],        // prior summary msgIds being superseded
- *   memoryDir: string,            // groups/<g>/tasks/<t>/memory/
- *   now?: () => number,           // test clock
+ *   progress?: number|string,
+ *   supersedes?: string[],
+ *   memoryDir: string,            // groups/<g>/features/<f>/memory/
+ *   now?: () => number,
  *   extractor?: (body:string) => Array<{kind:string,body:string,tags?:string[]}>
- *     // optional hook; default uses `defaultExtractor` (heuristic, no LLM)
  * }} opts
  * @returns {{ message: any, memoryIds: string[], supersededSummaryIds: string[] }}
  */
 export function postSummary(opts) {
   const {
     group,
-    taskId,
+    featureId,
     fromVpId,
     body,
     progress,
@@ -86,7 +85,7 @@ export function postSummary(opts) {
   if (!group || typeof group.appendMessage !== 'function') {
     throw new Error('postSummary: group handle required');
   }
-  if (!taskId)   throw new Error('postSummary: taskId required');
+  if (!featureId)   throw new Error('postSummary: featureId required');
   if (!fromVpId) throw new Error('postSummary: fromVpId required');
   if (typeof body !== 'string' || !body.trim()) {
     throw new Error('postSummary: body required (non-empty string)');
@@ -112,7 +111,7 @@ export function postSummary(opts) {
     from: fromVpId,
     role: 'assistant',
     text: body,
-    taskId,
+    featureId,
     meta: {
       type: 'summary',
       progress: progress == null ? null : (typeof progress === 'string' ? progress : Number(progress)),
@@ -120,10 +119,10 @@ export function postSummary(opts) {
     },
   });
 
-  // 2) Run the extractor → write task-memory entries (C).
+  // 2) Run the extractor → write feature-memory entries (C).
   const memoryIds = [];
   try {
-    const store = openMemoryShardStore(memoryDir, 'task');
+    const store = openMemoryShardStore(memoryDir, 'feature');
     const raw = extractor(body) || [];
     const bounded = clampExtracted(raw);
     for (const [i, item] of bounded.entries()) {
@@ -134,11 +133,11 @@ export function postSummary(opts) {
         id,
         shard,
         kind,
-        taskId,
+        featureId,
         body: typeof item.body === 'string' ? item.body.trim() : '',
         tags: Array.isArray(item.tags) ? item.tags.slice(0, 5) : [],
         authoredBy: AUTHORED_BY.SUMMARY,
-        sourceRef: { taskId, msgIds: [stored.id] },
+        sourceRef: { featureId, msgIds: [stored.id] },
         createdAt: new Date(now()).toISOString(),
       });
       memoryIds.push(id);
@@ -167,17 +166,6 @@ function clampExtracted(arr) {
 
 // ─── (C) default extractor ───────────────────────────────────────
 
-/**
- * Heuristic extractor — no LLM, deterministic, safe for tests.
- *
- * Strategy:
- *   - Split body into non-empty lines (trim bullets).
- *   - Lines starting with keywords "decide/decision/chose/chosen" → kind=decision.
- *   - Lines starting with "progress/ship/shipped/done/completed/blocker/todo"
- *     → kind=progress.
- *   - Everything else → kind=progress (default).
- *   - Emit up to EXTRACT_MAX_ENTRIES.
- */
 export function defaultExtractor(body) {
   if (typeof body !== 'string') return [];
   const lines = body
@@ -194,12 +182,7 @@ export function defaultExtractor(body) {
     out.push({ kind, body: line });
     if (out.length >= EXTRACT_MAX_ENTRIES) break;
   }
-  // If we ended up with fewer than MIN and there was a body, collapse to
-  // one "progress" entry carrying the trimmed full body so we never emit 0
-  // when the caller gave us real content and asked for 2-5.
   if (out.length < EXTRACT_MIN_ENTRIES && body.trim()) {
-    // Pad up to EXTRACT_MIN_ENTRIES with the full trimmed body when
-    // the line-by-line pass yielded fewer entries than the minimum.
     while (out.length < EXTRACT_MIN_ENTRIES) {
       out.push({ kind: 'progress', body: body.trim() });
     }
@@ -210,39 +193,34 @@ export function defaultExtractor(body) {
 // ─── (D) soft reminder builder ───────────────────────────────────
 
 /**
- * Build the `taskCtx.summaryReminder` shape consumed by 334e's prompt.
- * Returns null when the 3-AND conditions do not all hold. The prompt layer
- * adds a 4th check (currentVpId === initiatorVpId) so we gate here too so
- * callers can debug-log why it was suppressed.
+ * Build the `featureCtx.summaryReminder` shape consumed by 334e's prompt.
  *
  * §Δ31.4 conditions:
- *   (1) task.members.length > 1
- *   (2) caller role === 'initiator'  (i.e. currentVpId === task.initiator)
+ *   (1) feature.members.length > 1
+ *   (2) caller role === 'initiator'  (i.e. currentVpId === feature.initiator)
  *   (3) (now - lastSummaryAt) ≥ 20 min  OR  nonSummaryTurns ≥ 10
  *
  * @param {{
- *   task: { initiator?: string, members?: string[] },
+ *   feature: { initiator?: string, members?: string[] },
  *   currentVpId: string,
- *   lastSummaryAt: number,     // epoch ms, 0 = never
+ *   lastSummaryAt: number,
  *   nonSummaryTurns: number,
  *   now?: number,
  * }} input
- * @returns {{ triggered: boolean, nonSummaryCount: number, lastSummaryAt: number,
- *             now: number, reasons: string[] }}
  */
 export function buildSummaryReminder(input) {
-  const { task, currentVpId, lastSummaryAt = 0, nonSummaryTurns = 0 } = input || {};
+  const { feature, currentVpId, lastSummaryAt = 0, nonSummaryTurns = 0 } = input || {};
   const now = typeof input?.now === 'number' ? input.now : Date.now();
   const reasons = [];
 
-  if (!task || typeof task !== 'object') {
-    return { triggered: false, reasons: ['no-task'], nonSummaryCount: nonSummaryTurns, lastSummaryAt, now };
+  if (!feature || typeof feature !== 'object') {
+    return { triggered: false, reasons: ['no-feature'], nonSummaryCount: nonSummaryTurns, lastSummaryAt, now };
   }
-  const members = Array.isArray(task.members) ? task.members : [];
-  const isInitiator = !!currentVpId && task.initiator === currentVpId;
+  const members = Array.isArray(feature.members) ? feature.members : [];
+  const isInitiator = !!currentVpId && feature.initiator === currentVpId;
 
   if (!isInitiator) reasons.push('not-initiator');
-  if (members.length <= SUMMARY_REMINDER_MIN_MEMBERS - 1) reasons.push('solo-task');
+  if (members.length <= SUMMARY_REMINDER_MIN_MEMBERS - 1) reasons.push('solo-feature');
 
   const ageMs = lastSummaryAt > 0 ? now - lastSummaryAt : Number.POSITIVE_INFINITY;
   const ageOk = ageMs >= SUMMARY_REMINDER_MIN_AGE_MS;
@@ -259,29 +237,25 @@ export function buildSummaryReminder(input) {
   };
 }
 
-// ─── (E) task_ctx top-5 task-memory builder ──────────────────────
+// ─── (E) feature_ctx top-5 feature-memory builder ────────────────
 
 /**
- * Assemble task-memory top-5 for 334e's `taskCtx.memories` field.
+ * Assemble feature-memory top-5 for 334e's `featureCtx.memories` field.
  * Ordering (§Δ16.5): pinned first → recent → tag-relevant. Supersedes are
  * hidden (entries with supersededBy != null are filtered out).
  *
- * @param {string} memoryDir  groups/<g>/tasks/<t>/memory/
+ * @param {string} memoryDir  groups/<g>/features/<f>/memory/
  * @param {{ tags?: string[], top?: number }} [opts]
- *   tags : optional tag hints to boost relevance
- *   top  : default 5
  * @returns {Array<{body:string, shard:string, authoredBy?:string}>}
  */
-export function buildTaskCtxMemories(memoryDir, opts = {}) {
+export function buildFeatureCtxMemories(memoryDir, opts = {}) {
   const top = Number.isFinite(opts.top) ? Number(opts.top) : 5;
   const tagHints = Array.isArray(opts.tags) ? opts.tags : [];
   const nowMs = typeof opts.now === 'number' ? opts.now : Date.now();
   let results = [];
   try {
-    const store = openMemoryShardStore(memoryDir, 'task');
+    const store = openMemoryShardStore(memoryDir, 'feature');
     const q = store.query({});
-    // query() returns thin entries (id/shard/kind/tags/pinned/groupId/taskId/supersededBy);
-    // we need the body too.
     const hits = (q.results || [])
       .filter((r) => !r.supersededBy)
       .map((r) => {
@@ -301,21 +275,17 @@ export function buildTaskCtxMemories(memoryDir, opts = {}) {
     const score = (r) => {
       let s = 0;
       if (r.pinned) s += 1000;
-      // Recency decay: half-life of 24h. Recent entries score up to +100,
-      // decaying toward 0 as they age.
       if (r.createdAt) {
         const ageMs = nowMs - new Date(r.createdAt).getTime();
-        const halfLifeMs = 24 * 60 * 60 * 1000; // 24 hours
+        const halfLifeMs = 24 * 60 * 60 * 1000;
         s += Math.max(0, 100 * Math.pow(0.5, Math.max(0, ageMs) / halfLifeMs));
       }
-      // tag relevance
       for (const t of tagHints) if (r.tags.includes(t)) s += 5;
       return s;
     };
     hits.sort((a, b) => {
       const ds = score(b) - score(a);
       if (ds !== 0) return ds;
-      // stable recency tie-break
       return String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
     });
     results = hits.slice(0, top).map((r) => ({
@@ -329,31 +299,30 @@ export function buildTaskCtxMemories(memoryDir, opts = {}) {
   return results;
 }
 
-// ─── (F) related-task ACL fail-closed gate ───────────────────────
+// ─── (F) related-feature ACL fail-closed gate ─────────────────────
 
 /**
- * Return memory/summary hints for a related task only when ACL grants.
- * Caller passes the TaskStore so we can ask `canAccessRelated()`.
+ * Return memory/summary hints for a related feature only when ACL grants.
+ * Caller passes the FeatureStore so we can ask `canAccessRelated()`.
  *
  * @param {{
- *   taskStore: import('./store.js').TaskStore,
- *   currentTaskId: string,
- *   otherTaskId: string,
+ *   featureStore: import('./store.js').FeatureStore,
+ *   currentFeatureId: string,
+ *   otherFeatureId: string,
  *   vpId: string,
  *   groupsRoot: string,
  *   top?: number,
  * }} input
  * @returns {null | { id:string, title:string, members:string[], updatedAt?:number, memories:Array<{body:string,shard:string}> }}
- *   null iff ACL denies — NEVER leak taskId in that case.
  */
-export function getRelatedTaskCtx(input) {
-  const { taskStore, currentTaskId, otherTaskId, vpId, groupsRoot, top = 2 } = input || {};
-  if (!taskStore || !currentTaskId || !otherTaskId || !vpId || !groupsRoot) return null;
-  if (!taskStore.canAccessRelated(currentTaskId, otherTaskId, vpId)) return null;
-  const other = taskStore.get(otherTaskId);
+export function getRelatedFeatureCtx(input) {
+  const { featureStore, currentFeatureId, otherFeatureId, vpId, groupsRoot, top = 2 } = input || {};
+  if (!featureStore || !currentFeatureId || !otherFeatureId || !vpId || !groupsRoot) return null;
+  if (!featureStore.canAccessRelated(currentFeatureId, otherFeatureId, vpId)) return null;
+  const other = featureStore.get(otherFeatureId);
   if (!other || !other.groupId) return null;
-  const memoryDir = join(groupsRoot, other.groupId, 'tasks', other.id, 'memory');
-  const mems = buildTaskCtxMemories(memoryDir, { top });
+  const memoryDir = join(groupsRoot, other.groupId, 'features', other.id, 'memory');
+  const mems = buildFeatureCtxMemories(memoryDir, { top });
   return {
     id: other.id,
     title: other.title || other.id,

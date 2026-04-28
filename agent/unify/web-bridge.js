@@ -30,7 +30,7 @@ import { handleVpSubscribe } from './vp/vp-bridge.js';
 import { createVp, updateVp, deleteVp, readVp, VpCrudError } from './vp/vp-crud.js';
 import { scanVpLibrary } from './vp/vp-store.js';
 import { createRouter } from './routing/router.js';
-import { handleUnifyTaskMessage as _handleUnifyTaskMessage } from './task-message.js';
+import { handleUnifyFeatureMessage as _handleUnifyFeatureMessage } from './feature-message.js';
 import {
   handleUnifyUserMemoryWrite as _handleUnifyUserMemoryWrite,
   handleUnifyUserMemoryRemove as _handleUnifyUserMemoryRemove,
@@ -278,8 +278,8 @@ export function handleUnifyVpDelete(msg) {
  *
  * @param {any} msg
  */
-export function handleUnifyTaskMessage(msg) {
-  _handleUnifyTaskMessage(msg, sendUnifyEvent);
+export function handleUnifyFeatureMessage(msg) {
+  _handleUnifyFeatureMessage(msg, sendUnifyEvent);
 }
 
 /**
@@ -639,11 +639,11 @@ function sendThreadListUpdate() {
       preview: t.preview || '',
       createdAt: t.createdAt,
       updatedAt: t.updatedAt,
-      // task-315: attached taskId (if any) so the UI can aggregate all
-      // messages belonging to a task across multiple threads. null when
-      // the thread has no attached task.
-      taskId: (typeof store.attachedTask === 'function')
-        ? (store.attachedTask(t.id) || null)
+      // task-315: attached featureId (if any) so the UI can aggregate all
+      // messages belonging to a feature across multiple threads. null when
+      // the thread has no attached feature.
+      featureId: (typeof store.attachedFeature === 'function')
+        ? (store.attachedFeature(t.id) || null)
         : null,
       // `running` — the thread whose id equals the store's currentId is
       // considered the active/running track. The UI uses this for the
@@ -662,7 +662,7 @@ const THREAD_MUTATING_TOOLS = new Set([
   'SpawnThread',
   'SwitchThread',
   'ArchiveThread',
-  'AttachThreadToTask',
+  'AttachThreadToFeature',
 ]);
 
 /**
@@ -751,8 +751,8 @@ function sendThreadListSnapshot() {
       preview: t.preview || '',
       createdAt: t.createdAt,
       updatedAt: t.updatedAt,
-      taskId: (typeof store.attachedTask === 'function')
-        ? (store.attachedTask(t.id) || null)
+      featureId: (typeof store.attachedFeature === 'function')
+        ? (store.attachedFeature(t.id) || null)
         : null,
       running: t.id === store.currentId,
       state: inflight.has(t.id) ? 'running' : 'idle',
@@ -1809,37 +1809,37 @@ export function handleUnifyModeSwitch(_msg) {
 }
 
 /**
- * R6 G2 — VP/Task memory browser query.
+ * R6 G2 — VP/Feature memory browser query.
  *
  * Reads from session.memoryShardStore (R6 shard-based memory) and replies
- * with a time-sorted list of entries scoped to the requested vpId / taskId.
+ * with a time-sorted list of entries scoped to the requested vpId / featureId.
  * The web UI's MemoryCard / MemoryTraceModal consume the reply.
  *
  * Request shape:
  *   { type: 'unify_memory_query',
- *     vpId?: string, taskId?: string,
+ *     vpId?: string, featureId?: string,
  *     limit?: number, requestId?: string }
  *
  * Reply shape:
  *   { type: 'unify_memory_query_result',
- *     scope: { vpId, taskId },
+ *     scope: { vpId, featureId },
  *     entries: Array<thinEntry>,   // shape from shard-store mapRecordToThinEntry
  *     requestId? }
  *
  * Per D2 the query is scoped — the LLM owns memory recall via the
  * memory_query tool; this surface is purely UI browsing (read-only).
  *
- * @param {{ vpId?: string, taskId?: string, limit?: number, requestId?: string }} msg
+ * @param {{ vpId?: string, featureId?: string, limit?: number, requestId?: string }} msg
  */
 export function handleUnifyMemoryQuery(msg = {}) {
   const requestId = typeof msg.requestId === 'string' ? msg.requestId : undefined;
   const vpId = typeof msg.vpId === 'string' ? msg.vpId : null;
-  const taskId = typeof msg.taskId === 'string' ? msg.taskId : null;
+  const featureId = typeof msg.featureId === 'string' ? msg.featureId : null;
   const limit = Number.isFinite(msg.limit) ? Math.max(1, Math.min(200, msg.limit)) : 50;
 
   const reply = (extra = {}) => sendUnifyEvent({
     type: 'unify_memory_query_result',
-    scope: { vpId, taskId },
+    scope: { vpId, featureId },
     ...extra,
     ...(requestId ? { requestId } : {}),
   });
@@ -1852,7 +1852,7 @@ export function handleUnifyMemoryQuery(msg = {}) {
   try {
     const filter = {};
     if (vpId) filter.vp = vpId;
-    if (taskId) filter.task = taskId;
+    if (featureId) filter.feature = featureId;
     const res = session.memoryShardStore.query(filter);
     const list = Array.isArray(res?.results) ? res.results : [];
     // Time-sorted desc on updatedAt / createdAt.
@@ -1912,41 +1912,41 @@ export function handleUnifyMemoryTrace(msg = {}) {
 }
 
 /**
- * R6 G1a — Fetch a task's summary history (revision chain).
+ * R6 G1a — Fetch a feature's summary history (revision chain).
  *
- * Streams the group log filtered by `taskId` and `meta.kind === 'summary'`,
+ * Streams the group log filtered by `featureId` and `meta.kind === 'summary'`,
  * separates `current` (≤10 most recent non-superseded) from `archived` rows
  * per §Δ31.5. Default `includeArchived: false` keeps the wire payload small;
  * the UI's "Show archived" button re-issues with the flag set.
  *
  * Request shape:
- *   { type: 'unify_fetch_summary_history', taskId, includeArchived?: bool }
+ *   { type: 'unify_fetch_summary_history', featureId, includeArchived?: bool }
  *
  * Reply shape:
- *   { type: 'unify_summary_history', taskId, revisions: [...],
+ *   { type: 'unify_summary_history', featureId, revisions: [...],
  *     archived: [...]|null, error?: string, requestId? }
  */
 export async function handleUnifyFetchSummaryHistory(msg = {}) {
   const requestId = typeof msg.requestId === 'string' ? msg.requestId : undefined;
-  const taskId = typeof msg.taskId === 'string' ? msg.taskId : null;
+  const featureId = typeof msg.featureId === 'string' ? msg.featureId : null;
   const includeArchived = !!msg.includeArchived;
 
   const reply = (extra = {}) => sendUnifyEvent({
     type: 'unify_summary_history',
-    taskId,
+    featureId,
     ...extra,
     ...(requestId ? { requestId } : {}),
   });
 
-  if (!taskId) { reply({ revisions: [], archived: null, error: 'missing_task_id' }); return; }
+  if (!featureId) { reply({ revisions: [], archived: null, error: 'missing_feature_id' }); return; }
 
   try {
-    const { getTaskStore } = await import('./tools/task-tools.js');
-    const taskStore = getTaskStore();
-    const task = taskStore?.get(taskId);
-    if (!task) { reply({ revisions: [], archived: null, error: 'task_not_found' }); return; }
-    const groupId = task.groupId;
-    if (!groupId) { reply({ revisions: [], archived: null, error: 'task_has_no_group' }); return; }
+    const { getFeatureStore } = await import('./tools/feature-tools.js');
+    const featureStore = getFeatureStore();
+    const feature = featureStore?.get(featureId);
+    if (!feature) { reply({ revisions: [], archived: null, error: 'feature_not_found' }); return; }
+    const groupId = feature.groupId;
+    if (!groupId) { reply({ revisions: [], archived: null, error: 'feature_has_no_group' }); return; }
 
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     if (!yeaftDir) { reply({ revisions: [], archived: null, error: 'no_yeaft_dir' }); return; }
@@ -1963,7 +1963,7 @@ export async function handleUnifyFetchSummaryHistory(msg = {}) {
     const groupHandle = openGroup(root, groupId);
     const summaries = [];
     for (const m of groupHandle.streamMessages()) {
-      if (!m || m.taskId !== taskId) continue;
+      if (!m || m.featureId !== featureId) continue;
       const meta = m.meta || {};
       if (meta.kind === 'summary' || meta.type === 'summary') summaries.push(m);
     }
@@ -2002,74 +2002,74 @@ export async function handleUnifyFetchSummaryHistory(msg = {}) {
 }
 
 /**
- * R6 G1a — Task affiliation CRUD (relate / unrelate / kick_vp / abort_vp).
+ * R6 G1a — Feature affiliation CRUD (relate / unrelate / kick_vp / abort_vp).
  *
  * Single envelope so the UI doesn't fan out four separate WS message types
- * for housekeeping verbs. Replies with `unify_task_crud_result`.
+ * for housekeeping verbs. Replies with `unify_feature_crud_result`.
  *
- *   - relate     { taskId, relatedTaskId } — bidirectional Δ27 link
- *   - unrelate   { taskId, relatedTaskId } — drop both directions
- *   - kick_vp    { taskId, vpId } — taskStore.removeMember
- *   - abort_vp   { taskId, vpId } — abort that VP's in-flight engine inside the task
+ *   - relate     { featureId, relatedFeatureId } — bidirectional Δ27 link
+ *   - unrelate   { featureId, relatedFeatureId } — drop both directions
+ *   - kick_vp    { featureId, vpId } — featureStore.removeMember
+ *   - abort_vp   { featureId, vpId } — abort that VP's in-flight engine inside the feature
  */
-export async function handleUnifyTaskCrud(msg = {}) {
+export async function handleUnifyFeatureCrud(msg = {}) {
   const requestId = typeof msg.requestId === 'string' ? msg.requestId : undefined;
   const op = typeof msg.op === 'string' ? msg.op : null;
-  const taskId = typeof msg.taskId === 'string' ? msg.taskId : null;
+  const featureId = typeof msg.featureId === 'string' ? msg.featureId : null;
   const vpId = typeof msg.vpId === 'string' ? msg.vpId : null;
-  const relatedTaskId = typeof msg.relatedTaskId === 'string' ? msg.relatedTaskId : null;
+  const relatedFeatureId = typeof msg.relatedFeatureId === 'string' ? msg.relatedFeatureId : null;
 
   const reply = (extra = {}) => sendUnifyEvent({
-    type: 'unify_task_crud_result',
+    type: 'unify_feature_crud_result',
     op,
-    taskId,
+    featureId,
     ...(vpId ? { vpId } : {}),
     ...extra,
     ...(requestId ? { requestId } : {}),
   });
 
   if (!op) { reply({ ok: false, error: 'missing_op' }); return; }
-  if (!taskId) { reply({ ok: false, error: 'missing_task_id' }); return; }
+  if (!featureId) { reply({ ok: false, error: 'missing_feature_id' }); return; }
 
   try {
-    const { getTaskStore } = await import('./tools/task-tools.js');
-    const taskStore = getTaskStore();
-    const task = taskStore?.get(taskId);
-    if (!task) { reply({ ok: false, error: 'task_not_found' }); return; }
+    const { getFeatureStore } = await import('./tools/feature-tools.js');
+    const featureStore = getFeatureStore();
+    const feature = featureStore?.get(featureId);
+    if (!feature) { reply({ ok: false, error: 'feature_not_found' }); return; }
 
     if (op === 'relate' || op === 'unrelate') {
-      if (!relatedTaskId) { reply({ ok: false, error: 'missing_related_task_id' }); return; }
-      const other = taskStore.get(relatedTaskId);
-      if (!other) { reply({ ok: false, error: 'related_task_not_found' }); return; }
+      if (!relatedFeatureId) { reply({ ok: false, error: 'missing_related_feature_id' }); return; }
+      const other = featureStore.get(relatedFeatureId);
+      if (!other) { reply({ ok: false, error: 'related_feature_not_found' }); return; }
       const apply = (t, otherId, add) => {
-        const cur = Array.isArray(t.relatedTaskIds) ? t.relatedTaskIds.slice() : [];
+        const cur = Array.isArray(t.relatedFeatureIds) ? t.relatedFeatureIds.slice() : [];
         const idx = cur.indexOf(otherId);
         if (add && idx === -1) cur.push(otherId);
         if (!add && idx !== -1) cur.splice(idx, 1);
-        taskStore.update(t.id, { relatedTaskIds: cur });
+        featureStore.update(t.id, { relatedFeatureIds: cur });
       };
-      apply(task, relatedTaskId, op === 'relate');
-      apply(other, taskId, op === 'relate');
-      reply({ ok: true, relatedTaskId });
+      apply(feature, relatedFeatureId, op === 'relate');
+      apply(other, featureId, op === 'relate');
+      reply({ ok: true, relatedFeatureId });
       return;
     }
 
     if (op === 'kick_vp') {
       if (!vpId) { reply({ ok: false, error: 'missing_vp_id' }); return; }
-      taskStore.removeMember(taskId, vpId);
+      featureStore.removeMember(featureId, vpId);
       reply({ ok: true });
       return;
     }
 
     if (op === 'abort_vp') {
       if (!vpId) { reply({ ok: false, error: 'missing_vp_id' }); return; }
-      // Reuse per-thread abort registry — keyed by (taskId,vpId) tuple if
+      // Reuse per-thread abort registry — keyed by (featureId,vpId) tuple if
       // the engine instance is registered there. For v1 we surface success
       // and let the engine settle; full per-VP cancellation is owned by
       // the engine registry in 334o follow-up.
       const reg = session?.engineRegistry;
-      if (reg && typeof reg.abortVpInTask === 'function') {
-        reg.abortVpInTask(taskId, vpId);
+      if (reg && typeof reg.abortVpInFeature === 'function') {
+        reg.abortVpInFeature(featureId, vpId);
       }
       reply({ ok: true });
       return;

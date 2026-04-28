@@ -23,7 +23,7 @@ import { openMemoryShardStore } from './memory/shard-store.js';
 import { SkillManager, createSkillManager } from './skills.js';
 import { MCPManager } from './mcp.js';
 import { createFullRegistry } from './tools/index.js';
-import { initTaskStore } from './tools/task-tools.js';
+import { initFeatureStore } from './tools/feature-tools.js';
 import { initThreadStore } from './threads/store.js';
 import { Engine } from './engine.js';
 import { createThreadEngineRegistry } from './threads/engine-registry.js';
@@ -167,8 +167,8 @@ export async function loadSession(options = {}) {
     console.warn(`[Yeaft] Failed to open R6 memory shard store: ${err?.message || err}`);
   }
 
-  // ─── 5a. Initialize task store ─────────────────────────
-  initTaskStore(yeaftDir, { readOnly: config._readOnly || false });
+  // ─── 5a. Initialize feature store ──────────────────────
+  initFeatureStore(yeaftDir, { readOnly: config._readOnly || false });
 
   // ─── 5b. Initialize thread store (task-299 Phase 1) ────
   //         task-307a: now file-backed under ~/.yeaft/threads/. Passing the

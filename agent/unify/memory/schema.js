@@ -19,8 +19,8 @@ export const VP_DEFAULT_SHARDS = Object.freeze([
   'preferences',
 ]);
 
-// ─── §Δ25.2 Task-memory fixed 5 shards ──────────────────────────
-export const TASK_SHARDS = Object.freeze([
+// ─── §Δ25.2 Feature-memory fixed 5 shards ───────────────────────
+export const FEATURE_SHARDS = Object.freeze([
   'decision',
   'progress',
   'context',
@@ -49,7 +49,7 @@ export const SOFT_CAPS = Object.freeze({
   lessons:     { entries: 80,  bytes: 64 * 1024 },
   preferences: { entries: 80,  bytes: 64 * 1024 },
   relations:   { entries: 50,  bytes: 32 * 1024 },
-  // Task (Δ26.3 task-memory row)
+    // Feature (Δ26.3 feature-memory row)
   decision: { entries: 40, bytes: 24 * 1024 },
   progress: { entries: 40, bytes: 24 * 1024 },
   context:  { entries: 40, bytes: 24 * 1024 },
@@ -99,16 +99,16 @@ export function softCapFor(shardName) {
 /**
  * Build a schema object suitable for `openShardStore(dir, schema)` (334o).
  *
- * @param {'vp'|'task'|'user'} kind
+ * @param {'vp'|'feature'|'user'} kind
  * @param {{ extraShards?: string[] }} [opts]  e.g. existing project shards
  * @returns {{ shards: string[], softCap: Record<string,{entries:number,bytes:number}>, defaultSoftCap: object }}
  */
 export function buildShardSchema(kind, opts = {}) {
   let shards;
   switch (kind) {
-    case 'vp':   shards = [...VP_DEFAULT_SHARDS]; break;
-    case 'task': shards = [...TASK_SHARDS]; break;
-    case 'user': shards = [...USER_SHARDS]; break;
+    case 'vp':      shards = [...VP_DEFAULT_SHARDS]; break;
+    case 'feature': shards = [...FEATURE_SHARDS]; break;
+    case 'user':    shards = [...USER_SHARDS]; break;
     default: throw new Error(`buildShardSchema: unknown kind "${kind}"`);
   }
   if (Array.isArray(opts.extraShards)) {

@@ -15,7 +15,7 @@ import { createHash } from 'crypto';
 import { pickEffort } from '../effort.js';
 import {
   VP_DEFAULT_SHARDS,
-  TASK_SHARDS,
+  FEATURE_SHARDS,
   USER_SHARDS,
 } from './schema.js';
 
@@ -286,6 +286,6 @@ export function clearR6RecallCache() {
 
 export const R6_DEFAULTS = {
   VP_DEFAULT_SHARDS,
-  TASK_SHARDS,
+  FEATURE_SHARDS,
   USER_SHARDS,
 };

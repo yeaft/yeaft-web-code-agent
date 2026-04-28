@@ -4,16 +4,16 @@
  * Replaces the old entries-based dream scanner with shard-aware streaming:
  *   1. Shard scanner: iterate shards → stream entries → build orient/merge/prune inputs
  *   2. Compact job: rewrite shards with utilization < 50% to reclaim tombstones
- *   3. Task-memory guard: dream NEVER writes to task-memory shards (avoids double-write)
+ *   3. Feature-memory guard: dream NEVER writes to feature-memory shards (avoids double-write)
  *
  * References:
  *   - R5 delta §Δ17.5: compact job spec
- *   - R5 delta §Δ16.4.3: "auto-dream 不写 task-memory"
+ *   - R5 delta §Δ16.4.3: "auto-dream 不写 feature-memory"
  *   - 334f shard-store API: stageRecompression / commitRecompression / abortRecompression
- *   - schema.js: TASK_SHARDS, softCapFor
+ *   - schema.js: FEATURE_SHARDS, softCapFor
  */
 
-import { TASK_SHARDS, softCapFor } from './schema.js';
+import { FEATURE_SHARDS, softCapFor } from './schema.js';
 import { AUTHORED_BY } from './shard-store.js';
 import { pickEffort } from '../effort.js';
 
@@ -28,30 +28,30 @@ const MAX_COMPACTS_PER_DREAM = 4;
 /** Maximum LLM calls for shard-based dream phases. */
 const MAX_SHARD_DREAM_LLM_CALLS = 5;
 
-/** Task-memory shard names — dream must never write to these. */
-const TASK_SHARD_SET = new Set(TASK_SHARDS);
+/** Feature-memory shard names — dream must never write to these. */
+const FEATURE_SHARD_SET = new Set(FEATURE_SHARDS);
 
-// ─── Task-Memory Guard ─────────────────────────────────────
+// ─── Feature-Memory Guard ─────────────────────────────────────
 
 /**
- * Returns true if the shard name belongs to task-memory.
+ * Returns true if the shard name belongs to feature-memory.
  * Dream must NOT write entries to these shards.
  *
  * @param {string} shardName
  * @returns {boolean}
  */
-export function isTaskMemoryShard(shardName) {
-  return TASK_SHARD_SET.has(shardName);
+export function isFeatureMemoryShard(shardName) {
+  return FEATURE_SHARD_SET.has(shardName);
 }
 
 /**
- * Filter out task-memory shards from a list of shard names.
+ * Filter out feature-memory shards from a list of shard names.
  *
  * @param {string[]} shardNames
  * @returns {string[]}
  */
 export function filterDreamableShards(shardNames) {
-  return shardNames.filter(s => !isTaskMemoryShard(s));
+  return shardNames.filter(s => !isFeatureMemoryShard(s));
 }
 
 // ─── Shard Scanner ─────────────────────────────────────────
@@ -319,7 +319,7 @@ function compactShard(shardStore, shardName) {
  *   3. Merge — LLM-driven merge of duplicate/superseded entries
  *   4. Prune — LLM-driven removal of stale entries
  *
- * Task-memory guard: all phases skip TASK_SHARDS entirely.
+ * Feature-memory guard: all phases skip FEATURE_SHARDS entirely.
  *
  * @param {{
  *   shardStore: object,
@@ -509,7 +509,7 @@ async function runPrunePhase({ shardStore, scan, adapter, config }) {
   const st = shardStore.stats();
   const overCapShards = [];
   for (const [name, bucket] of Object.entries(st.shards)) {
-    if (isTaskMemoryShard(name)) continue;
+    if (isFeatureMemoryShard(name)) continue;
     const cap = softCapFor(name);
     if (bucket.entries > cap.entries || bucket.bytes > cap.bytes) {
       overCapShards.push(name);
@@ -551,7 +551,7 @@ async function runPrunePhase({ shardStore, scan, adapter, config }) {
     if (typeof id !== 'string') continue;
     // Double-check it's not in a task shard
     const entry = scan.entries.find(e => e.id === id);
-    if (entry && isTaskMemoryShard(entry.shard)) continue;
+    if (entry && isFeatureMemoryShard(entry.shard)) continue;
     try {
       shardStore.remove(id);
       result.prunedCount++;

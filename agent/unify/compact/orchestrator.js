@@ -111,7 +111,7 @@ export async function runCompact({ messages, keepHot = 10, taskId = null, root, 
       ? await hooks.readPriorTaskSummary() : '';
     const next = await hooks.refreshTaskSummary(coolingMessages, prior);
     if (typeof next === 'string' && next.trim()) {
-      await writeSummary({ kind: 'task', id: taskId }, next, { root });
+      await writeSummary({ kind: 'feature', id: taskId }, next, { root });
       taskSummaryRefreshed = true;
     }
   }
