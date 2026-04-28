@@ -6,6 +6,7 @@ import { useUserMemoryStore } from './stores/user-memory.js';
 import { useMemoryStore } from './stores/memory.js';
 import { useFeaturesStore } from './stores/features.js';
 import { createI18n } from './utils/i18n.js';
+import { installAuthFetch } from './utils/auth-fetch.js';
 import zhCN from './i18n/zh-CN.js';
 import en from './i18n/en.js';
 import LoginPage from './components/LoginPage.js';
@@ -85,6 +86,9 @@ app.use(pinia);
 
 // Install i18n
 createI18n(app, { 'zh-CN': zhCN, en });
+
+// Install fetch interceptor that swaps in renewed JWTs from X-New-Token.
+installAuthFetch();
 
 // Set up the store references after pinia is installed
 window.Pinia.useChatStore = useChatStore;

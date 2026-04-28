@@ -89,7 +89,11 @@ export const CONFIG = {
 
   // JWT settings
   jwtSecret: process.env.JWT_SECRET || DEFAULT_JWT_SECRET,
-  jwtExpiresIn: process.env.JWT_EXPIRES_IN || '24h',
+  jwtExpiresIn: process.env.JWT_EXPIRES_IN || '3d',
+  // Sliding renew: when an inbound request's token has less than this many ms
+  // remaining, requireAuth issues a fresh token via the X-New-Token response
+  // header. 1 day means an active user never sees an unexpected logout.
+  jwtRenewThresholdMs: parseInt(process.env.JWT_RENEW_THRESHOLD_MS, 10) || 24 * 60 * 60 * 1000,
   tempTokenExpiresIn: process.env.TEMP_TOKEN_EXPIRES_IN || '10m',
 
   // Email verification
