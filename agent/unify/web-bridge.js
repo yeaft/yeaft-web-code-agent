@@ -1402,6 +1402,22 @@ export async function handleUnifyChat(msg) {
       // code — the config file was updated on disk but the running
       // session continued with the old caps until next restart.
       installUnifyRuntimeBridge(session);
+
+      // PR-M1: install a sub-agent event sink so events emitted by sub-
+      // agent Engines surface to the web client. Frontend filters by the
+      // `agentId` field and renders them inside the sub-agent card.
+      try {
+        if (session.engine && typeof session.engine.setSubAgentEventSink === 'function') {
+          session.engine.setSubAgentEventSink((agentId, evt) => {
+            try {
+              sendUnifyEvent({ type: 'sub_agent_event', agentId, payload: evt });
+            } catch { /* ignore */ }
+          });
+        }
+      } catch (err) {
+        console.warn('[Unify] setSubAgentEventSink wiring failed:', err?.message || err);
+      }
+
       // task-317: run one idle-archive sweep at bootstrap, then schedule
       // the hourly tick bound to this session.
       runAutoArchiveSweep(session);

@@ -1,0 +1,153 @@
+/**
+ * sub-agent.css — PR-M3 sub-agent activity card.
+ *
+ * Per CLAUDE.md "Unify UI Design Rules": no horizontal dividers; soft
+ * surface with spacing-only separation between sections.
+ */
+
+.sub-agent-card {
+  margin: 12px 0;
+  padding: 12px 14px;
+  background: var(--surface-soft, #f6f7f9);
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary, #1f1f1f);
+}
+
+.sub-agent-card.is-failed {
+  background: var(--surface-warn, #fff3f0);
+}
+
+.sub-agent-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+  font-weight: 600;
+}
+
+.sub-agent-icon {
+  font-size: 14px;
+  color: var(--accent, #4a6df5);
+}
+
+.sub-agent-name {
+  flex: 0 0 auto;
+}
+
+.sub-agent-status-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+  background: var(--surface-base, #e5e7eb);
+  color: var(--text-secondary, #4b5563);
+}
+
+.sub-agent-status-running {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.sub-agent-status-idle {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.sub-agent-status-completed {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.sub-agent-status-closed {
+  background: #e5e7eb;
+  color: #4b5563;
+}
+
+.sub-agent-status-failed {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.sub-agent-meta {
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--text-secondary, #6b7280);
+}
+
+.sub-agent-caret {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-secondary, #6b7280);
+}
+
+.sub-agent-error {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-warn, #b03a2e);
+}
+
+.sub-agent-preview {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-secondary, #6b7280);
+  white-space: pre-wrap;
+}
+
+.sub-agent-body {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sub-agent-text {
+  white-space: pre-wrap;
+  font-weight: 400;
+  color: var(--text-primary, #1f1f1f);
+}
+
+.sub-agent-tools-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary, #6b7280);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+
+.sub-agent-tools-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sub-agent-tools-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.sub-agent-tool-name {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  color: var(--text-primary, #1f1f1f);
+}
+
+.sub-agent-tool-status {
+  font-size: 11px;
+  color: var(--text-secondary, #6b7280);
+}
+
+.sub-agent-tool-error .sub-agent-tool-status {
+  color: var(--text-warn, #b03a2e);
+}
+
+.sub-agent-tool-done .sub-agent-tool-status {
+  color: #065f46;
+}

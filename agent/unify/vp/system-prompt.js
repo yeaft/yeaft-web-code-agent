@@ -120,7 +120,18 @@ function buildStatic(vp, capabilitiesLine) {
     : `(no persona body for ${vp.id})`;
 
   const caps = (capabilitiesLine && capabilitiesLine.trim())
-    || 'Tools: route_forward, memory_search, memory_trace, task_summary_post (if initiator).';
+    || [
+      'Tools: route_forward, memory_search, memory_trace, task_summary_post (if initiator).',
+      'Sub-agent fan-out: when a single user task is large enough to benefit from parallel execution,',
+      'you MAY spawn sub-agents using the `Agent` tool. Each sub-agent inherits your persona +',
+      'voice, gets its own ToolRegistry (without Agent / RouteForward / AskUser to prevent recursion),',
+      'and runs the same Engine flow. Use `Agent` to spawn (returns agentId), `WaitAgent` to collect',
+      'each turn output, `SendMessage` for follow-ups, `CloseAgent` when done. You can fire multiple',
+      '`Agent` tool_calls in one assistant turn to launch them in parallel. Pass a self-contained,',
+      'markdown mission ("## Goal / ## Context / ## Deliverable / ## Constraints") — the sub-agent',
+      'cannot see your conversation history. Only spawn when work is genuinely parallelisable; for',
+      'small or strictly-sequential tasks, do it yourself.',
+    ].join('\n');
 
   // personaHash travels in the static block so downstream (334h live-diff)
   // can detect changes without re-hashing.

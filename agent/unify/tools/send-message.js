@@ -42,20 +42,31 @@ The message is queued for the agent to process.`,
     if (agent.status === 'closed') {
       return JSON.stringify({ error: `Agent "${agent.name}" is closed` });
     }
+    if (agent.status === 'failed') {
+      return JSON.stringify({ error: `Agent "${agent.name}" has failed: ${agent.error || 'unknown error'}` });
+    }
 
+    // PR-M1: queue as a pending prompt the driver will pull. This wakes
+    // the driver out of its idle wait and starts a new turn. The 'active'
+    // status alias kept for backward-compat with code that polls for it.
+    if (!Array.isArray(agent.pendingPrompts)) agent.pendingPrompts = [];
+    agent.pendingPrompts.push(message);
     agent.messages.push({
       role: 'user',
       content: message,
       timestamp: Date.now(),
     });
-    agent.status = 'active';
+    if (agent.status === 'idle' || agent.status === 'created') {
+      agent.status = 'running';
+    }
 
     return JSON.stringify({
       success: true,
       agentId: agent_id,
       name: agent.name,
       messageCount: agent.messages.length,
-      message: `Message sent to agent "${agent.name}"`,
+      pending: agent.pendingPrompts.length,
+      message: `Message sent to agent "${agent.name}". Use WaitAgent to collect its reply.`,
     });
   },
 });
