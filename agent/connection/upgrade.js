@@ -59,6 +59,86 @@ export function handleRestartAgent() {
   cleanupAndExit(1);
 }
 
+/**
+ * Fetch the `engines.node` SemVer range for a specific published version of
+ * a package. Returns the range string (e.g. ">=22.5.0") or `null` if the
+ * field is absent / the lookup fails. Failure is non-fatal — callers fall
+ * back to running the upgrade unconditionally rather than blocking on a
+ * registry hiccup.
+ */
+async function fetchRequiredNodeRange(pkgName, version) {
+  try {
+    const stdout = await new Promise((resolve, reject) => {
+      execFile(
+        npmPath,
+        ['view', `${pkgName}@${version}`, 'engines.node'],
+        { stdio: 'pipe', env: safeEnv, ...shellOpt },
+        (err, out) => { if (err) reject(err); else resolve(out.toString().trim()); },
+      );
+    });
+    return stdout || null;
+  } catch (e) {
+    console.warn(`[Agent] Could not fetch engines.node for ${pkgName}@${version}:`, e.message);
+    return null;
+  }
+}
+
+/**
+ * Minimal SemVer range checker — supports the subset of operators that
+ * appear in real-world `engines.node` fields:
+ *   - exact:           "22.5.0"
+ *   - comparator:      ">=22.5.0", ">22", "<=24", "<25.0.0"
+ *   - whitespace AND:  ">=18.0.0 <23.0.0"
+ *   - "||" OR:         ">=18 <19 || >=20"
+ *   - "*" / "" / "x":  always satisfied
+ *
+ * We deliberately avoid pulling in the `semver` npm package — the agent has
+ * a minimal dep set and this gate only needs to reject obviously-wrong Node
+ * versions. Anything we can't parse is treated as "satisfied" (fail-open)
+ * so a weird range never blocks a legitimate upgrade.
+ */
+export function nodeRangeSatisfied(current, range) {
+  if (!range || range === '*' || range === 'x' || range === 'X') return true;
+  const cur = parseSemver(current);
+  if (!cur) return true;
+  const orParts = String(range).split('||').map(s => s.trim()).filter(Boolean);
+  if (orParts.length === 0) return true;
+  return orParts.some(part => part.split(/\s+/).filter(Boolean).every(cmp => compareCmp(cur, cmp)));
+}
+
+function parseSemver(v) {
+  if (!v) return null;
+  const m = String(v).replace(/^v/, '').match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
+  if (!m) return null;
+  return [Number(m[1] || 0), Number(m[2] || 0), Number(m[3] || 0)];
+}
+
+function cmpTuple(a, b) {
+  for (let i = 0; i < 3; i++) {
+    if (a[i] !== b[i]) return a[i] - b[i];
+  }
+  return 0;
+}
+
+function compareCmp(cur, cmp) {
+  const m = cmp.match(/^(>=|<=|>|<|=|\^|~)?\s*v?(.+)$/);
+  if (!m) return true; // unparseable → fail-open
+  const op = m[1] || '=';
+  const target = parseSemver(m[2]);
+  if (!target) return true;
+  const d = cmpTuple(cur, target);
+  switch (op) {
+    case '>=': return d >= 0;
+    case '<=': return d <= 0;
+    case '>':  return d > 0;
+    case '<':  return d < 0;
+    case '=':  return d === 0;
+    case '^':  return d >= 0 && cur[0] === target[0];
+    case '~':  return d >= 0 && cur[0] === target[0] && cur[1] === target[1];
+    default:   return true;
+  }
+}
+
 export async function handleUpgradeAgent() {
   console.log('[Agent] Upgrade requested, checking for updates...');
   try {
@@ -74,6 +154,28 @@ export async function handleUpgradeAgent() {
       sendToServer({ type: 'upgrade_agent_ack', success: true, alreadyLatest: true, version: ctx.agentVersion });
       return;
     }
+
+    // Node.js compatibility gate: fetch engines.node of the *target* version
+    // and refuse to upgrade if the running Node is too old. Without this,
+    // npm install would replace files and the agent would crash on next
+    // restart with no actionable signal.
+    const requiredNode = await fetchRequiredNodeRange(pkgName, latestVersion);
+    const currentNode = process.versions.node;
+    if (requiredNode && !nodeRangeSatisfied(currentNode, requiredNode)) {
+      const msg = `Node ${currentNode} does not satisfy required ${requiredNode} for ${pkgName}@${latestVersion}`;
+      console.warn(`[Agent] Upgrade aborted: ${msg}`);
+      sendToServer({
+        type: 'upgrade_agent_ack',
+        success: false,
+        reason: 'node_incompatible',
+        error: msg,
+        currentNode,
+        requiredNode,
+        version: latestVersion,
+      });
+      return;
+    }
+
     console.log(`[Agent] Upgrading from ${ctx.agentVersion} to latest (${latestVersion})...`);
 
     // 检测安装方式：npm install 的路径包含 node_modules，源码运行则不包含
