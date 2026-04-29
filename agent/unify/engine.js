@@ -416,6 +416,15 @@ export class Engine {
     const ownVpId = args.ownVpId || null;
     const ams = this.#amsRegistry.getOrCreate(groupKey, { ownVpId });
 
+    // Prime #adjustRanByGroup from disk-hydrated state on first access:
+    // a reactivated group resumes with whatever adjustRanThisSession bit
+    // it had on disconnect, so we don't burn a fresh adjust on every
+    // reload. Once set true in this session we never clear it.
+    if (!this.#adjustRanByGroup.has(groupKey)
+        && this.#amsRegistry.adjustRanThisSession(groupKey)) {
+      this.#adjustRanByGroup.set(groupKey, true);
+    }
+
     // (a) Resident: rebuild from the same scope summaries the worker
     // prompt is already going to see.
     const residentEntries = [];
@@ -1455,9 +1464,6 @@ export class Engine {
 
           if (hookResult.consolidated) {
             yield { type: 'consolidate', archivedCount: 0, extractedCount: 0 };
-          }
-          if (hookResult.dreamTriggered) {
-            yield { type: 'dream_triggered' };
           }
         } else {
           // Legacy path (no yeaftDir → use old behavior)
