@@ -40,6 +40,8 @@ export default {
   'login.wechat': 'Sign in with WeChat',
   'login.alipay': 'Sign in with Alipay',
   'login.wechat.mobileUnsupported': 'Sign in with WeChat is only available on PC. Please scan the QR code from a desktop browser.',
+  'login.alipay.mobileWaiting': 'Waiting for you to confirm in the Alipay app… Once you finish, return to this page and you will be signed in automatically.',
+  'login.alipay.relaunch': 'Open Alipay again',
   'login.qr.title': 'Scan to sign in',
   'login.qr.titleAlipay': 'Sign in with Alipay',
   'login.qr.titleWechat': 'Sign in with WeChat',

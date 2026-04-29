@@ -157,14 +157,28 @@ export default {
         <template v-if="authStore.qrPanel && authStore.loginStep === 'credentials'">
           <div class="sso-qr-panel">
             <p class="totp-title">{{ qrPanelTitle }}</p>
-            <p class="totp-hint">{{ $t('login.qr.hint') }}</p>
-            <div class="qr-container">
-              <img v-if="qrDataUrl" :src="qrDataUrl" alt="QR" class="qr-code">
-              <div v-else class="qr-code qr-placeholder"></div>
-            </div>
-            <p v-if="authStore.qrPanel.status === 'error'" class="error">
-              {{ authStore.qrPanel.error }}
-            </p>
+            <!-- Mobile deep-link mode: user has been bounced to the Alipay
+                 app; we just wait for the poll to come back with a token.
+                 No QR canvas needed (and would be unscannable anyway). -->
+            <template v-if="authStore.qrPanel.mobileDeepLink">
+              <p class="totp-hint">{{ $t('login.alipay.mobileWaiting') }}</p>
+              <p v-if="authStore.qrPanel.status === 'error'" class="error">
+                {{ authStore.qrPanel.error }}
+              </p>
+              <button class="primary-btn" @click="relaunchAlipayMobile">
+                {{ $t('login.alipay.relaunch') }}
+              </button>
+            </template>
+            <template v-else>
+              <p class="totp-hint">{{ $t('login.qr.hint') }}</p>
+              <div class="qr-container">
+                <img v-if="qrDataUrl" :src="qrDataUrl" alt="QR" class="qr-code">
+                <div v-else class="qr-code qr-placeholder"></div>
+              </div>
+              <p v-if="authStore.qrPanel.status === 'error'" class="error">
+                {{ authStore.qrPanel.error }}
+              </p>
+            </template>
             <button class="back-button" @click="authStore.cancelSsoQr()">
               {{ $t('common.back') }}
             </button>
@@ -438,6 +452,16 @@ export default {
       });
     };
 
+    // Re-launch the alipays:// deep-link if the user came back without
+    // completing auth (e.g. they hit "back" inside Alipay). Same panel,
+    // same state, same poll — just kick the navigation again.
+    const relaunchAlipayMobile = () => {
+      const panel = authStore.qrPanel;
+      if (!panel || !panel.authorizeUrl) return;
+      const deepLink = `alipays://platformapi/startapp?appId=20000067&url=${encodeURIComponent(panel.authorizeUrl)}`;
+      window.location.href = deepLink;
+    };
+
     const handleProviderClick = (provider) => {
       localError.value = '';
       if (provider === 'microsoft') {
@@ -645,6 +669,7 @@ export default {
       switchToCredentials,
       enabledProviders,
       handleProviderClick,
+      relaunchAlipayMobile,
       qrCanvas,
       qrDataUrl,
       qrPanelTitle,

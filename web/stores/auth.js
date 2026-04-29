@@ -421,48 +421,41 @@ export const useAuthStore = defineStore('auth', {
     /**
      * Mobile-Alipay deep-link launch.
      *
-     * Alipay's H5 authorize page does NOT auto-pull-up the Alipay app from
-     * external browsers (Safari, Chrome, etc.) — it just shows "请在支付宝
-     * 客户端打开链接". The way to actually launch the app is to wrap the
-     * authorize URL in Alipay's `alipays://platformapi/startapp` scheme.
+     * Problem: on a phone, the user has only ONE app to scan a QR — they
+     * can't scan a QR shown on the same screen. And Alipay's H5 authorize
+     * page does NOT auto-pull-up the Alipay app from external browsers
+     * (it shows "请在支付宝客户端打开链接").
      *
-     * Flow:
-     *   1) Ask /start?format=json to mint state + return the authorize URL
-     *      (without issuing a 302, since we want to navigate to the scheme).
-     *   2) Wrap the URL: alipays://platformapi/startapp?appId=20000067&url=<enc>
-     *      (appId 20000067 is Alipay's "open external page" sub-app.)
-     *   3) Navigate. The OS pulls up the Alipay app, user consents, Alipay's
-     *      callback redirects back to the original SPA — same as PC redirect.
+     * Solution: combine the QR flow's polling mechanism with Alipay's
+     * `alipays://platformapi/startapp` URL scheme.
      *
-     * If the user does not have Alipay installed, the scheme navigation is
-     * silently dropped by the OS — no good fallback exists, but this is a
-     * very small edge case.
+     *   1) Hit /start-qr to mint a `state` and get the authorize URL.
+     *      The state is registered with mode='qr', so when Alipay's
+     *      callback fires it gets PARKED on the server (under that state)
+     *      instead of redirecting the device that completed auth.
+     *   2) Wrap the URL in alipays://platformapi/startapp?appId=20000067&url=…
+     *      and navigate. The OS launches the Alipay app; the user
+     *      consents inside Alipay; Alipay's webview hits our callback,
+     *      which parks the result.
+     *   3) Meanwhile, the user's ORIGINAL browser (Safari/Chrome) keeps
+     *      polling /api/auth/sso/poll/:state. When the user switches
+     *      back to that browser, the next poll picks up the result and
+     *      logs them in there. No cross-browser cookie sharing needed.
+     *
+     * Returns true if the deep-link was launched. Polling is started
+     * automatically (qrPanel.status drives the UI).
      */
     async loginWithAlipayMobile({ intent = 'login' } = {}) {
-      this.error = null;
-      try {
-        const params = new URLSearchParams({ format: 'json' });
-        if (intent === 'bind') {
-          if (!this.token) {
-            this.error = 'You must be logged in to bind an identity';
-            return false;
-          }
-          params.set('intent', 'bind');
-          params.set('token', this.token);
-        }
-        const res = await fetch(`/api/auth/sso/alipay/start?${params.toString()}`);
-        const data = await res.json();
-        if (!res.ok || !data.success || !data.url) {
-          this.error = data.error || 'Failed to start Alipay login';
-          return false;
-        }
-        const deepLink = `alipays://platformapi/startapp?appId=20000067&url=${encodeURIComponent(data.url)}`;
-        window.location.href = deepLink;
-        return true;
-      } catch (err) {
-        this.error = err.message || 'Network error';
-        return false;
-      }
+      const ok = await this.startSsoQr('alipay', { intent });
+      if (!ok) return false;
+      const authorizeUrl = this.qrPanel?.authorizeUrl;
+      if (!authorizeUrl) return false;
+      const deepLink = `alipays://platformapi/startapp?appId=20000067&url=${encodeURIComponent(authorizeUrl)}`;
+      // Mark the panel so the UI can show a mobile-friendly "waiting for
+      // Alipay" message instead of rendering a QR canvas.
+      this.qrPanel = { ...this.qrPanel, mobileDeepLink: true };
+      window.location.href = deepLink;
+      return true;
     },
 
     /**
