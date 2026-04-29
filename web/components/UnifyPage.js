@@ -2,7 +2,6 @@ import ChatInput from './ChatInput.js';
 import MessageList from './MessageList.js';
 import UnifySettings from './UnifySettings.js';
 import UnifySidebarV2 from './UnifySidebarV2.js';
-import UnifyFeatureDetailView from './UnifyFeatureDetailView.js';
 import VpDetailView from './VpDetailView.js';
 import GroupInviteModal from './GroupInviteModal.js';
 import GroupMemberEditor from './GroupMemberEditor.js';
@@ -12,7 +11,7 @@ import WorkbenchPanel from './WorkbenchPanel.js';
 
 export default {
   name: 'UnifyPage',
-  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2, UnifyFeatureDetailView, VpDetailView, GroupInviteModal, GroupMemberEditor, FeatureMessageRejectToast, UserMemoryPage, WorkbenchPanel },
+  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2, VpDetailView, GroupInviteModal, GroupMemberEditor, FeatureMessageRejectToast, UserMemoryPage, WorkbenchPanel },
   template: `
     <div class="unify-page">
       <!-- Mobile sidebar overlay -->
@@ -21,10 +20,8 @@ export default {
       <!-- Left Sidebar — V2 (task-341: V2 is the only sidebar now). -->
       <UnifySidebarV2
         :collapsed="sidebarCollapsed"
-        @select-thread="onSelectThreadV2"
         @select-task="onSelectTaskV2"
         @select-group="onSelectGroupV2"
-        @jump-to-message="onJumpToMessage"
         @search-escape="onSearchEscape"
         @open-user-memory="onOpenUserMemory"
         @toggle-sidebar="toggleSidebar"
@@ -93,16 +90,11 @@ export default {
           </div>
         </div>
 
-        <!-- H2.f.4: UnifyBreadcrumb removed (thread filter is no-op now). -->
-
-        <!-- task-315: Task Detail View replaces the message list when a
-             sidebar task is selected. Owns its own breadcrumb + reply
-             thread selector. -->
-        <UnifyFeatureDetailView
-          v-if="!showSettings && store.unifyActiveFeatureDetailId && !store.unifyActiveVpDetailId"
-          @back="exitTaskDetailView"
-          @switch-to-thread="onSwitchToThreadFromTaskDetail"
-        />
+        <!-- H2.f.6: UnifyFeatureDetailView removed — cross-thread aggregation
+             retired with the multi-thread engine; the task-detail view had
+             no message data source after H2.f.1, so it's been deleted.
+             Clicking a sidebar task still highlights it but the main pane
+             stays on the conversation stream. -->
 
         <!-- task-334-ui-c: VP Detail View replaces the message list when
              a VP badge / library row has been clicked. Takes precedence
@@ -122,7 +114,7 @@ export default {
              next step instead of a blank canvas. The modal still pops on
              top for groups the user hasn't dismissed yet. -->
         <div
-          v-if="!showSettings && !userMemoryOpen && !store.unifyActiveFeatureDetailId && !store.unifyActiveVpDetailId && isActiveGroupEmpty"
+          v-if="!showSettings && !userMemoryOpen && !store.unifyActiveVpDetailId && isActiveGroupEmpty"
           class="unify-empty-group-hero"
         >
           <div class="unify-empty-group-hero__icon" aria-hidden="true">
@@ -136,7 +128,7 @@ export default {
             {{ $t('unify.group.empty.cta') }}
           </button>
         </div>
-        <MessageList v-if="!showSettings && !userMemoryOpen && !store.unifyActiveFeatureDetailId && !store.unifyActiveVpDetailId && !isActiveGroupEmpty" />
+        <MessageList v-if="!showSettings && !userMemoryOpen && !store.unifyActiveVpDetailId && !isActiveGroupEmpty" />
 
         <!-- Settings Panel -->
         <UnifySettings v-if="showSettings" :initial-tab="settingsInitialTab" @close="showSettings = false" @saved="onSettingsSaved" />
@@ -335,26 +327,17 @@ export default {
     // for callers that still read it.
     const sidebarV2Enabled = Vue.computed(() => true);
 
-    const onSelectThreadV2 = (threadId) => {
-      // task-301 Part 2: delegate to store. setActiveThread also drives
-      // the task-303 chat-stream dual view filter, so clicking a thread
-      // narrows the conversation to that thread's messages.
-      store.setActiveThread(threadId);
-      if (isMobile.value) sidebarCollapsed.value = true;
-    };
-
     const onSelectTaskV2 = (featureId) => {
-      // task-315: clicking a task row enters the Task Detail View —
-      // replaces the main pane with a cross-thread aggregated message
-      // list. Also keeps the sidebar row highlighted (store handles
-      // both flags in enterTaskDetailView).
+      // task-315: clicking a task row highlights it. H2.f.6: cross-thread
+      // detail view retired (no thread data), so the main pane keeps
+      // showing the conversation stream.
       store.enterTaskDetailView(featureId);
       if (isMobile.value) sidebarCollapsed.value = true;
     };
 
     // task-fix (group-switch): clicking a group row in the sidebar narrows
     // the main pane to that group's messages. The store handles filter
-    // mutex (thread/task filters are cleared).
+    // mutex (task filter is cleared).
     const onSelectGroupV2 = (g) => {
       const id = g && g.id ? g.id : null;
       if (!id) return;
@@ -365,41 +348,14 @@ export default {
       if (isMobile.value) sidebarCollapsed.value = true;
     };
 
-    // task-315: exit the task-detail view back to the main stream.
-    const exitTaskDetailView = () => {
-      store.leaveTaskDetailView();
-    };
-
     // task-334-ui-c: exit the VP-detail view back to prior layer.
     const exitVpDetailView = () => {
       store.leaveVpDetailView();
     };
 
-    // task-315: clicking a source-thread pill inside the detail view
-    // switches to that thread's dual-view (task-303) and leaves the
-    // task-detail view behind.
-    const onSwitchToThreadFromTaskDetail = (threadId) => {
-      if (!threadId) return;
-      store.leaveTaskDetailView();
-      store.setActiveThread(threadId);
-      if (isMobile.value) sidebarCollapsed.value = true;
-    };
-
-    // task-312/316: sidebar search results — jump to first matching
-    // message inside a thread, or to a specific messageId for message
-    // hits from the advanced search (task-316).
-    const onJumpToMessage = (payload) => {
-      if (payload && typeof payload === 'object') {
-        store.setUnifyJumpTarget(payload);
-      }
-      if (isMobile.value) sidebarCollapsed.value = true;
-    };
-
     // task-312: Esc in sidebar search box — refocus chat input. The
     // sidebar has already cleared its own query string by the time this
-    // fires. We rely on document-level keydown listener below to
-    // additionally clear any thread filter, so nothing else is needed
-    // here beyond moving focus.
+    // fires.
     const onSearchEscape = () => {
       // Small timeout so the input[type=text] blur completes first.
       Vue.nextTick(() => {
@@ -459,10 +415,9 @@ export default {
     const isMobile = Vue.ref(window.innerWidth <= 768);
     const onResize = () => { isMobile.value = window.innerWidth <= 768; };
 
-    // Esc cascade (task-334-ui-c extends task-315 extends task-303):
+    // Esc cascade (H2.f.6: thread-filter layer removed):
     //   1) vp-detail view active → exit it first
-    //   2) task-detail view active → exit it (back to main stream)
-    //   3) thread filter active    → clear it (standard dual-view behaviour)
+    //   2) task-detail view active → exit it
     // Only one layer is popped per keystroke so the user always sees
     // a single, predictable transition.
     const onKeyDown = (e) => {
@@ -473,10 +428,6 @@ export default {
       }
       if (store.unifyActiveFeatureDetailId) {
         store.leaveTaskDetailView();
-        return;
-      }
-      if (store.unifyActiveThreadFilter) {
-        store.clearUnifyThreadFilter();
       }
     };
 
@@ -831,20 +782,6 @@ export default {
       showSettings.value = false;
     };
 
-    const clearThreadFilter = () => {
-      store.clearUnifyThreadFilter();
-    };
-
-    // Derive a human-readable label for the active thread, if any message carries a threadName.
-    const activeThreadName = Vue.computed(() => {
-      const tid = store.unifyActiveThreadFilter;
-      if (!tid) return '';
-      const convId = store.unifyConversationId;
-      const msgs = convId ? (store.messagesMap[convId] || []) : [];
-      const named = msgs.find(m => m && m.threadId === tid && m.threadName);
-      return named?.threadName || tid;
-    });
-
     return {
       store,
       sidebarCollapsed,
@@ -884,16 +821,10 @@ export default {
       formatToolOutput,
       getFunctionCallPairs,
       sidebarV2Enabled,
-      onSelectThreadV2,
       onSelectTaskV2,
       onSelectGroupV2,
-      exitTaskDetailView,
       exitVpDetailView,
-      onSwitchToThreadFromTaskDetail,
-      onJumpToMessage,
       onSearchEscape,
-      clearThreadFilter,
-      activeThreadName,
       // task-340: workbench capability gate
       canUseWorkbench,
       // task-334m: invite modal bindings.

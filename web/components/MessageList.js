@@ -517,10 +517,7 @@ export default {
           imageMsgs: [],
           askMsg: null,
           messages: [],
-          // task-302: capture threadId on turn so ThreadPill can render
-          // when a non-main thread's reply appears in the all-stream view.
-          // Null on legacy Chat messages (no threadId field) → ThreadPill skips.
-          threadId: null,
+          // H2.f.6: threadId capture removed (single-conversation model).
           // task-314: persisted message id (`m{NNNN}`) for the last
           // assistant chunk in this turn — used as the fork cursor when
           // the user clicks "Fork from here".
@@ -583,12 +580,7 @@ export default {
           if (msg.isStreaming) {
             currentTurn.isStreaming = true;
           }
-          // task-302: first assistant message's threadId wins for the turn.
-          // Subsequent messages in the same turn should already carry the
-          // same threadId, but we only latch the first to avoid flicker.
-          if (!currentTurn.threadId && msg.threadId) {
-            currentTurn.threadId = msg.threadId;
-          }
+          // H2.f.6: threadId latch removed (single-conversation model).
           // task-314: remember the persisted message id for this turn so a
           // "Fork from here" click can tell the agent which message to cut
           // at. We latch the LAST assistant message id — forking from the
@@ -1145,51 +1137,11 @@ export default {
       }
     );
 
-    // ★ task-312: Unify sidebar jump-to-message. When the store's
-    // `unifyJumpTarget` is set, find the first message in the active
-    // Unify conversation whose text contains the keyword (inside the
-    // requested thread if threadId is provided) and scroll it into view
-    // with a brief flash. Then clear the target.
+    // H2.f.6: unifyJumpTarget watcher removed (sidebar no longer emits
+    // jump-to-message events; multi-thread navigation is gone). The
+    // flashMsgId ref is kept (currently unused) so any v-bind referencing
+    // it stays valid.
     const flashMsgId = Vue.ref(null);
-    let flashTimer = null;
-    Vue.watch(
-      () => store.unifyJumpTarget,
-      (target) => {
-        // task-316: target may carry an explicit messageId (message-hit
-        // click) OR a keyword to scan for (legacy thread-hit). Prefer
-        // messageId when present — it's unambiguous.
-        if (!target) return;
-        if (!target.messageId && !target.keyword) return;
-        const convId = store.unifyConversationId;
-        if (!convId) return;
-        const msgs = store.messagesMap[convId] || [];
-        let hit = null;
-        if (target.messageId) {
-          hit = msgs.find(m => m && m.id === target.messageId) || null;
-        } else {
-          const kw = target.keyword;
-          hit = msgs.find((m) => {
-            if (!m) return false;
-            if (target.threadId && m.threadId !== target.threadId) return false;
-            const text = typeof m.content === 'string'
-              ? m.content
-              : (m.content ? JSON.stringify(m.content) : '');
-            return text.toLowerCase().includes(kw);
-          }) || null;
-        }
-        if (!hit || !hit.id) { store.clearUnifyJumpTarget(); return; }
-        Vue.nextTick(() => {
-          const el = document.querySelector(`[data-msg-id="${CSS.escape(hit.id)}"]`);
-          if (el && typeof el.scrollIntoView === 'function') {
-            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          }
-          flashMsgId.value = hit.id;
-          if (flashTimer) clearTimeout(flashTimer);
-          flashTimer = setTimeout(() => { flashMsgId.value = null; }, 1600);
-          store.clearUnifyJumpTarget();
-        });
-      }
-    );
 
     Vue.onMounted(() => {
       scrollToBottom();

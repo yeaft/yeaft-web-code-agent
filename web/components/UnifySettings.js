@@ -59,56 +59,8 @@ export default {
             <div v-show="activeTab === 'llm'" class="settings-pane">
               <LlmTab context="unify" @message="onLlmMessage" @saved="onLlmSaved" />
 
-              <!-- task-318: Unify runtime settings (thread cap + archive) -->
-              <div class="sp-group unify-settings-runtime">
-                <div class="sp-group-title">{{ $t('unify.settings.unifyTitle') }}</div>
-                <p class="sp-desc">{{ $t('unify.settings.unifyDesc') }}</p>
-
-                <div v-if="unifyLoading" class="sp-desc">
-                  {{ $t('unify.settings.unifyLoading') }}
-                </div>
-                <div v-else-if="unifyLoadError" class="sp-desc sp-error-text">
-                  {{ $t('unify.settings.unifyLoadError') }}: {{ unifyLoadError }}
-                </div>
-                <div v-else class="unify-settings-runtime-row">
-                  <div class="unify-settings-runtime-field">
-                    <label class="llm-field-label">{{ $t('unify.settings.maxConcurrentLabel') }}</label>
-                    <p class="sp-desc llm-model-hint">{{ $t('unify.settings.maxConcurrentHint') }}</p>
-                    <input
-                      type="number"
-                      min="1"
-                      max="50"
-                      class="sp-input"
-                      v-model.number="localMaxConcurrent"
-                      @input="onUnifyInput" />
-                    <small v-if="maxConcurrentError" class="sp-error-text">{{ maxConcurrentError }}</small>
-                  </div>
-                  <div class="unify-settings-runtime-field">
-                    <label class="llm-field-label">{{ $t('unify.settings.archiveIdleDaysLabel') }}</label>
-                    <p class="sp-desc llm-model-hint">{{ $t('unify.settings.archiveIdleDaysHint') }}</p>
-                    <input
-                      type="number"
-                      min="1"
-                      max="3650"
-                      class="sp-input"
-                      v-model.number="localArchiveIdleDays"
-                      @input="onUnifyInput" />
-                    <small v-if="archiveIdleDaysError" class="sp-error-text">{{ archiveIdleDaysError }}</small>
-                  </div>
-                </div>
-
-                <div class="llm-save-row">
-                  <span v-if="unifySaveMessage" :class="unifySaveError ? 'sp-error-text' : 'llm-dirty-hint'">{{ unifySaveMessage }}</span>
-                  <span v-else-if="unifyDirty" class="llm-dirty-hint">{{ $t('settings.llm.unsavedChanges') }}</span>
-                  <button
-                    class="sp-btn"
-                    :class="{ 'sp-btn-primary': unifyDirty }"
-                    @click="saveUnifySettings"
-                    :disabled="unifySaving || !unifyDirty || !!maxConcurrentError || !!archiveIdleDaysError">
-                    {{ unifySaving ? $t('unify.settings.unifySaving') : $t('unify.settings.unifySaveBtn') }}
-                  </button>
-                </div>
-              </div>
+              <!-- H2.f.6: thread-concurrency + auto-archive runtime settings
+                   removed alongside the multi-thread engine. -->
             </div>
 
             <!-- VP Library pane -->
@@ -167,133 +119,11 @@ export default {
       emit('saved');
     }
 
-    // ─── task-318: Unify runtime settings state ───────────────
-    const localMaxConcurrent = Vue.ref(6);
-    const localArchiveIdleDays = Vue.ref(30);
-    const unifyDirty = Vue.ref(false);
-    const unifyLoading = Vue.ref(false);
-    const unifyLoadError = Vue.ref(null);
-    const unifySaving = Vue.ref(false);
-    const unifySaveMessage = Vue.ref('');
-    const unifySaveError = Vue.ref(false);
-    let unifyLoadTimeout = null;
-    let unifySaveTimeout = null;
-
-    const maxConcurrentError = Vue.computed(() => {
-      const n = Number(localMaxConcurrent.value);
-      if (!Number.isFinite(n) || n < 1 || n > 50) {
-        return $t('unify.settings.rangeErrorConcurrent');
-      }
-      return '';
-    });
-    const archiveIdleDaysError = Vue.computed(() => {
-      const n = Number(localArchiveIdleDays.value);
-      if (!Number.isFinite(n) || n < 1 || n > 3650) {
-        return $t('unify.settings.rangeErrorArchive');
-      }
-      return '';
-    });
-
-    function onUnifyInput() {
-      unifyDirty.value = true;
-      unifySaveMessage.value = '';
-    }
-
-    function requestUnifySettings() {
-      const agentId = store.unifyAgentId;
-      if (!agentId) return;
-      unifyLoading.value = true;
-      unifyLoadError.value = null;
-      store.sendWsMessage({ type: 'get_unify_settings', agentId });
-      unifyLoadTimeout = setTimeout(() => {
-        if (unifyLoading.value) {
-          unifyLoading.value = false;
-          unifyLoadError.value = 'Timeout';
-        }
-      }, 5000);
-    }
-
-    function loadFromUnifySettings(settings) {
-      if (unifyLoadTimeout) { clearTimeout(unifyLoadTimeout); unifyLoadTimeout = null; }
-      unifyLoading.value = false;
-      if (settings.error) {
-        unifyLoadError.value = settings.error;
-        return;
-      }
-      unifyLoadError.value = null;
-      localMaxConcurrent.value = settings.maxConcurrentThreads ?? 6;
-      localArchiveIdleDays.value = settings.autoArchiveIdleDays ?? 30;
-      unifyDirty.value = false;
-    }
-
-    Vue.watch(
-      () => {
-        const agentId = store.unifyAgentId;
-        return agentId ? store.unifySettings[agentId] : null;
-      },
-      (settings) => {
-        if (settings && settings.loaded) loadFromUnifySettings(settings);
-      },
-      { deep: true }
-    );
-
-    function saveUnifySettings() {
-      const agentId = store.unifyAgentId;
-      if (!agentId || unifySaving.value) return;
-      if (maxConcurrentError.value || archiveIdleDaysError.value) return;
-
-      unifySaving.value = true;
-      unifySaveMessage.value = '';
-      unifySaveError.value = false;
-
-      store.sendWsMessage({
-        type: 'update_unify_settings',
-        agentId,
-        settings: {
-          maxConcurrentThreads: Math.floor(Number(localMaxConcurrent.value)),
-          autoArchiveIdleDays: Math.floor(Number(localArchiveIdleDays.value)),
-        },
-      });
-
-      unifySaveTimeout = setTimeout(() => {
-        unifySaving.value = false;
-        unifySaveMessage.value = $t('unify.settings.unifySaveError');
-        unifySaveError.value = true;
-      }, 10000);
-
-      const unwatch = Vue.watch(
-        () => store.unifySettings[agentId],
-        (settings) => {
-          if (settings && settings.loaded) {
-            if (unifySaveTimeout) { clearTimeout(unifySaveTimeout); unifySaveTimeout = null; }
-            unifySaving.value = false;
-            if (settings.error) {
-              unifySaveMessage.value = settings.error;
-              unifySaveError.value = true;
-            } else {
-              unifyDirty.value = false;
-              unifySaveMessage.value = $t('unify.settings.unifySaved');
-              unifySaveError.value = false;
-            }
-            unwatch();
-          }
-        },
-        { deep: true }
-      );
-    }
-
-    Vue.onMounted(() => {
-      const agentId = store.unifyAgentId;
-      if (agentId) {
-        const existingUnify = store.unifySettings[agentId];
-        if (existingUnify && existingUnify.loaded) loadFromUnifySettings(existingUnify);
-        else requestUnifySettings();
-      }
-    });
+    // H2.f.6: Unify runtime settings (maxConcurrentThreads + autoArchiveIdleDays)
+    // removed alongside the multi-thread engine. The block previously lived
+    // here; LlmTab still owns the LLM provider config.
 
     Vue.onUnmounted(() => {
-      if (unifyLoadTimeout) clearTimeout(unifyLoadTimeout);
-      if (unifySaveTimeout) clearTimeout(unifySaveTimeout);
       if (toastTimer) clearTimeout(toastTimer);
     });
 
@@ -301,12 +131,6 @@ export default {
       store,
       activeTab, tabs, currentTabLabel,
       toastMessage, toastIsError, onLlmMessage, onLlmSaved,
-      // task-318: Unify runtime settings
-      localMaxConcurrent, localArchiveIdleDays,
-      unifyLoading, unifyLoadError, unifyDirty,
-      unifySaving, unifySaveMessage, unifySaveError,
-      maxConcurrentError, archiveIdleDaysError,
-      onUnifyInput, saveUnifySettings,
     };
   },
 };

@@ -1,21 +1,15 @@
 /**
- * UnifySidebarV2 — task-300 skeleton + task-301 Part 1/2 integration.
+ * UnifySidebarV2 — H2.f.6 trimmed.
  *
  * Standalone sidebar component with:
- *   - top search box (keyword + `#thread-name` prefix), i18n placeholder
- *   - Active / Idle / Archived thread groups (main pinned first in Active,
- *     displayed as the localized "Inbox" label)
+ *   - top search box (task / message keywords; #thread- prefix retired)
+ *   - Groups list (with kebab menu: manage members / rename / delete)
  *   - Tasks tree (expand/collapse, max 3 levels)
- *   - emits `select-thread` / `select-task` on row click
+ *   - User Memory entry
+ *   - emits `select-task` / `select-group` / `open-user-memory` on click
  *
- * Part 2 (task-301): Phase-1 mock data is gone. The component now reads
- * `store.unifyThreads` / `store.unifyFeatures` directly — those arrays are
- * populated by `thread_list_updated` / `task_list_updated` events sent
- * from agent/unify/web-bridge.js (which wraps task-299 ThreadStore /
- * TaskStore snapshots).
- *
- * All group labels, empty-state strings and the search placeholder go
- * through the `$t()` i18n helper; nothing is hardcoded in English.
+ * H2.f.6: thread/merge/fork UI removed alongside the multi-thread engine.
+ * The remaining sidebar is a flat single-conversation surface.
  */
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -26,7 +20,6 @@ const DAY_MS = 24 * HOUR_MS;
 import {
   parseSearchQuery,
   hasActiveQuery,
-  threadMatches as _threadMatches,
   taskMatches as _taskMatches,
   messageMatches as _messageMatches,
 } from '../utils/search-parser.js';
@@ -35,7 +28,7 @@ import GroupCreateWizard from './GroupCreateWizard.js';
 export default {
   name: 'UnifySidebarV2',
   components: { GroupCreateWizard },
-  emits: ['select-thread', 'select-task', 'jump-to-message', 'search-escape', 'merge-thread', 'select-group', 'open-user-memory', 'toggle-sidebar', 'back', 'open-settings', 'manage-members'],
+  emits: ['select-task', 'select-group', 'search-escape', 'open-user-memory', 'toggle-sidebar', 'back', 'open-settings', 'manage-members'],
   template: `
     <aside class="unify-sidebar-v2" :class="{ collapsed: collapsed }">
       <!-- task-341: sidebar header row — agent identifier + collapse/back/workbench. -->
@@ -82,26 +75,6 @@ export default {
            so the user sees labelled sections (Threads / Tasks / Messages)
            with click-to-jump semantics. -->
       <div class="usv2-scroll" v-if="searchActive">
-        <!-- Threads group -->
-        <section class="usv2-group usv2-group-results" v-if="searchGroups.threads.length > 0">
-          <div class="usv2-group-header usv2-results-header">
-            <span class="usv2-group-label">{{ label('resultsThreads') }}</span>
-            <span class="usv2-group-count">{{ searchGroups.threads.length }}</span>
-          </div>
-          <div class="usv2-group-body">
-            <div
-              v-for="r in searchGroups.threads"
-              :key="'thread:' + r.id"
-              class="usv2-result usv2-result-thread"
-              @click="onSelectResult(r)"
-            >
-              <span class="usv2-result-kind">{{ label('kindThread') }}</span>
-              <span class="usv2-result-name">#{{ threadDisplayName(r.thread) }}</span>
-              <span class="usv2-result-title">{{ r.title }}</span>
-              <span class="usv2-result-snippet" v-if="r.snippet">{{ r.snippet }}</span>
-            </div>
-          </div>
-        </section>
         <!-- Tasks group -->
         <section class="usv2-group usv2-group-results" v-if="searchGroups.tasks.length > 0">
           <div class="usv2-group-header usv2-results-header">
@@ -147,7 +120,6 @@ export default {
           <div class="usv2-empty-title">{{ label('emptyResults') }}</div>
           <div class="usv2-empty-hints">
             <div class="usv2-empty-hint-label">{{ label('examplesLabel') }}</div>
-            <div class="usv2-empty-hint"><code>#thread-name</code></div>
             <div class="usv2-empty-hint"><code>task:42</code></div>
             <div class="usv2-empty-hint"><code>in:title foo</code></div>
             <div class="usv2-empty-hint"><code>status:open bar</code></div>
@@ -229,101 +201,10 @@ export default {
           <span>{{ $t('unify.group.newButtonAria') }}</span>
         </button>
 
-        <!-- Active Threads -->
-        <section class="usv2-group" :class="{ collapsed: !activeOpen }">
-          <button type="button" class="usv2-group-header" @click="activeOpen = !activeOpen">
-            <svg class="usv2-chevron" :class="{ open: activeOpen }" viewBox="0 0 24 24" width="10" height="10"><path fill="currentColor" d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
-            <span class="usv2-group-label">{{ label('activeThreads') }}</span>
-            <span class="usv2-group-count">{{ grouped.active.length }}</span>
-          </button>
-          <div class="usv2-group-body" v-show="activeOpen">
-            <div
-              v-for="t in grouped.active"
-              :key="t.id"
-              class="usv2-thread"
-              :class="{ selected: t.id === activeThreadId }"
-              :title="threadTooltip(t)"
-              @click="onSelectThread(t)"
-              @contextmenu.prevent="onRequestMerge(t)"
-            >
-              <span class="usv2-dot usv2-dot-active" :class="{ running: t.running }"></span>
-              <span class="usv2-thread-name">#{{ threadDisplayName(t) }}</span>
-              <span v-if="t.forkedFrom" class="usv2-fork-icon" :title="forkSourceLabel(t)">
-                <svg viewBox="0 0 24 24" width="11" height="11"><path fill="currentColor" d="M6 4a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm12 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4zM6 16a2 2 0 1 1 0 4 2 2 0 0 1 0-4zM7 9v4a4 4 0 0 0 4 4h2v-2h-2a2 2 0 0 1-2-2V9H7zm10 0h-2v4h2V9z"/></svg>
-              </span>
-              <span class="usv2-thread-title">{{ t.title || t.goal || '' }}</span>
-              <span class="usv2-unread" v-if="t.unread > 0">{{ t.unread }}</span>
-              <button
-                v-if="t.id !== 'main'"
-                type="button"
-                class="usv2-thread-kebab"
-                :title="label('mergeInto')"
-                @click.stop="onRequestMerge(t)"
-              >⋯</button>
-            </div>
-            <div class="usv2-empty" v-if="grouped.active.length === 0">{{ label('emptyActive') }}</div>
-          </div>
-        </section>
-
-        <!-- Idle Threads (collapsed by default) -->
-        <section class="usv2-group" :class="{ collapsed: !idleOpen }">
-          <button type="button" class="usv2-group-header" @click="idleOpen = !idleOpen">
-            <svg class="usv2-chevron" :class="{ open: idleOpen }" viewBox="0 0 24 24" width="10" height="10"><path fill="currentColor" d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
-            <span class="usv2-group-label">{{ label('idleThreads') }}</span>
-            <span class="usv2-group-count">{{ grouped.idle.length }}</span>
-          </button>
-          <div class="usv2-group-body" v-show="idleOpen">
-            <div
-              v-for="t in grouped.idle"
-              :key="t.id"
-              class="usv2-thread"
-              :class="{ selected: t.id === activeThreadId }"
-              @click="onSelectThread(t)"
-              @contextmenu.prevent="onRequestMerge(t)"
-            >
-              <span class="usv2-dot usv2-dot-idle"></span>
-              <span class="usv2-thread-name">#{{ threadDisplayName(t) }}</span>
-              <span v-if="t.forkedFrom" class="usv2-fork-icon" :title="forkSourceLabel(t)">
-                <svg viewBox="0 0 24 24" width="11" height="11"><path fill="currentColor" d="M6 4a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm12 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4zM6 16a2 2 0 1 1 0 4 2 2 0 0 1 0-4zM7 9v4a4 4 0 0 0 4 4h2v-2h-2a2 2 0 0 1-2-2V9H7zm10 0h-2v4h2V9z"/></svg>
-              </span>
-              <span class="usv2-thread-title">{{ t.title || t.goal || '' }}</span>
-              <button
-                v-if="t.id !== 'main'"
-                type="button"
-                class="usv2-thread-kebab"
-                :title="label('mergeInto')"
-                @click.stop="onRequestMerge(t)"
-              >⋯</button>
-            </div>
-            <div class="usv2-empty" v-if="grouped.idle.length === 0">{{ label('emptyIdle') }}</div>
-          </div>
-        </section>
-
-        <!-- Archived Threads (deeply collapsed) -->
-        <section class="usv2-group usv2-group-archived" :class="{ collapsed: !archivedOpen }">
-          <button type="button" class="usv2-group-header" @click="archivedOpen = !archivedOpen">
-            <svg class="usv2-chevron" :class="{ open: archivedOpen }" viewBox="0 0 24 24" width="10" height="10"><path fill="currentColor" d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
-            <span class="usv2-group-label">{{ label('archivedThreads') }}</span>
-            <span class="usv2-group-count">{{ grouped.archived.length }}</span>
-          </button>
-          <div class="usv2-group-body" v-show="archivedOpen">
-            <div
-              v-for="t in grouped.archived"
-              :key="t.id"
-              class="usv2-thread usv2-thread-archived"
-              :class="{ selected: t.id === activeThreadId }"
-              @click="onSelectThread(t)"
-            >
-              <span class="usv2-dot usv2-dot-archived"></span>
-              <span class="usv2-thread-name">#{{ threadDisplayName(t) }}</span>
-              <span class="usv2-thread-title">{{ t.title || t.goal || '' }}</span>
-            </div>
-            <div class="usv2-empty" v-if="grouped.archived.length === 0">{{ label('emptyArchived') }}</div>
-          </div>
-        </section>
+        <!-- H2.f.6: Active / Idle / Archived thread sections removed. -->
 
         <!-- Tasks Tree -->
-        <section class="usv2-group usv2-group-tasks" v-if="!threadOnlyQuery" :class="{ collapsed: !tasksOpen }">
+        <section class="usv2-group usv2-group-tasks" :class="{ collapsed: !tasksOpen }">
           <button type="button" class="usv2-group-header" @click="tasksOpen = !tasksOpen">
             <svg class="usv2-chevron" :class="{ open: tasksOpen }" viewBox="0 0 24 24" width="10" height="10"><path fill="currentColor" d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
             <span class="usv2-group-label">{{ label('tasks') }}</span>
@@ -346,7 +227,6 @@ export default {
                 <span class="usv2-task-toggle-spacer" v-else></span>
                 <span class="usv2-task-id">{{ task.id }}</span>
                 <span class="usv2-task-title">{{ task.title }}</span>
-                <span class="usv2-task-link" v-if="task.threadLink">→ #{{ threadLinkLabel(task.threadLink) }}</span>
               </div>
               <div v-if="isTaskExpanded(task.id) && task.children && task.children.length > 0">
                 <div
@@ -376,51 +256,8 @@ export default {
         </section>
       </div>
 
-      <!-- task-313: Merge target picker. Opens when the user triggers a merge
-           from a thread row (kebab click or right-click). Lists every other
-           non-archived thread as a candidate target. Selecting one advances
-           to the irreversible-confirm dialog. Clicking the backdrop cancels. -->
-      <div v-if="mergePicker.open" class="usv2-merge-overlay" @click.self="cancelMerge">
-        <div class="usv2-merge-panel">
-          <div class="usv2-merge-title">{{ label('mergeInto') }}</div>
-          <div class="usv2-merge-source">#{{ sourceDisplayName }}</div>
-          <div class="usv2-merge-body">
-            <div class="usv2-merge-empty" v-if="mergeCandidates.length === 0">{{ label('mergeNoCandidates') }}</div>
-            <button
-              v-for="c in mergeCandidates"
-              :key="c.id"
-              type="button"
-              class="usv2-merge-candidate"
-              @click="pickMergeTarget(c)"
-            >
-              <span class="usv2-merge-candidate-name">#{{ threadDisplayName(c) }}</span>
-              <span class="usv2-merge-candidate-title">{{ c.title || c.goal || '' }}</span>
-            </button>
-          </div>
-          <div class="usv2-merge-actions">
-            <button type="button" class="usv2-merge-cancel" @click="cancelMerge">{{ label('cancel') }}</button>
-          </div>
-        </div>
-      </div>
+      <!-- H2.f.6: merge target picker + irreversible confirm dialog removed. -->
 
-      <!-- task-313: Irreversible confirm dialog. The merge is permanent — the
-           source thread is archived and its messages are re-stamped onto the
-           target. We explicitly spell that out before the user commits. -->
-      <div v-if="mergeConfirm.open" class="usv2-merge-overlay usv2-merge-overlay-confirm" @click.self="cancelMerge">
-        <div class="usv2-merge-panel usv2-merge-panel-confirm">
-          <div class="usv2-merge-title">{{ label('mergeConfirmTitle') }}</div>
-          <div class="usv2-merge-warning">{{ label('mergeIrreversible') }}</div>
-          <div class="usv2-merge-summary">
-            <span>#{{ confirmSourceName }}</span>
-            <span class="usv2-merge-arrow">→</span>
-            <span>#{{ confirmTargetName }}</span>
-          </div>
-          <div class="usv2-merge-actions">
-            <button type="button" class="usv2-merge-cancel" @click="cancelMerge">{{ label('cancel') }}</button>
-            <button type="button" class="usv2-merge-confirm" @click="confirmMerge">{{ label('mergeConfirm') }}</button>
-          </div>
-        </div>
-      </div>
       <!-- task-334m: Create-group wizard (inline, modal overlay). -->
       <GroupCreateWizard
         v-if="groupWizardOpen"
@@ -489,7 +326,6 @@ export default {
     collapsed: { type: Boolean, default: false },
     // Optional injection hooks — primarily for unit tests that don't
     // mount Pinia. When null the component reads from store.
-    threadsSource: { type: Array, default: null },
     tasksSource: { type: Array, default: null },
     // task-316: let tests inject messages the same way.
     messagesSource: { type: Array, default: null },
@@ -497,19 +333,9 @@ export default {
   data() {
     return {
       searchQuery: '',
-      activeOpen: true,
-      idleOpen: false,
-      archivedOpen: false,
       tasksOpen: true,
       expandedTasks: {},
       now: Date.now(),
-      // task-313: merge-into flow state.
-      //   mergePicker.open  — true while the target picker overlay is showing
-      //   mergePicker.sourceId — thread we're merging AWAY from
-      //   mergeConfirm.open — true while the irreversible-confirm dialog shows
-      //   mergeConfirm.targetId — thread we're merging INTO
-      mergePicker: { open: false, sourceId: null },
-      mergeConfirm: { open: false, sourceId: null, targetId: null },
       // task-334m: group-create wizard visibility.
       groupWizardOpen: false,
       groupsOpen: true,
@@ -622,19 +448,10 @@ export default {
         return !!(s.hasCapability('terminal') || s.hasCapability('file_editor'));
       } catch (_) { return false; }
     },
-    // task-301 Part 2: real-store threads (or injected for tests).
-    // Each thread is the serialised shape from
-    // agent/unify/web-bridge.js#sendThreadListUpdate.
-    threads() {
-      if (Array.isArray(this.threadsSource)) return this.threadsSource;
-      return this.store?.unifyThreads || [];
-    },
+    // H2.f.6: threads removed. Tasks remain.
     tasks() {
       if (Array.isArray(this.tasksSource)) return this.tasksSource;
       return this.store?.unifyFeatures || [];
-    },
-    activeThreadId() {
-      return this.store?.unifyActiveThreadId || null;
     },
     activeTaskId() {
       return this.store?.unifyActiveFeatureId || null;
@@ -645,52 +462,17 @@ export default {
       if (typeof this.$t === 'function') {
         return this.$t('unify.sidebar.searchPlaceholder');
       }
-      return 'Search… (#name for threads)';
+      return 'Search…';
     },
     // task-316: parser now lives in web/utils/search-parser.js.
-    // Returned shape expanded with featureId + status filters; sidebar only
-    // reads the fields it needs. Existing tests that depend on the
-    // `{ keyword, threadPrefix, scopedField }` subset still pass because
-    // those fields are still present.
     parsedQuery() {
       return parseSearchQuery(this.searchQuery || '');
     },
     searchActive() {
       return hasActiveQuery(this.parsedQuery);
     },
-    threadOnlyQuery() {
-      return this.parsedQuery.threadPrefix !== null;
-    },
-    filteredThreads() {
-      const q = this.parsedQuery;
-      if (!hasActiveQuery(q)) return this.threads;
-      return this.threads.filter(t => _threadMatches(t, q));
-    },
-    grouped() {
-      const out = { active: [], idle: [], archived: [] };
-      for (const t of this.filteredThreads) {
-        if (t.archived || t.status === 'archived') {
-          out.archived.push(t);
-        } else if (t.running || (this.now - (t.lastActivityAt || t.lastMessageAt || 0)) <= DAY_MS) {
-          out.active.push(t);
-        } else {
-          out.idle.push(t);
-        }
-      }
-      const byActivity = (a, b) =>
-        (b.lastActivityAt || b.lastMessageAt || 0) - (a.lastActivityAt || a.lastMessageAt || 0);
-      out.idle.sort(byActivity);
-      out.archived.sort(byActivity);
-      out.active.sort((a, b) => {
-        if (a.id === 'main') return -1;
-        if (b.id === 'main') return 1;
-        return byActivity(a, b);
-      });
-      return out;
-    },
     filteredTasks() {
       const q = this.parsedQuery;
-      if (q.threadPrefix !== null) return [];
       if (!hasActiveQuery(q)) return this.tasks;
       // Keep task visible when itself OR any descendant matches so the
       // expand-chevron still renders the parent chain in the tree view.
@@ -700,44 +482,27 @@ export default {
       };
       return this.tasks.filter(matches);
     },
-    // task-312/316: flat ranked result list used by the results panel.
-    // Threads come first, then tasks (nested children flattened), then
-    // — new in task-316 — matching messages when the query includes
-    // `in:body kw` or a plain keyword scoped by `task:N`. Grouping is
-    // reported separately via `searchGroups` so the template can render
-    // labelled sections without duplicating the flatten logic.
+    // H2.f.6: search results = tasks + messages only (no threads).
     searchResults() {
       if (!this.searchActive) return [];
       const q = this.parsedQuery;
-      const { keyword, threadPrefix, scopedField } = q;
+      const { keyword, scopedField } = q;
       const out = [];
-      for (const t of this.filteredThreads) {
-        out.push({
-          kind: 'thread',
-          id: t.id,
-          title: t.title || t.goal || '',
-          snippet: this.pickThreadSnippet(t, keyword, threadPrefix, scopedField),
-          thread: t,
-        });
-      }
-      if (threadPrefix === null) {
-        const flatten = (task) => {
-          if (_taskMatches(task, q)) {
-            out.push({
-              kind: 'task',
-              id: task.id,
-              title: task.title || '',
-              snippet: this.pickTaskSnippet(task, keyword, scopedField),
-              task,
-            });
-          }
-          for (const c of (task.children || [])) flatten(c);
-        };
-        for (const task of this.filteredTasks) flatten(task);
-      }
-      // Message hits — only included when query could meaningfully
-      // match message content (task:N with any keyword, or in:body kw).
-      if (threadPrefix === null && (q.featureId || q.scopedField === 'body')) {
+      const flatten = (task) => {
+        if (_taskMatches(task, q)) {
+          out.push({
+            kind: 'task',
+            id: task.id,
+            title: task.title || '',
+            snippet: this.pickTaskSnippet(task, keyword, scopedField),
+            task,
+          });
+        }
+        for (const c of (task.children || [])) flatten(c);
+      };
+      for (const task of this.filteredTasks) flatten(task);
+      // Message hits — only included when query could meaningfully match.
+      if (q.featureId || q.scopedField === 'body') {
         const msgs = this.messages || [];
         for (const m of msgs) {
           if (_messageMatches(m, q)) {
@@ -745,7 +510,7 @@ export default {
               kind: 'message',
               id: m.id || `msg-${out.length}`,
               title: this.truncate(typeof m.content === 'string' ? m.content : JSON.stringify(m.content || ''), 80),
-              snippet: m.threadName ? `#${m.threadName}` : (m.threadId || ''),
+              snippet: '',
               message: m,
             });
           }
@@ -753,38 +518,11 @@ export default {
       }
       return out;
     },
-    // task-313: merge target candidates. Excludes the source, the main
-    // thread is always eligible as a target (you can fold a side-thread
-    // back into the main inbox), archived threads are filtered out.
-    mergeCandidates() {
-      const src = this.mergePicker.sourceId;
-      if (!src) return [];
-      return this.threads.filter((t) => {
-        if (t.id === src) return false;
-        if (t.archived || t.status === 'archived') return false;
-        return true;
-      });
-    },
-    sourceDisplayName() {
-      const t = this.threads.find((x) => x.id === this.mergePicker.sourceId);
-      return t ? this.threadDisplayName(t) : '';
-    },
-    confirmSourceName() {
-      const t = this.threads.find((x) => x.id === this.mergeConfirm.sourceId);
-      return t ? this.threadDisplayName(t) : '';
-    },
-    confirmTargetName() {
-      const t = this.threads.find((x) => x.id === this.mergeConfirm.targetId);
-      return t ? this.threadDisplayName(t) : '';
-    },
-    // task-316: parallel grouping view for the template — splits the
-    // flat searchResults into {threads, tasks, messages}. Groups with
-    // zero entries are omitted by the template's v-if check.
+    // H2.f.6: parallel grouping view — tasks + messages only.
     searchGroups() {
-      const groups = { threads: [], tasks: [], messages: [] };
+      const groups = { tasks: [], messages: [] };
       for (const r of this.searchResults) {
-        if (r.kind === 'thread') groups.threads.push(r);
-        else if (r.kind === 'task') groups.tasks.push(r);
+        if (r.kind === 'task') groups.tasks.push(r);
         else if (r.kind === 'message') groups.messages.push(r);
       }
       return groups;
@@ -807,28 +545,16 @@ export default {
       const full = `unify.sidebar.${key}`;
       if (typeof this.$t === 'function') return this.$t(full);
       const fallback = {
-        activeThreads: 'Active',
-        idleThreads: 'Idle',
-        archivedThreads: 'Archived',
+        // H2.f.6: thread/merge keys removed alongside the multi-thread UI.
         tasks: 'Tasks',
-        emptyActive: 'No active threads',
-        emptyIdle: 'No idle threads',
-        emptyArchived: 'No archived threads',
         emptyTasks: 'No tasks match',
         results: 'Results',
-        resultsThreads: 'Threads',
         resultsTasks: 'Tasks',
         resultsMessages: 'Messages',
         emptyResults: 'No matches',
-        kindThread: 'thread',
         kindTask: 'task',
         kindMessage: 'msg',
         clearSearch: 'Clear',
-        mergeInto: 'Merge into…',
-        mergeNoCandidates: 'No other threads to merge into',
-        mergeConfirmTitle: 'Merge this thread?',
-        mergeIrreversible: 'This cannot be undone. The source thread will be archived and its messages moved to the target.',
-        mergeConfirm: 'Merge',
         cancel: 'Cancel',
         examplesLabel: 'Try:',
       };
@@ -979,94 +705,29 @@ export default {
         this.renameModal.busy = false;
       }
     },
-    // Display label for a thread row. The "main" thread (internal id
-    // never changes) is shown as the localized "Inbox" label; all other
-    // threads use their `name`.
-    threadDisplayName(t) {
-      if (t && t.id === 'main') {
-        if (typeof this.$t === 'function') return this.$t('unify.inbox');
-        return 'Inbox';
-      }
-      return t ? t.name : '';
-    },
-    // task-fix (5-bugs): explain what the Inbox thread is. Users asked
-    // "收件箱 is what?" — this tooltip makes it explicit that `main` is
-    // the default personal thread (1:1 with Unify), not a message queue.
-    threadTooltip(t) {
-      if (t && t.id === 'main') {
-        if (typeof this.$t === 'function') return this.$t('unify.inbox.tooltip');
-        return 'Your default thread — one-on-one chat with Unify.';
-      }
-      return t ? (t.title || t.goal || t.name || '') : '';
-    },
+    // H2.f.6: thread display / tooltip / link / fork helpers removed.
     isTaskExpanded(id) {
       return !!this.expandedTasks[id];
-    },
-    threadLinkLabel(threadId) {
-      const match = this.threads.find((t) => t.id === threadId);
-      return match ? match.name : threadId;
-    },
-    // task-314: tooltip for sidebar fork icon
-    forkSourceLabel(t) {
-      if (!t || !t.forkedFrom) return '';
-      const srcId = t.forkedFrom.threadId;
-      const src = this.threads.find((x) => x.id === srcId);
-      const name = src ? (src.id === 'main' ? 'Inbox' : src.name) : srcId;
-      return `Forked from #${name}`;
     },
     toggleTask(id) {
       this.expandedTasks = { ...this.expandedTasks, [id]: !this.expandedTasks[id] };
     },
-    onSelectThread(t) {
-      this.$emit('select-thread', t.id);
-    },
     onSelectTask(task) {
       this.$emit('select-task', task.id);
     },
-    // task-312/316: unified click-through from the Results list.
+    // H2.f.6: results list now only contains tasks + messages.
     onSelectResult(r) {
-      if (r.kind === 'thread') {
-        this.$emit('select-thread', r.id);
-        const kw = this.parsedQuery.keyword;
-        if (kw) {
-          this.$emit('jump-to-message', { threadId: r.id, keyword: kw });
-        }
-      } else if (r.kind === 'message') {
-        // Message hit → switch to its thread (if known) and ask the
-        // chat stream to scroll to this specific message id.
-        const tid = r.message && r.message.threadId;
-        if (tid) this.$emit('select-thread', tid);
-        this.$emit('jump-to-message', {
-          threadId: tid || null,
-          messageId: r.message && r.message.id,
-          keyword: this.parsedQuery.keyword || '',
-        });
-      } else {
-        this.$emit('select-task', r.id);
+      if (r.kind === 'message') {
+        // Message hit: nothing to navigate to without threads — no-op for now.
+        return;
       }
+      this.$emit('select-task', r.id);
     },
     // task-312: Esc in the search box clears + asks parent to refocus
     // the chat input. Plain string empty also exits the results view.
     onSearchEscape() {
       this.searchQuery = '';
       this.$emit('search-escape');
-    },
-    // -------- snippet helpers (task-312) --------
-    pickThreadSnippet(t, keyword, threadPrefix, scopedField) {
-      if (threadPrefix) return '';
-      const kw = keyword || '';
-      if (!kw) return '';
-      const candidates = scopedField === 'title'
-        ? [t.title]
-        : scopedField === 'summary'
-          ? [t.goal, t.preview]
-          : [t.title, t.goal, t.preview];
-      for (const txt of candidates) {
-        if (txt && String(txt).toLowerCase().includes(kw)) {
-          return this.truncate(String(txt));
-        }
-      }
-      return '';
     },
     pickTaskSnippet(task, keyword, scopedField) {
       const kw = keyword || '';
@@ -1083,57 +744,10 @@ export default {
       }
       return '';
     },
-    taskMatchesDirect(task, keyword, scopedField) {
-      const kw = (keyword || '').toLowerCase();
-      if (!kw) return true;
-      if (scopedField === 'title') {
-        return (task.title || '').toLowerCase().includes(kw)
-          || (task.id || '').toLowerCase().includes(kw);
-      }
-      if (scopedField === 'summary') {
-        return (task.summary || '').toLowerCase().includes(kw)
-          || (task.description || '').toLowerCase().includes(kw);
-      }
-      return (task.title || '').toLowerCase().includes(kw)
-        || (task.id || '').toLowerCase().includes(kw)
-        || (task.summary || '').toLowerCase().includes(kw)
-        || (task.description || '').toLowerCase().includes(kw);
-    },
     truncate(s, n = 80) {
       if (!s) return '';
       return s.length > n ? s.slice(0, n - 1) + '…' : s;
-    },
-    // -------- merge flow (task-313) --------
-    // Open the target-picker for `thread`. Main/inbox thread is not a valid
-    // source because its id is hard-coded everywhere; archived threads are
-    // also skipped so users don't re-merge something that is already merged.
-    onRequestMerge(thread) {
-      if (!thread || thread.id === 'main') return;
-      if (thread.archived || thread.status === 'archived') return;
-      this.mergePicker = { open: true, sourceId: thread.id };
-    },
-    pickMergeTarget(target) {
-      if (!target) return;
-      this.mergeConfirm = {
-        open: true,
-        sourceId: this.mergePicker.sourceId,
-        targetId: target.id,
-      };
-      this.mergePicker = { open: false, sourceId: null };
-    },
-    confirmMerge() {
-      const { sourceId, targetId } = this.mergeConfirm;
-      if (sourceId && targetId && sourceId !== targetId) {
-        this.$emit('merge-thread', { sourceId, targetId });
-        if (this.store && typeof this.store.mergeUnifyThread === 'function') {
-          this.store.mergeUnifyThread(sourceId, targetId);
-        }
-      }
-      this.mergeConfirm = { open: false, sourceId: null, targetId: null };
-    },
-    cancelMerge() {
-      this.mergePicker = { open: false, sourceId: null };
-      this.mergeConfirm = { open: false, sourceId: null, targetId: null };
     }
+    // H2.f.6: merge / fork flows retired with the multi-thread model.
   }
 };
