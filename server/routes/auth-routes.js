@@ -189,9 +189,19 @@ export function registerAuthRoutes(app, { requireAuth, checkRateLimit }) {
 
     try {
       const { url } = buildAuthorizeUrl({ provider, intent, userId });
+      // `?format=json` returns the URL instead of issuing a 302. Used by the
+      // mobile-Alipay flow which needs to wrap the URL in an `alipays://`
+      // deep-link before navigating, since Alipay's H5 authorize page does
+      // not auto-launch the app from external browsers.
+      if (req.query.format === 'json') {
+        return res.json({ success: true, url });
+      }
       res.redirect(url);
     } catch (err) {
       console.error(`[SSO ${provider}] start error:`, err.message);
+      if (req.query.format === 'json') {
+        return res.status(400).json({ success: false, error: err.message });
+      }
       res.status(400).send(`SSO start failed: ${err.message}`);
     }
   });

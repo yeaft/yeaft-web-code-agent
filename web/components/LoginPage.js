@@ -445,11 +445,14 @@ export default {
         return;
       }
       if (provider === 'alipay') {
-        // Alipay's H5 authorize page natively pulls up the Alipay app on
-        // mobile (and works directly inside the Alipay in-app browser).
-        // Only PC needs the QR-scan flow.
-        if (isMobile() || isInAlipay()) {
+        // Alipay's H5 authorize page does NOT auto-launch the Alipay app
+        // from external mobile browsers (it shows "请在支付宝客户端打开链接").
+        // Use the alipays://platformapi/startapp deep-link to actually pull
+        // up the app. Inside the Alipay in-app browser, plain redirect works.
+        if (isInAlipay()) {
           authStore.loginWithSso(provider);
+        } else if (isMobile()) {
+          authStore.loginWithAlipayMobile();
         } else {
           authStore.startSsoQr(provider).then(ok => { if (ok) renderQrCode(); });
         }
