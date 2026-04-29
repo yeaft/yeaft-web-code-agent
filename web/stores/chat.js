@@ -319,13 +319,8 @@ export const useChatStore = defineStore('chat', {
     messages: (state) => {
       const convId = state.activeConversations[0];
       const raw = convId ? (state.messagesMap[convId] || EMPTY_ARRAY) : EMPTY_ARRAY;
-      // Unify dual-view: when a thread filter is active, keep only messages whose
-      // threadId matches (user messages without a threadId are also kept so the
-      // prompt that spawned the thread stays visible).
-      if (state.currentView === 'unify' && state.unifyActiveThreadFilter) {
-        const target = state.unifyActiveThreadFilter;
-        return raw.filter(m => m && m.threadId === target);
-      }
+      // H2.f.3: thread filter removed — the bridge no longer tags messages
+      // with threadId, so any per-thread filter would hide everything.
       // task-fix (group-switch): group filter narrows the stream to one group.
       // Every Unify message is stamped with a groupId at creation time
       // (addMessageToConversation defaults to grp_default), so strict
@@ -350,14 +345,10 @@ export const useChatStore = defineStore('chat', {
       const target = state.unifyActiveGroupFilter;
       return all.filter(t => t && (t.groupId === target || !t.groupId));
     },
-    // ★ Unify: the currently visible messages after applying unifyActiveThreadFilter.
+    // ★ Unify: the currently visible messages (H2.f.3: thread filter dropped).
     unifyVisibleMessages: (state) => {
       const convId = state.unifyConversationId;
       const raw = convId ? (state.messagesMap[convId] || EMPTY_ARRAY) : EMPTY_ARRAY;
-      if (state.unifyActiveThreadFilter) {
-        const target = state.unifyActiveThreadFilter;
-        return raw.filter(m => m && m.threadId === target);
-      }
       if (state.unifyActiveGroupFilter) {
         const target = state.unifyActiveGroupFilter;
         return raw.filter(m => m && m.groupId === target);
@@ -1017,11 +1008,10 @@ export const useChatStore = defineStore('chat', {
         }
 
         // ★ task-301 Part 2: real-store push from agent.
-        // Agent's ThreadStore changes (SpawnThread / SwitchThread /
-        // ArchiveThread / AttachThreadToTask) → web-bridge serialises the
-        // full thread list → here.
+        // H2.f.3: thread_list_updated never arrives anymore — bridge stopped
+        // emitting. Kept as no-op for any legacy server replay.
         case 'thread_list_updated':
-          this.unifyThreads = Array.isArray(event.threads) ? event.threads : [];
+          // no-op
           break;
 
         case 'task_list_updated':
@@ -1048,61 +1038,14 @@ export const useChatStore = defineStore('chat', {
           break;
         }
 
-        // ★ task-313: merge confirmation / failure toast hooks.
+        // H2.f.3: thread_merged / thread_forked / *_failed never arrive
+        // anymore — bridge returns failed-ack directly. Kept as no-op cases
+        // so any legacy server replay doesn't fall into the default handler.
         case 'thread_merged':
-          // Thread list refresh arrives as a separate `thread_list_updated`
-          // event. Here we just clear any per-thread UI state that pointed
-          // at the now-archived source.
-          if (this.unifyActiveThreadId === event.sourceId) {
-            this.unifyActiveThreadId = event.targetId || null;
-          }
-          if (this.unifyActiveThreadFilter === event.sourceId) {
-            this.unifyActiveThreadFilter = null;
-          }
-          this.unifyLastMergeResult = {
-            ok: true,
-            sourceId: event.sourceId,
-            targetId: event.targetId,
-            reassignedMessages: event.reassignedMessages || 0,
-            at: Date.now(),
-          };
-          break;
-
         case 'thread_merge_failed':
-          this.unifyLastMergeResult = {
-            ok: false,
-            sourceId: event.sourceId,
-            targetId: event.targetId,
-            error: event.error,
-            at: Date.now(),
-          };
-          break;
-
-        // ★ task-314: fork confirmation / failure toast hooks.
         case 'thread_forked':
-          this.unifyLastForkResult = {
-            ok: true,
-            sourceThreadId: event.sourceThreadId,
-            targetThreadId: event.targetThreadId,
-            forkedAtMessageId: event.forkedAtMessageId,
-            copiedMessages: event.copiedMessages || 0,
-            at: Date.now(),
-          };
-          // Navigate the UI to the newly forked thread so the user sees
-          // the copied context immediately.
-          if (event.targetThreadId) {
-            this.unifyActiveThreadId = event.targetThreadId;
-          }
-          break;
-
         case 'thread_fork_failed':
-          this.unifyLastForkResult = {
-            ok: false,
-            sourceThreadId: event.sourceThreadId,
-            atMessageId: event.atMessageId,
-            error: event.error,
-            at: Date.now(),
-          };
+          // no-op
           break;
 
         // ★ task-334j: task-scoped group-chat message arrival (R6 §Δ28).
@@ -1246,41 +1189,13 @@ export const useChatStore = defineStore('chat', {
         }
       } catch (_) { /* ignore storage errors */ }
     },
-    // ★ task-303: Chat stream dual view — filter actions.
-    setUnifyThreadFilter(threadId) {
-      this.unifyActiveThreadFilter = threadId || null;
-    },
-    clearUnifyThreadFilter() {
-      this.unifyActiveThreadFilter = null;
-    },
-    // ★ task-313: merge a source thread into target via agent-side store.
-    // The UI resolves the target with a picker + confirm dialog before
-    // calling this. Idempotent — the agent rejects invalid merges.
-    mergeUnifyThread(sourceId, targetId) {
-      if (!sourceId || !targetId || sourceId === targetId) return;
-      if (!this.unifyAgentId) return;
-      this.sendWsMessage({
-        type: 'unify_merge_thread',
-        agentId: this.unifyAgentId,
-        sourceId,
-        targetId,
-      });
-    },
-    // ★ task-314: fork a new thread from `sourceThreadId` at `atMessageId`.
-    // Messages up to and including atMessageId are copied onto the new
-    // thread; the source is untouched. The agent rejects invalid forks
-    // (archived source / missing ids).
-    forkUnifyThread(sourceThreadId, atMessageId, name) {
-      if (!sourceThreadId || !atMessageId) return;
-      if (!this.unifyAgentId) return;
-      this.sendWsMessage({
-        type: 'unify_fork_thread',
-        agentId: this.unifyAgentId,
-        sourceThreadId,
-        atMessageId,
-        ...(name ? { name } : {}),
-      });
-    },
+    // H2.f.3: thread filter / merge / fork actions are no-ops. The bridge
+    // dropped the multi-thread model; these stubs preserve the call sites
+    // until the matching components are removed.
+    setUnifyThreadFilter(_threadId) { /* no-op */ },
+    clearUnifyThreadFilter() { /* no-op */ },
+    mergeUnifyThread(_sourceId, _targetId) { /* no-op */ },
+    forkUnifyThread(_sourceThreadId, _atMessageId, _name) { /* no-op */ },
 
     // ★ task-334-ui-g: VP CRUD request dispatcher.
     // Wraps `unify_vp_{create,update,delete,read}` in a Promise that
@@ -1377,15 +1292,8 @@ export const useChatStore = defineStore('chat', {
       });
     },
 
-    // ★ task-301 Part 2: Sidebar V2 selection actions.
-    // setActiveThread additionally drives the chat-stream dual view filter
-    // (matches task-303 semantics — clicking a thread narrows the stream).
-    setActiveThread(threadId) {
-      this.unifyActiveThreadId = threadId || null;
-      this.unifyActiveThreadFilter = threadId || null;
-      // Thread + group filters are mutually exclusive.
-      if (threadId) this.unifyActiveGroupFilter = null;
-    },
+    // H2.f.3: thread-selection no-op (multi-thread UI retired).
+    setActiveThread(_threadId) { /* no-op */ },
     // task-fix (group-switch): clicking a group row in the sidebar narrows
     // the main pane to that group. Clears thread + task-detail filters so
     // exactly one scope is active at a time.
