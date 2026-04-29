@@ -17,7 +17,33 @@ const FILES = {
   triagePass2: 'triage-pass2.md',
   update: 'update.md',
   create: 'create.md',
+  // H2.e — per-scope segment extraction prompts (one per scope family)
+  extractUser: 'extract-user.md',
+  extractVp: 'extract-vp.md',
+  extractGroup: 'extract-group.md',
+  extractFeature: 'extract-feature.md',
+  extractTopic: 'extract-topic.md',
+  // H2.e — per-scope summary compression
+  summarizeScope: 'summarize-scope.md',
 };
+
+/**
+ * Map a scope string (e.g. "user", "vp/alice", "topic/auth/jwt") to the
+ * extraction template name. Unknown scopes fall back to `extractTopic`
+ * (the most generic template) so we never throw at extraction time.
+ *
+ * @param {string} scope
+ * @returns {keyof typeof FILES}
+ */
+export function extractTemplateForScope(scope) {
+  if (!scope || typeof scope !== 'string') return 'extractTopic';
+  if (scope === 'user') return 'extractUser';
+  if (scope.startsWith('vp/')) return 'extractVp';
+  if (scope.startsWith('group/')) return 'extractGroup';
+  if (scope.startsWith('feature/')) return 'extractFeature';
+  if (scope.startsWith('topic/')) return 'extractTopic';
+  return 'extractTopic';
+}
 
 /** @type {Record<string, string>} */
 const cache = {};

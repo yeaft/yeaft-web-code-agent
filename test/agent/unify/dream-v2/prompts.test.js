@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { render, _resetCache } from '../../../../agent/unify/dream-v2/prompts/index.js';
+import {
+  render, _resetCache, extractTemplateForScope,
+} from '../../../../agent/unify/dream-v2/prompts/index.js';
 
 describe('dream-v2 prompts loader', () => {
   it('renders triagePass1 with substituted vars', () => {
@@ -43,5 +45,74 @@ describe('dream-v2 prompts loader', () => {
     });
     expect(out).toContain('topic/sci/phys');
     expect(out).not.toContain('sibling/parent');
+  });
+});
+
+describe('dream-v2 per-scope extract prompts (H2.e)', () => {
+  it('extractUser mentions user-scope categories', () => {
+    _resetCache();
+    const out = render('extractUser', {});
+    expect(out).toContain('user');
+    expect(out).toMatch(/identity|preferences|habits|goals/i);
+    expect(out).toContain('JSON');
+  });
+
+  it('extractVp substitutes vpId', () => {
+    const out = render('extractVp', { vpId: 'alice' });
+    expect(out).toContain('alice');
+    expect(out).toMatch(/persona|voice|expertise|interaction/i);
+  });
+
+  it('extractGroup substitutes groupId', () => {
+    const out = render('extractGroup', { groupId: 'g-eng' });
+    expect(out).toContain('g-eng');
+    expect(out).toMatch(/purpose|members|conventions/i);
+  });
+
+  it('extractFeature substitutes featureId', () => {
+    const out = render('extractFeature', { featureId: 'memory-h2' });
+    expect(out).toContain('memory-h2');
+    expect(out).toMatch(/goal|architecture|decisions/i);
+  });
+
+  it('extractTopic substitutes topicId', () => {
+    const out = render('extractTopic', { topicId: 'auth/jwt' });
+    expect(out).toContain('auth/jwt');
+    expect(out).toMatch(/viewpoints|patterns|lessons/i);
+  });
+
+  it('summarizeScope substitutes scope/segments/budget', () => {
+    const out = render('summarizeScope', {
+      scope: 'user',
+      segmentCount: '3',
+      tokenBudget: '500',
+      segments: '- seg_aaa: prefers zsh',
+    });
+    expect(out).toContain('user');
+    expect(out).toContain('500');
+    expect(out).toContain('seg_aaa');
+  });
+});
+
+describe('extractTemplateForScope', () => {
+  it('routes user scope', () => {
+    expect(extractTemplateForScope('user')).toBe('extractUser');
+  });
+  it('routes vp/* scope', () => {
+    expect(extractTemplateForScope('vp/alice')).toBe('extractVp');
+  });
+  it('routes group/* scope', () => {
+    expect(extractTemplateForScope('group/eng')).toBe('extractGroup');
+  });
+  it('routes feature/* scope', () => {
+    expect(extractTemplateForScope('feature/memory-h2')).toBe('extractFeature');
+  });
+  it('routes topic/* scope', () => {
+    expect(extractTemplateForScope('topic/auth/jwt')).toBe('extractTopic');
+  });
+  it('falls back to extractTopic for unknown scope', () => {
+    expect(extractTemplateForScope('weird')).toBe('extractTopic');
+    expect(extractTemplateForScope('')).toBe('extractTopic');
+    expect(extractTemplateForScope(null)).toBe('extractTopic');
   });
 });
