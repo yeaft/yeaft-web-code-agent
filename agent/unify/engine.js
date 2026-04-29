@@ -32,7 +32,10 @@ import { buildMemoryInjection } from './memory/layout.js';
 import { buildUserProfile } from './memory/user-memory-store.js';
 import { readSummary as readScopeSummary } from './memory/store-v2.js';
 import { runStopHooks } from './stop-hooks.js';
-import { getThreadStore, MAIN_THREAD_ID } from './threads/store.js';
+// H2.f.5: threads/ retired. Persisted messages still carry a `threadId`
+// field for back-compat with old conversation files; new writes always use
+// the constant 'main'.
+const MAIN_THREAD_ID = 'main';
 import { pickEffort, parseEffortPrefix } from './effort.js';
 import { normalizeEffort } from './models.js';
 import { attachRouterPlan, extractPriorPlan, stripMetaForWire } from './router/continuity.js';
@@ -581,17 +584,9 @@ export class Engine {
     if (!this.#conversationStore) return;
     if (this.#config._readOnly) return;
 
-    // task-299 Phase 1: tag persisted messages with the current thread.
-    // getThreadStore() lazily seeds a default 'main' thread if not yet init'd.
-    let threadId = MAIN_THREAD_ID;
-    let threadStore = null;
-    try {
-      threadStore = getThreadStore();
-      threadId = threadStore.currentId || MAIN_THREAD_ID;
-    } catch {
-      // Defensive: any store failure falls back to 'main' so persistence
-      // never breaks because of thread bookkeeping.
-    }
+    // H2.f.5: threads retired. Persisted messages still carry threadId
+    // for back-compat with old conversation files; new writes always use 'main'.
+    const threadId = MAIN_THREAD_ID;
 
     // Persist user message
     this.#conversationStore.append({
@@ -614,18 +609,6 @@ export class Engine {
       assistantMsg.toolCalls = toolCalls;
     }
     this.#conversationStore.append(assistantMsg);
-
-    // task-299 Phase 1 cached-field update: bump thread counters twice
-    // (once for user, once for assistant). Any exception is swallowed so
-    // bookkeeping never blocks the main persist path.
-    try {
-      if (threadStore) {
-        threadStore.noteMessage(threadId);
-        threadStore.noteMessage(threadId);
-      }
-    } catch {
-      // Non-critical; counters can be rebuilt via rebuildFromMessages().
-    }
   }
 
   /**
@@ -1709,11 +1692,7 @@ export class Engine {
    * @returns {string}
    */
   get currentThreadId() {
-    try {
-      return getThreadStore().currentId || MAIN_THREAD_ID;
-    } catch {
-      return MAIN_THREAD_ID;
-    }
+    return MAIN_THREAD_ID;
   }
 
   /** @returns {string|null} */

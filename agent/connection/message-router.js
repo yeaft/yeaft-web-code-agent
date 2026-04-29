@@ -36,7 +36,7 @@ import { sendToServer, flushMessageBuffer } from './buffer.js';
 import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
 import { getLlmConfig, updateLlmConfig, getUnifySettings, updateUnifySettings } from '../unify/config-api.js';
-import { handleUnifyChat, handleUnifyGroupChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyMergeThread, handleUnifyForkThread, handleUnifyAbortThread, handleUnifyAbortAll, handleUnifyVpSubscribe, handleUnifyVpCreate, handleUnifyVpUpdate, handleUnifyVpDelete, handleUnifyVpRead, handleUnifyFeatureMessage, handleUnifyUserMemoryWrite, handleUnifyUserMemoryRemove, handleUnifyMemoryScopeList, handleUnifyMemoryQuery, handleUnifyMemoryTrace, handleUnifyFetchSummaryHistory, handleUnifyFeatureCrud, handleUnifyListGroups, handleUnifyCreateGroup, handleUnifyRenameGroup, handleUnifyArchiveGroup, handleUnifyDeleteGroup, handleUnifyAddMember, handleUnifyRemoveMember, handleUnifySetDefaultVp, handleUnifyDreamTrigger } from '../unify/web-bridge.js';
+import { handleUnifyChat, handleUnifyGroupChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyAbortThread, handleUnifyAbortAll, handleUnifyVpSubscribe, handleUnifyVpCreate, handleUnifyVpUpdate, handleUnifyVpDelete, handleUnifyVpRead, handleUnifyFeatureMessage, handleUnifyUserMemoryWrite, handleUnifyUserMemoryRemove, handleUnifyMemoryScopeList, handleUnifyMemoryQuery, handleUnifyMemoryTrace, handleUnifyFetchSummaryHistory, handleUnifyFeatureCrud, handleUnifyListGroups, handleUnifyCreateGroup, handleUnifyRenameGroup, handleUnifyArchiveGroup, handleUnifyDeleteGroup, handleUnifyAddMember, handleUnifyRemoveMember, handleUnifySetDefaultVp, handleUnifyDreamTrigger } from '../unify/web-bridge.js';
 
 export async function handleMessage(msg) {
   switch (msg.type) {
@@ -381,18 +381,10 @@ export async function handleMessage(msg) {
       await resetUnifySession();
       break;
 
-    case 'unify_merge_thread':
-      handleUnifyMergeThread(msg);
-      break;
-
-    case 'unify_fork_thread':
-      handleUnifyForkThread(msg);
-      break;
-
     case 'unify_abort_thread':
-      // task-325c: user-initiated abort of a single thread's in-flight
-      // query. Payload `{ threadId }`. Silent no-op when the thread has
-      // no in-flight controller.
+      // task-325c: user-initiated abort of an in-flight query. The
+      // legacy `threadId` field on the payload is accepted but ignored
+      // (H2.f.5: single-conversation model).
       handleUnifyAbortThread(msg);
       break;
 
