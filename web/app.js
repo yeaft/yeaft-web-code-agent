@@ -5,6 +5,7 @@ import { useGroupsStore } from './stores/groups.js';
 import { useUserMemoryStore } from './stores/user-memory.js';
 import { useMemoryStore } from './stores/memory.js';
 import { useFeaturesStore } from './stores/features.js';
+import { useDreamStore } from './stores/dream.js';
 import { createI18n } from './utils/i18n.js';
 import { installAuthFetch } from './utils/auth-fetch.js';
 import zhCN from './i18n/zh-CN.js';
@@ -98,6 +99,7 @@ window.Pinia.useGroupsStore = useGroupsStore;
 window.Pinia.useUserMemoryStore = useUserMemoryStore;
 window.Pinia.useMemoryStore = useMemoryStore;
 window.Pinia.useFeaturesStore = useFeaturesStore;
+window.Pinia.useDreamStore = useDreamStore;
 
 // Register global components
 app.component('ToolLine', ToolLine);

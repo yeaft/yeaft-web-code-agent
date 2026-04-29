@@ -10,10 +10,11 @@ import GroupMemberEditor from './GroupMemberEditor.js';
 import FeatureMessageRejectToast from './FeatureMessageRejectToast.js';
 import UserMemoryPage from './UserMemoryPage.js';
 import WorkbenchPanel from './WorkbenchPanel.js';
+import DreamDebugPanel from './DreamDebugPanel.js';
 
 export default {
   name: 'UnifyPage',
-  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2, UnifyBreadcrumb, UnifyFeatureDetailView, VpDetailView, GroupInviteModal, GroupMemberEditor, FeatureMessageRejectToast, UserMemoryPage, WorkbenchPanel },
+  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2, UnifyBreadcrumb, UnifyFeatureDetailView, VpDetailView, GroupInviteModal, GroupMemberEditor, FeatureMessageRejectToast, UserMemoryPage, WorkbenchPanel, DreamDebugPanel },
   template: `
     <div class="unify-page">
       <!-- Mobile sidebar overlay -->
@@ -284,6 +285,10 @@ export default {
           <div class="unify-debug-empty" v-else>
             {{ $t('unify.noDebugData') }}
           </div>
+
+          <!-- DESIGN-v2 §19.1–19.3 dream pipeline debug view. Always
+               visible when debug mode is on (independent of per-turn data). -->
+          <DreamDebugPanel />
         </div>
         <!-- Default: placeholder -->
         <div v-else class="unify-detail-placeholder">

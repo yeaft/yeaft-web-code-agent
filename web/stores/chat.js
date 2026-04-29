@@ -1212,6 +1212,17 @@ export const useChatStore = defineStore('chat', {
           break;
         }
 
+        // DESIGN-v2 §19.4 — runner-level dream pipeline progress events.
+        // Forwarded from agent/unify/dream-v2/runner.js via web-bridge's
+        // `_dreamProgressSink`. The dream store consumes phase events
+        // ('start'|'load-diff'|'triage'|'merge'|'apply'|'done') and
+        // surfaces them on the Dream Debug Panel.
+        case 'dream_progress': {
+          const dream = window.Pinia?.useDreamStore?.();
+          if (dream) dream.applyProgress(event);
+          break;
+        }
+
         // ★ R6 G2: VP/Task memory browser. Read-only surface; the LLM
         // owns memory recall via the memory_query tool, this is purely
         // for the user to inspect what got merged into a VP/task's
