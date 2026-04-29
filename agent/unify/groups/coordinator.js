@@ -2,55 +2,28 @@
  * coordinator.js — Group Coordinator (task-334b).
  *
  * Consumes user/VP messages, persists them to the group's 334o jsonl-log,
- * parses @-mentions (user-posted only), and dispatches to target RoleInstances'
- * `inputQueue`. Aligned with architecture §5 / §6:
+ * and dispatches user-text turns to target RoleInstances'
+ * `inputQueue`.
  *
- *   - Text @-mentions trigger routing ONLY for `role === 'user'` messages.
- *     VP-authored @ mentions are surface noise; VPs dispatch via the
- *     route_forward tool (334d), not free text.
- *   - `@all` fans out to every roster member except the sender (perGroupFanOut
- *     cap honoured via options).
- *   - Unknown @-targets return `{ error: 'not_in_roster' }` in the dispatch
- *     report; coordinator does not mutate roster on stranger mentions.
- *   - No @-mention on a user message → falls back to `defaultVpId` via
- *     resolveFallbackVp (architecture G2).
- *   - taskId: if the inbound message carries `taskId`, dispatch is scoped to
- *     task.members — passed in via `options.taskMembers` (task storage lives
- *     in 334n; coordinator only enforces the filter when the caller provides
- *     the member list).
+ * As of GC.1 Commit B, VP-selection (parseMentions + dispatch matrix:
+ * mention / @all / fallback / vp-author no-op) lives in
+ * `groups/pre-flow.js` so the same logic can be invoked directly by
+ * the parallel fan-out path in web-bridge.js. Coordinator's job is now
+ * narrower: persist the message and translate the selection result
+ * into deliver() calls.
  *
  * This module DOES NOT run the engine. It only:
  *   1. Persists the message (via GroupHandle.appendMessage)
- *   2. Resolves the list of target vpIds
+ *   2. Asks pre-flow for the list of target vpIds
  *   3. Calls a user-supplied deliver(vpId, envelope) per target
- *
- * That lets 334c (RoleInstance/Engine) own how a target is actually woken up
- * (inputQueue push, status transition, etc) without coordinator owning it.
  */
 
-import { isMember, resolveFallbackVp } from './roster.js';
+import { parseMentions, selectRespondingVps } from './pre-flow.js';
 
-/** Matches `@vp-id` where id is [A-Za-z0-9_-]+. Captures the id. */
-const MENTION_RE = /(^|\s)@([A-Za-z0-9_][A-Za-z0-9_-]*)/g;
-
-/**
- * Extract an ordered, unique list of @-mentions from a text string.
- * Recognises the literal token `@all` as broadcast.
- */
-export function parseMentions(text) {
-  if (!text || typeof text !== 'string') return [];
-  const out = [];
-  const seen = new Set();
-  MENTION_RE.lastIndex = 0;
-  let m;
-  while ((m = MENTION_RE.exec(text))) {
-    const id = m[2];
-    if (seen.has(id)) continue;
-    seen.add(id);
-    out.push(id);
-  }
-  return out;
-}
+// Re-export so existing importers (`createCoordinator(...).parseMentions`,
+// or modules importing `parseMentions` from coordinator) keep working
+// without churn. New code should import from `./pre-flow.js` directly.
+export { parseMentions };
 
 /**
  * Build a Group Coordinator bound to a single GroupHandle.
@@ -101,8 +74,18 @@ export function createCoordinator(group, options = {}) {
       role: input.role || (fromUser ? 'user' : 'assistant'),
     });
 
-    // VP-authored messages: persist but do NOT dispatch (§6: no text @ routing)
-    if (!fromUser) {
+    // Ask pre-flow which VPs (if any) should respond.
+    const selection = selectRespondingVps({
+      meta,
+      fromUser,
+      mentions,
+      sender: input.from,
+      fanOutCap,
+      taskMembers: opts.taskMembers,
+    });
+
+    // VP-authored: persist but no dispatch.
+    if (selection.reason === 'vp-author-no-text-routing') {
       return {
         message: stored,
         dispatched: [],
@@ -112,63 +95,48 @@ export function createCoordinator(group, options = {}) {
       };
     }
 
-    // @all broadcast
-    if (mentions.includes('all')) {
-      const roster = meta.roster.filter((v) => v !== input.from).slice(0, fanOutCap);
-      const scoped = opts.taskMembers
-        ? roster.filter((v) => opts.taskMembers.includes(v))
-        : roster;
+    if (selection.reason === 'broadcast') {
       const envelope = makeEnvelope(stored, meta, 'broadcast');
-      for (const vpId of scoped) deliver(vpId, envelope);
+      for (const vpId of selection.dispatched) deliver(vpId, envelope);
       return {
         message: stored,
-        dispatched: scoped,
+        dispatched: selection.dispatched,
         fallback: null,
-        errors: [],
+        errors: selection.errors,
         broadcast: true,
-        truncatedAtFanOutCap: meta.roster.length - 1 > fanOutCap,
+        truncatedAtFanOutCap: !!selection.truncatedAtFanOutCap,
       };
     }
 
-    // Explicit @-mentions
-    if (mentions.length > 0) {
-      const dispatched = [];
-      const errors = [];
-      for (const vpId of mentions) {
-        if (!isMember(meta, vpId)) {
-          errors.push({ vpId, error: 'not_in_roster' });
-          continue;
-        }
-        if (opts.taskMembers && !opts.taskMembers.includes(vpId)) {
-          errors.push({ vpId, error: 'not_in_task_members' });
-          continue;
-        }
-        dispatched.push(vpId);
+    if (selection.reason === 'mention') {
+      for (const vpId of selection.dispatched) {
         deliver(vpId, makeEnvelope(stored, meta, 'mention'));
       }
-      return { message: stored, dispatched, fallback: null, errors };
+      return {
+        message: stored,
+        dispatched: selection.dispatched,
+        fallback: null,
+        errors: selection.errors,
+      };
     }
 
-    // No @-mention → fallback
-    const fallback = resolveFallbackVp(meta);
-    if (!fallback) {
+    if (selection.reason === 'fallback' && selection.fallback) {
+      deliver(selection.fallback, makeEnvelope(stored, meta, 'fallback'));
       return {
         message: stored,
-        dispatched: [],
-        fallback: null,
-        errors: [{ error: 'no_default_vp' }],
+        dispatched: selection.dispatched,
+        fallback: selection.fallback,
+        errors: selection.errors,
       };
     }
-    if (opts.taskMembers && !opts.taskMembers.includes(fallback)) {
-      return {
-        message: stored,
-        dispatched: [],
-        fallback: null,
-        errors: [{ vpId: fallback, error: 'not_in_task_members' }],
-      };
-    }
-    deliver(fallback, makeEnvelope(stored, meta, 'fallback'));
-    return { message: stored, dispatched: [fallback], fallback, errors: [] };
+
+    // no-default / nothing to dispatch
+    return {
+      message: stored,
+      dispatched: [],
+      fallback: null,
+      errors: selection.errors,
+    };
   }
 
   return {
@@ -204,3 +172,4 @@ function makeEnvelope(msg, meta, trigger) {
  * @property {boolean=}  truncatedAtFanOutCap
  * @property {string=}   skipped
  */
+
