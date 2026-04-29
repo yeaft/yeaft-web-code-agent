@@ -1,27 +1,159 @@
 /**
  * groups/pre-flow.js — explicit pre-flow stage for Unify.
  *
- * Pre-flow is the "before any VP runs" stage. It is responsible for:
+ * Pre-flow is the "before any VP runs" stage. It owns:
  *
  *   (1) VP selection — which VP(s) respond to this user turn?
- *       (added in GC.1 Commit B; today the @-mention dispatch matrix
- *       lives in groups/coordinator.js)
+ *       Pure function `selectRespondingVps({meta, fromUser, mentions,
+ *       sender, taskMembers, fanOutCap})` that mirrors the legacy
+ *       coordinator dispatch matrix: mention → broadcast → fallback to
+ *       defaultVpId, with VP-authored messages routed via the explicit
+ *       route_forward tool instead of free-text @-mentions.
  *
  *   (2) Memory recall — what memory gets pre-injected into each
- *       responding VP's prompt? (this Commit A: thin wrapper around
- *       memory/preflow.js's FTS5 recall.)
+ *       responding VP's prompt? Thin wrapper around
+ *       memory/preflow.js's FTS5 recall.
  *
- * Right now this module owns only (2). Commit B moves (1) in too.
+ * Commit C will flip the caller (web-bridge.js) to fan out responding
+ * VPs in parallel via Promise.all.
  *
- * Why a wrapper module instead of calling memory/preflow.js directly:
- *   - Single import surface for the full pre-flow stage.
- *   - Stable seam for the engine — when Commit B adds VP-selection
- *     and Commit C goes parallel, callers keep importing from here.
- *   - Lets us format FTS hits into the {profile, entries, formatted}
- *     shape the engine already consumes from recallV2.
+ * Why one module: a single import surface for the full pre-flow stage,
+ * a stable seam for the engine, and a place to format FTS hits into the
+ * {profile, entries, formatted} shape the engine already consumes.
  */
 
 import { runPreflow as runFtsPreflow } from '../memory/preflow.js';
+import { isMember, resolveFallbackVp } from './roster.js';
+
+/** Matches `@vp-id` where id is [A-Za-z0-9_-]+. Captures the id. */
+const MENTION_RE = /(^|\s)@([A-Za-z0-9_][A-Za-z0-9_-]*)/g;
+
+/**
+ * Extract an ordered, unique list of @-mentions from a text string.
+ * Recognises the literal token `@all` as broadcast.
+ *
+ * @param {string} text
+ * @returns {string[]}
+ */
+export function parseMentions(text) {
+  if (!text || typeof text !== 'string') return [];
+  const out = [];
+  const seen = new Set();
+  MENTION_RE.lastIndex = 0;
+  let m;
+  while ((m = MENTION_RE.exec(text))) {
+    const id = m[2];
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+/**
+ * @typedef {object} SelectionInput
+ * @property {object}   meta          GroupHandle meta (roster + defaultVpId)
+ * @property {boolean}  fromUser      true = user-authored; false = VP-authored
+ * @property {string[]} mentions      Already-parsed @-mentions
+ * @property {string=}  sender        VP id when fromUser=false
+ * @property {number}   [fanOutCap=16]
+ * @property {string[]=} taskMembers  When set, restricts dispatch to this list
+ */
+
+/**
+ * @typedef {object} SelectionResult
+ * @property {string[]} dispatched              VP ids that should respond
+ * @property {string|null} fallback             The fallback vp, if any
+ * @property {Array<{vpId?:string,error:string}>} errors
+ * @property {'mention'|'broadcast'|'fallback'|'vp-author-no-text-routing'|'no-default'} reason
+ * @property {boolean=} truncatedAtFanOutCap
+ */
+
+/**
+ * Pure VP-selection step of pre-flow. Returns ids only — caller owns
+ * persistence + envelope construction + deliver().
+ *
+ * @param {SelectionInput} input
+ * @returns {SelectionResult}
+ */
+export function selectRespondingVps(input) {
+  const meta = input.meta;
+  if (!meta) {
+    return { dispatched: [], fallback: null, errors: [{ error: 'no_group_meta' }], reason: 'no-default' };
+  }
+  const fanOutCap = Number.isFinite(input.fanOutCap) ? input.fanOutCap : 16;
+  const taskMembers = Array.isArray(input.taskMembers) ? input.taskMembers : null;
+  const mentions = Array.isArray(input.mentions) ? input.mentions : [];
+
+  // VP-authored messages: never auto-route through @-mentions; VPs hand
+  // off through the explicit route_forward tool instead.
+  if (!input.fromUser) {
+    return {
+      dispatched: [],
+      fallback: null,
+      errors: [],
+      reason: 'vp-author-no-text-routing',
+    };
+  }
+
+  // @all broadcast — fan out to every roster member except the sender,
+  // honouring fanOutCap and taskMembers.
+  if (mentions.includes('all')) {
+    const roster = meta.roster.filter((v) => v !== input.sender).slice(0, fanOutCap);
+    const scoped = taskMembers ? roster.filter((v) => taskMembers.includes(v)) : roster;
+    return {
+      dispatched: scoped,
+      fallback: null,
+      errors: [],
+      reason: 'broadcast',
+      truncatedAtFanOutCap: meta.roster.length - 1 > fanOutCap,
+    };
+  }
+
+  // Explicit @-mentions
+  if (mentions.length > 0) {
+    const dispatched = [];
+    const errors = [];
+    for (const vpId of mentions) {
+      if (!isMember(meta, vpId)) {
+        errors.push({ vpId, error: 'not_in_roster' });
+        continue;
+      }
+      if (taskMembers && !taskMembers.includes(vpId)) {
+        errors.push({ vpId, error: 'not_in_task_members' });
+        continue;
+      }
+      dispatched.push(vpId);
+    }
+    return { dispatched, fallback: null, errors, reason: 'mention' };
+  }
+
+  // No @-mention → fallback to defaultVpId (architecture G2)
+  const fallback = resolveFallbackVp(meta);
+  if (!fallback) {
+    return {
+      dispatched: [],
+      fallback: null,
+      errors: [{ error: 'no_default_vp' }],
+      reason: 'no-default',
+    };
+  }
+  if (taskMembers && !taskMembers.includes(fallback)) {
+    return {
+      dispatched: [],
+      fallback: null,
+      errors: [{ vpId: fallback, error: 'not_in_task_members' }],
+      reason: 'no-default',
+    };
+  }
+  return {
+    dispatched: [fallback],
+    fallback,
+    errors: [],
+    reason: 'fallback',
+  };
+}
+
 
 /**
  * Build the heading for a single scope's formatted memory block.

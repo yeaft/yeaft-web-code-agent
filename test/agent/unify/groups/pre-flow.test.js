@@ -26,6 +26,8 @@ import {
   runMemoryPreflow,
   buildRelevantScopes,
   formatPickedForInjection,
+  parseMentions,
+  selectRespondingVps,
 } from '../../../../agent/unify/groups/pre-flow.js';
 
 let TEST_DIR;
@@ -131,5 +133,81 @@ describe('runMemoryPreflow', () => {
     // when entries contain a user-scope row profile MUST equal its body.
     const userSeg = r.entries.find(e => e.scope === 'user');
     if (userSeg) expect(r.profile).toBe(userSeg.body.trim());
+  });
+});
+
+describe('parseMentions', () => {
+  it('returns empty for empty / non-string input', () => {
+    expect(parseMentions('')).toEqual([]);
+    expect(parseMentions(null)).toEqual([]);
+  });
+  it('extracts ordered unique mentions', () => {
+    expect(parseMentions('@vp-alice hi @vp-bob @vp-alice')).toEqual(['vp-alice', 'vp-bob']);
+  });
+  it('recognises @all', () => {
+    expect(parseMentions('@all standup at 10')).toEqual(['all']);
+  });
+});
+
+describe('selectRespondingVps', () => {
+  const meta = { id: 'g1', roster: ['alice', 'bob', 'carol'], defaultVpId: 'alice' };
+
+  it('VP-authored messages: never dispatch', () => {
+    const r = selectRespondingVps({
+      meta, fromUser: false, mentions: ['bob'], sender: 'alice',
+    });
+    expect(r.dispatched).toEqual([]);
+    expect(r.reason).toBe('vp-author-no-text-routing');
+  });
+
+  it('mention: filters non-roster + dispatches roster members', () => {
+    const r = selectRespondingVps({
+      meta, fromUser: true, mentions: ['alice', 'stranger', 'bob'],
+    });
+    expect(r.dispatched).toEqual(['alice', 'bob']);
+    expect(r.errors).toEqual([{ vpId: 'stranger', error: 'not_in_roster' }]);
+    expect(r.reason).toBe('mention');
+  });
+
+  it('@all: broadcasts to roster minus sender', () => {
+    const r = selectRespondingVps({
+      meta, fromUser: true, mentions: ['all'], sender: 'user',
+    });
+    expect(r.dispatched).toEqual(['alice', 'bob', 'carol']);
+    expect(r.reason).toBe('broadcast');
+  });
+
+  it('@all: respects fanOutCap', () => {
+    const r = selectRespondingVps({
+      meta: { ...meta, roster: ['a', 'b', 'c', 'd', 'e'] },
+      fromUser: true, mentions: ['all'], sender: 'user', fanOutCap: 2,
+    });
+    expect(r.dispatched.length).toBe(2);
+    expect(r.truncatedAtFanOutCap).toBe(true);
+  });
+
+  it('no mention: falls back to defaultVpId', () => {
+    const r = selectRespondingVps({ meta, fromUser: true, mentions: [] });
+    expect(r.dispatched).toEqual(['alice']);
+    expect(r.fallback).toBe('alice');
+    expect(r.reason).toBe('fallback');
+  });
+
+  it('no mention + no roster: errors no_default_vp', () => {
+    const r = selectRespondingVps({
+      meta: { id: 'g1', roster: [], defaultVpId: null },
+      fromUser: true, mentions: [],
+    });
+    expect(r.dispatched).toEqual([]);
+    expect(r.errors).toEqual([{ error: 'no_default_vp' }]);
+  });
+
+  it('taskMembers: filters mention dispatch', () => {
+    const r = selectRespondingVps({
+      meta, fromUser: true, mentions: ['alice', 'bob'],
+      taskMembers: ['alice'],
+    });
+    expect(r.dispatched).toEqual(['alice']);
+    expect(r.errors).toEqual([{ vpId: 'bob', error: 'not_in_task_members' }]);
   });
 });
