@@ -669,11 +669,14 @@ export default {
     bindSso(provider) {
       this.ssoBoundMessage = '';
       this.ssoConflictMessage = '';
-      // Mobile: route Alipay through the redirect flow (Alipay's H5 page
-      // pulls up the app natively); refuse WeChat with a hint since the
-      // QR scan can't work on the same device.
-      if (provider === 'alipay' && (isMobile() || isInAlipay())) {
+      // Alipay on mobile: needs the alipays:// deep-link to actually pull
+      // up the Alipay app. In-Alipay-browser: plain redirect works.
+      if (provider === 'alipay' && isInAlipay()) {
         this.authStore.bindSso(provider);
+        return;
+      }
+      if (provider === 'alipay' && isMobile()) {
+        this.authStore.loginWithAlipayMobile({ intent: 'bind' });
         return;
       }
       if (provider === 'wechat' && (isMobile() || isInWeChat())) {

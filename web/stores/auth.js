@@ -419,6 +419,53 @@ export const useAuthStore = defineStore('auth', {
     },
 
     /**
+     * Mobile-Alipay deep-link launch.
+     *
+     * Alipay's H5 authorize page does NOT auto-pull-up the Alipay app from
+     * external browsers (Safari, Chrome, etc.) — it just shows "请在支付宝
+     * 客户端打开链接". The way to actually launch the app is to wrap the
+     * authorize URL in Alipay's `alipays://platformapi/startapp` scheme.
+     *
+     * Flow:
+     *   1) Ask /start?format=json to mint state + return the authorize URL
+     *      (without issuing a 302, since we want to navigate to the scheme).
+     *   2) Wrap the URL: alipays://platformapi/startapp?appId=20000067&url=<enc>
+     *      (appId 20000067 is Alipay's "open external page" sub-app.)
+     *   3) Navigate. The OS pulls up the Alipay app, user consents, Alipay's
+     *      callback redirects back to the original SPA — same as PC redirect.
+     *
+     * If the user does not have Alipay installed, the scheme navigation is
+     * silently dropped by the OS — no good fallback exists, but this is a
+     * very small edge case.
+     */
+    async loginWithAlipayMobile({ intent = 'login' } = {}) {
+      this.error = null;
+      try {
+        const params = new URLSearchParams({ format: 'json' });
+        if (intent === 'bind') {
+          if (!this.token) {
+            this.error = 'You must be logged in to bind an identity';
+            return false;
+          }
+          params.set('intent', 'bind');
+          params.set('token', this.token);
+        }
+        const res = await fetch(`/api/auth/sso/alipay/start?${params.toString()}`);
+        const data = await res.json();
+        if (!res.ok || !data.success || !data.url) {
+          this.error = data.error || 'Failed to start Alipay login';
+          return false;
+        }
+        const deepLink = `alipays://platformapi/startapp?appId=20000067&url=${encodeURIComponent(data.url)}`;
+        window.location.href = deepLink;
+        return true;
+      } catch (err) {
+        this.error = err.message || 'Network error';
+        return false;
+      }
+    },
+
+    /**
      * Server-driven SSO via in-page QR scan. PC frontend renders the QR code
      * locally; user scans with phone; server's /poll endpoint reports back
      * once the callback fires. Used for Alipay (and WeChat-PC in future).
