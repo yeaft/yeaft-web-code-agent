@@ -58,11 +58,13 @@ models.js        — Model registry (context windows, output limits, provider de
 ```
 
 ### Engine Query Loop (engine.js)
-1. Pre-query: recall memories -> inject into system prompt
+1. Pre-query: recall memories (recall-v2 when `memoryV2=true`, else
+   recall-r6 shard-based) -> inject into system prompt
 2. Build messages array (with compact summary if available)
 3. Call adapter.stream() -> collect text + tool_calls
 4. If tool_calls -> execute tools -> append results -> goto 3
-5. If end_turn -> persist messages -> check consolidation -> done
+5. If end_turn -> persist messages -> check consolidation (compact
+   orchestrator only — the legacy `useLegacy` fallback was removed) -> done
 6. If max_tokens -> auto-continue (up to 3 times)
 7. On LLMContextError -> force compact -> retry
 8. On retryable error with fallbackModel -> switch model -> retry
@@ -79,18 +81,52 @@ chat-completions.js  — OpenAI Chat Completions API adapter (covers proxy, Deep
 - Protocol: `"anthropic"` or `"openai"` (default)
 
 ### Memory System (agent/unify/memory/)
+
+The system is mid-migration from R6 (legacy shard layout) to v2
+(per-scope `memory.md` + `summary.md`). `config.memoryV2` defaults to
+**true**, and a one-shot auto-migration runs on first boot when an R6
+tree is detected on disk. The canonical reference is
+`agent/unify/memory/DESIGN-v2.md`.
+
 ```
-store.js       — CRUD for memory entries (entries/*.md with YAML frontmatter)
-recall.js      — 3-step recall: keyword extraction -> scope+tag filter -> LLM select (top 7)
-extract.js     — Extract memories from conversations
-consolidate.js — Archive old messages + extract memories when budget exceeded
-dream.js       — Background memory maintenance (merge, prune, promote)
-types.js       — Memory kind taxonomy (fact, preference, skill, lesson, context, relation)
-scan.js        — Memory health analysis
+v2 (active path)
+  store-v2.js          — atomic readSummary / writeMemory / writeSummary
+                         on per-scope memory.md + summary.md
+  recall-v2.js         — DESIGN-v2 §6 summary-first multi-scope recall
+                         (no LLM side-query, no fingerprint cache)
+  layout.js            — buildMemoryInjection: assembles the per-turn
+                         injection block from selected scope summaries
+  keywords.js          — pure-rule keyword extractor (used by recall-v2)
+  migrate-r6-to-v2.js  — one-shot R6 → v2 migrator
+  user-memory-store.js — user-scope persistence + profile builder
+
+dream-v2/ (active path — see DESIGN-v2 §19)
+  runner.js            — full dream pass: load-diff → triage → merge → apply
+  scheduler.js         — idle-timer trigger + per-VP orchestration
+  prompts.js           — triage / merge prompt builders
+  session-wiring.js    — replaces legacy dream-scheduler when memoryV2=on
+  web-bridge plumbs onProgress → dream_progress events to the
+  Dream Debug Panel (web/components/DreamDebugPanel.js).
+
+Legacy R6 (still imported by some live code paths — being phased out)
+  recall-r6.js   — 4-step shard-based recall (used by engine when
+                   memoryV2 is off)
+  consolidate.js — partitionMessages still consumed by the compact
+                   orchestrator hooks; full module pending replacement
+  extract.js     — extractMemories still called from the orchestrator
+                   extract hook
+  dream.js, dream-prompt.js, dream-extract.js, dream-shard.js,
+  recompression.js, shard-store.js, store.js, dream-scheduler.js
+                 — kept for stop-hooks legacy paths and
+                   features/summary.js feature-memory writes
+
+scan.js, schema.js, types.js — shared metadata used by both v2 and R6.
 ```
-- Memory 3D Model: Kind (what) x Scope (where) x Tags (how)
-- Entries stored as markdown files with YAML frontmatter in `~/.yeaft/memory/entries/`
-- Dream mode: periodic self-reflection to merge duplicates, prune stale, promote patterns
+
+- Memory layout (v2): `~/.yeaft/memory/<scope>/memory.md` + `summary.md`,
+  scopes are `user`, `vp/<id>`, `group/<id>`, `feature/<id>`,
+  `topic/<l1>[/<l2>]` (≤2 levels).
+- Hard ACL: `vp/<other>` recall paths are blocked from foreign VPs.
 
 ### Conversation Persistence (agent/unify/conversation/)
 ```
