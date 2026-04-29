@@ -36,7 +36,7 @@
  *   }
  */
 
-import { isVpForeign } from '../memory/scope-tree.js';
+import { isVpForeign } from '../memory/store-v2.js';
 
 /** @typedef {{ userOriginal: string, intent: string }} ForwardQuery */
 /** @typedef {{ memoryPaths: string[], taskIds: string[] }} Preselect */

@@ -37,8 +37,9 @@ import { seedDefaultVps } from './vp/seed-defaults.js';
 import { createDreamScheduler } from './memory/dream-scheduler.js';
 import { createV2DreamScheduler } from './dream-v2/session-wiring.js';
 import { getUserMemoryStore } from './memory/user-memory-store.js';
+import { migrateR6toV2 } from './memory/migrate-r6-to-v2.js';
 import { join } from 'path';
-import { existsSync as existsSyncSafe, readFileSync as readFileSyncSafe } from 'fs';
+import { existsSync as existsSyncSafe, readFileSync as readFileSyncSafe, writeFileSync as writeFileSyncSafe } from 'fs';
 
 /**
  * @typedef {Object} SessionOptions
@@ -134,6 +135,54 @@ export async function loadSession(options = {}) {
       }
     }
   } catch { /* never let this warn path block session load */ }
+
+  // ─── 2.2 Auto-migrate R6 → v2 on first boot with memoryV2=on ──
+  //         If `memoryV2` is on AND a R6-shaped tree is on disk AND we
+  //         haven't already migrated, run the one-shot migration. The
+  //         migration is idempotent and concatenate-don't-synthesise, so
+  //         the worst case on re-run is "no R6 dirs found, exit clean".
+  //         Failure here MUST NOT block session boot — we log + continue;
+  //         dream will gradually backfill v2 from group diffs.
+  try {
+    if (config?.memoryV2 === true && !config?._readOnly) {
+      const memoryRoot = join(yeaftDir, 'memory');
+      const stateFile = join(yeaftDir, '.memory-v2-migration.json');
+      let alreadyMigrated = false;
+      if (existsSyncSafe(stateFile)) {
+        try {
+          const state = JSON.parse(readFileSyncSafe(stateFile, 'utf8') || '{}');
+          alreadyMigrated = Boolean(state && state.completedAt);
+        } catch { /* malformed state → re-run; migration is idempotent */ }
+      }
+      const hasR6 = existsSyncSafe(join(memoryRoot, 'groups'))
+                 || existsSyncSafe(join(memoryRoot, 'features'));
+      if (!alreadyMigrated && hasR6) {
+        console.log('[Yeaft] memoryV2 on + R6 layout detected — running one-shot migration…');
+        const result = await migrateR6toV2({ root: memoryRoot, apply: true });
+        try {
+          writeFileSyncSafe(stateFile, JSON.stringify({
+            completedAt: new Date().toISOString(),
+            migratedScopes: result.migratedScopes,
+            skippedScopes: result.skippedScopes,
+            errors: result.errors,
+            backedUpTo: result.backedUpTo,
+          }, null, 2));
+        } catch { /* state file write is best-effort */ }
+        console.log(`[Yeaft] memory v2 migration done — ${result.migratedScopes} scopes migrated, backup at ${result.backedUpTo}`);
+      } else if (!alreadyMigrated && !hasR6) {
+        // Fresh user, no R6 to migrate. Mark as done so we don't keep checking.
+        try {
+          writeFileSyncSafe(stateFile, JSON.stringify({
+            completedAt: new Date().toISOString(),
+            migratedScopes: 0,
+            note: 'no R6 layout present — fresh v2',
+          }, null, 2));
+        } catch { /* best-effort */ }
+      }
+    }
+  } catch (err) {
+    console.warn(`[Yeaft] memory v2 migration skipped due to error: ${err?.message || err}`);
+  }
 
   // ─── 2a. Permission pre-check ─────────────────────────
   //         If the data dir is not writable, mark session as read-only.

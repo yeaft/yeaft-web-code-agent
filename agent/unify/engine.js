@@ -30,7 +30,7 @@ import { archiveTurn } from './archive/turn-archive.js';
 import { archiveToolResults } from './archive/tool-results.js';
 import { buildMemoryInjection } from './memory/layout.js';
 import { buildUserProfile } from './memory/user-memory-store.js';
-import { readSummary as readScopeSummary } from './memory/scope-tree.js';
+import { readSummary as readScopeSummary } from './memory/store-v2.js';
 import { runStopHooks } from './stop-hooks.js';
 import { getThreadStore, MAIN_THREAD_ID } from './threads/store.js';
 import { pickEffort, parseEffortPrefix } from './effort.js';
