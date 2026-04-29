@@ -427,47 +427,6 @@ export function installUnifyRuntimeBridge(s) {
 }
 
 /**
- * Translate a pipeline event (from Dispatcher) into web-bridge outputs.
- * Pipeline events are distinct from engine events — they carry queue /
- * routing state for the UI. Engine events are unwrapped and forwarded.
- */
-function forwardPipelineEvent(ev, pctx) {
-  if (!ev || typeof ev !== 'object') return false;
-  const gid = pctx && pctx.groupId;
-  switch (ev.type) {
-    case 'input_queue_updated':
-      sendUnifyEvent({
-        type: 'input_queue_updated',
-        total: ev.total,
-        pending: ev.pending,
-        routing: ev.routing,
-        dispatched: ev.dispatched,
-        head: ev.head,
-      }, gid);
-      return false;
-    case 'routing_decision':
-      // H2.f.2: still forwarded for wire compat, but frontend treats it as
-      // a no-op marker; targetThreadId is always 'main'.
-      sendUnifyEvent({
-        type: 'routing_decision',
-        entryId: ev.entryId,
-        action: ev.action,
-        source: ev.source,
-        reason: ev.reason,
-      }, gid);
-      return false;
-    case 'engine_event':
-      pctx.onEngineEvent(ev.event);
-      return false;
-    case 'error':
-      pctx.onError(ev.error);
-      return true;
-    default:
-      return false;
-  }
-}
-
-/**
  * Handle a single engine event unwrapped from an `engine_event` envelope.
  * H2.f.2: no longer stamps a threadId on outgoing claude_output frames.
  *
@@ -957,34 +916,24 @@ export async function handleUnifyChat(msg) {
       const toolCallsAccum = [];
       const toolResultsAccum = [];
 
-      const { entry } = session.dispatcher.submit(prompt, {
-        messageId: msg.messageId,
-        queryOpts: buildVpQueryOpts({ vpId, groupCoordinator, groupId }),
-      });
-      sendUnifyEvent({
-        type: 'input_queue_updated',
-        total: 1,
-        pending: 1,
-        routing: 0,
-        dispatched: 0,
-        head: { id: entry.id, status: entry.status, text: entry.text.slice(0, 80) },
-      }, groupId);
-
-      const pipelineCtx = {
+      // H2.f.5: dispatcher + InputQueue retired. Call engine.query() directly,
+      // passing the flat conversation history as `messages` for context continuity.
+      const queryOpts = buildVpQueryOpts({ vpId, groupCoordinator, groupId });
+      const handlerCtx = {
+        assistantTextParts,
+        toolCallsAccum,
+        toolResultsAccum,
+        resetQueryTimer,
         groupId,
-        onEngineEvent: (event) => handleEngineEvent(event, {
-          assistantTextParts,
-          toolCallsAccum,
-          toolResultsAccum,
-          resetQueryTimer,
-          groupId,
-        }),
-        onError: (err) => { throw err; },
       };
-
-      for await (const pev of session.dispatcher.drain({ signal: abortCtrl.signal })) {
+      for await (const event of session.engine.query({
+        prompt,
+        messages: [...conversationMessages],
+        signal: abortCtrl.signal,
+        ...queryOpts,
+      })) {
         resetQueryTimer();
-        forwardPipelineEvent(pev, pipelineCtx);
+        handleEngineEvent(event, handlerCtx);
       }
 
       // Accumulate messages for context continuity.
@@ -1374,33 +1323,6 @@ export async function handleUnifyFeatureCrud(msg = {}) {
   } catch (err) {
     reply({ ok: false, error: String(err?.message || err) });
   }
-}
-
-/**
- * H2.f.2 stub: thread merge no longer exists. Kept for back-compat with
- * older message-router cases — emits a failed-ack.
- */
-export function handleUnifyMergeThread(msg) {
-  const { sourceId, targetId } = msg || {};
-  sendUnifyEvent({
-    type: 'thread_merge_failed',
-    sourceId,
-    targetId,
-    error: 'thread merge is no longer supported (H2 single-conversation)',
-  });
-}
-
-/**
- * H2.f.2 stub: thread fork no longer exists.
- */
-export function handleUnifyForkThread(msg) {
-  const { sourceThreadId, atMessageId } = msg || {};
-  sendUnifyEvent({
-    type: 'thread_fork_failed',
-    sourceThreadId,
-    atMessageId,
-    error: 'thread fork is no longer supported (H2 single-conversation)',
-  });
 }
 
 /** Handle model switch from the web UI. */

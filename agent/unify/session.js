@@ -24,17 +24,10 @@ import { SkillManager, createSkillManager } from './skills.js';
 import { MCPManager } from './mcp.js';
 import { createFullRegistry } from './tools/index.js';
 import { initFeatureStore } from './tools/feature-tools.js';
-import { initThreadStore } from './threads/store.js';
 import { Engine } from './engine.js';
-import { createThreadEngineRegistry } from './threads/engine-registry.js';
-import { MAIN_THREAD_ID } from './threads/store.js';
-import { getThreadStore } from './threads/store.js';
-// H2.f.1: intent-classifier (LLM router) is retired. Memory recall now
-// runs through pre-flow (memory/preflow.js) + post-turn adjustMemory
-// (memory/adjust.js); the dispatcher routes every input to the single
-// MAIN_THREAD_ID engine instance.
-import { initInputQueueStore } from './input-queue/store.js';
-import { createDispatcher } from './pipeline/dispatcher.js';
+// H2.f.5: threads/, pipeline/dispatcher and input-queue retired. The
+// session now exposes a single Engine. Memory recall runs through
+// pre-flow (memory/preflow.js) + post-turn adjustMemory (memory/adjust.js).
 import { ensureDefaultGroupIfEmpty } from './groups/group-crud.js';
 import { seedDefaultVps } from './vp/seed-defaults.js';
 import { createDreamScheduler } from './memory/dream-scheduler.js';
@@ -223,16 +216,7 @@ export async function loadSession(options = {}) {
   // ─── 5a. Initialize feature store ──────────────────────
   initFeatureStore(yeaftDir, { readOnly: config._readOnly || false });
 
-  // ─── 5b. Initialize thread store (task-299 Phase 1) ────
-  //         task-307a: now file-backed under ~/.yeaft/threads/. Passing the
-  //         yeaftDir switches on disk persistence; read-only mode is honoured.
-  //         task-318: forward the Unify autoArchiveIdleDays knob so the
-  //         archive pass (owned by task-317) can read it off the store.
-  initThreadStore(yeaftDir, {
-    readOnly: config._readOnly || false,
-    force: true,
-    idleArchiveDays: config.unify?.autoArchiveIdleDays ?? 0,
-  });
+  // ─── 5b. (H2.f.5) thread store retired. Single conversation. ───
 
   // ─── 5c. D1 first-boot seed (task-334m) ─────────────────
   //         When no groups exist on disk AND we're not in read-only mode,
@@ -341,46 +325,10 @@ export async function loadSession(options = {}) {
     });
   }
 
-  // task-308 Phase 2: thread-aware engine registry.
-  // Each thread gets its own EngineInstance (lazy-created) that owns its
-  // messages array and tags all events with the bound threadId. Legacy
-  // single-engine callers keep working via `session.engine`; multi-thread
-  // callers use `session.engineRegistry.ensure(threadId)`.
-  const engineRegistry = createThreadEngineRegistry({
-    adapter,
-    trace,
-    config,
-    conversationStore,
-    memoryStore,
-    memoryShardStore,
-    toolRegistry,
-    skillManager,
-    mcpManager,
-    yeaftDir,
-    // task-318: concurrent-thread cap (UI-adjustable via Settings).
-    maxConcurrent: config.unify?.maxConcurrentThreads ?? null,
-  });
-  // Seed the main-thread instance so listActive() is non-empty from T=0.
-  engineRegistry.ensure(MAIN_THREAD_ID);
-
-  // H2.f.1: the LLM intent-classifier is retired. The dispatcher now
-  // unconditionally routes every input to the MAIN_THREAD_ID engine
-  // instance. Memory recall happens via memory/preflow.js (pre-turn)
-  // and memory/adjust.js (post-turn).
-
-  // task-310 Phase 2 integration: wire InputQueue + Dispatcher so the
-  // web-bridge can submit `unify_chat` inputs through the unified pipeline
-  // (queue → engineRegistry → EngineInstance). In read-only mode the
-  // queue is memory-only (no disk writes).
-  const inputQueue = initInputQueueStore({
-    yeaftDir: config._readOnly ? null : yeaftDir,
-    force: true,
-  });
-  const dispatcher = createDispatcher({
-    inputQueue,
-    engineRegistry,
-    trace,
-  });
+  // H2.f.5: thread engine registry, input queue, and dispatcher retired.
+  // The session exposes a single `engine`; web-bridge calls engine.query()
+  // directly. Memory recall happens via memory/preflow.js (pre-turn) and
+  // memory/adjust.js (post-turn).
 
   // ─── 10. Build session ─────────────────────────────────
   const status = {
@@ -398,11 +346,6 @@ export async function loadSession(options = {}) {
       // Best-effort cleanup
     }
     try {
-      engineRegistry.terminateAll();
-    } catch {
-      // Best-effort cleanup
-    }
-    try {
       await mcpManager.disconnectAll();
     } catch {
       // Best-effort cleanup
@@ -416,13 +359,6 @@ export async function loadSession(options = {}) {
 
   return {
     engine,
-    engineRegistry,
-    // H2.f.1: `router` removed (intent classifier retired). Kept the
-    // property as `null` for any caller doing back-compat existence
-    // checks; the dispatcher now always routes to MAIN_THREAD_ID.
-    router: null,
-    inputQueue,
-    dispatcher,
     adapter,
     config,
     conversationStore,
@@ -434,17 +370,12 @@ export async function loadSession(options = {}) {
     toolRegistry,
     trace,
     yeaftDir,
-    // task-318 rev-1 fix: expose the live ThreadStore handle so callers
-    // (web-bridge, message-router via ctx) can invoke setIdleArchiveDays()
-    // on the exact instance that's wired into the dispatcher. Without this
-    // export the setter was effectively dead code.
-    threadStore: getThreadStore(),
     status,
     shutdown,
     // task-325c: user-initiated abort API. Delegates to web-bridge which
-    // owns the per-thread AbortController registry (`abortByThread`).
-    // Lazy-imported to avoid a hard cycle with web-bridge.js (which already
-    // imports this module to call loadSession).
+    // owns the single AbortController. Lazy-imported to avoid a hard cycle
+    // with web-bridge.js (which already imports this module to call
+    // loadSession).
     async abort(opts = {}) {
       const { abortUnifySession } = await import('./web-bridge.js');
       return abortUnifySession(opts);
