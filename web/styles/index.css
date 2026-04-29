@@ -17,7 +17,7 @@
 @import './split-screen.css';
 @import './unify.css';
 @import './unify-sidebar-v2.css';
-@import './unify-thread-pill.css';
+/* H2.f.6: unify-thread-pill.css removed alongside the multi-thread engine. */
 @import './unify-vp.css';
 @import './unify-group-wizard.css';
 @import './unify-user-memory.css';
