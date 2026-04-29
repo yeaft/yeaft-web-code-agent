@@ -61,15 +61,9 @@ import {
   featureSummaryPost,
 } from './feature-tools.js';
 
-// --- P1 Thread tools (task-299 Phase 1) ---
-import {
-  spawnThread,
-  switchThread,
-  listThreads,
-  attachThreadToFeature,
-  readThreadSummary,
-  readThreadRecent,
-} from './thread-tools.js';
+// H2.f.4: thread tools (spawnThread/switchThread/listThreads/...) deleted.
+// The agent now runs in a single conversation; multi-thread orchestration
+// has been retired across the H2.f series.
 
 // --- P2 Auxiliary tools ---
 // task-333b L1 delete: ToolSearch and WriteStdin removed — the function-call
@@ -136,14 +130,6 @@ export const allTools = [
   followupFeature,
   updatePlan,
   featureSummaryPost,
-
-  // P1 Thread (task-299 Phase 1)
-  spawnThread,
-  switchThread,
-  listThreads,
-  attachThreadToFeature,
-  readThreadSummary,
-  readThreadRecent,
 
   // P2 Auxiliary
   jsRepl,

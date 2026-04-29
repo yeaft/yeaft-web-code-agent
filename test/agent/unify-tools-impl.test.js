@@ -17,9 +17,9 @@ const TOOLS_DIR = join(import.meta.dirname, '..', '..', 'agent', 'unify', 'tools
 // ──────────────────────────────────────────────
 
 describe('index.js tool registration', () => {
-  it('allTools has 51 tools (task-334f: +memory_trace +open_source_message)', async () => {
+  it('allTools has 45 tools (H2.f.4: -6 thread tools)', async () => {
     const { allTools } = await import(`${TOOLS_DIR}/index.js`);
-    expect(allTools.length).toBe(51);
+    expect(allTools.length).toBe(45);
   });
 
   it('all 39 tools have valid name, description, parameters, and execute', async () => {
