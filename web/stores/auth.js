@@ -503,7 +503,7 @@ export const useAuthStore = defineStore('auth', {
     },
 
     _startQrPoll() {
-      if (this._qrPollTimer) clearInterval(this._qrPollTimer);
+      this._stopQrPollTimer();
       const tick = async () => {
         if (!this.qrPanel) return;
         const state = this.qrPanel.state;
@@ -537,7 +537,30 @@ export const useAuthStore = defineStore('auth', {
           console.warn('[Auth] QR poll error:', err.message);
         }
       };
+      this._qrPollTick = tick;
       this._qrPollTimer = setInterval(tick, 2000);
+
+      // Mobile browsers (especially iOS Safari) throttle or fully suspend
+      // setInterval in backgrounded tabs. When the user is bounced into
+      // the Alipay app and stays there a while, our poll timer freezes;
+      // the next tick after they return can take many seconds — looking
+      // like the page is stuck. Re-fire immediately on tab visibility
+      // change, and reset the interval so the following tick is a fresh
+      // 2s away. `pageshow` covers iOS bfcache restore where
+      // `visibilitychange` doesn't fire.
+      if (typeof document !== 'undefined' && !this._qrVisHandler) {
+        this._qrVisHandler = () => {
+          if (typeof document !== 'undefined' && document.visibilityState && document.visibilityState !== 'visible') return;
+          if (!this.qrPanel || !this._qrPollTick) return;
+          this._qrPollTick();
+          if (this._qrPollTimer) clearInterval(this._qrPollTimer);
+          this._qrPollTimer = setInterval(this._qrPollTick, 2000);
+        };
+        document.addEventListener('visibilitychange', this._qrVisHandler);
+        if (typeof window !== 'undefined') {
+          window.addEventListener('pageshow', this._qrVisHandler);
+        }
+      }
     },
 
     _stopQrPollTimer() {
@@ -545,6 +568,16 @@ export const useAuthStore = defineStore('auth', {
         clearInterval(this._qrPollTimer);
         this._qrPollTimer = null;
       }
+      if (this._qrVisHandler) {
+        if (typeof document !== 'undefined') {
+          document.removeEventListener('visibilitychange', this._qrVisHandler);
+        }
+        if (typeof window !== 'undefined') {
+          window.removeEventListener('pageshow', this._qrVisHandler);
+        }
+        this._qrVisHandler = null;
+      }
+      this._qrPollTick = null;
     },
 
     cancelSsoQr() {
