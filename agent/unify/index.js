@@ -23,15 +23,10 @@ export { Engine } from './engine.js';
 export { ConversationStore, parseMessage, estimateTokens } from './conversation/persist.js';
 export { searchMessages } from './conversation/search.js';
 export { MemoryStore, parseEntry, serializeEntry, MEMORY_KINDS } from './memory/store.js';
-export { recall, extractKeywords, computeFingerprint, clearRecallCache } from './memory/recall.js';
-export { extractMemories } from './memory/extract.js';
-export { consolidate, shouldConsolidate } from './memory/consolidate.js';
 
 // Phase 5: Advanced features
 export { KINDS, KIND_PRIORITY, KIND_DESCRIPTIONS, IMPORTANCE_LEVELS, validateEntry, parseScopePath, getAncestorScopes, areScopesRelated } from './memory/types.js';
 export { scanEntries, scoreEntry, findStaleEntries, findDuplicateGroups, summarizeScan } from './memory/scan.js';
-export { dream, checkDreamGate, readDreamState, writeDreamState, incrementQueryCount } from './memory/dream.js';
-export { buildOrientPrompt, buildGatherPrompt, buildMergePrompt, buildPrunePrompt, buildPromotePrompt } from './memory/dream-prompt.js';
 export { runStopHooks } from './stop-hooks.js';
 export { MCPManager, createMCPManager } from './mcp.js';
 export { SkillManager, createSkillManager, parseSkill, serializeSkill } from './skills.js';
