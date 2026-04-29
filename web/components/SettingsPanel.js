@@ -386,14 +386,25 @@ export default {
       >
         <div class="sp-qr-card">
           <p class="totp-title">{{ qrModalTitle }}</p>
-          <p class="totp-hint">{{ $t('login.qr.hint') }}</p>
-          <div class="qr-container">
-            <img v-if="qrDataUrl" :src="qrDataUrl" alt="QR" class="qr-code">
-            <div v-else class="qr-code qr-placeholder"></div>
-          </div>
-          <p v-if="authStore.qrPanel.status === 'error'" class="error">
-            {{ authStore.qrPanel.error }}
-          </p>
+          <template v-if="authStore.qrPanel.mobileDeepLink">
+            <p class="totp-hint">{{ $t('login.alipay.mobileWaiting') }}</p>
+            <p v-if="authStore.qrPanel.status === 'error'" class="error">
+              {{ authStore.qrPanel.error }}
+            </p>
+            <button class="sp-btn" @click="relaunchAlipayMobile">
+              {{ $t('login.alipay.relaunch') }}
+            </button>
+          </template>
+          <template v-else>
+            <p class="totp-hint">{{ $t('login.qr.hint') }}</p>
+            <div class="qr-container">
+              <img v-if="qrDataUrl" :src="qrDataUrl" alt="QR" class="qr-code">
+              <div v-else class="qr-code qr-placeholder"></div>
+            </div>
+            <p v-if="authStore.qrPanel.status === 'error'" class="error">
+              {{ authStore.qrPanel.error }}
+            </p>
+          </template>
           <button class="sp-btn sp-btn-muted" @click="cancelQrBind">
             {{ $t('common.back') }}
           </button>
@@ -705,6 +716,13 @@ export default {
     cancelQrBind() {
       this.authStore.cancelSsoQr();
       this.qrDataUrl = '';
+    },
+
+    relaunchAlipayMobile() {
+      const panel = this.authStore.qrPanel;
+      if (!panel || !panel.authorizeUrl) return;
+      const deepLink = `alipays://platformapi/startapp?appId=20000067&url=${encodeURIComponent(panel.authorizeUrl)}`;
+      window.location.href = deepLink;
     },
 
     renderQrCode() {

@@ -189,19 +189,9 @@ export function registerAuthRoutes(app, { requireAuth, checkRateLimit }) {
 
     try {
       const { url } = buildAuthorizeUrl({ provider, intent, userId });
-      // `?format=json` returns the URL instead of issuing a 302. Used by the
-      // mobile-Alipay flow which needs to wrap the URL in an `alipays://`
-      // deep-link before navigating, since Alipay's H5 authorize page does
-      // not auto-launch the app from external browsers.
-      if (req.query.format === 'json') {
-        return res.json({ success: true, url });
-      }
       res.redirect(url);
     } catch (err) {
       console.error(`[SSO ${provider}] start error:`, err.message);
-      if (req.query.format === 'json') {
-        return res.status(400).json({ success: false, error: err.message });
-      }
       res.status(400).send(`SSO start failed: ${err.message}`);
     }
   });
@@ -267,7 +257,7 @@ export function registerAuthRoutes(app, { requireAuth, checkRateLimit }) {
         }
         // Minimal success page for the scanning device. The real session lands
         // on the original PC tab once it finishes polling.
-        return res.send(`<!doctype html><meta charset="utf-8"><title>登录成功</title><style>body{font-family:-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;color:#222}.box{text-align:center}h1{font-size:20px;margin:0 0 8px}p{color:#666;margin:0}</style><div class=box><h1>✓ 已确认登录</h1><p>请回到电脑上继续操作，本页面可关闭。</p></div>`);
+        return res.send(`<!doctype html><meta charset="utf-8"><title>登录成功</title><style>body{font-family:-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;color:#222}.box{text-align:center;padding:0 24px}h1{font-size:20px;margin:0 0 8px}p{color:#666;margin:0;line-height:1.5}</style><div class=box><h1>✓ 登录成功</h1><p>请返回原先的浏览器页面，几秒内会自动登录。<br/>本页面可关闭。</p></div>`);
       }
 
       if (result.kind === 'login') {

@@ -40,6 +40,8 @@ export default {
   'login.wechat': '使用微信扫码登录',
   'login.alipay': '使用支付宝账号登录',
   'login.wechat.mobileUnsupported': '微信登录暂仅支持电脑端，请在电脑浏览器中扫码登录。',
+  'login.alipay.mobileWaiting': '正在等待你在支付宝中确认… 完成后返回本页面将自动登录。',
+  'login.alipay.relaunch': '重新打开支付宝',
   'login.qr.title': '扫码登录',
   'login.qr.titleAlipay': '支付宝扫码登录',
   'login.qr.titleWechat': '微信扫码登录',
