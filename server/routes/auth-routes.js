@@ -2,6 +2,7 @@ import { CONFIG, isEmailConfigured, isTotpEnabled, isAadEnabled, getEnabledSsoPr
 import { loginStep1, loginStep2, logout, verifyTotpStep, completeTotpSetup, register, loginWithAad } from '../auth.js';
 import { buildAuthorizeUrl, handleCallback, peekStateMode, storePendingResult, consumePendingResult } from '../auth/oauth-flow.js';
 import { verifyToken } from '../auth/token.js';
+import { requestPasswordReset, verifyPasswordReset } from '../auth/password-reset.js';
 import { identityDb, userDb } from '../database.js';
 
 /**
@@ -14,6 +15,8 @@ export function registerAuthRoutes(app, { requireAuth, checkRateLimit }) {
     res.json({
       skipAuth: CONFIG.skipAuth,
       emailVerification: isEmailConfigured(),
+      // Password reset shares the email infrastructure — gate the UI on this.
+      passwordResetEnabled: isEmailConfigured(),
       totpEnabled: isTotpEnabled(),
       registrationEnabled: !CONFIG.skipAuth,
       aadEnabled,
@@ -108,6 +111,36 @@ export function registerAuthRoutes(app, { requireAuth, checkRateLimit }) {
       res.json(result);
     } catch (err) {
       console.error('Registration error:', err);
+      res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+  });
+
+  // Password reset — step 1: email me a code
+  app.post('/api/auth/password-reset/request', async (req, res) => {
+    if (!checkRateLimit(req.ip)) {
+      return res.status(429).json({ success: false, error: 'Too many attempts, please try again later' });
+    }
+    const { email } = req.body || {};
+    try {
+      const result = await requestPasswordReset(email);
+      res.json(result);
+    } catch (err) {
+      console.error('Password reset request error:', err);
+      res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+  });
+
+  // Password reset — step 2: verify code, set new password
+  app.post('/api/auth/password-reset/verify', async (req, res) => {
+    if (!checkRateLimit(req.ip)) {
+      return res.status(429).json({ success: false, error: 'Too many attempts, please try again later' });
+    }
+    const { resetToken, code, newPassword } = req.body || {};
+    try {
+      const result = await verifyPasswordReset(resetToken, code, newPassword);
+      res.json(result);
+    } catch (err) {
+      console.error('Password reset verify error:', err);
       res.status(500).json({ success: false, error: 'Internal server error' });
     }
   });

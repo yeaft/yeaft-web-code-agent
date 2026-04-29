@@ -1,6 +1,7 @@
 import { CONFIG } from '../config.js';
 import { hashPassword } from '../auth.js';
 import { userDb, sessionDb } from '../database.js';
+import { activeSessions, revokedTokens } from '../auth/session-store.js';
 
 // 过滤用户敏感字段
 function sanitizeUser(user) {
@@ -47,7 +48,10 @@ export function registerUserRoutes(app, { requireAuth, requireAdmin }) {
         displayName: user.display_name,
         email: user.email,
         role: user.role === 'admin' ? 'admin' : 'pro',
-        createdAt: user.created_at
+        createdAt: user.created_at,
+        // hasPassword lets the UI distinguish "change password" (current pwd
+        // required) from "set password for the first time" (SSO-only users).
+        hasPassword: !!user.password_hash
       });
     } catch (err) {
       console.error('Get profile error:', err);
@@ -65,14 +69,27 @@ export function registerUserRoutes(app, { requireAuth, requireAdmin }) {
 
       const { currentPassword, newPassword, email } = req.body;
 
-      if (!currentPassword) {
-        return res.status(400).json({ error: 'Current password is required' });
-      }
+      // Two cases:
+      //   (a) User already has a password → must verify currentPassword.
+      //   (b) User has no password (e.g. SSO-only) and is setting one for the
+      //       first time → currentPassword is not required, but they must
+      //       supply newPassword. This unblocks logout-then-username-login
+      //       for SSO users.
+      const isSettingFirstPassword = !user.password_hash && !!newPassword;
 
-      const bcryptModule = await import('bcrypt');
-      const passwordValid = await bcryptModule.default.compare(currentPassword, user.password_hash);
-      if (!passwordValid) {
-        return res.status(403).json({ error: 'Current password is incorrect' });
+      if (!isSettingFirstPassword) {
+        if (!currentPassword) {
+          return res.status(400).json({ error: 'Current password is required' });
+        }
+        if (!user.password_hash) {
+          // No password yet, and no newPassword in this request → nothing valid to do.
+          return res.status(400).json({ error: 'No password is set; supply newPassword to set one.' });
+        }
+        const bcryptModule = await import('bcrypt');
+        const passwordValid = await bcryptModule.default.compare(currentPassword, user.password_hash);
+        if (!passwordValid) {
+          return res.status(403).json({ error: 'Current password is incorrect' });
+        }
       }
 
       if (newPassword) {
@@ -91,6 +108,51 @@ export function registerUserRoutes(app, { requireAuth, requireAdmin }) {
     } catch (err) {
       console.error('Update profile error:', err);
       res.status(500).json({ error: 'Failed to update profile' });
+    }
+  });
+
+  // Permanently delete my account.
+  // Requires either currentPassword (for password users) OR confirms !hasPassword
+  // for SSO-only users (in which case the body must include `confirm: 'DELETE'`).
+  app.delete('/api/user/me', requireAuth, async (req, res) => {
+    try {
+      const user = userDb.getByUsername(req.user.username);
+      if (!user) return res.status(404).json({ error: 'User not found' });
+
+      const { currentPassword, confirm } = req.body || {};
+
+      if (user.password_hash) {
+        if (!currentPassword) {
+          return res.status(400).json({ error: 'Current password is required' });
+        }
+        const bcryptModule = await import('bcrypt');
+        const ok = await bcryptModule.default.compare(currentPassword, user.password_hash);
+        if (!ok) return res.status(403).json({ error: 'Current password is incorrect' });
+      } else {
+        // SSO-only: require explicit confirmation string to prevent accidental deletion.
+        if (confirm !== 'DELETE') {
+          return res.status(400).json({ error: 'Confirmation required (confirm: "DELETE")' });
+        }
+      }
+
+      const removed = userDb.deleteUser(user.id);
+      if (!removed) return res.status(404).json({ error: 'User not found or already deleted' });
+
+      // Best-effort: revoke every active JWT belonging to this user so any
+      // open tabs can't keep talking to the API.
+      try {
+        for (const [token, info] of activeSessions.entries()) {
+          if (info && info.username === user.username) {
+            activeSessions.delete(token);
+            revokedTokens.add(token);
+          }
+        }
+      } catch {}
+
+      res.json({ success: true });
+    } catch (err) {
+      console.error('Delete user error:', err);
+      res.status(500).json({ error: 'Failed to delete account' });
     }
   });
 

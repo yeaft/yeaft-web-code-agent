@@ -31,7 +31,7 @@ export default {
         </div>
 
         <!-- ─── OAuth-first view ─────────────────────────────────────── -->
-        <template v-if="loginMode === 'oauth' && authStore.loginStep === 'credentials' && !authStore.qrPanel">
+        <template v-if="loginMode === 'oauth' && authStore.loginStep === 'credentials' && !authStore.qrPanel && !forgotStep">
           <div v-if="enabledProviders.length === 0" class="login-empty">
             {{ $t('login.noProviders') }}
             <button class="link-button" @click="loginMode = 'credentials'">
@@ -61,7 +61,7 @@ export default {
         </template>
 
         <!-- ─── Credentials view ─────────────────────────────────────── -->
-        <template v-else-if="loginMode === 'credentials' && authStore.loginStep === 'credentials' && !authStore.qrPanel">
+        <template v-else-if="loginMode === 'credentials' && authStore.loginStep === 'credentials' && !authStore.qrPanel && !forgotStep">
           <input
             type="text"
             v-model="username"
@@ -82,6 +82,10 @@ export default {
             {{ authStore.loading ? $t('login.loggingIn') : $t('login.login') }}
           </button>
 
+          <button v-if="authStore.passwordResetEnabled" class="link-button login-switch" @click="enterForgotMode">
+            {{ $t('login.forgot.link') }}
+          </button>
+
           <button v-if="enabledProviders.length > 0" class="link-button login-switch" @click="loginMode = 'oauth'">
             ← {{ $t('login.useSso') }}
           </button>
@@ -90,6 +94,60 @@ export default {
             {{ $t('login.noAccount') }}<a href="#" @click.prevent="authStore.showRegister()">{{ $t('login.registerWithCode') }}</a>
           </p>
 
+          <p v-if="authStore.error" class="error">{{ authStore.error }}</p>
+          <p v-if="localError" class="error">{{ localError }}</p>
+        </template>
+
+        <!-- ─── Forgot password: step 1 (email) ─────────────────────── -->
+        <template v-if="forgotStep === 'email' && !authStore.qrPanel">
+          <p class="totp-title">{{ $t('login.forgot.title') }}</p>
+          <p class="totp-hint">{{ $t('login.forgot.emailHint') }}</p>
+          <input
+            type="email"
+            v-model="forgotEmail"
+            @keypress.enter="submitForgotEmail"
+            :placeholder="$t('login.register.email')"
+            autocomplete="email"
+          >
+          <button class="primary-btn" @click="submitForgotEmail" :disabled="forgotLoading">
+            {{ forgotLoading ? $t('login.forgot.sending') : $t('login.forgot.sendCode') }}
+          </button>
+          <button class="back-button" @click="exitForgotMode">{{ $t('common.back') }}</button>
+          <p v-if="authStore.error" class="error">{{ authStore.error }}</p>
+          <p v-if="localError" class="error">{{ localError }}</p>
+        </template>
+
+        <!-- ─── Forgot password: step 2 (code + new password) ───────── -->
+        <template v-if="forgotStep === 'verify' && !authStore.qrPanel">
+          <p class="totp-title">{{ $t('login.forgot.title') }}</p>
+          <p class="verification-hint">{{ $t('login.forgot.codeSent') }}</p>
+          <input
+            type="text"
+            v-model="forgotCode"
+            :placeholder="$t('login.email.enterCode')"
+            autocomplete="one-time-code"
+            inputmode="numeric"
+            maxlength="6"
+            class="code-input"
+          >
+          <input
+            type="password"
+            v-model="forgotNewPassword"
+            :placeholder="$t('settings.security.newPassword')"
+            autocomplete="new-password"
+          >
+          <input
+            type="password"
+            v-model="forgotConfirm"
+            @keypress.enter="submitForgotReset"
+            :placeholder="$t('settings.security.confirmPassword')"
+            autocomplete="new-password"
+          >
+          <button class="primary-btn" @click="submitForgotReset" :disabled="forgotLoading">
+            {{ forgotLoading ? $t('login.forgot.resetting') : $t('login.forgot.resetBtn') }}
+          </button>
+          <button class="back-button" @click="forgotStep = 'email'">{{ $t('common.back') }}</button>
+          <p v-if="forgotSuccess" class="success-msg">{{ $t('login.forgot.success') }}</p>
           <p v-if="authStore.error" class="error">{{ authStore.error }}</p>
           <p v-if="localError" class="error">{{ localError }}</p>
         </template>
@@ -268,6 +326,79 @@ export default {
     const regPasswordConfirm = Vue.ref('');
     const regEmail = Vue.ref('');
     const registerSuccess = Vue.ref(false);
+
+    // Forgot-password flow state. forgotStep: '' | 'email' | 'verify'.
+    const forgotStep = Vue.ref('');
+    const forgotEmail = Vue.ref('');
+    const forgotResetToken = Vue.ref('');
+    const forgotCode = Vue.ref('');
+    const forgotNewPassword = Vue.ref('');
+    const forgotConfirm = Vue.ref('');
+    const forgotLoading = Vue.ref(false);
+    const forgotSuccess = Vue.ref(false);
+
+    const enterForgotMode = () => {
+      localError.value = '';
+      authStore.error = null;
+      forgotStep.value = 'email';
+      forgotEmail.value = '';
+      forgotCode.value = '';
+      forgotNewPassword.value = '';
+      forgotConfirm.value = '';
+      forgotResetToken.value = '';
+      forgotSuccess.value = false;
+    };
+
+    const exitForgotMode = () => {
+      forgotStep.value = '';
+      forgotResetToken.value = '';
+      forgotSuccess.value = false;
+    };
+
+    const submitForgotEmail = async () => {
+      localError.value = '';
+      if (!forgotEmail.value || !/.+@.+\..+/.test(forgotEmail.value)) {
+        localError.value = t('login.forgot.emailInvalid');
+        return;
+      }
+      forgotLoading.value = true;
+      try {
+        const token = await authStore.requestPasswordReset(forgotEmail.value.trim());
+        if (!token) return; // store sets authStore.error
+        forgotResetToken.value = token;
+        forgotStep.value = 'verify';
+      } finally {
+        forgotLoading.value = false;
+      }
+    };
+
+    const submitForgotReset = async () => {
+      localError.value = '';
+      if (!forgotCode.value) { localError.value = t('login.error.enterVerifyCode'); return; }
+      if (!forgotNewPassword.value || forgotNewPassword.value.length < 6) {
+        localError.value = t('login.error.passwordMinLen'); return;
+      }
+      if (forgotNewPassword.value !== forgotConfirm.value) {
+        localError.value = t('login.error.passwordMismatch'); return;
+      }
+      forgotLoading.value = true;
+      try {
+        const ok = await authStore.verifyPasswordReset(
+          forgotResetToken.value,
+          forgotCode.value,
+          forgotNewPassword.value
+        );
+        if (ok) {
+          forgotSuccess.value = true;
+          setTimeout(() => {
+            exitForgotMode();
+            loginMode.value = 'credentials';
+          }, 1500);
+        }
+      } finally {
+        forgotLoading.value = false;
+      }
+    };
 
     // Provider definitions in fixed priority order. We use SVG icons inline
     // (no external font / image deps) so light + dark themes both look right.
@@ -516,7 +647,19 @@ export default {
       verify,
       verifyTotp,
       setupTotp,
-      doRegister
+      doRegister,
+      forgotStep,
+      forgotEmail,
+      forgotResetToken,
+      forgotCode,
+      forgotNewPassword,
+      forgotConfirm,
+      forgotLoading,
+      forgotSuccess,
+      enterForgotMode,
+      exitForgotMode,
+      submitForgotEmail,
+      submitForgotReset
     };
   }
 };

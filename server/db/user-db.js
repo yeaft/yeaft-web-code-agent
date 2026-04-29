@@ -1,4 +1,4 @@
-import { stmts, generateUserId, generateAgentSecret } from './connection.js';
+import { stmts, generateUserId, generateAgentSecret, transaction } from './connection.js';
 
 export const userDb = {
   getOrCreate(username, displayName = null) {
@@ -126,5 +126,36 @@ export const userDb = {
     stmts.insertUserFull.run(id, username, display, null, email, agentSecret, role, now);
     stmts.updateUserAadOid.run(aadOid, id);
     return { id, username, display_name: display, email, aad_oid: aadOid, agent_secret: agentSecret, role, created_at: now };
+  },
+
+  /**
+   * Permanently delete a user and ALL data scoped to that user.
+   *
+   * Tables touched (all inside one transaction):
+   *   - user_identities         hard delete (also covered by FK CASCADE, belt-and-braces)
+   *   - sessions                hard delete (messages cascade via FK)
+   *   - user_stats              hard delete
+   *   - daily_stats             hard delete
+   *   - custom_expert_roles     hard delete (custom_expert_actions cascade via FK)
+   *   - invitations.created_by  rows deleted (codes the user issued)
+   *   - invitations.used_by     set NULL (preserve history of *who consumed what* — but we lose the link)
+   *   - users                   row deleted last
+   *
+   * Caller is responsible for revoking JWT sessions (we don't import the
+   * session store from here to keep this layer pure).
+   */
+  deleteUser(userId) {
+    const run = transaction((id) => {
+      try { stmts.deleteIdentitiesForUser.run(id); } catch {}
+      try { stmts.deleteUserSessionsByUser.run(id); } catch {}
+      try { stmts.deleteUserStats.run(id); } catch {}
+      try { stmts.deleteDailyStatsForUser.run(id); } catch {}
+      try { stmts.deleteCustomExpertRolesForUser.run(id); } catch {}
+      try { stmts.deleteInvitationsCreatedBy.run(id); } catch {}
+      try { stmts.clearInvitationUsedBy.run(id); } catch {}
+      const result = stmts.deleteUserById.run(id);
+      return result.changes > 0;
+    });
+    return run(userId);
   }
 };

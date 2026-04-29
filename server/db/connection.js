@@ -535,6 +535,35 @@ export const stmts = {
     DELETE FROM user_identities WHERE user_id = ? AND provider = ?
   `),
 
+  // Hard-delete cascade for account deletion.
+  // user_identities and messages cascade automatically; the rest are explicit.
+  deleteUserSessionsByUser: db.prepare(`
+    DELETE FROM sessions WHERE user_id = ?
+  `),
+  deleteIdentitiesForUser: db.prepare(`
+    DELETE FROM user_identities WHERE user_id = ?
+  `),
+  deleteUserStats: db.prepare(`
+    DELETE FROM user_stats WHERE user_id = ?
+  `),
+  deleteDailyStatsForUser: db.prepare(`
+    DELETE FROM daily_stats WHERE user_id = ?
+  `),
+  deleteCustomExpertRolesForUser: db.prepare(`
+    DELETE FROM custom_expert_roles WHERE user_id = ?
+  `),
+  // Invitations: keep history but null-out the FK so it doesn't block deletion.
+  // (created_by is NOT NULL, so for invitations the user created we just delete them.)
+  deleteInvitationsCreatedBy: db.prepare(`
+    DELETE FROM invitations WHERE created_by = ?
+  `),
+  clearInvitationUsedBy: db.prepare(`
+    UPDATE invitations SET used_by = NULL WHERE used_by = ?
+  `),
+  deleteUserById: db.prepare(`
+    DELETE FROM users WHERE id = ?
+  `),
+
   // Dashboard 聚合
   getDashboardTotals: db.prepare(`
     SELECT

@@ -149,13 +149,40 @@ export default {
               </div>
 
               <div class="sp-group">
-                <div class="sp-group-title">{{ $t('settings.security.changePassword') }}</div>
-                <input type="password" v-model="currentPassword" :placeholder="$t('settings.security.currentPassword')" autocomplete="current-password" class="sp-input">
+                <div class="sp-group-title">{{ profile && profile.hasPassword === false ? $t('settings.security.setPassword') : $t('settings.security.changePassword') }}</div>
+                <p class="sp-desc" v-if="profile && profile.hasPassword === false">{{ $t('settings.security.setPasswordDesc') }}</p>
+                <input v-if="profile && profile.hasPassword !== false" type="password" v-model="currentPassword" :placeholder="$t('settings.security.currentPassword')" autocomplete="current-password" class="sp-input">
                 <input type="password" v-model="newPassword" :placeholder="$t('settings.security.newPassword')" autocomplete="new-password" class="sp-input">
                 <input type="password" v-model="confirmPassword" :placeholder="$t('settings.security.confirmPassword')" autocomplete="new-password" class="sp-input">
                 <button class="sp-btn" @click="changePassword" :disabled="changingPassword">
-                  {{ changingPassword ? $t('settings.security.changing') : $t('settings.security.changeBtn') }}
+                  {{ changingPassword ? $t('settings.security.changing') : (profile && profile.hasPassword === false ? $t('settings.security.setBtn') : $t('settings.security.changeBtn')) }}
                 </button>
+              </div>
+
+              <div class="sp-group sp-danger-zone">
+                <div class="sp-group-title">{{ $t('settings.security.deleteAccount') }}</div>
+                <p class="sp-desc">{{ $t('settings.security.deleteAccountDesc') }}</p>
+                <input
+                  v-if="profile && profile.hasPassword !== false"
+                  type="password"
+                  v-model="deletePassword"
+                  :placeholder="$t('settings.security.currentPassword')"
+                  autocomplete="current-password"
+                  class="sp-input"
+                  v-show="deleteConfirm">
+                <input
+                  v-else
+                  type="text"
+                  v-model="deleteConfirmText"
+                  :placeholder="$t('settings.security.deleteConfirmPlaceholder')"
+                  class="sp-input"
+                  v-show="deleteConfirm">
+                <div class="sp-actions-row">
+                  <button class="sp-btn sp-btn-danger" @click="deleteAccount" :disabled="deletingAccount">
+                    {{ deletingAccount ? $t('settings.security.deleting') : (deleteConfirm ? $t('settings.security.deleteConfirmBtn') : $t('settings.security.deleteBtn')) }}
+                  </button>
+                  <button v-if="deleteConfirm" class="sp-btn sp-btn-muted" @click="cancelDeleteAccount">{{ $t('common.cancel') }}</button>
+                </div>
               </div>
             </div>
 
@@ -399,6 +426,10 @@ export default {
       newPassword: '',
       confirmPassword: '',
       changingPassword: false,
+      deletePassword: '',
+      deleteConfirm: false,
+      deleteConfirmText: '',
+      deletingAccount: false,
       invitations: [],
       inviteRole: 'pro',
       creatingInvite: false,
@@ -765,7 +796,8 @@ export default {
     },
 
     async changePassword() {
-      if (!this.currentPassword) {
+      const isFirstSet = this.profile && this.profile.hasPassword === false;
+      if (!isFirstSet && !this.currentPassword) {
         this.showMessage(this.$t('settings.security.enterCurrentPwd'), true);
         return;
       }
@@ -779,20 +811,24 @@ export default {
       }
       this.changingPassword = true;
       try {
+        const body = { newPassword: this.newPassword };
+        if (!isFirstSet) body.currentPassword = this.currentPassword;
         const res = await fetch('/api/user/profile', {
           method: 'PUT',
           headers: this.getHeaders(),
-          body: JSON.stringify({
-            currentPassword: this.currentPassword,
-            newPassword: this.newPassword
-          })
+          body: JSON.stringify(body)
         });
         const data = await res.json();
         if (res.ok && data.success) {
-          this.showMessage(this.$t('settings.security.pwdChanged'));
+          this.showMessage(isFirstSet ? this.$t('settings.security.pwdSet') : this.$t('settings.security.pwdChanged'));
           this.currentPassword = '';
           this.newPassword = '';
           this.confirmPassword = '';
+          // Refresh profile so the form mode flips from "set" to "change".
+          try {
+            const p = await fetch('/api/user/profile', { headers: this.getHeaders() });
+            if (p.ok) this.profile = await p.json();
+          } catch {}
         } else {
           this.showMessage(data.error || this.$t('settings.msg.changeFailed'), true);
         }
@@ -800,6 +836,43 @@ export default {
         this.showMessage(this.$t('settings.msg.changeFailed') + ': ' + e.message, true);
       } finally {
         this.changingPassword = false;
+      }
+    },
+
+    cancelDeleteAccount() {
+      this.deleteConfirm = false;
+      this.deletePassword = '';
+      this.deleteConfirmText = '';
+    },
+
+    async deleteAccount() {
+      // First click arms the form; second click submits.
+      if (!this.deleteConfirm) {
+        this.deleteConfirm = true;
+        return;
+      }
+      const hasPwd = this.profile && this.profile.hasPassword !== false;
+      if (hasPwd && !this.deletePassword) {
+        this.showMessage(this.$t('settings.security.enterCurrentPwd'), true);
+        return;
+      }
+      if (!hasPwd && this.deleteConfirmText !== 'DELETE') {
+        this.showMessage(this.$t('settings.security.deleteConfirmRequired'), true);
+        return;
+      }
+      this.deletingAccount = true;
+      try {
+        const r = await this.authStore.deleteAccount(
+          hasPwd ? { currentPassword: this.deletePassword } : { confirm: 'DELETE' }
+        );
+        if (!r.success) {
+          this.showMessage(r.error || this.$t('settings.security.deleteFailed'), true);
+          return;
+        }
+        // Account is gone — bounce to a clean login page.
+        window.location.reload();
+      } finally {
+        this.deletingAccount = false;
       }
     },
 

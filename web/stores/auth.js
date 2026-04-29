@@ -10,6 +10,7 @@ export const useAuthStore = defineStore('auth', {
     // Auth mode from server
     skipAuth: false,
     emailVerification: false,
+    passwordResetEnabled: false,
     totpEnabled: false,
     registrationEnabled: false,
     aadEnabled: false,
@@ -60,6 +61,7 @@ export const useAuthStore = defineStore('auth', {
         const data = await response.json();
         this.skipAuth = data.skipAuth;
         this.emailVerification = data.emailVerification;
+        this.passwordResetEnabled = !!data.passwordResetEnabled;
         this.totpEnabled = data.totpEnabled;
         this.registrationEnabled = data.registrationEnabled || false;
         this.aadEnabled = data.aadEnabled || false;
@@ -654,6 +656,83 @@ export const useAuthStore = defineStore('auth', {
       this.totpSecret = null;
       this.qrCode = null;
       this.error = null;
+    },
+
+    /**
+     * Request a password-reset code by email. Always reports success even if
+     * the email isn't on file (server-side anti-enumeration), but still returns
+     * a resetToken so the UI can move on to the verify step.
+     */
+    async requestPasswordReset(email) {
+      this.error = null;
+      try {
+        const res = await fetch('/api/auth/password-reset/request', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email })
+        });
+        const data = await res.json();
+        if (!data.success) {
+          this.error = data.error || 'Failed to request password reset';
+          return null;
+        }
+        return data.resetToken || null;
+      } catch (err) {
+        this.error = err.message || 'Network error';
+        return null;
+      }
+    },
+
+    /**
+     * Submit reset code + new password.
+     */
+    async verifyPasswordReset(resetToken, code, newPassword) {
+      this.error = null;
+      try {
+        const res = await fetch('/api/auth/password-reset/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ resetToken, code, newPassword })
+        });
+        const data = await res.json();
+        if (!data.success) {
+          this.error = data.error || 'Failed to reset password';
+          return false;
+        }
+        return true;
+      } catch (err) {
+        this.error = err.message || 'Network error';
+        return false;
+      }
+    },
+
+    /**
+     * Permanently delete the current user's account.
+     * For password users: pass currentPassword.
+     * For SSO-only users: pass confirm: 'DELETE'.
+     */
+    async deleteAccount({ currentPassword, confirm } = {}) {
+      if (!this.token) return { success: false, error: 'Not authenticated' };
+      try {
+        const res = await fetch('/api/user/me', {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.token}`
+          },
+          body: JSON.stringify({ currentPassword, confirm })
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          return { success: false, error: data.error || 'Failed to delete account' };
+        }
+        // Clear local state — server already revoked the JWT.
+        this.reset();
+        localStorage.removeItem('authToken');
+        return { success: true };
+      } catch (err) {
+        return { success: false, error: err.message || 'Network error' };
+      }
     },
 
     /**
