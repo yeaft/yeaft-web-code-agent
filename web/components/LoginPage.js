@@ -1,5 +1,6 @@
 import { useAuthStore } from '../stores/auth.js';
 import { setLocale } from '../utils/i18n.js';
+import { isMobile, isInAlipay, isInWeChat } from '../utils/device.js';
 
 /**
  * LoginPage — OAuth-first design.
@@ -441,14 +442,32 @@ export default {
       localError.value = '';
       if (provider === 'microsoft') {
         authStore.loginWithMicrosoft();
-      } else if (provider === 'alipay' || provider === 'wechat') {
-        // QR-scan flow.
-        authStore.startSsoQr(provider).then(ok => {
-          if (ok) renderQrCode();
-        });
-      } else {
-        authStore.loginWithSso(provider);
+        return;
       }
+      if (provider === 'alipay') {
+        // Alipay's H5 authorize page natively pulls up the Alipay app on
+        // mobile (and works directly inside the Alipay in-app browser).
+        // Only PC needs the QR-scan flow.
+        if (isMobile() || isInAlipay()) {
+          authStore.loginWithSso(provider);
+        } else {
+          authStore.startSsoQr(provider).then(ok => { if (ok) renderQrCode(); });
+        }
+        return;
+      }
+      if (provider === 'wechat') {
+        // WeChat Open Platform's QR flow only works when scanned from a
+        // *different* device. On mobile we have no good alternative without
+        // a separate 公众号 appid, so surface a clear hint instead of a
+        // QR code the user can't scan.
+        if (isMobile() || isInWeChat()) {
+          localError.value = t('login.wechat.mobileUnsupported');
+          return;
+        }
+        authStore.startSsoQr(provider).then(ok => { if (ok) renderQrCode(); });
+        return;
+      }
+      authStore.loginWithSso(provider);
     };
 
     const login = async () => {

@@ -1,4 +1,5 @@
 import { useAuthStore } from '../stores/auth.js';
+import { isMobile, isInAlipay, isInWeChat } from '../utils/device.js';
 import ProxyTab from './ProxyTab.js';
 import DashboardTab from './DashboardTab.js';
 import LlmTab from './LlmTab.js';
@@ -668,6 +669,17 @@ export default {
     bindSso(provider) {
       this.ssoBoundMessage = '';
       this.ssoConflictMessage = '';
+      // Mobile: route Alipay through the redirect flow (Alipay's H5 page
+      // pulls up the app natively); refuse WeChat with a hint since the
+      // QR scan can't work on the same device.
+      if (provider === 'alipay' && (isMobile() || isInAlipay())) {
+        this.authStore.bindSso(provider);
+        return;
+      }
+      if (provider === 'wechat' && (isMobile() || isInWeChat())) {
+        this.ssoConflictMessage = this.$t('login.wechat.mobileUnsupported');
+        return;
+      }
       // QR providers (alipay, wechat) get the same in-page scan flow that
       // login uses. Everything else goes through the OAuth redirect.
       if (provider === 'alipay' || provider === 'wechat') {
