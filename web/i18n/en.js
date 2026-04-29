@@ -39,6 +39,7 @@ export default {
   'login.google': 'Sign in with Google',
   'login.wechat': 'Sign in with WeChat',
   'login.alipay': 'Sign in with Alipay',
+  'login.wechat.mobileUnsupported': 'Sign in with WeChat is only available on PC. Please scan the QR code from a desktop browser.',
   'login.qr.title': 'Scan to sign in',
   'login.qr.titleAlipay': 'Sign in with Alipay',
   'login.qr.titleWechat': 'Sign in with WeChat',
