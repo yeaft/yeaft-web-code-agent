@@ -1,9 +1,8 @@
 /**
  * keywords.js — pure-rule keyword extraction shared by memory recall paths.
  *
- * Extracted from the legacy R5 recall.js so recall-v2.js (and any future
- * recall path) can use it without dragging in the rest of the R5 module.
- * Pure CPU, no LLM, <1ms.
+ * Pure CPU, no LLM, <1ms. Used by `groups/pre-flow.js` to derive FTS
+ * query terms from the user message before hitting `memory/preflow.js`.
  */
 
 /** Common stop words filtered out before frequency counting. */

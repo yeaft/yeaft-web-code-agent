@@ -1,10 +1,12 @@
 /**
- * memory.js — R6 G2 Pinia store for VP/task memory browsing.
+ * memory.js — Pinia store for the read-only VP/task memory browser.
  *
  * Per ruling §5 (TASTE-5): the system prompt's memory composition is
- * assembled in the AGENT process via recall-r6.js / shard-store.js — this
- * store is purely a UI cache for the read-only memory browser surface.
- * It does NOT feed back into prompt assembly.
+ * assembled in the AGENT process via the FTS5 pre-flow path
+ * (groups/pre-flow.js → memory/preflow.js); per-VP/task memory shards
+ * are persisted by the agent's shard-store. This store is purely a UI
+ * cache for the read-only memory browser surface — it does NOT feed
+ * back into prompt assembly.
  *
  * Data flow:
  *   ChatStore receives unify_memory_query_result + unify_memory_trace_result

@@ -158,9 +158,8 @@ export function selectRespondingVps(input) {
 /**
  * Build the heading for a single scope's formatted memory block.
  *
- * Mirrors recall-v2's formatRecallV2 heading style so the system
- * prompt looks the same to the LLM whether recall came from FTS
- * (here) or from per-scope file reads (recall-v2).
+ * Heading style is the original recall-v2 format, kept so the system
+ * prompt the LLM sees stays stable across the FTS migration.
  *
  * @param {string} scope
  * @returns {string}
