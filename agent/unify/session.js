@@ -28,13 +28,14 @@ import { Engine } from './engine.js';
 // H2.f.5: threads/, pipeline/dispatcher and input-queue retired. The
 // session now exposes a single Engine.
 //
-// GC.1 Commit A: when config.memoryV2 && config.memoryPreflow, the
-// session opens a SegmentIndex (SQLite FTS5 over memory.md) and
-// passes it to the Engine. The Engine's #recallMemory then routes
-// pre-turn recall through groups/pre-flow.js → memory/preflow.js
-// instead of the per-scope file reader (memory/recall-v2.js).
-// Post-turn adjustMemory (memory/adjust.js) wiring lands in a later
-// commit.
+// GC.1 (final): when config.memoryV2 is on, the session opens a
+// SegmentIndex (SQLite FTS5 over memory.md) and passes it to the
+// Engine. Engine.#recallMemory routes pre-turn recall through
+// groups/pre-flow.js → memory/preflow.js (the previous per-scope
+// file reader recall-v2.js has been deleted). Post-turn AMS
+// correction (memory/adjust.js) is implemented but not yet wired —
+// requires session-level AMS instance + scope resolution. Tracked
+// as a follow-up.
 import { ensureDefaultGroupIfEmpty } from './groups/group-crud.js';
 import { seedDefaultVps } from './vp/seed-defaults.js';
 import { createDreamScheduler } from './memory/dream-scheduler.js';
@@ -223,15 +224,15 @@ export async function loadSession(options = {}) {
   }
 
   // ─── 5-fts. (GC.1) Open SegmentIndex for FTS pre-flow ────
-  //     When config.memoryV2 && config.memoryPreflow, build a SQLite
-  //     FTS5 index over ~/.yeaft/memory/<scope>/memory.md and pass it
-  //     to the Engine. Engine.#recallMemory uses it via
-  //     groups/pre-flow.js → memory/preflow.js. Disk is the source of
-  //     truth; on boot we reconcile disk → index via syncAll.
-  //     Failure to open the index is non-fatal: the Engine falls back
-  //     to recall-v2 transparently.
+  //     When config.memoryV2 is on, build a SQLite FTS5 index over
+  //     ~/.yeaft/memory/<scope>/memory.md and pass it to the Engine.
+  //     Engine.#recallMemory uses it via groups/pre-flow.js →
+  //     memory/preflow.js. Disk is the source of truth; on boot we
+  //     reconcile disk → index via syncAll. Failure to open the index
+  //     is non-fatal: #recallMemory returns an empty result and the
+  //     turn proceeds without pre-injected memory.
   let memoryIndex = null;
-  if (config.memoryV2 && config.memoryPreflow && !config._readOnly) {
+  if (config.memoryV2 && !config._readOnly) {
     try {
       const indexPath = join(yeaftDir, 'memory', 'index.db');
       memoryIndex = openSegmentIndex(indexPath);
