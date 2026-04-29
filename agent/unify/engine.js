@@ -20,8 +20,6 @@
 import { randomUUID } from 'crypto';
 import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
 import { LLMContextError, LLMAbortError } from './llm/adapter.js';
-import { recallR6, formatForInjection } from './memory/recall-r6.js';
-import { recallV2 } from './memory/recall-v2.js';
 import { runMemoryPreflow } from './groups/pre-flow.js';
 import { shouldConsolidate, consolidate, partitionMessages } from './memory/consolidate.js';
 import { extractMemories } from './memory/extract.js';
@@ -30,7 +28,6 @@ import { evaluateCompactTriggers } from './compact/triggers.js';
 import { archiveTurn } from './archive/turn-archive.js';
 import { archiveToolResults } from './archive/tool-results.js';
 import { buildMemoryInjection } from './memory/layout.js';
-import { buildUserProfile } from './memory/user-memory-store.js';
 import { readSummary as readScopeSummary } from './memory/store-v2.js';
 import { runStopHooks } from './stop-hooks.js';
 // H2.f.5: threads/ retired. Persisted messages still carry a `threadId`
@@ -500,9 +497,11 @@ export class Engine {
   /**
    * Perform memory recall for a given prompt.
    *
-   * Routes:
-   *   - config.memoryV2 === true → recall-v2 (per-scope memory.md + summary.md)
-   *   - else → R6 shard-based recall (legacy)
+   * Single path (GC.1 follow-up): SQLite FTS5 pre-flow via
+   * `groups/pre-flow.js` → `memory/preflow.js`. When the index isn't
+   * wired (e.g. read-only sessions or pre-FTS yeaft dirs) recall is
+   * skipped and an empty memory shape is returned — engine continues
+   * without injection.
    *
    * @param {string} prompt
    * @param {{ groupId?: string, vpId?: string, featureId?: string }} [ctx]
@@ -510,82 +509,20 @@ export class Engine {
    */
   async #recallMemory(prompt, ctx = {}) {
     const memory = { profile: '', entries: [], formatted: '' };
-
-    // ─── GC.1: FTS5 pre-flow path ──────────────────────────────
-    // When the SegmentIndex is wired and the feature flag is on,
-    // route recall through groups/pre-flow.js → memory/preflow.js
-    // (SQLite FTS5). On any failure fall through to v2.
-    if (this.#memoryIndex && this.#config && this.#config.memoryPreflow) {
-      try {
-        const result = runMemoryPreflow(this.#memoryIndex, {
-          userMsg: prompt,
-          groupId: ctx.groupId,
-          vpId: ctx.vpId,
-          featureId: ctx.featureId,
-        });
-        memory.profile = result.profile || '';
-        memory.entries = result.entries || [];
-        memory.formatted = result.formatted || '';
-        return memory;
-      } catch {
-        // Fall through to v2 / R6 paths.
-      }
-    }
-
-    // ─── v2 path (DESIGN-v2) ───────────────────────────────────
-    if (this.#config && this.#config.memoryV2 && this.#yeaftDir) {
-      try {
-        const result = await recallV2({
-          prompt,
-          root: `${this.#yeaftDir}/memory`,
-          groupId: ctx.groupId,
-          vpId: ctx.vpId,
-          featureId: ctx.featureId,
-        });
-        memory.entries = result.sections || [];
-        memory.formatted = result.formatted || '';
-        // Profile concept: in v2 the user/memory.md IS the profile.
-        const userSec = (result.sections || []).find(s => s.kind === 'user');
-        memory.profile = userSec ? (userSec.summary || '') : '';
-      } catch {
-        // Fail soft — empty injection.
-      }
-      return memory;
-    }
-
-    // ─── R6 legacy path ────────────────────────────────────────
-    // Build user profile from user-memory shard store (R6 path),
-    // falling back to legacy readProfile if shard store unavailable.
+    if (!this.#memoryIndex) return memory;
     try {
-      const profile = buildUserProfile(this.#memoryShardStore);
-      if (profile) {
-        memory.profile = profile;
-      } else if (this.#memoryStore) {
-        memory.profile = this.#memoryStore.readProfile();
-      }
+      const result = runMemoryPreflow(this.#memoryIndex, {
+        userMsg: prompt,
+        groupId: ctx.groupId,
+        vpId: ctx.vpId,
+        featureId: ctx.featureId,
+      });
+      memory.profile = result.profile || '';
+      memory.entries = result.entries || [];
+      memory.formatted = result.formatted || '';
     } catch {
-      // Non-critical — fall through to legacy
-      if (this.#memoryStore) {
-        try { memory.profile = this.#memoryStore.readProfile(); } catch { /* */ }
-      }
+      // Fail soft — empty injection.
     }
-
-    // R6 shard-based recall (preferred path)
-    if (this.#memoryShardStore) {
-      try {
-        const result = await recallR6({
-          prompt,
-          memoryShardStore: this.#memoryShardStore,
-          adapter: this.#adapter,
-          fastModel: this.#fastConfig?.model,
-        });
-        memory.entries = result.entries;
-        memory.formatted = formatForInjection(result.entries);
-      } catch {
-        // Recall failure is non-critical
-      }
-    }
-
     return memory;
   }
 
@@ -901,7 +838,8 @@ export class Engine {
     // ─── Pre-query: Memory Injection (task-287) + Compact Summary ──
     // Two-layer recall:
     //   1. Static memory index injection (buildMemoryInjection — always)
-    //   2. R6 shard-based recall (recallR6 — when memoryShardStore is wired)
+    //   2. FTS5 pre-flow recall (#recallMemory → groups/pre-flow.js →
+    //      memory/preflow.js — when memoryIndex is wired)
     // No per-turn fuzzy recall via old recall.js — LLM calls memory_load /
     // memory_query on demand (memory_search still works as a deprecated alias).
     let memoryInjection = '';

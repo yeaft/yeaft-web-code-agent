@@ -26,14 +26,9 @@ import { defineTool } from '../../../agent/unify/tools/types.js';
 import { buildChildToolRegistry, isRestrictedToolName } from '../../../agent/unify/sub-agent/runner.js';
 import { NullTrace } from '../../../agent/unify/debug-trace.js';
 
-vi.mock('../../../agent/unify/memory/recall-r6.js', async (importOriginal) => {
-  const orig = await importOriginal();
-  return {
-    ...orig,
-    recallR6: vi.fn(async () => ({ entries: [], shards: [], fingerprint: 't', cached: false })),
-    formatForInjection: vi.fn(() => ''),
-  };
-});
+// recall-r6 was deleted in GC.1 follow-up; engine now recalls via FTS5
+// pre-flow only when memoryIndex is wired (it isn't here), so no mock
+// needed.
 
 /**
  * Scripted adapter that emits text and end_turn for every stream() call.
