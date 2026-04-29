@@ -20,7 +20,7 @@
 import { randomUUID } from 'crypto';
 import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
 import { LLMContextError, LLMAbortError } from './llm/adapter.js';
-import { runMemoryPreflow } from './groups/pre-flow.js';
+import { runMemoryPreflow, buildRelevantScopes } from './groups/pre-flow.js';
 import { shouldConsolidate, consolidate, partitionMessages } from './memory/consolidate.js';
 import { extractMemories } from './memory/extract.js';
 import { runCompact as runCompactOrchestrator } from './compact/orchestrator.js';
@@ -29,6 +29,7 @@ import { archiveTurn } from './archive/turn-archive.js';
 import { archiveToolResults } from './archive/tool-results.js';
 import { buildMemoryInjection } from './memory/layout.js';
 import { readSummary as readScopeSummary } from './memory/store-v2.js';
+import { runAdjust } from './memory/adjust.js';
 import { runStopHooks } from './stop-hooks.js';
 // H2.f.5: threads/ retired. Persisted messages still carry a `threadId`
 // field for back-compat with old conversation files; new writes always use
@@ -153,6 +154,9 @@ export class Engine {
   /** @type {import('./memory/index-db.js').SegmentIndex|null} — GC.1: SQLite FTS5 segment index */
   #memoryIndex;
 
+  /** @type {import('./memory/ams-registry.js').AmsRegistry|null} — group-keyed AMS cache */
+  #amsRegistry;
+
   /** @type {import('./tools/registry.js').ToolRegistry|null} */
   #toolRegistry;
 
@@ -214,6 +218,14 @@ export class Engine {
   #reflectedTurns = new Set();
   #__queryCounter = 0;
 
+  /**
+   * Per-group "adjust has run at least once this engine lifetime" flag.
+   * Keyed by groupId (or 'default'). The first turn always runs adjust;
+   * subsequent turns only run on budget pressure or new memory.
+   * @type {Map<string, boolean>}
+   */
+  #adjustRanByGroup = new Map();
+
   /** @type {string|null} */
   #abortReason = null;
 
@@ -231,7 +243,7 @@ export class Engine {
    *   yeaftDir?: string,
    * }} params
    */
-  constructor({ adapter, trace, config, conversationStore, memoryStore, memoryShardStore, memoryIndex, toolRegistry, skillManager, mcpManager, yeaftDir }) {
+  constructor({ adapter, trace, config, conversationStore, memoryStore, memoryShardStore, memoryIndex, amsRegistry, toolRegistry, skillManager, mcpManager, yeaftDir }) {
     this.#adapter = adapter;
     this.#trace = trace;
     this.#config = config;
@@ -241,6 +253,7 @@ export class Engine {
     this.#memoryStore = memoryStore || null;
     this.#memoryShardStore = memoryShardStore || null;
     this.#memoryIndex = memoryIndex || null;
+    this.#amsRegistry = amsRegistry || null;
     this.#toolRegistry = toolRegistry || null;
     this.#skillManager = skillManager || null;
     this.#mcpManager = mcpManager || null;
@@ -376,6 +389,161 @@ export class Engine {
     ];
     const [user, group, vp] = await Promise.all(tasks);
     return { user: user || '', group: group || '', vp: vp || '' };
+  }
+
+  /**
+   * Prepare the per-turn AMS for the active group. Idempotent and safe
+   * to call when the AMS registry isn't wired (returns null).
+   *
+   * @param {{
+   *   groupId?: string,
+   *   ownVpId?: string|null,
+   *   featureId?: string,
+   *   summaries: { user?: string, group?: string, vp?: string },
+   *   recallEntries: object[],
+   * }} args
+   * @returns {{
+   *   ams: import('./memory/ams.js').ActiveMemorySet,
+   *   groupKey: string,
+   *   ownVpId: string|null,
+   *   scopes: string[],
+   *   snapshotBlock: string,
+   * } | null}
+   */
+  #prepareAms(args) {
+    if (!this.#amsRegistry) return null;
+    const groupKey = args.groupId || 'default';
+    const ownVpId = args.ownVpId || null;
+    const ams = this.#amsRegistry.getOrCreate(groupKey, { ownVpId });
+
+    // (a) Resident: rebuild from the same scope summaries the worker
+    // prompt is already going to see.
+    const residentEntries = [];
+    if (args.summaries?.user)  residentEntries.push({ scope: 'user', summary: args.summaries.user });
+    if (args.groupId && args.summaries?.group) {
+      residentEntries.push({ scope: `group/${args.groupId}`, summary: args.summaries.group });
+    }
+    if (ownVpId && args.summaries?.vp) {
+      residentEntries.push({ scope: `vp/${ownVpId}`, summary: args.summaries.vp });
+    }
+    ams.setResident(residentEntries);
+
+    // (b) onDemand: replace with this turn's FTS hits.
+    const segs = Array.isArray(args.recallEntries) ? args.recallEntries : [];
+    ams.setOnDemand(segs);
+
+    // (c) Snapshot — render the AMS layers as a single prompt block.
+    const snapshotBlock = this.#renderAmsSnapshot(ams);
+
+    const scopes = buildRelevantScopes({
+      groupId: args.groupId,
+      vpId: ownVpId,
+      featureId: args.featureId,
+    });
+
+    return { ams, groupKey, ownVpId, scopes, snapshotBlock };
+  }
+
+  /**
+   * Render an AMS snapshot as a markdown block suitable for prompt
+   * injection. Mirrors the heading style of the existing memory blocks
+   * so the LLM sees a consistent layout.
+   *
+   * @param {import('./memory/ams.js').ActiveMemorySet} ams
+   * @returns {string}
+   */
+  #renderAmsSnapshot(ams) {
+    const snap = ams.snapshot();
+    if (!snap) return '';
+    const parts = [];
+    if (snap.resident.length === 0 && snap.recent.length === 0 && snap.onDemand.length === 0) {
+      return '';
+    }
+    parts.push('## Active Memory Set');
+    if (snap.resident.length > 0) {
+      parts.push('### Resident');
+      for (const r of snap.resident) {
+        parts.push(`- **${r.scope}**: ${r.summary}`);
+      }
+    }
+    if (snap.recent.length > 0) {
+      parts.push('### Recent');
+      for (const s of snap.recent) {
+        parts.push(`- (${s.scope}) ${(s.body || '').trim()}`);
+      }
+    }
+    if (snap.onDemand.length > 0) {
+      parts.push('### OnDemand');
+      for (const s of snap.onDemand) {
+        parts.push(`- (${s.scope}) ${(s.body || '').trim()}`);
+      }
+    }
+    return parts.join('\n');
+  }
+
+  /**
+   * Post-turn AMS correction. Decides whether to run via
+   * `shouldRunAdjust`, then drives the LLM round-trip through
+   * `runAdjust`. Persists the AMS to disk if membership changed.
+   *
+   * Failure here is intentionally swallowed — adjust is a best-effort
+   * memory-quality step; a parse failure or LLM blip should never
+   * surface as a turn failure.
+   *
+   * @param {{
+   *   amsContext: { ams: import('./memory/ams.js').ActiveMemorySet, groupKey: string, ownVpId: string|null, scopes: string[] }|null,
+   *   userMsg: string,
+   *   assistantReply: string,
+   *   turnTokenUsage: number,
+   * }} args
+   * @returns {Promise<{ ran: boolean, added: number, evicted: number, reason: string } | null>}
+   */
+  async #runAdjustHook(args) {
+    const ctx = args.amsContext;
+    if (!ctx || !this.#amsRegistry || !this.#memoryIndex) return null;
+    const totalBudget = ctx.ams.budget?.total || 0;
+    if (!totalBudget) return null;
+
+    const adjustRanThisSession = this.#adjustRanByGroup.get(ctx.groupKey) === true;
+    try {
+      const result = await runAdjust({
+        trigger: {
+          newMemoryWritten: false,        // dream writes happen async; treat as false here
+          onDemandSize: ctx.ams.onDemandIds().length,
+          turnTokenUsage: args.turnTokenUsage,
+          totalBudget,
+          adjustRanThisSession,
+        },
+        ams: ctx.ams,
+        index: this.#memoryIndex,
+        scopes: ctx.scopes,
+        ownVpId: ctx.ownVpId,
+        userMsg: args.userMsg,
+        assistantReply: args.assistantReply,
+        runLLM: async (prompt) => {
+          const out = await this.#adapter.call({
+            model: this.#fastConfig.model,
+            system: 'You are a memory-management subroutine. Reply with a single JSON object as instructed.',
+            messages: [{ role: 'user', content: prompt }],
+            maxTokens: 1024,
+          });
+          return out?.text || '';
+        },
+      });
+      if (result?.ran) {
+        this.#adjustRanByGroup.set(ctx.groupKey, true);
+        // Always persist when we ran — even with no membership change,
+        // the adjustRanThisSession bit is part of the on-disk state we
+        // want to preserve.
+        this.#amsRegistry.markDirty(ctx.groupKey);
+        this.#amsRegistry.persist(ctx.groupKey, {
+          adjustRanThisSession: true,
+        });
+      }
+      return result;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -895,6 +1063,34 @@ export class Engine {
         : (typeof senderVpId === 'string' ? senderVpId : undefined),
     });
 
+    // ─── AMS: populate + snapshot ───────────────────────────────
+    // Group-keyed and persisted across session deactivation. Each turn:
+    //   (a) resident layer is rebuilt from <scope>/summary.md (the
+    //       summaries already loaded above are the same scopes, so
+    //       reuse them);
+    //   (b) onDemand is replaced with this turn's FTS hits;
+    //   (c) we render a budget-aware snapshot block and append it to
+    //       memoryInjection. Adjust runs post-turn (see end_turn below).
+    const ownVpIdForAms = vpPersona && typeof vpPersona === 'object'
+      && typeof vpPersona.vpId === 'string'
+      ? vpPersona.vpId
+      : (typeof senderVpId === 'string' ? senderVpId : null);
+    const featureIdForAms = typeof inboundEnvelope === 'object' && inboundEnvelope
+      ? inboundEnvelope.featureId
+      : undefined;
+    const amsContext = this.#prepareAms({
+      groupId,
+      ownVpId: ownVpIdForAms,
+      featureId: featureIdForAms,
+      summaries,
+      recallEntries: recallResult ? (recallResult.entries || []) : [],
+    });
+    if (amsContext && amsContext.snapshotBlock) {
+      memoryInjection = memoryInjection
+        ? memoryInjection + '\n\n' + amsContext.snapshotBlock
+        : amsContext.snapshotBlock;
+    }
+
     const systemPrompt = this.#buildSystemPrompt(undefined, compactSummary, prompt, memoryInjection, userProfile, vpPersona, summaries);
 
     // Build conversation: existing messages + new user message
@@ -925,6 +1121,8 @@ export class Engine {
     let toolLoopTurns = 0; // task-327b: tool-use turns for long-loop auto-bump
     let fullResponseText = '';
     let currentModel = this.#config.model;
+    let cumulativeInputTokens = 0;
+    let cumulativeOutputTokens = 0;
 
     while (true) {
       turnNumber++;
@@ -1061,6 +1259,8 @@ export class Engine {
             case 'usage':
               totalUsage.inputTokens += event.inputTokens;
               totalUsage.outputTokens += event.outputTokens;
+              cumulativeInputTokens += event.inputTokens || 0;
+              cumulativeOutputTokens += event.outputTokens || 0;
               yield event;
               break;
             case 'stop':
@@ -1266,6 +1466,27 @@ export class Engine {
           const consolidated = await this.#maybeConsolidate();
           if (consolidated && consolidated.archivedCount > 0) {
             yield { type: 'consolidate', archivedCount: consolidated.archivedCount, extractedCount: consolidated.extractedCount };
+          }
+        }
+
+        // ─── Post-turn AMS adjust ────────────────────────────────
+        // shouldRunAdjust gates the LLM round-trip so most turns are
+        // free; first turn always runs, plus on budget pressure.
+        if (amsContext) {
+          const adjustResult = await this.#runAdjustHook({
+            amsContext,
+            userMsg: prompt,
+            assistantReply: fullResponseText,
+            turnTokenUsage: cumulativeInputTokens + cumulativeOutputTokens,
+          });
+          if (adjustResult && adjustResult.ran) {
+            yield {
+              type: 'ams_adjust',
+              groupKey: amsContext.groupKey,
+              added: adjustResult.added,
+              evicted: adjustResult.evicted,
+              reason: adjustResult.reason,
+            };
           }
         }
 
