@@ -1,15 +1,18 @@
 /**
- * task-325c — Abort command protocol tests.
+ * Abort command protocol tests — H2.f.2 single-controller variant.
  *
- * Covers the three input combinations declared in the spec:
+ * Pre-H2.f.2 the bridge held a Map<threadId, AbortController>. Post-H2.f.2
+ * the bridge is collapsed to a single in-flight `currentAbortCtrl`. The
+ * wire protocol (`unify_abort_thread`, `unify_abort_all`, `unify_aborted`
+ * ack) is preserved for client back-compat — the threadId field on
+ * `unify_abort_thread` is simply ignored, since there is only one
+ * conversation to abort.
  *
- *   1. { threadId: 'foo' }  → aborts that thread's controller only
- *   2. { all: true }        → aborts every registered controller
- *   3. no registered thread → silent no-op (still emits ack)
- *
- * Plus the surrounding wiring: message-router route, server relay,
- * session.abort() entry, and the `thread_list_updated` / `unify_aborted`
- * event names (red line: names must not change).
+ * Covers:
+ *   1. wiring: message-router routes, server relay, session.abort() entry
+ *      and the `unify_aborted` ack name (red line: name must not change)
+ *   2. behaviour: { threadId } / { all:true } / no-op shapes against the
+ *      single controller.
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -29,12 +32,10 @@ const routerSrc = readFileSync(join(ROOT, 'agent/connection/message-router.js'),
 const relaySrc = readFileSync(join(ROOT, 'server/handlers/client-conversation.js'), 'utf8');
 const sessionSrc = readFileSync(join(ROOT, 'agent/unify/session.js'), 'utf8');
 
-// ---- Reset registry between tests (module-level singleton). ----
+// ---- Reset registry between tests (single controller). ----
 beforeEach(() => {
-  for (const id of __testGetRegisteredThreadIds()) {
-    // Drain without aborting — we seed fresh controllers per test.
-    handleUnifyAbortThread({ threadId: id });
-  }
+  // Clear the in-flight controller without aborting anything live.
+  __testSeedAbortController(undefined, null);
 });
 
 // --- 1. Protocol: message names + wiring ------------------------------------
@@ -54,9 +55,9 @@ describe('abort protocol — wire-level names (PM red lines)', () => {
     expect(routerSrc).toMatch(/handleUnifyAbortAll/);
   });
 
-  it('server client-conversation relays unify_abort_thread with threadId only', () => {
+  it('server client-conversation relays unify_abort_thread', () => {
     expect(relaySrc).toMatch(/case\s+'unify_abort_thread'/);
-    expect(relaySrc).toMatch(/type:\s*'unify_abort_thread',\s*\n\s*threadId:\s*msg\.threadId/);
+    expect(relaySrc).toMatch(/type:\s*'unify_abort_thread'/);
   });
 
   it('server client-conversation relays unify_abort_all with empty payload', () => {
@@ -69,13 +70,11 @@ describe('abort protocol — wire-level names (PM red lines)', () => {
     expect(sessionSrc).toMatch(/abortUnifySession/);
   });
 
-  it('web-bridge preserves existing `thread_list_updated` event name (red line)', () => {
-    expect(bridgeSrc).toMatch(/type:\s*'thread_list_updated'/);
-  });
-
-  it('web-bridge does NOT rename `abortByThread` Map key shape', () => {
-    // Registry must still be keyed by threadId (string). Sanity check.
-    expect(bridgeSrc).toMatch(/const\s+abortByThread\s*=\s*new\s+Map\(\)/);
+  it('web-bridge holds a single in-flight AbortController (red line)', () => {
+    // Post-H2.f.2: state collapsed from `abortByThread = new Map()` to a
+    // single `currentAbortCtrl` ref.
+    expect(bridgeSrc).toMatch(/let\s+currentAbortCtrl\s*=\s*null/);
+    expect(bridgeSrc).not.toMatch(/const\s+abortByThread\s*=\s*new\s+Map\(\)/);
   });
 
   it('web-bridge emits `unify_aborted` (not the old `unify_cancelled`) ack', () => {
@@ -84,42 +83,34 @@ describe('abort protocol — wire-level names (PM red lines)', () => {
   });
 });
 
-// --- 2. Behaviour: three input combinations ---------------------------------
-describe('abort behaviour — three input combinations', () => {
-  it('(1) { threadId } aborts the matching controller only', () => {
-    const ctrlA = new AbortController();
-    const ctrlB = new AbortController();
-    __testSeedAbortController('t-a', ctrlA);
-    __testSeedAbortController('t-b', ctrlB);
+// --- 2. Behaviour: single controller, three input shapes --------------------
+describe('abort behaviour — single controller', () => {
+  it('(1) { threadId } aborts the in-flight controller (threadId is ignored)', () => {
+    const ctrl = new AbortController();
+    __testSeedAbortController('ignored', ctrl);
 
-    const result = handleUnifyAbortThread({ threadId: 't-a' });
+    const result = handleUnifyAbortThread({ threadId: 'whatever' });
 
-    expect(result).toEqual({ aborted: ['t-a'], all: false });
-    expect(ctrlA.signal.aborted).toBe(true);
-    expect(ctrlB.signal.aborted).toBe(false);
-    // Registry pruned for 't-a' only
-    expect(__testGetRegisteredThreadIds()).toEqual(['t-b']);
+    expect(result.all).toBe(false);
+    expect(result.aborted).toEqual(['main']);
+    expect(ctrl.signal.aborted).toBe(true);
+    // Registry drained
+    expect(__testGetRegisteredThreadIds()).toEqual([]);
   });
 
-  it('(2) { all: true } aborts every registered controller', () => {
-    const ctrlA = new AbortController();
-    const ctrlB = new AbortController();
-    const ctrlC = new AbortController();
-    __testSeedAbortController('t-a', ctrlA);
-    __testSeedAbortController('t-b', ctrlB);
-    __testSeedAbortController('t-c', ctrlC);
+  it('(2) { all: true } aborts the single live controller', () => {
+    const ctrl = new AbortController();
+    __testSeedAbortController(undefined, ctrl);
 
     const result = handleUnifyAbortAll();
 
     expect(result.all).toBe(true);
-    expect(result.aborted.sort()).toEqual(['t-a', 't-b', 't-c']);
-    expect(ctrlA.signal.aborted).toBe(true);
-    expect(ctrlB.signal.aborted).toBe(true);
-    expect(ctrlC.signal.aborted).toBe(true);
+    expect(result.aborted).toEqual(['main']);
+    expect(ctrl.signal.aborted).toBe(true);
     expect(__testGetRegisteredThreadIds()).toEqual([]);
   });
 
-  it('(3) { threadId } on unregistered thread is a silent no-op', () => {
+  it('(3) abort with no in-flight controller is a silent no-op', () => {
     // Nothing seeded — registry empty.
     const result = handleUnifyAbortThread({ threadId: 'never-existed' });
     expect(result).toEqual({ aborted: [], all: false });
@@ -127,33 +118,26 @@ describe('abort behaviour — three input combinations', () => {
   });
 
   it('abortUnifySession dispatches correctly on all three shapes', () => {
-    const ctrlA = new AbortController();
-    __testSeedAbortController('t-a', ctrlA);
     // Shape A: { all:true }
+    const ctrlA = new AbortController();
+    __testSeedAbortController(undefined, ctrlA);
     expect(abortUnifySession({ all: true }).all).toBe(true);
     expect(ctrlA.signal.aborted).toBe(true);
 
-    // Shape B: { threadId }
+    // Shape B: { threadId } — also aborts the (now single) controller
     const ctrlB = new AbortController();
-    __testSeedAbortController('t-b', ctrlB);
-    expect(abortUnifySession({ threadId: 't-b' })).toEqual({ aborted: ['t-b'], all: false });
+    __testSeedAbortController(undefined, ctrlB);
+    const r = abortUnifySession({ threadId: 'whatever' });
+    expect(r.all).toBe(false);
+    expect(r.aborted).toEqual(['main']);
     expect(ctrlB.signal.aborted).toBe(true);
 
-    // Shape C: empty payload → conservative no-op
+    // Shape C: empty payload → conservative no-op (controller untouched)
     const ctrlC = new AbortController();
-    __testSeedAbortController('t-c', ctrlC);
+    __testSeedAbortController(undefined, ctrlC);
     const bare = abortUnifySession({});
     expect(bare).toEqual({ aborted: [], all: false });
-    expect(ctrlC.signal.aborted).toBe(false);  // untouched
-  });
-
-  it('handleUnifyAbortThread with missing threadId is a silent no-op', () => {
-    const ctrl = new AbortController();
-    __testSeedAbortController('t-x', ctrl);
-    const result = handleUnifyAbortThread({});
-    expect(result).toEqual({ aborted: [], all: false });
-    expect(ctrl.signal.aborted).toBe(false);
-    expect(__testGetRegisteredThreadIds()).toEqual(['t-x']);
+    expect(ctrlC.signal.aborted).toBe(false);
   });
 
   it('handleUnifyAbortAll on empty registry still emits ack (idempotent)', () => {

@@ -1,31 +1,26 @@
 /**
  * web-bridge.js — Bridge between web UI and Yeaft Unify Engine.
  *
+ * H2.f.2: collapsed to a single-conversation bridge. The pre-H2 multi-thread
+ * routing model is gone — there is one engine, one conversation, one
+ * AbortController, one flat message history. The wire protocol drops
+ * `threadId` from outgoing events; frontend reads them as a single stream.
+ *
  * Translates Engine events into claude_output-format messages so the
  * frontend can fully reuse the standard Chat rendering pipeline
  * (MessageList, AssistantTurn, ToolLine, AskCard, waiting cat, etc.).
- *
- * Architecture:
- *   1. On first use, loadSession() initialises Engine with skills + MCP enabled.
- *   2. A virtual conversationId ('unify-<ts>') is assigned per session.
- *   3. Engine.query() yields events → translated into unify_output messages
- *      that carry { conversationId, data } in claude_output format.
- *   4. The frontend's handleUnifyOutput dispatches them through handleClaudeOutput.
  *
  * task-330c lint guard:
  *   ⚠️ DO NOT introduce greedy `text.replace(/---ROUTE---[\s\S]*$/g, '')`
  *      style strips on incoming/outgoing message bodies. Crew ROUTE
  *      stripping is owned EXCLUSIVELY by `agent/crew/routing.js`
  *      `parseRoutes()` which returns `{routes, displayBody}` with exact
- *      ranges removed. Re-stripping here would (a) double-eat content
- *      that has already been parser-cleaned, (b) reintroduce the bug
- *      task-328 fixed (greedy tail-strip ate trailing prose).
+ *      ranges removed.
  */
 
 import { loadSession } from './session.js';
 import { sendToServer } from '../connection/buffer.js';
 import ctx from '../context.js';
-import { getThreadStore, MAIN_THREAD_ID } from './threads/store.js';
 import { handleVpSubscribe } from './vp/vp-bridge.js';
 import { createVp, updateVp, deleteVp, readVp, VpCrudError } from './vp/vp-crud.js';
 import { scanVpLibrary } from './vp/vp-store.js';
@@ -52,16 +47,11 @@ import {
 let session = null;
 
 /**
- * task-320: per-thread in-flight AbortController registry.
- *
- * A new message only cancels the prior round on the SAME thread; a message
- * routed to a different thread runs concurrently without aliasing. Keyed by
- * the resolved `targetThreadId` from the dispatcher's `routing_decision`
- * event (we don't know the thread until the router has classified).
- *
- * @type {Map<string, AbortController>}
+ * Single in-flight AbortController. A new user message cancels the prior
+ * round (if any). H2.f.2: replaces the per-thread Map.
+ * @type {AbortController | null}
  */
-const abortByThread = new Map();
+let currentAbortCtrl = null;
 
 /** Query timeout in ms — abort if LLM doesn't respond within this window */
 const QUERY_TIMEOUT_MS = 120_000;
@@ -74,41 +64,24 @@ let unifyConversationId = null;
 let _vpUnsubscribe = null;
 
 /**
- * task-320: per-thread accumulated conversation messages for context
- * continuity. Previously a single flat array — which cross-contaminated
- * history across threads. Keyed by threadId. Cleared on session reset or
- * by a `consolidate` event for that thread only.
- *
- * @type {Map<string, Array<{role: 'user'|'assistant', content: string|Array}>>}
+ * Flat conversation history for engine context continuity. H2.f.2: replaces
+ * the per-thread Map. Cleared on session reset or by a `consolidate` event.
+ * @type {Array<{role:'user'|'assistant'|'tool', content:string|Array, toolCalls?:Array, toolCallId?:string, isError?:boolean}>}
  */
-const messagesByThread = new Map();
-
-function getThreadMessages(threadId) {
-  if (!threadId) return [];
-  let arr = messagesByThread.get(threadId);
-  if (!arr) { arr = []; messagesByThread.set(threadId, arr); }
-  return arr;
-}
+let conversationMessages = [];
 
 /**
- * Restore per-thread message history from persisted conversation store.
- *
- * task-fix: accept `role:'tool'` messages AND preserve `toolCalls` /
- * `toolCallId` fields. Without this, chat-completions serialization
- * emits `tool_calls` without paired `role:'tool'` results, causing
- * "No tool output found for function call" 400s after the first tool
- * use across any restart / session-ready / model-switch event.
+ * Restore conversation history from persisted store. Accepts `role:'tool'`
+ * messages and preserves `toolCalls`/`toolCallId` so the next chat-completions
+ * serialization includes paired tool messages (avoids "No tool output found
+ * for function call" 400s).
  *
  * @param {Array<object>} recent — output of conversationStore.loadRecent()
  */
-function restoreThreadHistoryFromRecent(recent) {
-  messagesByThread.clear();
+function restoreHistoryFromRecent(recent) {
+  conversationMessages = [];
   for (const m of recent) {
-    // Keep user, assistant, AND tool messages. Tool messages are required
-    // for the chat-completions `tool_call_id` pairing.
     if (m.role !== 'user' && m.role !== 'assistant' && m.role !== 'tool') continue;
-    const tid = m.threadId || MAIN_THREAD_ID;
-    const bucket = getThreadMessages(tid);
     const entry = { role: m.role, content: m.content };
     if (m.toolCallId) entry.toolCallId = m.toolCallId;
     if (Array.isArray(m.toolCalls) && m.toolCalls.length > 0) {
@@ -119,18 +92,13 @@ function restoreThreadHistoryFromRecent(recent) {
       }));
     }
     if (m.isError) entry.isError = true;
-    bucket.push(entry);
+    conversationMessages.push(entry);
   }
 }
 
 /** Whether we've already sent a permission warning to the UI */
 let _permissionDiagnosticSent = false;
 
-/**
- * Check if an error message is a permission error.
- * @param {string} msg
- * @returns {boolean}
- */
 function isPermissionErrorMsg(msg) {
   if (!msg) return false;
   const lower = msg.toLowerCase();
@@ -139,14 +107,9 @@ function isPermissionErrorMsg(msg) {
 
 /**
  * Send a unify_output message carrying claude_output-format data.
- * The server forwards this as-is to the web client.
- * The frontend's handleUnifyOutput will dispatch via handleClaudeOutput.
- *
  * Optional `groupId` tags every emitted assistant/tool/user mirror with
  * the originating group so the frontend can stamp arriving messages with
- * the SEND-context group instead of the user's CURRENT filter (which can
- * change while the reply is in flight). Without this, switching groups
- * mid-reply lands the assistant turn in the wrong group.
+ * the SEND-context group.
  */
 function sendUnifyOutput(data, groupId) {
   sendToServer({
@@ -157,10 +120,7 @@ function sendUnifyOutput(data, groupId) {
   });
 }
 
-/**
- * Send a unify_output event (non-claude_output metadata).
- * Optional `groupId` — see sendUnifyOutput for rationale.
- */
+/** Send a unify_output event (non-claude_output metadata). */
 function sendUnifyEvent(event, groupId) {
   sendToServer({
     type: 'unify_output',
@@ -170,15 +130,7 @@ function sendUnifyEvent(event, groupId) {
   });
 }
 
-/**
- * task-334-ui-a + task-334h: respond to `unify_vp_subscribe` from the web
- * client by pushing a one-shot `vp_snapshot` event AND registering this
- * socket as a live-diff subscriber. VpLoader's debounced rescan fans out
- * `vp_updated` / `vp_removed` events to every active subscriber.
- */
 export function handleUnifyVpSubscribe(_msg) {
-  // Unsub any prior subscription before re-subscribing to prevent duplicate
-  // handler registration on reconnect / re-subscribe.
   if (_vpUnsubscribe) {
     try { _vpUnsubscribe(); } catch { /* ignore */ }
     _vpUnsubscribe = null;
@@ -187,23 +139,7 @@ export function handleUnifyVpSubscribe(_msg) {
 }
 
 /**
- * task-334-ui-g: VP CRUD from the web client.
- *
- * Thin dispatcher over agent/unify/vp/vp-crud.js. We never throw on the WS
- * path — each op reports via `unify_output` with a structured payload so
- * the UI can surface errors as i18n strings keyed by `error.code`. VpLoader
- * picks up the on-disk change on its next debounced rescan (default 500ms)
- * and fans out `vp_updated` / `vp_removed` events to every subscriber, so
- * we do not need to emit an extra snapshot here.
- *
- * Message shapes (wire):
- *   unify_vp_create  { payload: {vpId, displayName, role, traits, modelHint, persona}, requestId? }
- *   unify_vp_update  { payload: {...}, requestId? }
- *   unify_vp_delete  { vpId, requestId? }
- *   unify_vp_read    { vpId, requestId? }
- *
- * Replies (all sent through sendUnifyEvent):
- *   { type: 'vp_crud_result', op, requestId, ok, vpId?, vp?, error?: {code, vpId?} }
+ * VP CRUD from the web client. See historic doc for full message shapes.
  */
 function sendVpCrudResult(payload) {
   sendUnifyEvent({ type: 'vp_crud_result', ...payload });
@@ -269,53 +205,18 @@ export function handleUnifyVpDelete(msg) {
   }
 }
 
-/**
- * task-334h (R6 §Δ28 / §Δ31.6): task-scoped direct message echo.
- *
- * Replaces the withdrawn R3 `unify_task_private_chat`. The agent acts as a
- * relay: validate → stamp msgId + ts → broadcast `task_message`. Real
- * persistence + task ACL lands in 334l.
- *
- * @param {any} msg
- */
 export function handleUnifyFeatureMessage(msg) {
   _handleUnifyFeatureMessage(msg, sendUnifyEvent);
 }
 
-/**
- * task-334h (R6 §Δ29): user-memory write skeleton. Replies with a
- * `user_memory_updated` ack carrying `pending: true`; 334l replaces the
- * stub with real ingestion + entryId.
- *
- * @param {any} msg
- */
 export function handleUnifyUserMemoryWrite(msg) {
   _handleUnifyUserMemoryWrite(msg, sendUnifyEvent);
 }
 
-/**
- * task-334h (R6 §Δ29): user-memory remove skeleton. Replies with
- * `user_memory_removed` ack; 334l replaces the stub.
- *
- * @param {any} msg
- */
 export function handleUnifyUserMemoryRemove(msg) {
   _handleUnifyUserMemoryRemove(msg, sendUnifyEvent);
 }
 
-/**
- * task-fix: list MemoryStore entries as a scope-tree for the
- * UserMemoryPage "folder view". Entries come from MemoryStore.listEntries()
- * and are grouped client-side by their `scope` (a `/`-separated path like
- * `work/claude-web-chat/auth`).
- *
- * Request shape:  { type: 'unify_memory_scope_list', requestId? }
- * Reply shape:    { type: 'memory_scope_snapshot',
- *                   entries: Array<{name,scope,kind,tags,importance,
- *                                    frequency,created_at,updated_at,
- *                                    content}>,
- *                   requestId? }
- */
 export function handleUnifyMemoryScopeList(msg) {
   const requestId = msg && typeof msg.requestId === 'string' ? msg.requestId : undefined;
   try {
@@ -355,22 +256,7 @@ export function handleUnifyVpRead(msg) {
 }
 
 /**
- * task-334m: Group CRUD wired to WS events (§Δ10 334m + R6 §Δ31.2).
- *
- * Message shapes (wire):
- *   unify_list_groups    { requestId? }
- *   unify_create_group   { payload: {name, roster?, defaultVpId?}, requestId? }
- *   unify_rename_group   { groupId, name, requestId? }
- *   unify_archive_group  { groupId, requestId? }
- *   unify_add_member     { groupId, vpId, requestId? }
- *   unify_remove_member  { groupId, vpId, requestId? }
- *   unify_set_default_vp { groupId, vpId, requestId? }
- *
- * Replies (sendUnifyEvent):
- *   { type: 'group_crud_result', op, requestId, ok, group?, groups?, error?: {code, groupId?, message?} }
- *
- * Post-change broadcast (when meta mutates):
- *   { type: 'group_roster_changed', groupId, roster, defaultVpId, name }
+ * Group CRUD wired to WS events.
  */
 function sendGroupCrudResult(payload) {
   sendUnifyEvent({ type: 'group_crud_result', ...payload });
@@ -457,10 +343,6 @@ export function handleUnifyArchiveGroup(msg) {
   }
 }
 
-/**
- * Bug 8: physical delete — removes the group dir and any legacy
- * `.archived-*-<groupId>` siblings. Replies with op:'delete'.
- */
 export function handleUnifyDeleteGroup(msg) {
   const requestId = msg && msg.requestId;
   const groupId = msg && msg.groupId;
@@ -517,26 +399,16 @@ export function handleUnifySetDefaultVp(msg) {
 }
 
 /**
- * task-318 rev-1 fix: install live-setter bridge between the session's
- * runtime handles (engineRegistry + threadStore) and `ctx.unifyRuntimeSettings`,
- * which message-router's `update_unify_settings` branch reads. Previously
- * that object was null and the setters were dead code. Now every
- * `update_unify_settings` mutation pushes the new caps into the live
- * session within the same tick — no reload required.
- *
- * Exported so tests can drive the same wiring with a mock session.
+ * Install the dream pipeline progress sink and runtime settings bridge.
+ * H2.f.2: dropped the threadStore-related setters (autoArchiveIdleDays,
+ * maxConcurrentThreads). Only the dream sink remains.
  *
  * @param {import('./session.js').Session} s
  */
 export function installUnifyRuntimeBridge(s) {
   if (!s) return;
-  const initialMax = s.engineRegistry?.maxConcurrent ?? null;
-  const initialIdle = s.threadStore?.idleArchiveDays ?? 0;
 
-  // DESIGN-v2 §19.4: forward dream pipeline progress events to the web
-  // client so the debug panel can render live state. Events flow through
-  // the same `unify_output` channel; no new WebSocket message type is
-  // introduced.
+  // Forward dream pipeline progress events to the web debug panel.
   s._dreamProgressSink = (evt) => {
     try {
       sendUnifyEvent({ type: 'dream_progress', ...evt });
@@ -544,278 +416,24 @@ export function installUnifyRuntimeBridge(s) {
   };
 
   ctx.unifyRuntimeSettings = {
-    get maxConcurrentThreads() { return s.engineRegistry?.maxConcurrent ?? initialMax; },
-    set maxConcurrentThreads(v) {
-      if (typeof s.engineRegistry?.setMaxConcurrent === 'function') {
-        s.engineRegistry.setMaxConcurrent(v);
-      }
-    },
-    get autoArchiveIdleDays() { return s.threadStore?.idleArchiveDays ?? initialIdle; },
-    set autoArchiveIdleDays(v) {
-      if (typeof s.threadStore?.setIdleArchiveDays === 'function') {
-        s.threadStore.setIdleArchiveDays(v);
-      }
-      // task-317: re-sweep right after the cap changes so a user who
-      // lowers the threshold sees stale threads disappear immediately
-      // rather than having to wait for the hourly tick.
-      runAutoArchiveSweep(s);
-    },
+    // No multi-thread settings to surface anymore. Stub for back-compat
+    // with message-router's update_unify_settings branch — assignments are
+    // accepted but ignored.
+    get maxConcurrentThreads() { return null; },
+    set maxConcurrentThreads(_v) { /* deprecated, ignored */ },
+    get autoArchiveIdleDays() { return 0; },
+    set autoArchiveIdleDays(_v) { /* deprecated, ignored */ },
   };
-}
-
-/**
- * task-317: idle thread auto-archive.
- *
- * A single sweep = ask the ThreadStore to archive every non-main,
- * non-archived thread whose last activity predates the configured idle
- * window. When any thread is archived we push a fresh `thread_list_updated`
- * so the sidebar reflects reality within the same tick.
- *
- * Safe on stores with `idleArchiveDays === 0` (returns no-op) and on
- * sessions missing a threadStore handle (defensive; should never happen
- * once `installUnifyRuntimeBridge` has run).
- *
- * @param {import('./session.js').Session|null} s
- * @returns {string[]} archived thread ids (empty when nothing changed)
- */
-export function runAutoArchiveSweep(s) {
-  try {
-    const store = s?.threadStore ?? (typeof getThreadStore === 'function' ? getThreadStore() : null);
-    if (!store || typeof store.runArchivePass !== 'function') return [];
-    const { archived } = store.runArchivePass();
-    if (archived && archived.length > 0) {
-      sendThreadListUpdate();
-    }
-    return archived || [];
-  } catch (err) {
-    console.warn('[Unify] runAutoArchiveSweep failed:', err?.message || err);
-    return [];
-  }
-}
-
-/**
- * task-317: schedule the hourly auto-archive tick bound to the given
- * session. Returns the `Timeout` handle so tests can assert / clear it.
- * Re-calling replaces any prior timer (idempotent per-session).
- *
- * The timer is `unref()`'d so a pending tick never keeps the Node loop
- * alive during shutdown; an explicit `clearAutoArchiveSchedule()` is
- * provided for tests.
- */
-let autoArchiveTimer = null;
-const AUTO_ARCHIVE_TICK_MS = 60 * 60 * 1000; // 1h
-
-export function scheduleAutoArchive(s, { intervalMs = AUTO_ARCHIVE_TICK_MS } = {}) {
-  if (autoArchiveTimer) {
-    clearInterval(autoArchiveTimer);
-    autoArchiveTimer = null;
-  }
-  if (!s) return null;
-  autoArchiveTimer = setInterval(() => {
-    runAutoArchiveSweep(s);
-  }, intervalMs);
-  if (autoArchiveTimer && typeof autoArchiveTimer.unref === 'function') {
-    autoArchiveTimer.unref();
-  }
-  return autoArchiveTimer;
-}
-
-export function clearAutoArchiveSchedule() {
-  if (autoArchiveTimer) {
-    clearInterval(autoArchiveTimer);
-    autoArchiveTimer = null;
-  }
-}
-
-/**
- * task-301 Part 2: push the full thread list snapshot to the web client.
- * Called after any ThreadStore-mutating tool completes and at turn_end so
- * the sidebar V2 always shows a fresh picture. Cheap — ThreadStore keeps
- * cached counters so list() is O(n) over a small n.
- */
-function sendThreadListUpdate() {
-  try {
-    const store = getThreadStore();
-    const threads = store.list().map(t => ({
-      id: t.id,
-      name: t.name,
-      goal: t.goal || '',
-      parentThreadId: t.parentThreadId || null,
-      status: t.status,
-      archived: !!t.archived,
-      messageCount: t.messageCount || 0,
-      lastMessageAt: t.lastMessageAt || null,
-      lastActivityAt: t.lastActivityAt || t.lastMessageAt || t.updatedAt || null,
-      unread: t.unread || 0,
-      preview: t.preview || '',
-      createdAt: t.createdAt,
-      updatedAt: t.updatedAt,
-      // task-315: attached featureId (if any) so the UI can aggregate all
-      // messages belonging to a feature across multiple threads. null when
-      // the thread has no attached feature.
-      featureId: (typeof store.attachedFeature === 'function')
-        ? (store.attachedFeature(t.id) || null)
-        : null,
-      // `running` — the thread whose id equals the store's currentId is
-      // considered the active/running track. The UI uses this for the
-      // green halo in the Active group.
-      running: t.id === store.currentId,
-    }));
-    sendUnifyEvent({ type: 'thread_list_updated', threads, currentThreadId: store.currentId });
-  } catch (err) {
-    // Best-effort; sidebar update must never block the main query path.
-    console.warn('[Unify] sendThreadListUpdate failed:', err?.message || err);
-  }
-}
-
-/** Tool names that mutate ThreadStore. After any of these we push an update. */
-const THREAD_MUTATING_TOOLS = new Set([
-  'SpawnThread',
-  'SwitchThread',
-  'ArchiveThread',
-  'AttachThreadToFeature',
-]);
-
-/**
- * task-325b — Working Status event stream.
- *
- * Surfaces Engine lifecycle events (emitted by 325a) as a single
- * `thread_status` event for the frontend Working Status panel, plus
- * `thread_list_snapshot` for cold-start / reconnect.
- *
- * Contract (aligned with designer spec):
- *   thread_status   → { type: 'thread_status', threadId, state,
- *                       startedAt?, completedAt?, toolName?, reason? }
- *     state ∈ 'running' | 'idle' | 'aborted' | 'error'
- *   thread_list_snapshot → { type: 'thread_list_snapshot', threads[],
- *                            currentThreadId, serverTime }
- *
- * Red lines (per PM): do NOT mutate engine state; this layer is a pure
- * observer + translator. Event names match designer doc verbatim.
- */
-
-/** Map Engine event name → Working Status state string. */
-function engineEventToState(engineEventType) {
-  switch (engineEventType) {
-    case 'thread_started':   return 'running';
-    case 'thread_completed': return 'idle';
-    case 'thread_aborted':   return 'aborted';
-    case 'thread_error':     return 'error';
-    default:                 return null;
-  }
-}
-
-/**
- * Build and broadcast a `thread_status` payload translated from a raw
- * engine lifecycle event. The engine event shape (325a) is:
- *   { type, threadId, startedAt?, completedAt?, toolName?, reason? }
- * Unknown fields pass through untouched so future engine additions
- * (e.g. `attempt`) flow to the UI without another bridge change.
- *
- * @param {object} ev — engine event
- * @returns {boolean} true if a thread_status was emitted
- */
-function emitThreadStatusFromEngineEvent(ev) {
-  if (!ev || typeof ev !== 'object') return false;
-  const state = engineEventToState(ev.type);
-  if (!state) return false;
-  const payload = { type: 'thread_status', threadId: ev.threadId, state };
-  if (ev.startedAt != null)   payload.startedAt   = ev.startedAt;
-  if (ev.completedAt != null) payload.completedAt = ev.completedAt;
-  if (ev.toolName)            payload.toolName    = ev.toolName;
-  if (ev.reason)              payload.reason      = ev.reason;
-  if (ev.error?.message)      payload.error       = ev.error.message;
-  sendUnifyEvent(payload);
-  return true;
-}
-
-/**
- * task-325b: full-snapshot push distinct from `thread_list_updated`.
- * Emits `thread_list_snapshot` — a complete state dump the client uses
- * on page load / WebSocket reconnect to rebuild the Working Status panel
- * without missing any in-flight thread.
- *
- * Snapshot includes per-thread `state` (idle / running / aborted) resolved
- * from the engine registry's live inflight set. Threads the registry has
- * no entry for default to 'idle'.
- */
-function sendThreadListSnapshot() {
-  try {
-    const store = getThreadStore();
-    const registry = session?.engineRegistry || null;
-    const inflight = new Set(
-      typeof registry?.inflightThreadIds === 'function'
-        ? registry.inflightThreadIds()
-        : [],
-    );
-    const threads = store.list().map(t => ({
-      id: t.id,
-      name: t.name,
-      goal: t.goal || '',
-      parentThreadId: t.parentThreadId || null,
-      status: t.status,
-      archived: !!t.archived,
-      messageCount: t.messageCount || 0,
-      lastMessageAt: t.lastMessageAt || null,
-      lastActivityAt: t.lastActivityAt || t.lastMessageAt || t.updatedAt || null,
-      unread: t.unread || 0,
-      preview: t.preview || '',
-      createdAt: t.createdAt,
-      updatedAt: t.updatedAt,
-      featureId: (typeof store.attachedFeature === 'function')
-        ? (store.attachedFeature(t.id) || null)
-        : null,
-      running: t.id === store.currentId,
-      state: inflight.has(t.id) ? 'running' : 'idle',
-    }));
-    sendUnifyEvent({
-      type: 'thread_list_snapshot',
-      threads,
-      currentThreadId: store.currentId,
-      serverTime: Date.now(),
-    });
-  } catch (err) {
-    console.warn('[Unify] sendThreadListSnapshot failed:', err?.message || err);
-  }
-}
-
-/**
- * task-310: parse a leading `@thread-<id>` or `@thread-<name>` marker on
- * the user's input and return it as a dispatcher override. The marker
- * itself is STRIPPED from the prompt before it reaches the engine —
- * users don't want to see `@thread-foo` echoed back into their
- * conversation.
- *
- * Thread IDs are `main` or `thr-<8 hex>`, so the match captures the id
- * name AFTER the literal `@thread-`. The returned `override.threadId`
- * is the fully-qualified thread id (e.g. `thread-main`, `thread-thr-abcd1234`).
- *
- * Returns { prompt, override? } where override = { threadId } if matched.
- */
-export function parseThreadPrefix(text) {
-  if (!text || typeof text !== 'string') return { prompt: text || '', override: null };
-  // Capture the id portion after the literal `@thread-` prefix.
-  const m = text.match(/^\s*@thread-([A-Za-z0-9_-]+)\b\s*/);
-  if (!m) return { prompt: text, override: null };
-  const rest = text.slice(m[0].length);
-  // The captured id may already include a `thr-` sub-prefix (for non-main
-  // threads). For the canonical `main` thread, the override is the bare
-  // string `main`; for `thr-xxxxxxxx` threads, pass through verbatim.
-  const threadId = m[1];
-  return { prompt: rest || text, override: { threadId } };
 }
 
 /**
  * Translate a pipeline event (from Dispatcher) into web-bridge outputs.
  * Pipeline events are distinct from engine events — they carry queue /
- * routing state for the UI. Engine events are unwrapped and forwarded
- * through the existing sendUnifyOutput / sendUnifyEvent path.
- *
- * Returns whether the pipeline is complete (terminal error / no more).
+ * routing state for the UI. Engine events are unwrapped and forwarded.
  */
-function forwardPipelineEvent(ev, ctx) {
+function forwardPipelineEvent(ev, pctx) {
   if (!ev || typeof ev !== 'object') return false;
-  const gid = ctx && ctx.groupId;
+  const gid = pctx && pctx.groupId;
   switch (ev.type) {
     case 'input_queue_updated':
       sendUnifyEvent({
@@ -828,28 +446,21 @@ function forwardPipelineEvent(ev, ctx) {
       }, gid);
       return false;
     case 'routing_decision':
+      // H2.f.2: still forwarded for wire compat, but frontend treats it as
+      // a no-op marker; targetThreadId is always 'main'.
       sendUnifyEvent({
         type: 'routing_decision',
         entryId: ev.entryId,
         action: ev.action,
-        targetThreadId: ev.targetThreadId,
         source: ev.source,
         reason: ev.reason,
       }, gid);
       return false;
-    case 'thread_list_updated':
-      // Dispatcher built it already; just forward.
-      sendUnifyEvent({
-        type: 'thread_list_updated',
-        threads: ev.threads,
-        currentThreadId: ev.currentThreadId,
-      }, gid);
-      return false;
     case 'engine_event':
-      ctx.onEngineEvent(ev.event, ev.threadId);
+      pctx.onEngineEvent(ev.event);
       return false;
     case 'error':
-      ctx.onError(ev.error);
+      pctx.onError(ev.error);
       return true;
     default:
       return false;
@@ -857,34 +468,15 @@ function forwardPipelineEvent(ev, ctx) {
 }
 
 /**
- * Handle a single engine event unwrapped from an `engine_event` pipeline
- * envelope. Contains the event-type switch previously inlined in the
- * streaming loop. `threadId` is propagated onto tool_use / tool_result
- * blocks so the UI can render per-thread bubbles.
+ * Handle a single engine event unwrapped from an `engine_event` envelope.
+ * H2.f.2: no longer stamps a threadId on outgoing claude_output frames.
  *
  * @param {object} event — engine event (text_delta / tool_call / …)
- * @param {string} threadId — owning thread id (from envelope)
- * @param {{assistantTextParts:string[], toolCallsAccum:Array, toolResultsAccum:Array, resetQueryTimer:Function}} hctx
+ * @param {{assistantTextParts:string[], toolCallsAccum:Array, toolResultsAccum:Array, resetQueryTimer:Function, groupId?:string}} hctx
  */
-function handleEngineEvent(event, threadId, hctx) {
+function handleEngineEvent(event, hctx) {
   hctx.resetQueryTimer();
   const gid = hctx && hctx.groupId;
-
-  // task-325b: translate Engine lifecycle events into a single
-  // `thread_status` event for the frontend Working Status panel. These
-  // events are observer-only — they never mutate bridge state. The raw
-  // engine event is NOT forwarded further; the switch below handles
-  // anything the UI still needs.
-  if (event && (
-    event.type === 'thread_started' ||
-    event.type === 'thread_completed' ||
-    event.type === 'thread_aborted' ||
-    event.type === 'thread_error'
-  )) {
-    // Engine events carry their own threadId; fall back to envelope id.
-    emitThreadStatusFromEngineEvent({ ...event, threadId: event.threadId || threadId });
-    return;
-  }
 
   switch (event.type) {
     case 'text_delta':
@@ -892,17 +484,16 @@ function handleEngineEvent(event, threadId, hctx) {
       sendUnifyOutput({
         type: 'assistant',
         message: { content: [{ type: 'text', text: event.text }] },
-        threadId,
       }, gid);
       break;
 
     case 'thinking_delta':
-      sendUnifyEvent({ type: 'thinking_delta', text: event.text, threadId }, gid);
+      sendUnifyEvent({ type: 'thinking_delta', text: event.text }, gid);
       break;
 
     case 'tool_call':
-      // Capture tool_call for the assistant message's toolCalls array so the
-      // next turn's history correctly pairs `tool_calls` with `role:'tool'`
+      // Capture tool_call for the assistant message's toolCalls array so
+      // the next turn's history pairs `tool_calls` with `role:'tool'`
       // results (fixes "No tool output found for function call" 400s).
       if (hctx.toolCallsAccum) {
         hctx.toolCallsAccum.push({
@@ -915,7 +506,6 @@ function handleEngineEvent(event, threadId, hctx) {
       sendUnifyOutput({
         type: 'assistant',
         message: { content: [] },
-        threadId,
       }, gid);
       sendUnifyOutput({
         type: 'assistant',
@@ -927,7 +517,6 @@ function handleEngineEvent(event, threadId, hctx) {
             input: event.input,
           }],
         },
-        threadId: event.threadId || threadId,
       }, gid);
       break;
 
@@ -936,14 +525,10 @@ function handleEngineEvent(event, threadId, hctx) {
         type: 'tool_start',
         id: event.id,
         name: event.name,
-        threadId: event.threadId || threadId,
       }, gid);
       break;
 
     case 'tool_end':
-      // Capture tool result for the next-turn history so the paired
-      // `role:'tool'` message is included when we hand `messages` back to
-      // engine.query() (chat-completions requires tool_call_id pairing).
       if (hctx.toolResultsAccum) {
         hctx.toolResultsAccum.push({
           role: 'tool',
@@ -960,11 +545,7 @@ function handleEngineEvent(event, threadId, hctx) {
           content: event.output || '',
           is_error: event.isError || false,
         }],
-        threadId: event.threadId || threadId,
       }, gid);
-      if (THREAD_MUTATING_TOOLS.has(event.name)) {
-        sendThreadListUpdate();
-      }
       break;
 
     case 'turn_start':
@@ -978,7 +559,6 @@ function handleEngineEvent(event, threadId, hctx) {
         type: 'context_usage',
         inputTokens: event.inputTokens,
         outputTokens: event.outputTokens,
-        threadId,
       }, gid);
       break;
 
@@ -987,23 +567,16 @@ function handleEngineEvent(event, threadId, hctx) {
         type: 'recall',
         entryCount: event.entryCount,
         cached: event.cached,
-        threadId,
       }, gid);
       break;
 
     case 'consolidate':
-      // Engine compressed the context — clear our accumulated history for
-      // THIS thread only (task-320: per-thread history map).
-      if (threadId) {
-        messagesByThread.set(threadId, []);
-      } else {
-        messagesByThread.clear();
-      }
+      // Engine compressed the context — clear our accumulated history.
+      conversationMessages = [];
       sendUnifyEvent({
         type: 'consolidate',
         archivedCount: event.archivedCount,
         extractedCount: event.extractedCount,
-        threadId,
       }, gid);
       break;
 
@@ -1013,15 +586,10 @@ function handleEngineEvent(event, threadId, hctx) {
         from: event.from,
         to: event.to,
         reason: event.reason,
-        threadId,
       }, gid);
       break;
 
     case 'reflection':
-      // PR-L: V7 tool-history reflection event. Two phases per occurrence:
-      //   status: 'pending' — generation kicked off
-      //   status: 'ready'   — markdown content + durationMs
-      //   status: 'error'   — generation failed (history left unchanged)
       sendUnifyEvent({
         type: 'reflection',
         trigger: event.trigger,
@@ -1031,7 +599,6 @@ function handleEngineEvent(event, threadId, hctx) {
         content: event.content,
         durationMs: event.durationMs,
         error: event.error,
-        threadId,
       }, gid);
       break;
 
@@ -1048,18 +615,13 @@ function handleEngineEvent(event, threadId, hctx) {
         latencyMs: event.latencyMs,
         ttfbMs: event.ttfbMs,
         stopReason: event.stopReason,
-        // task-344: forward raw request / response (redacted) to web debug panel.
         rawRequest: event.rawRequest,
         rawResponse: event.rawResponse,
-        threadId,
       }, gid);
       break;
 
     case 'error': {
       const errMsg = event.error?.message || 'Unknown error';
-      // Filter permission errors: show friendly one-time diagnostic
-      // instead of raw error. Subsequent permission errors are suppressed
-      // — the user already saw the actionable message once.
       if (isPermissionErrorMsg(errMsg)) {
         if (!_permissionDiagnosticSent) {
           _permissionDiagnosticSent = true;
@@ -1071,17 +633,14 @@ function handleEngineEvent(event, threadId, hctx) {
                 text: '⚠️ Cannot write to ~/.yeaft/ directory — some features (memory, history) are unavailable. Please check directory permissions: `chmod -R u+rw ~/.yeaft/`',
               }],
             },
-            threadId,
           }, gid);
         }
-        // Don't show subsequent permission errors.
       } else {
         sendUnifyOutput({
           type: 'assistant',
           message: {
             content: [{ type: 'text', text: `⚠️ Error: ${errMsg}` }],
           },
-          threadId,
         }, gid);
       }
       break;
@@ -1094,21 +653,8 @@ function handleEngineEvent(event, threadId, hctx) {
 }
 
 /**
- * task-338-F4: Handle a unify_group_chat message from the web UI.
- *
- * Routes user text through the group coordinator's dispatch contract:
- *   1. @-mentions → each mentioned vpId (intersected with group roster)
- *   2. no mention → group.defaultVpId
- *   3. no default VP → fallback to legacy single-agent handleUnifyChat
- *
- * Emits a `group_message` event tagged with `vpId` per dispatched target so
- * frontend can render VP-scoped feedback. Does NOT itself run the engine —
- * for each resolved target, it delegates into handleUnifyChat (which owns
- * the Dispatcher + AbortController + timeout plumbing).
- *
- * Message shape: { type:'unify_group_chat', groupId, text, mentions? }
- *
- * @param {{groupId:string, text:string, mentions?:string[], agentId?:string, userId?:string, username?:string}} msg
+ * Handle a unify_group_chat message from the web UI. Routes user text
+ * through the group coordinator's dispatch contract.
  */
 export async function handleUnifyGroupChat(msg) {
   if (!msg || typeof msg !== 'object') return;
@@ -1116,17 +662,11 @@ export async function handleUnifyGroupChat(msg) {
   if (!text?.trim()) return;
   const mentions = Array.isArray(msg.mentions) ? msg.mentions : [];
 
-  // Fallback path #1 (PM red-line): no groupId on payload → skip group
-  // resolution entirely and hand the text to the legacy single-agent
-  // dispatcher. Ensures backward-compat with old clients that never learned
-  // about groups.
   if (!groupId) {
     await handleUnifyChat({ ...msg, prompt: text });
     return;
   }
 
-  // Open the group handle (meta + jsonl log). Unresolvable groups take the
-  // legacy fallback — never silently drop the send.
   let groupHandle = null;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
@@ -1149,12 +689,7 @@ export async function handleUnifyGroupChat(msg) {
     return;
   }
 
-  // Bug 2: When the user @-mentions a VP that exists in the library but is
-  // not yet in the group's roster, auto-add it. This is the natural "invite"
-  // gesture in group chat — failing here would punt to the legacy fallback
-  // and surface the misleading "only Yeaft is in this conversation" error
-  // even though the VP exists. We also ensure the group has a defaultVpId
-  // when its roster is non-empty, so unaddressed messages route correctly.
+  // Auto-add @-mentioned VPs from the library, heal missing defaultVpId.
   try {
     const meta = groupHandle.getMeta();
     const yeaftDir = ctx.CONFIG?.yeaftDir;
@@ -1172,7 +707,6 @@ export async function handleUnifyGroupChat(msg) {
         } catch { /* skip strangers */ }
       }
       if (mutated) {
-        // Re-open with fresh meta so the coordinator sees the new roster.
         try { groupHandle.close && groupHandle.close(); } catch { /* best-effort */ }
         const { openGroup } = await import('./groups/group-store.js');
         const { join } = await import('node:path');
@@ -1180,7 +714,6 @@ export async function handleUnifyGroupChat(msg) {
         sendGroupRosterChanged(groupHandle.getMeta());
       }
     }
-    // Heal missing defaultVpId — pick roster[0] when one exists.
     const meta2 = groupHandle.getMeta();
     if (!meta2.defaultVpId && meta2.roster.length && yeaftDir) {
       try {
@@ -1196,17 +729,6 @@ export async function handleUnifyGroupChat(msg) {
     console.warn('[Unify] unify_group_chat: auto-roster heal failed', err?.message || err);
   }
 
-  // Adapter layer (PM red-line: do NOT modify coordinator to fit this
-  // consumer). We drive `createCoordinator()` with a capturing `deliver`
-  // callback, collect its dispatched/fallback report, then translate each
-  // target into (a) a per-VP `group_message` event for the UI and (b) a
-  // per-VP prompt dispatched through the legacy `handleUnifyChat` path.
-  //
-  // Source of truth for mentions is the PAYLOAD (ChatInput parsed them
-  // once). We pass them through the coordinator's `input.meta` so the
-  // appended log carries the authoritative set — the coordinator will also
-  // run its own parse over `text` for routing, which matches the payload by
-  // construction (ChatInput's `parseMentions` is the same regex).
   const { createCoordinator } = await import('./groups/coordinator.js');
   const captured = [];
   const coord = createCoordinator(groupHandle, {
@@ -1227,22 +749,12 @@ export async function handleUnifyGroupChat(msg) {
     return;
   }
 
-  // Fallback path #2: coordinator resolved no targets and no default VP.
-  // Hand off to the legacy single-agent path so the text still runs.
   const dispatchedIds = Array.isArray(report?.dispatched) ? report.dispatched : [];
   if (dispatchedIds.length === 0 && !report?.fallback) {
     await handleUnifyChat({ ...msg, prompt: text });
     return;
   }
 
-  // Per target: emit `group_message` tagged with `speakerVpId` (the VP
-  // being addressed — F3's GroupSelector binding consumes this) + dispatch
-  // through the Engine via handleUnifyChat with an `@vp-<id>` prompt prefix.
-  //
-  // task-fix: bracket each per-VP dispatch with `vp_typing_start` /
-  // `vp_typing_end` events so the frontend can render a per-speaker typing
-  // dot next to that VP's avatar (matching IM apps). Avoids the old
-  // "one global running cat for N concurrent speakers" ambiguity.
   for (const { vpId, envelope } of captured) {
     try {
       sendUnifyEvent({
@@ -1273,9 +785,6 @@ export async function handleUnifyGroupChat(msg) {
         groupId,
         vpId,
         speakerVpId: vpId,
-        // Bug 4: hand the coordinator down so handleUnifyChat can build a
-        // Router for the RouteForward tool. Field is namespaced with `_`
-        // to mark it as an internal hop, never sent over WS.
         _groupCoordinator: coord,
       });
     } catch (err) {
@@ -1295,27 +804,8 @@ export async function handleUnifyGroupChat(msg) {
 
 /**
  * Build the per-query VP context for the Engine.
- *
- * - Loads the addressed VP's persona via readVp() so the system prompt
- *   speaks in that VP's voice (Bug 3 fix).
- * - When a GroupCoordinator handle is supplied, wraps it in a Router so
- *   the RouteForward tool actually forwards instead of returning
- *   `router_unavailable` (Bug 4 fix).
- *
- * Returns `undefined` when we have nothing to inject — keeps the legacy
- * single-agent path identical to before.
  */
 export function buildVpQueryOpts({ vpId, groupCoordinator, groupId }) {
-  // PR-G fix (Option A): when no vpId is supplied, resolve a default so the
-  // engine still receives a vpPersona and the system prompt speaks as the
-  // VP — not as legacy Yeaft. Resolution order:
-  //   1. caller-supplied vpId (group/coordinator dispatch)
-  //   2. open group's defaultVpId  (`groupCoordinator.group.getMeta()`)
-  //   3. session config `defaultVpId`  (~/.yeaft/config.json)
-  //   4. first VP in the local library (scanVpLibrary)
-  // Cold-start (empty library) returns undefined — engine then falls back
-  // to the legacy Yeaft identity, which is the intentional baseline only
-  // when no VP is available at all.
   let resolvedVpId = vpId;
   if (!resolvedVpId) {
     try {
@@ -1362,8 +852,7 @@ export function buildVpQueryOpts({ vpId, groupCoordinator, groupId }) {
     try {
       out.router = createRouter({ coordinator: groupCoordinator });
     } catch {
-      // Router build failure is non-fatal — RouteForward will report
-      // router_unavailable and the VP can pivot.
+      // Router build failure is non-fatal.
     }
   }
   return out;
@@ -1372,51 +861,33 @@ export function buildVpQueryOpts({ vpId, groupCoordinator, groupId }) {
 /**
  * Handle a unify_chat message from the web UI.
  *
+ * H2.f.2: a new message cancels the prior in-flight controller (single
+ * conversation, not per-thread). The history accumulator is a flat array.
+ *
  * @param {{ prompt: string, mode?: string, userId?: string, username?: string }} msg
- *   NOTE: `mode` is deprecated (task-297) — Unify now runs in a single unified mode.
- *   If present, a warning is logged and the field is ignored.
  */
 export async function handleUnifyChat(msg) {
   const { prompt, mode } = msg;
   if (!prompt?.trim()) return;
-  // Bug 3 / Bug 4 — when the upstream group dispatcher addresses a specific
-  // VP, it stamps `vpId` (and optionally a coordinator handle in
-  // `_groupCoordinator`). Hoist them now so they survive the lazy-init
-  // branch and reach the dispatcher.submit() queryOpts.
   const vpId = typeof msg.vpId === 'string' && msg.vpId.trim() ? msg.vpId.trim() : null;
   const groupCoordinator = msg._groupCoordinator || null;
-  // Bug 1: every event we emit during this query must carry the originating
-  // groupId so the frontend stamps arriving messages with the SEND-context
-  // group, not the user's CURRENT filter (which can change mid-reply).
   const groupId = typeof msg.groupId === 'string' && msg.groupId.trim() ? msg.groupId.trim() : null;
 
-  // Deprecation warning — task-297 removed chat/work mode distinction
   if (mode !== undefined && mode !== null) {
     console.warn('[Unify] unify_chat.mode is deprecated and ignored — Unify now runs in a single unified mode.');
   }
 
   try {
-    // ─── Lazy-init session (reuse across queries — Engine manages history) ──
     if (!session) {
       const yeaftDir = ctx.CONFIG?.yeaftDir;
       session = await loadSession({
         ...(yeaftDir && { dir: yeaftDir }),
-        // Enable all features — no lazy shortcuts
         skipMCP: false,
         skipSkills: false,
       });
 
-      // task-318 rev-1 fix: expose live setters on ctx so message-router's
-      // update_unify_settings branch can push the new caps into the
-      // registry + thread store without a session reload. Previously this
-      // object was null and setMaxConcurrent/setIdleArchiveDays were dead
-      // code — the config file was updated on disk but the running
-      // session continued with the old caps until next restart.
       installUnifyRuntimeBridge(session);
 
-      // PR-M1: install a sub-agent event sink so events emitted by sub-
-      // agent Engines surface to the web client. Frontend filters by the
-      // `agentId` field and renders them inside the sub-agent card.
       try {
         if (session.engine && typeof session.engine.setSubAgentEventSink === 'function') {
           session.engine.setSubAgentEventSink((agentId, evt) => {
@@ -1429,14 +900,7 @@ export async function handleUnifyChat(msg) {
         console.warn('[Unify] setSubAgentEventSink wiring failed:', err?.message || err);
       }
 
-      // task-317: run one idle-archive sweep at bootstrap, then schedule
-      // the hourly tick bound to this session.
-      runAutoArchiveSweep(session);
-      scheduleAutoArchive(session);
-
-      // Bug 8: clean up any legacy `.archived-*` group directories left
-      // behind by the previous soft-archive flow. This is a one-shot
-      // boot-time sweep — physical deletes after this point are immediate.
+      // Bug 8: clean up legacy `.archived-*` group dirs at boot.
       try {
         const yeaftDir = ctx.CONFIG?.yeaftDir;
         if (yeaftDir) {
@@ -1449,16 +913,10 @@ export async function handleUnifyChat(msg) {
         console.warn('[Unify] purgeArchivedGroups failed:', err?.message || err);
       }
 
-      // Create a stable conversationId for the Unify session
       unifyConversationId = `unify-${Date.now()}`;
 
-      // Restore per-thread history from persisted conversation store.
-      // task-320: bucket by threadId so each thread keeps its own context.
-      // task-fix: use restoreThreadHistoryFromRecent() so tool messages
-      // and toolCalls/toolCallId survive the restore.
-      restoreThreadHistoryFromRecent(session.conversationStore.loadRecent(50));
+      restoreHistoryFromRecent(session.conversationStore.loadRecent(50));
 
-      // Notify UI: session is ready with model info + conversationId
       sendUnifyEvent({
         type: 'session_ready',
         conversationId: unifyConversationId,
@@ -1468,35 +926,20 @@ export async function handleUnifyChat(msg) {
         mcpServers: session.status.mcpServers,
         tools: session.status.tools,
       });
-      // task-301 Part 2: initial thread snapshot so sidebar V2 renders
-      // the real 'main' thread (and any restored threads) right away.
-      sendThreadListUpdate();
-      // task-325b: full Working Status snapshot (superset with state +
-      // serverTime) so a freshly-connected client can restore inflight
-      // status without waiting for the next engine event.
-      sendThreadListSnapshot();
-      // task-334m: push initial groups snapshot so the Sidebar Groups
-      // section renders the full list immediately (including the D1
-      // default group seeded during session bootstrap).
       sendGroupSnapshotBroadcast();
     }
 
-    // wave-6b: notify dream scheduler of user activity
     if (session?.dreamScheduler) {
       session.dreamScheduler.noteUserMessage();
     }
 
-    // ─── Per-call AbortController (task-320) ──
-    // Each call owns its own controller. Only once the router resolves the
-    // target thread do we register it into `abortByThread` and abort any
-    // prior controller on THAT same thread. Messages routed to different
-    // threads never alias each other's signals.
+    // Cancel any prior in-flight round before starting this one.
+    if (currentAbortCtrl && !currentAbortCtrl.signal.aborted) {
+      try { currentAbortCtrl.abort(); } catch { /* best-effort */ }
+    }
     const abortCtrl = new AbortController();
-    /** @type {string | null} — set on routing_decision */
-    let resolvedThreadId = null;
+    currentAbortCtrl = abortCtrl;
 
-    // ─── Timeout guard: abort query if LLM hangs beyond threshold ──
-    // Resets on every event — fires only after prolonged silence.
     let queryTimer = null;
     const resetQueryTimer = () => {
       if (queryTimer) clearTimeout(queryTimer);
@@ -1510,128 +953,79 @@ export async function handleUnifyChat(msg) {
     resetQueryTimer();
 
     try {
-    // ─── Collect assistant response for conversation history ──
-    let assistantTextParts = [];
-    // task-fix: preserve toolCalls + tool_result pairings across turns so
-    // the next engine.query({messages}) handoff stays valid for OpenAI
-    // chat-completions (avoids "No tool output found for function call").
-    const toolCallsAccum = [];
-    const toolResultsAccum = [];
+      const assistantTextParts = [];
+      const toolCallsAccum = [];
+      const toolResultsAccum = [];
 
-    // task-310: route via Dispatcher pipeline (queue → router → registry →
-    // EngineInstance). The input is enqueued first so the UI observes the
-    // `input_queue_updated` snapshot before the router runs. An explicit
-    // `@thread-xxx` prefix on the message or an `override` field on the
-    // `unify_chat` payload becomes a dispatcher override — skipping the LLM.
-    const { prompt: cleanedPrompt, override: prefixOverride } = parseThreadPrefix(prompt);
-    const override = msg.override && typeof msg.override === 'object' && msg.override.threadId
-      ? msg.override
-      : prefixOverride;
+      const { entry } = session.dispatcher.submit(prompt, {
+        messageId: msg.messageId,
+        queryOpts: buildVpQueryOpts({ vpId, groupCoordinator, groupId }),
+      });
+      sendUnifyEvent({
+        type: 'input_queue_updated',
+        total: 1,
+        pending: 1,
+        routing: 0,
+        dispatched: 0,
+        head: { id: entry.id, status: entry.status, text: entry.text.slice(0, 80) },
+      }, groupId);
 
-    const { entry } = session.dispatcher.submit(cleanedPrompt, {
-      messageId: msg.messageId,
-      override: override || undefined,
-      queryOpts: buildVpQueryOpts({ vpId, groupCoordinator, groupId }),
-    });
-    sendUnifyEvent({
-      type: 'input_queue_updated',
-      total: 1,
-      pending: 1,
-      routing: 0,
-      dispatched: 0,
-      head: { id: entry.id, status: entry.status, text: entry.text.slice(0, 80) },
-    }, groupId);
-
-    const pipelineCtx = {
-      groupId,
-      onEngineEvent: (event, threadId) => handleEngineEvent(event, threadId, {
-        assistantTextParts,
-        toolCallsAccum,
-        toolResultsAccum,
-        resetQueryTimer,
+      const pipelineCtx = {
         groupId,
-      }),
-      onError: (err) => { throw err; },
-    };
+        onEngineEvent: (event) => handleEngineEvent(event, {
+          assistantTextParts,
+          toolCallsAccum,
+          toolResultsAccum,
+          resetQueryTimer,
+          groupId,
+        }),
+        onError: (err) => { throw err; },
+      };
 
-    for await (const pev of session.dispatcher.drain({ signal: abortCtrl.signal })) {
-      resetQueryTimer();
-      // task-320: on routing_decision, bind this abort controller to the
-      // resolved target thread and abort any prior in-flight controller
-      // owned by that thread. Different threads don't alias.
-      if (pev && pev.type === 'routing_decision' && pev.targetThreadId && !resolvedThreadId) {
-        resolvedThreadId = pev.targetThreadId;
-        const prior = abortByThread.get(resolvedThreadId);
-        if (prior && prior !== abortCtrl) {
-          prior.abort();
+      for await (const pev of session.dispatcher.drain({ signal: abortCtrl.signal })) {
+        resetQueryTimer();
+        forwardPipelineEvent(pev, pipelineCtx);
+      }
+
+      // Accumulate messages for context continuity.
+      conversationMessages.push({ role: 'user', content: prompt });
+
+      const fullText = assistantTextParts.join('');
+      if (fullText || toolCallsAccum.length > 0) {
+        const assistantMsg = { role: 'assistant', content: fullText };
+        if (toolCallsAccum.length > 0) {
+          assistantMsg.toolCalls = toolCallsAccum.map(tc => ({
+            id: tc.id,
+            name: tc.name,
+            input: tc.input,
+          }));
         }
-        abortByThread.set(resolvedThreadId, abortCtrl);
+        conversationMessages.push(assistantMsg);
+
+        for (const tr of toolResultsAccum) {
+          conversationMessages.push({
+            role: 'tool',
+            toolCallId: tr.toolCallId,
+            content: tr.content,
+            isError: tr.isError,
+          });
+        }
       }
-      forwardPipelineEvent(pev, pipelineCtx);
-    }
 
-    // ─── Query complete — accumulate messages for context continuity ──
-    // task-320: per-thread history (no cross-thread contamination).
-    // task-fix: when the turn made tool calls, the assistant message MUST
-    // carry `toolCalls` AND each paired `role:'tool'` result must be
-    // appended — otherwise the next turn's chat-completions serializer
-    // emits `tool_calls` without matching `tool` messages → proxy 400
-    // "No tool output found for function call call_xxx".
-    const historyThread = resolvedThreadId || MAIN_THREAD_ID;
-    const threadMessages = getThreadMessages(historyThread);
-    threadMessages.push({ role: 'user', content: cleanedPrompt });
-
-    const fullText = assistantTextParts.join('');
-    if (fullText || toolCallsAccum.length > 0) {
-      const assistantMsg = { role: 'assistant', content: fullText };
-      if (toolCallsAccum.length > 0) {
-        assistantMsg.toolCalls = toolCallsAccum.map(tc => ({
-          id: tc.id,
-          name: tc.name,
-          input: tc.input,
-        }));
-      }
-      threadMessages.push(assistantMsg);
-
-      // Append paired tool results, in order. Chat-completions requires
-      // one `role:'tool'` message per `tool_call_id` right after the
-      // assistant message that emitted them.
-      for (const tr of toolResultsAccum) {
-        threadMessages.push({
-          role: 'tool',
-          toolCallId: tr.toolCallId,
-          content: tr.content,
-          isError: tr.isError,
-        });
-      }
-    }
-
-    // ─── Signal turn end to UI ──
-    // Finish any streaming text
-    sendUnifyOutput({
-      type: 'assistant',
-      message: { content: [] },
-    }, groupId);
-    // Send result to clear processing state
-    sendUnifyOutput({
-      type: 'result',
-      result_text: '',
-    }, groupId);
-
+      sendUnifyOutput({
+        type: 'assistant',
+        message: { content: [] },
+      }, groupId);
+      sendUnifyOutput({
+        type: 'result',
+        result_text: '',
+      }, groupId);
     } finally {
-      // Always clear the timeout guard
       if (queryTimer) clearTimeout(queryTimer);
     }
-
   } catch (err) {
-    // task-320: classify both DOM AbortError and LLMAbortError as
-    // "aborted" — LLMAbortError is thrown by the LLM adapters when the
-    // signal trips and must NOT render as a session error bubble.
     const isAbort = err && (err.name === 'AbortError' || err.name === 'LLMAbortError');
     if (isAbort) {
-      // Silent abort — the new in-flight round (on the same thread) will
-      // produce its own output. Still send `result` so the frontend's
-      // processing spinner for this exact send clears.
       sendUnifyOutput({
         type: 'result',
         result_text: '',
@@ -1641,7 +1035,6 @@ export async function handleUnifyChat(msg) {
 
     console.error('[Unify] query error:', err.message);
 
-    // Filter permission errors at the session level too
     if (isPermissionErrorMsg(err.message)) {
       if (!_permissionDiagnosticSent) {
         _permissionDiagnosticSent = true;
@@ -1666,111 +1059,75 @@ export async function handleUnifyChat(msg) {
         },
       }, groupId);
     }
-    // Still send result to clear processing state
     sendUnifyOutput({
       type: 'result',
       result_text: '',
     }, groupId);
   } finally {
-    // task-320: only clear the per-thread slot if THIS controller is still
-    // the registered one. If a newer message already overwrote it, leaving
-    // the newer controller in the map is the correct state.
-    if (resolvedThreadId && abortByThread.get(resolvedThreadId) === abortCtrl) {
-      abortByThread.delete(resolvedThreadId);
+    if (currentAbortCtrl && currentAbortCtrl.signal.aborted) {
+      // Aborted controllers stay where they are; a new query will replace.
     }
   }
 }
 
 /**
- * task-325c: user-initiated abort of an in-flight Unify query on ONE thread.
+ * H2.f.2: user-initiated abort. The pre-H2 multi-thread version took a
+ * `threadId` parameter; the new version aborts the single in-flight
+ * controller. The `threadId` field on `msg` is accepted but ignored for
+ * back-compat with older clients.
  *
- * Cancels the AbortController registered for `msg.threadId` (if any). Silent
- * no-op when the thread has no in-flight round — users clicking Stop on an
- * already-idle thread should not trigger an error bubble. Emits an
- * `unify_aborted` event for UI acknowledgement and a fresh
- * `thread_list_updated` so inflight pills clear immediately.
- *
- * Red line (PM): the `thread_list_updated` event name is preserved; no
- * new per-thread abort signal leaks into `Engine.abort()`'s signature.
- *
- * @param {{ threadId?: string }} msg
+ * @param {{ threadId?: string }} _msg
  * @returns {{ aborted: string[], all: boolean }}
  */
-export function handleUnifyAbortThread(msg = {}) {
+export function handleUnifyAbortThread(_msg = {}) {
   const aborted = [];
-  const threadId = msg && msg.threadId;
-  if (threadId) {
-    const ctrl = abortByThread.get(threadId);
-    if (ctrl) {
-      try { ctrl.abort(); } catch { /* best-effort */ }
-      abortByThread.delete(threadId);
-      aborted.push(threadId);
-    }
+  if (currentAbortCtrl && !currentAbortCtrl.signal.aborted) {
+    try { currentAbortCtrl.abort(); aborted.push('main'); } catch { /* best-effort */ }
   }
+  currentAbortCtrl = null;
   sendUnifyEvent({ type: 'unify_aborted', aborted, all: false });
-  sendThreadListUpdate();
   return { aborted, all: false };
 }
 
 /**
- * task-325c: user-initiated abort of ALL in-flight Unify queries.
- *
- * Iterates every registered controller, aborts it, then clears the map.
- * Always emits `unify_aborted` with `all:true` (even when nothing was
- * running) so the UI can confirm the click landed.
- *
+ * H2.f.2: abort all (single conversation → same as abort one).
  * @returns {{ aborted: string[], all: boolean }}
  */
 export function handleUnifyAbortAll() {
   const aborted = [];
-  for (const [threadId, ctrl] of abortByThread.entries()) {
-    try { ctrl.abort(); } catch { /* best-effort */ }
-    aborted.push(threadId);
+  if (currentAbortCtrl && !currentAbortCtrl.signal.aborted) {
+    try { currentAbortCtrl.abort(); aborted.push('main'); } catch { /* best-effort */ }
   }
-  abortByThread.clear();
+  currentAbortCtrl = null;
   sendUnifyEvent({ type: 'unify_aborted', aborted, all: true });
-  sendThreadListUpdate();
   return { aborted, all: true };
 }
 
 /**
- * Unified dispatcher bound onto `session.abort({ threadId?, all? })`.
- * Routes to {@link handleUnifyAbortThread} or {@link handleUnifyAbortAll}
- * per input. Kept exported so message-router and tests can call it too.
- *
+ * Unified abort entry: routes by payload shape.
  * @param {{ threadId?: string, all?: boolean }} [opts]
  */
 export function abortUnifySession(opts = {}) {
   if (opts && opts.all) return handleUnifyAbortAll();
   if (opts && opts.threadId) return handleUnifyAbortThread({ threadId: opts.threadId });
-  // No payload — conservative default: abort nothing, just emit ack so
-  // callers see the no-op round-trip. Matches PM "don't accidentally
-  // nuke everything on a bare click".
+  // No payload — conservative no-op ack.
   sendUnifyEvent({ type: 'unify_aborted', aborted: [], all: false });
   return { aborted: [], all: false };
 }
 
-/**
- * Test-only: seed / inspect the abort registry without spinning up a
- * full session. Never use from production code — the prod registry is
- * managed by handleUnifyChat's per-query controller lifecycle.
- * @private
- */
-export function __testSeedAbortController(threadId, ctrl) {
-  abortByThread.set(threadId, ctrl);
+/** Test-only: seed the in-flight controller. */
+export function __testSeedAbortController(_threadId, ctrl) {
+  // _threadId is ignored — H2.f.2 has a single controller.
+  currentAbortCtrl = ctrl;
 }
 
-/** Test-only: returns the set of thread ids currently registered. */
+/** Test-only: returns ['main'] when a controller is registered, else []. */
 export function __testGetRegisteredThreadIds() {
-  return [...abortByThread.keys()];
+  return currentAbortCtrl && !currentAbortCtrl.signal.aborted ? ['main'] : [];
 }
 
 /**
- * wave-6b: Handle manual dream trigger from VP detail page.
- * Payload: { vpId?: string } (optional, defaults to 'default').
- * Emits unify_dream_result with the dream outcome.
- *
- * @param {{ vpId?: string }} msg
+ * Manual dream trigger from VP detail page.
  */
 export async function handleUnifyDreamTrigger(msg = {}) {
   if (!session?.dreamScheduler) {
@@ -1809,39 +1166,12 @@ export async function handleUnifyDreamTrigger(msg = {}) {
   }
 }
 
-/**
- * Handle mode switch from the web UI.
- * DEPRECATED (task-297): Unify no longer has chat/work mode distinction.
- * Retained as a no-op with warning for backward compatibility.
- * @param {{ mode?: string }} _msg
- */
+/** Deprecated mode switch — Unify is single-mode. */
 export function handleUnifyModeSwitch(_msg) {
   console.warn('[Unify] unify_mode_switch is deprecated and ignored — Unify now runs in a single unified mode.');
 }
 
-/**
- * R6 G2 — VP/Feature memory browser query.
- *
- * Reads from session.memoryShardStore (R6 shard-based memory) and replies
- * with a time-sorted list of entries scoped to the requested vpId / featureId.
- * The web UI's MemoryCard / MemoryTraceModal consume the reply.
- *
- * Request shape:
- *   { type: 'unify_memory_query',
- *     vpId?: string, featureId?: string,
- *     limit?: number, requestId?: string }
- *
- * Reply shape:
- *   { type: 'unify_memory_query_result',
- *     scope: { vpId, featureId },
- *     entries: Array<thinEntry>,   // shape from shard-store mapRecordToThinEntry
- *     requestId? }
- *
- * Per D2 the query is scoped — the LLM owns memory recall via the
- * memory_query tool; this surface is purely UI browsing (read-only).
- *
- * @param {{ vpId?: string, featureId?: string, limit?: number, requestId?: string }} msg
- */
+/** Read-only memory query for the UI memory browser. */
 export function handleUnifyMemoryQuery(msg = {}) {
   const requestId = typeof msg.requestId === 'string' ? msg.requestId : undefined;
   const vpId = typeof msg.vpId === 'string' ? msg.vpId : null;
@@ -1866,7 +1196,6 @@ export function handleUnifyMemoryQuery(msg = {}) {
     if (featureId) filter.feature = featureId;
     const res = session.memoryShardStore.query(filter);
     const list = Array.isArray(res?.results) ? res.results : [];
-    // Time-sorted desc on updatedAt / createdAt.
     list.sort((a, b) => {
       const ax = (a && (a.updatedAt || a.createdAt)) || 0;
       const bx = (b && (b.updatedAt || b.createdAt)) || 0;
@@ -1880,23 +1209,7 @@ export function handleUnifyMemoryQuery(msg = {}) {
   }
 }
 
-/**
- * R6 G2 — Open the source message behind a memory entry (memory_trace).
- *
- * Resolves entry → sourceRef.{conversationId, messageId} (or threadId/range)
- * via MemoryShardStore.get(entryId), then echoes the reference + the entry
- * for the MemoryTraceModal to render. The trace itself is a read-only
- * surface — the UI follows the conversationId/messageId to MessageList.
- *
- * Request shape:
- *   { type: 'unify_memory_trace', entryId: string, requestId?: string }
- *
- * Reply shape:
- *   { type: 'unify_memory_trace_result',
- *     entryId, entry: object|null, sourceRef: object|null, requestId? }
- *
- * @param {{ entryId?: string, requestId?: string }} msg
- */
+/** Open the source message behind a memory entry. */
 export function handleUnifyMemoryTrace(msg = {}) {
   const requestId = typeof msg.requestId === 'string' ? msg.requestId : undefined;
   const entryId = typeof msg.entryId === 'string' ? msg.entryId : null;
@@ -1922,21 +1235,7 @@ export function handleUnifyMemoryTrace(msg = {}) {
   }
 }
 
-/**
- * R6 G1a — Fetch a feature's summary history (revision chain).
- *
- * Streams the group log filtered by `featureId` and `meta.kind === 'summary'`,
- * separates `current` (≤10 most recent non-superseded) from `archived` rows
- * per §Δ31.5. Default `includeArchived: false` keeps the wire payload small;
- * the UI's "Show archived" button re-issues with the flag set.
- *
- * Request shape:
- *   { type: 'unify_fetch_summary_history', featureId, includeArchived?: bool }
- *
- * Reply shape:
- *   { type: 'unify_summary_history', featureId, revisions: [...],
- *     archived: [...]|null, error?: string, requestId? }
- */
+/** Fetch a feature's summary history (revision chain). */
 export async function handleUnifyFetchSummaryHistory(msg = {}) {
   const requestId = typeof msg.requestId === 'string' ? msg.requestId : undefined;
   const featureId = typeof msg.featureId === 'string' ? msg.featureId : null;
@@ -1994,7 +1293,6 @@ export async function handleUnifyFetchSummaryHistory(msg = {}) {
       if (supersededIds.has(s.id)) archived.push(s);
       else current.push(s);
     }
-    // §Δ31.5: keep only 10 in current; oldest extras spill to archived.
     const overflow = current.slice(10);
     const trimmedCurrent = current.slice(0, 10);
     if (overflow.length) archived.push(...overflow);
@@ -2012,17 +1310,7 @@ export async function handleUnifyFetchSummaryHistory(msg = {}) {
   }
 }
 
-/**
- * R6 G1a — Feature affiliation CRUD (relate / unrelate / kick_vp / abort_vp).
- *
- * Single envelope so the UI doesn't fan out four separate WS message types
- * for housekeeping verbs. Replies with `unify_feature_crud_result`.
- *
- *   - relate     { featureId, relatedFeatureId } — bidirectional Δ27 link
- *   - unrelate   { featureId, relatedFeatureId } — drop both directions
- *   - kick_vp    { featureId, vpId } — featureStore.removeMember
- *   - abort_vp   { featureId, vpId } — abort that VP's in-flight engine inside the feature
- */
+/** Feature affiliation CRUD (relate / unrelate / kick_vp / abort_vp). */
 export async function handleUnifyFeatureCrud(msg = {}) {
   const requestId = typeof msg.requestId === 'string' ? msg.requestId : undefined;
   const op = typeof msg.op === 'string' ? msg.op : null;
@@ -2074,14 +1362,10 @@ export async function handleUnifyFeatureCrud(msg = {}) {
 
     if (op === 'abort_vp') {
       if (!vpId) { reply({ ok: false, error: 'missing_vp_id' }); return; }
-      // Reuse per-thread abort registry — keyed by (featureId,vpId) tuple if
-      // the engine instance is registered there. For v1 we surface success
-      // and let the engine settle; full per-VP cancellation is owned by
-      // the engine registry in 334o follow-up.
-      const reg = session?.engineRegistry;
-      if (reg && typeof reg.abortVpInFeature === 'function') {
-        reg.abortVpInFeature(featureId, vpId);
-      }
+      // H2.f.2: per-VP abort no longer routed through engineRegistry — the
+      // single engine handles its own abort via currentAbortCtrl. Reply
+      // ok:true so the UI surface still works; deeper per-VP cancel is a
+      // separate task.
       reply({ ok: true });
       return;
     }
@@ -2093,141 +1377,36 @@ export async function handleUnifyFeatureCrud(msg = {}) {
 }
 
 /**
- * task-313: merge a source thread into a target thread.
- * Reassigns messages, archives source with `mergedInto`, terminates source
- * engine instance, broadcasts `thread_merged` + `thread_list_updated`.
- *
- * @param {{ sourceId: string, targetId: string }} msg
+ * H2.f.2 stub: thread merge no longer exists. Kept for back-compat with
+ * older message-router cases — emits a failed-ack.
  */
 export function handleUnifyMergeThread(msg) {
-  if (!session) {
-    console.warn('[Unify] unify_merge_thread received before session init — ignored');
-    return;
-  }
   const { sourceId, targetId } = msg || {};
-  if (!sourceId || !targetId) {
-    sendUnifyEvent({ type: 'thread_merge_failed', sourceId, targetId, error: 'sourceId and targetId required' });
-    return;
-  }
-
-  let reassigned = 0;
-  try {
-    // 1. Reassign messages (ConversationStore) — preserves sourceThreadId pill.
-    if (session.conversationStore && typeof session.conversationStore.reassignThread === 'function') {
-      reassigned = session.conversationStore.reassignThread(sourceId, targetId);
-    }
-    // 2. Mutate ThreadStore (mergedInto + archived + counter rollup).
-    const store = session.threadStore || getThreadStore();
-    store.mergeThread(sourceId, targetId);
-    // 3. Terminate + forget the source engine instance — releases its slot.
-    if (session.engineRegistry) {
-      session.engineRegistry.delete(sourceId);
-      // If the registry was tracking source as current, move to target.
-      if (typeof session.engineRegistry.setCurrent === 'function'
-          && session.engineRegistry.currentThreadId === sourceId) {
-        session.engineRegistry.setCurrent(targetId);
-      }
-    }
-    // 4. Flush ThreadStore so the merge is durable before the UI refreshes.
-    if (typeof store.flush === 'function') store.flush();
-  } catch (err) {
-    sendUnifyEvent({
-      type: 'thread_merge_failed',
-      sourceId,
-      targetId,
-      error: err?.message || String(err),
-    });
-    return;
-  }
-
-  // 5. Broadcast the merge + refreshed thread list.
   sendUnifyEvent({
-    type: 'thread_merged',
+    type: 'thread_merge_failed',
     sourceId,
     targetId,
-    reassignedMessages: reassigned,
+    error: 'thread merge is no longer supported (H2 single-conversation)',
   });
-  sendThreadListUpdate();
 }
 
 /**
- * task-314: fork a new thread from an existing one at a specific message.
- * Copies every message up to (and including) `atMessageId` from the source
- * thread onto a fresh thread, stamps `forkedFrom` on the new thread record,
- * and broadcasts `thread_forked` + refreshed thread list. The source is not
- * modified.
- *
- * @param {{ sourceThreadId: string, atMessageId: string, name?: string }} msg
+ * H2.f.2 stub: thread fork no longer exists.
  */
 export function handleUnifyForkThread(msg) {
-  if (!session) {
-    console.warn('[Unify] unify_fork_thread received before session init — ignored');
-    return;
-  }
-  const { sourceThreadId, atMessageId, name } = msg || {};
-  if (!sourceThreadId || !atMessageId) {
-    sendUnifyEvent({
-      type: 'thread_fork_failed',
-      sourceThreadId,
-      atMessageId,
-      error: 'sourceThreadId and atMessageId required',
-    });
-    return;
-  }
-
-  let copied = 0;
-  let newThread;
-  try {
-    // 1. Create the fork record on ThreadStore (sets forkedFrom pointer).
-    const store = session.threadStore || getThreadStore();
-    newThread = store.forkThread(sourceThreadId, atMessageId, { name });
-    // 2. Copy messages up to the cursor (inclusive) into the new thread.
-    if (session.conversationStore && typeof session.conversationStore.copyThreadUpTo === 'function') {
-      copied = session.conversationStore.copyThreadUpTo(
-        sourceThreadId,
-        newThread.id,
-        atMessageId,
-      );
-    }
-    // 3. Roll cached counters on the new thread so the sidebar shows the
-    // copied messages without needing a rebuild pass.
-    if (copied > 0) {
-      newThread.messageCount = copied;
-      newThread.lastMessageAt = Date.now();
-      newThread.lastActivityAt = newThread.lastMessageAt;
-    }
-    // 4. Flush so the new thread is durable before the UI refreshes.
-    if (typeof store.flush === 'function') store.flush();
-  } catch (err) {
-    sendUnifyEvent({
-      type: 'thread_fork_failed',
-      sourceThreadId,
-      atMessageId,
-      error: err?.message || String(err),
-    });
-    return;
-  }
-
-  // 5. Broadcast the fork + refreshed thread list.
+  const { sourceThreadId, atMessageId } = msg || {};
   sendUnifyEvent({
-    type: 'thread_forked',
+    type: 'thread_fork_failed',
     sourceThreadId,
-    targetThreadId: newThread.id,
-    forkedAtMessageId: atMessageId,
-    copiedMessages: copied,
+    atMessageId,
+    error: 'thread fork is no longer supported (H2 single-conversation)',
   });
-  sendThreadListUpdate();
 }
 
-/**
- * Handle model switch from the web UI.
- * Updates Engine's config so the next query uses the new model.
- * @param {{ model: string }} msg
- */
+/** Handle model switch from the web UI. */
 export function handleUnifyModelSwitch(msg) {
   if (!session || !msg.model) return;
 
-  // Validate: model must be in availableModels list
   const available = session.config.availableModels || [];
   const found = available.some(m => m.id === msg.model);
   if (!found) {
@@ -2235,10 +1414,8 @@ export function handleUnifyModelSwitch(msg) {
     return;
   }
 
-  // Update Engine's model for subsequent queries
   session.config.model = msg.model;
 
-  // Confirm switch to frontend
   sendUnifyEvent({
     type: 'model_switched',
     model: msg.model,
@@ -2246,14 +1423,10 @@ export function handleUnifyModelSwitch(msg) {
 }
 
 /**
- * Handle history load request from the web UI.
- * Loads recent messages from ConversationStore and sends them through
- * the standard claude_output rendering pipeline (sendUnifyOutput).
- *
- * @param {{ limit?: number }} msg
+ * Handle history load request. Loads recent messages from ConversationStore
+ * and replays them through the standard claude_output pipeline.
  */
 export async function handleUnifyLoadHistory(msg) {
-  // Lazy-init session if needed (same logic as handleUnifyChat)
   if (!session) {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     session = await loadSession({
@@ -2261,33 +1434,14 @@ export async function handleUnifyLoadHistory(msg) {
       skipMCP: false,
       skipSkills: false,
     });
-    // task-318 rev-1 fix: wire live setters; see handleUnifyChat.
     installUnifyRuntimeBridge(session);
-    // task-317: sweep + schedule auto-archive on history-load path too.
-    runAutoArchiveSweep(session);
-    scheduleAutoArchive(session);
 
     unifyConversationId = `unify-${Date.now()}`;
 
-    // Restore per-thread history from persisted conversation store.
-    // task-320: bucket by threadId so each thread keeps its own context.
-    // task-fix: use restoreThreadHistoryFromRecent() so tool messages
-    // and toolCalls/toolCallId survive the restore.
-    restoreThreadHistoryFromRecent(session.conversationStore.loadRecent(50));
+    restoreHistoryFromRecent(session.conversationStore.loadRecent(50));
   }
 
-  // task-322: replay `session_ready` + `thread_list_updated` UNCONDITIONALLY
-  // on every load-history call. The module-level `session` is a process-wide
-  // singleton — on page refresh the agent reuses it, so the lazy-init block
-  // above is skipped. The frontend's `enterUnify()` resets
-  // `unifyModel=null`, `unifyThreads=[]`, `unifySessionReady=false` every
-  // time, so without this replay the UI is left with the model selector
-  // stuck on the placeholder, sidebar empty, and the local→agent
-  // conversationId migration never triggers (leaving the main pane blank).
-  //
-  // Frontend is idempotent: the `session_ready` handler either migrates
-  // local→agent convId (first time) or just updates model/status fields
-  // (repeat) — receiving it twice is a no-op on state invariants.
+  // Always replay session_ready so refresh / reconnect rebuilds UI state.
   sendUnifyEvent({
     type: 'session_ready',
     conversationId: unifyConversationId,
@@ -2297,30 +1451,14 @@ export async function handleUnifyLoadHistory(msg) {
     mcpServers: session.status.mcpServers,
     tools: session.status.tools,
   });
-  sendThreadListUpdate();
-  // task-325b: after a page refresh / reconnect the frontend needs the
-  // full Working Status snapshot to rebuild the panel (which thread is
-  // running, idle, aborted). `thread_list_updated` is intentionally a
-  // mutation-delta stream; `thread_list_snapshot` is the single
-  // authoritative "everything right now" payload.
-  sendThreadListSnapshot();
-  // task-334m: replay groups snapshot so Sidebar Groups rebuilds on refresh.
   sendGroupSnapshotBroadcast();
 
-  // Honor explicit limit:0 — frontend uses it on Unify re-entry to refresh
-  // metadata (model/status/group snapshot via the unconditional replay
-  // above) without re-streaming the message history.
   const limit = (typeof msg.limit === 'number') ? msg.limit : 50;
   const messages = limit > 0 ? session.conversationStore.loadRecent(limit) : [];
   const compactSummary = session.conversationStore.readCompactSummary();
 
-  // Send each message through standard claude_output rendering pipeline
   for (const m of messages) {
     if (m.role === 'user') {
-      // Bug 6: forward groupId per message so the frontend re-stamps
-      // replayed messages into their originating group instead of the
-      // user's current filter (which would otherwise hide them when
-      // switching groups).
       sendUnifyOutput({ type: 'user', message: { content: m.content } }, m.groupId || null);
     } else if (m.role === 'assistant') {
       sendUnifyOutput({
@@ -2331,7 +1469,6 @@ export async function handleUnifyLoadHistory(msg) {
     }
   }
 
-  // Signal history loading complete
   sendUnifyEvent({
     type: 'history_loaded',
     count: messages.length,
@@ -2342,19 +1479,14 @@ export async function handleUnifyLoadHistory(msg) {
 }
 
 /**
- * Reset Unify session (for clear messages or config change).
- * After shutdown, immediately re-initializes the session and sends
- * session_ready so the frontend picks up updated models/config.
+ * Reset Unify session. Aborts the in-flight controller, tears down the
+ * session, then re-initialises so the frontend gets fresh config.
  */
 export async function resetUnifySession() {
-  // task-320: abort ALL in-flight controllers (every thread) before
-  // tearing down the session. Leaves no dangling round still writing
-  // to stdout after shutdown.
-  for (const ctrl of abortByThread.values()) {
-    try { ctrl.abort(); } catch { /* ignore */ }
+  if (currentAbortCtrl && !currentAbortCtrl.signal.aborted) {
+    try { currentAbortCtrl.abort(); } catch { /* ignore */ }
   }
-  abortByThread.clear();
-  // Clean up VP subscriber to prevent stale sends after reset.
+  currentAbortCtrl = null;
   if (_vpUnsubscribe) {
     try { _vpUnsubscribe(); } catch { /* ignore */ }
     _vpUnsubscribe = null;
@@ -2364,9 +1496,8 @@ export async function resetUnifySession() {
     session = null;
   }
   unifyConversationId = null;
-  messagesByThread.clear();
+  conversationMessages = [];
 
-  // Re-initialize session immediately so frontend gets updated config
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     session = await loadSession({
@@ -2374,20 +1505,11 @@ export async function resetUnifySession() {
       skipMCP: false,
       skipSkills: false,
     });
-    // task-318 rev-1 fix: wire live setters; see handleUnifyChat.
     installUnifyRuntimeBridge(session);
-    // task-317: sweep + re-schedule auto-archive on reset too (the old
-    // interval was bound to the previous session; reschedule against the
-    // fresh one so timer references don't dangle).
-    runAutoArchiveSweep(session);
-    scheduleAutoArchive(session);
 
     unifyConversationId = `unify-${Date.now()}`;
 
-    // Restore per-thread history for LLM context (task-320).
-    // task-fix: use restoreThreadHistoryFromRecent() so tool messages
-    // and toolCalls/toolCallId survive the restore.
-    restoreThreadHistoryFromRecent(session.conversationStore.loadRecent(50));
+    restoreHistoryFromRecent(session.conversationStore.loadRecent(50));
 
     sendUnifyEvent({
       type: 'session_ready',
@@ -2398,11 +1520,6 @@ export async function resetUnifySession() {
       mcpServers: session.status.mcpServers,
       tools: session.status.tools,
     });
-    // task-301 Part 2: re-push thread snapshot after session reset.
-    sendThreadListUpdate();
-    // task-325b: also push the full Working Status snapshot so the UI
-    // doesn't retain stale "running" badges from the prior session.
-    sendThreadListSnapshot();
   } catch (err) {
     console.error('[Unify] Failed to re-initialize session after reset:', err.message);
   }
