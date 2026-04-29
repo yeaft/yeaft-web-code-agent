@@ -556,7 +556,7 @@ describe('loadSession', () => {
       expect(session.toolRegistry.has('Skill')).toBe(true);
       expect(session.toolRegistry.has('EnterWorktree')).toBe(true);
       expect(session.toolRegistry.has('ExitWorktree')).toBe(true);
-      expect(session.status.tools).toBe(51);
+      expect(session.status.tools).toBe(45);
     } finally {
       await session.shutdown();
     }
@@ -583,7 +583,7 @@ describe('loadSession', () => {
 
     try {
       expect(session.toolRegistry.has('custom_tool')).toBe(true);
-      expect(session.status.tools).toBe(52); // 51 built-in + 1 extra
+      expect(session.status.tools).toBe(46); // 45 built-in + 1 extra
     } finally {
       await session.shutdown();
     }

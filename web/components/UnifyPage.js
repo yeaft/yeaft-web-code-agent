@@ -2,7 +2,6 @@ import ChatInput from './ChatInput.js';
 import MessageList from './MessageList.js';
 import UnifySettings from './UnifySettings.js';
 import UnifySidebarV2 from './UnifySidebarV2.js';
-import UnifyBreadcrumb from './UnifyBreadcrumb.js';
 import UnifyFeatureDetailView from './UnifyFeatureDetailView.js';
 import VpDetailView from './VpDetailView.js';
 import GroupInviteModal from './GroupInviteModal.js';
@@ -13,7 +12,7 @@ import WorkbenchPanel from './WorkbenchPanel.js';
 
 export default {
   name: 'UnifyPage',
-  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2, UnifyBreadcrumb, UnifyFeatureDetailView, VpDetailView, GroupInviteModal, GroupMemberEditor, FeatureMessageRejectToast, UserMemoryPage, WorkbenchPanel },
+  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2, UnifyFeatureDetailView, VpDetailView, GroupInviteModal, GroupMemberEditor, FeatureMessageRejectToast, UserMemoryPage, WorkbenchPanel },
   template: `
     <div class="unify-page">
       <!-- Mobile sidebar overlay -->
@@ -94,13 +93,7 @@ export default {
           </div>
         </div>
 
-        <!-- Breadcrumb: visible only when a thread filter is active AND not in task detail view -->
-        <UnifyBreadcrumb
-          v-if="store.unifyActiveThreadFilter && !store.unifyActiveFeatureDetailId"
-          :thread-id="store.unifyActiveThreadFilter"
-          :thread-name="activeThreadName"
-          @back="clearThreadFilter"
-        />
+        <!-- H2.f.4: UnifyBreadcrumb removed (thread filter is no-op now). -->
 
         <!-- task-315: Task Detail View replaces the message list when a
              sidebar task is selected. Owns its own breadcrumb + reply
