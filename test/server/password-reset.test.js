@@ -124,4 +124,18 @@ describe('verifyPasswordReset', () => {
     const r2 = await verifyPasswordReset(resetToken, code, 'anotherPass456');
     expect(r2.success).toBe(false);
   });
+
+  it('caps brute-force attempts and invalidates token after 5 wrong codes', async () => {
+    _users.set('u1', { id: 'u1', username: 'alice', email: 'a@x.com', password_hash: 'old' });
+    const { resetToken } = await requestPasswordReset('a@x.com');
+    const realCode = _sentEmails[0].code;
+    for (let i = 0; i < 5; i++) {
+      const r = await verifyPasswordReset(resetToken, '000000', 'newPass123');
+      expect(r.success).toBe(false);
+    }
+    // After 5 wrong attempts, even the right code should be rejected.
+    const r6 = await verifyPasswordReset(resetToken, realCode, 'newPass123');
+    expect(r6.success).toBe(false);
+    expect(_users.get('u1').password_hash).toBe('old');
+  });
 });

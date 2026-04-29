@@ -145,14 +145,17 @@ export const userDb = {
    * session store from here to keep this layer pure).
    */
   deleteUser(userId) {
+    // No inner try/catch — any failure must bubble out so the transaction
+    // rolls back. A partial delete (e.g. users row gone but daily_stats
+    // orphaned) is worse than the operation failing outright.
     const run = transaction((id) => {
-      try { stmts.deleteIdentitiesForUser.run(id); } catch {}
-      try { stmts.deleteUserSessionsByUser.run(id); } catch {}
-      try { stmts.deleteUserStats.run(id); } catch {}
-      try { stmts.deleteDailyStatsForUser.run(id); } catch {}
-      try { stmts.deleteCustomExpertRolesForUser.run(id); } catch {}
-      try { stmts.deleteInvitationsCreatedBy.run(id); } catch {}
-      try { stmts.clearInvitationUsedBy.run(id); } catch {}
+      stmts.deleteIdentitiesForUser.run(id);
+      stmts.deleteUserSessionsByUser.run(id);
+      stmts.deleteUserStats.run(id);
+      stmts.deleteDailyStatsForUser.run(id);
+      stmts.deleteCustomExpertRolesForUser.run(id);
+      stmts.deleteInvitationsCreatedBy.run(id);
+      stmts.clearInvitationUsedBy.run(id);
       const result = stmts.deleteUserById.run(id);
       return result.changes > 0;
     });

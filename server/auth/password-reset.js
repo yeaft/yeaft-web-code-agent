@@ -12,14 +12,15 @@
  *
  * Uses the same SMTP infra as login email verification.
  */
-import { randomBytes } from 'crypto';
+import { randomBytes, randomInt, timingSafeEqual } from 'crypto';
 import { CONFIG, isEmailConfigured } from '../config.js';
 import { userDb } from '../database.js';
 import { sendVerificationCode } from '../email.js';
 import { hashPassword } from './utils.js';
 
 const RESET_TTL_MS = 15 * 60 * 1000;
-const _pending = new Map(); // resetToken -> { userId, code, expiresAt }
+const MAX_ATTEMPTS = 5;
+const _pending = new Map(); // resetToken -> { userId, code, expiresAt, attempts }
 
 function _gc() {
   const now = Date.now();
@@ -27,9 +28,16 @@ function _gc() {
 }
 
 function _generateCode() {
-  let code = '';
-  for (let i = 0; i < 6; i++) code += Math.floor(Math.random() * 10).toString();
-  return code;
+  // CSPRNG. Math.random() is unsuitable for security tokens — predictable
+  // across attackers who can sample the server's PRNG state.
+  return String(randomInt(0, 1_000_000)).padStart(6, '0');
+}
+
+function _constantTimeCodeEqual(a, b) {
+  const ab = Buffer.from(String(a));
+  const bb = Buffer.from(String(b));
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
 }
 
 /**
@@ -57,6 +65,12 @@ export async function requestPasswordReset(email) {
     // Pretend success to prevent enumeration. No code sent, no token issued.
     // The client gets a fake-looking token so the UI can still proceed to
     // the "enter code" step — verification will simply fail.
+    //
+    // Sleep a small randomized window so the response time roughly matches
+    // the existing-email path (which awaits an SMTP round-trip). Without
+    // this, request latency is itself an enumeration oracle.
+    const fakeDelay = 200 + Math.floor(Math.random() * 400);
+    await new Promise(r => setTimeout(r, fakeDelay));
     return { success: true, resetToken: 'fake_' + randomBytes(16).toString('hex') };
   }
 
@@ -65,7 +79,8 @@ export async function requestPasswordReset(email) {
   _pending.set(resetToken, {
     userId: user.id,
     code,
-    expiresAt: Date.now() + RESET_TTL_MS
+    expiresAt: Date.now() + RESET_TTL_MS,
+    attempts: 0
   });
   try {
     await sendVerificationCode(user.email, code, user.username);
@@ -79,6 +94,10 @@ export async function requestPasswordReset(email) {
 
 /**
  * Step 2: verify code and set new password.
+ *
+ * Per-token attempt counter caps brute-force at MAX_ATTEMPTS regardless of
+ * IP rotation — the IP rate-limit alone is bypassable via residential
+ * proxies.
  */
 export async function verifyPasswordReset(resetToken, code, newPassword) {
   _gc();
@@ -88,7 +107,13 @@ export async function verifyPasswordReset(resetToken, code, newPassword) {
     _pending.delete(resetToken);
     return { success: false, error: 'Reset code has expired' };
   }
-  if (entry.code !== String(code || '')) {
+  if (entry.attempts >= MAX_ATTEMPTS) {
+    _pending.delete(resetToken);
+    return { success: false, error: 'Too many attempts; request a new reset code' };
+  }
+  if (!_constantTimeCodeEqual(entry.code, code || '')) {
+    entry.attempts += 1;
+    if (entry.attempts >= MAX_ATTEMPTS) _pending.delete(resetToken);
     return { success: false, error: 'Invalid reset code' };
   }
   if (!newPassword || typeof newPassword !== 'string' || newPassword.length < 6) {
