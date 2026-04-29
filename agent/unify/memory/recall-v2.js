@@ -39,7 +39,7 @@ import { promises as fsp, existsSync } from 'fs';
 import {
   DEFAULT_MEMORY_ROOT, scopeDir, readMemory, readSummary,
 } from './store-v2.js';
-import { extractKeywords } from './recall.js';
+import { extractKeywords } from './keywords.js';
 
 /** Default cap for how many topic scopes recall pulls in. */
 export const DEFAULT_TOPIC_LIMIT = 3;
