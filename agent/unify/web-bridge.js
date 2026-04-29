@@ -736,7 +736,17 @@ export async function handleUnifyGroupChat(msg) {
         ts: Date.now(),
       });
     } catch { /* never crash WS pipeline */ }
+  }
 
+  // GC.1 Commit C: VP-level parallelism. Each selected VP runs its
+  // turn concurrently via Promise.all. Intra-VP loops (LLM → tool →
+  // LLM) stay serial inside each handleUnifyChat call.
+  //
+  // Side-effect: VP-B's transcript no longer contains VP-A's reply
+  // (they're concurrent). Cross-VP visibility moves to the explicit
+  // route_forward tool. The group jsonl log remains the source of
+  // truth for full-fidelity replay.
+  await Promise.all(captured.map(async ({ vpId }) => {
     try {
       await handleUnifyChat({
         ...msg,
@@ -758,7 +768,7 @@ export async function handleUnifyGroupChat(msg) {
         });
       } catch { /* never crash WS pipeline */ }
     }
-  }
+  }));
 }
 
 /**
