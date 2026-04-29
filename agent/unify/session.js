@@ -33,7 +33,9 @@ import { Engine } from './engine.js';
 // Engine. Engine.#recallMemory routes pre-turn recall through
 // groups/pre-flow.js → memory/preflow.js (the previous per-scope
 // file reader recall-v2.js has been deleted). Post-turn AMS
-// correction (memory/adjust.js) runs after end_turn.
+// correction (memory/adjust.js) is implemented but not yet wired —
+// requires session-level AMS instance + scope resolution. Tracked
+// as a follow-up.
 import { ensureDefaultGroupIfEmpty } from './groups/group-crud.js';
 import { seedDefaultVps } from './vp/seed-defaults.js';
 import { createDreamScheduler } from './memory/dream-scheduler.js';
