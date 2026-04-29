@@ -26,13 +26,22 @@ import { createFullRegistry } from './tools/index.js';
 import { initFeatureStore } from './tools/feature-tools.js';
 import { Engine } from './engine.js';
 // H2.f.5: threads/, pipeline/dispatcher and input-queue retired. The
-// session now exposes a single Engine. Memory recall runs through
-// pre-flow (memory/preflow.js) + post-turn adjustMemory (memory/adjust.js).
+// session now exposes a single Engine.
+//
+// GC.1 Commit A: when config.memoryV2 && config.memoryPreflow, the
+// session opens a SegmentIndex (SQLite FTS5 over memory.md) and
+// passes it to the Engine. The Engine's #recallMemory then routes
+// pre-turn recall through groups/pre-flow.js → memory/preflow.js
+// instead of the per-scope file reader (memory/recall-v2.js).
+// Post-turn adjustMemory (memory/adjust.js) wiring lands in a later
+// commit.
 import { ensureDefaultGroupIfEmpty } from './groups/group-crud.js';
 import { seedDefaultVps } from './vp/seed-defaults.js';
 import { createDreamScheduler } from './memory/dream-scheduler.js';
 import { createV2DreamScheduler } from './dream-v2/session-wiring.js';
 import { getUserMemoryStore } from './memory/user-memory-store.js';
+import { openSegmentIndex } from './memory/index-db.js';
+import { syncAll as syncSegmentIndex } from './memory/segment-sync.js';
 import { migrateR6toV2 } from './memory/migrate-r6-to-v2.js';
 import { join } from 'path';
 import { existsSync as existsSyncSafe, readFileSync as readFileSyncSafe, writeFileSync as writeFileSyncSafe } from 'fs';
@@ -213,6 +222,35 @@ export async function loadSession(options = {}) {
     console.warn(`[Yeaft] Failed to open R6 memory shard store: ${err?.message || err}`);
   }
 
+  // ─── 5-fts. (GC.1) Open SegmentIndex for FTS pre-flow ────
+  //     When config.memoryV2 && config.memoryPreflow, build a SQLite
+  //     FTS5 index over ~/.yeaft/memory/<scope>/memory.md and pass it
+  //     to the Engine. Engine.#recallMemory uses it via
+  //     groups/pre-flow.js → memory/preflow.js. Disk is the source of
+  //     truth; on boot we reconcile disk → index via syncAll.
+  //     Failure to open the index is non-fatal: the Engine falls back
+  //     to recall-v2 transparently.
+  let memoryIndex = null;
+  if (config.memoryV2 && config.memoryPreflow && !config._readOnly) {
+    try {
+      const indexPath = join(yeaftDir, 'memory', 'index.db');
+      memoryIndex = openSegmentIndex(indexPath);
+      const memoryRoot = join(yeaftDir, 'memory');
+      try {
+        syncSegmentIndex(memoryRoot, memoryIndex);
+      } catch (syncErr) {
+        // Sync is best-effort; an empty / partial index just produces
+        // empty recall results, never an error.
+        if (config.debug) {
+          console.warn(`[Yeaft] FTS index sync warning: ${syncErr?.message || syncErr}`);
+        }
+      }
+    } catch (err) {
+      console.warn(`[Yeaft] Failed to open FTS segment index (preflow disabled): ${err?.message || err}`);
+      memoryIndex = null;
+    }
+  }
+
   // ─── 5a. Initialize feature store ──────────────────────
   initFeatureStore(yeaftDir, { readOnly: config._readOnly || false });
 
@@ -277,6 +315,7 @@ export async function loadSession(options = {}) {
     conversationStore,
     memoryStore,
     memoryShardStore,
+    memoryIndex,
     toolRegistry,
     skillManager,
     mcpManager,
@@ -354,6 +393,11 @@ export async function loadSession(options = {}) {
       trace.close();
     } catch {
       // Trace might not have close() (NullTrace)
+    }
+    try {
+      if (memoryIndex) memoryIndex.close();
+    } catch {
+      // Best-effort cleanup
     }
   }
 

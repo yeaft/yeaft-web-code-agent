@@ -22,6 +22,7 @@ import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
 import { LLMContextError, LLMAbortError } from './llm/adapter.js';
 import { recallR6, formatForInjection } from './memory/recall-r6.js';
 import { recallV2 } from './memory/recall-v2.js';
+import { runMemoryPreflow } from './groups/pre-flow.js';
 import { shouldConsolidate, consolidate, partitionMessages } from './memory/consolidate.js';
 import { extractMemories } from './memory/extract.js';
 import { runCompact as runCompactOrchestrator } from './compact/orchestrator.js';
@@ -152,6 +153,9 @@ export class Engine {
   /** @type {object|null} — R6 memory shard store (task-334f) */
   #memoryShardStore;
 
+  /** @type {import('./memory/index-db.js').SegmentIndex|null} — GC.1: SQLite FTS5 segment index */
+  #memoryIndex;
+
   /** @type {import('./tools/registry.js').ToolRegistry|null} */
   #toolRegistry;
 
@@ -223,13 +227,14 @@ export class Engine {
    *   config: object,
    *   conversationStore?: import('./conversation/persist.js').ConversationStore,
    *   memoryStore?: import('./memory/store.js').MemoryStore,
+   *   memoryIndex?: import('./memory/index-db.js').SegmentIndex,
    *   toolRegistry?: import('./tools/registry.js').ToolRegistry,
    *   skillManager?: import('./skills.js').SkillManager,
    *   mcpManager?: import('./mcp.js').MCPManager,
    *   yeaftDir?: string,
    * }} params
    */
-  constructor({ adapter, trace, config, conversationStore, memoryStore, memoryShardStore, toolRegistry, skillManager, mcpManager, yeaftDir }) {
+  constructor({ adapter, trace, config, conversationStore, memoryStore, memoryShardStore, memoryIndex, toolRegistry, skillManager, mcpManager, yeaftDir }) {
     this.#adapter = adapter;
     this.#trace = trace;
     this.#config = config;
@@ -238,6 +243,7 @@ export class Engine {
     this.#conversationStore = conversationStore || null;
     this.#memoryStore = memoryStore || null;
     this.#memoryShardStore = memoryShardStore || null;
+    this.#memoryIndex = memoryIndex || null;
     this.#toolRegistry = toolRegistry || null;
     this.#skillManager = skillManager || null;
     this.#mcpManager = mcpManager || null;
@@ -504,6 +510,27 @@ export class Engine {
    */
   async #recallMemory(prompt, ctx = {}) {
     const memory = { profile: '', entries: [], formatted: '' };
+
+    // ─── GC.1: FTS5 pre-flow path ──────────────────────────────
+    // When the SegmentIndex is wired and the feature flag is on,
+    // route recall through groups/pre-flow.js → memory/preflow.js
+    // (SQLite FTS5). On any failure fall through to v2.
+    if (this.#memoryIndex && this.#config && this.#config.memoryPreflow) {
+      try {
+        const result = runMemoryPreflow(this.#memoryIndex, {
+          userMsg: prompt,
+          groupId: ctx.groupId,
+          vpId: ctx.vpId,
+          featureId: ctx.featureId,
+        });
+        memory.profile = result.profile || '';
+        memory.entries = result.entries || [];
+        memory.formatted = result.formatted || '';
+        return memory;
+      } catch {
+        // Fall through to v2 / R6 paths.
+      }
+    }
 
     // ─── v2 path (DESIGN-v2) ───────────────────────────────────
     if (this.#config && this.#config.memoryV2 && this.#yeaftDir) {
