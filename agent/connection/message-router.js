@@ -36,7 +36,7 @@ import { sendToServer, flushMessageBuffer } from './buffer.js';
 import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
 import { getLlmConfig, updateLlmConfig, getUnifySettings, updateUnifySettings } from '../unify/config-api.js';
-import { handleUnifyChat, handleUnifyGroupChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyMergeThread, handleUnifyForkThread, handleUnifyAbortThread, handleUnifyAbortAll, handleUnifyVpSubscribe, handleUnifyVpCreate, handleUnifyVpUpdate, handleUnifyVpDelete, handleUnifyVpRead, handleUnifyTaskMessage, handleUnifyUserMemoryWrite, handleUnifyUserMemoryRemove, handleUnifyMemoryScopeList, handleUnifyMemoryQuery, handleUnifyMemoryTrace, handleUnifyFetchSummaryHistory, handleUnifyTaskCrud, handleUnifyListGroups, handleUnifyCreateGroup, handleUnifyRenameGroup, handleUnifyArchiveGroup, handleUnifyDeleteGroup, handleUnifyAddMember, handleUnifyRemoveMember, handleUnifySetDefaultVp, handleUnifyDreamTrigger } from '../unify/web-bridge.js';
+import { handleUnifyChat, handleUnifyGroupChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyMergeThread, handleUnifyForkThread, handleUnifyAbortThread, handleUnifyAbortAll, handleUnifyVpSubscribe, handleUnifyVpCreate, handleUnifyVpUpdate, handleUnifyVpDelete, handleUnifyVpRead, handleUnifyFeatureMessage, handleUnifyUserMemoryWrite, handleUnifyUserMemoryRemove, handleUnifyMemoryScopeList, handleUnifyMemoryQuery, handleUnifyMemoryTrace, handleUnifyFetchSummaryHistory, handleUnifyFeatureCrud, handleUnifyListGroups, handleUnifyCreateGroup, handleUnifyRenameGroup, handleUnifyArchiveGroup, handleUnifyDeleteGroup, handleUnifyAddMember, handleUnifyRemoveMember, handleUnifySetDefaultVp, handleUnifyDreamTrigger } from '../unify/web-bridge.js';
 
 export async function handleMessage(msg) {
   switch (msg.type) {
@@ -429,7 +429,7 @@ export async function handleMessage(msg) {
     // Replaces the withdrawn R3 `unify_task_private_chat`. Agent validates,
     // stamps msgId + ts, and broadcasts the `feature_message` mirror back.
     case 'unify_feature_message':
-      handleUnifyTaskMessage(msg);
+      handleUnifyFeatureMessage(msg);
       break;
 
     // task-334h (R6 §Δ29): user-memory skeleton. Payload schema + event
@@ -460,7 +460,7 @@ export async function handleMessage(msg) {
       await handleUnifyFetchSummaryHistory(msg);
       break;
     case 'unify_feature_crud':
-      await handleUnifyTaskCrud(msg);
+      await handleUnifyFeatureCrud(msg);
       break;
 
     // task-334m: Group CRUD + D1 seed wiring (§Δ10 334m + R6 §Δ31.2).
