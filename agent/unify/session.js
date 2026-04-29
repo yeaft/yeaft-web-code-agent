@@ -29,7 +29,10 @@ import { Engine } from './engine.js';
 import { createThreadEngineRegistry } from './threads/engine-registry.js';
 import { MAIN_THREAD_ID } from './threads/store.js';
 import { getThreadStore } from './threads/store.js';
-import { createIntentClassifier } from './router/intent-classifier.js';
+// H2.f.1: intent-classifier (LLM router) is retired. Memory recall now
+// runs through pre-flow (memory/preflow.js) + post-turn adjustMemory
+// (memory/adjust.js); the dispatcher routes every input to the single
+// MAIN_THREAD_ID engine instance.
 import { initInputQueueStore } from './input-queue/store.js';
 import { createDispatcher } from './pipeline/dispatcher.js';
 import { ensureDefaultGroupIfEmpty } from './groups/group-crud.js';
@@ -360,24 +363,22 @@ export async function loadSession(options = {}) {
   // Seed the main-thread instance so listActive() is non-empty from T=0.
   engineRegistry.ensure(MAIN_THREAD_ID);
 
-  // task-309 Phase 2 router: intent classifier that routes incoming user
-  // messages to the right EngineInstance. Shares the same adapter/trace/
-  // config as the engines so it can use primaryModel for classification.
-  const router = createIntentClassifier({ adapter, trace, config });
+  // H2.f.1: the LLM intent-classifier is retired. The dispatcher now
+  // unconditionally routes every input to the MAIN_THREAD_ID engine
+  // instance. Memory recall happens via memory/preflow.js (pre-turn)
+  // and memory/adjust.js (post-turn).
 
   // task-310 Phase 2 integration: wire InputQueue + Dispatcher so the
   // web-bridge can submit `unify_chat` inputs through the unified pipeline
-  // (queue → router → engineRegistry → EngineInstance). In read-only mode
-  // the queue is memory-only (no disk writes).
+  // (queue → engineRegistry → EngineInstance). In read-only mode the
+  // queue is memory-only (no disk writes).
   const inputQueue = initInputQueueStore({
     yeaftDir: config._readOnly ? null : yeaftDir,
     force: true,
   });
   const dispatcher = createDispatcher({
     inputQueue,
-    router,
     engineRegistry,
-    threadStore: getThreadStore(),
     trace,
   });
 
@@ -416,7 +417,10 @@ export async function loadSession(options = {}) {
   return {
     engine,
     engineRegistry,
-    router,
+    // H2.f.1: `router` removed (intent classifier retired). Kept the
+    // property as `null` for any caller doing back-compat existence
+    // checks; the dispatcher now always routes to MAIN_THREAD_ID.
+    router: null,
     inputQueue,
     dispatcher,
     adapter,
