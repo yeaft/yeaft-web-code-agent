@@ -315,12 +315,13 @@ export function loadConfig(overrides = {}) {
     // don't pollute the flat config namespace used by chat/crew code.
     unify: normaliseUnifySection(jsonConfig.unify),
 
-    // DESIGN-v2 feature flag. When true the session wires the v2 dream
-    // pipeline (dream-v2/runner.js) and opens the FTS5 SegmentIndex used
-    // by the engine's pre-turn recall (groups/pre-flow.js →
-    // memory/preflow.js). PR-E flipped the default to true; users who
-    // need the legacy R6 paths can opt out via `"memoryV2": false` in
-    // ~/.yeaft/config.json.
+    // DESIGN-v2 feature flag. When true the session opens the FTS5
+    // SegmentIndex (used by groups/pre-flow.js → memory/preflow.js
+    // for pre-turn recall) and wires the v2 dream pipeline
+    // (dream-v2/runner.js). When false both are skipped — no recall,
+    // no dream — turns still work but without memory injection. The
+    // legacy R6 recall + dream-scheduler paths have been deleted, so
+    // `false` is now a "memory off" kill switch rather than a fallback.
     memoryV2: overrides.memoryV2 !== undefined ? !!overrides.memoryV2
       : (jsonConfig.memoryV2 !== undefined ? !!jsonConfig.memoryV2 : true),
 
