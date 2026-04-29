@@ -32,15 +32,21 @@ import { Engine } from './engine.js';
 // SegmentIndex (SQLite FTS5 over memory.md) and passes it to the
 // Engine. Engine.#recallMemory routes pre-turn recall through
 // groups/pre-flow.js → memory/preflow.js (the previous per-scope
-// file reader recall-v2.js has been deleted). Post-turn AMS
-// correction (memory/adjust.js) is implemented but not yet wired —
-// requires session-level AMS instance + scope resolution. Tracked
-// as a follow-up.
+// file reader recall-v2.js has been deleted).
+//
+// GC.1 follow-up: when memoryIndex is wired we also open an
+// AmsRegistry. The registry caches per-group ActiveMemorySet
+// instances and persists their identity-only state under
+// `~/.yeaft/memory/groups/<gid>/ams.json` so a deactivated group
+// resumes with the same onDemand/recent membership it had on
+// disconnect. Engine.#runQuery uses the registry to populate the
+// AMS each turn and to run `memory/adjust.js` post-turn.
 import { ensureDefaultGroupIfEmpty } from './groups/group-crud.js';
 import { seedDefaultVps } from './vp/seed-defaults.js';
 import { createV2DreamScheduler } from './dream-v2/session-wiring.js';
 import { openSegmentIndex } from './memory/index-db.js';
 import { syncAll as syncSegmentIndex } from './memory/segment-sync.js';
+import { openAmsRegistry } from './memory/ams-registry.js';
 import { migrateR6toV2 } from './memory/migrate-r6-to-v2.js';
 import { join } from 'path';
 import { existsSync as existsSyncSafe, readFileSync as readFileSyncSafe, writeFileSync as writeFileSyncSafe } from 'fs';
@@ -250,6 +256,22 @@ export async function loadSession(options = {}) {
     }
   }
 
+  // ─── 5-ams. (GC.1 follow-up) Group-keyed AMS registry ────
+  //     The registry caches one ActiveMemorySet per groupId and
+  //     persists their state to disk so a deactivated group can be
+  //     reactivated with the same onDemand/recent membership it had
+  //     on disconnect. Without memoryIndex we have nothing to
+  //     re-hydrate against, so the registry is left null in that case.
+  let amsRegistry = null;
+  if (memoryIndex && !config._readOnly) {
+    try {
+      amsRegistry = openAmsRegistry({ yeaftDir, memoryIndex, config });
+    } catch (err) {
+      console.warn(`[Yeaft] Failed to open AMS registry (adjust disabled): ${err?.message || err}`);
+      amsRegistry = null;
+    }
+  }
+
   // ─── 5a. Initialize feature store ──────────────────────
   initFeatureStore(yeaftDir, { readOnly: config._readOnly || false });
 
@@ -315,6 +337,7 @@ export async function loadSession(options = {}) {
     memoryStore,
     memoryShardStore,
     memoryIndex,
+    amsRegistry,
     toolRegistry,
     skillManager,
     mcpManager,
@@ -372,6 +395,11 @@ export async function loadSession(options = {}) {
     } catch {
       // Best-effort cleanup
     }
+    try {
+      if (amsRegistry) amsRegistry.persistAll();
+    } catch {
+      // Best-effort cleanup
+    }
   }
 
   return {
@@ -388,6 +416,7 @@ export async function loadSession(options = {}) {
     trace,
     yeaftDir,
     status,
+    amsRegistry,
     shutdown,
     // task-325c: user-initiated abort API. Delegates to web-bridge which
     // owns the single AbortController. Lazy-imported to avoid a hard cycle
