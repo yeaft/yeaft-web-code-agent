@@ -141,8 +141,8 @@ export default {
                   </div>
                   <div class="sp-cmd-row">
                     <span class="sp-cmd-label">{{ $t('settings.security.agentCmdService') }}</span>
-                    <code class="sp-cmd">yeaft-agent install --server {{ serverWsUrl }} --secret {{ agentSecret }}</code>
-                    <button class="sp-icon-btn" @click="copyText('yeaft-agent install --server ' + serverWsUrl + ' --secret ' + agentSecret)" :title="$t('common.copy')">
+                    <code class="sp-cmd">yeaft-agent install --server {{ serverWsUrl }} --secret {{ agentSecret }} --name {{ agentName }}</code>
+                    <button class="sp-icon-btn" @click="copyText('yeaft-agent install --server ' + serverWsUrl + ' --secret ' + agentSecret + ' --name ' + agentName)" :title="$t('common.copy')">
                       <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
                     </button>
                   </div>
@@ -477,6 +477,26 @@ export default {
       if (!p) return '-';
       if (p.displayName && p.displayName !== p.username) return p.displayName;
       return p.username || '-';
+    },
+    /**
+     * Default agent name suggested in the install command. We combine the
+     * user's username with a short, stable id derived from username so two
+     * machines installed from the same account don't collide on display name
+     * trivially. Users can still override --name on the CLI.
+     */
+    agentName() {
+      const p = this.profile;
+      const base = (p && (p.username || p.displayName)) || 'agent';
+      // FNV-1a 32-bit, stable per username, no crypto dep needed.
+      let h = 0x811c9dc5;
+      for (let i = 0; i < base.length; i++) {
+        h ^= base.charCodeAt(i);
+        h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+      }
+      const id = h.toString(16).padStart(8, '0').slice(0, 6);
+      // Sanitize username for shell/CLI: keep alnum/_/-, collapse others.
+      const safe = String(base).replace(/[^A-Za-z0-9_-]/g, '-').replace(/^-+|-+$/g, '') || 'agent';
+      return `${safe}-${id}`;
     },
     visibleTabs() {
       const tabs = [
