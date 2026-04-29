@@ -22,7 +22,7 @@ import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
 import { LLMContextError, LLMAbortError } from './llm/adapter.js';
 import { recallR6, formatForInjection } from './memory/recall-r6.js';
 import { recallV2 } from './memory/recall-v2.js';
-import { shouldConsolidate, consolidate, partitionMessages } from './memory/consolidate.js';
+import { partitionMessages } from './memory/consolidate.js';
 import { extractMemories } from './memory/extract.js';
 import { runCompact as runCompactOrchestrator } from './compact/orchestrator.js';
 import { evaluateCompactTriggers } from './compact/triggers.js';
@@ -641,50 +641,11 @@ export class Engine {
     const budget = this.#config.messageTokenBudget || 8192;
     const compactCfg = (this.#config && this.#config.compact) || {};
 
-    // Phase 8 PR-H: orchestrator is now the default. The legacy
-    // shouldConsolidate / consolidate path remains reachable as an
-    // explicit fallback via `config.compact.useLegacy=true` for parity
-    // testing during migration. evaluateCompactTriggers (DESIGN §4.1)
-    // and runCompact (DESIGN §4.2) own the live path.
-    const useLegacy = compactCfg.useLegacy === true || compactCfg.useOrchestrator === false;
-    if (!useLegacy) {
-      return this.#runOrchestratorCompact(budget, compactCfg);
-    }
-
-    // Default path — surface trigger reasons via trace for observability
-    // even when we still fall through to the legacy consolidate.
-    try {
-      const messages = this.#conversationStore.loadAll();
-      const tokenCount = this.#conversationStore.hotTokens();
-      const trig = evaluateCompactTriggers({
-        messages,
-        tokenCount,
-        contextLimit: this.#config.maxContextTokens || 200000,
-        tokenRatio: compactCfg.tokenRatio,
-        maxMessages: compactCfg.maxMessages,
-      });
-      this.#trace.logEvent && this.#trace.logEvent({
-        traceId: 'compact_triggers_eval',
-        eventType: 'compact_triggers_eval',
-        eventData: { trigger: trig.trigger, reasons: trig.reasons },
-      });
-    } catch { /* observability only */ }
-
-    if (!shouldConsolidate(this.#conversationStore, budget)) return null;
-
-    try {
-      const result = await consolidate({
-        conversationStore: this.#conversationStore,
-        memoryStore: this.#memoryStore,
-        adapter: this.#adapter,
-        config: this.#fastConfig,
-        budget,
-      });
-      return { archivedCount: result.archivedCount, extractedCount: result.extractedEntries.length };
-    } catch {
-      // Consolidation failure is non-critical
-      return null;
-    }
+    // Phase 8 PR-H followup: orchestrator is the only path. The legacy
+    // shouldConsolidate / consolidate fallback was removed once parity
+    // testing concluded. evaluateCompactTriggers (DESIGN §4.1) and
+    // runCompact (DESIGN §4.2) own the live path.
+    return this.#runOrchestratorCompact(budget, compactCfg);
   }
 
   /**

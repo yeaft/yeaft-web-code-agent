@@ -129,27 +129,6 @@ describe('D-a default config routes through runCompact (PR-H flip)', () => {
   });
 });
 
-describe('D-b useLegacy=true keeps legacy consolidate', () => {
-  it('legacy consolidate invoked, orchestrator not invoked', async () => {
-    consolidate.mockClear();
-    runCompactOrchestrator.mockClear();
-    const { engine } = mkEngine({ legacy: true });
-
-    const out = [];
-    for await (const ev of engine.query({ prompt: 'hi', messages: [] })) out.push(ev);
-
-    expect(consolidate).toHaveBeenCalled();
-    expect(runCompactOrchestrator).not.toHaveBeenCalled();
-  });
-});
-
-describe('D-c evaluateCompactTriggers logs to trace', () => {
-  it('logEvent receives compact_triggers_eval on legacy path', async () => {
-    const { engine, trace } = mkEngine({ legacy: true });
-    for await (const _ of engine.query({ prompt: 'hi', messages: [] })) { /* drain */ }
-    const found = trace.events.find(e => e.eventType === 'compact_triggers_eval');
-    expect(found).toBeTruthy();
-    expect(found.eventData).toHaveProperty('trigger');
-    expect(found.eventData).toHaveProperty('reasons');
-  });
-});
+// D-b / D-c removed: the legacy `consolidate` fallback (gated on
+// `config.compact.useLegacy=true`) was deleted from engine.js once
+// orchestrator parity was confirmed. Only the orchestrator path remains.
