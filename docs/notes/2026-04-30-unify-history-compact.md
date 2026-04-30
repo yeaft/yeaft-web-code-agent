@@ -6,7 +6,7 @@
 - `agent/unify/web-bridge.js` — 接入点（`handleUnifyGroupChat` 顶部 entry gate + fan-out 结束后 schedule）
 - `agent/unify/history-compact.js` — 新增的纯函数 helper
 - `agent/unify/engine.js` — 新增 `engine.summarizeForCompact()` 方法
-- `test/agent/unify/history-compact/history-compact.test.js` — 41 个 helper 单测
+- `test/agent/unify/history-compact/history-compact.test.js` — 48 个 helper 单测
 - `test/agent/engine-summarize-for-compact.test.js` — 4 个 engine 接入测试
 
 ## 现象
@@ -145,9 +145,11 @@ scheduleCompactAfterTurn(groupId);
 
 `countTurns` / `findCutIndex` 都对 user-role 消息做 canonical text 去重——把 `@vp-${vpId} ` 前缀剥掉后比对，连续相同的算一个 turn。否则 5 个 VP 的一次 fan-out 会被算成 5 个 turn，触发器会过早触发。
 
+注意去重**只发生在计数和切点计算时**——`appendTurnToHistory` 仍然每个 VP push 一条 user-role 消息（带 `@vp-X` 前缀），存储不变。这是按 user-facing notion 去重，不动底层数据。
+
 ## 测试
 
-`agent/unify/history-compact.test.js` — **41 个 case**：
+`agent/unify/history-compact.test.js` — **48 个 case**：
 
 | 模块 | 覆盖 |
 |---|---|
@@ -163,7 +165,7 @@ scheduleCompactAfterTurn(groupId);
 
 `engine-summarize-for-compact.test.js` — **4 个 case**：fast model 路由、空字符串失败兜底、缺参数兜底、自定义 maxTokens。
 
-`npx vitest run` —— **1271 / 1271 通过**（既有 1226 + 新增 45）。
+`npx vitest run` —— **1278 / 1278 通过**（既有 1226 + 新增 52）。
 
 ## 影响面
 

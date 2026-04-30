@@ -1188,10 +1188,21 @@ function appendTurnToHistory(prompt, assistantTextParts, toolCallsAccum, toolRes
 let _compactInFlight = null;
 
 /**
+ * Re-trigger flag. If `scheduleCompactAfterTurn` is called while a
+ * compact is already in flight, set this so the in-flight one chains
+ * a follow-up immediately on completion. Without this, a sustained
+ * burst of turns could starve compaction: turn N triggers compact,
+ * turns N+1 / N+2 / … each find `_compactInFlight` set and skip,
+ * leaving history above threshold until the burst ends.
+ */
+let _compactPending = false;
+
+/**
  * Fire-and-forget post-turn compaction. Called once at the end of each
  * `handleUnifyGroupChat` after `Promise.all(runVpTurn)` resolves. If a
- * compaction is still in flight from an earlier turn (rare — would need
- * concurrent fan-outs which the entry gate prevents), this is a no-op.
+ * compaction is still in flight from an earlier turn, we set
+ * `_compactPending` so the running compact chains a follow-up on
+ * completion (anti-starvation).
  *
  * The promise is stored in `_compactInFlight` so the next user message
  * can await it before reading `conversationMessages`.
@@ -1199,7 +1210,12 @@ let _compactInFlight = null;
  * @param {string} groupId — for envelope tagging on the emitted event
  */
 function scheduleCompactAfterTurn(groupId) {
-  if (_compactInFlight) return;
+  if (_compactInFlight) {
+    // A compact is already running. Mark a follow-up so when it
+    // finishes, it re-evaluates and runs again if still triggered.
+    _compactPending = true;
+    return;
+  }
   // Cheap O(n) precheck so we don't bother engaging the LLM at all
   // when the conversation is still small.
   const triage = shouldCompactHistory(conversationMessages);
@@ -1211,6 +1227,13 @@ function scheduleCompactAfterTurn(groupId) {
 
   _compactInFlight = runCompactNow(groupId).finally(() => {
     _compactInFlight = null;
+    // If turns piled up while we were running and compaction is still
+    // needed, chain a follow-up. Use a microtask so the .finally chain
+    // settles cleanly before the next promise is created.
+    if (_compactPending) {
+      _compactPending = false;
+      queueMicrotask(() => scheduleCompactAfterTurn(groupId));
+    }
   });
 }
 

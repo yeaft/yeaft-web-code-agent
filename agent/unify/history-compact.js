@@ -219,10 +219,13 @@ export function buildSummarizerInput(messages) {
  * intact, fold everything before. Returns the index that the cut starts
  * AT, i.e. messages[0..cutIdx) gets summarised, messages[cutIdx..] stays.
  *
- * Strategy: walk from the END backwards counting user messages; stop after
- * we've passed `keepRecent` of them. The cut is at that user message's
- * index. If there aren't enough turns to fold (history shorter than
- * keepRecent), returns -1 (caller treats as no-op).
+ * Strategy: walks user-role messages from the END backwards, counting
+ * DISTINCT turns by canonical text (after stripping `@vp-<id>` prefix
+ * via `stripVpMentionPrefix`). Multi-VP fan-out variants of the same
+ * underlying turn collapse into one turn — and the candidate cut index
+ * is extended backwards through them so all `@vp-X` variants of the
+ * kept turn stay together. If there aren't enough turns to fold (history
+ * shorter than keepRecent), returns -1 (caller treats as no-op).
  *
  * @param {Array<object>} messages
  * @param {number} keepRecent
@@ -406,6 +409,24 @@ export async function compactHistory(messages, options) {
         afterTurns: before.turnCount,
         afterTokens: before.tokenCount,
         error: err && err.message ? err.message : String(err),
+      };
+    }
+    // Treat an empty / whitespace-only summary as a soft failure rather
+    // than a successful compact. Otherwise we'd archive real history
+    // behind a "(no summary produced)" placeholder and the next turn
+    // would start from useless context.
+    if (!summaryText.trim()) {
+      return {
+        messages,
+        compacted: false,
+        reason: before.reason,
+        summary: null,
+        archivedCount: 0,
+        beforeTurns: before.turnCount,
+        beforeTokens: before.tokenCount,
+        afterTurns: before.turnCount,
+        afterTokens: before.tokenCount,
+        error: 'empty summary',
       };
     }
   }

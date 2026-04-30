@@ -117,6 +117,53 @@ describe('countTurns', () => {
     expect(countTurns([])).toBe(0);
     expect(countTurns(null)).toBe(0);
   });
+
+  // ─── Multi-VP fan-out dedup ───
+  // The web bridge prefixes each VP's per-turn prompt with `@vp-<id> `.
+  // A single user message fanned out to N VPs becomes N consecutive
+  // user-role messages with identical canonical text. countTurns must
+  // collapse them into ONE turn — otherwise a 5-VP group hits the
+  // 20-turn trigger after only 4 real user prompts.
+  it('collapses consecutive @vp-X variants of the same canonical text into one turn', () => {
+    const ms = [
+      { role: 'user', content: '@vp-alice hello team' },
+      { role: 'user', content: '@vp-bob hello team' },
+      { role: 'user', content: '@vp-carol hello team' },
+      { role: 'assistant', content: 'reply' },
+    ];
+    expect(countTurns(ms)).toBe(1);
+  });
+
+  it('counts distinct turns even when each is fanned out to multiple VPs', () => {
+    const ms = [
+      { role: 'user', content: '@vp-a t1' },
+      { role: 'user', content: '@vp-b t1' },
+      { role: 'assistant', content: 'r1' },
+      { role: 'user', content: '@vp-a t2' },
+      { role: 'user', content: '@vp-b t2' },
+      { role: 'assistant', content: 'r2' },
+    ];
+    expect(countTurns(ms)).toBe(2);
+  });
+
+  it('treats a user prompt with NO @vp prefix the same way (single turn)', () => {
+    const ms = [
+      { role: 'user', content: 'plain text' },
+      { role: 'assistant', content: 'r' },
+    ];
+    expect(countTurns(ms)).toBe(1);
+  });
+
+  it('a user verbatim-repeating themselves still collapses to one turn (acceptable)', () => {
+    // If the user types "hi" twice in a row (rare), it counts as one
+    // turn. Documented quirk — not worth tracking message IDs to fix.
+    const ms = [
+      { role: 'user', content: 'hi' },
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'r' },
+    ];
+    expect(countTurns(ms)).toBe(1);
+  });
 });
 
 // ─── Trigger evaluation ─────────────────────────────────────────────
@@ -226,6 +273,44 @@ describe('findCutIndex', () => {
       { role: 'assistant', content: 'a0' },
     ];
     expect(findCutIndex(ms, 0)).toBe(2);
+  });
+
+  // ─── Multi-VP fan-out dedup ───
+  it('extends candidate backwards through @vp variants of the kept turn', () => {
+    // Three turns, each fanned out to 3 VPs.
+    //   Turn 1: idx 0..2 (3 @vp- variants), assistant idx 3
+    //   Turn 2: idx 4..6, assistant idx 7
+    //   Turn 3: idx 8..10, assistant idx 11
+    // keepRecent=2 → keep turns 2+3, fold turn 1.
+    // Cut should land at idx 4 (start of turn 2's first @vp variant),
+    // NOT at idx 6 (the last @vp variant of turn 2).
+    const ms = [
+      { role: 'user', content: '@vp-a t1' },     // 0
+      { role: 'user', content: '@vp-b t1' },     // 1
+      { role: 'user', content: '@vp-c t1' },     // 2
+      { role: 'assistant', content: 'r1' },      // 3
+      { role: 'user', content: '@vp-a t2' },     // 4 ← cut here
+      { role: 'user', content: '@vp-b t2' },     // 5
+      { role: 'user', content: '@vp-c t2' },     // 6
+      { role: 'assistant', content: 'r2' },      // 7
+      { role: 'user', content: '@vp-a t3' },     // 8
+      { role: 'user', content: '@vp-b t3' },     // 9
+      { role: 'user', content: '@vp-c t3' },     // 10
+      { role: 'assistant', content: 'r3' },      // 11
+    ];
+    expect(findCutIndex(ms, 2)).toBe(4);
+  });
+
+  it('keepRecent=1 with multi-VP fan-out cuts before all @vp variants of last turn', () => {
+    const ms = [
+      { role: 'user', content: '@vp-a old' },    // 0
+      { role: 'assistant', content: 'r-old' },   // 1
+      { role: 'user', content: '@vp-a t' },      // 2 ← cut here
+      { role: 'user', content: '@vp-b t' },      // 3
+      { role: 'user', content: '@vp-c t' },      // 4
+      { role: 'assistant', content: 'r' },       // 5
+    ];
+    expect(findCutIndex(ms, 1)).toBe(2);
   });
 });
 
@@ -412,6 +497,21 @@ describe('compactHistory (end-to-end)', () => {
     expect(r.compacted).toBe(false);
     expect(r.messages).toBe(ms);
     expect(r.error).toBe('LLM down');
+  });
+
+  it('treats empty summary as soft failure (no archive, error field set)', async () => {
+    const ms = [];
+    for (let i = 0; i < 22; i++) {
+      ms.push({ role: 'user', content: `q${i}` });
+      ms.push({ role: 'assistant', content: `a${i}` });
+    }
+    // LLM returned empty / whitespace — must NOT replace history with
+    // a "(no summary produced)" placeholder.
+    const summarize = async () => '   \n\n  ';
+    const r = await compactHistory(ms, { summarize });
+    expect(r.compacted).toBe(false);
+    expect(r.messages).toBe(ms);
+    expect(r.error).toBe('empty summary');
   });
 
   it('drops orphan tool messages at the head of the tail', async () => {
