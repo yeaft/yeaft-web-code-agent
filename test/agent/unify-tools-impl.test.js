@@ -213,11 +213,76 @@ describe('WebSearch tool', () => {
   it('returns error when no search API configured', async () => {
     const mod = await import(`${TOOLS_DIR}/web-search.js`);
     const tool = mod.default;
+    // Disable the HTML scrape fallback so the no-config case deterministically
+    // errors out instead of accidentally succeeding via DDG/Bing scrape on
+    // networks that aren't bot-flagged.
     const result = JSON.parse(await tool.execute(
       { query: 'test search' },
-      { adapter: {}, config: {} }
+      { adapter: {}, config: { search: { disableHtmlFallback: true } } }
     ));
     expect(result.error).toBeTruthy();
+  });
+
+  it('uses Tavily when search.tavilyApiKey is configured', async () => {
+    const mod = await import(`${TOOLS_DIR}/web-search.js`);
+    const tool = mod.default;
+    const originalFetch = globalThis.fetch;
+    let capturedUrl = '';
+    let capturedBody = null;
+    globalThis.fetch = async (url, opts) => {
+      capturedUrl = url;
+      capturedBody = JSON.parse(opts.body);
+      return {
+        ok: true,
+        json: async () => ({
+          answer: 'Mock answer',
+          results: [
+            { title: 'Result 1', url: 'https://r1.example', content: 'snippet 1', score: 0.9 },
+            { title: 'Result 2', url: 'https://r2.example', content: 'snippet 2', score: 0.8 },
+          ],
+        }),
+      };
+    };
+    try {
+      const result = JSON.parse(await tool.execute(
+        { query: 'NBA score', limit: 2 },
+        { config: { search: { tavilyApiKey: 'tvly-test-xxx' } } }
+      ));
+      expect(capturedUrl).toBe('https://api.tavily.com/search');
+      expect(capturedBody.api_key).toBe('tvly-test-xxx');
+      expect(capturedBody.query).toBe('NBA score');
+      expect(capturedBody.max_results).toBe(2);
+      expect(result.provider).toBe('tavily');
+      expect(result.answer).toBe('Mock answer');
+      expect(result.results).toHaveLength(2);
+      expect(result.results[0].url).toBe('https://r1.example');
+      expect(result.results[0].snippet).toBe('snippet 1');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('falls back through Tavily error to next backend', async () => {
+    const mod = await import(`${TOOLS_DIR}/web-search.js`);
+    const tool = mod.default;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => ({
+      ok: false,
+      status: 401,
+      statusText: 'Unauthorized',
+      text: async () => 'invalid key',
+    });
+    try {
+      const result = JSON.parse(await tool.execute(
+        { query: 'test' },
+        { config: { search: { tavilyApiKey: 'bad-key', disableHtmlFallback: true } } }
+      ));
+      expect(result.error).toBeTruthy();
+      expect(result.attempted).toBeDefined();
+      expect(result.attempted.some((s) => s.startsWith('tavily:'))).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
 
