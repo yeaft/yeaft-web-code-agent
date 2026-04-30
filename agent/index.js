@@ -126,7 +126,8 @@ async function detectCapabilities() {
   return capabilities;
 }
 
-// 确保依赖已安装（特别是 optionalDependencies 如 node-pty）
+// 确保依赖已安装。node-pty 已被 @homebridge/node-pty-prebuilt-multiarch
+// 取代（regular dep + 全平台预编译），不再需要 optionalDependency 的特判。
 async function ensureDependencies() {
   const agentDir = new URL('.', import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1');
   const nodeModulesPath = join(agentDir, 'node_modules');
@@ -139,20 +140,6 @@ async function ensureDependencies() {
       console.log('[Startup] npm install completed');
     } catch (e) {
       console.warn('[Startup] npm install failed:', e.message);
-    }
-    return;
-  }
-
-  // 检查 node-pty 是否可用（optionalDependency，可能需要编译）
-  try {
-    await import('node-pty');
-  } catch (e) {
-    console.log('[Startup] node-pty not available, attempting install...');
-    try {
-      await execAsync('npm install node-pty', { cwd: agentDir, timeout: 120000 });
-      console.log('[Startup] node-pty installed successfully');
-    } catch (installErr) {
-      console.warn('[Startup] node-pty install failed (terminal will be unavailable):', installErr.message);
     }
   }
 }

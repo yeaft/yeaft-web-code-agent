@@ -4,15 +4,20 @@ import { join, dirname } from 'path';
 import { createRequire } from 'module';
 import ctx from './context.js';
 
+// Package name of the PTY backend. We use the Homebridge prebuilt fork
+// because upstream node-pty ships no Linux prebuilds and falls back to
+// node-gyp + C++20, which silently fails on older toolchains. The fork
+// ships prebuilds for darwin/linux/win32 across x64/arm64 (incl. musl).
+const PTY_PKG = '@homebridge/node-pty-prebuilt-multiarch';
+
 // Ensure spawn-helper has executable permission on Unix systems.
 // npm may strip execute bits from prebuilt binaries, causing
 // "posix_spawnp failed" on macOS/Linux.
-// TODO: Remove this workaround once node-pty ships with correct permissions.
 function ensureSpawnHelperPermissions() {
   if (platform() === 'win32') return;
   try {
     const cjsRequire = createRequire(import.meta.url);
-    const ptyPkgPath = dirname(cjsRequire.resolve('node-pty/package.json'));
+    const ptyPkgPath = dirname(cjsRequire.resolve(`${PTY_PKG}/package.json`));
     const targets = [
       join(ptyPkgPath, 'prebuilds', `${platform()}-${arch()}`, 'spawn-helper'),
       join(ptyPkgPath, 'build', 'Release', 'spawn-helper'),
@@ -30,11 +35,15 @@ function ensureSpawnHelperPermissions() {
   }
 }
 
-// 动态加载 node-pty (optionalDependency)
+// Load PTY backend. With the prebuilt fork this is essentially never
+// expected to fail at runtime — it's a regular `dependencies` entry and
+// every supported (platform, abi) combination ships a prebuilt binary.
+// We still catch and degrade so a single missing binary doesn't crash
+// the whole agent on an exotic host.
 export async function loadNodePty() {
   if (ctx.nodePty !== null) return ctx.nodePty;
   try {
-    let pty = await import('node-pty');
+    let pty = await import(PTY_PKG);
     if (pty.default) pty = pty.default;
     ensureSpawnHelperPermissions();
     ctx.nodePty = pty;
@@ -69,7 +78,7 @@ export async function handleTerminalCreate(msg) {
       type: 'terminal_error',
       conversationId,
       terminalId,
-      message: 'node-pty is not installed. Run: npm install node-pty'
+      message: 'Terminal backend is not installed. Run: npm install'
     });
     return;
   }
