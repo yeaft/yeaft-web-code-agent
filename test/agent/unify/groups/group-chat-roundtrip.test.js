@@ -11,11 +11,11 @@
  *
  * The real `handleUnifyGroupChat` is a thin shell over the same pieces:
  *   open group → coord.ingest → for each captured envelope, call
- *   handleUnifyChat in Promise.all. We exercise the load-bearing
- *   coordination here with the real `createCoordinator`, the real
- *   `createGroup` on a tmp ~/.yeaft, and the real `runMemoryPreflow`
- *   over a real SQLite FTS5 index — but stub the LLM call (handleUnifyChat
- *   pulls in adapters/config we don't need).
+ *   `runVpTurn` (private to web-bridge) in Promise.all. We exercise the
+ *   load-bearing coordination here with the real `createCoordinator`, the
+ *   real `createGroup` on a tmp ~/.yeaft, and the real `runMemoryPreflow`
+ *   over a real SQLite FTS5 index — but stub the LLM call (the per-VP
+ *   turn pulls in adapters/config we don't need).
  *
  * Scenarios:
  *   1. single mention dispatch

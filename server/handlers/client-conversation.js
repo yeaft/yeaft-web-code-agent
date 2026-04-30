@@ -592,23 +592,6 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       break;
     }
 
-    case 'unify_chat': {
-      const unifyAgentId = msg.agentId || client.currentAgent;
-      if (!unifyAgentId) {
-        await sendToWebClient(client, { type: 'error', message: 'No agent selected' });
-        return;
-      }
-      if (!await checkAgentAccess(unifyAgentId)) return;
-      await forwardToAgent(unifyAgentId, {
-        type: 'unify_chat',
-        prompt: msg.prompt,
-        mode: msg.mode,
-        userId: client.userId,
-        username: client.username
-      });
-      break;
-    }
-
     case 'unify_load_history': {
       const histAgentId = msg.agentId || client.currentAgent;
       if (!histAgentId) return;

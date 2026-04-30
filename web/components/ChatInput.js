@@ -613,12 +613,13 @@ export default {
       }
 
       // Unify group-chat branch — Unify is conceptually a single conversation
-      // backed by a group (default: grp_default). We MUST always go through
+      // backed by a group (default: grp_default). All Unify turns go through
       // the group path so the agent builds a coordinator and wires
       // ctx.router for the per-VP Engine query; otherwise `route_forward`
-      // bombs out with `router_unavailable` the moment a VP @-mentions
-      // another VP. The legacy `unify_chat` (no-group) path is left as a
-      // backend safety net only — the frontend never picks it.
+      // would bomb out with `router_unavailable` the moment a VP @-mentions
+      // another VP. There is no longer a no-group backstop — the legacy
+      // `unify_chat` WS frame and `handleUnifyChat` agent handler were
+      // removed in v0.1.672.
       if (store.currentView === 'unify' && trimmed) {
         const mentions = parseMentions(trimmed).mentions;
         const groupId = groupsStore?.activeGroupId || 'grp_default';

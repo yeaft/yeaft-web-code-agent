@@ -7,6 +7,7 @@ import GroupInviteModal from './GroupInviteModal.js';
 import GroupMemberEditor from './GroupMemberEditor.js';
 import FeatureMessageRejectToast from './FeatureMessageRejectToast.js';
 import WorkbenchPanel from './WorkbenchPanel.js';
+import { parseMentions } from '../utils/parseMentions.js';
 
 export default {
   name: 'UnifyPage',
@@ -462,7 +463,12 @@ export default {
         if (g) inviteDismissedFor.delete(g.id); // force show
         return;
       }
-      store.sendUnifyChat(text);
+      // Unify is conceptually a single conversation backed by a group.
+      // Default to grp_default when no group is active so the agent
+      // ALWAYS builds a coordinator and ctx.router for the per-VP turn.
+      const groupId = (gs && gs.activeGroupId) || 'grp_default';
+      const mentions = parseMentions(text).mentions;
+      store.sendUnifyGroupChat({ groupId, text, mentions });
     };
 
     // Bug 5: ChatInput's default cancel triggers Chat-mode cancel_execution,

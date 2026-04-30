@@ -143,7 +143,7 @@ personality-*.md     — Personality variants (friendly, pragmatic)
 ### Web Bridge (agent/unify/web-bridge.js)
 - Translates Engine events into `claude_output` format
 - Frontend reuses standard Chat rendering pipeline (MessageList, AssistantTurn, ToolLine, etc.)
-- Message flow: `unify_chat` -> agent message-router -> `handleUnifyChat()` -> Engine.query() -> events -> `unify_output` -> server -> web client
+- Message flow: `unify_group_chat` -> agent message-router -> `handleUnifyGroupChat()` -> per-VP `runVpTurn()` -> Engine.query() -> events -> `unify_output` -> server -> web client
 
 ### Skills & MCP
 ```
@@ -176,7 +176,7 @@ unifyStatus: null                    // { skills, mcpServers, tools }
 ```js
 enterUnify(agentId?)     // Switch to Unify page, create virtual conversationId
 leaveUnify()             // Return to Chat page
-sendUnifyChat(prompt)    // Send message via WebSocket (type: 'unify_chat')
+sendUnifyGroupChat({groupId,text,mentions})  // SOLE Unify send path (type: 'unify_group_chat')
 handleUnifyOutput(msg)   // Dispatch Engine events through standard claude_output pipeline
 setUnifyMode(mode)       // Switch chat/work mode
 clearUnifyMessages()     // Reset session
@@ -200,8 +200,9 @@ Claude CLI -> agent -> ws "claude_output" -> Server -> ws "claude_output" -> Web
 
 ### Unify Mode
 ```
-Web Client -> ws "unify_chat" -> Server -> ws agent
-  -> message-router.js -> handleUnifyChat() -> Engine.query()
+Web Client -> ws "unify_group_chat" -> Server -> ws agent
+  -> message-router.js -> handleUnifyGroupChat()
+  -> coordinator.ingest() -> Promise.all(per-VP runVpTurn -> Engine.query())
   -> Engine events -> web-bridge.js -> ws "unify_output" -> Server
   -> ws "unify_output" -> Web Client -> handleUnifyOutput() -> handleClaudeOutput()
 ```

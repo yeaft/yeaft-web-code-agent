@@ -6,8 +6,8 @@
  *   regression test proved that *given* a vpPersona, the system prompt
  *   speaks as the VP. But the live web-bridge caller `buildVpQueryOpts`
  *   returned `undefined` whenever no vpId was on the inbound message —
- *   which is exactly what `unify_chat` (the no-group legacy path) and the
- *   coordinator-fallback paths do. Engine therefore got `vpPersona:
+ *   which is exactly what the legacy `unify_chat` (no-group) path and the
+ *   coordinator-fallback paths did. Engine therefore got `vpPersona:
  *   undefined` and fell back to the legacy "Yeaft — AI Companion"
  *   identity in production, even though every engine-level test was green.
  *

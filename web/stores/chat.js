@@ -508,39 +508,12 @@ export const useChatStore = defineStore('chat', {
         this._savedActiveConversations = null;
       }
     },
-    sendUnifyChat(prompt) {
-      if (!prompt?.trim() || !this.unifyAgentId) return;
-
-      // H2.f.6: thread-prefix routing retired (single conversation).
-      const finalPrompt = prompt;
-
-      // If we have a conversationId, use standard messagesMap pipeline
-      if (this.unifyConversationId) {
-        this.addMessageToConversation(this.unifyConversationId, {
-          type: 'user',
-          content: prompt,
-        });
-        this.processingConversations[this.unifyConversationId] = true;
-        this._turnCompletedConvs?.delete(this.unifyConversationId);
-        if (this._closedAt?.[this.unifyConversationId]) {
-          delete this._closedAt[this.unifyConversationId];
-        }
-        this.getOrCreateExecutionStatus(this.unifyConversationId);
-        // Start Unify watchdog — safety net to force-clear processing after 150s of silence
-        watchdogHelpers.startUnifyWatchdog(this, this.unifyConversationId);
-      }
-
-      this.sendWsMessage({
-        type: 'unify_chat',
-        prompt: finalPrompt,
-        agentId: this.unifyAgentId,
-      });
-    },
     /**
-     * task-338-F4: Send a group-scoped Unify chat message. Routes through the
-     * agent-side GroupCoordinator which fans out to the target VP(s) or falls
-     * back to the group's defaultVpId (and finally to the legacy single-agent
-     * handleUnifyChat path if no default is resolvable).
+     * Send a group-scoped Unify chat message. Routes through the agent-side
+     * GroupCoordinator which fans out to the target VP(s) or falls back to
+     * the group's defaultVpId. This is the SOLE Unify send path —
+     * `sendUnifyChat` (legacy 1:1) was removed; callers without a real
+     * groupId should pass `'grp_default'`.
      *
      * @param {{groupId:string, text:string, mentions?:string[]}} payload
      */
