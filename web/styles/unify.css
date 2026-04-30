@@ -27,10 +27,19 @@
 }
 
 .unify-sidebar.collapsed {
-  width: 0;
-  min-width: 0;
-  opacity: 0;
-  pointer-events: none;
+  width: 48px;
+  min-width: 48px;
+  border-right: 1px solid var(--border-color);
+}
+
+/* When collapsed, hide the full sidebar contents and only show the icon bar.
+   Mirrors Chat sidebar behavior so the user can re-expand instead of having
+   the sidebar disappear entirely. */
+.unify-sidebar.collapsed .us-header-row,
+.unify-sidebar.collapsed .us-search,
+.unify-sidebar.collapsed .us-scroll,
+.unify-sidebar.collapsed .sidebar-bottom {
+  display: none;
 }
 
 .unify-sidebar-header {
@@ -1405,7 +1414,13 @@
 
   .unify-sidebar.collapsed {
     width: 0;
+    min-width: 0;
     box-shadow: none;
+    border-right: none;
+  }
+  /* On mobile, fully hide the icon bar too — sidebar slides off-screen. */
+  .unify-sidebar.collapsed .sidebar-collapsed-bar {
+    display: none;
   }
 
   .unify-topbar-model-name {
