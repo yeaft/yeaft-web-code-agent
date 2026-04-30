@@ -26,11 +26,13 @@ import { useChatStore } from '../stores/chat.js';
 export default {
   name: 'VpSpeakerHeader',
   components: { VpBadge },
-  emits: ['open-detail'],
+  emits: ['open-detail', 'stop-turn'],
   props: {
     vpId: { type: String, required: true },
     timestamp: { type: Number, default: 0 },
     stateCause: { type: String, default: '' },
+    turnId: { type: String, default: '' },
+    showStop: { type: Boolean, default: false },
   },
   template: `
     <div class="vp-speaker-header" :data-vp-id="vpId">
@@ -59,6 +61,12 @@ export default {
         class="vp-speaker-time"
         :title="timestampFullText"
       >{{ timestampText }}</span>
+      <button
+        v-if="showStop"
+        class="vp-speaker-stop-btn"
+        @click.stop="$emit('stop-turn', turnId)"
+        :title="$t ? $t('unify.vp.speaker.stop') : 'Stop'"
+      ><svg viewBox="0 0 24 24" width="14" height="14"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></svg></button>
     </div>
   `,
   setup(props) {

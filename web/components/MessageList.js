@@ -530,6 +530,7 @@ export default {
           speakerTimestamp: 0,
           speakerStateCause: '',
           showSpeakerHeader: false,
+          turnId: null,
         };
       };
 
@@ -603,6 +604,9 @@ export default {
             if (typeof msg.lastStateChangeCause === 'string') {
               currentTurn.speakerStateCause = msg.lastStateChangeCause;
             }
+          }
+          if (!currentTurn.turnId && msg.turnId) {
+            currentTurn.turnId = msg.turnId;
           }
           currentTurn.messages.push(msg);
           continue;

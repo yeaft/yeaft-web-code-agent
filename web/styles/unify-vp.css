@@ -193,6 +193,32 @@
   color: var(--text-secondary, #9ca3af);
 }
 
+/* Per-VP turn stop button — small inline stop icon in the speaker header */
+.vp-speaker-stop-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary, #6b7280);
+  cursor: pointer;
+  margin-left: 6px;
+  padding: 0;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+.vp-speaker-stop-btn:hover {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.06));
+  color: var(--text-primary, #374151);
+}
+[data-theme="dark"] .vp-speaker-stop-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary, #e5e7eb);
+}
+
 /* When the speaker header is rendered, tighten the bubble's top padding
  * just a touch so the name→content vertical rhythm feels intentional
  * instead of accidentally doubled. */

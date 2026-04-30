@@ -188,6 +188,12 @@ export function handleClaudeOutput(store, conversationId, data) {
     // ★ result 表示当前 turn 已完成，立即清除 processing 状态
     delete store.processingConversations[conversationId];
     stopProcessingWatchdog(store, conversationId);
+
+    // Clear per-VP turn tracking if this result belongs to a specific turnId.
+    if (store._currentUnifyTurnId && store.activeVpTurns[store._currentUnifyTurnId]) {
+      const { [store._currentUnifyTurnId]: _removed, ...rest } = store.activeVpTurns;
+      store.activeVpTurns = rest;
+    }
     // ★ 设置防护窗口，防止后续 agent_list 中的 stale processing:true 重新设回
     if (!store._closedAt) store._closedAt = {};
     store._closedAt[conversationId] = Date.now();

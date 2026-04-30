@@ -33,6 +33,24 @@ export function addMessageToConversation(store, conversationId, msg) {
       || DEFAULT_GROUP_ID;
   }
 
+  // Unify per-VP turn: stamp vpId + turnId on the message for turn-level
+  // routing. Without this, concurrent VP streams would collide.
+  if (
+    store.currentView === 'unify'
+    && conversationId === store.unifyConversationId
+  ) {
+    if (!newMsg.vpId && store._currentUnifyVpId) {
+      newMsg.vpId = store._currentUnifyVpId;
+    }
+    if (!newMsg.turnId && store._currentUnifyTurnId) {
+      newMsg.turnId = store._currentUnifyTurnId;
+    }
+    // Derive speakerVpId for MessageList VP-grouping.
+    if (!newMsg.speakerVpId && newMsg.vpId && newMsg.type === 'assistant') {
+      newMsg.speakerVpId = newMsg.vpId;
+    }
+  }
+
   if (!store.messagesMap[conversationId]) {
     store.messagesMap[conversationId] = [];
   }
@@ -47,6 +65,29 @@ export function appendToAssistantMessageForConversation(store, conversationId, t
     store.messagesMap[conversationId] = [];
   }
   const msgs = store.messagesMap[conversationId];
+
+  // Per-VP turn routing: when a turnId is active, find the streaming
+  // message for THAT turn (not just the last message). This prevents
+  // concurrent VP streams from interleaving into the same message.
+  const turnId = store._currentUnifyTurnId;
+  if (turnId) {
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].turnId === turnId && msgs[i].type === 'assistant' && msgs[i].isStreaming) {
+        if (msgs[i].content.endsWith(text)) return;
+        msgs[i].content += text;
+        return;
+      }
+    }
+    // No existing streaming message for this turn — create one.
+    addMessageToConversation(store, conversationId, {
+      type: 'assistant',
+      content: text,
+      isStreaming: true
+    });
+    return;
+  }
+
+  // Legacy path (no turnId): append to the last streaming message.
   const lastMsg = msgs[msgs.length - 1];
   if (lastMsg && lastMsg.type === 'assistant' && lastMsg.isStreaming) {
     // Dedup guard: skip if the message already ends with this exact text
