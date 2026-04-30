@@ -19,9 +19,9 @@ export default {
   template: `
     <div class="assistant-turn" ref="turnRef" :class="{ streaming: turn.isStreaming, 'has-vp-speaker': !!turn.speakerVpId }">
       <!-- 0. task-334-ui-b: VP speaker header — only when a speakerVpId is
-           bound (multi-VP mode) AND the upstream consecutive-collapse
-           decided this turn should show the attribution. Legacy 1:1 chat
-           turns set showSpeakerHeader=false → this branch is inert. -->
+           bound AND the upstream consecutive-collapse decided this turn
+           should show the attribution. Legacy 1:1 chat turns leave
+           speakerVpId null → showSpeakerHeader stays false → inert. -->
       <VpSpeakerHeader
         v-if="turn.showSpeakerHeader && turn.speakerVpId"
         :vp-id="turn.speakerVpId"
