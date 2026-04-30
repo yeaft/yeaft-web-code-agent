@@ -1,7 +1,7 @@
 import ChatInput from './ChatInput.js';
 import MessageList from './MessageList.js';
 import UnifySettings from './UnifySettings.js';
-import UnifySidebarV2 from './UnifySidebarV2.js';
+import UnifySidebar from './UnifySidebar.js';
 import VpDetailView from './VpDetailView.js';
 import GroupInviteModal from './GroupInviteModal.js';
 import GroupMemberEditor from './GroupMemberEditor.js';
@@ -11,14 +11,14 @@ import { parseMentions } from '../utils/parseMentions.js';
 
 export default {
   name: 'UnifyPage',
-  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2, VpDetailView, GroupInviteModal, GroupMemberEditor, FeatureMessageRejectToast, WorkbenchPanel },
+  components: { ChatInput, MessageList, UnifySettings, UnifySidebar, VpDetailView, GroupInviteModal, GroupMemberEditor, FeatureMessageRejectToast, WorkbenchPanel },
   template: `
     <div class="unify-page">
       <!-- Mobile sidebar overlay -->
       <div class="unify-sidebar-overlay" v-if="!sidebarCollapsed && isMobile" @click="sidebarCollapsed = true"></div>
 
       <!-- Left Sidebar — V2 (task-341: V2 is the only sidebar now). -->
-      <UnifySidebarV2
+      <UnifySidebar
         :collapsed="sidebarCollapsed"
         @select-task="onSelectTaskV2"
         @select-group="onSelectGroupV2"

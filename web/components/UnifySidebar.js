@@ -1,5 +1,5 @@
 /**
- * UnifySidebarV2 — H2.f.6 trimmed.
+ * UnifySidebar — H2.f.6 trimmed.
  *
  * Standalone sidebar component with:
  *   - top search box (task / message keywords; #thread- prefix retired)
@@ -25,36 +25,36 @@ import {
 import GroupCreateWizard from './GroupCreateWizard.js';
 
 export default {
-  name: 'UnifySidebarV2',
+  name: 'UnifySidebar',
   components: { GroupCreateWizard },
   emits: ['select-task', 'select-group', 'search-escape', 'toggle-sidebar', 'back', 'open-settings', 'manage-members'],
   template: `
-    <aside class="unify-sidebar-v2" :class="{ collapsed: collapsed }">
+    <aside class="unify-sidebar" :class="{ collapsed: collapsed }">
       <!-- task-341: sidebar header row — agent identifier + collapse/back/workbench. -->
-      <div class="usv2-header-row">
-        <div class="usv2-brand" :title="agentTitleText">
-          <span class="usv2-status-dot" :class="{ online: currentAgentOnline }"></span>
-          <span class="usv2-brand-label">{{ currentAgentName }}</span>
-          <span v-if="currentAgentLatency != null" class="usv2-latency" :class="getLatencyClass(currentAgentLatency)">{{ currentAgentLatency }}ms</span>
+      <div class="us-header-row">
+        <div class="us-brand" :title="agentTitleText">
+          <span class="us-status-dot" :class="{ online: currentAgentOnline }"></span>
+          <span class="us-brand-label">{{ currentAgentName }}</span>
+          <span v-if="currentAgentLatency != null" class="us-latency" :class="getLatencyClass(currentAgentLatency)">{{ currentAgentLatency }}ms</span>
         </div>
-        <div class="usv2-header-actions">
-          <button class="usv2-icon-btn" :title="tr('chat.sidebar.collapse', 'Collapse')" @click="$emit('toggle-sidebar')">
+        <div class="us-header-actions">
+          <button class="us-icon-btn" :title="tr('chat.sidebar.collapse', 'Collapse')" @click="$emit('toggle-sidebar')">
             <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>
           </button>
-          <button class="usv2-icon-btn" :title="tr('unify.back', 'Back')" @click="$emit('back')">
+          <button class="us-icon-btn" :title="tr('unify.back', 'Back')" @click="$emit('back')">
             <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
           </button>
-          <button v-if="canUseWorkbench" class="usv2-icon-btn" :class="{ active: chatStore && chatStore.workbenchExpanded }" :title="tr('chat.sidebar.workbench', 'Workbench')" @click="onToggleWorkbench">
+          <button v-if="canUseWorkbench" class="us-icon-btn" :class="{ active: chatStore && chatStore.workbenchExpanded }" :title="tr('chat.sidebar.workbench', 'Workbench')" @click="onToggleWorkbench">
             <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M20 3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H4V5h16v14zM6 7h5v2H6V7zm0 4h5v2H6v-2zm0 4h5v2H6v-2zm7-8h5v10h-5V7z"/></svg>
           </button>
         </div>
       </div>
 
-      <div class="usv2-search">
-        <svg class="usv2-search-icon" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+      <div class="us-search">
+        <svg class="us-search-icon" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
         <input
           type="text"
-          class="usv2-search-input"
+          class="us-search-input"
           v-model="searchQuery"
           :placeholder="placeholderText"
           @keydown.esc.prevent="onSearchEscape"
@@ -63,7 +63,7 @@ export default {
         <button
           v-if="searchQuery"
           type="button"
-          class="usv2-search-clear"
+          class="us-search-clear"
           :title="label('clearSearch')"
           @click="onSearchEscape"
         >×</button>
@@ -73,68 +73,68 @@ export default {
            query is active; hides the Active/Idle/Archived/Tasks sections
            so the user sees labelled sections (Threads / Tasks / Messages)
            with click-to-jump semantics. -->
-      <div class="usv2-scroll" v-if="searchActive">
+      <div class="us-scroll" v-if="searchActive">
         <!-- Tasks group -->
-        <section class="usv2-group usv2-group-results" v-if="searchGroups.tasks.length > 0">
-          <div class="usv2-group-header usv2-results-header">
-            <span class="usv2-group-label">{{ label('resultsTasks') }}</span>
-            <span class="usv2-group-count">{{ searchGroups.tasks.length }}</span>
+        <section class="us-group us-group-results" v-if="searchGroups.tasks.length > 0">
+          <div class="us-group-header us-results-header">
+            <span class="us-group-label">{{ label('resultsTasks') }}</span>
+            <span class="us-group-count">{{ searchGroups.tasks.length }}</span>
           </div>
-          <div class="usv2-group-body">
+          <div class="us-group-body">
             <div
               v-for="r in searchGroups.tasks"
               :key="'task:' + r.id"
-              class="usv2-result usv2-result-task"
+              class="us-result us-result-task"
               @click="onSelectResult(r)"
             >
-              <span class="usv2-result-kind">{{ label('kindTask') }}</span>
-              <span class="usv2-result-name">{{ r.task.id }}</span>
-              <span class="usv2-result-title">{{ r.title }}</span>
-              <span class="usv2-result-snippet" v-if="r.snippet">{{ r.snippet }}</span>
+              <span class="us-result-kind">{{ label('kindTask') }}</span>
+              <span class="us-result-name">{{ r.task.id }}</span>
+              <span class="us-result-title">{{ r.title }}</span>
+              <span class="us-result-snippet" v-if="r.snippet">{{ r.snippet }}</span>
             </div>
           </div>
         </section>
         <!-- Messages group (task-316) — only populated when query asks
              for body-level match, e.g. in:body foo or task:N kw. -->
-        <section class="usv2-group usv2-group-results" v-if="searchGroups.messages.length > 0">
-          <div class="usv2-group-header usv2-results-header">
-            <span class="usv2-group-label">{{ label('resultsMessages') }}</span>
-            <span class="usv2-group-count">{{ searchGroups.messages.length }}</span>
+        <section class="us-group us-group-results" v-if="searchGroups.messages.length > 0">
+          <div class="us-group-header us-results-header">
+            <span class="us-group-label">{{ label('resultsMessages') }}</span>
+            <span class="us-group-count">{{ searchGroups.messages.length }}</span>
           </div>
-          <div class="usv2-group-body">
+          <div class="us-group-body">
             <div
               v-for="r in searchGroups.messages"
               :key="'msg:' + r.id"
-              class="usv2-result usv2-result-message"
+              class="us-result us-result-message"
               @click="onSelectResult(r)"
             >
-              <span class="usv2-result-kind">{{ label('kindMessage') }}</span>
-              <span class="usv2-result-title">{{ r.title }}</span>
-              <span class="usv2-result-snippet" v-if="r.snippet">{{ r.snippet }}</span>
+              <span class="us-result-kind">{{ label('kindMessage') }}</span>
+              <span class="us-result-title">{{ r.title }}</span>
+              <span class="us-result-snippet" v-if="r.snippet">{{ r.snippet }}</span>
             </div>
           </div>
         </section>
         <!-- Empty state with usage examples (task-316) -->
-        <div class="usv2-empty usv2-empty-with-hints" v-if="searchResults.length === 0">
-          <div class="usv2-empty-title">{{ label('emptyResults') }}</div>
-          <div class="usv2-empty-hints">
-            <div class="usv2-empty-hint-label">{{ label('examplesLabel') }}</div>
-            <div class="usv2-empty-hint"><code>task:42</code></div>
-            <div class="usv2-empty-hint"><code>in:title foo</code></div>
-            <div class="usv2-empty-hint"><code>status:open bar</code></div>
+        <div class="us-empty us-empty-with-hints" v-if="searchResults.length === 0">
+          <div class="us-empty-title">{{ label('emptyResults') }}</div>
+          <div class="us-empty-hints">
+            <div class="us-empty-hint-label">{{ label('examplesLabel') }}</div>
+            <div class="us-empty-hint"><code>task:42</code></div>
+            <div class="us-empty-hint"><code>in:title foo</code></div>
+            <div class="us-empty-hint"><code>status:open bar</code></div>
           </div>
         </div>
       </div>
 
-      <div class="usv2-scroll" v-else>
+      <div class="us-scroll" v-else>
         <!-- task-339-F1: Groups section hoisted ABOVE threads; hidden entirely when empty. -->
-        <section v-if="groupList.length > 0" class="usv2-group usv2-group-groups" :aria-label="$t('unify.group.sidebarAria')">
-          <div class="usv2-group-header">
-            <span class="usv2-group-label">{{ $t('unify.group.sidebarTitle') }}</span>
-            <span class="usv2-group-count">{{ groupList.length }}</span>
+        <section v-if="groupList.length > 0" class="us-group us-group-groups" :aria-label="$t('unify.group.sidebarAria')">
+          <div class="us-group-header">
+            <span class="us-group-label">{{ $t('unify.group.sidebarTitle') }}</span>
+            <span class="us-group-count">{{ groupList.length }}</span>
             <button
               type="button"
-              class="usv2-group-new-btn"
+              class="us-group-new-btn"
               :title="$t('unify.group.newButtonAria')"
               :aria-label="$t('unify.group.newButtonAria')"
               @click="onOpenGroupWizard"
@@ -142,11 +142,11 @@ export default {
               <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
             </button>
           </div>
-          <div class="usv2-group-body">
+          <div class="us-group-body">
             <div
               v-for="g in groupList"
               :key="g.id"
-              class="usv2-thread usv2-group-row"
+              class="us-row us-group-row"
               :class="{
                 selected: g.id === activeGroupId,
                 'is-empty': !g.roster || g.roster.length === 0,
@@ -155,30 +155,30 @@ export default {
               @click="onSelectGroup(g)"
               @contextmenu.prevent="openGroupMenu(g, $event)"
             >
-              <span class="usv2-dot usv2-dot-group"></span>
-              <span class="usv2-thread-name">{{ groupDisplayName(g) }}</span>
-              <span class="usv2-thread-title">
+              <span class="us-dot us-dot-group"></span>
+              <span class="us-row-name">{{ groupDisplayName(g) }}</span>
+              <span class="us-row-title">
                 <template v-if="g.roster && g.roster.length === 1">{{ $t('unify.group.oneMember') }}</template>
                 <template v-else-if="g.roster && g.roster.length > 1">{{ $t('unify.group.membersCount', { count: g.roster.length }) }}</template>
                 <template v-else>{{ $t('unify.group.noMembers') }}</template>
               </span>
               <button
                 type="button"
-                class="usv2-group-row-kebab"
+                class="us-group-row-kebab"
                 :title="$t('unify.group.moreActions')"
                 :aria-label="$t('unify.group.moreActions')"
                 aria-haspopup="menu"
                 :aria-expanded="groupMenu.open && groupMenu.groupId === g.id ? 'true' : 'false'"
                 @click.stop="openGroupMenu(g, $event)"
               >⋯</button>
-              <div v-if="groupMenu.open && groupMenu.groupId === g.id" class="usv2-group-row-menu" role="menu" @click.stop>
-                <button type="button" role="menuitem" class="usv2-group-row-menu-item" @click="startManageMembers(g)">
+              <div v-if="groupMenu.open && groupMenu.groupId === g.id" class="us-group-row-menu" role="menu" @click.stop>
+                <button type="button" role="menuitem" class="us-group-row-menu-item" @click="startManageMembers(g)">
                   {{ $t('unify.group.manageMembers') }}
                 </button>
-                <button type="button" role="menuitem" class="usv2-group-row-menu-item" @click="startRenameGroup(g)">
+                <button type="button" role="menuitem" class="us-group-row-menu-item" @click="startRenameGroup(g)">
                   {{ $t('unify.group.rename') }}
                 </button>
-                <button type="button" role="menuitem" class="usv2-group-row-menu-item usv2-group-row-menu-danger" @click="startDeleteGroup(g)">
+                <button type="button" role="menuitem" class="us-group-row-menu-item us-group-row-menu-danger" @click="startDeleteGroup(g)">
                   {{ $t('unify.group.delete') }}
                 </button>
               </div>
@@ -191,7 +191,7 @@ export default {
         <button
           v-if="groupList.length === 0"
           type="button"
-          class="usv2-new-group-btn"
+          class="us-new-group-btn"
           :title="$t('unify.group.newButtonAria')"
           :aria-label="$t('unify.group.newButtonAria')"
           @click="onOpenGroupWizard"
@@ -203,45 +203,45 @@ export default {
         <!-- H2.f.6: Active / Idle / Archived thread sections removed. -->
 
         <!-- Tasks Tree -->
-        <section class="usv2-group usv2-group-tasks" :class="{ collapsed: !tasksOpen }">
-          <button type="button" class="usv2-group-header" @click="tasksOpen = !tasksOpen">
-            <svg class="usv2-chevron" :class="{ open: tasksOpen }" viewBox="0 0 24 24" width="10" height="10"><path fill="currentColor" d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
-            <span class="usv2-group-label">{{ label('tasks') }}</span>
-            <span class="usv2-group-count">{{ filteredTasks.length }}</span>
+        <section class="us-group us-group-tasks" :class="{ collapsed: !tasksOpen }">
+          <button type="button" class="us-group-header" @click="tasksOpen = !tasksOpen">
+            <svg class="us-chevron" :class="{ open: tasksOpen }" viewBox="0 0 24 24" width="10" height="10"><path fill="currentColor" d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
+            <span class="us-group-label">{{ label('tasks') }}</span>
+            <span class="us-group-count">{{ filteredTasks.length }}</span>
           </button>
-          <div class="usv2-group-body" v-show="tasksOpen">
+          <div class="us-group-body" v-show="tasksOpen">
             <div v-for="task in filteredTasks" :key="task.id">
               <div
-                class="usv2-task usv2-task-lvl-0"
-                :class="['usv2-task-status-' + (task.status || 'unknown'), { selected: task.id === activeTaskId }]"
+                class="us-task us-task-lvl-0"
+                :class="['us-task-status-' + (task.status || 'unknown'), { selected: task.id === activeTaskId }]"
                 @click="onSelectTask(task)"
               >
                 <span
-                  class="usv2-task-toggle"
+                  class="us-task-toggle"
                   v-if="task.children && task.children.length > 0"
                   @click.stop="toggleTask(task.id)"
                 >
-                  <svg class="usv2-chevron" :class="{ open: isTaskExpanded(task.id) }" viewBox="0 0 24 24" width="9" height="9"><path fill="currentColor" d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
+                  <svg class="us-chevron" :class="{ open: isTaskExpanded(task.id) }" viewBox="0 0 24 24" width="9" height="9"><path fill="currentColor" d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
                 </span>
-                <span class="usv2-task-toggle-spacer" v-else></span>
-                <span class="usv2-task-id">{{ task.id }}</span>
-                <span class="usv2-task-title">{{ task.title }}</span>
+                <span class="us-task-toggle-spacer" v-else></span>
+                <span class="us-task-id">{{ task.id }}</span>
+                <span class="us-task-title">{{ task.title }}</span>
               </div>
               <div v-if="isTaskExpanded(task.id) && task.children && task.children.length > 0">
                 <div
                   v-for="child in task.children"
                   :key="child.id"
-                  class="usv2-task usv2-task-lvl-1"
-                  :class="['usv2-task-status-' + (child.status || 'unknown'), { selected: child.id === activeTaskId }]"
+                  class="us-task us-task-lvl-1"
+                  :class="['us-task-status-' + (child.status || 'unknown'), { selected: child.id === activeTaskId }]"
                   @click="onSelectTask(child)"
                 >
-                  <span class="usv2-task-toggle-spacer"></span>
-                  <span class="usv2-task-id">{{ child.id }}</span>
-                  <span class="usv2-task-title">{{ child.title }}</span>
+                  <span class="us-task-toggle-spacer"></span>
+                  <span class="us-task-id">{{ child.id }}</span>
+                  <span class="us-task-title">{{ child.title }}</span>
                 </div>
               </div>
             </div>
-            <div class="usv2-empty" v-if="filteredTasks.length === 0">{{ label('emptyTasks') }}</div>
+            <div class="us-empty" v-if="filteredTasks.length === 0">{{ label('emptyTasks') }}</div>
           </div>
         </section>
 
@@ -258,15 +258,15 @@ export default {
       />
 
       <!-- task-334m / Bug 8: Delete confirm modal (destructive 2nd-confirm). -->
-      <div v-if="deleteConfirm.open" class="usv2-merge-overlay usv2-merge-overlay-confirm" @click.self="cancelGroupAction">
-        <div class="usv2-merge-panel usv2-merge-panel-confirm">
-          <div class="usv2-merge-title">{{ $t('unify.group.delete') }}</div>
-          <div class="usv2-merge-warning">{{ $t('unify.group.deleteConfirm', { name: deleteConfirm.name }) }}</div>
-          <div class="usv2-merge-actions">
-            <button type="button" class="usv2-merge-cancel" @click="cancelGroupAction" :disabled="deleteConfirm.busy">
+      <div v-if="deleteConfirm.open" class="us-merge-overlay us-merge-overlay-confirm" @click.self="cancelGroupAction">
+        <div class="us-merge-panel us-merge-panel-confirm">
+          <div class="us-merge-title">{{ $t('unify.group.delete') }}</div>
+          <div class="us-merge-warning">{{ $t('unify.group.deleteConfirm', { name: deleteConfirm.name }) }}</div>
+          <div class="us-merge-actions">
+            <button type="button" class="us-merge-cancel" @click="cancelGroupAction" :disabled="deleteConfirm.busy">
               {{ label('cancel') }}
             </button>
-            <button type="button" class="usv2-merge-confirm" @click="confirmDeleteGroup" :disabled="deleteConfirm.busy">
+            <button type="button" class="us-merge-confirm" @click="confirmDeleteGroup" :disabled="deleteConfirm.busy">
               {{ deleteConfirm.busy ? $t('unify.group.deletingEllipsis') : $t('unify.group.delete') }}
             </button>
           </div>
@@ -274,28 +274,28 @@ export default {
       </div>
 
       <!-- task-334m: Rename modal (inline, mirrors delete-confirm chrome). -->
-      <div v-if="renameModal.open" class="usv2-merge-overlay" @click.self="cancelGroupAction">
-        <div class="usv2-merge-panel">
-          <div class="usv2-merge-title">{{ $t('unify.group.rename') }}</div>
-          <div class="usv2-merge-body">
-            <label class="usv2-rename-label">
+      <div v-if="renameModal.open" class="us-merge-overlay" @click.self="cancelGroupAction">
+        <div class="us-merge-panel">
+          <div class="us-merge-title">{{ $t('unify.group.rename') }}</div>
+          <div class="us-merge-body">
+            <label class="us-rename-label">
               {{ $t('unify.group.renamePrompt', { name: renameModal.original }) }}
               <input
                 type="text"
                 v-model.trim="renameModal.value"
-                class="usv2-rename-input"
+                class="us-rename-input"
                 maxlength="60"
                 @keydown.enter.prevent="confirmRenameGroup"
                 ref="renameInput"
               />
             </label>
-            <div v-if="renameModal.error" class="usv2-rename-error" role="alert">{{ renameModal.error }}</div>
+            <div v-if="renameModal.error" class="us-rename-error" role="alert">{{ renameModal.error }}</div>
           </div>
-          <div class="usv2-merge-actions">
-            <button type="button" class="usv2-merge-cancel" @click="cancelGroupAction" :disabled="renameModal.busy">
+          <div class="us-merge-actions">
+            <button type="button" class="us-merge-cancel" @click="cancelGroupAction" :disabled="renameModal.busy">
               {{ label('cancel') }}
             </button>
-            <button type="button" class="usv2-merge-confirm" @click="confirmRenameGroup" :disabled="renameModal.busy || !canCommitRename">
+            <button type="button" class="us-merge-confirm" @click="confirmRenameGroup" :disabled="renameModal.busy || !canCommitRename">
               {{ renameModal.busy ? $t('unify.group.renamingEllipsis') : $t('unify.group.rename') }}
             </button>
           </div>
@@ -605,7 +605,7 @@ export default {
       this.groupMenu = { open: true, groupId: g.id };
       // Close on next outside click.
       const close = (ev) => {
-        if (ev && ev.target && ev.target.closest && ev.target.closest('.usv2-group-row-menu')) return;
+        if (ev && ev.target && ev.target.closest && ev.target.closest('.us-group-row-menu')) return;
         this.groupMenu = { open: false, groupId: null };
         window.removeEventListener('click', close, true);
       };

@@ -1017,10 +1017,10 @@ export const useChatStore = defineStore('chat', {
     },
     // ★ task-341: V2 sidebar is the only sidebar. Setter kept as no-op
     // for backward compat; also sweeps the stale localStorage key once.
-    setUnifySidebarV2Enabled(_enabled) {
+    setUnifySidebarEnabled(_enabled) {
       try {
         if (typeof localStorage !== 'undefined') {
-          localStorage.removeItem('unify-sidebar-v2-enabled');
+          localStorage.removeItem('unify-sidebar-enabled');
         }
       } catch (_) { /* ignore storage errors */ }
     },

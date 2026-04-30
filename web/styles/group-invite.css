@@ -173,22 +173,22 @@
  * it is the user's first encounter with the concept.
  * ------------------------------------------------------------ */
 
-.usv2-group-row.is-empty .usv2-dot-group {
+.us-group-row.is-empty .us-dot-group {
   background: var(--accent, #4f8cff);
   opacity: 0.55;
 }
 
-.usv2-group-row.is-empty .usv2-thread-title {
+.us-group-row.is-empty .us-row-title {
   color: var(--accent, #4f8cff);
   opacity: 0.85;
 }
 
-.usv2-group-row.is-default-empty {
+.us-group-row.is-default-empty {
   border: 1px dashed var(--border-color);
   border-radius: 8px;
 }
 
-.usv2-group-row.is-default-empty.selected {
+.us-group-row.is-default-empty.selected {
   border-color: var(--accent, #4f8cff);
   border-style: dashed;
 }

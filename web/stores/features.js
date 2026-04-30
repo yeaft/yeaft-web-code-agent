@@ -14,7 +14,7 @@
  * Feature list / tree state lives on chatStore (`unifyFeatures`,
  * `unifyActiveFeatureId`) — this store only owns the *outgoing-action* +
  * *summary cache* surface so VpDetailView / UnifyFeatureDetailView /
- * UnifySidebarV2 can issue the new R6 verbs without each component
+ * UnifySidebar can issue the new R6 verbs without each component
  * re-implementing the WS plumbing.
  *
  * Cache keys:
