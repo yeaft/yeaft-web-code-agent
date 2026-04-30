@@ -106,15 +106,13 @@ export default {
             <!-- Assistant Turn card: aggregated rendering -->
             <AssistantTurn v-else-if="item.type === 'assistant-turn'" :turn="item" />
           </div>
-          <!-- PR-L: V7 tool-history reflection cards anchored to this row.
-               Rendered inline so T1 (mid-turn) appears between tool runs and
-               the next assistant message; T2 appears after the turn it
-               summarizes. -->
-          <ReflectionCard
-            v-for="card in cardsForRow(item)"
-            :key="card.key"
-            :card="card"
-          />
+          <!-- feat-6af5f9f1 PR A: ReflectionCard mounts removed from the
+               main message stream. Reflection is an engine-internal context
+               compaction step - surfacing it inline during normal chat is
+               noise. Cards remain in store.unifyReflectionCards so the
+               debug panel (PR B) can render them under the loop they
+               summarize. The component is still imported because PR B
+               will reuse it inside UnifyDebugPanel. -->
           <!-- PR-M3: sub-agent cards anchored to this row. -->
           <SubAgentCard
             v-for="card in subAgentCardsForRow(item)"
@@ -122,14 +120,9 @@ export default {
             :card="card"
           />
         </template>
-        <!-- PR-L: orphaned reflection cards (anchor message not yet
-             present, or scrolled out of the message window) flushed at
-             the tail so they're never lost. -->
-        <ReflectionCard
-          v-for="card in orphanCards"
-          :key="card.key"
-          :card="card"
-        />
+        <!-- feat-6af5f9f1 PR A: orphan-card flush also removed. Orphans
+             still latch in the store; PR B's debug panel surfaces them
+             under the matching loop range. -->
         <SubAgentCard
           v-for="card in orphanSubAgentCards"
           :key="card.key"
