@@ -282,7 +282,7 @@ export async function loadSession(options = {}) {
     yeaftDir,
   });
 
-  // ─── 9a. Create dream scheduler (DESIGN-v2) ────────────
+  // ─── 9a. Create dream scheduler ────────────
   // The legacy R6 dream-scheduler was retired alongside recall-r6;
   // dream-v2 is the only active path. The `memoryV2: false` opt-out
   // no longer leaves a usable system, so we always wire v2 here.

@@ -1,5 +1,5 @@
 /**
- * dream-v2/segment.js — DESIGN-v2 §17.
+ * dream-v2/segment.js.
  *
  * Three independent length-control concerns, kept pure so they can be
  * unit-tested without touching disk or any LLM:

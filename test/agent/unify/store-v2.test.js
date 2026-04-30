@@ -1,5 +1,5 @@
 /**
- * store-v2.test.js — DESIGN-v2 §2/§5/§9 store API.
+ * store-v2.test.js/§5/§9 store API.
  *
  * Verifies:
  *   A.  scopeDir for all 5 scope kinds + topic 1/2-level

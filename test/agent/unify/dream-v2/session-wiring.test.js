@@ -1,5 +1,5 @@
 /**
- * dream-v2/session-wiring.test.js — DESIGN-v2 §13 wiring smoke tests.
+ * dream-v2/session-wiring.test.js wiring smoke tests.
  *
  * Runs runDream against a stubbed groups directory and adapter; verifies
  * the session-wiring closures route data correctly.

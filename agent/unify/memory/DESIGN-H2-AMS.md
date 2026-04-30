@@ -1,10 +1,9 @@
 # DESIGN-H2-AMS — Active Memory Set + SQLite FTS Pre-flow
 
-Supersedes the Router→Worker model from DESIGN-v2 §1.2.1 for the
-memory-loading concern. The router decision (which VP acts) is still
-needed for multi-VP fan-out, but **memory loading is no longer
-LLM-gated on the hot path** — it's pure-CPU FTS recall plus an
-**occasional** post-turn LLM adjustment.
+Supersedes prior router→worker memory-loading designs. The router
+decision (which VP acts) is still needed for multi-VP fan-out, but
+**memory loading is no longer LLM-gated on the hot path** — it's
+pure-CPU FTS recall plus an **occasional** post-turn LLM adjustment.
 
 This document is the spec for the H2.a–H2.f PR series.
 
@@ -354,7 +353,7 @@ Dream framework, just needs segment-aware adapters.
 
 ---
 
-## 9. Privacy / ACL (unchanged from DESIGN-v2)
+## 9. Privacy / ACL
 
 - `vp/<other>` segments are filtered out of AMS for any worker that
   isn't `<other>` itself.

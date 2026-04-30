@@ -217,7 +217,7 @@ function loadLegacyConfig(dir, overrides) {
     maxContinueTurns: overrides.maxContinueTurns ?? fileConfig.maxContinueTurns ?? DEFAULTS.maxContinueTurns,
     // task-318: legacy path never had the `unify` section — defaults.
     unify: normaliseUnifySection(null),
-    // DESIGN-v2 feature flag. Default true (PR-E flipped). Override wins.
+    // H2-AMS feature flag. Default true. Override wins.
     memoryV2: overrides.memoryV2 !== undefined ? !!overrides.memoryV2 : true,
     providers: null,
     primaryModel: null,
@@ -315,7 +315,7 @@ export function loadConfig(overrides = {}) {
     // don't pollute the flat config namespace used by chat/crew code.
     unify: normaliseUnifySection(jsonConfig.unify),
 
-    // DESIGN-v2 feature flag. When true the session opens the FTS5
+    // H2-AMS feature flag. When true the session opens the FTS5
     // SegmentIndex (used by groups/pre-flow.js → memory/preflow.js
     // for pre-turn recall) and wires the v2 dream pipeline
     // (dream-v2/runner.js). When false both are skipped — no recall,

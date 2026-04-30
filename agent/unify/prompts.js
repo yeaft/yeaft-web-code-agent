@@ -8,39 +8,13 @@
  * and used to enrich the system prompt beyond the hardcoded fallbacks.
  *
  * Phase 2 additions:
- *   - Memory section (user profile + recalled entries)
+ *   - Memory section (recalled segments via H2-AMS pre-flow)
  *   - Compact summary section (conversation history summary)
  *
- * task-287 refactor (tool-on-demand memory):
- *   - New `memoryInjection` param carries prebuilt "Memory Index + user
- *     preferences + project header" text (~1.5k tokens). Engine builds this
- *     via memory/layout.buildMemoryInjection() and passes it every turn.
- *   - Legacy `memory={profile,entries}` param still supported for callers
- *     (tests, CLI) that have not migrated.
- *
- * task-334e additions (R6 §Δ24.5 / §Δ27.3 / §Δ31.4 / §Δ29.3):
- *   - `taskCtx` param → renders a `## task_ctx` block with:
- *       * task-memory top-5 bodies with semantic shard prefix `[shard]`
- *         (no sourceRef — memory_trace opens the trail on demand)
- *       * `### related tasks` sub-section — `relatedTaskIds` top-3 (sorted
- *         by updatedAt desc) + per-task top-2 memory; ACL-gated by
- *         `target.members` ∋ currentVpId (§Δ31.4)
- *       * `### summary reminder` soft nudge — condition (§Δ27.3):
- *           non-summary msgs ≥ 3 AND since-lastSummary > 15min AND
- *           currentVpId == task.initiatorVpId → emits a DYNAMIC hint
- *   - `userProfile` param → renders a `## user_profile` block. Stub
- *     implementation: when not passed explicitly, we fall back to reading
- *     `~/.yeaft/user/profile.json` ({ "content": "…string…" }) if present
- *     (§Δ29.3 placeholder until 334l wires real user-memory recall).
- *   - `coreMemory` param → renders a `## core_memory` block with recall
- *     top-7 memory bodies (no sourceRef) and a trailing meta line pointing
- *     at `memory_trace` as the way to open the original message.
- *
- * Hard constraints (task-334e contract):
- *   - Does NOT modify engine.js turn loop.
- *   - Does NOT implement memory_trace / open_source_message (task-334f).
- *   - Does NOT implement task_summary_post (task-334n).
- *   - Changes limited to prompts.js + templates/.
+ * Memory injection (H2-AMS):
+ *   - `memoryInjection` carries prebuilt FTS-recall text from
+ *     `memory/preflow.js` over the relevant scopes (user/group/vp/feature/
+ *     global). Engine passes it every turn after preflow runs.
  *
  * Reference: yeaft-unify-system-prompt-budget.md — Static + Dynamic + Context layers
  */

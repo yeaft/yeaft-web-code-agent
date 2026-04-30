@@ -1,5 +1,5 @@
 /**
- * dream-v2/schedule.js — DESIGN-v2 §10.2.
+ * dream-v2/schedule.js.
  *
  * Two trigger paths:
  *
@@ -10,7 +10,7 @@
  *
  * The scheduler is a thin wrapper around `runDream()` that prevents
  * concurrent passes (a second tick while the previous is still running
- * is dropped, not queued — DESIGN-v2 §10.1: "slow is OK, doesn't
+ * is dropped, not queued: "slow is OK, doesn't
  * compete with user latency").
  */
 

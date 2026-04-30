@@ -1,5 +1,5 @@
 /**
- * dream-v2/triage.js — DESIGN-v2 §14.
+ * dream-v2/triage.js.
  *
  * Decide, for one group's diff, which scopes should be touched by Apply.
  * The decision is two-staged on purpose:

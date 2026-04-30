@@ -5,7 +5,7 @@
  * segment blocks) and the SQLite segment index. This layer handles
  * scope <-> file path mapping; the index layer is scope-agnostic.
  *
- * Path conventions (DESIGN-v2 §5):
+ * Path conventions:
  *   ~/.yeaft/memory/user/memory.md
  *   ~/.yeaft/memory/vp/<id>/memory.md
  *   ~/.yeaft/memory/group/<id>/memory.md

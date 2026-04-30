@@ -1,5 +1,5 @@
 /**
- * memory/store-v2.js — DESIGN-v2.md Part I: per-scope memory.md + summary.md.
+ * memory/store-v2.js — per-scope memory.md + summary.md (Layer-A storage).
  *
  * One pair of files per scope. No shards, no entries/, no index.md, no
  * index.json. The five scope kinds — user, vp, group, feature, topic — share
@@ -29,18 +29,15 @@
  * ACL:
  *   - This module enforces ONE ACL: `vp/<other>` paths are blocked when
  *     `currentVpId` is given and differs from `<other>`. Every other scope
- *     boundary is ACL-free in v2 (DESIGN-v2 §3.2).
+ *     boundary is ACL-free.
  *
  * What this module deliberately does NOT do:
  *   - No frontmatter parsing. memory.md and summary.md are pure markdown;
  *     the dream-state metadata block lives at the file's tail and is read
  *     by `dream-v2/state.js`, not here.
  *   - No LLM calls, no extraction, no summarisation. Pure I/O.
- *   - No legacy R6 fallback. The old MemoryStore (memory/store.js) and
- *     ScopeTree (memory/scope-tree.js) remain in service until PR-E swaps
- *     callers; this module is additive.
  *
- * Reference: agent/unify/memory/DESIGN-v2.md §2, §5, §9.
+ * Reference: agent/unify/memory/DESIGN-H2-AMS.md.
  */
 
 import {
@@ -228,8 +225,8 @@ export async function writeMemory(scope, content, opts = {}) {
 }
 
 /**
- * Append to a scope's memory.md. Used by the rare "direct write" path
- * (DESIGN-v2 §7.1); main flow is dream-driven rewrites.
+ * Append to a scope's memory.md. Used by the rare "direct write" path;
+ * main flow is dream-driven rewrites.
  *
  * Append is non-atomic with concurrent readers in the strict sense, but a
  * single appendFile of a small buffer is atomic at the kernel level on POSIX
@@ -316,7 +313,7 @@ export async function ensureScope(scope, opts = {}) {
 
 /**
  * Enumerate all scopes present on disk. Returns Scope shapes that round-trip
- * back through `scopeDir`. Used by Triage (DESIGN-v2 §14) to list candidate
+ * back through `scopeDir`. Used by Triage to list candidate
  * scopes for a group's diff.
  *
  * Walks shallowly:

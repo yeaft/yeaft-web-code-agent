@@ -43,7 +43,7 @@ bound without a PM-approved spec change is a bug.
 | 4a | Tool list | `toolNames.join(', ')` | ~300 | 600 | **~310** for 36 tools | Names only, no per-tool doc. |
 | 4b | Tool guidance | `templates/tool-guidance.md` | ~750 | 1000 | **~745** | When/why to use tools; not per-tool reference. |
 | 5 | Skills | `skillContent` (from SkillManager) | ≤1000 | 1500 | variable | Empty when no skills loaded; grows with installed skills. |
-| 6 | Memory injection | `memoryInjection` (from `memory/layout.buildMemoryInjection()`) | ~1500 | 2000 | variable | Memory Index + user preferences + optional project header. |
+| 6 | Memory injection | `memoryInjection` (from `memory/preflow.js` FTS recall + AMS layers) | ~1500 | 2000 | variable | Memory Index + user preferences + optional project header. |
 | 7 | Compact summary | `compactSummary` (consolidator output) | ≤800 | 1500 | variable | Present only after consolidation fires. |
 | — | Joining `\n\n` whitespace | — | <50 | 100 | ~20 | Seven `\n\n` separators. |
 
@@ -72,7 +72,7 @@ silent drift when memory or skills grow over time.
 |------|---------|------------|
 | Tool catalog grows (dev adds 20 more tools) | 4a | Names-only listing caps growth at ~8 tokens/tool; at 100 tools we still fit. No mitigation needed until >150. |
 | Per-tool inline docs creep in | 4b | **Red line**: `tool-guidance.md` must stay behavioural, NOT per-tool reference. Per-tool docs belong to the tool's `description` field, which the LLM reads via `tools` array, not the system prompt. |
-| Memory injection explodes on large projects | 6 | `memory/layout.buildMemoryInjection()` already caps at index + top-N preferences. Cap stays ≤ 2k. |
+| Memory injection explodes on large projects | 6 | `memory/preflow.js` caps recall hits + AMS layers (Resident/Recent/OnDemand) are token-budgeted. Cap stays ≤ 2k. |
 | Compact summary never truncates | 7 | Consolidator must clip to ≤ 1.5k. If `compactSummary` regularly > 2k, that's a bug in `memory/consolidate.js`. |
 | Skill pack install blows up | 5 | SkillManager must cap total skill content ≤ 1.5k. Long skills go to `~/.yeaft/skills/` and are read on demand via `Skill` tool, not injected. |
 
@@ -122,6 +122,6 @@ exceeds its hard ceiling. Wire it into CI when the budget stops moving.
 
 - `agent/unify/prompts.js` — `buildSystemPrompt()` implementation
 - `agent/unify/templates/*.md` — per-section static content
-- `agent/unify/memory/layout.js` — `buildMemoryInjection()` for section 6
+- `agent/unify/memory/preflow.js` — FTS recall feeding section 6
 - `.crew/context/features/task-332-spec.md` — recovered task-270 spec (pre-F2 baseline)
 - `scripts/dump-prompt.js` — budget measurement tool
