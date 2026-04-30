@@ -22,10 +22,8 @@ export { buildSystemPrompt, SUPPORTED_LANGUAGES } from './prompts.js';
 export { Engine } from './engine.js';
 export { ConversationStore, parseMessage, estimateTokens } from './conversation/persist.js';
 export { searchMessages } from './conversation/search.js';
-export { MemoryStore, parseEntry, serializeEntry, MEMORY_KINDS } from './memory/store.js';
 
 // Phase 5: Advanced features
-export { KINDS, KIND_PRIORITY, KIND_DESCRIPTIONS, IMPORTANCE_LEVELS, validateEntry, parseScopePath, getAncestorScopes, areScopesRelated } from './memory/types.js';
 export { runStopHooks } from './stop-hooks.js';
 export { MCPManager, createMCPManager } from './mcp.js';
 export { SkillManager, createSkillManager, parseSkill, serializeSkill } from './skills.js';

@@ -1,30 +1,18 @@
 /**
- * summary.js — task-334n: Feature multi-VP collaboration summary protocol.
+ * summary.js — Feature multi-VP collaboration summary protocol.
  *
  * Owns:
  *   - postSummary()          — write a `type=summary` message to the group jsonl
- *                              and run the extractor (B + C)
- *   - extractFeatureMemory() — turn a summary body into 2-5 feature-memory entries
- *                              via 334f feature-memory shard lib (C)
  *   - buildSummaryReminder() — compute the §Δ31.4 3-AND soft reminder shape
- *                              consumed by 334e's `featureCtx.summaryReminder` (D)
- *   - buildFeatureCtxMemories() — assemble feature-memory top-5 (pinned + recent +
- *                                 tag relevance) for feature_ctx (E)
+ *   - buildFeatureCtxMemories() — feature-memory top-5 (post-rip stub: returns [])
  *
  * Hard boundaries:
- *   - does NOT touch 334o jsonl rotation internals (calls group.appendMessage)
- *   - does NOT touch 334f shard-store impl (calls openMemoryShardStore API)
- *   - does NOT touch 334e prompts main frame (returns plain shapes that feed
- *     the existing renderFeatureCtx contract)
- *   - does NOT self-loop-write VP-memory (extractor writes feature-memory only;
- *     VP-level synthesis is deferred to 334g dream)
- *   - softCap overflow does NOT create new shards (334f already routes into
- *     dream queue via projectDeriveHint; we just surface `needsRecompression`)
+ *   - does NOT touch jsonl rotation internals (calls group.appendMessage)
+ *   - does NOT write feature-memory shards — the H2-AMS rip retired the shard
+ *     store; feature memory now flows through Dream V2's scope merge instead.
  */
 
 import { join } from 'path';
-import { openMemoryShardStore } from '../memory/shard-store.js';
-import { AUTHORED_BY } from '../memory/schema.js';
 
 // ─── §Δ31.4 soft-reminder thresholds ─────────────────────────────
 /** Must be initiator AND members>1 AND (age≥20min OR turns≥10). */
@@ -119,36 +107,11 @@ export function postSummary(opts) {
     },
   });
 
-  // 2) Run the extractor → write feature-memory entries (C).
+  // 2) Feature-memory extraction is now owned by Dream V2 (per-group diff →
+  //    triage → merge by target scope → atomic segments). The legacy in-line
+  //    shard-store extractor was retired in the H2-AMS rip; we leave
+  //    `memoryIds` empty so callers don't depend on inline-extracted IDs.
   const memoryIds = [];
-  try {
-    const store = openMemoryShardStore(memoryDir, 'feature');
-    const raw = extractor(body) || [];
-    const bounded = clampExtracted(raw);
-    for (const [i, item] of bounded.entries()) {
-      const kind = EXTRACT_KINDS.includes(item.kind) ? item.kind : 'progress';
-      const shard = KIND_TO_SHARD[kind] || 'progress';
-      const id = `mem-${stored.id}-${i + 1}`;
-      store.put({
-        id,
-        shard,
-        kind,
-        featureId,
-        body: typeof item.body === 'string' ? item.body.trim() : '',
-        tags: Array.isArray(item.tags) ? item.tags.slice(0, 5) : [],
-        authoredBy: AUTHORED_BY.SUMMARY,
-        sourceRef: { featureId, msgIds: [stored.id] },
-        createdAt: new Date(now()).toISOString(),
-      });
-      memoryIds.push(id);
-    }
-  } catch (err) {
-    // Extractor failures must not fail the summary post; the message is
-    // already persisted (audit property). We return the empty memoryIds so
-    // callers can surface a warning if they want.
-    // eslint-disable-next-line no-console
-    console.warn('[task-334n] summary-extractor failed:', err?.message || err);
-  }
 
   return {
     message: stored,
@@ -241,62 +204,16 @@ export function buildSummaryReminder(input) {
 
 /**
  * Assemble feature-memory top-5 for 334e's `featureCtx.memories` field.
- * Ordering (§Δ16.5): pinned first → recent → tag-relevant. Supersedes are
- * hidden (entries with supersededBy != null are filtered out).
+ * Post-rip stub: the underlying shard store was retired in the H2-AMS rip;
+ * Dream V2 owns feature-scope memory now. Returning `[]` keeps the prompt
+ * shape valid until a follow-up wires the new scope-summary read path.
  *
- * @param {string} memoryDir  groups/<g>/features/<f>/memory/
+ * @param {string} memoryDir  unused (kept for callsite compatibility)
  * @param {{ tags?: string[], top?: number }} [opts]
  * @returns {Array<{body:string, shard:string, authoredBy?:string}>}
  */
-export function buildFeatureCtxMemories(memoryDir, opts = {}) {
-  const top = Number.isFinite(opts.top) ? Number(opts.top) : 5;
-  const tagHints = Array.isArray(opts.tags) ? opts.tags : [];
-  const nowMs = typeof opts.now === 'number' ? opts.now : Date.now();
-  let results = [];
-  try {
-    const store = openMemoryShardStore(memoryDir, 'feature');
-    const q = store.query({});
-    const hits = (q.results || [])
-      .filter((r) => !r.supersededBy)
-      .map((r) => {
-        const full = store.get(r.id);
-        return {
-          id: r.id,
-          shard: r.shard || 'general',
-          body: full?.body || '',
-          tags: Array.isArray(r.tags) ? r.tags : [],
-          pinned: !!r.pinned,
-          createdAt: full?.createdAt || null,
-          authoredBy: full?.authoredBy || null,
-        };
-      })
-      .filter((r) => r.body && r.body.trim());
-
-    const score = (r) => {
-      let s = 0;
-      if (r.pinned) s += 1000;
-      if (r.createdAt) {
-        const ageMs = nowMs - new Date(r.createdAt).getTime();
-        const halfLifeMs = 24 * 60 * 60 * 1000;
-        s += Math.max(0, 100 * Math.pow(0.5, Math.max(0, ageMs) / halfLifeMs));
-      }
-      for (const t of tagHints) if (r.tags.includes(t)) s += 5;
-      return s;
-    };
-    hits.sort((a, b) => {
-      const ds = score(b) - score(a);
-      if (ds !== 0) return ds;
-      return String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
-    });
-    results = hits.slice(0, top).map((r) => ({
-      body: r.body,
-      shard: r.shard,
-      ...(r.authoredBy ? { authoredBy: r.authoredBy } : {}),
-    }));
-  } catch {
-    results = [];
-  }
-  return results;
+export function buildFeatureCtxMemories(_memoryDir, _opts = {}) {
+  return [];
 }
 
 // ─── (F) related-feature ACL fail-closed gate ─────────────────────

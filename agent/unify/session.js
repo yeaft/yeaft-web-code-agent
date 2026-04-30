@@ -5,7 +5,7 @@
  *
  * Wires all subsystems together:
  *   initYeaftDir → loadConfig → createTrace → createLLMAdapter →
- *   ConversationStore → MemoryStore → SkillManager → MCPManager →
+ *   ConversationStore → SkillManager → MCPManager →
  *   ToolRegistry → Engine → Session
  *
  * The ~/.yeaft/ directory is the agent's persistent workspace.
@@ -18,8 +18,6 @@ import { loadConfig, loadMCPConfig } from './config.js';
 import { createTrace } from './debug-trace.js';
 import { createLLMAdapter } from './llm/adapter.js';
 import { ConversationStore } from './conversation/persist.js';
-import { MemoryStore } from './memory/store.js';
-import { openMemoryShardStore } from './memory/shard-store.js';
 import { SkillManager, createSkillManager } from './skills.js';
 import { MCPManager } from './mcp.js';
 import { createFullRegistry } from './tools/index.js';
@@ -68,7 +66,6 @@ import { existsSync as existsSyncSafe, readFileSync as readFileSyncSafe } from '
  * @property {import('./llm/adapter.js').LLMAdapter} adapter — The LLM adapter
  * @property {object} config — Resolved configuration
  * @property {ConversationStore} conversationStore — Conversation persistence
- * @property {MemoryStore} memoryStore — Memory persistence
  * @property {SkillManager} skillManager — Skill manager
  * @property {MCPManager} mcpManager — MCP manager
  * @property {import('./tools/registry.js').ToolRegistry} toolRegistry — Tool registry
@@ -169,19 +166,6 @@ export async function loadSession(options = {}) {
 
   // ─── 5. Create stores ──────────────────────────────────
   const conversationStore = new ConversationStore(yeaftDir);
-  const memoryStore = new MemoryStore(yeaftDir);
-
-  // ─── 5-shard. Open R6 memory shard store (task-334f) ──────
-  //     VP-level memory shard store rooted at ~/.yeaft/memory/vp/default.
-  //     The 'default' VP matches the single-user Unify mode; R6 multi-VP
-  //     callers open per-VP stores via openMemoryShardStore() directly.
-  const memoryShardDir = join(yeaftDir, 'memory', 'vp', 'default');
-  let memoryShardStore = null;
-  try {
-    memoryShardStore = openMemoryShardStore(memoryShardDir, 'vp');
-  } catch (err) {
-    console.warn(`[Yeaft] Failed to open R6 memory shard store: ${err?.message || err}`);
-  }
 
   // ─── 5-fts. (GC.1) Open SegmentIndex for FTS pre-flow ────
   //     When config.memoryV2 is on, build a SQLite FTS5 index over
@@ -290,8 +274,6 @@ export async function loadSession(options = {}) {
     trace,
     config,
     conversationStore,
-    memoryStore,
-    memoryShardStore,
     memoryIndex,
     amsRegistry,
     toolRegistry,
@@ -363,8 +345,6 @@ export async function loadSession(options = {}) {
     adapter,
     config,
     conversationStore,
-    memoryStore,
-    memoryShardStore,
     dreamScheduler,
     skillManager,
     mcpManager,

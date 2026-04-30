@@ -14,7 +14,7 @@
  *   --skip-skills        — Skip skill loading
  *
  * REPL commands:
- *   /memory              — Show memory status or manage entries
+ *   /history             — Show conversation history
  *   /history [n]         — Show last N messages from conversation
  *   /search <keyword>    — Search conversation history
  *   /compact             — Trigger manual consolidation
@@ -31,7 +31,6 @@ import { loadSession } from './session.js';
 import { listModels, resolveModel, parseModelRef } from './models.js';
 import { buildSystemPrompt } from './prompts.js';
 import { searchMessages } from './conversation/search.js';
-import { consolidate } from './memory/consolidate.js';
 
 // ─── Argument parsing ──────────────────────────────────────────
 
@@ -211,7 +210,7 @@ async function runREPL(config, args) {
     skipSkills: args.skipSkills,
   });
 
-  const { engine, conversationStore, memoryStore, trace, skillManager, mcpManager, toolRegistry } = session;
+  const { engine, conversationStore, trace, skillManager, mcpManager, toolRegistry } = session;
 
   // Load persisted conversation as initial messages
   let conversationMessages = conversationStore.loadRecent(50).map(m => ({
@@ -223,10 +222,9 @@ async function runREPL(config, args) {
 
   const hotCount = conversationStore.countHot();
   const coldCount = conversationStore.countCold();
-  const memStats = memoryStore.stats();
 
   console.log(`Yeaft Unify REPL (model: ${session.config.model})`);
-  console.log(`Conversation: ${hotCount} hot, ${coldCount} cold | Memory: ${memStats.entryCount} entries`);
+  console.log(`Conversation: ${hotCount} hot, ${coldCount} cold`);
   console.log(`Tools: ${session.status.tools} | Skills: ${session.status.skills}`);
   if (session.status.mcpServers.length > 0) {
     console.log(`MCP: ${session.status.mcpServers.join(', ')}`);
@@ -260,7 +258,6 @@ async function runREPL(config, args) {
           console.log('Commands:');
           console.log('  /debug                   — Toggle debug mode');
           console.log('  /trace <stats|recent>    — Query debug trace');
-          console.log('  /memory [add|clear|stats] — Memory management');
           console.log('  /history [n]             — Show last N messages');
           console.log('  /search <keyword>        — Search conversation history');
           console.log('  /compact                 — Trigger consolidation');
@@ -293,55 +290,7 @@ async function runREPL(config, args) {
         }
 
         case 'memory': {
-          const subcmd = cmdArgs[0];
-          if (subcmd === 'add') {
-            // /memory add <section> <entry text>
-            const section = cmdArgs[1];
-            const entryText = cmdArgs.slice(2).join(' ');
-            if (!section || !entryText) {
-              console.log('Usage: /memory add <section> <entry text>');
-            } else {
-              memoryStore.addToSection(section, `- ${entryText}`);
-              console.log(`Added to MEMORY.md [${section}]: ${entryText}`);
-            }
-          } else if (subcmd === 'clear') {
-            memoryStore.clear();
-            console.log('All memory cleared.');
-          } else if (subcmd === 'stats') {
-            const s = memoryStore.stats();
-            console.log('Memory stats:');
-            console.log(`  Entries: ${s.entryCount}`);
-            console.log(`  Scopes: ${s.scopes.join(', ') || '(none)'}`);
-            console.log(`  Kinds:  ${Object.entries(s.kinds).map(([k, v]) => `${k}=${v}`).join(', ') || '(none)'}`);
-          } else if (subcmd === 'search') {
-            const keyword = cmdArgs.slice(1).join(' ');
-            if (!keyword) {
-              console.log('Usage: /memory search <keyword>');
-            } else {
-              const results = memoryStore.search(keyword);
-              if (results.length === 0) {
-                console.log(`No memory entries matching "${keyword}".`);
-              } else {
-                console.log(`Found ${results.length} entries:`);
-                for (const e of results) {
-                  console.log(`  [${e.kind}] ${e.name} (scope: ${e.scope})`);
-                  console.log(`    ${(e.content || '').slice(0, 100)}`);
-                }
-              }
-            }
-          } else {
-            // Default: show MEMORY.md content
-            const profile = memoryStore.readProfile();
-            const s = memoryStore.stats();
-            if (profile) {
-              console.log('--- MEMORY.md ---');
-              console.log(profile.slice(0, 1000));
-              if (profile.length > 1000) console.log('... (truncated)');
-            } else {
-              console.log('MEMORY.md is empty.');
-            }
-            console.log(`\nEntries: ${s.entryCount} | Scopes: ${s.scopes.length}`);
-          }
+          console.log('Memory commands have been retired. Memory is now managed by Dream V2; use the in-app FTS recall.');
           break;
         }
 
@@ -382,33 +331,7 @@ async function runREPL(config, args) {
         }
 
         case 'compact': {
-          try {
-            const budget = session.config.messageTokenBudget || 8192;
-            const hotTokens = conversationStore.hotTokens();
-            console.log(`Hot tokens: ${hotTokens} / budget: ${budget}`);
-
-            if (hotTokens <= 0) {
-              console.log('No messages to compact.');
-              break;
-            }
-
-            console.log('Running consolidation...');
-            const result = await consolidate({
-              conversationStore,
-              memoryStore,
-              adapter: session.adapter,
-              config: session.config,
-              budget: Math.min(budget, hotTokens), // force trigger
-            });
-            console.log(`Consolidation complete:`);
-            console.log(`  Archived: ${result.archivedCount} messages`);
-            console.log(`  Extracted: ${result.extractedEntries.length} memory entries`);
-            if (result.compactSummary) {
-              console.log(`  Summary: ${result.compactSummary.slice(0, 200)}...`);
-            }
-          } catch (e) {
-            console.error(`Consolidation error: ${e.message}`);
-          }
+          console.log('The /compact REPL command is retired. Compaction is driven automatically by the engine when the hot-window budget is exceeded.');
           break;
         }
 
@@ -421,7 +344,6 @@ async function runREPL(config, args) {
           console.log(`  Hot messages: ${conversationStore.countHot()}`);
           console.log(`  Hot tokens: ${conversationStore.hotTokens()}`);
           console.log(`  Cold messages: ${conversationStore.countCold()}`);
-          console.log(`  Memory entries: ${memoryStore.stats().entryCount}`);
           console.log(`  Tools: ${toolRegistry.size}`);
           console.log(`  Skills: ${skillManager.size}`);
           break;
@@ -438,7 +360,6 @@ async function runREPL(config, args) {
           console.log(`  Tools: ${s.toolCount}`);
           console.log(`  Hot messages: ${conversationStore.countHot()}`);
           console.log(`  Cold messages: ${conversationStore.countCold()}`);
-          console.log(`  Memory entries: ${memoryStore.stats().entryCount}`);
           console.log(`  Registered tools: ${toolRegistry.size}`);
           console.log(`  Loaded skills: ${skillManager.size}`);
           break;

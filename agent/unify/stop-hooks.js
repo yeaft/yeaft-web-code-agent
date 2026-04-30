@@ -3,17 +3,17 @@
  *
  * Runs after each query loop completes:
  *   1. Persist messages to conversation/messages/
- *   2. Consolidate check (compact + extract) — only when budget exceeded
+ *
+ * Consolidation (compact orchestrator) is driven by the engine itself
+ * via `#maybeConsolidate`; the legacy LLM-driven `consolidate()` plus
+ * entries-store extraction was retired in the H2-AMS rip.
  *
  * Dream V2 owns all background memory maintenance (scope summaries +
- * memory writes via dream-v2/session-wiring.js → createV2DreamScheduler);
- * the legacy `memory/dream.js` gate that used to fire here was retired
- * alongside recall-r6.
+ * memory writes via dream-v2/session-wiring.js → createV2DreamScheduler).
  *
  * Reference: yeaft-unify-core-systems.md §4.4
  */
 
-import { shouldConsolidate, consolidate } from './memory/consolidate.js';
 import { isPermissionError } from './init.js';
 
 /** Track whether we've already warned about permission issues in stop hooks. */
@@ -26,7 +26,6 @@ let _permissionWarned = false;
  *   yeaftDir: string,
  *   mode: string,
  *   conversationStore: import('./conversation/persist.js').ConversationStore,
- *   memoryStore: import('./memory/store.js').MemoryStore,
  *   adapter: object,
  *   config: object,
  *   primaryModel?: string,
@@ -42,7 +41,6 @@ export async function runStopHooks(context) {
     yeaftDir,
     mode,
     conversationStore,
-    memoryStore,
     adapter,
     config,
     primaryModel,
@@ -60,7 +58,6 @@ export async function runStopHooks(context) {
 
   const result = {
     messagesPersisted: 0,
-    consolidated: false,
     errors: [],
   };
 
@@ -133,41 +130,9 @@ export async function runStopHooks(context) {
     }
   }
 
-  // 2. Consolidate check (non-blocking, but awaited for correctness)
-  try {
-    if (conversationStore && memoryStore && adapter) {
-      if (shouldConsolidate(conversationStore, config.messageTokenBudget)) {
-        const consolidated = await consolidate({
-          conversationStore,
-          memoryStore,
-          adapter,
-          config,
-          budget: config.messageTokenBudget,
-        });
-        result.consolidated = true;
-        trace?.logEvent({
-          eventType: 'consolidate',
-          eventData: {
-            archivedCount: consolidated.archivedCount,
-            extractedEntries: consolidated.extractedEntries.length,
-          },
-        });
-      }
-    }
-  } catch (err) {
-    if (isPermissionError(err)) {
-      if (!_permissionWarned) {
-        result.errors.push('Cannot write to ~/.yeaft/ — consolidation skipped');
-        _permissionWarned = true;
-      }
-    } else {
-      result.errors.push(`Consolidate failed: ${err.message}`);
-    }
-  }
-
-  // 3. Dream V2 owns background scope-memory maintenance via the session
-  //    dream scheduler (createV2DreamScheduler). No legacy dream gate is
-  //    invoked here; the scheduler decides when to run on its own cadence.
+  // 2. Consolidation is owned by the engine (#maybeConsolidate → compact
+  //    orchestrator). Dream V2 owns background scope-memory maintenance
+  //    via the session dream scheduler (createV2DreamScheduler).
 
   return result;
 }
@@ -175,6 +140,5 @@ export async function runStopHooks(context) {
 /**
  * @typedef {Object} StopHookResult
  * @property {number} messagesPersisted — how many messages were persisted
- * @property {boolean} consolidated — whether consolidation ran
  * @property {string[]} errors — any non-fatal errors
  */

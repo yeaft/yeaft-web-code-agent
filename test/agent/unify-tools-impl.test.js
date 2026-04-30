@@ -17,9 +17,9 @@ const TOOLS_DIR = join(import.meta.dirname, '..', '..', 'agent', 'unify', 'tools
 // ──────────────────────────────────────────────
 
 describe('index.js tool registration', () => {
-  it('allTools has 45 tools (H2.f.4: -6 thread tools)', async () => {
+  it('allTools has 39 tools (H2-AMS rip: -5 memory tools)', async () => {
     const { allTools } = await import(`${TOOLS_DIR}/index.js`);
-    expect(allTools.length).toBe(45);
+    expect(allTools.length).toBe(39);
   });
 
   it('all 39 tools have valid name, description, parameters, and execute', async () => {
@@ -66,7 +66,6 @@ describe('index.js tool registration', () => {
     const names = registry.getToolNames();
     // Chat-side tools
     expect(names).toContain('AskUser');
-    expect(names).toContain('MemoryRead');
     expect(names).toContain('WebSearch');
     // Previously work-only tools should also be available now
     expect(names).toContain('Agent');
@@ -101,111 +100,6 @@ describe('AskUser tool', () => {
     const mod = await import(`${TOOLS_DIR}/ask-user.js`);
     const result = JSON.parse(await mod.default.execute({}, {}));
     expect(result.error).toBeTruthy();
-  });
-});
-
-describe('MemoryRead tool', () => {
-  it('reads profile via memoryStore (returns raw text)', async () => {
-    const mod = await import(`${TOOLS_DIR}/memory-read.js`);
-    const tool = mod.default;
-    const mockStore = {
-      readProfile: () => '# User Profile\nName: Test',
-    };
-    // profile action returns raw markdown text, not JSON
-    const result = await tool.execute(
-      { action: 'profile' },
-      { memoryStore: mockStore }
-    );
-    expect(result).toContain('User Profile');
-    expect(result).toContain('Name: Test');
-  });
-
-  it('lists entries via memoryStore (returns JSON)', async () => {
-    const mod = await import(`${TOOLS_DIR}/memory-read.js`);
-    const tool = mod.default;
-    const mockStore = {
-      listEntries: () => [
-        { name: 'test-1', kind: 'fact', scope: 'global', tags: [], importance: 'normal', updated_at: '2026-01-01' },
-      ],
-    };
-    const result = JSON.parse(await tool.execute(
-      { action: 'list' },
-      { memoryStore: mockStore }
-    ));
-    expect(result.entries).toHaveLength(1);
-    expect(result.entries[0].name).toBe('test-1');
-  });
-
-  it('returns error when memoryStore is missing', async () => {
-    const mod = await import(`${TOOLS_DIR}/memory-read.js`);
-    const result = JSON.parse(await mod.default.execute({ action: 'profile' }, {}));
-    expect(result.error).toBeTruthy();
-  });
-});
-
-describe('MemoryWrite tool', () => {
-  it('writes entry via memoryStore', async () => {
-    const mod = await import(`${TOOLS_DIR}/memory-write.js`);
-    const tool = mod.default;
-    let written = null;
-    const mockStore = {
-      writeEntry: (entry) => { written = entry; return 'my-fact'; },
-    };
-    // write_entry requires entry object with name and content
-    const result = JSON.parse(await tool.execute(
-      { action: 'write_entry', entry: { name: 'My Fact', kind: 'fact', content: 'Test content' } },
-      { memoryStore: mockStore }
-    ));
-    expect(result.success).toBe(true);
-    expect(result.slug).toBe('my-fact');
-    expect(written).toBeTruthy();
-    expect(written.kind).toBe('fact');
-  });
-
-  it('deletes entry via memoryStore', async () => {
-    const mod = await import(`${TOOLS_DIR}/memory-write.js`);
-    const tool = mod.default;
-    let deleted = null;
-    const mockStore = {
-      deleteEntry: (name) => { deleted = name; return true; },
-    };
-    // delete_entry uses input.name
-    const result = JSON.parse(await tool.execute(
-      { action: 'delete_entry', name: 'entry-123' },
-      { memoryStore: mockStore }
-    ));
-    expect(result.success).toBe(true);
-    expect(deleted).toBe('entry-123');
-  });
-});
-
-describe('memory_search tool (task-287: path-based file loader)', () => {
-  it('errors when paths is empty', async () => {
-    const mod = await import(`${TOOLS_DIR}/memory-search.js`);
-    const tool = mod.default;
-    const result = JSON.parse(await tool.execute(
-      { paths: [] },
-      { yeaftDir: '/tmp/nonexistent-yeaft-dir' }
-    ));
-    expect(result.error).toBeTruthy();
-  });
-});
-
-describe('memory_query tool (task-287: fuzzy atomic entry search)', () => {
-  it('searches entries via memoryStore.findByFilter', async () => {
-    const mod = await import(`${TOOLS_DIR}/memory-query.js`);
-    const tool = mod.default;
-    const mockStore = {
-      findByFilter: () => [
-        { name: 'javascript-basics', kind: 'fact', content: 'JavaScript is a great language', scope: 'global', tags: [], _score: 2 },
-      ],
-      search: () => [],
-    };
-    const result = JSON.parse(await tool.execute(
-      { keywords: ['JavaScript'] },
-      { memoryStore: mockStore }
-    ));
-    expect(result.results.length).toBeGreaterThanOrEqual(1);
   });
 });
 
@@ -1133,7 +1027,7 @@ describe('Tool properties', () => {
 
   it('read-only tools are marked correctly', async () => {
     const { allTools } = await import(`${TOOLS_DIR}/index.js`);
-    const readOnlyTools = ['MemoryRead', 'MemorySearch', 'WebSearch', 'WebFetch',
+    const readOnlyTools = ['WebSearch', 'WebFetch',
       'HistorySearch', 'FileRead', 'Glob', 'Grep', 'ListDir', 'ViewImage',
       'RequestPermissions'];
 

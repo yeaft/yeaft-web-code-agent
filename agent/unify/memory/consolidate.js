@@ -1,21 +1,18 @@
 /**
- * consolidate.js — Consolidate = compact + extract (one LLM call)
+ * consolidate.js — Hot-window budget partitioning utilities.
  *
- * Triggered when hot_tokens > MESSAGE_TOKEN_BUDGET.
- * One LLM call does two things simultaneously:
- *   1. Generate compact summary → append to compact.md ("short-term memory")
- *   2. Extract memory entries → write to entries/ ("long-term memory")
+ * Reduced surface (PR-B rip): the legacy LLM-driven consolidate() pipeline
+ * (compact summary + entries-store extraction) has been retired. The only
+ * survivors are the pure functions used by the compact orchestrator:
  *
- * After consolidation:
- *   - Processed messages moved from messages/ to cold/
- *   - index.md + scopes.md updated
+ *   - shouldConsolidate(store, budget) — decide when to compact
+ *   - partitionMessages(messages, budget) — split hot messages into
+ *     toArchive / toKeep based on token budget
  *
- * Reference: yeaft-unify-core-systems.md §3.1, §4.2
- *            yeaft-unify-design.md §6.1
+ * Memory extraction is now owned by Dream V2 (per-group diff -> triage ->
+ * merge by target scope -> apply via segment-store + summary-store).
+ * Conversation summarisation lives in compact/orchestrator.js's hooks.
  */
-
-import { extractMemories } from './extract.js';
-import { pickEffort } from '../effort.js';
 
 // ─── Constants ──────────────────────────────────────────────────
 
@@ -27,8 +24,6 @@ export const COMPACT_KEEP_RATIO = 0.4;
 
 /** Minimum messages to keep hot (newest). */
 const MIN_KEEP_MESSAGES = 3;
-
-// ─── Consolidate ────────────────────────────────────────────────
 
 /**
  * Check if consolidation should be triggered.
@@ -79,115 +74,5 @@ export function partitionMessages(messages, budget = DEFAULT_MESSAGE_TOKEN_BUDGE
   return {
     toArchive: messages.slice(0, keepStart),
     toKeep: messages.slice(keepStart),
-  };
-}
-
-/**
- * Generate a compact summary of messages.
- *
- * @param {object[]} messages — messages to summarize
- * @param {object} adapter — LLM adapter with .call()
- * @param {object} config — { model }
- * @returns {Promise<string>} — compact summary text
- */
-async function generateSummary(messages, adapter, config) {
-  const conversation = messages.map(m => {
-    const prefix = m.role === 'user' ? 'User' : m.role === 'assistant' ? 'Assistant' : m.role;
-    return `[${prefix}]: ${(m.content || '').slice(0, 500)}`;
-  }).join('\n\n');
-
-  const system = 'You are a conversation summarizer. Summarize the conversation concisely in 2-3 paragraphs, preserving key decisions, facts, and context. Write in the same language as the conversation.';
-
-  try {
-    const result = await adapter.call({
-      model: config.model,
-      system,
-      messages: [{ role: 'user', content: `Summarize this conversation:\n\n${conversation}` }],
-      maxTokens: 1024,
-      // task-327c: consolidate is a high-complexity side-query; flag as
-      // 'max' effort so supported models use extended thinking / reasoning.
-      // Router/adapter silently drops the param for models that don't
-      // support thinking, or when UNIFY_THINKING_V1 is off.
-      effort: pickEffort({ scenario: 'consolidate' }),
-    });
-    return result.text.trim();
-  } catch {
-    // Fallback: simple concatenation of first/last messages
-    const first = messages[0]?.content?.slice(0, 200) || '';
-    const last = messages[messages.length - 1]?.content?.slice(0, 200) || '';
-    return `[Auto-summary failed] Started with: ${first}... Ended with: ${last}`;
-  }
-}
-
-/**
- * Run the full Consolidate pipeline.
- *
- * 1. Partition messages (what to archive vs keep)
- * 2. Generate compact summary (LLM call)
- * 3. Extract memory entries (LLM call)
- * 4. Move archived messages to cold/
- * 5. Update compact.md, index.md, scopes.md
- *
- * @param {{
- *   conversationStore: import('../conversation/persist.js').ConversationStore,
- *   memoryStore: import('./store.js').MemoryStore,
- *   adapter: object,
- *   config: object,
- *   budget?: number
- * }} params
- * @returns {Promise<{ compactSummary: string, extractedEntries: string[], archivedCount: number }>}
- */
-export async function consolidate({ conversationStore, memoryStore, adapter, config, budget = DEFAULT_MESSAGE_TOKEN_BUDGET }) {
-  // Load all hot messages
-  const messages = conversationStore.loadAll();
-
-  if (messages.length <= MIN_KEEP_MESSAGES) {
-    return { compactSummary: '', extractedEntries: [], archivedCount: 0 };
-  }
-
-  // Step 1: Partition
-  const { toArchive, toKeep } = partitionMessages(messages, budget);
-
-  if (toArchive.length === 0) {
-    return { compactSummary: '', extractedEntries: [], archivedCount: 0 };
-  }
-
-  // Step 2: Generate compact summary
-  const compactSummary = await generateSummary(toArchive, adapter, config);
-
-  // Step 3: Extract memory entries
-  const extracted = await extractMemories({ messages: toArchive, adapter, config });
-
-  // Step 4: Move archived messages to cold
-  const archiveIds = toArchive.map(m => m.id).filter(Boolean);
-  conversationStore.moveToColdBatch(archiveIds);
-
-  // Step 5a: Update compact.md
-  if (compactSummary) {
-    conversationStore.updateCompactSummary(compactSummary);
-  }
-
-  // Step 5b: Write extracted memory entries
-  const entryNames = [];
-  for (const entry of extracted) {
-    const slug = memoryStore.writeEntry(entry);
-    entryNames.push(slug);
-  }
-
-  // Step 5c: Update index.md
-  const lastMsg = toKeep[toKeep.length - 1];
-  conversationStore.updateIndex({
-    lastMessageId: lastMsg?.id || null,
-  });
-
-  // Step 5d: Rebuild scopes.md
-  if (entryNames.length > 0) {
-    memoryStore.rebuildScopes();
-  }
-
-  return {
-    compactSummary,
-    extractedEntries: entryNames,
-    archivedCount: archiveIds.length,
   };
 }
