@@ -502,13 +502,24 @@ export const useChatStore = defineStore('chat', {
       // only need the metadata replay, not the message stream — pass
       // limit:0 so the agent skips re-emitting messages and just re-fires
       // session_ready / thread_list_updated / group snapshot events.
+      //
+      // Group-history-isolation (Bug 7): pass `groupId` so the agent only
+      // replays messages stamped with the active group. The active group
+      // is owned by the groups Pinia store; we read it lazily here so
+      // chat.js doesn't depend on groups.js at module load.
       if (this.unifyAgentId) {
         const existing = this.messagesMap[this.unifyConversationId];
         const needMessages = !existing || existing.length === 0;
+        let groupId = null;
+        try {
+          const gs = window.Pinia?.useGroupsStore?.() || (window.__useGroupsStore && window.__useGroupsStore());
+          groupId = (gs && gs.activeGroupId) || null;
+        } catch { /* groups store not registered yet — fall back to no filter */ }
         this.sendWsMessage({
           type: 'unify_load_history',
           agentId: this.unifyAgentId,
           limit: needMessages ? 50 : 0,
+          groupId,
         });
       }
     },
@@ -1160,10 +1171,33 @@ export const useChatStore = defineStore('chat', {
     // task-fix (group-switch): clicking a group row in the sidebar narrows
     // the main pane to that group. Clears task-detail filter so exactly one
     // scope is active at a time.
+    //
+    // Group-history-isolation (Bug 7): also clear the message stream and
+    // re-request history from the agent scoped to this group. Without this,
+    // re-entering a group would either show the previous group's messages
+    // or — worse — show the legacy `grp_default` orphans plus pre-grouping
+    // messages because the cached stream was loaded with no group filter.
     setActiveGroupFilter(groupId) {
+      const prev = this.unifyActiveGroupFilter || null;
       this.unifyActiveGroupFilter = groupId || null;
       if (groupId) {
         this.unifyActiveFeatureDetailId = null;
+      }
+      // Only force a reload when the filter actually changed AND we have
+      // an active Unify session to ask. The local-only path (no agent yet)
+      // is harmless: the next sendUnifyEnter will plumb the groupId.
+      if ((groupId || null) === prev) return;
+      const convId = this.unifyConversationId;
+      if (convId && this.messagesMap[convId]) {
+        this.messagesMap[convId] = [];
+      }
+      if (this.unifyAgentId) {
+        this.sendWsMessage({
+          type: 'unify_load_history',
+          agentId: this.unifyAgentId,
+          limit: 50,
+          groupId: groupId || null,
+        });
       }
     },
     setActiveTaskUi(featureId) {

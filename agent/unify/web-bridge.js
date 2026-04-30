@@ -1384,8 +1384,18 @@ export function handleUnifyModelSwitch(msg) {
 /**
  * Handle history load request. Loads recent messages from ConversationStore
  * and replays them through the standard claude_output pipeline.
+ *
+ * Group-history-isolation (Bug 7): when `msg.groupId` is provided the
+ * replay AND the engine's bootstrap context are filtered to that group.
+ * Messages tagged with another groupId — and legacy messages with no
+ * groupId at all — are excluded so a stale `grp_default` (or any other
+ * group) never bleeds into the active group's pane.
  */
 export async function handleUnifyLoadHistory(msg) {
+  const groupId = (msg && typeof msg.groupId === 'string' && msg.groupId) || null;
+  const pickRecent = (store, lim) =>
+    groupId ? store.loadRecentByGroup(groupId, lim) : store.loadRecent(lim);
+
   if (!session) {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     session = await loadSession({
@@ -1397,7 +1407,12 @@ export async function handleUnifyLoadHistory(msg) {
 
     unifyConversationId = `unify-${Date.now()}`;
 
-    restoreHistoryFromRecent(session.conversationStore.loadRecent(50));
+    restoreHistoryFromRecent(pickRecent(session.conversationStore, 50));
+  } else if (groupId) {
+    // Re-entering an existing session with a (possibly new) group filter:
+    // re-seed the engine's flat history so it doesn't carry messages from
+    // another group into the next turn's context.
+    restoreHistoryFromRecent(pickRecent(session.conversationStore, 50));
   }
 
   // Always replay session_ready so refresh / reconnect rebuilds UI state.
@@ -1413,7 +1428,7 @@ export async function handleUnifyLoadHistory(msg) {
   sendGroupSnapshotBroadcast();
 
   const limit = (typeof msg.limit === 'number') ? msg.limit : 50;
-  const messages = limit > 0 ? session.conversationStore.loadRecent(limit) : [];
+  const messages = limit > 0 ? pickRecent(session.conversationStore, limit) : [];
   const compactSummary = session.conversationStore.readCompactSummary();
 
   for (const m of messages) {
@@ -1434,6 +1449,7 @@ export async function handleUnifyLoadHistory(msg) {
     hasCompactSummary: !!compactSummary,
     totalHot: session.conversationStore.countHot(),
     totalCold: session.conversationStore.countCold(),
+    groupId,
   });
 }
 

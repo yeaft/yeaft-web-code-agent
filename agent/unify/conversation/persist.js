@@ -443,6 +443,42 @@ export class ConversationStore {
   }
 
   /**
+   * Load recent hot messages stamped with `groupId`, sorted chronologically.
+   * Group-history-isolation (Bug 7): a message lives in exactly one group.
+   * Messages without a `groupId` frontmatter (legacy / pre-grouping) are
+   * NOT returned — they would otherwise leak into every group's stream.
+   *
+   * Implementation note: filters AFTER reading the most recent N files
+   * because the on-disk order is global by sequence id. We over-read by
+   * loading all hot files and slicing the tail of the filtered set so
+   * `limit` reflects "N most recent messages in this group", not "N most
+   * recent messages on disk that happen to be in this group". For typical
+   * inboxes (≤ a few thousand hot messages) this is cheap; if it ever
+   * becomes a hot path we add a per-group on-disk index.
+   *
+   * @param {string} groupId — required; null/empty returns []
+   * @param {number} [limit=50]
+   * @returns {object[]}
+   */
+  loadRecentByGroup(groupId, limit = 50) {
+    if (!groupId) return [];
+    const all = this.#loadFromDir(this.#msgDir, Infinity);
+    const filtered = all.filter(m => m && m.groupId === groupId);
+    if (limit === Infinity || limit < 0) return filtered;
+    return filtered.slice(-limit);
+  }
+
+  /**
+   * Load every hot message stamped with `groupId`.
+   *
+   * @param {string} groupId
+   * @returns {object[]}
+   */
+  loadAllByGroup(groupId) {
+    return this.loadRecentByGroup(groupId, Infinity);
+  }
+
+  /**
    * Count hot messages.
    *
    * @returns {number}

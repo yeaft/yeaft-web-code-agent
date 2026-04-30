@@ -599,6 +599,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       await forwardToAgent(histAgentId, {
         type: 'unify_load_history',
         limit: msg.limit,
+        groupId: msg.groupId || null,
       });
       break;
     }

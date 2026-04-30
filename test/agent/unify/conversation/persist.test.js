@@ -196,6 +196,67 @@ describe('ConversationStore', () => {
     });
   });
 
+  // Group-history-isolation (Bug 7): group-scoped loaders.
+  describe('loadRecentByGroup / loadAllByGroup', () => {
+    it('returns only messages stamped with the requested groupId', () => {
+      store.appendBatch([
+        { role: 'user',      content: 'A1', groupId: 'grp_a' },
+        { role: 'assistant', content: 'A2', groupId: 'grp_a' },
+        { role: 'user',      content: 'B1', groupId: 'grp_b' },
+        { role: 'user',      content: 'A3', groupId: 'grp_a' },
+      ]);
+      const a = store.loadRecentByGroup('grp_a', 50);
+      const b = store.loadRecentByGroup('grp_b', 50);
+      expect(a.map(m => m.content)).toEqual(['A1', 'A2', 'A3']);
+      expect(b.map(m => m.content)).toEqual(['B1']);
+    });
+
+    it('excludes messages with no groupId (legacy / pre-grouping)', () => {
+      store.appendBatch([
+        { role: 'user', content: 'orphan' },                       // no groupId
+        { role: 'user', content: 'tagged', groupId: 'grp_a' },
+      ]);
+      expect(store.loadRecentByGroup('grp_a', 50).map(m => m.content)).toEqual(['tagged']);
+    });
+
+    it('excludes messages from a deleted/other group', () => {
+      store.appendBatch([
+        { role: 'user', content: 'leftover', groupId: 'grp_default' },
+        { role: 'user', content: 'mine',     groupId: 'grp_claude' },
+      ]);
+      const out = store.loadRecentByGroup('grp_claude', 50);
+      expect(out.map(m => m.content)).toEqual(['mine']);
+    });
+
+    it('respects limit as "N most recent within this group"', () => {
+      store.appendBatch([
+        { role: 'user', content: 'A1', groupId: 'grp_a' },
+        { role: 'user', content: 'B1', groupId: 'grp_b' },
+        { role: 'user', content: 'A2', groupId: 'grp_a' },
+        { role: 'user', content: 'B2', groupId: 'grp_b' },
+        { role: 'user', content: 'A3', groupId: 'grp_a' },
+      ]);
+      // Two most recent A messages, not "scan last 2 messages globally
+      // and filter" (which would yield only A3).
+      expect(store.loadRecentByGroup('grp_a', 2).map(m => m.content)).toEqual(['A2', 'A3']);
+    });
+
+    it('returns [] for empty/null groupId without throwing', () => {
+      store.append({ role: 'user', content: 'X', groupId: 'grp_a' });
+      expect(store.loadRecentByGroup(null, 10)).toEqual([]);
+      expect(store.loadRecentByGroup('', 10)).toEqual([]);
+    });
+
+    it('loadAllByGroup mirrors loadRecentByGroup with no limit', () => {
+      const big = Array.from({ length: 80 }, (_, i) => ({
+        role: 'user', content: `m${i}`, groupId: 'grp_a',
+      }));
+      store.appendBatch(big);
+      expect(store.loadAllByGroup('grp_a')).toHaveLength(80);
+      expect(store.loadRecentByGroup('grp_a', 50)).toHaveLength(50);
+    });
+  });
+
   describe('moveToCold', () => {
     it('should move message from messages/ to cold/', () => {
       store.append({ role: 'user', content: 'To be archived' });
