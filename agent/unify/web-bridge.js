@@ -44,6 +44,10 @@ import {
 import { openGroup, loadGroupMeta } from './groups/group-store.js';
 import { createCoordinator } from './groups/coordinator.js';
 import { seedDefaultGroup } from './groups/seed-default.js';
+import {
+  shouldCompactHistory,
+  compactHistory,
+} from './history-compact.js';
 
 /** @type {import('./session.js').Session | null} */
 let session = null;
@@ -681,6 +685,15 @@ export async function handleUnifyGroupChat(msg) {
     ? msg.groupId.trim()
     : 'grp_default';
 
+  // Entry gate: if a compact is in flight from the previous turn,
+  // wait for it to finish before reading conversationMessages. Compact
+  // runs at turn END (post-fanout) so it does not block the user's
+  // current message latency, but a fast double-send from the user must
+  // not race with the swap.
+  if (_compactInFlight) {
+    try { await _compactInFlight; } catch { /* first caller logs */ }
+  }
+
   // yeaftDir is a hard prerequisite for both session boot and group seeding;
   // validate BEFORE booting so a misconfigured agent doesn't leave a zombie
   // session lying around.
@@ -885,6 +898,14 @@ export async function handleUnifyGroupChat(msg) {
       } catch { /* never crash WS pipeline */ }
     }
   }));
+
+  // Post-turn compaction. Triggers when the JUST-APPENDED turn pushed
+  // history past 20 turns / 80K tokens. Runs in the background — does
+  // not block the response to this message. The next user message
+  // awaits `_compactInFlight` at the entry gate (handleUnifyGroupChat
+  // top), so the swap is guaranteed to be observed before the next
+  // baseSnapshot capture. Errors are swallowed; next turn retries.
+  scheduleCompactAfterTurn(groupId);
 }
 
 /**
@@ -1148,6 +1169,145 @@ function appendTurnToHistory(prompt, assistantTextParts, toolCallsAccum, toolRes
         isError: tr.isError,
       });
     }
+  }
+}
+
+/**
+ * In-flight compact promise. Set by `scheduleCompactAfterTurn` when a
+ * turn ends and triggers compaction; awaited by the next
+ * `handleUnifyGroupChat` invocation at its entry gate so the next
+ * baseSnapshot reflects the compacted history.
+ *
+ * Compact runs at turn END (not before fan-out), so it does not add
+ * latency to the user's current message. The trade-off: the next user
+ * message may have to wait briefly for the compact to finish — but
+ * compact uses the fast model and typically completes in 1–3s.
+ *
+ * @type {Promise<void>|null}
+ */
+let _compactInFlight = null;
+
+/**
+ * Re-trigger flag. If `scheduleCompactAfterTurn` is called while a
+ * compact is already in flight, set this so the in-flight one chains
+ * a follow-up immediately on completion. Without this, a sustained
+ * burst of turns could starve compaction: turn N triggers compact,
+ * turns N+1 / N+2 / … each find `_compactInFlight` set and skip,
+ * leaving history above threshold until the burst ends.
+ */
+let _compactPending = false;
+
+/**
+ * Fire-and-forget post-turn compaction. Called once at the end of each
+ * `handleUnifyGroupChat` after `Promise.all(runVpTurn)` resolves. If a
+ * compaction is still in flight from an earlier turn, we set
+ * `_compactPending` so the running compact chains a follow-up on
+ * completion (anti-starvation).
+ *
+ * The promise is stored in `_compactInFlight` so the next user message
+ * can await it before reading `conversationMessages`.
+ *
+ * @param {string} groupId — for envelope tagging on the emitted event
+ */
+function scheduleCompactAfterTurn(groupId) {
+  if (_compactInFlight) {
+    // A compact is already running. Mark a follow-up so when it
+    // finishes, it re-evaluates and runs again if still triggered.
+    _compactPending = true;
+    return;
+  }
+  // Cheap O(n) precheck so we don't bother engaging the LLM at all
+  // when the conversation is still small.
+  const triage = shouldCompactHistory(conversationMessages);
+  if (!triage.trigger) return;
+  if (!session?.engine || typeof session.engine.summarizeForCompact !== 'function') {
+    console.warn('[Unify] history compact: engine.summarizeForCompact unavailable — skipping');
+    return;
+  }
+
+  _compactInFlight = runCompactNow(groupId).finally(() => {
+    _compactInFlight = null;
+    // If turns piled up while we were running and compaction is still
+    // needed, chain a follow-up. Use a microtask so the .finally chain
+    // settles cleanly before the next promise is created.
+    if (_compactPending) {
+      _compactPending = false;
+      queueMicrotask(() => scheduleCompactAfterTurn(groupId));
+    }
+  });
+}
+
+/**
+ * Run the in-memory history compactor. Replaces the older prefix of
+ * `conversationMessages` with a single user-role summary message,
+ * preserving the recent tail verbatim. Mutates the module-level
+ * variable in place via reassignment.
+ *
+ * Behaviour:
+ *   - If summarization fails, leaves history untouched.
+ *   - On success, emits a `unify_history_compacted` event so dev tools
+ *     can show what happened (frontend currently ignores it).
+ *
+ * Race safety:
+ *   - Single-flight via `_compactInFlight` (only one runs at a time).
+ *   - Reads the array reference once into `snapshot`. If anything else
+ *     reassigns `conversationMessages` during the await (`consolidate`
+ *     event from the engine, `clearUnifyMessages`, `resetUnifySession`),
+ *     we detect the swap by reference comparison and bail without
+ *     overwriting their fresh state.
+ *
+ * @param {string} groupId
+ * @returns {Promise<void>}
+ */
+async function runCompactNow(groupId) {
+  const summarize = ({ system, prompt }) =>
+    session.engine.summarizeForCompact({ system, prompt, maxTokens: 1024 });
+
+  // Capture the current array reference. If anyone reassigns
+  // `conversationMessages` while we're summarizing (engine consolidate
+  // event, session reset, manual clear), the reference will differ
+  // and we abandon the swap.
+  const snapshot = conversationMessages;
+
+  try {
+    const result = await compactHistory(snapshot, { summarize });
+    if (!result.compacted) {
+      if (result.error) {
+        console.warn(
+          `[Unify] history compact: summarizer failed (${result.error}); ` +
+          `keeping ${result.beforeTurns} turns / ~${result.beforeTokens} tokens`
+        );
+      }
+      return;
+    }
+    // Race guard: if `conversationMessages` was reassigned during the
+    // await (e.g. consolidate / reset), do NOT overwrite the fresh
+    // state with our stale compacted snapshot.
+    if (conversationMessages !== snapshot) {
+      console.log('[Unify] history compact: history was reset during compact — discarding stale summary');
+      return;
+    }
+    conversationMessages = result.messages;
+    console.log(
+      `[Unify] history compacted (reason=${result.reason}): ` +
+      `turns ${result.beforeTurns}→${result.afterTurns}, ` +
+      `tokens ~${result.beforeTokens}→${result.afterTokens}, ` +
+      `archived ${result.archivedCount} messages`
+    );
+    try {
+      sendUnifyEvent({
+        type: 'unify_history_compacted',
+        reason: result.reason,
+        beforeTurns: result.beforeTurns,
+        afterTurns: result.afterTurns,
+        beforeTokens: result.beforeTokens,
+        afterTokens: result.afterTokens,
+        archivedCount: result.archivedCount,
+        ts: Date.now(),
+      }, { groupId });
+    } catch { /* WS pipeline failure must not crash compact */ }
+  } catch (err) {
+    console.warn('[Unify] history compact: unexpected failure', err?.message || err);
   }
 }
 
