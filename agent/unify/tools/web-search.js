@@ -60,6 +60,14 @@ Guidelines:
     const signal = ctx?.signal;
     const errors = [];
 
+    // Backend preference set in UnifySettings → Search tab. When the
+    // user picks `playwright` we'd normally call the playwright-service;
+    // that service is not yet shipped (next PR), so the preference is
+    // recorded for forward-compat and we transparently fall through to
+    // Tavily / HTML scrape. Once the service lands we'll insert a
+    // tryPlaywright backend here ahead of Tavily.
+    // Anything other than 'playwright' is treated as 'tavily'.
+
     // 1. Tavily — default, fast, structured.
     if (search.tavilyApiKey) {
       const r = await tryTavily(query, limit, search.tavilyApiKey, signal);

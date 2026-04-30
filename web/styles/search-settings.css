@@ -1,0 +1,212 @@
+/* search-settings.css — Styles for the Search tab in UnifySettings.
+ *
+ * Reuses the .settings-pane container token from settings.css; adds
+ * its own .settings-section / form / usage-card subsystem so the tab
+ * is self-contained. Kept visually consistent with the rest of
+ * UnifySettings (no horizontal dividers per CLAUDE.md "Unify UI Design
+ * Rules") — separation is via spacing only.
+ */
+
+.search-settings-tab {
+  padding: 4px 0;
+}
+
+.search-settings-tab .settings-section {
+  padding: 16px 0;
+}
+
+.search-settings-tab .settings-section + .settings-section {
+  margin-top: 8px;
+}
+
+.search-settings-tab .settings-section-title {
+  margin: 0 0 6px 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary, #1f2937);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.search-settings-tab .settings-section-desc {
+  margin: 0 0 14px 0;
+  font-size: 13px;
+  color: var(--text-secondary, #6b7280);
+  line-height: 1.5;
+}
+
+.search-settings-tab .settings-section-desc a {
+  color: var(--accent, #2563eb);
+  text-decoration: none;
+}
+.search-settings-tab .settings-section-desc a:hover { text-decoration: underline; }
+
+.search-settings-tab .settings-section-actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 16px;
+}
+
+/* Backend radio rows */
+.search-radio-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.search-radio-row:hover { background: var(--surface-hover, #f3f4f6); }
+.search-radio-row.disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.search-radio-row.disabled:hover { background: transparent; }
+
+.search-radio-row input[type="radio"] {
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+
+.search-radio-body {
+  flex: 1;
+  min-width: 0;
+}
+.search-radio-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary, #1f2937);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.search-radio-hint {
+  margin-top: 2px;
+  font-size: 12.5px;
+  color: var(--text-secondary, #6b7280);
+}
+
+.search-coming-soon {
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--surface-muted, #e5e7eb);
+  color: var(--text-secondary, #6b7280);
+  padding: 1px 8px;
+  border-radius: 999px;
+}
+
+/* Tavily key input */
+.search-key-row {
+  display: flex;
+  gap: 8px;
+}
+.search-key-input {
+  flex: 1;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-family: var(--font-mono, ui-monospace, "SF Mono", Monaco, monospace);
+  border: 1px solid var(--border, #d1d5db);
+  border-radius: 6px;
+  background: var(--surface, #ffffff);
+  color: var(--text-primary, #1f2937);
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+.search-key-input:focus {
+  border-color: var(--accent, #2563eb);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+/* Usage card */
+.search-usage-card {
+  background: var(--surface-muted, #f9fafb);
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+.search-usage-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  padding: 4px 0;
+}
+.search-usage-label {
+  color: var(--text-secondary, #6b7280);
+}
+.search-usage-value {
+  color: var(--text-primary, #1f2937);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.search-usage-bar {
+  height: 6px;
+  background: var(--surface, #ffffff);
+  border-radius: 999px;
+  overflow: hidden;
+  margin: 8px 0 4px 0;
+}
+.search-usage-bar-fill {
+  height: 100%;
+  background: var(--accent, #2563eb);
+  transition: width 0.3s ease;
+}
+.search-usage-error {
+  font-size: 13px;
+  color: var(--danger, #dc2626);
+  background: var(--danger-bg, #fef2f2);
+  padding: 10px 12px;
+  border-radius: 6px;
+}
+.search-usage-pending {
+  font-size: 13px;
+  color: var(--text-secondary, #6b7280);
+  font-style: italic;
+}
+
+/* Buttons */
+.search-btn-primary {
+  padding: 7px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: var(--accent, #2563eb);
+  color: #ffffff;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.search-btn-primary:hover:not(:disabled) { background: var(--accent-hover, #1d4ed8); }
+.search-btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.search-btn-secondary {
+  padding: 7px 14px;
+  font-size: 13px;
+  border: 1px solid var(--border, #d1d5db);
+  border-radius: 6px;
+  background: var(--surface, #ffffff);
+  color: var(--text-primary, #1f2937);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.search-btn-secondary:hover:not(:disabled) { background: var(--surface-hover, #f3f4f6); }
+.search-btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.search-link-btn {
+  background: transparent;
+  border: none;
+  color: var(--accent, #2563eb);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.search-link-btn:hover:not(:disabled) { background: var(--surface-hover, #f3f4f6); }
+.search-link-btn:disabled { opacity: 0.5; cursor: not-allowed; }
