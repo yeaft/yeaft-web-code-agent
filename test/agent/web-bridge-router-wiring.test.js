@@ -76,8 +76,12 @@ describe('buildVpQueryOpts — router wiring invariant', () => {
   });
 
   it('does NOT throw when coordinator is structurally invalid', () => {
-    // Defensive — createRouter throws on a coordinator without ingest().
-    // buildVpQueryOpts must swallow it (router build failure is non-fatal).
+    // Defensive — buildVpQueryOpts must skip router wiring when the
+    // coordinator doesn't expose `ingest` as a function. NOTE: this
+    // exercises the outer `typeof === 'function'` guard, NOT the
+    // try/catch around createRouter — that catch is belt-and-suspenders
+    // for createRouter's own validation throw and isn't reachable from a
+    // coordinator whose `ingest` already failed the typeof guard.
     const broken = { ingest: 'not-a-function' };
     let out;
     expect(() => {

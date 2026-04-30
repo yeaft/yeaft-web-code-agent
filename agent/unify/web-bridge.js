@@ -916,6 +916,8 @@ export async function handleUnifyChat(msg) {
               const { seedDefaultGroup } = await import('./groups/seed-default.js');
               const seeded = seedDefaultGroup(yeaftDir, {});
               groupHandle = seeded.group;
+            } else {
+              console.warn('[Unify] handleUnifyChat: groupId %s not found; no router will be wired for this turn', resolvedGroupId);
             }
             if (groupHandle) {
               const { createCoordinator } = await import('./groups/coordinator.js');
