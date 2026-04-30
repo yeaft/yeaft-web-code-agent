@@ -805,8 +805,8 @@ export async function handleUnifyChat(msg) {
   const { prompt, mode } = msg;
   if (!prompt?.trim()) return;
   const vpId = typeof msg.vpId === 'string' && msg.vpId.trim() ? msg.vpId.trim() : null;
-  const groupCoordinator = msg._groupCoordinator || null;
-  const groupId = typeof msg.groupId === 'string' && msg.groupId.trim() ? msg.groupId.trim() : null;
+  let groupCoordinator = msg._groupCoordinator || null;
+  let groupId = typeof msg.groupId === 'string' && msg.groupId.trim() ? msg.groupId.trim() : null;
 
   if (mode !== undefined && mode !== null) {
     console.warn('[Unify] unify_chat.mode is deprecated and ignored — Unify now runs in a single unified mode.');
@@ -891,6 +891,46 @@ export async function handleUnifyChat(msg) {
       const assistantTextParts = [];
       const toolCallsAccum = [];
       const toolResultsAccum = [];
+
+      // Backend safety net: if no coordinator was supplied (legacy
+      // `unify_chat` path, or test harness) but we have a yeaft dir, build
+      // an ephemeral coordinator over `groupId || grp_default`. This keeps
+      // ctx.router always wired so `route_forward` never bombs out with
+      // `router_unavailable`. The coordinator is local to this turn — no
+      // fan-out, no extra dispatch — it only exists so the per-VP Engine
+      // query can hand it to createRouter().
+      if (!groupCoordinator) {
+        try {
+          const yeaftDir = ctx.CONFIG?.yeaftDir;
+          if (yeaftDir) {
+            const resolvedGroupId = groupId || 'grp_default';
+            const { openGroup, loadGroupMeta } = await import('./groups/group-store.js');
+            const { join } = await import('node:path');
+            const { existsSync } = await import('node:fs');
+            const root = join(yeaftDir, 'groups');
+            const dir = join(root, resolvedGroupId);
+            let groupHandle = null;
+            if (existsSync(dir) && loadGroupMeta(dir)) {
+              groupHandle = openGroup(root, resolvedGroupId);
+            } else if (resolvedGroupId === 'grp_default') {
+              const { seedDefaultGroup } = await import('./groups/seed-default.js');
+              const seeded = seedDefaultGroup(yeaftDir, {});
+              groupHandle = seeded.group;
+            }
+            if (groupHandle) {
+              const { createCoordinator } = await import('./groups/coordinator.js');
+              groupCoordinator = createCoordinator(groupHandle, {
+                deliver: () => { /* no-op: 1:1 path, no fan-out */ },
+              });
+              if (!groupId) groupId = resolvedGroupId;
+            }
+          }
+        } catch (err) {
+          console.warn('[Unify] handleUnifyChat: ephemeral coordinator build failed', err?.message || err);
+          // Non-fatal — buildVpQueryOpts will return without router and
+          // route_forward will surface `router_unavailable` for that turn.
+        }
+      }
 
       // H2.f.5: dispatcher + InputQueue retired. Call engine.query() directly,
       // passing the flat conversation history as `messages` for context continuity.

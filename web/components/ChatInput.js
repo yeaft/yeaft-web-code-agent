@@ -612,14 +612,17 @@ export default {
         return;
       }
 
-      // ★ task-338-F4: Unify group-chat branch — when the user is viewing
-      // Unify and an active group is selected, route through the group
-      // coordinator instead of the legacy single-agent pipeline. Falls back
-      // to `unify_chat` on the backend if no default VP is resolvable.
-      const activeGroupId = groupsStore?.activeGroupId || null;
-      if (store.currentView === 'unify' && activeGroupId && trimmed) {
+      // Unify group-chat branch — Unify is conceptually a single conversation
+      // backed by a group (default: grp_default). We MUST always go through
+      // the group path so the agent builds a coordinator and wires
+      // ctx.router for the per-VP Engine query; otherwise `route_forward`
+      // bombs out with `router_unavailable` the moment a VP @-mentions
+      // another VP. The legacy `unify_chat` (no-group) path is left as a
+      // backend safety net only — the frontend never picks it.
+      if (store.currentView === 'unify' && trimmed) {
         const mentions = parseMentions(trimmed).mentions;
-        store.sendUnifyGroupChat({ groupId: activeGroupId, text: trimmed, mentions });
+        const groupId = groupsStore?.activeGroupId || 'grp_default';
+        store.sendUnifyGroupChat({ groupId, text: trimmed, mentions });
         inputText.value = '';
         delete store.inputDrafts[store.currentConversation];
         if (inputRef.value) inputRef.value.style.height = 'auto';
