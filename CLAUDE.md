@@ -78,19 +78,39 @@ chat-completions.js  — OpenAI Chat Completions API adapter (covers proxy, Deep
 - Each provider: `{ name, baseUrl, apiKey, protocol?, models[] }`
 - Protocol: `"anthropic"` or `"openai"` (default)
 
-### Memory System (agent/unify/memory/)
+### Memory System (agent/unify/memory/) — H2-AMS architecture
+
 ```
-store.js       — CRUD for memory entries (entries/*.md with YAML frontmatter)
-recall.js      — 3-step recall: keyword extraction -> scope+tag filter -> LLM select (top 7)
-extract.js     — Extract memories from conversations
-consolidate.js — Archive old messages + extract memories when budget exceeded
-dream.js       — Background memory maintenance (merge, prune, promote)
-types.js       — Memory kind taxonomy (fact, preference, skill, lesson, context, relation)
-scan.js        — Memory health analysis
+segment-store.js  — Atomic markdown segments under <scope>/segments/*.md (storage primitive)
+segment-sync.js   — Mirrors segment writes/deletes into the FTS index
+segment.js        — Segment record helpers
+index-db.js       — SQLite FTS5 index over all segments (one row per segment, per scope)
+store-v2.js       — Layer-A summary read/write at <scope>/summary.md
+ams.js            — Active Memory Set: three-layer cache (Resident summary / Recent / OnDemand)
+ams-registry.js   — Group-keyed AMS persistence (hydrate + persist with adjustRanThisSession)
+preflow.js        — Pre-turn FTS recall over relevant scopes -> system-prompt injection
+adjust.js         — Post-turn LLM AMS correction (one-shot per session per group)
+dream-v2.js       — Background memory maintenance: per-group diff -> triage -> merge -> apply
+budget.js         — Token budget accounting for AMS layers
+keywords.js       — FTS keyword extraction
+layout.js         — Scope -> filesystem path resolution
+summary-store.js  — Helpers around summary.md
+types.js          — Memory taxonomy (kept for type literals)
 ```
-- Memory 3D Model: Kind (what) x Scope (where) x Tags (how)
-- Entries stored as markdown files with YAML frontmatter in `~/.yeaft/memory/entries/`
-- Dream mode: periodic self-reflection to merge duplicates, prune stale, promote patterns
+
+**Scope is the only dimension.** Memory lives at scopes like:
+- `user/<userId>` — per-user profile / preferences (replaces the old shard system)
+- `vp/<vpId>` — per-VP persona memory (a VP is a scope owner)
+- `vp/<vpId>/sub/<subAgentId>` — sub-agent of a VP, nested scope
+- `group/<groupId>` — shared inside a group
+- `feature/<featureId>` — feature-scoped collaboration memory
+- `global` — universal
+
+**Read path (per turn):** `preflow.js` runs FTS over relevant scopes → injects matches into the system prompt. AMS holds the in-flight three-layer cache keyed by groupId.
+
+**Write path:** `store-v2.js` writes `<scope>/summary.md` (Layer A); `adjust.js` runs at most once per session per group to correct AMS via the LLM; `dream-v2.js` runs in the background and segments diffs into atomic segment files.
+
+**VP / multi-agent semantics:** A VP is a scope owner just like a user. Sub-agents of a VP nest under `vp/<vpId>/sub/<subAgentId>`. Group fan-out runs VPs in parallel; cross-VP visibility happens via scope-aware pre-flow recall, not via shared shards or a shared transcript. VP→VP explicit handoff uses the `route_forward` tool.
 
 ### Conversation Persistence (agent/unify/conversation/)
 ```
