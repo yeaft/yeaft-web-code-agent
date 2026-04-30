@@ -18,6 +18,8 @@
  *      ranges removed.
  */
 
+import { join } from 'node:path';
+import { existsSync } from 'node:fs';
 import { loadSession } from './session.js';
 import { sendToServer } from '../connection/buffer.js';
 import ctx from '../context.js';
@@ -38,6 +40,9 @@ import {
   setGroupDefaultVp,
   snapshotGroups,
 } from './groups/group-crud.js';
+import { openGroup, loadGroupMeta } from './groups/group-store.js';
+import { createCoordinator } from './groups/coordinator.js';
+import { seedDefaultGroup } from './groups/seed-default.js';
 
 /** @type {import('./session.js').Session | null} */
 let session = null;
@@ -603,9 +608,9 @@ export async function handleUnifyGroupChat(msg) {
     ? msg.groupId.trim()
     : 'grp_default';
 
-  await ensureSessionLoaded();
-
-  // Open the group; seed grp_default on the fly if absent.
+  // yeaftDir is a hard prerequisite for both session boot and group seeding;
+  // validate BEFORE booting so a misconfigured agent doesn't leave a zombie
+  // session lying around.
   const yeaftDir = ctx.CONFIG?.yeaftDir;
   if (!yeaftDir) {
     sendUnifyOutput({
@@ -616,30 +621,51 @@ export async function handleUnifyGroupChat(msg) {
     return;
   }
 
+  await ensureSessionLoaded();
+
+  // Cancel any prior in-flight dispatch BEFORE we fan out. One dispatch =
+  // one cancellation domain. Each per-VP runVpTurn shares this signal, so
+  // siblings within the same dispatch never abort each other (the bug
+  // before this fix: each runVpTurn replaced currentAbortCtrl, causing
+  // VP-B's start to silently kill VP-A's in-flight LLM call).
+  if (currentAbortCtrl && !currentAbortCtrl.signal.aborted) {
+    try { currentAbortCtrl.abort(); } catch { /* best-effort */ }
+  }
+  const dispatchAbortCtrl = new AbortController();
+  currentAbortCtrl = dispatchAbortCtrl;
+
+  // Open the group; seed grp_default on the fly if absent. Track
+  // seedFailed separately so a seed crash surfaces a different message
+  // than a genuinely-missing group.
   let groupHandle = null;
+  let seedFailed = false;
   try {
-    const { openGroup, loadGroupMeta } = await import('./groups/group-store.js');
-    const { join } = await import('node:path');
-    const { existsSync } = await import('node:fs');
     const root = join(yeaftDir, 'groups');
     const dir = join(root, groupId);
     if (existsSync(dir) && loadGroupMeta(dir)) {
       groupHandle = openGroup(root, groupId);
     } else if (groupId === 'grp_default') {
-      const { seedDefaultGroup } = await import('./groups/seed-default.js');
-      const seeded = seedDefaultGroup(yeaftDir, {});
-      groupHandle = seeded.group;
+      try {
+        const seeded = seedDefaultGroup(yeaftDir, {});
+        groupHandle = seeded.group;
+      } catch (seedErr) {
+        seedFailed = true;
+        console.warn('[Unify] unify_group_chat: seedDefaultGroup failed', seedErr?.message || seedErr);
+      }
     } else {
       console.warn('[Unify] unify_group_chat: groupId %s not found', groupId);
     }
   } catch (err) {
-    console.warn('[Unify] unify_group_chat: group open/seed failed', err?.message || err);
+    console.warn('[Unify] unify_group_chat: group open failed', err?.message || err);
   }
 
   if (!groupHandle) {
+    const errText = seedFailed
+      ? `⚠️ Failed to seed default group ${groupId} — check ~/.yeaft/ permissions.`
+      : `⚠️ Group ${groupId} not found.`;
     sendUnifyOutput({
       type: 'assistant',
-      message: { content: [{ type: 'text', text: `⚠️ Group ${groupId} not found.` }] },
+      message: { content: [{ type: 'text', text: errText }] },
     }, groupId);
     sendUnifyOutput({ type: 'result', result_text: '' }, groupId);
     return;
@@ -663,8 +689,6 @@ export async function handleUnifyGroupChat(msg) {
       }
       if (mutated) {
         try { groupHandle.close && groupHandle.close(); } catch { /* best-effort */ }
-        const { openGroup } = await import('./groups/group-store.js');
-        const { join } = await import('node:path');
         groupHandle = openGroup(join(yeaftDir, 'groups'), groupId);
         sendGroupRosterChanged(groupHandle.getMeta());
       }
@@ -674,8 +698,6 @@ export async function handleUnifyGroupChat(msg) {
       try {
         setGroupDefaultVp(yeaftDir, groupId, meta2.roster[0]);
         try { groupHandle.close && groupHandle.close(); } catch { /* best-effort */ }
-        const { openGroup } = await import('./groups/group-store.js');
-        const { join } = await import('node:path');
         groupHandle = openGroup(join(yeaftDir, 'groups'), groupId);
         sendGroupRosterChanged(groupHandle.getMeta());
       } catch { /* best-effort */ }
@@ -684,7 +706,6 @@ export async function handleUnifyGroupChat(msg) {
     console.warn('[Unify] unify_group_chat: auto-roster heal failed', err?.message || err);
   }
 
-  const { createCoordinator } = await import('./groups/coordinator.js');
   const captured = [];
   const coord = createCoordinator(groupHandle, {
     deliver: (vpId, envelope) => { captured.push({ vpId, envelope }); },
@@ -748,7 +769,9 @@ export async function handleUnifyGroupChat(msg) {
 
   // GC.1 Commit C: VP-level parallelism. Each selected VP runs its
   // turn concurrently via Promise.all. Intra-VP loops (LLM → tool →
-  // LLM) stay serial inside each runVpTurn call.
+  // LLM) stay serial inside each runVpTurn call. All siblings share
+  // the dispatch-level AbortSignal so a single user-initiated abort
+  // (or a timeout in any one VP) cancels the whole fan-out.
   //
   // Side-effect: VP-B's transcript no longer contains VP-A's reply
   // (they're concurrent). Cross-VP visibility moves to the explicit
@@ -761,6 +784,7 @@ export async function handleUnifyGroupChat(msg) {
         groupId,
         vpId,
         groupCoordinator: coord,
+        signal: dispatchAbortCtrl.signal,
       });
     } catch (err) {
       console.warn('[Unify] unify_group_chat: per-vp dispatch failed', vpId, err?.message || err);
@@ -896,11 +920,13 @@ async function ensureSessionLoaded() {
  * result to the flat conversation history.
  *
  * Private — only `handleUnifyGroupChat` calls this. Coordinator and groupId
- * are mandatory; callers MUST resolve a default group before invoking.
+ * are mandatory; callers MUST resolve a default group before invoking. The
+ * caller also owns the AbortController; we receive only the signal so
+ * sibling VPs in the same fan-out share one cancellation domain.
  *
- * @param {{ prompt: string, groupId: string, vpId: string|null, groupCoordinator: object }} args
+ * @param {{ prompt: string, groupId: string, vpId: string|null, groupCoordinator: object, signal: AbortSignal }} args
  */
-async function runVpTurn({ prompt, groupId, vpId, groupCoordinator }) {
+async function runVpTurn({ prompt, groupId, vpId, groupCoordinator, signal }) {
   if (!prompt?.trim()) return;
 
   try {
@@ -908,20 +934,17 @@ async function runVpTurn({ prompt, groupId, vpId, groupCoordinator }) {
       session.dreamScheduler.noteUserMessage();
     }
 
-    // Cancel any prior in-flight round before starting this one.
-    if (currentAbortCtrl && !currentAbortCtrl.signal.aborted) {
-      try { currentAbortCtrl.abort(); } catch { /* best-effort */ }
-    }
-    const abortCtrl = new AbortController();
-    currentAbortCtrl = abortCtrl;
-
     let queryTimer = null;
     const resetQueryTimer = () => {
       if (queryTimer) clearTimeout(queryTimer);
       queryTimer = setTimeout(() => {
-        if (!abortCtrl.signal.aborted) {
+        // The dispatch-level controller is owned by the parent; the
+        // timeout fans out by aborting it, which cancels every sibling
+        // VP-turn at once. That's the intended semantics — one timeout
+        // burns the whole turn — and matches user-initiated abort.
+        if (currentAbortCtrl && !currentAbortCtrl.signal.aborted) {
           console.error(`[Unify] query timeout after ${QUERY_TIMEOUT_MS / 1000}s of silence — aborting`);
-          abortCtrl.abort();
+          try { currentAbortCtrl.abort(); } catch { /* best-effort */ }
         }
       }, QUERY_TIMEOUT_MS);
     };
@@ -945,7 +968,7 @@ async function runVpTurn({ prompt, groupId, vpId, groupCoordinator }) {
       for await (const event of session.engine.query({
         prompt,
         messages: [...conversationMessages],
-        signal: abortCtrl.signal,
+        signal,
         ...queryOpts,
       })) {
         resetQueryTimer();
@@ -1028,10 +1051,6 @@ async function runVpTurn({ prompt, groupId, vpId, groupCoordinator }) {
       type: 'result',
       result_text: '',
     }, groupId);
-  } finally {
-    if (currentAbortCtrl && currentAbortCtrl.signal.aborted) {
-      // Aborted controllers stay where they are; a new query will replace.
-    }
   }
 }
 
@@ -1162,9 +1181,6 @@ export async function handleUnifyFetchSummaryHistory(msg = {}) {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     if (!yeaftDir) { reply({ revisions: [], archived: null, error: 'no_yeaft_dir' }); return; }
 
-    const { openGroup, loadGroupMeta } = await import('./groups/group-store.js');
-    const { join } = await import('node:path');
-    const { existsSync } = await import('node:fs');
     const root = join(yeaftDir, 'groups');
     const dir = join(root, groupId);
     if (!existsSync(dir) || !loadGroupMeta(dir)) {
