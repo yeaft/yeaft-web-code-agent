@@ -11,7 +11,7 @@
  * truth is `<scope>/memory.md` + `<scope>/summary.md`. AMS itself
  * doesn't write to disk — that's Dream's job.
  *
- * Privacy (DESIGN-v2 §2.2): `vp/<other>` scopes are ALWAYS filtered out
+ * Privacy: `vp/<other>` scopes are ALWAYS filtered out
  * for any worker that isn't `<other>`. The owning code passes its own
  * vpId at construction.
  */

@@ -557,8 +557,8 @@ export class Engine {
    * @param {{ profile?: string, entries?: object[] }} [memory]
    * @param {string} [compactSummary]
    * @param {string} [prompt] — user prompt (for skill relevance matching)
-   * @param {string} [memoryInjection] — task-287: prebuilt memory block
-   * @param {string} [userProfile] — user profile from user-memory shard store
+   * @param {string} [memoryInjection] — prebuilt memory block from preflow
+   * @param {string} [userProfile] — user profile string
    * @param {object} [vpPersona]
    * @param {{user?:string, group?:string, vp?:string}} [summaries]
    * @returns {string}
@@ -936,12 +936,10 @@ export class Engine {
     //       memory/preflow.js) — per-turn scoped recall
     //   (b) AMS snapshot (resident summaries + onDemand FTS hits) appended
     //       below
-    // The legacy entries-aggregate `buildMemoryInjection` (index.md / by-project /
-    // by-topic / timeline) was retired in the H2-AMS rip.
     let memoryInjection = '';
     let recallEntryCount = 0;
 
-    // R6 recall: append shard-based recall results to memory injection
+    // FTS5 recall: append per-turn scoped hits to memory injection
     const recallResult = await this.#recallMemory(prompt, {
       groupId,
       vpId: vpPersona && typeof vpPersona === 'object' && typeof vpPersona.vpId === 'string'

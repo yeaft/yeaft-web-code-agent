@@ -1,5 +1,5 @@
 /**
- * dream-v2/merge.js — DESIGN-v2 §15.
+ * dream-v2/merge.js.
  *
  * Pure-code stage between Triage and Apply.
  *

@@ -378,7 +378,7 @@ describe('loadMCPConfig', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// memoryV2 feature flag — DESIGN-v2 PR-E flipped the default to true
+// memoryV2 feature flag — H2-AMS default true
 // ═══════════════════════════════════════════════════════════════
 
 describe('loadConfig — memoryV2 flag', () => {

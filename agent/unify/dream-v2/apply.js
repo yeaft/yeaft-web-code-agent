@@ -1,5 +1,5 @@
 /**
- * dream-v2/apply.js — DESIGN-v2 §16 + §17.2.
+ * dream-v2/apply.js.
  *
  * Execute one merged-target action: either UPDATE an existing scope's
  * memory.md/summary.md, or CREATE a new one (currently topic-only).

@@ -1,5 +1,5 @@
 /**
- * dream-v2/runner.js — DESIGN-v2 §13.
+ * dream-v2/runner.js.
  *
  * Orchestrates one full dream pass:
  *
@@ -29,7 +29,7 @@
  *
  *   onProgress emits dream_progress events that the web bridge forwards
  *   as `unify_output` messages so the debug panel can render live state
- *   (DESIGN-v2 §19.4). All events flow through the same channel; no new
+ *  . All events flow through the same channel; no new
  *   WebSocket message type is introduced.
  *
  * Everything that touches a shell of the system (LLM, message store,

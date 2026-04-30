@@ -1,5 +1,5 @@
 /**
- * dream-v2/limits.js — DESIGN-v2 §18 constants.
+ * dream-v2/limits.js constants.
  *
  * Centralised so tests and runtime share one source of truth. Exposed
  * as both named exports and a `DEFAULT_LIMITS` object for `runDream()`

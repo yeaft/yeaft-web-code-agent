@@ -1,5 +1,5 @@
 /**
- * dream-v2/snapshot.js — DESIGN-v2 §16.3 + §10.
+ * dream-v2/snapshot.js.
  *
  * Pre-Apply backup of memory.md + summary.md to
  * `~/.yeaft/memory/.dream-bak/<ts>/<scope-path>/`. The runner takes a

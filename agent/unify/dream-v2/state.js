@@ -1,5 +1,5 @@
 /**
- * dream-v2/state.js — DESIGN-v2 §11.
+ * dream-v2/state.js.
  *
  * Two pieces of state, tracked separately:
  *

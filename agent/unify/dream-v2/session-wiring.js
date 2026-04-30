@@ -1,13 +1,12 @@
 /**
- * dream-v2/session-wiring.js — DESIGN-v2 §13 wire-up for session.js.
+ * dream-v2/session-wiring.js wire-up for session.js.
  *
  * Bridges the framework-agnostic `runDream` orchestrator (dream-v2/runner.js)
  * to the live yeaft session: groups store, conversation log, LLM adapter,
  * and the engine's progress event sink.
  *
  * The dream pipeline only activates when `config.memoryV2 === true`. When
- * the flag is off, this module is a no-op — the legacy R6 dream-scheduler
- * keeps running as before (session.js still wires it).
+ * the flag is off, this module is a no-op.
  */
 
 import { join } from 'path';
