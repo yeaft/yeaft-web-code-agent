@@ -223,6 +223,14 @@ export const useChatStore = defineStore('chat', {
     // the user's CURRENT filter (which can change while a reply streams).
     _currentUnifyGroupId: null,
 
+    // Per-VP turn routing: set transiently by handleUnifyOutput so that
+    // addMessageToConversation / appendToAssistant can route by turnId.
+    _currentUnifyVpId: null,
+    _currentUnifyTurnId: null,
+
+    // Active VP turns — keyed by turnId. Cleared on result or abort ack.
+    activeVpTurns: {},
+
     // H2.f.6: thread state retired. unifyThreads / unifyActiveThreadId /
     // unifyFeatureReplyThreadId / unifyJumpTarget / merge+fork results all
     // removed. Single conversation owns the message stream.
@@ -559,11 +567,17 @@ export const useChatStore = defineStore('chat', {
           // Bug 1: stamp the in-flight SEND-context group so messages land
           // in the originating group regardless of the user's current filter.
           const prevGroup = this._currentUnifyGroupId;
+          const prevVpId = this._currentUnifyVpId;
+          const prevTurnId = this._currentUnifyTurnId;
           if (msg.groupId) this._currentUnifyGroupId = msg.groupId;
+          if (msg.vpId) this._currentUnifyVpId = msg.vpId;
+          if (msg.turnId) this._currentUnifyTurnId = msg.turnId;
           try {
             this.handleClaudeOutput(conversationId, msg.data);
           } finally {
             this._currentUnifyGroupId = prevGroup;
+            this._currentUnifyVpId = prevVpId;
+            this._currentUnifyTurnId = prevTurnId;
           }
         }
         return;
@@ -970,6 +984,20 @@ export const useChatStore = defineStore('chat', {
         // change (the state is declared as a plain object, not reactive
         // per-key). Cheap because it only holds entries for VPs currently
         // typing — usually 0–5.
+        case 'vp_turn_start': {
+          if (!event.turnId || !event.vpId) break;
+          this.activeVpTurns = {
+            ...this.activeVpTurns,
+            [event.turnId]: { vpId: event.vpId, isStreaming: true },
+          };
+          break;
+        }
+        case 'unify_turn_aborted': {
+          if (!event.turnId) break;
+          const { [event.turnId]: _removed, ...rest } = this.activeVpTurns;
+          this.activeVpTurns = rest;
+          break;
+        }
         case 'vp_typing_start': {
           if (!event.vpId) break;
           const next = { ...(this.unifyVpTyping || {}) };
@@ -1763,6 +1791,21 @@ export const useChatStore = defineStore('chat', {
       if (this.unifyConversationId) {
         this.processingConversations[this.unifyConversationId] = false;
       }
+      this.activeVpTurns = {};
+    },
+    /**
+     * Per-VP stop: abort a single VP turn by turnId without affecting siblings.
+     */
+    cancelVpTurn(turnId) {
+      if (!this.unifyAgentId || !turnId) return;
+      this.sendWsMessage({
+        type: 'unify_abort_turn',
+        agentId: this.unifyAgentId,
+        turnId,
+      });
+      // Optimistic: remove from activeVpTurns immediately.
+      const { [turnId]: _removed, ...rest } = this.activeVpTurns;
+      this.activeVpTurns = rest;
     },
     answerUserQuestion(requestId, answers, conversationId) { convHelpers.answerUserQuestion(this, requestId, answers, conversationId); },
     refreshAgents() { convHelpers.refreshAgents(this); },

@@ -27,7 +27,10 @@ export default {
         :vp-id="turn.speakerVpId"
         :timestamp="turn.speakerTimestamp || 0"
         :state-cause="turn.speakerStateCause || ''"
+        :turn-id="turn.turnId || ''"
+        :show-stop="turn.isStreaming && !!turn.turnId"
         @open-detail="onOpenVpDetail"
+        @stop-turn="onStopTurn"
       />
 
       <!-- 1. Text content -->
@@ -395,6 +398,17 @@ export default {
       }
     };
 
+    const onStopTurn = (turnId) => {
+      if (!turnId) return;
+      try {
+        if (typeof store.cancelVpTurn === 'function') {
+          store.cancelVpTurn(turnId);
+        }
+      } catch (e) {
+        console.error('[AssistantTurn] cancelVpTurn failed:', e);
+      }
+    };
+
     // task-334-ui-c (C): per-message hover timestamp — mirrors MessageItem's
     // messageTime / messageTimeFull pattern. Hidden by default via CSS; the
     // `.turn-footer:hover .turn-time` rule reveals it on hover.
@@ -421,6 +435,7 @@ export default {
 
     return {
       onOpenVpDetail,
+      onStopTurn,
       turnTime,
       turnTimeFull,
       copied,

@@ -20,6 +20,7 @@
 
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { loadSession } from './session.js';
 import { sendToServer } from '../connection/buffer.js';
 import ctx from '../context.js';
@@ -53,6 +54,15 @@ let session = null;
  * @type {AbortController | null}
  */
 let currentAbortCtrl = null;
+
+/**
+ * Per-VP-turn AbortControllers. Maps `turnId` → `AbortController`.
+ * Each VP-turn in a fan-out gets its own controller so it can be stopped
+ * independently (per-VP Stop button). `handleUnifyAbortTurn` looks up by
+ * turnId to abort a single VP. `handleUnifyAbortAll` iterates and aborts all.
+ * @type {Map<string, AbortController>}
+ */
+const turnAbortCtrls = new Map();
 
 /** Query timeout in ms — abort if LLM doesn't respond within this window */
 const QUERY_TIMEOUT_MS = 120_000;
@@ -108,25 +118,28 @@ function isPermissionErrorMsg(msg) {
 
 /**
  * Send a unify_output message carrying claude_output-format data.
- * Optional `groupId` tags every emitted assistant/tool/user mirror with
- * the originating group so the frontend can stamp arriving messages with
- * the SEND-context group.
+ * Envelope fields: conversationId, groupId, vpId, turnId — the last two
+ * let the frontend route incremental deltas to the correct per-VP message block.
  */
-function sendUnifyOutput(data, groupId) {
+function sendUnifyOutput(data, { groupId, vpId, turnId } = {}) {
   sendToServer({
     type: 'unify_output',
     conversationId: unifyConversationId,
     ...(groupId ? { groupId } : {}),
+    ...(vpId ? { vpId } : {}),
+    ...(turnId ? { turnId } : {}),
     data,
   });
 }
 
 /** Send a unify_output event (non-claude_output metadata). */
-function sendUnifyEvent(event, groupId) {
+function sendUnifyEvent(event, { groupId, vpId, turnId } = {}) {
   sendToServer({
     type: 'unify_output',
     conversationId: unifyConversationId,
     ...(groupId ? { groupId } : {}),
+    ...(vpId ? { vpId } : {}),
+    ...(turnId ? { turnId } : {}),
     event,
   });
 }
@@ -402,11 +415,11 @@ export function installUnifyRuntimeBridge(s) {
  * H2.f.2: no longer stamps a threadId on outgoing claude_output frames.
  *
  * @param {object} event — engine event (text_delta / tool_call / …)
- * @param {{assistantTextParts:string[], toolCallsAccum:Array, toolResultsAccum:Array, resetQueryTimer:Function, groupId?:string}} hctx
+ * @param {{assistantTextParts:string[], toolCallsAccum:Array, toolResultsAccum:Array, resetQueryTimer:Function, groupId?:string, vpId?:string, turnId?:string}} hctx
  */
 function handleEngineEvent(event, hctx) {
   hctx.resetQueryTimer();
-  const gid = hctx && hctx.groupId;
+  const envelope = { groupId: hctx.groupId, vpId: hctx.vpId, turnId: hctx.turnId };
 
   switch (event.type) {
     case 'text_delta':
@@ -414,11 +427,11 @@ function handleEngineEvent(event, hctx) {
       sendUnifyOutput({
         type: 'assistant',
         message: { content: [{ type: 'text', text: event.text }] },
-      }, gid);
+      }, envelope);
       break;
 
     case 'thinking_delta':
-      sendUnifyEvent({ type: 'thinking_delta', text: event.text }, gid);
+      sendUnifyEvent({ type: 'thinking_delta', text: event.text }, envelope);
       break;
 
     case 'tool_call':
@@ -436,7 +449,7 @@ function handleEngineEvent(event, hctx) {
       sendUnifyOutput({
         type: 'assistant',
         message: { content: [] },
-      }, gid);
+      }, envelope);
       sendUnifyOutput({
         type: 'assistant',
         message: {
@@ -447,7 +460,7 @@ function handleEngineEvent(event, hctx) {
             input: event.input,
           }],
         },
-      }, gid);
+      }, envelope);
       break;
 
     case 'tool_start':
@@ -455,7 +468,7 @@ function handleEngineEvent(event, hctx) {
         type: 'tool_start',
         id: event.id,
         name: event.name,
-      }, gid);
+      }, envelope);
       break;
 
     case 'tool_end':
@@ -475,7 +488,7 @@ function handleEngineEvent(event, hctx) {
           content: event.output || '',
           is_error: event.isError || false,
         }],
-      }, gid);
+      }, envelope);
       break;
 
     case 'turn_start':
@@ -489,7 +502,7 @@ function handleEngineEvent(event, hctx) {
         type: 'context_usage',
         inputTokens: event.inputTokens,
         outputTokens: event.outputTokens,
-      }, gid);
+      }, envelope);
       break;
 
     case 'recall':
@@ -497,7 +510,7 @@ function handleEngineEvent(event, hctx) {
         type: 'recall',
         entryCount: event.entryCount,
         cached: event.cached,
-      }, gid);
+      }, envelope);
       break;
 
     case 'consolidate':
@@ -507,7 +520,7 @@ function handleEngineEvent(event, hctx) {
         type: 'consolidate',
         archivedCount: event.archivedCount,
         extractedCount: event.extractedCount,
-      }, gid);
+      }, envelope);
       break;
 
     case 'fallback':
@@ -516,7 +529,7 @@ function handleEngineEvent(event, hctx) {
         from: event.from,
         to: event.to,
         reason: event.reason,
-      }, gid);
+      }, envelope);
       break;
 
     case 'reflection':
@@ -529,7 +542,7 @@ function handleEngineEvent(event, hctx) {
         content: event.content,
         durationMs: event.durationMs,
         error: event.error,
-      }, gid);
+      }, envelope);
       break;
 
     case 'debug_turn':
@@ -547,7 +560,7 @@ function handleEngineEvent(event, hctx) {
         stopReason: event.stopReason,
         rawRequest: event.rawRequest,
         rawResponse: event.rawResponse,
-      }, gid);
+      }, envelope);
       break;
 
     case 'error': {
@@ -563,7 +576,7 @@ function handleEngineEvent(event, hctx) {
                 text: '⚠️ Cannot write to ~/.yeaft/ directory — some features (memory, history) are unavailable. Please check directory permissions: `chmod -R u+rw ~/.yeaft/`',
               }],
             },
-          }, gid);
+          }, envelope);
         }
       } else {
         sendUnifyOutput({
@@ -571,7 +584,7 @@ function handleEngineEvent(event, hctx) {
           message: {
             content: [{ type: 'text', text: `⚠️ Error: ${errMsg}` }],
           },
-        }, gid);
+        }, envelope);
       }
       break;
     }
@@ -616,21 +629,23 @@ export async function handleUnifyGroupChat(msg) {
     sendUnifyOutput({
       type: 'assistant',
       message: { content: [{ type: 'text', text: '⚠️ Unify session error: no yeaft directory configured.' }] },
-    }, groupId);
-    sendUnifyOutput({ type: 'result', result_text: '' }, groupId);
+    }, { groupId });
+    sendUnifyOutput({ type: 'result', result_text: '' }, { groupId });
     return;
   }
 
   await ensureSessionLoaded();
 
-  // Cancel any prior in-flight dispatch BEFORE we fan out. One dispatch =
-  // one cancellation domain. Each per-VP runVpTurn shares this signal, so
-  // siblings within the same dispatch never abort each other (the bug
-  // before this fix: each runVpTurn replaced currentAbortCtrl, causing
-  // VP-B's start to silently kill VP-A's in-flight LLM call).
+  // Cancel any prior in-flight dispatch BEFORE we fan out.
   if (currentAbortCtrl && !currentAbortCtrl.signal.aborted) {
     try { currentAbortCtrl.abort(); } catch { /* best-effort */ }
   }
+  // Also abort any lingering per-VP controllers from the prior dispatch.
+  for (const ctrl of turnAbortCtrls.values()) {
+    try { if (!ctrl.signal.aborted) ctrl.abort(); } catch { /* best-effort */ }
+  }
+  turnAbortCtrls.clear();
+
   const dispatchAbortCtrl = new AbortController();
   currentAbortCtrl = dispatchAbortCtrl;
 
@@ -666,8 +681,8 @@ export async function handleUnifyGroupChat(msg) {
     sendUnifyOutput({
       type: 'assistant',
       message: { content: [{ type: 'text', text: errText }] },
-    }, groupId);
-    sendUnifyOutput({ type: 'result', result_text: '' }, groupId);
+    }, { groupId });
+    sendUnifyOutput({ type: 'result', result_text: '' }, { groupId });
     return;
   }
 
@@ -724,8 +739,8 @@ export async function handleUnifyGroupChat(msg) {
     sendUnifyOutput({
       type: 'assistant',
       message: { content: [{ type: 'text', text: `⚠️ Group dispatch error: ${err?.message || err}` }] },
-    }, groupId);
-    sendUnifyOutput({ type: 'result', result_text: '' }, groupId);
+    }, { groupId });
+    sendUnifyOutput({ type: 'result', result_text: '' }, { groupId });
     return;
   }
 
@@ -738,12 +753,20 @@ export async function handleUnifyGroupChat(msg) {
     sendUnifyOutput({
       type: 'assistant',
       message: { content: [{ type: 'text', text: '⚠️ No VP available to respond — check the group roster.' }] },
-    }, groupId);
-    sendUnifyOutput({ type: 'result', result_text: '' }, groupId);
+    }, { groupId });
+    sendUnifyOutput({ type: 'result', result_text: '' }, { groupId });
     return;
   }
 
+  // Mint a dispatch ID for this fan-out — each VP gets a unique turnId.
+  const dispatchId = randomUUID().slice(0, 8);
+
+  // Snapshot conversation history BEFORE fan-out starts. Each VP reads
+  // from this consistent point; no VP sees another VP's in-flight output.
+  const baseSnapshot = [...conversationMessages];
+
   for (const { vpId, envelope } of captured) {
+    const turnId = `${dispatchId}:${vpId}`;
     try {
       sendUnifyEvent({
         type: 'group_message',
@@ -754,7 +777,7 @@ export async function handleUnifyGroupChat(msg) {
         mentions,
         trigger: envelope?.trigger || 'fallback',
         ts: Date.now(),
-      });
+      }, { groupId, vpId, turnId });
     } catch { /* never crash WS pipeline */ }
 
     try {
@@ -762,40 +785,43 @@ export async function handleUnifyGroupChat(msg) {
         type: 'vp_typing_start',
         groupId,
         vpId,
+        turnId,
         ts: Date.now(),
-      });
+      }, { groupId, vpId, turnId });
     } catch { /* never crash WS pipeline */ }
   }
 
-  // GC.1 Commit C: VP-level parallelism. Each selected VP runs its
-  // turn concurrently via Promise.all. Intra-VP loops (LLM → tool →
-  // LLM) stay serial inside each runVpTurn call. All siblings share
-  // the dispatch-level AbortSignal so a single user-initiated abort
-  // (or a timeout in any one VP) cancels the whole fan-out.
-  //
-  // Side-effect: VP-B's transcript no longer contains VP-A's reply
-  // (they're concurrent). Cross-VP visibility moves to the explicit
-  // route_forward tool. The group jsonl log remains the source of
-  // truth for full-fidelity replay.
+  // Per-VP parallel fan-out. Each VP gets its own AbortController
+  // (stoppable individually via per-VP Stop button) and reads from
+  // the shared baseSnapshot. On completion (or abort), results are
+  // atomically appended to conversationMessages.
   await Promise.all(captured.map(async ({ vpId }) => {
+    const turnId = `${dispatchId}:${vpId}`;
+    const vpAbort = new AbortController();
+    turnAbortCtrls.set(turnId, vpAbort);
+
     try {
       await runVpTurn({
         prompt: `@vp-${vpId} ${text}`,
         groupId,
         vpId,
+        turnId,
         groupCoordinator: coord,
-        abortCtrl: dispatchAbortCtrl,
+        vpAbort,
+        baseSnapshot,
       });
     } catch (err) {
       console.warn('[Unify] unify_group_chat: per-vp dispatch failed', vpId, err?.message || err);
     } finally {
+      turnAbortCtrls.delete(turnId);
       try {
         sendUnifyEvent({
           type: 'vp_typing_end',
           groupId,
           vpId,
+          turnId,
           ts: Date.now(),
-        });
+        }, { groupId, vpId, turnId });
       } catch { /* never crash WS pipeline */ }
     }
   }));
@@ -919,18 +945,18 @@ async function ensureSessionLoaded() {
  * coordinator-bound router, stream events to the frontend, and append the
  * result to the flat conversation history.
  *
- * Private — only `handleUnifyGroupChat` calls this. Coordinator and groupId
- * are mandatory; callers MUST resolve a default group before invoking. The
- * caller also owns the AbortController; we receive the whole controller
- * (not just its signal) so the per-VP query-timeout can abort exactly the
- * dispatch it belongs to — and only if that controller is still the
- * module-active one. This avoids a stale-timer-from-an-aborted-dispatch
- * killing the next dispatch.
+ * Private — only `handleUnifyGroupChat` calls this. Each VP-turn gets its
+ * own AbortController (`vpAbort`) so it can be stopped individually. The
+ * shared `baseSnapshot` is the conversation history at fan-out start — no
+ * VP sees another VP's in-flight output. After the turn finishes (or is
+ * aborted), the VP's output is atomically appended to `conversationMessages`.
  *
- * @param {{ prompt: string, groupId: string, vpId: string|null, groupCoordinator: object, abortCtrl: AbortController }} args
+ * @param {{ prompt: string, groupId: string, vpId: string, turnId: string, groupCoordinator: object, vpAbort: AbortController, baseSnapshot: Array }} args
  */
-async function runVpTurn({ prompt, groupId, vpId, groupCoordinator, abortCtrl }) {
+async function runVpTurn({ prompt, groupId, vpId, turnId, groupCoordinator, vpAbort, baseSnapshot }) {
   if (!prompt?.trim()) return;
+
+  const envelope = { groupId, vpId, turnId };
 
   try {
     if (session?.dreamScheduler) {
@@ -941,25 +967,22 @@ async function runVpTurn({ prompt, groupId, vpId, groupCoordinator, abortCtrl })
     const resetQueryTimer = () => {
       if (queryTimer) clearTimeout(queryTimer);
       queryTimer = setTimeout(() => {
-        // Abort the captured dispatch controller — but only if it is
-        // still the module-active one. If a later dispatch already
-        // replaced it, our timer is stale and must NOT abort whatever
-        // the new dispatch installed (that was the original race).
-        if (abortCtrl === currentAbortCtrl && !abortCtrl.signal.aborted) {
-          console.error(`[Unify] query timeout after ${QUERY_TIMEOUT_MS / 1000}s of silence — aborting`);
-          try { abortCtrl.abort(); } catch { /* best-effort */ }
+        if (!vpAbort.signal.aborted) {
+          console.error(`[Unify] query timeout after ${QUERY_TIMEOUT_MS / 1000}s of silence — aborting VP ${vpId}`);
+          try { vpAbort.abort(); } catch { /* best-effort */ }
         }
       }, QUERY_TIMEOUT_MS);
     };
     resetQueryTimer();
+
+    // Emit turn_start so frontend can create the message block.
+    sendUnifyEvent({ type: 'vp_turn_start', vpId, turnId, groupId }, envelope);
 
     try {
       const assistantTextParts = [];
       const toolCallsAccum = [];
       const toolResultsAccum = [];
 
-      // H2.f.5: dispatcher + InputQueue retired. Call engine.query() directly,
-      // passing the flat conversation history as `messages` for context continuity.
       const queryOpts = buildVpQueryOpts({ vpId, groupCoordinator, groupId });
       const handlerCtx = {
         assistantTextParts,
@@ -967,50 +990,30 @@ async function runVpTurn({ prompt, groupId, vpId, groupCoordinator, abortCtrl })
         toolResultsAccum,
         resetQueryTimer,
         groupId,
+        vpId,
+        turnId,
       };
       for await (const event of session.engine.query({
         prompt,
-        messages: [...conversationMessages],
-        signal: abortCtrl.signal,
+        messages: baseSnapshot,
+        signal: vpAbort.signal,
         ...queryOpts,
       })) {
         resetQueryTimer();
         handleEngineEvent(event, handlerCtx);
       }
 
-      // Accumulate messages for context continuity.
-      conversationMessages.push({ role: 'user', content: prompt });
-
-      const fullText = assistantTextParts.join('');
-      if (fullText || toolCallsAccum.length > 0) {
-        const assistantMsg = { role: 'assistant', content: fullText };
-        if (toolCallsAccum.length > 0) {
-          assistantMsg.toolCalls = toolCallsAccum.map(tc => ({
-            id: tc.id,
-            name: tc.name,
-            input: tc.input,
-          }));
-        }
-        conversationMessages.push(assistantMsg);
-
-        for (const tr of toolResultsAccum) {
-          conversationMessages.push({
-            role: 'tool',
-            toolCallId: tr.toolCallId,
-            content: tr.content,
-            isError: tr.isError,
-          });
-        }
-      }
+      // Turn completed — atomically append this VP's output to shared history.
+      appendTurnToHistory(prompt, assistantTextParts, toolCallsAccum, toolResultsAccum);
 
       sendUnifyOutput({
         type: 'assistant',
         message: { content: [] },
-      }, groupId);
+      }, envelope);
       sendUnifyOutput({
         type: 'result',
         result_text: '',
-      }, groupId);
+      }, envelope);
     } finally {
       if (queryTimer) clearTimeout(queryTimer);
     }
@@ -1020,7 +1023,8 @@ async function runVpTurn({ prompt, groupId, vpId, groupCoordinator, abortCtrl })
       sendUnifyOutput({
         type: 'result',
         result_text: '',
-      }, groupId);
+        stopped: true,
+      }, envelope);
       return;
     }
 
@@ -1037,7 +1041,7 @@ async function runVpTurn({ prompt, groupId, vpId, groupCoordinator, abortCtrl })
               text: '⚠️ Cannot write to ~/.yeaft/ directory — some features (memory, history) are unavailable. Please check directory permissions: `chmod -R u+rw ~/.yeaft/`',
             }],
           },
-        }, groupId);
+        }, envelope);
       }
     } else {
       sendUnifyOutput({
@@ -1048,12 +1052,42 @@ async function runVpTurn({ prompt, groupId, vpId, groupCoordinator, abortCtrl })
             text: `⚠️ Session error: ${err.message}`,
           }],
         },
-      }, groupId);
+      }, envelope);
     }
     sendUnifyOutput({
       type: 'result',
       result_text: '',
-    }, groupId);
+    }, envelope);
+  }
+}
+
+/**
+ * Atomically append a completed VP-turn's messages to the shared
+ * conversation history. Called once at turn end (not during streaming).
+ */
+function appendTurnToHistory(prompt, assistantTextParts, toolCallsAccum, toolResultsAccum) {
+  conversationMessages.push({ role: 'user', content: prompt });
+
+  const fullText = assistantTextParts.join('');
+  if (fullText || toolCallsAccum.length > 0) {
+    const assistantMsg = { role: 'assistant', content: fullText };
+    if (toolCallsAccum.length > 0) {
+      assistantMsg.toolCalls = toolCallsAccum.map(tc => ({
+        id: tc.id,
+        name: tc.name,
+        input: tc.input,
+      }));
+    }
+    conversationMessages.push(assistantMsg);
+
+    for (const tr of toolResultsAccum) {
+      conversationMessages.push({
+        role: 'tool',
+        toolCallId: tr.toolCallId,
+        content: tr.content,
+        isError: tr.isError,
+      });
+    }
   }
 }
 
@@ -1072,6 +1106,11 @@ export function handleUnifyAbortThread(_msg = {}) {
     try { currentAbortCtrl.abort(); aborted.push('main'); } catch { /* best-effort */ }
   }
   currentAbortCtrl = null;
+  // Also abort all per-VP turn controllers.
+  for (const [turnId, ctrl] of turnAbortCtrls) {
+    try { if (!ctrl.signal.aborted) { ctrl.abort(); aborted.push(turnId); } } catch { /* best-effort */ }
+  }
+  turnAbortCtrls.clear();
   sendUnifyEvent({ type: 'unify_aborted', aborted, all: false });
   return { aborted, all: false };
 }
@@ -1086,8 +1125,35 @@ export function handleUnifyAbortAll() {
     try { currentAbortCtrl.abort(); aborted.push('main'); } catch { /* best-effort */ }
   }
   currentAbortCtrl = null;
+  // Also abort all per-VP turn controllers.
+  for (const [turnId, ctrl] of turnAbortCtrls) {
+    try { if (!ctrl.signal.aborted) { ctrl.abort(); aborted.push(turnId); } } catch { /* best-effort */ }
+  }
+  turnAbortCtrls.clear();
   sendUnifyEvent({ type: 'unify_aborted', aborted, all: true });
   return { aborted, all: true };
+}
+
+/**
+ * Per-VP abort: stops a single VP turn by turnId without affecting siblings.
+ * Frontend sends `{ type: 'unify_abort_turn', turnId }`.
+ * @param {{ turnId?: string }} msg
+ */
+export function handleUnifyAbortTurn(msg = {}) {
+  const { turnId } = msg;
+  if (!turnId) {
+    sendUnifyEvent({ type: 'unify_turn_aborted', turnId: null, success: false });
+    return;
+  }
+  const ctrl = turnAbortCtrls.get(turnId);
+  if (ctrl && !ctrl.signal.aborted) {
+    try { ctrl.abort(); } catch { /* best-effort */ }
+    turnAbortCtrls.delete(turnId);
+    sendUnifyEvent({ type: 'unify_turn_aborted', turnId, success: true });
+  } else {
+    turnAbortCtrls.delete(turnId);
+    sendUnifyEvent({ type: 'unify_turn_aborted', turnId, success: false });
+  }
 }
 
 /**
@@ -1352,13 +1418,13 @@ export async function handleUnifyLoadHistory(msg) {
 
   for (const m of messages) {
     if (m.role === 'user') {
-      sendUnifyOutput({ type: 'user', message: { content: m.content } }, m.groupId || null);
+      sendUnifyOutput({ type: 'user', message: { content: m.content } }, { groupId: m.groupId || null });
     } else if (m.role === 'assistant') {
       sendUnifyOutput({
         type: 'assistant',
         message: { content: [{ type: 'text', text: m.content }] },
-      }, m.groupId || null);
-      sendUnifyOutput({ type: 'result', result_text: '' }, m.groupId || null);
+      }, { groupId: m.groupId || null });
+      sendUnifyOutput({ type: 'result', result_text: '' }, { groupId: m.groupId || null });
     }
   }
 
