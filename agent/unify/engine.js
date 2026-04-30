@@ -1875,4 +1875,29 @@ export class Engine {
 
   /** @returns {object} — Config with fastModel as model (for internal tasks) */
   get fastConfig() { return this.#fastConfig; }
+
+  /**
+   * Run a one-shot fast-model call to produce a compact summary.
+   * Used by the web bridge's in-memory history compactor
+   * (`agent/unify/history-compact.js`) — kept on the engine so callers
+   * don't reach into the private adapter field.
+   *
+   * @param {{system: string, prompt: string, maxTokens?: number}} args
+   * @returns {Promise<string>} — summary text (trimmed); '' on failure
+   */
+  async summarizeForCompact({ system, prompt, maxTokens = 1024 } = {}) {
+    if (!system || !prompt) return '';
+    try {
+      const out = await this.#adapter.call({
+        model: this.#fastConfig.model,
+        system,
+        messages: [{ role: 'user', content: prompt }],
+        maxTokens,
+      });
+      return (out?.text || '').trim();
+    } catch (err) {
+      console.warn('[Engine] summarizeForCompact failed:', err?.message || err);
+      return '';
+    }
+  }
 }
