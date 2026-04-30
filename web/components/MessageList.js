@@ -152,9 +152,6 @@ export default {
           class="vp-typing-row"
         >
           <VpSpeakerHeader :vp-id="vpId" :timestamp="0" state-cause="" />
-          <span class="vp-speaker-typing" role="status">
-            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-          </span>
         </div>
         <!-- Typing dots: visible when processing but not streaming text -->
         <div v-if="previewShowTypingDots" class="typing-indicator" :class="waitingStatus ? ('status-' + waitingStatus) : ''">
@@ -465,13 +462,6 @@ export default {
       return store.agents.filter(a => a.online);
     });
 
-    // task-334-ui-b: gate VP speaker header rendering on the multi-VP
-    // feature flag. Until ops toggles it on, legacy 1:1 turns render the
-    // pre-existing layout exactly as before (zero-diff UX for chat mode).
-    const multiVpEnabled = Vue.computed(() => {
-      return !!(store.unifyStatus && store.unifyStatus.multiVp);
-    });
-
     // Turn aggregation: group flat messages into turn groups
     const turnGroups = Vue.computed(() => {
       const messages = store.messages;
@@ -492,7 +482,17 @@ export default {
             // task-334-ui-b: resolve speaker header visibility at the point
             // we flush the turn, AFTER all messages in it have been visited
             // (so speakerVpId has latched). Collapse same-speaker-in-a-row.
-            if (multiVpEnabled.value && currentTurn.speakerVpId) {
+            //
+            // Render the header purely from data: if the agent has stamped
+            // a `speakerVpId` onto any message in this turn, show it.
+            // Previously this was gated on a `multiVp` feature flag, but
+            // that caused a UX bug — the standalone `vp-typing-row` renders
+            // VpSpeakerHeader unconditionally, so when the flag was off the
+            // avatar/name appeared while typing and vanished the moment the
+            // stream ended. The flag still gates upstream group features
+            // (creation, @-mention dispatch); rendering of already-stamped
+            // turns must follow the data.
+            if (currentTurn.speakerVpId) {
               currentTurn.showSpeakerHeader =
                 currentTurn.speakerVpId !== lastShownSpeakerVpId;
               lastShownSpeakerVpId = currentTurn.speakerVpId;
