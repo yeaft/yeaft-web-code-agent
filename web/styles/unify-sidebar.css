@@ -229,7 +229,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-muted, #86868b);
-  font-size: 12px;
+  font-size: 13px;
 }
 .us-unread {
   flex: 0 0 auto;

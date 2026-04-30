@@ -366,7 +366,7 @@ export default {
     // - SubAgentPanel.open.expanded: width 40%, min 360, max 600 (web/styles/subagent-panel.css)
     // Unify detail is resizable; MIN matches ExpertPanel base, DEFAULT clamped like SubAgentPanel expanded.
     const DETAIL_MIN_WIDTH = 320;
-    const DETAIL_DEFAULT_WIDTH = Math.min(600, Math.max(360, Math.round(window.innerWidth * 0.4)));
+    const DETAIL_DEFAULT_WIDTH = Math.max(DETAIL_MIN_WIDTH, Math.round(window.innerWidth * 0.25));
     const savedDetailWidth = localStorage.getItem('unify-debug-width');
     const detailWidth = Vue.ref(savedDetailWidth ? parseInt(savedDetailWidth, 10) : DETAIL_DEFAULT_WIDTH);
 
