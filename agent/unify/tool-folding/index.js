@@ -23,12 +23,27 @@ export { buildFallbackStub } from './fallback-stub.js';
 
 /**
  * Collapse messages[startIdx..endIdx] (inclusive) into a single
- * `{ role: 'assistant', content }` message. Returns a NEW array; does not
- * mutate the input.
+ * `{ role: 'user', content }` reflection message. Returns a NEW array; does
+ * not mutate the input.
  *
- * The original assistant+tool sequence (the action arc) is replaced by the
- * reflection; user messages within that range stay put (defensive — the
- * caller normally passes a range that contains only assistant+tool).
+ * The original assistant+tool sequence (the action arc) is replaced by ONE
+ * synthetic user message carrying the reflection summary. User messages
+ * that happened to appear inside the range stay put (defensive — the caller
+ * normally passes a range that contains only assistant+tool).
+ *
+ * Why role='user' (not 'assistant'):
+ *   The Anthropic Messages API requires the messages array to end with a
+ *   user message before the next assistant turn. If we collapsed into an
+ *   assistant message and the reflection happened to land at the tail
+ *   (e.g. immediately before #applyPendingT2Reflections fires its next
+ *   query), the API rejects the request with "model does not support
+ *   assistant message prefill".
+ *
+ *   Following Claude Code's compact pattern, we wrap the reflection as a
+ *   synthetic user message — the model treats it as a context-recovery
+ *   directive and continues from there. The opening line ("The previous N
+ *   tool calls have been folded ...") plus the closing "Continue from
+ *   here." make it unambiguous that this is not a fresh user prompt.
  *
  * @param {Array} messages
  * @param {number} startIdx
@@ -43,13 +58,28 @@ export function collapseRangeToReflection(messages, startIdx, endIdx, reflection
   const collapsed = messages.slice(startIdx, endIdx + 1);
   const after = messages.slice(endIdx + 1);
 
+  // Count tool_use occurrences inside the collapsed range so the wrapper
+  // text can name how many calls were folded. Falls back to "previous"
+  // wording when no tool calls are detected.
+  let toolCount = 0;
+  for (const m of collapsed) {
+    if (m && m.role === 'assistant' && Array.isArray(m.toolCalls)) {
+      toolCount += m.toolCalls.length;
+    }
+  }
+
   // Preserve any user messages that happened to appear inside the range
   // (not expected per V7 spec, but defensive). Everything else (assistant +
-  // tool) is replaced by ONE assistant reflection message.
+  // tool) is replaced by ONE synthetic user reflection message.
   const preservedUsers = collapsed.filter(m => m && m.role === 'user');
+  const header = toolCount > 0
+    ? `The previous ${toolCount} tool call${toolCount === 1 ? '' : 's'} have been folded for context efficiency.`
+    : 'The previous tool calls have been folded for context efficiency.';
+  const wrappedContent =
+    `${header}\n\nSummary:\n${reflectionContent}\n\nContinue from here.`;
   const reflectionMsg = {
-    role: 'assistant',
-    content: reflectionContent,
+    role: 'user',
+    content: wrappedContent,
     _reflection: true,
   };
   return [...before, ...preservedUsers, reflectionMsg, ...after];
