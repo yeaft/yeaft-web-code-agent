@@ -7,11 +7,12 @@ import GroupInviteModal from './GroupInviteModal.js';
 import GroupMemberEditor from './GroupMemberEditor.js';
 import FeatureMessageRejectToast from './FeatureMessageRejectToast.js';
 import WorkbenchPanel from './WorkbenchPanel.js';
+import UnifyDebugPanel from './UnifyDebugPanel.js';
 import { parseMentions } from '../utils/parseMentions.js';
 
 export default {
   name: 'UnifyPage',
-  components: { ChatInput, MessageList, UnifySettings, UnifySidebar, VpDetailView, GroupInviteModal, GroupMemberEditor, FeatureMessageRejectToast, WorkbenchPanel },
+  components: { ChatInput, MessageList, UnifySettings, UnifySidebar, VpDetailView, GroupInviteModal, GroupMemberEditor, FeatureMessageRejectToast, WorkbenchPanel, UnifyDebugPanel },
   template: `
     <div class="unify-page">
       <!-- Mobile sidebar overlay -->
@@ -144,127 +145,13 @@ export default {
       <!-- Right Detail Panel -->
       <aside class="unify-detail" :class="{ collapsed: detailCollapsed, resizing: isResizingDetail }" :style="detailWidthStyle" ref="detailPanel">
         <div class="unify-detail-drag-handle" :class="{ active: isResizingDetail }" @mousedown.prevent="startDetailResize"></div>
-        <!-- Debug Mode: show per-turn debug info -->
-        <div v-if="debugMode" class="unify-debug-panel">
-          <div class="unify-debug-header">
-            <span class="unify-debug-title">{{ $t('unify.debug') }}</span>
-            <span class="unify-debug-count" v-if="store.unifyDebugTurnsForActiveGroup.length > 0">{{ store.unifyDebugTurnsForActiveGroup.length }} {{ $t('unify.debugTurns') }}</span>
-            <!-- task-344: detail / concise toggle (global, persisted) -->
-            <button
-              class="unify-debug-toggle-chip"
-              :class="{ active: store.unifyDebugDetailMode }"
-              @click="store.setUnifyDebugDetailMode(!store.unifyDebugDetailMode)"
-              :title="store.unifyDebugDetailMode ? ($t('unify.debugConcise') || 'Concise') : ($t('unify.debugDetail') || 'Detail')"
-            >
-              {{ store.unifyDebugDetailMode ? ($t('unify.debugDetail') || '详细') : ($t('unify.debugConcise') || '精简') }}
-            </button>
-          </div>
-          <div class="unify-debug-turns" v-if="store.unifyDebugTurnsForActiveGroup.length > 0">
-            <div class="unify-debug-turn" v-for="(turn, idx) in store.unifyDebugTurnsForActiveGroup" :key="idx">
-              <div class="unify-debug-turn-header" @click="toggleTurnExpand(idx)">
-                <svg class="unify-debug-turn-chevron" :class="{ expanded: expandedTurns[idx] }" viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
-                <span class="unify-debug-turn-num">{{ $t('unify.turn').replace('{n}', turn.turnNumber) }}</span>
-                <span class="unify-debug-turn-model">{{ turn.model }}</span>
-                <span class="unify-debug-turn-stats">
-                  <span>{{ turn.ttfbMs != null ? turn.ttfbMs + 'ms' : '-' }}</span>
-                  <span>{{ turn.latencyMs }}ms</span>
-                  <span>{{ turn.usage?.inputTokens || 0 }}</span>
-                  <span>{{ turn.usage?.outputTokens || 0 }}</span>
-                </span>
-              </div>
-              <div class="unify-debug-turn-body" v-if="expandedTurns[idx]">
-                <!-- Token usage -->
-                <div class="unify-debug-section">
-                  <div class="unify-debug-section-title">{{ $t('unify.duration') }} / Tokens</div>
-                  <div class="unify-debug-token-row">
-                    <span><span class="unify-debug-token-label">TTFB:</span> {{ turn.ttfbMs != null ? turn.ttfbMs + 'ms' : '-' }}</span>
-                    <span><span class="unify-debug-token-label">{{ $t('unify.duration') }}:</span> {{ turn.latencyMs }}ms</span>
-                    <span><span class="unify-debug-token-label">{{ $t('unify.inputTokens') }}:</span> {{ turn.usage?.inputTokens || 0 }}</span>
-                    <span><span class="unify-debug-token-label">{{ $t('unify.outputTokens') }}:</span> {{ turn.usage?.outputTokens || 0 }}</span>
-                  </div>
-                </div>
-                <!-- System Prompt -->
-                <div class="unify-debug-section">
-                  <div class="unify-debug-section-title">{{ $t('unify.systemPrompt') }}</div>
-                  <pre class="unify-debug-pre">{{ turn.systemPrompt || '(empty)' }}</pre>
-                </div>
-                <!-- Messages -->
-                <div class="unify-debug-section">
-                  <div class="unify-debug-section-title">{{ $t('unify.messagesLabel') }} ({{ turn.messages?.length || 0 }})</div>
-                  <div class="unify-debug-messages">
-                    <div v-for="(m, mi) in (turn.messages || [])" :key="mi" class="unify-debug-msg" :class="'role-' + m.role">
-                      <div class="unify-debug-msg-head">
-                        <span class="unify-debug-msg-role">[{{ m.role }}]</span>
-                        <span v-if="m.toolCallId" class="unify-debug-msg-callid">call_id={{ m.toolCallId }}</span>
-                        <span v-if="m.isError" class="unify-debug-msg-err">isError</span>
-                      </div>
-                      <pre class="unify-debug-pre" v-if="formatMsgContent(m)">{{ formatMsgContent(m) }}</pre>
-                      <details v-for="(tc, ti) in (m.toolCalls || [])" :key="'tc-' + ti" class="unify-debug-tc">
-                        <summary>→ call_{{ ti + 1 }} {{ tc.name }} <span class="unify-debug-tc-id">({{ tc.id }})</span></summary>
-                        <pre class="unify-debug-pre unify-debug-pre-args">{{ prettyJson(tc.input) }}</pre>
-                      </details>
-                    </div>
-                    <div v-if="!(turn.messages && turn.messages.length)" class="unify-debug-empty-inline">(none)</div>
-                  </div>
-                </div>
-                <!-- Response -->
-                <div class="unify-debug-section">
-                  <div class="unify-debug-section-title">{{ $t('unify.response') }}</div>
-                  <pre class="unify-debug-pre">{{ turn.response || '(empty)' }}</pre>
-                </div>
-                <!-- Function Calls (task-331): request + paired response -->
-                <div class="unify-debug-section" v-if="getFunctionCallPairs(turn).length > 0">
-                  <div class="unify-debug-section-title">{{ $t('unify.functionCalls') }} ({{ getFunctionCallPairs(turn).length }})</div>
-                  <div class="unify-debug-fncalls">
-                    <div v-for="(pair, pi) in getFunctionCallPairs(turn)" :key="pi" class="unify-debug-fncall">
-                      <div class="unify-debug-fncall-head">
-                        <span class="unify-debug-fncall-num">#{{ pi + 1 }}</span>
-                        <span class="unify-debug-fncall-name">{{ pair.name }}</span>
-                        <span class="unify-debug-fncall-id">({{ pair.id }})</span>
-                        <span v-if="pair.response == null" class="unify-debug-fncall-pending">{{ $t('unify.pending') }}</span>
-                        <span v-else-if="pair.isError" class="unify-debug-fncall-err">✗</span>
-                        <span v-else class="unify-debug-fncall-ok">✓</span>
-                      </div>
-                      <details open>
-                        <summary>{{ $t('unify.request') }} (arguments)</summary>
-                        <pre class="unify-debug-pre unify-debug-pre-args">{{ prettyJson(pair.input) }}</pre>
-                      </details>
-                      <details>
-                        <summary>{{ $t('unify.response') }}</summary>
-                        <pre class="unify-debug-pre">{{ pair.response != null ? formatToolOutput(pair.response) : '(pending)' }}</pre>
-                      </details>
-                    </div>
-                  </div>
-                </div>
-                <!-- Tool Calls -->
-                <div class="unify-debug-section" v-if="turn.toolCalls && turn.toolCalls.length > 0">
-                  <div class="unify-debug-section-title">{{ $t('unify.toolCalls') }} ({{ turn.toolCalls.length }})</div>
-                  <pre class="unify-debug-pre">{{ formatToolCalls(turn.toolCalls) }}</pre>
-                </div>
-                <!-- task-344: Raw API Request / Response (detail mode only) -->
-                <template v-if="store.unifyDebugDetailMode">
-                  <div class="unify-debug-section" v-if="turn.rawRequest">
-                    <div class="unify-debug-section-title">Raw Request</div>
-                    <details>
-                      <summary>{{ turn.rawRequest.method }} {{ turn.rawRequest.url }}</summary>
-                      <pre class="unify-debug-pre unify-debug-pre-raw">{{ prettyJson(turn.rawRequest) }}</pre>
-                    </details>
-                  </div>
-                  <div class="unify-debug-section" v-if="turn.rawResponse">
-                    <div class="unify-debug-section-title">Raw Response</div>
-                    <details>
-                      <summary>status={{ turn.rawResponse.status }}<span v-if="turn.rawResponse.format"> · {{ turn.rawResponse.format }}</span></summary>
-                      <pre class="unify-debug-pre unify-debug-pre-raw">{{ formatRawResponse(turn.rawResponse) }}</pre>
-                    </details>
-                  </div>
-                </template>
-              </div>
-            </div>
-          </div>
-          <div class="unify-debug-empty" v-else>
-            {{ $t('unify.noDebugData') }}
-          </div>
-        </div>
+        <!-- Debug Mode: feat-6af5f9f1 PR B replaces the previous inline
+             debug block with a dedicated component (Turn -> Loop -> Tool
+             tree, copy buttons, system/memory at turn level). All the
+             helpers (toggleTurnExpand, prettyJson, getFunctionCallPairs,
+             etc.) below are no longer used by the template; left in
+             place under the deprecated comment until PR C cleans them. -->
+        <UnifyDebugPanel v-if="debugMode" />
         <!-- Default: placeholder -->
         <div v-else class="unify-detail-placeholder">
           <svg viewBox="0 0 24 24" width="24" height="24" opacity="0.3"><path fill="currentColor" d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
