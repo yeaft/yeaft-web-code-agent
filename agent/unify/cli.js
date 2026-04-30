@@ -619,11 +619,6 @@ async function runREPL(config, args) {
               process.stderr.write(`[compact] Memory consolidated\n`);
             }
             break;
-          case 'dream_triggered':
-            if (session.config.debug) {
-              process.stderr.write(`[dream] Dream cycle triggered (background)\n`);
-            }
-            break;
           case 'fallback':
             process.stderr.write(`\n[fallback] ${event.from} → ${event.to}: ${event.reason}\n`);
             break;
@@ -715,11 +710,6 @@ async function runOnce(config, args) {
         case 'consolidate':
           if (args.verbose || args.debug) {
             process.stderr.write(`[consolidate] archived=${event.archivedCount}, extracted=${event.extractedCount}\n`);
-          }
-          break;
-        case 'dream_triggered':
-          if (args.verbose || args.debug) {
-            process.stderr.write(`[dream] Dream cycle triggered (background)\n`);
           }
           break;
         case 'fallback':
