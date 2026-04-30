@@ -784,7 +784,7 @@ export async function handleUnifyGroupChat(msg) {
         groupId,
         vpId,
         groupCoordinator: coord,
-        signal: dispatchAbortCtrl.signal,
+        abortCtrl: dispatchAbortCtrl,
       });
     } catch (err) {
       console.warn('[Unify] unify_group_chat: per-vp dispatch failed', vpId, err?.message || err);
@@ -921,12 +921,15 @@ async function ensureSessionLoaded() {
  *
  * Private — only `handleUnifyGroupChat` calls this. Coordinator and groupId
  * are mandatory; callers MUST resolve a default group before invoking. The
- * caller also owns the AbortController; we receive only the signal so
- * sibling VPs in the same fan-out share one cancellation domain.
+ * caller also owns the AbortController; we receive the whole controller
+ * (not just its signal) so the per-VP query-timeout can abort exactly the
+ * dispatch it belongs to — and only if that controller is still the
+ * module-active one. This avoids a stale-timer-from-an-aborted-dispatch
+ * killing the next dispatch.
  *
- * @param {{ prompt: string, groupId: string, vpId: string|null, groupCoordinator: object, signal: AbortSignal }} args
+ * @param {{ prompt: string, groupId: string, vpId: string|null, groupCoordinator: object, abortCtrl: AbortController }} args
  */
-async function runVpTurn({ prompt, groupId, vpId, groupCoordinator, signal }) {
+async function runVpTurn({ prompt, groupId, vpId, groupCoordinator, abortCtrl }) {
   if (!prompt?.trim()) return;
 
   try {
@@ -938,13 +941,13 @@ async function runVpTurn({ prompt, groupId, vpId, groupCoordinator, signal }) {
     const resetQueryTimer = () => {
       if (queryTimer) clearTimeout(queryTimer);
       queryTimer = setTimeout(() => {
-        // The dispatch-level controller is owned by the parent; the
-        // timeout fans out by aborting it, which cancels every sibling
-        // VP-turn at once. That's the intended semantics — one timeout
-        // burns the whole turn — and matches user-initiated abort.
-        if (currentAbortCtrl && !currentAbortCtrl.signal.aborted) {
+        // Abort the captured dispatch controller — but only if it is
+        // still the module-active one. If a later dispatch already
+        // replaced it, our timer is stale and must NOT abort whatever
+        // the new dispatch installed (that was the original race).
+        if (abortCtrl === currentAbortCtrl && !abortCtrl.signal.aborted) {
           console.error(`[Unify] query timeout after ${QUERY_TIMEOUT_MS / 1000}s of silence — aborting`);
-          try { currentAbortCtrl.abort(); } catch { /* best-effort */ }
+          try { abortCtrl.abort(); } catch { /* best-effort */ }
         }
       }, QUERY_TIMEOUT_MS);
     };
@@ -968,7 +971,7 @@ async function runVpTurn({ prompt, groupId, vpId, groupCoordinator, signal }) {
       for await (const event of session.engine.query({
         prompt,
         messages: [...conversationMessages],
-        signal,
+        signal: abortCtrl.signal,
         ...queryOpts,
       })) {
         resetQueryTimer();
@@ -1021,7 +1024,7 @@ async function runVpTurn({ prompt, groupId, vpId, groupCoordinator, signal }) {
       return;
     }
 
-    console.error('[Unify] query error:', err.message);
+    console.error('[Unify] query error:', err);
 
     if (isPermissionErrorMsg(err.message)) {
       if (!_permissionDiagnosticSent) {
