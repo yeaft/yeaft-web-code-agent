@@ -74,11 +74,12 @@
 .us-result {
   display: flex;
   align-items: baseline;
-  gap: 6px;
-  padding: 6px 10px;
-  border-radius: 6px;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 14px;
+  margin-bottom: 2px;
 }
 .us-result:hover { background: var(--sidebar-hover, rgba(0,0,0,0.05)); }
 .us-result-kind {
@@ -104,6 +105,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 15px;
 }
 .us-result-snippet {
   flex: 1 1 auto;
@@ -334,17 +336,18 @@
 .us-task {
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 4px 8px;
-  border-radius: 6px;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 14px;
+  margin-bottom: 2px;
 }
 .us-task:hover { background: var(--sidebar-hover, rgba(0,0,0,0.05)); }
 .us-task.selected { background: var(--sidebar-selected, rgba(0,122,255,0.14)); }
-.us-task-lvl-0 { padding-left: 10px; }
-.us-task-lvl-1 { padding-left: 28px; }
-.us-task-lvl-2 { padding-left: 46px; }
+.us-task-lvl-0 { padding-left: 12px; }
+.us-task-lvl-1 { padding-left: 30px; }
+.us-task-lvl-2 { padding-left: 48px; }
 .us-task-toggle {
   display: inline-flex;
   align-items: center;
@@ -357,7 +360,7 @@
 .us-task-toggle-spacer { width: 12px; flex: 0 0 auto; }
 .us-task-id {
   font-family: var(--font-mono, Menlo, monospace);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-muted, #86868b);
   flex: 0 0 auto;
 }
@@ -367,6 +370,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-primary, #1d1d1f);
+  font-size: 15px;
 }
 .us-task-link {
   font-size: 10px;
