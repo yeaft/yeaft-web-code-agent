@@ -79,7 +79,6 @@ const SUBDIRS = [
   'conversation/blobs',
   'memory/entries',
   'tasks',
-  'dream',
   'skills',
 ];
 

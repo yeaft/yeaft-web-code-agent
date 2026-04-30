@@ -26,7 +26,6 @@ export { MemoryStore, parseEntry, serializeEntry, MEMORY_KINDS } from './memory/
 
 // Phase 5: Advanced features
 export { KINDS, KIND_PRIORITY, KIND_DESCRIPTIONS, IMPORTANCE_LEVELS, validateEntry, parseScopePath, getAncestorScopes, areScopesRelated } from './memory/types.js';
-export { scanEntries, scoreEntry, findStaleEntries, findDuplicateGroups, summarizeScan } from './memory/scan.js';
 export { runStopHooks } from './stop-hooks.js';
 export { MCPManager, createMCPManager } from './mcp.js';
 export { SkillManager, createSkillManager, parseSkill, serializeSkill } from './skills.js';
