@@ -114,6 +114,18 @@ export const useChatStore = defineStore('chat', {
     // Shape: { maxConcurrentThreads, autoArchiveIdleDays, error, loaded, at }
     unifySettings: {},
 
+    // Search settings cache (web-search backend + Tavily key state).
+    // Single record (not per-agent) — config.json is one file per agent's
+    // ~/.yeaft, so the active unifyAgentId determines which agent we
+    // talked to last. Shape:
+    //   { backend, tavilyKeyConfigured, tavilyKeyMasked, disableHtmlFallback,
+    //     loaded, error, at }
+    searchSettings: null,
+    // Last live Tavily /usage probe.
+    //   { plan, used, limit, paygoUsed, paygoLimit } | { error }
+    tavilyUsage: null,
+    tavilyUsageLoading: false,
+
     // /btw mode state (multi-turn side question)
     btwMode: false,              // whether in btw mode
     btwMessages: [],             // [{ role: 'user'|'assistant', content }]
@@ -1202,6 +1214,69 @@ export const useChatStore = defineStore('chat', {
         ...this.unifySubAgentCards,
         [key]: { ...card, expanded: !card.expanded },
       };
+    },
+
+    // ─── Search settings (Tavily backend + key + on-demand quota) ───
+    //
+    // The Search tab in UnifySettings uses these. They use
+    // request/response promises keyed off the WS reply types
+    // (`search_settings`, `search_settings_updated`, `tavily_usage`).
+    // Since chat.js's WS layer has no first-class request/response
+    // primitive, we register one-shot resolvers on `_searchPending`
+    // and the messageHandler for those types pops the matching
+    // resolver. This keeps the action-shape promise-based for the
+    // component (`await store.updateSearchSettings(...)`) without
+    // bolting on a generic RPC layer.
+
+    /**
+     * Fetch the current search settings from the agent and store them
+     * on `searchSettings`. Promise resolves with the same record (or
+     * an `{ error }` shape if the agent returns one).
+     */
+    loadSearchSettings() {
+      if (!this.unifyAgentId) {
+        this.searchSettings = { backend: 'tavily', tavilyKeyConfigured: false, tavilyKeyMasked: null, disableHtmlFallback: false, loaded: true };
+        return Promise.resolve(this.searchSettings);
+      }
+      return new Promise((resolve) => {
+        if (!this._searchPending) this._searchPending = {};
+        this._searchPending.load = resolve;
+        this.sendWsMessage({ type: 'get_search_settings', agentId: this.unifyAgentId });
+      });
+    },
+
+    /**
+     * Persist a partial search-settings update. `payload` may include
+     * `backend`, `tavilyApiKey`, `disableHtmlFallback`. Omit fields to
+     * keep them unchanged — particularly `tavilyApiKey`, which the UI
+     * passes only when the user actually edited the input.
+     */
+    updateSearchSettings(payload) {
+      if (!this.unifyAgentId) return Promise.resolve({ error: 'no agent' });
+      return new Promise((resolve) => {
+        if (!this._searchPending) this._searchPending = {};
+        this._searchPending.update = resolve;
+        this.sendWsMessage({
+          type: 'update_search_settings',
+          agentId: this.unifyAgentId,
+          settings: payload || {},
+        });
+      });
+    },
+
+    /**
+     * Probe Tavily's /usage endpoint with the saved key. Triggered
+     * from the UI on tab open and on the "Refresh" button click —
+     * never on a timer.
+     */
+    loadTavilyUsage() {
+      if (!this.unifyAgentId) return Promise.resolve(null);
+      this.tavilyUsageLoading = true;
+      return new Promise((resolve) => {
+        if (!this._searchPending) this._searchPending = {};
+        this._searchPending.usage = resolve;
+        this.sendWsMessage({ type: 'get_tavily_usage', agentId: this.unifyAgentId });
+      });
     },
 
     clearUnifyMessages() {

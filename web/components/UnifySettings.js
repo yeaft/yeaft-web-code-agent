@@ -18,13 +18,14 @@
  */
 import LlmTab from './LlmTab.js';
 import VpCrudPanel from './VpCrudPanel.js';
+import SearchSettingsTab from './SearchSettingsTab.js';
 
 export default {
   name: 'UnifySettings',
-  components: { LlmTab, VpCrudPanel },
+  components: { LlmTab, VpCrudPanel, SearchSettingsTab },
   props: {
     visible: { type: Boolean, default: true },
-    initialTab: { type: String, default: 'llm' }, // 'llm' | 'vp'
+    initialTab: { type: String, default: 'llm' }, // 'llm' | 'vp' | 'search'
   },
   emits: ['close', 'saved'],
   template: `
@@ -42,6 +43,7 @@ export default {
           >
             <svg v-if="tab.key === 'llm'" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M21 10.12h-6.78l2.74-2.82c-2.73-2.7-7.15-2.8-9.88-.1-2.73 2.71-2.73 7.08 0 9.79s7.15 2.71 9.88 0C18.32 15.65 19 14.08 19 12.1h2c0 1.98-.88 4.55-2.64 6.29-3.51 3.48-9.21 3.48-12.72 0-3.5-3.47-3.5-9.11 0-12.58 3.51-3.47 9.14-3.49 12.65-.06L21 3v7.12zM12.5 8v4.25l3.5 2.08-.72 1.21L11 13V8h1.5z"/></svg>
             <svg v-else-if="tab.key === 'vp'" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+            <svg v-else-if="tab.key === 'search'" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
             <span>{{ tab.label }}</span>
           </button>
         </div>
@@ -67,6 +69,11 @@ export default {
             <div v-show="activeTab === 'vp'" class="settings-pane">
               <VpCrudPanel />
             </div>
+
+            <!-- Search pane: web-search backend + Tavily key + quota -->
+            <div v-show="activeTab === 'search'" class="settings-pane">
+              <SearchSettingsTab @message="onLlmMessage" />
+            </div>
           </div>
         </div>
       </div>
@@ -84,14 +91,15 @@ export default {
 
     // Active tab — seeded from initialTab, also reactive to prop changes so
     // a host that flips initialTab='vp' after open lands on the VP tab.
-    const activeTab = Vue.ref(props.initialTab === 'vp' ? 'vp' : 'llm');
+    const activeTab = Vue.ref(['llm', 'vp', 'search'].includes(props.initialTab) ? props.initialTab : 'llm');
     Vue.watch(() => props.initialTab, (next) => {
-      if (next === 'llm' || next === 'vp') activeTab.value = next;
+      if (['llm', 'vp', 'search'].includes(next)) activeTab.value = next;
     });
 
     const tabs = Vue.computed(() => [
       { key: 'llm', label: $t('unify.settings.tabs.llm') },
       { key: 'vp',  label: $t('unify.settings.tabs.vp') },
+      { key: 'search', label: $t('unify.settings.tabs.search') },
     ]);
     const currentTabLabel = Vue.computed(() => {
       const t = tabs.value.find(x => x.key === activeTab.value);

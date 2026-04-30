@@ -238,6 +238,25 @@ export async function handleAgentSync(agentId, agent, msg) {
       break;
     }
 
+    // Search settings + Tavily usage relays. We pass the whole msg
+    // through (minus agentId, which we set ourselves) — the payload
+    // shapes differ per type and the front-end already filters on
+    // `type`, so a generic forward is simpler than three nearly-
+    // identical branches.
+    case 'search_settings':
+    case 'search_settings_updated':
+    case 'tavily_usage': {
+      for (const [, client] of webClients) {
+        if (client.authenticated && (CONFIG.skipAuth ||
+          (agent.ownerId && client.userId === agent.ownerId) ||
+          (!agent.ownerId && client.role === 'admin')
+        )) {
+          await sendToWebClient(client, { ...msg, agentId });
+        }
+      }
+      break;
+    }
+
     default:
       return false; // Not handled
   }

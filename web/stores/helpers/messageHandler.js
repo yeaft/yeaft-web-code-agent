@@ -510,6 +510,52 @@ export function handleMessage(store, msg) {
       }
       break;
 
+    // Search settings — Search tab in UnifySettings. The store's
+    // `loadSearchSettings` / `updateSearchSettings` register one-shot
+    // resolvers under `_searchPending`; we pop the matching resolver
+    // here. We always update `searchSettings` itself too so any
+    // component watching `store.searchSettings` re-renders.
+    case 'search_settings':
+    case 'search_settings_updated': {
+      const record = {
+        backend: msg.backend || 'tavily',
+        tavilyKeyConfigured: !!msg.tavilyKeyConfigured,
+        tavilyKeyMasked: msg.tavilyKeyMasked || null,
+        disableHtmlFallback: !!msg.disableHtmlFallback,
+        error: msg.error || null,
+        loaded: true,
+        at: Date.now(),
+      };
+      store.searchSettings = record;
+      const pending = store._searchPending;
+      const key = msg.type === 'search_settings' ? 'load' : 'update';
+      if (pending && pending[key]) {
+        pending[key](record);
+        delete pending[key];
+      }
+      break;
+    }
+
+    case 'tavily_usage': {
+      const record = msg.error
+        ? { error: msg.error }
+        : {
+            plan: msg.plan,
+            used: msg.used,
+            limit: msg.limit,
+            paygoUsed: msg.paygoUsed,
+            paygoLimit: msg.paygoLimit,
+          };
+      store.tavilyUsage = record;
+      store.tavilyUsageLoading = false;
+      const pending = store._searchPending;
+      if (pending && pending.usage) {
+        pending.usage(record);
+        delete pending.usage;
+      }
+      break;
+    }
+
     // Per-conversation MCP servers (from Claude CLI init)
     case 'conversation_mcp_update':
       if (msg.conversationId && msg.servers) {

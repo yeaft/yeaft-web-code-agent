@@ -215,3 +215,154 @@ export function updateUnifySettings(update, dir) {
 
   return merged;
 }
+
+// ─── Search settings (web-search backend selection + Tavily key) ────
+
+/**
+ * Valid backend values. `playwright` is reserved for the upcoming
+ * playwright-service tool — its UI option is currently disabled, but we
+ * accept the literal so a hand-edited config doesn't trip validation.
+ * Anything else is rejected on write and normalized to `tavily` on read.
+ */
+const VALID_BACKENDS = ['tavily', 'playwright'];
+
+function maskKey(key) {
+  if (!key || typeof key !== 'string') return null;
+  if (key.length <= 10) return '***';
+  return `${key.slice(0, 6)}...${key.slice(-4)}`;
+}
+
+/**
+ * Read the `search` section of config.json. Tavily key is returned in
+ * masked form (`tvly-d...j3dgV`) — the raw key never leaves the agent.
+ * UI uses `tavilyKeyConfigured` to decide whether the input shows a
+ * "(unchanged)" placeholder vs an empty box.
+ *
+ * @param {string} [dir]
+ * @returns {{ backend: string, tavilyKeyConfigured: boolean, tavilyKeyMasked: string|null, disableHtmlFallback: boolean } | { error: string }}
+ */
+export function getSearchSettings(dir) {
+  const root = dir || process.env.YEAFT_DIR || DEFAULT_YEAFT_DIR;
+  const configPath = join(root, 'config.json');
+  const defaults = {
+    backend: 'tavily',
+    tavilyKeyConfigured: false,
+    tavilyKeyMasked: null,
+    disableHtmlFallback: false,
+  };
+  if (!existsSync(configPath)) return defaults;
+  try {
+    const json = JSON.parse(readFileSync(configPath, 'utf8'));
+    const s = (json && typeof json.search === 'object' && json.search) || {};
+    const backend = VALID_BACKENDS.includes(s.backend) ? s.backend : 'tavily';
+    const key = typeof s.tavilyApiKey === 'string' ? s.tavilyApiKey : '';
+    return {
+      backend,
+      tavilyKeyConfigured: !!key,
+      tavilyKeyMasked: key ? maskKey(key) : null,
+      disableHtmlFallback: !!s.disableHtmlFallback,
+    };
+  } catch (e) {
+    return { error: `Failed to read config.json: ${e.message}` };
+  }
+}
+
+/**
+ * Update the `search` section of config.json. Update is shallow-merged:
+ * any field omitted from `update` keeps its previous value. Pass
+ * `tavilyApiKey: ''` explicitly to clear the key; pass `undefined` (or
+ * omit) to keep it unchanged — this is what the UI relies on so the
+ * "(unchanged)" placeholder doesn't accidentally wipe a saved key when
+ * the user only touches the backend radio.
+ *
+ * @param {{ backend?: string, tavilyApiKey?: string, disableHtmlFallback?: boolean }} update
+ * @param {string} [dir]
+ * @returns {ReturnType<typeof getSearchSettings>}
+ */
+export function updateSearchSettings(update, dir) {
+  const root = dir || process.env.YEAFT_DIR || DEFAULT_YEAFT_DIR;
+  const configPath = join(root, 'config.json');
+
+  if (!update || typeof update !== 'object') {
+    return { error: 'update payload required' };
+  }
+  if (update.backend !== undefined && !VALID_BACKENDS.includes(update.backend)) {
+    return { error: `backend must be one of: ${VALID_BACKENDS.join(', ')}` };
+  }
+  if (update.tavilyApiKey !== undefined && typeof update.tavilyApiKey !== 'string') {
+    return { error: 'tavilyApiKey must be a string' };
+  }
+
+  let existing = {};
+  if (existsSync(configPath)) {
+    try {
+      existing = JSON.parse(readFileSync(configPath, 'utf8'));
+    } catch {
+      existing = {};
+    }
+  }
+  const prev = (existing && typeof existing.search === 'object' && existing.search) || {};
+  const merged = { ...prev };
+  if (update.backend !== undefined) merged.backend = update.backend;
+  if (update.tavilyApiKey !== undefined) merged.tavilyApiKey = update.tavilyApiKey;
+  if (update.disableHtmlFallback !== undefined) merged.disableHtmlFallback = !!update.disableHtmlFallback;
+  existing.search = merged;
+
+  try {
+    writeFileSync(configPath, JSON.stringify(existing, null, 2) + '\n', 'utf8');
+  } catch (e) {
+    return { error: `Failed to write config.json: ${e.message}` };
+  }
+  return getSearchSettings(root);
+}
+
+/**
+ * Probe Tavily's `/usage` endpoint with the currently-saved key. Returns
+ * the plan + usage fields the UI shows, or `{ error }` for any of:
+ *   - no key configured
+ *   - HTTP error from Tavily (401 = bad key, etc.)
+ *   - network failure
+ *
+ * Called only when the user opens the Search settings tab (the user
+ * explicitly asked for "open settings → live read, don't poll"). No
+ * caching here — a stale display is more confusing than a fresh probe.
+ *
+ * @param {string} [dir]
+ * @returns {Promise<{ plan: string, used: number, limit: number|null, paygoUsed: number, paygoLimit: number|null } | { error: string }>}
+ */
+export async function fetchTavilyUsage(dir) {
+  const root = dir || process.env.YEAFT_DIR || DEFAULT_YEAFT_DIR;
+  const configPath = join(root, 'config.json');
+  if (!existsSync(configPath)) return { error: 'config.json not found' };
+  let key;
+  try {
+    const json = JSON.parse(readFileSync(configPath, 'utf8'));
+    key = json?.search?.tavilyApiKey;
+  } catch (e) {
+    return { error: `Failed to read config.json: ${e.message}` };
+  }
+  if (!key) return { error: 'Tavily API key not configured' };
+
+  try {
+    const res = await fetch('https://api.tavily.com/usage', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${key}` },
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      return { error: `${res.status} ${res.statusText} ${text.slice(0, 200)}` };
+    }
+    const data = await res.json();
+    const account = data?.account || {};
+    return {
+      plan: account.current_plan || 'unknown',
+      used: Number(account.plan_usage) || 0,
+      limit: account.plan_limit ?? null,
+      paygoUsed: Number(account.paygo_usage) || 0,
+      paygoLimit: account.paygo_limit ?? null,
+    };
+  } catch (e) {
+    return { error: e.message || String(e) };
+  }
+}
+

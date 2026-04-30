@@ -150,6 +150,36 @@ export async function handleClientMisc(clientId, client, msg, checkAgentAccess) 
       break;
     }
 
+    // Search settings (web-search backend + Tavily key + on-demand usage probe).
+    // Mirrors the get/update_unify_settings pair: the agent owns the
+    // config file, server is just a relay.
+    case 'get_search_settings': {
+      const a = msg.agentId || client.currentAgent;
+      if (!a) break;
+      if (!await checkAgentAccess(a)) break;
+      await forwardToAgent(a, { type: 'get_search_settings' });
+      break;
+    }
+
+    case 'update_search_settings': {
+      const a = msg.agentId || client.currentAgent;
+      if (!a) break;
+      if (!await checkAgentAccess(a)) break;
+      await forwardToAgent(a, {
+        type: 'update_search_settings',
+        settings: msg.settings || msg.config || {}
+      });
+      break;
+    }
+
+    case 'get_tavily_usage': {
+      const a = msg.agentId || client.currentAgent;
+      if (!a) break;
+      if (!await checkAgentAccess(a)) break;
+      await forwardToAgent(a, { type: 'get_tavily_usage' });
+      break;
+    }
+
     default:
       return false; // Not handled
   }

@@ -35,7 +35,7 @@ import {
 import { sendToServer, flushMessageBuffer } from './buffer.js';
 import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
-import { getLlmConfig, updateLlmConfig, getUnifySettings, updateUnifySettings } from '../unify/config-api.js';
+import { getLlmConfig, updateLlmConfig, getUnifySettings, updateUnifySettings, getSearchSettings, updateSearchSettings, fetchTavilyUsage } from '../unify/config-api.js';
 import { handleUnifyChat, handleUnifyGroupChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyAbortThread, handleUnifyAbortAll, handleUnifyVpSubscribe, handleUnifyVpCreate, handleUnifyVpUpdate, handleUnifyVpDelete, handleUnifyVpRead, handleUnifyFeatureMessage, handleUnifyFetchSummaryHistory, handleUnifyFeatureCrud, handleUnifyListGroups, handleUnifyCreateGroup, handleUnifyRenameGroup, handleUnifyArchiveGroup, handleUnifyDeleteGroup, handleUnifyAddMember, handleUnifyRemoveMember, handleUnifySetDefaultVp, handleUnifyDreamTrigger } from '../unify/web-bridge.js';
 
 export async function handleMessage(msg) {
@@ -352,6 +352,29 @@ export async function handleMessage(msg) {
         ctx.unifyRuntimeSettings.autoArchiveIdleDays = result.autoArchiveIdleDays;
       }
       sendToServer({ type: 'unify_settings_updated', ...result });
+      break;
+    }
+
+    // Search settings (web-search backend + Tavily key) — read/write the
+    // `search` section of config.json. `get_tavily_usage` hits Tavily's
+    // /usage endpoint with the saved key and is fired from the UI only
+    // when the Search tab opens or the user clicks "Refresh" (no polling
+    // — the user explicitly asked for live read on open).
+    case 'get_search_settings': {
+      const settings = getSearchSettings(ctx.CONFIG?.yeaftDir);
+      sendToServer({ type: 'search_settings', ...settings });
+      break;
+    }
+
+    case 'update_search_settings': {
+      const result = updateSearchSettings(msg.settings || msg.config || {}, ctx.CONFIG?.yeaftDir);
+      sendToServer({ type: 'search_settings_updated', ...result });
+      break;
+    }
+
+    case 'get_tavily_usage': {
+      const usage = await fetchTavilyUsage(ctx.CONFIG?.yeaftDir);
+      sendToServer({ type: 'tavily_usage', ...usage });
       break;
     }
 
