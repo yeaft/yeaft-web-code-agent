@@ -566,7 +566,7 @@ The router emits one provider-agnostic value (`'high'` or `'max'`) per plan; the
 1. **UI setting.** A `Think: high ▾ / max` selector lives in the Unify topbar next to the model picker. Two modes:
    - *Per-turn* (default): the picker affects only the next turn the user sends; auto-resets to the group default after that turn.
    - *Lock for group*: a small lock icon next to the picker pins the choice into `groups/<g>/meta.md` (`thinking: max`) so it sticks across turns until unlocked.
-   The UI value is sent on the `unify_chat` WebSocket frame as `thinking: 'high' | 'max'` and reaches the dispatcher in `submitOptions`.
+   The UI value is sent on the `unify_group_chat` WebSocket frame as `thinking: 'high' | 'max'` and reaches the dispatcher in `submitOptions`.
 2. **Router recommendation.** When no UI override is in force, the router's per-plan `thinking` decides. Router defaults to `high`; recommends `max` only when the criteria block fires:
    > Recommend `max` only when: (a) the user is asking for an architectural/design decision with non-obvious tradeoffs, (b) a multi-step debugging task across files the VP has not yet seen, (c) the user's message contains "think hard" / "deeply" / "carefully" or zh equivalents (深入思考/仔细想/认真分析), (d) a task is being forked or a plan is being written. Otherwise `high`.
 3. **VP default.** `vp/<id>/role.md` frontmatter `defaultThinking: max` for personas that should always think hard (e.g. an `architect-fowler` VP). Used only when both UI and router are silent.
@@ -609,7 +609,7 @@ The dispatcher resolves this chain into the final `queryOpts.thinking` and passe
 
 **UI plumbing:**
 - Pinia store: `unifyThinking: 'high' | 'max'` (transient) + `unifyThinkingLocked: boolean`.
-- The selector emits an `unify_chat` frame with `thinking` set; the agent's `web-bridge.handleUnifyChat` puts it into `submitOptions.queryOpts.thinking`; the dispatcher records it in the route-decision precedence as the highest-priority signal.
+- The selector emits an `unify_group_chat` frame with `thinking` set; the agent's `web-bridge.handleUnifyGroupChat` puts it into `submitOptions.queryOpts.thinking` (per-VP via `runVpTurn`); the dispatcher records it in the route-decision precedence as the highest-priority signal.
 - Lock toggle calls a new `unify_group_set_thinking` WS message that writes `groups/<g>/meta.md`. Reads on group load.
 - Frontend never reads `config.thinking.budget` — those numbers live only in the agent's adapter.
 

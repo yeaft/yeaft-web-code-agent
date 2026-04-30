@@ -7,7 +7,8 @@
  *
  * The previous RoleInstance map (per (vpId, groupId) pair, with LRU
  * eviction) was removed in GC.2 — production fans out per-VP via
- * `handleUnifyChat` directly and never instantiated RoleInstance.
+ * `handleUnifyGroupChat` -> `runVpTurn` directly and never instantiated
+ * RoleInstance.
  */
 
 export class Registry {

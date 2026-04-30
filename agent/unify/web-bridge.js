@@ -18,6 +18,8 @@
  *      ranges removed.
  */
 
+import { join } from 'node:path';
+import { existsSync } from 'node:fs';
 import { loadSession } from './session.js';
 import { sendToServer } from '../connection/buffer.js';
 import ctx from '../context.js';
@@ -38,6 +40,9 @@ import {
   setGroupDefaultVp,
   snapshotGroups,
 } from './groups/group-crud.js';
+import { openGroup, loadGroupMeta } from './groups/group-store.js';
+import { createCoordinator } from './groups/coordinator.js';
+import { seedDefaultGroup } from './groups/seed-default.js';
 
 /** @type {import('./session.js').Session | null} */
 let session = null;
@@ -578,50 +583,101 @@ function handleEngineEvent(event, hctx) {
 }
 
 /**
- * Handle a unify_group_chat message from the web UI. Routes user text
- * through the group coordinator's dispatch contract.
+ * Handle a unify_group_chat message from the web UI — the SOLE Unify
+ * conversation entry point.
+ *
+ * Contract (post-consolidation, was previously split between handleUnifyChat
+ * and handleUnifyGroupChat):
+ *   - Frontend ALWAYS sends `unify_group_chat`. There is no `unify_chat`.
+ *   - `groupId` defaults to `'grp_default'` if missing — Unify is a single
+ *     conversation backed by the default group; the user is never "outside"
+ *     a group.
+ *   - If the group dir doesn't exist and the resolved id is `'grp_default'`,
+ *     it is seeded on the fly. Any other unknown groupId surfaces an error.
+ *   - Coordinator is MANDATORY (this is what guarantees ctx.router is wired
+ *     so the `route_forward` tool can never trip `router_unavailable`).
+ *   - No legacy "no-group" fallback paths — they were the source of the
+ *     router_unavailable bug fixed in v0.1.671.
  */
 export async function handleUnifyGroupChat(msg) {
   if (!msg || typeof msg !== 'object') return;
-  const { groupId, text } = msg;
+  const { text } = msg;
   if (!text?.trim()) return;
   const mentions = Array.isArray(msg.mentions) ? msg.mentions : [];
+  const groupId = (typeof msg.groupId === 'string' && msg.groupId.trim())
+    ? msg.groupId.trim()
+    : 'grp_default';
 
-  if (!groupId) {
-    await handleUnifyChat({ ...msg, prompt: text });
+  // yeaftDir is a hard prerequisite for both session boot and group seeding;
+  // validate BEFORE booting so a misconfigured agent doesn't leave a zombie
+  // session lying around.
+  const yeaftDir = ctx.CONFIG?.yeaftDir;
+  if (!yeaftDir) {
+    sendUnifyOutput({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: '⚠️ Unify session error: no yeaft directory configured.' }] },
+    }, groupId);
+    sendUnifyOutput({ type: 'result', result_text: '' }, groupId);
     return;
   }
 
+  await ensureSessionLoaded();
+
+  // Cancel any prior in-flight dispatch BEFORE we fan out. One dispatch =
+  // one cancellation domain. Each per-VP runVpTurn shares this signal, so
+  // siblings within the same dispatch never abort each other (the bug
+  // before this fix: each runVpTurn replaced currentAbortCtrl, causing
+  // VP-B's start to silently kill VP-A's in-flight LLM call).
+  if (currentAbortCtrl && !currentAbortCtrl.signal.aborted) {
+    try { currentAbortCtrl.abort(); } catch { /* best-effort */ }
+  }
+  const dispatchAbortCtrl = new AbortController();
+  currentAbortCtrl = dispatchAbortCtrl;
+
+  // Open the group; seed grp_default on the fly if absent. Track
+  // seedFailed separately so a seed crash surfaces a different message
+  // than a genuinely-missing group.
   let groupHandle = null;
+  let seedFailed = false;
   try {
-    const yeaftDir = ctx.CONFIG?.yeaftDir;
-    if (yeaftDir) {
-      const { openGroup, loadGroupMeta } = await import('./groups/group-store.js');
-      const { join } = await import('node:path');
-      const { existsSync } = await import('node:fs');
-      const root = join(yeaftDir, 'groups');
-      const dir = join(root, groupId);
-      if (existsSync(dir) && loadGroupMeta(dir)) {
-        groupHandle = openGroup(root, groupId);
+    const root = join(yeaftDir, 'groups');
+    const dir = join(root, groupId);
+    if (existsSync(dir) && loadGroupMeta(dir)) {
+      groupHandle = openGroup(root, groupId);
+    } else if (groupId === 'grp_default') {
+      try {
+        const seeded = seedDefaultGroup(yeaftDir, {});
+        groupHandle = seeded.group;
+      } catch (seedErr) {
+        seedFailed = true;
+        console.warn('[Unify] unify_group_chat: seedDefaultGroup failed', seedErr?.message || seedErr);
       }
+    } else {
+      console.warn('[Unify] unify_group_chat: groupId %s not found', groupId);
     }
   } catch (err) {
     console.warn('[Unify] unify_group_chat: group open failed', err?.message || err);
   }
 
   if (!groupHandle) {
-    await handleUnifyChat({ ...msg, prompt: text });
+    const errText = seedFailed
+      ? `⚠️ Failed to seed default group ${groupId} — check ~/.yeaft/ permissions.`
+      : `⚠️ Group ${groupId} not found.`;
+    sendUnifyOutput({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: errText }] },
+    }, groupId);
+    sendUnifyOutput({ type: 'result', result_text: '' }, groupId);
     return;
   }
 
   // Auto-add @-mentioned VPs from the library, heal missing defaultVpId.
   try {
     const meta = groupHandle.getMeta();
-    const yeaftDir = ctx.CONFIG?.yeaftDir;
     const wantsAdd = mentions.filter(
       (m) => m && m !== 'all' && !meta.roster.includes(m)
     );
-    if (wantsAdd.length && yeaftDir) {
+    if (wantsAdd.length) {
       let mutated = false;
       for (const vpId of wantsAdd) {
         try {
@@ -633,19 +689,15 @@ export async function handleUnifyGroupChat(msg) {
       }
       if (mutated) {
         try { groupHandle.close && groupHandle.close(); } catch { /* best-effort */ }
-        const { openGroup } = await import('./groups/group-store.js');
-        const { join } = await import('node:path');
         groupHandle = openGroup(join(yeaftDir, 'groups'), groupId);
         sendGroupRosterChanged(groupHandle.getMeta());
       }
     }
     const meta2 = groupHandle.getMeta();
-    if (!meta2.defaultVpId && meta2.roster.length && yeaftDir) {
+    if (!meta2.defaultVpId && meta2.roster.length) {
       try {
         setGroupDefaultVp(yeaftDir, groupId, meta2.roster[0]);
         try { groupHandle.close && groupHandle.close(); } catch { /* best-effort */ }
-        const { openGroup } = await import('./groups/group-store.js');
-        const { join } = await import('node:path');
         groupHandle = openGroup(join(yeaftDir, 'groups'), groupId);
         sendGroupRosterChanged(groupHandle.getMeta());
       } catch { /* best-effort */ }
@@ -654,7 +706,6 @@ export async function handleUnifyGroupChat(msg) {
     console.warn('[Unify] unify_group_chat: auto-roster heal failed', err?.message || err);
   }
 
-  const { createCoordinator } = await import('./groups/coordinator.js');
   const captured = [];
   const coord = createCoordinator(groupHandle, {
     deliver: (vpId, envelope) => { captured.push({ vpId, envelope }); },
@@ -670,13 +721,25 @@ export async function handleUnifyGroupChat(msg) {
     });
   } catch (err) {
     console.warn('[Unify] unify_group_chat: coord.ingest failed', err?.message || err);
-    await handleUnifyChat({ ...msg, prompt: text });
+    sendUnifyOutput({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: `⚠️ Group dispatch error: ${err?.message || err}` }] },
+    }, groupId);
+    sendUnifyOutput({ type: 'result', result_text: '' }, groupId);
     return;
   }
 
   const dispatchedIds = Array.isArray(report?.dispatched) ? report.dispatched : [];
   if (dispatchedIds.length === 0 && !report?.fallback) {
-    await handleUnifyChat({ ...msg, prompt: text });
+    // Coordinator chose nobody and provided no fallback — should not happen
+    // with a healthy roster. Surface the failure explicitly rather than
+    // silently retrying as a single-VP turn (the legacy fallback masked
+    // group-roster bugs).
+    sendUnifyOutput({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: '⚠️ No VP available to respond — check the group roster.' }] },
+    }, groupId);
+    sendUnifyOutput({ type: 'result', result_text: '' }, groupId);
     return;
   }
 
@@ -706,7 +769,9 @@ export async function handleUnifyGroupChat(msg) {
 
   // GC.1 Commit C: VP-level parallelism. Each selected VP runs its
   // turn concurrently via Promise.all. Intra-VP loops (LLM → tool →
-  // LLM) stay serial inside each handleUnifyChat call.
+  // LLM) stay serial inside each runVpTurn call. All siblings share
+  // the dispatch-level AbortSignal so a single user-initiated abort
+  // (or a timeout in any one VP) cancels the whole fan-out.
   //
   // Side-effect: VP-B's transcript no longer contains VP-A's reply
   // (they're concurrent). Cross-VP visibility moves to the explicit
@@ -714,13 +779,12 @@ export async function handleUnifyGroupChat(msg) {
   // truth for full-fidelity replay.
   await Promise.all(captured.map(async ({ vpId }) => {
     try {
-      await handleUnifyChat({
-        ...msg,
+      await runVpTurn({
         prompt: `@vp-${vpId} ${text}`,
         groupId,
         vpId,
-        speakerVpId: vpId,
-        _groupCoordinator: coord,
+        groupCoordinator: coord,
+        abortCtrl: dispatchAbortCtrl,
       });
     } catch (err) {
       console.warn('[Unify] unify_group_chat: per-vp dispatch failed', vpId, err?.message || err);
@@ -794,94 +858,96 @@ export function buildVpQueryOpts({ vpId, groupCoordinator, groupId }) {
 }
 
 /**
- * Handle a unify_chat message from the web UI.
- *
- * H2.f.2: a new message cancels the prior in-flight controller (single
- * conversation, not per-thread). The history accumulator is a flat array.
- *
- * @param {{ prompt: string, mode?: string, userId?: string, username?: string }} msg
+ * Lazy session boot. Idempotent: subsequent calls are no-ops once `session`
+ * is set. Emits `session_ready` on first init so the frontend can finalize
+ * its handshake.
  */
-export async function handleUnifyChat(msg) {
-  const { prompt, mode } = msg;
-  if (!prompt?.trim()) return;
-  const vpId = typeof msg.vpId === 'string' && msg.vpId.trim() ? msg.vpId.trim() : null;
-  let groupCoordinator = msg._groupCoordinator || null;
-  let groupId = typeof msg.groupId === 'string' && msg.groupId.trim() ? msg.groupId.trim() : null;
+async function ensureSessionLoaded() {
+  if (session) return;
 
-  if (mode !== undefined && mode !== null) {
-    console.warn('[Unify] unify_chat.mode is deprecated and ignored — Unify now runs in a single unified mode.');
-  }
+  const yeaftDir = ctx.CONFIG?.yeaftDir;
+  session = await loadSession({
+    ...(yeaftDir && { dir: yeaftDir }),
+    skipMCP: false,
+    skipSkills: false,
+  });
+
+  installUnifyRuntimeBridge(session);
 
   try {
-    if (!session) {
-      const yeaftDir = ctx.CONFIG?.yeaftDir;
-      session = await loadSession({
-        ...(yeaftDir && { dir: yeaftDir }),
-        skipMCP: false,
-        skipSkills: false,
+    if (session.engine && typeof session.engine.setSubAgentEventSink === 'function') {
+      session.engine.setSubAgentEventSink((agentId, evt) => {
+        try {
+          sendUnifyEvent({ type: 'sub_agent_event', agentId, payload: evt });
+        } catch { /* ignore */ }
       });
-
-      installUnifyRuntimeBridge(session);
-
-      try {
-        if (session.engine && typeof session.engine.setSubAgentEventSink === 'function') {
-          session.engine.setSubAgentEventSink((agentId, evt) => {
-            try {
-              sendUnifyEvent({ type: 'sub_agent_event', agentId, payload: evt });
-            } catch { /* ignore */ }
-          });
-        }
-      } catch (err) {
-        console.warn('[Unify] setSubAgentEventSink wiring failed:', err?.message || err);
-      }
-
-      // Bug 8: clean up legacy `.archived-*` group dirs at boot.
-      try {
-        const yeaftDir = ctx.CONFIG?.yeaftDir;
-        if (yeaftDir) {
-          const removed = purgeArchivedGroups(yeaftDir);
-          if (removed && removed.length > 0) {
-            console.log(`[Unify] purged ${removed.length} legacy .archived group dir(s)`);
-          }
-        }
-      } catch (err) {
-        console.warn('[Unify] purgeArchivedGroups failed:', err?.message || err);
-      }
-
-      unifyConversationId = `unify-${Date.now()}`;
-
-      restoreHistoryFromRecent(session.conversationStore.loadRecent(50));
-
-      sendUnifyEvent({
-        type: 'session_ready',
-        conversationId: unifyConversationId,
-        model: session.config.model,
-        availableModels: session.config.availableModels || [],
-        skills: session.status.skills,
-        mcpServers: session.status.mcpServers,
-        tools: session.status.tools,
-      });
-      sendGroupSnapshotBroadcast();
     }
+  } catch (err) {
+    console.warn('[Unify] setSubAgentEventSink wiring failed:', err?.message || err);
+  }
 
+  // Bug 8: clean up legacy `.archived-*` group dirs at boot.
+  try {
+    if (yeaftDir) {
+      const removed = purgeArchivedGroups(yeaftDir);
+      if (removed && removed.length > 0) {
+        console.log(`[Unify] purged ${removed.length} legacy .archived group dir(s)`);
+      }
+    }
+  } catch (err) {
+    console.warn('[Unify] purgeArchivedGroups failed:', err?.message || err);
+  }
+
+  unifyConversationId = `unify-${Date.now()}`;
+
+  restoreHistoryFromRecent(session.conversationStore.loadRecent(50));
+
+  sendUnifyEvent({
+    type: 'session_ready',
+    conversationId: unifyConversationId,
+    model: session.config.model,
+    availableModels: session.config.availableModels || [],
+    skills: session.status.skills,
+    mcpServers: session.status.mcpServers,
+    tools: session.status.tools,
+  });
+  sendGroupSnapshotBroadcast();
+}
+
+/**
+ * Run a single VP's turn: call engine.query() with the supplied prompt and
+ * coordinator-bound router, stream events to the frontend, and append the
+ * result to the flat conversation history.
+ *
+ * Private — only `handleUnifyGroupChat` calls this. Coordinator and groupId
+ * are mandatory; callers MUST resolve a default group before invoking. The
+ * caller also owns the AbortController; we receive the whole controller
+ * (not just its signal) so the per-VP query-timeout can abort exactly the
+ * dispatch it belongs to — and only if that controller is still the
+ * module-active one. This avoids a stale-timer-from-an-aborted-dispatch
+ * killing the next dispatch.
+ *
+ * @param {{ prompt: string, groupId: string, vpId: string|null, groupCoordinator: object, abortCtrl: AbortController }} args
+ */
+async function runVpTurn({ prompt, groupId, vpId, groupCoordinator, abortCtrl }) {
+  if (!prompt?.trim()) return;
+
+  try {
     if (session?.dreamScheduler) {
       session.dreamScheduler.noteUserMessage();
     }
-
-    // Cancel any prior in-flight round before starting this one.
-    if (currentAbortCtrl && !currentAbortCtrl.signal.aborted) {
-      try { currentAbortCtrl.abort(); } catch { /* best-effort */ }
-    }
-    const abortCtrl = new AbortController();
-    currentAbortCtrl = abortCtrl;
 
     let queryTimer = null;
     const resetQueryTimer = () => {
       if (queryTimer) clearTimeout(queryTimer);
       queryTimer = setTimeout(() => {
-        if (!abortCtrl.signal.aborted) {
+        // Abort the captured dispatch controller — but only if it is
+        // still the module-active one. If a later dispatch already
+        // replaced it, our timer is stale and must NOT abort whatever
+        // the new dispatch installed (that was the original race).
+        if (abortCtrl === currentAbortCtrl && !abortCtrl.signal.aborted) {
           console.error(`[Unify] query timeout after ${QUERY_TIMEOUT_MS / 1000}s of silence — aborting`);
-          abortCtrl.abort();
+          try { abortCtrl.abort(); } catch { /* best-effort */ }
         }
       }, QUERY_TIMEOUT_MS);
     };
@@ -891,48 +957,6 @@ export async function handleUnifyChat(msg) {
       const assistantTextParts = [];
       const toolCallsAccum = [];
       const toolResultsAccum = [];
-
-      // Backend safety net: if no coordinator was supplied (legacy
-      // `unify_chat` path, or test harness) but we have a yeaft dir, build
-      // an ephemeral coordinator over `groupId || grp_default`. This keeps
-      // ctx.router always wired so `route_forward` never bombs out with
-      // `router_unavailable`. The coordinator is local to this turn — no
-      // fan-out, no extra dispatch — it only exists so the per-VP Engine
-      // query can hand it to createRouter().
-      if (!groupCoordinator) {
-        try {
-          const yeaftDir = ctx.CONFIG?.yeaftDir;
-          if (yeaftDir) {
-            const resolvedGroupId = groupId || 'grp_default';
-            const { openGroup, loadGroupMeta } = await import('./groups/group-store.js');
-            const { join } = await import('node:path');
-            const { existsSync } = await import('node:fs');
-            const root = join(yeaftDir, 'groups');
-            const dir = join(root, resolvedGroupId);
-            let groupHandle = null;
-            if (existsSync(dir) && loadGroupMeta(dir)) {
-              groupHandle = openGroup(root, resolvedGroupId);
-            } else if (resolvedGroupId === 'grp_default') {
-              const { seedDefaultGroup } = await import('./groups/seed-default.js');
-              const seeded = seedDefaultGroup(yeaftDir, {});
-              groupHandle = seeded.group;
-            } else {
-              console.warn('[Unify] handleUnifyChat: groupId %s not found; no router will be wired for this turn', resolvedGroupId);
-            }
-            if (groupHandle) {
-              const { createCoordinator } = await import('./groups/coordinator.js');
-              groupCoordinator = createCoordinator(groupHandle, {
-                deliver: () => { /* no-op: 1:1 path, no fan-out */ },
-              });
-              if (!groupId) groupId = resolvedGroupId;
-            }
-          }
-        } catch (err) {
-          console.warn('[Unify] handleUnifyChat: ephemeral coordinator build failed', err?.message || err);
-          // Non-fatal — buildVpQueryOpts will return without router and
-          // route_forward will surface `router_unavailable` for that turn.
-        }
-      }
 
       // H2.f.5: dispatcher + InputQueue retired. Call engine.query() directly,
       // passing the flat conversation history as `messages` for context continuity.
@@ -1000,7 +1024,7 @@ export async function handleUnifyChat(msg) {
       return;
     }
 
-    console.error('[Unify] query error:', err.message);
+    console.error('[Unify] query error:', err);
 
     if (isPermissionErrorMsg(err.message)) {
       if (!_permissionDiagnosticSent) {
@@ -1030,10 +1054,6 @@ export async function handleUnifyChat(msg) {
       type: 'result',
       result_text: '',
     }, groupId);
-  } finally {
-    if (currentAbortCtrl && currentAbortCtrl.signal.aborted) {
-      // Aborted controllers stay where they are; a new query will replace.
-    }
   }
 }
 
@@ -1164,9 +1184,6 @@ export async function handleUnifyFetchSummaryHistory(msg = {}) {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     if (!yeaftDir) { reply({ revisions: [], archived: null, error: 'no_yeaft_dir' }); return; }
 
-    const { openGroup, loadGroupMeta } = await import('./groups/group-store.js');
-    const { join } = await import('node:path');
-    const { existsSync } = await import('node:fs');
     const root = join(yeaftDir, 'groups');
     const dir = join(root, groupId);
     if (!existsSync(dir) || !loadGroupMeta(dir)) {

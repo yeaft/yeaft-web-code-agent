@@ -5,18 +5,18 @@
  *
  *   1. v0.1.598 wired `createRouter` into buildVpQueryOpts when a
  *      coordinator is supplied — but only the `unify_group_chat` path
- *      supplies one. Legacy `unify_chat` (no group) silently dropped
- *      ctx.router, and any `route_forward` call from a VP exploded with
- *      `router_unavailable`.
+ *      supplied one. The legacy `unify_chat` path (no group) silently
+ *      dropped ctx.router, and any `route_forward` call from a VP
+ *      exploded with `router_unavailable`.
  *
  *   2. The product semantics are "Unify is a single conversation backed
  *      by grp_default" — there is no legitimate path where the user is
- *      in Unify but no group exists. So `route_forward` MUST always have
- *      a router to call into.
+ *      in Unify but no group exists. v0.1.671 ensured the frontend
+ *      ALWAYS sends `unify_group_chat` with `grp_default`; v0.1.672 then
+ *      deleted the `unify_chat` / `handleUnifyChat` legacy path entirely.
+ *      So `route_forward` ALWAYS has a router to call into.
  *
- * These tests guard the buildVpQueryOpts contract directly. Frontend
- * always-send-with-grp_default and backend lazy-coordinator are covered
- * by their own integration tests; this file is the contract pin.
+ * These tests guard the buildVpQueryOpts contract directly.
  */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -66,10 +66,11 @@ describe('buildVpQueryOpts — router wiring invariant', () => {
   });
 
   it('no router is attached when no coordinator is supplied', () => {
-    // This is the legacy path. The fix moves the responsibility for
-    // ALWAYS supplying a coordinator into the caller (frontend ChatInput
-    // always sends grp_default; backend handleUnifyChat builds a fallback
-    // coordinator before reaching here).
+    // After v0.1.672 there is no production caller that omits a
+    // coordinator — `handleUnifyGroupChat` always builds one and
+    // there's no longer a `handleUnifyChat` entry point. This test
+    // pins the buildVpQueryOpts function-level contract: given no
+    // coordinator, no router. Defensive only.
     const out = buildVpQueryOpts({ vpId: 'linus' });
     expect(out).toBeDefined();
     expect(out.router).toBeUndefined();
