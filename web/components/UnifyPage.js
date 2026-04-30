@@ -6,12 +6,11 @@ import VpDetailView from './VpDetailView.js';
 import GroupInviteModal from './GroupInviteModal.js';
 import GroupMemberEditor from './GroupMemberEditor.js';
 import FeatureMessageRejectToast from './FeatureMessageRejectToast.js';
-import UserMemoryPage from './UserMemoryPage.js';
 import WorkbenchPanel from './WorkbenchPanel.js';
 
 export default {
   name: 'UnifyPage',
-  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2, VpDetailView, GroupInviteModal, GroupMemberEditor, FeatureMessageRejectToast, UserMemoryPage, WorkbenchPanel },
+  components: { ChatInput, MessageList, UnifySettings, UnifySidebarV2, VpDetailView, GroupInviteModal, GroupMemberEditor, FeatureMessageRejectToast, WorkbenchPanel },
   template: `
     <div class="unify-page">
       <!-- Mobile sidebar overlay -->
@@ -23,7 +22,6 @@ export default {
         @select-task="onSelectTaskV2"
         @select-group="onSelectGroupV2"
         @search-escape="onSearchEscape"
-        @open-user-memory="onOpenUserMemory"
         @toggle-sidebar="toggleSidebar"
         @back="goBack"
         @open-settings="toggleSettings"
@@ -108,13 +106,12 @@ export default {
         />
 
         <!-- Messages Area — reuse standard MessageList for identical rendering -->
-        <UserMemoryPage v-if="!showSettings && userMemoryOpen && !store.unifyActiveVpDetailId" @back="userMemoryOpen = false" />
         <!-- task-fix-empty-group: hero state replaces MessageList when the
              active group has no roster — gives the user a single, clear
              next step instead of a blank canvas. The modal still pops on
              top for groups the user hasn't dismissed yet. -->
         <div
-          v-if="!showSettings && !userMemoryOpen && !store.unifyActiveVpDetailId && isActiveGroupEmpty"
+          v-if="!showSettings && !store.unifyActiveVpDetailId && isActiveGroupEmpty"
           class="unify-empty-group-hero"
         >
           <div class="unify-empty-group-hero__icon" aria-hidden="true">
@@ -128,17 +125,14 @@ export default {
             {{ $t('unify.group.empty.cta') }}
           </button>
         </div>
-        <MessageList v-if="!showSettings && !userMemoryOpen && !store.unifyActiveVpDetailId && !isActiveGroupEmpty" />
+        <MessageList v-if="!showSettings && !store.unifyActiveVpDetailId && !isActiveGroupEmpty" />
 
         <!-- Settings Panel -->
         <UnifySettings v-if="showSettings" :initial-tab="settingsInitialTab" @close="showSettings = false" @saved="onSettingsSaved" />
 
         <!-- Input Area -->
-        <!-- task-fix: hide ChatInput on UserMemoryPage — a memory browser
-             has no conversational input, and leaving the chatbox visible
-             was explicitly flagged as wrong UX ("怎么还能有对话框"). -->
         <ChatInput
-          v-if="!showSettings && !userMemoryOpen"
+          v-if="!showSettings"
           :send-fn="sendMessage"
           :cancel-fn="cancelUnify"
           :show-stop="isProcessing"
@@ -314,7 +308,6 @@ export default {
     const modelDropdownOpen = Vue.ref(false);
     const showSettings = Vue.ref(false);
     const settingsInitialTab = Vue.ref('llm'); // task-343: 'llm' | 'vp'
-    const userMemoryOpen = Vue.ref(false);
 
     // task-340: Workbench capability gate — matches ChatPage.canUseWorkbench
     // semantics via store.hasCapability. store.workbenchExpanded and
@@ -362,13 +355,6 @@ export default {
         const el = document.querySelector('.input-area textarea, .input-area input[type="text"]');
         if (el && typeof el.focus === 'function') el.focus();
       });
-    };
-
-    const onOpenUserMemory = () => {
-      userMemoryOpen.value = true;
-      showSettings.value = false;
-      store.unifyActiveFeatureDetailId = null;
-      store.unifyActiveVpDetailId = null;
     };
 
     // Detail panel resizable width
@@ -838,9 +824,6 @@ export default {
       memberEditorGroupId,
       openMemberEditor,
       closeMemberEditor,
-      // task-334-ui-d: user memory
-      userMemoryOpen,
-      onOpenUserMemory,
     };
   }
 };

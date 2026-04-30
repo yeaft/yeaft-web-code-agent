@@ -20,13 +20,11 @@
  * (shared cascade with task-detail / thread-filter).
  */
 import VpAvatar from './VpAvatar.js';
-import MemoryCard from './MemoryCard.js';
-import MemoryTraceModal from './MemoryTraceModal.js';
 import { reasonToI18nKey } from '../utils/vp-reason.js';
 
 export default {
   name: 'VpDetailView',
-  components: { VpAvatar, MemoryCard, MemoryTraceModal },
+  components: { VpAvatar },
   emits: ['back'],
   props: {
     vpId: { type: String, required: true },
@@ -123,42 +121,12 @@ export default {
           <p class="vp-detail-activity-hint">{{ $t('unify.vp.detail.activityPrivate') }}</p>
         </section>
 
-        <!-- R6 G2: per-VP memory shard browser -->
-        <section class="vp-detail-section vp-detail-memory">
-          <div class="vp-detail-memory-head">
-            <h3 class="vp-detail-section-title">{{ $t('unify.vp.detail.memory') }}</h3>
-            <button
-              type="button"
-              class="vp-detail-memory-refresh"
-              :title="$t('unify.vp.detail.memoryRefresh')"
-              @click="refreshMemory"
-            >↻</button>
-          </div>
-          <p v-if="memoryLoading" class="vp-detail-empty">{{ $t('unify.vp.detail.memoryLoading') }}</p>
-          <p v-else-if="memoryError" class="vp-detail-empty">{{ $t('unify.vp.detail.memoryError', { error: memoryError }) }}</p>
-          <p v-else-if="!memoryEntries.length" class="vp-detail-empty">{{ $t('unify.vp.detail.memoryEmpty') }}</p>
-          <div v-else class="vp-detail-memory-list">
-            <MemoryCard
-              v-for="e in memoryEntries"
-              :key="e.id"
-              :entry="e"
-              @open-trace="openTrace"
-            />
-          </div>
-        </section>
-
         <p class="vp-detail-edit-hint">{{ $t('unify.vp.detail.editHint') }}</p>
       </div>
 
       <div class="vp-detail-missing" v-else>
         <p>{{ $t('unify.vp.detail.notFound') }}</p>
       </div>
-
-      <MemoryTraceModal
-        :entry-id="traceEntryId"
-        @close="traceEntryId = null"
-        @jump-to-message="onJumpToMessage"
-      />
     </div>
   `,
   setup(props) {
@@ -286,37 +254,6 @@ export default {
       vpStore.triggerDream(props.vpId);
     }
 
-    // ── R6 G2: per-VP memory shard ─────────────────────────────
-    const memStore = (window.Pinia && window.Pinia.useMemoryStore)
-      ? window.Pinia.useMemoryStore()
-      : null;
-
-    const memoryScope = Vue.computed(() => ({ vpId: props.vpId }));
-    const memoryEntries = Vue.computed(() => memStore ? memStore.entriesFor(memoryScope.value) : []);
-    const memoryLoading = Vue.computed(() => memStore ? memStore.isLoading(memoryScope.value) : false);
-    const memoryError = Vue.computed(() => memStore ? memStore.errorFor(memoryScope.value) : null);
-
-    // Auto-fetch on mount + when vpId changes.
-    Vue.watch(() => props.vpId, (id) => {
-      if (id && memStore) memStore.queryScope({ vpId: id });
-    }, { immediate: true });
-
-    function refreshMemory() {
-      if (!memStore) return;
-      memStore.invalidateScope(memoryScope.value);
-      memStore.queryScope(memoryScope.value);
-    }
-
-    const traceEntryId = Vue.ref(null);
-    function openTrace(id) { traceEntryId.value = id || null; }
-    function onJumpToMessage(_sourceRef) {
-      // The MessageList jump is owned by ChatStore.unifyJumpTarget (set
-      // via search). For G2 v1 we close the modal — wiring the jump to
-      // MessageList is left to G1a / a future slice when the cross-
-      // panel scroll API is generalized.
-      traceEntryId.value = null;
-    }
-
     return {
       vp,
       traits,
@@ -327,13 +264,6 @@ export default {
       dreamStatus,
       dreamStatusText,
       onRunDream,
-      memoryEntries,
-      memoryLoading,
-      memoryError,
-      refreshMemory,
-      traceEntryId,
-      openTrace,
-      onJumpToMessage,
     };
   },
 };

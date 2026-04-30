@@ -21,13 +21,11 @@ import { randomUUID } from 'crypto';
 import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
 import { LLMContextError, LLMAbortError } from './llm/adapter.js';
 import { runMemoryPreflow, buildRelevantScopes } from './groups/pre-flow.js';
-import { shouldConsolidate, consolidate, partitionMessages } from './memory/consolidate.js';
-import { extractMemories } from './memory/extract.js';
+import { shouldConsolidate, partitionMessages } from './memory/consolidate.js';
 import { runCompact as runCompactOrchestrator } from './compact/orchestrator.js';
 import { evaluateCompactTriggers } from './compact/triggers.js';
 import { archiveTurn } from './archive/turn-archive.js';
 import { archiveToolResults } from './archive/tool-results.js';
-import { buildMemoryInjection } from './memory/layout.js';
 import { readSummary as readScopeSummary } from './memory/store-v2.js';
 import { runAdjust } from './memory/adjust.js';
 import { runStopHooks } from './stop-hooks.js';
@@ -145,12 +143,6 @@ export class Engine {
   /** @type {import('./conversation/persist.js').ConversationStore|null} */
   #conversationStore;
 
-  /** @type {import('./memory/store.js').MemoryStore|null} */
-  #memoryStore;
-
-  /** @type {object|null} — R6 memory shard store (task-334f) */
-  #memoryShardStore;
-
   /** @type {import('./memory/index-db.js').SegmentIndex|null} — GC.1: SQLite FTS5 segment index */
   #memoryIndex;
 
@@ -235,7 +227,6 @@ export class Engine {
    *   trace: object,
    *   config: object,
    *   conversationStore?: import('./conversation/persist.js').ConversationStore,
-   *   memoryStore?: import('./memory/store.js').MemoryStore,
    *   memoryIndex?: import('./memory/index-db.js').SegmentIndex,
    *   toolRegistry?: import('./tools/registry.js').ToolRegistry,
    *   skillManager?: import('./skills.js').SkillManager,
@@ -243,15 +234,13 @@ export class Engine {
    *   yeaftDir?: string,
    * }} params
    */
-  constructor({ adapter, trace, config, conversationStore, memoryStore, memoryShardStore, memoryIndex, amsRegistry, toolRegistry, skillManager, mcpManager, yeaftDir }) {
+  constructor({ adapter, trace, config, conversationStore, memoryIndex, amsRegistry, toolRegistry, skillManager, mcpManager, yeaftDir }) {
     this.#adapter = adapter;
     this.#trace = trace;
     this.#config = config;
     this.#tools = new Map();
     this.#traceId = randomUUID();
     this.#conversationStore = conversationStore || null;
-    this.#memoryStore = memoryStore || null;
-    this.#memoryShardStore = memoryShardStore || null;
     this.#memoryIndex = memoryIndex || null;
     this.#amsRegistry = amsRegistry || null;
     this.#toolRegistry = toolRegistry || null;
@@ -619,8 +608,6 @@ export class Engine {
       cwd: process.cwd(),
       mcpManager: this.#mcpManager,
       skillManager: this.#skillManager,
-      memoryStore: this.#memoryStore,
-      memoryShardStore: this.#memoryShardStore,
       conversationStore: this.#conversationStore,
       adapter: this.#adapter,
       config: this.#config,
@@ -644,8 +631,6 @@ export class Engine {
         adapter: this.#adapter,
         trace: this.#trace,
         config: this.#config,
-        memoryStore: this.#memoryStore,
-        memoryShardStore: this.#memoryShardStore,
         parentToolRegistry: this.#toolRegistry,
         skillManager: this.#skillManager,
         mcpManager: this.#mcpManager,
@@ -759,64 +744,21 @@ export class Engine {
    * @returns {Promise<{ archivedCount: number, extractedCount: number }|null>}
    */
   async #maybeConsolidate() {
-    if (!this.#conversationStore || !this.#memoryStore) return null;
+    if (!this.#conversationStore) return null;
     if (this.#config._readOnly) return null;
 
     const budget = this.#config.messageTokenBudget || 8192;
     const compactCfg = (this.#config && this.#config.compact) || {};
-
-    // Phase 8 PR-H: orchestrator is now the default. The legacy
-    // shouldConsolidate / consolidate path remains reachable as an
-    // explicit fallback via `config.compact.useLegacy=true` for parity
-    // testing during migration. evaluateCompactTriggers (DESIGN §4.1)
-    // and runCompact (DESIGN §4.2) own the live path.
-    const useLegacy = compactCfg.useLegacy === true || compactCfg.useOrchestrator === false;
-    if (!useLegacy) {
-      return this.#runOrchestratorCompact(budget, compactCfg);
-    }
-
-    // Default path — surface trigger reasons via trace for observability
-    // even when we still fall through to the legacy consolidate.
-    try {
-      const messages = this.#conversationStore.loadAll();
-      const tokenCount = this.#conversationStore.hotTokens();
-      const trig = evaluateCompactTriggers({
-        messages,
-        tokenCount,
-        contextLimit: this.#config.maxContextTokens || 200000,
-        tokenRatio: compactCfg.tokenRatio,
-        maxMessages: compactCfg.maxMessages,
-      });
-      this.#trace.logEvent && this.#trace.logEvent({
-        traceId: 'compact_triggers_eval',
-        eventType: 'compact_triggers_eval',
-        eventData: { trigger: trig.trigger, reasons: trig.reasons },
-      });
-    } catch { /* observability only */ }
-
-    if (!shouldConsolidate(this.#conversationStore, budget)) return null;
-
-    try {
-      const result = await consolidate({
-        conversationStore: this.#conversationStore,
-        memoryStore: this.#memoryStore,
-        adapter: this.#adapter,
-        config: this.#fastConfig,
-        budget,
-      });
-      return { archivedCount: result.archivedCount, extractedCount: result.extractedEntries.length };
-    } catch {
-      // Consolidation failure is non-critical
-      return null;
-    }
+    return this.#runOrchestratorCompact(budget, compactCfg);
   }
 
   /**
-   * Phase 8 PR-D: run compact via the new orchestrator (DESIGN §4.2).
-   * Hooks adapt the orchestrator's injectable contract to the existing
-   * conversationStore / memoryStore primitives, so behaviour matches
-   * the legacy `consolidate` path 1:1 while exercising the new
-   * triggers / turn-group / orchestrator code on the live path.
+   * Run compact via the orchestrator (DESIGN §4.2).
+   *
+   * PR-B rip: the legacy entries-based extract hook is gone — Dream V2
+   * owns durable memory extraction now. The orchestrator runs Track 1
+   * (compaction + summary) and Track 2 (task summary refresh, when wired);
+   * Track 3 (extract) is intentionally omitted.
    *
    * @param {number} budget
    * @param {object} compactCfg
@@ -824,7 +766,6 @@ export class Engine {
    */
   async #runOrchestratorCompact(budget, _compactCfg) {
     const conversationStore = this.#conversationStore;
-    const memoryStore = this.#memoryStore;
     const adapter = this.#adapter;
     const fastConfig = this.#fastConfig;
 
@@ -842,9 +783,9 @@ export class Engine {
     });
     if (!trig.trigger) return null;
 
-    // Use partitionMessages (the legacy primitive) to decide what is
-    // "cooling": orchestrator's own keepHot is a count, but we want to
-    // honour the token-budget partitioning the rest of the system uses.
+    // Use partitionMessages to decide what is "cooling": orchestrator's
+    // own keepHot is a count, but we want to honour the token-budget
+    // partitioning the rest of the system uses.
     const { toArchive } = partitionMessages(messages, budget);
     if (toArchive.length === 0) return null;
 
@@ -852,10 +793,6 @@ export class Engine {
 
     const hooks = {
       summarise: async () => {
-        // Reuse the legacy consolidate path's summary technique by
-        // invoking adapter directly with a fresh prompt. We keep the
-        // orchestrator's contract honoured: it takes the cooling slice
-        // and returns a string.
         try {
           const result = await adapter.call({
             model: fastConfig.model,
@@ -871,11 +808,6 @@ export class Engine {
       archive: async (_groupIdx, groupMsgs) => {
         for (const m of groupMsgs) if (m.id) archiveIds.push(m.id);
         const turnId = groupMsgs[0]?.id || `g_${Date.now()}`;
-        // Phase 8 PR-E: persist the cooling turn to
-        // <yeaftDir>/memory/archive/<turnId>.md so message_trace can
-        // replay it later. Scope is "user/" by default — group/task
-        // scoping is a follow-up that will arrive with multi-VP archive
-        // routing. Best-effort: archive failure must not abort compact.
         if (this.#yeaftDir) {
           try {
             await archiveTurn({
@@ -888,26 +820,12 @@ export class Engine {
         }
         return { turnId };
       },
-      extract: async (coolingMessages) => {
-        try {
-          const extracted = await extractMemories({
-            messages: coolingMessages, adapter, config: fastConfig,
-          });
-          for (const e of extracted) memoryStore.writeEntry(e);
-          if (extracted.length > 0) memoryStore.rebuildScopes();
-          return { written: extracted.length };
-        } catch {
-          return { written: 0 };
-        }
-      },
     };
 
     try {
       const out = await runCompactOrchestrator({
         messages, keepHot: 10, hooks,
       });
-      // Apply side effects to the conversation store: move archived
-      // ids to cold, persist compact summary, update index.
       if (archiveIds.length > 0) conversationStore.moveToColdBatch(archiveIds);
       if (out.compactSummary) conversationStore.updateCompactSummary(out.compactSummary);
       const lastKept = messages[messages.length - 1];
@@ -1012,28 +930,16 @@ export class Engine {
    */
   async *#runQuery({ prompt, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan }) {
 
-    // ─── Pre-query: Memory Injection (task-287) + Compact Summary ──
-    // Two-layer recall:
-    //   1. Static memory index injection (buildMemoryInjection — always)
-    //   2. FTS5 pre-flow recall (#recallMemory → groups/pre-flow.js →
-    //      memory/preflow.js — when memoryIndex is wired)
-    // No per-turn fuzzy recall via old recall.js — LLM calls memory_load /
-    // memory_query on demand (memory_search still works as a deprecated alias).
+    // ─── Pre-query: FTS5 Memory Recall + Compact Summary ──
+    // Memory feed comes from two places:
+    //   (a) FTS5 pre-flow recall (#recallMemory → groups/pre-flow.js →
+    //       memory/preflow.js) — per-turn scoped recall
+    //   (b) AMS snapshot (resident summaries + onDemand FTS hits) appended
+    //       below
+    // The legacy entries-aggregate `buildMemoryInjection` (index.md / by-project /
+    // by-topic / timeline) was retired in the H2-AMS rip.
     let memoryInjection = '';
     let recallEntryCount = 0;
-    if (this.#yeaftDir) {
-      try {
-        const entryCount = this.#memoryStore?.stats?.().entryCount ?? 0;
-        memoryInjection = buildMemoryInjection({
-          yeaftDir: this.#yeaftDir,
-          cwd: process.cwd(),
-          entryCount,
-          language: this.#config.language || 'en',
-        });
-      } catch {
-        // Injection failure is non-critical — fall back to empty.
-      }
-    }
 
     // R6 recall: append shard-based recall results to memory injection
     const recallResult = await this.#recallMemory(prompt, {
@@ -1326,7 +1232,7 @@ export class Engine {
         }
 
         // ─── LLMContextError → force compact → retry ──────
-        if (err instanceof LLMContextError && this.#conversationStore && this.#memoryStore) {
+        if (err instanceof LLMContextError && this.#conversationStore) {
           const consolidated = await this.#maybeConsolidate();
           if (consolidated && consolidated.archivedCount > 0) {
             yield { type: 'consolidate', archivedCount: consolidated.archivedCount, extractedCount: consolidated.extractedCount };
@@ -1451,7 +1357,6 @@ export class Engine {
           const hookResult = await runStopHooks({
             yeaftDir: this.#yeaftDir,
             conversationStore: this.#conversationStore,
-            memoryStore: this.#memoryStore,
             adapter: this.#adapter,
             config: this.#fastConfig,
             primaryModel: this.#config.model,
@@ -1778,19 +1683,6 @@ export class Engine {
    */
   get conversationStore() {
     return this.#conversationStore;
-  }
-
-  /**
-   * Get the memory store (for external access, e.g., CLI commands).
-   * @returns {import('./memory/store.js').MemoryStore|null}
-   */
-  get memoryStore() {
-    return this.#memoryStore;
-  }
-
-  /** @returns {object|null} — R6 memory shard store (task-334f) */
-  get memoryShardStore() {
-    return this.#memoryShardStore;
   }
 
   /** @returns {import('./tools/registry.js').ToolRegistry|null} */

@@ -3,112 +3,7 @@ import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync
 import { join } from 'path';
 import { tmpdir } from 'os';
 
-// ─── memory/types.js tests ──────────────────────────────────
-
-describe('memory/types.js', () => {
-  let types;
-
-  beforeEach(async () => {
-    types = await import('../../agent/unify/memory/types.js');
-  });
-
-  describe('KINDS', () => {
-    it('should have 6 kinds', () => {
-      expect(types.KINDS).toHaveLength(6);
-      expect(types.KINDS).toContain('fact');
-      expect(types.KINDS).toContain('preference');
-      expect(types.KINDS).toContain('skill');
-      expect(types.KINDS).toContain('lesson');
-      expect(types.KINDS).toContain('context');
-      expect(types.KINDS).toContain('relation');
-    });
-  });
-
-  describe('parseScopePath', () => {
-    it('should parse scope path into segments', () => {
-      expect(types.parseScopePath('work/project/auth')).toEqual(['work', 'project', 'auth']);
-    });
-
-    it('should return ["global"] for empty/null scope', () => {
-      expect(types.parseScopePath('')).toEqual(['global']);
-      expect(types.parseScopePath(null)).toEqual(['global']);
-      expect(types.parseScopePath(undefined)).toEqual(['global']);
-    });
-
-    it('should handle single segment', () => {
-      expect(types.parseScopePath('global')).toEqual(['global']);
-    });
-  });
-
-  describe('getAncestorScopes', () => {
-    it('should return all ancestor scopes including global', () => {
-      const ancestors = types.getAncestorScopes('work/project/auth');
-      expect(ancestors).toEqual(['global', 'work', 'work/project', 'work/project/auth']);
-    });
-
-    it('should return ["global"] for global scope', () => {
-      expect(types.getAncestorScopes('global')).toEqual(['global']);
-      expect(types.getAncestorScopes('')).toEqual(['global']);
-      expect(types.getAncestorScopes(null)).toEqual(['global']);
-    });
-  });
-
-  describe('areScopesRelated', () => {
-    it('should recognize parent-child relationship', () => {
-      expect(types.areScopesRelated('work', 'work/project')).toBe(true);
-      expect(types.areScopesRelated('work/project', 'work')).toBe(true);
-    });
-
-    it('should recognize exact match', () => {
-      expect(types.areScopesRelated('work/project', 'work/project')).toBe(true);
-    });
-
-    it('should consider global related to everything', () => {
-      expect(types.areScopesRelated('global', 'work/project')).toBe(true);
-      expect(types.areScopesRelated('work/project', 'global')).toBe(true);
-    });
-
-    it('should not relate unrelated scopes', () => {
-      expect(types.areScopesRelated('work/project-a', 'tech/typescript')).toBe(false);
-    });
-  });
-
-  describe('validateEntry', () => {
-    it('should accept valid entry', () => {
-      const result = types.validateEntry({
-        name: 'test-entry',
-        kind: 'fact',
-        content: 'Some content',
-        tags: ['a', 'b'],
-      });
-      expect(result.valid).toBe(true);
-      expect(result.errors).toHaveLength(0);
-    });
-
-    it('should reject missing name', () => {
-      const result = types.validateEntry({ content: 'test' });
-      expect(result.valid).toBe(false);
-      expect(result.errors.some(e => e.includes('name'))).toBe(true);
-    });
-
-    it('should reject missing content', () => {
-      const result = types.validateEntry({ name: 'test' });
-      expect(result.valid).toBe(false);
-      expect(result.errors.some(e => e.includes('content'))).toBe(true);
-    });
-
-    it('should reject invalid kind', () => {
-      const result = types.validateEntry({ name: 'test', kind: 'invalid', content: 'c' });
-      expect(result.valid).toBe(false);
-      expect(result.errors.some(e => e.includes('kind'))).toBe(true);
-    });
-
-    it('should reject non-object', () => {
-      const result = types.validateEntry(null);
-      expect(result.valid).toBe(false);
-    });
-  });
-});
+// ─── memory/types.js retired in H2-AMS rip ───────────────────
 
 // ─── memory/scan.js + dream.js + dream-prompt.js retired ──
 
@@ -127,7 +22,6 @@ describe('stop-hooks.js', () => {
       mode: 'worker',
     });
     expect(result.messagesPersisted).toBe(0);
-    expect(result.consolidated).toBe(false);
   });
 
   it('should handle missing stores gracefully', async () => {

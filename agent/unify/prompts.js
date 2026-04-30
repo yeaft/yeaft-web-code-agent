@@ -368,27 +368,11 @@ export function buildSystemPrompt({
   }
 
   // ─── 6. Memory Section ─────────────────────────────────
+  // FTS5 pre-flow recall + AMS snapshot are concatenated upstream by the
+  // engine into a single `memoryInjection` block. The legacy entries-based
+  // memory.profile / memory.entries shape was retired in the H2-AMS rip.
   if (memoryInjection && memoryInjection.trim()) {
-    // New path (task-287): prebuilt injection from memory/layout.buildMemoryInjection()
-    // Contains index.md + user-preferences.md + optional project header excerpt.
     parts.push(memoryInjection.trim());
-  } else if (memory && (memory.profile || (memory.entries && memory.entries.length > 0))) {
-    // Legacy path — kept for callers (tests, CLI) that have not migrated yet.
-    const memoryParts = [lang.memoryHeader];
-
-    if (memory.profile) {
-      memoryParts.push(`${lang.profileHeader}\n${memory.profile}`);
-    }
-
-    if (memory.entries && memory.entries.length > 0) {
-      const entryLines = memory.entries.map(e => {
-        const tags = (e.tags && e.tags.length > 0) ? ` [${e.tags.join(', ')}]` : '';
-        return `- **${e.name}** (${e.kind}): ${e.content}${tags}`;
-      });
-      memoryParts.push(`${lang.recalledHeader}\n${entryLines.join('\n')}`);
-    }
-
-    parts.push(memoryParts.join('\n\n'));
   }
 
   // ─── 7. Compact Summary Section ────────────────────────

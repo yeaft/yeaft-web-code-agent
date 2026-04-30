@@ -1007,29 +1007,6 @@ export default {
   'unify.vp.dream.errored': 'Last dream {relative} · failed',
   'unify.vp.dream.failed': 'Dream failed: {error}',
 
-  // R6 G2 — per-VP memory shard browser (VpDetailView "Memory" section).
-  'unify.vp.detail.memory': 'Memory',
-  'unify.vp.detail.memoryLoading': 'Loading memory entries…',
-  'unify.vp.detail.memoryEmpty': 'No memory entries for this VP yet. Entries appear after a dream cycle merges chat into the shard.',
-  'unify.vp.detail.memoryError': 'Could not load memory: {error}',
-  'unify.vp.detail.memoryRefresh': 'Refresh memory',
-
-  // R6 G2 — MemoryCard + MemoryTraceModal shared keys.
-  'unify.memory.card.aria': 'Memory entry {id}',
-  'unify.memory.card.importance': 'Importance score',
-  'unify.memory.card.trace': 'Trace source',
-  'unify.memory.card.traceTitle': 'Open the original message that produced this memory',
-  'unify.memory.card.traceUnavailable': 'No source reference recorded',
-  'unify.memory.card.supersededBy': 'superseded by {id}',
-  'unify.memory.trace.title': 'Memory trace',
-  'unify.memory.trace.close': 'Close',
-  'unify.memory.trace.loading': 'Loading source reference…',
-  'unify.memory.trace.error': 'Trace failed: {error}',
-  'unify.memory.trace.entry': 'Entry',
-  'unify.memory.trace.source': 'Source message',
-  'unify.memory.trace.noSource': 'This entry has no recorded source reference.',
-  'unify.memory.trace.jump': 'Jump to message',
-
   // ============ Unify VP Live-diff Reasons (task-334-ui-c / O4) ============
   // Friendly messages surfaced when vp_updated / vp_removed events arrive.
   // Used in toasts + activity rows so snake_case classifier tags never leak.
@@ -1131,22 +1108,6 @@ export default {
   'unify.group.members.defaultHint': 'Default VP (replies when no @mention is given)',
   'unify.group.members.memberCount': '{count} selected',
   'unify.group.members.actionFailed': 'Action failed: {error}',
-
-  // ===== task-334-ui-d: User Memory browser =====
-  'unify.userMemory.sidebarTitle': 'User Memory',
-  'unify.userMemory.sidebarAria': 'User memory section',
-  'unify.userMemory.title': 'User Memory',
-  'unify.userMemory.backAria': 'Back from user memory',
-  'unify.userMemory.back': 'Back',
-  'unify.userMemory.count': '{count} entries',
-  'unify.userMemory.allShards': 'All',
-  'unify.userMemory.empty': 'No user memory entries yet.',
-  'unify.userMemory.emptyHint': 'User memory will be populated as the system learns about you through conversations.',
-  'unify.userMemory.loading': 'Loading user memory…',
-  'unify.userMemory.pin': 'Pin entry',
-  'unify.userMemory.unpin': 'Unpin entry',
-  'unify.userMemory.delete': 'Delete entry',
-  'unify.userMemory.deleteConfirm': 'Delete this memory entry? This cannot be undone.',
 
   // ===== task-334j: group view (mentions / replyTo / reject) =====
   'unify.vp.mention.placeholder': 'Search role by id or name\u2026',

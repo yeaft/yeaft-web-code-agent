@@ -27,10 +27,6 @@ import { scanVpLibrary } from './vp/vp-store.js';
 import { createRouter } from './routing/router.js';
 import { handleUnifyFeatureMessage as _handleUnifyFeatureMessage } from './feature-message.js';
 import {
-  handleUnifyUserMemoryWrite as _handleUnifyUserMemoryWrite,
-  handleUnifyUserMemoryRemove as _handleUnifyUserMemoryRemove,
-} from './user-memory.js';
-import {
   GroupCrudError,
   createGroupFromSpec,
   renameGroup,
@@ -207,36 +203,6 @@ export function handleUnifyVpDelete(msg) {
 
 export function handleUnifyFeatureMessage(msg) {
   _handleUnifyFeatureMessage(msg, sendUnifyEvent);
-}
-
-export function handleUnifyUserMemoryWrite(msg) {
-  _handleUnifyUserMemoryWrite(msg, sendUnifyEvent);
-}
-
-export function handleUnifyUserMemoryRemove(msg) {
-  _handleUnifyUserMemoryRemove(msg, sendUnifyEvent);
-}
-
-export function handleUnifyMemoryScopeList(msg) {
-  const requestId = msg && typeof msg.requestId === 'string' ? msg.requestId : undefined;
-  try {
-    const store = session && session.memoryStore;
-    const entries = store && typeof store.listEntries === 'function'
-      ? store.listEntries()
-      : [];
-    sendUnifyEvent({
-      type: 'memory_scope_snapshot',
-      entries,
-      ...(requestId ? { requestId } : {}),
-    });
-  } catch (err) {
-    sendUnifyEvent({
-      type: 'memory_scope_snapshot',
-      entries: [],
-      error: String(err && err.message || err),
-      ...(requestId ? { requestId } : {}),
-    });
-  }
 }
 
 export function handleUnifyVpRead(msg) {
@@ -1128,70 +1094,6 @@ export async function handleUnifyDreamTrigger(msg = {}) {
 /** Deprecated mode switch — Unify is single-mode. */
 export function handleUnifyModeSwitch(_msg) {
   console.warn('[Unify] unify_mode_switch is deprecated and ignored — Unify now runs in a single unified mode.');
-}
-
-/** Read-only memory query for the UI memory browser. */
-export function handleUnifyMemoryQuery(msg = {}) {
-  const requestId = typeof msg.requestId === 'string' ? msg.requestId : undefined;
-  const vpId = typeof msg.vpId === 'string' ? msg.vpId : null;
-  const featureId = typeof msg.featureId === 'string' ? msg.featureId : null;
-  const limit = Number.isFinite(msg.limit) ? Math.max(1, Math.min(200, msg.limit)) : 50;
-
-  const reply = (extra = {}) => sendUnifyEvent({
-    type: 'unify_memory_query_result',
-    scope: { vpId, featureId },
-    ...extra,
-    ...(requestId ? { requestId } : {}),
-  });
-
-  if (!session || !session.memoryShardStore) {
-    reply({ entries: [], error: 'no_memory_store' });
-    return;
-  }
-
-  try {
-    const filter = {};
-    if (vpId) filter.vp = vpId;
-    if (featureId) filter.feature = featureId;
-    const res = session.memoryShardStore.query(filter);
-    const list = Array.isArray(res?.results) ? res.results : [];
-    list.sort((a, b) => {
-      const ax = (a && (a.updatedAt || a.createdAt)) || 0;
-      const bx = (b && (b.updatedAt || b.createdAt)) || 0;
-      const at = typeof ax === 'string' ? Date.parse(ax) : ax;
-      const bt = typeof bx === 'string' ? Date.parse(bx) : bx;
-      return (bt || 0) - (at || 0);
-    });
-    reply({ entries: list.slice(0, limit) });
-  } catch (err) {
-    reply({ entries: [], error: String(err?.message || err) });
-  }
-}
-
-/** Open the source message behind a memory entry. */
-export function handleUnifyMemoryTrace(msg = {}) {
-  const requestId = typeof msg.requestId === 'string' ? msg.requestId : undefined;
-  const entryId = typeof msg.entryId === 'string' ? msg.entryId : null;
-
-  const reply = (extra = {}) => sendUnifyEvent({
-    type: 'unify_memory_trace_result',
-    entryId,
-    ...extra,
-    ...(requestId ? { requestId } : {}),
-  });
-
-  if (!entryId) { reply({ entry: null, sourceRef: null, error: 'missing_entry_id' }); return; }
-  if (!session || !session.memoryShardStore) {
-    reply({ entry: null, sourceRef: null, error: 'no_memory_store' });
-    return;
-  }
-  try {
-    const entry = session.memoryShardStore.get(entryId);
-    if (!entry) { reply({ entry: null, sourceRef: null, error: 'not_found' }); return; }
-    reply({ entry, sourceRef: entry.sourceRef || null });
-  } catch (err) {
-    reply({ entry: null, sourceRef: null, error: String(err?.message || err) });
-  }
 }
 
 /** Fetch a feature's summary history (revision chain). */

@@ -16,14 +16,14 @@ describe('tools/index.js createFullRegistry', () => {
     const { createFullRegistry } = await import('../../agent/unify/tools/index.js');
     const registry = createFullRegistry();
 
-    // Should have all 41 built-in tools (5 original + 36 newly implemented)
-    expect(registry.size).toBeGreaterThanOrEqual(41);
+    // Post H2-AMS rip: 5 memory tools removed; rest unchanged.
+    expect(registry.size).toBeGreaterThanOrEqual(36);
   });
 
   it('allTools array contains all built-in tools', async () => {
     const { allTools } = await import('../../agent/unify/tools/index.js');
 
-    expect(allTools.length).toBeGreaterThanOrEqual(41);
+    expect(allTools.length).toBeGreaterThanOrEqual(36);
 
     const names = allTools.map(t => t.name);
     expect(names).toContain('mcp_list_tools');

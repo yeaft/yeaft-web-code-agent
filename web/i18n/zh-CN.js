@@ -1007,29 +1007,6 @@ export default {
   'unify.vp.dream.errored': '上次梦境 {relative} · 失败',
   'unify.vp.dream.failed': '梦境失败：{error}',
 
-  // R6 G2 — VP 记忆分片浏览
-  'unify.vp.detail.memory': '记忆',
-  'unify.vp.detail.memoryLoading': '加载记忆条目中…',
-  'unify.vp.detail.memoryEmpty': '该角色暂无记忆条目。梦境周期合并对话后会出现。',
-  'unify.vp.detail.memoryError': '加载记忆失败：{error}',
-  'unify.vp.detail.memoryRefresh': '刷新记忆',
-
-  // R6 G2 — MemoryCard / MemoryTraceModal
-  'unify.memory.card.aria': '记忆条目 {id}',
-  'unify.memory.card.importance': '重要度评分',
-  'unify.memory.card.trace': '追溯来源',
-  'unify.memory.card.traceTitle': '打开生成这条记忆的原始消息',
-  'unify.memory.card.traceUnavailable': '未记录来源',
-  'unify.memory.card.supersededBy': '已被 {id} 取代',
-  'unify.memory.trace.title': '记忆来源追溯',
-  'unify.memory.trace.close': '关闭',
-  'unify.memory.trace.loading': '加载来源引用中…',
-  'unify.memory.trace.error': '追溯失败：{error}',
-  'unify.memory.trace.entry': '条目',
-  'unify.memory.trace.source': '来源消息',
-  'unify.memory.trace.noSource': '该条目未记录来源引用。',
-  'unify.memory.trace.jump': '跳转到该消息',
-
   // ============ Unify VP live-diff 事件原因 (task-334-ui-c / O4) ============
   // vp_updated / vp_removed 事件到达时显示给用户的人话文案。
   // 取代 snake_case 分类标签，避免在 toast / 活动列表中泄漏。
@@ -1131,22 +1108,6 @@ export default {
   'unify.group.members.defaultHint': '默认 VP（@提及缺省时由该 VP 应答）',
   'unify.group.members.memberCount': '已选 {count} 位',
   'unify.group.members.actionFailed': '操作失败：{error}',
-
-  // ===== task-334-ui-d: 用户记忆浏览器 =====
-  'unify.userMemory.sidebarTitle': '用户记忆',
-  'unify.userMemory.sidebarAria': '用户记忆区域',
-  'unify.userMemory.title': '用户记忆',
-  'unify.userMemory.backAria': '返回用户记忆',
-  'unify.userMemory.back': '返回',
-  'unify.userMemory.count': '{count} 条记录',
-  'unify.userMemory.allShards': '全部',
-  'unify.userMemory.empty': '暂无用户记忆条目。',
-  'unify.userMemory.emptyHint': '系统通过对话了解你后，用户记忆将自动填充。',
-  'unify.userMemory.loading': '加载用户记忆中…',
-  'unify.userMemory.pin': '置顶条目',
-  'unify.userMemory.unpin': '取消置顶',
-  'unify.userMemory.delete': '删除条目',
-  'unify.userMemory.deleteConfirm': '删除此记忆条目？此操作无法撤销。',
 
   // ===== task-334j: 群聊视图（@ 提及 / 引用回复 / 发送拒绝） =====
   'unify.vp.mention.placeholder': '按 id 或名称搜索角色\u2026',

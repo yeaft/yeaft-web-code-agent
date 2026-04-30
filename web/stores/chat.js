@@ -216,12 +216,6 @@ export const useChatStore = defineStore('chat', {
     // removed. Single conversation owns the message stream.
     unifyFeatures: [],
 
-    // task-fix: MemoryStore scope-tree snapshot for the User Memory page.
-    // Populated by `memory_scope_snapshot` events; rendered as a folder
-    // tree grouped by `entry.scope` (e.g. `work/claude-web-chat/auth`).
-    unifyMemoryScopeEntries: [],
-    unifyMemoryScopeLoaded: false,
-
     // task-fix: per-VP typing indicator for Unify group chat.
     //   Shape: { [vpId]: refCount }  — a small counter (not a boolean) so
     //   overlapping sends to the same VP degrade gracefully (the dot stays
@@ -888,33 +882,6 @@ export const useChatStore = defineStore('chat', {
           break;
         }
 
-        // ★ task-334-ui-d: User Memory events.
-        case 'user_memory_snapshot': {
-          const um = window.Pinia?.useUserMemoryStore?.();
-          if (um) um.applySnapshot(event.entries);
-          break;
-        }
-        case 'user_memory_updated': {
-          const um = window.Pinia?.useUserMemoryStore?.();
-          if (um) um.applyUpdate(event);
-          break;
-        }
-        case 'user_memory_removed': {
-          const um = window.Pinia?.useUserMemoryStore?.();
-          if (um) um.applyRemoval(event);
-          break;
-        }
-
-        // task-fix: scope-tree snapshot for the Unify "User Memory" page.
-        // Agent reads MemoryStore.listEntries() and replies with the full
-        // entry list; the web store indexes by scope so the page can render
-        // a folder-style tree.
-        case 'memory_scope_snapshot': {
-          this.unifyMemoryScopeEntries = Array.isArray(event.entries) ? event.entries : [];
-          this.unifyMemoryScopeLoaded = true;
-          break;
-        }
-
         // ★ task-301 Part 2: real-store push from agent.
         // H2.f.6: thread_list_updated never arrives anymore — bridge stopped
         // emitting. Case removed; legacy replay would silently fall through.
@@ -1050,21 +1017,6 @@ export const useChatStore = defineStore('chat', {
         case 'unify_dream_result': {
           const vp = window.Pinia?.useVpStore?.() || (window.__useVpStore && window.__useVpStore());
           if (vp) vp.applyDreamResult(event);
-          break;
-        }
-
-        // ★ R6 G2: VP/Task memory browser. Read-only surface; the LLM
-        // owns memory recall via the memory_query tool, this is purely
-        // for the user to inspect what got merged into a VP/task's
-        // memory shard.
-        case 'unify_memory_query_result': {
-          const mem = window.Pinia?.useMemoryStore?.();
-          if (mem) mem.applyQueryResult(event);
-          break;
-        }
-        case 'unify_memory_trace_result': {
-          const mem = window.Pinia?.useMemoryStore?.();
-          if (mem) mem.applyTraceResult(event);
           break;
         }
       }
@@ -1241,24 +1193,6 @@ export const useChatStore = defineStore('chat', {
       this.unifyDebugDetailMode = !!enabled;
       try { localStorage.setItem('unifyDebugDetailMode', enabled ? '1' : '0'); }
       catch { /* ignore */ }
-    },
-
-    // task-fix: request the MemoryStore scope-tree snapshot so the User
-    // Memory page can render a folder view. Agent replies via
-    // `memory_scope_snapshot` → populates unifyMemoryScopeEntries.
-    fetchUnifyMemoryScope() {
-      if (!this.unifyAgentId) {
-        // task-fix: no agent connected → resolve into empty state instead
-        // of leaving the page stuck on "Loading memory entries…" forever.
-        this.unifyMemoryScopeEntries = [];
-        this.unifyMemoryScopeLoaded = true;
-        return;
-      }
-      this.unifyMemoryScopeLoaded = false;
-      this.sendWsMessage({
-        type: 'unify_memory_scope_list',
-        agentId: this.unifyAgentId,
-      });
     },
 
     toggleSubAgentCardExpand(key) {

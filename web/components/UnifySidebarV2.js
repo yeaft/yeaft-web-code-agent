@@ -5,8 +5,7 @@
  *   - top search box (task / message keywords; #thread- prefix retired)
  *   - Groups list (with kebab menu: manage members / rename / delete)
  *   - Tasks tree (expand/collapse, max 3 levels)
- *   - User Memory entry
- *   - emits `select-task` / `select-group` / `open-user-memory` on click
+ *   - emits `select-task` / `select-group` on click
  *
  * H2.f.6: thread/merge/fork UI removed alongside the multi-thread engine.
  * The remaining sidebar is a flat single-conversation surface.
@@ -28,7 +27,7 @@ import GroupCreateWizard from './GroupCreateWizard.js';
 export default {
   name: 'UnifySidebarV2',
   components: { GroupCreateWizard },
-  emits: ['select-task', 'select-group', 'search-escape', 'open-user-memory', 'toggle-sidebar', 'back', 'open-settings', 'manage-members'],
+  emits: ['select-task', 'select-group', 'search-escape', 'toggle-sidebar', 'back', 'open-settings', 'manage-members'],
   template: `
     <aside class="unify-sidebar-v2" :class="{ collapsed: collapsed }">
       <!-- task-341: sidebar header row — agent identifier + collapse/back/workbench. -->
@@ -247,13 +246,6 @@ export default {
         </section>
 
         <!-- task-339-F1: Groups section moved to top of sidebar (see above). -->
-
-        <!-- task-334-ui-d: User Memory section -->
-        <section class="usv2-group usv2-group-user-memory" :aria-label="$t('unify.userMemory.sidebarAria')">
-          <div class="usv2-group-header">
-            <span class="usv2-group-label usv2-user-memory-link" @click="$emit('open-user-memory')">📘 {{ $t('unify.userMemory.sidebarTitle') }}</span>
-          </div>
-        </section>
       </div>
 
       <!-- H2.f.6: merge target picker + irreversible confirm dialog removed. -->
