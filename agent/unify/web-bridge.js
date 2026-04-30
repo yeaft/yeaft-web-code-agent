@@ -535,6 +535,10 @@ function handleEngineEvent(event, hctx) {
     case 'reflection':
       sendUnifyEvent({
         type: 'reflection',
+        // feat-6af5f9f1 PR B: stamp turnId/loopNumber so the debug panel
+        // can attach reflection cards to the matching loop.
+        turnId: event.turnId || null,
+        loopNumber: event.loopNumber || null,
         trigger: event.trigger,
         status: event.status,
         loopRange: event.loopRange,
@@ -545,10 +549,66 @@ function handleEngineEvent(event, hctx) {
       }, envelope);
       break;
 
-    case 'debug_turn':
+    case 'turn_open':
       sendUnifyEvent({
-        type: 'debug_turn',
-        turnNumber: event.turnNumber,
+        type: 'turn_open',
+        turnId: event.turnId,
+        userPrompt: event.userPrompt,
+        vpId: event.vpId,
+        groupId: event.groupId,
+        at: event.at,
+      }, envelope);
+      break;
+
+    case 'turn_close':
+      sendUnifyEvent({
+        type: 'turn_close',
+        turnId: event.turnId,
+        totalMs: event.totalMs,
+        totalTokens: event.totalTokens,
+        loopCount: event.loopCount,
+      }, envelope);
+      break;
+
+    case 'memory_used':
+      sendUnifyEvent({
+        type: 'memory_used',
+        turnId: event.turnId,
+        loaded: event.loaded || [],
+      }, envelope);
+      break;
+
+    case 'memory_adjust':
+      sendUnifyEvent({
+        type: 'memory_adjust',
+        turnId: event.turnId,
+        groupKey: event.groupKey,
+        added: event.added,
+        evicted: event.evicted,
+        skipped: event.skipped,
+        reason: event.reason,
+      }, envelope);
+      break;
+
+    case 'tool_exec':
+      sendUnifyEvent({
+        type: 'tool_exec',
+        turnId: event.turnId,
+        loopNumber: event.loopNumber,
+        callId: event.callId,
+        name: event.name,
+        durationMs: event.durationMs,
+        isError: event.isError,
+      }, envelope);
+      break;
+
+    case 'loop':
+      // feat-6af5f9f1 PR B: replaces the old `debug_turn` event. Same
+      // payload shape plus turnId + loopNumber + usage.totalTokens.
+      sendUnifyEvent({
+        type: 'loop',
+        turnId: event.turnId,
+        loopNumber: event.loopNumber,
         model: event.model,
         systemPrompt: event.systemPrompt,
         messages: event.messages,

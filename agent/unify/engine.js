@@ -1028,6 +1028,43 @@ export class Engine {
     let t1Fired = false;
     const queryNumber = (this.#__queryCounter = (this.#__queryCounter || 0) + 1);
 
+    // feat-6af5f9f1 PR B: a Turn = one user prompt + all AI responses.
+    // `queryTurnId` is the wire-level turn identifier; every event emitted
+    // during this query() carries it as `turnId`. Each LLM call inside
+    // the loop is a `loopNumber` (was wire field `turnNumber`).
+    const queryTurnId = randomUUID();
+    const queryStartedAt = Date.now();
+    const userQuestionPreview = String(prompt || '').slice(0, 200);
+    const queryVpId = vpPersona && typeof vpPersona === 'object'
+      && typeof vpPersona.vpId === 'string'
+      ? vpPersona.vpId
+      : (typeof senderVpId === 'string' ? senderVpId : null);
+
+    yield {
+      type: 'turn_open',
+      turnId: queryTurnId,
+      userPrompt: userQuestionPreview,
+      vpId: queryVpId,
+      groupId: groupId || null,
+      at: queryStartedAt,
+    };
+
+    // Surface memory recall to the debug panel right after turn_open.
+    // recallResult was loaded above; emit a structured `memory_used`
+    // event so the UI can show "loaded N segments" without parsing
+    // the legacy `recall` event (which only carried entryCount).
+    if (recallResult && Array.isArray(recallResult.entries) && recallResult.entries.length > 0) {
+      yield {
+        type: 'memory_used',
+        turnId: queryTurnId,
+        loaded: recallResult.entries.map(e => ({
+          id: e && e.id || null,
+          score: e && typeof e.score === 'number' ? e.score : null,
+          kind: e && e.kind || null,
+        })),
+      };
+    }
+
     const toolDefs = this.#getToolDefs();
     let turnNumber = 0;
     let continueTurns = 0; // auto-continue counter
@@ -1196,16 +1233,23 @@ export class Engine {
           responseText,
         });
 
-        // Emit debug_turn for error path too
+        // Emit `loop` event for error path too (was `debug_turn`).
+        const errLoopInputTokens = totalUsage.inputTokens || 0;
+        const errLoopOutputTokens = totalUsage.outputTokens || 0;
         yield {
-          type: 'debug_turn',
-          turnNumber,
+          type: 'loop',
+          turnId: queryTurnId,
+          loopNumber: turnNumber,
           model: currentModel,
           systemPrompt,
           messages: conversationMessages.map(mapDebugMessage),
           response: responseText || `Error: ${err.message}`,
           toolCalls: toolCalls.map(tc => ({ id: tc.id, name: tc.name, input: tc.input })),
-          usage: { inputTokens: totalUsage.inputTokens, outputTokens: totalUsage.outputTokens },
+          usage: {
+            inputTokens: errLoopInputTokens,
+            outputTokens: errLoopOutputTokens,
+            totalTokens: errLoopInputTokens + errLoopOutputTokens,
+          },
           latencyMs,
           ttfbMs,
           stopReason: 'error',
@@ -1270,20 +1314,31 @@ export class Engine {
         responseText,
       });
 
-      // Emit debug_turn event for web UI debug panel
-      // (conversationMessages does NOT yet include the assistant response at this point)
-      // task-331: preserve toolCalls / toolCallId / isError on each message so
-      // the Debug panel can render function_call requests and their paired
-      // tool_result responses across turns.
+      // Emit `loop` event for the debug panel.
+      // feat-6af5f9f1 PR B: a Loop is one LLM call inside a Turn. The wire
+      // event was historically named `debug_turn` and carried `turnNumber`,
+      // which is misleading — it's per-LLM-call, not per-user-prompt.
+      // We emit the new shape (turnId + loopNumber) and keep totalTokens
+      // pre-computed so the UI doesn't have to.
+      // task-331: preserve toolCalls / toolCallId / isError on each message
+      // so the panel can render function_call requests and their paired
+      // tool_result responses across loops.
+      const loopInputTokens = totalUsage.inputTokens || 0;
+      const loopOutputTokens = totalUsage.outputTokens || 0;
       yield {
-        type: 'debug_turn',
-        turnNumber,
+        type: 'loop',
+        turnId: queryTurnId,
+        loopNumber: turnNumber,
         model: currentModel,
         systemPrompt,
         messages: conversationMessages.map(mapDebugMessage),
         response: responseText,
         toolCalls: toolCalls.map(tc => ({ id: tc.id, name: tc.name, input: tc.input })),
-        usage: { inputTokens: totalUsage.inputTokens, outputTokens: totalUsage.outputTokens },
+        usage: {
+          inputTokens: loopInputTokens,
+          outputTokens: loopOutputTokens,
+          totalTokens: loopInputTokens + loopOutputTokens,
+        },
         latencyMs,
         ttfbMs,
         stopReason,
@@ -1390,10 +1445,12 @@ export class Engine {
           });
           if (adjustResult && adjustResult.ran) {
             yield {
-              type: 'ams_adjust',
+              type: 'memory_adjust',
+              turnId: queryTurnId,
               groupKey: amsContext.groupKey,
               added: adjustResult.added,
               evicted: adjustResult.evicted,
+              skipped: adjustResult.skipped || 0,
               reason: adjustResult.reason,
             };
           }
@@ -1413,6 +1470,8 @@ export class Engine {
             );
             yield {
               type: 'reflection',
+              turnId: queryTurnId,
+              loopNumber: turnNumber,
               trigger: 't2',
               status: 'pending',
               loopRange: [arcStart, arcEnd],
@@ -1437,6 +1496,7 @@ export class Engine {
               loopRange: [arcStart, arcEnd],
               count: pairs.length,
               originalUserMsg: prompt,
+              originatingTurnId: queryTurnId,
               ready: false,
               result: null,
               error: null,
@@ -1534,6 +1594,20 @@ export class Engine {
 
         const toolDurationMs = Date.now() - toolStartTime;
 
+        // feat-6af5f9f1 PR B: emit a structured `tool_exec` event for the
+        // debug panel. Args/output are already in `conversationMessages`
+        // and will be visible in the next loop's snapshot, so we don't
+        // duplicate them here — only the per-tool timing + status.
+        yield {
+          type: 'tool_exec',
+          turnId: queryTurnId,
+          loopNumber: turnNumber,
+          callId: tc.id,
+          name: tc.name,
+          durationMs: toolDurationMs,
+          isError,
+        };
+
         // Log tool to debug trace
         this.#trace.logTool(turnId, {
           toolName: tc.name,
@@ -1596,6 +1670,8 @@ export class Engine {
           );
           yield {
             type: 'reflection',
+            turnId: queryTurnId,
+            loopNumber: turnNumber,
             trigger: 't1',
             status: 'pending',
             loopRange: [arcStart, arcEnd],
@@ -1616,6 +1692,8 @@ export class Engine {
           for (const m of next) conversationMessages.push(m);
           yield {
             type: 'reflection',
+            turnId: queryTurnId,
+            loopNumber: turnNumber,
             trigger: 't1',
             // PR-L bug fix: keep the same loopRange as the `pending` event
             // so the frontend key stays stable across pending → ready and
@@ -1631,6 +1709,8 @@ export class Engine {
           // continues normally — never block the turn.
           yield {
             type: 'reflection',
+            turnId: queryTurnId,
+            loopNumber: turnNumber,
             trigger: 't1',
             status: 'error',
             error: err && err.message || String(err),
@@ -1656,6 +1736,18 @@ export class Engine {
 
       // Loop back to call adapter again with tool results
     }
+
+    // feat-6af5f9f1 PR B: turn closed. Emits final totals so the debug
+    // panel can show "Turn done · 4 loops · 12.4s · 5.0k tok" without
+    // having to reduce the loops itself. Always fires (every break path
+    // above falls through here).
+    yield {
+      type: 'turn_close',
+      turnId: queryTurnId,
+      totalMs: Date.now() - queryStartedAt,
+      totalTokens: cumulativeInputTokens + cumulativeOutputTokens,
+      loopCount: turnNumber,
+    };
   }
 
   /**
@@ -1753,6 +1845,7 @@ export class Engine {
 
       yield {
         type: 'reflection',
+        turnId: info.originatingTurnId || null,
         trigger,
         status: 'ready',
         loopRange: [startIdx, endIdx],

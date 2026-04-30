@@ -185,7 +185,20 @@ export const useChatStore = defineStore('chat', {
     unifySessionReady: false,     // Session 是否已初始化
     unifyStatus: null,            // { skills, mcpServers, tools } 从 session_ready 获取
     unifyAvailableModels: [],     // 可用模型列表 [{ id, provider, label }]
-    unifyDebugTurns: [],          // Debug panel: per-turn debug info from engine
+    // feat-6af5f9f1 PR B: debug panel data refactor.
+    //
+    //   Turn = one user prompt + all AI responses (top level)
+    //   Loop = one LLM call inside a Turn
+    //   Tool = one tool execution inside a Loop
+    //
+    // `unifyDebugLoops` is a flat list (per-LLM-call). `unifyDebugTurnsById`
+    // is a {turnId -> turn record} map carrying turn-level data (user
+    // prompt, vp, group, memory_used, memory_adjust, totals).
+    // `unifyDebugTurnOrder` preserves insertion order so the panel can
+    // render newest-first.
+    unifyDebugLoops: [],
+    unifyDebugTurnsById: {},
+    unifyDebugTurnOrder: [],
     // PR-L: V7 tool-history reflection cards. Keyed by `${conversationId}:${trigger}:${loopRange[0]}-${loopRange[1]}`.
     // Each entry: { trigger, status, loopRange, toolCount, content, durationMs, error,
     // anchorMsgId, anchorOrder }. Rendered inline by MessageList — anchored
@@ -323,14 +336,51 @@ export const useChatStore = defineStore('chat', {
       const convId = state.unifyConversationId;
       return convId ? (state.messagesMap[convId] || EMPTY_ARRAY) : EMPTY_ARRAY;
     },
-    // Bug 3: debug turns scoped to the user's active group filter so the
+    // feat-6af5f9f1 PR B: Turn-grouped debug records for the redesigned
+    // panel. Returns `[{ turnId, userPrompt, vpId, groupId, openedAt,
+    //                    loops: Loop[], reflections: Card[], memoryLoaded,
+    //                    memoryAdjust, totalMs, totalTokens, loopCount }, ...]`
+    // sorted newest-first.
+    //
+    // Bug 3 carry-over: scoped to the user's active group filter so the
     // right-hand panel mirrors what the message pane shows. Unfiltered
     // when no group is active (legacy single-stream behaviour).
     unifyDebugTurnsForActiveGroup: (state) => {
-      const all = state.unifyDebugTurns || EMPTY_ARRAY;
-      if (!state.unifyActiveGroupFilter) return all;
-      const target = state.unifyActiveGroupFilter;
-      return all.filter(t => t && (t.groupId === target || !t.groupId));
+      const order = state.unifyDebugTurnOrder || EMPTY_ARRAY;
+      const byId = state.unifyDebugTurnsById || {};
+      const allLoops = state.unifyDebugLoops || EMPTY_ARRAY;
+      const reflections = state.unifyReflectionCards || {};
+      const target = state.unifyActiveGroupFilter || null;
+
+      // Group loops by turnId once.
+      const loopsByTurn = {};
+      for (const loop of allLoops) {
+        if (!loop || !loop.turnId) continue;
+        if (!loopsByTurn[loop.turnId]) loopsByTurn[loop.turnId] = [];
+        loopsByTurn[loop.turnId].push(loop);
+      }
+      // Group reflections by turnId.
+      const reflectionsByTurn = {};
+      for (const key of Object.keys(reflections)) {
+        const card = reflections[key];
+        if (!card || !card.turnId) continue;
+        if (!reflectionsByTurn[card.turnId]) reflectionsByTurn[card.turnId] = [];
+        reflectionsByTurn[card.turnId].push(card);
+      }
+
+      const out = [];
+      for (let i = order.length - 1; i >= 0; i--) {
+        const turnId = order[i];
+        const turn = byId[turnId];
+        if (!turn) continue;
+        if (target && turn.groupId && turn.groupId !== target) continue;
+        out.push({
+          ...turn,
+          loops: loopsByTurn[turnId] || EMPTY_ARRAY,
+          reflections: reflectionsByTurn[turnId] || EMPTY_ARRAY,
+        });
+      }
+      return out;
     },
     // ★ Unify: the currently visible messages (H2.f.3: thread filter dropped).
     unifyVisibleMessages: (state) => {
@@ -658,23 +708,124 @@ export const useChatStore = defineStore('chat', {
           // Could display token usage in UI later
           break;
 
-        case 'debug_turn':
-          this.unifyDebugTurns.push({
-            turnNumber: event.turnNumber,
+        case 'turn_open': {
+          // feat-6af5f9f1 PR B: seed a Turn record. All loop / tool_exec /
+          // memory_used / memory_adjust / reflection / turn_close events
+          // for this query() will reference event.turnId.
+          if (!event.turnId) break;
+          const turn = {
+            turnId: event.turnId,
+            userPrompt: event.userPrompt || '',
+            vpId: event.vpId || null,
+            groupId: event.groupId || msg.groupId || null,
+            openedAt: event.at || Date.now(),
+            closedAt: null,
+            totalMs: 0,
+            totalTokens: 0,
+            loopCount: 0,
+            memoryLoaded: null,
+            memoryAdjust: null,
+            tools: [],
+          };
+          this.unifyDebugTurnsById = { ...this.unifyDebugTurnsById, [event.turnId]: turn };
+          if (!this.unifyDebugTurnOrder.includes(event.turnId)) {
+            this.unifyDebugTurnOrder = [...this.unifyDebugTurnOrder, event.turnId];
+          }
+          break;
+        }
+
+        case 'turn_close': {
+          if (!event.turnId) break;
+          const prev = this.unifyDebugTurnsById[event.turnId];
+          if (!prev) break;
+          this.unifyDebugTurnsById = {
+            ...this.unifyDebugTurnsById,
+            [event.turnId]: {
+              ...prev,
+              closedAt: Date.now(),
+              totalMs: event.totalMs || 0,
+              totalTokens: event.totalTokens || 0,
+              loopCount: event.loopCount || prev.loopCount || 0,
+            },
+          };
+          break;
+        }
+
+        case 'memory_used': {
+          if (!event.turnId) break;
+          const prev = this.unifyDebugTurnsById[event.turnId];
+          if (!prev) break;
+          this.unifyDebugTurnsById = {
+            ...this.unifyDebugTurnsById,
+            [event.turnId]: {
+              ...prev,
+              memoryLoaded: Array.isArray(event.loaded) ? event.loaded : [],
+            },
+          };
+          break;
+        }
+
+        case 'memory_adjust': {
+          if (!event.turnId) break;
+          const prev = this.unifyDebugTurnsById[event.turnId];
+          if (!prev) break;
+          this.unifyDebugTurnsById = {
+            ...this.unifyDebugTurnsById,
+            [event.turnId]: {
+              ...prev,
+              memoryAdjust: {
+                groupKey: event.groupKey || null,
+                added: event.added || 0,
+                evicted: event.evicted || 0,
+                skipped: event.skipped || 0,
+                reason: event.reason || '',
+              },
+            },
+          };
+          break;
+        }
+
+        case 'tool_exec': {
+          // feat-6af5f9f1 PR B: pin the tool execution to its turn so the
+          // panel can show per-tool timing without scanning loops.messages.
+          if (!event.turnId) break;
+          const prev = this.unifyDebugTurnsById[event.turnId];
+          if (!prev) break;
+          const tools = [...(prev.tools || []), {
+            loopNumber: event.loopNumber || 0,
+            callId: event.callId || null,
+            name: event.name || '?',
+            durationMs: event.durationMs || 0,
+            isError: !!event.isError,
+          }];
+          this.unifyDebugTurnsById = {
+            ...this.unifyDebugTurnsById,
+            [event.turnId]: { ...prev, tools },
+          };
+          break;
+        }
+
+        case 'loop':
+          // feat-6af5f9f1 PR B: replaces `debug_turn`. Each entry is one
+          // LLM call; the parent Turn record lives in unifyDebugTurnsById
+          // under loop.turnId.
+          this.unifyDebugLoops.push({
+            turnId: event.turnId || null,
+            loopNumber: event.loopNumber || 0,
             model: event.model,
             systemPrompt: event.systemPrompt,
             messages: event.messages,
             response: event.response,
             toolCalls: event.toolCalls,
-            usage: event.usage,
+            usage: event.usage || { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
             latencyMs: event.latencyMs,
             ttfbMs: event.ttfbMs,
             stopReason: event.stopReason,
             // task-344: raw API request / response payload (redacted server-side).
             rawRequest: event.rawRequest || null,
             rawResponse: event.rawResponse || null,
-            // Bug 3: stamp groupId so the right-hand debug panel filter can
-            // narrow turns to the user's active group.
+            // Bug 3 carry-over: stamp groupId so the panel filter narrows
+            // by group. Falls back to envelope groupId if engine omitted it.
             groupId: msg.groupId || null,
           });
           break;
@@ -713,6 +864,10 @@ export const useChatStore = defineStore('chat', {
             [key]: {
               key,
               conversationId: convId,
+              // feat-6af5f9f1 PR B: stamp turnId so the debug panel can
+              // attach the card to its parent Turn.
+              turnId: event.turnId || (existing && existing.turnId) || null,
+              loopNumber: event.loopNumber || (existing && existing.loopNumber) || null,
               trigger: event.trigger,
               status: event.status,
               loopRange: range,
@@ -1334,7 +1489,10 @@ export const useChatStore = defineStore('chat', {
       this.unifyModel = null;
       this.unifyAvailableModels = [];
       this.unifyStatus = null;
-      this.unifyDebugTurns = [];
+      // feat-6af5f9f1 PR B: clear new Turn-grouped debug shape.
+      this.unifyDebugLoops = [];
+      this.unifyDebugTurnsById = {};
+      this.unifyDebugTurnOrder = [];
       this.unifyReflectionCards = {};
       this.unifySubAgentCards = {};
       // task-315: also exit the task detail view on a fresh Unify session
