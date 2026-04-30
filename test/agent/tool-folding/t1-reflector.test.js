@@ -51,7 +51,7 @@ describe('runT1Reflection — adapter throws', () => {
 });
 
 describe('collapseRangeToReflection (used by T1 to rewrite history)', () => {
-  it('collapses assistant+tool arc into ONE assistant message', () => {
+  it('collapses assistant+tool arc into ONE synthetic user message', () => {
     const before = [
       { role: 'user', content: 'q' },
       { role: 'assistant', content: '', toolCalls: [{ id: '1', name: 't', input: {} }] },
@@ -61,10 +61,18 @@ describe('collapseRangeToReflection (used by T1 to rewrite history)', () => {
     ];
     const after = collapseRangeToReflection(before, 1, 4, '## reflection\nbody');
     expect(after).toHaveLength(2);
+    // Original user prompt stays first.
     expect(after[0].role).toBe('user');
-    expect(after[1].role).toBe('assistant');
-    expect(after[1].content).toBe('## reflection\nbody');
+    // Folded arc becomes a synthetic user message — required so the
+    // Anthropic Messages API does not see the array end on assistant.
+    expect(after[1].role).toBe('user');
     expect(after[1]._reflection).toBe(true);
+    // Body wraps the reflection text with header + footer so the model
+    // recognises this as a context-recovery directive, not a fresh prompt.
+    expect(after[1].content).toContain('## reflection\nbody');
+    expect(after[1].content).toMatch(/folded for context efficiency/);
+    expect(after[1].content).toMatch(/Continue from here\.$/);
+    expect(after[1].content).toMatch(/2 tool calls/);
     // Original is untouched
     expect(before).toHaveLength(5);
   });

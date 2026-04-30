@@ -111,19 +111,29 @@ describe('PR-L T1 in-turn reflection — integration', () => {
     expect(totalEntries).toBe(13);
 
     // The 14th adapter.stream invocation (the one that produced 'end_turn')
-    // saw a REWRITTEN history: the user message + ONE assistant reflection
-    // message (no tool messages remaining from the collapsed arc).
+    // saw a REWRITTEN history: the original user prompt + ONE synthetic
+    // user reflection message (no assistant or tool messages remaining
+    // from the collapsed arc). The reflection lands in role='user' so
+    // the messages array ends with a user message, satisfying the
+    // Anthropic Messages API contract (no assistant prefill).
     const lastStream = adapter.streamCalls[adapter.streamCalls.length - 1];
     const finalMessages = lastStream.messages;
     const userMsgs = finalMessages.filter(m => m.role === 'user');
     const toolMsgs = finalMessages.filter(m => m.role === 'tool');
     const assistantMsgs = finalMessages.filter(m => m.role === 'assistant');
-    expect(userMsgs.length).toBe(1);
+    // Two user messages: the original prompt + the synthetic reflection.
+    expect(userMsgs.length).toBe(2);
     expect(toolMsgs.length).toBe(0);
-    // After collapse there's one assistant reflection (the original 13
-    // assistant turns are gone).
-    expect(assistantMsgs.length).toBe(1);
-    expect(assistantMsgs[0].content).toContain('## What was attempted');
+    // No assistant messages — the original 13 assistant turns are gone.
+    expect(assistantMsgs.length).toBe(0);
+    // The synthetic reflection is the LAST message, marked _reflection,
+    // and wraps the reflector body with the recovery header/footer.
+    const lastMsg = finalMessages[finalMessages.length - 1];
+    expect(lastMsg.role).toBe('user');
+    expect(lastMsg._reflection).toBe(true);
+    expect(lastMsg.content).toContain('## What was attempted');
+    expect(lastMsg.content).toMatch(/folded for context efficiency/);
+    expect(lastMsg.content).toMatch(/Continue from here\.$/);
   });
 });
 
