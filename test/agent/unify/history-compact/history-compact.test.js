@@ -170,7 +170,9 @@ describe('shouldCompactHistory', () => {
   it('reports turn_count first when both triggers fire', () => {
     const ms = [];
     for (let i = 0; i < 25; i++) {
-      ms.push({ role: 'user', content: 'x'.repeat(20_000) });
+      // Distinct content per turn so the multi-VP dedup in countTurns
+      // doesn't collapse them.
+      ms.push({ role: 'user', content: 'x'.repeat(20_000) + ` q${i}` });
     }
     const r = shouldCompactHistory(ms);
     expect(r.trigger).toBe(true);
@@ -387,7 +389,9 @@ describe('compactHistory (end-to-end)', () => {
     const ms = [];
     const big = 'x'.repeat(20_000 * 4); // 20K tokens each
     for (let i = 0; i < 5; i++) {
-      ms.push({ role: 'user', content: big });
+      // Distinct content per turn so multi-VP dedup in countTurns /
+      // findCutIndex sees 5 turns, not 1.
+      ms.push({ role: 'user', content: big + ` q${i}` });
       ms.push({ role: 'assistant', content: big });
     }
     const summarize = async () => 'compact summary';

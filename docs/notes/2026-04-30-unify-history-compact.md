@@ -3,7 +3,7 @@
 **日期**: 2026-04-30
 **关联 PR**: `feat(unify): in-memory history compact for group chat`
 **关联文件**:
-- `agent/unify/web-bridge.js` — 接入点（`handleUnifyGroupChat` 中 fan-out 之前）
+- `agent/unify/web-bridge.js` — 接入点（`handleUnifyGroupChat` 顶部 entry gate + fan-out 结束后 schedule）
 - `agent/unify/history-compact.js` — 新增的纯函数 helper
 - `agent/unify/engine.js` — 新增 `engine.summarizeForCompact()` 方法
 - `test/agent/unify/history-compact/history-compact.test.js` — 41 个 helper 单测
@@ -39,12 +39,17 @@ let conversationMessages = [];
 
 参考 Claude Code 的 compact 模式，做 in-memory 数组层面的 compact：
 
-**触发条件**（任一即可，每次 fan-out 之前检查）：
-- turn 数 > 20（user-role 消息数）
+**触发条件**（任一即可，每次 fan-out **结束之后** 检查）：
+- turn 数 > 20（去重后的 user-role 消息数；多 VP fan-out 算一轮 turn）
 - 估算 token 数 > 80,000
 
+**Compact 时机（post-turn）**：
+- compact 跑在 `Promise.all(runVpTurn)` 完成 **之后**，是一个 fire-and-forget 的后台任务，不会给当前用户消息加延迟。
+- `_compactInFlight` 暴露成 module-level Promise。下一条用户消息进来时，`handleUnifyGroupChat` 顶部有个 entry gate 会先 `await _compactInFlight`，确保 baseSnapshot 读到的是 compact 之后的历史。
+- 单飞守卫：同时只允许一个 compact 跑。
+
 **Compact 动作**：
-1. 找到"切点"：从尾部往前数，保留最近 2 个 user→assistant 弧（`keepRecent=2`），切点之前的全部折叠。
+1. 找到"切点"：从尾部往前数，保留最近 2 个 user→assistant 弧（`keepRecent=2`），切点之前的全部折叠。多 VP fan-out 算同一个 turn（按 `@vp-X` 前缀剥离后比对 canonical text）。
 2. 折叠区送给 fast model 做 summary（drop tool results、drop 已存在的 `_compactSummary`、把 toolCalls 折成 `[tool name: input...]` 占位符——节省 token）。
 3. summary 用 user-role 包装（沿用 `tool-folding/index.js#collapseRangeToReflection` 的做法，与 Claude Code 的 compact marker 一致）：
 
@@ -78,7 +83,7 @@ further questions.
 | `DEFAULT_KEEP_RECENT_TURNS = 2` | tail 保留量 |
 | `estimateMessageTokens(m)` | 单条消息 token 估算（content + role 框架 + toolCalls） |
 | `estimateMessagesTokens(ms)` | 数组求和 |
-| `countTurns(ms)` | user-role 消息计数 |
+| `countTurns(ms)` | turn 数（多 VP fan-out 去重） |
 | `shouldCompactHistory(ms, opts)` | 触发判定，返回 `{trigger, reason, turnCount, tokenCount, ...}` |
 | `findCutIndex(ms, keepRecent)` | 切点计算 |
 | `buildSummarizerInput(ms)` | 喂给 summary LLM 之前清洗（drop tool / `_compactSummary`，elide toolCalls） |
@@ -110,24 +115,35 @@ async summarizeForCompact({ system, prompt, maxTokens = 1024 }) {
 
 ### `agent/unify/web-bridge.js`（接入点）
 
-`handleUnifyGroupChat` 在 mint dispatchId 之后、`baseSnapshot` 捕获之前调一次：
+`handleUnifyGroupChat` 顶部有 entry gate；fan-out 结束后调度 compact：
 
 ```js
-const dispatchId = randomUUID().slice(0, 8);
+// 顶部 — entry gate：等待上一轮 turn 触发的 compact 完成
+if (_compactInFlight) {
+  try { await _compactInFlight; } catch { /* first caller logs */ }
+}
 
-// 新增：触发判定 + compact
-await maybeCompactConversationMessages(groupId);
-
-// 现有：snapshot
+// ... 现有逻辑，captureBaseSnapshot, fan-out ...
 const baseSnapshot = [...conversationMessages];
+await Promise.all(captured.map(runVpTurn));
+
+// fan-out 结束后调度 compact（fire-and-forget，不阻塞响应）
+scheduleCompactAfterTurn(groupId);
 ```
 
-`maybeCompactConversationMessages` 是新增的内部函数：
-- 单飞守卫 `_compactInFlight`：避免快速双发触发两次 summarize。
+`scheduleCompactAfterTurn(groupId)`（同步函数）：
+- 单飞守卫 `_compactInFlight`：避免重复触发。
 - 先做 cheap pre-check（`shouldCompactHistory` 是纯 O(n)），不触发就直接返回，不打 LLM。
-- 触发后调用 `compactHistory` 让 helper 做切片 + summary + 包装，原子换掉 `conversationMessages`。
+- 触发后把 `runCompactNow(groupId)` 挂到 `_compactInFlight`，下一轮 turn 自然在 entry gate 处等它。
+
+`runCompactNow(groupId)`（async 工作函数）：
+- **Race guard**：进入时先 `const snapshot = conversationMessages` 把引用记下；compact 跑完准备 swap 时检查 `conversationMessages !== snapshot`——如果在我们 await 期间有人 reassign 过这个数组（engine consolidate 事件、`clearUnifyMessages`、session reset），就丢弃 stale summary，不污染 fresh state。
 - summarize 失败：保留原历史，下次 fan-out 重试。
 - 成功后向前端发 `unify_history_compacted` 事件（携带 reason / 折前折后的 turn 和 token 数）—— 前端目前不消费，留给 dev tools 或将来的 UI 通知。
+
+### 多 VP fan-out 的 turn 计数去重
+
+`countTurns` / `findCutIndex` 都对 user-role 消息做 canonical text 去重——把 `@vp-${vpId} ` 前缀剥掉后比对，连续相同的算一个 turn。否则 5 个 VP 的一次 fan-out 会被算成 5 个 turn，触发器会过早触发。
 
 ## 测试
 
@@ -154,7 +170,7 @@ const baseSnapshot = [...conversationMessages];
 - **API**: 无变化。
 - **持久化**: 无变化（只动 in-memory，不写盘）。
 - **wire 协议**: 新增 `type: 'unify_history_compacted'` 事件（前端可忽略，无 schema 破坏）。
-- **行为变化**: 长会话不再无限膨胀 LLM prompt。第一次触发时用户会感受到一次额外的 fast-model 延迟（通常 1–3 秒）—— 与"模型彻底卡死/超长 prompt 报错"相比可接受。
+- **行为变化**: 长会话不再无限膨胀 LLM prompt。compact 跑在 turn 结束后，不延迟当前消息——但 **下一条** 用户消息进来时如果 compact 还没跑完，会在 entry gate 处等待（fast model 通常 1–3s）。与"模型彻底卡死/超长 prompt 报错"相比可接受。
 - **既有 compact 路径**: 完全不受影响。`engine.#runOrchestratorCompact` 还在做磁盘 store 的 compact，两条路径互不干扰。
 
 ## Follow-up（不在本 PR）

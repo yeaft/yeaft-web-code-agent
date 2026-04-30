@@ -98,10 +98,33 @@ export function estimateMessagesTokens(messages) {
 }
 
 /**
- * Count "turns" — defined as user-role messages. Each VP fan-out produces
- * one user message per VP (the engine appends `{role:'user', content:'@vp-X ...'}`
- * per VP). This matches what the user means by "turn" colloquially: a
- * round-trip exchange.
+ * Strip a leading `@vp-<id> ` mention prefix from a user prompt. The
+ * web bridge prefixes each VP's per-turn prompt with `@vp-<id> ` so
+ * the engine knows which VP is replying. When counting "turns" we
+ * want the user-facing notion of a turn (one round-trip), not one per
+ * VP — so we strip the prefix before deduping consecutive identical
+ * user messages.
+ *
+ * Format mirrors `web-bridge.js#runVpTurn`:
+ *   `@vp-${vpId} ${text}`
+ *
+ * @param {string} content
+ * @returns {string}
+ */
+function stripVpMentionPrefix(content) {
+  if (typeof content !== 'string') return '';
+  return content.replace(/^@vp-[^\s]+\s+/, '');
+}
+
+/**
+ * Count "turns" — defined as a user-side round-trip, NOT one per
+ * user-role message. Multi-VP fan-out appends one user message per VP
+ * (each with an `@vp-<id>` prefix) for the same underlying user prompt;
+ * those collapse into a single turn here.
+ *
+ * Algorithm: walk user-role messages, strip the `@vp-` prefix, count
+ * a turn whenever the canonical text changes from the previous user
+ * message (or it's the first one).
  *
  * @param {Array<object>} messages
  * @returns {number}
@@ -109,7 +132,15 @@ export function estimateMessagesTokens(messages) {
 export function countTurns(messages) {
   if (!Array.isArray(messages)) return 0;
   let n = 0;
-  for (const m of messages) if (m && m.role === 'user') n++;
+  let prev = null;
+  for (const m of messages) {
+    if (!m || m.role !== 'user') continue;
+    const canonical = stripVpMentionPrefix(m.content || '');
+    if (canonical !== prev) {
+      n++;
+      prev = canonical;
+    }
+  }
   return n;
 }
 
@@ -200,21 +231,42 @@ export function buildSummarizerInput(messages) {
 export function findCutIndex(messages, keepRecent) {
   if (!Array.isArray(messages) || messages.length === 0) return -1;
   if (keepRecent <= 0) return messages.length; // fold everything
-  let countFromEnd = 0;
+
+  // Walk from the end, counting DISTINCT turns (multiple consecutive
+  // user messages with the same canonical text — i.e. one fan-out's
+  // @vp-X variants — collapse into a single turn). Stop when we've
+  // started the (keepRecent)-th turn from the end; everything before
+  // its first user-message gets folded.
+  let turnsFromEnd = 0;
+  let nextCanonical = null; // canonical text of the turn we just opened
+  let candidateIdx = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i] && messages[i].role === 'user') {
-      countFromEnd++;
-      if (countFromEnd === keepRecent) {
-        // i is the start of the LAST keepRecent block. Everything BEFORE
-        // i gets folded into the summary; messages[i..] is the kept tail.
-        // If i === 0, there's nothing to fold (the whole history fits in
-        // the keep-window) → caller treats as no-op.
-        return i;
+    if (!messages[i] || messages[i].role !== 'user') continue;
+    const canonical = stripVpMentionPrefix(messages[i].content || '');
+    if (canonical !== nextCanonical) {
+      // New (older) turn boundary.
+      turnsFromEnd++;
+      nextCanonical = canonical;
+      if (turnsFromEnd === keepRecent) {
+        candidateIdx = i;
+        // Keep walking — the same turn might extend further back via
+        // earlier @vp variants of the same canonical text.
+        continue;
       }
+      if (turnsFromEnd > keepRecent) {
+        // We've stepped into the (keepRecent+1)-th turn — stop. The
+        // last recorded `candidateIdx` is the start of the LAST
+        // keepRecent block.
+        break;
+      }
+    } else if (turnsFromEnd === keepRecent) {
+      // Same canonical text as the keepRecent-th-from-end turn — this
+      // is an earlier @vp-variant of that same turn. Extend candidate
+      // backwards to include it.
+      candidateIdx = i;
     }
   }
-  // Fewer user messages than keepRecent — nothing to fold.
-  return -1;
+  return candidateIdx;
 }
 
 /**
