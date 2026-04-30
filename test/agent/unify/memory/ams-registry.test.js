@@ -112,6 +112,27 @@ describe('AmsRegistry — persist + hydrate round-trip', () => {
     expect(ams2.recentIds()).toEqual([seg1.id]);
   });
 
+  it('hydrate restores adjustRanThisSession across registry reloads', () => {
+    const seg = seedSegment('group/g7', 'still here');
+
+    {
+      const reg = openAmsRegistry({ yeaftDir: YEAFT_DIR, memoryIndex, config: {} });
+      const ams = reg.getOrCreate('g7');
+      ams.setOnDemand([seg]);
+      reg.markDirty('g7');
+      // First persist with the flag set true — the engine flips this
+      // after runAdjust succeeds.
+      expect(reg.persist('g7', { adjustRanThisSession: true })).toBe(true);
+      expect(reg.adjustRanThisSession('g7')).toBe(true);
+    }
+
+    // Fresh registry: must read the flag back from disk so the engine
+    // doesn't burn a redundant adjust on the first turn after reload.
+    const reg2 = openAmsRegistry({ yeaftDir: YEAFT_DIR, memoryIndex, config: {} });
+    reg2.getOrCreate('g7');
+    expect(reg2.adjustRanThisSession('g7')).toBe(true);
+  });
+
   it('hydrate skips ids that no longer exist in the index', () => {
     const seg = seedSegment('group/g3', 'still here');
 

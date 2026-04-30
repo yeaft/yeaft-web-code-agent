@@ -4,14 +4,16 @@
  * Runs after each query loop completes:
  *   1. Persist messages to conversation/messages/
  *   2. Consolidate check (compact + extract) — only when budget exceeded
- *   3. Dream gate check (background)
- *   4. Increment dream query counter
+ *
+ * Dream V2 owns all background memory maintenance (scope summaries +
+ * memory writes via dream-v2/session-wiring.js → createV2DreamScheduler);
+ * the legacy `memory/dream.js` gate that used to fire here was retired
+ * alongside recall-r6.
  *
  * Reference: yeaft-unify-core-systems.md §4.4
  */
 
 import { shouldConsolidate, consolidate } from './memory/consolidate.js';
-import { checkDreamGate, incrementQueryCount, dream } from './memory/dream.js';
 import { isPermissionError } from './init.js';
 
 /** Track whether we've already warned about permission issues in stop hooks. */
@@ -59,7 +61,6 @@ export async function runStopHooks(context) {
   const result = {
     messagesPersisted: 0,
     consolidated: false,
-    dreamTriggered: false,
     errors: [],
   };
 
@@ -164,45 +165,9 @@ export async function runStopHooks(context) {
     }
   }
 
-  // 3. Increment dream query counter
-  try {
-    if (yeaftDir) {
-      incrementQueryCount(yeaftDir);
-    }
-  } catch (err) {
-    if (isPermissionError(err)) {
-      // Silent — already warned about permission issues
-    } else {
-      result.errors.push(`Dream counter failed: ${err.message}`);
-    }
-  }
-
-  // 4. Dream gate check (fire-and-forget, background)
-  try {
-    if (yeaftDir && memoryStore && adapter) {
-      const gate = checkDreamGate(yeaftDir);
-      if (gate.shouldDream) {
-        result.dreamTriggered = true;
-        // Fire and forget — dream runs in background
-        dream({
-          yeaftDir,
-          memoryStore,
-          conversationStore,
-          adapter,
-          config,
-        }).catch(err => {
-          trace?.logEvent({
-            eventType: 'dream_error',
-            eventData: { error: err.message },
-          });
-        });
-      }
-    }
-  } catch (err) {
-    if (!isPermissionError(err)) {
-      result.errors.push(`Dream gate check failed: ${err.message}`);
-    }
-  }
+  // 3. Dream V2 owns background scope-memory maintenance via the session
+  //    dream scheduler (createV2DreamScheduler). No legacy dream gate is
+  //    invoked here; the scheduler decides when to run on its own cadence.
 
   return result;
 }
@@ -211,6 +176,5 @@ export async function runStopHooks(context) {
  * @typedef {Object} StopHookResult
  * @property {number} messagesPersisted — how many messages were persisted
  * @property {boolean} consolidated — whether consolidation ran
- * @property {boolean} dreamTriggered — whether dream was triggered
  * @property {string[]} errors — any non-fatal errors
  */

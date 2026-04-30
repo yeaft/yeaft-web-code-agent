@@ -48,6 +48,7 @@ export const DEFAULT_GROUP_KEY = 'default';
  * @typedef {object} AmsCacheEntry
  * @property {ActiveMemorySet} ams
  * @property {string|null}     ownVpId
+ * @property {boolean}         adjustRanThisSession
  */
 
 /**
@@ -77,12 +78,16 @@ export class AmsRegistry {
   /**
    * Resolve the on-disk path for a group's ams.json.
    *
+   * `groupId` is trusted: `nextGroupId()` (groups/ids.js) emits ids matching
+   * `grp_[a-z0-9_-]+`, and the single-VP path uses the literal
+   * `DEFAULT_GROUP_KEY`. No defensive escaping is needed.
+   *
    * @param {string} groupId
    * @returns {string}
    */
   amsPath(groupId) {
-    const safe = String(groupId || DEFAULT_GROUP_KEY).replace(/[^A-Za-z0-9._-]/g, '_');
-    return join(this.yeaftDir, 'memory', 'groups', safe, 'ams.json');
+    const key = String(groupId || DEFAULT_GROUP_KEY);
+    return join(this.yeaftDir, 'memory', 'groups', key, 'ams.json');
   }
 
   /**
@@ -114,10 +119,38 @@ export class AmsRegistry {
     const ownVpId = opts.ownVpId || null;
     const budget = this._budget();
     const ams = new ActiveMemorySet({ ownVpId, budget });
-    // Best-effort hydrate from disk.
-    this._hydrate(key, ams);
-    this._cache.set(key, { ams, ownVpId });
+    const entry = { ams, ownVpId, adjustRanThisSession: false };
+    // Best-effort hydrate from disk — populates ams + entry flags.
+    this._hydrate(key, entry);
+    this._cache.set(key, entry);
     return ams;
+  }
+
+  /**
+   * Read the persisted-and-rehydrated `adjustRanThisSession` flag for a
+   * group. Engine consults this on first AMS access so a reactivated group
+   * doesn't re-run `runAdjust` on its first turn back online.
+   *
+   * @param {string|null|undefined} groupId
+   * @returns {boolean}
+   */
+  adjustRanThisSession(groupId) {
+    const key = groupId || DEFAULT_GROUP_KEY;
+    return this._cache.get(key)?.adjustRanThisSession === true;
+  }
+
+  /**
+   * Update the cached `adjustRanThisSession` flag (does not persist on its
+   * own — call `persist()` to flush). Engine flips this true after
+   * `runAdjust` actually ran.
+   *
+   * @param {string|null|undefined} groupId
+   * @param {boolean} value
+   */
+  setAdjustRanThisSession(groupId, value) {
+    const key = groupId || DEFAULT_GROUP_KEY;
+    const entry = this._cache.get(key);
+    if (entry) entry.adjustRanThisSession = Boolean(value);
   }
 
   /**
@@ -134,6 +167,10 @@ export class AmsRegistry {
    * Persist a single group's AMS to disk. No-op when the cached entry
    * is missing or hasn't been marked dirty.
    *
+   * `opts.adjustRanThisSession`, when supplied, also updates the cached
+   * entry so subsequent `adjustRanThisSession()` reads see the latest flag
+   * without a round-trip through disk.
+   *
    * @param {string|null|undefined} groupId
    * @param {{ force?: boolean, adjustRanThisSession?: boolean }} [opts]
    * @returns {boolean} true if the file was written
@@ -144,13 +181,17 @@ export class AmsRegistry {
     if (!entry) return false;
     if (!opts.force && !this._dirty.has(key)) return false;
 
+    if (typeof opts.adjustRanThisSession === 'boolean') {
+      entry.adjustRanThisSession = opts.adjustRanThisSession;
+    }
+
     const path = this.amsPath(key);
     const payload = {
       version: AMS_FILE_VERSION,
       ownVpId: entry.ownVpId,
       onDemandIds: entry.ams.onDemandIds(),
       recentIds: entry.ams.recentIds(),
-      adjustRanThisSession: Boolean(opts.adjustRanThisSession),
+      adjustRanThisSession: Boolean(entry.adjustRanThisSession),
       savedAt: new Date().toISOString(),
     };
 
@@ -182,21 +223,26 @@ export class AmsRegistry {
 
   /**
    * Best-effort hydrate: read ams.json, re-resolve segment ids via the
-   * SegmentIndex (skipping ids that no longer exist), populate AMS.
+   * SegmentIndex (skipping ids that no longer exist), populate AMS, and
+   * restore the persisted `adjustRanThisSession` flag onto the cache entry.
    * Silent on every error — a corrupt or missing file is the cold-start
    * case, indistinguishable from "first use of this group".
    *
    * @private
    * @param {string} key
-   * @param {ActiveMemorySet} ams
+   * @param {AmsCacheEntry} entry
    */
-  _hydrate(key, ams) {
+  _hydrate(key, entry) {
     const path = this.amsPath(key);
     if (!existsSync(path)) return;
     let payload;
     try { payload = JSON.parse(readFileSync(path, 'utf8') || '{}'); }
     catch { return; }
     if (!payload || typeof payload !== 'object') return;
+
+    if (payload.adjustRanThisSession === true) {
+      entry.adjustRanThisSession = true;
+    }
 
     if (!this.memoryIndex) return;
 
@@ -210,12 +256,12 @@ export class AmsRegistry {
         if (seg) onDemandSegs.push(seg);
       } catch { /* skip unresolvable */ }
     }
-    if (onDemandSegs.length > 0) ams.setOnDemand(onDemandSegs);
+    if (onDemandSegs.length > 0) entry.ams.setOnDemand(onDemandSegs);
 
     for (const id of recentIds) {
       try {
         const seg = this.memoryIndex.get(id);
-        if (seg) ams.touchRecent(seg);
+        if (seg) entry.ams.touchRecent(seg);
       } catch { /* skip */ }
     }
   }
