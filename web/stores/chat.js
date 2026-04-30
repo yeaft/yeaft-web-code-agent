@@ -10,6 +10,7 @@ import * as convHelpers from './helpers/conversation.js';
 import * as sessionHelpers from './helpers/session.js';
 import * as watchdogHelpers from './helpers/watchdog.js';
 import * as crewHelpers from './helpers/crew.js';
+import * as unifyViewHelpers from './helpers/unify-view.js';
 
 const { defineStore } = Pinia;
 
@@ -469,7 +470,13 @@ export const useChatStore = defineStore('chat', {
     // Unify 页面
     // =====================
     enterUnify(agentId = null) {
-      this.currentView = 'unify';
+      // Capture the chat-side activeConversations snapshot BEFORE flipping
+      // currentView. The transition helper is idempotent: if we're
+      // already in Unify (e.g. switching agents, programmatic re-entry,
+      // a redundant call), it will NOT overwrite the existing snapshot
+      // with the unify-only array — which would otherwise cause
+      // leaveUnify to "restore" the unify conversationId back into Chat
+      // and leak unify messages into the Chat view.
       if (agentId) this.unifyAgentId = agentId;
       else if (!this.unifyAgentId) {
         const online = this.agents.find(a => a.online);
@@ -482,10 +489,10 @@ export const useChatStore = defineStore('chat', {
       if (!this.messagesMap[this.unifyConversationId]) {
         this.messagesMap[this.unifyConversationId] = [];
       }
-      // Save current activeConversations for restoration in leaveUnify
-      this._savedActiveConversations = [...this.activeConversations];
-      // Set the virtual conversationId as the active one so MessageList reads from it
-      this.activeConversations = [this.unifyConversationId];
+      // Snapshot (only on the Chat → Unify edge) and swap activeConversations.
+      // Reads `this.currentView` to decide; must run BEFORE the flip below.
+      unifyViewHelpers.applyEnterUnifyTransition(this);
+      this.currentView = 'unify';
 
       // Always request a session_ready replay so model + status + groups
       // snapshot are repopulated on every Unify entry. Backend's
@@ -510,11 +517,9 @@ export const useChatStore = defineStore('chat', {
       // task-315: also exit the task detail view so the next Unify entry
       // starts on the main stream.
       this.unifyActiveFeatureDetailId = null;
-      // Restore the original activeConversations
-      if (this._savedActiveConversations) {
-        this.activeConversations = this._savedActiveConversations;
-        this._savedActiveConversations = null;
-      }
+      // Restore the original activeConversations snapshot taken on the
+      // last real Chat → Unify transition (idempotent — no-op if cold).
+      unifyViewHelpers.applyLeaveUnifyTransition(this);
     },
     /**
      * Send a group-scoped Unify chat message. Routes through the agent-side
