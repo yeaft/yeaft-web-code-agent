@@ -36,7 +36,7 @@ import { sendToServer, flushMessageBuffer } from './buffer.js';
 import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
 import { getLlmConfig, updateLlmConfig, getUnifySettings, updateUnifySettings, getSearchSettings, updateSearchSettings, fetchTavilyUsage } from '../unify/config-api.js';
-import { handleUnifyGroupChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyAbortThread, handleUnifyAbortAll, handleUnifyAbortTurn, handleUnifyVpSubscribe, handleUnifyVpCreate, handleUnifyVpUpdate, handleUnifyVpDelete, handleUnifyVpRead, handleUnifyFeatureMessage, handleUnifyFetchSummaryHistory, handleUnifyFeatureCrud, handleUnifyListGroups, handleUnifyCreateGroup, handleUnifyRenameGroup, handleUnifyArchiveGroup, handleUnifyDeleteGroup, handleUnifyAddMember, handleUnifyRemoveMember, handleUnifySetDefaultVp, handleUnifyDreamTrigger } from '../unify/web-bridge.js';
+import { handleUnifyGroupChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyAbortThread, handleUnifyAbortAll, handleUnifyAbortTurn, handleUnifyVpSubscribe, handleUnifyVpCreate, handleUnifyVpUpdate, handleUnifyVpDelete, handleUnifyVpRead, handleUnifyFeatureMessage, handleUnifyFetchSummaryHistory, handleUnifyFeatureCrud, handleUnifyListGroups, handleUnifyCreateGroup, handleUnifyRenameGroup, handleUnifyUpdateGroup, handleUnifyArchiveGroup, handleUnifyDeleteGroup, handleUnifyAddMember, handleUnifyRemoveMember, handleUnifySetDefaultVp, handleUnifyDreamTrigger } from '../unify/web-bridge.js';
 
 export async function handleMessage(msg) {
   switch (msg.type) {
@@ -467,6 +467,9 @@ export async function handleMessage(msg) {
       break;
     case 'unify_rename_group':
       handleUnifyRenameGroup(msg);
+      break;
+    case 'unify_update_group':
+      handleUnifyUpdateGroup(msg);
       break;
     case 'unify_archive_group':
       handleUnifyArchiveGroup(msg);

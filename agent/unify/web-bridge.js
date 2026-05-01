@@ -33,6 +33,7 @@ import {
   GroupCrudError,
   createGroupFromSpec,
   renameGroup,
+  updateGroupAnnouncement,
   archiveGroup,
   deleteGroup,
   purgeArchivedGroups,
@@ -315,6 +316,36 @@ export function handleUnifyRenameGroup(msg) {
     sendGroupSnapshotBroadcast();
   } catch (err) {
     sendGroupCrudResult({ op: 'rename', requestId, ok: false, error: groupErrorPayload(err) });
+  }
+}
+
+/**
+ * `unify_update_group` — generalised group meta patch. Currently accepts
+ * `name` and `announcement` keys. Empty patch is rejected. Either field
+ * being a string triggers the corresponding CRUD call; both can land in
+ * the same op for atomicity from the user's perspective (the second write
+ * wins on conflict, which is fine — the UI binds save buttons per pane).
+ */
+export function handleUnifyUpdateGroup(msg) {
+  const requestId = msg && msg.requestId;
+  const groupId = msg && msg.groupId;
+  const patch = (msg && msg.patch && typeof msg.patch === 'object') ? msg.patch : null;
+  try {
+    if (!patch || (typeof patch.name !== 'string' && typeof patch.announcement !== 'string')) {
+      throw new GroupCrudError('invalid_patch', groupId);
+    }
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    let group = null;
+    if (typeof patch.name === 'string') {
+      group = renameGroup(yeaftDir, groupId, patch.name);
+    }
+    if (typeof patch.announcement === 'string') {
+      group = updateGroupAnnouncement(yeaftDir, groupId, patch.announcement);
+    }
+    sendGroupCrudResult({ op: 'update', requestId, ok: true, group });
+    sendGroupSnapshotBroadcast();
+  } catch (err) {
+    sendGroupCrudResult({ op: 'update', requestId, ok: false, error: groupErrorPayload(err) });
   }
 }
 
