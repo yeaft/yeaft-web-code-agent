@@ -563,7 +563,7 @@ export class Engine {
    * @param {{user?:string, group?:string, vp?:string}} [summaries]
    * @returns {string}
    */
-  #buildSystemPrompt(memory, compactSummary, prompt, memoryInjection, userProfile, vpPersona, summaries) {
+  #buildSystemPrompt(memory, compactSummary, prompt, memoryInjection, userProfile, vpPersona, summaries, groupAnnouncement) {
     // Get relevant skill content if SkillManager is wired
     let skillContent = '';
     if (this.#skillManager && prompt) {
@@ -585,6 +585,7 @@ export class Engine {
       userProfile,
       vpPersona,
       summaries,
+      groupAnnouncement,
       // Worker-shape harness is descriptive metadata for human inspection;
       // production prompts skip it to save tokens. Re-enable via env when
       // diagnosing prompt structure issues.
@@ -859,7 +860,7 @@ export class Engine {
    *   SCENARIO_EFFORT. Unknown values fall through to 'high'.
    * @yields {EngineEvent}
    */
-  async *query({ prompt, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan } = {}) {
+  async *query({ prompt, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement } = {}) {
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       yield {
         type: 'error',
@@ -910,7 +911,7 @@ export class Engine {
     const runSignal = abortCtrl.signal;
 
     try {
-      yield* this.#runQuery({ prompt: effectivePrompt, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan });
+      yield* this.#runQuery({ prompt: effectivePrompt, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement });
     } finally {
       if (signal) {
         try { signal.removeEventListener('abort', onExternalAbort); } catch { /* ignore */ }
@@ -928,7 +929,7 @@ export class Engine {
    * in a try/finally without indenting the whole loop.
    * @private
    */
-  async *#runQuery({ prompt, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan }) {
+  async *#runQuery({ prompt, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement }) {
 
     // ─── Pre-query: FTS5 Memory Recall + Compact Summary ──
     // Memory feed comes from two places:
@@ -1004,7 +1005,7 @@ export class Engine {
         : amsContext.snapshotBlock;
     }
 
-    const systemPrompt = this.#buildSystemPrompt(undefined, compactSummary, prompt, memoryInjection, userProfile, vpPersona, summaries);
+    const systemPrompt = this.#buildSystemPrompt(undefined, compactSummary, prompt, memoryInjection, userProfile, vpPersona, summaries, groupAnnouncement);
 
     // Build conversation: existing messages + new user message
     const conversationMessages = [

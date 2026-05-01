@@ -974,6 +974,17 @@ export function buildVpQueryOpts({ vpId, groupCoordinator, groupId }) {
   if (typeof groupId === 'string' && groupId.trim()) {
     out.groupId = groupId.trim();
   }
+  // task-334-group-editor: surface the group announcement to the engine so
+  // buildWorkerPrompt can inject it as a CLAUDE.md-style shared prefix.
+  // Empty/missing reads as '' and prompts.js skips the section.
+  try {
+    const meta = groupCoordinator && groupCoordinator.group
+      && typeof groupCoordinator.group.getMeta === 'function'
+      ? groupCoordinator.group.getMeta() : null;
+    if (meta && typeof meta.announcement === 'string') {
+      out.groupAnnouncement = meta.announcement;
+    }
+  } catch { /* announcement read is best-effort */ }
   try {
     const vp = readVp(resolvedVpId);
     if (vp) {
