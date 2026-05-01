@@ -834,21 +834,8 @@
   color: var(--text-primary);
 }
 .unify-debug-toggle-chip.active {
-  background: var(--sidebar-hover);
-  color: var(--text-primary);
-}
-
-.unify-debug-pre-raw {
-  max-height: 400px;
-  overflow: auto;
-  font-size: 11px;
-  font-family: var(--font-mono, ui-monospace, monospace);
-  background: var(--code-bg, var(--bg-input-wrapper));
-  color: var(--code-text, var(--text-secondary));
-  padding: 10px 12px;
-  border-radius: 6px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  background: var(--accent);
+  color: var(--accent-fg);
 }
 
 .unify-debug-count {
@@ -875,16 +862,14 @@
   font-size: 13px;
 }
 
-/* No card chrome — just spacing + a hairline between turns. */
+/* No card chrome, no hairlines — turns separate by spacing alone, per the
+   project "no horizontal divider" design rule. The header gets a hover bg
+   for affordance; that's enough. */
 .unify-debug-turn {
   border: none;
   border-radius: 0;
   margin: 0;
   padding: 4px 0 8px;
-  border-bottom: 1px solid var(--border-light);
-}
-.unify-debug-turn:last-child {
-  border-bottom: none;
 }
 
 .unify-debug-turn-header {
@@ -953,15 +938,16 @@
 }
 
 /* Block-level pre (assistant text, system prompt, etc.) — render
-   like a real code block, not an inline form field. Matches the
-   tokens used by .unify-debug-pre-raw above. */
+   like a real code block, not an inline form field. The shared "code-block
+   recipe" below is also reused by .unify-debug-error and (via composition)
+   .unify-debug-pre-soft. */
 .unify-debug-pre {
   background: var(--code-bg, var(--bg-input-wrapper));
   border: none;
   border-radius: 6px;
   padding: 10px 12px;
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 11.5px;
+  font-family: var(--font-mono);
+  font-size: 11px;
   line-height: 1.5;
   color: var(--code-text, var(--text-secondary));
   white-space: pre-wrap;
@@ -1003,7 +989,7 @@
   display: flex;
   gap: 8px;
   align-items: baseline;
-  font-size: 11.5px;
+  font-size: 11px;
 }
 .unify-debug-msg-role {
   font-weight: 600;
@@ -1023,7 +1009,7 @@
 }
 .unify-debug-tc > summary {
   cursor: pointer;
-  font-size: 11.5px;
+  font-size: 11px;
   color: var(--text-secondary);
   padding: 2px 0;
   list-style: none;
@@ -1035,9 +1021,6 @@
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 10px;
-}
-.unify-debug-pre-args {
-  max-height: 300px;
 }
 
 .unify-debug-fncalls {
@@ -1057,7 +1040,7 @@
   gap: 8px;
   align-items: baseline;
   margin-bottom: 2px;
-  font-size: 11.5px;
+  font-size: 11px;
 }
 .unify-debug-fncall-num {
   color: var(--text-muted);
@@ -1075,11 +1058,11 @@
   font-size: 10px;
 }
 .unify-debug-fncall-pending { color: var(--text-muted); font-size: 11px; }
-.unify-debug-fncall-ok      { color: var(--success); font-size: 11.5px; }
-.unify-debug-fncall-err     { color: var(--error); font-size: 11.5px; }
+.unify-debug-fncall-ok      { color: var(--success); font-size: 11px; }
+.unify-debug-fncall-err     { color: var(--error); font-size: 11px; }
 .unify-debug-fncall > details > summary {
   cursor: pointer;
-  font-size: 11.5px;
+  font-size: 11px;
   color: var(--text-secondary);
   padding: 2px 0;
   list-style: none;
@@ -1088,7 +1071,7 @@
   display: none;
 }
 .unify-debug-empty-inline {
-  font-size: 11.5px;
+  font-size: 11px;
   color: var(--text-muted);
   padding: 4px 0;
   font-style: italic;
@@ -1867,7 +1850,7 @@
   border-radius: 0;
   color: var(--text-secondary);
   font-size: 11px;
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-family: var(--font-mono);
 }
 
 .unify-debug-turn-loopcount,
@@ -1968,7 +1951,7 @@
 .unify-debug-loop-model {
   font-size: 11px;
   color: var(--text-muted);
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-family: var(--font-mono);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2014,7 +1997,7 @@
   flex: 0 0 auto;
   font-weight: 500;
   color: var(--text-primary);
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-family: var(--font-mono);
 }
 
 .unify-debug-tool-status.ok {
@@ -2049,7 +2032,7 @@
   padding: 1px 5px;
   border-radius: 3px;
   font-size: 10.5px;
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-family: var(--font-mono);
   color: var(--text-primary);
 }
 
@@ -2063,10 +2046,10 @@
    error envelopes (Anthropic 400 / 4xx) are the most common payload
    here, and `word-break: break-all` was chopping them mid-token. */
 .unify-debug-error {
-  font-size: 11.5px;
+  font-size: 11px;
   color: var(--error);
   background: var(--code-bg, var(--bg-input-wrapper));
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-family: var(--font-mono);
   line-height: 1.5;
   padding: 10px 12px;
   border-radius: 6px;
@@ -2077,19 +2060,12 @@
   margin: 4px 0 0;
 }
 
+/* Soft variant — composes with .unify-debug-pre via
+   `class="unify-debug-pre unify-debug-pre-soft"`. Only the delta lives here:
+   reflection content reads as "secondary" by being slightly muted. */
 .unify-debug-pre-soft {
-  background: var(--code-bg, var(--bg-input-wrapper));
-  color: var(--code-text, var(--text-secondary));
-  border-radius: 6px;
-  padding: 10px 12px;
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 11.5px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  max-height: 240px;
-  overflow: auto;
-  margin: 4px 0 0;
+  color: var(--text-secondary);
+  opacity: 0.85;
 }
 
 /* RAW row — buttons on the title line, URL/status on its own muted
@@ -2106,7 +2082,7 @@
   flex: 1 1 100%;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-family: var(--font-mono);
   color: var(--text-muted);
   padding-top: 2px;
 }
