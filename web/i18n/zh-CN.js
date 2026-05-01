@@ -1133,6 +1133,34 @@ export default {
   'unify.group.members.memberCount': '已选 {count} 位',
   'unify.group.members.actionFailed': '操作失败：{error}',
 
+  // 群公告（注入 system prompt 的共享前缀）.
+  'unify.group.announcement.label': '群公告',
+  'unify.group.announcement.hintEmpty': '暂无公告 — 点击 ✏️ 添加。',
+  'unify.group.announcement.emptyBody': '未设置群公告。可以在这里写一段简介，群内所有 VP 在收到消息时都会在 system prompt 顶部看到 — 适合写共同背景、规则、或 CLAUDE.md 式的指引。',
+  'unify.group.announcement.placeholder': '为这个群里的所有 VP 写一段共享的简介…',
+  'unify.group.announcement.edit': '编辑公告',
+  'unify.group.announcement.saving': '保存中…',
+  'unify.group.announcement.saveFailed': '保存失败：{error}',
+  'unify.group.announcement.openSettings': '打开群设置',
+
+  // 统一群设置弹窗.
+  'unify.group.settings.title': '{name} — 群设置',
+  'unify.group.settings.close': '关闭',
+  'unify.group.settings.nav.announcement': '群公告',
+  'unify.group.settings.nav.members': '成员',
+  'unify.group.settings.nav.rename': '重命名',
+  'unify.group.settings.nav.danger': '危险操作',
+  'unify.group.settings.announcement.heading': '群公告',
+  'unify.group.settings.announcement.help': '注入到群内每个 VP 的 system prompt 顶部 — 类似团队共享的 CLAUDE.md。',
+  'unify.group.settings.members.heading': '成员',
+  'unify.group.settings.rename.heading': '重命名群',
+  'unify.group.settings.rename.label': '新名称',
+  'unify.group.settings.rename.save': '保存名称',
+  'unify.group.settings.rename.saving': '保存中…',
+  'unify.group.settings.danger.heading': '危险操作',
+  'unify.group.settings.danger.deleteHelp': '永久删除这个群。会移除磁盘上的 group.json 和全部消息历史，不可恢复。',
+  'unify.group.settings.danger.deleteBtn': '删除群',
+
   // ===== task-334j: 群聊视图（@ 提及 / 引用回复 / 发送拒绝） =====
   'unify.vp.mention.placeholder': '按 id 或名称搜索角色\u2026',
   'unify.vp.mention.noMatch': '没有匹配的角色',

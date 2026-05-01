@@ -230,6 +230,12 @@ export const useChatStore = defineStore('chat', {
     // setting one clears the other so the view has a single predicate.
     unifyActiveGroupFilter: null,
 
+    // One-shot signal raised when MessageList's GroupAnnouncementBar (or
+    // the sidebar ⚙ button) requests opening the unified GroupSettingsModal.
+    // Shape: { groupId, section, at }. UnifyPage watches this, opens the
+    // modal, then clears the signal. Null means no pending request.
+    pendingGroupSettingsRequest: null,
+
     // Bug 1: in-flight SEND-context group, set transiently by
     // handleUnifyOutput before dispatching streaming chunks. Read by
     // addMessageToConversation so arriving messages get stamped with the
@@ -1291,6 +1297,7 @@ export const useChatStore = defineStore('chat', {
         list: 'unify_list_groups',
         create: 'unify_create_group',
         rename: 'unify_rename_group',
+        update: 'unify_update_group',
         archive: 'unify_archive_group',
         delete: 'unify_delete_group',
         add_member: 'unify_add_member',
