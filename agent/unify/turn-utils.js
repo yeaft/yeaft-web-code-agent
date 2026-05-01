@@ -30,15 +30,19 @@
  * fanned out to multiple VPs is one turn) — so we strip the prefix
  * before comparing.
  *
- * Format mirrors `web-bridge.js#runVpTurn`:
- *   `@vp-${vpId} ${text}`
+ * Format mirrors `web-bridge.js#runVpTurn` (`@vp-${vpId} ${text}`)
+ * and the canonical vpId charset from `groups/ids.js#VP_ID_RE`
+ * (`[A-Za-z0-9_-]`). The regex here is intentionally constrained to
+ * that charset so a literal `@vp-` substring in a *user-typed* message
+ * (e.g. `"@vp-, fooled you"`, `"@vp-😀 hi"`) is NOT mistaken for a
+ * fan-out prefix and over-stripped.
  *
  * @param {string} content
  * @returns {string}
  */
 export function stripVpMentionPrefix(content) {
   if (typeof content !== 'string') return '';
-  return content.replace(/^@vp-[^\s]+\s+/, '');
+  return content.replace(/^@vp-[A-Za-z0-9_-]+\s+/, '');
 }
 
 /**

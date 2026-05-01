@@ -1218,8 +1218,10 @@ function scheduleCompactAfterTurn(groupId) {
   }
   // Cheap O(n) precheck so we don't bother engaging the LLM at all
   // when the conversation is still small. Mirrors the policy that
-  // `runCompactNow` will apply: 10K floor / turn>20 / 40 % of
-  // configured context / 200K hard ceiling.
+  // `runCompactNow` will apply: 30K soft floor / 40 % of configured
+  // context / 200K hard ceiling. (The turn-count trigger is off by
+  // default — DEFAULT_TURN_LIMIT=Infinity — pin `turnLimit` via opts
+  // to re-enable it.)
   const maxContextTokens =
     typeof session?.config?.maxContextTokens === 'number'
       ? session.config.maxContextTokens
