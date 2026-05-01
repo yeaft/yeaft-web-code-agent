@@ -608,10 +608,11 @@ export default {
       const gs = groupsStore();
       return gs ? gs.activeGroup : null;
     });
-    const inviteGroupName = Vue.computed(() => {
-      const g = activeGroupForInvite.value;
+    // D1 seed sentinel: translate raw 'Default' on grp_default via global
+    // i18n. Used by `inviteGroupName` and the topbar ⚙ label so the two
+    // can't drift if one site is later relocalised.
+    const resolveGroupDisplayName = (g) => {
       if (!g) return '';
-      // D1 seed sentinel: translate raw 'Default' on grp_default via global i18n.
       if (g.id === 'grp_default' && (g.name === 'Default' || !g.name)) {
         try {
           const globalI18n = (typeof window !== 'undefined') ? window.i18n : null;
@@ -621,7 +622,10 @@ export default {
         } catch (_) {}
       }
       return g.name || g.id || '';
-    });
+    };
+    const inviteGroupName = Vue.computed(
+      () => resolveGroupDisplayName(activeGroupForInvite.value),
+    );
     const shouldShowInviteModal = Vue.computed(() => {
       const gs = groupsStore();
       if (!gs || !gs.activeNeedsInvite) return false;
@@ -689,19 +693,9 @@ export default {
       if (gs.activeGroupId && gs.groups[gs.activeGroupId]) return gs.groups[gs.activeGroupId];
       return gs.groups['grp_default'] || null;
     });
-    const topbarGroupName = Vue.computed(() => {
-      const g = topbarGroup.value;
-      if (!g) return '';
-      if (g.id === 'grp_default' && (g.name === 'Default' || !g.name)) {
-        try {
-          const globalI18n = (typeof window !== 'undefined') ? window.i18n : null;
-          if (globalI18n && globalI18n.global && typeof globalI18n.global.t === 'function') {
-            return globalI18n.global.t('unify.group.defaultName');
-          }
-        } catch (_) {}
-      }
-      return g.name || g.id || '';
-    });
+    const topbarGroupName = Vue.computed(
+      () => resolveGroupDisplayName(topbarGroup.value),
+    );
     const openTopbarGroupSettings = () => {
       const g = topbarGroup.value;
       if (!g) return;
