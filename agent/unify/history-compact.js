@@ -26,12 +26,16 @@
  *   4. Keep the last `keepRecent` user→assistant turns intact so the model
  *      has fresh, untransformed context for whatever the user just said.
  *
- * Triggers (either fires):
- *   - turn count > 20  (each user message in `conversationMessages` is a turn)
- *   - estimated tokens > 80,000
+ * Triggers (any fires, but only above a 10K token soft floor):
+ *   - tokens < 10_000 → never compact (cheap chat, no point paying the
+ *     summarizer)
+ *   - turn count > 20
+ *   - tokens > 40 % of `maxContextTokens` (defaults to 200K → 80K)
+ *   - tokens > 200,000 hard ceiling
  *
- * Defaults match the user-stated requirement; both are overridable via the
- * options bag for tests / future config plumbing.
+ * Defaults are derived from `maxContextTokens` so the policy auto-adjusts
+ * when the user widens or narrows their context budget. All three knobs
+ * are overridable via the options bag for tests / future config plumbing.
  *
  * Why role='user' for the summary message:
  *   The Anthropic Messages API rejects assistant prefill at the tail
@@ -44,13 +48,34 @@
  */
 
 import { estimateTokens } from './conversation/persist.js';
+import { pairSanitize } from './pair-sanitize.js';
 
 /**
- * Default trigger thresholds — match the user's stated policy:
- *   "如果 turn 超过 20 或者 message 上下文超过 80K，那么就 compact"
+ * Default trigger thresholds (2026-05-01 policy update):
+ *   - never compact while total tokens < 10K (soft floor)
+ *   - otherwise compact if ANY of:
+ *       turn count > 20
+ *       tokens > 40 % of `maxContextTokens` (default 200K → 80K)
+ *       tokens > 200K hard ceiling
+ *
+ * Token thresholds are derived from `maxContextTokens` at evaluation
+ * time so the policy auto-adjusts to the user's configured context.
+ * The constants below are the fallbacks when no config is plumbed in.
  */
 export const DEFAULT_TURN_LIMIT = 20;
-export const DEFAULT_TOKEN_LIMIT = 80_000;
+export const DEFAULT_MIN_TOKEN_FLOOR = 10_000;
+export const DEFAULT_MAX_CONTEXT_TOKENS = 200_000;
+export const DEFAULT_TOKEN_FRACTION = 0.4;
+export const DEFAULT_HARD_TOKEN_CEILING = 200_000;
+/**
+ * Effective default token trigger when no `maxContextTokens` is provided:
+ *   min(40% of 200K, 200K) = 80K. Preserved as `DEFAULT_TOKEN_LIMIT` for
+ *   back-compat with existing tests that import this name.
+ */
+export const DEFAULT_TOKEN_LIMIT = Math.min(
+  Math.floor(DEFAULT_MAX_CONTEXT_TOKENS * DEFAULT_TOKEN_FRACTION),
+  DEFAULT_HARD_TOKEN_CEILING
+);
 
 /**
  * How many user→assistant pairs to leave intact at the tail. The summary
@@ -148,20 +173,62 @@ export function countTurns(messages) {
  * Pure trigger evaluator. Decides whether the in-memory history needs
  * compaction. No I/O, no LLM call.
  *
+ * Policy (2026-05-01):
+ *   1. tokens < `minTokenFloor` (default 10K) → trigger=false (always).
+ *   2. otherwise trigger if ANY of:
+ *        turnCount > turnLimit                    (reason='turn_count')
+ *        tokenCount > maxContextTokens*fraction   (reason='token_threshold')
+ *        tokenCount > hardTokenCeiling            (reason='token_ceiling')
+ *
+ * `tokenLimit` is preserved as a back-compat override for callers /
+ * tests that pin a specific number; when set, it overrides the
+ * fraction-of-context calculation.
+ *
  * @param {Array<object>} messages
- * @param {{turnLimit?: number, tokenLimit?: number}} [opts]
- * @returns {{trigger: boolean, reason: 'turn_count'|'token_threshold'|null,
+ * @param {{
+ *   turnLimit?: number,
+ *   tokenLimit?: number,
+ *   minTokenFloor?: number,
+ *   maxContextTokens?: number,
+ *   tokenFraction?: number,
+ *   hardTokenCeiling?: number,
+ * }} [opts]
+ * @returns {{trigger: boolean, reason: 'turn_count'|'token_threshold'|'token_ceiling'|null,
  *            turnCount: number, tokenCount: number,
- *            turnLimit: number, tokenLimit: number}}
+ *            turnLimit: number, tokenLimit: number,
+ *            minTokenFloor: number, hardTokenCeiling: number}}
  */
 export function shouldCompactHistory(messages, opts = {}) {
   const turnLimit = opts.turnLimit ?? DEFAULT_TURN_LIMIT;
-  const tokenLimit = opts.tokenLimit ?? DEFAULT_TOKEN_LIMIT;
+  const minTokenFloor = opts.minTokenFloor ?? DEFAULT_MIN_TOKEN_FLOOR;
+  const hardTokenCeiling = opts.hardTokenCeiling ?? DEFAULT_HARD_TOKEN_CEILING;
+  const maxContextTokens = opts.maxContextTokens ?? DEFAULT_MAX_CONTEXT_TOKENS;
+  const tokenFraction = opts.tokenFraction ?? DEFAULT_TOKEN_FRACTION;
+  // tokenLimit override wins; otherwise compute fractional threshold.
+  const tokenLimit =
+    opts.tokenLimit
+    ?? Math.min(Math.floor(maxContextTokens * tokenFraction), hardTokenCeiling);
+
   const turnCount = countTurns(messages);
   const tokenCount = estimateMessagesTokens(messages);
 
   let reason = null;
+  // (1) Soft floor: never compact small conversations, regardless of turns.
+  if (tokenCount < minTokenFloor) {
+    return {
+      trigger: false,
+      reason: null,
+      turnCount,
+      tokenCount,
+      turnLimit,
+      tokenLimit,
+      minTokenFloor,
+      hardTokenCeiling,
+    };
+  }
+  // (2) Trigger if any of: turn budget, fractional token budget, hard ceiling.
   if (turnCount > turnLimit) reason = 'turn_count';
+  else if (tokenCount > hardTokenCeiling) reason = 'token_ceiling';
   else if (tokenCount > tokenLimit) reason = 'token_threshold';
 
   return {
@@ -171,6 +238,8 @@ export function shouldCompactHistory(messages, opts = {}) {
     tokenCount,
     turnLimit,
     tokenLimit,
+    minTokenFloor,
+    hardTokenCeiling,
   };
 }
 
@@ -331,6 +400,10 @@ export function buildSummaryPrompt(cleanedMessages) {
  *   keepRecent?: number,
  *   turnLimit?: number,
  *   tokenLimit?: number,
+ *   minTokenFloor?: number,
+ *   maxContextTokens?: number,
+ *   tokenFraction?: number,
+ *   hardTokenCeiling?: number,
  * }} options
  * @returns {Promise<{
  *   messages: Array<object>,
@@ -348,15 +421,29 @@ export async function compactHistory(messages, options) {
   const {
     summarize,
     keepRecent = DEFAULT_KEEP_RECENT_TURNS,
-    turnLimit = DEFAULT_TURN_LIMIT,
-    tokenLimit = DEFAULT_TOKEN_LIMIT,
+    turnLimit,
+    tokenLimit,
+    minTokenFloor,
+    maxContextTokens,
+    tokenFraction,
+    hardTokenCeiling,
   } = options || {};
 
   if (typeof summarize !== 'function') {
     throw new TypeError('compactHistory: options.summarize must be a function');
   }
 
-  const before = shouldCompactHistory(messages, { turnLimit, tokenLimit });
+  // Pass thresholds through to shouldCompactHistory so a single options
+  // bag controls the policy. Undefined keys fall back to module defaults.
+  const triggerOpts = {
+    turnLimit,
+    tokenLimit,
+    minTokenFloor,
+    maxContextTokens,
+    tokenFraction,
+    hardTokenCeiling,
+  };
+  const before = shouldCompactHistory(messages, triggerOpts);
   if (!before.trigger) {
     return {
       messages,
@@ -433,19 +520,17 @@ export async function compactHistory(messages, options) {
 
   const summaryMsg = wrapSummaryAsUserMessage(summaryText);
 
-  // Defensive: if the tail starts with a `role: 'tool'` message, the
-  // adapter will reject it (tool messages must follow an assistant with
-  // a matching tool_call). Drop leading tool messages from the tail —
-  // their preceding assistant has been folded into the summary, so the
-  // tool result is orphaned anyway.
-  let tailStart = 0;
-  while (tailStart < tail.length && tail[tailStart] && tail[tailStart].role === 'tool') {
-    tailStart++;
-  }
-  const safeTail = tail.slice(tailStart);
+  // Defensive pair-sanitize: the cut at `cutIdx` lands at a user-message
+  // boundary so an `[assistant(toolCalls), tool…]` arc is not split, but
+  // we still run `pairSanitize` over the tail as belt-and-suspenders —
+  // it idempotently drops any orphan tool messages, and any assistant
+  // whose tool_use IDs aren't fully matched in the tail. This is what
+  // keeps the next adapter call from 400-ing on tool_use/tool_result
+  // mismatch when the storage / fan-out layer reorders messages.
+  const safeTail = pairSanitize(tail);
 
   const newMessages = [summaryMsg, ...safeTail];
-  const after = shouldCompactHistory(newMessages, { turnLimit, tokenLimit });
+  const after = shouldCompactHistory(newMessages, triggerOpts);
 
   return {
     messages: newMessages,

@@ -1007,7 +1007,7 @@ async function ensureSessionLoaded() {
 
   unifyConversationId = `unify-${Date.now()}`;
 
-  restoreHistoryFromRecent(session.conversationStore.loadRecent(50));
+  restoreHistoryFromRecent(session.conversationStore.loadRecent(80));
 
   sendUnifyEvent({
     type: 'session_ready',
@@ -1217,8 +1217,14 @@ function scheduleCompactAfterTurn(groupId) {
     return;
   }
   // Cheap O(n) precheck so we don't bother engaging the LLM at all
-  // when the conversation is still small.
-  const triage = shouldCompactHistory(conversationMessages);
+  // when the conversation is still small. Mirrors the policy that
+  // `runCompactNow` will apply: 10K floor / turn>20 / 40 % of
+  // configured context / 200K hard ceiling.
+  const maxContextTokens =
+    typeof session?.config?.maxContextTokens === 'number'
+      ? session.config.maxContextTokens
+      : undefined;
+  const triage = shouldCompactHistory(conversationMessages, { maxContextTokens });
   if (!triage.trigger) return;
   if (!session?.engine || typeof session.engine.summarizeForCompact !== 'function') {
     console.warn('[Unify] history compact: engine.summarizeForCompact unavailable — skipping');
@@ -1269,8 +1275,16 @@ async function runCompactNow(groupId) {
   // and we abandon the swap.
   const snapshot = conversationMessages;
 
+  // Pull the user-configured context width so the 40 %-of-context
+  // threshold auto-adjusts to whatever model they're on. Falls back to
+  // the module default when missing.
+  const maxContextTokens =
+    typeof session?.config?.maxContextTokens === 'number'
+      ? session.config.maxContextTokens
+      : undefined;
+
   try {
-    const result = await compactHistory(snapshot, { summarize });
+    const result = await compactHistory(snapshot, { summarize, maxContextTokens });
     if (!result.compacted) {
       if (result.error) {
         console.warn(
@@ -1627,12 +1641,12 @@ export async function handleUnifyLoadHistory(msg) {
 
     unifyConversationId = `unify-${Date.now()}`;
 
-    restoreHistoryFromRecent(pickRecent(session.conversationStore, 50));
+    restoreHistoryFromRecent(pickRecent(session.conversationStore, 80));
   } else if (groupId) {
     // Re-entering an existing session with a (possibly new) group filter:
     // re-seed the engine's flat history so it doesn't carry messages from
     // another group into the next turn's context.
-    restoreHistoryFromRecent(pickRecent(session.conversationStore, 50));
+    restoreHistoryFromRecent(pickRecent(session.conversationStore, 80));
   }
 
   // Always replay session_ready so refresh / reconnect rebuilds UI state.
@@ -1704,7 +1718,7 @@ export async function resetUnifySession() {
 
     unifyConversationId = `unify-${Date.now()}`;
 
-    restoreHistoryFromRecent(session.conversationStore.loadRecent(50));
+    restoreHistoryFromRecent(session.conversationStore.loadRecent(80));
 
     sendUnifyEvent({
       type: 'session_ready',

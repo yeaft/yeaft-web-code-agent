@@ -21,6 +21,7 @@
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, renameSync, unlinkSync } from 'fs';
 import { join, basename } from 'path';
 import { isPermissionError } from '../init.js';
+import { pairSanitize } from '../pair-sanitize.js';
 
 // ─── Token estimation ────────────────────────────────────────
 
@@ -426,11 +427,15 @@ export class ConversationStore {
   /**
    * Load recent hot messages, sorted by id (chronological).
    *
-   * @param {number} [limit=50] — max messages to load
+   * Tool-pairing: same rationale as `loadRecentByGroup` — the tail slice
+   * can split a tool_use/tool_result pair, so we run `pairSanitize` to
+   * drop orphans.
+   *
+   * @param {number} [limit=80] — max messages to load
    * @returns {object[]} — parsed message objects
    */
-  loadRecent(limit = 50) {
-    return this.#loadFromDir(this.#msgDir, limit);
+  loadRecent(limit = 80) {
+    return pairSanitize(this.#loadFromDir(this.#msgDir, limit));
   }
 
   /**
@@ -456,16 +461,23 @@ export class ConversationStore {
    * inboxes (≤ a few thousand hot messages) this is cheap; if it ever
    * becomes a hot path we add a per-group on-disk index.
    *
+   * Tool-pairing (2026-05-01): the `.slice(-limit)` cut can split an
+   * `[assistant(toolCalls), tool…]` arc — landing on the tool messages
+   * (orphan tool_result, no preceding tool_use) or the assistant
+   * (orphan tool_use, no following tool_result). Both shapes 400 the
+   * Anthropic / Chat-Completions adapter. We run `pairSanitize` over
+   * the slice to drop those orphans. See `agent/unify/pair-sanitize.js`.
+   *
    * @param {string} groupId — required; null/empty returns []
-   * @param {number} [limit=50]
+   * @param {number} [limit=80]
    * @returns {object[]}
    */
-  loadRecentByGroup(groupId, limit = 50) {
+  loadRecentByGroup(groupId, limit = 80) {
     if (!groupId) return [];
     const all = this.#loadFromDir(this.#msgDir, Infinity);
     const filtered = all.filter(m => m && m.groupId === groupId);
-    if (limit === Infinity || limit < 0) return filtered;
-    return filtered.slice(-limit);
+    if (limit === Infinity || limit < 0) return pairSanitize(filtered);
+    return pairSanitize(filtered.slice(-limit));
   }
 
   /**

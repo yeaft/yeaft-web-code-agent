@@ -186,7 +186,9 @@ describe('shouldCompactHistory', () => {
       ms.push({ role: 'user', content: `q${i}` });
       ms.push({ role: 'assistant', content: `a${i}` });
     }
-    const r = shouldCompactHistory(ms);
+    // Drop the 10K soft floor to exercise the turn-count path with
+    // small messages.
+    const r = shouldCompactHistory(ms, { minTokenFloor: 0 });
     expect(r.trigger).toBe(true);
     expect(r.reason).toBe('turn_count');
     expect(r.turnCount).toBe(22);
@@ -209,7 +211,7 @@ describe('shouldCompactHistory', () => {
       { role: 'user', content: 'again' },
       { role: 'assistant', content: 'sure' },
     ];
-    const r = shouldCompactHistory(ms, { turnLimit: 1 });
+    const r = shouldCompactHistory(ms, { turnLimit: 1, minTokenFloor: 0 });
     expect(r.trigger).toBe(true);
     expect(r.reason).toBe('turn_count');
   });
@@ -225,6 +227,56 @@ describe('shouldCompactHistory', () => {
     expect(r.trigger).toBe(true);
     // Both fire, but turn_count is checked first.
     expect(r.reason).toBe('turn_count');
+  });
+
+  // ─── 2026-05-01 policy: 10K soft floor + 40 % fractional + 200K ceiling ───
+  it('does NOT compact when total tokens are below the 10K soft floor', () => {
+    // 22 small turns: clearly past the turn limit, but tokens < 10K.
+    const ms = [];
+    for (let i = 0; i < 22; i++) {
+      ms.push({ role: 'user', content: `q${i}` });
+      ms.push({ role: 'assistant', content: `a${i}` });
+    }
+    const r = shouldCompactHistory(ms);
+    expect(r.trigger).toBe(false);
+    expect(r.reason).toBe(null);
+    expect(r.tokenCount).toBeLessThan(10_000);
+    expect(r.turnCount).toBe(22); // soft floor wins over turn count
+  });
+
+  it('compacts at 40 % of `maxContextTokens` (default 200K → 80K)', () => {
+    const big = 'x'.repeat(81_000 * 4);
+    const ms = [{ role: 'user', content: big }];
+    const r = shouldCompactHistory(ms);
+    expect(r.trigger).toBe(true);
+    expect(r.reason).toBe('token_threshold');
+  });
+
+  it('with maxContextTokens=100K, fractional threshold drops to 40K', () => {
+    // ~50K tokens of content — under the default 80K threshold but over
+    // 40 % of 100K = 40K.
+    const big = 'x'.repeat(50_000 * 4);
+    const ms = [{ role: 'user', content: big }];
+    const r = shouldCompactHistory(ms, { maxContextTokens: 100_000 });
+    expect(r.trigger).toBe(true);
+    expect(r.tokenCount).toBeGreaterThan(40_000);
+  });
+
+  it('reports token_ceiling when tokens exceed the 200K hard ceiling', () => {
+    const huge = 'x'.repeat(201_000 * 4);
+    const ms = [{ role: 'user', content: huge }];
+    const r = shouldCompactHistory(ms);
+    expect(r.trigger).toBe(true);
+    expect(r.reason).toBe('token_ceiling');
+  });
+
+  it('hard ceiling fires even when fractional threshold is set higher', () => {
+    // Configure a generous 1M context (fraction → 200K, capped at 200K).
+    const huge = 'x'.repeat(210_000 * 4);
+    const ms = [{ role: 'user', content: huge }];
+    const r = shouldCompactHistory(ms, { maxContextTokens: 1_000_000 });
+    expect(r.trigger).toBe(true);
+    expect(r.reason).toBe('token_ceiling');
   });
 });
 
@@ -452,7 +504,8 @@ describe('compactHistory (end-to-end)', () => {
       expect(prompt).toContain('q0');
       return '- decisions made\n- facts learned';
     };
-    const r = await compactHistory(ms, { summarize });
+    // minTokenFloor=0 to exercise the turn-count path with small messages.
+    const r = await compactHistory(ms, { summarize, minTokenFloor: 0 });
     expect(r.compacted).toBe(true);
     expect(r.reason).toBe('turn_count');
     expect(summarizeCalls).toBe(1);
@@ -470,12 +523,13 @@ describe('compactHistory (end-to-end)', () => {
   });
 
   it('compacts when token count exceeds limit', async () => {
-    // 5 turns but each huge.
+    // 4 turns but each huge — total ≈ 80–120K, crosses the 80K
+    // fractional threshold but stays well under the 200K hard ceiling.
     const ms = [];
-    const big = 'x'.repeat(20_000 * 4); // 20K tokens each
-    for (let i = 0; i < 5; i++) {
+    const big = 'x'.repeat(12_000 * 4); // 12K tokens each
+    for (let i = 0; i < 4; i++) {
       // Distinct content per turn so multi-VP dedup in countTurns /
-      // findCutIndex sees 5 turns, not 1.
+      // findCutIndex sees 4 turns, not 1.
       ms.push({ role: 'user', content: big + ` q${i}` });
       ms.push({ role: 'assistant', content: big });
     }
@@ -493,7 +547,7 @@ describe('compactHistory (end-to-end)', () => {
       ms.push({ role: 'assistant', content: `a${i}` });
     }
     const summarize = async () => { throw new Error('LLM down'); };
-    const r = await compactHistory(ms, { summarize });
+    const r = await compactHistory(ms, { summarize, minTokenFloor: 0 });
     expect(r.compacted).toBe(false);
     expect(r.messages).toBe(ms);
     expect(r.error).toBe('LLM down');
@@ -508,7 +562,7 @@ describe('compactHistory (end-to-end)', () => {
     // LLM returned empty / whitespace — must NOT replace history with
     // a "(no summary produced)" placeholder.
     const summarize = async () => '   \n\n  ';
-    const r = await compactHistory(ms, { summarize });
+    const r = await compactHistory(ms, { summarize, minTokenFloor: 0 });
     expect(r.compacted).toBe(false);
     expect(r.messages).toBe(ms);
     expect(r.error).toBe('empty summary');
@@ -529,7 +583,7 @@ describe('compactHistory (end-to-end)', () => {
       ms.push({ role: 'assistant', content: `a${i}` });
     }
     const summarize = async () => 'summary';
-    const r = await compactHistory(ms, { summarize });
+    const r = await compactHistory(ms, { summarize, minTokenFloor: 0 });
     expect(r.compacted).toBe(true);
     // First message after summary must NOT be tool-role.
     expect(r.messages[0]._compactSummary).toBe(true);
@@ -544,7 +598,7 @@ describe('compactHistory (end-to-end)', () => {
     }
     const original = [...ms];
     const summarize = async () => 'summary';
-    await compactHistory(ms, { summarize });
+    await compactHistory(ms, { summarize, minTokenFloor: 0 });
     expect(ms).toEqual(original);
   });
 
@@ -555,7 +609,7 @@ describe('compactHistory (end-to-end)', () => {
       ms.push({ role: 'assistant', content: `a${i}` });
     }
     const summarize = async () => 'summary';
-    const r = await compactHistory(ms, { summarize, keepRecent: 1 });
+    const r = await compactHistory(ms, { summarize, keepRecent: 1, minTokenFloor: 0 });
     expect(r.compacted).toBe(true);
     // Tail = last 1 user→assistant pair = 2 messages, plus summary = 3
     expect(r.messages.length).toBe(3);
@@ -572,9 +626,70 @@ describe('compactHistory (end-to-end)', () => {
       { role: 'assistant', content: 'a1' },
     ];
     const summarize = async () => 'summary';
-    const r = await compactHistory(ms, { summarize, turnLimit: 1, keepRecent: 2 });
+    const r = await compactHistory(ms, { summarize, turnLimit: 1, keepRecent: 2, minTokenFloor: 0 });
     expect(r.compacted).toBe(false);
     expect(r.messages).toBe(ms);
     expect(r.reason).toBe('turn_count');
+  });
+
+  // ─── 2026-05-01 policy: pair-aware tail sanitation ───
+  it('drops a tail-starting orphan tool_use whose tool_result was folded into the summary', async () => {
+    // Pathological synthetic input: build a stream where the cut lands
+    // such that the tail's leading message is `role:'tool'` whose
+    // assistant tool_use is in the archived prefix. `pairSanitize` must
+    // drop it.
+    const ms = [];
+    for (let i = 0; i < 18; i++) {
+      ms.push({ role: 'user', content: `u${i}` });
+      ms.push({ role: 'assistant', content: `a${i}` });
+    }
+    // Penultimate assistant has a toolCall whose `tool` result lives
+    // INSIDE the tail boundary — manually engineer that.
+    ms.push({ role: 'user', content: 'u18' });
+    ms.push({ role: 'assistant', content: '', toolCalls: [{ id: 'pre-cut', name: 'bash', input: {} }] });
+    ms.push({ role: 'tool', toolCallId: 'pre-cut', content: 'this is in the tail' });
+    ms.push({ role: 'user', content: 'u19' });
+    ms.push({ role: 'assistant', content: 'a19' });
+    ms.push({ role: 'user', content: 'u20' });
+    ms.push({ role: 'assistant', content: 'a20' });
+    ms.push({ role: 'user', content: 'u21' });
+    ms.push({ role: 'assistant', content: 'a21' });
+
+    const summarize = async () => 'summary';
+    const r = await compactHistory(ms, { summarize, minTokenFloor: 0 });
+    expect(r.compacted).toBe(true);
+    // No assistant in the result should retain an unmatched tool_use,
+    // and no `role:'tool'` should appear without its preceding tool_use.
+    for (let i = 0; i < r.messages.length; i++) {
+      const m = r.messages[i];
+      if (m.role === 'tool') {
+        // Walk back to find the assistant whose toolCalls includes this id.
+        let found = false;
+        for (let j = i - 1; j >= 0; j--) {
+          const prev = r.messages[j];
+          if (prev.role === 'assistant' && Array.isArray(prev.toolCalls)) {
+            if (prev.toolCalls.some(tc => tc.id === m.toolCallId)) {
+              found = true;
+              break;
+            }
+          }
+        }
+        expect(found).toBe(true);
+      }
+      if (m.role === 'assistant' && Array.isArray(m.toolCalls)) {
+        for (const tc of m.toolCalls) {
+          // Forward-search for matching tool result.
+          let found = false;
+          for (let j = i + 1; j < r.messages.length; j++) {
+            const next = r.messages[j];
+            if (next.role === 'tool' && next.toolCallId === tc.id) {
+              found = true;
+              break;
+            }
+          }
+          expect(found).toBe(true);
+        }
+      }
+    }
   });
 });

@@ -426,6 +426,13 @@ describe('ConversationStore', () => {
     });
 
     it('should preserve tool message fields', () => {
+      // Tool messages need their owning assistant in the slice for
+      // pairSanitize to keep them — write the assistant first.
+      store.append({
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'call_abc', name: 'bash', input: {} }],
+      });
       store.append({
         role: 'tool',
         content: 'Tool output here',
@@ -433,10 +440,12 @@ describe('ConversationStore', () => {
         isError: true,
       });
 
-      const loaded = store.loadRecent(1);
-      expect(loaded[0].role).toBe('tool');
-      expect(loaded[0].toolCallId).toBe('call_abc');
-      expect(loaded[0].isError).toBe(true);
+      const loaded = store.loadRecent(2);
+      // pairSanitize keeps both since they're paired.
+      const tool = loaded.find(m => m.role === 'tool');
+      expect(tool).toBeDefined();
+      expect(tool.toolCallId).toBe('call_abc');
+      expect(tool.isError).toBe(true);
     });
   });
 });
