@@ -4,7 +4,7 @@ import UnifySettings from './UnifySettings.js';
 import UnifySidebar from './UnifySidebar.js';
 import VpDetailView from './VpDetailView.js';
 import GroupInviteModal from './GroupInviteModal.js';
-import GroupMemberEditor from './GroupMemberEditor.js';
+import GroupSettingsModal from './GroupSettingsModal.js';
 import FeatureMessageRejectToast from './FeatureMessageRejectToast.js';
 import WorkbenchPanel from './WorkbenchPanel.js';
 import UnifyDebugPanel from './UnifyDebugPanel.js';
@@ -12,7 +12,7 @@ import { parseMentions } from '../utils/parseMentions.js';
 
 export default {
   name: 'UnifyPage',
-  components: { ChatInput, MessageList, UnifySettings, UnifySidebar, VpDetailView, GroupInviteModal, GroupMemberEditor, FeatureMessageRejectToast, WorkbenchPanel, UnifyDebugPanel },
+  components: { ChatInput, MessageList, UnifySettings, UnifySidebar, VpDetailView, GroupInviteModal, GroupSettingsModal, FeatureMessageRejectToast, WorkbenchPanel, UnifyDebugPanel },
   template: `
     <div class="unify-page">
       <!-- Mobile sidebar overlay -->
@@ -27,7 +27,7 @@ export default {
         @toggle-sidebar="toggleSidebar"
         @back="goBack"
         @open-settings="toggleSettings"
-        @manage-members="openMemberEditor"
+        @open-group-settings="openGroupSettings"
       />
 
       <!-- Workbench Panel (between sidebar and main) -->
@@ -175,14 +175,16 @@ export default {
         @dismiss="onInviteDismiss"
       />
 
-      <!-- task-fix-group-member-editor: roster manager for the active
-           group. Replaces the previous "open settings → VP library"
-           detour. Owned at this level so the empty-group hero, the
-           sidebar kebab, and the invite-modal CTA all converge here. -->
-      <GroupMemberEditor
-        v-if="memberEditorOpen && memberEditorGroupId"
-        :group-id="memberEditorGroupId"
-        @close="closeMemberEditor"
+      <!-- task-fix-group-member-editor → unified GroupSettingsModal: a
+           single dialog (announcement / members / rename / danger) owned
+           at this level so the empty-group hero CTA, the sidebar ⚙
+           button, the invite-modal CTA, and the legacy openMemberEditor
+           shim all converge here. -->
+      <GroupSettingsModal
+        v-if="groupSettingsOpen && groupSettingsId"
+        :group-id="groupSettingsId"
+        :initial-section="groupSettingsSection"
+        @close="closeGroupSettings"
       />
     </div>
   `,
@@ -623,20 +625,49 @@ export default {
       const g = activeGroupForInvite.value;
       if (g) inviteDismissedFor.add(g.id);
     };
-    // task-fix-group-member-editor: GroupMemberEditor state. Holds the
-    // groupId so callers (sidebar kebab, hero CTA, invite-modal CTA)
-    // can target any group, not just the active one.
-    const memberEditorOpen = Vue.ref(false);
-    const memberEditorGroupId = Vue.ref(null);
+    // task-fix-group-member-editor → unified group settings modal.
+    // Holds the groupId + initial section so callers (sidebar ⚙, hero
+    // CTA, invite-modal CTA, announcement-bar "Open settings" link) can
+    // target any group and any pane.
+    const groupSettingsOpen = Vue.ref(false);
+    const groupSettingsId = Vue.ref(null);
+    const groupSettingsSection = Vue.ref('announcement');
+    const openGroupSettings = (payload) => {
+      // Accept either a string groupId or an object { groupId, section }.
+      const groupId = typeof payload === 'string'
+        ? payload
+        : (payload && payload.groupId) || null;
+      const section = (payload && typeof payload === 'object' && payload.section) || 'announcement';
+      if (!groupId) return;
+      groupSettingsId.value = groupId;
+      groupSettingsSection.value = section;
+      groupSettingsOpen.value = true;
+    };
+    const closeGroupSettings = () => {
+      groupSettingsOpen.value = false;
+      groupSettingsId.value = null;
+    };
+    // Backwards-compat shim — the empty-group hero, the sidebar kebab,
+    // and the invite-modal "open library" CTA still call this. Maps to
+    // the Members section of the unified settings modal.
     const openMemberEditor = (groupId) => {
       if (!groupId) return;
-      memberEditorGroupId.value = groupId;
-      memberEditorOpen.value = true;
+      openGroupSettings({ groupId, section: 'members' });
     };
-    const closeMemberEditor = () => {
-      memberEditorOpen.value = false;
-      memberEditorGroupId.value = null;
-    };
+    const closeMemberEditor = () => closeGroupSettings();
+    // External open-settings signal from MessageList → GroupAnnouncementBar.
+    // The store sets `pendingGroupSettingsRequest` as a one-shot { groupId,
+    // section, at } object; we react to `at` so duplicate clicks still
+    // re-open the modal.
+    Vue.watch(
+      () => store.pendingGroupSettingsRequest && store.pendingGroupSettingsRequest.at,
+      () => {
+        const req = store.pendingGroupSettingsRequest;
+        if (!req || !req.groupId) return;
+        openGroupSettings({ groupId: req.groupId, section: req.section || 'announcement' });
+        store.pendingGroupSettingsRequest = null;
+      },
+    );
     // Re-arm the prompt whenever the active roster transitions back to
     // empty (i.e. after the user removed the last member), so the modal
     // fires again next time `activeNeedsInvite` flips true.
@@ -712,9 +743,13 @@ export default {
       onInviteOpenLibrary,
       onInviteDismiss,
       isActiveGroupEmpty,
-      // task-fix-group-member-editor: roster editor bindings.
-      memberEditorOpen,
-      memberEditorGroupId,
+      // task-fix-group-member-editor → unified group settings modal.
+      groupSettingsOpen,
+      groupSettingsId,
+      groupSettingsSection,
+      openGroupSettings,
+      closeGroupSettings,
+      // Backwards-compat shims.
       openMemberEditor,
       closeMemberEditor,
     };
