@@ -126,6 +126,7 @@ export function createGroup(groupsRoot, spec) {
     name: spec.name || spec.id,
     roster,
     defaultVpId: spec.defaultVpId || null,
+    announcement: typeof spec.announcement === 'string' ? spec.announcement : '',
     createdAt: spec.createdAt || new Date().toISOString(),
   };
   h.saveMeta(meta);
@@ -140,6 +141,9 @@ export function loadGroupMeta(dir) {
     const raw = readFileSync(path, 'utf8');
     const parsed = JSON.parse(raw);
     validateMeta(parsed);
+    // Legacy groups created before the announcement field was added are
+    // forward-compat: missing field reads back as empty string.
+    if (typeof parsed.announcement !== 'string') parsed.announcement = '';
     return parsed;
   } catch {
     return null;
@@ -172,6 +176,9 @@ function validateMeta(meta) {
   }
   if (meta.defaultVpId != null && typeof meta.defaultVpId !== 'string') {
     throw new Error('group.defaultVpId must be string|null');
+  }
+  if (meta.announcement != null && typeof meta.announcement !== 'string') {
+    throw new Error('group.announcement must be string');
   }
 }
 

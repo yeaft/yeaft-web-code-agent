@@ -27,7 +27,7 @@ import GroupCreateWizard from './GroupCreateWizard.js';
 export default {
   name: 'UnifySidebar',
   components: { GroupCreateWizard },
-  emits: ['select-task', 'select-group', 'search-escape', 'toggle-sidebar', 'back', 'open-settings', 'manage-members'],
+  emits: ['select-task', 'select-group', 'search-escape', 'toggle-sidebar', 'back', 'open-settings', 'open-group-settings'],
   template: `
     <aside class="unify-sidebar" :class="{ collapsed: collapsed }">
       <!-- Collapsed Icon Bar — mirrors Chat's .sidebar-collapsed-bar so the
@@ -182,6 +182,15 @@ export default {
               </span>
               <button
                 type="button"
+                class="us-group-row-settings"
+                :title="$t('unify.group.settings.title', { name: groupDisplayName(g) })"
+                :aria-label="$t('unify.group.settings.title', { name: groupDisplayName(g) })"
+                @click.stop="openGroupSettings(g)"
+              >
+                <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+              </button>
+              <button
+                type="button"
                 class="us-group-row-kebab"
                 :title="$t('unify.group.moreActions')"
                 :aria-label="$t('unify.group.moreActions')"
@@ -190,13 +199,16 @@ export default {
                 @click.stop="openGroupMenu(g, $event)"
               >⋯</button>
               <div v-if="groupMenu.open && groupMenu.groupId === g.id" class="us-group-row-menu" role="menu" @click.stop>
-                <button type="button" role="menuitem" class="us-group-row-menu-item" @click="startManageMembers(g)">
+                <button type="button" role="menuitem" class="us-group-row-menu-item" @click="openGroupSettingsFromMenu(g, 'members')">
                   {{ $t('unify.group.manageMembers') }}
                 </button>
-                <button type="button" role="menuitem" class="us-group-row-menu-item" @click="startRenameGroup(g)">
+                <button type="button" role="menuitem" class="us-group-row-menu-item" @click="openGroupSettingsFromMenu(g, 'announcement')">
+                  {{ $t('unify.group.settings.nav.announcement') }}
+                </button>
+                <button type="button" role="menuitem" class="us-group-row-menu-item" @click="openGroupSettingsFromMenu(g, 'rename')">
                   {{ $t('unify.group.rename') }}
                 </button>
-                <button type="button" role="menuitem" class="us-group-row-menu-item us-group-row-menu-danger" @click="startDeleteGroup(g)">
+                <button type="button" role="menuitem" class="us-group-row-menu-item us-group-row-menu-danger" @click="openGroupSettingsFromMenu(g, 'danger')">
                   {{ $t('unify.group.delete') }}
                 </button>
               </div>
@@ -275,50 +287,10 @@ export default {
         @created="onGroupCreated"
       />
 
-      <!-- task-334m / Bug 8: Delete confirm modal (destructive 2nd-confirm). -->
-      <div v-if="deleteConfirm.open" class="us-merge-overlay us-merge-overlay-confirm" @click.self="cancelGroupAction">
-        <div class="us-merge-panel us-merge-panel-confirm">
-          <div class="us-merge-title">{{ $t('unify.group.delete') }}</div>
-          <div class="us-merge-warning">{{ $t('unify.group.deleteConfirm', { name: deleteConfirm.name }) }}</div>
-          <div class="us-merge-actions">
-            <button type="button" class="us-merge-cancel" @click="cancelGroupAction" :disabled="deleteConfirm.busy">
-              {{ label('cancel') }}
-            </button>
-            <button type="button" class="us-merge-confirm" @click="confirmDeleteGroup" :disabled="deleteConfirm.busy">
-              {{ deleteConfirm.busy ? $t('unify.group.deletingEllipsis') : $t('unify.group.delete') }}
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <!-- task-334m: Rename modal (inline, mirrors delete-confirm chrome). -->
-      <div v-if="renameModal.open" class="us-merge-overlay" @click.self="cancelGroupAction">
-        <div class="us-merge-panel">
-          <div class="us-merge-title">{{ $t('unify.group.rename') }}</div>
-          <div class="us-merge-body">
-            <label class="us-rename-label">
-              {{ $t('unify.group.renamePrompt', { name: renameModal.original }) }}
-              <input
-                type="text"
-                v-model.trim="renameModal.value"
-                class="us-rename-input"
-                maxlength="60"
-                @keydown.enter.prevent="confirmRenameGroup"
-                ref="renameInput"
-              />
-            </label>
-            <div v-if="renameModal.error" class="us-rename-error" role="alert">{{ renameModal.error }}</div>
-          </div>
-          <div class="us-merge-actions">
-            <button type="button" class="us-merge-cancel" @click="cancelGroupAction" :disabled="renameModal.busy">
-              {{ label('cancel') }}
-            </button>
-            <button type="button" class="us-merge-confirm" @click="confirmRenameGroup" :disabled="renameModal.busy || !canCommitRename">
-              {{ renameModal.busy ? $t('unify.group.renamingEllipsis') : $t('unify.group.rename') }}
-            </button>
-          </div>
-        </div>
-      </div>
+      <!-- task-unify-group-editor: Per-group rename/delete formerly lived
+           in inline overlays here. They've been folded into the unified
+           GroupSettingsModal — opened via the kebab → unified modal at
+           the proper section. UnifyPage owns the modal lifecycle. -->
 
       <!-- task-342: sidebar bottom — Settings entry + version badge. -->
       <div class="sidebar-bottom">
@@ -349,10 +321,10 @@ export default {
       // task-334m: group-create wizard visibility.
       groupWizardOpen: false,
       groupsOpen: true,
-      // task-334m prev-2 rev: per-row action menu + rename/delete modals.
+      // task-unify-group-editor: per-row action menu only — the rename
+      // and delete modals have been folded into the unified
+      // GroupSettingsModal owned by UnifyPage.
       groupMenu: { open: false, groupId: null },
-      deleteConfirm: { open: false, groupId: null, name: '', busy: false },
-      renameModal: { open: false, groupId: null, original: '', value: '', error: '', busy: false },
       // task-342: server version shown in sidebar-bottom (mirrors ChatPage).
       serverVersion: '',
     };
@@ -402,10 +374,6 @@ export default {
         }
       } catch (_) {}
       return null;
-    },
-    canCommitRename() {
-      const v = (this.renameModal.value || '').trim();
-      return v.length > 0 && v !== this.renameModal.original;
     },
     // task-341: header-row agent identifier + workbench gate.
     onlineAgents() {
@@ -598,6 +566,22 @@ export default {
       if (this.groupsStore) this.groupsStore.setActive(g.id);
       this.$emit('select-group', g);
     },
+    // task-unify-group-editor: ⚙ button on each group row opens the
+    // unified GroupSettingsModal (announcement / members / rename /
+    // danger). Default landing section is 'members' so the existing
+    // muscle-memory of the kebab "Manage members" lands in the same
+    // place. UnifyPage owns the modal lifecycle.
+    openGroupSettings(g, section = 'members') {
+      if (!g || !g.id) return;
+      this.$emit('open-group-settings', { groupId: g.id, section });
+    },
+    // Convenience wrapper used by the kebab menu items: closes the menu
+    // first so the unified modal opens cleanly without the kebab still
+    // hovering above it.
+    openGroupSettingsFromMenu(g, section) {
+      this.groupMenu = { open: false, groupId: null };
+      this.openGroupSettings(g, section);
+    },
     onGroupCreated(_group) {
       // Store auto-activates via applyCrudResult; wizard closes itself.
     },
@@ -630,91 +614,12 @@ export default {
       setTimeout(() => window.addEventListener('click', close, true), 0);
       if (evt && typeof evt.stopPropagation === 'function') evt.stopPropagation();
     },
-    startManageMembers(g) {
-      // task-fix-group-member-editor: bubble up to UnifyPage which owns
-      // the GroupMemberEditor modal. Sidebar stays a pure trigger so the
-      // editor lifecycle is centralized at the page level.
-      this.groupMenu = { open: false, groupId: null };
-      if (!g || !g.id) return;
-      this.$emit('manage-members', g.id);
-    },
-    startRenameGroup(g) {
-      this.groupMenu = { open: false, groupId: null };
-      if (!g || !g.id) return;
-      const display = this.groupDisplayName(g);
-      this.renameModal = {
-        open: true, groupId: g.id,
-        original: display,
-        value: display,
-        error: '', busy: false,
-      };
-      this.$nextTick(() => {
-        const el = this.$refs.renameInput;
-        if (el && typeof el.focus === 'function') el.focus();
-      });
-    },
-    startDeleteGroup(g) {
-      this.groupMenu = { open: false, groupId: null };
-      if (!g || !g.id) return;
-      this.deleteConfirm = {
-        open: true, groupId: g.id,
-        name: this.groupDisplayName(g),
-        busy: false,
-      };
-    },
-    cancelGroupAction() {
-      if (this.deleteConfirm.busy || this.renameModal.busy) return;
-      this.deleteConfirm = { open: false, groupId: null, name: '', busy: false };
-      this.renameModal = { open: false, groupId: null, original: '', value: '', error: '', busy: false };
-    },
-    async confirmDeleteGroup() {
-      const id = this.deleteConfirm.groupId;
-      if (!id || this.deleteConfirm.busy) return;
-      const chat = this.chatStore;
-      if (!chat || typeof chat.groupCrudRequest !== 'function') {
-        this.deleteConfirm.open = false;
-        return;
-      }
-      this.deleteConfirm.busy = true;
-      try {
-        await chat.groupCrudRequest('delete', { groupId: id });
-      } finally {
-        this.deleteConfirm = { open: false, groupId: null, name: '', busy: false };
-      }
-    },
-    async confirmRenameGroup() {
-      if (!this.canCommitRename || this.renameModal.busy) return;
-      const id = this.renameModal.groupId;
-      const name = (this.renameModal.value || '').trim();
-      const chat = this.chatStore;
-      if (!chat || typeof chat.groupCrudRequest !== 'function') {
-        this.renameModal.open = false;
-        return;
-      }
-      this.renameModal.busy = true;
-      this.renameModal.error = '';
-      try {
-        const res = await chat.groupCrudRequest('rename', { groupId: id, name });
-        if (res && res.ok) {
-          this.renameModal = { open: false, groupId: null, original: '', value: '', error: '', busy: false };
-          return;
-        }
-        const code = (res && res.error && res.error.code) || 'unknown';
-        const key = `unify.group.error.${code}`;
-        const translated = typeof this.$t === 'function' ? this.$t(key) : key;
-        this.renameModal.error = translated === key
-          ? (typeof this.$t === 'function'
-              ? this.$t('unify.group.error.unknown', { message: (res && res.error && res.error.message) || '' })
-              : 'Operation failed')
-          : translated;
-      } catch (err) {
-        this.renameModal.error = typeof this.$t === 'function'
-          ? this.$t('unify.group.error.unknown', { message: err && err.message || String(err) })
-          : 'Operation failed';
-      } finally {
-        this.renameModal.busy = false;
-      }
-    },
+    // task-unify-group-editor: per-group rename/delete + manage-members
+    // formerly lived as discrete startManageMembers/startRenameGroup/
+    // startDeleteGroup methods that mounted inline overlays. They've
+    // all been folded into the unified GroupSettingsModal opened via
+    // openGroupSettingsFromMenu(g, section) above. UnifyPage owns the
+    // modal lifecycle.
     // H2.f.6: thread display / tooltip / link / fork helpers removed.
     isTaskExpanded(id) {
       return !!this.expandedTasks[id];

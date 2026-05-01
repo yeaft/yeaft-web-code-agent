@@ -283,6 +283,7 @@ export function buildSystemPrompt({
   coreMemory,
   memoryTraceAvailable = false,
   vpPersona,
+  groupAnnouncement = '',
 } = {}) {
   // Fallback to English for unknown languages
   const lang = PROMPTS[language] || PROMPTS.en;
@@ -308,6 +309,15 @@ export function buildSystemPrompt({
     } else {
       parts.push(lang.identity);
     }
+  }
+
+  // ─── 1.5  Group Announcement (CLAUDE.md-style shared prefix) ───
+  // When a group has set an announcement, every VP in the group sees it
+  // near the top of the system prompt — before tools, memory, mode-specific
+  // instructions. Empty/whitespace = no block emitted.
+  const annText = (typeof groupAnnouncement === 'string') ? groupAnnouncement.trim() : '';
+  if (annText) {
+    parts.push(`[Group Announcement]\n${annText}`);
   }
 
   // ─── 2. Date Metadata ──────────────────────────────────

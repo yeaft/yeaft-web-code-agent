@@ -1133,6 +1133,34 @@ export default {
   'unify.group.members.memberCount': '{count} selected',
   'unify.group.members.actionFailed': 'Action failed: {error}',
 
+  // Group announcement (CLAUDE.md-style shared system-prompt prefix).
+  'unify.group.announcement.label': 'Announcement',
+  'unify.group.announcement.hintEmpty': 'No announcement — click ✏️ to add one.',
+  'unify.group.announcement.emptyBody': 'No announcement set. Add a message that every VP in this group will see at the top of its system prompt — useful for shared context, ground rules, or a CLAUDE.md-style brief.',
+  'unify.group.announcement.placeholder': 'Write a shared briefing for all VPs in this group…',
+  'unify.group.announcement.edit': 'Edit announcement',
+  'unify.group.announcement.saving': 'Saving…',
+  'unify.group.announcement.saveFailed': 'Save failed: {error}',
+  'unify.group.announcement.openSettings': 'Open group settings',
+
+  // Unified group settings modal (announcement + members + rename + danger).
+  'unify.group.settings.title': '{name} — group settings',
+  'unify.group.settings.close': 'Close',
+  'unify.group.settings.nav.announcement': 'Announcement',
+  'unify.group.settings.nav.members': 'Members',
+  'unify.group.settings.nav.rename': 'Rename',
+  'unify.group.settings.nav.danger': 'Danger zone',
+  'unify.group.settings.announcement.heading': 'Group announcement',
+  'unify.group.settings.announcement.help': 'Shared at the top of every VP\'s system prompt while in this group. Like a CLAUDE.md for the team.',
+  'unify.group.settings.members.heading': 'Members',
+  'unify.group.settings.rename.heading': 'Rename group',
+  'unify.group.settings.rename.label': 'New name',
+  'unify.group.settings.rename.save': 'Save name',
+  'unify.group.settings.rename.saving': 'Saving…',
+  'unify.group.settings.danger.heading': 'Danger zone',
+  'unify.group.settings.danger.deleteHelp': 'Delete this group permanently. This removes group.json and all message history on disk. Cannot be undone.',
+  'unify.group.settings.danger.deleteBtn': 'Delete group',
+
   // ===== task-334j: group view (mentions / replyTo / reject) =====
   'unify.vp.mention.placeholder': 'Search role by id or name\u2026',
   'unify.vp.mention.noMatch': 'No matching role',

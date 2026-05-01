@@ -4,10 +4,11 @@ import FeatureMessageItem from './FeatureMessageItem.js';
 import VpSpeakerHeader from './VpSpeakerHeader.js';
 import ReflectionCard from './ReflectionCard.js';
 import SubAgentCard from './SubAgentCard.js';
+import GroupAnnouncementBar from './GroupAnnouncementBar.js';
 
 export default {
   name: 'MessageList',
-  components: { MessageItem, AssistantTurn, FeatureMessageItem, VpSpeakerHeader, ReflectionCard, SubAgentCard },
+  components: { MessageItem, AssistantTurn, FeatureMessageItem, VpSpeakerHeader, ReflectionCard, SubAgentCard, GroupAnnouncementBar },
   template: `
     <main class="chat-container" ref="containerRef">
       <!-- Session Loading Overlay - only covers message area -->
@@ -67,6 +68,14 @@ export default {
 
       <!-- Messages when in conversation -->
       <div v-else class="messages">
+        <!-- Group announcement bar — surfaces a CLAUDE.md-style shared
+             prefix that's injected into every VP's system prompt.
+             Shown only in Unify mode when an active group is selected. -->
+        <GroupAnnouncementBar
+          v-if="activeGroupIdForBar"
+          :group-id="activeGroupIdForBar"
+          @open-settings="onOpenGroupSettings"
+        />
         <!-- Waiting status banner (shown above messages, not overlapping cat animation) -->
         <div v-if="waitingStatus && waitingStatus !== 'normal'" class="typing-status-banner" :class="'typing-status-banner-' + waitingStatus">
           <span v-if="waitingStatus === 'disconnected'" class="typing-status-text typing-status-error">
@@ -445,10 +454,31 @@ export default {
       </div>
     </main>
   `,
-  emits: ['new-conversation', 'resume-conversation', 'open-settings'],
-  setup() {
+  emits: ['new-conversation', 'resume-conversation', 'open-settings', 'open-group-settings'],
+  setup(_props, ctx) {
     const store = Pinia.useChatStore();
     const containerRef = Vue.ref(null);
+
+    // Resolve the active group id for the announcement bar. The bar should
+    // appear only when the user is on the Unify page AND has an active
+    // group selected (filter or default). We read the groups store via the
+    // Pinia global so the component still imports cleanly in node tests.
+    const groupsStore = (() => {
+      try { return window.Pinia?.useGroupsStore?.() || null; }
+      catch (_) { return null; }
+    });
+    const activeGroupIdForBar = Vue.computed(() => {
+      // Only render the bar in Unify view. Chat mode has no group concept.
+      if (store.currentView !== 'unify') return null;
+      const gs = groupsStore();
+      if (!gs) return null;
+      // Prefer the explicit "filter" the user picked from the sidebar; fall
+      // back to whatever the store considers active.
+      const filterId = store.unifyActiveGroupFilter || null;
+      if (filterId && gs.groups[filterId]) return filterId;
+      if (gs.activeGroupId && gs.groups[gs.activeGroupId]) return gs.activeGroupId;
+      return null;
+    });
 
     // Online agents
     const onlineAgents = Vue.computed(() => {
@@ -1176,6 +1206,20 @@ export default {
       store.enterVpDetailView(vpId);
     };
 
+    // GroupAnnouncementBar's "open settings" link bubbles a request up
+    // to the parent page (UnifyPage) so the unified GroupSettingsModal
+    // can be opened with the right group id and an initial section
+    // focus. MessageList is mounted directly inside UnifyPage, so a
+    // normal emit chain — rather than a store-as-bus signal — is the
+    // simpler path. UnifyPage listens for `@open-group-settings`.
+    const onOpenGroupSettings = (payload) => {
+      const norm = typeof payload === 'string'
+        ? { groupId: payload, section: 'announcement' }
+        : (payload || {});
+      if (!norm.groupId) return;
+      ctx.emit('open-group-settings', norm);
+    };
+
     return {
       store,
       containerRef,
@@ -1208,6 +1252,9 @@ export default {
       orphanCards,
       subAgentCardsForRow,
       orphanSubAgentCards,
+      // group editor wiring
+      activeGroupIdForBar,
+      onOpenGroupSettings,
     };
   }
 };

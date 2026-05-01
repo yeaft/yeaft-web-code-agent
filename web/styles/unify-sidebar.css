@@ -298,6 +298,29 @@
 .us-group-row .us-group-row-kebab[aria-expanded="true"] {
   opacity: 1;
 }
+
+/* task-unify-group-editor: ⚙ button mirrors the kebab — only visible
+   on hover or when the row is the active group. Sits to the LEFT of
+   the kebab. */
+.us-group-row .us-group-row-settings {
+  flex: 0 0 auto;
+  background: transparent;
+  border: 0;
+  padding: 0 4px;
+  color: var(--text-muted, #86868b);
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s, color 0.12s;
+}
+.us-group-row .us-group-row-settings:hover {
+  color: var(--text-primary, #1d1d1f);
+}
+.us-group-row:hover .us-group-row-settings,
+.us-group-row.selected .us-group-row-settings {
+  opacity: 1;
+}
 .us-group-row-menu {
   position: absolute;
   top: 100%;
