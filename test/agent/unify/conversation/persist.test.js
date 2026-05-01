@@ -167,17 +167,26 @@ describe('ConversationStore', () => {
       expect(loaded[2].content).toBe('Third');
     });
 
-    it('should respect limit (most recent)', () => {
+    it('should respect limit (most recent turns)', () => {
+      // `loadRecent` is now turn-based. Build 3 distinct user turns so
+      // we can slice the last 2 turns deterministically (no `@vp-X`
+      // collapsing, no orphan tool messages).
       store.appendBatch([
-        { role: 'user', content: 'Old' },
-        { role: 'assistant', content: 'Middle' },
-        { role: 'user', content: 'New' },
+        { role: 'user', content: 'q1' },
+        { role: 'assistant', content: 'a1' },
+        { role: 'user', content: 'q2' },
+        { role: 'assistant', content: 'a2' },
+        { role: 'user', content: 'q3' },
+        { role: 'assistant', content: 'a3' },
       ]);
 
       const loaded = store.loadRecent(2);
-      expect(loaded).toHaveLength(2);
-      expect(loaded[0].content).toBe('Middle');
-      expect(loaded[1].content).toBe('New');
+      // 2 turns = q2/a2 + q3/a3 = 4 messages.
+      expect(loaded).toHaveLength(4);
+      expect(loaded[0].content).toBe('q2');
+      expect(loaded[1].content).toBe('a2');
+      expect(loaded[2].content).toBe('q3');
+      expect(loaded[3].content).toBe('a3');
     });
 
     it('should return empty array when no messages', () => {
@@ -426,6 +435,13 @@ describe('ConversationStore', () => {
     });
 
     it('should preserve tool message fields', () => {
+      // Tool messages need their owning assistant in the slice for
+      // pairSanitize to keep them — write the assistant first.
+      store.append({
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'call_abc', name: 'bash', input: {} }],
+      });
       store.append({
         role: 'tool',
         content: 'Tool output here',
@@ -433,10 +449,12 @@ describe('ConversationStore', () => {
         isError: true,
       });
 
-      const loaded = store.loadRecent(1);
-      expect(loaded[0].role).toBe('tool');
-      expect(loaded[0].toolCallId).toBe('call_abc');
-      expect(loaded[0].isError).toBe(true);
+      const loaded = store.loadRecent(2);
+      // pairSanitize keeps both since they're paired.
+      const tool = loaded.find(m => m.role === 'tool');
+      expect(tool).toBeDefined();
+      expect(tool.toolCallId).toBe('call_abc');
+      expect(tool.isError).toBe(true);
     });
   });
 });

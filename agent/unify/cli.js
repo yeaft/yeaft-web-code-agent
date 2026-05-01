@@ -212,8 +212,11 @@ async function runREPL(config, args) {
 
   const { engine, conversationStore, trace, skillManager, mcpManager, toolRegistry } = session;
 
-  // Load persisted conversation as initial messages
-  let conversationMessages = conversationStore.loadRecent(50).map(m => ({
+  // Load persisted conversation as initial messages. `loadRecent` is now
+  // turn-based (one user round-trip = one turn; multi-VP fan-out collapses
+  // into one turn). 20 turns is the bootstrap window — the engine-level
+  // compactor in `history-compact.js` is the authoritative size limiter.
+  let conversationMessages = conversationStore.loadRecent().map(m => ({
     role: m.role,
     content: m.content,
     ...(m.toolCallId && { toolCallId: m.toolCallId }),

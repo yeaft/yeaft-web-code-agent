@@ -26,12 +26,19 @@
  *   4. Keep the last `keepRecent` user→assistant turns intact so the model
  *      has fresh, untransformed context for whatever the user just said.
  *
- * Triggers (either fires):
- *   - turn count > 20  (each user message in `conversationMessages` is a turn)
- *   - estimated tokens > 80,000
+ * Triggers (any fires, but only above a 30K token soft floor):
+ *   - tokens < 30_000 → never compact (cheap chat, no point paying
+ *     the summarizer)
+ *   - tokens > 40 % of `maxContextTokens` (defaults to 200K → 80K)
+ *   - tokens > 200,000 hard ceiling
  *
- * Defaults match the user-stated requirement; both are overridable via the
- * options bag for tests / future config plumbing.
+ * The "turn > 20" trigger that an earlier revision used was dropped:
+ * under a 30K token floor it's effectively dead code — the fractional
+ * threshold fires first in any conversation big enough to matter.
+ *
+ * Defaults are derived from `maxContextTokens` so the policy auto-adjusts
+ * when the user widens or narrows their context budget. All knobs are
+ * overridable via the options bag for tests / future config plumbing.
  *
  * Why role='user' for the summary message:
  *   The Anthropic Messages API rejects assistant prefill at the tail
@@ -44,13 +51,53 @@
  */
 
 import { estimateTokens } from './conversation/persist.js';
+import { pairSanitize } from './pair-sanitize.js';
+import {
+  countTurns as countTurnsImpl,
+  indexOfNthTurnFromEnd,
+} from './turn-utils.js';
 
 /**
- * Default trigger thresholds — match the user's stated policy:
- *   "如果 turn 超过 20 或者 message 上下文超过 80K，那么就 compact"
+ * Re-export `countTurns` so existing callers / tests that import it
+ * from this module continue to work. Implementation now lives in
+ * `turn-utils.js` and is shared with `ConversationStore`.
  */
-export const DEFAULT_TURN_LIMIT = 20;
-export const DEFAULT_TOKEN_LIMIT = 80_000;
+export const countTurns = countTurnsImpl;
+
+/**
+ * Default trigger thresholds (2026-05-01 policy update):
+ *   - never compact while total tokens < 30K (soft floor — most
+ *     conversations under that aren't worth paying the summarizer
+ *     cost; the LLM hasn't started feeling the context yet either),
+ *   - otherwise compact if ANY of:
+ *       tokens > 40 % of `maxContextTokens` (default 200K → 80K)
+ *       tokens > 200K hard ceiling
+ *
+ * The earlier "turn count > 20" trigger was DROPPED because under
+ * the new floor it's effectively dead code — by the time you've sent
+ * 20 user prompts that exceed 30K tokens, the fractional threshold
+ * has already fired. `turnLimit` and the `turn_count` reason code
+ * are still accepted as overrides so tests / future config can re-
+ * enable a turn-based trigger if needed; with `turnLimit: Infinity`
+ * (the new default) the check is simply skipped.
+ *
+ * Token thresholds are derived from `maxContextTokens` at evaluation
+ * time so the policy auto-adjusts to the user's configured context.
+ */
+export const DEFAULT_TURN_LIMIT = Infinity;
+export const DEFAULT_MIN_TOKEN_FLOOR = 30_000;
+export const DEFAULT_MAX_CONTEXT_TOKENS = 200_000;
+export const DEFAULT_TOKEN_FRACTION = 0.4;
+export const DEFAULT_HARD_TOKEN_CEILING = 200_000;
+/**
+ * Effective default token trigger when no `maxContextTokens` is provided:
+ *   min(40% of 200K, 200K) = 80K. Preserved as `DEFAULT_TOKEN_LIMIT` for
+ *   back-compat with existing tests that import this name.
+ */
+export const DEFAULT_TOKEN_LIMIT = Math.min(
+  Math.floor(DEFAULT_MAX_CONTEXT_TOKENS * DEFAULT_TOKEN_FRACTION),
+  DEFAULT_HARD_TOKEN_CEILING
+);
 
 /**
  * How many user→assistant pairs to leave intact at the tail. The summary
@@ -98,70 +145,66 @@ export function estimateMessagesTokens(messages) {
 }
 
 /**
- * Strip a leading `@vp-<id> ` mention prefix from a user prompt. The
- * web bridge prefixes each VP's per-turn prompt with `@vp-<id> ` so
- * the engine knows which VP is replying. When counting "turns" we
- * want the user-facing notion of a turn (one round-trip), not one per
- * VP — so we strip the prefix before deduping consecutive identical
- * user messages.
- *
- * Format mirrors `web-bridge.js#runVpTurn`:
- *   `@vp-${vpId} ${text}`
- *
- * @param {string} content
- * @returns {string}
- */
-function stripVpMentionPrefix(content) {
-  if (typeof content !== 'string') return '';
-  return content.replace(/^@vp-[^\s]+\s+/, '');
-}
-
-/**
- * Count "turns" — defined as a user-side round-trip, NOT one per
- * user-role message. Multi-VP fan-out appends one user message per VP
- * (each with an `@vp-<id>` prefix) for the same underlying user prompt;
- * those collapse into a single turn here.
- *
- * Algorithm: walk user-role messages, strip the `@vp-` prefix, count
- * a turn whenever the canonical text changes from the previous user
- * message (or it's the first one).
- *
- * @param {Array<object>} messages
- * @returns {number}
- */
-export function countTurns(messages) {
-  if (!Array.isArray(messages)) return 0;
-  let n = 0;
-  let prev = null;
-  for (const m of messages) {
-    if (!m || m.role !== 'user') continue;
-    const canonical = stripVpMentionPrefix(m.content || '');
-    if (canonical !== prev) {
-      n++;
-      prev = canonical;
-    }
-  }
-  return n;
-}
-
-/**
  * Pure trigger evaluator. Decides whether the in-memory history needs
  * compaction. No I/O, no LLM call.
  *
+ * Policy (2026-05-01):
+ *   1. tokens < `minTokenFloor` (default 30K) → trigger=false (always).
+ *   2. otherwise trigger if ANY of:
+ *        turnCount > turnLimit (default Infinity → effectively off;
+ *           callers can pin a number to re-enable a turn-count trigger)
+ *        tokenCount > maxContextTokens*fraction (reason='token_threshold')
+ *        tokenCount > hardTokenCeiling          (reason='token_ceiling')
+ *
+ * `tokenLimit` is preserved as a back-compat override for callers /
+ * tests that pin a specific number; when set, it overrides the
+ * fraction-of-context calculation.
+ *
  * @param {Array<object>} messages
- * @param {{turnLimit?: number, tokenLimit?: number}} [opts]
- * @returns {{trigger: boolean, reason: 'turn_count'|'token_threshold'|null,
+ * @param {{
+ *   turnLimit?: number,
+ *   tokenLimit?: number,
+ *   minTokenFloor?: number,
+ *   maxContextTokens?: number,
+ *   tokenFraction?: number,
+ *   hardTokenCeiling?: number,
+ * }} [opts]
+ * @returns {{trigger: boolean, reason: 'turn_count'|'token_threshold'|'token_ceiling'|null,
  *            turnCount: number, tokenCount: number,
- *            turnLimit: number, tokenLimit: number}}
+ *            turnLimit: number, tokenLimit: number,
+ *            minTokenFloor: number, hardTokenCeiling: number}}
  */
 export function shouldCompactHistory(messages, opts = {}) {
   const turnLimit = opts.turnLimit ?? DEFAULT_TURN_LIMIT;
-  const tokenLimit = opts.tokenLimit ?? DEFAULT_TOKEN_LIMIT;
+  const minTokenFloor = opts.minTokenFloor ?? DEFAULT_MIN_TOKEN_FLOOR;
+  const hardTokenCeiling = opts.hardTokenCeiling ?? DEFAULT_HARD_TOKEN_CEILING;
+  const maxContextTokens = opts.maxContextTokens ?? DEFAULT_MAX_CONTEXT_TOKENS;
+  const tokenFraction = opts.tokenFraction ?? DEFAULT_TOKEN_FRACTION;
+  // tokenLimit override wins; otherwise compute fractional threshold.
+  const tokenLimit =
+    opts.tokenLimit
+    ?? Math.min(Math.floor(maxContextTokens * tokenFraction), hardTokenCeiling);
+
   const turnCount = countTurns(messages);
   const tokenCount = estimateMessagesTokens(messages);
 
   let reason = null;
-  if (turnCount > turnLimit) reason = 'turn_count';
+  // (1) Soft floor: never compact small conversations.
+  if (tokenCount < minTokenFloor) {
+    return {
+      trigger: false,
+      reason: null,
+      turnCount,
+      tokenCount,
+      turnLimit,
+      tokenLimit,
+      minTokenFloor,
+      hardTokenCeiling,
+    };
+  }
+  // (2) Trigger evaluation. Turn check is opt-in (Infinity by default).
+  if (Number.isFinite(turnLimit) && turnCount > turnLimit) reason = 'turn_count';
+  else if (tokenCount > hardTokenCeiling) reason = 'token_ceiling';
   else if (tokenCount > tokenLimit) reason = 'token_threshold';
 
   return {
@@ -171,6 +214,8 @@ export function shouldCompactHistory(messages, opts = {}) {
     tokenCount,
     turnLimit,
     tokenLimit,
+    minTokenFloor,
+    hardTokenCeiling,
   };
 }
 
@@ -219,13 +264,14 @@ export function buildSummarizerInput(messages) {
  * intact, fold everything before. Returns the index that the cut starts
  * AT, i.e. messages[0..cutIdx) gets summarised, messages[cutIdx..] stays.
  *
- * Strategy: walks user-role messages from the END backwards, counting
- * DISTINCT turns by canonical text (after stripping `@vp-<id>` prefix
- * via `stripVpMentionPrefix`). Multi-VP fan-out variants of the same
- * underlying turn collapse into one turn — and the candidate cut index
- * is extended backwards through them so all `@vp-X` variants of the
- * kept turn stay together. If there aren't enough turns to fold (history
- * shorter than keepRecent), returns -1 (caller treats as no-op).
+ * Thin wrapper around `turn-utils.indexOfNthTurnFromEnd` with the
+ * historical contract preserved:
+ *   - empty input returns -1,
+ *   - `keepRecent <= 0` folds everything (returns messages.length),
+ *   - "fewer turns than keepRecent" maps to -1 (caller treats as no-op).
+ *
+ * Multi-VP fan-out: `@vp-X` variants of the same underlying turn count
+ * as ONE turn and the boundary extends backwards through them all.
  *
  * @param {Array<object>} messages
  * @param {number} keepRecent
@@ -234,42 +280,10 @@ export function buildSummarizerInput(messages) {
 export function findCutIndex(messages, keepRecent) {
   if (!Array.isArray(messages) || messages.length === 0) return -1;
   if (keepRecent <= 0) return messages.length; // fold everything
-
-  // Walk from the end, counting DISTINCT turns (multiple consecutive
-  // user messages with the same canonical text — i.e. one fan-out's
-  // @vp-X variants — collapse into a single turn). Stop when we've
-  // started the (keepRecent)-th turn from the end; everything before
-  // its first user-message gets folded.
-  let turnsFromEnd = 0;
-  let nextCanonical = null; // canonical text of the turn we just opened
-  let candidateIdx = -1;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (!messages[i] || messages[i].role !== 'user') continue;
-    const canonical = stripVpMentionPrefix(messages[i].content || '');
-    if (canonical !== nextCanonical) {
-      // New (older) turn boundary.
-      turnsFromEnd++;
-      nextCanonical = canonical;
-      if (turnsFromEnd === keepRecent) {
-        candidateIdx = i;
-        // Keep walking — the same turn might extend further back via
-        // earlier @vp variants of the same canonical text.
-        continue;
-      }
-      if (turnsFromEnd > keepRecent) {
-        // We've stepped into the (keepRecent+1)-th turn — stop. The
-        // last recorded `candidateIdx` is the start of the LAST
-        // keepRecent block.
-        break;
-      }
-    } else if (turnsFromEnd === keepRecent) {
-      // Same canonical text as the keepRecent-th-from-end turn — this
-      // is an earlier @vp-variant of that same turn. Extend candidate
-      // backwards to include it.
-      candidateIdx = i;
-    }
-  }
-  return candidateIdx;
+  const idx = indexOfNthTurnFromEnd(messages, keepRecent);
+  // `indexOfNthTurnFromEnd` returns -1 when there are fewer turns than
+  // requested — historical contract is the same. Pass through.
+  return idx;
 }
 
 /**
@@ -331,6 +345,10 @@ export function buildSummaryPrompt(cleanedMessages) {
  *   keepRecent?: number,
  *   turnLimit?: number,
  *   tokenLimit?: number,
+ *   minTokenFloor?: number,
+ *   maxContextTokens?: number,
+ *   tokenFraction?: number,
+ *   hardTokenCeiling?: number,
  * }} options
  * @returns {Promise<{
  *   messages: Array<object>,
@@ -348,15 +366,29 @@ export async function compactHistory(messages, options) {
   const {
     summarize,
     keepRecent = DEFAULT_KEEP_RECENT_TURNS,
-    turnLimit = DEFAULT_TURN_LIMIT,
-    tokenLimit = DEFAULT_TOKEN_LIMIT,
+    turnLimit,
+    tokenLimit,
+    minTokenFloor,
+    maxContextTokens,
+    tokenFraction,
+    hardTokenCeiling,
   } = options || {};
 
   if (typeof summarize !== 'function') {
     throw new TypeError('compactHistory: options.summarize must be a function');
   }
 
-  const before = shouldCompactHistory(messages, { turnLimit, tokenLimit });
+  // Pass thresholds through to shouldCompactHistory so a single options
+  // bag controls the policy. Undefined keys fall back to module defaults.
+  const triggerOpts = {
+    turnLimit,
+    tokenLimit,
+    minTokenFloor,
+    maxContextTokens,
+    tokenFraction,
+    hardTokenCeiling,
+  };
+  const before = shouldCompactHistory(messages, triggerOpts);
   if (!before.trigger) {
     return {
       messages,
@@ -433,19 +465,17 @@ export async function compactHistory(messages, options) {
 
   const summaryMsg = wrapSummaryAsUserMessage(summaryText);
 
-  // Defensive: if the tail starts with a `role: 'tool'` message, the
-  // adapter will reject it (tool messages must follow an assistant with
-  // a matching tool_call). Drop leading tool messages from the tail —
-  // their preceding assistant has been folded into the summary, so the
-  // tool result is orphaned anyway.
-  let tailStart = 0;
-  while (tailStart < tail.length && tail[tailStart] && tail[tailStart].role === 'tool') {
-    tailStart++;
-  }
-  const safeTail = tail.slice(tailStart);
+  // Defensive pair-sanitize: the cut at `cutIdx` lands at a user-message
+  // boundary so an `[assistant(toolCalls), tool…]` arc is not split, but
+  // we still run `pairSanitize` over the tail as belt-and-suspenders —
+  // it idempotently drops any orphan tool messages, and any assistant
+  // whose tool_use IDs aren't fully matched in the tail. This is what
+  // keeps the next adapter call from 400-ing on tool_use/tool_result
+  // mismatch when the storage / fan-out layer reorders messages.
+  const safeTail = pairSanitize(tail);
 
   const newMessages = [summaryMsg, ...safeTail];
-  const after = shouldCompactHistory(newMessages, { turnLimit, tokenLimit });
+  const after = shouldCompactHistory(newMessages, triggerOpts);
 
   return {
     messages: newMessages,
