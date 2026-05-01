@@ -11,12 +11,16 @@ import * as sessionHelpers from './helpers/session.js';
 import * as watchdogHelpers from './helpers/watchdog.js';
 import * as crewHelpers from './helpers/crew.js';
 import * as unifyViewHelpers from './helpers/unify-view.js';
+import { turnMatchesSearch } from './helpers/debug-search.js';
 
 const { defineStore } = Pinia;
 
 // Stable empty array for getters — avoids creating new [] on every call,
 // which prevents Vue computed from treating each call as a new value.
 const EMPTY_ARRAY = Object.freeze([]);
+
+// feat-6af5f9f1 PR C: turnMatchesSearch lives in helpers/debug-search.js
+// so it can be unit-tested without the Pinia browser globals.
 
 export const useChatStore = defineStore('chat', {
   state: () => ({
@@ -199,6 +203,14 @@ export const useChatStore = defineStore('chat', {
     unifyDebugLoops: [],
     unifyDebugTurnsById: {},
     unifyDebugTurnOrder: [],
+    // feat-6af5f9f1 PR C: debug-panel toolbar state.
+    //   - `unifyDebugSearch` is a substring filter applied to user prompt,
+    //     vpId, tool name, tool input/output, system prompt, raw url.
+    //   - `unifyDebugGroupFilter` is INDEPENDENT of the main pane's group
+    //     filter (per user spec): debug can show all groups while the
+    //     main pane is scoped to one. Default null = "All".
+    unifyDebugSearch: '',
+    unifyDebugGroupFilter: null,
     // PR-L: V7 tool-history reflection cards. Keyed by `${conversationId}:${trigger}:${loopRange[0]}-${loopRange[1]}`.
     // Each entry: { trigger, status, loopRange, toolCount, content, durationMs, error,
     // anchorMsgId, anchorOrder }. Rendered inline by MessageList — anchored
@@ -346,15 +358,32 @@ export const useChatStore = defineStore('chat', {
     //                    memoryAdjust, totalMs, totalTokens, loopCount }, ...]`
     // sorted newest-first.
     //
-    // Bug 3 carry-over: scoped to the user's active group filter so the
-    // right-hand panel mirrors what the message pane shows. Unfiltered
-    // when no group is active (legacy single-stream behaviour).
+    // PR C: filter precedence is now:
+    //   1. `unifyDebugGroupFilter` (independent debug-side filter; user's spec)
+    //   2. fall back to `unifyActiveGroupFilter` (main pane filter) ONLY if
+    //      the debug filter is null AND the user has selected a main group.
+    //   3. otherwise show all turns.
+    //
+    // The independent filter wins: setting it to a value (even one that
+    // doesn't match the main pane) shows just that group. Setting it to
+    // the empty-string sentinel `'__all__'` forces "show all" even when
+    // the main pane is filtered.
     unifyDebugTurnsForActiveGroup: (state) => {
       const order = state.unifyDebugTurnOrder || EMPTY_ARRAY;
       const byId = state.unifyDebugTurnsById || {};
       const allLoops = state.unifyDebugLoops || EMPTY_ARRAY;
       const reflections = state.unifyReflectionCards || {};
-      const target = state.unifyActiveGroupFilter || null;
+
+      const debugFilter = state.unifyDebugGroupFilter;
+      const mainFilter = state.unifyActiveGroupFilter || null;
+      let target;
+      if (debugFilter === '__all__') {
+        target = null;
+      } else if (debugFilter) {
+        target = debugFilter;
+      } else {
+        target = mainFilter;
+      }
 
       // Group loops by turnId once.
       const loopsByTurn = {};
@@ -372,19 +401,40 @@ export const useChatStore = defineStore('chat', {
         reflectionsByTurn[card.turnId].push(card);
       }
 
+      const search = (state.unifyDebugSearch || '').trim().toLowerCase();
+
       const out = [];
       for (let i = order.length - 1; i >= 0; i--) {
         const turnId = order[i];
         const turn = byId[turnId];
         if (!turn) continue;
         if (target && turn.groupId && turn.groupId !== target) continue;
-        out.push({
-          ...turn,
-          loops: loopsByTurn[turnId] || EMPTY_ARRAY,
-          reflections: reflectionsByTurn[turnId] || EMPTY_ARRAY,
-        });
+
+        const loops = loopsByTurn[turnId] || EMPTY_ARRAY;
+        const refls = reflectionsByTurn[turnId] || EMPTY_ARRAY;
+
+        if (search) {
+          if (!turnMatchesSearch(turn, loops, refls, search)) continue;
+        }
+
+        out.push({ ...turn, loops, reflections: refls });
       }
       return out;
+    },
+    // PR C: distinct groupIds present in the current debug history,
+    // for the toolbar group-filter dropdown.
+    unifyDebugAvailableGroups: (state) => {
+      const seen = new Set();
+      for (const turnId of state.unifyDebugTurnOrder || EMPTY_ARRAY) {
+        const turn = state.unifyDebugTurnsById[turnId];
+        if (turn && turn.groupId) seen.add(turn.groupId);
+      }
+      return Array.from(seen).sort();
+    },
+    // PR C: total turns ignoring filters — used to render "showing M of N"
+    // in the toolbar so the user knows when they have unsearched data.
+    unifyDebugTurnTotal: (state) => {
+      return (state.unifyDebugTurnOrder || EMPTY_ARRAY).length;
     },
     // ★ Unify: the currently visible messages (H2.f.3: thread filter dropped).
     unifyVisibleMessages: (state) => {
@@ -1407,6 +1457,28 @@ export const useChatStore = defineStore('chat', {
       catch { /* ignore */ }
     },
 
+    // feat-6af5f9f1 PR C: search query for the debug panel toolbar.
+    // Substring filter (case-insensitive) applied to the per-turn fields
+    // listed in turnMatchesSearch(). Not persisted — search is a transient
+    // exploration tool, not a session preference.
+    setUnifyDebugSearch(query) {
+      this.unifyDebugSearch = typeof query === 'string' ? query : '';
+    },
+
+    // feat-6af5f9f1 PR C: independent debug-panel group filter. Distinct
+    // from `unifyActiveGroupFilter` (the main pane's filter) so the user
+    // can debug across all groups even when the main pane is narrowed.
+    //   - null      : fall back to main pane filter (default)
+    //   - '__all__' : force "show all" regardless of main pane
+    //   - <groupId> : pin to a specific group
+    setUnifyDebugGroupFilter(groupId) {
+      if (groupId === null || groupId === undefined) {
+        this.unifyDebugGroupFilter = null;
+      } else {
+        this.unifyDebugGroupFilter = String(groupId);
+      }
+    },
+
     toggleSubAgentCardExpand(key) {
       const card = this.unifySubAgentCards?.[key];
       if (!card) return;
@@ -1498,6 +1570,11 @@ export const useChatStore = defineStore('chat', {
       this.unifyDebugLoops = [];
       this.unifyDebugTurnsById = {};
       this.unifyDebugTurnOrder = [];
+      // feat-6af5f9f1 PR C: clear toolbar transient state too. The group
+      // filter is intentionally cleared on session reset so a stale pin
+      // from a previous session doesn't hide all incoming turns.
+      this.unifyDebugSearch = '';
+      this.unifyDebugGroupFilter = null;
       this.unifyReflectionCards = {};
       this.unifySubAgentCards = {};
       // task-315: also exit the task detail view on a fresh Unify session

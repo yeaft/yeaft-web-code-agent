@@ -2673,3 +2673,42 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* feat-6af5f9f1 PR C — UnifyDebugPanel toolbar */
+.unify-debug-toolbar {
+  display: flex;
+  gap: 8px;
+  padding: 6px 10px 8px 10px;
+  align-items: center;
+  border-bottom: 1px solid var(--border-soft, #e1e4e9);
+}
+
+.unify-debug-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+  border: 1px solid var(--border-soft, #e1e4e9);
+  border-radius: 4px;
+  background: var(--surface, #fff);
+  color: var(--text-primary, #1f1f1f);
+  font-family: inherit;
+}
+
+.unify-debug-search:focus {
+  outline: none;
+  border-color: var(--accent, #4a6df5);
+}
+
+.unify-debug-group-select {
+  flex: 0 0 auto;
+  padding: 3px 6px;
+  font-size: 11px;
+  border: 1px solid var(--border-soft, #e1e4e9);
+  border-radius: 4px;
+  background: var(--surface, #fff);
+  color: var(--text-secondary, #555);
+  font-family: inherit;
+  cursor: pointer;
+  max-width: 180px;
+}

@@ -170,12 +170,9 @@ export default {
       <!-- Right Detail Panel -->
       <aside class="unify-detail" :class="{ collapsed: detailCollapsed, resizing: isResizingDetail }" :style="detailWidthStyle" ref="detailPanel">
         <div class="unify-detail-drag-handle" :class="{ active: isResizingDetail }" @mousedown.prevent="startDetailResize"></div>
-        <!-- Debug Mode: feat-6af5f9f1 PR B replaces the previous inline
-             debug block with a dedicated component (Turn -> Loop -> Tool
-             tree, copy buttons, system/memory at turn level). All the
-             helpers (toggleTurnExpand, prettyJson, getFunctionCallPairs,
-             etc.) below are no longer used by the template; left in
-             place under the deprecated comment until PR C cleans them. -->
+        <!-- Debug Mode: rendered by the dedicated UnifyDebugPanel component
+             (Turn -> Loop -> Tool tree, copy buttons, search + group filter,
+             memory and raw payloads gated by detail mode). -->
         <UnifyDebugPanel v-if="debugMode" />
         <!-- Default: placeholder -->
         <div v-else class="unify-detail-placeholder">
@@ -219,7 +216,6 @@ export default {
     const sidebarCollapsed = Vue.ref(false);
     const detailCollapsed = Vue.ref(false);
     const debugMode = Vue.ref(false);
-    const expandedTurns = Vue.reactive({});
     const modelDropdownOpen = Vue.ref(false);
     const showSettings = Vue.ref(false);
     const settingsInitialTab = Vue.ref('llm'); // task-343: 'llm' | 'vp'
@@ -415,130 +411,11 @@ export default {
       }
     };
 
-    const toggleTurnExpand = (idx) => {
-      expandedTurns[idx] = !expandedTurns[idx];
-    };
-
-    const formatMessages = (messages) => {
-      if (!messages || messages.length === 0) return '(no messages)';
-      return messages.map(m => {
-        const content = typeof m.content === 'string'
-          ? m.content.slice(0, 500) + (m.content.length > 500 ? '...' : '')
-          : JSON.stringify(m.content).slice(0, 500);
-        const head = m.toolCallId ? `[${m.role} call_id=${m.toolCallId}]` : `[${m.role}]`;
-        const body = content || '(empty)';
-        const calls = Array.isArray(m.toolCalls) && m.toolCalls.length
-          ? m.toolCalls.map((tc, i) =>
-              `\n  → call_${i + 1} ${tc.name}(${JSON.stringify(tc.input)})`
-            ).join('')
-          : '';
-        return `${head} ${body}${calls}`;
-      }).join('\n\n');
-    };
-
-    // task-331: content renderer for a single debug message — returns the
-    // text body only (function_call details render separately as <details>
-    // blocks, tool_result body falls through the same pre).
-    const formatMsgContent = (m) => {
-      if (!m) return '';
-      if (typeof m.content === 'string') {
-        const s = m.content;
-        return s.length > 2000 ? s.slice(0, 2000) + '…' : s;
-      }
-      if (m.content == null) return '';
-      try {
-        const s = JSON.stringify(m.content);
-        return s.length > 2000 ? s.slice(0, 2000) + '…' : s;
-      } catch {
-        return String(m.content);
-      }
-    };
-
-    // task-331: pretty-print a tool_call input blob.
-    const prettyJson = (v) => {
-      if (v == null) return '';
-      try {
-        return JSON.stringify(v, null, 2);
-      } catch {
-        return String(v);
-      }
-    };
-
-    // task-331: format a tool_result output — may be a string or structured.
-    const formatToolOutput = (out) => {
-      if (out == null) return '';
-      if (typeof out === 'string') {
-        return out.length > 4000 ? out.slice(0, 4000) + '…' : out;
-      }
-      try {
-        const s = JSON.stringify(out, null, 2);
-        return s.length > 4000 ? s.slice(0, 4000) + '…' : s;
-      } catch {
-        return String(out);
-      }
-    };
-
-    // task-331: walk a turn's messages, pairing each assistant `toolCalls`
-    // entry with the matching `role:'tool'` message that shares the same
-    // id. Returns [{id, name, input, response, isError}, ...] with
-    // `response`/`isError` undefined when no paired result (pending).
-    const getFunctionCallPairs = (turn) => {
-      const pairs = [];
-      const msgs = turn?.messages || [];
-      // Build index: toolCallId → tool message
-      const toolByCallId = new Map();
-      for (const m of msgs) {
-        if (m.role === 'tool' && m.toolCallId) toolByCallId.set(m.toolCallId, m);
-      }
-      for (const m of msgs) {
-        if (m.role !== 'assistant' || !Array.isArray(m.toolCalls)) continue;
-        for (const tc of m.toolCalls) {
-          const paired = toolByCallId.get(tc.id);
-          pairs.push({
-            id: tc.id,
-            name: tc.name,
-            input: tc.input,
-            response: paired ? paired.content : null,
-            isError: paired ? !!paired.isError : false,
-          });
-        }
-      }
-      // Also surface the CURRENT turn's tool_call requests (toolCalls[]),
-      // which haven't been pushed into conversationMessages yet when
-      // `debug_turn` fires. These will never have a paired response in
-      // THIS turn's snapshot — responses land in the NEXT debug_turn.
-      if (Array.isArray(turn?.toolCalls)) {
-        const alreadySeen = new Set(pairs.map(p => p.id));
-        for (const tc of turn.toolCalls) {
-          if (alreadySeen.has(tc.id)) continue;
-          pairs.push({
-            id: tc.id,
-            name: tc.name,
-            input: tc.input,
-            response: null,
-            isError: false,
-          });
-        }
-      }
-      return pairs;
-    };
-
-    const formatToolCalls = (toolCalls) => {
-      if (!toolCalls || toolCalls.length === 0) return '(none)';
-      return toolCalls.map(tc =>
-        `${tc.name}(${JSON.stringify(tc.input, null, 2)})`
-      ).join('\n\n');
-    };
-
-    // task-344: render raw API response — for SSE we show the raw text body;
-    // for JSON we pretty-print. Falls back to JSON.stringify of the envelope.
-    const formatRawResponse = (raw) => {
-      if (!raw) return '(empty)';
-      const body = raw.body;
-      if (typeof body === 'string') return body;
-      try { return JSON.stringify({ status: raw.status, headers: raw.headers, body }, null, 2); }
-      catch { return String(body); }
-    };
+    // feat-6af5f9f1 PR C: the legacy debug helpers (toggleTurnExpand,
+    // formatMessages, formatMsgContent, prettyJson, formatToolOutput,
+    // getFunctionCallPairs, formatToolCalls, formatRawResponse) lived
+    // here for the old inline debug panel. PR B replaced that panel
+    // with <UnifyDebugPanel>; PR C removes the now-orphaned helpers.
 
     const toggleModelDropdown = (e) => {
       e.stopPropagation();
@@ -733,7 +610,6 @@ export default {
       sidebarCollapsed,
       detailCollapsed,
       debugMode,
-      expandedTurns,
       modelDropdownOpen,
       showSettings,
       settingsInitialTab,
@@ -752,20 +628,12 @@ export default {
       toggleSidebar,
       toggleDetail,
       toggleDebug,
-      toggleTurnExpand,
       toggleModelDropdown,
       selectModel,
       formatTokens,
       formatModelCtx,
       toggleSettings,
       onSettingsSaved,
-      formatMessages,
-      formatToolCalls,
-      formatMsgContent,
-      prettyJson,
-      formatRawResponse,
-      formatToolOutput,
-      getFunctionCallPairs,
       sidebarV2Enabled,
       onSelectTaskV2,
       onSelectGroupV2,

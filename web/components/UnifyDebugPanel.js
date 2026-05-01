@@ -37,7 +37,49 @@ export default {
       expandedSections: {},
       copiedFlash: null, // last copy notice key (for transient feedback)
       copiedFlashAt: 0,
+      // feat-6af5f9f1 PR C: snapshot of user's expand state captured the
+      // moment they start a search, restored when they clear it. Without
+      // this, search would clobber their carefully curated open turns.
+      _expandSnapshot: null,
     };
+  },
+  watch: {
+    // PR C: when search becomes active, auto-expand all matching turns
+    // and their first loop so the user sees content immediately. When
+    // cleared, restore the snapshot.
+    searchQuery(now, prev) {
+      const wasActive = !!(prev && prev.trim());
+      const isActive = !!(now && now.trim());
+      if (!wasActive && isActive) {
+        // Entering search: snapshot current state, then auto-expand.
+        this._expandSnapshot = {
+          turns: { ...this.expandedTurns },
+          loops: { ...this.expandedLoops },
+        };
+        const turnsOpen = {};
+        const loopsOpen = {};
+        for (const turn of this.turns) {
+          turnsOpen[turn.turnId] = true;
+          if (turn.loops && turn.loops.length > 0) {
+            loopsOpen[`${turn.turnId}#${turn.loops[0].loopNumber}`] = true;
+          }
+        }
+        this.expandedTurns = turnsOpen;
+        this.expandedLoops = loopsOpen;
+      } else if (wasActive && !isActive && this._expandSnapshot) {
+        // Cleared: restore.
+        this.expandedTurns = this._expandSnapshot.turns;
+        this.expandedLoops = this._expandSnapshot.loops;
+        this._expandSnapshot = null;
+      } else if (isActive) {
+        // Search refined: keep all matching turns expanded.
+        const turnsOpen = { ...this.expandedTurns };
+        for (const turn of this.turns) {
+          if (turnsOpen[turn.turnId] === undefined) turnsOpen[turn.turnId] = true;
+        }
+        this.expandedTurns = turnsOpen;
+      }
+    },
   },
   computed: {
     store() {
@@ -55,6 +97,36 @@ export default {
       return this.detailMode
         ? (t('unify.debugDetail') || 'Detail')
         : (t('unify.debugConcise') || 'Lite');
+    },
+    // feat-6af5f9f1 PR C: toolbar bindings.
+    searchQuery: {
+      get() { return this.store ? (this.store.unifyDebugSearch || '') : ''; },
+      set(v) { this.store && this.store.setUnifyDebugSearch(v); },
+    },
+    groupFilter: {
+      get() {
+        if (!this.store) return '';
+        const g = this.store.unifyDebugGroupFilter;
+        // null (default — fall through to main pane filter) maps to ''
+        // in the dropdown so the placeholder option is selected.
+        return g === null || g === undefined ? '' : g;
+      },
+      set(v) {
+        if (!this.store) return;
+        if (!v) this.store.setUnifyDebugGroupFilter(null);
+        else this.store.setUnifyDebugGroupFilter(v);
+      },
+    },
+    availableGroups() {
+      return (this.store && this.store.unifyDebugAvailableGroups) || [];
+    },
+    turnTotal() {
+      return (this.store && this.store.unifyDebugTurnTotal) || 0;
+    },
+    showingMatchedHint() {
+      // Only render the "M of N" hint when filters/search are active and
+      // hiding something — otherwise it's just visual noise.
+      return this.turnTotal > this.turns.length;
     },
   },
   methods: {
@@ -229,7 +301,10 @@ export default {
     <div class="unify-debug-panel">
       <div class="unify-debug-header">
         <span class="unify-debug-title">{{ $t('unify.debug') }}</span>
-        <span class="unify-debug-count" v-if="turns.length > 0">{{ turns.length }} {{ $t('unify.debugTurns') }}</span>
+        <span class="unify-debug-count" v-if="turns.length > 0">
+          <template v-if="showingMatchedHint">{{ turns.length }} / {{ turnTotal }}</template>
+          <template v-else>{{ turns.length }} {{ $t('unify.debugTurns') }}</template>
+        </span>
         <button
           class="unify-debug-toggle-chip"
           :class="{ active: detailMode }"
@@ -237,6 +312,25 @@ export default {
           :title="detailLabel"
         >{{ detailLabel }}</button>
         <span v-if="copiedFlash" class="unify-debug-copied-flash">{{ copiedFlash }}</span>
+      </div>
+
+      <!-- feat-6af5f9f1 PR C: search + independent group filter toolbar -->
+      <div class="unify-debug-toolbar">
+        <input
+          type="search"
+          class="unify-debug-search"
+          v-model="searchQuery"
+          :placeholder="$t('unify.debugSearchPlaceholder') || 'Search turns, tools, prompts…'"
+        />
+        <select
+          v-if="availableGroups.length > 1"
+          class="unify-debug-group-select"
+          v-model="groupFilter"
+        >
+          <option value="">{{ $t('unify.debugGroupFollowMain') || 'Follow main pane' }}</option>
+          <option value="__all__">{{ $t('unify.debugGroupAll') || 'All groups' }}</option>
+          <option v-for="g in availableGroups" :key="g" :value="g">{{ g }}</option>
+        </select>
       </div>
 
       <div class="unify-debug-turns" v-if="turns.length > 0">
@@ -272,8 +366,8 @@ export default {
               <pre v-if="isSectionExpanded(turn.turnId, 'sys')" class="unify-debug-pre">{{ turn.loops[0].systemPrompt }}</pre>
             </div>
 
-            <!-- Turn-level: Memory loaded -->
-            <div class="unify-debug-section" v-if="turn.memoryLoaded && turn.memoryLoaded.length > 0">
+            <!-- Turn-level: Memory loaded (detail mode only — feat-6af5f9f1 PR C) -->
+            <div class="unify-debug-section" v-if="detailMode && turn.memoryLoaded && turn.memoryLoaded.length > 0">
               <div class="unify-debug-section-row">
                 <span class="unify-debug-section-title">Memory loaded</span>
                 <span class="unify-debug-section-meta">{{ turn.memoryLoaded.length }}</span>
@@ -290,8 +384,8 @@ export default {
               </ul>
             </div>
 
-            <!-- Turn-level: Memory adjust (post-turn AMS edits, including evictions) -->
-            <div class="unify-debug-section" v-if="turn.memoryAdjust">
+            <!-- Turn-level: Memory adjust (post-turn AMS edits, including evictions; detail mode only) -->
+            <div class="unify-debug-section" v-if="detailMode && turn.memoryAdjust">
               <div class="unify-debug-section-row">
                 <span class="unify-debug-section-title">Memory adjust</span>
                 <span class="unify-debug-section-meta">
