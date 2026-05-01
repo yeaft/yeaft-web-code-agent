@@ -2287,3 +2287,337 @@
 .group-announcement-bar__settings-link:hover {
   text-decoration: underline;
 }
+
+/* ───────────────────────────────────────────────────────────
+ * GroupSettingsModal — unified left-nav / right-pane dialog
+ * Replaces the previous standalone GroupMemberEditor.
+ * Sections: announcement / members / rename / danger.
+ * ─────────────────────────────────────────────────────────── */
+
+.group-settings-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 24px;
+}
+
+.group-settings-modal {
+  width: min(720px, 100%);
+  max-height: min(640px, 100vh - 48px);
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.28);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.group-settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+}
+
+.group-settings-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.group-settings-close {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 6px;
+  border-radius: 6px;
+}
+
+.group-settings-close:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.group-settings-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.group-settings-nav {
+  width: 168px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  overflow-y: auto;
+}
+
+.group-settings-nav-item {
+  appearance: none;
+  background: none;
+  border: none;
+  text-align: left;
+  font-size: 13px;
+  color: var(--text-primary);
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.group-settings-nav-item:hover {
+  background: var(--sidebar-hover);
+}
+
+.group-settings-nav-item.is-active {
+  background: var(--accent-blue);
+  color: #ffffff;
+}
+
+.group-settings-nav-item.is-active:hover {
+  background: var(--accent-blue);
+  filter: brightness(1.05);
+}
+
+.group-settings-nav-item.is-danger:not(.is-active) {
+  color: #c83737;
+}
+
+.group-settings-nav-item:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.group-settings-pane {
+  flex: 1;
+  min-width: 0;
+  padding: 18px 22px;
+  overflow-y: auto;
+}
+
+.group-settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.group-settings-heading {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.group-settings-help {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.group-settings-textarea {
+  width: 100%;
+  min-height: 180px;
+  resize: vertical;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-sizing: border-box;
+}
+
+.group-settings-textarea:focus {
+  outline: none;
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.group-settings-input {
+  width: 100%;
+  padding: 8px 12px;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-sizing: border-box;
+}
+
+.group-settings-input:focus {
+  outline: none;
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.group-settings-field-label {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  display: block;
+}
+
+.group-settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.group-settings-primary {
+  background: var(--accent-blue);
+  color: #ffffff;
+  border: 1px solid var(--accent-blue);
+  border-radius: 6px;
+  padding: 6px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.15s, opacity 0.15s;
+}
+
+.group-settings-primary:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+.group-settings-primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.group-settings-error {
+  margin: 0;
+  font-size: 12.5px;
+  color: #c83737;
+}
+
+.group-settings-empty {
+  font-size: 13px;
+  color: var(--text-secondary);
+  padding: 16px 0;
+}
+
+.group-settings-roster {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.group-settings-roster-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+
+.group-settings-roster-item:hover {
+  background: var(--sidebar-hover);
+}
+
+.group-settings-roster-item.is-default {
+  background: rgba(91, 141, 239, 0.08);
+}
+
+.group-settings-roster-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.group-settings-roster-row input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+}
+
+.group-settings-roster-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.group-settings-roster-name {
+  font-size: 13px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.group-settings-default-star {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  transition: color 0.15s, background 0.15s;
+}
+
+.group-settings-default-star.is-on {
+  color: #f5a623;
+}
+
+.group-settings-default-star:hover:not(:disabled) {
+  background: var(--sidebar-hover);
+}
+
+.group-settings-default-star:disabled {
+  cursor: default;
+}
+
+.group-settings-section-danger .group-settings-heading {
+  color: #c83737;
+}
+
+.group-settings-danger-btn {
+  background: #c83737;
+  color: #ffffff;
+  border: 1px solid #c83737;
+  border-radius: 6px;
+  padding: 6px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.15s, opacity 0.15s;
+}
+
+.group-settings-danger-btn:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.group-settings-danger-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
