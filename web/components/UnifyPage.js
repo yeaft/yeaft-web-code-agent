@@ -38,6 +38,17 @@ export default {
         <!-- Conversation Header -->
         <div class="unify-topbar">
         <!-- task-341: sidebar-toggle moved from topbar into V2 sidebar header. -->
+        <!-- task-fix-mobile-group-settings: re-add a mobile-only ☰ here so
+             that after the sidebar collapses on group select the user
+             still has a way back. CSS hides it on desktop (≥768px). -->
+          <button
+            class="unify-topbar-sidebar-toggle"
+            @click="toggleSidebar"
+            :title="$t('chat.sidebar.expand')"
+            :aria-label="$t('chat.sidebar.expand')"
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>
+          </button>
 
         <!-- task-339-F1: GroupSelector removed from topbar — groups now surface via sidebar section. -->
 
@@ -64,6 +75,20 @@ export default {
           </div>
 
           <div class="unify-topbar-right">
+            <!-- task-fix-mobile-group-settings: gear button to open group
+                 settings from the conversation header. Visible on every
+                 viewport so users can edit announcement / members /
+                 rename / delete without hunting for hover-only sidebar
+                 affordances (which don't exist on touch). -->
+            <button
+              v-if="topbarGroup"
+              class="unify-topbar-group-settings"
+              @click="openTopbarGroupSettings"
+              :title="$t('unify.group.settings.title', { name: topbarGroupName })"
+              :aria-label="$t('unify.group.settings.title', { name: topbarGroupName })"
+            >
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+            </button>
             <button
               class="unify-clear-btn"
               @click="clearMessages"
@@ -583,10 +608,11 @@ export default {
       const gs = groupsStore();
       return gs ? gs.activeGroup : null;
     });
-    const inviteGroupName = Vue.computed(() => {
-      const g = activeGroupForInvite.value;
+    // D1 seed sentinel: translate raw 'Default' on grp_default via global
+    // i18n. Used by `inviteGroupName` and the topbar ⚙ label so the two
+    // can't drift if one site is later relocalised.
+    const resolveGroupDisplayName = (g) => {
       if (!g) return '';
-      // D1 seed sentinel: translate raw 'Default' on grp_default via global i18n.
       if (g.id === 'grp_default' && (g.name === 'Default' || !g.name)) {
         try {
           const globalI18n = (typeof window !== 'undefined') ? window.i18n : null;
@@ -596,7 +622,10 @@ export default {
         } catch (_) {}
       }
       return g.name || g.id || '';
-    });
+    };
+    const inviteGroupName = Vue.computed(
+      () => resolveGroupDisplayName(activeGroupForInvite.value),
+    );
     const shouldShowInviteModal = Vue.computed(() => {
       const gs = groupsStore();
       if (!gs || !gs.activeNeedsInvite) return false;
@@ -648,6 +677,29 @@ export default {
     const openMemberEditor = (groupId) => {
       if (!groupId) return;
       openGroupSettings({ groupId, section: 'members' });
+    };
+    // task-fix-mobile-group-settings: surface a group ⚙ in the topbar
+    // so the conversation always has a settings entry-point — sidebar
+    // collapses to a slide-over on mobile, hover-reveal affordances
+    // don't exist on touch, and the announcement bar may not be
+    // visible if the active group has none. Resolve the group from the
+    // groups store the same way `sendMessage` does (filter > activeGroupId
+    // > grp_default fallback) so the gear targets whatever is on screen.
+    const topbarGroup = Vue.computed(() => {
+      const gs = groupsStore();
+      if (!gs || !gs.groups) return null;
+      const filterId = store.unifyActiveGroupFilter || null;
+      if (filterId && gs.groups[filterId]) return gs.groups[filterId];
+      if (gs.activeGroupId && gs.groups[gs.activeGroupId]) return gs.groups[gs.activeGroupId];
+      return gs.groups['grp_default'] || null;
+    });
+    const topbarGroupName = Vue.computed(
+      () => resolveGroupDisplayName(topbarGroup.value),
+    );
+    const openTopbarGroupSettings = () => {
+      const g = topbarGroup.value;
+      if (!g) return;
+      openGroupSettings({ groupId: g.id, section: 'announcement' });
     };
     // I6: closeMemberEditor shim was unused — dropped. openMemberEditor
     // remains because GroupInviteModal's "open library" CTA still calls
@@ -735,6 +787,10 @@ export default {
       closeGroupSettings,
       // Backwards-compat shim — onInviteOpenLibrary still calls this.
       openMemberEditor,
+      // task-fix-mobile-group-settings: topbar group ⚙ bindings.
+      topbarGroup,
+      topbarGroupName,
+      openTopbarGroupSettings,
     };
   }
 };

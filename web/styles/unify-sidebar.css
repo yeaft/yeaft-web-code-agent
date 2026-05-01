@@ -321,6 +321,19 @@
 .us-group-row.selected .us-group-row-settings {
   opacity: 1;
 }
+
+/* task-fix-mobile-group-settings: on touch viewports the hover-reveal
+   pattern hides the per-row ⚙ + ⋯ entirely. Force them always visible
+   so users can still open settings from the sidebar without having to
+   tap the row first to mark it `selected`. Combined `(hover: none)`
+   (touch laptops, phones, tablets) and `max-width: 768px` (small
+   viewports regardless of input) so a single rule covers both axes. */
+@media (hover: none), (max-width: 768px) {
+  .us-group-row .us-group-row-settings,
+  .us-group-row .us-group-row-kebab {
+    opacity: 1;
+  }
+}
 .us-group-row-menu {
   position: absolute;
   top: 100%;
