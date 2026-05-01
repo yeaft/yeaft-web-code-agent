@@ -1007,7 +1007,7 @@ async function ensureSessionLoaded() {
 
   unifyConversationId = `unify-${Date.now()}`;
 
-  restoreHistoryFromRecent(session.conversationStore.loadRecent(80));
+  restoreHistoryFromRecent(session.conversationStore.loadRecent());
 
   sendUnifyEvent({
     type: 'session_ready',
@@ -1627,6 +1627,10 @@ export function handleUnifyModelSwitch(msg) {
  */
 export async function handleUnifyLoadHistory(msg) {
   const groupId = (msg && typeof msg.groupId === 'string' && msg.groupId) || null;
+  // `lim` is now expressed in TURNS, not raw messages. `loadRecent` and
+  // `loadRecentByGroup` use turn-based slicing so the cut never lands
+  // mid-tool-arc. Pass `undefined` to use the persistence-layer default
+  // (DEFAULT_RECENT_TURNS = 20 turns).
   const pickRecent = (store, lim) =>
     groupId ? store.loadRecentByGroup(groupId, lim) : store.loadRecent(lim);
 
@@ -1641,12 +1645,12 @@ export async function handleUnifyLoadHistory(msg) {
 
     unifyConversationId = `unify-${Date.now()}`;
 
-    restoreHistoryFromRecent(pickRecent(session.conversationStore, 80));
+    restoreHistoryFromRecent(pickRecent(session.conversationStore, undefined));
   } else if (groupId) {
     // Re-entering an existing session with a (possibly new) group filter:
     // re-seed the engine's flat history so it doesn't carry messages from
     // another group into the next turn's context.
-    restoreHistoryFromRecent(pickRecent(session.conversationStore, 80));
+    restoreHistoryFromRecent(pickRecent(session.conversationStore, undefined));
   }
 
   // Always replay session_ready so refresh / reconnect rebuilds UI state.
@@ -1661,6 +1665,11 @@ export async function handleUnifyLoadHistory(msg) {
   });
   sendGroupSnapshotBroadcast();
 
+  // `msg.limit` is the replay-scrollback request from the frontend (UI
+  // history pane, not engine context). Semantics changed (2026-05-01):
+  // now expressed in TURNS. The previous default (50 messages) maps to
+  // ~20–25 turns; in the turn-count world 50 turns of UI scrollback is
+  // still cheap and matches what the frontend already passes through.
   const limit = (typeof msg.limit === 'number') ? msg.limit : 50;
   const messages = limit > 0 ? pickRecent(session.conversationStore, limit) : [];
   const compactSummary = session.conversationStore.readCompactSummary();
@@ -1718,7 +1727,7 @@ export async function resetUnifySession() {
 
     unifyConversationId = `unify-${Date.now()}`;
 
-    restoreHistoryFromRecent(session.conversationStore.loadRecent(80));
+    restoreHistoryFromRecent(session.conversationStore.loadRecent());
 
     sendUnifyEvent({
       type: 'session_ready',

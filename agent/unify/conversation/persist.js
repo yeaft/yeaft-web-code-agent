@@ -22,6 +22,24 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rename
 import { join, basename } from 'path';
 import { isPermissionError } from '../init.js';
 import { pairSanitize } from '../pair-sanitize.js';
+import { sliceLastNTurns } from '../turn-utils.js';
+
+/**
+ * Default cold-start "recent window" size, expressed in TURNS (not raw
+ * messages). One turn = one user prompt round-trip; multi-VP fan-out
+ * collapses N `@vp-X` variants of the same canonical prompt into ONE turn.
+ *
+ * Why turns and not messages: message-count slicing can cut mid-arc and
+ * orphan a `[assistant(toolCalls), tool…]` pair, which 400s the Anthropic /
+ * Chat-Completions adapter. Turn-based slicing always cuts at a user-
+ * message boundary, which is pair-safe by construction.
+ *
+ * 20 turns is the bootstrap window the user signed off on (2026-05-01).
+ * The session-level compactor in `history-compact.js` is the authoritative
+ * size limiter once the engine is running; this is just the cold-start
+ * replay window after a fresh boot or reconnect.
+ */
+export const DEFAULT_RECENT_TURNS = 20;
 
 // ─── Token estimation ────────────────────────────────────────
 
@@ -425,17 +443,29 @@ export class ConversationStore {
   // ─── Read API ───────────────────────────────────────────
 
   /**
-   * Load recent hot messages, sorted by id (chronological).
+   * Load recent hot messages, sliced to the last `turnsLimit` TURNS and
+   * sorted chronologically.
    *
-   * Tool-pairing: same rationale as `loadRecentByGroup` — the tail slice
-   * can split a tool_use/tool_result pair, so we run `pairSanitize` to
-   * drop orphans.
+   * Turn-based (not message-based) slicing is the contract here. A "turn"
+   * is one user-prompt round-trip — multi-VP fan-out emits N user
+   * messages for the same prompt, all of which collapse into ONE turn.
+   * `sliceLastNTurns` cuts at a user-message boundary, so an
+   * `[assistant(toolCalls), tool…]` arc is never split across the cut.
    *
-   * @param {number} [limit=80] — max messages to load
+   * `pairSanitize` runs as a defensive secondary pass — turn-boundary
+   * cuts are already pair-safe, but historical / hand-edited stores may
+   * contain orphans, and `pairSanitize` is idempotent.
+   *
+   * Back-compat: callers that pass `Infinity` (or a negative number) get
+   * the full hot history. `0` returns `[]`.
+   *
+   * @param {number} [turnsLimit=DEFAULT_RECENT_TURNS] — max turns to load
    * @returns {object[]} — parsed message objects
    */
-  loadRecent(limit = 80) {
-    return pairSanitize(this.#loadFromDir(this.#msgDir, limit));
+  loadRecent(turnsLimit = DEFAULT_RECENT_TURNS) {
+    const all = this.#loadFromDir(this.#msgDir, Infinity);
+    if (turnsLimit === Infinity || turnsLimit < 0) return pairSanitize(all);
+    return pairSanitize(sliceLastNTurns(all, turnsLimit));
   }
 
   /**
@@ -448,36 +478,43 @@ export class ConversationStore {
   }
 
   /**
-   * Load recent hot messages stamped with `groupId`, sorted chronologically.
-   * Group-history-isolation (Bug 7): a message lives in exactly one group.
-   * Messages without a `groupId` frontmatter (legacy / pre-grouping) are
-   * NOT returned — they would otherwise leak into every group's stream.
+   * Load recent hot messages stamped with `groupId`, sliced to the last
+   * `turnsLimit` TURNS and sorted chronologically.
    *
-   * Implementation note: filters AFTER reading the most recent N files
+   * Group-history-isolation (Bug 7): a message lives in exactly one
+   * group. Messages without a `groupId` frontmatter (legacy / pre-
+   * grouping) are NOT returned — they would otherwise leak into every
+   * group's stream.
+   *
+   * Turn-based slicing (2026-05-01): we used to take the last N
+   * messages, which can land mid-arc and orphan a tool_use/tool_result
+   * pair (the Anthropic / Chat-Completions adapter then 400s on the
+   * orphan). Switching to `sliceLastNTurns` always cuts at a user-
+   * message boundary — multi-VP `@vp-X` variants of the same canonical
+   * prompt collapse into ONE turn, so a fan-out turn is kept whole.
+   *
+   * `pairSanitize` runs as a belt-and-suspenders second pass: turn-
+   * boundary cuts are pair-safe by construction, but if a hand-edited
+   * store somehow contains pre-existing orphans we drop them anyway.
+   *
+   * Implementation note: filters AFTER reading the most recent files
    * because the on-disk order is global by sequence id. We over-read by
-   * loading all hot files and slicing the tail of the filtered set so
-   * `limit` reflects "N most recent messages in this group", not "N most
-   * recent messages on disk that happen to be in this group". For typical
-   * inboxes (≤ a few thousand hot messages) this is cheap; if it ever
-   * becomes a hot path we add a per-group on-disk index.
-   *
-   * Tool-pairing (2026-05-01): the `.slice(-limit)` cut can split an
-   * `[assistant(toolCalls), tool…]` arc — landing on the tool messages
-   * (orphan tool_result, no preceding tool_use) or the assistant
-   * (orphan tool_use, no following tool_result). Both shapes 400 the
-   * Anthropic / Chat-Completions adapter. We run `pairSanitize` over
-   * the slice to drop those orphans. See `agent/unify/pair-sanitize.js`.
+   * loading every hot file and slicing the tail of the FILTERED set so
+   * `turnsLimit` reflects "N most recent turns in this group", not "N
+   * most recent messages on disk that happen to be in this group". For
+   * typical inboxes (≤ a few thousand hot messages) this is cheap; if
+   * it ever becomes a hot path we add a per-group on-disk index.
    *
    * @param {string} groupId — required; null/empty returns []
-   * @param {number} [limit=80]
+   * @param {number} [turnsLimit=DEFAULT_RECENT_TURNS]
    * @returns {object[]}
    */
-  loadRecentByGroup(groupId, limit = 80) {
+  loadRecentByGroup(groupId, turnsLimit = DEFAULT_RECENT_TURNS) {
     if (!groupId) return [];
     const all = this.#loadFromDir(this.#msgDir, Infinity);
     const filtered = all.filter(m => m && m.groupId === groupId);
-    if (limit === Infinity || limit < 0) return pairSanitize(filtered);
-    return pairSanitize(filtered.slice(-limit));
+    if (turnsLimit === Infinity || turnsLimit < 0) return pairSanitize(filtered);
+    return pairSanitize(sliceLastNTurns(filtered, turnsLimit));
   }
 
   /**

@@ -26,16 +26,19 @@
  *   4. Keep the last `keepRecent` user→assistant turns intact so the model
  *      has fresh, untransformed context for whatever the user just said.
  *
- * Triggers (any fires, but only above a 10K token soft floor):
- *   - tokens < 10_000 → never compact (cheap chat, no point paying the
- *     summarizer)
- *   - turn count > 20
+ * Triggers (any fires, but only above a 30K token soft floor):
+ *   - tokens < 30_000 → never compact (cheap chat, no point paying
+ *     the summarizer)
  *   - tokens > 40 % of `maxContextTokens` (defaults to 200K → 80K)
  *   - tokens > 200,000 hard ceiling
  *
+ * The "turn > 20" trigger that an earlier revision used was dropped:
+ * under a 30K token floor it's effectively dead code — the fractional
+ * threshold fires first in any conversation big enough to matter.
+ *
  * Defaults are derived from `maxContextTokens` so the policy auto-adjusts
- * when the user widens or narrows their context budget. All three knobs
- * are overridable via the options bag for tests / future config plumbing.
+ * when the user widens or narrows their context budget. All knobs are
+ * overridable via the options bag for tests / future config plumbing.
  *
  * Why role='user' for the summary message:
  *   The Anthropic Messages API rejects assistant prefill at the tail
@@ -49,21 +52,40 @@
 
 import { estimateTokens } from './conversation/persist.js';
 import { pairSanitize } from './pair-sanitize.js';
+import {
+  countTurns as countTurnsImpl,
+  indexOfNthTurnFromEnd,
+} from './turn-utils.js';
+
+/**
+ * Re-export `countTurns` so existing callers / tests that import it
+ * from this module continue to work. Implementation now lives in
+ * `turn-utils.js` and is shared with `ConversationStore`.
+ */
+export const countTurns = countTurnsImpl;
 
 /**
  * Default trigger thresholds (2026-05-01 policy update):
- *   - never compact while total tokens < 10K (soft floor)
+ *   - never compact while total tokens < 30K (soft floor — most
+ *     conversations under that aren't worth paying the summarizer
+ *     cost; the LLM hasn't started feeling the context yet either),
  *   - otherwise compact if ANY of:
- *       turn count > 20
  *       tokens > 40 % of `maxContextTokens` (default 200K → 80K)
  *       tokens > 200K hard ceiling
  *
+ * The earlier "turn count > 20" trigger was DROPPED because under
+ * the new floor it's effectively dead code — by the time you've sent
+ * 20 user prompts that exceed 30K tokens, the fractional threshold
+ * has already fired. `turnLimit` and the `turn_count` reason code
+ * are still accepted as overrides so tests / future config can re-
+ * enable a turn-based trigger if needed; with `turnLimit: Infinity`
+ * (the new default) the check is simply skipped.
+ *
  * Token thresholds are derived from `maxContextTokens` at evaluation
  * time so the policy auto-adjusts to the user's configured context.
- * The constants below are the fallbacks when no config is plumbed in.
  */
-export const DEFAULT_TURN_LIMIT = 20;
-export const DEFAULT_MIN_TOKEN_FLOOR = 10_000;
+export const DEFAULT_TURN_LIMIT = Infinity;
+export const DEFAULT_MIN_TOKEN_FLOOR = 30_000;
 export const DEFAULT_MAX_CONTEXT_TOKENS = 200_000;
 export const DEFAULT_TOKEN_FRACTION = 0.4;
 export const DEFAULT_HARD_TOKEN_CEILING = 200_000;
@@ -123,62 +145,16 @@ export function estimateMessagesTokens(messages) {
 }
 
 /**
- * Strip a leading `@vp-<id> ` mention prefix from a user prompt. The
- * web bridge prefixes each VP's per-turn prompt with `@vp-<id> ` so
- * the engine knows which VP is replying. When counting "turns" we
- * want the user-facing notion of a turn (one round-trip), not one per
- * VP — so we strip the prefix before deduping consecutive identical
- * user messages.
- *
- * Format mirrors `web-bridge.js#runVpTurn`:
- *   `@vp-${vpId} ${text}`
- *
- * @param {string} content
- * @returns {string}
- */
-function stripVpMentionPrefix(content) {
-  if (typeof content !== 'string') return '';
-  return content.replace(/^@vp-[^\s]+\s+/, '');
-}
-
-/**
- * Count "turns" — defined as a user-side round-trip, NOT one per
- * user-role message. Multi-VP fan-out appends one user message per VP
- * (each with an `@vp-<id>` prefix) for the same underlying user prompt;
- * those collapse into a single turn here.
- *
- * Algorithm: walk user-role messages, strip the `@vp-` prefix, count
- * a turn whenever the canonical text changes from the previous user
- * message (or it's the first one).
- *
- * @param {Array<object>} messages
- * @returns {number}
- */
-export function countTurns(messages) {
-  if (!Array.isArray(messages)) return 0;
-  let n = 0;
-  let prev = null;
-  for (const m of messages) {
-    if (!m || m.role !== 'user') continue;
-    const canonical = stripVpMentionPrefix(m.content || '');
-    if (canonical !== prev) {
-      n++;
-      prev = canonical;
-    }
-  }
-  return n;
-}
-
-/**
  * Pure trigger evaluator. Decides whether the in-memory history needs
  * compaction. No I/O, no LLM call.
  *
  * Policy (2026-05-01):
- *   1. tokens < `minTokenFloor` (default 10K) → trigger=false (always).
+ *   1. tokens < `minTokenFloor` (default 30K) → trigger=false (always).
  *   2. otherwise trigger if ANY of:
- *        turnCount > turnLimit                    (reason='turn_count')
- *        tokenCount > maxContextTokens*fraction   (reason='token_threshold')
- *        tokenCount > hardTokenCeiling            (reason='token_ceiling')
+ *        turnCount > turnLimit (default Infinity → effectively off;
+ *           callers can pin a number to re-enable a turn-count trigger)
+ *        tokenCount > maxContextTokens*fraction (reason='token_threshold')
+ *        tokenCount > hardTokenCeiling          (reason='token_ceiling')
  *
  * `tokenLimit` is preserved as a back-compat override for callers /
  * tests that pin a specific number; when set, it overrides the
@@ -213,7 +189,7 @@ export function shouldCompactHistory(messages, opts = {}) {
   const tokenCount = estimateMessagesTokens(messages);
 
   let reason = null;
-  // (1) Soft floor: never compact small conversations, regardless of turns.
+  // (1) Soft floor: never compact small conversations.
   if (tokenCount < minTokenFloor) {
     return {
       trigger: false,
@@ -226,8 +202,8 @@ export function shouldCompactHistory(messages, opts = {}) {
       hardTokenCeiling,
     };
   }
-  // (2) Trigger if any of: turn budget, fractional token budget, hard ceiling.
-  if (turnCount > turnLimit) reason = 'turn_count';
+  // (2) Trigger evaluation. Turn check is opt-in (Infinity by default).
+  if (Number.isFinite(turnLimit) && turnCount > turnLimit) reason = 'turn_count';
   else if (tokenCount > hardTokenCeiling) reason = 'token_ceiling';
   else if (tokenCount > tokenLimit) reason = 'token_threshold';
 
@@ -288,13 +264,14 @@ export function buildSummarizerInput(messages) {
  * intact, fold everything before. Returns the index that the cut starts
  * AT, i.e. messages[0..cutIdx) gets summarised, messages[cutIdx..] stays.
  *
- * Strategy: walks user-role messages from the END backwards, counting
- * DISTINCT turns by canonical text (after stripping `@vp-<id>` prefix
- * via `stripVpMentionPrefix`). Multi-VP fan-out variants of the same
- * underlying turn collapse into one turn — and the candidate cut index
- * is extended backwards through them so all `@vp-X` variants of the
- * kept turn stay together. If there aren't enough turns to fold (history
- * shorter than keepRecent), returns -1 (caller treats as no-op).
+ * Thin wrapper around `turn-utils.indexOfNthTurnFromEnd` with the
+ * historical contract preserved:
+ *   - empty input returns -1,
+ *   - `keepRecent <= 0` folds everything (returns messages.length),
+ *   - "fewer turns than keepRecent" maps to -1 (caller treats as no-op).
+ *
+ * Multi-VP fan-out: `@vp-X` variants of the same underlying turn count
+ * as ONE turn and the boundary extends backwards through them all.
  *
  * @param {Array<object>} messages
  * @param {number} keepRecent
@@ -303,42 +280,10 @@ export function buildSummarizerInput(messages) {
 export function findCutIndex(messages, keepRecent) {
   if (!Array.isArray(messages) || messages.length === 0) return -1;
   if (keepRecent <= 0) return messages.length; // fold everything
-
-  // Walk from the end, counting DISTINCT turns (multiple consecutive
-  // user messages with the same canonical text — i.e. one fan-out's
-  // @vp-X variants — collapse into a single turn). Stop when we've
-  // started the (keepRecent)-th turn from the end; everything before
-  // its first user-message gets folded.
-  let turnsFromEnd = 0;
-  let nextCanonical = null; // canonical text of the turn we just opened
-  let candidateIdx = -1;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (!messages[i] || messages[i].role !== 'user') continue;
-    const canonical = stripVpMentionPrefix(messages[i].content || '');
-    if (canonical !== nextCanonical) {
-      // New (older) turn boundary.
-      turnsFromEnd++;
-      nextCanonical = canonical;
-      if (turnsFromEnd === keepRecent) {
-        candidateIdx = i;
-        // Keep walking — the same turn might extend further back via
-        // earlier @vp variants of the same canonical text.
-        continue;
-      }
-      if (turnsFromEnd > keepRecent) {
-        // We've stepped into the (keepRecent+1)-th turn — stop. The
-        // last recorded `candidateIdx` is the start of the LAST
-        // keepRecent block.
-        break;
-      }
-    } else if (turnsFromEnd === keepRecent) {
-      // Same canonical text as the keepRecent-th-from-end turn — this
-      // is an earlier @vp-variant of that same turn. Extend candidate
-      // backwards to include it.
-      candidateIdx = i;
-    }
-  }
-  return candidateIdx;
+  const idx = indexOfNthTurnFromEnd(messages, keepRecent);
+  // `indexOfNthTurnFromEnd` returns -1 when there are fewer turns than
+  // requested — historical contract is the same. Pass through.
+  return idx;
 }
 
 /**

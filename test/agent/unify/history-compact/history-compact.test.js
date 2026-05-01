@@ -3,13 +3,20 @@
  *
  * Background: `agent/unify/web-bridge.js`'s flat `conversationMessages`
  * array grew unbounded — every fan-out turn snapshotted the whole thing
- * and fed it to every VP. The fix introduces token+turn-count triggers
- * (>20 turns OR >80K tokens) and a Claude-Code-style compact: replace
- * the prefix with a single user-role summary message, keep the last N
- * user→assistant arcs intact.
+ * and fed it to every VP. The fix introduces token-based triggers
+ * (>30K floor + >40 % of context-window OR >200K hard ceiling) and a
+ * Claude-Code-style compact: replace the prefix with a single user-role
+ * summary message, keep the last N user→assistant arcs intact.
+ *
+ * 2026-05-01 policy update: the original "turn count > 20" trigger was
+ * dropped — under a 30K-token soft floor, by the time you've sent 20
+ * user prompts that exceed 30K tokens the fractional-of-context
+ * threshold has already fired, so the turn check is dead code in the
+ * normal case. `turnLimit` is preserved as an explicit override so
+ * tests / future config can still exercise the turn-count path.
  *
  * These tests cover:
- *   - trigger evaluation (turn count, token count, neither, both)
+ *   - trigger evaluation (turn count override, token count, neither, both)
  *   - turn / token counting helpers
  *   - cut-index calculation with `keepRecent`
  *   - summarizer-input cleaning (drops tool, drops _compactSummary,
@@ -23,7 +30,8 @@
  *   - summarizer failure leaves history untouched
  *   - leading orphan tool messages in the tail are dropped (would 400
  *     the chat-completions adapter otherwise)
- *   - DEFAULTS match the user-stated policy (20 turns / 80K tokens)
+ *   - DEFAULTS match the user-stated policy (turn trigger off / 30K
+ *     soft floor / 40 % fractional / 200K ceiling)
  */
 
 import { describe, it, expect } from 'vitest';
@@ -45,10 +53,10 @@ import {
 // ─── Default policy ─────────────────────────────────────────────────
 
 describe('defaults match the user-stated policy', () => {
-  it('turn limit is 20', () => {
-    expect(DEFAULT_TURN_LIMIT).toBe(20);
+  it('turn limit is Infinity by default (turn trigger off)', () => {
+    expect(DEFAULT_TURN_LIMIT).toBe(Infinity);
   });
-  it('token limit is 80,000', () => {
+  it('token limit is 80,000 (40 % of 200K default context)', () => {
     expect(DEFAULT_TOKEN_LIMIT).toBe(80_000);
   });
   it('keepRecent is 2 user→assistant pairs by default', () => {
@@ -186,9 +194,10 @@ describe('shouldCompactHistory', () => {
       ms.push({ role: 'user', content: `q${i}` });
       ms.push({ role: 'assistant', content: `a${i}` });
     }
-    // Drop the 10K soft floor to exercise the turn-count path with
-    // small messages.
-    const r = shouldCompactHistory(ms, { minTokenFloor: 0 });
+    // Turn trigger is off by default (DEFAULT_TURN_LIMIT=Infinity); pin
+    // `turnLimit: 20` to exercise it explicitly. Drop the 30K soft floor
+    // too — the messages here are tiny.
+    const r = shouldCompactHistory(ms, { turnLimit: 20, minTokenFloor: 0 });
     expect(r.trigger).toBe(true);
     expect(r.reason).toBe('turn_count');
     expect(r.turnCount).toBe(22);
@@ -223,24 +232,29 @@ describe('shouldCompactHistory', () => {
       // doesn't collapse them.
       ms.push({ role: 'user', content: 'x'.repeat(20_000) + ` q${i}` });
     }
-    const r = shouldCompactHistory(ms);
+    // Turn trigger is opt-in now — pin it so we can assert the priority
+    // ordering between turn_count and token_threshold.
+    const r = shouldCompactHistory(ms, { turnLimit: 20 });
     expect(r.trigger).toBe(true);
     // Both fire, but turn_count is checked first.
     expect(r.reason).toBe('turn_count');
   });
 
-  // ─── 2026-05-01 policy: 10K soft floor + 40 % fractional + 200K ceiling ───
-  it('does NOT compact when total tokens are below the 10K soft floor', () => {
-    // 22 small turns: clearly past the turn limit, but tokens < 10K.
+  // ─── 2026-05-01 policy: 30K soft floor + 40 % fractional + 200K ceiling ───
+  it('does NOT compact when total tokens are below the 30K soft floor', () => {
+    // 22 small turns: well past the 20-turn override, but tokens < 30K.
+    // With the turn trigger OFF by default this trivially won't compact,
+    // so we ALSO pin `turnLimit: 20` to confirm the floor takes priority
+    // over an explicitly-enabled turn-count trigger.
     const ms = [];
     for (let i = 0; i < 22; i++) {
       ms.push({ role: 'user', content: `q${i}` });
       ms.push({ role: 'assistant', content: `a${i}` });
     }
-    const r = shouldCompactHistory(ms);
+    const r = shouldCompactHistory(ms, { turnLimit: 20 });
     expect(r.trigger).toBe(false);
     expect(r.reason).toBe(null);
-    expect(r.tokenCount).toBeLessThan(10_000);
+    expect(r.tokenCount).toBeLessThan(30_000);
     expect(r.turnCount).toBe(22); // soft floor wins over turn count
   });
 
@@ -504,8 +518,10 @@ describe('compactHistory (end-to-end)', () => {
       expect(prompt).toContain('q0');
       return '- decisions made\n- facts learned';
     };
-    // minTokenFloor=0 to exercise the turn-count path with small messages.
-    const r = await compactHistory(ms, { summarize, minTokenFloor: 0 });
+    // Turn trigger is opt-in (DEFAULT_TURN_LIMIT=Infinity) — pin
+    // `turnLimit: 20` to exercise the turn-count path. minTokenFloor=0
+    // because the messages are tiny.
+    const r = await compactHistory(ms, { summarize, turnLimit: 20, minTokenFloor: 0 });
     expect(r.compacted).toBe(true);
     expect(r.reason).toBe('turn_count');
     expect(summarizeCalls).toBe(1);
@@ -547,7 +563,7 @@ describe('compactHistory (end-to-end)', () => {
       ms.push({ role: 'assistant', content: `a${i}` });
     }
     const summarize = async () => { throw new Error('LLM down'); };
-    const r = await compactHistory(ms, { summarize, minTokenFloor: 0 });
+    const r = await compactHistory(ms, { summarize, turnLimit: 20, minTokenFloor: 0 });
     expect(r.compacted).toBe(false);
     expect(r.messages).toBe(ms);
     expect(r.error).toBe('LLM down');
@@ -562,7 +578,7 @@ describe('compactHistory (end-to-end)', () => {
     // LLM returned empty / whitespace — must NOT replace history with
     // a "(no summary produced)" placeholder.
     const summarize = async () => '   \n\n  ';
-    const r = await compactHistory(ms, { summarize, minTokenFloor: 0 });
+    const r = await compactHistory(ms, { summarize, turnLimit: 20, minTokenFloor: 0 });
     expect(r.compacted).toBe(false);
     expect(r.messages).toBe(ms);
     expect(r.error).toBe('empty summary');
@@ -583,7 +599,7 @@ describe('compactHistory (end-to-end)', () => {
       ms.push({ role: 'assistant', content: `a${i}` });
     }
     const summarize = async () => 'summary';
-    const r = await compactHistory(ms, { summarize, minTokenFloor: 0 });
+    const r = await compactHistory(ms, { summarize, turnLimit: 20, minTokenFloor: 0 });
     expect(r.compacted).toBe(true);
     // First message after summary must NOT be tool-role.
     expect(r.messages[0]._compactSummary).toBe(true);
@@ -598,7 +614,7 @@ describe('compactHistory (end-to-end)', () => {
     }
     const original = [...ms];
     const summarize = async () => 'summary';
-    await compactHistory(ms, { summarize, minTokenFloor: 0 });
+    await compactHistory(ms, { summarize, turnLimit: 20, minTokenFloor: 0 });
     expect(ms).toEqual(original);
   });
 
@@ -609,7 +625,7 @@ describe('compactHistory (end-to-end)', () => {
       ms.push({ role: 'assistant', content: `a${i}` });
     }
     const summarize = async () => 'summary';
-    const r = await compactHistory(ms, { summarize, keepRecent: 1, minTokenFloor: 0 });
+    const r = await compactHistory(ms, { summarize, keepRecent: 1, turnLimit: 20, minTokenFloor: 0 });
     expect(r.compacted).toBe(true);
     // Tail = last 1 user→assistant pair = 2 messages, plus summary = 3
     expect(r.messages.length).toBe(3);
@@ -656,7 +672,7 @@ describe('compactHistory (end-to-end)', () => {
     ms.push({ role: 'assistant', content: 'a21' });
 
     const summarize = async () => 'summary';
-    const r = await compactHistory(ms, { summarize, minTokenFloor: 0 });
+    const r = await compactHistory(ms, { summarize, turnLimit: 20, minTokenFloor: 0 });
     expect(r.compacted).toBe(true);
     // No assistant in the result should retain an unmatched tool_use,
     // and no `role:'tool'` should appear without its preceding tool_use.
