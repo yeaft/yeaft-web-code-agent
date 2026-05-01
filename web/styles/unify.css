@@ -1437,6 +1437,58 @@
   .unify-topbar {
     padding: 6px 10px;
   }
+
+  /* task-fix-mobile-group-settings: show the topbar hamburger so users
+     can re-open the sidebar after a group/task selection collapses it. */
+  .unify-topbar-sidebar-toggle {
+    display: flex;
+  }
+}
+
+/* task-fix-mobile-group-settings: topbar hamburger — hidden on desktop
+   (the V2 sidebar header has its own collapse control), shown on mobile
+   via the @media block above. Mirrors `.header-sidebar-toggle` chrome. */
+.unify-topbar-sidebar-toggle {
+  display: none;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary, #555);
+  border-radius: 6px;
+  cursor: pointer;
+  flex-shrink: 0;
+  margin-right: 4px;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.unify-topbar-sidebar-toggle:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+/* task-fix-mobile-group-settings: topbar group ⚙ — opens the unified
+   GroupSettingsModal for the active group. Visible on every viewport
+   (no hover-reveal) so touch users always have a settings entry-point.
+   Sits inside `.unify-topbar-right` next to clear/debug/detail. */
+.unify-topbar-group-settings {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary, #555);
+  border-radius: 6px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.unify-topbar-group-settings:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
 }
 
 /* =====================================================
