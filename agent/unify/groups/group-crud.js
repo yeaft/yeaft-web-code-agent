@@ -163,6 +163,26 @@ export function renameGroup(yeaftDir, groupId, newName) {
 }
 
 /**
+ * (A.2.b) Update announcement — group-wide system-prompt prefix shared by
+ * every VP in the group (CLAUDE.md-style). Empty/whitespace clears it.
+ *
+ * `text` must be a string. Trimmed before persist so leading/trailing
+ * whitespace doesn't pollute the prompt.
+ */
+export function updateGroupAnnouncement(yeaftDir, groupId, text) {
+  if (typeof text !== 'string') {
+    throw new GroupCrudError('invalid_announcement', groupId);
+  }
+  const announcement = text.trim();
+  const handle = requireGroup(yeaftDir, groupId);
+  const meta = handle.getMeta();
+  handle.saveMeta({ ...meta, announcement });
+  const next = handle.getMeta();
+  handle.close();
+  return next;
+}
+
+/**
  * (A.3) Archive — renames the dir to `.archived-<ts>-<id>`. Directory
  * prefix `.` keeps `listGroups` from picking it up (readdirSync filter in
  * the caller). Reversible: user can rename back manually for recovery.
