@@ -127,7 +127,7 @@ export default {
             {{ $t('unify.group.empty.cta') }}
           </button>
         </div>
-        <MessageList v-if="!showSettings && !store.unifyActiveVpDetailId && !isActiveGroupEmpty" />
+        <MessageList v-if="!showSettings && !store.unifyActiveVpDetailId && !isActiveGroupEmpty" @open-group-settings="openGroupSettings" />
 
         <!-- Settings Panel -->
         <UnifySettings v-if="showSettings" :initial-tab="settingsInitialTab" @close="showSettings = false" @saved="onSettingsSaved" />
@@ -632,12 +632,7 @@ export default {
     const groupSettingsOpen = Vue.ref(false);
     const groupSettingsId = Vue.ref(null);
     const groupSettingsSection = Vue.ref('announcement');
-    const openGroupSettings = (payload) => {
-      // Accept either a string groupId or an object { groupId, section }.
-      const groupId = typeof payload === 'string'
-        ? payload
-        : (payload && payload.groupId) || null;
-      const section = (payload && typeof payload === 'object' && payload.section) || 'announcement';
+    const openGroupSettings = ({ groupId, section = 'announcement' } = {}) => {
       if (!groupId) return;
       groupSettingsId.value = groupId;
       groupSettingsSection.value = section;
@@ -654,20 +649,9 @@ export default {
       if (!groupId) return;
       openGroupSettings({ groupId, section: 'members' });
     };
-    const closeMemberEditor = () => closeGroupSettings();
-    // External open-settings signal from MessageList → GroupAnnouncementBar.
-    // The store sets `pendingGroupSettingsRequest` as a one-shot { groupId,
-    // section, at } object; we react to `at` so duplicate clicks still
-    // re-open the modal.
-    Vue.watch(
-      () => store.pendingGroupSettingsRequest && store.pendingGroupSettingsRequest.at,
-      () => {
-        const req = store.pendingGroupSettingsRequest;
-        if (!req || !req.groupId) return;
-        openGroupSettings({ groupId: req.groupId, section: req.section || 'announcement' });
-        store.pendingGroupSettingsRequest = null;
-      },
-    );
+    // I6: closeMemberEditor shim was unused — dropped. openMemberEditor
+    // remains because GroupInviteModal's "open library" CTA still calls
+    // it (see line 622, onInviteOpenLibrary).
     // Re-arm the prompt whenever the active roster transitions back to
     // empty (i.e. after the user removed the last member), so the modal
     // fires again next time `activeNeedsInvite` flips true.
@@ -749,9 +733,8 @@ export default {
       groupSettingsSection,
       openGroupSettings,
       closeGroupSettings,
-      // Backwards-compat shims.
+      // Backwards-compat shim — onInviteOpenLibrary still calls this.
       openMemberEditor,
-      closeMemberEditor,
     };
   }
 };

@@ -114,7 +114,7 @@ export default {
       }
     },
     onOpenSettings() {
-      this.$emit('open-settings', this.groupId);
+      this.$emit('open-settings', { groupId: this.groupId, section: 'announcement' });
     },
   },
   template: `
@@ -195,7 +195,7 @@ export default {
             <button
               type="button"
               class="group-announcement-bar__save"
-              :disabled="busy"
+              :disabled="busy || draft === announcement"
               @click="saveEdit"
             >{{ busy ? $t('unify.group.announcement.saving') : $t('common.save') }}</button>
           </div>

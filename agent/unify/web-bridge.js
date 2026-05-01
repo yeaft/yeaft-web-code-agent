@@ -321,25 +321,34 @@ export function handleUnifyRenameGroup(msg) {
 
 /**
  * `unify_update_group` — generalised group meta patch. Currently accepts
- * `name` and `announcement` keys. Empty patch is rejected. Either field
- * being a string triggers the corresponding CRUD call; both can land in
- * the same op for atomicity from the user's perspective (the second write
- * wins on conflict, which is fine — the UI binds save buttons per pane).
+ * `name` and `announcement` keys. Empty patch is rejected; an empty/
+ * whitespace-only `name` is also rejected up front rather than letting
+ * `renameGroup` raise a less-specific error deeper in the call stack.
+ *
+ * Partial-success contract: when a single patch contains BOTH `name` and
+ * `announcement`, the rename is committed first; if the announcement
+ * write throws, the rename has already persisted on disk and the client
+ * receives `ok:false` for the announcement error — i.e. the WS op is not
+ * atomic. Today's UI binds Save buttons per pane in `GroupSettingsModal`
+ * so this is theoretical; readers extending the patch shape should know
+ * the contract permits half-commits.
  */
 export function handleUnifyUpdateGroup(msg) {
   const requestId = msg && msg.requestId;
   const groupId = msg && msg.groupId;
   const patch = (msg && msg.patch && typeof msg.patch === 'object') ? msg.patch : null;
   try {
-    if (!patch || (typeof patch.name !== 'string' && typeof patch.announcement !== 'string')) {
+    const hasName = patch && typeof patch.name === 'string' && patch.name.trim().length > 0;
+    const hasAnnouncement = patch && typeof patch.announcement === 'string';
+    if (!patch || (!hasName && !hasAnnouncement)) {
       throw new GroupCrudError('invalid_patch', groupId);
     }
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     let group = null;
-    if (typeof patch.name === 'string') {
+    if (hasName) {
       group = renameGroup(yeaftDir, groupId, patch.name);
     }
-    if (typeof patch.announcement === 'string') {
+    if (hasAnnouncement) {
       group = updateGroupAnnouncement(yeaftDir, groupId, patch.announcement);
     }
     sendGroupCrudResult({ op: 'update', requestId, ok: true, group });
@@ -943,16 +952,24 @@ export async function handleUnifyGroupChat(msg) {
  * Build the per-query VP context for the Engine.
  */
 export function buildVpQueryOpts({ vpId, groupCoordinator, groupId }) {
+  // Read the group meta once and reuse for both defaultVpId fallback and
+  // announcement injection. Each .getMeta() reload reads + parses the
+  // group.json file, so calling it twice per turn is wasteful — and
+  // (more importantly) opens a window where a concurrent group edit
+  // could land between the two reads, giving the engine a defaultVpId
+  // from one snapshot and an announcement from a newer one.
+  let groupMeta = null;
+  try {
+    groupMeta = groupCoordinator && groupCoordinator.group
+      && typeof groupCoordinator.group.getMeta === 'function'
+      ? groupCoordinator.group.getMeta() : null;
+  } catch { /* coordinator inspection is best-effort */ }
+
   let resolvedVpId = vpId;
   if (!resolvedVpId) {
-    try {
-      const meta = groupCoordinator && groupCoordinator.group
-        && typeof groupCoordinator.group.getMeta === 'function'
-        ? groupCoordinator.group.getMeta() : null;
-      if (meta && typeof meta.defaultVpId === 'string' && meta.defaultVpId) {
-        resolvedVpId = meta.defaultVpId;
-      }
-    } catch { /* coordinator inspection is best-effort */ }
+    if (groupMeta && typeof groupMeta.defaultVpId === 'string' && groupMeta.defaultVpId) {
+      resolvedVpId = groupMeta.defaultVpId;
+    }
   }
   if (!resolvedVpId) {
     const cfgDefault = session?.config?.defaultVpId;
@@ -977,14 +994,9 @@ export function buildVpQueryOpts({ vpId, groupCoordinator, groupId }) {
   // task-334-group-editor: surface the group announcement to the engine so
   // buildWorkerPrompt can inject it as a CLAUDE.md-style shared prefix.
   // Empty/missing reads as '' and prompts.js skips the section.
-  try {
-    const meta = groupCoordinator && groupCoordinator.group
-      && typeof groupCoordinator.group.getMeta === 'function'
-      ? groupCoordinator.group.getMeta() : null;
-    if (meta && typeof meta.announcement === 'string') {
-      out.groupAnnouncement = meta.announcement;
-    }
-  } catch { /* announcement read is best-effort */ }
+  if (groupMeta && typeof groupMeta.announcement === 'string') {
+    out.groupAnnouncement = groupMeta.announcement;
+  }
   try {
     const vp = readVp(resolvedVpId);
     if (vp) {

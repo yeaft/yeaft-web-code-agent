@@ -117,11 +117,27 @@ export default {
       this.deleteConfirmText = '';
     },
     groupId() {
-      // Reset state if parent re-targets a different group while open.
+      // Reset state when parent re-targets a different group while
+      // open. Note: don't rely on the section() watcher to reseed
+      // drafts — it doesn't fire when section is already equal to
+      // initialSection. Seed directly here so the user never sees a
+      // momentary empty input.
       this.section = this.initialSection;
-      this.announcementDraft = '';
-      this.renameDraft = '';
+      this.announcementDraft = this.announcement;
+      this.renameDraft = this.groupDisplayName;
       this.deleteConfirmText = '';
+      this.announcementError = '';
+      this.renameError = '';
+      this.membersError = '';
+      this.deleteError = '';
+    },
+    // I3: auto-close when the group disappears (deleted from another
+    // tab, archived by agent, etc.) so the user isn't stuck on a stale
+    // shell with a blank title and disabled buttons.
+    group(next, prev) {
+      if (prev && !next && !this.deleteBusy) {
+        this.requestClose();
+      }
     },
   },
   mounted() {
@@ -224,7 +240,16 @@ export default {
           this.membersError = this.$t('unify.group.members.actionFailed', { error: message });
         } else if (op === 'add_member' && !this.defaultVpId) {
           // First-add convenience: promote to default automatically.
-          await this.chat.groupCrudRequest('set_default_vp', { groupId: this.groupId, vpId });
+          // Surface failures inline like the primary toggle — silent
+          // retries hide bugs in the agent's roster mutator.
+          const defRes = await this.chat.groupCrudRequest('set_default_vp', {
+            groupId: this.groupId, vpId,
+          });
+          if (defRes && !defRes.ok) {
+            const code2 = (defRes.error && defRes.error.code) || 'unknown';
+            const message2 = (defRes.error && defRes.error.message) || code2;
+            this.membersError = this.$t('unify.group.members.actionFailed', { error: message2 });
+          }
         }
       } finally {
         this.membersBusy = false;
@@ -286,6 +311,7 @@ export default {
             class="group-settings-close"
             type="button"
             @click="requestClose"
+            :disabled="announcementBusy || renameBusy || membersBusy || deleteBusy"
             :aria-label="$t('unify.group.settings.close')"
           >×</button>
         </header>

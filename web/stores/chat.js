@@ -230,11 +230,9 @@ export const useChatStore = defineStore('chat', {
     // setting one clears the other so the view has a single predicate.
     unifyActiveGroupFilter: null,
 
-    // One-shot signal raised when MessageList's GroupAnnouncementBar (or
-    // the sidebar ⚙ button) requests opening the unified GroupSettingsModal.
-    // Shape: { groupId, section, at }. UnifyPage watches this, opens the
-    // modal, then clears the signal. Null means no pending request.
-    pendingGroupSettingsRequest: null,
+    // (PR #693 review I4 + Fowler M2: removed `pendingGroupSettingsRequest`
+    // store-as-event-bus field — replaced by a normal emit chain since
+    // MessageList is mounted directly inside UnifyPage.)
 
     // Bug 1: in-flight SEND-context group, set transiently by
     // handleUnifyOutput before dispatching streaming chunks. Read by

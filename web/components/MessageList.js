@@ -455,7 +455,7 @@ export default {
     </main>
   `,
   emits: ['new-conversation', 'resume-conversation', 'open-settings', 'open-group-settings'],
-  setup() {
+  setup(_props, ctx) {
     const store = Pinia.useChatStore();
     const containerRef = Vue.ref(null);
 
@@ -1206,19 +1206,18 @@ export default {
       store.enterVpDetailView(vpId);
     };
 
-    // GroupAnnouncementBar's "open settings" link bubbles a request up to
-    // the parent page (UnifyPage) so the unified GroupSettingsModal can be
-    // opened with the right group id and an initial section focus.
-    const onOpenGroupSettings = (groupId) => {
-      if (!groupId) return;
-      // Stash a one-shot request the page picks up via watcher. We attach
-      // it to the store so siblings can read the same signal without prop
-      // drilling. Cleared on consume by UnifyPage.
-      store.pendingGroupSettingsRequest = {
-        groupId,
-        section: 'announcement',
-        at: Date.now(),
-      };
+    // GroupAnnouncementBar's "open settings" link bubbles a request up
+    // to the parent page (UnifyPage) so the unified GroupSettingsModal
+    // can be opened with the right group id and an initial section
+    // focus. MessageList is mounted directly inside UnifyPage, so a
+    // normal emit chain — rather than a store-as-bus signal — is the
+    // simpler path. UnifyPage listens for `@open-group-settings`.
+    const onOpenGroupSettings = (payload) => {
+      const norm = typeof payload === 'string'
+        ? { groupId: payload, section: 'announcement' }
+        : (payload || {});
+      if (!norm.groupId) return;
+      ctx.emit('open-group-settings', norm);
     };
 
     return {
