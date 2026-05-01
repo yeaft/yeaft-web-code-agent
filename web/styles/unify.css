@@ -816,52 +816,54 @@
   color: var(--text-primary);
 }
 
-/* task-344: detail/concise toggle chip in debug header */
+/* Detail/concise toggle chip — borderless, hover-only bg, matches secondary buttons. */
 .unify-debug-toggle-chip {
   margin-left: auto;
   padding: 2px 10px;
   font-size: 11px;
   line-height: 1.5;
-  border: 1px solid var(--border-color, #ddd);
+  border: none;
   background: transparent;
-  color: var(--text-secondary, #666);
+  color: var(--text-muted);
   border-radius: 10px;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: background 0.15s, color 0.15s;
 }
 .unify-debug-toggle-chip:hover {
-  border-color: var(--accent);
-  color: var(--accent);
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
 }
 .unify-debug-toggle-chip.active {
-  background: var(--accent);
-  color: var(--accent-fg);
-  border-color: var(--accent);
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
 }
 
 .unify-debug-pre-raw {
   max-height: 400px;
   overflow: auto;
   font-size: 11px;
-  background: var(--bg-subtle, #f6f8fa);
-  padding: 8px;
-  border-radius: 4px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  background: var(--code-bg, var(--bg-input-wrapper));
+  color: var(--code-text, var(--text-secondary));
+  padding: 10px 12px;
+  border-radius: 6px;
   white-space: pre-wrap;
-  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 
 .unify-debug-count {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-muted);
-  background: var(--bg-input-wrapper);
-  padding: 2px 8px;
-  border-radius: 10px;
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  font-variant-numeric: tabular-nums;
 }
 
 .unify-debug-turns {
   flex: 1;
   overflow-y: auto;
-  padding: 8px;
+  padding: 4px 12px 16px;
 }
 
 .unify-debug-empty {
@@ -873,24 +875,29 @@
   font-size: 13px;
 }
 
+/* No card chrome — just spacing + a hairline between turns. */
 .unify-debug-turn {
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  margin-bottom: 6px;
-  overflow: hidden;
+  border: none;
+  border-radius: 0;
+  margin: 0;
+  padding: 4px 0 8px;
+  border-bottom: 1px solid var(--border-light);
+}
+.unify-debug-turn:last-child {
+  border-bottom: none;
 }
 
-/* task-345: align body font sizes to Chat right-panel tokens
-   (12px secondary lines; 11px for compact stats). Monospace reserved to JSON/ID regions. */
 .unify-debug-turn-header {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 10px;
+  gap: 8px;
+  padding: 8px 6px;
+  margin: 0 -6px;
+  border-radius: 6px;
   cursor: pointer;
   font-size: 12px;
   color: var(--text-secondary);
-  background: var(--bg-input-wrapper);
+  background: transparent;
   user-select: none;
   transition: background 0.15s;
 }
@@ -926,11 +933,11 @@
 }
 
 .unify-debug-turn-body {
-  padding: 8px 10px;
+  padding: 4px 6px 4px 22px; /* indent past the chevron column */
 }
 
 .unify-debug-section {
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
 .unify-debug-section:last-child {
@@ -938,27 +945,30 @@
 }
 
 .unify-debug-section-title {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
   color: var(--text-muted);
-  margin-bottom: 4px;
 }
 
+/* Block-level pre (assistant text, system prompt, etc.) — render
+   like a real code block, not an inline form field. Matches the
+   tokens used by .unify-debug-pre-raw above. */
 .unify-debug-pre {
-  background: var(--bg-main);
-  border: 1px solid var(--border-color);
+  background: var(--code-bg, var(--bg-input-wrapper));
+  border: none;
   border-radius: 6px;
-  padding: 8px;
-  font-family: 'SF Mono', 'Fira Code', monospace;
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--text-secondary);
+  padding: 10px 12px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--code-text, var(--text-secondary));
   white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 200px;
+  overflow-wrap: anywhere; /* never break_all — preserves token shapes */
+  max-height: 240px;
   overflow-y: auto;
+  margin: 4px 0 0;
 }
 
 .unify-debug-token-row {
@@ -977,22 +987,23 @@
 .unify-debug-messages {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 .unify-debug-msg {
   display: flex;
   flex-direction: column;
   gap: 4px;
   padding: 6px 8px;
-  background: var(--bg-main);
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  border-left: 1px solid var(--border-light);
 }
 .unify-debug-msg-head {
   display: flex;
   gap: 8px;
   align-items: baseline;
-  font-size: 12px;
+  font-size: 11.5px;
 }
 .unify-debug-msg-role {
   font-weight: 600;
@@ -1000,7 +1011,7 @@
 }
 .unify-debug-msg-callid {
   color: var(--text-muted);
-  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-family: var(--font-mono);
   font-size: 10px;
 }
 .unify-debug-msg-err {
@@ -1012,13 +1023,17 @@
 }
 .unify-debug-tc > summary {
   cursor: pointer;
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--text-secondary);
   padding: 2px 0;
+  list-style: none;
+}
+.unify-debug-tc > summary::-webkit-details-marker {
+  display: none;
 }
 .unify-debug-tc-id {
   color: var(--text-muted);
-  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-family: var(--font-mono);
   font-size: 10px;
 }
 .unify-debug-pre-args {
@@ -1028,47 +1043,55 @@
 .unify-debug-fncalls {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 .unify-debug-fncall {
-  padding: 6px 8px;
-  background: var(--bg-main);
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
+  padding: 4px 8px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  border-left: 1px solid var(--border-light);
 }
 .unify-debug-fncall-head {
   display: flex;
   gap: 8px;
   align-items: baseline;
-  margin-bottom: 4px;
-  font-size: 12px;
+  margin-bottom: 2px;
+  font-size: 11.5px;
 }
 .unify-debug-fncall-num {
   color: var(--text-muted);
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 .unify-debug-fncall-name {
   color: var(--text-secondary);
   font-weight: 600;
+  font-family: var(--font-mono);
 }
 .unify-debug-fncall-id {
   color: var(--text-muted);
-  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-family: var(--font-mono);
   font-size: 10px;
 }
 .unify-debug-fncall-pending { color: var(--text-muted); font-size: 11px; }
-.unify-debug-fncall-ok      { color: var(--success); font-size: 12px; }
-.unify-debug-fncall-err     { color: var(--error); font-size: 12px; }
+.unify-debug-fncall-ok      { color: var(--success); font-size: 11.5px; }
+.unify-debug-fncall-err     { color: var(--error); font-size: 11.5px; }
 .unify-debug-fncall > details > summary {
   cursor: pointer;
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--text-secondary);
   padding: 2px 0;
+  list-style: none;
+}
+.unify-debug-fncall > details > summary::-webkit-details-marker {
+  display: none;
 }
 .unify-debug-empty-inline {
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--text-muted);
   padding: 4px 0;
+  font-style: italic;
 }
 
 /* ── UnifySettings Panel ── */
@@ -1818,7 +1841,7 @@
 .unify-debug-turn-prompt {
   flex: 1 1 auto;
   font-size: 12px;
-  color: var(--text-primary, #1f1f1f);
+  color: var(--text-primary);
   font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1827,19 +1850,24 @@
 
 .unify-debug-turn-stats {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   font-size: 11px;
-  color: var(--text-tertiary, #888);
+  color: var(--text-muted);
   align-items: center;
+  font-variant-numeric: tabular-nums;
 }
 
+/* Chip-less chips: no background, no padding, just muted mono text.
+   The visual hierarchy comes from the prompt being darker/heavier than
+   the metadata, not from boxes around each metric. */
 .unify-debug-turn-vp,
 .unify-debug-turn-group {
-  padding: 1px 6px;
-  background: var(--surface-soft, #eef0f4);
-  border-radius: 4px;
-  color: var(--text-secondary, #555);
-  font-size: 10px;
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-family: var(--font-mono, ui-monospace, monospace);
 }
 
 .unify-debug-turn-loopcount,
@@ -1852,7 +1880,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 0;
+  padding: 2px 0 4px;
   font-size: 12px;
 }
 
@@ -1864,26 +1892,33 @@
 .unify-debug-section-meta {
   flex: 1 1 auto;
   font-size: 11px;
-  color: var(--text-tertiary, #888);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
+/* One unified secondary-button style. Borderless, hover-only background.
+   `.small` keeps the same shape — it just dials the size down a notch. */
 .unify-debug-copy-btn,
 .unify-debug-show-btn {
   flex: 0 0 auto;
   padding: 2px 8px;
   font-size: 11px;
-  border: 1px solid var(--border-soft, #e1e4e9);
-  background: var(--surface, #fff);
-  color: var(--text-secondary, #555);
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
   border-radius: 4px;
   cursor: pointer;
   font-family: inherit;
+  transition: background 0.15s, color 0.15s;
 }
 
 .unify-debug-copy-btn:hover,
 .unify-debug-show-btn:hover {
-  background: var(--surface-soft, #f6f7f9);
-  border-color: var(--border, #cfd2d8);
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
 }
 
 .unify-debug-copy-btn.small {
@@ -1892,15 +1927,18 @@
 }
 
 .unify-debug-copied-flash {
-  margin-left: auto;
+  margin-left: 8px;
   font-size: 11px;
-  color: var(--accent, #4a6df5);
-  font-style: italic;
+  color: var(--text-muted);
+  font-style: normal;
+  padding: 1px 8px;
+  background: var(--sidebar-hover);
+  border-radius: 10px;
 }
 
 .unify-debug-loop {
-  margin: 8px 0;
-  border-left: 2px solid var(--border-soft, #e1e4e9);
+  margin: 6px 0 4px;
+  border-left: 1px solid var(--border-light);
   padding-left: 10px;
 }
 
@@ -1909,77 +1947,89 @@
   align-items: center;
   gap: 8px;
   cursor: pointer;
-  padding: 4px 0;
+  padding: 4px 6px;
+  margin: 0 -6px;
+  border-radius: 4px;
   font-size: 12px;
+  transition: background 0.15s;
 }
 
 .unify-debug-loop-header:hover {
-  color: var(--text-primary, #1f1f1f);
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
 }
 
 .unify-debug-loop-num {
   font-weight: 600;
   flex: 0 0 auto;
+  color: var(--text-secondary);
 }
 
 .unify-debug-loop-model {
   font-size: 11px;
-  color: var(--text-tertiary, #888);
+  color: var(--text-muted);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .unify-debug-loop-stats {
   display: flex;
   gap: 10px;
   font-size: 11px;
-  color: var(--text-secondary, #666);
+  color: var(--text-muted);
   font-variant-numeric: tabular-nums;
   margin-left: auto;
   align-items: center;
+  flex: 0 0 auto;
 }
 
 .unify-debug-loop-meta {
-  color: var(--text-tertiary, #888);
+  color: var(--text-muted);
 }
 
 .unify-debug-loop-body {
   margin-top: 4px;
-  margin-left: 14px;
+  margin-left: 10px;
 }
 
 .unify-debug-tool-row {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   align-items: center;
   padding: 3px 0;
   font-size: 11px;
-  color: var(--text-secondary, #555);
+  color: var(--text-secondary);
 }
 
 .unify-debug-tool-num {
   flex: 0 0 auto;
-  color: var(--text-tertiary, #888);
+  color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
 
 .unify-debug-tool-name {
   flex: 0 0 auto;
   font-weight: 500;
-  color: var(--text-primary, #1f1f1f);
+  color: var(--text-primary);
+  font-family: var(--font-mono, ui-monospace, monospace);
 }
 
 .unify-debug-tool-status.ok {
-  color: var(--success, #2e7d32);
+  color: var(--success);
   font-weight: 600;
 }
 
 .unify-debug-tool-status.err {
-  color: var(--danger, #c0392b);
+  color: var(--error);
   font-weight: 600;
 }
 
 .unify-debug-tool-time {
   flex: 0 0 auto;
-  color: var(--text-tertiary, #888);
+  color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1995,35 +2045,68 @@
 }
 
 .unify-debug-mem-list code {
-  background: var(--surface-soft, #f6f7f9);
-  padding: 1px 4px;
+  background: var(--inline-code-bg, var(--sidebar-hover));
+  padding: 1px 5px;
   border-radius: 3px;
-  font-size: 10px;
+  font-size: 10.5px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--text-primary);
 }
 
 .unify-debug-mem-meta {
   margin-left: 8px;
-  color: var(--text-tertiary, #888);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
+/* Error body — render as a code block, not flowing text. Long JSON
+   error envelopes (Anthropic 400 / 4xx) are the most common payload
+   here, and `word-break: break-all` was chopping them mid-token. */
 .unify-debug-error {
-  font-size: 12px;
-  color: var(--danger, #c0392b);
-  padding: 4px 0;
+  font-size: 11.5px;
+  color: var(--error);
+  background: var(--code-bg, var(--bg-input-wrapper));
+  font-family: var(--font-mono, ui-monospace, monospace);
+  line-height: 1.5;
+  padding: 10px 12px;
+  border-radius: 6px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 240px;
+  overflow-y: auto;
+  margin: 4px 0 0;
 }
 
 .unify-debug-pre-soft {
-  background: var(--surface-soft, #f6f7f9);
-  border-radius: 4px;
-  padding: 8px;
-  font-size: 11px;
-  max-height: 200px;
+  background: var(--code-bg, var(--bg-input-wrapper));
+  color: var(--code-text, var(--text-secondary));
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 240px;
   overflow: auto;
+  margin: 4px 0 0;
 }
 
+/* RAW row — buttons on the title line, URL/status on its own muted
+   monospace line below. Avoids the previous "all-on-one-line" cram. */
 .unify-debug-raw-row {
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px 10px;
   align-items: center;
   font-size: 11px;
+}
+
+.unify-debug-raw-row .unify-debug-section-meta {
+  flex: 1 1 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--text-muted);
+  padding-top: 2px;
 }
