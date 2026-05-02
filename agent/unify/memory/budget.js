@@ -1,28 +1,35 @@
 /**
- * memory/budget.js — DESIGN-H2-AMS §5.2.
+ * memory/budget.js — DESIGN-PROMPT §3 ③ Memory.
  *
- * Memory budget = `min(50_000, modelMaxContext * 0.10)`.
+ * Memory budget = `min(100_000, modelMaxContext * 0.20)`.
  *
  * Then split across the three AMS layers (resident / recent / onDemand)
- * with a configurable ratio. The defaults are tuned for ~200k context
- * models (Claude / GPT-5):
+ * with a configurable ratio. The defaults are tuned per DESIGN-PROMPT §3
+ * (Resident gets the largest share because UserProfile + CoreMemory
+ * collapse into Resident now):
  *
- *   resident   40%   →  20k   (all relevant scope summaries)
- *   recent     25%   →  12.5k (LRU of recently-used segments)
- *   onDemand   35%   →  17.5k (this turn's FTS recall)
+ *   resident   60%   →  24k of a 40k pool (Layer-A summaries +
+ *                                          UserProfile + CoreMemory pinned)
+ *   recent     15%   →  6k                (LRU of recently-used segments)
+ *   onDemand   25%   →  10k               (this turn's FTS recall)
+ *
+ * Concrete budgets for common models:
+ *   200K context → 40K total (20% × 200K)
+ *   1M  context → 100K total (capped)
+ *   128K context → 25.6K total
  *
  * Token counting here is approximate (chars / 4) — accurate enough for
  * budget enforcement. The engine has a real tokenizer for prompt
  * assembly; budget here is a guard rail, not the source of truth.
  */
 
-export const ABSOLUTE_CAP = 50_000;
-export const MODEL_FRACTION = 0.10;
+export const ABSOLUTE_CAP = 100_000;
+export const MODEL_FRACTION = 0.20;
 
 export const DEFAULT_RATIO = {
-  resident: 0.40,
-  recent:   0.25,
-  onDemand: 0.35,
+  resident: 0.60,
+  recent:   0.15,
+  onDemand: 0.25,
 };
 
 /**

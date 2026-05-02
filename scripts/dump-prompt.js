@@ -168,13 +168,19 @@ function approxTokens(s) {
  * Note: buildSystemPrompt always emits an identity+date+mode core; there is
  * no "no-mode" variant. We bundle those into a single "core" row and show
  * mode-only delta by diffing the requested mode against the alternate.
+ *
+ * `compactSummary` is no longer part of the system prompt (DESIGN-PROMPT
+ * §4.3 — it now belongs in the messages array head). The param is retained
+ * here as a diagnostic input but does not affect system-prompt size; the
+ * `compact` row is now reported as 0 chars / 0 tokens.
  */
 function measureSections({ mode, language, memoryInjection, compactSummary, skillContent, toolNames }) {
+  void compactSummary; // accepted for back-compat with callers; no longer routed into system prompt
   const core = buildSystemPrompt({ language, mode });
   const withTools = buildSystemPrompt({ language, mode, toolNames });
   const withSkill = buildSystemPrompt({ language, mode, toolNames, skillContent });
   const withMemory = buildSystemPrompt({ language, mode, toolNames, skillContent, memoryInjection });
-  const full = buildSystemPrompt({ language, mode, toolNames, skillContent, memoryInjection, compactSummary });
+  const full = withMemory; // compactSummary is no longer a system-prompt section
 
   const altMode = mode === 'dream' ? 'unified' : 'dream';
   const coreAlt = buildSystemPrompt({ language, mode: altMode });
@@ -183,7 +189,7 @@ function measureSections({ mode, language, memoryInjection, compactSummary, skil
   const toolsDelta = withTools.length - core.length;
   const skillDelta = withSkill.length - withTools.length;
   const memoryDelta = withMemory.length - withSkill.length;
-  const compactDelta = full.length - withMemory.length;
+  const compactDelta = 0;
 
   return {
     core: { chars: core.length, tokens: approxTokens(core), note: 'identity + date + mode template' },
@@ -191,7 +197,7 @@ function measureSections({ mode, language, memoryInjection, compactSummary, skil
     toolsBlock: { chars: toolsDelta, tokens: approxTokens('x'.repeat(Math.max(0, toolsDelta))) },
     skills: { chars: skillDelta, tokens: approxTokens('x'.repeat(Math.max(0, skillDelta))) },
     memory: { chars: memoryDelta, tokens: approxTokens('x'.repeat(Math.max(0, memoryDelta))) },
-    compact: { chars: compactDelta, tokens: approxTokens('x'.repeat(Math.max(0, compactDelta))) },
+    compact: { chars: compactDelta, tokens: 0, note: 'moved to messages head — DESIGN-PROMPT §4.3' },
     totalChars: full.length,
     totalTokens: approxTokens(full),
     fullPrompt: full,

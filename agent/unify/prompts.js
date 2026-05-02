@@ -7,22 +7,24 @@
  * Template files from agent/unify/templates/ are loaded once at startup
  * and used to enrich the system prompt beyond the hardcoded fallbacks.
  *
- * Phase 2 additions:
- *   - Memory section (recalled segments via H2-AMS pre-flow)
- *   - Compact summary section (conversation history summary)
+ * Concept layering (DESIGN-PROMPT §3):
+ *   ① Identity      — VP persona body (or Yeaft fallback)
+ *   ② Rules         — group announcement, date, mode template, tools,
+ *                     tool-guidance, skills, common rules
+ *   ③ Memory        — single block produced upstream by the AMS render
+ *                     outlet and threaded through here as `memoryInjection`
+ *   ④ Active Scope  — structured per-turn scope summary
+ *                     (feature / group / vp / envelope IDs)
  *
- * Memory injection (H2-AMS):
- *   - `memoryInjection` carries prebuilt FTS-recall text from
- *     `memory/preflow.js` over the relevant scopes (user/group/vp/feature/
- *     global). Engine passes it every turn after preflow runs.
- *
- * Reference: yeaft-unify-system-prompt-budget.md — Static + Dynamic + Context layers
+ * The compact summary, user_profile, and core_memory blocks that used to
+ * live inside the system prompt are GONE. Compact summary is now part of
+ * the messages timeline; user_profile + core_memory have been folded into
+ * AMS Resident.
  */
 
 import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { homedir } from 'os';
 
 // ─── Template Loading (one-time at startup) ──────────────────────
 
@@ -169,18 +171,13 @@ const PROMPTS = {
     date: (d) => `Date: ${d}`,
     dream: 'You are in dream mode. Reflect on past conversations and consolidate memories.',
     tools: (names) => `Available tools: ${names}`,
-    memoryHeader: '## User Memory',
-    profileHeader: '### User Profile',
-    recalledHeader: '### Recalled Memories',
-    compactHeader: '## Conversation History Summary',
-    // task-334e — new section headers
+    // task-334e — task-context section header (sub-block of Active Scope)
     taskCtxHeader: '## task_ctx',
     taskCtxRelatedHeader: '### related tasks',
     taskCtxSummaryReminder: (min, count) =>
       `💡 ${min}min since last summary (+${count} new messages). Consider calling \`task_summary_post\`.`,
-    userProfileHeader: '## user_profile',
-    coreMemoryHeader: '## core_memory',
-    coreMemoryMeta: 'To open the original message behind any entry above, call `memory_trace`.',
+    // DESIGN-PROMPT §3 ④ — Active Scope header
+    activeScopeHeader: '## active_scope',
     vpPersonaIntro: (name, role) =>
       `You ARE **${name}**${role ? ` (${role})` : ''}. Speak in the first person as ${name}; do not refer to yourself as "Yeaft" or as a generic AI assistant. The text below is your identity, expertise, and decision style.`,
   },
@@ -189,18 +186,13 @@ const PROMPTS = {
     date: (d) => `日期：${d}`,
     dream: '你处于梦境模式。回顾过去的对话，整理和巩固记忆。',
     tools: (names) => `可用工具：${names}`,
-    memoryHeader: '## 用户记忆',
-    profileHeader: '### 用户画像',
-    recalledHeader: '### 相关记忆',
-    compactHeader: '## 对话历史摘要',
-    // task-334e — new section headers
+    // task-334e — task-context section header (sub-block of Active Scope)
     taskCtxHeader: '## task_ctx',
     taskCtxRelatedHeader: '### 相关任务',
     taskCtxSummaryReminder: (min, count) =>
       `💡 距上次 summary 已过 ${min}min，新增 ${count} 条消息，建议调用 \`task_summary_post\`。`,
-    userProfileHeader: '## user_profile',
-    coreMemoryHeader: '## core_memory',
-    coreMemoryMeta: '如需原始 message，调 `memory_trace`。',
+    // DESIGN-PROMPT §3 ④ — Active Scope header
+    activeScopeHeader: '## active_scope',
     vpPersonaIntro: (name, role) =>
       `你就是 **${name}**${role ? `（${role}）` : ''}。请以 ${name} 的第一人称发言；不要自称 "Yeaft" 或泛指的 AI 助手。下面的文字是你的身份、专业方向与判断风格。`,
   },
@@ -217,19 +209,18 @@ export const SUPPORTED_LANGUAGES = Object.keys(PROMPTS);
  * — only `mode === 'dream'` triggers the dream-mode template (used by background
  * memory maintenance); all other values fall through to unified mode.
  *
- * Prompt structure:
- *   1. Core identity (from template or fallback)
- *   2. Date metadata
- *   3. Mode-specific behavioral instructions (unified, or dream)
- *   4. Tool list + tool guidance (from template)
- *   5. Skills section
- *   6. Memory section
- *   7. Compact summary section
- *   8. Task context section (task-334e §Δ24.5 + §Δ27.3 + §Δ31.4)
- *   9. User profile section (task-334e §Δ29.3 stub)
- *  10. Core memory section (task-334e §Δ24.5)
+ * Prompt structure (DESIGN-PROMPT §3):
+ *   ① Identity      — Core identity (persona or Yeaft fallback)
+ *   ② Rules         — Group announcement, date, mode, tools, guidance, skills
+ *   ③ Memory        — Single block produced by the AMS render outlet
+ *                     (callers pass it as `memoryInjection`).
+ *   ④ Active Scope  — Structured per-turn scope summary
+ *                     (feature / group / vp / envelope IDs).
+ *   (Task context lives inside Active Scope; the previous standalone
+ *    user_profile / core_memory blocks are gone — those signals now
+ *    arrive through AMS Resident.)
  *
- * task-334e params:
+ * task-334e taskCtx is preserved as a sub-block of Active Scope:
  *   @param {object} [taskCtx] — per-task context
  *   @param {string} [taskCtx.taskId]
  *   @param {string} [taskCtx.currentVpId] — used for ACL + initiator check
@@ -244,29 +235,24 @@ export const SUPPORTED_LANGUAGES = Object.keys(PROMPTS);
  *   @param {number} [taskCtx.summaryReminder.lastSummaryAt] — epoch ms (0/missing = never)
  *   @param {number} [taskCtx.summaryReminder.now] — override clock (tests), default Date.now()
  *
- *   @param {string} [userProfile] — explicit profile content (334l path);
- *     when omitted we read `~/.yeaft/user/profile.json` `{ content }` as stub.
- *   @param {{ entries?: Array<{body:string, shard?:string}>, max?: number }} [coreMemory]
- *     — recalled memory entries; we render top-7 bodies + meta line.
- *
- *   @param {boolean} [memoryTraceAvailable=false] — feature flag gating the
- *     "call memory_trace" meta line in the core_memory block. Defaults to
- *     false so we don't point VPs at an unimplemented tool (prev-3 Nit-2 /
- *     PM-approved Option A). 334f will flip this to `true` from session.js
- *     once `memory_trace` ships; this slice stays decoupled from session.js.
+ *   Active Scope params (DESIGN-PROMPT §3 ④):
+ *   @param {object} [activeScope] — structured scope summary for this turn
+ *   @param {string|null} [activeScope.featureId]   currently active feature, or null
+ *   @param {string} [activeScope.featureTitle]      short title for human display
+ *   @param {string} [activeScope.groupId]
+ *   @param {string} [activeScope.vpId]
+ *   @param {object} [activeScope.envelope]          inbound routing info (sender, intent)
  *
  * @param {{
  *   language?: string,
  *   mode?: string,
  *   toolNames?: string[],
- *   memory?: { profile?: string, entries?: object[] },
  *   memoryInjection?: string,
- *   compactSummary?: string,
  *   skillContent?: string,
  *   taskCtx?: object,
- *   userProfile?: string,
- *   coreMemory?: object,
- *   memoryTraceAvailable?: boolean,
+ *   activeScope?: object,
+ *   vpPersona?: object,
+ *   groupAnnouncement?: string,
  * }} params
  * @returns {string}
  */
@@ -274,14 +260,10 @@ export function buildSystemPrompt({
   language = 'en',
   mode,
   toolNames = [],
-  memory,
   memoryInjection,
-  compactSummary,
   skillContent,
   taskCtx,
-  userProfile,
-  coreMemory,
-  memoryTraceAvailable = false,
+  activeScope,
   vpPersona,
   groupAnnouncement = '',
 } = {}) {
@@ -351,30 +333,28 @@ export function buildSystemPrompt({
     parts.push(skillContent);
   }
 
-  // ─── 6. Memory Section ─────────────────────────────────
-  // FTS5 pre-flow recall + AMS snapshot are concatenated upstream by the
-  // engine into a single `memoryInjection` block. The legacy entries-based
-  // memory.profile / memory.entries shape was retired in the H2-AMS rip.
+  // ─── 6. Memory Section (DESIGN-PROMPT §3 ③) ────────────
+  // The Memory section has a SINGLE render outlet. Callers compose the
+  // block upstream by rendering the AMS snapshot (Resident + Recent +
+  // OnDemand) and passing the result here as `memoryInjection`. The
+  // legacy multi-path injection (FTS-formatted + AMS snapshot +
+  // renderLayerASummaries + renderUserProfile + renderCoreMemory) was
+  // retired in DESIGN-PROMPT v1: it produced 2-3× duplicated content
+  // for the same `summary.md` payload.
   if (memoryInjection && memoryInjection.trim()) {
     parts.push(memoryInjection.trim());
   }
 
-  // ─── 7. Compact Summary Section ────────────────────────
-  if (compactSummary) {
-    parts.push(`${lang.compactHeader}\n${compactSummary}`);
-  }
+  // ─── 7. Active Scope (DESIGN-PROMPT §3 ④) ──────────────
+  // Structured per-turn scope summary. taskCtx is rendered as a
+  // sub-block of Active Scope (when supplied), and the new
+  // feature/group/vp/envelope identifiers are rendered as a leading
+  // line.
+  const activeScopeBlock = renderActiveScope(activeScope, lang);
+  if (activeScopeBlock) parts.push(activeScopeBlock);
 
-  // ─── 8. Task Context Section (task-334e §Δ24.5 / §Δ27.3 / §Δ31.4) ─
   const taskCtxBlock = renderTaskCtx(taskCtx, lang);
   if (taskCtxBlock) parts.push(taskCtxBlock);
-
-  // ─── 9. User Profile Section (task-334e §Δ29.3 stub) ───
-  const profileBlock = renderUserProfile(userProfile, lang);
-  if (profileBlock) parts.push(profileBlock);
-
-  // ─── 10. Core Memory Section (task-334e §Δ24.5) ────────
-  const coreMemBlock = renderCoreMemory(coreMemory, lang, memoryTraceAvailable);
-  if (coreMemBlock) parts.push(coreMemBlock);
 
   return parts.join('\n\n');
 }
@@ -418,7 +398,6 @@ function renderVpPersona(vpPersona, lang) {
 const DEFAULT_TASK_MEMORY_TOP = 5;
 const DEFAULT_RELATED_TASK_TOP = 3;
 const DEFAULT_RELATED_TASK_MEMORY_TOP = 2;
-const DEFAULT_CORE_MEMORY_TOP = 7;
 // task-334n §Δ31.4 — tightened reminder gate:
 //   (a) currentVpId === initiatorVpId
 //   (b) task.members.length >= 2  (multi-VP only)
@@ -559,94 +538,114 @@ function renderSummaryReminder(taskCtx, lang) {
 }
 
 /**
- * Render `## user_profile` block. If the caller passed an explicit string,
- * we use it verbatim (that's the 334l path). Otherwise we stub-read from
- * `~/.yeaft/user/profile.json` (`{ content: "..." }`) per §Δ29.3. Any IO
- * error is swallowed — this is best-effort context, not critical path.
+ * Render `## active_scope` block (DESIGN-PROMPT §3 ④).
+ *
+ * Active Scope is a structured, deterministic, bounded block telling the
+ * LLM what scope the current turn lives in. It is NOT memory; long-form
+ * scope content (decisions, history) flows through AMS — Active Scope
+ * carries only IDs + tiny labels.
+ *
+ * Schema:
+ *   ## active_scope
+ *   feature: <featureId> "<title>"   (omitted when null/empty)
+ *   group:   <groupId>               (omitted when missing)
+ *   vp:      <vpId>                  (omitted when missing)
+ *   envelope: from=<sender> intent=<intent>   (omitted when no envelope)
+ *
+ * Returns '' when the input has no useful field — we don't emit an empty
+ * header. featureId is allowed to be `null` (DESIGN-PROMPT §5.1 — T4
+ * Scope Tagging is a placeholder; not every turn lives in a feature).
+ *
+ * @param {object} [activeScope]
+ * @param {string|null} [activeScope.featureId]
+ * @param {string} [activeScope.featureTitle]
+ * @param {string} [activeScope.groupId]
+ * @param {string} [activeScope.vpId]
+ * @param {object} [activeScope.envelope]   inbound routing summary
+ * @param {object} lang
+ * @returns {string}
  */
-function renderUserProfile(userProfile, lang) {
-  let content = '';
-  if (typeof userProfile === 'string' && userProfile.trim()) {
-    content = userProfile.trim();
-  } else if (userProfile == null) {
-    content = readUserProfileStub();
-  }
-  if (!content) return '';
-  return `${lang.userProfileHeader}\n${content}`;
-}
+function renderActiveScope(activeScope, lang) {
+  if (!activeScope || typeof activeScope !== 'object') return '';
 
-function readUserProfileStub() {
-  try {
-    const path = join(homedir(), '.yeaft', 'user', 'profile.json');
-    if (!existsSync(path)) return '';
-    const raw = readFileSync(path, 'utf8');
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed.content === 'string') return parsed.content.trim();
-    return '';
-  } catch {
-    // File missing, unreadable, malformed JSON, or non-string content.
-    // Stub is best-effort — fall through silently.
-    return '';
+  const lines = [];
+  const feature = typeof activeScope.featureId === 'string' && activeScope.featureId.trim()
+    ? activeScope.featureId.trim()
+    : null;
+  if (feature) {
+    // Escape embedded `"` in featureTitle so a title like `Onboard "v2"` does
+    // not produce a malformed `feature: f1 "Onboard "v2""` line. Titles come
+    // from user / agent input — assume nothing.
+    const title = typeof activeScope.featureTitle === 'string' && activeScope.featureTitle.trim()
+      ? ` "${activeScope.featureTitle.trim().replace(/"/g, '\\"')}"`
+      : '';
+    lines.push(`feature: ${feature}${title}`);
   }
+  const group = typeof activeScope.groupId === 'string' && activeScope.groupId.trim()
+    ? activeScope.groupId.trim()
+    : '';
+  if (group) lines.push(`group: ${group}`);
+
+  const vp = typeof activeScope.vpId === 'string' && activeScope.vpId.trim()
+    ? activeScope.vpId.trim()
+    : '';
+  if (vp) lines.push(`vp: ${vp}`);
+
+  const envLine = renderEnvelopeLine(activeScope.envelope);
+  if (envLine) lines.push(`envelope: ${envLine}`);
+
+  if (lines.length === 0) return '';
+
+  return `${lang.activeScopeHeader}\n${lines.join('\n')}`;
 }
 
 /**
- * Render `## core_memory` block with recall top-7 bodies + (optional) meta line.
+ * Render a one-line envelope summary. Pulls the small set of routing
+ * fields we surface to the LLM (sender, intent, originating user) and
+ * leaves the rest in AMS. Returns '' when the envelope carries no
+ * useful signal.
  *
- * Accepts `{ entries: [{body,shard}], max?: number }`. Never renders
- * `sourceRef`. The "call memory_trace" meta line is gated by
- * `memoryTraceAvailable` (prev-3 Nit-2 / PM-approved Option A): when the
- * `memory_trace` tool is not yet implemented (334f), we omit the meta line
- * entirely so the LLM does not try to call a non-existent tool. 334f will
- * flip the flag to `true` when it wires session.js.
+ * @param {object|null|undefined} envelope
+ * @returns {string}
  */
-function renderCoreMemory(coreMemory, lang, memoryTraceAvailable) {
-  if (!coreMemory || typeof coreMemory !== 'object') return '';
-  const entries = Array.isArray(coreMemory.entries) ? coreMemory.entries : [];
-  if (entries.length === 0) return '';
-  const max = Number.isFinite(coreMemory.max) && coreMemory.max > 0
-    ? Math.floor(coreMemory.max)
-    : DEFAULT_CORE_MEMORY_TOP;
-
-  const lines = [lang.coreMemoryHeader];
-  let shown = 0;
-  for (const e of entries) {
-    if (shown >= max) break;
-    const body = typeof e?.body === 'string' ? e.body.trim() : '';
-    if (!body) continue;
-    const shard = typeof e?.shard === 'string' && e.shard.trim() ? e.shard.trim() : 'general';
-    lines.push(`- [${shard}] ${body}`);
-    shown += 1;
-  }
-  if (shown === 0) return '';
-  if (memoryTraceAvailable) {
-    lines.push('');
-    lines.push(lang.coreMemoryMeta);
-  }
-  return lines.join('\n');
+function renderEnvelopeLine(envelope) {
+  if (!envelope || typeof envelope !== 'object') return '';
+  const segments = [];
+  const fromVp = typeof envelope.fromVpId === 'string' && envelope.fromVpId.trim()
+    ? envelope.fromVpId.trim()
+    : (typeof envelope.senderVpId === 'string' ? envelope.senderVpId.trim() : '');
+  if (fromVp) segments.push(`from=${fromVp}`);
+  const fromUser = typeof envelope.fromUserId === 'string' && envelope.fromUserId.trim()
+    ? envelope.fromUserId.trim()
+    : '';
+  if (fromUser) segments.push(`user=${fromUser}`);
+  const intent = typeof envelope.intent === 'string' && envelope.intent.trim()
+    ? envelope.intent.trim()
+    : '';
+  if (intent) segments.push(`intent=${intent}`);
+  return segments.join(' ');
 }
 
 // ─── Phase 1: Worker / Router prompt splits ──────────────────────
 //
 // DESIGN.md (multi-VP redesign) describes two distinct prompt shapes:
 //
-//   • Worker prompt — what a VP sees when it executes a turn. Layered as
-//     A (identity + summaries) / B (router-preselected memory) / C (task
-//     scope) / D (turn scope).
+//   • Worker prompt — what a VP sees when it executes a turn. The
+//     DESIGN-PROMPT v1 refactor collapsed the previous A/B/C/D layered
+//     shape into a single AMS-driven Memory block: AMS Resident now
+//     carries Layer-A summaries + UserProfile + CoreMemory, AMS OnDemand
+//     carries the per-turn FTS hits. The worker shape that survives is:
+//       harness/worker-shape   — optional descriptive metadata
+//       buildSystemPrompt(...) — ① Identity ② Rules ③ Memory ④ Active Scope
+//       optional taskScope/turnScope — caller-provided pass-through strings
+//     `renderLayerASummaries` is no longer called inside the worker prompt
+//     because AMS already renders the same summaries — calling both was
+//     the duplicate-render bug DESIGN-PROMPT §6.1 #2 set out to fix.
+//
 //   • Router prompt — what the per-VP Router sees before it decides
-//     plans[]. Identity-summary layer + recent group state, no task /
-//     turn-scope detail.
-//
-// To stay backwards-compatible with existing callers we KEEP
-// `buildSystemPrompt` and treat the two new entry points as thin wrappers
-// that:
-//   1) compose Layer-A summaries (user / group / vp) into the right
-//      headed sections, and
-//   2) prepend the matching harness/*-shape.md fragment when present.
-//
-// Subsequent phases will migrate engine.js / router.js to these entry
-// points and start filling Layers B / C with the new memory tree. For
-// now they exist primarily so tests can pin the contract.
+//     plans[]. This is a separate, smaller LLM call that does not run
+//     AMS, so it still uses `renderLayerASummaries` directly to surface
+//     the three Layer-A summaries inline.
 
 const LAYER_A_HEADERS = {
   en: {
@@ -663,8 +662,11 @@ const LAYER_A_HEADERS = {
 
 /**
  * Render Layer A's three rolling summaries (user / group / vp). Each is
- * optional; missing or empty strings are skipped. Headers follow the
- * `## summary_<scope>` convention so Layer-B/C/D headers don't collide.
+ * optional; missing or empty strings are skipped.
+ *
+ * Used by the Router prompt path only — the Worker prompt path receives
+ * the same summaries through AMS Resident (see DESIGN-PROMPT §3 ③) and
+ * MUST NOT call this in addition.
  *
  * @param {{user?: string, group?: string, vp?: string}} summaries
  * @param {'en'|'zh'} language
@@ -683,26 +685,22 @@ export function renderLayerASummaries(summaries, language = 'en') {
 }
 
 /**
- * Worker prompt entry point (DESIGN.md Phase 1).
+ * Worker prompt entry point.
  *
- * Layered output:
- *   harness/worker-shape   — what each layer means (optional fragment)
- *   Layer A — buildSystemPrompt(...) output (identity + persona + Layer-A
- *             summaries via `summaries`)
- *   Layer B — `preselectedMemory` block (router-supplied)
- *   Layer C — `taskScope` block (active task summary + related-task window)
- *   Layer D — `turnScope` block (inbound envelope, in-flight turn notes)
+ * Output sections (DESIGN-PROMPT §3 layered concepts):
+ *   harness/worker-shape (optional)   — descriptive metadata
+ *   buildSystemPrompt(...)             — ① Identity ② Rules ③ Memory ④ Active Scope
  *
- * Layers B/C/D are passed in as already-rendered strings so this builder
- * stays free of memory-store / task-store IO. Phase 2/3 will provide the
- * real renderers; for now any caller can stub them.
+ * Earlier task-322 / task-334e variants accepted `taskScope` and
+ * `turnScope` pass-through strings so callers could append their own
+ * scope blocks. DESIGN-PROMPT v1 retired that surface — Active Scope is
+ * now structured (`activeScope: { featureId, groupId, vpId, envelope }`)
+ * and rendered by `buildSystemPrompt` itself. Both pass-through params
+ * had zero remaining callers when v1 landed; removing them prevents the
+ * "two ways to describe scope" drift §1 set out to eliminate.
  *
  * @param {{
  *   language?: 'en'|'zh',
- *   summaries?: {user?: string, group?: string, vp?: string},
- *   preselectedMemory?: string,
- *   taskScope?: string,
- *   turnScope?: string,
  *   includeShape?: boolean,
  *   ...rest: import('./prompts.js').buildSystemPrompt
  * }} params
@@ -711,10 +709,6 @@ export function renderLayerASummaries(summaries, language = 'en') {
 export function buildWorkerPrompt(params = {}) {
   const {
     language = 'en',
-    summaries,
-    preselectedMemory,
-    taskScope,
-    turnScope,
     includeShape = true,
     ...rest
   } = params;
@@ -727,26 +721,9 @@ export function buildWorkerPrompt(params = {}) {
     if (shape) parts.push(shape);
   }
 
-  // Layer A — base + persona + summaries.
+  // Identity + Rules + Memory + Active Scope (DESIGN-PROMPT §3).
   const baseBlock = buildSystemPrompt({ ...rest, language });
   if (baseBlock) parts.push(baseBlock);
-  const summaryBlock = renderLayerASummaries(summaries, language);
-  if (summaryBlock) parts.push(summaryBlock);
-
-  // Layer B — router-preselected memory entries (rendered upstream).
-  if (typeof preselectedMemory === 'string' && preselectedMemory.trim()) {
-    parts.push(preselectedMemory.trim());
-  }
-
-  // Layer C — task scope.
-  if (typeof taskScope === 'string' && taskScope.trim()) {
-    parts.push(taskScope.trim());
-  }
-
-  // Layer D — turn scope (inbound envelope, in-flight turn notes).
-  if (typeof turnScope === 'string' && turnScope.trim()) {
-    parts.push(turnScope.trim());
-  }
 
   return parts.join('\n\n');
 }
