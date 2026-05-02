@@ -89,29 +89,39 @@ memoryBudget = min(maxContextTokens × 0.20, 100_000 tokens)
 
 ```
 ③ Memory
-   ├─ Resident   常驻知识（永远在 prompt 里，pin 优先）
-   │   ├─ Layer-A summaries：user/group/vp 的 summary.md
-   │   ├─ UserProfile：归并进 Resident（不再单独渲染）
-   │   └─ CoreMemory：归并进 Resident，标记 pinned
+   ├─ Resident   常驻知识（永远在 prompt 里）
+   │   └─ Layer-A summaries：user/group/vp 的 summary.md
    ├─ Recent     最近 N 轮触碰过的 segments（LRU 容量上限）
    └─ OnDemand   本轮 FTS 召回的 segments
 ```
+
+> **历史脚注（v1 实现状态）**：早期草稿曾计划把 `UserProfile` / `CoreMemory`
+> 也合并进 Resident 并以 `pinned` 标记区分优先级。落地时这两条数据源已
+> 在前序提交中废弃 —— 用户偏好与核心记忆现在统一通过 `summary.md`（由
+> dream consolidation 维护）流入 Layer-A，不再需要单独入口。`pinned`
+> 字段同步推迟，等真正出现"必须置顶的常驻条目"再落实。当前 Resident 结构
+> 即 `{ scope, summary }`，没有 pinned。
 
 **渲染契约**：
 
 - 只有 `ams.renderForPrompt()`（或等价方法）能写 Memory 块
 - engine 不再有第二条渲染路径——`recallResult.formatted` 不再直接注入 system prompt
-- `renderLayerASummaries / renderUserProfile / renderCoreMemory` 全部废弃
+- `renderLayerASummaries / renderUserProfile / renderCoreMemory` 在 Worker
+  prompt 中废弃；`renderUserProfile` / `renderCoreMemory` 已删除
+- **Router 例外**：Router prompt 是一条独立的轻量 LLM 调用，**不跑 AMS**
+  （它只决定 plans[]，不消费 segments），因此仍然直接调
+  `renderLayerASummaries(summaries)` 把三条 Layer-A summary 平铺进 Router
+  的 system 上下文。这是**有意保留的例外**，不是迁移漏网。如果将来 Router
+  也接入 AMS（让它能看到 OnDemand），这个例外会被一并清理
 
 **写入路径**（每轮 pre-flow）：
 
 ```js
+// engine.js#runQuery — 真实落地形态
 ams.setResident([
-  { scope:'user',          summary: layerASummaries.user,  pinned: false },
-  { scope:`group/${gid}`,  summary: layerASummaries.group, pinned: false },
-  { scope:`vp/${vpId}`,    summary: layerASummaries.vp,    pinned: false },
-  ...userProfileEntries,                                          // pinned: false
-  ...coreMemoryEntries,                                           // pinned: true
+  { scope:'user',          summary: layerASummaries.user  },
+  { scope:`group/${gid}`,  summary: layerASummaries.group },
+  { scope:`vp/${vpId}`,    summary: layerASummaries.vp    },
 ]);
 ams.setOnDemand(ftsRecallEntries);          // FTS 命中
 // recent 由各轮自然 LRU
@@ -120,7 +130,7 @@ const memoryBlock = ams.renderForPrompt();  // 唯一渲染出口
 
 **Budget 切分**（AMS 内部，按 `memoryBudget` 比例打包）：
 
-- Resident：60%（pinned 优先保留，剩余按 scope 顺序打包）
+- Resident：60%（按 scope 顺序打包；`pinned` 字段尚未实现）
 - Recent：15%
 - OnDemand：25%
 
@@ -226,9 +236,9 @@ messages: [
 | # | 位置 | 问题 | 修复 |
 |---|---|---|---|
 | 1 | `engine.js:953-957` | `recallResult.formatted` 直接拼进 `memoryInjection` | 删除——FTS 结果只通过 AMS OnDemand 出口 |
-| 2 | `prompts.js:733-734` `buildWorkerPrompt` | 调 `renderLayerASummaries(summaries)` 第二次渲染 summary.md | 删除调用；`renderLayerASummaries` 函数也删 |
+| 2 | `prompts.js:733-734` `buildWorkerPrompt` | 调 `renderLayerASummaries(summaries)` 第二次渲染 summary.md | 从 Worker prompt 中删除调用；函数本身保留供 Router 使用（Router 不跑 AMS——见 §3 ③ Router 例外） |
 | 3 | `prompts.js:362-365` | `compactSummary` 拼在 system prompt | 移到 messages 数组头部 |
-| 4 | `prompts.js:371-377` | `renderUserProfile / renderCoreMemory` 各自独立块 | 并入 AMS Resident（pin 标记） |
+| 4 | `prompts.js:371-377` | `renderUserProfile / renderCoreMemory` 各自独立块 | 函数与其依赖的 lang headers 一并删除；UserProfile/CoreMemory 数据源在前序提交中已废弃，统一通过 `summary.md` 流入 Layer-A（见 §3 ③ 历史脚注） |
 | 5 | `memory/budget.js` | budget = `min(50K, ctx × 0.10)` | 改为 `min(100K, ctx × 0.20)` |
 
 ### 6.2 Phase 化（每个 Phase 单独 PR）

@@ -119,6 +119,23 @@ describe('Active Scope rendering (DESIGN-PROMPT §3 ④)', () => {
     expect(out).toMatch(/## active_scope\nvp: alice/);
     expect(out).not.toMatch(/group:/);
   });
+
+  it('escapes embedded `"` in featureTitle so the line stays well-formed', () => {
+    // Titles come from user / agent input — assume nothing. A title like
+    // `Onboard "v2"` must not produce `feature: f1 "Onboard "v2""`.
+    const out = buildSystemPrompt({
+      language: 'en',
+      toolNames: ['bash'],
+      activeScope: { featureId: 'f1', featureTitle: 'Onboard "v2"' },
+    });
+    expect(out).toMatch(/feature: f1 "Onboard \\"v2\\""/);
+    // Sanity: there is exactly one un-escaped opening quote and one
+    // un-escaped closing quote per feature line.
+    const featureLine = out.split('\n').find((l) => l.startsWith('feature: '));
+    expect(featureLine).toBeTruthy();
+    const unescapedQuotes = featureLine.replace(/\\"/g, '').match(/"/g) || [];
+    expect(unescapedQuotes.length).toBe(2);
+  });
 });
 
 describe('Memory section single outlet (DESIGN-PROMPT §3 ③)', () => {

@@ -573,8 +573,11 @@ function renderActiveScope(activeScope, lang) {
     ? activeScope.featureId.trim()
     : null;
   if (feature) {
+    // Escape embedded `"` in featureTitle so a title like `Onboard "v2"` does
+    // not produce a malformed `feature: f1 "Onboard "v2""` line. Titles come
+    // from user / agent input — assume nothing.
     const title = typeof activeScope.featureTitle === 'string' && activeScope.featureTitle.trim()
-      ? ` "${activeScope.featureTitle.trim()}"`
+      ? ` "${activeScope.featureTitle.trim().replace(/"/g, '\\"')}"`
       : '';
     lines.push(`feature: ${feature}${title}`);
   }
@@ -687,18 +690,17 @@ export function renderLayerASummaries(summaries, language = 'en') {
  * Output sections (DESIGN-PROMPT §3 layered concepts):
  *   harness/worker-shape (optional)   — descriptive metadata
  *   buildSystemPrompt(...)             — ① Identity ② Rules ③ Memory ④ Active Scope
- *   taskScope (optional pass-through)  — caller-provided string
- *   turnScope (optional pass-through)  — caller-provided string
  *
- * `taskScope` and `turnScope` are caller-rendered strings retained for
- * back-compat with callers that still build their own scope blocks. The
- * preferred path is for the engine to build a structured `activeScope`
- * object and let `buildSystemPrompt` render it.
+ * Earlier task-322 / task-334e variants accepted `taskScope` and
+ * `turnScope` pass-through strings so callers could append their own
+ * scope blocks. DESIGN-PROMPT v1 retired that surface — Active Scope is
+ * now structured (`activeScope: { featureId, groupId, vpId, envelope }`)
+ * and rendered by `buildSystemPrompt` itself. Both pass-through params
+ * had zero remaining callers when v1 landed; removing them prevents the
+ * "two ways to describe scope" drift §1 set out to eliminate.
  *
  * @param {{
  *   language?: 'en'|'zh',
- *   taskScope?: string,
- *   turnScope?: string,
  *   includeShape?: boolean,
  *   ...rest: import('./prompts.js').buildSystemPrompt
  * }} params
@@ -707,8 +709,6 @@ export function renderLayerASummaries(summaries, language = 'en') {
 export function buildWorkerPrompt(params = {}) {
   const {
     language = 'en',
-    taskScope,
-    turnScope,
     includeShape = true,
     ...rest
   } = params;
@@ -724,15 +724,6 @@ export function buildWorkerPrompt(params = {}) {
   // Identity + Rules + Memory + Active Scope (DESIGN-PROMPT §3).
   const baseBlock = buildSystemPrompt({ ...rest, language });
   if (baseBlock) parts.push(baseBlock);
-
-  // Pass-through scope blocks (back-compat for callers still building
-  // their own task / turn scope strings; preferred path is `activeScope`).
-  if (typeof taskScope === 'string' && taskScope.trim()) {
-    parts.push(taskScope.trim());
-  }
-  if (typeof turnScope === 'string' && turnScope.trim()) {
-    parts.push(turnScope.trim());
-  }
 
   return parts.join('\n\n');
 }

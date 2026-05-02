@@ -558,15 +558,16 @@ export class Engine {
    *   - Adds the structured Active Scope block (`activeScope`)
    *   - Forwards optional `taskCtx` for the legacy task-context sub-block
    *
-   * @param {string} prompt — user prompt (for skill relevance matching)
-   * @param {string} memoryInjection — prebuilt Memory block from AMS
-   * @param {object} [vpPersona]
-   * @param {object} [activeScope] — DESIGN-PROMPT §3 ④ structured scope summary
-   * @param {string} [groupAnnouncement]
-   * @param {object} [taskCtx] — legacy task-context sub-block (optional)
+   * @param {object} args
+   * @param {string} args.prompt — user prompt (for skill relevance matching)
+   * @param {string} args.memoryInjection — prebuilt Memory block from AMS
+   * @param {object} [args.vpPersona]
+   * @param {object} [args.activeScope] — DESIGN-PROMPT §3 ④ structured scope summary
+   * @param {string} [args.groupAnnouncement]
+   * @param {object} [args.taskCtx] — legacy task-context sub-block (optional)
    * @returns {string}
    */
-  #buildSystemPrompt(prompt, memoryInjection, vpPersona, activeScope, groupAnnouncement, taskCtx) {
+  #buildSystemPrompt({ prompt, memoryInjection, vpPersona, activeScope, groupAnnouncement, taskCtx } = {}) {
     // Get relevant skill content if SkillManager is wired
     let skillContent = '';
     if (this.#skillManager && prompt) {
@@ -1009,14 +1010,19 @@ export class Engine {
       envelope: inboundEnvelope || null,
     };
 
-    const systemPrompt = this.#buildSystemPrompt(
+    const systemPrompt = this.#buildSystemPrompt({
       prompt,
       memoryInjection,
       vpPersona,
       activeScope,
       groupAnnouncement,
-      undefined, // taskCtx — not currently wired by query loop
-    );
+      // taskCtx is not currently wired by the query loop. The legacy
+      // task-context sub-block (renderTaskCtx, task-334e/334n contract) is
+      // retained behind a feature flag for callers that still build it
+      // upstream — it'll be folded into Active Scope or retired in a
+      // dedicated PR alongside the task-334n cleanup.
+      taskCtx: undefined,
+    });
 
     // ─── Compact summary as messages-array head (DESIGN-PROMPT §4.3) ─
     // The previous code placed the compact summary inside the system
@@ -1024,7 +1030,24 @@ export class Engine {
     // invalidated the entire system) and conflated identity/rules with
     // dialogue history. The compact summary is the product of compressing
     // older turns, so it belongs at the head of the messages array.
-    const compactSummary = this.#getCompactSummary();
+    //
+    // Note: this is a separate mechanism from `history-compact.js`'s
+    // `_compactSummary`-tagged user message. They never collide:
+    //   • THIS path injects a `<conversation_summary>` pair on every
+    //     query when conversationStore.readCompactSummary() returns text
+    //     (i.e. when a previous T1 run wrote one to disk). Engine reads,
+    //     does not produce.
+    //   • history-compact.js#compactHistory rewrites the in-memory
+    //     `messages` array, replacing cold messages with a single
+    //     `_compactSummary`-tagged user message. That path runs at a
+    //     different layer (web-bridge during a manual /compact) and never
+    //     touches `compactMessages` here.
+    // The two would only overlap if a tagged `_compactSummary` user
+    // message also matched the `<conversation_summary>` template — they
+    // don't, so duplication is impossible by construction.
+    const compactSummaryRaw = this.#getCompactSummary();
+    const compactSummary = typeof compactSummaryRaw === 'string'
+      ? compactSummaryRaw.trim() : '';
     const compactMessages = compactSummary
       ? [
           { role: 'user', content: `<conversation_summary>\n${compactSummary}\n</conversation_summary>` },

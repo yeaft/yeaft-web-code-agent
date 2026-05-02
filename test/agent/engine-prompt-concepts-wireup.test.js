@@ -84,6 +84,81 @@ describe('E-b compact summary placement (DESIGN-PROMPT §4.3)', () => {
     // Last message is always the new user prompt
     expect(msgs[msgs.length - 1]).toEqual({ role: 'user', content: 'next' });
   });
+
+  it('whitespace-only compact summary is treated as missing (no empty pair)', async () => {
+    // Defensive trim: if the store returns `'   '` (e.g. after a compact
+    // run produced an effectively-empty summary), we MUST NOT inject an
+    // empty `<conversation_summary>\n   \n</conversation_summary>` block.
+    const adapter = new CapturingAdapter();
+    const conversationStore = {
+      readCompactSummary: () => '   \n  \n',
+      readMessages: () => [],
+      readArchivedGroups: () => [],
+      replaceMessages: () => {},
+      updateCompactSummary: () => {},
+    };
+    const engine = mkEngine(adapter, { conversationStore });
+
+    for await (const _ of engine.query({ prompt: 'next', messages: [] })) { /* drain */ }
+
+    const msgs = adapter.calls[0].messages;
+    expect(msgs.length).toBe(1);
+    expect(msgs[0]).toEqual({ role: 'user', content: 'next' });
+    expect(msgs.some((m) => /<conversation_summary>/.test(m.content || ''))).toBe(false);
+  });
+
+  it('does not double-fire with history-compact `_compactSummary`-tagged messages', async () => {
+    // DESIGN-PROMPT §4.3: the compact summary placement at messages head
+    // is one mechanism; `history-compact.js` produces a separate
+    // `_compactSummary`-tagged user message that may land in the
+    // upstream messages array. They must NOT both render the same
+    // summary text into the wire payload.
+    const adapter = new CapturingAdapter();
+    const conversationStore = {
+      readCompactSummary: () => 'Earlier we discussed X.',
+      readMessages: () => [],
+      readArchivedGroups: () => [],
+      replaceMessages: () => {},
+      updateCompactSummary: () => {},
+    };
+    const engine = mkEngine(adapter, { conversationStore });
+
+    // Simulate a tagged history-compact summary already in messages.
+    const taggedSummary = {
+      role: 'user',
+      content:
+        'This session is being continued from a previous conversation. ' +
+        'The earlier context has been summarized for efficiency.\n\n' +
+        'Summary of conversation so far:\nEarlier we discussed X.\n\n' +
+        'Continue the conversation from where it left off without asking the user any further questions.',
+      _compactSummary: true,
+    };
+
+    for await (const _ of engine.query({
+      prompt: 'next',
+      messages: [taggedSummary],
+    })) { /* drain */ }
+
+    const msgs = adapter.calls[0].messages;
+    // The conversation_summary head pair is engine-injected from the
+    // store; it lives at indices 0+1.
+    expect(msgs[0].content).toMatch(/<conversation_summary>/);
+    expect(msgs[1]).toEqual({ role: 'assistant', content: 'Acknowledged.' });
+    // The tagged history-compact message rides in the body untouched —
+    // its wrapper text is distinct ("This session is being continued"),
+    // so the LLM sees two clearly different shapes, not a duplicate.
+    const taggedCount = msgs.filter((m) =>
+      typeof m.content === 'string' &&
+      m.content.includes('This session is being continued from a previous conversation')
+    ).length;
+    expect(taggedCount).toBe(1);
+    // And exactly one `<conversation_summary>` tag pair across the whole
+    // wire payload.
+    const csCount = msgs.filter((m) =>
+      typeof m.content === 'string' && /<conversation_summary>/.test(m.content)
+    ).length;
+    expect(csCount).toBe(1);
+  });
 });
 
 describe('E-c Active Scope is wired from engine context', () => {
