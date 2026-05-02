@@ -1375,6 +1375,58 @@
   .unify-detail {
     display: none;
   }
+
+  /* fix/unify-mobile-debug-panel: when debug mode is on, escalate the
+     detail panel to a fullscreen overlay so the toggle isn't a silent
+     no-op on tablets. The base 1024 rule above hides .unify-detail
+     unconditionally; .mobile-debug re-enables it as `display: flex`
+     and pins it over the chat surface. The selector specificity
+     (`.unify-detail.mobile-debug`) beats the bare `.unify-detail`
+     rule above, so this works without `!important`. */
+  .unify-detail.mobile-debug {
+    display: flex;
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: 100vw;
+    min-width: 0;
+    z-index: 110;
+    box-shadow: -4px 0 16px rgba(0, 0, 0, 0.2);
+  }
+
+  /* Drag handle is meaningless when the panel is fullscreen — hide it
+     so it can't intercept touches near the edge. */
+  .unify-detail.mobile-debug .unify-detail-drag-handle {
+    display: none;
+  }
+}
+
+/* fix/unify-mobile-debug-panel: in-panel close button, only rendered
+   (and only visible via @media) on narrow viewports because the topbar
+   toggle is occluded by the overlay. Apple-style icon button — neutral
+   chrome, hover lift. */
+.unify-debug-mobile-close {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.unify-debug-mobile-close:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
 }
 
 /* task-fix-mobile-group-settings: topbar hamburger — hidden on desktop
@@ -1446,6 +1498,13 @@
   /* Hide right panel */
   .unify-detail {
     display: none;
+  }
+
+  /* fix/unify-mobile-debug-panel: same overlay escalation for the
+     <=768 phone block. Without this, the 1024 override would be
+     beaten by the bare-selector rule directly above. */
+  .unify-detail.mobile-debug {
+    display: flex;
   }
 
   /* Show overlay backdrop when sidebar is open */

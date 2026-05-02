@@ -168,8 +168,19 @@ export default {
       </div>
 
       <!-- Right Detail Panel -->
-      <aside class="unify-detail" :class="{ collapsed: detailCollapsed, resizing: isResizingDetail }" :style="detailWidthStyle" ref="detailPanel">
+      <aside class="unify-detail" :class="{ collapsed: detailCollapsed, resizing: isResizingDetail, 'mobile-debug': debugMode && isNarrowDetail }" :style="detailWidthStyle" ref="detailPanel">
         <div class="unify-detail-drag-handle" :class="{ active: isResizingDetail }" @mousedown.prevent="startDetailResize"></div>
+        <!-- Mobile/tablet overlay: close affordance for the debug panel.
+             The topbar toggle is hidden behind the overlay on narrow
+             viewports so the user needs an in-panel exit. -->
+        <button
+          v-if="debugMode && isNarrowDetail"
+          class="unify-debug-mobile-close"
+          @click="toggleDebug"
+          :aria-label="$t('common.close')"
+        >
+          <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
         <!-- Debug Mode: rendered by the dedicated UnifyDebugPanel component
              (Turn -> Loop -> Tool tree, copy buttons, search + group filter,
              memory and raw payloads gated by detail mode). -->
@@ -308,9 +319,20 @@ export default {
       document.addEventListener('mouseup', onMouseUp);
     };
 
-    // Detect mobile for overlay behavior
+    // Detect mobile for overlay behavior.
+    //   isMobile        — sidebar overlay (<=768)
+    //   isNarrowDetail  — debug-panel overlay (<=1024). The base
+    //     responsive rule hides .unify-detail at 1024 and below, which
+    //     was making the debug toggle a no-op on tablets too. We mirror
+    //     that breakpoint here so the JS-driven overlay class is
+    //     applied on every viewport where CSS would otherwise hide the
+    //     panel.
     const isMobile = Vue.ref(window.innerWidth <= 768);
-    const onResize = () => { isMobile.value = window.innerWidth <= 768; };
+    const isNarrowDetail = Vue.ref(window.innerWidth <= 1024);
+    const onResize = () => {
+      isMobile.value = window.innerWidth <= 768;
+      isNarrowDetail.value = window.innerWidth <= 1024;
+    };
 
     // Esc cascade (H2.f.6: thread-filter layer removed):
     //   1) vp-detail view active → exit it first
@@ -615,6 +637,7 @@ export default {
       settingsInitialTab,
       openSettings,
       isMobile,
+      isNarrowDetail,
       detailPanel,
       isResizingDetail,
       detailWidthStyle,
