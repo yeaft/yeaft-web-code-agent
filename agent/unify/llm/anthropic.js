@@ -14,9 +14,6 @@ import {
   LLMServerError,
   LLMAbortError,
   redactRawRequest,
-  capRawRequest,
-  capRawString,
-  RAW_PAYLOAD_CAP_BYTES,
 } from './adapter.js';
 import {
   normalizeEffort,
@@ -184,9 +181,10 @@ export class AnthropicAdapter extends LLMAdapter {
       'anthropic-version': API_VERSION,
     };
 
-    // task-344: expose raw request (redacted) for debug panel.
-    // task-344 follow-up (N2): cap body to RAW_PAYLOAD_CAP_BYTES.
-    const rawRequest = capRawRequest(redactRawRequest({ url, method: 'POST', headers, body }));
+    // Expose the raw request (auth-redacted) for the debug panel. The body
+    // is captured verbatim — never truncated — so "copy request" matches
+    // exactly what we POST to the LLM.
+    const rawRequest = redactRawRequest({ url, method: 'POST', headers, body });
 
     const response = await fetch(url, {
       method: 'POST',
@@ -197,7 +195,7 @@ export class AnthropicAdapter extends LLMAdapter {
 
     if (!response.ok) {
       const errorBody = await response.text();
-      // task-344: capture error response too, then throw.
+      // Capture error response too, then throw.
       if (onRawExchange) {
         try {
           onRawExchange({
@@ -207,8 +205,7 @@ export class AnthropicAdapter extends LLMAdapter {
               headers: response.headers && typeof response.headers.entries === 'function'
                 ? Object.fromEntries(response.headers.entries())
                 : {},
-              // task-344 follow-up (N2): cap error body.
-              body: capRawString(errorBody),
+              body: errorBody,
             },
           });
         } catch { /* ignore */ }
@@ -223,12 +220,12 @@ export class AnthropicAdapter extends LLMAdapter {
     let currentToolCallId = null;
     let currentToolName = null;
     let currentToolInput = '';
-    // task-344: accumulate raw SSE body for debug exposure.
-    // task-344 follow-up (N2): cap growth — once past RAW_PAYLOAD_CAP_BYTES
-    // we freeze the captured body and record total-bytes-seen separately.
+    // Accumulate raw SSE body verbatim for the debug panel. No truncation:
+    // a truncated copy of the response is misleading. If the resulting
+    // payload is too large for the debug store the bound is per-LOOP-COUNT
+    // on the client (see web/stores/chat.js MAX_UNIFY_DEBUG_LOOPS), not
+    // per-payload mutilation here.
     let rawSseBody = '';
-    let rawSseTotalBytes = 0;
-    let rawSseCapped = false;
     const responseHeaders = response.headers && typeof response.headers.entries === 'function'
       ? Object.fromEntries(response.headers.entries())
       : {};
@@ -241,20 +238,7 @@ export class AnthropicAdapter extends LLMAdapter {
 
         const chunkText = decoder.decode(value, { stream: true });
         buffer += chunkText;
-        // task-344 follow-up (N2): size-capped capture.
-        rawSseTotalBytes += value.byteLength;
-        if (!rawSseCapped) {
-          if (rawSseTotalBytes <= RAW_PAYLOAD_CAP_BYTES) {
-            rawSseBody += chunkText;
-          } else {
-            // Append enough of this chunk to meet the cap, then freeze.
-            const remaining = RAW_PAYLOAD_CAP_BYTES - (rawSseTotalBytes - value.byteLength);
-            if (remaining > 0) {
-              rawSseBody += chunkText.slice(0, remaining);
-            }
-            rawSseCapped = true;
-          }
-        }
+        rawSseBody += chunkText;
         const lines = buffer.split('\n');
         buffer = lines.pop() || ''; // Keep incomplete line
 
@@ -344,19 +328,16 @@ export class AnthropicAdapter extends LLMAdapter {
       }
     } finally {
       reader.releaseLock();
-      // task-344: emit raw exchange after stream completes (or errors).
+      // Emit raw exchange after stream completes (or errors). Body is the
+      // verbatim SSE — never truncated.
       if (onRawExchange) {
         try {
-          // task-344 follow-up (N2): append truncation marker when capped.
-          const finalBody = rawSseCapped
-            ? `${rawSseBody}…[truncated, original ${rawSseTotalBytes} bytes]`
-            : rawSseBody;
           onRawExchange({
             rawRequest,
             rawResponse: {
               status: responseStatus,
               headers: responseHeaders,
-              body: finalBody,
+              body: rawSseBody,
               format: 'sse',
             },
           });

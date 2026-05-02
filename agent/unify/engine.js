@@ -74,10 +74,11 @@ const MAX_CONTINUE_TURNS = 3;
  *   - `toolCalls` on assistant turns (the LLM's function_call requests)
  *   - `toolCallId` + `isError` on tool turns (the paired tool_result)
  *
- * Content is truncated at 50000 chars; each tool_call input is JSON-stringified
- * + sliced at 10000 chars before being re-parsed, so a runaway `input` blob
- * can't blow past the WebSocket frame budget. Unknown roles pass through
- * unchanged.
+ * Content is passed through verbatim — never truncated. Debug traces must
+ * mirror exactly what we sent to the LLM; a truncated copy is misleading.
+ * If the resulting payload is too large for the client debug store the
+ * bound is per-loop-count (see `MAX_UNIFY_DEBUG_LOOPS` in
+ * `web/stores/chat.js`), not per-payload mutilation here.
  *
  * Pure function — no side effects on the input message.
  *
@@ -86,22 +87,13 @@ const MAX_CONTINUE_TURNS = 3;
  */
 export function mapDebugMessage(m) {
   const out = { role: m.role };
-  out.content = typeof m.content === 'string' ? m.content.slice(0, 50000) : m.content;
+  out.content = m.content;
   if (Array.isArray(m.toolCalls) && m.toolCalls.length > 0) {
-    out.toolCalls = m.toolCalls.map(tc => {
-      let input = tc.input;
-      try {
-        const s = JSON.stringify(input);
-        if (typeof s === 'string' && s.length > 10000) {
-          input = { __truncated: true, preview: s.slice(0, 10000) };
-        }
-      } catch {
-        // Non-serializable input — fall through with raw reference; the
-        // frontend's JSON.stringify will hit the same failure and replace
-        // it with a placeholder string.
-      }
-      return { id: tc.id, name: tc.name, input };
-    });
+    out.toolCalls = m.toolCalls.map(tc => ({
+      id: tc.id,
+      name: tc.name,
+      input: tc.input,
+    }));
   }
   if (m.toolCallId) out.toolCallId = m.toolCallId;
   if (m.isError != null) out.isError = m.isError;

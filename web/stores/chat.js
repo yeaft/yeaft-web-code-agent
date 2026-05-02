@@ -23,6 +23,15 @@ const EMPTY_ARRAY = Object.freeze([]);
 // feat-6af5f9f1 PR C: turnMatchesSearch lives in helpers/debug-search.js
 // so it can be unit-tested without the Pinia browser globals.
 
+// fix-debug-copy-no-truncate: bound debug retention by COUNT, not by
+// per-payload truncation. The adapter / engine pass through verbatim
+// what was sent to the LLM (so "copy request" matches reality); we cap
+// growth here by dropping the oldest loop entries — and the orphaned
+// turn records that no surviving loop references — once we exceed
+// MAX_UNIFY_DEBUG_LOOPS. This replaces the old per-payload mutilation
+// path that lied about what the model actually saw.
+const MAX_UNIFY_DEBUG_LOOPS = 50;
+
 export const useChatStore = defineStore('chat', {
   state: () => ({
     ws: null,
@@ -892,7 +901,7 @@ export const useChatStore = defineStore('chat', {
           break;
         }
 
-        case 'loop':
+        case 'loop': {
           // feat-6af5f9f1 PR B: replaces `debug_turn`. Each entry is one
           // LLM call; the parent Turn record lives in unifyDebugTurnsById
           // under loop.turnId.
@@ -915,7 +924,31 @@ export const useChatStore = defineStore('chat', {
             // by group. Falls back to envelope groupId if engine omitted it.
             groupId: msg.groupId || null,
           });
+          // fix-debug-copy-no-truncate: bound retention by count.
+          // Drop oldest loop entries when the cap is exceeded, then
+          // garbage-collect any turn record whose loops are all gone
+          // (so unifyDebugTurnsById / unifyDebugTurnOrder don't grow
+          // unboundedly either). This is the architectural counterpart
+          // to removing per-payload truncation: payloads are kept
+          // verbatim, but we keep at most MAX_UNIFY_DEBUG_LOOPS of them.
+          if (this.unifyDebugLoops.length > MAX_UNIFY_DEBUG_LOOPS) {
+            const overflow = this.unifyDebugLoops.length - MAX_UNIFY_DEBUG_LOOPS;
+            this.unifyDebugLoops.splice(0, overflow);
+            const liveTurnIds = new Set();
+            for (const lp of this.unifyDebugLoops) {
+              if (lp.turnId) liveTurnIds.add(lp.turnId);
+            }
+            const nextTurnsById = {};
+            for (const tid of Object.keys(this.unifyDebugTurnsById)) {
+              if (liveTurnIds.has(tid)) {
+                nextTurnsById[tid] = this.unifyDebugTurnsById[tid];
+              }
+            }
+            this.unifyDebugTurnsById = nextTurnsById;
+            this.unifyDebugTurnOrder = this.unifyDebugTurnOrder.filter(tid => liveTurnIds.has(tid));
+          }
           break;
+        }
 
         case 'recall':
         case 'consolidate':
