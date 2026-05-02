@@ -1354,27 +1354,6 @@
   color: var(--text-primary);
 }
 
-/* Header Page Reload — mobile-only, next to sidebar toggle */
-.header-reload-btn {
-  display: none;
-  width: 32px;
-  height: 32px;
-  border: none;
-  background: transparent;
-  border-radius: 6px;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-secondary);
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: color 0.15s ease, background 0.15s ease;
-}
-
-.header-reload-btn:hover {
-  background: var(--sidebar-hover);
-  color: var(--text-primary);
-}
-
 /* Sidebar Overlay */
 .sidebar-overlay {
   display: none;
@@ -1390,11 +1369,6 @@
 @media (max-width: 768px) {
   /* Show inline sidebar toggle in header on mobile */
   .header-sidebar-toggle {
-    display: flex;
-  }
-
-  /* Show page reload button on mobile */
-  .header-reload-btn {
     display: flex;
   }
 

@@ -207,6 +207,7 @@ export default {
   'unify.noDebugData': 'No debug data yet',
   'unify.showDebug': 'Show debug panel',
   'unify.hideDebug': 'Hide debug panel',
+  'unify.reloadPage': 'Reload page',
   'unify.switchModel': 'Switch model',
   'unify.settings.title': 'Settings',
   // task-343: tab labels for the two-column Settings dialog
@@ -423,6 +424,7 @@ export default {
   'chatHeader.compact': 'Compact context',
   'chatHeader.resume': 'Resume session',
   'chatHeader.refresh': 'Refresh messages',
+  'chatHeader.reloadPage': 'Reload page',
   'chatHeader.editCrew': 'Edit Crew',
   'chatHeader.clear': 'Clear messages',
   'chatHeader.clearing': 'Clearing context...',

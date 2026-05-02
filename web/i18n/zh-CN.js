@@ -207,6 +207,7 @@ export default {
   'unify.noDebugData': '暂无调试数据',
   'unify.showDebug': '显示调试面板',
   'unify.hideDebug': '隐藏调试面板',
+  'unify.reloadPage': '刷新页面',
   'unify.switchModel': '切换模型',
   'unify.settings.title': '设置',
   // task-343: tab labels for the two-column Settings dialog
@@ -423,6 +424,7 @@ export default {
   'chatHeader.compact': '压缩上下文',
   'chatHeader.resume': '恢复会话',
   'chatHeader.refresh': '刷新消息',
+  'chatHeader.reloadPage': '刷新页面',
   'chatHeader.editCrew': '编辑 Crew 配置',
   'chatHeader.clear': '清空消息',
   'chatHeader.clearing': '正在清空上下文...',

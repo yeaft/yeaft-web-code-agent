@@ -15,14 +15,6 @@ export default {
           <path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/>
         </svg>
       </button>
-      <!-- Mobile page reload — hidden on desktop -->
-      <button class="header-reload-btn" v-if="!store.isSplitMode"
-              @click="reloadPage"
-              title="Reload page">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
-        </svg>
-      </button>
       <div class="chat-title-group" :title="folderPath">
         <div class="chat-title">{{ headerTitle }}</div>
         <div v-if="folderPath || (store.isSplitMode && agentName)" class="chat-title-path">
@@ -39,6 +31,12 @@ export default {
         <span class="compact-message">{{ statusBannerMessage }}</span>
       </div>
       <div class="header-right" v-if="effectiveConvId && !isCrew">
+        <!-- Page reload — always visible top-right, full window.location.reload() -->
+        <button class="header-action-btn" @click="reloadPage" :title="$t('chatHeader.reloadPage')">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="23 20 23 14 17 14"/><polyline points="1 4 1 10 7 10"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+          </svg>
+        </button>
         <span class="context-usage-hint" v-if="contextUsage" :class="contextColorClass" :title="contextLabel">
           {{ contextUsage.percentage }}%
         </span>
@@ -114,6 +112,11 @@ export default {
         </button>
       </div>
       <div class="crew-header-actions" v-if="isCrew">
+        <button class="crew-header-nav-btn" @click="reloadPage" :title="$t('chatHeader.reloadPage')">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="23 20 23 14 17 14"/><polyline points="1 4 1 10 7 10"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+          </svg>
+        </button>
         <button v-if="isCrew" class="crew-header-nav-btn"
                 :class="{ active: isCrewPanelActive('roles') }"
                 @click="onCrewPanelToggle('roles')">
