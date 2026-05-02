@@ -41,6 +41,7 @@ import { Engine } from './engine.js';
 // AMS each turn and to run `memory/adjust.js` post-turn.
 import { ensureDefaultGroupIfEmpty } from './groups/group-crud.js';
 import { seedDefaultVps } from './vp/seed-defaults.js';
+import { runSummaryBackfill } from './memory/seed-backfill.js';
 import { createV2DreamScheduler } from './dream-v2/session-wiring.js';
 import { openSegmentIndex } from './memory/index-db.js';
 import { syncAll as syncSegmentIndex } from './memory/segment-sync.js';
@@ -239,6 +240,20 @@ export async function loadSession(options = {}) {
       ensureDefaultGroupIfEmpty(yeaftDir);
     } catch (err) {
       console.warn(`[Yeaft] ensureDefaultGroupIfEmpty failed: ${err?.message || err}`);
+    }
+
+    // task-fix-memory-load: backfill summary.md for VPs / groups created
+    // before the create-time seed was added. Without this, an existing
+    // user's `grp_claude` and `steve` VP have an empty Layer-A resident
+    // summary every turn (memory section in the system prompt is just
+    // the `active_scope` header). Idempotent — only writes when missing.
+    try {
+      runSummaryBackfill({
+        yeaftDir,
+        libDir: join(yeaftDir, 'virtual-persons'),
+      });
+    } catch (err) {
+      console.warn(`[Yeaft] runSummaryBackfill failed: ${err?.message || err}`);
     }
   }
 

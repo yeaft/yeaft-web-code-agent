@@ -19,8 +19,49 @@
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import { homedir } from 'os';
 import { validateVpId } from '../groups/ids.js';
 import { DEFAULT_VP_LIB_DIR, parseRoleMd } from './vp-store.js';
+
+/**
+ * Memory root used by store-v2 / engine.#loadLayerASummaries. We write the
+ * VP's seed summary directly here (sync) rather than going through
+ * store-v2's async `seedSummaryIfMissing` so this CRUD entry point stays
+ * synchronous (callers across web-bridge / WS handlers depend on the
+ * synchronous return contract). The file shape matches what store-v2
+ * `readSummary` expects: a single body string at `<root>/vp/<id>/summary.md`.
+ */
+const SEED_MEMORY_ROOT = join(homedir(), '.yeaft', 'memory');
+
+/**
+ * Build the seed summary body for a freshly-created VP. Pulled into a
+ * helper so tests can pin the exact format.
+ *
+ * @param {object} payload  same shape as createVp
+ * @returns {string}
+ */
+export function buildVpSeedSummary(payload) {
+  const id = String(payload?.vpId || '').trim();
+  const name = (payload?.displayName != null ? String(payload.displayName) : id).trim();
+  const role = (payload?.role != null ? String(payload.role) : '').trim();
+  const persona = (typeof payload?.persona === 'string' ? payload.persona : '').trim();
+  const traits = Array.isArray(payload?.traits)
+    ? payload.traits.map(t => String(t)).filter(Boolean)
+    : [];
+
+  const lines = [];
+  lines.push(`# ${name}`);
+  if (role) lines.push('', `**Role:** ${role}`);
+  if (traits.length > 0) lines.push('', `**Traits:** ${traits.join(', ')}`);
+  if (persona) {
+    // Keep the persona body terse — first 800 chars is plenty for an
+    // initial Layer-A resident summary; Dream-v2 will rewrite it as
+    // memory accumulates.
+    const truncated = persona.length > 800 ? persona.slice(0, 800).trim() + '…' : persona;
+    lines.push('', '**Persona:**', '', truncated);
+  }
+  return lines.join('\n').trim();
+}
 
 /**
  * Error thrown by CRUD entry points. Has stable `.code` so callers can map
@@ -123,6 +164,29 @@ export function createVp(payload, options = {}) {
   mkdirSync(dir, { recursive: true });
   mkdirSync(join(dir, 'memory'), { recursive: true });
   writeFileSync(vpRolePathFor(libDir, vpId), buildRoleMd({ ...payload, vpId }), 'utf-8');
+
+  // Seed the VP's Layer-A resident summary so the first session has SOMETHING
+  // for engine.#loadLayerASummaries to read. Without this, fresh VPs have
+  // an empty memory section in the system prompt until Dream-v2 runs (which
+  // requires a non-empty diff stream — i.e. several turns of activity).
+  // We only seed when the file is missing/empty: this is safe to re-run and
+  // never clobbers Dream-v2 writes.
+  try {
+    const summaryPath = join(SEED_MEMORY_ROOT, 'vp', vpId, 'summary.md');
+    let existing = '';
+    if (existsSync(summaryPath)) {
+      try { existing = readFileSync(summaryPath, 'utf-8').trim(); } catch { /* read race — fall through to seed */ }
+    }
+    if (!existing) {
+      mkdirSync(join(SEED_MEMORY_ROOT, 'vp', vpId), { recursive: true });
+      writeFileSync(summaryPath, buildVpSeedSummary({ ...payload, vpId }) + '\n', 'utf-8');
+    }
+  } catch (err) {
+    // Seeding is best-effort: a memory-root permission failure must NOT
+    // break VP creation. The legacy (no-summary) behavior is the fallback.
+    console.warn(`[vp-crud] failed to seed summary.md for ${vpId}:`, err?.message || err);
+  }
+
   return { vpId, dir };
 }
 

@@ -32,8 +32,9 @@
  *   'reserved'/'invalid_vp_id'/... — bubbled from ids.js validators
  */
 
-import { existsSync, renameSync, rmSync, readdirSync, statSync } from 'fs';
+import { existsSync, renameSync, rmSync, readdirSync, statSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { randomBytes } from 'crypto';
+import { homedir } from 'os';
 import { join } from 'path';
 import {
   openGroup, createGroup, listGroups, loadGroupMeta,
@@ -42,6 +43,61 @@ import { addVp as rosterAdd, removeVp as rosterRemove, setDefaultVp } from './ro
 import { seedDefaultGroup, DEFAULT_GROUP_ID } from './seed-default.js';
 import { nextGroupId, validateVpId, isReservedVpId } from './ids.js';
 import { scanVpLibrary, DEFAULT_VP_LIB_DIR } from '../vp/vp-store.js';
+
+/**
+ * Memory root used by store-v2 / engine.#loadLayerASummaries — see
+ * vp-crud.js for the same constant. Group seeds land at
+ * `<root>/group/<groupId>/summary.md`.
+ */
+const SEED_MEMORY_ROOT = join(homedir(), '.yeaft', 'memory');
+
+/**
+ * Build the group seed summary body. Uses the group display name + roster
+ * so even an empty conversation has SOMETHING for engine.#prepareAms to
+ * pull into the Layer-A resident summary on the very first turn.
+ *
+ * Format is intentionally short: Dream-v2 will rewrite it in full once
+ * meaningful diffs accumulate.
+ *
+ * @param {{name:string, roster?:string[], defaultVpId?:string|null}} spec
+ * @returns {string}
+ */
+export function buildGroupSeedSummary(spec) {
+  const name = String(spec?.name || '').trim();
+  const roster = Array.isArray(spec?.roster) ? spec.roster : [];
+  const lines = [];
+  if (name) lines.push(`# ${name}`);
+  lines.push('', `Group with ${roster.length} member${roster.length === 1 ? '' : 's'}.`);
+  if (roster.length > 0) {
+    lines.push('', `**Members:** ${roster.join(', ')}`);
+  }
+  if (spec?.defaultVpId) {
+    lines.push('', `**Default VP:** ${spec.defaultVpId}`);
+  }
+  return lines.join('\n').trim();
+}
+
+/**
+ * Sync seed of `<root>/group/<id>/summary.md` if missing/empty. Best-effort:
+ * any I/O error is logged and swallowed so group creation never fails on
+ * memory-root permission issues. See vp-crud.js for the matching VP path.
+ */
+function seedGroupSummaryIfMissing(groupId, body) {
+  try {
+    const dir = join(SEED_MEMORY_ROOT, 'group', groupId);
+    const path = join(dir, 'summary.md');
+    let existing = '';
+    if (existsSync(path)) {
+      try { existing = readFileSync(path, 'utf-8').trim(); } catch { /* read race — fall through */ }
+    }
+    if (!existing) {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path, (body || '').trim() + '\n', 'utf-8');
+    }
+  } catch (err) {
+    console.warn(`[group-crud] failed to seed summary.md for ${groupId}:`, err?.message || err);
+  }
+}
 
 export class GroupCrudError extends Error {
   constructor(code, groupId, message) {
@@ -145,6 +201,11 @@ export function createGroupFromSpec(yeaftDir, spec) {
   const handle = createGroup(root, { id, name, roster, defaultVpId });
   const meta = handle.getMeta();
   handle.close();
+
+  // Seed Layer-A resident summary so the first session has memory content
+  // even before Dream-v2 has run. No-op if a summary.md already exists.
+  seedGroupSummaryIfMissing(id, buildGroupSeedSummary({ name, roster, defaultVpId }));
+
   return meta;
 }
 

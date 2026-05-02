@@ -285,6 +285,29 @@ export async function writeSummary(scope, body, opts = {}) {
   await atomicWrite(abs, `${(body || '').trim()}\n`);
 }
 
+/**
+ * Seed a scope's summary.md if (and only if) it is missing or empty. Used
+ * at create-time for VPs and groups so a fresh session has SOMETHING for
+ * `engine.#prepareAms` to pull into the Layer-A resident summary — the
+ * earlier behavior of "no summary.md until Dream-v2 runs" left the memory
+ * section empty for the entire first session.
+ *
+ * Intentionally a no-op if a non-empty summary.md already exists, so this
+ * is safe to call from any place that creates the scope (VP create, group
+ * create, first-session bootstrap) without clobbering Dream-v2's writes.
+ *
+ * @param {Scope} scope
+ * @param {string} body
+ * @param {{ root?: string, currentVpId?: string }} [opts]
+ * @returns {Promise<boolean>}  true if seeded, false if a non-empty summary already existed
+ */
+export async function seedSummaryIfMissing(scope, body, opts = {}) {
+  const existing = await readSummary(scope, opts);
+  if (existing && existing.trim().length > 0) return false;
+  await writeSummary(scope, body, opts);
+  return true;
+}
+
 // ─── scope discovery ───────────────────────────────────────────
 
 /**

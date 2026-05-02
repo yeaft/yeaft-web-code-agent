@@ -65,27 +65,32 @@ import {
 export const countTurns = countTurnsImpl;
 
 /**
- * Default trigger thresholds (2026-05-01 policy update):
- *   - never compact while total tokens < 30K (soft floor — most
+ * Default trigger thresholds (2026-05-02 policy update):
+ *   - never compact while total tokens < 12K (soft floor — most short
  *     conversations under that aren't worth paying the summarizer
  *     cost; the LLM hasn't started feeling the context yet either),
  *   - otherwise compact if ANY of:
+ *       turnCount > 30           (back-stop for chats with many small turns)
  *       tokens > 40 % of `maxContextTokens` (default 200K → 80K)
  *       tokens > 200K hard ceiling
  *
- * The earlier "turn count > 20" trigger was DROPPED because under
- * the new floor it's effectively dead code — by the time you've sent
- * 20 user prompts that exceed 30K tokens, the fractional threshold
- * has already fired. `turnLimit` and the `turn_count` reason code
- * are still accepted as overrides so tests / future config can re-
- * enable a turn-based trigger if needed; with `turnLimit: Infinity`
- * (the new default) the check is simply skipped.
+ * Lowered from 30K → 12K and re-enabled a turn-count back-stop because
+ * the previous "soft floor of 30K, no turn cap" combination is dead in
+ * the multi-VP fan-out path: hundreds of small turns happily stay below
+ * 30K and never trigger compact, then `runVpTurn` feeds the whole 720+
+ * message snapshot to the LLM and trips the provider's context window.
+ * The snapshot trim in `web-bridge.js#trimSnapshotForBudget` is the
+ * primary defense; this is the second-line trigger that compresses
+ * the on-array form so subsequent turns also stay bounded.
+ *
+ * `turnLimit` and the `turn_count` reason code are still overridable
+ * for tests / future config.
  *
  * Token thresholds are derived from `maxContextTokens` at evaluation
  * time so the policy auto-adjusts to the user's configured context.
  */
-export const DEFAULT_TURN_LIMIT = Infinity;
-export const DEFAULT_MIN_TOKEN_FLOOR = 30_000;
+export const DEFAULT_TURN_LIMIT = 30;
+export const DEFAULT_MIN_TOKEN_FLOOR = 12_000;
 export const DEFAULT_MAX_CONTEXT_TOKENS = 200_000;
 export const DEFAULT_TOKEN_FRACTION = 0.4;
 export const DEFAULT_HARD_TOKEN_CEILING = 200_000;
