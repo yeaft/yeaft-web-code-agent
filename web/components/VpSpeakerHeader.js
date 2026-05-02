@@ -72,8 +72,11 @@ export default {
   setup(props) {
     const chat = useChatStore();
     const isTyping = Vue.computed(() => {
-      const map = chat.unifyVpTyping || {};
-      return (map[props.vpId] || 0) > 0;
+      // The store getter `isVpTypingInCurrentConv(vpId)` already scopes
+      // the lookup to the current conversation's slice — when in Chat,
+      // the current conversation is a chat conv and the getter returns
+      // false, so cross-mode state never leaks here.
+      return chat.isVpTypingInCurrentConv(props.vpId);
     });
     const timestampText = Vue.computed(() => {
       if (!props.timestamp) return '';

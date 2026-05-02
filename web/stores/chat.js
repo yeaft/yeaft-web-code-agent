@@ -11,6 +11,7 @@ import * as sessionHelpers from './helpers/session.js';
 import * as watchdogHelpers from './helpers/watchdog.js';
 import * as crewHelpers from './helpers/crew.js';
 import * as unifyViewHelpers from './helpers/unify-view.js';
+import { incVpTyping, decVpTyping } from './helpers/vp-typing.js';
 import { turnMatchesSearch } from './helpers/debug-search.js';
 
 const { defineStore } = Pinia;
@@ -267,14 +268,19 @@ export const useChatStore = defineStore('chat', {
     unifyFeatures: [],
 
     // task-fix: per-VP typing indicator for Unify group chat.
-    //   Shape: { [vpId]: refCount }  — a small counter (not a boolean) so
-    //   overlapping sends to the same VP degrade gracefully (the dot stays
-    //   on until the last concurrent dispatch ends).
+    //   Shape: { [conversationId]: { [vpId]: refCount } }
+    //   Nesting by conversationId is what isolates Unify typing state from
+    //   the Chat view — so a VP that's still streaming when the user
+    //   switches to a Chat tab does NOT bleed its avatar / typing dots
+    //   into the Chat view (cross-mode state leak).
     // Populated by `vp_typing_start` / `vp_typing_end` events emitted from
     // the agent's handleUnifyGroupChat fan-out loop. Consumed by
     // VpSpeakerHeader to render a three-dot animation next to the VP's
     // avatar — replaces the old global "running cat" which was ambiguous
     // when N VPs were speaking concurrently.
+    // The refCount (not a boolean) is so overlapping sends to the same VP
+    // degrade gracefully — the dot stays on until the last concurrent
+    // dispatch ends.
     unifyVpTyping: {},
 
     // ★ task-334-ui-g: VP CRUD pending-request map.
@@ -351,6 +357,33 @@ export const useChatStore = defineStore('chat', {
     unifyAllMessages: (state) => {
       const convId = state.unifyConversationId;
       return convId ? (state.messagesMap[convId] || EMPTY_ARRAY) : EMPTY_ARRAY;
+    },
+    // task-fix: per-VP typing-indicator getters scoped to the CURRENT
+    // conversation. Components read these instead of the underlying
+    // `unifyVpTyping` shape so the nested data layout stays an internal
+    // detail of the store. The cross-mode isolation invariant is then
+    // a property of the getter contract, not something each consumer has
+    // to remember to enforce.
+    vpsTypingInCurrentConv: (state) => {
+      const convId = state.activeConversations[0] || null;
+      if (!convId) return EMPTY_ARRAY;
+      const inner = (state.unifyVpTyping || {})[convId];
+      if (!inner) return EMPTY_ARRAY;
+      const ids = Object.keys(inner).filter((vpId) => (inner[vpId] || 0) > 0);
+      return ids.length === 0 ? EMPTY_ARRAY : ids;
+    },
+    // Factory getter: "is `vpId` typing in the current conversation?"
+    // Pinia getters that return a function of the props are how we
+    // expose argument-taking lookups while still keeping the underlying
+    // shape private to the store. VpSpeakerHeader uses this so it never
+    // touches the nested map directly.
+    isVpTypingInCurrentConv: (state) => (vpId) => {
+      if (!vpId) return false;
+      const convId = state.activeConversations[0] || null;
+      if (!convId) return false;
+      const inner = (state.unifyVpTyping || {})[convId];
+      if (!inner) return false;
+      return (inner[vpId] || 0) > 0;
     },
     // feat-6af5f9f1 PR B: Turn-grouped debug records for the redesigned
     // panel. Returns `[{ turnId, userPrompt, vpId, groupId, openedAt,
@@ -1225,19 +1258,20 @@ export const useChatStore = defineStore('chat', {
         }
         case 'vp_typing_start': {
           if (!event.vpId) break;
-          const next = { ...(this.unifyVpTyping || {}) };
-          next[event.vpId] = (next[event.vpId] || 0) + 1;
-          this.unifyVpTyping = next;
+          // Nest by conversationId so Unify typing state never leaks into
+          // the Chat view (cross-mode state leak). The conversationId rides
+          // on the unify_output envelope (msg.conversationId) — fall back to
+          // the current Unify session id if absent.
+          const convId = msg.conversationId || this.unifyConversationId;
+          if (!convId) break;
+          this.unifyVpTyping = incVpTyping(this.unifyVpTyping, convId, event.vpId);
           break;
         }
         case 'vp_typing_end': {
           if (!event.vpId) break;
-          const cur = this.unifyVpTyping || {};
-          const c = (cur[event.vpId] || 0) - 1;
-          const next = { ...cur };
-          if (c <= 0) delete next[event.vpId];
-          else next[event.vpId] = c;
-          this.unifyVpTyping = next;
+          const convId = msg.conversationId || this.unifyConversationId;
+          if (!convId) break;
+          this.unifyVpTyping = decVpTyping(this.unifyVpTyping, convId, event.vpId);
           break;
         }
 
