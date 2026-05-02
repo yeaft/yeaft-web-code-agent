@@ -75,6 +75,17 @@ export default {
           </div>
 
           <div class="unify-topbar-right">
+            <!-- Page reload — always visible, full window.location.reload() -->
+            <button
+              class="unify-reload-btn"
+              @click="reloadPage"
+              :title="$t('unify.reloadPage')"
+              :aria-label="$t('unify.reloadPage')"
+            >
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="23 20 23 14 17 14"/><polyline points="1 4 1 10 7 10"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+              </svg>
+            </button>
             <!-- task-fix-mobile-group-settings: gear button to open group
                  settings from the conversation header. Visible on every
                  viewport so users can edit announcement / members /
@@ -411,6 +422,10 @@ export default {
       }
     };
 
+    const reloadPage = () => {
+      window.location.reload();
+    };
+
     // feat-6af5f9f1 PR C: the legacy debug helpers (toggleTurnExpand,
     // formatMessages, formatMsgContent, prettyJson, formatToolOutput,
     // getFunctionCallPairs, formatToolCalls, formatRawResponse) lived
@@ -628,6 +643,7 @@ export default {
       toggleSidebar,
       toggleDetail,
       toggleDebug,
+      reloadPage,
       toggleModelDropdown,
       selectModel,
       formatTokens,

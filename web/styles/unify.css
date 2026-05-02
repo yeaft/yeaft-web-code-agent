@@ -687,6 +687,24 @@
   color: var(--error);
 }
 
+.unify-reload-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 6px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.unify-reload-btn:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
 .unify-detail-toggle {
   display: flex;
   align-items: center;
