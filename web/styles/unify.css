@@ -127,7 +127,7 @@
 
 .unify-settings-btn.active {
   color: var(--accent);
-  background: var(--bg-input-wrapper);
+  background: var(--sidebar-selected);
 }
 
 .unify-settings-btn svg {
@@ -188,7 +188,7 @@
 }
 
 .unify-topbar-model:hover {
-  background: var(--bg-input-wrapper);
+  background: var(--sidebar-hover);
 }
 
 .unify-topbar-model-name {
@@ -362,7 +362,7 @@
 }
 
 .unify-topbar-group-trigger:hover {
-  background: var(--bg-input-wrapper);
+  background: var(--sidebar-hover);
 }
 
 .unify-topbar-group-icon {
@@ -788,7 +788,7 @@
 
 .unify-debug-btn.active {
   color: var(--accent);
-  background: var(--bg-input-wrapper);
+  background: var(--sidebar-selected);
 }
 
 /* ── Debug Panel ── */
@@ -1294,7 +1294,7 @@
 }
 
 .unify-settings-add-btn:hover {
-  background: var(--bg-input-wrapper);
+  background: var(--sidebar-hover);
   border-color: var(--text-muted);
 }
 
@@ -2674,13 +2674,18 @@
   cursor: not-allowed;
 }
 
-/* feat-6af5f9f1 PR C — UnifyDebugPanel toolbar */
+/* feat-6af5f9f1 PR C — UnifyDebugPanel toolbar
+ * Theme-consistency fix: the original PR-C drop used --surface and
+ * --border-soft, neither of which are defined in variables.css, so the
+ * #fff / #e1e4e9 fallbacks fired in BOTH themes — including dark, where
+ * a white input over a dark backdrop is the visible bug. Re-anchored to
+ * the same tokens the rest of unify uses. */
 .unify-debug-toolbar {
   display: flex;
   gap: 8px;
   padding: 6px 10px 8px 10px;
   align-items: center;
-  border-bottom: 1px solid var(--border-soft, #e1e4e9);
+  border-bottom: 1px solid var(--border-color);
 }
 
 .unify-debug-search {
@@ -2688,26 +2693,26 @@
   min-width: 0;
   padding: 4px 8px;
   font-size: 12px;
-  border: 1px solid var(--border-soft, #e1e4e9);
+  border: 1px solid var(--border-color);
   border-radius: 4px;
-  background: var(--surface, #fff);
-  color: var(--text-primary, #1f1f1f);
+  background: var(--bg-input);
+  color: var(--text-primary);
   font-family: inherit;
 }
 
 .unify-debug-search:focus {
   outline: none;
-  border-color: var(--accent, #4a6df5);
+  border-color: var(--accent);
 }
 
 .unify-debug-group-select {
   flex: 0 0 auto;
   padding: 3px 6px;
   font-size: 11px;
-  border: 1px solid var(--border-soft, #e1e4e9);
+  border: 1px solid var(--border-color);
   border-radius: 4px;
-  background: var(--surface, #fff);
-  color: var(--text-secondary, #555);
+  background: var(--bg-input);
+  color: var(--text-secondary);
   font-family: inherit;
   cursor: pointer;
   max-width: 180px;
