@@ -29,7 +29,7 @@ describe('budget.computeBudget', () => {
 
   it('uses MODEL_FRACTION for small model contexts', () => {
     const b = computeBudget(200_000);
-    expect(b.total).toBe(20_000);
+    expect(b.total).toBe(40_000);
   });
 
   it('splits into resident/recent/onDemand', () => {
@@ -51,8 +51,8 @@ describe('budget.computeBudget', () => {
   });
 
   it('exposes constants', () => {
-    expect(MODEL_FRACTION).toBe(0.10);
-    expect(ABSOLUTE_CAP).toBe(50_000);
+    expect(MODEL_FRACTION).toBe(0.20);
+    expect(ABSOLUTE_CAP).toBe(100_000);
   });
 });
 

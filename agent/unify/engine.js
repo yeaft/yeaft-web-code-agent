@@ -545,25 +545,28 @@ export class Engine {
   }
 
   /**
-   * Build the system prompt with memory, compact summary, skill content,
-   * and (Phase 8 wire-up) Layer-A scope summaries.
+   * Build the system prompt with the AMS-rendered Memory block, the
+   * Active Scope block, and skill content. The legacy multi-path
+   * Memory injection (FTS-formatted + AMS snapshot + Layer-A summaries +
+   * userProfile + coreMemory) was retired in DESIGN-PROMPT v1; callers
+   * now thread a single `memoryInjection` string composed upstream from
+   * the AMS snapshot.
    *
    * Routes through `buildWorkerPrompt`, which:
    *   - Lays in the persona-as-identity block (or Yeaft identity fallback)
-   *   - Concatenates Layer A summaries (`user/group/vp/summary.md`)
-   *   - Reserves Layer B / C / D placeholders for future wiring (router
-   *     preselected memory, task scope, turn scope)
+   *   - Adds the Memory section (passed in as `memoryInjection`)
+   *   - Adds the structured Active Scope block (`activeScope`)
+   *   - Forwards optional `taskCtx` for the legacy task-context sub-block
    *
-   * @param {{ profile?: string, entries?: object[] }} [memory]
-   * @param {string} [compactSummary]
-   * @param {string} [prompt] — user prompt (for skill relevance matching)
-   * @param {string} [memoryInjection] — prebuilt memory block from preflow
-   * @param {string} [userProfile] — user profile string
+   * @param {string} prompt — user prompt (for skill relevance matching)
+   * @param {string} memoryInjection — prebuilt Memory block from AMS
    * @param {object} [vpPersona]
-   * @param {{user?:string, group?:string, vp?:string}} [summaries]
+   * @param {object} [activeScope] — DESIGN-PROMPT §3 ④ structured scope summary
+   * @param {string} [groupAnnouncement]
+   * @param {object} [taskCtx] — legacy task-context sub-block (optional)
    * @returns {string}
    */
-  #buildSystemPrompt(memory, compactSummary, prompt, memoryInjection, userProfile, vpPersona, summaries, groupAnnouncement) {
+  #buildSystemPrompt(prompt, memoryInjection, vpPersona, activeScope, groupAnnouncement, taskCtx) {
     // Get relevant skill content if SkillManager is wired
     let skillContent = '';
     if (this.#skillManager && prompt) {
@@ -578,21 +581,16 @@ export class Engine {
     return buildWorkerPrompt({
       language: this.#config.language || 'en',
       toolNames,
-      memory,
       memoryInjection,
-      compactSummary,
       skillContent,
-      userProfile,
       vpPersona,
-      summaries,
+      activeScope,
       groupAnnouncement,
+      taskCtx,
       // Worker-shape harness is descriptive metadata for human inspection;
       // production prompts skip it to save tokens. Re-enable via env when
       // diagnosing prompt structure issues.
       includeShape: process.env.UNIFY_PROMPT_INCLUDE_SHAPE === '1',
-      // task-334f: memory_trace tool is now registered (49 → 51 tools), so
-      // unlock the core_memory meta-line behind 334e's feature flag.
-      memoryTraceAvailable: true,
     });
   }
 
@@ -931,16 +929,18 @@ export class Engine {
    */
   async *#runQuery({ prompt, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement }) {
 
-    // ─── Pre-query: FTS5 Memory Recall + Compact Summary ──
-    // Memory feed comes from two places:
-    //   (a) FTS5 pre-flow recall (#recallMemory → groups/pre-flow.js →
-    //       memory/preflow.js) — per-turn scoped recall
-    //   (b) AMS snapshot (resident summaries + onDemand FTS hits) appended
-    //       below
+    // ─── Pre-query: FTS5 Memory Recall + AMS snapshot ─────
+    // Memory has a SINGLE render outlet now (DESIGN-PROMPT §3 ③):
+    //   1. FTS5 pre-flow recall produces a list of segments;
+    //   2. those segments are pushed into AMS OnDemand;
+    //   3. AMS renders a budget-aware snapshot (Resident + Recent +
+    //      OnDemand) — that snapshot IS `memoryInjection`.
+    // The legacy second path (`recallResult.formatted` concatenated
+    // directly into `memoryInjection`) was a duplicate render of the
+    // same segments AMS would also surface, so it's gone.
     let memoryInjection = '';
     let recallEntryCount = 0;
 
-    // FTS5 recall: append per-turn scoped hits to memory injection
     const recallResult = await this.#recallMemory(prompt, {
       groupId,
       vpId: vpPersona && typeof vpPersona === 'object' && typeof vpPersona.vpId === 'string'
@@ -950,26 +950,16 @@ export class Engine {
         ? inboundEnvelope.featureId
         : undefined,
     });
-    if (recallResult && recallResult.formatted) {
-      memoryInjection = memoryInjection
-        ? memoryInjection + '\n\n' + recallResult.formatted
-        : recallResult.formatted;
-      recallEntryCount = recallResult.entries.length;
-    }
-
-    if (memoryInjection) {
+    recallEntryCount = recallResult && Array.isArray(recallResult.entries)
+      ? recallResult.entries.length
+      : 0;
+    if (recallEntryCount > 0) {
       yield { type: 'recall', entryCount: recallEntryCount, cached: false };
     }
 
-    const compactSummary = this.#getCompactSummary();
-    const userProfile = recallResult?.profile || '';
-
-    // Phase 8 wire-up — Layer A scope summaries
-    // Load `summary.md` for the user / addressed group / addressed VP from
-    // the scoped memory tree (DESIGN.md §2). This is the rolling synopsis a
-    // dream tick maintains; we surface it to the worker prompt so the LLM
-    // has cheap, persistent context without paying the recall cost on every
-    // turn. Failures are non-fatal (cold-start / no memory dir).
+    // Layer-A summaries — same scopes AMS Resident will surface, loaded
+    // here so we can pass them into #prepareAms. (Rolling per-scope
+    // synopsis maintained by the dream tick.) Failures are non-fatal.
     const summaries = await this.#loadLayerASummaries({
       groupId,
       vpId: vpPersona && typeof vpPersona === 'object' && typeof vpPersona.vpId === 'string'
@@ -979,12 +969,11 @@ export class Engine {
 
     // ─── AMS: populate + snapshot ───────────────────────────────
     // Group-keyed and persisted across session deactivation. Each turn:
-    //   (a) resident layer is rebuilt from <scope>/summary.md (the
-    //       summaries already loaded above are the same scopes, so
-    //       reuse them);
+    //   (a) resident layer is rebuilt from <scope>/summary.md;
     //   (b) onDemand is replaced with this turn's FTS hits;
-    //   (c) we render a budget-aware snapshot block and append it to
-    //       memoryInjection. Adjust runs post-turn (see end_turn below).
+    //   (c) we render a budget-aware snapshot block — this is the SOLE
+    //       Memory section in the system prompt. Adjust runs post-turn
+    //       (see end_turn below).
     const ownVpIdForAms = vpPersona && typeof vpPersona === 'object'
       && typeof vpPersona.vpId === 'string'
       ? vpPersona.vpId
@@ -1000,15 +989,52 @@ export class Engine {
       recallEntries: recallResult ? (recallResult.entries || []) : [],
     });
     if (amsContext && amsContext.snapshotBlock) {
-      memoryInjection = memoryInjection
-        ? memoryInjection + '\n\n' + amsContext.snapshotBlock
-        : amsContext.snapshotBlock;
+      memoryInjection = amsContext.snapshotBlock;
     }
 
-    const systemPrompt = this.#buildSystemPrompt(undefined, compactSummary, prompt, memoryInjection, userProfile, vpPersona, summaries, groupAnnouncement);
+    // ─── Active Scope (DESIGN-PROMPT §3 ④) ──────────────────────
+    // Structured per-turn scope summary: feature + group + vp + envelope
+    // routing info. Long-form scope content lives in AMS — this block
+    // carries only IDs + tiny labels. featureId is allowed to be null
+    // (T4 Scope Tagging is a placeholder; not every turn lives in a
+    // feature — DESIGN-PROMPT §5.1).
+    const activeScope = {
+      featureId: featureIdForAms || null,
+      featureTitle: typeof inboundEnvelope === 'object' && inboundEnvelope
+        && typeof inboundEnvelope.featureTitle === 'string'
+        ? inboundEnvelope.featureTitle
+        : '',
+      groupId: groupId || '',
+      vpId: ownVpIdForAms || '',
+      envelope: inboundEnvelope || null,
+    };
 
-    // Build conversation: existing messages + new user message
+    const systemPrompt = this.#buildSystemPrompt(
+      prompt,
+      memoryInjection,
+      vpPersona,
+      activeScope,
+      groupAnnouncement,
+      undefined, // taskCtx — not currently wired by query loop
+    );
+
+    // ─── Compact summary as messages-array head (DESIGN-PROMPT §4.3) ─
+    // The previous code placed the compact summary inside the system
+    // prompt; that broke prompt-cache hit-rate (any compact update
+    // invalidated the entire system) and conflated identity/rules with
+    // dialogue history. The compact summary is the product of compressing
+    // older turns, so it belongs at the head of the messages array.
+    const compactSummary = this.#getCompactSummary();
+    const compactMessages = compactSummary
+      ? [
+          { role: 'user', content: `<conversation_summary>\n${compactSummary}\n</conversation_summary>` },
+          { role: 'assistant', content: 'Acknowledged.' },
+        ]
+      : [];
+
+    // Build conversation: optional compact head + existing messages + new user message
     const conversationMessages = [
+      ...compactMessages,
       ...messages,
       { role: 'user', content: prompt },
     ];
