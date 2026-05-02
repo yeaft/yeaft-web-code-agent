@@ -5,6 +5,7 @@ import VpSpeakerHeader from './VpSpeakerHeader.js';
 import ReflectionCard from './ReflectionCard.js';
 import SubAgentCard from './SubAgentCard.js';
 import GroupAnnouncementBar from './GroupAnnouncementBar.js';
+import { vpsTypingIn } from '../stores/helpers/vp-typing.js';
 
 export default {
   name: 'MessageList',
@@ -772,9 +773,14 @@ export default {
     // VP that already has a streaming turn at the tail — in that case
     // VpSpeakerHeader's inline dots take over, so a duplicate standalone
     // row would double-render the indicator.
+    //
+    // Cross-mode isolation: `unifyVpTyping` is keyed by conversationId, so
+    // we only consult the current conversation's slice. When the user is in
+    // a Chat tab, the current conversation is a chat conv (not the Unify
+    // one), so `vpsTypingIn` returns [] and no Unify typing rows bleed
+    // into Chat.
     const vpTypingIds = Vue.computed(() => {
-      const map = store.unifyVpTyping || {};
-      const ids = Object.keys(map).filter(vpId => (map[vpId] || 0) > 0);
+      const ids = vpsTypingIn(store.unifyVpTyping, store.currentConversation);
       if (ids.length === 0) return [];
       // Find the tail streaming speakerVpId (if any) — skip it.
       const msgs = store.messages;

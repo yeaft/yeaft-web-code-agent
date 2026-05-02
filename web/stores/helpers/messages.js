@@ -66,6 +66,23 @@ export function appendToAssistantMessageForConversation(store, conversationId, t
   }
   const msgs = store.messagesMap[conversationId];
 
+  // Defensive speaker-attribution stamping: when the routing context has
+  // a vpId / turnId set, mirror it onto the existing streaming message
+  // even if it was created before the routing context was known. Without
+  // this, the latched `speakerVpId` can fall off mid-stream (e.g. if the
+  // first delta from a turn arrived without a vpId envelope and the
+  // streaming message was created blank), and AssistantTurn's
+  // VpSpeakerHeader fails to render once the standalone typing-row
+  // disappears at vp_typing_end. Idempotent: only fills when missing.
+  const stampSpeaker = (m) => {
+    if (!m || m.type !== 'assistant') return;
+    if (store.currentView !== 'unify') return;
+    if (conversationId !== store.unifyConversationId) return;
+    if (!m.vpId && store._currentUnifyVpId) m.vpId = store._currentUnifyVpId;
+    if (!m.turnId && store._currentUnifyTurnId) m.turnId = store._currentUnifyTurnId;
+    if (!m.speakerVpId && m.vpId) m.speakerVpId = m.vpId;
+  };
+
   // Per-VP turn routing: when a turnId is active, find the streaming
   // message for THAT turn (not just the last message). This prevents
   // concurrent VP streams from interleaving into the same message.
@@ -73,6 +90,7 @@ export function appendToAssistantMessageForConversation(store, conversationId, t
   if (turnId) {
     for (let i = msgs.length - 1; i >= 0; i--) {
       if (msgs[i].turnId === turnId && msgs[i].type === 'assistant' && msgs[i].isStreaming) {
+        stampSpeaker(msgs[i]);
         if (msgs[i].content.endsWith(text)) return;
         msgs[i].content += text;
         return;
@@ -90,6 +108,7 @@ export function appendToAssistantMessageForConversation(store, conversationId, t
   // Legacy path (no turnId): append to the last streaming message.
   const lastMsg = msgs[msgs.length - 1];
   if (lastMsg && lastMsg.type === 'assistant' && lastMsg.isStreaming) {
+    stampSpeaker(lastMsg);
     // Dedup guard: skip if the message already ends with this exact text
     if (lastMsg.content.endsWith(text)) return;
     lastMsg.content += text;
@@ -111,11 +130,26 @@ export function finishStreamingForConversation(store, conversationId) {
     // Non-streaming messages (chat-image, tool-use) can be appended after
     // a streaming assistant message, leaving it stuck with isStreaming: true.
     for (let i = msgs.length - 1; i >= 0; i--) {
-      if (msgs[i].isStreaming) {
-        msgs[i].isStreaming = false;
+      const m = msgs[i];
+      if (m.isStreaming) {
+        m.isStreaming = false;
+      }
+      // Defensive speaker-attribution stamp at finalize time. The avatar
+      // header in AssistantTurn relies on `speakerVpId` to render after
+      // streaming ends; if the streaming message lost the latch (or never
+      // had it because vpId arrived late), this is the last chance to fill
+      // it in from the still-active routing context. Idempotent.
+      if (
+        m.type === 'assistant'
+        && store.currentView === 'unify'
+        && conversationId === store.unifyConversationId
+      ) {
+        if (!m.vpId && store._currentUnifyVpId) m.vpId = store._currentUnifyVpId;
+        if (!m.turnId && store._currentUnifyTurnId) m.turnId = store._currentUnifyTurnId;
+        if (!m.speakerVpId && m.vpId) m.speakerVpId = m.vpId;
       }
       // Stop at the last user message (turn boundary) — no need to go further
-      if (msgs[i].type === 'user') break;
+      if (m.type === 'user') break;
     }
   }
 }

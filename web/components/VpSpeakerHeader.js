@@ -22,6 +22,7 @@
  */
 import VpBadge from './VpBadge.js';
 import { useChatStore } from '../stores/chat.js';
+import { getVpTyping } from '../stores/helpers/vp-typing.js';
 
 export default {
   name: 'VpSpeakerHeader',
@@ -72,8 +73,11 @@ export default {
   setup(props) {
     const chat = useChatStore();
     const isTyping = Vue.computed(() => {
-      const map = chat.unifyVpTyping || {};
-      return (map[props.vpId] || 0) > 0;
+      // unifyVpTyping is keyed by conversationId so cross-mode state
+      // doesn't leak (Chat view never sees Unify typing). Look up the
+      // current conversation's slice — when in Chat, this yields 0 and
+      // isTyping is false.
+      return getVpTyping(chat.unifyVpTyping, chat.currentConversation, props.vpId) > 0;
     });
     const timestampText = Vue.computed(() => {
       if (!props.timestamp) return '';
