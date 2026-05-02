@@ -266,6 +266,113 @@ describe('ConversationStore', () => {
     });
   });
 
+  // Cascade delete + orphan compaction.
+  describe('deleteByGroup', () => {
+    it('removes only messages stamped with the matching groupId', () => {
+      store.appendBatch([
+        { role: 'user',      content: 'A1', groupId: 'grp_a' },
+        { role: 'assistant', content: 'A2', groupId: 'grp_a' },
+        { role: 'user',      content: 'B1', groupId: 'grp_b' },
+        { role: 'user',      content: 'untagged' }, // no groupId — must NOT be touched
+      ]);
+
+      const removed = store.deleteByGroup('grp_a');
+      expect(removed).toBe(2);
+
+      // grp_b and the untagged message are still on disk.
+      expect(store.loadAll().map(m => m.content).sort()).toEqual(['B1', 'untagged']);
+      expect(existsSync(join(TEST_DIR, 'conversation', 'messages', 'm0001.md'))).toBe(false);
+      expect(existsSync(join(TEST_DIR, 'conversation', 'messages', 'm0002.md'))).toBe(false);
+      expect(existsSync(join(TEST_DIR, 'conversation', 'messages', 'm0003.md'))).toBe(true);
+      expect(existsSync(join(TEST_DIR, 'conversation', 'messages', 'm0004.md'))).toBe(true);
+    });
+
+    it('also removes matching messages that have been moved to cold', () => {
+      store.append({ role: 'user', content: 'cold-A', groupId: 'grp_a' });
+      store.append({ role: 'user', content: 'hot-A',  groupId: 'grp_a' });
+      store.moveToCold('m0001'); // archive cold-A
+
+      const removed = store.deleteByGroup('grp_a');
+      expect(removed).toBe(2);
+      expect(store.countHot()).toBe(0);
+      expect(store.countCold()).toBe(0);
+    });
+
+    it('returns 0 and is a no-op for empty/null groupId', () => {
+      store.append({ role: 'user', content: 'A', groupId: 'grp_a' });
+      expect(store.deleteByGroup(null)).toBe(0);
+      expect(store.deleteByGroup('')).toBe(0);
+      expect(store.countHot()).toBe(1);
+    });
+
+    it('returns 0 when no message matches', () => {
+      store.append({ role: 'user', content: 'A', groupId: 'grp_a' });
+      expect(store.deleteByGroup('grp_nonexistent')).toBe(0);
+      expect(store.countHot()).toBe(1);
+    });
+  });
+
+  describe('compactOrphans', () => {
+    it('deletes messages whose groupId is missing or unknown', () => {
+      store.appendBatch([
+        { role: 'user', content: 'live',     groupId: 'grp_live' },
+        { role: 'user', content: 'orphan-a', groupId: 'grp_dead' },
+        { role: 'user', content: 'orphan-b' },                       // no groupId
+        { role: 'user', content: 'live-2',   groupId: 'grp_live' },
+      ]);
+
+      const result = store.compactOrphans({ keepGroupIds: ['grp_live'] });
+      expect(result.skipped).toBe(false);
+      expect(result.scanned).toBe(4);
+      expect(result.removed).toBe(2);
+      expect(store.loadAll().map(m => m.content).sort()).toEqual(['live', 'live-2']);
+    });
+
+    it('dryRun previews without deleting', () => {
+      store.appendBatch([
+        { role: 'user', content: 'live',   groupId: 'grp_live' },
+        { role: 'user', content: 'orphan' },
+      ]);
+
+      const result = store.compactOrphans({ keepGroupIds: ['grp_live'], dryRun: true });
+      expect(result.removed).toBe(0);
+      expect(result.orphans).toHaveLength(1);
+      expect(store.countHot()).toBe(2); // nothing actually deleted
+    });
+
+    it('refuses to run when keepGroupIds is not an array (defensive)', () => {
+      // If we let this through, a transient group-load failure would
+      // wipe every persisted message. Bail instead.
+      store.append({ role: 'user', content: 'X', groupId: 'grp_a' });
+      const result = store.compactOrphans({ keepGroupIds: undefined });
+      expect(result.skipped).toBe(true);
+      expect(result.removed).toBe(0);
+      expect(store.countHot()).toBe(1);
+    });
+
+    it('treats an empty keepGroupIds as "everything is an orphan"', () => {
+      // This is the legitimate use case: the user has zero groups left
+      // and wants a clean wipe. We DO accept an empty array (vs undefined).
+      store.appendBatch([
+        { role: 'user', content: 'A', groupId: 'grp_x' },
+        { role: 'user', content: 'B' },
+      ]);
+      const result = store.compactOrphans({ keepGroupIds: [] });
+      expect(result.skipped).toBe(false);
+      expect(result.removed).toBe(2);
+      expect(store.countHot()).toBe(0);
+    });
+
+    it('also sweeps orphans that have been moved to cold', () => {
+      store.append({ role: 'user', content: 'cold-orphan', groupId: 'grp_dead' });
+      store.moveToCold('m0001');
+
+      const result = store.compactOrphans({ keepGroupIds: ['grp_live'] });
+      expect(result.removed).toBe(1);
+      expect(store.countCold()).toBe(0);
+    });
+  });
+
   describe('moveToCold', () => {
     it('should move message from messages/ to cold/', () => {
       store.append({ role: 'user', content: 'To be archived' });
