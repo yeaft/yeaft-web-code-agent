@@ -5,7 +5,6 @@ import VpSpeakerHeader from './VpSpeakerHeader.js';
 import ReflectionCard from './ReflectionCard.js';
 import SubAgentCard from './SubAgentCard.js';
 import GroupAnnouncementBar from './GroupAnnouncementBar.js';
-import { vpsTypingIn } from '../stores/helpers/vp-typing.js';
 
 export default {
   name: 'MessageList',
@@ -774,13 +773,15 @@ export default {
     // VpSpeakerHeader's inline dots take over, so a duplicate standalone
     // row would double-render the indicator.
     //
-    // Cross-mode isolation: `unifyVpTyping` is keyed by conversationId, so
-    // we only consult the current conversation's slice. When the user is in
-    // a Chat tab, the current conversation is a chat conv (not the Unify
-    // one), so `vpsTypingIn` returns [] and no Unify typing rows bleed
-    // into Chat.
+    // Cross-mode isolation: the `vpsTypingInCurrentConv` Pinia getter
+    // already scopes lookup to the current conversation's slice of the
+    // (per-conversation, per-VP) typing-indicator map. When the user is
+    // in a Chat tab, the current conversation is a chat conv (not the
+    // Unify one), so the getter returns [] and no Unify typing rows
+    // bleed into Chat. Reading via the getter keeps the underlying
+    // nested shape an internal detail of the store.
     const vpTypingIds = Vue.computed(() => {
-      const ids = vpsTypingIn(store.unifyVpTyping, store.currentConversation);
+      const ids = store.vpsTypingInCurrentConv;
       if (ids.length === 0) return [];
       // Find the tail streaming speakerVpId (if any) — skip it.
       const msgs = store.messages;

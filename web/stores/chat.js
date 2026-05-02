@@ -358,6 +358,33 @@ export const useChatStore = defineStore('chat', {
       const convId = state.unifyConversationId;
       return convId ? (state.messagesMap[convId] || EMPTY_ARRAY) : EMPTY_ARRAY;
     },
+    // task-fix: per-VP typing-indicator getters scoped to the CURRENT
+    // conversation. Components read these instead of the underlying
+    // `unifyVpTyping` shape so the nested data layout stays an internal
+    // detail of the store. The cross-mode isolation invariant is then
+    // a property of the getter contract, not something each consumer has
+    // to remember to enforce.
+    vpsTypingInCurrentConv: (state) => {
+      const convId = state.activeConversations[0] || null;
+      if (!convId) return EMPTY_ARRAY;
+      const inner = (state.unifyVpTyping || {})[convId];
+      if (!inner) return EMPTY_ARRAY;
+      const ids = Object.keys(inner).filter((vpId) => (inner[vpId] || 0) > 0);
+      return ids.length === 0 ? EMPTY_ARRAY : ids;
+    },
+    // Factory getter: "is `vpId` typing in the current conversation?"
+    // Pinia getters that return a function of the props are how we
+    // expose argument-taking lookups while still keeping the underlying
+    // shape private to the store. VpSpeakerHeader uses this so it never
+    // touches the nested map directly.
+    isVpTypingInCurrentConv: (state) => (vpId) => {
+      if (!vpId) return false;
+      const convId = state.activeConversations[0] || null;
+      if (!convId) return false;
+      const inner = (state.unifyVpTyping || {})[convId];
+      if (!inner) return false;
+      return (inner[vpId] || 0) > 0;
+    },
     // feat-6af5f9f1 PR B: Turn-grouped debug records for the redesigned
     // panel. Returns `[{ turnId, userPrompt, vpId, groupId, openedAt,
     //                    loops: Loop[], reflections: Card[], memoryLoaded,

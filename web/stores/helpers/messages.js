@@ -7,6 +7,32 @@
 // can use strict equality without hiding "untagged" messages.
 const DEFAULT_GROUP_ID = 'grp_default';
 
+// Are we currently writing into the *active* Unify conversation? Both
+// the speaker-attribution stamper and the groupId stamper key off this
+// same predicate; centralising it keeps the rules in one place.
+function inActiveUnifyConv(store, conversationId) {
+  return store.currentView === 'unify'
+    && conversationId === store.unifyConversationId;
+}
+
+// Idempotently mirror the routing context (vpId / turnId / speakerVpId)
+// onto an assistant message. Used at three points:
+//   1. on creation in addMessageToConversation
+//   2. defensively on each delta in appendToAssistantMessageForConversation
+//      (so a message minted before the routing context was set still
+//      gets a speakerVpId before AssistantTurn picks it up)
+//   3. defensively at finalize in finishStreamingForConversation (last
+//      chance before the streaming flag clears and the avatar header has
+//      to render from latched fields)
+// Idempotent: only fills missing fields, never overwrites.
+function stampSpeakerOnAssistant(store, conversationId, m) {
+  if (!m || m.type !== 'assistant') return;
+  if (!inActiveUnifyConv(store, conversationId)) return;
+  if (!m.vpId && store._currentUnifyVpId) m.vpId = store._currentUnifyVpId;
+  if (!m.turnId && store._currentUnifyTurnId) m.turnId = store._currentUnifyTurnId;
+  if (!m.speakerVpId && m.vpId) m.speakerVpId = m.vpId;
+}
+
 export function addMessageToConversation(store, conversationId, msg) {
   if (!conversationId) return;
 
@@ -23,32 +49,26 @@ export function addMessageToConversation(store, conversationId, msg) {
   // handleUnifyOutput before dispatching streaming chunks) over the user's
   // current filter — otherwise messages arriving while the user has
   // switched groups get stamped with the wrong group.
-  if (
-    store.currentView === 'unify'
-    && conversationId === store.unifyConversationId
-    && !newMsg.groupId
-  ) {
+  if (inActiveUnifyConv(store, conversationId) && !newMsg.groupId) {
     newMsg.groupId = store._currentUnifyGroupId
       || store.unifyActiveGroupFilter
       || DEFAULT_GROUP_ID;
   }
 
   // Unify per-VP turn: stamp vpId + turnId on the message for turn-level
-  // routing. Without this, concurrent VP streams would collide.
-  if (
-    store.currentView === 'unify'
-    && conversationId === store.unifyConversationId
-  ) {
+  // routing. Without this, concurrent VP streams would collide. The
+  // speakerVpId derivation lives inside stampSpeakerOnAssistant — but
+  // every Unify message (assistant *or* user) still gets vpId / turnId,
+  // so we keep that here.
+  if (inActiveUnifyConv(store, conversationId)) {
     if (!newMsg.vpId && store._currentUnifyVpId) {
       newMsg.vpId = store._currentUnifyVpId;
     }
     if (!newMsg.turnId && store._currentUnifyTurnId) {
       newMsg.turnId = store._currentUnifyTurnId;
     }
-    // Derive speakerVpId for MessageList VP-grouping.
-    if (!newMsg.speakerVpId && newMsg.vpId && newMsg.type === 'assistant') {
-      newMsg.speakerVpId = newMsg.vpId;
-    }
+    // Speaker derivation is assistant-only — defer to the shared helper.
+    stampSpeakerOnAssistant(store, conversationId, newMsg);
   }
 
   if (!store.messagesMap[conversationId]) {
@@ -66,23 +86,6 @@ export function appendToAssistantMessageForConversation(store, conversationId, t
   }
   const msgs = store.messagesMap[conversationId];
 
-  // Defensive speaker-attribution stamping: when the routing context has
-  // a vpId / turnId set, mirror it onto the existing streaming message
-  // even if it was created before the routing context was known. Without
-  // this, the latched `speakerVpId` can fall off mid-stream (e.g. if the
-  // first delta from a turn arrived without a vpId envelope and the
-  // streaming message was created blank), and AssistantTurn's
-  // VpSpeakerHeader fails to render once the standalone typing-row
-  // disappears at vp_typing_end. Idempotent: only fills when missing.
-  const stampSpeaker = (m) => {
-    if (!m || m.type !== 'assistant') return;
-    if (store.currentView !== 'unify') return;
-    if (conversationId !== store.unifyConversationId) return;
-    if (!m.vpId && store._currentUnifyVpId) m.vpId = store._currentUnifyVpId;
-    if (!m.turnId && store._currentUnifyTurnId) m.turnId = store._currentUnifyTurnId;
-    if (!m.speakerVpId && m.vpId) m.speakerVpId = m.vpId;
-  };
-
   // Per-VP turn routing: when a turnId is active, find the streaming
   // message for THAT turn (not just the last message). This prevents
   // concurrent VP streams from interleaving into the same message.
@@ -90,7 +93,7 @@ export function appendToAssistantMessageForConversation(store, conversationId, t
   if (turnId) {
     for (let i = msgs.length - 1; i >= 0; i--) {
       if (msgs[i].turnId === turnId && msgs[i].type === 'assistant' && msgs[i].isStreaming) {
-        stampSpeaker(msgs[i]);
+        stampSpeakerOnAssistant(store, conversationId, msgs[i]);
         if (msgs[i].content.endsWith(text)) return;
         msgs[i].content += text;
         return;
@@ -108,7 +111,7 @@ export function appendToAssistantMessageForConversation(store, conversationId, t
   // Legacy path (no turnId): append to the last streaming message.
   const lastMsg = msgs[msgs.length - 1];
   if (lastMsg && lastMsg.type === 'assistant' && lastMsg.isStreaming) {
-    stampSpeaker(lastMsg);
+    stampSpeakerOnAssistant(store, conversationId, lastMsg);
     // Dedup guard: skip if the message already ends with this exact text
     if (lastMsg.content.endsWith(text)) return;
     lastMsg.content += text;
@@ -138,16 +141,8 @@ export function finishStreamingForConversation(store, conversationId) {
       // header in AssistantTurn relies on `speakerVpId` to render after
       // streaming ends; if the streaming message lost the latch (or never
       // had it because vpId arrived late), this is the last chance to fill
-      // it in from the still-active routing context. Idempotent.
-      if (
-        m.type === 'assistant'
-        && store.currentView === 'unify'
-        && conversationId === store.unifyConversationId
-      ) {
-        if (!m.vpId && store._currentUnifyVpId) m.vpId = store._currentUnifyVpId;
-        if (!m.turnId && store._currentUnifyTurnId) m.turnId = store._currentUnifyTurnId;
-        if (!m.speakerVpId && m.vpId) m.speakerVpId = m.vpId;
-      }
+      // it in from the still-active routing context.
+      stampSpeakerOnAssistant(store, conversationId, m);
       // Stop at the last user message (turn boundary) — no need to go further
       if (m.type === 'user') break;
     }
