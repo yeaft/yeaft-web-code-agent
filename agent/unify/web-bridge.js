@@ -377,7 +377,25 @@ export function handleUnifyDeleteGroup(msg) {
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     const result = deleteGroup(yeaftDir, groupId);
-    sendGroupCrudResult({ op: 'delete', requestId, ok: true, groupId: result.groupId });
+    // Cascade: remove every persisted message stamped with this group id.
+    // Hard delete (per user spec): no soft-archive, the bytes are gone.
+    // Skipped silently if the session/store isn't initialized — the next
+    // CLI `--compact-orphans` run will sweep them as orphans.
+    let messagesRemoved = 0;
+    try {
+      if (session && session.conversationStore) {
+        messagesRemoved = session.conversationStore.deleteByGroup(groupId);
+      }
+    } catch (cascadeErr) {
+      console.warn(`[Yeaft] cascade delete for group ${groupId} failed: ${cascadeErr.message}`);
+    }
+    sendGroupCrudResult({
+      op: 'delete',
+      requestId,
+      ok: true,
+      groupId: result.groupId,
+      messagesRemoved,
+    });
     sendGroupSnapshotBroadcast();
   } catch (err) {
     sendGroupCrudResult({ op: 'delete', requestId, ok: false, error: groupErrorPayload(err) });

@@ -581,6 +581,122 @@ export class ConversationStore {
   // ─── Internal ───────────────────────────────────────────
 
   /**
+   * Delete every persisted message stamped with `groupId`. Scans both hot
+   * (`messages/`) and cold (`cold/`) directories and `unlink`s matching
+   * files. Messages without a `groupId` frontmatter are NOT touched —
+   * they may be legitimate pre-grouping legacy messages and are handled
+   * by `compactOrphans` instead.
+   *
+   * Used as the cascade step for hard-deleting a group: when the user
+   * deletes a group via web-bridge / CLI, the group's persisted message
+   * files would otherwise stick around as orphans.
+   *
+   * Idempotent and safe: missing dirs / unparseable files are skipped.
+   * Returns the number of message files removed.
+   *
+   * @param {string} groupId
+   * @returns {number}
+   */
+  deleteByGroup(groupId) {
+    if (!groupId) return 0;
+    let removed = 0;
+    for (const dir of [this.#msgDir, this.#coldDir]) {
+      if (!existsSync(dir)) continue;
+      let files;
+      try {
+        files = readdirSync(dir).filter(f => f.endsWith('.md'));
+      } catch (err) {
+        if (isPermissionError(err)) continue;
+        throw err;
+      }
+      for (const file of files) {
+        const path = join(dir, file);
+        let raw;
+        try {
+          raw = readFileSync(path, 'utf8');
+        } catch (err) {
+          if (isPermissionError(err)) continue;
+          throw err;
+        }
+        const msg = parseMessage(raw);
+        if (!msg || msg.groupId !== groupId) continue;
+        try {
+          unlinkSync(path);
+          removed += 1;
+        } catch (err) {
+          if (isPermissionError(err)) continue;
+          throw err;
+        }
+      }
+    }
+    // Invalidate cached next-seq — countHot/loadAll will re-scan.
+    this.#nextSeq = null;
+    return removed;
+  }
+
+  /**
+   * Sweep messages that don't belong to any live group. A message is
+   * considered an orphan when its frontmatter `groupId`:
+   *   - is missing entirely (legacy / pre-grouping); OR
+   *   - is set to a value not in `keepGroupIds`.
+   *
+   * One-shot maintenance helper exposed via the CLI (`--compact-orphans`).
+   * The caller is responsible for passing the authoritative live-group
+   * list — we do NOT auto-discover it here, because a transient failure
+   * in group loading (returning an empty list) would otherwise wipe
+   * every persisted message. Defensive design: an empty/missing
+   * `keepGroupIds` is rejected with a no-op return.
+   *
+   * @param {{ keepGroupIds: string[], dryRun?: boolean }} opts
+   * @returns {{ scanned: number, removed: number, orphans: string[], skipped: boolean }}
+   */
+  compactOrphans({ keepGroupIds, dryRun = false } = {}) {
+    if (!Array.isArray(keepGroupIds)) {
+      return { scanned: 0, removed: 0, orphans: [], skipped: true };
+    }
+    const keep = new Set(keepGroupIds);
+    let scanned = 0;
+    let removed = 0;
+    const orphans = [];
+    for (const dir of [this.#msgDir, this.#coldDir]) {
+      if (!existsSync(dir)) continue;
+      let files;
+      try {
+        files = readdirSync(dir).filter(f => f.endsWith('.md'));
+      } catch (err) {
+        if (isPermissionError(err)) continue;
+        throw err;
+      }
+      for (const file of files) {
+        const path = join(dir, file);
+        let raw;
+        try {
+          raw = readFileSync(path, 'utf8');
+        } catch (err) {
+          if (isPermissionError(err)) continue;
+          throw err;
+        }
+        const msg = parseMessage(raw);
+        if (!msg) continue;
+        scanned += 1;
+        const isOrphan = !msg.groupId || !keep.has(msg.groupId);
+        if (!isOrphan) continue;
+        orphans.push(path);
+        if (dryRun) continue;
+        try {
+          unlinkSync(path);
+          removed += 1;
+        } catch (err) {
+          if (isPermissionError(err)) continue;
+          throw err;
+        }
+      }
+    }
+    if (removed > 0) this.#nextSeq = null;
+    return { scanned, removed, orphans, skipped: false };
+  }
+
+  /**
    * Reassign every message in this store whose `threadId === sourceId`
    * to `targetId`. The original thread id is preserved in
    * `sourceThreadId` so the UI can still render a "#source" pill.

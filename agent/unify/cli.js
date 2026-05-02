@@ -31,6 +31,8 @@ import { loadSession } from './session.js';
 import { listModels, resolveModel, parseModelRef } from './models.js';
 import { buildSystemPrompt } from './prompts.js';
 import { searchMessages } from './conversation/search.js';
+import { ConversationStore } from './conversation/persist.js';
+import { snapshotGroups } from './groups/group-crud.js';
 
 // ─── Argument parsing ──────────────────────────────────────────
 
@@ -46,6 +48,9 @@ function parseArgs(argv) {
     dryRun: false,
     skipMCP: false,
     skipSkills: false,
+    compactOrphans: false,
+    compactOrphansDry: false,
+    deleteGroup: null,
     prompt: null,
   };
 
@@ -87,6 +92,15 @@ function parseArgs(argv) {
         break;
       case '--skip-skills':
         args.skipSkills = true;
+        break;
+      case '--compact-orphans':
+        args.compactOrphans = true;
+        break;
+      case '--compact-orphans-dry':
+        args.compactOrphansDry = true;
+        break;
+      case '--delete-group':
+        args.deleteGroup = rest[++i] || null;
         break;
       default:
         if (!arg.startsWith('-') && !args.prompt) {
@@ -196,6 +210,81 @@ function handleDryRun(args, config) {
   }
   console.log();
   console.log('=== END DRY RUN ===');
+}
+
+// ─── Maintenance handlers (no LLM session needed) ──────────────
+
+/**
+ * One-shot orphan-message sweep. Reads the live group list off disk and
+ * deletes every persisted message whose `groupId` frontmatter is missing
+ * or points to a group that no longer exists.
+ *
+ * Exposed via `--compact-orphans` (delete) and `--compact-orphans-dry`
+ * (preview only). Defensive: if the live group list is unreadable, we
+ * abort rather than wipe everything.
+ */
+function handleCompactOrphans(config, { dryRun = false } = {}) {
+  const yeaftDir = config.dir;
+  let groups;
+  try {
+    groups = snapshotGroups(yeaftDir);
+  } catch (err) {
+    console.error(`Cannot read groups directory: ${err.message}`);
+    console.error('Refusing to compact orphans without an authoritative live-group list.');
+    process.exitCode = 1;
+    return;
+  }
+  const keepGroupIds = (groups || []).map(g => g.id).filter(Boolean);
+  const store = new ConversationStore(yeaftDir);
+  const result = store.compactOrphans({ keepGroupIds, dryRun });
+
+  console.log(dryRun ? '=== COMPACT ORPHANS (dry run) ===' : '=== COMPACT ORPHANS ===');
+  console.log(`  Live groups:   ${keepGroupIds.length}${keepGroupIds.length ? ` (${keepGroupIds.join(', ')})` : ''}`);
+  console.log(`  Scanned:       ${result.scanned}`);
+  console.log(`  Orphan files:  ${result.orphans.length}`);
+  console.log(`  Removed:       ${result.removed}${dryRun ? ' (dry run — no files touched)' : ''}`);
+  if (result.orphans.length > 0) {
+    const preview = result.orphans.slice(0, 10);
+    for (const p of preview) console.log(`    - ${p}`);
+    if (result.orphans.length > preview.length) {
+      console.log(`    ... and ${result.orphans.length - preview.length} more`);
+    }
+  }
+}
+
+/**
+ * One-shot group hard-delete with cascade. Removes the group directory
+ * AND every persisted message stamped with that group id. Same semantics
+ * as the web-bridge `unify_delete_group` op, but reachable from the CLI
+ * for scripted maintenance.
+ */
+function handleDeleteGroup(config, groupId) {
+  const yeaftDir = config.dir;
+  // Lazy import to avoid loading the whole groups module on every CLI call.
+  // (Static `import` at top is fine too — kept dynamic to mirror the web-bridge
+  // pattern and keep the maintenance path self-contained.)
+  // eslint-disable-next-line global-require
+  return import('./groups/group-crud.js').then(({ deleteGroup }) => {
+    let result;
+    try {
+      result = deleteGroup(yeaftDir, groupId);
+    } catch (err) {
+      console.error(`Failed to delete group ${groupId}: ${err.message}`);
+      process.exitCode = 1;
+      return;
+    }
+    let messagesRemoved = 0;
+    try {
+      const store = new ConversationStore(yeaftDir);
+      messagesRemoved = store.deleteByGroup(groupId);
+    } catch (err) {
+      console.warn(`Group dir removed, but cascade failed: ${err.message}`);
+    }
+    console.log('=== DELETE GROUP ===');
+    console.log(`  Group:               ${result.groupId}`);
+    console.log(`  Legacy archives swept: ${result.legacyCleanedUp}`);
+    console.log(`  Messages cascaded:   ${messagesRemoved}`);
+  });
 }
 
 // ─── REPL ──────────────────────────────────────────────────────
@@ -674,6 +763,16 @@ async function main() {
     return;
   }
 
+  // Handle one-shot maintenance ops (no LLM needed, no session needed)
+  if (args.compactOrphans || args.compactOrphansDry) {
+    handleCompactOrphans(config, { dryRun: args.compactOrphansDry });
+    return;
+  }
+  if (args.deleteGroup) {
+    await handleDeleteGroup(config, args.deleteGroup);
+    return;
+  }
+
   // Handle interactive mode
   if (args.interactive) {
     await runREPL(config, args);
@@ -709,6 +808,9 @@ async function main() {
   console.log('  node cli.js --trace stats             — Debug trace statistics');
   console.log('  node cli.js --trace recent            — Recent turns');
   console.log('  node cli.js --trace search "keyword"  — Search traces');
+  console.log('  node cli.js --compact-orphans         — Delete orphan messages (no live group)');
+  console.log('  node cli.js --compact-orphans-dry     — Preview orphan sweep, no delete');
+  console.log('  node cli.js --delete-group <id>       — Hard delete group + cascade messages');
   console.log();
   console.log('Options:');
   console.log('  -d, --debug           Enable debug tracing');
