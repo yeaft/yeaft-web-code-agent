@@ -214,6 +214,43 @@ export function resolveModel(modelName) {
 }
 
 /**
+ * Default context window when neither the model registry nor the engine
+ * config has a value. 200K is a conservative middle-ground — most modern
+ * production models (Claude, GPT-5, Gemini) have ≥ 128K.
+ *
+ * Single source of truth: callers (engine.js pre-flight guard,
+ * tools/registry.js per-result cap) MUST use this constant or
+ * {@link resolveContextWindow} instead of hardcoding 200_000.
+ */
+export const DEFAULT_CONTEXT_WINDOW = 200_000;
+
+/**
+ * Resolve the live context window for a model, with an explicit fallback
+ * ladder:
+ *   1. MODEL_REGISTRY entry's `contextWindow` (most accurate)
+ *   2. caller-supplied config override (e.g. `config.maxContextTokens`)
+ *   3. {@link DEFAULT_CONTEXT_WINDOW}
+ *
+ * Used by the per-tool-result cap and the pre-flight token guard so the
+ * defense layers always see the same number, regardless of which seam
+ * resolves it first.
+ *
+ * @param {string} modelName
+ * @param {{ maxContextTokens?: number }} [config]
+ * @returns {number}
+ */
+export function resolveContextWindow(modelName, config) {
+  const info = resolveModel(modelName);
+  if (info && Number.isFinite(info.contextWindow) && info.contextWindow > 0) {
+    return info.contextWindow;
+  }
+  const cfg = config && Number.isFinite(config.maxContextTokens) && config.maxContextTokens > 0
+    ? config.maxContextTokens : null;
+  if (cfg !== null) return cfg;
+  return DEFAULT_CONTEXT_WINDOW;
+}
+
+/**
  * List all known models.
  *
  * @returns {{ name: string, adapter: string, baseUrl: string, contextWindow: number, maxOutputTokens: number, displayName: string }[]}
