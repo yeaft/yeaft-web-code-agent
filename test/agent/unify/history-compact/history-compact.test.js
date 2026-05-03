@@ -53,8 +53,8 @@ import {
 // ─── Default policy ─────────────────────────────────────────────────
 
 describe('defaults match the user-stated policy', () => {
-  it('turn limit is Infinity by default (turn trigger off)', () => {
-    expect(DEFAULT_TURN_LIMIT).toBe(Infinity);
+  it('turn limit is 30 by default (back-stop for many small turns)', () => {
+    expect(DEFAULT_TURN_LIMIT).toBe(30);
   });
   it('token limit is 80,000 (40 % of 200K default context)', () => {
     expect(DEFAULT_TOKEN_LIMIT).toBe(80_000);

@@ -48,6 +48,7 @@ import { seedDefaultGroup } from './groups/seed-default.js';
 import {
   shouldCompactHistory,
   compactHistory,
+  trimSnapshotForBudget,
 } from './history-compact.js';
 
 /** @type {import('./session.js').Session | null} */
@@ -168,7 +169,9 @@ export function handleUnifyVpCreate(msg) {
   const requestId = msg && msg.requestId;
   const payload = msg && msg.payload;
   try {
-    const { vpId } = createVp(payload || {});
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    const memoryRoot = yeaftDir ? join(yeaftDir, 'memory') : undefined;
+    const { vpId } = createVp(payload || {}, memoryRoot ? { memoryRoot } : {});
     sendVpCrudResult({ op: 'create', requestId, ok: true, vpId });
   } catch (err) {
     sendVpCrudResult({
@@ -208,7 +211,9 @@ export function handleUnifyVpDelete(msg) {
   const requestId = msg && msg.requestId;
   const vpId = msg && msg.vpId;
   try {
-    deleteVp(vpId);
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    const memoryRoot = yeaftDir ? join(yeaftDir, 'memory') : undefined;
+    deleteVp(vpId, memoryRoot ? { memoryRoot } : {});
     sendVpCrudResult({ op: 'delete', requestId, ok: true, vpId });
   } catch (err) {
     sendVpCrudResult({
@@ -297,7 +302,8 @@ export function handleUnifyCreateGroup(msg) {
   const payload = (msg && msg.payload) || {};
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
-    const group = createGroupFromSpec(yeaftDir, payload);
+    const memoryRoot = yeaftDir ? join(yeaftDir, 'memory') : undefined;
+    const group = createGroupFromSpec(yeaftDir, payload, memoryRoot ? { memoryRoot } : {});
     sendGroupCrudResult({ op: 'create', requestId, ok: true, group });
     sendGroupSnapshotBroadcast();
   } catch (err) {
@@ -376,7 +382,8 @@ export function handleUnifyDeleteGroup(msg) {
   const groupId = msg && msg.groupId;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
-    const result = deleteGroup(yeaftDir, groupId);
+    const memoryRoot = yeaftDir ? join(yeaftDir, 'memory') : undefined;
+    const result = deleteGroup(yeaftDir, groupId, memoryRoot ? { memoryRoot } : {});
     // Cascade: remove every persisted message stamped with this group id.
     // Hard delete (per user spec): no soft-archive, the bytes are gone.
     // Skipped silently if the session/store isn't initialized — the next
@@ -792,7 +799,7 @@ export async function handleUnifyGroupChat(msg) {
       groupHandle = openGroup(root, groupId);
     } else if (groupId === 'grp_default') {
       try {
-        const seeded = seedDefaultGroup(yeaftDir, {});
+        const seeded = seedDefaultGroup(yeaftDir, { memoryRoot: join(yeaftDir, 'memory') });
         groupHandle = seeded.group;
       } catch (seedErr) {
         seedFailed = true;
@@ -1146,9 +1153,16 @@ async function runVpTurn({ prompt, groupId, vpId, turnId, groupCoordinator, vpAb
         vpId,
         turnId,
       };
+      // Always trim the snapshot before passing to engine.query. This is
+      // the second-line defense (history-compact only fires above 30K
+      // tokens — small chats with many turns still bloat the messages
+      // array). See `trimSnapshotForBudget` doc-block for policy.
+      const trimmedMessages = trimSnapshotForBudget(baseSnapshot, {
+        messageTokenBudget: session?.config?.messageTokenBudget,
+      });
       for await (const event of session.engine.query({
         prompt,
-        messages: baseSnapshot,
+        messages: trimmedMessages,
         signal: vpAbort.signal,
         ...queryOpts,
       })) {

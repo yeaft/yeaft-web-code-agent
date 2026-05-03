@@ -34,6 +34,7 @@
 
 import { existsSync, renameSync, rmSync, readdirSync, statSync } from 'fs';
 import { randomBytes } from 'crypto';
+import { homedir } from 'os';
 import { join } from 'path';
 import {
   openGroup, createGroup, listGroups, loadGroupMeta,
@@ -42,6 +43,40 @@ import { addVp as rosterAdd, removeVp as rosterRemove, setDefaultVp } from './ro
 import { seedDefaultGroup, DEFAULT_GROUP_ID } from './seed-default.js';
 import { nextGroupId, validateVpId, isReservedVpId } from './ids.js';
 import { scanVpLibrary, DEFAULT_VP_LIB_DIR } from '../vp/vp-store.js';
+import { seedSummaryIfMissingSync, removeScopeDirSync } from '../memory/store-v2.js';
+
+/**
+ * Default memory root used when callers don't pass `options.memoryRoot`.
+ * See `vp/vp-crud.js` for the same default; production code threads
+ * `<yeaftDir>/memory` through to keep test/prod isolation honest.
+ */
+const DEFAULT_MEMORY_ROOT = join(homedir(), '.yeaft', 'memory');
+
+/**
+ * Build the group seed summary body. Uses the group display name + roster
+ * so even an empty conversation has SOMETHING for engine.#prepareAms to
+ * pull into the Layer-A resident summary on the very first turn.
+ *
+ * Format is intentionally short: Dream-v2 will rewrite it in full once
+ * meaningful diffs accumulate.
+ *
+ * @param {{name:string, roster?:string[], defaultVpId?:string|null}} spec
+ * @returns {string}
+ */
+export function buildGroupSeedSummary(spec) {
+  const name = String(spec?.name || '').trim();
+  const roster = Array.isArray(spec?.roster) ? spec.roster : [];
+  const lines = [];
+  if (name) lines.push(`# ${name}`);
+  lines.push('', `Group with ${roster.length} member${roster.length === 1 ? '' : 's'}.`);
+  if (roster.length > 0) {
+    lines.push('', `**Members:** ${roster.join(', ')}`);
+  }
+  if (spec?.defaultVpId) {
+    lines.push('', `**Default VP:** ${spec.defaultVpId}`);
+  }
+  return lines.join('\n').trim();
+}
 
 export class GroupCrudError extends Error {
   constructor(code, groupId, message) {
@@ -78,6 +113,7 @@ export function makeGroupId(name) {
  */
 export function ensureDefaultGroupIfEmpty(yeaftDir, options = {}) {
   const libDir = options.libDir || DEFAULT_VP_LIB_DIR;
+  const memoryRoot = options.memoryRoot || DEFAULT_MEMORY_ROOT;
   const existing = listGroups(groupsRoot(yeaftDir));
   if (existing.length > 0) {
     return { seeded: false, groupId: existing[0].id };
@@ -95,6 +131,7 @@ export function ensureDefaultGroupIfEmpty(yeaftDir, options = {}) {
     name: options.name || 'Default',
     roster: vps,
     defaultVpId,
+    memoryRoot,
   });
   return {
     seeded: created,
@@ -112,7 +149,8 @@ export function ensureDefaultGroupIfEmpty(yeaftDir, options = {}) {
  * @param {{name:string, roster?:string[], defaultVpId?:string|null}} spec
  * @returns {{id:string, name:string, roster:string[], defaultVpId:string|null}}
  */
-export function createGroupFromSpec(yeaftDir, spec) {
+export function createGroupFromSpec(yeaftDir, spec, options = {}) {
+  const memoryRoot = options.memoryRoot || DEFAULT_MEMORY_ROOT;
   const name = String(spec && spec.name || '').trim();
   if (!name) throw new GroupCrudError('invalid_name', null, 'group name required');
 
@@ -145,6 +183,20 @@ export function createGroupFromSpec(yeaftDir, spec) {
   const handle = createGroup(root, { id, name, roster, defaultVpId });
   const meta = handle.getMeta();
   handle.close();
+
+  // Seed Layer-A resident summary so the first session has memory content
+  // even before Dream-v2 has run. No-op if a summary.md already exists.
+  // Best-effort: a memory-root permission failure must NOT break group create.
+  try {
+    seedSummaryIfMissingSync(
+      { kind: 'group', id },
+      buildGroupSeedSummary({ name, roster, defaultVpId }),
+      { root: memoryRoot },
+    );
+  } catch (err) {
+    console.warn(`[group-crud] failed to seed summary.md for ${id}:`, err?.message || err);
+  }
+
   return meta;
 }
 
@@ -216,7 +268,8 @@ export function archiveGroup(yeaftDir, groupId) {
  * behind by the previous soft-archive implementation, so a single
  * delete cleans up legacy state too.
  */
-export function deleteGroup(yeaftDir, groupId) {
+export function deleteGroup(yeaftDir, groupId, options = {}) {
+  const memoryRoot = options.memoryRoot || DEFAULT_MEMORY_ROOT;
   const root = groupsRoot(yeaftDir);
   const srcDir = join(root, groupId);
   const liveExists = existsSync(srcDir) && !!loadGroupMeta(srcDir);
@@ -244,6 +297,14 @@ export function deleteGroup(yeaftDir, groupId) {
   }
   for (const dir of legacyDirs) {
     rmSync(dir, { recursive: true, force: true });
+  }
+
+  // Cascade: drop the group's memory scope so a recreate with the same id
+  // starts clean. Best-effort — never let memory cleanup fail the CRUD op.
+  try {
+    removeScopeDirSync({ kind: 'group', id: groupId }, { root: memoryRoot });
+  } catch (err) {
+    console.warn(`[group-crud] failed to remove memory dir for ${groupId}:`, err?.message || err);
   }
 
   return { groupId, deleted: true, legacyCleanedUp: legacyDirs.length };

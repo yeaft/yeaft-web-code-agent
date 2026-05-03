@@ -31,6 +31,7 @@ import {
   appendMemory,
   readSummary,
   writeSummary,
+  seedSummaryIfMissing,
   ensureScope,
   listScopes,
   SCOPE_KINDS,
@@ -170,6 +171,29 @@ describe('D. summary.md read/write', () => {
     const onDisk = readFileSync(join(root, 'vp', 'li-si', 'summary.md'), 'utf8');
     expect(onDisk).toBe('\n');
     expect(await readSummary(scope, { root })).toBe('');
+  });
+
+  it('seedSummaryIfMissing writes when summary.md is absent', async () => {
+    const scope = { kind: 'vp', id: 'seedy' };
+    const seeded = await seedSummaryIfMissing(scope, 'seed body', { root });
+    expect(seeded).toBe(true);
+    expect(await readSummary(scope, { root })).toBe('seed body');
+  });
+
+  it('seedSummaryIfMissing is a no-op when a non-empty summary.md exists', async () => {
+    const scope = { kind: 'vp', id: 'protected' };
+    await writeSummary(scope, 'KEEP ME', { root });
+    const seeded = await seedSummaryIfMissing(scope, 'overwrite attempt', { root });
+    expect(seeded).toBe(false);
+    expect(await readSummary(scope, { root })).toBe('KEEP ME');
+  });
+
+  it('seedSummaryIfMissing rewrites an empty summary.md', async () => {
+    const scope = { kind: 'vp', id: 'empty-existing' };
+    await writeSummary(scope, '', { root });
+    const seeded = await seedSummaryIfMissing(scope, 'fresh seed', { root });
+    expect(seeded).toBe(true);
+    expect(await readSummary(scope, { root })).toBe('fresh seed');
   });
 });
 

@@ -55,6 +55,7 @@ import { pairSanitize } from './pair-sanitize.js';
 import {
   countTurns as countTurnsImpl,
   indexOfNthTurnFromEnd,
+  sliceLastNTurns,
 } from './turn-utils.js';
 
 /**
@@ -65,27 +66,32 @@ import {
 export const countTurns = countTurnsImpl;
 
 /**
- * Default trigger thresholds (2026-05-01 policy update):
- *   - never compact while total tokens < 30K (soft floor — most
+ * Default trigger thresholds (2026-05-02 policy update):
+ *   - never compact while total tokens < 12K (soft floor — most short
  *     conversations under that aren't worth paying the summarizer
  *     cost; the LLM hasn't started feeling the context yet either),
  *   - otherwise compact if ANY of:
+ *       turnCount > 30           (back-stop for chats with many small turns)
  *       tokens > 40 % of `maxContextTokens` (default 200K → 80K)
  *       tokens > 200K hard ceiling
  *
- * The earlier "turn count > 20" trigger was DROPPED because under
- * the new floor it's effectively dead code — by the time you've sent
- * 20 user prompts that exceed 30K tokens, the fractional threshold
- * has already fired. `turnLimit` and the `turn_count` reason code
- * are still accepted as overrides so tests / future config can re-
- * enable a turn-based trigger if needed; with `turnLimit: Infinity`
- * (the new default) the check is simply skipped.
+ * Lowered from 30K → 12K and re-enabled a turn-count back-stop because
+ * the previous "soft floor of 30K, no turn cap" combination is dead in
+ * the multi-VP fan-out path: hundreds of small turns happily stay below
+ * 30K and never trigger compact, then `runVpTurn` feeds the whole 720+
+ * message snapshot to the LLM and trips the provider's context window.
+ * The snapshot trim in `web-bridge.js#trimSnapshotForBudget` is the
+ * primary defense; this is the second-line trigger that compresses
+ * the on-array form so subsequent turns also stay bounded.
+ *
+ * `turnLimit` and the `turn_count` reason code are still overridable
+ * for tests / future config.
  *
  * Token thresholds are derived from `maxContextTokens` at evaluation
  * time so the policy auto-adjusts to the user's configured context.
  */
-export const DEFAULT_TURN_LIMIT = Infinity;
-export const DEFAULT_MIN_TOKEN_FLOOR = 30_000;
+export const DEFAULT_TURN_LIMIT = 30;
+export const DEFAULT_MIN_TOKEN_FLOOR = 12_000;
 export const DEFAULT_MAX_CONTEXT_TOKENS = 200_000;
 export const DEFAULT_TOKEN_FRACTION = 0.4;
 export const DEFAULT_HARD_TOKEN_CEILING = 200_000;
@@ -105,6 +111,35 @@ export const DEFAULT_TOKEN_LIMIT = Math.min(
  * talking about" lossless.
  */
 export const DEFAULT_KEEP_RECENT_TURNS = 2;
+
+/**
+ * Default cap on the number of turns kept in the per-call snapshot fed
+ * to `engine.query` (see `trimSnapshotForBudget` below). A turn here is
+ * one user-side prompt — multi-VP `@vp-X` variants of the same prompt
+ * collapse into one turn (see `turn-utils.js#countTurns`).
+ *
+ * Sized in conjunction with `DEFAULT_TURN_LIMIT` (30, the compact-trigger
+ * back-stop): trim to 25 leaves a 5-turn buffer below the compact trigger
+ * so a typical chat sees its history compacted before the trim starts
+ * dropping turns silently. That ordering matters — compact preserves the
+ * tail's lossless 2 turns AND a summary of everything older, whereas trim
+ * just discards anything beyond the cap.
+ *
+ * 25 turns at ~5 messages each (user + assistant + a couple tool steps)
+ * is roughly 100–125 messages — well under the LLM context window for
+ * any reasonable model, and large enough to preserve "what we've been
+ * talking about" context for the model. The hard token-budget cap inside
+ * `trimSnapshotForBudget` tightens this further when individual turns
+ * are large.
+ */
+export const DEFAULT_RECENT_TURN_CAP = 25;
+
+/**
+ * Default per-query token budget for the snapshot (separate from the
+ * `tokenLimit` used by compact triggers). Mirrors the historical default
+ * carried in `~/.yeaft/config.json`'s `messageTokenBudget` field.
+ */
+export const DEFAULT_MESSAGE_TOKEN_BUDGET = 8192;
 
 /**
  * Estimate the token weight of a single message including role overhead
@@ -488,4 +523,70 @@ export async function compactHistory(messages, options) {
     afterTurns: after.turnCount,
     afterTokens: after.tokenCount,
   };
+}
+
+/**
+ * Trim a snapshot of conversation messages so the per-call array fed
+ * to `engine.query` stays bounded.
+ *
+ * Two-stage policy:
+ *   1. **Turn cap** — keep at most `recentTurnCap` turns (default 25)
+ *      via `sliceLastNTurns`. This always cuts at a user-message
+ *      boundary and walks forward through `@vp-X` variants of the
+ *      cut turn so the slice is pair-safe.
+ *   2. **Token budget** — if the trimmed slice still exceeds
+ *      `messageTokenBudget` tokens (default 8192 from
+ *      `~/.yeaft/config.json`), iteratively drop the oldest turn until
+ *      we're under budget. We never drop below 1 turn — even a single
+ *      huge turn is preferable to no context.
+ *
+ * Then run `pairSanitize` as belt-and-suspenders to drop any orphan
+ * tool_use/tool_result that survived the cuts. The transform is
+ * idempotent and never mutates the input.
+ *
+ * Why this exists:
+ *   `runVpTurn` previously fed the entire `conversationMessages` array
+ *   into `engine.query` for every fan-out. With multi-VP turns the
+ *   array grows ~5–8 messages per user prompt, so after a few hundred
+ *   prompts the per-call payload exceeds 100 KB and routinely OOMs the
+ *   provider's context window. `compactHistory` only fires above its
+ *   token soft floor — small chats with many turns stay below that
+ *   floor but still bloat the messages array. This trim is the second-
+ *   line defense: it ALWAYS runs, before every query, regardless of
+ *   compact state.
+ *
+ * Lives in `history-compact.js` alongside `compactHistory` because
+ * both functions are part of the same "bound the messages array fed
+ * to the LLM" surface — keeping them together makes the relationship
+ * between trim (per-call) and compact (global) explicit.
+ *
+ * @param {Array<object>} snapshot
+ * @param {{ messageTokenBudget?: number, recentTurnCap?: number }} [opts]
+ * @returns {Array<object>}
+ */
+export function trimSnapshotForBudget(snapshot, opts = {}) {
+  if (!Array.isArray(snapshot) || snapshot.length === 0) return [];
+
+  const recentTurnCap = Number.isFinite(opts.recentTurnCap) && opts.recentTurnCap > 0
+    ? opts.recentTurnCap
+    : DEFAULT_RECENT_TURN_CAP;
+  const messageTokenBudget = Number.isFinite(opts.messageTokenBudget) && opts.messageTokenBudget > 0
+    ? opts.messageTokenBudget
+    : DEFAULT_MESSAGE_TOKEN_BUDGET;
+
+  // Stage 1: cap by turn count.
+  let trimmed = sliceLastNTurns(snapshot, recentTurnCap);
+
+  // Stage 2: cap by token budget. Drop oldest turn iteratively.
+  // We never drop below ~1 turn — pick a safety floor of 1.
+  let remainingTurnCap = recentTurnCap;
+  let tokens = estimateMessagesTokens(trimmed);
+  while (tokens > messageTokenBudget && remainingTurnCap > 1) {
+    remainingTurnCap--;
+    trimmed = sliceLastNTurns(trimmed, remainingTurnCap);
+    tokens = estimateMessagesTokens(trimmed);
+  }
+
+  // Stage 3: pair-sanitize to drop orphan tool_use/tool_result.
+  return pairSanitize(trimmed);
 }
