@@ -135,6 +135,27 @@ export function redactRawRequest(req) {
   return { url: req.url, method: req.method, headers, body: req.body };
 }
 
+/**
+ * Snapshot a Fetch Response's headers into a plain object for the debug
+ * panel. Defensive against polyfilled / mocked Response shapes that don't
+ * implement `Headers#entries()` — falls back to `{}` rather than throwing.
+ *
+ * NOTE: multi-valued headers (e.g. `Set-Cookie`) collapse to the last value
+ * because `Object.fromEntries` can't represent duplicates. For LLM debug
+ * traffic this is fine; if a future use case needs multi-valued capture,
+ * switch the return to an array of [k, v] pairs.
+ *
+ * @param {Response | { headers?: { entries?: () => Iterable<[string, string]> } }} response
+ * @returns {Record<string, string>}
+ */
+export function safeHeaders(response) {
+  const h = response && response.headers;
+  if (h && typeof h.entries === 'function') {
+    return Object.fromEntries(h.entries());
+  }
+  return {};
+}
+
 // ─── Base Class ────────────────────────────────────────────────
 
 /**
