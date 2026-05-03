@@ -22,11 +22,20 @@
   --vp-status-busy:   #f2994a;
 
   --vp-badge-subtitle-fg: var(--text-secondary, #6b7280);
+
+  /* WeChat-style VP turn card chrome (see .assistant-turn.has-vp-speaker
+   * below). Light-mode tokens; dark-mode overrides live in the
+   * [data-theme="dark"] block. */
+  --bg-vp-turn:     rgba(0, 0, 0, 0.025);
+  --border-vp-turn: rgba(0, 0, 0, 0.06);
 }
 
 [data-theme="dark"] {
   --vp-status-online: #56d364;
   --vp-status-busy:   #ff9e2c;
+
+  --bg-vp-turn:     rgba(255, 255, 255, 0.035);
+  --border-vp-turn: rgba(255, 255, 255, 0.08);
 }
 
 /* ─── VpAvatar ───────────────────────────────────────────── */
@@ -237,8 +246,8 @@
  * naturally beneath the header. This is the layout the user explicitly
  * called out: "谁在说话，message 要在对应的 VP 头像下面". */
 .assistant-turn.has-vp-speaker {
-  background: var(--bg-vp-turn, rgba(0, 0, 0, 0.025));
-  border: 1px solid var(--border-vp-turn, rgba(0, 0, 0, 0.06));
+  background: var(--bg-vp-turn);
+  border: 1px solid var(--border-vp-turn);
   border-radius: 10px;
   padding: 10px 12px;
   margin: 6px 0;
@@ -246,15 +255,11 @@
 .assistant-turn.has-vp-speaker .vp-speaker-header {
   margin: 0 0 6px;
 }
-[data-theme="dark"] .assistant-turn.has-vp-speaker {
-  background: var(--bg-vp-turn-dark, rgba(255, 255, 255, 0.035));
-  border-color: var(--border-vp-turn-dark, rgba(255, 255, 255, 0.08));
-}
 
 /* Streaming state: a faint accent on the left edge tells the eye which
  * card is currently producing text, without animating the entire box. */
 .assistant-turn.has-vp-speaker.streaming {
-  border-left: 2px solid var(--vp-status-busy, #f2994a);
+  border-left: 2px solid var(--vp-status-busy);
   padding-left: 11px;
 }
 

@@ -491,12 +491,6 @@ export default {
       const result = [];
       let currentTurn = null;
       let turnCounter = 0;
-      // task-334-ui-b: track the most recent VP speaker we actually rendered
-      // a header for, so consecutive turns from the same VP collapse
-      // (the WeChat/Slack group-chat convention). Reset whenever a user or
-      // system row is emitted — a non-VP row breaks the "consecutive VP"
-      // streak, same as in any other group chat.
-      let lastShownSpeakerVpId = null;
 
       const finishTurn = () => {
         if (currentTurn) {
@@ -516,9 +510,6 @@ export default {
             //
             // Legacy 1:1 turns (no speakerVpId) still render no header.
             currentTurn.showSpeakerHeader = !!currentTurn.speakerVpId;
-            if (currentTurn.speakerVpId) {
-              lastShownSpeakerVpId = currentTurn.speakerVpId;
-            }
             result.push(currentTurn);
           }
           currentTurn = null;
@@ -545,7 +536,8 @@ export default {
           // task-334-ui-b: speaker attribution. `speakerVpId` latches from
           // the first assistant message carrying it; `speakerTimestamp` /
           // `speakerStateCause` read from the same message. `showSpeakerHeader`
-          // is set at finishTurn() so we can collapse same-speaker streaks.
+          // is computed at finishTurn() — true for any VP-attributed turn,
+          // false for legacy 1:1 turns (no speakerVpId).
           speakerVpId: null,
           speakerTimestamp: 0,
           speakerStateCause: '',
@@ -563,17 +555,12 @@ export default {
             continue;
           }
           finishTurn();
-          // task-334-ui-b: a non-VP row resets the consecutive-speaker streak.
-          lastShownSpeakerVpId = null;
           result.push({ type: 'user', id: msg.id || 'u_' + i, message: msg });
           continue;
         }
 
         if (msg.type === 'system' || msg.type === 'error') {
           finishTurn();
-          // task-334-ui-b: same reset as for user rows — any non-VP row
-          // breaks the streak so the next VP turn re-shows its header.
-          lastShownSpeakerVpId = null;
           result.push({ type: msg.type, id: msg.id || 's_' + i, message: msg });
           continue;
         }
@@ -583,7 +570,6 @@ export default {
         // avatar + [task] pill — not a continuation of an assistant turn).
         if (msg.type === 'feature-message') {
           finishTurn();
-          lastShownSpeakerVpId = null;
           result.push({ type: 'feature-message', id: msg.id || 'tm_' + i, message: msg });
           continue;
         }
@@ -762,19 +748,15 @@ export default {
 
     // Show typing dots when AI is processing but hasn't started streaming text yet.
     //
-    // In Unify group chat mode, suppress the global cat/dog animation entirely:
-    // each VP renders its own per-speaker typing dots inside VpSpeakerHeader,
-    // so showing a global running-cat alongside that creates the illusion of
-    // a separate "speaker" (the cat) which has no attribution. WeChat-style
-    // attribution requires that typing indication live with the actual VP's
-    // avatar, never as a free-floating row.
+    // Contract: in Unify view, attribution is owned ENTIRELY by VpSpeakerHeader.
+    // The global running-cat is a 1:1-chat affordance — in group mode it has
+    // no speaker, so it reads as a phantom 5th participant. We unconditionally
+    // suppress it for `currentView === 'unify'`, even in the brief window
+    // before any VP is registered as typing: a momentary "nothing animating"
+    // is correct, a phantom speaker is not.
     const showTypingDots = Vue.computed(() => {
       if (!store.isProcessing || hasStreamingMessage.value) return false;
-      // Unify group mode: per-VP indicators are sufficient.
-      const isUnifyGroup = store.currentView === 'unify' &&
-        Array.isArray(store.vpsTypingInCurrentConv) &&
-        store.vpsTypingInCurrentConv.length > 0;
-      if (isUnifyGroup) return false;
+      if (store.currentView === 'unify') return false;
       return true;
     });
 
