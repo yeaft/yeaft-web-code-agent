@@ -32,6 +32,7 @@ import {
   LLMContextError,
   LLMServerError,
   LLMAbortError,
+  redactRawRequest,
 } from './adapter.js';
 import {
   normalizeEffort,
@@ -225,9 +226,9 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
   // ─── Streaming ──────────────────────────────────────────
 
   /**
-   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, effort?: 'low'|'medium'|'high'|'max', extraBody?: object, signal?: AbortSignal }} params
+   * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, effort?: 'low'|'medium'|'high'|'max', extraBody?: object, signal?: AbortSignal, onRawExchange?: ({rawRequest, rawResponse}) => void }} params
    */
-  async *stream({ model, system, messages, tools, maxTokens = 16384, effort, extraBody, signal }) {
+  async *stream({ model, system, messages, tools, maxTokens = 16384, effort, extraBody, signal, onRawExchange }) {
     if (signal?.aborted) throw new LLMAbortError();
 
     const body = {
@@ -255,14 +256,22 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
 
     if (extraBody) Object.assign(body, extraBody);
 
+    const url = `${this.#baseUrl}/responses`;
+    const headers = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${this.#apiKey}`,
+    };
+
+    // Expose the raw request (auth-redacted) for the debug panel. The body
+    // is captured verbatim — never truncated — so "copy request" matches
+    // exactly what we POST to the LLM. Parity with anthropic.js.
+    const rawRequest = redactRawRequest({ url, method: 'POST', headers, body });
+
     let response;
     try {
-      response = await fetch(`${this.#baseUrl}/responses`, {
+      response = await fetch(url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.#apiKey}`,
-        },
+        headers,
         body: JSON.stringify(body),
         signal,
       });
@@ -273,6 +282,21 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
 
     if (!response.ok) {
       const errorBody = await response.text();
+      // Capture error response too, then throw. Parity with anthropic.js.
+      if (onRawExchange) {
+        try {
+          onRawExchange({
+            rawRequest,
+            rawResponse: {
+              status: response.status,
+              headers: response.headers && typeof response.headers.entries === 'function'
+                ? Object.fromEntries(response.headers.entries())
+                : {},
+              body: errorBody,
+            },
+          });
+        } catch { /* ignore */ }
+      }
       throw this.#classifyError(response.status, errorBody);
     }
 
@@ -287,11 +311,23 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     const emittedToolCallIds = new Set();
     let sawToolCall = false;
 
+    // Accumulate raw SSE body verbatim for the debug panel. No truncation:
+    // a truncated copy of the response is misleading. Parity with
+    // anthropic.js — see web/stores/chat.js MAX_UNIFY_DEBUG_LOOPS for the
+    // count-based retention bound that replaces per-payload mutilation.
+    let rawSseBody = '';
+    const responseHeaders = response.headers && typeof response.headers.entries === 'function'
+      ? Object.fromEntries(response.headers.entries())
+      : {};
+    const responseStatus = response.status;
+
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        buffer += decoder.decode(value, { stream: true });
+        const chunkText = decoder.decode(value, { stream: true });
+        buffer += chunkText;
+        rawSseBody += chunkText;
 
         // SSE events are separated by blank lines; split on \n
         const lines = buffer.split('\n');
@@ -409,6 +445,21 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
       throw err;
     } finally {
       try { reader.releaseLock(); } catch { /* noop */ }
+      // Emit raw exchange after stream completes (or errors). Body is the
+      // verbatim SSE — never truncated. Parity with anthropic.js.
+      if (onRawExchange) {
+        try {
+          onRawExchange({
+            rawRequest,
+            rawResponse: {
+              status: responseStatus,
+              headers: responseHeaders,
+              body: rawSseBody,
+              format: 'sse',
+            },
+          });
+        } catch { /* ignore */ }
+      }
     }
   }
 

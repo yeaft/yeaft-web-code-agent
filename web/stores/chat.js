@@ -13,6 +13,7 @@ import * as crewHelpers from './helpers/crew.js';
 import * as unifyViewHelpers from './helpers/unify-view.js';
 import { incVpTyping, decVpTyping } from './helpers/vp-typing.js';
 import { turnMatchesSearch } from './helpers/debug-search.js';
+import { trimDebugRetention } from './helpers/debug-retention.js';
 
 const { defineStore } = Pinia;
 
@@ -950,26 +951,19 @@ export const useChatStore = defineStore('chat', {
           // would arrive orphaned and silently disappear from the
           // panel, defeating the whole "verbatim debug" point. Open
           // turns (closedAt == null) are always retained.
+          //
+          // Logic lives in helpers/debug-retention.js so it's
+          // unit-testable without Pinia/Vue globals.
           if (this.unifyDebugLoops.length > MAX_UNIFY_DEBUG_LOOPS) {
-            const overflow = this.unifyDebugLoops.length - MAX_UNIFY_DEBUG_LOOPS;
-            this.unifyDebugLoops.splice(0, overflow);
-            const liveTurnIds = new Set();
-            for (const lp of this.unifyDebugLoops) {
-              if (lp.turnId) liveTurnIds.add(lp.turnId);
-            }
-            // Protect still-open turns whose first loop hasn't landed.
-            for (const tid of this.unifyDebugTurnOrder) {
-              const turn = this.unifyDebugTurnsById[tid];
-              if (turn && turn.closedAt == null) liveTurnIds.add(tid);
-            }
-            const nextTurnsById = {};
-            for (const tid of Object.keys(this.unifyDebugTurnsById)) {
-              if (liveTurnIds.has(tid)) {
-                nextTurnsById[tid] = this.unifyDebugTurnsById[tid];
-              }
-            }
-            this.unifyDebugTurnsById = nextTurnsById;
-            this.unifyDebugTurnOrder = this.unifyDebugTurnOrder.filter(tid => liveTurnIds.has(tid));
+            const next = trimDebugRetention({
+              loops: this.unifyDebugLoops,
+              turnsById: this.unifyDebugTurnsById,
+              turnOrder: this.unifyDebugTurnOrder,
+              maxLoops: MAX_UNIFY_DEBUG_LOOPS,
+            });
+            this.unifyDebugLoops = next.loops;
+            this.unifyDebugTurnsById = next.turnsById;
+            this.unifyDebugTurnOrder = next.turnOrder;
           }
           break;
         }

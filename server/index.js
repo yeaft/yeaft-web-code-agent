@@ -21,7 +21,16 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
 app.set('trust proxy', 1);
 const server = createServer(app);
-const wss = new WebSocketServer({ noServer: true });
+// maxPayload: 256 MiB. The Unify debug feature ships verbatim LLM raw
+// request/response bodies through this WebSocket (see anthropic.js /
+// openai-responses.js onRawExchange — payloads are never truncated). A
+// pathological tool result or a long SSE stream can plausibly exceed the
+// `ws` library's 100 MiB default. 256 MiB covers realistic worst case
+// without making memory pressure on the server unbounded; the per-tab
+// retention is bounded separately on the client by MAX_UNIFY_DEBUG_LOOPS
+// in web/stores/chat.js.
+const WS_MAX_PAYLOAD_BYTES = 256 * 1024 * 1024;
+const wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD_BYTES });
 
 // =====================
 // WebSocket 心跳机制
