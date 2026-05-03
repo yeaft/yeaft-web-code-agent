@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { mapDebugMessage } from '../../agent/unify/engine.js';
+import { mapDebugMessage } from '../../../agent/unify/engine.js';
 
 describe('mapDebugMessage — verbatim contract', () => {
   it('passes string content through verbatim, even past 50_000 chars', () => {

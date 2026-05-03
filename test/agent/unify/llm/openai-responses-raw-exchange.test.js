@@ -19,6 +19,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { OpenAIResponsesAdapter } from '../../../../agent/unify/llm/openai-responses.js';
+import { LLMAuthError } from '../../../../agent/unify/llm/adapter.js';
 
 /** Build a streaming Response that emits the given SSE chunks. */
 function mkSseResponse(chunks, { ok = true, status = 200, headers = {} } = {}) {
@@ -143,7 +144,7 @@ describe('OpenAIResponsesAdapter — onRawExchange parity (verbatim)', () => {
     expect(exchange.rawResponse.body).toBe(sseChunks.join(''));
   });
 
-  it('fires onRawExchange on error path (non-OK status) before throwing', async () => {
+  it('fires onRawExchange on error path AND propagates the throw', async () => {
     const orig = globalThis.fetch;
     const errBody = '{"error":{"message":"forbidden"}}';
     globalThis.fetch = async () => ({
@@ -157,44 +158,56 @@ describe('OpenAIResponsesAdapter — onRawExchange parity (verbatim)', () => {
     const adapter = new OpenAIResponsesAdapter({ apiKey: 'k', baseUrl: 'https://stub' });
     let threw = null;
     try {
-      await drain(adapter.stream({
+      // Iterate inline so the throw actually surfaces — the `drain()` helper
+      // swallows for the success-path tests, which is the wrong shape here:
+      // the contract is "fires onRawExchange AND THEN throws", and a test
+      // that only checks the callback fires would still pass if the adapter
+      // silently stopped throwing on 403.
+      for await (const _ of adapter.stream({
         model: 'gpt-5',
         system: 's',
         messages: [{ role: 'user', content: 'hi' }],
         onRawExchange: (e) => { exchange = e; },
-      }));
+      })) { /* drain */ }
     } catch (err) {
       threw = err;
     } finally {
       globalThis.fetch = orig;
     }
-    // The drain helper swallows the throw, but onRawExchange should still
-    // have fired with the error response.
-    expect(threw).toBeNull();
+
+    // The throw must propagate so the engine can route to the error path.
+    expect(threw).not.toBeNull();
+    expect(threw).toBeInstanceOf(LLMAuthError);
+    expect(threw.statusCode).toBe(403);
+    // The callback must have fired with the verbatim error body BEFORE the throw.
     expect(exchange).not.toBeNull();
     expect(exchange.rawResponse.status).toBe(403);
     expect(exchange.rawResponse.body).toBe(errBody);
     expect(exchange.rawRequest.headers['Authorization']).toBe('***');
   });
 
-  it('does not crash if onRawExchange callback throws', async () => {
+  it('does not crash if onRawExchange callback throws (and still calls it)', async () => {
     const orig = globalThis.fetch;
     globalThis.fetch = async () => mkSseResponse([
       'data: {"type":"response.completed","response":{"output":[],"usage":{}}}\n\n',
     ]);
 
     const adapter = new OpenAIResponsesAdapter({ apiKey: 'k', baseUrl: 'https://stub' });
+    let calls = 0;
     let events = [];
     try {
       events = await drain(adapter.stream({
         model: 'gpt-5',
         system: 's',
         messages: [{ role: 'user', content: 'hi' }],
-        onRawExchange: () => { throw new Error('subscriber bug'); },
+        onRawExchange: () => { calls++; throw new Error('subscriber bug'); },
       }));
     } finally {
       globalThis.fetch = orig;
     }
+    // The callback was actually invoked (a regression that silently stops
+    // calling it would otherwise still pass this test).
+    expect(calls).toBe(1);
     // We still got the engine events out — the failing callback didn't poison
     // the stream. Defensive guard parity with anthropic.js.
     expect(events.some(e => e.type === 'usage')).toBe(true);

@@ -14,6 +14,7 @@ import {
   LLMServerError,
   LLMAbortError,
   redactRawRequest,
+  safeHeaders,
 } from './adapter.js';
 import {
   normalizeEffort,
@@ -202,9 +203,7 @@ export class AnthropicAdapter extends LLMAdapter {
             rawRequest,
             rawResponse: {
               status: response.status,
-              headers: response.headers && typeof response.headers.entries === 'function'
-                ? Object.fromEntries(response.headers.entries())
-                : {},
+              headers: safeHeaders(response),
               body: errorBody,
             },
           });
@@ -221,14 +220,11 @@ export class AnthropicAdapter extends LLMAdapter {
     let currentToolName = null;
     let currentToolInput = '';
     // Accumulate raw SSE body verbatim for the debug panel. No truncation:
-    // a truncated copy of the response is misleading. If the resulting
-    // payload is too large for the debug store the bound is per-LOOP-COUNT
-    // on the client (see web/stores/chat.js MAX_UNIFY_DEBUG_LOOPS), not
-    // per-payload mutilation here.
-    let rawSseBody = '';
-    const responseHeaders = response.headers && typeof response.headers.entries === 'function'
-      ? Object.fromEntries(response.headers.entries())
-      : {};
+    // see `redactRawRequest` in adapter.js for the verbatim-design rationale.
+    // Push-then-join keeps allocation bounded for multi-MiB payloads (avoids
+    // O(n²) string concat).
+    const rawSseBodyChunks = [];
+    const responseHeaders = safeHeaders(response);
     const responseStatus = response.status;
 
     try {
@@ -238,7 +234,7 @@ export class AnthropicAdapter extends LLMAdapter {
 
         const chunkText = decoder.decode(value, { stream: true });
         buffer += chunkText;
-        rawSseBody += chunkText;
+        rawSseBodyChunks.push(chunkText);
         const lines = buffer.split('\n');
         buffer = lines.pop() || ''; // Keep incomplete line
 
@@ -337,7 +333,7 @@ export class AnthropicAdapter extends LLMAdapter {
             rawResponse: {
               status: responseStatus,
               headers: responseHeaders,
-              body: rawSseBody,
+              body: rawSseBodyChunks.join(''),
               format: 'sse',
             },
           });

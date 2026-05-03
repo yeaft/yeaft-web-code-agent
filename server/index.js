@@ -21,15 +21,23 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
 app.set('trust proxy', 1);
 const server = createServer(app);
-// maxPayload: 256 MiB. The Unify debug feature ships verbatim LLM raw
-// request/response bodies through this WebSocket (see anthropic.js /
-// openai-responses.js onRawExchange — payloads are never truncated). A
-// pathological tool result or a long SSE stream can plausibly exceed the
-// `ws` library's 100 MiB default. 256 MiB covers realistic worst case
-// without making memory pressure on the server unbounded; the per-tab
-// retention is bounded separately on the client by MAX_UNIFY_DEBUG_LOOPS
-// in web/stores/chat.js.
-const WS_MAX_PAYLOAD_BYTES = 256 * 1024 * 1024;
+// maxPayload: defaults to 256 MiB but is env-overridable so operators on
+// constrained VMs can throttle without a redeploy. The Unify debug feature
+// ships verbatim LLM raw request/response bodies through this WebSocket
+// (see anthropic.js / openai-responses.js onRawExchange — payloads are
+// never truncated). A pathological tool result or a long SSE stream can
+// plausibly exceed the `ws` library's 100 MiB default. The default 256 MiB
+// covers realistic worst case; the per-tab retention is bounded separately
+// on the client by MAX_UNIFY_DEBUG_LOOPS in web/stores/chat.js.
+//
+// Memory math: with N concurrent agents each delivering one full-frame
+// payload, the server transiently holds N × maxPayload before dispatch.
+// On a small VM (≤1 GiB), set WS_MAX_PAYLOAD_BYTES lower (e.g. 64 MiB).
+const DEFAULT_WS_MAX_PAYLOAD_BYTES = 256 * 1024 * 1024;
+const envOverride = Number(process.env.WS_MAX_PAYLOAD_BYTES);
+const WS_MAX_PAYLOAD_BYTES = Number.isFinite(envOverride) && envOverride > 0
+  ? envOverride
+  : DEFAULT_WS_MAX_PAYLOAD_BYTES;
 const wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD_BYTES });
 
 // =====================

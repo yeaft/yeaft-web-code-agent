@@ -33,6 +33,7 @@ import {
   LLMServerError,
   LLMAbortError,
   redactRawRequest,
+  safeHeaders,
 } from './adapter.js';
 import {
   normalizeEffort,
@@ -227,6 +228,13 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
 
   /**
    * @param {{ model: string, system: string, messages: import('./adapter.js').UnifiedMessage[], tools?: import('./adapter.js').UnifiedToolDef[], maxTokens?: number, effort?: 'low'|'medium'|'high'|'max', extraBody?: object, signal?: AbortSignal, onRawExchange?: ({rawRequest, rawResponse}) => void }} params
+   *
+   * NOTE on `extraBody`: any keys you spread here are merged verbatim into
+   * the wire body and — because the verbatim debug feature is intentionally
+   * non-truncating — will surface in the debug panel via `rawRequest.body`.
+   * Do NOT put secrets in `extraBody`. Only `Authorization` / `x-api-key` /
+   * `api-key` headers are auto-redacted (see `redactRawRequest` in
+   * `adapter.js`); request-body fields are caller-controlled.
    */
   async *stream({ model, system, messages, tools, maxTokens = 16384, effort, extraBody, signal, onRawExchange }) {
     if (signal?.aborted) throw new LLMAbortError();
@@ -262,9 +270,8 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
       'Authorization': `Bearer ${this.#apiKey}`,
     };
 
-    // Expose the raw request (auth-redacted) for the debug panel. The body
-    // is captured verbatim — never truncated — so "copy request" matches
-    // exactly what we POST to the LLM. Parity with anthropic.js.
+    // Expose the raw request (auth-redacted) for the debug panel. See
+    // `redactRawRequest` in adapter.js for the verbatim-design rationale.
     const rawRequest = redactRawRequest({ url, method: 'POST', headers, body });
 
     let response;
@@ -289,9 +296,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
             rawRequest,
             rawResponse: {
               status: response.status,
-              headers: response.headers && typeof response.headers.entries === 'function'
-                ? Object.fromEntries(response.headers.entries())
-                : {},
+              headers: safeHeaders(response),
               body: errorBody,
             },
           });
@@ -312,13 +317,11 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
     let sawToolCall = false;
 
     // Accumulate raw SSE body verbatim for the debug panel. No truncation:
-    // a truncated copy of the response is misleading. Parity with
-    // anthropic.js — see web/stores/chat.js MAX_UNIFY_DEBUG_LOOPS for the
-    // count-based retention bound that replaces per-payload mutilation.
-    let rawSseBody = '';
-    const responseHeaders = response.headers && typeof response.headers.entries === 'function'
-      ? Object.fromEntries(response.headers.entries())
-      : {};
+    // see `redactRawRequest` in adapter.js for the verbatim-design rationale.
+    // Push-then-join keeps allocation bounded for multi-MiB payloads (avoids
+    // O(n²) string concat).
+    const rawSseBodyChunks = [];
+    const responseHeaders = safeHeaders(response);
     const responseStatus = response.status;
 
     try {
@@ -327,7 +330,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
         if (done) break;
         const chunkText = decoder.decode(value, { stream: true });
         buffer += chunkText;
-        rawSseBody += chunkText;
+        rawSseBodyChunks.push(chunkText);
 
         // SSE events are separated by blank lines; split on \n
         const lines = buffer.split('\n');
@@ -454,7 +457,7 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
             rawResponse: {
               status: responseStatus,
               headers: responseHeaders,
-              body: rawSseBody,
+              body: rawSseBodyChunks.join(''),
               format: 'sse',
             },
           });
@@ -465,6 +468,13 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
 
   // ─── Non-streaming call() ───────────────────────────────
 
+  /**
+   * Side-query (consolidate / dream / recall / light) entry point. Does
+   * NOT accept `onRawExchange` — these calls intentionally don't surface
+   * in the user-facing debug panel. If a future product change wants to
+   * expose them, mirror the stream() instrumentation. Parity with
+   * anthropic.js's `call()`.
+   */
   async call({ model, system, messages, maxTokens = 4096, effort, extraBody, signal }) {
     if (signal?.aborted) throw new LLMAbortError();
 
