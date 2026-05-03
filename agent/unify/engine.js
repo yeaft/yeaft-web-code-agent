@@ -34,10 +34,11 @@ import { runStopHooks } from './stop-hooks.js';
 // the constant 'main'.
 const MAIN_THREAD_ID = 'main';
 import { pickEffort, parseEffortPrefix } from './effort.js';
-import { normalizeEffort, resolveModel } from './models.js';
+import { normalizeEffort, resolveContextWindow } from './models.js';
 import { attachRouterPlan, extractPriorPlan, stripMetaForWire } from './router/continuity.js';
 import { resolveThinking } from './router/thinking.js';
 import { approxTokens } from './memory/budget.js';
+import { truncateToolResultIfNeeded } from './tools/registry.js';
 import {
   TOOL_BATCH_SIZE,
   TURN_SUMMARY_THRESHOLD,
@@ -126,7 +127,7 @@ export function mapDebugMessage(m) {
  * @returns {number}
  */
 export function estimateMessagesTokens(system, messages) {
-  let total = approxTokens(system || '');
+  let total = approxTokens(typeof system === 'string' ? system : '');
   if (!Array.isArray(messages)) return total;
   for (const m of messages) {
     if (!m) continue;
@@ -136,8 +137,14 @@ export function estimateMessagesTokens(system, messages) {
     } else if (Array.isArray(c)) {
       for (const part of c) {
         if (!part) continue;
-        if (part.type === 'text') total += approxTokens(part.text || '');
-        else if (part.type === 'image') total += 1024;
+        if (part.type === 'text') {
+          // Coerce defensively — a non-string `text` (number, Buffer,
+          // object) would otherwise throw inside approxTokens and abort
+          // the pre-flight estimate, defeating the guard rail.
+          total += approxTokens(typeof part.text === 'string' ? part.text : '');
+        } else if (part.type === 'image') {
+          total += 1024;
+        }
         // Other multi-modal parts (audio etc.) — skip; not produced today.
       }
     }
@@ -146,7 +153,7 @@ export function estimateMessagesTokens(system, messages) {
         try {
           total += approxTokens(JSON.stringify(tc.input || {}));
         } catch { /* circular — ignore */ }
-        total += approxTokens(tc.name || '');
+        total += approxTokens(typeof tc.name === 'string' ? tc.name : '');
       }
     }
   }
@@ -1216,11 +1223,10 @@ export class Engine {
       // the try so toolCtx (built after the adapter stream) can see it.
       // Re-resolved every turn because fallbackModel switches change
       // `currentModel` mid query() — the cap MUST track the model we're
-      // actually about to call.
-      const modelInfoForTurn = resolveModel(currentModel);
-      const currentContextWindow = (modelInfoForTurn && modelInfoForTurn.contextWindow)
-        || this.#config?.maxContextTokens
-        || 200_000;
+      // actually about to call. Single resolver in models.js owns the
+      // fallback ladder (registry → config → default) so engine.js and
+      // tools/registry.js can never disagree.
+      const currentContextWindow = resolveContextWindow(currentModel, this.#config);
 
       yield { type: 'turn_start', turnNumber };
 
@@ -1741,7 +1747,14 @@ export class Engine {
               output = await this.#toolRegistry.execute(tc.name, tc.input, toolCtx);
             } else {
               const tool = this.#tools.get(tc.name);
-              output = await tool.execute(tc.input, { signal });
+              const rawOutput = await tool.execute(tc.input, { signal });
+              // task-704b: legacy #tools branch must apply the same per-tool
+              // cap as ToolRegistry.execute. Otherwise a deployment using
+              // the legacy registration path bypasses the defense entirely.
+              output = truncateToolResultIfNeeded(rawOutput, {
+                contextWindow: currentContextWindow,
+                toolName: tc.name,
+              });
             }
             yield { type: 'tool_end', id: tc.id, name: tc.name, output, isError: false, threadId: this.currentThreadId };
           } catch (err) {

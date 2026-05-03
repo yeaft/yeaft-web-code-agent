@@ -10,6 +10,7 @@
  */
 
 import { formatSize } from '../archive/tool-results.js';
+import { DEFAULT_CONTEXT_WINDOW } from '../models.js';
 
 /**
  * Per-tool-result hard cap.
@@ -39,20 +40,33 @@ import { formatSize } from '../archive/tool-results.js';
  */
 const TOOL_RESULT_CAP_RATIO = 0.10;
 const TOOL_RESULT_MIN_CAP = 8 * 1024;
-const DEFAULT_CONTEXT_WINDOW = 200_000;
 
 /**
  * Truncate a tool result if it exceeds the per-result cap. Non-string
  * outputs are JSON-stringified first (matching what engine.js eventually
  * pushes into `content`), then capped.
  *
+ * Edge cases handled:
+ *   - `undefined` → `JSON.stringify(undefined)` returns `undefined`, not
+ *     a string, so we coerce to `'undefined'` and let the cap apply.
+ *   - circular refs / `JSON.stringify` throws → fall back to `String(...)`.
+ *
  * @param {unknown} output
  * @param {{ contextWindow?: number, toolName: string }} opts
  * @returns {string}
  */
 export function truncateToolResultIfNeeded(output, { contextWindow, toolName }) {
-  const text = typeof output === 'string' ? output : JSON.stringify(output);
-  if (typeof text !== 'string') return text;
+  let text;
+  if (typeof output === 'string') {
+    text = output;
+  } else {
+    try {
+      const json = JSON.stringify(output);
+      text = typeof json === 'string' ? json : String(output);
+    } catch {
+      text = String(output);
+    }
+  }
   const ctx = Number.isFinite(contextWindow) && contextWindow > 0
     ? contextWindow : DEFAULT_CONTEXT_WINDOW;
   const cap = Math.max(TOOL_RESULT_MIN_CAP, Math.floor(ctx * TOOL_RESULT_CAP_RATIO));
