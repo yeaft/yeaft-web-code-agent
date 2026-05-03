@@ -18,6 +18,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import { parseRoleMd } from '../vp/vp-store.js';
 
 const DEFAULT_MEMORY_ROOT = join(homedir(), '.yeaft', 'memory');
 
@@ -38,6 +39,11 @@ function writeAtomicSync(path, body) {
 /**
  * Build a synthetic VP summary from the on-disk role.md.
  *
+ * Delegates frontmatter parsing to `vp-store.js#parseRoleMd` so the
+ * backfill stays in sync with the production loader. The earlier hand-
+ * rolled regex parser silently dropped quoted multi-line scalars and
+ * list-shaped fields — `parseRoleMd` covers both.
+ *
  * @param {string} libDir
  * @param {string} vpId
  * @returns {string|null}
@@ -48,26 +54,11 @@ function readVpRoleSummary(libDir, vpId) {
   let raw = '';
   try { raw = readFileSync(rolePath, 'utf-8'); } catch { return null; }
 
-  // Minimal frontmatter/body split. Frontmatter is `---\n…\n---\n`.
-  let frontmatter = '';
-  let body = raw;
-  const m = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-  if (m) {
-    frontmatter = m[1];
-    body = m[2];
-  }
+  const { meta, body } = parseRoleMd(raw);
+  const name = String(meta.name || vpId).trim() || vpId;
+  const role = typeof meta.role === 'string' ? meta.role.trim() : '';
 
-  // Pull a few fields we care about — best effort, no full YAML parser.
-  const grab = (key) => {
-    const re = new RegExp(`^${key}:\\s*(?:"([^"]*)"|(.+))$`, 'm');
-    const mm = frontmatter.match(re);
-    if (!mm) return '';
-    return (mm[1] || mm[2] || '').trim();
-  };
-  const name = grab('name') || vpId;
-  const role = grab('role');
-
-  const persona = body.trim();
+  const persona = typeof body === 'string' ? body.trim() : '';
   const lines = [`# ${name}`];
   if (role) lines.push('', `**Role:** ${role}`);
   if (persona) {

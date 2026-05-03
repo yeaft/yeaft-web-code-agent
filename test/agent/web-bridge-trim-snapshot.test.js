@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { trimSnapshotForBudget } from '../../agent/unify/web-bridge.js';
+import { trimSnapshotForBudget } from '../../agent/unify/history-compact.js';
 import { countTurns } from '../../agent/unify/turn-utils.js';
 
 function buildSyntheticHistory(turnCount, charsPerMsg = 10) {

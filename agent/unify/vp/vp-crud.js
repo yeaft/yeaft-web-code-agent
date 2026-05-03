@@ -22,16 +22,16 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { validateVpId } from '../groups/ids.js';
 import { DEFAULT_VP_LIB_DIR, parseRoleMd } from './vp-store.js';
+import { seedSummaryIfMissingSync, removeScopeDirSync } from '../memory/store-v2.js';
 
 /**
- * Memory root used by store-v2 / engine.#loadLayerASummaries. We write the
- * VP's seed summary directly here (sync) rather than going through
- * store-v2's async `seedSummaryIfMissing` so this CRUD entry point stays
- * synchronous (callers across web-bridge / WS handlers depend on the
- * synchronous return contract). The file shape matches what store-v2
- * `readSummary` expects: a single body string at `<root>/vp/<id>/summary.md`.
+ * Default memory root used when callers don't pass `options.memoryRoot`.
+ * Memory lives at `<root>/vp/<id>/{summary.md,memory.md,segments/…}` —
+ * see `store-v2.scopeDir`. Production sites should thread the configured
+ * `<yeaftDir>/memory` through `options.memoryRoot` so a non-default yeaft
+ * directory (e.g. tests, sandboxed CI) doesn't write under `~/.yeaft/`.
  */
-const SEED_MEMORY_ROOT = join(homedir(), '.yeaft', 'memory');
+const DEFAULT_MEMORY_ROOT = join(homedir(), '.yeaft', 'memory');
 
 /**
  * Build the seed summary body for a freshly-created VP. Pulled into a
@@ -147,6 +147,7 @@ function yamlScalar(v) {
  */
 export function createVp(payload, options = {}) {
   const libDir = options.libDir || DEFAULT_VP_LIB_DIR;
+  const memoryRoot = options.memoryRoot || DEFAULT_MEMORY_ROOT;
   const vpId = payload && payload.vpId;
 
   const v = validateVpId(vpId);
@@ -170,20 +171,15 @@ export function createVp(payload, options = {}) {
   // an empty memory section in the system prompt until Dream-v2 runs (which
   // requires a non-empty diff stream — i.e. several turns of activity).
   // We only seed when the file is missing/empty: this is safe to re-run and
-  // never clobbers Dream-v2 writes.
+  // never clobbers Dream-v2 writes. Failures are best-effort: a memory-root
+  // permission failure must NOT break VP creation.
   try {
-    const summaryPath = join(SEED_MEMORY_ROOT, 'vp', vpId, 'summary.md');
-    let existing = '';
-    if (existsSync(summaryPath)) {
-      try { existing = readFileSync(summaryPath, 'utf-8').trim(); } catch { /* read race — fall through to seed */ }
-    }
-    if (!existing) {
-      mkdirSync(join(SEED_MEMORY_ROOT, 'vp', vpId), { recursive: true });
-      writeFileSync(summaryPath, buildVpSeedSummary({ ...payload, vpId }) + '\n', 'utf-8');
-    }
+    seedSummaryIfMissingSync(
+      { kind: 'vp', id: vpId },
+      buildVpSeedSummary({ ...payload, vpId }),
+      { root: memoryRoot },
+    );
   } catch (err) {
-    // Seeding is best-effort: a memory-root permission failure must NOT
-    // break VP creation. The legacy (no-summary) behavior is the fallback.
     console.warn(`[vp-crud] failed to seed summary.md for ${vpId}:`, err?.message || err);
   }
 
@@ -214,7 +210,9 @@ export function updateVp(payload, options = {}) {
 }
 
 /**
- * Delete a VP — removes the entire VP dir (role.md + memory/).
+ * Delete a VP — removes the entire VP dir (role.md + memory/) AND the
+ * shared memory root's `<root>/vp/<id>/` so a recreate of the same id
+ * doesn't see stale `summary.md` / segments / index entries.
  *
  * Hard constraint: `memory/` contents are scoped to this VP; removing them
  * with the role is the intended CRUD semantic (UX rule is the confirm
@@ -222,10 +220,13 @@ export function updateVp(payload, options = {}) {
  *
  * @param {string} vpId
  * @param {object} [options]
+ * @param {string} [options.libDir]
+ * @param {string} [options.memoryRoot]
  * @returns {{vpId:string}}
  */
 export function deleteVp(vpId, options = {}) {
   const libDir = options.libDir || DEFAULT_VP_LIB_DIR;
+  const memoryRoot = options.memoryRoot || DEFAULT_MEMORY_ROOT;
   // We do NOT run validateVpId here — deleting an already-legacy bad id is
   // legitimate cleanup. But we DO refuse obviously unsafe inputs.
   if (!vpId || typeof vpId !== 'string' || vpId.includes('/') || vpId.includes('\\') || vpId === '..' || vpId === '.') {
@@ -236,6 +237,13 @@ export function deleteVp(vpId, options = {}) {
     throw new VpCrudError('not_found', vpId);
   }
   rmSync(dir, { recursive: true, force: true });
+  // Cascade: drop the VP's memory scope so a recreate with the same id
+  // starts clean. Best-effort — never let memory cleanup fail the CRUD op.
+  try {
+    removeScopeDirSync({ kind: 'vp', id: vpId }, { root: memoryRoot });
+  } catch (err) {
+    console.warn(`[vp-crud] failed to remove memory dir for ${vpId}:`, err?.message || err);
+  }
   return { vpId };
 }
 

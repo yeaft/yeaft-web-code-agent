@@ -48,83 +48,8 @@ import { seedDefaultGroup } from './groups/seed-default.js';
 import {
   shouldCompactHistory,
   compactHistory,
-  estimateMessagesTokens,
+  trimSnapshotForBudget,
 } from './history-compact.js';
-import { sliceLastNTurns } from './turn-utils.js';
-import { pairSanitize } from './pair-sanitize.js';
-
-/**
- * Default cap on the number of turns kept in the per-call snapshot. A turn
- * here is one user-side prompt (multi-VP `@vp-X` variants of the same
- * prompt collapse into one turn — see `turn-utils.js#countTurns`).
- *
- * 25 turns at ~5 messages each (user + assistant + a couple tool steps)
- * is roughly 100–125 messages — well under the LLM context window for
- * any reasonable model, and large enough to preserve "what we've been
- * talking about" context for the model. The hard token-budget cap below
- * tightens this further when individual turns are large.
- */
-const DEFAULT_RECENT_TURN_CAP = 25;
-
-/**
- * Trim a snapshot of `conversationMessages` so the per-call messages
- * array fed to `engine.query` stays bounded.
- *
- * Two-stage policy:
- *   1. **Turn cap** — keep at most `recentTurnCap` turns (default 25)
- *      via `sliceLastNTurns`. This always cuts at a user-message
- *      boundary and walks forward through `@vp-X` variants of the
- *      cut turn so the slice is pair-safe.
- *   2. **Token budget** — if the trimmed slice still exceeds
- *      `messageTokenBudget` tokens (default 8192 from
- *      `~/.yeaft/config.json`), iteratively drop the oldest turn until
- *      we're under budget. We never drop below 1 turn — even a single
- *      huge turn is preferable to no context.
- *
- * Then run `pairSanitize` as belt-and-suspenders to drop any orphan
- * tool_use/tool_result that survived the cuts. The transform is
- * idempotent and never mutates the input.
- *
- * Why this exists:
- *   `runVpTurn` previously fed the entire `conversationMessages` array
- *   into `engine.query` for every fan-out. With multi-VP turns the
- *   array grows ~5–8 messages per user prompt, so after a few hundred
- *   prompts the per-call payload exceeds 100 KB and routinely OOMs the
- *   provider's context window. `history-compact.js` only fires above a
- *   30K-token soft floor — small chats stay below that floor but still
- *   bloat the messages array. This trim is the second-line defense:
- *   it ALWAYS runs, before every query, regardless of compact state.
- *
- * @param {Array<object>} snapshot
- * @param {{ messageTokenBudget?: number, recentTurnCap?: number }} [opts]
- * @returns {Array<object>}
- */
-export function trimSnapshotForBudget(snapshot, opts = {}) {
-  if (!Array.isArray(snapshot) || snapshot.length === 0) return [];
-
-  const recentTurnCap = Number.isFinite(opts.recentTurnCap) && opts.recentTurnCap > 0
-    ? opts.recentTurnCap
-    : DEFAULT_RECENT_TURN_CAP;
-  const messageTokenBudget = Number.isFinite(opts.messageTokenBudget) && opts.messageTokenBudget > 0
-    ? opts.messageTokenBudget
-    : 8192;
-
-  // Stage 1: cap by turn count.
-  let trimmed = sliceLastNTurns(snapshot, recentTurnCap);
-
-  // Stage 2: cap by token budget. Drop oldest turn iteratively.
-  // We never drop below ~1 turn — pick a safety floor of 1.
-  let remainingTurnCap = recentTurnCap;
-  let tokens = estimateMessagesTokens(trimmed);
-  while (tokens > messageTokenBudget && remainingTurnCap > 1) {
-    remainingTurnCap--;
-    trimmed = sliceLastNTurns(trimmed, remainingTurnCap);
-    tokens = estimateMessagesTokens(trimmed);
-  }
-
-  // Stage 3: pair-sanitize to drop orphan tool_use/tool_result.
-  return pairSanitize(trimmed);
-}
 
 /** @type {import('./session.js').Session | null} */
 let session = null;
@@ -244,7 +169,9 @@ export function handleUnifyVpCreate(msg) {
   const requestId = msg && msg.requestId;
   const payload = msg && msg.payload;
   try {
-    const { vpId } = createVp(payload || {});
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    const memoryRoot = yeaftDir ? join(yeaftDir, 'memory') : undefined;
+    const { vpId } = createVp(payload || {}, memoryRoot ? { memoryRoot } : {});
     sendVpCrudResult({ op: 'create', requestId, ok: true, vpId });
   } catch (err) {
     sendVpCrudResult({
@@ -284,7 +211,9 @@ export function handleUnifyVpDelete(msg) {
   const requestId = msg && msg.requestId;
   const vpId = msg && msg.vpId;
   try {
-    deleteVp(vpId);
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    const memoryRoot = yeaftDir ? join(yeaftDir, 'memory') : undefined;
+    deleteVp(vpId, memoryRoot ? { memoryRoot } : {});
     sendVpCrudResult({ op: 'delete', requestId, ok: true, vpId });
   } catch (err) {
     sendVpCrudResult({
@@ -373,7 +302,8 @@ export function handleUnifyCreateGroup(msg) {
   const payload = (msg && msg.payload) || {};
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
-    const group = createGroupFromSpec(yeaftDir, payload);
+    const memoryRoot = yeaftDir ? join(yeaftDir, 'memory') : undefined;
+    const group = createGroupFromSpec(yeaftDir, payload, memoryRoot ? { memoryRoot } : {});
     sendGroupCrudResult({ op: 'create', requestId, ok: true, group });
     sendGroupSnapshotBroadcast();
   } catch (err) {
@@ -452,7 +382,8 @@ export function handleUnifyDeleteGroup(msg) {
   const groupId = msg && msg.groupId;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
-    const result = deleteGroup(yeaftDir, groupId);
+    const memoryRoot = yeaftDir ? join(yeaftDir, 'memory') : undefined;
+    const result = deleteGroup(yeaftDir, groupId, memoryRoot ? { memoryRoot } : {});
     // Cascade: remove every persisted message stamped with this group id.
     // Hard delete (per user spec): no soft-archive, the bytes are gone.
     // Skipped silently if the session/store isn't initialized — the next
@@ -868,7 +799,7 @@ export async function handleUnifyGroupChat(msg) {
       groupHandle = openGroup(root, groupId);
     } else if (groupId === 'grp_default') {
       try {
-        const seeded = seedDefaultGroup(yeaftDir, {});
+        const seeded = seedDefaultGroup(yeaftDir, { memoryRoot: join(yeaftDir, 'memory') });
         groupHandle = seeded.group;
       } catch (seedErr) {
         seedFailed = true;

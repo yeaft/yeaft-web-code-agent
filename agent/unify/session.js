@@ -237,7 +237,7 @@ export async function loadSession(options = {}) {
       console.warn(`[Yeaft] seedDefaultVps failed: ${err?.message || err}`);
     }
     try {
-      ensureDefaultGroupIfEmpty(yeaftDir);
+      ensureDefaultGroupIfEmpty(yeaftDir, { memoryRoot: join(yeaftDir, 'memory') });
     } catch (err) {
       console.warn(`[Yeaft] ensureDefaultGroupIfEmpty failed: ${err?.message || err}`);
     }
@@ -251,6 +251,7 @@ export async function loadSession(options = {}) {
       runSummaryBackfill({
         yeaftDir,
         libDir: join(yeaftDir, 'virtual-persons'),
+        root: join(yeaftDir, 'memory'),
       });
     } catch (err) {
       console.warn(`[Yeaft] runSummaryBackfill failed: ${err?.message || err}`);

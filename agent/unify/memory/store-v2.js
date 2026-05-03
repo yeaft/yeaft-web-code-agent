@@ -44,6 +44,9 @@ import {
   promises as fsp,
   existsSync,
   mkdirSync,
+  readFileSync,
+  writeFileSync,
+  rmSync,
 } from 'fs';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
@@ -306,6 +309,55 @@ export async function seedSummaryIfMissing(scope, body, opts = {}) {
   if (existing && existing.trim().length > 0) return false;
   await writeSummary(scope, body, opts);
   return true;
+}
+
+/**
+ * Sync variant of `seedSummaryIfMissing` for synchronous CRUD entry points
+ * (vp-crud.js / group-crud.js / seed-default.js). Same idempotency contract:
+ * a non-empty existing `summary.md` blocks the seed; missing or empty
+ * triggers an atomic write. Failures are converted into thrown errors so
+ * the caller can decide whether to swallow (best-effort seed) or surface.
+ *
+ * NOTE on `opts.root`: callers MUST pass the configured memory root
+ * (typically `<yeaftDir>/memory`) so a non-default `yeaftDir` doesn't end
+ * up writing under `~/.yeaft/memory/`. The default is provided only for
+ * top-of-tree convenience; production code paths thread the root through.
+ *
+ * @param {Scope} scope
+ * @param {string} body
+ * @param {{ root?: string }} [opts]
+ * @returns {boolean}  true if seeded, false if a non-empty summary already existed
+ */
+export function seedSummaryIfMissingSync(scope, body, opts = {}) {
+  const { root = DEFAULT_MEMORY_ROOT } = opts;
+  const rel = `${scopeDir(scope)}/summary.md`;
+  const abs = join(root, rel);
+  let existing = '';
+  if (existsSync(abs)) {
+    try { existing = readFileSync(abs, 'utf8').trim(); }
+    catch { /* read race — fall through to seed */ }
+  }
+  if (existing) return false;
+  mkdirSync(dirname(abs), { recursive: true });
+  writeFileSync(abs, `${(body || '').trim()}\n`, 'utf8');
+  return true;
+}
+
+/**
+ * Synchronously remove a scope's directory under the memory root. Used by
+ * `deleteVp` / `deleteGroup` to cascade memory cleanup so a recreate of the
+ * same id doesn't see stale `summary.md` / `memory.md` / `segments/` files.
+ *
+ * Idempotent — missing directory is a no-op.
+ *
+ * @param {Scope} scope
+ * @param {{ root?: string }} [opts]
+ */
+export function removeScopeDirSync(scope, opts = {}) {
+  const { root = DEFAULT_MEMORY_ROOT } = opts;
+  const abs = join(root, scopeDir(scope));
+  if (!existsSync(abs)) return;
+  rmSync(abs, { recursive: true, force: true });
 }
 
 // ─── scope discovery ───────────────────────────────────────────
