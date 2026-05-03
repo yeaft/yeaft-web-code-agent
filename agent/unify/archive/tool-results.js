@@ -151,7 +151,15 @@ export async function archiveToolResults({
   };
 }
 
-function formatSize(bytes) {
+/**
+ * Format a byte count as a short human-readable string ("1.5KB", "2.0MB").
+ * Exported so other size-aware helpers (tool-result truncation in the
+ * registry) format identically.
+ *
+ * @param {number} bytes
+ * @returns {string}
+ */
+export function formatSize(bytes) {
   if (bytes < 1024) return `${bytes}B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;

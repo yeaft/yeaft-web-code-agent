@@ -24,6 +24,9 @@
  * @property {(groupId: string) => string[]|null} [getGroupRoster]
  *   — R6: resolve a group's roster (used by TaskCreate / route_forward to
  *   validate `members` ⊆ roster without importing group-store directly).
+ * @property {number} [contextWindow] — current model's context window in
+ *   tokens (used by ToolRegistry.execute to cap a single tool result at a
+ *   fraction of the window so one runaway grep can't blow the wire).
  */
 
 /**

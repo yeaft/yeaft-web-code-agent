@@ -34,9 +34,10 @@ import { runStopHooks } from './stop-hooks.js';
 // the constant 'main'.
 const MAIN_THREAD_ID = 'main';
 import { pickEffort, parseEffortPrefix } from './effort.js';
-import { normalizeEffort } from './models.js';
+import { normalizeEffort, resolveModel } from './models.js';
 import { attachRouterPlan, extractPriorPlan, stripMetaForWire } from './router/continuity.js';
 import { resolveThinking } from './router/thinking.js';
+import { approxTokens } from './memory/budget.js';
 import {
   TOOL_BATCH_SIZE,
   TURN_SUMMARY_THRESHOLD,
@@ -98,6 +99,58 @@ export function mapDebugMessage(m) {
   if (m.toolCallId) out.toolCallId = m.toolCallId;
   if (m.isError != null) out.isError = m.isError;
   return out;
+}
+
+/**
+ * task-704b — estimate the total token cost of a system prompt + a
+ * messages array. Used by the pre-flight guard before adapter.stream()
+ * to decide whether to run an emergency archive sweep.
+ *
+ * Why estimate, not exact: a real tokenizer (tiktoken, claude-tokenizer)
+ * adds a heavy dep + per-turn cost for what is fundamentally a guard
+ * rail. `approxTokens` (char/4 with CJK weighting) is the same
+ * estimator the AMS budget code uses; it is monotonic in payload size
+ * and that is the only property the guard rail needs. False positives
+ * cost an unnecessary archive sweep (cheap); false negatives let a
+ * runaway request through (expensive — that is exactly the bug we are
+ * fixing).
+ *
+ * Multi-modal messages: `content` may be an array of content parts
+ * (Anthropic / OpenAI Responses shape). Text parts use approxTokens;
+ * image parts get a fixed 1024-token estimate — a rough average across
+ * vision pricing models. Exact pricing isn't the goal; "this is roughly
+ * how much of the window the message will consume" is.
+ *
+ * @param {string} system
+ * @param {Array<{role:string, content?:any, toolCalls?:Array}>} messages
+ * @returns {number}
+ */
+export function estimateMessagesTokens(system, messages) {
+  let total = approxTokens(system || '');
+  if (!Array.isArray(messages)) return total;
+  for (const m of messages) {
+    if (!m) continue;
+    const c = m.content;
+    if (typeof c === 'string') {
+      total += approxTokens(c);
+    } else if (Array.isArray(c)) {
+      for (const part of c) {
+        if (!part) continue;
+        if (part.type === 'text') total += approxTokens(part.text || '');
+        else if (part.type === 'image') total += 1024;
+        // Other multi-modal parts (audio etc.) — skip; not produced today.
+      }
+    }
+    if (Array.isArray(m.toolCalls)) {
+      for (const tc of m.toolCalls) {
+        try {
+          total += approxTokens(JSON.stringify(tc.input || {}));
+        } catch { /* circular — ignore */ }
+        total += approxTokens(tc.name || '');
+      }
+    }
+  }
+  return total;
 }
 
 // ─── Engine Events (superset of adapter events) ──────────────────
@@ -603,6 +656,11 @@ export class Engine {
       conversationStore: this.#conversationStore,
       adapter: this.#adapter,
       config: this.#config,
+      // task-704b: per-tool-result hard cap derives from this. Threaded
+      // from the live model (resolveModel(currentModel)) every turn so
+      // fallbackModel switches see the new window. Falls back to
+      // config.maxContextTokens, then 200K, in registry.js.
+      contextWindow: vpCtx?.contextWindow,
       // ViewImage (task-333b PR-B rev-3 P1-A): expose size cap + allowlist
       // via tool ctx so hosts can override via ~/.yeaft/config.json without
       // touching the tool impl.
@@ -1152,6 +1210,18 @@ export class Engine {
         if (exchange?.rawResponse) rawResponse = exchange.rawResponse;
       };
 
+      // task-704b: resolve the live model's context window for this turn.
+      // Used by the per-tool-result cap (passed via toolCtx) and the
+      // pre-flight total-token guard inside the try-block. Hoisted out of
+      // the try so toolCtx (built after the adapter stream) can see it.
+      // Re-resolved every turn because fallbackModel switches change
+      // `currentModel` mid query() — the cap MUST track the model we're
+      // actually about to call.
+      const modelInfoForTurn = resolveModel(currentModel);
+      const currentContextWindow = (modelInfoForTurn && modelInfoForTurn.contextWindow)
+        || this.#config?.maxContextTokens
+        || 200_000;
+
       yield { type: 'turn_start', turnNumber };
 
       try {
@@ -1203,6 +1273,7 @@ export class Engine {
         // message_trace can fetch it on demand. The stub keeps the
         // OpenAI/Anthropic toolCallId pairing intact.
         let wireMessages = stripMetaForWire([...conversationMessages]);
+
         if (this.#yeaftDir && (this.#config?.archive?.toolResults !== false)) {
           try {
             const swept = await archiveToolResults({
@@ -1222,6 +1293,52 @@ export class Engine {
               }
             }
           } catch { /* best-effort */ }
+        }
+
+        // task-704b: pre-flight total-token guard. Even with the per-tool
+        // cap (registry.js: 10% of contextWindow per result), N tool
+        // results plus history can still breach the wire limit before we
+        // ever call adapter.stream(). Estimate the total token cost; if
+        // it exceeds PREFLIGHT_RATIO of the live context window, run an
+        // emergency archive sweep with `turnAgeMin: 0` so even
+        // current-turn-but-not-this-call bulky results get stubbed. The
+        // normal sweep above only stubs results older than 5 user turns
+        // — that's the wrong cadence when the *current* turn already has
+        // 4 large grep results.
+        //
+        // PREFLIGHT_RATIO = 0.85 leaves ~15% of the window for the model's
+        // own output tokens + tools metadata + light future history.
+        // The estimator (`estimateMessagesTokens`) is approxTokens
+        // (char/4 with CJK weighting) — good enough for a guard rail; a
+        // real tokenizer would be exact but adds a heavy dep.
+        if (this.#yeaftDir && (this.#config?.archive?.toolResults !== false)) {
+          const PREFLIGHT_RATIO = 0.85;
+          const threshold = Math.floor(currentContextWindow * PREFLIGHT_RATIO);
+          const estimate = estimateMessagesTokens(systemPrompt, wireMessages);
+          if (estimate > threshold) {
+            try {
+              const sweep = await archiveToolResults({
+                root: `${this.#yeaftDir}/memory`,
+                scopeDir: 'user',
+                messages: wireMessages,
+                turnAgeMin: 0,
+                lengthMin: this.#config?.archive?.lengthMin ?? 2000,
+              });
+              wireMessages = sweep.nextMessages;
+              if (sweep.archivedCount > 0) {
+                for (let i = 0; i < conversationMessages.length; i += 1) {
+                  conversationMessages[i] = wireMessages[i];
+                }
+                this.#trace.log?.('preflight_sweep', {
+                  archivedCount: sweep.archivedCount,
+                  archivedBytes: sweep.archivedBytes,
+                  estimateBefore: estimate,
+                  threshold,
+                  contextWindow: currentContextWindow,
+                });
+              }
+            } catch { /* best-effort */ }
+          }
         }
 
         // Stream from adapter
@@ -1555,7 +1672,7 @@ export class Engine {
       }
 
       // Execute tool calls and feed results back
-      const toolCtx = this.#buildToolContext(signal, { router, senderVpId, inboundEnvelope, taskId, taskMembers, vpPersona });
+      const toolCtx = this.#buildToolContext(signal, { router, senderVpId, inboundEnvelope, taskId, taskMembers, vpPersona, contextWindow: currentContextWindow });
 
       // task-325a: track whether we aborted mid tool-loop so we can
       // break out of the outer while-loop cleanly once the current
