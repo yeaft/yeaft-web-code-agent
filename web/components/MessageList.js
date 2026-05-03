@@ -504,23 +504,20 @@ export default {
           if (currentTurn.textContent || currentTurn.toolMsgs.length > 0 || currentTurn.todoMsg || currentTurn.askMsg || currentTurn.imageMsgs.length > 0) {
             // task-334-ui-b: resolve speaker header visibility at the point
             // we flush the turn, AFTER all messages in it have been visited
-            // (so speakerVpId has latched). Collapse same-speaker-in-a-row.
+            // (so speakerVpId has latched).
             //
-            // Render the header purely from data: if the agent has stamped
-            // a `speakerVpId` onto any message in this turn, show it.
-            // Previously this was gated on a `multiVp` feature flag, but
-            // that caused a UX bug — the standalone `vp-typing-row` renders
-            // VpSpeakerHeader unconditionally, so when the flag was off the
-            // avatar/name appeared while typing and vanished the moment the
-            // stream ended. The flag still gates upstream group features
-            // (creation, @-mention dispatch); rendering of already-stamped
-            // turns must follow the data.
+            // WeChat-style attribution: ALWAYS show the speaker header on
+            // every VP turn. Previous behaviour collapsed the header on
+            // consecutive turns from the same VP, but that caused the
+            // avatar to "disappear" the moment a turn finished — making
+            // it look like the speaker had vanished. Users expect each
+            // assistant turn to carry its avatar, name, and timestamp,
+            // exactly like WeChat / Slack group chat.
+            //
+            // Legacy 1:1 turns (no speakerVpId) still render no header.
+            currentTurn.showSpeakerHeader = !!currentTurn.speakerVpId;
             if (currentTurn.speakerVpId) {
-              currentTurn.showSpeakerHeader =
-                currentTurn.speakerVpId !== lastShownSpeakerVpId;
               lastShownSpeakerVpId = currentTurn.speakerVpId;
-            } else {
-              currentTurn.showSpeakerHeader = false;
             }
             result.push(currentTurn);
           }
@@ -763,9 +760,22 @@ export default {
       return store.messages.some(m => m.isStreaming);
     });
 
-    // Show typing dots when AI is processing but hasn't started streaming text yet
+    // Show typing dots when AI is processing but hasn't started streaming text yet.
+    //
+    // In Unify group chat mode, suppress the global cat/dog animation entirely:
+    // each VP renders its own per-speaker typing dots inside VpSpeakerHeader,
+    // so showing a global running-cat alongside that creates the illusion of
+    // a separate "speaker" (the cat) which has no attribution. WeChat-style
+    // attribution requires that typing indication live with the actual VP's
+    // avatar, never as a free-floating row.
     const showTypingDots = Vue.computed(() => {
-      return store.isProcessing && !hasStreamingMessage.value;
+      if (!store.isProcessing || hasStreamingMessage.value) return false;
+      // Unify group mode: per-VP indicators are sufficient.
+      const isUnifyGroup = store.currentView === 'unify' &&
+        Array.isArray(store.vpsTypingInCurrentConv) &&
+        store.vpsTypingInCurrentConv.length > 0;
+      if (isUnifyGroup) return false;
+      return true;
     });
 
     // task-fix: per-VP typing indicator IDs (group chat). Suppress for a

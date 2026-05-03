@@ -226,6 +226,38 @@
   margin-top: 2px;
 }
 
+/* WeChat-style group chat attribution: each VP turn lives inside a soft
+ * card so consecutive speakers read as separate utterances even when
+ * background is the same. The card is intentionally subtle — just enough
+ * border + background to break the visual flow without competing with the
+ * message content itself.
+ *
+ * The avatar header sits at the top-left of the card, dots animate next
+ * to the avatar while that VP is mid-stream, and the message body sits
+ * naturally beneath the header. This is the layout the user explicitly
+ * called out: "谁在说话，message 要在对应的 VP 头像下面". */
+.assistant-turn.has-vp-speaker {
+  background: var(--bg-vp-turn, rgba(0, 0, 0, 0.025));
+  border: 1px solid var(--border-vp-turn, rgba(0, 0, 0, 0.06));
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin: 6px 0;
+}
+.assistant-turn.has-vp-speaker .vp-speaker-header {
+  margin: 0 0 6px;
+}
+[data-theme="dark"] .assistant-turn.has-vp-speaker {
+  background: var(--bg-vp-turn-dark, rgba(255, 255, 255, 0.035));
+  border-color: var(--border-vp-turn-dark, rgba(255, 255, 255, 0.08));
+}
+
+/* Streaming state: a faint accent on the left edge tells the eye which
+ * card is currently producing text, without animating the entire box. */
+.assistant-turn.has-vp-speaker.streaming {
+  border-left: 2px solid var(--vp-status-busy, #f2994a);
+  padding-left: 11px;
+}
+
 /* ================================================================== * VpCrudPanel — task-343 (was VpCrudModal)
  * The panel lives inside UnifySettings's .settings-pane; the overlay /
  * dialog chrome moved to .settings-overlay / .settings-dialog. Only the
