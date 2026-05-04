@@ -1046,6 +1046,10 @@ export default {
   // ============ Unify 每条消息 hover 时间戳 (task-334-ui-c / prev-2 backlog) ============
   'unify.message.timeAria': '发送于 {time}',
 
+  // ============ Unify route_forward 转交提示 (task-707) ============
+  'unify.handoff.targets': '已转交给 {mentions}',
+  'unify.handoff.broadcast': '已转交给 {mentions}（广播）',
+
   // ============ Unify 群组 (task-334m) ============
   'unify.group.sidebarTitle': '群组',
   'unify.group.sidebarAria': '群组列表',

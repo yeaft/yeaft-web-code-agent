@@ -97,6 +97,19 @@ export default {
         <AskCard :ask-msg="turn.askMsg" @submit="onAskSubmit" />
       </div>
 
+      <!-- 5b. task-707: route_forward hand-off pill(s). Rendered for
+           every successful route_forward in this turn. The targets list
+           comes from the structured group_handoff payload (no string
+           parsing) so localization is straightforward. Uses the same
+           visual language as system-lines / tool chips. -->
+      <div v-if="turn.handoffHints && turn.handoffHints.length > 0" class="turn-handoffs">
+        <div v-for="(hint, i) in turn.handoffHints" :key="i" class="handoff-pill">
+          <span class="handoff-arrow" aria-hidden="true">↪</span>
+          <span class="handoff-label">{{ formatHandoffLabel(hint) }}</span>
+          <span v-if="hint.reason" class="handoff-reason">· {{ hint.reason }}</span>
+        </div>
+      </div>
+
       <!-- 6. Copy full response button (visible on hover) -->
       <div class="turn-footer" v-if="turn.textContent && !turn.isStreaming">
         <span
@@ -380,6 +393,25 @@ export default {
       window.open(url, '_blank');
     };
 
+    // task-707: render the route_forward hand-off label. The structured
+    // payload carries `toVpIds[]` and `broadcast`; we localize via $t so
+    // the bubble reads naturally in either language. Falls back to the
+    // English string if the i18n key is missing.
+    const formatHandoffLabel = (hint) => {
+      if (!hint) return '';
+      const ids = Array.isArray(hint.toVpIds) ? hint.toVpIds : [];
+      const mentions = ids.map((id) => `@${id}`).join('、');
+      try {
+        if (typeof t === 'function') {
+          if (hint.broadcast) {
+            return t('unify.handoff.broadcast', { mentions });
+          }
+          return t('unify.handoff.targets', { mentions });
+        }
+      } catch (_) { /* fall through to plain string */ }
+      return `Forwarded to ${mentions}`;
+    };
+
     // H2.f.6: canFork / forkFromHere removed alongside the multi-thread engine.
 
     // task-334-ui-c: forward VP speaker click → parent (MessageList →
@@ -455,7 +487,8 @@ export default {
       onAskSubmit,
       getImageUrl,
       handleImageError,
-      openImagePreview
+      openImagePreview,
+      formatHandoffLabel
     };
   }
 };
