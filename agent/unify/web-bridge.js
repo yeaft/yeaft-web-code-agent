@@ -58,6 +58,14 @@ let session = null;
 /**
  * Single in-flight AbortController. A new user message cancels the prior
  * round (if any). H2.f.2: replaces the per-thread Map.
+ *
+ * Note: post-707, group fan-out turns no longer flow through this slot —
+ * they each get their own controller in `vpAborts` keyed by
+ * `${groupId}::${vpId}`. The `currentAbortCtrl` here is only mutated by
+ * 1:1 chat paths, the test seeder, and the session-reset cleanup. Don't
+ * reach for it from new group-flow code; selective abort, abort-all,
+ * and abort-turn already operate against `vpAborts` correctly.
+ *
  * @type {AbortController | null}
  */
 let currentAbortCtrl = null;
@@ -72,7 +80,7 @@ let currentAbortCtrl = null;
 const turnAbortCtrls = new Map();
 
 /**
- * task-707: per-VP inbox + driver + engine pool.
+ * Per-VP inbox + driver + engine pool (group multi-VP delivery).
  *
  * Replaces the pre-707 one-shot `captured[]` array. The coordinator's
  * `deliver(vpId, envelope)` callback now pushes into `vpInboxes`, and a
@@ -85,10 +93,12 @@ const turnAbortCtrls = new Map();
  *   2. Each VP gets its own Engine (via `vpEngines`) so private state
  *      (`#currentAbortCtrl`, `#__queryCounter`, `#pendingT2`,
  *      `#abortReason`, `#adjustRanByGroup`, `#execLog`) does not collide
- *      across concurrent VP turns.
- *
- * Module-level keying is `${groupId}:${vpId}` so multiple groups
- * (currently rare in Unify, common in tests) don't collide.
+ *      across concurrent VP turns. Engines are keyed by
+ *      `${groupId}::${vpId}` rather than vpId alone because Engine
+ *      cannot serve two concurrent queries safely — even if AMS state
+ *      partitions correctly by groupKey, the non-group-keyed private
+ *      state would collide if the same VP ran turns in two groups in
+ *      parallel.
  */
 /** @type {Map<string, Array<{envelope: object, opts: object}>>} */
 const vpInboxes = new Map();
@@ -106,7 +116,14 @@ const vpAborts = new Map();
  * route_forward path would deliver into a freshly-created `captured[]`
  * that nobody consumes — exactly the pre-707 bug).
  *
- * Purged on session reset by `resetSession`.
+ * Purge sites:
+ *   - `invalidateGroupContext(groupId)` — called from every group CRUD
+ *     handler that mutates roster / meta / lifecycle state on disk
+ *     (rename, update announcement, archive, delete, add/remove member,
+ *     set default VP).
+ *   - `handleUnifyGroupChat` — invalidates inline when its own
+ *     auto-add / default-VP-heal pass mutated the roster.
+ *   - `resetUnifySession` and `__testResetVpState` clear the whole map.
  *
  * @type {Map<string, { coord: ReturnType<typeof createCoordinator>,
  *                     router: ReturnType<typeof createRouter>,
@@ -116,6 +133,35 @@ const groupContexts = new Map();
 
 function vpKey(groupId, vpId) {
   return `${groupId}::${vpId}`;
+}
+
+/**
+ * Drop the cached coordinator + router for a group AND abort/clear any
+ * in-flight VP turns belonging to it. Call this from every CRUD handler
+ * that mutates the group's roster, meta, or lifecycle state on disk —
+ * the cached coord holds a closed `groupHandle`, so without invalidation
+ * later route_forward / ingest calls would read zombie meta (stale
+ * roster, pre-rename announcement, kicked members still routable).
+ *
+ * Idempotent — safe to call when no entry exists.
+ */
+function invalidateGroupContext(groupId) {
+  if (!groupId) return;
+  groupContexts.delete(groupId);
+  const prefix = `${groupId}::`;
+  for (const [k, ctrl] of vpAborts) {
+    if (!k.startsWith(prefix)) continue;
+    try { if (!ctrl.signal.aborted) ctrl.abort(); } catch { /* best-effort */ }
+    vpAborts.delete(k);
+  }
+  for (const [k, inbox] of vpInboxes) {
+    if (!k.startsWith(prefix)) continue;
+    if (Array.isArray(inbox)) inbox.length = 0;
+  }
+  // Engines are NOT torn down here on purpose. They hold subordinate
+  // state (AMS adjustments) that should survive a meta change and a
+  // closed groupHandle — they don't reach the on-disk group meta
+  // directly. They *are* dropped on `resetUnifySession`.
 }
 
 /** Query timeout in ms — abort if LLM doesn't respond within this window */
@@ -327,6 +373,12 @@ function ensureDriverRunning(groupId, vpId) {
         console.warn('[Unify] driveVp: runVpTurn failed', vpId, err?.message || err);
       } finally {
         turnAbortCtrls.delete(turnId);
+        // Only clear the entry if it's still ours. A fresh user message
+        // can install a new controller for this VP between our abort
+        // and our finally (selective-abort pre-pass aborts the OLD
+        // controller, then ingest enqueues a NEW envelope which mints
+        // a fresh controller). Without this guard we'd drop the new
+        // controller and a later abort-all wouldn't see it.
         if (vpAborts.get(key) === vpAbort) vpAborts.delete(key);
         try {
           sendUnifyEvent({
@@ -341,9 +393,10 @@ function ensureDriverRunning(groupId, vpId) {
       // Emit a group_message event so the persisted message shows up in
       // the UI's group log AT THE POINT the turn actually ran (so a
       // queued envelope doesn't "appear" before the prior turn finished
-      // its writes). Trigger reflects coord's classification.
-      // (Only applies for non-system envelopes; coord always supplies
-      // a stored msg for user/route-forward dispatches.)
+      // its writes). Trigger reflects coord's classification. The emit
+      // happens regardless of whether the turn aborted — the envelope
+      // is real (coord persisted it before deliver), so the user log
+      // should show it even if the assistant reply was cut short.
       try {
         if (text && envelope?.msg) {
           sendUnifyEvent({
@@ -360,6 +413,15 @@ function ensureDriverRunning(groupId, vpId) {
       } catch { /* never crash WS pipeline */ }
     }
     vpDrivers.delete(key);
+    // Re-arm guard: the inbox could have been pushed into between the
+    // top-of-loop empty check and this delete (synchronous re-entry
+    // from a sendUnifyEvent listener, or a microtask scheduled while
+    // we were in `finally`). Without this, the new envelope would be
+    // stranded — `enqueueForVp` saw `vpDrivers.has(key)` return true
+    // because we hadn't deleted yet, then we delete and exit. Self-
+    // rearm if there is fresh work.
+    const tail = vpInboxes.get(key);
+    if (tail && tail.length > 0) ensureDriverRunning(groupId, vpId);
   })();
   vpDrivers.set(key, promise);
 }
@@ -380,8 +442,19 @@ export async function __testDrainVpDrivers() {
   }
 }
 
-/** Test-only: reset all per-VP / per-group caches. */
-export function __testResetVpState() {
+/**
+ * Test-only: reset all per-VP / per-group caches. Aborts in-flight
+ * drivers and drains them before clearing so the next test doesn't see
+ * a half-aborted controller writing to a now-cleared map.
+ */
+export async function __testResetVpState() {
+  for (const ctrl of vpAborts.values()) {
+    try { if (!ctrl.signal.aborted) ctrl.abort(); } catch { /* */ }
+  }
+  for (const inbox of vpInboxes.values()) {
+    if (Array.isArray(inbox)) inbox.length = 0;
+  }
+  await __testDrainVpDrivers();
   vpInboxes.clear();
   vpDrivers.clear();
   vpEngines.clear();
@@ -586,6 +659,7 @@ export function handleUnifyRenameGroup(msg) {
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     const group = renameGroup(yeaftDir, groupId, name);
+    invalidateGroupContext(groupId);
     sendGroupCrudResult({ op: 'rename', requestId, ok: true, group });
     sendGroupSnapshotBroadcast();
   } catch (err) {
@@ -625,6 +699,7 @@ export function handleUnifyUpdateGroup(msg) {
     if (hasAnnouncement) {
       group = updateGroupAnnouncement(yeaftDir, groupId, patch.announcement);
     }
+    invalidateGroupContext(groupId);
     sendGroupCrudResult({ op: 'update', requestId, ok: true, group });
     sendGroupSnapshotBroadcast();
   } catch (err) {
@@ -638,6 +713,7 @@ export function handleUnifyArchiveGroup(msg) {
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     const result = archiveGroup(yeaftDir, groupId);
+    invalidateGroupContext(groupId);
     sendGroupCrudResult({ op: 'archive', requestId, ok: true, groupId: result.groupId });
     sendGroupSnapshotBroadcast();
   } catch (err) {
@@ -664,6 +740,15 @@ export function handleUnifyDeleteGroup(msg) {
     } catch (cascadeErr) {
       console.warn(`[Yeaft] cascade delete for group ${groupId} failed: ${cascadeErr.message}`);
     }
+    // Drop the cached coord/router and abort/clear any in-flight VP
+    // turns for the deleted group. Engines for the deleted group are
+    // also dropped — unlike rename/announcement updates, the group is
+    // gone for good and there's nothing to preserve.
+    invalidateGroupContext(groupId);
+    const prefix = `${groupId}::`;
+    for (const k of Array.from(vpEngines.keys())) {
+      if (k.startsWith(prefix)) vpEngines.delete(k);
+    }
     sendGroupCrudResult({
       op: 'delete',
       requestId,
@@ -684,6 +769,7 @@ export function handleUnifyAddMember(msg) {
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     const group = addMember(yeaftDir, groupId, vpId);
+    invalidateGroupContext(groupId);
     sendGroupCrudResult({ op: 'add_member', requestId, ok: true, group });
     sendGroupRosterChanged(group);
   } catch (err) {
@@ -698,6 +784,10 @@ export function handleUnifyRemoveMember(msg) {
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     const group = removeMember(yeaftDir, groupId, vpId);
+    invalidateGroupContext(groupId);
+    // Also drop the kicked VP's engine — the next time they're added
+    // back they should start with fresh per-VP state.
+    vpEngines.delete(vpKey(groupId, vpId));
     sendGroupCrudResult({ op: 'remove_member', requestId, ok: true, group });
     sendGroupRosterChanged(group);
   } catch (err) {
@@ -712,6 +802,7 @@ export function handleUnifySetDefaultVp(msg) {
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     const group = setGroupDefaultVp(yeaftDir, groupId, vpId);
+    invalidateGroupContext(groupId);
     sendGroupCrudResult({ op: 'set_default_vp', requestId, ok: true, group });
     sendGroupRosterChanged(group);
   } catch (err) {
@@ -834,18 +925,24 @@ function handleEngineEvent(event, hctx) {
       break;
 
     case 'turn_end':
-      // task-707: when a tool (currently only `route_forward`) signals
+      // When a tool (currently only `route_forward`) signals
       // requestEndTurn, the engine emits turn_end with
       // stopReason='tool_handoff' and a structured `detail` payload.
       // Surface that to the frontend as a `group_handoff` event so the
       // originating VP's bubble can render "↪ 已转交给 @vp-b、@vp-c".
       // Other turn_end variants are ignored (the outer loop handles
       // result/end_turn semantics already).
+      //
+      // The `version` field is the wire schema version. Today there is
+      // only one shape. Future variants (e.g. a second hand-off tool)
+      // can bump it without breaking older frontends — they ignore
+      // unknown versions.
       if (event.stopReason === 'tool_handoff' && event.detail && typeof event.detail === 'object') {
         const detail = event.detail;
         if (detail.kind === 'route_forward') {
           sendUnifyEvent({
             type: 'group_handoff',
+            version: 1,
             kind: 'route_forward',
             fromVpId: detail.fromVpId || hctx.vpId,
             toVpIds: Array.isArray(detail.dispatched) ? detail.dispatched.slice() : [],
@@ -1150,11 +1247,22 @@ export async function handleUnifyGroupChat(msg) {
   const groupCtx = getOrCreateGroupContext(groupId, groupHandle);
   const coord = groupCtx.coord;
 
-  // task-707: selective abort — replace the pre-707 blanket abort that
-  // killed every in-flight turn on every new user message (Bug 2). We
-  // peek at which VPs THIS message will retrigger via the coordinator's
-  // `parseMentions` and only abort those VP's current turns. VPs busy on
-  // unrelated work (e.g. mid-route_forward reply chain) keep running.
+  // Selective abort — replace the pre-707 blanket abort that killed
+  // every in-flight turn on every new user message (Bug 2). We peek at
+  // which VPs THIS message will retrigger via the coordinator's
+  // `parseMentions` and only abort those VP's current turns. VPs busy
+  // on unrelated work keep running.
+  //
+  // Intentional limitation: we do NOT walk the route_forward causedBy
+  // chain. If VP-A is mid-turn, route_forwarded to VP-B, and the user
+  // now mentions only @vp-a, we abort VP-A but VP-B keeps generating
+  // even though VP-B's inbound was caused by the now-overridden VP-A
+  // turn. The argument for letting VP-B run: VP-B may already have
+  // useful work in flight (a partial reply); aborting it on a chain
+  // override discards that work for no user-visible benefit. If a
+  // future product decision wants to cancel transitively, walk
+  // `vpInboxes[*].envelope.causedBy` against the selectively-aborted
+  // VP set and fan the abort out.
   //
   // Note: this is a best-effort pre-pass. The real dispatch list comes
   // from `coord.ingest(...).dispatched` below, but at that point we
@@ -1220,14 +1328,14 @@ export async function handleUnifyGroupChat(msg) {
   }
 
   // Wait for the drivers initially scheduled by THIS user message to
-  // drain. We use the dispatched id list (plus any fallback) as the
-  // identity set; if route_forward fires inside one of these turns and
-  // wakes another VP, that target's driver runs concurrently and we'll
-  // wait for it too via the loop below.
-  const initialTargets = dispatchedIds.length > 0
+  // drain. We pass the dispatched id list (plus any fallback) for
+  // documentation; the wait function itself blocks on every driver in
+  // the group, so route_forward fan-outs the user didn't mention still
+  // get drained before we return.
+  const primaryTargets = dispatchedIds.length > 0
     ? dispatchedIds.slice()
     : (fallbackId ? [fallbackId] : []);
-  await waitForVpDrivers(groupId, initialTargets);
+  await waitForVpDrivers(groupId, primaryTargets);
 
   // Post-turn compaction. Triggers when the JUST-APPENDED turn pushed
   // history past 20 turns / 80K tokens. Runs in the background — does
@@ -1239,32 +1347,27 @@ export async function handleUnifyGroupChat(msg) {
 }
 
 /**
- * Wait for the drivers of `targets` AND any drivers spawned by their
- * downstream route_forward chains to all complete. We re-poll because a
- * route_forward inside VP-A's turn enqueues VP-B, which spawns a new
- * driver while we're waiting for VP-A. Loop terminates when every VP
- * mentioned (directly or via chain) is idle.
+ * Wait for the drivers of `primaryTargets` AND any drivers spawned by
+ * their downstream route_forward chains to all complete. We re-poll
+ * because a route_forward inside VP-A's turn enqueues VP-B, which spawns
+ * a new driver while we're waiting for VP-A. Loop terminates when every
+ * group-local driver is idle.
  *
- * Bounded by the per-driver QUERY_TIMEOUT_MS that runVpTurn enforces, so
- * even a misbehaving model can't pin this forever.
+ * `primaryTargets` is informational — for filtering we wait on EVERY
+ * driver in the group, since route_forward fan-out targets the user
+ * never directly mentioned still need to drain before this user message
+ * is considered handled.
+ *
+ * Bounded by the per-driver QUERY_TIMEOUT_MS that runVpTurn enforces,
+ * so even a misbehaving model can't pin this forever.
  */
-async function waitForVpDrivers(groupId, initialTargets) {
-  const seenVpIds = new Set(initialTargets);
+async function waitForVpDrivers(groupId, _primaryTargets) {
   while (true) {
     // Snapshot the current set of drivers belonging to this group.
     const promises = [];
+    const prefix = `${groupId}::`;
     for (const [key, p] of vpDrivers.entries()) {
-      // Driver keys are `${groupId}::${vpId}`.
-      if (key.startsWith(`${groupId}::`)) {
-        const vpId = key.slice(groupId.length + 2);
-        if (seenVpIds.has(vpId) || true) {
-          // Wait on every group-local driver — this naturally covers
-          // route_forward fan-out targets the user didn't mention. We
-          // keep `seenVpIds` for diagnostics but don't gate on it.
-          seenVpIds.add(vpId);
-          promises.push(p);
-        }
-      }
+      if (key.startsWith(prefix)) promises.push(p);
     }
     if (promises.length === 0) return;
     await Promise.all(promises.map((p) => p.catch(() => {})));
@@ -1755,6 +1858,28 @@ async function runCompactNow(groupId) {
 }
 
 /**
+ * Abort every in-flight VP turn and clear all queued envelopes across
+ * every group. Shared by `handleUnifyAbortThread` and
+ * `handleUnifyAbortAll` — both have the same "stop everything" intent
+ * after the H2.f.2 collapse to single-conversation. Pushes
+ * `vp:<key>` strings into the supplied `aborted` array for the
+ * unify_aborted event.
+ *
+ * @param {string[]} aborted — output array, mutated in place
+ */
+function abortAllVpRuntime(aborted) {
+  for (const [key, ctrl] of vpAborts) {
+    try {
+      if (!ctrl.signal.aborted) { ctrl.abort(); aborted.push(`vp:${key}`); }
+    } catch { /* best-effort */ }
+  }
+  vpAborts.clear();
+  for (const inbox of vpInboxes.values()) {
+    if (Array.isArray(inbox)) inbox.length = 0;
+  }
+}
+
+/**
  * H2.f.2: user-initiated abort. The pre-H2 multi-thread version took a
  * `threadId` parameter; the new version aborts the single in-flight
  * controller. The `threadId` field on `msg` is accepted but ignored for
@@ -1774,15 +1899,7 @@ export function handleUnifyAbortThread(_msg = {}) {
     try { if (!ctrl.signal.aborted) { ctrl.abort(); aborted.push(turnId); } } catch { /* best-effort */ }
   }
   turnAbortCtrls.clear();
-  // task-707: abort per-VP drivers and drop queued envelopes so a stop
-  // request also halts any route_forward chains that haven't run yet.
-  for (const [key, ctrl] of vpAborts) {
-    try { if (!ctrl.signal.aborted) { ctrl.abort(); aborted.push(`vp:${key}`); } } catch { /* best-effort */ }
-  }
-  vpAborts.clear();
-  for (const inbox of vpInboxes.values()) {
-    if (Array.isArray(inbox)) inbox.length = 0;
-  }
+  abortAllVpRuntime(aborted);
   sendUnifyEvent({ type: 'unify_aborted', aborted, all: false });
   return { aborted, all: false };
 }
@@ -1802,14 +1919,7 @@ export function handleUnifyAbortAll() {
     try { if (!ctrl.signal.aborted) { ctrl.abort(); aborted.push(turnId); } } catch { /* best-effort */ }
   }
   turnAbortCtrls.clear();
-  // task-707: per-VP drivers + inboxes (see handleUnifyAbortThread).
-  for (const [key, ctrl] of vpAborts) {
-    try { if (!ctrl.signal.aborted) { ctrl.abort(); aborted.push(`vp:${key}`); } } catch { /* best-effort */ }
-  }
-  vpAborts.clear();
-  for (const inbox of vpInboxes.values()) {
-    if (Array.isArray(inbox)) inbox.length = 0;
-  }
+  abortAllVpRuntime(aborted);
   sendUnifyEvent({ type: 'unify_aborted', aborted, all: true });
   return { aborted, all: true };
 }
@@ -2161,10 +2271,14 @@ export async function resetUnifySession() {
   }
   unifyConversationId = null;
   conversationMessages = [];
-  // task-707: drop all per-VP / per-group transient state when the
-  // session is replaced. Drivers may still be running with a stale
-  // engine reference; abort them so they exit cleanly. The new session
-  // gets fresh inboxes / engines / coords on first dispatch.
+  // Re-arm the permission warning. The user might have fixed the
+  // ~/.yeaft/ permissions in the interim and is now restarting the
+  // session — they should see the diagnostic again if it still fails.
+  _permissionDiagnosticSent = false;
+  // Drop all per-VP / per-group transient state when the session is
+  // replaced. Drivers may still be running with a stale engine
+  // reference; abort them so they exit cleanly. The new session gets
+  // fresh inboxes / engines / coords on first dispatch.
   for (const [, ctrl] of vpAborts) {
     try { if (!ctrl.signal.aborted) ctrl.abort(); } catch { /* best-effort */ }
   }
