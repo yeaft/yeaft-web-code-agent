@@ -1046,6 +1046,10 @@ export default {
   // ============ Unify per-message hover timestamp (task-334-ui-c / prev-2 backlog) ============
   'unify.message.timeAria': 'Sent at {time}',
 
+  // ============ Unify route_forward hand-off pill (task-707) ============
+  'unify.handoff.targets': 'Forwarded to {mentions}',
+  'unify.handoff.broadcast': 'Forwarded to {mentions} (broadcast)',
+
   // ============ Unify Groups (task-334m) ============
   'unify.group.sidebarTitle': 'Groups',
   'unify.group.sidebarAria': 'Groups section',

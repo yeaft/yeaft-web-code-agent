@@ -106,6 +106,24 @@ Returns JSON: { ok, dispatched?, error?, detail? }.`,
         detail: result.detail || null,
       });
     }
+    // task-707: hand off control. Successful forward means the originating
+    // turn should NOT continue generating — the target VPs are now in
+    // charge. Signal the engine to break the tool-loop after this batch.
+    // The structured payload feeds web-bridge's `group_handoff` UX event
+    // so the frontend can render "↪ 已转交给 @vp-x、@vp-y" without
+    // re-parsing a string.
+    if (typeof ctx.requestEndTurn === 'function') {
+      try {
+        ctx.requestEndTurn({
+          kind: 'route_forward',
+          fromVpId: senderVpId,
+          dispatched: result.dispatched.slice(),
+          broadcast: Boolean(result.report?.broadcast),
+          text,
+          reason: reason || null,
+        });
+      } catch { /* never block the tool path on a UX hint */ }
+    }
     return JSON.stringify({
       ok: true,
       dispatched: result.dispatched,

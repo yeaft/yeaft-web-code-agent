@@ -500,8 +500,11 @@ export default {
 
       const finishTurn = () => {
         if (currentTurn) {
-          // Skip empty turns (no text, no tools, no todo, no ask, no images)
-          if (currentTurn.textContent || currentTurn.toolMsgs.length > 0 || currentTurn.todoMsg || currentTurn.askMsg || currentTurn.imageMsgs.length > 0) {
+          // Skip empty turns (no text, no tools, no todo, no ask, no images,
+          // no hand-off pills). task-707: include `handoffHints` so a
+          // route_forward-only turn (VP-A's only output is "↪ 已转交给 …")
+          // still gets rendered as a bubble.
+          if (currentTurn.textContent || currentTurn.toolMsgs.length > 0 || currentTurn.todoMsg || currentTurn.askMsg || currentTurn.imageMsgs.length > 0 || (currentTurn.handoffHints && currentTurn.handoffHints.length > 0)) {
             // task-334-ui-b: resolve speaker header visibility at the point
             // we flush the turn, AFTER all messages in it have been visited
             // (so speakerVpId has latched). Collapse same-speaker-in-a-row.
@@ -554,6 +557,11 @@ export default {
           speakerStateCause: '',
           showSpeakerHeader: false,
           turnId: null,
+          // task-707: route_forward hand-off pills. Collected from any
+          // assistant message in this turn that carries `handoffHints`
+          // (set by chat.js's `group_handoff` handler). Rendered as a
+          // small system-line below the body in AssistantTurn.js.
+          handoffHints: [],
         };
       };
 
@@ -630,6 +638,13 @@ export default {
           }
           if (!currentTurn.turnId && msg.turnId) {
             currentTurn.turnId = msg.turnId;
+          }
+          // task-707: collect any route_forward hand-off pills attached
+          // to the message by the chat-store `group_handoff` handler.
+          if (Array.isArray(msg.handoffHints) && msg.handoffHints.length > 0) {
+            for (const hint of msg.handoffHints) {
+              currentTurn.handoffHints.push(hint);
+            }
           }
           currentTurn.messages.push(msg);
           continue;

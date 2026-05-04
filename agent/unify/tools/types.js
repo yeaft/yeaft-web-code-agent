@@ -27,6 +27,23 @@
  * @property {number} [contextWindow] — current model's context window in
  *   tokens (used by ToolRegistry.execute to cap a single tool result at a
  *   fraction of the window so one runaway grep can't blow the wire).
+ * @property {(reason?: string|object) => void} [requestEndTurn]
+ *   — tool-callable signal that the current engine turn should end after
+ *   this batch of tool calls completes (no follow-up adapter.stream call).
+ *   Used by `route_forward` to hand off control to other VPs without
+ *   continuing to generate. The engine wires this when it builds toolCtx
+ *   and yields a `turn_end` event with `stopReason: 'tool_handoff'` and
+ *   the supplied reason as `detail`. `reason` may be a structured object
+ *   `{kind, ...}` so downstream observers (web-bridge) can render UI hints
+ *   (e.g. "↪ 已转交给 @vp-b") without re-parsing strings.
+ * @property {string} [senderVpId] — id of the VP whose turn is currently
+ *   running. Used by `route_forward` to stamp the forwarded message and
+ *   by the loop guard to key per-sender throttling.
+ * @property {object} [inboundEnvelope] — the envelope that triggered this
+ *   turn (groupId / msgId / causedBy chain). Threaded into route_forward
+ *   so causedBy chains extend correctly.
+ * @property {object} [router] — per-group router (createRouter() output)
+ *   for VP-to-VP forwarding. Set by the bridge when running inside a group.
  */
 
 /**

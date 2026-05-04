@@ -682,6 +682,11 @@ export class Engine {
       inboundEnvelope: vpCtx?.inboundEnvelope,
       taskId: vpCtx?.taskId,
       taskMembers: vpCtx?.taskMembers,
+      // task-707: tool-callable end-turn signal. The engine threads this
+      // setter when constructing toolCtx so a tool (e.g. route_forward)
+      // can mark "after this batch, end the turn — do NOT call adapter
+      // again". Honored at the top of the tool-loop continuation.
+      requestEndTurn: vpCtx?.requestEndTurn,
       // Sub-agent plumbing — Agent tool needs these to spawn a child
       // Engine that inherits the parent's adapter / stores / toolset.
       parentEngineDeps: {
@@ -1180,6 +1185,13 @@ export class Engine {
     let currentModel = this.#config.model;
     let cumulativeInputTokens = 0;
     let cumulativeOutputTokens = 0;
+    // task-707: tool-callable end-turn signal. Tools (currently only
+    // `route_forward`) can set this via toolCtx.requestEndTurn(reason)
+    // to break out of the tool-loop after the current batch finishes
+    // — without invoking another adapter.stream(). Used to hand off
+    // control to other VPs cleanly. Reset to null at the top of every
+    // outer-loop iteration so the flag never carries across turns.
+    let endTurnRequested = null;
 
     while (true) {
       turnNumber++;
@@ -1678,7 +1690,28 @@ export class Engine {
       }
 
       // Execute tool calls and feed results back
-      const toolCtx = this.#buildToolContext(signal, { router, senderVpId, inboundEnvelope, taskId, taskMembers, vpPersona, contextWindow: currentContextWindow });
+      // task-707: requestEndTurn is a per-batch closure that lets a tool
+      // signal "end this turn after the current batch — no adapter retry".
+      // We re-create the closure each iteration because endTurnRequested
+      // is a per-query local (reset implicitly at the top of #runQuery).
+      const toolCtx = this.#buildToolContext(signal, {
+        router,
+        senderVpId,
+        inboundEnvelope,
+        taskId,
+        taskMembers,
+        vpPersona,
+        contextWindow: currentContextWindow,
+        requestEndTurn: (reason) => {
+          // First call wins — preserve the kind/reason of the first tool
+          // that asked to end the turn. Late callers (a second
+          // route_forward in the same batch) keep dispatching but don't
+          // overwrite the recorded reason.
+          if (endTurnRequested == null) {
+            endTurnRequested = reason || { kind: 'tool_handoff' };
+          }
+        },
+      });
 
       // task-325a: track whether we aborted mid tool-loop so we can
       // break out of the outer while-loop cleanly once the current
@@ -1820,6 +1853,31 @@ export class Engine {
       // user message immediately after the last tool result.
       for (const reminder of pendingDupReminders) {
         conversationMessages.push({ role: 'user', content: reminder });
+      }
+
+      // task-707: tool-callable end-turn signal. If a tool in this batch
+      // called toolCtx.requestEndTurn(reason), break out of the outer
+      // while-loop now — DON'T call adapter.stream() again. The
+      // assistant(tool_use)+tool(tool_result) pairs are already in
+      // conversationMessages, so the next user-initiated turn sees a
+      // clean wire shape. Used by `route_forward` to hand off control
+      // to other VPs without continuing to generate.
+      //
+      // Order matters: this runs BEFORE T1 reflection (which would
+      // collapse the arc into a summary that's only valuable across
+      // multi-iteration tool loops) and BEFORE the abortedDuringTools
+      // check (so a clean handoff doesn't get reported as 'aborted').
+      if (endTurnRequested) {
+        const handoffDetail = typeof endTurnRequested === 'object'
+          ? endTurnRequested
+          : { kind: 'tool_handoff', reason: String(endTurnRequested) };
+        yield {
+          type: 'turn_end',
+          turnNumber,
+          stopReason: 'tool_handoff',
+          detail: handoffDetail,
+        };
+        break;
       }
 
       // PR-L: T1 in-turn (synchronous) reflection. Fires exactly once per
