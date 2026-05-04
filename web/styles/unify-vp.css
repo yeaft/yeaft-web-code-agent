@@ -34,8 +34,8 @@
   --vp-status-online: #56d364;
   --vp-status-busy:   #ff9e2c;
 
-  --bg-vp-turn:     rgba(255, 255, 255, 0.035);
-  --border-vp-turn: rgba(255, 255, 255, 0.08);
+  --bg-vp-turn:     rgba(255, 255, 255, 0.05);
+  --border-vp-turn: rgba(255, 255, 255, 0.10);
 }
 
 /* ─── VpAvatar ───────────────────────────────────────────── */

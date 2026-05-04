@@ -5,6 +5,7 @@ import VpSpeakerHeader from './VpSpeakerHeader.js';
 import ReflectionCard from './ReflectionCard.js';
 import SubAgentCard from './SubAgentCard.js';
 import GroupAnnouncementBar from './GroupAnnouncementBar.js';
+import { buildTurnGroups } from '../stores/helpers/turn-groups.js';
 
 export default {
   name: 'MessageList',
@@ -485,177 +486,12 @@ export default {
       return store.agents.filter(a => a.online);
     });
 
-    // Turn aggregation: group flat messages into turn groups
-    const turnGroups = Vue.computed(() => {
-      const messages = store.messages;
-      const result = [];
-      let currentTurn = null;
-      let turnCounter = 0;
-
-      const finishTurn = () => {
-        if (currentTurn) {
-          // Skip empty turns (no text, no tools, no todo, no ask, no images)
-          if (currentTurn.textContent || currentTurn.toolMsgs.length > 0 || currentTurn.todoMsg || currentTurn.askMsg || currentTurn.imageMsgs.length > 0) {
-            // task-334-ui-b: resolve speaker header visibility at the point
-            // we flush the turn, AFTER all messages in it have been visited
-            // (so speakerVpId has latched).
-            //
-            // WeChat-style attribution: ALWAYS show the speaker header on
-            // every VP turn. Previous behaviour collapsed the header on
-            // consecutive turns from the same VP, but that caused the
-            // avatar to "disappear" the moment a turn finished — making
-            // it look like the speaker had vanished. Users expect each
-            // assistant turn to carry its avatar, name, and timestamp,
-            // exactly like WeChat / Slack group chat.
-            //
-            // Legacy 1:1 turns (no speakerVpId) still render no header.
-            currentTurn.showSpeakerHeader = !!currentTurn.speakerVpId;
-            result.push(currentTurn);
-          }
-          currentTurn = null;
-        }
-      };
-
-      const startTurn = () => {
-        turnCounter++;
-        currentTurn = {
-          type: 'assistant-turn',
-          id: 'turn_' + turnCounter,
-          textContent: '',
-          isStreaming: false,
-          todoMsg: null,
-          toolMsgs: [],
-          imageMsgs: [],
-          askMsg: null,
-          messages: [],
-          // H2.f.6: threadId capture removed (single-conversation model).
-          // task-314: persisted message id (`m{NNNN}`) for the last
-          // assistant chunk in this turn — used as the fork cursor when
-          // the user clicks "Fork from here".
-          atMessageId: null,
-          // task-334-ui-b: speaker attribution. `speakerVpId` latches from
-          // the first assistant message carrying it; `speakerTimestamp` /
-          // `speakerStateCause` read from the same message. `showSpeakerHeader`
-          // is computed at finishTurn() — true for any VP-attributed turn,
-          // false for legacy 1:1 turns (no speakerVpId).
-          speakerVpId: null,
-          speakerTimestamp: 0,
-          speakerStateCause: '',
-          showSpeakerHeader: false,
-          turnId: null,
-        };
-      };
-
-      for (let i = 0; i < messages.length; i++) {
-        const msg = messages[i];
-
-        if (msg.type === 'user') {
-          // Skip empty user messages (tool_result artifacts from DB)
-          if (!msg.content || !msg.content.trim()) {
-            continue;
-          }
-          finishTurn();
-          result.push({ type: 'user', id: msg.id || 'u_' + i, message: msg });
-          continue;
-        }
-
-        if (msg.type === 'system' || msg.type === 'error') {
-          finishTurn();
-          result.push({ type: msg.type, id: msg.id || 's_' + i, message: msg });
-          continue;
-        }
-
-        // task-334j: task-scoped group message row. Breaks the assistant
-        // turn streak like a user/system row (distinct visual channel —
-        // avatar + [task] pill — not a continuation of an assistant turn).
-        if (msg.type === 'feature-message') {
-          finishTurn();
-          result.push({ type: 'feature-message', id: msg.id || 'tm_' + i, message: msg });
-          continue;
-        }
-
-        // tool-result: skip (merged into tool-use)
-        if (msg.type === 'tool-result' || msg.type === 'tool_result') {
-          continue;
-        }
-
-        if (msg.type === 'assistant') {
-          if (!currentTurn) startTurn();
-          if (msg.content) {
-            currentTurn.textContent += msg.content;
-          }
-          if (msg.isStreaming) {
-            currentTurn.isStreaming = true;
-          }
-          // H2.f.6: threadId latch removed (single-conversation model).
-          // task-314: remember the persisted message id for this turn so a
-          // "Fork from here" click can tell the agent which message to cut
-          // at. We latch the LAST assistant message id — forking from the
-          // turn cuts after the full assistant reply has been received.
-          if (msg.id && /^m\d+$/.test(msg.id)) {
-            currentTurn.atMessageId = msg.id;
-          }
-          // task-334-ui-b: latch speaker attribution from the first
-          // assistant message that carries a VP id. Subsequent messages in
-          // the same turn should have the same speaker; we don't overwrite
-          // to avoid flicker mid-stream. `lastStateChangeCause` (334c O2)
-          // is read opportunistically — if 334h hasn't wired it yet, the
-          // field is simply undefined and we render no tooltip dot.
-          if (!currentTurn.speakerVpId && msg.speakerVpId) {
-            currentTurn.speakerVpId = msg.speakerVpId;
-            currentTurn.speakerTimestamp =
-              (typeof msg.timestamp === 'number' && msg.timestamp > 0)
-                ? msg.timestamp
-                : (typeof msg.createdAt === 'number' ? msg.createdAt : 0);
-            if (typeof msg.lastStateChangeCause === 'string') {
-              currentTurn.speakerStateCause = msg.lastStateChangeCause;
-            }
-          }
-          if (!currentTurn.turnId && msg.turnId) {
-            currentTurn.turnId = msg.turnId;
-          }
-          currentTurn.messages.push(msg);
-          continue;
-        }
-
-        if (msg.type === 'tool-use') {
-          if (!currentTurn) startTurn();
-
-          // Merge tool-result from next message
-          const nextMsg = messages[i + 1];
-          const hasResult = nextMsg && (nextMsg.type === 'tool-result' || nextMsg.type === 'tool_result');
-          const toolEntry = {
-            ...msg,
-            hasResult: hasResult || msg.hasResult || false,
-            toolResult: msg.toolResult || null
-          };
-
-          if (msg.toolName === 'TodoWrite') {
-            currentTurn.todoMsg = toolEntry;
-          } else if (msg.toolName === 'AskUserQuestion') {
-            currentTurn.askMsg = toolEntry;
-          } else {
-            currentTurn.toolMsgs.push(toolEntry);
-          }
-          currentTurn.messages.push(msg);
-          continue;
-        }
-
-        if (msg.type === 'chat-image') {
-          if (!currentTurn) startTurn();
-          currentTurn.imageMsgs.push(msg);
-          currentTurn.messages.push(msg);
-          continue;
-        }
-
-        // Unknown type: pass through
-        finishTurn();
-        result.push({ type: msg.type || 'unknown', id: msg.id || 'x_' + i, message: msg });
-      }
-
-      finishTurn();
-      return result;
-    });
+    // Turn aggregation: group flat messages into turn groups.
+    // The aggregation rules (turn boundaries, speaker latching, WeChat-
+    // style header) live in `web/stores/helpers/turn-groups.js` so they
+    // can be unit-tested without Vue. See that file for the moment-1
+    // turnId-split rule and the showSpeakerHeader contract.
+    const turnGroups = Vue.computed(() => buildTurnGroups(store.messages));
 
     // PR-L: reflection cards grouped by anchor (the message id present at the
     // moment the `pending` event arrived). Cards whose anchor isn't in the
