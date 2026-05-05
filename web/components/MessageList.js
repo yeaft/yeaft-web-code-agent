@@ -688,17 +688,18 @@ export default {
         // carry the typing badge on the live AssistantTurn — no
         // placeholder needed for them.
         const streamingVps = new Set();
+        // Walk back through the tail run of assistant-turns. Stop at the
+        // first non-assistant-turn (user / system / feature row) — those
+        // break a same-VP streak so anything streaming further back is
+        // already attached to its own non-collapsed turn.
         for (let i = result.length - 1; i >= 0; i--) {
           const r = result[i];
-          if (!r || r.type !== 'assistant-turn') continue;
+          if (!r) continue;
+          if (r.type !== 'assistant-turn') break;
           if (r.isStreaming && r.speakerVpId) streamingVps.add(r.speakerVpId);
-          // Stop walking back at the first non-streaming non-VP turn —
-          // we only need the tail run.
-          if (r.type === 'user') break;
         }
         for (const vpId of typingIdsForPlaceholder) {
           if (streamingVps.has(vpId)) continue;
-          turnCounter++;
           result.push({
             type: 'assistant-turn',
             id: 'turn_typing_' + vpId,
@@ -817,32 +818,9 @@ export default {
       return store.isProcessing && !hasStreamingMessage.value;
     });
 
-    // task-fix: per-VP typing indicator IDs (group chat). Suppress for a
-    // VP that already has a streaming turn at the tail — in that case
-    // VpSpeakerHeader's inline dots take over, so a duplicate standalone
-    // row would double-render the indicator.
-    //
-    // Cross-mode isolation: the `vpsTypingInCurrentConv` Pinia getter
-    // already scopes lookup to the current conversation's slice of the
-    // (per-conversation, per-VP) typing-indicator map. When the user is
-    // in a Chat tab, the current conversation is a chat conv (not the
-    // Unify one), so the getter returns [] and no Unify typing rows
-    // bleed into Chat. Reading via the getter keeps the underlying
-    // nested shape an internal detail of the store.
-    const vpTypingIds = Vue.computed(() => {
-      const ids = store.vpsTypingInCurrentConv;
-      if (ids.length === 0) return [];
-      // Find the tail streaming speakerVpId (if any) — skip it.
-      const msgs = store.messages;
-      let tailStreamingVpId = null;
-      for (let i = msgs.length - 1; i >= 0; i--) {
-        const m = msgs[i];
-        if (!m) continue;
-        if (m.isStreaming && m.speakerVpId) { tailStreamingVpId = m.speakerVpId; break; }
-        if (m.type === 'user') break;
-      }
-      return tailStreamingVpId ? ids.filter(v => v !== tailStreamingVpId) : ids;
-    });
+    // task-708: the standalone vp-typing-row was removed; the placeholder
+    // pseudo-turn synth in `turnGroups` reads `store.vpsTypingInCurrentConv`
+    // directly, so we no longer need a separate computed here.
 
     // Reactive timer for long-processing fallback status
     const typingStartTime = Vue.ref(0);
@@ -1282,7 +1260,6 @@ export default {
       flashMsgId,
       hasStreamingMessage,
       showTypingDots,
-      vpTypingIds,
       previewShowTypingDots,
       isPreviewMode,
       waitingStatus,
