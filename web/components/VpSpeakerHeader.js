@@ -41,14 +41,9 @@ export default {
         :size="24"
         :show-subtitle="true"
         :clickable="true"
+        :typing="isTyping"
         @open-detail="$emit('open-detail', $event)"
       />
-      <span
-        v-if="isTyping"
-        class="vp-speaker-typing"
-        :aria-label="$t ? $t('unify.vp.speaker.typingAria', { name: vpId }) : 'typing'"
-        role="status"
-      ><span class="dot"></span><span class="dot"></span><span class="dot"></span></span>
       <span
         v-if="stateCause"
         class="vp-speaker-state-cause"

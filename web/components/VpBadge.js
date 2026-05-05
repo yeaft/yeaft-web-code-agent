@@ -20,6 +20,7 @@ export default {
     size: { type: Number, default: 20 },
     showSubtitle: { type: Boolean, default: false },
     status: { type: String, default: null },
+    typing: { type: Boolean, default: false },
     compact: { type: Boolean, default: false },
     clickable: { type: Boolean, default: false },
   },
@@ -32,7 +33,7 @@ export default {
       :aria-label="displayName"
       @click.stop="$emit('open-detail', vpId)"
     >
-      <VpAvatar :vp-id="vpId" :size="size" :status="status" />
+      <VpAvatar :vp-id="vpId" :size="size" :status="status" :typing="typing" />
       <span class="vp-badge-text">
         <span class="vp-badge-name">{{ displayName }}</span>
         <span
@@ -42,7 +43,7 @@ export default {
       </span>
     </button>
     <span v-else class="vp-badge" :class="{ compact }">
-      <VpAvatar :vp-id="vpId" :size="size" :status="status" />
+      <VpAvatar :vp-id="vpId" :size="size" :status="status" :typing="typing" />
       <span class="vp-badge-text">
         <span class="vp-badge-name">{{ displayName }}</span>
         <span

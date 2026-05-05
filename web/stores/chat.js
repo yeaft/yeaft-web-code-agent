@@ -2294,6 +2294,20 @@ export const useChatStore = defineStore('chat', {
     changeLocale(locale) {
       this.locale = locale;
       setLocale(locale);
+      // task-708: live-locale propagation. Push the new language to the
+      // agent so the per-VP Engine pool (and 1:1-chat session.engine)
+      // re-renders the system prompt in the chosen language on the very
+      // next turn — no session reload required. Skipped when no Unify
+      // agent is bound (Chat-only or pre-connect state).
+      if (this.unifyAgentId) {
+        try {
+          this.sendWsMessage({
+            type: 'update_llm_config',
+            agentId: this.unifyAgentId,
+            config: { language: locale },
+          });
+        } catch { /* best-effort; locale already applied to UI */ }
+      }
     },
 
     // =====================

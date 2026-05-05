@@ -138,23 +138,20 @@ export default {
           :card="card"
         />
         <!--
-          task-fix: per-VP typing indicator for Unify group chat.
+          task-708: per-VP typing is now an avatar-attached badge on
+          every VP-attributed AssistantTurn (see VpSpeakerHeader →
+          VpBadge → VpAvatar :typing). The previous standalone
+          .vp-typing-row container was removed because it flashed
+          in/out when AssistantTurn materialised — the avatar on the
+          in-flight turn's own header now signals the typing state
+          continuously.
 
-          Rendered BEFORE the first streaming chunk arrives from the VP's
-          engine.query (gap between vp_typing_start and the first assistant
-          delta). Once that VP's AssistantTurn materialises, VpSpeakerHeader
-          continues showing the dots inline, so visually the indicator never
-          "jumps". We intentionally DO NOT show this when that VP already
-          has a streaming assistant turn at the tail — the header dots take
-          over from there.
+          When `vp_typing_start` lands but the engine hasn't emitted a
+          first chunk yet, a placeholder pseudo-turn is synthesised
+          below in turnGroups; AssistantTurn renders just the speaker
+          header (with typing badge on the avatar) when the body is
+          empty.
         -->
-        <div
-          v-for="vpId in vpTypingIds"
-          :key="'vp-typing-' + vpId"
-          class="vp-typing-row"
-        >
-          <VpSpeakerHeader :vp-id="vpId" :timestamp="0" state-cause="" />
-        </div>
         <!-- Typing dots: visible when processing but not streaming text -->
         <div v-if="previewShowTypingDots" class="typing-indicator" :class="waitingStatus ? ('status-' + waitingStatus) : ''">
           <span></span><span></span><span></span>
@@ -491,12 +488,13 @@ export default {
       const result = [];
       let currentTurn = null;
       let turnCounter = 0;
-      // task-334-ui-b: track the most recent VP speaker we actually rendered
-      // a header for, so consecutive turns from the same VP collapse
-      // (the WeChat/Slack group-chat convention). Reset whenever a user or
-      // system row is emitted — a non-VP row breaks the "consecutive VP"
-      // streak, same as in any other group chat.
-      let lastShownSpeakerVpId = null;
+      // task-708: every VP-attributed turn carries its own avatar header.
+      // The previous "consecutive-same-speaker collapse" (Slack-style)
+      // produced the user's "VP disappears" complaint — when a VP sent
+      // back-to-back turns, the second turn rendered without an avatar
+      // because we suppressed the header. The pure helper at
+      // `web/stores/helpers/turn-groups.js` already always shows the
+      // header per VP turn; this inline aggregator now matches it.
 
       const finishTurn = () => {
         if (currentTurn) {
@@ -505,26 +503,13 @@ export default {
           // route_forward-only turn (VP-A's only output is "↪ 已转交给 …")
           // still gets rendered as a bubble.
           if (currentTurn.textContent || currentTurn.toolMsgs.length > 0 || currentTurn.todoMsg || currentTurn.askMsg || currentTurn.imageMsgs.length > 0 || (currentTurn.handoffHints && currentTurn.handoffHints.length > 0)) {
-            // task-334-ui-b: resolve speaker header visibility at the point
-            // we flush the turn, AFTER all messages in it have been visited
-            // (so speakerVpId has latched). Collapse same-speaker-in-a-row.
-            //
-            // Render the header purely from data: if the agent has stamped
-            // a `speakerVpId` onto any message in this turn, show it.
-            // Previously this was gated on a `multiVp` feature flag, but
-            // that caused a UX bug — the standalone `vp-typing-row` renders
-            // VpSpeakerHeader unconditionally, so when the flag was off the
-            // avatar/name appeared while typing and vanished the moment the
-            // stream ended. The flag still gates upstream group features
-            // (creation, @-mention dispatch); rendering of already-stamped
-            // turns must follow the data.
-            if (currentTurn.speakerVpId) {
-              currentTurn.showSpeakerHeader =
-                currentTurn.speakerVpId !== lastShownSpeakerVpId;
-              lastShownSpeakerVpId = currentTurn.speakerVpId;
-            } else {
-              currentTurn.showSpeakerHeader = false;
-            }
+            // task-708: render the speaker header on every VP-attributed
+            // turn. The avatar (with its inline typing badge) is THE
+            // surface that signals which VP is speaking + whether they
+            // are still typing — collapsing it on consecutive turns
+            // reads as "the VP disappeared", which is exactly the bug
+            // the user reported "无数遍".
+            currentTurn.showSpeakerHeader = !!currentTurn.speakerVpId;
             result.push(currentTurn);
           }
           currentTurn = null;
@@ -574,17 +559,12 @@ export default {
             continue;
           }
           finishTurn();
-          // task-334-ui-b: a non-VP row resets the consecutive-speaker streak.
-          lastShownSpeakerVpId = null;
           result.push({ type: 'user', id: msg.id || 'u_' + i, message: msg });
           continue;
         }
 
         if (msg.type === 'system' || msg.type === 'error') {
           finishTurn();
-          // task-334-ui-b: same reset as for user rows — any non-VP row
-          // breaks the streak so the next VP turn re-shows its header.
-          lastShownSpeakerVpId = null;
           result.push({ type: msg.type, id: msg.id || 's_' + i, message: msg });
           continue;
         }
@@ -594,7 +574,6 @@ export default {
         // avatar + [task] pill — not a continuation of an assistant turn).
         if (msg.type === 'feature-message') {
           finishTurn();
-          lastShownSpeakerVpId = null;
           result.push({ type: 'feature-message', id: msg.id || 'tm_' + i, message: msg });
           continue;
         }
@@ -686,6 +665,62 @@ export default {
       }
 
       finishTurn();
+
+      // task-708: synthesize placeholder turns for VPs that are typing
+      // but have no in-flight AssistantTurn yet. This covers the gap
+      // between `vp_typing_start` and the first text chunk — the
+      // avatar is visible from the moment the engine picks up the
+      // user's message. AssistantTurn renders just the speaker
+      // header (with typing badge on the avatar) when the body is
+      // empty, so the visual is the same as a freshly-streaming
+      // turn with no tokens yet.
+      //
+      // Skip a typing VP when it already has any turn in `result` (the
+      // last such turn carries the speaker header / avatar; no need
+      // for an extra ghost row). Restricting the skip to the LAST
+      // turn would re-introduce the flash: when a VP starts a
+      // follow-up turn before the engine emits, the prior completed
+      // turn is no longer "in-flight" and the avatar would briefly
+      // disappear; the placeholder bridges that.
+      const typingIdsForPlaceholder = store.vpsTypingInCurrentConv;
+      if (typingIdsForPlaceholder.length > 0) {
+        // VPs whose latest turn in `result` is still streaming already
+        // carry the typing badge on the live AssistantTurn — no
+        // placeholder needed for them.
+        const streamingVps = new Set();
+        // Walk back through the tail run of assistant-turns. Stop at the
+        // first non-assistant-turn (user / system / feature row) — those
+        // break a same-VP streak so anything streaming further back is
+        // already attached to its own non-collapsed turn.
+        for (let i = result.length - 1; i >= 0; i--) {
+          const r = result[i];
+          if (!r) continue;
+          if (r.type !== 'assistant-turn') break;
+          if (r.isStreaming && r.speakerVpId) streamingVps.add(r.speakerVpId);
+        }
+        for (const vpId of typingIdsForPlaceholder) {
+          if (streamingVps.has(vpId)) continue;
+          result.push({
+            type: 'assistant-turn',
+            id: 'turn_typing_' + vpId,
+            textContent: '',
+            isStreaming: true,
+            todoMsg: null,
+            toolMsgs: [],
+            imageMsgs: [],
+            askMsg: null,
+            messages: [],
+            atMessageId: null,
+            speakerVpId: vpId,
+            speakerTimestamp: 0,
+            speakerStateCause: '',
+            showSpeakerHeader: true,
+            turnId: null,
+            handoffHints: [],
+          });
+        }
+      }
+
       return result;
     });
 
@@ -783,32 +818,9 @@ export default {
       return store.isProcessing && !hasStreamingMessage.value;
     });
 
-    // task-fix: per-VP typing indicator IDs (group chat). Suppress for a
-    // VP that already has a streaming turn at the tail — in that case
-    // VpSpeakerHeader's inline dots take over, so a duplicate standalone
-    // row would double-render the indicator.
-    //
-    // Cross-mode isolation: the `vpsTypingInCurrentConv` Pinia getter
-    // already scopes lookup to the current conversation's slice of the
-    // (per-conversation, per-VP) typing-indicator map. When the user is
-    // in a Chat tab, the current conversation is a chat conv (not the
-    // Unify one), so the getter returns [] and no Unify typing rows
-    // bleed into Chat. Reading via the getter keeps the underlying
-    // nested shape an internal detail of the store.
-    const vpTypingIds = Vue.computed(() => {
-      const ids = store.vpsTypingInCurrentConv;
-      if (ids.length === 0) return [];
-      // Find the tail streaming speakerVpId (if any) — skip it.
-      const msgs = store.messages;
-      let tailStreamingVpId = null;
-      for (let i = msgs.length - 1; i >= 0; i--) {
-        const m = msgs[i];
-        if (!m) continue;
-        if (m.isStreaming && m.speakerVpId) { tailStreamingVpId = m.speakerVpId; break; }
-        if (m.type === 'user') break;
-      }
-      return tailStreamingVpId ? ids.filter(v => v !== tailStreamingVpId) : ids;
-    });
+    // task-708: the standalone vp-typing-row was removed; the placeholder
+    // pseudo-turn synth in `turnGroups` reads `store.vpsTypingInCurrentConv`
+    // directly, so we no longer need a separate computed here.
 
     // Reactive timer for long-processing fallback status
     const typingStartTime = Vue.ref(0);
@@ -1248,7 +1260,6 @@ export default {
       flashMsgId,
       hasStreamingMessage,
       showTypingDots,
-      vpTypingIds,
       previewShowTypingDots,
       isPreviewMode,
       waitingStatus,
