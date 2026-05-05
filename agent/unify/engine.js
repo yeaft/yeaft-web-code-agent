@@ -366,6 +366,23 @@ export class Engine {
     return !!this.#currentAbortCtrl && !this.#currentAbortCtrl.signal.aborted;
   }
 
+  /**
+   * Mutate the engine's effective language at runtime. The next call to
+   * #buildSystemPrompt reads this.#config.language live, so the very next
+   * turn renders in the new language without reconstructing the engine.
+   *
+   * Used by the live-locale broadcast path: when the user flips the UI
+   * language dropdown, web → server → message-router calls
+   * broadcastLanguageChange(lang) (web-bridge.js) which fans out to every
+   * Engine in the per-VP pool plus the 1:1-chat session engine.
+   *
+   * @param {string} lang — 'en' | 'zh'
+   */
+  setLanguage(lang) {
+    if (typeof lang !== 'string' || !lang) return;
+    this.#config.language = lang;
+  }
+
 
   /**
    * Unregister a tool.

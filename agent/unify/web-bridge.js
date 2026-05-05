@@ -164,6 +164,30 @@ function invalidateGroupContext(groupId) {
   // directly. They *are* dropped on `resetUnifySession`.
 }
 
+/**
+ * Live-locale broadcast: push a new language onto every Engine instance
+ * the agent currently holds.
+ *
+ * Called from `agent/connection/message-router.js` after `update_llm_config`
+ * persists `language` to ~/.yeaft/config.json. Without this, the per-VP
+ * engine pool (constructed once per VP and cached) keeps serving its
+ * old language until the session is reloaded — that's the bug fix from
+ * task-708 group-locale-sync. The 1:1-chat session.engine is also
+ * updated so Chat-mode prompts pick up the new language on the very
+ * next turn.
+ *
+ * No-op when `language` is falsy.
+ *
+ * @param {string} language — 'en' | 'zh'
+ */
+export function broadcastLanguageChange(language) {
+  if (!language) return;
+  for (const eng of vpEngines.values()) {
+    try { eng.setLanguage?.(language); } catch { /* best-effort */ }
+  }
+  try { session?.engine?.setLanguage?.(language); } catch { /* best-effort */ }
+}
+
 /** Query timeout in ms — abort if LLM doesn't respond within this window */
 const QUERY_TIMEOUT_MS = 120_000;
 

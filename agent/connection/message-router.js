@@ -36,7 +36,7 @@ import { sendToServer, flushMessageBuffer } from './buffer.js';
 import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
 import { getLlmConfig, updateLlmConfig, getUnifySettings, updateUnifySettings, getSearchSettings, updateSearchSettings, fetchTavilyUsage } from '../unify/config-api.js';
-import { handleUnifyGroupChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyAbortThread, handleUnifyAbortAll, handleUnifyAbortTurn, handleUnifyVpSubscribe, handleUnifyVpCreate, handleUnifyVpUpdate, handleUnifyVpDelete, handleUnifyVpRead, handleUnifyFeatureMessage, handleUnifyFetchSummaryHistory, handleUnifyFeatureCrud, handleUnifyListGroups, handleUnifyCreateGroup, handleUnifyRenameGroup, handleUnifyUpdateGroup, handleUnifyArchiveGroup, handleUnifyDeleteGroup, handleUnifyAddMember, handleUnifyRemoveMember, handleUnifySetDefaultVp, handleUnifyDreamTrigger } from '../unify/web-bridge.js';
+import { handleUnifyGroupChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyAbortThread, handleUnifyAbortAll, handleUnifyAbortTurn, handleUnifyVpSubscribe, handleUnifyVpCreate, handleUnifyVpUpdate, handleUnifyVpDelete, handleUnifyVpRead, handleUnifyFeatureMessage, handleUnifyFetchSummaryHistory, handleUnifyFeatureCrud, handleUnifyListGroups, handleUnifyCreateGroup, handleUnifyRenameGroup, handleUnifyUpdateGroup, handleUnifyArchiveGroup, handleUnifyDeleteGroup, handleUnifyAddMember, handleUnifyRemoveMember, handleUnifySetDefaultVp, handleUnifyDreamTrigger, broadcastLanguageChange } from '../unify/web-bridge.js';
 
 export async function handleMessage(msg) {
   switch (msg.type) {
@@ -327,6 +327,14 @@ export async function handleMessage(msg) {
 
     case 'update_llm_config': {
       const result = updateLlmConfig(msg.config || {}, ctx.CONFIG?.yeaftDir);
+      // task-708: live locale propagation. When the user flips the UI
+      // language dropdown, push the new value into every cached Engine
+      // (per-VP pool + 1:1 chat session.engine) so the very next turn
+      // renders the system prompt in the chosen language without the
+      // user reloading the session.
+      if (!result.error && result.language) {
+        broadcastLanguageChange(result.language);
+      }
       sendToServer({ type: 'llm_config_updated', ...result });
       break;
     }
