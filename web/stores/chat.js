@@ -12,6 +12,7 @@ import * as watchdogHelpers from './helpers/watchdog.js';
 import * as crewHelpers from './helpers/crew.js';
 import * as unifyViewHelpers from './helpers/unify-view.js';
 import { incVpTyping, decVpTyping } from './helpers/vp-typing.js';
+import { selectActiveConversationId } from './helpers/active-conv.js';
 import { turnMatchesSearch } from './helpers/debug-search.js';
 import { trimDebugRetention } from './helpers/debug-retention.js';
 
@@ -389,19 +390,15 @@ export const useChatStore = defineStore('chat', {
   getters: {
     // ★ Multi-column: compatibility shim — reads activeConversations[0]
     currentConversation: (state) => state.activeConversations[0] || null,
+    // The single source-of-truth selector for "which conversation is the
+    // active view sourcing from?". Lives in
+    // `helpers/active-conv.js` so the rule can be unit-tested against a
+    // plain state shape, and so the three getters below share the
+    // canonical implementation instead of each open-coding the ternary.
+    activeConversationId: (state) => selectActiveConversationId(state),
     // ★ Multi-column: compatibility shim — reads messagesMap for primary conversation
-    // task-fix (chat-bleed): when in Unify view, source from unifyConversationId
-    // instead of activeConversations[0]. Chat-mode WS handlers
-    // (conversation_resumed / conversation_selected / agent_list restore /
-    // crew session restore) unconditionally clobber activeConversations
-    // regardless of currentView, which used to leak chat-mode messages into
-    // the open Unify group view. Routing through unifyConversationId here
-    // makes the view itself isolated; the active-conversations writes can
-    // stay in place for when the user returns to chat.
-    messages: (state) => {
-      const convId = state.currentView === 'unify'
-        ? state.unifyConversationId
-        : state.activeConversations[0];
+    messages(state) {
+      const convId = this.activeConversationId;
       const raw = convId ? (state.messagesMap[convId] || EMPTY_ARRAY) : EMPTY_ARRAY;
       // task-fix (group-switch): group filter narrows the stream to one group.
       // Every Unify message is stamped with a groupId at creation time
@@ -424,8 +421,12 @@ export const useChatStore = defineStore('chat', {
     // detail of the store. The cross-mode isolation invariant is then
     // a property of the getter contract, not something each consumer has
     // to remember to enforce.
-    vpsTypingInCurrentConv: (state) => {
-      const convId = state.activeConversations[0] || null;
+    //
+    // Routes through `activeConversationId` so chat-mode handlers that
+    // clobber `activeConversations` while the user is in Unify cannot
+    // make typing badges silently disappear.
+    vpsTypingInCurrentConv(state) {
+      const convId = this.activeConversationId;
       if (!convId) return EMPTY_ARRAY;
       const inner = (state.unifyVpTyping || {})[convId];
       if (!inner) return EMPTY_ARRAY;
@@ -437,13 +438,15 @@ export const useChatStore = defineStore('chat', {
     // expose argument-taking lookups while still keeping the underlying
     // shape private to the store. VpSpeakerHeader uses this so it never
     // touches the nested map directly.
-    isVpTypingInCurrentConv: (state) => (vpId) => {
-      if (!vpId) return false;
-      const convId = state.activeConversations[0] || null;
-      if (!convId) return false;
-      const inner = (state.unifyVpTyping || {})[convId];
-      if (!inner) return false;
-      return (inner[vpId] || 0) > 0;
+    isVpTypingInCurrentConv(state) {
+      return (vpId) => {
+        if (!vpId) return false;
+        const convId = this.activeConversationId;
+        if (!convId) return false;
+        const inner = (state.unifyVpTyping || {})[convId];
+        if (!inner) return false;
+        return (inner[vpId] || 0) > 0;
+      };
     },
     // feat-6af5f9f1 PR B: Turn-grouped debug records for the redesigned
     // panel. Returns `[{ turnId, userPrompt, vpId, groupId, openedAt,

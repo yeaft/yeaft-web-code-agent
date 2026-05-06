@@ -1,88 +1,121 @@
 /**
- * Regression test: chat-mode messages must NOT bleed into the open Unify
- * view, even when chat-mode WS handlers (conversation_resumed,
- * conversation_selected, agent_list restore, crew session restore) clobber
- * `activeConversations` while the user is sitting on the Unify page.
+ * Regression test — chat-mode messages must NOT bleed into the open
+ * Unify view, even when chat-mode WS handlers (conversation_resumed,
+ * conversation_selected, agent_list restore, crew session restore)
+ * clobber `activeConversations` while the user is sitting on Unify.
  *
- * Bug scenario:
- *   1. User is in Unify with `unifyConversationId = 'unify-conv-1'` and
- *      `activeConversations = ['unify-conv-1']`.
+ * Bug:
+ *   1. User in Unify, `unifyConversationId === 'unify-conv-1'`,
+ *      `activeConversations === ['unify-conv-1']`.
  *   2. A backgrounded chat WS event (e.g. conversation_resumed for an
- *      agent that was reconnecting) writes `activeConversations = ['chat-A']`
- *      without checking `currentView`.
- *   3. `store.messages` was sourcing from `activeConversations[0]` and
- *      thus started returning `messagesMap['chat-A']` — chat messages
- *      visibly leaked into the Unify view (and into `MessageList.js`'s
- *      turn aggregator + scroll watchers).
+ *      agent reconnect) writes `activeConversations = ['chat-A']`
+ *      regardless of `currentView`.
+ *   3. Every getter that read `activeConversations[0]` immediately
+ *      sourced chat data into the Unify view (`messages` showed chat
+ *      content; `vpsTypingInCurrentConv` looked up the wrong key and
+ *      came back empty).
  *
- * Fix: when `currentView === 'unify'` the getter sources from
- * `unifyConversationId` instead. Chat-mode handlers can keep clobbering
- * activeConversations as before — the Unify view is no longer affected.
+ * Fix: a single canonical selector,
+ *   web/stores/helpers/active-conv.js#selectActiveConversationId.
+ * In Unify view it returns `unifyConversationId`; in Chat / Crew it
+ * returns `activeConversations[0]`. The store getters route through
+ * it instead of reading `activeConversations[0]` directly.
  *
- * This test exercises the getter logic directly with a synthetic state
- * shape (no Pinia / no Vue), mirroring the slice the real getter reads.
+ * This test exercises the real production helper. There is no inline
+ * reimplementation of the rule.
  */
 import { describe, it, expect } from 'vitest';
-
-// Reproduce the messages getter in isolation. If you change the
-// production getter in web/stores/chat.js, mirror the change here so
-// the regression contract stays explicit.
-const EMPTY = Object.freeze([]);
-function messagesGetter(state) {
-  const convId = state.currentView === 'unify'
-    ? state.unifyConversationId
-    : state.activeConversations[0];
-  const raw = convId ? (state.messagesMap[convId] || EMPTY) : EMPTY;
-  if (state.currentView === 'unify' && state.unifyActiveGroupFilter) {
-    const target = state.unifyActiveGroupFilter;
-    return raw.filter(m => m && m.groupId === target);
-  }
-  return raw;
-}
+import { selectActiveConversationId } from '../../../web/stores/helpers/active-conv.js';
 
 function mkState(overrides = {}) {
   return {
     currentView: 'chat',
     activeConversations: [],
     unifyConversationId: null,
-    unifyActiveGroupFilter: null,
-    messagesMap: {},
     ...overrides,
   };
 }
 
-describe('messages getter — chat/unify isolation', () => {
-  it('chat view: sources from activeConversations[0] (existing behaviour)', () => {
+describe('selectActiveConversationId — view routing', () => {
+  it('chat view: returns activeConversations[0]', () => {
     const state = mkState({
       currentView: 'chat',
-      activeConversations: ['chat-A'],
-      messagesMap: {
-        'chat-A': [{ id: 'm1', content: 'hello' }],
-        'unify-1': [{ id: 'u1', content: 'should not appear' }],
-      },
+      activeConversations: ['chat-A', 'chat-B'],
+      unifyConversationId: 'unify-1',
     });
-    expect(messagesGetter(state)).toEqual([{ id: 'm1', content: 'hello' }]);
+    expect(selectActiveConversationId(state)).toBe('chat-A');
   });
 
-  it('unify view: sources from unifyConversationId, NOT activeConversations[0]', () => {
-    // Simulates the bleed: a backgrounded chat handler wrote
-    // activeConversations = ['chat-A'] while the user is in Unify.
+  it('chat view with empty activeConversations: returns null', () => {
+    const state = mkState({ currentView: 'chat', activeConversations: [] });
+    expect(selectActiveConversationId(state)).toBeNull();
+  });
+
+  it('crew view: also returns activeConversations[0] (Crew shares the chat conversation list)', () => {
+    const state = mkState({
+      currentView: 'crew',
+      activeConversations: ['crew-conv-1'],
+      unifyConversationId: 'unify-1',
+    });
+    expect(selectActiveConversationId(state)).toBe('crew-conv-1');
+  });
+
+  it('unify view: returns unifyConversationId, IGNORING activeConversations[0]', () => {
+    // The bleed scenario: a backgrounded chat handler clobbered
+    // activeConversations while the user is in Unify. The selector
+    // must NOT see the clobbered value.
     const state = mkState({
       currentView: 'unify',
       activeConversations: ['chat-A'],
       unifyConversationId: 'unify-1',
+    });
+    expect(selectActiveConversationId(state)).toBe('unify-1');
+  });
+
+  it('unify view with no unifyConversationId: returns null (does NOT fall back to chat)', () => {
+    // Hardening: even if the unify session hasn't been initialised,
+    // we refuse to fall back to activeConversations.
+    const state = mkState({
+      currentView: 'unify',
+      activeConversations: ['chat-A'],
+      unifyConversationId: null,
+    });
+    expect(selectActiveConversationId(state)).toBeNull();
+  });
+});
+
+/**
+ * Higher-level invariant test: `messages`, `vpsTypingInCurrentConv`,
+ * and `isVpTypingInCurrentConv` in chat.js all flow through this
+ * selector. We re-execute the relevant slices over a synthetic state
+ * to confirm — but the routing CALL itself is the production helper,
+ * not a reimplementation.
+ */
+describe('store getters — Unify isolation via selectActiveConversationId', () => {
+  // Slice that mirrors chat.js#messages — only the parts the bug
+  // touches. The selector call here is the REAL one.
+  const EMPTY = Object.freeze([]);
+  function getMessages(state) {
+    const convId = selectActiveConversationId(state);
+    const raw = convId ? (state.messagesMap[convId] || EMPTY) : EMPTY;
+    if (state.currentView === 'unify' && state.unifyActiveGroupFilter) {
+      return raw.filter(m => m && m.groupId === state.unifyActiveGroupFilter);
+    }
+    return raw;
+  }
+
+  it('unify view: messages stays scoped to unifyConversationId despite activeConversations clobber', () => {
+    const state = mkState({
+      currentView: 'unify',
+      activeConversations: ['chat-A'],
+      unifyConversationId: 'unify-1',
+      unifyActiveGroupFilter: null,
       messagesMap: {
-        'chat-A': [{ id: 'leaked', content: 'CHAT LEAK' }],
-        'unify-1': [
-          { id: 'u1', content: 'unify msg', groupId: 'grp_default' },
-        ],
+        'chat-A': [{ id: 'leaked' }],
+        'unify-1': [{ id: 'u1' }],
       },
     });
-    const out = messagesGetter(state);
-    expect(out).toEqual([
-      { id: 'u1', content: 'unify msg', groupId: 'grp_default' },
-    ]);
-    expect(out.find(m => m.id === 'leaked')).toBeUndefined();
+    expect(getMessages(state).map(m => m.id)).toEqual(['u1']);
   });
 
   it('unify view + group filter: still scoped to unify stream and filtered by groupId', () => {
@@ -92,51 +125,28 @@ describe('messages getter — chat/unify isolation', () => {
       unifyConversationId: 'unify-1',
       unifyActiveGroupFilter: 'grp_alpha',
       messagesMap: {
-        'chat-A': [{ id: 'leaked', content: 'CHAT LEAK', groupId: 'grp_alpha' }],
+        // Same groupId on the leaked side — strict equality alone
+        // would let it through; the selector is what blocks it.
+        'chat-A': [{ id: 'leaked', groupId: 'grp_alpha' }],
         'unify-1': [
-          { id: 'u1', content: 'alpha', groupId: 'grp_alpha' },
-          { id: 'u2', content: 'beta',  groupId: 'grp_beta'  },
+          { id: 'u1', groupId: 'grp_alpha' },
+          { id: 'u2', groupId: 'grp_beta' },
         ],
       },
     });
-    const out = messagesGetter(state);
-    expect(out).toEqual([
-      { id: 'u1', content: 'alpha', groupId: 'grp_alpha' },
-    ]);
-    // Even though the leaked chat message has groupId === 'grp_alpha',
-    // it must NOT appear because the source list is unify-only.
-    expect(out.find(m => m.id === 'leaked')).toBeUndefined();
+    expect(getMessages(state).map(m => m.id)).toEqual(['u1']);
   });
 
-  it('unify view with no unifyConversationId: returns empty (does not fall back to chat)', () => {
-    // Hardening: even if the unify session hasn't been initialised, we
-    // refuse to fall back to activeConversations.
+  it('chat view: messages source unchanged (regression guard for the chat side)', () => {
     const state = mkState({
-      currentView: 'unify',
+      currentView: 'chat',
       activeConversations: ['chat-A'],
-      unifyConversationId: null,
-      messagesMap: { 'chat-A': [{ id: 'leaked' }] },
+      unifyConversationId: 'unify-1',
+      messagesMap: {
+        'chat-A': [{ id: 'm1' }, { id: 'm2' }],
+        'unify-1': [{ id: 'u1' }],
+      },
     });
-    expect(messagesGetter(state)).toEqual([]);
-  });
-
-  it('returns the same EMPTY sentinel when there is no source convId (no churn)', () => {
-    // The getter's stable-empty sentinel keeps Vue computed from
-    // re-rendering on every call; verify both branches share it.
-    const stateA = mkState({ currentView: 'chat', activeConversations: [] });
-    const stateB = mkState({ currentView: 'unify', unifyConversationId: null });
-    expect(messagesGetter(stateA)).toBe(messagesGetter(stateB));
-  });
-});
-
-describe('messages getter — production source-of-truth assertion', () => {
-  // Cheap integrity guard — if someone refactors the production getter
-  // without updating this test, the substring assertion catches it.
-  it('chat.js getter mirrors the view-aware source selection above', async () => {
-    const fs = await import('node:fs/promises');
-    const url = new URL('../../../web/stores/chat.js', import.meta.url);
-    const src = await fs.readFile(url, 'utf8');
-    // The fix: convId selection branches on currentView === 'unify'
-    expect(src).toMatch(/state\.currentView === 'unify'\s*\?\s*state\.unifyConversationId\s*:\s*state\.activeConversations\[0\]/);
+    expect(getMessages(state).map(m => m.id)).toEqual(['m1', 'm2']);
   });
 });
