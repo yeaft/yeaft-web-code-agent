@@ -10,13 +10,18 @@
  * malformed values fall back to default.
  */
 
-export const DREAM_INTERVAL_HOURS = 12;
+export const DREAM_INTERVAL_HOURS = 1;
 export const DREAM_OVERLAP = 3;
 export const MIN_NEW_PER_GROUP = 20;
 export const MAX_SINGLE_MESSAGE_CHARS = 8000;
 export const MAX_DIFF_TOKENS_PER_TRIAGE = 60000;
 export const MAX_APPLY_TOKENS = 80000;
 export const DREAM_BACKUP_KEEP = 7;
+
+// task-710: nudge dream off the 1h timer when a group has accumulated
+// this many user messages since the last successful pass. Keeps memory
+// fresh during heavy chat windows without rivalling user latency.
+export const DREAM_NUDGE_AFTER_MESSAGES = 50;
 
 export const DEFAULT_LIMITS = Object.freeze({
   DREAM_INTERVAL_HOURS,
@@ -26,6 +31,7 @@ export const DEFAULT_LIMITS = Object.freeze({
   MAX_DIFF_TOKENS_PER_TRIAGE,
   MAX_APPLY_TOKENS,
   DREAM_BACKUP_KEEP,
+  DREAM_NUDGE_AFTER_MESSAGES,
 });
 
 /**

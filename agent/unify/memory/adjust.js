@@ -12,23 +12,25 @@
  *     manipulates AMS membership.
  *
  * Triggered conditionally — typical session shape is "hot turn skips,
- * adjust runs every 5–10 turns or on first turn":
+ * adjust runs once per session or under budget pressure":
  *
  *   shouldRunAdjust =
- *        (newMemoryWritten && onDemand.size >= 5)
- *     || (turnTokenUsage    > totalBudget * 0.9)
- *     || (!session.adjustRanThisSession)        // first-turn guarantee
+ *        (!session.adjustRanThisSession)        // first-turn guarantee
+ *     || (turnTokenUsage > totalBudget * 0.9)   // budget pressure
  *
  * The trigger lives at the call site (engine post-turn hook); this
  * module just exposes the policy + the LLM round-trip.
+ *
+ * task-710: the legacy `newMemoryWritten + onDemand >= 5` trigger was
+ * dropped — dream writes happen async on a background timer, so the
+ * caller had no good signal to pass and was hard-coding `false`. Adjust
+ * now relies on first-turn-guarantee + budget-pressure only.
  */
 
 import { approxTokens } from './budget.js';
 
 /**
  * @typedef {object} AdjustTriggerInput
- * @property {boolean} newMemoryWritten
- * @property {number}  onDemandSize
  * @property {number}  turnTokenUsage
  * @property {number}  totalBudget
  * @property {boolean} adjustRanThisSession
@@ -47,9 +49,6 @@ export function shouldRunAdjust(input) {
   }
   if (input.turnTokenUsage > input.totalBudget * 0.9) {
     return { run: true, reason: 'budget-pressure' };
-  }
-  if (input.newMemoryWritten && input.onDemandSize >= 5) {
-    return { run: true, reason: 'new-memory+onDemand-saturated' };
   }
   return { run: false, reason: 'no-trigger' };
 }

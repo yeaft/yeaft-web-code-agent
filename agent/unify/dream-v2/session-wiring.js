@@ -5,14 +5,15 @@
  * to the live yeaft session: groups store, conversation log, LLM adapter,
  * and the engine's progress event sink.
  *
- * The dream pipeline only activates when `config.memoryV2 === true`. When
- * the flag is off, this module is a no-op.
+ * Memory v2 is the only path. The legacy `config.memoryV2` opt-out flag was
+ * retired (task-710) — the wiring is unconditional.
  */
 
 import { join } from 'path';
 import { runDream } from './runner.js';
 import { createDreamScheduler } from './schedule.js';
 import { listGroups, openGroup } from '../groups/group-store.js';
+import { DREAM_NUDGE_AFTER_MESSAGES } from './limits.js';
 
 /**
  * Build the per-call options for runDream. Pure: takes a session and returns
@@ -157,14 +158,91 @@ export function createV2DreamScheduler(session) {
   });
   // Auto-start the timer.
   v2.start();
+
+  // task-710: wire `noteUserMessage` to a real per-session message
+  // counter. When the count crosses DREAM_NUDGE_AFTER_MESSAGES (default
+  // 50) we kick off a non-manual dream pass and reset the counter.
+  // Non-manual still respects MIN_NEW_PER_GROUP per-group, so groups
+  // below threshold are still skipped — the nudge just frees us from
+  // waiting for the 1h timer when traffic is high.
+  //
+  // Counter resets on fire-attempt (not completion). If a pass is
+  // already in flight when we hit threshold, we CLAMP at threshold
+  // rather than letting the counter accumulate unbounded — otherwise
+  // the first message after the in-flight pass settles would fire
+  // immediately, defeating the 50-message guarantee.
+  let messagesSinceLastNudgeFire = 0;
+  function nudgeOnUserMessage() {
+    messagesSinceLastNudgeFire += 1;
+    if (messagesSinceLastNudgeFire < DREAM_NUDGE_AFTER_MESSAGES) return;
+    if (v2.isRunning()) {
+      // Clamp; don't accumulate. We want the next fire to wait another
+      // full DREAM_NUDGE_AFTER_MESSAGES once the in-flight pass clears.
+      messagesSinceLastNudgeFire = DREAM_NUDGE_AFTER_MESSAGES;
+      return;
+    }
+    messagesSinceLastNudgeFire = 0;
+    // Fire-and-forget; failure flows through the scheduler's catch.
+    v2.nudge().catch(() => {});
+  }
+
   // Adapter shim: legacy callers (web-bridge) call .noteUserMessage() and
   // .triggerDreamNow() / .shutdown(). Map them onto the v2 API.
   return {
-    noteUserMessage() { /* v2 doesn't gate on user-message count */ },
+    noteUserMessage: nudgeOnUserMessage,
     triggerDreamNow() { return v2.triggerNow(); },
+    triggerDreamForScopes(scopeFilter) { return v2.triggerNow(scopeFilter); },
     shutdown() { v2.stop(); },
     get isRunning() { return v2.isRunning(); },
     // Preserve direct access for tests.
     _v2: v2,
   };
+}
+
+/**
+ * task-710: walk every group on disk, find the ones that have user messages
+ * but zero memory segments in the FTS index, and trigger an immediate dream
+ * pass scoped to those groups. Used at session boot so a freshly opened
+ * agent doesn't have to wait an hour (or for traffic to cross the nudge
+ * threshold) before its first memory write.
+ *
+ * Pure side-effect, fire-and-forget. Failure logs at debug only — never
+ * blocks session load.
+ *
+ * @param {{ yeaftDir: string, memoryIndex: import('../memory/index-db.js').SegmentIndex|null, dreamScheduler: { triggerDreamForScopes: (s:string[]) => Promise<any> }, config?: { debug?: boolean } }} args
+ * @returns {Promise<{ triggered: string[] }>}
+ */
+export async function bootInitEmptyGroups(args) {
+  const out = { triggered: [] };
+  if (!args || !args.memoryIndex || !args.dreamScheduler) return out;
+  const groupsRoot = join(args.yeaftDir, 'groups');
+  let ids;
+  try { ids = listGroups(groupsRoot).map(g => g.id); }
+  catch { return out; }
+  const empty = [];
+  for (const gid of ids) {
+    let segCount;
+    try { segCount = args.memoryIndex.listByScope(`group/${gid}`).length; }
+    catch { continue; }
+    if (segCount > 0) continue;
+    let hasMessages = false;
+    try {
+      const h = openGroup(groupsRoot, gid);
+      // Any message at all is enough — pull the first record off the
+      // iterator and stop.
+      const first = h.streamMessages().next();
+      hasMessages = !first.done;
+    } catch { continue; }
+    if (!hasMessages) continue;
+    empty.push(`group/${gid}`);
+  }
+  if (empty.length === 0) return out;
+  if (args.config?.debug) {
+    // eslint-disable-next-line no-console
+    console.log(`[dream-v2] boot init: triggering empty-AMS dream for ${empty.length} group(s):`, empty);
+  }
+  // Fire-and-forget; the scheduler swallows its own failures.
+  Promise.resolve(args.dreamScheduler.triggerDreamForScopes(empty)).catch(() => {});
+  out.triggered = empty;
+  return out;
 }

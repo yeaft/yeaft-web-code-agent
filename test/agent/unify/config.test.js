@@ -378,36 +378,29 @@ describe('loadMCPConfig', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// memoryV2 feature flag — H2-AMS default true
+// memoryV2 — flag retired (task-710)
+// The H2-AMS / dream-v2 wiring is now unconditional. We assert the
+// field is absent so a regression that re-introduces the dead switch
+// shows up in CI.
 // ═══════════════════════════════════════════════════════════════
 
-describe('loadConfig — memoryV2 flag', () => {
-  it('defaults memoryV2 to true (config.json with no flag)', () => {
+describe('loadConfig — memoryV2 flag retired', () => {
+  it('does not expose memoryV2 (config.json without it)', () => {
     writeFileSync(join(TEST_DIR, 'config.json'), JSON.stringify({
       providers: [{ name: 'p', baseUrl: 'http://x/v1', apiKey: 'k', models: ['m'] }],
       primaryModel: 'p/m',
     }));
     const config = loadConfig({ dir: TEST_DIR });
-    expect(config.memoryV2).toBe(true);
+    expect(config).not.toHaveProperty('memoryV2');
   });
 
-  it('honours explicit false in config.json', () => {
+  it('ignores memoryV2 in config.json (no longer plumbed)', () => {
     writeFileSync(join(TEST_DIR, 'config.json'), JSON.stringify({
       providers: [{ name: 'p', baseUrl: 'http://x/v1', apiKey: 'k', models: ['m'] }],
       primaryModel: 'p/m',
       memoryV2: false,
     }));
     const config = loadConfig({ dir: TEST_DIR });
-    expect(config.memoryV2).toBe(false);
-  });
-
-  it('override beats config.json', () => {
-    writeFileSync(join(TEST_DIR, 'config.json'), JSON.stringify({
-      providers: [{ name: 'p', baseUrl: 'http://x/v1', apiKey: 'k', models: ['m'] }],
-      primaryModel: 'p/m',
-      memoryV2: false,
-    }));
-    const config = loadConfig({ dir: TEST_DIR, memoryV2: true });
-    expect(config.memoryV2).toBe(true);
+    expect(config).not.toHaveProperty('memoryV2');
   });
 });
