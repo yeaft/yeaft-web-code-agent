@@ -1191,4 +1191,10 @@ export default {
 
   'unify.feature.pill.label': '任务',
   'unify.feature.messageTime.aria': '发送于 {time}',
+
+  // PR-2 (feature-pill double-track): FeaturePill + QuickPreview surfaces.
+  'unify.featurePill.label': '功能',
+  'unify.featurePill.summaryLabel': '总结：',
+  'unify.quickPreview.superseded.label': '已升级为功能',
+  'unify.quickPreview.superseded.title': '该快速回应已扩展为下方完整的功能任务。',
 };

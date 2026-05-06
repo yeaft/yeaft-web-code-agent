@@ -1,14 +1,17 @@
 import MessageItem from './MessageItem.js';
 import AssistantTurn from './AssistantTurn.js';
 import FeatureMessageItem from './FeatureMessageItem.js';
+import FeaturePill from './FeaturePill.js';
+import QuickPreview from './QuickPreview.js';
 import VpSpeakerHeader from './VpSpeakerHeader.js';
 import ReflectionCard from './ReflectionCard.js';
 import SubAgentCard from './SubAgentCard.js';
 import GroupAnnouncementBar from './GroupAnnouncementBar.js';
+import { foldByFeatureId, injectQuickPreviews } from '../stores/helpers/feature-fold.js';
 
 export default {
   name: 'MessageList',
-  components: { MessageItem, AssistantTurn, FeatureMessageItem, VpSpeakerHeader, ReflectionCard, SubAgentCard, GroupAnnouncementBar },
+  components: { MessageItem, AssistantTurn, FeatureMessageItem, FeaturePill, QuickPreview, VpSpeakerHeader, ReflectionCard, SubAgentCard, GroupAnnouncementBar },
   template: `
     <main class="chat-container" ref="containerRef">
       <!-- Session Loading Overlay - only covers message area -->
@@ -104,12 +107,31 @@ export default {
             <!-- User / system / error messages: rendered by MessageItem -->
             <MessageItem v-if="item.type === 'user' || item.type === 'system' || item.type === 'error'" :message="item.message" />
 
+            <!-- PR-2: Track-A quick preview bubble. Inserted by turnGroups
+                 just before the assistant-turn / feature-pill it precedes,
+                 so the user sees the instant gist while the main engine
+                 is still spinning up. Dimmed once a feature_started has
+                 superseded it. -->
+            <QuickPreview
+              v-else-if="item.type === 'quick-preview'"
+              :preview="item.preview"
+              :superseded="isQuickPreviewSuperseded(item)"
+            />
+
             <!-- task-334j: task-scoped group message row with VP attribution + [task] pill -->
             <FeatureMessageItem
               v-else-if="item.type === 'feature-message'"
               :message="item.message"
               @reply="onFeatureMessageReply"
               @open-detail="onOpenVpDetail"
+            />
+
+            <!-- PR-2: feature-pill — folded run of feature-tagged messages -->
+            <FeaturePill
+              v-else-if="item.type === 'feature-pill'"
+              :feature-id="item.featureId"
+              :turns="item.turns"
+              @open-vp-detail="onOpenVpDetail"
             />
 
             <!-- Assistant Turn card: aggregated rendering -->
@@ -753,7 +775,22 @@ export default {
         }
       }
 
-      return result;
+      // PR-2 (feature-pill double-track): two pure post-passes over the
+      // assembled turn list.
+      //
+      //   1. injectQuickPreviews — inserts a `quick-preview` marker just
+      //      before any assistant-turn whose vpId:turnId matches a stored
+      //      Track-A preview, so the bubble appears in the right place
+      //      without changing the underlying message stream.
+      //   2. foldByFeatureId — collapses runs of foldable items (assistant
+      //      turns + feature-message rows) that share a non-empty featureId
+      //      into a single `feature-pill` row. Inner items are preserved
+      //      so the user can expand the pill and see them.
+      //
+      // Both helpers live in `stores/helpers/feature-fold.js` so they can
+      // be tested without spinning up Vue / Pinia.
+      const previewInjected = injectQuickPreviews(result, store.unifyQuickPreviews || {});
+      return foldByFeatureId(previewInjected);
     });
 
     // PR-L: reflection cards grouped by anchor (the message id present at the
@@ -1272,6 +1309,26 @@ export default {
       store.enterVpDetailView(vpId);
     };
 
+    // PR-2: a quick-preview is "superseded" when the feature-arc has fired
+    // a `feature_started` event for the same vpId/turnId — that means
+    // Track A's preview was the gist of a feature ramp-up rather than the
+    // final answer, so we dim the bubble (and the FeaturePill rendered
+    // below it carries the canonical UI surface).
+    const isQuickPreviewSuperseded = (item) => {
+      if (!item || !item.preview) return false;
+      const vpId = item.forVpId || item.preview.vpId;
+      const turnId = item.forTurnId || item.preview.turnId;
+      if (!vpId || !turnId) return false;
+      const meta = store.unifyFeatureMeta || {};
+      // Cheap O(N) over featureMeta — typically 1–3 entries in flight.
+      for (const id of Object.keys(meta)) {
+        const m = meta[id];
+        if (!m) continue;
+        if (m.vpId === vpId && m.turnId === turnId) return true;
+      }
+      return false;
+    };
+
     // GroupAnnouncementBar's "open settings" link bubbles a request up
     // to the parent page (UnifyPage) so the unified GroupSettingsModal
     // can be opened with the right group id and an initial section
@@ -1311,6 +1368,8 @@ export default {
       // task-334j
       onFeatureMessageReply,
       onOpenVpDetail,
+      // PR-2 (feature-pill double-track)
+      isQuickPreviewSuperseded,
       onlineAgents,
       turnGroups,
       cardsForRow,

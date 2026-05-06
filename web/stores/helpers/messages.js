@@ -39,6 +39,14 @@ function stampSpeakerOnVpMessage(store, conversationId, m) {
   if (!m.vpId && store._currentUnifyVpId) m.vpId = store._currentUnifyVpId;
   if (!m.turnId && store._currentUnifyTurnId) m.turnId = store._currentUnifyTurnId;
   if (!m.speakerVpId && m.vpId) m.speakerVpId = m.vpId;
+  // PR-2 (feature-pill double-track): stamp featureId from the in-flight
+  // routing context so MessageList.turnGroups can fold consecutive
+  // messages tagged with the same feature into a single pill row.
+  // Idempotent: only fills missing field, never overwrites a featureId
+  // that the caller (or an earlier delta) already attached.
+  if (!m.featureId && store._currentUnifyFeatureId) {
+    m.featureId = store._currentUnifyFeatureId;
+  }
 }
 
 export function addMessageToConversation(store, conversationId, msg) {
@@ -74,6 +82,12 @@ export function addMessageToConversation(store, conversationId, msg) {
     }
     if (!newMsg.turnId && store._currentUnifyTurnId) {
       newMsg.turnId = store._currentUnifyTurnId;
+    }
+    // PR-2: stamp featureId on every Unify message (not just assistant /
+    // tool-use) so that any future message type carrying VP attribution
+    // is foldable. Idempotent — only fills missing field.
+    if (!newMsg.featureId && store._currentUnifyFeatureId) {
+      newMsg.featureId = store._currentUnifyFeatureId;
     }
     // Speaker derivation is gated by message type (assistant / tool-use)
     // inside the helper itself.
