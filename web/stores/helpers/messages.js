@@ -16,7 +16,8 @@ function inActiveUnifyConv(store, conversationId) {
 }
 
 // Idempotently mirror the routing context (vpId / turnId / speakerVpId)
-// onto a message that carries VP attribution. Used at three points:
+// onto a Unify message that carries VP attribution (assistant or
+// tool-use). Used at three points:
 //   1. on creation in addMessageToConversation
 //   2. defensively on each delta in appendToAssistantMessageForConversation
 //      (so a message minted before the routing context was set still
@@ -31,7 +32,7 @@ function inActiveUnifyConv(store, conversationId) {
 // any avatar above them.
 //
 // Idempotent: only fills missing fields, never overwrites.
-function stampSpeakerOnAssistant(store, conversationId, m) {
+function stampSpeakerOnVpMessage(store, conversationId, m) {
   if (!m) return;
   if (m.type !== 'assistant' && m.type !== 'tool-use') return;
   if (!inActiveUnifyConv(store, conversationId)) return;
@@ -64,7 +65,7 @@ export function addMessageToConversation(store, conversationId, msg) {
 
   // Unify per-VP turn: stamp vpId + turnId on the message for turn-level
   // routing. Without this, concurrent VP streams would collide. The
-  // speakerVpId derivation lives inside stampSpeakerOnAssistant — but
+  // speakerVpId derivation lives inside stampSpeakerOnVpMessage — but
   // every Unify message (assistant *or* user) still gets vpId / turnId,
   // so we keep that here.
   if (inActiveUnifyConv(store, conversationId)) {
@@ -74,8 +75,9 @@ export function addMessageToConversation(store, conversationId, msg) {
     if (!newMsg.turnId && store._currentUnifyTurnId) {
       newMsg.turnId = store._currentUnifyTurnId;
     }
-    // Speaker derivation is assistant-only — defer to the shared helper.
-    stampSpeakerOnAssistant(store, conversationId, newMsg);
+    // Speaker derivation is gated by message type (assistant / tool-use)
+    // inside the helper itself.
+    stampSpeakerOnVpMessage(store, conversationId, newMsg);
   }
 
   if (!store.messagesMap[conversationId]) {
@@ -100,7 +102,7 @@ export function appendToAssistantMessageForConversation(store, conversationId, t
   if (turnId) {
     for (let i = msgs.length - 1; i >= 0; i--) {
       if (msgs[i].turnId === turnId && msgs[i].type === 'assistant' && msgs[i].isStreaming) {
-        stampSpeakerOnAssistant(store, conversationId, msgs[i]);
+        stampSpeakerOnVpMessage(store, conversationId, msgs[i]);
         if (msgs[i].content.endsWith(text)) return;
         msgs[i].content += text;
         return;
@@ -118,7 +120,7 @@ export function appendToAssistantMessageForConversation(store, conversationId, t
   // Legacy path (no turnId): append to the last streaming message.
   const lastMsg = msgs[msgs.length - 1];
   if (lastMsg && lastMsg.type === 'assistant' && lastMsg.isStreaming) {
-    stampSpeakerOnAssistant(store, conversationId, lastMsg);
+    stampSpeakerOnVpMessage(store, conversationId, lastMsg);
     // Dedup guard: skip if the message already ends with this exact text
     if (lastMsg.content.endsWith(text)) return;
     lastMsg.content += text;
@@ -149,7 +151,7 @@ export function finishStreamingForConversation(store, conversationId) {
       // streaming ends; if the streaming message lost the latch (or never
       // had it because vpId arrived late), this is the last chance to fill
       // it in from the still-active routing context.
-      stampSpeakerOnAssistant(store, conversationId, m);
+      stampSpeakerOnVpMessage(store, conversationId, m);
       // Stop at the last user message (turn boundary) — no need to go further
       if (m.type === 'user') break;
     }

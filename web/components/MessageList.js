@@ -542,7 +542,12 @@ export default {
               (typeof msg.timestamp === 'number' && msg.timestamp > 0)
                 ? msg.timestamp
                 : (typeof msg.createdAt === 'number' ? msg.createdAt : 0);
-            if (typeof msg.lastStateChangeCause === 'string') {
+            // Match the surrounding "first wins" latch policy — only
+            // accept the state cause from the SAME message that gave us
+            // speakerVpId. A later message in the same turn must not
+            // overwrite it.
+            if (typeof msg.lastStateChangeCause === 'string'
+                && !currentTurn.speakerStateCause) {
               currentTurn.speakerStateCause = msg.lastStateChangeCause;
             }
           }
@@ -570,9 +575,11 @@ export default {
           // the user clicks "Fork from here".
           atMessageId: null,
           // task-334-ui-b: speaker attribution. `speakerVpId` latches from
-          // the first assistant message carrying it; `speakerTimestamp` /
-          // `speakerStateCause` read from the same message. `showSpeakerHeader`
-          // is set at finishTurn() so we can collapse same-speaker streaks.
+          // the first VP-attributed message in the turn (assistant /
+          // tool-use / chat-image) via `latchSpeakerFromMsg`;
+          // `speakerTimestamp` / `speakerStateCause` read from the same
+          // message. `showSpeakerHeader` is set at finishTurn() and is
+          // true on every VP-attributed turn (no same-speaker collapse).
           speakerVpId: null,
           speakerTimestamp: 0,
           speakerStateCause: '',
