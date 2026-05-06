@@ -1191,4 +1191,10 @@ export default {
 
   'unify.feature.pill.label': 'task',
   'unify.feature.messageTime.aria': 'Sent at {time}',
+
+  // PR-2 (feature-pill double-track): FeaturePill + QuickPreview surfaces.
+  'unify.featurePill.label': 'feature',
+  'unify.featurePill.summaryLabel': 'Summary:',
+  'unify.quickPreview.superseded.label': 'now a feature',
+  'unify.quickPreview.superseded.title': 'This quick preview is being expanded into a full feature run below.',
 };
