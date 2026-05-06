@@ -165,14 +165,25 @@ export function createV2DreamScheduler(session) {
   // Non-manual still respects MIN_NEW_PER_GROUP per-group, so groups
   // below threshold are still skipped — the nudge just frees us from
   // waiting for the 1h timer when traffic is high.
-  let messagesSinceLastDream = 0;
+  //
+  // Counter resets on fire-attempt (not completion). If a pass is
+  // already in flight when we hit threshold, we CLAMP at threshold
+  // rather than letting the counter accumulate unbounded — otherwise
+  // the first message after the in-flight pass settles would fire
+  // immediately, defeating the 50-message guarantee.
+  let messagesSinceLastNudgeFire = 0;
   function nudgeOnUserMessage() {
-    messagesSinceLastDream += 1;
-    if (messagesSinceLastDream < DREAM_NUDGE_AFTER_MESSAGES) return;
-    if (v2.isRunning()) return;
-    messagesSinceLastDream = 0;
+    messagesSinceLastNudgeFire += 1;
+    if (messagesSinceLastNudgeFire < DREAM_NUDGE_AFTER_MESSAGES) return;
+    if (v2.isRunning()) {
+      // Clamp; don't accumulate. We want the next fire to wait another
+      // full DREAM_NUDGE_AFTER_MESSAGES once the in-flight pass clears.
+      messagesSinceLastNudgeFire = DREAM_NUDGE_AFTER_MESSAGES;
+      return;
+    }
+    messagesSinceLastNudgeFire = 0;
     // Fire-and-forget; failure flows through the scheduler's catch.
-    Promise.resolve(v2._fire({ manual: false })).catch(() => {});
+    v2.nudge().catch(() => {});
   }
 
   // Adapter shim: legacy callers (web-bridge) call .noteUserMessage() and
@@ -214,15 +225,15 @@ export async function bootInitEmptyGroups(args) {
     try { segCount = args.memoryIndex.listByScope(`group/${gid}`).length; }
     catch { continue; }
     if (segCount > 0) continue;
-    let msgCount = 0;
+    let hasMessages = false;
     try {
       const h = openGroup(groupsRoot, gid);
-      for (const _m of h.streamMessages()) {
-        msgCount += 1;
-        if (msgCount > 0) break; // any message at all is enough
-      }
+      // Any message at all is enough — pull the first record off the
+      // iterator and stop.
+      const first = h.streamMessages().next();
+      hasMessages = !first.done;
     } catch { continue; }
-    if (msgCount === 0) continue;
+    if (!hasMessages) continue;
     empty.push(`group/${gid}`);
   }
   if (empty.length === 0) return out;

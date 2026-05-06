@@ -1,12 +1,15 @@
 /**
  * dream-v2/schedule.js.
  *
- * Two trigger paths:
+ * Three trigger paths:
  *
  *   1. Interval timer (default 1 hour, see DREAM_INTERVAL_HOURS in limits.js).
  *   2. Manual trigger (UI button or `/dream` command), routed in via
  *      `triggerNow()` — sets `manual: true` so the per-group threshold
  *      is bypassed.
+ *   3. Nudge (task-710), routed in via `nudge()` — non-manual, so
+ *      MIN_NEW_PER_GROUP still applies. Used by session-wiring when
+ *      user-message traffic crosses DREAM_NUDGE_AFTER_MESSAGES.
  *
  * The scheduler is a thin wrapper around `runDream()` that prevents
  * concurrent passes (a second tick while the previous is still running
@@ -65,6 +68,14 @@ export function createDreamScheduler({ run, intervalMs = DEFAULT_INTERVAL_MS, lo
     },
     triggerNow(scopeFilter) {
       return fire({ manual: true, scopeFilter });
+    },
+    /**
+     * task-710: non-manual fire driven by user-message traffic. Unlike
+     * `triggerNow`, MIN_NEW_PER_GROUP still applies — groups below
+     * threshold are skipped exactly as on the timer path.
+     */
+    nudge() {
+      return fire({ manual: false });
     },
     isRunning() { return !!inflight; },
     /** Test hook: fires once without scheduling a timer. */
