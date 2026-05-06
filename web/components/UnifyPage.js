@@ -8,11 +8,13 @@ import GroupSettingsModal from './GroupSettingsModal.js';
 import FeatureMessageRejectToast from './FeatureMessageRejectToast.js';
 import WorkbenchPanel from './WorkbenchPanel.js';
 import UnifyDebugPanel from './UnifyDebugPanel.js';
+import VpTimelinePane from './VpTimelinePane.js';
 import { parseMentions } from '../utils/parseMentions.js';
+import { buildTimelineRows } from '../stores/helpers/vp-timeline.js';
 
 export default {
   name: 'UnifyPage',
-  components: { ChatInput, MessageList, UnifySettings, UnifySidebar, VpDetailView, GroupInviteModal, GroupSettingsModal, FeatureMessageRejectToast, WorkbenchPanel, UnifyDebugPanel },
+  components: { ChatInput, MessageList, UnifySettings, UnifySidebar, VpDetailView, GroupInviteModal, GroupSettingsModal, FeatureMessageRejectToast, WorkbenchPanel, UnifyDebugPanel, VpTimelinePane },
   template: `
     <div class="unify-page">
       <!-- Mobile sidebar overlay -->
@@ -178,6 +180,21 @@ export default {
         />
       </div>
 
+      <!-- Right VP Timeline Pane (PR-3 of feature-pill double-track redesign).
+           Surfaces, for the active Unify conversation, one row per VP showing
+           live status / in-feature title / elapsed timer / last assistant
+           snippet. Click → drill into VP detail. Hidden under 1024 px (CSS
+           @media). The pane is rendered BEFORE .unify-detail so the visual
+           order in the right column is [timeline][detail] from left → right. -->
+      <VpTimelinePane
+        v-if="showVpTimeline"
+        :rows="vpTimelineRows"
+        :now-ms="nowMs"
+        :style="timelineWidthStyle"
+        @open-vp-detail="onOpenVpDetailFromTimeline"
+        @start-resize="startTimelineResize"
+      />
+
       <!-- Right Detail Panel -->
       <aside class="unify-detail" :class="{ collapsed: detailCollapsed, resizing: isResizingDetail, 'mobile-debug': debugMode && isNarrowDetail }" :style="detailWidthStyle" ref="detailPanel">
         <div class="unify-detail-drag-handle" :class="{ active: isResizingDetail }" @mousedown.prevent="startDetailResize"></div>
@@ -234,6 +251,10 @@ export default {
   `,
   setup() {
     const store = Pinia.useChatStore();
+    // PR-3: VP roster is the source of truth for timeline ordering and
+    // locale-aware naming. Read from the dedicated vp store rather than
+    // reaching into the chat store so the helper signature stays clean.
+    const vpStore = Pinia.useVpStore();
 
     const sidebarCollapsed = Vue.ref(false);
     const detailCollapsed = Vue.ref(false);
@@ -330,6 +351,57 @@ export default {
       document.addEventListener('mouseup', onMouseUp);
     };
 
+    // ── PR-3: VP Timeline pane resize-drag (mirrors detail pattern) ─────
+    // Independent localStorage key + clamp so the two right-column panes
+    // can be sized separately. Visual order is [timeline][detail], so a
+    // drag on the timeline's left edge widens the timeline (delta = startX
+    // - ev.clientX) — same handedness as .unify-detail above.
+    const isResizingTimeline = Vue.ref(false);
+    const TIMELINE_MIN_WIDTH = 220;
+    const TIMELINE_DEFAULT_WIDTH = 280;
+    const savedTimelineWidth = (() => {
+      try { return localStorage.getItem('unify-vp-timeline-width'); } catch (_) { return null; }
+    })();
+    const timelineWidth = Vue.ref(
+      savedTimelineWidth ? parseInt(savedTimelineWidth, 10) : TIMELINE_DEFAULT_WIDTH
+    );
+    const timelineWidthStyle = Vue.computed(() => ({
+      '--unify-vp-timeline-width': timelineWidth.value + 'px',
+    }));
+
+    const startTimelineResize = (e) => {
+      isResizingTimeline.value = true;
+      const startX = e.clientX;
+      const startWidth = timelineWidth.value;
+      // Cap at 40% of viewport — the timeline is supplementary; never
+      // let it crowd the conversation pane.
+      const maxWidth = Math.max(TIMELINE_MIN_WIDTH, Math.floor(window.innerWidth * 0.4));
+
+      const onMouseMove = (ev) => {
+        const delta = startX - ev.clientX; // drag left = wider
+        const newWidth = Math.min(maxWidth, Math.max(TIMELINE_MIN_WIDTH, startWidth + delta));
+        timelineWidth.value = newWidth;
+      };
+
+      const onMouseUp = () => {
+        isResizingTimeline.value = false;
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+        try { localStorage.setItem('unify-vp-timeline-width', String(timelineWidth.value)); } catch (_) {}
+      };
+
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+    };
+
+    // PR-3: 1 s tick that drives the in-feature elapsed timer inside
+    // VpTimelinePane. The tick is deliberately NOT consumed by the
+    // `vpTimelineRows` computed below — only by the elapsed-string
+    // helpers inside the component — so the row list isn't recomputed
+    // every second.
+    const nowMs = Vue.ref(Date.now());
+    let _nowTickHandle = null;
+
     // Detect mobile for overlay behavior.
     //   isMobile        — sidebar overlay (<=768)
     //   isNarrowDetail  — debug-panel overlay (<=1024). The base
@@ -365,11 +437,17 @@ export default {
       window.addEventListener('resize', onResize);
       document.addEventListener('click', closeModelDropdownOutside);
       document.addEventListener('keydown', onKeyDown);
+      // PR-3: tick the elapsed timer once per second. 1 s granularity is
+      // good enough for the "Ns / Nm Ms" string and avoids hammering the
+      // reactive system. The component's :v-if="showVpTimeline" gates
+      // re-renders when the pane is hidden.
+      _nowTickHandle = setInterval(() => { nowMs.value = Date.now(); }, 1000);
     });
     Vue.onUnmounted(() => {
       window.removeEventListener('resize', onResize);
       document.removeEventListener('click', closeModelDropdownOutside);
       document.removeEventListener('keydown', onKeyDown);
+      if (_nowTickHandle) { clearInterval(_nowTickHandle); _nowTickHandle = null; }
     });
 
     // Watch for conversationId changes (session_ready migrates local -> agent ID)
@@ -642,6 +720,72 @@ export default {
       showSettings.value = false;
     };
 
+    // ── PR-3: VP Timeline computeds ───────────────────────────────────
+    // Pane is visible when (a) we're not in settings, (b) viewport is
+    // wide enough that the right column still fits both panes (the CSS
+    // also hides .unify-vp-timeline at <=1024 px). Per the user's
+    // decision, the pane STAYS visible when unifyActiveVpDetailId is
+    // set so the user can hop between VPs without losing context.
+    const showVpTimeline = Vue.computed(
+      () => !showSettings.value && !isNarrowDetail.value
+    );
+
+    // Resolve the messages slice that mirrors what the conversation pane
+    // shows: when a group filter is active, only that group's messages.
+    // The timeline derives its VP set + per-VP snippet + streaming flag
+    // from this slice, so a filtered view shows only that group's VPs.
+    const vpTimelineRows = Vue.computed(() => {
+      const convId = store.unifyConversationId;
+      if (!convId) return [];
+      const raw = store.messagesMap[convId] || [];
+      const filter = store.unifyActiveGroupFilter || null;
+      const messages = filter
+        ? raw.filter((m) => m && m.groupId === filter)
+        : raw;
+
+      // Roster source: vpStore.vpList holds {vpId, displayName, ...}.
+      // When a group filter is active, narrow to the VPs that have at
+      // least one message in this slice OR are pointed at by the active
+      // pointer for that group; otherwise everyone in the roster
+      // surfaces. The filter logic mirrors `unifyVisibleMessages` so
+      // there's no drift between the message stream and the timeline.
+      let vpList = vpStore.vpList || [];
+      if (filter) {
+        const present = new Set();
+        for (const m of messages) {
+          const id = m && (m.speakerVpId || m.vpId);
+          if (id) present.add(id);
+        }
+        // Also include VPs whose active pointer references a feature
+        // belonging to this group, so an in-feature row doesn't vanish
+        // before its first message lands.
+        const meta = store.unifyFeatureMeta || {};
+        const active = store.unifyActiveFeatureByVp || {};
+        for (const vpId of Object.keys(active)) {
+          const fid = active[vpId];
+          const fm = fid ? meta[fid] : null;
+          if (fm && fm.groupId === filter) present.add(vpId);
+        }
+        vpList = vpList.filter((vp) => vp && present.has(vp.vpId));
+      }
+
+      return buildTimelineRows({
+        vpList,
+        unifyFeatureMeta: store.unifyFeatureMeta || {},
+        activeFeatureByVp: store.unifyActiveFeatureByVp || {},
+        typingVpIds: store.vpsTypingInCurrentConv || [],
+        messages,
+        vpLabelOf: (id) => vpStore.vpLabel(id),
+      });
+    });
+
+    const onOpenVpDetailFromTimeline = (vpId) => {
+      if (!vpId) return;
+      // Same path MessageList uses for VP-badge clicks (MessageList.js:1314):
+      // the store handles "leave any conflicting layer" cleanup internally.
+      store.enterVpDetailView(vpId);
+    };
+
     return {
       store,
       sidebarCollapsed,
@@ -698,6 +842,13 @@ export default {
       topbarGroup,
       topbarGroupName,
       openTopbarGroupSettings,
+      // PR-3: VP Timeline pane bindings.
+      vpTimelineRows,
+      showVpTimeline,
+      nowMs,
+      timelineWidthStyle,
+      startTimelineResize,
+      onOpenVpDetailFromTimeline,
     };
   }
 };
