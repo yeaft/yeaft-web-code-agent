@@ -770,10 +770,24 @@ export class Engine {
    * lazily via `parentEngineDeps.getCurrentFeatureId` so sub-agents
    * inherit whatever featureId is live at the moment they emit.
    *
+   * Concurrency note: callers are expected to serialize per-VP turns
+   * (web-bridge does — `runVpTurn` runs one turn at a time per VP and
+   * its `finally` clears the accessor before the next turn lands).
+   * If two installs collide (which today would be a bug, not by
+   * design), we warn so it's visible in logs.
+   *
    * @param {(() => (string|null)) | null} fn
    */
   setCurrentFeatureIdAccessor(fn) {
-    this.#currentFeatureIdAccessor = typeof fn === 'function' ? fn : null;
+    const next = typeof fn === 'function' ? fn : null;
+    if (next && this.#currentFeatureIdAccessor) {
+      // Canary: a prior accessor is still installed when we're about
+      // to overwrite it. Today's lifecycle (per-turn install + finally
+      // clear) means this should never fire; if it does, two turns
+      // are racing on the same engine.
+      console.warn('[Engine] setCurrentFeatureIdAccessor: overwriting non-null accessor — concurrent turns on the same VP engine?');
+    }
+    this.#currentFeatureIdAccessor = next;
   }
 
   /**

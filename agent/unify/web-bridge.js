@@ -1615,6 +1615,13 @@ async function runVpTurn({ prompt, groupId, vpId, turnId, envelope: inboundEnvel
       const assistantTextParts = [];
       const toolCallsAccum = [];
       const toolResultsAccum = [];
+      // PR-4 (review fix): hoist `vpEngine` so the `finally` can clear
+      // the per-turn featureId accessor on the SAME engine instance
+      // we installed it on — even if the VP was kicked or its group
+      // deleted mid-turn (both code paths call `vpEngines.delete(...)`).
+      // Calling `getOrCreateVpEngine` again from `finally` would
+      // resurrect a zombie engine for a VP that no longer exists.
+      let vpEngine = null;
 
       // task-707: per-VP engine + persistent group coord. The coord is
       // created in handleUnifyGroupChat via getOrCreateGroupContext and
@@ -1692,7 +1699,7 @@ async function runVpTurn({ prompt, groupId, vpId, turnId, envelope: inboundEnvel
       // spawns still tags the sub-agent's later events. Cleared in the
       // `finally` below so a stale `arc` reference doesn't leak into
       // the next turn.
-      const vpEngine = getOrCreateVpEngine(groupId, vpId);
+      vpEngine = getOrCreateVpEngine(groupId, vpId);
       if (typeof vpEngine.setCurrentFeatureIdAccessor === 'function') {
         vpEngine.setCurrentFeatureIdAccessor(() => {
           try { return arc?.getFeatureId?.() || null; } catch { return null; }
@@ -1755,13 +1762,16 @@ async function runVpTurn({ prompt, groupId, vpId, turnId, envelope: inboundEnvel
       }, envelope);
     } finally {
       if (queryTimer) clearTimeout(queryTimer);
-      // PR-4: clear the per-turn featureId accessor so the next turn's
-      // sub-agents don't see a stale arc. Idempotent on the same engine
-      // instance; cheap (a Map lookup + setter assignment).
+      // PR-4 (review fix): clear the accessor on the SAME engine
+      // instance we installed it on. Reusing the captured reference
+      // (instead of calling getOrCreateVpEngine again) avoids
+      // resurrecting a zombie engine if the VP/group was torn down
+      // mid-turn. `vpEngine` is null only when the install path threw
+      // before the engine lookup (very early failure) — in that case
+      // there's nothing to clear.
       try {
-        const eng = getOrCreateVpEngine(groupId, vpId);
-        if (typeof eng?.setCurrentFeatureIdAccessor === 'function') {
-          eng.setCurrentFeatureIdAccessor(null);
+        if (vpEngine && typeof vpEngine.setCurrentFeatureIdAccessor === 'function') {
+          vpEngine.setCurrentFeatureIdAccessor(null);
         }
       } catch { /* best-effort */ }
     }
