@@ -122,7 +122,7 @@ describe('createFeatureArc — observeEvent triggers', () => {
     expect(featureStarted).toHaveBeenCalledTimes(1);
     expect(featureStarted.mock.calls[0][0]).toMatchObject({
       featureId: arc.getFeatureId(),
-      signal: 'tool',
+      trigger: 'tool',
       toolName: 'Bash',
     });
   });
@@ -145,7 +145,7 @@ describe('createFeatureArc — observeEvent triggers', () => {
     }
     arc.observeEvent({ type: 'loop' });
     expect(arc.getFeatureId()).toBeTruthy();
-    expect(featureStarted.mock.calls[0][0].signal).toBe('turns');
+    expect(featureStarted.mock.calls[0][0].trigger).toBe('turns');
   });
 
   it('is idempotent — multiple signals only create once', () => {
@@ -393,7 +393,7 @@ describe('createFeatureArc — startTrackA', () => {
     await arc.startTrackA();
     expect(quickPreview).toHaveBeenCalledWith({ intent: 'feature', preview: 'will grep auth' });
     expect(featureStarted).toHaveBeenCalledTimes(1);
-    expect(featureStarted.mock.calls[0][0].signal).toBe('quick');
+    expect(featureStarted.mock.calls[0][0].trigger).toBe('quick');
     expect(arc.getFeatureId()).toBeTruthy();
     expect(arc.getTrackAResult()).toEqual({ intent: 'feature', preview: 'will grep auth' });
     expect(arc.isTrackADone()).toBe(true);
@@ -441,6 +441,111 @@ describe('createFeatureArc — startTrackA', () => {
     await arc.startTrackA();
     expect(arc.getFeatureId()).toBeNull();
     expect(arc.isTrackADone()).toBe(true);
+  });
+});
+
+describe('createFeatureArc — race + correctness regressions', () => {
+  it('post-finalize maybeCreateFeature is a no-op (C1: late Track A race)', async () => {
+    // Reproduces the bug where a fire-and-forget Track A resolves
+    // AFTER the engine generator has drained and arc.finalize() has
+    // already closed (with no featureId). The late `featureStarted`
+    // would have arrived after `feature_completed`, leaving the
+    // frontend with a dangling-active pill.
+    const store = makeStore();
+    const featureStarted = vi.fn();
+    const featureCompleted = vi.fn();
+    const arc = createFeatureArc({
+      adapter: makeAdapter([]),
+      model: 'm',
+      featureStore: store,
+      prompt: 'p',
+      vpId: 'a',
+      turnId: 't',
+      emit: { featureStarted, featureCompleted },
+    });
+    // Engine drained, no signals fired during the turn.
+    await arc.finalize({ status: 'completed' });
+    expect(featureCompleted).not.toHaveBeenCalled(); // arc never opened
+    // Now Track A resolves late and tries to fire the quick signal.
+    arc.observeEvent({ type: 'tool_call', name: 'Bash' });
+    expect(arc.getFeatureId()).toBeNull();
+    expect(store.create).not.toHaveBeenCalled();
+    expect(featureStarted).not.toHaveBeenCalled();
+  });
+
+  it('generates non-truncated, distinct ids across calls (C2: collision)', () => {
+    // Old code did `slice(0, 8)`. With Date.now() dominating the
+    // base-36 prefix, two arcs created in the same ms would collide
+    // on the 8-char prefix. Verify ids are at least 16 chars and
+    // never collide across many rapid creations.
+    const ids = new Set();
+    for (let i = 0; i < 100; i++) {
+      const arc = createFeatureArc({
+        adapter: makeAdapter([]),
+        model: 'm',
+        featureStore: makeStore(),
+        prompt: 'p',
+        vpId: 'a',
+        turnId: `t${i}`,
+      });
+      arc.observeEvent({ type: 'tool_call', name: 'Bash' });
+      ids.add(arc.getFeatureId());
+    }
+    expect(ids.size).toBe(100);
+    for (const id of ids) {
+      expect(id.length).toBeGreaterThan(16);
+    }
+  });
+
+  it('does NOT count turn_open toward FEATURE_TURN_THRESHOLD (off-by-one)', () => {
+    // The engine emits one `turn_open` per turn (bookkeeping marker)
+    // followed by `loop` events for each iteration. Counting both
+    // would fire after only 2 real loops instead of 3.
+    const store = makeStore();
+    const arc = createFeatureArc({
+      adapter: makeAdapter([]),
+      model: 'm',
+      featureStore: store,
+      prompt: 'p',
+      vpId: 'a',
+      turnId: 't',
+    });
+    arc.observeEvent({ type: 'turn_open' });
+    arc.observeEvent({ type: 'loop' });
+    arc.observeEvent({ type: 'loop' });
+    expect(arc.getFeatureId()).toBeNull();
+    expect(arc.getLoopCount()).toBe(2);
+    arc.observeEvent({ type: 'loop' });
+    expect(arc.getFeatureId()).toBeTruthy();
+    expect(arc.getLoopCount()).toBe(3);
+  });
+
+  it('skips featureStore.update for synthetic feat-local-* ids', async () => {
+    // When the store throws on create, the arc publishes a synthetic
+    // id so the wire path stays consistent. We must NOT then call
+    // .update(synthetic, ...) on the same broken store — it would
+    // throw on the unknown id (or silently fail), and is wasted work.
+    const store = {
+      create: vi.fn(() => { throw new Error('create broke'); }),
+      update: vi.fn(),
+    };
+    const featureCompleted = vi.fn();
+    const arc = createFeatureArc({
+      adapter: makeAdapter([]),
+      model: 'm',
+      featureStore: store,
+      prompt: 'p',
+      vpId: 'a',
+      turnId: 't42',
+      emit: { featureCompleted },
+    });
+    arc.observeEvent({ type: 'tool_call', name: 'Bash' });
+    arc.observeEvent({ type: 'text_delta', text: 'did stuff' });
+    expect(arc.getFeatureId()).toBe('feat-local-t42');
+    await arc.finalize({ status: 'aborted' });
+    expect(store.update).not.toHaveBeenCalled();
+    // But the wire emit still fires so the frontend pill closes.
+    expect(featureCompleted).toHaveBeenCalledTimes(1);
   });
 });
 

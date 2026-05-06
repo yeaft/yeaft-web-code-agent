@@ -1060,7 +1060,7 @@ export const useChatStore = defineStore('chat', {
                 groupId,
                 turnId,
                 title: typeof event.title === 'string' ? event.title : '',
-                trigger: event.signal || event.trigger || 'unknown',
+                trigger: event.trigger || 'unknown',
                 toolName: event.toolName || null,
                 status: 'active',
                 startedAt: Date.now(),

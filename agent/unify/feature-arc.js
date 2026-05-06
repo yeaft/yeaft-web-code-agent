@@ -39,8 +39,13 @@
 import { runQuickResponse } from './quick-response.js';
 
 /**
- * Tools that strongly signal "doing real work". Pure read / web search
- * are intentionally excluded — they are common in trivial Q&A.
+ * Tools that strongly signal "doing real work". Single-file Read and
+ * web search are intentionally excluded — they show up in trivial Q&A
+ * (one quick lookup, one fact check) and would over-trigger the pill.
+ *
+ * Codebase grep/glob/find are *included* because they signal multi-file
+ * investigation, which is exactly the "this got heavy" mode we want to
+ * surface to the user.
  *
  * @type {Set<string>}
  */
@@ -77,7 +82,7 @@ function buildSummarySystem(language = 'en') {
   if (isZh) {
     return [
       '你刚刚完成了一段工作。请用中文写一条 1–3 句的总结，告诉用户你做了什么、关键结果是什么。',
-      '只输出总结正文，不要 markdown，不要前缀（如「总结：」），不要超过 200 字。',
+      '只输出总结正文，不要 markdown，不要前缀（如「总结：」），不超过 600 字符。',
     ].join('\n');
   }
   return [
@@ -150,7 +155,7 @@ function makeTitle({ preview, prompt }) {
  * @typedef {Object} FeatureArcEmits
  * @property {(payload:{intent:'quick'|'feature', preview:string})=>void}
  *           [quickPreview]    — Track A finished
- * @property {(payload:{featureId:string, title:string, signal:'quick'|'turns'|'tool', toolName?:string})=>void}
+ * @property {(payload:{featureId:string, title:string, trigger:'quick'|'turns'|'tool', toolName?:string})=>void}
  *           [featureStarted]  — auto-create fired, frontend should fold
  * @property {(payload:{featureId:string, summary:string, status:'completed'|'aborted'|'error'})=>void}
  *           [featureCompleted] — turn ended, pill becomes done state
@@ -214,6 +219,13 @@ export function createFeatureArc(deps = {}) {
 
   /** Internal: try to fire the auto-create. Idempotent. */
   function maybeCreateFeature(signalKind, extra = {}) {
+    // Race guard: Track A is fire-and-forget, so it can resolve AFTER
+    // the engine generator has drained and finalize() has already
+    // closed the arc. Without this guard a late Track A would publish
+    // `feature_started` *after* `feature_completed` (or worse, with
+    // no `feature_completed` at all), leaving a dangling-active pill
+    // on the frontend.
+    if (_finalised) return;
     if (featureId) return;            // already created
     if (!featureStore || typeof featureStore.create !== 'function') {
       // No store — at least publish a synthetic id so the frontend can
@@ -222,7 +234,16 @@ export function createFeatureArc(deps = {}) {
       featureId = `feat-local-${turnId}`;
     } else {
       try {
-        const id = `feat-${(globalThis.crypto?.randomUUID?.() || Date.now().toString(36) + Math.random().toString(36).slice(2)).slice(0, 8)}`;
+        // Use the FULL UUID / random-string. A previous version
+        // sliced to 8 chars (32 bits of entropy) — collisions in a
+        // multi-VP group ingest were observed because the
+        // Date.now()/random fallback's first chars are dominated by
+        // the ms-precision timestamp, so two VPs in the same
+        // millisecond would hash to the same 8-char prefix and the
+        // frontend's featureId-keyed map would silently overwrite.
+        const rand = globalThis.crypto?.randomUUID?.()
+          || (Date.now().toString(36) + Math.random().toString(36).slice(2));
+        const id = `feat-${rand}`;
         const title = makeTitle({ preview: trackAResult?.preview, prompt });
         featureTitle = title;
         const record = {
@@ -257,7 +278,7 @@ export function createFeatureArc(deps = {}) {
         emit.featureStarted({
           featureId,
           title: featureTitle || makeTitle({ preview: trackAResult?.preview, prompt }),
-          signal: signalKind,
+          trigger: signalKind,
           toolName: extra.toolName,
         });
       } catch (err) {
@@ -311,7 +332,11 @@ export function createFeatureArc(deps = {}) {
   function observeEvent(event) {
     if (!event || typeof event !== 'object') return;
     switch (event.type) {
-      case 'turn_open':
+      // Only `loop` counts toward the heavy-turn threshold. The engine
+      // emits exactly one `turn_open` per turn (the bookkeeping marker
+      // that the turn started); `loop` is the per-iteration event.
+      // Counting both inflates by one and would cause
+      // FEATURE_TURN_THRESHOLD = 3 to fire after only 2 real loops.
       case 'loop':
         loopCount += 1;
         if (loopCount >= turnThreshold) maybeCreateFeature('turns');
@@ -366,7 +391,13 @@ export function createFeatureArc(deps = {}) {
       summary = (assistantText || '').replace(/\s+/g, ' ').trim().slice(0, 200) || '(no summary)';
     }
 
-    if (featureStore && typeof featureStore.update === 'function') {
+    // Skip the persistence call for synthetic ids — those exist
+    // precisely because the store was unavailable or threw on create,
+    // so any update against them would also throw on the unknown id
+    // (and the catch would silently swallow it). Wire emits still
+    // happen so the frontend gets a consistent close.
+    const isSynthetic = featureId.startsWith('feat-local-');
+    if (!isSynthetic && featureStore && typeof featureStore.update === 'function') {
       try {
         featureStore.update(featureId, {
           status,

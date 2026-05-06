@@ -1659,7 +1659,7 @@ async function runVpTurn({ prompt, groupId, vpId, turnId, envelope: inboundEnvel
               turnId,
             }, envelope);
           },
-          featureStarted: ({ featureId, title, signal: trigger, toolName }) => {
+          featureStarted: ({ featureId, title, trigger, toolName }) => {
             sendUnifyEvent({
               type: 'feature_started',
               featureId,
