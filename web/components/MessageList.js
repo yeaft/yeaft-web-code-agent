@@ -146,7 +146,7 @@ export default {
           in-flight turn's own header now signals the typing state
           continuously.
 
-          When `vp_typing_start` lands but the engine hasn't emitted a
+          When 'vp_typing_start' lands but the engine hasn't emitted a
           first chunk yet, a placeholder pseudo-turn is synthesised
           below in turnGroups; AssistantTurn renders just the speaker
           header (with typing badge on the avatar) when the body is
