@@ -3,7 +3,7 @@
  *
  * Two trigger paths:
  *
- *   1. 12-hour interval timer.
+ *   1. Interval timer (default 1 hour, see DREAM_INTERVAL_HOURS in limits.js).
  *   2. Manual trigger (UI button or `/dream` command), routed in via
  *      `triggerNow()` — sets `manual: true` so the per-group threshold
  *      is bypassed.

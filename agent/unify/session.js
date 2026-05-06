@@ -26,11 +26,12 @@ import { Engine } from './engine.js';
 // H2.f.5: threads/, pipeline/dispatcher and input-queue retired. The
 // session now exposes a single Engine.
 //
-// GC.1 (final): when config.memoryV2 is on, the session opens a
-// SegmentIndex (SQLite FTS5 over memory.md) and passes it to the
-// Engine. Engine.#recallMemory routes pre-turn recall through
-// groups/pre-flow.js → memory/preflow.js (the previous per-scope
-// file reader recall-v2.js has been deleted).
+// GC.1 (final): the session opens a SegmentIndex (SQLite FTS5 over
+// memory.md) and passes it to the Engine. Engine.#recallMemory routes
+// pre-turn recall through groups/pre-flow.js → memory/preflow.js (the
+// previous per-scope file reader recall-v2.js has been deleted).
+// The `config.memoryV2` opt-out flag was retired in task-710; wiring is
+// unconditional.
 //
 // GC.1 follow-up: when memoryIndex is wired we also open an
 // AmsRegistry. The registry caches per-group ActiveMemorySet
@@ -42,7 +43,7 @@ import { Engine } from './engine.js';
 import { ensureDefaultGroupIfEmpty } from './groups/group-crud.js';
 import { seedDefaultVps } from './vp/seed-defaults.js';
 import { runSummaryBackfill } from './memory/seed-backfill.js';
-import { createV2DreamScheduler } from './dream-v2/session-wiring.js';
+import { createV2DreamScheduler, bootInitEmptyGroups } from './dream-v2/session-wiring.js';
 import { openSegmentIndex } from './memory/index-db.js';
 import { syncAll as syncSegmentIndex } from './memory/segment-sync.js';
 import { openAmsRegistry } from './memory/ams-registry.js';
@@ -169,15 +170,14 @@ export async function loadSession(options = {}) {
   const conversationStore = new ConversationStore(yeaftDir);
 
   // ─── 5-fts. (GC.1) Open SegmentIndex for FTS pre-flow ────
-  //     When config.memoryV2 is on, build a SQLite FTS5 index over
-  //     ~/.yeaft/memory/<scope>/memory.md and pass it to the Engine.
-  //     Engine.#recallMemory uses it via groups/pre-flow.js →
-  //     memory/preflow.js. Disk is the source of truth; on boot we
-  //     reconcile disk → index via syncAll. Failure to open the index
-  //     is non-fatal: #recallMemory returns an empty result and the
-  //     turn proceeds without pre-injected memory.
+  //     Build a SQLite FTS5 index over ~/.yeaft/memory/<scope>/memory.md
+  //     and pass it to the Engine. Engine.#recallMemory uses it via
+  //     groups/pre-flow.js → memory/preflow.js. Disk is the source of
+  //     truth; on boot we reconcile disk → index via syncAll. Failure
+  //     to open the index is non-fatal: #recallMemory returns an empty
+  //     result and the turn proceeds without pre-injected memory.
   let memoryIndex = null;
-  if (config.memoryV2 && !config._readOnly) {
+  if (!config._readOnly) {
     try {
       const indexPath = join(yeaftDir, 'memory', 'index.db');
       memoryIndex = openSegmentIndex(indexPath);
@@ -300,8 +300,8 @@ export async function loadSession(options = {}) {
 
   // ─── 9a. Create dream scheduler ────────────
   // The legacy R6 dream-scheduler was retired alongside recall-r6;
-  // dream-v2 is the only active path. The `memoryV2: false` opt-out
-  // no longer leaves a usable system, so we always wire v2 here.
+  // dream-v2 is the only active path (the `config.memoryV2` opt-out
+  // flag was retired in task-710 — wiring is unconditional).
   // partialSession lets the v2 scheduler dereference adapter/config/
   // engine/trace lazily — safe because callers attach more fields
   // after this line.
@@ -313,6 +313,20 @@ export async function loadSession(options = {}) {
     trace,
   };
   const dreamScheduler = createV2DreamScheduler(partialSession);
+
+  // task-710: kick a dream pass at boot for any group that has user
+  // messages but zero memory segments in the FTS index. Without this a
+  // freshly opened agent had to wait an hour (or for the nudge counter
+  // to cross 50) before the first segment landed and recall could find
+  // anything. Fire-and-forget; failure logs at debug only.
+  if (memoryIndex && !config._readOnly) {
+    bootInitEmptyGroups({
+      yeaftDir,
+      memoryIndex,
+      dreamScheduler,
+      config,
+    }).catch(() => { /* best-effort boot init */ });
+  }
 
   // H2.f.5: thread engine registry, input queue, and dispatcher retired.
   // The session exposes a single `engine`; web-bridge calls engine.query()

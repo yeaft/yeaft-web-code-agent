@@ -34,30 +34,31 @@ afterEach(() => {
 describe('shouldRunAdjust', () => {
   it('first turn always runs', () => {
     expect(shouldRunAdjust({
-      newMemoryWritten: false, onDemandSize: 0,
       turnTokenUsage: 0, totalBudget: 100,
       adjustRanThisSession: false,
     }).run).toBe(true);
   });
   it('budget pressure triggers', () => {
     const r = shouldRunAdjust({
-      newMemoryWritten: false, onDemandSize: 0,
       turnTokenUsage: 95, totalBudget: 100,
       adjustRanThisSession: true,
     });
     expect(r.run).toBe(true);
     expect(r.reason).toBe('budget-pressure');
   });
-  it('new memory + onDemand≥5 triggers', () => {
+  it('newMemoryWritten/onDemandSize trigger removed (task-710)', () => {
+    // The legacy `newMemoryWritten + onDemand >= 5` path is gone:
+    // dream writes are async, so the caller had no good signal. This
+    // test is the regression guard — passing the old fields must NOT
+    // fire adjust on its own.
     expect(shouldRunAdjust({
       newMemoryWritten: true, onDemandSize: 5,
       turnTokenUsage: 0, totalBudget: 100,
       adjustRanThisSession: true,
-    }).run).toBe(true);
+    }).run).toBe(false);
   });
   it('quiet turn skips', () => {
     expect(shouldRunAdjust({
-      newMemoryWritten: false, onDemandSize: 2,
       turnTokenUsage: 10, totalBudget: 100,
       adjustRanThisSession: true,
     }).run).toBe(false);
@@ -218,7 +219,6 @@ describe('runAdjust', () => {
     const ams = new ActiveMemorySet({ budget: computeBudget(200_000) });
     const r = await runAdjust({
       trigger: {
-        newMemoryWritten: false, onDemandSize: 0,
         turnTokenUsage: 0, totalBudget: 100,
         adjustRanThisSession: true,
       },
@@ -241,7 +241,6 @@ describe('runAdjust', () => {
     let receivedPrompt = '';
     const r = await runAdjust({
       trigger: {
-        newMemoryWritten: false, onDemandSize: 0,
         turnTokenUsage: 0, totalBudget: 100,
         adjustRanThisSession: false,
       },
@@ -268,7 +267,6 @@ describe('runAdjust', () => {
     ams.setOnDemand([a]);
     const r = await runAdjust({
       trigger: {
-        newMemoryWritten: false, onDemandSize: 0,
         turnTokenUsage: 0, totalBudget: 100,
         adjustRanThisSession: false,
       },

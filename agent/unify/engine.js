@@ -574,8 +574,6 @@ export class Engine {
     try {
       const result = await runAdjust({
         trigger: {
-          newMemoryWritten: false,        // dream writes happen async; treat as false here
-          onDemandSize: ctx.ams.onDemandIds().length,
           turnTokenUsage: args.turnTokenUsage,
           totalBudget,
           adjustRanThisSession,
