@@ -3129,3 +3129,56 @@
     display: none;
   }
 }
+
+/* ── PR-4: per-feature / per-VP abort affordances ────────────────────
+   Two small filled-square buttons (mirroring the ChatInput stop icon's
+   `<rect rx="2"/>` shape, scaled to 10×10). Spacing-only — no horizontal
+   dividers (CLAUDE.md "Unify UI Design Rules"). Both surfaces use
+   <span role="button"> rather than <button> because their containers are
+   already interactive (FeaturePill header is a <button>, timeline row is
+   role="button") and nesting native buttons is an a11y violation. */
+.feature-pill-abort {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin: 0 4px;
+  border-radius: 4px;
+  color: var(--text-muted, var(--text-secondary, #888));
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.feature-pill-abort:hover,
+.feature-pill-abort:focus-visible {
+  background: var(--accent-soft, rgba(99, 102, 241, 0.12));
+  color: var(--accent, #6366f1);
+  outline: none;
+}
+
+/* Extend the timeline row grid to leave room for the abort affordance:
+   avatar (24) | body (1fr) | abort (auto). The body still wraps the same
+   name + status + snippet block; the abort lives outside it so its
+   .stop click handler doesn't fight the row's primary drill-into-detail
+   click handler. */
+.unify-vp-timeline-row {
+  grid-template-columns: 24px 1fr auto;
+}
+.unify-vp-timeline-abort {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  color: var(--text-muted, var(--text-secondary, #888));
+  cursor: pointer;
+  align-self: start;
+  transition: background 0.15s, color 0.15s;
+}
+.unify-vp-timeline-abort:hover,
+.unify-vp-timeline-abort:focus-visible {
+  background: var(--accent-soft, rgba(99, 102, 241, 0.12));
+  color: var(--accent, #6366f1);
+  outline: none;
+}

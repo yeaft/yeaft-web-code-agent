@@ -193,6 +193,7 @@ export default {
         :style="timelineWidthStyle"
         @open-vp-detail="onOpenVpDetailFromTimeline"
         @start-resize="startTimelineResize"
+        @cancel-vp-turn="onCancelVpFromTimeline"
       />
 
       <!-- Right Detail Panel -->
@@ -828,6 +829,34 @@ export default {
       store.enterVpDetailView(vpId);
     };
 
+    // PR-4: per-VP abort from the timeline. The pane only knows the vpId
+    // of the row the user clicked. We reverse-look-up the most recently
+    // started turnId for that VP from `activeVpTurns` (the keyed-by-turnId
+    // map populated on `vp_turn_start` and cleared on `unify_turn_aborted`
+    // / `vp_turn_end` — see chat.js:1436-1448). If a VP has multiple
+    // concurrent turns (rare; possible during fan-out), we abort the one
+    // with the most recent `startedAt` — that matches "what is this VP
+    // doing right now." `cancelVpTurn` is a no-op if the controller has
+    // already cleared, so the worst case for a stale turnId is a wasted
+    // round trip.
+    const onCancelVpFromTimeline = (vpId) => {
+      if (!vpId) return;
+      const map = store.activeVpTurns || {};
+      let bestTurnId = null;
+      let bestStartedAt = -Infinity;
+      for (const [turnId, info] of Object.entries(map)) {
+        if (!info || info.vpId !== vpId) continue;
+        if (info.endedAt) continue;
+        const ts = (typeof info.startedAt === 'number') ? info.startedAt : 0;
+        if (ts >= bestStartedAt) {
+          bestStartedAt = ts;
+          bestTurnId = turnId;
+        }
+      }
+      if (!bestTurnId) return;
+      store.cancelVpTurn(bestTurnId);
+    };
+
     return {
       store,
       sidebarCollapsed,
@@ -891,6 +920,8 @@ export default {
       timelineWidthStyle,
       startTimelineResize,
       onOpenVpDetailFromTimeline,
+      // PR-4: per-VP abort from the timeline pane.
+      onCancelVpFromTimeline,
     };
   }
 };

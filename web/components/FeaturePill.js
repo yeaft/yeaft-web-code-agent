@@ -17,26 +17,39 @@
  * the messages inside the pill look identical to messages outside it.
  *
  * Props:
- *   featureId — the run's id; looked up in `unifyFeatureMeta`.
- *   turns     — array of pre-aggregated turn items belonging to this feature
- *               (assistant-turn / feature-message). MessageList builds these
- *               in `turnGroups` so the same turn-aggregation logic that runs
- *               outside the pill also runs inside it.
+ *   featureId      — the run's id; looked up in `unifyFeatureMeta`.
+ *   turns          — array of pre-aggregated turn items belonging to this feature
+ *                    (assistant-turn / feature-message). MessageList builds these
+ *                    in `turnGroups` so the same turn-aggregation logic that runs
+ *                    outside the pill also runs inside it.
+ *   subAgentCards  — PR-4: sub-agent cards whose stored `featureId` equals this
+ *                    pill's; rendered inside the expanded body.
  *
  * Emits:
  *   open-vp-detail (vpId) — forwarded from inner AssistantTurn rows.
+ *   cancel-feature (featureId) — PR-4: user clicked the in-header abort button.
+ *                    Parent maps featureId → owning turnId via
+ *                    `unifyFeatureMeta[fid].turnId` and calls cancelVpTurn.
  */
 import AssistantTurn from './AssistantTurn.js';
 import FeatureMessageItem from './FeatureMessageItem.js';
 import MessageItem from './MessageItem.js';
+import SubAgentCard from './SubAgentCard.js';
 
 export default {
   name: 'FeaturePill',
-  components: { AssistantTurn, FeatureMessageItem, MessageItem },
-  emits: ['open-vp-detail'],
+  components: { AssistantTurn, FeatureMessageItem, MessageItem, SubAgentCard },
+  emits: ['open-vp-detail', 'cancel-feature'],
   props: {
     featureId: { type: String, required: true },
     turns: { type: Array, required: true },
+    // PR-4: sub-agent cards spawned while this pill's owning turn was
+    // running, identified via the `featureId` field that the sub-agent
+    // event sink stamps on every emit (see web-bridge.js sink + chat.js
+    // sub_agent_event handler). Rendered inside the expanded body so
+    // sub-agent activity folds under the parent feature instead of
+    // appearing as orphan cards below it.
+    subAgentCards: { type: Array, default: () => [] },
   },
   template: `
     <div class="feature-pill" :class="['feature-pill-' + statusClass, { 'feature-pill-expanded': expanded }]" :data-feature-id="featureId">
@@ -59,6 +72,29 @@ export default {
           <span v-if="triggerLabel" class="feature-pill-trigger">{{ triggerLabel }}</span>
           <span v-if="turnCount > 0" class="feature-pill-count">{{ turnCount }}</span>
         </span>
+        <!--
+          PR-4: per-feature abort affordance. Visible only while the feature
+          is still in flight (statusClass === 'active'). Rendered as a
+          <span role="button"> rather than <button> because the surrounding
+          .feature-pill-header is already a <button> — nesting interactive
+          elements is an a11y violation. .stop modifiers prevent the click
+          / Enter / Space from also firing the header's toggle handler.
+        -->
+        <span
+          v-if="statusClass === 'active'"
+          class="feature-pill-abort"
+          role="button"
+          tabindex="0"
+          :aria-label="$t('unify.featurePill.abort')"
+          :title="$t('unify.featurePill.abort')"
+          @click.stop="$emit('cancel-feature', featureId)"
+          @keydown.enter.stop.prevent="$emit('cancel-feature', featureId)"
+          @keydown.space.stop.prevent="$emit('cancel-feature', featureId)"
+        >
+          <svg width="10" height="10" viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>
+          </svg>
+        </span>
         <span class="feature-pill-toggle" aria-hidden="true">{{ expanded ? '▾' : '▸' }}</span>
       </button>
 
@@ -80,6 +116,21 @@ export default {
             />
           </div>
         </template>
+
+        <!--
+          PR-4: sub-agent cards spawned during this feature run. The runner
+          stamps each forwarded event with the parent's featureId (see
+          agent/unify/sub-agent/runner.js wrapEvt + agent/unify/engine.js
+          parentEngineDeps.getCurrentFeatureId), so chat.js latches it onto
+          the card and MessageList groups them under the matching pill.
+          Rendered after the inner turns and before the summary so the card
+          reads as "this is a helper that ran inside the feature."
+        -->
+        <SubAgentCard
+          v-for="card in subAgentCards"
+          :key="card.key"
+          :card="card"
+        />
 
         <div v-if="summaryText" class="feature-pill-summary">
           <span class="feature-pill-summary-label">{{ $t('unify.featurePill.summaryLabel') }}</span>

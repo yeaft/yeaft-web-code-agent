@@ -1686,6 +1686,19 @@ async function runVpTurn({ prompt, groupId, vpId, turnId, envelope: inboundEnvel
       // ready; the main engine loop must not be held back waiting for it.
       arc.startTrackA();
 
+      // PR-4: let sub-agents spawned during this turn inherit the
+      // parent's active featureId. Read lazily inside the engine's
+      // parentEngineDeps so a feature that opens AFTER a sub-agent
+      // spawns still tags the sub-agent's later events. Cleared in the
+      // `finally` below so a stale `arc` reference doesn't leak into
+      // the next turn.
+      const vpEngine = getOrCreateVpEngine(groupId, vpId);
+      if (typeof vpEngine.setCurrentFeatureIdAccessor === 'function') {
+        vpEngine.setCurrentFeatureIdAccessor(() => {
+          try { return arc?.getFeatureId?.() || null; } catch { return null; }
+        });
+      }
+
       const handlerCtx = {
         assistantTextParts,
         toolCallsAccum,
@@ -1705,7 +1718,6 @@ async function runVpTurn({ prompt, groupId, vpId, turnId, envelope: inboundEnvel
       const trimmedMessages = trimSnapshotForBudget(baseSnapshot, {
         messageTokenBudget: session?.config?.messageTokenBudget,
       });
-      const vpEngine = getOrCreateVpEngine(groupId, vpId);
       for await (const event of vpEngine.query({
         prompt,
         messages: trimmedMessages,
@@ -1743,6 +1755,15 @@ async function runVpTurn({ prompt, groupId, vpId, turnId, envelope: inboundEnvel
       }, envelope);
     } finally {
       if (queryTimer) clearTimeout(queryTimer);
+      // PR-4: clear the per-turn featureId accessor so the next turn's
+      // sub-agents don't see a stale arc. Idempotent on the same engine
+      // instance; cheap (a Map lookup + setter assignment).
+      try {
+        const eng = getOrCreateVpEngine(groupId, vpId);
+        if (typeof eng?.setCurrentFeatureIdAccessor === 'function') {
+          eng.setCurrentFeatureIdAccessor(null);
+        }
+      } catch { /* best-effort */ }
     }
   } catch (err) {
     const isAbort = err && (err.name === 'AbortError' || err.name === 'LLMAbortError');
