@@ -1,12 +1,17 @@
 /**
  * VpTimelinePane — PR-3 of the feature-pill double-track redesign.
  *
- * Right-side pane that surfaces, for the active Unify conversation, one
- * row per VP showing avatar + name + live status + (when in-feature)
- * feature title / trigger label / elapsed timer + most-recent assistant
- * snippet. Clicking a row drills into that VP's detail view via the
- * existing `open-vp-detail` event (UnifyPage maps it onto
- * `store.enterVpDetailView(vpId)` — same as MessageList does today).
+ * Left-of-conversation pane that surfaces, for the active Unify
+ * conversation, one row per VP showing avatar + name + live status +
+ * (when in-feature) feature title / trigger label / elapsed timer +
+ * most-recent assistant snippet. Originally rendered to the right of the
+ * conversation; the Unify layout realignment moved it inside
+ * `unify-main` to match Crew's members-left shape. The component itself
+ * is placement-agnostic — only its parent container + the resize handle
+ * direction in CSS reflect the side it's on. Clicking a row drills into
+ * that VP's detail view via the existing `open-vp-detail` event
+ * (UnifyPage maps it onto `store.enterVpDetailView(vpId)` — same as
+ * MessageList does today).
  *
  * Architecture: presentational only. Props down, emit up. Does NOT
  * import the chat store (mirroring the cleaner pattern Fowler I3 flagged

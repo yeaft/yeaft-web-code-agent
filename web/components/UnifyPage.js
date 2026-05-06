@@ -35,8 +35,34 @@ export default {
       <!-- Workbench Panel (between sidebar and main) -->
       <WorkbenchPanel v-if="canUseWorkbench" />
 
-      <!-- Center Conversation -->
+      <!-- Center Conversation. unify-main is now an inner row layout so
+           the VP list sits to the LEFT of the conversation (mirroring
+           Crew's role-panel-left + crew-panel-center). The conversation
+           stack lives inside .unify-main-center; the right .unify-detail
+           is still a sibling of .unify-main at the page level. -->
       <div class="unify-main" :class="{ 'workbench-active': canUseWorkbench && store.workbenchExpanded, 'workbench-maximized': canUseWorkbench && store.workbenchMaximized && store.workbenchExpanded }">
+        <!-- Left VP List Pane (Crew-style alignment).
+             Surfaces, for the active Unify conversation, one row per VP
+             showing live status / in-feature title / elapsed timer / last
+             assistant snippet. Click → drill into VP detail. Hidden under
+             1024 px (CSS @media + Vue gate). The pane sits at the LEFT
+             edge of unify-main so visual order is [VP list][conversation],
+             matching Crew's members-left layout. -->
+        <VpTimelinePane
+          v-if="showVpTimeline"
+          :rows="vpTimelineRows"
+          :now-ms="nowMs"
+          :style="timelineWidthStyle"
+          @open-vp-detail="onOpenVpDetailFromTimeline"
+          @start-resize="startTimelineResize"
+          @cancel-vp-turn="onCancelVpFromTimeline"
+        />
+
+        <!-- Center column: topbar + (settings | VpDetailView | empty-hero |
+             MessageList) + ChatInput. Wrapped in unify-main-center so
+             unify-main itself can be a row flex without breaking the
+             column stacking these descendants rely on. -->
+        <div class="unify-main-center">
         <!-- Conversation Header -->
         <div class="unify-topbar">
         <!-- task-341: sidebar-toggle moved from topbar into V2 sidebar header. -->
@@ -178,23 +204,8 @@ export default {
           :show-stop="isProcessing"
           placeholder-key="unify.placeholder"
         />
+        </div><!-- /.unify-main-center -->
       </div>
-
-      <!-- Right VP Timeline Pane (PR-3 of feature-pill double-track redesign).
-           Surfaces, for the active Unify conversation, one row per VP showing
-           live status / in-feature title / elapsed timer / last assistant
-           snippet. Click → drill into VP detail. Hidden under 1024 px (CSS
-           @media). The pane is rendered BEFORE .unify-detail so the visual
-           order in the right column is [timeline][detail] from left → right. -->
-      <VpTimelinePane
-        v-if="showVpTimeline"
-        :rows="vpTimelineRows"
-        :now-ms="nowMs"
-        :style="timelineWidthStyle"
-        @open-vp-detail="onOpenVpDetailFromTimeline"
-        @start-resize="startTimelineResize"
-        @cancel-vp-turn="onCancelVpFromTimeline"
-      />
 
       <!-- Right Detail Panel -->
       <aside class="unify-detail" :class="{ collapsed: detailCollapsed, resizing: isResizingDetail, 'mobile-debug': debugMode && isNarrowDetail }" :style="detailWidthStyle" ref="detailPanel">
@@ -353,10 +364,12 @@ export default {
     };
 
     // ── PR-3: VP Timeline pane resize-drag (mirrors detail pattern) ─────
-    // Independent localStorage key + clamp so the two right-column panes
-    // can be sized separately. Visual order is [timeline][detail], so a
-    // drag on the timeline's left edge widens the timeline (delta = startX
-    // - ev.clientX) — same handedness as .unify-detail above.
+    // Independent localStorage key + clamp so the two side panes can be
+    // sized separately. After the layout realignment the VP list pane
+    // sits at the LEFT edge of unify-main, so its resize handle is on
+    // the pane's RIGHT edge — drag-right widens the pane (delta =
+    // ev.clientX - startX). The detail pane's drag-handle on its own
+    // left edge keeps its own handedness; the two are independent.
     const isResizingTimeline = Vue.ref(false);
     const TIMELINE_MIN_WIDTH = 220;
     const TIMELINE_DEFAULT_WIDTH = 280;
@@ -374,12 +387,12 @@ export default {
       isResizingTimeline.value = true;
       const startX = e.clientX;
       const startWidth = timelineWidth.value;
-      // Cap at 40% of viewport — the timeline is supplementary; never
+      // Cap at 40% of viewport — the VP list is supplementary; never
       // let it crowd the conversation pane.
       const maxWidth = Math.max(TIMELINE_MIN_WIDTH, Math.floor(window.innerWidth * 0.4));
 
       const onMouseMove = (ev) => {
-        const delta = startX - ev.clientX; // drag left = wider
+        const delta = ev.clientX - startX; // drag right = wider (handle on right edge)
         const newWidth = Math.min(maxWidth, Math.max(TIMELINE_MIN_WIDTH, startWidth + delta));
         timelineWidth.value = newWidth;
       };
