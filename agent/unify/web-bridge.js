@@ -51,6 +51,8 @@ import {
   compactHistory,
   trimSnapshotForBudget,
 } from './history-compact.js';
+import { createFeatureArc } from './feature-arc.js';
+import { getFeatureStore } from './tools/feature-tools.js';
 
 /** @type {import('./session.js').Session | null} */
 let session = null;
@@ -492,25 +494,27 @@ export async function __testResetVpState() {
  * Envelope fields: conversationId, groupId, vpId, turnId — the last two
  * let the frontend route incremental deltas to the correct per-VP message block.
  */
-function sendUnifyOutput(data, { groupId, vpId, turnId } = {}) {
+function sendUnifyOutput(data, { groupId, vpId, turnId, featureId } = {}) {
   sendToServer({
     type: 'unify_output',
     conversationId: unifyConversationId,
     ...(groupId ? { groupId } : {}),
     ...(vpId ? { vpId } : {}),
     ...(turnId ? { turnId } : {}),
+    ...(featureId ? { featureId } : {}),
     data,
   });
 }
 
 /** Send a unify_output event (non-claude_output metadata). */
-function sendUnifyEvent(event, { groupId, vpId, turnId } = {}) {
+function sendUnifyEvent(event, { groupId, vpId, turnId, featureId } = {}) {
   sendToServer({
     type: 'unify_output',
     conversationId: unifyConversationId,
     ...(groupId ? { groupId } : {}),
     ...(vpId ? { vpId } : {}),
     ...(turnId ? { turnId } : {}),
+    ...(featureId ? { featureId } : {}),
     event,
   });
 }
@@ -871,7 +875,16 @@ export function installUnifyRuntimeBridge(s) {
  */
 function handleEngineEvent(event, hctx) {
   hctx.resetQueryTimer();
-  const envelope = { groupId: hctx.groupId, vpId: hctx.vpId, turnId: hctx.turnId };
+  // featureId may have just been published mid-turn by the FeatureArc
+  // (the arc's observeEvent runs before this dispatch); pull it fresh
+  // so the wire envelope tags every subsequent emit with the right id.
+  const featureId = typeof hctx.getFeatureId === 'function' ? hctx.getFeatureId() : null;
+  const envelope = {
+    groupId: hctx.groupId,
+    vpId: hctx.vpId,
+    turnId: hctx.turnId,
+    ...(featureId ? { featureId } : {}),
+  };
 
   switch (event.type) {
     case 'text_delta':
@@ -1572,6 +1585,11 @@ async function runVpTurn({ prompt, groupId, vpId, turnId, envelope: inboundEnvel
   if (!prompt?.trim()) return;
 
   const envelope = { groupId, vpId, turnId };
+  // Arc is declared at outer-try scope so the catch / finally branches
+  // below can call `arc.finalize({status:'aborted'|'error'})` after a
+  // throw escaping the inner try. It's null until the inner try
+  // populates it; all catch-side calls guard with `arc?.finalize?.`.
+  let arc = null;
 
   try {
     if (session?.dreamScheduler) {
@@ -1611,6 +1629,63 @@ async function runVpTurn({ prompt, groupId, vpId, turnId, envelope: inboundEnvel
         groupId,
         envelope: inboundEnvelope,
       });
+
+      // ── Dual-track feature arc ──
+      // Track A (quick-response) runs concurrently against the same
+      // primary model with a non-looping single call; its preview is
+      // surfaced to the user immediately via `quick_preview` so they
+      // see *something* within ~1s. Three signals (Track A intent,
+      // ≥3 engine loops, key tool call) auto-create a Feature record
+      // and the wire envelope starts tagging emits with `featureId`,
+      // letting the frontend fold subsequent messages into a pill.
+      arc = createFeatureArc({
+        adapter: session?.adapter || null,
+        model: session?.config?.model || null,
+        featureStore: getFeatureStore(),
+        prompt,
+        vpId,
+        groupId: groupId || null,
+        turnId,
+        vpDisplayName: queryOpts?.vpPersona?.displayName || vpId,
+        language: session?.config?.language || 'en',
+        signal: vpAbort.signal,
+        emit: {
+          quickPreview: ({ intent, preview }) => {
+            sendUnifyEvent({
+              type: 'quick_preview',
+              intent,
+              preview,
+              vpId,
+              turnId,
+            }, envelope);
+          },
+          featureStarted: ({ featureId, title, signal: trigger, toolName }) => {
+            sendUnifyEvent({
+              type: 'feature_started',
+              featureId,
+              title,
+              trigger,         // 'quick' | 'turns' | 'tool'
+              toolName: toolName || null,
+              vpId,
+              turnId,
+            }, { ...envelope, featureId });
+          },
+          featureCompleted: ({ featureId, summary, status }) => {
+            sendUnifyEvent({
+              type: 'feature_completed',
+              featureId,
+              summary,
+              status,            // 'completed' | 'aborted' | 'error'
+              vpId,
+              turnId,
+            }, { ...envelope, featureId });
+          },
+        },
+      });
+      // Fire-and-forget — Track A produces its preview / decision when
+      // ready; the main engine loop must not be held back waiting for it.
+      arc.startTrackA();
+
       const handlerCtx = {
         assistantTextParts,
         toolCallsAccum,
@@ -1619,6 +1694,9 @@ async function runVpTurn({ prompt, groupId, vpId, turnId, envelope: inboundEnvel
         groupId,
         vpId,
         turnId,
+        // Lets handleEngineEvent stamp the latest featureId on each
+        // outgoing envelope; the arc may publish it mid-turn.
+        getFeatureId: () => arc.getFeatureId(),
       };
       // Always trim the snapshot before passing to engine.query. This is
       // the second-line defense (history-compact only fires above 30K
@@ -1635,11 +1713,25 @@ async function runVpTurn({ prompt, groupId, vpId, turnId, envelope: inboundEnvel
         ...queryOpts,
       })) {
         resetQueryTimer();
+        // Arc observes BEFORE dispatch so featureId (if just published)
+        // is available when handleEngineEvent stamps the envelope.
+        try { arc.observeEvent(event); } catch (err) {
+          console.warn('[FeatureArc] observe failed:', err?.message || err);
+        }
         handleEngineEvent(event, handlerCtx);
       }
 
       // Turn completed — atomically append this VP's output to shared history.
       appendTurnToHistory(prompt, assistantTextParts, toolCallsAccum, toolResultsAccum);
+
+      // Close the arc: if a feature was opened during the turn, run the
+      // summary call and write status='completed' back to FeatureStore.
+      // Awaited so the `feature_completed` event reaches the frontend
+      // before the final 'result' bubble (UI ordering matters: the pill
+      // should reach its done state before the turn is marked done).
+      try { await arc.finalize({ status: 'completed' }); } catch (err) {
+        console.warn('[FeatureArc] finalize failed:', err?.message || err);
+      }
 
       sendUnifyOutput({
         type: 'assistant',
@@ -1655,6 +1747,9 @@ async function runVpTurn({ prompt, groupId, vpId, turnId, envelope: inboundEnvel
   } catch (err) {
     const isAbort = err && (err.name === 'AbortError' || err.name === 'LLMAbortError');
     if (isAbort) {
+      // Best-effort close: mark the feature aborted so the frontend pill
+      // settles into the right terminal state instead of staying active.
+      try { await arc?.finalize?.({ status: 'aborted' }); } catch { /* ignore */ }
       sendUnifyOutput({
         type: 'result',
         result_text: '',
@@ -1664,6 +1759,7 @@ async function runVpTurn({ prompt, groupId, vpId, turnId, envelope: inboundEnvel
     }
 
     console.error('[Unify] query error:', err);
+    try { await arc?.finalize?.({ status: 'error' }); } catch { /* ignore */ }
 
     if (isPermissionErrorMsg(err.message)) {
       if (!_permissionDiagnosticSent) {

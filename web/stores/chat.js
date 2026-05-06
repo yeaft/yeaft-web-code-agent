@@ -279,6 +279,35 @@ export const useChatStore = defineStore('chat', {
     // addMessageToConversation / appendToAssistant can route by turnId.
     _currentUnifyVpId: null,
     _currentUnifyTurnId: null,
+    // PR-1 (feature-pill double-track): the in-flight envelope's featureId.
+    // Stamped onto streaming chunks the same way _currentUnifyVpId/turnId
+    // are, so the rendering layer can group messages by feature without
+    // every component reaching back into a parallel map. Null when the
+    // arriving event is not part of any feature (lightweight Q&A).
+    _currentUnifyFeatureId: null,
+
+    // PR-1 (feature-pill double-track): per-feature lifecycle metadata.
+    // Keyed by featureId. Records:
+    //   { featureId, vpId, groupId, turnId, title, trigger,
+    //     status: 'active' | 'completed' | 'aborted' | 'error',
+    //     summary?: string, startedAt, endedAt? }
+    // Used by the (PR-2) MessageList to fold all messages tagged with a
+    // given featureId into a single pill. PR-1 only stores the data —
+    // the UI surface is added in the next PR.
+    unifyFeatureMeta: {},
+
+    // PR-1 (feature-pill double-track): per-VP active feature index.
+    // Keyed by vpId, value is the most recent active featureId for that
+    // VP (or null when no feature is open). Lets the timeline / detail
+    // panel show "VP-A is doing X" badges without scanning the meta map.
+    unifyActiveFeatureByVp: {},
+
+    // PR-1 (feature-pill double-track): pending Track-A previews keyed
+    // by `${vpId}:${turnId}`. Each entry is `{ vpId, turnId, intent,
+    // preview, ts }`. Rendered as an instant bubble under the user
+    // message in the (PR-2) UI; cleared when the matching feature
+    // completes (or after a TTL — handled in PR-2).
+    unifyQuickPreviews: {},
 
     // Active VP turns — keyed by turnId. Cleared on result or abort ack.
     activeVpTurns: {},
@@ -743,15 +772,24 @@ export const useChatStore = defineStore('chat', {
           const prevGroup = this._currentUnifyGroupId;
           const prevVpId = this._currentUnifyVpId;
           const prevTurnId = this._currentUnifyTurnId;
+          const prevFeatureId = this._currentUnifyFeatureId;
           if (msg.groupId) this._currentUnifyGroupId = msg.groupId;
           if (msg.vpId) this._currentUnifyVpId = msg.vpId;
           if (msg.turnId) this._currentUnifyTurnId = msg.turnId;
+          // PR-1: stamp featureId from the wire envelope so any code
+          // path that reads `_currentUnifyFeatureId` while addMessage
+          // is running sees the right value. Reset to null (not just
+          // "unchanged") when the inbound msg has no featureId — this
+          // matters because emits switch back to non-feature traffic
+          // mid-turn (e.g. typing indicators after the feature closes).
+          this._currentUnifyFeatureId = msg.featureId || null;
           try {
             this.handleClaudeOutput(conversationId, msg.data);
           } finally {
             this._currentUnifyGroupId = prevGroup;
             this._currentUnifyVpId = prevVpId;
             this._currentUnifyTurnId = prevTurnId;
+            this._currentUnifyFeatureId = prevFeatureId;
           }
         }
         return;
@@ -974,6 +1012,95 @@ export const useChatStore = defineStore('chat', {
         case 'thinking_delta':
           // Future: display these in UI
           break;
+
+        // PR-1 (feature-pill double-track) — protocol-only intake.
+        // The agent emits these three events to drive the pill UI in
+        // PR-2. PR-1 just stashes the data into store state and wires
+        // no rendering — that arrives with the MessageList changes in
+        // the next PR. We deliberately accept the events even when no
+        // UI consumes them so PR-1 is shippable in isolation.
+        case 'quick_preview': {
+          // Track A came back with `{intent, preview}`. Key the entry
+          // by `vpId:turnId` so a re-run of the same VP on a fresh
+          // turn doesn't clobber the previous preview while it's still
+          // on screen.
+          const vpId = event.vpId || msg.vpId;
+          const turnId = event.turnId || msg.turnId;
+          if (vpId && turnId) {
+            const key = `${vpId}:${turnId}`;
+            this.unifyQuickPreviews = {
+              ...this.unifyQuickPreviews,
+              [key]: {
+                vpId,
+                turnId,
+                intent: event.intent === 'feature' ? 'feature' : 'quick',
+                preview: typeof event.preview === 'string' ? event.preview : '',
+                ts: Date.now(),
+              },
+            };
+          }
+          break;
+        }
+
+        case 'feature_started': {
+          // One of the three signals fired (quick / turns / tool); the
+          // arc just published a featureId. Record it and mark this VP
+          // as "actively in a feature" so PR-2's MessageList can fold
+          // subsequent messages tagged with the same featureId.
+          const featureId = event.featureId;
+          const vpId = event.vpId || msg.vpId;
+          const turnId = event.turnId || msg.turnId;
+          const groupId = event.groupId || msg.groupId || null;
+          if (featureId) {
+            this.unifyFeatureMeta = {
+              ...this.unifyFeatureMeta,
+              [featureId]: {
+                featureId,
+                vpId,
+                groupId,
+                turnId,
+                title: typeof event.title === 'string' ? event.title : '',
+                trigger: event.signal || event.trigger || 'unknown',
+                toolName: event.toolName || null,
+                status: 'active',
+                startedAt: Date.now(),
+              },
+            };
+            if (vpId) {
+              this.unifyActiveFeatureByVp = {
+                ...this.unifyActiveFeatureByVp,
+                [vpId]: featureId,
+              };
+            }
+          }
+          break;
+        }
+
+        case 'feature_completed': {
+          // Arc.finalize() fired. Move the meta entry to a terminal
+          // state and clear the per-VP active pointer if it still
+          // points at this feature.
+          const featureId = event.featureId;
+          const vpId = event.vpId || msg.vpId;
+          if (featureId && this.unifyFeatureMeta[featureId]) {
+            const prev = this.unifyFeatureMeta[featureId];
+            this.unifyFeatureMeta = {
+              ...this.unifyFeatureMeta,
+              [featureId]: {
+                ...prev,
+                status: event.status || 'completed',
+                summary: typeof event.summary === 'string' ? event.summary : '',
+                endedAt: Date.now(),
+              },
+            };
+          }
+          if (vpId && this.unifyActiveFeatureByVp[vpId] === featureId) {
+            const next = { ...this.unifyActiveFeatureByVp };
+            next[vpId] = null;
+            this.unifyActiveFeatureByVp = next;
+          }
+          break;
+        }
 
         case 'reflection': {
           // PR-L: V7 tool-history reflection. Two phases per occurrence
