@@ -309,14 +309,10 @@ export default {
           agentId: store.currentAgent
         });
       } else {
-        // Only blank the local message list when no turn is in flight.
-        // Mid-turn we keep the in-memory partial so streaming text isn't
-        // wiped; sync_messages will dedup-merge persisted history around
-        // it (handleSyncMessagesResult skips entries whose dbMessageId
-        // already exists, and the streaming partial has no dbMessageId
-        // so it can never collide).
-        const isProcessing = !!store.processingConversations[effectiveConvId.value];
-        if (!isProcessing) {
+        // Mid-turn: keep the in-memory partial so streaming text isn't
+        // wiped. sync_messages_result dedups by dbMessageId (orphans are
+        // reconciled by content). Idle: blank for a clean reload.
+        if (!store.processingConversations[effectiveConvId.value]) {
           store.messagesMap[effectiveConvId.value] = [];
         }
         store.sendWsMessage({

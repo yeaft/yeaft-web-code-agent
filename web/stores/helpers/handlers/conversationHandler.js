@@ -291,6 +291,30 @@ export function handleSyncMessagesResult(store, msg) {
           if (m.dbMessageId && msgs.some(existing => existing.dbMessageId === m.dbMessageId)) {
             continue;
           }
+          // task-712: Mid-turn refresh race. If the user clicked refresh while
+          // a turn was streaming AND the turn completed (isStreaming flipped
+          // to false) BEFORE sync_messages_result returned, the in-memory
+          // assistant partial is now an orphan with no dbMessageId. The
+          // incoming DB row carries the same type+content but a fresh
+          // dbMessageId, so the dedup gate above misses it. Reconcile by
+          // stamping the dbMessageId onto the finalized orphan instead of
+          // appending a duplicate. We only collapse FINALIZED orphans —
+          // an actively streaming partial (isStreaming: true) is left
+          // alone so its content can keep growing.
+          if (m.dbMessageId && (m.type === 'assistant' || m.type === 'user')) {
+            const orphan = msgs.find(existing =>
+              !existing.dbMessageId &&
+              !existing.isStreaming &&
+              existing.type === m.type &&
+              existing.content === m.content
+            );
+            if (orphan) {
+              orphan.dbMessageId = m.dbMessageId;
+              orphan.id = m.id;
+              if (m.timestamp) orphan.timestamp = m.timestamp;
+              continue;
+            }
+          }
           msgs.push(m);
         }
       }
