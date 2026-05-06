@@ -516,6 +516,42 @@ export default {
         }
       };
 
+      // task-vp-header-pos: latch turn-level VP attribution from ANY
+      // message in the turn that carries routing context — not just
+      // `type==='assistant'`. When a VP's reply opens with a tool_call
+      // (no preceding text_delta), the FIRST message in the turn is a
+      // tool-use, and the previous "assistant-only latch" left
+      // `speakerVpId` null. Two visible bugs followed:
+      //   (1) the synthesized typing-placeholder (below) was pushed AFTER
+      //       the tool-bearing turn because `streamingVps.has(vpId)`
+      //       evaluated false → avatar appeared BELOW the tools.
+      //   (2) when `vp_typing_end` cleared the typing set, the placeholder
+      //       vanished and the real turn never had a speaker → avatar
+      //       disappeared once the message completed.
+      // Latching from any Unify-stamped message is idempotent (only fills
+      // missing fields) and matches what `messages-speaker.js` stamps on
+      // assistants — `m.vpId` is the falsy fallback when an inbound
+      // tool-use was stamped before its assistant peer arrived.
+      const latchSpeakerFromMsg = (msg) => {
+        if (!currentTurn) return;
+        if (!currentTurn.speakerVpId) {
+          const vp = msg.speakerVpId || msg.vpId;
+          if (vp) {
+            currentTurn.speakerVpId = vp;
+            currentTurn.speakerTimestamp =
+              (typeof msg.timestamp === 'number' && msg.timestamp > 0)
+                ? msg.timestamp
+                : (typeof msg.createdAt === 'number' ? msg.createdAt : 0);
+            if (typeof msg.lastStateChangeCause === 'string') {
+              currentTurn.speakerStateCause = msg.lastStateChangeCause;
+            }
+          }
+        }
+        if (!currentTurn.turnId && msg.turnId) {
+          currentTurn.turnId = msg.turnId;
+        }
+      };
+
       const startTurn = () => {
         turnCounter++;
         currentTurn = {
@@ -600,24 +636,11 @@ export default {
             currentTurn.atMessageId = msg.id;
           }
           // task-334-ui-b: latch speaker attribution from the first
-          // assistant message that carries a VP id. Subsequent messages in
-          // the same turn should have the same speaker; we don't overwrite
-          // to avoid flicker mid-stream. `lastStateChangeCause` (334c O2)
-          // is read opportunistically — if 334h hasn't wired it yet, the
-          // field is simply undefined and we render no tooltip dot.
-          if (!currentTurn.speakerVpId && msg.speakerVpId) {
-            currentTurn.speakerVpId = msg.speakerVpId;
-            currentTurn.speakerTimestamp =
-              (typeof msg.timestamp === 'number' && msg.timestamp > 0)
-                ? msg.timestamp
-                : (typeof msg.createdAt === 'number' ? msg.createdAt : 0);
-            if (typeof msg.lastStateChangeCause === 'string') {
-              currentTurn.speakerStateCause = msg.lastStateChangeCause;
-            }
-          }
-          if (!currentTurn.turnId && msg.turnId) {
-            currentTurn.turnId = msg.turnId;
-          }
+          // assistant message that carries a VP id. The shared helper
+          // (defined above) covers the same idempotent fill rules and is
+          // also used for tool-use / chat-image branches so a turn that
+          // opens with a non-assistant message still gets a header.
+          latchSpeakerFromMsg(msg);
           // task-707: collect any route_forward hand-off pills attached
           // to the message by the chat-store `group_handoff` handler.
           if (Array.isArray(msg.handoffHints) && msg.handoffHints.length > 0) {
@@ -631,6 +654,7 @@ export default {
 
         if (msg.type === 'tool-use') {
           if (!currentTurn) startTurn();
+          latchSpeakerFromMsg(msg);
 
           // Merge tool-result from next message
           const nextMsg = messages[i + 1];
@@ -654,6 +678,7 @@ export default {
 
         if (msg.type === 'chat-image') {
           if (!currentTurn) startTurn();
+          latchSpeakerFromMsg(msg);
           currentTurn.imageMsgs.push(msg);
           currentTurn.messages.push(msg);
           continue;

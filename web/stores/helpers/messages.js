@@ -16,7 +16,7 @@ function inActiveUnifyConv(store, conversationId) {
 }
 
 // Idempotently mirror the routing context (vpId / turnId / speakerVpId)
-// onto an assistant message. Used at three points:
+// onto a message that carries VP attribution. Used at three points:
 //   1. on creation in addMessageToConversation
 //   2. defensively on each delta in appendToAssistantMessageForConversation
 //      (so a message minted before the routing context was set still
@@ -24,9 +24,16 @@ function inActiveUnifyConv(store, conversationId) {
 //   3. defensively at finalize in finishStreamingForConversation (last
 //      chance before the streaming flag clears and the avatar header has
 //      to render from latched fields)
+//
+// task-vp-header-pos: also covers `tool-use` messages so a turn that
+// OPENS with a tool_call (no preceding text_delta) still carries the
+// speaker on disk — otherwise reload-from-history shows tools without
+// any avatar above them.
+//
 // Idempotent: only fills missing fields, never overwrites.
 function stampSpeakerOnAssistant(store, conversationId, m) {
-  if (!m || m.type !== 'assistant') return;
+  if (!m) return;
+  if (m.type !== 'assistant' && m.type !== 'tool-use') return;
   if (!inActiveUnifyConv(store, conversationId)) return;
   if (!m.vpId && store._currentUnifyVpId) m.vpId = store._currentUnifyVpId;
   if (!m.turnId && store._currentUnifyTurnId) m.turnId = store._currentUnifyTurnId;
