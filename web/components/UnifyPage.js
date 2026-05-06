@@ -400,7 +400,7 @@ export default {
     // helpers inside the component — so the row list isn't recomputed
     // every second.
     const nowMs = Vue.ref(Date.now());
-    let _nowTickHandle = null;
+    let nowTickHandle = null;
 
     // Detect mobile for overlay behavior.
     //   isMobile        — sidebar overlay (<=768)
@@ -437,17 +437,19 @@ export default {
       window.addEventListener('resize', onResize);
       document.addEventListener('click', closeModelDropdownOutside);
       document.addEventListener('keydown', onKeyDown);
-      // PR-3: tick the elapsed timer once per second. 1 s granularity is
-      // good enough for the "Ns / Nm Ms" string and avoids hammering the
-      // reactive system. The component's :v-if="showVpTimeline" gates
-      // re-renders when the pane is hidden.
-      _nowTickHandle = setInterval(() => { nowMs.value = Date.now(); }, 1000);
+      // PR-3: tick the elapsed timer once per second, but only when the
+      // timeline pane is actually visible. Review fix (Fowler F3 /
+      // Torvalds I3): the unconditional setInterval kept ticking when
+      // the pane was hidden by the settings overlay or by the ≤1024 px
+      // viewport breakpoint. The watcher below starts/stops the
+      // interval as `showVpTimeline` flips, so a hidden pane costs
+      // nothing.
     });
     Vue.onUnmounted(() => {
       window.removeEventListener('resize', onResize);
       document.removeEventListener('click', closeModelDropdownOutside);
       document.removeEventListener('keydown', onKeyDown);
-      if (_nowTickHandle) { clearInterval(_nowTickHandle); _nowTickHandle = null; }
+      if (nowTickHandle) { clearInterval(nowTickHandle); nowTickHandle = null; }
     });
 
     // Watch for conversationId changes (session_ready migrates local -> agent ID)
@@ -730,6 +732,27 @@ export default {
       () => !showSettings.value && !isNarrowDetail.value
     );
 
+    // PR-3 review fix (Fowler F3 / Torvalds I3): only run the 1 s tick
+    // while the pane is visible. `{ immediate: true }` arms the tick on
+    // first render if the pane starts visible. When the pane hides
+    // (settings overlay open or viewport ≤1024 px), the interval clears
+    // immediately so a hidden Unify page consumes zero clock work.
+    Vue.watch(
+      showVpTimeline,
+      (visible) => {
+        if (visible) {
+          if (!nowTickHandle) {
+            nowMs.value = Date.now();
+            nowTickHandle = setInterval(() => { nowMs.value = Date.now(); }, 1000);
+          }
+        } else if (nowTickHandle) {
+          clearInterval(nowTickHandle);
+          nowTickHandle = null;
+        }
+      },
+      { immediate: true },
+    );
+
     // Resolve the messages slice that mirrors what the conversation pane
     // shows: when a group filter is active, only that group's messages.
     // The timeline derives its VP set + per-VP snippet + streaming flag
@@ -749,7 +772,14 @@ export default {
       // pointer for that group; otherwise everyone in the roster
       // surfaces. The filter logic mirrors `unifyVisibleMessages` so
       // there's no drift between the message stream and the timeline.
+      const allMeta = store.unifyFeatureMeta || {};
+      const allActive = store.unifyActiveFeatureByVp || {};
+      const allTyping = store.vpsTypingInCurrentConv || [];
+
       let vpList = vpStore.vpList || [];
+      let typingVpIds = allTyping;
+      let activeFeatureByVp = allActive;
+
       if (filter) {
         const present = new Set();
         for (const m of messages) {
@@ -759,21 +789,33 @@ export default {
         // Also include VPs whose active pointer references a feature
         // belonging to this group, so an in-feature row doesn't vanish
         // before its first message lands.
-        const meta = store.unifyFeatureMeta || {};
-        const active = store.unifyActiveFeatureByVp || {};
-        for (const vpId of Object.keys(active)) {
-          const fid = active[vpId];
-          const fm = fid ? meta[fid] : null;
+        for (const vpId of Object.keys(allActive)) {
+          const fid = allActive[vpId];
+          const fm = fid ? allMeta[fid] : null;
           if (fm && fm.groupId === filter) present.add(vpId);
         }
         vpList = vpList.filter((vp) => vp && present.has(vp.vpId));
+        // Review fix (Torvalds I1 / Fowler F2): `typingVpIds` and the
+        // helper's tail-append loop would otherwise re-introduce VPs
+        // typing in OTHER groups of the same conversation. Filter the
+        // signals down to the group-scoped roster set so the timeline
+        // can't leak cross-group rows.
+        typingVpIds = allTyping.filter((id) => present.has(id));
+        // Same defense for the active pointer map: only keep entries
+        // whose feature meta belongs to this group.
+        activeFeatureByVp = {};
+        for (const vpId of Object.keys(allActive)) {
+          const fid = allActive[vpId];
+          const fm = fid ? allMeta[fid] : null;
+          if (fm && fm.groupId === filter) activeFeatureByVp[vpId] = fid;
+        }
       }
 
       return buildTimelineRows({
         vpList,
-        unifyFeatureMeta: store.unifyFeatureMeta || {},
-        activeFeatureByVp: store.unifyActiveFeatureByVp || {},
-        typingVpIds: store.vpsTypingInCurrentConv || [],
+        unifyFeatureMeta: allMeta,
+        activeFeatureByVp,
+        typingVpIds,
         messages,
         vpLabelOf: (id) => vpStore.vpLabel(id),
       });

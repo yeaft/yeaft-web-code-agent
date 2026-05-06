@@ -236,12 +236,19 @@ function makeRow(vpId, displayName, ctx, snippetMap) {
   // that branch, so m === null here and feature fields stay null.
   const isInFeature = status === 'in-feature' && m;
 
+  // Pre-trim the title once so we don't pay String#trim twice for the
+  // same field (review fix — Torvalds M2). Empty/whitespace titles
+  // collapse to null so the consumer can fall back to "untitled feature".
+  const trimmedTitle = isInFeature && typeof m.title === 'string'
+    ? m.title.trim()
+    : '';
+
   return {
     vpId,
     displayName: displayName || vpId,
     status,
     featureId: isInFeature ? fid : null,
-    featureTitle: isInFeature && typeof m.title === 'string' && m.title.trim() ? m.title.trim() : null,
+    featureTitle: trimmedTitle ? trimmedTitle : null,
     featureTrigger: isInFeature && m.trigger ? m.trigger : null,
     featureToolName: isInFeature && m.toolName ? m.toolName : null,
     featureStatus: isInFeature ? (m.status || 'active') : null,

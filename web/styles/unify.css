@@ -3013,10 +3013,12 @@
 }
 .unify-vp-timeline-resize-handle {
   position: absolute;
-  left: 0;
+  /* Straddle the left edge so the hit-target spans both panes
+     (review fix — Torvalds M9; matches .unify-detail-drag-handle). */
+  left: -3px;
   top: 0;
   bottom: 0;
-  width: 4px;
+  width: 6px;
   cursor: ew-resize;
   background: transparent;
   z-index: 1;

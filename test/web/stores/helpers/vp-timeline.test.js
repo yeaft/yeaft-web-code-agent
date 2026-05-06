@@ -334,4 +334,27 @@ describe('buildTimelineRows', () => {
     expect(Array.isArray(out)).toBe(true);
     expect(out).toHaveLength(1);
   });
+
+  // Review regression (Torvalds I1): when the caller has already filtered
+  // its inputs to a group's roster, we shouldn't be re-introducing
+  // out-of-roster VPs through the typing tail-pass. The chat store's
+  // `vpsTypingInCurrentConv` is conversation-scoped, not group-scoped,
+  // so UnifyPage filters it before passing to the helper. Pin that the
+  // helper itself respects the filtered inputs and does NOT bring back
+  // typing VPs that aren't in the (filtered) roster.
+  it('TYPING-FILTER: does not surface typing VPs absent from the (group-filtered) roster', () => {
+    const out = buildTimelineRows({
+      vpList: [{ vpId: 'vp-A', displayName: 'A' }],
+      unifyFeatureMeta: {},
+      activeFeatureByVp: {},
+      // Caller (UnifyPage) has already filtered out cross-group VPs by
+      // dropping them from `typingVpIds` before calling the helper —
+      // mirror that pre-filter here. The helper must NOT tail-append
+      // anything that's not in this list.
+      typingVpIds: ['vp-A'],
+      messages: [],
+    });
+    expect(out.map((r) => r.vpId)).toEqual(['vp-A']);
+    expect(out[0].status).toBe('typing');
+  });
 });

@@ -29,7 +29,7 @@ import VpAvatar from './VpAvatar.js';
 export default {
   name: 'VpTimelinePane',
   components: { VpAvatar },
-  emits: ['open-vp-detail'],
+  emits: ['open-vp-detail', 'start-resize'],
   props: {
     rows: { type: Array, required: true },
     nowMs: { type: Number, default: 0 },
@@ -93,12 +93,13 @@ export default {
       </ul>
     </aside>
   `,
-  setup(props, { emit }) {
-    // The resize handle bubbles a `start-resize` event that UnifyPage
-    // wires to its mousedown handler. Keeping the drag bookkeeping in
-    // the parent (matching the .unify-detail pattern at UnifyPage.js:312)
-    // avoids re-implementing localStorage / clamp logic per pane.
-    void emit;
+  setup(props) {
+    // Resize handle bubbles a `start-resize` event that UnifyPage wires
+    // to its mousedown handler. Keeping the drag bookkeeping in the
+    // parent (matching the .unify-detail pattern at UnifyPage.js:312)
+    // avoids re-implementing localStorage / clamp logic per pane. The
+    // template's $emit fires the event directly — we don't need to
+    // destructure `emit` from setup's context here.
 
     const i18nFor = (key) => {
       // Vue 3's globalProperties.$t is available via the component's
