@@ -91,7 +91,7 @@ export default {
             </div>
           </div>
         </Teleport>
-        <button class="header-action-btn" :class="{ 'btn-loading': isRefreshing }" @click="refreshSession" :disabled="!canRefresh || isRefreshing" :title="$t('chatHeader.refresh')" v-if="canRefresh">
+        <button class="header-action-btn" :class="{ 'btn-loading': isRefreshing }" @click="refreshSession" :disabled="!canRefresh || isRefreshing" :title="$t('chatHeader.refresh')">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
           </svg>
@@ -289,8 +289,12 @@ export default {
 
     const canRefresh = Vue.computed(() => {
       if (!effectiveConvId.value) return false;
-      return !store.processingConversations[effectiveConvId.value]
-        && !store.isRefreshingSession(effectiveConvId.value);
+      // task-712: refresh is allowed even while a turn is streaming.
+      // The user wants "刷历史,不动正在 streaming 的 turn" — handled in
+      // refreshSession by skipping the destructive messagesMap blank
+      // when a turn is in flight. Sync results dedup by dbMessageId,
+      // and the streaming partial has none, so it survives the merge.
+      return !store.isRefreshingSession(effectiveConvId.value);
     });
 
     const refreshSession = () => {
@@ -305,7 +309,12 @@ export default {
           agentId: store.currentAgent
         });
       } else {
-        store.messagesMap[effectiveConvId.value] = [];
+        // Mid-turn: keep the in-memory partial so streaming text isn't
+        // wiped. sync_messages_result dedups by dbMessageId (orphans are
+        // reconciled by content). Idle: blank for a clean reload.
+        if (!store.processingConversations[effectiveConvId.value]) {
+          store.messagesMap[effectiveConvId.value] = [];
+        }
         store.sendWsMessage({
           type: 'sync_messages',
           conversationId: effectiveConvId.value,
