@@ -140,6 +140,30 @@ describe('MessageList aggregator — every VP turn keeps its avatar (no collapse
     expect(src).toContain('typingIdsForPlaceholder');
     expect(src).toContain("id: 'turn_typing_'");
   });
+
+  // task-vp-header-pos: the speaker latch must run for ANY message that
+  // carries routing context, not just `type==='assistant'`. A turn that
+  // opens with a tool_call (no preceding text_delta) used to be left
+  // with `speakerVpId === null` → the placeholder synthesis pushed an
+  // EXTRA turn AFTER the tool-bearing turn (avatar below tools), and
+  // when typing-end cleared the placeholder the real turn never had a
+  // header (avatar disappeared).
+  it('factors out a latchSpeakerFromMsg helper used in every branch', () => {
+    expect(src).toContain('const latchSpeakerFromMsg = (msg)');
+  });
+
+  it('calls the latch in the assistant, tool-use, and chat-image branches', () => {
+    // Three call sites guarantee a turn that opens with any of the
+    // three kinds of message still gets its speakerVpId latched.
+    const calls = src.match(/latchSpeakerFromMsg\(msg\)/g) || [];
+    expect(calls.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('latch falls back to msg.vpId when speakerVpId is missing', () => {
+    // Stored tool-use messages may carry only `vpId` (the routing tag),
+    // not `speakerVpId` — the latch must still resolve to the VP.
+    expect(src).toMatch(/msg\.speakerVpId\s*\|\|\s*msg\.vpId/);
+  });
 });
 
 describe('CSS — typing badge styles + obsolete rules pruned', () => {

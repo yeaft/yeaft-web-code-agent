@@ -199,7 +199,7 @@ describe('addMessageToConversation: speakerVpId on creation', () => {
     expect(msgs[0].speakerVpId).toBe('vp-jobs');
   });
 
-  it('does NOT stamp speakerVpId on user messages (only on assistant)', () => {
+  it('does NOT stamp speakerVpId on user messages (only on assistant / tool-use)', () => {
     const store = mkStore({ _currentUnifyVpId: 'vp-jobs' });
     addMessageToConversation(store, 'conv-1', { type: 'user', content: 'hi' });
     const msgs = store.messagesMap['conv-1'];
@@ -209,5 +209,27 @@ describe('addMessageToConversation: speakerVpId on creation', () => {
     // vpId itself IS stamped on every Unify message — it's the
     // routing/turn-context tag, not the speaker tag.
     expect(msgs[0].vpId).toBe('vp-jobs');
+  });
+
+  // task-vp-header-pos regression: when a VP's reply opens with a tool_call
+  // (no preceding text_delta), the FIRST message in the turn is a tool-use.
+  // If this message lacks speakerVpId on persist, reload-from-history will
+  // render the tool block with no avatar above it. Keep speakerVpId in sync
+  // with assistant messages so the turn header always has data to latch.
+  it('stamps speakerVpId on a brand-new tool-use message in unify mode', () => {
+    const store = mkStore({
+      _currentUnifyVpId: 'vp-jobs',
+      _currentUnifyTurnId: 'turn-A',
+    });
+    addMessageToConversation(store, 'conv-1', {
+      type: 'tool-use',
+      toolName: 'Bash',
+      toolInput: { command: 'ls' },
+    });
+    const msgs = store.messagesMap['conv-1'];
+    expect(msgs[0].type).toBe('tool-use');
+    expect(msgs[0].vpId).toBe('vp-jobs');
+    expect(msgs[0].speakerVpId).toBe('vp-jobs');
+    expect(msgs[0].turnId).toBe('turn-A');
   });
 });
