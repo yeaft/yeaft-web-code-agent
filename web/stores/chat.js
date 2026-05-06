@@ -1200,9 +1200,17 @@ export const useChatStore = defineStore('chat', {
             anchorOrder,
             updatedAt: Date.now(),
             groupId: msg.groupId || null,
+            // PR-4: parent feature inheritance. Stamped by the sub-agent
+            // runner (see agent/unify/sub-agent/runner.js wrapEvt) when
+            // the parent VP is mid-feature. Latch-once: see below.
+            featureId: null,
           };
 
           if (payload.agentName && !next.agentName) next.agentName = payload.agentName;
+          // PR-4: latch featureId on first sighting; once set, never
+          // overwrite — keeps fold-by-featureId stable across later
+          // events (e.g. closing status) that may not carry it.
+          next.featureId = next.featureId || payload.featureId || null;
 
           switch (payload.type) {
             case 'sub_agent_status':

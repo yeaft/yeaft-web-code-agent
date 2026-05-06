@@ -22,14 +22,22 @@
  *           recomputed on real state change.
  *
  * Emits:
- *   open-vp-detail (vpId) — single click or Enter / Space on a row.
+ *   open-vp-detail (vpId)  — single click or Enter / Space on a row.
+ *   start-resize  (event)  — mousedown on the resize handle; UnifyPage
+ *                            owns the drag bookkeeping (matches the
+ *                            .unify-detail pattern).
+ *   cancel-vp-turn (vpId)  — PR-4: user clicked the row's abort button.
+ *                            Parent reverse-looks-up the most recently
+ *                            started turnId for that VP via
+ *                            `store.activeVpTurns` and calls
+ *                            `store.cancelVpTurn(turnId)`.
  */
 import VpAvatar from './VpAvatar.js';
 
 export default {
   name: 'VpTimelinePane',
   components: { VpAvatar },
-  emits: ['open-vp-detail', 'start-resize'],
+  emits: ['open-vp-detail', 'start-resize', 'cancel-vp-turn'],
   props: {
     rows: { type: Array, required: true },
     nowMs: { type: Number, default: 0 },
@@ -89,6 +97,27 @@ export default {
               {{ row.lastSnippet }}
             </div>
           </div>
+          <!--
+            PR-4: per-row abort. Visible whenever the VP is still doing
+            something (in-feature / streaming / typing). Idle rows have
+            nothing to abort. role="button" + .stop modifiers keep the
+            click from bubbling up to the row's drill-into-detail handler.
+          -->
+          <span
+            v-if="row.status !== 'idle'"
+            class="unify-vp-timeline-abort"
+            role="button"
+            tabindex="0"
+            :aria-label="$t('unify.vpTimeline.abort')"
+            :title="$t('unify.vpTimeline.abort')"
+            @click.stop="$emit('cancel-vp-turn', row.vpId)"
+            @keydown.enter.stop.prevent="$emit('cancel-vp-turn', row.vpId)"
+            @keydown.space.stop.prevent="$emit('cancel-vp-turn', row.vpId)"
+          >
+            <svg width="10" height="10" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>
+            </svg>
+          </span>
         </li>
       </ul>
     </aside>

@@ -131,7 +131,9 @@ export default {
               v-else-if="item.type === 'feature-pill'"
               :feature-id="item.featureId"
               :turns="item.turns"
+              :sub-agent-cards="subAgentCardsForFeature(item.featureId)"
               @open-vp-detail="onOpenVpDetail"
+              @cancel-feature="onCancelFeature"
             />
 
             <!-- Assistant Turn card: aggregated rendering -->
@@ -848,12 +850,19 @@ export default {
     });
 
     // PR-M3: sub-agent cards anchored the same way reflection cards are.
+    // PR-4: cards whose `featureId` is set are routed to the matching
+    // FeaturePill instead of the anchor row, so the parent feature visually
+    // owns its helpers. The featureId is latched onto the card by the
+    // chat-store sub_agent_event handler from `payload.featureId`, which
+    // the agent-side `runner.js` stamps using the parent engine's
+    // `getCurrentFeatureId` accessor (see agent/unify/engine.js + sub-agent
+    // runner). Cards without a featureId fall back to anchor-based render.
     const subAgentCardsByAnchor = Vue.computed(() => {
       const map = store.unifySubAgentCards || {};
       const convId = store.unifyConversationId;
       const out = { __orphans: [] };
       const sorted = Object.values(map)
-        .filter((c) => c && c.conversationId === convId)
+        .filter((c) => c && c.conversationId === convId && !c.featureId)
         .sort((a, b) => (a.anchorOrder || 0) - (b.anchorOrder || 0)
           || (a.updatedAt || 0) - (b.updatedAt || 0));
       const knownIds = new Set();
@@ -880,6 +889,31 @@ export default {
       const map = subAgentCardsByAnchor.value || {};
       return map.__orphans || [];
     });
+
+    // PR-4: sub-agent cards grouped by featureId, so a FeaturePill can
+    // render the helpers it spawned inside its expanded body. Sorted by
+    // updatedAt so a card that arrived first stays first; ties break on
+    // agentId for determinism.
+    const subAgentCardsByFeatureId = Vue.computed(() => {
+      const map = store.unifySubAgentCards || {};
+      const convId = store.unifyConversationId;
+      const out = {};
+      for (const card of Object.values(map)) {
+        if (!card || card.conversationId !== convId) continue;
+        if (!card.featureId) continue;
+        if (!out[card.featureId]) out[card.featureId] = [];
+        out[card.featureId].push(card);
+      }
+      for (const fid of Object.keys(out)) {
+        out[fid].sort((a, b) => (a.updatedAt || 0) - (b.updatedAt || 0)
+          || String(a.agentId).localeCompare(String(b.agentId)));
+      }
+      return out;
+    });
+    const subAgentCardsForFeature = (featureId) => {
+      if (!featureId) return [];
+      return (subAgentCardsByFeatureId.value || {})[featureId] || [];
+    };
 
     // Track if user is at bottom (within threshold)
     const isAtBottom = Vue.ref(true);
@@ -1316,6 +1350,20 @@ export default {
       store.enterVpDetailView(vpId);
     };
 
+    // PR-4: per-feature abort. The pill emits a featureId; we resolve the
+    // owning turnId via `unifyFeatureMeta` (set on `feature_started`) and
+    // delegate to the existing `cancelVpTurn` action. There is no separate
+    // "abort feature only" wire — feature == owning turn from the user's
+    // POV. The agent's catch path emits `feature_completed{status:'aborted'}`
+    // automatically when the abort lands (web-bridge.js abort branch).
+    const onCancelFeature = (featureId) => {
+      if (!featureId) return;
+      const meta = store.unifyFeatureMeta?.[featureId];
+      const turnId = meta?.turnId;
+      if (!turnId) return;
+      store.cancelVpTurn(turnId);
+    };
+
     // PR-2: a quick-preview is "superseded" when the feature-arc has fired
     // a `feature_started` event for the same vpId/turnId — that means
     // Track A's preview was the gist of a feature ramp-up rather than the
@@ -1375,6 +1423,8 @@ export default {
       // task-334j
       onFeatureMessageReply,
       onOpenVpDetail,
+      // PR-4: per-feature abort
+      onCancelFeature,
       // PR-2 (feature-pill double-track)
       isQuickPreviewSuperseded,
       onlineAgents,
@@ -1383,6 +1433,8 @@ export default {
       orphanCards,
       subAgentCardsForRow,
       orphanSubAgentCards,
+      // PR-4: sub-agent cards folded into the matching FeaturePill
+      subAgentCardsForFeature,
       // group editor wiring
       activeGroupIdForBar,
       onOpenGroupSettings,

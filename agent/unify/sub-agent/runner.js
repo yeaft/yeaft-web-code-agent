@@ -181,6 +181,25 @@ export function startSubAgent(agent, deps = {}) {
  */
 async function driveSubAgent(agent, subEngine, vpPersona, deps) {
   const onEvent = typeof deps.onEvent === 'function' ? deps.onEvent : null;
+  // PR-4: lazy parent-feature lookup. The parent's web-bridge installs
+  // an accessor on its engine right after creating the per-turn arc;
+  // that accessor flows here as `deps.getCurrentFeatureId`. We read it
+  // at every emit (NOT once at spawn-time) so a feature that opens AFTER
+  // the sub-agent starts still tags later events. Returns null when the
+  // parent is not in a feature run, in which case we leave `featureId`
+  // unset on the forwarded event (NOT explicitly null) so the frontend
+  // sub-agent card renders in its anchor-based fallback position.
+  const getParentFeatureId = (typeof deps.getCurrentFeatureId === 'function')
+    ? deps.getCurrentFeatureId
+    : null;
+  const wrapEvt = (evt) => {
+    const base = { ...evt, agentId: agent.id, agentName: agent.name };
+    if (!getParentFeatureId) return base;
+    let fid = null;
+    try { fid = getParentFeatureId(); } catch { fid = null; }
+    if (fid && !base.featureId) base.featureId = fid;
+    return base;
+  };
 
   // Helper: append a user message and either start or resume.
   const dequeueNextUserPrompt = () => {
@@ -197,7 +216,7 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
 
   agent.status = 'running';
   if (onEvent) {
-    try { onEvent(agent.id, { type: 'sub_agent_status', agentId: agent.id, agentName: agent.name, status: 'running' }); } catch { /* ignore */ }
+    try { onEvent(agent.id, wrapEvt({ type: 'sub_agent_status', status: 'running' })); } catch { /* ignore */ }
   }
 
   while (agent.status !== 'closed' && agent.status !== 'completed' && agent.status !== 'failed') {
@@ -206,7 +225,7 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
       // Nothing to do — go idle and wait for SendMessage / CloseAgent.
       agent.status = 'idle';
       if (onEvent) {
-        try { onEvent(agent.id, { type: 'sub_agent_status', agentId: agent.id, status: 'idle' }); } catch { /* ignore */ }
+        try { onEvent(agent.id, wrapEvt({ type: 'sub_agent_status', status: 'idle' })); } catch { /* ignore */ }
       }
       await waitUntilResumed(agent);
       // Either we have a new prompt now (back to running) or status is closed.
@@ -231,7 +250,7 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
         // the agent identity attached. Frontend renders these inside
         // the sub-agent's collapsed card.
         if (onEvent) {
-          try { onEvent(agent.id, { ...evt, agentId: agent.id, agentName: agent.name }); } catch { /* ignore listener errors */ }
+          try { onEvent(agent.id, wrapEvt(evt)); } catch { /* ignore listener errors */ }
         }
         if (evt && evt.type === 'text_delta' && typeof evt.text === 'string') {
           assistantText += evt.text;
@@ -250,7 +269,7 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
       agent.error = err && err.message ? err.message : String(err);
       agent.diagnostics.push({ type: 'query_error', error: agent.error, at: Date.now() });
       if (onEvent) {
-        try { onEvent(agent.id, { type: 'sub_agent_status', agentId: agent.id, status: 'failed', error: agent.error }); } catch { /* ignore */ }
+        try { onEvent(agent.id, wrapEvt({ type: 'sub_agent_status', status: 'failed', error: agent.error })); } catch { /* ignore */ }
       }
       return;
     }
@@ -262,7 +281,7 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
       agent.error = streamError;
       agent.diagnostics.push({ type: 'stream_error', error: streamError, at: Date.now() });
       if (onEvent) {
-        try { onEvent(agent.id, { type: 'sub_agent_status', agentId: agent.id, status: 'failed', error: streamError }); } catch { /* ignore */ }
+        try { onEvent(agent.id, wrapEvt({ type: 'sub_agent_status', status: 'failed', error: streamError })); } catch { /* ignore */ }
       }
       return;
     }
@@ -281,7 +300,7 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
       agent.status = 'failed';
       agent.error = agent.error || 'sub-agent stream ended without end_turn';
       if (onEvent) {
-        try { onEvent(agent.id, { type: 'sub_agent_status', agentId: agent.id, status: 'failed', error: agent.error }); } catch { /* ignore */ }
+        try { onEvent(agent.id, wrapEvt({ type: 'sub_agent_status', status: 'failed', error: agent.error })); } catch { /* ignore */ }
       }
       return;
     }
@@ -291,7 +310,7 @@ async function driveSubAgent(agent, subEngine, vpPersona, deps) {
     // by SendMessage, run the next; else go idle.
     agent.result = assistantText;
     if (onEvent) {
-      try { onEvent(agent.id, { type: 'sub_agent_turn_end', agentId: agent.id, agentName: agent.name, content: assistantText }); } catch { /* ignore */ }
+      try { onEvent(agent.id, wrapEvt({ type: 'sub_agent_turn_end', content: assistantText })); } catch { /* ignore */ }
     }
   }
 }

@@ -1615,6 +1615,13 @@ async function runVpTurn({ prompt, groupId, vpId, turnId, envelope: inboundEnvel
       const assistantTextParts = [];
       const toolCallsAccum = [];
       const toolResultsAccum = [];
+      // PR-4 (review fix): hoist `vpEngine` so the `finally` can clear
+      // the per-turn featureId accessor on the SAME engine instance
+      // we installed it on — even if the VP was kicked or its group
+      // deleted mid-turn (both code paths call `vpEngines.delete(...)`).
+      // Calling `getOrCreateVpEngine` again from `finally` would
+      // resurrect a zombie engine for a VP that no longer exists.
+      let vpEngine = null;
 
       // task-707: per-VP engine + persistent group coord. The coord is
       // created in handleUnifyGroupChat via getOrCreateGroupContext and
@@ -1686,6 +1693,19 @@ async function runVpTurn({ prompt, groupId, vpId, turnId, envelope: inboundEnvel
       // ready; the main engine loop must not be held back waiting for it.
       arc.startTrackA();
 
+      // PR-4: let sub-agents spawned during this turn inherit the
+      // parent's active featureId. Read lazily inside the engine's
+      // parentEngineDeps so a feature that opens AFTER a sub-agent
+      // spawns still tags the sub-agent's later events. Cleared in the
+      // `finally` below so a stale `arc` reference doesn't leak into
+      // the next turn.
+      vpEngine = getOrCreateVpEngine(groupId, vpId);
+      if (typeof vpEngine.setCurrentFeatureIdAccessor === 'function') {
+        vpEngine.setCurrentFeatureIdAccessor(() => {
+          try { return arc?.getFeatureId?.() || null; } catch { return null; }
+        });
+      }
+
       const handlerCtx = {
         assistantTextParts,
         toolCallsAccum,
@@ -1705,7 +1725,6 @@ async function runVpTurn({ prompt, groupId, vpId, turnId, envelope: inboundEnvel
       const trimmedMessages = trimSnapshotForBudget(baseSnapshot, {
         messageTokenBudget: session?.config?.messageTokenBudget,
       });
-      const vpEngine = getOrCreateVpEngine(groupId, vpId);
       for await (const event of vpEngine.query({
         prompt,
         messages: trimmedMessages,
@@ -1743,6 +1762,18 @@ async function runVpTurn({ prompt, groupId, vpId, turnId, envelope: inboundEnvel
       }, envelope);
     } finally {
       if (queryTimer) clearTimeout(queryTimer);
+      // PR-4 (review fix): clear the accessor on the SAME engine
+      // instance we installed it on. Reusing the captured reference
+      // (instead of calling getOrCreateVpEngine again) avoids
+      // resurrecting a zombie engine if the VP/group was torn down
+      // mid-turn. `vpEngine` is null only when the install path threw
+      // before the engine lookup (very early failure) — in that case
+      // there's nothing to clear.
+      try {
+        if (vpEngine && typeof vpEngine.setCurrentFeatureIdAccessor === 'function') {
+          vpEngine.setCurrentFeatureIdAccessor(null);
+        }
+      } catch { /* best-effort */ }
     }
   } catch (err) {
     const isAbort = err && (err.name === 'AbortError' || err.name === 'LLMAbortError');

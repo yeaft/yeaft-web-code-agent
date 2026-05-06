@@ -1195,6 +1195,8 @@ export default {
   // PR-2 (feature-pill double-track): FeaturePill + QuickPreview surfaces.
   'unify.featurePill.label': '功能',
   'unify.featurePill.summaryLabel': '总结：',
+  // PR-4：功能任务运行中的"中止"操作（pill 头部的小方块按钮）。
+  'unify.featurePill.abort': '中止此功能',
   'unify.quickPreview.superseded.label': '已升级为功能',
   'unify.quickPreview.superseded.title': '该快速回应已扩展为下方完整的功能任务。',
 
@@ -1211,4 +1213,6 @@ export default {
   'unify.vpTimeline.trigger.quick': '快速',
   'unify.vpTimeline.trigger.turns': '多轮',
   'unify.vpTimeline.trigger.tool': '工具',
+  // PR-4：时间线行的"中止"按钮。
+  'unify.vpTimeline.abort': '中止',
 };

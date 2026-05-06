@@ -220,6 +220,27 @@ export class Engine {
   #subAgentEventSink = null;
 
   /**
+   * PR-4 — current-featureId accessor.
+   *
+   * The feature arc lives in the per-VP web-bridge (`runVpTurn` creates
+   * one per turn) so the engine itself does NOT own the featureId. To
+   * let sub-agents inherit their parent's featureId without coupling the
+   * engine to FeatureArc, the bridge plugs in a thin accessor right
+   * after creating the arc — `engine.setCurrentFeatureIdAccessor(() =>
+   * arc.getFeatureId() || null)`. The engine surfaces the result via
+   * `parentEngineDeps.getCurrentFeatureId` (read lazily at sub-agent
+   * event-emit time, so a feature that opens mid-turn still tags the
+   * sub-agent's later events).
+   *
+   * The accessor is cleared (set to null) by the bridge in the same
+   * `finally` block that clears the per-turn AbortController, so a
+   * stale arc reference can't leak into the next turn.
+   *
+   * @type {(() => (string|null)) | null}
+   */
+  #currentFeatureIdAccessor = null;
+
+  /**
    * task-325a — abort state.
    *
    * The engine exposes a first-class abort surface: `engine.abort(reason)`
@@ -716,6 +737,13 @@ export class Engine {
         parentVpPersona: vpCtx?.vpPersona || null,
         onEvent: this.#subAgentEventSink || null,
         language: this.#config?.language || 'en',
+        // PR-4: lazy accessor so the sub-agent runner can stamp the
+        // parent's active featureId on every forwarded event. Read at
+        // emit-time (NOT at spawn-time) so a feature that opens AFTER
+        // the sub-agent starts still tags later events.
+        getCurrentFeatureId: () => {
+          try { return this.#currentFeatureIdAccessor?.() || null; } catch { return null; }
+        },
       },
     };
   }
@@ -730,6 +758,36 @@ export class Engine {
    */
   setSubAgentEventSink(sink) {
     this.#subAgentEventSink = typeof sink === 'function' ? sink : null;
+  }
+
+  /**
+   * PR-4 — install / clear the per-turn current-featureId accessor.
+   *
+   * Called by `runVpTurn` in web-bridge.js: right after `arc =
+   * createFeatureArc(...)` it passes `() => arc.getFeatureId() || null`,
+   * and clears it (passes null) in the `finally` so a stale arc
+   * reference can't leak into the next turn. The engine reads it
+   * lazily via `parentEngineDeps.getCurrentFeatureId` so sub-agents
+   * inherit whatever featureId is live at the moment they emit.
+   *
+   * Concurrency note: callers are expected to serialize per-VP turns
+   * (web-bridge does — `runVpTurn` runs one turn at a time per VP and
+   * its `finally` clears the accessor before the next turn lands).
+   * If two installs collide (which today would be a bug, not by
+   * design), we warn so it's visible in logs.
+   *
+   * @param {(() => (string|null)) | null} fn
+   */
+  setCurrentFeatureIdAccessor(fn) {
+    const next = typeof fn === 'function' ? fn : null;
+    if (next && this.#currentFeatureIdAccessor) {
+      // Canary: a prior accessor is still installed when we're about
+      // to overwrite it. Today's lifecycle (per-turn install + finally
+      // clear) means this should never fire; if it does, two turns
+      // are racing on the same engine.
+      console.warn('[Engine] setCurrentFeatureIdAccessor: overwriting non-null accessor — concurrent turns on the same VP engine?');
+    }
+    this.#currentFeatureIdAccessor = next;
   }
 
   /**
