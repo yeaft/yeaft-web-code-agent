@@ -45,6 +45,27 @@ describe('featureIdOfTurn', () => {
       .toBeNull();
   });
 
+  it('falls back to item.featureId when assistant-turn has empty messages (typing placeholder)', () => {
+    // PR-2 review fix (Fowler I1): a typing-placeholder turn synthesised
+    // between vp_typing_start and the first delta carries no inner
+    // messages yet, so the helper must read featureId off the item itself
+    // — otherwise the placeholder appears untagged and breaks an
+    // in-flight feature run, snapping the pill shut for the typing gap.
+    expect(featureIdOfTurn({ type: 'assistant-turn', messages: [], featureId: 'feat-Q' }))
+      .toBe('feat-Q');
+  });
+
+  it('prefers an inner message featureId over item.featureId when both exist', () => {
+    // The inner-message latch is the source of truth once delta arrives;
+    // the item-level fallback is only for the empty-placeholder window.
+    const item = {
+      type: 'assistant-turn',
+      featureId: 'feat-stale',
+      messages: [{ featureId: 'feat-fresh' }],
+    };
+    expect(featureIdOfTurn(item)).toBe('feat-fresh');
+  });
+
   it('returns null for a user / system / error / unknown item', () => {
     expect(featureIdOfTurn({ type: 'user' })).toBeNull();
     expect(featureIdOfTurn({ type: 'system' })).toBeNull();
@@ -126,10 +147,29 @@ describe('foldByFeatureId', () => {
     expect(out[2].turns).toEqual([t3]);
   });
 
-  it('produces a stable pill id derived from the featureId', () => {
+  it('produces a stable pill id derived from the featureId AND the first turn id', () => {
+    // PR-2 review fix (C1): pill id includes the first turn id so two
+    // non-contiguous runs sharing a featureId get distinct Vue keys.
     const t = { type: 'assistant-turn', id: 't1', messages: [{ featureId: 'feat-XYZ' }] };
     const out = foldByFeatureId([t]);
-    expect(out[0].id).toBe('feature_feat-XYZ');
+    expect(out[0].id).toBe('feature_feat-XYZ_t1');
+  });
+
+  it('emits DISTINCT pill ids for two non-contiguous runs sharing a featureId (C1)', () => {
+    // Without the firstTurnId disambiguator, both pills would have id
+    // "feature_feat-A" and Vue's keyed reconciliation would reuse the
+    // first instance — leaking userToggled / expand state across runs.
+    const t1 = { type: 'assistant-turn', id: 't1', messages: [{ featureId: 'feat-A' }] };
+    const u  = { type: 'user', id: 'u', message: { content: 'next?' } };
+    const t2 = { type: 'assistant-turn', id: 't2', messages: [{ featureId: 'feat-A' }] };
+    const out = foldByFeatureId([t1, u, t2]);
+    expect(out).toHaveLength(3);
+    expect(out[0].type).toBe('feature-pill');
+    expect(out[2].type).toBe('feature-pill');
+    expect(out[0].id).not.toBe(out[2].id);
+    // Both pills are still tagged with the same featureId — only the key differs.
+    expect(out[0].featureId).toBe('feat-A');
+    expect(out[2].featureId).toBe('feat-A');
   });
 
   it('handles empty / non-array input safely', () => {
@@ -145,6 +185,45 @@ describe('foldByFeatureId', () => {
     expect(out).toHaveLength(1);
     expect(out[0].type).toBe('feature-pill');
     expect(out[0].turns).toEqual([fm, t1]);
+  });
+
+  it('folds same-featureId turns from different VPs into one pill (cross-VP)', () => {
+    // PR-2 review fix (Torvalds M6): the policy is "feature-id is the
+    // unit, not the speaker" — when vp-1 and vp-2 each emit feat-A in
+    // adjacent turns, they fold into a SINGLE pill. This test pins that
+    // policy so a future maintainer doesn't accidentally key the fold on
+    // (vpId, featureId).
+    const t1 = {
+      type: 'assistant-turn', id: 't1',
+      speakerVpId: 'vp-1', messages: [{ featureId: 'feat-A' }],
+    };
+    const t2 = {
+      type: 'assistant-turn', id: 't2',
+      speakerVpId: 'vp-2', messages: [{ featureId: 'feat-A' }],
+    };
+    const out = foldByFeatureId([t1, t2]);
+    expect(out).toHaveLength(1);
+    expect(out[0].type).toBe('feature-pill');
+    expect(out[0].turns).toEqual([t1, t2]);
+  });
+
+  it('does not mutate input items or the input array (M5)', () => {
+    // Helpers must be pure — only the OUTPUT array is fresh. This guards
+    // against a future maintainer reaching for `item.foo = ...` and
+    // breaking the contract silently.
+    const t1 = Object.freeze({
+      type: 'assistant-turn',
+      id: 't1',
+      messages: Object.freeze([Object.freeze({ featureId: 'feat-A' })]),
+    });
+    const u = Object.freeze({ type: 'user', id: 'u', message: Object.freeze({ content: 'x' }) });
+    const items = Object.freeze([t1, u]);
+    expect(() => foldByFeatureId(items)).not.toThrow();
+    // Sanity: result is a fresh array, items inside are the same refs.
+    const out = foldByFeatureId(items);
+    expect(out).not.toBe(items);
+    expect(out[0].turns[0]).toBe(t1);
+    expect(out[1]).toBe(u);
   });
 });
 
@@ -208,6 +287,25 @@ describe('injectQuickPreviews', () => {
   it('handles empty / non-array input safely', () => {
     expect(injectQuickPreviews([], { 'a:b': {} })).toEqual([]);
     expect(injectQuickPreviews(null, { 'a:b': {} })).toEqual([]);
+  });
+
+  it('does not mutate input items or the input arrays (M5)', () => {
+    const t = Object.freeze({
+      type: 'assistant-turn', id: 't1',
+      speakerVpId: 'vp-1', turnId: 'turn-A',
+      messages: Object.freeze([]),
+    });
+    const items = Object.freeze([t]);
+    const previewMap = Object.freeze({
+      'vp-1:turn-A': Object.freeze({
+        vpId: 'vp-1', turnId: 'turn-A', intent: 'quick', preview: 'hi', ts: 1,
+      }),
+    });
+    expect(() => injectQuickPreviews(items, previewMap)).not.toThrow();
+    const out = injectQuickPreviews(items, previewMap);
+    expect(out).not.toBe(items);
+    // The original turn ref is preserved as-is at its new index.
+    expect(out[1]).toBe(t);
   });
 });
 

@@ -41,6 +41,14 @@ export function featureIdOfTurn(item) {
     for (const m of msgs) {
       if (m && m.featureId) return m.featureId;
     }
+    // Fallback: assistant-turn items synthesized BEFORE any inner message
+    // exists (e.g. typing-placeholder turns produced between
+    // `vp_typing_start` and the first delta) carry their featureId on
+    // the item itself. Without this fallback, an empty placeholder would
+    // be untagged and break an otherwise-contiguous feature run, causing
+    // the in-flight pill to flicker shut for the duration of the typing
+    // gap.
+    if (item.featureId) return item.featureId;
     return null;
   }
   return null;
@@ -61,6 +69,21 @@ export function isFoldable(item) {
  * featureId. Items without a featureId — including user / system rows AND
  * untagged assistant turns — pass through unchanged and break the run.
  *
+ * Pill id is `feature_<featureId>_<firstTurnId>` so a featureId that
+ * appears in two non-contiguous runs (e.g. feat-A → user → feat-A again)
+ * produces two pills with DISTINCT Vue keys. Without the suffix, the
+ * `<template v-for :key="item.id">` site would see a key collision and
+ * Vue would reuse the first pill's component instance for the second
+ * position — leaking userToggled / expand state across unrelated runs.
+ *
+ * NOTE: Track-A quick previews are non-foldable and break runs. The
+ * caller is expected to run `injectQuickPreviews` BEFORE `foldByFeatureId`
+ * so previews land outside the resulting pills (above them). The current
+ * pipeline assumes at most one preview anchors inside any given feature
+ * run; if Track-A ever starts emitting per-turn previews, the inject →
+ * fold ordering must be revisited (a single feature run would otherwise
+ * be split into N adjacent one-turn pills).
+ *
  * @param {Array<object>} items
  * @returns {Array<object>}
  */
@@ -71,9 +94,13 @@ export function foldByFeatureId(items) {
   let pendingTurns = null;
   const flushPending = () => {
     if (pendingFeatureId && pendingTurns && pendingTurns.length > 0) {
+      // Disambiguate non-contiguous pills sharing the same featureId.
+      // The first turn's id is stable for the lifetime of that run, so
+      // it pins this pill's Vue key without churning across renders.
+      const firstId = (pendingTurns[0] && pendingTurns[0].id) || 'x';
       out.push({
         type: 'feature-pill',
-        id: 'feature_' + pendingFeatureId,
+        id: 'feature_' + pendingFeatureId + '_' + firstId,
         featureId: pendingFeatureId,
         turns: pendingTurns,
       });

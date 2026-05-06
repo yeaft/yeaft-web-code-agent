@@ -57,7 +57,7 @@ export default {
         <span class="feature-pill-title">{{ pillTitle }}</span>
         <span class="feature-pill-meta">
           <span v-if="triggerLabel" class="feature-pill-trigger">{{ triggerLabel }}</span>
-          <span v-if="messageCount > 0" class="feature-pill-count">{{ messageCount }}</span>
+          <span v-if="turnCount > 0" class="feature-pill-count">{{ turnCount }}</span>
         </span>
         <span class="feature-pill-toggle" aria-hidden="true">{{ expanded ? '▾' : '▸' }}</span>
       </button>
@@ -118,6 +118,10 @@ export default {
 
     const pillTitle = Vue.computed(() => {
       const m = meta.value;
+      // pillTitle falls back to a short featureId slice for visual density
+      // (the badge area is narrow). The full id is preserved in
+      // pillTooltip below so it stays copy/debug-friendly — the divergence
+      // is intentional, not a bug.
       if (!m) return props.featureId.slice(0, 8);
       return (m.title && m.title.trim()) || props.featureId.slice(0, 8);
     });
@@ -150,9 +154,12 @@ export default {
       return parts.join(' · ');
     });
 
-    const messageCount = Vue.computed(() => {
-      // Surface the count of inner turns so the user can see "this pill has
-      // 4 messages folded inside" before deciding to expand.
+    const turnCount = Vue.computed(() => {
+      // Surface the count of folded items (turns + feature-message rows)
+      // inside this pill, NOT the total inner-message count. An
+      // assistant-turn item already aggregates many engine messages
+      // under one bubble; "turns" is the unit the user actually sees,
+      // so the badge speaks in that unit too.
       return Array.isArray(props.turns) ? props.turns.length : 0;
     });
 
@@ -164,7 +171,7 @@ export default {
       triggerLabel,
       summaryText,
       pillTooltip,
-      messageCount,
+      turnCount,
     };
   },
 };

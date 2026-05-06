@@ -754,6 +754,12 @@ export default {
         }
         for (const vpId of typingIdsForPlaceholder) {
           if (streamingVps.has(vpId)) continue;
+          // PR-2 (feature-pill): inherit the active featureId for this VP
+          // onto the placeholder so it doesn't break an in-flight feature
+          // run during the typing gap. featureIdOfTurn reads `item.featureId`
+          // as a fallback when `messages` is empty, so this stamp is enough
+          // — no need to push a sentinel into messages[].
+          const activeFeatureId = (store.unifyActiveFeatureByVp || {})[vpId] || null;
           result.push({
             type: 'assistant-turn',
             id: 'turn_typing_' + vpId,
@@ -771,6 +777,7 @@ export default {
             showSpeakerHeader: true,
             turnId: null,
             handoffHints: [],
+            featureId: activeFeatureId,
           });
         }
       }
