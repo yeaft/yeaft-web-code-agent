@@ -390,8 +390,18 @@ export const useChatStore = defineStore('chat', {
     // ★ Multi-column: compatibility shim — reads activeConversations[0]
     currentConversation: (state) => state.activeConversations[0] || null,
     // ★ Multi-column: compatibility shim — reads messagesMap for primary conversation
+    // task-fix (chat-bleed): when in Unify view, source from unifyConversationId
+    // instead of activeConversations[0]. Chat-mode WS handlers
+    // (conversation_resumed / conversation_selected / agent_list restore /
+    // crew session restore) unconditionally clobber activeConversations
+    // regardless of currentView, which used to leak chat-mode messages into
+    // the open Unify group view. Routing through unifyConversationId here
+    // makes the view itself isolated; the active-conversations writes can
+    // stay in place for when the user returns to chat.
     messages: (state) => {
-      const convId = state.activeConversations[0];
+      const convId = state.currentView === 'unify'
+        ? state.unifyConversationId
+        : state.activeConversations[0];
       const raw = convId ? (state.messagesMap[convId] || EMPTY_ARRAY) : EMPTY_ARRAY;
       // task-fix (group-switch): group filter narrows the stream to one group.
       // Every Unify message is stamped with a groupId at creation time
