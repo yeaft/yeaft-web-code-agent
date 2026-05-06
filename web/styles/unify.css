@@ -2989,3 +2989,143 @@
   text-transform: uppercase;
   letter-spacing: 0.3px;
 }
+
+/* ── PR-3: Right-side VP Timeline pane ────────────────────────────────
+   Sits between .unify-main and .unify-detail in the right column. CSS
+   custom property --unify-vp-timeline-width is set inline by UnifyPage's
+   timelineWidthStyle computed; the resize handle on the left edge drags
+   it. No border-top / border-bottom on any descendant — per project rule
+   "no horizontal dividers in Unify" (CLAUDE.md §Unify UI Design Rules).
+   Spacing comes from padding + gap only. Hidden under 1024 px so the
+   conversation pane keeps the screen on tablets/phones. */
+.unify-vp-timeline {
+  width: var(--unify-vp-timeline-width, 280px);
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-sidebar, var(--bg-secondary, #f7f7f7));
+  flex-shrink: 0;
+  padding: 12px 8px 16px;
+  gap: 4px;
+  overflow-y: auto;
+  position: relative; /* anchor for the absolute resize handle */
+  box-sizing: border-box;
+}
+.unify-vp-timeline-resize-handle {
+  position: absolute;
+  /* Straddle the left edge so the hit-target spans both panes
+     (review fix — Torvalds M9; matches .unify-detail-drag-handle). */
+  left: -3px;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+  background: transparent;
+  z-index: 1;
+}
+.unify-vp-timeline-resize-handle:hover {
+  background: var(--accent-soft, rgba(99, 102, 241, 0.15));
+}
+.unify-vp-timeline-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px 8px;
+}
+.unify-vp-timeline-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted, var(--text-secondary, #888));
+}
+.unify-vp-timeline-count {
+  font-size: 11px;
+  color: var(--text-muted, var(--text-secondary, #888));
+}
+.unify-vp-timeline-empty {
+  color: var(--text-muted, var(--text-secondary, #888));
+  font-size: 12px;
+  padding: 8px;
+}
+.unify-vp-timeline-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.unify-vp-timeline-row {
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+  align-items: start;
+}
+.unify-vp-timeline-row:hover,
+.unify-vp-timeline-row:focus-visible {
+  background: var(--sidebar-hover, var(--surface-1, rgba(0, 0, 0, 0.04)));
+  outline: none;
+}
+.unify-vp-timeline-row-body {
+  min-width: 0; /* let inner ellipsis work inside the 1fr column */
+}
+.unify-vp-timeline-row-name {
+  font-size: 13px;
+  color: var(--text-primary, #1f2937);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.unify-vp-timeline-row-status {
+  font-size: 11px;
+  color: var(--text-secondary, #555);
+  margin-top: 2px;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.unify-vp-timeline-feature-title {
+  color: var(--text-primary, #1f2937);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.unify-vp-timeline-trigger,
+.unify-vp-timeline-elapsed {
+  font-size: 10px;
+  color: var(--text-muted, var(--text-secondary, #888));
+  padding: 1px 6px;
+  background: var(--bg-main, var(--surface-1, rgba(0, 0, 0, 0.05)));
+  border-radius: 4px;
+}
+.unify-vp-timeline-row-snippet {
+  font-size: 11px;
+  color: var(--text-muted, var(--text-secondary, #888));
+  margin-top: 4px;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.unify-vp-timeline-row.is-status-in-feature .unify-vp-timeline-row-name {
+  color: var(--accent, #6366f1);
+}
+
+@media (max-width: 1024px) {
+  /* Pane disappears at the same breakpoint .unify-detail does so the
+     conversation pane keeps the right-column real estate. */
+  .unify-vp-timeline {
+    display: none;
+  }
+}

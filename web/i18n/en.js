@@ -1197,4 +1197,18 @@ export default {
   'unify.featurePill.summaryLabel': 'Summary:',
   'unify.quickPreview.superseded.label': 'now a feature',
   'unify.quickPreview.superseded.title': 'This quick preview is being expanded into a full feature run below.',
+
+  // PR-3 (feature-pill double-track): right-side VP Timeline pane.
+  'unify.vpTimeline.aria': 'VP timeline',
+  'unify.vpTimeline.title': 'VPs',
+  'unify.vpTimeline.empty': 'No VPs in this conversation yet.',
+  'unify.vpTimeline.untitledFeature': '(untitled feature)',
+  'unify.vpTimeline.resizeTitle': 'Drag to resize',
+  'unify.vpTimeline.status.idle': 'idle',
+  'unify.vpTimeline.status.typing': 'typing…',
+  'unify.vpTimeline.status.streaming': 'streaming',
+  'unify.vpTimeline.status.inFeature': 'in feature',
+  'unify.vpTimeline.trigger.quick': 'quick',
+  'unify.vpTimeline.trigger.turns': 'multi-turn',
+  'unify.vpTimeline.trigger.tool': 'tool',
 };
