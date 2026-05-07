@@ -67,6 +67,43 @@ export function truncateSnippet(text, max) {
 }
 
 /**
+ * Project a group's roster (array of vpIds) into the ordered
+ * { vpId, displayName, ... } list that `buildTimelineRows` expects.
+ *
+ * The middle "VP 列表" column is roster-scoped — it must show ONLY
+ * the active group's declared members, in roster order, hydrated
+ * from the global VP library for display fields. A roster id missing
+ * from the library is silently skipped (rare race when a roster
+ * delta lands before vp_snapshot has hydrated the new VP).
+ *
+ * @param {string[]|null|undefined} roster   array of vpIds for the group
+ * @param {Array<{vpId:string,displayName?:string,displayNameZh?:string}>|null|undefined} library
+ *     full VP library, e.g. vpStore.vpList
+ * @returns {Array<object>}  filtered + roster-ordered VPs
+ */
+export function selectGroupRosterVpList(roster, library) {
+  if (!Array.isArray(roster) || roster.length === 0) return [];
+  if (!Array.isArray(library) || library.length === 0) return [];
+  const byId = new Map();
+  for (const vp of library) {
+    if (vp && vp.vpId) byId.set(vp.vpId, vp);
+  }
+  // De-duplicate roster ids — a malformed agent payload or a UI race
+  // that double-adds the same VP must not produce duplicate rows
+  // (Vue v-for keying would warn or recycle DOM weirdly).
+  const seen = new Set();
+  const out = [];
+  for (const id of roster) {
+    if (seen.has(id)) continue;
+    const vp = byId.get(id);
+    if (!vp) continue;
+    seen.add(id);
+    out.push(vp);
+  }
+  return out;
+}
+
+/**
  * Walk messages right-to-left and collect, for each vpId that has at
  * least one assistant message, the most-recent { text, ts } pair.
  * Single-pass O(N); short-circuit is unnecessary because the helper is
