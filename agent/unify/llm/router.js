@@ -17,6 +17,7 @@
 
 import { LLMAdapter } from './adapter.js';
 import { getThinkingCapability, normalizeEffort } from '../models.js';
+import { pairSanitize, hasOrphanPairs } from '../pair-sanitize.js';
 
 /**
  * task-327a: feature-flag accessor. Read lazily so tests can flip.
@@ -56,6 +57,47 @@ export function filterEffortForModel(params) {
     return rest;
   }
   return { ...params, effort: norm };
+}
+
+/**
+ * task-715: last-line-of-defense pair sanitize at the wire.
+ *
+ * `pairSanitize` already runs in two upstream paths
+ * (`conversation/persist.js#loadRecentByGroup` and
+ * `history-compact.js#compactHistory`), but the engine's main loop
+ * mutates `conversationMessages` AFTER those — appending tool results
+ * mid-loop, archiving bulky tool results into stubs, and (in failure
+ * paths) potentially leaving an assistant `tool_use` whose matching
+ * `role:'tool'` was dropped or never produced. Anthropic's Messages
+ * API rejects either shape with HTTP 400 ("Each tool_use block must
+ * have a corresponding tool_result block in the next message").
+ *
+ * The router is the SINGLE choke point through which every
+ * adapter.stream() / adapter.call() flows. Sanitizing here means no
+ * caller can accidentally bypass the guard — including the per-VP
+ * group-mode path that surfaced the bug. The transform is idempotent
+ * and a pure no-op when the input is already well-formed, so the cost
+ * on the happy path is one O(n) walk over the messages array.
+ *
+ * Returns a fresh params object with `messages` replaced if any orphan
+ * was dropped; otherwise returns `params` unchanged.
+ *
+ * @param {object} params
+ * @returns {object}
+ */
+export function sanitizeMessagesForWire(params) {
+  if (!params || !Array.isArray(params.messages)) return params;
+  if (!hasOrphanPairs(params.messages)) return params;
+  const cleaned = pairSanitize(params.messages);
+  // Diagnostic — visible in agent logs so a recurrence is traceable.
+  // Best-effort console.warn; never throws.
+  try {
+    console.warn(
+      `[router] dropped tool_use/tool_result orphans before wire send: ` +
+      `${params.messages.length} → ${cleaned.length} messages`
+    );
+  } catch { /* ignore */ }
+  return { ...params, messages: cleaned };
 }
 
 /**
@@ -178,8 +220,9 @@ export class AdapterRouter extends LLMAdapter {
    */
   async *stream(params) {
     const filtered = filterEffortForModel(params);
-    const adapter = await this.#resolveAdapter(filtered.model);
-    yield* adapter.stream(filtered);
+    const sanitized = sanitizeMessagesForWire(filtered);
+    const adapter = await this.#resolveAdapter(sanitized.model);
+    yield* adapter.stream(sanitized);
   }
 
   /**
@@ -190,8 +233,9 @@ export class AdapterRouter extends LLMAdapter {
    */
   async call(params) {
     const filtered = filterEffortForModel(params);
-    const adapter = await this.#resolveAdapter(filtered.model);
-    return adapter.call(filtered);
+    const sanitized = sanitizeMessagesForWire(filtered);
+    const adapter = await this.#resolveAdapter(sanitized.model);
+    return adapter.call(sanitized);
   }
 
   /**
