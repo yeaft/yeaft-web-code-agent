@@ -19,6 +19,7 @@ import {
   lastAssistantInfoByVp,
   truncateSnippet,
   statusFor,
+  selectGroupRosterVpList,
 } from '../../../../web/stores/helpers/vp-timeline.js';
 
 describe('truncateSnippet', () => {
@@ -356,5 +357,73 @@ describe('buildTimelineRows', () => {
     });
     expect(out.map((r) => r.vpId)).toEqual(['vp-A']);
     expect(out[0].status).toBe('typing');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────
+// selectGroupRosterVpList — the projection the middle "VP 列表"
+// column uses to scope its base list to the active group's roster.
+// Bug fix: previously the column read the full vpStore.vpList and
+// only narrowed by message activity, so a 4-member group on a 12-VP
+// library showed all 12. The contract pinned here:
+//   - roster=[]              → []
+//   - roster non-empty + lib hits → roster-ordered, library-hydrated
+//   - roster id missing in lib → silently skipped (race tolerance)
+//   - lib=[] / null inputs → []
+// ─────────────────────────────────────────────────────────────────
+describe('selectGroupRosterVpList', () => {
+  const LIBRARY = [
+    { vpId: 'ada', displayName: 'Ada Lovelace' },
+    { vpId: 'alan', displayName: 'Alan Kay' },
+    { vpId: 'alice', displayName: 'Alice Security' },
+    { vpId: 'rams', displayName: 'Dieter Rams' },
+    { vpId: 'grace', displayName: 'Grace Hopper' },
+    { vpId: 'ken', displayName: 'Ken Thompson' },
+    { vpId: 'linus', displayName: 'Linus Torvalds' },
+    { vpId: 'maggie', displayName: 'Margaret Hamilton' },
+    { vpId: 'martin', displayName: 'Martin Fowler' },
+    { vpId: 'don', displayName: 'Don Norman' },
+    { vpId: 'shannon', displayName: 'Shannon' },
+    { vpId: 'jobs', displayName: 'Steve Jobs' },
+  ];
+
+  it('returns only the roster members from a 12-VP library (the bug under test)', () => {
+    const roster = ['ada', 'linus', 'martin', 'jobs'];
+    const out = selectGroupRosterVpList(roster, LIBRARY);
+    expect(out.map((v) => v.vpId)).toEqual(['ada', 'linus', 'martin', 'jobs']);
+    // Display fields hydrated from library, not invented:
+    expect(out[0].displayName).toBe('Ada Lovelace');
+  });
+
+  it('preserves roster order even when library is in different order', () => {
+    const roster = ['jobs', 'ada', 'martin', 'linus'];
+    const out = selectGroupRosterVpList(roster, LIBRARY);
+    expect(out.map((v) => v.vpId)).toEqual(['jobs', 'ada', 'martin', 'linus']);
+  });
+
+  it('returns [] for empty roster', () => {
+    expect(selectGroupRosterVpList([], LIBRARY)).toEqual([]);
+  });
+
+  it('returns [] for null/undefined roster', () => {
+    expect(selectGroupRosterVpList(null, LIBRARY)).toEqual([]);
+    expect(selectGroupRosterVpList(undefined, LIBRARY)).toEqual([]);
+  });
+
+  it('returns [] for empty/null library', () => {
+    expect(selectGroupRosterVpList(['ada'], [])).toEqual([]);
+    expect(selectGroupRosterVpList(['ada'], null)).toEqual([]);
+  });
+
+  it('silently skips roster ids not yet in the library (race tolerance)', () => {
+    const roster = ['ada', 'unknown-yet', 'linus'];
+    const out = selectGroupRosterVpList(roster, LIBRARY);
+    expect(out.map((v) => v.vpId)).toEqual(['ada', 'linus']);
+  });
+
+  it('tolerates malformed library entries', () => {
+    const lib = [null, { vpId: 'ada' }, undefined, { displayName: 'noid' }, { vpId: 'linus' }];
+    const out = selectGroupRosterVpList(['ada', 'linus'], lib);
+    expect(out.map((v) => v.vpId)).toEqual(['ada', 'linus']);
   });
 });

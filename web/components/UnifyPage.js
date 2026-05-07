@@ -11,7 +11,7 @@ import UnifyDebugPanel from './UnifyDebugPanel.js';
 import VpTimelinePane from './VpTimelinePane.js';
 import VpTurnDetailDrawer from './VpTurnDetailDrawer.js';
 import { parseMentions } from '../utils/parseMentions.js';
-import { buildTimelineRows } from '../stores/helpers/vp-timeline.js';
+import { buildTimelineRows, selectGroupRosterVpList } from '../stores/helpers/vp-timeline.js';
 
 export default {
   name: 'UnifyPage',
@@ -783,54 +783,46 @@ export default {
       const convId = store.unifyConversationId;
       if (!convId) return [];
       const raw = store.messagesMap[convId] || [];
-      const filter = store.unifyActiveGroupFilter || null;
-      const messages = filter
-        ? raw.filter((m) => m && m.groupId === filter)
-        : raw;
 
-      // Roster source: vpStore.vpList holds {vpId, displayName, ...}.
-      // When a group filter is active, narrow to the VPs that have at
-      // least one message in this slice OR are pointed at by the active
-      // pointer for that group; otherwise everyone in the roster
-      // surfaces. The filter logic mirrors `unifyVisibleMessages` so
-      // there's no drift between the message stream and the timeline.
+      // Active group resolution: an explicit conversation-pane filter
+      // wins; otherwise fall back to the groups store's selected group.
+      // The VP timeline is ALWAYS roster-scoped — no group means no
+      // rows. This matches the user's mental model: the middle column
+      // is "this group's roster", not "every VP in the library".
+      const gs = groupsStore();
+      const filter =
+        store.unifyActiveGroupFilter ||
+        (gs ? gs.activeGroupId : null) ||
+        null;
+      if (!filter) return [];
+
+      const group = gs && gs.groups ? gs.groups[filter] : null;
+      const roster = (group && Array.isArray(group.roster)) ? group.roster : [];
+      if (roster.length === 0) return [];
+      const rosterSet = new Set(roster);
+
+      const messages = raw.filter((m) => m && m.groupId === filter);
+
+      // Base list = the group's declared roster, ordered by the roster
+      // array. Hydrate display data from vpStore (which holds
+      // {displayName, ...}); silently skip any roster entry the
+      // library hasn't seen yet (rare race when a roster delta lands
+      // before vp_snapshot has hydrated the new VP).
+      const vpList = selectGroupRosterVpList(roster, vpStore.vpList || []);
+
+      // Cross-group leak defense: even within a single conversation,
+      // typing/active-feature signals can carry VPs from other groups.
+      // Constrain everything to the active group's roster.
       const allMeta = store.unifyFeatureMeta || {};
       const allActive = store.unifyActiveFeatureByVp || {};
       const allTyping = store.vpsTypingInCurrentConv || [];
-
-      let vpList = vpStore.vpList || [];
-      let typingVpIds = allTyping;
-      let activeFeatureByVp = allActive;
-
-      if (filter) {
-        const present = new Set();
-        for (const m of messages) {
-          const id = m && (m.speakerVpId || m.vpId);
-          if (id) present.add(id);
-        }
-        // Also include VPs whose active pointer references a feature
-        // belonging to this group, so an in-feature row doesn't vanish
-        // before its first message lands.
-        for (const vpId of Object.keys(allActive)) {
-          const fid = allActive[vpId];
-          const fm = fid ? allMeta[fid] : null;
-          if (fm && fm.groupId === filter) present.add(vpId);
-        }
-        vpList = vpList.filter((vp) => vp && present.has(vp.vpId));
-        // Review fix (Torvalds I1 / Fowler F2): `typingVpIds` and the
-        // helper's tail-append loop would otherwise re-introduce VPs
-        // typing in OTHER groups of the same conversation. Filter the
-        // signals down to the group-scoped roster set so the timeline
-        // can't leak cross-group rows.
-        typingVpIds = allTyping.filter((id) => present.has(id));
-        // Same defense for the active pointer map: only keep entries
-        // whose feature meta belongs to this group.
-        activeFeatureByVp = {};
-        for (const vpId of Object.keys(allActive)) {
-          const fid = allActive[vpId];
-          const fm = fid ? allMeta[fid] : null;
-          if (fm && fm.groupId === filter) activeFeatureByVp[vpId] = fid;
-        }
+      const typingVpIds = allTyping.filter((id) => rosterSet.has(id));
+      const activeFeatureByVp = {};
+      for (const vpId of Object.keys(allActive)) {
+        if (!rosterSet.has(vpId)) continue;
+        const fid = allActive[vpId];
+        const fm = fid ? allMeta[fid] : null;
+        if (fm && fm.groupId === filter) activeFeatureByVp[vpId] = fid;
       }
 
       return buildTimelineRows({
