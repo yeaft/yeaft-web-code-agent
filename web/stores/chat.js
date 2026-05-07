@@ -744,14 +744,22 @@ export const useChatStore = defineStore('chat', {
      *                               isImage?:boolean,mimeType?:string}>}} payload
      */
     sendUnifyGroupChat({ groupId, text, mentions, attachments }) {
-      if (!groupId || !text?.trim() || !this.unifyAgentId) return;
+      if (!groupId || !this.unifyAgentId) return;
       const safeAttachments = Array.isArray(attachments)
         ? attachments.filter((a) => a && a.fileId)
         : [];
+      // PR #721: image-only send guard. The previous early-return on
+      // `!text?.trim()` silently dropped sends where the user attached
+      // a file with no text. When attachments are present we synthesize
+      // a placeholder so the agent path runs end-to-end; the LLM still
+      // sees the image content blocks via `_promptParts`.
+      const hasAttachments = safeAttachments.length > 0;
+      if (!text?.trim() && !hasAttachments) return;
+      const effectiveText = text?.trim() ? text : '(attached files)';
       if (this.unifyConversationId) {
         const localMsg = {
           type: 'user',
-          content: text,
+          content: effectiveText,
           groupId,
         };
         if (safeAttachments.length > 0) {
@@ -781,7 +789,7 @@ export const useChatStore = defineStore('chat', {
         type: 'unify_group_chat',
         agentId: this.unifyAgentId,
         groupId,
-        text,
+        text: effectiveText,
         mentions: Array.isArray(mentions) ? mentions : [],
       };
       if (safeAttachments.length > 0) {

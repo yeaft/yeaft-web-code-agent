@@ -391,13 +391,13 @@ function ensureDriverRunning(groupId, vpId) {
       // Chat mode) AND build a content-array form so the LLM sees the
       // image bytes alongside the text. Pure file-only uploads only
       // need the suffix; engine.query falls back to string mode.
-      const attachmentSuffix = envelope?._attachmentSuffix || '';
-      const attachmentParts = Array.isArray(envelope?._attachmentParts)
-        ? envelope._attachmentParts
+      const inboundSuffix = envelope?._promptSuffix || '';
+      const inboundParts = Array.isArray(envelope?._promptParts)
+        ? envelope._promptParts
         : [];
-      const prompt = `@vp-${vpId} ${text}${attachmentSuffix}`;
-      const promptParts = attachmentParts.length > 0
-        ? [...attachmentParts, { type: 'text', text: prompt }]
+      const prompt = `@vp-${vpId} ${text}${inboundSuffix}`;
+      const promptParts = inboundParts.length > 0
+        ? [...inboundParts, { type: 'text', text: prompt }]
         : null;
       try {
         await runVpTurn({
@@ -1185,7 +1185,13 @@ function handleEngineEvent(event, hctx) {
 export async function handleUnifyGroupChat(msg) {
   if (!msg || typeof msg !== 'object') return;
   const { text } = msg;
-  if (!text?.trim()) return;
+  // PR #721: image-only send is allowed — text may be empty when the
+  // user attached files only. The frontend synthesizes a placeholder
+  // string in `sendUnifyGroupChat`, so by the time we get here `text`
+  // should always be non-empty; but defend anyway in case an API
+  // caller sends a bare attachment payload.
+  const hasFiles = Array.isArray(msg.files) && msg.files.length > 0;
+  if (!text?.trim() && !hasFiles) return;
   const mentions = Array.isArray(msg.mentions) ? msg.mentions : [];
   const groupId = (typeof msg.groupId === 'string' && msg.groupId.trim())
     ? msg.groupId.trim()
@@ -1353,7 +1359,7 @@ export async function handleUnifyGroupChat(msg) {
   // shows up in the persisted group log and on the envelope every VP
   // driver receives.
   const inboundFiles = Array.isArray(msg.files) ? msg.files : [];
-  let attachmentBundle = { savedFiles: [], promptSuffix: '', promptParts: [] };
+  let attachmentBundle = { promptAttachments: [], promptSuffix: '', promptParts: [], failed: [] };
   if (inboundFiles.length > 0) {
     try {
       attachmentBundle = persistUnifyAttachments(inboundFiles, { subdir: groupId });
@@ -1361,7 +1367,19 @@ export async function handleUnifyGroupChat(msg) {
       console.warn('[Unify] unify_group_chat: attachment persist failed', err?.message || err);
     }
   }
-  const persistedAttachments = attachmentsForPersistence(attachmentBundle.savedFiles);
+  // Surface partial / total upload failures to the user. We don't abort
+  // the turn — the LLM can still answer the text-only portion — but the
+  // user must know which files didn't make it.
+  if (Array.isArray(attachmentBundle.failed) && attachmentBundle.failed.length > 0) {
+    const detail = attachmentBundle.failed
+      .map((f) => `  - ${f.name}: ${f.error}`)
+      .join('\n');
+    sendUnifyOutput({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: `⚠️ ${attachmentBundle.failed.length} file(s) could not be attached:\n${detail}` }] },
+    }, { groupId });
+  }
+  const persistedAttachments = attachmentsForPersistence(attachmentBundle.promptAttachments);
 
   // Ingest user text. The coordinator persists, applies mention/fanout
   // rules, and calls deliver() (== enqueueForVp) for each chosen VP —
@@ -1378,10 +1396,10 @@ export async function handleUnifyGroupChat(msg) {
         attachments: persistedAttachments,
       },
       // Live form — adapters need the base64 image blocks; runVpTurn
-      // reads `_attachmentParts` off the envelope rather than going
+      // reads `_promptParts` off the envelope rather than going
       // back to disk on every fan-out target. NOT persisted.
-      _attachmentParts: attachmentBundle.promptParts,
-      _attachmentSuffix: attachmentBundle.promptSuffix,
+      _promptParts: attachmentBundle.promptParts,
+      _promptSuffix: attachmentBundle.promptSuffix,
     });
   } catch (err) {
     console.warn('[Unify] unify_group_chat: coord.ingest failed', err?.message || err);

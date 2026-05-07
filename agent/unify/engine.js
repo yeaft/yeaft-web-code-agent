@@ -991,6 +991,16 @@ export class Engine {
    * @param {string} [params.scenario='chat'] - task-327b: scenario tag
    *   forwarded to the effort decision tree. See effort.js
    *   SCENARIO_EFFORT. Unknown values fall through to 'high'.
+   * @param {Array<{type:string, source?:object, text?:string}>} [params.promptParts] -
+   *   PR #721: optional content-array form of the user message used
+   *   when attachments are present. Each entry is either an
+   *   `{type:'image', source:{type:'base64', mediaType, data}}` block
+   *   (one per uploaded image) or a `{type:'text', text}` block (the
+   *   text prompt body, including any [Uploaded files] suffix). When
+   *   supplied and non-empty, the LLM call uses this array as the
+   *   user-message content; the string `prompt` is then only used for
+   *   logging / history. When omitted the engine falls back to the
+   *   string-prompt shape (no regression for existing callers).
    * @yields {EngineEvent}
    */
   async *query({ prompt, promptParts = null, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement } = {}) {

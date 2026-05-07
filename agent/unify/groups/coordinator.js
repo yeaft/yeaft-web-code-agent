@@ -68,10 +68,17 @@ export function createCoordinator(group, options = {}) {
     const mentions = parseMentions(input.text);
 
     // Persist first — audit log / replay works even if dispatch has bugs.
-    // NOTE: any field on `input` that starts with `_` is treated as
-    // ephemeral and is NOT forwarded to appendMessage. We use this for
-    // attachment payloads (image base64) that must reach the driver
-    // for the LLM call but must NEVER hit the persisted jsonl-log.
+    //
+    // Convention: any field on `input` that starts with `_` is treated
+    // as ephemeral and is forwarded to the envelope (so per-turn driver
+    // payloads — image base64 blocks, prompt suffixes — reach the LLM
+    // call) but is NEVER passed to appendMessage. The jsonl-log must
+    // stay lean: base64 in audit history would blow up replay.
+    //
+    // The split is enforced structurally — see the assertion below the
+    // partition loop. Don't loosen it. If a new ephemeral key is added,
+    // it gets the `_` prefix at its source and inherits the protection
+    // for free; no allowlist to maintain.
     const persistInput = {};
     const ephemeral = {};
     for (const [k, v] of Object.entries(input)) {
@@ -79,6 +86,15 @@ export function createCoordinator(group, options = {}) {
         ephemeral[k] = v;
       } else {
         persistInput[k] = v;
+      }
+    }
+    // Structural guarantee: nothing with a `_` prefix may reach the
+    // jsonl-log via `persistInput`. If this ever throws, the `_` rule
+    // got bypassed — fix the caller, not this assertion.
+    {
+      const leaked = Object.keys(persistInput).filter((k) => typeof k === 'string' && k.startsWith('_'));
+      if (leaked.length > 0) {
+        throw new Error(`coordinator.ingest: ephemeral fields leaked into persisted record: ${leaked.join(', ')}`);
       }
     }
     const stored = group.appendMessage({

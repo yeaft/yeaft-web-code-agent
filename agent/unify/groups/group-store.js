@@ -69,10 +69,22 @@ export function openGroup(groupsRoot, groupId) {
     /**
      * Append a message to the group log. Assigns an id if absent.
      * Returns the stored record (with id + ts).
+     *
+     * Structural invariant: NO field on `record` may start with `_`.
+     * The `_` prefix is reserved for ephemeral per-turn payloads (image
+     * base64, prompt suffixes) that must reach the driver but must
+     * never hit the persisted jsonl-log. If this throws, the caller
+     * forgot to partition ephemeral fields off — fix the caller.
      */
     appendMessage(record) {
       if (!record || typeof record !== 'object') {
         throw new Error('appendMessage: record required');
+      }
+      {
+        const leaked = Object.keys(record).filter((k) => typeof k === 'string' && k.startsWith('_'));
+        if (leaked.length > 0) {
+          throw new Error(`appendMessage: ephemeral fields leaked into log: ${leaked.join(', ')}`);
+        }
       }
       const stored = {
         id: record.id || nextMsgId(),
