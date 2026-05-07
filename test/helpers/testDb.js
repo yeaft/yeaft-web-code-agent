@@ -82,7 +82,10 @@ const MIGRATIONS = [
 ];
 
 const MIGRATIONS_NEW = [
-  'ALTER TABLE users ADD COLUMN aad_oid TEXT'
+  'ALTER TABLE users ADD COLUMN aad_oid TEXT',
+  // fix-chat-title-sticky: mirror production migration so tests can
+  // exercise the sticky-title persistence path.
+  'ALTER TABLE sessions ADD COLUMN is_custom_title INTEGER DEFAULT 0'
 ];
 
 const POST_INDEXES = [
@@ -160,7 +163,7 @@ export function createDbOperations(db) {
     deleteInvitation: db.prepare('DELETE FROM invitations WHERE id = ? AND created_by = ? AND used_by IS NULL'),
     cleanupExpiredInvitations: db.prepare('DELETE FROM invitations WHERE expires_at < ? AND used_by IS NULL'),
     insertSession: db.prepare('INSERT INTO sessions (id, user_id, agent_id, agent_name, claude_session_id, work_dir, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'),
-    updateSession: db.prepare('UPDATE sessions SET claude_session_id = COALESCE(?, claude_session_id), title = COALESCE(?, title), updated_at = ? WHERE id = ?'),
+    updateSession: db.prepare('UPDATE sessions SET claude_session_id = COALESCE(?, claude_session_id), title = COALESCE(?, title), is_custom_title = COALESCE(?, is_custom_title), updated_at = ? WHERE id = ?'),
     updateSessionActive: db.prepare('UPDATE sessions SET is_active = ?, updated_at = ? WHERE id = ?'),
     getSession: db.prepare('SELECT * FROM sessions WHERE id = ?'),
     getSessionsByAgent: db.prepare('SELECT * FROM sessions WHERE agent_id = ? ORDER BY updated_at DESC LIMIT ?'),
@@ -260,23 +263,36 @@ export function createDbOperations(db) {
     }
   };
 
+  // fix-chat-title-sticky: mirror server/db/session-db.js#mapRow so tests
+  // see the same `customTitle` boolean the production code surfaces.
+  function mapSessionRow(row) {
+    if (!row) return row;
+    return { ...row, customTitle: row.is_custom_title === 1 };
+  }
+
   const sessionDb = {
     create(id, agentId, agentName, workDir, claudeSessionId = null, title = null, userId = null) {
       const now = Date.now();
       stmts.insertSession.run(id, userId, agentId, agentName, claudeSessionId, workDir, title, now, now);
-      return { id, userId, agentId, agentName, workDir, claudeSessionId, title, createdAt: now, updatedAt: now };
+      return { id, userId, agentId, agentName, workDir, claudeSessionId, title, customTitle: false, createdAt: now, updatedAt: now };
     },
     update(id, updates = {}) {
-      stmts.updateSession.run(updates.claudeSessionId || null, updates.title || null, Date.now(), id);
+      stmts.updateSession.run(
+        updates.claudeSessionId ?? null,
+        updates.title ?? null,
+        updates.isCustomTitle ?? null,
+        Date.now(),
+        id
+      );
     },
     setActive(id, active) { stmts.updateSessionActive.run(active ? 1 : 0, Date.now(), id); },
-    get(id) { return stmts.getSession.get(id); },
+    get(id) { return mapSessionRow(stmts.getSession.get(id)); },
     exists(id) { return !!stmts.getSession.get(id); },
-    getByAgent(agentId, limit = 50) { return stmts.getSessionsByAgent.all(agentId, limit); },
-    getByUser(userId, limit = 50) { return stmts.getSessionsByUser.all(userId, limit); },
-    getByUserAndAgent(userId, agentId, limit = 50) { return stmts.getSessionsByUserAndAgent.all(userId, agentId, limit); },
-    getAll(limit = 100) { return stmts.getAllSessions.all(limit); },
-    getActive() { return stmts.getActiveSessions.all(); },
+    getByAgent(agentId, limit = 50) { return stmts.getSessionsByAgent.all(agentId, limit).map(mapSessionRow); },
+    getByUser(userId, limit = 50) { return stmts.getSessionsByUser.all(userId, limit).map(mapSessionRow); },
+    getByUserAndAgent(userId, agentId, limit = 50) { return stmts.getSessionsByUserAndAgent.all(userId, agentId, limit).map(mapSessionRow); },
+    getAll(limit = 100) { return stmts.getAllSessions.all(limit).map(mapSessionRow); },
+    getActive() { return stmts.getActiveSessions.all().map(mapSessionRow); },
     delete(id) { stmts.deleteSession.run(id); }
   };
 
@@ -284,7 +300,9 @@ export function createDbOperations(db) {
     add(sessionId, role, content, messageType = null, toolName = null, toolInput = null) {
       const now = Date.now();
       const result = stmts.insertMessage.run(sessionId, role, content, messageType, toolName, toolInput, now);
-      stmts.updateSession.run(null, null, now, sessionId);
+      // fix-chat-title-sticky: bump updated_at without touching title /
+      // sticky bit — pass null for all three nullable fields.
+      stmts.updateSession.run(null, null, null, now, sessionId);
       return result.lastInsertRowid;
     },
     getBySession(sessionId) { return stmts.getMessagesBySession.all(sessionId); },

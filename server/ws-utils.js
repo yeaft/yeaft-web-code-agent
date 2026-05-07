@@ -91,14 +91,21 @@ export async function broadcastAgentList() {
           conversations: Array.from(agent.conversations.values()).filter(c =>
             CONFIG.skipAuth || !c.userId || c.userId === client.userId
           ).map(c => {
-            if (!c.title || (c.type === 'crew' && !c.name)) {
+            // fix-chat-title-sticky: lazy-hydrate `customTitle` from
+            // the DB whenever it's missing, so pre-fix in-memory
+            // convInfo objects (and any future rebuild path that
+            // forgets) still produce a correct broadcast.
+            if (!c.title || (c.type === 'crew' && !c.name) || c.customTitle === undefined) {
               const dbSession = sessionDb.get(c.id);
               if (dbSession?.title) {
                 c.title = c.title || dbSession.title;
                 // Crew sessions store name as title in DB
                 if (c.type === 'crew' && !c.name) c.name = dbSession.title;
               }
-              if (dbSession) c.pinned = !!dbSession.is_pinned;
+              if (dbSession) {
+                c.pinned = !!dbSession.is_pinned;
+                if (c.customTitle === undefined) c.customTitle = !!dbSession.customTitle;
+              }
             } else {
               const dbSession = sessionDb.get(c.id);
               if (dbSession) c.pinned = !!dbSession.is_pinned;
@@ -123,13 +130,19 @@ export async function sendConversationList(clientId, agentId) {
     const filteredConvs = Array.from(agent.conversations.values()).filter(c =>
       CONFIG.skipAuth || !c.userId || c.userId === client.userId
     ).map(c => {
-      if (!c.title || (c.type === 'crew' && !c.name)) {
+      // fix-chat-title-sticky: same lazy-hydrate as broadcastAgentList —
+      // ensure `customTitle` is reliably set on the wire so the
+      // per-message auto-title gate stays honest after restart / sync.
+      if (!c.title || (c.type === 'crew' && !c.name) || c.customTitle === undefined) {
         const dbSession = sessionDb.get(c.id);
         if (dbSession?.title) {
           c.title = c.title || dbSession.title;
           if (c.type === 'crew' && !c.name) c.name = dbSession.title;
         }
-        if (dbSession) c.pinned = !!dbSession.is_pinned;
+        if (dbSession) {
+          c.pinned = !!dbSession.is_pinned;
+          if (c.customTitle === undefined) c.customTitle = !!dbSession.customTitle;
+        }
       } else {
         const dbSession = sessionDb.get(c.id);
         if (dbSession) c.pinned = !!dbSession.is_pinned;
