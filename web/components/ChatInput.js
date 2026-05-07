@@ -2,11 +2,10 @@ import { DEFAULT_SLASH_COMMANDS, getCommandDescription, buildGroupedCommands } f
 import { buildAutocompleteItems as buildExpertAutocomplete, getSelectionLabel, EXPERT_ROLES, MAX_SELECTIONS } from '../utils/expert-roles.js';
 import { parseMentions } from '../utils/parseMentions.js';
 import VpMentionAutocomplete, { filterVpMentions, applyMentionSelection } from './VpMentionAutocomplete.js';
-import ReplyToCard from './ReplyToCard.js';
 
 export default {
   name: 'ChatInput',
-  components: { VpMentionAutocomplete, ReplyToCard },
+  components: { VpMentionAutocomplete },
   props: {
     /** Custom send function: (text, attachmentInfos) => void. Overrides store.sendMessage. */
     sendFn: { type: Function, default: null },
@@ -38,13 +37,6 @@ export default {
           <button class="attachment-remove" @click="removeAttachment(index)">&times;</button>
         </div>
       </div>
-      <!-- task-334j: reply-to quote card above input -->
-      <ReplyToCard
-        v-if="replyToActive"
-        :vp-id="replyToActive.vpId"
-        :text-preview="replyToActive.textPreview"
-        @cancel="clearReply"
-      />
       <div class="input-wrapper" :class="{ 'btw-active': store.btwMode }">
         <input
           v-if="attachmentsAllowed"
@@ -154,16 +146,8 @@ export default {
     // Derived: is this a custom-send context?
     const isCustomSend = Vue.computed(() => !!props.sendFn);
 
-    // PR #721: in feature-mode (task drawer / feature-message dispatch)
-    // attachments are not yet wired through the agent — the inbound
-    // payload would be silently dropped on the server. Hide the input
-    // affordance entirely so the user can't even *select* a file in
-    // feature-mode. The server-side relay also strips `attachments`
-    // for this type as a defence-in-depth stop-gap.
     const attachmentsAllowed = Vue.computed(() => {
       if (store.btwMode) return false;
-      // Feature-mode: dispatching to `unify_feature_message`. Hide.
-      if (store.unifyActiveFeatureDetailId) return false;
       return true;
     });
 
@@ -232,7 +216,7 @@ export default {
       // task-338-F5: decouple gate from VP list hydration state so Unify
       // view always routes `@` to VP candidates. Empty-state rendering is
       // handled downstream by VpMentionAutocomplete.
-      return !!(store.unifyActiveFeatureDetailId || store.currentView === 'unify');
+      return store.currentView === 'unify';
     };
 
     const vpMentionQuery = Vue.computed(() => {
@@ -286,23 +270,6 @@ export default {
       showVpAutocomplete.value = false;
       vpSelectedIndex.value = 0;
       Vue.nextTick(() => inputRef.value?.focus());
-    };
-
-    // ★ task-334j: reply-to state for task-message context.
-    const taskReplyKey = () => {
-      const featureId = store.unifyActiveFeatureDetailId;
-      return featureId ? 'task:' + featureId : null;
-    };
-
-    const replyToActive = Vue.computed(() => {
-      const key = taskReplyKey();
-      if (!key) return null;
-      return store.replyToMap[key] || null;
-    });
-
-    const clearReply = () => {
-      const key = taskReplyKey();
-      if (key) store.clearReplyTo(key);
     };
 
     // 恢复当前会话的草稿
@@ -605,11 +572,11 @@ export default {
       }
 
       // Build attachmentInfos once — every send branch (chat / unify
-      // group / unify feature) wants the same shape. Previously the
-      // Unify branches `return`ed before this, silently dropping the
-      // user's selected files. Now the store-side helpers (`sendUnify*`)
-      // know how to forward them; we just need to make sure the array
-      // is available before the dispatch.
+      // group) wants the same shape. Previously the Unify branches
+      // `return`ed before this, silently dropping the user's selected
+      // files. Now the store-side helpers (`sendUnify*`) know how to
+      // forward them; we just need to make sure the array is available
+      // before the dispatch.
       const attachmentInfos = attachments.value
         .filter(a => a.fileId)
         .map(a => ({
@@ -619,29 +586,6 @@ export default {
           isImage: a.file?.type?.startsWith('image/') || false,
           mimeType: a.file?.type || ''
         }));
-
-      // ★ task-334j: task-context branch — send as task message.
-      if (store.unifyActiveFeatureDetailId && trimmed) {
-        const mentions = parseMentions(trimmed).mentions;
-        const featureId = store.unifyActiveFeatureDetailId;
-        const groupId = store.unifyConversationId;
-        if (!groupId) return;
-        const replyToKey = 'task:' + featureId;
-        const replyTo = store.replyToMap[replyToKey]?.msgId || null;
-        const requestId = 'tm_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-        store.sendUnifyFeatureMessage({
-          groupId, featureId, vpId: 'user',
-          text: trimmed, mentions, replyTo, requestId,
-          attachments: attachmentInfos,
-        });
-        attachments.value = [];
-        inputText.value = '';
-        store.clearReplyTo(replyToKey);
-        store.expertSelections = [];
-        delete store.inputDrafts[store.currentConversation];
-        if (inputRef.value) inputRef.value.style.height = 'auto';
-        return;
-      }
 
       // Unify group-chat branch — Unify is conceptually a single conversation
       // backed by a group (default: grp_default). All Unify turns go through
@@ -826,8 +770,6 @@ export default {
       vpMentionQuery,
       mentionVpCandidates,
       selectVpMention,
-      replyToActive,
-      clearReply,
     };
   }
 };

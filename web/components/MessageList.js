@@ -1,7 +1,6 @@
 import MessageItem from './MessageItem.js';
 import AssistantTurn from './AssistantTurn.js';
 import VpQuickCard from './VpQuickCard.js';
-import FeatureMessageItem from './FeatureMessageItem.js';
 import FeaturePill from './FeaturePill.js';
 import QuickPreview from './QuickPreview.js';
 import VpSpeakerHeader from './VpSpeakerHeader.js';
@@ -14,7 +13,7 @@ import { deriveTurnIntent } from '../stores/helpers/turn-intent.js';
 
 export default {
   name: 'MessageList',
-  components: { MessageItem, AssistantTurn, VpQuickCard, FeatureMessageItem, FeaturePill, QuickPreview, VpSpeakerHeader, ReflectionCard, SubAgentCard, GroupAnnouncementBar },
+  components: { MessageItem, AssistantTurn, VpQuickCard, FeaturePill, QuickPreview, VpSpeakerHeader, ReflectionCard, SubAgentCard, GroupAnnouncementBar },
   template: `
     <main class="chat-container" ref="containerRef">
       <!-- Session Loading Overlay - only covers message area -->
@@ -119,14 +118,6 @@ export default {
               v-else-if="item.type === 'quick-preview'"
               :preview="item.preview"
               :superseded="isQuickPreviewSuperseded(item)"
-            />
-
-            <!-- task-334j: task-scoped group message row with VP attribution + [task] pill -->
-            <FeatureMessageItem
-              v-else-if="item.type === 'feature-message'"
-              :message="item.message"
-              @reply="onFeatureMessageReply"
-              @open-detail="onOpenVpDetail"
             />
 
             <!-- PR-2: feature-pill — folded run of feature-tagged messages -->
@@ -1293,20 +1284,6 @@ export default {
       if (dogRafId) { cancelAnimationFrame(dogRafId); dogRafId = null; }
     });
 
-    // task-334j: task-message row handlers.
-    const onFeatureMessageReply = (payload) => {
-      if (!payload || !payload.msgId) return;
-      // Scope reply-to by active featureId so it survives re-entry into the
-      // same task; ChatInput reads `task:${featureId}` on send.
-      const featureId = store.unifyActiveFeatureDetailId;
-      if (!featureId) return;
-      store.setReplyTo('task:' + featureId, {
-        msgId: payload.msgId,
-        vpId: payload.vpId,
-        content: payload.textPreview,
-      });
-    };
-
     const onOpenVpDetail = (vpId) => {
       if (!vpId) return;
       store.enterVpDetailView(vpId);
@@ -1386,8 +1363,6 @@ export default {
       questionLX,
       questionRX,
       refreshSession,
-      // task-334j
-      onFeatureMessageReply,
       onOpenVpDetail,
       onOpenVpTurnDetail,
       // PR-4: per-feature abort

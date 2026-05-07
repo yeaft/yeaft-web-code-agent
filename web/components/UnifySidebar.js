@@ -232,49 +232,6 @@ export default {
 
         <!-- H2.f.6: Active / Idle / Archived thread sections removed. -->
 
-        <!-- Tasks Tree -->
-        <section class="us-group us-group-tasks" :class="{ collapsed: !tasksOpen }">
-          <button type="button" class="us-group-header" @click="tasksOpen = !tasksOpen">
-            <svg class="us-chevron" :class="{ open: tasksOpen }" viewBox="0 0 24 24" width="10" height="10"><path fill="currentColor" d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
-            <span class="us-group-label">{{ label('tasks') }}</span>
-            <span class="us-group-count">{{ filteredTasks.length }}</span>
-          </button>
-          <div class="us-group-body" v-show="tasksOpen">
-            <div v-for="task in filteredTasks" :key="task.id">
-              <div
-                class="us-task us-task-lvl-0"
-                :class="['us-task-status-' + (task.status || 'unknown'), { selected: task.id === activeTaskId }]"
-                @click="onSelectTask(task)"
-              >
-                <span
-                  class="us-task-toggle"
-                  v-if="task.children && task.children.length > 0"
-                  @click.stop="toggleTask(task.id)"
-                >
-                  <svg class="us-chevron" :class="{ open: isTaskExpanded(task.id) }" viewBox="0 0 24 24" width="9" height="9"><path fill="currentColor" d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
-                </span>
-                <span class="us-task-toggle-spacer" v-else></span>
-                <span class="us-task-id">{{ task.id }}</span>
-                <span class="us-task-title">{{ task.title }}</span>
-              </div>
-              <div v-if="isTaskExpanded(task.id) && task.children && task.children.length > 0">
-                <div
-                  v-for="child in task.children"
-                  :key="child.id"
-                  class="us-task us-task-lvl-1"
-                  :class="['us-task-status-' + (child.status || 'unknown'), { selected: child.id === activeTaskId }]"
-                  @click="onSelectTask(child)"
-                >
-                  <span class="us-task-toggle-spacer"></span>
-                  <span class="us-task-id">{{ child.id }}</span>
-                  <span class="us-task-title">{{ child.title }}</span>
-                </div>
-              </div>
-            </div>
-            <div class="us-empty" v-if="filteredTasks.length === 0">{{ label('emptyTasks') }}</div>
-          </div>
-        </section>
-
         <!-- task-339-F1: Groups section moved to top of sidebar (see above). -->
       </div>
 
@@ -430,9 +387,6 @@ export default {
     tasks() {
       if (Array.isArray(this.tasksSource)) return this.tasksSource;
       return this.store?.unifyFeatures || [];
-    },
-    activeTaskId() {
-      return this.store?.unifyActiveFeatureId || null;
     },
     // Localized placeholder. Falls back gracefully when $t is not injected
     // (e.g. stand-alone unit tests that don't mount the component).
@@ -626,9 +580,6 @@ export default {
     },
     toggleTask(id) {
       this.expandedTasks = { ...this.expandedTasks, [id]: !this.expandedTasks[id] };
-    },
-    onSelectTask(task) {
-      this.$emit('select-task', task.id);
     },
     // H2.f.6: results list now only contains tasks + messages.
     onSelectResult(r) {

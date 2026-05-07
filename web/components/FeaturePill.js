@@ -32,13 +32,12 @@
  *                    `unifyFeatureMeta[fid].turnId` and calls cancelVpTurn.
  */
 import AssistantTurn from './AssistantTurn.js';
-import FeatureMessageItem from './FeatureMessageItem.js';
 import MessageItem from './MessageItem.js';
 import SubAgentCard from './SubAgentCard.js';
 
 export default {
   name: 'FeaturePill',
-  components: { AssistantTurn, FeatureMessageItem, MessageItem, SubAgentCard },
+  components: { AssistantTurn, MessageItem, SubAgentCard },
   emits: ['open-vp-detail', 'cancel-feature'],
   props: {
     featureId: { type: String, required: true },
@@ -103,10 +102,6 @@ export default {
           <div class="msg-row feature-pill-row" :data-msg-id="turn.id">
             <MessageItem
               v-if="turn.type === 'user' || turn.type === 'system' || turn.type === 'error'"
-              :message="turn.message"
-            />
-            <FeatureMessageItem
-              v-else-if="turn.type === 'feature-message'"
               :message="turn.message"
             />
             <AssistantTurn
