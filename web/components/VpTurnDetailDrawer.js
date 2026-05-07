@@ -51,10 +51,19 @@ export default {
         messages: msgs.slice(),
         speakerVpId: t.vpId,
         turnId: t.turnId,
-        speakerTimestamp: 0,
-        speakerStateCause: '',
+        // AssistantTurn may render this if shown; copy from the first
+        // message in the turn (typical case) and fall back to 0.
+        speakerTimestamp: msgs[0]?.timestamp || 0,
+        speakerStateCause: msgs[0]?.speakerStateCause || '',
+        // Drawer renders its own header (avatar + vpId + close/info);
+        // AssistantTurn must NOT redraw the speaker row inside the body.
         showSpeakerHeader: false,
+        // Handoff hints belong on the main flow card, not the drawer
+        // body — leaving empty avoids a duplicate render in two places.
         handoffHints: [],
+        // intent is stamped on the TURN, not on individual messages,
+        // and the drawer only opens for feature turns — so this is
+        // legitimately fixed rather than derived from msgs[0].
         intent: 'feature',
         atMessageId: null,
       };
