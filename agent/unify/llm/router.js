@@ -17,6 +17,7 @@
 
 import { LLMAdapter } from './adapter.js';
 import { getThinkingCapability, normalizeEffort } from '../models.js';
+import { pairSanitize } from '../pair-sanitize.js';
 
 /**
  * task-327a: feature-flag accessor. Read lazily so tests can flip.
@@ -56,6 +57,66 @@ export function filterEffortForModel(params) {
     return rest;
   }
   return { ...params, effort: norm };
+}
+
+/**
+ * task-715: last-line-of-defense pair sanitize at the wire.
+ *
+ * `pairSanitize` already runs in two upstream paths
+ * (`conversation/persist.js#loadRecentByGroup` and
+ * `history-compact.js#compactHistory`), but the engine's main loop
+ * mutates `conversationMessages` AFTER those — appending tool results
+ * mid-loop, archiving bulky tool results into stubs, and (in failure
+ * paths) potentially leaving an assistant `tool_use` whose matching
+ * `role:'tool'` was dropped or never produced. Anthropic's Messages
+ * API rejects either shape with HTTP 400 ("Each tool_use block must
+ * have a corresponding tool_result block in the next message").
+ *
+ * The router is the SINGLE choke point through which every
+ * adapter.stream() / adapter.call() flows. Sanitizing here means no
+ * caller can accidentally bypass the guard — including the per-VP
+ * group-mode path that surfaced the bug.
+ *
+ * Implementation: call `pairSanitize` exactly once and compare the
+ * result to the input. If nothing changed (length matches AND each
+ * assistant kept its toolCalls count), return the original `params`
+ * reference so the happy path is one O(n) walk + one comparison
+ * walk, no allocation downstream. If something WAS dropped, return
+ * `{ ...params, messages: cleaned }` and log a diagnostic so a
+ * recurrence stays traceable in agent logs.
+ *
+ * @param {object} params
+ * @returns {object}
+ */
+export function sanitizeMessagesForWire(params) {
+  if (!params || !Array.isArray(params.messages)) return params;
+  const cleaned = pairSanitize(params.messages);
+  if (sliceUnchanged(params.messages, cleaned)) return params;
+  console.warn(
+    `[router] dropped tool_use/tool_result orphans before wire send: ` +
+    `${params.messages.length} → ${cleaned.length} messages`
+  );
+  return { ...params, messages: cleaned };
+}
+
+/**
+ * Cheap structural equality between the original messages array and
+ * the post-sanitize result. Same length AND every assistant kept its
+ * toolCalls count = no orphans were dropped. We do NOT compare full
+ * deep equality — `pairSanitize` only ever shrinks, never reorders or
+ * mutates payloads.
+ */
+function sliceUnchanged(original, cleaned) {
+  if (original.length !== cleaned.length) return false;
+  for (let i = 0; i < original.length; i += 1) {
+    const a = original[i];
+    const b = cleaned[i];
+    if (!a || !b) continue;
+    const aCalls = Array.isArray(a.toolCalls) ? a.toolCalls.length : 0;
+    const bCalls = Array.isArray(b.toolCalls) ? b.toolCalls.length : 0;
+    if (aCalls !== bCalls) return false;
+  }
+  return true;
 }
 
 /**
@@ -178,8 +239,9 @@ export class AdapterRouter extends LLMAdapter {
    */
   async *stream(params) {
     const filtered = filterEffortForModel(params);
-    const adapter = await this.#resolveAdapter(filtered.model);
-    yield* adapter.stream(filtered);
+    const sanitized = sanitizeMessagesForWire(filtered);
+    const adapter = await this.#resolveAdapter(sanitized.model);
+    yield* adapter.stream(sanitized);
   }
 
   /**
@@ -190,8 +252,9 @@ export class AdapterRouter extends LLMAdapter {
    */
   async call(params) {
     const filtered = filterEffortForModel(params);
-    const adapter = await this.#resolveAdapter(filtered.model);
-    return adapter.call(filtered);
+    const sanitized = sanitizeMessagesForWire(filtered);
+    const adapter = await this.#resolveAdapter(sanitized.model);
+    return adapter.call(sanitized);
   }
 
   /**
