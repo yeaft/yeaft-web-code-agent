@@ -739,16 +739,44 @@ export const useChatStore = defineStore('chat', {
      * `sendUnifyChat` (legacy 1:1) was removed; callers without a real
      * groupId should pass `'grp_default'`.
      *
-     * @param {{groupId:string, text:string, mentions?:string[]}} payload
+     * @param {{groupId:string, text:string, mentions?:string[],
+     *           attachments?:Array<{fileId:string,name:string,preview?:string,
+     *                               isImage?:boolean,mimeType?:string}>}} payload
      */
-    sendUnifyGroupChat({ groupId, text, mentions }) {
-      if (!groupId || !text?.trim() || !this.unifyAgentId) return;
+    sendUnifyGroupChat({ groupId, text, mentions, attachments }) {
+      if (!groupId || !this.unifyAgentId) return;
+      const safeAttachments = Array.isArray(attachments)
+        ? attachments.filter((a) => a && a.fileId)
+        : [];
+      // PR #721: image-only send guard. The previous early-return on
+      // `!text?.trim()` silently dropped sends where the user attached
+      // a file with no text. When attachments are present we synthesize
+      // a placeholder so the agent path runs end-to-end; the LLM still
+      // sees the image content blocks via `_promptParts`.
+      const hasAttachments = safeAttachments.length > 0;
+      if (!text?.trim() && !hasAttachments) return;
+      const effectiveText = text?.trim() ? text : '(attached files)';
       if (this.unifyConversationId) {
-        this.addMessageToConversation(this.unifyConversationId, {
+        const localMsg = {
           type: 'user',
-          content: text,
+          content: effectiveText,
           groupId,
-        });
+        };
+        if (safeAttachments.length > 0) {
+          // Local-render shape mirrors what `MessageItem` already
+          // expects for Chat-mode user messages (preview thumbnail +
+          // attachments badge). We deliberately KEEP the `preview`
+          // data-URL on the local copy only — the WS frame strips it
+          // because the server already has the file bytes via fileId.
+          localMsg.attachments = safeAttachments.map((a) => ({
+            fileId: a.fileId,
+            name: a.name,
+            preview: a.preview,
+            isImage: !!a.isImage,
+            mimeType: a.mimeType || '',
+          }));
+        }
+        this.addMessageToConversation(this.unifyConversationId, localMsg);
         this.processingConversations[this.unifyConversationId] = true;
         this._turnCompletedConvs?.delete(this.unifyConversationId);
         if (this._closedAt?.[this.unifyConversationId]) {
@@ -757,13 +785,24 @@ export const useChatStore = defineStore('chat', {
         this.getOrCreateExecutionStatus(this.unifyConversationId);
         watchdogHelpers.startUnifyWatchdog(this, this.unifyConversationId);
       }
-      this.sendWsMessage({
+      const wsMsg = {
         type: 'unify_group_chat',
         agentId: this.unifyAgentId,
         groupId,
-        text,
+        text: effectiveText,
         mentions: Array.isArray(mentions) ? mentions : [],
-      });
+      };
+      if (safeAttachments.length > 0) {
+        // Wire-side: only the fields the server resolver needs. The
+        // server (`client-conversation.js` unify_* relay) consumes
+        // `attachments[].fileId` against pendingFiles and forwards
+        // `files: [{name,mimeType,data:base64,isImage}]` to the agent.
+        wsMsg.attachments = safeAttachments.map((a) => ({
+          fileId: a.fileId,
+          isImage: !!a.isImage,
+        }));
+      }
+      this.sendWsMessage(wsMsg);
     },
     handleUnifyOutput(msg) {
       if (!msg) return;
@@ -1881,7 +1920,7 @@ export const useChatStore = defineStore('chat', {
      *     mentions?, replyTo?, requestId? }
      * No-ops when text is empty (agent would reject with empty_text).
      */
-    sendUnifyFeatureMessage({ groupId, featureId, vpId, text, mentions, replyTo, requestId }) {
+    sendUnifyFeatureMessage({ groupId, featureId, vpId, text, mentions, replyTo, requestId, attachments }) {
       if (!text || !text.trim()) return;
       if (!groupId || !featureId || !vpId) return;
       const msg = {
@@ -1894,6 +1933,14 @@ export const useChatStore = defineStore('chat', {
       if (Array.isArray(mentions) && mentions.length > 0) msg.mentions = mentions;
       if (replyTo) msg.replyTo = replyTo;
       if (requestId) msg.requestId = requestId;
+      if (Array.isArray(attachments) && attachments.length > 0) {
+        // Same shape sendUnifyGroupChat uses — server-side relay
+        // resolves fileIds → base64 before forward.
+        msg.attachments = attachments
+          .filter((a) => a && a.fileId)
+          .map((a) => ({ fileId: a.fileId, isImage: !!a.isImage }));
+        if (msg.attachments.length === 0) delete msg.attachments;
+      }
       this.sendWsMessage(msg);
     },
 

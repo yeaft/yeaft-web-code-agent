@@ -68,8 +68,37 @@ export function createCoordinator(group, options = {}) {
     const mentions = parseMentions(input.text);
 
     // Persist first — audit log / replay works even if dispatch has bugs.
+    //
+    // Convention: any field on `input` that starts with `_` is treated
+    // as ephemeral and is forwarded to the envelope (so per-turn driver
+    // payloads — image base64 blocks, prompt suffixes — reach the LLM
+    // call) but is NEVER passed to appendMessage. The jsonl-log must
+    // stay lean: base64 in audit history would blow up replay.
+    //
+    // The split is enforced structurally — see the assertion below the
+    // partition loop. Don't loosen it. If a new ephemeral key is added,
+    // it gets the `_` prefix at its source and inherits the protection
+    // for free; no allowlist to maintain.
+    const persistInput = {};
+    const ephemeral = {};
+    for (const [k, v] of Object.entries(input)) {
+      if (typeof k === 'string' && k.startsWith('_')) {
+        ephemeral[k] = v;
+      } else {
+        persistInput[k] = v;
+      }
+    }
+    // Structural guarantee: nothing with a `_` prefix may reach the
+    // jsonl-log via `persistInput`. If this ever throws, the `_` rule
+    // got bypassed — fix the caller, not this assertion.
+    {
+      const leaked = Object.keys(persistInput).filter((k) => typeof k === 'string' && k.startsWith('_'));
+      if (leaked.length > 0) {
+        throw new Error(`coordinator.ingest: ephemeral fields leaked into persisted record: ${leaked.join(', ')}`);
+      }
+    }
     const stored = group.appendMessage({
-      ...input,
+      ...persistInput,
       mentions,
       role: input.role || (fromUser ? 'user' : 'assistant'),
     });
@@ -96,7 +125,7 @@ export function createCoordinator(group, options = {}) {
     }
 
     if (selection.reason === 'broadcast') {
-      const envelope = makeEnvelope(stored, meta, 'broadcast');
+      const envelope = makeEnvelope(stored, meta, 'broadcast', ephemeral);
       for (const vpId of selection.dispatched) deliver(vpId, envelope);
       return {
         message: stored,
@@ -110,7 +139,7 @@ export function createCoordinator(group, options = {}) {
 
     if (selection.reason === 'mention') {
       for (const vpId of selection.dispatched) {
-        deliver(vpId, makeEnvelope(stored, meta, 'mention'));
+        deliver(vpId, makeEnvelope(stored, meta, 'mention', ephemeral));
       }
       return {
         message: stored,
@@ -121,7 +150,7 @@ export function createCoordinator(group, options = {}) {
     }
 
     if (selection.reason === 'fallback' && selection.fallback) {
-      deliver(selection.fallback, makeEnvelope(stored, meta, 'fallback'));
+      deliver(selection.fallback, makeEnvelope(stored, meta, 'fallback', ephemeral));
       return {
         message: stored,
         dispatched: selection.dispatched,
@@ -146,12 +175,16 @@ export function createCoordinator(group, options = {}) {
   };
 }
 
-function makeEnvelope(msg, meta, trigger) {
+function makeEnvelope(msg, meta, trigger, ephemeral = {}) {
   return {
     groupId: meta.id,
     taskId: msg.taskId || null,
     msg,
     trigger, // 'broadcast' | 'mention' | 'fallback'
+    // Ephemeral fields (any `_`-prefixed key on coord.ingest input).
+    // Used to ferry per-turn payloads (e.g. image base64 blocks) that
+    // must reach the driver but must NOT be persisted to the group log.
+    ...ephemeral,
   };
 }
 

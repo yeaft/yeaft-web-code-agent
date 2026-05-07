@@ -53,6 +53,7 @@ import {
 } from './history-compact.js';
 import { createFeatureArc } from './feature-arc.js';
 import { getFeatureStore } from './tools/feature-tools.js';
+import { persistUnifyAttachments, attachmentsForPersistence } from './attachments.js';
 
 /** @type {import('./session.js').Session | null} */
 let session = null;
@@ -384,10 +385,24 @@ function ensureDriverRunning(groupId, vpId) {
       // the legacy fan-out path so the model sees the same surface form
       // it always has.
       const text = envelope?.msg?.text || '';
-      const prompt = `@vp-${vpId} ${text}`;
+      // Attachments ride on the envelope's ephemeral fields (set by
+      // handleUnifyGroupChat → coord.ingest). When images are present
+      // we append the file list to the text prompt (same surface as
+      // Chat mode) AND build a content-array form so the LLM sees the
+      // image bytes alongside the text. Pure file-only uploads only
+      // need the suffix; engine.query falls back to string mode.
+      const inboundSuffix = envelope?._promptSuffix || '';
+      const inboundParts = Array.isArray(envelope?._promptParts)
+        ? envelope._promptParts
+        : [];
+      const prompt = `@vp-${vpId} ${text}${inboundSuffix}`;
+      const promptParts = inboundParts.length > 0
+        ? [...inboundParts, { type: 'text', text: prompt }]
+        : null;
       try {
         await runVpTurn({
           prompt,
+          promptParts,
           groupId,
           vpId,
           turnId,
@@ -1170,7 +1185,13 @@ function handleEngineEvent(event, hctx) {
 export async function handleUnifyGroupChat(msg) {
   if (!msg || typeof msg !== 'object') return;
   const { text } = msg;
-  if (!text?.trim()) return;
+  // PR #721: image-only send is allowed — text may be empty when the
+  // user attached files only. The frontend synthesizes a placeholder
+  // string in `sendUnifyGroupChat`, so by the time we get here `text`
+  // should always be non-empty; but defend anyway in case an API
+  // caller sends a bare attachment payload.
+  const hasFiles = Array.isArray(msg.files) && msg.files.length > 0;
+  if (!text?.trim() && !hasFiles) return;
   const mentions = Array.isArray(msg.mentions) ? msg.mentions : [];
   const groupId = (typeof msg.groupId === 'string' && msg.groupId.trim())
     ? msg.groupId.trim()
@@ -1328,6 +1349,38 @@ export async function handleUnifyGroupChat(msg) {
     console.warn('[Unify] unify_group_chat: selective abort pre-pass failed', err?.message || err);
   }
 
+  // ── Attachments (images + files) ───────────────────────────────
+  // Server has already resolved fileId → { name, mimeType, data:base64,
+  // isImage } via the same path crew uses (client-conversation.js relay
+  // for `unify_*`). We persist files to disk under the agent's CWD so
+  // file-tools (file-read / bash) can pick them up with relative paths,
+  // and we build per-image content blocks for the LLM call. The
+  // resolved metadata WITHOUT base64 rides on coord.ingest meta so it
+  // shows up in the persisted group log and on the envelope every VP
+  // driver receives.
+  const inboundFiles = Array.isArray(msg.files) ? msg.files : [];
+  let attachmentBundle = { promptAttachments: [], promptSuffix: '', promptParts: [], failed: [] };
+  if (inboundFiles.length > 0) {
+    try {
+      attachmentBundle = persistUnifyAttachments(inboundFiles, { subdir: groupId });
+    } catch (err) {
+      console.warn('[Unify] unify_group_chat: attachment persist failed', err?.message || err);
+    }
+  }
+  // Surface partial / total upload failures to the user. We don't abort
+  // the turn — the LLM can still answer the text-only portion — but the
+  // user must know which files didn't make it.
+  if (Array.isArray(attachmentBundle.failed) && attachmentBundle.failed.length > 0) {
+    const detail = attachmentBundle.failed
+      .map((f) => `  - ${f.name}: ${f.error}`)
+      .join('\n');
+    sendUnifyOutput({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: `⚠️ ${attachmentBundle.failed.length} file(s) could not be attached:\n${detail}` }] },
+    }, { groupId });
+  }
+  const persistedAttachments = attachmentsForPersistence(attachmentBundle.promptAttachments);
+
   // Ingest user text. The coordinator persists, applies mention/fanout
   // rules, and calls deliver() (== enqueueForVp) for each chosen VP —
   // which both (a) emits vp_typing_start and (b) ensures a driver runs.
@@ -1337,7 +1390,16 @@ export async function handleUnifyGroupChat(msg) {
       from: 'user',
       role: 'user',
       text,
-      meta: { mentions },
+      meta: {
+        mentions,
+        // Persisted form (no base64) — safe for jsonl-log.
+        attachments: persistedAttachments,
+      },
+      // Live form — adapters need the base64 image blocks; runVpTurn
+      // reads `_promptParts` off the envelope rather than going
+      // back to disk on every fan-out target. NOT persisted.
+      _promptParts: attachmentBundle.promptParts,
+      _promptSuffix: attachmentBundle.promptSuffix,
     });
   } catch (err) {
     console.warn('[Unify] unify_group_chat: coord.ingest failed', err?.message || err);
@@ -1581,7 +1643,7 @@ async function ensureSessionLoaded() {
  *
  * @param {{ prompt: string, groupId: string, vpId: string, turnId: string, envelope: object, vpAbort: AbortController, baseSnapshot: Array }} args
  */
-async function runVpTurn({ prompt, groupId, vpId, turnId, envelope: inboundEnvelope, vpAbort, baseSnapshot }) {
+async function runVpTurn({ prompt, promptParts = null, groupId, vpId, turnId, envelope: inboundEnvelope, vpAbort, baseSnapshot }) {
   if (!prompt?.trim()) return;
 
   const envelope = { groupId, vpId, turnId };
@@ -1727,6 +1789,7 @@ async function runVpTurn({ prompt, groupId, vpId, turnId, envelope: inboundEnvel
       });
       for await (const event of vpEngine.query({
         prompt,
+        promptParts,
         messages: trimmedMessages,
         signal: vpAbort.signal,
         ...queryOpts,

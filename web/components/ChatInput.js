@@ -30,7 +30,7 @@ export default {
           <button class="chip-remove" @click="removeExpertSelection(index)">&times;</button>
         </span>
       </div>
-      <div class="attachments-preview" v-if="!store.btwMode && attachments.length > 0">
+      <div class="attachments-preview" v-if="attachmentsAllowed && attachments.length > 0">
         <div class="attachment-item" v-for="(file, index) in attachments" :key="index">
           <img v-if="file.preview" :src="file.preview" class="attachment-thumb" />
           <span v-else class="attachment-icon">\u{1F4CE}</span>
@@ -47,7 +47,7 @@ export default {
       />
       <div class="input-wrapper" :class="{ 'btw-active': store.btwMode }">
         <input
-          v-if="!store.btwMode"
+          v-if="attachmentsAllowed"
           type="file"
           ref="fileInput"
           id="chat-file-input"
@@ -56,7 +56,7 @@ export default {
           accept="image/*,text/*,.pdf,.doc,.docx,.xls,.xlsx,.json,.md,.py,.js,.ts,.css,.html"
           class="file-input-hidden"
         />
-        <label v-if="!store.btwMode" class="attach-btn" for="chat-file-input" :title="$t('chatInput.upload')">
+        <label v-if="attachmentsAllowed" class="attach-btn" for="chat-file-input" :title="$t('chatInput.upload')">
           <svg viewBox="0 0 24 24" width="20" height="20">
             <path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"/>
           </svg>
@@ -153,6 +153,19 @@ export default {
 
     // Derived: is this a custom-send context?
     const isCustomSend = Vue.computed(() => !!props.sendFn);
+
+    // PR #721: in feature-mode (task drawer / feature-message dispatch)
+    // attachments are not yet wired through the agent — the inbound
+    // payload would be silently dropped on the server. Hide the input
+    // affordance entirely so the user can't even *select* a file in
+    // feature-mode. The server-side relay also strips `attachments`
+    // for this type as a defence-in-depth stop-gap.
+    const attachmentsAllowed = Vue.computed(() => {
+      if (store.btwMode) return false;
+      // Feature-mode: dispatching to `unify_feature_message`. Hide.
+      if (store.unifyActiveFeatureDetailId) return false;
+      return true;
+    });
 
     // Placeholder i18n key
     const effectivePlaceholderKey = Vue.computed(() => props.placeholderKey || 'chatInput.placeholder');
@@ -591,6 +604,22 @@ export default {
         return;
       }
 
+      // Build attachmentInfos once — every send branch (chat / unify
+      // group / unify feature) wants the same shape. Previously the
+      // Unify branches `return`ed before this, silently dropping the
+      // user's selected files. Now the store-side helpers (`sendUnify*`)
+      // know how to forward them; we just need to make sure the array
+      // is available before the dispatch.
+      const attachmentInfos = attachments.value
+        .filter(a => a.fileId)
+        .map(a => ({
+          fileId: a.fileId,
+          name: a.name,
+          preview: a.preview,
+          isImage: a.file?.type?.startsWith('image/') || false,
+          mimeType: a.file?.type || ''
+        }));
+
       // ★ task-334j: task-context branch — send as task message.
       if (store.unifyActiveFeatureDetailId && trimmed) {
         const mentions = parseMentions(trimmed).mentions;
@@ -603,7 +632,9 @@ export default {
         store.sendUnifyFeatureMessage({
           groupId, featureId, vpId: 'user',
           text: trimmed, mentions, replyTo, requestId,
+          attachments: attachmentInfos,
         });
+        attachments.value = [];
         inputText.value = '';
         store.clearReplyTo(replyToKey);
         store.expertSelections = [];
@@ -620,25 +651,25 @@ export default {
       // another VP. There is no longer a no-group backstop — the legacy
       // `unify_chat` WS frame and `handleUnifyChat` agent handler were
       // removed in v0.1.672.
-      if (store.currentView === 'unify' && trimmed) {
+      //
+      // PR #721: also fire when text is empty but attachments are present
+      // (image-only send). The store helper synthesizes a placeholder
+      // text so the agent path runs end-to-end.
+      if (store.currentView === 'unify' && (trimmed || attachmentInfos.length > 0)) {
         const mentions = parseMentions(trimmed).mentions;
         const groupId = groupsStore?.activeGroupId || 'grp_default';
-        store.sendUnifyGroupChat({ groupId, text: trimmed, mentions });
+        store.sendUnifyGroupChat({
+          groupId,
+          text: trimmed,
+          mentions,
+          attachments: attachmentInfos,
+        });
+        attachments.value = [];
         inputText.value = '';
         delete store.inputDrafts[store.currentConversation];
         if (inputRef.value) inputRef.value.style.height = 'auto';
         return;
       }
-
-      const attachmentInfos = attachments.value
-        .filter(a => a.fileId)
-        .map(a => ({
-          fileId: a.fileId,
-          name: a.name,
-          preview: a.preview,
-          isImage: a.file?.type?.startsWith('image/') || false,
-          mimeType: a.file?.type || ''
-        }));
 
       const currentExpertSelections = [...expertSelections.value];
       store.sendMessage(inputText.value, attachmentInfos, { expertSelections: currentExpertSelections });
@@ -759,6 +790,7 @@ export default {
       isCompacting,
       isStopVisible,
       effectivePlaceholderKey,
+      attachmentsAllowed,
       showAutocomplete,
       selectedIndex,
       filteredCommands,

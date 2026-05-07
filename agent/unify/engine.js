@@ -991,9 +991,19 @@ export class Engine {
    * @param {string} [params.scenario='chat'] - task-327b: scenario tag
    *   forwarded to the effort decision tree. See effort.js
    *   SCENARIO_EFFORT. Unknown values fall through to 'high'.
+   * @param {Array<{type:string, source?:object, text?:string}>} [params.promptParts] -
+   *   PR #721: optional content-array form of the user message used
+   *   when attachments are present. Each entry is either an
+   *   `{type:'image', source:{type:'base64', mediaType, data}}` block
+   *   (one per uploaded image) or a `{type:'text', text}` block (the
+   *   text prompt body, including any [Uploaded files] suffix). When
+   *   supplied and non-empty, the LLM call uses this array as the
+   *   user-message content; the string `prompt` is then only used for
+   *   logging / history. When omitted the engine falls back to the
+   *   string-prompt shape (no regression for existing callers).
    * @yields {EngineEvent}
    */
-  async *query({ prompt, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement } = {}) {
+  async *query({ prompt, promptParts = null, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement } = {}) {
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       yield {
         type: 'error',
@@ -1002,6 +1012,14 @@ export class Engine {
       };
       return;
     }
+    // promptParts (optional): a content-array form of the user message
+    // (e.g. [{type:'image',source:{...}}, {type:'text',text:'@vp-x ...'}]).
+    // When supplied, it REPLACES the trailing `{role:'user',content:prompt}`
+    // entry built into conversationMessages — the string `prompt` is still
+    // used for memory recall, system prompt rendering, and turn previews
+    // because those layers all need plain text. Adapter side already
+    // accepts content arrays for user messages (anthropic.js:72,
+    // openai-responses.js:#translateUserContent).
 
     // task-327b: `/max` / `/high` / `/medium` / `/low` prefix override.
     // Explicit caller-supplied userEffort wins over the prefix.
@@ -1044,7 +1062,7 @@ export class Engine {
     const runSignal = abortCtrl.signal;
 
     try {
-      yield* this.#runQuery({ prompt: effectivePrompt, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement });
+      yield* this.#runQuery({ prompt: effectivePrompt, promptParts, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement });
     } finally {
       if (signal) {
         try { signal.removeEventListener('abort', onExternalAbort); } catch { /* ignore */ }
@@ -1062,7 +1080,7 @@ export class Engine {
    * in a try/finally without indenting the whole loop.
    * @private
    */
-  async *#runQuery({ prompt, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement }) {
+  async *#runQuery({ prompt, promptParts = null, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement }) {
 
     // ─── Pre-query: FTS5 Memory Recall + AMS snapshot ─────
     // Memory has a SINGLE render outlet now (DESIGN-PROMPT §3 ③):
@@ -1189,11 +1207,17 @@ export class Engine {
         ]
       : [];
 
-    // Build conversation: optional compact head + existing messages + new user message
+    // Build conversation: optional compact head + existing messages + new user message.
+    // If `promptParts` was supplied (image/file attachments), use the array form
+    // so the adapter sees image content blocks alongside the text. Otherwise the
+    // legacy string form keeps prompt-cache behavior identical.
+    const finalUserContent = (Array.isArray(promptParts) && promptParts.length > 0)
+      ? promptParts
+      : prompt;
     const conversationMessages = [
       ...compactMessages,
       ...messages,
-      { role: 'user', content: prompt },
+      { role: 'user', content: finalUserContent },
     ];
 
     // PR-L: T2 carry-forward. If a previous query()'s end-of-turn

@@ -489,7 +489,7 @@ export default {
       store.leaveUnify();
     };
 
-    const sendMessage = (text) => {
+    const sendMessage = (text, attachmentInfos) => {
       // task-334m: Pre-check `no_default_vp` before the WS round-trip.
       // If the active group has no roster + no defaultVpId, surface the
       // invite modal instead of sending a message that would round-trip
@@ -505,7 +505,12 @@ export default {
       // ALWAYS builds a coordinator and ctx.router for the per-VP turn.
       const groupId = (gs && gs.activeGroupId) || 'grp_default';
       const mentions = parseMentions(text).mentions;
-      store.sendUnifyGroupChat({ groupId, text, mentions });
+      // Attachments: ChatInput's custom-send path passes the resolved
+      // info list as the second arg. We forward it untouched — the
+      // store helper strips `fileId` shape for the wire and keeps the
+      // preview/name/mimeType on the local message render.
+      const attachments = Array.isArray(attachmentInfos) ? attachmentInfos : undefined;
+      store.sendUnifyGroupChat({ groupId, text, mentions, attachments });
     };
 
     // Bug 5: ChatInput's default cancel triggers Chat-mode cancel_execution,
