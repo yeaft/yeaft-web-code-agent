@@ -12,6 +12,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, existsSync, writeFileSync
 import { tmpdir, homedir } from 'os';
 import { join } from 'path';
 import { createVp, buildVpSeedSummary } from '../../../agent/unify/vp/vp-crud.js';
+import { VP_STUB_MARKER, isVpSeedBackfillStub } from '../../../agent/unify/memory/seed-backfill.js';
 
 let tmpRoot;
 let libDir;
@@ -47,7 +48,15 @@ describe('createVp seeds summary.md', () => {
       const body = readFileSync(summaryPath, 'utf-8');
       expect(body).toContain('Tester');
       expect(body).toContain('qa');
-      expect(body).toContain('Diligent QA engineer');
+      // Persona body MUST NOT be embedded — it is rendered as Section 1
+      // of the system prompt by `renderVpPersona`. Duplicating it into
+      // Layer-A `vp/<id>` resident produced the visible "persona defined
+      // twice" bug (PR #722 fixed the boot-time backfill twin).
+      expect(body).not.toContain('Diligent QA engineer');
+      expect(body).not.toContain('**Persona:**');
+      // Stamp lets `engine.buildResidentEntries` skip the own-VP push.
+      expect(body).toContain(VP_STUB_MARKER);
+      expect(isVpSeedBackfillStub(body)).toBe(true);
     } finally {
       // Clean up the side-effect file
       if (existsSync(summaryPath)) {
@@ -76,7 +85,7 @@ describe('createVp seeds summary.md', () => {
 });
 
 describe('buildVpSeedSummary', () => {
-  it('renders displayName, role, traits and persona', () => {
+  it('renders displayName, role, traits — but NOT persona body', () => {
     const out = buildVpSeedSummary({
       vpId: 'a',
       displayName: 'Alice',
@@ -87,20 +96,24 @@ describe('buildVpSeedSummary', () => {
     expect(out).toContain('# Alice');
     expect(out).toContain('lead');
     expect(out).toContain('careful, concise');
-    expect(out).toContain('Alice is the lead');
+    expect(out).not.toContain('Alice is the lead');
+    expect(out).not.toContain('**Persona:**');
+    expect(out).toContain(VP_STUB_MARKER);
   });
 
   it('falls back to vpId when displayName is missing', () => {
     const out = buildVpSeedSummary({ vpId: 'foo' });
     expect(out).toContain('# foo');
+    expect(out).toContain(VP_STUB_MARKER);
   });
 
-  it('truncates persona over 800 chars', () => {
+  it('produces a stub regardless of persona length (persona is dropped, not truncated)', () => {
     const big = 'x'.repeat(2000);
-    const out = buildVpSeedSummary({ vpId: 'big', persona: big });
-    // Should contain truncation ellipsis
-    expect(out).toMatch(/…$/);
-    // Should be shorter than the raw persona by a factor of ~2.5
-    expect(out.length).toBeLessThan(1100);
+    const out = buildVpSeedSummary({ vpId: 'big', displayName: 'Big', persona: big });
+    expect(out).not.toContain('xxxx');
+    expect(out).not.toMatch(/…/);
+    expect(out).toContain(VP_STUB_MARKER);
+    // Stub stays small — well under any persona truncation budget.
+    expect(out.length).toBeLessThan(300);
   });
 });

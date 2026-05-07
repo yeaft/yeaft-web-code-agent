@@ -22,6 +22,9 @@ import {
   backfillVpSummaries,
   backfillGroupSummaries,
   runSummaryBackfill,
+  migrateLegacyVpSummaries,
+  isVpSeedBackfillStub,
+  VP_STUB_MARKER,
 } from '../../../../agent/unify/memory/seed-backfill.js';
 
 let tmpRoot;
@@ -67,6 +70,10 @@ describe('backfillVpSummaries', () => {
     // twice" bug.
     expect(out).not.toContain('product lead');
     expect(out).not.toContain('**Persona:**');
+    // Stamp lets `engine.#prepareAms` detect the stub and skip the
+    // own-VP Resident push (the redundant-label follow-up to PR #722).
+    expect(out).toContain(VP_STUB_MARKER);
+    expect(isVpSeedBackfillStub(out)).toBe(true);
   });
 
   it('does NOT overwrite an existing non-empty summary.md', () => {
@@ -150,6 +157,7 @@ describe('runSummaryBackfill — end-to-end', () => {
     const r = runSummaryBackfill({ yeaftDir, libDir, root: memoryRoot });
     expect(r.vp.seeded).toBe(1);
     expect(r.group.seeded).toBe(1);
+    expect(r.migrate.migrated).toBe(0);
     expect(existsSync(join(memoryRoot, 'vp', 'steve', 'summary.md'))).toBe(true);
     expect(existsSync(join(memoryRoot, 'group', 'grp_claude', 'summary.md'))).toBe(true);
   });
@@ -163,5 +171,112 @@ describe('runSummaryBackfill — end-to-end', () => {
     expect(r1.group.seeded).toBe(1);
     expect(r2.vp.seeded).toBe(0);
     expect(r2.group.seeded).toBe(0);
+    expect(r2.migrate.migrated).toBe(0);
+  });
+
+  it('migrates legacy persona-body summaries on first run, then is a no-op', () => {
+    writeRoleMd('legacy', '---\nid: legacy\nname: Legacy\nrole: Engineer\n---\nLegacy persona body.');
+    // Pre-stamp summary written by the old stub: contains **Persona:**
+    // and a body excerpt, no marker.
+    mkdirSync(join(memoryRoot, 'vp', 'legacy'), { recursive: true });
+    writeFileSync(
+      join(memoryRoot, 'vp', 'legacy', 'summary.md'),
+      '# Legacy\n\n**Role:** Engineer\n\n**Persona:**\n\nLegacy persona body.\n',
+      'utf-8'
+    );
+    const r1 = runSummaryBackfill({ yeaftDir, libDir, root: memoryRoot });
+    expect(r1.migrate.migrated).toBe(1);
+    expect(r1.vp.seeded).toBe(0);  // file exists post-migration → not re-seeded
+    const out = readFileSync(join(memoryRoot, 'vp', 'legacy', 'summary.md'), 'utf-8');
+    expect(out).toContain(VP_STUB_MARKER);
+    expect(out).not.toContain('**Persona:**');
+    expect(out).not.toContain('Legacy persona body');
+    const r2 = runSummaryBackfill({ yeaftDir, libDir, root: memoryRoot });
+    expect(r2.migrate.migrated).toBe(0);
+  });
+});
+
+describe('isVpSeedBackfillStub', () => {
+  it('returns true for a freshly-stamped stub', () => {
+    writeRoleMd('alice', '---\nid: alice\nname: Alice\nrole: PM\n---\nbody');
+    backfillVpSummaries({ libDir, root: memoryRoot });
+    const out = readFileSync(join(memoryRoot, 'vp', 'alice', 'summary.md'), 'utf-8');
+    expect(isVpSeedBackfillStub(out)).toBe(true);
+  });
+
+  it('returns false for a Dream-v2-shaped summary (no marker)', () => {
+    const dreamLike = '# Alice\n\nWorked on AMS resident dedup last week. Prefers single-PR fixes.';
+    expect(isVpSeedBackfillStub(dreamLike)).toBe(false);
+  });
+
+  it('returns false for legacy pre-stamp persona-body summaries', () => {
+    const legacy = '# Alice\n\n**Role:** PM\n\n**Persona:**\n\nAlice is the product lead.';
+    expect(isVpSeedBackfillStub(legacy)).toBe(false);
+  });
+
+  it('returns false for empty / non-string input', () => {
+    expect(isVpSeedBackfillStub('')).toBe(false);
+    expect(isVpSeedBackfillStub(null)).toBe(false);
+    expect(isVpSeedBackfillStub(undefined)).toBe(false);
+    expect(isVpSeedBackfillStub(42)).toBe(false);
+  });
+});
+
+describe('migrateLegacyVpSummaries', () => {
+  it('rewrites a legacy persona-body summary into a stamped stub', () => {
+    writeRoleMd('legacy', '---\nid: legacy\nname: Legacy\nrole: Engineer\n---\nbody');
+    mkdirSync(join(memoryRoot, 'vp', 'legacy'), { recursive: true });
+    writeFileSync(
+      join(memoryRoot, 'vp', 'legacy', 'summary.md'),
+      '# Legacy\n\n**Role:** Engineer\n\n**Persona:**\n\nLong body excerpt up to 800 chars…\n',
+      'utf-8'
+    );
+    const r = migrateLegacyVpSummaries({ libDir, root: memoryRoot });
+    expect(r.scanned).toBe(1);
+    expect(r.migrated).toBe(1);
+    const out = readFileSync(join(memoryRoot, 'vp', 'legacy', 'summary.md'), 'utf-8');
+    expect(out).toContain(VP_STUB_MARKER);
+    expect(out).toContain('Legacy');
+    expect(out).toContain('Engineer');
+    expect(out).not.toContain('**Persona:**');
+    expect(out).not.toContain('Long body excerpt');
+  });
+
+  it('leaves stamped stubs alone', () => {
+    writeRoleMd('alice', '---\nid: alice\nname: Alice\nrole: PM\n---\nbody');
+    backfillVpSummaries({ libDir, root: memoryRoot });
+    const before = readFileSync(join(memoryRoot, 'vp', 'alice', 'summary.md'), 'utf-8');
+    const r = migrateLegacyVpSummaries({ libDir, root: memoryRoot });
+    expect(r.migrated).toBe(0);
+    const after = readFileSync(join(memoryRoot, 'vp', 'alice', 'summary.md'), 'utf-8');
+    expect(after).toBe(before);
+  });
+
+  it('leaves Dream-v2-shaped summaries alone (no persona marker, no stamp)', () => {
+    writeRoleMd('drm', '---\nid: drm\nname: Drm\nrole: Eng\n---\nbody');
+    mkdirSync(join(memoryRoot, 'vp', 'drm'), { recursive: true });
+    const dreamLike = '# Drm\n\nReal summary written by Dream-v2 — no marker, no Persona block.\n';
+    writeFileSync(join(memoryRoot, 'vp', 'drm', 'summary.md'), dreamLike, 'utf-8');
+    const r = migrateLegacyVpSummaries({ libDir, root: memoryRoot });
+    expect(r.scanned).toBe(1);
+    expect(r.migrated).toBe(0);
+    expect(readFileSync(join(memoryRoot, 'vp', 'drm', 'summary.md'), 'utf-8')).toBe(dreamLike);
+  });
+
+  it('skips VPs whose role.md is missing (cannot rebuild stub)', () => {
+    // No writeRoleMd — the on-disk role.md is absent.
+    mkdirSync(join(memoryRoot, 'vp', 'orphan'), { recursive: true });
+    const legacy = '# Orphan\n\n**Persona:**\n\nbody.\n';
+    writeFileSync(join(memoryRoot, 'vp', 'orphan', 'summary.md'), legacy, 'utf-8');
+    const r = migrateLegacyVpSummaries({ libDir, root: memoryRoot });
+    expect(r.migrated).toBe(0);
+    // Legacy file is preserved, not blanked.
+    expect(readFileSync(join(memoryRoot, 'vp', 'orphan', 'summary.md'), 'utf-8')).toBe(legacy);
+  });
+
+  it('handles a missing memoryRoot/vp dir without throwing', () => {
+    const r = migrateLegacyVpSummaries({ libDir, root: join(tmpRoot, 'no-such-root') });
+    expect(r.scanned).toBe(0);
+    expect(r.migrated).toBe(0);
   });
 });

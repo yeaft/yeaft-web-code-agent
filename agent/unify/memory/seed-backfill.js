@@ -22,6 +22,42 @@ import { parseRoleMd } from '../vp/vp-store.js';
 
 const DEFAULT_MEMORY_ROOT = join(homedir(), '.yeaft', 'memory');
 
+/**
+ * Marker stamped into every VP summary written by this module.
+ *
+ * Two consumers care about it:
+ *   1. `engine.#prepareAms` uses `isVpSeedBackfillStub` to skip the
+ *      `vp/<ownVpId>` Resident entry when its summary is just our stub —
+ *      the real persona is already rendered as Section 1 of the system
+ *      prompt by `renderVpPersona`. Without the skip, AMS Resident dups
+ *      Section 1 with redundant `name + role` labels.
+ *   2. `migrateLegacyVpSummaries` uses absence-of-marker + presence of
+ *      `**Persona:**` to identify pre-fix summary.md files (which copied
+ *      up to 800 chars of `role.md` body) and rewrite them as stubs.
+ *
+ * Bump the version suffix when the stub format changes meaningfully so
+ * old stamps can be re-migrated if needed.
+ */
+export const VP_STUB_MARKER = '<!-- seed-backfill:vp-stub v1 -->';
+
+/**
+ * True iff the given summary text was produced by this module's VP stub
+ * writer (i.e. carries the marker comment). Whitespace-tolerant.
+ *
+ * Used by `engine.#prepareAms` to decide whether to surface the
+ * `vp/<ownVpId>` summary as a Resident AMS entry. Stubs are skipped so
+ * Section 1 (`renderVpPersona`) is the sole rendering of own-VP identity;
+ * Dream-v2's eventual real summary will lack the marker and be surfaced
+ * normally.
+ *
+ * @param {string|null|undefined} text
+ * @returns {boolean}
+ */
+export function isVpSeedBackfillStub(text) {
+  if (typeof text !== 'string' || text.length === 0) return false;
+  return text.includes(VP_STUB_MARKER);
+}
+
 function readIfPresent(path) {
   try {
     if (!existsSync(path)) return '';
@@ -73,7 +109,7 @@ function readVpRoleSummary(libDir, vpId) {
   const name = String(meta.name || vpId).trim() || vpId;
   const role = typeof meta.role === 'string' ? meta.role.trim() : '';
 
-  const lines = [`# ${name}`];
+  const lines = [VP_STUB_MARKER, '', `# ${name}`];
   if (role) lines.push('', `**Role:** ${role}`);
   return lines.join('\n').trim();
 }
@@ -134,6 +170,64 @@ function readGroupSummaryBody(groupDir) {
 }
 
 /**
+ * Detect the *legacy* (pre-stamp) VP summary shape: a body that lacks
+ * `VP_STUB_MARKER` AND contains the `**Persona:**` block written by the
+ * older stub. Tight signature on purpose — we don't want to clobber
+ * hand-edited or Dream-v2-produced summaries that happen to be missing
+ * the marker for unrelated reasons.
+ *
+ * @param {string} body
+ * @returns {boolean}
+ */
+function isLegacyVpSummary(body) {
+  if (typeof body !== 'string' || body.length === 0) return false;
+  if (body.includes(VP_STUB_MARKER)) return false;
+  return body.includes('**Persona:**');
+}
+
+/**
+ * One-shot migration: walk `<root>/vp/<id>/summary.md` and rewrite any
+ * file matching the legacy shape (`isLegacyVpSummary`) into the current
+ * stamped stub. Idempotent — a stamped or Dream-v2-produced file is left
+ * untouched. Safe to run on every session boot.
+ *
+ * Existing users whose `summary.md` was written by the pre-stamp stub
+ * carry the persona body forever, because `backfillVpSummaries` only
+ * writes when the file is empty/missing. This pass closes that gap.
+ *
+ * @param {{ libDir: string, root?: string }} opts
+ * @returns {{ scanned: number, migrated: number }}
+ */
+export function migrateLegacyVpSummaries({ libDir, root = DEFAULT_MEMORY_ROOT }) {
+  let scanned = 0;
+  let migrated = 0;
+  const vpRoot = join(root, 'vp');
+  if (!existsSync(vpRoot)) return { scanned, migrated };
+  let entries;
+  try { entries = readdirSync(vpRoot); } catch { return { scanned, migrated }; }
+  for (const name of entries) {
+    if (name.startsWith('.')) continue;
+    const summaryPath = join(vpRoot, name, 'summary.md');
+    let body = '';
+    try {
+      if (!existsSync(summaryPath)) continue;
+      body = readFileSync(summaryPath, 'utf-8');
+    } catch { continue; }
+    scanned++;
+    if (!isLegacyVpSummary(body)) continue;
+    const stub = readVpRoleSummary(libDir, name);
+    if (!stub) continue;
+    try {
+      writeAtomicSync(summaryPath, stub);
+      migrated++;
+    } catch (err) {
+      console.warn(`[seed-backfill] migrate vp ${name}: ${err?.message || err}`);
+    }
+  }
+  return { scanned, migrated };
+}
+
+/**
  * Walk groups/ and seed `summary.md` for every group without one.
  *
  * @param {{ yeaftDir: string, root?: string }} opts
@@ -171,17 +265,30 @@ export function backfillGroupSummaries({ yeaftDir, root = DEFAULT_MEMORY_ROOT })
  * Run all backfills sequentially. Best-effort — any per-step error is
  * logged and the next step still runs.
  *
+ * Order:
+ *   1. Migrate legacy VP summaries (rewrite pre-stamp persona-body stubs
+ *      to current-format stamped stubs). Runs FIRST so that
+ *      `backfillVpSummaries` sees consistent on-disk state and any
+ *      future logic that distinguishes "stamped" vs "free-form" works
+ *      uniformly downstream.
+ *   2. Backfill missing VP summaries.
+ *   3. Backfill missing group summaries.
+ *
  * @param {{ yeaftDir: string, libDir: string, root?: string }} opts
- * @returns {{ vp: {scanned:number, seeded:number}, group: {scanned:number, seeded:number} }}
+ * @returns {{ migrate: {scanned:number, migrated:number}, vp: {scanned:number, seeded:number}, group: {scanned:number, seeded:number} }}
  */
 export function runSummaryBackfill({ yeaftDir, libDir, root = DEFAULT_MEMORY_ROOT }) {
+  let migrate = { scanned: 0, migrated: 0 };
   let vp = { scanned: 0, seeded: 0 };
   let group = { scanned: 0, seeded: 0 };
+  try { migrate = migrateLegacyVpSummaries({ libDir, root }); } catch (err) {
+    console.warn('[seed-backfill] vp migrate failed:', err?.message || err);
+  }
   try { vp = backfillVpSummaries({ libDir, root }); } catch (err) {
     console.warn('[seed-backfill] vp pass failed:', err?.message || err);
   }
   try { group = backfillGroupSummaries({ yeaftDir, root }); } catch (err) {
     console.warn('[seed-backfill] group pass failed:', err?.message || err);
   }
-  return { vp, group };
+  return { migrate, vp, group };
 }
