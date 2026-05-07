@@ -8,6 +8,7 @@ import ReflectionCard from './ReflectionCard.js';
 import SubAgentCard from './SubAgentCard.js';
 import GroupAnnouncementBar from './GroupAnnouncementBar.js';
 import { foldByFeatureId, injectQuickPreviews } from '../stores/helpers/feature-fold.js';
+import { appendTypingPlaceholders } from '../stores/helpers/typing-placeholders.js';
 
 export default {
   name: 'MessageList',
@@ -722,67 +723,19 @@ export default {
 
       finishTurn();
 
-      // task-708: synthesize placeholder turns for VPs that are typing
-      // but have no in-flight AssistantTurn yet. This covers the gap
-      // between `vp_typing_start` and the first text chunk — the
-      // avatar is visible from the moment the engine picks up the
-      // user's message. AssistantTurn renders just the speaker
-      // header (with typing badge on the avatar) when the body is
-      // empty, so the visual is the same as a freshly-streaming
-      // turn with no tokens yet.
-      //
-      // Skip a typing VP when it already has any turn in `result` (the
-      // last such turn carries the speaker header / avatar; no need
-      // for an extra ghost row). Restricting the skip to the LAST
-      // turn would re-introduce the flash: when a VP starts a
-      // follow-up turn before the engine emits, the prior completed
-      // turn is no longer "in-flight" and the avatar would briefly
-      // disappear; the placeholder bridges that.
-      const typingIdsForPlaceholder = store.vpsTypingInCurrentConv;
-      if (typingIdsForPlaceholder.length > 0) {
-        // VPs whose latest turn in `result` is still streaming already
-        // carry the typing badge on the live AssistantTurn — no
-        // placeholder needed for them.
-        const streamingVps = new Set();
-        // Walk back through the tail run of assistant-turns. Stop at the
-        // first non-assistant-turn (user / system / feature row) — those
-        // break a same-VP streak so anything streaming further back is
-        // already attached to its own non-collapsed turn.
-        for (let i = result.length - 1; i >= 0; i--) {
-          const r = result[i];
-          if (!r) continue;
-          if (r.type !== 'assistant-turn') break;
-          if (r.isStreaming && r.speakerVpId) streamingVps.add(r.speakerVpId);
-        }
-        for (const vpId of typingIdsForPlaceholder) {
-          if (streamingVps.has(vpId)) continue;
-          // PR-2 (feature-pill): inherit the active featureId for this VP
-          // onto the placeholder so it doesn't break an in-flight feature
-          // run during the typing gap. featureIdOfTurn reads `item.featureId`
-          // as a fallback when `messages` is empty, so this stamp is enough
-          // — no need to push a sentinel into messages[].
-          const activeFeatureId = (store.unifyActiveFeatureByVp || {})[vpId] || null;
-          result.push({
-            type: 'assistant-turn',
-            id: 'turn_typing_' + vpId,
-            textContent: '',
-            isStreaming: true,
-            todoMsg: null,
-            toolMsgs: [],
-            imageMsgs: [],
-            askMsg: null,
-            messages: [],
-            atMessageId: null,
-            speakerVpId: vpId,
-            speakerTimestamp: 0,
-            speakerStateCause: '',
-            showSpeakerHeader: true,
-            turnId: null,
-            handoffHints: [],
-            featureId: activeFeatureId,
-          });
-        }
-      }
+      // task-708 / PR-720: synthesise placeholder turns for typing VPs
+      // that have no in-flight AssistantTurn yet — bridges the gap
+      // between `vp_typing_start` and the first chunk so the avatar
+      // shows from the moment the engine picks up the user's message.
+      // Suppression rule: any speakerVpId in the tail run already covers
+      // that VP. (Earlier predicate `r.isStreaming && r.speakerVpId`
+      // missed tool-only turns — isStreaming flips on text deltas only.)
+      // Helper is pure so it's tested without Vue / Pinia.
+      appendTypingPlaceholders(
+        result,
+        store.vpsTypingInCurrentConv,
+        store.unifyActiveFeatureByVp || {},
+      );
 
       // PR-2 (feature-pill double-track): two pure post-passes over the
       // assembled turn list.
