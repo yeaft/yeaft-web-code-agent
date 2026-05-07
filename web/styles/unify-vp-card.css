@@ -1,0 +1,54 @@
+.vp-quick-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 14px;
+  margin: 6px 0;
+  border-radius: 10px;
+  background: var(--card-bg, #f5f5f4);
+  cursor: pointer;
+  transition: background 120ms ease;
+  user-select: none;
+}
+.vp-quick-card:hover { background: var(--card-bg-hover, #ebebea); }
+.vp-quick-card:focus-visible {
+  outline: 2px solid var(--accent, #d97706);
+  outline-offset: 2px;
+}
+.vp-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.vp-card-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-primary, #1c1917);
+}
+.vp-card-preview {
+  font-size: 13px;
+  color: var(--text-secondary, #44403c);
+  line-height: 1.4;
+}
+.vp-card-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-tertiary, #78716c);
+}
+.vp-card-status.status-thinking { color: var(--text-tertiary, #78716c); }
+.vp-card-status.status-tool { color: var(--accent, #d97706); }
+.vp-card-status.status-done { color: var(--success, #16a34a); }
+.vp-card-status.status-aborted { color: var(--text-tertiary, #78716c); opacity: 0.7; }
+.vp-card-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: vp-card-pulse 1.2s ease-in-out infinite;
+}
+@keyframes vp-card-pulse {
+  0%,100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}

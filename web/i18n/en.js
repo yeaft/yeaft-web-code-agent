@@ -962,6 +962,14 @@ export default {
   // ============ Unify VP Speaker Header (task-334-ui-b) ============
   'unify.vp.speaker.stateCauseAria': 'State change: {cause}',
 
+  // ============ Unify VP Quick Card (task-334-ui-quickcard) ============
+  'unify.vp.status.thinking': 'thinking…',
+  'unify.vp.status.tool': 'using {name}',
+  'unify.vp.status.done': 'done · {count} tools',
+  'unify.vp.status.aborted': 'aborted',
+  'unify.vp.detail.info': 'Info',
+  'unify.vp.detail.close': 'Close',
+
   // ============ Unify VP CRUD (task-334-ui-g) ============
   'unify.vp.crud.title': 'VP Library',
   'unify.vp.crud.close': 'Close',
