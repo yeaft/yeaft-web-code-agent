@@ -9,12 +9,13 @@ import FeatureMessageRejectToast from './FeatureMessageRejectToast.js';
 import WorkbenchPanel from './WorkbenchPanel.js';
 import UnifyDebugPanel from './UnifyDebugPanel.js';
 import VpTimelinePane from './VpTimelinePane.js';
+import VpTurnDetailDrawer from './VpTurnDetailDrawer.js';
 import { parseMentions } from '../utils/parseMentions.js';
 import { buildTimelineRows } from '../stores/helpers/vp-timeline.js';
 
 export default {
   name: 'UnifyPage',
-  components: { ChatInput, MessageList, UnifySettings, UnifySidebar, VpDetailView, GroupInviteModal, GroupSettingsModal, FeatureMessageRejectToast, WorkbenchPanel, UnifyDebugPanel, VpTimelinePane },
+  components: { ChatInput, MessageList, UnifySettings, UnifySidebar, VpDetailView, GroupInviteModal, GroupSettingsModal, FeatureMessageRejectToast, WorkbenchPanel, UnifyDebugPanel, VpTimelinePane, VpTurnDetailDrawer },
   template: `
     <div class="unify-page">
       <!-- Mobile sidebar overlay -->
@@ -259,6 +260,8 @@ export default {
         :initial-section="groupSettingsSection"
         @close="closeGroupSettings"
       />
+
+      <VpTurnDetailDrawer />
     </div>
   `,
   setup() {
