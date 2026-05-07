@@ -39,10 +39,25 @@ function writeAtomicSync(path, body) {
 /**
  * Build a synthetic VP summary from the on-disk role.md.
  *
+ * IMPORTANT — this is a STUB that lives until Dream-v2 writes a real
+ * per-scope summary. Earlier versions copied up to 800 chars of the
+ * `role.md` body into `summary.md`. That body is *also* rendered as
+ * Section 1 of the system prompt (`renderVpPersona` in `prompts.js`),
+ * so the same persona text reappeared in `## Active Memory Set →
+ * Resident → vp/<id>` — the user-visible "Why is the persona defined
+ * twice?" bug.
+ *
+ * The summary.md placeholder is therefore deliberately minimal: just
+ * the VP's display name + role label. Layer-A AMS still sees a
+ * non-empty `vp/<id>` resident entry (so adjust/recall scope wiring
+ * stays unchanged), but the persona body is rendered exactly once,
+ * by Section 1.
+ *
+ * Once Dream-v2 produces a real summary for this scope it overwrites
+ * this stub — see `idempotency` note at the top of the file.
+ *
  * Delegates frontmatter parsing to `vp-store.js#parseRoleMd` so the
- * backfill stays in sync with the production loader. The earlier hand-
- * rolled regex parser silently dropped quoted multi-line scalars and
- * list-shaped fields — `parseRoleMd` covers both.
+ * backfill stays in sync with the production loader.
  *
  * @param {string} libDir
  * @param {string} vpId
@@ -54,17 +69,12 @@ function readVpRoleSummary(libDir, vpId) {
   let raw = '';
   try { raw = readFileSync(rolePath, 'utf-8'); } catch { return null; }
 
-  const { meta, body } = parseRoleMd(raw);
+  const { meta } = parseRoleMd(raw);
   const name = String(meta.name || vpId).trim() || vpId;
   const role = typeof meta.role === 'string' ? meta.role.trim() : '';
 
-  const persona = typeof body === 'string' ? body.trim() : '';
   const lines = [`# ${name}`];
   if (role) lines.push('', `**Role:** ${role}`);
-  if (persona) {
-    const truncated = persona.length > 800 ? persona.slice(0, 800).trim() + '…' : persona;
-    lines.push('', '**Persona:**', '', truncated);
-  }
   return lines.join('\n').trim();
 }
 

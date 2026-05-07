@@ -53,7 +53,7 @@ function writeGroupMeta(groupId, meta) {
 }
 
 describe('backfillVpSummaries', () => {
-  it('seeds summary.md for VPs missing one', () => {
+  it('seeds summary.md for VPs missing one (stub: name + role only, no persona body)', () => {
     writeRoleMd('alice', '---\nid: alice\nname: Alice\nrole: PM\n---\nAlice is the product lead.');
     const r = backfillVpSummaries({ libDir, root: memoryRoot });
     expect(r.scanned).toBe(1);
@@ -61,7 +61,12 @@ describe('backfillVpSummaries', () => {
     const out = readFileSync(join(memoryRoot, 'vp', 'alice', 'summary.md'), 'utf-8');
     expect(out).toContain('Alice');
     expect(out).toContain('PM');
-    expect(out).toContain('product lead');
+    // Persona body MUST NOT be copied here — it is already rendered as
+    // Section 1 of the system prompt by `renderVpPersona`. Duplicating it
+    // into Layer-A `vp/<id>` resident produced the visible "persona defined
+    // twice" bug.
+    expect(out).not.toContain('product lead');
+    expect(out).not.toContain('**Persona:**');
   });
 
   it('does NOT overwrite an existing non-empty summary.md', () => {
