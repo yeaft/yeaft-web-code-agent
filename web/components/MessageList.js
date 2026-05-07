@@ -740,22 +740,35 @@ export default {
       // disappear; the placeholder bridges that.
       const typingIdsForPlaceholder = store.vpsTypingInCurrentConv;
       if (typingIdsForPlaceholder.length > 0) {
-        // VPs whose latest turn in `result` is still streaming already
-        // carry the typing badge on the live AssistantTurn — no
-        // placeholder needed for them.
-        const streamingVps = new Set();
-        // Walk back through the tail run of assistant-turns. Stop at the
-        // first non-assistant-turn (user / system / feature row) — those
-        // break a same-VP streak so anything streaming further back is
-        // already attached to its own non-collapsed turn.
+        // VPs whose latest turn in the tail run already carry the speaker
+        // header — placeholder would be a duplicate avatar block AFTER
+        // their real bubble. The previous predicate was
+        // `r.isStreaming && r.speakerVpId` which missed two real cases:
+        //   (a) A turn that OPENS with a tool_call but has not yet
+        //       received any `assistant` text-delta. Only `type==='assistant'`
+        //       deltas flip `isStreaming` (see line ~658), so a tool-only
+        //       turn is `isStreaming: false` — even though the engine is
+        //       clearly mid-turn (typing badge is lit). The walk-back
+        //       evaluated false → placeholder was synthesized AFTER the
+        //       tool-bearing turn → the user saw an avatar block BELOW
+        //       the tool action ("group chat UI is wrong, tool action
+        //       should be inside the VP block, avatar should be above").
+        //   (b) A turn that just finished its assistant-text but the engine
+        //       hasn't emitted `vp_typing_end` yet — same shape, isStreaming
+        //       cleared, but typing flag still lit.
+        // Broaden the predicate to "any non-empty assistant-turn for this
+        // VP in the tail run". The placeholder is only needed when there
+        // is NO real turn yet — which is its actual purpose (bridging the
+        // gap between vp_typing_start and the first chunk).
+        const coveredVps = new Set();
         for (let i = result.length - 1; i >= 0; i--) {
           const r = result[i];
           if (!r) continue;
           if (r.type !== 'assistant-turn') break;
-          if (r.isStreaming && r.speakerVpId) streamingVps.add(r.speakerVpId);
+          if (r.speakerVpId) coveredVps.add(r.speakerVpId);
         }
         for (const vpId of typingIdsForPlaceholder) {
-          if (streamingVps.has(vpId)) continue;
+          if (coveredVps.has(vpId)) continue;
           // PR-2 (feature-pill): inherit the active featureId for this VP
           // onto the placeholder so it doesn't break an in-flight feature
           // run during the typing gap. featureIdOfTurn reads `item.featureId`
