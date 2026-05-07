@@ -139,8 +139,22 @@
 .unify-main {
   flex: 1;
   display: flex;
-  flex-direction: column;
+  /* Layout realign — VP list on the LEFT of the conversation (mirrors
+     Crew). Outer axis is row; the conversation column lives in
+     .unify-main-center which preserves the old vertical stack. */
+  flex-direction: row;
   min-width: 0;
+  overflow: hidden;
+}
+
+/* Conversation column inside unify-main. Holds the topbar, body
+   (settings | VP detail | empty hero | message list), and ChatInput.
+   Reproduces the column flex that .unify-main itself used to be. */
+.unify-main-center {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 
@@ -2990,14 +3004,15 @@
   letter-spacing: 0.3px;
 }
 
-/* ── PR-3: Right-side VP Timeline pane ────────────────────────────────
-   Sits between .unify-main and .unify-detail in the right column. CSS
-   custom property --unify-vp-timeline-width is set inline by UnifyPage's
-   timelineWidthStyle computed; the resize handle on the left edge drags
-   it. No border-top / border-bottom on any descendant — per project rule
-   "no horizontal dividers in Unify" (CLAUDE.md §Unify UI Design Rules).
-   Spacing comes from padding + gap only. Hidden under 1024 px so the
-   conversation pane keeps the screen on tablets/phones. */
+/* ── PR-3: VP List pane (left of conversation) ────────────────────────
+   Sits inside .unify-main as its left column, mirroring Crew's
+   crew-panel-left. CSS custom property --unify-vp-timeline-width is set
+   inline by UnifyPage's timelineWidthStyle computed; the resize handle
+   on the right edge drags it. No border-top / border-bottom on any
+   descendant — per project rule "no horizontal dividers in Unify"
+   (CLAUDE.md §Unify UI Design Rules). Spacing comes from padding + gap
+   only. Hidden under 1024 px so the conversation pane keeps the screen
+   on tablets/phones. */
 .unify-vp-timeline {
   width: var(--unify-vp-timeline-width, 280px);
   min-width: 220px;
@@ -3013,9 +3028,12 @@
 }
 .unify-vp-timeline-resize-handle {
   position: absolute;
-  /* Straddle the left edge so the hit-target spans both panes
-     (review fix — Torvalds M9; matches .unify-detail-drag-handle). */
-  left: -3px;
+  /* Straddle the RIGHT edge of the pane (boundary with the conversation
+     column) so the hit-target spans both panes. Matches the
+     handedness of .unify-detail-drag-handle on the detail pane's left
+     edge — both handles sit at their pane's "outer" edge. */
+  right: -3px;
+  left: auto;
   top: 0;
   bottom: 0;
   width: 6px;
@@ -3070,6 +3088,19 @@
 .unify-vp-timeline-row:focus-visible {
   background: var(--sidebar-hover, var(--surface-1, rgba(0, 0, 0, 0.04)));
   outline: none;
+}
+/* ── Layout realign — active-speaker highlight ────────────────────────
+   Mirrors Crew's .crew-role-card.is-streaming. Triggered by the row's
+   `is-status-streaming` and `is-status-typing` classes (PR-3 already
+   emits these — see VpTimelinePane row template). The `in-feature`
+   state is intentionally NOT highlighted: per the user's spec, "speaker"
+   means "currently producing tokens," not "owning an open feature."
+   No border-bottom (project rule); use an inset 2px left bar — same
+   visual trick Crew uses for its role-card highlight. */
+.unify-vp-timeline-row.is-status-streaming,
+.unify-vp-timeline-row.is-status-typing {
+  background: var(--accent-soft, rgba(99, 102, 241, 0.10));
+  box-shadow: inset 2px 0 0 var(--accent, #6366f1);
 }
 .unify-vp-timeline-row-body {
   min-width: 0; /* let inner ellipsis work inside the 1fr column */
