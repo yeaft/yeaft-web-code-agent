@@ -360,6 +360,12 @@ export const useChatStore = defineStore('chat', {
     // a VP-speaker-headed turn or a VP library row.
     unifyActiveVpDetailId: null,
 
+    // Right-side detail drawer target — populated when the user clicks a
+    // VpQuickCard in the main feed; cleared on close. Coexists with
+    // `unifyActiveVpDetailId` (the older center-column persona view) —
+    // the two are different dimensions (turn-scoped vs vp-scoped).
+    unifyOpenVpTurnDetail: null,  // { vpId, turnId } | null
+
     // ★ task-334j: task-scoped group-chat state (multi-VP message list).
     //
     // - featureMessagesMap: { [featureId]: FeatureMessage[] } parallel cache keyed
@@ -1753,6 +1759,20 @@ export const useChatStore = defineStore('chat', {
     },
     leaveVpDetailView() {
       this.unifyActiveVpDetailId = null;
+    },
+    /**
+     * Open the right-side VP-turn detail drawer for a single VP turn.
+     * Idempotent: switching to a different vpId+turnId replaces the
+     * descriptor; the drawer keeps its DOM instance.
+     * No-op if vpId or turnId is missing.
+     */
+    openVpTurnDetail(payload) {
+      if (!payload || !payload.vpId || !payload.turnId) return;
+      this.unifyOpenVpTurnDetail = { vpId: payload.vpId, turnId: payload.turnId };
+    },
+
+    closeVpTurnDetail() {
+      this.unifyOpenVpTurnDetail = null;
     },
     // H2.f.6: setUnifyFeatureReplyThreadId / setUnifyJumpTarget /
     // clearUnifyJumpTarget actions removed.
