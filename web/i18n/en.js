@@ -1184,11 +1184,6 @@ export default {
   'unify.vp.mention.offRosterHint': '@{vpId} is not in this group. Ask the user to invite them first.',
   'unify.vp.mention.inviteToast': 'Cannot mention @{vpId} — not in this group. Add them via the group editor first.',
 
-  'unify.feature.reply.aria': 'Reply to this message',
-  'unify.feature.reply.to': 'Replying to @{vpId}',
-  'unify.feature.reply.cancel': 'Cancel reply',
-  'unify.feature.reply.originalDeleted': '(original message removed)',
-
   'unify.feature.reject.missing_group_id': 'Message send failed: group not specified.',
   'unify.feature.reject.missing_feature_id': 'Message send failed: task context lost.',
   'unify.feature.reject.missing_vp_id': 'Message send failed: speaker not set.',

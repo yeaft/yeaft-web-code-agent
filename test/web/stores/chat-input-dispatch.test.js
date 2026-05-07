@@ -3,10 +3,9 @@
  * dispatch must forward `attachments` end-to-end.
  *
  * What broke before #721:
- *   - In `web/components/ChatInput.js#send()`, the unify-group and
- *     unify-feature branches `return`ed early without ever consulting
- *     the local `attachments[]` ref. Files the user had paperclipped
- *     vanished into the void.
+ *   - In `web/components/ChatInput.js#send()`, the unify-group branch
+ *     `return`ed early without ever consulting the local `attachments[]`
+ *     ref. Files the user had paperclipped vanished into the void.
  *   - The store helper `sendUnifyGroupChat` also short-circuited on
  *     empty text, so an image-only send produced zero WS frames.
  *
@@ -15,11 +14,6 @@
  *      outbound `unify_group_chat` WS frame.
  *   2. The same call accepts an image-only send (empty text) — it
  *      synthesizes a placeholder text and still ships the frame.
- *   3. `sendUnifyFeatureMessage` forwards attachments onto the
- *      outbound `unify_feature_message` WS frame. (The server-side
- *      stop-gap then strips them; that's tested separately. Here we
- *      pin only the store-side passthrough so a future "let's also
- *      drop them client-side" doesn't quietly happen.)
  *
  * Unit-only — no Vue render, no real WS. We capture chat.js's actions
  * object via a Pinia.defineStore shim and invoke the methods against
@@ -123,25 +117,5 @@ describe('sendUnifyGroupChat — attachment passthrough', () => {
     const store = mkStore();
     actions.sendUnifyGroupChat.call(store, { groupId: 'grp_1', text: '' });
     expect(store.sent).toHaveLength(0);
-  });
-});
-
-describe('sendUnifyFeatureMessage — attachment passthrough', () => {
-  it('forwards attachments[].fileId onto the unify_feature_message WS frame', () => {
-    // The server will strip these (PR #721 stop-gap) — but the store
-    // helper itself MUST keep forwarding so when the consume-by-handler
-    // refactor lands, no client-side change is needed.
-    const store = mkStore();
-    actions.sendUnifyFeatureMessage.call(store, {
-      groupId: 'grp_1',
-      featureId: 'feat_1',
-      vpId: 'user',
-      text: 'hi',
-      attachments: [{ fileId: 'f-aaa', isImage: true }],
-    });
-    expect(store.sent).toHaveLength(1);
-    const frame = store.sent[0];
-    expect(frame.type).toBe('unify_feature_message');
-    expect(frame.attachments).toEqual([{ fileId: 'f-aaa', isImage: true }]);
   });
 });

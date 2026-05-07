@@ -18,7 +18,6 @@
  *
  * Item shape (input):
  *   - { type: 'user' | 'system' | 'error', id, message }            — never folded
- *   - { type: 'feature-message', id, message: { featureId, ... } }  — foldable
  *   - { type: 'assistant-turn', id, messages: Msg[], speakerVpId, turnId, ... }
  *       — foldable; featureId is read from any inner messages[i].featureId
  *
@@ -33,9 +32,6 @@
  */
 export function featureIdOfTurn(item) {
   if (!item) return null;
-  if (item.type === 'feature-message') {
-    return (item.message && item.message.featureId) || null;
-  }
   if (item.type === 'assistant-turn') {
     const msgs = item.messages || [];
     for (const m of msgs) {
@@ -61,7 +57,7 @@ export function featureIdOfTurn(item) {
  */
 export function isFoldable(item) {
   if (!item) return false;
-  return item.type === 'assistant-turn' || item.type === 'feature-message';
+  return item.type === 'assistant-turn';
 }
 
 /**

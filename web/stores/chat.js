@@ -316,7 +316,6 @@ export const useChatStore = defineStore('chat', {
     // H2.f.6: thread state retired. unifyThreads / unifyActiveThreadId /
     // unifyFeatureReplyThreadId / unifyJumpTarget / merge+fork results all
     // removed. Single conversation owns the message stream.
-    unifyFeatures: [],
 
     // task-fix: per-VP typing indicator for Unify group chat.
     //   Shape: { [conversationId]: { [vpId]: refCount } }
@@ -342,17 +341,6 @@ export const useChatStore = defineStore('chat', {
     // hydration from SSR / rehydration doesn't trip on a non-Map value.
     _vpCrudPending: null,
 
-    // Currently selected task in the sidebar (UI-only highlight).
-    unifyActiveFeatureId: null,
-
-    // ★ task-315: Task Detail View state.
-    // When set, UnifyPage replaces the main chat area with the detail view
-    // for that task. Cleared by breadcrumb ← or Esc.
-    // H2.f.6: cross-thread aggregation removed; the detail view shows an
-    // empty-state placeholder until a non-thread message-tagging path
-    // is built (see TODO in UnifyFeatureDetailView).
-    unifyActiveFeatureDetailId: null,
-
     // ★ task-334-ui-c: VP detail view. When non-null, UnifyPage switches
     // the center pane to the VpDetailView component (mirrors the
     // task-315 pattern). Esc / breadcrumb back clears. Stays null in
@@ -365,25 +353,6 @@ export const useChatStore = defineStore('chat', {
     // `unifyActiveVpDetailId` (the older center-column persona view) —
     // the two are different dimensions (turn-scoped vs vp-scoped).
     unifyOpenVpTurnDetail: null,  // { vpId, turnId } | null
-
-    // ★ task-334j: task-scoped group-chat state (multi-VP message list).
-    //
-    // - featureMessagesMap: { [featureId]: FeatureMessage[] } parallel cache keyed
-    //   by featureId. Each entry is the normalised record pushed by
-    //   handleUnifyOutput on a `task_message` event (agent echo of a
-    //   `unify_feature_message` send; see agent/unify/task-message.js).
-    // - featureMessageRejects: transient toast queue. Each inbound
-    //   `feature_message_rejected` event appends one entry; the toast
-    //   component auto-dismisses after 4s and calls
-    //   dismissFeatureMessageReject to drain the array.
-    // - replyToMap: { [key]: { msgId, vpId, textPreview } } — active
-    //   reply-to state keyed by a caller-chosen scope key (e.g.
-    //   `task:<featureId>`). ChatInput reads replyToMap[taskReplyKey()]
-    //   when it builds a unify_feature_message payload; ReplyToCard renders
-    //   the quote card above the textarea.
-    featureMessagesMap: {},
-    featureMessageRejects: [],
-    replyToMap: {},
 
     // R6 G4: transient toast/hint queue for off-roster @-mention attempts.
     // ChatInput.flashInviteHint(vpId) pushes here; a toast component pops
@@ -547,20 +516,6 @@ export const useChatStore = defineStore('chat', {
         return raw.filter(m => m && m.groupId === target);
       }
       return raw;
-    },
-    // H2.f.6: cross-thread aggregation retired (no threads). Detail view
-    // empty-state placeholder until a non-thread tagging path is built.
-    unifyFeatureDetailMessages: () => EMPTY_ARRAY,
-    // ★ task-315: Metadata snippet for the task currently shown in
-    // detail view — title + id + status. Falls back to `{ id, title: id }`
-    // when the unifyFeatures array hasn't caught up yet (e.g. the user just
-    // clicked a sidebar task before the refresh event lands).
-    unifyActiveFeatureMeta: (state) => {
-      const featureId = state.unifyActiveFeatureDetailId;
-      if (!featureId) return null;
-      const t = (state.unifyFeatures || []).find(x => x && x.id === featureId);
-      if (t) return t;
-      return { id: featureId, title: featureId, status: 'unknown' };
     },
     // ★ Multi-column: compatibility shim — alias for messagesMap
     messagesCache: (state) => state.messagesMap,
@@ -731,9 +686,6 @@ export const useChatStore = defineStore('chat', {
     },
     leaveUnify() {
       this.currentView = 'chat';
-      // task-315: also exit the task detail view so the next Unify entry
-      // starts on the main stream.
-      this.unifyActiveFeatureDetailId = null;
       // Drop any open VP-turn detail drawer too; it's pinned to a
       // specific (vpId, turnId) of the previous Unify session and would
       // otherwise re-open with stale data on the next entry.
@@ -1391,10 +1343,6 @@ export const useChatStore = defineStore('chat', {
         // H2.f.6: thread_list_updated never arrives anymore — bridge stopped
         // emitting. Case removed; legacy replay would silently fall through.
 
-        case 'task_list_updated':
-          this.unifyFeatures = Array.isArray(event.tasks) ? event.tasks : [];
-          break;
-
         // R6 G1a — task summary history (revisions + optional archived).
         case 'unify_summary_history': {
           const ts = (window.Pinia && window.Pinia.useFeaturesStore)
@@ -1417,70 +1365,6 @@ export const useChatStore = defineStore('chat', {
 
         // H2.f.6: thread_merged / thread_forked / *_failed cases removed —
         // bridge no longer emits them.
-
-        // ★ task-334j: task-scoped group-chat message arrival (R6 §Δ28).
-        //
-        // Server-side echo of a unify_feature_message send (or a broadcast to
-        // another connected view). We push the record into two places:
-        //   1) featureMessagesMap[featureId] — parallel cache for task-scoped
-        //      reads (e.g. a future task-detail-only rail).
-        //   2) messagesMap[unifyConversationId] — mirror into the main
-        //      stream so MessageList's turnGroups aggregator picks it up
-        //      as a `task-message` row.
-        // Dedup by msgId so a reconnect-replay (future 334l persistence)
-        // does not double-insert (forward-compat, F-J1 from spec §13).
-        case 'feature_message': {
-          if (!event || !event.msgId || !event.featureId) break;
-          const featureId = event.featureId;
-          if (!this.featureMessagesMap[featureId]) this.featureMessagesMap[featureId] = [];
-          const featureList = this.featureMessagesMap[featureId];
-          if (!featureList.some(m => m.msgId === event.msgId)) {
-            featureList.push({
-              msgId: event.msgId,
-              vpId: event.vpId,
-              text: event.text,
-              mentions: Array.isArray(event.mentions) ? event.mentions : [],
-              replyTo: event.replyTo || null,
-              ts: event.ts,
-              groupId: event.groupId,
-              featureId,
-            });
-          }
-          const convId = this.unifyConversationId;
-          if (convId) {
-            if (!this.messagesMap[convId]) this.messagesMap[convId] = [];
-            const stream = this.messagesMap[convId];
-            if (!stream.some(m => m && m.id === event.msgId)) {
-              stream.push({
-                type: 'feature-message',
-                id: event.msgId,
-                featureId,
-                groupId: event.groupId,
-                vpId: event.vpId,
-                content: event.text,
-                mentions: Array.isArray(event.mentions) ? event.mentions : [],
-                replyTo: event.replyTo || null,
-                timestamp: typeof event.ts === 'number' ? event.ts : Date.now(),
-              });
-            }
-          }
-          break;
-        }
-
-        // ★ task-334j: rejected unify_feature_message — surface as a toast.
-        case 'feature_message_rejected': {
-          const id = 'tmr_' + Date.now().toString(36) + '_' +
-            Math.random().toString(36).slice(2, 8);
-          this.featureMessageRejects.push({
-            id,
-            code: typeof event.code === 'string' ? event.code : 'unknown',
-            groupId: event.groupId || null,
-            featureId: event.featureId || null,
-            requestId: event.requestId || null,
-            at: Date.now(),
-          });
-          break;
-        }
 
         // task-fix: per-VP typing indicator (group chat only).
         //   vp_typing_start → increment unifyVpTyping[vpId]
@@ -1715,9 +1599,6 @@ export const useChatStore = defineStore('chat', {
     setActiveGroupFilter(groupId) {
       const prev = this.unifyActiveGroupFilter || null;
       this.unifyActiveGroupFilter = groupId || null;
-      if (groupId) {
-        this.unifyActiveFeatureDetailId = null;
-      }
       // Only force a reload when the filter actually changed AND we have
       // an active Unify session to ask. The local-only path (no agent yet)
       // is harmless: the next sendUnifyEnter will plumb the groupId.
@@ -1735,31 +1616,10 @@ export const useChatStore = defineStore('chat', {
         });
       }
     },
-    setActiveTaskUi(featureId) {
-      this.unifyActiveFeatureId = featureId || null;
-    },
-    // ★ task-315: Enter the Task Detail view.
-    // H2.f.6: thread filter / reply-thread defaults removed. Detail view
-    // currently has no message data source — empty-state placeholder.
-    enterTaskDetailView(featureId) {
-      if (!featureId) return;
-      this.unifyActiveFeatureDetailId = featureId;
-      this.unifyActiveFeatureId = featureId; // keep sidebar row highlighted
-    },
-    leaveTaskDetailView() {
-      this.unifyActiveFeatureDetailId = null;
-    },
-    // ★ task-334-ui-c: VP detail view entry / exit. Mirrors the
-    // task-detail pair above.
+    // ★ task-334-ui-c: VP detail view entry / exit.
     enterVpDetailView(vpId) {
       if (!vpId) return;
       this.unifyActiveVpDetailId = String(vpId);
-      // Exiting the task-detail view at the same time keeps the
-      // "one fullscreen panel at a time" invariant consistent with
-      // task-315.
-      if (this.unifyActiveFeatureDetailId) {
-        this.unifyActiveFeatureDetailId = null;
-      }
     },
     leaveVpDetailView() {
       this.unifyActiveVpDetailId = null;
@@ -1916,19 +1776,10 @@ export const useChatStore = defineStore('chat', {
       this.unifyDebugGroupFilter = null;
       this.unifyReflectionCards = {};
       this.unifySubAgentCards = {};
-      // task-315: also exit the task detail view on a fresh Unify session
-      this.unifyActiveFeatureDetailId = null;
       // Same reasoning as leaveUnify: a stale (vpId, turnId) descriptor
       // from the previous session would re-open the drawer with no
       // matching messages once the messagesMap is wiped.
       this.unifyOpenVpTurnDetail = null;
-      // task-301 Part 2: reset sidebar V2 state too
-      this.unifyFeatures = [];
-      this.unifyActiveFeatureId = null;
-      // task-334j: drop any task-chat caches / in-flight reply state
-      this.featureMessagesMap = {};
-      this.featureMessageRejects = [];
-      this.replyToMap = {};
       // Tell agent to reset session so Engine gets a fresh start
       if (this.unifyAgentId) {
         this.sendWsMessage({
@@ -1936,74 +1787,6 @@ export const useChatStore = defineStore('chat', {
           agentId: this.unifyAgentId,
         });
       }
-    },
-
-    // =====================
-    // task-334j: group view send + reply state helpers
-    // =====================
-    /**
-     * Wire a unify_feature_message send per R6 §Δ28 / §Δ31.6.
-     * Payload (agent/unify/task-message.js validates the mirror):
-     *   { type: 'unify_feature_message', groupId, featureId, vpId, text,
-     *     mentions?, replyTo?, requestId? }
-     * No-ops when text is empty (agent would reject with empty_text).
-     */
-    sendUnifyFeatureMessage({ groupId, featureId, vpId, text, mentions, replyTo, requestId, attachments }) {
-      if (!text || !text.trim()) return;
-      if (!groupId || !featureId || !vpId) return;
-      const msg = {
-        type: 'unify_feature_message',
-        groupId,
-        featureId,
-        vpId,
-        text,
-      };
-      if (Array.isArray(mentions) && mentions.length > 0) msg.mentions = mentions;
-      if (replyTo) msg.replyTo = replyTo;
-      if (requestId) msg.requestId = requestId;
-      if (Array.isArray(attachments) && attachments.length > 0) {
-        // Same shape sendUnifyGroupChat uses — server-side relay
-        // resolves fileIds → base64 before forward.
-        msg.attachments = attachments
-          .filter((a) => a && a.fileId)
-          .map((a) => ({ fileId: a.fileId, isImage: !!a.isImage }));
-        if (msg.attachments.length === 0) delete msg.attachments;
-      }
-      this.sendWsMessage(msg);
-    },
-
-    /**
-     * Set the active reply-to target for a scope `key` (e.g. `task:<id>`).
-     * `msg` can be either a task_message record (msgId/text) or a mirror
-     * stream row (id/content); we normalise onto msgId + textPreview.
-     * Pass a falsy `msg` to clear.
-     */
-    setReplyTo(key, msg) {
-      if (!key) return;
-      if (!msg) { delete this.replyToMap[key]; return; }
-      const msgId = msg.msgId || msg.id || null;
-      if (!msgId) { delete this.replyToMap[key]; return; }
-      const previewSrc = typeof msg.content === 'string' ? msg.content
-        : (typeof msg.text === 'string' ? msg.text : '');
-      this.replyToMap[key] = {
-        msgId,
-        vpId: msg.vpId || null,
-        textPreview: previewSrc.slice(0, 80),
-      };
-    },
-
-    clearReplyTo(key) {
-      if (!key) return;
-      delete this.replyToMap[key];
-    },
-
-    /**
-     * Dismiss (remove) a pending feature_message_rejected toast by id.
-     * Called by FeatureMessageRejectToast on timer expiry or click.
-     */
-    dismissFeatureMessageReject(id) {
-      if (!id) return;
-      this.featureMessageRejects = this.featureMessageRejects.filter(r => r.id !== id);
     },
 
     // R6 G4: surface a non-blocking hint when the user @-mentions a VP that

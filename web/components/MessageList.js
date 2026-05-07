@@ -1,7 +1,6 @@
 import MessageItem from './MessageItem.js';
 import AssistantTurn from './AssistantTurn.js';
 import VpQuickCard from './VpQuickCard.js';
-import FeatureMessageItem from './FeatureMessageItem.js';
 import FeaturePill from './FeaturePill.js';
 import QuickPreview from './QuickPreview.js';
 import VpSpeakerHeader from './VpSpeakerHeader.js';
@@ -14,7 +13,7 @@ import { deriveTurnIntent } from '../stores/helpers/turn-intent.js';
 
 export default {
   name: 'MessageList',
-  components: { MessageItem, AssistantTurn, VpQuickCard, FeatureMessageItem, FeaturePill, QuickPreview, VpSpeakerHeader, ReflectionCard, SubAgentCard, GroupAnnouncementBar },
+  components: { MessageItem, AssistantTurn, VpQuickCard, FeaturePill, QuickPreview, VpSpeakerHeader, ReflectionCard, SubAgentCard, GroupAnnouncementBar },
   template: `
     <main class="chat-container" ref="containerRef">
       <!-- Session Loading Overlay - only covers message area -->
@@ -119,14 +118,6 @@ export default {
               v-else-if="item.type === 'quick-preview'"
               :preview="item.preview"
               :superseded="isQuickPreviewSuperseded(item)"
-            />
-
-            <!-- task-334j: task-scoped group message row with VP attribution + [task] pill -->
-            <FeatureMessageItem
-              v-else-if="item.type === 'feature-message'"
-              :message="item.message"
-              @reply="onFeatureMessageReply"
-              @open-detail="onOpenVpDetail"
             />
 
             <!-- PR-2: feature-pill — folded run of feature-tagged messages -->
@@ -646,15 +637,6 @@ export default {
           continue;
         }
 
-        // task-334j: task-scoped group message row. Breaks the assistant
-        // turn streak like a user/system row (distinct visual channel —
-        // avatar + [task] pill — not a continuation of an assistant turn).
-        if (msg.type === 'feature-message') {
-          finishTurn();
-          result.push({ type: 'feature-message', id: msg.id || 'tm_' + i, message: msg });
-          continue;
-        }
-
         // tool-result: skip (merged into tool-use)
         if (msg.type === 'tool-result' || msg.type === 'tool_result') {
           continue;
@@ -753,10 +735,10 @@ export default {
       //      before any assistant-turn whose vpId:turnId matches a stored
       //      Track-A preview, so the bubble appears in the right place
       //      without changing the underlying message stream.
-      //   2. foldByFeatureId — collapses runs of foldable items (assistant
-      //      turns + feature-message rows) that share a non-empty featureId
-      //      into a single `feature-pill` row. Inner items are preserved
-      //      so the user can expand the pill and see them.
+      //   2. foldByFeatureId — collapses runs of foldable assistant turns
+      //      that share a non-empty featureId into a single `feature-pill`
+      //      row. Inner items are preserved so the user can expand the
+      //      pill and see them.
       //
       // Both helpers live in `stores/helpers/feature-fold.js` so they can
       // be tested without spinning up Vue / Pinia.
@@ -1293,20 +1275,6 @@ export default {
       if (dogRafId) { cancelAnimationFrame(dogRafId); dogRafId = null; }
     });
 
-    // task-334j: task-message row handlers.
-    const onFeatureMessageReply = (payload) => {
-      if (!payload || !payload.msgId) return;
-      // Scope reply-to by active featureId so it survives re-entry into the
-      // same task; ChatInput reads `task:${featureId}` on send.
-      const featureId = store.unifyActiveFeatureDetailId;
-      if (!featureId) return;
-      store.setReplyTo('task:' + featureId, {
-        msgId: payload.msgId,
-        vpId: payload.vpId,
-        content: payload.textPreview,
-      });
-    };
-
     const onOpenVpDetail = (vpId) => {
       if (!vpId) return;
       store.enterVpDetailView(vpId);
@@ -1386,8 +1354,6 @@ export default {
       questionLX,
       questionRX,
       refreshSession,
-      // task-334j
-      onFeatureMessageReply,
       onOpenVpDetail,
       onOpenVpTurnDetail,
       // PR-4: per-feature abort

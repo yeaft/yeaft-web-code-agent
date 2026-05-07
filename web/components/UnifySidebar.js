@@ -4,11 +4,16 @@
  * Standalone sidebar component with:
  *   - top search box (task / message keywords; #thread- prefix retired)
  *   - Groups list (with kebab menu: manage members / rename / delete)
- *   - Tasks tree (expand/collapse, max 3 levels)
- *   - emits `select-task` / `select-group` on click
+ *   - emits `select-group` on click
  *
  * H2.f.6: thread/merge/fork UI removed alongside the multi-thread engine.
  * The remaining sidebar is a flat single-conversation surface.
+ *
+ * Tasks tree was removed in the unify_feature_message channel cleanup
+ * (2026-05-07) — see docs/notes/2026-05-07-feature-message-channel-removal.md.
+ * The `select-task` emit is preserved in onSelectResult only because the
+ * search-results path still references it; that path's data source
+ * (`unifyFeatures`) is permanently empty until a feature panel is built.
  */
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -232,49 +237,6 @@ export default {
 
         <!-- H2.f.6: Active / Idle / Archived thread sections removed. -->
 
-        <!-- Tasks Tree -->
-        <section class="us-group us-group-tasks" :class="{ collapsed: !tasksOpen }">
-          <button type="button" class="us-group-header" @click="tasksOpen = !tasksOpen">
-            <svg class="us-chevron" :class="{ open: tasksOpen }" viewBox="0 0 24 24" width="10" height="10"><path fill="currentColor" d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
-            <span class="us-group-label">{{ label('tasks') }}</span>
-            <span class="us-group-count">{{ filteredTasks.length }}</span>
-          </button>
-          <div class="us-group-body" v-show="tasksOpen">
-            <div v-for="task in filteredTasks" :key="task.id">
-              <div
-                class="us-task us-task-lvl-0"
-                :class="['us-task-status-' + (task.status || 'unknown'), { selected: task.id === activeTaskId }]"
-                @click="onSelectTask(task)"
-              >
-                <span
-                  class="us-task-toggle"
-                  v-if="task.children && task.children.length > 0"
-                  @click.stop="toggleTask(task.id)"
-                >
-                  <svg class="us-chevron" :class="{ open: isTaskExpanded(task.id) }" viewBox="0 0 24 24" width="9" height="9"><path fill="currentColor" d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
-                </span>
-                <span class="us-task-toggle-spacer" v-else></span>
-                <span class="us-task-id">{{ task.id }}</span>
-                <span class="us-task-title">{{ task.title }}</span>
-              </div>
-              <div v-if="isTaskExpanded(task.id) && task.children && task.children.length > 0">
-                <div
-                  v-for="child in task.children"
-                  :key="child.id"
-                  class="us-task us-task-lvl-1"
-                  :class="['us-task-status-' + (child.status || 'unknown'), { selected: child.id === activeTaskId }]"
-                  @click="onSelectTask(child)"
-                >
-                  <span class="us-task-toggle-spacer"></span>
-                  <span class="us-task-id">{{ child.id }}</span>
-                  <span class="us-task-title">{{ child.title }}</span>
-                </div>
-              </div>
-            </div>
-            <div class="us-empty" v-if="filteredTasks.length === 0">{{ label('emptyTasks') }}</div>
-          </div>
-        </section>
-
         <!-- task-339-F1: Groups section moved to top of sidebar (see above). -->
       </div>
 
@@ -315,8 +277,6 @@ export default {
   data() {
     return {
       searchQuery: '',
-      tasksOpen: true,
-      expandedTasks: {},
       now: Date.now(),
       // task-334m: group-create wizard visibility.
       groupWizardOpen: false,
@@ -430,9 +390,6 @@ export default {
     tasks() {
       if (Array.isArray(this.tasksSource)) return this.tasksSource;
       return this.store?.unifyFeatures || [];
-    },
-    activeTaskId() {
-      return this.store?.unifyActiveFeatureId || null;
     },
     // Localized placeholder. Falls back gracefully when $t is not injected
     // (e.g. stand-alone unit tests that don't mount the component).
@@ -621,15 +578,8 @@ export default {
     // openGroupSettingsFromMenu(g, section) above. UnifyPage owns the
     // modal lifecycle.
     // H2.f.6: thread display / tooltip / link / fork helpers removed.
-    isTaskExpanded(id) {
-      return !!this.expandedTasks[id];
-    },
-    toggleTask(id) {
-      this.expandedTasks = { ...this.expandedTasks, [id]: !this.expandedTasks[id] };
-    },
-    onSelectTask(task) {
-      this.$emit('select-task', task.id);
-    },
+    // H2.f.7 (2026-05-07): tasks tree removed; isTaskExpanded/toggleTask
+    // dropped along with the rendered section.
     // H2.f.6: results list now only contains tasks + messages.
     onSelectResult(r) {
       if (r.kind === 'message') {

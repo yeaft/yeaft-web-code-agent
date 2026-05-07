@@ -1184,11 +1184,6 @@ export default {
   'unify.vp.mention.offRosterHint': '@{vpId} 不在当前群组中。请先让用户邀请他/她加入。',
   'unify.vp.mention.inviteToast': '无法 @{vpId} — 该角色不在群里，请先在群组编辑器中添加。',
 
-  'unify.feature.reply.aria': '回复该消息',
-  'unify.feature.reply.to': '回复 @{vpId}',
-  'unify.feature.reply.cancel': '取消回复',
-  'unify.feature.reply.originalDeleted': '（原消息已删除）',
-
   'unify.feature.reject.missing_group_id': '发送失败：未指定群组。',
   'unify.feature.reject.missing_feature_id': '发送失败：任务上下文丢失。',
   'unify.feature.reject.missing_vp_id': '发送失败：未设置发言者。',

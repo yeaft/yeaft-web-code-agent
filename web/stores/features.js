@@ -11,11 +11,12 @@
  *   - fetchSummaryHistory(featureId, includeArchived)
  *   - applySummaryHistory(event)
  *
- * Feature list / tree state lives on chatStore (`unifyFeatures`,
- * `unifyActiveFeatureId`) — this store only owns the *outgoing-action* +
- * *summary cache* surface so VpDetailView / UnifyFeatureDetailView /
- * UnifySidebar can issue the new R6 verbs without each component
- * re-implementing the WS plumbing.
+ * Feature list / tree state: post-2026-05-07 cleanup, the chatStore-side
+ * `unifyFeatures` / `unifyActiveFeatureId` slots and the sidebar tree that
+ * read them are gone (see docs/notes/2026-05-07-feature-message-channel-removal.md).
+ * This store now owns only the *outgoing-action* + *summary cache* surface
+ * for the agent-side FeatureStore — VpDetailView issues the new R6 verbs
+ * through here without re-implementing the WS plumbing.
  *
  * Cache keys:
  *   - summariesByFeature[featureId] = { revisions: [...], archived: [...]?, at, error }

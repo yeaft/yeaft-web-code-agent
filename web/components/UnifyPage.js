@@ -5,7 +5,6 @@ import UnifySidebar from './UnifySidebar.js';
 import VpDetailView from './VpDetailView.js';
 import GroupInviteModal from './GroupInviteModal.js';
 import GroupSettingsModal from './GroupSettingsModal.js';
-import FeatureMessageRejectToast from './FeatureMessageRejectToast.js';
 import WorkbenchPanel from './WorkbenchPanel.js';
 import UnifyDebugPanel from './UnifyDebugPanel.js';
 import VpTimelinePane from './VpTimelinePane.js';
@@ -15,7 +14,7 @@ import { buildTimelineRows, selectGroupRosterVpList } from '../stores/helpers/vp
 
 export default {
   name: 'UnifyPage',
-  components: { ChatInput, MessageList, UnifySettings, UnifySidebar, VpDetailView, GroupInviteModal, GroupSettingsModal, FeatureMessageRejectToast, WorkbenchPanel, UnifyDebugPanel, VpTimelinePane, VpTurnDetailDrawer },
+  components: { ChatInput, MessageList, UnifySettings, UnifySidebar, VpDetailView, GroupInviteModal, GroupSettingsModal, WorkbenchPanel, UnifyDebugPanel, VpTimelinePane, VpTurnDetailDrawer },
   template: `
     <div class="unify-page">
       <!-- Mobile sidebar overlay -->
@@ -24,7 +23,6 @@ export default {
       <!-- Left Sidebar — V2 (task-341: V2 is the only sidebar now). -->
       <UnifySidebar
         :collapsed="sidebarCollapsed"
-        @select-task="onSelectTaskV2"
         @select-group="onSelectGroupV2"
         @search-escape="onSearchEscape"
         @toggle-sidebar="toggleSidebar"
@@ -236,9 +234,6 @@ export default {
 
       <!-- task-343: VP library is now an in-Settings tab (initial-tab='vp'). -->
 
-      <!-- task-334j: reject toast stack (bottom-right) -->
-      <FeatureMessageRejectToast />
-
       <!-- task-fix-group-member-editor: invite modal CTA now opens the
            group's member editor directly (the previous flow dumped the
            user into VP-Settings, where there was no add-to-group UI). -->
@@ -289,14 +284,6 @@ export default {
     // for callers that still read it.
     const sidebarV2Enabled = Vue.computed(() => true);
 
-    const onSelectTaskV2 = (featureId) => {
-      // task-315: clicking a task row highlights it. H2.f.6: cross-thread
-      // detail view retired (no thread data), so the main pane keeps
-      // showing the conversation stream.
-      store.enterTaskDetailView(featureId);
-      if (isMobile.value) sidebarCollapsed.value = true;
-    };
-
     // task-fix (group-switch): clicking a group row in the sidebar narrows
     // the main pane to that group's messages. The store handles filter
     // mutex (task filter is cleared).
@@ -304,8 +291,7 @@ export default {
       const id = g && g.id ? g.id : null;
       if (!id) return;
       store.setActiveGroupFilter(id);
-      // Also leave any detail views so the main stream is visible.
-      if (store.unifyActiveFeatureDetailId) store.leaveTaskDetailView();
+      // Also leave the VP detail view so the main stream is visible.
       if (store.unifyActiveVpDetailId) store.leaveVpDetailView();
       if (isMobile.value) sidebarCollapsed.value = true;
     };
@@ -434,19 +420,13 @@ export default {
       isNarrowDetail.value = window.innerWidth <= 1024;
     };
 
-    // Esc cascade (H2.f.6: thread-filter layer removed):
-    //   1) vp-detail view active → exit it first
-    //   2) task-detail view active → exit it
-    // Only one layer is popped per keystroke so the user always sees
-    // a single, predictable transition.
+    // Esc handling — exit the VP detail view if it's open. (Task-detail
+    // layer was deleted alongside unifyActiveFeatureDetailId; only the
+    // vp-detail layer remains.)
     const onKeyDown = (e) => {
       if (e.key !== 'Escape') return;
       if (store.unifyActiveVpDetailId) {
         store.leaveVpDetailView();
-        return;
-      }
-      if (store.unifyActiveFeatureDetailId) {
-        store.leaveTaskDetailView();
       }
     };
 
@@ -905,7 +885,6 @@ export default {
       toggleSettings,
       onSettingsSaved,
       sidebarV2Enabled,
-      onSelectTaskV2,
       onSelectGroupV2,
       exitVpDetailView,
       onSearchEscape,
