@@ -591,6 +591,22 @@ export default {
         return;
       }
 
+      // Build attachmentInfos once — every send branch (chat / unify
+      // group / unify feature) wants the same shape. Previously the
+      // Unify branches `return`ed before this, silently dropping the
+      // user's selected files. Now the store-side helpers (`sendUnify*`)
+      // know how to forward them; we just need to make sure the array
+      // is available before the dispatch.
+      const attachmentInfos = attachments.value
+        .filter(a => a.fileId)
+        .map(a => ({
+          fileId: a.fileId,
+          name: a.name,
+          preview: a.preview,
+          isImage: a.file?.type?.startsWith('image/') || false,
+          mimeType: a.file?.type || ''
+        }));
+
       // ★ task-334j: task-context branch — send as task message.
       if (store.unifyActiveFeatureDetailId && trimmed) {
         const mentions = parseMentions(trimmed).mentions;
@@ -603,7 +619,9 @@ export default {
         store.sendUnifyFeatureMessage({
           groupId, featureId, vpId: 'user',
           text: trimmed, mentions, replyTo, requestId,
+          attachments: attachmentInfos,
         });
+        attachments.value = [];
         inputText.value = '';
         store.clearReplyTo(replyToKey);
         store.expertSelections = [];
@@ -623,22 +641,18 @@ export default {
       if (store.currentView === 'unify' && trimmed) {
         const mentions = parseMentions(trimmed).mentions;
         const groupId = groupsStore?.activeGroupId || 'grp_default';
-        store.sendUnifyGroupChat({ groupId, text: trimmed, mentions });
+        store.sendUnifyGroupChat({
+          groupId,
+          text: trimmed,
+          mentions,
+          attachments: attachmentInfos,
+        });
+        attachments.value = [];
         inputText.value = '';
         delete store.inputDrafts[store.currentConversation];
         if (inputRef.value) inputRef.value.style.height = 'auto';
         return;
       }
-
-      const attachmentInfos = attachments.value
-        .filter(a => a.fileId)
-        .map(a => ({
-          fileId: a.fileId,
-          name: a.name,
-          preview: a.preview,
-          isImage: a.file?.type?.startsWith('image/') || false,
-          mimeType: a.file?.type || ''
-        }));
 
       const currentExpertSelections = [...expertSelections.value];
       store.sendMessage(inputText.value, attachmentInfos, { expertSelections: currentExpertSelections });

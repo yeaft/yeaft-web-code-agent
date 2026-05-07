@@ -68,8 +68,21 @@ export function createCoordinator(group, options = {}) {
     const mentions = parseMentions(input.text);
 
     // Persist first — audit log / replay works even if dispatch has bugs.
+    // NOTE: any field on `input` that starts with `_` is treated as
+    // ephemeral and is NOT forwarded to appendMessage. We use this for
+    // attachment payloads (image base64) that must reach the driver
+    // for the LLM call but must NEVER hit the persisted jsonl-log.
+    const persistInput = {};
+    const ephemeral = {};
+    for (const [k, v] of Object.entries(input)) {
+      if (typeof k === 'string' && k.startsWith('_')) {
+        ephemeral[k] = v;
+      } else {
+        persistInput[k] = v;
+      }
+    }
     const stored = group.appendMessage({
-      ...input,
+      ...persistInput,
       mentions,
       role: input.role || (fromUser ? 'user' : 'assistant'),
     });
@@ -96,7 +109,7 @@ export function createCoordinator(group, options = {}) {
     }
 
     if (selection.reason === 'broadcast') {
-      const envelope = makeEnvelope(stored, meta, 'broadcast');
+      const envelope = makeEnvelope(stored, meta, 'broadcast', ephemeral);
       for (const vpId of selection.dispatched) deliver(vpId, envelope);
       return {
         message: stored,
@@ -110,7 +123,7 @@ export function createCoordinator(group, options = {}) {
 
     if (selection.reason === 'mention') {
       for (const vpId of selection.dispatched) {
-        deliver(vpId, makeEnvelope(stored, meta, 'mention'));
+        deliver(vpId, makeEnvelope(stored, meta, 'mention', ephemeral));
       }
       return {
         message: stored,
@@ -121,7 +134,7 @@ export function createCoordinator(group, options = {}) {
     }
 
     if (selection.reason === 'fallback' && selection.fallback) {
-      deliver(selection.fallback, makeEnvelope(stored, meta, 'fallback'));
+      deliver(selection.fallback, makeEnvelope(stored, meta, 'fallback', ephemeral));
       return {
         message: stored,
         dispatched: selection.dispatched,
@@ -146,12 +159,16 @@ export function createCoordinator(group, options = {}) {
   };
 }
 
-function makeEnvelope(msg, meta, trigger) {
+function makeEnvelope(msg, meta, trigger, ephemeral = {}) {
   return {
     groupId: meta.id,
     taskId: msg.taskId || null,
     msg,
     trigger, // 'broadcast' | 'mention' | 'fallback'
+    // Ephemeral fields (any `_`-prefixed key on coord.ingest input).
+    // Used to ferry per-turn payloads (e.g. image base64 blocks) that
+    // must reach the driver but must NOT be persisted to the group log.
+    ...ephemeral,
   };
 }
 

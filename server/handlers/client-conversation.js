@@ -719,6 +719,37 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         // Forward the entire message minus the agentId field; the agent
         // router is the authoritative consumer of the payload shape.
         const { agentId: _discard, ...rest } = msg;
+
+        // Resolve attachment fileIds → base64 BEFORE forwarding, mirroring
+        // the chat / crew handlers. The agent never sees fileIds — it
+        // only handles `files: [{ name, mimeType, data, isImage }]`.
+        // Same-shape resolution as `client-crew.js#crew_human_input` so
+        // the unify side can share helpers with crew if it wants to.
+        if (Array.isArray(rest.attachments) && rest.attachments.length > 0) {
+          const resolvedFiles = [];
+          for (const att of rest.attachments) {
+            if (!att || !att.fileId) continue;
+            const file = pendingFiles.get(att.fileId);
+            if (file && (!file.userId || CONFIG.skipAuth || file.userId === client.userId)) {
+              resolvedFiles.push({
+                name: file.name,
+                mimeType: file.mimeType,
+                data: file.buffer.toString('base64'),
+                isImage: !!att.isImage || (file.mimeType || '').startsWith('image/'),
+              });
+              pendingFiles.delete(att.fileId);
+            } else if (file && file.userId !== client.userId) {
+              console.warn(`[Security] User ${client.userId} attempted to use unify file ${att.fileId} owned by ${file.userId}`);
+            }
+          }
+          if (resolvedFiles.length > 0) {
+            rest.files = resolvedFiles;
+          }
+          // Drop the fileId-bearing array so the agent only sees the
+          // resolved form on `files`.
+          delete rest.attachments;
+        }
+
         await forwardToAgent(relayAgentId, rest);
         return true;
       }
