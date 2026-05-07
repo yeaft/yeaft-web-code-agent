@@ -29,7 +29,6 @@ import { handleVpSubscribe } from './vp/vp-bridge.js';
 import { createVp, updateVp, deleteVp, readVp, VpCrudError } from './vp/vp-crud.js';
 import { scanVpLibrary } from './vp/vp-store.js';
 import { createRouter } from './routing/router.js';
-import { handleUnifyFeatureMessage as _handleUnifyFeatureMessage } from './feature-message.js';
 import {
   GroupCrudError,
   createGroupFromSpec,
@@ -635,10 +634,6 @@ export function handleUnifyVpDelete(msg) {
       },
     });
   }
-}
-
-export function handleUnifyFeatureMessage(msg) {
-  _handleUnifyFeatureMessage(msg, sendUnifyEvent);
 }
 
 export function handleUnifyVpRead(msg) {
