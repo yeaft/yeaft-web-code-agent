@@ -83,20 +83,31 @@ describe('sanitizeMessagesForWire — pure unit', () => {
     expect(sanitizeMessagesForWire(null)).toBe(null);
   });
 
-  it('is idempotent — sanitize(sanitize(x)) === sanitize(x).messages', () => {
+  it('handles empty messages array as a no-op (same reference)', () => {
+    const params = { model: 'claude-sonnet-4-20250514', messages: [] };
+    expect(sanitizeMessagesForWire(params)).toBe(params);
+  });
+
+  it('is idempotent — sanitize(clean) returns same reference, second call is also a no-op', () => {
+    // Real idempotence contract: once an orphan has been dropped, the
+    // result is well-formed, so a second sanitize must return the SAME
+    // reference (no re-allocation). This exercises the no-allocation
+    // contract that `sliceUnchanged` exists to guarantee.
     const params = {
       model: 'claude-sonnet-4-20250514',
       messages: [
         { role: 'user', content: 'hi' },
         { role: 'assistant', content: '', toolCalls: [
+          { id: 't_kept', name: 'x', input: {} },
           { id: 't_orphan', name: 'y', input: {} },
         ] },
-        // no tool_result for t_orphan
+        { role: 'tool', toolCallId: 't_kept', content: 'ok' },
       ],
     };
     const once = sanitizeMessagesForWire(params);
+    expect(once).not.toBe(params); // first call dropped the orphan
     const twice = sanitizeMessagesForWire(once);
-    expect(twice.messages).toEqual(once.messages);
+    expect(twice).toBe(once); // second call is a true no-op
   });
 });
 
@@ -153,6 +164,55 @@ describe('AdapterRouter — wire-level guard (integration)', () => {
       for (const block of m.content) {
         if (block.type === 'tool_use' && block.id) {
           toolUseIds.push(block.id);
+        }
+      }
+    }
+    expect(toolUseIds).toEqual(['t_kept']);
+    expect(toolResultIds.has('t_kept')).toBe(true);
+    expect(toolUseIds.includes('t_orphan')).toBe(false);
+  });
+
+  it('strips orphan tool_use before the request body reaches Anthropic via stream()', async () => {
+    const router = new AdapterRouter({ providers: [ANTHROPIC_PROVIDER] });
+
+    let capturedBody = null;
+    global.fetch = async (_url, opts) => {
+      capturedBody = opts?.body ? JSON.parse(opts.body) : null;
+      return {
+        ok: false, status: 401, headers: new Map(),
+        json: async () => ({ error: { message: 'test' } }),
+        text: async () => 'Unauthorized',
+      };
+    };
+
+    try {
+      const gen = router.stream({
+        model: 'claude-sonnet-4-20250514',
+        system: 'sys',
+        messages: [
+          { role: 'user', content: 'go' },
+          { role: 'assistant', content: '', toolCalls: [
+            { id: 't_kept', name: 'x', input: {} },
+            { id: 't_orphan', name: 'y', input: {} },
+          ] },
+          { role: 'tool', toolCallId: 't_kept', content: 'ok' },
+        ],
+      });
+      // Drain the generator — fetch is invoked lazily on first yield.
+      // eslint-disable-next-line no-unused-vars
+      for await (const _evt of gen) { /* drain */ }
+    } catch { /* 401 from mock fetch — we only care about the body */ }
+
+    expect(capturedBody).not.toBeNull();
+    const wireMsgs = capturedBody.messages || [];
+    const toolUseIds = [];
+    const toolResultIds = new Set();
+    for (const m of wireMsgs) {
+      if (!Array.isArray(m.content)) continue;
+      for (const block of m.content) {
+        if (block.type === 'tool_use' && block.id) toolUseIds.push(block.id);
+        if (block.type === 'tool_result' && block.tool_use_id) {
+          toolResultIds.add(block.tool_use_id);
         }
       }
     }

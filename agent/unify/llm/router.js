@@ -17,7 +17,7 @@
 
 import { LLMAdapter } from './adapter.js';
 import { getThinkingCapability, normalizeEffort } from '../models.js';
-import { pairSanitize, hasOrphanPairs } from '../pair-sanitize.js';
+import { pairSanitize } from '../pair-sanitize.js';
 
 /**
  * task-327a: feature-flag accessor. Read lazily so tests can flip.
@@ -75,29 +75,48 @@ export function filterEffortForModel(params) {
  * The router is the SINGLE choke point through which every
  * adapter.stream() / adapter.call() flows. Sanitizing here means no
  * caller can accidentally bypass the guard — including the per-VP
- * group-mode path that surfaced the bug. The transform is idempotent
- * and a pure no-op when the input is already well-formed, so the cost
- * on the happy path is one O(n) walk over the messages array.
+ * group-mode path that surfaced the bug.
  *
- * Returns a fresh params object with `messages` replaced if any orphan
- * was dropped; otherwise returns `params` unchanged.
+ * Implementation: call `pairSanitize` exactly once and compare the
+ * result to the input. If nothing changed (length matches AND each
+ * assistant kept its toolCalls count), return the original `params`
+ * reference so the happy path is one O(n) walk + one comparison
+ * walk, no allocation downstream. If something WAS dropped, return
+ * `{ ...params, messages: cleaned }` and log a diagnostic so a
+ * recurrence stays traceable in agent logs.
  *
  * @param {object} params
  * @returns {object}
  */
 export function sanitizeMessagesForWire(params) {
   if (!params || !Array.isArray(params.messages)) return params;
-  if (!hasOrphanPairs(params.messages)) return params;
   const cleaned = pairSanitize(params.messages);
-  // Diagnostic — visible in agent logs so a recurrence is traceable.
-  // Best-effort console.warn; never throws.
-  try {
-    console.warn(
-      `[router] dropped tool_use/tool_result orphans before wire send: ` +
-      `${params.messages.length} → ${cleaned.length} messages`
-    );
-  } catch { /* ignore */ }
+  if (sliceUnchanged(params.messages, cleaned)) return params;
+  console.warn(
+    `[router] dropped tool_use/tool_result orphans before wire send: ` +
+    `${params.messages.length} → ${cleaned.length} messages`
+  );
   return { ...params, messages: cleaned };
+}
+
+/**
+ * Cheap structural equality between the original messages array and
+ * the post-sanitize result. Same length AND every assistant kept its
+ * toolCalls count = no orphans were dropped. We do NOT compare full
+ * deep equality — `pairSanitize` only ever shrinks, never reorders or
+ * mutates payloads.
+ */
+function sliceUnchanged(original, cleaned) {
+  if (original.length !== cleaned.length) return false;
+  for (let i = 0; i < original.length; i += 1) {
+    const a = original[i];
+    const b = cleaned[i];
+    if (!a || !b) continue;
+    const aCalls = Array.isArray(a.toolCalls) ? a.toolCalls.length : 0;
+    const bCalls = Array.isArray(b.toolCalls) ? b.toolCalls.length : 0;
+    if (aCalls !== bCalls) return false;
+  }
+  return true;
 }
 
 /**
