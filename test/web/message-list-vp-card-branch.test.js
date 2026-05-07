@@ -68,7 +68,6 @@ const stubs = {
   VpQuickCard: { name: 'VpQuickCard', template: '<div class="vp-quick-card-stub"></div>', props: ['turn', 'preview'] },
   AssistantTurn: { name: 'AssistantTurn', template: '<div class="assistant-turn-stub"></div>', props: ['turn'] },
   MessageItem: true,
-  FeatureMessageItem: true,
   FeaturePill: true,
   QuickPreview: true,
   VpSpeakerHeader: true,
