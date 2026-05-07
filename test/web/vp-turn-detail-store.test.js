@@ -80,4 +80,11 @@ describe('chat.js — unifyOpenVpTurnDetail', () => {
     actions.openVpTurnDetail.call(store, null);
     expect(store.unifyOpenVpTurnDetail).toBeNull();
   });
+
+  it('whitelists payload to vpId+turnId only (rejects extra fields)', () => {
+    const store = mkStore();
+    actions.openVpTurnDetail.call(store, { vpId: 'a', turnId: 't1', foo: 1, hostile: true });
+    expect(Object.keys(store.unifyOpenVpTurnDetail).sort()).toEqual(['turnId', 'vpId']);
+    expect(store.unifyOpenVpTurnDetail.foo).toBeUndefined();
+  });
 });
