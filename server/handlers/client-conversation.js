@@ -32,6 +32,10 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
             workDir: dbSession.work_dir,
             claudeSessionId: dbSession.claude_session_id,
             title: dbSession.title,
+            // fix-chat-title-sticky: hydrate sticky bit from DB so the
+            // per-message auto-title write at line 351 can't clobber a
+            // user-renamed title after a server-restart restore.
+            customTitle: !!dbSession.customTitle,
             createdAt: dbSession.created_at,
             userId: dbSession.user_id || client.userId,
             username: client.username,
@@ -64,6 +68,9 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
             workDir: dbSession.work_dir,
             claudeSessionId: dbSession.claude_session_id,
             title: dbSession.title,
+            // fix-chat-title-sticky: same hydration as the
+            // conversationIds branch above.
+            customTitle: !!dbSession.customTitle,
             createdAt: dbSession.created_at,
             userId: dbSession.user_id || client.userId,
             username: client.username,
@@ -88,9 +95,14 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         const filteredConvs = Array.from(agent.conversations.values()).filter(c =>
           CONFIG.skipAuth || !c.userId || c.userId === client.userId
         ).map(c => {
-          if (!c.title) {
+          // fix-chat-title-sticky: lazy-hydrate the title AND the
+          // sticky bit on send. This catches conversations rebuilt
+          // before the bit was wired through (older code paths,
+          // crew restores, etc.).
+          if (!c.title || c.customTitle === undefined) {
             const dbSession = sessionDb.get(c.id);
-            if (dbSession?.title) c.title = dbSession.title;
+            if (dbSession?.title && !c.title) c.title = dbSession.title;
+            if (c.customTitle === undefined) c.customTitle = !!dbSession?.customTitle;
           }
           return c;
         });
@@ -500,14 +512,22 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         await sendToWebClient(client, { type: 'error', message: 'Permission denied' });
         return;
       }
-      // Handle custom title (server-local, no agent forwarding needed)
+      // Handle custom title (server-local, no agent forwarding needed).
+      // fix-chat-title-sticky: persist `is_custom_title` to the DB so the
+      // sticky bit survives agent reconnect / server restart / convInfo
+      // rebuild. Without this, the per-message auto-title write at
+      // line 351 silently clobbers the user's renamed title the next
+      // time `convInfo.customTitle` is reset to undefined.
       if (msg.title !== undefined) {
         const titleAgent = agents.get(client.currentAgent);
         const titleConvInfo = titleAgent?.conversations.get(settingsConvId);
         if (msg.title) {
-          sessionDb.update(settingsConvId, { title: msg.title });
+          sessionDb.update(settingsConvId, { title: msg.title, isCustomTitle: 1 });
           if (titleConvInfo) { titleConvInfo.title = msg.title; titleConvInfo.customTitle = true; }
         } else {
+          // Clearing the custom title returns the session to auto-naming
+          // mode — the next user prompt repopulates the title.
+          sessionDb.update(settingsConvId, { isCustomTitle: 0 });
           if (titleConvInfo) { titleConvInfo.customTitle = false; }
         }
       }

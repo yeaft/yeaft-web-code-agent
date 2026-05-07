@@ -39,12 +39,31 @@ export async function handleAgentConversation(agentId, agent, msg) {
             existing.userId = dbSession?.user_id || agent.ownerId || null;
             existing.username = dbSession?.username || agent.ownerUsername || null;
           }
+          // fix-chat-title-sticky: hydrate the persisted title +
+          // sticky-bit on every list refresh. The agent doesn't track
+          // titles, so without this the in-memory `convInfo.customTitle`
+          // is stuck at `undefined` and the per-message auto-title write
+          // happily overwrites the user's renamed title.
+          if (existing.customTitle === undefined) {
+            const dbSession = sessionDb.get(conv.id);
+            if (dbSession) {
+              if (dbSession.title) existing.title = dbSession.title;
+              existing.customTitle = !!dbSession.customTitle;
+            }
+          }
         } else {
           // 新 conversation — 从 DB 或 agent.ownerId 获取 userId，不信任 agent 上报
           const dbSession = sessionDb.get(conv.id);
           const trustedUserId = dbSession?.user_id || agent.ownerId || null;
           const trustedUsername = dbSession?.username || agent.ownerUsername || null;
-          agent.conversations.set(conv.id, { ...conv, userId: trustedUserId, username: trustedUsername });
+          agent.conversations.set(conv.id, {
+            ...conv,
+            userId: trustedUserId,
+            username: trustedUsername,
+            // Hydrate sticky title bits if the DB has them.
+            title: dbSession?.title || conv.title || null,
+            customTitle: !!dbSession?.customTitle,
+          });
         }
       }
       await broadcastAgentList();
@@ -73,6 +92,19 @@ export async function handleAgentConversation(agentId, agent, msg) {
         claudeSessionId: msg.claudeSessionId,
         userId: trustedUserId,
         username: trustedUsername,
+        // fix-chat-title-sticky: hydrate the persisted title + sticky-bit
+        // from the DB on resume/recreate. Without this, a user-renamed
+        // session that's been resumed has `customTitle = undefined`,
+        // so the next user prompt overwrites the title.
+        //
+        // The OR-merge (`existing || db`) is deliberate: the in-memory
+        // value is fresher than the DB on the rare race where
+        // update_conversation_settings has just cleared the bit but the
+        // resume payload arrived from the agent before that write
+        // settled. Both sources move in lockstep on rename and clear,
+        // so they cannot disagree for long.
+        title: dbSessionData?.title || existingConvData?.title || null,
+        customTitle: !!(existingConvData?.customTitle || dbSessionData?.customTitle),
         createdAt: Date.now(),
         processing: false
       });

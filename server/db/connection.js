@@ -114,7 +114,15 @@ const migrations = [
   `ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'user'`,
   `ALTER TABLE messages ADD COLUMN metadata TEXT`,
   `ALTER TABLE sessions ADD COLUMN is_pinned INTEGER DEFAULT 0`,
-  `ALTER TABLE users ADD COLUMN aad_oid TEXT`
+  `ALTER TABLE users ADD COLUMN aad_oid TEXT`,
+  // fix-chat-title-sticky: persist the "user manually renamed this session"
+  // bit so it survives agent reconnect / server restart / DB rehydration.
+  // Before this column existed, the bit lived only on the in-memory
+  // `convInfo.customTitle` flag, and every rebuild path
+  // (agent-conversation handlers, agent-sync, get_agents) wiped it —
+  // letting the per-message auto-title write at
+  // `client-conversation.js:351` clobber the user's renamed title.
+  `ALTER TABLE sessions ADD COLUMN is_custom_title INTEGER DEFAULT 0`
 ];
 
 for (const migration of migrations) {
@@ -340,6 +348,7 @@ export const stmts = {
     UPDATE sessions SET
       claude_session_id = COALESCE(?, claude_session_id),
       title = COALESCE(?, title),
+      is_custom_title = COALESCE(?, is_custom_title),
       updated_at = ?
     WHERE id = ?
   `),

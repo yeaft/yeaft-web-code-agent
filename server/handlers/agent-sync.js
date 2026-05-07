@@ -53,7 +53,12 @@ export async function handleAgentSync(agentId, agent, msg) {
             }
             created++;
           } else {
-            if (s.lastModified > existing.updated_at) {
+            // fix-chat-title-sticky: don't let the agent's bulk title
+            // sync overwrite a user-renamed session. The title in the
+            // DB is sticky once `customTitle` is set; only the
+            // agent's claudeSessionId / activity timestamp need to
+            // refresh on this path.
+            if (s.lastModified > existing.updated_at && !existing.customTitle) {
               sessionDb.update(s.sessionId, { title: s.title });
             }
             updated++;
