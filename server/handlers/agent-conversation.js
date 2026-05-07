@@ -96,6 +96,13 @@ export async function handleAgentConversation(agentId, agent, msg) {
         // from the DB on resume/recreate. Without this, a user-renamed
         // session that's been resumed has `customTitle = undefined`,
         // so the next user prompt overwrites the title.
+        //
+        // The OR-merge (`existing || db`) is deliberate: the in-memory
+        // value is fresher than the DB on the rare race where
+        // update_conversation_settings has just cleared the bit but the
+        // resume payload arrived from the agent before that write
+        // settled. Both sources move in lockstep on rename and clear,
+        // so they cannot disagree for long.
         title: dbSessionData?.title || existingConvData?.title || null,
         customTitle: !!(existingConvData?.customTitle || dbSessionData?.customTitle),
         createdAt: Date.now(),

@@ -6,7 +6,11 @@ export const messageDb = {
     const now = Date.now();
     const result = stmts.insertMessage.run(sessionId, role, content, messageType, toolName, toolInput, now, metadata);
     // 更新会话的 updated_at
-    stmts.updateSession.run(null, null, now, sessionId);
+    // fix-chat-title-sticky: updateSession statement gained a fifth
+    // placeholder for `is_custom_title` — pass null so COALESCE keeps
+    // the existing value. Forgetting this arg is a RangeError on every
+    // message insert.
+    stmts.updateSession.run(null, null, null, now, sessionId);
     return result.lastInsertRowid;
   },
 
