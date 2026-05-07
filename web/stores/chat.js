@@ -354,13 +354,6 @@ export const useChatStore = defineStore('chat', {
     // the two are different dimensions (turn-scoped vs vp-scoped).
     unifyOpenVpTurnDetail: null,  // { vpId, turnId } | null
 
-    // ★ task-334j: reply-to scope cache.
-    //
-    // - replyToMap: { [key]: { msgId, vpId, textPreview } } — active
-    //   reply-to state keyed by a caller-chosen scope key. ReplyToCard
-    //   renders the quote card above the textarea.
-    replyToMap: {},
-
     // R6 G4: transient toast/hint queue for off-roster @-mention attempts.
     // ChatInput.flashInviteHint(vpId) pushes here; a toast component pops
     // them after a few seconds. Per D4 the user — not the LLM — is the one
@@ -1787,8 +1780,6 @@ export const useChatStore = defineStore('chat', {
       // from the previous session would re-open the drawer with no
       // matching messages once the messagesMap is wiped.
       this.unifyOpenVpTurnDetail = null;
-      // task-334j: drop in-flight reply state
-      this.replyToMap = {};
       // Tell agent to reset session so Engine gets a fresh start
       if (this.unifyAgentId) {
         this.sendWsMessage({
@@ -1796,35 +1787,6 @@ export const useChatStore = defineStore('chat', {
           agentId: this.unifyAgentId,
         });
       }
-    },
-
-    // =====================
-    // task-334j: reply state helpers
-    // =====================
-
-    /**
-     * Set the active reply-to target for a scope `key` (e.g. `task:<id>`).
-     * `msg` can be either a task_message record (msgId/text) or a mirror
-     * stream row (id/content); we normalise onto msgId + textPreview.
-     * Pass a falsy `msg` to clear.
-     */
-    setReplyTo(key, msg) {
-      if (!key) return;
-      if (!msg) { delete this.replyToMap[key]; return; }
-      const msgId = msg.msgId || msg.id || null;
-      if (!msgId) { delete this.replyToMap[key]; return; }
-      const previewSrc = typeof msg.content === 'string' ? msg.content
-        : (typeof msg.text === 'string' ? msg.text : '');
-      this.replyToMap[key] = {
-        msgId,
-        vpId: msg.vpId || null,
-        textPreview: previewSrc.slice(0, 80),
-      };
-    },
-
-    clearReplyTo(key) {
-      if (!key) return;
-      delete this.replyToMap[key];
     },
 
     // R6 G4: surface a non-blocking hint when the user @-mentions a VP that

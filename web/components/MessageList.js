@@ -637,15 +637,6 @@ export default {
           continue;
         }
 
-        // task-334j: task-scoped group message row. Breaks the assistant
-        // turn streak like a user/system row (distinct visual channel —
-        // avatar + [task] pill — not a continuation of an assistant turn).
-        if (msg.type === 'feature-message') {
-          finishTurn();
-          result.push({ type: 'feature-message', id: msg.id || 'tm_' + i, message: msg });
-          continue;
-        }
-
         // tool-result: skip (merged into tool-use)
         if (msg.type === 'tool-result' || msg.type === 'tool_result') {
           continue;
@@ -744,10 +735,10 @@ export default {
       //      before any assistant-turn whose vpId:turnId matches a stored
       //      Track-A preview, so the bubble appears in the right place
       //      without changing the underlying message stream.
-      //   2. foldByFeatureId — collapses runs of foldable items (assistant
-      //      turns + feature-message rows) that share a non-empty featureId
-      //      into a single `feature-pill` row. Inner items are preserved
-      //      so the user can expand the pill and see them.
+      //   2. foldByFeatureId — collapses runs of foldable assistant turns
+      //      that share a non-empty featureId into a single `feature-pill`
+      //      row. Inner items are preserved so the user can expand the
+      //      pill and see them.
       //
       // Both helpers live in `stores/helpers/feature-fold.js` so they can
       // be tested without spinning up Vue / Pinia.

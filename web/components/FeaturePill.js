@@ -13,15 +13,15 @@
  *   - 'error'     — red ✕, collapsed by default.
  *
  * Click the pill header to toggle. The inner body re-uses the standard
- * AssistantTurn / FeatureMessageItem / MessageItem rendering pipeline so
- * the messages inside the pill look identical to messages outside it.
+ * AssistantTurn / MessageItem rendering pipeline so the messages inside
+ * the pill look identical to messages outside it.
  *
  * Props:
  *   featureId      — the run's id; looked up in `unifyFeatureMeta`.
- *   turns          — array of pre-aggregated turn items belonging to this feature
- *                    (assistant-turn / feature-message). MessageList builds these
- *                    in `turnGroups` so the same turn-aggregation logic that runs
- *                    outside the pill also runs inside it.
+ *   turns          — array of pre-aggregated assistant-turn items belonging
+ *                    to this feature. MessageList builds these in `turnGroups`
+ *                    so the same turn-aggregation logic that runs outside the
+ *                    pill also runs inside it.
  *   subAgentCards  — PR-4: sub-agent cards whose stored `featureId` equals this
  *                    pill's; rendered inside the expanded body.
  *
@@ -201,10 +201,10 @@ export default {
     });
 
     const turnCount = Vue.computed(() => {
-      // Surface the count of folded items (turns + feature-message rows)
-      // inside this pill, NOT the total inner-message count. An
-      // assistant-turn item already aggregates many engine messages
-      // under one bubble; "turns" is the unit the user actually sees,
+      // Surface the count of folded turns inside this pill, NOT the total
+      // inner-message count. An assistant-turn item already aggregates
+      // many engine messages under one bubble; "turns" is the unit the
+      // user actually sees,
       // so the badge speaks in that unit too.
       return Array.isArray(props.turns) ? props.turns.length : 0;
     });

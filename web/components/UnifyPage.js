@@ -291,8 +291,7 @@ export default {
       const id = g && g.id ? g.id : null;
       if (!id) return;
       store.setActiveGroupFilter(id);
-      // Also leave any detail views so the main stream is visible.
-      if (store.unifyActiveFeatureDetailId) store.leaveTaskDetailView();
+      // Also leave the VP detail view so the main stream is visible.
       if (store.unifyActiveVpDetailId) store.leaveVpDetailView();
       if (isMobile.value) sidebarCollapsed.value = true;
     };
@@ -421,19 +420,13 @@ export default {
       isNarrowDetail.value = window.innerWidth <= 1024;
     };
 
-    // Esc cascade (H2.f.6: thread-filter layer removed):
-    //   1) vp-detail view active → exit it first
-    //   2) task-detail view active → exit it
-    // Only one layer is popped per keystroke so the user always sees
-    // a single, predictable transition.
+    // Esc handling — exit the VP detail view if it's open. (Task-detail
+    // layer was deleted alongside unifyActiveFeatureDetailId; only the
+    // vp-detail layer remains.)
     const onKeyDown = (e) => {
       if (e.key !== 'Escape') return;
       if (store.unifyActiveVpDetailId) {
         store.leaveVpDetailView();
-        return;
-      }
-      if (store.unifyActiveFeatureDetailId) {
-        store.leaveTaskDetailView();
       }
     };
 

@@ -4,11 +4,16 @@
  * Standalone sidebar component with:
  *   - top search box (task / message keywords; #thread- prefix retired)
  *   - Groups list (with kebab menu: manage members / rename / delete)
- *   - Tasks tree (expand/collapse, max 3 levels)
- *   - emits `select-task` / `select-group` on click
+ *   - emits `select-group` on click
  *
  * H2.f.6: thread/merge/fork UI removed alongside the multi-thread engine.
  * The remaining sidebar is a flat single-conversation surface.
+ *
+ * Tasks tree was removed in the unify_feature_message channel cleanup
+ * (2026-05-07) — see docs/notes/2026-05-07-feature-message-channel-removal.md.
+ * The `select-task` emit is preserved in onSelectResult only because the
+ * search-results path still references it; that path's data source
+ * (`unifyFeatures`) is permanently empty until a feature panel is built.
  */
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -272,8 +277,6 @@ export default {
   data() {
     return {
       searchQuery: '',
-      tasksOpen: true,
-      expandedTasks: {},
       now: Date.now(),
       // task-334m: group-create wizard visibility.
       groupWizardOpen: false,
@@ -575,12 +578,8 @@ export default {
     // openGroupSettingsFromMenu(g, section) above. UnifyPage owns the
     // modal lifecycle.
     // H2.f.6: thread display / tooltip / link / fork helpers removed.
-    isTaskExpanded(id) {
-      return !!this.expandedTasks[id];
-    },
-    toggleTask(id) {
-      this.expandedTasks = { ...this.expandedTasks, [id]: !this.expandedTasks[id] };
-    },
+    // H2.f.7 (2026-05-07): tasks tree removed; isTaskExpanded/toggleTask
+    // dropped along with the rendered section.
     // H2.f.6: results list now only contains tasks + messages.
     onSelectResult(r) {
       if (r.kind === 'message') {

@@ -19,15 +19,6 @@ import {
 } from '../../../../web/stores/helpers/feature-fold.js';
 
 describe('featureIdOfTurn', () => {
-  it('reads featureId from a feature-message item', () => {
-    expect(featureIdOfTurn({ type: 'feature-message', message: { featureId: 'feat-1' } }))
-      .toBe('feat-1');
-  });
-
-  it('returns null for a feature-message with no featureId', () => {
-    expect(featureIdOfTurn({ type: 'feature-message', message: {} })).toBeNull();
-  });
-
   it('reads featureId from any inner message of an assistant-turn', () => {
     const item = {
       type: 'assistant-turn',
@@ -77,9 +68,8 @@ describe('featureIdOfTurn', () => {
 });
 
 describe('isFoldable', () => {
-  it('treats only assistant-turn / feature-message as foldable', () => {
+  it('treats only assistant-turn as foldable', () => {
     expect(isFoldable({ type: 'assistant-turn' })).toBe(true);
-    expect(isFoldable({ type: 'feature-message' })).toBe(true);
   });
   it('rejects user / system / error / quick-preview / null', () => {
     expect(isFoldable({ type: 'user' })).toBe(false);
@@ -176,15 +166,6 @@ describe('foldByFeatureId', () => {
     expect(foldByFeatureId([])).toEqual([]);
     expect(foldByFeatureId(null)).toEqual([]);
     expect(foldByFeatureId(undefined)).toEqual([]);
-  });
-
-  it('mixes feature-message and assistant-turn under the same featureId', () => {
-    const fm  = { type: 'feature-message', id: 'fm1', message: { featureId: 'feat-A' } };
-    const t1  = { type: 'assistant-turn',  id: 't1',  messages: [{ featureId: 'feat-A' }] };
-    const out = foldByFeatureId([fm, t1]);
-    expect(out).toHaveLength(1);
-    expect(out[0].type).toBe('feature-pill');
-    expect(out[0].turns).toEqual([fm, t1]);
   });
 
   it('folds same-featureId turns from different VPs into one pill (cross-VP)', () => {
