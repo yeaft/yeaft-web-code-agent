@@ -133,12 +133,17 @@ describe('MessageList aggregator — every VP turn keeps its avatar (no collapse
   });
 
   it('synthesises a placeholder turn for typing VPs with no in-flight turn', () => {
-    // task-708: avatar visible from `vp_typing_start` even before the
-    // first text chunk lands. The placeholder pseudo-turn carries an
-    // empty textContent + speakerVpId; AssistantTurn renders just
-    // the speaker header (with typing badge on the avatar).
-    expect(src).toContain('typingIdsForPlaceholder');
-    expect(src).toContain("id: 'turn_typing_'");
+    // task-708 / PR-720: avatar visible from `vp_typing_start` even
+    // before the first text chunk lands. The placeholder pseudo-turn
+    // carries an empty textContent + speakerVpId; AssistantTurn renders
+    // just the speaker header (with typing badge on the avatar).
+    //
+    // The synthesis lives in `web/stores/helpers/typing-placeholders.js`
+    // (PR-720 extracted it out of MessageList) — assert on the helper
+    // module so a future MessageList rename doesn't false-fail this.
+    const helperSrc = read('web/stores/helpers/typing-placeholders.js');
+    expect(helperSrc).toContain("id: 'turn_typing_'");
+    expect(src).toContain('appendTypingPlaceholders');
   });
 
   // task-vp-header-pos: the speaker latch must run for ANY message that

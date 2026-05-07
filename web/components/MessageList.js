@@ -8,6 +8,7 @@ import ReflectionCard from './ReflectionCard.js';
 import SubAgentCard from './SubAgentCard.js';
 import GroupAnnouncementBar from './GroupAnnouncementBar.js';
 import { foldByFeatureId, injectQuickPreviews } from '../stores/helpers/feature-fold.js';
+import { appendTypingPlaceholders } from '../stores/helpers/typing-placeholders.js';
 
 export default {
   name: 'MessageList',
@@ -722,80 +723,19 @@ export default {
 
       finishTurn();
 
-      // task-708: synthesize placeholder turns for VPs that are typing
-      // but have no in-flight AssistantTurn yet. This covers the gap
-      // between `vp_typing_start` and the first text chunk — the
-      // avatar is visible from the moment the engine picks up the
-      // user's message. AssistantTurn renders just the speaker
-      // header (with typing badge on the avatar) when the body is
-      // empty, so the visual is the same as a freshly-streaming
-      // turn with no tokens yet.
-      //
-      // Skip a typing VP when it already has any turn in `result` (the
-      // last such turn carries the speaker header / avatar; no need
-      // for an extra ghost row). Restricting the skip to the LAST
-      // turn would re-introduce the flash: when a VP starts a
-      // follow-up turn before the engine emits, the prior completed
-      // turn is no longer "in-flight" and the avatar would briefly
-      // disappear; the placeholder bridges that.
-      const typingIdsForPlaceholder = store.vpsTypingInCurrentConv;
-      if (typingIdsForPlaceholder.length > 0) {
-        // VPs whose latest turn in the tail run already carry the speaker
-        // header — placeholder would be a duplicate avatar block AFTER
-        // their real bubble. The previous predicate was
-        // `r.isStreaming && r.speakerVpId` which missed two real cases:
-        //   (a) A turn that OPENS with a tool_call but has not yet
-        //       received any `assistant` text-delta. Only `type==='assistant'`
-        //       deltas flip `isStreaming` (see line ~658), so a tool-only
-        //       turn is `isStreaming: false` — even though the engine is
-        //       clearly mid-turn (typing badge is lit). The walk-back
-        //       evaluated false → placeholder was synthesized AFTER the
-        //       tool-bearing turn → the user saw an avatar block BELOW
-        //       the tool action ("group chat UI is wrong, tool action
-        //       should be inside the VP block, avatar should be above").
-        //   (b) A turn that just finished its assistant-text but the engine
-        //       hasn't emitted `vp_typing_end` yet — same shape, isStreaming
-        //       cleared, but typing flag still lit.
-        // Broaden the predicate to "any non-empty assistant-turn for this
-        // VP in the tail run". The placeholder is only needed when there
-        // is NO real turn yet — which is its actual purpose (bridging the
-        // gap between vp_typing_start and the first chunk).
-        const coveredVps = new Set();
-        for (let i = result.length - 1; i >= 0; i--) {
-          const r = result[i];
-          if (!r) continue;
-          if (r.type !== 'assistant-turn') break;
-          if (r.speakerVpId) coveredVps.add(r.speakerVpId);
-        }
-        for (const vpId of typingIdsForPlaceholder) {
-          if (coveredVps.has(vpId)) continue;
-          // PR-2 (feature-pill): inherit the active featureId for this VP
-          // onto the placeholder so it doesn't break an in-flight feature
-          // run during the typing gap. featureIdOfTurn reads `item.featureId`
-          // as a fallback when `messages` is empty, so this stamp is enough
-          // — no need to push a sentinel into messages[].
-          const activeFeatureId = (store.unifyActiveFeatureByVp || {})[vpId] || null;
-          result.push({
-            type: 'assistant-turn',
-            id: 'turn_typing_' + vpId,
-            textContent: '',
-            isStreaming: true,
-            todoMsg: null,
-            toolMsgs: [],
-            imageMsgs: [],
-            askMsg: null,
-            messages: [],
-            atMessageId: null,
-            speakerVpId: vpId,
-            speakerTimestamp: 0,
-            speakerStateCause: '',
-            showSpeakerHeader: true,
-            turnId: null,
-            handoffHints: [],
-            featureId: activeFeatureId,
-          });
-        }
-      }
+      // task-708 / PR-720: synthesise placeholder turns for typing VPs
+      // that have no in-flight AssistantTurn yet — bridges the gap
+      // between `vp_typing_start` and the first chunk so the avatar
+      // shows from the moment the engine picks up the user's message.
+      // Suppression rule: any speakerVpId in the tail run already covers
+      // that VP. (Earlier predicate `r.isStreaming && r.speakerVpId`
+      // missed tool-only turns — isStreaming flips on text deltas only.)
+      // Helper is pure so it's tested without Vue / Pinia.
+      appendTypingPlaceholders(
+        result,
+        store.vpsTypingInCurrentConv,
+        store.unifyActiveFeatureByVp || {},
+      );
 
       // PR-2 (feature-pill double-track): two pure post-passes over the
       // assembled turn list.
