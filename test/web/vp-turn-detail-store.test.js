@@ -97,7 +97,6 @@ describe('chat.js — unifyOpenVpTurnDetail', () => {
       currentView: 'unify',
       activeConversations: ['unify-x'],
       _savedActiveConversations: ['chat-1'],
-      unifyActiveFeatureDetailId: null,
     };
     actions.leaveUnify.call(store);
     expect(store.unifyOpenVpTurnDetail).toBeNull();
