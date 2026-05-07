@@ -1,5 +1,6 @@
 import MessageItem from './MessageItem.js';
 import AssistantTurn from './AssistantTurn.js';
+import VpQuickCard from './VpQuickCard.js';
 import FeatureMessageItem from './FeatureMessageItem.js';
 import FeaturePill from './FeaturePill.js';
 import QuickPreview from './QuickPreview.js';
@@ -13,7 +14,7 @@ import { deriveTurnIntent } from '../stores/helpers/turn-intent.js';
 
 export default {
   name: 'MessageList',
-  components: { MessageItem, AssistantTurn, FeatureMessageItem, FeaturePill, QuickPreview, VpSpeakerHeader, ReflectionCard, SubAgentCard, GroupAnnouncementBar },
+  components: { MessageItem, AssistantTurn, VpQuickCard, FeatureMessageItem, FeaturePill, QuickPreview, VpSpeakerHeader, ReflectionCard, SubAgentCard, GroupAnnouncementBar },
   template: `
     <main class="chat-container" ref="containerRef">
       <!-- Session Loading Overlay - only covers message area -->
@@ -139,6 +140,12 @@ export default {
             />
 
             <!-- Assistant Turn card: aggregated rendering -->
+            <VpQuickCard
+              v-else-if="item.type === 'assistant-turn' && item.intent === 'feature'"
+              :turn="item"
+              :preview="store.unifyQuickPreviews[item.speakerVpId + ':' + item.turnId]"
+              @open-detail="onOpenVpTurnDetail"
+            />
             <AssistantTurn v-else-if="item.type === 'assistant-turn'" :turn="item" />
           </div>
           <!-- feat-6af5f9f1 PR A: ReflectionCard mounts removed from the
@@ -1305,6 +1312,10 @@ export default {
       store.enterVpDetailView(vpId);
     };
 
+    const onOpenVpTurnDetail = ({ vpId, turnId }) => {
+      store.openVpTurnDetail({ vpId, turnId });
+    };
+
     // PR-4: per-feature abort. The pill emits a featureId; we resolve the
     // owning turnId via `unifyFeatureMeta` (set on `feature_started`) and
     // delegate to the existing `cancelVpTurn` action. There is no separate
@@ -1378,6 +1389,7 @@ export default {
       // task-334j
       onFeatureMessageReply,
       onOpenVpDetail,
+      onOpenVpTurnDetail,
       // PR-4: per-feature abort
       onCancelFeature,
       // PR-2 (feature-pill double-track)
