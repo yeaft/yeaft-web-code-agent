@@ -360,6 +360,12 @@ export const useChatStore = defineStore('chat', {
     // a VP-speaker-headed turn or a VP library row.
     unifyActiveVpDetailId: null,
 
+    // Right-side detail drawer target — populated when the user clicks a
+    // VpQuickCard in the main feed; cleared on close. Coexists with
+    // `unifyActiveVpDetailId` (the older center-column persona view) —
+    // the two are different dimensions (turn-scoped vs vp-scoped).
+    unifyOpenVpTurnDetail: null,  // { vpId, turnId } | null
+
     // ★ task-334j: task-scoped group-chat state (multi-VP message list).
     //
     // - featureMessagesMap: { [featureId]: FeatureMessage[] } parallel cache keyed
@@ -728,6 +734,10 @@ export const useChatStore = defineStore('chat', {
       // task-315: also exit the task detail view so the next Unify entry
       // starts on the main stream.
       this.unifyActiveFeatureDetailId = null;
+      // Drop any open VP-turn detail drawer too; it's pinned to a
+      // specific (vpId, turnId) of the previous Unify session and would
+      // otherwise re-open with stale data on the next entry.
+      this.unifyOpenVpTurnDetail = null;
       // Restore the original activeConversations snapshot taken on the
       // last real Chat → Unify transition (idempotent — no-op if cold).
       unifyViewHelpers.applyLeaveUnifyTransition(this);
@@ -1754,6 +1764,20 @@ export const useChatStore = defineStore('chat', {
     leaveVpDetailView() {
       this.unifyActiveVpDetailId = null;
     },
+    /**
+     * Open the right-side VP-turn detail drawer for a single VP turn.
+     * Idempotent: switching to a different vpId+turnId replaces the
+     * descriptor; the drawer keeps its DOM instance.
+     * No-op if vpId or turnId is missing.
+     */
+    openVpTurnDetail(payload) {
+      if (!payload || !payload.vpId || !payload.turnId) return;
+      this.unifyOpenVpTurnDetail = { vpId: payload.vpId, turnId: payload.turnId };
+    },
+
+    closeVpTurnDetail() {
+      this.unifyOpenVpTurnDetail = null;
+    },
     // H2.f.6: setUnifyFeatureReplyThreadId / setUnifyJumpTarget /
     // clearUnifyJumpTarget actions removed.
     switchUnifyModel(modelId) {
@@ -1894,6 +1918,10 @@ export const useChatStore = defineStore('chat', {
       this.unifySubAgentCards = {};
       // task-315: also exit the task detail view on a fresh Unify session
       this.unifyActiveFeatureDetailId = null;
+      // Same reasoning as leaveUnify: a stale (vpId, turnId) descriptor
+      // from the previous session would re-open the drawer with no
+      // matching messages once the messagesMap is wiped.
+      this.unifyOpenVpTurnDetail = null;
       // task-301 Part 2: reset sidebar V2 state too
       this.unifyFeatures = [];
       this.unifyActiveFeatureId = null;

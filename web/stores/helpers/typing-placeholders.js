@@ -70,6 +70,7 @@ export function appendTypingPlaceholders(items, typingVpIds, activeFeatureByVp) 
       turnId: null,
       handoffHints: [],
       featureId: featureMap[vpId] || null,
+      intent: 'quick',
     });
   }
   return items;

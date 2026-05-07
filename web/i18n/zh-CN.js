@@ -962,6 +962,14 @@ export default {
   // ============ Unify VP 发言头 (task-334-ui-b) ============
   'unify.vp.speaker.stateCauseAria': '状态变更：{cause}',
 
+  // ============ Unify VP 快速卡片 (task-334-ui-quickcard) ============
+  'unify.vp.status.thinking': '正在思考…',
+  'unify.vp.status.tool': '正在使用 {name}',
+  'unify.vp.status.done': '完成 · {count} 个工具',
+  'unify.vp.status.aborted': '已中止',
+  'unify.vp.detail.info': '信息',
+  'unify.vp.detail.close': '关闭',
+
   // ============ Unify VP 增删改查 (task-334-ui-g) ============
   'unify.vp.crud.title': '角色库',
   'unify.vp.crud.close': '关闭',
