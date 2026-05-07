@@ -51,12 +51,13 @@ export default {
         messages: msgs.slice(),
         speakerVpId: t.vpId,
         turnId: t.turnId,
-        // AssistantTurn may render this if shown; copy from the first
-        // message in the turn (typical case) and fall back to 0.
-        speakerTimestamp: msgs[0]?.timestamp || 0,
-        speakerStateCause: msgs[0]?.speakerStateCause || '',
-        // Drawer renders its own header (avatar + vpId + close/info);
-        // AssistantTurn must NOT redraw the speaker row inside the body.
+        // Drawer renders its own header (avatar + vpId + close/info)
+        // and does NOT render a timestamp / state-cause row, so we
+        // pin showSpeakerHeader: false and omit speakerTimestamp /
+        // speakerStateCause entirely. The raw message objects don't
+        // carry a `speakerStateCause` field anyway — that's tracked
+        // on a separate path inside MessageList.turnGroups via
+        // `lastStateChangeCause`, not on individual messages.
         showSpeakerHeader: false,
         // Handoff hints belong on the main flow card, not the drawer
         // body — leaving empty avoids a duplicate render in two places.
@@ -67,14 +68,25 @@ export default {
         intent: 'feature',
         atMessageId: null,
       };
-      for (const m of msgs) {
+      // Mirror of MessageList.turnGroups tool-result merge — keep in sync.
+      // (Followup: extract a shared build-turn-from-messages helper so
+      // there's only one place to change. Out of scope for this PR.)
+      for (let i = 0; i < msgs.length; i++) {
+        const m = msgs[i];
         if (m.type === 'assistant') {
           if (m.content) turn.textContent += m.content;
           if (m.isStreaming) turn.isStreaming = true;
         } else if (m.type === 'tool-use') {
-          if (m.toolName === 'TodoWrite') turn.todoMsg = m;
-          else if (m.toolName === 'AskUserQuestion') turn.askMsg = m;
-          else turn.toolMsgs.push(m);
+          const nextMsg = msgs[i + 1];
+          const hasResult = !!(nextMsg && (nextMsg.type === 'tool-result' || nextMsg.type === 'tool_result'));
+          const toolEntry = {
+            ...m,
+            hasResult: hasResult || m.hasResult || false,
+            toolResult: hasResult ? nextMsg : (m.toolResult || null),
+          };
+          if (m.toolName === 'TodoWrite') turn.todoMsg = toolEntry;
+          else if (m.toolName === 'AskUserQuestion') turn.askMsg = toolEntry;
+          else turn.toolMsgs.push(toolEntry);
         } else if (m.type === 'chat-image') {
           turn.imageMsgs.push(m);
         }

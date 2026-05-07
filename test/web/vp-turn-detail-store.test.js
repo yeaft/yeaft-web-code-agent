@@ -87,4 +87,20 @@ describe('chat.js — unifyOpenVpTurnDetail', () => {
     expect(Object.keys(store.unifyOpenVpTurnDetail).sort()).toEqual(['turnId', 'vpId']);
     expect(store.unifyOpenVpTurnDetail.foo).toBeUndefined();
   });
+
+  it('leaveUnify clears any open VP-turn detail descriptor', () => {
+    // A stale (vpId, turnId) from a previous Unify session would
+    // re-open the drawer on next entry against the wrong messagesMap.
+    // Pin that leaveUnify wipes it.
+    const store = {
+      unifyOpenVpTurnDetail: { vpId: 'jobs', turnId: 't1' },
+      currentView: 'unify',
+      activeConversations: ['unify-x'],
+      _savedActiveConversations: ['chat-1'],
+      unifyActiveFeatureDetailId: null,
+    };
+    actions.leaveUnify.call(store);
+    expect(store.unifyOpenVpTurnDetail).toBeNull();
+    expect(store.currentView).toBe('chat');
+  });
 });

@@ -5,14 +5,14 @@
   padding: 10px 14px;
   margin: 6px 0;
   border-radius: 10px;
-  background: var(--card-bg, #f5f5f4);
+  background: var(--bg-user-msg-subtle);
   cursor: pointer;
   transition: background 120ms ease;
   user-select: none;
 }
-.vp-quick-card:hover { background: var(--card-bg-hover, #ebebea); }
+.vp-quick-card:hover { background: var(--bg-hover); }
 .vp-quick-card:focus-visible {
-  outline: 2px solid var(--accent, #d97706);
+  outline: 2px solid var(--accent-blue);
   outline-offset: 2px;
 }
 .vp-card-header {
@@ -23,11 +23,11 @@
 .vp-card-name {
   font-weight: 600;
   font-size: 14px;
-  color: var(--text-primary, #1c1917);
+  color: var(--text-primary);
 }
 .vp-card-preview {
   font-size: 13px;
-  color: var(--text-secondary, #44403c);
+  color: var(--text-secondary);
   line-height: 1.4;
 }
 .vp-card-status {
@@ -35,12 +35,12 @@
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: var(--text-tertiary, #78716c);
+  color: var(--text-tertiary);
 }
-.vp-card-status.status-thinking { color: var(--text-tertiary, #78716c); }
-.vp-card-status.status-tool { color: var(--accent, #d97706); }
-.vp-card-status.status-done { color: var(--success, #16a34a); }
-.vp-card-status.status-aborted { color: var(--text-tertiary, #78716c); opacity: 0.7; }
+.vp-card-status.status-thinking { color: var(--text-tertiary); }
+.vp-card-status.status-tool { color: var(--status-busy); }
+.vp-card-status.status-done { color: var(--success); }
+.vp-card-status.status-aborted { color: var(--text-tertiary); opacity: 0.7; }
 .vp-card-status-dot {
   width: 6px;
   height: 6px;

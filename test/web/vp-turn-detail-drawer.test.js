@@ -199,6 +199,30 @@ describe('VpTurnDetailDrawer', () => {
     expect(wrapper.find('.drawer-info-popover').exists()).toBe(false);
   });
 
+  it('reconstruction merges tool-result into the preceding tool-use entry', () => {
+    // Mirrors MessageList.turnGroups: when a tool-use is immediately
+    // followed by a tool-result for the same turn, `hasResult` flips
+    // true and `toolResult` points at the result message. Without this
+    // merge, AssistantTurn would render the tool as still-running.
+    const toolUse = { type: 'tool-use', toolName: 'bash', vpId: 'jobs', turnId: 't1', id: 'tu1' };
+    const toolResult = {
+      type: 'tool-result', toolUseId: 'tu1', vpId: 'jobs', turnId: 't1',
+      content: 'ok', isError: false,
+    };
+    const store = setupStore({
+      openTarget: { vpId: 'jobs', turnId: 't1' },
+      messages: [toolUse, toolResult],
+    });
+    store.currentView = 'unify';
+    const wrapper = mount(VpTurnDetailDrawer, mountOpts);
+    const turn = wrapper.vm.targetTurn;
+    expect(turn.toolMsgs).toHaveLength(1);
+    expect(turn.toolMsgs[0].hasResult).toBe(true);
+    expect(turn.toolMsgs[0].toolResult).toBeTruthy();
+    expect(turn.toolMsgs[0].toolResult.content).toBe('ok');
+    expect(turn.toolMsgs[0].toolResult.toolUseId).toBe('tu1');
+  });
+
   it('renders drawer-empty when target set but no matching messages', () => {
     setupStore({
       openTarget: { vpId: 'jobs', turnId: 't1' },

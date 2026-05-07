@@ -734,6 +734,10 @@ export const useChatStore = defineStore('chat', {
       // task-315: also exit the task detail view so the next Unify entry
       // starts on the main stream.
       this.unifyActiveFeatureDetailId = null;
+      // Drop any open VP-turn detail drawer too; it's pinned to a
+      // specific (vpId, turnId) of the previous Unify session and would
+      // otherwise re-open with stale data on the next entry.
+      this.unifyOpenVpTurnDetail = null;
       // Restore the original activeConversations snapshot taken on the
       // last real Chat → Unify transition (idempotent — no-op if cold).
       unifyViewHelpers.applyLeaveUnifyTransition(this);
@@ -1914,6 +1918,10 @@ export const useChatStore = defineStore('chat', {
       this.unifySubAgentCards = {};
       // task-315: also exit the task detail view on a fresh Unify session
       this.unifyActiveFeatureDetailId = null;
+      // Same reasoning as leaveUnify: a stale (vpId, turnId) descriptor
+      // from the previous session would re-open the drawer with no
+      // matching messages once the messagesMap is wiped.
+      this.unifyOpenVpTurnDetail = null;
       // task-301 Part 2: reset sidebar V2 state too
       this.unifyFeatures = [];
       this.unifyActiveFeatureId = null;

@@ -4,7 +4,7 @@
   right: 0;
   bottom: 0;
   width: min(560px, 50vw);
-  background: var(--bg-primary, #fffaf5);
+  background: var(--bg-main);
   box-shadow: -4px 0 24px rgba(0, 0, 0, 0.08);
   display: flex;
   flex-direction: column;
@@ -20,7 +20,7 @@
 .drawer-vp-name {
   font-weight: 600;
   font-size: 15px;
-  color: var(--text-primary, #1c1917);
+  color: var(--text-primary);
 }
 .drawer-spacer { flex: 1; }
 .drawer-info-btn,
@@ -32,10 +32,10 @@
   width: 32px;
   height: 32px;
   border-radius: 6px;
-  color: var(--text-secondary, #44403c);
+  color: var(--text-secondary);
 }
 .drawer-info-btn:hover,
-.drawer-close:hover { background: var(--card-bg-hover, #ebebea); }
+.drawer-close:hover { background: var(--bg-hover); }
 
 .drawer-info-popover {
   position: absolute;
@@ -43,7 +43,7 @@
   right: 16px;
   min-width: 240px;
   padding: 12px 14px;
-  background: var(--bg-primary, #fff);
+  background: var(--bg-main);
   border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
   z-index: 1;
@@ -56,7 +56,7 @@
   overflow-y: auto;
   padding: 8px 16px 24px;
 }
-.drawer-empty { padding: 24px 0; color: var(--text-tertiary, #78716c); font-size: 13px; }
+.drawer-empty { padding: 24px 0; color: var(--text-tertiary); font-size: 13px; }
 
 .drawer-slide-enter-from,
 .drawer-slide-leave-to { transform: translateX(100%); }
