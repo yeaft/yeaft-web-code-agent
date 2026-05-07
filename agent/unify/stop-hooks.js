@@ -51,6 +51,11 @@ export async function runStopHooks(context) {
     // history replay can route messages back into the originating group.
     groupId,
     threadId,
+    // Multi-VP fan-out (history-dedup): when several engines run the
+    // same user prompt in parallel, the orchestrator persists the user
+    // row exactly once before fan-out. Each VP's stop-hook then skips
+    // the user record but still writes its own assistant + tool rows.
+    userAlreadyPersisted = false,
   } = context;
 
   // Model name for persisted messages: use primaryModel if provided, else config.model
@@ -90,6 +95,11 @@ export async function runStopHooks(context) {
       const recentMessages = messages.slice(turnStart);
       for (const msg of recentMessages) {
         if (!msg || !msg.role) continue;
+        // Skip the user row if the orchestrator already wrote it once for
+        // this turn (multi-VP fan-out: every VP's engine sees the same
+        // user prompt at conversationMessages[turnStart] but only the
+        // first writer should land on disk).
+        if (userAlreadyPersisted && msg.role === 'user') continue;
         // Allow empty assistant content when toolCalls are present;
         // tool messages have content by construction.
         const hasContent =

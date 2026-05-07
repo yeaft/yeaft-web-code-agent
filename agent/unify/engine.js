@@ -873,11 +873,19 @@ export class Engine {
    * Persist user message and assistant response to conversation store.
    * Skipped in read-only mode (config._readOnly).
    *
+   * Multi-VP fan-out (Bug 1): when several engines run the same user
+   * prompt in parallel, we must NOT each write our own copy of the user
+   * message — `coord.ingest`/the orchestrator already wrote it once. Pass
+   * `userAlreadyPersisted: true` from the caller to skip the user-row
+   * append while still persisting the assistant + tool rows.
+   *
    * @param {string} userContent
    * @param {string} assistantContent
    * @param {object[]} [toolCalls]
+   * @param {string} [groupId]
+   * @param {boolean} [userAlreadyPersisted]
    */
-  #persistMessages(userContent, assistantContent, toolCalls, groupId) {
+  #persistMessages(userContent, assistantContent, toolCalls, groupId, userAlreadyPersisted = false) {
     if (!this.#conversationStore) return;
     if (this.#config._readOnly) return;
 
@@ -885,14 +893,17 @@ export class Engine {
     // for back-compat with old conversation files; new writes always use 'main'.
     const threadId = MAIN_THREAD_ID;
 
-    // Persist user message
-    this.#conversationStore.append({
-      role: 'user',
-      content: userContent,
-      threadId,
-      // Bug 6: stamp groupId so history replay can route by group.
-      ...(groupId ? { groupId } : {}),
-    });
+    // Persist user message — unless an upstream caller (e.g. the group
+    // coordinator) has already done so for this turn.
+    if (!userAlreadyPersisted) {
+      this.#conversationStore.append({
+        role: 'user',
+        content: userContent,
+        threadId,
+        // Bug 6: stamp groupId so history replay can route by group.
+        ...(groupId ? { groupId } : {}),
+      });
+    }
 
     // Persist assistant message
     const assistantMsg = {
@@ -1040,7 +1051,7 @@ export class Engine {
    *   string-prompt shape (no regression for existing callers).
    * @yields {EngineEvent}
    */
-  async *query({ prompt, promptParts = null, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement } = {}) {
+  async *query({ prompt, promptParts = null, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement, userAlreadyPersisted = false } = {}) {
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       yield {
         type: 'error',
@@ -1099,7 +1110,7 @@ export class Engine {
     const runSignal = abortCtrl.signal;
 
     try {
-      yield* this.#runQuery({ prompt: effectivePrompt, promptParts, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement });
+      yield* this.#runQuery({ prompt: effectivePrompt, promptParts, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement, userAlreadyPersisted });
     } finally {
       if (signal) {
         try { signal.removeEventListener('abort', onExternalAbort); } catch { /* ignore */ }
@@ -1117,7 +1128,7 @@ export class Engine {
    * in a try/finally without indenting the whole loop.
    * @private
    */
-  async *#runQuery({ prompt, promptParts = null, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement }) {
+  async *#runQuery({ prompt, promptParts = null, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement, userAlreadyPersisted = false }) {
 
     // ─── Pre-query: FTS5 Memory Recall + AMS snapshot ─────
     // Memory has a SINGLE render outlet now (DESIGN-PROMPT §3 ③):
@@ -1728,6 +1739,11 @@ export class Engine {
             // Bug 6: tag persisted messages with the originating group so
             // history replay can re-stamp them on reload.
             groupId,
+            // Multi-VP fan-out (history-dedup): skip the user-row append
+            // in stop-hooks when the orchestrator already wrote it once
+            // for this turn. The hook still persists assistant + tool
+            // rows for THIS VP's contribution.
+            userAlreadyPersisted,
           });
 
           if (hookResult.consolidated) {
@@ -1735,7 +1751,7 @@ export class Engine {
           }
         } else {
           // Legacy path (no yeaftDir → use old behavior)
-          this.#persistMessages(prompt, fullResponseText, assistantMsg.toolCalls, groupId);
+          this.#persistMessages(prompt, fullResponseText, assistantMsg.toolCalls, groupId, userAlreadyPersisted);
 
           const consolidated = await this.#maybeConsolidate();
           if (consolidated && consolidated.archivedCount > 0) {

@@ -399,6 +399,30 @@ function ensureDriverRunning(groupId, vpId) {
       const promptParts = inboundParts.length > 0
         ? [...inboundParts, { type: 'text', text: prompt }]
         : null;
+
+      // Multi-VP fan-out — history dedup. Persist the user row exactly
+      // once per envelope (keyed by coordinator-minted msg.id). The
+      // first driver to pick up an envelope writes; later drivers
+      // (other VPs in the same fan-out, or downstream route_forward
+      // targets sharing an msg.id) become no-ops. Each VP's engine
+      // runs with `userAlreadyPersisted: true` so its stop-hook never
+      // tries to write the user row a second time.
+      //
+      // Belt-and-suspenders against the handleUnifyGroupChat call: in
+      // the common path that one runs first and this is a no-op; in
+      // edge paths (route_forward without an upstream user write) this
+      // is the writer.
+      try {
+        const envMsgId = envelope?.msg?.id;
+        if (envMsgId && text) {
+          persistUserMessageOnceByMsgId({
+            msgId: envMsgId,
+            text,
+            groupId,
+          });
+        }
+      } catch { /* never crash WS pipeline */ }
+
       try {
         await runVpTurn({
           prompt,
@@ -1411,6 +1435,36 @@ export async function handleUnifyGroupChat(msg) {
     return;
   }
 
+  // Multi-VP fan-out — history dedup (PR-fix-unify-group-history-dedup):
+  // persist the user row EXACTLY ONCE per turn. We do it AFTER
+  // `coord.ingest` so we can key dedup on the coordinator-minted
+  // `report.message.id` — the same id the per-VP driver will see on
+  // `envelope.msg.id`, which lets a route_forward injection that lands
+  // on the same id be a no-op.
+  //
+  // Each VP's engine then runs with `userAlreadyPersisted: true` (see
+  // runVpTurn's vpEngine.query call) so its stop-hook skips the
+  // user-row append while still writing assistant + tool rows.
+  //
+  // We persist the canonical `text` (no `@vp-X ` prefix) because that's
+  // what the user actually typed. Clean text matches what `loadHistory`
+  // replays back to the frontend on refresh.
+  try {
+    const persistedMsgId = report?.message?.id;
+    if (persistedMsgId) {
+      persistUserMessageOnceByMsgId({
+        msgId: persistedMsgId,
+        text,
+        groupId,
+      });
+    }
+  } catch (err) {
+    console.warn(
+      '[Unify] unify_group_chat: persistUserMessageOnceByMsgId failed',
+      err?.message || err,
+    );
+  }
+
   const dispatchedIds = Array.isArray(report?.dispatched) ? report.dispatched : [];
   const fallbackId = typeof report?.fallback === 'string' ? report.fallback : null;
   if (dispatchedIds.length === 0 && !fallbackId) {
@@ -1792,6 +1846,14 @@ async function runVpTurn({ prompt, promptParts = null, groupId, vpId, turnId, en
         promptParts,
         messages: trimmedMessages,
         signal: vpAbort.signal,
+        // Multi-VP fan-out (history-dedup): the user row was persisted
+        // ONCE by handleUnifyGroupChat → persistUserMessageOnce before
+        // fan-out. Tell the engine's stop-hook to skip the user-row
+        // append for THIS VP's turn (it still writes assistant + tool
+        // rows for this VP). Without this the magnet of N engines would
+        // each write a copy of the user message, and history replay
+        // would render the user's prompt N times.
+        userAlreadyPersisted: true,
         ...queryOpts,
       })) {
         resetQueryTimer();
@@ -1915,6 +1977,87 @@ function appendTurnToHistory(prompt, assistantTextParts, toolCallsAccum, toolRes
     }
   }
 }
+
+/**
+ * Persist the user row to disk EXACTLY ONCE per coordinator-ingest call,
+ * keyed by the coordinator-assigned `msgId`. Both `handleUnifyGroupChat`
+ * (real user input) and `enqueueForVp`'s driver loop (route_forward
+ * synthetic injections) call this — the Set guard makes either path
+ * the writer, whichever runs first, while the other becomes a no-op.
+ *
+ * Without this dedup, a 2-VP group prompt produces TWO `m{NNNN}.md`
+ * user rows (one per engine) — `handleUnifyLoadHistory` then replays
+ * the user's prompt twice and sandwiches one VP's reply between two
+ * copies of the user message. Visually this reads as "messages out of
+ * order" because the second copy of the user prompt sits BETWEEN the
+ * two VPs' replies.
+ *
+ * Best-effort: a write failure does NOT abort the turn — engines can
+ * still run, and the next user message will trigger another append.
+ *
+ * Note: we mirror `engine.#persistMessages`'s schema for the user row
+ * exactly (role/content/threadId/groupId), so existing parsers /
+ * loaders see no schema drift. Attachments are not part of the on-disk
+ * schema today (the engine never wrote them either) — they live on the
+ * coordinator's jsonl-log under group meta.
+ *
+ * @param {{ msgId:string, text:string, groupId:string }} args
+ * @returns {boolean} true if this call wrote the row, false if a prior
+ *   call already wrote it (dedup hit).
+ */
+function persistUserMessageOnceByMsgId({ msgId, text, groupId }) {
+  if (!session?.conversationStore) return false;
+  // No msgId means no dedup key — caller is responsible for guarding.
+  // Both call sites already do (`if (envMsgId && text)` and
+  // `if (persistedMsgId)`); refusing here keeps the helper's contract
+  // clean. A synthetic-id fallback (Date.now+random) would defeat dedup —
+  // every call would mint a unique id and write a duplicate row, which
+  // is the exact bug this helper exists to prevent.
+  if (!msgId || typeof msgId !== 'string') return false;
+  if (_persistedUserMsgIds.has(msgId)) return false;
+  // Mark BEFORE the empty-text bail. If a later same-id call arrives
+  // with non-empty text (e.g. a route_forward injection that the first
+  // caller passed in with empty text), the Set must already remember
+  // this id so the second call dedups instead of writing.
+  _persistedUserMsgIds.add(msgId);
+  if (!text || typeof text !== 'string') return false;
+  // Bound the Set so it doesn't grow unbounded over a long session.
+  // 4096 msg-ids is well past any realistic "messages in flight"
+  // window — once N drivers have observed the id, the rest can fall
+  // back to "write again" without harm (the second writer would be a
+  // duplicate, but it requires both: (a) the Set evicting an id AND
+  // (b) a still-running driver getting around to its first persist).
+  if (_persistedUserMsgIds.size > 4096) {
+    const iter = _persistedUserMsgIds.values();
+    for (let i = 0; i < 1024; i++) {
+      const v = iter.next();
+      if (v.done) break;
+      _persistedUserMsgIds.delete(v.value);
+    }
+  }
+  try {
+    const record = {
+      role: 'user',
+      content: text,
+      threadId: 'main',
+    };
+    if (groupId) record.groupId = groupId;
+    session.conversationStore.append(record);
+    return true;
+  } catch (err) {
+    console.warn(
+      '[Unify] persistUserMessageOnceByMsgId failed (non-fatal):',
+      err?.message || err,
+    );
+    return false;
+  }
+}
+
+/**
+ * Cleared on session reset (resetUnifySession) so a fresh session
+ * starts with no stale msg-ids.
+ */
+const _persistedUserMsgIds = new Set();
 
 /**
  * In-flight compact promise. Set by `scheduleCompactAfterTurn` when a
@@ -2501,6 +2644,9 @@ export async function resetUnifySession() {
   vpDrivers.clear();
   vpEngines.clear();
   groupContexts.clear();
+  // History-dedup cache is keyed by per-session coordinator msg ids;
+  // a fresh session resets the id space, so clear the cache too.
+  _persistedUserMsgIds.clear();
 
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
