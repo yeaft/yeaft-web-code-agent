@@ -75,8 +75,25 @@ function parseArgs(argv) {
     else if (a === '--include-cold') args.includeCold = true;
     else if (a === '--verbose' || a === '-v') args.verbose = true;
     else if (a === '--help' || a === '-h') args.help = true;
-    else if (a === '--dir') args.dir = argv[++i];
-    else if (a === '--window-ms') args.windowMs = parseInt(argv[++i], 10);
+    else if (a === '--dir') {
+      if (i + 1 >= argv.length) {
+        console.error('error: --dir requires a path');
+        process.exit(2);
+      }
+      args.dir = argv[++i];
+    }
+    else if (a === '--window-ms') {
+      if (i + 1 >= argv.length) {
+        console.error('error: --window-ms requires a number');
+        process.exit(2);
+      }
+      const v = parseInt(argv[++i], 10);
+      if (!Number.isFinite(v) || v < 0) {
+        console.error('error: --window-ms must be a non-negative integer');
+        process.exit(2);
+      }
+      args.windowMs = v;
+    }
     else {
       console.error(`Unknown arg: ${a}`);
       args.help = true;

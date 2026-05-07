@@ -2007,15 +2007,20 @@ function appendTurnToHistory(prompt, assistantTextParts, toolCallsAccum, toolRes
  */
 function persistUserMessageOnceByMsgId({ msgId, text, groupId }) {
   if (!session?.conversationStore) return false;
-  if (!text || typeof text !== 'string') return false;
-  if (!msgId || typeof msgId !== 'string') {
-    // No msgId means we can't dedup safely — fall back to writing once
-    // unconditionally. Callers that have an msgId (the normal case)
-    // should always pass it.
-    msgId = `_no_id_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  }
+  // No msgId means no dedup key — caller is responsible for guarding.
+  // Both call sites already do (`if (envMsgId && text)` and
+  // `if (persistedMsgId)`); refusing here keeps the helper's contract
+  // clean. A synthetic-id fallback (Date.now+random) would defeat dedup —
+  // every call would mint a unique id and write a duplicate row, which
+  // is the exact bug this helper exists to prevent.
+  if (!msgId || typeof msgId !== 'string') return false;
   if (_persistedUserMsgIds.has(msgId)) return false;
+  // Mark BEFORE the empty-text bail. If a later same-id call arrives
+  // with non-empty text (e.g. a route_forward injection that the first
+  // caller passed in with empty text), the Set must already remember
+  // this id so the second call dedups instead of writing.
   _persistedUserMsgIds.add(msgId);
+  if (!text || typeof text !== 'string') return false;
   // Bound the Set so it doesn't grow unbounded over a long session.
   // 4096 msg-ids is well past any realistic "messages in flight"
   // window — once N drivers have observed the id, the rest can fall
