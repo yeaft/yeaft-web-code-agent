@@ -9,6 +9,7 @@ import SubAgentCard from './SubAgentCard.js';
 import GroupAnnouncementBar from './GroupAnnouncementBar.js';
 import { foldByFeatureId, injectQuickPreviews } from '../stores/helpers/feature-fold.js';
 import { appendTypingPlaceholders } from '../stores/helpers/typing-placeholders.js';
+import { deriveTurnIntent } from '../stores/helpers/turn-intent.js';
 
 export default {
   name: 'MessageList',
@@ -535,6 +536,7 @@ export default {
             // reads as "the VP disappeared", which is exactly the bug
             // the user reported "无数遍".
             currentTurn.showSpeakerHeader = !!currentTurn.speakerVpId;
+            currentTurn.intent = deriveTurnIntent(currentTurn, store.unifyQuickPreviews);
             result.push(currentTurn);
           }
           currentTurn = null;
