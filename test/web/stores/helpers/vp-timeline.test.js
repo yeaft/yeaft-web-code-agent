@@ -387,7 +387,7 @@ describe('selectGroupRosterVpList', () => {
     { vpId: 'jobs', displayName: 'Steve Jobs' },
   ];
 
-  it('returns only the roster members from a 12-VP library (the bug under test)', () => {
+  it('returns roster members only, ignoring extra library entries', () => {
     const roster = ['ada', 'linus', 'martin', 'jobs'];
     const out = selectGroupRosterVpList(roster, LIBRARY);
     expect(out.map((v) => v.vpId)).toEqual(['ada', 'linus', 'martin', 'jobs']);
@@ -424,6 +424,11 @@ describe('selectGroupRosterVpList', () => {
   it('tolerates malformed library entries', () => {
     const lib = [null, { vpId: 'ada' }, undefined, { displayName: 'noid' }, { vpId: 'linus' }];
     const out = selectGroupRosterVpList(['ada', 'linus'], lib);
+    expect(out.map((v) => v.vpId)).toEqual(['ada', 'linus']);
+  });
+
+  it('de-duplicates repeated roster ids', () => {
+    const out = selectGroupRosterVpList(['ada', 'ada', 'linus', 'ada'], LIBRARY);
     expect(out.map((v) => v.vpId)).toEqual(['ada', 'linus']);
   });
 });

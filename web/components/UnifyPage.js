@@ -790,18 +790,21 @@ export default {
       // rows. This matches the user's mental model: the middle column
       // is "this group's roster", not "every VP in the library".
       const gs = groupsStore();
-      const filter =
-        store.unifyActiveGroupFilter ||
-        (gs ? gs.activeGroupId : null) ||
-        null;
+      const filter = store.unifyActiveGroupFilter || gs?.activeGroupId || null;
       if (!filter) return [];
 
-      const group = gs && gs.groups ? gs.groups[filter] : null;
+      const group = gs?.groups?.[filter] ?? null;
       const roster = (group && Array.isArray(group.roster)) ? group.roster : [];
       if (roster.length === 0) return [];
       const rosterSet = new Set(roster);
 
-      const messages = raw.filter((m) => m && m.groupId === filter);
+      // Message slice: same group + sender within roster. The roster
+      // gate plugs `buildTimelineRows`'s tail pass, which would
+      // otherwise tail-append rows for VPs that posted in this group
+      // before being removed from the roster (Torvalds I1).
+      const messages = raw.filter(
+        (m) => m && m.groupId === filter && rosterSet.has(m.speakerVpId || m.vpId),
+      );
 
       // Base list = the group's declared roster, ordered by the roster
       // array. Hydrate display data from vpStore (which holds

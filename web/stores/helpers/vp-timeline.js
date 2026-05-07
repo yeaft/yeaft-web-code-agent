@@ -88,10 +88,17 @@ export function selectGroupRosterVpList(roster, library) {
   for (const vp of library) {
     if (vp && vp.vpId) byId.set(vp.vpId, vp);
   }
+  // De-duplicate roster ids — a malformed agent payload or a UI race
+  // that double-adds the same VP must not produce duplicate rows
+  // (Vue v-for keying would warn or recycle DOM weirdly).
+  const seen = new Set();
   const out = [];
   for (const id of roster) {
+    if (seen.has(id)) continue;
     const vp = byId.get(id);
-    if (vp) out.push(vp);
+    if (!vp) continue;
+    seen.add(id);
+    out.push(vp);
   }
   return out;
 }
