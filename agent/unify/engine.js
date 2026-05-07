@@ -28,6 +28,7 @@ import { archiveTurn } from './archive/turn-archive.js';
 import { archiveToolResults } from './archive/tool-results.js';
 import { readSummary as readScopeSummary } from './memory/store-v2.js';
 import { runAdjust } from './memory/adjust.js';
+import { isVpSeedBackfillStub } from './memory/seed-backfill.js';
 import { runStopHooks } from './stop-hooks.js';
 // H2.f.5: threads/ retired. Persisted messages still carry a `threadId`
 // field for back-compat with old conversation files; new writes always use
@@ -175,6 +176,45 @@ export function estimateMessagesTokens(system, messages) {
  */
 
 // ─── Engine ──────────────────────────────────────────────────────
+
+/**
+ * buildResidentEntries — pure helper that builds the AMS Resident entry
+ * list from the per-turn Layer-A summaries.
+ *
+ * Encodes one non-trivial rule on top of "push if non-empty":
+ *
+ *   The `vp/<ownVpId>` summary is skipped when it carries the
+ *   seed-backfill stub marker. The persona body is already rendered as
+ *   Section 1 of the system prompt by `renderVpPersona`; surfacing the
+ *   stub's `# Name / Role` line as a Resident entry would re-label the
+ *   same identity in Section 6 ("Active Memory Set") with no added
+ *   information — the visible follow-up to the persona-dup bug fixed in
+ *   PR #722. Once Dream-v2 writes a real summary for this scope it
+ *   lacks the marker and is surfaced normally.
+ *
+ * Other-VP entries (group collaborators) are NOT considered here — only
+ * the local VP's summary is loaded into `summaries.vp` upstream by
+ * `#loadLayerASummaries`. Cross-VP context flows through onDemand recall.
+ *
+ * @param {{
+ *   groupId?: string|null,
+ *   ownVpId?: string|null,
+ *   summaries: { user?: string, group?: string, vp?: string }
+ * }} args
+ * @returns {Array<{scope: string, summary: string}>}
+ */
+export function buildResidentEntries(args) {
+  const summaries = (args && args.summaries) || {};
+  const out = [];
+  if (summaries.user) out.push({ scope: 'user', summary: summaries.user });
+  if (args.groupId && summaries.group) {
+    out.push({ scope: `group/${args.groupId}`, summary: summaries.group });
+  }
+  if (args.ownVpId && summaries.vp && !isVpSeedBackfillStub(summaries.vp)) {
+    out.push({ scope: `vp/${args.ownVpId}`, summary: summaries.vp });
+  }
+  return out;
+}
 
 export class Engine {
   /** @type {import('./llm/adapter.js').LLMAdapter} */
@@ -505,14 +545,11 @@ export class Engine {
 
     // (a) Resident: rebuild from the same scope summaries the worker
     // prompt is already going to see.
-    const residentEntries = [];
-    if (args.summaries?.user)  residentEntries.push({ scope: 'user', summary: args.summaries.user });
-    if (args.groupId && args.summaries?.group) {
-      residentEntries.push({ scope: `group/${args.groupId}`, summary: args.summaries.group });
-    }
-    if (ownVpId && args.summaries?.vp) {
-      residentEntries.push({ scope: `vp/${ownVpId}`, summary: args.summaries.vp });
-    }
+    const residentEntries = buildResidentEntries({
+      groupId: args.groupId,
+      ownVpId,
+      summaries: args.summaries || {},
+    });
     ams.setResident(residentEntries);
 
     // (b) onDemand: replace with this turn's FTS hits.

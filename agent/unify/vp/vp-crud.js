@@ -23,6 +23,7 @@ import { homedir } from 'os';
 import { validateVpId } from '../groups/ids.js';
 import { DEFAULT_VP_LIB_DIR, parseRoleMd } from './vp-store.js';
 import { seedSummaryIfMissingSync, removeScopeDirSync } from '../memory/store-v2.js';
+import { VP_STUB_MARKER } from '../memory/seed-backfill.js';
 
 /**
  * Default memory root used when callers don't pass `options.memoryRoot`.
@@ -40,26 +41,36 @@ const DEFAULT_MEMORY_ROOT = join(homedir(), '.yeaft', 'memory');
  * @param {object} payload  same shape as createVp
  * @returns {string}
  */
+/**
+ * Build the seed body for a freshly-created VP's `<root>/vp/<id>/summary.md`.
+ *
+ * IMPORTANT — this is a STUB that mirrors `seed-backfill.js#readVpRoleSummary`.
+ * Earlier versions of both writers embedded up to 800 chars of `persona`
+ * here. That body is *also* rendered as Section 1 of the system prompt by
+ * `renderVpPersona`, so the same persona text reappeared in the AMS
+ * Resident block — the user-visible "persona defined twice" bug. PR #722
+ * fixed `seed-backfill.js`; this writer is the create-time twin.
+ *
+ * The seed is therefore deliberately minimal (name + role + traits) and
+ * stamped with `VP_STUB_MARKER` so `engine.buildResidentEntries` knows to
+ * skip the own-VP Resident push (Section 1 is already the source of truth
+ * for own-VP identity). Once Dream-v2 writes a real summary it overwrites
+ * this stub and lacks the marker, so it surfaces normally.
+ *
+ * @param {object} payload  same shape as createVp
+ * @returns {string}
+ */
 export function buildVpSeedSummary(payload) {
   const id = String(payload?.vpId || '').trim();
   const name = (payload?.displayName != null ? String(payload.displayName) : id).trim();
   const role = (payload?.role != null ? String(payload.role) : '').trim();
-  const persona = (typeof payload?.persona === 'string' ? payload.persona : '').trim();
   const traits = Array.isArray(payload?.traits)
     ? payload.traits.map(t => String(t)).filter(Boolean)
     : [];
 
-  const lines = [];
-  lines.push(`# ${name}`);
+  const lines = [VP_STUB_MARKER, '', `# ${name}`];
   if (role) lines.push('', `**Role:** ${role}`);
   if (traits.length > 0) lines.push('', `**Traits:** ${traits.join(', ')}`);
-  if (persona) {
-    // Keep the persona body terse — first 800 chars is plenty for an
-    // initial Layer-A resident summary; Dream-v2 will rewrite it as
-    // memory accumulates.
-    const truncated = persona.length > 800 ? persona.slice(0, 800).trim() + '…' : persona;
-    lines.push('', '**Persona:**', '', truncated);
-  }
   return lines.join('\n').trim();
 }
 
