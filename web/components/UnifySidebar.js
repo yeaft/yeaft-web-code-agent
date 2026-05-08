@@ -2,7 +2,6 @@
  * UnifySidebar — H2.f.6 trimmed.
  *
  * Standalone sidebar component with:
- *   - top search box (task / message keywords; #thread- prefix retired)
  *   - Groups list (with kebab menu: manage members / rename / delete)
  *   - emits `select-group` on click
  *
@@ -11,28 +10,20 @@
  *
  * Tasks tree was removed in the unify_feature_message channel cleanup
  * (2026-05-07) — see docs/notes/2026-05-07-feature-message-channel-removal.md.
- * The `select-task` emit is preserved in onSelectResult only because the
- * search-results path still references it; that path's data source
- * (`unifyFeatures`) is permanently empty until a feature panel is built.
+ *
+ * task-unify-remove-sidebar-search (2026-05-08): the retired query UI and
+ * its helper code are gone; the sidebar is now Groups + Settings.
  */
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
-// task-316: pulled parser out into a standalone, unit-tested module.
-// The sidebar only consumes the typed ParsedQuery + the pure matchers.
-import {
-  parseSearchQuery,
-  hasActiveQuery,
-  taskMatches as _taskMatches,
-  messageMatches as _messageMatches,
-} from '../utils/search-parser.js';
 import GroupCreateWizard from './GroupCreateWizard.js';
 
 export default {
   name: 'UnifySidebar',
   components: { GroupCreateWizard },
-  emits: ['select-task', 'select-group', 'search-escape', 'toggle-sidebar', 'back', 'open-settings', 'open-group-settings'],
+  emits: ['select-group', 'toggle-sidebar', 'back', 'open-settings', 'open-group-settings'],
   template: `
     <aside class="unify-sidebar" :class="{ collapsed: collapsed }">
       <!-- Collapsed Icon Bar — mirrors Chat's .sidebar-collapsed-bar so the
@@ -73,83 +64,7 @@ export default {
         </div>
       </div>
 
-      <div class="us-search">
-        <svg class="us-search-icon" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
-        <input
-          type="text"
-          class="us-search-input"
-          v-model="searchQuery"
-          :placeholder="placeholderText"
-          @keydown.esc.prevent="onSearchEscape"
-          ref="searchInput"
-        />
-        <button
-          v-if="searchQuery"
-          type="button"
-          class="us-search-clear"
-          :title="label('clearSearch')"
-          @click="onSearchEscape"
-        >×</button>
-      </div>
-
-      <!-- task-312/316: unified search results list. Shown whenever a
-           query is active; hides the Active/Idle/Archived/Tasks sections
-           so the user sees labelled sections (Threads / Tasks / Messages)
-           with click-to-jump semantics. -->
-      <div class="us-scroll" v-if="searchActive">
-        <!-- Tasks group -->
-        <section class="us-group us-group-results" v-if="searchGroups.tasks.length > 0">
-          <div class="us-group-header us-results-header">
-            <span class="us-group-label">{{ label('resultsTasks') }}</span>
-            <span class="us-group-count">{{ searchGroups.tasks.length }}</span>
-          </div>
-          <div class="us-group-body">
-            <div
-              v-for="r in searchGroups.tasks"
-              :key="'task:' + r.id"
-              class="us-result us-result-task"
-              @click="onSelectResult(r)"
-            >
-              <span class="us-result-kind">{{ label('kindTask') }}</span>
-              <span class="us-result-name">{{ r.task.id }}</span>
-              <span class="us-result-title">{{ r.title }}</span>
-              <span class="us-result-snippet" v-if="r.snippet">{{ r.snippet }}</span>
-            </div>
-          </div>
-        </section>
-        <!-- Messages group (task-316) — only populated when query asks
-             for body-level match, e.g. in:body foo or task:N kw. -->
-        <section class="us-group us-group-results" v-if="searchGroups.messages.length > 0">
-          <div class="us-group-header us-results-header">
-            <span class="us-group-label">{{ label('resultsMessages') }}</span>
-            <span class="us-group-count">{{ searchGroups.messages.length }}</span>
-          </div>
-          <div class="us-group-body">
-            <div
-              v-for="r in searchGroups.messages"
-              :key="'msg:' + r.id"
-              class="us-result us-result-message"
-              @click="onSelectResult(r)"
-            >
-              <span class="us-result-kind">{{ label('kindMessage') }}</span>
-              <span class="us-result-title">{{ r.title }}</span>
-              <span class="us-result-snippet" v-if="r.snippet">{{ r.snippet }}</span>
-            </div>
-          </div>
-        </section>
-        <!-- Empty state with usage examples (task-316) -->
-        <div class="us-empty us-empty-with-hints" v-if="searchResults.length === 0">
-          <div class="us-empty-title">{{ label('emptyResults') }}</div>
-          <div class="us-empty-hints">
-            <div class="us-empty-hint-label">{{ label('examplesLabel') }}</div>
-            <div class="us-empty-hint"><code>task:42</code></div>
-            <div class="us-empty-hint"><code>in:title foo</code></div>
-            <div class="us-empty-hint"><code>status:open bar</code></div>
-          </div>
-        </div>
-      </div>
-
-      <div class="us-scroll" v-else>
+      <div class="us-scroll">
         <!-- task-unify-group-ui-cleanup: header now mirrors Chat sidebar
              ".session-tab" — section-icon + label + create (+) button, no
              count. Visible even when groupList is empty so the user always
@@ -261,15 +176,9 @@ export default {
     // task-fix: collapsed flag from parent (UnifyPage). Used to drive
     // the mobile slide-away behavior.
     collapsed: { type: Boolean, default: false },
-    // Optional injection hooks — primarily for unit tests that don't
-    // mount Pinia. When null the component reads from store.
-    tasksSource: { type: Array, default: null },
-    // task-316: let tests inject messages the same way.
-    messagesSource: { type: Array, default: null },
   },
   data() {
     return {
-      searchQuery: '',
       now: Date.now(),
       // task-334m: group-create wizard visibility.
       groupWizardOpen: false,
@@ -379,115 +288,10 @@ export default {
         return !!(s.hasCapability('terminal') || s.hasCapability('file_editor'));
       } catch (_) { return false; }
     },
-    // H2.f.6: threads removed. Tasks remain.
-    tasks() {
-      if (Array.isArray(this.tasksSource)) return this.tasksSource;
-      return this.store?.unifyFeatures || [];
-    },
-    // Localized placeholder. Falls back gracefully when $t is not injected
-    // (e.g. stand-alone unit tests that don't mount the component).
-    placeholderText() {
-      if (typeof this.$t === 'function') {
-        return this.$t('unify.sidebar.searchPlaceholder');
-      }
-      return 'Search…';
-    },
-    // task-316: parser now lives in web/utils/search-parser.js.
-    parsedQuery() {
-      return parseSearchQuery(this.searchQuery || '');
-    },
-    searchActive() {
-      return hasActiveQuery(this.parsedQuery);
-    },
-    filteredTasks() {
-      const q = this.parsedQuery;
-      if (!hasActiveQuery(q)) return this.tasks;
-      // Keep task visible when itself OR any descendant matches so the
-      // expand-chevron still renders the parent chain in the tree view.
-      const matches = (task) => {
-        if (_taskMatches(task, q)) return true;
-        return (task.children || []).some(matches);
-      };
-      return this.tasks.filter(matches);
-    },
-    // H2.f.6: search results = tasks + messages only (no threads).
-    searchResults() {
-      if (!this.searchActive) return [];
-      const q = this.parsedQuery;
-      const { keyword, scopedField } = q;
-      const out = [];
-      const flatten = (task) => {
-        if (_taskMatches(task, q)) {
-          out.push({
-            kind: 'task',
-            id: task.id,
-            title: task.title || '',
-            snippet: this.pickTaskSnippet(task, keyword, scopedField),
-            task,
-          });
-        }
-        for (const c of (task.children || [])) flatten(c);
-      };
-      for (const task of this.filteredTasks) flatten(task);
-      // Message hits — only included when query could meaningfully match.
-      if (q.featureId || q.scopedField === 'body') {
-        const msgs = this.messages || [];
-        for (const m of msgs) {
-          if (_messageMatches(m, q)) {
-            out.push({
-              kind: 'message',
-              id: m.id || `msg-${out.length}`,
-              title: this.truncate(typeof m.content === 'string' ? m.content : JSON.stringify(m.content || ''), 80),
-              snippet: '',
-              message: m,
-            });
-          }
-        }
-      }
-      return out;
-    },
-    // H2.f.6: parallel grouping view — tasks + messages only.
-    searchGroups() {
-      const groups = { tasks: [], messages: [] };
-      for (const r of this.searchResults) {
-        if (r.kind === 'task') groups.tasks.push(r);
-        else if (r.kind === 'message') groups.messages.push(r);
-      }
-      return groups;
-    },
-    // task-316: messages visible to the sidebar. Reads the active Unify
-    // conversation's message array directly from the store; unit tests
-    // that don't mount Pinia can inject via `messagesSource`.
-    messages() {
-      if (Array.isArray(this.messagesSource)) return this.messagesSource;
-      const s = this.store;
-      const convId = s?.unifyConversationId;
-      if (!convId) return [];
-      return (s.messagesMap && s.messagesMap[convId]) || [];
-    }
+    // task-unify-remove-sidebar-search: retired query-related computeds
+    // and placeholder helpers were removed with the old query UI.
   },
   methods: {
-    // Unified i18n lookup for sidebar labels/empties. Falls back to a
-    // built-in English dictionary when $t is not available (unit tests).
-    label(key) {
-      const full = `unify.sidebar.${key}`;
-      if (typeof this.$t === 'function') return this.$t(full);
-      const fallback = {
-        // H2.f.6: thread/merge keys removed alongside the multi-thread UI.
-        tasks: 'Tasks',
-        emptyTasks: 'No tasks match',
-        results: 'Results',
-        resultsTasks: 'Tasks',
-        resultsMessages: 'Messages',
-        emptyResults: 'No matches',
-        kindTask: 'task',
-        kindMessage: 'msg',
-        clearSearch: 'Clear',
-        cancel: 'Cancel',
-        examplesLabel: 'Try:',
-      };
-      return fallback[key] || full;
-    },
     // task-341: i18n lookup for keys outside the unify.sidebar namespace.
     tr(fullKey, fallback) {
       if (typeof this.$t === 'function') {
@@ -573,39 +377,9 @@ export default {
     // H2.f.6: thread display / tooltip / link / fork helpers removed.
     // H2.f.7 (2026-05-07): tasks tree removed; isTaskExpanded/toggleTask
     // dropped along with the rendered section.
-    // H2.f.6: results list now only contains tasks + messages.
-    onSelectResult(r) {
-      if (r.kind === 'message') {
-        // Message hit: nothing to navigate to without threads — no-op for now.
-        return;
-      }
-      this.$emit('select-task', r.id);
-    },
-    // task-312: Esc in the search box clears + asks parent to refocus
-    // the chat input. Plain string empty also exits the results view.
-    onSearchEscape() {
-      this.searchQuery = '';
-      this.$emit('search-escape');
-    },
-    pickTaskSnippet(task, keyword, scopedField) {
-      const kw = keyword || '';
-      if (!kw) return '';
-      const candidates = scopedField === 'title'
-        ? [task.title]
-        : scopedField === 'summary'
-          ? [task.summary, task.description]
-          : [task.summary, task.description];
-      for (const txt of candidates) {
-        if (txt && String(txt).toLowerCase().includes(kw)) {
-          return this.truncate(String(txt));
-        }
-      }
-      return '';
-    },
-    truncate(s, n = 80) {
-      if (!s) return '';
-      return s.length > n ? s.slice(0, n - 1) + '…' : s;
-    }
+    // task-unify-remove-sidebar-search (2026-05-08): the search box,
+    // its results list, and the helpers it required (onSelectResult,
+    // onSearchEscape, pickTaskSnippet, truncate) have all been removed.
     // H2.f.6: merge / fork flows retired with the multi-thread model.
   }
 };
