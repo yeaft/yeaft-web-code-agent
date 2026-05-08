@@ -1197,6 +1197,7 @@ export default {
   'unify.vpTimeline.aria': 'VP timeline',
   'unify.vpTimeline.title': 'VPs',
   'unify.vpTimeline.empty': 'No VPs in this conversation yet.',
+  'unify.vpTimeline.noSnippet': 'No messages yet',
   'unify.vpTimeline.untitledFeature': '(untitled feature)',
   'unify.vpTimeline.resizeTitle': 'Drag to resize',
   'unify.vpTimeline.status.idle': 'idle',
