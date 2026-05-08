@@ -2581,223 +2581,12 @@
 }
 
 /* ============================================================
- * PR-2 (feature-pill double-track): FeaturePill + QuickPreview
- *
- * Per CLAUDE.md "No horizontal dividers" — feature visual split
- * is carried by background tint + radius + indent only.
+ * (Track-A FeatureArc / FeaturePill / QuickPreview removed —
+ *  see commit log "VP-block redesign" 2026-05-08. Roughly 220
+ *  lines of `.feature-pill-*` and `.quick-preview-*` rules
+ *  lived here; the per-VP turn block component carries that
+ *  visual story now.)
  * ============================================================ */
-
-.feature-pill {
-  margin: 4px 8px;
-  border-radius: 8px;
-  background: var(--task-accent-bg, rgba(99, 102, 241, 0.06));
-  overflow: hidden;
-}
-
-.feature-pill-active {
-  background: var(--task-accent-bg, rgba(99, 102, 241, 0.10));
-}
-
-.feature-pill-completed {
-  background: var(--task-accent-bg, rgba(34, 197, 94, 0.06));
-}
-
-.feature-pill-error {
-  background: rgba(239, 68, 68, 0.06);
-}
-
-.feature-pill-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 10px;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  font: inherit;
-  text-align: left;
-  color: inherit;
-}
-
-.feature-pill-header:hover {
-  background: var(--surface-hover, rgba(0, 0, 0, 0.03));
-}
-
-.feature-pill-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  font-size: 12px;
-  color: var(--task-accent, #6366f1);
-  flex: 0 0 16px;
-}
-
-.feature-pill-completed .feature-pill-icon {
-  color: #16a34a;
-}
-
-.feature-pill-error .feature-pill-icon {
-  color: #dc2626;
-}
-
-.feature-pill-spinner {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  border: 2px solid currentColor;
-  border-right-color: transparent;
-  border-radius: 50%;
-  animation: feature-pill-spin 700ms linear infinite;
-}
-
-@keyframes feature-pill-spin {
-  to { transform: rotate(360deg); }
-}
-
-.feature-pill-label {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  color: var(--task-accent, #6366f1);
-  flex: 0 0 auto;
-}
-
-.feature-pill-completed .feature-pill-label {
-  color: #16a34a;
-}
-
-.feature-pill-error .feature-pill-label {
-  color: #dc2626;
-}
-
-.feature-pill-title {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-primary, #222);
-  flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.feature-pill-meta {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
-  font-size: 11px;
-  color: var(--text-secondary, #666);
-}
-
-.feature-pill-trigger {
-  padding: 1px 5px;
-  border-radius: 3px;
-  background: var(--surface-1, rgba(0, 0, 0, 0.04));
-  font-family: monospace;
-  font-size: 10px;
-}
-
-.feature-pill-count {
-  font-variant-numeric: tabular-nums;
-  opacity: 0.7;
-}
-
-.feature-pill-toggle {
-  flex: 0 0 auto;
-  font-size: 10px;
-  color: var(--text-tertiary, #999);
-  width: 12px;
-  text-align: center;
-}
-
-.feature-pill-body {
-  padding: 4px 8px 8px 8px;
-}
-
-.feature-pill-row {
-  /* Inner rows are slightly indented so the pill boundary reads as a
-   * "container" rather than the row itself bleeding to the page edge. */
-  margin-left: 4px;
-}
-
-.feature-pill-summary {
-  display: flex;
-  gap: 6px;
-  margin-top: 6px;
-  padding: 6px 10px;
-  border-radius: 6px;
-  background: var(--surface-1, rgba(0, 0, 0, 0.03));
-  font-size: 12px;
-  color: var(--text-secondary, #555);
-}
-
-.feature-pill-summary-label {
-  font-weight: 600;
-  color: var(--text-primary, #222);
-  flex: 0 0 auto;
-}
-
-.feature-pill-summary-body {
-  flex: 1 1 auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-/* ----------------------------------------------------------------
- * QuickPreview — Track-A instant bubble, dimmed when superseded
- * ---------------------------------------------------------------- */
-
-.quick-preview-bubble {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  margin: 2px 12px 6px 12px;
-  padding: 6px 10px;
-  border-radius: 8px;
-  background: var(--surface-1, rgba(0, 0, 0, 0.03));
-  font-size: 13px;
-  line-height: 1.4;
-  color: var(--text-primary, #222);
-  transition: opacity 200ms ease;
-}
-
-.quick-preview-feature {
-  /* Subtle indigo tint for previews that became feature ramps. */
-  background: var(--task-accent-bg, rgba(99, 102, 241, 0.06));
-}
-
-.quick-preview-superseded {
-  opacity: 0.55;
-}
-
-.quick-preview-icon {
-  font-size: 12px;
-  flex: 0 0 14px;
-  color: var(--task-accent, #6366f1);
-  line-height: 1.4;
-}
-
-.quick-preview-body {
-  flex: 1 1 auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.quick-preview-superseded-tag {
-  flex: 0 0 auto;
-  align-self: center;
-  padding: 1px 6px;
-  border-radius: 3px;
-  background: var(--surface-1, rgba(0, 0, 0, 0.05));
-  font-size: 10px;
-  color: var(--text-tertiary, #999);
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-}
 
 /* ── PR-3: VP List pane (left of conversation) ────────────────────────
    Sits inside .unify-main as its left column, mirroring Crew's
@@ -2966,31 +2755,14 @@
   }
 }
 
-/* ── PR-4: per-feature / per-VP abort affordances ────────────────────
-   Two small filled-square buttons (mirroring the ChatInput stop icon's
-   `<rect rx="2"/>` shape, scaled to 10×10). Spacing-only — no horizontal
-   dividers (CLAUDE.md "Unify UI Design Rules"). Both surfaces use
-   <span role="button"> rather than <button> because their containers are
-   already interactive (FeaturePill header is a <button>, timeline row is
-   role="button") and nesting native buttons is an a11y violation. */
-.feature-pill-abort {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  margin: 0 4px;
-  border-radius: 4px;
-  color: var(--text-muted, var(--text-secondary, #888));
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-.feature-pill-abort:hover,
-.feature-pill-abort:focus-visible {
-  background: var(--accent-soft, rgba(99, 102, 241, 0.12));
-  color: var(--accent, #6366f1);
-  outline: none;
-}
+/* ── PR-4: per-VP abort affordance (timeline row) ────────────────────
+   Small filled-square button mirroring the ChatInput stop icon's
+   `<rect rx="2"/>` shape, scaled to 10×10. Spacing-only — no horizontal
+   dividers (CLAUDE.md "Unify UI Design Rules"). Uses <span role="button">
+   rather than <button> because its container (the timeline row) is
+   role="button" and nesting native buttons is an a11y violation.
+   (FeaturePill abort variant removed alongside the FeaturePill component
+   in the VP-block redesign.) */
 
 /* Extend the timeline row grid to leave room for the abort affordance:
    avatar (24) | body (1fr) | abort (auto). The body still wraps the same

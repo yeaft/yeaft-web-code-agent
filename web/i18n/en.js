@@ -1191,15 +1191,6 @@ export default {
   'unify.feature.pill.label': 'task',
   'unify.feature.messageTime.aria': 'Sent at {time}',
 
-  // PR-2 (feature-pill double-track): FeaturePill + QuickPreview surfaces.
-  'unify.featurePill.label': 'feature',
-  'unify.featurePill.summaryLabel': 'Summary:',
-  // PR-4: per-feature abort affordance (the small filled-square in the
-  // pill header; visible only while the feature is active).
-  'unify.featurePill.abort': 'Abort feature',
-  'unify.quickPreview.superseded.label': 'now a feature',
-  'unify.quickPreview.superseded.title': 'This quick preview is being expanded into a full feature run below.',
-
   // PR-3 (feature-pill double-track): right-side VP Timeline pane.
   'unify.vpTimeline.aria': 'VP timeline',
   'unify.vpTimeline.title': 'VPs',

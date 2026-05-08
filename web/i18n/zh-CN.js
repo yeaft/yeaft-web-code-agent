@@ -1191,14 +1191,6 @@ export default {
   'unify.feature.pill.label': '任务',
   'unify.feature.messageTime.aria': '发送于 {time}',
 
-  // PR-2 (feature-pill double-track): FeaturePill + QuickPreview surfaces.
-  'unify.featurePill.label': '功能',
-  'unify.featurePill.summaryLabel': '总结：',
-  // PR-4：功能任务运行中的"中止"操作（pill 头部的小方块按钮）。
-  'unify.featurePill.abort': '中止此功能',
-  'unify.quickPreview.superseded.label': '已升级为功能',
-  'unify.quickPreview.superseded.title': '该快速回应已扩展为下方完整的功能任务。',
-
   // PR-3 (feature-pill double-track): 右侧 VP 时间线面板。
   'unify.vpTimeline.aria': 'VP 时间线',
   'unify.vpTimeline.title': 'VP 列表',
