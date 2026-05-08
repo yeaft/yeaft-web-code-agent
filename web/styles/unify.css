@@ -2601,7 +2601,7 @@
   min-width: 220px;
   display: flex;
   flex-direction: column;
-  background: var(--bg-sidebar, var(--bg-secondary, #f7f7f7));
+  background: var(--bg-main);
   flex-shrink: 0;
   padding: 12px 8px 16px;
   gap: 4px;
