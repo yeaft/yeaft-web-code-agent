@@ -100,14 +100,10 @@ export default {
             {{ $t('chat.waiting.cliExited') }}
           </span>
         </div>
-        <div v-if="store.loadingMoreMessages" class="loading-more">{{ $t('message.loadingMore') }}</div>
-        <!-- task-fix-unify-load-more-empty: load-more is a Chat-only feature.
-             It dispatches 'sync_messages', which the agent only handles for
-             Chat conversations (Unify history is owned by the Unify session
-             store, not the SQLite messageDb). Showing the hint in Unify
-             always lies — clicking it returns no rows. Gate on currentView.
-             Single-quoted intentionally — this comment lives inside a Vue
-             template literal; backticks here would close the outer string. -->
+        <!-- task-fix-unify-load-more-empty: load-more is a Chat-only feature
+             ('sync_messages' verb, SQLite messageDb). Unify history lives in
+             the agent's conversationStore — gate hint + spinner on currentView. -->
+        <div v-if="store.loadingMoreMessages && store.currentView !== 'unify'" class="loading-more">{{ $t('message.loadingMore') }}</div>
         <div v-else-if="store.hasMoreMessages && store.currentView !== 'unify'" class="load-more-hint" @click="store.loadMoreMessages()">{{ $t('message.loadMore') }}</div>
         <template v-for="item in turnGroups" :key="item.id">
           <!-- task-312: wrapper carries data-msg-id so the Unify sidebar

@@ -2235,6 +2235,13 @@ export const useChatStore = defineStore('chat', {
 
     // ★ Phase 6.1: 分页加载（基于 turn，统一走 DB）
     loadMoreMessages() {
+      // task-fix-unify-load-more-empty: action-level guard. The hint and
+      // scroll-trigger in MessageList both gate on currentView, but this
+      // is the authoritative stop — Unify history doesn't live in the
+      // SQLite messageDb that `sync_messages` queries, so dispatching
+      // here from Unify always returns empty. Any future caller (hotkey,
+      // devtools, programmatic) is covered by this single line.
+      if (this.currentView === 'unify') return;
       if (this.loadingMoreMessages || !this.hasMoreMessages || !this.currentConversation) return;
       this.loadingMoreMessages = true;
 
