@@ -77,6 +77,26 @@ export default {
             <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>
           </button>
 
+          <!-- Show/hide VP list. Sits next to the sidebar toggle so the
+               two "show another column" affordances live together at the
+               left edge of the topbar. Independent of detailCollapsed
+               (the right-side debug panel) — persists separately under
+               localStorage 'unify-vp-timeline-visible'. Hidden under
+               1024 px because the pane itself is hidden by the CSS
+               breakpoint there; showing a toggle for an unreachable pane
+               just confuses the user. -->
+          <button
+            v-if="!isNarrowDetail"
+            class="unify-topbar-vp-toggle"
+            :class="{ active: vpTimelineVisible }"
+            @click="toggleVpTimeline"
+            :title="vpTimelineVisible ? $t('unify.vpTimeline.hide') : $t('unify.vpTimeline.show')"
+            :aria-label="vpTimelineVisible ? $t('unify.vpTimeline.hide') : $t('unify.vpTimeline.show')"
+            :aria-pressed="vpTimelineVisible ? 'true' : 'false'"
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+          </button>
+
         <!-- task-339-F1: GroupSelector removed from topbar — groups now surface via sidebar section. -->
 
           <!-- Model selector (compact dropdown in topbar) -->
@@ -360,6 +380,27 @@ export default {
     // ev.clientX - startX). The detail pane's drag-handle on its own
     // left edge keeps its own handedness; the two are independent.
     const isResizingTimeline = Vue.ref(false);
+
+    // User-controlled show/hide for the VP list pane. Independent of
+    // `showVpTimeline` (which is the visibility decision). Defaults to
+    // true so first-time users see the pane; subsequent sessions
+    // restore whatever the user last chose. localStorage is wrapped in
+    // try/catch because in private-browsing mode setItem can throw.
+    const VP_TIMELINE_VISIBLE_KEY = 'unify-vp-timeline-visible';
+    const readVpTimelineVisible = () => {
+      try {
+        const v = localStorage.getItem(VP_TIMELINE_VISIBLE_KEY);
+        if (v === '0' || v === 'false') return false;
+        return true;
+      } catch (_) { return true; }
+    };
+    const vpTimelineVisible = Vue.ref(readVpTimelineVisible());
+    const toggleVpTimeline = () => {
+      vpTimelineVisible.value = !vpTimelineVisible.value;
+      try {
+        localStorage.setItem(VP_TIMELINE_VISIBLE_KEY, vpTimelineVisible.value ? '1' : '0');
+      } catch (_) {}
+    };
     const TIMELINE_MIN_WIDTH = 220;
     const TIMELINE_DEFAULT_WIDTH = 280;
     const savedTimelineWidth = (() => {
@@ -727,11 +768,12 @@ export default {
     // ── PR-3: VP Timeline computeds ───────────────────────────────────
     // Pane is visible when (a) we're not in settings, (b) viewport is
     // wide enough that the right column still fits both panes (the CSS
-    // also hides .unify-vp-timeline at <=1024 px). Per the user's
+    // also hides .unify-vp-timeline at <=1024 px), and (c) the user
+    // hasn't hidden the pane via the topbar toggle. Per the user's
     // decision, the pane STAYS visible when unifyActiveVpDetailId is
     // set so the user can hop between VPs without losing context.
     const showVpTimeline = Vue.computed(
-      () => !showSettings.value && !isNarrowDetail.value
+      () => !showSettings.value && !isNarrowDetail.value && vpTimelineVisible.value
     );
 
     // PR-3 review fix (Fowler F3 / Torvalds I3): only run the 1 s tick
@@ -911,6 +953,8 @@ export default {
       // PR-3: VP Timeline pane bindings.
       vpTimelineRows,
       showVpTimeline,
+      vpTimelineVisible,
+      toggleVpTimeline,
       nowMs,
       timelineWidthStyle,
       startTimelineResize,
