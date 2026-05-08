@@ -114,13 +114,18 @@ export default {
             <MessageItem v-if="item.type === 'user' || item.type === 'system' || item.type === 'error'" :message="item.message" />
 
             <!-- Assistant turn — VP-block redesign (2026-05-08).
-                 • Unify multi-VP turns (`speakerVpId` set) → VpTurnBlock,
+                 • Unify multi-VP turns ('speakerVpId' set) → VpTurnBlock,
                    the collapsible per-VP wrapper that renders avatar +
                    start time + live elapsed ticker, with a 4-state expand
                    machine (see web/stores/helpers/turn-compact.js).
                  • Legacy 1:1 Chat turns (no VP attribution) → plain
                    AssistantTurn unchanged. The collapse affordance only
-                   makes sense in multi-VP conversations. -->
+                   makes sense in multi-VP conversations.
+                 NOTE: do NOT use backticks inside this comment — the
+                 enclosing component is defined with a tagged-template
+                 'template:' literal, and an unescaped backtick here
+                 closes it early and breaks the esbuild bundle
+                 (v0.1.737 build failure). -->
             <VpTurnBlock
               v-else-if="item.type === 'assistant-turn' && item.speakerVpId"
               :turn="item"
