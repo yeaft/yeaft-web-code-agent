@@ -1219,4 +1219,9 @@ export default {
   'unify.vpTimeline.trigger.tool': 'tool',
   // PR-4: per-row abort affordance in the timeline pane.
   'unify.vpTimeline.abort': 'Abort',
+  // Topbar show/hide-VP-list toggle. The VP list panel is independent
+  // of the detail panel; preference persists in localStorage
+  // (unify-vp-timeline-visible).
+  'unify.vpTimeline.show': 'Show VP list',
+  'unify.vpTimeline.hide': 'Hide VP list',
 };

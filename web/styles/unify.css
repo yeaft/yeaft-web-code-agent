@@ -3030,11 +3030,94 @@
   color: var(--text-muted, var(--text-secondary, #888));
   cursor: pointer;
   align-self: start;
-  transition: background 0.15s, color 0.15s;
+  /* Hover-revealed (Crew parity). Idle = opacity 0; row-hover or
+     focus-within bumps to 0.7; direct hover bumps to 1 + danger color
+     — see the row-scoped rules below. */
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
 }
-.unify-vp-timeline-abort:hover,
 .unify-vp-timeline-abort:focus-visible {
   background: var(--accent-soft, rgba(99, 102, 241, 0.12));
   color: var(--accent, #6366f1);
   outline: none;
+}
+
+/* ── Crew-style row parity ────────────────────────────────────────────
+   Mirror the affordances of .crew-role-card:
+     1. Abort button is HOVER-REVEALED (opacity 0 baseline declared in
+        the .unify-vp-timeline-abort block above) — keeps the row
+        visually quiet until the user hovers, matching Crew's subtle
+        action-bar pattern. Focus-visible also reveals it for
+        keyboard users.
+     2. While streaming/typing, the VP name breathes (Crew uses the
+        same 3 s nameBreathing keyframe). Reuses the existing keyframe
+        if present; redeclares locally so this stylesheet is
+        self-contained. Honors prefers-reduced-motion.
+     3. Abort button uses the danger color on hover, again mirroring
+        .crew-role-abort-btn.
+   The existing .is-status-streaming/.is-status-typing accent (above)
+   stays as-is — it's the row's "I'm the one talking" treatment, the
+   breathing name is the secondary cue. Both are intentionally only on
+   "currently producing tokens", not on in-feature state.
+*/
+.unify-vp-timeline-row:hover .unify-vp-timeline-abort,
+.unify-vp-timeline-row:focus-within .unify-vp-timeline-abort,
+.unify-vp-timeline-abort:focus-visible {
+  opacity: 0.7;
+}
+/* Direct-hover treatment. The row-hover descendant rule above has
+   specificity (0,3,0) — to actually reach opacity:1 + danger color
+   when the cursor is on the abort button (which also row-hovers, by
+   inclusion), we compound the row class here so this rule's
+   specificity matches and source-order wins. Without the compound
+   selector the (0,2,0) `.abort:hover` would lose, clamping at 0.7. */
+.unify-vp-timeline-row .unify-vp-timeline-abort:hover {
+  opacity: 1;
+  color: var(--error-color, #e74c3c);
+  background: rgba(231, 76, 60, 0.15);
+}
+
+/* Streaming/typing breathing animation on the row name. Crew uses an
+   identical 3 s ease-in-out infinite cycle. */
+.unify-vp-timeline-row.is-status-streaming .unify-vp-timeline-row-name,
+.unify-vp-timeline-row.is-status-typing .unify-vp-timeline-row-name {
+  animation: unifyVpNameBreathing 3s ease-in-out infinite;
+}
+@keyframes unifyVpNameBreathing {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .unify-vp-timeline-row.is-status-streaming .unify-vp-timeline-row-name,
+  .unify-vp-timeline-row.is-status-typing .unify-vp-timeline-row-name {
+    animation: none;
+  }
+}
+
+/* ── Topbar VP-list toggle button ────────────────────────────────────
+   Sits next to .unify-topbar-sidebar-toggle at the left edge of the
+   topbar. Inactive = muted icon; active = accent-tinted background to
+   indicate "the panel is currently visible." Same shape/size as the
+   existing topbar buttons (16 px icon, ~28 px hit-target). */
+.unify-topbar-vp-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--text-muted, var(--text-secondary, #888));
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 6px;
+  transition: background 0.15s, color 0.15s;
+}
+.unify-topbar-vp-toggle:hover,
+.unify-topbar-vp-toggle:focus-visible {
+  background: var(--sidebar-hover, var(--surface-1, rgba(0, 0, 0, 0.05)));
+  color: var(--text-primary, #1f2937);
+  outline: none;
+}
+.unify-topbar-vp-toggle.active {
+  color: var(--accent, #6366f1);
+  background: var(--accent-soft, rgba(99, 102, 241, 0.10));
 }
