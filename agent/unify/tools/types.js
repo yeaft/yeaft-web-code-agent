@@ -68,6 +68,7 @@
  *   isConcurrencySafe?: (input?: object) => boolean,
  *   isReadOnly?: (input?: object) => boolean,
  *   isDestructive?: (input?: object) => boolean,
+ *   timeoutMs?: number,
  * }} def
  * @returns {ToolDef}
  */
@@ -79,11 +80,12 @@ export function defineTool({
   isConcurrencySafe = () => false,
   isReadOnly = () => false,
   isDestructive = () => false,
+  timeoutMs,
 }) {
   if (!name) throw new Error('Tool must have a name');
   if (!execute) throw new Error(`Tool "${name}" must have an execute function`);
 
-  return {
+  const def = {
     name,
     description: description || `Tool: ${name}`,
     parameters: parameters || { type: 'object', properties: {} },
@@ -92,4 +94,11 @@ export function defineTool({
     isReadOnly,
     isDestructive,
   };
+  // Only attach `timeoutMs` when the tool author opts in. Leaving it
+  // unset means ToolRegistry.execute uses DEFAULT_TOOL_TIMEOUT_MS — set
+  // to <= 0 to disable the per-tool timeout entirely.
+  if (Number.isFinite(timeoutMs)) {
+    def.timeoutMs = timeoutMs;
+  }
+  return def;
 }
