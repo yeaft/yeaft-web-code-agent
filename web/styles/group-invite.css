@@ -109,8 +109,8 @@
 /* ------------------------------------------------------------
  * Empty-group hero — shown in the center pane (replaces the
  * blank MessageList) when the active group has no roster.
- * Mirrors the calm tone of `.unify-detail-placeholder` but with
- * a single primary CTA so the next step is obvious.
+ * Calm tone with a single primary CTA so the next step is
+ * obvious.
  * ------------------------------------------------------------ */
 
 .unify-empty-group-hero {

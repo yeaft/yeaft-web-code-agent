@@ -77,11 +77,6 @@ export default {
             <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>
           </button>
 
-        <!-- task-unify-group-ui-cleanup: VP-list show/hide moved to the
-             right side of the topbar (next to the model dropdown's
-             trailing actions) so it lives alongside the other panel
-             toggles, mirroring Crew's "hide-roles / hide-features"
-             affordances which sit at the right edge of the chat header. -->
         <!-- task-339-F1: GroupSelector removed from topbar — groups now surface via sidebar section. -->
 
           <!-- Model selector (compact dropdown in topbar) -->
@@ -232,7 +227,7 @@ export default {
       <aside
         v-if="debugMode"
         class="unify-detail"
-        :class="{ resizing: isResizingDetail, 'mobile-debug': debugMode && isNarrowDetail }"
+        :class="{ resizing: isResizingDetail, 'mobile-debug': isNarrowDetail }"
         :style="detailWidthStyle"
         ref="detailPanel"
       >
@@ -390,12 +385,13 @@ export default {
     // try/catch because in private-browsing mode setItem can throw.
     //
     // Why we persist *visibility* here but not for the right-side
-    // detail panel (`detailCollapsed`): the VP list is a stable layout
-    // preference (some users want a compact 2-column view, some want
-    // 3 columns), while the detail panel is a transient debug surface
-    // — toggling it open/closed across sessions would be surprising.
-    // Pane *width* is persisted in both cases (`unify-vp-timeline-width`,
-    // `unify-debug-width`); only visibility diverges.
+    // detail panel: the VP list is a stable layout preference (some
+    // users want a compact 2-column view, some want 3 columns), while
+    // the detail panel is a transient debug surface mounted on demand
+    // (`v-if="debugMode"`) and re-toggling it across sessions would be
+    // surprising. Pane *width* is persisted in both cases
+    // (`unify-vp-timeline-width`, `unify-debug-width`); only visibility
+    // diverges.
     const VP_TIMELINE_VISIBLE_KEY = 'unify-vp-timeline-visible';
     const readVpTimelineVisible = () => {
       try {
