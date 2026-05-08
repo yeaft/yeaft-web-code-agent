@@ -24,7 +24,6 @@ export default {
       <UnifySidebar
         :collapsed="sidebarCollapsed"
         @select-group="onSelectGroupV2"
-        @search-escape="onSearchEscape"
         @toggle-sidebar="toggleSidebar"
         @back="goBack"
         @open-settings="toggleSettings"
@@ -318,16 +317,9 @@ export default {
       store.leaveVpDetailView();
     };
 
-    // task-312: Esc in sidebar search box — refocus chat input. The
-    // sidebar has already cleared its own query string by the time this
-    // fires.
-    const onSearchEscape = () => {
-      // Small timeout so the input[type=text] blur completes first.
-      Vue.nextTick(() => {
-        const el = document.querySelector('.input-area textarea, .input-area input[type="text"]');
-        if (el && typeof el.focus === 'function') el.focus();
-      });
-    };
+    // task-unify-remove-sidebar-search (2026-05-08): the sidebar search
+    // box was retired, so the Esc-to-refocus handler that paired with
+    // it is gone too.
 
     // Detail panel resizable width
     const detailPanel = Vue.ref(null);
@@ -929,7 +921,6 @@ export default {
       sidebarV2Enabled,
       onSelectGroupV2,
       exitVpDetailView,
-      onSearchEscape,
       // task-340: workbench capability gate
       canUseWorkbench,
       // task-334m: invite modal bindings.

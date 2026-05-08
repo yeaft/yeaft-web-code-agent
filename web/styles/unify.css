@@ -36,7 +36,6 @@
    Mirrors Chat sidebar behavior so the user can re-expand instead of having
    the sidebar disappear entirely. */
 .unify-sidebar.collapsed .us-header-row,
-.unify-sidebar.collapsed .us-search,
 .unify-sidebar.collapsed .us-scroll,
 .unify-sidebar.collapsed .sidebar-bottom {
   display: none;
