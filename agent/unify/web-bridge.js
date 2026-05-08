@@ -50,8 +50,6 @@ import {
   compactHistory,
   trimSnapshotForBudget,
 } from './history-compact.js';
-import { createFeatureArc } from './feature-arc.js';
-import { getFeatureStore } from './tools/feature-tools.js';
 import { persistUnifyAttachments, attachmentsForPersistence } from './attachments.js';
 
 /** @type {import('./session.js').Session | null} */
@@ -909,15 +907,18 @@ export function installUnifyRuntimeBridge(s) {
  */
 function handleEngineEvent(event, hctx) {
   hctx.resetQueryTimer();
-  // featureId may have just been published mid-turn by the FeatureArc
-  // (the arc's observeEvent runs before this dispatch); pull it fresh
-  // so the wire envelope tags every subsequent emit with the right id.
-  const featureId = typeof hctx.getFeatureId === 'function' ? hctx.getFeatureId() : null;
+  // Sub-agent events may carry their own `featureId` (stamped by the
+  // sub-agent runner from the parent's inbound feature scope). Plain
+  // VP-turn events have no featureId — auto-feature creation was
+  // removed when Track-A / FeatureArc was deleted (2026-05-08).
+  const eventFeatureId = typeof event === 'object' && event && typeof event.featureId === 'string'
+    ? event.featureId
+    : null;
   const envelope = {
     groupId: hctx.groupId,
     vpId: hctx.vpId,
     turnId: hctx.turnId,
-    ...(featureId ? { featureId } : {}),
+    ...(eventFeatureId ? { featureId: eventFeatureId } : {}),
   };
 
   switch (event.type) {
@@ -1696,11 +1697,6 @@ async function runVpTurn({ prompt, promptParts = null, groupId, vpId, turnId, en
   if (!prompt?.trim()) return;
 
   const envelope = { groupId, vpId, turnId };
-  // Arc is declared at outer-try scope so the catch / finally branches
-  // below can call `arc.finalize({status:'aborted'|'error'})` after a
-  // throw escaping the inner try. It's null until the inner try
-  // populates it; all catch-side calls guard with `arc?.finalize?.`.
-  let arc = null;
 
   try {
     if (session?.dreamScheduler) {
@@ -1726,12 +1722,6 @@ async function runVpTurn({ prompt, promptParts = null, groupId, vpId, turnId, en
       const assistantTextParts = [];
       const toolCallsAccum = [];
       const toolResultsAccum = [];
-      // PR-4 (review fix): hoist `vpEngine` so the `finally` can clear
-      // the per-turn featureId accessor on the SAME engine instance
-      // we installed it on — even if the VP was kicked or its group
-      // deleted mid-turn (both code paths call `vpEngines.delete(...)`).
-      // Calling `getOrCreateVpEngine` again from `finally` would
-      // resurrect a zombie engine for a VP that no longer exists.
       let vpEngine = null;
 
       // task-707: per-VP engine + persistent group coord. The coord is
@@ -1748,74 +1738,7 @@ async function runVpTurn({ prompt, promptParts = null, groupId, vpId, turnId, en
         envelope: inboundEnvelope,
       });
 
-      // ── Dual-track feature arc ──
-      // Track A (quick-response) runs concurrently against the same
-      // primary model with a non-looping single call; its preview is
-      // surfaced to the user immediately via `quick_preview` so they
-      // see *something* within ~1s. Three signals (Track A intent,
-      // ≥3 engine loops, key tool call) auto-create a Feature record
-      // and the wire envelope starts tagging emits with `featureId`,
-      // letting the frontend fold subsequent messages into a pill.
-      arc = createFeatureArc({
-        adapter: session?.adapter || null,
-        model: session?.config?.model || null,
-        featureStore: getFeatureStore(),
-        prompt,
-        vpId,
-        groupId: groupId || null,
-        turnId,
-        vpDisplayName: queryOpts?.vpPersona?.displayName || vpId,
-        language: session?.config?.language || 'en',
-        signal: vpAbort.signal,
-        emit: {
-          quickPreview: ({ intent, preview }) => {
-            sendUnifyEvent({
-              type: 'quick_preview',
-              intent,
-              preview,
-              vpId,
-              turnId,
-            }, envelope);
-          },
-          featureStarted: ({ featureId, title, trigger, toolName }) => {
-            sendUnifyEvent({
-              type: 'feature_started',
-              featureId,
-              title,
-              trigger,         // 'quick' | 'turns' | 'tool'
-              toolName: toolName || null,
-              vpId,
-              turnId,
-            }, { ...envelope, featureId });
-          },
-          featureCompleted: ({ featureId, summary, status }) => {
-            sendUnifyEvent({
-              type: 'feature_completed',
-              featureId,
-              summary,
-              status,            // 'completed' | 'aborted' | 'error'
-              vpId,
-              turnId,
-            }, { ...envelope, featureId });
-          },
-        },
-      });
-      // Fire-and-forget — Track A produces its preview / decision when
-      // ready; the main engine loop must not be held back waiting for it.
-      arc.startTrackA();
-
-      // PR-4: let sub-agents spawned during this turn inherit the
-      // parent's active featureId. Read lazily inside the engine's
-      // parentEngineDeps so a feature that opens AFTER a sub-agent
-      // spawns still tags the sub-agent's later events. Cleared in the
-      // `finally` below so a stale `arc` reference doesn't leak into
-      // the next turn.
       vpEngine = getOrCreateVpEngine(groupId, vpId);
-      if (typeof vpEngine.setCurrentFeatureIdAccessor === 'function') {
-        vpEngine.setCurrentFeatureIdAccessor(() => {
-          try { return arc?.getFeatureId?.() || null; } catch { return null; }
-        });
-      }
 
       const handlerCtx = {
         assistantTextParts,
@@ -1825,9 +1748,6 @@ async function runVpTurn({ prompt, promptParts = null, groupId, vpId, turnId, en
         groupId,
         vpId,
         turnId,
-        // Lets handleEngineEvent stamp the latest featureId on each
-        // outgoing envelope; the arc may publish it mid-turn.
-        getFeatureId: () => arc.getFeatureId(),
       };
       // Always trim the snapshot before passing to engine.query. This is
       // the second-line defense (history-compact only fires above 30K
@@ -1852,25 +1772,11 @@ async function runVpTurn({ prompt, promptParts = null, groupId, vpId, turnId, en
         ...queryOpts,
       })) {
         resetQueryTimer();
-        // Arc observes BEFORE dispatch so featureId (if just published)
-        // is available when handleEngineEvent stamps the envelope.
-        try { arc.observeEvent(event); } catch (err) {
-          console.warn('[FeatureArc] observe failed:', err?.message || err);
-        }
         handleEngineEvent(event, handlerCtx);
       }
 
       // Turn completed — atomically append this VP's output to shared history.
       appendTurnToHistory(prompt, assistantTextParts, toolCallsAccum, toolResultsAccum);
-
-      // Close the arc: if a feature was opened during the turn, run the
-      // summary call and write status='completed' back to FeatureStore.
-      // Awaited so the `feature_completed` event reaches the frontend
-      // before the final 'result' bubble (UI ordering matters: the pill
-      // should reach its done state before the turn is marked done).
-      try { await arc.finalize({ status: 'completed' }); } catch (err) {
-        console.warn('[FeatureArc] finalize failed:', err?.message || err);
-      }
 
       sendUnifyOutput({
         type: 'assistant',
@@ -1882,25 +1788,10 @@ async function runVpTurn({ prompt, promptParts = null, groupId, vpId, turnId, en
       }, envelope);
     } finally {
       if (queryTimer) clearTimeout(queryTimer);
-      // PR-4 (review fix): clear the accessor on the SAME engine
-      // instance we installed it on. Reusing the captured reference
-      // (instead of calling getOrCreateVpEngine again) avoids
-      // resurrecting a zombie engine if the VP/group was torn down
-      // mid-turn. `vpEngine` is null only when the install path threw
-      // before the engine lookup (very early failure) — in that case
-      // there's nothing to clear.
-      try {
-        if (vpEngine && typeof vpEngine.setCurrentFeatureIdAccessor === 'function') {
-          vpEngine.setCurrentFeatureIdAccessor(null);
-        }
-      } catch { /* best-effort */ }
     }
   } catch (err) {
     const isAbort = err && (err.name === 'AbortError' || err.name === 'LLMAbortError');
     if (isAbort) {
-      // Best-effort close: mark the feature aborted so the frontend pill
-      // settles into the right terminal state instead of staying active.
-      try { await arc?.finalize?.({ status: 'aborted' }); } catch { /* ignore */ }
       sendUnifyOutput({
         type: 'result',
         result_text: '',
@@ -1910,7 +1801,6 @@ async function runVpTurn({ prompt, promptParts = null, groupId, vpId, turnId, en
     }
 
     console.error('[Unify] query error:', err);
-    try { await arc?.finalize?.({ status: 'error' }); } catch { /* ignore */ }
 
     if (isPermissionErrorMsg(err.message)) {
       if (!_permissionDiagnosticSent) {
