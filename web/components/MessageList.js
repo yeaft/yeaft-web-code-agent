@@ -100,8 +100,11 @@ export default {
             {{ $t('chat.waiting.cliExited') }}
           </span>
         </div>
-        <div v-if="store.loadingMoreMessages" class="loading-more">{{ $t('message.loadingMore') }}</div>
-        <div v-else-if="store.hasMoreMessages" class="load-more-hint" @click="store.loadMoreMessages()">{{ $t('message.loadMore') }}</div>
+        <!-- task-fix-unify-load-more-empty: load-more is a Chat-only feature
+             ('sync_messages' verb, SQLite messageDb). Unify history lives in
+             the agent's conversationStore — gate hint + spinner on currentView. -->
+        <div v-if="store.loadingMoreMessages && store.currentView !== 'unify'" class="loading-more">{{ $t('message.loadingMore') }}</div>
+        <div v-else-if="store.hasMoreMessages && store.currentView !== 'unify'" class="load-more-hint" @click="store.loadMoreMessages()">{{ $t('message.loadMore') }}</div>
         <template v-for="item in turnGroups" :key="item.id">
           <!-- task-312: wrapper carries data-msg-id so the Unify sidebar
                jump-to-message feature can scroll/flash a specific row. -->
@@ -1206,7 +1209,7 @@ export default {
 
       if (containerRef.value) {
         const { scrollTop } = containerRef.value;
-        if (scrollTop < 100 && store.hasMoreMessages && !store.loadingMoreMessages) {
+        if (scrollTop < 100 && store.hasMoreMessages && !store.loadingMoreMessages && store.currentView !== 'unify') {
           const prevScrollHeight = containerRef.value.scrollHeight;
           store.loadMoreMessages();
 

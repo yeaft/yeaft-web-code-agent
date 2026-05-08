@@ -654,6 +654,13 @@ export const useChatStore = defineStore('chat', {
       // Reads `this.currentView` to decide; must run BEFORE the flip below.
       unifyViewHelpers.applyEnterUnifyTransition(this);
       this.currentView = 'unify';
+      // task-fix-unify-load-more-empty: clear leaked Chat-mode pagination
+      // flags. `hasMoreMessages` is set true by Chat's `db_messages_loaded`
+      // / `sync_messages_result` handlers and would otherwise survive the
+      // Chat → Unify transition, surfacing a "加载更多消息" hint that does
+      // nothing in Unify (Unify history doesn't live in messageDb).
+      this.hasMoreMessages = false;
+      this.loadingMoreMessages = false;
 
       // Always request a session_ready replay so model + status + groups
       // snapshot are repopulated on every Unify entry. Backend's
@@ -2228,6 +2235,13 @@ export const useChatStore = defineStore('chat', {
 
     // ★ Phase 6.1: 分页加载（基于 turn，统一走 DB）
     loadMoreMessages() {
+      // task-fix-unify-load-more-empty: action-level guard. The hint and
+      // scroll-trigger in MessageList both gate on currentView, but this
+      // is the authoritative stop — Unify history doesn't live in the
+      // SQLite messageDb that `sync_messages` queries, so dispatching
+      // here from Unify always returns empty. Any future caller (hotkey,
+      // devtools, programmatic) is covered by this single line.
+      if (this.currentView === 'unify') return;
       if (this.loadingMoreMessages || !this.hasMoreMessages || !this.currentConversation) return;
       this.loadingMoreMessages = true;
 
