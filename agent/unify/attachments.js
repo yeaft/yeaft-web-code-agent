@@ -27,9 +27,13 @@
  *     stay small).
  *   - `promptSuffix`: text to append to the user's prompt so the model
  *     sees the file list in the same form Chat mode uses.
- *   - `promptParts`: an array of `{ type:'image', source:{ data, mediaType } }`
+ *   - `promptParts`: an array of `{ type:'image', source:{ data, media_type } }`
  *     blocks for images, ready to be combined with a text block for
  *     `engine.query({ promptParts })`. Empty when no images are present.
+ *     Field name is `media_type` (snake_case) to match the Anthropic
+ *     Messages API spec — Anthropic adapter forwards user-content blocks
+ *     verbatim, so the on-the-wire form must already be correct here.
+ *     `crew/routing.js` / `workbench/transfer.js` emit the same shape.
  *   - `failed`: list of `{ name, error }` for entries that could not
  *     be persisted (disk full, bad base64, ...). The caller surfaces
  *     this so the UI can tell the user *which* file blew up rather
@@ -92,7 +96,7 @@ function sanitizeBaseName(base) {
  * @returns {{
  *   promptAttachments: Array<{name:string, path:string, mimeType:string, isImage:boolean}>,
  *   promptSuffix: string,
- *   promptParts: Array<{type:'image', source:{type:'base64', mediaType:string, data:string}}>,
+ *   promptParts: Array<{type:'image', source:{type:'base64', media_type:string, data:string}}>,
  *   failed: Array<{name:string, error:string}>
  * }}
  */
@@ -176,11 +180,13 @@ export function persistUnifyAttachments(files, opts = {}) {
           type: 'image',
           source: {
             type: 'base64',
-            // Both adapters accept either `mediaType` or `media_type`
-            // (see openai-responses.js:#translateUserContent and the
-            // Anthropic upstream contract). Use the camelCase form to
-            // match `openai-responses.js` exactly.
-            mediaType: file.mimeType || 'image/png',
+            // Field name MUST be `media_type` (snake_case) — the Anthropic
+            // Messages API rejects camelCase here with `400 Failed to
+            // read request body`, and the Anthropic adapter forwards
+            // user-content blocks verbatim (no field rename). The OpenAI
+            // Responses adapter accepts both forms (see
+            // `openai-responses.js#translateUserContent`).
+            media_type: file.mimeType || 'image/png',
             data: file.data,
           },
         });
