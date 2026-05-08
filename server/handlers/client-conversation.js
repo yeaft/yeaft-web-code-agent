@@ -624,6 +624,19 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       break;
     }
 
+    case 'unify_load_more_history': {
+      const moreAgentId = msg.agentId || client.currentAgent;
+      if (!moreAgentId) return;
+      if (!await checkAgentAccess(moreAgentId)) return;
+      await forwardToAgent(moreAgentId, {
+        type: 'unify_load_more_history',
+        groupId: msg.groupId || null,
+        beforeSeq: typeof msg.beforeSeq === 'number' ? msg.beforeSeq : null,
+        turns: typeof msg.turns === 'number' ? msg.turns : 20,
+      });
+      break;
+    }
+
     case 'unify_mode_switch': {
       const modeAgentId = msg.agentId || client.currentAgent;
       if (!modeAgentId) return;

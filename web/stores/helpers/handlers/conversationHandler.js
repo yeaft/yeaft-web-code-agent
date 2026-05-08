@@ -326,3 +326,72 @@ export function handleSyncMessagesResult(store, msg) {
   store.loadingMoreMessages = false;
   store.setRefreshingSession(msg.conversationId, false);
 }
+
+/**
+ * Handle a `unify_history_chunk` envelope — the response to
+ * `unify_load_more_history`. Unlike Chat-mode's `sync_messages_result`,
+ * Unify history doesn't live in a SQLite DB and isn't keyed by
+ * `dbMessageId`; the agent computes the page directly from on-disk
+ * markdown. The chunk is GUARANTEED to be strictly older than every
+ * message currently in `messagesMap[unifyConversationId]` (the cursor
+ * was the oldest currently-loaded seq), so prepending at index 0 is
+ * always correct.
+ *
+ * Always clears `unifyLoadingMoreHistory` — even on an empty / error
+ * chunk — so the spinner doesn't get stuck. Always overwrites
+ * `unifyHasMoreHistory` from the server's authoritative value.
+ */
+export function handleUnifyHistoryChunk(store, msg) {
+  const convId = msg.conversationId || store.unifyConversationId;
+  if (!convId) {
+    store.unifyLoadingMoreHistory = false;
+    return;
+  }
+  // Stale-chunk guard: between the request fly-out and this chunk landing,
+  // the user may have switched groups (or a group lifecycle event —
+  // create / archive / delete — may have flipped `activeGroupId` under
+  // us). `setActiveGroupFilter` clears the loading flag and the cursor,
+  // so accepting this chunk would prepend group A's history into group
+  // B's view. Drop on the floor; spinner already cleared by the switch.
+  // The chunk's groupId is authoritative — it's stamped by the agent
+  // from the request groupId, not from messagesMap state.
+  const activeFilter = store.unifyActiveGroupFilter ?? null;
+  if (msg.groupId && activeFilter && msg.groupId !== activeFilter) {
+    store.unifyLoadingMoreHistory = false;
+    return;
+  }
+  if (!store.messagesMap[convId]) store.messagesMap[convId] = [];
+
+  // Same projection as handleUnifyLoadHistory's bootstrap replay: only
+  // user / assistant text rows. No tool rows. `isStreaming: false`
+  // because these are historical, not in-flight.
+  const formatted = [];
+  for (const m of (msg.messages || [])) {
+    if (!m) continue;
+    if (m.role === 'user') {
+      formatted.push({
+        type: 'user',
+        content: m.content,
+        groupId: m.groupId || null,
+        isStreaming: false,
+      });
+    } else if (m.role === 'assistant') {
+      formatted.push({
+        type: 'assistant',
+        content: m.content,
+        groupId: m.groupId || null,
+        isStreaming: false,
+      });
+    }
+  }
+
+  if (formatted.length > 0) {
+    store.messagesMap[convId].splice(0, 0, ...formatted);
+  }
+
+  store.unifyHasMoreHistory = !!msg.hasMore;
+  if (typeof msg.oldestSeq === 'number') {
+    store.unifyOldestLoadedSeq = msg.oldestSeq;
+  }
+  store.unifyLoadingMoreHistory = false;
+}

@@ -53,6 +53,7 @@ import {
 import { createFeatureArc } from './feature-arc.js';
 import { getFeatureStore } from './tools/feature-tools.js';
 import { persistUnifyAttachments, attachmentsForPersistence } from './attachments.js';
+import { parseSeqFromId } from './conversation/persist.js';
 
 /** @type {import('./session.js').Session | null} */
 let session = null;
@@ -2594,6 +2595,32 @@ export async function handleUnifyLoadHistory(msg) {
     }
   }
 
+  // Compute the pagination cursor for the bootstrap load so the frontend
+  // knows whether a "Load older messages" hint should be shown and where
+  // to start the next page. The cursor is the seq of the oldest replayed
+  // message; `hasMore` is true iff there's an earlier message in the
+  // group that we did NOT replay.
+  let hasMore = false;
+  let oldestSeq = null;
+  if (groupId && messages.length > 0) {
+    const firstId = messages[0].id;
+    const seq = parseSeqFromId(firstId);
+    // Defend against malformed ids: a NaN cursor would round-trip back as
+    // a poison `beforeSeq` and degrade subsequent paginations to "give me
+    // the newest page again". Surface as null instead.
+    oldestSeq = Number.isFinite(seq) ? seq : null;
+    if (oldestSeq != null) {
+      // Consult the store for whether anything older exists in the same
+      // group. Cheap: a single extra `loadOlderByGroup` with turns=1.
+      try {
+        const probe = session.conversationStore.loadOlderByGroup(groupId, oldestSeq, 1);
+        hasMore = probe.messages.length > 0;
+      } catch (err) {
+        console.error('[Unify] history-load probe failed:', err.message);
+      }
+    }
+  }
+
   sendUnifyEvent({
     type: 'history_loaded',
     count: messages.length,
@@ -2601,6 +2628,71 @@ export async function handleUnifyLoadHistory(msg) {
     totalHot: session.conversationStore.countHot(),
     totalCold: session.conversationStore.countCold(),
     groupId,
+    hasMore,
+    oldestSeq,
+  });
+}
+
+/**
+ * Handle a "load older messages" pagination request. Reads `turns` more
+ * turns of history strictly older than `beforeSeq` for `groupId`, and
+ * emits them in a single `unify_history_chunk` envelope (NOT a
+ * `unify_output` — that pipeline appends, but the frontend needs to
+ * PREPEND these older messages above what it already has).
+ *
+ * Tool replay is NOT included in this PR — same projection as
+ * `handleUnifyLoadHistory` (user / assistant text only). On any internal
+ * failure we still emit an empty chunk so the spinner clears.
+ *
+ * @param {object} msg — { groupId, beforeSeq, turns }
+ */
+export async function handleUnifyLoadMoreHistory(msg) {
+  const groupId = (msg && typeof msg.groupId === 'string' && msg.groupId) || null;
+  const emit = (payload) => sendToServer({
+    type: 'unify_history_chunk',
+    conversationId: unifyConversationId,
+    groupId,
+    ...payload,
+  });
+
+  if (!session || !groupId) {
+    emit({ messages: [], oldestSeq: null, hasMore: false });
+    return;
+  }
+
+  const beforeSeq = (typeof msg.beforeSeq === 'number') ? msg.beforeSeq : null;
+  const turns = (typeof msg.turns === 'number' && msg.turns > 0) ? msg.turns : 20;
+
+  let result;
+  try {
+    result = session.conversationStore.loadOlderByGroup(groupId, beforeSeq, turns);
+  } catch (err) {
+    console.error('[Unify] loadOlderByGroup failed:', err.message);
+    result = { messages: [], oldestSeq: null, hasMore: false };
+  }
+
+  // Wire shape mirrors handleUnifyLoadHistory's projection: only user /
+  // assistant text rows. Tool_use / tool_result replay is out of scope
+  // for this PR (today's bootstrap path drops them too).
+  //
+  // We intentionally do NOT ship `id` or `time` over the wire:
+  // `handleUnifyHistoryChunk` reads only role / content / groupId. The
+  // pagination cursor (`oldestSeq`) is sent once at the envelope level,
+  // so per-row ids are dead weight. `time` would be useful if we render
+  // "5 days ago" stamps on older history rows — when that ships, add it
+  // back here and consume it in conversationHandler.
+  const projected = (result.messages || [])
+    .filter(m => m && (m.role === 'user' || m.role === 'assistant'))
+    .map(m => ({
+      role: m.role,
+      content: m.content,
+      groupId: m.groupId || null,
+    }));
+
+  emit({
+    messages: projected,
+    oldestSeq: result.oldestSeq,
+    hasMore: !!result.hasMore,
   });
 }
 

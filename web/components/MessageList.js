@@ -100,11 +100,16 @@ export default {
             {{ $t('chat.waiting.cliExited') }}
           </span>
         </div>
-        <!-- task-fix-unify-load-more-empty: load-more is a Chat-only feature
-             ('sync_messages' verb, SQLite messageDb). Unify history lives in
-             the agent's conversationStore — gate hint + spinner on currentView. -->
-        <div v-if="store.loadingMoreMessages && store.currentView !== 'unify'" class="loading-more">{{ $t('message.loadingMore') }}</div>
-        <div v-else-if="store.hasMoreMessages && store.currentView !== 'unify'" class="load-more-hint" @click="store.loadMoreMessages()">{{ $t('message.loadMore') }}</div>
+        <!-- Load-more hint + spinner. Two parallel paths share one row:
+             - Chat mode dispatches 'sync_messages' against the SQLite
+               messageDb (gated on store.hasMoreMessages).
+             - Unify mode dispatches 'unify_load_more_history' which the
+               agent reads from disk-backed conversationStore (gated on
+               store.unifyHasMoreHistory).
+             onClickLoadMore branches by currentView so a single visual
+             affordance can drive either mode without leaking state. -->
+        <div v-if="(store.loadingMoreMessages && store.currentView !== 'unify') || store.unifyLoadingMoreHistory" class="loading-more">{{ $t('message.loadingMore') }}</div>
+        <div v-else-if="(store.hasMoreMessages && store.currentView !== 'unify') || store.unifyHasMoreHistory" class="load-more-hint" @click="onClickLoadMore">{{ $t('message.loadMore') }}</div>
         <template v-for="item in turnGroups" :key="item.id">
           <!-- task-312: wrapper carries data-msg-id so the Unify sidebar
                jump-to-message feature can scroll/flash a specific row. -->
@@ -1209,25 +1214,42 @@ export default {
 
       if (containerRef.value) {
         const { scrollTop } = containerRef.value;
-        if (scrollTop < 100 && store.hasMoreMessages && !store.loadingMoreMessages && store.currentView !== 'unify') {
-          const prevScrollHeight = containerRef.value.scrollHeight;
-          store.loadMoreMessages();
+        if (scrollTop >= 100) return;
 
-          const unwatch = Vue.watch(
-            () => store.loadingMoreMessages,
-            (loading) => {
-              if (!loading) {
-                Vue.nextTick(() => {
-                  if (containerRef.value) {
-                    const newScrollHeight = containerRef.value.scrollHeight;
-                    containerRef.value.scrollTop = newScrollHeight - prevScrollHeight + scrollTop;
-                  }
-                });
-                unwatch();
-              }
-            }
-          );
+        // Auto-fire load-more when the user scrolls near the top. Two
+        // independent paths share this trigger, gated on currentView so
+        // that the wrong store-flag pair never wins.
+        const isUnify = store.currentView === 'unify';
+        const eligible = isUnify
+          ? (store.unifyHasMoreHistory && !store.unifyLoadingMoreHistory && store.unifyOldestLoadedSeq != null)
+          : (store.hasMoreMessages && !store.loadingMoreMessages);
+        if (!eligible) return;
+
+        const prevScrollHeight = containerRef.value.scrollHeight;
+        if (isUnify) {
+          store.loadMoreUnifyHistory();
+        } else {
+          store.loadMoreMessages();
         }
+
+        // Watch the corresponding loading flag and restore the user's
+        // scroll position once the prepended messages render. Without
+        // this the viewport "jumps" because the document grew above
+        // the fold.
+        const loadingRef = isUnify
+          ? () => store.unifyLoadingMoreHistory
+          : () => store.loadingMoreMessages;
+        const unwatch = Vue.watch(loadingRef, (loading) => {
+          if (!loading) {
+            Vue.nextTick(() => {
+              if (containerRef.value) {
+                const newScrollHeight = containerRef.value.scrollHeight;
+                containerRef.value.scrollTop = newScrollHeight - prevScrollHeight + scrollTop;
+              }
+            });
+            unwatch();
+          }
+        });
       }
     };
 
@@ -1335,6 +1357,15 @@ export default {
       ctx.emit('open-group-settings', norm);
     };
 
+    // Single click handler for the load-more hint. Branches by view so
+    // Chat-mode and Unify-mode can share one button while dispatching to
+    // their own pagination paths (different store actions, different
+    // wire verbs, different cursor semantics).
+    const onClickLoadMore = () => {
+      if (store.currentView === 'unify') store.loadMoreUnifyHistory();
+      else store.loadMoreMessages();
+    };
+
     return {
       store,
       containerRef,
@@ -1374,6 +1405,7 @@ export default {
       // group editor wiring
       activeGroupIdForBar,
       onOpenGroupSettings,
+      onClickLoadMore,
     };
   }
 };

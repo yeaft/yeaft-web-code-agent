@@ -333,6 +333,25 @@ export async function handleAgentOutput(agentId, agent, msg) {
       }
       break;
 
+    case 'unify_history_chunk':
+      // Forward a "load older messages" pagination chunk to the same
+      // authenticated clients. Distinct from `unify_output` because the
+      // frontend needs to PREPEND these older messages above the current
+      // history (whereas unify_output flows through an append pipeline).
+      for (const [cId, c] of webClients) {
+        if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
+          await sendToWebClient(c, {
+            type: 'unify_history_chunk',
+            conversationId: msg.conversationId,
+            ...(msg.groupId ? { groupId: msg.groupId } : {}),
+            messages: msg.messages || [],
+            oldestSeq: msg.oldestSeq ?? null,
+            hasMore: !!msg.hasMore,
+          });
+        }
+      }
+      break;
+
     default:
       return false; // Not handled
   }

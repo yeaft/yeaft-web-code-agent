@@ -122,6 +122,17 @@ export const useChatStore = defineStore('chat', {
     // ★ Phase 6: 消息分页状态
     hasMoreMessages: false,
     loadingMoreMessages: false,
+    // Unify 分页状态 (parallel to the Chat-mode flags above):
+    //  - unifyHasMoreHistory: server told us there's at least one earlier
+    //    turn for the active group that we haven't loaded yet.
+    //  - unifyLoadingMoreHistory: a `unify_load_more_history` request is
+    //    in flight; gates the click handler + drives the spinner.
+    //  - unifyOldestLoadedSeq: the seq of the oldest message currently
+    //    in messagesMap[unifyConversationId]. Doubles as the cursor
+    //    (`beforeSeq`) for the next page request.
+    unifyHasMoreHistory: false,
+    unifyLoadingMoreHistory: false,
+    unifyOldestLoadedSeq: null,
     // 可用的 slash commands 列表（按 conversationId 隔离，从 Claude SDK init 消息获取）
     slashCommandsMap: {},  // { [conversationId]: string[] }
     // Slash command 描述映射（从 agent 端传递，所有 conversation 共用）
@@ -661,6 +672,11 @@ export const useChatStore = defineStore('chat', {
       // nothing in Unify (Unify history doesn't live in messageDb).
       this.hasMoreMessages = false;
       this.loadingMoreMessages = false;
+      // Reset Unify pagination cursor on every entry. The agent will re-prime
+      // these via `history_loaded` once the bootstrap replay completes.
+      this.unifyHasMoreHistory = false;
+      this.unifyLoadingMoreHistory = false;
+      this.unifyOldestLoadedSeq = null;
 
       // Always request a session_ready replay so model + status + groups
       // snapshot are repopulated on every Unify entry. Backend's
@@ -1275,7 +1291,13 @@ export const useChatStore = defineStore('chat', {
 
         case 'history_loaded':
           // History messages already rendered via sendUnifyOutput (data path).
-          // This event just signals completion — no additional action needed.
+          // This event just signals completion — capture the pagination
+          // cursor (`oldestSeq`) and `hasMore` flag so the MessageList can
+          // show / hide the "Load older messages" hint and the
+          // `loadMoreUnifyHistory` action knows where to start the next
+          // page.
+          this.unifyHasMoreHistory = !!event.hasMore;
+          this.unifyOldestLoadedSeq = (typeof event.oldestSeq === 'number') ? event.oldestSeq : null;
           break;
 
         // ★ task-334-ui-a + 334h: VP library snapshot + live diff.
@@ -1614,6 +1636,13 @@ export const useChatStore = defineStore('chat', {
       if (convId && this.messagesMap[convId]) {
         this.messagesMap[convId] = [];
       }
+      // Pagination cursor is per-group: a stale cursor from the previous
+      // group would let the next "Load older" click cross-pollute history
+      // (or, more likely, return an empty page because the seq predates
+      // the new group). The agent will re-prime via `history_loaded`.
+      this.unifyHasMoreHistory = false;
+      this.unifyLoadingMoreHistory = false;
+      this.unifyOldestLoadedSeq = null;
       if (this.unifyAgentId) {
         this.sendWsMessage({
           type: 'unify_load_history',
@@ -2254,6 +2283,40 @@ export const useChatStore = defineStore('chat', {
         ...(firstMsgWithId ? { beforeId: firstMsgWithId.dbMessageId } : {})
       });
     },
+
+    /**
+     * Unify-side counterpart to loadMoreMessages. Requests one more page of
+     * older history (20 turns by default) for the active group, using the
+     * cursor stamped by the latest `history_loaded` / `unify_history_chunk`
+     * event. The agent reads from the persisted hot+cold conversation and
+     * replies with a `unify_history_chunk` envelope; the chunk handler
+     * prepends the messages to messagesMap and updates the cursor.
+     *
+     * Idempotent: re-entering while a page is in flight is a no-op
+     * (`unifyLoadingMoreHistory` gates), and we don't fire if the agent
+     * already told us there's nothing more to load.
+     */
+    loadMoreUnifyHistory() {
+      if (this.currentView !== 'unify') return;
+      if (this.unifyLoadingMoreHistory || !this.unifyHasMoreHistory) return;
+      if (!this.unifyAgentId || this.unifyOldestLoadedSeq == null) return;
+
+      let groupId = null;
+      try {
+        const gs = window.Pinia?.useGroupsStore?.() || (window.__useGroupsStore && window.__useGroupsStore());
+        groupId = (gs && gs.activeGroupId) || null;
+      } catch { /* groups store not registered yet — agent treats null as no-op */ }
+
+      this.unifyLoadingMoreHistory = true;
+      this.sendWsMessage({
+        type: 'unify_load_more_history',
+        agentId: this.unifyAgentId,
+        groupId,
+        beforeSeq: this.unifyOldestLoadedSeq,
+        turns: 20,
+      });
+    },
+
 
     // =====================
     // Session persistence
