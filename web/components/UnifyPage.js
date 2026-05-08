@@ -77,32 +77,6 @@ export default {
             <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>
           </button>
 
-          <!-- Show/hide VP list. Sits next to the sidebar toggle so the
-               two "show another column" affordances live together at the
-               left edge of the topbar. Independent of detailCollapsed
-               (the right-side debug panel) — persists separately under
-               localStorage 'unify-vp-timeline-visible'. Hidden under
-               1024 px because the pane itself is hidden by the CSS
-               breakpoint there; showing a toggle for an unreachable pane
-               just confuses the user. The aria attribute is 'expanded'
-               (disclosure semantics) rather than 'pressed' (toggle
-               button semantics) — the button reveals/hides a region.
-               Single-quoted intentionally: this comment lives inside
-               the component's Vue template, which itself is a template
-               literal — backticks here would close the outer string
-               and break esbuild. -->
-          <button
-            v-if="!isNarrowDetail"
-            class="unify-topbar-vp-toggle"
-            :class="{ active: vpTimelineVisible }"
-            @click="toggleVpTimeline"
-            :title="vpTimelineVisible ? $t('unify.vpTimeline.hide') : $t('unify.vpTimeline.show')"
-            :aria-label="vpTimelineVisible ? $t('unify.vpTimeline.hide') : $t('unify.vpTimeline.show')"
-            :aria-expanded="vpTimelineVisible ? 'true' : 'false'"
-          >
-            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
-          </button>
-
         <!-- task-339-F1: GroupSelector removed from topbar — groups now surface via sidebar section. -->
 
           <!-- Model selector (compact dropdown in topbar) -->
@@ -169,13 +143,26 @@ export default {
             >
               <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M20 8h-2.81c-.45-.78-1.07-1.45-1.82-1.96L17 4.41 15.59 3l-2.17 2.17C12.96 5.06 12.49 5 12 5s-.96.06-1.41.17L8.41 3 7 4.41l1.62 1.63C7.88 6.55 7.26 7.22 6.81 8H4v2h2.09c-.05.33-.09.66-.09 1v1H4v2h2v1c0 .34.04.67.09 1H4v2h2.81c1.04 1.79 2.97 3 5.19 3s4.15-1.21 5.19-3H20v-2h-2.09c.05-.33.09-.66.09-1v-1h2v-2h-2v-1c0-.34-.04-.67-.09-1H20V8zm-6 8h-4v-2h4v2zm0-4h-4v-2h4v2z"/></svg>
             </button>
+            <!-- task-unify-group-ui-cleanup: VP-list show/hide moved here
+                 (was at the left edge of the topbar). Mirrors Crew's
+                 right-side panel toggles. Hidden under 1024 px because
+                 the pane itself is gated by the same breakpoint. -->
             <button
-              class="unify-detail-toggle"
-              @click="toggleDetail"
-              :title="detailCollapsed ? $t('unify.showDetail') : $t('unify.hideDetail')"
+              v-if="!isNarrowDetail"
+              class="unify-topbar-vp-toggle"
+              :class="{ active: vpTimelineVisible }"
+              @click="toggleVpTimeline"
+              :title="vpTimelineVisible ? $t('unify.vpTimeline.hide') : $t('unify.vpTimeline.show')"
+              :aria-label="vpTimelineVisible ? $t('unify.vpTimeline.hide') : $t('unify.vpTimeline.show')"
+              :aria-expanded="vpTimelineVisible ? 'true' : 'false'"
             >
-              <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
             </button>
+            <!-- task-unify-group-ui-cleanup: legacy ".unify-detail-toggle"
+                 (tasks/feature placeholder slide-in) removed — Unify only
+                 supports the debug panel today, and the placeholder
+                 button surfaced an unimplemented feature. Debug button
+                 above remains the sole right-pane affordance. -->
           </div>
         </div>
 
@@ -232,30 +219,31 @@ export default {
         </div><!-- /.unify-main-center -->
       </div>
 
-      <!-- Right Detail Panel -->
-      <aside class="unify-detail" :class="{ collapsed: detailCollapsed, resizing: isResizingDetail, 'mobile-debug': debugMode && isNarrowDetail }" :style="detailWidthStyle" ref="detailPanel">
+      <!-- Right Detail Panel — only rendered when debug mode is on. The
+           legacy "tasks memory" placeholder + collapse-toggle were retired
+           in task-unify-group-ui-cleanup; the debug panel is the only
+           right-pane content today, and it should not occupy layout space
+           unless explicitly opened. -->
+      <aside
+        v-if="debugMode"
+        class="unify-detail"
+        :class="{ resizing: isResizingDetail, 'mobile-debug': isNarrowDetail }"
+        :style="detailWidthStyle"
+        ref="detailPanel"
+      >
         <div class="unify-detail-drag-handle" :class="{ active: isResizingDetail }" @mousedown.prevent="startDetailResize"></div>
         <!-- Mobile/tablet overlay: close affordance for the debug panel.
              The topbar toggle is hidden behind the overlay on narrow
              viewports so the user needs an in-panel exit. -->
         <button
-          v-if="debugMode && isNarrowDetail"
+          v-if="isNarrowDetail"
           class="unify-debug-mobile-close"
           @click="toggleDebug"
           :aria-label="$t('common.close')"
         >
           <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
         </button>
-        <!-- Debug Mode: rendered by the dedicated UnifyDebugPanel component
-             (Turn -> Loop -> Tool tree, copy buttons, search + group filter,
-             memory and raw payloads gated by detail mode). -->
-        <UnifyDebugPanel v-if="debugMode" />
-        <!-- Default: placeholder -->
-        <div v-else class="unify-detail-placeholder">
-          <svg viewBox="0 0 24 24" width="24" height="24" opacity="0.3"><path fill="currentColor" d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
-          <span>{{ $t('unify.tasksMemory') }}</span>
-          <span class="unify-detail-hint">{{ $t('unify.comingSoon') }}</span>
-        </div>
+        <UnifyDebugPanel />
       </aside>
 
       <!-- task-343: VP library is now an in-Settings tab (initial-tab='vp'). -->
@@ -293,7 +281,10 @@ export default {
     const vpStore = Pinia.useVpStore();
 
     const sidebarCollapsed = Vue.ref(false);
-    const detailCollapsed = Vue.ref(false);
+    // task-unify-group-ui-cleanup: debug mode now starts OFF (was always
+    // visible as a "tasks memory / coming soon" placeholder). The right
+    // detail panel is only rendered when debugMode is on, so the
+    // conversation column gets the full width by default.
     const debugMode = Vue.ref(false);
     const modelDropdownOpen = Vue.ref(false);
     const showSettings = Vue.ref(false);
@@ -394,12 +385,13 @@ export default {
     // try/catch because in private-browsing mode setItem can throw.
     //
     // Why we persist *visibility* here but not for the right-side
-    // detail panel (`detailCollapsed`): the VP list is a stable layout
-    // preference (some users want a compact 2-column view, some want
-    // 3 columns), while the detail panel is a transient debug surface
-    // — toggling it open/closed across sessions would be surprising.
-    // Pane *width* is persisted in both cases (`unify-vp-timeline-width`,
-    // `unify-debug-width`); only visibility diverges.
+    // detail panel: the VP list is a stable layout preference (some
+    // users want a compact 2-column view, some want 3 columns), while
+    // the detail panel is a transient debug surface mounted on demand
+    // (`v-if="debugMode"`) and re-toggling it across sessions would be
+    // surprising. Pane *width* is persisted in both cases
+    // (`unify-vp-timeline-width`, `unify-debug-width`); only visibility
+    // diverges.
     const VP_TIMELINE_VISIBLE_KEY = 'unify-vp-timeline-visible';
     const readVpTimelineVisible = () => {
       try {
@@ -569,16 +561,12 @@ export default {
       sidebarCollapsed.value = !sidebarCollapsed.value;
     };
 
-    const toggleDetail = () => {
-      detailCollapsed.value = !detailCollapsed.value;
-    };
+    // task-unify-group-ui-cleanup: toggleDetail() was wired to a topbar
+    // button that opened/collapsed the placeholder detail panel; the
+    // button + placeholder are gone, so the helper is removed too.
 
     const toggleDebug = () => {
       debugMode.value = !debugMode.value;
-      // Open detail panel if activating debug and panel is collapsed
-      if (debugMode.value && detailCollapsed.value) {
-        detailCollapsed.value = false;
-      }
     };
 
     const reloadPage = () => {
@@ -912,7 +900,6 @@ export default {
     return {
       store,
       sidebarCollapsed,
-      detailCollapsed,
       debugMode,
       modelDropdownOpen,
       showSettings,
@@ -931,7 +918,6 @@ export default {
       cancelUnify,
       clearMessages,
       toggleSidebar,
-      toggleDetail,
       toggleDebug,
       reloadPage,
       toggleModelDropdown,

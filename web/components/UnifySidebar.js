@@ -150,22 +150,25 @@ export default {
       </div>
 
       <div class="us-scroll" v-else>
-        <!-- task-339-F1: Groups section hoisted ABOVE threads; hidden entirely when empty. -->
-        <section v-if="groupList.length > 0" class="us-group us-group-groups" :aria-label="$t('unify.group.sidebarAria')">
-          <div class="us-group-header">
+        <!-- task-unify-group-ui-cleanup: header now mirrors Chat sidebar
+             ".session-tab" — section-icon + label + create (+) button, no
+             count. Visible even when groupList is empty so the user always
+             has a one-click create entry. -->
+        <section class="us-group us-group-groups" :aria-label="$t('unify.group.sidebarAria')">
+          <div class="us-group-header us-group-header-tab">
+            <svg class="us-group-header-icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
             <span class="us-group-label">{{ $t('unify.group.sidebarTitle') }}</span>
-            <span class="us-group-count">{{ groupList.length }}</span>
             <button
               type="button"
               class="us-group-new-btn"
               :title="$t('unify.group.newButtonAria')"
               :aria-label="$t('unify.group.newButtonAria')"
-              @click="onOpenGroupWizard"
+              @click.stop="onOpenGroupWizard"
             >
               <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
             </button>
           </div>
-          <div class="us-group-body">
+          <div class="us-group-body" v-if="groupList.length > 0">
             <div
               v-for="g in groupList"
               :key="g.id"
@@ -221,19 +224,9 @@ export default {
           </div>
         </section>
 
-        <!-- task-339-F1: Create-group entry point — visible even when groups=0 so user
-             can still bootstrap. Mirrors .new-chat-btn chrome from the Chat sidebar. -->
-        <button
-          v-if="groupList.length === 0"
-          type="button"
-          class="us-new-group-btn"
-          :title="$t('unify.group.newButtonAria')"
-          :aria-label="$t('unify.group.newButtonAria')"
-          @click="onOpenGroupWizard"
-        >
-          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-          <span>{{ $t('unify.group.newButtonAria') }}</span>
-        </button>
+        <!-- task-unify-group-ui-cleanup: standalone empty-state button
+             retired — the section header now always renders with a "+"
+             create button, even when groupList is empty. -->
 
         <!-- H2.f.6: Active / Idle / Archived thread sections removed. -->
 

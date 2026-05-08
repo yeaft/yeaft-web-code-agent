@@ -177,6 +177,28 @@
   cursor: pointer;
 }
 .us-group-header:hover { color: var(--text-primary, #1d1d1f); }
+
+/* task-unify-group-ui-cleanup: header variant that mirrors Chat sidebar's
+   ".session-tab" — icon + label + create-button, same font/sizing as the
+   Chat tab bar so the two sidebars feel consistent. Overrides the
+   uppercase-section-label look used by other us-group sections. */
+.us-group-header.us-group-header-tab {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary, #1d1d1f);
+  text-transform: none;
+  letter-spacing: 0;
+  padding: 8px 10px 8px 12px;
+  cursor: default;
+}
+.us-group-header.us-group-header-tab:hover {
+  color: var(--text-primary, #1d1d1f);
+}
+.us-group-header-icon {
+  flex: 0 0 auto;
+  color: var(--text-secondary, #515154);
+  opacity: 0.85;
+}
 .us-chevron {
   transition: transform 0.12s ease;
   color: var(--text-muted, #86868b);
@@ -469,28 +491,6 @@
   60%  { background-color: rgba(255, 235, 59, 0.22); }
   100% { background-color: transparent; }
 }
-
-/* ===========================================================================
-   task-339-F1: Groups section hoisted to top of sidebar. The "new group" CTA
-   mirrors the Chat sidebar's .new-chat-btn chrome (transparent, rounded 8,
-   hover = var(--sidebar-hover)) so the two primary entry buttons look alike.
-   =========================================================================== */
-.us-new-group-btn {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text-primary);
-  font-size: 14px;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.us-new-group-btn:hover { background: var(--sidebar-hover); }
-.us-new-group-btn svg { flex-shrink: 0; color: var(--text-secondary); }
 
 /* Inline "+" new-group button in the Groups section header (when groups>0). */
 .us-group-new-btn {
