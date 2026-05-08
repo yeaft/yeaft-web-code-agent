@@ -55,6 +55,20 @@ export function estimateTokens(text) {
   return Math.ceil(text.length / 4);
 }
 
+/**
+ * Parse the global monotonic sequence number out of a message id of the
+ * form `m####`. Returns NaN for malformed ids. Used by the pagination
+ * cursor (`loadOlderByGroup`) to compare ids numerically without having
+ * to trust file-system sort order.
+ *
+ * @param {string} id
+ * @returns {number}
+ */
+export function parseSeqFromId(id) {
+  const m = String(id || '').match(/^m(\d+)$/);
+  return m ? parseInt(m[1], 10) : NaN;
+}
+
 // ─── Frontmatter helpers ─────────────────────────────────────
 
 /**
@@ -525,6 +539,49 @@ export class ConversationStore {
    */
   loadAllByGroup(groupId) {
     return this.loadRecentByGroup(groupId, Infinity);
+  }
+
+  /**
+   * Pagination-cursor read: load the page of `turnsLimit` TURNS that ends
+   * just before `beforeSeq` (exclusive) for the given `groupId`. Used by
+   * the Unify "Load older messages" UI to walk backwards through history
+   * one click at a time.
+   *
+   * Crucially, this scans BOTH hot (`messages/`) and cold (`cold/`) dirs
+   * — `#getNextSeq` is global across both, and `moveToCold` is a `rename`
+   * that never reseqs, so cold ids are strictly < hot ids and a flat
+   * `[...cold, ...hot]` concat is already chronological. Crossing the
+   * hot→cold boundary is therefore transparent to the caller.
+   *
+   * `hasMore` is computed in TURNS (not raw message count). It's true iff
+   * the slice we returned still leaves an earlier turn boundary unread in
+   * the filtered prefix — i.e. there's at least one more page to fetch.
+   *
+   * `pairSanitize` runs as a defensive secondary pass. Turn-boundary cuts
+   * are already pair-safe, but historical / hand-edited stores may
+   * contain orphan tool_use/tool_result pairs.
+   *
+   * @param {string} groupId — required; null/empty returns empty result
+   * @param {number|null} beforeSeq — exclusive upper bound on message
+   *   sequence id; pass `null` or `Infinity` to start from the newest
+   * @param {number} [turnsLimit=DEFAULT_RECENT_TURNS] — max turns per page
+   * @returns {{ messages: object[], oldestSeq: number|null, hasMore: boolean }}
+   */
+  loadOlderByGroup(groupId, beforeSeq, turnsLimit = DEFAULT_RECENT_TURNS) {
+    if (!groupId) return { messages: [], oldestSeq: null, hasMore: false };
+    const hot = this.#loadFromDir(this.#msgDir, Infinity);
+    const cold = this.#loadFromDir(this.#coldDir, Infinity);
+    // Cold ids strictly < hot ids by construction → chronological concat.
+    const all = [...cold, ...hot];
+    const cutoff = Number.isFinite(beforeSeq) ? beforeSeq : Infinity;
+    const prefix = all.filter(m => m && m.groupId === groupId
+      && parseSeqFromId(m.id) < cutoff);
+    if (prefix.length === 0) return { messages: [], oldestSeq: null, hasMore: false };
+    const sliced = pairSanitize(sliceLastNTurns(prefix, turnsLimit));
+    // Turn-based hasMore: there's an EARLIER turn boundary we didn't keep.
+    const hasMore = sliced.length > 0 && sliced[0] !== prefix[0];
+    const oldestSeq = sliced.length ? parseSeqFromId(sliced[0].id) : null;
+    return { messages: sliced, oldestSeq, hasMore };
   }
 
   /**

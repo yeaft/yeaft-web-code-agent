@@ -36,7 +36,7 @@ import { sendToServer, flushMessageBuffer } from './buffer.js';
 import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
 import { getLlmConfig, updateLlmConfig, getUnifySettings, updateUnifySettings, getSearchSettings, updateSearchSettings, fetchTavilyUsage } from '../unify/config-api.js';
-import { handleUnifyGroupChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyAbortThread, handleUnifyAbortAll, handleUnifyAbortTurn, handleUnifyVpSubscribe, handleUnifyVpCreate, handleUnifyVpUpdate, handleUnifyVpDelete, handleUnifyVpRead, handleUnifyFetchSummaryHistory, handleUnifyFeatureCrud, handleUnifyListGroups, handleUnifyCreateGroup, handleUnifyRenameGroup, handleUnifyUpdateGroup, handleUnifyArchiveGroup, handleUnifyDeleteGroup, handleUnifyAddMember, handleUnifyRemoveMember, handleUnifySetDefaultVp, handleUnifyDreamTrigger, broadcastLanguageChange } from '../unify/web-bridge.js';
+import { handleUnifyGroupChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyLoadMoreHistory, handleUnifyAbortThread, handleUnifyAbortAll, handleUnifyAbortTurn, handleUnifyVpSubscribe, handleUnifyVpCreate, handleUnifyVpUpdate, handleUnifyVpDelete, handleUnifyVpRead, handleUnifyFetchSummaryHistory, handleUnifyFeatureCrud, handleUnifyListGroups, handleUnifyCreateGroup, handleUnifyRenameGroup, handleUnifyUpdateGroup, handleUnifyArchiveGroup, handleUnifyDeleteGroup, handleUnifyAddMember, handleUnifyRemoveMember, handleUnifySetDefaultVp, handleUnifyDreamTrigger, broadcastLanguageChange } from '../unify/web-bridge.js';
 
 export async function handleMessage(msg) {
   switch (msg.type) {
@@ -401,6 +401,10 @@ export async function handleMessage(msg) {
 
     case 'unify_load_history':
       await handleUnifyLoadHistory(msg);
+      break;
+
+    case 'unify_load_more_history':
+      await handleUnifyLoadMoreHistory(msg);
       break;
 
     case 'unify_mode_switch':

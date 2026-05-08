@@ -18,7 +18,8 @@ import {
   handleConversationClosed,
   handleConversationRefresh,
   handleExecutionCancelled,
-  handleSyncMessagesResult
+  handleSyncMessagesResult,
+  handleUnifyHistoryChunk
 } from './handlers/conversationHandler.js';
 
 export function handleMessage(store, msg) {
@@ -138,6 +139,10 @@ export function handleMessage(store, msg) {
 
     case 'unify_output':
       store.handleUnifyOutput(msg);
+      break;
+
+    case 'unify_history_chunk':
+      handleUnifyHistoryChunk(store, msg);
       break;
 
     case 'chat_image':
