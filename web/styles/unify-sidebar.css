@@ -177,6 +177,28 @@
   cursor: pointer;
 }
 .us-group-header:hover { color: var(--text-primary, #1d1d1f); }
+
+/* task-unify-group-ui-cleanup: header variant that mirrors Chat sidebar's
+   ".session-tab" — icon + label + create-button, same font/sizing as the
+   Chat tab bar so the two sidebars feel consistent. Overrides the
+   uppercase-section-label look used by other us-group sections. */
+.us-group-header.us-group-header-tab {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary, #1d1d1f);
+  text-transform: none;
+  letter-spacing: 0;
+  padding: 8px 10px 8px 12px;
+  cursor: default;
+}
+.us-group-header.us-group-header-tab:hover {
+  color: var(--text-primary, #1d1d1f);
+}
+.us-group-header-icon {
+  flex: 0 0 auto;
+  color: var(--text-secondary, #515154);
+  opacity: 0.85;
+}
 .us-chevron {
   transition: transform 0.12s ease;
   color: var(--text-muted, #86868b);

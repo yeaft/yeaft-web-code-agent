@@ -2848,6 +2848,12 @@
   padding: 12px 8px 16px;
   gap: 4px;
   overflow-y: auto;
+  /* task-unify-group-ui-cleanup: prevent the horizontal scrollbar that
+     appeared at the bottom of the pane when row content was wider than
+     the pane (e.g. long VP name + trigger + elapsed cluster on a narrow
+     timeline). The pane is column-scoped — there's nothing to pan
+     horizontally, so clip overflow on that axis. */
+  overflow-x: hidden;
   position: relative; /* anchor for the absolute resize handle */
   box-sizing: border-box;
 }
@@ -2898,6 +2904,10 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
+  /* task-unify-group-ui-cleanup: prevent grid columns that expand to fit
+     long content (status pill + elapsed) from pushing the list past
+     pane width. */
+  min-width: 0;
 }
 .unify-vp-timeline-row {
   display: grid;
