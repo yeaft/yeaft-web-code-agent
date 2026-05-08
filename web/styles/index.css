@@ -19,8 +19,8 @@
 @import './unify-sidebar.css';
 /* H2.f.6: unify-thread-pill.css removed alongside the multi-thread engine. */
 @import './unify-vp.css';
-@import './unify-vp-card.css';
-@import './unify-detail-drawer.css';
+/* unify-vp-card.css and unify-detail-drawer.css removed alongside the
+   VpQuickCard / VpTurnDetailDrawer components (VP-block redesign 2026-05-08). */
 @import './unify-group-wizard.css';
 @import './group-invite.css';
 @import './reflection.css';
