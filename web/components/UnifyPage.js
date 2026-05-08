@@ -84,7 +84,9 @@ export default {
                localStorage 'unify-vp-timeline-visible'. Hidden under
                1024 px because the pane itself is hidden by the CSS
                breakpoint there; showing a toggle for an unreachable pane
-               just confuses the user. -->
+               just confuses the user. The aria attribute is `expanded`
+               (disclosure semantics) rather than `pressed` (toggle
+               button semantics) — the button reveals/hides a region. -->
           <button
             v-if="!isNarrowDetail"
             class="unify-topbar-vp-toggle"
@@ -92,7 +94,7 @@ export default {
             @click="toggleVpTimeline"
             :title="vpTimelineVisible ? $t('unify.vpTimeline.hide') : $t('unify.vpTimeline.show')"
             :aria-label="vpTimelineVisible ? $t('unify.vpTimeline.hide') : $t('unify.vpTimeline.show')"
-            :aria-pressed="vpTimelineVisible ? 'true' : 'false'"
+            :aria-expanded="vpTimelineVisible ? 'true' : 'false'"
           >
             <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
           </button>
@@ -386,6 +388,14 @@ export default {
     // true so first-time users see the pane; subsequent sessions
     // restore whatever the user last chose. localStorage is wrapped in
     // try/catch because in private-browsing mode setItem can throw.
+    //
+    // Why we persist *visibility* here but not for the right-side
+    // detail panel (`detailCollapsed`): the VP list is a stable layout
+    // preference (some users want a compact 2-column view, some want
+    // 3 columns), while the detail panel is a transient debug surface
+    // — toggling it open/closed across sessions would be surprising.
+    // Pane *width* is persisted in both cases (`unify-vp-timeline-width`,
+    // `unify-debug-width`); only visibility diverges.
     const VP_TIMELINE_VISIBLE_KEY = 'unify-vp-timeline-visible';
     const readVpTimelineVisible = () => {
       try {
