@@ -145,7 +145,7 @@ function runWithTimeout(promise, timeoutMs, toolName) {
     }, timeoutMs);
   });
   return Promise.race([promise, timeoutPromise]).finally(() => {
-    if (timer) clearTimeout(timer);
+    clearTimeout(timer);
   });
 }
 

@@ -204,9 +204,15 @@ const QUERY_TIMEOUT_MS = 120_000;
  *
  * If a tool ignores `signal` and never resolves, the engine generator's
  * `await tool.execute(...)` is permanently blocked: the abort fires on a
- * controller it never observes, and runVpTurn never returns. With no
- * second-stage escalation the typing dots hang forever — exactly the
- * "halts mid-execution with no turn_end" symptom.
+ * controller it never observes, and runVpTurn never returns. The same
+ * applies to an adapter `stream()` that ignores `signal` (e.g. a stuck
+ * SSE connection) or to tools that legitimately opt out of the per-tool
+ * timeout via `timeoutMs <= 0`. The per-tool timeout in
+ * {@link import('./tools/registry.js').DEFAULT_TOOL_TIMEOUT_MS}
+ * is the primary cure for the tool-ignore-signal case; this bridge-level
+ * escalation strictly extends it to cover the adapter and opt-out cases.
+ * Without a second-stage escalation the typing dots hang forever —
+ * exactly the "halts mid-execution with no turn_end" symptom.
  *
  * The driver loop wraps `await runVpTurn(...)` in a Promise.race against
  * this grace-window timer. If runVpTurn doesn't return within
@@ -1754,6 +1760,10 @@ async function runVpTurnWithEscalation(args) {
  * promise is left dangling (JS has no promise cancellation) but the caller
  * is unblocked.
  *
+ * `onEscalate` MUST be synchronous. We swallow synchronous throws so a
+ * torn-down WS pipeline can't crash the watchdog, but a Promise rejection
+ * from an async `onEscalate` would leak past this `catch`.
+ *
  * Pure helper, no module-level state, exported as `__testRaceWithEscalation`
  * so the contract can be unit-tested in isolation. Inner errors propagate
  * (a tool that throws still surfaces through `runVpTurn`'s normal catch).
@@ -1770,14 +1780,18 @@ async function raceWithEscalation(inner, { deadlineMs, onEscalate }) {
       try { onEscalate(); } catch { /* never throw out of the watchdog */ }
       resolve();
     }, deadlineMs);
+    // `unref()` lets a pending escalation timer not hold the Node event
+    // loop open (e.g. during graceful shutdown). Browsers / non-Node
+    // runtimes don't expose it, hence the typeof guard. Node's own
+    // `Timeout.unref()` does not throw, so no try/catch is needed.
     if (escalateTimer && typeof escalateTimer.unref === 'function') {
-      try { escalateTimer.unref(); } catch { /* ignore */ }
+      escalateTimer.unref();
     }
   });
   try {
     return await Promise.race([inner, escalation]);
   } finally {
-    if (escalateTimer) clearTimeout(escalateTimer);
+    clearTimeout(escalateTimer);
   }
 }
 
