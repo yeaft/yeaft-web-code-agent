@@ -347,6 +347,19 @@ export function handleUnifyHistoryChunk(store, msg) {
     store.unifyLoadingMoreHistory = false;
     return;
   }
+  // Stale-chunk guard: between the request fly-out and this chunk landing,
+  // the user may have switched groups (or a group lifecycle event —
+  // create / archive / delete — may have flipped `activeGroupId` under
+  // us). `setActiveGroupFilter` clears the loading flag and the cursor,
+  // so accepting this chunk would prepend group A's history into group
+  // B's view. Drop on the floor; spinner already cleared by the switch.
+  // The chunk's groupId is authoritative — it's stamped by the agent
+  // from the request groupId, not from messagesMap state.
+  const activeFilter = store.unifyActiveGroupFilter ?? null;
+  if (msg.groupId && activeFilter && msg.groupId !== activeFilter) {
+    store.unifyLoadingMoreHistory = false;
+    return;
+  }
   if (!store.messagesMap[convId]) store.messagesMap[convId] = [];
 
   // Same projection as handleUnifyLoadHistory's bootstrap replay: only

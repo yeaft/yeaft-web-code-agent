@@ -195,6 +195,75 @@ describe('handleUnifyHistoryChunk', () => {
     expect(store.unifyOldestLoadedSeq).toBe(100);
     expect(store.unifyHasMoreHistory).toBe(false);
   });
+
+  it('drops stale chunks whose groupId no longer matches the active filter (race-with-group-switch)', () => {
+    // Sequence: user is in group A, "Load older" fires while looking at A,
+    // user switches to B before the chunk arrives. The B switch already
+    // cleared messagesMap[convId] and reset the cursor; we must NOT
+    // splice A's history into B's view when A's chunk finally lands.
+    const store = mkStore({
+      unifyActiveGroupFilter: 'group-B',
+      unifyLoadingMoreHistory: true,           // spinner up from the A click
+      messagesMap: {
+        'unify-1': [
+          { type: 'user', content: 'B-msg', groupId: 'group-B' },
+        ],
+      },
+    });
+    handleUnifyHistoryChunk(store, {
+      conversationId: 'unify-1',
+      groupId: 'group-A',                      // stale: chunk is for the OLD group
+      messages: [
+        { id: 'm0001', role: 'user',      content: 'A-old-q', groupId: 'group-A' },
+        { id: 'm0002', role: 'assistant', content: 'A-old-a', groupId: 'group-A' },
+      ],
+      oldestSeq: 1,
+      hasMore: true,
+    });
+    // No prepend — group B's stream is untouched.
+    expect(store.messagesMap['unify-1'].map(m => m.content)).toEqual(['B-msg']);
+    // Spinner is cleared regardless so the UI doesn't get stuck.
+    expect(store.unifyLoadingMoreHistory).toBe(false);
+    // Cursor not corrupted by group A's data.
+    expect(store.unifyOldestLoadedSeq).toBe(100);
+  });
+
+  it('accepts a chunk whose groupId matches the active filter', () => {
+    const store = mkStore({
+      unifyActiveGroupFilter: 'group-A',
+      messagesMap: { 'unify-1': [] },
+    });
+    handleUnifyHistoryChunk(store, {
+      conversationId: 'unify-1',
+      groupId: 'group-A',
+      messages: [
+        { id: 'm0001', role: 'user', content: 'A-old-q', groupId: 'group-A' },
+      ],
+      oldestSeq: 1,
+      hasMore: false,
+    });
+    expect(store.messagesMap['unify-1'].map(m => m.content)).toEqual(['A-old-q']);
+    expect(store.unifyOldestLoadedSeq).toBe(1);
+  });
+
+  it('accepts a chunk when the active filter is null (no per-group scope set)', () => {
+    // Edge case: bootstrap path before any group has been selected. The
+    // chunk may carry a groupId stamp; without an active filter we accept.
+    const store = mkStore({
+      unifyActiveGroupFilter: null,
+      messagesMap: { 'unify-1': [] },
+    });
+    handleUnifyHistoryChunk(store, {
+      conversationId: 'unify-1',
+      groupId: 'group-X',
+      messages: [
+        { id: 'm0001', role: 'user', content: 'q', groupId: 'group-X' },
+      ],
+      oldestSeq: 1,
+      hasMore: false,
+    });
+    expect(store.messagesMap['unify-1'].map(m => m.content)).toEqual(['q']);
+  });
 });
 
 describe('loadMoreUnifyHistory — action gates', () => {

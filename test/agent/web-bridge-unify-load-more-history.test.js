@@ -124,16 +124,19 @@ describe('handleUnifyLoadMoreHistory — chunk emission', () => {
     // 2 newest turns: q4/aq4, q5/aq5.
     expect(chunk.messages.map(m => m.content))
       .toEqual(['q4', 'aq4', 'q5', 'aq5']);
-    // Each row carries id/role/content/groupId.
+    // Each row carries role/content/groupId. We intentionally do NOT
+    // ship id/time over the wire — see web-bridge.js for rationale.
     for (const m of chunk.messages) {
       expect(m).toEqual(expect.objectContaining({
-        id: expect.any(String),
         role: expect.stringMatching(/^(user|assistant)$/),
         content: expect.any(String),
         groupId: gid,
       }));
+      expect(m).not.toHaveProperty('id');
+      expect(m).not.toHaveProperty('time');
     }
-    expect(chunk.oldestSeq).toBe(parseInt(chunk.messages[0].id.slice(1), 10));
+    expect(typeof chunk.oldestSeq).toBe('number');
+    expect(chunk.oldestSeq).toBeGreaterThan(0);
     expect(chunk.hasMore).toBe(true);
   });
 

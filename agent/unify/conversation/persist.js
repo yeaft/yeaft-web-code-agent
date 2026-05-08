@@ -563,7 +563,13 @@ export class ConversationStore {
    *
    * @param {string} groupId — required; null/empty returns empty result
    * @param {number|null} beforeSeq — exclusive upper bound on message
-   *   sequence id; pass `null` or `Infinity` to start from the newest
+   *   sequence id. Special cases:
+   *   - `null` / `undefined` / non-finite (e.g. `Infinity`, `NaN`) → start
+   *     from the newest (no upper bound).
+   *   - `0` is a VALID finite cutoff that excludes everything (since seqs
+   *     start at 1). Distinct from `null`. A caller writing
+   *     `loadOlderByGroup(g, store.firstSeq || 0, ...)` will silently get
+   *     an empty page — pass `null` if you mean "from newest".
    * @param {number} [turnsLimit=DEFAULT_RECENT_TURNS] — max turns per page
    * @returns {{ messages: object[], oldestSeq: number|null, hasMore: boolean }}
    */
@@ -579,8 +585,19 @@ export class ConversationStore {
     if (prefix.length === 0) return { messages: [], oldestSeq: null, hasMore: false };
     const sliced = pairSanitize(sliceLastNTurns(prefix, turnsLimit));
     // Turn-based hasMore: there's an EARLIER turn boundary we didn't keep.
-    const hasMore = sliced.length > 0 && sliced[0] !== prefix[0];
-    const oldestSeq = sliced.length ? parseSeqFromId(sliced[0].id) : null;
+    // Compare seqs (not object identity) — pairSanitize / sliceLastNTurns
+    // return references today, but a future normalization pass that clones
+    // rows would silently flip identity-compare to always-true.
+    const oldestSlicedSeq = sliced.length ? parseSeqFromId(sliced[0].id) : NaN;
+    const oldestPrefixSeq = parseSeqFromId(prefix[0].id);
+    const hasMore = sliced.length > 0
+      && Number.isFinite(oldestSlicedSeq)
+      && Number.isFinite(oldestPrefixSeq)
+      && oldestSlicedSeq > oldestPrefixSeq;
+    // Defend the cursor at the source: a malformed id surfaces as NaN here
+    // and a NaN cursor would round-trip back as a poison `beforeSeq` that
+    // degrades to "give me the newest page again".
+    const oldestSeq = Number.isFinite(oldestSlicedSeq) ? oldestSlicedSeq : null;
     return { messages: sliced, oldestSeq, hasMore };
   }
 

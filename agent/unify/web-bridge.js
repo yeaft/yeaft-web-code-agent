@@ -2604,14 +2604,20 @@ export async function handleUnifyLoadHistory(msg) {
   let oldestSeq = null;
   if (groupId && messages.length > 0) {
     const firstId = messages[0].id;
-    oldestSeq = parseSeqFromId(firstId);
-    // Consult the store for whether anything older exists in the same
-    // group. Cheap: a single extra `loadOlderByGroup` with turns=1.
-    try {
-      const probe = session.conversationStore.loadOlderByGroup(groupId, oldestSeq, 1);
-      hasMore = probe.messages.length > 0;
-    } catch (err) {
-      console.error('[Unify] history-load probe failed:', err.message);
+    const seq = parseSeqFromId(firstId);
+    // Defend against malformed ids: a NaN cursor would round-trip back as
+    // a poison `beforeSeq` and degrade subsequent paginations to "give me
+    // the newest page again". Surface as null instead.
+    oldestSeq = Number.isFinite(seq) ? seq : null;
+    if (oldestSeq != null) {
+      // Consult the store for whether anything older exists in the same
+      // group. Cheap: a single extra `loadOlderByGroup` with turns=1.
+      try {
+        const probe = session.conversationStore.loadOlderByGroup(groupId, oldestSeq, 1);
+        hasMore = probe.messages.length > 0;
+      } catch (err) {
+        console.error('[Unify] history-load probe failed:', err.message);
+      }
     }
   }
 
@@ -2668,13 +2674,18 @@ export async function handleUnifyLoadMoreHistory(msg) {
   // Wire shape mirrors handleUnifyLoadHistory's projection: only user /
   // assistant text rows. Tool_use / tool_result replay is out of scope
   // for this PR (today's bootstrap path drops them too).
+  //
+  // We intentionally do NOT ship `id` or `time` over the wire:
+  // `handleUnifyHistoryChunk` reads only role / content / groupId. The
+  // pagination cursor (`oldestSeq`) is sent once at the envelope level,
+  // so per-row ids are dead weight. `time` would be useful if we render
+  // "5 days ago" stamps on older history rows — when that ships, add it
+  // back here and consume it in conversationHandler.
   const projected = (result.messages || [])
     .filter(m => m && (m.role === 'user' || m.role === 'assistant'))
     .map(m => ({
-      id: m.id,
       role: m.role,
       content: m.content,
-      time: m.time,
       groupId: m.groupId || null,
     }));
 
