@@ -96,12 +96,14 @@ export default {
         </span>
         <button
           v-if="showStop"
+          type="button"
           class="vp-turn-block-stop"
           @click.stop="onStopTurn"
           :title="$t ? $t('unify.vp.speaker.stop') : 'Stop'"
           :aria-label="$t ? $t('unify.vp.speaker.stop') : 'Stop'"
         ><svg viewBox="0 0 24 24" width="14" height="14"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></svg></button>
         <button
+          type="button"
           class="vp-turn-block-toggle"
           @click.stop="onToggle"
           :title="expanded ? toggleCollapseTitle : toggleExpandTitle"
@@ -184,8 +186,12 @@ export default {
     const onStopTurn = () => {
       const turnId = props.turn && props.turn.turnId;
       if (!turnId) return;
-      if (typeof store.cancelVpTurn === 'function') {
-        store.cancelVpTurn(turnId);
+      try {
+        if (typeof store.cancelVpTurn === 'function') {
+          store.cancelVpTurn(turnId);
+        }
+      } catch (e) {
+        console.error('[VpTurnBlock] cancelVpTurn failed:', e);
       }
     };
 
@@ -221,7 +227,9 @@ export default {
       const ts = props.turn.speakerTimestamp;
       if (!ts) return '';
       try {
-        return new Date(ts).toLocaleTimeString(undefined, {
+        const d = new Date(ts);
+        if (Number.isNaN(d.getTime())) return '';
+        return d.toLocaleTimeString(undefined, {
           hour: '2-digit', minute: '2-digit',
         });
       } catch { return ''; }
@@ -230,7 +238,11 @@ export default {
     const startedTimeFullText = Vue.computed(() => {
       const ts = props.turn.speakerTimestamp;
       if (!ts) return '';
-      try { return new Date(ts).toLocaleString(); } catch { return ''; }
+      try {
+        const d = new Date(ts);
+        if (Number.isNaN(d.getTime())) return '';
+        return d.toLocaleString();
+      } catch { return ''; }
     });
 
     const elapsedText = Vue.computed(() => {
@@ -251,17 +263,29 @@ export default {
 
     const emptyText = Vue.computed(() => {
       if (props.turn.isStreaming) {
-        return t ? t('unify.vp.turnBlock.thinking') : 'thinking…';
+        if (t) {
+          try { return t('unify.vp.turnBlock.thinking'); } catch {}
+        }
+        return 'thinking…';
       }
-      return t ? t('unify.vp.turnBlock.empty') : '(no text)';
+      if (t) {
+        try { return t('unify.vp.turnBlock.empty'); } catch {}
+      }
+      return '(no text)';
     });
 
-    const toggleExpandTitle = Vue.computed(
-      () => (t ? t('unify.vp.turnBlock.expand') : 'Expand turn')
-    );
-    const toggleCollapseTitle = Vue.computed(
-      () => (t ? t('unify.vp.turnBlock.collapse') : 'Collapse turn')
-    );
+    const toggleExpandTitle = Vue.computed(() => {
+      if (t) {
+        try { return t('unify.vp.turnBlock.expand'); } catch {}
+      }
+      return 'Expand turn';
+    });
+    const toggleCollapseTitle = Vue.computed(() => {
+      if (t) {
+        try { return t('unify.vp.turnBlock.collapse'); } catch {}
+      }
+      return 'Collapse turn';
+    });
 
     return {
       expanded,

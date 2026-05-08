@@ -78,6 +78,22 @@ describe('compactBody', () => {
     });
   });
 
+  it('boundary: exactly maxLines is not truncated', () => {
+    const text = 'l1\nl2\nl3\nl4\nl5\nl6';
+    const out = compactBody(text, 6);
+    expect(out.totalLines).toBe(6);
+    expect(out.truncated).toBe(false);
+    expect(out.text).toBe(text);
+  });
+
+  it('boundary: maxLines+1 truncates by exactly one line', () => {
+    const text = 'l1\nl2\nl3\nl4\nl5\nl6\nl7';
+    const out = compactBody(text, 6);
+    expect(out.totalLines).toBe(7);
+    expect(out.truncated).toBe(true);
+    expect(out.text).toBe('l2\nl3\nl4\nl5\nl6\nl7');
+  });
+
   it('returns 0 totalLines for whitespace-only that fully strips', () => {
     expect(compactBody('\n\n\n')).toEqual({
       text: '',
