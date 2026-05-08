@@ -84,9 +84,13 @@ export default {
                localStorage 'unify-vp-timeline-visible'. Hidden under
                1024 px because the pane itself is hidden by the CSS
                breakpoint there; showing a toggle for an unreachable pane
-               just confuses the user. The aria attribute is `expanded`
-               (disclosure semantics) rather than `pressed` (toggle
-               button semantics) — the button reveals/hides a region. -->
+               just confuses the user. The aria attribute is 'expanded'
+               (disclosure semantics) rather than 'pressed' (toggle
+               button semantics) — the button reveals/hides a region.
+               Single-quoted intentionally: this comment lives inside
+               the component's Vue template, which itself is a template
+               literal — backticks here would close the outer string
+               and break esbuild. -->
           <button
             v-if="!isNarrowDetail"
             class="unify-topbar-vp-toggle"
