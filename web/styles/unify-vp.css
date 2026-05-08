@@ -736,3 +736,157 @@
   .vp-detail-activity-text { white-space: normal; }
   .vp-detail-persona { max-height: 240px; }
 }
+
+/* ---------------------------------------------------------------------
+ * VpTurnBlock — collapsible per-VP turn wrapper (VP-block redesign,
+ * Phase 3, 2026-05-08).
+ *
+ * Layout: [avatar 28px][meta name+time+elapsed][stop btn][toggle btn]
+ *         [body — either compact 6-line tail or full AssistantTurn]
+ *
+ * Per CLAUDE.md "No horizontal dividers" — block boundaries are drawn
+ * by spacing alone (margin: 10px 0). Hover background is a soft tint
+ * matching the timeline-row hover so the two surfaces feel paired.
+ * ------------------------------------------------------------------ */
+.vp-turn-block {
+  position: relative;
+  margin: 10px 0;
+  padding: 0;
+}
+
+.vp-turn-block-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 2px 0;
+}
+.vp-turn-block-header .vp-badge {
+  /* Avatar drives the left gutter — no extra indent on the badge. */
+  flex: 0 0 auto;
+}
+.vp-turn-block-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-left: auto;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-secondary, #6b7280);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.vp-turn-block-time {
+  font-variant-numeric: tabular-nums;
+}
+.vp-turn-block-elapsed {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-tertiary, var(--text-secondary, #9ca3af));
+  /* Subtle pulse so the live ticker reads as "active" without being
+     loud — half-second cycle tied to the 1Hz nowMs ref's update cadence. */
+  animation: vp-turn-elapsed-pulse 2s ease-in-out infinite;
+}
+@keyframes vp-turn-elapsed-pulse {
+  0%, 100% { opacity: 0.85; }
+  50%      { opacity: 0.55; }
+}
+.vp-turn-block-stop,
+.vp-turn-block-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted, var(--text-secondary, #888));
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.vp-turn-block-stop:hover,
+.vp-turn-block-stop:focus-visible {
+  background: rgba(220, 38, 38, 0.12);
+  color: #dc2626;
+  outline: none;
+}
+.vp-turn-block-toggle:hover,
+.vp-turn-block-toggle:focus-visible {
+  background: var(--surface-hover, rgba(0, 0, 0, 0.05));
+  color: var(--text-primary, var(--text-secondary, #222));
+  outline: none;
+}
+
+/* Body indent — align text with the avatar's right edge so the visual
+   eye-line is "avatar | text". 28px badge + 8px gap = 36px gutter. */
+.vp-turn-block-compact,
+.vp-turn-block > .assistant-turn {
+  margin-left: 36px;
+}
+
+.vp-turn-block-compact {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 0 2px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary, #222);
+}
+.vp-turn-block-compact-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  /* Last-N-lines view: render plain text (no markdown) so streaming
+     mid-formatting doesn't flicker. The expanded body still gets full
+     markdown via AssistantTurn. */
+}
+.vp-turn-block-compact-truncated {
+  /* Soft top fade hints there's more above when expanded. */
+  position: relative;
+  padding-top: 2px;
+}
+.vp-turn-block-compact-truncated::before {
+  content: '⋯';
+  display: block;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-tertiary, var(--text-secondary, #9ca3af));
+  margin-bottom: 2px;
+}
+.vp-turn-block-compact-empty {
+  font-size: 12px;
+  color: var(--text-tertiary, var(--text-secondary, #9ca3af));
+  font-style: italic;
+}
+.vp-turn-block-compact-tool {
+  /* Single-tool preview — let ToolLine carry its own chrome. */
+  margin-top: 2px;
+}
+
+/* Streaming state: a soft accent on the left edge so the eye locates
+   the active block at a glance in a busy multi-VP conversation.
+   Uses a thin pseudo-bar rather than a real border so we honour
+   "no horizontal dividers" — this is a vertical accent, not a divider. */
+.vp-turn-block-streaming::before {
+  content: '';
+  position: absolute;
+  left: -10px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent, #6366f1);
+  opacity: 0.5;
+}
+
+/* Dark-mode parity: just bump the elapsed text contrast. The accent
+   bar already uses --accent which is theme-aware. */
+[data-theme="dark"] .vp-turn-block-elapsed {
+  color: var(--text-tertiary, var(--text-secondary, #9ca3af));
+}
+[data-theme="dark"] .vp-turn-block-stop:hover,
+[data-theme="dark"] .vp-turn-block-stop:focus-visible {
+  background: rgba(248, 113, 113, 0.18);
+  color: #f87171;
+}

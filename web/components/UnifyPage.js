@@ -8,13 +8,12 @@ import GroupSettingsModal from './GroupSettingsModal.js';
 import WorkbenchPanel from './WorkbenchPanel.js';
 import UnifyDebugPanel from './UnifyDebugPanel.js';
 import VpTimelinePane from './VpTimelinePane.js';
-import VpTurnDetailDrawer from './VpTurnDetailDrawer.js';
 import { parseMentions } from '../utils/parseMentions.js';
 import { buildTimelineRows, selectGroupRosterVpList } from '../stores/helpers/vp-timeline.js';
 
 export default {
   name: 'UnifyPage',
-  components: { ChatInput, MessageList, UnifySettings, UnifySidebar, VpDetailView, GroupInviteModal, GroupSettingsModal, WorkbenchPanel, UnifyDebugPanel, VpTimelinePane, VpTurnDetailDrawer },
+  components: { ChatInput, MessageList, UnifySettings, UnifySidebar, VpDetailView, GroupInviteModal, GroupSettingsModal, WorkbenchPanel, UnifyDebugPanel, VpTimelinePane },
   template: `
     <div class="unify-page">
       <!-- Mobile sidebar overlay -->
@@ -268,8 +267,6 @@ export default {
         :initial-section="groupSettingsSection"
         @close="closeGroupSettings"
       />
-
-      <VpTurnDetailDrawer />
     </div>
   `,
   setup() {
@@ -830,24 +827,18 @@ export default {
       const vpList = selectGroupRosterVpList(roster, vpStore.vpList || []);
 
       // Cross-group leak defense: even within a single conversation,
-      // typing/active-feature signals can carry VPs from other groups.
-      // Constrain everything to the active group's roster.
-      const allMeta = store.unifyFeatureMeta || {};
-      const allActive = store.unifyActiveFeatureByVp || {};
+      // typing signals can carry VPs from other groups. Constrain
+      // everything to the active group's roster.
+      // (Track-A FeatureArc subsystem removed — no more feature meta /
+      // active-feature pointers; pass empty maps so the timeline helper
+      // simply emits idle / typing / streaming statuses.)
       const allTyping = store.vpsTypingInCurrentConv || [];
       const typingVpIds = allTyping.filter((id) => rosterSet.has(id));
-      const activeFeatureByVp = {};
-      for (const vpId of Object.keys(allActive)) {
-        if (!rosterSet.has(vpId)) continue;
-        const fid = allActive[vpId];
-        const fm = fid ? allMeta[fid] : null;
-        if (fm && fm.groupId === filter) activeFeatureByVp[vpId] = fid;
-      }
 
       return buildTimelineRows({
         vpList,
-        unifyFeatureMeta: allMeta,
-        activeFeatureByVp,
+        unifyFeatureMeta: {},
+        activeFeatureByVp: {},
         typingVpIds,
         messages,
         vpLabelOf: (id) => vpStore.vpLabel(id),

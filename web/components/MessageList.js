@@ -1,19 +1,15 @@
 import MessageItem from './MessageItem.js';
 import AssistantTurn from './AssistantTurn.js';
-import VpQuickCard from './VpQuickCard.js';
-import FeaturePill from './FeaturePill.js';
-import QuickPreview from './QuickPreview.js';
+import VpTurnBlock from './VpTurnBlock.js';
 import VpSpeakerHeader from './VpSpeakerHeader.js';
 import ReflectionCard from './ReflectionCard.js';
 import SubAgentCard from './SubAgentCard.js';
 import GroupAnnouncementBar from './GroupAnnouncementBar.js';
-import { foldByFeatureId, injectQuickPreviews } from '../stores/helpers/feature-fold.js';
 import { appendTypingPlaceholders } from '../stores/helpers/typing-placeholders.js';
-import { deriveTurnIntent } from '../stores/helpers/turn-intent.js';
 
 export default {
   name: 'MessageList',
-  components: { MessageItem, AssistantTurn, VpQuickCard, FeaturePill, QuickPreview, VpSpeakerHeader, ReflectionCard, SubAgentCard, GroupAnnouncementBar },
+  components: { MessageItem, AssistantTurn, VpTurnBlock, VpSpeakerHeader, ReflectionCard, SubAgentCard, GroupAnnouncementBar },
   template: `
     <main class="chat-container" ref="containerRef">
       <!-- Session Loading Overlay - only covers message area -->
@@ -117,33 +113,18 @@ export default {
             <!-- User / system / error messages: rendered by MessageItem -->
             <MessageItem v-if="item.type === 'user' || item.type === 'system' || item.type === 'error'" :message="item.message" />
 
-            <!-- PR-2: Track-A quick preview bubble. Inserted by turnGroups
-                 just before the assistant-turn / feature-pill it precedes,
-                 so the user sees the instant gist while the main engine
-                 is still spinning up. Dimmed once a feature_started has
-                 superseded it. -->
-            <QuickPreview
-              v-else-if="item.type === 'quick-preview'"
-              :preview="item.preview"
-              :superseded="isQuickPreviewSuperseded(item)"
-            />
-
-            <!-- PR-2: feature-pill — folded run of feature-tagged messages -->
-            <FeaturePill
-              v-else-if="item.type === 'feature-pill'"
-              :feature-id="item.featureId"
-              :turns="item.turns"
-              :sub-agent-cards="subAgentCardsForFeature(item.featureId)"
-              @open-vp-detail="onOpenVpDetail"
-              @cancel-feature="onCancelFeature"
-            />
-
-            <!-- Assistant Turn card: aggregated rendering -->
-            <VpQuickCard
-              v-else-if="item.type === 'assistant-turn' && item.intent === 'feature'"
+            <!-- Assistant turn — VP-block redesign (2026-05-08).
+                 • Unify multi-VP turns (`speakerVpId` set) → VpTurnBlock,
+                   the collapsible per-VP wrapper that renders avatar +
+                   start time + live elapsed ticker, with a 4-state expand
+                   machine (see web/stores/helpers/turn-compact.js).
+                 • Legacy 1:1 Chat turns (no VP attribution) → plain
+                   AssistantTurn unchanged. The collapse affordance only
+                   makes sense in multi-VP conversations. -->
+            <VpTurnBlock
+              v-else-if="item.type === 'assistant-turn' && item.speakerVpId"
               :turn="item"
-              :preview="store.unifyQuickPreviews[item.speakerVpId + ':' + item.turnId]"
-              @open-detail="onOpenVpTurnDetail"
+              :now-ms="nowMs"
             />
             <AssistantTurn v-else-if="item.type === 'assistant-turn'" :turn="item" />
           </div>
@@ -542,7 +523,6 @@ export default {
             // reads as "the VP disappeared", which is exactly the bug
             // the user reported "无数遍".
             currentTurn.showSpeakerHeader = !!currentTurn.speakerVpId;
-            currentTurn.intent = deriveTurnIntent(currentTurn, store.unifyQuickPreviews);
             result.push(currentTurn);
           }
           currentTurn = null;
@@ -722,36 +702,17 @@ export default {
 
       finishTurn();
 
-      // task-708 / PR-720: synthesise placeholder turns for typing VPs
-      // that have no in-flight AssistantTurn yet — bridges the gap
-      // between `vp_typing_start` and the first chunk so the avatar
-      // shows from the moment the engine picks up the user's message.
-      // Suppression rule: any speakerVpId in the tail run already covers
-      // that VP. (Earlier predicate `r.isStreaming && r.speakerVpId`
-      // missed tool-only turns — isStreaming flips on text deltas only.)
-      // Helper is pure so it's tested without Vue / Pinia.
+      // VP-block redesign (2026-05-08): the Track-A `unifyActiveFeatureByVp`
+      // map is gone, but `appendTypingPlaceholders` accepts a feature index
+      // for parity with the prior signature; pass an empty object so its
+      // logic short-circuits the feature-aware branch.
       appendTypingPlaceholders(
         result,
         store.vpsTypingInCurrentConv,
-        store.unifyActiveFeatureByVp || {},
+        {},
       );
 
-      // PR-2 (feature-pill double-track): two pure post-passes over the
-      // assembled turn list.
-      //
-      //   1. injectQuickPreviews — inserts a `quick-preview` marker just
-      //      before any assistant-turn whose vpId:turnId matches a stored
-      //      Track-A preview, so the bubble appears in the right place
-      //      without changing the underlying message stream.
-      //   2. foldByFeatureId — collapses runs of foldable assistant turns
-      //      that share a non-empty featureId into a single `feature-pill`
-      //      row. Inner items are preserved so the user can expand the
-      //      pill and see them.
-      //
-      // Both helpers live in `stores/helpers/feature-fold.js` so they can
-      // be tested without spinning up Vue / Pinia.
-      const previewInjected = injectQuickPreviews(result, store.unifyQuickPreviews || {});
-      return foldByFeatureId(previewInjected);
+      return result;
     });
 
     // PR-L: reflection cards grouped by anchor (the message id present at the
@@ -802,19 +763,16 @@ export default {
     });
 
     // PR-M3: sub-agent cards anchored the same way reflection cards are.
-    // PR-4: cards whose `featureId` is set are routed to the matching
-    // FeaturePill instead of the anchor row, so the parent feature visually
-    // owns its helpers. The featureId is latched onto the card by the
-    // chat-store sub_agent_event handler from `payload.featureId`, which
-    // the agent-side `runner.js` stamps using the parent engine's
-    // `getCurrentFeatureId` accessor (see agent/unify/engine.js + sub-agent
-    // runner). Cards without a featureId fall back to anchor-based render.
+    // VP-block redesign: the `featureId` routing branch (which steered cards
+    // into FeaturePill bodies) is gone. Cards always render under their
+    // anchor row now — same behavior as cards that lacked `featureId` in
+    // the prior code.
     const subAgentCardsByAnchor = Vue.computed(() => {
       const map = store.unifySubAgentCards || {};
       const convId = store.unifyConversationId;
       const out = { __orphans: [] };
       const sorted = Object.values(map)
-        .filter((c) => c && c.conversationId === convId && !c.featureId)
+        .filter((c) => c && c.conversationId === convId)
         .sort((a, b) => (a.anchorOrder || 0) - (b.anchorOrder || 0)
           || (a.updatedAt || 0) - (b.updatedAt || 0));
       const knownIds = new Set();
@@ -842,31 +800,6 @@ export default {
       return map.__orphans || [];
     });
 
-    // PR-4: sub-agent cards grouped by featureId, so a FeaturePill can
-    // render the helpers it spawned inside its expanded body. Sorted by
-    // updatedAt so a card that arrived first stays first; ties break on
-    // agentId for determinism.
-    const subAgentCardsByFeatureId = Vue.computed(() => {
-      const map = store.unifySubAgentCards || {};
-      const convId = store.unifyConversationId;
-      const out = {};
-      for (const card of Object.values(map)) {
-        if (!card || card.conversationId !== convId) continue;
-        if (!card.featureId) continue;
-        if (!out[card.featureId]) out[card.featureId] = [];
-        out[card.featureId].push(card);
-      }
-      for (const fid of Object.keys(out)) {
-        out[fid].sort((a, b) => (a.updatedAt || 0) - (b.updatedAt || 0)
-          || String(a.agentId).localeCompare(String(b.agentId)));
-      }
-      return out;
-    });
-    const subAgentCardsForFeature = (featureId) => {
-      if (!featureId) return [];
-      return (subAgentCardsByFeatureId.value || {})[featureId] || [];
-    };
-
     // Track if user is at bottom (within threshold)
     const isAtBottom = Vue.ref(true);
     const SCROLL_THRESHOLD = 50;
@@ -883,6 +816,46 @@ export default {
     // task-708: the standalone vp-typing-row was removed; the placeholder
     // pseudo-turn synth in `turnGroups` reads `store.vpsTypingInCurrentConv`
     // directly, so we no longer need a separate computed here.
+
+    // VP-block redesign Phase 3: a single page-shared "now" ref that
+    // ticks once per second WHILE any turn is streaming. VpTurnBlock
+    // reads it via prop to compute its live elapsed counter. We tick
+    // only during streaming to avoid wasted re-renders when idle.
+    //
+    // Why one shared ref (not one per VpTurnBlock instance): a multi-VP
+    // group can have 5+ in-flight turns simultaneously; per-component
+    // setIntervals would all fire on different cycles and cause
+    // staircase repaints. One ref + one interval gives every block
+    // the same wall-clock value at the same render frame.
+    const nowMs = Vue.ref(Date.now());
+    let nowTickHandle = null;
+    const startNowTick = () => {
+      if (nowTickHandle) return;
+      nowTickHandle = setInterval(() => {
+        nowMs.value = Date.now();
+      }, 1000);
+    };
+    const stopNowTick = () => {
+      if (nowTickHandle) {
+        clearInterval(nowTickHandle);
+        nowTickHandle = null;
+      }
+    };
+    Vue.watch(
+      hasStreamingMessage,
+      (streaming) => {
+        if (streaming) {
+          // Take an immediate sample so the "started 0s ago" reads
+          // accurately on the first paint, not after the next 1s tick.
+          nowMs.value = Date.now();
+          startNowTick();
+        } else {
+          stopNowTick();
+        }
+      },
+      { immediate: true },
+    );
+    Vue.onBeforeUnmount(() => stopNowTick());
 
     // Reactive timer for long-processing fallback status
     const typingStartTime = Vue.ref(0);
@@ -1305,44 +1278,6 @@ export default {
       store.enterVpDetailView(vpId);
     };
 
-    const onOpenVpTurnDetail = ({ vpId, turnId }) => {
-      store.openVpTurnDetail({ vpId, turnId });
-    };
-
-    // PR-4: per-feature abort. The pill emits a featureId; we resolve the
-    // owning turnId via `unifyFeatureMeta` (set on `feature_started`) and
-    // delegate to the existing `cancelVpTurn` action. There is no separate
-    // "abort feature only" wire — feature == owning turn from the user's
-    // POV. The agent's catch path emits `feature_completed{status:'aborted'}`
-    // automatically when the abort lands (web-bridge.js abort branch).
-    const onCancelFeature = (featureId) => {
-      if (!featureId) return;
-      const meta = store.unifyFeatureMeta?.[featureId];
-      const turnId = meta?.turnId;
-      if (!turnId) return;
-      store.cancelVpTurn(turnId);
-    };
-
-    // PR-2: a quick-preview is "superseded" when the feature-arc has fired
-    // a `feature_started` event for the same vpId/turnId — that means
-    // Track A's preview was the gist of a feature ramp-up rather than the
-    // final answer, so we dim the bubble (and the FeaturePill rendered
-    // below it carries the canonical UI surface).
-    const isQuickPreviewSuperseded = (item) => {
-      if (!item || !item.preview) return false;
-      const vpId = item.forVpId || item.preview.vpId;
-      const turnId = item.forTurnId || item.preview.turnId;
-      if (!vpId || !turnId) return false;
-      const meta = store.unifyFeatureMeta || {};
-      // Cheap O(N) over featureMeta — typically 1–3 entries in flight.
-      for (const id of Object.keys(meta)) {
-        const m = meta[id];
-        if (!m) continue;
-        if (m.vpId === vpId && m.turnId === turnId) return true;
-      }
-      return false;
-    };
-
     // GroupAnnouncementBar's "open settings" link bubbles a request up
     // to the parent page (UnifyPage) so the unified GroupSettingsModal
     // can be opened with the right group id and an initial section
@@ -1371,6 +1306,7 @@ export default {
       containerRef,
       flashMsgId,
       hasStreamingMessage,
+      nowMs,
       showTypingDots,
       previewShowTypingDots,
       isPreviewMode,
@@ -1389,19 +1325,12 @@ export default {
       questionRX,
       refreshSession,
       onOpenVpDetail,
-      onOpenVpTurnDetail,
-      // PR-4: per-feature abort
-      onCancelFeature,
-      // PR-2 (feature-pill double-track)
-      isQuickPreviewSuperseded,
       onlineAgents,
       turnGroups,
       cardsForRow,
       orphanCards,
       subAgentCardsForRow,
       orphanSubAgentCards,
-      // PR-4: sub-agent cards folded into the matching FeaturePill
-      subAgentCardsForFeature,
       // group editor wiring
       activeGroupIdForBar,
       onOpenGroupSettings,

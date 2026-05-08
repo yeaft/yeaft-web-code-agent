@@ -39,9 +39,11 @@ function stampSpeakerOnVpMessage(store, conversationId, m) {
   if (!m.vpId && store._currentUnifyVpId) m.vpId = store._currentUnifyVpId;
   if (!m.turnId && store._currentUnifyTurnId) m.turnId = store._currentUnifyTurnId;
   if (!m.speakerVpId && m.vpId) m.speakerVpId = m.vpId;
-  // PR-2 (feature-pill double-track): stamp featureId from the in-flight
-  // routing context so MessageList.turnGroups can fold consecutive
-  // messages tagged with the same feature into a single pill row.
+  // Stamp featureId from the in-flight routing context onto the
+  // message. Used downstream by the agent for memory scoping (the
+  // `feature_*` LLM tools) and dream-v2 triage; no longer drives any
+  // frontend folding (the FeatureArc / FeaturePill UI was retired in
+  // the VP-block redesign — see VpTurnBlock).
   // Idempotent: only fills missing field, never overwrites a featureId
   // that the caller (or an earlier delta) already attached.
   if (!m.featureId && store._currentUnifyFeatureId) {

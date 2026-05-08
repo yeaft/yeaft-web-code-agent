@@ -291,35 +291,14 @@ export const useChatStore = defineStore('chat', {
     // addMessageToConversation / appendToAssistant can route by turnId.
     _currentUnifyVpId: null,
     _currentUnifyTurnId: null,
-    // PR-1 (feature-pill double-track): the in-flight envelope's featureId.
-    // Stamped onto streaming chunks the same way _currentUnifyVpId/turnId
-    // are, so the rendering layer can group messages by feature without
-    // every component reaching back into a parallel map. Null when the
-    // arriving event is not part of any feature (lightweight Q&A).
-    _currentUnifyFeatureId: null,
-
-    // PR-1 (feature-pill double-track): per-feature lifecycle metadata.
-    // Keyed by featureId. Records:
-    //   { featureId, vpId, groupId, turnId, title, trigger,
-    //     status: 'active' | 'completed' | 'aborted' | 'error',
-    //     summary?: string, startedAt, endedAt? }
-    // Used by the (PR-2) MessageList to fold all messages tagged with a
-    // given featureId into a single pill. PR-1 only stores the data —
-    // the UI surface is added in the next PR.
-    unifyFeatureMeta: {},
-
-    // PR-1 (feature-pill double-track): per-VP active feature index.
-    // Keyed by vpId, value is the most recent active featureId for that
-    // VP (or null when no feature is open). Lets the timeline / detail
-    // panel show "VP-A is doing X" badges without scanning the meta map.
-    unifyActiveFeatureByVp: {},
-
-    // PR-1 (feature-pill double-track): pending Track-A previews keyed
-    // by `${vpId}:${turnId}`. Each entry is `{ vpId, turnId, intent,
-    // preview, ts }`. Rendered as an instant bubble under the user
-    // message in the (PR-2) UI; cleared when the matching feature
-    // completes (or after a TTL — handled in PR-2).
-    unifyQuickPreviews: {},
+    // VP-block redesign (2026-05-08): Track-A FeatureArc and the
+    // feature-pill rendering surface have been retired. featureId still
+    // flows on engine events when the LLM uses the feature_* tools or
+    // when a sub-agent runner stamps it; we no longer maintain a
+    // parallel meta map / preview map / per-VP active-feature pointer
+    // in the store. The frontend now folds turns into per-VP blocks
+    // (VpTurnBlock); LLM-driven feature scoping for memory still works
+    // via the FeatureStore on the agent side.
 
     // Active VP turns — keyed by turnId. Cleared on result or abort ack.
     activeVpTurns: {},
@@ -359,11 +338,10 @@ export const useChatStore = defineStore('chat', {
     // a VP-speaker-headed turn or a VP library row.
     unifyActiveVpDetailId: null,
 
-    // Right-side detail drawer target — populated when the user clicks a
-    // VpQuickCard in the main feed; cleared on close. Coexists with
-    // `unifyActiveVpDetailId` (the older center-column persona view) —
-    // the two are different dimensions (turn-scoped vs vp-scoped).
-    unifyOpenVpTurnDetail: null,  // { vpId, turnId } | null
+    // VP-block redesign (2026-05-08): the per-turn detail drawer
+    // (`unifyOpenVpTurnDetail`) was retired alongside VpQuickCard /
+    // VpTurnDetailDrawer. Per-turn inspection now happens through the
+    // VpTurnBlock collapse layer in the message list.
 
     // R6 G4: transient toast/hint queue for off-roster @-mention attempts.
     // ChatInput.flashInviteHint(vpId) pushes here; a toast component pops
@@ -709,10 +687,8 @@ export const useChatStore = defineStore('chat', {
     },
     leaveUnify() {
       this.currentView = 'chat';
-      // Drop any open VP-turn detail drawer too; it's pinned to a
-      // specific (vpId, turnId) of the previous Unify session and would
-      // otherwise re-open with stale data on the next entry.
-      this.unifyOpenVpTurnDetail = null;
+      // VP-block redesign (2026-05-08): the per-turn detail drawer was
+      // retired; nothing to clear here.
       // Restore the original activeConversations snapshot taken on the
       // last real Chat → Unify transition (idempotent — no-op if cold).
       unifyViewHelpers.applyLeaveUnifyTransition(this);
@@ -1050,94 +1026,13 @@ export const useChatStore = defineStore('chat', {
           // Future: display these in UI
           break;
 
-        // PR-1 (feature-pill double-track) — protocol-only intake.
-        // The agent emits these three events to drive the pill UI in
-        // PR-2. PR-1 just stashes the data into store state and wires
-        // no rendering — that arrives with the MessageList changes in
-        // the next PR. We deliberately accept the events even when no
-        // UI consumes them so PR-1 is shippable in isolation.
-        case 'quick_preview': {
-          // Track A came back with `{intent, preview}`. Key the entry
-          // by `vpId:turnId` so a re-run of the same VP on a fresh
-          // turn doesn't clobber the previous preview while it's still
-          // on screen.
-          const vpId = event.vpId || msg.vpId;
-          const turnId = event.turnId || msg.turnId;
-          if (vpId && turnId) {
-            const key = `${vpId}:${turnId}`;
-            this.unifyQuickPreviews = {
-              ...this.unifyQuickPreviews,
-              [key]: {
-                vpId,
-                turnId,
-                intent: event.intent === 'feature' ? 'feature' : 'quick',
-                preview: typeof event.preview === 'string' ? event.preview : '',
-                ts: Date.now(),
-              },
-            };
-          }
-          break;
-        }
-
-        case 'feature_started': {
-          // One of the three signals fired (quick / turns / tool); the
-          // arc just published a featureId. Record it and mark this VP
-          // as "actively in a feature" so PR-2's MessageList can fold
-          // subsequent messages tagged with the same featureId.
-          const featureId = event.featureId;
-          const vpId = event.vpId || msg.vpId;
-          const turnId = event.turnId || msg.turnId;
-          const groupId = event.groupId || msg.groupId || null;
-          if (featureId) {
-            this.unifyFeatureMeta = {
-              ...this.unifyFeatureMeta,
-              [featureId]: {
-                featureId,
-                vpId,
-                groupId,
-                turnId,
-                title: typeof event.title === 'string' ? event.title : '',
-                trigger: event.trigger || 'unknown',
-                toolName: event.toolName || null,
-                status: 'active',
-                startedAt: Date.now(),
-              },
-            };
-            if (vpId) {
-              this.unifyActiveFeatureByVp = {
-                ...this.unifyActiveFeatureByVp,
-                [vpId]: featureId,
-              };
-            }
-          }
-          break;
-        }
-
-        case 'feature_completed': {
-          // Arc.finalize() fired. Move the meta entry to a terminal
-          // state and clear the per-VP active pointer if it still
-          // points at this feature.
-          const featureId = event.featureId;
-          const vpId = event.vpId || msg.vpId;
-          if (featureId && this.unifyFeatureMeta[featureId]) {
-            const prev = this.unifyFeatureMeta[featureId];
-            this.unifyFeatureMeta = {
-              ...this.unifyFeatureMeta,
-              [featureId]: {
-                ...prev,
-                status: event.status || 'completed',
-                summary: typeof event.summary === 'string' ? event.summary : '',
-                endedAt: Date.now(),
-              },
-            };
-          }
-          if (vpId && this.unifyActiveFeatureByVp[vpId] === featureId) {
-            const next = { ...this.unifyActiveFeatureByVp };
-            next[vpId] = null;
-            this.unifyActiveFeatureByVp = next;
-          }
-          break;
-        }
+        // VP-block redesign (2026-05-08): the three Track-A / FeaturePill
+        // intake handlers (`quick_preview`, `feature_started`,
+        // `feature_completed`) have been removed alongside the FeatureArc
+        // backend. The agent no longer emits these events; if any future
+        // emitter needs feature attribution, it should ride directly on
+        // the existing `featureId` envelope field that's already
+        // propagated through `addMessageToConversation`.
 
         case 'reflection': {
           // PR-L: V7 tool-history reflection. Two phases per occurrence
@@ -1660,20 +1555,6 @@ export const useChatStore = defineStore('chat', {
     leaveVpDetailView() {
       this.unifyActiveVpDetailId = null;
     },
-    /**
-     * Open the right-side VP-turn detail drawer for a single VP turn.
-     * Idempotent: switching to a different vpId+turnId replaces the
-     * descriptor; the drawer keeps its DOM instance.
-     * No-op if vpId or turnId is missing.
-     */
-    openVpTurnDetail(payload) {
-      if (!payload || !payload.vpId || !payload.turnId) return;
-      this.unifyOpenVpTurnDetail = { vpId: payload.vpId, turnId: payload.turnId };
-    },
-
-    closeVpTurnDetail() {
-      this.unifyOpenVpTurnDetail = null;
-    },
     // H2.f.6: setUnifyFeatureReplyThreadId / setUnifyJumpTarget /
     // clearUnifyJumpTarget actions removed.
     switchUnifyModel(modelId) {
@@ -1812,10 +1693,7 @@ export const useChatStore = defineStore('chat', {
       this.unifyDebugGroupFilter = null;
       this.unifyReflectionCards = {};
       this.unifySubAgentCards = {};
-      // Same reasoning as leaveUnify: a stale (vpId, turnId) descriptor
-      // from the previous session would re-open the drawer with no
-      // matching messages once the messagesMap is wiped.
-      this.unifyOpenVpTurnDetail = null;
+      // VP-block redesign (2026-05-08): per-turn detail drawer retired.
       // Tell agent to reset session so Engine gets a fresh start
       if (this.unifyAgentId) {
         this.sendWsMessage({

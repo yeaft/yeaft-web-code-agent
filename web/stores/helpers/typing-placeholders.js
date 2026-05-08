@@ -10,7 +10,9 @@
  *
  * The helper is pure so it can be tested without spinning up Vue / Pinia.
  * MessageList.js calls it as the last step of the turn-aggregation
- * pipeline (after finishTurn, before injectQuickPreviews / foldByFeatureId).
+ * pipeline (after finishTurn — the now-deleted Track-A
+ * injectQuickPreviews / foldByFeatureId stage was removed in the
+ * VP-block redesign).
  *
  * **The bug this guards against** (PR #720): the previous predicate was
  * `r.isStreaming && r.speakerVpId`. Only `type==='assistant'` deltas flip
