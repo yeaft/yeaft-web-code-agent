@@ -1042,7 +1042,7 @@ export class Engine {
    * @param {Array<{type:string, source?:object, text?:string}>} [params.promptParts] -
    *   PR #721: optional content-array form of the user message used
    *   when attachments are present. Each entry is either an
-   *   `{type:'image', source:{type:'base64', mediaType, data}}` block
+   *   `{type:'image', source:{type:'base64', media_type, data}}` block
    *   (one per uploaded image) or a `{type:'text', text}` block (the
    *   text prompt body, including any [Uploaded files] suffix). When
    *   supplied and non-empty, the LLM call uses this array as the

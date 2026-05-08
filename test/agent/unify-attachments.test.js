@@ -114,8 +114,33 @@ describe('persistUnifyAttachments', () => {
     const part = r.promptParts[0];
     expect(part.type).toBe('image');
     expect(part.source.type).toBe('base64');
-    expect(part.source.mediaType).toBe('image/png');
+    expect(part.source.media_type).toBe('image/png');
     expect(part.source.data).toBe(PNG_1x1);
+  });
+
+  // Regression: the Anthropic Messages API rejects camelCase
+  // `mediaType` with `400 Failed to read request body`. The Anthropic
+  // adapter forwards user-content blocks verbatim, so the field MUST
+  // already be snake_case at the source. Lock it in so a future
+  // refactor can't quietly resurrect the bug. Also covers the
+  // alternate MIME type path (jpeg, not just png-default).
+  it('image source uses snake_case `media_type` (not camelCase `mediaType`)', () => {
+    const r = persistUnifyAttachments([
+      {
+        name: 'photo.jpg',
+        mimeType: 'image/jpeg',
+        data: PNG_1x1,
+        isImage: true,
+      },
+    ], { subdir: 'grp_wire' });
+
+    expect(r.promptParts).toHaveLength(1);
+    const src = r.promptParts[0].source;
+    expect(src.media_type).toBe('image/jpeg');
+    // Belt-and-braces: prove the legacy camelCase key is absent. If a
+    // future change re-introduces it, the wire payload will start
+    // failing against Anthropic again — catch it here, not in prod.
+    expect(Object.prototype.hasOwnProperty.call(src, 'mediaType')).toBe(false);
   });
 
   it('skips entries missing data and survives bad inputs', () => {
@@ -243,7 +268,7 @@ describe('coordinator.ingest ephemeral fields', () => {
 
     const imageBlocks = [{
       type: 'image',
-      source: { type: 'base64', mediaType: 'image/png', data: PNG_1x1 },
+      source: { type: 'base64', media_type: 'image/png', data: PNG_1x1 },
     }];
     coord.ingest({
       from: 'user',

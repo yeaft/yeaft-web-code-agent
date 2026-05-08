@@ -112,13 +112,16 @@ export class OpenAIResponsesAdapter extends LLMAdapter {
           return { type: 'input_text', text: part.text || '' };
         }
         if (part.type === 'image') {
-          // part.source may be { url } or { data, mediaType } (base64)
+          // part.source may be { url } or { data, media_type } (base64).
+          // We accept the legacy `mediaType` (camelCase) for backward
+          // compatibility with any caller still on the pre-fix shape;
+          // the canonical wire form is now `media_type` per Anthropic.
           const src = part.source || {};
           let imageUrl;
           if (src.url) {
             imageUrl = src.url;
           } else if (src.data) {
-            const mt = src.mediaType || 'image/png';
+            const mt = src.media_type || src.mediaType || 'image/png';
             imageUrl = `data:${mt};base64,${src.data}`;
           } else {
             imageUrl = '';
