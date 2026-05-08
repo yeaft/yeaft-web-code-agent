@@ -192,6 +192,42 @@ export function broadcastLanguageChange(language) {
 /** Query timeout in ms — abort if LLM doesn't respond within this window */
 const QUERY_TIMEOUT_MS = 120_000;
 
+/**
+ * Secondary watchdog grace period (ms).
+ *
+ * After {@link QUERY_TIMEOUT_MS} of silence the per-VP `vpAbort` is fired.
+ * That's enough on its own when adapters / tools cooperate with the
+ * AbortSignal — the engine throws `AbortError`, runVpTurn's catch emits
+ * `result{stopped:true}`, the driver `finally` emits `vp_typing_end`, and
+ * the user is unstuck.
+ *
+ * If a tool ignores `signal` and never resolves, the engine generator's
+ * `await tool.execute(...)` is permanently blocked: the abort fires on a
+ * controller it never observes, and runVpTurn never returns. The same
+ * applies to an adapter `stream()` that ignores `signal` (e.g. a stuck
+ * SSE connection) or to tools that legitimately opt out of the per-tool
+ * timeout via `timeoutMs <= 0`. The per-tool timeout in
+ * {@link import('./tools/registry.js').DEFAULT_TOOL_TIMEOUT_MS}
+ * is the primary cure for the tool-ignore-signal case; this bridge-level
+ * escalation strictly extends it to cover the adapter and opt-out cases.
+ * Without a second-stage escalation the typing dots hang forever —
+ * exactly the "halts mid-execution with no turn_end" symptom.
+ *
+ * The driver loop wraps `await runVpTurn(...)` in a Promise.race against
+ * this grace-window timer. If runVpTurn doesn't return within
+ * QUERY_TIMEOUT_MS + ESCALATE_AFTER_ABORT_MS, the driver forces its
+ * `finally` block (vp_typing_end + group_message), emits a synthetic
+ * `result{stopped:true}` so the frontend leaves its in-flight state,
+ * and moves on. The hung tool promise leaks (JS lacks cooperative
+ * promise cancellation) but the user-facing turn is closed.
+ *
+ * 15s is wide enough that legitimate "abort took a moment to propagate"
+ * paths (network teardown, finally cleanup) finish first; tight enough
+ * that a truly stuck tool doesn't stretch the user-visible stall to
+ * minutes.
+ */
+const ESCALATE_AFTER_ABORT_MS = 15_000;
+
 /** Virtual conversationId for the Unify session */
 let unifyConversationId = null;
 
@@ -422,7 +458,7 @@ function ensureDriverRunning(groupId, vpId) {
       } catch { /* never crash WS pipeline */ }
 
       try {
-        await runVpTurn({
+        await runVpTurnWithEscalation({
           prompt,
           promptParts,
           groupId,
@@ -1674,6 +1710,94 @@ async function ensureSessionLoaded() {
 }
 
 /**
+ * Wrap {@link runVpTurn} with a hard escalation deadline.
+ *
+ * The first-line defense is the in-turn watchdog inside runVpTurn: at
+ * {@link QUERY_TIMEOUT_MS} of silence it calls `vpAbort.abort()`. When
+ * adapters and tools cooperate with AbortSignal that's enough — the
+ * engine throws AbortError, the catch handler emits `result{stopped:true}`,
+ * and the driver's `finally` emits `vp_typing_end`.
+ *
+ * This wrapper is the second-line defense for the "tool ignores signal"
+ * failure mode. If runVpTurn doesn't return within
+ * QUERY_TIMEOUT_MS + ESCALATE_AFTER_ABORT_MS we synthesize a clean exit:
+ * emit a synthetic `result{stopped:true}` so the frontend leaves its
+ * in-flight state, log loudly so operators know a tool is stuck, and
+ * resolve. The hung promise leaks (the engine generator is permanently
+ * blocked on a tool that ignores cancellation) but the user-facing turn
+ * is closed and the next message can flow. Resolving the wrapper is
+ * preferred over rejecting because the driver's catch already logs a
+ * warning — we want a single, unambiguous "watchdog escalated" line in
+ * the log instead of layered noise.
+ *
+ * Tool-level timeouts (see registry.js DEFAULT_TOOL_TIMEOUT_MS) are the
+ * real cure: this wrapper should rarely fire because no tool should be
+ * able to block longer than its budget. It exists as belt-and-suspenders
+ * for tools that legitimately disable timeouts (long-running internal
+ * helpers) or for adapter implementations that ignore signal.
+ */
+async function runVpTurnWithEscalation(args) {
+  const { groupId, vpId, turnId } = args;
+  const deadlineMs = QUERY_TIMEOUT_MS + ESCALATE_AFTER_ABORT_MS;
+  await raceWithEscalation(runVpTurn(args), {
+    deadlineMs,
+    onEscalate: () => {
+      console.error(
+        `[Unify] runVpTurn watchdog escalation: VP ${vpId} did not return ${deadlineMs}ms after enqueue — emitting synthetic stop and unblocking driver`,
+      );
+      try {
+        sendUnifyOutput(
+          { type: 'result', result_text: '', stopped: true },
+          { groupId, vpId, turnId },
+        );
+      } catch { /* never crash WS pipeline */ }
+    },
+  });
+}
+
+/**
+ * Race `inner` against a deadline timer. If `inner` resolves/rejects first,
+ * the timer is cleared and the result of `inner` is returned. If the timer
+ * wins, `onEscalate` is called and the wrapper resolves cleanly — the inner
+ * promise is left dangling (JS has no promise cancellation) but the caller
+ * is unblocked.
+ *
+ * `onEscalate` MUST be synchronous. We swallow synchronous throws so a
+ * torn-down WS pipeline can't crash the watchdog, but a Promise rejection
+ * from an async `onEscalate` would leak past this `catch`.
+ *
+ * Pure helper, no module-level state, exported as `__testRaceWithEscalation`
+ * so the contract can be unit-tested in isolation. Inner errors propagate
+ * (a tool that throws still surfaces through `runVpTurn`'s normal catch).
+ *
+ * @template T
+ * @param {Promise<T>} inner
+ * @param {{ deadlineMs: number, onEscalate: () => void }} opts
+ * @returns {Promise<T|void>}
+ */
+async function raceWithEscalation(inner, { deadlineMs, onEscalate }) {
+  let escalateTimer = null;
+  const escalation = new Promise((resolve) => {
+    escalateTimer = setTimeout(() => {
+      try { onEscalate(); } catch { /* never throw out of the watchdog */ }
+      resolve();
+    }, deadlineMs);
+    // `unref()` lets a pending escalation timer not hold the Node event
+    // loop open (e.g. during graceful shutdown). Browsers / non-Node
+    // runtimes don't expose it, hence the typeof guard. Node's own
+    // `Timeout.unref()` does not throw, so no try/catch is needed.
+    if (escalateTimer && typeof escalateTimer.unref === 'function') {
+      escalateTimer.unref();
+    }
+  });
+  try {
+    return await Promise.race([inner, escalation]);
+  } finally {
+    clearTimeout(escalateTimer);
+  }
+}
+
+/**
  * Run a single VP's turn: call engine.query() with the supplied prompt and
  * coordinator-bound router, stream events to the frontend, and append the
  * result to the flat conversation history.
@@ -2211,6 +2335,13 @@ export function __testSeedAbortController(_threadId, ctrl) {
 export function __testGetRegisteredThreadIds() {
   return currentAbortCtrl && !currentAbortCtrl.signal.aborted ? ['main'] : [];
 }
+
+/**
+ * Test-only: expose the bridge-level escalation helper. Lets tests verify
+ * the "tool ignored signal → wrapper escalates" contract without booting a
+ * full session. See `test/agent/unify/web-bridge-escalation.test.js`.
+ */
+export const __testRaceWithEscalation = raceWithEscalation;
 
 /**
  * Manual dream trigger from VP detail page.

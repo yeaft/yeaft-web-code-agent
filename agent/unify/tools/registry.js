@@ -42,6 +42,50 @@ const TOOL_RESULT_CAP_RATIO = 0.10;
 const TOOL_RESULT_MIN_CAP = 8 * 1024;
 
 /**
+ * Per-tool execution timeout (ms).
+ *
+ * Without a timeout, a tool whose `execute()` ignores `signal` (or hangs on
+ * a network call that doesn't honor AbortSignal) blocks the engine
+ * generator's `await this.#toolRegistry.execute(...)` forever. The for-await
+ * in the bridge driver never advances → no further events emitted → no
+ * `turn_end` → typing dots hang → user sees the conversation "halt" with
+ * no terminal event. The bridge's 120s watchdog calls `vpAbort.abort()`
+ * but a tool that ignores signal also ignores the abort, so the abort
+ * does nothing.
+ *
+ * Fix: race the tool's promise against a timer. On timeout we throw a
+ * loud error — the engine's existing catch (engine.js: tool-execute path)
+ * emits `tool_end{isError:true}` and the loop continues normally. Loud
+ * failure beats silent stall.
+ *
+ * 90s is comfortably above the typical tool budget (most tools complete
+ * in <1s; bash and web-fetch can run tens of seconds; web-search is
+ * usually <10s) but well below the 120s bridge-level watchdog so the
+ * tool-level signal fires first and surfaces a useful per-tool diagnosis
+ * rather than an opaque "VP stalled" log.
+ *
+ * Override per-tool by setting `tool.timeoutMs` on the ToolDef. Set to
+ * 0 (or a negative number) to disable the timeout for that tool — only
+ * use this for legitimately long-running internal tools.
+ */
+export const DEFAULT_TOOL_TIMEOUT_MS = 90_000;
+
+/**
+ * Error thrown when a tool's execute() exceeds its timeout. Carries the
+ * tool name + budget so the engine's catch path (and the resulting
+ * `tool_end{isError:true}` event) can surface a precise diagnostic to
+ * the user instead of a generic stall.
+ */
+export class ToolExecutionTimeoutError extends Error {
+  constructor(toolName, timeoutMs) {
+    super(`Tool "${toolName}" did not complete within ${timeoutMs}ms`);
+    this.name = 'ToolExecutionTimeoutError';
+    this.toolName = toolName;
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+/**
  * Truncate a tool result if it exceeds the per-result cap. Non-string
  * outputs are JSON-stringified first (matching what engine.js eventually
  * pushes into `content`), then capped.
@@ -74,6 +118,35 @@ export function truncateToolResultIfNeeded(output, { contextWindow, toolName }) 
   const head = text.slice(0, cap);
   const marker = `\n\n[truncated: ${toolName} returned ${formatSize(text.length)}, capped at ${formatSize(cap)}; the model will not see the rest of this output]`;
   return head + marker;
+}
+
+/**
+ * Race a promise against a timer. If the promise resolves first, return its
+ * value. If the timer wins, throw {@link ToolExecutionTimeoutError}. The
+ * underlying tool promise is intentionally NOT cancelled — JS has no
+ * cooperative promise cancellation, so a tool that ignores `signal` will
+ * keep running in the background; we just stop waiting on it. The engine
+ * sees a clean error and the user sees `tool_end{isError:true}` instead
+ * of an indefinite hang.
+ *
+ * Internal helper — not exported. The default and overrides are managed
+ * via {@link DEFAULT_TOOL_TIMEOUT_MS} and `tool.timeoutMs`.
+ *
+ * @param {Promise<unknown>} promise
+ * @param {number} timeoutMs
+ * @param {string} toolName
+ * @returns {Promise<unknown>}
+ */
+function runWithTimeout(promise, timeoutMs, toolName) {
+  let timer = null;
+  const timeoutPromise = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(new ToolExecutionTimeoutError(toolName, timeoutMs));
+    }, timeoutMs);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    clearTimeout(timer);
+  });
 }
 
 export class ToolRegistry {
@@ -174,7 +247,20 @@ export class ToolRegistry {
   async execute(name, input, ctx = {}) {
     const tool = this.#tools.get(name);
     if (!tool) throw new Error(`Unknown tool: ${name}`);
-    const output = await tool.execute(input, ctx);
+
+    // Per-tool timeout. A tool that ignores `signal` and never resolves
+    // would otherwise hang the engine's `await this.#toolRegistry.execute(...)`
+    // indefinitely — see DEFAULT_TOOL_TIMEOUT_MS docblock for the
+    // motivating "silent turn stall" failure. The race throws a typed
+    // error on timeout; the engine's existing catch turns it into
+    // `tool_end{isError:true}` and the loop continues.
+    const rawTimeout = Number.isFinite(tool.timeoutMs) ? tool.timeoutMs : DEFAULT_TOOL_TIMEOUT_MS;
+    const useTimeout = rawTimeout > 0;
+
+    const output = useTimeout
+      ? await runWithTimeout(tool.execute(input, ctx), rawTimeout, name)
+      : await tool.execute(input, ctx);
+
     return truncateToolResultIfNeeded(output, {
       contextWindow: ctx.contextWindow,
       toolName: name,
