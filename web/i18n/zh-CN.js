@@ -1191,6 +1191,16 @@ export default {
   'unify.feature.pill.label': '任务',
   'unify.feature.messageTime.aria': '发送于 {time}',
 
+  // VP-block redesign Phase 3 (2026-05-08)：VpTurnBlock — 可折叠的
+  // 每个 VP 每轮 turn 的 block 包装。折叠态显示最后 6 行 + 最近 1 个工具；
+  // 展开态是完整的 AssistantTurn。
+  'unify.vp.turnBlock.expand': '展开',
+  'unify.vp.turnBlock.collapse': '折叠',
+  'unify.vp.turnBlock.elapsedTitle': '本轮 turn 开始至今的时间',
+  'unify.vp.turnBlock.truncated': '已显示最后 6 行（共 {total} 行）— 点击展开',
+  'unify.vp.turnBlock.thinking': '思考中…',
+  'unify.vp.turnBlock.empty': '（暂无文本）',
+
   // PR-3 (feature-pill double-track): 右侧 VP 时间线面板。
   'unify.vpTimeline.aria': 'VP 时间线',
   'unify.vpTimeline.title': 'VP 列表',

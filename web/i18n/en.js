@@ -1191,6 +1191,16 @@ export default {
   'unify.feature.pill.label': 'task',
   'unify.feature.messageTime.aria': 'Sent at {time}',
 
+  // VP-block redesign Phase 3 (2026-05-08): VpTurnBlock — collapsible
+  // per-VP turn wrapper. The compact view shows last 6 lines + last
+  // 1 tool; the expanded view is the full AssistantTurn surface.
+  'unify.vp.turnBlock.expand': 'Expand turn',
+  'unify.vp.turnBlock.collapse': 'Collapse turn',
+  'unify.vp.turnBlock.elapsedTitle': 'Time elapsed since this turn started',
+  'unify.vp.turnBlock.truncated': 'Showing last 6 of {total} lines — click to expand',
+  'unify.vp.turnBlock.thinking': 'thinking…',
+  'unify.vp.turnBlock.empty': '(no text)',
+
   // PR-3 (feature-pill double-track): right-side VP Timeline pane.
   'unify.vpTimeline.aria': 'VP timeline',
   'unify.vpTimeline.title': 'VPs',
