@@ -179,19 +179,27 @@ describe('bootCatchUpStaleDream', () => {
     expect(sched._calls.catchUp).toBe(0);
   });
 
-  it('falls back to triggerDreamForScopes when scheduler does not expose catchUpNudge', async () => {
+  it('fails closed when scheduler shim does not expose catchUpNudge', async () => {
+    // PR #743 review (Martin): the previous behaviour fell back to
+    // triggerDreamForScopes(), but that path routes through
+    // v2.triggerNow() which sets manual:true and bypasses
+    // MIN_NEW_PER_GROUP — directly contradicting the documented
+    // contract of bootCatchUpStaleDream. We now refuse to substitute a
+    // manual fire and report fired=false instead.
     seedGroupWithMessage('grp_fun');
     const calls = { scope: [] };
     const sched = {
-      // Older shim — no catchUpNudge.
+      // Older shim — no catchUpNudge. triggerDreamForScopes is present
+      // but MUST NOT be called by bootCatchUpStaleDream because its
+      // semantics (manual=true) violate this code path's contract.
       triggerDreamForScopes: async (s) => { calls.scope.push(s); },
     };
     const r = await bootCatchUpStaleDream({ yeaftDir, dreamScheduler: sched });
-    expect(r.fired).toBe(true);
+    expect(r.stale).toBe(true);
+    expect(r.fired).toBe(false);
     await new Promise(resolve => setImmediate(resolve));
-    expect(calls.scope).toHaveLength(1);
-    // Whole-session pass — no scope filter.
-    expect(calls.scope[0]).toBeUndefined();
+    // Crucially: we did NOT route through the manual path.
+    expect(calls.scope).toEqual([]);
   });
 
   it('survives a corrupt .dream-state (per-group skip, no throw)', async () => {

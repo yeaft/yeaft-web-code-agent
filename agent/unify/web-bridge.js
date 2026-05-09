@@ -2376,13 +2376,19 @@ export async function handleUnifyDreamTrigger(msg = {}) {
     const entriesCreated = targets.filter(t => t && t.status === 'done').length;
     const lastDreamAt = result?.startedAt || new Date().toISOString();
 
+    // Spread `result` FIRST so derived fields (success, entriesCreated,
+    // lastDreamAt) authoritatively shadow anything the runner might grow
+    // with the same name. Today there is no collision (runner.js returns
+    // { groups, targets, startedAt, error?, skipped? }) but the failure
+    // mode of the alternative ordering is silent — review feedback from
+    // PR #743.
     sendToServer({
       type: 'unify_dream_result',
       vpId,
+      ...result,
       success: !result.error && !result.skipped,
       entriesCreated,
       lastDreamAt,
-      ...result,
     });
   } catch (err) {
     sendToServer({

@@ -283,7 +283,7 @@ export async function bootInitEmptyGroups(args) {
  *
  * @param {{
  *   yeaftDir: string,
- *   dreamScheduler: { catchUpNudge?: () => Promise<any>, triggerDreamForScopes?: (s?:string[]) => Promise<any> },
+ *   dreamScheduler: { catchUpNudge?: () => Promise<any> },
  *   intervalHours?: number,
  *   now?: number,
  *   config?: { debug?: boolean },
@@ -340,14 +340,21 @@ export async function bootCatchUpStaleDream(args) {
   // `catchUpNudge()` adapter — same dedupe path as the interval timer
   // (both go through `fire({ manual: false })`), so a concurrent timer
   // tick will be coalesced by the existing in-flight guard.
+  //
+  // Fail closed if the scheduler shim doesn't expose `catchUpNudge`:
+  // the previous `triggerDreamForScopes()` fallback routed through
+  // `v2.triggerNow()` which sets `manual: true` and bypasses
+  // MIN_NEW_PER_GROUP — directly contradicting the contract documented
+  // above. Better to skip than to silently fire a different semantic.
+  // PR #743 review feedback (Martin).
   try {
     if (typeof args.dreamScheduler.catchUpNudge === 'function') {
       Promise.resolve(args.dreamScheduler.catchUpNudge()).catch(() => {});
       out.fired = true;
-    } else if (typeof args.dreamScheduler.triggerDreamForScopes === 'function') {
-      // Defensive fallback for shimmed schedulers in tests.
-      Promise.resolve(args.dreamScheduler.triggerDreamForScopes()).catch(() => {});
-      out.fired = true;
+    } else {
+      // Shim does not expose the non-manual catch-up path. Refuse to
+      // substitute a manual fire — the caller should upgrade the shim.
+      out.fired = false;
     }
   } catch {
     out.fired = false;
