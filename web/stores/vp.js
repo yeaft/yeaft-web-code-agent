@@ -217,6 +217,14 @@ export const useVpStore = defineStore('vp', {
           lastResult: ok ? {
             mergedCount: event.mergedCount ?? null,
             extractedCount: event.extractedCount ?? null,
+            // fix/dream-cadence-and-ui-trigger: bridge derives a single
+            // scalar `entriesCreated` (count of done targets) so the
+            // topbar bubble has a stable field to read; falls back to
+            // mergedCount/extractedCount if an older agent build is
+            // attached.
+            entriesCreated: typeof event.entriesCreated === 'number'
+              ? event.entriesCreated
+              : (event.mergedCount ?? event.extractedCount ?? 0),
             skipped: !!event.skipped,
             skippedReason: event.skippedReason || null,
           } : null,
