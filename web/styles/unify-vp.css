@@ -833,8 +833,9 @@
   color: var(--text-tertiary, var(--text-secondary, #9ca3af));
   white-space: nowrap;
   flex-shrink: 0;
-  /* Subtle pulse so the live ticker reads as "active" without being
-     loud — half-second cycle tied to the 1Hz nowMs ref's update cadence. */
+  /* Subtle 2s opacity pulse so the live ticker reads as "active" without
+     being loud. Independent of the 1Hz nowMs ref — the ref drives the
+     numeric updates, this animation just gives the digits a heartbeat. */
   animation: vp-turn-elapsed-pulse 2s ease-in-out infinite;
 }
 .vp-turn-block-elapsed::before {

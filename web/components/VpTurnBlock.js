@@ -54,6 +54,7 @@ import AssistantTurn from './AssistantTurn.js';
 import VpAvatar from './VpAvatar.js';
 import ToolLine from './ToolLine.js';
 import { useChatStore } from '../stores/chat.js';
+import { useVpStore } from '../stores/vp.js';
 import {
   compactBody,
   isExpanded as isExpandedFn,
@@ -72,7 +73,7 @@ export default {
   },
   template: `
     <div class="vp-turn-block"
-         :class="{ 'vp-turn-block-streaming': turn.isStreaming, 'vp-turn-block-collapsed': !expanded }"
+         :class="{ 'vp-turn-block-streaming': turn.isStreaming }"
          :data-turn-id="turn.turnId || ''"
          :data-vp-id="turn.speakerVpId || ''">
 
@@ -102,7 +103,6 @@ export default {
             v-if="displayName"
             class="vp-turn-block-name"
             @click.stop="onAvatarClick"
-            :role="turn.speakerVpId ? 'button' : null"
           >{{ displayName }}</span>
           <span
             v-if="startedTimeText"
@@ -180,6 +180,7 @@ export default {
   `,
   setup(props) {
     const store = useChatStore();
+    const vpStore = useVpStore();
     const t = Vue.inject('t', null);
 
     // 4-state expand machine. Initial value depends on whether the turn
@@ -214,11 +215,10 @@ export default {
     const displayName = Vue.computed(() => {
       const vpId = props.turn && props.turn.speakerVpId;
       if (!vpId) return '';
-      try {
-        return store.vpLabel(vpId) || vpId;
-      } catch {
-        return vpId;
-      }
+      // vpLabel lives on the VP store (same as VpAvatar / VpBadge); calling
+      // it on the chat store would silently TypeError and leave the always-
+      // visible header showing raw `vp-…` ids — the exact bug this PR fixes.
+      return vpStore.vpLabel(vpId) || vpId;
     });
 
     const onStopTurn = () => {
