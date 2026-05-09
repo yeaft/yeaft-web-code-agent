@@ -152,7 +152,7 @@ export default {
 
         <!-- Expanded body: full AssistantTurn delegates rendering of
              markdown text + tool history + todo + ask + images +
-             handoff pills. We pass `hide-speaker-header` so AssistantTurn
+             handoff pills. We pass 'hide-speaker-header' so AssistantTurn
              suppresses its own VpSpeakerHeader — the avatar/name are
              already in our right-column header. -->
         <AssistantTurn
