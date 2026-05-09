@@ -14,6 +14,15 @@ export default {
     conversationId: {
       type: String,
       default: null
+    },
+    // When true, suppresses the VpSpeakerHeader regardless of
+    // turn.showSpeakerHeader. Used by VpTurnBlock, which renders its own
+    // header in the right-column grid layout and would otherwise double the
+    // attribution. Default false keeps the legacy MessageList path
+    // unchanged.
+    hideSpeakerHeader: {
+      type: Boolean,
+      default: false
     }
   },
   template: `
@@ -23,7 +32,7 @@ export default {
            should show the attribution. Legacy 1:1 chat turns leave
            speakerVpId null → showSpeakerHeader stays false → inert. -->
       <VpSpeakerHeader
-        v-if="turn.showSpeakerHeader && turn.speakerVpId"
+        v-if="turn.showSpeakerHeader && turn.speakerVpId && !hideSpeakerHeader"
         :vp-id="turn.speakerVpId"
         :timestamp="turn.speakerTimestamp || 0"
         :state-cause="turn.speakerStateCause || ''"

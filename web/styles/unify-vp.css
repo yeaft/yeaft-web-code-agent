@@ -821,11 +821,13 @@
   white-space: nowrap;
   flex-shrink: 0;
 }
-.vp-turn-block-time::before {
-  content: '·';
-  margin-right: 6px;
+.vp-turn-block-sep {
+  font-size: 11px;
   font-family: system-ui;
   color: var(--text-tertiary, var(--text-secondary, #9ca3af));
+  white-space: nowrap;
+  flex-shrink: 0;
+  user-select: none;
 }
 .vp-turn-block-elapsed {
   font-size: 11px;
@@ -837,12 +839,6 @@
      being loud. Independent of the 1Hz nowMs ref — the ref drives the
      numeric updates, this animation just gives the digits a heartbeat. */
   animation: vp-turn-elapsed-pulse 2s ease-in-out infinite;
-}
-.vp-turn-block-elapsed::before {
-  content: '·';
-  margin-right: 6px;
-  font-family: system-ui;
-  color: var(--text-tertiary, var(--text-secondary, #9ca3af));
 }
 @keyframes vp-turn-elapsed-pulse {
   0%, 100% { opacity: 0.85; }

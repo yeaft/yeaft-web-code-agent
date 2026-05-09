@@ -105,10 +105,20 @@ export default {
             @click.stop="onAvatarClick"
           >{{ displayName }}</span>
           <span
+            v-if="displayName && startedTimeText"
+            class="vp-turn-block-sep"
+            aria-hidden="true"
+          >·</span>
+          <span
             v-if="startedTimeText"
             class="vp-turn-block-time"
             :title="startedTimeFullText"
           >{{ startedTimeText }}</span>
+          <span
+            v-if="turn.isStreaming && elapsedText"
+            class="vp-turn-block-sep"
+            aria-hidden="true"
+          >·</span>
           <span
             v-if="turn.isStreaming && elapsedText"
             class="vp-turn-block-elapsed"
@@ -141,14 +151,15 @@ export default {
 
         <!-- Expanded body: full AssistantTurn delegates rendering of
              markdown text + tool history + todo + ask + images +
-             handoff pills. We suppress AssistantTurn's own speaker
-             header (`showSpeakerHeader: false`) so the avatar/name
-             aren't doubled. -->
+             handoff pills. We pass `hide-speaker-header` so AssistantTurn
+             suppresses its own VpSpeakerHeader — the avatar/name are
+             already in our right-column header. -->
         <AssistantTurn
           v-if="expanded"
           class="vp-turn-block-body-expanded"
-          :turn="proxyTurn"
+          :turn="turn"
           :conversation-id="conversationId"
+          :hide-speaker-header="true"
         />
 
         <!-- Collapsed body: 6-line text tail + last 1 tool action.
@@ -243,15 +254,6 @@ export default {
       () => !!(props.turn && props.turn.isStreaming && props.turn.turnId)
     );
 
-    // Inner AssistantTurn shouldn't render its own speaker header — we
-    // already render the avatar in our own block header. Spreading via
-    // a proxy is cheap (object identity changes only when the relevant
-    // field flips) and avoids monkey-patching the upstream turn object.
-    const proxyTurn = Vue.computed(() => ({
-      ...props.turn,
-      showSpeakerHeader: false,
-    }));
-
     // Compact body — recomputed reactively as text streams in.
     const compactText = Vue.computed(() => compactBody(props.turn.textContent || '', 6));
 
@@ -264,23 +266,19 @@ export default {
     const startedTimeText = Vue.computed(() => {
       const ts = props.turn.speakerTimestamp;
       if (!ts) return '';
-      try {
-        const d = new Date(ts);
-        if (Number.isNaN(d.getTime())) return '';
-        return d.toLocaleTimeString(undefined, {
-          hour: '2-digit', minute: '2-digit',
-        });
-      } catch { return ''; }
+      const d = new Date(ts);
+      if (Number.isNaN(d.getTime())) return '';
+      return d.toLocaleTimeString(undefined, {
+        hour: '2-digit', minute: '2-digit',
+      });
     });
 
     const startedTimeFullText = Vue.computed(() => {
       const ts = props.turn.speakerTimestamp;
       if (!ts) return '';
-      try {
-        const d = new Date(ts);
-        if (Number.isNaN(d.getTime())) return '';
-        return d.toLocaleString();
-      } catch { return ''; }
+      const d = new Date(ts);
+      if (Number.isNaN(d.getTime())) return '';
+      return d.toLocaleString();
     });
 
     const elapsedText = Vue.computed(() => {
@@ -293,35 +291,25 @@ export default {
 
     const truncatedTitle = Vue.computed(() => {
       const total = compactText.value.totalLines;
-      if (t) {
-        try { return t('unify.vp.turnBlock.truncated', { total }); } catch {}
-      }
+      if (t) return t('unify.vp.turnBlock.truncated', { total });
       return `Showing last 6 of ${total} lines — click to expand.`;
     });
 
     const emptyText = Vue.computed(() => {
       if (props.turn.isStreaming) {
-        if (t) {
-          try { return t('unify.vp.turnBlock.thinking'); } catch {}
-        }
+        if (t) return t('unify.vp.turnBlock.thinking');
         return 'thinking…';
       }
-      if (t) {
-        try { return t('unify.vp.turnBlock.empty'); } catch {}
-      }
+      if (t) return t('unify.vp.turnBlock.empty');
       return '(no text)';
     });
 
     const toggleExpandTitle = Vue.computed(() => {
-      if (t) {
-        try { return t('unify.vp.turnBlock.expand'); } catch {}
-      }
+      if (t) return t('unify.vp.turnBlock.expand');
       return 'Expand turn';
     });
     const toggleCollapseTitle = Vue.computed(() => {
-      if (t) {
-        try { return t('unify.vp.turnBlock.collapse'); } catch {}
-      }
+      if (t) return t('unify.vp.turnBlock.collapse');
       return 'Collapse turn';
     });
 
@@ -332,7 +320,6 @@ export default {
       onStopTurn,
       isTyping,
       showStop,
-      proxyTurn,
       displayName,
       compactText,
       lastTool,
