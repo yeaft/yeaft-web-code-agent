@@ -197,6 +197,11 @@ export default {
   'unify.hideDebug': '隐藏调试面板',
   'unify.reloadPage': '刷新页面',
   'unify.switchModel': '切换模型',
+  // fix/dream-cadence-and-ui-trigger: manual dream trigger button.
+  'unify.dream.runNow': '立即整理记忆',
+  'unify.dream.lastRun': '上次：{ago}前',
+  'unify.dream.lastRunNever': '尚未运行',
+  'unify.dream.entriesCreated': '{n} 条',
   'unify.settings.title': '设置',
   // task-343: tab labels for the two-column Settings dialog
   'unify.settings.tabs.llm': 'LLM',

@@ -2872,3 +2872,88 @@
   color: var(--accent, #6366f1);
   background: var(--accent-soft, rgba(99, 102, 241, 0.10));
 }
+
+/* ── fix/dream-cadence-and-ui-trigger: manual dream trigger button ──
+   Sits to the LEFT of .unify-topbar-vp-toggle. Mirrors the shape of
+   the other topbar buttons (16 px icon, ~28 px hit-target). Three
+   visual states overlay on the same button so layout stays stable:
+     - idle:           muted icon
+     - running:        spin animation, disabled hit
+     - just-finished:  +N bubble (3 s)
+   A 24h-stale red dot may appear at the top-right when idle. */
+.unify-topbar-dream-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--text-muted, var(--text-secondary, #888));
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 6px;
+  transition: background 0.15s, color 0.15s;
+}
+.unify-topbar-dream-toggle:hover:not(:disabled),
+.unify-topbar-dream-toggle:focus-visible {
+  background: var(--sidebar-hover, var(--surface-1, rgba(0, 0, 0, 0.05)));
+  color: var(--text-primary, #1f2937);
+  outline: none;
+}
+.unify-topbar-dream-toggle:disabled {
+  cursor: default;
+  opacity: 0.85;
+}
+.unify-topbar-dream-toggle.running {
+  color: var(--accent, #6366f1);
+}
+.unify-topbar-dream-toggle.running .unify-topbar-dream-icon {
+  animation: unify-dream-spin 0.9s linear infinite;
+  transform-origin: 50% 50%;
+}
+.unify-topbar-dream-toggle.just-finished {
+  color: var(--success, #16a34a);
+}
+@keyframes unify-dream-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* Post-success "+N entries" bubble. Anchors to the button so the topbar
+   does not reflow. */
+.unify-topbar-dream-bubble {
+  position: absolute;
+  top: -6px;
+  right: -10px;
+  min-width: 18px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--success, #16a34a);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+  /* gentle fade-in; the disappearance is timer-driven (v-if flip) */
+  animation: unify-dream-bubble-in 0.18s ease-out;
+}
+@keyframes unify-dream-bubble-in {
+  from { opacity: 0; transform: translateY(2px) scale(0.9); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* 24h-stale red dot. 6 px solid; no animation, no number — the spec
+   explicitly calls for a subtle visual nudge, not a notification. */
+.unify-topbar-dream-staledot {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--error, #dc2626);
+  pointer-events: none;
+}

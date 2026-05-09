@@ -10,6 +10,11 @@ import UnifyDebugPanel from './UnifyDebugPanel.js';
 import VpTimelinePane from './VpTimelinePane.js';
 import { parseMentions } from '../utils/parseMentions.js';
 import { buildTimelineRows, selectGroupRosterVpList } from '../stores/helpers/vp-timeline.js';
+import {
+  DREAM_JUST_FINISHED_MS,
+  DREAM_REDDOT_THRESHOLD_MS,
+  DREAM_RELATIVE_TIME_REFRESH_MS,
+} from './dream-ui-constants.js';
 
 export default {
   name: 'UnifyPage',
@@ -144,7 +149,59 @@ export default {
             <!-- task-unify-group-ui-cleanup: VP-list show/hide moved here
                  (was at the left edge of the topbar). Mirrors Crew's
                  right-side panel toggles. Hidden under 1024 px because
-                 the pane itself is gated by the same breakpoint. -->
+                 the pane itself is gated by the same breakpoint.
+
+                 fix/dream-cadence-and-ui-trigger: manual dream trigger
+                 sits to the LEFT of the VP-list toggle. Three states —
+                 idle / running (spin) / just-finished (✓ + +N bubble).
+                 24h-stale red dot when the local cache shows no recent
+                 run. Backend wiring: ws unify_dream_trigger →
+                 handleUnifyDreamTrigger; updates flow back via
+                 unify_dream_status / unify_dream_result through
+                 vpStore.applyDreamStatus / applyDreamResult. -->
+            <button
+              class="unify-topbar-dream-toggle"
+              :class="{
+                running: dreamRunning,
+                'just-finished': dreamJustFinished,
+                stale: dreamStale,
+              }"
+              @click="onDreamTriggerClick"
+              :disabled="dreamRunning"
+              :title="dreamLastRunRelative
+                ? ($t('unify.dream.runNow') + '\n' + $t('unify.dream.lastRun', { ago: dreamLastRunRelative }))
+                : ($t('unify.dream.runNow') + '\n' + $t('unify.dream.lastRunNever'))"
+              :aria-label="$t('unify.dream.runNow')"
+              :aria-busy="dreamRunning ? 'true' : 'false'"
+            >
+              <!-- Composite icon: moon (idle) overlaid with a small
+                   refresh arc — distinct from clock (debug) and gear
+                   (settings) so the affordance is unambiguous. The
+                   spinner state hides the moon body and rotates the
+                   arc only. -->
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" class="unify-topbar-dream-icon">
+                <path class="unify-topbar-dream-moon" fill="currentColor"
+                  d="M14.5 3.5c-.5 1-.8 2.2-.8 3.4 0 4 3.3 7.3 7.3 7.3.4 0 .8 0 1.2-.1-1.1 4.1-4.8 7.1-9.2 7.1-5.3 0-9.5-4.3-9.5-9.5 0-4.4 3-8.1 7-9.2-.1.4 0 .7 0 1z"/>
+                <path class="unify-topbar-dream-arc" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                  d="M19.5 8.5a4 4 0 1 0 1 3.5"/>
+                <polyline class="unify-topbar-dream-arc-tip" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                  points="20.5 5.5 20.5 8.5 17.5 8.5"/>
+              </svg>
+              <!-- 3-second post-success bubble. Position absolute so it
+                   doesn't shift the topbar height. -->
+              <span
+                v-if="dreamJustFinished && dreamEntriesCreated !== null"
+                class="unify-topbar-dream-bubble"
+                aria-hidden="true"
+              >+{{ dreamEntriesCreated }}</span>
+              <!-- 24h-stale red dot. Pure visual nudge; click on the
+                   button still works the same. -->
+              <span
+                v-if="dreamStale && !dreamRunning && !dreamJustFinished"
+                class="unify-topbar-dream-staledot"
+                aria-hidden="true"
+              ></span>
+            </button>
             <button
               v-if="!isNarrowDetail"
               class="unify-topbar-vp-toggle"
@@ -562,6 +619,102 @@ export default {
       window.location.reload();
     };
 
+    // ── fix/dream-cadence-and-ui-trigger: manual dream trigger ──
+    // The button targets whichever VP key the agent will use to fan
+    // back the result. `handleUnifyDreamTrigger` defaults to 'default'
+    // when no vpId is sent; mirroring that here keeps the round-trip
+    // keys aligned with vpStore.dreamStatus[vpId].
+    const dreamButtonVpId = Vue.computed(() => {
+      const g = topbarGroup.value;
+      if (g && g.defaultVpId) return g.defaultVpId;
+      return 'default';
+    });
+
+    /** @type {import('vue').Ref<number|null>} just-finished flag — wall-clock when the last result arrived. */
+    const dreamFinishedAt = Vue.ref(null);
+    let dreamFinishedTimer = null;
+    /** Ticker used to re-evaluate "stale" + relative-time strings without re-rendering on every input event. */
+    const dreamTickMs = Vue.ref(Date.now());
+    let dreamTickHandle = null;
+    Vue.onMounted(() => {
+      // Refresh ticker — re-evaluates the relative-time tooltip and
+      // the 24h-stale check at DREAM_RELATIVE_TIME_REFRESH_MS cadence.
+      dreamTickHandle = setInterval(
+        () => { dreamTickMs.value = Date.now(); },
+        DREAM_RELATIVE_TIME_REFRESH_MS,
+      );
+    });
+    Vue.onBeforeUnmount(() => {
+      if (dreamTickHandle) { clearInterval(dreamTickHandle); dreamTickHandle = null; }
+      if (dreamFinishedTimer) { clearTimeout(dreamFinishedTimer); dreamFinishedTimer = null; }
+    });
+
+    const dreamStatusEntry = Vue.computed(
+      () => vpStore.dreamStatusFor(dreamButtonVpId.value),
+    );
+    const dreamRunning = Vue.computed(() => dreamStatusEntry.value.status === 'running');
+    const dreamLastRunAt = Vue.computed(() => dreamStatusEntry.value.lastRunAt);
+
+    // Auto-clear the post-success bubble after 3 s. Watching `lastRunAt`
+    // catches both success and error paths; we only show the +N badge on
+    // success (entriesCreated will be null on error).
+    Vue.watch(dreamLastRunAt, (newVal) => {
+      if (!newVal) return;
+      dreamFinishedAt.value = newVal;
+      if (dreamFinishedTimer) clearTimeout(dreamFinishedTimer);
+      dreamFinishedTimer = setTimeout(() => {
+        dreamFinishedAt.value = null;
+        dreamFinishedTimer = null;
+      }, DREAM_JUST_FINISHED_MS);
+    });
+
+    const dreamJustFinished = Vue.computed(() => {
+      const f = dreamFinishedAt.value;
+      if (!f) return false;
+      // Only paint the bubble for successful runs — error path leaves
+      // status='error' and lastResult=null.
+      return dreamStatusEntry.value.status === 'success'
+        && !!dreamStatusEntry.value.lastResult;
+    });
+    const dreamEntriesCreated = Vue.computed(() => {
+      const lr = dreamStatusEntry.value.lastResult;
+      if (!lr) return null;
+      const n = lr.entriesCreated;
+      return typeof n === 'number' ? n : null;
+    });
+
+    // Stale = no run observed yet OR last run >24h old. The local cache
+    // is per-tab; a freshly opened browser tab will always show stale
+    // until the server pushes a state snapshot or the user runs it
+    // manually. That's intentional — better to nudge once than to
+    // silently let dream rot.
+    const dreamStale = Vue.computed(() => {
+      const t = dreamLastRunAt.value;
+      if (!t) return true;
+      return (dreamTickMs.value - t) > DREAM_REDDOT_THRESHOLD_MS;
+    });
+
+    /** Format a millisecond delta as a short relative-time string. */
+    const formatRelativeFromNow = (whenMs) => {
+      if (!whenMs) return null;
+      const dt = Math.max(0, dreamTickMs.value - whenMs);
+      const min = Math.floor(dt / 60_000);
+      if (min < 1) return null; // "just now" handled by the bubble already
+      if (min < 60) return `${min}m`;
+      const hr = Math.floor(min / 60);
+      if (hr < 24) return `${hr}h`;
+      const day = Math.floor(hr / 24);
+      return `${day}d`;
+    };
+
+    /** Relative-time string for the tooltip's second line (or null = never run). */
+    const dreamLastRunRelative = Vue.computed(() => formatRelativeFromNow(dreamLastRunAt.value));
+
+    const onDreamTriggerClick = () => {
+      if (dreamRunning.value) return;
+      vpStore.triggerDream(dreamButtonVpId.value);
+    };
+
     // feat-6af5f9f1 PR C: the legacy debug helpers (toggleTurnExpand,
     // formatMessages, formatMsgContent, prettyJson, formatToolOutput,
     // getFunctionCallPairs, formatToolCalls, formatRawResponse) lived
@@ -944,6 +1097,13 @@ export default {
       onOpenVpDetailFromTimeline,
       // PR-4: per-VP abort from the timeline pane.
       onCancelVpFromTimeline,
+      // fix/dream-cadence-and-ui-trigger: manual dream trigger bindings.
+      dreamRunning,
+      dreamJustFinished,
+      dreamStale,
+      dreamEntriesCreated,
+      dreamLastRunRelative,
+      onDreamTriggerClick,
     };
   }
 };

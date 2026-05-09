@@ -13,7 +13,8 @@ import { join } from 'path';
 import { runDream } from './runner.js';
 import { createDreamScheduler } from './schedule.js';
 import { listGroups, openGroup } from '../groups/group-store.js';
-import { DREAM_NUDGE_AFTER_MESSAGES } from './limits.js';
+import { readGroupState } from './state.js';
+import { DREAM_NUDGE_AFTER_MESSAGES, DREAM_INTERVAL_HOURS } from './limits.js';
 
 /**
  * Build the per-call options for runDream. Pure: takes a session and returns
@@ -154,6 +155,12 @@ export function createV2DreamScheduler(session) {
 
   const v2 = createDreamScheduler({
     run,
+    // Server mode — the HTTP listener already pins the event loop, so the
+    // ticker should be allowed to participate normally. Without this, on
+    // some Node 22 builds the unref'd interval stops being scheduled and
+    // dream effectively never fires (observed in production: 12 days
+    // between ticks, see fix/dream-cadence-and-ui-trigger).
+    keepAlive: !!session?.config?.serverMode,
     logger: session.config?.debug ? console : undefined,
   });
   // Auto-start the timer.
@@ -192,6 +199,12 @@ export function createV2DreamScheduler(session) {
     noteUserMessage: nudgeOnUserMessage,
     triggerDreamNow() { return v2.triggerNow(); },
     triggerDreamForScopes(scopeFilter) { return v2.triggerNow(scopeFilter); },
+    /**
+     * Non-manual catch-up fire. MIN_NEW_PER_GROUP still applies, so groups
+     * below threshold are skipped — same shape as the interval timer
+     * tick. Used by `bootCatchUpStaleDream`.
+     */
+    catchUpNudge() { return v2.nudge(); },
     shutdown() { v2.stop(); },
     get isRunning() { return v2.isRunning(); },
     // Preserve direct access for tests.
@@ -244,5 +257,107 @@ export async function bootInitEmptyGroups(args) {
   // Fire-and-forget; the scheduler swallows its own failures.
   Promise.resolve(args.dreamScheduler.triggerDreamForScopes(empty)).catch(() => {});
   out.triggered = empty;
+  return out;
+}
+
+/**
+ * fix/dream-cadence-and-ui-trigger: stale-cadence catch-up.
+ *
+ * Walks every group on disk and reads the per-group `.dream-state`
+ * `lastDreamAt`. The newest of those is the effective "session was last
+ * cleanly Dream-processed at" timestamp. If that's older than
+ * `DREAM_INTERVAL_HOURS` (or there's no record at all and at least one
+ * group has user traffic), schedule a non-manual catch-up tick.
+ *
+ * Why this matters: the only thing previously triggering dream on a
+ * long-lived server was `setInterval(...).unref()` plus the user-traffic
+ * nudge. In practice (production: 12 days idle), neither fired reliably.
+ * This boot-time catch-up gives us a deterministic "if we were stale at
+ * boot, run once" guarantee that's independent of timer behaviour.
+ *
+ * MIN_NEW_PER_GROUP still gates per-group writes inside `runDream` —
+ * non-manual catch-up will not produce empty segment churn for groups
+ * that haven't crossed threshold.
+ *
+ * Pure side-effect, fire-and-forget.
+ *
+ * @param {{
+ *   yeaftDir: string,
+ *   dreamScheduler: { catchUpNudge?: () => Promise<any> },
+ *   intervalHours?: number,
+ *   now?: number,
+ *   config?: { debug?: boolean },
+ * }} args
+ * @returns {Promise<{ stale: boolean, lastDreamAt: string|null, ageMs: number|null, fired: boolean }>}
+ */
+export async function bootCatchUpStaleDream(args) {
+  const out = { stale: false, lastDreamAt: null, ageMs: null, fired: false };
+  if (!args || !args.dreamScheduler) return out;
+
+  const memoryRoot = join(args.yeaftDir, 'memory');
+  const groupsRoot = join(args.yeaftDir, 'groups');
+  const intervalMs = (args.intervalHours ?? DREAM_INTERVAL_HOURS) * 60 * 60 * 1000;
+  const now = args.now ?? Date.now();
+
+  let groupIds;
+  try { groupIds = listGroups(groupsRoot).map(g => g.id); }
+  catch { return out; }
+
+  // Find the newest lastDreamAt across all groups.
+  let newestAt = null;
+  let anyTraffic = false;
+  for (const gid of groupIds) {
+    let st;
+    try { st = await readGroupState(memoryRoot, gid); }
+    catch { continue; }
+    if (st.lastDreamAt) {
+      const t = Date.parse(st.lastDreamAt);
+      if (Number.isFinite(t) && (newestAt === null || t > newestAt)) newestAt = t;
+    }
+    if (!anyTraffic) {
+      try {
+        const h = openGroup(groupsRoot, gid);
+        const first = h.streamMessages().next();
+        if (!first.done) anyTraffic = true;
+      } catch { /* keep going */ }
+    }
+  }
+
+  // No groups, no traffic, nothing to catch up.
+  if (!anyTraffic) return out;
+
+  out.lastDreamAt = newestAt === null ? null : new Date(newestAt).toISOString();
+  out.ageMs = newestAt === null ? null : (now - newestAt);
+  out.stale = (newestAt === null) || (now - newestAt > intervalMs);
+  if (!out.stale) return out;
+
+  if (args.config?.debug) {
+    // eslint-disable-next-line no-console
+    console.log(`[dream-v2] boot catch-up: stale (lastDreamAt=${out.lastDreamAt}, ageMs=${out.ageMs}); firing one non-manual tick.`);
+  }
+
+  // Non-manual: MIN_NEW_PER_GROUP still applies. Use the public
+  // `catchUpNudge()` adapter — same dedupe path as the interval timer
+  // (both go through `fire({ manual: false })`), so a concurrent timer
+  // tick will be coalesced by the existing in-flight guard.
+  //
+  // Fail closed if the scheduler shim doesn't expose `catchUpNudge`:
+  // the previous `triggerDreamForScopes()` fallback routed through
+  // `v2.triggerNow()` which sets `manual: true` and bypasses
+  // MIN_NEW_PER_GROUP — directly contradicting the contract documented
+  // above. Better to skip than to silently fire a different semantic.
+  // PR #743 review feedback (Martin).
+  try {
+    if (typeof args.dreamScheduler.catchUpNudge === 'function') {
+      Promise.resolve(args.dreamScheduler.catchUpNudge()).catch(() => {});
+      out.fired = true;
+    } else {
+      // Shim does not expose the non-manual catch-up path. Refuse to
+      // substitute a manual fire — the caller should upgrade the shim.
+      out.fired = false;
+    }
+  } catch {
+    out.fired = false;
+  }
   return out;
 }

@@ -43,7 +43,7 @@ import { Engine } from './engine.js';
 import { ensureDefaultGroupIfEmpty } from './groups/group-crud.js';
 import { seedDefaultVps } from './vp/seed-defaults.js';
 import { runSummaryBackfill } from './memory/seed-backfill.js';
-import { createV2DreamScheduler, bootInitEmptyGroups } from './dream-v2/session-wiring.js';
+import { createV2DreamScheduler, bootInitEmptyGroups, bootCatchUpStaleDream } from './dream-v2/session-wiring.js';
 import { openSegmentIndex } from './memory/index-db.js';
 import { syncAll as syncSegmentIndex } from './memory/segment-sync.js';
 import { openAmsRegistry } from './memory/ams-registry.js';
@@ -97,6 +97,7 @@ export async function loadSession(options = {}) {
     skipSkills = false,
     extraTools = [],
     configOverrides = {},
+    serverMode = false,
   } = options;
 
   // ─── 1. Determine yeaftDir + ensure directory structure ──
@@ -119,6 +120,10 @@ export async function loadSession(options = {}) {
 
   // ─── 2. Load config ───────────────────────────────────
   const config = loadConfig(overrides);
+  // fix/dream-cadence-and-ui-trigger: tag config so the dream scheduler
+  // can decide whether to keep its interval timer alive (server) or
+  // unref it (CLI / tests). Non-persisted — set per-session by caller.
+  if (serverMode) config.serverMode = true;
 
   // ─── 2.1 Migration state check (task-334i) ────────────
   //        If the group-chat feature flag is on but migration has not
@@ -326,6 +331,21 @@ export async function loadSession(options = {}) {
       dreamScheduler,
       config,
     }).catch(() => { /* best-effort boot init */ });
+  }
+
+  // fix/dream-cadence-and-ui-trigger: stale-cadence catch-up. If the
+  // newest per-group lastDreamAt across all groups is older than
+  // DREAM_INTERVAL_HOURS (or absent and there's user traffic), fire a
+  // single non-manual tick now. Independent of the interval timer —
+  // necessary because production observed 12 days between scheduled
+  // ticks (the unref'd interval did not fire reliably on long-lived
+  // server processes).
+  if (!config._readOnly) {
+    bootCatchUpStaleDream({
+      yeaftDir,
+      dreamScheduler,
+      config,
+    }).catch(() => { /* best-effort catch-up */ });
   }
 
   // H2.f.5: thread engine registry, input queue, and dispatcher retired.

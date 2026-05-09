@@ -36,4 +36,42 @@ describe('createDreamScheduler', () => {
     const r = await sched.triggerNow();
     expect(r.error).toBe('boom');
   });
+  it('start() unrefs the timer by default (CLI / one-shot path)', () => {
+    const run = vi.fn(async () => ({ ok: true }));
+    const sched = createDreamScheduler({ run, intervalMs: 60_000 });
+    const origSetInterval = global.setInterval;
+    let captured = null;
+    global.setInterval = vi.fn((fn, ms) => {
+      const t = origSetInterval(fn, ms);
+      t.unref = vi.fn(t.unref?.bind(t) || (() => {}));
+      captured = t;
+      return t;
+    });
+    try {
+      sched.start();
+      expect(captured.unref).toHaveBeenCalledTimes(1);
+    } finally {
+      sched.stop();
+      global.setInterval = origSetInterval;
+    }
+  });
+  it('start() does NOT unref when keepAlive=true (server path)', () => {
+    const run = vi.fn(async () => ({ ok: true }));
+    const sched = createDreamScheduler({ run, intervalMs: 60_000, keepAlive: true });
+    const origSetInterval = global.setInterval;
+    let captured = null;
+    global.setInterval = vi.fn((fn, ms) => {
+      const t = origSetInterval(fn, ms);
+      t.unref = vi.fn(t.unref?.bind(t) || (() => {}));
+      captured = t;
+      return t;
+    });
+    try {
+      sched.start();
+      expect(captured.unref).not.toHaveBeenCalled();
+    } finally {
+      sched.stop();
+      global.setInterval = origSetInterval;
+    }
+  });
 });

@@ -1665,6 +1665,7 @@ async function ensureSessionLoaded() {
     ...(yeaftDir && { dir: yeaftDir }),
     skipMCP: false,
     skipSkills: false,
+    serverMode: true,
   });
 
   installUnifyRuntimeBridge(session);
@@ -2367,11 +2368,27 @@ export async function handleUnifyDreamTrigger(msg = {}) {
 
     const result = await session.dreamScheduler.triggerDreamNow();
 
+    // fix/dream-cadence-and-ui-trigger: derive a single "entries
+    // created" count for the UI bubble. The runner returns a richer
+    // shape (groups[], targets[]); the front-end button only needs a
+    // scalar plus the start timestamp.
+    const targets = Array.isArray(result?.targets) ? result.targets : [];
+    const entriesCreated = targets.filter(t => t && t.status === 'done').length;
+    const lastDreamAt = result?.startedAt || new Date().toISOString();
+
+    // Spread `result` FIRST so derived fields (success, entriesCreated,
+    // lastDreamAt) authoritatively shadow anything the runner might grow
+    // with the same name. Today there is no collision (runner.js returns
+    // { groups, targets, startedAt, error?, skipped? }) but the failure
+    // mode of the alternative ordering is silent — review feedback from
+    // PR #743.
     sendToServer({
       type: 'unify_dream_result',
       vpId,
-      success: !result.error && !result.skipped,
       ...result,
+      success: !result.error && !result.skipped,
+      entriesCreated,
+      lastDreamAt,
     });
   } catch (err) {
     sendToServer({
@@ -2570,6 +2587,7 @@ export async function handleUnifyLoadHistory(msg) {
       ...(yeaftDir && { dir: yeaftDir }),
       skipMCP: false,
       skipSkills: false,
+      serverMode: true,
     });
     installUnifyRuntimeBridge(session);
 
@@ -2762,6 +2780,7 @@ export async function resetUnifySession() {
       ...(yeaftDir && { dir: yeaftDir }),
       skipMCP: false,
       skipSkills: false,
+      serverMode: true,
     });
     installUnifyRuntimeBridge(session);
 

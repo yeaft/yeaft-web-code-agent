@@ -197,6 +197,11 @@ export default {
   'unify.hideDebug': 'Hide debug panel',
   'unify.reloadPage': 'Reload page',
   'unify.switchModel': 'Switch model',
+  // fix/dream-cadence-and-ui-trigger: manual dream trigger button.
+  'unify.dream.runNow': 'Run dream now',
+  'unify.dream.lastRun': 'Last run: {ago} ago',
+  'unify.dream.lastRunNever': 'Not run yet',
+  'unify.dream.entriesCreated': '{n} entries',
   'unify.settings.title': 'Settings',
   // task-343: tab labels for the two-column Settings dialog
   'unify.settings.tabs.llm': 'LLM',
