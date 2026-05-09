@@ -26,13 +26,22 @@ export const DEFAULT_INTERVAL_MS = DREAM_INTERVAL_HOURS * 60 * 60 * 1000;
  * everything `runDream` needs (memory root, llm, message-store hooks,
  * onProgress sink); the scheduler only knows how to call it.
  *
+ * `keepAlive` controls whether the interval timer holds the event loop
+ * open. Default `false` preserves the original behaviour (CLI / one-shot
+ * invocations should not be kept alive solely by the dream ticker). The
+ * web server passes `true` because (a) the HTTP listener already pins
+ * the loop, so unref'ing buys nothing, and (b) on Node 22 some platforms
+ * never schedule unref'd timers when nothing else wakes them — meaning
+ * the server saw zero ticks in production. See PR fix/dream-cadence.
+ *
  * @param {{
  *   run: (opts: { manual: boolean, scopeFilter?: string[] }) => Promise<object>,
  *   intervalMs?: number,
+ *   keepAlive?: boolean,
  *   logger?: { info?: (...a:any) => void, warn?: (...a:any) => void, error?: (...a:any) => void },
  * }} args
  */
-export function createDreamScheduler({ run, intervalMs = DEFAULT_INTERVAL_MS, logger }) {
+export function createDreamScheduler({ run, intervalMs = DEFAULT_INTERVAL_MS, keepAlive = false, logger }) {
   if (typeof run !== 'function') throw new Error('createDreamScheduler: run callable required');
   const log = logger || {};
   let timer = null;
@@ -60,8 +69,11 @@ export function createDreamScheduler({ run, intervalMs = DEFAULT_INTERVAL_MS, lo
     start() {
       if (timer) return;
       timer = setInterval(() => { fire({ manual: false }).catch(() => {}); }, intervalMs);
-      // Don't keep the event loop alive solely for the dream ticker.
-      if (typeof timer.unref === 'function') timer.unref();
+      // Server / long-lived hosts pass keepAlive=true so the interval
+      // participates in the loop normally. Short-lived hosts (CLI, tests)
+      // leave keepAlive=false to avoid pinning the loop open with the
+      // ticker alone.
+      if (!keepAlive && typeof timer.unref === 'function') timer.unref();
     },
     stop() {
       if (timer) { clearInterval(timer); timer = null; }
