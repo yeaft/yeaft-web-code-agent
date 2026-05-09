@@ -738,57 +738,119 @@
 }
 
 /* ---------------------------------------------------------------------
- * VpTurnBlock — collapsible per-VP turn wrapper (VP-block redesign,
- * Phase 3, 2026-05-08).
+ * VpTurnBlock — Slack-style two-column turn block (2026-05-09).
  *
- * Layout: [avatar 28px][meta name+time+elapsed][stop btn][toggle btn]
- *         [body — either compact 6-line tail or full AssistantTurn]
+ * Two-column grid: avatar gutter | main column (header + body).
+ *
+ *   ┌──────────────────────────────────────────────────────────┐
+ *   │ ┌─avatar──┐  Display Name · 15:42 · 5s     [stop] [^]    │
+ *   │ │ [36px]  │  body (text + tools, full or 6-line tail)    │
+ *   │ └─────────┘                                              │
+ *   └──────────────────────────────────────────────────────────┘
+ *
+ * The header stays visible regardless of collapse state, so "who
+ * replied" never disappears post-streaming. The body is the only
+ * thing the 4-state machine collapses.
  *
  * Per CLAUDE.md "No horizontal dividers" — block boundaries are drawn
- * by spacing alone (margin: 10px 0). Hover background is a soft tint
- * matching the timeline-row hover so the two surfaces feel paired.
+ * by spacing alone (margin: 12px 0). A vertical accent bar marks the
+ * actively streaming block.
  * ------------------------------------------------------------------ */
 .vp-turn-block {
   position: relative;
-  margin: 10px 0;
+  margin: 12px 0;
   padding: 0;
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  column-gap: 10px;
 }
 
-.vp-turn-block-header {
+.vp-turn-block-avatar {
+  grid-column: 1;
+  grid-row: 1;
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 2px;
+  /* Avatar size (36px) is set on VpAvatar prop; the gutter exactly
+     matches so the avatar fills the column edge-to-edge. */
+}
+.vp-turn-block-avatar-clickable {
+  cursor: pointer;
+  border-radius: 50%;
+  transition: opacity 0.15s ease;
+}
+.vp-turn-block-avatar-clickable:hover,
+.vp-turn-block-avatar-clickable:focus-visible {
+  opacity: 0.85;
+  outline: none;
+}
+
+.vp-turn-block-main {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
-  padding: 2px 0;
 }
-.vp-turn-block-header .vp-badge {
-  /* Avatar drives the left gutter — no extra indent on the badge. */
-  flex: 0 0 auto;
-}
-.vp-turn-block-meta {
+
+.vp-turn-block-main-header {
   display: flex;
   align-items: baseline;
-  gap: 6px;
-  margin-left: auto;
+  gap: 8px;
   min-width: 0;
-  font-size: 11px;
-  color: var(--text-secondary, #6b7280);
+  padding: 0;
+  margin-bottom: 2px;
+}
+.vp-turn-block-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, #222);
+  cursor: pointer;
+  user-select: none;
   white-space: nowrap;
   flex-shrink: 0;
 }
+.vp-turn-block-name:hover {
+  text-decoration: underline;
+}
 .vp-turn-block-time {
+  font-size: 11px;
+  color: var(--text-secondary, #6b7280);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.vp-turn-block-time::before {
+  content: '·';
+  margin-right: 6px;
+  font-family: system-ui;
+  color: var(--text-tertiary, var(--text-secondary, #9ca3af));
 }
 .vp-turn-block-elapsed {
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
   color: var(--text-tertiary, var(--text-secondary, #9ca3af));
+  white-space: nowrap;
+  flex-shrink: 0;
   /* Subtle pulse so the live ticker reads as "active" without being
      loud — half-second cycle tied to the 1Hz nowMs ref's update cadence. */
   animation: vp-turn-elapsed-pulse 2s ease-in-out infinite;
 }
+.vp-turn-block-elapsed::before {
+  content: '·';
+  margin-right: 6px;
+  font-family: system-ui;
+  color: var(--text-tertiary, var(--text-secondary, #9ca3af));
+}
 @keyframes vp-turn-elapsed-pulse {
   0%, 100% { opacity: 0.85; }
   50%      { opacity: 0.55; }
+}
+/* Spacer pushes stop / toggle to the right edge of the main column. */
+.vp-turn-block-spacer {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 .vp-turn-block-stop,
 .vp-turn-block-toggle {
@@ -804,6 +866,7 @@
   color: var(--text-muted, var(--text-secondary, #888));
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
+  flex-shrink: 0;
 }
 .vp-turn-block-stop:hover,
 .vp-turn-block-stop:focus-visible {
@@ -818,18 +881,19 @@
   outline: none;
 }
 
-/* Body indent — align text with the avatar's right edge so the visual
-   eye-line is "avatar | text". 28px badge + 8px gap = 36px gutter. */
-.vp-turn-block-compact,
-.vp-turn-block > .assistant-turn {
-  margin-left: 36px;
+/* Body: nested AssistantTurn or compact tail. Both inherit the main
+   column width — no extra indent (the avatar gutter already gives the
+   eye-line). */
+.vp-turn-block-body-expanded,
+.vp-turn-block-compact {
+  margin-top: 2px;
 }
 
 .vp-turn-block-compact {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 4px 0 2px;
+  padding: 2px 0;
   font-size: 13px;
   line-height: 1.5;
   color: var(--text-primary, #222);
@@ -880,9 +944,13 @@
   opacity: 0.5;
 }
 
-/* Dark-mode parity: just bump the elapsed text contrast. The accent
+/* Dark-mode parity: bump elapsed/time contrast slightly. The accent
    bar already uses --accent which is theme-aware. */
-[data-theme="dark"] .vp-turn-block-elapsed {
+[data-theme="dark"] .vp-turn-block-name {
+  color: var(--text-primary, #f9fafb);
+}
+[data-theme="dark"] .vp-turn-block-elapsed,
+[data-theme="dark"] .vp-turn-block-time {
   color: var(--text-tertiary, var(--text-secondary, #9ca3af));
 }
 [data-theme="dark"] .vp-turn-block-stop:hover,

@@ -1,38 +1,44 @@
 /**
- * VpTurnBlock — collapsible per-VP turn wrapper (VP-block redesign Phase 3).
+ * VpTurnBlock — Slack-style per-VP turn block (Slack-layout redesign,
+ * 2026-05-09). Two-column grid: avatar gutter on the LEFT, content
+ * column on the RIGHT. The content column has its own header on top
+ * (name + time + state cause + per-turn stop) and the message body
+ * (text + tools + todo + ask + images + hand-off pills) below it.
  *
- * Wraps an AssistantTurn for Unify multi-VP conversations. Each VP × turn
- * gets its own block, with:
- *   • Always-visible header: avatar + name + start time + (live elapsed
- *     ticker while streaming) + stop button + chevron toggle.
- *   • Collapsed body (default after streaming ends): last 6 lines of
- *     text + the most-recent 1 tool action — see compactBody helper.
- *   • Expanded body: the full AssistantTurn surface (all text, all tool
- *     history, todo, ask, images, hand-off pills, footer actions).
+ * Why a 2-column grid (vs. the prior horizontal flex header + indented
+ * body): the previous shape rendered `[avatar | name | time | toggle]`
+ * across the FULL row width, with the body indented 36px below. After
+ * a turn finished and entered `auto-collapsed`, the compact body
+ * stripped most context, and several reports came back saying the
+ * "who replied" identity disappeared visually because the eye-line
+ * separated the bare text from the small avatar a row up. The grid
+ * keeps avatar and message side-by-side at all times, like Slack /
+ * Crew workspace's `crew-message` layout.
  *
- * 4-state expand machine (see turn-compact.js docstring for the full
- * truth-table):
+ * Header content (always visible, never collapsed):
+ *   [Display name] · [HH:MM start time] [· Ns elapsed while streaming]
+ *                                                  [stop btn] [toggle]
  *
- *     'streaming'      — auto, while turn.isStreaming === true
- *     'auto-collapsed' — auto, after streaming ends
- *     'user-expanded'  — sticky, set when user clicks toggle to open
- *     'user-collapsed' — sticky, set when user clicks toggle to close
+ * Body collapse — kept the 4-state expand machine (see
+ * turn-compact.js) but ONLY collapses the body. The header is
+ * unconditional, so identity never disappears post-streaming, even
+ * in `auto-collapsed`:
  *
- * The user-* states win over auto-* transitions so a click during
- * streaming sticks even after the turn finishes (and vice-versa).
+ *     'streaming'      — auto, while turn.isStreaming === true     → expanded body
+ *     'auto-collapsed' — auto, after streaming ends                → collapsed body
+ *     'user-expanded'  — sticky, after user clicks chevron open    → expanded body
+ *     'user-collapsed' — sticky, after user clicks chevron close   → collapsed body
  *
- * Why a wrapper rather than baking collapse into AssistantTurn:
- *   AssistantTurn is reused by both Unify (multi-VP) and legacy 1:1
- *   Chat. Chat turns have no VP attribution and shouldn't gain a
- *   collapse affordance — the user wants to see every Chat turn
- *   in full. MessageList only mounts VpTurnBlock when the turn
- *   carries a `speakerVpId`; otherwise it falls through to a plain
- *   AssistantTurn render.
+ * Expanded body delegates to AssistantTurn (full markdown, tool
+ * history, todo, ask, images, footer actions). Collapsed body shows
+ * a 6-line tail + the most-recent tool action — same as before, just
+ * pinned next to the avatar instead of indented under a wide header.
  *
- * The live elapsed ticker is driven by a `nowMs` prop passed in by
- * MessageList (one shared interval per page, not per turn). This
- * avoids creating dozens of setInterval handles when many VPs are
- * speaking concurrently.
+ * MessageList mounts VpTurnBlock only when the turn carries a
+ * `speakerVpId`; legacy 1:1 chat turns (no VP attribution) fall
+ * through to a plain AssistantTurn. The live elapsed ticker is
+ * driven by a single page-shared `nowMs` ref passed in by MessageList
+ * (one interval, not per-turn).
  *
  * Props:
  *   turn         — required; the turn object produced by MessageList.turnGroups.
@@ -45,7 +51,7 @@
  *                  MessageList while any turn is streaming.
  */
 import AssistantTurn from './AssistantTurn.js';
-import VpBadge from './VpBadge.js';
+import VpAvatar from './VpAvatar.js';
 import ToolLine from './ToolLine.js';
 import { useChatStore } from '../stores/chat.js';
 import {
@@ -58,7 +64,7 @@ import {
 
 export default {
   name: 'VpTurnBlock',
-  components: { AssistantTurn, VpBadge, ToolLine },
+  components: { AssistantTurn, VpAvatar, ToolLine },
   props: {
     turn: { type: Object, required: true },
     conversationId: { type: String, default: null },
@@ -70,18 +76,34 @@ export default {
          :data-turn-id="turn.turnId || ''"
          :data-vp-id="turn.speakerVpId || ''">
 
-      <!-- Header: avatar (left gutter) + name + time + elapsed + stop + toggle -->
-      <div class="vp-turn-block-header">
-        <VpBadge
+      <!-- Left gutter: avatar only. Clickable opens VP detail. The
+           name lives in the right column's header so it shares the
+           message column's text baseline (Slack style). -->
+      <div class="vp-turn-block-avatar"
+           :class="{ 'vp-turn-block-avatar-clickable': !!turn.speakerVpId }"
+           @click.stop="onAvatarClick"
+           :title="displayName"
+           :role="turn.speakerVpId ? 'button' : null"
+           :tabindex="turn.speakerVpId ? '0' : null"
+           @keydown.enter.stop="onAvatarClick"
+           @keydown.space.stop.prevent="onAvatarClick">
+        <VpAvatar
           v-if="turn.speakerVpId"
           :vp-id="turn.speakerVpId"
-          :size="28"
-          :show-subtitle="true"
-          :clickable="true"
+          :size="36"
           :typing="isTyping"
-          @open-detail="onOpenVpDetail"
         />
-        <span class="vp-turn-block-meta">
+      </div>
+
+      <!-- Right column: header (always visible) + body (collapsible) -->
+      <div class="vp-turn-block-main">
+        <div class="vp-turn-block-main-header">
+          <span
+            v-if="displayName"
+            class="vp-turn-block-name"
+            @click.stop="onAvatarClick"
+            :role="turn.speakerVpId ? 'button' : null"
+          >{{ displayName }}</span>
           <span
             v-if="startedTimeText"
             class="vp-turn-block-time"
@@ -92,64 +114,67 @@ export default {
             class="vp-turn-block-elapsed"
             :title="$t ? $t('unify.vp.turnBlock.elapsedTitle') : 'Elapsed time'"
             aria-live="polite"
-          >· {{ elapsedText }}</span>
-        </span>
-        <button
-          v-if="showStop"
-          type="button"
-          class="vp-turn-block-stop"
-          @click.stop="onStopTurn"
-          :title="$t ? $t('unify.vp.speaker.stop') : 'Stop'"
-          :aria-label="$t ? $t('unify.vp.speaker.stop') : 'Stop'"
-        ><svg viewBox="0 0 24 24" width="14" height="14"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></svg></button>
-        <button
-          type="button"
-          class="vp-turn-block-toggle"
-          @click.stop="onToggle"
-          :title="expanded ? toggleCollapseTitle : toggleExpandTitle"
-          :aria-label="expanded ? toggleCollapseTitle : toggleExpandTitle"
-          :aria-expanded="expanded ? 'true' : 'false'"
-        >
-          <svg viewBox="0 0 24 24" width="14" height="14">
-            <path v-if="expanded" fill="currentColor" d="M7 14l5-5 5 5z"/>
-            <path v-else fill="currentColor" d="M7 10l5 5 5-5z"/>
-          </svg>
-        </button>
-      </div>
-
-      <!-- Expanded body: full AssistantTurn (passes the same turn object).
-           The original AssistantTurn already renders its own VpSpeakerHeader
-           when turn.showSpeakerHeader is true; we set showSpeakerHeader=false
-           on the proxy turn so we don't double up the avatar. -->
-      <AssistantTurn
-        v-if="expanded"
-        :turn="proxyTurn"
-        :conversation-id="conversationId"
-      />
-
-      <!-- Collapsed body: last 6 lines of text + last 1 tool action.
-           Empty turn (no text, no tools) collapses to an empty body, which
-           is fine because the header already shows avatar + name. -->
-      <div v-else class="vp-turn-block-compact">
-        <div
-          v-if="compactText.text"
-          class="vp-turn-block-compact-text"
-          :class="{ 'vp-turn-block-compact-truncated': compactText.truncated }"
-          :title="compactText.truncated ? truncatedTitle : ''"
-        >{{ compactText.text }}</div>
-        <div v-if="lastTool" class="vp-turn-block-compact-tool">
-          <ToolLine
-            :tool-name="lastTool.toolName"
-            :tool-input="lastTool.toolInput"
-            :tool-result="lastTool.toolResult"
-            :has-result="!!lastTool.hasResult"
-            :start-time="lastTool.startTime"
-          />
+          >{{ elapsedText }}</span>
+          <span class="vp-turn-block-spacer"></span>
+          <button
+            v-if="showStop"
+            type="button"
+            class="vp-turn-block-stop"
+            @click.stop="onStopTurn"
+            :title="$t ? $t('unify.vp.speaker.stop') : 'Stop'"
+            :aria-label="$t ? $t('unify.vp.speaker.stop') : 'Stop'"
+          ><svg viewBox="0 0 24 24" width="14" height="14"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></svg></button>
+          <button
+            type="button"
+            class="vp-turn-block-toggle"
+            @click.stop="onToggle"
+            :title="expanded ? toggleCollapseTitle : toggleExpandTitle"
+            :aria-label="expanded ? toggleCollapseTitle : toggleExpandTitle"
+            :aria-expanded="expanded ? 'true' : 'false'"
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14">
+              <path v-if="expanded" fill="currentColor" d="M7 14l5-5 5 5z"/>
+              <path v-else fill="currentColor" d="M7 10l5 5 5-5z"/>
+            </svg>
+          </button>
         </div>
-        <div
-          v-if="!compactText.text && !lastTool"
-          class="vp-turn-block-compact-empty"
-        >{{ emptyText }}</div>
+
+        <!-- Expanded body: full AssistantTurn delegates rendering of
+             markdown text + tool history + todo + ask + images +
+             handoff pills. We suppress AssistantTurn's own speaker
+             header (`showSpeakerHeader: false`) so the avatar/name
+             aren't doubled. -->
+        <AssistantTurn
+          v-if="expanded"
+          class="vp-turn-block-body-expanded"
+          :turn="proxyTurn"
+          :conversation-id="conversationId"
+        />
+
+        <!-- Collapsed body: 6-line text tail + last 1 tool action.
+             Identity is preserved by the header above — the body just
+             communicates "what they said / what they did". -->
+        <div v-else class="vp-turn-block-compact">
+          <div
+            v-if="compactText.text"
+            class="vp-turn-block-compact-text"
+            :class="{ 'vp-turn-block-compact-truncated': compactText.truncated }"
+            :title="compactText.truncated ? truncatedTitle : ''"
+          >{{ compactText.text }}</div>
+          <div v-if="lastTool" class="vp-turn-block-compact-tool">
+            <ToolLine
+              :tool-name="lastTool.toolName"
+              :tool-input="lastTool.toolInput"
+              :tool-result="lastTool.toolResult"
+              :has-result="!!lastTool.hasResult"
+              :start-time="lastTool.startTime"
+            />
+          </div>
+          <div
+            v-if="!compactText.text && !lastTool"
+            class="vp-turn-block-compact-empty"
+          >{{ emptyText }}</div>
+        </div>
       </div>
     </div>
   `,
@@ -177,11 +202,24 @@ export default {
       expandState.value = toggleState(expandState.value);
     };
 
-    const onOpenVpDetail = (vpId) => {
-      // Reuse the same path the timeline + speaker header use.
+    const onAvatarClick = () => {
+      // Reuse the same path the timeline + speaker header use. Click on
+      // either the avatar gutter or the name in the right-column header
+      // routes here so users have a wide, obvious affordance.
+      const vpId = props.turn && props.turn.speakerVpId;
       if (!vpId) return;
       store.enterVpDetailView(vpId);
     };
+
+    const displayName = Vue.computed(() => {
+      const vpId = props.turn && props.turn.speakerVpId;
+      if (!vpId) return '';
+      try {
+        return store.vpLabel(vpId) || vpId;
+      } catch {
+        return vpId;
+      }
+    });
 
     const onStopTurn = () => {
       const turnId = props.turn && props.turn.turnId;
@@ -290,11 +328,12 @@ export default {
     return {
       expanded,
       onToggle,
-      onOpenVpDetail,
+      onAvatarClick,
       onStopTurn,
       isTyping,
       showStop,
       proxyTurn,
+      displayName,
       compactText,
       lastTool,
       startedTimeText,
