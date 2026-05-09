@@ -363,13 +363,12 @@ describe('buildTimelineRows', () => {
 // ─────────────────────────────────────────────────────────────────
 // selectGroupRosterVpList — the projection the middle "VP 列表"
 // column uses to scope its base list to the active group's roster.
-// Bug fix: previously the column read the full vpStore.vpList and
-// only narrowed by message activity, so a 4-member group on a 12-VP
-// library showed all 12. The contract pinned here:
-//   - roster=[]              → []
-//   - roster non-empty + lib hits → roster-ordered, library-hydrated
-//   - roster id missing in lib → silently skipped (race tolerance)
-//   - lib=[] / null inputs → []
+// Contract (roster-first, 2026-05-09):
+//   Roster is the source of truth. The library only supplies display
+//   fields. A roster id missing from the library still produces a row,
+//   stubbed as { vpId: id } so the consumer can fall back to the raw
+//   id while vp_snapshot hydrates. Empty/null roster → []; empty
+//   library is fine (every row gets stubbed).
 // ─────────────────────────────────────────────────────────────────
 describe('selectGroupRosterVpList', () => {
   const LIBRARY = [
@@ -410,15 +409,19 @@ describe('selectGroupRosterVpList', () => {
     expect(selectGroupRosterVpList(undefined, LIBRARY)).toEqual([]);
   });
 
-  it('returns [] for empty/null library', () => {
-    expect(selectGroupRosterVpList(['ada'], [])).toEqual([]);
-    expect(selectGroupRosterVpList(['ada'], null)).toEqual([]);
+  it('stubs every roster id when library is empty/null (hydration race)', () => {
+    expect(selectGroupRosterVpList(['ada'], [])).toEqual([{ vpId: 'ada' }]);
+    expect(selectGroupRosterVpList(['ada'], null)).toEqual([{ vpId: 'ada' }]);
   });
 
-  it('silently skips roster ids not yet in the library (race tolerance)', () => {
+  it('stubs roster ids not yet in the library while keeping order', () => {
     const roster = ['ada', 'unknown-yet', 'linus'];
     const out = selectGroupRosterVpList(roster, LIBRARY);
-    expect(out.map((v) => v.vpId)).toEqual(['ada', 'linus']);
+    expect(out.map((v) => v.vpId)).toEqual(['ada', 'unknown-yet', 'linus']);
+    // Hydrated row carries display fields; stubbed row is bare.
+    expect(out[0].displayName).toBe('Ada Lovelace');
+    expect(out[1]).toEqual({ vpId: 'unknown-yet' });
+    expect(out[2].displayName).toBe('Linus Torvalds');
   });
 
   it('tolerates malformed library entries', () => {
@@ -429,6 +432,12 @@ describe('selectGroupRosterVpList', () => {
 
   it('de-duplicates repeated roster ids', () => {
     const out = selectGroupRosterVpList(['ada', 'ada', 'linus', 'ada'], LIBRARY);
+    expect(out.map((v) => v.vpId)).toEqual(['ada', 'linus']);
+  });
+
+  it('drops falsy roster entries (null / undefined / empty string)', () => {
+    const roster = [null, 'ada', undefined, '', 'linus'];
+    const out = selectGroupRosterVpList(roster, LIBRARY);
     expect(out.map((v) => v.vpId)).toEqual(['ada', 'linus']);
   });
 });

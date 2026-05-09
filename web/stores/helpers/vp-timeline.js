@@ -71,22 +71,30 @@ export function truncateSnippet(text, max) {
  * { vpId, displayName, ... } list that `buildTimelineRows` expects.
  *
  * The middle "VP 列表" column is roster-scoped — it must show ONLY
- * the active group's declared members, in roster order, hydrated
- * from the global VP library for display fields. A roster id missing
- * from the library is silently skipped (rare race when a roster
- * delta lands before vp_snapshot has hydrated the new VP).
+ * the active group's declared members, in roster order. Roster is the
+ * source of truth; the library only supplies display fields. A roster
+ * id missing from the library is stubbed as `{ vpId: id }` so the
+ * column still renders a row for every roster member while
+ * vp_snapshot hydrates (the consumer's label callback falls back to
+ * the raw id until then).
  *
  * @param {string[]|null|undefined} roster   array of vpIds for the group
  * @param {Array<{vpId:string,displayName?:string,displayNameZh?:string}>|null|undefined} library
  *     full VP library, e.g. vpStore.vpList
- * @returns {Array<object>}  filtered + roster-ordered VPs
+ * @returns {Array<object>}  roster-ordered VPs (hydrated where possible, stubbed otherwise)
  */
 export function selectGroupRosterVpList(roster, library) {
   if (!Array.isArray(roster) || roster.length === 0) return [];
-  if (!Array.isArray(library) || library.length === 0) return [];
+  // Roster is the source of truth — never gate on library presence.
+  // If the VP library hasn't hydrated yet (vp_snapshot race), we still
+  // emit a row per roster id with a stub `{ vpId: id }`. The consumer
+  // (UnifyPage / VpTimelinePane) falls back to the raw vpId for display
+  // and re-renders cleanly once the library catches up.
   const byId = new Map();
-  for (const vp of library) {
-    if (vp && vp.vpId) byId.set(vp.vpId, vp);
+  if (Array.isArray(library)) {
+    for (const vp of library) {
+      if (vp && vp.vpId) byId.set(vp.vpId, vp);
+    }
   }
   // De-duplicate roster ids — a malformed agent payload or a UI race
   // that double-adds the same VP must not produce duplicate rows
@@ -94,11 +102,9 @@ export function selectGroupRosterVpList(roster, library) {
   const seen = new Set();
   const out = [];
   for (const id of roster) {
-    if (seen.has(id)) continue;
-    const vp = byId.get(id);
-    if (!vp) continue;
+    if (!id || seen.has(id)) continue;
     seen.add(id);
-    out.push(vp);
+    out.push(byId.get(id) || { vpId: id });
   }
   return out;
 }

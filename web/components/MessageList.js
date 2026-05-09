@@ -1,7 +1,6 @@
 import MessageItem from './MessageItem.js';
 import AssistantTurn from './AssistantTurn.js';
 import VpTurnBlock from './VpTurnBlock.js';
-import VpBadge from './VpBadge.js';
 import VpSpeakerHeader from './VpSpeakerHeader.js';
 import ReflectionCard from './ReflectionCard.js';
 import SubAgentCard from './SubAgentCard.js';
@@ -10,7 +9,7 @@ import { appendTypingPlaceholders } from '../stores/helpers/typing-placeholders.
 
 export default {
   name: 'MessageList',
-  components: { MessageItem, AssistantTurn, VpTurnBlock, VpBadge, VpSpeakerHeader, ReflectionCard, SubAgentCard, GroupAnnouncementBar },
+  components: { MessageItem, AssistantTurn, VpTurnBlock, VpSpeakerHeader, ReflectionCard, SubAgentCard, GroupAnnouncementBar },
   template: `
     <main class="chat-container" ref="containerRef">
       <!-- Session Loading Overlay - only covers message area -->
@@ -107,56 +106,7 @@ export default {
              affordance can drive either mode without leaking state. -->
         <div v-if="(store.loadingMoreMessages && store.currentView !== 'unify') || store.unifyLoadingMoreHistory" class="loading-more">{{ $t('message.loadingMore') }}</div>
         <div v-else-if="(store.hasMoreMessages && store.currentView !== 'unify') || store.unifyHasMoreHistory" class="load-more-hint" @click="onClickLoadMore">{{ $t('message.loadMore') }}</div>
-        <template v-if="showGroupVpThreads">
-          <template v-for="item in groupLevelRows" :key="item.id">
-            <div class="msg-row" :data-msg-id="item.id" :class="{ 'msg-flash': item.id === flashMsgId }">
-              <MessageItem v-if="item.type === 'user' || item.type === 'system' || item.type === 'error'" :message="item.message" />
-              <AssistantTurn v-else-if="item.type === 'assistant-turn'" :turn="item" />
-            </div>
-            <SubAgentCard
-              v-for="card in subAgentCardsForRow(item)"
-              :key="card.key"
-              :card="card"
-            />
-          </template>
-          <section
-            v-for="section in groupVpSections"
-            :key="section.vpId"
-            class="unify-vp-thread-section"
-            :class="{ 'is-empty': section.items.length === 0 }"
-            :data-vp-id="section.vpId"
-          >
-            <header class="unify-vp-thread-header">
-              <VpBadge
-                :vp-id="section.vpId"
-                :size="28"
-                :show-subtitle="true"
-                :clickable="true"
-                @open-detail="onOpenVpDetail"
-              />
-              <span class="unify-vp-thread-count">{{ section.items.length }}</span>
-            </header>
-            <div v-if="section.items.length" class="unify-vp-thread-body">
-              <template v-for="item in section.items" :key="item.id">
-                <div class="msg-row" :data-msg-id="item.id" :class="{ 'msg-flash': item.id === flashMsgId }">
-                  <VpTurnBlock
-                    v-if="item.type === 'assistant-turn' && item.speakerVpId"
-                    :turn="item"
-                    :now-ms="nowMs"
-                  />
-                  <AssistantTurn v-else-if="item.type === 'assistant-turn'" :turn="item" />
-                </div>
-                <SubAgentCard
-                  v-for="card in subAgentCardsForRow(item)"
-                  :key="card.key"
-                  :card="card"
-                />
-              </template>
-            </div>
-            <div v-else class="unify-vp-thread-empty">{{ $t('unify.vpTimeline.noSnippet') }}</div>
-          </section>
-        </template>
-        <template v-if="!showGroupVpThreads" v-for="item in turnGroups" :key="item.id">
+        <template v-for="item in turnGroups" :key="item.id">
           <!-- task-312: wrapper carries data-msg-id so the Unify sidebar
                jump-to-message feature can scroll/flash a specific row. -->
           <div class="msg-row" :data-msg-id="item.id" :class="{ 'msg-flash': item.id === flashMsgId }">
@@ -540,27 +490,6 @@ export default {
       return null;
     });
 
-    const activeGroup = Vue.computed(() => {
-      const id = activeGroupIdForBar.value;
-      if (!id) return null;
-      const gs = groupsStore();
-      return gs?.groups?.[id] || null;
-    });
-
-    const activeGroupRoster = Vue.computed(() => {
-      const roster = activeGroup.value && Array.isArray(activeGroup.value.roster)
-        ? activeGroup.value.roster
-        : [];
-      const seen = new Set();
-      const out = [];
-      for (const vpId of roster) {
-        if (!vpId || seen.has(vpId)) continue;
-        seen.add(vpId);
-        out.push(vpId);
-      }
-      return out;
-    });
-
     // Online agents
     const onlineAgents = Vue.computed(() => {
       return store.agents.filter(a => a.online);
@@ -784,35 +713,6 @@ export default {
       );
 
       return result;
-    });
-
-    const showGroupVpThreads = Vue.computed(() => {
-      return store.currentView === 'unify'
-        && !!store.unifyActiveGroupFilter
-        && activeGroupRoster.value.length > 0;
-    });
-
-    const groupLevelRows = Vue.computed(() => {
-      if (!showGroupVpThreads.value) return [];
-      return turnGroups.value.filter((item) => {
-        if (!item) return false;
-        if (item.type === 'assistant-turn') return !item.speakerVpId;
-        return item.type === 'user' || item.type === 'system' || item.type === 'error';
-      });
-    });
-
-    const groupVpSections = Vue.computed(() => {
-      if (!showGroupVpThreads.value) return [];
-      const roster = activeGroupRoster.value;
-      const rosterSet = new Set(roster);
-      const byVp = new Map(roster.map((vpId) => [vpId, []]));
-      for (const item of turnGroups.value) {
-        if (!item || item.type !== 'assistant-turn') continue;
-        const vpId = item.speakerVpId;
-        if (!vpId || !rosterSet.has(vpId)) continue;
-        byVp.get(vpId).push(item);
-      }
-      return roster.map((vpId) => ({ vpId, items: byVp.get(vpId) || [] }));
     });
 
     // PR-L: reflection cards grouped by anchor (the message id present at the
@@ -1373,11 +1273,6 @@ export default {
       if (dogRafId) { cancelAnimationFrame(dogRafId); dogRafId = null; }
     });
 
-    const onOpenVpDetail = (vpId) => {
-      if (!vpId) return;
-      store.enterVpDetailView(vpId);
-    };
-
     // GroupAnnouncementBar's "open settings" link bubbles a request up
     // to the parent page (UnifyPage) so the unified GroupSettingsModal
     // can be opened with the right group id and an initial section
@@ -1424,12 +1319,8 @@ export default {
       questionLX,
       questionRX,
       refreshSession,
-      onOpenVpDetail,
       onlineAgents,
       turnGroups,
-      showGroupVpThreads,
-      groupLevelRows,
-      groupVpSections,
       cardsForRow,
       orphanCards,
       subAgentCardsForRow,

@@ -114,21 +114,6 @@ describe('MessageList — standalone vp-typing-row removed', () => {
   });
 });
 
-describe('MessageList group view — roster-scoped VP sections', () => {
-  const src = read('web/components/MessageList.js');
-
-  it('renders roster-backed VP sections instead of a flat active-speaker-only stream', () => {
-    expect(src).toContain('showGroupVpThreads');
-    expect(src).toContain('v-for="section in groupVpSections"');
-    expect(src).toContain('class="unify-vp-thread-section"');
-  });
-
-  it('keeps empty roster members visible', () => {
-    expect(src).toContain('return roster.map((vpId) => ({ vpId, items: byVp.get(vpId) || [] }))');
-    expect(src).toContain('unify-vp-thread-empty');
-  });
-});
-
 describe('MessageList aggregator — every VP turn keeps its avatar (no collapse)', () => {
   const src = read('web/components/MessageList.js');
 
