@@ -1278,10 +1278,30 @@ export class Engine {
 
     // PR-L: track this query()'s tool-arc for reflection.
     // `turnStartIdx` is where the current user message lives; the arc
-    // we may collapse spans (turnStartIdx + 1 .. last assistant/tool).
+    // we may collapse spans (arcStartIdx .. last assistant/tool).
+    //
+    // Periodic-T1 fix: T1 must fire EVERY TOOL_BATCH_SIZE (13) tool
+    // calls, not just the first 13. So instead of a one-shot boolean,
+    // track:
+    //   • `lastT1AtToolCount` — toolCount snapshot at the last T1
+    //     ATTEMPT (success OR error). Trigger when
+    //     `queryToolCount - lastT1AtToolCount >= TOOL_BATCH_SIZE`.
+    //   • `arcStartIdx` — first index of the current (uncollapsed)
+    //     tool arc. Initialised to turnStartIdx + 1; reset after each
+    //     successful T1 collapse to `conversationMessages.length`
+    //     (i.e. the slot the next assistant message will land in).
+    //   • `t1CollapsesDone` — count of T1 firings that ACTUALLY
+    //     rewrote history. Distinct from `lastT1AtToolCount` because
+    //     the catch block bumps the latter to back off after a
+    //     transient reflector error WITHOUT having collapsed
+    //     anything. The T2 schedule check below is gated on this
+    //     counter (==0 means "no T1 ever rewrote the arc, T2 may
+    //     fall back at end_turn").
     const turnStartIdx = conversationMessages.length - 1;
     let queryToolCount = 0;
-    let t1Fired = false;
+    let lastT1AtToolCount = 0;
+    let arcStartIdx = turnStartIdx + 1;
+    let t1CollapsesDone = 0;
     const queryNumber = (this.#__queryCounter = (this.#__queryCounter || 0) + 1);
 
     // feat-6af5f9f1 PR B: a Turn = one user prompt + all AI responses.
@@ -1784,10 +1804,17 @@ export class Engine {
 
         // PR-L: T2 end-of-turn (asynchronous) reflection. Fires when the
         // total tool count for this query() exceeds TURN_SUMMARY_THRESHOLD
-        // (5) AND T1 didn't already collapse the arc. Kicks off the
+        // (5) AND no T1 has actually rewritten the arc yet. Kicks off the
         // primary-model call without await; the next query()'s
         // `#applyPendingT2Reflections` carries the result forward.
-        if (queryToolCount > TURN_SUMMARY_THRESHOLD && !t1Fired) {
+        //
+        // Periodic-T1 fix: gate on `t1CollapsesDone === 0`, NOT
+        // `lastT1AtToolCount === 0`. The catch block of T1 bumps
+        // `lastT1AtToolCount` after a reflector error to avoid
+        // tight-loop retries — but no collapse happened, so T2 should
+        // still be allowed to fall back at end_turn. Fowler-review
+        // critical finding.
+        if (queryToolCount > TURN_SUMMARY_THRESHOLD && t1CollapsesDone === 0) {
           const arcStart = turnStartIdx + 1;
           const arcEnd = conversationMessages.length - 1;
           if (arcEnd > arcStart) {
@@ -2029,23 +2056,41 @@ export class Engine {
         break;
       }
 
-      // PR-L: T1 in-turn (synchronous) reflection. Fires exactly once per
-      // query() lifetime, the moment queryToolCount crosses
-      // TOOL_BATCH_SIZE (13). Generates a markdown reflection over the
-      // assistant+tool arc since the user prompt and rewrites the history
-      // in place — collapsing it to a SINGLE assistant message — before
-      // the next adapter.stream() runs.
-      if (!t1Fired
-          && queryToolCount >= TOOL_BATCH_SIZE
-          && !this.#reflectedTurns.has(`${queryNumber}:t1`)
-          && !abortedDuringTools && !signal?.aborted) {
-        t1Fired = true;
-        this.#reflectedTurns.add(`${queryNumber}:t1`);
+      // PR-L: T1 in-turn (synchronous) reflection. Fires once per
+      // adapter loop iteration where ≥ TOOL_BATCH_SIZE (13) tool
+      // calls have accumulated since the last T1 firing — not just
+      // the first 13 of the query(). Generates a markdown reflection
+      // over the assistant+tool arc since the last T1 firing (or
+      // since the user prompt for the first batch) and rewrites that
+      // range to a SINGLE synthetic user message before the next
+      // adapter.stream() runs.
+      //
+      // Loop semantics:
+      //   - First batch: arcStartIdx = turnStartIdx + 1, fires when
+      //     queryToolCount reaches 13.
+      //   - Each subsequent batch: arcStartIdx is updated to the slot
+      //     right after the just-inserted reflection message; fires
+      //     again whenever 13 more tools have run since
+      //     lastT1AtToolCount.
+      //   - The dedup Set key includes `lastT1AtToolCount` so each
+      //     batch within the same query gets a distinct entry — without
+      //     this the second batch would be silently skipped.
+      const t1BatchDue = queryToolCount - lastT1AtToolCount >= TOOL_BATCH_SIZE;
+      if (t1BatchDue && !abortedDuringTools && !signal?.aborted) {
+        const t1DedupKey = `${queryNumber}:t1:${queryToolCount}`;
+        if (this.#reflectedTurns.has(t1DedupKey)) {
+          // Defensive: should never hit since t1BatchDue gates re-entry
+          // and queryNumber namespaces queries. Kept as belt-and-
+          // suspenders against any future external mutation of the
+          // cursor (or a re-entrant query() that this code doesn't
+          // anticipate).
+        } else {
+          this.#reflectedTurns.add(t1DedupKey);
+        const batchStart = arcStartIdx;
+        const batchEnd = conversationMessages.length - 1;
         try {
-          const arcStart = turnStartIdx + 1;
-          const arcEnd = conversationMessages.length - 1;
           const { pairs, assistantText } = extractToolPairsFromRange(
-            conversationMessages, arcStart, arcEnd,
+            conversationMessages, batchStart, batchEnd,
           );
           yield {
             type: 'reflection',
@@ -2053,7 +2098,7 @@ export class Engine {
             loopNumber: turnNumber,
             trigger: 't1',
             status: 'pending',
-            loopRange: [arcStart, arcEnd],
+            loopRange: [batchStart, batchEnd],
             toolCount: pairs.length,
           };
           const { content, durationMs } = await runT1Reflection({
@@ -2065,10 +2110,21 @@ export class Engine {
             signal,
           });
           const next = collapseRangeToReflection(
-            conversationMessages, arcStart, arcEnd, content,
+            conversationMessages, batchStart, batchEnd, content,
           );
           conversationMessages.length = 0;
           for (const m of next) conversationMessages.push(m);
+          // After collapse: the just-inserted reflection lives at
+          // index `batchStart`. The next tool arc therefore starts
+          // immediately after it, i.e. at conversationMessages.length
+          // (the next assistant message will land here).
+          arcStartIdx = conversationMessages.length;
+          lastT1AtToolCount = queryToolCount;
+          // Bump the success counter — used by the T2 schedule check
+          // to decide whether T2 still has work to do at end_turn.
+          // Distinct from lastT1AtToolCount which the catch block
+          // also bumps (but without rewriting history).
+          t1CollapsesDone += 1;
           yield {
             type: 'reflection',
             turnId: queryTurnId,
@@ -2078,7 +2134,7 @@ export class Engine {
             // so the frontend key stays stable across pending → ready and
             // the spinner card is replaced in place (no orphan).
             status: 'ready',
-            loopRange: [arcStart, arcEnd],
+            loopRange: [batchStart, batchEnd],
             toolCount: pairs.length,
             content,
             durationMs,
@@ -2094,6 +2150,19 @@ export class Engine {
             status: 'error',
             error: err && err.message || String(err),
           };
+          // Advance lastT1AtToolCount past this batch so we don't
+          // tight-loop on a hiccuping reflector. The next attempt is
+          // 13 tools from now, not immediately. arcStartIdx is left
+          // alone because history wasn't rewritten — the tail still
+          // begins where it did. The trade-off: the next batch's
+          // reflection will cover the tools that just failed too,
+          // which is fine (they're still in conversationMessages).
+          //
+          // We do NOT bump t1CollapsesDone — see the variable's
+          // declaration comment. This keeps the T2 fallback path live
+          // when every T1 attempt has errored.
+          lastT1AtToolCount = queryToolCount;
+        }
         }
       }
 
