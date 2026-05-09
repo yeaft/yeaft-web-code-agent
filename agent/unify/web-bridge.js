@@ -252,6 +252,34 @@ let _vpUnsubscribe = null;
  */
 
 /**
+ * @typedef {Object} GroupContextEntry
+ * @property {object|null} coord — group coordinator (lazily built by getOrCreateGroupContext)
+ * @property {object|null} router — message router (lazily built by getOrCreateGroupContext)
+ * @property {object|null} groupHandle — opened group handle (lazily built by getOrCreateGroupContext)
+ * @property {GroupHistory} history — per-group conversation tape
+ * @property {boolean} historyHydrated — true once history has been loaded
+ *   from disk (or explicitly assigned). The flag is required because an
+ *   empty array is legitimate post-consolidate / post-clear state and
+ *   MUST NOT trigger a re-hydrate. Without the flag, a partial entry
+ *   seeded by `getCompactState` (which only needs `_compact`) would
+ *   short-circuit `getOrCreateGroupHistory` on truthy `[]` and skip
+ *   the disk load.
+ * @property {{inFlight: Promise<void>|null, pending: boolean}} [_compact]
+ *   per-group compact state, lazily attached.
+ */
+
+/** Build a fresh stub entry with no coord/router/history loaded. */
+function makeGroupContextStub() {
+  return {
+    coord: null,
+    router: null,
+    groupHandle: null,
+    history: [],
+    historyHydrated: false,
+  };
+}
+
+/**
  * Project a persisted message record into the in-memory history shape.
  * Accepts `role:'tool'` and preserves `toolCalls`/`toolCallId` so the
  * next chat-completions serialization includes paired tool messages
@@ -290,7 +318,7 @@ function hydrateGroupHistory(groupId) {
   try {
     recent = session.conversationStore.loadRecentByGroup(groupId);
   } catch (err) {
-    console.warn('[Unify] hydrateGroupHistory failed:', err?.message || err);
+    console.warn('[Unify] hydrateGroupHistory failed (groupId=%s):', groupId, err?.message || err);
     return [];
   }
   const out = [];
@@ -320,13 +348,19 @@ function hydrateGroupHistory(groupId) {
 function getOrCreateGroupHistory(groupId) {
   if (!groupId) return [];
   let entry = groupContexts.get(groupId);
-  if (entry && entry.history) return entry.history;
+  // Use `historyHydrated` rather than truthiness on `history` itself —
+  // an empty array (post-consolidate, post-clear, or a partial entry
+  // seeded by `getCompactState` before any data was loaded) is
+  // legitimate state that does NOT mean "needs hydration"... unless we
+  // never loaded from disk in the first place. The flag separates the
+  // two cases.
+  if (entry && entry.historyHydrated) return entry.history;
   if (!entry) {
-    entry = { coord: null, router: null, groupHandle: null, history: hydrateGroupHistory(groupId) };
+    entry = makeGroupContextStub();
     groupContexts.set(groupId, entry);
-  } else {
-    entry.history = hydrateGroupHistory(groupId);
   }
+  entry.history = hydrateGroupHistory(groupId);
+  entry.historyHydrated = true;
   return entry.history;
 }
 
@@ -335,6 +369,10 @@ function getOrCreateGroupHistory(groupId) {
  * clear paths that need to swap the array (not just mutate it). Returns
  * the new reference. Idempotent if the entry doesn't exist (creates one).
  *
+ * Sets `historyHydrated = true` because an explicit assignment is itself
+ * a hydration — even setting `[]` after `consolidate` means "this is the
+ * canonical state right now, don't re-load from disk".
+ *
  * @param {string} groupId
  * @param {GroupHistory} next
  */
@@ -342,11 +380,11 @@ function setGroupHistory(groupId, next) {
   if (!groupId) return;
   let entry = groupContexts.get(groupId);
   if (!entry) {
-    entry = { coord: null, router: null, groupHandle: null, history: next };
+    entry = makeGroupContextStub();
     groupContexts.set(groupId, entry);
-  } else {
-    entry.history = next;
   }
+  entry.history = next;
+  entry.historyHydrated = true;
 }
 
 /**
@@ -358,6 +396,32 @@ function setGroupHistory(groupId, next) {
  */
 export function __testGroupHistory(groupId) {
   return getOrCreateGroupHistory(groupId);
+}
+
+/**
+ * Test-only: install a minimal `session` so `hydrateGroupHistory` can
+ * read from a real `ConversationStore`. Pass `null` to clear.
+ *
+ * Tests that need to verify the hydrate-from-disk path can construct a
+ * `ConversationStore` against a tmp dir, write per-group records via
+ * `store.append({groupId, ...})`, then call this helper to wire the
+ * store into the bridge before calling `__testGroupHistory(groupId)`.
+ *
+ * @param {{ conversationStore: object } | null} sessionLike
+ */
+export function __testSetSession(sessionLike) {
+  session = sessionLike;
+}
+
+/**
+ * Test-only: peek at the GroupContext entry for a group (or undefined
+ * if never seeded). Lets tests assert the `historyHydrated` flag without
+ * exporting the entire `groupContexts` Map.
+ *
+ * @param {string} groupId
+ */
+export function __testGroupContextEntry(groupId) {
+  return groupContexts.get(groupId);
 }
 
 /** Whether we've already sent a permission warning to the UI */
@@ -428,24 +492,26 @@ function getOrCreateGroupContext(groupId, groupHandle) {
   let entry = groupContexts.get(groupId);
   if (entry && entry.coord && entry.router) return entry;
   // Either no entry, or a partial entry seeded by `getOrCreateGroupHistory`
-  // (history-only). Build the coord/router and merge into the existing
-  // record so the per-group history reference is preserved.
+  // / `getCompactState` (no coord/router yet). Build the coord/router and
+  // merge into the existing record so the per-group history reference and
+  // hydration flag are preserved.
   const coord = createCoordinator(groupHandle, {
     deliver: (vpId, envelope) => enqueueForVp(groupId, vpId, envelope),
   });
   const router = createRouter({ coordinator: coord });
-  if (entry) {
-    entry.coord = coord;
-    entry.router = router;
-    entry.groupHandle = groupHandle;
-  } else {
-    entry = {
-      coord,
-      router,
-      groupHandle,
-      history: hydrateGroupHistory(groupId),
-    };
+  if (!entry) {
+    entry = makeGroupContextStub();
     groupContexts.set(groupId, entry);
+  }
+  entry.coord = coord;
+  entry.router = router;
+  entry.groupHandle = groupHandle;
+  // Defend against a future caller that builds a coord/router without
+  // having gone through `getOrCreateGroupHistory` first: a partial entry
+  // could exist with `historyHydrated:false`, so do the load now.
+  if (!entry.historyHydrated) {
+    entry.history = hydrateGroupHistory(groupId);
+    entry.historyHydrated = true;
   }
   return entry;
 }
@@ -2208,7 +2274,13 @@ function getCompactState(groupId) {
   if (!groupId) return { inFlight: null, pending: false };
   let entry = groupContexts.get(groupId);
   if (!entry) {
-    entry = { coord: null, router: null, groupHandle: null, history: [] };
+    // Don't pre-hydrate history here. The stub leaves
+    // `historyHydrated:false`, so the first `getOrCreateGroupHistory`
+    // call still triggers disk hydration. (Pre-fix this seeded
+    // `history: []` and `getOrCreateGroupHistory` short-circuited on
+    // the truthy empty array, leaving the group amnesiac for any
+    // entry path that didn't first go through `handleUnifyLoadHistory`.)
+    entry = makeGroupContextStub();
     groupContexts.set(groupId, entry);
   }
   if (!entry._compact) entry._compact = { inFlight: null, pending: false };
@@ -2279,11 +2351,15 @@ function scheduleCompactAfterTurn(groupId) {
  * Race safety:
  *   - Single-flight via per-group `_compact.inFlight` (only one runs
  *     at a time per group).
- *   - Reads the array reference once into `snapshot`. If anything
- *     else reassigns the group's history during the await
- *     (`consolidate` event from the engine, `clearUnifyMessages`,
- *     `resetUnifySession`), we detect the swap by reference
- *     comparison and bail without overwriting their fresh state.
+ *   - Captures the array reference AND its length on entry. If anything
+ *     reassigns the group's history during the await (`consolidate` event
+ *     from the engine, `clearUnifyMessages`, `resetUnifySession`), we
+ *     detect the swap by reference comparison. If a `route_forward`
+ *     driver path appends new messages in place during the await
+ *     (push-mutate, not reassignment), the length grew — also bail,
+ *     because writing back the stale compacted view would silently drop
+ *     the in-flight messages. (Disk persistence is independent — the
+ *     stop-hooks already wrote those messages to disk.)
  *
  * @param {string} groupId
  * @returns {Promise<void>}
@@ -2292,11 +2368,15 @@ async function runCompactNow(groupId) {
   const summarize = ({ system, prompt }) =>
     session.engine.summarizeForCompact({ system, prompt, maxTokens: 1024 });
 
-  // Capture the current array reference. If anyone reassigns the
-  // group's history while we're summarizing (engine consolidate event,
-  // session reset, manual clear), the reference will differ and we
-  // abandon the swap.
+  // Capture the current array reference AND its length. If anyone
+  // reassigns the group's history while we're summarizing (engine
+  // consolidate event, session reset, manual clear), the reference will
+  // differ. If a driver path push-mutates new messages in place
+  // (route_forward turning into a new VP turn during compact), the
+  // reference is the same but the length grew. Both cases mean the
+  // snapshot we summarized is no longer the canonical state — bail.
   const snapshot = getOrCreateGroupHistory(groupId);
+  const snapshotLen = snapshot.length;
 
   // Pull the user-configured context width so the 40 %-of-context
   // threshold auto-adjusts to whatever model they're on. Falls back to
@@ -2318,10 +2398,16 @@ async function runCompactNow(groupId) {
       return;
     }
     // Race guard: if the group's history was reassigned during the
-    // await (e.g. consolidate / reset), do NOT overwrite the fresh
-    // state with our stale compacted snapshot.
-    if (getOrCreateGroupHistory(groupId) !== snapshot) {
+    // await (e.g. consolidate / reset), or push-mutated by a driver
+    // path (e.g. a route_forward triggered VP turn appending), do NOT
+    // overwrite the fresh state with our stale compacted snapshot.
+    const current = getOrCreateGroupHistory(groupId);
+    if (current !== snapshot) {
       console.log('[Unify] history compact: history was reset during compact — discarding stale summary');
+      return;
+    }
+    if (current.length !== snapshotLen) {
+      console.log('[Unify] history compact: history was appended-to during compact — discarding stale summary');
       return;
     }
     setGroupHistory(groupId, result.messages);
@@ -2721,24 +2807,12 @@ export async function handleUnifyLoadHistory(msg) {
     // group's tape so the next user message sees on-disk state. When
     // it doesn't (legacy callers), do nothing — the per-group lazy
     // hydration handles it.
-    if (groupId) {
-      const next = [];
-      for (const m of pickRecent(session.conversationStore, undefined) || []) {
-        const entry = projectPersistedToHistoryEntry(m);
-        if (entry) next.push(entry);
-      }
-      setGroupHistory(groupId, next);
-    }
+    if (groupId) setGroupHistory(groupId, hydrateGroupHistory(groupId));
   } else if (groupId) {
     // Re-entering an existing session with a (possibly new) group filter:
     // re-seed THIS group's history from disk so it doesn't carry stale
     // in-memory state into the next turn's context.
-    const next = [];
-    for (const m of pickRecent(session.conversationStore, undefined) || []) {
-      const entry = projectPersistedToHistoryEntry(m);
-      if (entry) next.push(entry);
-    }
-    setGroupHistory(groupId, next);
+    setGroupHistory(groupId, hydrateGroupHistory(groupId));
   }
 
   // Always replay session_ready so refresh / reconnect rebuilds UI state.
