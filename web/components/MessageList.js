@@ -1273,11 +1273,6 @@ export default {
       if (dogRafId) { cancelAnimationFrame(dogRafId); dogRafId = null; }
     });
 
-    const onOpenVpDetail = (vpId) => {
-      if (!vpId) return;
-      store.enterVpDetailView(vpId);
-    };
-
     // GroupAnnouncementBar's "open settings" link bubbles a request up
     // to the parent page (UnifyPage) so the unified GroupSettingsModal
     // can be opened with the right group id and an initial section
@@ -1324,7 +1319,6 @@ export default {
       questionLX,
       questionRX,
       refreshSession,
-      onOpenVpDetail,
       onlineAgents,
       turnGroups,
       cardsForRow,

@@ -434,4 +434,10 @@ describe('selectGroupRosterVpList', () => {
     const out = selectGroupRosterVpList(['ada', 'ada', 'linus', 'ada'], LIBRARY);
     expect(out.map((v) => v.vpId)).toEqual(['ada', 'linus']);
   });
+
+  it('drops falsy roster entries (null / undefined / empty string)', () => {
+    const roster = [null, 'ada', undefined, '', 'linus'];
+    const out = selectGroupRosterVpList(roster, LIBRARY);
+    expect(out.map((v) => v.vpId)).toEqual(['ada', 'linus']);
+  });
 });
