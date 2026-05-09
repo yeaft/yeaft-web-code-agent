@@ -114,17 +114,18 @@ export default {
             class="vp-turn-block-time"
             :title="startedTimeFullText"
           >{{ startedTimeText }}</span>
-          <span
-            v-if="turn.isStreaming && elapsedText"
-            class="vp-turn-block-sep"
-            aria-hidden="true"
-          >·</span>
-          <span
-            v-if="turn.isStreaming && elapsedText"
-            class="vp-turn-block-elapsed"
-            :title="$t ? $t('unify.vp.turnBlock.elapsedTitle') : 'Elapsed time'"
-            aria-live="polite"
-          >{{ elapsedText }}</span>
+          <template v-if="turn.isStreaming && elapsedText">
+            <span
+              v-if="displayName || startedTimeText"
+              class="vp-turn-block-sep"
+              aria-hidden="true"
+            >·</span>
+            <span
+              class="vp-turn-block-elapsed"
+              :title="$t ? $t('unify.vp.turnBlock.elapsedTitle') : 'Elapsed time'"
+              aria-live="polite"
+            >{{ elapsedText }}</span>
+          </template>
           <span class="vp-turn-block-spacer"></span>
           <button
             v-if="showStop"
@@ -291,27 +292,24 @@ export default {
 
     const truncatedTitle = Vue.computed(() => {
       const total = compactText.value.totalLines;
-      if (t) return t('unify.vp.turnBlock.truncated', { total });
-      return `Showing last 6 of ${total} lines — click to expand.`;
+      return t
+        ? t('unify.vp.turnBlock.truncated', { total })
+        : `Showing last 6 of ${total} lines — click to expand.`;
     });
 
     const emptyText = Vue.computed(() => {
       if (props.turn.isStreaming) {
-        if (t) return t('unify.vp.turnBlock.thinking');
-        return 'thinking…';
+        return t ? t('unify.vp.turnBlock.thinking') : 'thinking…';
       }
-      if (t) return t('unify.vp.turnBlock.empty');
-      return '(no text)';
+      return t ? t('unify.vp.turnBlock.empty') : '(no text)';
     });
 
-    const toggleExpandTitle = Vue.computed(() => {
-      if (t) return t('unify.vp.turnBlock.expand');
-      return 'Expand turn';
-    });
-    const toggleCollapseTitle = Vue.computed(() => {
-      if (t) return t('unify.vp.turnBlock.collapse');
-      return 'Collapse turn';
-    });
+    const toggleExpandTitle = Vue.computed(() =>
+      t ? t('unify.vp.turnBlock.expand') : 'Expand turn'
+    );
+    const toggleCollapseTitle = Vue.computed(() =>
+      t ? t('unify.vp.turnBlock.collapse') : 'Collapse turn'
+    );
 
     return {
       expanded,

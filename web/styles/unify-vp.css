@@ -814,27 +814,25 @@
 .vp-turn-block-name:hover {
   text-decoration: underline;
 }
-.vp-turn-block-time {
+.vp-turn-block-time,
+.vp-turn-block-sep,
+.vp-turn-block-elapsed {
   font-size: 11px;
-  color: var(--text-secondary, #6b7280);
-  font-variant-numeric: tabular-nums;
   white-space: nowrap;
   flex-shrink: 0;
 }
+.vp-turn-block-time {
+  color: var(--text-secondary, #6b7280);
+  font-variant-numeric: tabular-nums;
+}
 .vp-turn-block-sep {
-  font-size: 11px;
   font-family: system-ui;
   color: var(--text-tertiary, var(--text-secondary, #9ca3af));
-  white-space: nowrap;
-  flex-shrink: 0;
   user-select: none;
 }
 .vp-turn-block-elapsed {
-  font-size: 11px;
   font-variant-numeric: tabular-nums;
   color: var(--text-tertiary, var(--text-secondary, #9ca3af));
-  white-space: nowrap;
-  flex-shrink: 0;
   /* Subtle 2s opacity pulse so the live ticker reads as "active" without
      being loud. Independent of the 1Hz nowMs ref — the ref drives the
      numeric updates, this animation just gives the digits a heartbeat. */
