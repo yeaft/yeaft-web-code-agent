@@ -236,36 +236,192 @@ let unifyConversationId = null;
 let _vpUnsubscribe = null;
 
 /**
- * Flat conversation history for engine context continuity. H2.f.2: replaces
- * the per-thread Map. Cleared on session reset or by a `consolidate` event.
- * @type {Array<{role:'user'|'assistant'|'tool', content:string|Array, toolCalls?:Array, toolCallId?:string, isError?:boolean}>}
+ * Per-group conversation history lives on the GroupContext entry
+ * (`groupContexts.get(groupId).history`). The pre-refactor module-level
+ * `conversationMessages` was a single array shared across every group —
+ * a user prompt in group-A would leak into group-B's next-turn snapshot
+ * because the bridge appended every turn to the same array regardless
+ * of which group it belonged to. Disk was group-tagged correctly, but
+ * the in-memory tape was unified.
+ *
+ * Post-refactor: each GroupContext owns its own `history`, lazily
+ * hydrated from `conversationStore.loadRecentByGroup(groupId)` on first
+ * access. Group-A and group-B are isolated.
+ *
+ * @typedef {Array<{role:'user'|'assistant'|'tool', content:string|Array, toolCalls?:Array, toolCallId?:string, isError?:boolean}>} GroupHistory
  */
-let conversationMessages = [];
 
 /**
- * Restore conversation history from persisted store. Accepts `role:'tool'`
- * messages and preserves `toolCalls`/`toolCallId` so the next chat-completions
- * serialization includes paired tool messages (avoids "No tool output found
- * for function call" 400s).
- *
- * @param {Array<object>} recent — output of conversationStore.loadRecent()
+ * @typedef {Object} GroupContextEntry
+ * @property {object|null} coord — group coordinator (lazily built by getOrCreateGroupContext)
+ * @property {object|null} router — message router (lazily built by getOrCreateGroupContext)
+ * @property {object|null} groupHandle — opened group handle (lazily built by getOrCreateGroupContext)
+ * @property {GroupHistory} history — per-group conversation tape
+ * @property {boolean} historyHydrated — true once history has been loaded
+ *   from disk (or explicitly assigned). The flag is required because an
+ *   empty array is legitimate post-consolidate / post-clear state and
+ *   MUST NOT trigger a re-hydrate. Without the flag, a partial entry
+ *   seeded by `getCompactState` (which only needs `_compact`) would
+ *   short-circuit `getOrCreateGroupHistory` on truthy `[]` and skip
+ *   the disk load.
+ * @property {{inFlight: Promise<void>|null, pending: boolean}} [_compact]
+ *   per-group compact state, lazily attached.
  */
-function restoreHistoryFromRecent(recent) {
-  conversationMessages = [];
-  for (const m of recent) {
-    if (m.role !== 'user' && m.role !== 'assistant' && m.role !== 'tool') continue;
-    const entry = { role: m.role, content: m.content };
-    if (m.toolCallId) entry.toolCallId = m.toolCallId;
-    if (Array.isArray(m.toolCalls) && m.toolCalls.length > 0) {
-      entry.toolCalls = m.toolCalls.map(tc => ({
-        id: tc.id,
-        name: tc.name,
-        input: tc.input,
-      }));
-    }
-    if (m.isError) entry.isError = true;
-    conversationMessages.push(entry);
+
+/** Build a fresh stub entry with no coord/router/history loaded. */
+function makeGroupContextStub() {
+  return {
+    coord: null,
+    router: null,
+    groupHandle: null,
+    history: [],
+    historyHydrated: false,
+  };
+}
+
+/**
+ * Project a persisted message record into the in-memory history shape.
+ * Accepts `role:'tool'` and preserves `toolCalls`/`toolCallId` so the
+ * next chat-completions serialization includes paired tool messages
+ * (avoids "No tool output found for function call" 400s).
+ *
+ * @param {object} m — record from conversationStore.loadRecent*()
+ * @returns {object|null} history-shape entry, or null to skip
+ */
+function projectPersistedToHistoryEntry(m) {
+  if (!m) return null;
+  if (m.role !== 'user' && m.role !== 'assistant' && m.role !== 'tool') return null;
+  const entry = { role: m.role, content: m.content };
+  if (m.toolCallId) entry.toolCallId = m.toolCallId;
+  if (Array.isArray(m.toolCalls) && m.toolCalls.length > 0) {
+    entry.toolCalls = m.toolCalls.map(tc => ({
+      id: tc.id,
+      name: tc.name,
+      input: tc.input,
+    }));
   }
+  if (m.isError) entry.isError = true;
+  return entry;
+}
+
+/**
+ * Hydrate a freshly-created GroupContext's history from the on-disk
+ * conversation store. Returns an empty array if the session isn't
+ * loaded yet (sub-agent / test paths) or if the load throws.
+ *
+ * @param {string} groupId
+ * @returns {GroupHistory}
+ */
+function hydrateGroupHistory(groupId) {
+  if (!session?.conversationStore || !groupId) return [];
+  let recent;
+  try {
+    recent = session.conversationStore.loadRecentByGroup(groupId);
+  } catch (err) {
+    console.warn('[Unify] hydrateGroupHistory failed (groupId=%s):', groupId, err?.message || err);
+    return [];
+  }
+  const out = [];
+  for (const m of recent || []) {
+    const entry = projectPersistedToHistoryEntry(m);
+    if (entry) out.push(entry);
+  }
+  return out;
+}
+
+/**
+ * Get-or-create the per-group history array. Used everywhere the bridge
+ * needs to read/append/snapshot a group's conversation tape. Lazily
+ * inserts an entry into `groupContexts` on first access — no
+ * `groupHandle` required (history is independent of coord/router
+ * lifecycle, so a sub-agent / route_forward path that hasn't yet
+ * opened the group can still read history).
+ *
+ * Returns the SAME array reference across calls within the same
+ * lifecycle, so consumers can mutate-in-place. Reassigned only by
+ * compact (race guard checks reference equality), `consolidate`
+ * events, and session reset.
+ *
+ * @param {string} groupId
+ * @returns {GroupHistory}
+ */
+function getOrCreateGroupHistory(groupId) {
+  if (!groupId) return [];
+  let entry = groupContexts.get(groupId);
+  // Use `historyHydrated` rather than truthiness on `history` itself —
+  // an empty array (post-consolidate, post-clear, or a partial entry
+  // seeded by `getCompactState` before any data was loaded) is
+  // legitimate state that does NOT mean "needs hydration"... unless we
+  // never loaded from disk in the first place. The flag separates the
+  // two cases.
+  if (entry && entry.historyHydrated) return entry.history;
+  if (!entry) {
+    entry = makeGroupContextStub();
+    groupContexts.set(groupId, entry);
+  }
+  entry.history = hydrateGroupHistory(groupId);
+  entry.historyHydrated = true;
+  return entry.history;
+}
+
+/**
+ * Reassign a group's history reference. Used by compact + consolidate +
+ * clear paths that need to swap the array (not just mutate it). Returns
+ * the new reference. Idempotent if the entry doesn't exist (creates one).
+ *
+ * Sets `historyHydrated = true` because an explicit assignment is itself
+ * a hydration — even setting `[]` after `consolidate` means "this is the
+ * canonical state right now, don't re-load from disk".
+ *
+ * @param {string} groupId
+ * @param {GroupHistory} next
+ */
+function setGroupHistory(groupId, next) {
+  if (!groupId) return;
+  let entry = groupContexts.get(groupId);
+  if (!entry) {
+    entry = makeGroupContextStub();
+    groupContexts.set(groupId, entry);
+  }
+  entry.history = next;
+  entry.historyHydrated = true;
+}
+
+/**
+ * Test-only access to a group's history array. Re-exported below as
+ * `__testGroupHistory`. Lets tests pin the per-group isolation contract
+ * without booting a full session.
+ *
+ * @param {string} groupId
+ */
+export function __testGroupHistory(groupId) {
+  return getOrCreateGroupHistory(groupId);
+}
+
+/**
+ * Test-only: install a minimal `session` so `hydrateGroupHistory` can
+ * read from a real `ConversationStore`. Pass `null` to clear.
+ *
+ * Tests that need to verify the hydrate-from-disk path can construct a
+ * `ConversationStore` against a tmp dir, write per-group records via
+ * `store.append({groupId, ...})`, then call this helper to wire the
+ * store into the bridge before calling `__testGroupHistory(groupId)`.
+ *
+ * @param {{ conversationStore: object } | null} sessionLike
+ */
+export function __testSetSession(sessionLike) {
+  session = sessionLike;
+}
+
+/**
+ * Test-only: peek at the GroupContext entry for a group (or undefined
+ * if never seeded). Lets tests assert the `historyHydrated` flag without
+ * exporting the entire `groupContexts` Map.
+ *
+ * @param {string} groupId
+ */
+export function __testGroupContextEntry(groupId) {
+  return groupContexts.get(groupId);
 }
 
 /** Whether we've already sent a permission warning to the UI */
@@ -334,13 +490,29 @@ function getOrCreateVpEngine(groupId, vpId) {
  */
 function getOrCreateGroupContext(groupId, groupHandle) {
   let entry = groupContexts.get(groupId);
-  if (entry) return entry;
+  if (entry && entry.coord && entry.router) return entry;
+  // Either no entry, or a partial entry seeded by `getOrCreateGroupHistory`
+  // / `getCompactState` (no coord/router yet). Build the coord/router and
+  // merge into the existing record so the per-group history reference and
+  // hydration flag are preserved.
   const coord = createCoordinator(groupHandle, {
     deliver: (vpId, envelope) => enqueueForVp(groupId, vpId, envelope),
   });
   const router = createRouter({ coordinator: coord });
-  entry = { coord, router, groupHandle };
-  groupContexts.set(groupId, entry);
+  if (!entry) {
+    entry = makeGroupContextStub();
+    groupContexts.set(groupId, entry);
+  }
+  entry.coord = coord;
+  entry.router = router;
+  entry.groupHandle = groupHandle;
+  // Defend against a future caller that builds a coord/router without
+  // having gone through `getOrCreateGroupHistory` first: a partial entry
+  // could exist with `historyHydrated:false`, so do the load now.
+  if (!entry.historyHydrated) {
+    entry.history = hydrateGroupHistory(groupId);
+    entry.historyHydrated = true;
+  }
   return entry;
 }
 
@@ -411,8 +583,9 @@ function ensureDriverRunning(groupId, vpId) {
       turnAbortCtrls.set(turnId, vpAbort);
       // Snapshot history at the moment this turn starts. Later turns in
       // the same driver loop see updated history (post-append from the
-      // previous turn).
-      const baseSnapshot = [...conversationMessages];
+      // previous turn). Per-group: each driver only sees its own group's
+      // tape, so cross-group prompts never leak into a VP's snapshot.
+      const baseSnapshot = [...getOrCreateGroupHistory(groupId)];
       const trigger = envelope?.trigger || 'fallback';
       // Synthesize the prompt. For coordinator-emitted envelopes the
       // text lives at envelope.msg.text. We prefix `@vp-<id>` to mirror
@@ -1081,8 +1254,9 @@ function handleEngineEvent(event, hctx) {
       break;
 
     case 'consolidate':
-      // Engine compressed the context — clear our accumulated history.
-      conversationMessages = [];
+      // Engine compressed the context — clear THIS group's accumulated
+      // history. Other groups' histories stay intact.
+      if (hctx.groupId) setGroupHistory(hctx.groupId, []);
       sendUnifyEvent({
         type: 'consolidate',
         archivedCount: event.archivedCount,
@@ -1254,13 +1428,15 @@ export async function handleUnifyGroupChat(msg) {
     ? msg.groupId.trim()
     : 'grp_default';
 
-  // Entry gate: if a compact is in flight from the previous turn,
-  // wait for it to finish before reading conversationMessages. Compact
-  // runs at turn END (post-fanout) so it does not block the user's
-  // current message latency, but a fast double-send from the user must
-  // not race with the swap.
-  if (_compactInFlight) {
-    try { await _compactInFlight; } catch { /* first caller logs */ }
+  // Entry gate: if a compact is in flight from the previous turn IN
+  // THIS GROUP, wait for it to finish before reading the group's
+  // history. Compact runs at turn END (post-fanout) so it does not
+  // block the user's current message latency, but a fast double-send
+  // from the user must not race with the swap. Other groups' compacts
+  // never block this gate.
+  const _entryCompactState = getCompactState(groupId);
+  if (_entryCompactState.inFlight) {
+    try { await _entryCompactState.inFlight; } catch { /* first caller logs */ }
   }
 
   // yeaftDir is a hard prerequisite for both session boot and group seeding;
@@ -1524,10 +1700,11 @@ export async function handleUnifyGroupChat(msg) {
   await waitForVpDrivers(groupId, primaryTargets);
 
   // Post-turn compaction. Triggers when the JUST-APPENDED turn pushed
-  // history past 20 turns / 80K tokens. Runs in the background — does
-  // not block the response to this message. The next user message
-  // awaits `_compactInFlight` at the entry gate (handleUnifyGroupChat
-  // top), so the swap is guaranteed to be observed before the next
+  // history past 20 turns / 80K tokens for THIS group. Runs in the
+  // background — does not block the response to this message. The
+  // next user message in the same group awaits its per-group
+  // `_compact.inFlight` at the entry gate (handleUnifyGroupChat top),
+  // so the swap is guaranteed to be observed before the next
   // baseSnapshot capture. Errors are swallowed; next turn retries.
   scheduleCompactAfterTurn(groupId);
 }
@@ -1696,7 +1873,8 @@ async function ensureSessionLoaded() {
 
   unifyConversationId = `unify-${Date.now()}`;
 
-  restoreHistoryFromRecent(session.conversationStore.loadRecent());
+  // Per-group history is hydrated lazily on first `getOrCreateGroupHistory`
+  // — there's no global "all conversations" tape any more.
 
   sendUnifyEvent({
     type: 'session_ready',
@@ -1902,7 +2080,7 @@ async function runVpTurn({ prompt, promptParts = null, groupId, vpId, turnId, en
       }
 
       // Turn completed — atomically append this VP's output to shared history.
-      appendTurnToHistory(prompt, assistantTextParts, toolCallsAccum, toolResultsAccum);
+      appendTurnToGroupHistory(groupId, prompt, assistantTextParts, toolCallsAccum, toolResultsAccum);
 
       sendUnifyOutput({
         type: 'assistant',
@@ -1960,11 +2138,21 @@ async function runVpTurn({ prompt, promptParts = null, groupId, vpId, turnId, en
 }
 
 /**
- * Atomically append a completed VP-turn's messages to the shared
+ * Atomically append a completed VP-turn's messages to the GROUP'S
  * conversation history. Called once at turn end (not during streaming).
+ *
+ * Note: this does NOT see the engine's collapsed form — it appends the
+ * raw user prompt + the per-VP assistant text + tool results. The
+ * engine's own `conversationMessages` (with T1/T2 collapse applied)
+ * is persisted to disk via stop-hooks, so the next turn's history is
+ * read from disk via `loadRecentByGroup` on next session boot. Within
+ * a session, this in-memory tape carries the un-collapsed form — which
+ * is fine because each VP turn's `engine.query` re-collapses on the fly.
  */
-function appendTurnToHistory(prompt, assistantTextParts, toolCallsAccum, toolResultsAccum) {
-  conversationMessages.push({ role: 'user', content: prompt });
+function appendTurnToGroupHistory(groupId, prompt, assistantTextParts, toolCallsAccum, toolResultsAccum) {
+  if (!groupId) return;
+  const history = getOrCreateGroupHistory(groupId);
+  history.push({ role: 'user', content: prompt });
 
   const fullText = assistantTextParts.join('');
   if (fullText || toolCallsAccum.length > 0) {
@@ -1976,10 +2164,10 @@ function appendTurnToHistory(prompt, assistantTextParts, toolCallsAccum, toolRes
         input: tc.input,
       }));
     }
-    conversationMessages.push(assistantMsg);
+    history.push(assistantMsg);
 
     for (const tr of toolResultsAccum) {
-      conversationMessages.push({
+      history.push({
         role: 'tool',
         toolCallId: tr.toolCallId,
         content: tr.content,
@@ -2071,47 +2259,53 @@ function persistUserMessageOnceByMsgId({ msgId, text, groupId }) {
 const _persistedUserMsgIds = new Set();
 
 /**
- * In-flight compact promise. Set by `scheduleCompactAfterTurn` when a
- * turn ends and triggers compaction; awaited by the next
- * `handleUnifyGroupChat` invocation at its entry gate so the next
- * baseSnapshot reflects the compacted history.
+ * Per-group compact state. Each group has its own in-flight promise +
+ * pending flag so a compact in group-A doesn't block a compact in
+ * group-B (and so the entry-gate await in `handleUnifyGroupChat` only
+ * blocks on its own group's compact, not unrelated groups').
  *
- * Compact runs at turn END (not before fan-out), so it does not add
- * latency to the user's current message. The trade-off: the next user
- * message may have to wait briefly for the compact to finish — but
- * compact uses the fast model and typically completes in 1–3s.
+ * Lives off `groupContexts.get(groupId)._compact = { inFlight, pending }`.
  *
- * @type {Promise<void>|null}
+ * @typedef {{ inFlight: Promise<void>|null, pending: boolean }} CompactState
  */
-let _compactInFlight = null;
 
-/**
- * Re-trigger flag. If `scheduleCompactAfterTurn` is called while a
- * compact is already in flight, set this so the in-flight one chains
- * a follow-up immediately on completion. Without this, a sustained
- * burst of turns could starve compaction: turn N triggers compact,
- * turns N+1 / N+2 / … each find `_compactInFlight` set and skip,
- * leaving history above threshold until the burst ends.
- */
-let _compactPending = false;
+/** Get-or-create the per-group compact state. */
+function getCompactState(groupId) {
+  if (!groupId) return { inFlight: null, pending: false };
+  let entry = groupContexts.get(groupId);
+  if (!entry) {
+    // Don't pre-hydrate history here. The stub leaves
+    // `historyHydrated:false`, so the first `getOrCreateGroupHistory`
+    // call still triggers disk hydration. (Pre-fix this seeded
+    // `history: []` and `getOrCreateGroupHistory` short-circuited on
+    // the truthy empty array, leaving the group amnesiac for any
+    // entry path that didn't first go through `handleUnifyLoadHistory`.)
+    entry = makeGroupContextStub();
+    groupContexts.set(groupId, entry);
+  }
+  if (!entry._compact) entry._compact = { inFlight: null, pending: false };
+  return entry._compact;
+}
 
 /**
  * Fire-and-forget post-turn compaction. Called once at the end of each
  * `handleUnifyGroupChat` after `Promise.all(runVpTurn)` resolves. If a
- * compaction is still in flight from an earlier turn, we set
- * `_compactPending` so the running compact chains a follow-up on
+ * compaction is still in flight from an earlier turn IN THIS GROUP, we
+ * set `_compact.pending` so the running compact chains a follow-up on
  * completion (anti-starvation).
  *
- * The promise is stored in `_compactInFlight` so the next user message
- * can await it before reading `conversationMessages`.
+ * The promise is stored on the per-group state so the next user message
+ * in the SAME group can await it before reading the group's history.
  *
  * @param {string} groupId — for envelope tagging on the emitted event
  */
 function scheduleCompactAfterTurn(groupId) {
-  if (_compactInFlight) {
+  if (!groupId) return;
+  const cs = getCompactState(groupId);
+  if (cs.inFlight) {
     // A compact is already running. Mark a follow-up so when it
     // finishes, it re-evaluates and runs again if still triggered.
-    _compactPending = true;
+    cs.pending = true;
     return;
   }
   // Cheap O(n) precheck so we don't bother engaging the LLM at all
@@ -2124,30 +2318,30 @@ function scheduleCompactAfterTurn(groupId) {
     typeof session?.config?.maxContextTokens === 'number'
       ? session.config.maxContextTokens
       : undefined;
-  const triage = shouldCompactHistory(conversationMessages, { maxContextTokens });
+  const triage = shouldCompactHistory(getOrCreateGroupHistory(groupId), { maxContextTokens });
   if (!triage.trigger) return;
   if (!session?.engine || typeof session.engine.summarizeForCompact !== 'function') {
     console.warn('[Unify] history compact: engine.summarizeForCompact unavailable — skipping');
     return;
   }
 
-  _compactInFlight = runCompactNow(groupId).finally(() => {
-    _compactInFlight = null;
+  cs.inFlight = runCompactNow(groupId).finally(() => {
+    cs.inFlight = null;
     // If turns piled up while we were running and compaction is still
     // needed, chain a follow-up. Use a microtask so the .finally chain
     // settles cleanly before the next promise is created.
-    if (_compactPending) {
-      _compactPending = false;
+    if (cs.pending) {
+      cs.pending = false;
       queueMicrotask(() => scheduleCompactAfterTurn(groupId));
     }
   });
 }
 
 /**
- * Run the in-memory history compactor. Replaces the older prefix of
- * `conversationMessages` with a single user-role summary message,
- * preserving the recent tail verbatim. Mutates the module-level
- * variable in place via reassignment.
+ * Run the in-memory history compactor for ONE group. Replaces the older
+ * prefix of the group's history with a single user-role summary
+ * message, preserving the recent tail verbatim. Mutates the per-group
+ * array via reassignment (`setGroupHistory`).
  *
  * Behaviour:
  *   - If summarization fails, leaves history untouched.
@@ -2155,12 +2349,17 @@ function scheduleCompactAfterTurn(groupId) {
  *     can show what happened (frontend currently ignores it).
  *
  * Race safety:
- *   - Single-flight via `_compactInFlight` (only one runs at a time).
- *   - Reads the array reference once into `snapshot`. If anything else
- *     reassigns `conversationMessages` during the await (`consolidate`
- *     event from the engine, `clearUnifyMessages`, `resetUnifySession`),
- *     we detect the swap by reference comparison and bail without
- *     overwriting their fresh state.
+ *   - Single-flight via per-group `_compact.inFlight` (only one runs
+ *     at a time per group).
+ *   - Captures the array reference AND its length on entry. If anything
+ *     reassigns the group's history during the await (`consolidate` event
+ *     from the engine, `clearUnifyMessages`, `resetUnifySession`), we
+ *     detect the swap by reference comparison. If a `route_forward`
+ *     driver path appends new messages in place during the await
+ *     (push-mutate, not reassignment), the length grew — also bail,
+ *     because writing back the stale compacted view would silently drop
+ *     the in-flight messages. (Disk persistence is independent — the
+ *     stop-hooks already wrote those messages to disk.)
  *
  * @param {string} groupId
  * @returns {Promise<void>}
@@ -2169,11 +2368,15 @@ async function runCompactNow(groupId) {
   const summarize = ({ system, prompt }) =>
     session.engine.summarizeForCompact({ system, prompt, maxTokens: 1024 });
 
-  // Capture the current array reference. If anyone reassigns
-  // `conversationMessages` while we're summarizing (engine consolidate
-  // event, session reset, manual clear), the reference will differ
-  // and we abandon the swap.
-  const snapshot = conversationMessages;
+  // Capture the current array reference AND its length. If anyone
+  // reassigns the group's history while we're summarizing (engine
+  // consolidate event, session reset, manual clear), the reference will
+  // differ. If a driver path push-mutates new messages in place
+  // (route_forward turning into a new VP turn during compact), the
+  // reference is the same but the length grew. Both cases mean the
+  // snapshot we summarized is no longer the canonical state — bail.
+  const snapshot = getOrCreateGroupHistory(groupId);
+  const snapshotLen = snapshot.length;
 
   // Pull the user-configured context width so the 40 %-of-context
   // threshold auto-adjusts to whatever model they're on. Falls back to
@@ -2194,14 +2397,20 @@ async function runCompactNow(groupId) {
       }
       return;
     }
-    // Race guard: if `conversationMessages` was reassigned during the
-    // await (e.g. consolidate / reset), do NOT overwrite the fresh
-    // state with our stale compacted snapshot.
-    if (conversationMessages !== snapshot) {
+    // Race guard: if the group's history was reassigned during the
+    // await (e.g. consolidate / reset), or push-mutated by a driver
+    // path (e.g. a route_forward triggered VP turn appending), do NOT
+    // overwrite the fresh state with our stale compacted snapshot.
+    const current = getOrCreateGroupHistory(groupId);
+    if (current !== snapshot) {
       console.log('[Unify] history compact: history was reset during compact — discarding stale summary');
       return;
     }
-    conversationMessages = result.messages;
+    if (current.length !== snapshotLen) {
+      console.log('[Unify] history compact: history was appended-to during compact — discarding stale summary');
+      return;
+    }
+    setGroupHistory(groupId, result.messages);
     console.log(
       `[Unify] history compacted (reason=${result.reason}): ` +
       `turns ${result.beforeTurns}→${result.afterTurns}, ` +
@@ -2593,12 +2802,17 @@ export async function handleUnifyLoadHistory(msg) {
 
     unifyConversationId = `unify-${Date.now()}`;
 
-    restoreHistoryFromRecent(pickRecent(session.conversationStore, undefined));
+    // Per-group history hydrates lazily via getOrCreateGroupHistory.
+    // When the load-history call carries a groupId, force-refresh THAT
+    // group's tape so the next user message sees on-disk state. When
+    // it doesn't (legacy callers), do nothing — the per-group lazy
+    // hydration handles it.
+    if (groupId) setGroupHistory(groupId, hydrateGroupHistory(groupId));
   } else if (groupId) {
     // Re-entering an existing session with a (possibly new) group filter:
-    // re-seed the engine's flat history so it doesn't carry messages from
-    // another group into the next turn's context.
-    restoreHistoryFromRecent(pickRecent(session.conversationStore, undefined));
+    // re-seed THIS group's history from disk so it doesn't carry stale
+    // in-memory state into the next turn's context.
+    setGroupHistory(groupId, hydrateGroupHistory(groupId));
   }
 
   // Always replay session_ready so refresh / reconnect rebuilds UI state.
@@ -2753,7 +2967,9 @@ export async function resetUnifySession() {
     session = null;
   }
   unifyConversationId = null;
-  conversationMessages = [];
+  // Per-group histories live on groupContexts entries — clearing the
+  // map (a few lines below) drops every group's history with it. No
+  // separate global tape to clear.
   // Re-arm the permission warning. The user might have fixed the
   // ~/.yeaft/ permissions in the interim and is now restarting the
   // session — they should see the diagnostic again if it still fails.
@@ -2786,7 +3002,8 @@ export async function resetUnifySession() {
 
     unifyConversationId = `unify-${Date.now()}`;
 
-    restoreHistoryFromRecent(session.conversationStore.loadRecent());
+    // Per-group history hydrates lazily via getOrCreateGroupHistory on
+    // first read. Nothing to seed here.
 
     sendUnifyEvent({
       type: 'session_ready',

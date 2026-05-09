@@ -30,6 +30,7 @@ let _permissionWarned = false;
  *   config: object,
  *   primaryModel?: string,
  *   messages?: object[],
+ *   turnStartIdx?: number,
  *   taskId?: string,
  *   workerId?: string,
  *   trace?: object,
@@ -45,6 +46,19 @@ export async function runStopHooks(context) {
     config,
     primaryModel,
     messages = [],
+    // Reflect-persist fix: when the engine knows the exact turn boundary
+    // (it does — `turnStartIdx` is set at query() entry as
+    // `conversationMessages.length - 1`), pass it in. The legacy
+    // heuristic of "scan back for the last role:'user'" is wrong once
+    // T1/T2 reflection has collapsed the tool arc into a synthetic
+    // role:'user' message — that synthetic message would be picked as
+    // the turn start, dropping the original prompt AND any earlier
+    // reflection messages from the persistence window.
+    //
+    // When undefined, falls back to the legacy heuristic so older
+    // callers (sub-agents, workers) that don't pass it continue to
+    // work.
+    turnStartIdx,
     taskId,
     trace,
     // Bug 6: groupId/threadId stamped on every persisted message so
@@ -77,19 +91,33 @@ export async function runStopHooks(context) {
   // assistant's `toolCalls` and each paired `role:'tool'` result —
   // otherwise restoring history on session reload drops the pairing
   // and causes "No tool output found for function call" 400s on the
-  // next chat-completions request. We walk back from the end of
-  // `messages` to find the first `role:'user'` that marks the start
-  // of the current turn, then persist everything from there forward.
+  // next chat-completions request.
+  //
+  // Reflect-persist fix: prefer the explicit `turnStartIdx` from the
+  // engine when given. The legacy heuristic of "find the last
+  // role:'user'" is broken in the presence of T1/T2 reflection
+  // collapse, because the collapsed reflection is itself a
+  // role:'user' message — using it as the turn start would drop the
+  // real user prompt and any earlier reflections.
   try {
     if (conversationStore && messages.length > 0) {
-      // Find the start of the latest turn — the last `role:'user'`
-      // message in the array. Everything from that index onward is
-      // new this turn (user + assistant[+toolCalls] + tool results).
-      let turnStart = messages.length - 1;
-      for (let i = messages.length - 1; i >= 0; i--) {
-        if (messages[i] && messages[i].role === 'user') {
-          turnStart = i;
-          break;
+      let turnStart;
+      if (typeof turnStartIdx === 'number'
+          && Number.isFinite(turnStartIdx)
+          && turnStartIdx >= 0
+          && turnStartIdx < messages.length) {
+        // Engine-supplied exact turn boundary — preferred.
+        turnStart = turnStartIdx;
+      } else {
+        // Legacy heuristic — find the last role:'user' message.
+        // Used by sub-agent / worker callers that don't compute the
+        // boundary explicitly.
+        turnStart = messages.length - 1;
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i] && messages[i].role === 'user') {
+            turnStart = i;
+            break;
+          }
         }
       }
       const recentMessages = messages.slice(turnStart);
@@ -99,7 +127,18 @@ export async function runStopHooks(context) {
         // this turn (multi-VP fan-out: every VP's engine sees the same
         // user prompt at conversationMessages[turnStart] but only the
         // first writer should land on disk).
-        if (userAlreadyPersisted && msg.role === 'user') continue;
+        //
+        // With the engine-supplied turnStartIdx, `messages[turnStart]`
+        // is the ORIGINAL user prompt (not a reflection placeholder),
+        // so the first message in `recentMessages` is the one that
+        // gets skipped on subsequent VPs. Reflection messages that
+        // come AFTER turnStart still have role:'user' — they are NOT
+        // skipped because `userAlreadyPersisted` only suppresses the
+        // first user-prompt copy; reflections are per-VP outputs and
+        // each VP's reflections are valid contributions to the
+        // shared history (this matches today's per-VP fan-out where
+        // each VP appends its own assistant + tool rows).
+        if (userAlreadyPersisted && msg.role === 'user' && msg === recentMessages[0]) continue;
         // Allow empty assistant content when toolCalls are present;
         // tool messages have content by construction.
         const hasContent =

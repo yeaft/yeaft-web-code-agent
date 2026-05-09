@@ -1755,6 +1755,17 @@ export class Engine {
             config: this.#fastConfig,
             primaryModel: this.#config.model,
             messages: conversationMessages,
+            // Reflect-persist fix: tell stop-hooks the EXACT turn boundary
+            // instead of letting it heuristically scan back to the last
+            // role:'user'. With T1/T2 reflection collapse, the last
+            // role:'user' is the synthetic reflection message — not the
+            // original user prompt — so the heuristic was dropping
+            // earlier reflection messages and the original prompt off
+            // the persistence window. `turnStartIdx` is the index of
+            // the original user prompt (set at query() entry); slicing
+            // from there persists the full collapsed turn including all
+            // reflection messages and the trailing assistant response.
+            turnStartIdx,
             trace: this.#trace,
             // Bug 6: tag persisted messages with the originating group so
             // history replay can re-stamp them on reload.
