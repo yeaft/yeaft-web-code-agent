@@ -1197,7 +1197,6 @@ export default {
   'unify.vpTimeline.aria': 'VP 时间线',
   'unify.vpTimeline.title': 'VP 列表',
   'unify.vpTimeline.empty': '本对话还没有 VP。',
-  'unify.vpTimeline.noSnippet': '暂无消息',
   'unify.vpTimeline.untitledFeature': '（未命名功能）',
   'unify.vpTimeline.resizeTitle': '拖动调整宽度',
   'unify.vpTimeline.status.idle': '空闲',

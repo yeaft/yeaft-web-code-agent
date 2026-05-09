@@ -821,9 +821,10 @@ export default {
 
       // Base list = the group's declared roster, ordered by the roster
       // array. Hydrate display data from vpStore (which holds
-      // {displayName, ...}); silently skip any roster entry the
-      // library hasn't seen yet (rare race when a roster delta lands
-      // before vp_snapshot has hydrated the new VP).
+      // {displayName, ...}); roster ids the library hasn't hydrated yet
+      // are stubbed as { vpId: id } so the timeline still has a row for
+      // every roster member — the label callback falls back to the raw
+      // id until vp_snapshot lands.
       const vpList = selectGroupRosterVpList(roster, vpStore.vpList || []);
 
       // Cross-group leak defense: even within a single conversation,
