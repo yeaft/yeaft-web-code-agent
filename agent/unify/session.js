@@ -23,6 +23,7 @@ import { MCPManager } from './mcp.js';
 import { createFullRegistry } from './tools/index.js';
 import { initFeatureStore } from './tools/feature-tools.js';
 import { Engine } from './engine.js';
+import { Compactor } from './compact/compactor.js';
 // H2.f.5: threads/, pipeline/dispatcher and input-queue retired. The
 // session now exposes a single Engine.
 //
@@ -65,6 +66,7 @@ import { existsSync as existsSyncSafe, readFileSync as readFileSyncSafe } from '
 /**
  * @typedef {Object} Session
  * @property {Engine} engine — The wired engine, ready for .query()
+ * @property {import('./compact/compactor.js').Compactor} compactor — Per-group history compactor
  * @property {import('./llm/adapter.js').LLMAdapter} adapter — The LLM adapter
  * @property {object} config — Resolved configuration
  * @property {ConversationStore} conversationStore — Conversation persistence
@@ -303,6 +305,18 @@ export async function loadSession(options = {}) {
     yeaftDir,
   });
 
+  // ─── 9a-pre. Create per-group history Compactor ────────
+  // Owns the post-turn single-flight + race-guarded compactor that used
+  // to live inline in web-bridge.js. Bridge keeps history ownership and
+  // wires the WS sink (`unify_history_compacted`) via
+  // `compactor.setOnCompacted` from `installUnifyRuntimeBridge`.
+  const compactor = new Compactor({
+    summarize: ({ system, prompt, maxTokens } = {}) =>
+      engine.summarizeForCompact({ system, prompt, maxTokens }),
+    getMaxContextTokens: () =>
+      typeof config.maxContextTokens === 'number' ? config.maxContextTokens : undefined,
+  });
+
   // ─── 9a. Create dream scheduler ────────────
   // The legacy R6 dream-scheduler was retired alongside recall-r6;
   // dream-v2 is the only active path (the `config.memoryV2` opt-out
@@ -396,6 +410,7 @@ export async function loadSession(options = {}) {
     config,
     conversationStore,
     dreamScheduler,
+    compactor,
     skillManager,
     mcpManager,
     toolRegistry,

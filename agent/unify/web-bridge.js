@@ -46,8 +46,6 @@ import { openGroup, loadGroupMeta } from './groups/group-store.js';
 import { createCoordinator } from './groups/coordinator.js';
 import { seedDefaultGroup } from './groups/seed-default.js';
 import {
-  shouldCompactHistory,
-  compactHistory,
   trimSnapshotForBudget,
 } from './history-compact.js';
 import { persistUnifyAttachments, attachmentsForPersistence } from './attachments.js';
@@ -261,11 +259,8 @@ let _vpUnsubscribe = null;
  *   from disk (or explicitly assigned). The flag is required because an
  *   empty array is legitimate post-consolidate / post-clear state and
  *   MUST NOT trigger a re-hydrate. Without the flag, a partial entry
- *   seeded by `getCompactState` (which only needs `_compact`) would
- *   short-circuit `getOrCreateGroupHistory` on truthy `[]` and skip
+ *   would short-circuit `getOrCreateGroupHistory` on truthy `[]` and skip
  *   the disk load.
- * @property {{inFlight: Promise<void>|null, pending: boolean}} [_compact]
- *   per-group compact state, lazily attached.
  */
 
 /** Build a fresh stub entry with no coord/router/history loaded. */
@@ -350,10 +345,10 @@ function getOrCreateGroupHistory(groupId) {
   let entry = groupContexts.get(groupId);
   // Use `historyHydrated` rather than truthiness on `history` itself —
   // an empty array (post-consolidate, post-clear, or a partial entry
-  // seeded by `getCompactState` before any data was loaded) is
-  // legitimate state that does NOT mean "needs hydration"... unless we
-  // never loaded from disk in the first place. The flag separates the
-  // two cases.
+  // seeded by an early `getOrCreateGroupContext` call before data was
+  // loaded) is legitimate state that does NOT mean "needs hydration"...
+  // unless we never loaded from disk in the first place. The flag
+  // separates the two cases.
   if (entry && entry.historyHydrated) return entry.history;
   if (!entry) {
     entry = makeGroupContextStub();
@@ -492,9 +487,9 @@ function getOrCreateGroupContext(groupId, groupHandle) {
   let entry = groupContexts.get(groupId);
   if (entry && entry.coord && entry.router) return entry;
   // Either no entry, or a partial entry seeded by `getOrCreateGroupHistory`
-  // / `getCompactState` (no coord/router yet). Build the coord/router and
-  // merge into the existing record so the per-group history reference and
-  // hydration flag are preserved.
+  // (no coord/router yet). Build the coord/router and merge into the
+  // existing record so the per-group history reference and hydration
+  // flag are preserved.
   const coord = createCoordinator(groupHandle, {
     deliver: (vpId, envelope) => enqueueForVp(groupId, vpId, envelope),
   });
@@ -732,6 +727,12 @@ export async function __testResetVpState() {
   vpEngines.clear();
   vpAborts.clear();
   groupContexts.clear();
+  // Per-group compact in-flight + pending state lives on the session's
+  // Compactor. Clear it so a follow-on test doesn't see ghost in-flight
+  // promises from a prior run.
+  if (session?.compactor && typeof session.compactor.__testReset === 'function') {
+    session.compactor.__testReset();
+  }
 }
 
 
@@ -1097,6 +1098,28 @@ export function installUnifyRuntimeBridge(s) {
     } catch { /* never let event delivery throw */ }
   };
 
+  // Wire the post-compact WS sink. Compactor is constructed in
+  // session.js with a no-op sink; bridge owns `sendUnifyEvent` /
+  // `unifyConversationId`, so the sink is wired here once a session is
+  // present. Per-group `unify_history_compacted` events fire after a
+  // successful summarize+swap.
+  if (s.compactor && typeof s.compactor.setOnCompacted === 'function') {
+    s.compactor.setOnCompacted((groupId, result) => {
+      try {
+        sendUnifyEvent({
+          type: 'unify_history_compacted',
+          reason: result?.reason ?? null,
+          beforeTurns: result?.beforeTurns,
+          afterTurns: result?.afterTurns,
+          beforeTokens: result?.beforeTokens,
+          afterTokens: result?.afterTokens,
+          archivedCount: result?.archivedCount,
+          ts: Date.now(),
+        }, { groupId });
+      } catch { /* WS pipeline failure must not crash compact */ }
+    });
+  }
+
   ctx.unifyRuntimeSettings = {
     // No multi-thread settings to surface anymore. Stub for back-compat
     // with message-router's update_unify_settings branch — assignments are
@@ -1433,10 +1456,11 @@ export async function handleUnifyGroupChat(msg) {
   // history. Compact runs at turn END (post-fanout) so it does not
   // block the user's current message latency, but a fast double-send
   // from the user must not race with the swap. Other groups' compacts
-  // never block this gate.
-  const _entryCompactState = getCompactState(groupId);
-  if (_entryCompactState.inFlight) {
-    try { await _entryCompactState.inFlight; } catch { /* first caller logs */ }
+  // never block this gate. Compactor is created in session.js — until
+  // a session has loaded (or in test paths that never call
+  // `ensureSessionLoaded`) it may be unavailable; skip gracefully.
+  if (session?.compactor) {
+    await session.compactor.awaitInFlight(groupId);
   }
 
   // yeaftDir is a hard prerequisite for both session boot and group seeding;
@@ -1700,13 +1724,21 @@ export async function handleUnifyGroupChat(msg) {
   await waitForVpDrivers(groupId, primaryTargets);
 
   // Post-turn compaction. Triggers when the JUST-APPENDED turn pushed
-  // history past 20 turns / 80K tokens for THIS group. Runs in the
-  // background — does not block the response to this message. The
-  // next user message in the same group awaits its per-group
-  // `_compact.inFlight` at the entry gate (handleUnifyGroupChat top),
-  // so the swap is guaranteed to be observed before the next
-  // baseSnapshot capture. Errors are swallowed; next turn retries.
-  scheduleCompactAfterTurn(groupId);
+  // history past the configured token thresholds for THIS group. Runs
+  // in the background — does not block the response to this message.
+  // The next user message in the same group awaits its per-group
+  // in-flight at the entry gate (handleUnifyGroupChat top) via
+  // `compactor.awaitInFlight`, so the swap is guaranteed to be
+  // observed before the next baseSnapshot capture. Errors are
+  // swallowed; next turn retries. The Compactor takes a per-call
+  // historyHandle so the bridge keeps history ownership and the
+  // Compactor stays ignorant of `groupContexts` / `historyHydrated`.
+  if (session?.compactor && groupId) {
+    session.compactor.scheduleAfterTurn(groupId, {
+      get: () => getOrCreateGroupHistory(groupId),
+      set: (next) => setGroupHistory(groupId, next),
+    });
+  }
 }
 
 /**
@@ -2258,181 +2290,13 @@ function persistUserMessageOnceByMsgId({ msgId, text, groupId }) {
  */
 const _persistedUserMsgIds = new Set();
 
-/**
- * Per-group compact state. Each group has its own in-flight promise +
- * pending flag so a compact in group-A doesn't block a compact in
- * group-B (and so the entry-gate await in `handleUnifyGroupChat` only
- * blocks on its own group's compact, not unrelated groups').
- *
- * Lives off `groupContexts.get(groupId)._compact = { inFlight, pending }`.
- *
- * @typedef {{ inFlight: Promise<void>|null, pending: boolean }} CompactState
- */
-
-/** Get-or-create the per-group compact state. */
-function getCompactState(groupId) {
-  if (!groupId) return { inFlight: null, pending: false };
-  let entry = groupContexts.get(groupId);
-  if (!entry) {
-    // Don't pre-hydrate history here. The stub leaves
-    // `historyHydrated:false`, so the first `getOrCreateGroupHistory`
-    // call still triggers disk hydration. (Pre-fix this seeded
-    // `history: []` and `getOrCreateGroupHistory` short-circuited on
-    // the truthy empty array, leaving the group amnesiac for any
-    // entry path that didn't first go through `handleUnifyLoadHistory`.)
-    entry = makeGroupContextStub();
-    groupContexts.set(groupId, entry);
-  }
-  if (!entry._compact) entry._compact = { inFlight: null, pending: false };
-  return entry._compact;
-}
-
-/**
- * Fire-and-forget post-turn compaction. Called once at the end of each
- * `handleUnifyGroupChat` after `Promise.all(runVpTurn)` resolves. If a
- * compaction is still in flight from an earlier turn IN THIS GROUP, we
- * set `_compact.pending` so the running compact chains a follow-up on
- * completion (anti-starvation).
- *
- * The promise is stored on the per-group state so the next user message
- * in the SAME group can await it before reading the group's history.
- *
- * @param {string} groupId — for envelope tagging on the emitted event
- */
-function scheduleCompactAfterTurn(groupId) {
-  if (!groupId) return;
-  const cs = getCompactState(groupId);
-  if (cs.inFlight) {
-    // A compact is already running. Mark a follow-up so when it
-    // finishes, it re-evaluates and runs again if still triggered.
-    cs.pending = true;
-    return;
-  }
-  // Cheap O(n) precheck so we don't bother engaging the LLM at all
-  // when the conversation is still small. Mirrors the policy that
-  // `runCompactNow` will apply: 30K soft floor / 40 % of configured
-  // context / 200K hard ceiling. (The turn-count trigger is off by
-  // default — DEFAULT_TURN_LIMIT=Infinity — pin `turnLimit` via opts
-  // to re-enable it.)
-  const maxContextTokens =
-    typeof session?.config?.maxContextTokens === 'number'
-      ? session.config.maxContextTokens
-      : undefined;
-  const triage = shouldCompactHistory(getOrCreateGroupHistory(groupId), { maxContextTokens });
-  if (!triage.trigger) return;
-  if (!session?.engine || typeof session.engine.summarizeForCompact !== 'function') {
-    console.warn('[Unify] history compact: engine.summarizeForCompact unavailable — skipping');
-    return;
-  }
-
-  cs.inFlight = runCompactNow(groupId).finally(() => {
-    cs.inFlight = null;
-    // If turns piled up while we were running and compaction is still
-    // needed, chain a follow-up. Use a microtask so the .finally chain
-    // settles cleanly before the next promise is created.
-    if (cs.pending) {
-      cs.pending = false;
-      queueMicrotask(() => scheduleCompactAfterTurn(groupId));
-    }
-  });
-}
-
-/**
- * Run the in-memory history compactor for ONE group. Replaces the older
- * prefix of the group's history with a single user-role summary
- * message, preserving the recent tail verbatim. Mutates the per-group
- * array via reassignment (`setGroupHistory`).
- *
- * Behaviour:
- *   - If summarization fails, leaves history untouched.
- *   - On success, emits a `unify_history_compacted` event so dev tools
- *     can show what happened (frontend currently ignores it).
- *
- * Race safety:
- *   - Single-flight via per-group `_compact.inFlight` (only one runs
- *     at a time per group).
- *   - Captures the array reference AND its length on entry. If anything
- *     reassigns the group's history during the await (`consolidate` event
- *     from the engine, `clearUnifyMessages`, `resetUnifySession`), we
- *     detect the swap by reference comparison. If a `route_forward`
- *     driver path appends new messages in place during the await
- *     (push-mutate, not reassignment), the length grew — also bail,
- *     because writing back the stale compacted view would silently drop
- *     the in-flight messages. (Disk persistence is independent — the
- *     stop-hooks already wrote those messages to disk.)
- *
- * @param {string} groupId
- * @returns {Promise<void>}
- */
-async function runCompactNow(groupId) {
-  const summarize = ({ system, prompt }) =>
-    session.engine.summarizeForCompact({ system, prompt, maxTokens: 1024 });
-
-  // Capture the current array reference AND its length. If anyone
-  // reassigns the group's history while we're summarizing (engine
-  // consolidate event, session reset, manual clear), the reference will
-  // differ. If a driver path push-mutates new messages in place
-  // (route_forward turning into a new VP turn during compact), the
-  // reference is the same but the length grew. Both cases mean the
-  // snapshot we summarized is no longer the canonical state — bail.
-  const snapshot = getOrCreateGroupHistory(groupId);
-  const snapshotLen = snapshot.length;
-
-  // Pull the user-configured context width so the 40 %-of-context
-  // threshold auto-adjusts to whatever model they're on. Falls back to
-  // the module default when missing.
-  const maxContextTokens =
-    typeof session?.config?.maxContextTokens === 'number'
-      ? session.config.maxContextTokens
-      : undefined;
-
-  try {
-    const result = await compactHistory(snapshot, { summarize, maxContextTokens });
-    if (!result.compacted) {
-      if (result.error) {
-        console.warn(
-          `[Unify] history compact: summarizer failed (${result.error}); ` +
-          `keeping ${result.beforeTurns} turns / ~${result.beforeTokens} tokens`
-        );
-      }
-      return;
-    }
-    // Race guard: if the group's history was reassigned during the
-    // await (e.g. consolidate / reset), or push-mutated by a driver
-    // path (e.g. a route_forward triggered VP turn appending), do NOT
-    // overwrite the fresh state with our stale compacted snapshot.
-    const current = getOrCreateGroupHistory(groupId);
-    if (current !== snapshot) {
-      console.log('[Unify] history compact: history was reset during compact — discarding stale summary');
-      return;
-    }
-    if (current.length !== snapshotLen) {
-      console.log('[Unify] history compact: history was appended-to during compact — discarding stale summary');
-      return;
-    }
-    setGroupHistory(groupId, result.messages);
-    console.log(
-      `[Unify] history compacted (reason=${result.reason}): ` +
-      `turns ${result.beforeTurns}→${result.afterTurns}, ` +
-      `tokens ~${result.beforeTokens}→${result.afterTokens}, ` +
-      `archived ${result.archivedCount} messages`
-    );
-    try {
-      sendUnifyEvent({
-        type: 'unify_history_compacted',
-        reason: result.reason,
-        beforeTurns: result.beforeTurns,
-        afterTurns: result.afterTurns,
-        beforeTokens: result.beforeTokens,
-        afterTokens: result.afterTokens,
-        archivedCount: result.archivedCount,
-        ts: Date.now(),
-      }, { groupId });
-    } catch { /* WS pipeline failure must not crash compact */ }
-  } catch (err) {
-    console.warn('[Unify] history compact: unexpected failure', err?.message || err);
-  }
-}
+// Per-group post-turn compaction lives on `session.compactor`
+// (`agent/unify/compact/compactor.js`), constructed in `session.js`.
+// Bridge passes a per-call `historyHandle = { get, set }` and wires the
+// `unify_history_compacted` WS sink via `compactor.setOnCompacted` from
+// `installUnifyRuntimeBridge`. The bridge keeps history ownership; the
+// Compactor owns single-flight, anti-starvation, race-guard, and the
+// LLM summarize call.
 
 /**
  * Abort every in-flight VP turn and clear all queued envelopes across
