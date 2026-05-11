@@ -169,8 +169,8 @@ export default {
               @click="onDreamTriggerClick"
               :disabled="dreamRunning"
               :title="dreamLastRunRelative
-                ? ($t('unify.dream.runNow') + '\n' + $t('unify.dream.lastRun', { ago: dreamLastRunRelative }))
-                : ($t('unify.dream.runNow') + '\n' + $t('unify.dream.lastRunNever'))"
+                ? ($t('unify.dream.runNow') + '\\n' + $t('unify.dream.lastRun', { ago: dreamLastRunRelative }))
+                : ($t('unify.dream.runNow') + '\\n' + $t('unify.dream.lastRunNever'))"
               :aria-label="$t('unify.dream.runNow')"
               :aria-busy="dreamRunning ? 'true' : 'false'"
             >
