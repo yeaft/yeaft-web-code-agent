@@ -204,6 +204,28 @@ const PROMPTS = {
 export const SUPPORTED_LANGUAGES = Object.keys(PROMPTS);
 
 /**
+ * Return true for Chinese locales. Real app config persists values like
+ * `zh-CN`; prompt templates are keyed by the base language (`zh`).
+ *
+ * @param {string} language
+ * @returns {boolean}
+ */
+export function isZhLanguage(language) {
+  return String(language || '').toLowerCase().startsWith('zh');
+}
+
+/**
+ * Normalize app/user locale to the prompt dictionary key.
+ * Protocol identifiers stay English; this only selects visible prose.
+ *
+ * @param {string} language
+ * @returns {'en'|'zh'}
+ */
+export function normalizePromptLanguage(language) {
+  return isZhLanguage(language) ? 'zh' : 'en';
+}
+
+/**
  * Build the system prompt for a given language.
  *
  * task-297: chat/work mode distinction was removed. The prompt now always uses
@@ -269,9 +291,9 @@ export function buildSystemPrompt({
   vpPersona,
   groupAnnouncement = '',
 } = {}) {
-  // Fallback to English for unknown languages
-  const lang = PROMPTS[language] || PROMPTS.en;
-  const effectiveLang = PROMPTS[language] ? language : 'en';
+  // Normalize app locales like `zh-CN` to prompt dictionary/template keys.
+  const effectiveLang = normalizePromptLanguage(language);
+  const lang = PROMPTS[effectiveLang] || PROMPTS.en;
 
   const parts = [];
 
@@ -676,7 +698,8 @@ const LAYER_A_HEADERS = {
  */
 export function renderLayerASummaries(summaries, language = 'en') {
   if (!summaries || typeof summaries !== 'object') return '';
-  const headers = LAYER_A_HEADERS[language] || LAYER_A_HEADERS.en;
+  const effectiveLang = normalizePromptLanguage(language);
+  const headers = LAYER_A_HEADERS[effectiveLang] || LAYER_A_HEADERS.en;
   const out = [];
   for (const key of ['user', 'group', 'vp']) {
     const body = typeof summaries[key] === 'string' ? summaries[key].trim() : '';
@@ -714,17 +737,18 @@ export function buildWorkerPrompt(params = {}) {
     includeShape = true,
     ...rest
   } = params;
+  const effectiveLang = normalizePromptLanguage(language);
 
   const parts = [];
 
   // Optional harness — describes the layered shape.
   if (includeShape) {
-    const shape = getTemplate('harnessWorkerShape', language);
+    const shape = getTemplate('harnessWorkerShape', effectiveLang);
     if (shape) parts.push(shape);
   }
 
   // Identity + Rules + Memory + Active Scope (DESIGN-PROMPT §3).
-  const baseBlock = buildSystemPrompt({ ...rest, language });
+  const baseBlock = buildSystemPrompt({ ...rest, language: effectiveLang });
   if (baseBlock) parts.push(baseBlock);
 
   return parts.join('\n\n');
@@ -741,7 +765,8 @@ export function buildWorkerPrompt(params = {}) {
  */
 export function renderPriorPlan(priorPlan, language = 'en') {
   if (!priorPlan || typeof priorPlan !== 'object') return '';
-  const header = language === 'zh' ? '## 上一轮 plan' : '## prior_plan';
+  const effectiveLang = normalizePromptLanguage(language);
+  const header = effectiveLang === 'zh' ? '## 上一轮 plan' : '## prior_plan';
   const lines = [];
   if (priorPlan.vpId) lines.push(`vpId: ${priorPlan.vpId}`);
   const fq = priorPlan.forwardQuery;
@@ -782,17 +807,18 @@ export function renderPriorPlan(priorPlan, language = 'en') {
  */
 export function buildRouterPrompt(params = {}) {
   const { language = 'en', summaries, routerContext, priorPlan, includeShape = true } = params;
+  const effectiveLang = normalizePromptLanguage(language);
   const parts = [];
 
   if (includeShape) {
-    const shape = getTemplate('harnessRouterShape', language);
+    const shape = getTemplate('harnessRouterShape', effectiveLang);
     if (shape) parts.push(shape);
   }
 
-  const summaryBlock = renderLayerASummaries(summaries, language);
+  const summaryBlock = renderLayerASummaries(summaries, effectiveLang);
   if (summaryBlock) parts.push(summaryBlock);
 
-  const priorBlock = renderPriorPlan(priorPlan, language);
+  const priorBlock = renderPriorPlan(priorPlan, effectiveLang);
   if (priorBlock) parts.push(priorBlock);
 
   if (typeof routerContext === 'string' && routerContext.trim()) {

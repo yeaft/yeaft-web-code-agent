@@ -195,6 +195,20 @@ describe('System prompt language selection', () => {
     expect(out).toContain('所有 VP 先看这里。');
   });
 
+  it('normalizes real app locale zh-CN before selecting visible prompt prose', () => {
+    const out = buildSystemPrompt({
+      language: 'zh-CN',
+      toolNames: ['Bash'],
+      groupAnnouncement: '公告',
+    });
+    expect(out).toContain('[群组公告]');
+    expect(out).toContain('日期：');
+    expect(out).toContain('可用工具：Bash');
+    expect(out).toContain('公告');
+    expect(out).not.toContain('[Group Announcement]');
+    expect(out).not.toContain('Available tools: Bash');
+  });
+
   it('keeps English visible headings/instructions for en users', () => {
     const out = buildSystemPrompt({
       language: 'en',
