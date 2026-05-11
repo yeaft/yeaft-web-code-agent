@@ -146,6 +146,22 @@ describe('handleUnifyDreamTrigger — routing', () => {
     expect(result).toBeTruthy();
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/not initialized/i);
+    // Regression (PR #757 review, Torvalds Important): the error
+    // envelope MUST carry the `groupId` tag so the frontend store can
+    // route the failure to the right row. Without this the per-group
+    // "Run dream now" button stays stuck on "Running…" forever
+    // because `applyDreamResult` can't find a row to update.
+    expect(result.groupId).toBe('g1');
+    expect(result.vpId).toBeUndefined();
+  });
+
+  it('uninitialised-scheduler error envelope carries vpId tag for legacy clients', async () => {
+    __testSetSession({ dreamScheduler: null });
+    await handleUnifyDreamTrigger({ vpId: 'steve' });
+    const result = find('unify_dream_result');
+    expect(result.success).toBe(false);
+    expect(result.vpId).toBe('steve');
+    expect(result.groupId).toBeUndefined();
   });
 
   it('catches scheduler exceptions and emits success=false with the message', async () => {

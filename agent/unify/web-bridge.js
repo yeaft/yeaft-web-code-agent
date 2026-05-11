@@ -2437,19 +2437,25 @@ export const __testRaceWithEscalation = raceWithEscalation;
  * which matches the pre-v0.1.754 behavior.
  */
 export async function handleUnifyDreamTrigger(msg = {}) {
+  // Resolve tag up-front so EVERY outbound envelope (including the
+  // scheduler-uninitialised early-return below) carries `groupId` /
+  // `vpId`. Without this the frontend's `applyDreamResult` couldn't
+  // route the error event back to the right row and the per-group
+  // "Run dream now" button would stay stuck on "Running…" forever
+  // (review feedback from PR #757).
+  const groupId = typeof msg.groupId === 'string' && msg.groupId ? msg.groupId : null;
+  const vpId = !groupId ? (msg.vpId || 'default') : null;
+  const tag = groupId ? { groupId } : { vpId };
+
   if (!session?.dreamScheduler) {
     sendToServer({
       type: 'unify_dream_result',
+      ...tag,
       success: false,
       error: 'Dream scheduler not initialized — session not loaded.',
     });
     return;
   }
-
-  const groupId = typeof msg.groupId === 'string' && msg.groupId ? msg.groupId : null;
-  const vpId = !groupId ? (msg.vpId || 'default') : null;
-  // Result envelope: route by which field was supplied.
-  const tag = groupId ? { groupId } : { vpId };
 
   try {
     sendToServer({

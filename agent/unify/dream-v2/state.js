@@ -1,7 +1,7 @@
 /**
  * dream-v2/state.js.
  *
- * Two pieces of state, tracked separately:
+ * Three pieces of state, tracked separately:
  *
  *   1. Per-group control state (used to decide whether a group enters
  *      triage and how far to advance the cursor):
@@ -31,7 +31,18 @@
  *      control-flow decision. We update it by replacing the existing
  *      block (if any) or appending a new one to the end of the file.
  *
- * Both helpers are pure I/O; no LLM, no logic beyond parsing.
+ *   3. Per-scope dream-error sink (added v0.1.754):
+ *
+ *        ~/.yeaft/memory/<scope>/.dream-last-error.json
+ *
+ *      Most-recent-wins JSON written unconditionally on every triage
+ *      or apply failure (best-effort — never throws even when the I/O
+ *      itself fails). The runner used to swallow these exceptions and
+ *      the only sink was a `config.debug`-gated console.log; this file
+ *      gives operators on-disk evidence regardless of debug. See
+ *      `writeDreamError` / `readDreamError` below for the contract.
+ *
+ * All helpers are pure I/O; no LLM, no logic beyond parsing.
  */
 
 import { promises as fsp, existsSync } from 'fs';
