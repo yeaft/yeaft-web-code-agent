@@ -50,7 +50,7 @@ export default {
         <header class="vp-detail-hero">
           <VpAvatar :vp-id="vpId" :size="48" />
           <div class="vp-detail-hero-text">
-            <h2 class="vp-detail-name">{{ vp.displayName || vpId }}</h2>
+            <h2 class="vp-detail-name">{{ vpLabel }}</h2>
             <p class="vp-detail-role" v-if="vp.role">{{ vp.role }}</p>
             <span
               v-if="vp.personaHash"
@@ -140,6 +140,12 @@ export default {
     const vp = Vue.computed(() => {
       if (!vpStore) return null;
       return vpStore.vpById(props.vpId);
+    });
+
+    const vpLabel = Vue.computed(() => {
+      if (vpStore && typeof vpStore.vpLabel === 'function') return vpStore.vpLabel(props.vpId);
+      const v = vp.value;
+      return (v && (v.displayName || v.vpId)) || props.vpId;
     });
 
     const traits = Vue.computed(() => {
@@ -256,6 +262,7 @@ export default {
 
     return {
       vp,
+      vpLabel,
       traits,
       personaBody,
       shortHash,

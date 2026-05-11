@@ -38,7 +38,7 @@ export default {
                 {{ vpInitialFor(vp.vpId) }}
               </div>
               <div class="vp-crud-card-meta">
-                <div class="vp-crud-card-name">{{ vp.displayName || vp.vpId }}</div>
+                <div class="vp-crud-card-name">{{ vpLabelFor(vp.vpId) }}</div>
                 <div class="vp-crud-card-id">@{{ vp.vpId }}</div>
                 <div class="vp-crud-card-role" v-if="vp.role">{{ vp.role }}</div>
               </div>
@@ -181,6 +181,7 @@ export default {
     },
     vpColorFor(vpId) { return this.vpStore.vpColor(vpId); },
     vpInitialFor(vpId) { return this.vpStore.vpInitial(vpId); },
+    vpLabelFor(vpId) { return this.vpStore.vpLabel(vpId); },
 
     startCreate() {
       this.editing = null;
@@ -219,7 +220,7 @@ export default {
     },
     async confirmDelete(vp) {
       if (this.busy) return;
-      const label = vp.displayName || vp.vpId;
+      const label = this.vpLabelFor(vp.vpId);
       const prompt = this.$t('unify.vp.crud.deleteConfirm').replace('{name}', label);
       if (typeof window !== 'undefined' && window.confirm && !window.confirm(prompt)) return;
       this.busy = true;

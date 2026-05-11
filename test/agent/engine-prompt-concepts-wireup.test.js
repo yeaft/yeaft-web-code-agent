@@ -31,11 +31,12 @@ class CapturingAdapter {
 }
 
 function mkEngine(adapter, opts = {}) {
+  const baseConfig = { model: 'test-model', maxOutputTokens: 1024, _readOnly: true, language: 'en' };
   return new Engine({
     adapter,
     trace: new NullTrace(),
-    config: { model: 'test-model', maxOutputTokens: 1024, _readOnly: true, language: 'en' },
     ...opts,
+    config: { ...baseConfig, ...(opts.config || {}) },
   });
 }
 
@@ -158,6 +159,57 @@ describe('E-b compact summary placement (DESIGN-PROMPT §4.3)', () => {
       typeof m.content === 'string' && /<conversation_summary>/.test(m.content)
     ).length;
     expect(csCount).toBe(1);
+  });
+});
+
+describe('prompt language threading through Engine.query()', () => {
+  it('renders zh-CN system prompt prose through the real Engine.query path', async () => {
+    const adapter = new CapturingAdapter();
+    const toolRegistry = {
+      getToolNames: () => ['Bash'],
+      getToolDefs: () => [],
+    };
+    const engine = mkEngine(adapter, {
+      config: { language: 'zh-CN' },
+      toolRegistry,
+    });
+
+    for await (const _ of engine.query({
+      prompt: '你好',
+      messages: [],
+      groupAnnouncement: '公告',
+    })) { /* drain */ }
+
+    const sys = adapter.calls[0].system || '';
+    expect(sys).toContain('[群组公告]');
+    expect(sys).toContain('日期：');
+    expect(sys).toContain('可用工具：Bash');
+    expect(sys).not.toContain('[Group Announcement]');
+    expect(sys).not.toContain('Available tools: Bash');
+  });
+
+  it('keeps English system prompt prose for en users through Engine.query', async () => {
+    const adapter = new CapturingAdapter();
+    const toolRegistry = {
+      getToolNames: () => ['Bash'],
+      getToolDefs: () => [],
+    };
+    const engine = mkEngine(adapter, {
+      config: { language: 'en' },
+      toolRegistry,
+    });
+
+    for await (const _ of engine.query({
+      prompt: 'hello',
+      messages: [],
+      groupAnnouncement: 'notice',
+    })) { /* drain */ }
+
+    const sys = adapter.calls[0].system || '';
+    expect(sys).toContain('[Group Announcement]');
+    expect(sys).toContain('Available tools: Bash');
+    expect(sys).not.toContain('[群组公告]');
+    expect(sys).not.toContain('可用工具：Bash');
   });
 });
 

@@ -181,6 +181,15 @@ function invalidateGroupContext(groupId) {
  */
 export function broadcastLanguageChange(language) {
   if (!language) return;
+
+  // Engine.#buildSystemPrompt reads from its config object at turn time. The
+  // cached engines are updated below, but newly-created per-VP engines receive
+  // `session.config` in getOrCreateVpEngine(). Keep that authoritative object
+  // in sync too, or zh-CN users get English prompts again after cache misses.
+  if (session?.config) {
+    session.config.language = language;
+  }
+
   for (const eng of vpEngines.values()) {
     try { eng.setLanguage?.(language); } catch { /* best-effort */ }
   }
