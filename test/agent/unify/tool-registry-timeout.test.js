@@ -149,3 +149,98 @@ describe('ToolRegistry.execute — per-tool timeout', () => {
     expect(out).toContain('[truncated:');
   });
 });
+
+
+describe('ToolRegistry.getToolDefs — language-aware visible prose', () => {
+  it('localizes zh tool descriptions while preserving protocol fields', () => {
+    const reg = new ToolRegistry();
+    reg.register(defineTool({
+      name: 'SampleTool',
+      description: 'Execute the sample operation.',
+      parameters: {
+        type: 'object',
+        properties: {
+          file_path: {
+            type: 'string',
+            description: 'Path to the file to process',
+          },
+        },
+        required: ['file_path'],
+      },
+      execute: async () => 'ok',
+    }));
+
+    const [def] = reg.getToolDefs('zh');
+    expect(def.name).toBe('SampleTool');
+    expect(def.parameters.type).toBe('object');
+    expect(def.parameters.properties.file_path.type).toBe('string');
+    expect(def.parameters.required).toEqual(['file_path']);
+    expect(def.description).toContain('工具说明');
+    expect(def.description).toContain('工具名、参数名、JSON key');
+    expect(def.parameters.properties.file_path.description).toContain('工具说明');
+    expect(Object.keys(def.parameters.properties)).toEqual(['file_path']);
+  });
+
+  it('keeps English tool definitions unchanged for en users', () => {
+    const reg = new ToolRegistry();
+    reg.register(defineTool({
+      name: 'SampleTool',
+      description: 'Execute the sample operation.',
+      parameters: {
+        type: 'object',
+        properties: {
+          file_path: { type: 'string', description: 'Path to the file to process' },
+        },
+      },
+      execute: async () => 'ok',
+    }));
+
+    const [def] = reg.getToolDefs('en');
+    expect(def.description).toBe('Execute the sample operation.');
+    expect(def.parameters.properties.file_path.description).toBe('Path to the file to process');
+  });
+
+  it('does not mutate registered parameter schemas when rendering zh defs', () => {
+    const reg = new ToolRegistry();
+    const parameters = {
+      type: 'object',
+      properties: {
+        file_path: { type: 'string', description: 'Path to the file to process' },
+      },
+      required: ['file_path'],
+    };
+    reg.register(defineTool({
+      name: 'SampleTool',
+      description: 'Execute the sample operation.',
+      parameters,
+      execute: async () => 'ok',
+    }));
+
+    const [zhDef] = reg.getToolDefs('zh');
+    const [enDef] = reg.getToolDefs('en');
+
+    expect(zhDef.parameters).not.toBe(parameters);
+    expect(zhDef.parameters.properties.file_path.description).toContain('工具说明');
+    expect(parameters.properties.file_path.description).toBe('Path to the file to process');
+    expect(enDef.parameters).toBe(parameters);
+    expect(enDef.parameters.properties.file_path.description).toBe('Path to the file to process');
+  });
+
+  it('localizes model-visible truncation marker for zh tool results', async () => {
+    const reg = new ToolRegistry();
+    const big = 'x'.repeat(64 * 1024);
+    reg.register(defineTool({
+      name: 'big_tool',
+      description: '',
+      parameters: { type: 'object', properties: {} },
+      execute: async () => big,
+    }));
+
+    const out = await reg.execute('big_tool', {}, {
+      contextWindow: 8000,
+      config: { language: 'zh' },
+    });
+    expect(out).toContain('[已截断：');
+    expect(out).not.toContain('[truncated:');
+  });
+});

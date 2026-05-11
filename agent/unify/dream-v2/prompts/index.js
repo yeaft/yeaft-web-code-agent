@@ -48,6 +48,16 @@ export function extractTemplateForScope(scope) {
 /** @type {Record<string, string>} */
 const cache = {};
 
+export function normalizePromptLanguage(language) {
+  return String(language || '').toLowerCase().startsWith('zh') ? 'zh' : 'en';
+}
+
+function languageDirective(language) {
+  return normalizePromptLanguage(language) === 'zh'
+    ? '语言要求：请用中文生成所有自然语言内容，尤其是 memory_md 和 summary_md；工具名、scope、JSON key、schema 字段、代码标识符和枚举值必须保持英文。严格按要求输出 JSON 时，不要翻译 JSON key。'
+    : 'Language requirement: write all natural-language memory content in English. Keep tool names, scopes, JSON keys, schema fields, code identifiers, and enum values in English. When strict JSON is required, do not rename JSON keys.';
+}
+
 function load(name) {
   if (cache[name]) return cache[name];
   const file = FILES[name];
@@ -63,13 +73,17 @@ function load(name) {
  *
  * @param {string} name
  * @param {Record<string, string>} vars
+ * @param {{ language?: string, includeLanguageDirective?: boolean }} [opts]
  */
-export function render(name, vars) {
+export function render(name, vars, opts = {}) {
   const tpl = load(name);
-  return tpl.replace(/\{\{(\w+)\}\}/g, (_m, key) => {
+  const body = tpl.replace(/\{\{(\w+)\}\}/g, (_m, key) => {
     if (!(key in vars)) throw new Error(`prompts.${name}: missing var ${key}`);
     return vars[key];
   });
+  if (opts.includeLanguageDirective === false) return body;
+  if (!opts.language) return body;
+  return `${languageDirective(opts.language)}\n\n${body}`;
 }
 
 /** Test-only: drop the in-memory cache so a fresh read re-loads from disk. */

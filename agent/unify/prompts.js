@@ -178,6 +178,7 @@ const PROMPTS = {
       `💡 ${min}min since last summary (+${count} new messages). Consider calling \`task_summary_post\`.`,
     // DESIGN-PROMPT §3 ④ — Active Scope header
     activeScopeHeader: '## active_scope',
+    groupAnnouncementHeader: '[Group Announcement]',
     vpPersonaIntro: (name, role) =>
       `You ARE **${name}**${role ? ` (${role})` : ''}. Speak in the first person as ${name}; do not refer to yourself as "Yeaft" or as a generic AI assistant. The text below is your identity, expertise, and decision style.`,
   },
@@ -193,6 +194,7 @@ const PROMPTS = {
       `💡 距上次 summary 已过 ${min}min，新增 ${count} 条消息，建议调用 \`task_summary_post\`。`,
     // DESIGN-PROMPT §3 ④ — Active Scope header
     activeScopeHeader: '## active_scope',
+    groupAnnouncementHeader: '[群组公告]',
     vpPersonaIntro: (name, role) =>
       `你就是 **${name}**${role ? `（${role}）` : ''}。请以 ${name} 的第一人称发言；不要自称 "Yeaft" 或泛指的 AI 助手。下面的文字是你的身份、专业方向与判断风格。`,
   },
@@ -200,6 +202,28 @@ const PROMPTS = {
 
 /** Supported language codes. */
 export const SUPPORTED_LANGUAGES = Object.keys(PROMPTS);
+
+/**
+ * Return true for Chinese locales. Real app config persists values like
+ * `zh-CN`; prompt templates are keyed by the base language (`zh`).
+ *
+ * @param {string} language
+ * @returns {boolean}
+ */
+export function isZhLanguage(language) {
+  return String(language || '').toLowerCase().startsWith('zh');
+}
+
+/**
+ * Normalize app/user locale to the prompt dictionary key.
+ * Protocol identifiers stay English; this only selects visible prose.
+ *
+ * @param {string} language
+ * @returns {'en'|'zh'}
+ */
+export function normalizePromptLanguage(language) {
+  return isZhLanguage(language) ? 'zh' : 'en';
+}
 
 /**
  * Build the system prompt for a given language.
@@ -267,9 +291,9 @@ export function buildSystemPrompt({
   vpPersona,
   groupAnnouncement = '',
 } = {}) {
-  // Fallback to English for unknown languages
-  const lang = PROMPTS[language] || PROMPTS.en;
-  const effectiveLang = PROMPTS[language] ? language : 'en';
+  // Normalize app locales like `zh-CN` to prompt dictionary/template keys.
+  const effectiveLang = normalizePromptLanguage(language);
+  const lang = PROMPTS[effectiveLang] || PROMPTS.en;
 
   const parts = [];
 
@@ -299,7 +323,7 @@ export function buildSystemPrompt({
   // instructions. Empty/whitespace = no block emitted.
   const annText = (typeof groupAnnouncement === 'string') ? groupAnnouncement.trim() : '';
   if (annText) {
-    parts.push(`[Group Announcement]\n${annText}`);
+    parts.push(`${lang.groupAnnouncementHeader || '[Group Announcement]'}\n${annText}`);
   }
 
   // ─── 2. Date Metadata ──────────────────────────────────
@@ -674,7 +698,8 @@ const LAYER_A_HEADERS = {
  */
 export function renderLayerASummaries(summaries, language = 'en') {
   if (!summaries || typeof summaries !== 'object') return '';
-  const headers = LAYER_A_HEADERS[language] || LAYER_A_HEADERS.en;
+  const effectiveLang = normalizePromptLanguage(language);
+  const headers = LAYER_A_HEADERS[effectiveLang] || LAYER_A_HEADERS.en;
   const out = [];
   for (const key of ['user', 'group', 'vp']) {
     const body = typeof summaries[key] === 'string' ? summaries[key].trim() : '';
@@ -712,17 +737,18 @@ export function buildWorkerPrompt(params = {}) {
     includeShape = true,
     ...rest
   } = params;
+  const effectiveLang = normalizePromptLanguage(language);
 
   const parts = [];
 
   // Optional harness — describes the layered shape.
   if (includeShape) {
-    const shape = getTemplate('harnessWorkerShape', language);
+    const shape = getTemplate('harnessWorkerShape', effectiveLang);
     if (shape) parts.push(shape);
   }
 
   // Identity + Rules + Memory + Active Scope (DESIGN-PROMPT §3).
-  const baseBlock = buildSystemPrompt({ ...rest, language });
+  const baseBlock = buildSystemPrompt({ ...rest, language: effectiveLang });
   if (baseBlock) parts.push(baseBlock);
 
   return parts.join('\n\n');
@@ -739,7 +765,8 @@ export function buildWorkerPrompt(params = {}) {
  */
 export function renderPriorPlan(priorPlan, language = 'en') {
   if (!priorPlan || typeof priorPlan !== 'object') return '';
-  const header = language === 'zh' ? '## 上一轮 plan' : '## prior_plan';
+  const effectiveLang = normalizePromptLanguage(language);
+  const header = effectiveLang === 'zh' ? '## 上一轮 plan' : '## prior_plan';
   const lines = [];
   if (priorPlan.vpId) lines.push(`vpId: ${priorPlan.vpId}`);
   const fq = priorPlan.forwardQuery;
@@ -780,17 +807,18 @@ export function renderPriorPlan(priorPlan, language = 'en') {
  */
 export function buildRouterPrompt(params = {}) {
   const { language = 'en', summaries, routerContext, priorPlan, includeShape = true } = params;
+  const effectiveLang = normalizePromptLanguage(language);
   const parts = [];
 
   if (includeShape) {
-    const shape = getTemplate('harnessRouterShape', language);
+    const shape = getTemplate('harnessRouterShape', effectiveLang);
     if (shape) parts.push(shape);
   }
 
-  const summaryBlock = renderLayerASummaries(summaries, language);
+  const summaryBlock = renderLayerASummaries(summaries, effectiveLang);
   if (summaryBlock) parts.push(summaryBlock);
 
-  const priorBlock = renderPriorPlan(priorPlan, language);
+  const priorBlock = renderPriorPlan(priorPlan, effectiveLang);
   if (priorBlock) parts.push(priorBlock);
 
   if (typeof routerContext === 'string' && routerContext.trim()) {

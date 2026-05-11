@@ -180,3 +180,45 @@ describe('Memory section single outlet (DESIGN-PROMPT §3 ③)', () => {
     expect(out).not.toContain('Earlier we discussed X.');
   });
 });
+
+
+describe('System prompt language selection', () => {
+  it('uses Chinese visible headings/instructions for zh users', () => {
+    const out = buildSystemPrompt({
+      language: 'zh',
+      toolNames: ['Bash'],
+      groupAnnouncement: '所有 VP 先看这里。',
+    });
+    expect(out).toContain('[群组公告]');
+    expect(out).toContain('日期：');
+    expect(out).toContain('可用工具：Bash');
+    expect(out).toContain('所有 VP 先看这里。');
+  });
+
+  it('normalizes real app locale zh-CN before selecting visible prompt prose', () => {
+    const out = buildSystemPrompt({
+      language: 'zh-CN',
+      toolNames: ['Bash'],
+      groupAnnouncement: '公告',
+    });
+    expect(out).toContain('[群组公告]');
+    expect(out).toContain('日期：');
+    expect(out).toContain('可用工具：Bash');
+    expect(out).toContain('公告');
+    expect(out).not.toContain('[Group Announcement]');
+    expect(out).not.toContain('Available tools: Bash');
+  });
+
+  it('keeps English visible headings/instructions for en users', () => {
+    const out = buildSystemPrompt({
+      language: 'en',
+      toolNames: ['Bash'],
+      groupAnnouncement: 'Read this first.',
+    });
+    expect(out).toContain('[Group Announcement]');
+    expect(out).toContain('Date:');
+    expect(out).toContain('Available tools: Bash');
+    expect(out).toContain('Read this first.');
+    expect(out).not.toContain('[群组公告]');
+  });
+});

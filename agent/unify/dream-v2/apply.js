@@ -28,7 +28,11 @@ import { snapshotScope } from './snapshot.js';
 import { parseJsonSafe } from './triage.js';
 import { render } from './prompts/index.js';
 
-const SYSTEM = `You are the Apply stage of a dream pipeline. You rewrite a single scope's memory.md and summary.md based on recent group conversations. Reply with strict JSON only — no prose, no fences.`;
+function applySystem(language) {
+  return String(language || '').toLowerCase().startsWith('zh')
+    ? '你是梦境流水线的 Apply 阶段。你会根据最近的群组对话重写单个 scope 的 memory.md 和 summary.md。请只回复严格 JSON，不要输出说明文字或 markdown fence。memory_md 和 summary_md 的自然语言内容必须使用中文；JSON key、scope、schema 字段和代码标识符保持英文。'
+    : 'You are the Apply stage of a dream pipeline. You rewrite a single scope\'s memory.md and summary.md based on recent group conversations. Reply with strict JSON only — no prose, no fences.';
+}
 
 /**
  * Build the UPDATE prompt body. Accepts the current scope state +
@@ -44,16 +48,18 @@ const SYSTEM = `You are the Apply stage of a dream pipeline. You rewrite a singl
  */
 export function buildUpdatePrompt(ctx) {
   const batchHeader = (ctx.batchInfo && ctx.batchInfo.total > 1)
-    ? `This is batch ${ctx.batchInfo.index} of ${ctx.batchInfo.total}.\nEarlier batches have already been folded into the current memory.md below.\n`
+    ? (String(ctx.language || '').toLowerCase().startsWith('zh')
+      ? `这是第 ${ctx.batchInfo.index}/${ctx.batchInfo.total} 批。前面的批次已经合并进下面当前的 memory.md。\n`
+      : `This is batch ${ctx.batchInfo.index} of ${ctx.batchInfo.total}.\nEarlier batches have already been folded into the current memory.md below.\n`)
     : '';
-  const sources = renderSourceBlocks(ctx.sources);
+  const sources = renderSourceBlocks(ctx.sources, ctx.language);
   return render('update', {
     target: ctx.target,
     batchHeader,
     memoryMd: ctx.memoryMd || '',
     summaryMd: ctx.summaryMd || '',
     sources,
-  });
+  }, { language: ctx.language });
 }
 
 /**
@@ -67,10 +73,10 @@ export function buildUpdatePrompt(ctx) {
  * }} ctx
  */
 export function buildCreatePrompt(ctx) {
-  const sources = renderSourceBlocks(ctx.sources);
+  const sources = renderSourceBlocks(ctx.sources, ctx.language);
   let siblingsBlock = '';
   if (ctx.siblingTopics && ctx.siblingTopics.length > 0) {
-    const lines = ['For tone reference, sibling/parent topic summaries:'];
+    const lines = [String(ctx.language || '').toLowerCase().startsWith('zh') ? '语气参考：同级/父级 topic 摘要：' : 'For tone reference, sibling/parent topic summaries:'];
     for (const t of ctx.siblingTopics) lines.push(`  - ${t.path}: ${oneLine(t.summary)}`);
     lines.push('');
     siblingsBlock = lines.join('\n');
@@ -79,7 +85,7 @@ export function buildCreatePrompt(ctx) {
     target: ctx.target,
     sources,
     siblingsBlock,
-  });
+  }, { language: ctx.language });
 }
 
 /**
@@ -89,13 +95,13 @@ export function buildCreatePrompt(ctx) {
  *
  * @param {Array<{ groupId: string, diff: Array<object> }>} sources
  */
-function renderSourceBlocks(sources) {
+function renderSourceBlocks(sources, language) {
   const out = [];
   for (const src of (sources || [])) {
     out.push('');
     out.push(`[group/${src.groupId}]`);
     for (const m of (src.diff || [])) {
-      const head = `[${m.role || 'message'}${m.kind === 'overlap' ? ' (already processed)' : ''}]`;
+      const head = `[${m.role || 'message'}${m.kind === 'overlap' ? (String(language || '').toLowerCase().startsWith('zh') ? '（已处理）' : ' (already processed)') : ''}]`;
       out.push(head);
       out.push(truncateMessage(m.body || ''));
     }
@@ -174,9 +180,10 @@ export async function applyMergedTarget(merged, opts) {
       target: merged.target,
       sources: merged.sources,
       siblingTopics: siblings,
+      language: opts.language,
     });
     if (opts.onProgress) opts.onProgress({ phase: 'apply', target: merged.target, status: 'llm', batch: 1, of: 1 });
-    const raw = await opts.llm({ pass: 'create', prompt, system: SYSTEM });
+    const raw = await opts.llm({ pass: 'create', prompt, system: applySystem(opts.language) });
     const parsed = parseJsonSafe(raw);
     if (!parsed || typeof parsed.memory_md !== 'string') {
       throw new Error(`apply: CREATE returned malformed JSON for ${merged.target}`);
@@ -202,9 +209,10 @@ export async function applyMergedTarget(merged, opts) {
         summaryMd,
         sources: batch,
         batchInfo: { index: i, total: batches.length },
+        language: opts.language,
       });
       if (opts.onProgress) opts.onProgress({ phase: 'apply', target: merged.target, status: 'llm', batch: i, of: batches.length });
-      const raw = await opts.llm({ pass: 'update', prompt, system: SYSTEM });
+      const raw = await opts.llm({ pass: 'update', prompt, system: applySystem(opts.language) });
       const parsed = parseJsonSafe(raw);
       if (!parsed || typeof parsed.memory_md !== 'string') {
         throw new Error(`apply: UPDATE batch ${i} returned malformed JSON for ${merged.target}`);

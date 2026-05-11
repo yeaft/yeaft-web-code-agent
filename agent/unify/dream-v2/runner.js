@@ -143,6 +143,7 @@ export async function runDream(opts) {
         topicSummaries,
         llm: opts.llm,
         onProgress,
+        language: opts.language,
       });
     } catch (err) {
       groupsReport.push({ groupId, new: newCount, status: 'error', error: err.message });
@@ -178,6 +179,7 @@ export async function runDream(opts) {
         nowIso: opts.nowIso || (() => nowIso),
         onProgress,
         siblingTopicsFor: opts.siblingTopicsFor,
+        language: opts.language,
       });
       targetsReport.push({ ...r, sources: merged.sources.length, status: 'done' });
     } catch (err) {
