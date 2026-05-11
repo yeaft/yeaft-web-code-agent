@@ -30,7 +30,7 @@ export default {
     initialSection: {
       type: String,
       default: 'announcement',
-      validator: v => ['announcement', 'members', 'rename', 'danger'].includes(v),
+      validator: v => ['announcement', 'members', 'rename', 'memory', 'danger'].includes(v),
     },
   },
   data() {
@@ -99,8 +99,23 @@ export default {
         { id: 'announcement', label: this.$t('unify.group.settings.nav.announcement') },
         { id: 'members', label: this.$t('unify.group.settings.nav.members') },
         { id: 'rename', label: this.$t('unify.group.settings.nav.rename') },
+        { id: 'memory', label: this.$t('unify.group.settings.nav.memory') },
         { id: 'danger', label: this.$t('unify.group.settings.nav.danger') },
       ];
+    },
+    /**
+     * v0.1.754 — reactive dream status for THIS group. Reads from
+     * vpStore.groupDreamStatus so the "Run dream now" button flips
+     * between idle / running / success / error states without manual
+     * polling. Returns the same shape as `dreamStatusFor`.
+     */
+    groupDreamStatus() {
+      const vs = this.vpStore;
+      if (!vs) return { status: 'idle', lastRunAt: null, lastResult: null, lastError: null };
+      return vs.groupDreamStatusFor(this.groupId);
+    },
+    dreamRunning() {
+      return this.groupDreamStatus.status === 'running';
     },
   },
   watch: {
@@ -272,6 +287,19 @@ export default {
         this.membersBusy = false;
       }
     },
+    // ── Memory (manual dream trigger) ───────────────────────
+    // v0.1.754: lets the user kick the dream scheduler for this group
+    // after observing that the Resident layer is stuck on the bootstrap
+    // seed. Status flows back as a `groupId`-tagged unify_dream_result
+    // and lands in `vpStore.groupDreamStatus`.
+    runDream() {
+      if (!this.vpStore || this.dreamRunning) return;
+      this.vpStore.triggerGroupDream(this.groupId);
+    },
+    formatDreamTimestamp(ms) {
+      if (!ms) return '';
+      try { return new Date(ms).toLocaleString(); } catch (_) { return ''; }
+    },
     // ── Danger zone (delete) ────────────────────────────────
     async confirmDelete() {
       if (!this.deleteConfirmReady || this.deleteBusy || !this.chat) return;
@@ -420,6 +448,34 @@ export default {
                   @click="saveRename"
                 >{{ renameBusy ? $t('unify.group.settings.rename.saving') : $t('unify.group.settings.rename.save') }}</button>
               </div>
+            </div>
+
+            <!-- Memory (manual dream trigger) -->
+            <div v-else-if="section === 'memory'" class="group-settings-section">
+              <h3 class="group-settings-heading">{{ $t('unify.group.settings.memory.heading') }}</h3>
+              <p class="group-settings-help">{{ $t('unify.group.settings.memory.help') }}</p>
+              <div class="group-settings-actions">
+                <button
+                  type="button"
+                  class="group-settings-primary"
+                  :disabled="dreamRunning"
+                  @click="runDream"
+                >{{ dreamRunning
+                    ? $t('unify.group.settings.memory.running')
+                    : $t('unify.group.settings.memory.runNow') }}</button>
+              </div>
+              <p
+                v-if="groupDreamStatus.status === 'success' && groupDreamStatus.lastRunAt"
+                class="group-settings-help group-settings-memory-status group-settings-memory-status-success"
+              >{{ $t('unify.group.settings.memory.lastSuccess', {
+                  time: formatDreamTimestamp(groupDreamStatus.lastRunAt),
+                  count: groupDreamStatus.lastResult?.entriesCreated ?? 0,
+              }) }}</p>
+              <p
+                v-else-if="groupDreamStatus.status === 'error'"
+                class="group-settings-error group-settings-memory-status"
+                role="alert"
+              >{{ $t('unify.group.settings.memory.lastError', { error: groupDreamStatus.lastError || 'unknown' }) }}</p>
             </div>
 
             <!-- Danger zone -->

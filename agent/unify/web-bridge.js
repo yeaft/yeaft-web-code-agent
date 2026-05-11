@@ -2418,7 +2418,23 @@ export function __testGetRegisteredThreadIds() {
 export const __testRaceWithEscalation = raceWithEscalation;
 
 /**
- * Manual dream trigger from VP detail page.
+ * Manual dream trigger.
+ *
+ * Two call shapes, both routed through this single handler:
+ *
+ *   { type: 'unify_dream_trigger', vpId }     — per-VP trigger (legacy
+ *     VP-detail page button). Fires an unscoped dream pass; the result
+ *     event is tagged with `vpId` so the per-VP store row updates.
+ *
+ *   { type: 'unify_dream_trigger', groupId }  — per-GROUP trigger (new
+ *     in v0.1.754 — added so users can manually kick dream for a group
+ *     after seeing the Resident layer stuck on the bootstrap seed).
+ *     Fires a scope-filtered pass via `triggerDreamForScopes(['group/X'])`
+ *     so unrelated groups don't get processed; the result event is
+ *     tagged with `groupId` for the per-group UI row.
+ *
+ * Backwards-compat: when neither field is set, defaults to `vpId='default'`
+ * which matches the pre-v0.1.754 behavior.
  */
 export async function handleUnifyDreamTrigger(msg = {}) {
   if (!session?.dreamScheduler) {
@@ -2430,16 +2446,21 @@ export async function handleUnifyDreamTrigger(msg = {}) {
     return;
   }
 
-  const vpId = msg.vpId || 'default';
+  const groupId = typeof msg.groupId === 'string' && msg.groupId ? msg.groupId : null;
+  const vpId = !groupId ? (msg.vpId || 'default') : null;
+  // Result envelope: route by which field was supplied.
+  const tag = groupId ? { groupId } : { vpId };
 
   try {
     sendToServer({
       type: 'unify_dream_status',
-      vpId,
+      ...tag,
       status: 'running',
     });
 
-    const result = await session.dreamScheduler.triggerDreamNow();
+    const result = groupId
+      ? await session.dreamScheduler.triggerDreamForScopes([`group/${groupId}`])
+      : await session.dreamScheduler.triggerDreamNow();
 
     // fix/dream-cadence-and-ui-trigger: derive a single "entries
     // created" count for the UI bubble. The runner returns a richer
@@ -2457,7 +2478,7 @@ export async function handleUnifyDreamTrigger(msg = {}) {
     // PR #743.
     sendToServer({
       type: 'unify_dream_result',
-      vpId,
+      ...tag,
       ...result,
       success: !result.error && !result.skipped,
       entriesCreated,
@@ -2466,7 +2487,7 @@ export async function handleUnifyDreamTrigger(msg = {}) {
   } catch (err) {
     sendToServer({
       type: 'unify_dream_result',
-      vpId,
+      ...tag,
       success: false,
       error: err?.message || String(err),
     });
