@@ -464,7 +464,7 @@ export class Engine {
    */
   #getToolDefs() {
     if (this.#toolRegistry) {
-      return this.#toolRegistry.getToolDefs();
+      return this.#toolRegistry.getToolDefs(this.#config?.language || 'en');
     }
     // Legacy path: no mode filtering
     const defs = [];
@@ -645,7 +645,9 @@ export class Engine {
         runLLM: async (prompt) => {
           const out = await this.#adapter.call({
             model: this.#fastConfig.model,
-            system: 'You are a memory-management subroutine. Reply with a single JSON object as instructed.',
+            system: (String(this.#config?.language || '').toLowerCase().startsWith('zh')
+          ? '你是记忆管理子程序。请按要求只回复一个 JSON 对象，不要输出额外说明。'
+          : 'You are a memory-management subroutine. Reply with a single JSON object as instructed.'),
             messages: [{ role: 'user', content: prompt }],
             maxTokens: 1024,
           });

@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   render, _resetCache, extractTemplateForScope,
 } from '../../../../agent/unify/dream-v2/prompts/index.js';
+import { buildPass1Prompt } from '../../../../agent/unify/dream-v2/triage.js';
+import { buildUpdatePrompt, buildCreatePrompt } from '../../../../agent/unify/dream-v2/apply.js';
 
 describe('dream-v2 prompts loader', () => {
   it('renders triagePass1 with substituted vars', () => {
@@ -46,6 +48,74 @@ describe('dream-v2 prompts loader', () => {
     expect(out).toContain('topic/sci/phys');
     expect(out).not.toContain('sibling/parent');
   });
+
+  it('adds Chinese language instruction for zh dream prompts without renaming JSON keys', () => {
+    const out = render('update', {
+      target: 'user',
+      batchHeader: '',
+      memoryMd: 'old',
+      summaryMd: 'sum',
+      sources: '[group/g-eng]',
+    }, { language: 'zh' });
+    expect(out).toContain('语言要求：请用中文生成所有自然语言内容');
+    expect(out).toContain('JSON key');
+    expect(out).toContain('memory_md');
+    expect(out).toContain('summary_md');
+  });
+
+  it('keeps English language instruction for en dream prompts', () => {
+    const out = render('update', {
+      target: 'user',
+      batchHeader: '',
+      memoryMd: 'old',
+      summaryMd: 'sum',
+      sources: '[group/g-eng]',
+    }, { language: 'en' });
+    expect(out).toContain('Language requirement: write all natural-language memory content in English');
+    expect(out).toContain('memory_md');
+    expect(out).not.toContain('语言要求');
+  });
+
+  it('builds zh triage prompts with Chinese visible instructions and English protocol keys', () => {
+    const out = buildPass1Prompt({
+      language: 'zh',
+      groupId: 'g-eng',
+      topicSummaries: [],
+      messages: [{ role: 'user', kind: 'overlap', body: '你好' }],
+    });
+    expect(out).toContain('语言要求：请用中文生成所有自然语言内容');
+    expect(out).toContain('（无）');
+    expect(out).toContain('已处理');
+    expect(out).toContain('user_profile_signals');
+    expect(out).toContain('trivial_only');
+  });
+
+  it('builds zh apply prompts but keeps JSON keys unchanged', () => {
+    const update = buildUpdatePrompt({
+      language: 'zh',
+      target: 'user',
+      memoryMd: '旧记忆',
+      summaryMd: '摘要',
+      sources: [{ groupId: 'g', diff: [{ role: 'user', kind: 'overlap', body: '新的事实' }] }],
+      batchInfo: { index: 1, total: 2 },
+    });
+    expect(update).toContain('这是第 1/2 批');
+    expect(update).toContain('语言要求：请用中文生成所有自然语言内容');
+    expect(update).toContain('memory_md');
+    expect(update).toContain('summary_md');
+    expect(update).toContain('已处理');
+
+    const create = buildCreatePrompt({
+      language: 'zh',
+      target: 'topic/auth/jwt',
+      sources: [{ groupId: 'g', diff: [{ role: 'user', body: 'JWT 讨论' }] }],
+      siblingTopics: [{ path: 'auth/oauth', summary: 'OAuth notes' }],
+    });
+    expect(create).toContain('语气参考');
+    expect(create).toContain('memory_md');
+    expect(create).toContain('summary_md');
+  });
+
 });
 
 describe('dream-v2 per-scope extract prompts (H2.e)', () => {

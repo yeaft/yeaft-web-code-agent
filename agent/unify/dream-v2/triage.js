@@ -39,7 +39,11 @@ import { isValidTopic } from '../memory/store-v2.js';
 import { truncateMessage } from './segment.js';
 import { render } from './prompts/index.js';
 
-const SYSTEM = `You are the Triage stage of a dream pipeline that decides which scopes a recent group conversation should affect. Reply with strict JSON only — no prose, no markdown fences.`;
+function triageSystem(language) {
+  return String(language || '').toLowerCase().startsWith('zh')
+    ? '你是梦境流水线的 Triage 阶段，负责判断最近的群组对话会影响哪些 scope。请只回复严格 JSON，不要输出说明文字或 markdown fence。自然语言内容使用中文；JSON key、scope 和枚举值保持英文。'
+    : 'You are the Triage stage of a dream pipeline that decides which scopes a recent group conversation should affect. Reply with strict JSON only — no prose, no markdown fences.';
+}
 
 /**
  * Hard rules: deterministically derive must-include scopes from the
@@ -89,11 +93,11 @@ export function applyHardRules({ groupId, messages }) {
  */
 export function buildPass1Prompt(ctx) {
   const topicSummaries = (!ctx.topicSummaries || ctx.topicSummaries.length === 0)
-    ? '  (none)'
+    ? (String(ctx.language || '').toLowerCase().startsWith('zh') ? '  （无）' : '  (none)')
     : ctx.topicSummaries.map(t => `  - ${t.path} — ${oneLine(t.summary)}`).join('\n');
   const conv = [];
   for (const m of (ctx.messages || [])) {
-    const head = `[${m.role || 'message'}${m.kind === 'overlap' ? ' (already processed)' : ''}]`;
+    const head = `[${m.role || 'message'}${m.kind === 'overlap' ? (String(ctx.language || '').toLowerCase().startsWith('zh') ? '（已处理）' : ' (already processed)') : ''}]`;
     conv.push(head);
     conv.push(truncateMessage(m.body || ''));
     conv.push('');
@@ -102,7 +106,7 @@ export function buildPass1Prompt(ctx) {
     groupId: ctx.groupId,
     topicSummaries,
     conversation: conv.join('\n').trimEnd(),
-  });
+  }, { language: ctx.language });
 }
 
 /**
@@ -112,12 +116,12 @@ export function buildPass1Prompt(ctx) {
  */
 export function buildPass2Prompt(ctx) {
   const existingTopics = (!ctx.existingTopics || ctx.existingTopics.length === 0)
-    ? '  (none)'
+    ? (String(ctx.language || '').toLowerCase().startsWith('zh') ? '  （无）' : '  (none)')
     : ctx.existingTopics.map(t => `  - ${t.path} — ${oneLine(t.summary)}`).join('\n');
   return render('triagePass2', {
     description: ctx.description,
     existingTopics,
-  });
+  }, { language: ctx.language });
 }
 
 /**
@@ -131,10 +135,10 @@ export function buildPass2Prompt(ctx) {
  * }} args
  * @returns {Promise<Array<{ kind: 'update'|'create', scope: string }>>}
  */
-export async function classifySoft({ groupId, messages, topicSummaries, llm }) {
+export async function classifySoft({ groupId, messages, topicSummaries, llm, language }) {
   if (!llm) throw new Error('triage.classifySoft: llm callable required');
-  const pass1Prompt = buildPass1Prompt({ groupId, messages, topicSummaries });
-  const pass1Raw = await llm({ pass: 'triage-pass1', prompt: pass1Prompt, system: SYSTEM });
+  const pass1Prompt = buildPass1Prompt({ groupId, messages, topicSummaries, language });
+  const pass1Raw = await llm({ pass: 'triage-pass1', prompt: pass1Prompt, system: triageSystem(language) });
   const pass1 = parseJsonSafe(pass1Raw);
   const out = [];
 
@@ -151,8 +155,9 @@ export async function classifySoft({ groupId, messages, topicSummaries, llm }) {
     const pass2Prompt = buildPass2Prompt({
       description: description.trim(),
       existingTopics: topicSummaries || [],
+      language,
     });
-    const pass2Raw = await llm({ pass: 'triage-pass2', prompt: pass2Prompt, system: SYSTEM });
+    const pass2Raw = await llm({ pass: 'triage-pass2', prompt: pass2Prompt, system: triageSystem(language) });
     const pass2 = parseJsonSafe(pass2Raw);
     if (!pass2 || !pass2.decision) continue;
     if (pass2.decision === 'none') continue;
@@ -201,7 +206,7 @@ export async function triageOneSegment(args) {
  * }} args
  * @returns {Promise<Array<{ kind: 'update'|'create', scope: string }>>}
  */
-export async function triageGroupSegments({ groupId, segments, topicSummaries, llm, onProgress }) {
+export async function triageGroupSegments({ groupId, segments, topicSummaries, llm, onProgress, language }) {
   let acc = [];
   let i = 0;
   for (const seg of (segments || [])) {
@@ -212,6 +217,7 @@ export async function triageGroupSegments({ groupId, segments, topicSummaries, l
       messages: seg.messages,
       topicSummaries,
       llm,
+      language,
     });
     acc = dedupeActions([...acc, ...segActions]);
   }

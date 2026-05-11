@@ -41,6 +41,41 @@ import { DEFAULT_CONTEXT_WINDOW } from '../models.js';
 const TOOL_RESULT_CAP_RATIO = 0.10;
 const TOOL_RESULT_MIN_CAP = 8 * 1024;
 
+function normalizeLanguage(language) {
+  return String(language || '').toLowerCase().startsWith('zh') ? 'zh' : 'en';
+}
+
+function localizeVisibleText(value, language, toolName) {
+  const lang = normalizeLanguage(language);
+  if (typeof value === 'function') return localizeVisibleText(value(lang), lang, toolName);
+  if (value && typeof value === 'object') {
+    const picked = value[lang] || value[lang === 'zh' ? 'zh-CN' : 'en-US'] || value.en || value.default;
+    if (typeof picked === 'string') return picked;
+  }
+  const text = typeof value === 'string' ? value : String(value || '');
+  if (lang !== 'zh') return text;
+  if (!text.trim()) return text;
+  return [
+    `工具说明：${toolName || '该工具'}。请严格按照 schema 调用；工具名、参数名、JSON key 和枚举值保持英文，不要翻译。`,
+    `原始协议说明（英文，供精确调用参考）：${text}`,
+  ].join('\n');
+}
+
+function localizeParameters(parameters, language, toolName) {
+  const lang = normalizeLanguage(language);
+  if (lang !== 'zh' || !parameters || typeof parameters !== 'object') return parameters;
+  if (Array.isArray(parameters)) return parameters.map(v => localizeParameters(v, lang, toolName));
+  const out = {};
+  for (const [key, value] of Object.entries(parameters)) {
+    if (key === 'description') {
+      out[key] = localizeVisibleText(value, lang, toolName);
+    } else {
+      out[key] = localizeParameters(value, lang, toolName);
+    }
+  }
+  return out;
+}
+
 /**
  * Per-tool execution timeout (ms).
  *
@@ -99,7 +134,7 @@ export class ToolExecutionTimeoutError extends Error {
  * @param {{ contextWindow?: number, toolName: string }} opts
  * @returns {string}
  */
-export function truncateToolResultIfNeeded(output, { contextWindow, toolName }) {
+export function truncateToolResultIfNeeded(output, { contextWindow, toolName, language } = {}) {
   let text;
   if (typeof output === 'string') {
     text = output;
@@ -116,7 +151,9 @@ export function truncateToolResultIfNeeded(output, { contextWindow, toolName }) 
   const cap = Math.max(TOOL_RESULT_MIN_CAP, Math.floor(ctx * TOOL_RESULT_CAP_RATIO));
   if (text.length <= cap) return text;
   const head = text.slice(0, cap);
-  const marker = `\n\n[truncated: ${toolName} returned ${formatSize(text.length)}, capped at ${formatSize(cap)}; the model will not see the rest of this output]`;
+  const marker = normalizeLanguage(language) === 'zh'
+    ? `\n\n[已截断：${toolName} 返回 ${formatSize(text.length)}，上限为 ${formatSize(cap)}；模型不会看到剩余内容]`
+    : `\n\n[truncated: ${toolName} returned ${formatSize(text.length)}, capped at ${formatSize(cap)}; the model will not see the rest of this output]`;
   return head + marker;
 }
 
@@ -213,13 +250,15 @@ export class ToolRegistry {
   /**
    * Get tool definitions for the LLM adapter.
    * Returns all registered tools — mode filtering was removed in task-297.
+   * @param {string} [language='en']
    * @returns {{ name: string, description: string, parameters: object }[]}
    */
-  getToolDefs() {
+  getToolDefs(language = 'en') {
+    const lang = normalizeLanguage(language);
     return this.getAllTools().map(t => ({
       name: t.name,
-      description: t.description,
-      parameters: t.parameters,
+      description: localizeVisibleText(t.description, lang, t.name),
+      parameters: localizeParameters(t.parameters, lang, t.name),
     }));
   }
 
@@ -264,6 +303,7 @@ export class ToolRegistry {
     return truncateToolResultIfNeeded(output, {
       contextWindow: ctx.contextWindow,
       toolName: name,
+      language: ctx.config?.language,
     });
   }
 

@@ -31,6 +31,7 @@ export function buildRunDreamOpts(session, onProgress) {
 
   return {
     root: memoryRoot,
+    language: session.config?.language || 'en',
     llm: makeLlm(session),
     listGroups: async () => {
       try { return listGroups(groupsRoot).map(g => g.id); }
@@ -110,7 +111,9 @@ function makeLlm(session) {
     }
     const r = await adapter.call({
       model,
-      system: system || `You are the dream pipeline — pass: ${pass}.`,
+      system: system || (String(session.config?.language || '').toLowerCase().startsWith('zh')
+        ? `你是梦境流水线 — pass: ${pass}。请用中文生成自然语言内容；JSON key 保持英文。`
+        : `You are the dream pipeline — pass: ${pass}.`),
       messages: [{ role: 'user', content: prompt }],
       maxTokens: 2048,
     });

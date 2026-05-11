@@ -178,6 +178,7 @@ const PROMPTS = {
       `💡 ${min}min since last summary (+${count} new messages). Consider calling \`task_summary_post\`.`,
     // DESIGN-PROMPT §3 ④ — Active Scope header
     activeScopeHeader: '## active_scope',
+    groupAnnouncementHeader: '[Group Announcement]',
     vpPersonaIntro: (name, role) =>
       `You ARE **${name}**${role ? ` (${role})` : ''}. Speak in the first person as ${name}; do not refer to yourself as "Yeaft" or as a generic AI assistant. The text below is your identity, expertise, and decision style.`,
   },
@@ -193,6 +194,7 @@ const PROMPTS = {
       `💡 距上次 summary 已过 ${min}min，新增 ${count} 条消息，建议调用 \`task_summary_post\`。`,
     // DESIGN-PROMPT §3 ④ — Active Scope header
     activeScopeHeader: '## active_scope',
+    groupAnnouncementHeader: '[群组公告]',
     vpPersonaIntro: (name, role) =>
       `你就是 **${name}**${role ? `（${role}）` : ''}。请以 ${name} 的第一人称发言；不要自称 "Yeaft" 或泛指的 AI 助手。下面的文字是你的身份、专业方向与判断风格。`,
   },
@@ -299,7 +301,7 @@ export function buildSystemPrompt({
   // instructions. Empty/whitespace = no block emitted.
   const annText = (typeof groupAnnouncement === 'string') ? groupAnnouncement.trim() : '';
   if (annText) {
-    parts.push(`[Group Announcement]\n${annText}`);
+    parts.push(`${lang.groupAnnouncementHeader || '[Group Announcement]'}\n${annText}`);
   }
 
   // ─── 2. Date Metadata ──────────────────────────────────
