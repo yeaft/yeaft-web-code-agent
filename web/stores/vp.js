@@ -82,20 +82,36 @@ export const useVpStore = defineStore('vp', {
       return state.vpOrder.length;
     },
     vpById: (state) => (id) => state.vps[id] || null,
-    // task-fix (5-bugs): bilingual display. Locale is read from
-    // localStorage (same key the i18n module uses) so the getter stays
-    // pure-state but tracks user language choice. zh-* locales prefer
+    // task-fix (5-bugs): bilingual display. Locale is read reactively from
+    // the chat store (which is itself Pinia-reactive). zh-* locales prefer
     // displayNameZh; others fall back to displayName, then vpId.
+    //
+    // History: this getter used to read `localStorage.getItem('locale')`
+    // directly. localStorage is not reactive, so when the user flipped
+    // the language dropdown the getter result stayed cached against
+    // `state.vps` (the only declared reactive dep) and the VP list label
+    // would not update until the next vp_snapshot arrived. Reading from
+    // `chatStore.locale` (a Pinia state field) re-establishes reactivity.
     vpLabel: (state) => (id) => {
       const v = state.vps[id];
       if (!v) return id;
-      const locale = (typeof localStorage !== 'undefined' && localStorage.getItem('locale')) || '';
+      const chat = (typeof window !== 'undefined' && window.Pinia && window.Pinia.useChatStore)
+        ? window.Pinia.useChatStore()
+        : null;
+      const locale = (chat && typeof chat.locale === 'string')
+        ? chat.locale
+        : ((typeof localStorage !== 'undefined' && localStorage.getItem('locale')) || '');
       if (locale.startsWith('zh') && v.displayNameZh) return v.displayNameZh;
       return v.displayName || v.vpId || id;
     },
     vpInitial: (state) => (id) => {
       const v = state.vps[id];
-      const locale = (typeof localStorage !== 'undefined' && localStorage.getItem('locale')) || '';
+      const chat = (typeof window !== 'undefined' && window.Pinia && window.Pinia.useChatStore)
+        ? window.Pinia.useChatStore()
+        : null;
+      const locale = (chat && typeof chat.locale === 'string')
+        ? chat.locale
+        : ((typeof localStorage !== 'undefined' && localStorage.getItem('locale')) || '');
       const preferZh = locale.startsWith('zh');
       const src = (v && (v.avatar
         || (preferZh && v.displayNameZh)

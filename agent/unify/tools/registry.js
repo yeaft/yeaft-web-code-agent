@@ -61,16 +61,44 @@ function localizeVisibleText(value, language, toolName) {
   ].join('\n');
 }
 
+/**
+ * Walk a JSON Schema `parameters` object and localize the human-readable
+ * `description` strings to the requested language. All other schema bits
+ * (`type`, `enum`, `required`, `items`, nested `properties`, etc.) are
+ * preserved by value.
+ *
+ * Critical correctness rule: a JSON Schema can have a *property named*
+ * `description` whose value is itself a sub-schema (e.g.
+ * `properties: { description: { type: 'string', description: 'Detailed...' }}`).
+ * In that case the OUTER `description` key holds the sub-schema and must
+ * be recursed into; only the INNER `description: 'Detailed...'` value
+ * (which is a string) should be localized.
+ *
+ * Previous bug: this walker localized ANY value under a `description`
+ * key, including sub-schema objects. `localizeVisibleText` then ran
+ * `String(value)` on the object, producing the literal string
+ * `'[object Object]'`. GPT-5's strict schema validator rejected the
+ * resulting `{ description: '[object Object]' }` with
+ * `"'[object Object]' is not of type 'object', 'boolean'"`. This made
+ * FeatureCreate (and any tool whose schema contains a property named
+ * `description`) unusable in zh locale on strict providers.
+ *
+ * The fix: only treat a `description` value as localizable text when it
+ * is actually a string. Object/array values under a `description` key
+ * are sub-schemas and must be recursed into normally.
+ */
 function localizeParameters(parameters, language, toolName) {
   const lang = normalizeLanguage(language);
   if (lang !== 'zh' || !parameters || typeof parameters !== 'object') return parameters;
   if (Array.isArray(parameters)) return parameters.map(v => localizeParameters(v, lang, toolName));
   const out = {};
   for (const [key, value] of Object.entries(parameters)) {
-    if (key === 'description') {
+    if (key === 'description' && typeof value === 'string') {
       out[key] = localizeVisibleText(value, lang, toolName);
-    } else {
+    } else if (value && typeof value === 'object') {
       out[key] = localizeParameters(value, lang, toolName);
+    } else {
+      out[key] = value;
     }
   }
   return out;

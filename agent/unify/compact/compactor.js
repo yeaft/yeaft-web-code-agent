@@ -62,18 +62,26 @@ export class Compactor {
    *        treats that as a soft failure).
    * @param {() => number|undefined} [opts.getMaxContextTokens]
    *        Returns `config.maxContextTokens` for `shouldCompactHistory`.
+   * @param {() => string|undefined} [opts.getLanguage]
+   *        Returns the live `config.language`. Threaded into
+   *        `compactHistory` so the compactor's summary prompt + the
+   *        "session continued" wrapper render in the user's preferred
+   *        locale instead of always English.
    * @param {(groupId: string, result: CompactedResult) => void} [opts.onCompacted]
    *        Optional sink. Bridge wires this to send the
    *        `unify_history_compacted` WS event. Default: no-op. Can be
    *        replaced post-construction via `setOnCompacted`.
    */
-  constructor({ summarize, getMaxContextTokens, onCompacted } = {}) {
+  constructor({ summarize, getMaxContextTokens, getLanguage, onCompacted } = {}) {
     if (typeof summarize !== 'function') {
       throw new TypeError('Compactor: summarize is required');
     }
     this._summarize = summarize;
     this._getMaxContextTokens = typeof getMaxContextTokens === 'function'
       ? getMaxContextTokens
+      : () => undefined;
+    this._getLanguage = typeof getLanguage === 'function'
+      ? getLanguage
       : () => undefined;
     this._onCompacted = typeof onCompacted === 'function' ? onCompacted : () => {};
     /** @type {Map<string, { inFlight: Promise<void>|null, pending: boolean }>} */
@@ -186,7 +194,11 @@ export class Compactor {
       const summarize = ({ system, prompt }) =>
         this._summarize({ system, prompt, maxTokens: SUMMARIZER_MAX_TOKENS });
 
-      const result = await compactHistory(snapshot, { summarize, maxContextTokens });
+      const result = await compactHistory(snapshot, {
+        summarize,
+        maxContextTokens,
+        language: this._getLanguage(),
+      });
       if (!result || !result.compacted) {
         if (result && result.error) {
           console.warn(

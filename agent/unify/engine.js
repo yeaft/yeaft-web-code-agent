@@ -975,13 +975,23 @@ export class Engine {
 
     const archiveIds = [];
 
+    // Language-aware summarizer prompts. The orchestrator-track summary
+    // ends up in the system prompt as a "previous conversation summary"
+    // block, so it needs to match the user's preferred language to avoid
+    // a jarring locale flip mid-context.
+    const isZh = String(this.#config.language || '').toLowerCase().startsWith('zh');
+    const summariserSystem = isZh
+      ? '你是对话摘要器。请用中文写出 2–3 段简明摘要，保留决策、事实与上下文。'
+      : 'You are a conversation summarizer. Summarize concisely in 2–3 paragraphs, preserving decisions, facts, and context.';
+    const summariserPromptPrefix = isZh ? '请概括：\n\n' : 'Summarize:\n\n';
+
     const hooks = {
       summarise: async () => {
         try {
           const result = await adapter.call({
             model: fastConfig.model,
-            system: 'You are a conversation summarizer. Summarize concisely in 2–3 paragraphs, preserving decisions, facts, and context.',
-            messages: [{ role: 'user', content: `Summarize:\n\n${toArchive.map(m => `[${m.role}] ${(m.content || '').slice(0, 500)}`).join('\n\n')}` }],
+            system: summariserSystem,
+            messages: [{ role: 'user', content: `${summariserPromptPrefix}${toArchive.map(m => `[${m.role}] ${(m.content || '').slice(0, 500)}`).join('\n\n')}` }],
             maxTokens: 1024,
           });
           return (result.text || '').trim();
