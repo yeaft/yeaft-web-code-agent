@@ -315,6 +315,13 @@ export async function loadSession(options = {}) {
       engine.summarizeForCompact({ system, prompt, maxTokens }),
     getMaxContextTokens: () =>
       typeof config.maxContextTokens === 'number' ? config.maxContextTokens : undefined,
+    // Live-read: `config.language` is mutated in place by
+    // `engine.setLanguage()` (which broadcastLanguageChange fans out to
+    // every per-VP engine). The compactor must see the post-broadcast
+    // value, not a boot-time snapshot, so the summary prompt + the
+    // "session continued" wrapper render in the user's current locale.
+    getLanguage: () =>
+      typeof config.language === 'string' ? config.language : undefined,
   });
 
   // ─── 9a. Create dream scheduler ────────────

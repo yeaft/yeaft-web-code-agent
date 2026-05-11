@@ -134,9 +134,20 @@ export default {
   setup(props) {
     const filteredList = Vue.computed(() => filterVpMentions(props.vps, props.query));
     // task-fix (5-bugs): locale-aware display name. zh-* prefers displayNameZh.
+    //
+    // Locale must be read reactively: previously this read
+    // `localStorage.getItem('locale')` directly, which is not reactive and
+    // left the mention list stale across language switches. Read from the
+    // chat store's Pinia-reactive `locale` field instead so the template
+    // re-renders when the user flips the dropdown.
+    const chatStore = (typeof window !== 'undefined' && window.Pinia && window.Pinia.useChatStore)
+      ? window.Pinia.useChatStore()
+      : null;
     function displayNameFor(vp) {
       if (!vp) return '';
-      const locale = (typeof localStorage !== 'undefined' && localStorage.getItem('locale')) || '';
+      const locale = (chatStore && typeof chatStore.locale === 'string')
+        ? chatStore.locale
+        : ((typeof localStorage !== 'undefined' && localStorage.getItem('locale')) || '');
       if (locale.startsWith('zh') && vp.displayNameZh) return vp.displayNameZh;
       return vp.displayName || vp.vpId || '';
     }

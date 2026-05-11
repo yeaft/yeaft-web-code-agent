@@ -328,16 +328,22 @@ export function findCutIndex(messages, keepRecent) {
  * `server/db/message-db.js`) recognise it.
  *
  * @param {string} summary
+ * @param {{ language?: string }} [opts]
  * @returns {{role:'user', content:string, _compactSummary: true}}
  */
-export function wrapSummaryAsUserMessage(summary) {
+export function wrapSummaryAsUserMessage(summary, opts = {}) {
   const body = (summary || '').trim() || '(no summary produced)';
-  const content =
-    'This session is being continued from a previous conversation. ' +
-    'The earlier context has been summarized for efficiency.\n\n' +
-    'Summary of conversation so far:\n' +
-    body +
-    '\n\nContinue the conversation from where it left off without asking the user any further questions.';
+  const isZh = String(opts.language || '').toLowerCase().startsWith('zh');
+  const content = isZh
+    ? '本会话延续自之前的对话。早期上下文已经被概括以节省空间。\n\n' +
+      '至此为止的对话摘要：\n' +
+      body +
+      '\n\n请从中断处继续对话，不要再向用户重复确认。'
+    : 'This session is being continued from a previous conversation. ' +
+      'The earlier context has been summarized for efficiency.\n\n' +
+      'Summary of conversation so far:\n' +
+      body +
+      '\n\nContinue the conversation from where it left off without asking the user any further questions.';
   return {
     role: 'user',
     content,
@@ -349,24 +355,36 @@ export function wrapSummaryAsUserMessage(summary) {
  * Build the prompt fed to the fast-model summarizer. Kept in code (not in
  * a template file) because it's small and lives alongside the call site.
  *
+ * The summarizer prompt itself is language-aware: callers pass the live
+ * `config.language` so the produced summary is written in the user's
+ * preferred language. JSON-style structural cues stay English so the
+ * summary remains easy to splice into the next turn regardless of locale.
+ *
  * @param {Array<{role:string, content:string}>} cleanedMessages
+ * @param {{ language?: string }} [opts]
  * @returns {{system: string, prompt: string}}
  */
-export function buildSummaryPrompt(cleanedMessages) {
+export function buildSummaryPrompt(cleanedMessages, opts = {}) {
   const transcript = cleanedMessages
     .map(m => `[${m.role}]\n${m.content}`)
     .join('\n\n---\n\n');
-  const system =
-    'You are a conversation summarizer for a multi-agent group chat. ' +
-    'Produce a concise (4–8 short bullet points) summary of the conversation ' +
-    'so far. Preserve: (1) decisions made, (2) facts learned, (3) the user\'s ' +
-    'current goal, (4) any open questions or pending actions, (5) which VPs ' +
-    'are participating and what each contributed. Do NOT include raw tool ' +
-    'output. Do NOT speculate. Be specific.';
-  const prompt =
-    'Summarize the following conversation. Output ONLY the summary, no ' +
-    'preamble.\n\n' +
-    transcript;
+  const isZh = String(opts.language || '').toLowerCase().startsWith('zh');
+  const system = isZh
+    ? '你是多 agent 群聊的对话摘要器。请用中文写出 4–8 条简明 bullet 摘要。' +
+      '保留：(1) 已做的决策，(2) 已学到的事实，(3) 用户当前目标，' +
+      '(4) 任何未解决的问题或待办事项，(5) 哪些 VP 参与了对话以及各自贡献。' +
+      '不要包含原始工具输出。不要臆测。要具体。'
+    : 'You are a conversation summarizer for a multi-agent group chat. ' +
+      'Produce a concise (4–8 short bullet points) summary of the conversation ' +
+      'so far. Preserve: (1) decisions made, (2) facts learned, (3) the user\'s ' +
+      'current goal, (4) any open questions or pending actions, (5) which VPs ' +
+      'are participating and what each contributed. Do NOT include raw tool ' +
+      'output. Do NOT speculate. Be specific.';
+  const prompt = isZh
+    ? '请概括下面的对话。只输出摘要正文，不要前言。\n\n' + transcript
+    : 'Summarize the following conversation. Output ONLY the summary, no ' +
+      'preamble.\n\n' +
+      transcript;
   return { system, prompt };
 }
 
@@ -384,6 +402,7 @@ export function buildSummaryPrompt(cleanedMessages) {
  *   maxContextTokens?: number,
  *   tokenFraction?: number,
  *   hardTokenCeiling?: number,
+ *   language?: string,
  * }} options
  * @returns {Promise<{
  *   messages: Array<object>,
@@ -407,6 +426,7 @@ export async function compactHistory(messages, options) {
     maxContextTokens,
     tokenFraction,
     hardTokenCeiling,
+    language,
   } = options || {};
 
   if (typeof summarize !== 'function') {
@@ -460,7 +480,7 @@ export async function compactHistory(messages, options) {
 
   let summaryText = '';
   if (cleaned.length > 0) {
-    const { system, prompt } = buildSummaryPrompt(cleaned);
+    const { system, prompt } = buildSummaryPrompt(cleaned, { language });
     try {
       summaryText = (await summarize({ system, prompt })) || '';
     } catch (err) {
@@ -498,7 +518,7 @@ export async function compactHistory(messages, options) {
     }
   }
 
-  const summaryMsg = wrapSummaryAsUserMessage(summaryText);
+  const summaryMsg = wrapSummaryAsUserMessage(summaryText, { language });
 
   // Defensive pair-sanitize: the cut at `cutIdx` lands at a user-message
   // boundary so an `[assistant(toolCalls), tool…]` arc is not split, but
