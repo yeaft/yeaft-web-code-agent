@@ -13,8 +13,12 @@
  *
  * Strategy: bundle UnifyPage.js with esbuild into a single IIFE (so all
  * imports are resolved), stub the globals it expects (Vue, Pinia, window,
- * etc.), and run the bundle in a vm sandbox. Computed/watch are stubbed
- * to evaluate eagerly during setup so TDZ violations surface immediately.
+ * etc.), and run the bundle in a vm sandbox. `Vue.watch` resolves its
+ * source eagerly (just like real Vue) so any TDZ in a computed transitively
+ * touched by a watch source surfaces immediately. `Vue.computed` itself is
+ * **lazy** in the stub (same as real Vue) — its callback only runs on
+ * first `.value` read. This deliberately avoids false positives on benign
+ * "late-bound" computeds that real Vue would never trip on.
  *
  * This is intentionally a runtime test, not a static analyzer — TDZ in
  * setup() is observable only at execution time, and a static scanner
@@ -30,8 +34,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..', '..');
 
 /**
- * Build a minimal Vue stub whose computed/watch eagerly evaluate their
- * callbacks so that any TDZ violation in setup() surfaces immediately.
+ * Build a minimal Vue stub. `computed` is lazy (matches real Vue); `watch`
+ * resolves its source eagerly (also matches real Vue — that's the
+ * setup-time read that surfaces TDZ on later-declared consts). Together
+ * they catch the bug class without flagging late-bound computeds that
+ * never get touched until first render.
  */
 function makeVueStub() {
   const ref = (initial) => {
@@ -40,21 +47,39 @@ function makeVueStub() {
   };
   const reactive = (obj) => obj;
   const computed = (fn) => {
-    // Eagerly invoke once — this models watch-source resolution + first
-    // template render. TDZ violations on let/const declared later in the
-    // enclosing setup() throw here.
-    const cached = fn();
-    return { get value() { return cached; } };
+    // Lazy: matches real Vue. The callback only runs when `.value` is
+    // read, which is exactly what `Vue.watch` does to its source during
+    // setup (see `watch` below), and what the template renderer does on
+    // first render. TDZ violations chained through a watch source still
+    // surface here because that read happens during setup().
+    let cached;
+    let ran = false;
+    return {
+      get value() {
+        if (!ran) { cached = fn(); ran = true; }
+        return cached;
+      },
+    };
+  };
+  /**
+   * `watch` resolves its source eagerly during setup to register reactive
+   * deps. If `source` is a function we call it; if it's a ref-like we
+   * touch `.value`; if it's an array we recurse into each entry. Any of
+   * those paths can dereference a not-yet-initialised const and throw —
+   * which is the bug. Array support matters because `Vue.watch([refA,
+   * refB], cb)` is a valid pattern; without it a future array-source
+   * watch would silently no-op here and skip the TDZ check.
+   */
+  const resolveOne = (s) => {
+    if (typeof s === 'function') return s();
+    if (s && typeof s === 'object' && 'value' in s) return s.value;
+    return undefined;
   };
   const watch = (source) => {
-    // Vue resolves the source to a getter and invokes it once during
-    // setup to register reactive deps. If `source` is a function we call
-    // it; if it's a ref-like we touch .value. Either path can dereference
-    // a not-yet-initialised const and throw — which is the bug.
-    if (typeof source === 'function') {
-      source();
-    } else if (source && typeof source === 'object' && 'value' in source) {
-      void source.value;
+    if (Array.isArray(source)) {
+      source.forEach(resolveOne);
+    } else {
+      resolveOne(source);
     }
   };
   return {
@@ -71,6 +96,19 @@ function makeVueStub() {
   };
 }
 
+/**
+ * Pinia stub. `defineStore` IS called by the bundle — UnifyPage transitively
+ * imports `web/stores/helpers/vp-timeline.js` which pulls in `web/stores/*.js`
+ * via the bundler; each store module runs `const { defineStore } = Pinia;
+ * defineStore(name, schema)` at load time. We return `() => ({})` for the
+ * resulting `useXStore` hook because the test only exercises setup()
+ * declaration order, not store behaviour. UnifyPage itself reaches for
+ * `window.Pinia.useChatStore()` etc. at runtime, so those three are
+ * supplied separately with the fields setup() actually touches.
+ *
+ * If a future computed reads a store field not listed here it will return
+ * undefined — that's intentional. Add fields when setup() needs them.
+ */
 function makePiniaStub() {
   const chatStore = {
     unifyConversationId: null,
@@ -107,9 +145,6 @@ function makePiniaStub() {
     activeNeedsInvite: false,
   };
   return {
-    // Pinia.defineStore is called at module-load time by each store file
-    // (web/stores/*.js). The factory it returns is the `useXStore` hook —
-    // for this test we ignore the schema and return a flat stub.
     defineStore: (_name, _schema) => () => ({}),
     useChatStore: () => chatStore,
     useVpStore: () => vpStore,
@@ -118,7 +153,7 @@ function makePiniaStub() {
 }
 
 describe('UnifyPage setup() — temporal dead zone regression', () => {
-  it('setup() initialises without ReferenceError when every computed evaluates eagerly', () => {
+  it('setup() initialises without ReferenceError, and dependent computeds resolve cleanly', () => {
     // Bundle UnifyPage.js into a single IIFE so imports resolve in-memory.
     const bundle = buildSync({
       entryPoints: [path.join(ROOT, 'web/components/UnifyPage.js')],
@@ -128,8 +163,6 @@ describe('UnifyPage setup() — temporal dead zone regression', () => {
       globalName: '__UNIFY_PAGE_MOD__',
       platform: 'browser',
       target: 'es2020',
-      // The component reads window.Pinia at runtime; we provide that via
-      // the vm sandbox. Imports are bundled inline.
     });
     const code = bundle.outputFiles[0].text;
 
@@ -156,10 +189,15 @@ describe('UnifyPage setup() — temporal dead zone regression', () => {
       clearTimeout: () => {},
       console,
     };
-    // Mirror everything from globalThis we need (Date, Math, Array, etc.)
-    for (const key of ['Date', 'Math', 'Set', 'Map', 'Array', 'Object', 'JSON',
-                       'String', 'Number', 'Boolean', 'Promise', 'Error',
-                       'TypeError', 'ReferenceError', 'SyntaxError']) {
+    // Mirror the JS built-ins the bundle reaches for. Hand-curated rather
+    // than `Object.assign(sandbox, globalThis)` so unexpected globals
+    // (e.g. fetch) surface as `X is not defined` instead of being silently
+    // available. Add to this list if setup() ever needs a new built-in.
+    for (const key of ['Date', 'Math', 'Set', 'Map', 'WeakMap', 'WeakSet',
+                       'Array', 'Object', 'JSON', 'String', 'Number',
+                       'Boolean', 'Promise', 'Error', 'TypeError',
+                       'ReferenceError', 'SyntaxError', 'URL',
+                       'URLSearchParams']) {
       sandbox[key] = globalThis[key];
     }
     sandbox.globalThis = sandbox;
@@ -172,9 +210,26 @@ describe('UnifyPage setup() — temporal dead zone regression', () => {
     const Comp = mod.default || mod;
     expect(typeof Comp.setup, 'UnifyPage must have a setup() function').toBe('function');
 
-    // Run setup() — any TDZ violation throws here. The whole point of
-    // the eager-computed stub above is that this call mirrors what the
-    // production bundle does on first render.
-    expect(() => Comp.setup()).not.toThrow();
+    // Run setup() — any TDZ violation throws here. `Vue.watch` eagerly
+    // resolves its source, which is what surfaces TDZs chained through
+    // computeds the watch depends on (the bug we're guarding against).
+    let api;
+    expect(() => { api = Comp.setup(); }, 'setup() must not throw').not.toThrow();
+
+    // Additionally read every computed setup() exposes. With the lazy
+    // `computed` stub above, this catches a second TDZ class: computeds
+    // that aren't watched but are referenced from the template (lazy
+    // until first render — same end result, blank page). Anything on the
+    // returned API that quacks like a ref (`{ value }` getter) gets
+    // touched. Refs are fine because their `.value` access is a plain
+    // property read; only computeds re-enter `fn()`.
+    expect(api, 'setup() must return a public API').toBeTruthy();
+    expect(() => {
+      for (const k of Object.keys(api)) {
+        const v = api[k];
+        if (v && typeof v === 'object' && 'value' in v) void v.value;
+      }
+    }, 'reading every exposed ref/computed must not throw').not.toThrow();
   });
 });
+

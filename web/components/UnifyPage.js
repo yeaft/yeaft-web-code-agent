@@ -619,12 +619,14 @@ export default {
       window.location.reload();
     };
 
-    // groupsStore + topbarGroup must be declared BEFORE dreamButtonVpId
-    // (and the dream-status watcher) — Vue.watch eagerly reads the source
-    // ref during setup, which transitively dereferences topbarGroup.value.
-    // If topbarGroup is declared later in setup() it triggers a TDZ
-    // ReferenceError ("Cannot access … before initialization") and the
-    // component fails to mount, blanking out the page.
+    // groupsStore + topbarGroup must be declared BEFORE dreamButtonVpId.
+    // The chain that hits TDZ otherwise:
+    //   Vue.watch(dreamLastRunAt, …) eagerly resolves its source during
+    //   setup → dreamLastRunAt.value reads dreamStatusEntry.value →
+    //   vpStore.dreamStatusFor(dreamButtonVpId.value) → topbarGroup.value
+    // If topbarGroup is declared later in setup() the last step throws
+    // "ReferenceError: Cannot access 'topbarGroup' before initialization"
+    // and the component fails to mount, blanking out the page.
     const groupsStore = () => {
       try {
         return window.Pinia?.useGroupsStore?.() || null;
