@@ -619,6 +619,35 @@ export default {
       window.location.reload();
     };
 
+    // groupsStore + topbarGroup must be declared BEFORE dreamButtonVpId.
+    // The chain that hits TDZ otherwise:
+    //   Vue.watch(dreamLastRunAt, …) eagerly resolves its source during
+    //   setup → dreamLastRunAt.value reads dreamStatusEntry.value →
+    //   vpStore.dreamStatusFor(dreamButtonVpId.value) → topbarGroup.value
+    // If topbarGroup is declared later in setup() the last step throws
+    // "ReferenceError: Cannot access 'topbarGroup' before initialization"
+    // and the component fails to mount, blanking out the page.
+    const groupsStore = () => {
+      try {
+        return window.Pinia?.useGroupsStore?.() || null;
+      } catch { return null; }
+    };
+    // task-fix-mobile-group-settings: surface a group ⚙ in the topbar
+    // so the conversation always has a settings entry-point — sidebar
+    // collapses to a slide-over on mobile, hover-reveal affordances
+    // don't exist on touch, and the announcement bar may not be
+    // visible if the active group has none. Resolve the group from the
+    // groups store the same way `sendMessage` does (filter > activeGroupId
+    // > grp_default fallback) so the gear targets whatever is on screen.
+    const topbarGroup = Vue.computed(() => {
+      const gs = groupsStore();
+      if (!gs || !gs.groups) return null;
+      const filterId = store.unifyActiveGroupFilter || null;
+      if (filterId && gs.groups[filterId]) return gs.groups[filterId];
+      if (gs.activeGroupId && gs.groups[gs.activeGroupId]) return gs.groups[gs.activeGroupId];
+      return gs.groups['grp_default'] || null;
+    });
+
     // ── fix/dream-cadence-and-ui-trigger: manual dream trigger ──
     // The button targets whichever VP key the agent will use to fan
     // back the result. `handleUnifyDreamTrigger` defaults to 'default'
@@ -780,11 +809,6 @@ export default {
     // roster mutation re-arms the prompt so adding then removing a VP
     // correctly re-surfaces the invite on the next empty state).
     const inviteDismissedFor = Vue.reactive(new Set());
-    const groupsStore = () => {
-      try {
-        return window.Pinia?.useGroupsStore?.() || null;
-      } catch { return null; }
-    };
     const activeGroupForInvite = Vue.computed(() => {
       const gs = groupsStore();
       return gs ? gs.activeGroup : null;
@@ -859,21 +883,6 @@ export default {
       if (!groupId) return;
       openGroupSettings({ groupId, section: 'members' });
     };
-    // task-fix-mobile-group-settings: surface a group ⚙ in the topbar
-    // so the conversation always has a settings entry-point — sidebar
-    // collapses to a slide-over on mobile, hover-reveal affordances
-    // don't exist on touch, and the announcement bar may not be
-    // visible if the active group has none. Resolve the group from the
-    // groups store the same way `sendMessage` does (filter > activeGroupId
-    // > grp_default fallback) so the gear targets whatever is on screen.
-    const topbarGroup = Vue.computed(() => {
-      const gs = groupsStore();
-      if (!gs || !gs.groups) return null;
-      const filterId = store.unifyActiveGroupFilter || null;
-      if (filterId && gs.groups[filterId]) return gs.groups[filterId];
-      if (gs.activeGroupId && gs.groups[gs.activeGroupId]) return gs.groups[gs.activeGroupId];
-      return gs.groups['grp_default'] || null;
-    });
     const topbarGroupName = Vue.computed(
       () => resolveGroupDisplayName(topbarGroup.value),
     );
