@@ -44,7 +44,7 @@ import { listScopes, readSummary } from '../memory/store-v2.js';
 import {
   DEFAULT_LIMITS,
 } from './limits.js';
-import { readGroupState, writeGroupState } from './state.js';
+import { readGroupState, writeGroupState, writeDreamError } from './state.js';
 import { segmentDiff, truncateMessage, estimateMessagesTokens } from './segment.js';
 import { triageGroupSegments } from './triage.js';
 import { mergeByTarget } from './merge.js';
@@ -148,6 +148,14 @@ export async function runDream(opts) {
     } catch (err) {
       groupsReport.push({ groupId, new: newCount, status: 'error', error: err.message });
       onProgress({ phase: 'triage', groupId, status: 'error', error: err.message });
+      // Journal the failure on disk so operators can see WHY dream is
+      // not advancing without having to enable `config.debug`. Best-
+      // effort — `writeDreamError` swallows its own I/O errors.
+      await writeDreamError(opts.root, `group/${groupId}`, {
+        phase: 'triage',
+        message: err.message,
+        stack: err.stack,
+      });
       continue;
     }
 
@@ -191,6 +199,14 @@ export async function runDream(opts) {
         error: err.message,
       });
       onProgress({ phase: 'apply', target: merged.target, status: 'error', error: err.message });
+      // Journal apply-stage failures into the target scope's directory
+      // (`<root>/<merged.target>/.dream-last-error.json`). Same rationale
+      // as the triage catch above.
+      await writeDreamError(opts.root, merged.target, {
+        phase: 'apply',
+        message: err.message,
+        stack: err.stack,
+      });
     }
   }
 

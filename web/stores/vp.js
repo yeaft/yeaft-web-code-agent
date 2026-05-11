@@ -72,6 +72,15 @@ export const useVpStore = defineStore('vp', {
      * @type {Record<string, object>}
      */
     dreamStatus: {},
+    /**
+     * v0.1.754 — per-GROUP dream activity state. Same shape as
+     * `dreamStatus` but keyed by groupId instead of vpId. Populated
+     * from unify_dream_status / unify_dream_result events that carry a
+     * `groupId` field (i.e. triggered via `triggerGroupDream(groupId)`
+     * rather than the legacy per-VP path).
+     * @type {Record<string, object>}
+     */
+    groupDreamStatus: {},
   }),
 
   getters: {
@@ -127,6 +136,15 @@ export const useVpStore = defineStore('vp', {
     /** R6 G3 — dream status row for a vpId (always returns an object). */
     dreamStatusFor: (state) => (id) => {
       return state.dreamStatus[id] || {
+        status: 'idle',
+        lastRunAt: null,
+        lastResult: null,
+        lastError: null,
+      };
+    },
+    /** v0.1.754 — dream status row for a groupId (always returns an object). */
+    groupDreamStatusFor: (state) => (groupId) => {
+      return state.groupDreamStatus[groupId] || {
         status: 'idle',
         lastRunAt: null,
         lastResult: null,
@@ -207,9 +225,54 @@ export const useVpStore = defineStore('vp', {
       }
     },
 
-    /** Apply unify_dream_status event (status='running' from agent). */
+    /**
+     * Per-group manual dream trigger (added v0.1.754 to give users a
+     * way to kick the dream scheduler after seeing the Resident layer
+     * stuck on a group's bootstrap seed). Sends
+     * `{ type: 'unify_dream_trigger', groupId }` over WS; the agent's
+     * `handleUnifyDreamTrigger` routes to `triggerDreamForScopes(['group/X'])`
+     * so unrelated groups are not processed. Status flows back via
+     * unify_dream_status / unify_dream_result events tagged with
+     * `groupId` instead of `vpId`.
+     *
+     * @param {string} groupId
+     */
+    triggerGroupDream(groupId) {
+      if (!groupId) return;
+      this.groupDreamStatus = {
+        ...this.groupDreamStatus,
+        [groupId]: {
+          ...(this.groupDreamStatus[groupId] || {}),
+          status: 'running',
+          lastError: null,
+        },
+      };
+      const chat = (window.Pinia && window.Pinia.useChatStore)
+        ? window.Pinia.useChatStore()
+        : null;
+      if (chat && typeof chat.sendWsMessage === 'function') {
+        chat.sendWsMessage({ type: 'unify_dream_trigger', groupId });
+      }
+    },
+
+    /**
+     * Apply unify_dream_status event (status='running' from agent).
+     * Routes by which id field the event carries (vpId vs groupId).
+     */
     applyDreamStatus(event) {
-      if (!event || !event.vpId) return;
+      if (!event) return;
+      if (event.groupId) {
+        const groupId = event.groupId;
+        this.groupDreamStatus = {
+          ...this.groupDreamStatus,
+          [groupId]: {
+            ...(this.groupDreamStatus[groupId] || {}),
+            status: event.status === 'running' ? 'running' : (event.status || 'idle'),
+          },
+        };
+        return;
+      }
+      if (!event.vpId) return;
       const vpId = event.vpId;
       this.dreamStatus = {
         ...this.dreamStatus,
@@ -220,31 +283,50 @@ export const useVpStore = defineStore('vp', {
       };
     },
 
-    /** Apply unify_dream_result event (success or error). */
+    /**
+     * Apply unify_dream_result event (success or error). Routes by
+     * which id field the event carries.
+     */
     applyDreamResult(event) {
-      if (!event || !event.vpId) return;
-      const vpId = event.vpId;
+      if (!event) return;
       const ok = !!event.success;
+      const result = ok ? {
+        mergedCount: event.mergedCount ?? null,
+        extractedCount: event.extractedCount ?? null,
+        // fix/dream-cadence-and-ui-trigger: bridge derives a single
+        // scalar `entriesCreated` (count of done targets) so the
+        // topbar bubble has a stable field to read; falls back to
+        // mergedCount/extractedCount if an older agent build is
+        // attached.
+        entriesCreated: typeof event.entriesCreated === 'number'
+          ? event.entriesCreated
+          : (event.mergedCount ?? event.extractedCount ?? 0),
+        skipped: !!event.skipped,
+        skippedReason: event.skippedReason || null,
+      } : null;
+      const lastError = ok ? null : (event.error || 'unknown');
+      if (event.groupId) {
+        const groupId = event.groupId;
+        this.groupDreamStatus = {
+          ...this.groupDreamStatus,
+          [groupId]: {
+            status: ok ? 'success' : 'error',
+            lastRunAt: Date.now(),
+            lastResult: result,
+            lastError,
+          },
+        };
+        return;
+      }
+      if (!event.vpId) return;
+      const vpId = event.vpId;
       this.dreamStatus = {
         ...this.dreamStatus,
         [vpId]: {
           status: ok ? 'success' : 'error',
           lastRunAt: Date.now(),
-          lastResult: ok ? {
-            mergedCount: event.mergedCount ?? null,
-            extractedCount: event.extractedCount ?? null,
-            // fix/dream-cadence-and-ui-trigger: bridge derives a single
-            // scalar `entriesCreated` (count of done targets) so the
-            // topbar bubble has a stable field to read; falls back to
-            // mergedCount/extractedCount if an older agent build is
-            // attached.
-            entriesCreated: typeof event.entriesCreated === 'number'
-              ? event.entriesCreated
-              : (event.mergedCount ?? event.extractedCount ?? 0),
-            skipped: !!event.skipped,
-            skippedReason: event.skippedReason || null,
-          } : null,
-          lastError: ok ? null : (event.error || 'unknown'),
+          lastResult: result,
+          lastError,
         },
       };
     },
