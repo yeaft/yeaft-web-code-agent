@@ -2549,6 +2549,56 @@
   border-bottom: 1px solid var(--border-color);
 }
 
+/* v0.1.755: Dream pass status row — shows the most recent auto/manual
+ * dream pass for the focused group. Sits between toolbar and turn list. */
+.unify-debug-dream-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+}
+.unify-debug-dream-label {
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: 0.04em;
+}
+.unify-debug-dream-kind {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: var(--bg-tertiary, rgba(0,0,0,0.04));
+  color: var(--text-secondary);
+}
+.unify-debug-dream-kind.kind-manual {
+  background: rgba(59,130,246,0.12);
+  color: #3b82f6;
+}
+.unify-debug-dream-kind.kind-auto {
+  background: rgba(34,197,94,0.12);
+  color: #22c55e;
+}
+.unify-debug-dream-status {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.unify-debug-dream-status.status-running { color: #f59e0b; }
+.unify-debug-dream-status.status-success { color: #22c55e; }
+.unify-debug-dream-status.status-error   { color: #ef4444; }
+.unify-debug-dream-time {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-tertiary, var(--text-secondary));
+}
+
 .unify-debug-search {
   flex: 1 1 auto;
   min-width: 0;

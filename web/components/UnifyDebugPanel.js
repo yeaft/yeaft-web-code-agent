@@ -128,6 +128,30 @@ export default {
       // hiding something — otherwise it's just visual noise.
       return this.turnTotal > this.turns.length;
     },
+    // v0.1.755: latest dream pass for the active group (auto + manual share
+    // this surface; user only cares about the most recent run).
+    dreamLatest() {
+      return (this.store && this.store.unifyDreamLatestForActiveGroup) || null;
+    },
+    dreamLatestLabel() {
+      const d = this.dreamLatest;
+      if (!d) return '';
+      if (d.status === 'running') {
+        return `running · ${d.phase || '...'}`;
+      }
+      if (d.status === 'error') {
+        return `error · ${d.error || 'unknown'}`;
+      }
+      const parts = ['done'];
+      if (typeof d.mergedCount === 'number') parts.push(`merged ${d.mergedCount}`);
+      if (typeof d.durationMs === 'number') parts.push(this.formatMs(d.durationMs));
+      return parts.join(' · ');
+    },
+    dreamLatestKindLabel() {
+      const d = this.dreamLatest;
+      if (!d) return '';
+      return d.manual ? 'manual' : 'auto';
+    },
   },
   methods: {
     toggleTurn(turnId) {
@@ -331,6 +355,17 @@ export default {
           <option value="__all__">{{ $t('unify.debugGroupAll') || 'All groups' }}</option>
           <option v-for="g in availableGroups" :key="g" :value="g">{{ g }}</option>
         </select>
+      </div>
+
+      <!-- v0.1.755: Dream pass status for the focused group. Both auto-
+           triggered and manually-triggered runs feed the same row; user
+           sees only the latest run by design ("dream只需要看最新的一次"). -->
+      <div class="unify-debug-dream-row" v-if="dreamLatest">
+        <span class="unify-debug-dream-label">Dream</span>
+        <span class="unify-debug-dream-kind" :class="'kind-' + dreamLatestKindLabel">{{ dreamLatestKindLabel }}</span>
+        <span class="unify-debug-dream-status" :class="'status-' + dreamLatest.status">{{ dreamLatestLabel }}</span>
+        <span class="unify-debug-dream-time" v-if="dreamLatest.finishedAt">{{ formatTimestamp(dreamLatest.finishedAt) }}</span>
+        <span class="unify-debug-dream-time" v-else-if="dreamLatest.startedAt">{{ formatTimestamp(dreamLatest.startedAt) }}</span>
       </div>
 
       <div class="unify-debug-turns" v-if="turns.length > 0">

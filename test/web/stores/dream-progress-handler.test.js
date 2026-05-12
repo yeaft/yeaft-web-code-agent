@@ -1,0 +1,264 @@
+/**
+ * dream-progress-handler.test.js — v0.1.755 Issue A regression.
+ *
+ * UnifyDebugPanel needs a single most-recent dream-pass row for the
+ * active group's scope ("dream只需要看最新的一次就行"). The chat-store
+ * `handleUnifyOutput` switch case `'dream_progress'` is the projection
+ * point: each inbound progress event is reduced into
+ * `state.unifyDreamLatest[scope]` as a single record with
+ * `{ scope, phase, status, startedAt, finishedAt, mergedCount, error,
+ *    manual, durationMs, isRunning }`.
+ *
+ * What this file pins:
+ *   1. Per-target events (`target: 'group/...'`) route to that scope.
+ *   2. Per-group events (only `groupId`) route to `group/<id>`.
+ *   3. Top-level events (no target / no groupId) land in the '*'
+ *      broadcast bucket AND are mirrored onto every existing scope.
+ *   4. Phase transitions:
+ *      - running phases (`triage`, `merge`, …) → status='running',
+ *        `startedAt` preserved across updates, no `finishedAt`.
+ *      - `phase === 'done'`                  → status='success',
+ *        `finishedAt` set.
+ *      - `phase === 'error'` or status='error' → status='error',
+ *        `finishedAt` set, `error` populated.
+ *   5. `manual: true` carried into running phase persists through done.
+ *
+ * Unit-only — same Pinia.defineStore shim pattern as
+ * chat-input-dispatch.test.js. Invokes the captured `actions.handleUnifyOutput`
+ * against a hand-rolled `this` with `unifyDreamLatest: {}`.
+ */
+import { describe, it, expect, beforeAll } from 'vitest';
+
+let capturedOptions = null;
+globalThis.Pinia = globalThis.Pinia || {};
+globalThis.Pinia.defineStore = (_id, options) => {
+  if (options && options.actions && options.actions.handleUnifyOutput) {
+    capturedOptions = options;
+  }
+  return () => ({});
+};
+
+let actions;
+beforeAll(async () => {
+  await import('../../../web/stores/chat.js');
+  if (!capturedOptions) {
+    throw new Error('chat.js defineStore was not captured — Pinia shim mis-wired');
+  }
+  actions = capturedOptions.actions;
+});
+
+/**
+ * Minimal `this` surface that the dream_progress branch actually
+ * touches. Everything else in handleUnifyOutput short-circuits before
+ * the switch when there's no msg.data and event.type !== other cases.
+ */
+function mkStore() {
+  return {
+    unifyDreamLatest: {},
+    // Other state the function MAY read on un-related branches. Safe
+    // defaults so the function never crashes if it walks past our case.
+    unifyConversationId: null,
+    messagesMap: {},
+    processingConversations: {},
+    executionStatusMap: {},
+    activeConversations: [],
+    currentView: 'unify',
+    sendWsMessage() {},
+  };
+}
+
+const send = (store, event) => {
+  actions.handleUnifyOutput.call(store, { event });
+};
+
+describe('handleUnifyOutput — dream_progress projection', () => {
+  it('routes per-target events into target scope', () => {
+    const store = mkStore();
+    send(store, {
+      type: 'dream_progress',
+      phase: 'merge',
+      target: 'group/grp_demo',
+      ts: 1000,
+    });
+    expect(Object.keys(store.unifyDreamLatest)).toEqual(['group/grp_demo']);
+    const entry = store.unifyDreamLatest['group/grp_demo'];
+    expect(entry.scope).toBe('group/grp_demo');
+    expect(entry.status).toBe('running');
+    expect(entry.phase).toBe('merge');
+    expect(entry.startedAt).toBe(1000);
+    expect(entry.finishedAt).toBeNull();
+    expect(entry.isRunning).toBe(true);
+  });
+
+  it('routes per-group events (groupId only) into group/<id>', () => {
+    const store = mkStore();
+    send(store, {
+      type: 'dream_progress',
+      phase: 'triage',
+      groupId: 'grp_x',
+      ts: 2000,
+    });
+    expect(store.unifyDreamLatest['group/grp_x']).toBeDefined();
+    expect(store.unifyDreamLatest['group/grp_x'].scope).toBe('group/grp_x');
+    expect(store.unifyDreamLatest['group/grp_x'].status).toBe('running');
+  });
+
+  it('top-level events (no target/groupId) land in "*" bucket', () => {
+    const store = mkStore();
+    send(store, {
+      type: 'dream_progress',
+      phase: 'start',
+      ts: 3000,
+    });
+    expect(store.unifyDreamLatest['*']).toBeDefined();
+    expect(store.unifyDreamLatest['*'].scope).toBe('*');
+    expect(store.unifyDreamLatest['*'].isRunning).toBe(true);
+  });
+
+  it('top-level events mirror onto every existing scope', () => {
+    const store = mkStore();
+    // Prime two scopes with running entries.
+    send(store, { type: 'dream_progress', phase: 'triage', target: 'group/g1', ts: 100 });
+    send(store, { type: 'dream_progress', phase: 'triage', target: 'vp/v1', ts: 110 });
+    // Now a top-level "done" event arrives.
+    send(store, { type: 'dream_progress', phase: 'done', ts: 200 });
+    // Both prior scopes plus '*' bucket all reflect done.
+    expect(store.unifyDreamLatest['*'].status).toBe('success');
+    expect(store.unifyDreamLatest['group/g1'].status).toBe('success');
+    expect(store.unifyDreamLatest['vp/v1'].status).toBe('success');
+    expect(store.unifyDreamLatest['group/g1'].finishedAt).toBe(200);
+  });
+
+  it('phase=done flips status to success and stamps finishedAt', () => {
+    const store = mkStore();
+    send(store, {
+      type: 'dream_progress',
+      phase: 'merge',
+      target: 'group/grp_demo',
+      ts: 1000,
+    });
+    send(store, {
+      type: 'dream_progress',
+      phase: 'done',
+      target: 'group/grp_demo',
+      ts: 1500,
+      mergedCount: 3,
+    });
+    const entry = store.unifyDreamLatest['group/grp_demo'];
+    expect(entry.status).toBe('success');
+    expect(entry.phase).toBe('done');
+    expect(entry.finishedAt).toBe(1500);
+    expect(entry.mergedCount).toBe(3);
+    expect(entry.isRunning).toBe(false);
+  });
+
+  it('preserves startedAt across running-phase transitions', () => {
+    const store = mkStore();
+    send(store, {
+      type: 'dream_progress',
+      phase: 'triage',
+      target: 'group/grp_demo',
+      ts: 500,
+    });
+    send(store, {
+      type: 'dream_progress',
+      phase: 'merge',
+      target: 'group/grp_demo',
+      ts: 700,
+    });
+    expect(store.unifyDreamLatest['group/grp_demo'].startedAt).toBe(500);
+    expect(store.unifyDreamLatest['group/grp_demo'].phase).toBe('merge');
+  });
+
+  it('phase=error sets status=error + carries error message', () => {
+    const store = mkStore();
+    send(store, {
+      type: 'dream_progress',
+      phase: 'error',
+      target: 'group/grp_demo',
+      ts: 800,
+      error: 'fts segment write failed',
+    });
+    const entry = store.unifyDreamLatest['group/grp_demo'];
+    expect(entry.status).toBe('error');
+    expect(entry.error).toBe('fts segment write failed');
+    expect(entry.finishedAt).toBe(800);
+    expect(entry.isRunning).toBe(false);
+  });
+
+  it('status=error (without phase=error) is also treated as error', () => {
+    const store = mkStore();
+    send(store, {
+      type: 'dream_progress',
+      phase: 'merge',
+      status: 'error',
+      target: 'group/grp_demo',
+      ts: 900,
+      error: 'boom',
+    });
+    expect(store.unifyDreamLatest['group/grp_demo'].status).toBe('error');
+    expect(store.unifyDreamLatest['group/grp_demo'].error).toBe('boom');
+  });
+
+  it('manual flag from a running event survives to the done event', () => {
+    const store = mkStore();
+    send(store, {
+      type: 'dream_progress',
+      phase: 'triage',
+      target: 'group/grp_demo',
+      manual: true,
+      ts: 100,
+    });
+    // Subsequent events from the same pass typically don't repeat
+    // `manual` — the projection should fall back to the prior value.
+    send(store, {
+      type: 'dream_progress',
+      phase: 'done',
+      target: 'group/grp_demo',
+      ts: 200,
+    });
+    expect(store.unifyDreamLatest['group/grp_demo'].manual).toBe(true);
+  });
+
+  it('manual=false is preserved when later events omit the flag', () => {
+    const store = mkStore();
+    send(store, {
+      type: 'dream_progress',
+      phase: 'triage',
+      target: 'group/grp_demo',
+      manual: false,
+      ts: 100,
+    });
+    send(store, {
+      type: 'dream_progress',
+      phase: 'done',
+      target: 'group/grp_demo',
+      ts: 200,
+    });
+    expect(store.unifyDreamLatest['group/grp_demo'].manual).toBe(false);
+  });
+
+  it('durationMs from event.duration is captured on done', () => {
+    const store = mkStore();
+    send(store, {
+      type: 'dream_progress',
+      phase: 'done',
+      target: 'group/grp_demo',
+      duration: 1234,
+      ts: 1000,
+    });
+    expect(store.unifyDreamLatest['group/grp_demo'].durationMs).toBe(1234);
+  });
+
+  it('mergedCount falls back to event.targets when mergedCount absent', () => {
+    const store = mkStore();
+    send(store, {
+      type: 'dream_progress',
+      phase: 'merge',
+      target: 'group/grp_demo',
+      targets: 5,
+      ts: 100,
+    });
+    expect(store.unifyDreamLatest['group/grp_demo'].mergedCount).toBe(5);
+  });
+});
