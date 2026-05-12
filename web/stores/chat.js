@@ -1483,6 +1483,14 @@ export const useChatStore = defineStore('chat', {
             // so the active-group panel always reflects the newest pass.
             // Also keep the '*' bucket so a first-ever start event from a
             // group with no prior entry still surfaces something.
+            //
+            // NOTE on invariant: a top-level `phase='done'` will mark every
+            // tracked scope as success — this is intentional (the dream
+            // worker emits a single global "done" after a sweep), but it
+            // means a scope's last finishedAt no longer corresponds to a
+            // scope-specific pass. UI consumers should treat the dream row
+            // as "most recent activity touching this group", not "this
+            // group's own pass".
             const next = { ...this.unifyDreamLatest, '*': updateScope('*') };
             for (const k of Object.keys(this.unifyDreamLatest)) {
               if (k === '*') continue;
@@ -1801,6 +1809,9 @@ export const useChatStore = defineStore('chat', {
       this.unifyReflectionCards = {};
       this.unifySubAgentCards = {};
       // VP-block redesign (2026-05-08): per-turn detail drawer retired.
+      // v0.1.755: reset dream-pass projection so a previous session's
+      // "latest pass" doesn't bleed into the fresh session.
+      this.unifyDreamLatest = {};
       // Tell agent to reset session so Engine gets a fresh start
       if (this.unifyAgentId) {
         this.sendWsMessage({

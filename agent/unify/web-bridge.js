@@ -627,7 +627,7 @@ function ensureDriverRunning(groupId, vpId) {
           const senderVpId = isForward
             ? (meta.senderVpId || envelope?.msg?.from || null)
             : null;
-          persistUserMessageOnceByMsgId({
+          persistInboundMessageOnceByMsgId({
             msgId: envMsgId,
             text,
             groupId,
@@ -1697,7 +1697,7 @@ export async function handleUnifyGroupChat(msg) {
   try {
     const persistedMsgId = report?.message?.id;
     if (persistedMsgId) {
-      persistUserMessageOnceByMsgId({
+      persistInboundMessageOnceByMsgId({
         msgId: persistedMsgId,
         text,
         groupId,
@@ -1705,7 +1705,7 @@ export async function handleUnifyGroupChat(msg) {
     }
   } catch (err) {
     console.warn(
-      '[Unify] unify_group_chat: persistUserMessageOnceByMsgId failed',
+      '[Unify] unify_group_chat: persistInboundMessageOnceByMsgId failed',
       err?.message || err,
     );
   }
@@ -2222,11 +2222,13 @@ function appendTurnToGroupHistory(groupId, prompt, assistantTextParts, toolCalls
 }
 
 /**
- * Persist the user row to disk EXACTLY ONCE per coordinator-ingest call,
- * keyed by the coordinator-assigned `msgId`. Both `handleUnifyGroupChat`
- * (real user input) and `enqueueForVp`'s driver loop (route_forward
- * synthetic injections) call this — the Set guard makes either path
- * the writer, whichever runs first, while the other becomes a no-op.
+ * Persist an inbound message row to disk EXACTLY ONCE per
+ * coordinator-ingest call, keyed by the coordinator-assigned `msgId`.
+ * Both `handleUnifyGroupChat` (real user input, persists as
+ * role='user') and `enqueueForVp`'s driver loop (route_forward
+ * synthetic injections, persists as role='assistant' attributed via
+ * `speakerVpId`) call this — the Set guard makes either path the
+ * writer, whichever runs first, while the other becomes a no-op.
  *
  * Without this dedup, a 2-VP group prompt produces TWO `m{NNNN}.md`
  * user rows (one per engine) — `handleUnifyLoadHistory` then replays
@@ -2248,7 +2250,7 @@ function appendTurnToGroupHistory(groupId, prompt, assistantTextParts, toolCalls
  * @returns {boolean} true if this call wrote the row, false if a prior
  *   call already wrote it (dedup hit).
  */
-function persistUserMessageOnceByMsgId({ msgId, text, groupId, role, speakerVpId }) {
+function persistInboundMessageOnceByMsgId({ msgId, text, groupId, role, speakerVpId }) {
   if (!session?.conversationStore) return false;
   // No msgId means no dedup key — caller is responsible for guarding.
   // Both call sites already do (`if (envMsgId && text)` and
@@ -2302,7 +2304,7 @@ function persistUserMessageOnceByMsgId({ msgId, text, groupId, role, speakerVpId
     return true;
   } catch (err) {
     console.warn(
-      '[Unify] persistUserMessageOnceByMsgId failed (non-fatal):',
+      '[Unify] persistInboundMessageOnceByMsgId failed (non-fatal):',
       err?.message || err,
     );
     return false;

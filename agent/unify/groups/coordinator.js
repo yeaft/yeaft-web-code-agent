@@ -76,7 +76,7 @@ export function createCoordinator(group, options = {}) {
     // attributes the turn to the sending VP, not to the user.
     const isRouteForwardInjection = input?.meta?.injectedBy === 'route_forward';
     const fromUser = input.from === 'user'
-      || (input.role === 'user' && !isRouteForwardInjection)
+      || input.role === 'user'
       || isRouteForwardInjection;
     const mentions = parseMentions(input.text);
 

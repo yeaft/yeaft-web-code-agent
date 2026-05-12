@@ -131,12 +131,6 @@ export function createRouter(deps = {}) {
     // stamp + `synthetic` marker let Coordinator's `selectRespondingVps`
     // still treat this like a routed turn (target VPs need to respond) even
     // though role is now 'assistant'.
-    //
-    // Pre-bug-fix history: this used to write role='user' to reuse the
-    // @-routing dispatch branch. That made forwards show up in the UI as
-    // human-typed messages, which was wrong — the forwarded text was
-    // authored by a VP. Coordinator now reads `meta.injectedBy` to keep
-    // the dispatch path lit without misrepresenting authorship.
     const injectText = to === 'all'
       ? `@all ${text}`
       : `@${to} ${text}`;
