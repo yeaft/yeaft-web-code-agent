@@ -125,17 +125,12 @@ export function createRouter(deps = {}) {
     }
 
     // Synthesize an injection message — coordinator's `ingest` expects the
-    // {from, role, text} shape. We set role='user' ONLY because that's the
-    // code path that triggers @-routing; semantically it is a VP-initiated
-    // injection. The `from` field preserves the real sender vpId, and we
-    // stamp meta.synthetic + meta.injectedBy so downstream auditors can
-    // tell it apart from real user input.
-    //
-    // Why not add a third role to Coordinator? Scope discipline: Coordinator
-    // (334b) owns user vs VP branching. A third branch would force edits
-    // across both 334b and 334d for one hop. Setting role='user' with
-    // synthetic meta keeps the Coordinator API frozen — and `from` still
-    // reflects the real author, which is what the guard keys on anyway.
+    // {from, role, text} shape. The forwarded message is semantically the
+    // SENDER VP speaking (just delivered to a different VP's inbox), so it
+    // persists as role='assistant' attributed to `from`. The `meta.injectedBy`
+    // stamp + `synthetic` marker let Coordinator's `selectRespondingVps`
+    // still treat this like a routed turn (target VPs need to respond) even
+    // though role is now 'assistant'.
     const injectText = to === 'all'
       ? `@all ${text}`
       : `@${to} ${text}`;
@@ -143,7 +138,7 @@ export function createRouter(deps = {}) {
     const report = coordinator.ingest(
       {
         from,                  // real VP id — preserved for provenance
-        role: 'user',          // triggers coordinator dispatch path
+        role: 'assistant',     // VP-authored — persists as assistant turn
         text: injectText,
         taskId: args.taskId ?? null,
         meta: {

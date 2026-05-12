@@ -64,7 +64,20 @@ export function createCoordinator(group, options = {}) {
     const meta = group.getMeta();
     if (!meta) throw new Error('group not initialised (call createGroup first)');
 
-    const fromUser = input.from === 'user' || input.role === 'user';
+    // `fromUser` drives `selectRespondingVps` — when true, the @-mention
+    // matrix runs (mention/broadcast/fallback). When false, VPs cannot
+    // text-@-route (VP-authored free text is surface noise per arch §6).
+    //
+    // route_forward injection is a special case: the message is VP-authored
+    // (role='assistant') but it MUST trigger dispatch (target VP needs to
+    // run). We detect it via `meta.injectedBy === 'route_forward'` and
+    // treat it as "user-like" for dispatch purposes only. Persistence still
+    // honours the caller's `role` field so the on-disk record correctly
+    // attributes the turn to the sending VP, not to the user.
+    const isRouteForwardInjection = input?.meta?.injectedBy === 'route_forward';
+    const fromUser = input.from === 'user'
+      || input.role === 'user'
+      || isRouteForwardInjection;
     const mentions = parseMentions(input.text);
 
     // Persist first — audit log / replay works even if dispatch has bugs.

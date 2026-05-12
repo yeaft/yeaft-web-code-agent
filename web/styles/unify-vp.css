@@ -953,3 +953,67 @@
   background: rgba(248, 113, 113, 0.18);
   color: #f87171;
 }
+
+/* ─── Issue C (2026-05-12) — UserTurnBlock + UserAvatar ──────────────
+   IM-style human row in the Unify group view. Mirror of .vp-turn-block:
+   VP turns sit on the left (gutter 36px, content 1fr); human turns sit
+   on the right (content 1fr, gutter 36px). Same 36px avatar size on
+   both sides so the eye-line stays even down the conversation. The
+   inner MessageItem keeps its own bubble styling (.message.user is
+   already `align-items: flex-end` so the content right-aligns inside
+   the left grid cell). */
+.user-turn-block {
+  position: relative;
+  margin: 12px 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1fr 36px;
+  column-gap: 10px;
+}
+.user-turn-block-main {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+.user-turn-block-main > .message.user {
+  /* MessageItem renders the bubble as .message.user; cap its width so the
+     long-text wrap looks like a chat bubble (not full-row paragraph). */
+  max-width: 100%;
+  margin: 0;
+}
+.user-turn-block-avatar {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 2px;
+}
+
+/* UserAvatar — circular initial badge. The accent color is intentionally
+   distinct from VP palette so the eye reads "human" at a glance. We use
+   the theme accent so dark/light parity comes for free. */
+.user-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--accent, #6366f1);
+  color: #fff;
+  font-weight: 600;
+  font-family: inherit;
+  user-select: none;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.user-avatar-letter {
+  display: inline-block;
+  line-height: 1;
+}
+[data-theme="dark"] .user-avatar {
+  background: var(--accent, #818cf8);
+  color: #fff;
+}

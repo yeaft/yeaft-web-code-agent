@@ -111,7 +111,7 @@ describe('runStopHooks userAlreadyPersisted (group-history-dedup)', () => {
 
   it('3. fan-out invariant — two VPs running the hook for the same user prompt produce ZERO duplicate user rows when the orchestrator already wrote it once', async () => {
     // Step 1: orchestrator writes the user row exactly once before fan-out.
-    // (In production, web-bridge.persistUserMessageOnceByMsgId does this,
+    // (In production, web-bridge.persistInboundMessageOnceByMsgId does this,
     //  keyed on coordinator-minted msg.id.)
     store.append({ role: 'user', content: 'hello group', groupId: 'g1', threadId: 'main' });
 

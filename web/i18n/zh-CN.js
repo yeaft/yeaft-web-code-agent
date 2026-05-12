@@ -1047,6 +1047,10 @@ export default {
   // ============ Unify 每条消息 hover 时间戳 (task-334-ui-c / prev-2 backlog) ============
   'unify.message.timeAria': '发送于 {time}',
 
+  // ============ Unify IM 风格用户行 (Issue C, 2026-05-12) ============
+  // Unify 群聊视图右侧人类头像的 aria 标签 / tooltip。
+  'unify.user.youLabel': '我',
+
   // ============ Unify route_forward 转交提示 (task-707) ============
   'unify.handoff.targets': '已转交给 {mentions}',
   'unify.handoff.broadcast': '已转交给 {mentions}（广播）',

@@ -245,6 +245,15 @@ export const useChatStore = defineStore('chat', {
     //     main pane is scoped to one. Default null = "All".
     unifyDebugSearch: '',
     unifyDebugGroupFilter: null,
+    // v0.1.755: latest dream pass status per scope, keyed by scope string
+    // (e.g. 'group/abc', 'vp/alice'). Auto-triggered and manual passes both
+    // feed the same map via `dream_progress` events. Schema per entry:
+    //   { scope, status: 'running'|'success'|'error', startedAt, finishedAt?,
+    //     stage?, mergedCount?, error?, manual?, durationMs? }
+    // UnifyDebugPanel reads `unifyDreamLatestForActiveGroup` (getter) to
+    // render a single row showing the most recent pass for the active
+    // group's scope.
+    unifyDreamLatest: {},
     // PR-L: V7 tool-history reflection cards. Keyed by `${conversationId}:${trigger}:${loopRange[0]}-${loopRange[1]}`.
     // Each entry: { trigger, status, loopRange, toolCount, content, durationMs, error,
     // anchorMsgId, anchorOrder }. Rendered inline by MessageList — anchored
@@ -411,6 +420,26 @@ export const useChatStore = defineStore('chat', {
         if (!inner) return false;
         return (inner[vpId] || 0) > 0;
       };
+    },
+    // v0.1.755: latest dream pass for the currently-focused group (or null).
+    // Reads from `unifyDreamLatest` keyed by scope. The active group's
+    // scope is `group/<id>` — we resolve that from `unifyActiveGroupFilter`
+    // (or fall back to the debug-side filter). Returns null when nothing
+    // has been recorded yet for this scope.
+    unifyDreamLatestForActiveGroup(state) {
+      const debugFilter = state.unifyDebugGroupFilter;
+      const mainFilter = state.unifyActiveGroupFilter || null;
+      let targetGroupId;
+      if (debugFilter === '__all__') {
+        targetGroupId = null;
+      } else if (debugFilter) {
+        targetGroupId = debugFilter;
+      } else {
+        targetGroupId = mainFilter;
+      }
+      if (!targetGroupId) return null;
+      const scope = `group/${targetGroupId}`;
+      return state.unifyDreamLatest?.[scope] || null;
     },
     // feat-6af5f9f1 PR B: Turn-grouped debug records for the redesigned
     // panel. Returns `[{ turnId, userPrompt, vpId, groupId, openedAt,
@@ -1390,6 +1419,92 @@ export const useChatStore = defineStore('chat', {
           if (vp) vp.applyDreamResult(event);
           break;
         }
+        // v0.1.755: dream_progress events emitted by both manual + auto
+        // dream runs (see agent/unify/web-bridge.js _dreamProgressSink).
+        // Per-group events carry `groupId`; per-target merge/apply events
+        // carry `target` (already a scope string like 'group/...' / 'vp/...').
+        // Top-level start/done/merge events carry neither — those we attach
+        // to a magic '*' bucket so they show up for every focused group.
+        // Schema per entry (the projection — NOT identical to the raw
+        // event):
+        //   { scope, status: 'running'|'success'|'error', startedAt,
+        //     finishedAt?, phase, mergedCount?, error?, manual?,
+        //     durationMs? }.
+        // UnifyDebugPanel reads `unifyDreamLatestForActiveGroup` (getter)
+        // to render a single row showing the most recent pass for the
+        // active group's scope ("dream只需要看最新的一次就行").
+        case 'dream_progress': {
+          const phase = event?.phase || 'unknown';
+          // Resolve the scope this event belongs to.
+          let scope = null;
+          if (typeof event?.target === 'string' && event.target.includes('/')) {
+            scope = event.target;
+          } else if (typeof event?.groupId === 'string' && event.groupId) {
+            scope = `group/${event.groupId}`;
+          } else {
+            // Top-level event (start/merge/done/error without group context).
+            // Apply to all known scopes — easiest to spread across whatever
+            // scopes are already tracked, OR fall back to a singleton '*'
+            // bucket so the active-group getter can find it on first run.
+            scope = '*';
+          }
+          const isDone = phase === 'done';
+          const isError = phase === 'error' || (event?.status === 'error');
+          const isRunning = !isDone && !isError;
+          const updateScope = (key) => {
+            const prev = this.unifyDreamLatest[key] || null;
+            return {
+              scope: key,
+              phase,
+              status: isError ? 'error' : (isDone ? 'success' : 'running'),
+              startedAt: prev?.startedAt && isRunning
+                ? prev.startedAt
+                : (event?.ts || prev?.startedAt || Date.now()),
+              finishedAt: (isDone || isError) ? (event?.ts || Date.now()) : null,
+              mergedCount: typeof event?.mergedCount === 'number'
+                ? event.mergedCount
+                : (typeof event?.targets === 'number'
+                  ? event.targets
+                  : (prev?.mergedCount ?? null)),
+              error: isError ? (event?.error || 'unknown') : null,
+              manual: typeof event?.manual === 'boolean'
+                ? event.manual
+                : (prev?.manual ?? false),
+              durationMs: typeof event?.duration === 'number'
+                ? event.duration
+                : (typeof event?.durationMs === 'number'
+                  ? event.durationMs
+                  : (prev?.durationMs ?? null)),
+              isRunning,
+            };
+          };
+          if (scope === '*') {
+            // Broadcast: if we already track any scopes, refresh them all
+            // so the active-group panel always reflects the newest pass.
+            // Also keep the '*' bucket so a first-ever start event from a
+            // group with no prior entry still surfaces something.
+            //
+            // NOTE on invariant: a top-level `phase='done'` will mark every
+            // tracked scope as success — this is intentional (the dream
+            // worker emits a single global "done" after a sweep), but it
+            // means a scope's last finishedAt no longer corresponds to a
+            // scope-specific pass. UI consumers should treat the dream row
+            // as "most recent activity touching this group", not "this
+            // group's own pass".
+            const next = { ...this.unifyDreamLatest, '*': updateScope('*') };
+            for (const k of Object.keys(this.unifyDreamLatest)) {
+              if (k === '*') continue;
+              next[k] = updateScope(k);
+            }
+            this.unifyDreamLatest = next;
+          } else {
+            this.unifyDreamLatest = {
+              ...this.unifyDreamLatest,
+              [scope]: updateScope(scope),
+            };
+          }
+          break;
+        }
       }
     },
     fetchExpertRoleDefinitions() {
@@ -1694,6 +1809,9 @@ export const useChatStore = defineStore('chat', {
       this.unifyReflectionCards = {};
       this.unifySubAgentCards = {};
       // VP-block redesign (2026-05-08): per-turn detail drawer retired.
+      // v0.1.755: reset dream-pass projection so a previous session's
+      // "latest pass" doesn't bleed into the fresh session.
+      this.unifyDreamLatest = {};
       // Tell agent to reset session so Engine gets a fresh start
       if (this.unifyAgentId) {
         this.sendWsMessage({
