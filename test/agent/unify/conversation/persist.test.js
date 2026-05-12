@@ -93,6 +93,29 @@ Response text`;
     const msg = parseMessage(raw);
     expect(msg.turnNumber).toBe(3);
   });
+
+  // Issue B (PR v0.1.755): forwarded messages persist as ASSISTANT role
+  // with speakerVpId stamped to the originating VP, so the history-replay
+  // path emits unify_output type='assistant' (not type='user'). Verify
+  // both fields round-trip through frontmatter.
+  it('should parse speakerVpId for route_forward injections', () => {
+    const raw = `---
+id: m0042
+role: assistant
+time: 2026-05-12T10:00:00Z
+groupId: grp_demo
+speakerVpId: vp-alice
+tokens_est: 8
+---
+
+Forwarded payload from Alice`;
+
+    const msg = parseMessage(raw);
+    expect(msg.role).toBe('assistant');
+    expect(msg.speakerVpId).toBe('vp-alice');
+    expect(msg.groupId).toBe('grp_demo');
+    expect(msg.content).toBe('Forwarded payload from Alice');
+  });
 });
 
 // ─── ConversationStore ───────────────────────────────────────

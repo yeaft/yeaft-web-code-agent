@@ -617,10 +617,22 @@ function ensureDriverRunning(groupId, vpId) {
       try {
         const envMsgId = envelope?.msg?.id;
         if (envMsgId && text) {
+          // route_forward injection: the envelope text was authored by the
+          // sending VP, not the user. Persist as an assistant row attributed
+          // to the sender so history replay puts it on the VP track, not on
+          // the human "user" track. Non-forward envelopes (real user input)
+          // persist as the user row exactly like before.
+          const meta = envelope?.msg?.meta || {};
+          const isForward = meta.injectedBy === 'route_forward';
+          const senderVpId = isForward
+            ? (meta.senderVpId || envelope?.msg?.from || null)
+            : null;
           persistUserMessageOnceByMsgId({
             msgId: envMsgId,
             text,
             groupId,
+            role: isForward ? 'assistant' : 'user',
+            speakerVpId: senderVpId,
           });
         }
       } catch { /* never crash WS pipeline */ }
@@ -2232,11 +2244,11 @@ function appendTurnToGroupHistory(groupId, prompt, assistantTextParts, toolCalls
  * schema today (the engine never wrote them either) — they live on the
  * coordinator's jsonl-log under group meta.
  *
- * @param {{ msgId:string, text:string, groupId:string }} args
+ * @param {{ msgId:string, text:string, groupId:string, role?:string, speakerVpId?:string|null }} args
  * @returns {boolean} true if this call wrote the row, false if a prior
  *   call already wrote it (dedup hit).
  */
-function persistUserMessageOnceByMsgId({ msgId, text, groupId }) {
+function persistUserMessageOnceByMsgId({ msgId, text, groupId, role, speakerVpId }) {
   if (!session?.conversationStore) return false;
   // No msgId means no dedup key — caller is responsible for guarding.
   // Both call sites already do (`if (envMsgId && text)` and
@@ -2267,12 +2279,25 @@ function persistUserMessageOnceByMsgId({ msgId, text, groupId }) {
     }
   }
   try {
+    // role defaults to 'user' for back-compat: handleUnifyGroupChat's
+    // real-user call site passes no role and gets a user row. The driver
+    // loop passes role='assistant' + speakerVpId for route_forward
+    // injections so the on-disk record correctly attributes the text to
+    // the sending VP.
+    const persistRole = role === 'assistant' ? 'assistant' : 'user';
     const record = {
-      role: 'user',
+      role: persistRole,
       content: text,
       threadId: 'main',
     };
     if (groupId) record.groupId = groupId;
+    // Stamp speakerVpId so the UI's loadHistory replay can route the row
+    // to the correct VP block. Only meaningful when role='assistant'; for
+    // a real user message we leave it unset (the UI's user track is
+    // unattributed).
+    if (persistRole === 'assistant' && speakerVpId && typeof speakerVpId === 'string') {
+      record.speakerVpId = speakerVpId;
+    }
     session.conversationStore.append(record);
     return true;
   } catch (err) {
@@ -2731,11 +2756,19 @@ export async function handleUnifyLoadHistory(msg) {
     if (m.role === 'user') {
       sendUnifyOutput({ type: 'user', message: { content: m.content } }, { groupId: m.groupId || null });
     } else if (m.role === 'assistant') {
+      // speakerVpId rides on the envelope so the frontend can route this
+      // replayed assistant text to the correct VP track. Without it, the
+      // history replay would merge replies from different VPs onto one
+      // anonymous assistant turn.
+      const envelopeOpts = {
+        groupId: m.groupId || null,
+      };
+      if (m.speakerVpId) envelopeOpts.vpId = m.speakerVpId;
       sendUnifyOutput({
         type: 'assistant',
         message: { content: [{ type: 'text', text: m.content }] },
-      }, { groupId: m.groupId || null });
-      sendUnifyOutput({ type: 'result', result_text: '' }, { groupId: m.groupId || null });
+      }, envelopeOpts);
+      sendUnifyOutput({ type: 'result', result_text: '' }, envelopeOpts);
     }
   }
 
