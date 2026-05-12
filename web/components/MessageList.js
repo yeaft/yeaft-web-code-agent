@@ -5,11 +5,12 @@ import VpSpeakerHeader from './VpSpeakerHeader.js';
 import ReflectionCard from './ReflectionCard.js';
 import SubAgentCard from './SubAgentCard.js';
 import GroupAnnouncementBar from './GroupAnnouncementBar.js';
+import UserTurnBlock from './UserTurnBlock.js';
 import { appendTypingPlaceholders } from '../stores/helpers/typing-placeholders.js';
 
 export default {
   name: 'MessageList',
-  components: { MessageItem, AssistantTurn, VpTurnBlock, VpSpeakerHeader, ReflectionCard, SubAgentCard, GroupAnnouncementBar },
+  components: { MessageItem, AssistantTurn, VpTurnBlock, VpSpeakerHeader, ReflectionCard, SubAgentCard, GroupAnnouncementBar, UserTurnBlock },
   template: `
     <main class="chat-container" ref="containerRef">
       <!-- Session Loading Overlay - only covers message area -->
@@ -110,8 +111,16 @@ export default {
           <!-- task-312: wrapper carries data-msg-id so the Unify sidebar
                jump-to-message feature can scroll/flash a specific row. -->
           <div class="msg-row" :data-msg-id="item.id" :class="{ 'msg-flash': item.id === flashMsgId }">
+            <!-- User message in Unify group view: render IM-style on the
+                 right side via UserTurnBlock (mirror of VpTurnBlock).
+                 Outside of group view (legacy 1:1 chat) keep the original
+                 MessageItem path so chat-mode is untouched. -->
+            <UserTurnBlock
+              v-if="item.type === 'user' && useImStyleForUser"
+              :message="item.message"
+            />
             <!-- User / system / error messages: rendered by MessageItem -->
-            <MessageItem v-if="item.type === 'user' || item.type === 'system' || item.type === 'error'" :message="item.message" />
+            <MessageItem v-else-if="item.type === 'user' || item.type === 'system' || item.type === 'error'" :message="item.message" />
 
             <!-- Assistant turn — VP-block redesign (2026-05-08).
                  - Unify multi-VP turns (speakerVpId set) -> VpTurnBlock,
@@ -489,6 +498,15 @@ export default {
       if (gs.activeGroupId && gs.groups[gs.activeGroupId]) return gs.activeGroupId;
       return null;
     });
+
+    // Issue C (2026-05-12) — IM-style dual-column layout gate.
+    // The user explicitly scoped this to Unify GROUP conversations only:
+    // 1:1 chat and crew are unchanged. We reuse the same predicate as
+    // the announcement bar — Unify view + an active group is selected —
+    // so user messages render as right-side bubbles (UserTurnBlock) and
+    // VP turns stay on the left (existing VpTurnBlock). Outside a group,
+    // user messages fall through to the legacy centered MessageItem.
+    const useImStyleForUser = Vue.computed(() => activeGroupIdForBar.value !== null);
 
     // Online agents
     const onlineAgents = Vue.computed(() => {
@@ -1327,6 +1345,7 @@ export default {
       orphanSubAgentCards,
       // group editor wiring
       activeGroupIdForBar,
+      useImStyleForUser,
       onOpenGroupSettings,
       onClickLoadMore,
     };

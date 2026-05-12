@@ -1047,6 +1047,10 @@ export default {
   // ============ Unify per-message hover timestamp (task-334-ui-c / prev-2 backlog) ============
   'unify.message.timeAria': 'Sent at {time}',
 
+  // ============ Unify IM-style human row (Issue C, 2026-05-12) ============
+  // Aria label / tooltip for the right-side user avatar in Unify group view.
+  'unify.user.youLabel': 'You',
+
   // ============ Unify route_forward hand-off pill (task-707) ============
   'unify.handoff.targets': 'Forwarded to {mentions}',
   'unify.handoff.broadcast': 'Forwarded to {mentions} (broadcast)',
