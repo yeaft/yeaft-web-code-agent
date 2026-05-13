@@ -553,7 +553,7 @@ export default {
             || currentTurn.imageMsgs.length > 0
           );
           const hasTools = currentTurn.toolMsgs.length > 0;
-          const hasHandoff = currentTurn.handoffHints && currentTurn.handoffHints.length > 0;
+          const hasHandoff = !!(currentTurn.handoffHints && currentTurn.handoffHints.length > 0);
 
           // task-757 / Issue #2: hide a turn whose ONLY product is a
           // route_forward hand-off. If a VP (e.g. Jobs) receives a
@@ -575,6 +575,16 @@ export default {
 
           // Skip empty turns (nothing at all) AND skip forward-only
           // turns (collapse into the next VP's bubble).
+          //
+          // Note on the predicate: it could be inlined as
+          //   hasVisible || (hasTools && !hasHandoff)
+          // since `forwardOnly` already cancels the `|| hasHandoff` arm.
+          // The (A || B || C) && !forwardOnly form is intentional — it
+          // reads as "did the turn produce anything; if so, was it
+          // forward-only" which mirrors the two-step intent. The
+          // forward-only test suite pins both this shape AND the
+          // simplified-behaviour cases, so a future refactor to the
+          // inlined form is safe.
           if ((hasVisible || hasTools || hasHandoff) && !forwardOnly) {
             // task-708: render the speaker header on every VP-attributed
             // turn. The avatar (with its inline typing badge) is THE
