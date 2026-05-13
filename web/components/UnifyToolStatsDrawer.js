@@ -15,6 +15,11 @@
  *
  * Designed as a controlled component: parent owns `modelValue` (open
  * state). Mount it inside UnifyPage and bind a toolbar button to it.
+ *
+ * Note on formatters: `formatMs / formatPct / formatLastCalled` are
+ * intentionally duplicated from `agent/unify/stats/format.js`. The
+ * no-build-step frontend can't share JS modules with `agent/`; keep the
+ * two definitions byte-identical when tweaking either side.
  */
 export default {
   name: 'UnifyToolStatsDrawer',

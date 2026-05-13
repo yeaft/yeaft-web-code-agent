@@ -194,28 +194,37 @@ export class ToolUsageStats {
     const stale = now - this.#lastFlushAt >= this.#flushIntervalMs;
     const overflow = this.#recordsSinceFlush >= this.#flushEveryN;
     if (!stale && !overflow) return;
-    // Fire-and-forget; collapse concurrent flushes into one in-flight write.
+    // If a write is already in flight, skip — the in-memory state is
+    // ahead of disk, but #recordsSinceFlush will trigger the next overflow.
     if (this.#flushInFlight) return;
+    this.#startFlush();
+  }
+
+  /**
+   * Persist current state. Writes atomically via .tmp + rename.
+   *
+   * Coalesces with any in-flight throttled flush — first awaits it (the
+   * in-flight write captured a *snapshot* taken before this call, so it
+   * may not include the latest record), then schedules a fresh singleton
+   * flush so the on-disk state matches the in-memory state at the moment
+   * this method resolves. `#flushInFlight` is the only path that ever
+   * opens a writer on `${path}.tmp`, so two writers never race.
+   */
+  async flush() {
+    if (this.#flushInFlight) {
+      try { await this.#flushInFlight; } catch { /* swallow */ }
+    }
+    this.#startFlush();
+    try { await this.#flushInFlight; } catch { /* swallow */ }
+  }
+
+  #startFlush() {
     this.#flushInFlight = this.#doFlush().catch(() => {
       // Persisted-write failures are non-fatal: in-memory state is the
       // source of truth for the current session.
     }).finally(() => {
       this.#flushInFlight = null;
     });
-  }
-
-  /**
-   * Persist current state. Writes atomically via .tmp + rename.
-   *
-   * If a throttled flush is in flight, awaits it first so the caller is
-   * guaranteed to see the most recent state on disk before this promise
-   * resolves (and we never have two concurrent rename()s racing).
-   */
-  async flush() {
-    if (this.#flushInFlight) {
-      try { await this.#flushInFlight; } catch { /* swallow */ }
-    }
-    return this.#doFlush();
   }
 
   async #doFlush() {
@@ -225,6 +234,12 @@ export class ToolUsageStats {
       tools: this.#tools,
     };
     const json = JSON.stringify(payload, null, 2);
+    // Capture the records-since-flush count at write-start. Any records
+    // that land during the async write must still count toward the next
+    // overflow trigger, so we subtract only what we actually persisted —
+    // not whatever value `#recordsSinceFlush` happens to be when rename
+    // returns.
+    const flushedCount = this.#recordsSinceFlush;
     const dir = dirname(this.#path);
     try {
       await fsp.mkdir(dir, { recursive: true });
@@ -237,7 +252,7 @@ export class ToolUsageStats {
       await fsp.writeFile(tmpPath, json, 'utf8');
       await fsp.rename(tmpPath, this.#path);
       this.#lastFlushAt = Date.now();
-      this.#recordsSinceFlush = 0;
+      this.#recordsSinceFlush = Math.max(0, this.#recordsSinceFlush - flushedCount);
     } catch {
       // Try to clean the tmp file if it dangling.
       try { await fsp.unlink(tmpPath); } catch { /* swallow */ }

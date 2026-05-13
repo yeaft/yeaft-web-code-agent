@@ -6,7 +6,8 @@
   "type": "module",
   "bin": {
     "yeaft-agent": "./cli.js",
-    "yeaft": "./unify/cli.js"
+    "yeaft": "./unify/cli.js",
+    "yeaft-stats": "./bin/yeaft-stats.js"
   },
   "scripts": {
     "start": "node index.js",

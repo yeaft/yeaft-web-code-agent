@@ -17,8 +17,9 @@
 
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { ToolUsageStats } from '../agent/unify/stats/tool-usage.js';
-import { allTools } from '../agent/unify/tools/index.js';
+import { ToolUsageStats } from '../unify/stats/tool-usage.js';
+import { allTools } from '../unify/tools/index.js';
+import { formatMs, formatPct, formatLastCalled } from '../unify/stats/format.js';
 
 function parseArgs(argv) {
   const opts = {
@@ -48,28 +49,6 @@ Usage:
   yeaft-stats --reset       Delete the stats file
   yeaft-stats --yeaft-dir=/path
   yeaft-stats --help        Show this message`);
-}
-
-function formatMs(ms) {
-  if (!Number.isFinite(ms)) return '-';
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(2)}s`;
-}
-
-function formatPct(rate) {
-  if (!Number.isFinite(rate) || rate === 0) return '0%';
-  return `${(rate * 100).toFixed(1)}%`;
-}
-
-function formatLastCalled(iso) {
-  if (typeof iso !== 'string' || !iso) return 'never';
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return iso;
-  const ageMs = Date.now() - t;
-  if (ageMs < 60_000) return 'just now';
-  if (ageMs < 3_600_000) return `${Math.floor(ageMs / 60_000)}m ago`;
-  if (ageMs < 86_400_000) return `${Math.floor(ageMs / 3_600_000)}h ago`;
-  return `${Math.floor(ageMs / 86_400_000)}d ago`;
 }
 
 function padRight(s, n) {

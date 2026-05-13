@@ -287,7 +287,6 @@ export default {
           class="tool-stats-open-button"
           @click="toolStatsOpen = true"
           :title="$t('unify.toolStats.buttonLabel')"
-          style="position: absolute; top: 10px; right: 48px; background: transparent; border: 0; color: inherit; cursor: pointer; padding: 4px 8px; font-size: 11px; border-radius: 4px;"
         >
           📊 {{ $t('unify.toolStats.buttonLabel') }}
         </button>

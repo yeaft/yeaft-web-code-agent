@@ -311,14 +311,8 @@ export const useChatStore = defineStore('chat', {
     // addMessageToConversation / appendToAssistant can route by turnId.
     _currentUnifyVpId: null,
     _currentUnifyTurnId: null,
-    // VP-block redesign (2026-05-08): Track-A FeatureArc and the
-    // feature-pill rendering surface have been retired. featureId still
-    // flows on engine events when the LLM uses the feature_* tools or
-    // when a sub-agent runner stamps it; we no longer maintain a
-    // parallel meta map / preview map / per-VP active-feature pointer
-    // in the store. The frontend now folds turns into per-VP blocks
-    // (VpTurnBlock); LLM-driven feature scoping for memory still works
-    // via the FeatureStore on the agent side.
+    // Feature system fully removed 2026-05-13; per-VP turns are folded
+    // by VpTurnBlock keyed off vpId + turnId.
 
     // Active VP turns — keyed by turnId. Cleared on result or abort ack.
     activeVpTurns: {},
@@ -746,6 +740,21 @@ export const useChatStore = defineStore('chat', {
         type: 'unify_fetch_tool_stats',
         agentId: this.unifyAgentId,
       });
+      // Guard against silent drops (agent down, relay loss). Without a
+      // timeout the drawer spinner runs forever; surface the failure to
+      // the user so they at least know to retry / reload.
+      if (this._fetchUnifyToolStatsTimer) clearTimeout(this._fetchUnifyToolStatsTimer);
+      this._fetchUnifyToolStatsTimer = setTimeout(() => {
+        if (this.unifyToolStatsLoading) {
+          this.unifyToolStatsLoading = false;
+          this.unifyToolStats = {
+            ...(this.unifyToolStats || { snapshot: {}, registered: [], unused: [] }),
+            error: 'Timed out waiting for agent reply.',
+            fetchedAt: Date.now(),
+          };
+        }
+        this._fetchUnifyToolStatsTimer = null;
+      }, 10_000);
     },
     /**
      * Send a group-scoped Unify chat message. Routes through the agent-side
@@ -1418,6 +1427,10 @@ export const useChatStore = defineStore('chat', {
         // and "defined but never called" views without a second
         // round-trip.
         case 'unify_tool_stats': {
+          if (this._fetchUnifyToolStatsTimer) {
+            clearTimeout(this._fetchUnifyToolStatsTimer);
+            this._fetchUnifyToolStatsTimer = null;
+          }
           this.unifyToolStats = {
             snapshot: event?.snapshot && typeof event.snapshot === 'object' ? event.snapshot : {},
             registered: Array.isArray(event?.registered) ? event.registered : [],

@@ -2727,6 +2727,19 @@
 
 /* ── 2026-05-13 Tool Usage Stats drawer ──────────────────────────── */
 
+.tool-stats-open-button {
+  position: absolute;
+  top: 10px;
+  right: 48px;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  padding: 4px 8px;
+  font-size: 11px;
+  border-radius: 4px;
+}
+
 .tool-stats-drawer-backdrop {
   position: fixed;
   inset: 0;

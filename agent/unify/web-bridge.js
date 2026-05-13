@@ -175,6 +175,11 @@ function invalidateGroupContext(groupId) {
     if (!k.startsWith(prefix)) continue;
     if (Array.isArray(inbox)) inbox.length = 0;
   }
+  // Reap per-(group,vp) TodoWrite snapshots for this group so a
+  // deleted/renamed group doesn't pin a stale checklist forever.
+  for (const k of vpCurrentTodos.keys()) {
+    if (k.startsWith(prefix)) vpCurrentTodos.delete(k);
+  }
   // Engines are NOT torn down here on purpose. They hold subordinate
   // state (AMS adjustments) that should survive a meta change and a
   // closed groupHandle — they don't reach the on-disk group meta
@@ -757,6 +762,7 @@ export async function __testResetVpState() {
   vpEngines.clear();
   vpAborts.clear();
   groupContexts.clear();
+  vpCurrentTodos.clear();
   // Per-group compact in-flight + pending state lives on the session's
   // Compactor. Clear it so a follow-on test doesn't see ghost in-flight
   // promises from a prior run.
@@ -2851,6 +2857,7 @@ export async function resetUnifySession() {
   vpDrivers.clear();
   vpEngines.clear();
   groupContexts.clear();
+  vpCurrentTodos.clear();
   // History-dedup cache is keyed by per-session coordinator msg ids;
   // a fresh session resets the id space, so clear the cache too.
   _persistedUserMsgIds.clear();

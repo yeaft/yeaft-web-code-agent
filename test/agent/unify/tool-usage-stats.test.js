@@ -147,4 +147,28 @@ describe('ToolUsageStats', () => {
     }
     expect(existsSync(tmp.path)).toBe(true);
   });
+
+  it('concurrent flush()s coalesce — only one writer touches .tmp at a time', async () => {
+    // Regression for the PR-767 Torvalds C1 race: manual flush() and the
+    // throttled #maybeFlush() both ran #doFlush() directly, so two
+    // concurrent rename()s could race on the same .tmp path and the
+    // catch-block unlink could nuke the other writer's file. The fix
+    // funnels every flush through the #flushInFlight singleton.
+    const stats = new ToolUsageStats({
+      path: tmp.path,
+      flushEveryN: 2,
+      flushIntervalMs: 60_000,
+    });
+    // Kick the throttled path and the manual path at the same time.
+    stats.record({ name: 'Bash' });
+    stats.record({ name: 'Bash' }); // overflow → schedules a #doFlush
+    await Promise.all([stats.flush(), stats.flush(), stats.flush()]);
+    expect(existsSync(tmp.path)).toBe(true);
+    // The .tmp sibling must not be left behind by a racing writer.
+    expect(existsSync(`${tmp.path}.tmp`)).toBe(false);
+    // State on disk reflects what's in memory.
+    const reloaded = new ToolUsageStats({ path: tmp.path });
+    reloaded.loadSync();
+    expect(reloaded.snapshot().Bash.callCount).toBe(2);
+  });
 });
