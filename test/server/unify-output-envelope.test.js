@@ -1,0 +1,202 @@
+/**
+ * Server relay envelope passthrough for `unify_output`.
+ *
+ * The bug this guards against (fixed in v0.1.756):
+ *   Agent sends `{type:'unify_output', conversationId, groupId, vpId, turnId, data}`
+ *   Server forwarded only `{conversationId, groupId, data, event}` to web clients,
+ *   silently DROPPING `vpId` and `turnId`. The frontend reads
+ *   `msg.vpId / msg.turnId` in `handleUnifyOutput` to stamp routing context
+ *   that drives `speakerVpId` on streaming assistant deltas. Missing fields
+ *   meant MessageList fell through from VpTurnBlock (with avatar) to a plain
+ *   AssistantTurn (no avatar) — exactly the visual bug users reported after
+ *   v0.1.755 ("AI 的 response icon 不见了").
+ *
+ * Strategy: mock the heavy deps (database, context, ws-utils, config) so we
+ * can import the real `handleAgentOutput` and exercise the `unify_output`
+ * branch end-to-end. The fake `sendToWebClient` records every envelope it
+ * receives; assertions inspect those envelopes verbatim.
+ */
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+// ── In-memory state shared across mocks + tests ────────────────────────────
+const _sent = [];
+const _webClients = new Map();
+
+function _reset() {
+  _sent.length = 0;
+  _webClients.clear();
+}
+
+// ── Mocks (must be hoisted before the import below) ───────────────────────
+vi.mock('../../server/database.js', () => ({
+  messageDb: {
+    add: vi.fn(() => 'mock-db-id'),
+  },
+}));
+
+vi.mock('../../server/ws-utils.js', () => ({
+  broadcastAgentList: vi.fn(),
+  forwardToClients: vi.fn(),
+  // The relay we care about. Record verbatim envelope per call.
+  sendToWebClient: vi.fn(async (client, envelope) => {
+    _sent.push({ clientId: client.__id, envelope });
+  }),
+}));
+
+vi.mock('../../server/context.js', () => ({
+  webClients: _webClients,
+  previewFiles: new Map(),
+  trackMessage: vi.fn(),
+}));
+
+vi.mock('../../server/config.js', () => ({
+  CONFIG: { skipAuth: true },
+}));
+
+const { handleAgentOutput } = await import('../../server/handlers/agent-output.js');
+
+function addClient(id) {
+  const c = { __id: id, authenticated: true, userId: 'u1' };
+  _webClients.set(id, c);
+  return c;
+}
+
+const baseAgent = { ownerId: 'u1', conversations: new Map() };
+
+beforeEach(_reset);
+
+describe('agent-output.js — unify_output envelope passthrough', () => {
+  it('forwards vpId on data envelopes', async () => {
+    addClient('c1');
+    await handleAgentOutput('a1', baseAgent, {
+      type: 'unify_output',
+      conversationId: 'conv1',
+      vpId: 'vp_alice',
+      data: { type: 'assistant', message: { content: 'hi' } },
+    });
+    expect(_sent).toHaveLength(1);
+    expect(_sent[0].envelope.vpId).toBe('vp_alice');
+  });
+
+  it('forwards turnId on data envelopes', async () => {
+    addClient('c1');
+    await handleAgentOutput('a1', baseAgent, {
+      type: 'unify_output',
+      conversationId: 'conv1',
+      turnId: 'd123:vp_alice',
+      data: { type: 'assistant', message: { content: 'hi' } },
+    });
+    expect(_sent[0].envelope.turnId).toBe('d123:vp_alice');
+  });
+
+  it('forwards groupId on data envelopes (already worked, regression guard)', async () => {
+    addClient('c1');
+    await handleAgentOutput('a1', baseAgent, {
+      type: 'unify_output',
+      conversationId: 'conv1',
+      groupId: 'grp_team',
+      data: { type: 'assistant', message: { content: 'hi' } },
+    });
+    expect(_sent[0].envelope.groupId).toBe('grp_team');
+  });
+
+  it('forwards featureId on data envelopes', async () => {
+    addClient('c1');
+    await handleAgentOutput('a1', baseAgent, {
+      type: 'unify_output',
+      conversationId: 'conv1',
+      featureId: 'feat_42',
+      data: { type: 'assistant', message: { content: 'hi' } },
+    });
+    expect(_sent[0].envelope.featureId).toBe('feat_42');
+  });
+
+  it('forwards ALL envelope fields together on a typical streaming delta', async () => {
+    addClient('c1');
+    await handleAgentOutput('a1', baseAgent, {
+      type: 'unify_output',
+      conversationId: 'conv1',
+      groupId: 'grp_team',
+      vpId: 'vp_alice',
+      turnId: 'd123:vp_alice',
+      featureId: 'feat_42',
+      data: { type: 'assistant', message: { content: 'hi' } },
+    });
+    const env = _sent[0].envelope;
+    expect(env).toMatchObject({
+      type: 'unify_output',
+      conversationId: 'conv1',
+      groupId: 'grp_team',
+      vpId: 'vp_alice',
+      turnId: 'd123:vp_alice',
+      featureId: 'feat_42',
+    });
+    expect(env.data).toEqual({ type: 'assistant', message: { content: 'hi' } });
+  });
+
+  it('forwards vpId/turnId on event envelopes (vp_typing_start, vp_turn_start, etc.)', async () => {
+    addClient('c1');
+    await handleAgentOutput('a1', baseAgent, {
+      type: 'unify_output',
+      conversationId: 'conv1',
+      vpId: 'vp_alice',
+      turnId: 'd123:vp_alice',
+      event: { type: 'vp_typing_start', vpId: 'vp_alice' },
+    });
+    expect(_sent[0].envelope.vpId).toBe('vp_alice');
+    expect(_sent[0].envelope.turnId).toBe('d123:vp_alice');
+    expect(_sent[0].envelope.event).toEqual({ type: 'vp_typing_start', vpId: 'vp_alice' });
+  });
+
+  it('omits absent envelope fields (no `undefined` leaks)', async () => {
+    addClient('c1');
+    await handleAgentOutput('a1', baseAgent, {
+      type: 'unify_output',
+      conversationId: 'conv1',
+      data: { type: 'assistant', message: { content: 'hi' } },
+      // No groupId / vpId / turnId / featureId
+    });
+    const env = _sent[0].envelope;
+    expect('groupId' in env).toBe(false);
+    expect('vpId' in env).toBe(false);
+    expect('turnId' in env).toBe(false);
+    expect('featureId' in env).toBe(false);
+  });
+
+  it('forwards empty-string ids verbatim (`!= null`, not truthy)', async () => {
+    // A relay shouldn't silently eat legitimate values. IDs are non-empty
+    // in practice, but if one ever arrives as '' or 0, we want the relay
+    // to pass it through visibly rather than drop it. Documents the
+    // `!= null` semantics chosen in agent-output.js.
+    addClient('c1');
+    await handleAgentOutput('a1', baseAgent, {
+      type: 'unify_output',
+      conversationId: 'conv1',
+      vpId: '',
+      turnId: '',
+      data: { type: 'assistant', message: { content: 'hi' } },
+    });
+    const env = _sent[0].envelope;
+    expect(env.vpId).toBe('');
+    expect(env.turnId).toBe('');
+  });
+
+  it('broadcasts to every authenticated client of the agent owner', async () => {
+    addClient('c1');
+    addClient('c2');
+    // Unauthenticated client should NOT receive
+    _webClients.set('c3', { __id: 'c3', authenticated: false, userId: 'u1' });
+    await handleAgentOutput('a1', baseAgent, {
+      type: 'unify_output',
+      conversationId: 'conv1',
+      vpId: 'vp_alice',
+      data: { type: 'assistant', message: { content: 'hi' } },
+    });
+    // skipAuth: true bypasses the ownerId check; both c1 and c2 are
+    // authenticated so both receive. c3 is filtered out by the
+    // `c.authenticated` predicate.
+    const ids = _sent.map(s => s.clientId).sort();
+    expect(ids).toEqual(['c1', 'c2']);
+    for (const s of _sent) expect(s.envelope.vpId).toBe('vp_alice');
+  });
+});
