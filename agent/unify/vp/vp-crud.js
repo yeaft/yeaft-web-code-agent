@@ -297,5 +297,6 @@ export function readVp(vpId, options = {}) {
     traits: Array.isArray(meta.traits) ? meta.traits.map(String) : [],
     modelHint,
     persona: body,
+    planInstruction: typeof meta.planInstruction === 'string' ? String(meta.planInstruction) : '',
   };
 }

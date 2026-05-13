@@ -140,7 +140,8 @@ export class VpLoader {
         prev.mtimeMs !== next.mtimeMs ||
         prev.persona !== next.persona ||
         prev.name !== next.name ||
-        prev.role !== next.role
+        prev.role !== next.role ||
+        prev.planInstruction !== next.planInstruction
       ) {
         // In-place update preserves VP identity → RoleInstance.runtimeState
         // is untouched; persona swap propagates on next read of vp.persona.

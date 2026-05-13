@@ -737,6 +737,13 @@ export class Engine {
       // VP-aware tool). Undefined when running in non-group / no-VP flows.
       router: vpCtx?.router,
       senderVpId: vpCtx?.senderVpId,
+      // Active VP persona — surfaced so tools like `StartPlan` can read
+      // the optional `planInstruction` override without re-reading
+      // role.md. Mirrors the symmetry already present in
+      // `parentEngineDeps.parentVpPersona` below — sub-agents inherit it
+      // through the parent deps; tools at this level read it directly.
+      // Null in non-VP / test contexts.
+      vpPersona: vpCtx?.vpPersona || null,
       inboundEnvelope: vpCtx?.inboundEnvelope,
       taskId: vpCtx?.taskId,
       taskMembers: vpCtx?.taskMembers,
