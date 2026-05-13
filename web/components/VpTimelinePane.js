@@ -128,21 +128,17 @@ export default {
     </aside>
   `,
   setup() {
-    const i18nFor = (key) => {
-      // Vue 3's globalProperties.$t is available via the component's
-      // proxy. We keep this thin wrapper so the setup-side functions
-      // below have a consistent way to look up labels.
-      const app = Vue.getCurrentInstance();
-      return app && app.appContext.config.globalProperties.$t
-        ? app.appContext.config.globalProperties.$t(key)
-        : key;
-    };
+    // Capture $t ONCE at mount via getCurrentInstance(); reusing the
+    // same reference for every status label avoids re-walking
+    // appContext on every render (40 lookups for 20 rows otherwise).
+    const inst = Vue.getCurrentInstance();
+    const $t = (inst && inst.appContext.config.globalProperties.$t) || ((k) => k);
 
     const statusLabel = (row) => {
       switch (row.status) {
-        case 'idle':      return i18nFor('unify.vpTimeline.status.idle');
-        case 'typing':    return i18nFor('unify.vpTimeline.status.typing');
-        case 'streaming': return i18nFor('unify.vpTimeline.status.streaming');
+        case 'idle':      return $t('unify.vpTimeline.status.idle');
+        case 'typing':    return $t('unify.vpTimeline.status.typing');
+        case 'streaming': return $t('unify.vpTimeline.status.streaming');
         default:          return row.status;
       }
     };

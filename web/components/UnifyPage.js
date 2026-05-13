@@ -455,7 +455,6 @@ export default {
     // together with the Feature system. The pane is roster-driven and
     // has no Feature-system dependency; no per-second tick is needed
     // (the original `nowMs` only drove the in-feature elapsed timer).
-    const isResizingTimeline = Vue.ref(false);
 
     // User-controlled show/hide. Defaults to true so first-time users
     // see the pane; subsequent sessions restore whatever the user last
@@ -481,15 +480,19 @@ export default {
     const savedTimelineWidth = (() => {
       try { return localStorage.getItem('unify-vp-timeline-width'); } catch (_) { return null; }
     })();
+    // Guard parseInt against garbled / partial storage values — a
+    // bare parseInt would let 'NaNpx' leak into the CSS variable.
+    const parsedTimelineWidth = savedTimelineWidth ? parseInt(savedTimelineWidth, 10) : NaN;
     const timelineWidth = Vue.ref(
-      savedTimelineWidth ? parseInt(savedTimelineWidth, 10) : TIMELINE_DEFAULT_WIDTH
+      Number.isFinite(parsedTimelineWidth) && parsedTimelineWidth >= TIMELINE_MIN_WIDTH
+        ? parsedTimelineWidth
+        : TIMELINE_DEFAULT_WIDTH
     );
     const timelineWidthStyle = Vue.computed(() => ({
       '--unify-vp-timeline-width': timelineWidth.value + 'px',
     }));
 
     const startTimelineResize = (e) => {
-      isResizingTimeline.value = true;
       const startX = e.clientX;
       const startWidth = timelineWidth.value;
       // Cap at 40% of viewport — the VP list is supplementary; never
@@ -503,7 +506,6 @@ export default {
       };
 
       const onMouseUp = () => {
-        isResizingTimeline.value = false;
         document.removeEventListener('mousemove', onMouseMove);
         document.removeEventListener('mouseup', onMouseUp);
         try { localStorage.setItem('unify-vp-timeline-width', String(timelineWidth.value)); } catch (_) {}

@@ -2791,7 +2791,15 @@
   opacity: 0;
   transition: opacity 0.15s, background 0.15s, color 0.15s;
 }
-.unify-vp-timeline-abort:focus-visible,
+/* Keyboard-focus styling mirrors hover styling so a keyboard user can
+   tell destructive (abort = red) from informational (info = accent)
+   without having to read the aria-label. */
+.unify-vp-timeline-abort:focus-visible {
+  background: rgba(231, 76, 60, 0.15);
+  color: var(--error-color, #e74c3c);
+  outline: none;
+  opacity: 1;
+}
 .unify-vp-timeline-info:focus-visible {
   background: var(--accent-soft, rgba(99, 102, 241, 0.12));
   color: var(--accent, #6366f1);
