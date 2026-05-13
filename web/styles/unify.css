@@ -2753,13 +2753,14 @@
   font-size: 13px;
   color: var(--text-primary, #1f2937);
   font-weight: 500;
-  flex-shrink: 0;
-  /* The name itself can ellipsis when extremely long, but priority is
-     given to keeping the status visible — so the name shrinks LAST. */
+  /* Name can ellipsis when extremely long; status (flex:1 below) gets the
+     remaining space. Removing the earlier `flex-shrink: 0` + `max-width: 60%`
+     pair — they contradicted each other (the cap forced ellipsis at 60%
+     even when status was empty, while flex-shrink:0 said "don't shrink"). */
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 60%;
 }
 .unify-vp-timeline-row-status {
   font-size: 11px;
@@ -2769,6 +2770,8 @@
   align-items: center;
   flex-wrap: nowrap;
   overflow: hidden;
+  /* status takes the remaining space and ellipsises before the name does. */
+  flex: 1;
   min-width: 0;
   white-space: nowrap;
   text-overflow: ellipsis;

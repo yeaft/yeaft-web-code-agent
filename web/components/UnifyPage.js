@@ -267,6 +267,7 @@ export default {
         <!-- Input Area -->
         <ChatInput
           v-if="!showSettings"
+          ref="chatInputRef"
           :send-fn="sendMessage"
           :cancel-fn="cancelUnify"
           :show-stop="isProcessing"
@@ -343,6 +344,12 @@ export default {
     const modelDropdownOpen = Vue.ref(false);
     const showSettings = Vue.ref(false);
     const settingsInitialTab = Vue.ref('llm'); // task-343: 'llm' | 'vp'
+
+    // feat-vp-list-ui-polish: template ref to the embedded ChatInput so we
+    // can call its imperative `appendMention(vpId)` when the VP list pane
+    // emits a mention request. Keeps the Unify-specific @-syntax out of
+    // ChatInput (review fix — Fowler C2, PR #763).
+    const chatInputRef = Vue.ref(null);
 
     // task-340: Workbench capability gate — matches ChatPage.canUseWorkbench
     // semantics via store.hasCapability. store.workbenchExpanded and
@@ -1019,13 +1026,15 @@ export default {
     // feat-vp-list-ui-polish: clicking a VP row now @-mentions that VP in
     // the chat input (default action), instead of jumping straight to the
     // detail view. The detail view moved to a hover-revealed info button
-    // on the row. The store action handles the input-draft append + a
-    // reactive trigger that ChatInput watches to insert the mention into
-    // its local inputText.
+    // on the row. UnifyPage owns the ChatInput template ref and calls its
+    // exposed `appendMention()` method directly — keeping the
+    // Unify-specific `@<vpId>` syntax out of the shared ChatInput's setup
+    // (review fix — Fowler C2, PR #763).
     const onMentionVpFromTimeline = (vpId) => {
       if (!vpId) return;
-      if (typeof store.requestUnifyMention === 'function') {
-        store.requestUnifyMention(vpId);
+      const ci = chatInputRef.value;
+      if (ci && typeof ci.appendMention === 'function') {
+        ci.appendMention(vpId);
       }
     };
 
@@ -1064,6 +1073,7 @@ export default {
       modelDropdownOpen,
       showSettings,
       settingsInitialTab,
+      chatInputRef,
       openSettings,
       isMobile,
       isNarrowDetail,

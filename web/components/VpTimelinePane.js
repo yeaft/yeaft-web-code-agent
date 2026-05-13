@@ -74,7 +74,7 @@ export default {
           :class="['is-status-' + row.status]"
           tabindex="0"
           role="button"
-          :aria-label="row.displayName + ' — ' + statusLabel(row) + ' — ' + $t('unify.vpTimeline.mention')"
+          :aria-label="row.displayName + ' — ' + statusLabel(row)"
           :title="$t('unify.vpTimeline.mention')"
           @click="$emit('mention-vp', row.vpId)"
           @keydown.enter.prevent="$emit('mention-vp', row.vpId)"

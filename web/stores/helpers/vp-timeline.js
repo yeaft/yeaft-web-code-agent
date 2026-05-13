@@ -44,27 +44,7 @@
  * @property {'active'|'completed'|'aborted'|'error'|null} featureStatus
  * @property {number|null} featureStartedAt
  * @property {number|null} featureEndedAt
- * @property {string|null} lastSnippet           // last assistant text, ≤ snippetMaxLen + '…'
- * @property {number|null} lastActivityAt        // max(featureStartedAt, lastMsg.ts) | null
  */
-
-/**
- * Truncate a string to `max` chars, appending '…' when shortened.
- * Returns null for null/undefined/empty input so the consumer can render
- * "no snippet yet" with a single null-check.
- *
- * @param {string|null|undefined} text
- * @param {number} max
- * @returns {string|null}
- */
-export function truncateSnippet(text, max) {
-  if (text == null) return null;
-  const s = typeof text === 'string' ? text : String(text);
-  const trimmed = s.trim();
-  if (!trimmed) return null;
-  if (trimmed.length <= max) return trimmed;
-  return trimmed.slice(0, max) + '…';
-}
 
 /**
  * Project a group's roster (array of vpIds) into the ordered
@@ -110,40 +90,6 @@ export function selectGroupRosterVpList(roster, library) {
 }
 
 /**
- * Walk messages right-to-left and collect, for each vpId that has at
- * least one assistant message, the most-recent { text, ts } pair.
- * Single-pass O(N); short-circuit is unnecessary because the helper is
- * called once per render and the caller may need every VP's snippet.
- *
- * Attribution prefers `speakerVpId` (the canonical PR-2 stamp) and
- * falls back to `vpId`. Messages without either are skipped.
- *
- * @param {Array<object>} messages
- * @param {number} snippetMaxLen
- * @returns {Map<string, { text: string|null, ts: number }>}
- */
-export function lastAssistantInfoByVp(messages, snippetMaxLen) {
-  const out = new Map();
-  if (!Array.isArray(messages)) return out;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (!m || m.type !== 'assistant') continue;
-    const vpId = m.speakerVpId || m.vpId;
-    if (!vpId) continue;
-    if (out.has(vpId)) continue;
-    const ts = typeof m.timestamp === 'number' ? m.timestamp : 0;
-    // Prefer m.content (canonical); fall back to m.textContent (used by
-    // some VP-aggregated turn shapes — see VpDetailView for the same
-    // fallback pattern).
-    const raw = (typeof m.content === 'string' && m.content)
-      || (typeof m.textContent === 'string' && m.textContent)
-      || '';
-    out.set(vpId, { text: truncateSnippet(raw, snippetMaxLen), ts });
-  }
-  return out;
-}
-
-/**
  * Decide the status tag for a single vpId given the active store state.
  * Pure: no closures over module state, no Date.now().
  *
@@ -178,7 +124,6 @@ export function statusFor(vpId, ctx) {
  * @param {string[]} args.typingVpIds
  * @param {Array<object>} args.messages
  * @param {(vpId: string) => string} [args.vpLabelOf]   // optional locale-aware labeler
- * @param {number} [args.snippetMaxLen=80]
  * @returns {TimelineRow[]}
  */
 export function buildTimelineRows(args) {
@@ -189,24 +134,30 @@ export function buildTimelineRows(args) {
     typingVpIds,
     messages,
     vpLabelOf,
-    snippetMaxLen = 80,
   } = args || {};
 
   const meta = unifyFeatureMeta || {};
   const active = activeFeatureByVp || {};
   const typingSet = new Set(Array.isArray(typingVpIds) ? typingVpIds : []);
-  const snippetMap = lastAssistantInfoByVp(messages, snippetMaxLen);
 
   // Streaming attribution: a VP is "streaming" if any message in the
   // current (group-filtered) view has isStreaming===true and matches.
   // Computed once per call so the per-VP statusFor() is O(1) inside the
   // main loop.
+  // (feat-vp-list-ui-polish: the previous snippet-derived `lastActivityAt`
+  // is gone — the VP list no longer renders snippets, and no caller reads
+  // the field. See PR #763 review.)
   const streamingSet = new Set();
+  const speakerVps = new Set();
   if (Array.isArray(messages)) {
     for (const m of messages) {
-      if (!m || !m.isStreaming) continue;
+      if (!m) continue;
       const vp = m.speakerVpId || m.vpId;
-      if (vp) streamingSet.add(vp);
+      if (m.isStreaming && vp) streamingSet.add(vp);
+      // Track every assistant-speaker so the tail pass still surfaces
+      // VPs that emitted a message but never appeared in roster/typing/
+      // streaming sets (previously this fell out of `snippetMap.keys()`).
+      if (m.type === 'assistant' && vp) speakerVps.add(vp);
     }
   }
 
@@ -230,24 +181,24 @@ export function buildTimelineRows(args) {
     for (const vp of vpList) {
       if (!vp || !vp.vpId) continue;
       rosterIds.add(vp.vpId);
-      rows.push(makeRow(vp.vpId, labelOf(vp.vpId, vp), ctx, snippetMap));
+      rows.push(makeRow(vp.vpId, labelOf(vp.vpId, vp), ctx));
     }
   }
 
   // Tail pass: VPs referenced anywhere in the live state but absent
-  // from vpList. First-seen order across the three sources keeps the
+  // from vpList. First-seen order across the sources keeps the
   // tail deterministic across renders.
   const seen = new Set();
   const addTail = (vpId) => {
     if (!vpId || rosterIds.has(vpId) || seen.has(vpId)) return;
     seen.add(vpId);
-    rows.push(makeRow(vpId, labelOf(vpId, null), ctx, snippetMap));
+    rows.push(makeRow(vpId, labelOf(vpId, null), ctx));
   };
   for (const vpId of Object.keys(active)) {
     if (active[vpId]) addTail(vpId);
   }
   for (const vpId of typingSet) addTail(vpId);
-  for (const vpId of snippetMap.keys()) addTail(vpId);
+  for (const vpId of speakerVps) addTail(vpId);
   for (const vpId of streamingSet) addTail(vpId);
 
   return rows;
@@ -261,17 +212,13 @@ export function buildTimelineRows(args) {
  * @param {string} vpId
  * @param {string} displayName
  * @param {object} ctx
- * @param {Map<string, {text:string|null, ts:number}>} snippetMap
  * @returns {TimelineRow}
  */
-function makeRow(vpId, displayName, ctx, snippetMap) {
+function makeRow(vpId, displayName, ctx) {
   const status = statusFor(vpId, ctx);
   const fid = ctx.activeFeatureByVp[vpId] || null;
   const m = (fid && ctx.unifyFeatureMeta[fid]) || null;
-  const snip = snippetMap.get(vpId) || null;
   const featureStartedAt = m && typeof m.startedAt === 'number' ? m.startedAt : null;
-  const lastTs = snip ? snip.ts : 0;
-  const lastActivityAt = Math.max(featureStartedAt || 0, lastTs || 0) || null;
 
   // status === 'in-feature' is the only branch that exposes feature
   // metadata. The race case (active pointer but missing meta) collapsed
@@ -297,7 +244,5 @@ function makeRow(vpId, displayName, ctx, snippetMap) {
     featureStatus: isInFeature ? (m.status || 'active') : null,
     featureStartedAt: isInFeature ? featureStartedAt : null,
     featureEndedAt: isInFeature && typeof m.endedAt === 'number' ? m.endedAt : null,
-    lastSnippet: snip ? snip.text : null,
-    lastActivityAt,
   };
 }

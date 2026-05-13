@@ -10,102 +10,14 @@
  *   - Status precedence: in-feature ▸ typing ▸ streaming ▸ idle.
  *   - active pointer with missing meta → status 'streaming', no feature
  *     fields leaked.
- *   - Snippet attribution: speakerVpId preferred, then vpId.
  *   - Helper is pure: frozen inputs do not throw.
  */
 import { describe, it, expect } from 'vitest';
 import {
   buildTimelineRows,
-  lastAssistantInfoByVp,
-  truncateSnippet,
   statusFor,
   selectGroupRosterVpList,
 } from '../../../../web/stores/helpers/vp-timeline.js';
-
-describe('truncateSnippet', () => {
-  it('returns null for null/undefined/empty/whitespace input', () => {
-    expect(truncateSnippet(null, 80)).toBeNull();
-    expect(truncateSnippet(undefined, 80)).toBeNull();
-    expect(truncateSnippet('', 80)).toBeNull();
-    expect(truncateSnippet('   ', 80)).toBeNull();
-  });
-
-  it('returns the trimmed string when ≤ max', () => {
-    expect(truncateSnippet('hello', 80)).toBe('hello');
-    expect(truncateSnippet('  hi  ', 80)).toBe('hi');
-  });
-
-  it('returns trimmed string when length === max (no ellipsis)', () => {
-    const s = 'a'.repeat(80);
-    expect(truncateSnippet(s, 80)).toBe(s);
-  });
-
-  it("appends '…' when length > max", () => {
-    const s = 'a'.repeat(200);
-    const out = truncateSnippet(s, 80);
-    expect(out).toHaveLength(81);
-    expect(out.endsWith('…')).toBe(true);
-    expect(out.slice(0, 80)).toBe('a'.repeat(80));
-  });
-});
-
-describe('lastAssistantInfoByVp', () => {
-  it('returns an empty Map for non-array / null input', () => {
-    expect(lastAssistantInfoByVp(null, 80).size).toBe(0);
-    expect(lastAssistantInfoByVp(undefined, 80).size).toBe(0);
-  });
-
-  it('picks the MOST RECENT assistant message per vpId (right-to-left)', () => {
-    const messages = [
-      { type: 'assistant', speakerVpId: 'vp-1', content: 'old', timestamp: 1 },
-      { type: 'assistant', speakerVpId: 'vp-1', content: 'new', timestamp: 2 },
-    ];
-    const out = lastAssistantInfoByVp(messages, 80);
-    expect(out.get('vp-1').text).toBe('new');
-    expect(out.get('vp-1').ts).toBe(2);
-  });
-
-  it('skips user / tool-use / system messages', () => {
-    const messages = [
-      { type: 'user', speakerVpId: 'vp-1', content: 'why?', timestamp: 1 },
-      { type: 'tool-use', speakerVpId: 'vp-1', toolName: 'Bash', timestamp: 2 },
-      { type: 'system', speakerVpId: 'vp-1', content: 'sys', timestamp: 3 },
-    ];
-    const out = lastAssistantInfoByVp(messages, 80);
-    expect(out.size).toBe(0);
-  });
-
-  it('prefers speakerVpId over vpId for attribution', () => {
-    const messages = [
-      // speakerVpId wins; vpId is the routing turn-id field, not the speaker.
-      { type: 'assistant', vpId: 'vp-routing', speakerVpId: 'vp-real', content: 'hi', timestamp: 1 },
-    ];
-    const out = lastAssistantInfoByVp(messages, 80);
-    expect(out.has('vp-real')).toBe(true);
-    expect(out.has('vp-routing')).toBe(false);
-  });
-
-  it('falls back to vpId when speakerVpId is absent', () => {
-    const messages = [
-      { type: 'assistant', vpId: 'vp-1', content: 'hi', timestamp: 1 },
-    ];
-    expect(lastAssistantInfoByVp(messages, 80).get('vp-1').text).toBe('hi');
-  });
-
-  it('skips assistant messages with no vpId attribution', () => {
-    const messages = [
-      { type: 'assistant', content: 'orphan', timestamp: 1 },
-    ];
-    expect(lastAssistantInfoByVp(messages, 80).size).toBe(0);
-  });
-
-  it('falls back to m.textContent when m.content is empty', () => {
-    const messages = [
-      { type: 'assistant', speakerVpId: 'vp-1', textContent: 'aggr', timestamp: 1 },
-    ];
-    expect(lastAssistantInfoByVp(messages, 80).get('vp-1').text).toBe('aggr');
-  });
-});
 
 describe('statusFor', () => {
   const meta = { 'feat-A': { featureId: 'feat-A', status: 'active' } };
@@ -164,8 +76,6 @@ describe('buildTimelineRows', () => {
       displayName: 'Alice',
       status: 'idle',
       featureId: null,
-      lastSnippet: null,
-      lastActivityAt: null,
     });
   });
 
@@ -241,37 +151,6 @@ describe('buildTimelineRows', () => {
     expect(out.map((r) => r.status)).toEqual(['idle', 'typing', 'in-feature']);
   });
 
-  it("truncates lastSnippet to snippetMaxLen and appends '…'", () => {
-    const longText = 'a'.repeat(200);
-    const out = buildTimelineRows({
-      vpList: [{ vpId: 'vp-1' }],
-      unifyFeatureMeta: {},
-      activeFeatureByVp: {},
-      typingVpIds: [],
-      messages: [
-        { type: 'assistant', speakerVpId: 'vp-1', content: longText, timestamp: 1 },
-      ],
-    });
-    expect(out[0].lastSnippet).toHaveLength(81);
-    expect(out[0].lastSnippet.endsWith('…')).toBe(true);
-  });
-
-  it('snippet picks most recent assistant message; ignores intervening user message', () => {
-    const out = buildTimelineRows({
-      vpList: [{ vpId: 'vp-1' }],
-      unifyFeatureMeta: {},
-      activeFeatureByVp: {},
-      typingVpIds: [],
-      messages: [
-        { type: 'assistant', speakerVpId: 'vp-1', content: 'old', timestamp: 1 },
-        { type: 'user', content: 'why?', timestamp: 2 },
-        { type: 'assistant', speakerVpId: 'vp-1', content: 'fresh', timestamp: 3 },
-      ],
-    });
-    expect(out[0].lastSnippet).toBe('fresh');
-    expect(out[0].lastActivityAt).toBe(3);
-  });
-
   it('tail-appends a VP referenced only by activeFeatureByVp (transient VP)', () => {
     const out = buildTimelineRows({
       vpList: [{ vpId: 'vp-A' }],   // only A is in the roster
@@ -287,20 +166,20 @@ describe('buildTimelineRows', () => {
     expect(out[1].displayName).toBe('vp-X');  // fallback to vpId
   });
 
-  it("lastActivityAt = max(featureStartedAt, snippetTs)", () => {
-    // featureStartedAt = 200, snippet ts = 100 → max is 200
+  it('tail-appends a VP that only has assistant messages (no roster / typing / feature signal)', () => {
+    // The previous implementation surfaced these through `snippetMap.keys()`;
+    // post-snippet-cleanup, `speakerVps` plays the same role.
     const out = buildTimelineRows({
-      vpList: [{ vpId: 'vp-1' }],
-      unifyFeatureMeta: {
-        'feat-A': { featureId: 'feat-A', status: 'active', startedAt: 200, title: 'A' },
-      },
-      activeFeatureByVp: { 'vp-1': 'feat-A' },
+      vpList: [{ vpId: 'vp-A' }],
+      unifyFeatureMeta: {},
+      activeFeatureByVp: {},
       typingVpIds: [],
       messages: [
-        { type: 'assistant', speakerVpId: 'vp-1', content: 'old', timestamp: 100 },
+        { type: 'assistant', speakerVpId: 'vp-ghost', content: 'hi', timestamp: 1 },
       ],
     });
-    expect(out[0].lastActivityAt).toBe(200);
+    expect(out.map((r) => r.vpId)).toEqual(['vp-A', 'vp-ghost']);
+    expect(out[1].status).toBe('idle');
   });
 
   it('uses vpLabelOf when provided (locale-aware naming)', () => {
