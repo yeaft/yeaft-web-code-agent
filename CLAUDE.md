@@ -263,9 +263,11 @@ Every feature or fix — no matter how small — goes through this loop. **Never
 
 The PR is the review gate. Skipping it bypasses code review and breaks the audit trail. If a previous instruction (including older project memory) tells you to push directly to main, that instruction is wrong — follow this section.
 
-## Auto Review-and-Ship Flow (when the user explicitly authorizes)
+## Auto Review-and-Ship Flow (DEFAULT — run without asking)
 
-When the user says something like *"你 review 一下，没问题就 merge + tag"* / *"review and ship if it looks good"* / *"自己 merge"*, the assistant runs the following loop end-to-end **without further confirmation**. The user's authorization replaces the per-step approval the standard workflow requires.
+**This is the standard ship workflow for EVERY PR. Do not ask the user "should I review and merge?" — once tests are green and the PR is open, run this loop end-to-end automatically.** (Established 2026-05-13 by user directive: "以后记住不需要问我，做完了就自动触发这个流程".)
+
+Earlier conversational triggers like *"review一下，没问题就 merge + tag"* / *"自己 merge"* are still valid, but they're no longer required — the flow is the default.
 
 1. **Two-pass review (mandatory, both passes)** — invoke the `yeaft-skills:review-code` skill, which dispatches:
    - **Pass 1 — architecture (Fowler persona)**: module boundaries, abstraction levels, consistency, coupling, scope drift.
@@ -278,7 +280,9 @@ When the user says something like *"你 review 一下，没问题就 merge + tag
 6. **Tag from main** — switch to `/home/azureuser/projects/claude-web-chat`, `git checkout main && git pull --ff-only`, verify `git branch --show-current` outputs `main`, then `git tag v0.1.X && git push origin v0.1.X`. The tag commit must be reachable from `origin/main`.
 7. **Clean up the worktree** when done (`ExitWorktree action: "remove"`; pass `discard_changes: true` since the commits are already on main via the PR).
 
-The forbidden shortcuts above (`HEAD:main`, tagging a feature branch, pushing a tag whose commit isn't on origin/main) still apply — the user's "go ahead and ship" authorizes steps 5–6, not skipping the PR.
+**Stop and ask only if** review surfaces a Critical/Important issue you can't confidently auto-fix, or if the fix's scope is genuinely uncertain. Otherwise, proceed without asking.
+
+The forbidden shortcuts above (`HEAD:main`, tagging a feature branch, pushing a tag whose commit isn't on origin/main) still apply — auto-flow is steps 1–7 only, not a license to bypass the PR gate.
 
 ## Operations Safety Rules
 

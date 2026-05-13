@@ -3,7 +3,7 @@
  * Bundles all JS/CSS into single files with maximum compression
  */
 const esbuild = require('esbuild');
-const { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync, readdirSync, statSync, rmSync } = require('fs');
+const { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync, cpSync, readdirSync, statSync, rmSync } = require('fs');
 const { join } = require('path');
 const { gzipSync } = require('zlib');
 const crypto = require('crypto');
@@ -183,6 +183,25 @@ for (const file of filesToGzip) {
   const content = readFileSync(join(distDir, file));
   const gzipped = gzipSync(content, { level: 9 });
   writeFileSync(join(distDir, file + '.gz'), gzipped);
+}
+
+// Step 6: Copy static assets (avatars, etc.). These are not bundled —
+// the dev server serves them straight from `web/`, but `SERVE_DIST=true`
+// flips the static root to `web/dist/` so anything outside the bundles
+// has to be explicitly mirrored or it 404s in production.
+//
+// `web/assets/` currently holds the 13 illustrated avatar SVGs referenced
+// by VpAvatar.js / UserAvatar.js. Their `@error` handlers fall back to
+// the letter render, so a missing copy fails silently — every avatar in
+// prod would look like dev's letter fallback with no warning. The mirror
+// step plus the prod-build regression test below keep that quiet failure
+// from shipping.
+console.log('6. Copying static assets...');
+const assetsSrc = join(__dirname, 'assets');
+if (existsSync(assetsSrc)) {
+  cpSync(assetsSrc, join(distDir, 'assets'), { recursive: true });
+  const assetCount = readdirSync(join(distDir, 'assets'), { recursive: true }).length;
+  console.log(`   Copied web/assets/ → dist/assets/ (${assetCount} entries)`);
 }
 
 // Calculate sizes

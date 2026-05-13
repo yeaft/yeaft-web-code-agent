@@ -18,6 +18,7 @@
     "test:all": "npm run test && npm run test:e2e",
     "install:all": "npm install --workspaces",
     "build": "node web/build.js",
+    "avatars": "node scripts/generate-avatars.mjs",
     "start:server": "npm run start --workspace=server",
     "start:server:prod": "cross-env SERVE_DIST=true npm run start --workspace=server",
     "start:agent": "npm run start --workspace=agent",
@@ -29,6 +30,8 @@
     "docs:preview": "vitepress preview docs"
   },
   "devDependencies": {
+    "@dicebear/collection": "^9.4.2",
+    "@dicebear/core": "^9.4.2",
     "@playwright/test": "^1.58.2",
     "@vue/test-utils": "^2.4.6",
     "concurrently": "^8.2.2",
