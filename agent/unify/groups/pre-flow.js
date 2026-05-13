@@ -225,19 +225,20 @@ export function formatPickedForInjection(picked) {
  */
 
 /**
- * Build the canonical scope list for a given (groupId, vpId, featureId).
+ * Build the canonical scope list for a given (groupId, vpId).
  * Always includes 'user'. The order is significant — preflow.js's scope
  * filter accepts/rejects by membership, and the formatter renders in
  * order.
  *
- * @param {{groupId?: string, vpId?: string, featureId?: string, extra?: string[]}} ctx
+ * (2026-05-13: `featureId` scope dropped along with the Feature system.)
+ *
+ * @param {{groupId?: string, vpId?: string, extra?: string[]}} ctx
  * @returns {string[]}
  */
-export function buildRelevantScopes({ groupId, vpId, featureId, extra } = {}) {
+export function buildRelevantScopes({ groupId, vpId, extra } = {}) {
   const scopes = ['user'];
   if (groupId) scopes.push(`group/${groupId}`);
   if (vpId) scopes.push(`vp/${vpId}`);
-  if (featureId) scopes.push(`feature/${featureId}`);
   if (Array.isArray(extra)) {
     for (const s of extra) {
       if (s && !scopes.includes(s)) scopes.push(s);
@@ -273,7 +274,6 @@ export function runMemoryPreflow(index, opts) {
   const relevantScopes = buildRelevantScopes({
     groupId: opts.groupId,
     vpId: opts.vpId,
-    featureId: opts.featureId,
     extra: opts.extraScopes,
   });
 

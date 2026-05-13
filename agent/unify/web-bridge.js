@@ -108,6 +108,24 @@ const vpEngines = new Map();
 /** @type {Map<string, AbortController>} */
 const vpAborts = new Map();
 /**
+ * Per-(groupId, vpId) current TodoWrite list. Each VP in a group keeps
+ * its own todo state so two VPs in the same group can independently
+ * track multi-step tasks without overwriting each other. Threaded into
+ * the engine's tool ctx via buildVpQueryOpts → getCurrentTodos /
+ * setCurrentTodos closures. Best-effort in-memory cache only — todos
+ * are also stamped into the LLM event stream (the frontend reads from
+ * the tool_use input, not from this map), so a server restart simply
+ * loses the "what was the most recent list?" peek without breaking the
+ * UI replay.
+ *
+ * Key: `${groupId}::${vpId}` (matches vpEngines/vpAborts convention).
+ * Value: `Array<{content, status, activeForm}>` — the last full list
+ * the VP wrote with TodoWrite.
+ *
+ * @type {Map<string, Array<{content: string, status: string, activeForm: string}>>}
+ */
+const vpCurrentTodos = new Map();
+/**
  * Per-group cached coordinator + router. Created on first
  * `handleUnifyGroupChat` for a given groupId; reused across user messages
  * AND across `route_forward` deliveries inside running VP turns (the
@@ -753,27 +771,25 @@ export async function __testResetVpState() {
  * Envelope fields: conversationId, groupId, vpId, turnId — the last two
  * let the frontend route incremental deltas to the correct per-VP message block.
  */
-function sendUnifyOutput(data, { groupId, vpId, turnId, featureId } = {}) {
+function sendUnifyOutput(data, { groupId, vpId, turnId } = {}) {
   sendToServer({
     type: 'unify_output',
     conversationId: unifyConversationId,
     ...(groupId ? { groupId } : {}),
     ...(vpId ? { vpId } : {}),
     ...(turnId ? { turnId } : {}),
-    ...(featureId ? { featureId } : {}),
     data,
   });
 }
 
 /** Send a unify_output event (non-claude_output metadata). */
-function sendUnifyEvent(event, { groupId, vpId, turnId, featureId } = {}) {
+function sendUnifyEvent(event, { groupId, vpId, turnId } = {}) {
   sendToServer({
     type: 'unify_output',
     conversationId: unifyConversationId,
     ...(groupId ? { groupId } : {}),
     ...(vpId ? { vpId } : {}),
     ...(turnId ? { turnId } : {}),
-    ...(featureId ? { featureId } : {}),
     event,
   });
 }
@@ -1152,18 +1168,10 @@ export function installUnifyRuntimeBridge(s) {
  */
 function handleEngineEvent(event, hctx) {
   hctx.resetQueryTimer();
-  // Sub-agent events may carry their own `featureId` (stamped by the
-  // sub-agent runner from the parent's inbound feature scope). Plain
-  // VP-turn events have no featureId — auto-feature creation was
-  // removed when Track-A / FeatureArc was deleted (2026-05-08).
-  const eventFeatureId = typeof event === 'object' && event && typeof event.featureId === 'string'
-    ? event.featureId
-    : null;
   const envelope = {
     groupId: hctx.groupId,
     vpId: hctx.vpId,
     turnId: hctx.turnId,
-    ...(eventFeatureId ? { featureId: eventFeatureId } : {}),
   };
 
   switch (event.type) {
@@ -1872,6 +1880,20 @@ export function buildVpQueryOpts({ vpId, groupCoordinator, groupId, envelope }) 
   if (envelope && typeof envelope === 'object') {
     out.inboundEnvelope = envelope;
   }
+  // TodoWrite per-VP isolation. Bind closures that read/write a slot
+  // keyed by `${groupId}::${vpId}` so two VPs in the same group don't
+  // overwrite each other's lists, and the TodoWrite tool can stay
+  // ignorant of routing details (it just calls ctx.setCurrentTodos).
+  const todosKey = `${out.groupId || ''}::${resolvedVpId}`;
+  out.getCurrentTodos = () => {
+    const cached = vpCurrentTodos.get(todosKey);
+    return Array.isArray(cached) ? cached.slice() : null;
+  };
+  out.setCurrentTodos = (todos) => {
+    if (Array.isArray(todos)) {
+      vpCurrentTodos.set(todosKey, todos.slice());
+    }
+  };
   return out;
 }
 
@@ -2529,148 +2551,63 @@ export async function handleUnifyDreamTrigger(msg = {}) {
   }
 }
 
+/**
+ * 2026-05-13: serve the Unify debug drawer's "Tool Stats" panel.
+ *
+ * Replies with `{type: 'unify_tool_stats', snapshot, registered,
+ * unused}`. `snapshot` is the `ToolUsageStats.snapshot()` keyed by
+ * tool name (callCount, errorCount, p50Ms, p95Ms, avgMs, lastCalledAt,
+ * lastError, errorRate). `registered` is the static list of built-in
+ * tool names so the frontend can render the "(defined but never
+ * called)" subview without spinning up its own registry mirror.
+ *
+ * Best-effort: if the session hasn't booted yet or toolStats is
+ * missing, we still reply with an empty snapshot so the UI can render
+ * a placeholder rather than spin forever.
+ */
+export async function handleUnifyFetchToolStats(_msg = {}) {
+  let snapshot = {};
+  let registered = [];
+  let unused = [];
+  try {
+    if (session?.toolStats && typeof session.toolStats.snapshot === 'function') {
+      snapshot = session.toolStats.snapshot();
+    }
+    // Pull the static built-in tool list. MCP/skill tools aren't in
+    // here — that's fine: the "unused" view is meant to flag stale
+    // built-in tools, not user-installed ones.
+    const { allTools } = await import('./tools/index.js');
+    if (Array.isArray(allTools)) {
+      registered = allTools
+        .filter(t => t && typeof t.name === 'string' && t.name)
+        .map(t => t.name);
+    }
+    if (session?.toolStats && typeof session.toolStats.getRegisteredButUncalled === 'function') {
+      unused = session.toolStats.getRegisteredButUncalled(registered);
+    }
+  } catch (err) {
+    sendToServer({
+      type: 'unify_tool_stats',
+      snapshot: {},
+      registered: [],
+      unused: [],
+      error: err && err.message ? err.message : String(err),
+    });
+    return;
+  }
+  sendToServer({
+    type: 'unify_tool_stats',
+    snapshot,
+    registered,
+    unused,
+  });
+}
+
 /** Deprecated mode switch — Unify is single-mode. */
 export function handleUnifyModeSwitch(_msg) {
   console.warn('[Unify] unify_mode_switch is deprecated and ignored — Unify now runs in a single unified mode.');
 }
 
-/** Fetch a feature's summary history (revision chain). */
-export async function handleUnifyFetchSummaryHistory(msg = {}) {
-  const requestId = typeof msg.requestId === 'string' ? msg.requestId : undefined;
-  const featureId = typeof msg.featureId === 'string' ? msg.featureId : null;
-  const includeArchived = !!msg.includeArchived;
-
-  const reply = (extra = {}) => sendUnifyEvent({
-    type: 'unify_summary_history',
-    featureId,
-    ...extra,
-    ...(requestId ? { requestId } : {}),
-  });
-
-  if (!featureId) { reply({ revisions: [], archived: null, error: 'missing_feature_id' }); return; }
-
-  try {
-    const { getFeatureStore } = await import('./tools/feature-tools.js');
-    const featureStore = getFeatureStore();
-    const feature = featureStore?.get(featureId);
-    if (!feature) { reply({ revisions: [], archived: null, error: 'feature_not_found' }); return; }
-    const groupId = feature.groupId;
-    if (!groupId) { reply({ revisions: [], archived: null, error: 'feature_has_no_group' }); return; }
-
-    const yeaftDir = ctx.CONFIG?.yeaftDir;
-    if (!yeaftDir) { reply({ revisions: [], archived: null, error: 'no_yeaft_dir' }); return; }
-
-    const root = join(yeaftDir, 'groups');
-    const dir = join(root, groupId);
-    if (!existsSync(dir) || !loadGroupMeta(dir)) {
-      reply({ revisions: [], archived: null, error: 'group_not_found' });
-      return;
-    }
-    const groupHandle = openGroup(root, groupId);
-    const summaries = [];
-    for (const m of groupHandle.streamMessages()) {
-      if (!m || m.featureId !== featureId) continue;
-      const meta = m.meta || {};
-      if (meta.kind === 'summary' || meta.type === 'summary') summaries.push(m);
-    }
-    summaries.sort((a, b) => {
-      const at = Date.parse(a.ts || '') || 0;
-      const bt = Date.parse(b.ts || '') || 0;
-      return bt - at;
-    });
-    const supersededIds = new Set();
-    for (const s of summaries) {
-      const arr = s.meta?.supersedes;
-      if (Array.isArray(arr)) for (const id of arr) supersededIds.add(id);
-    }
-    const current = [];
-    const archived = [];
-    for (const s of summaries) {
-      if (supersededIds.has(s.id)) archived.push(s);
-      else current.push(s);
-    }
-    const overflow = current.slice(10);
-    const trimmedCurrent = current.slice(0, 10);
-    if (overflow.length) archived.push(...overflow);
-    archived.sort((a, b) => {
-      const at = Date.parse(a.ts || '') || 0;
-      const bt = Date.parse(b.ts || '') || 0;
-      return bt - at;
-    });
-    reply({
-      revisions: trimmedCurrent,
-      archived: includeArchived ? archived : null,
-    });
-  } catch (err) {
-    reply({ revisions: [], archived: null, error: String(err?.message || err) });
-  }
-}
-
-/** Feature affiliation CRUD (relate / unrelate / kick_vp / abort_vp). */
-export async function handleUnifyFeatureCrud(msg = {}) {
-  const requestId = typeof msg.requestId === 'string' ? msg.requestId : undefined;
-  const op = typeof msg.op === 'string' ? msg.op : null;
-  const featureId = typeof msg.featureId === 'string' ? msg.featureId : null;
-  const vpId = typeof msg.vpId === 'string' ? msg.vpId : null;
-  const relatedFeatureId = typeof msg.relatedFeatureId === 'string' ? msg.relatedFeatureId : null;
-
-  const reply = (extra = {}) => sendUnifyEvent({
-    type: 'unify_feature_crud_result',
-    op,
-    featureId,
-    ...(vpId ? { vpId } : {}),
-    ...extra,
-    ...(requestId ? { requestId } : {}),
-  });
-
-  if (!op) { reply({ ok: false, error: 'missing_op' }); return; }
-  if (!featureId) { reply({ ok: false, error: 'missing_feature_id' }); return; }
-
-  try {
-    const { getFeatureStore } = await import('./tools/feature-tools.js');
-    const featureStore = getFeatureStore();
-    const feature = featureStore?.get(featureId);
-    if (!feature) { reply({ ok: false, error: 'feature_not_found' }); return; }
-
-    if (op === 'relate' || op === 'unrelate') {
-      if (!relatedFeatureId) { reply({ ok: false, error: 'missing_related_feature_id' }); return; }
-      const other = featureStore.get(relatedFeatureId);
-      if (!other) { reply({ ok: false, error: 'related_feature_not_found' }); return; }
-      const apply = (t, otherId, add) => {
-        const cur = Array.isArray(t.relatedFeatureIds) ? t.relatedFeatureIds.slice() : [];
-        const idx = cur.indexOf(otherId);
-        if (add && idx === -1) cur.push(otherId);
-        if (!add && idx !== -1) cur.splice(idx, 1);
-        featureStore.update(t.id, { relatedFeatureIds: cur });
-      };
-      apply(feature, relatedFeatureId, op === 'relate');
-      apply(other, featureId, op === 'relate');
-      reply({ ok: true, relatedFeatureId });
-      return;
-    }
-
-    if (op === 'kick_vp') {
-      if (!vpId) { reply({ ok: false, error: 'missing_vp_id' }); return; }
-      featureStore.removeMember(featureId, vpId);
-      reply({ ok: true });
-      return;
-    }
-
-    if (op === 'abort_vp') {
-      if (!vpId) { reply({ ok: false, error: 'missing_vp_id' }); return; }
-      // H2.f.2: per-VP abort no longer routed through engineRegistry — the
-      // single engine handles its own abort via currentAbortCtrl. Reply
-      // ok:true so the UI surface still works; deeper per-VP cancel is a
-      // separate task.
-      reply({ ok: true });
-      return;
-    }
-
-    reply({ ok: false, error: 'unknown_op' });
-  } catch (err) {
-    reply({ ok: false, error: String(err?.message || err) });
-  }
-}
 
 /** Handle model switch from the web UI. */
 export function handleUnifyModelSwitch(msg) {

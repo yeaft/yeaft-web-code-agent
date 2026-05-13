@@ -3,10 +3,12 @@
  *
  * The Active Scope block is a structured, deterministic, bounded section
  * of the system prompt that tells the LLM what scope this turn lives in:
- *   - feature (nullable; T4 placeholder per DESIGN-PROMPT §5.1)
  *   - group
  *   - vp
  *   - envelope (compressed routing summary)
+ *
+ * (Feature fields were removed in 2026-05 alongside the rest of the
+ * Feature system.)
  *
  * Long-form scope content lives in AMS Memory; Active Scope only carries
  * IDs + tiny labels. These tests pin the contract so future refactors do
@@ -40,42 +42,11 @@ describe('Active Scope rendering (DESIGN-PROMPT §3 ④)', () => {
     expect(out).not.toMatch(/active_scope/);
   });
 
-  it('renders feature with optional title', () => {
-    const out = buildSystemPrompt({
-      language: 'en',
-      toolNames: ['bash'],
-      activeScope: { featureId: 'feat-42', featureTitle: 'Onboarding' },
-    });
-    expect(out).toMatch(/feature: feat-42 "Onboarding"/);
-  });
-
-  it('renders feature without title when title missing', () => {
-    const out = buildSystemPrompt({
-      language: 'en',
-      toolNames: ['bash'],
-      activeScope: { featureId: 'feat-42' },
-    });
-    expect(out).toMatch(/feature: feat-42(?!\s*")/);
-    expect(out).not.toMatch(/feature: feat-42 "/);
-  });
-
-  it('omits feature line when featureId is null (T4 placeholder)', () => {
-    const out = buildSystemPrompt({
-      language: 'en',
-      toolNames: ['bash'],
-      activeScope: { featureId: null, groupId: 'g1' },
-    });
-    expect(out).toMatch(/## active_scope\ngroup: g1/);
-    expect(out).not.toMatch(/feature:/);
-  });
-
   it('renders all fields together in stable order', () => {
     const out = buildSystemPrompt({
       language: 'en',
       toolNames: ['bash'],
       activeScope: {
-        featureId: 'f1',
-        featureTitle: 'T',
         groupId: 'g1',
         vpId: 'alice',
         envelope: { fromVpId: 'bob', intent: 'ask' },
@@ -83,11 +54,10 @@ describe('Active Scope rendering (DESIGN-PROMPT §3 ④)', () => {
     });
     const block = out.split('## active_scope\n')[1];
     expect(block).toBeTruthy();
-    const lines = block.split('\n').slice(0, 4);
-    expect(lines[0]).toBe('feature: f1 "T"');
-    expect(lines[1]).toBe('group: g1');
-    expect(lines[2]).toBe('vp: alice');
-    expect(lines[3]).toBe('envelope: from=bob intent=ask');
+    const lines = block.split('\n').slice(0, 3);
+    expect(lines[0]).toBe('group: g1');
+    expect(lines[1]).toBe('vp: alice');
+    expect(lines[2]).toBe('envelope: from=bob intent=ask');
   });
 
   it('envelope: compresses sender, intent, and originating user', () => {
@@ -118,23 +88,6 @@ describe('Active Scope rendering (DESIGN-PROMPT §3 ④)', () => {
     });
     expect(out).toMatch(/## active_scope\nvp: alice/);
     expect(out).not.toMatch(/group:/);
-  });
-
-  it('escapes embedded `"` in featureTitle so the line stays well-formed', () => {
-    // Titles come from user / agent input — assume nothing. A title like
-    // `Onboard "v2"` must not produce `feature: f1 "Onboard "v2""`.
-    const out = buildSystemPrompt({
-      language: 'en',
-      toolNames: ['bash'],
-      activeScope: { featureId: 'f1', featureTitle: 'Onboard "v2"' },
-    });
-    expect(out).toMatch(/feature: f1 "Onboard \\"v2\\""/);
-    // Sanity: there is exactly one un-escaped opening quote and one
-    // un-escaped closing quote per feature line.
-    const featureLine = out.split('\n').find((l) => l.startsWith('feature: '));
-    expect(featureLine).toBeTruthy();
-    const unescapedQuotes = featureLine.replace(/\\"/g, '').match(/"/g) || [];
-    expect(unescapedQuotes.length).toBe(2);
   });
 });
 

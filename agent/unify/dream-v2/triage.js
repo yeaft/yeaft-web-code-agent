@@ -6,9 +6,9 @@
  *
  *   1. **Hard rules** (this module, no LLM): everything we can determine
  *      from message metadata. Always include the active group, every VP
- *      that spoke as an assistant in the diff, every feature referenced
- *      via `featureId`, and `user` (so painted-over user-profile signals
- *      can't be missed).
+ *      that spoke as an assistant in the diff, and `user` (so painted-over
+ *      user-profile signals can't be missed). (Feature scope was dropped
+ *      2026-05-13 along with the rest of the Feature system.)
  *
  *   2. **Soft classification** (LLM, two passes):
  *        Pass-1: high-recall — does the diff carry user-profile signal?
@@ -17,9 +17,9 @@
  *                              it to an exact existing path or propose
  *                              a new ≤2-level path.
  *
- *      VP / group / feature are deliberately NOT asked of the LLM —
- *      Hard Rules already cover them, and giving the LLM a chance to
- *      drop a structurally-required scope would weaken the contract.
+ *      VP / group are deliberately NOT asked of the LLM — Hard Rules
+ *      already cover them, and giving the LLM a chance to drop a
+ *      structurally-required scope would weaken the contract.
  *
  *      `user_profile_signals === true` does not need Pass-2 either: the
  *      Hard Rule already added `user` and Apply itself decides whether
@@ -75,10 +75,7 @@ export function applyHardRules({ groupId, messages }) {
       const vp = m.vpId || (m.author && /^vp:(.+)$/.exec(m.author)?.[1]);
       if (vp && /^[A-Za-z0-9_\-.一-鿿]+$/.test(vp)) add(`vp/${vp}`);
     }
-    // Active feature: explicit metadata.
-    if (m.featureId && /^[A-Za-z0-9_\-.一-鿿]+$/.test(m.featureId)) {
-      add(`feature/${m.featureId}`);
-    }
+    // (Active feature scope was dropped 2026-05-13 with the Feature system.)
   }
 
   return Array.from(out.values());

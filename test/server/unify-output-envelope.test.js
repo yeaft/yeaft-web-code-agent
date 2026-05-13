@@ -100,17 +100,6 @@ describe('agent-output.js — unify_output envelope passthrough', () => {
     expect(_sent[0].envelope.groupId).toBe('grp_team');
   });
 
-  it('forwards featureId on data envelopes', async () => {
-    addClient('c1');
-    await handleAgentOutput('a1', baseAgent, {
-      type: 'unify_output',
-      conversationId: 'conv1',
-      featureId: 'feat_42',
-      data: { type: 'assistant', message: { content: 'hi' } },
-    });
-    expect(_sent[0].envelope.featureId).toBe('feat_42');
-  });
-
   it('forwards ALL envelope fields together on a typical streaming delta', async () => {
     addClient('c1');
     await handleAgentOutput('a1', baseAgent, {
@@ -119,7 +108,6 @@ describe('agent-output.js — unify_output envelope passthrough', () => {
       groupId: 'grp_team',
       vpId: 'vp_alice',
       turnId: 'd123:vp_alice',
-      featureId: 'feat_42',
       data: { type: 'assistant', message: { content: 'hi' } },
     });
     const env = _sent[0].envelope;
@@ -129,7 +117,6 @@ describe('agent-output.js — unify_output envelope passthrough', () => {
       groupId: 'grp_team',
       vpId: 'vp_alice',
       turnId: 'd123:vp_alice',
-      featureId: 'feat_42',
     });
     expect(env.data).toEqual({ type: 'assistant', message: { content: 'hi' } });
   });
@@ -154,13 +141,12 @@ describe('agent-output.js — unify_output envelope passthrough', () => {
       type: 'unify_output',
       conversationId: 'conv1',
       data: { type: 'assistant', message: { content: 'hi' } },
-      // No groupId / vpId / turnId / featureId
+      // No groupId / vpId / turnId
     });
     const env = _sent[0].envelope;
     expect('groupId' in env).toBe(false);
     expect('vpId' in env).toBe(false);
     expect('turnId' in env).toBe(false);
-    expect('featureId' in env).toBe(false);
   });
 
   it('forwards empty-string ids verbatim (`!= null`, not truthy)', async () => {

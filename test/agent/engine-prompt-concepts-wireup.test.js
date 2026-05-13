@@ -162,7 +162,7 @@ describe('E-b compact summary placement (DESIGN-PROMPT §4.3)', () => {
 });
 
 describe('E-c Active Scope is wired from engine context', () => {
-  it('renders ## active_scope with group / vp / feature when supplied', async () => {
+  it('renders ## active_scope with group / vp / envelope when supplied', async () => {
     const adapter = new CapturingAdapter();
     const engine = mkEngine(adapter);
 
@@ -171,18 +171,17 @@ describe('E-c Active Scope is wired from engine context', () => {
       messages: [],
       groupId: 'team-x',
       vpPersona: { vpId: 'alice', displayName: 'Alice', persona: 'Cool dev.' },
-      inboundEnvelope: { featureId: 'feat-99', featureTitle: 'Onboarding', senderVpId: 'bob' },
+      inboundEnvelope: { senderVpId: 'bob' },
     })) { /* drain */ }
 
     const sys = adapter.calls[0].system || '';
     expect(sys).toMatch(/## active_scope/);
-    expect(sys).toMatch(/feature: feat-99 "Onboarding"/);
     expect(sys).toMatch(/group: team-x/);
     expect(sys).toMatch(/vp: alice/);
     expect(sys).toMatch(/envelope: from=bob/);
   });
 
-  it('renders Active Scope without feature line when no featureId (T4 placeholder)', async () => {
+  it('renders Active Scope with just group + vp when no envelope', async () => {
     const adapter = new CapturingAdapter();
     const engine = mkEngine(adapter);
 

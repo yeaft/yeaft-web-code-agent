@@ -223,6 +223,17 @@ export const useChatStore = defineStore('chat', {
     unifySessionReady: false,     // Session 是否已初始化
     unifyStatus: null,            // { skills, mcpServers, tools } 从 session_ready 获取
     unifyAvailableModels: [],     // 可用模型列表 [{ id, provider, label }]
+    // 2026-05-13: tool-call usage stats for the Unify debug drawer.
+    // Populated by `fetchUnifyToolStats()` → backend → `unify_tool_stats`
+    // case in handleUnifyOutput. Shape:
+    //   { snapshot: {[name]: {callCount, errorCount, errorRate, avgMs,
+    //                          p50Ms, p95Ms, lastCalledAt, lastError}},
+    //     registered: string[],   // all built-in tool names
+    //     unused: string[],       // registered & callCount==0
+    //     error: string|null,
+    //     fetchedAt: number }
+    unifyToolStats: null,
+    unifyToolStatsLoading: false,
     // feat-6af5f9f1 PR B: debug panel data refactor.
     //
     //   Turn = one user prompt + all AI responses (top level)
@@ -723,6 +734,20 @@ export const useChatStore = defineStore('chat', {
       unifyViewHelpers.applyLeaveUnifyTransition(this);
     },
     /**
+     * 2026-05-13: ask the agent for the latest tool-call usage stats.
+     * Round-trip: web → server → agent (handleUnifyFetchToolStats) →
+     * web (`unify_tool_stats` case writes to this.unifyToolStats).
+     * Used by the UnifyDebugDrawer "Tool Stats" panel.
+     */
+    fetchUnifyToolStats() {
+      if (!this.unifyAgentId) return;
+      this.unifyToolStatsLoading = true;
+      this.sendWsMessage({
+        type: 'unify_fetch_tool_stats',
+        agentId: this.unifyAgentId,
+      });
+    },
+    /**
      * Send a group-scoped Unify chat message. Routes through the agent-side
      * GroupCoordinator which fans out to the target VP(s) or falls back to
      * the group's defaultVpId. This is the SOLE Unify send path —
@@ -814,24 +839,16 @@ export const useChatStore = defineStore('chat', {
           const prevGroup = this._currentUnifyGroupId;
           const prevVpId = this._currentUnifyVpId;
           const prevTurnId = this._currentUnifyTurnId;
-          const prevFeatureId = this._currentUnifyFeatureId;
           if (msg.groupId) this._currentUnifyGroupId = msg.groupId;
           if (msg.vpId) this._currentUnifyVpId = msg.vpId;
           if (msg.turnId) this._currentUnifyTurnId = msg.turnId;
-          // PR-1: stamp featureId from the wire envelope so any code
-          // path that reads `_currentUnifyFeatureId` while addMessage
-          // is running sees the right value. Reset to null (not just
-          // "unchanged") when the inbound msg has no featureId — this
-          // matters because emits switch back to non-feature traffic
-          // mid-turn (e.g. typing indicators after the feature closes).
-          this._currentUnifyFeatureId = msg.featureId || null;
+          // (2026-05-13) featureId stamping removed along with the Feature system.
           try {
             this.handleClaudeOutput(conversationId, msg.data);
           } finally {
             this._currentUnifyGroupId = prevGroup;
             this._currentUnifyVpId = prevVpId;
             this._currentUnifyTurnId = prevTurnId;
-            this._currentUnifyFeatureId = prevFeatureId;
           }
         }
         return;
@@ -1148,17 +1165,10 @@ export const useChatStore = defineStore('chat', {
             anchorOrder,
             updatedAt: Date.now(),
             groupId: msg.groupId || null,
-            // PR-4: parent feature inheritance. Stamped by the sub-agent
-            // runner (see agent/unify/sub-agent/runner.js wrapEvt) when
-            // the parent VP is mid-feature. Latch-once: see below.
-            featureId: null,
+            // (2026-05-13) featureId removed along with the Feature system.
           };
 
           if (payload.agentName && !next.agentName) next.agentName = payload.agentName;
-          // PR-4: latch featureId on first sighting; once set, never
-          // overwrite — keeps fold-by-featureId stable across later
-          // events (e.g. closing status) that may not carry it.
-          next.featureId = next.featureId || payload.featureId || null;
 
           switch (payload.type) {
             case 'sub_agent_status':
@@ -1296,25 +1306,8 @@ export const useChatStore = defineStore('chat', {
         // H2.f.6: thread_list_updated never arrives anymore — bridge stopped
         // emitting. Case removed; legacy replay would silently fall through.
 
-        // R6 G1a — task summary history (revisions + optional archived).
-        case 'unify_summary_history': {
-          const ts = (window.Pinia && window.Pinia.useFeaturesStore)
-            ? window.Pinia.useFeaturesStore() : null;
-          if (ts && typeof ts.applySummaryHistory === 'function') {
-            ts.applySummaryHistory(event);
-          }
-          break;
-        }
-
-        // R6 G1a — task affiliation CRUD result (relate / unrelate / kick / abort).
-        case 'unify_feature_crud_result': {
-          const ts = (window.Pinia && window.Pinia.useFeaturesStore)
-            ? window.Pinia.useFeaturesStore() : null;
-          if (ts && typeof ts.applyCrudResult === 'function') {
-            ts.applyCrudResult(event);
-          }
-          break;
-        }
+        // (2026-05-13) `unify_summary_history` / `unify_feature_crud_result`
+        // cases removed along with the Feature system.
 
         // H2.f.6: thread_merged / thread_forked / *_failed cases removed —
         // bridge no longer emits them.
@@ -1417,6 +1410,22 @@ export const useChatStore = defineStore('chat', {
         case 'unify_dream_result': {
           const vp = window.Pinia?.useVpStore?.() || (window.__useVpStore && window.__useVpStore());
           if (vp) vp.applyDreamResult(event);
+          break;
+        }
+        // 2026-05-13: tool-call usage stats response for the debug drawer.
+        // Snapshot keyed by tool name; `registered` and `unused` are
+        // companion lists so the drawer can render both "all tools"
+        // and "defined but never called" views without a second
+        // round-trip.
+        case 'unify_tool_stats': {
+          this.unifyToolStats = {
+            snapshot: event?.snapshot && typeof event.snapshot === 'object' ? event.snapshot : {},
+            registered: Array.isArray(event?.registered) ? event.registered : [],
+            unused: Array.isArray(event?.unused) ? event.unused : [],
+            error: typeof event?.error === 'string' ? event.error : null,
+            fetchedAt: Date.now(),
+          };
+          this.unifyToolStatsLoading = false;
           break;
         }
         // v0.1.755: dream_progress events emitted by both manual + auto

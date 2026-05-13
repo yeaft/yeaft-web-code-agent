@@ -14,7 +14,7 @@
  *   ③ Memory        — single block produced upstream by the AMS render
  *                     outlet and threaded through here as `memoryInjection`
  *   ④ Active Scope  — structured per-turn scope summary
- *                     (feature / group / vp / envelope IDs)
+ *                     (group / vp / envelope IDs)
  *
  * The compact summary, user_profile, and core_memory blocks that used to
  * live inside the system prompt are GONE. Compact summary is now part of
@@ -171,11 +171,6 @@ const PROMPTS = {
     date: (d) => `Date: ${d}`,
     dream: 'You are in dream mode. Reflect on past conversations and consolidate memories.',
     tools: (names) => `Available tools: ${names}`,
-    // task-334e — task-context section header (sub-block of Active Scope)
-    taskCtxHeader: '## task_ctx',
-    taskCtxRelatedHeader: '### related tasks',
-    taskCtxSummaryReminder: (min, count) =>
-      `💡 ${min}min since last summary (+${count} new messages). Consider calling \`task_summary_post\`.`,
     // DESIGN-PROMPT §3 ④ — Active Scope header
     activeScopeHeader: '## active_scope',
     groupAnnouncementHeader: '[Group Announcement]',
@@ -187,11 +182,6 @@ const PROMPTS = {
     date: (d) => `日期：${d}`,
     dream: '你处于梦境模式。回顾过去的对话，整理和巩固记忆。',
     tools: (names) => `可用工具：${names}`,
-    // task-334e — task-context section header (sub-block of Active Scope)
-    taskCtxHeader: '## task_ctx',
-    taskCtxRelatedHeader: '### 相关任务',
-    taskCtxSummaryReminder: (min, count) =>
-      `💡 距上次 summary 已过 ${min}min，新增 ${count} 条消息，建议调用 \`task_summary_post\`。`,
     // DESIGN-PROMPT §3 ④ — Active Scope header
     activeScopeHeader: '## active_scope',
     groupAnnouncementHeader: '[群组公告]',
@@ -239,30 +229,14 @@ export function normalizePromptLanguage(language) {
  *   ③ Memory        — Single block produced by the AMS render outlet
  *                     (callers pass it as `memoryInjection`).
  *   ④ Active Scope  — Structured per-turn scope summary
- *                     (feature / group / vp / envelope IDs).
- *   (Task context lives inside Active Scope; the previous standalone
- *    user_profile / core_memory blocks are gone — those signals now
- *    arrive through AMS Resident.)
- *
- * task-334e taskCtx is preserved as a sub-block of Active Scope:
- *   @param {object} [taskCtx] — per-task context
- *   @param {string} [taskCtx.taskId]
- *   @param {string} [taskCtx.currentVpId] — used for ACL + initiator check
- *   @param {string} [taskCtx.initiatorVpId] — task initiator VP id
- *   @param {Array<{body:string, shard?:string}>} [taskCtx.memories] — task-memory top-5
- *   @param {Array<{id:string, title?:string, members?:string[], updatedAt?:number,
- *                  memories?:Array<{body:string, shard?:string}>}>} [taskCtx.relatedTasks]
- *          — related tasks; we take top-3 by updatedAt desc, top-2 mem each,
- *            ACL-gated (members must include currentVpId)
- *   @param {object} [taskCtx.summaryReminder]
- *   @param {number} [taskCtx.summaryReminder.nonSummaryCount] — msgs since last summary
- *   @param {number} [taskCtx.summaryReminder.lastSummaryAt] — epoch ms (0/missing = never)
- *   @param {number} [taskCtx.summaryReminder.now] — override clock (tests), default Date.now()
+ *                     (group / vp / envelope IDs).
+ *   (The previous standalone user_profile / core_memory blocks are
+ *    gone — those signals now arrive through AMS Resident. Task
+ *    context (`taskCtx`) was wired into Active Scope by task-334e
+ *    but never actually populated by the engine; removed 2026-05-13.)
  *
  *   Active Scope params (DESIGN-PROMPT §3 ④):
  *   @param {object} [activeScope] — structured scope summary for this turn
- *   @param {string|null} [activeScope.featureId]   currently active feature, or null
- *   @param {string} [activeScope.featureTitle]      short title for human display
  *   @param {string} [activeScope.groupId]
  *   @param {string} [activeScope.vpId]
  *   @param {object} [activeScope.envelope]          inbound routing info (sender, intent)
@@ -273,7 +247,6 @@ export function normalizePromptLanguage(language) {
  *   toolNames?: string[],
  *   memoryInjection?: string,
  *   skillContent?: string,
- *   taskCtx?: object,
  *   activeScope?: object,
  *   vpPersona?: object,
  *   groupAnnouncement?: string,
@@ -286,7 +259,6 @@ export function buildSystemPrompt({
   toolNames = [],
   memoryInjection,
   skillContent,
-  taskCtx,
   activeScope,
   vpPersona,
   groupAnnouncement = '',
@@ -370,20 +342,16 @@ export function buildSystemPrompt({
   }
 
   // ─── 7. Active Scope (DESIGN-PROMPT §3 ④) ──────────────
-  // Structured per-turn scope summary. taskCtx is rendered as a
-  // sub-block of Active Scope (when supplied), and the new
-  // feature/group/vp/envelope identifiers are rendered as a leading
-  // line.
+  // Structured per-turn scope summary. The group/vp/envelope identifiers
+  // are rendered as a leading line. (Per-task taskCtx sub-block was
+  // never wired and is removed 2026-05-13.)
   const activeScopeBlock = renderActiveScope(activeScope, lang);
   if (activeScopeBlock) parts.push(activeScopeBlock);
-
-  const taskCtxBlock = renderTaskCtx(taskCtx, lang);
-  if (taskCtxBlock) parts.push(taskCtxBlock);
 
   return parts.join('\n\n');
 }
 
-// ─── task-334e helpers ───────────────────────────────────────────
+// ─── helpers ─────────────────────────────────────────────────────
 
 /**
  * Render the `## active_persona` block when the engine is running on
@@ -455,147 +423,6 @@ function hasCjk(text) {
   return /[\u3400-\u9fff\uf900-\ufaff]/u.test(String(text || ''));
 }
 
-const DEFAULT_TASK_MEMORY_TOP = 5;
-const DEFAULT_RELATED_TASK_TOP = 3;
-const DEFAULT_RELATED_TASK_MEMORY_TOP = 2;
-// task-334n §Δ31.4 — tightened reminder gate:
-//   (a) currentVpId === initiatorVpId
-//   (b) task.members.length >= 2  (multi-VP only)
-//   (c) nonSummaryCount >= 10  OR  (now - lastSummaryAt) >= 20 min
-// 334e's earlier looser gate (3 msgs / 15 min) is preserved as a legacy
-// fallback path for callers that never set `summaryReminder.members`.
-const SUMMARY_REMINDER_MIN_MESSAGES = 3;
-const SUMMARY_REMINDER_MIN_AGE_MS = 15 * 60 * 1000; // 15 minutes (legacy)
-const SUMMARY_REMINDER_MIN_TURNS_334N = 10;
-const SUMMARY_REMINDER_MIN_AGE_MS_334N = 20 * 60 * 1000; // 20 minutes
-const SUMMARY_REMINDER_MIN_MEMBERS_334N = 2;
-
-/**
- * Render `## task_ctx` block. Never throws on malformed input — missing
- * fields degrade to omission. The block is only emitted when at least one
- * of { memories, relatedTasks (post-ACL), summaryReminder } has content.
- */
-function renderTaskCtx(taskCtx, lang) {
-  if (!taskCtx || typeof taskCtx !== 'object') return '';
-
-  const memLines = renderTaskMemories(taskCtx.memories);
-  const relatedLines = renderRelatedTasks(
-    taskCtx.relatedTasks,
-    taskCtx.currentVpId,
-    lang,
-    taskCtx.groupId,
-  );
-  const reminderLine = renderSummaryReminder(taskCtx, lang);
-
-  if (!memLines && !relatedLines && !reminderLine) return '';
-
-  const out = [lang.taskCtxHeader];
-  if (taskCtx.taskId) out.push(`taskId: ${taskCtx.taskId}`);
-  if (memLines) out.push(memLines);
-  if (relatedLines) out.push(relatedLines);
-  if (reminderLine) out.push(reminderLine);
-  return out.join('\n');
-}
-
-/** Render task-memory top-N bodies with `[shard]` prefix, no sourceRef. */
-function renderTaskMemories(memories) {
-  if (!Array.isArray(memories) || memories.length === 0) return '';
-  const lines = [];
-  for (const m of memories.slice(0, DEFAULT_TASK_MEMORY_TOP)) {
-    const body = typeof m?.body === 'string' ? m.body.trim() : '';
-    if (!body) continue;
-    const shard = typeof m?.shard === 'string' && m.shard.trim() ? m.shard.trim() : 'general';
-    lines.push(`- [${shard}] ${body}`);
-  }
-  return lines.join('\n');
-}
-
-/**
- * Render `### related tasks` sub-block. §Δ31.4 ACL: a related task is only
- * included if `task.members` contains `currentVpId`. Missing `members` is
- * treated as private (excluded) — fail-closed.
- *
- * Ordering: by `updatedAt` desc (undefined treated as 0). Top-3 tasks, top-2
- * memory each.
- */
-function renderRelatedTasks(relatedTasks, currentVpId, lang, currentTaskGroupId) {
-  if (!Array.isArray(relatedTasks) || relatedTasks.length === 0) return '';
-  if (!currentVpId) return ''; // no ACL subject → fail-closed
-
-  const allowed = relatedTasks.filter((t) => {
-    if (!t || typeof t !== 'object') return false;
-    const members = Array.isArray(t.members) ? t.members : null;
-    // task-334n §Δ27.3 — either same-group OR members-intersection grants.
-    if (currentTaskGroupId && t.groupId && t.groupId === currentTaskGroupId) {
-      return true;
-    }
-    if (!members) return false; // fail-closed on missing ACL
-    return members.includes(currentVpId);
-  });
-  if (allowed.length === 0) return '';
-
-  // Sort by updatedAt desc; undefined coerces to 0 (i.e. pushed to the end).
-  const sorted = allowed
-    .slice()
-    .sort((a, b) => (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0));
-
-  const out = [lang.taskCtxRelatedHeader];
-  for (const t of sorted.slice(0, DEFAULT_RELATED_TASK_TOP)) {
-    const title = typeof t.title === 'string' && t.title.trim() ? t.title.trim() : t.id;
-    out.push(`- **${t.id}** · ${title}`);
-    const mems = Array.isArray(t.memories) ? t.memories : [];
-    for (const m of mems.slice(0, DEFAULT_RELATED_TASK_MEMORY_TOP)) {
-      const body = typeof m?.body === 'string' ? m.body.trim() : '';
-      if (!body) continue;
-      const shard = typeof m?.shard === 'string' && m.shard.trim() ? m.shard.trim() : 'general';
-      out.push(`  - [${shard}] ${body}`);
-    }
-  }
-  // If every allowed task had zero usable memory, we still keep the header +
-  // task list — the related-task identifiers themselves are useful context.
-  return out.join('\n');
-}
-
-/**
- * Render the summary-reminder line (§Δ27.3).
- *
- * Conditions (ALL must hold):
- *   (a) currentVpId === task.initiatorVpId
- *   (b) summaryReminder.nonSummaryCount ≥ 3
- *   (c) (now - lastSummaryAt) > 15 minutes
- *       (lastSummaryAt == 0 / missing is treated as "never summarized":
- *        only triggers if nonSummaryCount ≥ 3)
- */
-function renderSummaryReminder(taskCtx, lang) {
-  const r = taskCtx && taskCtx.summaryReminder;
-  if (!r || typeof r !== 'object') return '';
-  if (!taskCtx.currentVpId || !taskCtx.initiatorVpId) return '';
-  if (taskCtx.currentVpId !== taskCtx.initiatorVpId) return '';
-
-  const count = Number(r.nonSummaryCount) || 0;
-  const now = Number(r.now) || Date.now();
-  const lastAt = Number(r.lastSummaryAt) || 0;
-  const ageMs = lastAt > 0 ? now - lastAt : Number.POSITIVE_INFINITY;
-
-  // task-334n §Δ31.4 gate: when `members` is supplied, apply the strict
-  // multi-VP / 20min-or-10turn rule. Otherwise keep the legacy 334e gate
-  // so pre-334n callers still see reminders under the old thresholds.
-  const members = Array.isArray(r.members) ? r.members : null;
-  if (members) {
-    if (members.length < SUMMARY_REMINDER_MIN_MEMBERS_334N) return '';
-    const ageOk = lastAt > 0 && ageMs >= SUMMARY_REMINDER_MIN_AGE_MS_334N;
-    const turnsOk = count >= SUMMARY_REMINDER_MIN_TURNS_334N;
-    // `never summarised` (lastAt=0) only counts when turnsOk, otherwise we
-    // silently wait — aligns with §Δ31.4 "too-soon" reason code.
-    if (!ageOk && !turnsOk) return '';
-  } else {
-    if (count < SUMMARY_REMINDER_MIN_MESSAGES) return '';
-    if (lastAt > 0 && ageMs <= SUMMARY_REMINDER_MIN_AGE_MS) return '';
-  }
-
-  const minStr = lastAt > 0 ? String(Math.round(ageMs / 60000)) : '—';
-  return lang.taskCtxSummaryReminder(minStr, count);
-}
 
 /**
  * Render `## active_scope` block (DESIGN-PROMPT §3 ④).
@@ -607,18 +434,15 @@ function renderSummaryReminder(taskCtx, lang) {
  *
  * Schema:
  *   ## active_scope
- *   feature: <featureId> "<title>"   (omitted when null/empty)
  *   group:   <groupId>               (omitted when missing)
  *   vp:      <vpId>                  (omitted when missing)
  *   envelope: from=<sender> intent=<intent>   (omitted when no envelope)
  *
  * Returns '' when the input has no useful field — we don't emit an empty
- * header. featureId is allowed to be `null` (DESIGN-PROMPT §5.1 — T4
- * Scope Tagging is a placeholder; not every turn lives in a feature).
+ * header. (`featureId`/`featureTitle` fields were removed 2026-05-13 along
+ * with the rest of the Feature system; the JSDoc once described them.)
  *
  * @param {object} [activeScope]
- * @param {string|null} [activeScope.featureId]
- * @param {string} [activeScope.featureTitle]
  * @param {string} [activeScope.groupId]
  * @param {string} [activeScope.vpId]
  * @param {object} [activeScope.envelope]   inbound routing summary
@@ -629,18 +453,6 @@ function renderActiveScope(activeScope, lang) {
   if (!activeScope || typeof activeScope !== 'object') return '';
 
   const lines = [];
-  const feature = typeof activeScope.featureId === 'string' && activeScope.featureId.trim()
-    ? activeScope.featureId.trim()
-    : null;
-  if (feature) {
-    // Escape embedded `"` in featureTitle so a title like `Onboard "v2"` does
-    // not produce a malformed `feature: f1 "Onboard "v2""` line. Titles come
-    // from user / agent input — assume nothing.
-    const title = typeof activeScope.featureTitle === 'string' && activeScope.featureTitle.trim()
-      ? ` "${activeScope.featureTitle.trim().replace(/"/g, '\\"')}"`
-      : '';
-    lines.push(`feature: ${feature}${title}`);
-  }
   const group = typeof activeScope.groupId === 'string' && activeScope.groupId.trim()
     ? activeScope.groupId.trim()
     : '';
@@ -755,8 +567,8 @@ export function renderLayerASummaries(summaries, language = 'en') {
  * Earlier task-322 / task-334e variants accepted `taskScope` and
  * `turnScope` pass-through strings so callers could append their own
  * scope blocks. DESIGN-PROMPT v1 retired that surface — Active Scope is
- * now structured (`activeScope: { featureId, groupId, vpId, envelope }`)
- * and rendered by `buildSystemPrompt` itself. Both pass-through params
+ * now structured (`activeScope: { groupId, vpId, envelope }`) and
+ * rendered by `buildSystemPrompt` itself. Both pass-through params
  * had zero remaining callers when v1 landed; removing them prevents the
  * "two ways to describe scope" drift §1 set out to eliminate.
  *

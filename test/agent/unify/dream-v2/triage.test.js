@@ -46,24 +46,22 @@ describe('applyHardRules', () => {
     });
     expect(out.map(a => a.scope)).toContain('vp/wang-wu');
   });
-  it('adds feature/<id> when message carries featureId', () => {
+  it('does NOT create feature scopes from messages (Feature system removed)', () => {
     const out = applyHardRules({
       groupId: 'g-eng',
       messages: [{ role: 'user', featureId: 'abc-123' }],
     });
-    expect(out.map(a => a.scope)).toContain('feature/abc-123');
+    expect(out.map(a => a.scope).some(s => s.startsWith('feature/'))).toBe(false);
   });
-  it('rejects unsafe vp/feature ids silently', () => {
+  it('rejects unsafe vp ids silently', () => {
     const out = applyHardRules({
       groupId: 'g',
       messages: [
         { role: 'assistant', vpId: '../etc/passwd' },
-        { role: 'user', featureId: 'a/b' },
       ],
     });
     const scopes = out.map(a => a.scope);
     expect(scopes.some(s => s.startsWith('vp/'))).toBe(false);
-    expect(scopes.some(s => s.startsWith('feature/'))).toBe(false);
   });
 });
 

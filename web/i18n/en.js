@@ -1209,28 +1209,26 @@ export default {
   'unify.vp.turnBlock.thinking': 'thinking…',
   'unify.vp.turnBlock.empty': '(no text)',
 
-  // PR-3 (feature-pill double-track): right-side VP Timeline pane.
-  'unify.vpTimeline.aria': 'VP timeline',
-  'unify.vpTimeline.title': 'VPs',
-  'unify.vpTimeline.empty': 'No VPs in this conversation yet.',
-  'unify.vpTimeline.untitledFeature': '(untitled feature)',
-  'unify.vpTimeline.resizeTitle': 'Drag to resize',
-  'unify.vpTimeline.status.idle': 'idle',
-  'unify.vpTimeline.status.typing': 'typing…',
-  'unify.vpTimeline.status.streaming': 'streaming',
-  'unify.vpTimeline.status.inFeature': 'in feature',
-  'unify.vpTimeline.trigger.quick': 'quick',
-  'unify.vpTimeline.trigger.turns': 'multi-turn',
-  'unify.vpTimeline.trigger.tool': 'tool',
-  // PR-4: per-row abort affordance in the timeline pane.
-  'unify.vpTimeline.abort': 'Abort',
-  // feat-vp-list-ui-polish: hover-revealed info button + default
-  // row-click action (@-mention the VP into the chat input).
-  'unify.vpTimeline.info': 'View profile',
-  'unify.vpTimeline.mention': 'Click to @-mention this VP',
-  // Topbar show/hide-VP-list toggle. The VP list panel is independent
-  // of the detail panel; preference persists in localStorage
-  // (unify-vp-timeline-visible).
-  'unify.vpTimeline.show': 'Show VP list',
-  'unify.vpTimeline.hide': 'Hide VP list',
+  // (2026-05-13) unify.vpTimeline.* keys removed along with VpTimelinePane.
+
+  // (2026-05-13) Tool Usage Stats drawer.
+  'unify.toolStats.title': 'Tool Usage Stats',
+  'unify.toolStats.refresh': 'Refresh',
+  'unify.toolStats.close': 'Close',
+  'unify.toolStats.tabAll': 'All tools',
+  'unify.toolStats.tabUnused': 'Unused',
+  'unify.toolStats.loading': 'Loading…',
+  'unify.toolStats.notLoaded': 'No data yet — click refresh.',
+  'unify.toolStats.empty': '(no tool calls recorded yet)',
+  'unify.toolStats.noneUnused': '(every registered tool has been called at least once)',
+  'unify.toolStats.fetchedAt': 'Fetched at',
+  'unify.toolStats.col.name': 'Tool',
+  'unify.toolStats.col.calls': 'Calls',
+  'unify.toolStats.col.errors': 'Errors',
+  'unify.toolStats.col.errRate': 'Err%',
+  'unify.toolStats.col.p50': 'p50',
+  'unify.toolStats.col.p95': 'p95',
+  'unify.toolStats.col.avg': 'Avg',
+  'unify.toolStats.col.last': 'Last',
+  'unify.toolStats.buttonLabel': 'Tool Stats',
 };
