@@ -1209,7 +1209,22 @@ export default {
   'unify.vp.turnBlock.thinking': 'thinking…',
   'unify.vp.turnBlock.empty': '(no text)',
 
-  // (2026-05-13) unify.vpTimeline.* keys removed along with VpTimelinePane.
+  // VP timeline pane — left-of-conversation roster list. Restored
+  // v0.1.767 after PR #767 inadvertently removed it together with the
+  // Feature system. No feature-specific labels anymore (status is just
+  // idle / typing / streaming).
+  'unify.vpTimeline.aria': 'VP list',
+  'unify.vpTimeline.title': 'VPs',
+  'unify.vpTimeline.empty': 'No VPs in this conversation yet.',
+  'unify.vpTimeline.resizeTitle': 'Drag to resize',
+  'unify.vpTimeline.status.idle': 'idle',
+  'unify.vpTimeline.status.typing': 'typing…',
+  'unify.vpTimeline.status.streaming': 'streaming',
+  'unify.vpTimeline.abort': 'Abort',
+  'unify.vpTimeline.info': 'View profile',
+  'unify.vpTimeline.mention': 'Click to @-mention this VP',
+  'unify.vpTimeline.show': 'Show VP list',
+  'unify.vpTimeline.hide': 'Hide VP list',
 
   // (2026-05-13) Tool Usage Stats drawer.
   'unify.toolStats.title': 'Tool Usage Stats',
