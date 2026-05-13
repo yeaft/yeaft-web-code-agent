@@ -2,13 +2,18 @@
  * UserAvatar — human-side circular avatar used by the Unify group-chat
  * dual-column layout (Issue C, IM-style: VP left / human right).
  *
- * The user identity here is intentionally minimal: this is a SINGLE-user
- * web app (the logged-in operator), so the avatar carries one initial
- * (the localised "you" character — `Y` for English, `我` for Chinese)
- * and a stable accent-color background that's distinct from any VP
- * color. The point of the avatar is layout symmetry with VP turns —
- * visual scaffolding for "this row was authored by the human" — not
- * user identification.
+ * Visual stack (back → front):
+ *   1. Accent-coloured palette disk (background of `.user-avatar` in CSS)
+ *   2. Illustrated SVG portrait — `/assets/avatars/user.svg`, generated
+ *      with DiceBear `personas` style (same generator as the VP roster
+ *      in `scripts/generate-avatars.mjs`) so the human side renders in
+ *      the same visual language as the VPs.
+ *   3. Letter (localised "you" character) — rendered ONLY when the SVG
+ *      fails to load. Keeps the original Issue-C look as fallback.
+ *
+ * The illustration layer is the new piece. Failure path (404, corrupt
+ * file, browser-blocked) falls back to the localised initial so the
+ * avatar is never visually broken.
  *
  * Props:
  *   size      — px diameter (default 36, mirrors VpAvatar in turn blocks).
@@ -32,11 +37,23 @@ export default {
       :aria-label="ariaLabel"
       role="img"
     >
-      <span class="user-avatar-letter">{{ displayedInitial }}</span>
+      <img
+        v-if="!imgFailed"
+        class="user-avatar-img"
+        src="/assets/avatars/user.svg"
+        alt=""
+        draggable="false"
+        @error="onImgError"
+      />
+      <span v-else class="user-avatar-letter">{{ displayedInitial }}</span>
     </span>
   `,
   setup(props) {
     const t = Vue.inject('t', null);
+    const imgFailed = Vue.ref(false);
+    function onImgError() {
+      imgFailed.value = true;
+    }
     const displayedInitial = Vue.computed(() => {
       // Prop wins when explicitly set.
       let raw = (props.initial || '').trim();
@@ -56,6 +73,6 @@ export default {
       height: props.size + 'px',
       fontSize: Math.round(props.size * 0.5) + 'px',
     }));
-    return { displayedInitial, avatarStyle };
+    return { displayedInitial, avatarStyle, imgFailed, onImgError };
   },
 };
