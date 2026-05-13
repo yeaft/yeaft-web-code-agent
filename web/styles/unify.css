@@ -2637,297 +2637,8 @@
  *  visual story now.)
  * ============================================================ */
 
-/* ── PR-3: VP List pane (left of conversation) ────────────────────────
-   Sits inside .unify-main as its left column, mirroring Crew's
-   crew-panel-left. CSS custom property --unify-vp-timeline-width is set
-   inline by UnifyPage's timelineWidthStyle computed; the resize handle
-   on the right edge drags it. No border-top / border-bottom on any
-   descendant — per project rule "no horizontal dividers in Unify"
-   (CLAUDE.md §Unify UI Design Rules). Spacing comes from padding + gap
-   only. Hidden under 1024 px so the conversation pane keeps the screen
-   on tablets/phones. */
-.unify-vp-timeline {
-  width: var(--unify-vp-timeline-width, 280px);
-  min-width: 220px;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-main);
-  flex-shrink: 0;
-  padding: 12px 8px 16px;
-  gap: 4px;
-  overflow-y: auto;
-  /* task-unify-group-ui-cleanup: prevent the horizontal scrollbar that
-     appeared at the bottom of the pane when row content was wider than
-     the pane (e.g. long VP name + trigger + elapsed cluster on a narrow
-     timeline). The pane is column-scoped — there's nothing to pan
-     horizontally, so clip overflow on that axis. */
-  overflow-x: hidden;
-  position: relative; /* anchor for the absolute resize handle */
-  box-sizing: border-box;
-}
-.unify-vp-timeline-resize-handle {
-  position: absolute;
-  /* Straddle the RIGHT edge of the pane (boundary with the conversation
-     column) so the hit-target spans both panes. Matches the
-     handedness of .unify-detail-drag-handle on the detail pane's left
-     edge — both handles sit at their pane's "outer" edge. */
-  right: -3px;
-  left: auto;
-  top: 0;
-  bottom: 0;
-  width: 6px;
-  cursor: ew-resize;
-  background: transparent;
-  z-index: 1;
-}
-.unify-vp-timeline-resize-handle:hover {
-  background: var(--accent-soft, rgba(99, 102, 241, 0.15));
-}
-.unify-vp-timeline-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 8px 8px;
-}
-.unify-vp-timeline-title {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-muted, var(--text-secondary, #888));
-}
-.unify-vp-timeline-count {
-  font-size: 11px;
-  color: var(--text-muted, var(--text-secondary, #888));
-}
-.unify-vp-timeline-empty {
-  color: var(--text-muted, var(--text-secondary, #888));
-  font-size: 12px;
-  padding: 8px;
-}
-.unify-vp-timeline-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  /* task-unify-group-ui-cleanup: prevent grid columns that expand to fit
-     long content (status pill + elapsed) from pushing the list past
-     pane width. */
-  min-width: 0;
-}
-/* feat-vp-list-ui-polish: row collapsed to a single line. The previous
-   three-row stack (name / status / snippet) split the VP across vertical
-   space the sidebar can't afford; the new layout is a flex row with the
-   name + an inline status suffix, mirroring Crew's compact role card.
-   Snippet was removed entirely — the conversation pane is right next
-   door and the duplicated text wasn't earning its row height. */
-.unify-vp-timeline-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.unify-vp-timeline-row:hover,
-.unify-vp-timeline-row:focus-visible {
-  background: var(--sidebar-hover, var(--surface-1, rgba(0, 0, 0, 0.04)));
-  outline: none;
-}
-/* feat-vp-list-ui-polish: the inset left-bar + tinted background that
-   marked the "currently speaking" row was removed. The breathing name
-   animation (further below) carries the same signal without the heavier
-   visual treatment — same approach Crew's role-card takes. */
-.unify-vp-timeline-row-body {
-  flex: 1;
-  min-width: 0;          /* let inner ellipsis work inside the flex item */
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  overflow: hidden;
-}
-.unify-vp-timeline-row-name {
-  font-size: 13px;
-  color: var(--text-primary, #1f2937);
-  font-weight: 500;
-  /* Name can ellipsis when extremely long; status (flex:1 below) gets the
-     remaining space. Removing the earlier `flex-shrink: 0` + `max-width: 60%`
-     pair — they contradicted each other (the cap forced ellipsis at 60%
-     even when status was empty, while flex-shrink:0 said "don't shrink"). */
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.unify-vp-timeline-row-status {
-  font-size: 11px;
-  color: var(--text-secondary, #555);
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
-  flex-wrap: nowrap;
-  overflow: hidden;
-  /* status takes the remaining space and ellipsises before the name does. */
-  flex: 1;
-  min-width: 0;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.unify-vp-timeline-feature-title {
-  color: var(--text-primary, #1f2937);
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 100%;
-}
-.unify-vp-timeline-trigger,
-.unify-vp-timeline-elapsed {
-  font-size: 10px;
-  color: var(--text-muted, var(--text-secondary, #888));
-  padding: 1px 6px;
-  background: var(--bg-main, var(--surface-1, rgba(0, 0, 0, 0.05)));
-  border-radius: 4px;
-}
-.unify-vp-timeline-row.is-status-in-feature .unify-vp-timeline-row-name {
-  color: var(--accent, #6366f1);
-}
+/* (2026-05-13) .unify-vp-timeline-* and .unify-topbar-vp-toggle rules removed along with VpTimelinePane. */
 
-@media (max-width: 1024px) {
-  /* Pane disappears at the same breakpoint .unify-detail does so the
-     conversation pane keeps the right-column real estate. */
-  .unify-vp-timeline {
-    display: none;
-  }
-}
-
-/* ── PR-4 / feat-vp-list-ui-polish: per-VP right-side action cluster ──
-   Two small icon buttons (abort + info) sit at the right edge of the
-   row. The abort button mirrors the ChatInput stop icon's `<rect rx=2/>`
-   shape (10×10 inside a 22×22 hit target); the info button is a 12×12
-   circle-i icon. Both use <span role="button"> rather than <button>
-   because the parent row is already role="button" and nesting native
-   buttons is an a11y violation. Spacing-only — no horizontal dividers
-   (CLAUDE.md "Unify UI Design Rules"). */
-
-/* The row is now a flex container (see .unify-vp-timeline-row above),
-   so the actions cluster simply slots in at the end. */
-.unify-vp-timeline-row-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  flex-shrink: 0;
-}
-.unify-vp-timeline-abort,
-.unify-vp-timeline-info {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 4px;
-  color: var(--text-muted, var(--text-secondary, #888));
-  cursor: pointer;
-  /* Hover-revealed (Crew parity). Idle = opacity 0; row-hover or
-     focus-within bumps to 0.7; direct hover bumps to 1 + accent / danger
-     color — see the row-scoped rules below. */
-  opacity: 0;
-  transition: opacity 0.15s, background 0.15s, color 0.15s;
-}
-/* The abort button has its own visibility gate in the template
-   (v-if="row.status !== 'idle'"), but we still keep it hover-revealed
-   so an idle moment in a streaming row stays visually quiet. */
-.unify-vp-timeline-abort:focus-visible,
-.unify-vp-timeline-info:focus-visible {
-  background: var(--accent-soft, rgba(99, 102, 241, 0.12));
-  color: var(--accent, #6366f1);
-  outline: none;
-  opacity: 1;
-}
-
-/* ── Crew-style row parity ────────────────────────────────────────────
-   Mirror the affordances of .crew-role-card:
-     1. Action buttons (abort + info) are HOVER-REVEALED (opacity 0
-        baseline declared above) — keeps the row visually quiet until
-        the user hovers, matching Crew's subtle action-bar pattern.
-        Focus-visible also reveals them for keyboard users.
-     2. While streaming/typing, the VP name breathes (Crew uses the
-        same 3 s nameBreathing keyframe). Honors prefers-reduced-motion.
-     3. Abort button uses the danger color on hover, mirroring
-        .crew-role-abort-btn. Info button uses the accent color.
-   feat-vp-list-ui-polish: the "currently producing tokens" left-bar +
-   tinted background was removed; the breathing name is now the sole
-   active-speaker cue (still only on streaming / typing, NOT in-feature).
-*/
-.unify-vp-timeline-row:hover .unify-vp-timeline-abort,
-.unify-vp-timeline-row:hover .unify-vp-timeline-info,
-.unify-vp-timeline-row:focus-within .unify-vp-timeline-abort,
-.unify-vp-timeline-row:focus-within .unify-vp-timeline-info {
-  opacity: 0.7;
-}
-/* Direct-hover treatment. The row-hover descendant rule above has
-   specificity (0,3,0) — to actually reach opacity:1 + accent / danger
-   color when the cursor is on the action button (which also row-hovers,
-   by inclusion), we compound the row class here so this rule's
-   specificity matches and source-order wins. */
-.unify-vp-timeline-row .unify-vp-timeline-abort:hover {
-  opacity: 1;
-  color: var(--error-color, #e74c3c);
-  background: rgba(231, 76, 60, 0.15);
-}
-.unify-vp-timeline-row .unify-vp-timeline-info:hover {
-  opacity: 1;
-  color: var(--accent, #6366f1);
-  background: var(--accent-soft, rgba(99, 102, 241, 0.12));
-}
-
-/* Streaming/typing breathing animation on the row name. Crew uses an
-   identical 3 s ease-in-out infinite cycle. */
-.unify-vp-timeline-row.is-status-streaming .unify-vp-timeline-row-name,
-.unify-vp-timeline-row.is-status-typing .unify-vp-timeline-row-name {
-  animation: unifyVpNameBreathing 3s ease-in-out infinite;
-}
-@keyframes unifyVpNameBreathing {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .unify-vp-timeline-row.is-status-streaming .unify-vp-timeline-row-name,
-  .unify-vp-timeline-row.is-status-typing .unify-vp-timeline-row-name {
-    animation: none;
-  }
-}
-
-/* ── Topbar VP-list toggle button ────────────────────────────────────
-   Sits next to .unify-topbar-sidebar-toggle at the left edge of the
-   topbar. Inactive = muted icon; active = accent-tinted background to
-   indicate "the panel is currently visible." Same shape/size as the
-   existing topbar buttons (16 px icon, ~28 px hit-target). */
-.unify-topbar-vp-toggle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: none;
-  border: none;
-  color: var(--text-muted, var(--text-secondary, #888));
-  cursor: pointer;
-  padding: 4px 6px;
-  border-radius: 6px;
-  transition: background 0.15s, color 0.15s;
-}
-.unify-topbar-vp-toggle:hover,
-.unify-topbar-vp-toggle:focus-visible {
-  background: var(--sidebar-hover, var(--surface-1, rgba(0, 0, 0, 0.05)));
-  color: var(--text-primary, #1f2937);
-  outline: none;
-}
-.unify-topbar-vp-toggle.active {
-  color: var(--accent, #6366f1);
-  background: var(--accent-soft, rgba(99, 102, 241, 0.10));
-}
 
 /* ── fix/dream-cadence-and-ui-trigger: manual dream trigger button ──
    Sits to the LEFT of .unify-topbar-vp-toggle. Mirrors the shape of
@@ -3012,4 +2723,178 @@
   border-radius: 50%;
   background: var(--error, #dc2626);
   pointer-events: none;
+}
+
+/* ── 2026-05-13 Tool Usage Stats drawer ──────────────────────────── */
+
+.tool-stats-open-button {
+  position: absolute;
+  top: 10px;
+  right: 48px;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  padding: 4px 8px;
+  font-size: 11px;
+  border-radius: 4px;
+}
+
+.tool-stats-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 100;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.tool-stats-drawer {
+  width: min(720px, 92vw);
+  height: 100%;
+  background: var(--bg-elevated, var(--bg, #1f1f1f));
+  color: var(--text, #e6e6e6);
+  display: flex;
+  flex-direction: column;
+  box-shadow: -4px 0 18px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+}
+
+.tool-stats-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+}
+
+.tool-stats-drawer-header h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.tool-stats-drawer-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.tool-stats-drawer-actions .btn-icon {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.tool-stats-drawer-actions .btn-icon:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+}
+
+.tool-stats-drawer-actions .btn-icon:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.tool-stats-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 16px 8px;
+}
+
+.tool-stats-tab {
+  background: transparent;
+  border: 0;
+  color: var(--text-muted, #999);
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.tool-stats-tab.active {
+  color: var(--text, #e6e6e6);
+  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+}
+
+.tool-stats-tab-count {
+  margin-left: 4px;
+  opacity: 0.7;
+}
+
+.tool-stats-drawer-body {
+  flex: 1;
+  overflow: auto;
+  padding: 8px 16px 16px;
+}
+
+.tool-stats-loading,
+.tool-stats-empty,
+.tool-stats-error,
+.tool-stats-empty-row {
+  padding: 12px;
+  text-align: center;
+  color: var(--text-muted, #999);
+  font-size: 13px;
+}
+
+.tool-stats-error {
+  color: var(--error, #dc2626);
+}
+
+.tool-stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.tool-stats-table th,
+.tool-stats-table td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06));
+}
+
+.tool-stats-table th {
+  font-weight: 600;
+  color: var(--text-muted, #aaa);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tool-stats-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.tool-stats-name {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+
+.tool-stats-last {
+  color: var(--text-muted, #aaa);
+  white-space: nowrap;
+}
+
+.tool-stats-unused ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.tool-stats-unused-row {
+  padding: 6px 8px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06));
+}
+
+.tool-stats-footer {
+  padding: 8px 16px;
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  text-align: right;
 }

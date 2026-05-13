@@ -43,22 +43,19 @@ import listAgents from './list-agents.js';
 // --- P1 Routing tools (task-334d) ---
 import routeForward from './route-forward.js';
 
-// --- P1 Feature tools ---
-import {
-  featureCreate,
-  featureUpdate,
-  featureList,
-  featureGet,
-  featureProgress,
-  featureMemory,
-  followupFeature,
-  updatePlan,
-  featureSummaryPost,
-} from './feature-tools.js';
+// --- P1 Progress tracking ---
+import todoWrite from './todo-write.js';
 
 // H2.f.4: thread tools (spawnThread/switchThread/listThreads/...) deleted.
 // The agent now runs in a single conversation; multi-thread orchestration
 // has been retired across the H2.f series.
+//
+// Feature tools (FeatureCreate/Update/List/Get/Progress/Memory + Followup
+// + UpdatePlan + feature_summary_post) and the FeatureArc auto-creation
+// system were removed in 2026-05-13 — they were defined but never used in
+// production, contributing ~2900 lines of dead code. The TodoWrite tool
+// above replaces them as the actual progress-tracking surface the LLM
+// uses for multi-step tasks.
 
 // --- P2 Auxiliary tools ---
 // task-333b L1 delete: ToolSearch and WriteStdin removed — the function-call
@@ -109,16 +106,8 @@ export const allTools = [
   // P1 Routing (task-334d)
   routeForward,
 
-  // P1 Feature
-  featureCreate,
-  featureUpdate,
-  featureList,
-  featureGet,
-  featureProgress,
-  featureMemory,
-  followupFeature,
-  updatePlan,
-  featureSummaryPost,
+  // P1 Progress tracking
+  todoWrite,
 
   // P2 Auxiliary
   jsRepl,

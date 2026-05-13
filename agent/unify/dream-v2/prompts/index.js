@@ -21,7 +21,6 @@ const FILES = {
   extractUser: 'extract-user.md',
   extractVp: 'extract-vp.md',
   extractGroup: 'extract-group.md',
-  extractFeature: 'extract-feature.md',
   extractTopic: 'extract-topic.md',
   // H2.e — per-scope summary compression
   summarizeScope: 'summarize-scope.md',
@@ -32,6 +31,10 @@ const FILES = {
  * extraction template name. Unknown scopes fall back to `extractTopic`
  * (the most generic template) so we never throw at extraction time.
  *
+ * (2026-05-13: `extractFeature` was removed along with the Feature
+ * system; legacy `feature/*` scopes — if any remain in old data — fall
+ * through to `extractTopic` here, which is harmless.)
+ *
  * @param {string} scope
  * @returns {keyof typeof FILES}
  */
@@ -40,7 +43,6 @@ export function extractTemplateForScope(scope) {
   if (scope === 'user') return 'extractUser';
   if (scope.startsWith('vp/')) return 'extractVp';
   if (scope.startsWith('group/')) return 'extractGroup';
-  if (scope.startsWith('feature/')) return 'extractFeature';
   if (scope.startsWith('topic/')) return 'extractTopic';
   return 'extractTopic';
 }

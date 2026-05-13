@@ -139,12 +139,6 @@ describe('dream-v2 per-scope extract prompts (H2.e)', () => {
     expect(out).toMatch(/purpose|members|conventions/i);
   });
 
-  it('extractFeature substitutes featureId', () => {
-    const out = render('extractFeature', { featureId: 'memory-h2' });
-    expect(out).toContain('memory-h2');
-    expect(out).toMatch(/goal|architecture|decisions/i);
-  });
-
   it('extractTopic substitutes topicId', () => {
     const out = render('extractTopic', { topicId: 'auth/jwt' });
     expect(out).toContain('auth/jwt');
@@ -174,8 +168,8 @@ describe('extractTemplateForScope', () => {
   it('routes group/* scope', () => {
     expect(extractTemplateForScope('group/eng')).toBe('extractGroup');
   });
-  it('routes feature/* scope', () => {
-    expect(extractTemplateForScope('feature/memory-h2')).toBe('extractFeature');
+  it('routes feature/* scope falls back to extractTopic (Feature system removed)', () => {
+    expect(extractTemplateForScope('feature/memory-h2')).toBe('extractTopic');
   });
   it('routes topic/* scope', () => {
     expect(extractTemplateForScope('topic/auth/jwt')).toBe('extractTopic');

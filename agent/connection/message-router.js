@@ -36,7 +36,7 @@ import { sendToServer, flushMessageBuffer } from './buffer.js';
 import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
 import { getLlmConfig, updateLlmConfig, getUnifySettings, updateUnifySettings, getSearchSettings, updateSearchSettings, fetchTavilyUsage } from '../unify/config-api.js';
-import { handleUnifyGroupChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyLoadMoreHistory, handleUnifyAbortThread, handleUnifyAbortAll, handleUnifyAbortTurn, handleUnifyVpSubscribe, handleUnifyVpCreate, handleUnifyVpUpdate, handleUnifyVpDelete, handleUnifyVpRead, handleUnifyFetchSummaryHistory, handleUnifyFeatureCrud, handleUnifyListGroups, handleUnifyCreateGroup, handleUnifyRenameGroup, handleUnifyUpdateGroup, handleUnifyArchiveGroup, handleUnifyDeleteGroup, handleUnifyAddMember, handleUnifyRemoveMember, handleUnifySetDefaultVp, handleUnifyDreamTrigger, broadcastLanguageChange } from '../unify/web-bridge.js';
+import { handleUnifyGroupChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyLoadMoreHistory, handleUnifyAbortThread, handleUnifyAbortAll, handleUnifyAbortTurn, handleUnifyVpSubscribe, handleUnifyVpCreate, handleUnifyVpUpdate, handleUnifyVpDelete, handleUnifyVpRead, handleUnifyListGroups, handleUnifyCreateGroup, handleUnifyRenameGroup, handleUnifyUpdateGroup, handleUnifyArchiveGroup, handleUnifyDeleteGroup, handleUnifyAddMember, handleUnifyRemoveMember, handleUnifySetDefaultVp, handleUnifyDreamTrigger, handleUnifyFetchToolStats, broadcastLanguageChange } from '../unify/web-bridge.js';
 
 export async function handleMessage(msg) {
   switch (msg.type) {
@@ -460,14 +460,6 @@ export async function handleMessage(msg) {
       handleUnifyVpRead(msg);
       break;
 
-    // R6 G1a — feature summary history + feature affiliation CRUD.
-    case 'unify_fetch_summary_history':
-      await handleUnifyFetchSummaryHistory(msg);
-      break;
-    case 'unify_feature_crud':
-      await handleUnifyFeatureCrud(msg);
-      break;
-
     // task-334m: Group CRUD + D1 seed wiring (§Δ10 334m + R6 §Δ31.2).
     // All handlers reply via `group_crud_result`; mutating ops additionally
     // emit `group_roster_changed` (add/remove/default) or
@@ -503,6 +495,11 @@ export async function handleMessage(msg) {
     // wave-6b: manual dream trigger from VP detail page
     case 'unify_dream_trigger':
       await handleUnifyDreamTrigger(msg);
+      break;
+
+    // 2026-05-13: per-tool call counters for the Unify debug drawer.
+    case 'unify_fetch_tool_stats':
+      await handleUnifyFetchToolStats(msg);
       break;
 
     // Expert roles definition (for ExpertPanel detail view)

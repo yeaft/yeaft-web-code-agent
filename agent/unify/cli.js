@@ -454,6 +454,22 @@ async function runREPL(config, args) {
           console.log(`  Cold messages: ${conversationStore.countCold()}`);
           console.log(`  Registered tools: ${toolRegistry.size}`);
           console.log(`  Loaded skills: ${skillManager.size}`);
+          // 2026-05-13: per-tool call counters. Rendered inline so the
+          // REPL gives a one-shot snapshot — the `yeaft-stats` CLI is
+          // the dedicated entry for richer rendering / --unused mode.
+          if (session.toolStats && typeof session.toolStats.snapshot === 'function') {
+            const snap = session.toolStats.snapshot();
+            const entries = Object.entries(snap).sort((a, b) => b[1].callCount - a[1].callCount);
+            if (entries.length === 0) {
+              console.log(`  Tool calls: (none recorded yet)`);
+            } else {
+              console.log(`  Tool calls (top 10 by count):`);
+              for (const [name, rec] of entries.slice(0, 10)) {
+                const errPct = rec.callCount > 0 ? ((rec.errorCount / rec.callCount) * 100).toFixed(1) : '0';
+                console.log(`    ${name.padEnd(28)}  ${String(rec.callCount).padStart(5)} calls  ${errPct.padStart(5)}% err  p50=${rec.p50Ms}ms p95=${rec.p95Ms}ms`);
+              }
+            }
+          }
           break;
         }
 

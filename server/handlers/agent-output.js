@@ -320,7 +320,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
       // Payload carries { conversationId, data } (claude_output format) or { event } (metadata).
       //
       // Envelope passthrough — every field the agent stamped on the envelope
-      // (groupId, vpId, turnId, featureId) MUST be forwarded verbatim. The
+      // (groupId, vpId, turnId) MUST be forwarded verbatim. The
       // frontend uses vpId + turnId in `handleUnifyOutput` to set
       // `_currentUnifyVpId` / `_currentUnifyTurnId`, which in turn drive
       // `stampSpeakerOnVpMessage` so streaming assistant deltas get a
@@ -328,6 +328,9 @@ export async function handleAgentOutput(agentId, agent, msg) {
       // VpTurnBlock (with avatar) to a plain AssistantTurn (no avatar) —
       // the bug v0.1.756 fixed. Keep this spread in sync with the agent
       // side `sendUnifyOutput` / `sendUnifyEvent` in agent/unify/web-bridge.js.
+      //
+      // (2026-05-13: `featureId` field dropped from the envelope along
+      // with the rest of the Feature system.)
       //
       // Forward semantics: `!= null` (not truthy) — a relay should
       // pass through whatever was stamped, including empty strings. IDs
@@ -341,7 +344,6 @@ export async function handleAgentOutput(agentId, agent, msg) {
             ...(msg.groupId != null ? { groupId: msg.groupId } : {}),
             ...(msg.vpId != null ? { vpId: msg.vpId } : {}),
             ...(msg.turnId != null ? { turnId: msg.turnId } : {}),
-            ...(msg.featureId != null ? { featureId: msg.featureId } : {}),
             data: msg.data,
             event: msg.event,
           });
@@ -400,6 +402,24 @@ export async function handleAgentOutput(agentId, agent, msg) {
             ...(Array.isArray(msg.groups) ? { groups: msg.groups } : {}),
             ...(Array.isArray(msg.targets) ? { targets: msg.targets } : {}),
             ...(msg.startedAt != null ? { startedAt: msg.startedAt } : {}),
+          });
+        }
+      }
+      break;
+
+    case 'unify_tool_stats':
+      // 2026-05-13: relay tool-call counters from the agent to the web
+      // client that requested them. Whitelist `snapshot`/`registered`/
+      // `unused` so a future schema bump can't leak unrelated fields,
+      // and tolerate a `error` field for graceful failure replies.
+      for (const [, c] of webClients) {
+        if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
+          await sendToWebClient(c, {
+            type: 'unify_tool_stats',
+            ...(msg.snapshot && typeof msg.snapshot === 'object' ? { snapshot: msg.snapshot } : { snapshot: {} }),
+            ...(Array.isArray(msg.registered) ? { registered: msg.registered } : { registered: [] }),
+            ...(Array.isArray(msg.unused) ? { unused: msg.unused } : { unused: [] }),
+            ...(msg.error != null ? { error: msg.error } : {}),
           });
         }
       }

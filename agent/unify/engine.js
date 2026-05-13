@@ -253,32 +253,17 @@ export class Engine {
   /** @type {string|null} */
   #yeaftDir;
 
+  /** @type {import('./stats/tool-usage.js').ToolUsageStats|null} — per-tool call/latency counters */
+  #toolStats = null;
+
   /** @type {object|null} — Config override for internal tasks (recall, consolidation, dream) using fastModel */
   #fastConfig;
 
   /** @type {((agentId: string, evt: object) => void) | null} */
   #subAgentEventSink = null;
 
-  /**
-   * PR-4 — current-featureId accessor.
-   *
-   * The feature arc lives in the per-VP web-bridge (`runVpTurn` creates
-   * one per turn) so the engine itself does NOT own the featureId. To
-   * let sub-agents inherit their parent's featureId without coupling the
-   * engine to FeatureArc, the bridge plugs in a thin accessor right
-   * after creating the arc — `engine.setCurrentFeatureIdAccessor(() =>
-   * arc.getFeatureId() || null)`. The engine surfaces the result via
-   * `parentEngineDeps.getCurrentFeatureId` (read lazily at sub-agent
-   * event-emit time, so a feature that opens mid-turn still tags the
-   * sub-agent's later events).
-   *
-   * The accessor is cleared (set to null) by the bridge in the same
-   * `finally` block that clears the per-turn AbortController, so a
-   * stale arc reference can't leak into the next turn.
-   *
-   * @type {(() => (string|null)) | null}
-   */
-  #currentFeatureIdAccessor = null;
+  // (removed 2026-05-13) `#currentFeatureIdAccessor` — sub-agent
+  // feature-inheritance plumbing that went with the Feature system.
 
   /**
    * task-325a — abort state.
@@ -347,7 +332,7 @@ export class Engine {
    *   yeaftDir?: string,
    * }} params
    */
-  constructor({ adapter, trace, config, conversationStore, memoryIndex, amsRegistry, toolRegistry, skillManager, mcpManager, yeaftDir }) {
+  constructor({ adapter, trace, config, conversationStore, memoryIndex, amsRegistry, toolRegistry, skillManager, mcpManager, yeaftDir, toolStats = null }) {
     this.#adapter = adapter;
     this.#trace = trace;
     this.#config = config;
@@ -360,6 +345,7 @@ export class Engine {
     this.#skillManager = skillManager || null;
     this.#mcpManager = mcpManager || null;
     this.#yeaftDir = yeaftDir || null;
+    this.#toolStats = toolStats || null;
 
     // PR-L: tool history reflection log. Keyed by traceId so distinct
     // engine instances don't stomp on each other's jsonl files. When
@@ -516,7 +502,6 @@ export class Engine {
    * @param {{
    *   groupId?: string,
    *   ownVpId?: string|null,
-   *   featureId?: string,
    *   summaries: { user?: string, group?: string, vp?: string },
    *   recallEntries: object[],
    * }} args
@@ -562,7 +547,6 @@ export class Engine {
     const scopes = buildRelevantScopes({
       groupId: args.groupId,
       vpId: ownVpId,
-      featureId: args.featureId,
     });
 
     return { ams, groupKey, ownVpId, scopes, snapshotBlock };
@@ -756,6 +740,11 @@ export class Engine {
       inboundEnvelope: vpCtx?.inboundEnvelope,
       taskId: vpCtx?.taskId,
       taskMembers: vpCtx?.taskMembers,
+      // TodoWrite per-VP cache hooks. Threaded from web-bridge so each
+      // VP keeps its own todo list (see todo-write.js, web-bridge.js).
+      // Null in non-VP / test contexts — tools tolerate missing slots.
+      getCurrentTodos: vpCtx?.getCurrentTodos || null,
+      setCurrentTodos: vpCtx?.setCurrentTodos || null,
       // task-707: tool-callable end-turn signal. The engine threads this
       // setter when constructing toolCtx so a tool (e.g. route_forward)
       // can mark "after this batch, end the turn — do NOT call adapter
@@ -776,13 +765,6 @@ export class Engine {
         parentVpPersona: vpCtx?.vpPersona || null,
         onEvent: this.#subAgentEventSink || null,
         language: this.#config?.language || 'en',
-        // PR-4: lazy accessor so the sub-agent runner can stamp the
-        // parent's active featureId on every forwarded event. Read at
-        // emit-time (NOT at spawn-time) so a feature that opens AFTER
-        // the sub-agent starts still tags later events.
-        getCurrentFeatureId: () => {
-          try { return this.#currentFeatureIdAccessor?.() || null; } catch { return null; }
-        },
       },
     };
   }
@@ -800,36 +782,6 @@ export class Engine {
   }
 
   /**
-   * PR-4 — install / clear the per-turn current-featureId accessor.
-   *
-   * Called by `runVpTurn` in web-bridge.js: right after `arc =
-   * createFeatureArc(...)` it passes `() => arc.getFeatureId() || null`,
-   * and clears it (passes null) in the `finally` so a stale arc
-   * reference can't leak into the next turn. The engine reads it
-   * lazily via `parentEngineDeps.getCurrentFeatureId` so sub-agents
-   * inherit whatever featureId is live at the moment they emit.
-   *
-   * Concurrency note: callers are expected to serialize per-VP turns
-   * (web-bridge does — `runVpTurn` runs one turn at a time per VP and
-   * its `finally` clears the accessor before the next turn lands).
-   * If two installs collide (which today would be a bug, not by
-   * design), we warn so it's visible in logs.
-   *
-   * @param {(() => (string|null)) | null} fn
-   */
-  setCurrentFeatureIdAccessor(fn) {
-    const next = typeof fn === 'function' ? fn : null;
-    if (next && this.#currentFeatureIdAccessor) {
-      // Canary: a prior accessor is still installed when we're about
-      // to overwrite it. Today's lifecycle (per-turn install + finally
-      // clear) means this should never fire; if it does, two turns
-      // are racing on the same engine.
-      console.warn('[Engine] setCurrentFeatureIdAccessor: overwriting non-null accessor — concurrent turns on the same VP engine?');
-    }
-    this.#currentFeatureIdAccessor = next;
-  }
-
-  /**
    * Perform memory recall for a given prompt.
    *
    * Single path (GC.1 follow-up): SQLite FTS5 pre-flow via
@@ -839,7 +791,7 @@ export class Engine {
    * without injection.
    *
    * @param {string} prompt
-   * @param {{ groupId?: string, vpId?: string, featureId?: string }} [ctx]
+   * @param {{ groupId?: string, vpId?: string }} [ctx]
    * @returns {Promise<{ profile: string, entries: object[], formatted: string }|null>}
    */
   async #recallMemory(prompt, ctx = {}) {
@@ -850,7 +802,6 @@ export class Engine {
         userMsg: prompt,
         groupId: ctx.groupId,
         vpId: ctx.vpId,
-        featureId: ctx.featureId,
       });
       memory.profile = result.profile || '';
       memory.entries = result.entries || [];
@@ -1063,7 +1014,7 @@ export class Engine {
    *   string-prompt shape (no regression for existing callers).
    * @yields {EngineEvent}
    */
-  async *query({ prompt, promptParts = null, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement, userAlreadyPersisted = false } = {}) {
+  async *query({ prompt, promptParts = null, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null } = {}) {
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       yield {
         type: 'error',
@@ -1122,7 +1073,7 @@ export class Engine {
     const runSignal = abortCtrl.signal;
 
     try {
-      yield* this.#runQuery({ prompt: effectivePrompt, promptParts, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement, userAlreadyPersisted });
+      yield* this.#runQuery({ prompt: effectivePrompt, promptParts, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement, userAlreadyPersisted, getCurrentTodos, setCurrentTodos });
     } finally {
       if (signal) {
         try { signal.removeEventListener('abort', onExternalAbort); } catch { /* ignore */ }
@@ -1140,7 +1091,7 @@ export class Engine {
    * in a try/finally without indenting the whole loop.
    * @private
    */
-  async *#runQuery({ prompt, promptParts = null, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement, userAlreadyPersisted = false }) {
+  async *#runQuery({ prompt, promptParts = null, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null }) {
 
     // ─── Pre-query: FTS5 Memory Recall + AMS snapshot ─────
     // Memory has a SINGLE render outlet now (DESIGN-PROMPT §3 ③):
@@ -1159,9 +1110,6 @@ export class Engine {
       vpId: vpPersona && typeof vpPersona === 'object' && typeof vpPersona.vpId === 'string'
         ? vpPersona.vpId
         : (typeof senderVpId === 'string' ? senderVpId : undefined),
-      featureId: typeof inboundEnvelope === 'object' && inboundEnvelope
-        ? inboundEnvelope.featureId
-        : undefined,
     });
     recallEntryCount = recallResult && Array.isArray(recallResult.entries)
       ? recallResult.entries.length
@@ -1191,13 +1139,9 @@ export class Engine {
       && typeof vpPersona.vpId === 'string'
       ? vpPersona.vpId
       : (typeof senderVpId === 'string' ? senderVpId : null);
-    const featureIdForAms = typeof inboundEnvelope === 'object' && inboundEnvelope
-      ? inboundEnvelope.featureId
-      : undefined;
     const amsContext = this.#prepareAms({
       groupId,
       ownVpId: ownVpIdForAms,
-      featureId: featureIdForAms,
       summaries,
       recallEntries: recallResult ? (recallResult.entries || []) : [],
     });
@@ -1206,17 +1150,10 @@ export class Engine {
     }
 
     // ─── Active Scope (DESIGN-PROMPT §3 ④) ──────────────────────
-    // Structured per-turn scope summary: feature + group + vp + envelope
-    // routing info. Long-form scope content lives in AMS — this block
-    // carries only IDs + tiny labels. featureId is allowed to be null
-    // (T4 Scope Tagging is a placeholder; not every turn lives in a
-    // feature — DESIGN-PROMPT §5.1).
+    // Structured per-turn scope summary: group + vp + envelope routing
+    // info. Long-form scope content lives in AMS — this block carries
+    // only IDs + tiny labels. (Feature scope retired 2026-05-13.)
     const activeScope = {
-      featureId: featureIdForAms || null,
-      featureTitle: typeof inboundEnvelope === 'object' && inboundEnvelope
-        && typeof inboundEnvelope.featureTitle === 'string'
-        ? inboundEnvelope.featureTitle
-        : '',
       groupId: groupId || '',
       vpId: ownVpIdForAms || '',
       envelope: inboundEnvelope || null,
@@ -1228,12 +1165,6 @@ export class Engine {
       vpPersona,
       activeScope,
       groupAnnouncement,
-      // taskCtx is not currently wired by the query loop. The legacy
-      // task-context sub-block (renderTaskCtx, task-334e/334n contract) is
-      // retained behind a feature flag for callers that still build it
-      // upstream — it'll be folded into Active Scope or retired in a
-      // dedicated PR alongside the task-334n cleanup.
-      taskCtx: undefined,
     });
 
     // ─── Compact summary as messages-array head (DESIGN-PROMPT §4.3) ─
@@ -1901,6 +1832,8 @@ export class Engine {
         taskMembers,
         vpPersona,
         contextWindow: currentContextWindow,
+        getCurrentTodos,
+        setCurrentTodos,
         requestEndTurn: (reason) => {
           // First call wins — preserve the kind/reason of the first tool
           // that asked to end the turn. Late callers (a second
@@ -2011,6 +1944,20 @@ export class Engine {
           durationMs: toolDurationMs,
           isError,
         };
+
+        // 2026-05-13: feed the per-tool counters. Stays best-effort — a
+        // stats sink that throws shouldn't crash the engine. `record`
+        // already swallows internal write errors.
+        if (this.#toolStats && typeof this.#toolStats.record === 'function') {
+          try {
+            this.#toolStats.record({
+              name: tc.name,
+              durationMs: toolDurationMs,
+              isError,
+              errorMessage: isError && typeof output === 'string' ? output.slice(0, 500) : null,
+            });
+          } catch { /* swallow */ }
+        }
 
         // Log tool to debug trace
         this.#trace.logTool(turnId, {

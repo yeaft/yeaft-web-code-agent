@@ -77,7 +77,11 @@ export function buildRunDreamOpts(session, onProgress) {
 
 /**
  * Translate a group-store message record (id, from, role, text, ...) into
- * the shape runDream expects (id, role, body, vpId, author, featureId).
+ * the shape runDream expects (id, role, body, vpId, author).
+ *
+ * (2026-05-13: legacy `m.meta.featureId` propagation was dropped along
+ * with the Feature system. Historical messages on disk may still carry
+ * it, but it no longer influences dream scoping.)
  *
  * @param {Object} m
  */
@@ -90,9 +94,6 @@ function translateGroupMessage(m) {
   };
   if (role === 'assistant' && m.from && m.from !== 'user') {
     out.vpId = m.from;
-  }
-  if (m.meta && typeof m.meta === 'object' && m.meta.featureId) {
-    out.featureId = m.meta.featureId;
   }
   return out;
 }

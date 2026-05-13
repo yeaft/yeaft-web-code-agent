@@ -181,25 +181,10 @@ export function startSubAgent(agent, deps = {}) {
  */
 async function driveSubAgent(agent, subEngine, vpPersona, deps) {
   const onEvent = typeof deps.onEvent === 'function' ? deps.onEvent : null;
-  // PR-4: lazy parent-feature lookup. The parent's web-bridge installs
-  // an accessor on its engine right after creating the per-turn arc;
-  // that accessor flows here as `deps.getCurrentFeatureId`. We read it
-  // at every emit (NOT once at spawn-time) so a feature that opens AFTER
-  // the sub-agent starts still tags later events. Returns null when the
-  // parent is not in a feature run, in which case we leave `featureId`
-  // unset on the forwarded event (NOT explicitly null) so the frontend
-  // sub-agent card renders in its anchor-based fallback position.
-  const getParentFeatureId = (typeof deps.getCurrentFeatureId === 'function')
-    ? deps.getCurrentFeatureId
-    : null;
-  const wrapEvt = (evt) => {
-    const base = { ...evt, agentId: agent.id, agentName: agent.name };
-    if (!getParentFeatureId) return base;
-    let fid = null;
-    try { fid = getParentFeatureId(); } catch { fid = null; }
-    if (fid && !base.featureId) base.featureId = fid;
-    return base;
-  };
+  // Sub-agent events are forwarded with agentId/agentName stamped on top of
+  // the raw engine event. (PR-4 parent-feature inheritance was removed
+  // 2026-05-13 along with the rest of the Feature system.)
+  const wrapEvt = (evt) => ({ ...evt, agentId: agent.id, agentName: agent.name });
 
   // Helper: append a user message and either start or resume.
   const dequeueNextUserPrompt = () => {

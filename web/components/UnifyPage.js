@@ -7,9 +7,8 @@ import GroupInviteModal from './GroupInviteModal.js';
 import GroupSettingsModal from './GroupSettingsModal.js';
 import WorkbenchPanel from './WorkbenchPanel.js';
 import UnifyDebugPanel from './UnifyDebugPanel.js';
-import VpTimelinePane from './VpTimelinePane.js';
+import UnifyToolStatsDrawer from './UnifyToolStatsDrawer.js';
 import { parseMentions } from '../utils/parseMentions.js';
-import { buildTimelineRows, selectGroupRosterVpList } from '../stores/helpers/vp-timeline.js';
 import {
   DREAM_JUST_FINISHED_MS,
   DREAM_REDDOT_THRESHOLD_MS,
@@ -18,7 +17,7 @@ import {
 
 export default {
   name: 'UnifyPage',
-  components: { ChatInput, MessageList, UnifySettings, UnifySidebar, VpDetailView, GroupInviteModal, GroupSettingsModal, WorkbenchPanel, UnifyDebugPanel, VpTimelinePane },
+  components: { ChatInput, MessageList, UnifySettings, UnifySidebar, VpDetailView, GroupInviteModal, GroupSettingsModal, WorkbenchPanel, UnifyDebugPanel, UnifyToolStatsDrawer },
   template: `
     <div class="unify-page">
       <!-- Mobile sidebar overlay -->
@@ -50,16 +49,7 @@ export default {
              1024 px (CSS @media + Vue gate). The pane sits at the LEFT
              edge of unify-main so visual order is [VP list][conversation],
              matching Crew's members-left layout. -->
-        <VpTimelinePane
-          v-if="showVpTimeline"
-          :rows="vpTimelineRows"
-          :now-ms="nowMs"
-          :style="timelineWidthStyle"
-          @mention-vp="onMentionVpFromTimeline"
-          @open-vp-detail="onOpenVpDetailFromTimeline"
-          @start-resize="startTimelineResize"
-          @cancel-vp-turn="onCancelVpFromTimeline"
-        />
+        <!-- (2026-05-13) VpTimelinePane removed along with the Feature system. -->
 
         <!-- Center column: topbar + (settings | VpDetailView | empty-hero |
              MessageList) + ChatInput. Wrapped in unify-main-center so
@@ -203,17 +193,7 @@ export default {
                 aria-hidden="true"
               ></span>
             </button>
-            <button
-              v-if="!isNarrowDetail"
-              class="unify-topbar-vp-toggle"
-              :class="{ active: vpTimelineVisible }"
-              @click="toggleVpTimeline"
-              :title="vpTimelineVisible ? $t('unify.vpTimeline.hide') : $t('unify.vpTimeline.show')"
-              :aria-label="vpTimelineVisible ? $t('unify.vpTimeline.hide') : $t('unify.vpTimeline.show')"
-              :aria-expanded="vpTimelineVisible ? 'true' : 'false'"
-            >
-              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
-            </button>
+            <!-- (2026-05-13) VP timeline toggle button removed along with VpTimelinePane. -->
             <!-- task-unify-group-ui-cleanup: legacy ".unify-detail-toggle"
                  (tasks/feature placeholder slide-in) removed — Unify only
                  supports the debug panel today, and the placeholder
@@ -300,8 +280,22 @@ export default {
         >
           <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
         </button>
+        <!-- 2026-05-13: open the Tool Usage Stats drawer. Lives here so
+             it's reachable only from the debug surface (matches the
+             "developer panel" framing). -->
+        <button
+          class="tool-stats-open-button"
+          @click="toolStatsOpen = true"
+          :title="$t('unify.toolStats.buttonLabel')"
+        >
+          📊 {{ $t('unify.toolStats.buttonLabel') }}
+        </button>
         <UnifyDebugPanel />
       </aside>
+
+      <!-- 2026-05-13: Tool Usage Stats drawer (modal). Controlled by
+           the chip inside the debug panel header. -->
+      <UnifyToolStatsDrawer v-model="toolStatsOpen" />
 
       <!-- task-343: VP library is now an in-Settings tab (initial-tab='vp'). -->
 
@@ -344,6 +338,10 @@ export default {
     const modelDropdownOpen = Vue.ref(false);
     const showSettings = Vue.ref(false);
     const settingsInitialTab = Vue.ref('llm'); // task-343: 'llm' | 'vp'
+    // 2026-05-13: tool-stats drawer open state. Toggled by the chip in
+    // the debug detail header, populated lazily on first open by the
+    // drawer's own watcher.
+    const toolStatsOpen = Vue.ref(false);
 
     // feat-vp-list-ui-polish: template ref to the embedded ChatInput so we
     // can call its imperative `appendMention(vpId)` when the VP list pane
@@ -423,88 +421,10 @@ export default {
       document.addEventListener('mouseup', onMouseUp);
     };
 
-    // ── PR-3: VP Timeline pane resize-drag (mirrors detail pattern) ─────
-    // Independent localStorage key + clamp so the two side panes can be
-    // sized separately. After the layout realignment the VP list pane
-    // sits at the LEFT edge of unify-main, so its resize handle is on
-    // the pane's RIGHT edge — drag-right widens the pane (delta =
-    // ev.clientX - startX). The detail pane's drag-handle on its own
-    // left edge keeps its own handedness; the two are independent.
-    const isResizingTimeline = Vue.ref(false);
-
-    // User-controlled show/hide for the VP list pane. Independent of
-    // `showVpTimeline` (which is the visibility decision). Defaults to
-    // true so first-time users see the pane; subsequent sessions
-    // restore whatever the user last chose. localStorage is wrapped in
-    // try/catch because in private-browsing mode setItem can throw.
-    //
-    // Why we persist *visibility* here but not for the right-side
-    // detail panel: the VP list is a stable layout preference (some
-    // users want a compact 2-column view, some want 3 columns), while
-    // the detail panel is a transient debug surface mounted on demand
-    // (`v-if="debugMode"`) and re-toggling it across sessions would be
-    // surprising. Pane *width* is persisted in both cases
-    // (`unify-vp-timeline-width`, `unify-debug-width`); only visibility
-    // diverges.
-    const VP_TIMELINE_VISIBLE_KEY = 'unify-vp-timeline-visible';
-    const readVpTimelineVisible = () => {
-      try {
-        const v = localStorage.getItem(VP_TIMELINE_VISIBLE_KEY);
-        if (v === '0' || v === 'false') return false;
-        return true;
-      } catch (_) { return true; }
-    };
-    const vpTimelineVisible = Vue.ref(readVpTimelineVisible());
-    const toggleVpTimeline = () => {
-      vpTimelineVisible.value = !vpTimelineVisible.value;
-      try {
-        localStorage.setItem(VP_TIMELINE_VISIBLE_KEY, vpTimelineVisible.value ? '1' : '0');
-      } catch (_) {}
-    };
-    const TIMELINE_MIN_WIDTH = 220;
-    const TIMELINE_DEFAULT_WIDTH = 280;
-    const savedTimelineWidth = (() => {
-      try { return localStorage.getItem('unify-vp-timeline-width'); } catch (_) { return null; }
-    })();
-    const timelineWidth = Vue.ref(
-      savedTimelineWidth ? parseInt(savedTimelineWidth, 10) : TIMELINE_DEFAULT_WIDTH
-    );
-    const timelineWidthStyle = Vue.computed(() => ({
-      '--unify-vp-timeline-width': timelineWidth.value + 'px',
-    }));
-
-    const startTimelineResize = (e) => {
-      isResizingTimeline.value = true;
-      const startX = e.clientX;
-      const startWidth = timelineWidth.value;
-      // Cap at 40% of viewport — the VP list is supplementary; never
-      // let it crowd the conversation pane.
-      const maxWidth = Math.max(TIMELINE_MIN_WIDTH, Math.floor(window.innerWidth * 0.4));
-
-      const onMouseMove = (ev) => {
-        const delta = ev.clientX - startX; // drag right = wider (handle on right edge)
-        const newWidth = Math.min(maxWidth, Math.max(TIMELINE_MIN_WIDTH, startWidth + delta));
-        timelineWidth.value = newWidth;
-      };
-
-      const onMouseUp = () => {
-        isResizingTimeline.value = false;
-        document.removeEventListener('mousemove', onMouseMove);
-        document.removeEventListener('mouseup', onMouseUp);
-        try { localStorage.setItem('unify-vp-timeline-width', String(timelineWidth.value)); } catch (_) {}
-      };
-
-      document.addEventListener('mousemove', onMouseMove);
-      document.addEventListener('mouseup', onMouseUp);
-    };
-
-    // PR-3: 1 s tick that drives the in-feature elapsed timer inside
-    // VpTimelinePane. The tick is deliberately NOT consumed by the
-    // `vpTimelineRows` computed below — only by the elapsed-string
-    // helpers inside the component — so the row list isn't recomputed
-    // every second.
-    const nowMs = Vue.ref(Date.now());
-    let nowTickHandle = null;
+    // ── (2026-05-13) VP Timeline pane removed along with Feature system.
+    // Previously this block managed isResizingTimeline, vpTimelineVisible,
+    // toggleVpTimeline, timelineWidth(Style), startTimelineResize, and
+    // nowMs/nowTickHandle. All gone with VpTimelinePane.js.
 
     // Detect mobile for overlay behavior.
     //   isMobile        — sidebar overlay (<=768)
@@ -535,19 +455,11 @@ export default {
       window.addEventListener('resize', onResize);
       document.addEventListener('click', closeModelDropdownOutside);
       document.addEventListener('keydown', onKeyDown);
-      // PR-3: tick the elapsed timer once per second, but only when the
-      // timeline pane is actually visible. Review fix (Fowler F3 /
-      // Torvalds I3): the unconditional setInterval kept ticking when
-      // the pane was hidden by the settings overlay or by the ≤1024 px
-      // viewport breakpoint. The watcher below starts/stops the
-      // interval as `showVpTimeline` flips, so a hidden pane costs
-      // nothing.
     });
     Vue.onUnmounted(() => {
       window.removeEventListener('resize', onResize);
       document.removeEventListener('click', closeModelDropdownOutside);
       document.removeEventListener('keydown', onKeyDown);
-      if (nowTickHandle) { clearInterval(nowTickHandle); nowTickHandle = null; }
     });
 
     // Watch for conversationId changes (session_ready migrates local -> agent ID)
@@ -933,138 +845,10 @@ export default {
     // hasn't hidden the pane via the topbar toggle. Per the user's
     // decision, the pane STAYS visible when unifyActiveVpDetailId is
     // set so the user can hop between VPs without losing context.
-    const showVpTimeline = Vue.computed(
-      () => !showSettings.value && !isNarrowDetail.value && vpTimelineVisible.value
-    );
-
-    // PR-3 review fix (Fowler F3 / Torvalds I3): only run the 1 s tick
-    // while the pane is visible. `{ immediate: true }` arms the tick on
-    // first render if the pane starts visible. When the pane hides
-    // (settings overlay open or viewport ≤1024 px), the interval clears
-    // immediately so a hidden Unify page consumes zero clock work.
-    Vue.watch(
-      showVpTimeline,
-      (visible) => {
-        if (visible) {
-          if (!nowTickHandle) {
-            nowMs.value = Date.now();
-            nowTickHandle = setInterval(() => { nowMs.value = Date.now(); }, 1000);
-          }
-        } else if (nowTickHandle) {
-          clearInterval(nowTickHandle);
-          nowTickHandle = null;
-        }
-      },
-      { immediate: true },
-    );
-
-    // Resolve the messages slice that mirrors what the conversation pane
-    // shows: when a group filter is active, only that group's messages.
-    // The timeline derives its VP set + per-VP snippet + streaming flag
-    // from this slice, so a filtered view shows only that group's VPs.
-    const vpTimelineRows = Vue.computed(() => {
-      const convId = store.unifyConversationId;
-      if (!convId) return [];
-      const raw = store.messagesMap[convId] || [];
-
-      // Active group resolution: an explicit conversation-pane filter
-      // wins; otherwise fall back to the groups store's selected group.
-      // The VP timeline is ALWAYS roster-scoped — no group means no
-      // rows. This matches the user's mental model: the middle column
-      // is "this group's roster", not "every VP in the library".
-      const gs = groupsStore();
-      const filter = store.unifyActiveGroupFilter || gs?.activeGroupId || null;
-      if (!filter) return [];
-
-      const group = gs?.groups?.[filter] ?? null;
-      const roster = (group && Array.isArray(group.roster)) ? group.roster : [];
-      if (roster.length === 0) return [];
-      const rosterSet = new Set(roster);
-
-      // Message slice: same group + sender within roster. The roster
-      // gate plugs `buildTimelineRows`'s tail pass, which would
-      // otherwise tail-append rows for VPs that posted in this group
-      // before being removed from the roster (Torvalds I1).
-      const messages = raw.filter(
-        (m) => m && m.groupId === filter && rosterSet.has(m.speakerVpId || m.vpId),
-      );
-
-      // Base list = the group's declared roster, ordered by the roster
-      // array. Hydrate display data from vpStore (which holds
-      // {displayName, ...}); roster ids the library hasn't hydrated yet
-      // are stubbed as { vpId: id } so the timeline still has a row for
-      // every roster member — the label callback falls back to the raw
-      // id until vp_snapshot lands.
-      const vpList = selectGroupRosterVpList(roster, vpStore.vpList || []);
-
-      // Cross-group leak defense: even within a single conversation,
-      // typing signals can carry VPs from other groups. Constrain
-      // everything to the active group's roster.
-      // (Track-A FeatureArc subsystem removed — no more feature meta /
-      // active-feature pointers; pass empty maps so the timeline helper
-      // simply emits idle / typing / streaming statuses.)
-      const allTyping = store.vpsTypingInCurrentConv || [];
-      const typingVpIds = allTyping.filter((id) => rosterSet.has(id));
-
-      return buildTimelineRows({
-        vpList,
-        unifyFeatureMeta: {},
-        activeFeatureByVp: {},
-        typingVpIds,
-        messages,
-        vpLabelOf: (id) => vpStore.vpLabel(id),
-      });
-    });
-
-    const onOpenVpDetailFromTimeline = (vpId) => {
-      if (!vpId) return;
-      // Same path MessageList uses for VP-badge clicks (MessageList.js:1314):
-      // the store handles "leave any conflicting layer" cleanup internally.
-      store.enterVpDetailView(vpId);
-    };
-
-    // feat-vp-list-ui-polish: clicking a VP row now @-mentions that VP in
-    // the chat input (default action), instead of jumping straight to the
-    // detail view. The detail view moved to a hover-revealed info button
-    // on the row. UnifyPage owns the ChatInput template ref and calls its
-    // exposed `appendMention()` method directly — keeping the
-    // Unify-specific `@<vpId>` syntax out of the shared ChatInput's setup
-    // (review fix — Fowler C2, PR #763).
-    const onMentionVpFromTimeline = (vpId) => {
-      if (!vpId) return;
-      const ci = chatInputRef.value;
-      if (ci && typeof ci.appendMention === 'function') {
-        ci.appendMention(vpId);
-      }
-    };
-
-    // PR-4: per-VP abort from the timeline. The pane only knows the vpId
-    // of the row the user clicked. We reverse-look-up the most recently
-    // started turnId for that VP from `activeVpTurns` (the keyed-by-turnId
-    // map populated on `vp_turn_start` and cleared on `unify_turn_aborted`
-    // / `vp_turn_end` — see chat.js:1436-1448). If a VP has multiple
-    // concurrent turns (rare; possible during fan-out), we abort the one
-    // with the most recent `startedAt` — that matches "what is this VP
-    // doing right now." `cancelVpTurn` is a no-op if the controller has
-    // already cleared, so the worst case for a stale turnId is a wasted
-    // round trip.
-    const onCancelVpFromTimeline = (vpId) => {
-      if (!vpId) return;
-      const map = store.activeVpTurns || {};
-      let bestTurnId = null;
-      let bestStartedAt = -Infinity;
-      for (const [turnId, info] of Object.entries(map)) {
-        if (!info || info.vpId !== vpId) continue;
-        if (info.endedAt) continue;
-        const ts = (typeof info.startedAt === 'number') ? info.startedAt : 0;
-        if (ts >= bestStartedAt) {
-          bestStartedAt = ts;
-          bestTurnId = turnId;
-        }
-      }
-      if (!bestTurnId) return;
-      store.cancelVpTurn(bestTurnId);
-    };
+    // (2026-05-13) VP Timeline computeds + handlers removed along with
+    // VpTimelinePane / vp-timeline.js. The pane was the surface for
+    // active-feature labels & elapsed timers; with the Feature system
+    // gone there was no driving signal left.
 
     return {
       store,
@@ -1073,6 +857,7 @@ export default {
       modelDropdownOpen,
       showSettings,
       settingsInitialTab,
+      toolStatsOpen,
       chatInputRef,
       openSettings,
       isMobile,
@@ -1119,19 +904,7 @@ export default {
       topbarGroup,
       topbarGroupName,
       openTopbarGroupSettings,
-      // PR-3: VP Timeline pane bindings.
-      vpTimelineRows,
-      showVpTimeline,
-      vpTimelineVisible,
-      toggleVpTimeline,
-      nowMs,
-      timelineWidthStyle,
-      startTimelineResize,
-      onOpenVpDetailFromTimeline,
-      // feat-vp-list-ui-polish: primary row click → @-mention the VP.
-      onMentionVpFromTimeline,
-      // PR-4: per-VP abort from the timeline pane.
-      onCancelVpFromTimeline,
+      // (2026-05-13) VP Timeline pane bindings removed along with VpTimelinePane.
       // fix/dream-cadence-and-ui-trigger: manual dream trigger bindings.
       dreamRunning,
       dreamJustFinished,

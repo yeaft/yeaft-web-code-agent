@@ -17,12 +17,12 @@ const TOOLS_DIR = join(import.meta.dirname, '..', '..', 'agent', 'unify', 'tools
 // ──────────────────────────────────────────────
 
 describe('index.js tool registration', () => {
-  it('allTools has 39 tools (H2-AMS rip: -5 memory tools)', async () => {
+  it('allTools has 31 tools (Feature system removed, TodoWrite added — 2026-05-13)', async () => {
     const { allTools } = await import(`${TOOLS_DIR}/index.js`);
-    expect(allTools.length).toBe(39);
+    expect(allTools.length).toBe(31);
   });
 
-  it('all 39 tools have valid name, description, parameters, and execute', async () => {
+  it('all 31 tools have valid name, description, parameters, and execute', async () => {
     const { allTools } = await import(`${TOOLS_DIR}/index.js`);
     for (const tool of allTools) {
       expect(tool.name).toBeTruthy();
@@ -100,6 +100,84 @@ describe('AskUser tool', () => {
     const mod = await import(`${TOOLS_DIR}/ask-user.js`);
     const result = JSON.parse(await mod.default.execute({}, {}));
     expect(result.error).toBeTruthy();
+  });
+});
+
+describe('TodoWrite tool', () => {
+  it('accepts a valid todos array and reports counts', async () => {
+    const mod = await import(`${TOOLS_DIR}/todo-write.js`);
+    const result = JSON.parse(await mod.default.execute({
+      todos: [
+        { content: 'Run tests', status: 'in_progress', activeForm: 'Running tests' },
+        { content: 'Update docs', status: 'pending', activeForm: 'Updating docs' },
+        { content: 'Lint code', status: 'completed', activeForm: 'Linting code' },
+      ],
+    }, {}));
+    expect(result.success).toBe(true);
+    expect(result.count).toBe(3);
+    expect(result.pending).toBe(1);
+    expect(result.in_progress).toBe(1);
+    expect(result.completed).toBe(1);
+  });
+
+  it('rejects an empty array', async () => {
+    const mod = await import(`${TOOLS_DIR}/todo-write.js`);
+    const result = JSON.parse(await mod.default.execute({ todos: [] }, {}));
+    expect(result.error).toBeTruthy();
+  });
+
+  it('rejects missing content / activeForm', async () => {
+    const mod = await import(`${TOOLS_DIR}/todo-write.js`);
+    const r1 = JSON.parse(await mod.default.execute({
+      todos: [{ content: '', status: 'pending', activeForm: 'X' }],
+    }, {}));
+    expect(r1.error).toBeTruthy();
+    const r2 = JSON.parse(await mod.default.execute({
+      todos: [{ content: 'X', status: 'pending', activeForm: '' }],
+    }, {}));
+    expect(r2.error).toBeTruthy();
+  });
+
+  it('rejects invalid status', async () => {
+    const mod = await import(`${TOOLS_DIR}/todo-write.js`);
+    const result = JSON.parse(await mod.default.execute({
+      todos: [{ content: 'X', status: 'sorta_done', activeForm: 'X-ing' }],
+    }, {}));
+    expect(result.error).toBeTruthy();
+  });
+
+  it('rejects more than one in_progress', async () => {
+    const mod = await import(`${TOOLS_DIR}/todo-write.js`);
+    const result = JSON.parse(await mod.default.execute({
+      todos: [
+        { content: 'A', status: 'in_progress', activeForm: 'A-ing' },
+        { content: 'B', status: 'in_progress', activeForm: 'B-ing' },
+      ],
+    }, {}));
+    expect(result.error).toBeTruthy();
+  });
+
+  it('per-VP isolation: ctx slots do not leak between VPs', async () => {
+    const mod = await import(`${TOOLS_DIR}/todo-write.js`);
+    let aTodos = null;
+    let bTodos = null;
+    const ctxA = { setCurrentTodos: (t) => { aTodos = t; } };
+    const ctxB = { setCurrentTodos: (t) => { bTodos = t; } };
+    await mod.default.execute({
+      todos: [{ content: 'A-1', status: 'pending', activeForm: 'A-1-ing' }],
+    }, ctxA);
+    await mod.default.execute({
+      todos: [
+        { content: 'B-1', status: 'completed', activeForm: 'B-1-ing' },
+        { content: 'B-2', status: 'in_progress', activeForm: 'B-2-ing' },
+      ],
+    }, ctxB);
+    expect(aTodos).not.toBeNull();
+    expect(bTodos).not.toBeNull();
+    expect(aTodos.length).toBe(1);
+    expect(bTodos.length).toBe(2);
+    expect(aTodos[0].content).toBe('A-1');
+    expect(bTodos[0].content).toBe('B-1');
   });
 });
 
@@ -606,93 +684,9 @@ describe('Agent tools', () => {
 });
 
 // ──────────────────────────────────────────────
-// § P1 Feature tools
+// § P1 Feature tools — REMOVED 2026-05-13 with the Feature system.
 // ──────────────────────────────────────────────
 
-describe('Feature tools', () => {
-  it('FeatureCreate creates a feature', async () => {
-    // Initialize feature store with a temp directory before using feature tools
-    const { initFeatureStore, featureCreate } = await import(`${TOOLS_DIR}/feature-tools.js`);
-    const { mkdirSync } = await import('fs');
-    const { tmpdir } = await import('os');
-    const { join } = await import('path');
-    const tmpDir = join(tmpdir(), `yeaft-test-features-${Date.now()}`);
-    mkdirSync(tmpDir, { recursive: true });
-    initFeatureStore(tmpDir);
-    const result = JSON.parse(await featureCreate.execute(
-      { title: 'Test feature', description: 'A test' },
-      {}
-    ));
-    expect(result.success).toBe(true);
-    expect(result.feature.id).toBeTruthy();
-    expect(result.feature.title).toBe('Test feature');
-    expect(result.feature.status).toBe('pending');
-  });
-
-  it('FeatureUpdate updates feature status', async () => {
-    const { featureCreate, featureUpdate } = await import(`${TOOLS_DIR}/feature-tools.js`);
-    const created = JSON.parse(await featureCreate.execute(
-      { title: 'Update me' },
-      {}
-    ));
-    const result = JSON.parse(await featureUpdate.execute(
-      { feature_id: created.feature.id, status: 'in_progress' },
-      {}
-    ));
-    expect(result.success).toBe(true);
-    expect(result.feature.status).toBe('in_progress');
-  });
-
-  it('FeatureList lists features', async () => {
-    const { featureCreate, featureList } = await import(`${TOOLS_DIR}/feature-tools.js`);
-    await featureCreate.execute({ title: 'List test' }, {});
-
-    const result = JSON.parse(await featureList.execute({}, {}));
-    expect(result.features).toBeTruthy();
-    expect(result.features.length).toBeGreaterThan(0);
-  });
-
-  it('FeatureGet retrieves feature details', async () => {
-    const { featureCreate, featureGet } = await import(`${TOOLS_DIR}/feature-tools.js`);
-    const created = JSON.parse(await featureCreate.execute(
-      { title: 'Get me', description: 'Details test' },
-      {}
-    ));
-    const result = JSON.parse(await featureGet.execute(
-      { feature_id: created.feature.id },
-      {}
-    ));
-    expect(result.title).toBe('Get me');
-    expect(result.description).toBe('Details test');
-  });
-
-  it('FollowupFeature creates linked feature', async () => {
-    const { featureCreate, followupFeature } = await import(`${TOOLS_DIR}/feature-tools.js`);
-    const parent = JSON.parse(await featureCreate.execute(
-      { title: 'Parent' },
-      {}
-    ));
-    const result = JSON.parse(await followupFeature.execute(
-      { parent_feature_id: parent.feature.id, title: 'Child feature' },
-      {}
-    ));
-    expect(result.success).toBe(true);
-    expect(result.feature.parentId).toBe(parent.feature.id);
-  });
-
-  it('UpdatePlan updates the plan', async () => {
-    const { updatePlan } = await import(`${TOOLS_DIR}/feature-tools.js`);
-    const result = JSON.parse(await updatePlan.execute(
-      { action: 'update', content: '# My Plan\n\n1. Step one\n2. Step two' },
-      {}
-    ));
-    expect(result.success).toBe(true);
-  });
-});
-
-// ──────────────────────────────────────────────
-// § P2 Auxiliary tools
-// ──────────────────────────────────────────────
 
 describe('JsRepl tool', () => {
   it('evaluates JavaScript expressions (returns plain text)', async () => {

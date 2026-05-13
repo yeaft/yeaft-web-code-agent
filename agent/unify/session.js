@@ -21,9 +21,9 @@ import { ConversationStore } from './conversation/persist.js';
 import { SkillManager, createSkillManager } from './skills.js';
 import { MCPManager } from './mcp.js';
 import { createFullRegistry } from './tools/index.js';
-import { initFeatureStore } from './tools/feature-tools.js';
 import { Engine } from './engine.js';
 import { Compactor } from './compact/compactor.js';
+import { ToolUsageStats } from './stats/tool-usage.js';
 // H2.f.5: threads/, pipeline/dispatcher and input-queue retired. The
 // session now exposes a single Engine.
 //
@@ -221,8 +221,7 @@ export async function loadSession(options = {}) {
     }
   }
 
-  // ─── 5a. Initialize feature store ──────────────────────
-  initFeatureStore(yeaftDir, { readOnly: config._readOnly || false });
+  // ─── 5a. (removed 2026-05-13) Feature store init — Feature system retired.
 
   // ─── 5b. (H2.f.5) thread store retired. Single conversation. ───
 
@@ -318,6 +317,13 @@ export async function loadSession(options = {}) {
   }
 
   // ─── 9. Create engine (wires everything) ───────────────
+  // Tool-call usage statistics: persisted to <yeaftDir>/stats/tool-usage.json.
+  // Loaded synchronously at boot so the first turn already sees prior counts.
+  // Threaded into the engine so it can `record` each tool_exec event.
+  const toolStats = new ToolUsageStats({
+    path: join(yeaftDir, 'stats', 'tool-usage.json'),
+  });
+  toolStats.loadSync();
   const engine = new Engine({
     adapter,
     trace,
@@ -329,6 +335,7 @@ export async function loadSession(options = {}) {
     skillManager,
     mcpManager,
     yeaftDir,
+    toolStats,
   });
 
   // ─── 9a-pre. Create per-group history Compactor ────────
@@ -435,6 +442,13 @@ export async function loadSession(options = {}) {
     } catch {
       // Best-effort cleanup
     }
+    try {
+      if (toolStats && typeof toolStats.flush === 'function') {
+        await toolStats.flush();
+      }
+    } catch {
+      // Best-effort cleanup
+    }
   }
 
   return {
@@ -451,6 +465,7 @@ export async function loadSession(options = {}) {
     yeaftDir,
     status,
     amsRegistry,
+    toolStats,
     shutdown,
     // task-325c: user-initiated abort API. Delegates to web-bridge which
     // owns the single AbortController. Lazy-imported to avoid a hard cycle

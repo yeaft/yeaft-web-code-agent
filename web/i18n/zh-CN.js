@@ -1209,26 +1209,26 @@ export default {
   'unify.vp.turnBlock.thinking': '思考中…',
   'unify.vp.turnBlock.empty': '（暂无文本）',
 
-  // PR-3 (feature-pill double-track): 右侧 VP 时间线面板。
-  'unify.vpTimeline.aria': 'VP 时间线',
-  'unify.vpTimeline.title': 'VP 列表',
-  'unify.vpTimeline.empty': '本对话还没有 VP。',
-  'unify.vpTimeline.untitledFeature': '（未命名功能）',
-  'unify.vpTimeline.resizeTitle': '拖动调整宽度',
-  'unify.vpTimeline.status.idle': '空闲',
-  'unify.vpTimeline.status.typing': '输入中…',
-  'unify.vpTimeline.status.streaming': '生成中',
-  'unify.vpTimeline.status.inFeature': '执行功能中',
-  'unify.vpTimeline.trigger.quick': '快速',
-  'unify.vpTimeline.trigger.turns': '多轮',
-  'unify.vpTimeline.trigger.tool': '工具',
-  // PR-4：时间线行的"中止"按钮。
-  'unify.vpTimeline.abort': '中止',
-  // feat-vp-list-ui-polish：VP 行右侧的 info 按钮 + 点击行的默认 @-mention 提示。
-  'unify.vpTimeline.info': '查看资料',
-  'unify.vpTimeline.mention': '点击 @ 该 VP',
-  // 顶栏的"显示/隐藏 VP 列表"开关。VP 列表可视化与 detail 面板独立，
-  // 用户偏好持久化在 localStorage（unify-vp-timeline-visible）。
-  'unify.vpTimeline.show': '显示 VP 列表',
-  'unify.vpTimeline.hide': '隐藏 VP 列表',
+  // (2026-05-13) unify.vpTimeline.* 键已随 VpTimelinePane 一同移除。
+
+  // (2026-05-13) 工具使用统计抽屉。
+  'unify.toolStats.title': '工具使用统计',
+  'unify.toolStats.refresh': '刷新',
+  'unify.toolStats.close': '关闭',
+  'unify.toolStats.tabAll': '全部工具',
+  'unify.toolStats.tabUnused': '未使用',
+  'unify.toolStats.loading': '加载中…',
+  'unify.toolStats.notLoaded': '暂无数据 — 点击刷新。',
+  'unify.toolStats.empty': '（暂无工具调用记录）',
+  'unify.toolStats.noneUnused': '（每个已注册工具都至少被调用过一次）',
+  'unify.toolStats.fetchedAt': '获取时间',
+  'unify.toolStats.col.name': '工具',
+  'unify.toolStats.col.calls': '调用',
+  'unify.toolStats.col.errors': '错误',
+  'unify.toolStats.col.errRate': '错误率',
+  'unify.toolStats.col.p50': 'p50',
+  'unify.toolStats.col.p95': 'p95',
+  'unify.toolStats.col.avg': '平均',
+  'unify.toolStats.col.last': '最近',
+  'unify.toolStats.buttonLabel': '工具统计',
 };

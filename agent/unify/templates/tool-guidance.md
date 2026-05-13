@@ -37,6 +37,28 @@
 - Do not retry the same command without changing something
 - If a file doesn't exist, check the path and search for alternatives
 
+## Multi-Step Task Tracking (TodoWrite)
+
+When the task you're about to do has **3+ meaningful steps**, the user
+gave you a **list** of things to do, or you're starting a **non-trivial
+multi-file change** — call `TodoWrite` **first** to lay out the
+checklist. The user sees the items tick off in real time as you work.
+
+How to use it:
+
+- First call: enumerate every step with status `"pending"`, mark
+  exactly one as `"in_progress"`.
+- Each subsequent call: rewrite the **full** list. Mark the
+  just-finished item `"completed"` and promote the next one to
+  `"in_progress"`.
+- At most **one** item may be `"in_progress"` at any time.
+- `content` is the imperative form (e.g. "Run tests"); `activeForm` is
+  the present-continuous form shown during execution (e.g. "Running
+  tests").
+
+Do **not** use TodoWrite for single trivial edits, single command runs,
+or pure conversational/question turns — the checklist becomes noise.
+
 <!-- lang:zh -->
 
 # 工具使用指引
@@ -75,3 +97,22 @@
 - 如果工具返回错误，在重试前仔细阅读错误信息
 - 不要在没有改变任何东西的情况下重试相同的命令
 - 如果文件不存在，检查路径并搜索替代方案
+
+## 多步骤任务追踪（TodoWrite）
+
+当你要做的事 **≥3 个有意义的步骤**、用户给了你一组任务、或者你即将开始
+**复杂的多文件改动**时——**先**调用 `TodoWrite` 列出待办清单。用户会
+实时看到这些条目被勾选。
+
+使用方式：
+
+- 第一次调用：枚举所有步骤，状态全部 `"pending"`，仅把一项标记为
+  `"in_progress"`。
+- 之后每次调用：重写**完整**清单——把刚完成的项改成 `"completed"`，下
+  一项改成 `"in_progress"`。
+- 任何时刻最多只能有 **一个** `"in_progress"`。
+- `content` 是命令式（如 "Run tests"）；`activeForm` 是执行中展示的进行
+  时（如 "Running tests"）。
+
+**不要**为单条琐碎修改、单次命令执行、纯对话/问题使用 TodoWrite——清单
+反而成了噪音。

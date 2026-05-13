@@ -47,10 +47,10 @@ describe('buildRelevantScopes', () => {
   it('always includes user scope', () => {
     expect(buildRelevantScopes({})).toEqual(['user']);
   });
-  it('orders user → group → vp → feature', () => {
+  it('orders user → group → vp (featureId is silently ignored — Feature system removed)', () => {
     expect(
       buildRelevantScopes({ groupId: 'g1', vpId: 'alice', featureId: 'auth' }),
-    ).toEqual(['user', 'group/g1', 'vp/alice', 'feature/auth']);
+    ).toEqual(['user', 'group/g1', 'vp/alice']);
   });
   it('appends extra scopes once', () => {
     expect(

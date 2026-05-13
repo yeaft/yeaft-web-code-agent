@@ -16,14 +16,14 @@ describe('tools/index.js createFullRegistry', () => {
     const { createFullRegistry } = await import('../../agent/unify/tools/index.js');
     const registry = createFullRegistry();
 
-    // Post H2-AMS rip: 5 memory tools removed; rest unchanged.
-    expect(registry.size).toBeGreaterThanOrEqual(36);
+    // Post H2-AMS rip + Feature system removal + TodoWrite addition.
+    expect(registry.size).toBeGreaterThanOrEqual(28);
   });
 
   it('allTools array contains all built-in tools', async () => {
     const { allTools } = await import('../../agent/unify/tools/index.js');
 
-    expect(allTools.length).toBeGreaterThanOrEqual(36);
+    expect(allTools.length).toBeGreaterThanOrEqual(28);
 
     const names = allTools.map(t => t.name);
     expect(names).toContain('mcp_list_tools');
@@ -31,6 +31,7 @@ describe('tools/index.js createFullRegistry', () => {
     expect(names).toContain('Skill');
     expect(names).toContain('EnterWorktree');
     expect(names).toContain('ExitWorktree');
+    expect(names).toContain('TodoWrite');
   });
 
   it('createFullRegistry includes mcp tools', async () => {
