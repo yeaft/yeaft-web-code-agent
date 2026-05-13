@@ -51,6 +51,14 @@ describe('VpAvatar — illustrated portrait branch', () => {
     expect(src).toMatch(/imgFailed\.value\s*=\s*true/);
   });
 
+  it('resets imgFailed on vpId change via Vue.watch (component-reuse safety)', () => {
+    // If this watch is deleted, a "this VP\'s SVG broke once" decision
+    // leaks into the next VP that lands in this component slot when
+    // Vue reuses the DOM node. The test guards against that regression.
+    expect(src).toMatch(/Vue\.watch\(\s*\(\)\s*=>\s*props\.vpId/);
+    expect(src).toMatch(/imgFailed\.value\s*=\s*false/);
+  });
+
   it('avatarUrl points at the absolute /assets/avatars path', () => {
     expect(src).toContain('/assets/avatars/');
   });

@@ -80,9 +80,10 @@ export default {
     const displayName = Vue.computed(() => store.vpLabel(props.vpId));
     const color = Vue.computed(() => store.vpColor(props.vpId));
     // imgFailed flips to true once the <img> emits an error event for
-    // this mount, forcing the letter fallback for the rest of the
-    // component's lifetime. Resets implicitly on prop change because
-    // the avatarUrl computed re-reads the live vpId.
+    // this mount, forcing the letter fallback. It does NOT reset on its
+    // own — the Vue.watch below is load-bearing: when this component
+    // is reused for a different vpId (Vue list-key reuse), the watch
+    // clears the flag so the new VP gets a fresh shot at loading.
     const imgFailed = Vue.ref(false);
     const avatarUrl = Vue.computed(() => {
       if (imgFailed.value) return null;
@@ -93,7 +94,9 @@ export default {
     function onImgError() {
       imgFailed.value = true;
     }
-    // Reset failure state if vpId changes (component reused for another VP).
+    // Load-bearing: see the imgFailed comment above. Without this,
+    // a stale "this VP's SVG broke once" decision would leak into the
+    // next VP that lands in this component slot.
     Vue.watch(() => props.vpId, () => { imgFailed.value = false; });
     const avatarStyle = Vue.computed(() => ({
       width: props.size + 'px',
