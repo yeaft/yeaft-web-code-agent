@@ -30,6 +30,9 @@ import { createHash } from 'crypto';
  * @property {string} id              — VP id (default: dir name)
  * @property {string} name
  * @property {string} role
+ * @property {string} area            — taxonomy bucket (e.g. 'philosophy', 'investing'); '' if absent.
+ *                                       Optional, additive: no consumer is required to dispatch on it.
+ *                                       Sidebar grouping by area is intentionally a future PR.
  * @property {string[]} traits
  * @property {'fast'|'primary'|undefined} modelHint
  * @property {string} persona         — markdown body (persona / system prompt seed)
@@ -136,6 +139,10 @@ export function loadVpFromDir(dir) {
       : [],
     role: String(meta.role || ''),
     roleZh: typeof meta.roleZh === 'string' ? String(meta.roleZh) : '',
+    // Taxonomy bucket for sidebar grouping / filtering. Absent for legacy
+    // role.md files written before this field existed — consumers MUST
+    // treat '' as "uncategorised", never as a default category.
+    area: typeof meta.area === 'string' ? String(meta.area).trim() : '',
     traits: Array.isArray(meta.traits) ? meta.traits.map(String) : [],
     modelHint,
     persona: body,

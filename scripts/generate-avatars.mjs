@@ -36,10 +36,17 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const outDir = join(__dirname, '..', 'web', 'assets', 'avatars');
 mkdirSync(outDir, { recursive: true });
 
-// 12 VP seeds match the roster shipped under ~/.yeaft/virtual-persons/.
+// 32 VP seeds match the roster shipped under ~/.yeaft/virtual-persons/.
 // `vpId` is the lookup key the web client uses; the file name MUST match.
 // `seed` is the DiceBear input — kept identical to vpId for stable output.
+//
+// Three places must stay in lockstep (test/web/vp-avatar-image.test.js
+// guards two of them):
+//   1. agent/unify/vp/seed-defaults.js#DEFAULT_VPS (the 32 source-of-truth VPs)
+//   2. web/components/VpAvatar.js#KNOWN_AVATAR_IDS (frontend gate)
+//   3. test/web/vp-avatar-image.test.js#KNOWN (test gate)
 const ENTRIES = [
+  // Original 12 (engineering / design / science / security / business).
   { id: 'ada' },
   { id: 'alan' },
   { id: 'alice' },
@@ -52,6 +59,28 @@ const ENTRIES = [
   { id: 'norman' },
   { id: 'shannon' },
   { id: 'steve' },
+  // Expansion 20 (philosophy / psychology / strategy / history /
+  // investing / business / writing / science / arts).
+  { id: 'kongzi' },
+  { id: 'socrates' },
+  { id: 'nietzsche' },
+  { id: 'kahneman' },
+  { id: 'jung' },
+  { id: 'sunzi' },
+  { id: 'clausewitz' },
+  { id: 'simaqian' },
+  { id: 'harari' },
+  { id: 'buffett' },
+  { id: 'munger' },
+  { id: 'dalio' },
+  { id: 'bezos' },
+  { id: 'drucker' },
+  { id: 'luxun' },
+  { id: 'sudongpo' },
+  { id: 'borges' },
+  { id: 'einstein' },
+  { id: 'kubrick' },
+  { id: 'miyazaki' },
   // Single human user avatar — the web app is single-user per session,
   // so one stable image covers every "you" surface.
   { id: 'user', seed: 'yeaft-user' },

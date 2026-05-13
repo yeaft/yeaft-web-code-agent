@@ -113,6 +113,9 @@ export function buildRoleMd(p) {
   const aliases = Array.isArray(p.aliases) ? p.aliases.map(a => String(a)).filter(Boolean) : [];
   const role = p.role != null ? String(p.role) : '';
   const roleZh = p.roleZh != null ? String(p.roleZh) : '';
+  // Taxonomy bucket. Optional + additive — written only when present so
+  // legacy VPs serialised without an `area` field stay byte-identical.
+  const area = p.area != null ? String(p.area).trim() : '';
   const traits = Array.isArray(p.traits) ? p.traits.map(t => String(t)).filter(Boolean) : [];
   const modelHint = p.modelHint === 'primary' || p.modelHint === 'fast' ? p.modelHint : null;
   const body = typeof p.persona === 'string' ? p.persona : '';
@@ -121,6 +124,7 @@ export function buildRoleMd(p) {
   if (nameZh) lines.push(`nameZh: ${yamlScalar(nameZh)}`);
   lines.push(`role: ${yamlScalar(role)}`);
   if (roleZh) lines.push(`roleZh: ${yamlScalar(roleZh)}`);
+  if (area) lines.push(`area: ${yamlScalar(area)}`);
   if (modelHint) lines.push(`modelHint: ${modelHint}`);
   if (traits.length > 0) {
     lines.push('traits:');
