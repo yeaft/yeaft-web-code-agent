@@ -37,7 +37,7 @@ import { createHash } from 'crypto';
  * @property {'fast'|'primary'|undefined} modelHint
  * @property {string} persona         — markdown body (persona / system prompt seed)
  * @property {string} personaHash     — sha256(persona).slice(0,8); changes when persona body changes
- * @property {string} planInstruction — optional per-VP planning style (used by `start_plan`
+ * @property {string} planInstruction — optional per-VP planning style (used by `StartPlan`
  *                                       tool); '' means "fall back to the default template".
  *                                       Frontmatter scalar key `planInstruction`.
  * @property {string} dir             — absolute path to VP dir
@@ -166,7 +166,7 @@ export function loadVpFromDir(dir) {
     modelHint,
     persona: body,
     personaHash: personaHashValue,
-    // Optional per-VP planning style for the `start_plan` tool. Stored as a
+    // Optional per-VP planning style for the `StartPlan` tool. Stored as a
     // raw scalar string in role.md frontmatter (`planInstruction: "..."`).
     // Empty / missing → the tool falls back to the default template. Kept
     // verbatim — the tool itself is responsible for any framing.

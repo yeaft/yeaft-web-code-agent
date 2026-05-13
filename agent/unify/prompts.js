@@ -149,7 +149,7 @@ const RAW_TEMPLATES = {
   harnessRouterShape: readTemplate('harness/router-shape.md', { required: false }),
   // Phase 3b — coordinator harness rule for inter-VP forwarding.
   harnessRouterHandoff: readTemplate('harness/router-handoff.md', { required: false }),
-  // task — start_plan tool fallback. The `start_plan` tool reads this when
+  // task — StartPlan tool fallback. The `StartPlan` tool reads this when
   // a VP has no `planInstruction` of its own. Required so a misconfigured
   // install fails fast instead of injecting an empty plan instruction.
   planInstruction: readTemplate('plan-instruction.md'),
@@ -168,7 +168,7 @@ function getTemplate(key, language) {
 }
 
 /**
- * Default planning-instruction text returned by the `start_plan` tool when
+ * Default planning-instruction text returned by the `StartPlan` tool when
  * the active VP has no `planInstruction` override on its role.md frontmatter.
  *
  * Pulled from `templates/plan-instruction.md`. Marked required at load time

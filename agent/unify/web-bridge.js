@@ -1868,7 +1868,7 @@ export function buildVpQueryOpts({ vpId, groupCoordinator, groupId, envelope }) 
         role: vp.role || '',
         roleZh: vp.roleZh || '',
         persona: vp.persona || '',
-        // Optional per-VP planning style for the `start_plan` tool. Empty
+        // Optional per-VP planning style for the `StartPlan` tool. Empty
         // string means "fall back to the default template" — the tool
         // handles the lookup so callers stay ignorant of the default.
         planInstruction: typeof vp.planInstruction === 'string' ? vp.planInstruction : '',

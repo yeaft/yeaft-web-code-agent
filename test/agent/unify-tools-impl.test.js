@@ -17,7 +17,7 @@ const TOOLS_DIR = join(import.meta.dirname, '..', '..', 'agent', 'unify', 'tools
 // ──────────────────────────────────────────────
 
 describe('index.js tool registration', () => {
-  it('allTools has 32 tools (Feature system removed, TodoWrite + start_plan — 2026-05-13)', async () => {
+  it('allTools has 32 tools (Feature system removed, TodoWrite + StartPlan — 2026-05-13)', async () => {
     const { allTools } = await import(`${TOOLS_DIR}/index.js`);
     expect(allTools.length).toBe(32);
   });

@@ -1,9 +1,9 @@
 /**
- * start-plan.js — start_plan tool.
+ * start-plan.js — StartPlan tool.
  *
  * Lightweight planning entry point inspired by Claude Code's plan mode.
  * Unlike Claude Code, we do NOT swap tools or change conversation state —
- * `start_plan` is a regular tool. Its only job is to push a planning
+ * `StartPlan` is a regular tool. Its only job is to push a planning
  * instruction back into the model's tool-result stream so the very next
  * turn produces a structured plan plus a `TodoWrite` call.
  *
@@ -15,8 +15,8 @@
  *          engine; see engine.js #buildToolContext).
  *       2. The default template `templates/plan-instruction.md`
  *          loaded at module init by prompts.js.
- *   - The caller may pass guiding fields (stuck_at, user_problem,
- *     expected_scale, additional_context) to help the model think — these
+ *   - The caller may pass guiding fields (stuckAt, userProblem,
+ *     expectedScale, additionalContext) to help the model think — these
  *     are echoed back in the tool result so the planning turn can read
  *     them without re-asking the user.
  *   - Output is plain text (the instruction + the echo). No side effects,
@@ -33,7 +33,7 @@ import { defineTool } from './types.js';
 import { getDefaultPlanInstruction } from '../prompts.js';
 
 export default defineTool({
-  name: 'start_plan',
+  name: 'StartPlan',
   description: `Enter planning mode for a non-trivial task. Use BEFORE you start working when the request needs multiple steps, has unclear scope, or the user said "make a plan" / "think through this first".
 
 This tool does NOT execute the work. It returns a planning instruction; on the next turn you should:
@@ -49,7 +49,7 @@ WHEN NOT TO USE:
 - Single trivial change, single command run, lookup-style question.
 - Mid-execution — once you're past the first step, use TodoWrite directly.
 
-The tool takes the topic plus optional guiding fields (stuck_at, user_problem, expected_scale, additional_context) that help you think; they're echoed back verbatim, so don't repeat the full user request in \`topic\`.`,
+The tool takes the topic plus optional guiding fields (stuckAt, userProblem, expectedScale, additionalContext) that help you think; they're echoed back verbatim, so don't repeat the full user request in \`topic\`.`,
   parameters: {
     type: 'object',
     properties: {
@@ -57,19 +57,19 @@ The tool takes the topic plus optional guiding fields (stuck_at, user_problem, e
         type: 'string',
         description: 'One-sentence statement of what is being planned (e.g. "Add dark-mode toggle to UnifyPage settings").',
       },
-      user_problem: {
+      userProblem: {
         type: 'string',
         description: 'Optional. The underlying problem the user is trying to solve (often broader than the immediate ask).',
       },
-      stuck_at: {
+      stuckAt: {
         type: 'string',
         description: 'Optional. If you are blocked or unsure, the specific decision or unknown that needs resolving first.',
       },
-      expected_scale: {
+      expectedScale: {
         type: 'string',
         description: 'Optional. Rough scope estimate — number of files touched, lines of code, time horizon, etc.',
       },
-      additional_context: {
+      additionalContext: {
         type: 'string',
         description: 'Optional. Any other facts that shape the plan (constraints, deadlines, related prior work).',
       },
@@ -81,7 +81,9 @@ The tool takes the topic plus optional guiding fields (stuck_at, user_problem, e
   async execute(input, ctx) {
     const topic = typeof input?.topic === 'string' ? input.topic.trim() : '';
     if (!topic) {
-      return JSON.stringify({ error: 'topic is required (one-sentence statement of what is being planned)' });
+      // Plain-text error — same shape as the success path so the LLM
+      // doesn't need a JSON-vs-text branch to read this tool's output.
+      return 'Error: topic is required (one-sentence statement of what is being planned).';
     }
 
     // Resolve the planning instruction: per-VP override first, then default.
@@ -98,7 +100,7 @@ The tool takes the topic plus optional guiding fields (stuck_at, user_problem, e
     // Echo the optional guiding fields back so the planning turn has them
     // without re-reading the user's original message. Skip empty strings.
     const echoed = {};
-    for (const key of ['user_problem', 'stuck_at', 'expected_scale', 'additional_context']) {
+    for (const key of ['userProblem', 'stuckAt', 'expectedScale', 'additionalContext']) {
       const v = typeof input?.[key] === 'string' ? input[key].trim() : '';
       if (v) echoed[key] = v;
     }

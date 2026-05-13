@@ -1,12 +1,15 @@
 /**
- * start-plan.test.js — tests for the `start_plan` tool.
+ * start-plan.test.js — tests for the `StartPlan` tool.
  *
  * Coverage:
  *   - tool shape (name, description, parameters, execute) is valid
- *   - `topic` is required; missing / blank → error
+ *   - `topic` is required; missing / blank → plain-text error
  *   - default template is returned when no VP override is present
  *   - VP `planInstruction` override wins when ctx.vpPersona.planInstruction is set
- *   - guiding fields (stuck_at, user_problem, expected_scale, additional_context)
+ *   - whitespace-only override falls back to default
+ *   - vpPersona present but missing planInstruction key falls back to default
+ *   - language: 'zh' is honored when the template carries lang sections
+ *   - guiding fields (stuckAt, userProblem, expectedScale, additionalContext)
  *     are echoed back; empty / missing ones are skipped
  *   - the result includes a TodoWrite handoff line
  */
@@ -16,11 +19,11 @@ import { join } from 'path';
 
 const ROOT = join(import.meta.dirname, '..', '..', '..');
 
-describe('start_plan tool', () => {
+describe('StartPlan tool', () => {
   it('exposes a valid tool definition', async () => {
     const mod = await import(`${ROOT}/agent/unify/tools/start-plan.js`);
     const tool = mod.default;
-    expect(tool.name).toBe('start_plan');
+    expect(tool.name).toBe('StartPlan');
     expect(typeof tool.description).toBe('string');
     expect(tool.description.length).toBeGreaterThan(50);
     expect(tool.parameters?.type).toBe('object');
@@ -28,19 +31,21 @@ describe('start_plan tool', () => {
     expect(typeof tool.execute).toBe('function');
   });
 
-  it('rejects missing topic', async () => {
+  it('rejects missing topic with plain-text error', async () => {
     const mod = await import(`${ROOT}/agent/unify/tools/start-plan.js`);
     const out = await mod.default.execute({}, {});
-    // Error path returns JSON.
-    const parsed = JSON.parse(out);
-    expect(parsed.error).toMatch(/topic is required/i);
+    // Plain text — same shape as the success path so the LLM doesn't
+    // need a JSON-vs-text branch to read this tool's output.
+    expect(typeof out).toBe('string');
+    expect(out).toMatch(/^Error: topic is required/i);
+    // Sanity: not JSON.
+    expect(() => JSON.parse(out)).toThrow();
   });
 
-  it('rejects blank topic', async () => {
+  it('rejects blank topic with plain-text error', async () => {
     const mod = await import(`${ROOT}/agent/unify/tools/start-plan.js`);
     const out = await mod.default.execute({ topic: '   ' }, {});
-    const parsed = JSON.parse(out);
-    expect(parsed.error).toMatch(/topic is required/i);
+    expect(out).toMatch(/^Error: topic is required/i);
   });
 
   it('returns default template when no VP planInstruction is set', async () => {
@@ -78,22 +83,39 @@ describe('start_plan tool', () => {
     expect(out).toMatch(/planning mode|TodoWrite/);
   });
 
+  it('falls back to default when planInstruction is whitespace-only', async () => {
+    const mod = await import(`${ROOT}/agent/unify/tools/start-plan.js`);
+    const ctx = { vpPersona: { vpId: 'alice', planInstruction: '   \n\t  ' } };
+    const out = await mod.default.execute({ topic: 'fix bug 42' }, ctx);
+    // Default template phrase should appear; the whitespace must NOT
+    // appear inside the plan-instruction block.
+    expect(out).toMatch(/planning mode|TodoWrite/);
+    expect(out).not.toMatch(/<plan-instruction>\s*\n\s*\n\s*<\/plan-instruction>/);
+  });
+
+  it('falls back to default when vpPersona is present but lacks planInstruction', async () => {
+    const mod = await import(`${ROOT}/agent/unify/tools/start-plan.js`);
+    const ctx = { vpPersona: { vpId: 'alice', displayName: 'Alice' } };
+    const out = await mod.default.execute({ topic: 'fix bug 42' }, ctx);
+    expect(out).toMatch(/planning mode|TodoWrite/);
+  });
+
   it('echoes guiding fields back when provided', async () => {
     const mod = await import(`${ROOT}/agent/unify/tools/start-plan.js`);
     const out = await mod.default.execute({
       topic: 'plan migration',
-      user_problem: 'database is overloaded under spike traffic',
-      stuck_at: 'unsure whether sharding or read-replicas is right',
-      expected_scale: '~ 8 tables, ~ 2 weeks',
-      additional_context: 'must keep zero-downtime during cutover',
+      userProblem: 'database is overloaded under spike traffic',
+      stuckAt: 'unsure whether sharding or read-replicas is right',
+      expectedScale: '~ 8 tables, ~ 2 weeks',
+      additionalContext: 'must keep zero-downtime during cutover',
     }, {});
     expect(out).toContain('<guiding-context>');
-    expect(out).toContain('user_problem:');
+    expect(out).toContain('userProblem:');
     expect(out).toContain('database is overloaded under spike traffic');
-    expect(out).toContain('stuck_at:');
+    expect(out).toContain('stuckAt:');
     expect(out).toContain('unsure whether sharding or read-replicas is right');
-    expect(out).toContain('expected_scale:');
-    expect(out).toContain('additional_context:');
+    expect(out).toContain('expectedScale:');
+    expect(out).toContain('additionalContext:');
     expect(out).toContain('zero-downtime during cutover');
   });
 
@@ -107,13 +129,24 @@ describe('start_plan tool', () => {
     const mod = await import(`${ROOT}/agent/unify/tools/start-plan.js`);
     const out = await mod.default.execute({
       topic: 'tidy plan',
-      user_problem: '   ',
-      stuck_at: '',
-      additional_context: 'real context here',
+      userProblem: '   ',
+      stuckAt: '',
+      additionalContext: 'real context here',
     }, {});
-    expect(out).toContain('additional_context: real context here');
-    expect(out).not.toContain('user_problem:');
-    expect(out).not.toContain('stuck_at:');
+    expect(out).toContain('additionalContext: real context here');
+    expect(out).not.toContain('userProblem:');
+    expect(out).not.toContain('stuckAt:');
+  });
+
+  it('honors language: zh on ctx.config when resolving the default template', async () => {
+    const mod = await import(`${ROOT}/agent/unify/tools/start-plan.js`);
+    // Even if the template has no zh-specific section, the resolution must
+    // not crash and must still return a usable instruction. (The shipped
+    // template currently has no lang markers, so zh falls back to the
+    // whole body — verify that fallback is safe.)
+    const out = await mod.default.execute({ topic: 'plan zh' }, { config: { language: 'zh' } });
+    expect(out).toContain('<plan-instruction>');
+    expect(out).toMatch(/TodoWrite/);
   });
 
   it('is declared concurrency-safe and read-only', async () => {
