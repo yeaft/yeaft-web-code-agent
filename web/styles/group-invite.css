@@ -178,7 +178,10 @@
   opacity: 0.55;
 }
 
-.us-group-row.is-empty .us-row-title {
+/* feat-group-row-cleanup: the inline ".us-row-title" suffix that used to
+   render "N 位成员" inside the group row is gone. The empty-state accent
+   now hangs on .us-row-name (the only text node left on the row). */
+.us-group-row.is-empty .us-row-name {
   color: var(--accent, #4f8cff);
   opacity: 0.85;
 }
