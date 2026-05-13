@@ -301,7 +301,7 @@ export function buildSystemPrompt({
   // Phase 8 wire-up: when a VP persona is active, the persona body REPLACES
   // the Yeaft identity block (the LLM is that VP, not Yeaft pretending). When
   // there is no persona, fall back to the legacy Yeaft identity bundle.
-  const personaBlock = renderVpPersona(vpPersona, lang);
+  const personaBlock = renderVpPersona(vpPersona, lang, effectiveLang);
   if (personaBlock) {
     parts.push(personaBlock);
     // Common rules (output format, code editing, search, frontend) still
@@ -396,17 +396,19 @@ export function buildSystemPrompt({
  * @param {object} vpPersona
  * @param {string} vpPersona.displayName
  * @param {string} [vpPersona.role]
+ * @param {string} [vpPersona.roleZh]
  * @param {string} [vpPersona.persona]
+ * @param {string} [vpPersona.personaZh]
  * @param {object} lang
+ * @param {'en'|'zh'} effectiveLang
  * @returns {string}
  */
-function renderVpPersona(vpPersona, lang) {
+function renderVpPersona(vpPersona, lang, effectiveLang = 'en') {
   if (!vpPersona || typeof vpPersona !== 'object') return '';
-  const name = typeof vpPersona.displayName === 'string'
-    ? vpPersona.displayName.trim() : '';
+  const name = selectVpPersonaName(vpPersona, effectiveLang);
   if (!name) return '';
-  const role = typeof vpPersona.role === 'string' ? vpPersona.role.trim() : '';
-  const body = typeof vpPersona.persona === 'string' ? vpPersona.persona.trim() : '';
+  const role = selectVpPersonaRole(vpPersona, effectiveLang);
+  const body = selectVpPersonaBody(vpPersona, effectiveLang);
 
   // Phase 8 wire-up: persona is now the IDENTITY layer (not an overlay).
   // Emit a `# <name> — <role>` H1 so the prompt opens with the VP's name,
@@ -417,6 +419,44 @@ function renderVpPersona(vpPersona, lang) {
   const lines = [heading, '', lang.vpPersonaIntro(name, role)];
   if (body) lines.push('', body);
   return lines.join('\n');
+}
+
+function selectVpPersonaName(vpPersona, effectiveLang) {
+  if (effectiveLang === 'zh') {
+    const zhName = typeof vpPersona.displayNameZh === 'string'
+      ? vpPersona.displayNameZh.trim() : '';
+    if (zhName) return zhName;
+  }
+  return typeof vpPersona.displayName === 'string' ? vpPersona.displayName.trim() : '';
+}
+
+function selectVpPersonaRole(vpPersona, effectiveLang) {
+  if (effectiveLang === 'zh') {
+    const zhRole = typeof vpPersona.roleZh === 'string' ? vpPersona.roleZh.trim() : '';
+    if (zhRole) return zhRole;
+
+    const role = typeof vpPersona.role === 'string' ? vpPersona.role.trim() : '';
+    return hasCjk(role) ? role : '';
+  }
+  return typeof vpPersona.role === 'string' ? vpPersona.role.trim() : '';
+}
+
+function selectVpPersonaBody(vpPersona, effectiveLang) {
+  if (effectiveLang === 'zh') {
+    const zhBody = typeof vpPersona.personaZh === 'string' ? vpPersona.personaZh.trim() : '';
+    if (zhBody) return zhBody;
+
+    const body = typeof vpPersona.persona === 'string' ? vpPersona.persona.trim() : '';
+    // Persisted role.md files may already be authored in Chinese. Keep those.
+    // But seeded/default VPs currently store English-only persona bodies; do
+    // not append them after the Chinese intro.
+    return hasCjk(body) ? body : '';
+  }
+  return typeof vpPersona.persona === 'string' ? vpPersona.persona.trim() : '';
+}
+
+function hasCjk(text) {
+  return /[\u3400-\u9fff\uf900-\ufaff]/u.test(String(text || ''));
 }
 
 const DEFAULT_TASK_MEMORY_TOP = 5;

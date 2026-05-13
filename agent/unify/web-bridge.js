@@ -1850,8 +1850,11 @@ export function buildVpQueryOpts({ vpId, groupCoordinator, groupId, envelope }) 
       out.vpPersona = {
         vpId: resolvedVpId,
         displayName: vp.displayName || resolvedVpId,
+        displayNameZh: vp.displayNameZh || '',
         role: vp.role || '',
+        roleZh: vp.roleZh || '',
         persona: vp.persona || '',
+        personaZh: vp.personaZh || '',
       };
     }
   } catch { /* persona load is best-effort */ }

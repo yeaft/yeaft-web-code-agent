@@ -135,6 +135,7 @@ export function loadVpFromDir(dir) {
       ? meta.aliases.map(String).map(s => s.trim()).filter(Boolean)
       : [],
     role: String(meta.role || ''),
+    roleZh: typeof meta.roleZh === 'string' ? String(meta.roleZh) : '',
     traits: Array.isArray(meta.traits) ? meta.traits.map(String) : [],
     modelHint,
     persona: body,

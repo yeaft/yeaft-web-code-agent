@@ -38,11 +38,11 @@ class CapturingAdapter {
   async call() { return { text: '', usage: { inputTokens: 0, outputTokens: 0 } }; }
 }
 
-function mkEngine(adapter) {
+function mkEngine(adapter, language = 'en') {
   return new Engine({
     adapter,
     trace: new NullTrace(),
-    config: { model: 'test-model', maxOutputTokens: 1024, _readOnly: true, language: 'en' },
+    config: { model: 'test-model', maxOutputTokens: 1024, _readOnly: true, language },
   });
 }
 
@@ -79,6 +79,62 @@ describe('W-a VP persona is the identity, not an overlay', () => {
     // persona is active — that was the entire point of Phase 8.
     expect(sys).not.toContain('Yeaft — AI Companion');
     expect(sys).not.toContain('Yeaft — AI 伙伴');
+  });
+
+  it('uses localized VP fields for Chinese prompts instead of appending English seed persona text', async () => {
+    const adapter = new CapturingAdapter();
+    const engine = mkEngine(adapter, 'zh');
+
+    for await (const _ of engine.query({
+      prompt: 'hi',
+      messages: [],
+      vpPersona: {
+        vpId: 'steve',
+        displayName: 'Steve Jobs',
+        displayNameZh: '史蒂夫·乔布斯',
+        role: 'Product Strategist',
+        roleZh: '产品战略家',
+        persona: 'You are Steve Jobs. You do not merely advise on product — you judge it.\n\nCore capabilities:\n- Reduction by fire.',
+        personaZh: '你是史蒂夫·乔布斯。你不只是给产品提建议——你会审判它。\n\n核心能力：\n- 用火焰做减法。',
+      },
+    })) { /* drain */ }
+
+    expect(adapter.calls.length).toBeGreaterThan(0);
+    const sys = adapter.calls[0].system || '';
+
+    expect(sys).toContain('# 史蒂夫·乔布斯 — 产品战略家');
+    expect(sys).not.toContain('Product Strategist');
+    expect(sys).toContain('你就是 **史蒂夫·乔布斯**');
+    expect(sys).toContain('你是史蒂夫·乔布斯。你不只是给产品提建议');
+    expect(sys).toContain('核心能力');
+    expect(sys).not.toContain('You are Steve Jobs. You do not merely advise on product');
+    expect(sys).not.toContain('Core capabilities:');
+  });
+
+  it('does not append English-only VP persona bodies to Chinese prompt wrappers', async () => {
+    const adapter = new CapturingAdapter();
+    const engine = mkEngine(adapter, 'zh');
+
+    for await (const _ of engine.query({
+      prompt: 'hi',
+      messages: [],
+      vpPersona: {
+        vpId: 'steve',
+        displayName: 'Steve Jobs',
+        displayNameZh: '史蒂夫·乔布斯',
+        role: 'Product Strategist',
+        persona: 'You are Steve Jobs. You do not merely advise on product — you judge it.\n\nCore capabilities:\n- Reduction by fire.',
+      },
+    })) { /* drain */ }
+
+    expect(adapter.calls.length).toBeGreaterThan(0);
+    const sys = adapter.calls[0].system || '';
+
+    expect(sys).toContain('# 史蒂夫·乔布斯');
+    expect(sys).not.toContain('Product Strategist');
+    expect(sys).toContain('你就是 **史蒂夫·乔布斯**');
+    expect(sys).not.toContain('You are Steve Jobs. You do not merely advise on product');
+    expect(sys).not.toContain('Core capabilities:');
   });
 });
 
