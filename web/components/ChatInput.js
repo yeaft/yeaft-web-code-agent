@@ -296,6 +296,33 @@ export default {
       inputText.value = (newId && store.inputDrafts[newId]) || '';
     });
 
+    // feat-vp-list-ui-polish: external mention API. Parents that need to
+    // inject an `@<vpId> ` token into the draft (e.g. UnifyPage when its
+    // VP list pane gets clicked) call this via a template ref. Keeping
+    // the mechanism imperative — and the Unify-specific knowledge
+    // (`@<vpId>` syntax, which view it lives in) out of this generic
+    // component — avoids a reverse dependency where the shared input
+    // would need to know about Unify state. A leading space is added so
+    // the boundary regex in parseMentions accepts the mention; trailing
+    // space gives the user a clean place to keep typing.
+    const appendMention = (vpId) => {
+      if (!vpId || typeof vpId !== 'string') return;
+      const current = inputText.value || '';
+      const needsSpace = current.length > 0 && !/\s$/.test(current);
+      const next = current + (needsSpace ? ' ' : '') + '@' + vpId + ' ';
+      inputText.value = next;
+      Vue.nextTick(() => {
+        const ta = inputRef.value;
+        if (!ta) return;
+        ta.focus();
+        // Caret to end so the user can keep typing after the mention.
+        ta.setSelectionRange(next.length, next.length);
+        // Re-run the autosize hook so the textarea grows if the appended
+        // mention pushed past one line.
+        autoResize();
+      });
+    };
+
     // Slash command 自动补全状态
     const showAutocomplete = Vue.ref(false);
     const selectedIndex = Vue.ref(0);
@@ -770,6 +797,10 @@ export default {
       vpMentionQuery,
       mentionVpCandidates,
       selectVpMention,
+      // feat-vp-list-ui-polish: imperative API for parents (UnifyPage)
+      // to append an `@<vpId> ` token to the draft. Exposed via the
+      // setup return so it shows up on the template ref.
+      appendMention,
     };
   }
 };

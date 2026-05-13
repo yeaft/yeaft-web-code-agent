@@ -1224,6 +1224,10 @@ export default {
   'unify.vpTimeline.trigger.tool': 'tool',
   // PR-4: per-row abort affordance in the timeline pane.
   'unify.vpTimeline.abort': 'Abort',
+  // feat-vp-list-ui-polish: hover-revealed info button + default
+  // row-click action (@-mention the VP into the chat input).
+  'unify.vpTimeline.info': 'View profile',
+  'unify.vpTimeline.mention': 'Click to @-mention this VP',
   // Topbar show/hide-VP-list toggle. The VP list panel is independent
   // of the detail panel; preference persists in localStorage
   // (unify-vp-timeline-visible).

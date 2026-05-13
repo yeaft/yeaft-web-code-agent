@@ -1224,6 +1224,9 @@ export default {
   'unify.vpTimeline.trigger.tool': '工具',
   // PR-4：时间线行的"中止"按钮。
   'unify.vpTimeline.abort': '中止',
+  // feat-vp-list-ui-polish：VP 行右侧的 info 按钮 + 点击行的默认 @-mention 提示。
+  'unify.vpTimeline.info': '查看资料',
+  'unify.vpTimeline.mention': '点击 @ 该 VP',
   // 顶栏的"显示/隐藏 VP 列表"开关。VP 列表可视化与 detail 面板独立，
   // 用户偏好持久化在 localStorage（unify-vp-timeline-visible）。
   'unify.vpTimeline.show': '显示 VP 列表',

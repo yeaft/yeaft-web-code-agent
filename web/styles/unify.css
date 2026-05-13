@@ -2717,41 +2717,47 @@
      pane width. */
   min-width: 0;
 }
+/* feat-vp-list-ui-polish: row collapsed to a single line. The previous
+   three-row stack (name / status / snippet) split the VP across vertical
+   space the sidebar can't afford; the new layout is a flex row with the
+   name + an inline status suffix, mirroring Crew's compact role card.
+   Snippet was removed entirely — the conversation pane is right next
+   door and the duplicated text wasn't earning its row height. */
 .unify-vp-timeline-row {
-  display: grid;
-  grid-template-columns: 24px 1fr;
+  display: flex;
+  align-items: center;
   gap: 8px;
-  padding: 8px;
+  padding: 6px 8px;
   border-radius: 8px;
   cursor: pointer;
   transition: background 0.15s;
-  align-items: start;
 }
 .unify-vp-timeline-row:hover,
 .unify-vp-timeline-row:focus-visible {
   background: var(--sidebar-hover, var(--surface-1, rgba(0, 0, 0, 0.04)));
   outline: none;
 }
-/* ── Layout realign — active-speaker highlight ────────────────────────
-   Mirrors Crew's .crew-role-card.is-streaming. Triggered by the row's
-   `is-status-streaming` and `is-status-typing` classes (PR-3 already
-   emits these — see VpTimelinePane row template). The `in-feature`
-   state is intentionally NOT highlighted: per the user's spec, "speaker"
-   means "currently producing tokens," not "owning an open feature."
-   No border-bottom (project rule); use an inset 2px left bar — same
-   visual trick Crew uses for its role-card highlight. */
-.unify-vp-timeline-row.is-status-streaming,
-.unify-vp-timeline-row.is-status-typing {
-  background: var(--accent-soft, rgba(99, 102, 241, 0.10));
-  box-shadow: inset 2px 0 0 var(--accent, #6366f1);
-}
+/* feat-vp-list-ui-polish: the inset left-bar + tinted background that
+   marked the "currently speaking" row was removed. The breathing name
+   animation (further below) carries the same signal without the heavier
+   visual treatment — same approach Crew's role-card takes. */
 .unify-vp-timeline-row-body {
-  min-width: 0; /* let inner ellipsis work inside the 1fr column */
+  flex: 1;
+  min-width: 0;          /* let inner ellipsis work inside the flex item */
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  overflow: hidden;
 }
 .unify-vp-timeline-row-name {
   font-size: 13px;
   color: var(--text-primary, #1f2937);
   font-weight: 500;
+  /* Name can ellipsis when extremely long; status (flex:1 below) gets the
+     remaining space. Removing the earlier `flex-shrink: 0` + `max-width: 60%`
+     pair — they contradicted each other (the cap forced ellipsis at 60%
+     even when status was empty, while flex-shrink:0 said "don't shrink"). */
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2759,11 +2765,16 @@
 .unify-vp-timeline-row-status {
   font-size: 11px;
   color: var(--text-secondary, #555);
-  margin-top: 2px;
-  display: flex;
+  display: inline-flex;
   gap: 6px;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow: hidden;
+  /* status takes the remaining space and ellipsises before the name does. */
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .unify-vp-timeline-feature-title {
   color: var(--text-primary, #1f2937);
@@ -2781,17 +2792,6 @@
   background: var(--bg-main, var(--surface-1, rgba(0, 0, 0, 0.05)));
   border-radius: 4px;
 }
-.unify-vp-timeline-row-snippet {
-  font-size: 11px;
-  color: var(--text-muted, var(--text-secondary, #888));
-  margin-top: 4px;
-  line-height: 1.35;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
 .unify-vp-timeline-row.is-status-in-feature .unify-vp-timeline-row-name {
   color: var(--accent, #6366f1);
 }
@@ -2804,24 +2804,25 @@
   }
 }
 
-/* ── PR-4: per-VP abort affordance (timeline row) ────────────────────
-   Small filled-square button mirroring the ChatInput stop icon's
-   `<rect rx="2"/>` shape, scaled to 10×10. Spacing-only — no horizontal
-   dividers (CLAUDE.md "Unify UI Design Rules"). Uses <span role="button">
-   rather than <button> because its container (the timeline row) is
-   role="button" and nesting native buttons is an a11y violation.
-   (FeaturePill abort variant removed alongside the FeaturePill component
-   in the VP-block redesign.) */
+/* ── PR-4 / feat-vp-list-ui-polish: per-VP right-side action cluster ──
+   Two small icon buttons (abort + info) sit at the right edge of the
+   row. The abort button mirrors the ChatInput stop icon's `<rect rx=2/>`
+   shape (10×10 inside a 22×22 hit target); the info button is a 12×12
+   circle-i icon. Both use <span role="button"> rather than <button>
+   because the parent row is already role="button" and nesting native
+   buttons is an a11y violation. Spacing-only — no horizontal dividers
+   (CLAUDE.md "Unify UI Design Rules"). */
 
-/* Extend the timeline row grid to leave room for the abort affordance:
-   avatar (24) | body (1fr) | abort (auto). The body still wraps the same
-   name + status + snippet block; the abort lives outside it so its
-   .stop click handler doesn't fight the row's primary drill-into-detail
-   click handler. */
-.unify-vp-timeline-row {
-  grid-template-columns: 24px 1fr auto;
+/* The row is now a flex container (see .unify-vp-timeline-row above),
+   so the actions cluster simply slots in at the end. */
+.unify-vp-timeline-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
 }
-.unify-vp-timeline-abort {
+.unify-vp-timeline-abort,
+.unify-vp-timeline-info {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2830,52 +2831,57 @@
   border-radius: 4px;
   color: var(--text-muted, var(--text-secondary, #888));
   cursor: pointer;
-  align-self: start;
   /* Hover-revealed (Crew parity). Idle = opacity 0; row-hover or
-     focus-within bumps to 0.7; direct hover bumps to 1 + danger color
-     — see the row-scoped rules below. */
+     focus-within bumps to 0.7; direct hover bumps to 1 + accent / danger
+     color — see the row-scoped rules below. */
   opacity: 0;
   transition: opacity 0.15s, background 0.15s, color 0.15s;
 }
-.unify-vp-timeline-abort:focus-visible {
+/* The abort button has its own visibility gate in the template
+   (v-if="row.status !== 'idle'"), but we still keep it hover-revealed
+   so an idle moment in a streaming row stays visually quiet. */
+.unify-vp-timeline-abort:focus-visible,
+.unify-vp-timeline-info:focus-visible {
   background: var(--accent-soft, rgba(99, 102, 241, 0.12));
   color: var(--accent, #6366f1);
   outline: none;
+  opacity: 1;
 }
 
 /* ── Crew-style row parity ────────────────────────────────────────────
    Mirror the affordances of .crew-role-card:
-     1. Abort button is HOVER-REVEALED (opacity 0 baseline declared in
-        the .unify-vp-timeline-abort block above) — keeps the row
-        visually quiet until the user hovers, matching Crew's subtle
-        action-bar pattern. Focus-visible also reveals it for
-        keyboard users.
+     1. Action buttons (abort + info) are HOVER-REVEALED (opacity 0
+        baseline declared above) — keeps the row visually quiet until
+        the user hovers, matching Crew's subtle action-bar pattern.
+        Focus-visible also reveals them for keyboard users.
      2. While streaming/typing, the VP name breathes (Crew uses the
-        same 3 s nameBreathing keyframe). Reuses the existing keyframe
-        if present; redeclares locally so this stylesheet is
-        self-contained. Honors prefers-reduced-motion.
-     3. Abort button uses the danger color on hover, again mirroring
-        .crew-role-abort-btn.
-   The existing .is-status-streaming/.is-status-typing accent (above)
-   stays as-is — it's the row's "I'm the one talking" treatment, the
-   breathing name is the secondary cue. Both are intentionally only on
-   "currently producing tokens", not on in-feature state.
+        same 3 s nameBreathing keyframe). Honors prefers-reduced-motion.
+     3. Abort button uses the danger color on hover, mirroring
+        .crew-role-abort-btn. Info button uses the accent color.
+   feat-vp-list-ui-polish: the "currently producing tokens" left-bar +
+   tinted background was removed; the breathing name is now the sole
+   active-speaker cue (still only on streaming / typing, NOT in-feature).
 */
 .unify-vp-timeline-row:hover .unify-vp-timeline-abort,
+.unify-vp-timeline-row:hover .unify-vp-timeline-info,
 .unify-vp-timeline-row:focus-within .unify-vp-timeline-abort,
-.unify-vp-timeline-abort:focus-visible {
+.unify-vp-timeline-row:focus-within .unify-vp-timeline-info {
   opacity: 0.7;
 }
 /* Direct-hover treatment. The row-hover descendant rule above has
-   specificity (0,3,0) — to actually reach opacity:1 + danger color
-   when the cursor is on the abort button (which also row-hovers, by
-   inclusion), we compound the row class here so this rule's
-   specificity matches and source-order wins. Without the compound
-   selector the (0,2,0) `.abort:hover` would lose, clamping at 0.7. */
+   specificity (0,3,0) — to actually reach opacity:1 + accent / danger
+   color when the cursor is on the action button (which also row-hovers,
+   by inclusion), we compound the row class here so this rule's
+   specificity matches and source-order wins. */
 .unify-vp-timeline-row .unify-vp-timeline-abort:hover {
   opacity: 1;
   color: var(--error-color, #e74c3c);
   background: rgba(231, 76, 60, 0.15);
+}
+.unify-vp-timeline-row .unify-vp-timeline-info:hover {
+  opacity: 1;
+  color: var(--accent, #6366f1);
+  background: var(--accent-soft, rgba(99, 102, 241, 0.12));
 }
 
 /* Streaming/typing breathing animation on the row name. Crew uses an

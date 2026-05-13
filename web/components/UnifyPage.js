@@ -55,6 +55,7 @@ export default {
           :rows="vpTimelineRows"
           :now-ms="nowMs"
           :style="timelineWidthStyle"
+          @mention-vp="onMentionVpFromTimeline"
           @open-vp-detail="onOpenVpDetailFromTimeline"
           @start-resize="startTimelineResize"
           @cancel-vp-turn="onCancelVpFromTimeline"
@@ -266,6 +267,7 @@ export default {
         <!-- Input Area -->
         <ChatInput
           v-if="!showSettings"
+          ref="chatInputRef"
           :send-fn="sendMessage"
           :cancel-fn="cancelUnify"
           :show-stop="isProcessing"
@@ -342,6 +344,12 @@ export default {
     const modelDropdownOpen = Vue.ref(false);
     const showSettings = Vue.ref(false);
     const settingsInitialTab = Vue.ref('llm'); // task-343: 'llm' | 'vp'
+
+    // feat-vp-list-ui-polish: template ref to the embedded ChatInput so we
+    // can call its imperative `appendMention(vpId)` when the VP list pane
+    // emits a mention request. Keeps the Unify-specific @-syntax out of
+    // ChatInput (review fix — Fowler C2, PR #763).
+    const chatInputRef = Vue.ref(null);
 
     // task-340: Workbench capability gate — matches ChatPage.canUseWorkbench
     // semantics via store.hasCapability. store.workbenchExpanded and
@@ -1015,6 +1023,21 @@ export default {
       store.enterVpDetailView(vpId);
     };
 
+    // feat-vp-list-ui-polish: clicking a VP row now @-mentions that VP in
+    // the chat input (default action), instead of jumping straight to the
+    // detail view. The detail view moved to a hover-revealed info button
+    // on the row. UnifyPage owns the ChatInput template ref and calls its
+    // exposed `appendMention()` method directly — keeping the
+    // Unify-specific `@<vpId>` syntax out of the shared ChatInput's setup
+    // (review fix — Fowler C2, PR #763).
+    const onMentionVpFromTimeline = (vpId) => {
+      if (!vpId) return;
+      const ci = chatInputRef.value;
+      if (ci && typeof ci.appendMention === 'function') {
+        ci.appendMention(vpId);
+      }
+    };
+
     // PR-4: per-VP abort from the timeline. The pane only knows the vpId
     // of the row the user clicked. We reverse-look-up the most recently
     // started turnId for that VP from `activeVpTurns` (the keyed-by-turnId
@@ -1050,6 +1073,7 @@ export default {
       modelDropdownOpen,
       showSettings,
       settingsInitialTab,
+      chatInputRef,
       openSettings,
       isMobile,
       isNarrowDetail,
@@ -1104,6 +1128,8 @@ export default {
       timelineWidthStyle,
       startTimelineResize,
       onOpenVpDetailFromTimeline,
+      // feat-vp-list-ui-polish: primary row click → @-mention the VP.
+      onMentionVpFromTimeline,
       // PR-4: per-VP abort from the timeline pane.
       onCancelVpFromTimeline,
       // fix/dream-cadence-and-ui-trigger: manual dream trigger bindings.
