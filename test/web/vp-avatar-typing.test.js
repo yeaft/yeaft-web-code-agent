@@ -132,18 +132,23 @@ describe('MessageList aggregator — every VP turn keeps its avatar (no collapse
     expect(src).toContain('currentTurn.showSpeakerHeader = !!currentTurn.speakerVpId');
   });
 
-  it('synthesises a placeholder turn for typing VPs with no in-flight turn', () => {
-    // task-708 / PR-720: avatar visible from `vp_typing_start` even
-    // before the first text chunk lands. The placeholder pseudo-turn
-    // carries an empty textContent + speakerVpId; AssistantTurn renders
-    // just the speaker header (with typing badge on the avatar).
+  it('does NOT call appendTypingPlaceholders from the active pipeline (v0.1.757)', () => {
+    // Earlier (PR-720) MessageList synthesised a placeholder pseudo-turn
+    // for any typing VP without an in-flight assistant-turn so the avatar
+    // appeared the moment `vp_typing_start` fired. That placeholder
+    // rendered as a *standalone* card at the bottom of the conversation,
+    // which (a) duplicated the VP block once the first chunk landed and
+    // (b) hung around as an orphan "typing dots" card after a
+    // route_forward sender (Jobs) had finished but no longer had its own
+    // streaming block. v0.1.757 removed the call from MessageList; the
+    // VpTurnBlock's own typing badge (driven by
+    // `isVpTypingInCurrentConv`) now carries the indicator.
     //
-    // The synthesis lives in `web/stores/helpers/typing-placeholders.js`
-    // (PR-720 extracted it out of MessageList) — assert on the helper
-    // module so a future MessageList rename doesn't false-fail this.
-    const helperSrc = read('web/stores/helpers/typing-placeholders.js');
-    expect(helperSrc).toContain("id: 'turn_typing_'");
-    expect(src).toContain('appendTypingPlaceholders');
+    // The pure helper at `web/stores/helpers/typing-placeholders.js` is
+    // kept (its unit tests still pass) so the logic remains available
+    // if we want to revive a placeholder pattern later — but the live
+    // pipeline must not invoke it.
+    expect(src).not.toContain('appendTypingPlaceholders(');
   });
 
   // task-vp-header-pos: the speaker latch must run for ANY message that

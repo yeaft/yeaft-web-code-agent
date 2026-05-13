@@ -6,7 +6,19 @@ import ReflectionCard from './ReflectionCard.js';
 import SubAgentCard from './SubAgentCard.js';
 import GroupAnnouncementBar from './GroupAnnouncementBar.js';
 import UserTurnBlock from './UserTurnBlock.js';
-import { appendTypingPlaceholders } from '../stores/helpers/typing-placeholders.js';
+// task-757: appendTypingPlaceholders removed from the pipeline.
+// The standalone typing card it produced (at the bottom of the
+// conversation) showed "[VP] is typing…" in a separate row that
+// duplicated the VP's avatar block. The pure helper at
+// `web/stores/helpers/typing-placeholders.js` is kept for its unit
+// tests and may be reused later, but the active rendering path no
+// longer invokes it — the VpTurnBlock that materialises from the
+// first streaming chunk carries its own typing badge on the avatar
+// (driven by `isVpTypingInCurrentConv`), so the avatar+state appear
+// in the right place (inside the VP's own block) instead of as a
+// detached card. There is a sub-second gap between `vp_typing_start`
+// and the first chunk where no avatar is shown; user-tested as
+// acceptable in v0.1.757.
 
 export default {
   name: 'MessageList',
@@ -529,11 +541,51 @@ export default {
 
       const finishTurn = () => {
         if (currentTurn) {
-          // Skip empty turns (no text, no tools, no todo, no ask, no images,
-          // no hand-off pills). task-707: include `handoffHints` so a
-          // route_forward-only turn (VP-A's only output is "↪ 已转交给 …")
-          // still gets rendered as a bubble.
-          if (currentTurn.textContent || currentTurn.toolMsgs.length > 0 || currentTurn.todoMsg || currentTurn.askMsg || currentTurn.imageMsgs.length > 0 || (currentTurn.handoffHints && currentTurn.handoffHints.length > 0)) {
+          // Has the VP produced anything the user/group can see?
+          // Tools are NOT user-visible content — they're internal
+          // activity. Hand-off pills alone (Issue #2 in v0.1.757) are
+          // not user-visible content either: they're a meta marker
+          // that this VP routed elsewhere.
+          const hasVisible = !!(
+            currentTurn.textContent
+            || currentTurn.todoMsg
+            || currentTurn.askMsg
+            || currentTurn.imageMsgs.length > 0
+          );
+          const hasTools = currentTurn.toolMsgs.length > 0;
+          const hasHandoff = !!(currentTurn.handoffHints && currentTurn.handoffHints.length > 0);
+
+          // task-757 / Issue #2: hide a turn whose ONLY product is a
+          // route_forward hand-off. If a VP (e.g. Jobs) receives a
+          // task and immediately routes it to another VP (Linus)
+          // without saying anything to the group, showing Jobs's turn
+          // as a bubble — with avatar header + bash tool calls Jobs
+          // ran while deciding to forward — confuses the user ("why
+          // is Jobs displaying tool actions when Linus is the one
+          // working?"). The user explicitly chose: forward-only
+          // senders should NOT appear in the message stream. Persisted
+          // route_forward records still live on disk for audit; only
+          // the visual is suppressed.
+          //
+          // Forward-only is defined as: handoffHints present AND no
+          // user-visible content. Internal tool calls (bash, etc.) the
+          // VP made before deciding to forward are part of the same
+          // "private decision" and are hidden together.
+          const forwardOnly = hasHandoff && !hasVisible;
+
+          // Skip empty turns (nothing at all) AND skip forward-only
+          // turns (collapse into the next VP's bubble).
+          //
+          // Note on the predicate: it could be inlined as
+          //   hasVisible || (hasTools && !hasHandoff)
+          // since `forwardOnly` already cancels the `|| hasHandoff` arm.
+          // The (A || B || C) && !forwardOnly form is intentional — it
+          // reads as "did the turn produce anything; if so, was it
+          // forward-only" which mirrors the two-step intent. The
+          // forward-only test suite pins both this shape AND the
+          // simplified-behaviour cases, so a future refactor to the
+          // inlined form is safe.
+          if ((hasVisible || hasTools || hasHandoff) && !forwardOnly) {
             // task-708: render the speaker header on every VP-attributed
             // turn. The avatar (with its inline typing badge) is THE
             // surface that signals which VP is speaking + whether they
@@ -720,15 +772,29 @@ export default {
 
       finishTurn();
 
-      // VP-block redesign (2026-05-08): the Track-A `unifyActiveFeatureByVp`
-      // map is gone, but `appendTypingPlaceholders` accepts a feature index
-      // for parity with the prior signature; pass an empty object so its
-      // logic short-circuits the feature-aware branch.
-      appendTypingPlaceholders(
-        result,
-        store.vpsTypingInCurrentConv,
-        {},
-      );
+      // task-757: removed the call to the typing-placeholder helper
+      // [appendTypingPlaceholders, kept in web/stores/helpers/ for its
+      // unit tests] which used to be invoked here. That call appended a
+      // standalone typing card at the bottom for any VP
+      // whose typing flag was set but had no in-flight turn. Reasons:
+      //
+      //   1. Visual: the card rendered as a detached row at the end of
+      //      the conversation, not "inside" the VP's eventual block —
+      //      so the avatar+typing dot read as a separate / orphan VP
+      //      rather than as the VP that was about to speak.
+      //   2. Redundant: once the first text_delta lands, a VpTurnBlock
+      //      materialises with the VP's avatar AND a typing badge
+      //      driven by `isVpTypingInCurrentConv` — the same signal the
+      //      placeholder used. Two rows competed for the same surface.
+      //   3. route_forward UX: a forwarded-only sender (Jobs hands off
+      //      to Linus with no text of its own) used to leave a typing
+      //      card hanging after Jobs finished, even though Jobs was
+      //      done and Linus was the one still typing.
+      //
+      // Trade-off: there is a sub-second gap between `vp_typing_start`
+      // and the first chunk where no avatar is shown. User-accepted in
+      // v0.1.757 as the price of keeping the typing indicator inside
+      // the VP's own block.
 
       return result;
     });
