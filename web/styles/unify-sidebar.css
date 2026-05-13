@@ -95,8 +95,13 @@
 .us-row-name {
   font-weight: 500;
   color: var(--text-secondary);
-  flex: 0 0 auto;
-  max-width: 80px;
+  /* feat-group-row-cleanup: with .us-row-title removed, the name is the
+     only growable text on a group row. Take the remaining width and
+     ellipsis when long, instead of the old `flex: 0 0 auto; max-width:
+     80px` which truncated names like "Marketing" at ~80px even though
+     the sidebar had plenty of room. */
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -111,14 +116,10 @@
   opacity: 0.8;
 }
 .us-fork-icon:hover { opacity: 1; }
-.us-row-title {
-  flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-primary);
-  font-size: 15px;
-}
+/* feat-group-row-cleanup: ".us-row-title" was the secondary text slot
+   that used to carry "N 位成员" on group rows. No element references it
+   anymore (the group row now shows only the name + kebab), so the rule
+   has been removed. .us-row-name remains the primary label class. */
 .us-unread {
   flex: 0 0 auto;
   background: var(--accent);
@@ -185,37 +186,18 @@
   opacity: 1;
 }
 
-/* task-unify-group-editor: ⚙ button mirrors the kebab — only visible
-   on hover or when the row is the active group. Sits to the LEFT of
-   the kebab. */
-.us-group-row .us-group-row-settings {
-  flex: 0 0 auto;
-  background: transparent;
-  border: 0;
-  padding: 0 4px;
-  color: var(--text-muted, #86868b);
-  display: inline-flex;
-  align-items: center;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.12s, color 0.12s;
-}
-.us-group-row .us-group-row-settings:hover {
-  color: var(--text-primary, #1d1d1f);
-}
-.us-group-row:hover .us-group-row-settings,
-.us-group-row.selected .us-group-row-settings {
-  opacity: 1;
-}
+/* task-unify-group-editor: the standalone ⚙ button that used to sit
+   to the LEFT of the kebab has been retired (see feat-group-row-cleanup
+   in UnifySidebar.js). All configuration lives inside the kebab menu
+   now, so .us-group-row-settings has no element to style. */
 
 /* task-fix-mobile-group-settings: on touch viewports the hover-reveal
-   pattern hides the per-row ⚙ + ⋯ entirely. Force them always visible
-   so users can still open settings from the sidebar without having to
-   tap the row first to mark it `selected`. Combined `(hover: none)`
-   (touch laptops, phones, tablets) and `max-width: 768px` (small
-   viewports regardless of input) so a single rule covers both axes. */
+   pattern hides the per-row ⋯ entirely. Force it always visible so
+   users can still open the group menu without having to tap the row
+   first to mark it `selected`. Combined `(hover: none)` (touch laptops,
+   phones, tablets) and `max-width: 768px` (small viewports regardless
+   of input) so a single rule covers both axes. */
 @media (hover: none), (max-width: 768px) {
-  .us-group-row .us-group-row-settings,
   .us-group-row .us-group-row-kebab {
     opacity: 1;
   }
