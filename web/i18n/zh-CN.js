@@ -1209,7 +1209,21 @@ export default {
   'unify.vp.turnBlock.thinking': '思考中…',
   'unify.vp.turnBlock.empty': '（暂无文本）',
 
-  // (2026-05-13) unify.vpTimeline.* 键已随 VpTimelinePane 一同移除。
+  // VP 列表面板 —— group conversation 左侧的 roster 列表。v0.1.767
+  // 恢复（PR #767 误将其与 Feature 系统一起删除）。已不再有 feature
+  // 相关标签（status 只剩 idle / typing / streaming）。
+  'unify.vpTimeline.aria': 'VP 列表',
+  'unify.vpTimeline.title': 'VP 列表',
+  'unify.vpTimeline.empty': '本对话还没有 VP。',
+  'unify.vpTimeline.resizeTitle': '拖动调整宽度',
+  'unify.vpTimeline.status.idle': '空闲',
+  'unify.vpTimeline.status.typing': '输入中…',
+  'unify.vpTimeline.status.streaming': '生成中',
+  'unify.vpTimeline.abort': '中止',
+  'unify.vpTimeline.info': '查看资料',
+  'unify.vpTimeline.mention': '点击 @ 该 VP',
+  'unify.vpTimeline.show': '显示 VP 列表',
+  'unify.vpTimeline.hide': '隐藏 VP 列表',
 
   // (2026-05-13) 工具使用统计抽屉。
   'unify.toolStats.title': '工具使用统计',
