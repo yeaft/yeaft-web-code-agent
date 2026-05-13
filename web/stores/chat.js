@@ -358,6 +358,15 @@ export const useChatStore = defineStore('chat', {
     // who must invite the cross-group VP, so the hint nudges them rather
     // than auto-inviting.
     unifyMentionInviteHints: [],
+    // feat-vp-list-ui-polish: reactive request pipe between the VP list
+    // pane and the ChatInput. When the user clicks a VP row, UnifyPage
+    // calls `requestUnifyMention(vpId)` which bumps `seq` and sets
+    // `vpId`. ChatInput watches `seq`, reads `vpId`, and appends
+    // `@<vpId> ` to its local inputText, then clears `vpId`. Using a
+    // {seq, vpId} pair (rather than a plain string) ensures the same
+    // vpId can be requested twice in a row and still fire — every call
+    // bumps `seq` so the watcher always sees a change.
+    unifyMentionRequest: { seq: 0, vpId: null },
   }),
 
   getters: {
@@ -1838,6 +1847,21 @@ export const useChatStore = defineStore('chat', {
     dismissInviteHint(id) {
       if (!id) return;
       this.unifyMentionInviteHints = this.unifyMentionInviteHints.filter(h => h.id !== id);
+    },
+
+    // feat-vp-list-ui-polish: request that ChatInput append `@<vpId> ` to
+    // the current Unify input draft and focus the textarea. The pipe is a
+    // {seq, vpId} pair (declared in state) — bumping `seq` is what
+    // triggers ChatInput's watcher, so two consecutive mentions of the
+    // SAME vpId still fire. Idempotent on empty/missing vpId. The actual
+    // append (vs replace-token) logic lives in ChatInput so we don't
+    // have to mirror its draft state into the store.
+    requestUnifyMention(vpId) {
+      if (!vpId || typeof vpId !== 'string') return;
+      this.unifyMentionRequest = {
+        seq: (this.unifyMentionRequest?.seq || 0) + 1,
+        vpId,
+      };
     },
 
     // =====================

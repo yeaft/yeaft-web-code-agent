@@ -296,6 +296,38 @@ export default {
       inputText.value = (newId && store.inputDrafts[newId]) || '';
     });
 
+    // feat-vp-list-ui-polish: external mention requests (e.g. the VP
+    // list pane in Unify clicked a row). The store exposes a
+    // `unifyMentionRequest` object { seq, vpId } — watching `seq`
+    // ensures back-to-back requests for the same VP still fire. We
+    // append `@<vpId> ` to the current draft (with a leading space when
+    // needed so the boundary regex in parseMentions accepts it), then
+    // focus the textarea. Skipped when we're not actually in Unify
+    // view because the mention syntax is Unify-specific.
+    Vue.watch(() => store.unifyMentionRequest?.seq || 0, (seq) => {
+      if (!seq) return;
+      if (store.currentView !== 'unify') return;
+      const req = store.unifyMentionRequest;
+      const vpId = req && req.vpId;
+      if (!vpId) return;
+      const current = inputText.value || '';
+      const needsSpace = current.length > 0 && !/\s$/.test(current);
+      inputText.value = current + (needsSpace ? ' ' : '') + '@' + vpId + ' ';
+      Vue.nextTick(() => {
+        const ta = inputRef.value;
+        if (ta) {
+          ta.focus();
+          // Move caret to end so the user can keep typing after the mention.
+          const len = inputText.value.length;
+          try { ta.setSelectionRange(len, len); } catch (_) {}
+          // Re-run the autosize hook so the textarea grows if the
+          // appended mention pushed past one line.
+          ta.style.height = 'auto';
+          ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';
+        }
+      });
+    });
+
     // Slash command 自动补全状态
     const showAutocomplete = Vue.ref(false);
     const selectedIndex = Vue.ref(0);

@@ -55,6 +55,7 @@ export default {
           :rows="vpTimelineRows"
           :now-ms="nowMs"
           :style="timelineWidthStyle"
+          @mention-vp="onMentionVpFromTimeline"
           @open-vp-detail="onOpenVpDetailFromTimeline"
           @start-resize="startTimelineResize"
           @cancel-vp-turn="onCancelVpFromTimeline"
@@ -1015,6 +1016,19 @@ export default {
       store.enterVpDetailView(vpId);
     };
 
+    // feat-vp-list-ui-polish: clicking a VP row now @-mentions that VP in
+    // the chat input (default action), instead of jumping straight to the
+    // detail view. The detail view moved to a hover-revealed info button
+    // on the row. The store action handles the input-draft append + a
+    // reactive trigger that ChatInput watches to insert the mention into
+    // its local inputText.
+    const onMentionVpFromTimeline = (vpId) => {
+      if (!vpId) return;
+      if (typeof store.requestUnifyMention === 'function') {
+        store.requestUnifyMention(vpId);
+      }
+    };
+
     // PR-4: per-VP abort from the timeline. The pane only knows the vpId
     // of the row the user clicked. We reverse-look-up the most recently
     // started turnId for that VP from `activeVpTurns` (the keyed-by-turnId
@@ -1104,6 +1118,8 @@ export default {
       timelineWidthStyle,
       startTimelineResize,
       onOpenVpDetailFromTimeline,
+      // feat-vp-list-ui-polish: primary row click → @-mention the VP.
+      onMentionVpFromTimeline,
       // PR-4: per-VP abort from the timeline pane.
       onCancelVpFromTimeline,
       // fix/dream-cadence-and-ui-trigger: manual dream trigger bindings.

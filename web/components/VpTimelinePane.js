@@ -3,20 +3,23 @@
  *
  * Left-of-conversation pane that surfaces, for the active Unify
  * conversation, one row per VP showing avatar + name + live status +
- * (when in-feature) feature title / trigger label / elapsed timer +
- * most-recent assistant snippet. Originally rendered to the right of the
- * conversation; the Unify layout realignment moved it inside
- * `unify-main` to match Crew's members-left shape. The component itself
- * is placement-agnostic — only its parent container + the resize handle
- * direction in CSS reflect the side it's on. Clicking a row drills into
- * that VP's detail view via the existing `open-vp-detail` event
- * (UnifyPage maps it onto `store.enterVpDetailView(vpId)` — same as
- * MessageList does today).
+ * (when in-feature) feature title / trigger label / elapsed timer.
+ * Originally rendered to the right of the conversation; the Unify layout
+ * realignment moved it inside `unify-main` to match Crew's members-left
+ * shape. The component itself is placement-agnostic — only its parent
+ * container + the resize handle direction in CSS reflect the side it's
+ * on.
  *
- * Architecture: presentational only. Props down, emit up. Does NOT
- * import the chat store (mirroring the cleaner pattern Fowler I3 flagged
- * on FeaturePill in the PR-2 review). All data arrives via `rows` and
- * `nowMs`, both computed by UnifyPage.
+ * UI polish (feat-vp-list-ui-polish): the previous three-line row
+ * (name / status / last-message snippet) collapsed to a single line —
+ * status now sits inline after the name. The last-message snippet was
+ * removed entirely (the conversation pane is two columns away; a
+ * duplicated snippet was visual noise, not information). The left-bar
+ * streaming highlight was removed in favour of a name-only breathing
+ * animation, mirroring Crew's role-card affordance. The row's primary
+ * click action is now to @-mention the VP into the chat input; opening
+ * the detail view moved to a hover-revealed "info" affordance on the
+ * right side, sitting next to the existing abort button.
  *
  * Props:
  *   rows  — TimelineRow[] (see web/stores/helpers/vp-timeline.js for shape).
@@ -27,22 +30,21 @@
  *           recomputed on real state change.
  *
  * Emits:
- *   open-vp-detail (vpId)  — single click or Enter / Space on a row.
+ *   mention-vp (vpId)      — primary row click / Enter / Space. UnifyPage
+ *                            forwards to the chat input which appends
+ *                            `@<vpId> ` to the current draft.
+ *   open-vp-detail (vpId)  — hover-revealed info button on the row.
  *   start-resize  (event)  — mousedown on the resize handle; UnifyPage
  *                            owns the drag bookkeeping (matches the
  *                            .unify-detail pattern).
- *   cancel-vp-turn (vpId)  — PR-4: user clicked the row's abort button.
- *                            Parent reverse-looks-up the most recently
- *                            started turnId for that VP via
- *                            `store.activeVpTurns` and calls
- *                            `store.cancelVpTurn(turnId)`.
+ *   cancel-vp-turn (vpId)  — abort button click for an active turn.
  */
 import VpAvatar from './VpAvatar.js';
 
 export default {
   name: 'VpTimelinePane',
   components: { VpAvatar },
-  emits: ['open-vp-detail', 'start-resize', 'cancel-vp-turn'],
+  emits: ['mention-vp', 'open-vp-detail', 'start-resize', 'cancel-vp-turn'],
   props: {
     rows: { type: Array, required: true },
     nowMs: { type: Number, default: 0 },
@@ -72,10 +74,11 @@ export default {
           :class="['is-status-' + row.status]"
           tabindex="0"
           role="button"
-          :aria-label="row.displayName + ' — ' + statusLabel(row)"
-          @click="$emit('open-vp-detail', row.vpId)"
-          @keydown.enter.prevent="$emit('open-vp-detail', row.vpId)"
-          @keydown.space.prevent="$emit('open-vp-detail', row.vpId)"
+          :aria-label="row.displayName + ' — ' + statusLabel(row) + ' — ' + $t('unify.vpTimeline.mention')"
+          :title="$t('unify.vpTimeline.mention')"
+          @click="$emit('mention-vp', row.vpId)"
+          @keydown.enter.prevent="$emit('mention-vp', row.vpId)"
+          @keydown.space.prevent="$emit('mention-vp', row.vpId)"
         >
           <VpAvatar
             :vp-id="row.vpId"
@@ -83,8 +86,8 @@ export default {
             :typing="row.status === 'typing'"
           />
           <div class="unify-vp-timeline-row-body">
-            <div class="unify-vp-timeline-row-name">{{ row.displayName }}</div>
-            <div class="unify-vp-timeline-row-status">
+            <span class="unify-vp-timeline-row-name">{{ row.displayName }}</span>
+            <span class="unify-vp-timeline-row-status">
               <template v-if="row.status === 'in-feature'">
                 <span class="unify-vp-timeline-feature-title">
                   {{ row.featureTitle || $t('unify.vpTimeline.untitledFeature') }}
@@ -97,31 +100,47 @@ export default {
                 </span>
               </template>
               <span v-else>{{ statusLabel(row) }}</span>
-            </div>
-            <div v-if="row.lastSnippet" class="unify-vp-timeline-row-snippet">
-              {{ row.lastSnippet }}
-            </div>
+            </span>
           </div>
           <!--
-            PR-4: per-row abort. Visible whenever the VP is still doing
-            something (in-feature / streaming / typing). Idle rows have
-            nothing to abort. role="button" + .stop modifiers keep the
-            click from bubbling up to the row's drill-into-detail handler.
+            Right-side affordance cluster. Both buttons stop click
+            propagation so they don't fall through to the row's primary
+            mention action. The abort button is only visible while the VP
+            is actually doing something; the info button is hover-revealed
+            (CSS) so the row stays visually quiet at rest.
           -->
-          <span
-            v-if="row.status !== 'idle'"
-            class="unify-vp-timeline-abort"
-            role="button"
-            tabindex="0"
-            :aria-label="$t('unify.vpTimeline.abort')"
-            :title="$t('unify.vpTimeline.abort')"
-            @click.stop="$emit('cancel-vp-turn', row.vpId)"
-            @keydown.enter.stop.prevent="$emit('cancel-vp-turn', row.vpId)"
-            @keydown.space.stop.prevent="$emit('cancel-vp-turn', row.vpId)"
-          >
-            <svg width="10" height="10" viewBox="0 0 24 24" aria-hidden="true">
-              <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>
-            </svg>
+          <span class="unify-vp-timeline-row-actions">
+            <span
+              v-if="row.status !== 'idle'"
+              class="unify-vp-timeline-abort"
+              role="button"
+              tabindex="0"
+              :aria-label="$t('unify.vpTimeline.abort')"
+              :title="$t('unify.vpTimeline.abort')"
+              @click.stop="$emit('cancel-vp-turn', row.vpId)"
+              @keydown.enter.stop.prevent="$emit('cancel-vp-turn', row.vpId)"
+              @keydown.space.stop.prevent="$emit('cancel-vp-turn', row.vpId)"
+            >
+              <svg width="10" height="10" viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>
+              </svg>
+            </span>
+            <span
+              class="unify-vp-timeline-info"
+              role="button"
+              tabindex="0"
+              :aria-label="$t('unify.vpTimeline.info')"
+              :title="$t('unify.vpTimeline.info')"
+              @click.stop="$emit('open-vp-detail', row.vpId)"
+              @keydown.enter.stop.prevent="$emit('open-vp-detail', row.vpId)"
+              @keydown.space.stop.prevent="$emit('open-vp-detail', row.vpId)"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="16" x2="12" y2="12"/>
+                <line x1="12" y1="8" x2="12.01" y2="8"/>
+              </svg>
+            </span>
           </span>
         </li>
       </ul>
