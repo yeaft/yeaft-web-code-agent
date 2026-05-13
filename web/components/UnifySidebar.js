@@ -339,9 +339,6 @@ export default {
       }
       return g.name || g.id || '';
     },
-    groupMemberCount(g) {
-      return Array.isArray(g?.roster) ? g.roster.length : 0;
-    },
     // task-334m prev-2 rev: per-row kebab + rename/delete wiring.
     openGroupMenu(g, evt) {
       if (!g || !g.id) return;
