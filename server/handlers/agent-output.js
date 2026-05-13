@@ -368,6 +368,32 @@ export async function handleAgentOutput(agentId, agent, msg) {
       }
       break;
 
+    case 'unify_dream_status':
+    case 'unify_dream_result':
+      // Forward Dream lifecycle envelopes verbatim to the web client.
+      //
+      // The bug this fixes: agent/unify/web-bridge.js#handleUnifyDreamTrigger
+      // emits these as BARE top-level messages (not wrapped in unify_output)
+      // when the user clicks the "Run dream now" button — in the topbar
+      // (vpId-scoped) or in group settings (groupId-scoped). Without a case
+      // here, the message hit the `default: return false` branch and was
+      // silently dropped before reaching any web client. The UI button stayed
+      // stuck on "Running…" because the result envelope never arrived, even
+      // though the dream pass had actually completed on the agent.
+      //
+      // Pass the envelope through as-is — the frontend handlers
+      // (chat.js#unify_dream_status / unify_dream_result) consume the full
+      // body (groupId|vpId + status, OR groupId|vpId + success +
+      // entriesCreated + lastDreamAt + result/skipped/error). Spread the
+      // whole message except for fields the relay re-stamps for safety
+      // (type is preserved by the spread; we don't override it).
+      for (const [cId, c] of webClients) {
+        if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
+          await sendToWebClient(c, { ...msg });
+        }
+      }
+      break;
+
     default:
       return false; // Not handled
   }
