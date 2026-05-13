@@ -11,44 +11,91 @@
  * schema with `properties.description = '[object Object]'`. GPT-5's
  * strict JSON-Schema validator rejected the resulting payload with
  * `"'[object Object]' is not of type 'object', 'boolean'"`, breaking
- * every tool whose schema has a `description` property (FeatureCreate
- * is the canonical case).
+ * every tool whose schema has a `description` property.
  *
  * The fix: only treat a `description` value as localizable text when it
  * is actually a string. Object/array values under a `description` key
  * are sub-schemas and must be recursed into normally.
  *
- * This test pins the contract: after `getToolDefs('zh')` the FeatureCreate
- * schema must round-trip through a strict-shape check unchanged in
- * structure — keys, types, nested `description` sub-property, and the
- * `enum` array.
+ * Originally written against `featureCreate`, which had exactly this
+ * shape (a `properties.description` sub-schema + an enum + an array
+ * with `items`). The Feature tool family was removed on 2026-05-13
+ * (commit c5cb48cd) — the contract still lives in `registry.js`, so
+ * this test now uses a synthetic ToolDef built specifically to exercise
+ * every branch of `localizeParameters` without depending on any
+ * production tool's schema shape.
  */
 
 import { describe, it, expect } from 'vitest';
 import { ToolRegistry } from '../../../agent/unify/tools/registry.js';
-import { featureCreate } from '../../../agent/unify/tools/feature-tools.js';
+import { defineTool } from '../../../agent/unify/tools/types.js';
 
 function isObjectSchema(node) {
   return node && typeof node === 'object' && !Array.isArray(node);
 }
 
+/**
+ * Build a fresh ToolDef on every call so individual tests can mutate
+ * the returned `defs` without leaking between cases. The shape is
+ * hand-crafted to hit every branch of `localizeParameters`:
+ *
+ *  - `properties.description` is a sub-schema OBJECT whose own
+ *    `description` field is a STRING (the bug case).
+ *  - `properties.priority` carries an `enum` array that must survive
+ *    the walk by value.
+ *  - `properties.members` is an array schema whose `items` is itself
+ *    a sub-schema object (must not be stringified).
+ *  - `required` is an array of strings (array-of-primitives branch).
+ */
+function buildFixtureTool() {
+  return defineTool({
+    name: 'SchemaProbe',
+    description: 'Synthetic tool used to pin the localizeParameters contract.',
+    parameters: {
+      type: 'object',
+      required: ['title'],
+      properties: {
+        title: {
+          type: 'string',
+          description: 'Short human-readable title.',
+        },
+        description: {
+          type: 'string',
+          description: 'Detailed description of the item.',
+        },
+        priority: {
+          type: 'string',
+          enum: ['low', 'medium', 'high', 'critical'],
+          description: 'Priority bucket.',
+        },
+        members: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'List of member ids.',
+        },
+      },
+    },
+    execute: async () => 'ok',
+  });
+}
+
 describe('ToolRegistry.getToolDefs language localization', () => {
   it('preserves nested schema when a property is literally named "description" (zh)', () => {
     const reg = new ToolRegistry();
-    reg.register(featureCreate);
+    reg.register(buildFixtureTool());
 
     const defs = reg.getToolDefs('zh');
-    const fc = defs.find(d => d.name === 'FeatureCreate');
-    expect(fc).toBeDefined();
+    const probe = defs.find(d => d.name === 'SchemaProbe');
+    expect(probe).toBeDefined();
 
     // Top-level shape preserved.
-    expect(fc.parameters.type).toBe('object');
-    expect(Array.isArray(fc.parameters.required)).toBe(true);
-    expect(fc.parameters.required).toContain('title');
+    expect(probe.parameters.type).toBe('object');
+    expect(Array.isArray(probe.parameters.required)).toBe(true);
+    expect(probe.parameters.required).toContain('title');
 
     // The property literally named `description` must remain an object
     // sub-schema, NOT a string. Pre-fix this was `'[object Object]'`.
-    const propDesc = fc.parameters.properties.description;
+    const propDesc = probe.parameters.properties.description;
     expect(isObjectSchema(propDesc)).toBe(true);
     expect(propDesc.type).toBe('string');
     // Its INNER description (the field doc) is a string — and may be
@@ -57,14 +104,14 @@ describe('ToolRegistry.getToolDefs language localization', () => {
     expect(propDesc.description.length).toBeGreaterThan(0);
 
     // priority must still carry its enum array intact.
-    const propPrio = fc.parameters.properties.priority;
+    const propPrio = probe.parameters.properties.priority;
     expect(isObjectSchema(propPrio)).toBe(true);
     expect(propPrio.type).toBe('string');
     expect(propPrio.enum).toEqual(['low', 'medium', 'high', 'critical']);
 
     // members.items must still be the inner type schema, not a
     // recursively-stringified shape.
-    const propMembers = fc.parameters.properties.members;
+    const propMembers = probe.parameters.properties.members;
     expect(isObjectSchema(propMembers)).toBe(true);
     expect(propMembers.type).toBe('array');
     expect(isObjectSchema(propMembers.items)).toBe(true);
@@ -73,39 +120,39 @@ describe('ToolRegistry.getToolDefs language localization', () => {
 
   it('does NOT corrupt schemas in en locale either (no-op identity path)', () => {
     const reg = new ToolRegistry();
-    reg.register(featureCreate);
+    reg.register(buildFixtureTool());
 
     const defs = reg.getToolDefs('en');
-    const fc = defs.find(d => d.name === 'FeatureCreate');
+    const probe = defs.find(d => d.name === 'SchemaProbe');
 
-    const propDesc = fc.parameters.properties.description;
+    const propDesc = probe.parameters.properties.description;
     expect(isObjectSchema(propDesc)).toBe(true);
     expect(propDesc.type).toBe('string');
 
-    const propPrio = fc.parameters.properties.priority;
+    const propPrio = probe.parameters.properties.priority;
     expect(propPrio.enum).toEqual(['low', 'medium', 'high', 'critical']);
   });
 
   it('localizes the tool-level description (text-typed only), leaves params intact', () => {
     const reg = new ToolRegistry();
-    reg.register(featureCreate);
+    reg.register(buildFixtureTool());
 
     const defsZh = reg.getToolDefs('zh');
-    const fcZh = defsZh.find(d => d.name === 'FeatureCreate');
-    expect(typeof fcZh.description).toBe('string');
+    const probeZh = defsZh.find(d => d.name === 'SchemaProbe');
+    expect(typeof probeZh.description).toBe('string');
     // zh localization prepends a Chinese prefix — assert the marker is
     // present so we know zh-path actually ran.
-    expect(fcZh.description).toMatch(/工具说明/);
+    expect(probeZh.description).toMatch(/工具说明/);
 
     const defsEn = reg.getToolDefs('en');
-    const fcEn = defsEn.find(d => d.name === 'FeatureCreate');
+    const probeEn = defsEn.find(d => d.name === 'SchemaProbe');
     // en path is identity.
-    expect(fcEn.description).not.toMatch(/工具说明/);
+    expect(probeEn.description).not.toMatch(/工具说明/);
   });
 
   it('never produces "[object Object]" anywhere in the emitted schema', () => {
     const reg = new ToolRegistry();
-    reg.register(featureCreate);
+    reg.register(buildFixtureTool());
 
     for (const lang of ['en', 'zh', 'zh-CN']) {
       const defs = reg.getToolDefs(lang);
