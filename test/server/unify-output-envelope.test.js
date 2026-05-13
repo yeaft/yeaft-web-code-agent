@@ -163,6 +163,24 @@ describe('agent-output.js — unify_output envelope passthrough', () => {
     expect('featureId' in env).toBe(false);
   });
 
+  it('forwards empty-string ids verbatim (`!= null`, not truthy)', async () => {
+    // A relay shouldn't silently eat legitimate values. IDs are non-empty
+    // in practice, but if one ever arrives as '' or 0, we want the relay
+    // to pass it through visibly rather than drop it. Documents the
+    // `!= null` semantics chosen in agent-output.js.
+    addClient('c1');
+    await handleAgentOutput('a1', baseAgent, {
+      type: 'unify_output',
+      conversationId: 'conv1',
+      vpId: '',
+      turnId: '',
+      data: { type: 'assistant', message: { content: 'hi' } },
+    });
+    const env = _sent[0].envelope;
+    expect(env.vpId).toBe('');
+    expect(env.turnId).toBe('');
+  });
+
   it('broadcasts to every authenticated client of the agent owner', async () => {
     addClient('c1');
     addClient('c2');
