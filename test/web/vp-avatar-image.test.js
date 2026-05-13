@@ -20,17 +20,25 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, '..', '..');
 const read = (rel) => readFileSync(join(repoRoot, rel), 'utf8');
 
-// The 12 VP seeds the generator ships SVGs for. Anything outside this
+// The 32 VP seeds the generator ships SVGs for. Anything outside this
 // set MUST fall back to the letter render to avoid 404 spam.
 const KNOWN = [
+  // Original 12 (engineering / design / science / security / business).
   'ada', 'alan', 'alice', 'dieter', 'grace', 'ken',
   'linus', 'margaret', 'martin', 'norman', 'shannon', 'steve',
+  // Expansion 20 (philosophy / psychology / strategy / history /
+  // investing / business / writing / science / arts).
+  'kongzi', 'socrates', 'nietzsche', 'kahneman', 'jung',
+  'sunzi', 'clausewitz', 'simaqian', 'harari',
+  'buffett', 'munger', 'dalio', 'bezos', 'drucker',
+  'luxun', 'sudongpo', 'borges', 'einstein',
+  'kubrick', 'miyazaki',
 ];
 
 describe('VpAvatar — illustrated portrait branch', () => {
   const src = read('web/components/VpAvatar.js');
 
-  it('declares a KNOWN_AVATAR_IDS set covering all 12 VPs', () => {
+  it('declares a KNOWN_AVATAR_IDS set covering all 32 VPs', () => {
     for (const id of KNOWN) {
       expect(src).toContain(`'${id}'`);
     }

@@ -30,6 +30,9 @@ import { createHash } from 'crypto';
  * @property {string} id              — VP id (default: dir name)
  * @property {string} name
  * @property {string} role
+ * @property {string} area            — taxonomy bucket (e.g. 'philosophy', 'investing'); '' if absent.
+ *                                       Optional, additive: no consumer is required to dispatch on it.
+ *                                       Sidebar grouping by area is intentionally a future PR.
  * @property {string[]} traits
  * @property {'fast'|'primary'|undefined} modelHint
  * @property {string} persona         — markdown body (persona / system prompt seed)
@@ -40,6 +43,22 @@ import { createHash } from 'crypto';
  */
 
 export const DEFAULT_VP_LIB_DIR = join(homedir(), '.yeaft', 'virtual-persons');
+
+/**
+ * Hash a persona body to a short stable fingerprint. Single definition for
+ * the project — anyone comparing two persona bodies (vp-store at load time,
+ * seed-topup when stamping the ledger, web-bridge live-diff, etc.) must
+ * route through this helper so the algorithm cannot silently diverge.
+ *
+ * Format: sha256(persona).slice(0,8) — short enough to log, long enough
+ * that accidental collisions across <100 VPs are astronomically unlikely.
+ *
+ * @param {string} persona
+ * @returns {string}
+ */
+export function personaHash(persona) {
+  return createHash('sha256').update(String(persona || '')).digest('hex').slice(0, 8);
+}
 
 /**
  * Parse YAML frontmatter + body from role.md.
@@ -121,7 +140,7 @@ export function loadVpFromDir(dir) {
   // personaHash: sync sha256 of persona body, first 8 hex chars.
   // Computed at load time (not lazy) so downstream consumers (system prompt
   // builders, web-bridge live-diff in 334h) can compare cheaply.
-  const personaHash = createHash('sha256').update(body).digest('hex').slice(0, 8);
+  const personaHashValue = personaHash(body);
 
   /** @type {VP} */
   return {
@@ -136,10 +155,14 @@ export function loadVpFromDir(dir) {
       : [],
     role: String(meta.role || ''),
     roleZh: typeof meta.roleZh === 'string' ? String(meta.roleZh) : '',
+    // Taxonomy bucket for sidebar grouping / filtering. Absent for legacy
+    // role.md files written before this field existed — consumers MUST
+    // treat '' as "uncategorised", never as a default category.
+    area: typeof meta.area === 'string' ? String(meta.area).trim() : '',
     traits: Array.isArray(meta.traits) ? meta.traits.map(String) : [],
     modelHint,
     persona: body,
-    personaHash,
+    personaHash: personaHashValue,
     dir,
     memoryDir,
     mtimeMs: st.mtimeMs,

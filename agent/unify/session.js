@@ -43,6 +43,7 @@ import { Compactor } from './compact/compactor.js';
 // AMS each turn and to run `memory/adjust.js` post-turn.
 import { ensureDefaultGroupIfEmpty } from './groups/group-crud.js';
 import { seedDefaultVps } from './vp/seed-defaults.js';
+import { topUpDefaultVps } from './vp/seed-topup.js';
 import { runSummaryBackfill } from './memory/seed-backfill.js';
 import { createV2DreamScheduler, bootInitEmptyGroups, bootCatchUpStaleDream } from './dream-v2/session-wiring.js';
 import { openSegmentIndex } from './memory/index-db.js';
@@ -232,16 +233,41 @@ export async function loadSession(options = {}) {
   //         any group already exists. Never throws; failure logs a warning
   //         so session load always succeeds.
   if (!config._readOnly) {
-    // task-337: seed the 12 default VPs (steve, linus, martin, …) on a fresh
-    // install so the library is never empty. Idempotent — a no-op once the
-    // user has any VP on disk. Must run BEFORE ensureDefaultGroupIfEmpty so
-    // the default group's roster scan sees the seeded VPs. Must also run
+    // task-337: seed the 32 default VPs (steve, linus, martin, kongzi, buffett, …)
+    // on a fresh install so the library is never empty. Idempotent — a no-op
+    // once the user has any VP on disk. Must run BEFORE ensureDefaultGroupIfEmpty
+    // so the default group's roster scan sees the seeded VPs. Must also run
     // before any VpLoader.start() (VpLoader is lazy-started in vp-bridge.js
     // on first subscribe, which happens strictly after loadSession returns).
     try {
       seedDefaultVps(join(yeaftDir, 'virtual-persons'));
     } catch (err) {
       console.warn(`[Yeaft] seedDefaultVps failed: ${err?.message || err}`);
+    }
+    // VP roster expansion: for existing installs that already had the original
+    // 12 VPs before the roster grew to 32, top up the missing ones AND backfill
+    // the `area` frontmatter line on legacy role.md files. NEVER overwrites
+    // hand-edited VPs and NEVER recreates a VP the user explicitly deleted
+    // (tracked via `.seeded-versions.json`). Best-effort — never throws.
+    try {
+      const result = topUpDefaultVps(join(yeaftDir, 'virtual-persons'));
+      if (result.added.length > 0 || result.areaBackfilled.length > 0) {
+        console.log(
+          `[Yeaft] vp-topup: added=${result.added.length} ` +
+          `area-backfilled=${result.areaBackfilled.length} ` +
+          `respected-deletes=${result.respectedDeletes.length}`,
+        );
+      }
+      // Top-up is best-effort but per-VP failures are still worth surfacing —
+      // otherwise a permission glitch on a single role.md backfill goes
+      // invisible. We never throw on them; we just log.
+      if (result.errors && result.errors.length > 0) {
+        for (const e of result.errors) {
+          console.warn(`[Yeaft] vp-topup ${e.code} on ${e.vpId}: ${e.message}`);
+        }
+      }
+    } catch (err) {
+      console.warn(`[Yeaft] topUpDefaultVps failed: ${err?.message || err}`);
     }
     try {
       ensureDefaultGroupIfEmpty(yeaftDir, { memoryRoot: join(yeaftDir, 'memory') });
