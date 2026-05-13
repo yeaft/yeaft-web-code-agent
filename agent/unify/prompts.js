@@ -149,6 +149,10 @@ const RAW_TEMPLATES = {
   harnessRouterShape: readTemplate('harness/router-shape.md', { required: false }),
   // Phase 3b — coordinator harness rule for inter-VP forwarding.
   harnessRouterHandoff: readTemplate('harness/router-handoff.md', { required: false }),
+  // task — start_plan tool fallback. The `start_plan` tool reads this when
+  // a VP has no `planInstruction` of its own. Required so a misconfigured
+  // install fails fast instead of injecting an empty plan instruction.
+  planInstruction: readTemplate('plan-instruction.md'),
 };
 
 /**
@@ -161,6 +165,23 @@ function getTemplate(key, language) {
   const raw = RAW_TEMPLATES[key];
   if (!raw) return '';
   return extractLangSection(raw, language);
+}
+
+/**
+ * Default planning-instruction text returned by the `start_plan` tool when
+ * the active VP has no `planInstruction` override on its role.md frontmatter.
+ *
+ * Pulled from `templates/plan-instruction.md`. Marked required at load time
+ * so a missing template fails fast on agent boot — preferable to silently
+ * shipping an empty plan instruction to the LLM.
+ *
+ * @param {string} [language='en'] — 'en' / 'zh' (uses lang-section markers
+ *                                   if the template carries them; falls
+ *                                   back to the whole body otherwise).
+ * @returns {string}
+ */
+export function getDefaultPlanInstruction(language = 'en') {
+  return getTemplate('planInstruction', language);
 }
 
 // ─── Prompt Templates (hardcoded fallbacks) ──────────────────────

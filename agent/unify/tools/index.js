@@ -45,6 +45,7 @@ import routeForward from './route-forward.js';
 
 // --- P1 Progress tracking ---
 import todoWrite from './todo-write.js';
+import startPlan from './start-plan.js';
 
 // H2.f.4: thread tools (spawnThread/switchThread/listThreads/...) deleted.
 // The agent now runs in a single conversation; multi-thread orchestration
@@ -108,6 +109,7 @@ export const allTools = [
 
   // P1 Progress tracking
   todoWrite,
+  startPlan,
 
   // P2 Auxiliary
   jsRepl,
