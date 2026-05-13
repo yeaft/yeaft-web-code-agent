@@ -11,7 +11,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, existsSync, writeFileSync } from 'fs';
 import { tmpdir, homedir } from 'os';
 import { join } from 'path';
-import { createVp, buildVpSeedSummary } from '../../../agent/unify/vp/vp-crud.js';
+import { createVp, readVp, buildVpSeedSummary } from '../../../agent/unify/vp/vp-crud.js';
 import { VP_STUB_MARKER, isVpSeedBackfillStub } from '../../../agent/unify/memory/seed-backfill.js';
 
 let tmpRoot;
@@ -81,6 +81,27 @@ describe('createVp seeds summary.md', () => {
     } finally {
       if (existsSync(summaryDir)) rmSync(summaryDir, { recursive: true, force: true });
     }
+  });
+
+  it('round-trips localized name and role, but only one persisted persona body', () => {
+    const vpId = `tst_locale_${Date.now()}`;
+    createVp({
+      vpId,
+      displayName: 'Linus',
+      displayNameZh: '林纳斯',
+      role: 'kernel hacker',
+      roleZh: '内核黑客',
+      persona: '你是林纳斯。代码要么能工作，要么不能。',
+    }, { libDir });
+
+    const vp = readVp(vpId, { libDir });
+    expect(vp).toBeTruthy();
+    expect(vp.displayName).toBe('Linus');
+    expect(vp.displayNameZh).toBe('林纳斯');
+    expect(vp.role).toBe('kernel hacker');
+    expect(vp.roleZh).toBe('内核黑客');
+    expect(vp.persona).toBe('你是林纳斯。代码要么能工作，要么不能。');
+    expect(vp).not.toHaveProperty('personaZh');
   });
 });
 

@@ -81,7 +81,7 @@ describe('W-a VP persona is the identity, not an overlay', () => {
     expect(sys).not.toContain('Yeaft — AI 伙伴');
   });
 
-  it('uses localized VP fields for Chinese prompts instead of appending English seed persona text', async () => {
+  it('keeps a Chinese-authored persisted VP persona body in Chinese prompts', async () => {
     const adapter = new CapturingAdapter();
     const engine = mkEngine(adapter, 'zh');
 
@@ -94,8 +94,7 @@ describe('W-a VP persona is the identity, not an overlay', () => {
         displayNameZh: '史蒂夫·乔布斯',
         role: 'Product Strategist',
         roleZh: '产品战略家',
-        persona: 'You are Steve Jobs. You do not merely advise on product — you judge it.\n\nCore capabilities:\n- Reduction by fire.',
-        personaZh: '你是史蒂夫·乔布斯。你不只是给产品提建议——你会审判它。\n\n核心能力：\n- 用火焰做减法。',
+        persona: '你是史蒂夫·乔布斯。你不只是给产品提建议——你会审判它。\n\n核心能力：\n- 用火焰做减法。',
       },
     })) { /* drain */ }
 

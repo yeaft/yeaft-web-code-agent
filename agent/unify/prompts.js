@@ -398,7 +398,6 @@ export function buildSystemPrompt({
  * @param {string} [vpPersona.role]
  * @param {string} [vpPersona.roleZh]
  * @param {string} [vpPersona.persona]
- * @param {string} [vpPersona.personaZh]
  * @param {object} lang
  * @param {'en'|'zh'} effectiveLang
  * @returns {string}
@@ -442,17 +441,14 @@ function selectVpPersonaRole(vpPersona, effectiveLang) {
 }
 
 function selectVpPersonaBody(vpPersona, effectiveLang) {
+  const body = typeof vpPersona.persona === 'string' ? vpPersona.persona.trim() : '';
   if (effectiveLang === 'zh') {
-    const zhBody = typeof vpPersona.personaZh === 'string' ? vpPersona.personaZh.trim() : '';
-    if (zhBody) return zhBody;
-
-    const body = typeof vpPersona.persona === 'string' ? vpPersona.persona.trim() : '';
-    // Persisted role.md files may already be authored in Chinese. Keep those.
-    // But seeded/default VPs currently store English-only persona bodies; do
-    // not append them after the Chinese intro.
+    // role.md has one persisted persona body today. If that body is Chinese,
+    // keep it. If it is English-only (the default seeded VP shape), do not glue
+    // it under a Chinese wrapper and produce a half-translated system prompt.
     return hasCjk(body) ? body : '';
   }
-  return typeof vpPersona.persona === 'string' ? vpPersona.persona.trim() : '';
+  return body;
 }
 
 function hasCjk(text) {

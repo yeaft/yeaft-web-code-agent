@@ -1854,7 +1854,6 @@ export function buildVpQueryOpts({ vpId, groupCoordinator, groupId, envelope }) 
         role: vp.role || '',
         roleZh: vp.roleZh || '',
         persona: vp.persona || '',
-        personaZh: vp.personaZh || '',
       };
     }
   } catch { /* persona load is best-effort */ }
