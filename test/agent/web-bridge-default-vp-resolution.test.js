@@ -35,7 +35,9 @@ vi.mock('../../agent/unify/vp/vp-crud.js', async (orig) => {
     readVp: vi.fn((vpId) => ({
       vpId,
       displayName: vpId === 'linus' ? 'Linus' : vpId,
+      displayNameZh: vpId === 'linus' ? '林纳斯' : '',
       role: vpId === 'linus' ? 'kernel hacker' : 'tester',
+      roleZh: vpId === 'linus' ? '内核黑客' : '',
       persona: `You are ${vpId}.`,
     })),
   };
@@ -52,6 +54,7 @@ vi.mock('../../agent/unify/vp/vp-store.js', async (orig) => {
   };
 });
 
+import { buildSystemPrompt } from '../../agent/unify/prompts.js';
 import { buildVpQueryOpts } from '../../agent/unify/web-bridge.js';
 
 describe('PR-G — buildVpQueryOpts resolves a default VP when none is supplied', () => {
@@ -71,7 +74,18 @@ describe('PR-G — buildVpQueryOpts resolves a default VP when none is supplied'
     expect(out).toBeDefined();
     expect(out.senderVpId).toBe('linus');
     expect(out.vpPersona.displayName).toBe('Linus');
+    expect(out.vpPersona.displayNameZh).toBe('林纳斯');
     expect(out.vpPersona.role).toBe('kernel hacker');
+    expect(out.vpPersona.roleZh).toBe('内核黑客');
+    expect(out.vpPersona.persona).toBe('You are linus.');
+    expect(out.vpPersona).not.toHaveProperty('personaZh');
+
+    const zhPrompt = buildSystemPrompt({ language: 'zh', vpPersona: out.vpPersona });
+    expect(zhPrompt).toContain('# 林纳斯 — 内核黑客');
+    expect(zhPrompt).toContain('你就是 **林纳斯**（内核黑客）');
+    expect(zhPrompt).not.toContain('kernel hacker');
+    expect(zhPrompt).not.toContain('You are linus.');
+
     expect(out.groupId).toBe('g-1');
   });
 
