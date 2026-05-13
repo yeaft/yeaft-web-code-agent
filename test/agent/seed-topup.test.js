@@ -203,4 +203,17 @@ describe('insertAreaLine — pure helper', () => {
       '---\nid: x\nname: X\nrole: Y\narea: science\nmodelHint: primary\n---\nbody\n',
     );
   });
+
+  it('preserves CRLF line endings end-to-end (Windows-authored role.md)', () => {
+    // The function detects CRLF by inspecting the YAML block and uses the
+    // matching separator on output. A Windows-edited file must round-trip
+    // without becoming a mixed-newline mess.
+    const src = '---\r\nid: x\r\nrole: y\r\n---\r\nbody\r\n';
+    const out = insertAreaLine(src, 'arts');
+    expect(out).toBe('---\r\nid: x\r\nrole: y\r\narea: arts\r\n---\r\nbody\r\n');
+    // No bare LF inside the frontmatter region.
+    const fm = out.match(/^---\r\n([\s\S]*?)\r\n---/);
+    expect(fm).not.toBeNull();
+    expect(fm[1]).not.toMatch(/[^\r]\n/);
+  });
 });

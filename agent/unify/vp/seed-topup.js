@@ -29,6 +29,14 @@
  *     wants it gone.
  *   - Best-effort: any failure is logged, never thrown.
  *
+ * Pre-ledger deletion caveat: on the very first top-up against an existing
+ * library (no `.seeded-versions.json` yet), we cannot distinguish "user
+ * deleted VP X before the expansion landed" from "X was never seeded." The
+ * bootstrap records only on-disk ids as `legacy`; an id the user had deleted
+ * BEFORE this code shipped looks identical to a brand-new default and will
+ * be recreated once. After that single bootstrap event the ledger is
+ * authoritative — any subsequent delete is permanent.
+ *
  * Sidecar file: `<libDir>/.seeded-versions.json`
  *
  *   {
@@ -43,11 +51,10 @@
  * user a migration" semantics. We do not auto-upgrade today.
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { createHash } from 'crypto';
 import { createVp, VpCrudError } from './vp-crud.js';
-import { DEFAULT_VP_LIB_DIR } from './vp-store.js';
+import { DEFAULT_VP_LIB_DIR, personaHash } from './vp-store.js';
 import { DEFAULT_VPS } from './seed-defaults.js';
 
 const SEEDED_VERSIONS_FILE = '.seeded-versions.json';
@@ -73,20 +80,24 @@ export function readSeedVersions(libDir) {
 }
 
 /**
- * Write the seed-versions sidecar. Best-effort.
+ * Write the seed-versions sidecar atomically (write-then-rename) so a crash
+ * mid-write can never replace a healthy ledger with a partial one. Best-effort
+ * — failures log a warning and do not throw.
  *
  * @param {string} libDir
  * @param {{seeded: Record<string,string>}} data
  */
 export function writeSeedVersions(libDir, data) {
   const path = join(libDir, SEEDED_VERSIONS_FILE);
+  const tmpPath = path + '.tmp';
   try {
     mkdirSync(libDir, { recursive: true });
     writeFileSync(
-      path,
+      tmpPath,
       JSON.stringify({ version: SEEDED_VERSIONS_VERSION, seeded: data.seeded }, null, 2),
       'utf-8',
     );
+    renameSync(tmpPath, path);
   } catch (err) {
     console.warn(`[vp-topup] failed to write ${SEEDED_VERSIONS_FILE}: ${err?.message || err}`);
   }
@@ -128,15 +139,6 @@ function listExistingVpIds(libDir) {
     if (vpExistsOnDisk(libDir, e.name)) out.push(e.name);
   }
   return out;
-}
-
-/**
- * personaHash matching vp-store's algorithm — sha256(persona).slice(0,8).
- * @param {string} persona
- * @returns {string}
- */
-function personaHash(persona) {
-  return createHash('sha256').update(String(persona || '')).digest('hex').slice(0, 8);
 }
 
 /**

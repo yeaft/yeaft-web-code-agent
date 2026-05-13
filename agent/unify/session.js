@@ -258,6 +258,14 @@ export async function loadSession(options = {}) {
           `respected-deletes=${result.respectedDeletes.length}`,
         );
       }
+      // Top-up is best-effort but per-VP failures are still worth surfacing —
+      // otherwise a permission glitch on a single role.md backfill goes
+      // invisible. We never throw on them; we just log.
+      if (result.errors && result.errors.length > 0) {
+        for (const e of result.errors) {
+          console.warn(`[Yeaft] vp-topup ${e.code} on ${e.vpId}: ${e.message}`);
+        }
+      }
     } catch (err) {
       console.warn(`[Yeaft] topUpDefaultVps failed: ${err?.message || err}`);
     }
