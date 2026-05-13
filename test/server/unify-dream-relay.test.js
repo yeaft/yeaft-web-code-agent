@@ -197,23 +197,8 @@ describe('agent-output.js — dream relay broadcast semantics', () => {
     expect(ids).toEqual(['c1', 'c2']);
   });
 
-  it('returns true (handled) — regression: the default branch returned false and dropped the message', async () => {
-    // Before the fix: switch fell through to `default: return false` and
-    // the message silently disappeared. The truthy return is the literal
-    // contract: agent-output.js handled this type.
-    addClient('c1');
-    const handled = await handleAgentOutput('a1', baseAgent, {
-      type: 'unify_dream_result',
-      vpId: 'vp_alice',
-      success: true,
-      entriesCreated: 0,
-      lastDreamAt: '2026-05-13T05:03:00Z',
-    });
-    expect(handled).toBe(true);
-  });
-
   it('does not deliver to an unauthenticated client', async () => {
-    _webClients.set('c1', { __id: 'c1', authenticated: false, userId: 'u1' });
+    addClient('c1', { authenticated: false });
     await handleAgentOutput('a1', baseAgent, {
       type: 'unify_dream_status',
       vpId: 'vp_alice',

@@ -370,26 +370,37 @@ export async function handleAgentOutput(agentId, agent, msg) {
 
     case 'unify_dream_status':
     case 'unify_dream_result':
-      // Forward Dream lifecycle envelopes verbatim to the web client.
+      // Forward Dream lifecycle envelopes to the web client.
       //
-      // The bug this fixes: agent/unify/web-bridge.js#handleUnifyDreamTrigger
-      // emits these as BARE top-level messages (not wrapped in unify_output)
-      // when the user clicks the "Run dream now" button — in the topbar
-      // (vpId-scoped) or in group settings (groupId-scoped). Without a case
-      // here, the message hit the `default: return false` branch and was
-      // silently dropped before reaching any web client. The UI button stayed
-      // stuck on "Running…" because the result envelope never arrived, even
-      // though the dream pass had actually completed on the agent.
+      // The bug this fixes: `handleUnifyDreamTrigger` in
+      // `agent/unify/web-bridge.js` emits these as BARE top-level
+      // messages when the user clicks "Run dream now" (in the topbar or
+      // group settings). Without a case here, the switch hit
+      // `default: return false` and silently dropped the message,
+      // leaving the UI stuck on "Running…" even after the dream pass
+      // completed.
       //
-      // Pass the envelope through as-is — the frontend handlers
-      // (chat.js#unify_dream_status / unify_dream_result) consume the full
-      // body (groupId|vpId + status, OR groupId|vpId + success +
-      // entriesCreated + lastDreamAt + result/skipped/error). Spread the
-      // whole message except for fields the relay re-stamps for safety
-      // (type is preserved by the spread; we don't override it).
-      for (const [cId, c] of webClients) {
+      // Whitelist spread matches the pattern used by sibling cases
+      // (`unify_output`, `unify_history_chunk`) so a future agent-side
+      // bug that tags an internal field onto a dream envelope can't
+      // leak it to the web client. Keep in sync with the agent emit at
+      // `handleUnifyDreamTrigger`.
+      for (const [, c] of webClients) {
         if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
-          await sendToWebClient(c, { ...msg });
+          await sendToWebClient(c, {
+            type: msg.type,
+            ...(msg.groupId != null ? { groupId: msg.groupId } : {}),
+            ...(msg.vpId != null ? { vpId: msg.vpId } : {}),
+            ...(msg.status != null ? { status: msg.status } : {}),
+            ...(typeof msg.success === 'boolean' ? { success: msg.success } : {}),
+            ...(typeof msg.entriesCreated === 'number' ? { entriesCreated: msg.entriesCreated } : {}),
+            ...(msg.lastDreamAt != null ? { lastDreamAt: msg.lastDreamAt } : {}),
+            ...(msg.skipped ? { skipped: true } : {}),
+            ...(msg.error != null ? { error: msg.error } : {}),
+            ...(Array.isArray(msg.groups) ? { groups: msg.groups } : {}),
+            ...(Array.isArray(msg.targets) ? { targets: msg.targets } : {}),
+            ...(msg.startedAt != null ? { startedAt: msg.startedAt } : {}),
+          });
         }
       }
       break;
