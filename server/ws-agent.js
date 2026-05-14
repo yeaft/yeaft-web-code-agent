@@ -236,29 +236,18 @@ async function handleAgentMessage(agentId, msg) {
   const agent = agents.get(agentId);
   if (!agent) return;
 
-  // Security: 需要 conversationId 的消息类型，验证该 conversation 属于此 agent
-  //
-  // fix-unify-workbench-file-content-drop: Workbench response types are
-  // exempted from the conversation-id gate because Unify uses a virtual
-  // `unify-<timestamp>` conversationId that is never registered in
-  // `agent.conversations` (only Chat/Crew flows do that via
-  // agent.conversations.set(...) in agent-conversation.js / agent-crew.js).
-  // The real ownership boundary for these messages is `_requestUserId`
-  // enforced by `forwardToClients` in ws-utils.js — the conversationId on
-  // workbench responses is only echo, not an authorization key. Without
-  // the exemption, `directory_listing` already worked (it's listed below)
-  // but `file_content`, `file_saved`, `file_op_result`, `file_search_result`
-  // were silently dropped here, breaking "open file" in the Unify workbench.
+  // Security: 需要 conversationId 的消息类型，验证该 conversation 属于此 agent.
+  // The conversation-id check only authorizes Chat/Crew flows where the
+  // conversationId IS the ownership key. Workbench responses and Unify
+  // events use `_requestUserId` for ownership (enforced in
+  // `forwardToClients`), so they bypass this gate. See PR #772.
   const CONV_EXEMPT_TYPES = new Set([
     'conversation_list', 'conversation_created', 'conversation_resumed',
     'agent_sync_complete', 'sync_sessions', 'proxy_response', 'proxy_response_chunk',
     'proxy_response_end', 'proxy_ports_update', 'proxy_ws_opened', 'proxy_ws_message',
     'proxy_ws_closed', 'proxy_ws_error', 'restart_agent_ack', 'upgrade_agent_ack',
     'directory_listing', 'folders_list', 'unify_output',
-    // Workbench responses — ownership-checked by _requestUserId downstream.
-    // Files: read/write/list/search/delete/move/copy/create/upload.
     'file_content', 'file_saved', 'file_op_result', 'file_search_result',
-    // Git: status/diff/add/reset/restore/commit/push.
     'git_status_result', 'git_diff_result', 'git_op_result'
   ]);
   if (msg.conversationId && !CONV_EXEMPT_TYPES.has(msg.type)) {

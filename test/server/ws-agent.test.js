@@ -1136,6 +1136,13 @@ describe('CONV_EXEMPT_TYPES — workbench responses must bypass conversation-id 
     expect(isDropped(agent, { type: 'claude_output' })).toBe(false);
   });
 
+  it('passes any message when conversationId is empty string (falsy short-circuit)', () => {
+    const agent = createMockAgent();
+    // Empty string is falsy, so the `if (msg.conversationId && ...)` guard
+    // skips the lookup — same as missing.
+    expect(isDropped(agent, { type: 'claude_output', conversationId: '' })).toBe(false);
+  });
+
   it('passes workbench responses when the conversationId IS in the Map (Chat path unchanged)', () => {
     const agent = createMockAgent();
     agent.conversations.set('conv_chat_1', { id: 'conv_chat_1' });
