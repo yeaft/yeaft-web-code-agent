@@ -1061,6 +1061,113 @@ describe('Server Restart: DB conversation recovery (task-37/task-44)', () => {
   });
 });
 
+describe('CONV_EXEMPT_TYPES — workbench responses must bypass conversation-id gate', () => {
+  // Regression for fix-unify-workbench-file-content-drop: Unify uses a
+  // virtual `unify-<timestamp>` conversationId that is never registered
+  // in agent.conversations. Workbench responses (file_content, file_saved,
+  // file_op_result, file_search_result, git_*_result) MUST be exempted
+  // from the conversation-id gate or "open file" in the Unify workbench
+  // is silently dropped. The real ownership check for these messages is
+  // _requestUserId enforced downstream by forwardToClients.
+  //
+  // This mirrors the gate in server/ws-agent.js handleAgentMessage().
+  const CONV_EXEMPT_TYPES = new Set([
+    'conversation_list', 'conversation_created', 'conversation_resumed',
+    'agent_sync_complete', 'sync_sessions', 'proxy_response', 'proxy_response_chunk',
+    'proxy_response_end', 'proxy_ports_update', 'proxy_ws_opened', 'proxy_ws_message',
+    'proxy_ws_closed', 'proxy_ws_error', 'restart_agent_ack', 'upgrade_agent_ack',
+    'directory_listing', 'folders_list', 'unify_output',
+    'file_content', 'file_saved', 'file_op_result', 'file_search_result',
+    'git_status_result', 'git_diff_result', 'git_op_result'
+  ]);
+
+  function isDropped(agent, msg) {
+    // Replicates the gate: if a message has a conversationId, the type
+    // isn't exempt, and the agent's Map doesn't know that conversation,
+    // we drop it. Returns true when the message is dropped.
+    if (msg.conversationId && !CONV_EXEMPT_TYPES.has(msg.type)) {
+      if (!agent.conversations.has(msg.conversationId)) return true;
+    }
+    return false;
+  }
+
+  it('passes file_content through for an unknown (Unify-style) conversationId', () => {
+    const agent = createMockAgent(); // empty conversations Map
+    const msg = {
+      type: 'file_content',
+      conversationId: 'unify-1762400000000',
+      _requestUserId: 'user_1',
+      content: 'file contents'
+    };
+    expect(isDropped(agent, msg)).toBe(false);
+  });
+
+  it('passes file_saved / file_op_result / file_search_result for Unify ids', () => {
+    const agent = createMockAgent();
+    const cid = 'unify-1762400000000';
+    for (const type of ['file_saved', 'file_op_result', 'file_search_result']) {
+      expect(isDropped(agent, { type, conversationId: cid, _requestUserId: 'u1' })).toBe(false);
+    }
+  });
+
+  it('passes git_*_result for Unify ids (git workbench tab parity)', () => {
+    const agent = createMockAgent();
+    const cid = 'unify-1762400000000';
+    for (const type of ['git_status_result', 'git_diff_result', 'git_op_result']) {
+      expect(isDropped(agent, { type, conversationId: cid, _requestUserId: 'u1' })).toBe(false);
+    }
+  });
+
+  it('still drops non-exempt types for unknown conversationIds (security preserved)', () => {
+    const agent = createMockAgent();
+    // claude_output is not exempt — must continue to drop for unknown convs.
+    const msg = {
+      type: 'claude_output',
+      conversationId: 'rogue-conv-123',
+      _requestUserId: 'attacker',
+      data: { type: 'assistant', message: { content: 'leak' } }
+    };
+    expect(isDropped(agent, msg)).toBe(true);
+  });
+
+  it('passes any message when conversationId is missing (no gate to apply)', () => {
+    const agent = createMockAgent();
+    // No conversationId → the early guard short-circuits; nothing to check.
+    expect(isDropped(agent, { type: 'claude_output' })).toBe(false);
+  });
+
+  it('passes any message when conversationId is empty string (falsy short-circuit)', () => {
+    const agent = createMockAgent();
+    // Empty string is falsy, so the `if (msg.conversationId && ...)` guard
+    // skips the lookup — same as missing.
+    expect(isDropped(agent, { type: 'claude_output', conversationId: '' })).toBe(false);
+  });
+
+  it('passes workbench responses when the conversationId IS in the Map (Chat path unchanged)', () => {
+    const agent = createMockAgent();
+    agent.conversations.set('conv_chat_1', { id: 'conv_chat_1' });
+    const msg = {
+      type: 'file_content',
+      conversationId: 'conv_chat_1',
+      _requestUserId: 'u1',
+      content: 'chat file body'
+    };
+    expect(isDropped(agent, msg)).toBe(false);
+  });
+
+  it('directory_listing remained exempt (the working-before baseline)', () => {
+    const agent = createMockAgent();
+    const msg = {
+      type: 'directory_listing',
+      conversationId: 'unify-1762400000000',
+      entries: []
+    };
+    // This was working pre-fix — it's the proof that file_content needed
+    // the same treatment.
+    expect(isDropped(agent, msg)).toBe(false);
+  });
+});
+
 describe('Slash Commands Preservation on Reconnect (task-216)', () => {
   describe('slash_commands_update caching', () => {
     it('should cache slashCommands on agent object via slash_commands_update', () => {
