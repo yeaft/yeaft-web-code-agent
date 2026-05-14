@@ -222,5 +222,14 @@ export function handleClaudeOutput(store, conversationId, data) {
       }
     }
     store.finishStreamingForConversation(conversationId);
+    // v0.1.768 — orphan sweep: when this is the last per-VP `result` for
+    // the conversation (no activeVpTurns remain, nothing is processing),
+    // clear any stale `isStreaming: true` flag left behind by a prior
+    // turn whose `result` was lost (WS hiccup, agent restart, page
+    // reload). Without this, an orphan message persists across the
+    // user-message turn fence and the VP shows '生成中' forever.
+    // No-op when other VPs are still streaming — the sweep itself
+    // gates on activeVpTurns + processingConversations.
+    store.sweepStaleStreamingForConversation(conversationId);
   }
 }

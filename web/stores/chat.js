@@ -2039,6 +2039,7 @@ export const useChatStore = defineStore('chat', {
     addMessageToConversation(conversationId, msg) { msgHelpers.addMessageToConversation(this, conversationId, msg); },
     appendToAssistantMessageForConversation(conversationId, text) { msgHelpers.appendToAssistantMessageForConversation(this, conversationId, text); },
     finishStreamingForConversation(conversationId) { msgHelpers.finishStreamingForConversation(this, conversationId); },
+    sweepStaleStreamingForConversation(conversationId) { msgHelpers.sweepStaleStreamingForConversation(this, conversationId); },
     appendToAssistantMessage(text) { this.appendToAssistantMessageForConversation(this.currentConversation, text); },
     finishStreaming() { this.finishStreamingForConversation(this.currentConversation); },
     addMessage(msg) { this.addMessageToConversation(this.currentConversation, msg); },
