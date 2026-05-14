@@ -308,7 +308,7 @@ export function topUpDefaultVps(libDir = DEFAULT_VP_LIB_DIR) {
         } catch (err) {
           errors.push({
             vpId,
-            code: 'namezh_backfill_failed',
+            code: 'name_zh_backfill_failed',
             message: String(err?.message || err),
           });
         }
