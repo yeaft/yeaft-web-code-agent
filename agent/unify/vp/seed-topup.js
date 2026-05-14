@@ -142,30 +142,38 @@ function listExistingVpIds(libDir) {
 }
 
 /**
- * Splice a single `area: <bucket>` line into an existing role.md's YAML
+ * Splice a single `<key>: <value>` line into an existing role.md's YAML
  * frontmatter, immediately after the `role:` line if one is present (else
  * before the closing `---`). All other bytes are preserved.
  *
- * Returns `null` if the file already has an `area:` line, has no
- * frontmatter, or any other parse anomaly — caller treats null as "don't
- * touch this file."
+ * Returns `null` if the file already has the key, has no frontmatter, or
+ * any other parse anomaly — caller treats null as "don't touch this file."
  *
  * @param {string} source
- * @param {string} bucket
+ * @param {string} key   YAML key to insert (e.g. 'area', 'nameZh')
+ * @param {string} value Scalar value (will be YAML-escaped only if it
+ *                       contains characters that need quoting)
  * @returns {string|null}
  */
-export function insertAreaLine(source, bucket) {
-  const bucketTrim = String(bucket || '').trim();
-  if (!bucketTrim) return null;
+function insertFrontmatterLine(source, key, value) {
+  const valTrim = String(value || '').trim();
+  if (!valTrim) return null;
   const fmMatch = source.match(/^(---\r?\n)([\s\S]*?)(\r?\n---\r?\n?)/);
   if (!fmMatch) return null;
   const [full, open, yaml, close] = fmMatch;
-  if (/^area:\s*/m.test(yaml)) return null; // user already set area
-  // Pick newline that yaml block uses.
+  // Anchored at start-of-line so `nameZh` is never mistaken for `name`.
+  const keyPattern = new RegExp(`^${key}:\\s*`, 'm');
+  if (keyPattern.test(yaml)) return null; // user already set this key
   const nl = yaml.includes('\r\n') ? '\r\n' : '\n';
   const lines = yaml.split(/\r?\n/);
   const roleIdx = lines.findIndex(l => /^role:\s*/.test(l));
-  const newLine = `area: ${bucketTrim}`;
+  // Quote the value when it contains characters YAML treats specially or
+  // non-ASCII bytes — the existing vp-crud writer does the same dance.
+  const needsQuote = /[:#"'\\\n]/.test(valTrim) || /[^\x20-\x7e]/.test(valTrim);
+  const yamlVal = needsQuote
+    ? `"${valTrim.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+    : valTrim;
+  const newLine = `${key}: ${yamlVal}`;
   if (roleIdx >= 0) {
     lines.splice(roleIdx + 1, 0, newLine);
   } else {
@@ -177,12 +185,37 @@ export function insertAreaLine(source, bucket) {
 }
 
 /**
+ * Backward-compatible wrapper kept for tests that pin the `area` shape.
+ * Equivalent to `insertFrontmatterLine(source, 'area', bucket)`.
+ *
+ * @param {string} source
+ * @param {string} bucket
+ * @returns {string|null}
+ */
+export function insertAreaLine(source, bucket) {
+  return insertFrontmatterLine(source, 'area', bucket);
+}
+
+/**
+ * v0.1.768 — backfill `nameZh:` into a role.md frontmatter that predates
+ * the bilingual seed. Same byte-preserving semantics as insertAreaLine.
+ *
+ * @param {string} source
+ * @param {string} nameZh
+ * @returns {string|null}
+ */
+export function insertNameZhLine(source, nameZh) {
+  return insertFrontmatterLine(source, 'nameZh', nameZh);
+}
+
+/**
  * Top-up the default VPs into an existing `libDir`.
  *
  * @param {string} [libDir=DEFAULT_VP_LIB_DIR]
  * @returns {{
  *   added: string[],
  *   areaBackfilled: string[],
+ *   nameZhBackfilled: string[],
  *   respectedDeletes: string[],
  *   skippedExisting: string[],
  *   errors: Array<{vpId:string, code:string, message:string}>,
@@ -191,6 +224,7 @@ export function insertAreaLine(source, bucket) {
 export function topUpDefaultVps(libDir = DEFAULT_VP_LIB_DIR) {
   const added = [];
   const areaBackfilled = [];
+  const nameZhBackfilled = [];
   const respectedDeletes = [];
   const skippedExisting = [];
   /** @type {Array<{vpId:string,code:string,message:string}>} */
@@ -200,7 +234,7 @@ export function topUpDefaultVps(libDir = DEFAULT_VP_LIB_DIR) {
   // that case there's nothing to top up — seedDefaultVps will populate
   // everything. We still return cleanly.
   if (!existsSync(libDir)) {
-    return { added, areaBackfilled, respectedDeletes, skippedExisting, errors };
+    return { added, areaBackfilled, nameZhBackfilled, respectedDeletes, skippedExisting, errors };
   }
 
   let versions = readSeedVersions(libDir);
@@ -222,21 +256,59 @@ export function topUpDefaultVps(libDir = DEFAULT_VP_LIB_DIR) {
     const inLedger = Object.prototype.hasOwnProperty.call(versions.seeded, vpId);
 
     if (onDisk) {
-      // Already there — never overwrite. Possibly backfill `area`.
+      // Already there — never overwrite. Possibly backfill `area` /
+      // `nameZh`. Each backfill is independent: a role.md with `area`
+      // already set but no `nameZh` should still get `nameZh`.
       skippedExisting.push(vpId);
+      let currentSrc = null;
+      const rolePath = join(libDir, vpId, 'role.md');
+      const readRole = () => {
+        if (currentSrc == null) {
+          try { currentSrc = readFileSync(rolePath, 'utf-8'); } catch { currentSrc = null; }
+        }
+        return currentSrc;
+      };
       if (vp.area) {
         try {
-          const rolePath = join(libDir, vpId, 'role.md');
-          const src = readFileSync(rolePath, 'utf-8');
-          const patched = insertAreaLine(src, vp.area);
-          if (patched != null && patched !== src) {
-            writeFileSync(rolePath, patched, 'utf-8');
-            areaBackfilled.push(vpId);
+          const src = readRole();
+          if (src != null) {
+            const patched = insertAreaLine(src, vp.area);
+            if (patched != null && patched !== src) {
+              writeFileSync(rolePath, patched, 'utf-8');
+              currentSrc = patched;
+              areaBackfilled.push(vpId);
+            }
           }
         } catch (err) {
           errors.push({
             vpId,
             code: 'area_backfill_failed',
+            message: String(err?.message || err),
+          });
+        }
+      }
+      // v0.1.768 — bilingual top-up. Existing VPs created from a
+      // pre-bilingual seed lack `nameZh:` in their role.md, which means
+      // serializeVpForWire ships `displayNameZh: ''` and the web
+      // `vpLabel` falls through to English even under zh locale. Splice
+      // the canonical Chinese display name into frontmatter without
+      // touching anything else — the user's persona body stays
+      // byte-identical.
+      if (vp.displayNameZh) {
+        try {
+          const src = readRole();
+          if (src != null) {
+            const patched = insertNameZhLine(src, vp.displayNameZh);
+            if (patched != null && patched !== src) {
+              writeFileSync(rolePath, patched, 'utf-8');
+              currentSrc = patched;
+              nameZhBackfilled.push(vpId);
+            }
+          }
+        } catch (err) {
+          errors.push({
+            vpId,
+            code: 'name_zh_backfill_failed',
             message: String(err?.message || err),
           });
         }
@@ -274,5 +346,5 @@ export function topUpDefaultVps(libDir = DEFAULT_VP_LIB_DIR) {
   }
 
   writeSeedVersions(libDir, versions);
-  return { added, areaBackfilled, respectedDeletes, skippedExisting, errors };
+  return { added, areaBackfilled, nameZhBackfilled, respectedDeletes, skippedExisting, errors };
 }

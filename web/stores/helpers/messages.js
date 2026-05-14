@@ -137,24 +137,85 @@ export function finishStreamingForConversation(store, conversationId) {
   if (!conversationId) return;
 
   const msgs = store.messagesMap[conversationId];
-  if (msgs && msgs.length > 0) {
-    // ★ Finish ALL streaming messages in the current turn, not just the last one.
-    // Non-streaming messages (chat-image, tool-use) can be appended after
-    // a streaming assistant message, leaving it stuck with isStreaming: true.
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      const m = msgs[i];
-      if (m.isStreaming) {
-        m.isStreaming = false;
+  if (!msgs || msgs.length === 0) return;
+
+  // v0.1.768 — per-turn isolation. When a Unify turnId is active, ONLY
+  // clear streaming flags on messages that belong to that turn. Multi-VP
+  // fan-out runs concurrent turns inside the same conversation: VP-A's
+  // `result` lands before VP-B finishes streaming. Without this guard,
+  // VP-A's finishStreamingForConversation walks back across VP-B's
+  // still-streaming message and flips its flag — VP-B's next text_delta
+  // then finds no streaming message for its turnId and forks a NEW
+  // message via the addMessageToConversation branch in
+  // appendToAssistantMessageForConversation. Net effect: the original
+  // (now misflagged) message sits idle, and the new forked message
+  // becomes an "orphan" that only this VP's own result can clear later
+  // — and if that result is lost (WS hiccup, agent crash, page reload),
+  // it stays `isStreaming: true` forever and the VP shows '生成中'
+  // permanently. Scoping the walk-back to turnId eliminates the
+  // cascade. Legacy single-turn path (no _currentUnifyTurnId) keeps the
+  // original blanket-clear so non-Unify chats are unaffected.
+  const targetTurnId = store._currentUnifyTurnId || null;
+
+  // ★ Finish ALL streaming messages in the current turn, not just the last one.
+  // Non-streaming messages (chat-image, tool-use) can be appended after
+  // a streaming assistant message, leaving it stuck with isStreaming: true.
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (targetTurnId) {
+      // Per-turn mode: only touch messages tagged with this turnId, OR
+      // messages that have NO turnId yet (they were minted before the
+      // routing context was set and the defensive stamper below will
+      // adopt them into the active turn). Anything tagged with a
+      // DIFFERENT turnId is a concurrent VP — leave it alone.
+      if (m.turnId && m.turnId !== targetTurnId) {
+        // Stop at the user message that opened this fan-out so we don't
+        // wander into older history.
+        if (m.type === 'user') break;
+        continue;
       }
-      // Defensive speaker-attribution stamp at finalize time. The avatar
-      // header in AssistantTurn relies on `speakerVpId` to render after
-      // streaming ends; if the streaming message lost the latch (or never
-      // had it because vpId arrived late), this is the last chance to fill
-      // it in from the still-active routing context.
-      stampSpeakerOnVpMessage(store, conversationId, m);
-      // Stop at the last user message (turn boundary) — no need to go further
-      if (m.type === 'user') break;
     }
+    if (m.isStreaming) {
+      m.isStreaming = false;
+    }
+    // Defensive speaker-attribution stamp at finalize time. The avatar
+    // header in AssistantTurn relies on `speakerVpId` to render after
+    // streaming ends; if the streaming message lost the latch (or never
+    // had it because vpId arrived late), this is the last chance to fill
+    // it in from the still-active routing context.
+    stampSpeakerOnVpMessage(store, conversationId, m);
+    // Stop at the last user message (turn boundary) — no need to go further
+    if (m.type === 'user') break;
+  }
+}
+
+/**
+ * v0.1.768 — orphan sweep. After a VP's `result` lands AND every other
+ * per-VP turn for this conversation has drained, walk the whole
+ * conversation and clear any leftover `isStreaming: true` flag. This is
+ * the safety net for the case where a `result` was genuinely lost
+ * (network partition, agent restart mid-fan-out, page reload during
+ * streaming) — without it, an orphan message would sit `isStreaming:
+ * true` past the next user prompt's "turn fence" and the VP would show
+ * '生成中' indefinitely.
+ *
+ * Gated on both `activeVpTurns` being empty AND `processingConversations
+ * [convId]` being falsy so the sweep can NEVER race a still-running
+ * fan-out peer.
+ *
+ * @param {object} store
+ * @param {string} conversationId
+ */
+export function sweepStaleStreamingForConversation(store, conversationId) {
+  if (!conversationId) return;
+  // If anything is still flagged in-flight for THIS conversation or for
+  // any per-VP turn, we are not the "last result" — bail.
+  if (store.processingConversations && store.processingConversations[conversationId]) return;
+  if (store.activeVpTurns && Object.keys(store.activeVpTurns).length > 0) return;
+  const msgs = store.messagesMap && store.messagesMap[conversationId];
+  if (!msgs || msgs.length === 0) return;
+  for (const m of msgs) {
+    if (m && m.isStreaming) m.isStreaming = false;
   }
 }
 

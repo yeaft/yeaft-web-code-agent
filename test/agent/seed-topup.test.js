@@ -26,6 +26,7 @@ import {
   topUpDefaultVps,
   readSeedVersions,
   insertAreaLine,
+  insertNameZhLine,
 } from '../../agent/unify/vp/seed-topup.js';
 import { DEFAULT_VPS } from '../../agent/unify/vp/seed-defaults.js';
 
@@ -152,9 +153,15 @@ describe('topUpDefaultVps — area backfill on legacy frontmatter', () => {
     expect(result.areaBackfilled).toContain('steve');
 
     const after = readFileSync(join(libDir, 'steve', 'role.md'), 'utf-8');
-    // New file MUST contain area: business (steve's bucket) immediately
-    // after role:.
-    expect(after).toMatch(/role: Product Strategist\narea: business\n/);
+    // New file MUST contain area: business (steve's bucket) inside the
+    // YAML frontmatter. nameZh: may also have been inserted by the
+    // independent bilingual backfill pass — both lines land near `role:`
+    // but their relative order is an implementation detail, so we only
+    // assert presence within the frontmatter, not their adjacency.
+    const fm = after.match(/^---\n([\s\S]*?)\n---\n/);
+    expect(fm).not.toBeNull();
+    expect(fm[1]).toMatch(/^area: business$/m);
+    expect(fm[1]).toMatch(/^role: Product Strategist$/m);
     // Body MUST be unchanged byte-for-byte.
     expect(after).toContain('I am a user-edited persona body. Do NOT rewrite me.');
     // No accidental duplication of role/name/id.
@@ -215,5 +222,127 @@ describe('insertAreaLine — pure helper', () => {
     const fm = out.match(/^---\r\n([\s\S]*?)\r\n---/);
     expect(fm).not.toBeNull();
     expect(fm[1]).not.toMatch(/[^\r]\n/);
+  });
+});
+
+describe('topUpDefaultVps — nameZh backfill on legacy frontmatter', () => {
+  it('inserts a nameZh line into a legacy role.md whose frontmatter lacks it, body unchanged', () => {
+    // Simulate a pre-bilingual seed: `name:` present, `nameZh:` missing.
+    // After top-up the file MUST carry the canonical Chinese display name
+    // from DEFAULT_VPS while the user-edited persona body stays byte-identical.
+    const legacyRoleMd =
+      '---\n' +
+      'id: steve\n' +
+      'name: Steve Jobs\n' +
+      'role: Product Strategist\n' +
+      'modelHint: primary\n' +
+      'traits:\n' +
+      '  - minimalist\n' +
+      '---\n' +
+      '\n' +
+      'I am a user-edited persona body. Do NOT rewrite me.\n';
+    writeRoleMd('steve', legacyRoleMd);
+
+    const result = topUpDefaultVps(libDir);
+    expect(result.errors).toEqual([]);
+    expect(result.nameZhBackfilled).toContain('steve');
+
+    const after = readFileSync(join(libDir, 'steve', 'role.md'), 'utf-8');
+    // Must now contain a nameZh: line. Value comes from DEFAULT_VPS.
+    const steveDef = DEFAULT_VPS.find(v => v.vpId === 'steve');
+    expect(steveDef?.displayNameZh).toBeTruthy();
+    // The value contains non-ASCII so it will be quoted by insertFrontmatterLine.
+    expect(after).toMatch(
+      new RegExp(`nameZh:\\s*"?${steveDef.displayNameZh}"?`),
+    );
+    // Body MUST be unchanged byte-for-byte.
+    expect(after).toContain('I am a user-edited persona body. Do NOT rewrite me.');
+    // No accidental duplication of name.
+    const nameCount = (after.match(/^name: Steve Jobs$/gm) || []).length;
+    expect(nameCount).toBe(1);
+  });
+
+  it('does not re-insert nameZh on a re-run', () => {
+    const legacyRoleMd =
+      '---\n' +
+      'id: linus\n' +
+      'name: Linus Torvalds\n' +
+      'role: Systems Engineer\n' +
+      '---\n' +
+      '\nbody\n';
+    writeRoleMd('linus', legacyRoleMd);
+
+    topUpDefaultVps(libDir);
+    const first = readFileSync(join(libDir, 'linus', 'role.md'), 'utf-8');
+    const second = topUpDefaultVps(libDir);
+    const after = readFileSync(join(libDir, 'linus', 'role.md'), 'utf-8');
+    expect(after).toBe(first);
+    expect(second.nameZhBackfilled).not.toContain('linus');
+  });
+
+  it('backfills nameZh even when area is already present (independent passes)', () => {
+    // A role.md that has area: but no nameZh: must still get nameZh inserted.
+    // The two backfill passes are independent.
+    const legacyRoleMd =
+      '---\n' +
+      'id: steve\n' +
+      'name: Steve Jobs\n' +
+      'role: Product Strategist\n' +
+      'area: business\n' +
+      '---\n' +
+      '\nbody\n';
+    writeRoleMd('steve', legacyRoleMd);
+
+    const result = topUpDefaultVps(libDir);
+    expect(result.errors).toEqual([]);
+    expect(result.nameZhBackfilled).toContain('steve');
+    expect(result.areaBackfilled).not.toContain('steve');
+
+    const after = readFileSync(join(libDir, 'steve', 'role.md'), 'utf-8');
+    expect(after).toMatch(/nameZh:\s*/);
+    // area: business must still appear exactly once.
+    const areaCount = (after.match(/^area: business$/gm) || []).length;
+    expect(areaCount).toBe(1);
+  });
+});
+
+describe('insertNameZhLine — pure helper', () => {
+  it('returns null when no frontmatter is present', () => {
+    expect(insertNameZhLine('no frontmatter here', '史蒂夫·乔布斯')).toBe(null);
+  });
+
+  it('returns null when nameZh is already declared', () => {
+    const src = '---\nid: x\nrole: y\nnameZh: 张三\n---\nbody';
+    expect(insertNameZhLine(src, '李四')).toBe(null);
+  });
+
+  it('returns null when nameZh value is empty', () => {
+    const src = '---\nid: x\nrole: y\n---\nbody';
+    expect(insertNameZhLine(src, '   ')).toBe(null);
+  });
+
+  it('inserts the line after role: and preserves the rest, quoting non-ASCII', () => {
+    const src = '---\nid: x\nname: X\nrole: Y\nmodelHint: primary\n---\nbody\n';
+    const out = insertNameZhLine(src, '某某');
+    // Non-ASCII triggers double-quoting by insertFrontmatterLine.
+    expect(out).toBe(
+      '---\nid: x\nname: X\nrole: Y\nnameZh: "某某"\nmodelHint: primary\n---\nbody\n',
+    );
+  });
+
+  it('does not collide with `name:` — anchored at start-of-line', () => {
+    // `nameZh` shares a prefix with `name`. The keyPattern must be
+    // anchored so the helper does NOT mistake `name:` for `nameZh:`
+    // and silently bail.
+    const src = '---\nid: x\nname: Steve\nrole: Y\n---\nbody\n';
+    const out = insertNameZhLine(src, '乔布斯');
+    expect(out).not.toBe(null);
+    expect(out).toContain('nameZh: "乔布斯"');
+  });
+
+  it('preserves CRLF line endings (Windows-authored role.md)', () => {
+    const src = '---\r\nid: x\r\nrole: y\r\n---\r\nbody\r\n';
+    const out = insertNameZhLine(src, '苏东坡');
+    expect(out).toBe('---\r\nid: x\r\nrole: y\r\nnameZh: "苏东坡"\r\n---\r\nbody\r\n');
   });
 });
