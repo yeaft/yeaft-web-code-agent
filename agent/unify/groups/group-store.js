@@ -139,6 +139,7 @@ export function createGroup(groupsRoot, spec) {
     roster,
     defaultVpId: spec.defaultVpId || null,
     announcement: typeof spec.announcement === 'string' ? spec.announcement : '',
+    workDir: typeof spec.workDir === 'string' ? spec.workDir.trim() : '',
     createdAt: spec.createdAt || new Date().toISOString(),
   };
   h.saveMeta(meta);
@@ -153,9 +154,10 @@ export function loadGroupMeta(dir) {
     const raw = readFileSync(path, 'utf8');
     const parsed = JSON.parse(raw);
     validateMeta(parsed);
-    // Legacy groups created before the announcement field was added are
-    // forward-compat: missing field reads back as empty string.
+    // Legacy groups created before optional fields were added are
+    // forward-compat: missing fields read back as safe empty strings.
     if (typeof parsed.announcement !== 'string') parsed.announcement = '';
+    if (typeof parsed.workDir !== 'string') parsed.workDir = '';
     return parsed;
   } catch {
     return null;
@@ -191,6 +193,9 @@ function validateMeta(meta) {
   }
   if (meta.announcement != null && typeof meta.announcement !== 'string') {
     throw new Error('group.announcement must be string');
+  }
+  if (meta.workDir != null && typeof meta.workDir !== 'string') {
+    throw new Error('group.workDir must be string');
   }
 }
 

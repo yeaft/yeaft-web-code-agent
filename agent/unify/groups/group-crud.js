@@ -32,10 +32,19 @@
  *   'reserved'/'invalid_vp_id'/... — bubbled from ids.js validators
  */
 
-import { existsSync, renameSync, rmSync, readdirSync, statSync } from 'fs';
+import {
+  existsSync,
+  renameSync,
+  rmSync,
+  readdirSync,
+  statSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from 'fs';
 import { randomBytes } from 'crypto';
 import { homedir } from 'os';
-import { join } from 'path';
+import { isAbsolute, join, resolve } from 'path';
 import {
   openGroup, createGroup, listGroups, loadGroupMeta,
 } from './group-store.js';
@@ -87,8 +96,75 @@ export class GroupCrudError extends Error {
   }
 }
 
-function groupsRoot(yeaftDir) {
+const GROUP_WORKDIR_REGISTRY = 'group-workdirs.json';
+
+export function groupsRoot(yeaftDir) {
   return join(yeaftDir, 'groups');
+}
+
+export function normalizeWorkDir(workDir) {
+  const raw = String(workDir || '').trim();
+  if (!raw) return '';
+  return isAbsolute(raw) ? raw : resolve(raw);
+}
+
+export function yeaftDirForWorkDir(workDir) {
+  const normalized = normalizeWorkDir(workDir);
+  return normalized ? join(normalized, '.yeaft') : '';
+}
+
+function registryPath(yeaftDir) {
+  return join(yeaftDir, GROUP_WORKDIR_REGISTRY);
+}
+
+export function readWorkDirRegistry(yeaftDir) {
+  if (!yeaftDir) return {};
+  const file = registryPath(yeaftDir);
+  if (!existsSync(file)) return {};
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeWorkDirRegistry(yeaftDir, registry) {
+  if (!yeaftDir) return;
+  mkdirSync(yeaftDir, { recursive: true });
+  writeFileSync(registryPath(yeaftDir), `${JSON.stringify(registry, null, 2)}\n`);
+}
+
+export function registerGroupWorkDir(defaultYeaftDir, groupId, workDir) {
+  const normalized = normalizeWorkDir(workDir);
+  if (!defaultYeaftDir || !groupId || !normalized) return;
+  const registry = readWorkDirRegistry(defaultYeaftDir);
+  registry[groupId] = normalized;
+  writeWorkDirRegistry(defaultYeaftDir, registry);
+}
+
+export function unregisterGroupWorkDir(defaultYeaftDir, groupId) {
+  if (!defaultYeaftDir || !groupId) return;
+  const registry = readWorkDirRegistry(defaultYeaftDir);
+  if (!Object.prototype.hasOwnProperty.call(registry, groupId)) return;
+  delete registry[groupId];
+  writeWorkDirRegistry(defaultYeaftDir, registry);
+}
+
+export function resolveGroupYeaftDir(defaultYeaftDir, groupId) {
+  if (!defaultYeaftDir || !groupId) return defaultYeaftDir;
+  const defaultGroupDir = join(groupsRoot(defaultYeaftDir), groupId);
+  if (existsSync(defaultGroupDir) && loadGroupMeta(defaultGroupDir)) return defaultYeaftDir;
+
+  const registry = readWorkDirRegistry(defaultYeaftDir);
+  const workDir = normalizeWorkDir(registry[groupId]);
+  if (workDir) {
+    const candidate = yeaftDirForWorkDir(workDir);
+    const candidateDir = join(groupsRoot(candidate), groupId);
+    if (existsSync(candidateDir) && loadGroupMeta(candidateDir)) return candidate;
+  }
+
+  return defaultYeaftDir;
 }
 
 /** Build a safe group id from a display name (slug + ulid-lite suffix). */
@@ -146,11 +222,13 @@ export function ensureDefaultGroupIfEmpty(yeaftDir, options = {}) {
  * we do NOT auto-expand to the full VP library here. That's D1's job only.
  *
  * @param {string} yeaftDir
- * @param {{name:string, roster?:string[], defaultVpId?:string|null}} spec
- * @returns {{id:string, name:string, roster:string[], defaultVpId:string|null}}
+ * @param {{name:string, roster?:string[], defaultVpId?:string|null, workDir?:string}} spec
+ * @returns {{id:string, name:string, roster:string[], defaultVpId:string|null, workDir?:string}}
  */
 export function createGroupFromSpec(yeaftDir, spec, options = {}) {
-  const memoryRoot = options.memoryRoot || DEFAULT_MEMORY_ROOT;
+  const normalizedWorkDir = normalizeWorkDir(spec && spec.workDir);
+  const groupYeaftDir = normalizedWorkDir ? yeaftDirForWorkDir(normalizedWorkDir) : yeaftDir;
+  const memoryRoot = options.memoryRoot || (groupYeaftDir ? join(groupYeaftDir, 'memory') : DEFAULT_MEMORY_ROOT);
   const name = String(spec && spec.name || '').trim();
   if (!name) throw new GroupCrudError('invalid_name', null, 'group name required');
 
@@ -174,15 +252,16 @@ export function createGroupFromSpec(yeaftDir, spec, options = {}) {
   if (!defaultVpId) defaultVpId = roster[0] || null;
 
   const id = makeGroupId(name);
-  const root = groupsRoot(yeaftDir);
+  const root = groupsRoot(groupYeaftDir);
   if (existsSync(join(root, id))) {
     // Extremely unlikely (ulid suffix), but surface deterministically.
     throw new GroupCrudError('duplicate', id);
   }
 
-  const handle = createGroup(root, { id, name, roster, defaultVpId });
+  const handle = createGroup(root, { id, name, roster, defaultVpId, workDir: normalizedWorkDir });
   const meta = handle.getMeta();
   handle.close();
+  if (normalizedWorkDir) registerGroupWorkDir(yeaftDir, id, normalizedWorkDir);
 
   // Seed Layer-A resident summary so the first session has memory content
   // even before Dream-v2 has run. No-op if a summary.md already exists.
@@ -243,7 +322,8 @@ export function updateGroupAnnouncement(yeaftDir, groupId, text) {
  * own second-confirm modal (acceptance #4 in task-334-slice-specs.md 334m).
  */
 export function archiveGroup(yeaftDir, groupId) {
-  const root = groupsRoot(yeaftDir);
+  const groupYeaftDir = resolveGroupYeaftDir(yeaftDir, groupId);
+  const root = groupsRoot(groupYeaftDir);
   const srcDir = join(root, groupId);
   if (!existsSync(srcDir) || !loadGroupMeta(srcDir)) {
     throw new GroupCrudError('not_found', groupId);
@@ -253,6 +333,7 @@ export function archiveGroup(yeaftDir, groupId) {
   const suffix = randomBytes(2).toString('hex');
   const dstDir = join(root, `.archived-${ts}-${suffix}-${groupId}`);
   renameSync(srcDir, dstDir);
+  unregisterGroupWorkDir(yeaftDir, groupId);
   return { groupId, archivedAs: dstDir };
 }
 
@@ -269,8 +350,9 @@ export function archiveGroup(yeaftDir, groupId) {
  * delete cleans up legacy state too.
  */
 export function deleteGroup(yeaftDir, groupId, options = {}) {
-  const memoryRoot = options.memoryRoot || DEFAULT_MEMORY_ROOT;
-  const root = groupsRoot(yeaftDir);
+  const groupYeaftDir = resolveGroupYeaftDir(yeaftDir, groupId);
+  const memoryRoot = options.memoryRoot || (groupYeaftDir ? join(groupYeaftDir, 'memory') : DEFAULT_MEMORY_ROOT);
+  const root = groupsRoot(groupYeaftDir);
   const srcDir = join(root, groupId);
   const liveExists = existsSync(srcDir) && !!loadGroupMeta(srcDir);
 
@@ -307,6 +389,7 @@ export function deleteGroup(yeaftDir, groupId, options = {}) {
     console.warn(`[group-crud] failed to remove memory dir for ${groupId}:`, err?.message || err);
   }
 
+  unregisterGroupWorkDir(yeaftDir, groupId);
   return { groupId, deleted: true, legacyCleanedUp: legacyDirs.length };
 }
 
@@ -382,8 +465,9 @@ export function setGroupDefaultVp(yeaftDir, groupId, vpId) {
   }
 }
 
-function requireGroup(yeaftDir, groupId) {
-  const root = groupsRoot(yeaftDir);
+export function requireGroup(yeaftDir, groupId) {
+  const groupYeaftDir = resolveGroupYeaftDir(yeaftDir, groupId);
+  const root = groupsRoot(groupYeaftDir);
   const dir = join(root, groupId);
   if (!existsSync(dir) || !loadGroupMeta(dir)) {
     throw new GroupCrudError('not_found', groupId);
@@ -393,7 +477,18 @@ function requireGroup(yeaftDir, groupId) {
 
 /** Convenience: snapshot all non-archived groups for WS broadcast. */
 export function snapshotGroups(yeaftDir) {
-  return listGroups(groupsRoot(yeaftDir));
+  const byId = new Map();
+  for (const group of listGroups(groupsRoot(yeaftDir))) {
+    byId.set(group.id, group);
+  }
+  const registry = readWorkDirRegistry(yeaftDir);
+  for (const [groupId, workDir] of Object.entries(registry)) {
+    const groupYeaftDir = yeaftDirForWorkDir(workDir);
+    const dir = join(groupsRoot(groupYeaftDir), groupId);
+    const meta = existsSync(dir) ? loadGroupMeta(dir) : null;
+    if (meta) byId.set(meta.id, meta);
+  }
+  return Array.from(byId.values()).sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
 }
 
 export { DEFAULT_GROUP_ID };
