@@ -63,37 +63,44 @@ server's relay is unchanged).
                 ▲                                │
                 │                                │ vp_turn_start
                 │                                ▼
-                │                            thinking
-                │                                │
+                │                            thinking ◀──┐
+                │                                │       │
                 │                                │ text_delta
-                │                                ▼
-                │                            streaming  ◀──┐
-                │                                │         │
+                │                                ▼       │
+                │                            streaming   │
+                │                                │       │ tool_end
                 │                                │ tool_call
-                │                                ▼         │ tool_end
-                │                              tool   ─────┘
+                │                                ▼       │
+                │                              tool  ────┘
                 │                                │
                 │  result / abort / error /      │
-                │  driver finally                │
+                │  driver finally / watchdog     │
                 └────────────────────────────────┘
 ```
 
 * `idle` — VP exists, no in-flight work
 * `typing` — envelope enqueued, driver hasn't started turn yet
-* `thinking` — `vp_turn_start` emitted, no text/tool yet
+* `thinking` — no text/tool delta yet (entered on `vp_turn_start`, re-entered after `tool_end` while waiting for the next chunk)
 * `streaming` — receiving `text_delta` events from the LLM
 * `tool` — a `tool_call` is in flight (between `tool_call` and `tool_end`)
-* `error` — turn ended with an exception (sticky for ~3s, then idle)
+* `error` — turn ended with an exception; emitted briefly from `runVpTurn`'s catch, then the outer `finally` settles to `idle`
 
 Notes:
 * `typing` and `thinking` collapse to the same UI label (`thinking…`)
   in v1 — the distinction is preserved on the wire so future UI can
   surface "queued vs running" separately.
+* `tool_end` lands in `thinking` (not `streaming`) because no text has
+  arrived yet — the LLM may emit another `tool_call` before the next
+  `text_delta`. The next `text_delta` flips back to `streaming`.
 * `streaming` ⇄ `tool` switching is unbounded inside a turn (a turn
   may interleave text and N tool calls).
-* `error` is a terminal state that auto-degrades to `idle` on the next
-  transition or after a short timeout — keeps the row from getting
-  stuck on a stale red dot.
+* `error` is a transient state. The agent emits `error` once from
+  `runVpTurn`'s catch, then the outer `finally` (which runs on every
+  exit path, including this one) settles back to `idle`. The
+  frontend's red status label shows briefly during that window —
+  long-enough for a snapshot consumer (refresh / reconnect arriving
+  mid-error) to see it, short-enough that the row doesn't stay stuck
+  red forever.
 
 ### Browser-only `offline`
 

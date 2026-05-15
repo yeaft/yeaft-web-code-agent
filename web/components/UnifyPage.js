@@ -971,17 +971,17 @@ export default {
       const vpList = selectGroupRosterVpList(roster, vpStore.vpList || []);
 
       // Cross-group leak defense: only include status rows whose
-      // groupId matches the active filter (or rows that have no
-      // groupId, which a defensive broker emits at process start).
-      // Without this scoping a VP that's "streaming" in group-A would
-      // light up its row in group-B's roster.
+      // groupId matches the active filter, and whose vpId is in the
+      // active roster. The store keys vpStatuses by `${groupId}::${vpId}`
+      // (see chat.js `vpStatusKey`) — iterate values, not keys, since
+      // the composite key isn't a usable VP id by itself.
       const rawStatuses = store.vpStatuses || {};
       const scopedStatuses = {};
-      for (const [vpId, entry] of Object.entries(rawStatuses)) {
-        if (!entry) continue;
+      for (const entry of Object.values(rawStatuses)) {
+        if (!entry || !entry.vpId) continue;
         if (entry.groupId && entry.groupId !== filter) continue;
-        if (!rosterSet.has(vpId)) continue;
-        scopedStatuses[vpId] = entry;
+        if (!rosterSet.has(entry.vpId)) continue;
+        scopedStatuses[entry.vpId] = entry;
       }
 
       return buildTimelineRows({

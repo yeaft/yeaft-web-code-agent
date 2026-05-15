@@ -911,6 +911,18 @@ export function handleUnifyVpDelete(msg) {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     const memoryRoot = yeaftDir ? join(yeaftDir, 'memory') : undefined;
     deleteVp(vpId, memoryRoot ? { memoryRoot } : {});
+    // vp-status: a deleted VP must not haunt the snapshot. We don't
+    // know up front which groups the VP appeared in (the registry's
+    // delete already detached it from every group), so sweep every
+    // matching entry from the broker table.
+    try {
+      const broker = getVpStatusBroker();
+      for (const row of broker.snapshot()) {
+        if (row.vpId === vpId) broker.forget({ groupId: row.groupId, vpId });
+      }
+    } catch (err) {
+      console.warn('[Unify] vp-status forget on delete failed:', err?.message || err);
+    }
     sendVpCrudResult({ op: 'delete', requestId, ok: true, vpId });
   } catch (err) {
     sendVpCrudResult({
@@ -2098,6 +2110,19 @@ async function runVpTurnWithEscalation(args) {
           { groupId, vpId, turnId },
         );
       } catch { /* never crash WS pipeline */ }
+      // vp-status: when the watchdog escalates, `runVpTurn`'s inner
+      // promise is still dangling (the adapter is ignoring `signal`)
+      // and its outer `finally` won't run until the adapter eventually
+      // returns — which may be never. Settle the broker here so the
+      // row drops to idle in lockstep with the synthetic stop frame.
+      // This is the exact failure mode the watchdog exists for; not
+      // settling here would re-introduce the "stuck on streaming" bug
+      // the whole PR is meant to fix.
+      try {
+        getVpStatusBroker().settleIdle({ groupId, vpId });
+      } catch (err) {
+        console.warn('[Unify] vp-status settleIdle (escalation) failed:', err?.message || err);
+      }
     },
   });
 }
@@ -2279,6 +2304,17 @@ async function runVpTurn({ prompt, promptParts = null, groupId, vpId, turnId, en
     }
 
     console.error('[Unify] query error:', err);
+
+    // vp-status: surface a transient `error` state so the row's status
+    // label flips red for the brief window before the outer finally
+    // settles it to idle. Without this, an LLM/tool failure would look
+    // identical to a normal turn end in the timeline — the user has
+    // no way to tell from the row that something went wrong.
+    try {
+      getVpStatusBroker().transition({ groupId, vpId, state: 'error', turnId });
+    } catch (brokerErr) {
+      console.warn('[Unify] vp-status error transition failed:', brokerErr?.message || brokerErr);
+    }
 
     if (isPermissionErrorMsg(err.message)) {
       if (!_permissionDiagnosticSent) {
@@ -2979,6 +3015,16 @@ export async function resetUnifySession() {
   // History-dedup cache is keyed by per-session coordinator msg ids;
   // a fresh session resets the id space, so clear the cache too.
   _persistedUserMsgIds.clear();
+  // vp-status: nuke the broker table too. Drivers above have just
+  // been aborted, so any in-flight `settleIdle` from their outer
+  // `finally` blocks is racing this reset. Clearing here makes the
+  // post-reset `broadcastSnapshot` (further down) emit an empty
+  // table, and the frontend mirror clears in lockstep.
+  try {
+    getVpStatusBroker().reset();
+  } catch (err) {
+    console.warn('[Unify] vp-status broker reset failed:', err?.message || err);
+  }
 
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;

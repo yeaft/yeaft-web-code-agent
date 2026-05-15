@@ -123,9 +123,20 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
   }
 
   /**
-   * Build the snapshot payload. Optionally filtered by groupId; if
-   * `groupId === undefined` the caller gets every group's table (used
-   * by the all-groups broadcast on session_ready).
+   * Build the snapshot payload. Optionally filtered by groupId.
+   *
+   * Filtering semantics:
+   *   - `groupId === undefined` → return every row across every group.
+   *     This is the all-groups broadcast used on `session_ready`.
+   *   - `groupId === null`      → same as undefined. Treated as "no
+   *     scope" because the wire envelope serializes `undefined` as
+   *     `null` over JSON, and we want both forms to behave the same.
+   *   - `groupId === '<id>'`    → only rows for that group.
+   *
+   * The store mirrors this semantic on the frontend (see
+   * `vp_status_snapshot` handler in chat.js): scoped snapshots
+   * replace just that group's slice, while null/undefined snapshots
+   * replace the whole table.
    *
    * @param {string} [groupId]
    * @returns {Array<{vpId:string, state:string, since:number, turnId:string|null, groupId:string|null}>}
@@ -133,7 +144,7 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
   function snapshot(groupId) {
     const out = [];
     for (const entry of table.values()) {
-      if (groupId !== undefined && entry.groupId !== groupId) continue;
+      if (groupId !== undefined && groupId !== null && entry.groupId !== groupId) continue;
       out.push({
         vpId: entry.vpId,
         state: entry.state,
@@ -148,6 +159,10 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
   /**
    * Emit a `vp_status_snapshot` to the wire. Pulls from `snapshot()`
    * so the wire shape stays consistent with the in-memory table.
+   *
+   * Wire envelope: `{ type, groupId, statuses }` where `groupId` is
+   * `null` when unscoped (frontend uses null to mean "replace the
+   * whole table"). See `snapshot()` JSDoc for the scoping contract.
    */
   function broadcastSnapshot({ groupId } = {}) {
     send({
@@ -167,6 +182,21 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
   }
 
   /**
+   * Wipe the in-memory table. Called from `resetUnifySession` on the
+   * agent side so a forced session reset doesn't leave the broker
+   * holding rows for VPs whose engines/inboxes have been cleared. The
+   * post-reset `broadcastSnapshot` then emits an empty table, and the
+   * frontend's mirror clears in lockstep.
+   *
+   * Distinct from `__testReset`: this is production code path, named
+   * accordingly. `__testReset` stays for tests that mutate broker
+   * state across describe-blocks.
+   */
+  function reset() {
+    table.clear();
+  }
+
+  /**
    * Wipe everything (only used by tests; agent runtime keeps the
    * broker alive for the whole process).
    */
@@ -180,6 +210,7 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
     snapshot,
     broadcastSnapshot,
     forget,
+    reset,
     __testReset,
   };
 }

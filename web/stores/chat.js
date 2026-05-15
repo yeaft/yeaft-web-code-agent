@@ -22,6 +22,14 @@ const { defineStore } = Pinia;
 // which prevents Vue computed from treating each call as a new value.
 const EMPTY_ARRAY = Object.freeze([]);
 
+// vp-status (2026-05-15): composite key used by the `vpStatuses` map.
+// Mirrors the agent broker's `keyOf` (see vp-status-broker.js): the
+// same vpId can appear in multiple groups, so keying by vpId alone
+// would conflate concurrent VP turns across groups. Null/undefined
+// groupId is normalized to empty string so cross-group lookups stay
+// deterministic.
+const vpStatusKey = (groupId, vpId) => `${groupId || ''}::${vpId}`;
+
 // feat-6af5f9f1 PR C: turnMatchesSearch lives in helpers/debug-search.js
 // so it can be unit-tested without the Pinia browser globals.
 
@@ -1360,6 +1368,20 @@ export const useChatStore = defineStore('chat', {
           this.activeVpTurns = rest;
           break;
         }
+        // vp_typing_* coexists with vp_status_changed on purpose. They serve
+        // two different display surfaces with different lifetimes:
+        //   - `vp_typing_start` / `vp_typing_end` drive the three-dot
+        //     animation next to a VP's avatar inside an *in-flight assistant
+        //     bubble* (VpSpeakerHeader). It's a refcount because overlapping
+        //     enqueues to the same VP should keep the dots on continuously.
+        //   - `vp_status_changed` drives the *VP timeline pane* row label
+        //     (typing / thinking / streaming / tool / error / offline). It's
+        //     a state machine, not a refcount — exactly one state per VP.
+        // Folding them into one event would force the timeline pane to
+        // re-derive "is the dot animating?" from the state machine, and
+        // would force the avatar dots to round-trip through a state that
+        // doesn't care about overlap. Cheaper to keep them as two thin
+        // streams over the same wire.
         case 'vp_typing_start': {
           if (!event.vpId) break;
           // Nest by conversationId so Unify typing state never leaks into
@@ -1384,51 +1406,67 @@ export const useChatStore = defineStore('chat', {
         // vp-timeline helper read from there. No reverse-inference from
         // `messages[].isStreaming` any more — that flag is a UI artifact
         // and was the root cause of the "stuck on streaming" bug.
+        //
+        // Key format mirrors the broker's: `${groupId}::${vpId}`. Keying
+        // by vpId alone would corrupt the table when the same VP sits
+        // in two groups (last-write-wins between the two transitions).
+        // See vp-status-broker.js `keyOf` for the canonical form.
         case 'vp_status_changed': {
           if (!event.vpId || !event.state) break;
+          const k = vpStatusKey(event.groupId, event.vpId);
           this.vpStatuses = {
             ...this.vpStatuses,
-            [event.vpId]: {
+            [k]: {
               state: event.state,
               since: event.since || Date.now(),
               turnId: event.turnId || null,
               groupId: event.groupId || null,
+              vpId: event.vpId,
             },
           };
           break;
         }
         case 'vp_status_snapshot': {
-          // Bulk hydrate. Replace the table outright when the snapshot
-          // is unscoped (groupId === null = "all groups"); otherwise
-          // merge in just the rows for the named group so other groups'
-          // entries survive a scoped reconnect.
+          // Bulk hydrate. Snapshot scoping (see broker JSDoc):
+          //   - groupId == null → unscoped, replace the WHOLE table.
+          //     This is what session_ready / reset broadcasts use, so
+          //     the frontend's mirror always matches the agent's table
+          //     after a reconnect.
+          //   - groupId === '<id>' → scoped, replace just that group's
+          //     slice. Other groups' entries survive.
           const statuses = Array.isArray(event.statuses) ? event.statuses : [];
           if (event.groupId == null) {
             const next = {};
             for (const row of statuses) {
               if (!row || !row.vpId) continue;
-              next[row.vpId] = {
+              const k = vpStatusKey(row.groupId, row.vpId);
+              next[k] = {
                 state: row.state,
                 since: row.since || Date.now(),
                 turnId: row.turnId || null,
                 groupId: row.groupId || null,
+                vpId: row.vpId,
               };
             }
             this.vpStatuses = next;
           } else {
             const merged = { ...this.vpStatuses };
-            // Drop existing rows for this groupId first so a VP that
-            // was removed from the group doesn't linger in the table.
+            // Drop every existing row for this groupId, regardless of
+            // the map's internal key. Iterating by entry.groupId (not
+            // by key shape) means a stray null-group leak in the table
+            // doesn't haunt subsequent scoped reconnects.
             for (const [k, v] of Object.entries(merged)) {
               if (v && v.groupId === event.groupId) delete merged[k];
             }
             for (const row of statuses) {
               if (!row || !row.vpId) continue;
-              merged[row.vpId] = {
+              const k = vpStatusKey(row.groupId, row.vpId);
+              merged[k] = {
                 state: row.state,
                 since: row.since || Date.now(),
                 turnId: row.turnId || null,
                 groupId: row.groupId || null,
+                vpId: row.vpId,
               };
             }
             this.vpStatuses = merged;
