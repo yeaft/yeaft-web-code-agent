@@ -1230,8 +1230,8 @@ export class Engine {
     // `turnStartIdx` is where the current user message lives; the arc
     // we may collapse spans (arcStartIdx .. last assistant/tool).
     //
-    // Periodic-T1 fix: T1 must fire EVERY TOOL_BATCH_SIZE (13) tool
-    // calls, not just the first 13. So instead of a one-shot boolean,
+    // Periodic-T1 fix: T1 must fire EVERY TOOL_BATCH_SIZE (30) tool
+    // calls, not just the first batch. So instead of a one-shot boolean,
     // track:
     //   • `lastT1AtToolCount` — toolCount snapshot at the last T1
     //     ATTEMPT (success OR error). Trigger when
@@ -1797,6 +1797,7 @@ export class Engine {
               originalUserMsg: prompt,
               toolPairs: pairs,
               assistantText,
+              language: this.#config.language,
               signal,
             });
             // Detach: never await. The promise outlives this query() and
@@ -2034,9 +2035,9 @@ export class Engine {
       }
 
       // PR-L: T1 in-turn (synchronous) reflection. Fires once per
-      // adapter loop iteration where ≥ TOOL_BATCH_SIZE (13) tool
+      // adapter loop iteration where ≥ TOOL_BATCH_SIZE (30) tool
       // calls have accumulated since the last T1 firing — not just
-      // the first 13 of the query(). Generates a markdown reflection
+      // the first batch of the query(). Generates a markdown reflection
       // over the assistant+tool arc since the last T1 firing (or
       // since the user prompt for the first batch) and rewrites that
       // range to a SINGLE synthetic user message before the next
@@ -2084,6 +2085,7 @@ export class Engine {
             originalUserMsg: prompt,
             toolPairs: pairs,
             assistantText,
+            language: this.#config.language,
             signal,
           });
           const next = collapseRangeToReflection(

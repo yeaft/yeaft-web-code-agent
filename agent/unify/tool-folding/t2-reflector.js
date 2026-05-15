@@ -17,13 +17,14 @@ import { buildReflectionPrompt } from './reflection-prompt.js';
  *   originalUserMsg: string,
  *   toolPairs: Array<{ name: string, input: any, output: string, isError: boolean }>,
  *   assistantText?: string,
+ *   language?: string,
  *   signal?: AbortSignal,
  * }} p
  * @returns {Promise<{ content: string, durationMs: number }>}
  */
-export async function runT2Reflection({ adapter, model, originalUserMsg, toolPairs, assistantText, signal }) {
+export async function runT2Reflection({ adapter, model, originalUserMsg, toolPairs, assistantText, language, signal }) {
   const t0 = Date.now();
-  const prompt = buildReflectionPrompt({ originalUserMsg, toolPairs, assistantText });
+  const prompt = buildReflectionPrompt({ originalUserMsg, toolPairs, assistantText, language });
   const result = await adapter.call({
     model,
     system: prompt,

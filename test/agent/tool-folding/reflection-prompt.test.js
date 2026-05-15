@@ -2,7 +2,12 @@
  * reflection-prompt.test.js — PR-L
  */
 import { describe, it, expect } from 'vitest';
-import { buildReflectionPrompt, REFLECTION_TEMPLATE } from '../../../agent/unify/tool-folding/reflection-prompt.js';
+import {
+  buildReflectionPrompt,
+  REFLECTION_TEMPLATE,
+  REFLECTION_TEMPLATE_EN,
+  REFLECTION_TEMPLATE_ZH,
+} from '../../../agent/unify/tool-folding/reflection-prompt.js';
 
 describe('buildReflectionPrompt', () => {
   it('contains all five required section headings', () => {
@@ -46,4 +51,75 @@ describe('buildReflectionPrompt', () => {
   it('exports the canonical template constant', () => {
     expect(REFLECTION_TEMPLATE).toContain('CRITICAL: Preserve all identifiers');
   });
+
+  it('renders the English template when language is omitted', () => {
+    const prompt = buildReflectionPrompt({
+      originalUserMsg: 'hello',
+      toolPairs: [{ name: 'a', input: {}, output: 'ok', isError: false }],
+    });
+    expect(prompt).toContain('You are reviewing a sequence of');
+    expect(prompt).toContain('CRITICAL: Preserve all identifiers');
+  });
+
+  it('renders the English template for language="en"', () => {
+    const prompt = buildReflectionPrompt({
+      originalUserMsg: 'hello',
+      toolPairs: [{ name: 'a', input: {}, output: 'ok', isError: false }],
+      assistantText: 'analyzing the failure',
+      language: 'en',
+    });
+    expect(prompt).toContain('You are reviewing a sequence of');
+    expect(prompt).toContain('Assistant text emitted during this batch');
+    // The Chinese template should NOT be selected.
+    expect(prompt).not.toContain('你正在复盘');
+    expect(prompt).not.toContain('本批工具调用期间助手输出的文本');
+  });
+
+  it('renders the Chinese template for language="zh"', () => {
+    const prompt = buildReflectionPrompt({
+      originalUserMsg: '修复 foo.js 的 bug',
+      toolPairs: [{ name: 'a', input: {}, output: 'ok', isError: false }],
+      language: 'zh',
+    });
+    expect(prompt).toContain('你正在复盘');
+    expect(prompt).toContain('修复 foo.js 的 bug');
+    // Section headings MUST stay English even in the zh template — the
+    // frontend ReflectionCard parses them by literal match.
+    expect(prompt).toContain('## What was attempted');
+    expect(prompt).toContain('## Key findings');
+    expect(prompt).toContain('## Direction check');
+    expect(prompt).toContain('## Suggested next direction');
+    expect(prompt).toContain('## Tool execution log');
+    // The English boilerplate is gone.
+    expect(prompt).not.toContain('CRITICAL: Preserve all identifiers');
+  });
+
+  it('treats language="zh-CN" as Chinese (case-insensitive prefix match)', () => {
+    const prompt = buildReflectionPrompt({
+      originalUserMsg: 'x',
+      toolPairs: [{ name: 'a', input: {}, output: 'ok', isError: false }],
+      language: 'ZH-CN',
+    });
+    expect(prompt).toContain('你正在复盘');
+  });
+
+  it('localises the assistantText header in the zh template', () => {
+    const prompt = buildReflectionPrompt({
+      originalUserMsg: 'x',
+      toolPairs: [{ name: 'a', input: {}, output: 'ok', isError: false }],
+      assistantText: '我在分析这个错误',
+      language: 'zh',
+    });
+    expect(prompt).toContain('本批工具调用期间助手输出的文本');
+    expect(prompt).toContain('我在分析这个错误');
+    expect(prompt).not.toContain('Assistant text emitted during this batch');
+  });
+
+  it('exports both language-specific template constants', () => {
+    expect(REFLECTION_TEMPLATE_EN).toContain('CRITICAL: Preserve all identifiers');
+    expect(REFLECTION_TEMPLATE_ZH).toContain('你正在复盘');
+    // EN constant equals the legacy REFLECTION_TEMPLATE for back-compat.
+    expect(REFLECTION_TEMPLATE).toBe(REFLECTION_TEMPLATE_EN);
+  });
 });
+

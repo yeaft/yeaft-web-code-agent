@@ -8,8 +8,8 @@
  *    must end with a user message."
  *
  * Historically this regressed when the T1 in-turn reflection collapsed a
- * 13-tool arc into a SINGLE assistant message and that arc happened to be
- * the tail of conversationMessages. The next adapter.stream() call then
+ * BATCH-tool arc into a SINGLE assistant message and that arc happened to
+ * be the tail of conversationMessages. The next adapter.stream() call then
  * saw user → assistant(reflection) and the upstream API 400'd.
  *
  * This file is a contract test: it drives the engine through the T1
@@ -22,13 +22,16 @@
  * level above (the unified UnifiedMessage[] layer) because that's where
  * the constraint is enforceable end-to-end without coupling to wire
  * format.
+ *
+ * BATCH = TOOL_BATCH_SIZE constant (was 13; raised to 30 on 2026-05-15).
  */
 import { describe, it, expect } from 'vitest';
 import { Engine } from '../../../../agent/unify/engine.js';
 import { NullTrace } from '../../../../agent/unify/debug-trace.js';
+import { TOOL_BATCH_SIZE } from '../../../../agent/unify/tool-folding/index.js';
 
 class TailRecordingAdapter {
-  constructor({ toolUseTurns = 13 } = {}) {
+  constructor({ toolUseTurns = TOOL_BATCH_SIZE } = {}) {
     this.toolUseTurns = toolUseTurns;
     this.tailRoles = []; // role of last message at every stream() call
     this.allLastMessages = [];
@@ -101,31 +104,31 @@ describe('messages-tail contract — Anthropic API requires user-tail', () => {
   });
 
   it('after T1 collapse the reflection lands as user-role (so the next stream sees user-tail)', async () => {
-    // 13 tool calls trips T1. Critical assertion: the post-collapse
-    // stream() call (the 14th) MUST see role='user' at the tail.
-    const adapter = new TailRecordingAdapter({ toolUseTurns: 13 });
+    // BATCH tool calls trips T1. Critical assertion: the post-collapse
+    // stream() call (the (BATCH+1)-th) MUST see role='user' at the tail.
+    const adapter = new TailRecordingAdapter({ toolUseTurns: TOOL_BATCH_SIZE });
     const engine = mkEngine(adapter);
     for await (const _ of engine.query({ prompt: 'go', messages: [] })) { /* drain */ }
 
-    // We expect 14 stream() invocations: 13 that issued tool_use + 1 that
-    // produced end_turn after the rewrite.
-    expect(adapter.tailRoles).toHaveLength(14);
+    // We expect BATCH+1 stream() invocations: BATCH that issued tool_use +
+    // 1 that produced end_turn after the rewrite.
+    expect(adapter.tailRoles).toHaveLength(TOOL_BATCH_SIZE + 1);
 
     // The post-collapse stream call must see a user-tail. This is the
     // exact regression we are guarding.
-    const postCollapseTail = adapter.tailRoles[13];
+    const postCollapseTail = adapter.tailRoles[TOOL_BATCH_SIZE];
     expect(postCollapseTail).toBe('user');
 
     // And the synthetic reflection should be tagged so we can tell it
     // apart from a real user prompt during debugging.
-    const postCollapseLastMsg = adapter.allLastMessages[13];
+    const postCollapseLastMsg = adapter.allLastMessages[TOOL_BATCH_SIZE];
     expect(postCollapseLastMsg._reflection).toBe(true);
     expect(postCollapseLastMsg.content).toMatch(/folded for context efficiency/);
 
-    // The earlier 13 stream calls (during the tool loop) all end with
+    // The earlier BATCH stream calls (during the tool loop) all end with
     // either user (the original prompt, on call 0) or tool (tool_results
-    // for the prior tool_use, on calls 1..12).
-    for (let i = 0; i < 13; i += 1) {
+    // for the prior tool_use, on calls 1..BATCH-1).
+    for (let i = 0; i < TOOL_BATCH_SIZE; i += 1) {
       expect(['user', 'tool']).toContain(adapter.tailRoles[i]);
     }
   });
