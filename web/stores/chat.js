@@ -1600,7 +1600,7 @@ export const useChatStore = defineStore('chat', {
     //
     //   op                data shape
     //   list              (ignored)
-    //   create            { name, roster?, defaultVpId? }  → msg.payload
+    //   create            { name, roster?, defaultVpId?, workDir? }  → msg.payload
     //   rename            { groupId, name }                → flat
     //   archive           { groupId }                      → flat
     //   add_member        { groupId, vpId }                → flat

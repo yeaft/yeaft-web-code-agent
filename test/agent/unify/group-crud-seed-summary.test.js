@@ -7,21 +7,26 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, existsSync, writeFileSync } from 'fs';
-import { tmpdir, homedir } from 'os';
+import { tmpdir } from 'os';
 import { join } from 'path';
 import {
   createGroupFromSpec,
   buildGroupSeedSummary,
+  groupsRoot,
+  readWorkDirRegistry,
+  requireGroup,
+  resolveGroupYeaftDir,
+  snapshotGroups,
+  updateGroupAnnouncement,
+  yeaftDirForWorkDir,
 } from '../../../agent/unify/groups/group-crud.js';
+import { loadGroupMeta } from '../../../agent/unify/groups/group-store.js';
 
 let yeaftDir;
-let realHome;
-
 beforeEach(() => {
   const tmp = mkdtempSync(join(tmpdir(), 'group-seed-'));
   yeaftDir = tmp;
   mkdirSync(join(yeaftDir, 'groups'), { recursive: true });
-  realHome = homedir();
 });
 
 afterEach(() => {
@@ -35,7 +40,7 @@ describe('createGroupFromSpec seeds summary.md', () => {
       roster: ['alice', 'bob'],
       defaultVpId: 'alice',
     });
-    const summaryPath = join(realHome, '.yeaft', 'memory', 'group', meta.id, 'summary.md');
+    const summaryPath = join(yeaftDir, 'memory', 'group', meta.id, 'summary.md');
     try {
       expect(existsSync(summaryPath)).toBe(true);
       const body = readFileSync(summaryPath, 'utf-8');
@@ -44,9 +49,57 @@ describe('createGroupFromSpec seeds summary.md', () => {
       expect(body).toContain('bob');
     } finally {
       if (existsSync(summaryPath)) {
-        rmSync(join(realHome, '.yeaft', 'memory', 'group', meta.id), { recursive: true, force: true });
+        rmSync(join(yeaftDir, 'memory', 'group', meta.id), { recursive: true, force: true });
       }
     }
+  });
+
+
+  it('creates workDir-backed group state under <workDir>/.yeaft and keeps it discoverable', () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'group-workdir-'));
+    const meta = createGroupFromSpec(yeaftDir, {
+      name: `WorkdirGrp_${Date.now()}`,
+      roster: ['alice'],
+      defaultVpId: 'alice',
+      workDir,
+    });
+
+    const groupYeaftDir = yeaftDirForWorkDir(workDir);
+    const groupDir = join(groupYeaftDir, 'groups', meta.id);
+    expect(existsSync(groupDir)).toBe(true);
+    expect(existsSync(join(yeaftDir, 'groups', meta.id))).toBe(false);
+
+    const stored = loadGroupMeta(groupDir);
+    expect(stored.workDir).toBe(workDir);
+    expect(resolveGroupYeaftDir(yeaftDir, meta.id)).toBe(groupYeaftDir);
+    expect(readWorkDirRegistry(yeaftDir)[meta.id]).toBe(workDir);
+
+    const groups = snapshotGroups(yeaftDir);
+    expect(groups.some((g) => g.id === meta.id && g.workDir === workDir)).toBe(true);
+
+    const handle = requireGroup(yeaftDir, meta.id);
+    expect(handle.getMeta().workDir).toBe(workDir);
+    handle.close();
+
+    const updated = updateGroupAnnouncement(yeaftDir, meta.id, 'Stored in project workdir');
+    expect(updated.announcement).toBe('Stored in project workdir');
+    expect(loadGroupMeta(groupDir).announcement).toBe('Stored in project workdir');
+
+    const summaryPath = join(groupYeaftDir, 'memory', 'group', meta.id, 'summary.md');
+    expect(existsSync(summaryPath)).toBe(true);
+    expect(readFileSync(summaryPath, 'utf8').trim().length).toBeGreaterThan(0);
+  });
+
+  it('keeps legacy groups without workDir under the default yeaftDir', () => {
+    const meta = createGroupFromSpec(yeaftDir, {
+      name: `LegacyGrp_${Date.now()}`,
+      roster: ['alice'],
+      defaultVpId: 'alice',
+    });
+
+    expect(resolveGroupYeaftDir(yeaftDir, meta.id)).toBe(yeaftDir);
+    expect(existsSync(join(groupsRoot(yeaftDir), meta.id))).toBe(true);
+    expect(readWorkDirRegistry(yeaftDir)[meta.id]).toBeUndefined();
   });
 });
 

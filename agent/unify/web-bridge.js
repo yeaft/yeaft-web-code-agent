@@ -41,6 +41,8 @@ import {
   removeMember,
   setGroupDefaultVp,
   snapshotGroups,
+  resolveGroupYeaftDir,
+  groupsRoot,
 } from './groups/group-crud.js';
 import { openGroup, loadGroupMeta } from './groups/group-store.js';
 import { createCoordinator } from './groups/coordinator.js';
@@ -921,6 +923,7 @@ function sendGroupRosterChanged(group) {
     name: group.name,
     roster: group.roster,
     defaultVpId: group.defaultVpId,
+    workDir: group.workDir || '',
   });
 }
 
@@ -948,8 +951,7 @@ export function handleUnifyCreateGroup(msg) {
   const payload = (msg && msg.payload) || {};
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
-    const memoryRoot = yeaftDir ? join(yeaftDir, 'memory') : undefined;
-    const group = createGroupFromSpec(yeaftDir, payload, memoryRoot ? { memoryRoot } : {});
+    const group = createGroupFromSpec(yeaftDir, payload);
     sendGroupCrudResult({ op: 'create', requestId, ok: true, group });
     sendGroupSnapshotBroadcast();
   } catch (err) {
@@ -1031,8 +1033,7 @@ export function handleUnifyDeleteGroup(msg) {
   const groupId = msg && msg.groupId;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
-    const memoryRoot = yeaftDir ? join(yeaftDir, 'memory') : undefined;
-    const result = deleteGroup(yeaftDir, groupId, memoryRoot ? { memoryRoot } : {});
+    const result = deleteGroup(yeaftDir, groupId);
     // Cascade: remove every persisted message stamped with this group id.
     // Hard delete (per user spec): no soft-archive, the bytes are gone.
     // Skipped silently if the session/store isn't initialized — the next
@@ -1510,13 +1511,14 @@ export async function handleUnifyGroupChat(msg) {
   let groupHandle = null;
   let seedFailed = false;
   try {
-    const root = join(yeaftDir, 'groups');
+    const groupYeaftDir = resolveGroupYeaftDir(yeaftDir, groupId);
+    const root = groupsRoot(groupYeaftDir);
     const dir = join(root, groupId);
     if (existsSync(dir) && loadGroupMeta(dir)) {
       groupHandle = openGroup(root, groupId);
     } else if (groupId === 'grp_default') {
       try {
-        const seeded = seedDefaultGroup(yeaftDir, { memoryRoot: join(yeaftDir, 'memory') });
+        const seeded = seedDefaultGroup(groupYeaftDir, { memoryRoot: join(groupYeaftDir, 'memory') });
         groupHandle = seeded.group;
       } catch (seedErr) {
         seedFailed = true;
@@ -1531,7 +1533,7 @@ export async function handleUnifyGroupChat(msg) {
 
   if (!groupHandle) {
     const errText = seedFailed
-      ? `⚠️ Failed to seed default group ${groupId} — check ~/.yeaft/ permissions.`
+      ? `⚠️ Failed to seed default group ${groupId} — check group .yeaft permissions.`
       : `⚠️ Group ${groupId} not found.`;
     sendUnifyOutput({
       type: 'assistant',
@@ -1559,7 +1561,7 @@ export async function handleUnifyGroupChat(msg) {
       }
       if (rosterMutated) {
         try { groupHandle.close && groupHandle.close(); } catch { /* best-effort */ }
-        groupHandle = openGroup(join(yeaftDir, 'groups'), groupId);
+        groupHandle = openGroup(root, groupId);
         sendGroupRosterChanged(groupHandle.getMeta());
       }
     }
@@ -1568,7 +1570,7 @@ export async function handleUnifyGroupChat(msg) {
       try {
         setGroupDefaultVp(yeaftDir, groupId, meta2.roster[0]);
         try { groupHandle.close && groupHandle.close(); } catch { /* best-effort */ }
-        groupHandle = openGroup(join(yeaftDir, 'groups'), groupId);
+        groupHandle = openGroup(root, groupId);
         sendGroupRosterChanged(groupHandle.getMeta());
         rosterMutated = true;
       } catch { /* best-effort */ }

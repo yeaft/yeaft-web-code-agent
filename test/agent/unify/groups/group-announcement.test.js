@@ -40,6 +40,24 @@ describe('group.json announcement field', () => {
     h.close();
   });
 
+
+  it('createGroup persists workDir and legacy groups load with empty workDir', () => {
+    const h = createGroup(groupsDir, {
+      id: 'workdir',
+      name: 'Workdir',
+      roster: [],
+      workDir: '/tmp/project-a',
+    });
+    const meta = h.getMeta();
+    h.close();
+    expect(meta.workDir).toBe('/tmp/project-a');
+
+    const legacy = createGroup(groupsDir, { id: 'legacy-workdir', name: 'Legacy Workdir', roster: [] });
+    legacy.saveMeta({ id: 'legacy-workdir', name: 'Legacy Workdir', roster: [], defaultVpId: null });
+    legacy.close();
+    const reloaded = loadGroupMeta(join(groupsDir, 'legacy-workdir'));
+    expect(reloaded.workDir).toBe('');
+  });
   it('legacy group without announcement loads with empty string', () => {
     // Simulate pre-migration meta (no announcement field) by writing through
     // a saveMeta call, which runs validateMeta — so a meta without

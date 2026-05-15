@@ -53,6 +53,31 @@ export default {
             <span v-if="nameError" class="group-wizard-error">{{ nameError }}</span>
           </label>
 
+          <!-- WORK DIR -->
+          <label class="group-wizard-field">
+            <span class="group-wizard-field-label">{{ $t('unify.group.wizard.workDir') }}</span>
+            <div class="group-wizard-workdir-row">
+              <input
+                type="text"
+                v-model.trim="form.workDir"
+                :placeholder="$t('unify.group.wizard.workDirPlaceholder')"
+                autocomplete="off"
+                class="group-wizard-input"
+                @keydown.enter.prevent="onSubmit"
+              />
+              <button
+                class="group-wizard-browse-btn"
+                type="button"
+                @click="openFolderPicker"
+                :disabled="busy || !folderPickerAgentId"
+                :title="$t('crewConfig.browse')"
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
+              </button>
+            </div>
+            <span class="group-wizard-hint">{{ $t('unify.group.wizard.workDirHint') }}</span>
+          </label>
+
           <!-- ROSTER -->
           <div class="group-wizard-field">
             <span class="group-wizard-field-label">{{ $t('unify.group.wizard.roster') }}</span>
@@ -119,6 +144,41 @@ export default {
             </button>
           </div>
         </div>
+
+        <div class="folder-picker-overlay" v-if="folderPickerOpen" @click.self="closeFolderPicker">
+          <div class="folder-picker-dialog">
+            <div class="folder-picker-header">
+              <span>{{ $t('modal.folderPicker.title') }}</span>
+              <button class="wb-btn-sm" type="button" @click="closeFolderPicker">&times;</button>
+            </div>
+            <div class="folder-picker-path">
+              <button class="wb-btn-sm" type="button" @click="folderPickerNavigateUp" :disabled="!folderPickerPath" :title="$t('modal.folderPicker.parentDir')">
+                <svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+              </button>
+              <span class="folder-picker-current">{{ folderPickerPath || $t('common.rootDir') }}</span>
+            </div>
+            <div class="folder-picker-list">
+              <div class="git-loading" v-if="folderPickerLoading" style="padding:12px"><span class="spinner-mini"></span> {{ $t('common.loading') }}</div>
+              <template v-else>
+                <div
+                  v-for="entry in folderPickerEntries"
+                  :key="entry.name"
+                  class="tree-item tree-dir folder-picker-item"
+                  :class="{ 'folder-picker-selected': folderPickerSelected === entry.name }"
+                  @click="folderPickerSelectItem(entry)"
+                  @dblclick="folderPickerEnter(entry)"
+                >
+                  <span class="tree-icon"><svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg></span>
+                  <span class="tree-name">{{ entry.name }}</span>
+                </div>
+                <div class="tree-empty" v-if="folderPickerEntries.length === 0">{{ $t('common.noSubdirectories') }}</div>
+              </template>
+            </div>
+            <div class="folder-picker-footer">
+              <button class="modern-btn primary" type="button" @click="confirmFolderPicker" :disabled="!folderPickerPath">{{ $t('common.confirm') }}</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
     </Teleport>
@@ -129,10 +189,17 @@ export default {
         name: '',
         roster: [],
         defaultVpId: null,
+        workDir: '',
       },
       busy: false,
       nameError: '',
       submitError: '',
+      folderPickerOpen: false,
+      folderPickerPath: '',
+      folderPickerEntries: [],
+      folderPickerLoading: false,
+      folderPickerSelected: '',
+      _folderPickerTimer: null,
     };
   },
   computed: {
@@ -170,9 +237,14 @@ export default {
       return !!(s.lastSnapshotAt && s.lastSnapshotAt > 0 && (s.vpOrder?.length || 0) === 0);
     },
     canAdvanceFromName() { return (this.form.name || '').trim().length > 0; },
+    folderPickerAgentId() {
+      const chat = this.chat;
+      return chat?.currentAgent || chat?.agents?.[0]?.id || '';
+    },
   },
   mounted() {
     window.addEventListener('keydown', this.onEsc);
+    window.addEventListener('workbench-message', this.handleFolderPickerMessage);
     this.$nextTick(() => {
       const el = this.$refs.nameInput;
       if (el && typeof el.focus === 'function') el.focus();
@@ -189,6 +261,8 @@ export default {
   },
   beforeUnmount() {
     window.removeEventListener('keydown', this.onEsc);
+    window.removeEventListener('workbench-message', this.handleFolderPickerMessage);
+    if (this._folderPickerTimer) clearTimeout(this._folderPickerTimer);
   },
   methods: {
     onEsc(e) {
@@ -221,6 +295,109 @@ export default {
       const fn = this.vpStore?.vpInitial;
       return typeof fn === 'function' ? fn(vpId) : (vpId ? vpId.charAt(0).toUpperCase() : '?');
     },
+    openFolderPicker() {
+      const agentId = this.folderPickerAgentId;
+      if (!agentId || !this.chat?.sendWsMessage) return;
+      const agent = this.chat.agents?.find(a => a.id === agentId);
+      const defaultDir = (this.form.workDir || agent?.workDir || '').trim();
+      this.folderPickerOpen = true;
+      this.folderPickerSelected = '';
+      this.folderPickerLoading = true;
+      this.folderPickerPath = defaultDir;
+      this.folderPickerEntries = [];
+      const sendRequest = () => {
+        this.chat.sendWsMessage({
+          type: 'list_directory',
+          conversationId: '_workdir_picker',
+          agentId,
+          dirPath: defaultDir,
+          workDir: agent?.workDir || '',
+        });
+      };
+      sendRequest();
+      if (this._folderPickerTimer) clearTimeout(this._folderPickerTimer);
+      this._folderPickerTimer = setTimeout(() => {
+        if (this.folderPickerLoading && this.folderPickerOpen) sendRequest();
+      }, 5000);
+    },
+    closeFolderPicker() {
+      this.folderPickerOpen = false;
+      if (this._folderPickerTimer) {
+        clearTimeout(this._folderPickerTimer);
+        this._folderPickerTimer = null;
+      }
+    },
+    loadFolderPickerDir(dirPath) {
+      const agentId = this.folderPickerAgentId;
+      if (!agentId || !this.chat?.sendWsMessage) return;
+      const agent = this.chat.agents?.find(a => a.id === agentId);
+      this.folderPickerLoading = true;
+      this.folderPickerSelected = '';
+      this.folderPickerEntries = [];
+      this.chat.sendWsMessage({
+        type: 'list_directory',
+        conversationId: '_workdir_picker',
+        agentId,
+        dirPath,
+        workDir: agent?.workDir || '',
+      });
+    },
+    folderPickerNavigateUp() {
+      if (!this.folderPickerPath) return;
+      const isWin = this.folderPickerPath.includes('\\');
+      const sep = isWin ? '\\' : '/';
+      const parts = this.folderPickerPath.replace(/[/\\]$/, '').split(/[/\\]/);
+      parts.pop();
+      if (parts.length === 0) {
+        this.folderPickerPath = '';
+        this.loadFolderPickerDir('');
+      } else if (isWin && parts.length === 1 && /^[A-Za-z]:$/.test(parts[0])) {
+        this.folderPickerPath = `${parts[0]}\\`;
+        this.loadFolderPickerDir(`${parts[0]}\\`);
+      } else {
+        const parent = parts.join(sep);
+        this.folderPickerPath = parent;
+        this.loadFolderPickerDir(parent);
+      }
+    },
+    folderPickerSelectItem(entry) {
+      this.folderPickerSelected = entry.name;
+    },
+    folderPickerEnter(entry) {
+      const isWin = this.folderPickerPath.includes('\\') || /^[A-Z]:/.test(entry.name);
+      const sep = isWin ? '\\' : '/';
+      let next;
+      if (!this.folderPickerPath) {
+        next = /^[A-Z]:$/.test(entry.name) ? `${entry.name}\\` : `/${entry.name}`;
+      } else {
+        next = this.folderPickerPath.replace(/[/\\]$/, '') + sep + entry.name;
+      }
+      this.folderPickerPath = next;
+      this.loadFolderPickerDir(next);
+    },
+    confirmFolderPicker() {
+      let path = this.folderPickerPath;
+      if (!path) return;
+      if (this.folderPickerSelected) {
+        const sep = path.includes('\\') ? '\\' : '/';
+        path = path.replace(/[/\\]$/, '') + sep + this.folderPickerSelected;
+      }
+      this.form.workDir = path;
+      this.closeFolderPicker();
+    },
+    handleFolderPickerMessage(event) {
+      const msg = event.detail;
+      if (!msg || msg.type !== 'directory_listing' || msg.conversationId !== '_workdir_picker') return;
+      if (this._folderPickerTimer) {
+        clearTimeout(this._folderPickerTimer);
+        this._folderPickerTimer = null;
+      }
+      this.folderPickerLoading = false;
+      this.folderPickerEntries = (msg.entries || [])
+        .filter(e => e.type === 'directory')
+        .sort((a, b) => a.name.localeCompare(b.name));
+      if (msg.dirPath != null) this.folderPickerPath = msg.dirPath;
+    },
     async onSubmit() {
       this.submitError = '';
       this.nameError = '';
@@ -240,6 +417,7 @@ export default {
           name: this.form.name.trim(),
           roster: this.form.roster.slice(),
           defaultVpId,
+          workDir: this.form.workDir.trim(),
         });
         if (res && res.ok) {
           this.$emit('created', res.group);
