@@ -55,6 +55,10 @@ beforeAll(async () => {
 function mkStore() {
   return {
     unifyDreamLatest: {},
+    // PR feat-dream-debug-panel-full: ring buffer + sibling action are
+    // touched by the same dream_progress branch we're exercising.
+    unifyDreamEvents: {},
+    _appendDreamEvent: actions._appendDreamEvent,
     // Other state the function MAY read on un-related branches. Safe
     // defaults so the function never crashes if it walks past our case.
     unifyConversationId: null,

@@ -41,6 +41,10 @@ export default {
       // moment they start a search, restored when they clear it. Without
       // this, search would clobber their carefully curated open turns.
       _expandSnapshot: null,
+      // PR feat-dream-debug-panel-full: expand state for the Dream row's
+      // event timeline. False = collapsed summary line only; true = show
+      // full per-event ring buffer below.
+      dreamExpanded: false,
     };
   },
   watch: {
@@ -152,10 +156,83 @@ export default {
       if (!d) return '';
       return d.manual ? 'manual' : 'auto';
     },
+    // PR feat-dream-debug-panel-full: full per-event timeline for the
+    // active group. Empty array when no events have been recorded yet.
+    // Sorted oldest-first (matches the store getter's merge order).
+    dreamEvents() {
+      const list = (this.store && this.store.unifyDreamEventsForActiveGroup) || [];
+      return Array.isArray(list) ? list : [];
+    },
   },
   methods: {
     toggleTurn(turnId) {
       this.expandedTurns = { ...this.expandedTurns, [turnId]: !this.expandedTurns[turnId] };
+    },
+    // PR feat-dream-debug-panel-full: toggle the expanded event timeline
+    // under the Dream row.
+    toggleDream() {
+      this.dreamExpanded = !this.dreamExpanded;
+    },
+    // PR feat-dream-debug-panel-full: human-readable one-line detail for
+    // a single dream event in the timeline. Falls back to phase + status
+    // when no richer detail is available so every event shows something.
+    dreamEventDetail(evt) {
+      if (!evt) return '';
+      const phase = evt.phase || 'unknown';
+      const parts = [];
+      // Per-phase rich detail: prefer the most informative field per phase.
+      let matched = true;
+      if (phase === 'start') {
+        parts.push(evt.manual ? 'manual trigger' : 'auto trigger');
+      } else if (phase === 'load-diff') {
+        if (evt.groupId) parts.push(`group ${evt.groupId}`);
+      } else if (phase === 'triage') {
+        if (typeof evt.segments === 'number') parts.push(`${evt.segments} segs`);
+        if (typeof evt.actions === 'number') parts.push(`${evt.actions} actions`);
+        if (evt.status) parts.push(evt.status);
+      } else if (phase === 'merge') {
+        if (typeof evt.targets === 'number') parts.push(`${evt.targets} targets`);
+      } else if (phase === 'apply') {
+        if (evt.target) parts.push(evt.target);
+        if (evt.status) parts.push(evt.status);
+        if (typeof evt.mergedCount === 'number') parts.push(`merged ${evt.mergedCount}`);
+      } else if (phase === 'done') {
+        if (typeof evt.groups === 'number') parts.push(`${evt.groups} groups`);
+        if (typeof evt.targets === 'number') parts.push(`${evt.targets} targets`);
+        if (typeof evt.duration === 'number') parts.push(this.formatMs(evt.duration));
+      } else if (phase === 'result') {
+        parts.push(evt.success ? 'success' : 'error');
+        if (typeof evt.entriesCreated === 'number') parts.push(`entries ${evt.entriesCreated}`);
+        if (!evt.success && evt.error) parts.push(evt.error);
+        if (evt.skipped) parts.push(`skipped: ${evt.skippedReason || 'unknown'}`);
+      } else {
+        matched = false;
+      }
+      // Generic fallback: if the phase wasn't one we know, OR a known
+      // phase produced no parts (runner grew a new field shape), show
+      // every scalar field so the panel never silently goes blank. This
+      // makes new runner phases visible as soon as they ship instead of
+      // requiring a UI update lockstep.
+      if (!matched || parts.length === 0) {
+        const skip = new Set(['type', 'phase', 'groupId', 'target', 'ts', 'at']);
+        for (const [k, v] of Object.entries(evt)) {
+          if (skip.has(k)) continue;
+          if (v === null || v === undefined) continue;
+          if (typeof v === 'object') continue;
+          parts.push(`${k}=${v}`);
+        }
+      }
+      if (evt.error && !parts.includes(evt.error)) parts.unshift(`error: ${evt.error}`);
+      return parts.join(' · ');
+    },
+    // PR feat-dream-debug-panel-full: status label used to colorize a
+    // timeline row (matches the same class names as the Dream summary).
+    dreamEventStatus(evt) {
+      if (!evt) return 'running';
+      if (evt.status === 'error' || evt.phase === 'error') return 'error';
+      if (evt.status === 'done' || evt.status === 'success' || evt.phase === 'done') return 'success';
+      if (evt.phase === 'result') return evt.success ? 'success' : 'error';
+      return 'running';
     },
     toggleLoop(turnId, loopNumber) {
       const key = `${turnId}#${loopNumber}`;
@@ -357,15 +434,40 @@ export default {
         </select>
       </div>
 
-      <!-- v0.1.755: Dream pass status for the focused group. Both auto-
-           triggered and manually-triggered runs feed the same row; user
-           sees only the latest run by design ("dream只需要看最新的一次"). -->
-      <div class="unify-debug-dream-row" v-if="dreamLatest">
+      <!-- v0.1.755 + PR feat-dream-debug-panel-full: Dream pass status
+           for the focused group. The header row shows the most recent
+           pass (auto or manual); clicking it expands a timeline of every
+           dream_progress event observed for this scope so users can see
+           per-phase progress + the final result with errors. -->
+      <div class="unify-debug-dream-row" v-if="dreamLatest || dreamEvents.length > 0" @click="toggleDream">
+        <svg
+          class="unify-debug-dream-chevron"
+          :class="{ expanded: dreamExpanded }"
+          viewBox="0 0 24 24" width="12" height="12"
+        >
+          <path fill="currentColor" d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/>
+        </svg>
         <span class="unify-debug-dream-label">Dream</span>
-        <span class="unify-debug-dream-kind" :class="'kind-' + dreamLatestKindLabel">{{ dreamLatestKindLabel }}</span>
-        <span class="unify-debug-dream-status" :class="'status-' + dreamLatest.status">{{ dreamLatestLabel }}</span>
-        <span class="unify-debug-dream-time" v-if="dreamLatest.finishedAt">{{ formatTimestamp(dreamLatest.finishedAt) }}</span>
-        <span class="unify-debug-dream-time" v-else-if="dreamLatest.startedAt">{{ formatTimestamp(dreamLatest.startedAt) }}</span>
+        <span v-if="dreamLatest" class="unify-debug-dream-kind" :class="'kind-' + dreamLatestKindLabel">{{ dreamLatestKindLabel }}</span>
+        <span v-if="dreamLatest" class="unify-debug-dream-status" :class="'status-' + dreamLatest.status">{{ dreamLatestLabel }}</span>
+        <span v-else class="unify-debug-dream-status">{{ dreamEvents.length }} events</span>
+        <span class="unify-debug-dream-time" v-if="dreamLatest && dreamLatest.finishedAt">{{ formatTimestamp(dreamLatest.finishedAt) }}</span>
+        <span class="unify-debug-dream-time" v-else-if="dreamLatest && dreamLatest.startedAt">{{ formatTimestamp(dreamLatest.startedAt) }}</span>
+      </div>
+      <div class="unify-debug-dream-events" v-if="dreamExpanded && dreamEvents.length > 0">
+        <div
+          v-for="(evt, idx) in dreamEvents"
+          :key="evt.at + ':' + idx"
+          class="unify-debug-dream-event"
+          :class="'status-' + dreamEventStatus(evt)"
+        >
+          <span class="unify-debug-dream-event-time">{{ formatTimestamp(evt.at) }}</span>
+          <span class="unify-debug-dream-event-phase">{{ evt.phase || 'unknown' }}</span>
+          <span class="unify-debug-dream-event-detail">{{ dreamEventDetail(evt) }}</span>
+        </div>
+      </div>
+      <div class="unify-debug-dream-events" v-else-if="dreamExpanded && dreamEvents.length === 0">
+        <div class="unify-debug-dream-event-empty">No dream events yet for this group.</div>
       </div>
 
       <div class="unify-debug-turns" v-if="turns.length > 0">

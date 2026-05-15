@@ -2549,8 +2549,10 @@
   border-bottom: 1px solid var(--border-color);
 }
 
-/* v0.1.755: Dream pass status row — shows the most recent auto/manual
- * dream pass for the focused group. Sits between toolbar and turn list. */
+/* v0.1.755 + PR feat-dream-debug-panel-full: Dream pass status row.
+ * Header line shows the most recent pass; clicking it expands the
+ * per-event timeline below. Per Unify design rule (CLAUDE.md): no
+ * horizontal divider — spacing only. */
 .unify-debug-dream-row {
   display: flex;
   align-items: center;
@@ -2558,8 +2560,21 @@
   padding: 6px 10px;
   font-size: 11px;
   color: var(--text-secondary);
-  border-bottom: 1px solid var(--border-color);
   background: var(--bg-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+.unify-debug-dream-row:hover {
+  background: var(--bg-tertiary, rgba(0,0,0,0.04));
+}
+.unify-debug-dream-chevron {
+  flex: 0 0 auto;
+  transform: rotate(0deg);
+  transition: transform 0.12s ease;
+  color: var(--text-tertiary, var(--text-secondary));
+}
+.unify-debug-dream-chevron.expanded {
+  transform: rotate(90deg);
 }
 .unify-debug-dream-label {
   font-weight: 600;
@@ -2597,6 +2612,51 @@
   flex: 0 0 auto;
   font-variant-numeric: tabular-nums;
   color: var(--text-tertiary, var(--text-secondary));
+}
+
+/* PR feat-dream-debug-panel-full: expanded dream event timeline.
+ * Rendered when the user clicks the Dream row; one line per event
+ * (oldest first). Indented under the row to keep the timeline
+ * visually nested without a divider. */
+.unify-debug-dream-events {
+  background: var(--bg-secondary);
+  padding: 4px 10px 8px 26px;
+  font-size: 11px;
+  font-family: var(--mono-font, ui-monospace, monospace);
+}
+.unify-debug-dream-event {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 0;
+  color: var(--text-secondary);
+}
+.unify-debug-dream-event-time {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-tertiary, var(--text-secondary));
+  min-width: 64px;
+}
+.unify-debug-dream-event-phase {
+  flex: 0 0 auto;
+  font-weight: 600;
+  color: var(--text-primary);
+  min-width: 72px;
+}
+.unify-debug-dream-event-detail {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.unify-debug-dream-event.status-running .unify-debug-dream-event-phase { color: #f59e0b; }
+.unify-debug-dream-event.status-success .unify-debug-dream-event-phase { color: #22c55e; }
+.unify-debug-dream-event.status-error   .unify-debug-dream-event-phase { color: #ef4444; }
+.unify-debug-dream-event-empty {
+  color: var(--text-tertiary, var(--text-secondary));
+  font-style: italic;
+  padding: 4px 0;
 }
 
 .unify-debug-search {
