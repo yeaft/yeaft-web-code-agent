@@ -768,8 +768,7 @@
  * thing the 4-state machine collapses.
  *
  * Per CLAUDE.md "No horizontal dividers" — block boundaries are drawn
- * by spacing alone (margin: 12px 0). A vertical accent bar marks the
- * actively streaming block.
+ * by spacing alone (margin: 12px 0).
  * ------------------------------------------------------------------ */
 .vp-turn-block {
   position: relative;
@@ -938,24 +937,7 @@
   margin-top: 2px;
 }
 
-/* Streaming state: a soft accent on the left edge so the eye locates
-   the active block at a glance in a busy multi-VP conversation.
-   Uses a thin pseudo-bar rather than a real border so we honour
-   "no horizontal dividers" — this is a vertical accent, not a divider. */
-.vp-turn-block-streaming::before {
-  content: '';
-  position: absolute;
-  left: -10px;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  border-radius: 2px;
-  background: var(--accent, #6366f1);
-  opacity: 0.5;
-}
-
-/* Dark-mode parity: bump elapsed/time contrast slightly. The accent
-   bar already uses --accent which is theme-aware. */
+/* Dark-mode parity: bump elapsed/time contrast slightly. */
 [data-theme="dark"] .vp-turn-block-name {
   color: var(--text-primary, #f9fafb);
 }
