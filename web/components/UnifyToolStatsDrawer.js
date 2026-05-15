@@ -123,6 +123,7 @@ export default {
         </div>
         <div class="tool-stats-drawer-body">
           <div v-if="stats && stats.error" class="tool-stats-error">{{ stats.error }}</div>
+          <div v-else-if="stats && stats.notice" class="tool-stats-empty">{{ stats.notice }}</div>
           <div v-else-if="loading && !stats" class="tool-stats-loading">
             {{ $t ? $t('unify.toolStats.loading') : 'Loading…' }}
           </div>
