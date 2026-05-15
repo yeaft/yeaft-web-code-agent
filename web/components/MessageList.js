@@ -555,37 +555,33 @@ export default {
           const hasTools = currentTurn.toolMsgs.length > 0;
           const hasHandoff = !!(currentTurn.handoffHints && currentTurn.handoffHints.length > 0);
 
-          // task-757 / Issue #2: hide a turn whose ONLY product is a
-          // route_forward hand-off. If a VP (e.g. Jobs) receives a
-          // task and immediately routes it to another VP (Linus)
-          // without saying anything to the group, showing Jobs's turn
-          // as a bubble — with avatar header + bash tool calls Jobs
-          // ran while deciding to forward — confuses the user ("why
-          // is Jobs displaying tool actions when Linus is the one
-          // working?"). The user explicitly chose: forward-only
-          // senders should NOT appear in the message stream. Persisted
-          // route_forward records still live on disk for audit; only
-          // the visual is suppressed.
+          // task-group-vp-block-split (v0.1.776): a VP whose only
+          // product is a `route_forward` hand-off MUST still render —
+          // as a body-less block whose sole surface is the hand-off
+          // pill ("↪ forwarded to Linus") under the VP's avatar
+          // header. This replaces the v0.1.757 forward-only suppression
+          // because it hid the cause of the next VP's appearance and
+          // left the user wondering why Linus suddenly started talking.
           //
-          // Forward-only is defined as: handoffHints present AND no
-          // user-visible content. Internal tool calls (bash, etc.) the
-          // VP made before deciding to forward are part of the same
-          // "private decision" and are hidden together.
+          // Internal tool calls the VP made while deciding to forward
+          // are still suppressed at render time, but we do that via an
+          // explicit `renderHandoffOnly` flag that AssistantTurn reads
+          // to skip its `turn-actions` block — NOT by mutating
+          // toolMsgs. Keeping toolMsgs / messages intact preserves the
+          // audit-trail invariant ("the in-memory turn matches what's
+          // on disk") and makes the render policy a one-line
+          // declarative flag instead of a hidden side-effect of
+          // finishTurn.
           const forwardOnly = hasHandoff && !hasVisible;
+          if (forwardOnly) {
+            currentTurn.renderHandoffOnly = true;
+          }
 
-          // Skip empty turns (nothing at all) AND skip forward-only
-          // turns (collapse into the next VP's bubble).
-          //
-          // Note on the predicate: it could be inlined as
-          //   hasVisible || (hasTools && !hasHandoff)
-          // since `forwardOnly` already cancels the `|| hasHandoff` arm.
-          // The (A || B || C) && !forwardOnly form is intentional — it
-          // reads as "did the turn produce anything; if so, was it
-          // forward-only" which mirrors the two-step intent. The
-          // forward-only test suite pins both this shape AND the
-          // simplified-behaviour cases, so a future refactor to the
-          // inlined form is safe.
-          if ((hasVisible || hasTools || hasHandoff) && !forwardOnly) {
+          // Push the turn if it produced ANY surface (visible content,
+          // tools, or a hand-off pill). Empty turns (nothing at all)
+          // are still skipped — they're created when latch helpers ran
+          // but no message body ever attached.
+          if (hasVisible || hasTools || hasHandoff) {
             // task-708: render the speaker header on every VP-attributed
             // turn. The avatar (with its inline typing badge) is THE
             // surface that signals which VP is speaking + whether they
@@ -673,7 +669,44 @@ export default {
           // (set by chat.js's `group_handoff` handler). Rendered as a
           // small system-line below the body in AssistantTurn.js.
           handoffHints: [],
+          // task-group-vp-block-split (v0.1.776): when true, AssistantTurn
+          // skips its `turn-actions` block so a VP whose only product
+          // was a `route_forward` renders as a body-less block whose
+          // only surface is the hand-off pill. Set at finishTurn() when
+          // `forwardOnly` is computed; toolMsgs / messages are NOT
+          // mutated (audit-trail intact).
+          renderHandoffOnly: false,
         };
+      };
+
+      // task-group-vp-block-split (v0.1.776): close the current turn
+      // when an incoming VP-attributed message belongs to a DIFFERENT
+      // VP-turn than the one currently being assembled. Without this,
+      // a `route_forward` from VP_A to VP_B leaves VP_A's turn open
+      // and VP_B's first chunks get appended into VP_A's block —
+      // visually the user sees Linus's text inside Jobs's bubble.
+      //
+      // Contract: turnId is any unique-per-VP-delivery string. The
+      // producer is the agent web-bridge (one fresh turnId per call
+      // to `enqueueForVp`); the exact mint format is an implementation
+      // detail and must not be relied on here. Two messages share a
+      // turnId iff they belong to the same VP delivery.
+      //
+      // Only break when BOTH sides carry a non-empty turnId AND the
+      // values differ. Otherwise (Chat mode, pre-stamping messages,
+      // empty fallback values) we keep the legacy "single open turn"
+      // behaviour. The empty-string check is defensive — the producer
+      // doesn't mint empty turnIds today, but a stray empty string
+      // sneaking in would silently re-introduce the bug this fix
+      // exists to prevent.
+      const closeTurnIfTurnIdChanged = (msg) => {
+        if (!currentTurn) return;
+        const curTurnId = currentTurn.turnId;
+        const msgTurnId = msg.turnId;
+        if (!curTurnId || !msgTurnId) return;
+        if (typeof curTurnId !== 'string' || typeof msgTurnId !== 'string') return;
+        if (curTurnId === msgTurnId) return;
+        finishTurn();
       };
 
       for (let i = 0; i < messages.length; i++) {
@@ -701,6 +734,7 @@ export default {
         }
 
         if (msg.type === 'assistant') {
+          closeTurnIfTurnIdChanged(msg);
           if (!currentTurn) startTurn();
           if (msg.content) {
             currentTurn.textContent += msg.content;
@@ -734,6 +768,7 @@ export default {
         }
 
         if (msg.type === 'tool-use') {
+          closeTurnIfTurnIdChanged(msg);
           if (!currentTurn) startTurn();
           latchSpeakerFromMsg(msg);
 
@@ -758,6 +793,7 @@ export default {
         }
 
         if (msg.type === 'chat-image') {
+          closeTurnIfTurnIdChanged(msg);
           if (!currentTurn) startTurn();
           latchSpeakerFromMsg(msg);
           currentTurn.imageMsgs.push(msg);
@@ -786,10 +822,13 @@ export default {
       //      materialises with the VP's avatar AND a typing badge
       //      driven by `isVpTypingInCurrentConv` — the same signal the
       //      placeholder used. Two rows competed for the same surface.
-      //   3. route_forward UX: a forwarded-only sender (Jobs hands off
-      //      to Linus with no text of its own) used to leave a typing
-      //      card hanging after Jobs finished, even though Jobs was
-      //      done and Linus was the one still typing.
+      //
+      // (The v0.1.757 rationale also cited a `route_forward` typing-
+      // card hang, but that case has been reshaped by v0.1.776: the
+      // forward-source VP now renders as a body-less block with a
+      // hand-off pill, so the typing card would overlap with the
+      // rendered block rather than appear next to a hidden one. Reasons
+      // 1 and 2 still hold on their own.)
       //
       // Trade-off: there is a sub-second gap between `vp_typing_start`
       // and the first chunk where no avatar is shown. User-accepted in
