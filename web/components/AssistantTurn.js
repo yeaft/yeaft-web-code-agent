@@ -170,6 +170,11 @@ export default {
     };
 
     const showToolActions = Vue.computed(() => {
+      // task-group-vp-block-split (v0.1.776): forward-source VPs render
+      // as body-less blocks (hand-off pill only). MessageList.turnGroups
+      // sets `renderHandoffOnly: true` on such turns; toolMsgs is left
+      // intact for the audit trail but we skip the tool render here.
+      if (props.turn.renderHandoffOnly) return false;
       return props.turn.toolMsgs.length > 0;
     });
 

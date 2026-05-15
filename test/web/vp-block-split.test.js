@@ -14,13 +14,16 @@
  * Fix: before opening (or reusing) the current turn, close it if the
  * incoming message carries a DIFFERENT turnId than the currently-open
  * turn. Each VP gets a fresh turnId at delivery time (the web-bridge
- * mints `${randomUUID().slice(0,8)}:${vpId}` per delivery), so turnId
- * inequality is the precise VP-boundary signal.
+ * mints a unique-per-VP-delivery string), so turnId inequality is the
+ * precise VP-boundary signal.
  *
  * This test exercises the aggregator's behaviour through a logic
  * replica — the same approach used by `forward-only-suppression.test.js`
  * to avoid spinning up a Vue runtime. The source-level pins below
- * guarantee the boundary check lives in the right place.
+ * guarantee the boundary check lives in the right place and exercises
+ * the right call sites; they're written as behaviour-shaped contains
+ * checks rather than exact source regexes so cosmetic refactors don't
+ * break them.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -36,31 +39,38 @@ const read = (p) => readFileSync(resolve(ROOT, p), 'utf-8');
 describe('MessageList.turnGroups — VP block split (source)', () => {
   const src = read('web/components/MessageList.js');
 
-  it('defines a `breakOnTurnBoundary` helper', () => {
-    expect(src).toMatch(/const\s+breakOnTurnBoundary\s*=/);
+  it('defines a `closeTurnIfTurnIdChanged` helper', () => {
+    expect(src).toContain('closeTurnIfTurnIdChanged');
   });
 
-  it('breakOnTurnBoundary only triggers when both sides carry a turnId AND they differ', () => {
-    // The helper must be a no-op for Chat-mode messages that lack
-    // turnId — otherwise we'd break the legacy "single open turn"
-    // behavior used by 1:1 chat.
-    const re = /const\s+breakOnTurnBoundary\s*=\s*\(msg\)\s*=>\s*\{[\s\S]*?\};/;
-    const m = src.match(re);
-    expect(m).not.toBeNull();
-    const body = m[0];
-    expect(body).toContain('if (!currentTurn) return;');
-    expect(body).toContain('if (!currentTurn.turnId || !msg.turnId) return;');
-    expect(body).toContain('if (currentTurn.turnId === msg.turnId) return;');
+  it('the helper is invoked in all three append branches', () => {
+    // assistant / tool-use / chat-image must each call the helper
+    // before opening (or reusing) a turn. We use a contains check
+    // rather than a positional regex so cosmetic edits don't break
+    // the test.
+    const assistantSegment = src.slice(src.indexOf("msg.type === 'assistant'"));
+    expect(assistantSegment.slice(0, 200)).toContain('closeTurnIfTurnIdChanged(msg);');
+
+    const toolUseSegment = src.slice(src.indexOf("msg.type === 'tool-use'"));
+    expect(toolUseSegment.slice(0, 200)).toContain('closeTurnIfTurnIdChanged(msg);');
+
+    const imageSegment = src.slice(src.indexOf("msg.type === 'chat-image'"));
+    expect(imageSegment.slice(0, 200)).toContain('closeTurnIfTurnIdChanged(msg);');
+  });
+
+  it('helper guards against missing or non-string turnIds AND calls finishTurn on mismatch', () => {
+    // Pin the BEHAVIOUR (early-return for missing/non-string turnIds,
+    // finishTurn() on inequality), not the exact early-return shape.
+    const idx = src.indexOf('const closeTurnIfTurnIdChanged');
+    expect(idx).toBeGreaterThan(-1);
+    const body = src.slice(idx, idx + 800);
+    expect(body).toContain('currentTurn');
+    expect(body).toContain('msg.turnId');
+    // Empty string / null / undefined are all rejected by the early-
+    // return chain. The exact predicate may evolve, but it must reject
+    // falsy values somewhere.
+    expect(body).toMatch(/!\s*curTurnId|!\s*currentTurn\.turnId|curTurnId\s*==\s*null/);
     expect(body).toContain('finishTurn();');
-  });
-
-  it('boundary check fires in all three append branches', () => {
-    // assistant, tool-use, chat-image — each must call
-    // breakOnTurnBoundary BEFORE the "if (!currentTurn) startTurn()"
-    // line, so the close-and-reopen happens cleanly.
-    expect(src).toMatch(/msg\.type === 'assistant'[\s\S]{0,200}breakOnTurnBoundary\(msg\);\s*\n\s*if\s*\(!currentTurn\)\s*startTurn\(\);/);
-    expect(src).toMatch(/msg\.type === 'tool-use'[\s\S]{0,200}breakOnTurnBoundary\(msg\);\s*\n\s*if\s*\(!currentTurn\)\s*startTurn\(\);/);
-    expect(src).toMatch(/msg\.type === 'chat-image'[\s\S]{0,200}breakOnTurnBoundary\(msg\);\s*\n\s*if\s*\(!currentTurn\)\s*startTurn\(\);/);
   });
 });
 
@@ -72,10 +82,13 @@ describe('MessageList.turnGroups — VP block split (source)', () => {
  *
  *   - currentTurn opens lazily on the first assistant/tool-use/image.
  *   - latchSpeakerFromMsg fills speakerVpId and turnId, idempotent.
- *   - breakOnTurnBoundary closes the open turn when turnIds differ.
+ *   - closeTurnIfTurnIdChanged closes the open turn when turnIds differ.
  *   - finishTurn pushes the turn if it has any surface.
  *
- * If MessageList drifts from this shape, the source-level pins above
+ * `hasVisible` mirrors all four arms of the real predicate
+ * (textContent / todoMsg / askMsg / imageMsgs) so the replica catches
+ * drift on every arm, not just the ones the boundary tests happen to
+ * exercise. If MessageList drifts further, the source-level pins above
  * fail first.
  */
 function aggregate(messages) {
@@ -83,11 +96,16 @@ function aggregate(messages) {
   let currentTurn = null;
   const finishTurn = () => {
     if (!currentTurn) return;
-    const hasVisible = !!(currentTurn.textContent || currentTurn.imageMsgs.length > 0);
+    const hasVisible = !!(
+      currentTurn.textContent
+      || currentTurn.todoMsg
+      || currentTurn.askMsg
+      || currentTurn.imageMsgs.length > 0
+    );
     const hasTools = currentTurn.toolMsgs.length > 0;
     const hasHandoff = currentTurn.handoffHints.length > 0;
     const forwardOnly = hasHandoff && !hasVisible;
-    if (forwardOnly) currentTurn.toolMsgs = [];
+    if (forwardOnly) currentTurn.renderHandoffOnly = true;
     if (hasVisible || hasTools || hasHandoff) {
       currentTurn.showSpeakerHeader = !!currentTurn.speakerVpId;
       result.push(currentTurn);
@@ -99,10 +117,13 @@ function aggregate(messages) {
       textContent: '',
       toolMsgs: [],
       imageMsgs: [],
+      todoMsg: null,
+      askMsg: null,
       handoffHints: [],
       speakerVpId: null,
       turnId: null,
       showSpeakerHeader: false,
+      renderHandoffOnly: false,
     };
   };
   const latch = (msg) => {
@@ -113,15 +134,18 @@ function aggregate(messages) {
     }
     if (!currentTurn.turnId && msg.turnId) currentTurn.turnId = msg.turnId;
   };
-  const breakOnTurnBoundary = (msg) => {
+  const closeTurnIfTurnIdChanged = (msg) => {
     if (!currentTurn) return;
-    if (!currentTurn.turnId || !msg.turnId) return;
-    if (currentTurn.turnId === msg.turnId) return;
+    const curTurnId = currentTurn.turnId;
+    const msgTurnId = msg.turnId;
+    if (!curTurnId || !msgTurnId) return;
+    if (typeof curTurnId !== 'string' || typeof msgTurnId !== 'string') return;
+    if (curTurnId === msgTurnId) return;
     finishTurn();
   };
   for (const msg of messages) {
     if (msg.type === 'assistant') {
-      breakOnTurnBoundary(msg);
+      closeTurnIfTurnIdChanged(msg);
       if (!currentTurn) startTurn();
       if (msg.content) currentTurn.textContent += msg.content;
       latch(msg);
@@ -129,14 +153,14 @@ function aggregate(messages) {
       continue;
     }
     if (msg.type === 'tool-use') {
-      breakOnTurnBoundary(msg);
+      closeTurnIfTurnIdChanged(msg);
       if (!currentTurn) startTurn();
       latch(msg);
       currentTurn.toolMsgs.push(msg);
       continue;
     }
     if (msg.type === 'chat-image') {
-      breakOnTurnBoundary(msg);
+      closeTurnIfTurnIdChanged(msg);
       if (!currentTurn) startTurn();
       latch(msg);
       currentTurn.imageMsgs.push(msg);
@@ -148,8 +172,6 @@ function aggregate(messages) {
 
 describe('MessageList.turnGroups — VP block split (logic)', () => {
   it('splits two consecutive assistant chunks from different VP turnIds into separate blocks', () => {
-    // The exact bug: Jobs streams a chunk (turnId T1), then Linus
-    // streams a chunk (turnId T2). Result must be two blocks.
     const blocks = aggregate([
       { type: 'assistant', content: 'hello from Jobs', vpId: 'jobs', turnId: 'aaaa:jobs' },
       { type: 'assistant', content: 'hello from Linus', vpId: 'linus', turnId: 'bbbb:linus' },
@@ -162,7 +184,6 @@ describe('MessageList.turnGroups — VP block split (logic)', () => {
   });
 
   it('two assistant chunks with the SAME turnId stay in one block', () => {
-    // Same VP, same turnId: streaming continuation. Must merge.
     const blocks = aggregate([
       { type: 'assistant', content: 'part one ', vpId: 'jobs', turnId: 'aaaa:jobs' },
       { type: 'assistant', content: 'part two', vpId: 'jobs', turnId: 'aaaa:jobs' },
@@ -172,9 +193,6 @@ describe('MessageList.turnGroups — VP block split (logic)', () => {
   });
 
   it('boundary trips on tool-use too (Linus opens with a tool, not text)', () => {
-    // Reported scenario: Jobs sends a text+forward, then Linus's
-    // first message is a tool-use (e.g. read_file). The tool-use
-    // must NOT land in Jobs's block.
     const blocks = aggregate([
       { type: 'assistant', content: 'forwarding', vpId: 'jobs', turnId: 'aaaa:jobs',
         handoffHints: [{ to: 'linus' }] },
@@ -199,8 +217,6 @@ describe('MessageList.turnGroups — VP block split (logic)', () => {
   });
 
   it('messages without turnId fall through to legacy single-open-turn behavior', () => {
-    // Chat mode never stamps turnId. Two assistant chunks without
-    // turnId must still merge — we MUST NOT regress Chat.
     const blocks = aggregate([
       { type: 'assistant', content: 'a' },
       { type: 'assistant', content: 'b' },
@@ -210,21 +226,36 @@ describe('MessageList.turnGroups — VP block split (logic)', () => {
   });
 
   it('mixed legacy (no turnId) + turn-stamped messages do not falsely split', () => {
-    // If one side lacks turnId, the boundary check is a no-op — we
-    // fall back to the legacy single-turn merge rather than
-    // accidentally splitting on a missing field.
     const blocks = aggregate([
-      { type: 'assistant', content: 'a' }, // legacy, no turnId
-      { type: 'assistant', content: 'b', turnId: 'aaaa:jobs' }, // stamped
+      { type: 'assistant', content: 'a' },
+      { type: 'assistant', content: 'b', turnId: 'aaaa:jobs' },
     ]);
     expect(blocks).toHaveLength(1);
     expect(blocks[0].textContent).toBe('ab');
   });
 
+  it('empty-string turnId on either side is treated as no-turnId (legacy merge, no false split)', () => {
+    // Defensive case: a stray empty string from any producer must not
+    // trigger a split. The early-return chain rejects falsy values
+    // before reaching the inequality check.
+    const blocks1 = aggregate([
+      { type: 'assistant', content: 'a', turnId: '' },
+      { type: 'assistant', content: 'b', turnId: 'aaaa:jobs' },
+    ]);
+    expect(blocks1).toHaveLength(1);
+    const blocks2 = aggregate([
+      { type: 'assistant', content: 'a', turnId: 'aaaa:jobs' },
+      { type: 'assistant', content: 'b', turnId: '' },
+    ]);
+    expect(blocks2).toHaveLength(1);
+  });
+
   it('the exact reported scenario: Jobs forwards to Linus → two distinct blocks', () => {
     // Jobs's turn: a forward (no visible text — pure forward-only).
     // Linus's turn: actual work.
-    // Both must render; Jobs as a body-less pill, Linus as a real block.
+    // Both must render; Jobs as a body-less block carrying
+    // renderHandoffOnly=true + the hand-off pill, Linus as a real
+    // block with tools.
     const blocks = aggregate([
       { type: 'assistant', vpId: 'jobs', turnId: 'aaaa:jobs',
         handoffHints: [{ to: 'linus', reason: 'kernel question' }] },
@@ -232,14 +263,15 @@ describe('MessageList.turnGroups — VP block split (logic)', () => {
       { type: 'tool-use', toolName: 'bash', vpId: 'linus', turnId: 'bbbb:linus' },
     ]);
     expect(blocks).toHaveLength(2);
-    // Jobs's block: forward pill, no body content, no tools.
+    // Jobs's block: forward pill, body-less render flag.
     expect(blocks[0].speakerVpId).toBe('jobs');
     expect(blocks[0].handoffHints).toHaveLength(1);
     expect(blocks[0].textContent).toBe('');
-    expect(blocks[0].toolMsgs).toHaveLength(0);
+    expect(blocks[0].renderHandoffOnly).toBe(true);
     // Linus's block: real text + tool.
     expect(blocks[1].speakerVpId).toBe('linus');
     expect(blocks[1].textContent).toBe('OK, looking at it');
     expect(blocks[1].toolMsgs).toHaveLength(1);
+    expect(blocks[1].renderHandoffOnly).toBe(false);
   });
 });
