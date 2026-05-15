@@ -1,28 +1,25 @@
 /**
- * Forward-only VP turn suppression (v0.1.757).
+ * Forward-only VP turn rendering — current policy (v0.1.776).
  *
- * Issue: when a VP (e.g. Jobs) receives a task and immediately
- * `route_forward`s it to another VP (Linus) without producing any
- * user-visible content of its own — even if it ran a tool like `bash`
- * privately before deciding to forward — its turn used to render as
- * a bubble with the VP's avatar header + tool rows. Users found that
- * confusing ("Jobs is showing tool actions, but Linus is the one
- * actually doing the work?"). The user explicitly chose: forward-only
- * senders should NOT appear in the message stream.
+ * History:
+ *   - v0.1.757: a VP whose only product was a `route_forward` hand-off
+ *     was HIDDEN from the message stream. The persisted record lived on
+ *     disk for audit, but the bubble was suppressed so users wouldn't
+ *     see Jobs's empty turn with leftover tool chips before Linus
+ *     started talking.
+ *   - v0.1.776 (this test): user reported that hiding Jobs entirely
+ *     made Linus's appearance feel disconnected — there was no UI
+ *     signal saying "Jobs handed off to Linus". New policy: the
+ *     forward-source VP's block is STILL RENDERED, but body-less.
+ *     Speaker header + a single hand-off pill ("↪ forwarded to Linus")
+ *     is the entire surface. Internal tools the VP ran while deciding
+ *     to forward are stripped from the rendered turn (kept on disk).
  *
- * The persisted record stays on disk (audit-safe); only the visual is
- * suppressed.
+ * Layer 1 (source pins) — guarantee the policy stays declared at the
+ *   right place with the right shape so future refactors don't
+ *   accidentally re-hide forward-only turns.
  *
- * Two layers of tests:
- *
- *   1. Source-level: assert the MessageList.turnGroups predicate
- *      uses the `forwardOnly` flag and the right "user-visible
- *      content" definition. This catches a future refactor that
- *      accidentally re-introduces tool-as-visible.
- *
- *   2. Logic-level: replicate the exact predicate inline and run it
- *      against fixture turns. This catches a logic bug that source
- *      regex would miss.
+ * Layer 2 (logic replica) — exercises the predicate against fixtures.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -35,20 +32,19 @@ const read = (p) => readFileSync(resolve(ROOT, p), 'utf-8');
 
 // ─── Layer 1: source pins ───────────────────────────────────────────
 
-describe('MessageList.turnGroups — forward-only suppression (source)', () => {
+describe('MessageList.turnGroups — forward-only rendering policy (source)', () => {
   const src = read('web/components/MessageList.js');
 
   it('defines a `forwardOnly` flag inside finishTurn', () => {
-    // The predicate must be named so future readers (and reviewers)
-    // can find the rule. A literal `forwardOnly` substring proves the
-    // suppression lives in finishTurn rather than being inlined.
+    // The predicate must remain named so future readers can find it.
     expect(src).toMatch(/const\s+forwardOnly\s*=/);
   });
 
   it('forwardOnly = handoffHints present AND no user-visible content', () => {
     // Tools are explicitly NOT user-visible. This is the rule the user
     // asked for: a VP that ran internal bash before forwarding is still
-    // forward-only.
+    // forward-only — but per v0.1.776 it's no longer suppressed; we
+    // strip its tool list instead.
     expect(src).toMatch(/forwardOnly\s*=\s*hasHandoff\s*&&\s*!hasVisible/);
   });
 
@@ -61,21 +57,31 @@ describe('MessageList.turnGroups — forward-only suppression (source)', () => {
     );
   });
 
-  it('finishTurn pushes only if (hasVisible || hasTools || hasHandoff) AND not forwardOnly', () => {
-    expect(src).toMatch(
-      /\(hasVisible\s*\|\|\s*hasTools\s*\|\|\s*hasHandoff\)\s*&&\s*!forwardOnly/
-    );
+  it('forward-only turns strip toolMsgs at render time (but DON\'T hide the block)', () => {
+    // The body-less rendering policy: clear toolMsgs so the pill is
+    // the only surface in the block. The push-gate must NOT exclude
+    // forwardOnly any more — pushing must happen on
+    //   (hasVisible || hasTools || hasHandoff)
+    // alone.
+    expect(src).toMatch(/if\s*\(\s*forwardOnly\s*\)\s*\{[\s\S]{0,400}currentTurn\.toolMsgs\s*=\s*\[\s*\]/);
+    expect(src).toMatch(/if\s*\(\s*hasVisible\s*\|\|\s*hasTools\s*\|\|\s*hasHandoff\s*\)\s*\{/);
+    // And the OLD `&& !forwardOnly` push gate must be gone.
+    expect(src).not.toMatch(/\(hasVisible\s*\|\|\s*hasTools\s*\|\|\s*hasHandoff\)\s*&&\s*!forwardOnly/);
   });
 });
 
 // ─── Layer 2: logic replica ─────────────────────────────────────────
 
 /**
- * Mirrors the predicate from MessageList.turnGroups.finishTurn exactly.
- * Kept in sync via the source-level tests above; if the predicate in
- * MessageList drifts, layer 1 fails first.
+ * Mirrors finishTurn's decision exactly:
+ *   1. Compute hasVisible / hasTools / hasHandoff / forwardOnly.
+ *   2. If forwardOnly, strip toolMsgs (body-less render).
+ *   3. Push the turn iff (hasVisible || hasTools || hasHandoff).
+ *
+ * Returns the mutated turn if pushed, null otherwise — so tests can
+ * inspect what AssistantTurn would receive.
  */
-function shouldPushTurn(turn) {
+function pushOrSkipTurn(turn) {
   const hasVisible = !!(
     turn.textContent
     || turn.todoMsg
@@ -85,7 +91,11 @@ function shouldPushTurn(turn) {
   const hasTools = !!(turn.toolMsgs && turn.toolMsgs.length > 0);
   const hasHandoff = !!(turn.handoffHints && turn.handoffHints.length > 0);
   const forwardOnly = hasHandoff && !hasVisible;
-  return (hasVisible || hasTools || hasHandoff) && !forwardOnly;
+  if (forwardOnly) {
+    turn.toolMsgs = [];
+  }
+  if (hasVisible || hasTools || hasHandoff) return turn;
+  return null;
 }
 
 const turn = (overrides = {}) => ({
@@ -100,69 +110,78 @@ const turn = (overrides = {}) => ({
   ...overrides,
 });
 
-describe('MessageList.turnGroups — forward-only suppression (logic)', () => {
-  it('HIDES a turn whose only output is a route_forward hint', () => {
-    expect(shouldPushTurn(turn({ handoffHints: [{ to: 'linus' }] }))).toBe(false);
+describe('MessageList.turnGroups — forward-only rendering policy (logic)', () => {
+  it('RENDERS a turn whose only output is a route_forward hint (body-less)', () => {
+    const result = pushOrSkipTurn(turn({ handoffHints: [{ to: 'linus' }] }));
+    expect(result).not.toBeNull();
+    expect(result.handoffHints).toHaveLength(1);
+    // No body to render — pill is the only surface.
+    expect(result.toolMsgs).toHaveLength(0);
+    expect(result.textContent).toBe('');
   });
 
-  it('HIDES a turn that ran internal bash and then forwarded (no text)', () => {
-    // The exact reported scenario: Jobs ran `git fetch` privately,
-    // then route_forward to Linus. From the user's POV, Jobs said
-    // nothing — Linus is doing the work. The internal tool calls are
-    // suppressed along with the hand-off.
-    expect(shouldPushTurn(turn({
+  it('RENDERS a turn that ran internal bash and then forwarded (tools stripped)', () => {
+    // Jobs ran `git fetch` privately, then route_forward to Linus.
+    // New policy: Jobs's block still appears so the user sees "↪
+    // forwarded to Linus", but the internal bash chip is removed
+    // because it's just decision-time noise.
+    const result = pushOrSkipTurn(turn({
       toolMsgs: [{ toolName: 'bash', toolInput: { command: 'git fetch origin main' } }],
       handoffHints: [{ to: 'linus' }],
-    }))).toBe(false);
+    }));
+    expect(result).not.toBeNull();
+    expect(result.handoffHints).toHaveLength(1);
+    expect(result.toolMsgs).toHaveLength(0); // stripped
   });
 
-  it('SHOWS a turn that has text AND a route_forward hint', () => {
-    // If Jobs DID say something ("OK, asking Linus to check…") and
-    // ALSO forwarded, the bubble must show — the text is information
-    // the user benefits from seeing.
-    expect(shouldPushTurn(turn({
+  it('RENDERS a turn that has text AND a route_forward hint (tools NOT stripped)', () => {
+    // If Jobs DID say something AND forwarded, the bubble must show
+    // with the text intact — and forwardOnly is false (because text
+    // counts as visible content), so tools survive.
+    const result = pushOrSkipTurn(turn({
       textContent: 'OK, asking Linus to check the deploy.',
+      toolMsgs: [{ toolName: 'bash' }],
       handoffHints: [{ to: 'linus' }],
-    }))).toBe(true);
+    }));
+    expect(result).not.toBeNull();
+    expect(result.textContent).toBe('OK, asking Linus to check the deploy.');
+    expect(result.toolMsgs).toHaveLength(1);
+    expect(result.handoffHints).toHaveLength(1);
   });
 
-  it('SHOWS a turn with only tools (no hand-off) — Linus working visibly', () => {
+  it('RENDERS a turn with only tools (no hand-off) — Linus working visibly', () => {
     // Symmetric: Linus running bash with no text and no hand-off is
     // legitimate work and must appear.
-    expect(shouldPushTurn(turn({
+    const result = pushOrSkipTurn(turn({
       speakerVpId: 'linus',
       toolMsgs: [{ toolName: 'bash', toolInput: { command: 'npm test' } }],
-    }))).toBe(true);
+    }));
+    expect(result).not.toBeNull();
+    expect(result.toolMsgs).toHaveLength(1);
   });
 
-  it('SHOWS a turn with only text', () => {
-    expect(shouldPushTurn(turn({ textContent: 'hello' }))).toBe(true);
+  it('RENDERS a turn with only text', () => {
+    const result = pushOrSkipTurn(turn({ textContent: 'hello' }));
+    expect(result).not.toBeNull();
+    expect(result.textContent).toBe('hello');
   });
 
-  it('SHOWS a turn with todo (todo list updates count as visible)', () => {
-    expect(shouldPushTurn(turn({ todoMsg: { items: [] } }))).toBe(true);
+  it('RENDERS a turn with todo', () => {
+    expect(pushOrSkipTurn(turn({ todoMsg: { items: [] } }))).not.toBeNull();
   });
 
-  it('SHOWS a turn with askMsg (interactive prompt)', () => {
-    expect(shouldPushTurn(turn({ askMsg: { questions: [] } }))).toBe(true);
+  it('RENDERS a turn with askMsg', () => {
+    expect(pushOrSkipTurn(turn({ askMsg: { questions: [] } }))).not.toBeNull();
   });
 
-  it('SHOWS a turn with images', () => {
-    expect(shouldPushTurn(turn({ imageMsgs: [{ url: 'x' }] }))).toBe(true);
+  it('RENDERS a turn with images', () => {
+    expect(pushOrSkipTurn(turn({ imageMsgs: [{ url: 'x' }] }))).not.toBeNull();
   });
 
   it('HIDES an entirely empty turn', () => {
-    // No content of any kind. Always skipped (same as before).
-    expect(shouldPushTurn(turn())).toBe(false);
-  });
-
-  it('SHOWS a turn whose only output is tools, but no hand-off', () => {
-    // Edge case: a VP that runs only tools (no text, no forward) is
-    // still doing visible work — must appear so the user can see what
-    // happened. forwardOnly only kicks in when handoffHints are
-    // present.
-    expect(shouldPushTurn(turn({
-      toolMsgs: [{ toolName: 'web_search' }],
-    }))).toBe(true);
+    // No content of any kind. Always skipped — this is the only
+    // remaining suppression case. Empty turns are an aggregator
+    // artifact (latch ran, no body attached) and shouldn't render.
+    expect(pushOrSkipTurn(turn())).toBeNull();
   });
 });

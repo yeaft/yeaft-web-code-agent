@@ -555,37 +555,35 @@ export default {
           const hasTools = currentTurn.toolMsgs.length > 0;
           const hasHandoff = !!(currentTurn.handoffHints && currentTurn.handoffHints.length > 0);
 
-          // task-757 / Issue #2: hide a turn whose ONLY product is a
-          // route_forward hand-off. If a VP (e.g. Jobs) receives a
-          // task and immediately routes it to another VP (Linus)
-          // without saying anything to the group, showing Jobs's turn
-          // as a bubble — with avatar header + bash tool calls Jobs
-          // ran while deciding to forward — confuses the user ("why
-          // is Jobs displaying tool actions when Linus is the one
-          // working?"). The user explicitly chose: forward-only
-          // senders should NOT appear in the message stream. Persisted
-          // route_forward records still live on disk for audit; only
-          // the visual is suppressed.
+          // task-group-vp-block-split (v0.1.776): a VP whose only
+          // product is a `route_forward` hand-off MUST still render —
+          // as a body-less block whose sole surface is the hand-off
+          // pill ("↪ forwarded to Linus") under the VP's avatar
+          // header. This replaces the v0.1.757 forward-only suppression
+          // because it hid the cause of the next VP's appearance and
+          // left the user wondering why Linus suddenly started talking.
           //
-          // Forward-only is defined as: handoffHints present AND no
-          // user-visible content. Internal tool calls (bash, etc.) the
-          // VP made before deciding to forward are part of the same
-          // "private decision" and are hidden together.
+          // Internal tool calls the VP made while deciding to forward
+          // are still suppressed at render time: AssistantTurn only
+          // renders toolMsgs / textContent / images when present, so a
+          // turn we mark `renderHandoffOnly` simply needs its body
+          // arrays cleared. This keeps the block focused on "Jobs
+          // forwarded to Linus" without the noisy bash chips that the
+          // earlier suppression rule was meant to hide.
           const forwardOnly = hasHandoff && !hasVisible;
+          if (forwardOnly) {
+            // Strip the internal-decision tools so the pill is the
+            // only thing rendered for this VP's block. The persisted
+            // tool records are unchanged on disk; this is a render
+            // policy only.
+            currentTurn.toolMsgs = [];
+          }
 
-          // Skip empty turns (nothing at all) AND skip forward-only
-          // turns (collapse into the next VP's bubble).
-          //
-          // Note on the predicate: it could be inlined as
-          //   hasVisible || (hasTools && !hasHandoff)
-          // since `forwardOnly` already cancels the `|| hasHandoff` arm.
-          // The (A || B || C) && !forwardOnly form is intentional — it
-          // reads as "did the turn produce anything; if so, was it
-          // forward-only" which mirrors the two-step intent. The
-          // forward-only test suite pins both this shape AND the
-          // simplified-behaviour cases, so a future refactor to the
-          // inlined form is safe.
-          if ((hasVisible || hasTools || hasHandoff) && !forwardOnly) {
+          // Push the turn if it produced ANY surface (visible content,
+          // tools, or a hand-off pill). Empty turns (nothing at all)
+          // are still skipped — they're created when latch helpers ran
+          // but no message body ever attached.
+          if (hasVisible || hasTools || hasHandoff) {
             // task-708: render the speaker header on every VP-attributed
             // turn. The avatar (with its inline typing badge) is THE
             // surface that signals which VP is speaking + whether they
@@ -676,6 +674,26 @@ export default {
         };
       };
 
+      // task-group-vp-block-split (v0.1.776): close the current turn
+      // when an incoming VP-attributed message belongs to a DIFFERENT
+      // VP-turn than the one currently being assembled. Without this,
+      // a `route_forward` from VP_A to VP_B leaves VP_A's turn open
+      // and VP_B's first chunks get appended into VP_A's block —
+      // visually the user sees Linus's text inside Jobs's bubble.
+      //
+      // Each VP gets a distinct turnId at delivery time
+      // (`${randomUUID().slice(0,8)}:${vpId}` in web-bridge.js), so
+      // testing turnId inequality is the precise boundary signal. We
+      // only break when BOTH sides carry a turnId — otherwise we
+      // preserve the legacy "single open turn" behaviour for Chat
+      // mode and any messages that pre-date turn stamping.
+      const breakOnTurnBoundary = (msg) => {
+        if (!currentTurn) return;
+        if (!currentTurn.turnId || !msg.turnId) return;
+        if (currentTurn.turnId === msg.turnId) return;
+        finishTurn();
+      };
+
       for (let i = 0; i < messages.length; i++) {
         const msg = messages[i];
 
@@ -701,6 +719,7 @@ export default {
         }
 
         if (msg.type === 'assistant') {
+          breakOnTurnBoundary(msg);
           if (!currentTurn) startTurn();
           if (msg.content) {
             currentTurn.textContent += msg.content;
@@ -734,6 +753,7 @@ export default {
         }
 
         if (msg.type === 'tool-use') {
+          breakOnTurnBoundary(msg);
           if (!currentTurn) startTurn();
           latchSpeakerFromMsg(msg);
 
@@ -758,6 +778,7 @@ export default {
         }
 
         if (msg.type === 'chat-image') {
+          breakOnTurnBoundary(msg);
           if (!currentTurn) startTurn();
           latchSpeakerFromMsg(msg);
           currentTurn.imageMsgs.push(msg);
