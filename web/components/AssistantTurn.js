@@ -1,6 +1,7 @@
 import ToolLine from './ToolLine.js';
 import AskCard from './AskCard.js';
 import VpSpeakerHeader from './VpSpeakerHeader.js';
+import { getTodoDisplayState } from '../utils/todo-display-state.js';
 
 export default {
   name: 'AssistantTurn',
@@ -61,13 +62,16 @@ export default {
 
       <!-- 2. Todo progress (TodoWrite) -->
       <div v-if="turn.todoMsg" class="turn-todos">
-        <div v-for="todo in turn.todoMsg.toolInput.todos" :key="todo.content"
-             class="todo-item" :class="todo.status">
+        <div v-for="todo in displayedTodos" :key="todo.content"
+             class="todo-item" :class="todo.displayStatus"
+             :title="todo.staleLabel || null">
           <span class="todo-checkbox">
-            <span v-if="todo.status === 'completed'">✓</span>
-            <span v-else-if="todo.status === 'in_progress'" class="todo-spinner"></span>
+            <span v-if="todo.displayStatus === 'completed'">✓</span>
+            <span v-else-if="todo.displayStatus === 'in_progress'" class="todo-spinner"></span>
+            <span v-else-if="todo.displayStatus === 'stale'" class="todo-stale-mark">!</span>
           </span>
-          <span class="todo-text">{{ todo.status === 'in_progress' ? (todo.activeForm || todo.content) : todo.content }}</span>
+          <span class="todo-text">{{ todo.displayText }}</span>
+          <span v-if="todo.staleLabel" class="todo-stale-note">{{ todo.staleLabel }}</span>
         </div>
       </div>
 
@@ -180,6 +184,12 @@ export default {
 
     const historyTools = Vue.computed(() => {
       return props.turn.toolMsgs.slice(0, -1);
+    });
+
+    const displayedTodos = Vue.computed(() => {
+      const todos = props.turn?.todoMsg?.toolInput?.todos;
+      if (!Array.isArray(todos)) return [];
+      return todos.map((todo) => getTodoDisplayState(props.turn, todo));
     });
 
     // H2.f.6: threadDisplayName computed removed (single-conversation model).
@@ -497,7 +507,8 @@ export default {
       getImageUrl,
       handleImageError,
       openImagePreview,
-      formatHandoffLabel
+      formatHandoffLabel,
+      displayedTodos
     };
   }
 };
