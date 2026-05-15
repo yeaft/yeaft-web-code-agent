@@ -92,7 +92,7 @@ export default {
           -->
           <span class="unify-vp-timeline-row-actions">
             <span
-              v-if="row.status !== 'idle'"
+              v-if="isActiveStatus(row.status)"
               class="unify-vp-timeline-abort"
               role="button"
               tabindex="0"
@@ -138,11 +138,24 @@ export default {
       switch (row.status) {
         case 'idle':      return $t('unify.vpTimeline.status.idle');
         case 'typing':    return $t('unify.vpTimeline.status.typing');
+        case 'thinking':  return $t('unify.vpTimeline.status.thinking');
         case 'streaming': return $t('unify.vpTimeline.status.streaming');
+        case 'tool':      return $t('unify.vpTimeline.status.tool');
+        case 'error':     return $t('unify.vpTimeline.status.error');
+        case 'offline':   return $t('unify.vpTimeline.status.offline');
         default:          return row.status;
       }
     };
 
-    return { statusLabel };
+    // "Active" = there's actually a turn in flight we could abort. We
+    // intentionally exclude `idle` (no turn), `error` (turn already
+    // ended with a failure), and `offline` (agent gone — abort would
+    // never land). Without this gate, an offline row would render a
+    // dead abort button that does nothing on click, which is worse than
+    // not showing it at all.
+    const ACTIVE_STATES = new Set(['typing', 'thinking', 'streaming', 'tool']);
+    const isActiveStatus = (s) => ACTIVE_STATES.has(s);
+
+    return { statusLabel, isActiveStatus };
   },
 };
