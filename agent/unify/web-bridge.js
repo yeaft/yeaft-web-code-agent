@@ -52,6 +52,7 @@ import {
 } from './history-compact.js';
 import { persistUnifyAttachments, attachmentsForPersistence } from './attachments.js';
 import { parseSeqFromId } from './conversation/persist.js';
+import { createVpStatusBroker } from './vp-status-broker.js';
 
 /** @type {import('./session.js').Session | null} */
 let session = null;
@@ -79,6 +80,43 @@ let currentAbortCtrl = null;
  * @type {Map<string, AbortController>}
  */
 const turnAbortCtrls = new Map();
+
+/**
+ * Per-VP status broker — the agent-side authority for VP timeline
+ * status. Lazy-initialized on first use because `sendUnifyEvent` is
+ * declared below; trying to call it at module top-level would crash
+ * with a TDZ error during agent boot.
+ *
+ * Every transition (typing → thinking → streaming → tool → idle) is
+ * pushed through `vpStatusBroker.transition(...)`. The broker also
+ * owns the `vp_status_snapshot` payload for reconnect.
+ *
+ * @type {ReturnType<typeof createVpStatusBroker> | null}
+ */
+let vpStatusBroker = null;
+function getVpStatusBroker() {
+  if (!vpStatusBroker) {
+    vpStatusBroker = createVpStatusBroker({
+      send: (event) => {
+        // The broker emits both `vp_status_changed` and
+        // `vp_status_snapshot`. Both ride the standard sendUnifyEvent
+        // envelope so the frontend's existing unify_output dispatcher
+        // sees them. We stamp groupId/vpId on the envelope for
+        // events that target a specific VP so the server's per-client
+        // routing (groupId scoping, etc.) works the same way as
+        // typing events.
+        const env = {};
+        if (event && typeof event === 'object') {
+          if (event.groupId) env.groupId = event.groupId;
+          if (event.vpId) env.vpId = event.vpId;
+          if (event.turnId) env.turnId = event.turnId;
+        }
+        sendUnifyEvent(event, env);
+      },
+    });
+  }
+  return vpStatusBroker;
+}
 
 /**
  * Per-VP inbox + driver + engine pool (group multi-VP delivery).
@@ -575,6 +613,15 @@ function enqueueForVp(groupId, vpId, envelope) {
     }, { groupId, vpId, turnId });
   } catch { /* never crash WS pipeline */ }
 
+  // vp-status: queued, driver not running yet → 'typing'. Emitted
+  // alongside `vp_typing_start` so the timeline pane lights up on the
+  // same edge as the per-message typing dot.
+  try {
+    getVpStatusBroker().transition({ groupId, vpId, state: 'typing', turnId });
+  } catch (err) {
+    console.warn('[Unify] vp-status typing transition failed:', err?.message || err);
+  }
+
   ensureDriverRunning(groupId, vpId);
 }
 
@@ -866,6 +913,18 @@ export function handleUnifyVpDelete(msg) {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     const memoryRoot = yeaftDir ? join(yeaftDir, 'memory') : undefined;
     deleteVp(vpId, memoryRoot ? { memoryRoot } : {});
+    // vp-status: a deleted VP must not haunt the snapshot. We don't
+    // know up front which groups the VP appeared in (the registry's
+    // delete already detached it from every group), so sweep every
+    // matching entry from the broker table.
+    try {
+      const broker = getVpStatusBroker();
+      for (const row of broker.snapshot()) {
+        if (row.vpId === vpId) broker.forget({ groupId: row.groupId, vpId });
+      }
+    } catch (err) {
+      console.warn('[Unify] vp-status forget on delete failed:', err?.message || err);
+    }
     sendVpCrudResult({ op: 'delete', requestId, ok: true, vpId });
   } catch (err) {
     sendVpCrudResult({
@@ -1167,6 +1226,29 @@ export function installUnifyRuntimeBridge(s) {
 }
 
 /**
+ * Mid-turn vp-status transitions (text_delta / tool_call / tool_end).
+ * Tolerates `hctx` missing groupId/vpId — pre-707 1:1 chat paths don't
+ * have either; they're tracked as the default broker key but the
+ * frontend ignores rows it doesn't recognize.
+ *
+ * @param {object} hctx
+ * @param {string} state
+ */
+function maybeTransitionVpStatus(hctx, state) {
+  if (!hctx || !hctx.vpId) return;
+  try {
+    getVpStatusBroker().transition({
+      groupId: hctx.groupId || null,
+      vpId: hctx.vpId,
+      state,
+      turnId: hctx.turnId || null,
+    });
+  } catch (err) {
+    console.warn(`[Unify] vp-status ${state} transition failed:`, err?.message || err);
+  }
+}
+
+/**
  * Handle a single engine event unwrapped from an `engine_event` envelope.
  * H2.f.2: no longer stamps a threadId on outgoing claude_output frames.
  *
@@ -1188,6 +1270,10 @@ function handleEngineEvent(event, hctx) {
         type: 'assistant',
         message: { content: [{ type: 'text', text: event.text }] },
       }, envelope);
+      // vp-status: first text-delta of a (thinking|tool) phase flips
+      // the row to 'streaming'. transition() is a no-op when already
+      // streaming, so subsequent deltas are cheap.
+      maybeTransitionVpStatus(hctx, 'streaming');
       break;
 
     case 'thinking_delta':
@@ -1221,6 +1307,7 @@ function handleEngineEvent(event, hctx) {
           }],
         },
       }, envelope);
+      maybeTransitionVpStatus(hctx, 'tool');
       break;
 
     case 'tool_start':
@@ -1249,6 +1336,12 @@ function handleEngineEvent(event, hctx) {
           is_error: event.isError || false,
         }],
       }, envelope);
+      // Tool finished. The engine may either (a) emit more text-deltas
+      // before end_turn, or (b) go straight to end_turn. Settle the
+      // row back to 'thinking' — if (a), the next text_delta will flip
+      // it to 'streaming'; if (b), runVpTurn's finally will flip it to
+      // 'idle'. Either way we never strand the row in 'tool'.
+      maybeTransitionVpStatus(hctx, 'thinking');
       break;
 
     case 'turn_start':
@@ -1966,6 +2059,15 @@ async function ensureSessionLoaded() {
     tools: session.status.tools,
   });
   sendGroupSnapshotBroadcast();
+  // vp-status: rebuild frontend status table from authoritative agent
+  // memory. Sent unconditionally so reconnect/refresh paths get the same
+  // bootstrap as first-load (the broker dedup logic makes a redundant
+  // snapshot harmless).
+  try {
+    getVpStatusBroker().broadcastSnapshot();
+  } catch (err) {
+    console.warn('[Unify] vp-status snapshot broadcast failed:', err?.message || err);
+  }
 }
 
 /**
@@ -2010,6 +2112,19 @@ async function runVpTurnWithEscalation(args) {
           { groupId, vpId, turnId },
         );
       } catch { /* never crash WS pipeline */ }
+      // vp-status: when the watchdog escalates, `runVpTurn`'s inner
+      // promise is still dangling (the adapter is ignoring `signal`)
+      // and its outer `finally` won't run until the adapter eventually
+      // returns — which may be never. Settle the broker here so the
+      // row drops to idle in lockstep with the synthetic stop frame.
+      // This is the exact failure mode the watchdog exists for; not
+      // settling here would re-introduce the "stuck on streaming" bug
+      // the whole PR is meant to fix.
+      try {
+        getVpStatusBroker().settleIdle({ groupId, vpId });
+      } catch (err) {
+        console.warn('[Unify] vp-status settleIdle (escalation) failed:', err?.message || err);
+      }
     },
   });
 }
@@ -2101,6 +2216,12 @@ async function runVpTurn({ prompt, promptParts = null, groupId, vpId, turnId, en
 
     // Emit turn_start so frontend can create the message block.
     sendUnifyEvent({ type: 'vp_turn_start', vpId, turnId, groupId }, envelope);
+    // vp-status: LLM call about to start, no text/tool yet → 'thinking'.
+    try {
+      getVpStatusBroker().transition({ groupId, vpId, state: 'thinking', turnId });
+    } catch (err) {
+      console.warn('[Unify] vp-status thinking transition failed:', err?.message || err);
+    }
 
     try {
       const assistantTextParts = [];
@@ -2186,6 +2307,17 @@ async function runVpTurn({ prompt, promptParts = null, groupId, vpId, turnId, en
 
     console.error('[Unify] query error:', err);
 
+    // vp-status: surface a transient `error` state so the row's status
+    // label flips red for the brief window before the outer finally
+    // settles it to idle. Without this, an LLM/tool failure would look
+    // identical to a normal turn end in the timeline — the user has
+    // no way to tell from the row that something went wrong.
+    try {
+      getVpStatusBroker().transition({ groupId, vpId, state: 'error', turnId });
+    } catch (brokerErr) {
+      console.warn('[Unify] vp-status error transition failed:', brokerErr?.message || brokerErr);
+    }
+
     if (isPermissionErrorMsg(err.message)) {
       if (!_permissionDiagnosticSent) {
         _permissionDiagnosticSent = true;
@@ -2214,6 +2346,16 @@ async function runVpTurn({ prompt, promptParts = null, groupId, vpId, turnId, en
       type: 'result',
       result_text: '',
     }, envelope);
+  } finally {
+    // vp-status: guaranteed-settle. Regardless of how the turn exited
+    // (normal completion, AbortError early-return, caught exception),
+    // the row must drop back to 'idle'. Wrapped in its own try so a
+    // broker bug can't mask the original error.
+    try {
+      getVpStatusBroker().settleIdle({ groupId, vpId });
+    } catch (err) {
+      console.warn('[Unify] vp-status settleIdle failed:', err?.message || err);
+    }
   }
 }
 
@@ -2695,6 +2837,14 @@ export async function handleUnifyLoadHistory(msg) {
     tools: session.status.tools,
   });
   sendGroupSnapshotBroadcast();
+  // vp-status: replay the authoritative table on reconnect so a refreshed
+  // frontend doesn't have to wait for the next transition to learn each
+  // VP's current state.
+  try {
+    getVpStatusBroker().broadcastSnapshot();
+  } catch (err) {
+    console.warn('[Unify] vp-status snapshot broadcast (replay) failed:', err?.message || err);
+  }
 
   // `msg.limit` is the replay-scrollback request from the frontend (UI
   // history pane, not engine context). Semantics changed (2026-05-01):
@@ -2867,6 +3017,16 @@ export async function resetUnifySession() {
   // History-dedup cache is keyed by per-session coordinator msg ids;
   // a fresh session resets the id space, so clear the cache too.
   _persistedUserMsgIds.clear();
+  // vp-status: nuke the broker table too. Drivers above have just
+  // been aborted, so any in-flight `settleIdle` from their outer
+  // `finally` blocks is racing this reset. Clearing here makes the
+  // post-reset `broadcastSnapshot` (further down) emit an empty
+  // table, and the frontend mirror clears in lockstep.
+  try {
+    getVpStatusBroker().reset();
+  } catch (err) {
+    console.warn('[Unify] vp-status broker reset failed:', err?.message || err);
+  }
 
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
@@ -2892,6 +3052,14 @@ export async function resetUnifySession() {
       mcpServers: session.status.mcpServers,
       tools: session.status.tools,
     });
+    // vp-status: after a forced reset the broker table is still live in
+    // memory; broadcast so the frontend can rebuild its mirror without
+    // waiting for the first per-VP transition.
+    try {
+      getVpStatusBroker().broadcastSnapshot();
+    } catch (err) {
+      console.warn('[Unify] vp-status snapshot broadcast (reset) failed:', err?.message || err);
+    }
   } catch (err) {
     console.error('[Unify] Failed to re-initialize session after reset:', err.message);
   }
