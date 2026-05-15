@@ -45,6 +45,14 @@ const EMPTY_ARRAY = Object.freeze([]);
 // (silently truncating payloads) is what this PR is removing.
 const MAX_UNIFY_DEBUG_LOOPS = 50;
 
+// PR feat-dream-debug-panel-full: per-scope ring buffer cap for dream
+// events. Bounds the unifyDreamEvents map so long-running sessions
+// (auto-dream every hour) don't grow unbounded. 200 is generous:
+// a typical dream pass emits ~6-10 events (start, load-diff per
+// group, triage per group, merge, apply per target, done, result),
+// so this holds ~20-30 recent passes.
+const MAX_UNIFY_DREAM_EVENTS_PER_SCOPE = 200;
+
 export const useChatStore = defineStore('chat', {
   state: () => ({
     ws: null,
@@ -265,6 +273,15 @@ export const useChatStore = defineStore('chat', {
     // render a single row showing the most recent pass for the active
     // group's scope.
     unifyDreamLatest: {},
+    // PR feat-dream-debug-panel-full: per-scope ring buffer of dream
+    // events. Each entry is the raw event payload augmented with `at`
+    // (receive timestamp). Buffer is capped at UNIFY_DREAM_EVENT_LIMIT
+    // per scope so the array stays bounded across long sessions. Both
+    // auto-triggered and manually-triggered passes append here. The
+    // debug panel renders this under the Dream row when expanded.
+    // Shape: { [scope: string]: Array<{phase, status?, target?, groupId?,
+    //   error?, segments?, actions?, manual?, ts, at, ...}> }
+    unifyDreamEvents: {},
     // PR-L: V7 tool-history reflection cards. Keyed by `${conversationId}:${trigger}:${loopRange[0]}-${loopRange[1]}`.
     // Each entry: { trigger, status, loopRange, toolCount, content, durationMs, error,
     // anchorMsgId, anchorOrder }. Rendered inline by MessageList — anchored
@@ -445,6 +462,38 @@ export const useChatStore = defineStore('chat', {
       if (!targetGroupId) return null;
       const scope = `group/${targetGroupId}`;
       return state.unifyDreamLatest?.[scope] || null;
+    },
+    // PR feat-dream-debug-panel-full: per-group event log for the
+    // expanded debug-panel view. Same filter precedence as
+    // `unifyDreamLatestForActiveGroup`. Returns the full ring-buffer
+    // array for the active group's scope (oldest first), or an empty
+    // array. Includes `'*'`-scoped events broadcast to all groups
+    // (start/done) merged in chronological order so the user sees a
+    // single coherent timeline regardless of whether a given event
+    // landed in the scoped bucket or the broadcast bucket.
+    unifyDreamEventsForActiveGroup(state) {
+      const debugFilter = state.unifyDebugGroupFilter;
+      const mainFilter = state.unifyActiveGroupFilter || null;
+      let targetGroupId;
+      if (debugFilter === '__all__') {
+        targetGroupId = null;
+      } else if (debugFilter) {
+        targetGroupId = debugFilter;
+      } else {
+        targetGroupId = mainFilter;
+      }
+      if (!targetGroupId) return [];
+      const scope = `group/${targetGroupId}`;
+      const scoped = Array.isArray(state.unifyDreamEvents?.[scope])
+        ? state.unifyDreamEvents[scope] : [];
+      const broadcast = Array.isArray(state.unifyDreamEvents?.['*'])
+        ? state.unifyDreamEvents['*'] : [];
+      if (broadcast.length === 0) return scoped;
+      if (scoped.length === 0) return broadcast;
+      // Merge by `at` timestamp (already monotonic per source since both
+      // are append-only ring buffers). A simple concat+sort is fine at
+      // this scale (≤400 entries).
+      return [...scoped, ...broadcast].sort((a, b) => (a.at || 0) - (b.at || 0));
     },
     // feat-6af5f9f1 PR B: Turn-grouped debug records for the redesigned
     // panel. Returns `[{ turnId, userPrompt, vpId, groupId, openedAt,
@@ -1419,6 +1468,34 @@ export const useChatStore = defineStore('chat', {
         case 'unify_dream_result': {
           const vp = window.Pinia?.useVpStore?.() || (window.__useVpStore && window.__useVpStore());
           if (vp) vp.applyDreamResult(event);
+          // PR feat-dream-debug-panel-full: also project the final
+          // outcome into the debug panel's per-scope state. The bridge
+          // already mirrors a `phase:'result'` dream_progress for the
+          // ring buffer, but the latest-projection lives in
+          // `unifyDreamLatest` and needs to know success/error +
+          // entriesCreated so the Dream row shows the final tally
+          // instead of being stuck on the last `phase:'apply'` state.
+          if (typeof event?.groupId === 'string' && event.groupId) {
+            const scope = `group/${event.groupId}`;
+            const prev = this.unifyDreamLatest[scope] || null;
+            this.unifyDreamLatest = {
+              ...this.unifyDreamLatest,
+              [scope]: {
+                scope,
+                phase: 'result',
+                status: event.success ? 'success' : 'error',
+                startedAt: prev?.startedAt || Date.now(),
+                finishedAt: Date.now(),
+                mergedCount: typeof event.entriesCreated === 'number'
+                  ? event.entriesCreated
+                  : (prev?.mergedCount ?? null),
+                error: event.success ? null : (event.error || 'unknown'),
+                manual: prev?.manual ?? true,
+                durationMs: prev?.durationMs ?? null,
+                isRunning: false,
+              },
+            };
+          }
           break;
         }
         // 2026-05-13: tool-call usage stats response for the debug drawer.
@@ -1525,10 +1602,45 @@ export const useChatStore = defineStore('chat', {
               [scope]: updateScope(scope),
             };
           }
+          // PR feat-dream-debug-panel-full: also append to the per-scope
+          // ring buffer so the debug panel can render a timeline (not just
+          // the latest summary line). We append to the SAME scope that the
+          // latest-projection resolved — for '*' events that means the
+          // broadcast bucket, which the getter merges with the active
+          // group's bucket. Cap at MAX_UNIFY_DREAM_EVENTS_PER_SCOPE so the
+          // buffer stays bounded.
+          this._appendDreamEvent(scope, event);
           break;
         }
       }
     },
+    // PR feat-dream-debug-panel-full: append a dream event to the per-scope
+    // ring buffer. Caps the buffer at MAX_UNIFY_DREAM_EVENTS_PER_SCOPE so a
+    // long-running session can't grow the array unboundedly. Caller
+    // resolves the scope ('group/<id>' for scoped events; '*' for top-level
+    // broadcast events that don't carry a groupId).
+    //
+    // The augmented record adds an `at` timestamp (receive time, used by
+    // the active-group getter to merge scoped+broadcast buckets in order)
+    // and preserves the raw event fields so the UI can render whatever it
+    // wants (phase, status, target, error, etc.).
+    _appendDreamEvent(scope, event) {
+      if (!scope || !event) return;
+      const at = Date.now();
+      const record = { ...event, at };
+      const prev = Array.isArray(this.unifyDreamEvents?.[scope])
+        ? this.unifyDreamEvents[scope]
+        : [];
+      const next = [...prev, record];
+      if (next.length > MAX_UNIFY_DREAM_EVENTS_PER_SCOPE) {
+        next.splice(0, next.length - MAX_UNIFY_DREAM_EVENTS_PER_SCOPE);
+      }
+      this.unifyDreamEvents = {
+        ...this.unifyDreamEvents,
+        [scope]: next,
+      };
+    },
+
     fetchExpertRoleDefinitions() {
       if (this.expertRoleDefinitions) return; // Already cached
       const agentId = this.currentAgent;
@@ -1834,6 +1946,7 @@ export const useChatStore = defineStore('chat', {
       // v0.1.755: reset dream-pass projection so a previous session's
       // "latest pass" doesn't bleed into the fresh session.
       this.unifyDreamLatest = {};
+      this.unifyDreamEvents = {};
       // Tell agent to reset session so Engine gets a fresh start
       if (this.unifyAgentId) {
         this.sendWsMessage({

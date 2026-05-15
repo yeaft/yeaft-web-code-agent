@@ -55,6 +55,16 @@ import { parseSeqFromId } from './conversation/persist.js';
 let session = null;
 
 /**
+ * Set while `handleUnifyDreamTrigger({groupId})` is awaiting its
+ * scope-filtered dream pass. The progress sink reads this to stamp
+ * top-level events (start/merge/done) that the runner emits without a
+ * groupId so the frontend can route them to the active group's row.
+ * Cleared in the `finally` of the trigger handler.
+ * @type {string | null}
+ */
+let activeScopedDreamGroupId = null;
+
+/**
  * Single in-flight AbortController. A new user message cancels the prior
  * round (if any). H2.f.2: replaces the per-thread Map.
  *
@@ -1126,9 +1136,28 @@ export function installUnifyRuntimeBridge(s) {
   if (!s) return;
 
   // Forward dream pipeline progress events to the web debug panel.
+  //
+  // Group-id stamping (PR feat-dream-debug-panel-full): when a user
+  // triggers a scoped run via `handleUnifyDreamTrigger({groupId})`, the
+  // runner emits SOME events that carry `groupId` (load-diff / triage /
+  // apply) and SOME that don't (start / merge / done — top-level wrap).
+  // Without this stamp the unscoped events land in the store's `'*'`
+  // bucket and never reach the active group's debug-panel row, leaving
+  // it empty even though events are streaming.
+  //
+  // We stamp the active scoped groupId onto BOTH the event payload
+  // (so chat.js's `dream_progress` case routes correctly via
+  // `event.groupId`) AND the unify_output envelope (so server-side
+  // group-scoped filters work too). Events that already carry a
+  // groupId are passed through unchanged.
   s._dreamProgressSink = (evt) => {
     try {
-      sendUnifyEvent({ type: 'dream_progress', ...evt });
+      const scopedGid = activeScopedDreamGroupId; // module-level
+      const stampedGid = (evt && evt.groupId) || scopedGid || null;
+      const out = stampedGid && !(evt && evt.groupId)
+        ? { type: 'dream_progress', ...evt, groupId: stampedGid }
+        : { type: 'dream_progress', ...evt };
+      sendUnifyEvent(out, stampedGid ? { groupId: stampedGid } : {});
     } catch { /* never let event delivery throw */ }
   };
 
@@ -2525,6 +2554,11 @@ export async function handleUnifyDreamTrigger(msg = {}) {
       status: 'running',
     });
 
+    // Stamp module-level scope so the dream progress sink can route
+    // top-level start/merge/done events back to this group's row
+    // (the runner emits them without a groupId; see runner.js).
+    if (groupId) activeScopedDreamGroupId = groupId;
+
     const result = groupId
       ? await session.dreamScheduler.triggerDreamForScopes([`group/${groupId}`])
       : await session.dreamScheduler.triggerDreamNow();
@@ -2536,6 +2570,7 @@ export async function handleUnifyDreamTrigger(msg = {}) {
     const targets = Array.isArray(result?.targets) ? result.targets : [];
     const entriesCreated = targets.filter(t => t && t.status === 'done').length;
     const lastDreamAt = result?.startedAt || new Date().toISOString();
+    const success = !result.error && !result.skipped;
 
     // Spread `result` FIRST so derived fields (success, entriesCreated,
     // lastDreamAt) authoritatively shadow anything the runner might grow
@@ -2547,10 +2582,31 @@ export async function handleUnifyDreamTrigger(msg = {}) {
       type: 'unify_dream_result',
       ...tag,
       ...result,
-      success: !result.error && !result.skipped,
+      success,
       entriesCreated,
       lastDreamAt,
     });
+
+    // Mirror into the dream_progress stream as a `phase:'result'` event
+    // so the debug panel's per-group event ring buffer gets the final
+    // outcome (vs. only the unify_dream_result envelope which the store
+    // routes to the per-VP/per-group "Run now" button state). Without
+    // this the ring buffer ends on the last `phase:'apply'` event and
+    // never shows success/error + duration.
+    if (groupId && typeof session?._dreamProgressSink === 'function') {
+      session._dreamProgressSink({
+        phase: 'result',
+        groupId,
+        status: success ? 'success' : 'error',
+        success,
+        entriesCreated,
+        targets: targets.length,
+        error: success ? null : (result?.error || null),
+        skipped: !!result?.skipped,
+        skippedReason: result?.skippedReason || null,
+        ts: Date.now(),
+      });
+    }
   } catch (err) {
     sendToServer({
       type: 'unify_dream_result',
@@ -2558,6 +2614,18 @@ export async function handleUnifyDreamTrigger(msg = {}) {
       success: false,
       error: err?.message || String(err),
     });
+    if (groupId && typeof session?._dreamProgressSink === 'function') {
+      session._dreamProgressSink({
+        phase: 'result',
+        groupId,
+        status: 'error',
+        success: false,
+        error: err?.message || String(err),
+        ts: Date.now(),
+      });
+    }
+  } finally {
+    if (groupId) activeScopedDreamGroupId = null;
   }
 }
 
