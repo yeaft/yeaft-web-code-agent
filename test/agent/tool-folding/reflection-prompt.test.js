@@ -4,7 +4,6 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildReflectionPrompt,
-  REFLECTION_TEMPLATE,
   REFLECTION_TEMPLATE_EN,
   REFLECTION_TEMPLATE_ZH,
 } from '../../../agent/unify/tool-folding/reflection-prompt.js';
@@ -46,10 +45,6 @@ describe('buildReflectionPrompt', () => {
     expect(prompt).toContain('[1] bash');
     expect(prompt).toContain('[2] read [ERROR]');
     expect(prompt).toContain('"cmd":"ls"');
-  });
-
-  it('exports the canonical template constant', () => {
-    expect(REFLECTION_TEMPLATE).toContain('CRITICAL: Preserve all identifiers');
   });
 
   it('renders the English template when language is omitted', () => {
@@ -118,8 +113,7 @@ describe('buildReflectionPrompt', () => {
   it('exports both language-specific template constants', () => {
     expect(REFLECTION_TEMPLATE_EN).toContain('CRITICAL: Preserve all identifiers');
     expect(REFLECTION_TEMPLATE_ZH).toContain('你正在复盘');
-    // EN constant equals the legacy REFLECTION_TEMPLATE for back-compat.
-    expect(REFLECTION_TEMPLATE).toBe(REFLECTION_TEMPLATE_EN);
   });
 });
+
 

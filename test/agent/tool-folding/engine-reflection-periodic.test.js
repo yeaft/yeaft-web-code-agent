@@ -80,6 +80,15 @@ function mkEngine(adapter) {
 }
 
 describe('T1 in-turn reflection — periodic firing', () => {
+  it('TOOL_BATCH_SIZE is pinned to 30 (guard against accidental flip)', () => {
+    // The behaviour tests in this file follow the constant, so they would
+    // still pass if someone silently changed it. This one assertion exists
+    // purely to catch an accidental change to the numeric value — bump it
+    // intentionally if 30 is being revised, and write down why in the
+    // TOOL_BATCH_SIZE doc comment.
+    expect(TOOL_BATCH_SIZE).toBe(30);
+  });
+
   it('fires TWICE when 2×BATCH tool_use stops accumulate in a single query', async () => {
     const adapter = new ScriptedAdapter({ toolUseTurns: TOOL_BATCH_SIZE * 2 });
     const engine = mkEngine(adapter);
@@ -207,7 +216,7 @@ describe('T1 in-turn reflection — periodic firing', () => {
       calls += 1;
       if (calls === 1) throw new Error('reflector boom');
       return {
-        text: '## What was attempted\nbatched\n## Key findings\nnone\n## Direction check\nok\n## Suggested next direction\ncontinue\n## Tool execution log\necho × 2BATCH',
+        text: '## What was attempted\nbatched\n## Key findings\nnone\n## Direction check\nok\n## Suggested next direction\ncontinue\n## Tool execution log\necho × many',
         usage: { inputTokens: 1, outputTokens: 1 },
       };
     };

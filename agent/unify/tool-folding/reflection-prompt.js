@@ -17,6 +17,8 @@
  * attempted" et al.) and a localised heading would break rendering.
  */
 
+import { isZhLanguage } from '../prompts.js';
+
 const TEMPLATE_EN = `You are reviewing a sequence of {N} tool calls executed by an AI agent.
 Your job is NOT just to summarize, but to REFLECT.
 
@@ -89,7 +91,7 @@ const TEMPLATE_ZH = `你正在复盘一个 AI agent 刚刚执行的 {N} 次工�
 export function buildReflectionPrompt({ originalUserMsg, toolPairs, assistantText, language }) {
   const N = toolPairs.length;
   const seq = toolPairs.map((p, i) => formatPair(i + 1, p)).join('\n\n');
-  const isZh = String(language || '').toLowerCase().startsWith('zh');
+  const isZh = isZhLanguage(language);
   const head = assistantText && assistantText.trim()
     ? (isZh
       ? `本批工具调用期间助手输出的文本：\n${assistantText.trim()}\n\n`
@@ -116,9 +118,8 @@ function formatPair(idx, p) {
   return `[${idx}] ${p.name}${status}\n  args: ${inputStr}\n  result: ${outputStr}`;
 }
 
-// Kept as the English template constant for compatibility with the
-// existing reflection-prompt test that asserts on the literal
-// "CRITICAL: Preserve all identifiers" string.
-export const REFLECTION_TEMPLATE = TEMPLATE_EN;
+// Section headings stay English in both templates because ReflectionCard
+// parses them by literal string match. Exported separately so a debug panel
+// or test can compare against either dictionary directly.
 export const REFLECTION_TEMPLATE_EN = TEMPLATE_EN;
 export const REFLECTION_TEMPLATE_ZH = TEMPLATE_ZH;

@@ -66,7 +66,7 @@ class ScriptedAdapter {
   }
   async call() {
     return {
-      text: '## What was attempted\nbatched BATCH tools\n## Key findings\nnone\n## Direction check\nok\n## Suggested next direction\ncontinue\n## Tool execution log\necho × BATCH',
+      text: '## What was attempted\nbatched many tools\n## Key findings\nnone\n## Direction check\nok\n## Suggested next direction\ncontinue\n## Tool execution log\necho × many',
       usage: { inputTokens: 1, outputTokens: 1 },
     };
   }
@@ -110,7 +110,7 @@ describe('Reflect persistence — T1 collapse should land on disk in collapsed f
       const { engine, conversationStore } = mkEngine(adapter, yeaftDir);
 
       for await (const _ of engine.query({
-        prompt: 'do something with BATCH tools',
+        prompt: 'do something with one batch of tools',
         messages: [],
         groupId: 'g1',
       })) {
@@ -139,7 +139,7 @@ describe('Reflect persistence — T1 collapse should land on disk in collapsed f
       // The original user prompt should be there exactly once.
       const promptMsgs = persisted.filter(
         m => m.role === 'user' && typeof m.content === 'string'
-          && m.content.includes('do something with BATCH tools'),
+          && m.content.includes('do something with one batch of tools'),
       );
       expect(promptMsgs).toHaveLength(1);
 
@@ -169,7 +169,7 @@ describe('Reflect persistence — T1 collapse should land on disk in collapsed f
       const { engine, conversationStore } = mkEngine(adapter, yeaftDir);
 
       for await (const _ of engine.query({
-        prompt: 'do something with 2BATCH tools',
+        prompt: 'do something with two batches of tools',
         messages: [],
         groupId: 'g1',
       })) {

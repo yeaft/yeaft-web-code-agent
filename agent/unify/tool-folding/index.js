@@ -23,7 +23,11 @@ export const TURN_SUMMARY_THRESHOLD = 5;
 export const DUP_TOOL_THRESHOLD = 3;
 
 export { ExecLog, buildEntry, argsHashOf } from './exec-log.js';
-export { buildReflectionPrompt, REFLECTION_TEMPLATE } from './reflection-prompt.js';
+export {
+  buildReflectionPrompt,
+  REFLECTION_TEMPLATE_EN,
+  REFLECTION_TEMPLATE_ZH,
+} from './reflection-prompt.js';
 export { runT1Reflection } from './t1-reflector.js';
 export { runT2Reflection } from './t2-reflector.js';
 export { buildFallbackStub } from './fallback-stub.js';

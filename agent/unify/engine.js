@@ -2045,10 +2045,10 @@ export class Engine {
       //
       // Loop semantics:
       //   - First batch: arcStartIdx = turnStartIdx + 1, fires when
-      //     queryToolCount reaches 13.
+      //     queryToolCount reaches TOOL_BATCH_SIZE.
       //   - Each subsequent batch: arcStartIdx is updated to the slot
       //     right after the just-inserted reflection message; fires
-      //     again whenever 13 more tools have run since
+      //     again whenever TOOL_BATCH_SIZE more tools have run since
       //     lastT1AtToolCount.
       //   - The dedup Set key includes `lastT1AtToolCount` so each
       //     batch within the same query gets a distinct entry — without
@@ -2131,8 +2131,8 @@ export class Engine {
           };
           // Advance lastT1AtToolCount past this batch so we don't
           // tight-loop on a hiccuping reflector. The next attempt is
-          // 13 tools from now, not immediately. arcStartIdx is left
-          // alone because history wasn't rewritten — the tail still
+          // TOOL_BATCH_SIZE tools from now, not immediately. arcStartIdx is
+          // left alone because history wasn't rewritten — the tail still
           // begins where it did. The trade-off: the next batch's
           // reflection will cover the tools that just failed too,
           // which is fine (they're still in conversationMessages).

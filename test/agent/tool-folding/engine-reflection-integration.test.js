@@ -58,7 +58,7 @@ class ScriptedAdapter {
   async call(params) {
     this.callCalls.push(params);
     return {
-      text: '## What was attempted\nbatched\n## Key findings\nnone\n## Direction check\nok\n## Suggested next direction\ncontinue\n## Tool execution log\necho × BATCH',
+      text: '## What was attempted\nbatched\n## Key findings\nnone\n## Direction check\nok\n## Suggested next direction\ncontinue\n## Tool execution log\necho × many',
       usage: { inputTokens: 1, outputTokens: 1 },
     };
   }
@@ -166,8 +166,8 @@ describe('PR-L T1 — adapter.call failure leaves history unchanged', () => {
 
 describe('PR-L T2 end-of-turn — fires when tool count > TURN_SUMMARY_THRESHOLD and < TOOL_BATCH_SIZE', () => {
   it('schedules an async reflection without blocking the turn', async () => {
-    const count = TURN_SUMMARY_THRESHOLD + 1;
-    const adapter = new ScriptedAdapter({ toolUseTurns: count });
+    const toolUseTurns = TURN_SUMMARY_THRESHOLD + 1;
+    const adapter = new ScriptedAdapter({ toolUseTurns });
     const engine = mkEngine(adapter);
 
     const events = [];
@@ -175,7 +175,7 @@ describe('PR-L T2 end-of-turn — fires when tool count > TURN_SUMMARY_THRESHOLD
 
     const t2Pending = events.filter(e => e.type === 'reflection' && e.trigger === 't2' && e.status === 'pending');
     expect(t2Pending).toHaveLength(1);
-    expect(t2Pending[0].toolCount).toBe(count);
+    expect(t2Pending[0].toolCount).toBe(toolUseTurns);
     // No T1 since count never reached TOOL_BATCH_SIZE.
     expect(events.filter(e => e.type === 'reflection' && e.trigger === 't1')).toHaveLength(0);
   });
