@@ -939,13 +939,14 @@ export default {
       () => !showSettings.value && !isNarrowDetail.value && vpTimelineVisible.value
     );
 
-    // Resolve the messages slice that mirrors what the conversation pane
-    // shows: when a group filter is active, only that group's messages.
-    // The timeline derives its VP set + streaming flag from this slice.
+    // Resolve the active group's roster and project it into timeline
+    // rows. Status comes from the store's `vpStatuses` map (mirrored
+    // from the agent broker) — no reverse-inference from message-level
+    // `isStreaming` flags any more (see
+    // docs/notes/2026-05-15-vp-status-from-agent.md).
     const vpTimelineRows = Vue.computed(() => {
       const convId = store.unifyConversationId;
       if (!convId) return [];
-      const raw = store.messagesMap[convId] || [];
 
       // Active group resolution: an explicit conversation-pane filter
       // wins; otherwise fall back to the groups store's selected group.
@@ -961,14 +962,6 @@ export default {
       if (roster.length === 0) return [];
       const rosterSet = new Set(roster);
 
-      // Message slice: same group + sender within roster. The roster
-      // gate plugs `buildTimelineRows`'s tail pass, which would
-      // otherwise tail-append rows for VPs that posted in this group
-      // before being removed from the roster.
-      const messages = raw.filter(
-        (m) => m && m.groupId === filter && rosterSet.has(m.speakerVpId || m.vpId),
-      );
-
       // Base list = the group's declared roster, ordered by the roster
       // array. Hydrate display data from vpStore (which holds
       // {displayName, ...}); roster ids the library hasn't hydrated yet
@@ -977,16 +970,24 @@ export default {
       // id until vp_snapshot lands.
       const vpList = selectGroupRosterVpList(roster, vpStore.vpList || []);
 
-      // Cross-group leak defense: even within a single conversation,
-      // typing signals can carry VPs from other groups. Constrain
-      // everything to the active group's roster.
-      const allTyping = store.vpsTypingInCurrentConv || [];
-      const typingVpIds = allTyping.filter((id) => rosterSet.has(id));
+      // Cross-group leak defense: only include status rows whose
+      // groupId matches the active filter (or rows that have no
+      // groupId, which a defensive broker emits at process start).
+      // Without this scoping a VP that's "streaming" in group-A would
+      // light up its row in group-B's roster.
+      const rawStatuses = store.vpStatuses || {};
+      const scopedStatuses = {};
+      for (const [vpId, entry] of Object.entries(rawStatuses)) {
+        if (!entry) continue;
+        if (entry.groupId && entry.groupId !== filter) continue;
+        if (!rosterSet.has(vpId)) continue;
+        scopedStatuses[vpId] = entry;
+      }
 
       return buildTimelineRows({
         vpList,
-        typingVpIds,
-        messages,
+        vpStatuses: scopedStatuses,
+        connectionState: store.connectionState,
         vpLabelOf: (id) => vpStore.vpLabel(id),
       });
     });

@@ -317,6 +317,23 @@ export const useChatStore = defineStore('chat', {
     // Active VP turns — keyed by turnId. Cleared on result or abort ack.
     activeVpTurns: {},
 
+    // vp-status (2026-05-15): authoritative per-VP status table, mirrored
+    // from the agent broker. Shape: { [vpId]: { state, since, turnId,
+    // groupId } }. Populated by `vp_status_snapshot` (bulk) and updated
+    // by `vp_status_changed` (per transition). The vp-timeline helper
+    // reads this as the single source of truth — the previous design
+    // reverse-inferred from message-level `isStreaming` flags and would
+    // drift any time a flag-clearing event was missed.
+    //
+    // Keyed by vpId only (not (groupId, vpId)) because the timeline
+    // pane is already group-scoped: it renders rows for the active
+    // group's roster, so multiple groups' status tables never share
+    // a row. The composite key lives on the wire (see broker.snapshot)
+    // and the `groupId` field is preserved in each entry, so if a
+    // future feature wants to display VP status across groups the
+    // data is there.
+    vpStatuses: {},
+
     // H2.f.6: thread state retired. unifyThreads / unifyActiveThreadId /
     // unifyFeatureReplyThreadId / unifyJumpTarget / merge+fork results all
     // removed. Single conversation owns the message stream.
@@ -1362,6 +1379,63 @@ export const useChatStore = defineStore('chat', {
           break;
         }
 
+        // vp-status (2026-05-15): authoritative status from the agent
+        // broker. We mirror the row into `this.vpStatuses` and let the
+        // vp-timeline helper read from there. No reverse-inference from
+        // `messages[].isStreaming` any more — that flag is a UI artifact
+        // and was the root cause of the "stuck on streaming" bug.
+        case 'vp_status_changed': {
+          if (!event.vpId || !event.state) break;
+          this.vpStatuses = {
+            ...this.vpStatuses,
+            [event.vpId]: {
+              state: event.state,
+              since: event.since || Date.now(),
+              turnId: event.turnId || null,
+              groupId: event.groupId || null,
+            },
+          };
+          break;
+        }
+        case 'vp_status_snapshot': {
+          // Bulk hydrate. Replace the table outright when the snapshot
+          // is unscoped (groupId === null = "all groups"); otherwise
+          // merge in just the rows for the named group so other groups'
+          // entries survive a scoped reconnect.
+          const statuses = Array.isArray(event.statuses) ? event.statuses : [];
+          if (event.groupId == null) {
+            const next = {};
+            for (const row of statuses) {
+              if (!row || !row.vpId) continue;
+              next[row.vpId] = {
+                state: row.state,
+                since: row.since || Date.now(),
+                turnId: row.turnId || null,
+                groupId: row.groupId || null,
+              };
+            }
+            this.vpStatuses = next;
+          } else {
+            const merged = { ...this.vpStatuses };
+            // Drop existing rows for this groupId first so a VP that
+            // was removed from the group doesn't linger in the table.
+            for (const [k, v] of Object.entries(merged)) {
+              if (v && v.groupId === event.groupId) delete merged[k];
+            }
+            for (const row of statuses) {
+              if (!row || !row.vpId) continue;
+              merged[row.vpId] = {
+                state: row.state,
+                since: row.since || Date.now(),
+                turnId: row.turnId || null,
+                groupId: row.groupId || null,
+              };
+            }
+            this.vpStatuses = merged;
+          }
+          break;
+        }
+
         // task-707: route_forward hand-off hint. The agent emits this when
         // the originating VP's `route_forward` tool succeeds and the
         // engine breaks the tool-loop with stopReason='tool_handoff'. We
@@ -1834,6 +1908,9 @@ export const useChatStore = defineStore('chat', {
       // v0.1.755: reset dream-pass projection so a previous session's
       // "latest pass" doesn't bleed into the fresh session.
       this.unifyDreamLatest = {};
+      // vp-status: drop the cached per-VP status table on session reset.
+      // The agent will re-broadcast a fresh snapshot after re-init.
+      this.vpStatuses = {};
       // Tell agent to reset session so Engine gets a fresh start
       if (this.unifyAgentId) {
         this.sendWsMessage({

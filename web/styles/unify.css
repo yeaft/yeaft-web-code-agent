@@ -2823,10 +2823,15 @@
   background: var(--accent-soft, rgba(99, 102, 241, 0.12));
 }
 
-/* Streaming/typing breathing animation on the row name. Crew uses an
-   identical 3 s ease-in-out infinite cycle. */
+/* Streaming/typing/thinking/tool breathing animation on the row name.
+   Crew uses an identical 3 s ease-in-out infinite cycle. All four
+   "in-flight" labels share the same animation so a turn that switches
+   thinking → streaming → tool visually reads as one continuous
+   activity instead of stop-start. */
 .unify-vp-timeline-row.is-status-streaming .unify-vp-timeline-row-name,
-.unify-vp-timeline-row.is-status-typing .unify-vp-timeline-row-name {
+.unify-vp-timeline-row.is-status-typing .unify-vp-timeline-row-name,
+.unify-vp-timeline-row.is-status-thinking .unify-vp-timeline-row-name,
+.unify-vp-timeline-row.is-status-tool .unify-vp-timeline-row-name {
   animation: unifyVpNameBreathing 3s ease-in-out infinite;
 }
 @keyframes unifyVpNameBreathing {
@@ -2835,9 +2840,27 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .unify-vp-timeline-row.is-status-streaming .unify-vp-timeline-row-name,
-  .unify-vp-timeline-row.is-status-typing .unify-vp-timeline-row-name {
+  .unify-vp-timeline-row.is-status-typing .unify-vp-timeline-row-name,
+  .unify-vp-timeline-row.is-status-thinking .unify-vp-timeline-row-name,
+  .unify-vp-timeline-row.is-status-tool .unify-vp-timeline-row-name {
     animation: none;
   }
+}
+
+/* Offline = agent connection lost. Mute everything so the user can
+   tell at a glance that this row isn't actionable. Error = the turn
+   ended in a failure; tint the status label red but keep the rest of
+   the row legible (the user may still want to @-mention or open the
+   detail view). */
+.unify-vp-timeline-row.is-status-offline {
+  opacity: 0.55;
+}
+.unify-vp-timeline-row.is-status-offline .unify-vp-timeline-row-status {
+  color: var(--text-muted, #94a3b8);
+  font-style: italic;
+}
+.unify-vp-timeline-row.is-status-error .unify-vp-timeline-row-status {
+  color: var(--danger, #e74c3c);
 }
 
 /* ── Topbar VP-list toggle button ────────────────────────────────────

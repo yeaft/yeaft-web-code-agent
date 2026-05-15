@@ -1,12 +1,23 @@
-// vp-timeline.test.js — pinned contract for the simplified helper.
+// vp-timeline.test.js — pinned contract for the agent-authoritative
+// status helper (feat-vp-status-from-agent, 2026-05-15).
 //
-// PR #767 removed VpTimelinePane + this helper along with the Feature
-// system. v0.1.767 restored the VP list WITHOUT the feature-aware
-// branches. This test pins the simplified shape:
-//   - status ∈ {idle, typing, streaming} only
-//   - no feature* fields on TimelineRow
-//   - selectGroupRosterVpList: roster is source of truth
-//   - buildTimelineRows: roster-first ordering, tail pass for transient VPs
+// Previously this helper reverse-inferred status from messages
+// (`m.isStreaming === true`) plus a `typingVpIds` array. Both signals
+// dropped on reconnect / tool windows / persisted history rehydration,
+// stranding the timeline row in stale "streaming". The new contract:
+//
+//   - status comes from `ctx.vpStatuses[vpId].state` (mirrored from
+//     the agent broker's `vp_status_changed` events)
+//   - when `ctx.connectionState !== 'connected'` every row reads as
+//     `'offline'` regardless of the cached status (a connection drop
+//     means the cached state is stale by definition)
+//   - the row schema is still { vpId, displayName, status }
+//   - buildTimelineRows roster pass first, then a tail pass for VPs
+//     that appear in `vpStatuses` but not the roster (e.g. a VP that
+//     emitted a status event before its vp_snapshot landed)
+//
+// The old reverse-inference (messages → streamingSet, typingVpIds →
+// typingSet) is GONE and these tests must keep it that way.
 
 import { describe, it, expect } from 'vitest';
 import {
@@ -58,35 +69,49 @@ describe('selectGroupRosterVpList', () => {
 });
 
 describe('statusFor', () => {
-  it('returns typing when in typingSet', () => {
-    expect(statusFor('a', {
-      typingSet: new Set(['a']),
-      streamingSet: new Set(),
-    })).toBe('typing');
+  it('reads state from vpStatuses[vpId]', () => {
+    const ctx = {
+      connectionState: 'connected',
+      vpStatuses: {
+        a: { state: 'streaming' },
+        b: { state: 'tool' },
+        c: { state: 'error' },
+      },
+    };
+    expect(statusFor('a', ctx)).toBe('streaming');
+    expect(statusFor('b', ctx)).toBe('tool');
+    expect(statusFor('c', ctx)).toBe('error');
   });
 
-  it('returns streaming when in streamingSet (and not typing)', () => {
-    expect(statusFor('a', {
-      typingSet: new Set(),
-      streamingSet: new Set(['a']),
-    })).toBe('streaming');
+  it('returns idle when the VP has no entry yet', () => {
+    expect(statusFor('a', { connectionState: 'connected', vpStatuses: {} }))
+      .toBe('idle');
   });
 
-  it('returns idle when in neither set', () => {
-    expect(statusFor('a', {
-      typingSet: new Set(),
-      streamingSet: new Set(),
-    })).toBe('idle');
+  it('returns offline when connectionState is not "connected"', () => {
+    // Connection drop = cached state is stale by definition. Single
+    // unambiguous signal beats a stale "streaming" any day.
+    const ctx = {
+      connectionState: 'disconnected',
+      vpStatuses: { a: { state: 'streaming' } },
+    };
+    expect(statusFor('a', ctx)).toBe('offline');
   });
 
-  it('typing wins over streaming (precedence)', () => {
+  it.each([
+    'connecting',
+    'reconnecting',
+    'disconnected',
+    'updating',
+  ])('treats %s as offline', (s) => {
     expect(statusFor('a', {
-      typingSet: new Set(['a']),
-      streamingSet: new Set(['a']),
-    })).toBe('typing');
+      connectionState: s,
+      vpStatuses: { a: { state: 'streaming' } },
+    })).toBe('offline');
   });
 
-  it('survives missing ctx fields', () => {
+  it('survives missing ctx', () => {
+    expect(statusFor('a', null)).toBe('idle');
     expect(statusFor('a', {})).toBe('idle');
   });
 });
@@ -98,71 +123,88 @@ describe('buildTimelineRows', () => {
         { vpId: 'a', displayName: 'A' },
         { vpId: 'b', displayName: 'B' },
       ],
-      typingVpIds: [],
-      messages: [],
+      vpStatuses: {},
+      connectionState: 'connected',
     });
     expect(rows.map((r) => r.vpId)).toEqual(['a', 'b']);
     expect(rows.every((r) => r.status === 'idle')).toBe(true);
   });
 
-  it('tags typing/streaming correctly', () => {
+  it('tags rows from vpStatuses', () => {
     const rows = buildTimelineRows({
       vpList: [
         { vpId: 'a', displayName: 'A' },
         { vpId: 'b', displayName: 'B' },
         { vpId: 'c', displayName: 'C' },
       ],
-      typingVpIds: ['a'],
-      messages: [
-        { type: 'assistant', vpId: 'b', isStreaming: true },
-      ],
+      vpStatuses: {
+        a: { state: 'typing' },
+        b: { state: 'streaming' },
+        // c has no entry → idle
+      },
+      connectionState: 'connected',
     });
     expect(rows.find((r) => r.vpId === 'a').status).toBe('typing');
     expect(rows.find((r) => r.vpId === 'b').status).toBe('streaming');
     expect(rows.find((r) => r.vpId === 'c').status).toBe('idle');
   });
 
+  it('forces every row to offline on connection drop', () => {
+    // The whole point of the offline overlay: when the agent is gone,
+    // it doesn't matter what the cached statuses say.
+    const rows = buildTimelineRows({
+      vpList: [
+        { vpId: 'a' },
+        { vpId: 'b' },
+      ],
+      vpStatuses: {
+        a: { state: 'streaming' },
+        b: { state: 'tool' },
+      },
+      connectionState: 'disconnected',
+    });
+    expect(rows.every((r) => r.status === 'offline')).toBe(true);
+  });
+
   it('does NOT expose feature-specific fields on rows', () => {
+    // The Feature system was deleted 2026-05-13; no row should re-grow
+    // these fields by accident.
     const rows = buildTimelineRows({
       vpList: [{ vpId: 'a', displayName: 'A' }],
-      typingVpIds: [],
-      messages: [],
+      vpStatuses: {},
+      connectionState: 'connected',
     });
     const r = rows[0];
-    // The simplified helper exports only vpId / displayName / status.
     expect(Object.keys(r).sort()).toEqual(['displayName', 'status', 'vpId']);
-    // Defensive: no feature* fields linger.
     expect(r.featureId).toBeUndefined();
     expect(r.featureTitle).toBeUndefined();
     expect(r.featureStartedAt).toBeUndefined();
   });
 
-  it('tail-appends VPs missing from roster but seen in typing/streaming/messages', () => {
+  it('tail-appends VPs present in vpStatuses but missing from roster', () => {
+    // Race: status event arrives before vp_snapshot. Without the tail
+    // pass the row would silently disappear; the user would see
+    // activity in the logs that doesn't show up in the timeline.
     const rows = buildTimelineRows({
-      vpList: [{ vpId: 'a', displayName: 'A' }],
-      typingVpIds: ['b'],
-      messages: [
-        { type: 'assistant', vpId: 'c' },
-        { type: 'assistant', vpId: 'd', isStreaming: true },
-      ],
+      vpList: [{ vpId: 'a' }],
+      vpStatuses: {
+        a: { state: 'thinking' },
+        ghost: { state: 'streaming' },
+      },
+      connectionState: 'connected',
     });
-    expect(rows.map((r) => r.vpId)).toEqual(['a', 'b', 'd', 'c']);
-    // typing pass adds 'b' first; streamingSet pass adds 'd'; speakerVps pass
-    // would re-add 'd' but it's already seen; 'c' shows up via speakerVps.
-    // Order is roster -> typingSet -> speakerVps -> streamingSet. The exact
-    // tail order may shift if implementation details change, so the most
-    // important assertion is that ALL four VPs end up represented.
-    expect(rows.length).toBe(4);
+    expect(rows.map((r) => r.vpId)).toEqual(['a', 'ghost']);
+    expect(rows.find((r) => r.vpId === 'ghost').status).toBe('streaming');
   });
 
   it('uses vpLabelOf when provided, falls back to displayName, then vpId', () => {
     const rows = buildTimelineRows({
       vpList: [
         { vpId: 'a', displayName: 'fallback-a' },
-        { vpId: 'b' }, // no displayName
+        { vpId: 'b' },
       ],
-      typingVpIds: [],
-      messages: [],
+      vpStatuses: {},
+      connectionState: 'connected',
       vpLabelOf: (id) => (id === 'a' ? '局长A' : ''),
     });
     expect(rows.find((r) => r.vpId === 'a').displayName).toBe('局长A');
@@ -172,7 +214,7 @@ describe('buildTimelineRows', () => {
   it('survives malformed args', () => {
     expect(buildTimelineRows(null)).toEqual([]);
     expect(buildTimelineRows({})).toEqual([]);
-    expect(buildTimelineRows({ vpList: [], typingVpIds: [], messages: [] })).toEqual([]);
+    expect(buildTimelineRows({ vpList: [], vpStatuses: {} })).toEqual([]);
   });
 
   it('skips entries without vpId in vpList', () => {
@@ -183,20 +225,26 @@ describe('buildTimelineRows', () => {
         null,
         { vpId: 'b' },
       ],
-      typingVpIds: [],
-      messages: [],
+      vpStatuses: {},
+      connectionState: 'connected',
     });
     expect(rows.map((r) => r.vpId)).toEqual(['a', 'b']);
   });
 
-  it('uses speakerVpId before vpId on messages', () => {
+  it('does not reverse-infer status from messages (regression guard)', () => {
+    // The old contract took a `messages` arg and computed
+    // streamingSet from `m.isStreaming === true`. The new helper must
+    // ignore that field entirely — even if a caller forwards messages
+    // by accident, the status should still come from vpStatuses (or
+    // default to idle).
     const rows = buildTimelineRows({
       vpList: [{ vpId: 'a' }],
-      typingVpIds: [],
-      messages: [
-        { type: 'assistant', speakerVpId: 'a', vpId: 'WRONG', isStreaming: true },
-      ],
+      vpStatuses: {},
+      connectionState: 'connected',
+      // Intentionally pass shape the old helper consumed.
+      messages: [{ type: 'assistant', vpId: 'a', isStreaming: true }],
+      typingVpIds: ['a'],
     });
-    expect(rows[0].status).toBe('streaming');
+    expect(rows[0].status).toBe('idle');
   });
 });
