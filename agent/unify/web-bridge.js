@@ -1602,13 +1602,14 @@ export async function handleUnifyGroupChat(msg) {
   // seedFailed separately so a seed crash surfaces a different message
   // than a genuinely-missing group.
   let groupHandle = null;
+  let groupRoot = null;
   let seedFailed = false;
   try {
     const groupYeaftDir = resolveGroupYeaftDir(yeaftDir, groupId);
-    const root = groupsRoot(groupYeaftDir);
-    const dir = join(root, groupId);
+    groupRoot = groupsRoot(groupYeaftDir);
+    const dir = join(groupRoot, groupId);
     if (existsSync(dir) && loadGroupMeta(dir)) {
-      groupHandle = openGroup(root, groupId);
+      groupHandle = openGroup(groupRoot, groupId);
     } else if (groupId === 'grp_default') {
       try {
         const seeded = seedDefaultGroup(groupYeaftDir, { memoryRoot: join(groupYeaftDir, 'memory') });
@@ -1654,7 +1655,7 @@ export async function handleUnifyGroupChat(msg) {
       }
       if (rosterMutated) {
         try { groupHandle.close && groupHandle.close(); } catch { /* best-effort */ }
-        groupHandle = openGroup(root, groupId);
+        groupHandle = openGroup(groupRoot, groupId);
         sendGroupRosterChanged(groupHandle.getMeta());
       }
     }
@@ -1663,7 +1664,7 @@ export async function handleUnifyGroupChat(msg) {
       try {
         setGroupDefaultVp(yeaftDir, groupId, meta2.roster[0]);
         try { groupHandle.close && groupHandle.close(); } catch { /* best-effort */ }
-        groupHandle = openGroup(root, groupId);
+        groupHandle = openGroup(groupRoot, groupId);
         sendGroupRosterChanged(groupHandle.getMeta());
         rosterMutated = true;
       } catch { /* best-effort */ }
