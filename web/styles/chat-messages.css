@@ -2626,6 +2626,10 @@
   color: var(--text-primary);
 }
 
+.todo-item.stale {
+  color: var(--text-muted);
+}
+
 .todo-checkbox {
   width: 16px;
   height: 16px;
@@ -2646,6 +2650,22 @@
 
 .todo-item.in_progress .todo-checkbox {
   border-color: var(--text-secondary);
+}
+
+.todo-item.stale .todo-checkbox {
+  border-color: var(--text-muted);
+  color: var(--text-muted);
+}
+
+.todo-stale-mark {
+  font-weight: 700;
+  line-height: 1;
+}
+
+.todo-stale-note {
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-left: 4px;
 }
 
 .todo-spinner {
