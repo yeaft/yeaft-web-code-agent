@@ -7,6 +7,17 @@ import {
   broadcastAgentList, verifyConversationOwnership, verifyAgentOwnership
 } from '../ws-utils.js';
 
+function emptyUnifyToolStats(reason = '') {
+  const payload = {
+    type: 'unify_tool_stats',
+    snapshot: {},
+    registered: [],
+    unused: [],
+  };
+  if (reason) payload.notice = reason;
+  return payload;
+}
+
 /**
  * Handle conversation lifecycle messages from web client.
  * Types: get_agents, select_agent, create_conversation, resume_conversation,
@@ -727,8 +738,23 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       // hung forever.
       if (typeof msg.type === 'string' && msg.type.startsWith('unify_')) {
         const relayAgentId = msg.agentId || client.currentAgent;
-        if (!relayAgentId) return true; // swallow silently
-        if (!await checkAgentAccess(relayAgentId)) return true;
+        if (!relayAgentId) {
+          if (msg.type === 'unify_fetch_tool_stats') {
+            await sendToWebClient(client, emptyUnifyToolStats('No agent selected.'));
+          }
+          return true; // swallow silently for legacy fire-and-forget messages
+        }
+        if (!await checkAgentAccess(relayAgentId)) {
+          if (msg.type === 'unify_fetch_tool_stats') {
+            await sendToWebClient(client, emptyUnifyToolStats('Agent is not available.'));
+          }
+          return true;
+        }
+        const relayAgent = agents.get(relayAgentId);
+        if (msg.type === 'unify_fetch_tool_stats' && (!relayAgent || relayAgent.ws?.readyState !== 1)) {
+          await sendToWebClient(client, emptyUnifyToolStats('Agent is offline.'));
+          return true;
+        }
         // Forward the entire message minus the agentId field; the agent
         // router is the authoritative consumer of the payload shape.
         const { agentId: _discard, ...rest } = msg;

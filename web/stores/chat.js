@@ -823,7 +823,8 @@ export const useChatStore = defineStore('chat', {
           this.unifyToolStatsLoading = false;
           this.unifyToolStats = {
             ...(this.unifyToolStats || { snapshot: {}, registered: [], unused: [] }),
-            error: 'Timed out waiting for agent reply.',
+            error: null,
+            notice: 'Tool stats are unavailable right now. Try again after the agent reconnects.',
             fetchedAt: Date.now(),
           };
         }
@@ -1662,6 +1663,7 @@ export const useChatStore = defineStore('chat', {
             registered: Array.isArray(event?.registered) ? event.registered : [],
             unused: Array.isArray(event?.unused) ? event.unused : [],
             error: typeof event?.error === 'string' ? event.error : null,
+            notice: typeof event?.notice === 'string' ? event.notice : null,
             fetchedAt: Date.now(),
           };
           this.unifyToolStatsLoading = false;
