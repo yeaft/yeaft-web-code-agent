@@ -1,18 +1,24 @@
 /**
  * engine-reflection-integration.test.js — PR-L V7 end-to-end.
  *
- * Drives the Engine with a scripted adapter that emits 13 tool_use stops
+ * Drives the Engine with a scripted adapter that emits BATCH tool_use stops
  * in a row and asserts:
  *   • T1 reflection fires exactly once.
  *   • The conversationMessages history seen by adapter.stream after
  *     the rewrite contains the reflection placeholder, not the raw
  *     assistant+tool arc.
- *   • The exec-log accumulates 13 entries.
+ *   • The exec-log accumulates BATCH entries.
  *   • A `reflection` event with trigger='t1' is yielded.
+ *
+ * BATCH = TOOL_BATCH_SIZE constant (was 13, raised to 30 on 2026-05-15).
  */
 import { describe, it, expect, vi } from 'vitest';
 import { Engine } from '../../../agent/unify/engine.js';
 import { NullTrace } from '../../../agent/unify/debug-trace.js';
+import {
+  TOOL_BATCH_SIZE,
+  TURN_SUMMARY_THRESHOLD,
+} from '../../../agent/unify/tool-folding/index.js';
 
 // recall-r6 was deleted in GC.1 follow-up; engine now recalls via FTS5
 // pre-flow only when memoryIndex is wired (it isn't here), so no mock
@@ -27,7 +33,7 @@ import { NullTrace } from '../../../agent/unify/debug-trace.js';
  *     markdown immediately.
  */
 class ScriptedAdapter {
-  constructor({ toolUseTurns = 13 } = {}) {
+  constructor({ toolUseTurns = TOOL_BATCH_SIZE } = {}) {
     this.toolUseTurns = toolUseTurns;
     this.streamCalls = [];
     this.callCalls = [];
@@ -52,7 +58,7 @@ class ScriptedAdapter {
   async call(params) {
     this.callCalls.push(params);
     return {
-      text: '## What was attempted\nbatched\n## Key findings\nnone\n## Direction check\nok\n## Suggested next direction\ncontinue\n## Tool execution log\necho × 13',
+      text: '## What was attempted\nbatched\n## Key findings\nnone\n## Direction check\nok\n## Suggested next direction\ncontinue\n## Tool execution log\necho × many',
       usage: { inputTokens: 1, outputTokens: 1 },
     };
   }
@@ -85,8 +91,8 @@ function mkEngine(adapter) {
 }
 
 describe('PR-L T1 in-turn reflection — integration', () => {
-  it('fires exactly once and rewrites history when 13 tool_results accumulate', async () => {
-    const adapter = new ScriptedAdapter({ toolUseTurns: 13 });
+  it('fires exactly once and rewrites history when BATCH tool_results accumulate', async () => {
+    const adapter = new ScriptedAdapter({ toolUseTurns: TOOL_BATCH_SIZE });
     const engine = mkEngine(adapter);
 
     const events = [];
@@ -100,17 +106,17 @@ describe('PR-L T1 in-turn reflection — integration', () => {
     expect(reflectionPending).toHaveLength(1);
     expect(reflectionReady).toHaveLength(1);
     expect(reflectionReady[0].content).toContain('## What was attempted');
-    expect(reflectionReady[0].toolCount).toBe(13);
+    expect(reflectionReady[0].toolCount).toBe(TOOL_BATCH_SIZE);
 
     // adapter.call was invoked exactly once for the reflection.
     expect(adapter.callCalls).toHaveLength(1);
 
-    // Exec-log contains 13 entries for this query, all keyed by queryNumber=1
+    // Exec-log contains BATCH entries for this query, all keyed by queryNumber=1
     // (the user-conversation turn counter, not the inner adapter loop counter).
     const totalEntries = engine._execLog.readTurn(1).length;
-    expect(totalEntries).toBe(13);
+    expect(totalEntries).toBe(TOOL_BATCH_SIZE);
 
-    // The 14th adapter.stream invocation (the one that produced 'end_turn')
+    // The next adapter.stream invocation (the one that produced 'end_turn')
     // saw a REWRITTEN history: the original user prompt + ONE synthetic
     // user reflection message (no assistant or tool messages remaining
     // from the collapsed arc). The reflection lands in role='user' so
@@ -124,7 +130,7 @@ describe('PR-L T1 in-turn reflection — integration', () => {
     // Two user messages: the original prompt + the synthetic reflection.
     expect(userMsgs.length).toBe(2);
     expect(toolMsgs.length).toBe(0);
-    // No assistant messages — the original 13 assistant turns are gone.
+    // No assistant messages — the original BATCH assistant turns are gone.
     expect(assistantMsgs.length).toBe(0);
     // The synthetic reflection is the LAST message, marked _reflection,
     // and wraps the reflector body with the recovery header/footer.
@@ -142,7 +148,7 @@ describe('PR-L T1 — adapter.call failure leaves history unchanged', () => {
     class FailingAdapter extends ScriptedAdapter {
       async call() { throw new Error('reflector down'); }
     }
-    const adapter = new FailingAdapter({ toolUseTurns: 13 });
+    const adapter = new FailingAdapter({ toolUseTurns: TOOL_BATCH_SIZE });
     const engine = mkEngine(adapter);
 
     const events = [];
@@ -151,16 +157,17 @@ describe('PR-L T1 — adapter.call failure leaves history unchanged', () => {
     const errEvents = events.filter(e => e.type === 'reflection' && e.status === 'error');
     expect(errEvents).toHaveLength(1);
     // History was NOT rewritten — the final stream call still saw
-    // 13 assistant + 13 tool messages.
+    // BATCH assistant + BATCH tool messages.
     const finalMessages = adapter.streamCalls[adapter.streamCalls.length - 1].messages;
     const tools = finalMessages.filter(m => m.role === 'tool');
-    expect(tools.length).toBe(13);
+    expect(tools.length).toBe(TOOL_BATCH_SIZE);
   });
 });
 
-describe('PR-L T2 end-of-turn — fires when tool count > 5 and < 13', () => {
+describe('PR-L T2 end-of-turn — fires when tool count > TURN_SUMMARY_THRESHOLD and < TOOL_BATCH_SIZE', () => {
   it('schedules an async reflection without blocking the turn', async () => {
-    const adapter = new ScriptedAdapter({ toolUseTurns: 6 });
+    const toolUseTurns = TURN_SUMMARY_THRESHOLD + 1;
+    const adapter = new ScriptedAdapter({ toolUseTurns });
     const engine = mkEngine(adapter);
 
     const events = [];
@@ -168,13 +175,13 @@ describe('PR-L T2 end-of-turn — fires when tool count > 5 and < 13', () => {
 
     const t2Pending = events.filter(e => e.type === 'reflection' && e.trigger === 't2' && e.status === 'pending');
     expect(t2Pending).toHaveLength(1);
-    expect(t2Pending[0].toolCount).toBe(6);
-    // No T1 since count never reached 13.
+    expect(t2Pending[0].toolCount).toBe(toolUseTurns);
+    // No T1 since count never reached TOOL_BATCH_SIZE.
     expect(events.filter(e => e.type === 'reflection' && e.trigger === 't1')).toHaveLength(0);
   });
 
-  it('does NOT fire when tool count <= 5', async () => {
-    const adapter = new ScriptedAdapter({ toolUseTurns: 4 });
+  it('does NOT fire when tool count <= TURN_SUMMARY_THRESHOLD', async () => {
+    const adapter = new ScriptedAdapter({ toolUseTurns: TURN_SUMMARY_THRESHOLD - 1 });
     const engine = mkEngine(adapter);
 
     const events = [];

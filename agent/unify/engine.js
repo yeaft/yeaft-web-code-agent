@@ -1230,8 +1230,8 @@ export class Engine {
     // `turnStartIdx` is where the current user message lives; the arc
     // we may collapse spans (arcStartIdx .. last assistant/tool).
     //
-    // Periodic-T1 fix: T1 must fire EVERY TOOL_BATCH_SIZE (13) tool
-    // calls, not just the first 13. So instead of a one-shot boolean,
+    // Periodic-T1 fix: T1 must fire EVERY TOOL_BATCH_SIZE (30) tool
+    // calls, not just the first batch. So instead of a one-shot boolean,
     // track:
     //   • `lastT1AtToolCount` — toolCount snapshot at the last T1
     //     ATTEMPT (success OR error). Trigger when
@@ -1797,6 +1797,7 @@ export class Engine {
               originalUserMsg: prompt,
               toolPairs: pairs,
               assistantText,
+              language: this.#config.language,
               signal,
             });
             // Detach: never await. The promise outlives this query() and
@@ -2034,9 +2035,9 @@ export class Engine {
       }
 
       // PR-L: T1 in-turn (synchronous) reflection. Fires once per
-      // adapter loop iteration where ≥ TOOL_BATCH_SIZE (13) tool
+      // adapter loop iteration where ≥ TOOL_BATCH_SIZE (30) tool
       // calls have accumulated since the last T1 firing — not just
-      // the first 13 of the query(). Generates a markdown reflection
+      // the first batch of the query(). Generates a markdown reflection
       // over the assistant+tool arc since the last T1 firing (or
       // since the user prompt for the first batch) and rewrites that
       // range to a SINGLE synthetic user message before the next
@@ -2044,10 +2045,10 @@ export class Engine {
       //
       // Loop semantics:
       //   - First batch: arcStartIdx = turnStartIdx + 1, fires when
-      //     queryToolCount reaches 13.
+      //     queryToolCount reaches TOOL_BATCH_SIZE.
       //   - Each subsequent batch: arcStartIdx is updated to the slot
       //     right after the just-inserted reflection message; fires
-      //     again whenever 13 more tools have run since
+      //     again whenever TOOL_BATCH_SIZE more tools have run since
       //     lastT1AtToolCount.
       //   - The dedup Set key includes `lastT1AtToolCount` so each
       //     batch within the same query gets a distinct entry — without
@@ -2084,6 +2085,7 @@ export class Engine {
             originalUserMsg: prompt,
             toolPairs: pairs,
             assistantText,
+            language: this.#config.language,
             signal,
           });
           const next = collapseRangeToReflection(
@@ -2129,8 +2131,8 @@ export class Engine {
           };
           // Advance lastT1AtToolCount past this batch so we don't
           // tight-loop on a hiccuping reflector. The next attempt is
-          // 13 tools from now, not immediately. arcStartIdx is left
-          // alone because history wasn't rewritten — the tail still
+          // TOOL_BATCH_SIZE tools from now, not immediately. arcStartIdx is
+          // left alone because history wasn't rewritten — the tail still
           // begins where it did. The trade-off: the next batch's
           // reflection will cover the tools that just failed too,
           // which is fine (they're still in conversationMessages).

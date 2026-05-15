@@ -4,10 +4,13 @@
  * 这是 PR-state-ownership 的核心 TDD 测试。我们要保证：
  *
  *   T1 触发后，磁盘上落的是 collapsed 形态（reflection user msg + 最终
- *   assistant），而不是 13 条 tool_use+tool_result 原始记录。
+ *   assistant），而不是 BATCH 条 tool_use+tool_result 原始记录。
  *
  *   这样下一个 turn loadRecentByGroup 看到的是 reflection，省 context
  *   的效果跨 turn 持久化。
+ *
+ * BATCH = TOOL_BATCH_SIZE 常量（最初为 13，2026-05-15 上调至 30）。测试
+ * 通过 import 常量来跟随，不再硬编码数字。
  *
  * 当前（修复前）行为：
  *   - Engine 在内存里 collapse 了
@@ -15,7 +18,7 @@
  *   - turnStart 找最后一个 user → 找到 reflection 那条（collapse 的产物
  *     也是 user role）
  *   - 写盘时只写 reflection + assistant
- *   - 但是！原始 13 条 tool_use+tool_result 在 collapse 之前 **从未** 被写盘
+ *   - 但是！原始 BATCH 条 tool_use+tool_result 在 collapse 之前 **从未** 被写盘
  *     （stop-hooks 只在 turn end 写，不是 incremental），所以"原始记录"
  *     这个问题不存在
  *   - 但是！有 vp_user_already_persisted 的机制：原始 user prompt 在 fan-out
@@ -38,9 +41,10 @@ import { join } from 'node:path';
 import { Engine } from '../../../agent/unify/engine.js';
 import { NullTrace } from '../../../agent/unify/debug-trace.js';
 import { ConversationStore } from '../../../agent/unify/conversation/persist.js';
+import { TOOL_BATCH_SIZE } from '../../../agent/unify/tool-folding/index.js';
 
 class ScriptedAdapter {
-  constructor({ toolUseTurns = 13 } = {}) {
+  constructor({ toolUseTurns = TOOL_BATCH_SIZE } = {}) {
     this.toolUseTurns = toolUseTurns;
     this.streamCalls = [];
     this.callCalls = [];
@@ -62,7 +66,7 @@ class ScriptedAdapter {
   }
   async call() {
     return {
-      text: '## What was attempted\nbatched 13 tools\n## Key findings\nnone\n## Direction check\nok\n## Suggested next direction\ncontinue\n## Tool execution log\necho × 13',
+      text: '## What was attempted\nbatched many tools\n## Key findings\nnone\n## Direction check\nok\n## Suggested next direction\ncontinue\n## Tool execution log\necho × many',
       usage: { inputTokens: 1, outputTokens: 1 },
     };
   }
@@ -99,14 +103,14 @@ function mkEngine(adapter, yeaftDir) {
 }
 
 describe('Reflect persistence — T1 collapse should land on disk in collapsed form', () => {
-  it('after 13-tool T1 collapse, disk shows reflection (not raw tool pairs)', async () => {
+  it('after BATCH-tool T1 collapse, disk shows reflection (not raw tool pairs)', async () => {
     const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-reflect-persist-'));
     try {
-      const adapter = new ScriptedAdapter({ toolUseTurns: 13 });
+      const adapter = new ScriptedAdapter({ toolUseTurns: TOOL_BATCH_SIZE });
       const { engine, conversationStore } = mkEngine(adapter, yeaftDir);
 
       for await (const _ of engine.query({
-        prompt: 'do something with 13 tools',
+        prompt: 'do something with one batch of tools',
         messages: [],
         groupId: 'g1',
       })) {
@@ -118,7 +122,7 @@ describe('Reflect persistence — T1 collapse should land on disk in collapsed f
       // What we want on disk for THIS turn:
       //   - the original user prompt (kept; fold-down doesn't touch it)
       //   - the reflection synthetic user msg (collapsed form of the
-      //     13-tool arc)
+      //     BATCH-tool arc)
       //   - the final assistant message ('all done')
       //
       // What we EXPLICITLY do NOT want:
@@ -135,7 +139,7 @@ describe('Reflect persistence — T1 collapse should land on disk in collapsed f
       // The original user prompt should be there exactly once.
       const promptMsgs = persisted.filter(
         m => m.role === 'user' && typeof m.content === 'string'
-          && m.content.includes('do something with 13 tools'),
+          && m.content.includes('do something with one batch of tools'),
       );
       expect(promptMsgs).toHaveLength(1);
 
@@ -158,14 +162,14 @@ describe('Reflect persistence — T1 collapse should land on disk in collapsed f
     }
   });
 
-  it('after 26-tool double-T1 collapse, disk has TWO reflections + final assistant', async () => {
+  it('after 2×BATCH-tool double-T1 collapse, disk has TWO reflections + final assistant', async () => {
     const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-reflect-persist-'));
     try {
-      const adapter = new ScriptedAdapter({ toolUseTurns: 26 });
+      const adapter = new ScriptedAdapter({ toolUseTurns: TOOL_BATCH_SIZE * 2 });
       const { engine, conversationStore } = mkEngine(adapter, yeaftDir);
 
       for await (const _ of engine.query({
-        prompt: 'do something with 26 tools',
+        prompt: 'do something with two batches of tools',
         messages: [],
         groupId: 'g1',
       })) {
@@ -196,10 +200,10 @@ describe('Reflect persistence — T1 collapse should land on disk in collapsed f
   it('next query loadRecentByGroup sees collapsed history (no tool pairs)', async () => {
     const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-reflect-persist-'));
     try {
-      const adapter = new ScriptedAdapter({ toolUseTurns: 13 });
+      const adapter = new ScriptedAdapter({ toolUseTurns: TOOL_BATCH_SIZE });
       const { engine, conversationStore } = mkEngine(adapter, yeaftDir);
 
-      // Turn 1: 13 tools → collapse → persist.
+      // Turn 1: BATCH tools → collapse → persist.
       for await (const _ of engine.query({
         prompt: 'first turn',
         messages: [],

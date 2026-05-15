@@ -9,14 +9,25 @@
  *   - Duplicate-reminder text formatter
  *
  * The constants are NOT config-driven — V7 design freezes them in code.
+ *
+ * TOOL_BATCH_SIZE history: was 13 originally; raised to 30 (2026-05-15)
+ * after user feedback that 13 fired too often inside a single task and
+ * fragmented otherwise-coherent tool arcs into multiple reflections. 30
+ * keeps the periodic-reflection contract (it still fires every N tools,
+ * not just once) but gives a single task arc room to breathe before the
+ * arc gets collapsed.
  */
 
-export const TOOL_BATCH_SIZE = 13;
+export const TOOL_BATCH_SIZE = 30;
 export const TURN_SUMMARY_THRESHOLD = 5;
 export const DUP_TOOL_THRESHOLD = 3;
 
 export { ExecLog, buildEntry, argsHashOf } from './exec-log.js';
-export { buildReflectionPrompt, REFLECTION_TEMPLATE } from './reflection-prompt.js';
+export {
+  buildReflectionPrompt,
+  REFLECTION_TEMPLATE_EN,
+  REFLECTION_TEMPLATE_ZH,
+} from './reflection-prompt.js';
 export { runT1Reflection } from './t1-reflector.js';
 export { runT2Reflection } from './t2-reflector.js';
 export { buildFallbackStub } from './fallback-stub.js';
