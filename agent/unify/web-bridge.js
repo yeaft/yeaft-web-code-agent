@@ -55,14 +55,21 @@ import { parseSeqFromId } from './conversation/persist.js';
 let session = null;
 
 /**
- * Set while `handleUnifyDreamTrigger({groupId})` is awaiting its
- * scope-filtered dream pass. The progress sink reads this to stamp
- * top-level events (start/merge/done) that the runner emits without a
- * groupId so the frontend can route them to the active group's row.
- * Cleared in the `finally` of the trigger handler.
- * @type {string | null}
+ * Tracks scoped-dream triggers that are currently inflight, keyed by
+ * groupId. Used by `handleUnifyDreamTrigger` to reject any overlapping
+ * scoped trigger rather than racing the sink-wrapping logic against
+ * itself.
+ *
+ * Cross-group overlap is rejected (not just same-group): under the
+ * existing dream scheduler a second concurrent trigger silently shares
+ * the first's inflight promise and dropped its own scope filter. So
+ * "B during A's run" doesn't actually produce a separate scoped pass
+ * for B — letting B install a second sink wrapper would only mis-stamp
+ * A's events with B's groupId. Rejecting B with an explicit error is
+ * the honest answer; the user can re-click after A settles.
+ * @type {Set<string>}
  */
-let activeScopedDreamGroupId = null;
+const inflightScopedDreamGroups = new Set();
 
 /**
  * Single in-flight AbortController. A new user message cancels the prior
@@ -1137,27 +1144,22 @@ export function installUnifyRuntimeBridge(s) {
 
   // Forward dream pipeline progress events to the web debug panel.
   //
-  // Group-id stamping (PR feat-dream-debug-panel-full): when a user
-  // triggers a scoped run via `handleUnifyDreamTrigger({groupId})`, the
-  // runner emits SOME events that carry `groupId` (load-diff / triage /
-  // apply) and SOME that don't (start / merge / done — top-level wrap).
-  // Without this stamp the unscoped events land in the store's `'*'`
-  // bucket and never reach the active group's debug-panel row, leaving
-  // it empty even though events are streaming.
-  //
-  // We stamp the active scoped groupId onto BOTH the event payload
-  // (so chat.js's `dream_progress` case routes correctly via
-  // `event.groupId`) AND the unify_output envelope (so server-side
-  // group-scoped filters work too). Events that already carry a
-  // groupId are passed through unchanged.
+  // Group-id stamping is NO LONGER done here. It used to be: this sink
+  // read a module-level `activeScopedDreamGroupId` that
+  // `handleUnifyDreamTrigger({groupId})` parked before awaiting the
+  // scope-filtered pass. That created a race when two scoped triggers
+  // overlapped (auto-tick during a manual click; or two manual clicks
+  // for different groups): the second handler's `finally` could clear
+  // the module slot while the first run was still emitting events,
+  // dropping the stamp from the tail of the first pass. The new design:
+  // `handleUnifyDreamTrigger` wraps THIS sink for the lifetime of the
+  // trigger to inject `groupId` per-call (see that function below). The
+  // base sink is intentionally a pure passthrough.
   s._dreamProgressSink = (evt) => {
     try {
-      const scopedGid = activeScopedDreamGroupId; // module-level
-      const stampedGid = (evt && evt.groupId) || scopedGid || null;
-      const out = stampedGid && !(evt && evt.groupId)
-        ? { type: 'dream_progress', ...evt, groupId: stampedGid }
-        : { type: 'dream_progress', ...evt };
-      sendUnifyEvent(out, stampedGid ? { groupId: stampedGid } : {});
+      const out = { type: 'dream_progress', ...evt };
+      const tag = evt && evt.groupId ? { groupId: evt.groupId } : {};
+      sendUnifyEvent(out, tag);
     } catch { /* never let event delivery throw */ }
   };
 
@@ -2547,17 +2549,52 @@ export async function handleUnifyDreamTrigger(msg = {}) {
     return;
   }
 
+  // Concurrent-trigger guard for scoped runs. Two scoped clicks (same
+  // group or different) overlapping the same inflight pass used to set
+  // the module-level groupId slot, race the sink wrapping, and let the
+  // second `finally` restore the original sink while the first run was
+  // still emitting events. We now refuse any second scoped trigger
+  // while ANY scoped pass is inflight — the scheduler already
+  // short-circuits the underlying run for same-group, and a different
+  // group's filter would have been silently dropped anyway (see
+  // dream-v2/schedule.js inflight reuse), so the user-facing semantics
+  // are unchanged ("you already asked").
+  if (groupId && inflightScopedDreamGroups.size > 0) {
+    sendToServer({
+      type: 'unify_dream_result',
+      ...tag,
+      success: false,
+      error: 'A dream pass is already running.',
+    });
+    return;
+  }
+
+  // Per-call sink wrapper. For scoped runs we install a closure that
+  // injects this trigger's groupId onto top-level events the runner
+  // emits without one (start/merge/done), then delegates to the
+  // original passthrough sink. The wrapper lives only for the lifetime
+  // of this trigger and is restored in `finally`; concurrent calls for
+  // OTHER groupIds chain (last-installed wins) but each restoration
+  // unwinds back to its predecessor.
+  const originalSink = session?._dreamProgressSink;
+  if (groupId && typeof originalSink === 'function') {
+    inflightScopedDreamGroups.add(groupId);
+    session._dreamProgressSink = (evt) => {
+      try {
+        const stamped = evt && evt.groupId
+          ? evt
+          : { ...evt, groupId };
+        originalSink(stamped);
+      } catch { /* never let event delivery throw */ }
+    };
+  }
+
   try {
     sendToServer({
       type: 'unify_dream_status',
       ...tag,
       status: 'running',
     });
-
-    // Stamp module-level scope so the dream progress sink can route
-    // top-level start/merge/done events back to this group's row
-    // (the runner emits them without a groupId; see runner.js).
-    if (groupId) activeScopedDreamGroupId = groupId;
 
     const result = groupId
       ? await session.dreamScheduler.triggerDreamForScopes([`group/${groupId}`])
@@ -2578,6 +2615,14 @@ export async function handleUnifyDreamTrigger(msg = {}) {
     // { groups, targets, startedAt, error?, skipped? }) but the failure
     // mode of the alternative ordering is silent — review feedback from
     // PR #743.
+    //
+    // This `unify_dream_result` envelope is the SOLE terminal signal for
+    // a dream pass. The chat-store projects it into BOTH `unifyDreamLatest`
+    // (final tally row) AND `unifyDreamEvents` (ring-buffer terminal
+    // marker), so we no longer mirror a synthetic `phase:'result'`
+    // dream_progress event — that mirror used to race the
+    // `unifyDreamLatest` writer and flip the success row back to
+    // 'running' (Critical reviewer finding pre-merge).
     sendToServer({
       type: 'unify_dream_result',
       ...tag,
@@ -2586,27 +2631,6 @@ export async function handleUnifyDreamTrigger(msg = {}) {
       entriesCreated,
       lastDreamAt,
     });
-
-    // Mirror into the dream_progress stream as a `phase:'result'` event
-    // so the debug panel's per-group event ring buffer gets the final
-    // outcome (vs. only the unify_dream_result envelope which the store
-    // routes to the per-VP/per-group "Run now" button state). Without
-    // this the ring buffer ends on the last `phase:'apply'` event and
-    // never shows success/error + duration.
-    if (groupId && typeof session?._dreamProgressSink === 'function') {
-      session._dreamProgressSink({
-        phase: 'result',
-        groupId,
-        status: success ? 'success' : 'error',
-        success,
-        entriesCreated,
-        targets: targets.length,
-        error: success ? null : (result?.error || null),
-        skipped: !!result?.skipped,
-        skippedReason: result?.skippedReason || null,
-        ts: Date.now(),
-      });
-    }
   } catch (err) {
     sendToServer({
       type: 'unify_dream_result',
@@ -2614,18 +2638,12 @@ export async function handleUnifyDreamTrigger(msg = {}) {
       success: false,
       error: err?.message || String(err),
     });
-    if (groupId && typeof session?._dreamProgressSink === 'function') {
-      session._dreamProgressSink({
-        phase: 'result',
-        groupId,
-        status: 'error',
-        success: false,
-        error: err?.message || String(err),
-        ts: Date.now(),
-      });
-    }
   } finally {
-    if (groupId) activeScopedDreamGroupId = null;
+    // Restore the original sink and release the per-group inflight lock.
+    if (groupId && typeof originalSink === 'function') {
+      session._dreamProgressSink = originalSink;
+      inflightScopedDreamGroups.delete(groupId);
+    }
   }
 }
 

@@ -9,18 +9,21 @@
  * cross-contaminated the active group's bucket, leaving the panel
  * empty until the next pass.
  *
- * The bridge fix: `handleUnifyDreamTrigger({groupId})` parks the
- * groupId in a module-level `activeScopedDreamGroupId` field, and
- * `_dreamProgressSink` reads it to stamp ungroupId'd events with
- * the active scope.
+ * The bridge fix: `handleUnifyDreamTrigger({groupId})` wraps the
+ * session's `_dreamProgressSink` for the lifetime of the trigger
+ * with a closure that injects the active groupId onto top-level
+ * events. The base sink is a pure passthrough. Concurrent scoped
+ * triggers for the SAME group are rejected with an error envelope
+ * so the wrappers don't race each other.
  *
- * The second fix: after the unify_dream_result is sent, the bridge
- * mirrors a synthetic `phase:'result'` dream_progress event so the
- * frontend ring buffer has a final "outcome" row showing success or
- * error rather than ending on the last `phase:'apply'` event.
+ * Note: post-review, the bridge no longer mirrors a synthetic
+ * `phase:'result'` dream_progress event after `unify_dream_result`.
+ * That mirror raced the store's `unifyDreamLatest` projection. The
+ * terminal record now comes from the store appending into the ring
+ * buffer when it sees `unify_dream_result` — see
+ * `test/web/stores/dream-event-ring-buffer-handler.test.js`.
  *
- * This suite pins both contracts so a regression that drops
- * groupId stamping or the result mirror can't ship silently.
+ * This suite pins the stamping + concurrency contracts.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -96,8 +99,9 @@ describe('dream_progress event routing', () => {
     await handleUnifyDreamTrigger({ groupId: 'g1' });
 
     const progress = findProgress();
-    // start, load-diff, merge, done, plus the synthetic `phase:'result'`.
-    expect(progress.length).toBe(5);
+    // start, load-diff, merge, done — no synthetic phase:'result' mirror
+    // any longer (terminal is unify_dream_result, see suite docstring).
+    expect(progress.length).toBe(4);
 
     // Top-level events (start / merge / done) — runner did NOT supply
     // a groupId, but the bridge stamped it.
@@ -114,24 +118,26 @@ describe('dream_progress event routing', () => {
     expect(loadDiff.event.groupId).toBe('g1');
   });
 
-  it('mirrors a synthetic phase:"result" event after a successful scoped run', async () => {
+  it('does NOT mirror a synthetic phase:"result" event after a successful scoped run', async () => {
     const session = makeSession();
     installUnifyRuntimeBridge(session);
     __testSetSession(session);
 
     await handleUnifyDreamTrigger({ groupId: 'g1' });
 
+    // Synthetic mirror removed — the terminal record is appended by the
+    // store when it receives `unify_dream_result`. The bridge only sends
+    // `unify_dream_result` here, no extra dream_progress.
     const progress = findProgress();
-    const result = progress.find(p => p.event.phase === 'result');
-    expect(result).toBeTruthy();
-    expect(result.event.groupId).toBe('g1');
-    expect(result.event.status).toBe('success');
-    expect(result.event.success).toBe(true);
-    expect(result.event.entriesCreated).toBe(1);
-    expect(result.envelope.groupId).toBe('g1');
+    expect(progress.find(p => p.event.phase === 'result')).toBeUndefined();
+    const result = findAll('unify_dream_result');
+    expect(result.length).toBe(1);
+    expect(result[0].success).toBe(true);
+    expect(result[0].entriesCreated).toBe(1);
+    expect(result[0].groupId).toBe('g1');
   });
 
-  it('mirrors a synthetic phase:"result" event with status:"error" when the scheduler throws', async () => {
+  it('does NOT mirror a synthetic phase:"result" event when the scheduler throws', async () => {
     const session = makeSession({
       triggerDreamForScopes: vi.fn(async () => {
         throw new Error('disk full');
@@ -143,15 +149,16 @@ describe('dream_progress event routing', () => {
     await handleUnifyDreamTrigger({ groupId: 'g1' });
 
     const progress = findProgress();
-    const result = progress.find(p => p.event.phase === 'result');
-    expect(result).toBeTruthy();
-    expect(result.event.status).toBe('error');
-    expect(result.event.success).toBe(false);
-    expect(result.event.error).toBe('disk full');
-    expect(result.event.groupId).toBe('g1');
+    expect(progress.find(p => p.event.phase === 'result')).toBeUndefined();
+    // The terminal envelope is the error-shaped `unify_dream_result`.
+    const result = findAll('unify_dream_result');
+    expect(result.length).toBe(1);
+    expect(result[0].success).toBe(false);
+    expect(result[0].error).toBe('disk full');
+    expect(result[0].groupId).toBe('g1');
   });
 
-  it('clears the active scoped groupId after the trigger settles', async () => {
+  it('restores the base sink after the trigger settles', async () => {
     const session = makeSession();
     installUnifyRuntimeBridge(session);
     __testSetSession(session);
@@ -160,7 +167,8 @@ describe('dream_progress event routing', () => {
 
     // A subsequent sink call (e.g. an auto-dream firing later) should
     // NOT inherit the prior groupId. We emit a top-level event after
-    // the trigger has settled and verify it carries no groupId.
+    // the trigger has settled and verify it carries no groupId — proves
+    // the wrapper was uninstalled and the base passthrough sink is back.
     outbound.length = 0;
     session._dreamProgressSink({ phase: 'start', manual: false, ts: 99 });
     const progress = findProgress();
@@ -186,13 +194,44 @@ describe('dream_progress event routing', () => {
     await handleUnifyDreamTrigger({ vpId: 'steve' });
 
     const progress = findProgress();
-    // start + done — but no `phase:'result'` mirror (only scoped runs emit it
-    // since the ring buffer is per-group). Top-level vp runs already get
-    // unify_dream_result for the per-VP button row.
     expect(progress.length).toBe(2);
     for (const p of progress) {
       expect(p.event.groupId).toBeUndefined();
       expect(p.envelope.groupId).toBeUndefined();
     }
   });
+
+  it('rejects a second concurrent scoped trigger while one is inflight', async () => {
+    // Trigger A starts a slow scoped run and never finishes during the
+    // test. While it's awaiting, trigger B fires (same group, then
+    // also a different group). Both should be rejected immediately
+    // with an error envelope — the existing scheduler shares the
+    // inflight promise across callers and silently drops the second's
+    // scope filter, so letting B install a second sink wrapper would
+    // only mis-stamp A's events.
+    let resolveA;
+    const session = makeSession({
+      triggerDreamForScopes: vi.fn(() => new Promise((res) => { resolveA = res; })),
+    });
+    installUnifyRuntimeBridge(session);
+    __testSetSession(session);
+
+    const a = handleUnifyDreamTrigger({ groupId: 'g1' });
+    // Give microtasks a tick so A reaches its await.
+    await Promise.resolve();
+    await handleUnifyDreamTrigger({ groupId: 'g1' }); // same-group reject
+    await handleUnifyDreamTrigger({ groupId: 'g2' }); // cross-group reject
+
+    const results = findAll('unify_dream_result');
+    expect(results.length).toBe(2);
+    for (const r of results) {
+      expect(r.success).toBe(false);
+      expect(r.error).toMatch(/already running/i);
+    }
+
+    // Let A finish so we don't leak unhandled promises.
+    resolveA({ startedAt: '2026-05-15T08:00:00.000Z', targets: [] });
+    await a;
+  });
 });
+

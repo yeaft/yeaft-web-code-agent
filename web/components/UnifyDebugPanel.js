@@ -181,6 +181,7 @@ export default {
       const phase = evt.phase || 'unknown';
       const parts = [];
       // Per-phase rich detail: prefer the most informative field per phase.
+      let matched = true;
       if (phase === 'start') {
         parts.push(evt.manual ? 'manual trigger' : 'auto trigger');
       } else if (phase === 'load-diff') {
@@ -204,6 +205,22 @@ export default {
         if (typeof evt.entriesCreated === 'number') parts.push(`entries ${evt.entriesCreated}`);
         if (!evt.success && evt.error) parts.push(evt.error);
         if (evt.skipped) parts.push(`skipped: ${evt.skippedReason || 'unknown'}`);
+      } else {
+        matched = false;
+      }
+      // Generic fallback: if the phase wasn't one we know, OR a known
+      // phase produced no parts (runner grew a new field shape), show
+      // every scalar field so the panel never silently goes blank. This
+      // makes new runner phases visible as soon as they ship instead of
+      // requiring a UI update lockstep.
+      if (!matched || parts.length === 0) {
+        const skip = new Set(['type', 'phase', 'groupId', 'target', 'ts', 'at']);
+        for (const [k, v] of Object.entries(evt)) {
+          if (skip.has(k)) continue;
+          if (v === null || v === undefined) continue;
+          if (typeof v === 'object') continue;
+          parts.push(`${k}=${v}`);
+        }
       }
       if (evt.error && !parts.includes(evt.error)) parts.unshift(`error: ${evt.error}`);
       return parts.join(' · ');

@@ -184,4 +184,104 @@ describe('handleUnifyOutput — unify_dream_result projection', () => {
     // scope key.
     expect(Object.keys(store.unifyDreamLatest)).toEqual([]);
   });
+
+  // Pre-PR review pulled out two defaulting bugs in this branch.
+  // (1) startedAt was synthesised as Date.now() when no prior running
+  //     entry existed (network reorder, fresh-tab reconnect mid-pass),
+  //     making the row claim the pass started the instant the result
+  //     envelope landed. (2) manual was hard-coded to true unless the
+  //     prev entry carried a value, mis-attributing auto runs as
+  //     manual. We now leave both null in that case.
+  it('leaves startedAt null and manual null when no prior running entry exists', () => {
+    const store = mkStore();
+    actions.handleUnifyOutput.call(store, {
+      event: {
+        type: 'unify_dream_result',
+        groupId: 'g1',
+        success: true,
+        entriesCreated: 0,
+      },
+    });
+    const entry = store.unifyDreamLatest['group/g1'];
+    expect(entry.startedAt).toBeNull();
+    expect(entry.manual).toBeNull();
+  });
+
+  it('respects event.manual when the bridge supplies it', () => {
+    const store = mkStore();
+    actions.handleUnifyOutput.call(store, {
+      event: {
+        type: 'unify_dream_result',
+        groupId: 'g1',
+        success: true,
+        manual: false,
+        entriesCreated: 0,
+      },
+    });
+    expect(store.unifyDreamLatest['group/g1'].manual).toBe(false);
+  });
+
+  it('appends a synthetic terminal record into unifyDreamEvents[group/<id>] (timeline marker)', () => {
+    const store = mkStore();
+    send(store, { type: 'dream_progress', phase: 'apply', target: 'group/g1', status: 'done', ts: 100 });
+    actions.handleUnifyOutput.call(store, {
+      event: {
+        type: 'unify_dream_result',
+        groupId: 'g1',
+        success: true,
+        entriesCreated: 4,
+      },
+    });
+    const buf = store.unifyDreamEvents['group/g1'];
+    // 1 dream_progress (apply) + 1 synthetic terminal (phase:'result')
+    expect(buf.length).toBe(2);
+    const terminal = buf[buf.length - 1];
+    expect(terminal.type).toBe('dream_progress');
+    expect(terminal.phase).toBe('result');
+    expect(terminal.status).toBe('success');
+    expect(terminal.success).toBe(true);
+    expect(terminal.entriesCreated).toBe(4);
+  });
+
+  // CRITICAL regression test (PR review pre-merge). Pre-fix the bridge
+  // sent BOTH `unify_dream_result` (terminal) AND a synthetic
+  // `phase:'result'` dream_progress event back-to-back. The store's
+  // dream_progress projection didn't recognise `phase:'result'` as
+  // terminal, so isRunning evaluated to true and the row was rewritten
+  // to status:'running' immediately after being marked success. New
+  // design: bridge no longer sends the mirror; store appends the
+  // terminal record into the ring buffer itself.
+  //
+  // This test plays the FULL production sequence for a successful
+  // scoped pass — running envelope, then `unify_dream_result` — and
+  // asserts the final state is success (no clobber).
+  it('survives the full production sequence: running → unify_dream_result (regression for synthetic-mirror clobber)', () => {
+    const store = mkStore();
+    // 1. Running event lands first (runner emitted load-diff / triage /
+    //    merge / apply with the bridge's stamped groupId).
+    send(store, { type: 'dream_progress', phase: 'triage', groupId: 'g1', ts: 100 });
+    expect(store.unifyDreamLatest['group/g1'].status).toBe('running');
+
+    // 2. Terminal envelope — bridge sends `unify_dream_result` only.
+    actions.handleUnifyOutput.call(store, {
+      event: {
+        type: 'unify_dream_result',
+        groupId: 'g1',
+        success: true,
+        entriesCreated: 2,
+      },
+    });
+
+    // 3. Final state: success, not 'running'. The synthetic-mirror
+    //    clobber bug would surface as status === 'running' here.
+    expect(store.unifyDreamLatest['group/g1'].status).toBe('success');
+    expect(store.unifyDreamLatest['group/g1'].isRunning).toBe(false);
+    expect(store.unifyDreamLatest['group/g1'].mergedCount).toBe(2);
+    // Ring buffer also has the terminal marker so the timeline shows
+    // an outcome row instead of ending on 'triage'.
+    const buf = store.unifyDreamEvents['group/g1'];
+    expect(buf.length).toBe(2);
+    expect(buf[1].phase).toBe('result');
+    expect(buf[1].status).toBe('success');
+  });
 });

@@ -1468,33 +1468,70 @@ export const useChatStore = defineStore('chat', {
         case 'unify_dream_result': {
           const vp = window.Pinia?.useVpStore?.() || (window.__useVpStore && window.__useVpStore());
           if (vp) vp.applyDreamResult(event);
-          // PR feat-dream-debug-panel-full: also project the final
-          // outcome into the debug panel's per-scope state. The bridge
-          // already mirrors a `phase:'result'` dream_progress for the
-          // ring buffer, but the latest-projection lives in
-          // `unifyDreamLatest` and needs to know success/error +
-          // entriesCreated so the Dream row shows the final tally
-          // instead of being stuck on the last `phase:'apply'` state.
+          // PR feat-dream-debug-panel-full: `unify_dream_result` is the
+          // SOLE terminal projection for a scoped dream pass. We write
+          // both:
+          //   1. `unifyDreamLatest[group/<id>]` — the most-recent-pass
+          //      row the Dream UI reads.
+          //   2. `unifyDreamEvents[group/<id>]` — append a synthetic
+          //      terminal record into the timeline ring buffer so the
+          //      debug panel doesn't end on the last `phase:'apply'`
+          //      event with no outcome.
+          //
+          // The bridge used to mirror an extra `phase:'result'`
+          // dream_progress event for #2, but that mirror raced through
+          // the `dream_progress` projection (which doesn't recognise
+          // `phase:'result'` as terminal) and clobbered the
+          // `unifyDreamLatest` success row back to 'running'. The fix
+          // is to consolidate both writes here.
           if (typeof event?.groupId === 'string' && event.groupId) {
             const scope = `group/${event.groupId}`;
             const prev = this.unifyDreamLatest[scope] || null;
+            // Defaults when no prior running entry exists (network
+            // reorder, fresh-tab reconnect): leave nullable fields
+            // null rather than synthesising `Date.now()` /
+            // `manual: true`. UI consumers already handle missing
+            // startedAt; misattributing an auto run as manual is worse
+            // than rendering 'unknown'.
             this.unifyDreamLatest = {
               ...this.unifyDreamLatest,
               [scope]: {
                 scope,
                 phase: 'result',
                 status: event.success ? 'success' : 'error',
-                startedAt: prev?.startedAt || Date.now(),
+                startedAt: prev?.startedAt ?? null,
                 finishedAt: Date.now(),
                 mergedCount: typeof event.entriesCreated === 'number'
                   ? event.entriesCreated
                   : (prev?.mergedCount ?? null),
                 error: event.success ? null : (event.error || 'unknown'),
-                manual: prev?.manual ?? true,
+                manual: typeof event?.manual === 'boolean'
+                  ? event.manual
+                  : (prev?.manual ?? null),
                 durationMs: prev?.durationMs ?? null,
                 isRunning: false,
               },
             };
+            // Append a synthetic terminal record into the ring buffer
+            // so the timeline shows the final outcome. We invent a
+            // `phase:'result'` marker on the record only (NOT on the
+            // wire — the bridge does not mirror it anymore). The
+            // record uses the same shape as a dream_progress event so
+            // the panel's renderer can treat it uniformly.
+            this._appendDreamEvent(scope, {
+              type: 'dream_progress',
+              phase: 'result',
+              groupId: event.groupId,
+              status: event.success ? 'success' : 'error',
+              success: !!event.success,
+              entriesCreated: typeof event.entriesCreated === 'number'
+                ? event.entriesCreated
+                : null,
+              error: event.success ? null : (event.error || null),
+              skipped: !!event.skipped,
+              skippedReason: event.skippedReason || null,
+              ts: Date.now(),
+            });
           }
           break;
         }
