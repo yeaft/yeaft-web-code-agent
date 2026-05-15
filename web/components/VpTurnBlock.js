@@ -19,13 +19,13 @@
  *   [Display name] · [HH:MM start time] [· Ns elapsed while streaming]
  *                                                  [stop btn] [toggle]
  *
- * Body collapse — kept the 4-state expand machine (see
+ * Body collapse — kept the explicit expand machine (see
  * turn-compact.js) but ONLY collapses the body. The header is
- * unconditional, so identity never disappears post-streaming, even
- * in `auto-collapsed`:
+ * unconditional, so identity never disappears when a user manually
+ * collapses a turn:
  *
  *     'streaming'      — auto, while turn.isStreaming === true     → expanded body
- *     'auto-collapsed' — auto, after streaming ends                → collapsed body
+ *     'auto-expanded'  — auto, after streaming ends                → expanded body
  *     'user-expanded'  — sticky, after user clicks chevron open    → expanded body
  *     'user-collapsed' — sticky, after user clicks chevron close   → collapsed body
  *
@@ -195,9 +195,10 @@ export default {
     const vpStore = useVpStore();
     const t = Vue.inject('t', null);
 
-    // 4-state expand machine. Initial value depends on whether the turn
+    // Explicit expand machine. Initial value depends on whether the turn
     // is streaming when first mounted (resumes mid-stream → 'streaming').
-    const expandState = Vue.ref(props.turn.isStreaming ? 'streaming' : 'auto-collapsed');
+    // Completed VP turns are expanded by default; manual collapse still sticks.
+    const expandState = Vue.ref(props.turn.isStreaming ? 'streaming' : 'auto-expanded');
 
     // Reconcile the auto-* part of the machine whenever the upstream
     // streaming flag changes. The user-* states are immune (see

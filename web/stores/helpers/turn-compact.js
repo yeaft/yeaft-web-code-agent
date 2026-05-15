@@ -62,34 +62,35 @@ export function compactBody(text, maxLines = 6) {
 }
 
 /**
- * Decide the visual "expanded" state from the 4-state machine and the
+ * Decide the visual "expanded" state from the explicit state machine and the
  * turn's live streaming flag. Pure helper so the component template
  * stays a one-line ternary.
  *
  *   'streaming'        → expanded (always show full body while streaming)
+ *   'auto-expanded'    → expanded (default after streaming ends)
  *   'user-expanded'    → expanded (user clicked open; sticks)
  *   'user-collapsed'   → collapsed (user clicked close; sticks)
- *   'auto-collapsed'   → collapsed (default after streaming ends)
+ *   'auto-collapsed'   → collapsed (legacy default; still understood)
  *
- * Why 4 states (not just a boolean): the user's manual toggle must
+ * Why explicit states (not just a boolean): the user's manual toggle must
  * survive a re-render where the turn's `isStreaming` flips back and
  * forth (e.g. another delta lands after the user clicked collapse).
- * A boolean would be overwritten by every "auto" pass; the 4-state
- * machine lets the component remember whether the current value was
- * USER intent or AUTO intent.
+ * A boolean would be overwritten by every "auto" pass; the state machine
+ * lets the component remember whether the current value was USER intent
+ * or AUTO intent.
  *
- * @param {'streaming'|'auto-collapsed'|'user-expanded'|'user-collapsed'} state
+ * @param {'streaming'|'auto-expanded'|'auto-collapsed'|'user-expanded'|'user-collapsed'} state
  * @returns {boolean}
  */
 export function isExpanded(state) {
-  return state === 'streaming' || state === 'user-expanded';
+  return state === 'streaming' || state === 'auto-expanded' || state === 'user-expanded';
 }
 
 /**
  * Compute the next state after a user click on the toggle button.
- * Mirrors the 4-state machine in the docstring above.
+ * Mirrors the state machine in the docstring above.
  *
- * @param {'streaming'|'auto-collapsed'|'user-expanded'|'user-collapsed'} state
+ * @param {'streaming'|'auto-expanded'|'auto-collapsed'|'user-expanded'|'user-collapsed'} state
  * @returns {'user-expanded'|'user-collapsed'}
  */
 export function toggleState(state) {
@@ -98,19 +99,19 @@ export function toggleState(state) {
 
 /**
  * Compute the next state when the upstream `turn.isStreaming` flag
- * changes. Streaming entry forces 'streaming' (overrides any prior
- * user-collapsed); streaming exit collapses to 'auto-collapsed' UNLESS
- * the user has already manually toggled (in which case we preserve
- * their intent).
+ * changes. Streaming entry forces 'streaming' unless the user has already
+ * manually toggled; streaming exit expands to 'auto-expanded' UNLESS the
+ * user has already manually toggled (in which case we preserve their
+ * intent).
  *
- *   was 'streaming', now NOT streaming → 'auto-collapsed'
+ *   was 'streaming', now NOT streaming → 'auto-expanded'
  *   was NOT streaming, now streaming   → 'streaming'
  *   user-* states                       → unchanged (user wins)
  *   anything else                       → unchanged
  *
- * @param {'streaming'|'auto-collapsed'|'user-expanded'|'user-collapsed'} state
+ * @param {'streaming'|'auto-expanded'|'auto-collapsed'|'user-expanded'|'user-collapsed'} state
  * @param {boolean} isStreaming
- * @returns {'streaming'|'auto-collapsed'|'user-expanded'|'user-collapsed'}
+ * @returns {'streaming'|'auto-expanded'|'auto-collapsed'|'user-expanded'|'user-collapsed'}
  */
 export function reconcileStreamingState(state, isStreaming) {
   if (isStreaming) {
@@ -118,7 +119,7 @@ export function reconcileStreamingState(state, isStreaming) {
     return 'streaming';
   }
   // Streaming has stopped.
-  if (state === 'streaming') return 'auto-collapsed';
+  if (state === 'streaming') return 'auto-expanded';
   return state;
 }
 

@@ -104,8 +104,9 @@ describe('compactBody', () => {
 });
 
 describe('isExpanded', () => {
-  it('streaming and user-expanded → true', () => {
+  it('streaming, auto-expanded, and user-expanded → true', () => {
     expect(isExpanded('streaming')).toBe(true);
+    expect(isExpanded('auto-expanded')).toBe(true);
     expect(isExpanded('user-expanded')).toBe(true);
   });
   it('auto-collapsed and user-collapsed → false', () => {
@@ -121,6 +122,7 @@ describe('isExpanded', () => {
 describe('toggleState', () => {
   it('expanded states → user-collapsed', () => {
     expect(toggleState('streaming')).toBe('user-collapsed');
+    expect(toggleState('auto-expanded')).toBe('user-collapsed');
     expect(toggleState('user-expanded')).toBe('user-collapsed');
   });
   it('collapsed states → user-expanded', () => {
@@ -137,8 +139,8 @@ describe('reconcileStreamingState', () => {
     expect(reconcileStreamingState('user-expanded', true)).toBe('user-expanded');
     expect(reconcileStreamingState('user-collapsed', true)).toBe('user-collapsed');
   });
-  it('streaming → NOT-streaming auto-collapses by default', () => {
-    expect(reconcileStreamingState('streaming', false)).toBe('auto-collapsed');
+  it('streaming → NOT-streaming auto-expands by default', () => {
+    expect(reconcileStreamingState('streaming', false)).toBe('auto-expanded');
   });
   it('streaming → NOT-streaming preserves user intent', () => {
     // a user clicked toggle DURING streaming; even though the upstream
@@ -149,6 +151,7 @@ describe('reconcileStreamingState', () => {
   });
   it('idempotent for steady states', () => {
     expect(reconcileStreamingState('streaming', true)).toBe('streaming');
+    expect(reconcileStreamingState('auto-expanded', false)).toBe('auto-expanded');
     expect(reconcileStreamingState('auto-collapsed', false)).toBe('auto-collapsed');
   });
 });
