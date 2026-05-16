@@ -81,6 +81,33 @@ import { existsSync as existsSyncSafe, readFileSync as readFileSyncSafe, mkdirSy
  */
 
 /**
+ * Eagerly create `<yeaftDir>/stats/` and surface failures as a warn.
+ *
+ * Returns the resolved path either way — the caller can still pass it
+ * to `ToolUsageStats`, which keeps an in-memory counter path even when
+ * the disk is read-only.
+ *
+ * NOTE: this knowledge ("stats lives under `stats/`") belongs inside
+ * `ToolUsageStats.init()`. Once that exists, delete this helper and
+ * the call site collapses to `await toolStats.init(yeaftDir)`.
+ *
+ * @param {string} yeaftDir
+ * @returns {string} statsDir
+ */
+function prepareToolStatsDir(yeaftDir) {
+  const statsDir = join(yeaftDir, 'stats');
+  try {
+    mkdirSyncSafe(statsDir, { recursive: true });
+  } catch (err) {
+    console.warn(
+      `[Unify] Could not create stats dir ${statsDir}: ${err?.message || err}. ` +
+      `Tool-usage counters will live in memory only.`
+    );
+  }
+  return statsDir;
+}
+
+/**
  * Load (or initialize) a Yeaft session.
  *
  * This is the main entry point for using Yeaft programmatically.
@@ -329,15 +356,13 @@ export async function loadSession(options = {}) {
   // failure as a console.warn while still leaving the in-memory
   // counter path functional — the engine keeps recording even if the
   // disk is read-only.
-  const statsDir = join(yeaftDir, 'stats');
-  try {
-    mkdirSyncSafe(statsDir, { recursive: true });
-  } catch (err) {
-    console.warn(
-      `[Unify] Could not create stats dir ${statsDir}: ${err?.message || err}. ` +
-      `Tool-usage counters will live in memory only.`
-    );
-  }
+  //
+  // FOLLOW-UP: this leaks `ToolUsageStats`'s storage layout (its
+  // directory name) into the session orchestrator. The right home is
+  // a `ToolUsageStats.init()` that owns the mkdir + the warn + a
+  // `writesDisabled` flag. Tracking as future work; for now the helper
+  // below visually quarantines the leak so the migration is one delete.
+  const statsDir = prepareToolStatsDir(yeaftDir);
   const toolStats = new ToolUsageStats({
     path: join(statsDir, 'tool-usage.json'),
   });

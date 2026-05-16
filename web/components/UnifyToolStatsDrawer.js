@@ -157,21 +157,23 @@ export default {
         </div>
         <div class="tool-stats-drawer-body">
           <div v-if="stats && stats.error" class="tool-stats-error">{{ stats.error }}</div>
-          <!--
-            2026-05-16: notice (e.g. "Agent is offline.") is shown as a
-            top banner instead of replacing the entire body. This keeps
-            the registered-tool fallback rows visible underneath so the
-            panel still conveys "here is the catalog" even when the
-            live snapshot fetch failed.
-          -->
-          <div v-if="stats && stats.notice" class="tool-stats-notice">{{ stats.notice }}</div>
-          <div v-if="loading && !stats" class="tool-stats-loading">
+          <div v-else-if="loading && !stats" class="tool-stats-loading">
             {{ $t ? $t('unify.toolStats.loading') : 'Loading…' }}
           </div>
           <div v-else-if="!stats" class="tool-stats-empty">
             {{ $t ? $t('unify.toolStats.notLoaded') : 'No data yet — click refresh.' }}
           </div>
           <template v-else>
+            <!--
+              2026-05-16: notice (e.g. "Agent is offline.") is shown as
+              a top banner instead of replacing the entire body. This
+              keeps the registered-tool fallback rows visible underneath
+              so the panel still conveys "here is the catalog" even when
+              the live snapshot fetch failed. Lives inside the v-else so
+              the error / loading / no-data paths still own the whole
+              body and don't double-render the banner + table.
+            -->
+            <div v-if="stats.notice" class="tool-stats-banner">{{ stats.notice }}</div>
             <table v-if="activeTab === 'all'" class="tool-stats-table">
               <thead>
                 <tr>

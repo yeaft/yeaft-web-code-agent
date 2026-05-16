@@ -112,4 +112,17 @@ describe('messageHandler — unify_tool_stats routing', () => {
     expect(store.unifyToolStats.registered).toEqual([]);
     expect(store.unifyToolStats.unused).toEqual([]);
   });
+
+  it('rejects array-shaped snapshot (typeof [] === "object" loophole)', () => {
+    // Without the !Array.isArray guard, the drawer would call
+    // Object.entries(['Bash', 'Read']) and render rows with numeric
+    // names like "0" / "1" — weird and user-visible.
+    handleMessage(store, {
+      type: 'unify_tool_stats',
+      snapshot: ['Bash', 'Read'],
+      registered: [],
+      unused: [],
+    });
+    expect(store.unifyToolStats.snapshot).toEqual({});
+  });
 });

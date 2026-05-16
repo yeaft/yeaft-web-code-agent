@@ -167,8 +167,14 @@ export function handleMessage(store, msg) {
         clearTimeout(store._fetchUnifyToolStatsTimer);
         store._fetchUnifyToolStatsTimer = null;
       }
+      // `typeof [] === 'object'` — be specific about plain-object so an
+      // accidental array payload doesn't surface as numeric-keyed rows.
+      const rawSnap = msg?.snapshot;
+      const snapshot = rawSnap && typeof rawSnap === 'object' && !Array.isArray(rawSnap)
+        ? rawSnap
+        : {};
       store.unifyToolStats = {
-        snapshot: msg?.snapshot && typeof msg.snapshot === 'object' ? msg.snapshot : {},
+        snapshot,
         registered: Array.isArray(msg?.registered) ? msg.registered : [],
         unused: Array.isArray(msg?.unused) ? msg.unused : [],
         error: typeof msg?.error === 'string' ? msg.error : null,

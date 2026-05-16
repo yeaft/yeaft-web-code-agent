@@ -3158,13 +3158,15 @@
  * 2026-05-16: top-banner variant of the previous "notice replaces
  * everything" pattern. Sits above the table so the registered-tool
  * fallback rows still render — the user sees the catalog even when
- * the live fetch was a fast-fail.
+ * the live fetch was a fast-fail. Class name follows the existing
+ * `*-banner` convention used by `.compact-status-banner` (sidebar)
+ * and `.typing-status-banner` (chat) so future banner-greps find it.
  */
-.tool-stats-notice {
+.tool-stats-banner {
   padding: 8px 12px;
   margin: 0 0 8px;
   border-radius: 6px;
-  background: var(--surface-subtle, rgba(255, 255, 255, 0.04));
+  background: var(--bg-subtle, rgba(255, 255, 255, 0.04));
   color: var(--text-muted, #999);
   font-size: 12px;
   text-align: center;

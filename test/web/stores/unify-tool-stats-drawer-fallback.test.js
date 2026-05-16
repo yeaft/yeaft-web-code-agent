@@ -76,6 +76,19 @@ describe('UnifyToolStatsDrawer — rankedRows', () => {
     expect(rows.find(r => r.name === 'Bash').callCount).toBe(4);
   });
 
+  it('keeps snapshot row, not zeroed fallback, when name is in both snapshot and registered', () => {
+    // The dominant production case: every recorded tool is also
+    // registered. Make sure the dedup keeps the rich snapshot row
+    // rather than letting the zero-counter fallback win.
+    const rows = rankedRowsFor({
+      snapshot: { Bash: { callCount: 7, errorCount: 1 } },
+      registered: ['Bash', 'Read'],
+    });
+    expect(rows.filter(r => r.name === 'Bash').length).toBe(1);
+    expect(rows.find(r => r.name === 'Bash').callCount).toBe(7);
+    expect(rows.find(r => r.name === 'Bash').errorCount).toBe(1);
+  });
+
   it('tolerates missing stats / registered fields', () => {
     expect(rankedRowsFor(null)).toEqual([]);
     expect(rankedRowsFor({ snapshot: {} })).toEqual([]);
