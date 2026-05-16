@@ -2673,6 +2673,37 @@ export const __testRaceWithEscalation = raceWithEscalation;
  * Backwards-compat: when neither field is set, defaults to `vpId='default'`
  * which matches the pre-v0.1.754 behavior.
  */
+export function normalizeDreamResult(result) {
+  const groups = Array.isArray(result?.groups) ? result.groups : [];
+  const targets = Array.isArray(result?.targets) ? result.targets : [];
+  const groupsProcessed = groups.filter(g => g && g.status === 'triaged').length;
+  const skippedGroups = groups.filter(g => g && g.status === 'skipped');
+  const groupsSkipped = skippedGroups.length;
+  const targetsApplied = targets.filter(t => t && t.status === 'done').length;
+  const targetErrors = targets
+    .filter(t => t && t.status === 'error')
+    .map(t => ({ target: t.target || null, error: t.error || 'unknown' }));
+  const hardError = result?.error || null;
+  const skipped = !hardError && groupsProcessed === 0 && targetsApplied === 0;
+  const skippedReason = skipped
+    ? (skippedGroups[0]?.reason || 'no-targets-applied')
+    : null;
+  const success = !hardError && targetErrors.length === 0 && !skipped && targetsApplied > 0;
+
+  return {
+    success,
+    skipped,
+    skippedReason,
+    groupsProcessed,
+    groupsSkipped,
+    targetsApplied,
+    targetErrors,
+    entriesCreated: targetsApplied,
+    lastDreamAt: result?.startedAt || new Date().toISOString(),
+    error: hardError || (targetErrors[0]?.error || null),
+  };
+}
+
 export async function handleUnifyDreamTrigger(msg = {}) {
   // Resolve tag up-front so EVERY outbound envelope (including the
   // scheduler-uninitialised early-return below) carries `groupId` /
@@ -2685,11 +2716,11 @@ export async function handleUnifyDreamTrigger(msg = {}) {
   const tag = groupId ? { groupId } : { vpId };
 
   if (!session?.dreamScheduler) {
+    const error = 'Dream scheduler not initialized — session not loaded.';
     sendToServer({
       type: 'unify_dream_result',
       ...tag,
-      success: false,
-      error: 'Dream scheduler not initialized — session not loaded.',
+      ...normalizeDreamResult({ error }),
     });
     return;
   }
@@ -2705,11 +2736,11 @@ export async function handleUnifyDreamTrigger(msg = {}) {
   // dream-v2/schedule.js inflight reuse), so the user-facing semantics
   // are unchanged ("you already asked").
   if (groupId && inflightScopedDreamGroups.size > 0) {
+    const error = 'A dream pass is already running.';
     sendToServer({
       type: 'unify_dream_result',
       ...tag,
-      success: false,
-      error: 'A dream pass is already running.',
+      ...normalizeDreamResult({ error }),
     });
     return;
   }
@@ -2745,17 +2776,12 @@ export async function handleUnifyDreamTrigger(msg = {}) {
       ? await session.dreamScheduler.triggerDreamForScopes([`group/${groupId}`])
       : await session.dreamScheduler.triggerDreamNow();
 
-    // fix/dream-cadence-and-ui-trigger: derive a single "entries
-    // created" count for the UI bubble. The runner returns a richer
-    // shape (groups[], targets[]); the front-end button only needs a
-    // scalar plus the start timestamp.
-    const targets = Array.isArray(result?.targets) ? result.targets : [];
-    const entriesCreated = targets.filter(t => t && t.status === 'done').length;
-    const lastDreamAt = result?.startedAt || new Date().toISOString();
-    const success = !result.error && !result.skipped;
+    const normalized = normalizeDreamResult(result);
 
-    // Spread `result` FIRST so derived fields (success, entriesCreated,
-    // lastDreamAt) authoritatively shadow anything the runner might grow
+    // Spread `result` FIRST so normalized fields (success, skipped,
+    // skippedReason, groupsProcessed, groupsSkipped, targetsApplied,
+    // targetErrors, entriesCreated, lastDreamAt) authoritatively shadow
+    // anything the runner might grow
     // with the same name. Today there is no collision (runner.js returns
     // { groups, targets, startedAt, error?, skipped? }) but the failure
     // mode of the alternative ordering is silent — review feedback from
@@ -2772,16 +2798,14 @@ export async function handleUnifyDreamTrigger(msg = {}) {
       type: 'unify_dream_result',
       ...tag,
       ...result,
-      success,
-      entriesCreated,
-      lastDreamAt,
+      ...normalized,
     });
   } catch (err) {
+    const error = err?.message || String(err);
     sendToServer({
       type: 'unify_dream_result',
       ...tag,
-      success: false,
-      error: err?.message || String(err),
+      ...normalizeDreamResult({ error }),
     });
   } finally {
     // Restore the original sink and release the per-group inflight lock.

@@ -657,15 +657,12 @@ export default {
       return gs.groups['grp_default'] || null;
     });
 
-    // ── fix/dream-cadence-and-ui-trigger: manual dream trigger ──
-    // The button targets whichever VP key the agent will use to fan
-    // back the result. `handleUnifyDreamTrigger` defaults to 'default'
-    // when no vpId is sent; mirroring that here keeps the round-trip
-    // keys aligned with vpStore.dreamStatus[vpId].
-    const dreamButtonVpId = Vue.computed(() => {
+    // ── manual dream trigger ──
+    // Header dream acts on the conversation currently on screen. That is
+    // a group-scoped manual pass, not a VP-scoped/global pass.
+    const dreamButtonGroupId = Vue.computed(() => {
       const g = topbarGroup.value;
-      if (g && g.defaultVpId) return g.defaultVpId;
-      return 'default';
+      return (g && g.id) || null;
     });
 
     /** @type {import('vue').Ref<number|null>} just-finished flag — wall-clock when the last result arrived. */
@@ -688,7 +685,7 @@ export default {
     });
 
     const dreamStatusEntry = Vue.computed(
-      () => vpStore.dreamStatusFor(dreamButtonVpId.value),
+      () => vpStore.groupDreamStatusFor(dreamButtonGroupId.value),
     );
     const dreamRunning = Vue.computed(() => dreamStatusEntry.value.status === 'running');
     const dreamLastRunAt = Vue.computed(() => dreamStatusEntry.value.lastRunAt);
@@ -749,8 +746,8 @@ export default {
     const dreamLastRunRelative = Vue.computed(() => formatRelativeFromNow(dreamLastRunAt.value));
 
     const onDreamTriggerClick = () => {
-      if (dreamRunning.value) return;
-      vpStore.triggerDream(dreamButtonVpId.value);
+      if (dreamRunning.value || !dreamButtonGroupId.value) return;
+      vpStore.triggerGroupDream(dreamButtonGroupId.value);
     };
 
     // feat-6af5f9f1 PR C: the legacy debug helpers (toggleTurnExpand,

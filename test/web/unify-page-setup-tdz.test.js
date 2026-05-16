@@ -134,7 +134,9 @@ function makePiniaStub() {
   };
   const vpStore = {
     dreamStatusFor: () => ({ status: 'idle', lastRunAt: null, lastResult: null }),
+    groupDreamStatusFor: () => ({ status: 'idle', lastRunAt: null, lastResult: null }),
     triggerDream: () => {},
+    triggerGroupDream: () => {},
     vpList: [],
     vpLabel: (id) => id,
   };

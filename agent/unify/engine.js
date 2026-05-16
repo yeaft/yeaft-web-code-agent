@@ -216,6 +216,10 @@ export function buildResidentEntries(args) {
   return out;
 }
 
+function isZhRuntimeLanguage(language) {
+  return String(language || '').toLowerCase().startsWith('zh');
+}
+
 export class Engine {
   /** @type {import('./llm/adapter.js').LLMAdapter} */
   #adapter;
@@ -476,19 +480,19 @@ export class Engine {
    * dream tick (Phase 6) is what populates these; on a fresh install they
    * all return ''.
    *
-   * @param {{groupId?: string, vpId?: string}} ctx
+   * @param {{groupId?: string, vpId?: string, language?: string}} ctx
    * @returns {Promise<{user:string, group:string, vp:string}>}
    */
-  async #loadLayerASummaries({ groupId, vpId } = {}) {
+  async #loadLayerASummaries({ groupId, vpId, language } = {}) {
     if (!this.#yeaftDir) return { user: '', group: '', vp: '' };
     const memoryRoot = `${this.#yeaftDir}/memory`;
     const tasks = [
-      readScopeSummary({ kind: 'user' }, { root: memoryRoot }).catch(() => ''),
+      readScopeSummary({ kind: 'user' }, { root: memoryRoot, language }).catch(() => ''),
       groupId
-        ? readScopeSummary({ kind: 'group', id: groupId }, { root: memoryRoot }).catch(() => '')
+        ? readScopeSummary({ kind: 'group', id: groupId }, { root: memoryRoot, language }).catch(() => '')
         : Promise.resolve(''),
       vpId
-        ? readScopeSummary({ kind: 'vp', id: vpId }, { root: memoryRoot }).catch(() => '')
+        ? readScopeSummary({ kind: 'vp', id: vpId }, { root: memoryRoot, language }).catch(() => '')
         : Promise.resolve(''),
     ];
     const [user, group, vp] = await Promise.all(tasks);
@@ -542,7 +546,7 @@ export class Engine {
     ams.setOnDemand(segs);
 
     // (c) Snapshot — render the AMS layers as a single prompt block.
-    const snapshotBlock = this.#renderAmsSnapshot(ams);
+    const snapshotBlock = this.#renderAmsSnapshot(ams, this.#config.language || 'en');
 
     const scopes = buildRelevantScopes({
       groupId: args.groupId,
@@ -558,30 +562,35 @@ export class Engine {
    * so the LLM sees a consistent layout.
    *
    * @param {import('./memory/ams.js').ActiveMemorySet} ams
+   * @param {string} [language]
    * @returns {string}
    */
-  #renderAmsSnapshot(ams) {
+  #renderAmsSnapshot(ams, language = 'en') {
     const snap = ams.snapshot();
     if (!snap) return '';
     const parts = [];
     if (snap.resident.length === 0 && snap.recent.length === 0 && snap.onDemand.length === 0) {
       return '';
     }
-    parts.push('## Active Memory Set');
+    const zh = isZhRuntimeLanguage(language);
+    parts.push(zh ? '## 活跃记忆集' : '## Active Memory Set');
+    parts.push(zh
+      ? '以下记忆按当前用户语言呈现；如果个别历史摘要仍是其他语言，请只把它当作事实来源，回答和新增记忆应使用中文。'
+      : 'Memory is presented for the current user language; if an older summary is in another language, treat it as factual context and continue in English.');
     if (snap.resident.length > 0) {
-      parts.push('### Resident');
+      parts.push(zh ? '### 常驻记忆' : '### Resident');
       for (const r of snap.resident) {
         parts.push(`- **${r.scope}**: ${r.summary}`);
       }
     }
     if (snap.recent.length > 0) {
-      parts.push('### Recent');
+      parts.push(zh ? '### 最近记忆' : '### Recent');
       for (const s of snap.recent) {
         parts.push(`- (${s.scope}) ${(s.body || '').trim()}`);
       }
     }
     if (snap.onDemand.length > 0) {
-      parts.push('### OnDemand');
+      parts.push(zh ? '### 按需记忆' : '### OnDemand');
       for (const s of snap.onDemand) {
         parts.push(`- (${s.scope}) ${(s.body || '').trim()}`);
       }
@@ -1133,6 +1142,7 @@ export class Engine {
       vpId: vpPersona && typeof vpPersona === 'object' && typeof vpPersona.vpId === 'string'
         ? vpPersona.vpId
         : (typeof senderVpId === 'string' ? senderVpId : undefined),
+      language: this.#config.language || 'en',
     });
 
     // ─── AMS: populate + snapshot ───────────────────────────────

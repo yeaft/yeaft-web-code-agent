@@ -25,7 +25,7 @@ const ROOT = path.resolve(__dirname, '..');
 
 // Keep these in sync with vitest.config.js.
 const INCLUDE = ['**/*.{test,spec}.?(c|m)[jt]s?(x)'];
-const EXCLUDE = ['**/node_modules/**', '**/e2e/**', '.claude/worktrees/**'];
+const EXCLUDE = ['**/node_modules/**', '**/e2e/**', '.claude/worktrees/**', '.worktrees/**', '.yeaft/worktrees/**'];
 
 describe('vitest discovery smoke', () => {
   it('scans fewer than 500 test files (exclude globs are correct)', async () => {
@@ -41,14 +41,18 @@ describe('vitest discovery smoke', () => {
     expect(files.length, `Unexpectedly many test files discovered (${files.length}). Check vitest.config.js exclude patterns — a stale worktree glob here wrecks CI.`).toBeLessThan(500);
   });
 
-  it('does not include any file under .claude/worktrees/', async () => {
+  it('does not include any file under known worktree directories', async () => {
     const files = await glob(INCLUDE, {
       cwd: ROOT,
       ignore: EXCLUDE,
       dot: false,
       absolute: false,
     });
-    const leaked = files.filter((f) => f.includes('.claude/worktrees/'));
+    const leaked = files.filter((f) => (
+      f.includes('.claude/worktrees/')
+      || f.includes('.worktrees/')
+      || f.includes('.yeaft/worktrees/')
+    ));
     expect(leaked, `vitest discovery leaked worktree test files:\n${leaked.slice(0, 5).join('\n')}`).toHaveLength(0);
   });
 });
