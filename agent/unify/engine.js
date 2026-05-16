@@ -772,6 +772,11 @@ export class Engine {
         parentVpPersona: vpCtx?.vpPersona || null,
         onEvent: this.#subAgentEventSink || null,
         language: this.#config?.language || 'en',
+        // Forward the session-shared ToolUsageStats so sub-agent
+        // engines record tool calls into the same on-disk snapshot
+        // (~/.yeaft/stats/tool-usage.json) the parent engine writes
+        // to. Null when the parent has no stats wired (e.g. tests).
+        toolStats: this.#toolStats || null,
       },
     };
   }

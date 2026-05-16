@@ -86,6 +86,7 @@ export function isRestrictedToolName(name) {
  *   parentName?: string,
  *   parentVpId?: string,
  *   parentVpPersona?: object,
+ *   toolStats?: object,
  *   onEvent?: (agentId: string, evt: object) => void,
  *   language?: 'en'|'zh',
  * }} deps
@@ -112,6 +113,13 @@ export function startSubAgent(agent, deps = {}) {
     skillManager: deps.skillManager || null,
     mcpManager: deps.mcpManager || null,
     yeaftDir: deps.yeaftDir || null,
+    // Share the SAME ToolUsageStats instance the session-level engine
+    // uses (and the same one per-VP engines use). Without this, every
+    // tool call inside a sub-agent silently dropped because engine.js's
+    // record-on-tool-exec branch (`if (this.#toolStats && ...)`) was
+    // false. Sub-agents are usually the heaviest tool users — leaving
+    // them out skewed the snapshot read by `unify_fetch_tool_stats`.
+    toolStats: deps.toolStats || null,
   });
 
   agent.subEngine = subEngine;
