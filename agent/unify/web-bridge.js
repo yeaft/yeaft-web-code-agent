@@ -499,6 +499,19 @@ export function __testGroupContextEntry(groupId) {
   return groupContexts.get(groupId);
 }
 
+/**
+ * Test-only: build (or return cached) per-VP Engine for a session that
+ * was wired via `__testSetSession`. Lets tests assert that the engine's
+ * dependencies (notably `toolStats`) come from the session reference —
+ * see `test/agent/web-bridge-vp-engine-tool-stats.test.js`.
+ *
+ * @param {string} groupId
+ * @param {string} vpId
+ */
+export function __testGetOrCreateVpEngine(groupId, vpId) {
+  return getOrCreateVpEngine(groupId, vpId);
+}
+
 /** Whether we've already sent a permission warning to the UI */
 let _permissionDiagnosticSent = false;
 
@@ -540,6 +553,12 @@ function getOrCreateVpEngine(groupId, vpId) {
     skillManager: session.skillManager,
     mcpManager: session.mcpManager,
     yeaftDir: session.yeaftDir,
+    // Share the session-shared ToolUsageStats so per-VP tool calls land
+    // in the same on-disk snapshot the `unify_fetch_tool_stats` handler
+    // reads. Without this, engine's record-on-tool-exec guard
+    // (`if (this.#toolStats && ...)`) is false and group VP tool calls
+    // are silently dropped.
+    toolStats: session.toolStats || null,
   });
   vpEngines.set(key, eng);
   return eng;

@@ -90,7 +90,11 @@ export async function runSingleEval(evalCase, { adapter, model, config = {} }) {
   const trace = new NullTrace();
   const engineConfig = { model, maxOutputTokens: 4096, ...config };
 
-  // Build engine — optionally with ToolRegistry
+  // Build engine — optionally with ToolRegistry. NOTE: intentionally
+  // no `toolStats` here. The eval runner is an offline scoring harness
+  // and must NOT pollute the user-facing `~/.yeaft/stats/tool-usage.json`
+  // snapshot (see PR #782 for the session-shared ToolUsageStats
+  // wiring on the runtime paths).
   const engineOpts = { adapter, trace, config: engineConfig };
 
   if (evalCase.registryTools) {

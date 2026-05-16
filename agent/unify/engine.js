@@ -326,10 +326,12 @@ export class Engine {
    *   config: object,
    *   conversationStore?: import('./conversation/persist.js').ConversationStore,
    *   memoryIndex?: import('./memory/index-db.js').SegmentIndex,
+   *   amsRegistry?: object,
    *   toolRegistry?: import('./tools/registry.js').ToolRegistry,
    *   skillManager?: import('./skills.js').SkillManager,
    *   mcpManager?: import('./mcp.js').MCPManager,
    *   yeaftDir?: string,
+   *   toolStats?: import('./stats/tool-usage.js').ToolUsageStats,
    * }} params
    */
   constructor({ adapter, trace, config, conversationStore, memoryIndex, amsRegistry, toolRegistry, skillManager, mcpManager, yeaftDir, toolStats = null }) {
@@ -772,6 +774,11 @@ export class Engine {
         parentVpPersona: vpCtx?.vpPersona || null,
         onEvent: this.#subAgentEventSink || null,
         language: this.#config?.language || 'en',
+        // Forward the session-shared ToolUsageStats so sub-agent
+        // engines record tool calls into the same on-disk snapshot
+        // (~/.yeaft/stats/tool-usage.json) the parent engine writes
+        // to. Null when the parent has no stats wired (e.g. tests).
+        toolStats: this.#toolStats || null,
       },
     };
   }

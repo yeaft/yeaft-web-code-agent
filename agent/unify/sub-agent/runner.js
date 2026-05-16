@@ -86,6 +86,7 @@ export function isRestrictedToolName(name) {
  *   parentName?: string,
  *   parentVpId?: string,
  *   parentVpPersona?: object,
+ *   toolStats?: object,
  *   onEvent?: (agentId: string, evt: object) => void,
  *   language?: 'en'|'zh',
  * }} deps
@@ -112,6 +113,11 @@ export function startSubAgent(agent, deps = {}) {
     skillManager: deps.skillManager || null,
     mcpManager: deps.mcpManager || null,
     yeaftDir: deps.yeaftDir || null,
+    // Share the session-shared ToolUsageStats so sub-agent tool calls
+    // land in the same on-disk snapshot the parent records into. Sub-
+    // agents are often the heaviest tool users — leaving them out
+    // skewed `unify_fetch_tool_stats` output.
+    toolStats: deps.toolStats || null,
   });
 
   agent.subEngine = subEngine;
