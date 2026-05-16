@@ -7,10 +7,16 @@
  * `unify_fetch_tool_stats`. The user-visible bug was "tool usage stats
  * in group conversations don't work".
  *
- * The test installs a session-shaped stub via `__testSetSession`, asks
- * the bridge to build a per-VP Engine via `__testGetOrCreateVpEngine`,
- * drives one tool through it, and asserts the stub stats received a
- * `record(...)` call with the tool name.
+ * Two-layer assertion:
+ *
+ *   1. Identity — the per-VP engine carries the EXACT instance the
+ *      session exposes. Verified by registering a capture-tool and
+ *      reading `ctx.parentEngineDeps.toolStats`. Without this assertion
+ *      a future per-VP wrapper that swapped the instance for a clone
+ *      would silently re-introduce the bug.
+ *
+ *   2. Behaviour — driving a real tool through the engine produces a
+ *      `record({ name, durationMs, isError })` call on the same stub.
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -22,38 +28,58 @@ import {
 import { NullTrace } from '../../agent/unify/debug-trace.js';
 import { ToolRegistry } from '../../agent/unify/tools/registry.js';
 import { defineTool } from '../../agent/unify/tools/types.js';
+import { mkStatsStub, OneShotToolAdapter } from '../helpers/tool-stats.js';
 
-function mkStatsStub() {
-  const calls = [];
+function mkSession({ toolRegistry, adapter, toolStats }) {
   return {
-    calls,
-    record(args) { calls.push(args); },
-    snapshot() { return { tools: {} }; },
+    adapter,
+    trace: new NullTrace(),
+    config: { model: 'test-model', maxOutputTokens: 1024, _readOnly: true, language: 'en' },
+    conversationStore: null,
+    memoryIndex: null,
+    amsRegistry: null,
+    toolRegistry,
+    skillManager: null,
+    mcpManager: null,
+    yeaftDir: null,
+    toolStats,
   };
-}
-
-class OneShotToolAdapter {
-  constructor(toolName) {
-    this.toolName = toolName;
-    this._counter = 0;
-  }
-  async *stream() {
-    if (this._counter === 0) {
-      this._counter += 1;
-      yield { type: 'tool_call', id: 'tc-1', name: this.toolName, input: {} };
-      yield { type: 'stop', stopReason: 'tool_use' };
-    } else {
-      yield { type: 'text_delta', text: 'all done' };
-      yield { type: 'stop', stopReason: 'end_turn' };
-    }
-  }
-  async call() { return { text: 'ok', usage: { inputTokens: 1, outputTokens: 1 } }; }
 }
 
 describe('getOrCreateVpEngine: per-VP engine inherits session.toolStats', () => {
   beforeEach(async () => {
     await __testResetVpState();
     __testSetSession(null);
+  });
+
+  it('per-VP engine surfaces session.toolStats by identity through ctx.parentEngineDeps', async () => {
+    const stats = mkStatsStub();
+    let capturedCtx = null;
+    const captureTool = defineTool({
+      name: 'capture',
+      description: 'captures ctx so the test can assert on it',
+      parameters: { type: 'object', properties: {} },
+      async execute(_input, ctx) {
+        capturedCtx = ctx;
+        return 'ok';
+      },
+    });
+    const toolRegistry = new ToolRegistry();
+    toolRegistry.register(captureTool);
+
+    __testSetSession(mkSession({
+      toolRegistry,
+      adapter: new OneShotToolAdapter('capture'),
+      toolStats: stats,
+    }));
+
+    const engine = __testGetOrCreateVpEngine('grp_test', 'vp_test');
+    for await (const _evt of engine.query({ prompt: 'go', messages: [] })) {
+      // drain
+    }
+    // Identity, not just shape — guarantees the same instance the
+    // unify_fetch_tool_stats handler reads back.
+    expect(capturedCtx.parentEngineDeps.toolStats).toBe(stats);
   });
 
   it('tool calls executed inside a per-VP engine increment session.toolStats', async () => {
@@ -67,24 +93,13 @@ describe('getOrCreateVpEngine: per-VP engine inherits session.toolStats', () => 
     const toolRegistry = new ToolRegistry();
     toolRegistry.register(echoTool);
 
-    const adapter = new OneShotToolAdapter('echo');
-    __testSetSession({
-      adapter,
-      trace: new NullTrace(),
-      config: { model: 'test-model', maxOutputTokens: 1024, _readOnly: true, language: 'en' },
-      conversationStore: null,
-      memoryIndex: null,
-      amsRegistry: null,
+    __testSetSession(mkSession({
       toolRegistry,
-      skillManager: null,
-      mcpManager: null,
-      yeaftDir: null,
+      adapter: new OneShotToolAdapter('echo'),
       toolStats: stats,
-    });
+    }));
 
     const engine = __testGetOrCreateVpEngine('grp_test', 'vp_test');
-    expect(engine).toBeTruthy();
-
     for await (const _evt of engine.query({ prompt: 'use echo once', messages: [] })) {
       // drain
     }
@@ -105,20 +120,12 @@ describe('getOrCreateVpEngine: per-VP engine inherits session.toolStats', () => 
     const toolRegistry = new ToolRegistry();
     toolRegistry.register(echoTool);
 
-    const adapter = new OneShotToolAdapter('echo');
-    __testSetSession({
-      adapter,
-      trace: new NullTrace(),
-      config: { model: 'test-model', maxOutputTokens: 1024, _readOnly: true, language: 'en' },
-      conversationStore: null,
-      memoryIndex: null,
-      amsRegistry: null,
+    __testSetSession(mkSession({
       toolRegistry,
-      skillManager: null,
-      mcpManager: null,
-      yeaftDir: null,
-      // toolStats intentionally absent — exercises the `|| null` fallback
-    });
+      adapter: new OneShotToolAdapter('echo'),
+      // toolStats omitted — exercises the `|| null` fallback
+    }));
+
     const engine = __testGetOrCreateVpEngine('grp_test', 'vp_test');
     let endTurn = false;
     for await (const evt of engine.query({ prompt: 'use echo once', messages: [] })) {

@@ -326,10 +326,12 @@ export class Engine {
    *   config: object,
    *   conversationStore?: import('./conversation/persist.js').ConversationStore,
    *   memoryIndex?: import('./memory/index-db.js').SegmentIndex,
+   *   amsRegistry?: object,
    *   toolRegistry?: import('./tools/registry.js').ToolRegistry,
    *   skillManager?: import('./skills.js').SkillManager,
    *   mcpManager?: import('./mcp.js').MCPManager,
    *   yeaftDir?: string,
+   *   toolStats?: import('./stats/tool-usage.js').ToolUsageStats,
    * }} params
    */
   constructor({ adapter, trace, config, conversationStore, memoryIndex, amsRegistry, toolRegistry, skillManager, mcpManager, yeaftDir, toolStats = null }) {

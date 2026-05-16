@@ -553,13 +553,11 @@ function getOrCreateVpEngine(groupId, vpId) {
     skillManager: session.skillManager,
     mcpManager: session.mcpManager,
     yeaftDir: session.yeaftDir,
-    // task-fix-vp-engine-tool-stats: share the SAME ToolUsageStats
-    // instance the session-level engine uses, so per-VP tool calls
-    // in group conversations get counted into the same on-disk
-    // snapshot (~/.yeaft/stats/tool-usage.json) the
-    // `unify_fetch_tool_stats` handler reads. Without this, every
-    // tool call inside a group VP was silently dropped because
-    // engine.js:1956-1969's `if (this.#toolStats && ...)` was false.
+    // Share the session-shared ToolUsageStats so per-VP tool calls land
+    // in the same on-disk snapshot the `unify_fetch_tool_stats` handler
+    // reads. Without this, engine's record-on-tool-exec guard
+    // (`if (this.#toolStats && ...)`) is false and group VP tool calls
+    // are silently dropped.
     toolStats: session.toolStats || null,
   });
   vpEngines.set(key, eng);

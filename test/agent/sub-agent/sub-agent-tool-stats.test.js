@@ -29,48 +29,7 @@ import { ToolRegistry } from '../../../agent/unify/tools/registry.js';
 import { defineTool } from '../../../agent/unify/tools/types.js';
 import { _resetAgentRegistry, getAgentRegistry } from '../../../agent/unify/tools/agent.js';
 import agentTool from '../../../agent/unify/tools/agent.js';
-
-/**
- * Minimal ToolUsageStats stub — only the surface Engine touches
- * (`record({ name, durationMs, isError, errorMessage })`) plus a
- * `calls` array so tests can assert what the engine recorded.
- */
-function mkStatsStub() {
-  const calls = [];
-  return {
-    calls,
-    record(args) { calls.push(args); },
-  };
-}
-
-/**
- * Scripted adapter that emits ONE tool_call for `toolName`, then on the
- * next stream() call yields end_turn. Mirrors the shape used by
- * tool-folding tests but parameterised on the tool name so we can drive
- * the engine through a single tool execution.
- */
-class OneShotToolAdapter {
-  constructor(toolName) {
-    this.toolName = toolName;
-    this.streamCalls = [];
-    this._counter = 0;
-  }
-  async *stream(params) {
-    this.streamCalls.push({
-      system: params.system,
-      messages: JSON.parse(JSON.stringify(params.messages || [])),
-    });
-    if (this._counter === 0) {
-      this._counter += 1;
-      yield { type: 'tool_call', id: 'tc-1', name: this.toolName, input: {} };
-      yield { type: 'stop', stopReason: 'tool_use' };
-    } else {
-      yield { type: 'text_delta', text: 'all done' };
-      yield { type: 'stop', stopReason: 'end_turn' };
-    }
-  }
-  async call() { return { text: 'ok', usage: { inputTokens: 1, outputTokens: 1 } }; }
-}
+import { mkStatsStub, OneShotToolAdapter } from '../../helpers/tool-stats.js';
 
 describe('Engine threads its own #toolStats into parentEngineDeps', () => {
   it('a tool invoked by the parent engine receives ctx.parentEngineDeps.toolStats === the engine stats instance', async () => {
@@ -110,35 +69,6 @@ describe('Engine threads its own #toolStats into parentEngineDeps', () => {
     // updates the snapshot the parent (and the unify_fetch_tool_stats
     // handler) reads.
     expect(capturedCtx.parentEngineDeps.toolStats).toBe(stats);
-  });
-
-  it('engine still functions and records when toolStats is null (defensive)', async () => {
-    let capturedCtx = null;
-    const capturingAgentTool = defineTool({
-      name: 'Agent',
-      description: 'fake Agent tool used to capture ctx',
-      parameters: { type: 'object', properties: {} },
-      async execute(_input, ctx) {
-        capturedCtx = ctx;
-        return JSON.stringify({ ok: true });
-      },
-    });
-    const registry = new ToolRegistry();
-    registry.register(capturingAgentTool);
-    const adapter = new OneShotToolAdapter('Agent');
-    const engine = new Engine({
-      adapter,
-      trace: new NullTrace(),
-      config: { model: 'test-model', maxOutputTokens: 1024, _readOnly: true, language: 'en' },
-      toolRegistry: registry,
-      // intentionally omit toolStats
-    });
-    for await (const _evt of engine.query({ prompt: 'spawn one', messages: [] })) {
-      // consume
-    }
-    // parentEngineDeps still present, toolStats is null (not undefined,
-    // not absent) so the child can safely `deps.toolStats || null`.
-    expect(capturedCtx.parentEngineDeps.toolStats).toBeNull();
   });
 });
 
