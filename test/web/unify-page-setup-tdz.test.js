@@ -3,11 +3,11 @@
  *
  * Bug we're guarding against (introduced sometime before v0.1.747, surfaced
  * when the topbar gear button was added):
- *   `dreamButtonVpId` was declared as a Vue.computed early in setup() and
- *   read `topbarGroup.value`. `topbarGroup` itself was declared 240+ lines
- *   later. The dream-status `Vue.watch` source evaluates eagerly during
- *   setup, which transitively dereferences `topbarGroup.value` while
- *   `topbarGroup` is still in TDZ — producing
+ *   the header Dream status computed now resolves via the current group id,
+ *   but it still depends on `topbarGroup.value`. `topbarGroup` must be
+ *   declared before any eagerly watched Dream computed touches it. Otherwise
+ *   setup can dereference `topbarGroup.value` while `topbarGroup` is still in
+ *   TDZ — producing
  *     ReferenceError: Cannot access 'Dt' before initialization
  *   and blanking the page when the user enters group mode.
  *

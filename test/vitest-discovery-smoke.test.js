@@ -1,58 +1,64 @@
 /**
- * Smoke test — vitest discovery scope sanity.
+ * Smoke test — Vitest discovery scope sanity.
  *
- * Guards against vitest.config.js `exclude` patterns drifting off their real
- * paths (as happened when `.worktrees/**` was written instead of the true
- * `.claude/worktrees/**`, which caused ~109 worktrees × ~100 test files =
- * ~10k files to be scanned and a 50+ minute full run).
- *
- * We enumerate the files that vitest would discover using the same glob
- * engine (tinyglobby) + the same include/exclude patterns the runner reads
- * from vitest.config.js. If the count balloons past the sensible ceiling
- * for this repo we fail — cheaper than a 50-minute CI run.
- *
- * Current baseline (2026-04): ~160 test files under test/.
- * Ceiling: 500. If your legitimate additions push past 500, raise the cap
- * here — don't bypass the assertion.
+ * This must test Vitest's own discovery, not a hand-rolled tinyglobby
+ * approximation. Focused positional runs such as:
+ *   vitest list --filesOnly test/agent/unify/store-v2.test.js
+ * can match same-named files under cloned worktrees unless config/script
+ * excludes keep `.claude/worktrees/**`, `.worktrees/**`, and
+ * `.yeaft/worktrees/**` out of Vitest's file set.
  */
 import { describe, it, expect } from 'vitest';
-import { glob } from 'tinyglobby';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
+const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
+const REQUESTED_FILES = [
+  'test/agent/unify/dream-trigger-routing.test.js',
+  'test/agent/unify/dream-v2/runner.test.js',
+  'test/agent/unify/dream-v2/prompts.test.js',
+  'test/agent/unify/store-v2.test.js',
+  'test/vitest-discovery-smoke.test.js',
+  'test/web/unify-page-setup-tdz.test.js',
+];
+const FOCUSED_ARGS = [
+  '--config',
+  './vitest.config.js',
+  'list',
+  '--filesOnly',
+  ...REQUESTED_FILES,
+];
 
-// Keep these in sync with vitest.config.js.
-const INCLUDE = ['**/*.{test,spec}.?(c|m)[jt]s?(x)'];
-const EXCLUDE = ['**/node_modules/**', '**/e2e/**', '.claude/worktrees/**', '.worktrees/**', '.yeaft/worktrees/**'];
+async function vitestListFocusedFiles() {
+  const { stdout } = await execFileAsync('./node_modules/.bin/vitest', FOCUSED_ARGS, {
+    cwd: ROOT,
+    timeout: 30000,
+    maxBuffer: 1024 * 1024,
+  });
+  return stdout
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(file => file.replace(/\\/g, '/'));
+}
 
 describe('vitest discovery smoke', () => {
-  it('scans fewer than 500 test files (exclude globs are correct)', async () => {
-    const files = await glob(INCLUDE, {
-      cwd: ROOT,
-      ignore: EXCLUDE,
-      dot: false,
-      absolute: false,
-    });
-    // If this trips, first check whether `.claude/worktrees/**` is still
-    // being excluded. A misspelled exclude pattern is the likeliest cause —
-    // 100+ live worktrees each carry their own test/ tree.
-    expect(files.length, `Unexpectedly many test files discovered (${files.length}). Check vitest.config.js exclude patterns — a stale worktree glob here wrecks CI.`).toBeLessThan(500);
-  });
-
-  it('does not include any file under known worktree directories', async () => {
-    const files = await glob(INCLUDE, {
-      cwd: ROOT,
-      ignore: EXCLUDE,
-      dot: false,
-      absolute: false,
-    });
+  it('focused positional runs do not discover cloned worktree tests', async () => {
+    const files = await vitestListFocusedFiles();
     const leaked = files.filter((f) => (
       f.includes('.claude/worktrees/')
       || f.includes('.worktrees/')
       || f.includes('.yeaft/worktrees/')
     ));
-    expect(leaked, `vitest discovery leaked worktree test files:\n${leaked.slice(0, 5).join('\n')}`).toHaveLength(0);
+    expect(leaked, `vitest positional discovery leaked worktree test files:\n${leaked.slice(0, 20).join('\n')}`).toHaveLength(0);
+  });
+
+  it('focused positional runs stay on the requested six files', async () => {
+    const files = await vitestListFocusedFiles();
+    expect(files.sort()).toEqual(REQUESTED_FILES.sort());
   });
 });

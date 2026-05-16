@@ -9,7 +9,7 @@
     "agent"
   ],
   "scripts": {
-    "test": "vitest run",
+    "test": "vitest run --exclude '**/.claude/worktrees/**' --exclude '**/.worktrees/**' --exclude '**/.yeaft/worktrees/**'",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test --config e2e/playwright.config.js",
