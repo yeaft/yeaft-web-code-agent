@@ -45,11 +45,45 @@ export default {
     },
     /**
      * Ranked rows for the "All tools" tab, sorted by callCount desc.
+     *
+     * 2026-05-16: when the snapshot is empty (fresh install / no
+     * recorded calls yet) but the agent has reported its registered
+     * tool list, fall back to rendering every registered tool with
+     * zero counters. This matches user intent — "show me the tools,
+     * with zeroes if needed" — instead of the previous behaviour
+     * which rendered just an "(no tool calls recorded yet)" placeholder
+     * row and made the panel feel broken.
+     *
+     * Tools that DO have snapshot rows take precedence over the
+     * registered fallback (we don't double-render a name).
      */
     rankedRows() {
       const snap = this.stats?.snapshot || {};
       const rows = Object.entries(snap).map(([name, rec]) => ({ name, ...rec }));
-      rows.sort((a, b) => (b.callCount || 0) - (a.callCount || 0));
+      const seen = new Set(rows.map(r => r.name));
+      const registered = Array.isArray(this.stats?.registered) ? this.stats.registered : [];
+      for (const name of registered) {
+        if (typeof name !== 'string' || !name || seen.has(name)) continue;
+        rows.push({
+          name,
+          callCount: 0,
+          errorCount: 0,
+          errorRate: 0,
+          avgMs: 0,
+          p50Ms: 0,
+          p95Ms: 0,
+          lastCalledAt: null,
+          lastError: null,
+        });
+        seen.add(name);
+      }
+      rows.sort((a, b) => {
+        const diff = (b.callCount || 0) - (a.callCount || 0);
+        if (diff !== 0) return diff;
+        // Stable tie-break on name so the registered-only rows have
+        // a deterministic order.
+        return a.name.localeCompare(b.name);
+      });
       return rows;
     },
     unusedRows() {
@@ -123,7 +157,6 @@ export default {
         </div>
         <div class="tool-stats-drawer-body">
           <div v-if="stats && stats.error" class="tool-stats-error">{{ stats.error }}</div>
-          <div v-else-if="stats && stats.notice" class="tool-stats-empty">{{ stats.notice }}</div>
           <div v-else-if="loading && !stats" class="tool-stats-loading">
             {{ $t ? $t('unify.toolStats.loading') : 'Loading…' }}
           </div>
@@ -131,6 +164,16 @@ export default {
             {{ $t ? $t('unify.toolStats.notLoaded') : 'No data yet — click refresh.' }}
           </div>
           <template v-else>
+            <!--
+              2026-05-16: notice (e.g. "Agent is offline.") is shown as
+              a top banner instead of replacing the entire body. This
+              keeps the registered-tool fallback rows visible underneath
+              so the panel still conveys "here is the catalog" even when
+              the live snapshot fetch failed. Lives inside the v-else so
+              the error / loading / no-data paths still own the whole
+              body and don't double-render the banner + table.
+            -->
+            <div v-if="stats.notice" class="tool-stats-banner">{{ stats.notice }}</div>
             <table v-if="activeTab === 'all'" class="tool-stats-table">
               <thead>
                 <tr>
