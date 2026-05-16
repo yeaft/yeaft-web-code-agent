@@ -1648,27 +1648,12 @@ export const useChatStore = defineStore('chat', {
           }
           break;
         }
-        // 2026-05-13: tool-call usage stats response for the debug drawer.
-        // Snapshot keyed by tool name; `registered` and `unused` are
-        // companion lists so the drawer can render both "all tools"
-        // and "defined but never called" views without a second
-        // round-trip.
-        case 'unify_tool_stats': {
-          if (this._fetchUnifyToolStatsTimer) {
-            clearTimeout(this._fetchUnifyToolStatsTimer);
-            this._fetchUnifyToolStatsTimer = null;
-          }
-          this.unifyToolStats = {
-            snapshot: event?.snapshot && typeof event.snapshot === 'object' ? event.snapshot : {},
-            registered: Array.isArray(event?.registered) ? event.registered : [],
-            unused: Array.isArray(event?.unused) ? event.unused : [],
-            error: typeof event?.error === 'string' ? event.error : null,
-            notice: typeof event?.notice === 'string' ? event.notice : null,
-            fetchedAt: Date.now(),
-          };
-          this.unifyToolStatsLoading = false;
-          break;
-        }
+        // 2026-05-16: `unify_tool_stats` is NOT a `unify_output` event —
+        // the agent emits it as a bare top-level message via
+        // `sendToServer({type:'unify_tool_stats', ...})`. Routing lives
+        // in `helpers/messageHandler.js`. The previous case here was
+        // unreachable and is intentionally removed to prevent future
+        // confusion about which switch owns this protocol.
         // v0.1.755: dream_progress events emitted by both manual + auto
         // dream runs (see agent/unify/web-bridge.js _dreamProgressSink).
         // Per-group events carry `groupId`; per-target merge/apply events

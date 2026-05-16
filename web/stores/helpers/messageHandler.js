@@ -145,6 +145,40 @@ export function handleMessage(store, msg) {
       handleUnifyHistoryChunk(store, msg);
       break;
 
+    // 2026-05-16: tool-usage stats reply from the agent. The agent
+    // emits this as a BARE top-level message (see
+    // `agent/unify/web-bridge.js#handleUnifyFetchToolStats` —
+    // `sendToServer({type:'unify_tool_stats', ...})` — NOT wrapped in
+    // a `unify_output` envelope), so we MUST route it from the
+    // top-level switch. A previous version put the case inside
+    // `handleUnifyOutput`'s inner `switch (event.type)`, which was
+    // unreachable for this protocol shape — the reply was silently
+    // dropped, the 10-second timeout in `fetchUnifyToolStats` always
+    // fired, and the drawer rendered "Tool stats are unavailable
+    // right now" even though the agent had answered in <100ms.
+    //
+    // Server may also synthesize a fast-fail reply with
+    // `{snapshot:{}, registered:[], unused:[], notice}` when no
+    // agent is selected / available / online — see
+    // `server/handlers/client-conversation.js#emptyUnifyToolStats`.
+    // Both paths land here; the store distinguishes via `notice`.
+    case 'unify_tool_stats': {
+      if (store._fetchUnifyToolStatsTimer) {
+        clearTimeout(store._fetchUnifyToolStatsTimer);
+        store._fetchUnifyToolStatsTimer = null;
+      }
+      store.unifyToolStats = {
+        snapshot: msg?.snapshot && typeof msg.snapshot === 'object' ? msg.snapshot : {},
+        registered: Array.isArray(msg?.registered) ? msg.registered : [],
+        unused: Array.isArray(msg?.unused) ? msg.unused : [],
+        error: typeof msg?.error === 'string' ? msg.error : null,
+        notice: typeof msg?.notice === 'string' ? msg.notice : null,
+        fetchedAt: Date.now(),
+      };
+      store.unifyToolStatsLoading = false;
+      break;
+    }
+
     case 'chat_image':
       // Image from Claude response (tool screenshots, etc.)
       if (msg.conversationId && msg.fileId) {

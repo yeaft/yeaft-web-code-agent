@@ -50,7 +50,7 @@ import { openSegmentIndex } from './memory/index-db.js';
 import { syncAll as syncSegmentIndex } from './memory/segment-sync.js';
 import { openAmsRegistry } from './memory/ams-registry.js';
 import { join } from 'path';
-import { existsSync as existsSyncSafe, readFileSync as readFileSyncSafe } from 'fs';
+import { existsSync as existsSyncSafe, readFileSync as readFileSyncSafe, mkdirSync as mkdirSyncSafe } from 'fs';
 
 /**
  * @typedef {Object} SessionOptions
@@ -320,8 +320,26 @@ export async function loadSession(options = {}) {
   // Tool-call usage statistics: persisted to <yeaftDir>/stats/tool-usage.json.
   // Loaded synchronously at boot so the first turn already sees prior counts.
   // Threaded into the engine so it can `record` each tool_exec event.
+  //
+  // 2026-05-16: eagerly create the `stats/` directory at boot. The
+  // ToolUsageStats writer does `fsp.mkdir(..., {recursive:true})` lazily
+  // inside `#doFlush()` and swallows any mkdir error, which meant an
+  // unwritable parent (perm denied, ENOSPC) was silently invisible
+  // until the user filed a support ticket. Doing it here surfaces the
+  // failure as a console.warn while still leaving the in-memory
+  // counter path functional — the engine keeps recording even if the
+  // disk is read-only.
+  const statsDir = join(yeaftDir, 'stats');
+  try {
+    mkdirSyncSafe(statsDir, { recursive: true });
+  } catch (err) {
+    console.warn(
+      `[Unify] Could not create stats dir ${statsDir}: ${err?.message || err}. ` +
+      `Tool-usage counters will live in memory only.`
+    );
+  }
   const toolStats = new ToolUsageStats({
-    path: join(yeaftDir, 'stats', 'tool-usage.json'),
+    path: join(statsDir, 'tool-usage.json'),
   });
   toolStats.loadSync();
   const engine = new Engine({
