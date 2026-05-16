@@ -182,6 +182,54 @@ describe('runDream — happy path', () => {
     expect(targets).toEqual(['user']);
   });
 
+  it('uses group scopeFilter to process only the selected group while bypassing the manual threshold', async () => {
+    const calls = [];
+    const r = await runDream({
+      root,
+      manual: true,
+      scopeFilter: ['group/g-current'],
+      llm: makeLlm(),
+      listGroups: async () => ['g-current', 'g-other'],
+      countMessages: async (g) => {
+        calls.push(`count:${g}`);
+        return 1;
+      },
+      loadGroupDiff: async (g) => {
+        calls.push(`diff:${g}`);
+        return [{ id: `${g}-m1`, role: 'user', body: 'hi' }];
+      },
+      loadOverlapPreamble: async () => [],
+    });
+
+    expect(calls).toEqual(['count:g-current', 'diff:g-current']);
+    expect(r.groups.find(x => x.groupId === 'g-current').status).toBe('triaged');
+    expect(r.groups.find(x => x.groupId === 'g-other')).toMatchObject({
+      status: 'skipped',
+      reason: 'scope-filtered',
+    });
+    const targets = r.targets.map(t => t.target).sort();
+    expect(targets).toEqual(['group/g-current', 'user']);
+  });
+
+  it('returns empty-diff skipped reason for manual current-group runs', async () => {
+    const r = await runDream({
+      root,
+      manual: true,
+      scopeFilter: ['group/g-current'],
+      llm: makeLlm(),
+      listGroups: async () => ['g-current', 'g-other'],
+      countMessages: async () => 1,
+      loadGroupDiff: async () => [],
+      loadOverlapPreamble: async () => [],
+    });
+
+    expect(r.groups.find(x => x.groupId === 'g-current')).toMatchObject({
+      status: 'skipped',
+      reason: 'empty-diff',
+    });
+    expect(r.targets).toEqual([]);
+  });
+
   it('emits dream_progress lifecycle events', async () => {
     const events = [];
     await runDream({

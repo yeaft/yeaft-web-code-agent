@@ -33,6 +33,7 @@ vi.mock('../../../agent/connection/buffer.js', () => ({
 
 import {
   handleUnifyDreamTrigger,
+  normalizeDreamResult,
   __testSetSession,
 } from '../../../agent/unify/web-bridge.js';
 
@@ -41,10 +42,12 @@ function makeSession(overrides = {}) {
     dreamScheduler: {
       triggerDreamForScopes: vi.fn(async () => ({
         startedAt: '2026-05-11T08:00:00.000Z',
+        groups: [{ groupId: 'g1', status: 'triaged', new: 1 }],
         targets: [{ target: 'group/g1', status: 'done' }],
       })),
       triggerDreamNow: vi.fn(async () => ({
         startedAt: '2026-05-11T08:00:00.000Z',
+        groups: [{ groupId: 'g', status: 'triaged', new: 1 }],
         targets: [
           { target: 'user', status: 'done' },
           { target: 'group/g', status: 'done' },
@@ -87,7 +90,51 @@ describe('handleUnifyDreamTrigger — routing', () => {
     expect(result.groupId).toBe('g1');
     expect(result.vpId).toBeUndefined();
     expect(result.success).toBe(true);
+    expect(result.skipped).toBe(false);
+    expect(result.groupsProcessed).toBe(1);
+    expect(result.groupsSkipped).toBe(0);
+    expect(result.targetsApplied).toBe(1);
+    expect(result.targetErrors).toEqual([]);
     expect(result.entriesCreated).toBe(1);
+  });
+
+  it('normalizes skipped no-new-messages instead of reporting fake success', async () => {
+    const session = makeSession({
+      dreamScheduler: {
+        triggerDreamForScopes: vi.fn(async () => ({
+          startedAt: '2026-05-11T08:00:00.000Z',
+          groups: [{ groupId: 'g1', status: 'skipped', reason: 'no-new-messages', new: 0 }],
+          targets: [],
+        })),
+        triggerDreamNow: vi.fn(),
+      },
+    });
+    __testSetSession(session);
+
+    await handleUnifyDreamTrigger({ type: 'unify_dream_trigger', groupId: 'g1' });
+
+    const result = find('unify_dream_result');
+    expect(result.groupId).toBe('g1');
+    expect(result.success).toBe(false);
+    expect(result.skipped).toBe(true);
+    expect(result.skippedReason).toBe('no-new-messages');
+    expect(result.groupsProcessed).toBe(0);
+    expect(result.groupsSkipped).toBe(1);
+    expect(result.targetsApplied).toBe(0);
+  });
+
+  it('normalizes target errors as failure with targetErrors', () => {
+    const normalized = normalizeDreamResult({
+      startedAt: '2026-05-11T08:00:00.000Z',
+      groups: [{ groupId: 'g1', status: 'triaged' }],
+      targets: [{ target: 'group/g1', status: 'error', error: 'bad json' }],
+    });
+    expect(normalized.success).toBe(false);
+    expect(normalized.skipped).toBe(false);
+    expect(normalized.groupsProcessed).toBe(1);
+    expect(normalized.targetsApplied).toBe(0);
+    expect(normalized.targetErrors).toEqual([{ target: 'group/g1', error: 'bad json' }]);
+    expect(normalized.error).toBe('bad json');
   });
 
   it('vpId path → triggerDreamNow() + envelopes tagged with vpId', async () => {
@@ -107,6 +154,8 @@ describe('handleUnifyDreamTrigger — routing', () => {
     expect(result.vpId).toBe('steve');
     expect(result.groupId).toBeUndefined();
     expect(result.success).toBe(true);
+    expect(result.groupsProcessed).toBe(1);
+    expect(result.targetsApplied).toBe(2);
     expect(result.entriesCreated).toBe(2);
   });
 

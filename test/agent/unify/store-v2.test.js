@@ -173,6 +173,25 @@ describe('D. summary.md read/write', () => {
     expect(await readSummary(scope, { root })).toBe('');
   });
 
+  it('writes Chinese summaries to summary.zh.md and falls back to summary.md when missing', async () => {
+    const scope = { kind: 'group', id: 'g-zh' };
+    await writeSummary(scope, 'English fallback', { root });
+    expect(await readSummary(scope, { root, language: 'zh-CN' })).toBe('English fallback');
+
+    await writeSummary(scope, '中文摘要', { root, language: 'zh-CN' });
+    expect(readFileSync(join(root, 'group', 'g-zh', 'summary.md'), 'utf8')).toBe('English fallback\n');
+    expect(readFileSync(join(root, 'group', 'g-zh', 'summary.zh.md'), 'utf8')).toBe('中文摘要\n');
+    expect(await readSummary(scope, { root, language: 'zh-CN' })).toBe('中文摘要');
+    expect(await readSummary(scope, { root, language: 'en' })).toBe('English fallback');
+  });
+
+  it('unknown summary language uses the English summary.md path', async () => {
+    const scope = { kind: 'group', id: 'g-unknown' };
+    await writeSummary(scope, 'fallback summary', { root, language: 'fr' });
+    expect(readFileSync(join(root, 'group', 'g-unknown', 'summary.md'), 'utf8')).toBe('fallback summary\n');
+    expect(await readSummary(scope, { root, language: 'fr' })).toBe('fallback summary');
+  });
+
   it('seedSummaryIfMissing writes when summary.md is absent', async () => {
     const scope = { kind: 'vp', id: 'seedy' };
     const seeded = await seedSummaryIfMissing(scope, 'seed body', { root });

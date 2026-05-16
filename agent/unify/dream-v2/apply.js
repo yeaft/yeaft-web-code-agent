@@ -163,7 +163,7 @@ export async function applyMergedTarget(merged, opts) {
   await snapFn(opts.root, ts, scopeDirRel);
 
   let memoryMd = await readMemory(scope, { root: opts.root });
-  let summaryMd = await readSummary(scope, { root: opts.root });
+  let summaryMd = await readSummary(scope, { root: opts.root, language: opts.language });
 
   if (merged.kind === 'create' && (memoryMd || summaryMd)) {
     // Race / partial state: the scope already exists. Treat as update —
@@ -226,7 +226,7 @@ export async function applyMergedTarget(merged, opts) {
   // Stamp the per-scope dream marker, then atomically write both files.
   const stamped = withDreamMarker(memoryMd, { lastDreamAt: nowIso });
   await writeMemory(scope, stamped, { root: opts.root });
-  await writeSummary(scope, summaryMd || '', { root: opts.root });
+  await writeSummary(scope, summaryMd || '', { root: opts.root, language: opts.language });
 
   if (opts.onProgress) opts.onProgress({ phase: 'apply', target: merged.target, status: 'done', batches: batchesUsed });
   return { target: merged.target, kind: merged.kind, batches: batchesUsed };

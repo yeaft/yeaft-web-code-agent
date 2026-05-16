@@ -197,7 +197,7 @@ async function atomicWrite(absPath, content) {
  * Read a scope's memory.md. Missing → empty string.
  *
  * @param {Scope} scope
- * @param {{ root?: string, currentVpId?: string }} [opts]
+ * @param {{ root?: string, currentVpId?: string, language?: string }} [opts]
  * @returns {Promise<string>}
  */
 export async function readMemory(scope, opts = {}) {
@@ -254,23 +254,38 @@ export async function appendMemory(scope, chunk, opts = {}) {
 
 // ─── summary.md ────────────────────────────────────────────────
 
+
+function summaryFileName(language) {
+  const normalized = String(language || '').toLowerCase().startsWith('zh') ? 'zh' : 'en';
+  return normalized === 'zh' ? 'summary.zh.md' : 'summary.md';
+}
+
+function summaryCandidateRels(scope, language) {
+  const dir = scopeDir(scope);
+  const primary = `${dir}/${summaryFileName(language)}`;
+  const fallback = `${dir}/summary.md`;
+  return primary === fallback ? [fallback] : [primary, fallback];
+}
+
 /**
  * Read a scope's summary.md (trimmed). Missing → empty string.
  *
  * @param {Scope} scope
- * @param {{ root?: string, currentVpId?: string }} [opts]
+ * @param {{ root?: string, currentVpId?: string, language?: string }} [opts]
  * @returns {Promise<string>}
  */
 export async function readSummary(scope, opts = {}) {
-  const { root = DEFAULT_MEMORY_ROOT, currentVpId } = opts;
-  const rel = `${scopeDir(scope)}/summary.md`;
-  enforceVpAcl(rel, currentVpId);
-  const abs = join(root, rel);
-  try { return (await fsp.readFile(abs, 'utf8')).trim(); }
-  catch (err) {
-    if (err && err.code === 'ENOENT') return '';
-    throw err;
+  const { root = DEFAULT_MEMORY_ROOT, currentVpId, language } = opts;
+  for (const rel of summaryCandidateRels(scope, language)) {
+    enforceVpAcl(rel, currentVpId);
+    const abs = join(root, rel);
+    try { return (await fsp.readFile(abs, 'utf8')).trim(); }
+    catch (err) {
+      if (err && err.code === 'ENOENT') continue;
+      throw err;
+    }
   }
+  return '';
 }
 
 /**
@@ -278,11 +293,11 @@ export async function readSummary(scope, opts = {}) {
  *
  * @param {Scope} scope
  * @param {string} body
- * @param {{ root?: string, currentVpId?: string }} [opts]
+ * @param {{ root?: string, currentVpId?: string, language?: string }} [opts]
  */
 export async function writeSummary(scope, body, opts = {}) {
-  const { root = DEFAULT_MEMORY_ROOT, currentVpId } = opts;
-  const rel = `${scopeDir(scope)}/summary.md`;
+  const { root = DEFAULT_MEMORY_ROOT, currentVpId, language } = opts;
+  const rel = `${scopeDir(scope)}/${summaryFileName(language)}`;
   enforceVpAcl(rel, currentVpId);
   const abs = join(root, rel);
   await atomicWrite(abs, `${(body || '').trim()}\n`);

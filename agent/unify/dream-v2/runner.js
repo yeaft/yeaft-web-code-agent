@@ -88,6 +88,7 @@ export async function runDream(opts) {
   // 1. enumerate groups
   const groupIds = await safeCall(opts.listGroups, []);
   const filter = Array.isArray(opts.scopeFilter) ? new Set(opts.scopeFilter) : null;
+  const groupFilter = deriveGroupFilter(filter);
   const groupsReport = [];
   const groupTriages = [];
   const processedGroups = [];
@@ -95,12 +96,18 @@ export async function runDream(opts) {
   // 2. per-group: skip / segment / triage
   const topicSummaries = opts.listTopicSummaries
     ? await safeCall(opts.listTopicSummaries, [])
-    : await defaultListTopicSummaries(opts.root).catch(() => []);
+    : await defaultListTopicSummaries(opts.root, opts.language).catch(() => []);
 
   for (const groupId of groupIds) {
-    // NOTE: scopeFilter is applied at the merge/apply stage, not here.
-    // A filter like ['user'] still requires triaging every group so their
-    // hard-rule actions can contribute to the user target.
+    // Current-group manual dream passes are the one case where scopeFilter
+    // must constrain enumeration too: clicking the conversation header means
+    // "dream this group now", not "triage every group and then only apply
+    // group/<id>". Pure target filters such as ['user'] still triage every
+    // group so their hard-rule actions can contribute to the requested scope.
+    if (groupFilter && !groupFilter.has(groupId)) {
+      groupsReport.push({ groupId, new: 0, status: 'skipped', reason: 'scope-filtered' });
+      continue;
+    }
     const state = await readGroupState(opts.root, groupId);
     const beforeCount = await safeCall(() => opts.countMessages(groupId), 0);
     const newCount = Math.max(0, beforeCount - (state.messageCount || 0));
@@ -170,7 +177,7 @@ export async function runDream(opts) {
   // 3. merge
   const mergedTargets = mergeByTarget(groupTriages);
   const targetsToApply = filter && filter.size > 0 && !filter.has('*')
-    ? mergedTargets.filter(t => filter.has(t.target))
+    ? mergedTargets.filter(t => filter.has(t.target) || filter.has(`group/${sourceGroupId(t)}`))
     : mergedTargets;
 
   onProgress({ phase: 'merge', targets: targetsToApply.length });
@@ -263,6 +270,22 @@ function lastMessageId(messages) {
   return null;
 }
 
+function deriveGroupFilter(filter) {
+  if (!filter || filter.size === 0 || filter.has('*')) return null;
+  const groups = [];
+  for (const scope of filter) {
+    if (typeof scope !== 'string') continue;
+    const m = /^group\/([^/]+)$/.exec(scope);
+    if (m && m[1]) groups.push(m[1]);
+  }
+  return groups.length > 0 ? new Set(groups) : null;
+}
+
+function sourceGroupId(mergedTarget) {
+  const src = Array.isArray(mergedTarget?.sources) ? mergedTarget.sources[0] : null;
+  return src && typeof src.groupId === 'string' ? src.groupId : '';
+}
+
 async function safeCall(fn, fallback) {
   try {
     if (typeof fn !== 'function') return fallback;
@@ -273,12 +296,12 @@ async function safeCall(fn, fallback) {
   }
 }
 
-async function defaultListTopicSummaries(root) {
+async function defaultListTopicSummaries(root, language) {
   const all = await listScopes({ root });
   const out = [];
   for (const sc of all) {
     if (sc.kind !== 'topic') continue;
-    const summary = await readSummary(sc, { root });
+    const summary = await readSummary(sc, { root, language });
     out.push({ path: sc.path.join('/'), summary });
   }
   return out;

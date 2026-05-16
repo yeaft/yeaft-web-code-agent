@@ -290,7 +290,7 @@ export const useVpStore = defineStore('vp', {
     applyDreamResult(event) {
       if (!event) return;
       const ok = !!event.success;
-      const result = ok ? {
+      const result = {
         mergedCount: event.mergedCount ?? null,
         extractedCount: event.extractedCount ?? null,
         // fix/dream-cadence-and-ui-trigger: bridge derives a single
@@ -303,8 +303,12 @@ export const useVpStore = defineStore('vp', {
           : (event.mergedCount ?? event.extractedCount ?? 0),
         skipped: !!event.skipped,
         skippedReason: event.skippedReason || null,
-      } : null;
-      const lastError = ok ? null : (event.error || 'unknown');
+        groupsProcessed: typeof event.groupsProcessed === 'number' ? event.groupsProcessed : null,
+        groupsSkipped: typeof event.groupsSkipped === 'number' ? event.groupsSkipped : null,
+        targetsApplied: typeof event.targetsApplied === 'number' ? event.targetsApplied : null,
+        targetErrors: Array.isArray(event.targetErrors) ? event.targetErrors : [],
+      };
+      const lastError = ok ? null : (event.error || (event.skipped ? event.skippedReason : null));
       if (event.groupId) {
         const groupId = event.groupId;
         this.groupDreamStatus = {
