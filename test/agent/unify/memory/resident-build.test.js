@@ -12,6 +12,8 @@
 
 import { describe, it, expect } from 'vitest';
 import { buildResidentEntries } from '../../../../agent/unify/engine.js';
+import { ActiveMemorySet } from '../../../../agent/unify/memory/ams.js';
+import { buildSystemPrompt } from '../../../../agent/unify/prompts.js';
 import { VP_STUB_MARKER } from '../../../../agent/unify/memory/seed-backfill.js';
 
 const STUB_VP_SUMMARY = `${VP_STUB_MARKER}\n\n# Steve Jobs\n\n**Role:** Product Strategist`;
@@ -92,5 +94,35 @@ describe('buildResidentEntries', () => {
       summaries: { vp: sneaky },
     });
     expect(out).toEqual([]);
+  });
+
+  it('carries a real Dream group summary into the next system prompt memory block', () => {
+    const entries = buildResidentEntries({
+      groupId: 'grp_demo',
+      ownVpId: 'linus',
+      summaries: {
+        group: 'summary for group/grp_demo',
+      },
+    });
+    const ams = new ActiveMemorySet({
+      ownVpId: 'linus',
+      budget: { resident: 200, recent: 0, onDemand: 0 },
+    });
+    ams.setResident(entries);
+    const snap = ams.snapshot();
+    const memoryInjection = [
+      '## Active Memory Set',
+      '### Resident',
+      ...snap.resident.map(r => `- **${r.scope}**: ${r.summary}`),
+    ].join('\n');
+
+    const prompt = buildSystemPrompt({
+      language: 'en',
+      mode: 'unified',
+      memoryInjection,
+    });
+
+    expect(prompt).toContain('## Active Memory Set');
+    expect(prompt).toContain('- **group/grp_demo**: summary for group/grp_demo');
   });
 });
