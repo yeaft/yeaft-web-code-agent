@@ -40,8 +40,8 @@ plan is written — the plan is the runway, not the destination.
 
 **Exception — stop after the plan only if** the very first step is "ask the
 user / wait for input" (e.g. an unresolved unknown that genuinely blocks
-every other step). In that case, do the ask and end the turn. Otherwise keep
-moving.
+every other step). In that case, call the `ask_user` tool with the
+question and end the turn. Otherwise keep moving.
 
 ## Tone
 

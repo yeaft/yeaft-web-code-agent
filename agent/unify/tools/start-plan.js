@@ -10,7 +10,7 @@
  * destination — the loop continues until the work is done (or until the
  * model legitimately needs the user, e.g. an unresolved unknown).
  *
- * Design (locked 2026-05-13):
+ * Design:
  *   - Anyone can call it; the tool description tells the LLM when to.
  *   - The instruction text comes from one of two places, in order:
  *       1. The active VP's `planInstruction` frontmatter override
@@ -23,13 +23,16 @@
  *     are echoed back in the tool result so the planning turn can read
  *     them without re-asking the user.
  *   - Output is plain text (the instruction + the echo). No side effects,
- *     no persistence — the LLM's next turn does the actual planning and
- *     calls TodoWrite to land structured steps.
+ *     no persistence — the same turn that called StartPlan produces the
+ *     plan, lands the steps via TodoWrite, and starts executing the first
+ *     step (unless that first step is "ask the user", which is the one
+ *     legitimate reason to stop here).
  *
- * The expected integration is TodoWrite: after the planning turn the LLM
- * issues a `TodoWrite` call enumerating the 1..N steps. The frontend
- * already renders TodoWrite as a checkbox-style list, so the user sees
- * the plan materialize without any new UI.
+ * The expected integration is TodoWrite: during the planning turn the LLM
+ * issues a `TodoWrite` call enumerating the 1..N steps, then keeps going
+ * and works the first step. The frontend already renders TodoWrite as a
+ * checkbox-style list, so the user sees the plan materialize without any
+ * new UI.
  */
 
 import { defineTool } from './types.js';
