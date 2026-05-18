@@ -54,8 +54,35 @@ export const REASON_I18N_KEY = Object.freeze({
   // Backend-only codes surfaced by vp-crud.js.
   duplicate: 'unify.vp.idError.duplicate',
   not_found: 'unify.vp.idError.not_found',
+  stock_readonly: 'unify.vp.idError.stock_readonly',
   unknown: 'unify.vp.idError.unknown',
 });
+
+/**
+ * Closed set of error codes that are about the vpId itself (as opposed to
+ * persona body / server-side state). VpCrudPanel uses this to decide
+ * whether a create-form error should be routed to the vpId field's
+ * `idStatus` (turning the input red) vs. surfaced as a generic
+ * `formError`. Kept here so the validator file is the single source of
+ * truth — substring regexes are forbidden because they (a) match codes
+ * we never meant (e.g. a future `payload_too_long`) and (b) miss codes
+ * we DID mean (e.g. `stock_readonly` doesn't contain any of the
+ * substrings the old regex used).
+ */
+export const ID_REASON_CODES = Object.freeze(new Set([
+  'empty_or_non_string',
+  'too_long',
+  'illegal_character',
+  'underscore_prefix_reserved',
+  'pure_digits',
+  'reserved',
+  'duplicate',
+]));
+
+/** True iff `code` belongs to the id-validation taxonomy. */
+export function isIdReasonCode(code) {
+  return typeof code === 'string' && ID_REASON_CODES.has(code);
+}
 
 /** Return the i18n key for a reason, or the reason itself as a fallback. */
 export function i18nKeyForReason(reason) {

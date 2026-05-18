@@ -24,7 +24,7 @@
 
 export default {
   name: 'GroupSettingsModal',
-  emits: ['close'],
+  emits: ['close', 'open-vp-library'],
   props: {
     groupId: { type: String, required: true },
     initialSection: {
@@ -385,7 +385,15 @@ export default {
 
             <!-- Members -->
             <div v-else-if="section === 'members'" class="group-settings-section">
-              <h3 class="group-settings-heading">{{ $t('unify.group.settings.members.heading') }}</h3>
+              <div class="group-settings-section-header">
+                <h3 class="group-settings-heading">{{ $t('unify.group.settings.members.heading') }}</h3>
+                <button
+                  type="button"
+                  class="group-settings-link-btn"
+                  :title="$t('unify.group.members.openLibraryHint')"
+                  @click="$emit('open-vp-library')"
+                >{{ $t('unify.group.members.openLibrary') }}</button>
+              </div>
               <p class="group-settings-help">{{ $t('unify.group.members.defaultHint') }}</p>
               <div v-if="vpList.length === 0 && vpLibraryEmpty" class="group-settings-empty">
                 {{ $t('unify.group.members.empty') }}

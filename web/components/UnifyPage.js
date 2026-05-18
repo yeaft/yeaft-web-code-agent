@@ -333,6 +333,7 @@ export default {
         :group-id="groupSettingsId"
         :initial-section="groupSettingsSection"
         @close="closeGroupSettings"
+        @open-vp-library="openVpLibraryFromGroupSettings"
       />
     </div>
   `,
@@ -862,6 +863,13 @@ export default {
       groupSettingsOpen.value = false;
       groupSettingsId.value = null;
     };
+    // task-vp-customize: GroupSettings → "Open VP Library" shortcut. We
+    // close the group settings modal first so the two dialogs never stack
+    // visually, then jump into UnifySettings with the 'vp' tab focused.
+    const openVpLibraryFromGroupSettings = () => {
+      closeGroupSettings();
+      openSettings({ initialTab: 'vp' });
+    };
     // Backwards-compat shim — the empty-group hero, the sidebar kebab,
     // and the invite-modal "open library" CTA still call this. Maps to
     // the Members section of the unified settings modal.
@@ -1061,6 +1069,8 @@ export default {
       groupSettingsSection,
       openGroupSettings,
       closeGroupSettings,
+      // task-vp-customize: members → "Open VP Library" handler.
+      openVpLibraryFromGroupSettings,
       // Backwards-compat shim — onInviteOpenLibrary still calls this.
       openMemberEditor,
       // task-fix-mobile-group-settings: topbar group ⚙ bindings.

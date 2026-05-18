@@ -2371,6 +2371,28 @@
   color: var(--text-primary);
 }
 
+/* task-vp-customize: members section header lays the "Open VP Library"
+ * shortcut on the same line as the heading. */
+.group-settings-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.group-settings-link-btn {
+  background: transparent;
+  color: var(--accent, var(--text-primary));
+  border: 1px solid var(--border-subtle, rgba(0,0,0,0.1));
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12.5px;
+  cursor: pointer;
+  line-height: 1.4;
+}
+.group-settings-link-btn:hover {
+  background: var(--bg-user-msg);
+}
+
 .group-settings-help {
   margin: 0;
   font-size: 12.5px;

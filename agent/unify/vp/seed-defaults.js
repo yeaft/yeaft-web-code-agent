@@ -31,6 +31,7 @@ import { existsSync, mkdirSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { createVp, VpCrudError } from './vp-crud.js';
 import { DEFAULT_VP_LIB_DIR } from './vp-store.js';
+import { STOCK_VP_IDS } from './stock-ids.js';
 
 /**
  * The 33 default VPs. Each entry is a valid `createVp` payload.
@@ -854,6 +855,33 @@ Good for: default entry point tasks, mixed-domain problems, drafting, coding hel
 Bad for: requests that require pretending to be a licensed professional, bypassing safety controls, doing unauthorized actions, or replacing a deep specialist when a specialist VP is explicitly needed.`,
   },
 ]);
+
+/**
+ * Self-check: every seed persona's vpId must appear in STOCK_VP_IDS, and
+ * vice versa. The two lists live in separate modules to break a circular
+ * import (see stock-ids.js header), so the only thing keeping them in
+ * sync is this load-time assertion. If you add a new seed VP and forget
+ * to add its id to stock-ids.js#STOCK_VP_ID_LIST (or vice versa), the
+ * agent will refuse to start with a clear error.
+ */
+const _seedIds = new Set(DEFAULT_VPS.map(v => v.vpId));
+{
+  const missingInStockIds = [];
+  for (const id of _seedIds) {
+    if (!STOCK_VP_IDS.has(id)) missingInStockIds.push(id);
+  }
+  const missingInSeeds = [];
+  for (const id of STOCK_VP_IDS) {
+    if (!_seedIds.has(id)) missingInSeeds.push(id);
+  }
+  if (missingInStockIds.length || missingInSeeds.length) {
+    throw new Error(
+      '[seed-defaults] DEFAULT_VPS / STOCK_VP_IDS mismatch — '
+      + `add to stock-ids.js: [${missingInStockIds.join(', ')}]; `
+      + `add to DEFAULT_VPS: [${missingInSeeds.join(', ')}]`,
+    );
+  }
+}
 
 /**
  * True iff `libDir` exists and contains at least one subdirectory that
