@@ -10,6 +10,13 @@
  *
  * The constants are NOT config-driven — V7 design freezes them in code.
  *
+ * Invariant: TURN_SUMMARY_THRESHOLD < TOOL_BATCH_SIZE. T1 runs inside the
+ * turn and collapses history in place; T2 fires at end_turn and is gated
+ * by `t1CollapsesDone === 0` (engine.js). If T2 were ever set ≥ T1, T1
+ * would collapse first and T2 could never fire — silently disabling the
+ * end-of-turn reflection path. Keep a usefully wide gap between the two
+ * so the (T2, T1) band where T2-alone applies stays meaningful.
+ *
  * TOOL_BATCH_SIZE history: was 13 originally; raised to 30 (2026-05-15)
  * after user feedback that 13 fired too often inside a single task and
  * fragmented otherwise-coherent tool arcs into multiple reflections. 30
