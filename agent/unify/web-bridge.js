@@ -1988,6 +1988,13 @@ export function buildVpQueryOpts({ vpId, groupCoordinator, groupId, envelope }) 
   if (groupMeta && typeof groupMeta.announcement === 'string') {
     out.groupAnnouncement = groupMeta.announcement;
   }
+  // Surface the group's configured working directory so the engine can
+  // resolve CLAUDE.md / AGENTS.md at that path and inject it as a
+  // [Project Doc] block above the announcement. Groups with no workDir
+  // skip the block silently (matches the announcement contract).
+  if (groupMeta && typeof groupMeta.workDir === 'string' && groupMeta.workDir.trim()) {
+    out.workDir = groupMeta.workDir.trim();
+  }
   try {
     const vp = readVp(resolvedVpId);
     if (vp) {

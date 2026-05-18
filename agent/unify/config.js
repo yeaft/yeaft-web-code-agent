@@ -42,6 +42,11 @@ const DEFAULTS = {
   // plumb the knob through so the UI can set it).
   unifyMaxConcurrentThreads: 6,
   unifyAutoArchiveIdleDays: 30,
+  // CLAUDE.md / AGENTS.md project-doc cap, in bytes. Mirrors Codex's
+  // `project_doc_max_bytes`. 0 disables the feature (no project-doc
+  // block is injected). Hand-edited values are NOT clamped — we let
+  // power users opt into larger docs at their own context-window risk.
+  projectDocMaxBytes: 32 * 1024,
 };
 
 // ─── config.json reader ─────────────────────────────────────────
@@ -215,6 +220,10 @@ function loadLegacyConfig(dir, overrides) {
     maxOutputTokens: overrides.maxOutputTokens ?? fileConfig.maxOutputTokens ?? DEFAULTS.maxOutputTokens,
     messageTokenBudget: overrides.messageTokenBudget ?? (env.YEAFT_MESSAGE_TOKEN_BUDGET ? parseInt(env.YEAFT_MESSAGE_TOKEN_BUDGET, 10) : null) ?? fileConfig.messageTokenBudget ?? DEFAULTS.messageTokenBudget,
     maxContinueTurns: overrides.maxContinueTurns ?? fileConfig.maxContinueTurns ?? DEFAULTS.maxContinueTurns,
+    // CLAUDE.md / AGENTS.md project-doc cap, in bytes. Legacy config
+    // has no field for this, so it always lands on the default unless
+    // explicitly overridden via CLI.
+    projectDocMaxBytes: overrides.projectDocMaxBytes ?? fileConfig.projectDocMaxBytes ?? DEFAULTS.projectDocMaxBytes,
     // task-318: legacy path never had the `unify` section — defaults.
     unify: normaliseUnifySection(null),
     providers: null,
@@ -308,6 +317,11 @@ export function loadConfig(overrides = {}) {
     maxOutputTokens: overrides.maxOutputTokens ?? jsonConfig.maxOutputTokens ?? modelInfo?.maxOutputTokens ?? DEFAULTS.maxOutputTokens,
     messageTokenBudget: overrides.messageTokenBudget ?? jsonConfig.messageTokenBudget ?? DEFAULTS.messageTokenBudget,
     maxContinueTurns: overrides.maxContinueTurns ?? jsonConfig.maxContinueTurns ?? DEFAULTS.maxContinueTurns,
+
+    // CLAUDE.md / AGENTS.md project-doc cap, in bytes. Set to 0 to
+    // disable the feature entirely. Read from `projectDocMaxBytes` in
+    // ~/.yeaft/config.json or threaded through CLI overrides.
+    projectDocMaxBytes: overrides.projectDocMaxBytes ?? jsonConfig.projectDocMaxBytes ?? DEFAULTS.projectDocMaxBytes,
 
     // task-318: Unify runtime caps. `unify` is a nested section so we
     // don't pollute the flat config namespace used by chat/crew code.
