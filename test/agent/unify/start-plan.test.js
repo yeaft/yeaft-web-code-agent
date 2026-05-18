@@ -261,4 +261,21 @@ describe('getDefaultPlanInstruction', () => {
     expect(out.length).toBeGreaterThan(50);
     expect(out).toMatch(/TodoWrite/);
   });
+
+  // Regression: the default template MUST tell the LLM to keep going after
+  // TodoWrite. The original wording said "Do not execute the steps in this
+  // turn ... ends after the TodoWrite call" which made the engine loop exit
+  // (engine.js:1721 — stop_reason='end_turn' terminates the turn) and group
+  // VPs went silent after writing the plan. This assertion locks the new
+  // contract — if a future "tidy the wording" PR re-introduces stop-here
+  // language, this test will fail before the bug ships.
+  it('default instruction tells the LLM to continue executing after the plan', async () => {
+    const { getDefaultPlanInstruction } = await import(`${ROOT}/agent/unify/prompts.js`);
+    const out = getDefaultPlanInstruction('en');
+    // Positive signal: "keep going" / "same turn" / "start executing"
+    expect(out).toMatch(/keep going|same turn|start executing/i);
+    // Negative signal: must NOT carry the old stop-here phrasing.
+    expect(out).not.toMatch(/do not execute the steps in this turn/i);
+    expect(out).not.toMatch(/this turn ends after the .?TodoWrite/i);
+  });
 });

@@ -3,11 +3,14 @@
  *
  * Lightweight planning entry point inspired by Claude Code's plan mode.
  * Unlike Claude Code, we do NOT swap tools or change conversation state —
- * `StartPlan` is a regular tool. Its only job is to push a planning
- * instruction back into the model's tool-result stream so the very next
- * turn produces a structured plan plus a `TodoWrite` call.
+ * `StartPlan` is a regular tool. Its job is to push a planning instruction
+ * back into the model's tool-result stream so the same turn produces a
+ * short prose plan, a `TodoWrite` call to land the steps, and then keeps
+ * going by starting the first step. The plan is the runway, not the
+ * destination — the loop continues until the work is done (or until the
+ * model legitimately needs the user, e.g. an unresolved unknown).
  *
- * Design (locked 2026-05-13):
+ * Design:
  *   - Anyone can call it; the tool description tells the LLM when to.
  *   - The instruction text comes from one of two places, in order:
  *       1. The active VP's `planInstruction` frontmatter override
@@ -20,13 +23,16 @@
  *     are echoed back in the tool result so the planning turn can read
  *     them without re-asking the user.
  *   - Output is plain text (the instruction + the echo). No side effects,
- *     no persistence — the LLM's next turn does the actual planning and
- *     calls TodoWrite to land structured steps.
+ *     no persistence — the same turn that called StartPlan produces the
+ *     plan, lands the steps via TodoWrite, and starts executing the first
+ *     step (unless that first step is "ask the user", which is the one
+ *     legitimate reason to stop here).
  *
- * The expected integration is TodoWrite: after the planning turn the LLM
- * issues a `TodoWrite` call enumerating the 1..N steps. The frontend
- * already renders TodoWrite as a checkbox-style list, so the user sees
- * the plan materialize without any new UI.
+ * The expected integration is TodoWrite: during the planning turn the LLM
+ * issues a `TodoWrite` call enumerating the 1..N steps, then keeps going
+ * and works the first step. The frontend already renders TodoWrite as a
+ * checkbox-style list, so the user sees the plan materialize without any
+ * new UI.
  */
 
 import { defineTool } from './types.js';
@@ -36,9 +42,10 @@ export default defineTool({
   name: 'StartPlan',
   description: `Enter planning mode for a non-trivial task. Use BEFORE you start working when the request needs multiple steps, has unclear scope, or the user said "make a plan" / "think through this first".
 
-This tool does NOT execute the work. It returns a planning instruction; on the next turn you should:
+This tool returns a planning instruction. Use it to land a structured plan, then keep working in the same turn. The expected flow is:
 1. Produce a short prose plan (problem, approach, risks).
 2. Call \`TodoWrite\` with the ordered steps. Mark the first concrete step "in_progress", the rest "pending".
+3. Start executing that first step — call whatever tools the work needs. Do not end the turn just because the plan is written; the plan is the runway.
 
 WHEN TO USE:
 - Multi-step implementation (3+ steps), refactor, or open-ended investigation.
@@ -48,6 +55,8 @@ WHEN TO USE:
 WHEN NOT TO USE:
 - Single trivial change, single command run, lookup-style question.
 - Mid-execution — once you're past the first step, use TodoWrite directly.
+
+EXCEPTION — stop after the plan only if the first step is genuinely "ask the user" (an unresolved unknown that blocks every other step). Otherwise keep moving.
 
 The tool takes the topic plus optional guiding fields (stuckAt, userProblem, expectedScale, additionalContext) that help you think; they're echoed back verbatim, so don't repeat the full user request in \`topic\`.`,
   parameters: {
@@ -126,7 +135,7 @@ The tool takes the topic plus optional guiding fields (stuckAt, userProblem, exp
       lines.push('</guiding-context>');
     }
     lines.push('');
-    lines.push('Next: produce the plan as described above, then call `TodoWrite` to land the ordered steps. Do NOT start executing the steps in this turn.');
+    lines.push('Next: produce the plan, call `TodoWrite` to land the ordered steps, then keep going — start executing the first step in this same turn. Only stop after the plan if the first step is "ask the user".');
 
     return lines.join('\n');
   },
