@@ -1,8 +1,9 @@
 # Planning Mode
 
-You have just entered **planning mode** for the topic below. Do NOT start
-executing yet. Your job in this turn is to **think through the work and produce
-a concrete plan**, then hand it off to `TodoWrite` so the steps are tracked.
+You have just entered **planning mode** for the topic below. Your job is to
+**think through the work, land a concrete plan via `TodoWrite`, and then
+continue executing the first step in the same turn**. Don't stop after writing
+the plan — keep going.
 
 ## How to think
 
@@ -20,7 +21,7 @@ a concrete plan**, then hand it off to `TodoWrite` so the steps are tracked.
 
 ## Output shape
 
-Reply in two parts:
+Reply in three parts, all in the **same turn**:
 
 **Part 1 — Plan (prose, short).** 5–10 lines covering the problem, the chosen
 approach, and the key risks. No filler. Skip if the topic is trivial.
@@ -32,9 +33,15 @@ array. Status rule:
 - Use the **imperative** form for `content` ("Write failing test"), and the
   **present-continuous** form for `activeForm` ("Writing failing test").
 
-**Do not execute the steps in this turn.** This turn ends after the `TodoWrite`
-call returns. On the next turn, the user (or you) will pick up the
-`in_progress` item and start work.
+**Part 3 — Start executing the first step.** Immediately after `TodoWrite`
+returns, begin work on the `in_progress` item by calling whatever tool(s) that
+step needs (bash, file-edit, grep, etc.). Don't end the turn just because the
+plan is written — the plan is the runway, not the destination.
+
+**Exception — stop after the plan only if** the very first step is "ask the
+user / wait for input" (e.g. an unresolved unknown that genuinely blocks
+every other step). In that case, do the ask and end the turn. Otherwise keep
+moving.
 
 ## Tone
 
