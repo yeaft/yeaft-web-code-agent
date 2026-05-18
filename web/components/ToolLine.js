@@ -10,6 +10,8 @@
  *   compact    — Boolean, compact mode for crew view
  *   startTime  — Number, timestamp when tool execution started (optional)
  */
+import { formatRouteForwardToolLine } from '../utils/route-forward-display.js';
+
 export default {
   name: 'ToolLine',
   props: {
@@ -107,7 +109,7 @@ export default {
     };
 
     const getToolIcon = (name) => {
-      const icons = { Read: '\u{1F4D6}', Edit: '\u270F\uFE0F', Write: '\u{1F4DD}', Bash: '\u26A1', Glob: '\u{1F50D}', Grep: '\u{1F50E}', Task: '\u{1F4CB}', WebFetch: '\u{1F310}', WebSearch: '\u{1F50D}', TodoWrite: '\u2705' };
+      const icons = { Read: '\u{1F4D6}', Edit: '\u270F\uFE0F', Write: '\u{1F4DD}', Bash: '\u26A1', Glob: '\u{1F50D}', Grep: '\u{1F50E}', Task: '\u{1F4CB}', WebFetch: '\u{1F310}', WebSearch: '\u{1F50D}', TodoWrite: '\u2705', RouteForward: '@' };
       return icons[name] || '\u2699\uFE0F';
     };
 
@@ -150,6 +152,9 @@ export default {
       if (toolName === 'TodoWrite' && input.todos) {
         const completed = input.todos.filter(t => t.status === 'completed').length;
         return `Todo: ${completed}/${input.todos.length} done`;
+      }
+      if (toolName === 'RouteForward') {
+        return formatRouteForwardToolLine(input, middleTruncate);
       }
       return toolName;
     };

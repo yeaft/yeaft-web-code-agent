@@ -2,6 +2,10 @@ import ToolLine from './ToolLine.js';
 import AskCard from './AskCard.js';
 import VpSpeakerHeader from './VpSpeakerHeader.js';
 import { getTodoDisplayState } from '../utils/todo-display-state.js';
+import {
+  formatRouteForwardHandoffLabel,
+  formatRouteForwardHandoffReason,
+} from '../utils/route-forward-display.js';
 
 export default {
   name: 'AssistantTurn',
@@ -119,7 +123,7 @@ export default {
         <div v-for="(hint, i) in turn.handoffHints" :key="i" class="handoff-pill">
           <span class="handoff-arrow" aria-hidden="true">↪</span>
           <span class="handoff-label">{{ formatHandoffLabel(hint) }}</span>
-          <span v-if="hint.reason" class="handoff-reason">· {{ hint.reason }}</span>
+          <span v-if="formatHandoffReason(hint)" class="handoff-reason">· {{ formatHandoffReason(hint) }}</span>
         </div>
       </div>
 
@@ -417,24 +421,14 @@ export default {
       window.open(url, '_blank');
     };
 
-    // task-707: render the route_forward hand-off label. The structured
-    // payload carries `toVpIds[]` and `broadcast`; we localize via $t so
-    // the bubble reads naturally in either language. Falls back to the
-    // English string if the i18n key is missing.
-    const formatHandoffLabel = (hint) => {
-      if (!hint) return '';
-      const ids = Array.isArray(hint.toVpIds) ? hint.toVpIds : [];
-      const mentions = ids.map((id) => `@${id}`).join('、');
-      try {
-        if (typeof t === 'function') {
-          if (hint.broadcast) {
-            return t('unify.handoff.broadcast', { mentions });
-          }
-          return t('unify.handoff.targets', { mentions });
-        }
-      } catch (_) { /* fall through to plain string */ }
-      return `Forwarded to ${mentions}`;
-    };
+    // task-routeforward-chat-ui: render successful route_forward as a
+    // natural group-chat hand-off, not as a generic tool-call summary.
+    // The structured payload carries targets and the text the source VP
+    // sent to them, so the user sees "@linus: do X" directly in the
+    // originating VP's bubble. `reason` stays as secondary audit text.
+    const formatHandoffLabel = (hint) => formatRouteForwardHandoffLabel(hint, t);
+
+    const formatHandoffReason = (hint) => formatRouteForwardHandoffReason(hint, t);
 
     // H2.f.6: canFork / forkFromHere removed alongside the multi-thread engine.
 
@@ -513,6 +507,7 @@ export default {
       handleImageError,
       openImagePreview,
       formatHandoffLabel,
+      formatHandoffReason,
       displayedTodos
     };
   }

@@ -1058,7 +1058,10 @@ export default {
 
   // ============ Unify route_forward 转交提示 (task-707) ============
   'unify.handoff.targets': '已转交给 {mentions}',
+  'unify.handoff.chat': '{mentions}：{text}',
   'unify.handoff.broadcast': '已转交给 {mentions}（广播）',
+  'unify.handoff.broadcastChat': '{mentions}：{text}（广播）',
+  'unify.handoff.reason': '原因：{reason}',
 
   // ============ Unify 群组 (task-334m) ============
   'unify.group.sidebarTitle': '群组',

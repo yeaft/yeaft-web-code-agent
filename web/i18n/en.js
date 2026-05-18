@@ -1058,7 +1058,10 @@ export default {
 
   // ============ Unify route_forward hand-off pill (task-707) ============
   'unify.handoff.targets': 'Forwarded to {mentions}',
+  'unify.handoff.chat': '{mentions}: {text}',
   'unify.handoff.broadcast': 'Forwarded to {mentions} (broadcast)',
+  'unify.handoff.broadcastChat': '{mentions}: {text} (broadcast)',
+  'unify.handoff.reason': 'reason: {reason}',
 
   // ============ Unify Groups (task-334m) ============
   'unify.group.sidebarTitle': 'Groups',
