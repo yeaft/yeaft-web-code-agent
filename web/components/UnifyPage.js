@@ -997,13 +997,10 @@ export default {
       }
     };
 
-    // Per-VP abort from the timeline. The pane only knows the vpId of
-    // the row the user clicked. We reverse-look-up the most recently
-    // started turnId for that VP from `activeVpTurns`. If a VP has
-    // multiple concurrent turns (rare; possible during fan-out), we
-    // abort the one with the most recent `startedAt` — that matches
-    // "what is this VP doing right now." `cancelVpTurn` is a no-op if
-    // the controller has already cleared.
+    // Per-VP abort from the timeline. A VP may now have multiple running
+    // threads, so we cancel the most recently started active turn for that
+    // VP. `cancelVpTurn` remains turnId-based because abort controllers are
+    // keyed by turn, not by the aggregate VP row.
     const onCancelVpFromTimeline = (vpId) => {
       if (!vpId) return;
       const map = store.activeVpTurns || {};

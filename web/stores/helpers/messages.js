@@ -15,7 +15,7 @@ function inActiveUnifyConv(store, conversationId) {
     && conversationId === store.unifyConversationId;
 }
 
-// Idempotently mirror the routing context (vpId / turnId / speakerVpId)
+// Idempotently mirror the routing context (vpId / turnId / threadId / speakerVpId)
 // onto a Unify message that carries VP attribution (assistant or
 // tool-use). Used at three points:
 //   1. on creation in addMessageToConversation
@@ -38,6 +38,8 @@ function stampSpeakerOnVpMessage(store, conversationId, m) {
   if (!inActiveUnifyConv(store, conversationId)) return;
   if (!m.vpId && store._currentUnifyVpId) m.vpId = store._currentUnifyVpId;
   if (!m.turnId && store._currentUnifyTurnId) m.turnId = store._currentUnifyTurnId;
+  if (!m.threadId && store._currentUnifyThreadId) m.threadId = store._currentUnifyThreadId;
+  if (!m.threadTitle && store._currentUnifyThreadTitle) m.threadTitle = store._currentUnifyThreadTitle;
   if (!m.speakerVpId && m.vpId) m.speakerVpId = m.vpId;
 }
 
@@ -75,6 +77,12 @@ export function addMessageToConversation(store, conversationId, msg) {
     if (!newMsg.turnId && store._currentUnifyTurnId) {
       newMsg.turnId = store._currentUnifyTurnId;
     }
+    if (!newMsg.threadId && store._currentUnifyThreadId) {
+      newMsg.threadId = store._currentUnifyThreadId;
+    }
+    if (!newMsg.threadTitle && store._currentUnifyThreadTitle) {
+      newMsg.threadTitle = store._currentUnifyThreadTitle;
+    }
     // Speaker derivation is gated by message type (assistant / tool-use)
     // inside the helper itself.
     stampSpeakerOnVpMessage(store, conversationId, newMsg);
@@ -99,9 +107,12 @@ export function appendToAssistantMessageForConversation(store, conversationId, t
   // message for THAT turn (not just the last message). This prevents
   // concurrent VP streams from interleaving into the same message.
   const turnId = store._currentUnifyTurnId;
-  if (turnId) {
+  const threadId = store._currentUnifyThreadId || null;
+  if (turnId || threadId) {
     for (let i = msgs.length - 1; i >= 0; i--) {
-      if (msgs[i].turnId === turnId && msgs[i].type === 'assistant' && msgs[i].isStreaming) {
+      const turnMatches = !turnId || msgs[i].turnId === turnId;
+      const threadMatches = !threadId || !msgs[i].threadId || msgs[i].threadId === threadId;
+      if (turnMatches && threadMatches && msgs[i].type === 'assistant' && msgs[i].isStreaming) {
         stampSpeakerOnVpMessage(store, conversationId, msgs[i]);
         if (opts.id && !msgs[i].id) msgs[i].id = opts.id;
         if (opts.id && !msgs[i].messageId) msgs[i].messageId = opts.id;
@@ -162,14 +173,15 @@ export function finishStreamingForConversation(store, conversationId) {
   // cascade. Legacy single-turn path (no _currentUnifyTurnId) keeps the
   // original blanket-clear so non-Unify chats are unaffected.
   const targetTurnId = store._currentUnifyTurnId || null;
+  const targetThreadId = store._currentUnifyThreadId || null;
 
   // ★ Finish ALL streaming messages in the current turn, not just the last one.
   // Non-streaming messages (chat-image, tool-use) can be appended after
   // a streaming assistant message, leaving it stuck with isStreaming: true.
   for (let i = msgs.length - 1; i >= 0; i--) {
     const m = msgs[i];
-    if (targetTurnId) {
-      // Per-turn mode: only touch messages tagged with this turnId, OR
+    if (targetTurnId || targetThreadId) {
+      // Per-turn/thread mode: only touch messages tagged with this turnId, OR
       // messages that have NO turnId yet (they were minted before the
       // routing context was set and the defensive stamper below will
       // adopt them into the active turn). Anything tagged with a
@@ -177,6 +189,10 @@ export function finishStreamingForConversation(store, conversationId) {
       if (m.turnId && m.turnId !== targetTurnId) {
         // Stop at the user message that opened this fan-out so we don't
         // wander into older history.
+        if (m.type === 'user') break;
+        continue;
+      }
+      if (targetThreadId && m.threadId && m.threadId !== targetThreadId) {
         if (m.type === 'user') break;
         continue;
       }

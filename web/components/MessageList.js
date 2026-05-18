@@ -612,6 +612,12 @@ export default {
         if (!currentTurn.turnId && msg.turnId) {
           currentTurn.turnId = msg.turnId;
         }
+        if (!currentTurn.threadId && msg.threadId) {
+          currentTurn.threadId = msg.threadId;
+        }
+        if (!currentTurn.threadTitle && msg.threadTitle) {
+          currentTurn.threadTitle = msg.threadTitle;
+        }
       };
 
       const startTurn = () => {
@@ -626,7 +632,12 @@ export default {
           imageMsgs: [],
           askMsg: null,
           messages: [],
-          // H2.f.6: threadId capture removed (single-conversation model).
+          threadId: null,
+          threadTitle: '',
+          threadStatus: '',
+          threadMessageCount: 0,
+          isLatestThreadForVp: false,
+          threadCollapsed: false,
           // task-314: persisted message id (`m{NNNN}`) for the last
           // assistant chunk in this turn — used as the fork cursor when
           // the user clicks "Fork from here".
@@ -647,7 +658,7 @@ export default {
 
       // task-group-vp-block-split (v0.1.776): close the current turn
       // when an incoming VP-attributed message belongs to a DIFFERENT
-      // VP-turn than the one currently being assembled. Without this,
+      // VP-turn/thread than the one currently being assembled. Without this,
       // a `route_forward` from VP_A to VP_B leaves VP_A's turn open
       // and VP_B's first chunks get appended into VP_A's block —
       // visually the user sees Linus's text inside Jobs's bubble.
@@ -666,6 +677,16 @@ export default {
       // unstamped legacy Chat rows still keep the old single-open-turn path.
       const closeTurnIfTurnIdChanged = (msg) => {
         if (!currentTurn) return;
+        const curThreadId = currentTurn.threadId;
+        const msgThreadId = msg.threadId;
+        if (curThreadId && msgThreadId) {
+          if (typeof curThreadId !== 'string' || typeof msgThreadId !== 'string') return;
+          if (curThreadId !== msgThreadId) {
+            finishTurn();
+            return;
+          }
+        }
+
         const curTurnId = currentTurn.turnId;
         const msgTurnId = msg.turnId;
         if (curTurnId && msgTurnId) {
@@ -715,7 +736,6 @@ export default {
           if (msg.isStreaming) {
             currentTurn.isStreaming = true;
           }
-          // H2.f.6: threadId latch removed (single-conversation model).
           // task-314: remember the persisted message id for this turn so a
           // "Fork from here" click can tell the agent which message to cut
           // at. We latch the LAST assistant message id — forking from the
@@ -773,6 +793,26 @@ export default {
       }
 
       finishTurn();
+
+      const latestThreadByVp = new Map();
+      for (const item of result) {
+        if (!item || item.type !== 'assistant-turn' || !item.speakerVpId || !item.threadId) continue;
+        latestThreadByVp.set(item.speakerVpId, item.threadId);
+      }
+      const threadCounts = new Map();
+      for (const item of result) {
+        if (!item || item.type !== 'assistant-turn' || !item.threadId) continue;
+        const key = `${item.speakerVpId || ''}::${item.threadId}`;
+        const count = (item.messages && item.messages.length) || 0;
+        threadCounts.set(key, (threadCounts.get(key) || 0) + count);
+      }
+      for (const item of result) {
+        if (!item || item.type !== 'assistant-turn' || !item.threadId) continue;
+        const key = `${item.speakerVpId || ''}::${item.threadId}`;
+        item.threadMessageCount = threadCounts.get(key) || ((item.messages && item.messages.length) || 0);
+        item.isLatestThreadForVp = latestThreadByVp.get(item.speakerVpId) === item.threadId;
+        item.threadCollapsed = !!(item.threadId && !item.isLatestThreadForVp && !item.isStreaming);
+      }
 
       // task-757: removed the call to the typing-placeholder helper
       // [appendTypingPlaceholders, kept in web/stores/helpers/ for its

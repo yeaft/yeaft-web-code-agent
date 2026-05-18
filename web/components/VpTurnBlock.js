@@ -98,6 +98,10 @@ export default {
 
       <!-- Right column: header (always visible) + body (collapsible) -->
       <div class="vp-turn-block-main">
+        <div v-if="turn.threadId" class="vp-thread-summary" :class="{ 'vp-thread-summary-collapsed': threadSummaryCollapsed }">
+          <span class="vp-thread-title">{{ threadTitle }}</span>
+          <span class="vp-thread-meta">{{ threadMetaText }}</span>
+        </div>
         <div class="vp-turn-block-main-header">
           <span
             v-if="displayName"
@@ -212,6 +216,16 @@ export default {
 
     const expanded = Vue.computed(() => isExpandedFn(expandState.value));
 
+    Vue.watch(
+      () => props.turn.threadCollapsed,
+      (collapsed) => {
+        if (collapsed && expandState.value === 'auto-expanded') {
+          expandState.value = 'user-collapsed';
+        }
+      },
+      { immediate: true },
+    );
+
     const onToggle = () => {
       expandState.value = toggleState(expandState.value);
     };
@@ -312,6 +326,24 @@ export default {
       t ? t('unify.vp.turnBlock.collapse') : 'Collapse turn'
     );
 
+    const threadTitle = Vue.computed(() => {
+      if (!props.turn || !props.turn.threadId) return '';
+      return props.turn.threadTitle || props.turn.threadId;
+    });
+
+    const threadSummaryCollapsed = Vue.computed(() => !!(props.turn && props.turn.threadCollapsed));
+
+    const threadMetaText = Vue.computed(() => {
+      if (!props.turn || !props.turn.threadId) return '';
+      const parts = [];
+      if (props.turn.isStreaming) parts.push('running');
+      else if (props.turn.threadCollapsed) parts.push('collapsed');
+      else parts.push('latest');
+      const n = props.turn.threadMessageCount || (Array.isArray(props.turn.messages) ? props.turn.messages.length : 0);
+      if (n) parts.push(`${n} messages`);
+      return parts.join(' · ');
+    });
+
     return {
       expanded,
       onToggle,
@@ -329,6 +361,9 @@ export default {
       emptyText,
       toggleExpandTitle,
       toggleCollapseTitle,
+      threadTitle,
+      threadMetaText,
+      threadSummaryCollapsed,
     };
   },
 };

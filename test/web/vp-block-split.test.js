@@ -63,6 +63,8 @@ describe('MessageList.turnGroups — VP block split (source)', () => {
     const body = src.slice(idx, idx + 1200);
     expect(body).toContain('currentTurn');
     expect(body).toContain('msg.turnId');
+    expect(body).toContain('msg.threadId');
+    expect(body).toContain('currentTurn.threadId');
     expect(body).toContain('currentTurn.speakerVpId');
     expect(body).toContain('msg.speakerVpId || msg.vpId');
     expect(body).toContain('finishTurn();');
@@ -109,6 +111,8 @@ function aggregate(messages) {
       askMsg: null,
       speakerVpId: null,
       turnId: null,
+      threadId: null,
+      threadTitle: '',
       showSpeakerHeader: false,
     };
   };
@@ -119,9 +123,20 @@ function aggregate(messages) {
       if (vp) currentTurn.speakerVpId = vp;
     }
     if (!currentTurn.turnId && msg.turnId) currentTurn.turnId = msg.turnId;
+    if (!currentTurn.threadId && msg.threadId) currentTurn.threadId = msg.threadId;
+    if (!currentTurn.threadTitle && msg.threadTitle) currentTurn.threadTitle = msg.threadTitle;
   };
   const closeTurnIfTurnIdChanged = (msg) => {
     if (!currentTurn) return;
+    const curThreadId = currentTurn.threadId;
+    const msgThreadId = msg.threadId;
+    if (curThreadId && msgThreadId) {
+      if (typeof curThreadId !== 'string' || typeof msgThreadId !== 'string') return;
+      if (curThreadId !== msgThreadId) {
+        finishTurn();
+        return;
+      }
+    }
     const curTurnId = currentTurn.turnId;
     const msgTurnId = msg.turnId;
     if (curTurnId && msgTurnId) {
@@ -205,6 +220,30 @@ describe('MessageList.turnGroups — VP block split (logic)', () => {
     expect(blocks[0].speakerVpId).toBe('jobs');
     expect(blocks[1].speakerVpId).toBe('linus');
     expect(blocks[1].imageMsgs).toHaveLength(1);
+  });
+
+
+
+  it('splits same VP and same turnId when threadId changes', () => {
+    const blocks = aggregate([
+      { type: 'assistant', content: 'old task', vpId: 'linus', turnId: 'turn-1', threadId: 'thr-old', threadTitle: 'Old' },
+      { type: 'assistant', content: 'new task', vpId: 'linus', turnId: 'turn-1', threadId: 'thr-new', threadTitle: 'New' },
+    ]);
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0].threadId).toBe('thr-old');
+    expect(blocks[1].threadId).toBe('thr-new');
+  });
+
+  it('keeps related append messages in the same thread block', () => {
+    const blocks = aggregate([
+      { type: 'assistant', content: 'first ', vpId: 'linus', turnId: 'turn-1', threadId: 'thr-a', threadTitle: 'A' },
+      { type: 'tool-use', toolName: 'TodoWrite', vpId: 'linus', turnId: 'turn-1', threadId: 'thr-a', threadTitle: 'A' },
+      { type: 'assistant', content: 'second', vpId: 'linus', turnId: 'turn-1', threadId: 'thr-a', threadTitle: 'A' },
+    ]);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].threadId).toBe('thr-a');
+    expect(blocks[0].toolMsgs).toHaveLength(1);
+    expect(blocks[0].textContent).toBe('first second');
   });
 
   it('messages without turnId and without speaker attribution keep legacy single-open-turn behavior', () => {

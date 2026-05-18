@@ -82,6 +82,11 @@ export default {
           <div class="unify-vp-timeline-row-body">
             <span class="unify-vp-timeline-row-name">{{ row.displayName }}</span>
             <span class="unify-vp-timeline-row-status">{{ statusLabel(row) }}</span>
+            <span
+              v-if="row.runningThreadCount > 1"
+              class="unify-vp-timeline-thread-count"
+              :title="threadCountTitle(row)"
+            >{{ row.runningThreadCount }} threads</span>
           </div>
           <!--
             Right-side affordance cluster. Both buttons stop click
@@ -156,6 +161,15 @@ export default {
     const ACTIVE_STATES = new Set(['typing', 'thinking', 'streaming', 'tool']);
     const isActiveStatus = (s) => ACTIVE_STATES.has(s);
 
-    return { statusLabel, isActiveStatus };
+    const threadCountTitle = (row) => {
+      const threads = Array.isArray(row && row.threads) ? row.threads : [];
+      if (!threads.length) return '';
+      return threads
+        .slice(0, 5)
+        .map((t) => `${t.title || t.threadId || 'thread'}: ${t.status || 'idle'}`)
+        .join('\n');
+    };
+
+    return { statusLabel, isActiveStatus, threadCountTitle };
   },
 };

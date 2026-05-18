@@ -192,3 +192,34 @@ describe('vp-status-broker — wire event shape', () => {
     expect(typeof events[0].since).toBe('number');
   });
 });
+
+describe('vp-status-broker — thread aggregate', () => {
+  it('keeps one thread idle without clearing another running thread on the same VP', () => {
+    const { broker, events } = makeBrokerWithSink();
+    broker.transition({ groupId: 'g1', vpId: 'v1', threadId: 'thr-a', state: 'streaming', turnId: 't-a', title: 'A' });
+    broker.transition({ groupId: 'g1', vpId: 'v1', threadId: 'thr-b', state: 'tool', turnId: 't-b', title: 'B' });
+    broker.settleIdle({ groupId: 'g1', vpId: 'v1', threadId: 'thr-a', title: 'A' });
+
+    const last = events.filter((e) => e.type === 'vp_status_changed').at(-1);
+    expect(last.vpId).toBe('v1');
+    expect(last.state).toBe('tool');
+    expect(last.runningThreadCount).toBe(1);
+    expect(last.threads.map((t) => [t.threadId, t.status])).toEqual(expect.arrayContaining([
+      ['thr-a', 'idle'],
+      ['thr-b', 'tool'],
+    ]));
+  });
+
+  it('snapshot emits aggregate rows with thread summaries', () => {
+    const { broker } = makeBrokerWithSink();
+    broker.transition({ groupId: 'g1', vpId: 'v1', threadId: 'thr-a', state: 'thinking', turnId: 't-a', title: 'A', messageCount: 2 });
+    broker.transition({ groupId: 'g1', vpId: 'v1', threadId: 'thr-b', state: 'streaming', turnId: 't-b', title: 'B', messageCount: 3 });
+
+    const [row] = broker.snapshot('g1');
+    expect(row.state).toBe('streaming');
+    expect(row.runningThreadCount).toBe(2);
+    expect(row.threads).toHaveLength(2);
+    expect(row.threads.map((t) => t.threadId)).toEqual(expect.arrayContaining(['thr-a', 'thr-b']));
+    expect(row.threads.find((t) => t.threadId === 'thr-b')).toMatchObject({ title: 'B', messageCount: 3 });
+  });
+});

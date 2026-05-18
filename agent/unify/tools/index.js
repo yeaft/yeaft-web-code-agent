@@ -47,9 +47,9 @@ import routeForward from './route-forward.js';
 import todoWrite from './todo-write.js';
 import startPlan from './start-plan.js';
 
-// H2.f.4: thread tools (spawnThread/switchThread/listThreads/...) deleted.
-// The agent now runs in a single conversation; multi-thread orchestration
-// has been retired across the H2.f series.
+// H2.f.4: user-facing thread tools (spawnThread/switchThread/listThreads/...)
+// were deleted. PR #797 reintroduces runtime-owned VP thread routing below the
+// tool layer; LLMs still do not manage threads via tools.
 //
 // Feature tools (FeatureCreate/Update/List/Get/Progress/Memory + Followup
 // + UpdatePlan + feature_summary_post) and the FeatureArc auto-creation

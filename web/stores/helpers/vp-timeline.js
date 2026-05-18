@@ -46,6 +46,8 @@
  * @property {string} vpId
  * @property {string} displayName
  * @property {VpStatus} status
+ * @property {number} runningThreadCount
+ * @property {Array<object>} threads
  */
 
 /**
@@ -113,7 +115,7 @@ export function statusFor(vpId, ctx) {
  *
  * @param {object} args
  * @param {Array<{vpId:string, displayName?:string, displayNameZh?:string}>} args.vpList
- * @param {Object<string, {state: VpStatus, since?:number, turnId?:string|null, groupId?:string|null}>} [args.vpStatuses]
+ * @param {Object<string, {state: VpStatus, since?:number, turnId?:string|null, groupId?:string|null, runningThreadCount?:number, threads?:Array<object>}>} [args.vpStatuses]
  * @param {string} [args.connectionState]
  * @param {(vpId: string) => string} [args.vpLabelOf]   // optional locale-aware labeler
  * @returns {TimelineRow[]}
@@ -180,9 +182,14 @@ export function buildTimelineRows(args) {
  * @returns {TimelineRow}
  */
 function makeRow(vpId, displayName, ctx) {
+  const entry = ctx && ctx.vpStatuses && ctx.vpStatuses[vpId];
   return {
     vpId,
     displayName: displayName || vpId,
     status: statusFor(vpId, ctx),
+    runningThreadCount: entry && Number.isFinite(entry.runningThreadCount)
+      ? entry.runningThreadCount
+      : 0,
+    threads: entry && Array.isArray(entry.threads) ? entry.threads : [],
   };
 }

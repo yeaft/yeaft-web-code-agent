@@ -9,11 +9,11 @@
  * `tool_use` event — not the result — so this tool's persistence story
  * is "stamp into the LLM event stream and cache on ctx for replay."
  *
- * Per-VP isolation: each VP keeps its own current todo list. The
- * web-bridge injects `ctx.getCurrentTodos()` / `ctx.setCurrentTodos()`
- * pointing at a per-(groupId,vpId) slot so two VPs in the same group
- * can independently track their own multi-step tasks without
- * stepping on each other.
+ * Per-thread isolation: each running VP thread keeps its own current todo
+ * list. The web-bridge injects `ctx.getCurrentTodos()` /
+ * `ctx.setCurrentTodos()` pointing at a per-(groupId,vpId,threadId) slot so
+ * two concurrent threads for the same VP cannot overwrite each other's
+ * progress.
  *
  * Reference: plan §2 (2026-05-13 — Feature system retired, TodoWrite
  * added as the actual progress-tracking surface for the LLM).

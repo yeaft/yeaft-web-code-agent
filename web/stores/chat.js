@@ -334,8 +334,10 @@ export const useChatStore = defineStore('chat', {
     // addMessageToConversation / appendToAssistant can route by turnId.
     _currentUnifyVpId: null,
     _currentUnifyTurnId: null,
+    _currentUnifyThreadId: null,
+    _currentUnifyThreadTitle: null,
     // Feature system fully removed 2026-05-13; per-VP turns are folded
-    // by VpTurnBlock keyed off vpId + turnId.
+    // by VpTurnBlock keyed off vpId + turnId + threadId.
 
     // Active VP turns — keyed by turnId. Cleared on result or abort ack.
     activeVpTurns: {},
@@ -357,9 +359,9 @@ export const useChatStore = defineStore('chat', {
     // data is there.
     vpStatuses: {},
 
-    // H2.f.6: thread state retired. unifyThreads / unifyActiveThreadId /
-    // unifyFeatureReplyThreadId / unifyJumpTarget / merge+fork results all
-    // removed. Single conversation owns the message stream.
+    // VP runtime threads: the conversation is still a single message stream,
+    // but group VP messages are explicitly tagged by threadId so MessageList
+    // can keep tools/todos/progress inside the correct VP thread block.
 
     // task-fix: per-VP typing indicator for Unify group chat.
     //   Shape: { [conversationId]: { [vpId]: refCount } }
@@ -914,9 +916,13 @@ export const useChatStore = defineStore('chat', {
           const prevGroup = this._currentUnifyGroupId;
           const prevVpId = this._currentUnifyVpId;
           const prevTurnId = this._currentUnifyTurnId;
+          const prevThreadId = this._currentUnifyThreadId;
+          const prevThreadTitle = this._currentUnifyThreadTitle;
           if (msg.groupId) this._currentUnifyGroupId = msg.groupId;
           if (msg.vpId) this._currentUnifyVpId = msg.vpId;
           if (msg.turnId) this._currentUnifyTurnId = msg.turnId;
+          if (msg.threadId) this._currentUnifyThreadId = msg.threadId;
+          if (msg.threadTitle || msg.title) this._currentUnifyThreadTitle = msg.threadTitle || msg.title;
           // (2026-05-13) featureId stamping removed along with the Feature system.
           try {
             this.handleClaudeOutput(conversationId, msg.data);
@@ -924,6 +930,8 @@ export const useChatStore = defineStore('chat', {
             this._currentUnifyGroupId = prevGroup;
             this._currentUnifyVpId = prevVpId;
             this._currentUnifyTurnId = prevTurnId;
+            this._currentUnifyThreadId = prevThreadId;
+            this._currentUnifyThreadTitle = prevThreadTitle;
           }
         }
         return;
@@ -1417,7 +1425,13 @@ export const useChatStore = defineStore('chat', {
           if (!event.turnId || !event.vpId) break;
           this.activeVpTurns = {
             ...this.activeVpTurns,
-            [event.turnId]: { vpId: event.vpId, isStreaming: true },
+            [event.turnId]: {
+              vpId: event.vpId,
+              threadId: event.threadId || null,
+              threadTitle: event.title || event.threadTitle || '',
+              isStreaming: true,
+              startedAt: event.ts || Date.now(),
+            },
           };
           break;
         }
@@ -1479,6 +1493,10 @@ export const useChatStore = defineStore('chat', {
               state: event.state,
               since: event.since || Date.now(),
               turnId: event.turnId || null,
+              threadId: event.threadId || null,
+              title: event.title || '',
+              runningThreadCount: event.runningThreadCount || 0,
+              threads: Array.isArray(event.threads) ? event.threads : [],
               groupId: event.groupId || null,
               vpId: event.vpId,
             },
@@ -1503,6 +1521,10 @@ export const useChatStore = defineStore('chat', {
                 state: row.state,
                 since: row.since || Date.now(),
                 turnId: row.turnId || null,
+                threadId: row.threadId || null,
+                title: row.title || '',
+                runningThreadCount: row.runningThreadCount || 0,
+                threads: Array.isArray(row.threads) ? row.threads : [],
                 groupId: row.groupId || null,
                 vpId: row.vpId,
               };
@@ -1524,6 +1546,10 @@ export const useChatStore = defineStore('chat', {
                 state: row.state,
                 since: row.since || Date.now(),
                 turnId: row.turnId || null,
+                threadId: row.threadId || null,
+                title: row.title || '',
+                runningThreadCount: row.runningThreadCount || 0,
+                threads: Array.isArray(row.threads) ? row.threads : [],
                 groupId: row.groupId || null,
                 vpId: row.vpId,
               };
