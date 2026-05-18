@@ -1782,7 +1782,7 @@ export class Engine {
 
         // PR-L: T2 end-of-turn (asynchronous) reflection. Fires when the
         // total tool count for this query() exceeds TURN_SUMMARY_THRESHOLD
-        // (5) AND no T1 has actually rewritten the arc yet. Kicks off the
+        // (8) AND no T1 has actually rewritten the arc yet. Kicks off the
         // primary-model call without await; the next query()'s
         // `#applyPendingT2Reflections` carries the result forward.
         //
