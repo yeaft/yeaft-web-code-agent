@@ -21,6 +21,7 @@ import { randomUUID } from 'crypto';
 import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
 import { LLMContextError, LLMAbortError } from './llm/adapter.js';
 import { runMemoryPreflow, buildRelevantScopes } from './groups/pre-flow.js';
+import { readProjectDoc, pickProjectDocFile, DEFAULT_PROJECT_DOC_MAX_BYTES } from './groups/project-doc.js';
 import { shouldConsolidate, partitionMessages } from './memory/consolidate.js';
 import { runCompact as runCompactOrchestrator } from './compact/orchestrator.js';
 import { evaluateCompactTriggers } from './compact/triggers.js';
@@ -322,6 +323,18 @@ export class Engine {
 
   /** @type {string|null} */
   #abortReason = null;
+
+  /**
+   * Per-engine cache of the resolved CLAUDE.md / AGENTS.md project doc.
+   * Shape: `{ workDir, path, mtimeMs, text } | null`. A non-null record
+   * means "for THIS workDir, the file at `path` with this `mtimeMs`
+   * resolved to `text`" — when the next turn's stat returns the same
+   * `(path, mtimeMs)` tuple, we skip the read entirely. mtime changes
+   * (or a different picked file, e.g. user added AGENTS.md) invalidate
+   * automatically because the `path`/`mtimeMs` comparison fails.
+   * @type {{ workDir: string, path: string, mtimeMs: number, text: string }|null}
+   */
+  #projectDocCache = null;
 
   /**
    * @param {{
@@ -685,10 +698,11 @@ export class Engine {
    * @param {object} [args.vpPersona]
    * @param {object} [args.activeScope] — DESIGN-PROMPT §3 ④ structured scope summary
    * @param {string} [args.groupAnnouncement]
+   * @param {string} [args.projectDoc] — resolved CLAUDE.md / AGENTS.md text (already truncated)
    * @param {object} [args.taskCtx] — legacy task-context sub-block (optional)
    * @returns {string}
    */
-  #buildSystemPrompt({ prompt, memoryInjection, vpPersona, activeScope, groupAnnouncement, taskCtx } = {}) {
+  #buildSystemPrompt({ prompt, memoryInjection, vpPersona, activeScope, groupAnnouncement, projectDoc, taskCtx } = {}) {
     // Get relevant skill content if SkillManager is wired
     let skillContent = '';
     if (this.#skillManager && prompt) {
@@ -708,12 +722,83 @@ export class Engine {
       vpPersona,
       activeScope,
       groupAnnouncement,
+      projectDoc,
       taskCtx,
       // Worker-shape harness is descriptive metadata for human inspection;
       // production prompts skip it to save tokens. Re-enable via env when
       // diagnosing prompt structure issues.
       includeShape: process.env.UNIFY_PROMPT_INCLUDE_SHAPE === '1',
     });
+  }
+
+  /**
+   * Resolve the CLAUDE.md / AGENTS.md project doc text for the current
+   * group's working directory. mtime-cached on the engine so we only
+   * re-read the file when the user actually edited it.
+   *
+   * Cache strategy:
+   *   1. Cheap path: `pickProjectDocFile` (two stats, no read).
+   *   2. If the picked `(path, mtimeMs)` matches the cache → return
+   *      cached text. No disk read, no UTF-8 decode, no truncation work.
+   *   3. Cache miss → call `readProjectDoc` (bounded `readSync` into a
+   *      pre-sized buffer), refresh the cache, return the fresh text.
+   *
+   * Returns '' when:
+   *   - workDir is empty / not a string
+   *   - config.projectDocMaxBytes === 0 (feature disabled)
+   *   - neither CLAUDE.md nor AGENTS.md exists in workDir
+   *   - the picked file is empty after trim
+   *
+   * @param {string|undefined} workDir
+   * @returns {string}
+   */
+  #getProjectDocBlock(workDir) {
+    if (typeof workDir !== 'string' || !workDir.trim()) {
+      this.#projectDocCache = null;
+      return '';
+    }
+    const maxBytes = Number.isFinite(this.#config?.projectDocMaxBytes)
+      ? this.#config.projectDocMaxBytes
+      : DEFAULT_PROJECT_DOC_MAX_BYTES;
+    if (maxBytes === 0) {
+      this.#projectDocCache = null;
+      return '';
+    }
+
+    // Step 1 — stat-only check. Cheap (two `statSync` calls) and lets
+    // us short-circuit the read when the file hasn't moved.
+    const picked = pickProjectDocFile(workDir);
+    if (!picked) {
+      this.#projectDocCache = null;
+      return '';
+    }
+
+    // Step 2 — cache hit? Same workDir, same picked file, same mtime
+    // ⇒ the previously decoded text is still authoritative. Skip the
+    // file read entirely.
+    const cache = this.#projectDocCache;
+    if (
+      cache
+      && cache.workDir === workDir
+      && cache.path === picked.path
+      && cache.mtimeMs === picked.mtimeMs
+    ) {
+      return cache.text;
+    }
+
+    // Step 3 — cache miss. Read + decode, then refresh the cache.
+    const doc = readProjectDoc(workDir, { maxBytes });
+    if (!doc) {
+      this.#projectDocCache = null;
+      return '';
+    }
+    this.#projectDocCache = {
+      workDir,
+      path: doc.path,
+      mtimeMs: doc.mtimeMs,
+      text: doc.text,
+    };
+    return doc.text;
   }
 
   /**
@@ -1037,7 +1122,7 @@ export class Engine {
    *   string-prompt shape (no regression for existing callers).
    * @yields {EngineEvent}
    */
-  async *query({ prompt, promptParts = null, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null } = {}) {
+  async *query({ prompt, promptParts = null, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement, workDir, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null } = {}) {
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       yield {
         type: 'error',
@@ -1096,7 +1181,7 @@ export class Engine {
     const runSignal = abortCtrl.signal;
 
     try {
-      yield* this.#runQuery({ prompt: effectivePrompt, promptParts, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement, userAlreadyPersisted, getCurrentTodos, setCurrentTodos });
+      yield* this.#runQuery({ prompt: effectivePrompt, promptParts, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement, workDir, userAlreadyPersisted, getCurrentTodos, setCurrentTodos });
     } finally {
       if (signal) {
         try { signal.removeEventListener('abort', onExternalAbort); } catch { /* ignore */ }
@@ -1114,7 +1199,7 @@ export class Engine {
    * in a try/finally without indenting the whole loop.
    * @private
    */
-  async *#runQuery({ prompt, promptParts = null, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null }) {
+  async *#runQuery({ prompt, promptParts = null, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement, workDir, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null }) {
 
     // ─── Pre-query: FTS5 Memory Recall + AMS snapshot ─────
     // Memory has a SINGLE render outlet now (DESIGN-PROMPT §3 ③):
@@ -1183,12 +1268,15 @@ export class Engine {
       envelope: inboundEnvelope || null,
     };
 
+    const projectDoc = this.#getProjectDocBlock(workDir);
+
     const systemPrompt = this.#buildSystemPrompt({
       prompt,
       memoryInjection,
       vpPersona,
       activeScope,
       groupAnnouncement,
+      projectDoc,
     });
 
     // ─── Compact summary as messages-array head (DESIGN-PROMPT §4.3) ─

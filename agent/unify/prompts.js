@@ -195,6 +195,12 @@ const PROMPTS = {
     // DESIGN-PROMPT §3 ④ — Active Scope header
     activeScopeHeader: '## active_scope',
     groupAnnouncementHeader: '[Group Announcement]',
+    // Project-doc (CLAUDE.md / AGENTS.md) header + one-liner intro. Both
+    // filenames are recognized: CLAUDE.md is this project's convention,
+    // AGENTS.md is the cross-tool convention (Codex / OpenAI Codex CLI).
+    projectDocHeader: '[Project Doc]',
+    projectDocIntro:
+      'The user keeps project-level instructions and context in `CLAUDE.md` or `AGENTS.md` at the group\'s working directory. Treat the content below as authoritative project context — coding conventions, task guidance, workflow rules, etc.',
     vpPersonaIntro: (name, role) =>
       `You ARE **${name}**${role ? ` (${role})` : ''}. Speak in the first person as ${name}; do not refer to yourself as "Yeaft" or as a generic AI assistant. The text below is your identity, expertise, and decision style.`,
   },
@@ -206,6 +212,10 @@ const PROMPTS = {
     // DESIGN-PROMPT §3 ④ — Active Scope header
     activeScopeHeader: '## active_scope',
     groupAnnouncementHeader: '[群组公告]',
+    // 项目文档块：CLAUDE.md / AGENTS.md（与 Codex 通用命名兼容）。
+    projectDocHeader: '[项目文档]',
+    projectDocIntro:
+      '用户把项目级的说明和上下文记录在群组工作目录下的 `CLAUDE.md` 或 `AGENTS.md` 中。下面的内容是权威的项目上下文 —— 编码规范、任务指导、工作流约定等，请遵循它来工作。',
     vpPersonaIntro: (name, role) =>
       `你就是 **${name}**${role ? `（${role}）` : ''}。请以 ${name} 的第一人称发言；不要自称 "Yeaft" 或泛指的 AI 助手。下面的文字是你的身份、专业方向与判断风格。`,
   },
@@ -271,6 +281,7 @@ export function normalizePromptLanguage(language) {
  *   activeScope?: object,
  *   vpPersona?: object,
  *   groupAnnouncement?: string,
+ *   projectDoc?: string,
  * }} params
  * @returns {string}
  */
@@ -283,6 +294,7 @@ export function buildSystemPrompt({
   activeScope,
   vpPersona,
   groupAnnouncement = '',
+  projectDoc = '',
 } = {}) {
   // Normalize app locales like `zh-CN` to prompt dictionary/template keys.
   const effectiveLang = normalizePromptLanguage(language);
@@ -308,6 +320,21 @@ export function buildSystemPrompt({
     } else {
       parts.push(lang.identity);
     }
+  }
+
+  // ─── 1.4  Project Doc (CLAUDE.md / AGENTS.md from group workDir) ───
+  // The group's working-directory may contain a project-level
+  // instructions file. The engine resolves "newest of CLAUDE.md vs
+  // AGENTS.md by mtime" and threads the resulting text through here.
+  // Empty/whitespace = no block emitted. Sits ABOVE the announcement
+  // because user-authored project files are higher signal than the
+  // group-level announcement (which is typically a short rule).
+  const docText = (typeof projectDoc === 'string') ? projectDoc.trim() : '';
+  if (docText) {
+    const docHeader = lang.projectDocHeader || '[Project Doc]';
+    const docIntro = lang.projectDocIntro || '';
+    const introLine = docIntro ? `${docIntro}\n\n` : '';
+    parts.push(`${docHeader}\n${introLine}${docText}`);
   }
 
   // ─── 1.5  Group Announcement (CLAUDE.md-style shared prefix) ───
