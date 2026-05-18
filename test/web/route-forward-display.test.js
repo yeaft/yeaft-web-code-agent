@@ -1,61 +1,49 @@
 import { describe, expect, it } from 'vitest';
 import {
-  formatRouteForwardHandoffLabel,
-  formatRouteForwardHandoffReason,
+  formatMentionList,
   formatRouteForwardToolLine,
 } from '../../web/utils/route-forward-display.js';
 
-const t = (key, params = {}) => {
-  const templates = {
-    'unify.handoff.targets': 'Forwarded to {mentions}',
-    'unify.handoff.chat': '{mentions}: {text}',
-    'unify.handoff.broadcast': 'Forwarded to {mentions} (broadcast)',
-    'unify.handoff.broadcastChat': '{mentions}: {text} (broadcast)',
-    'unify.handoff.reason': 'reason: {reason}',
-  };
-  return templates[key].replace(/\{(\w+)\}/g, (_, name) => params[name] || '');
-};
-
-describe('RouteForward group display formatting', () => {
-  it('renders a successful single-target handoff like a group-chat mention', () => {
-    const label = formatRouteForwardHandoffLabel({
-      toVpIds: ['linus'],
-      text: 'please implement and test this',
-      reason: 'PM request',
-    }, t);
-
-    expect(label).toBe('@linus: please implement and test this');
+describe('RouteForward display formatting', () => {
+  it('joins a list of vp ids as @-mentions with the default separator', () => {
+    expect(formatMentionList(['linus', 'steve'])).toBe('@linus, @steve');
   });
 
-  it('renders broadcast/all handoffs as broadcast chat instructions', () => {
-    const label = formatRouteForwardHandoffLabel({
-      toVpIds: ['steve', 'linus', 'martin'],
-      broadcast: true,
-      text: 'please weigh in',
-    }, t);
-
-    expect(label).toBe('@steve, @linus, @martin: please weigh in (broadcast)');
+  it('respects a custom separator', () => {
+    expect(formatMentionList(['linus', 'steve'], { separator: ' / ' }))
+      .toBe('@linus / @steve');
   });
 
-  it('keeps old fallback text when a successful handoff has no instruction text', () => {
-    expect(formatRouteForwardHandoffLabel({ toVpIds: ['linus'] }, t))
-      .toBe('Forwarded to @linus');
-    expect(formatRouteForwardHandoffLabel({ toVpIds: ['linus'], broadcast: true }, t))
-      .toBe('Forwarded to @linus (broadcast)');
+  it('handles non-array input by returning an empty string', () => {
+    expect(formatMentionList(null)).toBe('');
+    expect(formatMentionList(undefined)).toBe('');
   });
 
-  it('keeps the handoff reason as secondary audit text', () => {
-    expect(formatRouteForwardHandoffReason({ reason: 'needs code owner review' }, t))
-      .toBe('reason: needs code owner review');
-    expect(formatRouteForwardHandoffReason({}, t)).toBe('');
-  });
-
-  it('formats failed or non-handoff RouteForward tool rows as a readable fallback', () => {
+  it('formats a route_forward tool row as `Route @target: <text>`', () => {
     expect(formatRouteForwardToolLine({ to: 'martin', text: 'review PR #785' }))
       .toBe('Route @martin: review PR #785');
+  });
+
+  it('renders `Route @all: ...` when broadcasting', () => {
     expect(formatRouteForwardToolLine({ to: 'all', text: 'please weigh in' }))
       .toBe('Route @all: please weigh in');
-    expect(formatRouteForwardToolLine({ to: 'linus' }))
-      .toBe('Route @linus');
+  });
+
+  it('falls back to `Route @target` when no text is supplied', () => {
+    expect(formatRouteForwardToolLine({ to: 'linus' })).toBe('Route @linus');
+  });
+
+  it('uses `?` when the target is missing or non-string', () => {
+    expect(formatRouteForwardToolLine({})).toBe('Route @?');
+    expect(formatRouteForwardToolLine({ to: '' })).toBe('Route @?');
+  });
+
+  it('passes long text through the supplied truncate helper', () => {
+    const truncate = (value, max) => value.length > max ? value.slice(0, max) + '…' : value;
+    const out = formatRouteForwardToolLine(
+      { to: 'martin', text: 'a'.repeat(100) },
+      truncate,
+    );
+    expect(out).toBe('Route @martin: ' + 'a'.repeat(70) + '…');
   });
 });

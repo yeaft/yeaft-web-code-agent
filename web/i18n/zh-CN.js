@@ -1056,13 +1056,6 @@ export default {
   // Unify 群聊视图右侧人类头像的 aria 标签 / tooltip。
   'unify.user.youLabel': '我',
 
-  // ============ Unify route_forward 转交提示 (task-707) ============
-  'unify.handoff.targets': '已转交给 {mentions}',
-  'unify.handoff.chat': '{mentions}：{text}',
-  'unify.handoff.broadcast': '已转交给 {mentions}（广播）',
-  'unify.handoff.broadcastChat': '{mentions}：{text}（广播）',
-  'unify.handoff.reason': '原因：{reason}',
-
   // ============ Unify 群组 (task-334m) ============
   'unify.group.sidebarTitle': '群组',
   'unify.group.sidebarAria': '群组列表',

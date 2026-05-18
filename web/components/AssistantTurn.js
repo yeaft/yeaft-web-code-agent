@@ -2,10 +2,6 @@ import ToolLine from './ToolLine.js';
 import AskCard from './AskCard.js';
 import VpSpeakerHeader from './VpSpeakerHeader.js';
 import { getTodoDisplayState } from '../utils/todo-display-state.js';
-import {
-  formatRouteForwardHandoffLabel,
-  formatRouteForwardHandoffReason,
-} from '../utils/route-forward-display.js';
 
 export default {
   name: 'AssistantTurn',
@@ -111,19 +107,6 @@ export default {
         <AskCard :ask-msg="turn.askMsg" @submit="onAskSubmit" />
       </div>
 
-      <!-- 5b. task-707: route_forward hand-off pill(s). Rendered for
-           every successful route_forward in this turn. The targets list
-           comes from the structured group_handoff payload (no string
-           parsing) so localization is straightforward. Uses the same
-           visual language as system-lines / tool chips. -->
-      <div v-if="turn.handoffHints && turn.handoffHints.length > 0" class="turn-handoffs">
-        <div v-for="(hint, i) in turn.handoffHints" :key="i" class="handoff-pill">
-          <span class="handoff-arrow" aria-hidden="true">↪</span>
-          <span class="handoff-label">{{ formatHandoffLabel(hint) }}</span>
-          <span v-if="formatHandoffReason(hint)" class="handoff-reason">· {{ formatHandoffReason(hint) }}</span>
-        </div>
-      </div>
-
       <!-- 6. Copy full response button (visible on hover) -->
       <div class="turn-footer" v-if="turn.textContent && !turn.isStreaming">
         <span
@@ -175,11 +158,6 @@ export default {
     };
 
     const showToolActions = Vue.computed(() => {
-      // task-group-vp-block-split (v0.1.776): forward-source VPs render
-      // as body-less blocks (hand-off pill only). MessageList.turnGroups
-      // sets `renderHandoffOnly: true` on such turns; toolMsgs is left
-      // intact for the audit trail but we skip the tool render here.
-      if (props.turn.renderHandoffOnly) return false;
       return props.turn.toolMsgs.length > 0;
     });
 
@@ -418,15 +396,6 @@ export default {
       window.open(url, '_blank');
     };
 
-    // task-routeforward-chat-ui: render successful route_forward as a
-    // natural group-chat hand-off, not as a generic tool-call summary.
-    // The structured payload carries targets and the text the source VP
-    // sent to them, so the user sees "@linus: do X" directly in the
-    // originating VP's bubble. `reason` stays as secondary audit text.
-    const formatHandoffLabel = (hint) => formatRouteForwardHandoffLabel(hint, t);
-
-    const formatHandoffReason = (hint) => formatRouteForwardHandoffReason(hint, t);
-
     // H2.f.6: canFork / forkFromHere removed alongside the multi-thread engine.
 
     // task-334-ui-c: forward VP speaker click → parent (MessageList →
@@ -503,8 +472,6 @@ export default {
       getImageUrl,
       handleImageError,
       openImagePreview,
-      formatHandoffLabel,
-      formatHandoffReason,
       displayedTodos
     };
   }

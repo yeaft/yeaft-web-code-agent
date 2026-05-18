@@ -1510,49 +1510,6 @@ export const useChatStore = defineStore('chat', {
           break;
         }
 
-        // task-707: route_forward hand-off hint. The agent emits this when
-        // the originating VP's `route_forward` tool succeeds and the
-        // engine breaks the tool-loop with stopReason='tool_handoff'. We
-        // stamp the hint onto the originating VP's most-recent assistant
-        // message (matched by turnId+vpId) so the bubble can render
-        // "↪ 已转交给 @vp-b、@vp-c" beneath the message body. Target VPs
-        // already have `vp_typing_start` from the bridge's enqueueForVp,
-        // so their typing dots are already lit by the time this fires.
-        case 'group_handoff': {
-          const fromVpId = event.fromVpId;
-          const toVpIds = Array.isArray(event.toVpIds) ? event.toVpIds : [];
-          if (!fromVpId || toVpIds.length === 0) break;
-          const convId = msg.conversationId || this.unifyConversationId;
-          if (!convId) break;
-          const turnId = msg.turnId || null;
-          const list = this.messagesMap[convId];
-          if (!Array.isArray(list)) break;
-          // Find the most-recent assistant message belonging to this
-          // VP/turn — that's the bubble the hand-off hint belongs to.
-          for (let i = list.length - 1; i >= 0; i--) {
-            const m = list[i];
-            if (m.type !== 'assistant') continue;
-            if (turnId && m.turnId !== turnId) continue;
-            if (!turnId && m.vpId !== fromVpId) continue;
-            // Append (don't overwrite) so multiple hand-offs in a single
-            // turn — e.g. a VP that calls route_forward twice — all show.
-            const existing = Array.isArray(m.handoffHints) ? m.handoffHints : [];
-            m.handoffHints = [
-              ...existing,
-              {
-                kind: event.kind || 'route_forward',
-                toVpIds: toVpIds.slice(),
-                broadcast: Boolean(event.broadcast),
-                text: typeof event.text === 'string' ? event.text : '',
-                reason: event.reason || null,
-                ts: event.ts || Date.now(),
-              },
-            ];
-            break;
-          }
-          break;
-        }
-
         // ★ R6 G3: dream activity events. Forwarded from
         // agent/unify/web-bridge.js handleUnifyDreamTrigger.
         // unify_dream_status carries { vpId, status: 'running' } during the

@@ -44,7 +44,7 @@
  *   turn         — required; the turn object produced by MessageList.turnGroups.
  *                  Carries: speakerVpId, speakerTimestamp, isStreaming,
  *                  textContent, toolMsgs, todoMsg, askMsg, imageMsgs,
- *                  handoffHints, turnId, atMessageId, etc.
+ *                  turnId, atMessageId, etc.
  *   conversationId — optional; passed through to AssistantTurn.
  *   nowMs        — required when streaming; the page-shared live timestamp
  *                  used to compute the elapsed counter. Updated ~1Hz by
@@ -151,10 +151,10 @@ export default {
         </div>
 
         <!-- Expanded body: full AssistantTurn delegates rendering of
-             markdown text + tool history + todo + ask + images +
-             handoff pills. We pass 'hide-speaker-header' so AssistantTurn
-             suppresses its own VpSpeakerHeader — the avatar/name are
-             already in our right-column header. -->
+             markdown text + tool history + todo + ask + images. We
+             pass 'hide-speaker-header' so AssistantTurn suppresses its
+             own VpSpeakerHeader — the avatar/name are already in our
+             right-column header. -->
         <AssistantTurn
           v-if="expanded"
           class="vp-turn-block-body-expanded"
