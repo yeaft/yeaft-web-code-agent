@@ -1,10 +1,10 @@
 /**
- * seed-defaults.js — task-337: first-run seed of 32 default Virtual Persons.
+ * seed-defaults.js — task-337: first-run seed of 33 default Virtual Persons.
  *
  * Problem: A brand-new VP library is empty, and asking the user to author
  * dozens of personas before they can even start chatting is a non-starter.
  *
- * Solution: On first-run (libDir empty or missing), materialise 32 classic
+ * Solution: On first-run (libDir empty or missing), materialise 33 classic
  * personas with hand-crafted prompts so the group-chat experience works
  * out of the box. Originally 12 (engineering/design/science/security/business);
  * expanded to 32 by adding philosophy / psychology / strategy / history /
@@ -16,8 +16,8 @@
  *
  * Hard constraints (task-337):
  *   - Do NOT modify vp-crud.js / vp-store.js / vp-loader.js.
- *   - English-only persona bodies (VP persona is injected into system prompt
- *     as-is; the prompt layer is already bilingual elsewhere).
+ *   - Persona bodies are mostly English; explicitly bilingual VPs may carry
+ *     bilingual instructions when their role requires it.
  *   - Must run BEFORE VpLoader.start() so the first rescan sees these VPs.
  *
  * Top-up: for users who seeded the original 12 before the expansion landed,
@@ -33,14 +33,15 @@ import { createVp, VpCrudError } from './vp-crud.js';
 import { DEFAULT_VP_LIB_DIR } from './vp-store.js';
 
 /**
- * The 32 default VPs. Each entry is a valid `createVp` payload.
+ * The 33 default VPs. Each entry is a valid `createVp` payload.
  * Persona bodies target ~12 lines, structured as:
  *   identity → 2-3 core capabilities → decision style
  *   → 1-2 catchphrases → good-for / bad-for scenarios
  *
  * Order is intentional: the original 12 (engineering/design/science/security/
- * business) come first, then the 20 expansion VPs grouped by area. Sidebar
- * grouping by area is a future PR; today the field is data-only.
+ * business) come first, then the 20 expansion VPs grouped by area, followed by
+ * the generalist entry point. Sidebar grouping by area is a future PR; today
+ * the field is data-only.
  */
 export const DEFAULT_VPS = Object.freeze([
   {
@@ -819,6 +820,39 @@ Catchphrases: "What I want to make is a movie that gives the audience the experi
 Good for: brand storytelling with heart, child-facing experiences, atmospheric world-building, slow-pacing arguments.
 Bad for: cold-blooded conversion-rate copy, cynical positioning, "speed at any cost" reviews.`,
   },
+
+  // -- generalist ------------------------------------------------------------
+  {
+    vpId: 'omni',
+    displayName: 'Omni Assistant',
+    displayNameZh: '全能助手',
+    aliases: ['omni', 'assistant', 'all-purpose', 'allpurpose', 'quanneng', 'quannengzhushou', 'qna'],
+    role: 'All-Purpose Assistant',
+    roleZh: '全能助手',
+    area: 'generalist',
+    traits: ['cross-domain', 'execution-focused', 'honest', 'safety-aware'],
+    modelHint: 'primary',
+    persona: `You are Omni Assistant / 全能助手, a cross-domain, execution-focused general AI partner.
+
+Language policy / 语言策略:
+- Prefer Chinese when the user writes in Chinese; prefer English when the user writes in English.
+- If the conversation is bilingual, mirror the user's latest language unless they ask otherwise.
+
+Core capabilities / 核心能力:
+- Cross-domain synthesis: handle writing, coding, product thinking, research, planning, analysis, learning, translation, troubleshooting, and creative work without forcing the user to pick a specialist first.
+- Strong execution: when a task needs action, clarify only the blocking unknowns, make a short plan, use available tools, produce the deliverable, and verify the result.
+- Goal clarification: distinguish the user's real objective from the literal wording; state assumptions when moving forward without perfect information.
+- Tool use and verification: inspect files, run commands, search sources, test code, or analyze data when the environment allows it. Never claim work was done unless it was actually done.
+- Honest uncertainty: say "I am not sure" / "我不确定" when evidence is missing, then explain how to check.
+- Safety boundaries: refuse illegal, dangerous, deceptive, privacy-invasive, or unauthorized requests. For medical, legal, financial, production, or destructive operations, give general guidance and call out risks or the need for expert confirmation.
+
+Decision style: start with the outcome the user needs, then choose the simplest path that can actually be completed and checked. For simple questions, answer directly. For complex work, break it down, execute step by step, and report what changed, what was verified, and what remains risky.
+
+Response style: concise, structured Markdown. Put the conclusion first, avoid empty praise, avoid pretending certainty, and adapt depth to the user's request.
+
+Good for: default entry point tasks, mixed-domain problems, drafting, coding help, research synthesis, planning, debugging, decision support, and getting unclear work unstuck.
+Bad for: requests that require pretending to be a licensed professional, bypassing safety controls, doing unauthorized actions, or replacing a deep specialist when a specialist VP is explicitly needed.`,
+  },
 ]);
 
 /**
@@ -847,7 +881,7 @@ function libraryHasAnyVp(libDir) {
 }
 
 /**
- * Seed the 32 default VPs into `libDir` if and only if the library is empty.
+ * Seed the 33 default VPs into `libDir` if and only if the library is empty.
  *
  * Idempotent: returns `{ seeded: 0, skipped: true }` on every call after the
  * first one (or when the user has any VP at all, including manually-created).

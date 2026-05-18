@@ -2,8 +2,8 @@
  * seed-topup.test.js — contract for the existing-library top-up pass.
  *
  * Plan §4 acceptance:
- *   case 1: empty lib + no .seeded-versions.json → all 32 seeded, ledger has 32.
- *   case 2: lib has 12 legacy VPs + no ledger → 20 new added, 12 untouched on disk.
+ *   case 1: empty lib + no .seeded-versions.json → all defaults seeded, ledger has every id.
+ *   case 2: lib has 12 legacy VPs + no ledger → missing defaults added, 12 untouched on disk.
  *   case 3: ledger has entry but VP not on disk → user deleted, do NOT recreate.
  *   case 4: user-edited role.md → body byte-identical after top-up.
  *   case 5: area backfill — legacy role.md gains `area: ...` line, body unchanged.
@@ -65,6 +65,29 @@ describe('topUpDefaultVps — empty library', () => {
       expect(versions.seeded[vp.vpId]).toBeDefined();
     }
   });
+
+  it('includes the bilingual Omni Assistant generalist VP', () => {
+    const omni = DEFAULT_VPS.find(vp => vp.vpId === 'omni');
+    expect(omni).toBeDefined();
+    expect(omni.displayName).toBe('Omni Assistant');
+    expect(omni.displayNameZh).toBe('全能助手');
+    expect(omni.role).toBe('All-Purpose Assistant');
+    expect(omni.roleZh).toBe('全能助手');
+    expect(omni.area).toBe('generalist');
+    expect(omni.modelHint).toBe('primary');
+    expect(omni.traits).toEqual(expect.arrayContaining([
+      'cross-domain',
+      'execution-focused',
+      'honest',
+      'safety-aware',
+    ]));
+    expect(omni.persona).toContain('Language policy / 语言策略');
+    expect(omni.persona).toContain('Prefer Chinese when the user writes in Chinese');
+    expect(omni.persona).toContain('prefer English when the user writes in English');
+    expect(omni.persona).toContain('Tool use and verification');
+    expect(omni.persona).toContain('Honest uncertainty');
+    expect(omni.persona).toContain('Safety boundaries');
+  });
 });
 
 describe('topUpDefaultVps — legacy 12-VP library, no ledger yet', () => {
@@ -87,7 +110,7 @@ describe('topUpDefaultVps — legacy 12-VP library, no ledger yet', () => {
     const result = topUpDefaultVps(libDir);
     expect(result.errors).toEqual([]);
 
-    // 12 should be marked existing, 20 newly added.
+    // 12 should be marked existing; every other default should be newly added.
     expect(result.skippedExisting.length).toBe(12);
     expect(result.added.length).toBe(DEFAULT_VPS.length - 12);
 
@@ -98,7 +121,7 @@ describe('topUpDefaultVps — legacy 12-VP library, no ledger yet', () => {
       expect(after).toBe(legacyBodies.get(id));
     }
 
-    // Ledger now records all 32 ids: 12 as 'legacy', 20 with persona hash.
+    // Ledger now records every default id: 12 as 'legacy', the rest with persona hashes.
     const versions = readSeedVersions(libDir);
     for (const id of legacyIds) {
       expect(versions.seeded[id]).toBe('legacy');
@@ -126,7 +149,7 @@ describe('topUpDefaultVps — respects user deletes', () => {
     expect(result.respectedDeletes).toContain('kongzi');
     expect(existsSync(join(libDir, 'kongzi', 'role.md'))).toBe(false);
 
-    // The other 31 should have been seeded.
+    // Every other default should have been seeded.
     expect(result.added.length).toBe(DEFAULT_VPS.length - 1);
   });
 });

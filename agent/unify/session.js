@@ -259,7 +259,7 @@ export async function loadSession(options = {}) {
   //         any group already exists. Never throws; failure logs a warning
   //         so session load always succeeds.
   if (!config._readOnly) {
-    // task-337: seed the 32 default VPs (steve, linus, martin, kongzi, buffett, …)
+    // task-337: seed the default VPs (steve, linus, martin, kongzi, buffett, omni, …)
     // on a fresh install so the library is never empty. Idempotent — a no-op
     // once the user has any VP on disk. Must run BEFORE ensureDefaultGroupIfEmpty
     // so the default group's roster scan sees the seeded VPs. Must also run
@@ -271,7 +271,7 @@ export async function loadSession(options = {}) {
       console.warn(`[Yeaft] seedDefaultVps failed: ${err?.message || err}`);
     }
     // VP roster expansion: for existing installs that already had the original
-    // 12 VPs before the roster grew to 32, top up the missing ones AND backfill
+    // 12 VPs before the roster grew, top up the missing ones AND backfill
     // the `area` frontmatter line on legacy role.md files. NEVER overwrites
     // hand-edited VPs and NEVER recreates a VP the user explicitly deleted
     // (tracked via `.seeded-versions.json`). Best-effort — never throws.
