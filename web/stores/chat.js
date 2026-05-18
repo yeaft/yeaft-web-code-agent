@@ -391,13 +391,6 @@ export const useChatStore = defineStore('chat', {
     // (`unifyOpenVpTurnDetail`) was retired alongside VpQuickCard /
     // VpTurnDetailDrawer. Per-turn inspection now happens through the
     // VpTurnBlock collapse layer in the message list.
-
-    // R6 G4: transient toast/hint queue for off-roster @-mention attempts.
-    // ChatInput.flashInviteHint(vpId) pushes here; a toast component pops
-    // them after a few seconds. Per D4 the user — not the LLM — is the one
-    // who must invite the cross-group VP, so the hint nudges them rather
-    // than auto-inviting.
-    unifyMentionInviteHints: [],
   }),
 
   getters: {
@@ -2078,25 +2071,6 @@ export const useChatStore = defineStore('chat', {
           agentId: this.unifyAgentId,
         });
       }
-    },
-
-    // R6 G4: surface a non-blocking hint when the user @-mentions a VP that
-    // isn't on the active group's roster. We do NOT auto-invite (D4 — the
-    // user owns roster changes); we just queue a toast asking them to add
-    // the VP via the group editor. ChatInput's selectVpMention() calls this.
-    flashInviteHint(vpId) {
-      if (!vpId) return;
-      const id = 'imh_' + Date.now().toString(36) + '_' +
-        Math.random().toString(36).slice(2, 8);
-      this.unifyMentionInviteHints = [
-        ...this.unifyMentionInviteHints,
-        { id, vpId, at: Date.now() },
-      ];
-    },
-
-    dismissInviteHint(id) {
-      if (!id) return;
-      this.unifyMentionInviteHints = this.unifyMentionInviteHints.filter(h => h.id !== id);
     },
 
     // =====================

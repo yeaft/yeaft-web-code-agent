@@ -1194,10 +1194,6 @@ export default {
   'unify.vp.mention.placeholder': 'Search role by id or name\u2026',
   'unify.vp.mention.noMatch': 'No matching role',
   'unify.vp.mention.count': '{count} mentions',
-  // R6 G4 — off-roster @-mention surface (cross-group VP).
-  'unify.vp.mention.offRosterBadge': 'not in group',
-  'unify.vp.mention.offRosterHint': '@{vpId} is not in this group. Ask the user to invite them first.',
-  'unify.vp.mention.inviteToast': 'Cannot mention @{vpId} — not in this group. Add them via the group editor first.',
 
   'unify.feature.reject.missing_group_id': 'Message send failed: group not specified.',
   'unify.feature.reject.missing_feature_id': 'Message send failed: task context lost.',

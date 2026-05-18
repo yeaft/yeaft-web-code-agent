@@ -1,7 +1,7 @@
 import { DEFAULT_SLASH_COMMANDS, getCommandDescription, buildGroupedCommands } from '../utils/slash-commands.js';
 import { buildAutocompleteItems as buildExpertAutocomplete, getSelectionLabel, EXPERT_ROLES, MAX_SELECTIONS } from '../utils/expert-roles.js';
 import { parseMentions } from '../utils/parseMentions.js';
-import VpMentionAutocomplete, { filterVpMentions, applyMentionSelection } from './VpMentionAutocomplete.js';
+import VpMentionAutocomplete, { filterVpMentions, applyMentionSelection, selectMentionCandidates } from './VpMentionAutocomplete.js';
 
 export default {
   name: 'ChatInput',
@@ -226,46 +226,22 @@ export default {
       return text.slice(atIdx + 1);
     });
 
-    // task-fix (vp-mention-roster) + R6 G4: when an active group filter is
-    // set, IN-roster VPs are normal candidates; OFF-roster VPs are still
-    // surfaced but flagged `_offRoster: true` so the autocomplete can render
-    // them grayed with an "ask user to invite" hint (D4: never auto-invite,
-    // mirrors TaskCreate's not_in_roster behaviour). Falls back to the full
-    // library when no group filter is set (legacy single-agent path).
+    // Group-scoped `@` autocomplete: only roster VPs are mentionable.
+    // Active-group resolution mirrors UnifyPage's middle-column resolver
+    // (filter wins, then groupsStore.activeGroupId, then no group).
+    //
+    // TODO(arch): this `unifyActiveGroupFilter || activeGroupId` chain is
+    //   duplicated in UnifyPage.js (timeline + topbar) and MessageList.js
+    //   (announcement bar). Consolidate into a `groupsStore.activeGroupIdResolved`
+    //   getter and migrate all four call sites in a follow-up PR.
     const mentionVpCandidates = Vue.computed(() => {
-      const fullList = Array.isArray(vpStore.vpList) ? vpStore.vpList : [];
-      if (!groupsStore) return fullList;
-      const activeGroupId = store.unifyActiveGroupFilter;
-      if (!activeGroupId) return fullList;
-      const group = groupsStore.groups?.[activeGroupId];
-      const roster = group && Array.isArray(group.roster) ? group.roster : null;
-      if (!roster || roster.length === 0) return fullList;
-      const allowed = new Set(roster);
-      // R6 G4: keep both lists but tag off-roster. Order: in-roster first.
-      const inRoster = [];
-      const offRoster = [];
-      for (const vp of fullList) {
-        if (!vp || !vp.vpId) continue;
-        if (allowed.has(vp.vpId)) inRoster.push(vp);
-        else offRoster.push({ ...vp, _offRoster: true });
-      }
-      return [...inRoster, ...offRoster];
+      if (!groupsStore) return vpStore.vpList || [];
+      const activeGroupId = store.unifyActiveGroupFilter || groupsStore.activeGroupId || null;
+      return selectMentionCandidates(vpStore.vpList, groupsStore.groups?.[activeGroupId]);
     });
 
     const selectVpMention = (vp) => {
       if (!vp || !vp.vpId) return;
-      // R6 G4: off-roster VPs cannot be @-mentioned (D4 — never auto-invite).
-      // Surface a non-blocking hint and abort the insert; the parent UI
-      // mirrors this through unifyMentionInviteHint so a toast can render.
-      if (vp._offRoster) {
-        if (typeof store.flashInviteHint === 'function') {
-          store.flashInviteHint(vp.vpId);
-        }
-        showVpAutocomplete.value = false;
-        vpSelectedIndex.value = 0;
-        Vue.nextTick(() => inputRef.value?.focus());
-        return;
-      }
       inputText.value = applyMentionSelection(inputText.value, vp.vpId);
       showVpAutocomplete.value = false;
       vpSelectedIndex.value = 0;
