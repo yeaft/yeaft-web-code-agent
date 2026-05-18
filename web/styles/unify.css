@@ -3346,3 +3346,42 @@
   color: var(--text-muted, #888);
   text-align: right;
 }
+
+
+/* VP multi-thread summary inside a VP turn block. */
+.vp-thread-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  margin: 0 0 4px;
+  color: var(--text-secondary, #64748b);
+  font-size: 12px;
+}
+
+.vp-thread-summary-collapsed {
+  opacity: 0.9;
+}
+
+.vp-thread-title {
+  color: var(--text-primary, #0f172a);
+  font-weight: 600;
+}
+
+.vp-thread-meta {
+  color: var(--text-tertiary, #94a3b8);
+}
+
+
+.unify-vp-timeline-thread-count {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  margin-top: 2px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-muted, #f1f5f9);
+  color: var(--text-tertiary, #64748b);
+  font-size: 11px;
+  line-height: 16px;
+}

@@ -24,8 +24,9 @@ import { createFullRegistry } from './tools/index.js';
 import { Engine } from './engine.js';
 import { Compactor } from './compact/compactor.js';
 import { ToolUsageStats } from './stats/tool-usage.js';
-// H2.f.5: threads/, pipeline/dispatcher and input-queue retired. The
-// session now exposes a single Engine.
+// H2.f.5 removed the old user-facing thread pipeline/dispatcher. The base
+// session still exposes a single default Engine; PR #797 adds group VP thread
+// engines in web-bridge runtime state, keyed below the session layer.
 //
 // GC.1 (final): the session opens a SegmentIndex (SQLite FTS5 over
 // memory.md) and passes it to the Engine. Engine.#recallMemory routes
@@ -250,7 +251,7 @@ export async function loadSession(options = {}) {
 
   // ─── 5a. (removed 2026-05-13) Feature store init — Feature system retired.
 
-  // ─── 5b. (H2.f.5) thread store retired. Single conversation. ───
+  // ─── 5b. (H2.f.5) user-facing thread store retired. ───
 
   // ─── 5c. D1 first-boot seed (task-334m) ─────────────────
   //         When no groups exist on disk AND we're not in read-only mode,
@@ -445,8 +446,9 @@ export async function loadSession(options = {}) {
     }).catch(() => { /* best-effort catch-up */ });
   }
 
-  // H2.f.5: thread engine registry, input queue, and dispatcher retired.
-  // The session exposes a single `engine`; web-bridge calls engine.query()
+  // H2.f.5 retired the old session-level thread engine registry, input queue,
+  // and dispatcher. The session exposes a default `engine`; PR #797 keeps
+  // group VP thread engines in web-bridge runtime state and calls engine.query()
   // directly. Memory recall happens via memory/preflow.js (pre-turn) and
   // memory/adjust.js (post-turn).
 

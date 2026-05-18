@@ -31,9 +31,8 @@ import { readSummary as readScopeSummary } from './memory/store-v2.js';
 import { runAdjust } from './memory/adjust.js';
 import { isVpSeedBackfillStub } from './memory/seed-backfill.js';
 import { runStopHooks } from './stop-hooks.js';
-// H2.f.5: threads/ retired. Persisted messages still carry a `threadId`
-// field for back-compat with old conversation files; new writes always use
-// the constant 'main'.
+// Default thread marker for legacy / non-group flows. Group VP runtime may
+// pass a real threadId per (groupId, vpId, threadId) engine instance.
 const MAIN_THREAD_ID = 'main';
 import { pickEffort, parseEffortPrefix } from './effort.js';
 import { normalizeEffort, resolveContextWindow } from './models.js';
@@ -312,6 +311,12 @@ export class Engine {
   #pendingT2 = new Map();
   #reflectedTurns = new Set();
   #__queryCounter = 0;
+
+  /** @type {string} */
+  #currentThreadId = MAIN_THREAD_ID;
+
+  /** @type {Array<{content:string|Array, preview:string}>} */
+  #pendingUserMessages = [];
 
   /**
    * Per-group "adjust has run at least once this engine lifetime" flag.
@@ -950,9 +955,9 @@ export class Engine {
     if (!this.#conversationStore) return;
     if (this.#config._readOnly) return;
 
-    // H2.f.5: threads retired. Persisted messages still carry threadId
-    // for back-compat with old conversation files; new writes always use 'main'.
-    const threadId = MAIN_THREAD_ID;
+    // Persist with the active runtime thread. Legacy / non-group flows use
+    // MAIN_THREAD_ID; group VP flows pass their classified threadId.
+    const threadId = this.#currentThreadId || MAIN_THREAD_ID;
 
     // Persist user message — unless an upstream caller (e.g. the group
     // coordinator) has already done so for this turn.
@@ -1093,6 +1098,33 @@ export class Engine {
     }
   }
 
+  #drainPendingUserMessages(drainPendingUserMessages) {
+    const pending = [];
+    if (typeof drainPendingUserMessages === 'function') {
+      try {
+        const drained = drainPendingUserMessages();
+        if (Array.isArray(drained)) pending.push(...drained);
+      } catch {
+        // Best-effort hook; a bad bridge callback must not kill the engine loop.
+      }
+    }
+    if (this.#pendingUserMessages.length > 0) {
+      pending.push(...this.#pendingUserMessages.splice(0));
+    }
+    return pending
+      .map((item) => {
+        if (typeof item === 'string') return { content: item, preview: item };
+        if (!item || typeof item !== 'object') return null;
+        const content = item.content ?? item.text;
+        if (typeof content !== 'string' && !Array.isArray(content)) return null;
+        const preview = typeof item.preview === 'string'
+          ? item.preview
+          : (typeof content === 'string' ? content : '[content blocks]');
+        return { content, preview };
+      })
+      .filter(Boolean);
+  }
+
   /**
    * Run a query — the main loop.
    *
@@ -1122,7 +1154,7 @@ export class Engine {
    *   string-prompt shape (no regression for existing callers).
    * @yields {EngineEvent}
    */
-  async *query({ prompt, promptParts = null, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement, workDir, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null } = {}) {
+  async *query({ prompt, promptParts = null, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement, workDir, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null, threadId = MAIN_THREAD_ID, drainPendingUserMessages = null } = {}) {
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       yield {
         type: 'error',
@@ -1181,7 +1213,8 @@ export class Engine {
     const runSignal = abortCtrl.signal;
 
     try {
-      yield* this.#runQuery({ prompt: effectivePrompt, promptParts, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement, workDir, userAlreadyPersisted, getCurrentTodos, setCurrentTodos });
+      this.#currentThreadId = threadId || MAIN_THREAD_ID;
+      yield* this.#runQuery({ prompt: effectivePrompt, promptParts, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement, workDir, userAlreadyPersisted, getCurrentTodos, setCurrentTodos, threadId: this.#currentThreadId, drainPendingUserMessages });
     } finally {
       if (signal) {
         try { signal.removeEventListener('abort', onExternalAbort); } catch { /* ignore */ }
@@ -1190,6 +1223,8 @@ export class Engine {
       // and a subsequent query() starts with a clean slate.
       this.#currentAbortCtrl = null;
       this.#abortReason = null;
+      this.#currentThreadId = MAIN_THREAD_ID;
+      this.#pendingUserMessages.length = 0;
     }
   }
 
@@ -1199,7 +1234,7 @@ export class Engine {
    * in a try/finally without indenting the whole loop.
    * @private
    */
-  async *#runQuery({ prompt, promptParts = null, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement, workDir, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null }) {
+  async *#runQuery({ prompt, promptParts = null, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement, workDir, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null, threadId = MAIN_THREAD_ID, drainPendingUserMessages = null }) {
 
     // ─── Pre-query: FTS5 Memory Recall + AMS snapshot ─────
     // Memory has a SINGLE render outlet now (DESIGN-PROMPT §3 ③):
@@ -1223,7 +1258,7 @@ export class Engine {
       ? recallResult.entries.length
       : 0;
     if (recallEntryCount > 0) {
-      yield { type: 'recall', entryCount: recallEntryCount, cached: false };
+      yield { type: 'recall', entryCount: recallEntryCount, cached: false, threadId };
     }
 
     // Layer-A summaries — same scopes AMS Resident will surface, loaded
@@ -1374,6 +1409,7 @@ export class Engine {
     yield {
       type: 'turn_open',
       turnId: queryTurnId,
+      threadId,
       userPrompt: userQuestionPreview,
       vpId: queryVpId,
       groupId: groupId || null,
@@ -1424,8 +1460,8 @@ export class Engine {
       // the previous iteration) cleanly ends the loop instead of
       // launching another adapter stream.
       if (signal?.aborted) {
-        yield { type: 'aborted', reason: this.#abortReason || 'external', turnNumber };
-        yield { type: 'turn_end', turnNumber, stopReason: 'aborted' };
+        yield { type: 'aborted', reason: this.#abortReason || 'external', turnNumber, threadId };
+        yield { type: 'turn_end', turnNumber, stopReason: 'aborted', threadId };
         break;
       }
 
@@ -1459,7 +1495,21 @@ export class Engine {
       // tools/registry.js can never disagree.
       const currentContextWindow = resolveContextWindow(currentModel, this.#config);
 
-      yield { type: 'turn_start', turnNumber };
+      yield { type: 'turn_start', turnNumber, threadId };
+
+      const appendedBeforeStream = this.#drainPendingUserMessages(drainPendingUserMessages);
+      if (appendedBeforeStream.length > 0) {
+        for (const item of appendedBeforeStream) {
+          conversationMessages.push({ role: 'user', content: item.content });
+          yield {
+            type: 'user_append',
+            turnId: queryTurnId,
+            loopNumber: turnNumber,
+            threadId,
+            preview: String(item.preview || '').slice(0, 200),
+          };
+        }
+      }
 
       try {
         // task-327b: resolve effort per-turn so the long-loop auto-bump
@@ -1635,6 +1685,7 @@ export class Engine {
         yield {
           type: 'loop',
           turnId: queryTurnId,
+          threadId,
           loopNumber: turnNumber,
           model: currentModel,
           systemPrompt,
@@ -1664,8 +1715,8 @@ export class Engine {
           || err?.name === 'LLMAbortError'
           || (signal?.aborted && /abort/i.test(err?.message || ''));
         if (isAbort || signal?.aborted) {
-          yield { type: 'aborted', reason: this.#abortReason || 'external', turnNumber };
-          yield { type: 'turn_end', turnNumber, stopReason: 'aborted' };
+          yield { type: 'aborted', reason: this.#abortReason || 'external', turnNumber, threadId };
+          yield { type: 'turn_end', turnNumber, stopReason: 'aborted', threadId };
           break;
         }
 
@@ -1674,7 +1725,7 @@ export class Engine {
           const consolidated = await this.#maybeConsolidate();
           if (consolidated && consolidated.archivedCount > 0) {
             yield { type: 'consolidate', archivedCount: consolidated.archivedCount, extractedCount: consolidated.extractedCount };
-            yield { type: 'turn_end', turnNumber, stopReason: 'context_overflow_retry' };
+            yield { type: 'turn_end', turnNumber, stopReason: 'context_overflow_retry', threadId };
             continue; // retry with fewer messages
           }
         }
@@ -1685,7 +1736,7 @@ export class Engine {
             (err.name === 'LLMRateLimitError' || err.name === 'LLMServerError')) {
           yield { type: 'fallback', from: currentModel, to: fallbackModel, reason: err.message };
           currentModel = fallbackModel;
-          yield { type: 'turn_end', turnNumber, stopReason: 'fallback_retry' };
+          yield { type: 'turn_end', turnNumber, stopReason: 'fallback_retry', threadId };
           continue; // retry with fallback model
         }
 
@@ -1694,7 +1745,7 @@ export class Engine {
           error: err,
           retryable: err.name === 'LLMRateLimitError' || err.name === 'LLMServerError',
         };
-        yield { type: 'turn_end', turnNumber, stopReason: 'error' };
+        yield { type: 'turn_end', turnNumber, stopReason: 'error', threadId };
         break;
       }
 
@@ -1788,13 +1839,33 @@ export class Engine {
         continueTurns++;
         // Append a "Continue" user message
         conversationMessages.push({ role: 'user', content: 'Continue' });
-        yield { type: 'turn_end', turnNumber, stopReason: 'max_tokens_continue' };
+        yield { type: 'turn_end', turnNumber, stopReason: 'max_tokens_continue', threadId };
         continue; // loop back to call adapter again
+      }
+
+      // If new user input was appended while this loop was streaming and
+      // there are no tools to force another loop, splice it now and continue
+      // instead of ending the thread. This preserves token streaming and
+      // still only mutates messages at a clean loop boundary.
+      const appendedAfterAssistant = this.#drainPendingUserMessages(drainPendingUserMessages);
+      if (appendedAfterAssistant.length > 0) {
+        for (const item of appendedAfterAssistant) {
+          conversationMessages.push({ role: 'user', content: item.content });
+          yield {
+            type: 'user_append',
+            turnId: queryTurnId,
+            loopNumber: turnNumber,
+            threadId,
+            preview: String(item.preview || '').slice(0, 200),
+          };
+        }
+        yield { type: 'turn_end', turnNumber, stopReason: 'user_append_continue', threadId };
+        continue;
       }
 
       // If no tool calls, we're done
       if (stopReason !== 'tool_use' || toolCalls.length === 0) {
-        yield { type: 'turn_end', turnNumber, stopReason };
+        yield { type: 'turn_end', turnNumber, stopReason, threadId };
 
         // ─── Post-query: StopHooks or Legacy ─────────────
         if (this.#config._readOnly) {
@@ -1825,6 +1896,7 @@ export class Engine {
             // Bug 6: tag persisted messages with the originating group so
             // history replay can re-stamp them on reload.
             groupId,
+            threadId,
             // Multi-VP fan-out (history-dedup): skip the user-row append
             // in stop-hooks when the orchestrator already wrote it once
             // for this turn. The hook still persists assistant + tool
@@ -1859,6 +1931,7 @@ export class Engine {
             yield {
               type: 'memory_adjust',
               turnId: queryTurnId,
+              threadId,
               groupKey: amsContext.groupKey,
               added: adjustResult.added,
               evicted: adjustResult.evicted,
@@ -2051,6 +2124,7 @@ export class Engine {
         yield {
           type: 'tool_exec',
           turnId: queryTurnId,
+          threadId,
           loopNumber: turnNumber,
           callId: tc.id,
           name: tc.name,
@@ -2135,6 +2209,7 @@ export class Engine {
           turnNumber,
           stopReason: 'tool_handoff',
           detail: handoffDetail,
+          threadId,
         };
         break;
       }
@@ -2178,6 +2253,7 @@ export class Engine {
           yield {
             type: 'reflection',
             turnId: queryTurnId,
+            threadId,
             loopNumber: turnNumber,
             trigger: 't1',
             status: 'pending',
@@ -2212,6 +2288,7 @@ export class Engine {
           yield {
             type: 'reflection',
             turnId: queryTurnId,
+            threadId,
             loopNumber: turnNumber,
             trigger: 't1',
             // PR-L bug fix: keep the same loopRange as the `pending` event
@@ -2229,6 +2306,7 @@ export class Engine {
           yield {
             type: 'reflection',
             turnId: queryTurnId,
+            threadId,
             loopNumber: turnNumber,
             trigger: 't1',
             status: 'error',
@@ -2254,12 +2332,12 @@ export class Engine {
       // the typed `aborted` event + a final turn_end with stopReason
       // 'aborted' instead of looping back to a new adapter call.
       if (abortedDuringTools || signal?.aborted) {
-        yield { type: 'aborted', reason: this.#abortReason || 'external', turnNumber };
-        yield { type: 'turn_end', turnNumber, stopReason: 'aborted' };
+        yield { type: 'aborted', reason: this.#abortReason || 'external', turnNumber, threadId };
+        yield { type: 'turn_end', turnNumber, stopReason: 'aborted', threadId };
         break;
       }
 
-      yield { type: 'turn_end', turnNumber, stopReason: 'tool_use' };
+      yield { type: 'turn_end', turnNumber, stopReason: 'tool_use', threadId };
 
       // task-327b: count this as a tool-loop turn. Next iteration's
       // pickEffort() will see the bumped counter and upgrade to 'max'
@@ -2276,6 +2354,7 @@ export class Engine {
     yield {
       type: 'turn_close',
       turnId: queryTurnId,
+      threadId,
       totalMs: Date.now() - queryStartedAt,
       totalTokens: cumulativeInputTokens + cumulativeOutputTokens,
       loopCount: turnNumber,
@@ -2399,7 +2478,22 @@ export class Engine {
    * @returns {string}
    */
   get currentThreadId() {
-    return MAIN_THREAD_ID;
+    return this.#currentThreadId || MAIN_THREAD_ID;
+  }
+
+  /**
+   * Append a user message into the currently running query. The loop consumes
+   * it only at adapter boundaries, never mid-token and never between an
+   * assistant tool_use and its paired tool_result messages.
+   * @param {string|Array} content
+   * @returns {boolean}
+   */
+  appendUserMessage(content) {
+    if (typeof content !== 'string' && !Array.isArray(content)) return false;
+    if (typeof content === 'string' && !content.trim()) return false;
+    const preview = typeof content === 'string' ? content : '[content blocks]';
+    this.#pendingUserMessages.push({ content, preview });
+    return true;
   }
 
   /** @returns {string|null} */
