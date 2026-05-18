@@ -45,6 +45,7 @@ export default {
       // event timeline. False = collapsed summary line only; true = show
       // full per-event ring buffer below.
       dreamExpanded: false,
+      activeTab: 'requests', // 'toolStats' | 'requests'
     };
   },
   watch: {
@@ -92,16 +93,6 @@ export default {
     turns() {
       return (this.store && this.store.unifyDebugTurnsForActiveGroup) || [];
     },
-    detailMode() {
-      return !!(this.store && this.store.unifyDebugDetailMode);
-    },
-    detailLabel() {
-      // i18n: keep parity with the prior chip behaviour.
-      const t = this.$t || ((k) => k);
-      return this.detailMode
-        ? (t('unify.debugDetail') || 'Detail')
-        : (t('unify.debugConcise') || 'Lite');
-    },
     // feat-6af5f9f1 PR C: toolbar bindings.
     searchQuery: {
       get() { return this.store ? (this.store.unifyDebugSearch || '') : ''; },
@@ -131,6 +122,46 @@ export default {
       // Only render the "M of N" hint when filters/search are active and
       // hiding something — otherwise it's just visual noise.
       return this.turnTotal > this.turns.length;
+    },
+    toolStats() {
+      return this.store?.unifyToolStats || null;
+    },
+    toolStatsLoading() {
+      return !!this.store?.unifyToolStatsLoading;
+    },
+    rankedToolRows() {
+      const snap = this.toolStats?.snapshot || {};
+      const rows = Object.entries(snap).map(([name, rec]) => ({ name, ...rec }));
+      const seen = new Set(rows.map(r => r.name));
+      const registered = Array.isArray(this.toolStats?.registered) ? this.toolStats.registered : [];
+      for (const name of registered) {
+        if (typeof name !== 'string' || !name || seen.has(name)) continue;
+        rows.push({
+          name,
+          callCount: 0,
+          errorCount: 0,
+          errorRate: 0,
+          avgMs: 0,
+          p50Ms: 0,
+          p95Ms: 0,
+          lastCalledAt: null,
+          lastError: null,
+        });
+        seen.add(name);
+      }
+      rows.sort((a, b) => {
+        const diff = (b.callCount || 0) - (a.callCount || 0);
+        return diff !== 0 ? diff : a.name.localeCompare(b.name);
+      });
+      return rows;
+    },
+    unusedToolRows() {
+      return Array.isArray(this.toolStats?.unused) ? this.toolStats.unused : [];
+    },
+    toolStatsFetchedAtLabel() {
+      const t = this.toolStats?.fetchedAt;
+      if (!t) return '';
+      try { return new Date(t).toLocaleTimeString(); } catch { return ''; }
     },
     // v0.1.755: latest dream pass for the active group (auto + manual share
     // this surface; user only cares about the most recent run).
@@ -248,12 +279,6 @@ export default {
     isSectionExpanded(turnId, section) {
       return !!this.expandedSections[`${turnId}#${section}`];
     },
-    setDetailMode(on) {
-      if (this.store && typeof this.store.setUnifyDebugDetailMode === 'function') {
-        this.store.setUnifyDebugDetailMode(!!on);
-      }
-    },
-
     // ─── Formatting helpers ─────────────────────────────────────
     formatMs(ms) {
       if (ms == null) return '-';
@@ -289,6 +314,60 @@ export default {
     loopMetaSummary(loop) {
       const tools = (loop.toolCalls || []).length;
       return tools > 0 ? `tools×${tools}` : 'end_turn';
+    },
+    assistantResponseForLoop(loop) {
+      if (!loop) return '';
+      if (loop.response) return typeof loop.response === 'string' ? loop.response : JSON.stringify(loop.response, null, 2);
+      const messages = Array.isArray(loop.messages) ? loop.messages : [];
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i];
+        if (!m || m.role !== 'assistant') continue;
+        if (typeof m.content === 'string') return m.content;
+        if (Array.isArray(m.content)) {
+          const parts = m.content
+            .map(part => {
+              if (!part) return '';
+              if (typeof part === 'string') return part;
+              if (typeof part.text === 'string') return part.text;
+              return '';
+            })
+            .filter(Boolean);
+          if (parts.length > 0) return parts.join('\n');
+        }
+        if (m.content != null) return JSON.stringify(m.content, null, 2);
+      }
+      return '';
+    },
+    showAssistantResponse(turnId, loopNumber) {
+      const loopKey = `${turnId}#${loopNumber}`;
+      const sectionKey = `${turnId}#asst-${loopNumber}`;
+      this.expandedLoops = { ...this.expandedLoops, [loopKey]: true };
+      this.expandedSections = { ...this.expandedSections, [sectionKey]: true };
+    },
+    setActiveTab(tab) {
+      this.activeTab = tab === 'toolStats' ? 'toolStats' : 'requests';
+      if (this.activeTab === 'toolStats' && !this.toolStats && !this.toolStatsLoading) {
+        this.refreshToolStats();
+      }
+    },
+    refreshToolStats() {
+      if (this.store && typeof this.store.fetchUnifyToolStats === 'function') {
+        this.store.fetchUnifyToolStats();
+      }
+    },
+    formatPct(rate) {
+      if (!Number.isFinite(rate) || rate === 0) return '0%';
+      return `${(rate * 100).toFixed(1)}%`;
+    },
+    formatLastCalled(iso) {
+      if (typeof iso !== 'string' || !iso) return 'never';
+      const t = Date.parse(iso);
+      if (Number.isNaN(t)) return iso;
+      const ageMs = Date.now() - t;
+      if (ageMs < 60_000) return 'just now';
+      if (ageMs < 3_600_000) return `${Math.floor(ageMs / 60_000)}m ago`;
+      if (ageMs < 86_400_000) return `${Math.floor(ageMs / 3_600_000)}h ago`;
+      return `${Math.floor(ageMs / 86_400_000)}d ago`;
     },
 
     // ─── Copy helpers ──────────────────────────────────────────
@@ -386,11 +465,12 @@ export default {
             lines.push(`- ${t.name}  ${t.isError ? 'ERROR' : 'ok'}  ${this.formatMs(t.durationMs)}`);
           }
         }
-        if (loop.response) {
+        const assistantText = this.assistantResponseForLoop(loop);
+        if (assistantText) {
           lines.push('');
           lines.push('### Assistant text');
           lines.push('```');
-          lines.push(loop.response);
+          lines.push(assistantText);
           lines.push('```');
         }
         lines.push('');
@@ -402,44 +482,117 @@ export default {
     <div class="unify-debug-panel">
       <div class="unify-debug-header">
         <span class="unify-debug-title">{{ $t('unify.debug') }}</span>
-        <span class="unify-debug-count" v-if="turns.length > 0">
-          <template v-if="showingMatchedHint">{{ turns.length }} / {{ turnTotal }}</template>
-          <template v-else>{{ turns.length }} {{ $t('unify.debugTurns') }}</template>
-        </span>
-        <button
-          class="unify-debug-toggle-chip"
-          :class="{ active: detailMode }"
-          @click="setDetailMode(!detailMode)"
-          :title="detailLabel"
-        >{{ detailLabel }}</button>
         <span v-if="copiedFlash" class="unify-debug-copied-flash">{{ copiedFlash }}</span>
       </div>
 
-      <!-- feat-6af5f9f1 PR C: search + independent group filter toolbar -->
-      <div class="unify-debug-toolbar">
-        <input
-          type="search"
-          class="unify-debug-search"
-          v-model="searchQuery"
-          :placeholder="$t('unify.debugSearchPlaceholder') || 'Search turns, tools, prompts…'"
-        />
-        <select
-          v-if="availableGroups.length > 1"
-          class="unify-debug-group-select"
-          v-model="groupFilter"
+      <div class="unify-debug-tabs" role="tablist" :aria-label="$t('unify.debug')">
+        <button
+          type="button"
+          class="unify-debug-tab"
+          :class="{ active: activeTab === 'toolStats' }"
+          role="tab"
+          :aria-selected="activeTab === 'toolStats'"
+          @click="setActiveTab('toolStats')"
         >
-          <option value="">{{ $t('unify.debugGroupFollowMain') || 'Follow main pane' }}</option>
-          <option value="__all__">{{ $t('unify.debugGroupAll') || 'All groups' }}</option>
-          <option v-for="g in availableGroups" :key="g" :value="g">{{ g }}</option>
-        </select>
+          {{ $t('unify.debugTabToolStats') }}
+        </button>
+        <button
+          type="button"
+          class="unify-debug-tab"
+          :class="{ active: activeTab === 'requests' }"
+          role="tab"
+          :aria-selected="activeTab === 'requests'"
+          @click="setActiveTab('requests')"
+        >
+          {{ $t('unify.debugTabRequestLog') }}
+          <span class="unify-debug-tab-count" v-if="turns.length > 0">
+            <template v-if="showingMatchedHint">{{ turns.length }} / {{ turnTotal }}</template>
+            <template v-else>{{ turns.length }}</template>
+          </span>
+        </button>
       </div>
 
-      <!-- v0.1.755 + PR feat-dream-debug-panel-full: Dream pass status
-           for the focused group. The header row shows the most recent
-           pass (auto or manual); clicking it expands a timeline of every
-           dream_progress event observed for this scope so users can see
-           per-phase progress + the final result with errors. -->
-      <div class="unify-debug-dream-row" v-if="dreamLatest || dreamEvents.length > 0" @click="toggleDream">
+      <div v-if="activeTab === 'toolStats'" class="unify-debug-tool-stats" role="tabpanel">
+        <div class="unify-debug-tool-stats-header">
+          <div>
+            <div class="unify-debug-tool-stats-title">{{ $t('unify.toolStats.title') }}</div>
+            <div v-if="toolStatsFetchedAtLabel" class="unify-debug-tool-stats-meta">
+              {{ $t('unify.toolStats.fetchedAt') }} {{ toolStatsFetchedAtLabel }}
+            </div>
+          </div>
+          <button class="unify-debug-show-btn" @click="refreshToolStats" :disabled="toolStatsLoading">
+            {{ $t('unify.toolStats.refresh') }}
+          </button>
+        </div>
+        <div v-if="toolStats && toolStats.error" class="tool-stats-error">{{ toolStats.error }}</div>
+        <div v-else-if="toolStatsLoading && !toolStats" class="tool-stats-loading">{{ $t('unify.toolStats.loading') }}</div>
+        <div v-else-if="!toolStats" class="tool-stats-empty">{{ $t('unify.toolStats.notLoaded') }}</div>
+        <template v-else>
+          <div v-if="toolStats.notice" class="tool-stats-banner">{{ toolStats.notice }}</div>
+          <div class="unify-debug-tool-stats-table-wrap">
+            <table class="tool-stats-table">
+              <thead>
+                <tr>
+                  <th>{{ $t('unify.toolStats.col.name') }}</th>
+                  <th class="num">{{ $t('unify.toolStats.col.calls') }}</th>
+                  <th class="num">{{ $t('unify.toolStats.col.errors') }}</th>
+                  <th class="num">{{ $t('unify.toolStats.col.errRate') }}</th>
+                  <th class="num">{{ $t('unify.toolStats.col.p50') }}</th>
+                  <th class="num">{{ $t('unify.toolStats.col.p95') }}</th>
+                  <th class="num">{{ $t('unify.toolStats.col.avg') }}</th>
+                  <th>{{ $t('unify.toolStats.col.last') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-if="rankedToolRows.length === 0">
+                  <td colspan="8" class="tool-stats-empty-row">{{ $t('unify.toolStats.empty') }}</td>
+                </tr>
+                <tr v-for="row in rankedToolRows" :key="row.name">
+                  <td class="tool-stats-name">{{ row.name }}</td>
+                  <td class="num">{{ row.callCount }}</td>
+                  <td class="num">{{ row.errorCount }}</td>
+                  <td class="num">{{ formatPct(row.errorRate) }}</td>
+                  <td class="num">{{ formatMs(row.p50Ms) }}</td>
+                  <td class="num">{{ formatMs(row.p95Ms) }}</td>
+                  <td class="num">{{ formatMs(row.avgMs) }}</td>
+                  <td class="tool-stats-last">{{ formatLastCalled(row.lastCalledAt) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="unify-debug-unused-tools" v-if="unusedToolRows.length > 0">
+            <div class="unify-debug-section-title">{{ $t('unify.toolStats.tabUnused') }}</div>
+            <span v-for="name in unusedToolRows" :key="name" class="unify-debug-unused-tool">{{ name }}</span>
+          </div>
+        </template>
+      </div>
+
+      <template v-else>
+        <!-- feat-6af5f9f1 PR C: search + independent group filter toolbar -->
+        <div class="unify-debug-toolbar">
+          <input
+            type="search"
+            class="unify-debug-search"
+            v-model="searchQuery"
+            :placeholder="$t('unify.debugSearchPlaceholder')"
+          />
+          <select
+            v-if="availableGroups.length > 1"
+            class="unify-debug-group-select"
+            v-model="groupFilter"
+          >
+            <option value="">{{ $t('unify.debugGroupFollowMain') }}</option>
+            <option value="__all__">{{ $t('unify.debugGroupAll') }}</option>
+            <option v-for="g in availableGroups" :key="g" :value="g">{{ g }}</option>
+          </select>
+        </div>
+
+        <!-- v0.1.755 + PR feat-dream-debug-panel-full: Dream pass status
+             for the focused group. The header row shows the most recent
+             pass (auto or manual); clicking it expands a timeline of every
+             dream_progress event observed for this scope so users can see
+             per-phase progress + the final result with errors. -->
+        <div class="unify-debug-dream-row" v-if="dreamLatest || dreamEvents.length > 0" @click="toggleDream">
         <svg
           class="unify-debug-dream-chevron"
           :class="{ expanded: dreamExpanded }"
@@ -503,8 +656,8 @@ export default {
               <pre v-if="isSectionExpanded(turn.turnId, 'sys')" class="unify-debug-pre">{{ turn.loops[0].systemPrompt }}</pre>
             </div>
 
-            <!-- Turn-level: Memory loaded (detail mode only — feat-6af5f9f1 PR C) -->
-            <div class="unify-debug-section" v-if="detailMode && turn.memoryLoaded && turn.memoryLoaded.length > 0">
+            <!-- Turn-level: Memory loaded -->
+            <div class="unify-debug-section" v-if="turn.memoryLoaded && turn.memoryLoaded.length > 0">
               <div class="unify-debug-section-row">
                 <span class="unify-debug-section-title">Memory loaded</span>
                 <span class="unify-debug-section-meta">{{ turn.memoryLoaded.length }}</span>
@@ -521,8 +674,8 @@ export default {
               </ul>
             </div>
 
-            <!-- Turn-level: Memory adjust (post-turn AMS edits, including evictions; detail mode only) -->
-            <div class="unify-debug-section" v-if="detailMode && turn.memoryAdjust">
+            <!-- Turn-level: Memory adjust (post-turn AMS edits, including evictions) -->
+            <div class="unify-debug-section" v-if="turn.memoryAdjust">
               <div class="unify-debug-section-row">
                 <span class="unify-debug-section-title">Memory adjust</span>
                 <span class="unify-debug-section-meta">
@@ -549,6 +702,11 @@ export default {
                   <span>{{ formatMs(loop.latencyMs) }}</span>
                   <span class="unify-debug-loop-meta">{{ loopMetaSummary(loop) }}</span>
                 </span>
+                <button
+                  v-if="assistantResponseForLoop(loop)"
+                  class="unify-debug-show-btn small"
+                  @click.stop="showAssistantResponse(turn.turnId, loop.loopNumber)"
+                >{{ $t('unify.debugViewAssistantResponse') }}</button>
               </div>
 
               <div class="unify-debug-loop-body" v-if="isLoopExpanded(turn.turnId, loop.loopNumber)">
@@ -577,20 +735,20 @@ export default {
                 </div>
 
                 <!-- Assistant text -->
-                <div class="unify-debug-section" v-if="loop.response">
+                <div class="unify-debug-section" v-if="assistantResponseForLoop(loop)">
                   <div class="unify-debug-section-row">
-                    <span class="unify-debug-section-title">Assistant text</span>
-                    <span class="unify-debug-section-meta">{{ loop.response.length }} chars</span>
-                    <button class="unify-debug-copy-btn" @click="copyText(loop.response, 'assistant text')">copy</button>
+                    <span class="unify-debug-section-title">{{ $t('unify.debugAssistantResponse') }}</span>
+                    <span class="unify-debug-section-meta">{{ assistantResponseForLoop(loop).length }} chars</span>
+                    <button class="unify-debug-copy-btn" @click="copyText(assistantResponseForLoop(loop), 'assistant text')">copy</button>
                     <button class="unify-debug-show-btn" @click="toggleSection(turn.turnId, 'asst-' + loop.loopNumber)">
                       {{ isSectionExpanded(turn.turnId, 'asst-' + loop.loopNumber) ? 'hide' : 'show' }}
                     </button>
                   </div>
-                  <pre v-if="isSectionExpanded(turn.turnId, 'asst-' + loop.loopNumber)" class="unify-debug-pre">{{ loop.response }}</pre>
+                  <pre v-if="isSectionExpanded(turn.turnId, 'asst-' + loop.loopNumber)" class="unify-debug-pre">{{ assistantResponseForLoop(loop) }}</pre>
                 </div>
 
                 <!-- Raw API request / response — copy-only, never inlined -->
-                <div class="unify-debug-section unify-debug-raw-row" v-if="detailMode && (loop.rawRequest || loop.rawResponse)">
+                <div class="unify-debug-section unify-debug-raw-row" v-if="loop.rawRequest || loop.rawResponse">
                   <span class="unify-debug-section-title">Raw</span>
                   <button v-if="loop.rawRequest" class="unify-debug-copy-btn" @click="copyText(loop.rawRequest, 'raw request')">copy req</button>
                   <button v-if="loop.rawResponse" class="unify-debug-copy-btn" @click="copyText(loop.rawResponse, 'raw response')">copy res</button>
@@ -605,9 +763,10 @@ export default {
         </div>
       </div>
 
-      <div class="unify-debug-empty" v-else>
-        {{ $t('unify.noDebugData') }}
-      </div>
+        <div class="unify-debug-empty" v-else>
+          {{ $t('unify.noDebugData') }}
+        </div>
+      </template>
     </div>
   `,
 };

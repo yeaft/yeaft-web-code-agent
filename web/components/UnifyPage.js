@@ -7,7 +7,6 @@ import GroupInviteModal from './GroupInviteModal.js';
 import GroupSettingsModal from './GroupSettingsModal.js';
 import WorkbenchPanel from './WorkbenchPanel.js';
 import UnifyDebugPanel from './UnifyDebugPanel.js';
-import UnifyToolStatsDrawer from './UnifyToolStatsDrawer.js';
 import VpTimelinePane from './VpTimelinePane.js';
 import { parseMentions } from '../utils/parseMentions.js';
 import { buildTimelineRows, selectGroupRosterVpList } from '../stores/helpers/vp-timeline.js';
@@ -19,7 +18,7 @@ import {
 
 export default {
   name: 'UnifyPage',
-  components: { ChatInput, MessageList, UnifySettings, UnifySidebar, VpDetailView, GroupInviteModal, GroupSettingsModal, WorkbenchPanel, UnifyDebugPanel, UnifyToolStatsDrawer, VpTimelinePane },
+  components: { ChatInput, MessageList, UnifySettings, UnifySidebar, VpDetailView, GroupInviteModal, GroupSettingsModal, WorkbenchPanel, UnifyDebugPanel, VpTimelinePane },
   template: `
     <div class="unify-page">
       <!-- Mobile sidebar overlay -->
@@ -309,22 +308,8 @@ export default {
         >
           <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
         </button>
-        <!-- 2026-05-13: open the Tool Usage Stats drawer. Lives here so
-             it's reachable only from the debug surface (matches the
-             "developer panel" framing). -->
-        <button
-          class="tool-stats-open-button"
-          @click="toolStatsOpen = true"
-          :title="$t('unify.toolStats.buttonLabel')"
-        >
-          📊 {{ $t('unify.toolStats.buttonLabel') }}
-        </button>
         <UnifyDebugPanel />
       </aside>
-
-      <!-- 2026-05-13: Tool Usage Stats drawer (modal). Controlled by
-           the chip inside the debug panel header. -->
-      <UnifyToolStatsDrawer v-model="toolStatsOpen" />
 
       <!-- task-343: VP library is now an in-Settings tab (initial-tab='vp'). -->
 
@@ -367,11 +352,6 @@ export default {
     const modelDropdownOpen = Vue.ref(false);
     const showSettings = Vue.ref(false);
     const settingsInitialTab = Vue.ref('llm'); // task-343: 'llm' | 'vp'
-    // 2026-05-13: tool-stats drawer open state. Toggled by the chip in
-    // the debug detail header, populated lazily on first open by the
-    // drawer's own watcher.
-    const toolStatsOpen = Vue.ref(false);
-
     // feat-vp-list-ui-polish: template ref to the embedded ChatInput so we
     // can call its imperative `appendMention(vpId)` when the VP list pane
     // emits a mention request. Keeps the Unify-specific @-syntax out of
@@ -1041,7 +1021,6 @@ export default {
       modelDropdownOpen,
       showSettings,
       settingsInitialTab,
-      toolStatsOpen,
       chatInputRef,
       openSettings,
       isMobile,

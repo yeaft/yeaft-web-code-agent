@@ -301,13 +301,6 @@ export const useChatStore = defineStore('chat', {
     // Populated by `sub_agent_event` handler — fed by Engine
     // sub-agent event sink → web-bridge.js → unify_output.
     unifySubAgentCards: {},
-    // task-344: global toggle for detail (full raw API payload) vs concise
-    // debug view. Default concise. Persisted via localStorage.
-    unifyDebugDetailMode: (() => {
-      try { return localStorage.getItem('unifyDebugDetailMode') === '1'; }
-      catch { return false; }
-    })(),
-
     // ★ task-341: Sidebar V2 is now the only sidebar. Flag kept as a
     // constant `true` for backward-compat with any lingering reads.
     // Legacy <aside class="unify-sidebar"> deleted in UnifyPage.
@@ -1950,14 +1943,6 @@ export const useChatStore = defineStore('chat', {
         agentId: this.unifyAgentId,
       });
     },
-    // task-344: toggle the Unify debug panel "detail" mode (shows full raw
-     // API request + response payload). Persisted to localStorage.
-    setUnifyDebugDetailMode(enabled) {
-      this.unifyDebugDetailMode = !!enabled;
-      try { localStorage.setItem('unifyDebugDetailMode', enabled ? '1' : '0'); }
-      catch { /* ignore */ }
-    },
-
     // feat-6af5f9f1 PR C: search query for the debug panel toolbar.
     // Substring filter (case-insensitive) applied to the per-turn fields
     // listed in turnMatchesSearch(). Not persisted — search is a transient
