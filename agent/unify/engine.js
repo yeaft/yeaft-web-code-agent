@@ -21,7 +21,7 @@ import { randomUUID } from 'crypto';
 import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
 import { LLMContextError, LLMAbortError } from './llm/adapter.js';
 import { runMemoryPreflow, buildRelevantScopes } from './groups/pre-flow.js';
-import { readProjectDoc, DEFAULT_PROJECT_DOC_MAX_BYTES } from './groups/project-doc.js';
+import { readProjectDoc, pickProjectDocFile, DEFAULT_PROJECT_DOC_MAX_BYTES } from './groups/project-doc.js';
 import { shouldConsolidate, partitionMessages } from './memory/consolidate.js';
 import { runCompact as runCompactOrchestrator } from './compact/orchestrator.js';
 import { evaluateCompactTriggers } from './compact/triggers.js';
@@ -326,13 +326,13 @@ export class Engine {
 
   /**
    * Per-engine cache of the resolved CLAUDE.md / AGENTS.md project doc.
-   * The engine reads the group's `workDir` from the per-turn args and
-   * mtime-checks the file before deciding to re-read. Shape:
-   *   { workDir, path, mtimeMs, text } | null
-   * `null` means "no project doc applies for the current workDir" — we
-   * still need the cache record so we don't re-stat every turn when the
-   * answer is "no file".
-   * @type {{ workDir: string, path: string|null, mtimeMs: number|null, text: string }|null}
+   * Shape: `{ workDir, path, mtimeMs, text } | null`. A non-null record
+   * means "for THIS workDir, the file at `path` with this `mtimeMs`
+   * resolved to `text`" — when the next turn's stat returns the same
+   * `(path, mtimeMs)` tuple, we skip the read entirely. mtime changes
+   * (or a different picked file, e.g. user added AGENTS.md) invalidate
+   * automatically because the `path`/`mtimeMs` comparison fails.
+   * @type {{ workDir: string, path: string, mtimeMs: number, text: string }|null}
    */
   #projectDocCache = null;
 
@@ -733,8 +733,15 @@ export class Engine {
 
   /**
    * Resolve the CLAUDE.md / AGENTS.md project doc text for the current
-   * group's working directory. mtime-cached on the engine so we don't
-   * re-read every turn; an mtime change invalidates the cache.
+   * group's working directory. mtime-cached on the engine so we only
+   * re-read the file when the user actually edited it.
+   *
+   * Cache strategy:
+   *   1. Cheap path: `pickProjectDocFile` (two stats, no read).
+   *   2. If the picked `(path, mtimeMs)` matches the cache → return
+   *      cached text. No disk read, no UTF-8 decode, no truncation work.
+   *   3. Cache miss → call `readProjectDoc` (bounded `readSync` into a
+   *      pre-sized buffer), refresh the cache, return the fresh text.
    *
    * Returns '' when:
    *   - workDir is empty / not a string
@@ -758,26 +765,32 @@ export class Engine {
       return '';
     }
 
-    // Re-stat every turn (cheap) so mtime updates invalidate the cache.
-    // The cache key is (workDir, path, mtimeMs); when the picked file
-    // changes (e.g. user added AGENTS.md alongside CLAUDE.md) the path
-    // delta also invalidates.
-    const doc = readProjectDoc(workDir, { maxBytes });
-    if (!doc) {
-      // Remember "no doc applies" so callers don't loop through this
-      // path twice in the same turn. Cache cleared lazily next turn.
-      this.#projectDocCache = { workDir, path: null, mtimeMs: null, text: '' };
+    // Step 1 — stat-only check. Cheap (two `statSync` calls) and lets
+    // us short-circuit the read when the file hasn't moved.
+    const picked = pickProjectDocFile(workDir);
+    if (!picked) {
+      this.#projectDocCache = null;
       return '';
     }
 
+    // Step 2 — cache hit? Same workDir, same picked file, same mtime
+    // ⇒ the previously decoded text is still authoritative. Skip the
+    // file read entirely.
     const cache = this.#projectDocCache;
     if (
-      cache &&
-      cache.workDir === workDir &&
-      cache.path === doc.path &&
-      cache.mtimeMs === doc.mtimeMs
+      cache
+      && cache.workDir === workDir
+      && cache.path === picked.path
+      && cache.mtimeMs === picked.mtimeMs
     ) {
       return cache.text;
+    }
+
+    // Step 3 — cache miss. Read + decode, then refresh the cache.
+    const doc = readProjectDoc(workDir, { maxBytes });
+    if (!doc) {
+      this.#projectDocCache = null;
+      return '';
     }
     this.#projectDocCache = {
       workDir,

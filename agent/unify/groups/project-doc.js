@@ -29,7 +29,7 @@
  * tests can construct two engines without interfering with each other.
  */
 
-import { existsSync, statSync, readFileSync } from 'fs';
+import { statSync, openSync, readSync, closeSync } from 'fs';
 import { join } from 'path';
 
 /** Filenames probed in `workDir`, in tie-break order (first wins on tie). */
@@ -51,27 +51,28 @@ export const DEFAULT_PROJECT_DOC_MAX_BYTES = 32 * 1024;
  */
 export function pickProjectDocFile(workDir) {
   if (typeof workDir !== 'string' || !workDir.trim()) return null;
-  if (!existsSync(workDir)) return null;
   try {
     const dirStat = statSync(workDir);
     if (!dirStat.isDirectory()) return null;
   } catch {
+    // Non-existent / permission-denied / not a path we can stat.
     return null;
   }
 
   let best = null;
   for (const name of PROJECT_DOC_FILENAMES) {
     const path = join(workDir, name);
-    if (!existsSync(path)) continue;
+    let s;
     try {
-      const s = statSync(path);
-      if (!s.isFile()) continue;
-      // Strict-greater so ties favor the order in PROJECT_DOC_FILENAMES.
-      if (!best || s.mtimeMs > best.mtimeMs) {
-        best = { path, mtimeMs: s.mtimeMs };
-      }
+      s = statSync(path);
     } catch {
-      // Skip unreadable file; we'll try the next candidate.
+      // Missing or unreadable; try the next candidate.
+      continue;
+    }
+    if (!s.isFile()) continue;
+    // Strict-greater so ties favor the order in PROJECT_DOC_FILENAMES.
+    if (!best || s.mtimeMs > best.mtimeMs) {
+      best = { path, mtimeMs: s.mtimeMs };
     }
   }
   return best;
@@ -81,9 +82,15 @@ export function pickProjectDocFile(workDir) {
  * Read the picked project-doc file. Returns null when nothing is
  * eligible (no workDir, no file, empty contents after trim).
  *
- * Truncates to `maxBytes` and emits a console.warn — same trade-off as
- * Codex's read path: we'd rather inject a partial doc than swallow the
- * caller's context budget on a runaway file.
+ * Bounded I/O. We allocate `maxBytes + 1` bytes and `readSync` once —
+ * never letting a runaway file balloon the agent's heap. The extra
+ * byte tells us whether the file was actually larger (so we know to
+ * warn about truncation).
+ *
+ * Codepoint-safe truncation. When we cut mid-byte inside a multi-byte
+ * UTF-8 sequence (very likely for `zh-CN` docs), we walk back to the
+ * last codepoint boundary before decoding, so the model sees clean
+ * text instead of a trailing `U+FFFD` replacement character.
  *
  * @param {string} workDir
  * @param {{ maxBytes?: number }} [opts]
@@ -98,18 +105,39 @@ export function readProjectDoc(workDir, opts = {}) {
   const picked = pickProjectDocFile(workDir);
   if (!picked) return null;
 
-  let buf;
+  // Allocate one extra byte so a `bytesRead === maxBytes + 1` tells us
+  // there's more content beyond the cap — i.e. the file was truncated.
+  const cap = maxBytes + 1;
+  const buffer = Buffer.allocUnsafe(cap);
+  let fd;
+  let bytesRead = 0;
   try {
-    buf = readFileSync(picked.path);
+    fd = openSync(picked.path, 'r');
+    bytesRead = readSync(fd, buffer, 0, cap, 0);
   } catch {
     return null;
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch { /* ignore */ }
+    }
   }
-  let truncated = false;
-  if (buf.length > maxBytes) {
-    buf = buf.subarray(0, maxBytes);
-    truncated = true;
+
+  let useBytes = bytesRead;
+  const truncated = bytesRead > maxBytes;
+  if (truncated) {
+    useBytes = maxBytes;
+    // Walk back into the buffer until the cut isn't sitting in the
+    // middle of a multi-byte UTF-8 sequence. Each continuation byte
+    // matches the pattern `10xxxxxx` (0x80–0xBF). We scan back at most
+    // 3 bytes — UTF-8 codepoints are ≤ 4 bytes total.
+    let scan = 0;
+    while (scan < 3 && useBytes > 0 && (buffer[useBytes] & 0xC0) === 0x80) {
+      useBytes -= 1;
+      scan += 1;
+    }
   }
-  const text = buf.toString('utf8').trim();
+
+  const text = buffer.toString('utf8', 0, useBytes).trim();
   if (truncated) {
     console.warn(
       `[unify/project-doc] ${picked.path} exceeds ${maxBytes} bytes — truncated.`,

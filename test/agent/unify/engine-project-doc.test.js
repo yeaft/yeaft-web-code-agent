@@ -129,8 +129,8 @@ describe('Engine — project-doc injection via workDir', () => {
     writeFileSync(claudePath, 'CLAUDE_BODY');
     writeFileSync(agentsPath, 'AGENTS_BODY');
     // AGENTS.md becomes newer.
-    utimesSync(claudePath, new Date(1700000000000 / 1000), new Date(1700000000000 / 1000));
-    utimesSync(agentsPath, new Date(1800000000000 / 1000), new Date(1800000000000 / 1000));
+    utimesSync(claudePath, new Date(1700000000000), new Date(1700000000000));
+    utimesSync(agentsPath, new Date(1800000000000), new Date(1800000000000));
 
     await runTurn('hello', workDir);
     const sysPrompt = adapter.callLog[0].system;

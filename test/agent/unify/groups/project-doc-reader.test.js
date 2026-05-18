@@ -72,15 +72,16 @@ describe('pickProjectDocFile', () => {
     const agentsPath = join(workDir, 'AGENTS.md');
     writeFileSync(claudePath, '# Claude');
     writeFileSync(agentsPath, '# Agents');
-    // Force CLAUDE.md older than AGENTS.md.
-    utimesSync(claudePath, new Date(1700000000000 / 1000), new Date(1700000000000 / 1000));
-    utimesSync(agentsPath, new Date(1800000000000 / 1000), new Date(1800000000000 / 1000));
+    // Force CLAUDE.md older than AGENTS.md. Dates here are ms since
+    // epoch — `new Date(ms)` expects milliseconds, not seconds.
+    utimesSync(claudePath, new Date(1700000000000), new Date(1700000000000));
+    utimesSync(agentsPath, new Date(1800000000000), new Date(1800000000000));
 
     const picked = pickProjectDocFile(workDir);
     expect(picked.path).toBe(agentsPath);
 
     // Now flip: CLAUDE.md becomes newer.
-    utimesSync(claudePath, new Date(1900000000000 / 1000), new Date(1900000000000 / 1000));
+    utimesSync(claudePath, new Date(1900000000000), new Date(1900000000000));
     const reflip = pickProjectDocFile(workDir);
     expect(reflip.path).toBe(claudePath);
   });
@@ -90,7 +91,7 @@ describe('pickProjectDocFile', () => {
     const agentsPath = join(workDir, 'AGENTS.md');
     writeFileSync(claudePath, '# Claude');
     writeFileSync(agentsPath, '# Agents');
-    const t = new Date(1750000000000 / 1000);
+    const t = new Date(1750000000000);
     utimesSync(claudePath, t, t);
     utimesSync(agentsPath, t, t);
     const picked = pickProjectDocFile(workDir);
@@ -149,6 +150,22 @@ describe('readProjectDoc', () => {
     expect(doc.text.length).toBe(10);
     expect(warnSpy).toHaveBeenCalledOnce();
     expect(warnSpy.mock.calls[0][0]).toMatch(/exceeds 10 bytes — truncated/);
+  });
+
+  it('codepoint-safe truncation: never emits U+FFFD for Chinese content', () => {
+    // Each Chinese character is 3 UTF-8 bytes. Writing 20 characters
+    // produces a 60-byte payload; capping at any byte count that lands
+    // mid-codepoint (e.g. 11, 13, 14, 16, 17, 19) must NOT leave a
+    // dangling replacement character in the decoded text.
+    const body = '中文测试内容很长一段话需要被裁剪掉了'; // 18 chars × 3 bytes = 54 bytes
+    writeFileSync(join(workDir, 'CLAUDE.md'), body);
+    for (const cap of [7, 8, 10, 11, 13, 14, 17, 20, 25]) {
+      warnSpy.mockClear();
+      const doc = readProjectDoc(workDir, { maxBytes: cap });
+      if (doc) {
+        expect(doc.text).not.toMatch(/�/);
+      }
+    }
   });
 
   it('does not warn when file is smaller than maxBytes', () => {
