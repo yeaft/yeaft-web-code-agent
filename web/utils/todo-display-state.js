@@ -18,6 +18,17 @@
  * AssistantTurn does not have to change, and so a future "turn ended"
  * concern can be added back without another API churn — but right now
  * the helper does not branch on it.
+ *
+ * Do NOT inline this back into the template just because the body
+ * looks short: the helper owns three things the template should not
+ * — (1) the `status || 'pending'` fallback when the agent omits it,
+ * (2) the `activeForm || content` fallback for in_progress, and
+ * (3) the spread-then-overlay that produces a fresh display object
+ * so the raw reactive todo from claudeOutput.js stays immutable.
+ *
+ * The underlying TodoWrite lifecycle concerns from PR #780 (todos
+ * disappearing mid-turn / todos lingering after turn-end) are still
+ * open and intentionally not addressed here — the revert is UI-only.
  */
 export function getTodoDisplayState(_turn, todo) {
   const status = todo?.status || 'pending';
