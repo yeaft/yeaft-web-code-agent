@@ -36,13 +36,15 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const outDir = join(__dirname, '..', 'web', 'assets', 'avatars');
 mkdirSync(outDir, { recursive: true });
 
-// 32 VP seeds match the roster shipped under ~/.yeaft/virtual-persons/.
+// VP seeds match the roster shipped under ~/.yeaft/virtual-persons/.
 // `vpId` is the lookup key the web client uses; the file name MUST match.
 // `seed` is the DiceBear input — kept identical to vpId for stable output.
 //
-// Three places must stay in lockstep (test/web/vp-avatar-image.test.js
+// The illustrated-avatar roster is intentionally a subset of DEFAULT_VPS.
+// VPs not listed here fall back to the letter render, which avoids 404s.
+// These three places must stay in lockstep (test/web/vp-avatar-image.test.js
 // guards two of them):
-//   1. agent/unify/vp/seed-defaults.js#DEFAULT_VPS (the 32 source-of-truth VPs)
+//   1. this ENTRIES array (generated SVG files)
 //   2. web/components/VpAvatar.js#KNOWN_AVATAR_IDS (frontend gate)
 //   3. test/web/vp-avatar-image.test.js#KNOWN (test gate)
 const ENTRIES = [

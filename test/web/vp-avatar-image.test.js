@@ -20,8 +20,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, '..', '..');
 const read = (rel) => readFileSync(join(repoRoot, rel), 'utf8');
 
-// The 32 VP seeds the generator ships SVGs for. Anything outside this
-// set MUST fall back to the letter render to avoid 404 spam.
+// Illustrated-avatar IDs the generator ships SVGs for. DEFAULT_VPS may include
+// additional VPs; those MUST fall back to the letter render to avoid 404 spam.
 const KNOWN = [
   // Original 12 (engineering / design / science / security / business).
   'ada', 'alan', 'alice', 'dieter', 'grace', 'ken',
@@ -38,7 +38,7 @@ const KNOWN = [
 describe('VpAvatar — illustrated portrait branch', () => {
   const src = read('web/components/VpAvatar.js');
 
-  it('declares a KNOWN_AVATAR_IDS set covering all 32 VPs', () => {
+  it('declares a KNOWN_AVATAR_IDS set covering all shipped VP avatars', () => {
     for (const id of KNOWN) {
       expect(src).toContain(`'${id}'`);
     }
@@ -69,6 +69,10 @@ describe('VpAvatar — illustrated portrait branch', () => {
 
   it('avatarUrl points at the absolute /assets/avatars path', () => {
     expect(src).toContain('/assets/avatars/');
+  });
+
+  it('does not request an illustrated avatar for Omni until omni.svg ships', () => {
+    expect(src).not.toMatch(/KNOWN_AVATAR_IDS[\s\S]*'omni'/);
   });
 });
 
