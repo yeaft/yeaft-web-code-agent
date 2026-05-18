@@ -87,22 +87,28 @@ export function filterVpMentions(vps, query) {
  * Rules:
  *   - No active group (single-agent / no group context): return the full
  *     library. This preserves the legacy single-agent autocomplete.
- *   - Active group with a non-empty roster: return ONLY the VPs that are
- *     in that roster. Off-roster VPs are hidden entirely — you can't
- *     @-mention someone who isn't in the conversation, and the dropdown
- *     shouldn't tempt the user to try.
- *   - Active group with an empty roster (rare bootstrap state): return
- *     the full library as a safe fallback rather than an empty dropdown.
+ *   - Active group: return ONLY the VPs that are on the group's roster.
+ *     Off-roster VPs are hidden entirely — you can't @-mention someone
+ *     who isn't in the conversation, and the dropdown shouldn't tempt
+ *     the user to try. An empty roster means an empty dropdown; this
+ *     matches the VP timeline (`selectGroupRosterVpList` in
+ *     `web/stores/helpers/vp-timeline.js`) and the autocomplete's
+ *     `v-if="filteredList.length > 0"` then hides the popover entirely.
  *
- * @param {object[]} vpList — the full VP library (typically vpStore.vpList).
- * @param {{ roster?: string[] }|null} group — the active group's record, or null/undefined.
+ * See also: `selectGroupRosterVpList` is a deliberately-different sibling
+ *   — it preserves roster order and stubs ghost ids for the timeline,
+ *   whereas this helper preserves library order and drops ghosts so the
+ *   mention dropdown never offers something we can't render.
+ *
+ * @param {object[]|null|undefined} vpList — the full VP library (typically vpStore.vpList).
+ * @param {{ roster?: string[] }|null|undefined} group — the active group's record.
  * @returns {object[]} the candidate list (NOT yet filtered by query).
  */
 export function selectMentionCandidates(vpList, group) {
   const full = Array.isArray(vpList) ? vpList : [];
   if (!group) return full;
-  const roster = Array.isArray(group.roster) ? group.roster : null;
-  if (!roster || roster.length === 0) return full;
+  const roster = Array.isArray(group.roster) ? group.roster : [];
+  if (roster.length === 0) return [];
   const allowed = new Set(roster);
   return full.filter((vp) => vp && vp.vpId && allowed.has(vp.vpId));
 }

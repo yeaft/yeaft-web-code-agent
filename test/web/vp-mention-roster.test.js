@@ -10,8 +10,9 @@
  * What the helper guarantees:
  *   - No active group  -> full library (legacy single-agent path).
  *   - Group with roster -> only VPs whose vpId is on that roster.
- *   - Empty/missing roster -> full library (safe bootstrap fallback —
- *     never an empty dropdown).
+ *   - Empty/missing roster -> empty result. Matches the VP timeline
+ *     (`selectGroupRosterVpList`) and lets the autocomplete's
+ *     `v-if="filteredList.length > 0"` hide the popover entirely.
  *   - Off-roster VPs are HIDDEN entirely, not grayed out. The previous
  *     UX surfaced them with an "_offRoster" badge and an invite-toast
  *     hint; we removed that whole branch when the user picked the
@@ -22,20 +23,14 @@ import { describe, it, expect } from 'vitest';
 // VpMentionAutocomplete -> VpAvatar -> vp store -> `Pinia.defineStore(...)`
 // at module top-level. We only need the pure helper, not the Vue plumbing,
 // so install a minimal Pinia shim before importing.
-globalThis.Pinia = globalThis.Pinia || {};
-globalThis.Pinia.defineStore = globalThis.Pinia.defineStore || (() => () => ({}));
-// `Vue` is also referenced by VpMentionAutocomplete's setup() (Vue.computed),
-// but it's only invoked when the component is instantiated. The pure
-// helper is exported above setup() and never touches Vue, so no shim
-// needed for that — module-load is what matters.
+globalThis.Pinia ??= { defineStore: () => () => ({}) };
 
 const { selectMentionCandidates } = await import('../../web/components/VpMentionAutocomplete.js');
 
 const VPS = [
-  { vpId: 'jobs',     displayName: 'Steve Jobs' },
-  { vpId: 'linus',    displayName: 'Linus Torvalds' },
-  { vpId: 'rams',     displayName: 'Dieter Rams' },
-  { vpId: 'fowler',   displayName: 'Martin Fowler' },
+  { vpId: 'jobs',   displayName: 'Steve Jobs' },
+  { vpId: 'linus',  displayName: 'Linus Torvalds' },
+  { vpId: 'fowler', displayName: 'Martin Fowler' },
 ];
 
 describe('selectMentionCandidates', () => {
@@ -50,22 +45,24 @@ describe('selectMentionCandidates', () => {
     expect(out.map(v => v.vpId)).toEqual(['linus', 'fowler']);
   });
 
-  it('preserves the library order when filtering by roster', () => {
-    // roster lists fowler first, but the dropdown should mirror the
-    // library order so it stays stable across renders.
+  it('emits results in input (library) order, not roster order', () => {
+    // The dropdown is stable across renders because the helper uses
+    // Array.prototype.filter on the library list. If we ever switch to
+    // roster-order output (matching UnifyPage's timeline), update this.
     const group = { id: 'g1', roster: ['fowler', 'linus'] };
     const out = selectMentionCandidates(VPS, group);
     expect(out.map(v => v.vpId)).toEqual(['linus', 'fowler']);
   });
 
-  it('falls back to the full library when roster is empty', () => {
-    // Empty roster is a transient bootstrap state — surfacing an empty
-    // dropdown would be hostile UX, so we deliberately fail open.
-    expect(selectMentionCandidates(VPS, { id: 'g1', roster: [] })).toEqual(VPS);
+  it('returns an empty list when the group has an empty roster', () => {
+    // Matches the VP timeline (UnifyPage): a group with no members has
+    // nothing to @-mention. The autocomplete's v-if hides the popover
+    // when filteredList is empty, so the user sees no dropdown.
+    expect(selectMentionCandidates(VPS, { id: 'g1', roster: [] })).toEqual([]);
   });
 
-  it('falls back to the full library when roster is missing', () => {
-    expect(selectMentionCandidates(VPS, { id: 'g1' })).toEqual(VPS);
+  it('returns an empty list when the group is missing the roster field', () => {
+    expect(selectMentionCandidates(VPS, { id: 'g1' })).toEqual([]);
   });
 
   it('drops roster entries that no longer have a matching VP record', () => {

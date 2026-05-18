@@ -226,23 +226,18 @@ export default {
       return text.slice(atIdx + 1);
     });
 
-    // Group-scoped `@` autocomplete: in a group conversation, only VPs
-    // that are actually in the group's roster may be @-mentioned. Off-
-    // roster VPs are hidden entirely — the dropdown should never tempt
-    // the user to mention someone who isn't in the conversation.
-    //
+    // Group-scoped `@` autocomplete: only roster VPs are mentionable.
     // Active-group resolution mirrors UnifyPage's middle-column resolver
-    // (UnifyPage.js: store.unifyActiveGroupFilter || groupsStore.activeGroupId).
-    // The explicit conversation-pane filter wins; otherwise we fall back
-    // to the groups store's selected group. When neither is set (legacy
-    // single-agent path), we surface the full library.
+    // (filter wins, then groupsStore.activeGroupId, then no group).
+    //
+    // TODO(arch): this `unifyActiveGroupFilter || activeGroupId` chain is
+    //   duplicated in UnifyPage.js (timeline + topbar) and MessageList.js
+    //   (announcement bar). Consolidate into a `groupsStore.activeGroupIdResolved`
+    //   getter and migrate all four call sites in a follow-up PR.
     const mentionVpCandidates = Vue.computed(() => {
-      const fullList = Array.isArray(vpStore.vpList) ? vpStore.vpList : [];
-      if (!groupsStore) return fullList;
+      if (!groupsStore) return vpStore.vpList || [];
       const activeGroupId = store.unifyActiveGroupFilter || groupsStore.activeGroupId || null;
-      if (!activeGroupId) return fullList;
-      const group = groupsStore.groups?.[activeGroupId] || null;
-      return selectMentionCandidates(fullList, group);
+      return selectMentionCandidates(vpStore.vpList, groupsStore.groups?.[activeGroupId]);
     });
 
     const selectVpMention = (vp) => {
