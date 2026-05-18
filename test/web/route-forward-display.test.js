@@ -1,24 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import {
-  formatMentionList,
-  formatRouteForwardToolLine,
-} from '../../web/utils/route-forward-display.js';
+import { formatRouteForwardToolLine } from '../../web/utils/route-forward-display.js';
 
 describe('RouteForward display formatting', () => {
-  it('joins a list of vp ids as @-mentions with the default separator', () => {
-    expect(formatMentionList(['linus', 'steve'])).toBe('@linus, @steve');
-  });
-
-  it('respects a custom separator', () => {
-    expect(formatMentionList(['linus', 'steve'], { separator: ' / ' }))
-      .toBe('@linus / @steve');
-  });
-
-  it('handles non-array input by returning an empty string', () => {
-    expect(formatMentionList(null)).toBe('');
-    expect(formatMentionList(undefined)).toBe('');
-  });
-
   it('formats a route_forward tool row as `Route @target: <text>`', () => {
     expect(formatRouteForwardToolLine({ to: 'martin', text: 'review PR #785' }))
       .toBe('Route @martin: review PR #785');

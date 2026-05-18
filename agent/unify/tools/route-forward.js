@@ -109,9 +109,11 @@ Returns JSON: { ok, dispatched?, error?, detail? }.`,
     // task-707: hand off control. Successful forward means the originating
     // turn should NOT continue generating — the target VPs are now in
     // charge. Signal the engine to break the tool-loop after this batch.
-    // The structured payload feeds web-bridge's `group_handoff` UX event
-    // so the frontend can render "↪ 已转交给 @vp-x、@vp-y" without
-    // re-parsing a string.
+    // The structured payload lands on `turn_end.detail` as audit metadata
+    // (kind, fromVpId, dispatched, broadcast, text, reason); the frontend
+    // renders the hand-off as a Route tool chip from the tool_call
+    // envelope already on the wire (see PR #793 — the previous
+    // `group_handoff` UI event was removed when its single consumer was).
     if (typeof ctx.requestEndTurn === 'function') {
       try {
         ctx.requestEndTurn({

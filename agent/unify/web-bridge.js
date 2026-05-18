@@ -1400,34 +1400,14 @@ function handleEngineEvent(event, hctx) {
       break;
 
     case 'turn_end':
-      // When a tool (currently only `route_forward`) signals
-      // requestEndTurn, the engine emits turn_end with
-      // stopReason='tool_handoff' and a structured `detail` payload.
-      // Surface that to the frontend as a `group_handoff` event so the
-      // originating VP's bubble can render "↪ 已转交给 @vp-b、@vp-c".
-      // Other turn_end variants are ignored (the outer loop handles
-      // result/end_turn semantics already).
-      //
-      // The `version` field is the wire schema version. Today there is
-      // only one shape. Future variants (e.g. a second hand-off tool)
-      // can bump it without breaking older frontends — they ignore
-      // unknown versions.
-      if (event.stopReason === 'tool_handoff' && event.detail && typeof event.detail === 'object') {
-        const detail = event.detail;
-        if (detail.kind === 'route_forward') {
-          sendUnifyEvent({
-            type: 'group_handoff',
-            version: 1,
-            kind: 'route_forward',
-            fromVpId: detail.fromVpId || hctx.vpId,
-            toVpIds: Array.isArray(detail.dispatched) ? detail.dispatched.slice() : [],
-            broadcast: Boolean(detail.broadcast),
-            text: typeof detail.text === 'string' ? detail.text : '',
-            reason: detail.reason || null,
-            ts: Date.now(),
-          }, envelope);
-        }
-      }
+      // turn_end variants are handled by the outer loop (result /
+      // end_turn semantics). PR #793 removed the `group_handoff`
+      // wire event that the frontend used to render a "↪ 已转交给"
+      // pill — the Route tool chip (rendered from the tool_call
+      // envelope already on the wire) is the single source of truth
+      // for hand-off UX. If a future feature (notification toast,
+      // typing-chain animation, …) needs the structured payload,
+      // re-emit a wire event here from `event.detail`.
       break;
 
     case 'usage':
