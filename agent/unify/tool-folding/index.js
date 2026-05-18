@@ -16,10 +16,17 @@
  * keeps the periodic-reflection contract (it still fires every N tools,
  * not just once) but gives a single task arc room to breathe before the
  * arc gets collapsed.
+ *
+ * TURN_SUMMARY_THRESHOLD history: was 5 originally; raised to 8
+ * (2026-05-18). 5 was too aggressive — small "read a few files, edit one,
+ * run tests" turns crossed it and produced a T2 reflection card the user
+ * didn't want. 8 lets short-to-medium turns finish without a reflection
+ * while still folding the long ones that genuinely benefit from a summary
+ * before the next turn's history grows.
  */
 
 export const TOOL_BATCH_SIZE = 30;
-export const TURN_SUMMARY_THRESHOLD = 5;
+export const TURN_SUMMARY_THRESHOLD = 8;
 export const DUP_TOOL_THRESHOLD = 3;
 
 export { ExecLog, buildEntry, argsHashOf } from './exec-log.js';
