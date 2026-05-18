@@ -54,6 +54,7 @@ export const REASON_I18N_KEY = Object.freeze({
   // Backend-only codes surfaced by vp-crud.js.
   duplicate: 'unify.vp.idError.duplicate',
   not_found: 'unify.vp.idError.not_found',
+  stock_readonly: 'unify.vp.idError.stock_readonly',
   unknown: 'unify.vp.idError.unknown',
 });
 

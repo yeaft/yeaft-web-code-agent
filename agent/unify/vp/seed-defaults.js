@@ -822,6 +822,24 @@ Bad for: cold-blooded conversion-rate copy, cynical positioning, "speed at any c
 ]);
 
 /**
+ * Set of vpIds that ship with the agent ("stock" VPs). Built once from
+ * `DEFAULT_VPS` so any future seed addition automatically rolls in.
+ *
+ * Used by:
+ *   - `vp-bridge.js#serializeVpForWire` to mark wire records `isStock:true`
+ *     so the frontend can disable Edit/Delete for these entries.
+ *   - `vp-crud.js#updateVp` / `#deleteVp` to refuse mutation server-side,
+ *     defending against a misbehaving WS client that bypasses the UI.
+ *
+ * NOTE: this is a runtime check on vpId, not a file-system "did seed
+ * write this dir" check — the latter would treat any user-renamed-back
+ * VP as stock, which is wrong. The contract is "if you pick one of the
+ * reserved stock ids, you cannot mutate it"; users picking a unique id
+ * stay fully editable.
+ */
+export const STOCK_VP_IDS = new Set(DEFAULT_VPS.map(v => v.vpId));
+
+/**
  * True iff `libDir` exists and contains at least one subdirectory that
  * looks like a VP entry (has a `role.md` file). A stray empty directory
  * from a half-aborted CRUD counts as "already initialised" too — we stay

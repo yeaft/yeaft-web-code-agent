@@ -999,6 +999,15 @@ export default {
   'unify.vp.crud.saveFailed': 'Save failed: {error}',
   'unify.vp.crud.deleteFailed': 'Delete failed: {error}',
 
+  // task-vp-customize: view-prompt (read-only) view + stock VP gating.
+  'unify.vp.crud.viewPrompt': 'View prompt',
+  'unify.vp.crud.viewModal.title': 'VP prompt',
+  'unify.vp.crud.viewModal.personaEmpty': '(no persona body — only metadata is defined)',
+  'unify.vp.crud.viewModal.back': 'Back',
+  'unify.vp.crud.viewModal.editFromHere': 'Edit',
+  'unify.vp.crud.stockBadge': 'Stock',
+  'unify.vp.crud.stockReadOnly': 'Stock VPs ship with the agent and cannot be edited or deleted.',
+
   // N4 mapping — validateVpId reason → friendly message (334d nit + prev-3 递的雏形).
   'unify.vp.idError.empty_or_non_string': 'VP id is required.',
   'unify.vp.idError.too_long': 'VP id is too long (max 40 characters).',
@@ -1008,6 +1017,7 @@ export default {
   'unify.vp.idError.reserved': 'VP id cannot be one of the reserved names (all, user, system, everyone).',
   'unify.vp.idError.duplicate': 'A role with this VP id already exists.',
   'unify.vp.idError.not_found': 'This VP does not exist — it may have been deleted.',
+  'unify.vp.idError.stock_readonly': 'Stock VPs cannot be edited or deleted.',
   'unify.vp.idError.unknown': 'An unexpected error occurred. Please try again.',
 
   // ============ Unify VP Detail View (task-334-ui-c) ============
@@ -1147,6 +1157,9 @@ export default {
   'unify.group.members.defaultHint': 'Default VP (replies when no @mention is given)',
   'unify.group.members.memberCount': '{count} selected',
   'unify.group.members.actionFailed': 'Action failed: {error}',
+  // task-vp-customize: shortcut from group settings → VP Library tab (create + view).
+  'unify.group.members.openLibrary': 'Open VP Library',
+  'unify.group.members.openLibraryHint': 'Create a new VP or view a VP\'s prompt.',
 
   // Group announcement (CLAUDE.md-style shared system-prompt prefix).
   'unify.group.announcement.label': 'Announcement',

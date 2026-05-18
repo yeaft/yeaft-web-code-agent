@@ -38,21 +38,103 @@ export default {
                 {{ vpInitialFor(vp.vpId) }}
               </div>
               <div class="vp-crud-card-meta">
-                <div class="vp-crud-card-name">{{ vp.displayName || vp.vpId }}</div>
+                <div class="vp-crud-card-name">
+                  <span>{{ vp.displayName || vp.vpId }}</span>
+                  <span v-if="vp.isStock" class="vp-crud-stock-badge" :title="$t('unify.vp.crud.stockReadOnly')">
+                    {{ $t('unify.vp.crud.stockBadge') }}
+                  </span>
+                </div>
                 <div class="vp-crud-card-id">@{{ vp.vpId }}</div>
                 <div class="vp-crud-card-role" v-if="vp.role">{{ vp.role }}</div>
               </div>
               <div class="vp-crud-card-actions">
-                <button class="vp-crud-link-btn" type="button" @click="startEdit(vp)" :disabled="busy">
+                <button
+                  class="vp-crud-link-btn"
+                  type="button"
+                  @click="startView(vp)"
+                  :disabled="busy"
+                >
+                  {{ $t('unify.vp.crud.viewPrompt') }}
+                </button>
+                <button
+                  class="vp-crud-link-btn"
+                  type="button"
+                  @click="startEdit(vp)"
+                  :disabled="busy || vp.isStock"
+                  :title="vp.isStock ? $t('unify.vp.crud.stockReadOnly') : ''"
+                >
                   {{ $t('unify.vp.crud.edit') }}
                 </button>
-                <button class="vp-crud-link-btn is-danger" type="button" @click="confirmDelete(vp)" :disabled="busy">
+                <button
+                  class="vp-crud-link-btn is-danger"
+                  type="button"
+                  @click="confirmDelete(vp)"
+                  :disabled="busy || vp.isStock"
+                  :title="vp.isStock ? $t('unify.vp.crud.stockReadOnly') : ''"
+                >
                   {{ $t('unify.vp.crud.delete') }}
                 </button>
               </div>
             </div>
           </div>
         </template>
+      </div>
+
+      <!-- DETAIL (VIEW PROMPT) VIEW — read-only -->
+      <div v-else-if="view === 'detail'" class="vp-crud-body vp-crud-detail">
+        <div class="vp-crud-form-header">
+          <span>{{ $t('unify.vp.crud.viewModal.title') }}</span>
+          <span v-if="detail && detail.isStock" class="vp-crud-stock-badge vp-crud-stock-badge-inline">
+            {{ $t('unify.vp.crud.stockBadge') }}
+          </span>
+        </div>
+
+        <div v-if="detailLoading" class="vp-crud-empty-text">{{ $t('unify.vp.crud.saving') }}</div>
+        <template v-else-if="detail">
+          <div class="vp-crud-field vp-crud-field-readonly">
+            <span class="vp-crud-field-label">{{ $t('unify.vp.crud.form.vpId') }}</span>
+            <div class="vp-crud-readonly-value">@{{ detail.vpId }}</div>
+          </div>
+          <div class="vp-crud-field vp-crud-field-readonly">
+            <span class="vp-crud-field-label">{{ $t('unify.vp.crud.form.displayName') }}</span>
+            <div class="vp-crud-readonly-value">{{ detail.displayName || detail.vpId }}</div>
+          </div>
+          <div class="vp-crud-field vp-crud-field-readonly" v-if="detail.role">
+            <span class="vp-crud-field-label">{{ $t('unify.vp.crud.form.role') }}</span>
+            <div class="vp-crud-readonly-value">{{ detail.role }}</div>
+          </div>
+          <div class="vp-crud-field vp-crud-field-readonly" v-if="detail.traits && detail.traits.length">
+            <span class="vp-crud-field-label">{{ $t('unify.vp.crud.form.traits') }}</span>
+            <div class="vp-crud-readonly-value">{{ detail.traits.join(', ') }}</div>
+          </div>
+          <div class="vp-crud-field vp-crud-field-readonly" v-if="detail.modelHint">
+            <span class="vp-crud-field-label">{{ $t('unify.vp.crud.form.modelHint') }}</span>
+            <div class="vp-crud-readonly-value">{{ detail.modelHint }}</div>
+          </div>
+          <div class="vp-crud-field vp-crud-field-readonly">
+            <span class="vp-crud-field-label">{{ $t('unify.vp.crud.form.persona') }}</span>
+            <pre v-if="detail.persona" class="vp-crud-persona-preview">{{ detail.persona }}</pre>
+            <div v-else class="vp-crud-readonly-value vp-crud-readonly-empty">
+              {{ $t('unify.vp.crud.viewModal.personaEmpty') }}
+            </div>
+          </div>
+        </template>
+        <div v-else class="vp-crud-form-error">{{ detailError || $t('unify.vp.idError.unknown') }}</div>
+
+        <div class="vp-crud-form-actions">
+          <button type="button" class="vp-crud-link-btn" @click="view = 'list'">
+            {{ $t('unify.vp.crud.viewModal.back') }}
+          </button>
+          <button
+            v-if="detail && !detail.isStock"
+            type="button"
+            class="vp-crud-primary-btn"
+            @click="editFromDetail"
+            :disabled="busy"
+          >
+            {{ $t('unify.vp.crud.viewModal.editFromHere') }}
+          </button>
+        </div>
       </div>
 
       <!-- FORM VIEW -->
@@ -150,13 +232,17 @@ export default {
   `,
   data() {
     return {
-      view: 'list',          // 'list' | 'form'
+      view: 'list',          // 'list' | 'form' | 'detail'
       editing: null,         // null for create, vp object for edit
       busy: false,
       idStatus: 'idle',      // 'idle' | 'ok' | 'error'
       idErrorKey: '',
       formError: '',
       form: this.blankForm(),
+      // task-vp-customize: read-only "View prompt" mode.
+      detail: null,          // { vpId, displayName, role, traits, modelHint, persona, isStock }
+      detailLoading: false,
+      detailError: '',
     };
   },
   computed: {
@@ -196,6 +282,9 @@ export default {
     },
     async startEdit(vp) {
       if (this.busy) return;
+      // Defence-in-depth: even if the template's :disabled is bypassed,
+      // refuse to enter edit form for a stock VP.
+      if (vp && vp.isStock) return;
       this.busy = true;
       this.formError = '';
       try {
@@ -217,8 +306,73 @@ export default {
         this.busy = false;
       }
     },
+
+    /**
+     * Open the read-only "View prompt" detail view for any VP (stock or
+     * user-authored). Pulls the persona body via `vpCrudRequest('read', id)`
+     * which is the same path startEdit uses.
+     */
+    async startView(vp) {
+      if (this.busy || !vp || !vp.vpId) return;
+      this.busy = true;
+      this.detailLoading = true;
+      this.detailError = '';
+      this.detail = null;
+      this.view = 'detail';
+      try {
+        const res = await this.chatStore().vpCrudRequest('read', vp.vpId);
+        if (res && res.ok && res.vp) {
+          this.detail = {
+            vpId: res.vp.vpId,
+            displayName: res.vp.displayName || '',
+            role: res.vp.role || '',
+            traits: Array.isArray(res.vp.traits) ? res.vp.traits : [],
+            modelHint: res.vp.modelHint || '',
+            persona: typeof res.vp.persona === 'string' ? res.vp.persona : '',
+            isStock: !!vp.isStock,
+          };
+        } else {
+          const code = (res && res.error && res.error.code) || 'unknown';
+          const key = i18nKeyForReason(code);
+          const translated = this.$t(key);
+          this.detailError = translated && translated !== key
+            ? translated
+            : ((res && res.error && res.error.message) || code);
+        }
+      } catch (err) {
+        this.detailError = (err && err.message) || this.$t('unify.vp.idError.unknown');
+      } finally {
+        this.detailLoading = false;
+        this.busy = false;
+      }
+    },
+
+    /**
+     * "Edit" button on the detail view: jump straight into the edit form
+     * using the already-loaded `this.detail` so we don't refetch.
+     */
+    editFromDetail() {
+      if (!this.detail || this.detail.isStock) return;
+      const src = this.detail;
+      this.editing = { vpId: src.vpId };
+      this.form = {
+        vpId: src.vpId,
+        displayName: src.displayName || '',
+        role: src.role || '',
+        traitsRaw: Array.isArray(src.traits) ? src.traits.join(', ') : '',
+        modelHint: src.modelHint || '',
+        persona: typeof src.persona === 'string' ? src.persona : '',
+      };
+      this.idStatus = 'ok';
+      this.idErrorKey = '';
+      this.formError = '';
+      this.view = 'form';
+    },
+
     async confirmDelete(vp) {
       if (this.busy) return;
+      // Defence-in-depth: stock VPs cannot be deleted from the UI.
+      if (vp && vp.isStock) return;
       const label = vp.displayName || vp.vpId;
       const prompt = this.$t('unify.vp.crud.deleteConfirm').replace('{name}', label);
       if (typeof window !== 'undefined' && window.confirm && !window.confirm(prompt)) return;

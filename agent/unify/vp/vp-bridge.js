@@ -23,6 +23,7 @@
 
 import { defaultRegistry } from './registry.js';
 import { VpLoader } from './vp-loader.js';
+import { STOCK_VP_IDS } from './seed-defaults.js';
 
 /** Process-singleton VpLoader; lazily started on first subscribe. */
 let _loaderStarted = false;
@@ -176,7 +177,7 @@ function ensureLoader(registry = defaultRegistry) {
  * expects (spec §2.1). Pure; no IO.
  *
  * @param {{id:string,name:string,role:string,traits?:string[],modelHint?:string,personaHash?:string}} vp
- * @returns {{vpId:string,displayName:string,subtitle:string,role:string,traits:string[],modelHint:?string,personaHash:?string}}
+ * @returns {{vpId:string,displayName:string,subtitle:string,role:string,traits:string[],modelHint:?string,personaHash:?string,isStock:boolean}}
  */
 export function serializeVpForWire(vp) {
   return {
@@ -191,6 +192,10 @@ export function serializeVpForWire(vp) {
     traits: Array.isArray(vp.traits) ? vp.traits.slice() : [],
     modelHint: vp.modelHint ?? null,
     personaHash: vp.personaHash ?? null,
+    // task-vp-customize: mark seed VPs so the frontend can disable
+    // Edit/Delete and surface a "Stock" badge. Pure id check — see
+    // seed-defaults.js#STOCK_VP_IDS for the contract.
+    isStock: STOCK_VP_IDS.has(vp.id),
   };
 }
 

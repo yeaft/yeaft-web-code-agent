@@ -14,6 +14,7 @@
  * Error codes returned to the caller (wire-visible):
  *   'duplicate'      — vpId already exists (on create)
  *   'not_found'      — vpId does not exist on disk (on update/delete)
+ *   'stock_readonly' — vpId is one of the seed/stock VPs (mutation refused)
  *   <reason from validateVpId> — invalid shape
  */
 
@@ -24,6 +25,7 @@ import { validateVpId } from '../groups/ids.js';
 import { DEFAULT_VP_LIB_DIR, parseRoleMd } from './vp-store.js';
 import { seedSummaryIfMissingSync, removeScopeDirSync } from '../memory/store-v2.js';
 import { VP_STUB_MARKER } from '../memory/seed-backfill.js';
+import { STOCK_VP_IDS } from './seed-defaults.js';
 
 /**
  * Default memory root used when callers don't pass `options.memoryRoot`.
@@ -218,6 +220,11 @@ export function updateVp(payload, options = {}) {
   const v = validateVpId(vpId);
   if (!v.ok) throw new VpCrudError(v.reason, vpId);
 
+  // Stock VPs ship with the agent and are immutable from the CRUD path.
+  // The UI also disables Edit/Delete on these, but a misbehaving WS client
+  // could bypass the UI — refuse here so the file on disk stays canonical.
+  if (STOCK_VP_IDS.has(vpId)) throw new VpCrudError('stock_readonly', vpId);
+
   const dir = vpDirFor(libDir, vpId);
   if (!existsSync(dir) || !existsSync(vpRolePathFor(libDir, vpId))) {
     throw new VpCrudError('not_found', vpId);
@@ -249,6 +256,10 @@ export function deleteVp(vpId, options = {}) {
   if (!vpId || typeof vpId !== 'string' || vpId.includes('/') || vpId.includes('\\') || vpId === '..' || vpId === '.') {
     throw new VpCrudError('illegal_character', vpId);
   }
+  // Stock VPs ship with the agent. Refuse the delete server-side so a
+  // misbehaving WS client cannot wipe `~/.yeaft/virtual-persons/steve/`
+  // even if the UI's delete button is missing or disabled.
+  if (STOCK_VP_IDS.has(vpId)) throw new VpCrudError('stock_readonly', vpId);
   const dir = vpDirFor(libDir, vpId);
   if (!existsSync(dir)) {
     throw new VpCrudError('not_found', vpId);

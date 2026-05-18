@@ -999,6 +999,15 @@ export default {
   'unify.vp.crud.saveFailed': '保存失败：{error}',
   'unify.vp.crud.deleteFailed': '删除失败：{error}',
 
+  // task-vp-customize：查看 prompt（只读）+ stock VP 守门。
+  'unify.vp.crud.viewPrompt': '查看 prompt',
+  'unify.vp.crud.viewModal.title': 'VP prompt',
+  'unify.vp.crud.viewModal.personaEmpty': '（未定义 persona 正文，只有基础元数据）',
+  'unify.vp.crud.viewModal.back': '返回',
+  'unify.vp.crud.viewModal.editFromHere': '编辑',
+  'unify.vp.crud.stockBadge': '预装',
+  'unify.vp.crud.stockReadOnly': '预装 VP 随 agent 出厂，不能编辑或删除。',
+
   // N4 映射 — validateVpId reason → 人话（334d nit + prev-3 递的雏形）。
   'unify.vp.idError.empty_or_non_string': '角色 ID 不能为空。',
   'unify.vp.idError.too_long': '角色 ID 太长（最多 40 字符）。',
@@ -1008,6 +1017,7 @@ export default {
   'unify.vp.idError.reserved': '角色 ID 不能用保留名（all / user / system / everyone）。',
   'unify.vp.idError.duplicate': '已经存在同 ID 的角色。',
   'unify.vp.idError.not_found': '该 VP 不存在，可能已被删除。',
+  'unify.vp.idError.stock_readonly': '预装 VP 不能编辑或删除。',
   'unify.vp.idError.unknown': '发生未知错误，请重试。',
 
   // ============ Unify VP 详情页 (task-334-ui-c) ============
@@ -1147,6 +1157,9 @@ export default {
   'unify.group.members.defaultHint': '默认 VP（@提及缺省时由该 VP 应答）',
   'unify.group.members.memberCount': '已选 {count} 位',
   'unify.group.members.actionFailed': '操作失败：{error}',
+  // task-vp-customize：从群设置直接跳到 VP 库 tab（新建 + 查看）。
+  'unify.group.members.openLibrary': '打开 VP 库',
+  'unify.group.members.openLibraryHint': '在 VP 库可创建新 VP 或查看 VP 的 prompt。',
 
   // 群公告（注入 system prompt 的共享前缀）.
   'unify.group.announcement.label': '群公告',
