@@ -51,7 +51,6 @@ const buildToolOnlyTurn = (vpId, { isStreaming = false } = {}) => ({
   speakerStateCause: '',
   showSpeakerHeader: true,
   turnId: 'turn_1',
-  handoffHints: [],
 });
 
 const buildTextTurn = (vpId, { isStreaming = false, text = 'hello' } = {}) => ({
@@ -70,7 +69,6 @@ const buildTextTurn = (vpId, { isStreaming = false, text = 'hello' } = {}) => ({
   speakerStateCause: '',
   showSpeakerHeader: true,
   turnId: 'turn_2',
-  handoffHints: [],
 });
 
 describe('appendTypingPlaceholders — orphan-block regression', () => {

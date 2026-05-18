@@ -543,9 +543,10 @@ export default {
         if (currentTurn) {
           // Has the VP produced anything the user/group can see?
           // Tools are NOT user-visible content — they're internal
-          // activity. Hand-off pills alone (Issue #2 in v0.1.757) are
-          // not user-visible content either: they're a meta marker
-          // that this VP routed elsewhere.
+          // activity. A route_forward call shows up as a tool chip
+          // (ToolLine renders the `Route @target: text` line), so
+          // forward-only turns still pass through the `hasTools`
+          // gate without a separate handoff pill.
           const hasVisible = !!(
             currentTurn.textContent
             || currentTurn.todoMsg
@@ -553,35 +554,12 @@ export default {
             || currentTurn.imageMsgs.length > 0
           );
           const hasTools = currentTurn.toolMsgs.length > 0;
-          const hasHandoff = !!(currentTurn.handoffHints && currentTurn.handoffHints.length > 0);
 
-          // task-group-vp-block-split (v0.1.776): a VP whose only
-          // product is a `route_forward` hand-off MUST still render —
-          // as a body-less block whose sole surface is the hand-off
-          // pill ("↪ forwarded to Linus") under the VP's avatar
-          // header. This replaces the v0.1.757 forward-only suppression
-          // because it hid the cause of the next VP's appearance and
-          // left the user wondering why Linus suddenly started talking.
-          //
-          // Internal tool calls the VP made while deciding to forward
-          // are still suppressed at render time, but we do that via an
-          // explicit `renderHandoffOnly` flag that AssistantTurn reads
-          // to skip its `turn-actions` block — NOT by mutating
-          // toolMsgs. Keeping toolMsgs / messages intact preserves the
-          // audit-trail invariant ("the in-memory turn matches what's
-          // on disk") and makes the render policy a one-line
-          // declarative flag instead of a hidden side-effect of
-          // finishTurn.
-          const forwardOnly = hasHandoff && !hasVisible;
-          if (forwardOnly) {
-            currentTurn.renderHandoffOnly = true;
-          }
-
-          // Push the turn if it produced ANY surface (visible content,
-          // tools, or a hand-off pill). Empty turns (nothing at all)
-          // are still skipped — they're created when latch helpers ran
-          // but no message body ever attached.
-          if (hasVisible || hasTools || hasHandoff) {
+          // Push the turn if it produced ANY surface (visible content
+          // or tools). Empty turns (nothing at all) are still skipped —
+          // they're created when latch helpers ran but no message body
+          // ever attached.
+          if (hasVisible || hasTools) {
             // task-708: render the speaker header on every VP-attributed
             // turn. The avatar (with its inline typing badge) is THE
             // surface that signals which VP is speaking + whether they
@@ -664,18 +642,6 @@ export default {
           speakerStateCause: '',
           showSpeakerHeader: false,
           turnId: null,
-          // task-707: route_forward hand-off pills. Collected from any
-          // assistant message in this turn that carries `handoffHints`
-          // (set by chat.js's `group_handoff` handler). Rendered as a
-          // small system-line below the body in AssistantTurn.js.
-          handoffHints: [],
-          // task-group-vp-block-split (v0.1.776): when true, AssistantTurn
-          // skips its `turn-actions` block so a VP whose only product
-          // was a `route_forward` renders as a body-less block whose
-          // only surface is the hand-off pill. Set at finishTurn() when
-          // `forwardOnly` is computed; toolMsgs / messages are NOT
-          // mutated (audit-trail intact).
-          renderHandoffOnly: false,
         };
       };
 
@@ -763,13 +729,6 @@ export default {
           // also used for tool-use / chat-image branches so a turn that
           // opens with a non-assistant message still gets a header.
           latchSpeakerFromMsg(msg);
-          // task-707: collect any route_forward hand-off pills attached
-          // to the message by the chat-store `group_handoff` handler.
-          if (Array.isArray(msg.handoffHints) && msg.handoffHints.length > 0) {
-            for (const hint of msg.handoffHints) {
-              currentTurn.handoffHints.push(hint);
-            }
-          }
           currentTurn.messages.push(msg);
           continue;
         }

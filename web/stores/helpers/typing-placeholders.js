@@ -70,7 +70,6 @@ export function appendTypingPlaceholders(items, typingVpIds, activeFeatureByVp) 
       speakerStateCause: '',
       showSpeakerHeader: true,
       turnId: null,
-      handoffHints: [],
       featureId: featureMap[vpId] || null,
       intent: 'quick',
     });

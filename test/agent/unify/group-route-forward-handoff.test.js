@@ -448,8 +448,10 @@ describe('Engine + route_forward integration (task-707)', () => {
     expect(toolPayload.ok).toBe(true);
     expect(toolPayload.dispatched).toEqual(['vp-b']);
 
-    // turn_end carries the structured handoff detail that web-bridge
-    // turns into a `group_handoff` event for the UI.
+    // turn_end carries the structured handoff detail as audit metadata
+    // (kind, fromVpId, dispatched, broadcast, text). The frontend renders
+    // the hand-off as a Route tool chip from the tool_call envelope; the
+    // previous `group_handoff` UI wire event was removed in PR #793.
     const turnEnd = events.filter(e => e.type === 'turn_end').pop();
     expect(turnEnd.stopReason).toBe('tool_handoff');
     expect(turnEnd.detail.kind).toBe('route_forward');

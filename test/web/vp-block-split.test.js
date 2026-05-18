@@ -18,12 +18,11 @@
  * precise VP-boundary signal.
  *
  * This test exercises the aggregator's behaviour through a logic
- * replica — the same approach used by `forward-only-suppression.test.js`
- * to avoid spinning up a Vue runtime. The source-level pins below
- * guarantee the boundary check lives in the right place and exercises
- * the right call sites; they're written as behaviour-shaped contains
- * checks rather than exact source regexes so cosmetic refactors don't
- * break them.
+ * replica to avoid spinning up a Vue runtime. The source-level pins
+ * below guarantee the boundary check lives in the right place and
+ * exercises the right call sites; they're written as behaviour-shaped
+ * contains checks rather than exact source regexes so cosmetic refactors
+ * don't break them.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -79,13 +78,9 @@ describe('MessageList.turnGroups — VP block split (source)', () => {
  *   - currentTurn opens lazily on the first assistant/tool-use/image.
  *   - latchSpeakerFromMsg fills speakerVpId and turnId, idempotent.
  *   - closeTurnIfTurnIdChanged closes the open turn when turnIds differ.
- *   - finishTurn pushes the turn if it has any surface.
- *
- * `hasVisible` mirrors all four arms of the real predicate
- * (textContent / todoMsg / askMsg / imageMsgs) so the replica catches
- * drift on every arm, not just the ones the boundary tests happen to
- * exercise. If MessageList drifts further, the source-level pins above
- * fail first.
+ *   - finishTurn pushes the turn if it has any surface
+ *     (visible content OR tools — route_forward shows up as a tool chip
+ *     so forward-only turns pass through the `hasTools` gate).
  */
 function aggregate(messages) {
   const result = [];
@@ -99,10 +94,7 @@ function aggregate(messages) {
       || currentTurn.imageMsgs.length > 0
     );
     const hasTools = currentTurn.toolMsgs.length > 0;
-    const hasHandoff = currentTurn.handoffHints.length > 0;
-    const forwardOnly = hasHandoff && !hasVisible;
-    if (forwardOnly) currentTurn.renderHandoffOnly = true;
-    if (hasVisible || hasTools || hasHandoff) {
+    if (hasVisible || hasTools) {
       currentTurn.showSpeakerHeader = !!currentTurn.speakerVpId;
       result.push(currentTurn);
     }
@@ -115,11 +107,9 @@ function aggregate(messages) {
       imageMsgs: [],
       todoMsg: null,
       askMsg: null,
-      handoffHints: [],
       speakerVpId: null,
       turnId: null,
       showSpeakerHeader: false,
-      renderHandoffOnly: false,
     };
   };
   const latch = (msg) => {
@@ -153,7 +143,6 @@ function aggregate(messages) {
       if (!currentTurn) startTurn();
       if (msg.content) currentTurn.textContent += msg.content;
       latch(msg);
-      if (Array.isArray(msg.handoffHints)) currentTurn.handoffHints.push(...msg.handoffHints);
       continue;
     }
     if (msg.type === 'tool-use') {
@@ -198,13 +187,11 @@ describe('MessageList.turnGroups — VP block split (logic)', () => {
 
   it('boundary trips on tool-use too (Linus opens with a tool, not text)', () => {
     const blocks = aggregate([
-      { type: 'assistant', content: 'forwarding', vpId: 'jobs', turnId: 'aaaa:jobs',
-        handoffHints: [{ to: 'linus' }] },
+      { type: 'assistant', content: 'forwarding', vpId: 'jobs', turnId: 'aaaa:jobs' },
       { type: 'tool-use', toolName: 'read_file', vpId: 'linus', turnId: 'bbbb:linus' },
     ]);
     expect(blocks).toHaveLength(2);
     expect(blocks[0].speakerVpId).toBe('jobs');
-    expect(blocks[0].handoffHints).toHaveLength(1);
     expect(blocks[1].speakerVpId).toBe('linus');
     expect(blocks[1].toolMsgs).toHaveLength(1);
   });
@@ -274,27 +261,26 @@ describe('MessageList.turnGroups — VP block split (logic)', () => {
   });
 
   it('the exact reported scenario: Jobs forwards to Linus → two distinct blocks', () => {
-    // Jobs's turn: a forward (no visible text — pure forward-only).
+    // Jobs's turn: a route_forward tool call (no visible text — the
+    // forward IS the surface, rendered as a Route tool chip).
     // Linus's turn: actual work.
-    // Both must render; Jobs as a body-less block carrying
-    // renderHandoffOnly=true + the hand-off pill, Linus as a real
-    // block with tools.
+    // Both must render; Jobs as a tool-only block whose only surface is
+    // the Route chip, Linus as a real block with tools.
     const blocks = aggregate([
-      { type: 'assistant', vpId: 'jobs', turnId: 'aaaa:jobs',
-        handoffHints: [{ to: 'linus', reason: 'kernel question' }] },
+      { type: 'tool-use', toolName: 'route_forward', vpId: 'jobs', turnId: 'aaaa:jobs',
+        input: { to: 'linus', text: 'kernel question' } },
       { type: 'assistant', content: 'OK, looking at it', vpId: 'linus', turnId: 'bbbb:linus' },
       { type: 'tool-use', toolName: 'bash', vpId: 'linus', turnId: 'bbbb:linus' },
     ]);
     expect(blocks).toHaveLength(2);
-    // Jobs's block: forward pill, body-less render flag.
+    // Jobs's block: route_forward tool chip, no visible text.
     expect(blocks[0].speakerVpId).toBe('jobs');
-    expect(blocks[0].handoffHints).toHaveLength(1);
     expect(blocks[0].textContent).toBe('');
-    expect(blocks[0].renderHandoffOnly).toBe(true);
+    expect(blocks[0].toolMsgs).toHaveLength(1);
+    expect(blocks[0].toolMsgs[0].toolName).toBe('route_forward');
     // Linus's block: real text + tool.
     expect(blocks[1].speakerVpId).toBe('linus');
     expect(blocks[1].textContent).toBe('OK, looking at it');
     expect(blocks[1].toolMsgs).toHaveLength(1);
-    expect(blocks[1].renderHandoffOnly).toBe(false);
   });
 });
