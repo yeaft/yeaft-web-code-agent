@@ -25,7 +25,7 @@ import { validateVpId } from '../groups/ids.js';
 import { DEFAULT_VP_LIB_DIR, parseRoleMd } from './vp-store.js';
 import { seedSummaryIfMissingSync, removeScopeDirSync } from '../memory/store-v2.js';
 import { VP_STUB_MARKER } from '../memory/seed-backfill.js';
-import { STOCK_VP_IDS } from './seed-defaults.js';
+import { STOCK_VP_IDS } from './stock-ids.js';
 
 /**
  * Default memory root used when callers don't pass `options.memoryRoot`.
@@ -36,13 +36,6 @@ import { STOCK_VP_IDS } from './seed-defaults.js';
  */
 const DEFAULT_MEMORY_ROOT = join(homedir(), '.yeaft', 'memory');
 
-/**
- * Build the seed summary body for a freshly-created VP. Pulled into a
- * helper so tests can pin the exact format.
- *
- * @param {object} payload  same shape as createVp
- * @returns {string}
- */
 /**
  * Build the seed body for a freshly-created VP's `<root>/vp/<id>/summary.md`.
  *
@@ -309,5 +302,11 @@ export function readVp(vpId, options = {}) {
     modelHint,
     persona: body,
     planInstruction: typeof meta.planInstruction === 'string' ? String(meta.planInstruction) : '',
+    // Echo the authoritative stock flag on the read response so the UI's
+    // detail view doesn't have to trust the (potentially stale) list
+    // snapshot it was launched from. Defence-in-depth: same Set, two
+    // call sites; if either disagrees, the agent guard in updateVp /
+    // deleteVp is still the final word.
+    isStock: STOCK_VP_IDS.has(id) === true,
   };
 }

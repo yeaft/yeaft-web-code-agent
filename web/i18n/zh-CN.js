@@ -1000,11 +1000,14 @@ export default {
   'unify.vp.crud.deleteFailed': '删除失败：{error}',
 
   // task-vp-customize：查看 prompt（只读）+ stock VP 守门。
+  // 视图嵌入在 VpCrudPanel 内（v-else-if "view === 'detail'"），不是
+  // 弹窗 — 键统一收在 `view.*`。
   'unify.vp.crud.viewPrompt': '查看 prompt',
-  'unify.vp.crud.viewModal.title': 'VP prompt',
-  'unify.vp.crud.viewModal.personaEmpty': '（未定义 persona 正文，只有基础元数据）',
-  'unify.vp.crud.viewModal.back': '返回',
-  'unify.vp.crud.viewModal.editFromHere': '编辑',
+  'unify.vp.crud.view.title': 'VP 提示词',
+  'unify.vp.crud.view.personaEmpty': '（未定义 persona 正文，只有基础元数据）',
+  'unify.vp.crud.view.back': '返回',
+  'unify.vp.crud.view.editFromHere': '编辑该 VP',
+  'unify.vp.crud.view.removed': '该 VP 已在别处被删除，返回列表。',
   'unify.vp.crud.stockBadge': '预装',
   'unify.vp.crud.stockReadOnly': '预装 VP 随 agent 出厂，不能编辑或删除。',
 

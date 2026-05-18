@@ -1000,11 +1000,14 @@ export default {
   'unify.vp.crud.deleteFailed': 'Delete failed: {error}',
 
   // task-vp-customize: view-prompt (read-only) view + stock VP gating.
+  // The detail view is rendered inline inside VpCrudPanel (v-else-if
+  // "view === 'detail'"), not in a modal — keys live under `view.*`.
   'unify.vp.crud.viewPrompt': 'View prompt',
-  'unify.vp.crud.viewModal.title': 'VP prompt',
-  'unify.vp.crud.viewModal.personaEmpty': '(no persona body — only metadata is defined)',
-  'unify.vp.crud.viewModal.back': 'Back',
-  'unify.vp.crud.viewModal.editFromHere': 'Edit',
+  'unify.vp.crud.view.title': 'VP prompt',
+  'unify.vp.crud.view.personaEmpty': '(no persona body — only metadata is defined)',
+  'unify.vp.crud.view.back': 'Back',
+  'unify.vp.crud.view.editFromHere': 'Edit this VP',
+  'unify.vp.crud.view.removed': 'This VP was removed elsewhere — returning to the list.',
   'unify.vp.crud.stockBadge': 'Stock',
   'unify.vp.crud.stockReadOnly': 'Stock VPs ship with the agent and cannot be edited or deleted.',
 

@@ -12,7 +12,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { serializeVpForWire } from '../../../agent/unify/vp/vp-bridge.js';
-import { STOCK_VP_IDS } from '../../../agent/unify/vp/seed-defaults.js';
+import { STOCK_VP_IDS } from '../../../agent/unify/vp/stock-ids.js';
 
 describe('serializeVpForWire — isStock', () => {
   it('marks a stock VP id as isStock:true', () => {
@@ -62,5 +62,16 @@ describe('serializeVpForWire — isStock', () => {
       role: 'Visionary',
     });
     expect(wire.isStock).toBe(false);
+  });
+
+  it('isStock defaults to false on falsy / non-string vp.id (defensive)', () => {
+    // Older fixtures or buggy callers might hand serializeVpForWire a vp
+    // whose id is undefined / null / numeric. We must never accidentally
+    // mark such records `isStock: true`, and the field must stay strictly
+    // boolean so the frontend's `!!vp.isStock` collapses cleanly.
+    for (const badId of [undefined, null, '', 0, false]) {
+      const wire = serializeVpForWire({ id: badId, name: 'x', role: 'y' });
+      expect(wire.isStock).toBe(false);
+    }
   });
 });

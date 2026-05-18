@@ -490,7 +490,11 @@
   line-height: 1.4;
   border: 1px solid var(--border-subtle, rgba(0,0,0,0.08));
 }
-.vp-crud-stock-badge-inline {
+.vp-crud-stock-badge--compact {
+  /* Detail view header sits the badge next to the title text, so we
+   * push it off the title with a small left margin. The base
+   * `.vp-crud-stock-badge` is already inline-block — this modifier
+   * only adds spacing, not display. */
   margin-left: 8px;
 }
 .vp-crud-detail .vp-crud-field-readonly {

@@ -11,7 +11,7 @@
  *   only emits nothing and renders self-contained list/form toggle.
  */
 import { useVpStore } from '../stores/vp.js';
-import { validateVpId, i18nKeyForReason } from '../utils/vp-id-validator.js';
+import { validateVpId, i18nKeyForReason, isIdReasonCode } from '../utils/vp-id-validator.js';
 
 export default {
   name: 'VpCrudPanel',
@@ -83,8 +83,8 @@ export default {
       <!-- DETAIL (VIEW PROMPT) VIEW — read-only -->
       <div v-else-if="view === 'detail'" class="vp-crud-body vp-crud-detail">
         <div class="vp-crud-form-header">
-          <span>{{ $t('unify.vp.crud.viewModal.title') }}</span>
-          <span v-if="detail && detail.isStock" class="vp-crud-stock-badge vp-crud-stock-badge-inline">
+          <span>{{ $t('unify.vp.crud.view.title') }}</span>
+          <span v-if="detail && detail.isStock" class="vp-crud-stock-badge vp-crud-stock-badge--compact">
             {{ $t('unify.vp.crud.stockBadge') }}
           </span>
         </div>
@@ -115,15 +115,15 @@ export default {
             <span class="vp-crud-field-label">{{ $t('unify.vp.crud.form.persona') }}</span>
             <pre v-if="detail.persona" class="vp-crud-persona-preview">{{ detail.persona }}</pre>
             <div v-else class="vp-crud-readonly-value vp-crud-readonly-empty">
-              {{ $t('unify.vp.crud.viewModal.personaEmpty') }}
+              {{ $t('unify.vp.crud.view.personaEmpty') }}
             </div>
           </div>
         </template>
         <div v-else class="vp-crud-form-error">{{ detailError || $t('unify.vp.idError.unknown') }}</div>
 
         <div class="vp-crud-form-actions">
-          <button type="button" class="vp-crud-link-btn" @click="view = 'list'">
-            {{ $t('unify.vp.crud.viewModal.back') }}
+          <button type="button" class="vp-crud-link-btn" @click="returnToList">
+            {{ $t('unify.vp.crud.view.back') }}
           </button>
           <button
             v-if="detail && !detail.isStock"
@@ -132,7 +132,7 @@ export default {
             @click="editFromDetail"
             :disabled="busy"
           >
-            {{ $t('unify.vp.crud.viewModal.editFromHere') }}
+            {{ $t('unify.vp.crud.view.editFromHere') }}
           </button>
         </div>
       </div>
@@ -220,7 +220,7 @@ export default {
         <div v-if="formError" class="vp-crud-form-error">{{ formError }}</div>
 
         <div class="vp-crud-form-actions">
-          <button type="button" class="vp-crud-link-btn" @click="view = 'list'" :disabled="busy">
+          <button type="button" class="vp-crud-link-btn" @click="returnToList" :disabled="busy">
             {{ $t('unify.vp.crud.form.cancel') }}
           </button>
           <button type="submit" class="vp-crud-primary-btn" :disabled="!canSubmit">
@@ -268,6 +268,40 @@ export default {
     vpColorFor(vpId) { return this.vpStore.vpColor(vpId); },
     vpInitialFor(vpId) { return this.vpStore.vpInitial(vpId); },
 
+    /**
+     * Populate `this.form` from a VP-shaped object (either a fresh read
+     * response or this.detail). Shared between `startEdit` and
+     * `editFromDetail` so a new VP field only needs to be added once.
+     */
+    populateFormFrom(src) {
+      this.form = {
+        vpId: src.vpId,
+        displayName: src.displayName || '',
+        role: src.role || '',
+        traitsRaw: Array.isArray(src.traits) ? src.traits.join(', ') : '',
+        modelHint: src.modelHint || '',
+        persona: typeof src.persona === 'string' ? src.persona : '',
+      };
+    },
+
+    /**
+     * Single exit path back to the list view. Clears detail-view state
+     * AND form / editing state so a re-entry starts clean. The cancel
+     * button on the form, the "Back" button on the detail view, and the
+     * live-removal watcher all funnel through here.
+     */
+    returnToList(message) {
+      this.view = 'list';
+      this.editing = null;
+      this.form = this.blankForm();
+      this.idStatus = 'idle';
+      this.idErrorKey = '';
+      this.formError = typeof message === 'string' ? message : '';
+      this.detail = null;
+      this.detailError = '';
+      this.detailLoading = false;
+    },
+
     startCreate() {
       this.editing = null;
       this.form = this.blankForm();
@@ -289,16 +323,22 @@ export default {
       this.formError = '';
       try {
         const res = await this.chatStore().vpCrudRequest('read', vp.vpId);
-        const src = (res && res.ok && res.vp) ? res.vp : vp;
+        // FIX (review C2): on read failure we MUST NOT fall back silently
+        // to the list-snapshot — that gave users a stale form they thought
+        // was the live record, and saves landed on a divergent persona.
+        // Surface the error and stay on the list.
+        if (!(res && res.ok && res.vp)) {
+          const code = (res && res.error && res.error.code) || 'unknown';
+          const key = i18nKeyForReason(code);
+          const translated = this.$t(key);
+          this.formError = translated && translated !== key
+            ? translated
+            : ((res && res.error && res.error.message) || code);
+          return;
+        }
+        const src = res.vp;
         this.editing = { vpId: src.vpId };
-        this.form = {
-          vpId: src.vpId,
-          displayName: src.displayName || '',
-          role: src.role || '',
-          traitsRaw: Array.isArray(src.traits) ? src.traits.join(', ') : '',
-          modelHint: src.modelHint || '',
-          persona: typeof src.persona === 'string' ? src.persona : '',
-        };
+        this.populateFormFrom(src);
         this.idStatus = 'ok';
         this.idErrorKey = '';
         this.view = 'form';
@@ -329,7 +369,10 @@ export default {
             traits: Array.isArray(res.vp.traits) ? res.vp.traits : [],
             modelHint: res.vp.modelHint || '',
             persona: typeof res.vp.persona === 'string' ? res.vp.persona : '',
-            isStock: !!vp.isStock,
+            // Prefer the authoritative isStock from the read response
+            // (echoed by readVp); fall back to the list-snapshot flag
+            // only if an older agent hasn't been redeployed yet.
+            isStock: !!(res.vp.isStock != null ? res.vp.isStock : vp.isStock),
           };
         } else {
           const code = (res && res.error && res.error.code) || 'unknown';
@@ -355,14 +398,7 @@ export default {
       if (!this.detail || this.detail.isStock) return;
       const src = this.detail;
       this.editing = { vpId: src.vpId };
-      this.form = {
-        vpId: src.vpId,
-        displayName: src.displayName || '',
-        role: src.role || '',
-        traitsRaw: Array.isArray(src.traits) ? src.traits.join(', ') : '',
-        modelHint: src.modelHint || '',
-        persona: typeof src.persona === 'string' ? src.persona : '',
-      };
+      this.populateFormFrom(src);
       this.idStatus = 'ok';
       this.idErrorKey = '';
       this.formError = '';
@@ -451,7 +487,12 @@ export default {
             '{error}',
             translated && translated !== key ? translated : ((res.error && res.error.message) || code),
           );
-          if (this.editing == null && (code === 'duplicate' || /reserved|digits|character|long|empty/.test(code))) {
+          // FIX (review I2): the closed enum lives in vp-id-validator.js's
+          // `ID_REASON_CODES`. Substring regexes against the code (a) used
+          // to false-positive any future code containing 'long'/'empty'
+          // etc., and (b) missed `stock_readonly` even though it's the
+          // most security-relevant id-related refusal.
+          if (this.editing == null && isIdReasonCode(code)) {
             this.idStatus = 'error';
             this.idErrorKey = key;
           }
@@ -459,6 +500,31 @@ export default {
       } finally {
         this.busy = false;
       }
+    },
+  },
+
+  /**
+   * Live-removal sync (review C3): if the VP currently being viewed in
+   * the detail panel or edited in the form disappears from the store
+   * (another tab deletes it, or a `vp_removed` event arrives), bounce
+   * back to the list rather than letting the user save edits on a ghost
+   * record. The store handles `vp_removed` already — we only need to
+   * react to its observable consequence (`vpStore.vps` losing the key).
+   */
+  watch: {
+    'vpStore.vps': {
+      deep: true,
+      handler(vps) {
+        const id = this.detail?.vpId || this.editing?.vpId;
+        if (!id) return;
+        if (vps && vps[id]) return;
+        // The VP we were viewing / editing is gone. Bail back to the list
+        // with a translated notice. Avoid stomping a more specific error
+        // that the user is currently looking at.
+        if (this.view === 'detail' || this.view === 'form') {
+          this.returnToList(this.$t('unify.vp.crud.view.removed'));
+        }
+      },
     },
   },
 };

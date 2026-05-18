@@ -14,7 +14,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createVp, updateVp, deleteVp, VpCrudError, buildRoleMd } from '../../../agent/unify/vp/vp-crud.js';
-import { STOCK_VP_IDS } from '../../../agent/unify/vp/seed-defaults.js';
+import { STOCK_VP_IDS } from '../../../agent/unify/vp/stock-ids.js';
 
 let tmpRoot;
 let libDir;
@@ -44,7 +44,7 @@ function seedStockVpOnDisk(vpId, persona = 'original') {
 }
 
 describe('vp-crud — stock VPs are immutable server-side', () => {
-  it('STOCK_VP_IDS is a non-empty Set built from DEFAULT_VPS', () => {
+  it('STOCK_VP_IDS is a non-empty Set covering at least the original 12 seed VPs', () => {
     expect(STOCK_VP_IDS).toBeInstanceOf(Set);
     expect(STOCK_VP_IDS.size).toBeGreaterThanOrEqual(12);
     // Spot-check a couple of canonical seed ids.
