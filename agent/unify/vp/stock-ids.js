@@ -34,6 +34,8 @@ const STOCK_VP_ID_LIST = Object.freeze([
   'buffett', 'munger', 'dalio', 'bezos', 'drucker',
   // arts / culture
   'luxun', 'sudongpo', 'borges', 'einstein', 'kubrick', 'miyazaki',
+  // assistant
+  'omni',
 ]);
 
 /** @type {ReadonlySet<string>} */
