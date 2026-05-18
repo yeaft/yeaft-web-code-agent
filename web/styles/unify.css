@@ -793,26 +793,60 @@
   color: var(--text-primary);
 }
 
-/* Detail/concise toggle chip — borderless, hover-only bg, matches secondary buttons. */
-.unify-debug-toggle-chip {
-  margin-left: auto;
-  padding: 2px 10px;
-  font-size: 11px;
-  line-height: 1.5;
-  border: none;
+.unify-debug-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 12px 8px;
+  flex-shrink: 0;
+}
+
+.unify-debug-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 6px;
   background: transparent;
   color: var(--text-muted);
-  border-radius: 10px;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
-.unify-debug-toggle-chip:hover {
+
+.unify-debug-tab:hover {
   background: var(--sidebar-hover);
   color: var(--text-primary);
 }
-.unify-debug-toggle-chip.active {
-  background: var(--accent);
-  color: var(--accent-fg);
+
+.unify-debug-tab.active {
+  background: var(--sidebar-selected);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.unify-debug-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.unify-debug-tab-count {
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--bg-tertiary, var(--sidebar-hover));
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.unify-debug-tab.active .unify-debug-tab-count {
+  color: var(--text-secondary);
 }
 
 .unify-debug-count {
@@ -1812,9 +1846,15 @@
 }
 
 .unify-debug-copy-btn:hover,
-.unify-debug-show-btn:hover {
+.unify-debug-show-btn:hover:not(:disabled) {
   background: var(--sidebar-hover);
   color: var(--text-primary);
+}
+
+.unify-debug-show-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: transparent;
 }
 
 .unify-debug-copy-btn.small {
@@ -2543,10 +2583,19 @@
  * the same tokens the rest of unify uses. */
 .unify-debug-toolbar {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 6px 10px 8px 10px;
   align-items: center;
   border-bottom: 1px solid var(--border-color);
+}
+
+.unify-debug-search {
+  min-width: 160px;
+}
+
+.unify-debug-group-select {
+  max-width: 100%;
 }
 
 /* v0.1.755 + PR feat-dream-debug-panel-full: Dream pass status row.
@@ -3038,19 +3087,6 @@
 
 /* ── 2026-05-13 Tool Usage Stats drawer ──────────────────────────── */
 
-.tool-stats-open-button {
-  position: absolute;
-  top: 10px;
-  right: 48px;
-  background: transparent;
-  border: 0;
-  color: inherit;
-  cursor: pointer;
-  padding: 4px 8px;
-  font-size: 11px;
-  border-radius: 4px;
-}
-
 .tool-stats-drawer-backdrop {
   position: fixed;
   inset: 0;
@@ -3127,6 +3163,67 @@
 .tool-stats-tab.active {
   color: var(--text, #e6e6e6);
   background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+}
+
+.unify-debug-tool-stats {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 12px 16px;
+}
+
+.unify-debug-tool-stats-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.unify-debug-tool-stats-title {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.unify-debug-tool-stats-meta {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.unify-debug-tool-stats-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.unify-debug-tool-stats .tool-stats-table {
+  min-width: 640px;
+}
+
+.unify-debug-unused-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.unify-debug-unused-tools .unify-debug-section-title {
+  flex: 1 0 100%;
+  margin-bottom: 0;
+}
+
+.unify-debug-unused-tool {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--sidebar-hover);
+  color: var(--text-secondary);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
 }
 
 .tool-stats-tab-count {
