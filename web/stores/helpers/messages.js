@@ -86,7 +86,7 @@ export function addMessageToConversation(store, conversationId, msg) {
   store.messagesMap[conversationId].push(newMsg);
 }
 
-export function appendToAssistantMessageForConversation(store, conversationId, text) {
+export function appendToAssistantMessageForConversation(store, conversationId, text, opts = {}) {
   if (!conversationId) return;
   if (!text) return;
 
@@ -103,6 +103,8 @@ export function appendToAssistantMessageForConversation(store, conversationId, t
     for (let i = msgs.length - 1; i >= 0; i--) {
       if (msgs[i].turnId === turnId && msgs[i].type === 'assistant' && msgs[i].isStreaming) {
         stampSpeakerOnVpMessage(store, conversationId, msgs[i]);
+        if (opts.id && !msgs[i].id) msgs[i].id = opts.id;
+        if (opts.id && !msgs[i].messageId) msgs[i].messageId = opts.id;
         if (msgs[i].content.endsWith(text)) return;
         msgs[i].content += text;
         return;
@@ -110,6 +112,7 @@ export function appendToAssistantMessageForConversation(store, conversationId, t
     }
     // No existing streaming message for this turn — create one.
     addMessageToConversation(store, conversationId, {
+      ...(opts.id ? { id: opts.id, messageId: opts.id } : {}),
       type: 'assistant',
       content: text,
       isStreaming: true
@@ -122,10 +125,13 @@ export function appendToAssistantMessageForConversation(store, conversationId, t
   if (lastMsg && lastMsg.type === 'assistant' && lastMsg.isStreaming) {
     stampSpeakerOnVpMessage(store, conversationId, lastMsg);
     // Dedup guard: skip if the message already ends with this exact text
+    if (opts.id && !lastMsg.id) lastMsg.id = opts.id;
+    if (opts.id && !lastMsg.messageId) lastMsg.messageId = opts.id;
     if (lastMsg.content.endsWith(text)) return;
     lastMsg.content += text;
   } else {
     addMessageToConversation(store, conversationId, {
+      ...(opts.id ? { id: opts.id, messageId: opts.id } : {}),
       type: 'assistant',
       content: text,
       isStreaming: true

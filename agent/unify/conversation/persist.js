@@ -107,6 +107,13 @@ function serializeMessage(msg) {
   // the speaker so the UI can render the message on the correct VP track.
   // For real user messages this is unset.
   if (msg.speakerVpId) fm.push(`speakerVpId: ${msg.speakerVpId}`);
+  // Internal/synthetic rows must round-trip so refresh/history replay can
+  // keep them out of the user-visible conversation. Reflection folding uses
+  // `_reflection`; other engine-only rows may use one of the explicit flags.
+  if (msg._reflection) fm.push('_reflection: true');
+  if (msg.internal) fm.push('internal: true');
+  if (msg.systemOnly) fm.push('systemOnly: true');
+  if (msg.systemOnlyMessage) fm.push('systemOnlyMessage: true');
 
   // Token estimate
   const content = msg.content || '';
@@ -179,6 +186,10 @@ export function parseMessage(raw) {
       case 'sourceThreadId': msg.sourceThreadId = value; break;
       case 'groupId': msg.groupId = value; break;
       case 'speakerVpId': msg.speakerVpId = value; break;
+      case '_reflection': msg._reflection = value === 'true'; break;
+      case 'internal': msg.internal = value === 'true'; break;
+      case 'systemOnly': msg.systemOnly = value === 'true'; break;
+      case 'systemOnlyMessage': msg.systemOnlyMessage = value === 'true'; break;
       // toolCalls are multi-line YAML — handled separately below
     }
   }

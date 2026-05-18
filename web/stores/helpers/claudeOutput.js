@@ -53,7 +53,7 @@ export function handleClaudeOutput(store, conversationId, data) {
 
     // content 可能是字符串或数组
     if (typeof content === 'string') {
-      store.appendToAssistantMessageForConversation(conversationId, content);
+      store.appendToAssistantMessageForConversation(conversationId, content, { id: data.message?.id || data.message?.messageId || null });
       return;
     }
     if (!Array.isArray(content)) return;
@@ -66,7 +66,7 @@ export function handleClaudeOutput(store, conversationId, data) {
 
     for (const block of content) {
       if (block.type === 'text') {
-        store.appendToAssistantMessageForConversation(conversationId, block.text);
+        store.appendToAssistantMessageForConversation(conversationId, block.text, { id: data.message?.id || data.message?.messageId || null });
       } else if (block.type === 'tool_use') {
         // Finish any in-progress streaming so typing dots reappear during tool execution.
         // Without this, isStreaming stays true on the assistant message, which suppresses
@@ -179,6 +179,7 @@ export function handleClaudeOutput(store, conversationId, data) {
       const duplicate = msgs.some(m => m.type === 'user' && m.content === userContent);
       if (!duplicate) {
         store.addMessageToConversation(conversationId, {
+          ...(data.message?.id ? { id: data.message.id, messageId: data.message.id } : {}),
           type: 'user',
           content: userContent
         });

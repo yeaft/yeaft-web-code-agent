@@ -124,20 +124,39 @@ describe('handleUnifyLoadMoreHistory — chunk emission', () => {
     // 2 newest turns: q4/aq4, q5/aq5.
     expect(chunk.messages.map(m => m.content))
       .toEqual(['q4', 'aq4', 'q5', 'aq5']);
-    // Each row carries role/content/groupId. We intentionally do NOT
-    // ship id/time over the wire — see web-bridge.js for rationale.
+    // Each row carries role/content/groupId; stable ids and assistant
+    // speaker attribution are included when present.
     for (const m of chunk.messages) {
       expect(m).toEqual(expect.objectContaining({
         role: expect.stringMatching(/^(user|assistant)$/),
         content: expect.any(String),
         groupId: gid,
       }));
-      expect(m).not.toHaveProperty('id');
       expect(m).not.toHaveProperty('time');
     }
     expect(typeof chunk.oldestSeq).toBe('number');
     expect(chunk.oldestSeq).toBeGreaterThan(0);
     expect(chunk.hasMore).toBe(true);
+  });
+
+
+  it('filters internal reflection rows and preserves ids + speaker attribution in older history', async () => {
+    const gid = 'g_chunk_visible_projection';
+    sharedStore.appendBatch([
+      { id: 'visible-u', role: 'user', content: 'visible question', groupId: gid },
+      { id: 'reflection-u', role: 'user', content: 'The previous tool calls have been folded', groupId: gid, _reflection: true },
+      { id: 'internal-a', role: 'assistant', content: 'internal assistant', groupId: gid, internal: true, speakerVpId: 'vp-hidden' },
+      { id: 'visible-a', role: 'assistant', content: 'visible answer', groupId: gid, speakerVpId: 'vp-linus' },
+    ]);
+
+    await handleUnifyLoadMoreHistory({ groupId: gid, beforeSeq: null, turns: 10 });
+    const chunk = lastChunk();
+    expect(chunk).toBeDefined();
+    expect(chunk.messages.map(m => m.content)).toEqual(['visible question', 'visible answer']);
+    expect(chunk.messages[0]).toEqual(expect.objectContaining({ role: 'user', groupId: gid }));
+    expect(chunk.messages[0].id).toEqual(expect.any(String));
+    expect(chunk.messages[1]).toEqual(expect.objectContaining({ role: 'assistant', groupId: gid, speakerVpId: 'vp-linus' }));
+    expect(chunk.messages[1].id).toEqual(expect.any(String));
   });
 
   it('walks the cursor through history until exhausted', async () => {
@@ -236,6 +255,30 @@ describe('handleUnifyLoadHistory — pagination cursor priming', () => {
     expect(evt.hasMore).toBe(true);
     expect(typeof evt.oldestSeq).toBe('number');
     expect(evt.oldestSeq).toBeGreaterThan(0);
+  });
+
+
+  it('refresh replay filters reflection/internal rows and emits stable ids + speaker envelopes', async () => {
+    const gid = 'g_refresh_visible_projection';
+    sharedStore.appendBatch([
+      { id: 'refresh-u', role: 'user', content: 'refresh question', groupId: gid },
+      { id: 'refresh-reflection', role: 'user', content: 'The previous 30 tool calls have been folded', groupId: gid, _reflection: true },
+      { id: 'refresh-internal', role: 'assistant', content: 'internal note', groupId: gid, internal: true, speakerVpId: 'vp-hidden' },
+      { id: 'refresh-a', role: 'assistant', content: 'refresh answer', groupId: gid, speakerVpId: 'vp-ada' },
+    ]);
+
+    await handleUnifyLoadHistory({ groupId: gid, limit: 10 });
+
+    const replay = outbound.filter(m => m.type === 'unify_output' && m.data);
+    const visibleData = replay.map(m => ({ groupId: m.groupId, vpId: m.vpId || null, data: m.data }));
+    expect(visibleData.filter(x => x.data.type === 'user').map(x => x.data.message.content)).toEqual(['refresh question']);
+    expect(visibleData.filter(x => x.data.type === 'assistant').map(x => x.data.message.content[0].text)).toEqual(['refresh answer']);
+    const assistant = visibleData.find(x => x.data.type === 'assistant');
+    expect(assistant).toEqual(expect.objectContaining({ groupId: gid, vpId: 'vp-ada' }));
+    expect(assistant.data.message.id).toEqual(expect.any(String));
+    const user = visibleData.find(x => x.data.type === 'user');
+    expect(user.data.message.id).toEqual(expect.any(String));
+    expect(user.data.message.id).not.toBe(assistant.data.message.id);
   });
 
   it('history_loaded reports hasMore=false when the bootstrap covers everything', async () => {

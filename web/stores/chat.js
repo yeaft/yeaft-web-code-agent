@@ -149,6 +149,11 @@ export const useChatStore = defineStore('chat', {
     unifyHasMoreHistory: false,
     unifyLoadingMoreHistory: false,
     unifyOldestLoadedSeq: null,
+    // Group-scoped Unify history cursors/cache metadata. The legacy three
+    // flags above mirror the currently active group for component
+    // compatibility; this map is the source of truth across group switches.
+    // Shape: { [groupId || '__all__']: { loaded, hasMore, loading, oldestSeq, count } }
+    unifyGroupHistoryState: {},
     // 可用的 slash commands 列表（按 conversationId 隔离，从 Claude SDK init 消息获取）
     slashCommandsMap: {},  // { [conversationId]: string[] }
     // Slash command 描述映射（从 agent 端传递，所有 conversation 共用）
@@ -1300,8 +1305,26 @@ export const useChatStore = defineStore('chat', {
           // show / hide the "Load older messages" hint and the
           // `loadMoreUnifyHistory` action knows where to start the next
           // page.
-          this.unifyHasMoreHistory = !!event.hasMore;
-          this.unifyOldestLoadedSeq = (typeof event.oldestSeq === 'number') ? event.oldestSeq : null;
+          {
+            const groupKey = event.groupId || '__all__';
+            const nextState = {
+              loaded: true,
+              loading: false,
+              hasMore: !!event.hasMore,
+              oldestSeq: (typeof event.oldestSeq === 'number') ? event.oldestSeq : null,
+              count: (typeof event.count === 'number') ? event.count : 0,
+            };
+            this.unifyGroupHistoryState = {
+              ...this.unifyGroupHistoryState,
+              [groupKey]: nextState,
+            };
+            const activeKey = this.unifyActiveGroupFilter || '__all__';
+            if (groupKey === activeKey) {
+              this.unifyHasMoreHistory = nextState.hasMore;
+              this.unifyLoadingMoreHistory = false;
+              this.unifyOldestLoadedSeq = nextState.oldestSeq;
+            }
+          }
           break;
 
         // ★ task-334-ui-a + 334h: VP library snapshot + live diff.
@@ -1886,35 +1909,39 @@ export const useChatStore = defineStore('chat', {
     // the main pane to that group. Clears task-detail filter so exactly one
     // scope is active at a time.
     //
-    // Group-history-isolation (Bug 7): also clear the message stream and
-    // re-request history from the agent scoped to this group. Without this,
-    // re-entering a group would either show the previous group's messages
-    // or — worse — show the legacy `grp_default` orphans plus pre-grouping
-    // messages because the cached stream was loaded with no group filter.
+    // Group conversation consistency: do NOT clear the shared Unify stream
+    // on group switch. `messages` already filters by groupId; clearing the
+    // backing array caused flicker and destroyed the live state for the
+    // group the user just left. Keep all group-stamped rows cached in the
+    // Unify conversation and only request history for a group that has no
+    // visible rows and has not been hydrated yet.
     setActiveGroupFilter(groupId) {
       const prev = this.unifyActiveGroupFilter || null;
-      this.unifyActiveGroupFilter = groupId || null;
-      // Only force a reload when the filter actually changed AND we have
-      // an active Unify session to ask. The local-only path (no agent yet)
-      // is harmless: the next sendUnifyEnter will plumb the groupId.
-      if ((groupId || null) === prev) return;
+      const next = groupId || null;
+      this.unifyActiveGroupFilter = next;
+      if (next === prev) return;
+
+      const groupKey = next || '__all__';
+      const savedState = this.unifyGroupHistoryState[groupKey] || null;
+      this.unifyHasMoreHistory = !!savedState?.hasMore;
+      this.unifyLoadingMoreHistory = !!savedState?.loading;
+      this.unifyOldestLoadedSeq = (typeof savedState?.oldestSeq === 'number') ? savedState.oldestSeq : null;
+
       const convId = this.unifyConversationId;
-      if (convId && this.messagesMap[convId]) {
-        this.messagesMap[convId] = [];
-      }
-      // Pagination cursor is per-group: a stale cursor from the previous
-      // group would let the next "Load older" click cross-pollute history
-      // (or, more likely, return an empty page because the seq predates
-      // the new group). The agent will re-prime via `history_loaded`.
-      this.unifyHasMoreHistory = false;
-      this.unifyLoadingMoreHistory = false;
-      this.unifyOldestLoadedSeq = null;
-      if (this.unifyAgentId) {
+      const rows = convId ? (this.messagesMap[convId] || []) : [];
+      const hasCachedVisibleRows = !!next && rows.some(m => m && m.groupId === next);
+      const needsHydrate = !savedState?.loaded && !savedState?.loading && !hasCachedVisibleRows;
+      if (this.unifyAgentId && needsHydrate) {
+        this.unifyGroupHistoryState = {
+          ...this.unifyGroupHistoryState,
+          [groupKey]: { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },
+        };
+        this.unifyLoadingMoreHistory = true;
         this.sendWsMessage({
           type: 'unify_load_history',
           agentId: this.unifyAgentId,
           limit: 50,
-          groupId: groupId || null,
+          groupId: next,
         });
       }
     },
@@ -2248,7 +2275,7 @@ export const useChatStore = defineStore('chat', {
     // Message CRUD
     // =====================
     addMessageToConversation(conversationId, msg) { msgHelpers.addMessageToConversation(this, conversationId, msg); },
-    appendToAssistantMessageForConversation(conversationId, text) { msgHelpers.appendToAssistantMessageForConversation(this, conversationId, text); },
+    appendToAssistantMessageForConversation(conversationId, text, opts) { msgHelpers.appendToAssistantMessageForConversation(this, conversationId, text, opts); },
     finishStreamingForConversation(conversationId) { msgHelpers.finishStreamingForConversation(this, conversationId); },
     sweepStaleStreamingForConversation(conversationId) { msgHelpers.sweepStaleStreamingForConversation(this, conversationId); },
     appendToAssistantMessage(text) { this.appendToAssistantMessageForConversation(this.currentConversation, text); },
@@ -2538,6 +2565,14 @@ export const useChatStore = defineStore('chat', {
       } catch { /* groups store not registered yet — agent treats null as no-op */ }
 
       this.unifyLoadingMoreHistory = true;
+      const groupKey = groupId || '__all__';
+      this.unifyGroupHistoryState = {
+        ...this.unifyGroupHistoryState,
+        [groupKey]: {
+          ...(this.unifyGroupHistoryState[groupKey] || {}),
+          loading: true,
+        },
+      };
       this.sendWsMessage({
         type: 'unify_load_more_history',
         agentId: this.unifyAgentId,
