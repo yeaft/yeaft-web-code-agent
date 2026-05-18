@@ -211,7 +211,64 @@ describe('runDream — happy path', () => {
     expect(targets).toEqual(['group/g-current', 'user']);
   });
 
-  it('returns empty-diff skipped reason for manual current-group runs', async () => {
+  it('reruns scoped manual group dreams over prior messages and persists memory summaries', async () => {
+    const priorMessages = [
+      { id: 'm1', role: 'user', body: 'Dream should remember that the operator prefers concise release notes.' },
+      { id: 'm2', role: 'assistant', vpId: 'linus', body: 'We should keep the fix small and tested.' },
+    ];
+    const calls = [];
+    await writeGroupState(root, 'g-current', {
+      lastDreamMessageId: 'm2',
+      lastDreamAt: '2026-05-17T00:00:00Z',
+      messageCount: priorMessages.length,
+    });
+
+    const r = await runDream({
+      root,
+      manual: true,
+      scopeFilter: ['group/g-current'],
+      llm: makeLlm(),
+      listGroups: async () => ['g-current', 'g-other'],
+      countMessages: async (g) => {
+        calls.push(`count:${g}`);
+        return g === 'g-current' ? priorMessages.length : 99;
+      },
+      loadGroupDiff: async (g, sinceId) => {
+        calls.push(`diff:${g}:${sinceId ?? '<all>'}`);
+        return g === 'g-current' ? priorMessages : [];
+      },
+      loadOverlapPreamble: async () => {
+        calls.push('overlap');
+        return [];
+      },
+      nowIso: () => '2026-05-18T06:00:00Z',
+    });
+
+    expect(calls).toEqual(['count:g-current', 'diff:g-current:<all>']);
+    expect(r.groups.find(x => x.groupId === 'g-current')).toMatchObject({
+      status: 'triaged',
+      new: 0,
+      rerun: true,
+    });
+    expect(r.groups.find(x => x.groupId === 'g-other')).toMatchObject({
+      status: 'skipped',
+      reason: 'scope-filtered',
+    });
+    expect(r.targets.map(t => t.target).sort()).toEqual(['group/g-current', 'user', 'vp/linus']);
+
+    const groupMem = readFileSync(join(root, 'group', 'g-current', 'memory.md'), 'utf8');
+    const groupSummary = readFileSync(join(root, 'group', 'g-current', 'summary.md'), 'utf8');
+    expect(groupMem).toContain('written by update');
+    expect(groupMem).toContain('lastDreamAt: 2026-05-18T06:00:00Z');
+    expect(groupSummary.trimEnd()).toBe('summary for group/g-current');
+
+    const state = await readGroupState(root, 'g-current');
+    expect(state.lastDreamMessageId).toBe('m2');
+    expect(state.messageCount).toBe(priorMessages.length);
+    expect(state.lastDreamAt).toBe('2026-05-18T06:00:00Z');
+  });
+
+  it('returns empty-diff skipped reason for manual current-group runs when no messages can be loaded', async () => {
     const r = await runDream({
       root,
       manual: true,

@@ -8,7 +8,8 @@
  *   enumerateGroups()                  via opts.listGroups()
  *     ↓
  *   for each group with newCount ≥ MIN_NEW_PER_GROUP (auto)
- *                    or > 0 (manual):
+ *                    or > 0 (manual)
+ *                    or prior messages in a scoped manual group rerun:
  *       loadDiff()                     via opts.loadGroupDiff(groupId, sinceId)
  *       applyOverlap()                 via opts.loadOverlapPreamble(...)
  *       segment()                      segmentDiff(...)
@@ -55,7 +56,7 @@ import { tsForBackup, pruneOldSnapshots } from './snapshot.js';
  * @typedef {Object} RunDreamOpts
  * @property {string} root                    — memory root, e.g. ~/.yeaft/memory
  * @property {boolean} [manual=false]         — manual trigger overrides newCount<20 skip
- * @property {string[]} [scopeFilter]         — optional: only dream these targets (still respects newCount per group; '*' allowed)
+ * @property {string[]} [scopeFilter]         — optional: only dream these targets; scoped manual group triggers rerun the current group when there are prior messages but no new cursor delta ('*' allowed)
  * @property {(req: {pass:string, prompt:string, system:string}) => Promise<string>} llm
  * @property {() => Promise<Array<string>>} listGroups   — return all group ids (incl. '_no-group')
  * @property {(groupId: string) => Promise<number>} countMessages   — total message count for a group
@@ -112,7 +113,13 @@ export async function runDream(opts) {
     const beforeCount = await safeCall(() => opts.countMessages(groupId), 0);
     const newCount = Math.max(0, beforeCount - (state.messageCount || 0));
 
-    if (newCount === 0) {
+    const rerunScopedManual = !!opts.manual
+      && groupFilter
+      && groupFilter.has(groupId)
+      && newCount === 0
+      && beforeCount > 0;
+
+    if (newCount === 0 && !rerunScopedManual) {
       groupsReport.push({ groupId, new: 0, status: 'skipped', reason: 'no-new-messages' });
       continue;
     }
@@ -122,12 +129,13 @@ export async function runDream(opts) {
     }
 
     onProgress({ phase: 'load-diff', groupId });
-    const diffNew = await safeCall(() => opts.loadGroupDiff(groupId, state.lastDreamMessageId), []);
+    const diffCursor = rerunScopedManual ? null : state.lastDreamMessageId;
+    const diffNew = await safeCall(() => opts.loadGroupDiff(groupId, diffCursor), []);
     if (!diffNew || diffNew.length === 0) {
       groupsReport.push({ groupId, new: newCount, status: 'skipped', reason: 'empty-diff' });
       continue;
     }
-    const overlapMessages = state.lastDreamMessageId
+    const overlapMessages = state.lastDreamMessageId && !rerunScopedManual
       ? await safeCall(
           () => opts.loadOverlapPreamble
             ? opts.loadOverlapPreamble(groupId, state.lastDreamMessageId, limits.DREAM_OVERLAP)
@@ -171,7 +179,7 @@ export async function runDream(opts) {
 
     const tailId = lastMessageId(diffNew);
     processedGroups.push({ groupId, tailId, beforeCount, newCount, segments: segments.length, actions: actions.length });
-    groupsReport.push({ groupId, new: newCount, segments: segments.length, actions: actions.length, status: 'triaged' });
+    groupsReport.push({ groupId, new: newCount, segments: segments.length, actions: actions.length, status: 'triaged', rerun: rerunScopedManual || undefined });
   }
 
   // 3. merge
