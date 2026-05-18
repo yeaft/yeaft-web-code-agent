@@ -63,11 +63,54 @@ function mkStore(overrides = {}) {
     unifyHasMoreHistory: true,
     unifyLoadingMoreHistory: false,
     unifyOldestLoadedSeq: 100,
+    unifyGroupHistoryState: {},
     messagesMap: {},
     sendWsMessage(msg) { sent.push(msg); },
     _sent: sent,
     ...overrides,
   };
+}
+
+function visibleMessages(state) {
+  const convId = state.currentView === 'unify'
+    ? (state.unifyConversationId || null)
+    : (state.activeConversations?.[0] || null);
+  const raw = convId ? (state.messagesMap[convId] || []) : [];
+  if (state.currentView === 'unify' && state.unifyActiveGroupFilter) {
+    return raw.filter(m => m && m.groupId === state.unifyActiveGroupFilter);
+  }
+  return raw;
+}
+
+function setActiveGroupFilter(groupId) {
+  const prev = this.unifyActiveGroupFilter || null;
+  const next = groupId || null;
+  this.unifyActiveGroupFilter = next;
+  if (next === prev) return;
+
+  const groupKey = next || '__all__';
+  const savedState = this.unifyGroupHistoryState[groupKey] || null;
+  this.unifyHasMoreHistory = !!savedState?.hasMore;
+  this.unifyLoadingMoreHistory = !!savedState?.loading;
+  this.unifyOldestLoadedSeq = (typeof savedState?.oldestSeq === 'number') ? savedState.oldestSeq : null;
+
+  const convId = this.unifyConversationId;
+  const rows = convId ? (this.messagesMap[convId] || []) : [];
+  const hasCachedVisibleRows = !!next && rows.some(m => m && m.groupId === next);
+  const needsHydrate = !savedState?.loaded && !savedState?.loading && !hasCachedVisibleRows;
+  if (this.unifyAgentId && needsHydrate) {
+    this.unifyGroupHistoryState = {
+      ...this.unifyGroupHistoryState,
+      [groupKey]: { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },
+    };
+    this.unifyLoadingMoreHistory = true;
+    this.sendWsMessage({
+      type: 'unify_load_history',
+      agentId: this.unifyAgentId,
+      limit: 50,
+      groupId: next,
+    });
+  }
 }
 
 describe('handleUnifyHistoryChunk', () => {
@@ -99,6 +142,60 @@ describe('handleUnifyHistoryChunk', () => {
     expect(arr[0].type).toBe('user');
     expect(arr[1].type).toBe('assistant');
     expect(arr[0].groupId).toBe('g1');
+  });
+
+
+  it('preserves stable ids and assistant speaker attribution from older history rows', () => {
+    const store = mkStore({
+      unifyActiveGroupFilter: 'g1',
+      messagesMap: { 'unify-1': [] },
+    });
+    handleUnifyHistoryChunk(store, {
+      conversationId: 'unify-1',
+      groupId: 'g1',
+      messages: [
+        { id: 'u-1', role: 'user', content: 'older-q', groupId: 'g1' },
+        { id: 'a-1', role: 'assistant', content: 'older-a', groupId: 'g1', speakerVpId: 'vp-linus' },
+      ],
+      oldestSeq: 10,
+      hasMore: false,
+    });
+
+    expect(store.messagesMap['unify-1']).toEqual([
+      expect.objectContaining({ id: 'u-1', messageId: 'u-1', type: 'user', groupId: 'g1' }),
+      expect.objectContaining({ id: 'a-1', messageId: 'a-1', type: 'assistant', groupId: 'g1', vpId: 'vp-linus', speakerVpId: 'vp-linus' }),
+    ]);
+  });
+
+  it('keeps group-scoped cursor state isolated when accepting matching chunks', () => {
+    const store = mkStore({
+      unifyActiveGroupFilter: 'group-A',
+      unifyGroupHistoryState: {
+        'group-B': { loaded: true, loading: false, hasMore: true, oldestSeq: 77, count: 2 },
+      },
+      messagesMap: { 'unify-1': [] },
+    });
+    handleUnifyHistoryChunk(store, {
+      conversationId: 'unify-1',
+      groupId: 'group-A',
+      messages: [{ id: 'a-old', role: 'user', content: 'A-old', groupId: 'group-A' }],
+      oldestSeq: 11,
+      hasMore: false,
+    });
+
+    expect(store.unifyGroupHistoryState['group-A']).toEqual(expect.objectContaining({
+      loaded: true,
+      loading: false,
+      hasMore: false,
+      oldestSeq: 11,
+      count: 1,
+    }));
+    expect(store.unifyGroupHistoryState['group-B']).toEqual(expect.objectContaining({
+      hasMore: true,
+      oldestSeq: 77,
+    }));
+    expect(store.unifyHasMoreHistory).toBe(false);
+    expect(store.unifyOldestLoadedSeq).toBe(11);
   });
 
   it('updates unifyHasMoreHistory + unifyOldestLoadedSeq from the chunk', () => {
@@ -345,5 +442,84 @@ describe('loadMoreUnifyHistory — action gates', () => {
     expect(() => loadMoreUnifyHistory.call(store)).not.toThrow();
     expect(store._sent).toHaveLength(1);
     expect(store._sent[0].groupId).toBeNull();
+  });
+});
+
+describe('setActiveGroupFilter — group-scoped conversation cache', () => {
+  it('does not clear the shared Unify message stream when switching groups', () => {
+    const store = mkStore({
+      unifyActiveGroupFilter: 'group-A',
+      messagesMap: {
+        'unify-1': [
+          { id: 'a1', type: 'user', content: 'A before', groupId: 'group-A' },
+          { id: 'b1', type: 'user', content: 'B before', groupId: 'group-B' },
+        ],
+      },
+      unifyGroupHistoryState: {
+        'group-A': { loaded: true, loading: false, hasMore: true, oldestSeq: 10, count: 1 },
+        'group-B': { loaded: true, loading: false, hasMore: false, oldestSeq: 20, count: 1 },
+      },
+    });
+
+    const beforeA = visibleMessages(store).map(m => m.id);
+    setActiveGroupFilter.call(store, 'group-B');
+    const afterB = visibleMessages(store).map(m => m.id);
+    setActiveGroupFilter.call(store, 'group-A');
+    const afterA = visibleMessages(store).map(m => m.id);
+
+    expect(beforeA).toEqual(['a1']);
+    expect(afterB).toEqual(['b1']);
+    expect(afterA).toEqual(['a1']);
+    expect(store.messagesMap['unify-1'].map(m => m.id)).toEqual(['a1', 'b1']);
+    expect(store._sent).toEqual([]);
+    expect(store.unifyHasMoreHistory).toBe(true);
+    expect(store.unifyOldestLoadedSeq).toBe(10);
+  });
+
+  it('hydrates only a group without cached rows or loaded history metadata', () => {
+    const store = mkStore({
+      unifyActiveGroupFilter: 'group-A',
+      messagesMap: {
+        'unify-1': [{ id: 'a1', type: 'user', content: 'A before', groupId: 'group-A' }],
+      },
+      unifyGroupHistoryState: {
+        'group-A': { loaded: true, loading: false, hasMore: false, oldestSeq: null, count: 1 },
+      },
+    });
+
+    setActiveGroupFilter.call(store, 'group-C');
+
+    expect(visibleMessages(store)).toEqual([]);
+    expect(store.messagesMap['unify-1'].map(m => m.id)).toEqual(['a1']);
+    expect(store._sent).toEqual([{ type: 'unify_load_history', agentId: 'agent-1', limit: 50, groupId: 'group-C' }]);
+    expect(store.unifyGroupHistoryState['group-C']).toEqual(expect.objectContaining({ loading: true, loaded: false }));
+  });
+
+  it('keeps selected group and pending history state isolated across groups', () => {
+    const store = mkStore({
+      unifyActiveGroupFilter: 'group-A',
+      unifyLoadingMoreHistory: false,
+      unifyGroupHistoryState: {
+        'group-A': { loaded: true, loading: false, hasMore: true, oldestSeq: 101, count: 2 },
+        'group-B': { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },
+      },
+      messagesMap: {
+        'unify-1': [
+          { id: 'a1', type: 'assistant', content: 'A', groupId: 'group-A', speakerVpId: 'vp-a' },
+          { id: 'b1', type: 'assistant', content: 'B', groupId: 'group-B', speakerVpId: 'vp-b' },
+        ],
+      },
+    });
+
+    setActiveGroupFilter.call(store, 'group-B');
+    expect(visibleMessages(store).map(m => m.id)).toEqual(['b1']);
+    expect(store.unifyLoadingMoreHistory).toBe(true);
+    expect(store.unifyOldestLoadedSeq).toBeNull();
+
+    setActiveGroupFilter.call(store, 'group-A');
+    expect(visibleMessages(store).map(m => m.id)).toEqual(['a1']);
+    expect(store.unifyLoadingMoreHistory).toBe(false);
+    expect(store.unifyHasMoreHistory).toBe(true);
+    expect(store.unifyOldestLoadedSeq).toBe(101);
   });
 });

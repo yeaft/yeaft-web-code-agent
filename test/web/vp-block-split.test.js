@@ -58,18 +58,14 @@ describe('MessageList.turnGroups — VP block split (source)', () => {
     expect(imageSegment.slice(0, 200)).toContain('closeTurnIfTurnIdChanged(msg);');
   });
 
-  it('helper guards against missing or non-string turnIds AND calls finishTurn on mismatch', () => {
-    // Pin the BEHAVIOUR (early-return for missing/non-string turnIds,
-    // finishTurn() on inequality), not the exact early-return shape.
+  it('helper splits on turnId mismatch or fallback speaker mismatch', () => {
     const idx = src.indexOf('const closeTurnIfTurnIdChanged');
     expect(idx).toBeGreaterThan(-1);
-    const body = src.slice(idx, idx + 800);
+    const body = src.slice(idx, idx + 1200);
     expect(body).toContain('currentTurn');
     expect(body).toContain('msg.turnId');
-    // Empty string / null / undefined are all rejected by the early-
-    // return chain. The exact predicate may evolve, but it must reject
-    // falsy values somewhere.
-    expect(body).toMatch(/!\s*curTurnId|!\s*currentTurn\.turnId|curTurnId\s*==\s*null/);
+    expect(body).toContain('currentTurn.speakerVpId');
+    expect(body).toContain('msg.speakerVpId || msg.vpId');
     expect(body).toContain('finishTurn();');
   });
 });
@@ -138,9 +134,17 @@ function aggregate(messages) {
     if (!currentTurn) return;
     const curTurnId = currentTurn.turnId;
     const msgTurnId = msg.turnId;
-    if (!curTurnId || !msgTurnId) return;
-    if (typeof curTurnId !== 'string' || typeof msgTurnId !== 'string') return;
-    if (curTurnId === msgTurnId) return;
+    if (curTurnId && msgTurnId) {
+      if (typeof curTurnId !== 'string' || typeof msgTurnId !== 'string') return;
+      if (curTurnId === msgTurnId) return;
+      finishTurn();
+      return;
+    }
+
+    const curSpeaker = currentTurn.speakerVpId;
+    const msgSpeaker = msg.speakerVpId || msg.vpId;
+    if (!curSpeaker || !msgSpeaker) return;
+    if (curSpeaker === msgSpeaker) return;
     finishTurn();
   };
   for (const msg of messages) {
@@ -216,7 +220,7 @@ describe('MessageList.turnGroups — VP block split (logic)', () => {
     expect(blocks[1].imageMsgs).toHaveLength(1);
   });
 
-  it('messages without turnId fall through to legacy single-open-turn behavior', () => {
+  it('messages without turnId and without speaker attribution keep legacy single-open-turn behavior', () => {
     const blocks = aggregate([
       { type: 'assistant', content: 'a' },
       { type: 'assistant', content: 'b' },
@@ -225,7 +229,7 @@ describe('MessageList.turnGroups — VP block split (logic)', () => {
     expect(blocks[0].textContent).toBe('ab');
   });
 
-  it('mixed legacy (no turnId) + turn-stamped messages do not falsely split', () => {
+  it('mixed legacy unstamped + turn-stamped messages do not falsely split', () => {
     const blocks = aggregate([
       { type: 'assistant', content: 'a' },
       { type: 'assistant', content: 'b', turnId: 'aaaa:jobs' },
@@ -234,10 +238,29 @@ describe('MessageList.turnGroups — VP block split (logic)', () => {
     expect(blocks[0].textContent).toBe('ab');
   });
 
-  it('empty-string turnId on either side is treated as no-turnId (legacy merge, no false split)', () => {
-    // Defensive case: a stray empty string from any producer must not
-    // trigger a split. The early-return chain rejects falsy values
-    // before reaching the inequality check.
+  it('refresh replay: consecutive assistant rows without turnId split when speakerVpId changes', () => {
+    const blocks = aggregate([
+      { type: 'assistant', content: 'answer from A', speakerVpId: 'vp-a' },
+      { type: 'assistant', content: 'answer from B', speakerVpId: 'vp-b' },
+    ]);
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0].speakerVpId).toBe('vp-a');
+    expect(blocks[0].textContent).toBe('answer from A');
+    expect(blocks[1].speakerVpId).toBe('vp-b');
+    expect(blocks[1].textContent).toBe('answer from B');
+  });
+
+  it('refresh replay: same-speaker assistant rows without turnId still merge', () => {
+    const blocks = aggregate([
+      { type: 'assistant', content: 'part one ', speakerVpId: 'vp-a' },
+      { type: 'assistant', content: 'part two', speakerVpId: 'vp-a' },
+    ]);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].speakerVpId).toBe('vp-a');
+    expect(blocks[0].textContent).toBe('part one part two');
+  });
+
+  it('empty-string turnId on either side is treated as no-turnId; unstamped legacy rows still merge', () => {
     const blocks1 = aggregate([
       { type: 'assistant', content: 'a', turnId: '' },
       { type: 'assistant', content: 'b', turnId: 'aaaa:jobs' },

@@ -366,7 +366,11 @@ function makeGroupContextStub() {
 function projectPersistedToHistoryEntry(m) {
   if (!m) return null;
   if (m.role !== 'user' && m.role !== 'assistant' && m.role !== 'tool') return null;
+  if (m._reflection || m.internal || m.systemOnly || m.systemOnlyMessage) return null;
   const entry = { role: m.role, content: m.content };
+  if (m.id) entry.id = m.id;
+  if (m.groupId) entry.groupId = m.groupId;
+  if (m.speakerVpId) entry.speakerVpId = m.speakerVpId;
   if (m.toolCallId) entry.toolCallId = m.toolCallId;
   if (Array.isArray(m.toolCalls) && m.toolCalls.length > 0) {
     entry.toolCalls = m.toolCalls.map(tc => ({
@@ -2986,20 +2990,22 @@ export async function handleUnifyLoadHistory(msg) {
   const compactSummary = session.conversationStore.readCompactSummary();
 
   for (const m of messages) {
-    if (m.role === 'user') {
-      sendUnifyOutput({ type: 'user', message: { content: m.content } }, { groupId: m.groupId || null });
-    } else if (m.role === 'assistant') {
+    const entry = projectPersistedToHistoryEntry(m);
+    if (!entry) continue;
+    if (entry.role === 'user') {
+      sendUnifyOutput({ type: 'user', message: { content: entry.content, id: entry.id || null } }, { groupId: entry.groupId || null });
+    } else if (entry.role === 'assistant') {
       // speakerVpId rides on the envelope so the frontend can route this
       // replayed assistant text to the correct VP track. Without it, the
       // history replay would merge replies from different VPs onto one
       // anonymous assistant turn.
       const envelopeOpts = {
-        groupId: m.groupId || null,
+        groupId: entry.groupId || null,
       };
-      if (m.speakerVpId) envelopeOpts.vpId = m.speakerVpId;
+      if (entry.speakerVpId) envelopeOpts.vpId = entry.speakerVpId;
       sendUnifyOutput({
         type: 'assistant',
-        message: { content: [{ type: 'text', text: m.content }] },
+        message: { id: entry.id || null, content: [{ type: 'text', text: entry.content }] },
       }, envelopeOpts);
       sendUnifyOutput({ type: 'result', result_text: '' }, envelopeOpts);
     }
@@ -3081,22 +3087,19 @@ export async function handleUnifyLoadMoreHistory(msg) {
     result = { messages: [], oldestSeq: null, hasMore: false };
   }
 
-  // Wire shape mirrors handleUnifyLoadHistory's projection: only user /
-  // assistant text rows. Tool_use / tool_result replay is out of scope
-  // for this PR (today's bootstrap path drops them too).
-  //
-  // We intentionally do NOT ship `id` or `time` over the wire:
-  // `handleUnifyHistoryChunk` reads only role / content / groupId. The
-  // pagination cursor (`oldestSeq`) is sent once at the envelope level,
-  // so per-row ids are dead weight. `time` would be useful if we render
-  // "5 days ago" stamps on older history rows — when that ships, add it
-  // back here and consume it in conversationHandler.
+  // Wire shape mirrors handleUnifyLoadHistory's projection: only visible
+  // user / assistant text rows. Internal reflection/system-only rows stay
+  // server-side, and stable ids + speaker attribution ride with each row
+  // so older-history prepend renders exactly like refresh replay.
   const projected = (result.messages || [])
+    .map(projectPersistedToHistoryEntry)
     .filter(m => m && (m.role === 'user' || m.role === 'assistant'))
     .map(m => ({
+      ...(m.id ? { id: m.id } : {}),
       role: m.role,
       content: m.content,
       groupId: m.groupId || null,
+      ...(m.speakerVpId ? { speakerVpId: m.speakerVpId } : {}),
     }));
 
   emit({

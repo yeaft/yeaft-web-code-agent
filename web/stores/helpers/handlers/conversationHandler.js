@@ -350,13 +350,22 @@ export function handleUnifyHistoryChunk(store, msg) {
   // Stale-chunk guard: between the request fly-out and this chunk landing,
   // the user may have switched groups (or a group lifecycle event —
   // create / archive / delete — may have flipped `activeGroupId` under
-  // us). `setActiveGroupFilter` clears the loading flag and the cursor,
-  // so accepting this chunk would prepend group A's history into group
-  // B's view. Drop on the floor; spinner already cleared by the switch.
+  // us). Drop on the floor; the active group's spinner/cursor is keyed
+  // separately so accepting this chunk would cross-pollute group history.
   // The chunk's groupId is authoritative — it's stamped by the agent
   // from the request groupId, not from messagesMap state.
   const activeFilter = store.unifyActiveGroupFilter ?? null;
   if (msg.groupId && activeFilter && msg.groupId !== activeFilter) {
+    const staleKey = msg.groupId || '__all__';
+    if (store.unifyGroupHistoryState) {
+      store.unifyGroupHistoryState = {
+        ...store.unifyGroupHistoryState,
+        [staleKey]: {
+          ...(store.unifyGroupHistoryState[staleKey] || {}),
+          loading: false,
+        },
+      };
+    }
     store.unifyLoadingMoreHistory = false;
     return;
   }
@@ -370,6 +379,7 @@ export function handleUnifyHistoryChunk(store, msg) {
     if (!m) continue;
     if (m.role === 'user') {
       formatted.push({
+        ...(m.id ? { id: m.id, messageId: m.id } : {}),
         type: 'user',
         content: m.content,
         groupId: m.groupId || null,
@@ -377,9 +387,11 @@ export function handleUnifyHistoryChunk(store, msg) {
       });
     } else if (m.role === 'assistant') {
       formatted.push({
+        ...(m.id ? { id: m.id, messageId: m.id } : {}),
         type: 'assistant',
         content: m.content,
         groupId: m.groupId || null,
+        ...(m.speakerVpId ? { vpId: m.speakerVpId, speakerVpId: m.speakerVpId } : {}),
         isStreaming: false,
       });
     }
@@ -389,9 +401,26 @@ export function handleUnifyHistoryChunk(store, msg) {
     store.messagesMap[convId].splice(0, 0, ...formatted);
   }
 
-  store.unifyHasMoreHistory = !!msg.hasMore;
-  if (typeof msg.oldestSeq === 'number') {
-    store.unifyOldestLoadedSeq = msg.oldestSeq;
+  const groupKey = msg.groupId || '__all__';
+  const nextState = {
+    loaded: true,
+    loading: false,
+    hasMore: !!msg.hasMore,
+    oldestSeq: (typeof msg.oldestSeq === 'number') ? msg.oldestSeq : store.unifyOldestLoadedSeq,
+    count: formatted.length,
+  };
+  if (store.unifyGroupHistoryState) {
+    store.unifyGroupHistoryState = {
+      ...store.unifyGroupHistoryState,
+      [groupKey]: nextState,
+    };
   }
-  store.unifyLoadingMoreHistory = false;
+  const activeKey = store.unifyActiveGroupFilter || '__all__';
+  if (groupKey === activeKey) {
+    store.unifyHasMoreHistory = nextState.hasMore;
+    if (typeof msg.oldestSeq === 'number') {
+      store.unifyOldestLoadedSeq = msg.oldestSeq;
+    }
+    store.unifyLoadingMoreHistory = false;
+  }
 }

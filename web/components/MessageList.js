@@ -692,20 +692,27 @@ export default {
       // detail and must not be relied on here. Two messages share a
       // turnId iff they belong to the same VP delivery.
       //
-      // Only break when BOTH sides carry a non-empty turnId AND the
-      // values differ. Otherwise (Chat mode, pre-stamping messages,
-      // empty fallback values) we keep the legacy "single open turn"
-      // behaviour. The empty-string check is defensive — the producer
-      // doesn't mint empty turnIds today, but a stray empty string
-      // sneaking in would silently re-introduce the bug this fix
-      // exists to prevent.
+      // Primary boundary: if BOTH sides carry a non-empty turnId, split on
+      // inequality. Refresh/load-more history can still contain older rows
+      // without turnId, so there is a second boundary: when turnId is
+      // missing on either side but both rows have explicit VP attribution,
+      // split on speaker changes. Same-speaker legacy chunks still merge;
+      // unstamped legacy Chat rows still keep the old single-open-turn path.
       const closeTurnIfTurnIdChanged = (msg) => {
         if (!currentTurn) return;
         const curTurnId = currentTurn.turnId;
         const msgTurnId = msg.turnId;
-        if (!curTurnId || !msgTurnId) return;
-        if (typeof curTurnId !== 'string' || typeof msgTurnId !== 'string') return;
-        if (curTurnId === msgTurnId) return;
+        if (curTurnId && msgTurnId) {
+          if (typeof curTurnId !== 'string' || typeof msgTurnId !== 'string') return;
+          if (curTurnId === msgTurnId) return;
+          finishTurn();
+          return;
+        }
+
+        const curSpeaker = currentTurn.speakerVpId;
+        const msgSpeaker = msg.speakerVpId || msg.vpId;
+        if (!curSpeaker || !msgSpeaker) return;
+        if (curSpeaker === msgSpeaker) return;
         finishTurn();
       };
 
