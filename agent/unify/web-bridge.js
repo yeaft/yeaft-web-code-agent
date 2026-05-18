@@ -107,6 +107,13 @@ let currentAbortCtrl = null;
 const turnAbortCtrls = new Map();
 
 /**
+ * Per-turn runtime ownership. Targeted thread aborts use this instead of
+ * blindly aborting every turn controller in the process.
+ * @type {Map<string, { groupId: string, vpId: string, threadId: string, key: string }>}
+ */
+const turnAbortMeta = new Map();
+
+/**
  * Per-VP status broker — the agent-side authority for VP timeline
  * status. Lazy-initialized on first use because `sendUnifyEvent` is
  * declared below; trying to call it at module top-level would crash
@@ -352,6 +359,11 @@ function invalidateGroupContext(groupId) {
     if (!k.startsWith(prefix)) continue;
     try { if (!ctrl.signal.aborted) ctrl.abort(); } catch { /* best-effort */ }
     vpAborts.delete(k);
+  }
+  for (const [turnId, meta] of Array.from(turnAbortMeta.entries())) {
+    if (meta?.groupId !== groupId) continue;
+    turnAbortCtrls.delete(turnId);
+    turnAbortMeta.delete(turnId);
   }
   for (const [k, inbox] of vpInboxes) {
     if (!k.startsWith(prefix)) continue;
@@ -899,6 +911,7 @@ function ensureDriverRunning(groupId, vpId, threadId = 'main') {
       const vpAbort = new AbortController();
       vpAborts.set(key, vpAbort);
       turnAbortCtrls.set(turnId, vpAbort);
+      turnAbortMeta.set(turnId, { groupId, vpId, threadId: thread.threadId, key });
       const baseSnapshot = getOrCreateGroupHistory(groupId)
         .filter((m) => !m.threadId || m.threadId === 'main' || m.threadId === thread.threadId);
       const trigger = envelope?.trigger || 'fallback';
@@ -938,6 +951,7 @@ function ensureDriverRunning(groupId, vpId, threadId = 'main') {
         console.warn('[Unify] driveVp: runVpTurn failed', vpId, err?.message || err);
       } finally {
         turnAbortCtrls.delete(turnId);
+        turnAbortMeta.delete(turnId);
         if (vpAborts.get(key) === vpAbort) vpAborts.delete(key);
         try {
           sendUnifyEvent({
@@ -1002,6 +1016,8 @@ export async function __testResetVpState() {
     if (Array.isArray(inbox)) inbox.length = 0;
   }
   vpThreads.clear();
+  turnAbortCtrls.clear();
+  turnAbortMeta.clear();
   await __testDrainVpDrivers();
   vpInboxes.clear();
   vpDrivers.clear();
@@ -2702,8 +2718,11 @@ export function handleUnifyAbortThread(_msg = {}) {
       if (Array.isArray(inbox)) inbox.length = 0;
     }
     for (const [turnId, ctrl] of Array.from(turnAbortCtrls.entries())) {
+      const meta = turnAbortMeta.get(turnId);
+      if ((meta?.threadId || 'main') !== targetThreadId) continue;
       try { if (!ctrl.signal.aborted) { ctrl.abort(); aborted.push(turnId); } } catch { /* best-effort */ }
       turnAbortCtrls.delete(turnId);
+      turnAbortMeta.delete(turnId);
     }
     for (const vpMap of vpThreads.values()) {
       const thread = vpMap.get(targetThreadId);
@@ -2721,6 +2740,7 @@ export function handleUnifyAbortThread(_msg = {}) {
     try { if (!ctrl.signal.aborted) { ctrl.abort(); aborted.push(turnId); } } catch { /* best-effort */ }
   }
   turnAbortCtrls.clear();
+  turnAbortMeta.clear();
   abortAllVpRuntime(aborted);
   sendUnifyEvent({ type: 'unify_aborted', aborted, all: false });
   return { aborted, all: false };
@@ -2741,6 +2761,7 @@ export function handleUnifyAbortAll() {
     try { if (!ctrl.signal.aborted) { ctrl.abort(); aborted.push(turnId); } } catch { /* best-effort */ }
   }
   turnAbortCtrls.clear();
+  turnAbortMeta.clear();
   abortAllVpRuntime(aborted);
   sendUnifyEvent({ type: 'unify_aborted', aborted, all: true });
   return { aborted, all: true };
@@ -2761,9 +2782,11 @@ export function handleUnifyAbortTurn(msg = {}) {
   if (ctrl && !ctrl.signal.aborted) {
     try { ctrl.abort(); } catch { /* best-effort */ }
     turnAbortCtrls.delete(turnId);
+    turnAbortMeta.delete(turnId);
     sendUnifyEvent({ type: 'unify_turn_aborted', turnId, success: true });
   } else {
     turnAbortCtrls.delete(turnId);
+    turnAbortMeta.delete(turnId);
     sendUnifyEvent({ type: 'unify_turn_aborted', turnId, success: false });
   }
 }
@@ -2780,10 +2803,28 @@ export function abortUnifySession(opts = {}) {
   return { aborted: [], all: false };
 }
 
-/** Test-only: seed an in-flight controller. */
-export function __testSeedAbortController(threadId, ctrl, groupId = 'test', vpId = 'vp') {
+function seedAbortController(threadId, ctrl, groupId = 'test', vpId = 'vp', turnId = null) {
   const tid = threadId || 'main';
-  vpAborts.set(threadKey(groupId, vpId, tid), ctrl);
+  const key = threadKey(groupId, vpId, tid);
+  if (ctrl) vpAborts.set(key, ctrl);
+  if (turnId && ctrl) {
+    turnAbortCtrls.set(turnId, ctrl);
+    turnAbortMeta.set(turnId, { groupId, vpId, threadId: tid, key });
+  }
+}
+
+/** Test-only: seed an in-flight VP runtime controller. */
+export function __testSeedAbortController(threadId, ctrl, groupId = 'test', vpId = 'vp') {
+  seedAbortController(threadId, ctrl, groupId, vpId);
+}
+
+/** Test-only: seed an in-flight VP turn controller. */
+export function __testSeedTurnAbortController(turnId, threadId, ctrl, groupId = 'test', vpId = 'vp') {
+  if (!turnId || !ctrl) return;
+  const tid = threadId || 'main';
+  const key = threadKey(groupId, vpId, tid);
+  turnAbortCtrls.set(turnId, ctrl);
+  turnAbortMeta.set(turnId, { groupId, vpId, threadId: tid, key });
 }
 
 /** Test-only: returns registered VP runtime thread ids. */
@@ -3269,6 +3310,8 @@ export async function resetUnifySession() {
     try { if (!ctrl.signal.aborted) ctrl.abort(); } catch { /* best-effort */ }
   }
   vpAborts.clear();
+  turnAbortCtrls.clear();
+  turnAbortMeta.clear();
   vpInboxes.clear();
   vpDrivers.clear();
   vpEngines.clear();
