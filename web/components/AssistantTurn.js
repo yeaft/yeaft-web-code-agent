@@ -63,15 +63,12 @@ export default {
       <!-- 2. Todo progress (TodoWrite) -->
       <div v-if="turn.todoMsg" class="turn-todos">
         <div v-for="todo in displayedTodos" :key="todo.content"
-             class="todo-item" :class="todo.displayStatus"
-             :title="todo.staleLabel || null">
+             class="todo-item" :class="todo.displayStatus">
           <span class="todo-checkbox">
             <span v-if="todo.displayStatus === 'completed'">✓</span>
             <span v-else-if="todo.displayStatus === 'in_progress'" class="todo-spinner"></span>
-            <span v-else-if="todo.displayStatus === 'stale'" class="todo-stale-mark">!</span>
           </span>
           <span class="todo-text">{{ todo.displayText }}</span>
-          <span v-if="todo.staleLabel" class="todo-stale-note">{{ todo.staleLabel }}</span>
         </div>
       </div>
 
