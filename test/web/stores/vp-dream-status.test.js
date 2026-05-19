@@ -32,14 +32,25 @@ beforeEach(() => {
   vi.spyOn(Date, 'now').mockReturnValue(1770000000000);
 });
 
-function mkStore() {
+function mkStore(options = {}) {
   const sent = [];
+  const projected = [];
+  const sendResult = Object.prototype.hasOwnProperty.call(options, 'sendResult')
+    ? options.sendResult
+    : true;
   globalThis.window = globalThis.window || {};
   globalThis.window.Pinia = {
-    useChatStore: () => ({ sendWsMessage: msg => sent.push(msg) }),
+    useChatStore: () => ({
+      sendWsMessage: msg => {
+        sent.push(msg);
+        return sendResult;
+      },
+      handleUnifyOutput: msg => projected.push(msg),
+    }),
   };
   return {
     sent,
+    projected,
     vps: {},
     vpOrder: [],
     emptyLibrary: false,
@@ -61,9 +72,75 @@ describe('vp store — group Dream status', () => {
     actions.triggerGroupDream.call(store, 'grp_demo');
 
     expect(store.sent).toEqual([{ type: 'unify_dream_trigger', groupId: 'grp_demo' }]);
+    expect(store.projected).toEqual([{
+      event: {
+        type: 'dream_progress',
+        phase: 'start',
+        groupId: 'grp_demo',
+        manual: true,
+        trigger: 'manual',
+        source: 'header-button',
+        ts: 1770000000000,
+      },
+    }]);
     expect(groupStatus(store, 'grp_demo')).toMatchObject({
       status: 'running',
       lastError: null,
+    });
+  });
+
+  it('records a skipped dream result when the websocket trigger cannot be sent', () => {
+    const store = mkStore({ sendResult: false });
+
+    actions.triggerGroupDream.call(store, 'grp_demo');
+
+    expect(store.sent).toEqual([{ type: 'unify_dream_trigger', groupId: 'grp_demo' }]);
+    expect(store.projected).toEqual([
+      {
+        event: {
+          type: 'dream_progress',
+          phase: 'start',
+          groupId: 'grp_demo',
+          manual: true,
+          trigger: 'manual',
+          source: 'header-button',
+          ts: 1770000000000,
+        },
+      },
+      {
+        event: {
+          type: 'unify_dream_result',
+          groupId: 'grp_demo',
+          success: false,
+          skipped: true,
+          skippedReason: 'websocket-not-open',
+          trigger: 'manual',
+          error: null,
+        },
+      },
+    ]);
+  });
+
+  it('skipped result ends the spinner without treating the skip as an error', () => {
+    const store = mkStore();
+    actions.triggerGroupDream.call(store, 'grp_demo');
+
+    actions.applyDreamResult.call(store, {
+      type: 'unify_dream_result',
+      groupId: 'grp_demo',
+      success: false,
+      skipped: true,
+      skippedReason: 'websocket-not-open',
+    });
+
+    expect(groupStatus(store, 'grp_demo')).toMatchObject({
+      status: 'skipped',
+      lastRunAt: 1770000000000,
+      lastError: null,
+      lastResult: {
+        skipped: true,
+        skippedReason: 'websocket-not-open',
+      },
     });
   });
 
