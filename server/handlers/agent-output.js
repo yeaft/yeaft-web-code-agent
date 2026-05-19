@@ -425,6 +425,27 @@ export async function handleAgentOutput(agentId, agent, msg) {
       }
       break;
 
+    case 'unify_debug_history':
+      // fix-vp-multi-thread (bug 4): relay the persistent SQLite trace
+      // snapshot from the agent to the web client that requested it via
+      // `unify_fetch_debug_history`. Without this case the agent's
+      // bare-message reply is dropped here and the UI never hydrates.
+      // Whitelist `loops`/`turns`/`groupId`/`threadId`/`error` to fence
+      // off accidental leakage of new fields in future schema bumps.
+      for (const [, c] of webClients) {
+        if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
+          await sendToWebClient(c, {
+            type: 'unify_debug_history',
+            loops: Array.isArray(msg.loops) ? msg.loops : [],
+            turns: Array.isArray(msg.turns) ? msg.turns : [],
+            ...(msg.groupId != null ? { groupId: msg.groupId } : {}),
+            ...(msg.threadId != null ? { threadId: msg.threadId } : {}),
+            ...(msg.error != null ? { error: msg.error } : {}),
+          });
+        }
+      }
+      break;
+
     default:
       return false; // Not handled
   }

@@ -269,6 +269,16 @@ export const useChatStore = defineStore('chat', {
     unifyDebugLoops: [],
     unifyDebugTurnsById: {},
     unifyDebugTurnOrder: [],
+    // fix-vp-multi-thread (bug 4): hydration status for the persistent
+    // SQLite trace round-trip. `loadUnifyDebugHistory()` flips
+    // `unifyDebugHistoryLoading` while the request is in flight; the
+    // `unify_debug_history` case in messageHandler resets it and stamps
+    // `unifyDebugHistoryFetchedAt`. `unifyDebugHistoryError` is non-null
+    // when the 10-second guard timer fires before the agent replies
+    // (agent down / relay loss).
+    unifyDebugHistoryLoading: false,
+    unifyDebugHistoryError: null,
+    unifyDebugHistoryFetchedAt: 0,
     // feat-6af5f9f1 PR C: debug-panel toolbar state.
     //   - `unifyDebugSearch` is a substring filter applied to user prompt,
     //     vpId, tool name, tool input/output, system prompt, raw url.
@@ -825,6 +835,38 @@ export const useChatStore = defineStore('chat', {
       }, 10_000);
     },
     /**
+     * fix-vp-multi-thread (bug 4): hydrate the Unify debug panel from the
+     * persistent SQLite trace. The agent maintains a per-call SQLite log at
+     * `~/.yeaft/cache/unify-debug-trace.sqlite`; before this action existed
+     * the panel only displayed turns observed live via `unify_output`, so
+     * everything before the panel was mounted was invisible.
+     *
+     * Round-trip: web → server → agent (handleUnifyFetchDebugHistory) →
+     * web (`unify_debug_history` case in messageHandler merges into
+     * `unifyDebugLoops` / `unifyDebugTurnsById` / `unifyDebugTurnOrder`).
+     */
+    loadUnifyDebugHistory({ groupId, threadId, limit } = {}) {
+      if (!this.unifyAgentId) return;
+      this.unifyDebugHistoryLoading = true;
+      this.unifyDebugHistoryError = null;
+      const payload = {
+        type: 'unify_fetch_debug_history',
+        agentId: this.unifyAgentId,
+        limit: Number.isFinite(limit) && limit > 0 ? limit : 200,
+      };
+      if (typeof groupId === 'string' && groupId) payload.groupId = groupId;
+      if (typeof threadId === 'string' && threadId) payload.threadId = threadId;
+      this.sendWsMessage(payload);
+      if (this._fetchUnifyDebugHistoryTimer) clearTimeout(this._fetchUnifyDebugHistoryTimer);
+      this._fetchUnifyDebugHistoryTimer = setTimeout(() => {
+        if (this.unifyDebugHistoryLoading) {
+          this.unifyDebugHistoryLoading = false;
+          this.unifyDebugHistoryError = 'Debug history is unavailable right now. Try again after the agent reconnects.';
+        }
+        this._fetchUnifyDebugHistoryTimer = null;
+      }, 10_000);
+    },
+    /**
      * Send a group-scoped Unify chat message. Routes through the agent-side
      * GroupCoordinator which fans out to the target VP(s) or falls back to
      * the group's defaultVpId. This is the SOLE Unify send path —
@@ -1004,8 +1046,12 @@ export const useChatStore = defineStore('chat', {
           const turn = {
             turnId: event.turnId,
             userPrompt: event.userPrompt || '',
-            vpId: event.vpId || null,
+            vpId: event.vpId || msg.vpId || null,
             groupId: event.groupId || msg.groupId || null,
+            // fix-vp-multi-thread (bug 4): stamp threadId so a multi-
+            // thread VP's debug rows can be filtered by thread in the
+            // panel without re-deriving it from each loop body.
+            threadId: msg.threadId || event.threadId || null,
             openedAt: event.at || Date.now(),
             closedAt: null,
             totalMs: 0,
@@ -1115,6 +1161,13 @@ export const useChatStore = defineStore('chat', {
             // Bug 3 carry-over: stamp groupId so the panel filter narrows
             // by group. Falls back to envelope groupId if engine omitted it.
             groupId: msg.groupId || null,
+            // fix-vp-multi-thread (bug 4): stamp threadId / vpId so the
+            // debug panel can show per-thread debug history for a VP
+            // that runs N concurrent threads. Without these fields the
+            // panel can only filter by group, collapsing every thread
+            // into one timeline.
+            threadId: msg.threadId || event.threadId || null,
+            vpId: msg.vpId || event.vpId || null,
           });
           // fix-debug-copy-no-truncate: bound retention by count.
           // Drop oldest loop entries when the cap is exceeded, then
@@ -2059,6 +2112,12 @@ export const useChatStore = defineStore('chat', {
       this.unifyDebugLoops = [];
       this.unifyDebugTurnsById = {};
       this.unifyDebugTurnOrder = [];
+      // fix-vp-multi-thread (bug 4): reset hydration state — the new session
+      // will start re-collecting live trace events, and the next mount of
+      // the debug panel will re-issue `loadUnifyDebugHistory` to refill.
+      this.unifyDebugHistoryLoading = false;
+      this.unifyDebugHistoryError = null;
+      this.unifyDebugHistoryFetchedAt = 0;
       // feat-6af5f9f1 PR C: clear toolbar transient state too. The group
       // filter is intentionally cleared on session reset so a stale pin
       // from a previous session doesn't hide all incoming turns.
