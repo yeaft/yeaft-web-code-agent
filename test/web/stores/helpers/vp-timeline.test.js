@@ -168,14 +168,23 @@ describe('buildTimelineRows', () => {
 
   it('does NOT expose feature-specific fields on rows', () => {
     // The Feature system was deleted 2026-05-13; no row should re-grow
-    // these fields by accident.
+    // these fields by accident. VP thread fields are runtime state, not
+    // feature metadata.
     const rows = buildTimelineRows({
       vpList: [{ vpId: 'a', displayName: 'A' }],
       vpStatuses: {},
       connectionState: 'connected',
     });
     const r = rows[0];
-    expect(Object.keys(r).sort()).toEqual(['displayName', 'status', 'vpId']);
+    expect(Object.keys(r).sort()).toEqual([
+      'displayName',
+      'runningThreadCount',
+      'status',
+      'threads',
+      'vpId',
+    ]);
+    expect(r.runningThreadCount).toBe(0);
+    expect(r.threads).toEqual([]);
     expect(r.featureId).toBeUndefined();
     expect(r.featureTitle).toBeUndefined();
     expect(r.featureStartedAt).toBeUndefined();
