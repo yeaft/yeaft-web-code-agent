@@ -20,6 +20,11 @@
 
 const { defineStore } = Pinia;
 
+function projectDreamDebugEvent(chat, event) {
+  if (!chat || typeof chat.handleUnifyOutput !== 'function' || !event) return;
+  chat.handleUnifyOutput({ event });
+}
+
 // 12-color palette (mirrors --vp-palette-1..12 in unify-vp.css).
 // Pre-vetted ≥4.5:1 contrast against white text in both light and dark.
 export const VP_PALETTE = [
@@ -250,8 +255,39 @@ export const useVpStore = defineStore('vp', {
       const chat = (window.Pinia && window.Pinia.useChatStore)
         ? window.Pinia.useChatStore()
         : null;
-      if (chat && typeof chat.sendWsMessage === 'function') {
-        chat.sendWsMessage({ type: 'unify_dream_trigger', groupId });
+      const now = Date.now();
+      projectDreamDebugEvent(chat, {
+        type: 'dream_progress',
+        phase: 'start',
+        groupId,
+        manual: true,
+        trigger: 'manual',
+        source: 'header-button',
+        ts: now,
+      });
+      if (!chat || typeof chat.sendWsMessage !== 'function') {
+        projectDreamDebugEvent(chat, {
+          type: 'unify_dream_result',
+          groupId,
+          success: false,
+          skipped: true,
+          skippedReason: 'chat-store-unavailable',
+          trigger: 'manual',
+          error: null,
+        });
+        return;
+      }
+      const sent = chat.sendWsMessage({ type: 'unify_dream_trigger', groupId });
+      if (sent === false) {
+        projectDreamDebugEvent(chat, {
+          type: 'unify_dream_result',
+          groupId,
+          success: false,
+          skipped: true,
+          skippedReason: 'websocket-not-open',
+          trigger: 'manual',
+          error: null,
+        });
       }
     },
 
@@ -290,6 +326,7 @@ export const useVpStore = defineStore('vp', {
     applyDreamResult(event) {
       if (!event) return;
       const ok = !!event.success;
+      const skipped = !!event.skipped;
       const result = {
         mergedCount: event.mergedCount ?? null,
         extractedCount: event.extractedCount ?? null,
@@ -301,20 +338,21 @@ export const useVpStore = defineStore('vp', {
         entriesCreated: typeof event.entriesCreated === 'number'
           ? event.entriesCreated
           : (event.mergedCount ?? event.extractedCount ?? 0),
-        skipped: !!event.skipped,
+        skipped,
         skippedReason: event.skippedReason || null,
         groupsProcessed: typeof event.groupsProcessed === 'number' ? event.groupsProcessed : null,
         groupsSkipped: typeof event.groupsSkipped === 'number' ? event.groupsSkipped : null,
         targetsApplied: typeof event.targetsApplied === 'number' ? event.targetsApplied : null,
         targetErrors: Array.isArray(event.targetErrors) ? event.targetErrors : [],
       };
-      const lastError = ok ? null : (event.error || (event.skipped ? event.skippedReason : null));
+      const lastError = ok || skipped ? null : (event.error || null);
+      const status = skipped ? 'skipped' : (ok ? 'success' : 'error');
       if (event.groupId) {
         const groupId = event.groupId;
         this.groupDreamStatus = {
           ...this.groupDreamStatus,
           [groupId]: {
-            status: ok ? 'success' : 'error',
+            status,
             lastRunAt: Date.now(),
             lastResult: result,
             lastError,
@@ -327,7 +365,7 @@ export const useVpStore = defineStore('vp', {
       this.dreamStatus = {
         ...this.dreamStatus,
         [vpId]: {
-          status: ok ? 'success' : 'error',
+          status,
           lastRunAt: Date.now(),
           lastResult: result,
           lastError,
