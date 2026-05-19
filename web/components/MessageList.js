@@ -1311,6 +1311,44 @@ export default {
       return scrollHeight - scrollTop - clientHeight <= SCROLL_THRESHOLD;
     };
 
+    const preserveScrollAnchorDuringLoad = (loadFn, loadingRef) => {
+      if (!containerRef.value) {
+        loadFn();
+        return;
+      }
+
+      const prevScrollHeight = containerRef.value.scrollHeight;
+      const prevScrollTop = containerRef.value.scrollTop;
+      let restored = false;
+      let unwatch = null;
+
+      const restore = () => {
+        if (restored) return;
+        restored = true;
+        if (unwatch) unwatch();
+        Vue.nextTick(() => {
+          if (!containerRef.value) return;
+          const newScrollHeight = containerRef.value.scrollHeight;
+          containerRef.value.scrollTop = newScrollHeight - prevScrollHeight + prevScrollTop;
+        });
+      };
+
+      if (loadingRef) {
+        unwatch = Vue.watch(loadingRef, (loading) => {
+          if (!loading) restore();
+        });
+      }
+
+      loadFn();
+
+      // Covers synchronous test doubles and cached responses that prepend
+      // rows without a visible loading-flag round trip. The normal async
+      // path restores from the watcher above when loading flips false.
+      Vue.nextTick(() => {
+        if (!loadingRef || !loadingRef()) restore();
+      });
+    };
+
     const onScroll = () => {
       isAtBottom.value = checkIfAtBottom();
 
@@ -1327,31 +1365,10 @@ export default {
           : (store.hasMoreMessages && !store.loadingMoreMessages);
         if (!eligible) return;
 
-        const prevScrollHeight = containerRef.value.scrollHeight;
-        if (isUnify) {
-          store.loadMoreUnifyHistory();
-        } else {
-          store.loadMoreMessages();
-        }
-
-        // Watch the corresponding loading flag and restore the user's
-        // scroll position once the prepended messages render. Without
-        // this the viewport "jumps" because the document grew above
-        // the fold.
-        const loadingRef = isUnify
-          ? () => store.unifyLoadingMoreHistory
-          : () => store.loadingMoreMessages;
-        const unwatch = Vue.watch(loadingRef, (loading) => {
-          if (!loading) {
-            Vue.nextTick(() => {
-              if (containerRef.value) {
-                const newScrollHeight = containerRef.value.scrollHeight;
-                containerRef.value.scrollTop = newScrollHeight - prevScrollHeight + scrollTop;
-              }
-            });
-            unwatch();
-          }
-        });
+        preserveScrollAnchorDuringLoad(
+          isUnify ? () => store.loadMoreUnifyHistory() : () => store.loadMoreMessages(),
+          isUnify ? () => store.unifyLoadingMoreHistory : () => store.loadingMoreMessages
+        );
       }
     };
 
@@ -1421,8 +1438,11 @@ export default {
     // their own pagination paths (different store actions, different
     // wire verbs, different cursor semantics).
     const onClickLoadMore = () => {
-      if (store.currentView === 'unify') store.loadMoreUnifyHistory();
-      else store.loadMoreMessages();
+      const isUnify = store.currentView === 'unify';
+      preserveScrollAnchorDuringLoad(
+        isUnify ? () => store.loadMoreUnifyHistory() : () => store.loadMoreMessages(),
+        isUnify ? () => store.unifyLoadingMoreHistory : () => store.loadingMoreMessages
+      );
     };
 
     return {

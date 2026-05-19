@@ -278,6 +278,53 @@ describe('handleUnifyHistoryChunk', () => {
     expect(store.messagesMap['unify-1'].map(m => m.content)).toEqual(['q1', 'a1']);
   });
 
+
+  it('keeps chronological order and dedupes rows when older group history overlaps cached rows', () => {
+    const store = mkStore({
+      unifyActiveGroupFilter: 'group-A',
+      messagesMap: {
+        'unify-1': [
+          { id: 'm0003', messageId: 'm0003', type: 'user', content: 'newer-q', groupId: 'group-A' },
+          { id: 'm0004', messageId: 'm0004', type: 'assistant', content: 'newer-a', groupId: 'group-A', speakerVpId: 'vp-ada' },
+        ],
+      },
+    });
+
+    handleUnifyHistoryChunk(store, {
+      conversationId: 'unify-1',
+      groupId: 'group-A',
+      messages: [
+        { id: 'm0001', role: 'user', content: 'oldest-q', groupId: 'group-A' },
+        { id: 'm0002', role: 'assistant', content: 'oldest-a', groupId: 'group-A', speakerVpId: 'vp-linus' },
+        { id: 'm0003', role: 'user', content: 'newer-q', groupId: 'group-A' },
+      ],
+      oldestSeq: 1,
+      hasMore: false,
+    });
+
+    expect(store.messagesMap['unify-1'].map(m => m.id)).toEqual(['m0001', 'm0002', 'm0003', 'm0004']);
+    expect(store.messagesMap['unify-1'].map(m => m.content)).toEqual(['oldest-q', 'oldest-a', 'newer-q', 'newer-a']);
+  });
+
+  it('drops reflected/system-like rows even if they arrive with role=user', () => {
+    const store = mkStore({ messagesMap: { 'unify-1': [] } });
+    handleUnifyHistoryChunk(store, {
+      conversationId: 'unify-1',
+      groupId: 'g1',
+      messages: [
+        { id: 'm0001', role: 'user', content: 'visible user', groupId: 'g1' },
+        { id: 'm0002', role: 'user', content: 'reflection text', groupId: 'g1', _reflection: true },
+        { id: 'm0003', role: 'assistant', content: 'system-only note', groupId: 'g1', systemOnly: true },
+        { id: 'm0004', role: 'assistant', content: 'visible assistant', groupId: 'g1', speakerVpId: 'vp-linus' },
+      ],
+      oldestSeq: 1,
+      hasMore: false,
+    });
+
+    expect(store.messagesMap['unify-1'].map(m => m.content)).toEqual(['visible user', 'visible assistant']);
+    expect(store.messagesMap['unify-1'][1]).toEqual(expect.objectContaining({ type: 'assistant', speakerVpId: 'vp-linus' }));
+  });
+
   it('does not corrupt unifyOldestLoadedSeq when chunk omits a numeric oldestSeq', () => {
     const store = mkStore({ unifyOldestLoadedSeq: 100 });
     handleUnifyHistoryChunk(store, {

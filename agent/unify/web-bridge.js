@@ -52,6 +52,7 @@ import {
 } from './history-compact.js';
 import { persistUnifyAttachments, attachmentsForPersistence } from './attachments.js';
 import { parseSeqFromId } from './conversation/persist.js';
+import { sliceLastNTurns } from './turn-utils.js';
 import { createVpStatusBroker } from './vp-status-broker.js';
 import { classifyThread as defaultClassifyThread, fallbackTitle } from './vp/thread-classifier.js';
 
@@ -521,6 +522,54 @@ function projectPersistedToHistoryEntry(m) {
   }
   if (m.isError) entry.isError = true;
   return entry;
+}
+
+function projectPersistedToVisibleHistoryEntry(m) {
+  const entry = projectPersistedToHistoryEntry(m);
+  return entry && (entry.role === 'user' || entry.role === 'assistant') ? entry : null;
+}
+
+function loadVisibleGroupHistoryPage(store, groupId, limit, beforeSeq = null) {
+  if (!store || !groupId || !(limit > 0)) return { messages: [], oldestSeq: null, hasMore: false };
+
+  let rows = [];
+  try {
+    if (typeof store.loadOlderByGroup === 'function') {
+      // Use an unbounded raw prefix, then project/slice visible rows below.
+      // This preserves loadOlderByGroup's hot+cold scan without letting raw
+      // reflection/internal rows consume the UI-visible page window.
+      rows = store.loadOlderByGroup(groupId, beforeSeq, Infinity).messages || [];
+    } else if (Number.isFinite(beforeSeq)) {
+      const all = typeof store.loadAllByGroup === 'function'
+        ? store.loadAllByGroup(groupId)
+        : store.loadRecentByGroup(groupId, Infinity);
+      rows = all.filter(m => parseSeqFromId(m?.id) < beforeSeq);
+    } else if (typeof store.loadAllByGroup === 'function') {
+      rows = store.loadAllByGroup(groupId);
+    } else {
+      rows = store.loadRecentByGroup(groupId, Infinity);
+    }
+  } catch (err) {
+    console.error('[Unify] visible history page load failed:', err?.message || err);
+    return { messages: [], oldestSeq: null, hasMore: false };
+  }
+
+  const visible = rows
+    .map(projectPersistedToVisibleHistoryEntry)
+    .filter(Boolean);
+  const messages = sliceLastNTurns(visible, limit);
+  const oldestSeq = messages.length ? parseSeqFromId(messages[0].id) : null;
+  const firstVisibleSeq = visible.length ? parseSeqFromId(visible[0].id) : null;
+  const hasMore = messages.length > 0
+    && Number.isFinite(oldestSeq)
+    && Number.isFinite(firstVisibleSeq)
+    && oldestSeq > firstVisibleSeq;
+
+  return {
+    messages,
+    oldestSeq: Number.isFinite(oldestSeq) ? oldestSeq : null,
+    hasMore,
+  };
 }
 
 /**
@@ -3283,12 +3332,17 @@ export async function handleUnifyLoadHistory(msg) {
   // ~20–25 turns; in the turn-count world 50 turns of UI scrollback is
   // still cheap and matches what the frontend already passes through.
   const limit = (typeof msg.limit === 'number') ? msg.limit : 50;
-  const messages = limit > 0 ? pickRecent(session.conversationStore, limit) : [];
+  const visiblePage = groupId
+    ? loadVisibleGroupHistoryPage(session.conversationStore, groupId, limit)
+    : { messages: limit > 0 ? pickRecent(session.conversationStore, limit) : [], oldestSeq: null, hasMore: false };
   const compactSummary = session.conversationStore.readCompactSummary();
+  const replayEntries = groupId
+    ? visiblePage.messages
+    : visiblePage.messages
+      .map(projectPersistedToVisibleHistoryEntry)
+      .filter(Boolean);
 
-  for (const m of messages) {
-    const entry = projectPersistedToHistoryEntry(m);
-    if (!entry) continue;
+  for (const entry of replayEntries) {
     if (entry.role === 'user') {
       sendUnifyOutput({ type: 'user', message: { content: entry.content, id: entry.id || null } }, { groupId: entry.groupId || null });
     } else if (entry.role === 'assistant') {
@@ -3310,33 +3364,19 @@ export async function handleUnifyLoadHistory(msg) {
 
   // Compute the pagination cursor for the bootstrap load so the frontend
   // knows whether a "Load older messages" hint should be shown and where
-  // to start the next page. The cursor is the seq of the oldest replayed
-  // message; `hasMore` is true iff there's an earlier message in the
-  // group that we did NOT replay.
+  // to start the next page. For group history, this is computed from the
+  // visible projected page, not raw persisted rows, so reflection/internal
+  // tail rows cannot consume the bootstrap window or create false hasMore.
   let hasMore = false;
   let oldestSeq = null;
-  if (groupId && messages.length > 0) {
-    const firstId = messages[0].id;
-    const seq = parseSeqFromId(firstId);
-    // Defend against malformed ids: a NaN cursor would round-trip back as
-    // a poison `beforeSeq` and degrade subsequent paginations to "give me
-    // the newest page again". Surface as null instead.
-    oldestSeq = Number.isFinite(seq) ? seq : null;
-    if (oldestSeq != null) {
-      // Consult the store for whether anything older exists in the same
-      // group. Cheap: a single extra `loadOlderByGroup` with turns=1.
-      try {
-        const probe = session.conversationStore.loadOlderByGroup(groupId, oldestSeq, 1);
-        hasMore = probe.messages.length > 0;
-      } catch (err) {
-        console.error('[Unify] history-load probe failed:', err.message);
-      }
-    }
+  if (groupId) {
+    hasMore = visiblePage.hasMore;
+    oldestSeq = visiblePage.oldestSeq;
   }
 
   sendUnifyEvent({
     type: 'history_loaded',
-    count: messages.length,
+    count: replayEntries.length,
     hasCompactSummary: !!compactSummary,
     totalHot: session.conversationStore.countHot(),
     totalCold: session.conversationStore.countCold(),
@@ -3378,7 +3418,7 @@ export async function handleUnifyLoadMoreHistory(msg) {
 
   let result;
   try {
-    result = session.conversationStore.loadOlderByGroup(groupId, beforeSeq, turns);
+    result = loadVisibleGroupHistoryPage(session.conversationStore, groupId, turns, beforeSeq);
   } catch (err) {
     console.error('[Unify] loadOlderByGroup failed:', err.message);
     result = { messages: [], oldestSeq: null, hasMore: false };
@@ -3389,8 +3429,6 @@ export async function handleUnifyLoadMoreHistory(msg) {
   // server-side, and stable ids + speaker attribution ride with each row
   // so older-history prepend renders exactly like refresh replay.
   const projected = (result.messages || [])
-    .map(projectPersistedToHistoryEntry)
-    .filter(m => m && (m.role === 'user' || m.role === 'assistant'))
     .map(m => ({
       ...(m.id ? { id: m.id } : {}),
       role: m.role,
