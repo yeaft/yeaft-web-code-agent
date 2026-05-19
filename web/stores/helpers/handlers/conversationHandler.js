@@ -371,15 +371,26 @@ export function handleUnifyHistoryChunk(store, msg) {
   }
   if (!store.messagesMap[convId]) store.messagesMap[convId] = [];
 
-  // Same projection as handleUnifyLoadHistory's bootstrap replay: only
-  // user / assistant text rows. No tool rows. `isStreaming: false`
-  // because these are historical, not in-flight.
+  // Same visible projection as handleUnifyLoadHistory's bootstrap replay:
+  // only user / assistant text rows. Reflection, internal, and system-only
+  // records may be persisted as role=user, but they are not user-authored UI
+  // messages and must never be prepended as user bubbles.
+  const existingIds = new Set(
+    (store.messagesMap[convId] || [])
+      .map(m => m && (m.messageId || m.id))
+      .filter(Boolean)
+  );
+  const seenIds = new Set();
   const formatted = [];
   for (const m of (msg.messages || [])) {
     if (!m) continue;
+    if (m._reflection || m.internal || m.systemOnly || m.systemOnlyMessage) continue;
+    const stableId = m.id || m.messageId || null;
+    if (stableId && (existingIds.has(stableId) || seenIds.has(stableId))) continue;
+    if (stableId) seenIds.add(stableId);
     if (m.role === 'user') {
       formatted.push({
-        ...(m.id ? { id: m.id, messageId: m.id } : {}),
+        ...(stableId ? { id: stableId, messageId: stableId } : {}),
         type: 'user',
         content: m.content,
         groupId: m.groupId || null,
@@ -387,7 +398,7 @@ export function handleUnifyHistoryChunk(store, msg) {
       });
     } else if (m.role === 'assistant') {
       formatted.push({
-        ...(m.id ? { id: m.id, messageId: m.id } : {}),
+        ...(stableId ? { id: stableId, messageId: stableId } : {}),
         type: 'assistant',
         content: m.content,
         groupId: m.groupId || null,

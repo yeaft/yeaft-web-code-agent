@@ -241,6 +241,30 @@ describe('handleUnifyLoadMoreHistory — chunk emission', () => {
 });
 
 describe('handleUnifyLoadHistory — pagination cursor priming', () => {
+
+  it('initial group replay emits only the latest window in chronological order', async () => {
+    const gid = 'g_initial_latest_window';
+    seedTurns(gid, 5, 'latest');
+
+    await handleUnifyLoadHistory({ groupId: gid, limit: 2 });
+
+    const replay = outbound.filter(m => m.type === 'unify_output' && m.data);
+    const userTexts = replay
+      .filter(m => m.groupId === gid && m.data.type === 'user')
+      .map(m => m.data.message.content);
+    const assistantTexts = replay
+      .filter(m => m.groupId === gid && m.data.type === 'assistant')
+      .map(m => m.data.message.content[0].text);
+
+    expect(userTexts).toEqual(['latest4', 'latest5']);
+    expect(assistantTexts).toEqual(['alatest4', 'alatest5']);
+    expect(replay.some(m => m.groupId === gid && JSON.stringify(m.data).includes('latest1'))).toBe(false);
+
+    const evt = lastHistoryLoadedEvent();
+    expect(evt).toEqual(expect.objectContaining({ groupId: gid, count: 4, hasMore: true }));
+    expect(typeof evt.oldestSeq).toBe('number');
+  });
+
   it('history_loaded carries hasMore + oldestSeq when older messages remain', async () => {
     const gid = 'g_prime_more';
     seedTurns(gid, 5);

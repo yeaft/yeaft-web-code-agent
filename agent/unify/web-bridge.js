@@ -3156,10 +3156,11 @@ export async function handleUnifyLoadHistory(msg) {
   const limit = (typeof msg.limit === 'number') ? msg.limit : 50;
   const messages = limit > 0 ? pickRecent(session.conversationStore, limit) : [];
   const compactSummary = session.conversationStore.readCompactSummary();
+  const replayEntries = messages
+    .map(projectPersistedToHistoryEntry)
+    .filter(entry => entry && (entry.role === 'user' || entry.role === 'assistant'));
 
-  for (const m of messages) {
-    const entry = projectPersistedToHistoryEntry(m);
-    if (!entry) continue;
+  for (const entry of replayEntries) {
     if (entry.role === 'user') {
       sendUnifyOutput({ type: 'user', message: { content: entry.content, id: entry.id || null } }, { groupId: entry.groupId || null });
     } else if (entry.role === 'assistant') {
@@ -3186,8 +3187,8 @@ export async function handleUnifyLoadHistory(msg) {
   // group that we did NOT replay.
   let hasMore = false;
   let oldestSeq = null;
-  if (groupId && messages.length > 0) {
-    const firstId = messages[0].id;
+  if (groupId && replayEntries.length > 0) {
+    const firstId = replayEntries[0].id;
     const seq = parseSeqFromId(firstId);
     // Defend against malformed ids: a NaN cursor would round-trip back as
     // a poison `beforeSeq` and degrade subsequent paginations to "give me
@@ -3207,7 +3208,7 @@ export async function handleUnifyLoadHistory(msg) {
 
   sendUnifyEvent({
     type: 'history_loaded',
-    count: messages.length,
+    count: replayEntries.length,
     hasCompactSummary: !!compactSummary,
     totalHot: session.conversationStore.countHot(),
     totalCold: session.conversationStore.countCold(),
