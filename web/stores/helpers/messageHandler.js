@@ -185,6 +185,97 @@ export function handleMessage(store, msg) {
       break;
     }
 
+    // fix-vp-multi-thread (bug 4): hydrate the Unify debug panel from the
+    // persistent SQLite trace. The agent replies via a bare top-level
+    // `unify_debug_history` message (mirrors `unify_tool_stats` shape —
+    // NOT a `unify_output` envelope), so we route it from the top-level
+    // switch here. Without this, the debug panel only shows turns that
+    // happened after the panel was opened — every previous turn is
+    // invisible even though `~/.yeaft/cache/unify-debug-trace.sqlite`
+    // has them.
+    case 'unify_debug_history': {
+      if (store._fetchUnifyDebugHistoryTimer) {
+        clearTimeout(store._fetchUnifyDebugHistoryTimer);
+        store._fetchUnifyDebugHistoryTimer = null;
+      }
+      const loops = Array.isArray(msg?.loops) ? msg.loops : [];
+      const turns = Array.isArray(msg?.turns) ? msg.turns : [];
+      // Merge into existing in-memory state. Live-streamed turns/loops
+      // (received via `unify_output` while the panel was open) win because
+      // they may carry richer in-flight detail (e.g. memoryUsed/Adjust
+      // attached after turn_open). Hydrated rows backfill anything we
+      // never saw. The order is computed as hydrated loops first
+      // (oldest-first per fetchRecentDebugHistory's `.reverse()`), then
+      // any live turn IDs we already had appended at the tail.
+      if (!store.unifyDebugTurnsById || typeof store.unifyDebugTurnsById !== 'object') {
+        store.unifyDebugTurnsById = {};
+      }
+      if (!Array.isArray(store.unifyDebugLoops)) {
+        store.unifyDebugLoops = [];
+      }
+      if (!Array.isArray(store.unifyDebugTurnOrder)) {
+        store.unifyDebugTurnOrder = [];
+      }
+      // C1 fix: keys are `turnId`, NOT `id`. Both turn records (from
+      // fetchRecentDebugHistory) and live `turn_open` events use `turnId`
+      // throughout the codebase — see chat.js:1041 and the Turn shape in
+      // unifyDebugTurnsById's selectors. Reading `turn.id` here would
+      // silently drop every hydrated row.
+      const nextTurnsById = { ...store.unifyDebugTurnsById };
+      for (const turn of turns) {
+        const tid = turn?.turnId;
+        if (!tid) continue;
+        const existing = nextTurnsById[tid];
+        if (existing) {
+          // Live event already populated this turn — keep its richer
+          // detail (memoryLoaded/memoryAdjust/tools etc.), but backfill
+          // any field that hydration captured and live missed (e.g.
+          // userPrompt for a turn that opened before the panel mounted).
+          nextTurnsById[tid] = { ...turn, ...existing };
+        } else {
+          nextTurnsById[tid] = turn;
+        }
+      }
+      store.unifyDebugTurnsById = nextTurnsById;
+      // I1 fix: merge loops by turnId+loopNumber instead of clobbering.
+      // Live-streamed loops collected between request-issued and
+      // reply-arrived would otherwise be silently overwritten.
+      const loopKey = (l) => `${l?.turnId || ''}#${l?.loopNumber || 0}`;
+      const liveLoops = store.unifyDebugLoops;
+      const haveKeys = new Set(liveLoops.map(loopKey));
+      const mergedLoops = [];
+      for (const hydrated of loops) {
+        if (!hydrated) continue;
+        if (!haveKeys.has(loopKey(hydrated))) {
+          mergedLoops.push(hydrated);
+        }
+      }
+      // Append the live loops in their existing order so anything
+      // observed in real time still shows up exactly once.
+      for (const live of liveLoops) mergedLoops.push(live);
+      store.unifyDebugLoops = mergedLoops;
+      // Rebuild turn order: hydrated turns first (in arrival order),
+      // then any live turn IDs not present in hydration.
+      const seenIds = new Set();
+      const mergedOrder = [];
+      for (const turn of turns) {
+        const tid = turn?.turnId;
+        if (!tid || seenIds.has(tid)) continue;
+        seenIds.add(tid);
+        mergedOrder.push(tid);
+      }
+      for (const tid of store.unifyDebugTurnOrder) {
+        if (!tid || seenIds.has(tid)) continue;
+        seenIds.add(tid);
+        mergedOrder.push(tid);
+      }
+      store.unifyDebugTurnOrder = mergedOrder;
+      store.unifyDebugHistoryLoading = false;
+      store.unifyDebugHistoryError = typeof msg?.error === 'string' ? msg.error : null;
+      store.unifyDebugHistoryFetchedAt = Date.now();
+      break;
+    }
+
     case 'chat_image':
       // Image from Claude response (tool screenshots, etc.)
       if (msg.conversationId && msg.fileId) {

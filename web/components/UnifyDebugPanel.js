@@ -195,6 +195,17 @@ export default {
       return Array.isArray(list) ? list : [];
     },
   },
+  mounted() {
+    // fix-vp-multi-thread (bug 4): hydrate from the agent's persistent
+    // SQLite trace as soon as the panel is mounted. Previously the panel
+    // only ever showed turns observed live via `unify_output` events, so
+    // anything before the panel was opened was invisible — even though
+    // the trace had captured it. Pull the most recent N rows so the panel
+    // is useful from frame 1.
+    if (this.store && typeof this.store.loadUnifyDebugHistory === 'function') {
+      this.store.loadUnifyDebugHistory({ limit: 200 });
+    }
+  },
   methods: {
     toggleTurn(turnId) {
       this.expandedTurns = { ...this.expandedTurns, [turnId]: !this.expandedTurns[turnId] };

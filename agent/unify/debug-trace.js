@@ -28,7 +28,18 @@ const SCHEMA = `
     latency_ms INTEGER,
     response_text TEXT,
     started_at INTEGER NOT NULL,
-    ended_at INTEGER
+    ended_at INTEGER,
+    group_id TEXT,
+    vp_id TEXT,
+    thread_id TEXT,
+    system_prompt TEXT,
+    messages_json TEXT,
+    tool_calls_json TEXT,
+    usage_json TEXT,
+    ttfb_ms INTEGER,
+    raw_request TEXT,
+    raw_response TEXT,
+    user_prompt TEXT
   );
 
   CREATE TABLE IF NOT EXISTS trace_tools (
@@ -61,8 +72,46 @@ const SCHEMA = `
   CREATE INDEX IF NOT EXISTS idx_events_type ON trace_events(event_type);
 `;
 
+/**
+ * Indexes that reference columns added by the v0.1.x fix-vp-multi-thread
+ * migration. Must be executed AFTER `migrateAddColumn` for those columns
+ * — running them inside the main SCHEMA block would fail on an old DB
+ * whose `trace_turns` table predates `group_id` / `vp_id` / `thread_id`
+ * (`CREATE TABLE IF NOT EXISTS` is a no-op when the table already
+ * exists, so the columns are never added by SCHEMA alone).
+ */
+const POST_MIGRATION_INDEXES = `
+  CREATE INDEX IF NOT EXISTS idx_turns_group_id ON trace_turns(group_id);
+  CREATE INDEX IF NOT EXISTS idx_turns_vp_id ON trace_turns(vp_id);
+  CREATE INDEX IF NOT EXISTS idx_turns_thread_id ON trace_turns(thread_id);
+`;
+
+/**
+ * Idempotent column-adds for pre-existing trace databases. `ALTER TABLE …
+ * ADD COLUMN` throws if the column already exists, so we wrap each call.
+ * Mirrors the columns introduced above so older DBs upgrade in place.
+ */
+function migrateAddColumn(db, table, column, type) {
+  try {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  } catch (err) {
+    if (!String(err?.message || err).match(/duplicate column name/i)) {
+      throw err;
+    }
+  }
+}
+
 /** Max tool_output size stored (10KB). Longer outputs are truncated. */
 const MAX_TOOL_OUTPUT = 10240;
+
+/**
+ * Max per-loop payload (system prompt, messages JSON, raw request /
+ * response, response text) stored per row. Larger than MAX_TOOL_OUTPUT
+ * because real-world LLM exchanges (system prompt + 30K-token message
+ * trail + raw response) routinely cross 10KB. 256KB lets us replay the
+ * panel verbatim for the most recent traces without bloating the DB.
+ */
+const MAX_LOOP_PAYLOAD = 256 * 1024;
 
 /**
  * Truncate a string to a max length, appending "... [truncated]" if needed.
@@ -98,29 +147,53 @@ export class DebugTrace {
     this.#db.exec('PRAGMA journal_mode = WAL');
     this.#db.exec('PRAGMA foreign_keys = ON');
     this.#db.exec(SCHEMA);
+    // Forward-compat: a DB created by an older version of the bridge
+    // will be missing the group/vp/thread + per-loop snapshot columns.
+    // Add them on open; no-op for fresh DBs (column already exists
+    // from SCHEMA above).
+    migrateAddColumn(this.#db, 'trace_turns', 'group_id', 'TEXT');
+    migrateAddColumn(this.#db, 'trace_turns', 'vp_id', 'TEXT');
+    migrateAddColumn(this.#db, 'trace_turns', 'thread_id', 'TEXT');
+    migrateAddColumn(this.#db, 'trace_turns', 'system_prompt', 'TEXT');
+    migrateAddColumn(this.#db, 'trace_turns', 'messages_json', 'TEXT');
+    migrateAddColumn(this.#db, 'trace_turns', 'tool_calls_json', 'TEXT');
+    migrateAddColumn(this.#db, 'trace_turns', 'usage_json', 'TEXT');
+    migrateAddColumn(this.#db, 'trace_turns', 'ttfb_ms', 'INTEGER');
+    migrateAddColumn(this.#db, 'trace_turns', 'raw_request', 'TEXT');
+    migrateAddColumn(this.#db, 'trace_turns', 'raw_response', 'TEXT');
+    // C2 fix: explicit `user_prompt` column. Deriving the prompt from
+    // `messages_json` is unsafe because every loop after turn 1 in a
+    // multi-loop tool-call cycle persists the *cumulative* conversation
+    // snapshot — `messages.find(role==='user')` would return turn 1's
+    // text for every subsequent turn, mislabeling every Turn header.
+    migrateAddColumn(this.#db, 'trace_turns', 'user_prompt', 'TEXT');
+    // Indexes on the just-added columns. Must run AFTER the ALTER TABLEs
+    // — running them inside SCHEMA's CREATE INDEX IF NOT EXISTS block
+    // would fail with "no such column: group_id" on a pre-bugfix DB.
+    this.#db.exec(POST_MIGRATION_INDEXES);
   }
 
   // ─── Write API ───────────────────────────────────────────────
 
   /**
    * Start a new turn.
-   * @param {{ traceId: string, messageId?: string, mode?: string, turnNumber?: number }} opts
+   * @param {{ traceId: string, messageId?: string, mode?: string, turnNumber?: number, groupId?: string, vpId?: string, threadId?: string, userPrompt?: string }} opts
    * @returns {string} — turnId
    */
-  startTurn({ traceId, messageId = null, mode = null, turnNumber = null }) {
+  startTurn({ traceId, messageId = null, mode = null, turnNumber = null, groupId = null, vpId = null, threadId = null, userPrompt = null }) {
     const id = randomUUID();
     const now = Date.now();
     this.#prepare('insertTurn', `
-      INSERT INTO trace_turns (id, trace_id, message_id, mode, turn_number, started_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(id, traceId, messageId, mode, turnNumber, now);
+      INSERT INTO trace_turns (id, trace_id, message_id, mode, turn_number, started_at, group_id, vp_id, thread_id, user_prompt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, traceId, messageId, mode, turnNumber, now, groupId, vpId, threadId, truncate(userPrompt, MAX_LOOP_PAYLOAD));
     return id;
   }
 
   /**
    * End a turn with model response info.
    * @param {string} turnId
-   * @param {{ model?: string, inputTokens?: number, outputTokens?: number, cacheReadTokens?: number, cacheWriteTokens?: number, stopReason?: string, latencyMs?: number, responseText?: string }} info
+   * @param {{ model?: string, inputTokens?: number, outputTokens?: number, cacheReadTokens?: number, cacheWriteTokens?: number, stopReason?: string, latencyMs?: number, responseText?: string, systemPrompt?: string, messages?: unknown, toolCalls?: unknown, usage?: unknown, ttfbMs?: number, rawRequest?: unknown, rawResponse?: unknown }} info
    */
   endTurn(turnId, {
     model = null,
@@ -131,19 +204,68 @@ export class DebugTrace {
     stopReason = null,
     latencyMs = null,
     responseText = null,
+    systemPrompt = null,
+    messages = null,
+    toolCalls = null,
+    usage = null,
+    ttfbMs = null,
+    rawRequest = null,
+    rawResponse = null,
   } = {}) {
     const now = Date.now();
+    // JSON-stringify the structured fields so they round-trip through
+    // SQLite as TEXT. JSON serialisation might fail (cyclic structure /
+    // BigInt) — guard with try/catch and persist null on failure so a
+    // single bad message can never tank the whole turn record.
+    //
+    // I2 fix: if the serialised JSON exceeds MAX_LOOP_PAYLOAD, the naïve
+    // `truncate(s, MAX)` would append `... [truncated]` mid-string and
+    // make the row's JSON unparseable. The reader's `parseJsonSafe` would
+    // then silently return null and the panel would render the loop with
+    // empty messages / toolCalls / usage. Persist a structured sentinel
+    // instead so the panel can render a "[truncated, N bytes]" notice.
+    const safeStringify = (v) => {
+      if (v == null) return null;
+      try {
+        const s = JSON.stringify(v);
+        if (s.length <= MAX_LOOP_PAYLOAD) return s;
+        return JSON.stringify({
+          __truncated: true,
+          originalBytes: s.length,
+          maxBytes: MAX_LOOP_PAYLOAD,
+        });
+      } catch { return null; }
+    };
+    // For raw request/response, accept either a pre-stringified blob
+    // (treat as opaque text — truncation here is fine because
+    // parseJsonSafe is not used on raw_*) or a structured object (route
+    // through safeStringify which preserves JSON validity).
+    const stringifyRaw = (v) => {
+      if (v == null) return null;
+      if (typeof v === 'string') return truncate(v, MAX_LOOP_PAYLOAD);
+      return safeStringify(v);
+    };
     this.#prepare('endTurn', `
       UPDATE trace_turns SET
         model = ?, input_tokens = ?, output_tokens = ?,
         cache_read_tokens = ?, cache_write_tokens = ?,
-        stop_reason = ?, latency_ms = ?, response_text = ?, ended_at = ?
+        stop_reason = ?, latency_ms = ?, response_text = ?, ended_at = ?,
+        system_prompt = ?, messages_json = ?, tool_calls_json = ?,
+        usage_json = ?, ttfb_ms = ?, raw_request = ?, raw_response = ?
       WHERE id = ?
     `).run(
       model, inputTokens, outputTokens,
       cacheReadTokens, cacheWriteTokens,
-      stopReason, latencyMs, truncate(responseText, MAX_TOOL_OUTPUT),
-      now, turnId,
+      stopReason, latencyMs, truncate(responseText, MAX_LOOP_PAYLOAD),
+      now,
+      truncate(systemPrompt, MAX_LOOP_PAYLOAD),
+      safeStringify(messages),
+      safeStringify(toolCalls),
+      safeStringify(usage),
+      ttfbMs,
+      stringifyRaw(rawRequest),
+      stringifyRaw(rawResponse),
+      turnId,
     );
   }
 
@@ -234,6 +356,125 @@ export class DebugTrace {
     return this.#prepare('recentTurns', `
       SELECT * FROM trace_turns ORDER BY started_at DESC LIMIT ?
     `).all(limit);
+  }
+
+  /**
+   * Fetch the recent debug history for the UnifyDebugPanel. Returns one
+   * record per LLM loop (ordered oldest → newest) with the structured
+   * fields the panel expects. JSON columns are parsed; truncated /
+   * malformed payloads degrade to null instead of failing the call.
+   *
+   * @param {{ limit?: number, groupId?: string|null, threadId?: string|null }} [opts]
+   * @returns {{ loops: object[], turns: object[] }}
+   */
+  fetchRecentDebugHistory({ limit = 100, groupId = null, threadId = null } = {}) {
+    const lim = Math.max(1, Math.min(500, Number(limit) || 100));
+    const where = [];
+    const args = [];
+    if (groupId) { where.push('group_id = ?'); args.push(groupId); }
+    if (threadId) { where.push('thread_id = ?'); args.push(threadId); }
+    const sql = `
+      SELECT * FROM trace_turns
+      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+      ORDER BY started_at DESC
+      LIMIT ?
+    `;
+    args.push(lim);
+    const rows = this.#db.prepare(sql).all(...args);
+    const turnIds = rows.map(r => r.id);
+    const tools = turnIds.length > 0
+      ? this.#db.prepare(
+          `SELECT * FROM trace_tools WHERE turn_id IN (${turnIds.map(() => '?').join(',')}) ORDER BY created_at`
+        ).all(...turnIds)
+      : [];
+    const parseJsonSafe = (s) => {
+      if (s == null) return null;
+      try { return JSON.parse(s); }
+      catch { return null; }
+    };
+    // Group rows by (turnId, threadId, groupId, vpId) → frontend Turn
+    // record. Each row is also surfaced as a Loop.
+    const turnsById = new Map();
+    const loops = rows.map((r) => {
+      const parsedMessages = parseJsonSafe(r.messages_json) || [];
+      const parsedUsage = parseJsonSafe(r.usage_json);
+      const loop = {
+        turnId: r.trace_id, // panel groups loops by trace_id-as-turnId
+        loopNumber: r.turn_number || 0,
+        model: r.model || null,
+        systemPrompt: r.system_prompt || '',
+        messages: parsedMessages,
+        response: r.response_text || '',
+        toolCalls: parseJsonSafe(r.tool_calls_json) || [],
+        usage: parsedUsage || {
+          inputTokens: r.input_tokens || 0,
+          outputTokens: r.output_tokens || 0,
+          totalTokens: (r.input_tokens || 0) + (r.output_tokens || 0),
+        },
+        latencyMs: r.latency_ms || 0,
+        ttfbMs: r.ttfb_ms || null,
+        stopReason: r.stop_reason || null,
+        rawRequest: r.raw_request || null,
+        rawResponse: r.raw_response || null,
+        groupId: r.group_id || null,
+        vpId: r.vp_id || null,
+        threadId: r.thread_id || null,
+      };
+      if (!turnsById.has(r.trace_id)) {
+        turnsById.set(r.trace_id, {
+          turnId: r.trace_id,
+          // C2 fix: read the explicit `user_prompt` column persisted at
+          // startTurn time. Deriving from messages_json is unsafe — each
+          // tool-loop iteration overwrites messages_json with the
+          // cumulative conversation snapshot, so `messages[0].content`
+          // would be turn-1's prompt for every subsequent turn header.
+          userPrompt: r.user_prompt || '',
+          groupId: r.group_id || null,
+          vpId: r.vp_id || null,
+          threadId: r.thread_id || null,
+          openedAt: r.started_at || 0,
+          closedAt: r.ended_at || null,
+          totalMs: 0,
+          totalTokens: 0,
+          loopCount: 0,
+          memoryLoaded: null,
+          memoryAdjust: null,
+          tools: [],
+        });
+      }
+      const t = turnsById.get(r.trace_id);
+      t.loopCount += 1;
+      // Aggregate per-loop latency / tokens so the Turn header shows the
+      // same totals the live `turn_close` event would have stamped.
+      t.totalMs += r.latency_ms || 0;
+      const usageTokens = parsedUsage && Number.isFinite(parsedUsage.totalTokens)
+        ? parsedUsage.totalTokens
+        : (r.input_tokens || 0) + (r.output_tokens || 0);
+      t.totalTokens += usageTokens;
+      if (r.ended_at && (!t.closedAt || r.ended_at > t.closedAt)) t.closedAt = r.ended_at;
+      return loop;
+    });
+    // Attach tools to their parent Turn so the panel can render per-tool
+    // timing without scanning the loop bodies.
+    for (const tool of tools) {
+      // Find which loop row this tool belongs to → that row's trace_id
+      // identifies the Turn.
+      const owner = rows.find(r => r.id === tool.turn_id);
+      if (!owner) continue;
+      const t = turnsById.get(owner.trace_id);
+      if (!t) continue;
+      t.tools.push({
+        loopNumber: owner.turn_number || 0,
+        callId: tool.id,
+        name: tool.tool_name,
+        durationMs: tool.duration_ms || 0,
+        isError: !!tool.is_error,
+      });
+    }
+    // Reverse to oldest-first so the panel's existing append-driven UI
+    // renders in chronological order on hydration.
+    loops.reverse();
+    return { loops, turns: Array.from(turnsById.values()) };
   }
 
   /**
@@ -383,6 +624,7 @@ export class NullTrace {
   cleanup() { return { deletedTurns: 0, deletedTools: 0, deletedEvents: 0 }; }
   purge() {}
   close() {}
+  fetchRecentDebugHistory() { return { loops: [], turns: [] }; }
 }
 
 /**

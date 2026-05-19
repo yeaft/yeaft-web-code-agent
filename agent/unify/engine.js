@@ -1468,6 +1468,18 @@ export class Engine {
       const turnId = this.#trace.startTurn({
         traceId: this.#traceId,
         turnNumber,
+        // fix-vp-multi-thread (bug 4): stamp routing context so the
+        // debug-trace SQL row carries enough info to be filtered by
+        // group / thread / VP later when the panel hydrates from disk.
+        groupId: groupId || null,
+        vpId: queryVpId || null,
+        threadId: threadId || null,
+        // Persist the user prompt EXPLICITLY rather than reconstruct it
+        // post-hoc from `messages_json` — every tool-loop iteration
+        // writes the *cumulative* messages array, so deriving the prompt
+        // from `messages.find(role==='user')` would always return turn
+        // 1's prompt and mislabel every subsequent Turn header.
+        userPrompt: userQuestionPreview,
       });
 
       const startTime = Date.now();
@@ -1677,6 +1689,20 @@ export class Engine {
           stopReason: 'error',
           latencyMs,
           responseText,
+          // fix-vp-multi-thread (bug 4): persist the snapshot on the
+          // error path too — failure traces are the most valuable for
+          // hydration.
+          systemPrompt,
+          messages: conversationMessages.map(mapDebugMessage),
+          toolCalls: toolCalls.map(tc => ({ id: tc.id, name: tc.name, input: tc.input })),
+          usage: {
+            inputTokens: totalUsage.inputTokens || 0,
+            outputTokens: totalUsage.outputTokens || 0,
+            totalTokens: (totalUsage.inputTokens || 0) + (totalUsage.outputTokens || 0),
+          },
+          ttfbMs,
+          rawRequest,
+          rawResponse,
         });
 
         // Emit `loop` event for error path too (was `debug_turn`).
@@ -1759,6 +1785,21 @@ export class Engine {
         stopReason,
         latencyMs,
         responseText,
+        // fix-vp-multi-thread (bug 4): persist the full per-loop
+        // snapshot. The frontend debug panel only renders what it has
+        // in-memory — without these columns the user can never see
+        // history from before the panel was opened.
+        systemPrompt,
+        messages: conversationMessages.map(mapDebugMessage),
+        toolCalls: toolCalls.map(tc => ({ id: tc.id, name: tc.name, input: tc.input })),
+        usage: {
+          inputTokens: totalUsage.inputTokens || 0,
+          outputTokens: totalUsage.outputTokens || 0,
+          totalTokens: (totalUsage.inputTokens || 0) + (totalUsage.outputTokens || 0),
+        },
+        ttfbMs,
+        rawRequest,
+        rawResponse,
       });
 
       // Emit `loop` event for the debug panel.

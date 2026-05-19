@@ -837,7 +837,7 @@ async function routeEnvelopeToVpThread(groupId, vpId, envelope) {
 
   if (related) {
     const content = promptParts || prompt;
-    thread.pendingQueries.push({ content, preview: prompt });
+    thread.pendingQueries.push({ content, preview: prompt, originalText: text, originalParts: Array.isArray(envelope?._promptParts) ? envelope._promptParts : null });
     persistInboundMessageOnceByMsgId({
       msgId: envelope?.msg?.id,
       text,
@@ -979,6 +979,72 @@ function ensureDriverRunning(groupId, vpId, threadId = 'main') {
           }, { groupId, vpId, threadId: thread.threadId, turnId });
         }
       } catch { /* never crash WS pipeline */ }
+
+      // fix-vp-multi-thread (bug 1 + 3): rescue any orphaned related-
+      // appends. If a user (or a VP via route_forward) added queries
+      // to this thread's `pendingQueries` AFTER the engine had already
+      // decided to end_turn (so the inner drain at engine.js:1850 no
+      // longer fires), those queries would be silently lost. Convert
+      // each leftover into a synthetic inbox envelope so the driver
+      // re-enters and runs a fresh turn on the same thread.
+      if (thread && Array.isArray(thread.pendingQueries) && thread.pendingQueries.length > 0) {
+        const leftovers = thread.pendingQueries.splice(0);
+        for (const leftover of leftovers) {
+          // `originalText` / `originalParts` capture the inbound payload
+          // BEFORE `buildVpPromptPayload` prepended `@vp-<id> ` and added
+          // any suffix. Replaying through `buildVpPromptPayload` (via the
+          // driver) re-applies the prefix, so we must NOT pass the
+          // already-decorated `preview` here or the prompt would carry
+          // a double `@vp-<id> @vp-<id> ...` mention.
+          const replayText = typeof leftover?.originalText === 'string'
+            ? leftover.originalText
+            : '';
+          const replayParts = Array.isArray(leftover?.originalParts) && leftover.originalParts.length > 0
+            ? leftover.originalParts
+            : null;
+          if (!replayText && !replayParts) continue;
+          const followUpId = `followup_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`;
+          const followUpEnvelope = {
+            groupId,
+            taskId: envelope?.taskId || null,
+            trigger: 'pending_rescue',
+            msg: {
+              id: followUpId,
+              from: 'user',
+              text: replayText,
+              meta: { rescuedFrom: 'pendingQueries', threadId: thread.threadId },
+            },
+            ...(replayParts ? { _promptParts: replayParts } : {}),
+          };
+          const followUpTurnId = `${randomUUID().slice(0, 8)}:${vpId}`;
+          inbox.push({ envelope: followUpEnvelope, turnId: followUpTurnId, thread });
+          try {
+            thread.status = 'typing';
+            thread.updatedAt = Date.now();
+            getVpStatusBroker().transition({
+              groupId,
+              vpId,
+              threadId: thread.threadId,
+              title: thread.title || '',
+              state: 'typing',
+              turnId: followUpTurnId,
+              messageCount: thread.messageIds.length,
+            });
+          } catch (err) {
+            console.warn('[Unify] vp-status typing transition (rescue) failed:', err?.message || err);
+          }
+          try {
+            sendUnifyEvent({
+              type: 'vp_typing_start',
+              groupId,
+              vpId,
+              threadId: thread.threadId,
+              turnId: followUpTurnId,
+              ts: Date.now(),
+            }, { groupId, vpId, threadId: thread.threadId, turnId: followUpTurnId });
+          } catch { /* never crash WS pipeline */ }
+        }
+      }
     }
     vpDrivers.delete(key);
     const tail = vpInboxes.get(key);
@@ -2518,6 +2584,20 @@ async function runVpTurn({ prompt, promptParts = null, groupId, vpId, threadId =
     } catch (err) {
       console.warn('[Unify] vp-status settleIdle failed:', err?.message || err);
     }
+    // fix-vp-multi-thread (bug 2): the bridge tracks per-thread status
+    // on `thread.status` separately from the broker. Multiple sites
+    // (`maybeTransitionVpStatus`, `routeEnvelopeToVpThread`'s typing
+    // transition) write to it but no site cleared it on turn end, so
+    // every finished thread was stuck reporting `thinking|streaming|tool`
+    // forever. `getRunningThreads` filters on this field, so the
+    // classifier next time the user spoke would treat the zombie as
+    // a live thread and route the new query as "related" — orphaning
+    // the message in `pendingQueries` because no engine was running
+    // to drain it. Always settle to 'idle' here.
+    if (thread) {
+      thread.status = 'idle';
+      thread.updatedAt = Date.now();
+    }
   }
 }
 
@@ -3056,6 +3136,55 @@ export async function handleUnifyFetchToolStats(_msg = {}) {
     snapshot,
     registered,
     unused,
+  });
+}
+
+/**
+ * Hydrate the UnifyDebugPanel from the persistent SQLite trace. The
+ * panel state (`unifyDebugLoops` / `unifyDebugTurnsById`) is otherwise
+ * built ONLY from in-flight `loop` / `turn_open` events on the wire,
+ * so a panel opened after a turn has finished sees nothing for that
+ * turn. This handler ships back a frontend-shaped snapshot the store
+ * splices into place.
+ *
+ * Inputs (all optional):
+ *   - `limit`     — max number of loops to return (1..500, default 100)
+ *   - `groupId`   — narrow by group
+ *   - `threadId`  — narrow by thread
+ *
+ * Sends:
+ *   { type: 'unify_debug_history', loops: [...], turns: [...] }
+ *
+ * Best-effort: if the session / trace isn't ready, sends an empty
+ * snapshot so the panel renders a placeholder instead of spinning.
+ */
+export async function handleUnifyFetchDebugHistory(msg = {}) {
+  const limit = Number.isFinite(msg?.limit) ? Number(msg.limit) : 100;
+  const groupId = typeof msg?.groupId === 'string' && msg.groupId ? msg.groupId : null;
+  const threadId = typeof msg?.threadId === 'string' && msg.threadId ? msg.threadId : null;
+  let loops = [];
+  let turns = [];
+  try {
+    if (session?.trace && typeof session.trace.fetchRecentDebugHistory === 'function') {
+      const out = session.trace.fetchRecentDebugHistory({ limit, groupId, threadId });
+      loops = Array.isArray(out?.loops) ? out.loops : [];
+      turns = Array.isArray(out?.turns) ? out.turns : [];
+    }
+  } catch (err) {
+    sendToServer({
+      type: 'unify_debug_history',
+      loops: [],
+      turns: [],
+      error: err && err.message ? err.message : String(err),
+    });
+    return;
+  }
+  sendToServer({
+    type: 'unify_debug_history',
+    loops,
+    turns,
+    groupId,
+    threadId,
   });
 }
 
