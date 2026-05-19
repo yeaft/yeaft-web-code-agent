@@ -3004,10 +3004,12 @@ export function normalizeDreamResult(result) {
     .filter(t => t && t.status === 'error')
     .map(t => ({ target: t.target || null, error: t.error || 'unknown' }));
   const hardError = result?.error || null;
-  const skipped = !hardError && groupsProcessed === 0 && targetsApplied === 0;
+  const explicitSkipped = result?.skipped === true;
+  const skipped = !hardError && (explicitSkipped || (groupsProcessed === 0 && targetsApplied === 0));
   const skippedReason = skipped
-    ? (skippedGroups[0]?.reason || 'no-targets-applied')
+    ? (result?.skippedReason || skippedGroups[0]?.reason || 'no-targets-applied')
     : null;
+  const trigger = result?.trigger || null;
   const success = !hardError && targetErrors.length === 0 && !skipped && targetsApplied > 0;
 
   return {
@@ -3020,6 +3022,7 @@ export function normalizeDreamResult(result) {
     targetErrors,
     entriesCreated: targetsApplied,
     lastDreamAt: result?.startedAt || new Date().toISOString(),
+    trigger,
     error: hardError || (targetErrors[0]?.error || null),
   };
 }

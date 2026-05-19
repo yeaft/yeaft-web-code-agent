@@ -1656,13 +1656,13 @@ export const useChatStore = defineStore('chat', {
               [scope]: {
                 scope,
                 phase: 'result',
-                status: event.success ? 'success' : 'error',
+                status: event.skipped ? 'skipped' : (event.success ? 'success' : 'error'),
                 startedAt: prev?.startedAt ?? null,
                 finishedAt: Date.now(),
                 mergedCount: typeof event.entriesCreated === 'number'
                   ? event.entriesCreated
                   : (prev?.mergedCount ?? null),
-                error: event.success ? null : (event.error || 'unknown'),
+                error: event.skipped || event.success ? null : (event.error || 'unknown'),
                 manual: typeof event?.manual === 'boolean'
                   ? event.manual
                   : (prev?.manual ?? null),
@@ -1680,12 +1680,13 @@ export const useChatStore = defineStore('chat', {
               type: 'dream_progress',
               phase: 'result',
               groupId: event.groupId,
-              status: event.success ? 'success' : 'error',
+              status: event.skipped ? 'skipped' : (event.success ? 'success' : 'error'),
               success: !!event.success,
               entriesCreated: typeof event.entriesCreated === 'number'
                 ? event.entriesCreated
                 : null,
-              error: event.success ? null : (event.error || null),
+              trigger: event.trigger || null,
+              error: event.skipped || event.success ? null : (event.error || null),
               skipped: !!event.skipped,
               skippedReason: event.skippedReason || null,
               ts: Date.now(),

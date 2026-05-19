@@ -123,6 +123,23 @@ describe('handleUnifyDreamTrigger — routing', () => {
     expect(result.targetsApplied).toBe(0);
   });
 
+  it('normalizes explicit scheduler skips without losing skippedReason or trigger', () => {
+    const normalized = normalizeDreamResult({
+      startedAt: '2026-05-11T08:00:00.000Z',
+      skipped: true,
+      skippedReason: 'already-running',
+      trigger: 'manual',
+      groups: [],
+      targets: [],
+    });
+    expect(normalized.success).toBe(false);
+    expect(normalized.skipped).toBe(true);
+    expect(normalized.skippedReason).toBe('already-running');
+    expect(normalized.trigger).toBe('manual');
+    expect(normalized.groupsProcessed).toBe(0);
+    expect(normalized.targetsApplied).toBe(0);
+  });
+
   it('normalizes target errors as failure with targetErrors', () => {
     const normalized = normalizeDreamResult({
       startedAt: '2026-05-11T08:00:00.000Z',

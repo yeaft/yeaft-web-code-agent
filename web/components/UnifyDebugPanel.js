@@ -45,7 +45,7 @@ export default {
       // event timeline. False = collapsed summary line only; true = show
       // full per-event ring buffer below.
       dreamExpanded: false,
-      activeTab: 'requests', // 'toolStats' | 'requests'
+      activeTab: 'requests', // 'toolStats' | 'dream' | 'requests'
     };
   },
   watch: {
@@ -177,6 +177,9 @@ export default {
       if (d.status === 'error') {
         return `error · ${d.error || 'unknown'}`;
       }
+      if (d.status === 'skipped') {
+        return 'skipped';
+      }
       const parts = ['done'];
       if (typeof d.mergedCount === 'number') parts.push(`merged ${d.mergedCount}`);
       if (typeof d.durationMs === 'number') parts.push(this.formatMs(d.durationMs));
@@ -193,6 +196,9 @@ export default {
     dreamEvents() {
       const list = (this.store && this.store.unifyDreamEventsForActiveGroup) || [];
       return Array.isArray(list) ? list : [];
+    },
+    dreamEventCount() {
+      return this.dreamEvents.length;
     },
   },
   mounted() {
@@ -271,10 +277,60 @@ export default {
     // timeline row (matches the same class names as the Dream summary).
     dreamEventStatus(evt) {
       if (!evt) return 'running';
+      if (evt.status === 'skipped' || evt.skipped) return 'skipped';
       if (evt.status === 'error' || evt.phase === 'error') return 'error';
       if (evt.status === 'done' || evt.status === 'success' || evt.phase === 'done') return 'success';
       if (evt.phase === 'result') return evt.success ? 'success' : 'error';
       return 'running';
+    },
+    dreamEventTrigger(evt) {
+      if (!evt) return '-';
+      if (evt.trigger) return evt.trigger;
+      if (evt.source) return evt.source;
+      if (evt.manual === true) return 'manual';
+      if (evt.manual === false) return 'auto';
+      return '-';
+    },
+    dreamEventCall(evt) {
+      if (!evt) return '-';
+      const phase = evt.phase || 'unknown';
+      const status = evt.status || '';
+      if (phase === 'start') return 'scheduler -> runDream';
+      if (phase === 'load-diff') return 'runDream -> loadGroupDiff';
+      if (phase === 'triage') return status ? `triageGroupSegments · ${status}` : 'triageGroupSegments';
+      if (phase === 'merge') return 'mergeByTarget';
+      if (phase === 'apply') return status ? `applyMergedTarget · ${status}` : 'applyMergedTarget';
+      if (phase === 'done') return 'runDream completed';
+      if (phase === 'result') return 'web-bridge -> unify_dream_result';
+      return phase;
+    },
+    dreamEventLocation(evt) {
+      if (!evt) return '-';
+      if (evt.target) return evt.target;
+      if (evt.scope) return evt.scope;
+      if (evt.groupId) return `group/${evt.groupId}`;
+      if (evt.vpId) return `vp/${evt.vpId}`;
+      return '-';
+    },
+    dreamEventResult(evt) {
+      if (!evt) return '-';
+      const parts = [];
+      if (evt.skipped) parts.push(`skipped: ${evt.skippedReason || 'unknown'}`);
+      if (evt.reason) parts.push(`reason: ${evt.reason}`);
+      if (typeof evt.entriesCreated === 'number') parts.push(`entries ${evt.entriesCreated}`);
+      if (typeof evt.targetsApplied === 'number') parts.push(`applied ${evt.targetsApplied}`);
+      if (typeof evt.groupsProcessed === 'number') parts.push(`groups ${evt.groupsProcessed}`);
+      if (typeof evt.groupsSkipped === 'number') parts.push(`skipped groups ${evt.groupsSkipped}`);
+      if (typeof evt.segments === 'number') parts.push(`segments ${evt.segments}`);
+      if (typeof evt.actions === 'number') parts.push(`actions ${evt.actions}`);
+      if (typeof evt.targets === 'number') parts.push(`targets ${evt.targets}`);
+      if (typeof evt.duration === 'number') parts.push(this.formatMs(evt.duration));
+      if (typeof evt.durationMs === 'number') parts.push(this.formatMs(evt.durationMs));
+      if (Array.isArray(evt.targetErrors) && evt.targetErrors.length > 0) {
+        parts.push(`errors ${evt.targetErrors.length}: ${this.truncate(evt.targetErrors.map(e => e.target ? `${e.target}: ${e.error}` : e.error).join('; '), 160)}`);
+      }
+      if (evt.error) parts.push(`error: ${evt.error}`);
+      return parts.length > 0 ? parts.join(' · ') : this.dreamEventDetail(evt);
     },
     toggleLoop(turnId, loopNumber) {
       const key = `${turnId}#${loopNumber}`;
@@ -356,7 +412,7 @@ export default {
       this.expandedSections = { ...this.expandedSections, [sectionKey]: true };
     },
     setActiveTab(tab) {
-      this.activeTab = tab === 'toolStats' ? 'toolStats' : 'requests';
+      this.activeTab = tab === 'toolStats' || tab === 'dream' ? tab : 'requests';
       if (this.activeTab === 'toolStats' && !this.toolStats && !this.toolStatsLoading) {
         this.refreshToolStats();
       }
@@ -510,6 +566,17 @@ export default {
         <button
           type="button"
           class="unify-debug-tab"
+          :class="{ active: activeTab === 'dream' }"
+          role="tab"
+          :aria-selected="activeTab === 'dream'"
+          @click="setActiveTab('dream')"
+        >
+          {{ $t('unify.debugTabDream') }}
+          <span class="unify-debug-tab-count" v-if="dreamEventCount > 0">{{ dreamEventCount }}</span>
+        </button>
+        <button
+          type="button"
+          class="unify-debug-tab"
           :class="{ active: activeTab === 'requests' }"
           role="tab"
           :aria-selected="activeTab === 'requests'"
@@ -576,6 +643,62 @@ export default {
             <span v-for="name in unusedToolRows" :key="name" class="unify-debug-unused-tool">{{ name }}</span>
           </div>
         </template>
+      </div>
+
+      <div v-else-if="activeTab === 'dream'" class="unify-debug-dream-panel" role="tabpanel">
+        <div class="unify-debug-toolbar">
+          <select
+            v-if="availableGroups.length > 1"
+            class="unify-debug-group-select"
+            v-model="groupFilter"
+          >
+            <option value="">{{ $t('unify.debugGroupFollowMain') }}</option>
+            <option value="__all__">{{ $t('unify.debugGroupAll') }}</option>
+            <option v-for="g in availableGroups" :key="g" :value="g">{{ g }}</option>
+          </select>
+        </div>
+
+        <div class="unify-debug-dream-summary">
+          <div class="unify-debug-dream-summary-title">{{ $t('unify.dreamDebug.title') }}</div>
+          <div v-if="dreamLatest" class="unify-debug-dream-summary-grid">
+            <span>{{ $t('unify.dreamDebug.trigger') }}</span>
+            <strong>{{ dreamLatestKindLabel || '-' }}</strong>
+            <span>{{ $t('unify.dreamDebug.status') }}</span>
+            <strong :class="'status-' + dreamLatest.status">{{ dreamLatestLabel }}</strong>
+            <span>{{ $t('unify.dreamDebug.started') }}</span>
+            <strong>{{ formatTimestamp(dreamLatest.startedAt) || '-' }}</strong>
+            <span>{{ $t('unify.dreamDebug.finished') }}</span>
+            <strong>{{ formatTimestamp(dreamLatest.finishedAt) || '-' }}</strong>
+          </div>
+          <div v-else class="unify-debug-dream-event-empty">{{ $t('unify.dreamDebug.noLatest') }}</div>
+        </div>
+
+        <div class="unify-debug-dream-events" v-if="dreamEvents.length > 0">
+          <div class="unify-debug-dream-event-header">
+            <span>{{ $t('unify.dreamDebug.time') }}</span>
+            <span>{{ $t('unify.dreamDebug.phase') }}</span>
+            <span>{{ $t('unify.dreamDebug.trigger') }}</span>
+            <span>{{ $t('unify.dreamDebug.call') }}</span>
+            <span>{{ $t('unify.dreamDebug.location') }}</span>
+            <span>{{ $t('unify.dreamDebug.result') }}</span>
+          </div>
+          <div
+            v-for="(evt, idx) in dreamEvents"
+            :key="evt.at + ':dream-tab:' + idx"
+            class="unify-debug-dream-event detailed"
+            :class="'status-' + dreamEventStatus(evt)"
+          >
+            <span class="unify-debug-dream-event-time">{{ formatTimestamp(evt.at) }}</span>
+            <span class="unify-debug-dream-event-phase">{{ evt.phase || 'unknown' }}</span>
+            <span class="unify-debug-dream-event-detail">{{ dreamEventTrigger(evt) }}</span>
+            <span class="unify-debug-dream-event-detail">{{ dreamEventCall(evt) }}</span>
+            <span class="unify-debug-dream-event-detail">{{ dreamEventLocation(evt) }}</span>
+            <span class="unify-debug-dream-event-detail">{{ dreamEventResult(evt) }}</span>
+          </div>
+        </div>
+        <div v-else class="unify-debug-dream-events">
+          <div class="unify-debug-dream-event-empty">{{ $t('unify.dreamDebug.noEvents') }}</div>
+        </div>
       </div>
 
       <template v-else>

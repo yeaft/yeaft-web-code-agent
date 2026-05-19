@@ -50,7 +50,11 @@ export function createDreamScheduler({ run, intervalMs = DEFAULT_INTERVAL_MS, ke
   async function fire(opts) {
     if (inflight) {
       log.warn?.('[dream] tick dropped — previous run still in progress');
-      return inflight;
+      return {
+        skipped: true,
+        skippedReason: 'already-running',
+        trigger: opts?.manual ? 'manual' : 'auto',
+      };
     }
     inflight = (async () => {
       try {

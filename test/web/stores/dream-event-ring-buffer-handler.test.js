@@ -151,6 +151,33 @@ describe('handleUnifyOutput — unify_dream_result projection', () => {
     expect(entry.startedAt).toBe(100);
   });
 
+  it('projects skipped results with skippedReason and no error', () => {
+    const store = mkStore();
+    actions.handleUnifyOutput.call(store, {
+      event: {
+        type: 'unify_dream_result',
+        groupId: 'g1',
+        success: false,
+        skipped: true,
+        skippedReason: 'already-running',
+        trigger: 'manual',
+        entriesCreated: 0,
+      },
+    });
+
+    const entry = store.unifyDreamLatest['group/g1'];
+    expect(entry).toBeDefined();
+    expect(entry.status).toBe('skipped');
+    expect(entry.error).toBeNull();
+    expect(entry.isRunning).toBe(false);
+
+    const terminal = store.unifyDreamEvents['group/g1'][0];
+    expect(terminal.status).toBe('skipped');
+    expect(terminal.skipped).toBe(true);
+    expect(terminal.skippedReason).toBe('already-running');
+    expect(terminal.trigger).toBe('manual');
+  });
+
   it('projects error into unifyDreamLatest[group/<id>] with status=error + error message', () => {
     const store = mkStore();
     actions.handleUnifyOutput.call(store, {
