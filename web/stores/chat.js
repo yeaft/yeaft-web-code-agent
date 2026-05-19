@@ -30,6 +30,24 @@ const EMPTY_ARRAY = Object.freeze([]);
 // deterministic.
 const vpStatusKey = (groupId, vpId) => `${groupId || ''}::${vpId}`;
 
+function resolveActiveDreamDebugGroupId(state) {
+  const debugFilter = state.unifyDebugGroupFilter;
+  if (debugFilter === '__all__') return null;
+  if (debugFilter) return debugFilter;
+  if (state.unifyActiveGroupFilter) return state.unifyActiveGroupFilter;
+  let gs = null;
+  try {
+    gs = (typeof window !== 'undefined' && window.Pinia?.useGroupsStore)
+      ? window.Pinia.useGroupsStore()
+      : null;
+  } catch {
+    gs = null;
+  }
+  if (gs?.activeGroupId) return gs.activeGroupId;
+  if (gs?.groups?.grp_default) return 'grp_default';
+  return null;
+}
+
 // feat-6af5f9f1 PR C: turnMatchesSearch lives in helpers/debug-search.js
 // so it can be unit-tested without the Pinia browser globals.
 
@@ -477,16 +495,7 @@ export const useChatStore = defineStore('chat', {
     // (or fall back to the debug-side filter). Returns null when nothing
     // has been recorded yet for this scope.
     unifyDreamLatestForActiveGroup(state) {
-      const debugFilter = state.unifyDebugGroupFilter;
-      const mainFilter = state.unifyActiveGroupFilter || null;
-      let targetGroupId;
-      if (debugFilter === '__all__') {
-        targetGroupId = null;
-      } else if (debugFilter) {
-        targetGroupId = debugFilter;
-      } else {
-        targetGroupId = mainFilter;
-      }
+      const targetGroupId = resolveActiveDreamDebugGroupId(state);
       if (!targetGroupId) return null;
       const scope = `group/${targetGroupId}`;
       return state.unifyDreamLatest?.[scope] || null;
@@ -500,16 +509,7 @@ export const useChatStore = defineStore('chat', {
     // single coherent timeline regardless of whether a given event
     // landed in the scoped bucket or the broadcast bucket.
     unifyDreamEventsForActiveGroup(state) {
-      const debugFilter = state.unifyDebugGroupFilter;
-      const mainFilter = state.unifyActiveGroupFilter || null;
-      let targetGroupId;
-      if (debugFilter === '__all__') {
-        targetGroupId = null;
-      } else if (debugFilter) {
-        targetGroupId = debugFilter;
-      } else {
-        targetGroupId = mainFilter;
-      }
+      const targetGroupId = resolveActiveDreamDebugGroupId(state);
       if (!targetGroupId) return [];
       const scope = `group/${targetGroupId}`;
       const scoped = Array.isArray(state.unifyDreamEvents?.[scope])

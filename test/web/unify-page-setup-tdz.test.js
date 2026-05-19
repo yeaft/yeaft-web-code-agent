@@ -110,6 +110,8 @@ function makeVueStub() {
  * undefined — that's intentional. Add fields when setup() needs them.
  */
 function makePiniaStub() {
+  const triggerGroupDreamCalls = [];
+  const projectedDreamEvents = [];
   const chatStore = {
     unifyConversationId: null,
     unifyActiveGroupFilter: null,
@@ -131,12 +133,27 @@ function makePiniaStub() {
     switchUnifyModel: () => {},
     enterVpDetailView: () => {},
     cancelVpTurn: () => {},
+    handleUnifyOutput: (payload) => {
+      if (payload?.event) projectedDreamEvents.push(payload.event);
+    },
   };
   const vpStore = {
     dreamStatusFor: () => ({ status: 'idle', lastRunAt: null, lastResult: null }),
     groupDreamStatusFor: () => ({ status: 'idle', lastRunAt: null, lastResult: null }),
     triggerDream: () => {},
-    triggerGroupDream: () => {},
+    triggerGroupDream: (groupId) => {
+      triggerGroupDreamCalls.push(groupId);
+      chatStore.handleUnifyOutput({
+        event: {
+          type: 'dream_progress',
+          phase: 'start',
+          groupId,
+          manual: true,
+          trigger: 'manual',
+          source: 'header-button',
+        },
+      });
+    },
     vpList: [],
     vpLabel: (id) => id,
   };
@@ -151,6 +168,8 @@ function makePiniaStub() {
     useChatStore: () => chatStore,
     useVpStore: () => vpStore,
     useGroupsStore: () => groupsStore,
+    __triggerGroupDreamCalls: triggerGroupDreamCalls,
+    __projectedDreamEvents: projectedDreamEvents,
   };
 }
 
@@ -232,6 +251,24 @@ describe('UnifyPage setup() — temporal dead zone regression', () => {
         if (v && typeof v === 'object' && 'value' in v) void v.value;
       }
     }, 'reading every exposed ref/computed must not throw').not.toThrow();
+
+    // Regression for v0.1.800: the real header Dream button must call the
+    // group-scoped trigger for the group currently shown by the topbar. A
+    // store-only test of triggerGroupDream() is not enough; this pins the
+    // actual template handler exposed by UnifyPage.setup().
+    expect(typeof api.onDreamTriggerClick).toBe('function');
+    api.onDreamTriggerClick();
+    expect(Pinia.__triggerGroupDreamCalls).toEqual(['grp_default']);
+    expect(Pinia.__projectedDreamEvents).toEqual([
+      expect.objectContaining({
+        type: 'dream_progress',
+        phase: 'start',
+        groupId: 'grp_default',
+        manual: true,
+        trigger: 'manual',
+        source: 'header-button',
+      }),
+    ]);
   });
 });
 

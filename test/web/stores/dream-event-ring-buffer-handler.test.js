@@ -35,12 +35,14 @@ globalThis.Pinia.defineStore = (_id, options) => {
 };
 
 let actions;
+let getters;
 beforeAll(async () => {
   await import('../../../web/stores/chat.js');
   if (!capturedOptions) {
     throw new Error('chat.js defineStore was not captured — Pinia shim mis-wired');
   }
   actions = capturedOptions.actions;
+  getters = capturedOptions.getters;
 });
 
 function mkStore() {
@@ -48,6 +50,8 @@ function mkStore() {
     unifyDreamLatest: {},
     unifyDreamEvents: {},
     unifyConversationId: null,
+    unifyDebugGroupFilter: null,
+    unifyActiveGroupFilter: null,
     messagesMap: {},
     processingConversations: {},
     executionStatusMap: {},
@@ -63,6 +67,31 @@ const send = (store, event) => {
 };
 
 describe('handleUnifyOutput — dream event ring buffer', () => {
+  it('active-group getters fall back to groupsStore.activeGroupId when the main pane is not filtered', () => {
+    const store = mkStore();
+    globalThis.window.Pinia.useGroupsStore = () => ({
+      activeGroupId: 'grp_default',
+      groups: { grp_default: { id: 'grp_default' } },
+    });
+
+    send(store, {
+      type: 'dream_progress',
+      phase: 'start',
+      groupId: 'grp_default',
+      manual: true,
+      trigger: 'manual',
+      source: 'header-button',
+      ts: 100,
+    });
+
+    expect(getters.unifyDreamLatestForActiveGroup(store)).toMatchObject({
+      scope: 'group/grp_default',
+      status: 'running',
+      manual: true,
+    });
+    expect(getters.unifyDreamEventsForActiveGroup(store).map(e => e.phase)).toEqual(['start']);
+  });
+
   it('appends per-group events to unifyDreamEvents["group/<id>"]', () => {
     const store = mkStore();
     send(store, { type: 'dream_progress', phase: 'triage', groupId: 'g1', ts: 100 });
