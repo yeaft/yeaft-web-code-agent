@@ -77,8 +77,8 @@ export function __testSetThreadClassifier(fn) {
  * the first's inflight promise and dropped its own scope filter. So
  * "B during A's run" doesn't actually produce a separate scoped pass
  * for B — letting B install a second sink wrapper would only mis-stamp
- * A's events with B's groupId. Rejecting B with an explicit error is
- * the honest answer; the user can re-click after A settles.
+ * A's events with B's groupId. Reporting B as an explicit skipped
+ * result is the honest answer; the user can re-click after A settles.
  * @type {Set<string>}
  */
 const inflightScopedDreamGroups = new Set();
@@ -3004,10 +3004,12 @@ export function normalizeDreamResult(result) {
     .filter(t => t && t.status === 'error')
     .map(t => ({ target: t.target || null, error: t.error || 'unknown' }));
   const hardError = result?.error || null;
-  const skipped = !hardError && groupsProcessed === 0 && targetsApplied === 0;
+  const explicitSkipped = result?.skipped === true;
+  const skipped = !hardError && (explicitSkipped || (groupsProcessed === 0 && targetsApplied === 0));
   const skippedReason = skipped
-    ? (skippedGroups[0]?.reason || 'no-targets-applied')
+    ? (result?.skippedReason || skippedGroups[0]?.reason || 'no-targets-applied')
     : null;
+  const trigger = result?.trigger || null;
   const success = !hardError && targetErrors.length === 0 && !skipped && targetsApplied > 0;
 
   return {
@@ -3020,6 +3022,7 @@ export function normalizeDreamResult(result) {
     targetErrors,
     entriesCreated: targetsApplied,
     lastDreamAt: result?.startedAt || new Date().toISOString(),
+    trigger,
     error: hardError || (targetErrors[0]?.error || null),
   };
 }
@@ -3056,11 +3059,16 @@ export async function handleUnifyDreamTrigger(msg = {}) {
   // dream-v2/schedule.js inflight reuse), so the user-facing semantics
   // are unchanged ("you already asked").
   if (groupId && inflightScopedDreamGroups.size > 0) {
-    const error = 'A dream pass is already running.';
+    const skippedResult = {
+      skipped: true,
+      skippedReason: 'already-running',
+      trigger: msg.manual === false ? 'auto' : 'manual',
+    };
     sendToServer({
       type: 'unify_dream_result',
       ...tag,
-      ...normalizeDreamResult({ error }),
+      ...skippedResult,
+      ...normalizeDreamResult(skippedResult),
     });
     return;
   }

@@ -12,15 +12,20 @@ describe('createDreamScheduler', () => {
     await sched.triggerNow();
     expect(run).toHaveBeenCalledWith({ manual: true, scopeFilter: undefined });
   });
-  it('drops a tick when one is already in-flight', async () => {
+  it('returns a skipped result when one is already in-flight', async () => {
     let resolveFirst;
     const run = vi.fn(async () => new Promise(r => { resolveFirst = r; }));
     const sched = createDreamScheduler({ run });
     const p1 = sched.triggerNow();
-    const p2 = sched.triggerNow();   // dropped — re-uses the in-flight
+    const p2 = sched.triggerNow();
     expect(run).toHaveBeenCalledTimes(1);
+    await expect(p2).resolves.toEqual({
+      skipped: true,
+      skippedReason: 'already-running',
+      trigger: 'manual',
+    });
     resolveFirst({ ok: true });
-    await Promise.all([p1, p2]);
+    await p1;
   });
   it('start/stop lifecycle is safe to call repeatedly', async () => {
     const run = vi.fn(async () => ({ ok: true }));

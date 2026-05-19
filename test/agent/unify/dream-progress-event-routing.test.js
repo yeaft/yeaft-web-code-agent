@@ -201,14 +201,14 @@ describe('dream_progress event routing', () => {
     }
   });
 
-  it('rejects a second concurrent scoped trigger while one is inflight', async () => {
+  it('reports a second concurrent scoped trigger as skipped while one is inflight', async () => {
     // Trigger A starts a slow scoped run and never finishes during the
     // test. While it's awaiting, trigger B fires (same group, then
-    // also a different group). Both should be rejected immediately
-    // with an error envelope — the existing scheduler shares the
-    // inflight promise across callers and silently drops the second's
-    // scope filter, so letting B install a second sink wrapper would
-    // only mis-stamp A's events.
+    // also a different group). Both should be reported immediately
+    // with an explicit skipped envelope — the existing scheduler shares
+    // the inflight promise across callers and silently drops the
+    // second's scope filter, so letting B install a second sink wrapper
+    // would only mis-stamp A's events.
     let resolveA;
     const session = makeSession({
       triggerDreamForScopes: vi.fn(() => new Promise((res) => { resolveA = res; })),
@@ -224,9 +224,13 @@ describe('dream_progress event routing', () => {
 
     const results = findAll('unify_dream_result');
     expect(results.length).toBe(2);
+    expect(results.map(r => r.groupId)).toEqual(['g1', 'g2']);
     for (const r of results) {
       expect(r.success).toBe(false);
-      expect(r.error).toMatch(/already running/i);
+      expect(r.skipped).toBe(true);
+      expect(r.skippedReason).toBe('already-running');
+      expect(r.trigger).toBe('manual');
+      expect(r.error).toBeNull();
     }
 
     // Let A finish so we don't leak unhandled promises.
