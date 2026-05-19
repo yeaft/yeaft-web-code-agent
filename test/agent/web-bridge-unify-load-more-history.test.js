@@ -159,6 +159,29 @@ describe('handleUnifyLoadMoreHistory — chunk emission', () => {
     expect(chunk.messages[1].id).toEqual(expect.any(String));
   });
 
+  it('older history pages over invisible rows before the cursor', async () => {
+    const gid = 'g_chunk_invisible_before_cursor';
+    sharedStore.appendBatch([
+      { role: 'user', content: 'older visible', groupId: gid },
+      { role: 'assistant', content: 'older answer', groupId: gid, speakerVpId: 'vp-ada' },
+      { role: 'user', content: 'old reflection', groupId: gid, _reflection: true },
+      { role: 'assistant', content: 'old internal', groupId: gid, internal: true, speakerVpId: 'vp-hidden' },
+      { role: 'user', content: 'newer visible', groupId: gid },
+      { role: 'assistant', content: 'newer answer', groupId: gid, speakerVpId: 'vp-linus' },
+    ]);
+
+    await handleUnifyLoadMoreHistory({ groupId: gid, beforeSeq: Number.MAX_SAFE_INTEGER, turns: 1 });
+    const newest = lastChunk();
+    expect(newest.messages.map(m => m.content)).toEqual(['newer visible', 'newer answer']);
+
+    outbound.length = 0;
+    await handleUnifyLoadMoreHistory({ groupId: gid, beforeSeq: newest.oldestSeq, turns: 1 });
+    const older = lastChunk();
+    expect(older.messages.map(m => m.content)).toEqual(['older visible', 'older answer']);
+    expect(older.hasMore).toBe(false);
+    expect(older.messages.some(m => m.content.includes('reflection') || m.content.includes('internal'))).toBe(false);
+  });
+
   it('walks the cursor through history until exhausted', async () => {
     const gid = 'g_walk';
     seedTurns(gid, 3);
@@ -207,36 +230,24 @@ describe('handleUnifyLoadMoreHistory — chunk emission', () => {
     const gid = 'g_default';
     seedTurns(gid, 25);
 
-    let capturedTurns = null;
-    const original = sharedStore.loadOlderByGroup.bind(sharedStore);
-    sharedStore.loadOlderByGroup = (gidArg, before, turns) => {
-      capturedTurns = turns;
-      return original(gidArg, before, turns);
-    };
-    try {
-      await handleUnifyLoadMoreHistory({ groupId: gid, beforeSeq: null /* turns omitted */ });
-    } finally {
-      sharedStore.loadOlderByGroup = original;
-    }
-    expect(capturedTurns).toBe(20);
+    await handleUnifyLoadMoreHistory({ groupId: gid, beforeSeq: null /* turns omitted */ });
+    const chunk = lastChunk();
+    expect(chunk.messages).toHaveLength(40); // 20 turns × (user + assistant)
+    expect(chunk.messages[0].content).toBe('q6');
+    expect(chunk.messages.at(-1).content).toBe('aq25');
+    expect(chunk.hasMore).toBe(true);
   });
 
   it('rejects non-positive turns and falls back to default 20', async () => {
     const gid = 'g_default2';
     seedTurns(gid, 25);
 
-    let capturedTurns = null;
-    const original = sharedStore.loadOlderByGroup.bind(sharedStore);
-    sharedStore.loadOlderByGroup = (gidArg, before, turns) => {
-      capturedTurns = turns;
-      return original(gidArg, before, turns);
-    };
-    try {
-      await handleUnifyLoadMoreHistory({ groupId: gid, beforeSeq: null, turns: 0 });
-    } finally {
-      sharedStore.loadOlderByGroup = original;
-    }
-    expect(capturedTurns).toBe(20);
+    await handleUnifyLoadMoreHistory({ groupId: gid, beforeSeq: null, turns: 0 });
+    const chunk = lastChunk();
+    expect(chunk.messages).toHaveLength(40); // 20 turns × (user + assistant)
+    expect(chunk.messages[0].content).toBe('q6');
+    expect(chunk.messages.at(-1).content).toBe('aq25');
+    expect(chunk.hasMore).toBe(true);
   });
 });
 
@@ -303,6 +314,40 @@ describe('handleUnifyLoadHistory — pagination cursor priming', () => {
     const user = visibleData.find(x => x.data.type === 'user');
     expect(user.data.message.id).toEqual(expect.any(String));
     expect(user.data.message.id).not.toBe(assistant.data.message.id);
+  });
+
+  it('initial group replay pages over visible rows when latest turns are invisible', async () => {
+    const gid = 'g_initial_invisible_tail';
+    sharedStore.appendBatch([
+      { role: 'user', content: 'visible one', groupId: gid },
+      { role: 'assistant', content: 'visible answer one', groupId: gid, speakerVpId: 'vp-ada' },
+      { role: 'user', content: 'visible two', groupId: gid },
+      { role: 'assistant', content: 'visible answer two', groupId: gid, speakerVpId: 'vp-linus' },
+      { role: 'user', content: 'reflection one', groupId: gid, _reflection: true },
+      { role: 'assistant', content: 'internal one', groupId: gid, internal: true, speakerVpId: 'vp-hidden' },
+      { role: 'user', content: 'reflection two', groupId: gid, _reflection: true },
+      { role: 'assistant', content: 'system only', groupId: gid, systemOnly: true, speakerVpId: 'vp-hidden' },
+    ]);
+
+    await handleUnifyLoadHistory({ groupId: gid, limit: 1 });
+
+    const replay = outbound.filter(m => m.type === 'unify_output' && m.data);
+    const userTexts = replay
+      .filter(m => m.groupId === gid && m.data.type === 'user')
+      .map(m => m.data.message.content);
+    const assistantRows = replay
+      .filter(m => m.groupId === gid && m.data.type === 'assistant');
+
+    expect(userTexts).toEqual(['visible two']);
+    expect(assistantRows.map(m => m.data.message.content[0].text)).toEqual(['visible answer two']);
+    expect(assistantRows[0]).toEqual(expect.objectContaining({ vpId: 'vp-linus' }));
+    expect(replay.some(m => JSON.stringify(m.data).includes('reflection'))).toBe(false);
+    expect(replay.some(m => JSON.stringify(m.data).includes('internal one'))).toBe(false);
+    expect(replay.some(m => JSON.stringify(m.data).includes('system only'))).toBe(false);
+
+    const evt = lastHistoryLoadedEvent();
+    expect(evt).toEqual(expect.objectContaining({ groupId: gid, count: 2, hasMore: true }));
+    expect(typeof evt.oldestSeq).toBe('number');
   });
 
   it('history_loaded reports hasMore=false when the bootstrap covers everything', async () => {
