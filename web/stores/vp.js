@@ -277,7 +277,9 @@ export const useVpStore = defineStore('vp', {
         });
         return;
       }
-      const sent = chat.sendWsMessage({ type: 'unify_dream_trigger', groupId });
+      const frame = { type: 'unify_dream_trigger', groupId };
+      if (chat.unifyAgentId) frame.agentId = chat.unifyAgentId;
+      const sent = chat.sendWsMessage(frame);
       if (sent === false) {
         projectDreamDebugEvent(chat, {
           type: 'unify_dream_result',

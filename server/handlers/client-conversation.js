@@ -18,6 +18,20 @@ function emptyUnifyToolStats(reason = '') {
   return payload;
 }
 
+function skippedUnifyDreamResult(msg, reason) {
+  const payload = {
+    type: 'unify_dream_result',
+    success: false,
+    skipped: true,
+    skippedReason: reason,
+    trigger: msg?.trigger || 'manual',
+    error: null,
+  };
+  if (msg?.groupId) payload.groupId = msg.groupId;
+  if (msg?.vpId) payload.vpId = msg.vpId;
+  return payload;
+}
+
 /**
  * Handle conversation lifecycle messages from web client.
  * Types: get_agents, select_agent, create_conversation, resume_conversation,
@@ -741,19 +755,29 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         if (!relayAgentId) {
           if (msg.type === 'unify_fetch_tool_stats') {
             await sendToWebClient(client, emptyUnifyToolStats('No agent selected.'));
+          } else if (msg.type === 'unify_dream_trigger') {
+            await sendToWebClient(client, skippedUnifyDreamResult(msg, 'no-agent-selected'));
           }
           return true; // swallow silently for legacy fire-and-forget messages
         }
         if (!await checkAgentAccess(relayAgentId)) {
           if (msg.type === 'unify_fetch_tool_stats') {
             await sendToWebClient(client, emptyUnifyToolStats('Agent is not available.'));
+          } else if (msg.type === 'unify_dream_trigger') {
+            await sendToWebClient(client, skippedUnifyDreamResult(msg, 'agent-not-available'));
           }
           return true;
         }
         const relayAgent = agents.get(relayAgentId);
-        if (msg.type === 'unify_fetch_tool_stats' && (!relayAgent || relayAgent.ws?.readyState !== 1)) {
-          await sendToWebClient(client, emptyUnifyToolStats('Agent is offline.'));
-          return true;
+        if (!relayAgent || relayAgent.ws?.readyState !== 1) {
+          if (msg.type === 'unify_fetch_tool_stats') {
+            await sendToWebClient(client, emptyUnifyToolStats('Agent is offline.'));
+            return true;
+          }
+          if (msg.type === 'unify_dream_trigger') {
+            await sendToWebClient(client, skippedUnifyDreamResult(msg, 'agent-offline'));
+            return true;
+          }
         }
         // Forward the entire message minus the agentId field; the agent
         // router is the authoritative consumer of the payload shape.

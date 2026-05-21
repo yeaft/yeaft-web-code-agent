@@ -38,9 +38,13 @@ function mkStore(options = {}) {
   const sendResult = Object.prototype.hasOwnProperty.call(options, 'sendResult')
     ? options.sendResult
     : true;
+  const unifyAgentId = Object.prototype.hasOwnProperty.call(options, 'unifyAgentId')
+    ? options.unifyAgentId
+    : null;
   globalThis.window = globalThis.window || {};
   globalThis.window.Pinia = {
     useChatStore: () => ({
+      unifyAgentId,
       sendWsMessage: msg => {
         sent.push(msg);
         return sendResult;
@@ -87,6 +91,18 @@ describe('vp store — group Dream status', () => {
       status: 'running',
       lastError: null,
     });
+  });
+
+  it('includes the active Unify agent id so the server can route to the agent bridge', () => {
+    const store = mkStore({ unifyAgentId: 'agent-unify' });
+
+    actions.triggerGroupDream.call(store, 'grp_demo');
+
+    expect(store.sent).toEqual([{
+      type: 'unify_dream_trigger',
+      groupId: 'grp_demo',
+      agentId: 'agent-unify',
+    }]);
   });
 
   it('records a skipped dream result when the websocket trigger cannot be sent', () => {
