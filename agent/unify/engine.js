@@ -1486,6 +1486,7 @@ export class Engine {
       let ttfbMs = null;  // Time to first token
       let responseText = '';
       const toolCalls = [];
+      const thinkingBlocks = []; // task-327d: collected from adapter for round-trip
       let stopReason = 'end_turn';
       const totalUsage = { inputTokens: 0, outputTokens: 0 };
       // task-344: capture redacted raw request / raw response for debug panel.
@@ -1659,6 +1660,18 @@ export class Engine {
               break;
             case 'thinking_delta':
               yield event;
+              break;
+            case 'thinking_block_end':
+              // task-327d: collect server-signed thinking block for
+              // round-trip replay. Anthropic 400s the next turn if a
+              // thinking block was emitted but not echoed back with its
+              // original signature. Drop blocks missing a signature —
+              // sending them back without signature would also 400.
+              if (event.signature) {
+                thinkingBlocks.push({ thinking: event.thinking, signature: event.signature });
+              } else {
+                console.warn('[Engine] thinking block missing signature — dropping; next turn would 400 on replay');
+              }
               break;
             case 'tool_call':
               toolCalls.push(event);
@@ -1841,6 +1854,16 @@ export class Engine {
           id: tc.id,
           name: tc.name,
           input: tc.input,
+        }));
+      }
+      // task-327d: persist thinking blocks for the next turn's replay.
+      // Anthropic requires assistant.thinking blocks to be echoed back
+      // verbatim (text + signature) when the previous turn used extended
+      // thinking — see translateMessages in anthropic.js.
+      if (thinkingBlocks.length > 0) {
+        assistantMsg.thinkingBlocks = thinkingBlocks.map(tb => ({
+          thinking: tb.thinking,
+          signature: tb.signature,
         }));
       }
       // Phase 8 (DESIGN.md §9.15): carry the router plan back on the

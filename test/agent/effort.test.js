@@ -5,7 +5,7 @@
  * Coverage:
  *   - effort.js: pickEffort() decision table (chat/consolidate/dream/
  *     sub_agent/recall/light), long-loop auto-bump, userEffort override,
- *     cheap-scenario-no-bump guard, unknown scenario defaults 'high'.
+ *     cheap-scenario-no-bump guard, unknown scenario defaults 'max'.
  *   - effort.js: parseEffortPrefix() accepts `/max `, `/high `, `/medium`,
  *     `/low`; rejects `/maxfoo` (no word boundary via trailing \s|$);
  *     caseful (`/MAX` rejected, matches adapter normalizeEffort).
@@ -13,7 +13,7 @@
  * Red lines:
  *   - Decision tree must not call into models.js capability matrix
  *     (that's the adapter/router's job per 327a).
- *   - Unknown scenario → 'high', never throw.
+ *   - Unknown scenario → 'max', never throw.
  */
 import { describe, it, expect } from 'vitest';
 import {
@@ -24,8 +24,8 @@ import {
 } from '../../agent/unify/effort.js';
 
 describe('task-327b: SCENARIO_EFFORT table', () => {
-  it('chat defaults to high (the architect spec default)', () => {
-    expect(SCENARIO_EFFORT.chat).toBe('high');
+  it('chat defaults to max (per user 2026-05-22 — quality over latency)', () => {
+    expect(SCENARIO_EFFORT.chat).toBe('max');
   });
 
   it('consolidate / dream / sub_agent get max', () => {
@@ -57,9 +57,9 @@ describe('task-327b: pickEffort — user override wins', () => {
   });
 
   it('invalid userEffort is ignored — falls through to scenario', () => {
-    expect(pickEffort({ scenario: 'chat', userEffort: 'ULTRA' })).toBe('high');
-    expect(pickEffort({ scenario: 'chat', userEffort: '' })).toBe('high');
-    expect(pickEffort({ scenario: 'chat', userEffort: 42 })).toBe('high');
+    expect(pickEffort({ scenario: 'chat', userEffort: 'ULTRA' })).toBe('max');
+    expect(pickEffort({ scenario: 'chat', userEffort: '' })).toBe('max');
+    expect(pickEffort({ scenario: 'chat', userEffort: 42 })).toBe('max');
   });
 
   it('userEffort=null defers to the scenario tree', () => {
@@ -69,14 +69,14 @@ describe('task-327b: pickEffort — user override wins', () => {
 });
 
 describe('task-327b: pickEffort — scenario tree', () => {
-  it('default scenario is chat → high', () => {
-    expect(pickEffort({})).toBe('high');
-    expect(pickEffort()).toBe('high');
+  it('default scenario is chat → max', () => {
+    expect(pickEffort({})).toBe('max');
+    expect(pickEffort()).toBe('max');
   });
 
-  it('unknown scenario defaults to high (never throws)', () => {
-    expect(pickEffort({ scenario: 'banana' })).toBe('high');
-    expect(pickEffort({ scenario: 'MAX' })).toBe('high');
+  it('unknown scenario defaults to max (never throws)', () => {
+    expect(pickEffort({ scenario: 'banana' })).toBe('max');
+    expect(pickEffort({ scenario: 'MAX' })).toBe('max');
   });
 
   it('consolidate/dream/sub_agent map to max', () => {
@@ -94,7 +94,7 @@ describe('task-327b: pickEffort — scenario tree', () => {
 describe('task-327b: pickEffort — long-loop auto-bump', () => {
   it(`does not bump below threshold=${LONG_LOOP_TURN_THRESHOLD}`, () => {
     expect(pickEffort({ scenario: 'chat', toolLoopTurns: LONG_LOOP_TURN_THRESHOLD - 1 }))
-      .toBe('high');
+      .toBe('max');
   });
 
   it('bumps chat → max at threshold', () => {
@@ -123,9 +123,9 @@ describe('task-327b: pickEffort — long-loop auto-bump', () => {
   });
 
   it('non-numeric toolLoopTurns does not bump (no NaN blow-up)', () => {
-    expect(pickEffort({ scenario: 'chat', toolLoopTurns: 'not a number' })).toBe('high');
-    expect(pickEffort({ scenario: 'chat', toolLoopTurns: null })).toBe('high');
-    expect(pickEffort({ scenario: 'chat', toolLoopTurns: undefined })).toBe('high');
+    expect(pickEffort({ scenario: 'chat', toolLoopTurns: 'not a number' })).toBe('max');
+    expect(pickEffort({ scenario: 'chat', toolLoopTurns: null })).toBe('max');
+    expect(pickEffort({ scenario: 'chat', toolLoopTurns: undefined })).toBe('max');
   });
 });
 

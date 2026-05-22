@@ -82,7 +82,7 @@ describe('T-b priorPlan thinking carries forward', () => {
 });
 
 describe('T-c no VP persona ⇒ scenario effort untouched', () => {
-  it('chat scenario without vpPersona keeps high (not bumped)', async () => {
+  it('chat scenario without vpPersona uses scenario default max', async () => {
     const adapter = new CapturingAdapter();
     const engine = mkEngine(adapter);
 
@@ -92,7 +92,7 @@ describe('T-c no VP persona ⇒ scenario effort untouched', () => {
       scenario: 'chat',
     })) { /* drain */ }
 
-    expect(adapter.calls[0].effort).toBe('high');
+    expect(adapter.calls[0].effort).toBe('max');
   });
 });
 
@@ -124,7 +124,7 @@ describe('T-d live routerPlan.thinking wins over vpDefault', () => {
       vpPlan: { vpId: 'vp-other', thinking: 'max' },
     })) { /* drain */ }
 
-    // Falls through to default 'high' (no other signal raises it).
-    expect(adapter.calls[0].effort).toBe('high');
+    // Falls through to scenario chat default 'max'.
+    expect(adapter.calls[0].effort).toBe('max');
   });
 });

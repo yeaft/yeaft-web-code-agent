@@ -73,6 +73,19 @@ export class AnthropicAdapter extends LLMAdapter {
         result.push({ role: 'user', content: msg.content });
       } else if (msg.role === 'assistant') {
         const content = [];
+        // task-327d: Anthropic requires thinking blocks to appear BEFORE
+        // any text / tool_use in the content array on echo-back. When the
+        // previous turn produced thinking blocks (with server-signed
+        // signature), we MUST replay them verbatim or the next request
+        // 400s with "content[].thinking in the thinking mode must be
+        // passed back to the API". Order is mandatory.
+        if (Array.isArray(msg.thinkingBlocks)) {
+          for (const tb of msg.thinkingBlocks) {
+            if (!tb || typeof tb.thinking !== 'string' || typeof tb.signature !== 'string') continue;
+            if (!tb.signature) continue; // never replay a thinking block without its signature
+            content.push({ type: 'thinking', thinking: tb.thinking, signature: tb.signature });
+          }
+        }
         if (msg.content) {
           content.push({ type: 'text', text: msg.content });
         }
@@ -219,6 +232,15 @@ export class AnthropicAdapter extends LLMAdapter {
     let currentToolCallId = null;
     let currentToolName = null;
     let currentToolInput = '';
+    // task-327d: track in-flight thinking block. `inThinkingBlock` flips
+    // to true on content_block_start{type:'thinking'} and back to false
+    // on the matching content_block_stop. `signature_delta` events
+    // append to currentThinkingSignature — Anthropic typically sends the
+    // signature in one delta at the end of the block, but we accumulate
+    // defensively in case it ever streams.
+    let inThinkingBlock = false;
+    let currentThinkingText = '';
+    let currentThinkingSignature = '';
     // Accumulate raw SSE body verbatim for the debug panel. No truncation:
     // see `redactRawRequest` in adapter.js for the verbatim-design rationale.
     // Push-then-join keeps allocation bounded for multi-MiB payloads (avoids
@@ -258,13 +280,27 @@ export class AnthropicAdapter extends LLMAdapter {
               currentToolCallId = block.id;
               currentToolName = block.name;
               currentToolInput = '';
+            } else if (block?.type === 'thinking') {
+              // task-327d: open a thinking block. Both fields default to
+              // empty strings; deltas append.
+              inThinkingBlock = true;
+              currentThinkingText = typeof block.thinking === 'string' ? block.thinking : '';
+              currentThinkingSignature = typeof block.signature === 'string' ? block.signature : '';
             }
           } else if (type === 'content_block_delta') {
             const delta = event.delta;
             if (delta?.type === 'text_delta') {
               yield { type: 'text_delta', text: delta.text };
             } else if (delta?.type === 'thinking_delta') {
+              // Forward the delta for live UI; ALSO accumulate so we can
+              // round-trip the block on the next turn.
+              currentThinkingText += delta.thinking || '';
               yield { type: 'thinking_delta', text: delta.thinking };
+            } else if (delta?.type === 'signature_delta') {
+              // task-327d: Anthropic typically sends the HMAC signature in
+              // one signature_delta near the end of the thinking block.
+              // Accumulate defensively.
+              currentThinkingSignature += delta.signature || '';
             } else if (delta?.type === 'input_json_delta') {
               currentToolInput += delta.partial_json;
             }
@@ -285,6 +321,20 @@ export class AnthropicAdapter extends LLMAdapter {
               currentToolCallId = null;
               currentToolName = null;
               currentToolInput = '';
+            } else if (inThinkingBlock) {
+              // task-327d: emit ONE end-of-block event with the assembled
+              // text + signature. Caller (engine) collects these into
+              // assistantMsg.thinkingBlocks for round-trip. We emit even
+              // when signature is empty so the engine can warn-and-drop;
+              // a thinking block without a signature would 400 on replay.
+              yield {
+                type: 'thinking_block_end',
+                thinking: currentThinkingText,
+                signature: currentThinkingSignature,
+              };
+              inThinkingBlock = false;
+              currentThinkingText = '';
+              currentThinkingSignature = '';
             }
           } else if (type === 'message_delta') {
             const stopReason = event.delta?.stop_reason;

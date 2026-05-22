@@ -142,6 +142,24 @@ function serializeMessage(msg) {
     }
   }
 
+  // task-327d: persist Anthropic extended-thinking blocks so the next turn
+  // can echo them back with their server-signed signature. Both fields are
+  // base64'd: thinking is multi-line text, and the signature is opaque
+  // bytes that don't need to be human-readable. Without this round-trip
+  // the next Anthropic request 400s with "content[].thinking in the
+  // thinking mode must be passed back to the API".
+  if (msg.thinkingBlocks && msg.thinkingBlocks.length > 0) {
+    fm.push(`thinkingBlocks:`);
+    for (const tb of msg.thinkingBlocks) {
+      if (!tb || typeof tb.thinking !== 'string' || typeof tb.signature !== 'string') continue;
+      if (!tb.signature) continue; // never persist an unsigned block
+      const thinkingB64 = Buffer.from(tb.thinking, 'utf8').toString('base64');
+      const signatureB64 = Buffer.from(tb.signature, 'utf8').toString('base64');
+      fm.push(`  - thinkingB64: ${thinkingB64}`);
+      fm.push(`    signatureB64: ${signatureB64}`);
+    }
+  }
+
   fm.push('---');
   fm.push('');
   fm.push(content);
@@ -227,6 +245,36 @@ export function parseMessage(raw) {
       }
     }
     if (toolCalls.length > 0) msg.toolCalls = toolCalls;
+  }
+
+  // task-327d: parse thinkingBlocks (mirror of toolCalls parser above)
+  if (frontmatter.includes('thinkingBlocks:')) {
+    const thinkingBlocks = [];
+    const tbMatch = frontmatter.match(/thinkingBlocks:\n((?:\s+-\s+[\s\S]*?)(?=\n\w|$))/);
+    if (tbMatch) {
+      const tbBlock = tbMatch[1];
+      const entries = tbBlock.split(/\n\s+-\s+/).filter(Boolean);
+      for (const entry of entries) {
+        const tb = {};
+        for (const line of entry.split('\n')) {
+          const trimmed = line.trim().replace(/^-\s+/, '');
+          const ci = trimmed.indexOf(':');
+          if (ci === -1) continue;
+          const k = trimmed.slice(0, ci).trim();
+          const v = trimmed.slice(ci + 1).trim();
+          if (k === 'thinkingB64') {
+            try { tb.thinking = Buffer.from(v, 'base64').toString('utf8'); } catch { /* skip */ }
+          } else if (k === 'signatureB64') {
+            try { tb.signature = Buffer.from(v, 'base64').toString('utf8'); } catch { /* skip */ }
+          }
+        }
+        // Both fields required — an unsigned block would 400 on replay.
+        if (typeof tb.thinking === 'string' && typeof tb.signature === 'string' && tb.signature) {
+          thinkingBlocks.push(tb);
+        }
+      }
+    }
+    if (thinkingBlocks.length > 0) msg.thinkingBlocks = thinkingBlocks;
   }
 
   return msg;
