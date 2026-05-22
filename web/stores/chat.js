@@ -1505,6 +1505,12 @@ export const useChatStore = defineStore('chat', {
           };
           break;
         }
+        case 'vp_turn_end': {
+          if (!event.turnId) break;
+          const { [event.turnId]: _removed, ...rest } = this.activeVpTurns;
+          this.activeVpTurns = rest;
+          break;
+        }
         case 'unify_turn_aborted': {
           if (!event.turnId) break;
           const { [event.turnId]: _removed, ...rest } = this.activeVpTurns;

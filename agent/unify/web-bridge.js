@@ -1653,6 +1653,10 @@ function maybeTransitionVpStatus(hctx, state) {
  * @param {object} event — engine event (text_delta / tool_call / …)
  * @param {{assistantTextParts:string[], toolCallsAccum:Array, toolResultsAccum:Array, thinkingBlocksAccum?:Array, resetQueryTimer:Function, groupId?:string, vpId?:string, turnId?:string}} hctx
  */
+export function __testHandleEngineEvent(event, hctx) {
+  return handleEngineEvent(event, hctx);
+}
+
 function handleEngineEvent(event, hctx) {
   hctx.resetQueryTimer();
   const envelope = {
@@ -1773,14 +1777,39 @@ function handleEngineEvent(event, hctx) {
       break;
 
     case 'turn_end':
-      // turn_end variants are handled by the outer loop (result /
-      // end_turn semantics). PR #793 removed the `group_handoff`
-      // wire event that the frontend used to render a "↪ 已转交给"
-      // pill — the Route tool chip (rendered from the tool_call
-      // envelope already on the wire) is the single source of truth
-      // for hand-off UX. If a future feature (notification toast,
-      // typing-chain animation, …) needs the structured payload,
-      // re-emit a wire event here from `event.detail`.
+      // Most engine turn_end events are internal loop boundaries. A normal
+      // tool_use stop means "run tools, then call the adapter again", so it
+      // must NOT end the VP's visible turn. route_forward is different: the
+      // tool has handed control to another VP and Engine.query will not
+      // stream more text for this VP. Settle the current VP immediately so
+      // the roster row does not sit on "thinking" until later result cleanup.
+      if (event.stopReason === 'tool_handoff' && event.detail?.kind === 'route_forward') {
+        try {
+          if (hctx.thread) {
+            hctx.thread.status = 'idle';
+            hctx.thread.updatedAt = Date.now();
+          }
+          getVpStatusBroker().settleIdle({
+            groupId: hctx.groupId || null,
+            vpId: hctx.vpId,
+            threadId: hctx.threadId || 'main',
+            title: hctx.thread?.title || '',
+            messageCount: hctx.thread?.messageIds?.length || 0,
+          });
+        } catch (err) {
+          console.warn('[Unify] vp-status settleIdle (route_forward) failed:', err?.message || err);
+        }
+        sendUnifyEvent({
+          type: 'vp_turn_end',
+          groupId: hctx.groupId,
+          vpId: hctx.vpId,
+          threadId: hctx.threadId || event.threadId || 'main',
+          turnId: hctx.turnId,
+          stopReason: event.stopReason,
+          detail: event.detail || null,
+          ts: Date.now(),
+        }, envelope);
+      }
       break;
 
     case 'usage':
