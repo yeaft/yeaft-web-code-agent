@@ -30,7 +30,7 @@ export default {
     initialSection: {
       type: String,
       default: 'announcement',
-      validator: v => ['announcement', 'members', 'rename', 'memory', 'danger'].includes(v),
+      validator: v => ['announcement', 'members', 'rename', 'model', 'memory', 'danger'].includes(v),
     },
   },
   data() {
@@ -44,6 +44,10 @@ export default {
       renameDraft: '',
       renameBusy: false,
       renameError: '',
+      // Model override draft (empty string = fall back to user default).
+      modelDraft: '',
+      modelBusy: false,
+      modelError: '',
       // Members busy flag — gates concurrent toggles.
       membersBusy: false,
       membersError: '',
@@ -84,6 +88,21 @@ export default {
     defaultVpId() {
       return this.group ? (this.group.defaultVpId || null) : null;
     },
+    groupConfig() {
+      return this.group && this.group.config && typeof this.group.config === 'object'
+        ? this.group.config
+        : {};
+    },
+    groupModelOverride() {
+      const m = this.groupConfig.model;
+      return typeof m === 'string' ? m : '';
+    },
+    availableModels() {
+      return this.chat?.unifyAvailableModels || [];
+    },
+    userDefaultModel() {
+      return this.chat?.unifyModel || '';
+    },
     vpList() { return this.vpStore?.vpList || []; },
     vpLibraryEmpty() {
       const s = this.vpStore;
@@ -98,6 +117,7 @@ export default {
       return [
         { id: 'announcement', label: this.$t('unify.group.settings.nav.announcement') },
         { id: 'members', label: this.$t('unify.group.settings.nav.members') },
+        { id: 'model', label: this.$t('unify.group.settings.nav.model') || 'Model' },
         { id: 'rename', label: this.$t('unify.group.settings.nav.rename') },
         { id: 'memory', label: this.$t('unify.group.settings.nav.memory') },
         { id: 'danger', label: this.$t('unify.group.settings.nav.danger') },
@@ -124,9 +144,11 @@ export default {
       // the current value rather than a stale or empty input.
       if (next === 'announcement') this.announcementDraft = this.announcement;
       if (next === 'rename') this.renameDraft = this.groupDisplayName;
+      if (next === 'model') this.modelDraft = this.groupModelOverride;
       // Clear unrelated errors so they don't haunt other sections.
       this.announcementError = '';
       this.renameError = '';
+      this.modelError = '';
       this.membersError = '';
       this.deleteError = '';
       this.deleteConfirmText = '';
@@ -140,9 +162,11 @@ export default {
       this.section = this.initialSection;
       this.announcementDraft = this.announcement;
       this.renameDraft = this.groupDisplayName;
+      this.modelDraft = this.groupModelOverride;
       this.deleteConfirmText = '';
       this.announcementError = '';
       this.renameError = '';
+      this.modelError = '';
       this.membersError = '';
       this.deleteError = '';
     },
@@ -170,6 +194,7 @@ export default {
     // Seed initial draft for whatever the entry section is.
     if (this.section === 'announcement') this.announcementDraft = this.announcement;
     if (this.section === 'rename') this.renameDraft = this.groupDisplayName;
+    if (this.section === 'model') this.modelDraft = this.groupModelOverride;
   },
   beforeUnmount() {
     window.removeEventListener('keydown', this.onEsc);
@@ -178,11 +203,11 @@ export default {
     onEsc(e) {
       if (e.key !== 'Escape') return;
       // Don't close mid-busy operation.
-      if (this.announcementBusy || this.renameBusy || this.membersBusy || this.deleteBusy) return;
+      if (this.announcementBusy || this.renameBusy || this.modelBusy || this.membersBusy || this.deleteBusy) return;
       this.requestClose();
     },
     onOverlayClick() {
-      if (this.announcementBusy || this.renameBusy || this.membersBusy || this.deleteBusy) return;
+      if (this.announcementBusy || this.renameBusy || this.modelBusy || this.membersBusy || this.deleteBusy) return;
       this.requestClose();
     },
     requestClose() { this.$emit('close'); },
@@ -226,6 +251,26 @@ export default {
         }
       } finally {
         this.renameBusy = false;
+      }
+    },
+    // ── Model override ─────────────────────────────────────
+    async saveModel() {
+      if (this.modelBusy || !this.chat) return;
+      this.modelBusy = true;
+      this.modelError = '';
+      try {
+        const next = (this.modelDraft || '').trim();
+        const res = await this.chat.groupCrudRequest('update_config', {
+          groupId: this.groupId,
+          config: { model: next || null },
+        });
+        if (!res || !res.ok) {
+          const code = (res && res.error && res.error.code) || 'unknown';
+          const message = (res && res.error && res.error.message) || code;
+          this.modelError = message;
+        }
+      } finally {
+        this.modelBusy = false;
       }
     },
     // ── Members ────────────────────────────────────────────
@@ -339,7 +384,7 @@ export default {
             class="group-settings-close"
             type="button"
             @click="requestClose"
-            :disabled="announcementBusy || renameBusy || membersBusy || deleteBusy"
+            :disabled="announcementBusy || renameBusy || modelBusy || membersBusy || deleteBusy"
             :aria-label="$t('unify.group.settings.close')"
           >×</button>
         </header>
@@ -455,6 +500,43 @@ export default {
                   :disabled="renameBusy || !renameDraft.trim() || renameDraft.trim() === groupDisplayName"
                   @click="saveRename"
                 >{{ renameBusy ? $t('unify.group.settings.rename.saving') : $t('unify.group.settings.rename.save') }}</button>
+              </div>
+            </div>
+
+            <!-- Model override -->
+            <div v-else-if="section === 'model'" class="group-settings-section">
+              <h3 class="group-settings-heading">Model</h3>
+              <p class="group-settings-help">
+                Override the model used for this group. Leave empty to fall back to the
+                user default ({{ userDefaultModel || '—' }}).
+              </p>
+              <select
+                v-if="availableModels.length > 0"
+                class="group-settings-input"
+                v-model="modelDraft"
+                :disabled="modelBusy"
+              >
+                <option value="">(use user default)</option>
+                <option v-for="m in availableModels" :key="m.id" :value="m.id">
+                  {{ m.label || m.id }}<span v-if="m.provider"> — {{ m.provider }}</span>
+                </option>
+              </select>
+              <input
+                v-else
+                type="text"
+                class="group-settings-input"
+                v-model="modelDraft"
+                :disabled="modelBusy"
+                placeholder="provider/model-id"
+              />
+              <p v-if="modelError" class="group-settings-error" role="alert">{{ modelError }}</p>
+              <div class="group-settings-actions">
+                <button
+                  type="button"
+                  class="group-settings-primary"
+                  :disabled="modelBusy || modelDraft === groupModelOverride"
+                  @click="saveModel"
+                >{{ modelBusy ? 'Saving…' : $t('common.save') }}</button>
               </div>
             </div>
 
