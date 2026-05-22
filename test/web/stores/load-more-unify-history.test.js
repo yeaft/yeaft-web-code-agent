@@ -104,11 +104,8 @@ function setActiveGroupFilter(groupId) {
   this.unifyLoadingMoreHistory = !!savedState?.loading;
   this.unifyOldestLoadedSeq = (typeof savedState?.oldestSeq === 'number') ? savedState.oldestSeq : null;
 
-  const convId = this.unifyConversationId;
-  const rows = convId ? (this.messagesMap[convId] || []) : [];
-  const hasCachedVisibleRows = !!next && rows.some(m => m && m.groupId === next);
-  const needsHydrate = !savedState?.loaded && !savedState?.loading && !hasCachedVisibleRows;
-  if (this.unifyAgentId && needsHydrate) {
+  const needsHydrate = !savedState?.loaded && !savedState?.loading;
+  if (this.unifyAgentId && next && needsHydrate) {
     this.unifyGroupHistoryState = {
       ...this.unifyGroupHistoryState,
       [groupKey]: { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },

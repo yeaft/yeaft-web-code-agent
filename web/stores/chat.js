@@ -780,11 +780,12 @@ export const useChatStore = defineStore('chat', {
       // Always request a session_ready replay so model + status + groups
       // snapshot are repopulated on every Unify entry. Backend's
       // handleUnifyLoadHistory is idempotent: the session_ready handler
-      // either migrates the local convId (first time) or just refreshes
-      // model/status fields (re-entry). When messages already exist we
-      // only need the metadata replay, not the message stream — pass
-      // limit:0 so the agent skips re-emitting messages and just re-fires
-      // session_ready / thread_list_updated / group snapshot events.
+      // either migrates the local convId (first time) or refreshes model /
+      // status fields (re-entry). For the active group, also replay the
+      // visible history unless that group has already completed a history
+      // load in this UI lifecycle. A non-empty shared messagesMap is not
+      // enough evidence: it may hold stale rows for `grp_fun` while newer
+      // persisted rows were written during a previous page/session.
       //
       // Group-history-isolation (Bug 7): pass `groupId` so the agent only
       // replays messages stamped with the active group. The visible Unify
@@ -792,9 +793,17 @@ export const useChatStore = defineStore('chat', {
       // fallback so quick group switches don't request another group's
       // history into the active pane.
       if (this.unifyAgentId) {
-        const existing = this.messagesMap[this.unifyConversationId];
-        const needMessages = !existing || existing.length === 0;
         const groupId = resolveActiveUnifyGroupId(this);
+        const groupKey = groupId || '__all__';
+        const savedState = this.unifyGroupHistoryState[groupKey] || null;
+        const needMessages = !!groupId && !savedState?.loaded && !savedState?.loading;
+        if (groupId && needMessages) {
+          this.unifyGroupHistoryState = {
+            ...this.unifyGroupHistoryState,
+            [groupKey]: { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },
+          };
+          this.unifyLoadingMoreHistory = true;
+        }
         this.sendWsMessage({
           type: 'unify_load_history',
           agentId: this.unifyAgentId,
@@ -1958,9 +1967,12 @@ export const useChatStore = defineStore('chat', {
     // Group conversation consistency: do NOT clear the shared Unify stream
     // on group switch. `messages` already filters by groupId; clearing the
     // backing array caused flicker and destroyed the live state for the
-    // group the user just left. Keep all group-stamped rows cached in the
-    // Unify conversation and only request history for a group that has no
-    // visible rows and has not been hydrated yet.
+    // group the user just left. Keep group-stamped rows cached, but do not
+    // treat cache presence as proof that the group is hydrated. A user can
+    // have stale rows for `grp_fun` in memory while newer persisted rows are
+    // on disk after a refresh/re-entry; switching back to that group must
+    // still ask the agent for authoritative history unless this group has
+    // already completed a history load in the current UI lifecycle.
     setActiveGroupFilter(groupId) {
       const prev = this.unifyActiveGroupFilter || null;
       const next = groupId || null;
@@ -1973,11 +1985,8 @@ export const useChatStore = defineStore('chat', {
       this.unifyLoadingMoreHistory = !!savedState?.loading;
       this.unifyOldestLoadedSeq = (typeof savedState?.oldestSeq === 'number') ? savedState.oldestSeq : null;
 
-      const convId = this.unifyConversationId;
-      const rows = convId ? (this.messagesMap[convId] || []) : [];
-      const hasCachedVisibleRows = !!next && rows.some(m => m && m.groupId === next);
-      const needsHydrate = !savedState?.loaded && !savedState?.loading && !hasCachedVisibleRows;
-      if (this.unifyAgentId && needsHydrate) {
+      const needsHydrate = !savedState?.loaded && !savedState?.loading;
+      if (this.unifyAgentId && next && needsHydrate) {
         this.unifyGroupHistoryState = {
           ...this.unifyGroupHistoryState,
           [groupKey]: { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },
