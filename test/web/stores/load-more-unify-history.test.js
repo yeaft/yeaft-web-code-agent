@@ -35,16 +35,26 @@ function loadMoreUnifyHistory() {
   if (this.unifyLoadingMoreHistory || !this.unifyHasMoreHistory) return;
   if (!this.unifyAgentId || this.unifyOldestLoadedSeq == null) return;
 
-  let groupId = null;
-  try {
-    const gs = (typeof window !== 'undefined') && (
-      window.Pinia?.useGroupsStore?.() ||
-      (window.__useGroupsStore && window.__useGroupsStore())
-    );
-    groupId = (gs && gs.activeGroupId) || null;
-  } catch { /* groups store missing — agent treats null as no-op */ }
+  let groupId = this.unifyActiveGroupFilter || null;
+  if (!groupId) {
+    try {
+      const gs = (typeof window !== 'undefined') && (
+        window.Pinia?.useGroupsStore?.() ||
+        (window.__useGroupsStore && window.__useGroupsStore())
+      );
+      groupId = (gs && gs.activeGroupId) || null;
+    } catch { /* groups store missing — agent treats null as no-op */ }
+  }
 
   this.unifyLoadingMoreHistory = true;
+  const groupKey = groupId || '__all__';
+  this.unifyGroupHistoryState = {
+    ...this.unifyGroupHistoryState,
+    [groupKey]: {
+      ...(this.unifyGroupHistoryState[groupKey] || {}),
+      loading: true,
+    },
+  };
   this.sendWsMessage({
     type: 'unify_load_more_history',
     agentId: this.unifyAgentId,
@@ -372,6 +382,63 @@ describe('handleUnifyHistoryChunk', () => {
     expect(store.unifyOldestLoadedSeq).toBe(100);
   });
 
+  it('drops stale chunks with an empty-string groupId instead of treating them as unscoped history', () => {
+    const store = mkStore({
+      unifyActiveGroupFilter: 'group-B',
+      unifyLoadingMoreHistory: true,
+      unifyGroupHistoryState: {
+        '': { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },
+        'group-B': { loaded: true, loading: false, hasMore: true, oldestSeq: 100, count: 1 },
+      },
+      messagesMap: {
+        'unify-1': [
+          { type: 'user', content: 'B-msg', groupId: 'group-B' },
+        ],
+      },
+    });
+
+    handleUnifyHistoryChunk(store, {
+      conversationId: 'unify-1',
+      groupId: '',
+      messages: [
+        { id: 'm-empty-1', role: 'user', content: 'empty-scope-q', groupId: '' },
+      ],
+      oldestSeq: 1,
+      hasMore: true,
+    });
+
+    expect(store.messagesMap['unify-1'].map(m => m.content)).toEqual(['B-msg']);
+    expect(store.unifyLoadingMoreHistory).toBe(false);
+    expect(store.unifyGroupHistoryState['']).toEqual(expect.objectContaining({ loading: false }));
+    expect(store.unifyGroupHistoryState.__all__).toBeUndefined();
+    expect(store.unifyOldestLoadedSeq).toBe(100);
+  });
+
+  it('preserves empty-string row groupId when accepting an empty-string chunk', () => {
+    const store = mkStore({
+      unifyActiveGroupFilter: '',
+      messagesMap: { 'unify-1': [] },
+    });
+
+    handleUnifyHistoryChunk(store, {
+      conversationId: 'unify-1',
+      groupId: '',
+      messages: [
+        { id: 'm-empty-1', role: 'user', content: 'empty-scope-q', groupId: '' },
+        { id: 'm-empty-2', role: 'assistant', content: 'empty-scope-a', groupId: '' },
+      ],
+      oldestSeq: 1,
+      hasMore: false,
+    });
+
+    expect(store.messagesMap['unify-1']).toEqual([
+      expect.objectContaining({ id: 'm-empty-1', groupId: '' }),
+      expect.objectContaining({ id: 'm-empty-2', groupId: '' }),
+    ]);
+    expect(store.unifyGroupHistoryState['']).toEqual(expect.objectContaining({ loading: false, hasMore: false }));
+    expect(store.unifyGroupHistoryState.__all__).toBeUndefined();
+  });
+
   it('accepts a chunk whose groupId matches the active filter', () => {
     const store = mkStore({
       unifyActiveGroupFilter: 'group-A',
@@ -446,6 +513,22 @@ describe('loadMoreUnifyHistory — action gates', () => {
     loadMoreUnifyHistory.call(store);
     expect(store._sent[0].groupId).toBe('grp-xyz');
     expect(store._sent[0].beforeSeq).toBe(7);
+  });
+
+  it('prefers unifyActiveGroupFilter over a stale groupsStore.activeGroupId', () => {
+    globalThis.window.Pinia = {
+      useGroupsStore: () => ({ activeGroupId: 'grp-stale' }),
+    };
+    const store = mkStore({
+      unifyActiveGroupFilter: 'grp-visible',
+      unifyOldestLoadedSeq: 9,
+    });
+
+    loadMoreUnifyHistory.call(store);
+
+    expect(store._sent[0].groupId).toBe('grp-visible');
+    expect(store.unifyGroupHistoryState['grp-visible'].loading).toBe(true);
+    expect(store.unifyGroupHistoryState['grp-stale']).toBeUndefined();
   });
 
   it('no-op when currentView is not unify', () => {

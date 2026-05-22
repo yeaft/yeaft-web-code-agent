@@ -355,8 +355,9 @@ export function handleUnifyHistoryChunk(store, msg) {
   // The chunk's groupId is authoritative — it's stamped by the agent
   // from the request groupId, not from messagesMap state.
   const activeFilter = store.unifyActiveGroupFilter ?? null;
-  if (msg.groupId && activeFilter && msg.groupId !== activeFilter) {
-    const staleKey = msg.groupId || '__all__';
+  const hasChunkGroup = msg.groupId != null;
+  if (hasChunkGroup && activeFilter && msg.groupId !== activeFilter) {
+    const staleKey = msg.groupId ?? '__all__';
     if (store.unifyGroupHistoryState) {
       store.unifyGroupHistoryState = {
         ...store.unifyGroupHistoryState,
@@ -393,7 +394,7 @@ export function handleUnifyHistoryChunk(store, msg) {
         ...(stableId ? { id: stableId, messageId: stableId } : {}),
         type: 'user',
         content: m.content,
-        groupId: m.groupId || null,
+        groupId: m.groupId ?? null,
         isStreaming: false,
       });
     } else if (m.role === 'assistant') {
@@ -401,7 +402,7 @@ export function handleUnifyHistoryChunk(store, msg) {
         ...(stableId ? { id: stableId, messageId: stableId } : {}),
         type: 'assistant',
         content: m.content,
-        groupId: m.groupId || null,
+        groupId: m.groupId ?? null,
         ...(m.speakerVpId ? { vpId: m.speakerVpId, speakerVpId: m.speakerVpId } : {}),
         isStreaming: false,
       });
@@ -412,7 +413,7 @@ export function handleUnifyHistoryChunk(store, msg) {
     store.messagesMap[convId].splice(0, 0, ...formatted);
   }
 
-  const groupKey = msg.groupId || '__all__';
+  const groupKey = msg.groupId ?? '__all__';
   const nextState = {
     loaded: true,
     loading: false,
@@ -426,7 +427,7 @@ export function handleUnifyHistoryChunk(store, msg) {
       [groupKey]: nextState,
     };
   }
-  const activeKey = store.unifyActiveGroupFilter || '__all__';
+  const activeKey = store.unifyActiveGroupFilter ?? '__all__';
   if (groupKey === activeKey) {
     store.unifyHasMoreHistory = nextState.hasMore;
     if (typeof msg.oldestSeq === 'number') {

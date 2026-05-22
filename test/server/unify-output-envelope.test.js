@@ -158,13 +158,36 @@ describe('agent-output.js — unify_output envelope passthrough', () => {
     await handleAgentOutput('a1', baseAgent, {
       type: 'unify_output',
       conversationId: 'conv1',
+      groupId: '',
       vpId: '',
       turnId: '',
       data: { type: 'assistant', message: { content: 'hi' } },
     });
     const env = _sent[0].envelope;
+    expect(env.groupId).toBe('');
     expect(env.vpId).toBe('');
     expect(env.turnId).toBe('');
+  });
+
+  it('forwards groupId on history chunks using the same `!= null` semantics', async () => {
+    addClient('c1');
+    await handleAgentOutput('a1', baseAgent, {
+      type: 'unify_history_chunk',
+      conversationId: 'conv1',
+      groupId: '',
+      messages: [],
+      oldestSeq: 5,
+      hasMore: false,
+    });
+
+    expect(_sent[0].envelope).toMatchObject({
+      type: 'unify_history_chunk',
+      conversationId: 'conv1',
+      groupId: '',
+      messages: [],
+      oldestSeq: 5,
+      hasMore: false,
+    });
   });
 
   it('broadcasts to every authenticated client of the agent owner', async () => {

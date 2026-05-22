@@ -112,6 +112,7 @@ function makeVueStub() {
 function makePiniaStub() {
   const triggerGroupDreamCalls = [];
   const projectedDreamEvents = [];
+  const sentGroupChats = [];
   const chatStore = {
     unifyConversationId: null,
     unifyActiveGroupFilter: null,
@@ -124,10 +125,10 @@ function makePiniaStub() {
     vpsTypingInCurrentConv: [],
     activeVpTurns: {},
     hasCapability: () => false,
-    setActiveGroupFilter: () => {},
+    setActiveGroupFilter: (groupId) => { chatStore.unifyActiveGroupFilter = groupId; },
     leaveVpDetailView: () => {},
     leaveUnify: () => {},
-    sendUnifyGroupChat: () => {},
+    sendUnifyGroupChat: (payload) => { sentGroupChats.push(payload); },
     cancelUnify: () => {},
     clearUnifyMessages: () => {},
     switchUnifyModel: () => {},
@@ -170,6 +171,9 @@ function makePiniaStub() {
     useGroupsStore: () => groupsStore,
     __triggerGroupDreamCalls: triggerGroupDreamCalls,
     __projectedDreamEvents: projectedDreamEvents,
+    __sentGroupChats: sentGroupChats,
+    __chatStore: chatStore,
+    __groupsStore: groupsStore,
   };
 }
 
@@ -269,6 +273,18 @@ describe('UnifyPage setup() — temporal dead zone regression', () => {
         source: 'header-button',
       }),
     ]);
+
+    // Regression for group isolation: send routing must follow the visible
+    // Unify filter, not a stale groupsStore.activeGroupId. Quick group
+    // switches can briefly leave those pointers divergent; using the stale
+    // pointer stamps the new message with the wrong groupId.
+    Pinia.__chatStore.unifyActiveGroupFilter = 'grp-visible';
+    Pinia.__groupsStore.activeGroupId = 'grp-stale';
+    api.sendMessage('hello visible group', []);
+    expect(Pinia.__sentGroupChats.at(-1)).toEqual(expect.objectContaining({
+      groupId: 'grp-visible',
+      text: 'hello visible group',
+    }));
   });
 });
 
