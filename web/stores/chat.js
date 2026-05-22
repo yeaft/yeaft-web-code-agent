@@ -1457,6 +1457,7 @@ export const useChatStore = defineStore('chat', {
               group: event.group || null,
               groupId: event.groupId || null,
               groups: event.groups || null,
+              config: event.config || null,
               error: event.error || null,
             });
           }
@@ -2000,13 +2001,25 @@ export const useChatStore = defineStore('chat', {
     },
     // H2.f.6: setUnifyFeatureReplyThreadId / setUnifyJumpTarget /
     // clearUnifyJumpTarget actions removed.
-    switchUnifyModel(modelId) {
+    async switchUnifyModel(modelId, groupId = null) {
       if (!modelId || !this.unifyAgentId) return;
+      const targetGroupId = groupId || null;
+      if (targetGroupId) {
+        const res = await this.groupCrudRequest('update_config', {
+          groupId: targetGroupId,
+          config: { model: modelId },
+        });
+        if (res && res.ok) {
+          this.unifyModel = modelId;
+        }
+        return res;
+      }
       this.sendWsMessage({
         type: 'unify_model_switch',
         model: modelId,
         agentId: this.unifyAgentId,
       });
+      return null;
     },
     // feat-6af5f9f1 PR C: search query for the debug panel toolbar.
     // Substring filter (case-insensitive) applied to the per-turn fields

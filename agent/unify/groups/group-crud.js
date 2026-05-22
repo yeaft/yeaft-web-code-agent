@@ -329,7 +329,7 @@ export function updateGroupAnnouncement(yeaftDir, groupId, text) {
 }
 
 /**
- * (A.2.c) Update per-group config overrides (v1: just `model`).
+ * (A.2.c) Persist the model selected in the group conversation header.
  * Returns the persisted config object so the caller can broadcast it.
  *
  * Throws GroupConfigError on validation failure (unknown key, bad type).

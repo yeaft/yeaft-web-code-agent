@@ -134,10 +134,8 @@ describe('topUpDefaultVps — legacy 12-VP library, no ledger yet', () => {
 });
 
 describe('topUpDefaultVps — respects user deletes', () => {
-  it('does NOT recreate a VP whose id is in the ledger but not on disk', () => {
-    // Pre-populate the ledger as if we'd seeded kongzi before, then the
-    // user deleted ~/.yeaft/virtual-persons/kongzi/ manually.
-    const ledger = { version: 1, seeded: { kongzi: 'abc12345' } };
+  it('recreates missing stock defaults such as Omni even when an old ledger says they were seeded', () => {
+    const ledger = { version: 1, seeded: { omni: 'abc12345', kongzi: 'def67890' } };
     writeFileSync(
       join(libDir, '.seeded-versions.json'),
       JSON.stringify(ledger, null, 2),
@@ -146,11 +144,15 @@ describe('topUpDefaultVps — respects user deletes', () => {
 
     const result = topUpDefaultVps(libDir);
     expect(result.errors).toEqual([]);
-    expect(result.respectedDeletes).toContain('kongzi');
-    expect(existsSync(join(libDir, 'kongzi', 'role.md'))).toBe(false);
+    expect(result.respectedDeletes).not.toContain('omni');
+    expect(result.respectedDeletes).not.toContain('kongzi');
+    expect(existsSync(join(libDir, 'omni', 'role.md'))).toBe(true);
+    expect(existsSync(join(libDir, 'kongzi', 'role.md'))).toBe(true);
+    expect(result.added).toEqual(expect.arrayContaining(['omni', 'kongzi']));
 
-    // Every other default should have been seeded.
-    expect(result.added.length).toBe(DEFAULT_VPS.length - 1);
+    const versions = readSeedVersions(libDir);
+    expect(versions.seeded.omni).toMatch(/^[0-9a-f]{8}$/);
+    expect(versions.seeded.kongzi).toMatch(/^[0-9a-f]{8}$/);
   });
 });
 

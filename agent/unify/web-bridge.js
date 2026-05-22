@@ -1416,12 +1416,12 @@ export function handleUnifyUpdateGroup(msg) {
 }
 
 /**
- * Update per-group config overrides (v1: `model`). Cache invalidation:
+ * Persist the model selected in the group conversation header. Cache invalidation:
  * drop every cached Engine whose key starts with `${groupId}::` so the
  * next turn picks up the new model. The group meta itself is untouched.
  *
  * Payload: { groupId, requestId, config: { model?: string|null } }
- *  - `model: ''` or `null` clears the override (group falls back to user default).
+ *  - `model: ''` or `null` clears the selected group model (falls back to user default).
  */
 export function handleUnifyUpdateGroupConfig(msg) {
   const requestId = msg && msg.requestId;

@@ -1,7 +1,7 @@
 /**
- * group-config.js — Per-group configuration overrides.
+ * group-config.js — Per-group selected model state.
  *
- * Each group may carry its own `config.json` at
+ * Each group may carry its header-selected model in `config.json` at
  *   ~/.yeaft/groups/<groupId>/config.json
  *
  * v1 schema (intentionally tiny — extend via additive keys only):
@@ -11,7 +11,7 @@
  *
  * Missing file → empty object. Missing field → fall back to user-level
  * config (`~/.yeaft/config.json` via loadConfig()). Resolution is a
- * shallow overlay (group fields override user fields when truthy).
+ * shallow overlay for send-time effective config.
  *
  * Storage layer only — no engine wiring, no validation of model strings
  * against the provider registry (that's done lazily at resolve time by
@@ -25,7 +25,7 @@ import { groupsRoot, resolveGroupYeaftDir } from './group-crud.js';
 
 const CONFIG_FILE = 'config.json';
 
-/** Whitelist of fields a group may override. Reject everything else. */
+/** Whitelist of persisted group model-state fields. Reject everything else. */
 const ALLOWED_KEYS = new Set(['model']);
 
 export class GroupConfigError extends Error {
