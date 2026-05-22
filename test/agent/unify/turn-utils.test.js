@@ -69,6 +69,18 @@ describe('countTurns', () => {
     expect(countTurns([])).toBe(0);
     expect(countTurns(null)).toBe(0);
   });
+
+  it('does not count tool_result-only user blocks as human turns', () => {
+    const ms = [
+      { role: 'user', content: 'q1' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 't1', name: 'bash', input: {} }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'output' }] },
+      { role: 'assistant', content: 'a1' },
+      { role: 'user', content: [{ type: 'text', text: 'q2' }] },
+      { role: 'assistant', content: 'a2' },
+    ];
+    expect(countTurns(ms)).toBe(2);
+  });
 });
 
 describe('indexOfNthTurnFromEnd', () => {
@@ -123,6 +135,19 @@ describe('indexOfNthTurnFromEnd', () => {
   it('n=0 returns past-the-end (caller treats as drop-everything)', () => {
     const ms = [{ role: 'user', content: 'u' }];
     expect(indexOfNthTurnFromEnd(ms, 0)).toBe(1);
+  });
+
+  it('skips tool_result-only user blocks when finding turn boundaries', () => {
+    const ms = [
+      { role: 'user', content: 'old' },       // 0
+      { role: 'assistant', content: 'a0' },   // 1
+      { role: 'user', content: 'new' },       // 2
+      { role: 'assistant', content: '', toolCalls: [{ id: 't1', name: 'bash', input: {} }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'out' }] },
+      { role: 'assistant', content: 'done' },
+    ];
+    expect(indexOfNthTurnFromEnd(ms, 1)).toBe(2);
+    expect(indexOfNthTurnFromEnd(ms, 2)).toBe(0);
   });
 });
 

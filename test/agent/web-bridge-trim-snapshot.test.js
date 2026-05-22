@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { trimSnapshotForBudget } from '../../agent/unify/history-compact.js';
+import { DEFAULT_KEEP_TOOL_TURNS, trimSnapshotForBudget } from '../../agent/unify/history-compact.js';
 import { countTurns } from '../../agent/unify/turn-utils.js';
 
 function buildSyntheticHistory(turnCount, charsPerMsg = 10) {
@@ -99,6 +99,63 @@ describe('trimSnapshotForBudget — pair-safety', () => {
     // slice. With recentTurnCap=5 the slice never reaches the orphan, so
     // there should be zero tool messages in the trimmed result.
     expect(toolMsgs.length).toBe(0);
+  });
+});
+
+describe('trimSnapshotForBudget — tool noise stripping', () => {
+  function buildToolHistory(turnCount) {
+    const ms = [];
+    for (let i = 0; i < turnCount; i++) {
+      ms.push({ role: 'user', content: `q${i}` });
+      ms.push({
+        role: 'assistant',
+        content: [
+          { type: 'text', text: `using tool ${i}` },
+          { type: 'tool_use', id: `tu-${i}`, name: 'echo', input: { i } },
+        ],
+        toolCalls: [{ id: `tu-${i}`, name: 'echo', input: { i } }],
+      });
+      ms.push({ role: 'tool', toolCallId: `tu-${i}`, content: `result ${i}` });
+      ms.push({
+        // Anthropic-style tool_result block: this is part of the tool
+        // exchange, not a new human turn. Do not add extra text here or
+        // countTurns() will correctly treat it as a distinct user turn.
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: `tu-${i}`, content: `result ${i}` },
+        ],
+      });
+      ms.push({ role: 'assistant', content: `done ${i}` });
+    }
+    return ms;
+  }
+
+  it('strips tool calls/results older than the recent 3-turn lossless window', () => {
+    const ms = buildToolHistory(5);
+    const out = trimSnapshotForBudget(ms, {
+      recentTurnCap: 10,
+      messageTokenBudget: 1_000_000,
+    });
+
+    const olderText = JSON.stringify(out.filter(m => typeof m.content === 'string' && /q0|q1/.test(m.content)));
+    expect(olderText).toContain('q0');
+    expect(olderText).toContain('q1');
+
+    const olderToolCallIds = new Set(['tu-0', 'tu-1']);
+    const recentToolCallIds = new Set(['tu-2', 'tu-3', 'tu-4']);
+    for (const m of out) {
+      expect(olderToolCallIds.has(m.toolCallId)).toBe(false);
+      expect((m.toolCalls || []).some(tc => olderToolCallIds.has(tc.id))).toBe(false);
+      if (Array.isArray(m.content)) {
+        expect(m.content.some(part => part.type === 'tool_use' && olderToolCallIds.has(part.id))).toBe(false);
+        expect(m.content.some(part => part.type === 'tool_result' && olderToolCallIds.has(part.tool_use_id))).toBe(false);
+      }
+    }
+    for (const id of recentToolCallIds) {
+      expect(out.some(m => (m.toolCalls || []).some(tc => tc.id === id))).toBe(true);
+      expect(out.some(m => m.toolCallId === id)).toBe(true);
+    }
+    expect(DEFAULT_KEEP_TOOL_TURNS).toBe(3);
   });
 });
 

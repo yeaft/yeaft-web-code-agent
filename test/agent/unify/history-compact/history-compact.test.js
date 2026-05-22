@@ -39,6 +39,7 @@ import {
   DEFAULT_TURN_LIMIT,
   DEFAULT_TOKEN_LIMIT,
   DEFAULT_KEEP_RECENT_TURNS,
+  DEFAULT_MIN_TURNS_FOR_COMPACT,
   estimateMessageTokens,
   estimateMessagesTokens,
   countTurns,
@@ -48,6 +49,7 @@ import {
   wrapSummaryAsUserMessage,
   buildSummaryPrompt,
   compactHistory,
+  stripToolNoiseFromOlderTurns,
 } from '../../../../agent/unify/history-compact.js';
 
 // ─── Default policy ─────────────────────────────────────────────────
@@ -56,8 +58,11 @@ describe('defaults match the user-stated policy', () => {
   it('turn limit is 30 by default (back-stop for many small turns)', () => {
     expect(DEFAULT_TURN_LIMIT).toBe(30);
   });
-  it('token limit is 80,000 (40 % of 200K default context)', () => {
-    expect(DEFAULT_TOKEN_LIMIT).toBe(80_000);
+  it('token limit is 160,000 (80 % of 200K default context)', () => {
+    expect(DEFAULT_TOKEN_LIMIT).toBe(160_000);
+  });
+  it('protects histories shorter than 5 turns unless context pressure is high', () => {
+    expect(DEFAULT_MIN_TURNS_FOR_COMPACT).toBe(5);
   });
   it('keepRecent is 2 user→assistant pairs by default', () => {
     expect(DEFAULT_KEEP_RECENT_TURNS).toBe(2);
@@ -203,24 +208,28 @@ describe('shouldCompactHistory', () => {
     expect(r.turnCount).toBe(22);
   });
 
-  it('fires on token_threshold even with few turns', () => {
-    // One huge user message
-    const big = 'x'.repeat(81_000 * 4); // ~81K tokens at 4 chars/token
+  it('fires on token_threshold even with few turns when context pressure exceeds 80%', () => {
+    // One huge user message: above 80% of the default 200K context.
+    const big = 'x'.repeat(161_000 * 4); // ~161K tokens at 4 chars/token
     const ms = [{ role: 'user', content: big }];
     const r = shouldCompactHistory(ms);
     expect(r.trigger).toBe(true);
     expect(r.reason).toBe('token_threshold');
-    expect(r.tokenCount).toBeGreaterThan(80_000);
+    expect(r.tokenCount).toBeGreaterThan(160_000);
   });
 
-  it('respects override thresholds', () => {
+  it('respects override thresholds when the protected short-history window is disabled', () => {
     const ms = [
       { role: 'user', content: 'hi' },
       { role: 'assistant', content: 'hello' },
       { role: 'user', content: 'again' },
       { role: 'assistant', content: 'sure' },
     ];
-    const r = shouldCompactHistory(ms, { turnLimit: 1, minTokenFloor: 0 });
+    const r = shouldCompactHistory(ms, {
+      turnLimit: 1,
+      minTokenFloor: 0,
+      minTurnsForCompact: 0,
+    });
     expect(r.trigger).toBe(true);
     expect(r.reason).toBe('turn_count');
   });
@@ -240,9 +249,9 @@ describe('shouldCompactHistory', () => {
     expect(r.reason).toBe('turn_count');
   });
 
-  // ─── 2026-05-01 policy: 30K soft floor + 40 % fractional + 200K ceiling ───
-  it('does NOT compact when total tokens are below the 30K soft floor', () => {
-    // 22 small turns: well past the 20-turn override, but tokens < 30K.
+  // ─── 2026-05-22 policy: 12K soft floor + 80 % fractional + 200K ceiling ───
+  it('does NOT compact when total tokens are below the 12K soft floor', () => {
+    // 22 small turns: well past the 20-turn override, but tokens < 12K.
     // With the turn trigger OFF by default this trivially won't compact,
     // so we ALSO pin `turnLimit: 20` to confirm the floor takes priority
     // over an explicitly-enabled turn-count trigger.
@@ -254,26 +263,44 @@ describe('shouldCompactHistory', () => {
     const r = shouldCompactHistory(ms, { turnLimit: 20 });
     expect(r.trigger).toBe(false);
     expect(r.reason).toBe(null);
-    expect(r.tokenCount).toBeLessThan(30_000);
+    expect(r.tokenCount).toBeLessThan(12_000);
     expect(r.turnCount).toBe(22); // soft floor wins over turn count
   });
 
-  it('compacts at 40 % of `maxContextTokens` (default 200K → 80K)', () => {
-    const big = 'x'.repeat(81_000 * 4);
+  it('compacts at 80 % of `maxContextTokens` (default 200K → 160K)', () => {
+    const big = 'x'.repeat(160_000 * 4);
     const ms = [{ role: 'user', content: big }];
     const r = shouldCompactHistory(ms);
     expect(r.trigger).toBe(true);
     expect(r.reason).toBe('token_threshold');
   });
 
-  it('with maxContextTokens=100K, fractional threshold drops to 40K', () => {
-    // ~50K tokens of content — under the default 80K threshold but over
-    // 40 % of 100K = 40K.
-    const big = 'x'.repeat(50_000 * 4);
+  it('with maxContextTokens=100K, fractional threshold drops to 80K', () => {
+    // ~90K tokens of content — under the default 160K threshold but over
+    // 80 % of 100K = 80K.
+    const big = 'x'.repeat(90_000 * 4);
     const ms = [{ role: 'user', content: big }];
     const r = shouldCompactHistory(ms, { maxContextTokens: 100_000 });
     expect(r.trigger).toBe(true);
-    expect(r.tokenCount).toBeGreaterThan(40_000);
+    expect(r.tokenCount).toBeGreaterThan(80_000);
+  });
+
+  it('does not compact fewer than 5 turns below 80% context pressure', () => {
+    const bigButBelowPressure = 'x'.repeat(20_000 * 4);
+    const ms = [
+      { role: 'user', content: 'q0' },
+      { role: 'assistant', content: 'a0' },
+      { role: 'user', content: bigButBelowPressure },
+      { role: 'assistant', content: 'a1' },
+    ];
+    const r = shouldCompactHistory(ms, {
+      minTokenFloor: 0,
+      turnLimit: 1,
+      maxContextTokens: 100_000,
+    });
+    expect(r.turnCount).toBe(2);
+    expect(r.trigger).toBe(false);
+    expect(r.reason).toBe(null);
   });
 
   it('reports token_ceiling when tokens exceed the 200K hard ceiling', () => {
@@ -539,10 +566,10 @@ describe('compactHistory (end-to-end)', () => {
   });
 
   it('compacts when token count exceeds limit', async () => {
-    // 4 turns but each huge — total ≈ 80–120K, crosses the 80K
-    // fractional threshold but stays well under the 200K hard ceiling.
+    // 4 turns but each huge — total crosses the 160K (80% of 200K)
+    // fractional threshold while staying under the 200K hard ceiling.
     const ms = [];
-    const big = 'x'.repeat(12_000 * 4); // 12K tokens each
+    const big = 'x'.repeat(22_000 * 4); // ~22K tokens per message
     for (let i = 0; i < 4; i++) {
       // Distinct content per turn so multi-VP dedup in countTurns /
       // findCutIndex sees 4 turns, not 1.
@@ -634,7 +661,8 @@ describe('compactHistory (end-to-end)', () => {
   });
 
   it('no-op when triggered but too few turns to fold while keeping the window', async () => {
-    // Force trigger via low turnLimit, but keepRecent equals total users.
+    // Disable the short-history guard to exercise the legacy cut-index
+    // no-op path: trigger fires, but keepRecent equals total users.
     const ms = [
       { role: 'user', content: 'u0' },
       { role: 'assistant', content: 'a0' },
@@ -642,7 +670,13 @@ describe('compactHistory (end-to-end)', () => {
       { role: 'assistant', content: 'a1' },
     ];
     const summarize = async () => 'summary';
-    const r = await compactHistory(ms, { summarize, turnLimit: 1, keepRecent: 2, minTokenFloor: 0 });
+    const r = await compactHistory(ms, {
+      summarize,
+      turnLimit: 1,
+      keepRecent: 2,
+      minTokenFloor: 0,
+      minTurnsForCompact: 0,
+    });
     expect(r.compacted).toBe(false);
     expect(r.messages).toBe(ms);
     expect(r.reason).toBe('turn_count');

@@ -26,10 +26,12 @@
  *   4. Keep the last `keepRecent` user→assistant turns intact so the model
  *      has fresh, untransformed context for whatever the user just said.
  *
- * Triggers (any fires, but only above a 30K token soft floor):
- *   - tokens < 30_000 → never compact (cheap chat, no point paying
+ * Triggers:
+ *   - tokens < 12_000 → never compact (cheap chat, no point paying
  *     the summarizer)
- *   - tokens > 40 % of `maxContextTokens` (defaults to 200K → 80K)
+ *   - fewer than 5 turns → do not compact unless context pressure is
+ *     already high
+ *   - tokens > 80 % of `maxContextTokens` (defaults to 200K → 160K)
  *   - tokens > 200,000 hard ceiling
  *
  * The "turn > 20" trigger that an earlier revision used was dropped:
@@ -72,8 +74,10 @@ export const countTurns = countTurnsImpl;
  *     cost; the LLM hasn't started feeling the context yet either),
  *   - otherwise compact if ANY of:
  *       turnCount > 30           (back-stop for chats with many small turns)
- *       tokens > 40 % of `maxContextTokens` (default 200K → 80K)
+ *       tokens > 80 % of `maxContextTokens` (default 200K → 160K)
  *       tokens > 200K hard ceiling
+ *     Fewer than 5 turns are protected from compact unless the token
+ *     threshold is already crossed.
  *
  * Lowered from 30K → 12K and re-enabled a turn-count back-stop because
  * the previous "soft floor of 30K, no turn cap" combination is dead in
@@ -93,11 +97,13 @@ export const countTurns = countTurnsImpl;
 export const DEFAULT_TURN_LIMIT = 30;
 export const DEFAULT_MIN_TOKEN_FLOOR = 12_000;
 export const DEFAULT_MAX_CONTEXT_TOKENS = 200_000;
-export const DEFAULT_TOKEN_FRACTION = 0.4;
+export const DEFAULT_TOKEN_FRACTION = 0.8;
 export const DEFAULT_HARD_TOKEN_CEILING = 200_000;
+export const DEFAULT_MIN_TURNS_FOR_COMPACT = 5;
+export const DEFAULT_KEEP_TOOL_TURNS = 3;
 /**
  * Effective default token trigger when no `maxContextTokens` is provided:
- *   min(40% of 200K, 200K) = 80K. Preserved as `DEFAULT_TOKEN_LIMIT` for
+ *   min(80% of 200K, 200K) = 160K. Preserved as `DEFAULT_TOKEN_LIMIT` for
  *   back-compat with existing tests that import this name.
  */
 export const DEFAULT_TOKEN_LIMIT = Math.min(
@@ -183,12 +189,13 @@ export function estimateMessagesTokens(messages) {
  * Pure trigger evaluator. Decides whether the in-memory history needs
  * compaction. No I/O, no LLM call.
  *
- * Policy (2026-05-01):
- *   1. tokens < `minTokenFloor` (default 30K) → trigger=false (always).
- *   2. otherwise trigger if ANY of:
- *        turnCount > turnLimit (default Infinity → effectively off;
- *           callers can pin a number to re-enable a turn-count trigger)
- *        tokenCount > maxContextTokens*fraction (reason='token_threshold')
+ * Policy (2026-05-22):
+ *   1. tokens < `minTokenFloor` (default 12K) → trigger=false (always).
+ *   2. fewer than `minTurnsForCompact` turns (default 5) → trigger=false
+ *      unless tokenCount already exceeds the fractional context threshold.
+ *   3. otherwise trigger if ANY of:
+ *        turnCount > turnLimit (default 30 back-stop)
+ *        tokenCount > maxContextTokens*fraction (default 80%, reason='token_threshold')
  *        tokenCount > hardTokenCeiling          (reason='token_ceiling')
  *
  * `tokenLimit` is preserved as a back-compat override for callers /
@@ -198,6 +205,7 @@ export function estimateMessagesTokens(messages) {
  * @param {Array<object>} messages
  * @param {{
  *   turnLimit?: number,
+ *   minTurnsForCompact?: number,
  *   tokenLimit?: number,
  *   minTokenFloor?: number,
  *   maxContextTokens?: number,
@@ -206,7 +214,7 @@ export function estimateMessagesTokens(messages) {
  * }} [opts]
  * @returns {{trigger: boolean, reason: 'turn_count'|'token_threshold'|'token_ceiling'|null,
  *            turnCount: number, tokenCount: number,
- *            turnLimit: number, tokenLimit: number,
+ *            turnLimit: number, tokenLimit: number, minTurnsForCompact: number,
  *            minTokenFloor: number, hardTokenCeiling: number}}
  */
 export function shouldCompactHistory(messages, opts = {}) {
@@ -215,6 +223,7 @@ export function shouldCompactHistory(messages, opts = {}) {
   const hardTokenCeiling = opts.hardTokenCeiling ?? DEFAULT_HARD_TOKEN_CEILING;
   const maxContextTokens = opts.maxContextTokens ?? DEFAULT_MAX_CONTEXT_TOKENS;
   const tokenFraction = opts.tokenFraction ?? DEFAULT_TOKEN_FRACTION;
+  const minTurnsForCompact = opts.minTurnsForCompact ?? DEFAULT_MIN_TURNS_FOR_COMPACT;
   // tokenLimit override wins; otherwise compute fractional threshold.
   const tokenLimit =
     opts.tokenLimit
@@ -225,7 +234,9 @@ export function shouldCompactHistory(messages, opts = {}) {
 
   let reason = null;
   // (1) Soft floor: never compact small conversations.
-  if (tokenCount < minTokenFloor) {
+  // (2) Short-history guard: fewer than five turns should not compact unless
+  //     the estimated prompt is already at the context-pressure threshold.
+  if (tokenCount < minTokenFloor || (turnCount < minTurnsForCompact && tokenCount < tokenLimit)) {
     return {
       trigger: false,
       reason: null,
@@ -233,6 +244,7 @@ export function shouldCompactHistory(messages, opts = {}) {
       tokenCount,
       turnLimit,
       tokenLimit,
+      minTurnsForCompact,
       minTokenFloor,
       hardTokenCeiling,
     };
@@ -240,7 +252,7 @@ export function shouldCompactHistory(messages, opts = {}) {
   // (2) Trigger evaluation. Turn check is opt-in (Infinity by default).
   if (Number.isFinite(turnLimit) && turnCount > turnLimit) reason = 'turn_count';
   else if (tokenCount > hardTokenCeiling) reason = 'token_ceiling';
-  else if (tokenCount > tokenLimit) reason = 'token_threshold';
+  else if (tokenCount >= tokenLimit) reason = 'token_threshold';
 
   return {
     trigger: reason !== null,
@@ -249,9 +261,69 @@ export function shouldCompactHistory(messages, opts = {}) {
     tokenCount,
     turnLimit,
     tokenLimit,
+    minTurnsForCompact,
     minTokenFloor,
     hardTokenCeiling,
   };
+}
+
+function hasContentAfterToolStrip(content) {
+  if (typeof content === 'string') return content.trim().length > 0;
+  if (Array.isArray(content)) return content.length > 0;
+  return content != null;
+}
+
+function stripToolContentParts(content) {
+  if (!Array.isArray(content)) return content;
+  return content.filter(part => {
+    if (!part || typeof part !== 'object') return true;
+    return part.type !== 'tool_use'
+      && part.type !== 'tool_result'
+      && part.type !== 'function_call'
+      && part.type !== 'function_call_output';
+  });
+}
+
+/**
+ * Remove tool-call / tool-result noise from turns older than the recent
+ * lossless window. The last `keepToolTurns` turns keep their full tool
+ * chains; older turns keep user/assistant text but lose `toolCalls`,
+ * Anthropic/OpenAI tool content blocks, and `role:'tool'` messages.
+ *
+ * This is deliberately a wire-history transform, not a summarizer: it
+ * never invents a summary and it never mutates input. Pair-sanitize runs
+ * afterwards so no orphan tool_use/tool_result can survive.
+ *
+ * @param {Array<object>} messages
+ * @param {{ keepToolTurns?: number }} [opts]
+ * @returns {Array<object>}
+ */
+export function stripToolNoiseFromOlderTurns(messages, opts = {}) {
+  if (!Array.isArray(messages) || messages.length === 0) return [];
+  const keepToolTurns = Number.isFinite(opts.keepToolTurns) && opts.keepToolTurns >= 0
+    ? opts.keepToolTurns
+    : DEFAULT_KEEP_TOOL_TURNS;
+  const cutIdx = indexOfNthTurnFromEnd(messages, keepToolTurns);
+  if (cutIdx <= 0) return messages.map(m => ({ ...m }));
+
+  const older = messages.slice(0, cutIdx);
+  const recent = messages.slice(cutIdx);
+  const cleanedOlder = [];
+
+  for (const m of older) {
+    if (!m || typeof m !== 'object') continue;
+    if (m.role === 'tool') continue;
+
+    const next = { ...m };
+    if (Array.isArray(next.toolCalls)) delete next.toolCalls;
+    if (Array.isArray(next.content)) next.content = stripToolContentParts(next.content);
+
+    if (next.role === 'assistant' && !hasContentAfterToolStrip(next.content)) continue;
+    if (next.role === 'user' && Array.isArray(next.content) && next.content.length === 0) continue;
+    cleanedOlder.push(next);
+  }
+
+  return [...cleanedOlder, ...recent.map(m => ({ ...m }))];
 }
 
 /**
@@ -442,6 +514,7 @@ export async function compactHistory(messages, options) {
     maxContextTokens,
     tokenFraction,
     hardTokenCeiling,
+    minTurnsForCompact: options?.minTurnsForCompact,
   };
   const before = shouldCompactHistory(messages, triggerOpts);
   if (!before.trigger) {
@@ -581,7 +654,7 @@ export async function compactHistory(messages, options) {
  * between trim (per-call) and compact (global) explicit.
  *
  * @param {Array<object>} snapshot
- * @param {{ messageTokenBudget?: number, recentTurnCap?: number }} [opts]
+ * @param {{ messageTokenBudget?: number, recentTurnCap?: number, keepToolTurns?: number }} [opts]
  * @returns {Array<object>}
  */
 export function trimSnapshotForBudget(snapshot, opts = {}) {
@@ -607,6 +680,12 @@ export function trimSnapshotForBudget(snapshot, opts = {}) {
     tokens = estimateMessagesTokens(trimmed);
   }
 
-  // Stage 3: pair-sanitize to drop orphan tool_use/tool_result.
+  // Stage 3: keep only the recent tool chains lossless. Older turns
+  // retain text but drop tool_use/tool_result noise before pair safety.
+  trimmed = stripToolNoiseFromOlderTurns(trimmed, {
+    keepToolTurns: opts.keepToolTurns,
+  });
+
+  // Stage 4: pair-sanitize to drop orphan tool_use/tool_result.
   return pairSanitize(trimmed);
 }
