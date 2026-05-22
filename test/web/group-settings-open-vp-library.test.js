@@ -46,4 +46,15 @@ describe('GroupSettingsModal — open-vp-library wiring', () => {
     const tpl = String(GroupSettingsModal.template || '');
     expect(tpl).toMatch(/unify\.group\.members\.openLibraryHint/);
   });
+
+  it('does not expose standalone per-group model configuration UI', () => {
+    const sections = GroupSettingsModal.computed.sections.call({ $t: (key) => key });
+    expect(sections.map(s => s.id)).not.toContain('model');
+    expect(GroupSettingsModal.props.initialSection.validator('model')).toBe(false);
+
+    const tpl = String(GroupSettingsModal.template || '');
+    expect(tpl).not.toMatch(/section === ['"]model['"]/);
+    expect(tpl).not.toMatch(/Override the model used for this group/);
+  });
+
 });

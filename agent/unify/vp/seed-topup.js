@@ -3,17 +3,17 @@
  *
  * Problem: `seedDefaultVps` is first-run-only — once the library has any VP
  * in it, that function never runs again. When we expanded the default roster
- * from 12 to 32 (philosophy, psychology, strategy, history, investing,
- * business, writing, science, arts), existing installs would never see the
- * 20 new VPs without either (a) the user manually deleting their library or
+ * from 12 to 33 (philosophy, psychology, strategy, history, investing,
+ * business, writing, science, arts, Omni), existing installs would never see the
+ * new VPs without either (a) the user manually deleting their library or
  * (b) a forced overwrite that would clobber their hand edits.
  *
  * This module runs on every agent start alongside `seedDefaultVps` and does
  * two minimal, additive things:
  *
- *   1. **Top-up missing default VPs**. If a vpId from `DEFAULT_VPS` is not
- *      on disk AND the user has not explicitly deleted it before (tracked
- *      via `<libDir>/.seeded-versions.json`), `createVp()` it.
+ *   1. **Top-up missing stock VPs**. If a vpId from `DEFAULT_VPS` is not
+ *      on disk, `createVp()` it. This keeps product-owned defaults such as
+ *      Omni and the expanded role roster visible in group/member pickers.
  *
  *   2. **Backfill the `area` frontmatter line** on existing seeded VPs whose
  *      role.md predates the area field. The body is left BYTE-IDENTICAL —
@@ -24,9 +24,9 @@
  * Hard rules:
  *   - **Never** overwrite a VP that is on disk. The user might have edited
  *     persona/role/traits; that is their truth, not ours.
- *   - **Never** recreate a VP the user has deleted. The seed-versions file
- *     remembers "we have seeded this before" — if it's gone now, the user
- *     wants it gone.
+ *   - **Keep stock defaults available.** If a shipped stock VP is missing,
+ *     recreate it, but never overwrite an on-disk VP. The group/member picker
+ *     depends on these product-owned defaults being present.
  *   - Best-effort: any failure is logged, never thrown.
  *
  * Pre-ledger deletion caveat: on the very first top-up against an existing
@@ -34,8 +34,8 @@
  * deleted VP X before the expansion landed" from "X was never seeded." The
  * bootstrap records only on-disk ids as `legacy`; an id the user had deleted
  * BEFORE this code shipped looks identical to a brand-new default and will
- * be recreated once. After that single bootstrap event the ledger is
- * authoritative — any subsequent delete is permanent.
+ * be recreated once. Stock defaults remain authoritative product entries and
+ * may be recreated later if missing; existing files are still never overwritten.
  *
  * Sidecar file: `<libDir>/.seeded-versions.json`
  *
@@ -56,6 +56,7 @@ import { join } from 'path';
 import { createVp, VpCrudError } from './vp-crud.js';
 import { DEFAULT_VP_LIB_DIR, personaHash } from './vp-store.js';
 import { DEFAULT_VPS } from './seed-defaults.js';
+import { STOCK_VP_IDS } from './stock-ids.js';
 
 const SEEDED_VERSIONS_FILE = '.seeded-versions.json';
 const SEEDED_VERSIONS_VERSION = 1;
@@ -319,13 +320,17 @@ export function topUpDefaultVps(libDir = DEFAULT_VP_LIB_DIR) {
       continue;
     }
 
-    if (inLedger) {
-      // We seeded this before, user has since deleted it — respect that.
+    if (inLedger && !STOCK_VP_IDS.has(vpId)) {
+      // We seeded this custom/default VP before, user has since deleted it — respect that.
+      // Stock/default personas are product-owned roster entries and must remain
+      // available in group creation/member pickers after migrations. Recreate
+      // them below without overwriting anything that exists on disk.
       respectedDeletes.push(vpId);
       continue;
     }
 
-    // Missing on disk and never seeded — create it.
+    // Missing on disk and never seeded — or a missing stock VP that must remain available.
+
     try {
       createVp(vp, { libDir });
       versions.seeded[vpId] = personaHash(vp.persona);

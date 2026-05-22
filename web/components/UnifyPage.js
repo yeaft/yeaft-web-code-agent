@@ -87,18 +87,18 @@ export default {
 
           <!-- Model selector (compact dropdown in topbar) -->
           <div class="unify-topbar-model" @click="toggleModelDropdown" :title="$t('unify.switchModel')">
-            <span class="unify-topbar-model-name">{{ store.unifyModel || $t('settings.llm.selectModel') }}</span>
+            <span class="unify-topbar-model-name">{{ topbarModel || $t('settings.llm.selectModel') }}</span>
             <svg v-if="store.unifyAvailableModels.length > 1" class="unify-model-chevron" :class="{ open: modelDropdownOpen }" viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
             <!-- Dropdown -->
             <div class="unify-model-dropdown unify-topbar-model-dropdown" v-if="modelDropdownOpen && store.unifyAvailableModels.length > 1" @click.stop>
               <div
                 class="unify-model-option"
-                :class="{ active: m.id === store.unifyModel }"
+                :class="{ active: m.id === topbarModel }"
                 v-for="m in store.unifyAvailableModels"
                 :key="m.id"
                 @click="selectModel(m.id)"
               >
-                <span class="unify-model-check" v-if="m.id === store.unifyModel">&#10003;</span>
+                <span class="unify-model-check" v-if="m.id === topbarModel">&#10003;</span>
                 <span class="unify-model-check" v-else></span>
                 <span class="unify-model-option-label">{{ m.label || m.id }}</span>
                 <span class="unify-model-option-provider" v-if="m.provider">{{ m.provider }}</span>
@@ -640,6 +640,11 @@ export default {
       return gs.groups['grp_default'] || null;
     });
 
+    const topbarModel = Vue.computed(() => {
+      const groupModel = topbarGroup.value?.config?.model;
+      return typeof groupModel === 'string' && groupModel ? groupModel : (store.unifyModel || '');
+    });
+
     // ── manual dream trigger ──
     // Header dream acts on the conversation currently on screen. That is
     // a group-scoped manual pass, not a VP-scoped/global pass.
@@ -746,11 +751,12 @@ export default {
     };
 
     const selectModel = (modelId) => {
-      if (modelId === store.unifyModel) {
+      if (modelId === topbarModel.value) {
         modelDropdownOpen.value = false;
         return;
       }
-      store.switchUnifyModel(modelId);
+      const groupId = topbarGroup.value?.id || null;
+      store.switchUnifyModel(modelId, groupId);
       modelDropdownOpen.value = false;
     };
 
@@ -1026,6 +1032,7 @@ export default {
       sidebarCollapsed,
       debugMode,
       modelDropdownOpen,
+      topbarModel,
       showSettings,
       settingsInitialTab,
       chatInputRef,
