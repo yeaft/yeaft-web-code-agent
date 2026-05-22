@@ -108,6 +108,57 @@ describe('task-327d: SSE → thinking_block_end event', () => {
     expect(tbe.thinking).toBe('unsigned');
     expect(tbe.signature).toBe('');
   });
+  it('handles redacted_thinking blocks (data + signature, no plaintext)', async () => {
+    globalThis.fetch = fakeFetchSSE([
+      sseChunk({ type: 'content_block_start', index: 0, content_block: { type: 'redacted_thinking', data: 'opaque-encrypted-blob', signature: 'sig-r' } }),
+      sseChunk({ type: 'content_block_stop', index: 0 }),
+      sseChunk({ type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } }),
+      sseChunk({ type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'answer' } }),
+      sseChunk({ type: 'content_block_stop', index: 1 }),
+      sseChunk({ type: 'message_delta', delta: { stop_reason: 'end_turn' } }),
+    ]);
+    const adapter = new AnthropicAdapter({ apiKey: 't', baseUrl: 'https://stub' });
+    const events = [];
+    for await (const ev of adapter.stream({
+      model: 'claude-sonnet-4-20250514',
+      system: 's',
+      messages: [{ role: 'user', content: 'hi' }],
+    })) events.push(ev);
+    const tbe = events.find(e => e.type === 'thinking_block_end');
+    expect(tbe).toBeDefined();
+    expect(tbe.redacted).toBe(true);
+    expect(tbe.data).toBe('opaque-encrypted-blob');
+    expect(tbe.signature).toBe('sig-r');
+  });
+
+  it('dispatches by event.index — thinking + tool_use interleaved would not cross wires', async () => {
+    // Simulate an out-of-order stop sequence: tool_use opens at index 0,
+    // thinking at index 1, but stops arrive in reverse order. Today's API
+    // doesn't do this, but the protocol allows it.
+    globalThis.fetch = fakeFetchSSE([
+      sseChunk({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tc1', name: 'foo' } }),
+      sseChunk({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"a":1}' } }),
+      sseChunk({ type: 'content_block_start', index: 1, content_block: { type: 'thinking', thinking: '', signature: '' } }),
+      sseChunk({ type: 'content_block_delta', index: 1, delta: { type: 'thinking_delta', thinking: 'thought' } }),
+      sseChunk({ type: 'content_block_delta', index: 1, delta: { type: 'signature_delta', signature: 'sig-t' } }),
+      sseChunk({ type: 'content_block_stop', index: 1 }),
+      sseChunk({ type: 'content_block_stop', index: 0 }),
+      sseChunk({ type: 'message_delta', delta: { stop_reason: 'end_turn' } }),
+    ]);
+    const adapter = new AnthropicAdapter({ apiKey: 't', baseUrl: 'https://stub' });
+    const events = [];
+    for await (const ev of adapter.stream({
+      model: 'claude-sonnet-4-20250514',
+      system: 's',
+      messages: [{ role: 'user', content: 'hi' }],
+    })) events.push(ev);
+    const tbe = events.find(e => e.type === 'thinking_block_end');
+    const tc = events.find(e => e.type === 'tool_call');
+    expect(tbe?.thinking).toBe('thought');
+    expect(tbe?.signature).toBe('sig-t');
+    expect(tc?.id).toBe('tc1');
+    expect(tc?.input).toEqual({ a: 1 });
+  });
 });
 
 // ─── translateMessages — thinking blocks emitted first ─────────
@@ -178,6 +229,29 @@ describe('task-327d: assistant.thinkingBlocks → Anthropic content[] order', ()
     const thinkingBlocks = asst.content.filter(c => c.type === 'thinking');
     expect(thinkingBlocks).toHaveLength(1);
     expect(thinkingBlocks[0].thinking).toBe('signed');
+  });
+
+  it('replays redacted_thinking blocks as type:"redacted_thinking" with data + signature', async () => {
+    const adapter = new AnthropicAdapter({ apiKey: 't', baseUrl: 'https://stub' });
+    await drain(adapter.stream({
+      model: 'claude-sonnet-4-20250514',
+      system: 's',
+      messages: [
+        { role: 'user', content: 'hi' },
+        {
+          role: 'assistant',
+          content: 'hello',
+          thinkingBlocks: [
+            { redacted: true, data: 'opaque-blob', signature: 'sig-r' },
+            { thinking: 'visible thought', signature: 'sig-t' },
+          ],
+        },
+      ],
+    }));
+    const asst = captured.messages.find(m => m.role === 'assistant');
+    expect(asst.content[0]).toEqual({ type: 'redacted_thinking', data: 'opaque-blob', signature: 'sig-r' });
+    expect(asst.content[1]).toEqual({ type: 'thinking', thinking: 'visible thought', signature: 'sig-t' });
+    expect(asst.content[2].type).toBe('text');
   });
 
   it('omits thinking blocks entirely when assistant message has none', async () => {

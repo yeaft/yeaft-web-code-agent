@@ -151,12 +151,21 @@ function serializeMessage(msg) {
   if (msg.thinkingBlocks && msg.thinkingBlocks.length > 0) {
     fm.push(`thinkingBlocks:`);
     for (const tb of msg.thinkingBlocks) {
-      if (!tb || typeof tb.thinking !== 'string' || typeof tb.signature !== 'string') continue;
-      if (!tb.signature) continue; // never persist an unsigned block
-      const thinkingB64 = Buffer.from(tb.thinking, 'utf8').toString('base64');
-      const signatureB64 = Buffer.from(tb.signature, 'utf8').toString('base64');
-      fm.push(`  - thinkingB64: ${thinkingB64}`);
-      fm.push(`    signatureB64: ${signatureB64}`);
+      if (!tb || typeof tb.signature !== 'string' || !tb.signature) continue;
+      if (tb.redacted) {
+        if (typeof tb.data !== 'string') continue;
+        const dataB64 = Buffer.from(tb.data, 'utf8').toString('base64');
+        const signatureB64 = Buffer.from(tb.signature, 'utf8').toString('base64');
+        fm.push(`  - redacted: true`);
+        fm.push(`    dataB64: ${dataB64}`);
+        fm.push(`    signatureB64: ${signatureB64}`);
+      } else {
+        if (typeof tb.thinking !== 'string') continue;
+        const thinkingB64 = Buffer.from(tb.thinking, 'utf8').toString('base64');
+        const signatureB64 = Buffer.from(tb.signature, 'utf8').toString('base64');
+        fm.push(`  - thinkingB64: ${thinkingB64}`);
+        fm.push(`    signatureB64: ${signatureB64}`);
+      }
     }
   }
 
@@ -263,13 +272,21 @@ export function parseMessage(raw) {
           const k = trimmed.slice(0, ci).trim();
           const v = trimmed.slice(ci + 1).trim();
           if (k === 'thinkingB64') {
-            try { tb.thinking = Buffer.from(v, 'base64').toString('utf8'); } catch { /* skip */ }
+            tb.thinking = Buffer.from(v, 'base64').toString('utf8');
+          } else if (k === 'dataB64') {
+            tb.data = Buffer.from(v, 'base64').toString('utf8');
           } else if (k === 'signatureB64') {
-            try { tb.signature = Buffer.from(v, 'base64').toString('utf8'); } catch { /* skip */ }
+            tb.signature = Buffer.from(v, 'base64').toString('utf8');
+          } else if (k === 'redacted') {
+            tb.redacted = v === 'true';
           }
         }
         // Both fields required — an unsigned block would 400 on replay.
-        if (typeof tb.thinking === 'string' && typeof tb.signature === 'string' && tb.signature) {
+        if (tb.redacted) {
+          if (typeof tb.data === 'string' && typeof tb.signature === 'string' && tb.signature) {
+            thinkingBlocks.push(tb);
+          }
+        } else if (typeof tb.thinking === 'string' && typeof tb.signature === 'string' && tb.signature) {
           thinkingBlocks.push(tb);
         }
       }

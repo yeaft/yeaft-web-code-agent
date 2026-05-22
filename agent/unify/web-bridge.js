@@ -1647,10 +1647,18 @@ function handleEngineEvent(event, hctx) {
       // only — wire serializers (stripMetaForWire / sendUnifyOutput)
       // never reference thinkingBlocks, so it cannot leak to the UI.
       if (hctx.thinkingBlocksAccum && event.signature) {
-        hctx.thinkingBlocksAccum.push({
-          thinking: event.thinking,
-          signature: event.signature,
-        });
+        if (event.redacted) {
+          hctx.thinkingBlocksAccum.push({
+            redacted: true,
+            data: event.data,
+            signature: event.signature,
+          });
+        } else {
+          hctx.thinkingBlocksAccum.push({
+            thinking: event.thinking,
+            signature: event.signature,
+          });
+        }
       }
       break;
 
@@ -2708,10 +2716,11 @@ function appendTurnToGroupHistory(groupId, threadId, prompts, assistantTextParts
     // back to the API". The signature is server-private — it stays in
     // this in-memory history and in agent-side persistence only.
     if (Array.isArray(thinkingBlocksAccum) && thinkingBlocksAccum.length > 0) {
-      assistantMsg.thinkingBlocks = thinkingBlocksAccum.map(tb => ({
-        thinking: tb.thinking,
-        signature: tb.signature,
-      }));
+      assistantMsg.thinkingBlocks = thinkingBlocksAccum.map(tb => (
+        tb.redacted
+          ? { redacted: true, data: tb.data, signature: tb.signature }
+          : { thinking: tb.thinking, signature: tb.signature }
+      ));
     }
     history.push(assistantMsg);
 

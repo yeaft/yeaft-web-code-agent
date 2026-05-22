@@ -1664,11 +1664,15 @@ export class Engine {
             case 'thinking_block_end':
               // task-327d: collect server-signed thinking block for
               // round-trip replay. Anthropic 400s the next turn if a
-              // thinking block was emitted but not echoed back with its
-              // original signature. Drop blocks missing a signature —
-              // sending them back without signature would also 400.
+              // thinking block (regular or redacted) was emitted but not
+              // echoed back with its original signature. Drop blocks
+              // missing a signature — replay-without-sig 400s identically.
               if (event.signature) {
-                thinkingBlocks.push({ thinking: event.thinking, signature: event.signature });
+                if (event.redacted) {
+                  thinkingBlocks.push({ redacted: true, data: event.data, signature: event.signature });
+                } else {
+                  thinkingBlocks.push({ thinking: event.thinking, signature: event.signature });
+                }
               } else {
                 console.warn('[Engine] thinking block missing signature — dropping; next turn would 400 on replay');
               }
@@ -1861,10 +1865,11 @@ export class Engine {
       // verbatim (text + signature) when the previous turn used extended
       // thinking — see translateMessages in anthropic.js.
       if (thinkingBlocks.length > 0) {
-        assistantMsg.thinkingBlocks = thinkingBlocks.map(tb => ({
-          thinking: tb.thinking,
-          signature: tb.signature,
-        }));
+        assistantMsg.thinkingBlocks = thinkingBlocks.map(tb => (
+          tb.redacted
+            ? { redacted: true, data: tb.data, signature: tb.signature }
+            : { thinking: tb.thinking, signature: tb.signature }
+        ));
       }
       // Phase 8 (DESIGN.md §9.15): carry the router plan back on the
       // assistant message that produced it. Stripped at the wire by

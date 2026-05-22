@@ -71,6 +71,20 @@ hi`;
     expect(parsed.thinkingBlocks).toBeUndefined();
   });
 
+  it('round-trips redacted_thinking blocks (data instead of thinking)', () => {
+    const store = new ConversationStore(TEST_DIR);
+    const blocks = [
+      { redacted: true, data: 'opaque-encrypted-blob==', signature: 'sig-r' },
+      { thinking: 'visible thought', signature: 'sig-v' },
+    ];
+    const written = store.append({ role: 'assistant', content: 'ok', thinkingBlocks: blocks });
+    const raw = readFileSync(join(TEST_DIR, 'conversation', 'messages', `${written.id}.md`), 'utf8');
+    expect(raw).toContain('redacted: true');
+    expect(raw).toContain('dataB64:');
+    const parsed = parseMessage(raw);
+    expect(parsed.thinkingBlocks).toEqual(blocks);
+  });
+
   it('messages without thinkingBlocks serialize without the field', () => {
     const store = new ConversationStore(TEST_DIR);
     const written = store.append({ role: 'assistant', content: 'plain reply' });
