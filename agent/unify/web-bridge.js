@@ -45,6 +45,8 @@ import {
   groupsRoot,
 } from './groups/group-crud.js';
 import { openGroup, loadGroupMeta } from './groups/group-store.js';
+import { loadGroupConfig, resolveGroupConfig, GroupConfigError } from './groups/group-config.js';
+import { updateGroupConfig } from './groups/group-crud.js';
 import { createCoordinator } from './groups/coordinator.js';
 import { seedDefaultGroup } from './groups/seed-default.js';
 import {
@@ -760,10 +762,16 @@ function getOrCreateVpEngine(groupId, vpId, threadId = 'main') {
   let eng = vpEngines.get(key);
   if (eng) return eng;
   if (!session) throw new Error('getOrCreateVpEngine: session not loaded');
+  // Per-group config overlay (v1: model only). Falls back to the
+  // session's user-level config when no override is set. The resolver
+  // never mutates session.config — it returns a new object.
+  const yeaftDir = ctx.CONFIG?.yeaftDir || session.yeaftDir;
+  const groupCfg = loadGroupConfig(yeaftDir, groupId);
+  const effectiveConfig = resolveGroupConfig(session.config, groupCfg);
   eng = new Engine({
     adapter: session.adapter,
     trace: session.trace,
-    config: session.config,
+    config: effectiveConfig,
     conversationStore: session.conversationStore,
     memoryIndex: session.memoryIndex || null,
     amsRegistry: session.amsRegistry,
@@ -1318,8 +1326,11 @@ function sendGroupRosterChanged(group) {
 }
 
 function groupErrorPayload(err) {
+  let code = 'unknown';
+  if (err instanceof GroupCrudError) code = err.code;
+  else if (err instanceof GroupConfigError) code = err.code;
   return {
-    code: err instanceof GroupCrudError ? err.code : 'unknown',
+    code,
     groupId: err && err.groupId,
     message: err && err.message,
   };
@@ -1401,6 +1412,36 @@ export function handleUnifyUpdateGroup(msg) {
     sendGroupSnapshotBroadcast();
   } catch (err) {
     sendGroupCrudResult({ op: 'update', requestId, ok: false, error: groupErrorPayload(err) });
+  }
+}
+
+/**
+ * Update per-group config overrides (v1: `model`). Cache invalidation:
+ * drop every cached Engine whose key starts with `${groupId}::` so the
+ * next turn picks up the new model. The group meta itself is untouched.
+ *
+ * Payload: { groupId, requestId, config: { model?: string|null } }
+ *  - `model: ''` or `null` clears the override (group falls back to user default).
+ */
+export function handleUnifyUpdateGroupConfig(msg) {
+  const requestId = msg && msg.requestId;
+  const groupId = msg && msg.groupId;
+  const partial = (msg && msg.config && typeof msg.config === 'object') ? msg.config : null;
+  try {
+    if (!groupId) throw new GroupConfigError('missing_group_id', 'groupId required');
+    if (!partial) throw new GroupConfigError('invalid_patch', 'config object required');
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    const savedConfig = updateGroupConfig(yeaftDir, groupId, partial);
+    // Drop cached engines so the next VP turn rebuilds with the new model.
+    const prefix = `${groupId}::`;
+    for (const k of Array.from(vpEngines.keys())) {
+      if (k.startsWith(prefix)) vpEngines.delete(k);
+    }
+    invalidateGroupContext(groupId);
+    sendGroupCrudResult({ op: 'update_config', requestId, ok: true, groupId, config: savedConfig });
+    sendGroupSnapshotBroadcast();
+  } catch (err) {
+    sendGroupCrudResult({ op: 'update_config', requestId, ok: false, error: groupErrorPayload(err) });
   }
 }
 

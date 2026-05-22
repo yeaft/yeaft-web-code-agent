@@ -53,6 +53,7 @@ import { seedDefaultGroup, DEFAULT_GROUP_ID } from './seed-default.js';
 import { nextGroupId, validateVpId, isReservedVpId } from './ids.js';
 import { scanVpLibrary, DEFAULT_VP_LIB_DIR } from '../vp/vp-store.js';
 import { seedSummaryIfMissingSync, removeScopeDirSync } from '../memory/store-v2.js';
+import { ensureGroupConfigFile, saveGroupConfig, loadGroupConfig } from './group-config.js';
 
 /**
  * Default memory root used when callers don't pass `options.memoryRoot`.
@@ -263,6 +264,20 @@ export function createGroupFromSpec(yeaftDir, spec, options = {}) {
   handle.close();
   if (normalizedWorkDir) registerGroupWorkDir(yeaftDir, id, normalizedWorkDir);
 
+  // Per-group config (v1: model only). We always create an empty
+  // config.json so the file's presence signals "owned by this group" and
+  // hand-editing tools can find a stub. Initial overrides from the
+  // wizard spec (currently just `config.model`) are persisted here so
+  // the engine cache picks them up on the very first turn.
+  try {
+    ensureGroupConfigFile(yeaftDir, id);
+    if (spec && spec.config && typeof spec.config === 'object') {
+      saveGroupConfig(yeaftDir, id, spec.config);
+    }
+  } catch (err) {
+    console.warn(`[group-crud] failed to seed config.json for ${id}:`, err?.message || err);
+  }
+
   // Seed Layer-A resident summary so the first session has memory content
   // even before Dream-v2 has run. No-op if a summary.md already exists.
   // Best-effort: a memory-root permission failure must NOT break group create.
@@ -311,6 +326,22 @@ export function updateGroupAnnouncement(yeaftDir, groupId, text) {
   const next = handle.getMeta();
   handle.close();
   return next;
+}
+
+/**
+ * (A.2.c) Update per-group config overrides (v1: just `model`).
+ * Returns the persisted config object so the caller can broadcast it.
+ *
+ * Throws GroupConfigError on validation failure (unknown key, bad type).
+ * Group must exist (we call requireGroup to assert).
+ */
+export function updateGroupConfig(yeaftDir, groupId, partial) {
+  const handle = requireGroup(yeaftDir, groupId);
+  try {
+    return saveGroupConfig(yeaftDir, groupId, partial || {});
+  } finally {
+    handle.close();
+  }
 }
 
 /**
@@ -487,6 +518,11 @@ export function snapshotGroups(yeaftDir) {
     const dir = join(groupsRoot(groupYeaftDir), groupId);
     const meta = existsSync(dir) ? loadGroupMeta(dir) : null;
     if (meta) byId.set(meta.id, meta);
+  }
+  // Attach per-group config overrides (v1: just `model`). Frontend can
+  // render the effective model without re-querying.
+  for (const meta of byId.values()) {
+    meta.config = loadGroupConfig(yeaftDir, meta.id);
   }
   return Array.from(byId.values()).sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
 }

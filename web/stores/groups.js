@@ -124,6 +124,17 @@ export const useGroupsStore = defineStore('groups', {
           this.activeGroupId = this.groupOrder[0] || null;
         }
       }
+      // On successful update_config, merge the new config into the cached
+      // group entry so the UI updates without waiting for the snapshot.
+      if (result.ok && result.op === 'update_config' && result.groupId) {
+        const prev = this.groups[result.groupId];
+        if (prev) {
+          this.groups[result.groupId] = {
+            ...prev,
+            config: result.config && typeof result.config === 'object' ? { ...result.config } : {},
+          };
+        }
+      }
     },
 
     /** Insert or merge a single group record. */
@@ -162,6 +173,7 @@ export const useGroupsStore = defineStore('groups', {
         roster: Array.isArray(g.roster) ? g.roster.slice() : [],
         defaultVpId: g.defaultVpId || null,
         announcement: typeof g.announcement === 'string' ? g.announcement : '',
+        config: g.config && typeof g.config === 'object' ? { ...g.config } : {},
         createdAt: g.createdAt || null,
       };
     },
