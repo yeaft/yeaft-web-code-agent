@@ -13,7 +13,7 @@
  *   4. null (no effort = adapter/router drops the param)
  *
  * Red lines:
- *   • Never error on unknown scenario — default to 'high'.
+ *   • Never error on unknown scenario — default to 'max'.
  *   • Feature flag UNIFY_THINKING_V1 is enforced at the adapter/router
  *     layer; this module just computes the intended value. If the flag
  *     is off, adapters drop it anyway.
@@ -36,7 +36,8 @@ export const LONG_LOOP_TURN_THRESHOLD = 8;
  * a scenario string before invoking `pickEffort()`.
  *
  * Tiers (6 scenarios per architect spec):
- *   chat          → high   (default interactive pair-programming turn)
+ *   chat          → max    (default interactive pair-programming turn —
+ *                            quality over latency; per user 2026-05-22)
  *   consolidate   → max    (memory compaction — quality matters, runs once)
  *   dream         → max    (memory maintenance — same rationale)
  *   sub_agent     → max    (coordinator spawns + merges)
@@ -47,7 +48,7 @@ export const LONG_LOOP_TURN_THRESHOLD = 8;
  * Unknown scenarios fall through to 'high'.
  */
 export const SCENARIO_EFFORT = Object.freeze({
-  chat: 'high',
+  chat: 'max',
   consolidate: 'max',
   dream: 'max',
   sub_agent: 'max',
@@ -65,7 +66,7 @@ export const SCENARIO_EFFORT = Object.freeze({
  *      `/max` prefix, Settings slider, or API caller.
  *   2. If toolLoopTurns >= LONG_LOOP_TURN_THRESHOLD, upgrade the
  *      base scenario to 'long_loop' (→ 'max').
- *   3. Look up SCENARIO_EFFORT[scenario]; unknown → 'high'.
+ *   3. Look up SCENARIO_EFFORT[scenario]; unknown → 'max'.
  *
  * @param {object} ctx
  * @param {string} [ctx.scenario='chat'] — Scenario tag; see SCENARIO_EFFORT.
@@ -92,7 +93,7 @@ export function pickEffort({ scenario = 'chat', toolLoopTurns = 0, userEffort = 
   }
 
   // 3. Scenario table lookup.
-  return SCENARIO_EFFORT[scenario] || 'high';
+  return SCENARIO_EFFORT[scenario] || 'max';
 }
 
 /**

@@ -50,7 +50,16 @@ export {
   removeMember,
   setGroupDefaultVp,
   snapshotGroups,
+  updateGroupConfig,
+  updateGroupAnnouncement,
 } from './group-crud.js';
+export {
+  loadGroupConfig,
+  saveGroupConfig,
+  resolveGroupConfig,
+  validateGroupConfig,
+  GroupConfigError,
+} from './group-config.js';
 export {
   nextMsgId,
   nextGroupId,

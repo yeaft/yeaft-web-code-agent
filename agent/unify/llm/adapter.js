@@ -40,20 +40,23 @@
 /**
  * @typedef {{ type: 'text_delta', text: string }} TextDeltaEvent
  * @typedef {{ type: 'thinking_delta', text: string }} ThinkingDeltaEvent
+ * @typedef {{ type: 'thinking_block_end', thinking: string, signature: string }} ThinkingBlockEndEvent
  * @typedef {{ type: 'tool_call', id: string, name: string, input: object }} ToolCallEvent
  * @typedef {{ type: 'usage', inputTokens: number, outputTokens: number, cacheReadTokens?: number, cacheWriteTokens?: number }} UsageEvent
  * @typedef {{ type: 'stop', stopReason: 'end_turn' | 'tool_use' | 'max_tokens' }} StopEvent
  * @typedef {{ type: 'error', error: Error, retryable: boolean }} ErrorEvent
  *
- * @typedef {TextDeltaEvent | ThinkingDeltaEvent | ToolCallEvent | UsageEvent | StopEvent | ErrorEvent} StreamEvent
+ * @typedef {TextDeltaEvent | ThinkingDeltaEvent | ThinkingBlockEndEvent | ToolCallEvent | UsageEvent | StopEvent | ErrorEvent} StreamEvent
  */
 
 // ─── Unified Message Types ─────────────────────────────────────
 
 /**
+ * @typedef {{ thinking: string, signature: string }} ThinkingBlock
+ *
  * @typedef {{ role: 'system', content: string }} SystemMessage
  * @typedef {{ role: 'user', content: string }} UserMessage
- * @typedef {{ role: 'assistant', content: string, toolCalls?: UnifiedToolCall[] }} AssistantMessage
+ * @typedef {{ role: 'assistant', content: string, toolCalls?: UnifiedToolCall[], thinkingBlocks?: ThinkingBlock[] }} AssistantMessage
  * @typedef {{ role: 'tool', toolCallId: string, content: string, isError?: boolean }} ToolMessage
  *
  * @typedef {SystemMessage | UserMessage | AssistantMessage | ToolMessage} UnifiedMessage

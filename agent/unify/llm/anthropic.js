@@ -73,6 +73,24 @@ export class AnthropicAdapter extends LLMAdapter {
         result.push({ role: 'user', content: msg.content });
       } else if (msg.role === 'assistant') {
         const content = [];
+        // task-327d: Anthropic requires thinking blocks to appear BEFORE
+        // any text / tool_use in the content array on echo-back. When the
+        // previous turn produced thinking blocks (with server-signed
+        // signature), we MUST replay them verbatim or the next request
+        // 400s with "content[].thinking in the thinking mode must be
+        // passed back to the API". Order is mandatory.
+        if (Array.isArray(msg.thinkingBlocks)) {
+          for (const tb of msg.thinkingBlocks) {
+            if (!tb || typeof tb.signature !== 'string' || !tb.signature) continue;
+            if (tb.redacted) {
+              if (typeof tb.data !== 'string') continue;
+              content.push({ type: 'redacted_thinking', data: tb.data, signature: tb.signature });
+            } else {
+              if (typeof tb.thinking !== 'string') continue;
+              content.push({ type: 'thinking', thinking: tb.thinking, signature: tb.signature });
+            }
+          }
+        }
         if (msg.content) {
           content.push({ type: 'text', text: msg.content });
         }
@@ -216,9 +234,16 @@ export class AnthropicAdapter extends LLMAdapter {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    let currentToolCallId = null;
-    let currentToolName = null;
-    let currentToolInput = '';
+    // task-327d: index-keyed per-block state. Anthropic streams content
+    // blocks sequentially today, but the protocol exposes `event.index`
+    // precisely because that's not guaranteed. Dispatch in
+    // content_block_stop must look up by index, never "whichever scalar
+    // happens to still be set." States by kind: 'tool_use', 'thinking',
+    // 'redacted_thinking'. Redacted blocks carry opaque `data` instead
+    // of `thinking` text but share the same echo-back rule (drop without
+    // signature → next turn 400s identically).
+    /** @type {Map<number, { kind: string, [k: string]: any }>} */
+    const blockByIndex = new Map();
     // Accumulate raw SSE body verbatim for the debug panel. No truncation:
     // see `redactRawRequest` in adapter.js for the verbatim-design rationale.
     // Push-then-join keeps allocation bounded for multi-MiB payloads (avoids
@@ -254,38 +279,90 @@ export class AnthropicAdapter extends LLMAdapter {
 
           if (type === 'content_block_start') {
             const block = event.content_block;
+            const idx = event.index;
             if (block?.type === 'tool_use') {
-              currentToolCallId = block.id;
-              currentToolName = block.name;
-              currentToolInput = '';
+              blockByIndex.set(idx, {
+                kind: 'tool_use',
+                id: block.id,
+                name: block.name,
+                input: '',
+              });
+            } else if (block?.type === 'thinking') {
+              blockByIndex.set(idx, {
+                kind: 'thinking',
+                thinking: typeof block.thinking === 'string' ? block.thinking : '',
+                signature: typeof block.signature === 'string' ? block.signature : '',
+              });
+            } else if (block?.type === 'redacted_thinking') {
+              // task-327d: API-redacted thinking. Body is opaque `data`
+              // (server-encrypted, not user-readable); we still need to
+              // echo it back with signature on the next turn or the API
+              // 400s with the same "must be passed back" error.
+              blockByIndex.set(idx, {
+                kind: 'redacted_thinking',
+                data: typeof block.data === 'string' ? block.data : '',
+                signature: typeof block.signature === 'string' ? block.signature : '',
+              });
             }
           } else if (type === 'content_block_delta') {
             const delta = event.delta;
+            const idx = event.index;
+            const st = blockByIndex.get(idx);
             if (delta?.type === 'text_delta') {
               yield { type: 'text_delta', text: delta.text };
             } else if (delta?.type === 'thinking_delta') {
+              // Forward delta for live UI; ALSO accumulate for round-trip.
+              if (st && st.kind === 'thinking') st.thinking += delta.thinking || '';
               yield { type: 'thinking_delta', text: delta.thinking };
+            } else if (delta?.type === 'signature_delta') {
+              // Anthropic typically sends signature in one delta near the
+              // end of the (redacted_)thinking block. Accumulate defensively.
+              if (st && (st.kind === 'thinking' || st.kind === 'redacted_thinking')) {
+                st.signature += delta.signature || '';
+              }
             } else if (delta?.type === 'input_json_delta') {
-              currentToolInput += delta.partial_json;
+              if (st && st.kind === 'tool_use') st.input += delta.partial_json;
             }
           } else if (type === 'content_block_stop') {
-            if (currentToolCallId) {
+            const idx = event.index;
+            const st = blockByIndex.get(idx);
+            if (!st) {
+              // Unknown / unhandled block kind (e.g. text — we don't track
+              // text state because text_delta is forwarded immediately).
+            } else if (st.kind === 'tool_use') {
               let parsedInput = {};
               try {
-                parsedInput = currentToolInput ? JSON.parse(currentToolInput) : {};
+                parsedInput = st.input ? JSON.parse(st.input) : {};
               } catch {
                 parsedInput = {};
               }
               yield {
                 type: 'tool_call',
-                id: currentToolCallId,
-                name: currentToolName,
+                id: st.id,
+                name: st.name,
                 input: parsedInput,
               };
-              currentToolCallId = null;
-              currentToolName = null;
-              currentToolInput = '';
+            } else if (st.kind === 'thinking' || st.kind === 'redacted_thinking') {
+              // task-327d: emit ONE end-of-block event with the assembled
+              // payload + signature. Engine collects these for replay.
+              // We emit even when signature is empty so engine can
+              // warn-and-drop; replaying without signature would 400.
+              if (st.kind === 'thinking') {
+                yield {
+                  type: 'thinking_block_end',
+                  thinking: st.thinking,
+                  signature: st.signature,
+                };
+              } else {
+                yield {
+                  type: 'thinking_block_end',
+                  redacted: true,
+                  data: st.data,
+                  signature: st.signature,
+                };
+              }
             }
+            blockByIndex.delete(idx);
           } else if (type === 'message_delta') {
             const stopReason = event.delta?.stop_reason;
             if (stopReason) {

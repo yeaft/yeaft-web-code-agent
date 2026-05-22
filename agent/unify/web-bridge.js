@@ -45,6 +45,8 @@ import {
   groupsRoot,
 } from './groups/group-crud.js';
 import { openGroup, loadGroupMeta } from './groups/group-store.js';
+import { loadGroupConfig, resolveGroupConfig, GroupConfigError } from './groups/group-config.js';
+import { updateGroupConfig } from './groups/group-crud.js';
 import { createCoordinator } from './groups/coordinator.js';
 import { seedDefaultGroup } from './groups/seed-default.js';
 import {
@@ -760,10 +762,16 @@ function getOrCreateVpEngine(groupId, vpId, threadId = 'main') {
   let eng = vpEngines.get(key);
   if (eng) return eng;
   if (!session) throw new Error('getOrCreateVpEngine: session not loaded');
+  // Per-group config overlay (v1: model only). Falls back to the
+  // session's user-level config when no override is set. The resolver
+  // never mutates session.config — it returns a new object.
+  const yeaftDir = ctx.CONFIG?.yeaftDir || session.yeaftDir;
+  const groupCfg = loadGroupConfig(yeaftDir, groupId);
+  const effectiveConfig = resolveGroupConfig(session.config, groupCfg);
   eng = new Engine({
     adapter: session.adapter,
     trace: session.trace,
-    config: session.config,
+    config: effectiveConfig,
     conversationStore: session.conversationStore,
     memoryIndex: session.memoryIndex || null,
     amsRegistry: session.amsRegistry,
@@ -1318,8 +1326,11 @@ function sendGroupRosterChanged(group) {
 }
 
 function groupErrorPayload(err) {
+  let code = 'unknown';
+  if (err instanceof GroupCrudError) code = err.code;
+  else if (err instanceof GroupConfigError) code = err.code;
   return {
-    code: err instanceof GroupCrudError ? err.code : 'unknown',
+    code,
     groupId: err && err.groupId,
     message: err && err.message,
   };
@@ -1401,6 +1412,36 @@ export function handleUnifyUpdateGroup(msg) {
     sendGroupSnapshotBroadcast();
   } catch (err) {
     sendGroupCrudResult({ op: 'update', requestId, ok: false, error: groupErrorPayload(err) });
+  }
+}
+
+/**
+ * Update per-group config overrides (v1: `model`). Cache invalidation:
+ * drop every cached Engine whose key starts with `${groupId}::` so the
+ * next turn picks up the new model. The group meta itself is untouched.
+ *
+ * Payload: { groupId, requestId, config: { model?: string|null } }
+ *  - `model: ''` or `null` clears the override (group falls back to user default).
+ */
+export function handleUnifyUpdateGroupConfig(msg) {
+  const requestId = msg && msg.requestId;
+  const groupId = msg && msg.groupId;
+  const partial = (msg && msg.config && typeof msg.config === 'object') ? msg.config : null;
+  try {
+    if (!groupId) throw new GroupConfigError('missing_group_id', 'groupId required');
+    if (!partial) throw new GroupConfigError('invalid_patch', 'config object required');
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    const savedConfig = updateGroupConfig(yeaftDir, groupId, partial);
+    // Drop cached engines so the next VP turn rebuilds with the new model.
+    const prefix = `${groupId}::`;
+    for (const k of Array.from(vpEngines.keys())) {
+      if (k.startsWith(prefix)) vpEngines.delete(k);
+    }
+    invalidateGroupContext(groupId);
+    sendGroupCrudResult({ op: 'update_config', requestId, ok: true, groupId, config: savedConfig });
+    sendGroupSnapshotBroadcast();
+  } catch (err) {
+    sendGroupCrudResult({ op: 'update_config', requestId, ok: false, error: groupErrorPayload(err) });
   }
 }
 
@@ -1610,7 +1651,7 @@ function maybeTransitionVpStatus(hctx, state) {
  * todos, debug cards, and persistence all share the same boundary.
  *
  * @param {object} event — engine event (text_delta / tool_call / …)
- * @param {{assistantTextParts:string[], toolCallsAccum:Array, toolResultsAccum:Array, resetQueryTimer:Function, groupId?:string, vpId?:string, turnId?:string}} hctx
+ * @param {{assistantTextParts:string[], toolCallsAccum:Array, toolResultsAccum:Array, thinkingBlocksAccum?:Array, resetQueryTimer:Function, groupId?:string, vpId?:string, turnId?:string}} hctx
  */
 function handleEngineEvent(event, hctx) {
   hctx.resetQueryTimer();
@@ -1636,6 +1677,30 @@ function handleEngineEvent(event, hctx) {
 
     case 'thinking_delta':
       sendUnifyEvent({ type: 'thinking_delta', text: event.text }, envelope);
+      break;
+
+    case 'thinking_block_end':
+      // task-327d: capture the assembled thinking block (with server-
+      // signed signature) so the group history we hand to subsequent
+      // turns / VPs includes it. Without this echo Anthropic 400s the
+      // next request with "content[].thinking in the thinking mode must
+      // be passed back to the API". The signature stays server-side
+      // only — wire serializers (stripMetaForWire / sendUnifyOutput)
+      // never reference thinkingBlocks, so it cannot leak to the UI.
+      if (hctx.thinkingBlocksAccum && event.signature) {
+        if (event.redacted) {
+          hctx.thinkingBlocksAccum.push({
+            redacted: true,
+            data: event.data,
+            signature: event.signature,
+          });
+        } else {
+          hctx.thinkingBlocksAccum.push({
+            thinking: event.thinking,
+            signature: event.signature,
+          });
+        }
+      }
       break;
 
     case 'tool_call':
@@ -2493,6 +2558,7 @@ async function runVpTurn({ prompt, promptParts = null, groupId, vpId, threadId =
       const assistantTextParts = [];
       const toolCallsAccum = [];
       const toolResultsAccum = [];
+      const thinkingBlocksAccum = []; // task-327d: round-trip to next turn
       const appendedUserPrompts = [];
       let vpEngine = null;
 
@@ -2518,6 +2584,7 @@ async function runVpTurn({ prompt, promptParts = null, groupId, vpId, threadId =
         assistantTextParts,
         toolCallsAccum,
         toolResultsAccum,
+        thinkingBlocksAccum,
         resetQueryTimer,
         groupId,
         vpId,
@@ -2558,7 +2625,7 @@ async function runVpTurn({ prompt, promptParts = null, groupId, vpId, threadId =
       }
 
       // Turn completed — atomically append this VP's output to shared history.
-      appendTurnToGroupHistory(groupId, threadId, [prompt, ...appendedUserPrompts], assistantTextParts, toolCallsAccum, toolResultsAccum);
+      appendTurnToGroupHistory(groupId, threadId, [prompt, ...appendedUserPrompts], assistantTextParts, toolCallsAccum, toolResultsAccum, thinkingBlocksAccum);
 
       sendUnifyOutput({
         type: 'assistant',
@@ -2664,7 +2731,7 @@ async function runVpTurn({ prompt, promptParts = null, groupId, vpId, threadId =
  * a session, this in-memory tape carries the un-collapsed form — which
  * is fine because each VP turn's `engine.query` re-collapses on the fly.
  */
-function appendTurnToGroupHistory(groupId, threadId, prompts, assistantTextParts, toolCallsAccum, toolResultsAccum) {
+function appendTurnToGroupHistory(groupId, threadId, prompts, assistantTextParts, toolCallsAccum, toolResultsAccum, thinkingBlocksAccum) {
   if (!groupId) return;
   const history = getOrCreateGroupHistory(groupId);
   const promptList = Array.isArray(prompts) ? prompts : [prompts];
@@ -2683,6 +2750,18 @@ function appendTurnToGroupHistory(groupId, threadId, prompts, assistantTextParts
         name: tc.name,
         input: tc.input,
       }));
+    }
+    // task-327d: carry thinking blocks across turns. Anthropic protocol
+    // requires us to echo them back on the next request or the API
+    // returns "content[].thinking in the thinking mode must be passed
+    // back to the API". The signature is server-private — it stays in
+    // this in-memory history and in agent-side persistence only.
+    if (Array.isArray(thinkingBlocksAccum) && thinkingBlocksAccum.length > 0) {
+      assistantMsg.thinkingBlocks = thinkingBlocksAccum.map(tb => (
+        tb.redacted
+          ? { redacted: true, data: tb.data, signature: tb.signature }
+          : { thinking: tb.thinking, signature: tb.signature }
+      ));
     }
     history.push(assistantMsg);
 
