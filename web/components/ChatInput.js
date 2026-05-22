@@ -604,7 +604,7 @@ export default {
       // text so the agent path runs end-to-end.
       if (store.currentView === 'unify' && (trimmed || attachmentInfos.length > 0)) {
         const mentions = parseMentions(trimmed).mentions;
-        const groupId = groupsStore?.activeGroupId || 'grp_default';
+        const groupId = store.unifyActiveGroupFilter || groupsStore?.activeGroupId || 'grp_default';
         store.sendUnifyGroupChat({
           groupId,
           text: trimmed,

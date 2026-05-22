@@ -361,7 +361,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
           await sendToWebClient(c, {
             type: 'unify_history_chunk',
             conversationId: msg.conversationId,
-            ...(msg.groupId ? { groupId: msg.groupId } : {}),
+            ...(msg.groupId != null ? { groupId: msg.groupId } : {}),
             messages: msg.messages || [],
             oldestSeq: msg.oldestSeq ?? null,
             hasMore: !!msg.hasMore,

@@ -35,16 +35,26 @@ function loadMoreUnifyHistory() {
   if (this.unifyLoadingMoreHistory || !this.unifyHasMoreHistory) return;
   if (!this.unifyAgentId || this.unifyOldestLoadedSeq == null) return;
 
-  let groupId = null;
-  try {
-    const gs = (typeof window !== 'undefined') && (
-      window.Pinia?.useGroupsStore?.() ||
-      (window.__useGroupsStore && window.__useGroupsStore())
-    );
-    groupId = (gs && gs.activeGroupId) || null;
-  } catch { /* groups store missing — agent treats null as no-op */ }
+  let groupId = this.unifyActiveGroupFilter || null;
+  if (!groupId) {
+    try {
+      const gs = (typeof window !== 'undefined') && (
+        window.Pinia?.useGroupsStore?.() ||
+        (window.__useGroupsStore && window.__useGroupsStore())
+      );
+      groupId = (gs && gs.activeGroupId) || null;
+    } catch { /* groups store missing — agent treats null as no-op */ }
+  }
 
   this.unifyLoadingMoreHistory = true;
+  const groupKey = groupId || '__all__';
+  this.unifyGroupHistoryState = {
+    ...this.unifyGroupHistoryState,
+    [groupKey]: {
+      ...(this.unifyGroupHistoryState[groupKey] || {}),
+      loading: true,
+    },
+  };
   this.sendWsMessage({
     type: 'unify_load_more_history',
     agentId: this.unifyAgentId,
@@ -446,6 +456,22 @@ describe('loadMoreUnifyHistory — action gates', () => {
     loadMoreUnifyHistory.call(store);
     expect(store._sent[0].groupId).toBe('grp-xyz');
     expect(store._sent[0].beforeSeq).toBe(7);
+  });
+
+  it('prefers unifyActiveGroupFilter over a stale groupsStore.activeGroupId', () => {
+    globalThis.window.Pinia = {
+      useGroupsStore: () => ({ activeGroupId: 'grp-stale' }),
+    };
+    const store = mkStore({
+      unifyActiveGroupFilter: 'grp-visible',
+      unifyOldestLoadedSeq: 9,
+    });
+
+    loadMoreUnifyHistory.call(store);
+
+    expect(store._sent[0].groupId).toBe('grp-visible');
+    expect(store.unifyGroupHistoryState['grp-visible'].loading).toBe(true);
+    expect(store.unifyGroupHistoryState['grp-stale']).toBeUndefined();
   });
 
   it('no-op when currentView is not unify', () => {

@@ -567,9 +567,11 @@ export default {
         return;
       }
       // Unify is conceptually a single conversation backed by a group.
-      // Default to grp_default when no group is active so the agent
-      // ALWAYS builds a coordinator and ctx.router for the per-VP turn.
-      const groupId = (gs && gs.activeGroupId) || 'grp_default';
+      // The main pane filter is the authoritative group currently on screen;
+      // groupsStore.activeGroupId is only the fallback. Keeping send-path
+      // resolution aligned with the visible filter prevents quick group
+      // switches from stamping a message with a different group's id.
+      const groupId = store.unifyActiveGroupFilter || (gs && gs.activeGroupId) || 'grp_default';
       const mentions = parseMentions(text).mentions;
       // Attachments: ChatInput's custom-send path passes the resolved
       // info list as the second arg. We forward it untouched — the

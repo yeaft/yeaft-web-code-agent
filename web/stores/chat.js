@@ -30,20 +30,30 @@ const EMPTY_ARRAY = Object.freeze([]);
 // deterministic.
 const vpStatusKey = (groupId, vpId) => `${groupId || ''}::${vpId}`;
 
+function getGroupsStore() {
+  try {
+    if (typeof window === 'undefined') return null;
+    return window.Pinia?.useGroupsStore?.() || (window.__useGroupsStore && window.__useGroupsStore()) || null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveActiveUnifyGroupId(state, { fallbackDefault = false } = {}) {
+  if (state?.unifyActiveGroupFilter) return state.unifyActiveGroupFilter;
+  const gs = getGroupsStore();
+  if (gs?.activeGroupId) return gs.activeGroupId;
+  if (fallbackDefault) return 'grp_default';
+  return null;
+}
+
 function resolveActiveDreamDebugGroupId(state) {
   const debugFilter = state.unifyDebugGroupFilter;
   if (debugFilter === '__all__') return null;
   if (debugFilter) return debugFilter;
-  if (state.unifyActiveGroupFilter) return state.unifyActiveGroupFilter;
-  let gs = null;
-  try {
-    gs = (typeof window !== 'undefined' && window.Pinia?.useGroupsStore)
-      ? window.Pinia.useGroupsStore()
-      : null;
-  } catch {
-    gs = null;
-  }
-  if (gs?.activeGroupId) return gs.activeGroupId;
+  const resolved = resolveActiveUnifyGroupId(state);
+  if (resolved) return resolved;
+  const gs = getGroupsStore();
   if (gs?.groups?.grp_default) return 'grp_default';
   return null;
 }
@@ -777,17 +787,14 @@ export const useChatStore = defineStore('chat', {
       // session_ready / thread_list_updated / group snapshot events.
       //
       // Group-history-isolation (Bug 7): pass `groupId` so the agent only
-      // replays messages stamped with the active group. The active group
-      // is owned by the groups Pinia store; we read it lazily here so
-      // chat.js doesn't depend on groups.js at module load.
+      // replays messages stamped with the active group. The visible Unify
+      // filter is authoritative; groupsStore.activeGroupId is only a lazy
+      // fallback so quick group switches don't request another group's
+      // history into the active pane.
       if (this.unifyAgentId) {
         const existing = this.messagesMap[this.unifyConversationId];
         const needMessages = !existing || existing.length === 0;
-        let groupId = null;
-        try {
-          const gs = window.Pinia?.useGroupsStore?.() || (window.__useGroupsStore && window.__useGroupsStore());
-          groupId = (gs && gs.activeGroupId) || null;
-        } catch { /* groups store not registered yet — fall back to no filter */ }
+        const groupId = resolveActiveUnifyGroupId(this);
         this.sendWsMessage({
           type: 'unify_load_history',
           agentId: this.unifyAgentId,
@@ -960,7 +967,7 @@ export const useChatStore = defineStore('chat', {
           const prevTurnId = this._currentUnifyTurnId;
           const prevThreadId = this._currentUnifyThreadId;
           const prevThreadTitle = this._currentUnifyThreadTitle;
-          if (msg.groupId) this._currentUnifyGroupId = msg.groupId;
+          if (msg.groupId != null) this._currentUnifyGroupId = msg.groupId;
           if (msg.vpId) this._currentUnifyVpId = msg.vpId;
           if (msg.turnId) this._currentUnifyTurnId = msg.turnId;
           if (msg.threadId) this._currentUnifyThreadId = msg.threadId;
@@ -2601,11 +2608,7 @@ export const useChatStore = defineStore('chat', {
       if (this.unifyLoadingMoreHistory || !this.unifyHasMoreHistory) return;
       if (!this.unifyAgentId || this.unifyOldestLoadedSeq == null) return;
 
-      let groupId = null;
-      try {
-        const gs = window.Pinia?.useGroupsStore?.() || (window.__useGroupsStore && window.__useGroupsStore());
-        groupId = (gs && gs.activeGroupId) || null;
-      } catch { /* groups store not registered yet — agent treats null as no-op */ }
+      const groupId = resolveActiveUnifyGroupId(this);
 
       this.unifyLoadingMoreHistory = true;
       const groupKey = groupId || '__all__';
