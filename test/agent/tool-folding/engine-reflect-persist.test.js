@@ -92,6 +92,12 @@ function mkEngine(adapter, yeaftDir) {
       model: 'test-model',
       maxOutputTokens: 1024,
       language: 'en',
+      // Keep the test model's context window small so the group-reflection
+      // gate is intentionally over the 80% pressure threshold. These tests
+      // verify the persistence contract once T1 collapse is allowed; the
+      // below-threshold "no group reflection" behavior is covered in
+      // group-context-policy.test.js.
+      maxContextTokens: 100,
       // Critically NOT _readOnly — we want stop-hooks to actually
       // hit the disk so we can assert on what got persisted.
     },
@@ -100,6 +106,13 @@ function mkEngine(adapter, yeaftDir) {
   });
   engine.registerTool(new EchoTool());
   return { engine, conversationStore };
+}
+
+function highPressureHistory() {
+  return [
+    { role: 'user', content: `prior context ${'x'.repeat(400)}` },
+    { role: 'assistant', content: 'prior answer' },
+  ];
 }
 
 describe('Reflect persistence — T1 collapse should land on disk in collapsed form', () => {
@@ -111,7 +124,7 @@ describe('Reflect persistence — T1 collapse should land on disk in collapsed f
 
       for await (const _ of engine.query({
         prompt: 'do something with one batch of tools',
-        messages: [],
+        messages: highPressureHistory(),
         groupId: 'g1',
       })) {
         /* drain */
@@ -170,7 +183,7 @@ describe('Reflect persistence — T1 collapse should land on disk in collapsed f
 
       for await (const _ of engine.query({
         prompt: 'do something with two batches of tools',
-        messages: [],
+        messages: highPressureHistory(),
         groupId: 'g1',
       })) {
         /* drain */
@@ -206,7 +219,7 @@ describe('Reflect persistence — T1 collapse should land on disk in collapsed f
       // Turn 1: BATCH tools → collapse → persist.
       for await (const _ of engine.query({
         prompt: 'first turn',
-        messages: [],
+        messages: highPressureHistory(),
         groupId: 'g1',
       })) {
         /* drain */
