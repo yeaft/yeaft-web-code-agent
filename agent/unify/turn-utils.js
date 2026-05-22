@@ -45,6 +45,17 @@ export function stripVpMentionPrefix(content) {
   return content.replace(/^@vp-[A-Za-z0-9_-]+\s+/, '');
 }
 
+function canonicalUserTurnContent(content) {
+  if (typeof content === 'string') return stripVpMentionPrefix(content);
+  if (!Array.isArray(content)) return null;
+  const text = content
+    .filter(part => part && typeof part === 'object' && part.type === 'text')
+    .map(part => typeof part.text === 'string' ? part.text : '')
+    .join('\n')
+    .trim();
+  return text ? stripVpMentionPrefix(text) : null;
+}
+
 /**
  * Count "turns" — distinct user prompts after `@vp-X` collapsing.
  *
@@ -62,7 +73,8 @@ export function countTurns(messages) {
   let prev = null;
   for (const m of messages) {
     if (!m || m.role !== 'user') continue;
-    const canonical = stripVpMentionPrefix(m.content || '');
+    const canonical = canonicalUserTurnContent(m.content);
+    if (canonical == null) continue;
     if (canonical !== prev) {
       n++;
       prev = canonical;
@@ -101,7 +113,8 @@ export function indexOfNthTurnFromEnd(messages, n) {
   let candidate = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
     if (!messages[i] || messages[i].role !== 'user') continue;
-    const canonical = stripVpMentionPrefix(messages[i].content || '');
+    const canonical = canonicalUserTurnContent(messages[i].content);
+    if (canonical == null) continue;
     if (canonical !== openCanonical) {
       // Boundary: a new (older) turn starts here.
       turnsFromEnd++;

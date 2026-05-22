@@ -35,7 +35,8 @@ import { runStopHooks } from './stop-hooks.js';
 // pass a real threadId per (groupId, vpId, threadId) engine instance.
 const MAIN_THREAD_ID = 'main';
 import { pickEffort, parseEffortPrefix } from './effort.js';
-import { normalizeEffort, resolveContextWindow } from './models.js';
+import { DEFAULT_CONTEXT_WINDOW, normalizeEffort, resolveContextWindow, resolveModel } from './models.js';
+import { countTurns } from './turn-utils.js';
 import { attachRouterPlan, extractPriorPlan, stripMetaForWire } from './router/continuity.js';
 import { resolveThinking } from './router/thinking.js';
 import { approxTokens } from './memory/budget.js';
@@ -159,6 +160,51 @@ export function estimateMessagesTokens(system, messages) {
     }
   }
   return total;
+}
+
+export const GROUP_CONTEXT_PRESSURE_RATIO = 0.8;
+export const GROUP_MIN_TURNS_FOR_COMPACT = 5;
+
+export function shouldAllowGroupReflection({
+  system = '',
+  messages = [],
+  model = null,
+  config = {},
+  groupId = null,
+} = {}) {
+  if (!groupId) {
+    return {
+      allowed: true,
+      compactAllowed: true,
+      tokenEstimate: estimateMessagesTokens(system, messages),
+      threshold: 0,
+      contextWindow: null,
+      ratio: GROUP_CONTEXT_PRESSURE_RATIO,
+      turnCount: countTurns(messages),
+      usedFallbackContextWindow: false,
+    };
+  }
+  const contextWindow = resolveContextWindow(model, config);
+  const hasRegistryContext = !!resolveModel(model)?.contextWindow;
+  const hasConfigContext = Number.isFinite(config?.maxContextTokens) && config.maxContextTokens > 0;
+  const threshold = Math.floor(contextWindow * GROUP_CONTEXT_PRESSURE_RATIO);
+  const tokenEstimate = estimateMessagesTokens(system, messages);
+  const overThreshold = tokenEstimate >= threshold;
+  const turnCount = countTurns(messages);
+  return {
+    // Group send defaults to no reflection. Trust the model until context
+    // pressure says we are near the model window.
+    allowed: overThreshold,
+    // Durable compact is also protected for tiny histories: fewer than five
+    // turns do not compact unless they already exceed the same 80% threshold.
+    compactAllowed: overThreshold || turnCount >= GROUP_MIN_TURNS_FOR_COMPACT,
+    tokenEstimate,
+    threshold,
+    contextWindow,
+    ratio: GROUP_CONTEXT_PRESSURE_RATIO,
+    turnCount,
+    usedFallbackContextWindow: !hasRegistryContext && !hasConfigContext && contextWindow === DEFAULT_CONTEXT_WINDOW,
+  };
 }
 
 // ─── Engine Events (superset of adapter events) ──────────────────
@@ -1024,10 +1070,30 @@ export class Engine {
     if (!Array.isArray(messages) || messages.length === 0) return null;
 
     const tokenCount = conversationStore.hotTokens();
+    const groupId = messages.find(m => m && typeof m.groupId === 'string' && m.groupId)?.groupId || null;
+    const groupContextGate = shouldAllowGroupReflection({
+      system: '',
+      messages,
+      model: this.#config.model,
+      config: this.#config,
+      groupId,
+    });
+    if (groupId && groupContextGate?.usedFallbackContextWindow) {
+      this.#trace.log?.('group_context_window_fallback', {
+        groupId,
+        model: this.#config.model,
+        contextWindow: groupContextGate.contextWindow,
+        threshold: groupContextGate.threshold,
+      });
+    }
+    if (groupId && !groupContextGate.compactAllowed) return null;
+
     const trig = evaluateCompactTriggers({
       messages,
       tokenCount,
       contextLimit: this.#config.maxContextTokens || 200000,
+      tokenRatio: groupId ? GROUP_CONTEXT_PRESSURE_RATIO : undefined,
+      maxMessages: groupId ? Number.POSITIVE_INFINITY : undefined,
     });
     if (!trig.trigger) return null;
 
@@ -1358,13 +1424,34 @@ export class Engine {
       { role: 'user', content: finalUserContent },
     ];
 
+    const groupReflectionGate = shouldAllowGroupReflection({
+      system: systemPrompt,
+      messages: conversationMessages,
+      model: this.#config.model,
+      config: this.#config,
+      groupId,
+    });
+    const groupReflectionAllowed = groupReflectionGate.allowed === true;
+    if (groupId && groupReflectionGate?.usedFallbackContextWindow) {
+      this.#trace.log?.('group_context_window_fallback', {
+        groupId,
+        model: this.#config.model,
+        contextWindow: groupReflectionGate.contextWindow,
+        threshold: groupReflectionGate.threshold,
+      });
+    }
+
     // PR-L: T2 carry-forward. If a previous query()'s end-of-turn
     // reflection has resolved, rewrite that turn's range in
     // `conversationMessages` to a single assistant reflection message.
     // If still pending, fall back to the exec-log stub — non-blocking,
     // never wait. This runs BEFORE the first adapter.stream so the
-    // upcoming call sees the rewritten history.
-    yield* this.#applyPendingT2Reflections(conversationMessages, prompt);
+    // upcoming call sees the rewritten history. Group send defaults to no
+    // reflection; only high context pressure (>=80% of model window)
+    // enables the carry-forward rewrite.
+    if (groupReflectionAllowed) {
+      yield* this.#applyPendingT2Reflections(conversationMessages, prompt);
+    }
 
     // PR-L: track this query()'s tool-arc for reflection.
     // `turnStartIdx` is where the current user message lives; the arc
@@ -1994,7 +2081,7 @@ export class Engine {
         // tight-loop retries — but no collapse happened, so T2 should
         // still be allowed to fall back at end_turn. Fowler-review
         // critical finding.
-        if (queryToolCount > TURN_SUMMARY_THRESHOLD && t1CollapsesDone === 0) {
+        if (groupReflectionAllowed && queryToolCount > TURN_SUMMARY_THRESHOLD && t1CollapsesDone === 0) {
           const arcStart = turnStartIdx + 1;
           const arcEnd = conversationMessages.length - 1;
           if (arcEnd > arcStart) {
@@ -2275,7 +2362,7 @@ export class Engine {
       //     batch within the same query gets a distinct entry — without
       //     this the second batch would be silently skipped.
       const t1BatchDue = queryToolCount - lastT1AtToolCount >= TOOL_BATCH_SIZE;
-      if (t1BatchDue && !abortedDuringTools && !signal?.aborted) {
+      if (groupReflectionAllowed && t1BatchDue && !abortedDuringTools && !signal?.aborted) {
         const t1DedupKey = `${queryNumber}:t1:${queryToolCount}`;
         if (this.#reflectedTurns.has(t1DedupKey)) {
           // Defensive: should never hit since t1BatchDue gates re-entry
