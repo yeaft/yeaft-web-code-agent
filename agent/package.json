@@ -35,7 +35,8 @@
   },
   "files": [
     "**/*.js",
-    "unify/templates/**/*.md"
+    "unify/templates/**/*.md",
+    "unify/dream-v2/prompts/**/*.md"
   ],
   "license": "MIT",
   "author": "Yeaft",
