@@ -75,6 +75,59 @@ describe('Unify group history re-entry', () => {
     }]);
   });
 
+
+  it('hydrates the active group after session_ready replays the group snapshot', () => {
+    const store = makeStore();
+    store.currentView = 'unify';
+    store.unifyConversationId = 'unify-local-1';
+    store.unifyAgentId = 'agent-1';
+    store.sent = [];
+
+    const groupsStore = {
+      activeGroupId: null,
+      groups: {},
+      groupOrder: [],
+      applySnapshot(groups) {
+        const arr = Array.isArray(groups) ? groups : [];
+        this.groups = Object.fromEntries(arr.map((g) => [g.id, g]));
+        this.groupOrder = arr.map((g) => g.id);
+        if (!this.activeGroupId && this.groupOrder.length > 0) this.activeGroupId = this.groupOrder[0];
+      },
+    };
+    const previousWindow = globalThis.window;
+    globalThis.window = {
+      ...(previousWindow || {}),
+      Pinia: {
+        ...((previousWindow && previousWindow.Pinia) || {}),
+        useGroupsStore: () => groupsStore,
+      },
+    };
+
+    try {
+      store.handleUnifyOutput({
+        event: {
+          type: 'group_list_updated',
+          groups: [{ id: 'grp_fun', name: 'Fun', roster: ['linus'], defaultVpId: 'linus' }],
+        },
+      });
+    } finally {
+      globalThis.window = previousWindow;
+    }
+
+    expect(store.unifyActiveGroupFilter).toBe('grp_fun');
+    expect(store.unifyLoadingMoreHistory).toBe(true);
+    expect(store.unifyGroupHistoryState.grp_fun).toEqual(expect.objectContaining({
+      loaded: false,
+      loading: true,
+    }));
+    expect(store.sent).toEqual([{
+      type: 'unify_load_history',
+      agentId: 'agent-1',
+      limit: 50,
+      groupId: 'grp_fun',
+    }]);
+  });
+
   it('does not rehydrate a group that already completed history loading in this UI lifecycle', () => {
     const store = makeStore();
     store.unifyConversationId = 'unify-1';

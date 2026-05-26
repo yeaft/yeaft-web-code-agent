@@ -348,6 +348,7 @@ export default {
   'messages.loadMore': '↑ Click or scroll up to load more',
   'message.loadingMore': 'Loading more messages...',
   'message.loadMore': '↑ Click or scroll up to load more',
+  'message.scrollToLatest': '↓ Latest',
 
   // ============ Typing Health ============
   'chat.waiting.disconnected': 'Connection lost',

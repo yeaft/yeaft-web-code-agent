@@ -483,6 +483,10 @@ export default {
         </span>
         </template>
       </div>
+
+      <button type="button" class="scroll-to-latest" :class="{ 'is-hidden': isAtBottom }" @click="scrollToLatest">
+        {{ $t('message.scrollToLatest') }}
+      </button>
     </main>
   `,
   emits: ['new-conversation', 'resume-conversation', 'open-settings', 'open-group-settings'],
@@ -1379,6 +1383,15 @@ export default {
       }
     };
 
+    const scrollToLatest = () => {
+      // If the user jumped away while an initial Unify group page was still
+      // being hydrated, make the intent explicit: stay on the newest loaded
+      // row, and when the in-flight page lands the existing smart-scroll
+      // watchers will keep us pinned because isAtBottom is true.
+      isAtBottom.value = true;
+      Vue.nextTick(scrollToBottom);
+    };
+
     const smartScrollToBottom = () => {
       if (isAtBottom.value) {
         Vue.nextTick(scrollToBottom);
@@ -1479,6 +1492,8 @@ export default {
       useImStyleForUser,
       onOpenGroupSettings,
       onClickLoadMore,
+      isAtBottom,
+      scrollToLatest,
     };
   }
 };

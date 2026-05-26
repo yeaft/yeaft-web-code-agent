@@ -38,6 +38,18 @@ describe('MessageList history pagination scroll anchoring', () => {
     expect(clickSegment).toContain('store.loadMoreMessages()');
   });
 
+
+  it('surfaces a chat-mode-style jump-to-latest control when scrolled away', () => {
+    expect(src).toContain('class="scroll-to-latest"');
+    expect(src).toContain(':class="{ \'is-hidden\': isAtBottom }"');
+    expect(src).toContain('@click="scrollToLatest"');
+    expect(src).toContain("{{ $t('message.scrollToLatest') }}");
+
+    const latestSegment = src.slice(src.indexOf('const scrollToLatest = () => {'), src.indexOf('const smartScrollToBottom = () => {'));
+    expect(latestSegment).toContain('isAtBottom.value = true;');
+    expect(latestSegment).toContain('Vue.nextTick(scrollToBottom);');
+  });
+
   it('does not rely only on loading flag transitions, covering synchronous cached prepends', () => {
     expect(src).toContain('Covers synchronous test doubles and cached responses');
     expect(src).toContain('Vue.nextTick(() => {');
