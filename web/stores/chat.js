@@ -651,18 +651,27 @@ export const useChatStore = defineStore('chat', {
     // Effective workDir for the workbench (Files / Git tabs).
     //
     // Chat mode: the conversation's project dir (`currentWorkDir`) takes
-    // precedence, falling back to the agent's cwd. This preserves the
-    // pre-existing behavior of those tabs.
+    // precedence, falling back to the agent's cwd. Preserves prior behavior.
     //
     // Unify mode: the Chat agent's cwd is the wrong default — it leaks
     // whichever Chat conversation the user last opened into the group's
-    // workbench. Default to the agent's ~/.yeaft home (advertised via
-    // session_ready.yeaftDir) so groups open into a neutral, predictable
-    // folder. Groups don't yet carry their own workDir; when they do,
-    // slot it ahead of yeaftDir here.
+    // workbench. Precedence:
+    //   1. active group's own workDir (groups don't carry one on main yet,
+    //      but the lookup is wired so the day they do, no consumer changes
+    //      are needed),
+    //   2. agent's ~/.yeaft home, advertised via session_ready.yeaftDir,
+    //   3. agent cwd as a final fallback if session_ready hasn't landed.
+    //
+    // Until `unifySessionReady`, we still return the fallback chain rather
+    // than '' so first-paint Files/Git RPCs don't hit a no-op — a brief
+    // flicker is preferable to a blank workbench during the ~1 tick gap.
     effectiveWorkDir: (state) => {
       if (state.currentView === 'unify') {
-        return state.unifyYeaftDir || state.currentAgentInfo?.workDir || '';
+        const groupWorkDir = getGroupsStore()?.activeGroup?.workDir;
+        return groupWorkDir
+          || state.unifyYeaftDir
+          || state.currentAgentInfo?.workDir
+          || '';
       }
       return state.currentWorkDir || state.currentAgentInfo?.workDir || '';
     },

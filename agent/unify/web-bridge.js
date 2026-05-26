@@ -3663,6 +3663,7 @@ export async function resetUnifySession() {
       skills: session.status.skills,
       mcpServers: session.status.mcpServers,
       tools: session.status.tools,
+      yeaftDir: ctx.CONFIG?.yeaftDir || null,
     });
     // vp-status: after a forced reset the broker table is still live in
     // memory; broadcast so the frontend can rebuild its mirror without
