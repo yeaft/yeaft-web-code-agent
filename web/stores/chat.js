@@ -272,6 +272,7 @@ export const useChatStore = defineStore('chat', {
     unifySessionReady: false,     // Session 是否已初始化
     unifyStatus: null,            // { skills, mcpServers, tools } 从 session_ready 获取
     unifyAvailableModels: [],     // 可用模型列表 [{ id, provider, label }]
+    unifyYeaftDir: null,          // agent 的 ~/.yeaft 绝对路径（session_ready 携带）— Unify workbench 的默认 workDir
     // 2026-05-13: tool-call usage stats for the Unify debug drawer.
     // Populated by `fetchUnifyToolStats()` → backend → `unify_tool_stats`
     // case in handleUnifyOutput. Shape:
@@ -646,6 +647,24 @@ export const useChatStore = defineStore('chat', {
     },
     currentAgentWorkDir: (state) => {
       return state.currentAgentInfo?.workDir || '';
+    },
+    // Effective workDir for the workbench (Files / Git tabs).
+    //
+    // Chat mode: the conversation's project dir (`currentWorkDir`) takes
+    // precedence, falling back to the agent's cwd. This preserves the
+    // pre-existing behavior of those tabs.
+    //
+    // Unify mode: the Chat agent's cwd is the wrong default — it leaks
+    // whichever Chat conversation the user last opened into the group's
+    // workbench. Default to the agent's ~/.yeaft home (advertised via
+    // session_ready.yeaftDir) so groups open into a neutral, predictable
+    // folder. Groups don't yet carry their own workDir; when they do,
+    // slot it ahead of yeaftDir here.
+    effectiveWorkDir: (state) => {
+      if (state.currentView === 'unify') {
+        return state.unifyYeaftDir || state.currentAgentInfo?.workDir || '';
+      }
+      return state.currentWorkDir || state.currentAgentInfo?.workDir || '';
     },
     // 当前 Agent 的能力列表
     currentAgentCapabilities: (state) => {
@@ -1037,6 +1056,10 @@ export const useChatStore = defineStore('chat', {
           this.unifyModel = event.model;
           this.unifySessionReady = true;
           this.unifyAvailableModels = event.availableModels || [];
+          // Surface agent's yeaft home dir so Unify workbench (Files/Git tabs)
+          // can default to a sensible folder instead of leaking through
+          // currentAgentInfo.workDir (which is Chat's cwd, not the group's).
+          if (event.yeaftDir) this.unifyYeaftDir = event.yeaftDir;
           this.unifyStatus = {
             skills: event.skills,
             mcpServers: event.mcpServers,

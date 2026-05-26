@@ -2440,6 +2440,7 @@ async function ensureSessionLoaded() {
     skills: session.status.skills,
     mcpServers: session.status.mcpServers,
     tools: session.status.tools,
+    yeaftDir: ctx.CONFIG?.yeaftDir || null,
   });
   sendGroupSnapshotBroadcast();
   // vp-status: rebuild frontend status table from authoritative agent
@@ -3454,6 +3455,7 @@ export async function handleUnifyLoadHistory(msg) {
     skills: session.status.skills,
     mcpServers: session.status.mcpServers,
     tools: session.status.tools,
+    yeaftDir: ctx.CONFIG?.yeaftDir || null,
   });
   sendGroupSnapshotBroadcast();
   // vp-status: replay the authoritative table on reconnect so a refreshed
