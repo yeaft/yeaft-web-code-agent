@@ -444,7 +444,7 @@ export default {
     const t = Vue.inject('t');
 
     // --- Shared utilities ---
-    const getEffectiveWorkDir = () => store.currentWorkDir || store.currentAgentWorkDir || '';
+    const getEffectiveWorkDir = () => store.effectiveWorkDir || '';
     const normalizePath = (p) => p ? p.replace(/\\/g, '/') : '';
     const getFileIconHtml = (name) => getFileIconSvg(name);
     const getFolderIcon = (isOpen) => getFolderIconSvg(isOpen);

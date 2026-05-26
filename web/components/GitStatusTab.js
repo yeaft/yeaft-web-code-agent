@@ -278,7 +278,7 @@ export default {
     const gitFiles = Vue.ref([]);
 
     // --- Git work directory ---
-    const defaultWorkDir = Vue.computed(() => store.currentWorkDir || store.currentAgentWorkDir || '');
+    const defaultWorkDir = Vue.computed(() => store.effectiveWorkDir || '');
     const gitWorkDir = Vue.ref('');
     const effectiveGitWorkDir = Vue.computed(() => gitWorkDir.value.trim() || defaultWorkDir.value);
 
