@@ -110,14 +110,43 @@ function makeLlm(session) {
     if (!adapter || typeof adapter.call !== 'function') {
       throw new Error(`dream-v2: no adapter.call available (pass=${pass})`);
     }
+
+    // Bug 2: emit loop event so the debug panel shows dream LLM API calls.
+    const startedMs = Date.now();
+    session._dreamLoopCounter = (session._dreamLoopCounter || 0) + 1;
+    const loopNumber = session._dreamLoopCounter;
+    const turnId = session._dreamTurnId || 'dream';
+    const effectiveSystem = system || (String(session.config?.language || '').toLowerCase().startsWith('zh')
+      ? `你是梦境流水线 — pass: ${pass}。请用中文生成自然语言内容；JSON key 保持英文。`
+      : `You are the dream pipeline — pass: ${pass}.`);
+
     const r = await adapter.call({
       model,
-      system: system || (String(session.config?.language || '').toLowerCase().startsWith('zh')
-        ? `你是梦境流水线 — pass: ${pass}。请用中文生成自然语言内容；JSON key 保持英文。`
-        : `You are the dream pipeline — pass: ${pass}.`),
+      system: effectiveSystem,
       messages: [{ role: 'user', content: prompt }],
       maxTokens: 2048,
     });
+
+    // Emit complete loop event (request + response) to the debug panel.
+    if (typeof session._dreamProgressSink === 'function') {
+      session._dreamProgressSink({
+        type: 'loop',
+        turnId,
+        loopNumber,
+        model: model || 'unknown',
+        systemPrompt: effectiveSystem,
+        messages: [{ role: 'user', content: prompt }],
+        response: typeof r?.text === 'string' ? r.text : '',
+        toolCalls: [],
+        usage: r?.usage || { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        latencyMs: Date.now() - startedMs,
+        ttfbMs: null,
+        stopReason: 'end_turn',
+        rawRequest: null,
+        rawResponse: null,
+      });
+    }
+
     return (r && r.text) ? r.text : '';
   };
 }
@@ -151,11 +180,46 @@ export function createV2DreamScheduler(session) {
     } catch { /* never let progress reporting kill the run */ }
   };
 
-  const run = (opts = {}) => runDream({
-    ...buildRunDreamOpts(session, onProgress),
-    manual: !!opts.manual,
-    scopeFilter: Array.isArray(opts.scopeFilter) ? opts.scopeFilter : undefined,
-  });
+  let dreamTurnCounter = 0;
+
+  const run = (opts = {}) => {
+    // Bug 2: emit turn_open before the dream pass so the debug panel
+    // can group all LLM loop events under a single dream "turn".
+    dreamTurnCounter += 1;
+    const turnId = `dream-${dreamTurnCounter}-${Date.now()}`;
+    const startedAt = Date.now();
+    session._dreamTurnId = turnId;
+    session._dreamLoopCounter = 0;
+
+    if (typeof session._dreamProgressSink === 'function') {
+      session._dreamProgressSink({
+        type: 'turn_open',
+        turnId,
+        userPrompt: '[dream] automatic memory consolidation',
+        vpId: null,
+        groupId: null,
+        at: startedAt,
+      });
+    }
+
+    return runDream({
+      ...buildRunDreamOpts(session, onProgress),
+      manual: !!opts.manual,
+      scopeFilter: Array.isArray(opts.scopeFilter) ? opts.scopeFilter : undefined,
+    }).then((result) => {
+      // Bug 2: emit turn_close when the dream pass completes.
+      if (typeof session._dreamProgressSink === 'function') {
+        session._dreamProgressSink({
+          type: 'turn_close',
+          turnId,
+          totalMs: Date.now() - startedAt,
+          totalTokens: 0,
+          loopCount: session._dreamLoopCounter || 0,
+        });
+      }
+      return result;
+    });
+  };
 
   const v2 = createDreamScheduler({
     run,

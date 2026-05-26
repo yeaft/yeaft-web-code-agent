@@ -1597,11 +1597,19 @@ export function installUnifyRuntimeBridge(s) {
   // `handleUnifyDreamTrigger` wraps THIS sink for the lifetime of the
   // trigger to inject `groupId` per-call (see that function below). The
   // base sink is intentionally a pure passthrough.
+  //
+  // Bug 2: also forward turn_open / turn_close / loop events emitted by
+  // the dream pipeline so the debug panel shows dream LLM API calls.
   s._dreamProgressSink = (evt) => {
     try {
-      const out = { type: 'dream_progress', ...evt };
-      const tag = evt && evt.groupId ? { groupId: evt.groupId } : {};
-      sendUnifyEvent(out, tag);
+      if (evt.type === 'turn_open' || evt.type === 'turn_close' || evt.type === 'loop') {
+        const tag = evt && evt.groupId ? { groupId: evt.groupId } : {};
+        sendUnifyEvent(evt, tag);
+      } else {
+        const out = { type: 'dream_progress', ...evt };
+        const tag = evt && evt.groupId ? { groupId: evt.groupId } : {};
+        sendUnifyEvent(out, tag);
+      }
     } catch { /* never let event delivery throw */ }
   };
 
@@ -3485,7 +3493,7 @@ export async function handleUnifyLoadHistory(msg) {
 
   for (const entry of replayEntries) {
     if (entry.role === 'user') {
-      sendUnifyOutput({ type: 'user', message: { content: entry.content, id: entry.id || null } }, { groupId: entry.groupId || null });
+      sendUnifyOutput({ type: 'user', message: { content: entry.content, id: entry.id || null }, ts: entry.ts || null }, { groupId: entry.groupId || null });
     } else if (entry.role === 'assistant') {
       // speakerVpId rides on the envelope so the frontend can route this
       // replayed assistant text to the correct VP track. Without it, the
@@ -3498,6 +3506,7 @@ export async function handleUnifyLoadHistory(msg) {
       sendUnifyOutput({
         type: 'assistant',
         message: { id: entry.id || null, content: [{ type: 'text', text: entry.content }] },
+        ts: entry.ts || null,
       }, envelopeOpts);
       sendUnifyOutput({ type: 'result', result_text: '' }, envelopeOpts);
     }

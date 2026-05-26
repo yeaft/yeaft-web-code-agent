@@ -181,7 +181,10 @@ export function handleClaudeOutput(store, conversationId, data) {
         store.addMessageToConversation(conversationId, {
           ...(data.message?.id ? { id: data.message.id, messageId: data.message.id } : {}),
           type: 'user',
-          content: userContent
+          content: userContent,
+          // Bug 1: forward original ts so history messages keep their real
+          // timestamp instead of using arrival time.
+          ...(data.ts ? { ts: data.ts } : {}),
         });
       }
     }
