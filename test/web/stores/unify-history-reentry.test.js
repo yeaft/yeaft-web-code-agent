@@ -32,6 +32,7 @@ describe('Unify group history re-entry', () => {
     const store = makeStore();
     store.unifyConversationId = 'unify-1';
     store.unifyAgentId = 'agent-1';
+    store.currentAgent = 'agent-1';
     store.unifyActiveGroupFilter = 'grp_fun';
     store.messagesMap = {
       'unify-1': [
@@ -117,5 +118,22 @@ describe('Unify group history re-entry', () => {
       'old Fun message',
       'new Fun message typed before re-entry',
     ]);
+  });
+
+  it('syncs currentAgent to the entered Unify agent so sidebar + Files panel follow it', () => {
+    const store = makeStore();
+    // Chat auto-selected the first agent; user now opens Unify for a different agent.
+    store.currentAgent = 'agent-1';
+    store.unifyActiveGroupFilter = 'grp_fun';
+
+    store.enterUnify('agent-2');
+
+    expect(store.unifyAgentId).toBe('agent-2');
+    // selectAgent emits a select_agent WS message — observing that side-effect
+    // is how we prove currentAgent will sync (the handler flips currentAgent
+    // when the server acks; the WS emission is the contract we control).
+    expect(store.sent).toEqual(expect.arrayContaining([
+      { type: 'select_agent', agentId: 'agent-2' },
+    ]));
   });
 });

@@ -753,6 +753,16 @@ export const useChatStore = defineStore('chat', {
         const online = this.agents.find(a => a.online);
         if (online) this.unifyAgentId = online.id;
       }
+      // Keep currentAgent / currentAgentInfo in sync with the Unify agent
+      // selection. The sidebar header indicator and the entire Files /
+      // Workbench subsystem key off `currentAgent` (e.g. file ops send
+      // `agentId: store.currentAgent`). Without this sync they remained
+      // stuck on whichever agent Chat had auto-selected first, so opening
+      // Unify for the 2nd/3rd agent showed the wrong agent badge and
+      // browsed the first agent's folder.
+      if (this.unifyAgentId && this.currentAgent !== this.unifyAgentId) {
+        this.selectAgent(this.unifyAgentId);
+      }
       // Create a local conversationId immediately so MessageList has something to render
       if (!this.unifyConversationId) {
         this.unifyConversationId = `unify-local-${Date.now()}`;
