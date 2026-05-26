@@ -160,7 +160,10 @@ async function _createRoleQueryInner(session, roleName) {
 
   const queryOptions = {
     cwd: roleCwd,
-    permissionMode: 'bypassPermissions',
+    // 不设 permissionMode（走 SDK 默认 'default'）。bypassPermissions +
+    // canCallTool 在新版 Claude CLI 会卡死 init 握手 / message_start。
+    // canCallTool 在 default 模式下能正常工作，并对非 AskUserQuestion
+    // 工具返回 { behavior:'allow', updatedInput } 等同放行。
     abort: abortController.signal,
     model: role.model || undefined,
     appendSystemPrompt: systemPrompt,
@@ -177,7 +180,7 @@ async function _createRoleQueryInner(session, roleName) {
     if (toolName === 'AskUserQuestion') {
       return await handleAskUserQuestion(session.id, input, toolCtx);
     }
-    return input;
+    return { behavior: 'allow', updatedInput: input };
   };
 
   if (savedSessionId) {

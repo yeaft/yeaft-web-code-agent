@@ -102,15 +102,19 @@ export async function startClaudeQuery(conversationId, workDir, resumeSessionId)
   // 配置 SDK query 选项
   const options = {
     cwd: workDir,
-    permissionMode: 'bypassPermissions', // Auto-approve all tool uses
+    // 不显式设 permissionMode（让它走 SDK 默认 'default'）。
+    // bypassPermissions 会让 CLI 跳过整个 permission 通道，但我们注册了
+    // canCallTool（→ --permission-prompt-tool stdio）来拦截
+    // AskUserQuestion；新版 Claude CLI 在 bypass+stdio 同时存在时会
+    // 卡在 init 握手 / message_start 后死等。改用 default mode +
+    // canCallTool 自动放行，是新 CLI 期望的形态。
     abort: abortController.signal,
-    // 拦截 AskUserQuestion 工具调用，转发到 Web UI
+    // 拦截 AskUserQuestion 工具调用，转发到 Web UI；其他工具自动放行
     canCallTool: async (toolName, input, toolCtx) => {
       if (toolName === 'AskUserQuestion') {
         return await handleAskUserQuestion(conversationId, input, toolCtx);
       }
-      // 其他工具自动批准
-      return input;
+      return { behavior: 'allow', updatedInput: input };
     }
   };
 
