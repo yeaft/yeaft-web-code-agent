@@ -1193,7 +1193,15 @@ export function handleUnifyVpSubscribe(_msg) {
     try { _vpUnsubscribe(); } catch { /* ignore */ }
     _vpUnsubscribe = null;
   }
-  _vpUnsubscribe = handleVpSubscribe(sendUnifyEvent);
+  const yeaftDir = ctx.CONFIG?.yeaftDir;
+  const libDir = typeof yeaftDir === 'string' && yeaftDir.trim()
+    ? join(yeaftDir.trim(), 'virtual-persons')
+    : undefined;
+  _vpUnsubscribe = handleVpSubscribe(
+    sendUnifyEvent,
+    undefined,
+    libDir ? { dir: libDir } : {},
+  );
 }
 
 /**
