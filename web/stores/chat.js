@@ -1488,12 +1488,14 @@ export const useChatStore = defineStore('chat', {
         // ★ task-334m: Group snapshot + roster delta + CRUD ack.
         case 'group_list_updated': {
           const gs = window.Pinia?.useGroupsStore?.() || (window.__useGroupsStore && window.__useGroupsStore());
-          if (gs) {
-            gs.applySnapshot(event.groups);
-            const resolvedGroupId = this.unifyActiveGroupFilter || gs.activeGroupId || null;
-            if (this.currentView === 'unify' && resolvedGroupId && !this.unifyActiveGroupFilter) {
-              this.setActiveGroupFilter(resolvedGroupId, { force: true });
-            }
+          const prevGroupId = gs ? (gs.activeGroupId || null) : null;
+          if (gs) gs.applySnapshot(event.groups);
+          const newGroupId = gs ? (gs.activeGroupId || null) : null;
+          // Bug 1: after enterUnify the group snapshot may arrive *after*
+          // initial history load (which happened with groupId:null), so
+          // reload history for the correct group when activeGroupId changes.
+          if (this.currentView === 'unify' && newGroupId && newGroupId !== prevGroupId) {
+            this.setActiveGroupFilter(newGroupId);
           }
           break;
         }

@@ -48,7 +48,10 @@ export function addMessageToConversation(store, conversationId, msg) {
 
   const newMsg = {
     id: msg.dbMessageId || Date.now().toString() + Math.random().toString(36).substr(2, 9),
-    timestamp: Date.now(),
+    // Bug 1: preserve original ts from agent (ISO string) if present,
+    // otherwise fall back to arrival time. This keeps history messages
+    // in their actual chronological order rather than insertion order.
+    timestamp: (msg.ts ? new Date(msg.ts).getTime() : Date.now()),
     ...msg
   };
 
@@ -92,6 +95,12 @@ export function addMessageToConversation(store, conversationId, msg) {
     store.messagesMap[conversationId] = [];
   }
   store.messagesMap[conversationId].push(newMsg);
+  // Bug 1: keep messages sorted by timestamp so history loaded out-of-order
+  // (e.g. from different groups) still displays chronologically.
+  // Only sort Unify conversations; crew conversations need insertion order.
+  if (conversationId === store.unifyConversationId) {
+    store.messagesMap[conversationId].sort((a, b) => a.timestamp - b.timestamp);
+  }
 }
 
 export function appendToAssistantMessageForConversation(store, conversationId, text, opts = {}) {
