@@ -182,6 +182,8 @@ export function handleClaudeOutput(store, conversationId, data) {
           ...(data.message?.id ? { id: data.message.id, messageId: data.message.id } : {}),
           type: 'user',
           content: userContent,
+          // Preserve attachment metadata from agent history replay
+          ...(data.message?.attachments ? { attachments: data.message.attachments } : {}),
           // Bug 1: forward original ts so history messages keep their real
           // timestamp instead of using arrival time.
           ...(data.ts ? { ts: data.ts } : {}),

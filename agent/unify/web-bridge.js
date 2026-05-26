@@ -523,6 +523,8 @@ function projectPersistedToHistoryEntry(m) {
     }));
   }
   if (m.isError) entry.isError = true;
+  if (m.ts) entry.ts = m.ts;
+  if (m.attachments) entry.attachments = m.attachments;
   return entry;
 }
 
