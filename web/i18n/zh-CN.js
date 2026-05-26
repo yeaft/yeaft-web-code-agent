@@ -348,6 +348,7 @@ export default {
   'messages.loadMore': '↑ 点击或向上滚动加载更多',
   'message.loadingMore': '加载更多消息...',
   'message.loadMore': '↑ 点击或向上滚动加载更多',
+  'message.scrollToLatest': '↓ 最新',
 
   // ============ Typing Health ============
   'chat.waiting.disconnected': '连接已断开',

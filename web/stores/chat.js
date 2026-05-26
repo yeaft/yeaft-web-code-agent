@@ -1456,7 +1456,13 @@ export const useChatStore = defineStore('chat', {
         // ★ task-334m: Group snapshot + roster delta + CRUD ack.
         case 'group_list_updated': {
           const gs = window.Pinia?.useGroupsStore?.() || (window.__useGroupsStore && window.__useGroupsStore());
-          if (gs) gs.applySnapshot(event.groups);
+          if (gs) {
+            gs.applySnapshot(event.groups);
+            const resolvedGroupId = this.unifyActiveGroupFilter || gs.activeGroupId || null;
+            if (this.currentView === 'unify' && resolvedGroupId && !this.unifyActiveGroupFilter) {
+              this.setActiveGroupFilter(resolvedGroupId, { force: true });
+            }
+          }
           break;
         }
         case 'group_roster_changed': {
@@ -1989,11 +1995,12 @@ export const useChatStore = defineStore('chat', {
     // on disk after a refresh/re-entry; switching back to that group must
     // still ask the agent for authoritative history unless this group has
     // already completed a history load in the current UI lifecycle.
-    setActiveGroupFilter(groupId) {
+    setActiveGroupFilter(groupId, opts = {}) {
       const prev = this.unifyActiveGroupFilter || null;
       const next = groupId || null;
+      const force = !!opts.force;
       this.unifyActiveGroupFilter = next;
-      if (next === prev) return;
+      if (!force && next === prev) return;
 
       const groupKey = next || '__all__';
       const savedState = this.unifyGroupHistoryState[groupKey] || null;
