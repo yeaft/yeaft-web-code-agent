@@ -32,6 +32,7 @@ describe('Unify group history re-entry', () => {
     const store = makeStore();
     store.unifyConversationId = 'unify-1';
     store.unifyAgentId = 'agent-1';
+    store.currentAgent = 'agent-1';
     store.unifyActiveGroupFilter = 'grp_fun';
     store.messagesMap = {
       'unify-1': [
