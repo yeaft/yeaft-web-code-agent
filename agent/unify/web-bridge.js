@@ -1188,12 +1188,27 @@ function sendUnifyEvent(event, { groupId, vpId, turnId, threadId } = {}) {
   });
 }
 
+function configuredVpPaths() {
+  const yeaftDir = ctx.CONFIG?.yeaftDir;
+  if (typeof yeaftDir !== 'string' || !yeaftDir.trim()) return {};
+  const root = yeaftDir.trim();
+  return {
+    libDir: join(root, 'virtual-persons'),
+    memoryRoot: join(root, 'memory'),
+  };
+}
+
 export function handleUnifyVpSubscribe(_msg) {
   if (_vpUnsubscribe) {
     try { _vpUnsubscribe(); } catch { /* ignore */ }
     _vpUnsubscribe = null;
   }
-  _vpUnsubscribe = handleVpSubscribe(sendUnifyEvent);
+  const { libDir } = configuredVpPaths();
+  _vpUnsubscribe = handleVpSubscribe(
+    sendUnifyEvent,
+    undefined,
+    libDir ? { dir: libDir } : {},
+  );
 }
 
 /**
@@ -1207,9 +1222,12 @@ export function handleUnifyVpCreate(msg) {
   const requestId = msg && msg.requestId;
   const payload = msg && msg.payload;
   try {
-    const yeaftDir = ctx.CONFIG?.yeaftDir;
-    const memoryRoot = yeaftDir ? join(yeaftDir, 'memory') : undefined;
-    const { vpId } = createVp(payload || {}, memoryRoot ? { memoryRoot } : {});
+    const { libDir, memoryRoot } = configuredVpPaths();
+    const options = {
+      ...(libDir ? { libDir } : {}),
+      ...(memoryRoot ? { memoryRoot } : {}),
+    };
+    const { vpId } = createVp(payload || {}, options);
     sendVpCrudResult({ op: 'create', requestId, ok: true, vpId });
   } catch (err) {
     sendVpCrudResult({
@@ -1229,7 +1247,8 @@ export function handleUnifyVpUpdate(msg) {
   const requestId = msg && msg.requestId;
   const payload = msg && msg.payload;
   try {
-    const { vpId } = updateVp(payload || {});
+    const { libDir } = configuredVpPaths();
+    const { vpId } = updateVp(payload || {}, libDir ? { libDir } : {});
     sendVpCrudResult({ op: 'update', requestId, ok: true, vpId });
   } catch (err) {
     sendVpCrudResult({
@@ -1249,9 +1268,12 @@ export function handleUnifyVpDelete(msg) {
   const requestId = msg && msg.requestId;
   const vpId = msg && msg.vpId;
   try {
-    const yeaftDir = ctx.CONFIG?.yeaftDir;
-    const memoryRoot = yeaftDir ? join(yeaftDir, 'memory') : undefined;
-    deleteVp(vpId, memoryRoot ? { memoryRoot } : {});
+    const { libDir, memoryRoot } = configuredVpPaths();
+    const options = {
+      ...(libDir ? { libDir } : {}),
+      ...(memoryRoot ? { memoryRoot } : {}),
+    };
+    deleteVp(vpId, options);
     // vp-status: a deleted VP must not haunt the snapshot. We don't
     // know up front which groups the VP appeared in (the registry's
     // delete already detached it from every group), so sweep every
@@ -1282,7 +1304,8 @@ export function handleUnifyVpDelete(msg) {
 export function handleUnifyVpRead(msg) {
   const requestId = msg && msg.requestId;
   const vpId = msg && msg.vpId;
-  const vp = readVp(vpId);
+  const { libDir } = configuredVpPaths();
+  const vp = readVp(vpId, libDir ? { libDir } : {});
   if (!vp) {
     sendVpCrudResult({
       op: 'read',

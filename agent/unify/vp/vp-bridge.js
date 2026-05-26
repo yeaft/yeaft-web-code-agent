@@ -28,6 +28,7 @@ import { STOCK_VP_IDS } from './stock-ids.js';
 /** Process-singleton VpLoader; lazily started on first subscribe. */
 let _loaderStarted = false;
 let _loader = null;
+let _loaderDir = null;
 
 /**
  * Broadcast fan-out. VpLoader.onChange fires once per debounce batch for the
@@ -145,21 +146,33 @@ function _fanout(evt) {
   }
 }
 
-function ensureLoader(registry = defaultRegistry) {
-  if (_loaderStarted) return { loader: _loader, fresh: false };
+function ensureLoader(registry = defaultRegistry, options = {}) {
+  const desiredDir = registry === defaultRegistry && typeof options.dir === 'string' && options.dir.trim()
+    ? options.dir.trim()
+    : null;
+  if (_loaderStarted && _loaderDir === desiredDir) return { loader: _loader, fresh: false };
+
+  if (_loader) {
+    try { _loader.stop(); } catch { /* ignore */ }
+  }
   _loaderStarted = true;
+  _loader = null;
+  _loaderDir = desiredDir;
+  if (registry === defaultRegistry && registry.vpMap && typeof registry.vpMap.clear === 'function') {
+    registry.vpMap.clear();
+  }
   // For NON-default registries (unit tests seeding VPs manually) we MUST NOT
-  // start VpLoader — its .start() scans DEFAULT_VP_LIB_DIR and push-imports
-  // every on-disk VP into the test registry, overwriting/augmenting the
-  // fixture. Tests don't need hot-reload anyway; `_broadcastChangeForTest`
-  // drives the diff path directly.
+  // start VpLoader — its .start() scans the configured/default VP library and
+  // push-imports every on-disk VP into the test registry, overwriting or
+  // augmenting the fixture. Tests don't need hot-reload anyway;
+  // `_broadcastChangeForTest` drives the diff path directly.
   if (registry !== defaultRegistry) {
-    _loader = null;
     captureState(registry);
     return { loader: null, fresh: true };
   }
   try {
     _loader = new VpLoader({
+      ...(desiredDir ? { dir: desiredDir } : {}),
       registry,
       onChange: (summary) => broadcastChange(summary, registry),
     });
@@ -228,10 +241,11 @@ export function buildVpSnapshot(registry = defaultRegistry) {
  *
  * @param {(event: object) => void} sendUnifyEvent
  * @param {import('./registry.js').Registry} [registry]
+ * @param {{dir?: string}} [options]
  * @returns {() => void} unsubscribe fn
  */
-export function handleVpSubscribe(sendUnifyEvent, registry = defaultRegistry) {
-  const { loader, fresh } = ensureLoader(registry);
+export function handleVpSubscribe(sendUnifyEvent, registry = defaultRegistry, options = {}) {
+  const { loader, fresh } = ensureLoader(registry, options);
   // task-338-F2 + task-339-followup: replay semantics.
   //
   // The loader's own start() already scans on first creation, so on a
@@ -245,9 +259,9 @@ export function handleVpSubscribe(sendUnifyEvent, registry = defaultRegistry) {
   // production path so the first snapshot always reflects current disk.
   //
   // For NON-default registries (unit tests that seed VPs manually), we
-  // MUST skip the rescan: rescan against DEFAULT_VP_LIB_DIR would call
-  // registry.removeVp() for seeded ids that don't exist on disk, wiping
-  // the test fixture. See vp-bridge-live-diff.test.js and
+  // MUST skip the rescan: rescan against the configured/default VP library
+  // would call registry.removeVp() for seeded ids that don't exist on disk,
+  // wiping the test fixture. See vp-bridge-live-diff.test.js and
   // vp-bridge-first-subscribe-replay.test.js (test-seed preservation).
   //
   // On subsequent subscribes (page reload, reconnect, second web client)
@@ -277,6 +291,7 @@ export function _resetVpBridgeForTest() {
   }
   _loader = null;
   _loaderStarted = false;
+  _loaderDir = null;
   _subscribers.clear();
   _prevState.clear();
 }
