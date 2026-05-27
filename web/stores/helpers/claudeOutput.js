@@ -84,7 +84,7 @@ export function handleClaudeOutput(store, conversationId, data) {
 
     // content 可能是字符串或数组
     if (typeof content === 'string') {
-      store.appendToAssistantMessageForConversation(conversationId, content, { id: data.message?.id || data.message?.messageId || null });
+      store.appendToAssistantMessageForConversation(conversationId, content, { id: data.message?.id || data.message?.messageId || null, ts: data.ts || data.message?.ts || data.message?.time || null });
       return;
     }
     if (!Array.isArray(content)) return;
@@ -97,7 +97,7 @@ export function handleClaudeOutput(store, conversationId, data) {
 
     for (const block of content) {
       if (block.type === 'text') {
-        store.appendToAssistantMessageForConversation(conversationId, block.text, { id: data.message?.id || data.message?.messageId || null });
+        store.appendToAssistantMessageForConversation(conversationId, block.text, { id: data.message?.id || data.message?.messageId || null, ts: data.ts || data.message?.ts || data.message?.time || null });
       } else if (block.type === 'tool_use') {
         // Finish any in-progress streaming so typing dots reappear during tool execution.
         // Without this, isStreaming stays true on the assistant message, which suppresses
@@ -212,13 +212,13 @@ export function handleClaudeOutput(store, conversationId, data) {
       if (!duplicate) {
         store.addMessageToConversation(conversationId, {
           ...(data.message?.id ? { id: data.message.id, messageId: data.message.id } : {}),
+          ...(data.ts ? { ts: data.ts } : {}),
           type: 'user',
           content: userContent,
           // Preserve attachment metadata from agent history replay
           ...(data.message?.attachments ? { attachments: data.message.attachments } : {}),
           // Bug 1: forward original ts so history messages keep their real
           // timestamp instead of using arrival time.
-          ...(data.ts ? { ts: data.ts } : {}),
         });
       }
     }

@@ -576,6 +576,7 @@ function projectPersistedToHistoryEntry(m) {
   }
   if (m.isError) entry.isError = true;
   if (m.ts) entry.ts = m.ts;
+  else if (m.time) entry.ts = m.time;
   if (Array.isArray(m.attachments) && m.attachments.length > 0) entry.attachments = m.attachments;
   if ((entry.role === 'user' || entry.role === 'assistant') && !entry.content && !entry.attachments) return null;
   return entry;
@@ -3680,6 +3681,7 @@ export async function handleUnifyLoadMoreHistory(msg) {
       ...(m.id ? { id: m.id } : {}),
       role: m.role,
       content: m.content,
+      ts: m.ts || m.time || null,
       groupId: m.groupId || null,
       threadId: m.threadId || m.turnId || 'main',
       turnId: m.turnId || m.threadId || 'main',

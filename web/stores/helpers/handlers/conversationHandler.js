@@ -11,6 +11,20 @@ function filterEmptyUserMessages(messages) {
   return messages.filter(m => !(m.type === 'user' && (!m.content || !m.content.trim())));
 }
 
+function normalizeHistoryTimestamp(m) {
+  const candidates = [m?.timestamp, m?.createdAt, m?.ts, m?.time, m?.created_at];
+  for (const value of candidates) {
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
+    if (typeof value === 'string' && value.trim()) {
+      const parsed = Date.parse(value);
+      if (Number.isFinite(parsed)) return parsed;
+      const numeric = Number(value);
+      if (Number.isFinite(numeric) && numeric > 0) return numeric;
+    }
+  }
+  return null;
+}
+
 /** Mark all pending tool-use messages as completed for a conversation */
 export function markAllToolsCompleted(store, convId) {
   const msgs = store.messagesMap[convId] || [];
@@ -395,6 +409,7 @@ export function handleUnifyHistoryChunk(store, msg) {
         ...(stableId ? { id: stableId, messageId: stableId } : {}),
         type: 'user',
         content: m.content,
+        timestamp: normalizeHistoryTimestamp(m),
         groupId: m.groupId ?? null,
         threadId,
         turnId: m.turnId || threadId,
@@ -407,6 +422,7 @@ export function handleUnifyHistoryChunk(store, msg) {
         ...(stableId ? { id: stableId, messageId: stableId } : {}),
         type: 'assistant',
         content: m.content,
+        timestamp: normalizeHistoryTimestamp(m),
         groupId: m.groupId ?? null,
         threadId,
         turnId: m.turnId || threadId,
