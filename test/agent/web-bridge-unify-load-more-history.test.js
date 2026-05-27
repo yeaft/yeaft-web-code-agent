@@ -276,7 +276,7 @@ describe('handleUnifyLoadHistory — pagination cursor priming', () => {
     expect(typeof evt.oldestSeq).toBe('number');
   });
 
-  it('history_loaded carries hasMore + oldestSeq when older messages remain', async () => {
+  it('history_loaded carries authoritative group tail with ids and metadata', async () => {
     const gid = 'g_prime_more';
     seedTurns(gid, 5);
 
@@ -290,6 +290,13 @@ describe('handleUnifyLoadHistory — pagination cursor priming', () => {
     expect(evt.hasMore).toBe(true);
     expect(typeof evt.oldestSeq).toBe('number');
     expect(evt.oldestSeq).toBeGreaterThan(0);
+    expect(evt.messages.map(m => [m.role, m.content])).toEqual([
+      ['user', 'q4'],
+      ['assistant', 'aq4'],
+      ['user', 'q5'],
+      ['assistant', 'aq5'],
+    ]);
+    expect(evt.messages.every(m => m.id && m.groupId === gid)).toBe(true);
   });
 
 
@@ -382,6 +389,30 @@ describe('handleUnifyLoadHistory — pagination cursor priming', () => {
     const user = outbound.find(m => m.type === 'unify_output' && m.groupId === gid && m.data?.type === 'user');
     expect(user.data.message.content).toBe('plain text');
     expect(user.data.message).not.toHaveProperty('attachments');
+  });
+
+  it('history_loaded preserves tool-call and tool-result rows for UI reconciliation', async () => {
+    const gid = 'g_refresh_tool_shape';
+    sharedStore.appendBatch([
+      {
+        id: 'tool-a',
+        role: 'assistant',
+        content: '',
+        groupId: gid,
+        speakerVpId: 'vp-linus',
+        toolCalls: [{ id: 'call-1', name: 'Bash', input: { command: 'npm test' } }],
+      },
+      { id: 'tool-r', role: 'tool', content: 'ok', groupId: gid, toolCallId: 'call-1' },
+    ]);
+
+    await handleUnifyLoadHistory({ groupId: gid, limit: 10 });
+
+    const evt = lastHistoryLoadedEvent();
+    expect(evt.messages).toEqual([
+      expect.objectContaining({ role: 'assistant', groupId: gid, speakerVpId: 'vp-linus', toolCalls: [{ id: 'call-1', name: 'Bash', input: { command: 'npm test' } }] }),
+      expect.objectContaining({ role: 'tool', groupId: gid, toolCallId: 'call-1', content: 'ok' }),
+    ]);
+    expect(evt.messages.every(m => typeof m.id === 'string' && m.id)).toBe(true);
   });
 
   it('initial group replay pages over visible rows when latest turns are invisible', async () => {

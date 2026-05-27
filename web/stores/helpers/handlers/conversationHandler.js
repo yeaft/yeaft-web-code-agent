@@ -26,6 +26,149 @@ export function markAllToolsCompleted(store, convId) {
   }
 }
 
+function normalizeHistoryContent(content) {
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (!part || typeof part !== 'object') return '';
+        if (part.type === 'text' && typeof part.text === 'string') return part.text;
+        if (part.type === 'input_text' && typeof part.text === 'string') return part.text;
+        return '';
+      })
+      .join('')
+      .trim();
+  }
+  return typeof content === 'string' ? content : String(content || '');
+}
+
+function formatUnifyHistoryMessage(m) {
+  if (!m || (m._reflection || m.internal || m.systemOnly || m.systemOnlyMessage)) return [];
+  const stableId = m.id || m.messageId || null;
+  const timestamp = m.ts ? new Date(m.ts).getTime() : Date.now();
+  const base = {
+    ...(stableId ? { id: stableId, messageId: stableId } : {}),
+    groupId: m.groupId ?? null,
+    timestamp,
+    isStreaming: false,
+    isHistory: true,
+  };
+  if (m.role === 'user') {
+    return [{
+      ...base,
+      type: 'user',
+      content: normalizeHistoryContent(m.content),
+      ...(Array.isArray(m.attachments) && m.attachments.length > 0 ? { attachments: m.attachments } : {}),
+    }];
+  }
+  if (m.role === 'assistant') {
+    const rows = [];
+    const content = normalizeHistoryContent(m.content);
+    if (content) {
+      rows.push({
+        ...base,
+        type: 'assistant',
+        content,
+        ...(m.speakerVpId ? { vpId: m.speakerVpId, speakerVpId: m.speakerVpId } : {}),
+        ...(m.turnId ? { turnId: m.turnId } : {}),
+        ...(m.threadId ? { threadId: m.threadId } : {}),
+      });
+    }
+    if (Array.isArray(m.toolCalls)) {
+      for (const tc of m.toolCalls) {
+        if (!tc) continue;
+        const toolId = tc.id ? `${stableId || 'tool'}:${tc.id}` : `${stableId || 'tool'}:${rows.length}`;
+        rows.push({
+          ...base,
+          id: toolId,
+          messageId: toolId,
+          type: 'tool-use',
+          toolName: tc.name || 'tool',
+          toolInput: tc.input || {},
+          hasResult: false,
+          ...(m.speakerVpId ? { vpId: m.speakerVpId, speakerVpId: m.speakerVpId } : {}),
+          ...(tc.id ? { toolCallId: tc.id } : {}),
+        });
+      }
+    }
+    return rows;
+  }
+  if (m.role === 'tool') {
+    return [{
+      ...base,
+      id: stableId || (m.toolCallId ? `tool-result:${m.toolCallId}` : undefined),
+      messageId: stableId || (m.toolCallId ? `tool-result:${m.toolCallId}` : undefined),
+      type: 'tool_result',
+      toolCallId: m.toolCallId || null,
+      content: normalizeHistoryContent(m.content),
+      isError: !!m.isError,
+    }];
+  }
+  return [];
+}
+
+export function reconcileUnifyHistoryMessages(store, { conversationId, groupId, messages = [], hasMore = false, oldestSeq = null, count = 0 } = {}) {
+  const convId = conversationId || store.unifyConversationId;
+  if (!convId) return;
+  if (!store.messagesMap[convId]) store.messagesMap[convId] = [];
+
+  const activeFilter = store.unifyActiveGroupFilter ?? null;
+  if (groupId != null && activeFilter && groupId !== activeFilter) {
+    const staleKey = groupId ?? '__all__';
+    store.unifyGroupHistoryState = {
+      ...store.unifyGroupHistoryState,
+      [staleKey]: {
+        ...(store.unifyGroupHistoryState[staleKey] || {}),
+        loading: false,
+      },
+    };
+    store.unifyLoadingMoreHistory = false;
+    return;
+  }
+
+  const formatted = [];
+  const seen = new Set();
+  for (const raw of messages || []) {
+    for (const row of formatUnifyHistoryMessage(raw)) {
+      const key = row.messageId || row.id || `${row.type}:${row.content || row.toolName || ''}:${row.timestamp}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      formatted.push(row);
+    }
+  }
+
+  const belongsToGroup = (m) => (groupId == null ? !m.groupId : m.groupId === groupId);
+  const existing = store.messagesMap[convId] || [];
+  const nonGroupRows = existing.filter(m => !belongsToGroup(m));
+  const existingById = new Map(existing.map(m => [m && (m.messageId || m.id), m]).filter(([id]) => id));
+  const reconciled = formatted.map((m) => {
+    const prior = existingById.get(m.messageId || m.id);
+    return prior ? { ...prior, ...m, isStreaming: false } : m;
+  });
+
+  store.messagesMap[convId] = [...nonGroupRows, ...reconciled]
+    .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+
+  const groupKey = groupId || '__all__';
+  const nextState = {
+    loaded: true,
+    loading: false,
+    hasMore: !!hasMore,
+    oldestSeq: (typeof oldestSeq === 'number') ? oldestSeq : null,
+    count: (typeof count === 'number') ? count : formatted.length,
+  };
+  store.unifyGroupHistoryState = {
+    ...store.unifyGroupHistoryState,
+    [groupKey]: nextState,
+  };
+  const activeKey = store.unifyActiveGroupFilter || '__all__';
+  if (groupKey === activeKey) {
+    store.unifyHasMoreHistory = nextState.hasMore;
+    store.unifyLoadingMoreHistory = false;
+    store.unifyOldestLoadedSeq = nextState.oldestSeq;
+  }
+}
+
 export function handleConversationCreated(store, msg) {
   clearSessionLoading(store);
   const createdAgent = store.agents.find(a => a.id === msg.agentId);

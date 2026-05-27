@@ -575,13 +575,23 @@ function projectPersistedToHistoryEntry(m) {
   if (m.isError) entry.isError = true;
   if (m.ts) entry.ts = m.ts;
   if (Array.isArray(m.attachments) && m.attachments.length > 0) entry.attachments = m.attachments;
-  if ((entry.role === 'user' || entry.role === 'assistant') && !entry.content && !entry.attachments) return null;
+  if ((entry.role === 'user' || entry.role === 'assistant') && !entry.content && !entry.attachments && !entry.toolCalls) return null;
   return entry;
 }
 
 function projectPersistedToVisibleHistoryEntry(m) {
   const entry = projectPersistedToHistoryEntry(m);
   return entry && (entry.role === 'user' || entry.role === 'assistant') ? entry : null;
+}
+
+function projectPersistedToUiHistoryEntry(m) {
+  const entry = projectPersistedToHistoryEntry(m);
+  if (!entry) return null;
+  if (entry.role !== 'user' && entry.role !== 'assistant' && entry.role !== 'tool') return null;
+  if (Array.isArray(entry.attachments) && entry.attachments.length > 0) {
+    entry.attachments = hydrateHistoryAttachmentPreviews(entry.attachments);
+  }
+  return entry;
 }
 
 function hydrateHistoryAttachmentPreviews(attachments) {
@@ -619,10 +629,24 @@ function loadVisibleGroupHistoryPage(store, groupId, limit, beforeSeq = null) {
     return { messages: [], oldestSeq: null, hasMore: false };
   }
 
-  const visible = rows
-    .map(projectPersistedToVisibleHistoryEntry)
+  const projected = rows
+    .map(projectPersistedToHistoryEntry)
     .filter(Boolean);
-  const messages = sliceLastNTurns(visible, limit);
+  const visible = projected.filter(m => m.role === 'user' || m.role === 'assistant');
+  const visibleTail = sliceLastNTurns(visible, limit);
+  const tailIds = new Set(visibleTail.map(m => m.id).filter(Boolean));
+  const visibleIndexById = new Map(visible.map((m, idx) => [m.id, idx]));
+  for (const entry of visibleTail) {
+    if (entry.role !== 'assistant' || !Array.isArray(entry.toolCalls) || entry.toolCalls.length === 0) continue;
+    const idx = visibleIndexById.get(entry.id);
+    if (idx == null) continue;
+    for (let i = idx + 1; i < projected.length; i++) {
+      const next = projected[i];
+      if (!next || next.role !== 'tool') break;
+      if (next.id) tailIds.add(next.id);
+    }
+  }
+  const messages = projected.filter(m => tailIds.has(m.id));
   const oldestSeq = messages.length ? parseSeqFromId(messages[0].id) : null;
   const firstVisibleSeq = visible.length ? parseSeqFromId(visible[0].id) : null;
   const hasMore = messages.length > 0
@@ -3570,7 +3594,7 @@ export async function handleUnifyLoadHistory(msg) {
     : { messages: limit > 0 ? pickRecent(session.conversationStore, limit) : [], oldestSeq: null, hasMore: false };
   const compactSummary = session.conversationStore.readCompactSummary();
   const replayEntries = groupId
-    ? visiblePage.messages
+    ? visiblePage.messages.map(projectPersistedToUiHistoryEntry).filter(Boolean)
     : visiblePage.messages
       .map(projectPersistedToVisibleHistoryEntry)
       .filter(Boolean);
@@ -3619,6 +3643,7 @@ export async function handleUnifyLoadHistory(msg) {
   sendUnifyEvent({
     type: 'history_loaded',
     count: replayEntries.length,
+    ...(groupId ? { messages: replayEntries } : {}),
     hasCompactSummary: !!compactSummary,
     totalHot: session.conversationStore.countHot(),
     totalCold: session.conversationStore.countCold(),

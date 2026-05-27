@@ -7,6 +7,7 @@ import * as msgHelpers from './helpers/messages.js';
 import * as claudeHelpers from './helpers/claudeOutput.js';
 import * as handlerHelpers from './helpers/messageHandler.js';
 import * as convHelpers from './helpers/conversation.js';
+import { reconcileUnifyHistoryMessages } from './helpers/handlers/conversationHandler.js';
 import * as sessionHelpers from './helpers/session.js';
 import * as watchdogHelpers from './helpers/watchdog.js';
 import * as crewHelpers from './helpers/crew.js';
@@ -833,9 +834,8 @@ export const useChatStore = defineStore('chat', {
       if (this.unifyAgentId) {
         const groupId = resolveActiveUnifyGroupId(this);
         const groupKey = groupId || '__all__';
-        const savedState = this.unifyGroupHistoryState[groupKey] || null;
-        const needMessages = !!groupId && !savedState?.loaded && !savedState?.loading;
-        if (groupId && needMessages) {
+        const needMessages = !!groupId;
+        if (groupId) {
           this.unifyGroupHistoryState = {
             ...this.unifyGroupHistoryState,
             [groupKey]: { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },
@@ -1419,13 +1419,19 @@ export const useChatStore = defineStore('chat', {
         }
 
         case 'history_loaded':
-          // History messages already rendered via sendUnifyOutput (data path).
-          // This event just signals completion — capture the pagination
-          // cursor (`oldestSeq`) and `hasMore` flag so the MessageList can
-          // show / hide the "Load older messages" hint and the
-          // `loadMoreUnifyHistory` action knows where to start the next
-          // page.
-          {
+          // Group bootstrap history is authoritative for the visible tail:
+          // reconcile the active group slice from the backend batch instead of
+          // trusting whatever stale rows this tab had cached.
+          if (event.groupId && Array.isArray(event.messages)) {
+            reconcileUnifyHistoryMessages(this, {
+              conversationId: msg.conversationId || this.unifyConversationId,
+              groupId: event.groupId,
+              messages: event.messages,
+              hasMore: event.hasMore,
+              oldestSeq: event.oldestSeq,
+              count: event.count,
+            });
+          } else {
             const groupKey = event.groupId || '__all__';
             const nextState = {
               loaded: true,
@@ -2065,8 +2071,7 @@ export const useChatStore = defineStore('chat', {
       this.unifyLoadingMoreHistory = !!savedState?.loading;
       this.unifyOldestLoadedSeq = (typeof savedState?.oldestSeq === 'number') ? savedState.oldestSeq : null;
 
-      const needsHydrate = !savedState?.loaded && !savedState?.loading;
-      if (this.unifyAgentId && next && needsHydrate) {
+      if (this.unifyAgentId && next) {
         this.unifyGroupHistoryState = {
           ...this.unifyGroupHistoryState,
           [groupKey]: { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },

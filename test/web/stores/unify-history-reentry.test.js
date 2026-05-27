@@ -11,7 +11,10 @@ globalThis.localStorage = globalThis.localStorage || {
 };
 
 const { useChatStore } = await import('../../../web/stores/chat.js');
-const { handleUnifyHistoryChunk } = await import('../../../web/stores/helpers/handlers/conversationHandler.js');
+const {
+  handleUnifyHistoryChunk,
+  reconcileUnifyHistoryMessages,
+} = await import('../../../web/stores/helpers/handlers/conversationHandler.js');
 
 function makeStore() {
   const schema = useChatStore();
@@ -128,7 +131,7 @@ describe('Unify group history re-entry', () => {
     }]);
   });
 
-  it('does not rehydrate a group that already completed history loading in this UI lifecycle', () => {
+  it('rehydrates a group even if it completed history loading earlier in this UI lifecycle', () => {
     const store = makeStore();
     store.unifyConversationId = 'unify-1';
     store.unifyAgentId = 'agent-1';
@@ -144,7 +147,12 @@ describe('Unify group history re-entry', () => {
 
     store.setActiveGroupFilter('grp_fun');
 
-    expect(store.sent).toEqual([]);
+    expect(store.sent).toEqual([{
+      type: 'unify_load_history',
+      agentId: 'agent-1',
+      limit: 50,
+      groupId: 'grp_fun',
+    }]);
   });
 
   it('merges loaded Fun history with cached rows instead of replacing the pane with old content', () => {
@@ -170,6 +178,82 @@ describe('Unify group history re-entry', () => {
     expect(store.messagesMap['unify-1'].map(m => m.content)).toEqual([
       'old Fun message',
       'new Fun message typed before re-entry',
+    ]);
+  });
+
+  it('two stale clients converge to the same authoritative latest group tail', () => {
+    const latest = [
+      { id: 'm0002', role: 'user', content: 'latest question', groupId: 'grp_fun', ts: '2026-05-27T00:00:02.000Z' },
+      { id: 'm0003', role: 'assistant', content: 'latest answer', groupId: 'grp_fun', speakerVpId: 'linus', ts: '2026-05-27T00:00:03.000Z' },
+    ];
+    const a = makeStore();
+    const b = makeStore();
+    for (const store of [a, b]) {
+      store.unifyConversationId = 'unify-1';
+      store.unifyActiveGroupFilter = 'grp_fun';
+    }
+    a.messagesMap = { 'unify-1': [{ id: 'stale-a', type: 'user', content: 'stale a', groupId: 'grp_fun' }] };
+    b.messagesMap = { 'unify-1': [{ id: 'stale-b', type: 'assistant', content: 'stale b', groupId: 'grp_fun' }] };
+
+    for (const store of [a, b]) {
+      reconcileUnifyHistoryMessages(store, {
+        conversationId: 'unify-1',
+        groupId: 'grp_fun',
+        messages: latest,
+        count: latest.length,
+      });
+    }
+
+    expect(a.messagesMap['unify-1']).toEqual(b.messagesMap['unify-1']);
+    expect(a.messagesMap['unify-1'].map(m => m.content)).toEqual(['latest question', 'latest answer']);
+    expect(a.messagesMap['unify-1'][1]).toEqual(expect.objectContaining({ speakerVpId: 'linus', vpId: 'linus' }));
+  });
+
+  it('repeated authoritative group history replay does not duplicate messages', () => {
+    const store = makeStore();
+    store.unifyConversationId = 'unify-1';
+    store.unifyActiveGroupFilter = 'grp_fun';
+    const payload = {
+      conversationId: 'unify-1',
+      groupId: 'grp_fun',
+      messages: [
+        { id: 'm0001', role: 'user', content: 'q', groupId: 'grp_fun' },
+        { id: 'm0002', role: 'assistant', content: 'a', groupId: 'grp_fun' },
+      ],
+      count: 2,
+    };
+
+    reconcileUnifyHistoryMessages(store, payload);
+    reconcileUnifyHistoryMessages(store, payload);
+
+    expect(store.messagesMap['unify-1'].map(m => m.id)).toEqual(['m0001', 'm0002']);
+  });
+
+  it('authoritative group history preserves persisted tool-call shape', () => {
+    const store = makeStore();
+    store.unifyConversationId = 'unify-1';
+    store.unifyActiveGroupFilter = 'grp_fun';
+
+    reconcileUnifyHistoryMessages(store, {
+      conversationId: 'unify-1',
+      groupId: 'grp_fun',
+      messages: [
+        {
+          id: 'm0002',
+          role: 'assistant',
+          content: '',
+          groupId: 'grp_fun',
+          speakerVpId: 'linus',
+          toolCalls: [{ id: 'call-1', name: 'Bash', input: { command: 'npm test' } }],
+        },
+        { id: 'm0003', role: 'tool', content: 'ok', groupId: 'grp_fun', toolCallId: 'call-1' },
+      ],
+      count: 2,
+    });
+
+    expect(store.messagesMap['unify-1']).toEqual([
+      expect.objectContaining({ type: 'tool-use', toolName: 'Bash', toolInput: { command: 'npm test' }, speakerVpId: 'linus', toolCallId: 'call-1' }),
+      expect.objectContaining({ type: 'tool_result', content: 'ok', toolCallId: 'call-1' }),
     ]);
   });
 
