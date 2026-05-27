@@ -52,7 +52,7 @@ import { seedDefaultGroup } from './groups/seed-default.js';
 import {
   trimSnapshotForBudget,
 } from './history-compact.js';
-import { persistUnifyAttachments, attachmentsForPersistence } from './attachments.js';
+import { persistUnifyAttachments, attachmentsForPersistence, persistedAttachmentPreviewPayload } from './attachments.js';
 import { parseSeqFromId } from './conversation/persist.js';
 import { sliceLastNTurns } from './turn-utils.js';
 import { createVpStatusBroker } from './vp-status-broker.js';
@@ -582,6 +582,16 @@ function projectPersistedToHistoryEntry(m) {
 function projectPersistedToVisibleHistoryEntry(m) {
   const entry = projectPersistedToHistoryEntry(m);
   return entry && (entry.role === 'user' || entry.role === 'assistant') ? entry : null;
+}
+
+function hydrateHistoryAttachmentPreviews(attachments) {
+  if (!Array.isArray(attachments) || attachments.length === 0) return [];
+  return attachments.map((att) => {
+    if (!att || typeof att !== 'object') return att;
+    if (!att.isImage || att.preview || att.previewData) return att;
+    const payload = persistedAttachmentPreviewPayload(att);
+    return payload ? { ...att, previewData: payload } : att;
+  });
 }
 
 function loadVisibleGroupHistoryPage(store, groupId, limit, beforeSeq = null) {
@@ -3561,7 +3571,7 @@ export async function handleUnifyLoadHistory(msg) {
         message: {
           content: entry.content,
           id: entry.id || null,
-          ...(Array.isArray(entry.attachments) && entry.attachments.length > 0 ? { attachments: entry.attachments } : {}),
+          ...(Array.isArray(entry.attachments) && entry.attachments.length > 0 ? { attachments: hydrateHistoryAttachmentPreviews(entry.attachments) } : {}),
         },
         ts: entry.ts || null,
       }, { groupId: entry.groupId || null });
@@ -3655,7 +3665,7 @@ export async function handleUnifyLoadMoreHistory(msg) {
       role: m.role,
       content: m.content,
       groupId: m.groupId || null,
-      ...(Array.isArray(m.attachments) && m.attachments.length > 0 ? { attachments: m.attachments } : {}),
+      ...(Array.isArray(m.attachments) && m.attachments.length > 0 ? { attachments: hydrateHistoryAttachmentPreviews(m.attachments) } : {}),
       ...(m.speakerVpId ? { speakerVpId: m.speakerVpId } : {}),
     }));
 
