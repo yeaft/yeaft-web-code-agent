@@ -3,7 +3,6 @@ import { messageDb } from '../database.js';
 import { broadcastAgentList, forwardToClients, sendToWebClient } from '../ws-utils.js';
 import { trackMessage, webClients, previewFiles } from '../context.js';
 import { CONFIG } from '../config.js';
-import { randomUUID } from 'crypto';
 
 function hydrateMessagePreviewData(message) {
   const attachments = message?.attachments;
