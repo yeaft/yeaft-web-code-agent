@@ -40,6 +40,30 @@ describe('addMessageToConversation: timestamp from agent ts', () => {
     expect(msgs[0].timestamp).toBe(new Date('2026-05-01T10:00:00.000Z').getTime());
   });
 
+  it('preserves existing epoch timestamp from paginated history rows', () => {
+    const store = mkStore();
+    addMessageToConversation(store, 'conv-1', {
+      type: 'assistant',
+      content: 'older answer',
+      timestamp: 1770000000000,
+    });
+    const msgs = store.messagesMap['conv-1'];
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].timestamp).toBe(1770000000000);
+  });
+
+  it('uses persisted time when replay uses the conversation-store time field', () => {
+    const store = mkStore();
+    addMessageToConversation(store, 'conv-1', {
+      type: 'assistant',
+      content: 'history answer',
+      time: '2026-05-02T12:34:56.000Z',
+    });
+    const msgs = store.messagesMap['conv-1'];
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].timestamp).toBe(new Date('2026-05-02T12:34:56.000Z').getTime());
+  });
+
   it('falls back to Date.now() when msg.ts is missing', () => {
     const before = Date.now();
     const store = mkStore();

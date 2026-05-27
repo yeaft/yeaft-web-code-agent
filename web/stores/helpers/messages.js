@@ -43,16 +43,36 @@ function stampSpeakerOnVpMessage(store, conversationId, m) {
   if (!m.speakerVpId && m.vpId) m.speakerVpId = m.vpId;
 }
 
+function normalizeMessageTimestamp(msg) {
+  const candidates = [
+    msg?.timestamp,
+    msg?.createdAt,
+    msg?.ts,
+    msg?.time,
+    msg?.created_at,
+  ];
+  for (const value of candidates) {
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
+    if (typeof value === 'string' && value.trim()) {
+      const parsed = Date.parse(value);
+      if (Number.isFinite(parsed)) return parsed;
+      const numeric = Number(value);
+      if (Number.isFinite(numeric) && numeric > 0) return numeric;
+    }
+  }
+  return Date.now();
+}
+
 export function addMessageToConversation(store, conversationId, msg) {
   if (!conversationId) return;
 
   const newMsg = {
-    id: msg.dbMessageId || Date.now().toString() + Math.random().toString(36).substr(2, 9),
-    // Bug 1: preserve original ts from agent (ISO string) if present,
-    // otherwise fall back to arrival time. This keeps history messages
-    // in their actual chronological order rather than insertion order.
-    timestamp: (msg.ts ? new Date(msg.ts).getTime() : Date.now()),
-    ...msg
+    ...msg,
+    id: msg.dbMessageId || msg.id || Date.now().toString() + Math.random().toString(36).substr(2, 9),
+    // Preserve persisted message time when present. History/replay paths may
+    // send ISO `ts`/`time`, DB-style `created_at`, or already-normalized epoch
+    // fields; only live messages with no persisted time fall back to arrival.
+    timestamp: normalizeMessageTimestamp(msg),
   };
 
   // Unify uniformity: stamp every message that lands in the active Unify
@@ -133,6 +153,8 @@ export function appendToAssistantMessageForConversation(store, conversationId, t
     // No existing streaming message for this turn — create one.
     addMessageToConversation(store, conversationId, {
       ...(opts.id ? { id: opts.id, messageId: opts.id } : {}),
+      ...(opts.ts ? { ts: opts.ts } : {}),
+      ...(opts.timestamp ? { timestamp: opts.timestamp } : {}),
       type: 'assistant',
       content: text,
       isStreaming: true
@@ -152,6 +174,8 @@ export function appendToAssistantMessageForConversation(store, conversationId, t
   } else {
     addMessageToConversation(store, conversationId, {
       ...(opts.id ? { id: opts.id, messageId: opts.id } : {}),
+      ...(opts.ts ? { ts: opts.ts } : {}),
+      ...(opts.timestamp ? { timestamp: opts.timestamp } : {}),
       type: 'assistant',
       content: text,
       isStreaming: true

@@ -151,6 +151,26 @@ describe('handleUnifyHistoryChunk', () => {
     expect(arr[0].groupId).toBe('g1');
   });
 
+  it('preserves persisted timestamps from paginated history rows', () => {
+    const store = mkStore({ messagesMap: { 'unify-1': [] } });
+    handleUnifyHistoryChunk(store, {
+      conversationId: 'unify-1',
+      groupId: 'g1',
+      messages: [
+        { id: 'm0001', role: 'user', content: 'older-q1', groupId: 'g1', ts: '2026-05-01T10:00:00.000Z' },
+        { id: 'm0002', role: 'assistant', content: 'older-a1', groupId: 'g1', time: '2026-05-01T10:00:05.000Z' },
+      ],
+      oldestSeq: 1,
+      hasMore: false,
+    });
+
+    const arr = store.messagesMap['unify-1'];
+    expect(arr[0].timestamp).toBe(new Date('2026-05-01T10:00:00.000Z').getTime());
+    expect(arr[1].timestamp).toBe(new Date('2026-05-01T10:00:05.000Z').getTime());
+    expect(arr[0].isStreaming).toBe(false);
+    expect(arr[1].isStreaming).toBe(false);
+  });
+
 
   it('preserves stable ids, thread ids, and assistant speaker attribution from older history rows', () => {
     const store = mkStore({
