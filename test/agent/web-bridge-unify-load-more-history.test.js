@@ -316,6 +316,33 @@ describe('handleUnifyLoadHistory — pagination cursor priming', () => {
     expect(user.data.message.id).not.toBe(assistant.data.message.id);
   });
 
+  it('normalizes persisted image content blocks and preserves attachment metadata on refresh replay', async () => {
+    const gid = 'g_refresh_image_blocks';
+    sharedStore.appendBatch([
+      {
+        role: 'user',
+        groupId: gid,
+        content: JSON.stringify([
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAABASE64' } },
+          { type: 'text', text: 'please inspect this\n\n[Uploaded files]\n- .claude-tmp-attachments/g/a.png (image)' },
+        ]),
+        attachments: [{ name: 'a.png', path: '.claude-tmp-attachments/g/a.png', mimeType: 'image/png', isImage: true }],
+      },
+      { role: 'assistant', content: 'ok', groupId: gid, speakerVpId: 'vp-linus' },
+    ]);
+
+    await handleUnifyLoadHistory({ groupId: gid, limit: 10 });
+
+    const replay = outbound.filter(m => m.type === 'unify_output' && m.data);
+    const user = replay.find(m => m.groupId === gid && m.data.type === 'user');
+    expect(user.data.message.content).toBe('please inspect this');
+    expect(JSON.stringify(user.data.message)).not.toContain('AAAABASE64');
+    expect(JSON.stringify(user.data.message)).not.toContain('Uploaded files');
+    expect(user.data.message.attachments).toEqual([
+      expect.objectContaining({ name: 'a.png', mimeType: 'image/png', isImage: true }),
+    ]);
+  });
+
   it('initial group replay pages over visible rows when latest turns are invisible', async () => {
     const gid = 'g_initial_invisible_tail';
     sharedStore.appendBatch([

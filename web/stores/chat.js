@@ -899,14 +899,15 @@ export const useChatStore = defineStore('chat', {
      * web (`unify_debug_history` case in messageHandler merges into
      * `unifyDebugLoops` / `unifyDebugTurnsById` / `unifyDebugTurnOrder`).
      */
-    loadUnifyDebugHistory({ groupId, threadId, limit } = {}) {
+    loadUnifyDebugHistory({ groupId, threadId, limit, dreamLimit } = {}) {
       if (!this.unifyAgentId) return;
       this.unifyDebugHistoryLoading = true;
       this.unifyDebugHistoryError = null;
       const payload = {
         type: 'unify_fetch_debug_history',
         agentId: this.unifyAgentId,
-        limit: Number.isFinite(limit) && limit > 0 ? limit : 200,
+        limit: Number.isFinite(limit) && limit > 0 ? limit : 5,
+        dreamLimit: Number.isFinite(dreamLimit) && dreamLimit > 0 ? dreamLimit : 5,
       };
       if (typeof groupId === 'string' && groupId) payload.groupId = groupId;
       if (typeof threadId === 'string' && threadId) payload.threadId = threadId;
@@ -1886,6 +1887,9 @@ export const useChatStore = defineStore('chat', {
       const prev = Array.isArray(this.unifyDreamEvents?.[scope])
         ? this.unifyDreamEvents[scope]
         : [];
+      const keyOf = (e) => [e?.type || '', e?.phase || '', e?.groupId || '', e?.target || '', e?.ts || e?.at || ''].join('|');
+      const recordKey = keyOf(record);
+      if (prev.some(e => keyOf(e) === recordKey)) return;
       const next = [...prev, record];
       if (next.length > MAX_UNIFY_DREAM_EVENTS_PER_SCOPE) {
         next.splice(0, next.length - MAX_UNIFY_DREAM_EVENTS_PER_SCOPE);

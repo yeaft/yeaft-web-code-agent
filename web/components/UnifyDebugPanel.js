@@ -206,10 +206,10 @@ export default {
     // SQLite trace as soon as the panel is mounted. Previously the panel
     // only ever showed turns observed live via `unify_output` events, so
     // anything before the panel was opened was invisible — even though
-    // the trace had captured it. Pull the most recent N rows so the panel
-    // is useful from frame 1.
+    // the trace had captured it. Pull the most recent 5 request loops and
+    // 5 dream events so the panel is useful from frame 1 without flooding.
     if (this.store && typeof this.store.loadUnifyDebugHistory === 'function') {
-      this.store.loadUnifyDebugHistory({ limit: 200 });
+      this.store.loadUnifyDebugHistory({ limit: 5, dreamLimit: 5 });
     }
   },
   methods: {

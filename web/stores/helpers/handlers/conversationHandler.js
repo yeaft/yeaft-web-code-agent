@@ -395,6 +395,7 @@ export function handleUnifyHistoryChunk(store, msg) {
         type: 'user',
         content: m.content,
         groupId: m.groupId ?? null,
+        ...(Array.isArray(m.attachments) && m.attachments.length > 0 ? { attachments: m.attachments } : {}),
         isStreaming: false,
       });
     } else if (m.role === 'assistant') {

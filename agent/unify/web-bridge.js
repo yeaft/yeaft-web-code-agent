@@ -498,6 +498,56 @@ function makeGroupContextStub() {
 }
 
 /**
+ * Parse persisted content that may have been stringified from provider content
+ * blocks, then return only user-visible text. Image/file binary blocks are UI
+ * metadata and must never be rendered as bubble text; attachment chips ride in
+ * `attachments` instead.
+ *
+ * @param {unknown} content
+ * @returns {string}
+ */
+export function __testNormalizePersistedVisibleContent(content) {
+  let value = content;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if ((trimmed.startsWith('[') && trimmed.endsWith(']')) || (trimmed.startsWith('{') && trimmed.endsWith('}'))) {
+      try { value = JSON.parse(trimmed); } catch { value = content; }
+    }
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (!part || typeof part !== 'object') return '';
+        if (part.type === 'text' && typeof part.text === 'string') return part.text;
+        if (part.type === 'input_text' && typeof part.text === 'string') return part.text;
+        return '';
+      })
+      .join('')
+      .replace(/\n\n\[Uploaded files\][\s\S]*$/m, '')
+      .trim();
+  }
+
+  if (value && typeof value === 'object') {
+    if (typeof value.text === 'string') return value.text.trim();
+    if (typeof value.content === 'string') return value.content.trim();
+    return '';
+  }
+
+  return typeof value === 'string'
+    ? value.replace(/\n\n\[Uploaded files\][\s\S]*$/m, '').trim()
+    : '';
+}
+
+function isPersistedInternalMessage(m) {
+  if (!m) return true;
+  if (m._reflection || m.internal || m.systemOnly || m.systemOnlyMessage) return true;
+  if (m.kind === 'compact_summary' || m._compactSummary) return true;
+  return false;
+}
+
+/**
  * Project a persisted message record into the in-memory history shape.
  * Accepts `role:'tool'` and preserves `toolCalls`/`toolCallId` so the
  * next chat-completions serialization includes paired tool messages
@@ -509,8 +559,8 @@ function makeGroupContextStub() {
 function projectPersistedToHistoryEntry(m) {
   if (!m) return null;
   if (m.role !== 'user' && m.role !== 'assistant' && m.role !== 'tool') return null;
-  if (m._reflection || m.internal || m.systemOnly || m.systemOnlyMessage) return null;
-  const entry = { role: m.role, content: m.content };
+  if (isPersistedInternalMessage(m)) return null;
+  const entry = { role: m.role, content: m.role === 'tool' ? m.content : __testNormalizePersistedVisibleContent(m.content) };
   if (m.id) entry.id = m.id;
   if (m.groupId) entry.groupId = m.groupId;
   if (m.speakerVpId) entry.speakerVpId = m.speakerVpId;
@@ -523,6 +573,9 @@ function projectPersistedToHistoryEntry(m) {
     }));
   }
   if (m.isError) entry.isError = true;
+  if (m.ts) entry.ts = m.ts;
+  if (Array.isArray(m.attachments) && m.attachments.length > 0) entry.attachments = m.attachments;
+  if ((entry.role === 'user' || entry.role === 'assistant') && !entry.content && !entry.attachments) return null;
   return entry;
 }
 
@@ -902,6 +955,7 @@ async function routeEnvelopeToVpThread(groupId, vpId, envelope) {
       threadId: thread.threadId,
       role: envelope?.msg?.meta?.injectedBy === 'route_forward' ? 'assistant' : 'user',
       speakerVpId: envelope?.msg?.meta?.senderVpId || envelope?.msg?.from || null,
+      attachments: Array.isArray(envelope?.msg?.meta?.attachments) ? envelope.msg.meta.attachments : [],
     });
     thread.updatedAt = Date.now();
     try {
@@ -987,6 +1041,7 @@ function ensureDriverRunning(groupId, vpId, threadId = 'main') {
             threadId: thread.threadId,
             role: isForward ? 'assistant' : 'user',
             speakerVpId: senderVpId,
+            attachments: Array.isArray(meta.attachments) ? meta.attachments : [],
           });
         }
       } catch { /* never crash WS pipeline */ }
@@ -2857,17 +2912,17 @@ function appendTurnToGroupHistory(groupId, threadId, prompts, assistantTextParts
  * Best-effort: a write failure does NOT abort the turn — engines can
  * still run, and the next user message will trigger another append.
  *
- * Note: we mirror `engine.#persistMessages`'s schema for the user row
- * exactly (role/content/threadId/groupId), so existing parsers /
- * loaders see no schema drift. Attachments are not part of the on-disk
- * schema today (the engine never wrote them either) — they live on the
- * coordinator's jsonl-log under group meta.
+ * Note: we mirror `engine.#persistMessages`'s core user-row fields
+ * (role/content/threadId/groupId) so existing parsers keep working.
+ * Attachment UI metadata is persisted separately (without base64) so
+ * refresh replay can render chips without leaking image source data into
+ * the message body.
  *
- * @param {{ msgId:string, text:string, groupId:string, role?:string, speakerVpId?:string|null }} args
+ * @param {{ msgId:string, text:string, groupId:string, role?:string, speakerVpId?:string|null, attachments?:Array<object> }} args
  * @returns {boolean} true if this call wrote the row, false if a prior
  *   call already wrote it (dedup hit).
  */
-function persistInboundMessageOnceByMsgId({ msgId, text, groupId, threadId = 'main', role, speakerVpId }) {
+function persistInboundMessageOnceByMsgId({ msgId, text, groupId, threadId = 'main', role, speakerVpId, attachments }) {
   if (!session?.conversationStore) return false;
   // No msgId means no dedup key — caller is responsible for guarding.
   // Both call sites already do (`if (envMsgId && text)` and
@@ -2917,6 +2972,9 @@ function persistInboundMessageOnceByMsgId({ msgId, text, groupId, threadId = 'ma
     // unattributed).
     if (persistRole === 'assistant' && speakerVpId && typeof speakerVpId === 'string') {
       record.speakerVpId = speakerVpId;
+    }
+    if (persistRole === 'user' && Array.isArray(attachments) && attachments.length > 0) {
+      record.attachments = attachments;
     }
     session.conversationStore.append(record);
     return true;
@@ -3357,21 +3415,25 @@ export async function handleUnifyFetchToolStats(_msg = {}) {
  */
 export async function handleUnifyFetchDebugHistory(msg = {}) {
   const limit = Number.isFinite(msg?.limit) ? Number(msg.limit) : 100;
+  const dreamLimit = Number.isFinite(msg?.dreamLimit) ? Number(msg.dreamLimit) : 5;
   const groupId = typeof msg?.groupId === 'string' && msg.groupId ? msg.groupId : null;
   const threadId = typeof msg?.threadId === 'string' && msg.threadId ? msg.threadId : null;
   let loops = [];
   let turns = [];
+  let dreamEvents = [];
   try {
     if (session?.trace && typeof session.trace.fetchRecentDebugHistory === 'function') {
-      const out = session.trace.fetchRecentDebugHistory({ limit, groupId, threadId });
+      const out = session.trace.fetchRecentDebugHistory({ limit, dreamLimit, groupId, threadId });
       loops = Array.isArray(out?.loops) ? out.loops : [];
       turns = Array.isArray(out?.turns) ? out.turns : [];
+      dreamEvents = Array.isArray(out?.dreamEvents) ? out.dreamEvents : [];
     }
   } catch (err) {
     sendToServer({
       type: 'unify_debug_history',
       loops: [],
       turns: [],
+      dreamEvents: [],
       error: err && err.message ? err.message : String(err),
     });
     return;
@@ -3380,6 +3442,7 @@ export async function handleUnifyFetchDebugHistory(msg = {}) {
     type: 'unify_debug_history',
     loops,
     turns,
+    dreamEvents,
     groupId,
     threadId,
   });
@@ -3493,7 +3556,15 @@ export async function handleUnifyLoadHistory(msg) {
 
   for (const entry of replayEntries) {
     if (entry.role === 'user') {
-      sendUnifyOutput({ type: 'user', message: { content: entry.content, id: entry.id || null }, ts: entry.ts || null }, { groupId: entry.groupId || null });
+      sendUnifyOutput({
+        type: 'user',
+        message: {
+          content: entry.content,
+          id: entry.id || null,
+          ...(Array.isArray(entry.attachments) && entry.attachments.length > 0 ? { attachments: entry.attachments } : {}),
+        },
+        ts: entry.ts || null,
+      }, { groupId: entry.groupId || null });
     } else if (entry.role === 'assistant') {
       // speakerVpId rides on the envelope so the frontend can route this
       // replayed assistant text to the correct VP track. Without it, the
@@ -3584,6 +3655,7 @@ export async function handleUnifyLoadMoreHistory(msg) {
       role: m.role,
       content: m.content,
       groupId: m.groupId || null,
+      ...(Array.isArray(m.attachments) && m.attachments.length > 0 ? { attachments: m.attachments } : {}),
       ...(m.speakerVpId ? { speakerVpId: m.speakerVpId } : {}),
     }));
 

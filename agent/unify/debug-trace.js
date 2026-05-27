@@ -364,11 +364,14 @@ export class DebugTrace {
    * fields the panel expects. JSON columns are parsed; truncated /
    * malformed payloads degrade to null instead of failing the call.
    *
-   * @param {{ limit?: number, groupId?: string|null, threadId?: string|null }} [opts]
-   * @returns {{ loops: object[], turns: object[] }}
+   * @param {{ limit?: number, dreamLimit?: number, groupId?: string|null, threadId?: string|null }} [opts]
+   * @returns {{ loops: object[], turns: object[], dreamEvents: object[] }}
    */
-  fetchRecentDebugHistory({ limit = 100, groupId = null, threadId = null } = {}) {
+  fetchRecentDebugHistory({ limit = 100, dreamLimit = 5, groupId = null, threadId = null } = {}) {
     const lim = Math.max(1, Math.min(500, Number(limit) || 100));
+    const dreamLim = Number.isFinite(Number(dreamLimit))
+      ? Math.max(0, Math.min(50, Number(dreamLimit)))
+      : 5;
     const where = [];
     const args = [];
     if (groupId) { where.push('group_id = ?'); args.push(groupId); }
@@ -471,10 +474,30 @@ export class DebugTrace {
         isError: !!tool.is_error,
       });
     }
+    const dreamEvents = [];
+    if (dreamLim > 0) {
+      const eventRows = this.#db.prepare(`
+        SELECT * FROM trace_events WHERE event_type = 'dream_progress' ORDER BY created_at DESC LIMIT ?
+      `).all(Math.max(dreamLim * 5, dreamLim));
+      for (const er of eventRows) {
+        const data = parseJsonSafe(er.event_data) || {};
+        const evtGroupId = typeof data.groupId === 'string' && data.groupId ? data.groupId : null;
+        const target = typeof data.target === 'string' ? data.target : '';
+        if (groupId) {
+          const isBroadcast = !evtGroupId && !target;
+          const isThisGroup = evtGroupId === groupId || target === `group/${groupId}`;
+          if (!isBroadcast && !isThisGroup) continue;
+        }
+        dreamEvents.push({ type: 'dream_progress', ...data, at: er.created_at, ts: data.ts || er.created_at });
+        if (dreamEvents.length >= dreamLim) break;
+      }
+      dreamEvents.reverse();
+    }
+
     // Reverse to oldest-first so the panel's existing append-driven UI
     // renders in chronological order on hydration.
     loops.reverse();
-    return { loops, turns: Array.from(turnsById.values()) };
+    return { loops, turns: Array.from(turnsById.values()), dreamEvents };
   }
 
   /**
@@ -624,7 +647,7 @@ export class NullTrace {
   cleanup() { return { deletedTurns: 0, deletedTools: 0, deletedEvents: 0 }; }
   purge() {}
   close() {}
-  fetchRecentDebugHistory() { return { loops: [], turns: [] }; }
+  fetchRecentDebugHistory() { return { loops: [], turns: [], dreamEvents: [] }; }
 }
 
 /**

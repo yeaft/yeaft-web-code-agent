@@ -200,6 +200,7 @@ export function handleMessage(store, msg) {
       }
       const loops = Array.isArray(msg?.loops) ? msg.loops : [];
       const turns = Array.isArray(msg?.turns) ? msg.turns : [];
+      const dreamEvents = Array.isArray(msg?.dreamEvents) ? msg.dreamEvents : [];
       // Merge into existing in-memory state. Live-streamed turns/loops
       // (received via `unify_output` while the panel was open) win because
       // they may carry richer in-flight detail (e.g. memoryUsed/Adjust
@@ -270,6 +271,17 @@ export function handleMessage(store, msg) {
         mergedOrder.push(tid);
       }
       store.unifyDebugTurnOrder = mergedOrder;
+      for (const evt of dreamEvents) {
+        if (!evt) continue;
+        let scope = null;
+        if (typeof evt.target === 'string' && evt.target.includes('/')) scope = evt.target;
+        else if (typeof evt.groupId === 'string' && evt.groupId) scope = `group/${evt.groupId}`;
+        else scope = '*';
+        if (typeof store._appendDreamEvent === 'function') store._appendDreamEvent(scope, evt);
+        if (evt.type === 'dream_progress' && typeof store.handleUnifyOutput === 'function') {
+          store.handleUnifyOutput({ event: evt });
+        }
+      }
       store.unifyDebugHistoryLoading = false;
       store.unifyDebugHistoryError = typeof msg?.error === 'string' ? msg.error : null;
       store.unifyDebugHistoryFetchedAt = Date.now();
