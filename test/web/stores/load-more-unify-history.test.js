@@ -152,7 +152,7 @@ describe('handleUnifyHistoryChunk', () => {
   });
 
 
-  it('preserves stable ids and assistant speaker attribution from older history rows', () => {
+  it('preserves stable ids, thread ids, and assistant speaker attribution from older history rows', () => {
     const store = mkStore({
       unifyActiveGroupFilter: 'g1',
       messagesMap: { 'unify-1': [] },
@@ -161,16 +161,16 @@ describe('handleUnifyHistoryChunk', () => {
       conversationId: 'unify-1',
       groupId: 'g1',
       messages: [
-        { id: 'u-1', role: 'user', content: 'older-q', groupId: 'g1' },
-        { id: 'a-1', role: 'assistant', content: 'older-a', groupId: 'g1', speakerVpId: 'vp-linus' },
+        { id: 'u-1', role: 'user', content: 'older-q', groupId: 'g1', threadId: 'thr-a' },
+        { id: 'a-1', role: 'assistant', content: 'older-a', groupId: 'g1', threadId: 'thr-a', speakerVpId: 'vp-linus' },
       ],
       oldestSeq: 10,
       hasMore: false,
     });
 
     expect(store.messagesMap['unify-1']).toEqual([
-      expect.objectContaining({ id: 'u-1', messageId: 'u-1', type: 'user', groupId: 'g1' }),
-      expect.objectContaining({ id: 'a-1', messageId: 'a-1', type: 'assistant', groupId: 'g1', vpId: 'vp-linus', speakerVpId: 'vp-linus' }),
+      expect.objectContaining({ id: 'u-1', messageId: 'u-1', type: 'user', groupId: 'g1', threadId: 'thr-a', turnId: 'thr-a' }),
+      expect.objectContaining({ id: 'a-1', messageId: 'a-1', type: 'assistant', groupId: 'g1', threadId: 'thr-a', turnId: 'thr-a', vpId: 'vp-linus', speakerVpId: 'vp-linus' }),
     ]);
   });
 

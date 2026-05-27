@@ -390,20 +390,26 @@ export function handleUnifyHistoryChunk(store, msg) {
     if (stableId && (existingIds.has(stableId) || seenIds.has(stableId))) continue;
     if (stableId) seenIds.add(stableId);
     if (m.role === 'user') {
+      const threadId = m.threadId || m.turnId || 'main';
       formatted.push({
         ...(stableId ? { id: stableId, messageId: stableId } : {}),
         type: 'user',
         content: m.content,
         groupId: m.groupId ?? null,
+        threadId,
+        turnId: m.turnId || threadId,
         ...(Array.isArray(m.attachments) && m.attachments.length > 0 ? { attachments: m.attachments } : {}),
         isStreaming: false,
       });
     } else if (m.role === 'assistant') {
+      const threadId = m.threadId || m.turnId || 'main';
       formatted.push({
         ...(stableId ? { id: stableId, messageId: stableId } : {}),
         type: 'assistant',
         content: m.content,
         groupId: m.groupId ?? null,
+        threadId,
+        turnId: m.turnId || threadId,
         ...(m.speakerVpId ? { vpId: m.speakerVpId, speakerVpId: m.speakerVpId } : {}),
         isStreaming: false,
       });

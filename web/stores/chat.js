@@ -945,11 +945,21 @@ export const useChatStore = defineStore('chat', {
       const hasAttachments = safeAttachments.length > 0;
       if (!text?.trim() && !hasAttachments) return;
       const effectiveText = text?.trim() ? text : '(attached files)';
+      const clientMessageId = `u_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+      const clientThreadId = `pending_${clientMessageId}`;
       if (this.unifyConversationId) {
         const localMsg = {
+          id: clientMessageId,
+          messageId: clientMessageId,
           type: 'user',
           content: effectiveText,
           groupId,
+          // The agent-side router will replace this with the classified
+          // threadId as soon as the first frame for the VP thread arrives.
+          // Until then, the input row still has a stable block id instead of
+          // an empty/random-per-render boundary.
+          threadId: clientThreadId,
+          turnId: clientThreadId,
         };
         if (safeAttachments.length > 0) {
           // Local-render shape mirrors what `MessageItem` already
@@ -977,6 +987,7 @@ export const useChatStore = defineStore('chat', {
       const wsMsg = {
         type: 'unify_group_chat',
         agentId: this.unifyAgentId,
+        id: clientMessageId,
         groupId,
         text: effectiveText,
         mentions: Array.isArray(mentions) ? mentions : [],
@@ -1020,6 +1031,18 @@ export const useChatStore = defineStore('chat', {
           if (msg.turnId) this._currentUnifyTurnId = msg.turnId;
           if (msg.threadId) this._currentUnifyThreadId = msg.threadId;
           if (msg.threadTitle || msg.title) this._currentUnifyThreadTitle = msg.threadTitle || msg.title;
+          if (msg.threadId) {
+            const rows = this.messagesMap[conversationId] || [];
+            for (let i = rows.length - 1; i >= 0; i--) {
+              const row = rows[i];
+              if (!row || row.type !== 'user') continue;
+              if (msg.groupId != null && row.groupId !== msg.groupId) continue;
+              if (row.threadId && !String(row.threadId).startsWith('pending_')) break;
+              row.threadId = msg.threadId;
+              if (!row.turnId || String(row.turnId).startsWith('pending_')) row.turnId = msg.threadId;
+              break;
+            }
+          }
           // (2026-05-13) featureId stamping removed along with the Feature system.
           try {
             this.handleClaudeOutput(conversationId, msg.data);

@@ -783,6 +783,10 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         // router is the authoritative consumer of the payload shape.
         const { agentId: _discard, ...rest } = msg;
 
+        if (rest.type === 'unify_group_chat' && !rest.id) {
+          rest.id = `u_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+        }
+
         // Resolve attachment fileIds → base64 BEFORE forwarding, mirroring
         // the chat / crew handlers. The agent never sees fileIds — it
         // only handles `files: [{ name, mimeType, data, isImage }]`.

@@ -562,6 +562,8 @@ function projectPersistedToHistoryEntry(m) {
   if (isPersistedInternalMessage(m)) return null;
   const entry = { role: m.role, content: m.role === 'tool' ? m.content : __testNormalizePersistedVisibleContent(m.content) };
   if (m.id) entry.id = m.id;
+  entry.threadId = m.threadId || m.turnId || 'main';
+  entry.turnId = m.turnId || entry.threadId;
   if (m.groupId) entry.groupId = m.groupId;
   if (m.speakerVpId) entry.speakerVpId = m.speakerVpId;
   if (m.toolCallId) entry.toolCallId = m.toolCallId;
@@ -2268,6 +2270,7 @@ export async function handleUnifyGroupChat(msg) {
   let report;
   try {
     report = coord.ingest({
+      id: typeof msg.id === 'string' && msg.id ? msg.id : undefined,
       from: 'user',
       role: 'user',
       text,
@@ -3585,7 +3588,7 @@ export async function handleUnifyLoadHistory(msg) {
           ...(Array.isArray(entry.attachments) && entry.attachments.length > 0 ? { attachments: hydrateHistoryAttachmentPreviews(entry.attachments) } : {}),
         },
         ts: entry.ts || null,
-      }, { groupId: entry.groupId || null });
+      }, { groupId: entry.groupId || null, threadId: entry.threadId || 'main', turnId: entry.turnId || entry.threadId || 'main' });
     } else if (entry.role === 'assistant') {
       // speakerVpId rides on the envelope so the frontend can route this
       // replayed assistant text to the correct VP track. Without it, the
@@ -3593,6 +3596,8 @@ export async function handleUnifyLoadHistory(msg) {
       // anonymous assistant turn.
       const envelopeOpts = {
         groupId: entry.groupId || null,
+        threadId: entry.threadId || 'main',
+        turnId: entry.turnId || entry.threadId || 'main',
       };
       if (entry.speakerVpId) envelopeOpts.vpId = entry.speakerVpId;
       sendUnifyOutput({
@@ -3676,6 +3681,8 @@ export async function handleUnifyLoadMoreHistory(msg) {
       role: m.role,
       content: m.content,
       groupId: m.groupId || null,
+      threadId: m.threadId || m.turnId || 'main',
+      turnId: m.turnId || m.threadId || 'main',
       ...(Array.isArray(m.attachments) && m.attachments.length > 0 ? { attachments: hydrateHistoryAttachmentPreviews(m.attachments) } : {}),
       ...(m.speakerVpId ? { speakerVpId: m.speakerVpId } : {}),
     }));

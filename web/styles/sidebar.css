@@ -1538,6 +1538,12 @@
 }
 
 /* Messages */
+.thread-block {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
 .msg-row {
   display: flex;
   flex-direction: column;
