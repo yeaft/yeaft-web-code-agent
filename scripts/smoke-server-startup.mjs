@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -9,9 +10,25 @@ import { fileURLToPath } from 'node:url';
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const serverDir = join(repoRoot, 'server');
 const dataDir = mkdtempSync(join(tmpdir(), 'yeaft-server-smoke-'));
-const port = 43000 + Math.floor(Math.random() * 1000);
 const timeoutMs = 15000;
 
+async function reserveAvailablePort() {
+  const probe = createServer();
+  probe.unref();
+  await new Promise((resolve, reject) => {
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', resolve);
+  });
+  const address = probe.address();
+  const port = address && typeof address === 'object' ? address.port : null;
+  await new Promise((resolve, reject) => {
+    probe.close((error) => (error ? reject(error) : resolve()));
+  });
+  if (!port) throw new Error('failed to reserve an available smoke-test port');
+  return port;
+}
+
+const port = await reserveAvailablePort();
 const child = spawn(process.execPath, ['index.js'], {
   cwd: serverDir,
   env: {
