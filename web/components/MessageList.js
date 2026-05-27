@@ -172,7 +172,17 @@ export default {
           </section>
           <template v-else>
             <div class="msg-row" :data-msg-id="block.id" :class="{ 'msg-flash': block.id === flashMsgId }">
-              <MessageItem v-if="block.type === 'system' || block.type === 'error'" :message="block.message" />
+              <UserTurnBlock
+                v-if="block.type === 'user' && useImStyleForUser"
+                :message="block.message"
+              />
+              <MessageItem v-else-if="block.type === 'user' || block.type === 'system' || block.type === 'error'" :message="block.message" />
+              <VpTurnBlock
+                v-else-if="block.type === 'assistant-turn' && block.speakerVpId"
+                :turn="block"
+                :now-ms="nowMs"
+              />
+              <AssistantTurn v-else-if="block.type === 'assistant-turn'" :turn="block" />
             </div>
             <SubAgentCard
               v-for="card in subAgentCardsForRow(block)"
