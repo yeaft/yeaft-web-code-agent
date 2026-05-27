@@ -125,6 +125,38 @@ function truncate(str, max) {
   return str.slice(0, max) + '... [truncated]';
 }
 
+function truncatedJsonSentinel(originalBytes) {
+  return {
+    __truncated: true,
+    originalBytes,
+    maxBytes: MAX_LOOP_PAYLOAD,
+  };
+}
+
+function truncateJsonValue(value) {
+  if (value == null) return value;
+  if (typeof value === 'string') return truncate(value, MAX_LOOP_PAYLOAD);
+  try {
+    const s = JSON.stringify(value);
+    if (s.length <= MAX_LOOP_PAYLOAD) return value;
+    return truncatedJsonSentinel(s.length);
+  } catch {
+    return null;
+  }
+}
+
+function boundDreamEventData(eventType, eventData) {
+  if (eventType !== 'dream_loop' || !eventData || typeof eventData !== 'object') return eventData;
+  return {
+    ...eventData,
+    systemPrompt: truncateJsonValue(eventData.systemPrompt),
+    messages: truncateJsonValue(eventData.messages),
+    response: truncateJsonValue(eventData.response),
+    rawRequest: truncateJsonValue(eventData.rawRequest),
+    rawResponse: truncateJsonValue(eventData.rawResponse),
+  };
+}
+
 /**
  * DebugTrace — SQLite-backed debug trace.
  */
@@ -229,11 +261,7 @@ export class DebugTrace {
       try {
         const s = JSON.stringify(v);
         if (s.length <= MAX_LOOP_PAYLOAD) return s;
-        return JSON.stringify({
-          __truncated: true,
-          originalBytes: s.length,
-          maxBytes: MAX_LOOP_PAYLOAD,
-        });
+        return JSON.stringify(truncatedJsonSentinel(s.length));
       } catch { return null; }
     };
     // For raw request/response, accept either a pre-stringified blob
@@ -304,7 +332,8 @@ export class DebugTrace {
   logEvent({ traceId, eventType, eventData = null }) {
     const id = randomUUID();
     const now = Date.now();
-    const data = eventData != null ? JSON.stringify(eventData) : null;
+    const boundedData = boundDreamEventData(eventType, eventData);
+    const data = boundedData != null ? JSON.stringify(boundedData) : null;
     this.#prepare('insertEvent', `
       INSERT INTO trace_events (id, trace_id, event_type, event_data, created_at)
       VALUES (?, ?, ?, ?, ?)

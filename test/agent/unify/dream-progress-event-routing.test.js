@@ -237,5 +237,40 @@ describe('dream_progress event routing', () => {
     resolveA({ startedAt: '2026-05-15T08:00:00.000Z', targets: [] });
     await a;
   });
+
+  it('rejects scoped manual trigger during an already-running unscoped dream before wrapping the sink', async () => {
+    const session = makeSession({
+      isRunning: true,
+      triggerDreamForScopes: vi.fn(async () => {
+        throw new Error('should not start scoped run');
+      }),
+    });
+    installUnifyRuntimeBridge(session);
+    const baseSink = session._dreamProgressSink;
+    __testSetSession(session);
+
+    await handleUnifyDreamTrigger({ groupId: 'g1' });
+
+    expect(session.dreamScheduler.triggerDreamForScopes).not.toHaveBeenCalled();
+    expect(session._dreamActiveGroupId).toBeUndefined();
+    expect(session._dreamProgressSink).toBe(baseSink);
+
+    const results = findAll('unify_dream_result');
+    expect(results).toHaveLength(1);
+
+    // Existing unscoped auto-run events must keep flowing without a stamped groupId.
+    outbound.length = 0;
+    session._dreamProgressSink({ phase: 'done', manual: false });
+    const progress = findProgress();
+    expect(progress).toHaveLength(1);
+    expect(progress[0].event.groupId).toBeUndefined();
+    expect(progress[0].envelope.groupId).toBeUndefined();
+    expect(results[0]).toEqual(expect.objectContaining({
+      groupId: 'g1',
+      success: false,
+      skipped: true,
+      skippedReason: 'already-running',
+    }));
+  });
 });
 

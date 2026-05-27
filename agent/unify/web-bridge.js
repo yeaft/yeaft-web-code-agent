@@ -3267,13 +3267,15 @@ export async function handleUnifyDreamTrigger(msg = {}) {
   // group or different) overlapping the same inflight pass used to set
   // the module-level groupId slot, race the sink wrapping, and let the
   // second `finally` restore the original sink while the first run was
-  // still emitting events. We now refuse any second scoped trigger
-  // while ANY scoped pass is inflight — the scheduler already
-  // short-circuits the underlying run for same-group, and a different
-  // group's filter would have been silently dropped anyway (see
-  // dream-v2/schedule.js inflight reuse), so the user-facing semantics
-  // are unchanged ("you already asked").
-  if (groupId && inflightScopedDreamGroups.size > 0) {
+  // still emitting events. We now refuse scoped triggers while ANY dream
+  // pass is already running: a scoped manual click during an unscoped
+  // auto run must not install `_dreamActiveGroupId` or wrap the sink,
+  // otherwise auto-run events can be persisted under the clicked group.
+  // The scheduler also short-circuits the underlying run for same-group,
+  // and a different group's filter would have been silently dropped
+  // anyway (see dream-v2/schedule.js inflight reuse), so the user-facing
+  // semantics are unchanged ("you already asked").
+  if (groupId && (inflightScopedDreamGroups.size > 0 || session.dreamScheduler.isRunning)) {
     const skippedResult = {
       skipped: true,
       skippedReason: 'already-running',
