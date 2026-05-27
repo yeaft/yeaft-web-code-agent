@@ -25,5 +25,8 @@ jobs:
       - name: Run tests
         run: npm test
 
+      - name: Run release guards
+        run: npm run release:guard
+
       - name: Build frontend
         run: npm run build
