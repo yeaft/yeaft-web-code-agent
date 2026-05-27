@@ -226,6 +226,17 @@ export class ToolRegistry {
   register(tool) {
     if (!tool || !tool.name) throw new Error('Tool must have a name');
     this.#tools.set(tool.name, tool);
+    // Legacy-name aliases: keep historical jsonl tool_calls resolvable
+    // after a rename. The alias entry shares the same tool object so
+    // execute/has lookups succeed, but `getToolDefs()` dedupes by tool
+    // identity so the LLM only sees the canonical name.
+    if (Array.isArray(tool.aliases)) {
+      for (const alias of tool.aliases) {
+        if (typeof alias === 'string' && alias && alias !== tool.name) {
+          this.#tools.set(alias, tool);
+        }
+      }
+    }
     return this;
   }
 
@@ -269,10 +280,21 @@ export class ToolRegistry {
 
   /**
    * Get all registered tools (unfiltered).
+   *
+   * Dedupes alias entries — when a tool is registered with `aliases`,
+   * the same ToolDef object lives at multiple Map keys. We return each
+   * tool object at most once (under its canonical `tool.name`).
    * @returns {import('./types.js').ToolDef[]}
    */
   getAllTools() {
-    return Array.from(this.#tools.values());
+    const seen = new Set();
+    const out = [];
+    for (const tool of this.#tools.values()) {
+      if (seen.has(tool)) continue;
+      seen.add(tool);
+      out.push(tool);
+    }
+    return out;
   }
 
   /**
@@ -291,11 +313,12 @@ export class ToolRegistry {
   }
 
   /**
-   * Get all registered tool names.
+   * Get all registered tool names (canonical only — aliases are excluded
+   * so debug surfaces like the tool-stats panel show one row per tool).
    * @returns {string[]}
    */
   getToolNames() {
-    return Array.from(this.#tools.keys());
+    return this.getAllTools().map(t => t.name);
   }
 
   /**
@@ -337,7 +360,7 @@ export class ToolRegistry {
 
   /** Number of registered tools. */
   get size() {
-    return this.#tools.size;
+    return this.getAllTools().length;
   }
 
   /** All registered tool names. */

@@ -79,17 +79,17 @@ function mkDeps(adapter, overrides = {}) {
 }
 
 describe('sub-agent: tool subset', () => {
-  it('child registry strips Agent/SendMessage/WaitAgent/CloseAgent/RouteForward/AskUser', () => {
+  it('child registry strips SpawnAgent/PromptAgent/WaitAgent/CloseAgent/RouteForward/AskUser', () => {
     const parent = new ToolRegistry();
-    const fakes = ['Agent', 'SendMessage', 'WaitAgent', 'CloseAgent', 'ListAgents', 'RouteForward', 'AskUser', 'Bash', 'Grep'].map((name) =>
+    const fakes = ['SpawnAgent', 'PromptAgent', 'WaitAgent', 'CloseAgent', 'ListAgents', 'RouteForward', 'AskUser', 'Bash', 'Grep'].map((name) =>
       defineTool({ name, description: name, parameters: { type: 'object', properties: {} }, async execute() { return ''; } }),
     );
     parent.registerAll(fakes);
     const child = buildChildToolRegistry(parent);
     expect(child.has('Bash')).toBe(true);
     expect(child.has('Grep')).toBe(true);
-    expect(child.has('Agent')).toBe(false);
-    expect(child.has('SendMessage')).toBe(false);
+    expect(child.has('SpawnAgent')).toBe(false);
+    expect(child.has('PromptAgent')).toBe(false);
     expect(child.has('WaitAgent')).toBe(false);
     expect(child.has('CloseAgent')).toBe(false);
     expect(child.has('ListAgents')).toBe(false);
@@ -98,7 +98,8 @@ describe('sub-agent: tool subset', () => {
   });
 
   it('isRestrictedToolName has the right list', () => {
-    expect(isRestrictedToolName('Agent')).toBe(true);
+    expect(isRestrictedToolName('SpawnAgent')).toBe(true);
+    expect(isRestrictedToolName('Agent')).toBe(true); // legacy alias still restricted
     expect(isRestrictedToolName('Bash')).toBe(false);
   });
 });

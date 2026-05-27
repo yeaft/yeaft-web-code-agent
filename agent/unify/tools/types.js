@@ -74,6 +74,7 @@
  */
 export function defineTool({
   name,
+  aliases,
   description,
   parameters,
   execute,
@@ -94,6 +95,12 @@ export function defineTool({
     isReadOnly,
     isDestructive,
   };
+  // Legacy tool-name aliases. Registered as extra lookup keys so old
+  // jsonl tool_calls (e.g. `SendMessage` → `PromptAgent`) keep resolving,
+  // but excluded from the LLM-visible catalogue.
+  if (Array.isArray(aliases) && aliases.length > 0) {
+    def.aliases = aliases.slice();
+  }
   // Only attach `timeoutMs` when the tool author opts in. Leaving it
   // unset means ToolRegistry.execute uses DEFAULT_TOOL_TIMEOUT_MS — set
   // to <= 0 to disable the per-tool timeout entirely.

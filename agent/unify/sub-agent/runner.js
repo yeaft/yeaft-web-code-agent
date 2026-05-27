@@ -31,8 +31,10 @@ import { ToolRegistry } from '../tools/registry.js';
 import { buildSpawnedPreamble } from './spawned-prompt.js';
 
 const RESTRICTED_TOOLS = new Set([
-  'Agent',
-  'SendMessage',
+  'SpawnAgent',
+  'Agent',          // legacy alias
+  'PromptAgent',
+  'SendMessage',    // legacy alias
   'WaitAgent',
   'CloseAgent',
   'ListAgents',

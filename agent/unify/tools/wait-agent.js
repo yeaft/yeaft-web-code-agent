@@ -10,7 +10,7 @@ export default defineTool({
   description: `Wait for a sub-agent to complete its task and retrieve the result.
 
 Returns the agent's final result or current status if still running.
-Use after sending a task to an agent via SendMessage.`,
+Use after sending a task to an agent via PromptAgent.`,
   parameters: {
     type: 'object',
     properties: {

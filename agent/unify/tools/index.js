@@ -18,7 +18,6 @@ import exitWorktree from './exit-worktree.js';
 
 // --- P0 Core tools ---
 import askUser from './ask-user.js';
-import openSourceMessage from './open-source-message.js';
 import webSearch from './web-search.js';
 import webFetch from './web-fetch.js';
 import historySearch from './history-search.js';
@@ -66,7 +65,6 @@ import { jsRepl, jsReplReset } from './js-repl.js';
 import notebookEdit from './notebook-edit.js';
 import imageGeneration from './image-generation.js';
 import viewImage from './view-image.js';
-import requestPermissions from './request-permissions.js';
 
 /**
  * All built-in tools, flattened into a single array.
@@ -82,7 +80,6 @@ export const allTools = [
 
   // P0 Core
   askUser,
-  openSourceMessage,
   webSearch,
   webFetch,
   historySearch,
@@ -117,7 +114,6 @@ export const allTools = [
   notebookEdit,
   imageGeneration,
   viewImage,
-  requestPermissions,
 ];
 
 /**
