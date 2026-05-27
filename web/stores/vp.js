@@ -345,6 +345,13 @@ export const useVpStore = defineStore('vp', {
         groupsProcessed: typeof event.groupsProcessed === 'number' ? event.groupsProcessed : null,
         groupsSkipped: typeof event.groupsSkipped === 'number' ? event.groupsSkipped : null,
         targetsApplied: typeof event.targetsApplied === 'number' ? event.targetsApplied : null,
+        durationMs: typeof event.durationMs === 'number' ? event.durationMs : null,
+        llmCallCount: typeof event.llmCallCount === 'number' ? event.llmCallCount : 0,
+        inputTokens: typeof event.inputTokens === 'number' ? event.inputTokens : 0,
+        outputTokens: typeof event.outputTokens === 'number' ? event.outputTokens : 0,
+        totalTokens: typeof event.totalTokens === 'number' ? event.totalTokens : 0,
+        metrics: event.metrics || null,
+        passBreakdown: event.passBreakdown || event.metrics?.passBreakdown || null,
         targetErrors: Array.isArray(event.targetErrors) ? event.targetErrors : [],
       };
       const lastError = ok || skipped ? null : (event.error || null);

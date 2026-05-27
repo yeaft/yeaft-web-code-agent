@@ -128,27 +128,126 @@ function makeLlm(session) {
     });
 
     // Emit complete loop event (request + response) to the debug panel.
+    const latencyMs = Date.now() - startedMs;
+    const usage = normalizeDreamUsage(r?.usage || {});
+    if (!session._dreamMetrics) session._dreamMetrics = createDreamMetrics({ turnId });
+    session._dreamMetrics.llmCallCount += 1;
+    session._dreamMetrics.inputTokens += usage.inputTokens;
+    session._dreamMetrics.outputTokens += usage.outputTokens;
+    session._dreamMetrics.totalTokens += usage.totalTokens;
+    session._dreamMetrics.byPass[pass] = session._dreamMetrics.byPass[pass] || createDreamPassMetrics();
+    session._dreamMetrics.byPass[pass].llmCallCount += 1;
+    session._dreamMetrics.byPass[pass].inputTokens += usage.inputTokens;
+    session._dreamMetrics.byPass[pass].outputTokens += usage.outputTokens;
+    session._dreamMetrics.byPass[pass].totalTokens += usage.totalTokens;
+    session._dreamMetrics.byPass[pass].durationMs += latencyMs;
+    const loopEvent = stampDreamScope(session, {
+      type: 'loop',
+      turnId,
+      loopNumber,
+      pass,
+      model: model || 'unknown',
+      systemPrompt: effectiveSystem,
+      messages: [{ role: 'user', content: prompt }],
+      response: typeof r?.text === 'string' ? r.text : '',
+      toolCalls: [],
+      usage,
+      latencyMs,
+      ttfbMs: null,
+      stopReason: 'end_turn',
+      rawRequest: null,
+      rawResponse: null,
+    });
+    persistDreamTrace(session, 'dream_loop', loopEvent);
     if (typeof session._dreamProgressSink === 'function') {
-      session._dreamProgressSink({
-        type: 'loop',
-        turnId,
-        loopNumber,
-        model: model || 'unknown',
-        systemPrompt: effectiveSystem,
-        messages: [{ role: 'user', content: prompt }],
-        response: typeof r?.text === 'string' ? r.text : '',
-        toolCalls: [],
-        usage: r?.usage || { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-        latencyMs: Date.now() - startedMs,
-        ttfbMs: null,
-        stopReason: 'end_turn',
-        rawRequest: null,
-        rawResponse: null,
-      });
+      session._dreamProgressSink(loopEvent);
     }
 
     return (r && r.text) ? r.text : '';
   };
+}
+
+
+function stampDreamScope(session, evt) {
+  if (!evt || typeof evt !== 'object') return evt;
+  if (evt.groupId || !session?._dreamActiveGroupId) return evt;
+  return { ...evt, groupId: session._dreamActiveGroupId };
+}
+
+function finiteNumber(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+function normalizeDreamUsage(usage = {}) {
+  const inputTokens = finiteNumber(
+    usage.inputTokens ?? usage.input_tokens ?? usage.promptTokens ?? usage.prompt_tokens,
+  );
+  const outputTokens = finiteNumber(
+    usage.outputTokens ?? usage.output_tokens ?? usage.completionTokens ?? usage.completion_tokens,
+  );
+  const explicitTotal = finiteNumber(usage.totalTokens ?? usage.total_tokens);
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens: explicitTotal || inputTokens + outputTokens,
+  };
+}
+
+function createDreamPassMetrics() {
+  return { llmCallCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, durationMs: 0 };
+}
+
+function createDreamMetrics({ turnId, startedAt = Date.now() } = {}) {
+  return {
+    turnId: turnId || 'dream',
+    startedAt,
+    durationMs: 0,
+    llmCallCount: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    byPass: {},
+  };
+}
+
+function finalizeDreamMetrics(metrics, durationMs) {
+  const m = metrics || createDreamMetrics();
+  return {
+    turnId: m.turnId || 'dream',
+    startedAt: m.startedAt || null,
+    durationMs: finiteNumber(durationMs),
+    llmCallCount: finiteNumber(m.llmCallCount),
+    inputTokens: finiteNumber(m.inputTokens),
+    outputTokens: finiteNumber(m.outputTokens),
+    totalTokens: finiteNumber(m.totalTokens),
+    passBreakdown: Object.fromEntries(Object.entries(m.byPass || {}).map(([pass, rec]) => [pass, {
+      llmCallCount: finiteNumber(rec.llmCallCount),
+      inputTokens: finiteNumber(rec.inputTokens),
+      outputTokens: finiteNumber(rec.outputTokens),
+      totalTokens: finiteNumber(rec.totalTokens),
+      durationMs: finiteNumber(rec.durationMs),
+    }])),
+  };
+}
+
+function summarizeDreamResult(result = {}) {
+  return {
+    groups: Array.isArray(result.groups) ? result.groups.length : 0,
+    targets: Array.isArray(result.targets) ? result.targets.length : 0,
+    error: result.error || null,
+    skipped: !!result.skipped,
+    skippedReason: result.skippedReason || null,
+  };
+}
+
+function persistDreamTrace(session, eventType, eventData) {
+  try {
+    if (typeof session?.trace?.event === 'function') session.trace.event(eventType, eventData);
+    else if (typeof session?.trace?.logEvent === 'function') {
+      session.trace.logEvent({ traceId: String(eventData?.turnId || eventData?.runId || eventType), eventType, eventData });
+    }
+  } catch { /* trace must never break dream */ }
 }
 
 /**
@@ -162,20 +261,21 @@ function makeLlm(session) {
 export function createV2DreamScheduler(session) {
   const onProgress = (evt) => {
     try {
+      const stampedEvt = stampDreamScope(session, evt);
       const sink = session.engine?.subAgentEventSink || null;
       // We don't have a sub-agent id; emit on the engine's standard
       // event channel instead. session.engine exposes setSubAgentEventSink
       // for nested events; for top-level dream, we route through trace.
       if (typeof session.trace?.event === 'function') {
-        session.trace.event('dream_progress', evt);
+        session.trace.event('dream_progress', stampedEvt);
       }
       if (typeof session._dreamProgressSink === 'function') {
-        session._dreamProgressSink(evt);
+        session._dreamProgressSink(stampedEvt);
       }
       // Best-effort console for debug builds.
       if (session.config?.debug) {
         // eslint-disable-next-line no-console
-        console.log('[dream-v2]', evt);
+        console.log('[dream-v2]', stampedEvt);
       }
     } catch { /* never let progress reporting kill the run */ }
   };
@@ -190,16 +290,19 @@ export function createV2DreamScheduler(session) {
     const startedAt = Date.now();
     session._dreamTurnId = turnId;
     session._dreamLoopCounter = 0;
+    session._dreamMetrics = createDreamMetrics({ turnId, startedAt });
 
+    const turnOpen = stampDreamScope(session, {
+      type: 'turn_open',
+      turnId,
+      userPrompt: '[dream] automatic memory consolidation',
+      vpId: null,
+      groupId: null,
+      at: startedAt,
+    });
+    persistDreamTrace(session, 'dream_turn_open', turnOpen);
     if (typeof session._dreamProgressSink === 'function') {
-      session._dreamProgressSink({
-        type: 'turn_open',
-        turnId,
-        userPrompt: '[dream] automatic memory consolidation',
-        vpId: null,
-        groupId: null,
-        at: startedAt,
-      });
+      session._dreamProgressSink(turnOpen);
     }
 
     return runDream({
@@ -208,14 +311,35 @@ export function createV2DreamScheduler(session) {
       scopeFilter: Array.isArray(opts.scopeFilter) ? opts.scopeFilter : undefined,
     }).then((result) => {
       // Bug 2: emit turn_close when the dream pass completes.
+      result.trigger = opts.manual ? 'manual' : 'auto';
+      if (session._dreamActiveGroupId && !result.groupId) result.groupId = session._dreamActiveGroupId;
+      const metrics = finalizeDreamMetrics(session._dreamMetrics, Date.now() - startedAt);
+      result.metrics = metrics;
+      result.durationMs = metrics.durationMs;
+      result.llmCallCount = metrics.llmCallCount;
+      result.inputTokens = metrics.inputTokens;
+      result.outputTokens = metrics.outputTokens;
+      result.totalTokens = metrics.totalTokens;
+      result.passBreakdown = metrics.passBreakdown;
+      const turnClose = stampDreamScope(session, {
+        type: 'turn_close',
+        turnId,
+        totalMs: metrics.durationMs,
+        totalTokens: metrics.totalTokens,
+        loopCount: metrics.llmCallCount,
+        metrics,
+      });
+      persistDreamTrace(session, 'dream_turn_close', turnClose);
+      persistDreamTrace(session, 'dream_run', stampDreamScope(session, {
+        type: 'dream_run',
+        turnId,
+        phase: 'result',
+        status: result?.error ? 'error' : 'done',
+        metrics,
+        resultSummary: summarizeDreamResult(result),
+      }));
       if (typeof session._dreamProgressSink === 'function') {
-        session._dreamProgressSink({
-          type: 'turn_close',
-          turnId,
-          totalMs: Date.now() - startedAt,
-          totalTokens: 0,
-          loopCount: session._dreamLoopCounter || 0,
-        });
+        session._dreamProgressSink(turnClose);
       }
       return result;
     });

@@ -125,6 +125,38 @@ function truncate(str, max) {
   return str.slice(0, max) + '... [truncated]';
 }
 
+function truncatedJsonSentinel(originalBytes) {
+  return {
+    __truncated: true,
+    originalBytes,
+    maxBytes: MAX_LOOP_PAYLOAD,
+  };
+}
+
+function truncateJsonValue(value) {
+  if (value == null) return value;
+  if (typeof value === 'string') return truncate(value, MAX_LOOP_PAYLOAD);
+  try {
+    const s = JSON.stringify(value);
+    if (s.length <= MAX_LOOP_PAYLOAD) return value;
+    return truncatedJsonSentinel(s.length);
+  } catch {
+    return null;
+  }
+}
+
+function boundDreamEventData(eventType, eventData) {
+  if (eventType !== 'dream_loop' || !eventData || typeof eventData !== 'object') return eventData;
+  return {
+    ...eventData,
+    systemPrompt: truncateJsonValue(eventData.systemPrompt),
+    messages: truncateJsonValue(eventData.messages),
+    response: truncateJsonValue(eventData.response),
+    rawRequest: truncateJsonValue(eventData.rawRequest),
+    rawResponse: truncateJsonValue(eventData.rawResponse),
+  };
+}
+
 /**
  * DebugTrace — SQLite-backed debug trace.
  */
@@ -229,11 +261,7 @@ export class DebugTrace {
       try {
         const s = JSON.stringify(v);
         if (s.length <= MAX_LOOP_PAYLOAD) return s;
-        return JSON.stringify({
-          __truncated: true,
-          originalBytes: s.length,
-          maxBytes: MAX_LOOP_PAYLOAD,
-        });
+        return JSON.stringify(truncatedJsonSentinel(s.length));
       } catch { return null; }
     };
     // For raw request/response, accept either a pre-stringified blob
@@ -304,12 +332,26 @@ export class DebugTrace {
   logEvent({ traceId, eventType, eventData = null }) {
     const id = randomUUID();
     const now = Date.now();
-    const data = eventData != null ? JSON.stringify(eventData) : null;
+    const boundedData = boundDreamEventData(eventType, eventData);
+    const data = boundedData != null ? JSON.stringify(boundedData) : null;
     this.#prepare('insertEvent', `
       INSERT INTO trace_events (id, trace_id, event_type, event_data, created_at)
       VALUES (?, ?, ?, ?, ?)
     `).run(id, traceId, eventType, data, now);
     return id;
+  }
+
+  /**
+   * Compatibility helper used by older engine/dream call sites.
+   * @param {string} eventType
+   * @param {unknown} eventData
+   * @returns {string}
+   */
+  event(eventType, eventData = null) {
+    const traceId = (eventData && typeof eventData === 'object' && (eventData.turnId || eventData.runId))
+      ? String(eventData.turnId || eventData.runId)
+      : String(eventType || 'event');
+    return this.logEvent({ traceId, eventType, eventData });
   }
 
   // ─── Read API ────────────────────────────────────────────────
@@ -477,7 +519,9 @@ export class DebugTrace {
     const dreamEvents = [];
     if (dreamLim > 0) {
       const eventRows = this.#db.prepare(`
-        SELECT * FROM trace_events WHERE event_type = 'dream_progress' ORDER BY created_at DESC LIMIT ?
+        SELECT * FROM trace_events
+        WHERE event_type IN ('dream_progress', 'dream_loop', 'dream_turn_open', 'dream_turn_close', 'dream_run')
+        ORDER BY created_at DESC, rowid DESC LIMIT ?
       `).all(Math.max(dreamLim * 5, dreamLim));
       for (const er of eventRows) {
         const data = parseJsonSafe(er.event_data) || {};
@@ -488,7 +532,12 @@ export class DebugTrace {
           const isThisGroup = evtGroupId === groupId || target === `group/${groupId}`;
           if (!isBroadcast && !isThisGroup) continue;
         }
-        dreamEvents.push({ type: 'dream_progress', ...data, at: er.created_at, ts: data.ts || er.created_at });
+        dreamEvents.push({
+          type: data.type || (er.event_type === 'dream_progress' ? 'dream_progress' : er.event_type),
+          ...data,
+          at: er.created_at,
+          ts: data.ts || data.at || er.created_at,
+        });
         if (dreamEvents.length >= dreamLim) break;
       }
       dreamEvents.reverse();
@@ -638,6 +687,7 @@ export class NullTrace {
   endTurn() {}
   logTool() { return 'null'; }
   logEvent() { return 'null'; }
+  event() { return 'null'; }
   queryByMessage() { return { turns: [], tools: [], events: [] }; }
   queryByTrace() { return { turns: [], tools: [], events: [] }; }
   queryRecent() { return []; }

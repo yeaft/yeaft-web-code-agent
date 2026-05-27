@@ -295,6 +295,71 @@ describe('fix-vp-multi-thread bugfix guards', () => {
     }
   });
 
+  it('fetchRecentDebugHistory returns persisted dream metrics and loop events after reload', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'debug-trace-test-'));
+    const dbPath = join(dir, 'trace.sqlite');
+    try {
+      const trace = new DebugTrace(dbPath);
+      trace.event('dream_loop', {
+        type: 'loop',
+        turnId: 'dream-1',
+        groupId: 'g1',
+        pass: 'triage-pass1',
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+        latencyMs: 12,
+      });
+      trace.event('dream_run', {
+        type: 'dream_run',
+        turnId: 'dream-1',
+        groupId: 'g1',
+        phase: 'result',
+        metrics: { durationMs: 20, llmCallCount: 1, inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+      });
+      const out = trace.fetchRecentDebugHistory({ groupId: 'g1', dreamLimit: 5 });
+      expect(out.dreamEvents.map(e => e.type)).toEqual(['loop', 'dream_run']);
+      expect(out.dreamEvents[1].metrics).toEqual(expect.objectContaining({ llmCallCount: 1, totalTokens: 15 }));
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('truncates large dream_loop payloads before storing trace_events', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'debug-trace-test-'));
+    const dbPath = join(dir, 'trace.sqlite');
+    try {
+      const trace = new DebugTrace(dbPath);
+      const large = 'x'.repeat(300 * 1024);
+      trace.event('dream_loop', {
+        type: 'loop',
+        turnId: 'dream-large',
+        groupId: 'g1',
+        systemPrompt: large,
+        messages: [{ role: 'user', content: large }],
+        response: large,
+        rawRequest: { body: large },
+        rawResponse: { body: large },
+      });
+
+      const out = trace.fetchRecentDebugHistory({ groupId: 'g1', dreamLimit: 1 });
+      expect(out.dreamEvents).toHaveLength(1);
+      const evt = out.dreamEvents[0];
+      expect(evt.systemPrompt.length).toBeLessThan(270 * 1024);
+      expect(evt.systemPrompt.endsWith('... [truncated]')).toBe(true);
+      expect(evt.response.length).toBeLessThan(270 * 1024);
+      expect(evt.messages).toEqual(expect.objectContaining({
+        __truncated: true,
+        maxBytes: 256 * 1024,
+      }));
+      expect(evt.rawRequest).toEqual(expect.objectContaining({
+        __truncated: true,
+        maxBytes: 256 * 1024,
+      }));
+      expect(evt.rawResponse).toEqual(expect.objectContaining({
+        __truncated: true,
+        maxBytes: 256 * 1024,
+      }));
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+
   it('bug 4: opening an old DB without the new columns auto-migrates without throwing', async () => {
     // Simulate the pre-bugfix DB shape: create the file by writing to a
     // stripped-down SCHEMA, then re-open via DebugTrace and verify the

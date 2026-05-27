@@ -1740,7 +1740,13 @@ export const useChatStore = defineStore('chat', {
                 manual: typeof event?.manual === 'boolean'
                   ? event.manual
                   : (prev?.manual ?? null),
-                durationMs: prev?.durationMs ?? null,
+                durationMs: typeof event.durationMs === 'number' ? event.durationMs : (prev?.durationMs ?? null),
+                llmCallCount: typeof event.llmCallCount === 'number' ? event.llmCallCount : (prev?.llmCallCount ?? 0),
+                inputTokens: typeof event.inputTokens === 'number' ? event.inputTokens : (prev?.inputTokens ?? 0),
+                outputTokens: typeof event.outputTokens === 'number' ? event.outputTokens : (prev?.outputTokens ?? 0),
+                totalTokens: typeof event.totalTokens === 'number' ? event.totalTokens : (prev?.totalTokens ?? 0),
+                metrics: event.metrics || prev?.metrics || null,
+                passBreakdown: event.passBreakdown || event.metrics?.passBreakdown || prev?.passBreakdown || null,
                 isRunning: false,
               },
             };
@@ -1763,6 +1769,13 @@ export const useChatStore = defineStore('chat', {
               error: event.skipped || event.success ? null : (event.error || null),
               skipped: !!event.skipped,
               skippedReason: event.skippedReason || null,
+              durationMs: typeof event.durationMs === 'number' ? event.durationMs : null,
+              llmCallCount: typeof event.llmCallCount === 'number' ? event.llmCallCount : 0,
+              inputTokens: typeof event.inputTokens === 'number' ? event.inputTokens : 0,
+              outputTokens: typeof event.outputTokens === 'number' ? event.outputTokens : 0,
+              totalTokens: typeof event.totalTokens === 'number' ? event.totalTokens : 0,
+              metrics: event.metrics || null,
+              passBreakdown: event.passBreakdown || event.metrics?.passBreakdown || null,
               ts: Date.now(),
             });
           }
@@ -1830,6 +1843,12 @@ export const useChatStore = defineStore('chat', {
                 : (typeof event?.durationMs === 'number'
                   ? event.durationMs
                   : (prev?.durationMs ?? null)),
+              llmCallCount: typeof event?.llmCallCount === 'number' ? event.llmCallCount : (prev?.llmCallCount ?? 0),
+              inputTokens: typeof event?.inputTokens === 'number' ? event.inputTokens : (prev?.inputTokens ?? 0),
+              outputTokens: typeof event?.outputTokens === 'number' ? event.outputTokens : (prev?.outputTokens ?? 0),
+              totalTokens: typeof event?.totalTokens === 'number' ? event.totalTokens : (prev?.totalTokens ?? 0),
+              metrics: event?.metrics || prev?.metrics || null,
+              passBreakdown: event?.passBreakdown || event?.metrics?.passBreakdown || prev?.passBreakdown || null,
               isRunning,
             };
           };
