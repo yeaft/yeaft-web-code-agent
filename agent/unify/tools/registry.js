@@ -363,9 +363,9 @@ export class ToolRegistry {
     return this.getAllTools().length;
   }
 
-  /** All registered tool names. */
+  /** All registered tool names (canonical only; aliases excluded). */
   get names() {
-    return Array.from(this.#tools.keys());
+    return this.getAllTools().map(t => t.name);
   }
 }
 

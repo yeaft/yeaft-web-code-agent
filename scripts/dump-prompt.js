@@ -217,13 +217,13 @@ function main() {
   const toolNames = [
     'AskUser', 'MemoryRead', 'MemoryWrite', 'memory_search', 'memory_query',
     'WebSearch', 'WebFetch', 'HistorySearch', 'Bash', 'FileRead', 'FileWrite',
-    'FileEdit', 'Glob', 'Grep', 'ListDir', 'apply_patch', 'Agent',
-    'SendMessage', 'WaitAgent', 'CloseAgent', 'ListAgents', 'TaskCreate',
+    'FileEdit', 'Glob', 'Grep', 'ListDir', 'apply_patch', 'SpawnAgent',
+    'PromptAgent', 'WaitAgent', 'CloseAgent', 'ListAgents', 'TaskCreate',
     'TaskUpdate', 'TaskList', 'TaskGet', 'TaskProgress', 'TaskMemory',
     'FollowupTask', 'UpdatePlan', 'SpawnThread', 'SwitchThread',
     'ListThreads', 'AttachThreadToTask', 'SpawnTask', 'ReadThreadSummary',
     'ReadThreadRecent', 'jsRepl', 'jsReplReset', 'NotebookEdit',
-    'ImageGeneration', 'ViewImage', 'ToolSearch', 'RequestPermissions',
+    'ImageGeneration', 'ViewImage',
     'WriteStdin', 'EnterWorktree', 'ExitWorktree', 'Skill',
     'mcp_list_tools', 'mcp_call_tool',
   ];

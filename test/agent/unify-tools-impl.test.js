@@ -56,6 +56,39 @@ describe('index.js tool registration', () => {
     }
   });
 
+  it('alias dedup: aliased tool is registered once but resolvable by both names', async () => {
+    const { createFullRegistry } = await import(`${TOOLS_DIR}/index.js`);
+    const { ToolRegistry } = await import(`${TOOLS_DIR}/registry.js`);
+    const { defineTool } = await import(`${TOOLS_DIR}/types.js`);
+
+    const reg = new ToolRegistry();
+    const tool = defineTool({
+      name: 'NewName',
+      aliases: ['OldName'],
+      description: 'aliased',
+      parameters: { type: 'object', properties: {} },
+      execute: async () => 'ok',
+    });
+    reg.register(tool);
+
+    expect(reg.size).toBe(1);
+    expect(reg.getAllTools().length).toBe(1);
+    expect(reg.getToolNames()).toEqual(['NewName']);
+    expect(reg.names).toEqual(['NewName']);
+    expect(reg.has('NewName')).toBe(true);
+    expect(reg.has('OldName')).toBe(true);
+    expect(await reg.execute('OldName', {})).toBe('ok');
+    expect(reg.getToolDefs().length).toBe(1);
+
+    // Sanity check on the real registry: SpawnAgent/PromptAgent are
+    // resolvable under their legacy names too.
+    const full = createFullRegistry();
+    expect(full.has('Agent')).toBe(true);
+    expect(full.has('SendMessage')).toBe(true);
+    expect(full.names).not.toContain('Agent');
+    expect(full.names).not.toContain('SendMessage');
+  });
+
   it('task-297: all tools are exposed regardless of mode (no filtering)', async () => {
     const { createFullRegistry, allTools } = await import(`${TOOLS_DIR}/index.js`);
     const registry = createFullRegistry();
