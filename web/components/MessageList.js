@@ -119,49 +119,67 @@ export default {
              affordance can drive either mode without leaking state. -->
         <div v-if="(store.loadingMoreMessages && store.currentView !== 'unify') || store.unifyLoadingMoreHistory" class="loading-more">{{ $t('message.loadingMore') }}</div>
         <div v-else-if="(store.hasMoreMessages && store.currentView !== 'unify') || store.unifyHasMoreHistory" class="load-more-hint" @click="onClickLoadMore">{{ $t('message.loadMore') }}</div>
-        <template v-for="item in turnGroups" :key="item.id">
-          <!-- task-312: wrapper carries data-msg-id so the Unify sidebar
-               jump-to-message feature can scroll/flash a specific row. -->
-          <div class="msg-row" :data-msg-id="item.id" :class="{ 'msg-flash': item.id === flashMsgId }">
-            <!-- User message in Unify group view: render IM-style on the
-                 right side via UserTurnBlock (mirror of VpTurnBlock).
-                 Outside of group view (legacy 1:1 chat) keep the original
-                 MessageItem path so chat-mode is untouched. -->
-            <UserTurnBlock
-              v-if="item.type === 'user' && useImStyleForUser"
-              :message="item.message"
-            />
-            <!-- User / system / error messages: rendered by MessageItem -->
-            <MessageItem v-else-if="item.type === 'user' || item.type === 'system' || item.type === 'error'" :message="item.message" />
+        <template v-for="block in threadBlocks" :key="block.id">
+          <section
+            v-if="block.type === 'thread-block'"
+            class="thread-block"
+            :data-thread-id="block.threadId"
+          >
+            <template v-for="item in block.items" :key="item.id">
+              <!-- task-312: wrapper carries data-msg-id so the Unify sidebar
+                   jump-to-message feature can scroll/flash a specific row. -->
+              <div class="msg-row" :data-msg-id="item.id" :class="{ 'msg-flash': item.id === flashMsgId }">
+                <!-- User message in Unify group view: render IM-style on the
+                     right side via UserTurnBlock (mirror of VpTurnBlock).
+                     Outside of group view (legacy 1:1 chat) keep the original
+                     MessageItem path so chat-mode is untouched. -->
+                <UserTurnBlock
+                  v-if="item.type === 'user' && useImStyleForUser"
+                  :message="item.message"
+                />
+                <!-- User / system / error messages: rendered by MessageItem -->
+                <MessageItem v-else-if="item.type === 'user' || item.type === 'system' || item.type === 'error'" :message="item.message" />
 
-            <!-- Assistant turn — VP-block redesign (2026-05-08).
-                 - Unify multi-VP turns (speakerVpId set) -> VpTurnBlock,
-                   the collapsible per-VP wrapper that renders avatar +
-                   start time + live elapsed ticker, with a 4-state expand
-                   machine (see web/stores/helpers/turn-compact.js).
-                 - Legacy 1:1 Chat turns (no VP attribution) -> plain
-                   AssistantTurn unchanged. The collapse affordance only
-                   makes sense in multi-VP conversations. -->
-            <VpTurnBlock
-              v-else-if="item.type === 'assistant-turn' && item.speakerVpId"
-              :turn="item"
-              :now-ms="nowMs"
+                <!-- Assistant turn — VP-block redesign (2026-05-08).
+                     - Unify multi-VP turns (speakerVpId set) -> VpTurnBlock,
+                       the collapsible per-VP wrapper that renders avatar +
+                       start time + live elapsed ticker, with a 4-state expand
+                       machine (see web/stores/helpers/turn-compact.js).
+                     - Legacy 1:1 Chat turns (no VP attribution) -> plain
+                       AssistantTurn unchanged. The collapse affordance only
+                       makes sense in multi-VP conversations. -->
+                <VpTurnBlock
+                  v-else-if="item.type === 'assistant-turn' && item.speakerVpId"
+                  :turn="item"
+                  :now-ms="nowMs"
+                />
+                <AssistantTurn v-else-if="item.type === 'assistant-turn'" :turn="item" />
+              </div>
+              <!-- feat-6af5f9f1 PR A: ReflectionCard mounts removed from the
+                   main message stream. Reflection is an engine-internal context
+                   compaction step - surfacing it inline during normal chat is
+                   noise. Cards remain in store.unifyReflectionCards so the
+                   debug panel (PR B) can render them under the loop they
+                   summarize. The component is still imported because PR B
+                   will reuse it inside UnifyDebugPanel. -->
+              <!-- PR-M3: sub-agent cards anchored to this row. -->
+              <SubAgentCard
+                v-for="card in subAgentCardsForRow(item)"
+                :key="card.key"
+                :card="card"
+              />
+            </template>
+          </section>
+          <template v-else>
+            <div class="msg-row" :data-msg-id="block.id" :class="{ 'msg-flash': block.id === flashMsgId }">
+              <MessageItem v-if="block.type === 'system' || block.type === 'error'" :message="block.message" />
+            </div>
+            <SubAgentCard
+              v-for="card in subAgentCardsForRow(block)"
+              :key="card.key"
+              :card="card"
             />
-            <AssistantTurn v-else-if="item.type === 'assistant-turn'" :turn="item" />
-          </div>
-          <!-- feat-6af5f9f1 PR A: ReflectionCard mounts removed from the
-               main message stream. Reflection is an engine-internal context
-               compaction step - surfacing it inline during normal chat is
-               noise. Cards remain in store.unifyReflectionCards so the
-               debug panel (PR B) can render them under the loop they
-               summarize. The component is still imported because PR B
-               will reuse it inside UnifyDebugPanel. -->
-          <!-- PR-M3: sub-agent cards anchored to this row. -->
-          <SubAgentCard
-            v-for="card in subAgentCardsForRow(item)"
-            :key="card.key"
-            :card="card"
-          />
+          </template>
         </template>
         <!-- feat-6af5f9f1 PR A: orphan-card flush also removed. Orphans
              still latch in the store; PR B's debug panel surfaces them
@@ -529,6 +547,16 @@ export default {
       return store.agents.filter(a => a.online);
     });
 
+    const threadBlockIdForItem = (item, index) => {
+      if (!item) return `unknown_${index}`;
+      const msg = item.message || null;
+      return item.threadId
+        || item.turnId
+        || msg?.threadId
+        || msg?.turnId
+        || (msg?.id ? `legacy_${msg.id}` : `legacy_${index}`);
+    };
+
     // Turn aggregation: group flat messages into turn groups
     const turnGroups = Vue.computed(() => {
       const messages = store.messages;
@@ -846,6 +874,38 @@ export default {
       // the VP's own block.
 
       return result;
+    });
+
+    const threadBlocks = Vue.computed(() => {
+      if (store.currentView !== 'unify') return turnGroups.value;
+      const blocks = [];
+      let current = null;
+      const flush = () => {
+        if (current && current.items.length > 0) blocks.push(current);
+        current = null;
+      };
+      for (let i = 0; i < turnGroups.value.length; i++) {
+        const item = turnGroups.value[i];
+        if (!item) continue;
+        if (item.type === 'system' || item.type === 'error') {
+          flush();
+          blocks.push(item);
+          continue;
+        }
+        const threadId = threadBlockIdForItem(item, i);
+        if (!current || current.threadId !== threadId) {
+          flush();
+          current = {
+            type: 'thread-block',
+            id: `thread_${threadId}_${i}`,
+            threadId,
+            items: [],
+          };
+        }
+        current.items.push(item);
+      }
+      flush();
+      return blocks;
     });
 
     // PR-L: reflection cards grouped by anchor (the message id present at the
@@ -1483,6 +1543,7 @@ export default {
       refreshSession,
       onlineAgents,
       turnGroups,
+      threadBlocks,
       cardsForRow,
       orphanCards,
       subAgentCardsForRow,
