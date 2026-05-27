@@ -17,12 +17,12 @@ const TOOLS_DIR = join(import.meta.dirname, '..', '..', 'agent', 'unify', 'tools
 // ──────────────────────────────────────────────
 
 describe('index.js tool registration', () => {
-  it('allTools has 32 tools (Feature system removed, TodoWrite + StartPlan — 2026-05-13)', async () => {
+  it('allTools has 30 tools (RequestPermissions + open_source_message removed 2026-05-27)', async () => {
     const { allTools } = await import(`${TOOLS_DIR}/index.js`);
-    expect(allTools.length).toBe(32);
+    expect(allTools.length).toBe(30);
   });
 
-  it('all 32 tools have valid name, description, parameters, and execute', async () => {
+  it('all 30 tools have valid name, description, parameters, and execute', async () => {
     const { allTools } = await import(`${TOOLS_DIR}/index.js`);
     for (const tool of allTools) {
       expect(tool.name).toBeTruthy();
@@ -56,6 +56,39 @@ describe('index.js tool registration', () => {
     }
   });
 
+  it('alias dedup: aliased tool is registered once but resolvable by both names', async () => {
+    const { createFullRegistry } = await import(`${TOOLS_DIR}/index.js`);
+    const { ToolRegistry } = await import(`${TOOLS_DIR}/registry.js`);
+    const { defineTool } = await import(`${TOOLS_DIR}/types.js`);
+
+    const reg = new ToolRegistry();
+    const tool = defineTool({
+      name: 'NewName',
+      aliases: ['OldName'],
+      description: 'aliased',
+      parameters: { type: 'object', properties: {} },
+      execute: async () => 'ok',
+    });
+    reg.register(tool);
+
+    expect(reg.size).toBe(1);
+    expect(reg.getAllTools().length).toBe(1);
+    expect(reg.getToolNames()).toEqual(['NewName']);
+    expect(reg.names).toEqual(['NewName']);
+    expect(reg.has('NewName')).toBe(true);
+    expect(reg.has('OldName')).toBe(true);
+    expect(await reg.execute('OldName', {})).toBe('ok');
+    expect(reg.getToolDefs().length).toBe(1);
+
+    // Sanity check on the real registry: SpawnAgent/PromptAgent are
+    // resolvable under their legacy names too.
+    const full = createFullRegistry();
+    expect(full.has('Agent')).toBe(true);
+    expect(full.has('SendMessage')).toBe(true);
+    expect(full.names).not.toContain('Agent');
+    expect(full.names).not.toContain('SendMessage');
+  });
+
   it('task-297: all tools are exposed regardless of mode (no filtering)', async () => {
     const { createFullRegistry, allTools } = await import(`${TOOLS_DIR}/index.js`);
     const registry = createFullRegistry();
@@ -68,8 +101,8 @@ describe('index.js tool registration', () => {
     expect(names).toContain('AskUser');
     expect(names).toContain('WebSearch');
     // Previously work-only tools should also be available now
-    expect(names).toContain('Agent');
-    expect(names).toContain('SendMessage');
+    expect(names).toContain('SpawnAgent');
+    expect(names).toContain('PromptAgent');
     // Dev tools
     expect(names).toContain('Bash');
     expect(names).toContain('FileRead');
@@ -1047,16 +1080,10 @@ describe('ToolSearch tool (removed in task-333b)', () => {
   });
 });
 
-describe('RequestPermissions tool', () => {
-  it('returns structured permission request', async () => {
-    const mod = await import(`${TOOLS_DIR}/request-permissions.js`);
-    const result = JSON.parse(await mod.default.execute(
-      { operation: 'Delete all files', reason: 'Cleanup', risk_level: 'critical' },
-      {}
-    ));
-    expect(result.type).toBe('permission_request');
-    expect(result.operation).toBe('Delete all files');
-    expect(result.riskLevel).toBe('critical');
+describe('RequestPermissions tool (removed 2026-05-27)', () => {
+  it('is no longer registered in allTools', async () => {
+    const { allTools } = await import(`${TOOLS_DIR}/index.js`);
+    expect(allTools.find(t => t.name === 'RequestPermissions')).toBeUndefined();
   });
 });
 
@@ -1087,8 +1114,7 @@ describe('Tool properties', () => {
   it('read-only tools are marked correctly', async () => {
     const { allTools } = await import(`${TOOLS_DIR}/index.js`);
     const readOnlyTools = ['WebSearch', 'WebFetch',
-      'HistorySearch', 'FileRead', 'Glob', 'Grep', 'ListDir', 'ViewImage',
-      'RequestPermissions'];
+      'HistorySearch', 'FileRead', 'Glob', 'Grep', 'ListDir', 'ViewImage'];
 
     for (const name of readOnlyTools) {
       const tool = allTools.find(t => t.name === name);

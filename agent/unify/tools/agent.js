@@ -174,7 +174,8 @@ export function tickAgent(agentId, delta = {}, now = Date.now()) {
 }
 
 export default defineTool({
-  name: 'Agent',
+  name: 'SpawnAgent',
+  aliases: ['Agent'],
   description: `Create a sub-agent to work on an independent task in parallel.
 
 Sub-agents run in their own context and can be given a concrete mission
@@ -189,7 +190,7 @@ Guidelines:
 - Give a clear, focused mission — what "done" looks like
 - Use expected_output to pin the structure you want back
 - Always set a budget for unbounded missions
-- Use SendMessage to communicate, WaitAgent to collect results, CloseAgent to finalize`,
+- Use PromptAgent to communicate, WaitAgent to collect results, CloseAgent to finalize`,
   parameters: {
     type: 'object',
     properties: {
@@ -302,7 +303,7 @@ Guidelines:
       persona: spec.persona || null,
       budget: spec.budget || null,
       status: agent.status,
-      message: `Sub-agent "${name}" spawned (${agentId}). Use WaitAgent to collect its first turn output, SendMessage to give it more work, CloseAgent to finish.`,
+      message: `Sub-agent "${name}" spawned (${agentId}). Use WaitAgent to collect its first turn output, PromptAgent to give it more work, CloseAgent to finish.`,
     });
   },
 });

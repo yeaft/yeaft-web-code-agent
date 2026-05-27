@@ -1,16 +1,20 @@
 /**
- * send-message.js — Send a message to a sub-agent.
+ * send-message.js — Send a follow-up prompt to a sub-agent.
+ *
+ * Tool name: PromptAgent (canonical) / SendMessage (legacy alias for
+ * historical jsonl replay — see registry alias map).
  */
 
 import { defineTool } from './types.js';
 import { getAgentRegistry } from './agent.js';
 
 export default defineTool({
-  name: 'SendMessage',
-  description: `Send a message to a sub-agent.
+  name: 'PromptAgent',
+  aliases: ['SendMessage'],
+  description: `Send a follow-up prompt to a sub-agent you previously spawned.
 
-Use this to give tasks, provide instructions, or relay information to a sub-agent.
-The message is queued for the agent to process.`,
+Use this to give the sub-agent more work, additional instructions, or relay
+information. The prompt is queued for the agent to process on its next turn.`,
   parameters: {
     type: 'object',
     properties: {
