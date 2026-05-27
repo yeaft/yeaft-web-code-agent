@@ -23,7 +23,7 @@
  */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -341,6 +341,47 @@ describe('handleUnifyLoadHistory — pagination cursor priming', () => {
     expect(user.data.message.attachments).toEqual([
       expect.objectContaining({ name: 'a.png', mimeType: 'image/png', isImage: true }),
     ]);
+  });
+
+  it('hydrates persisted image attachments with previewData on refresh replay', async () => {
+    const gid = 'g_refresh_preview_data';
+    const relPath = `.claude-tmp-attachments/${gid}/pic.png`;
+    mkdirSync(join(process.cwd(), '.claude-tmp-attachments', gid), { recursive: true });
+    writeFileSync(join(process.cwd(), relPath), Buffer.from('png-bytes'));
+    sharedStore.appendBatch([
+      {
+        role: 'user',
+        groupId: gid,
+        content: 'image please',
+        attachments: [{ name: 'pic.png', path: relPath, mimeType: 'image/png', isImage: true }],
+      },
+    ]);
+
+    await handleUnifyLoadHistory({ groupId: gid, limit: 10 });
+
+    const user = outbound.find(m => m.type === 'unify_output' && m.groupId === gid && m.data?.type === 'user');
+    expect(user.data.message.attachments[0]).toEqual(expect.objectContaining({
+      name: 'pic.png',
+      path: relPath,
+      mimeType: 'image/png',
+      isImage: true,
+      previewData: expect.objectContaining({
+        data: Buffer.from('png-bytes').toString('base64'),
+        mimeType: 'image/png',
+        filename: 'pic.png',
+      }),
+    }));
+  });
+
+  it('preserves no-attachment history replay shape unchanged', async () => {
+    const gid = 'g_refresh_no_attachments';
+    sharedStore.appendBatch([{ role: 'user', groupId: gid, content: 'plain text' }]);
+
+    await handleUnifyLoadHistory({ groupId: gid, limit: 10 });
+
+    const user = outbound.find(m => m.type === 'unify_output' && m.groupId === gid && m.data?.type === 'user');
+    expect(user.data.message.content).toBe('plain text');
+    expect(user.data.message).not.toHaveProperty('attachments');
   });
 
   it('initial group replay pages over visible rows when latest turns are invisible', async () => {

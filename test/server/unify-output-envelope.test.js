@@ -21,10 +21,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 // ── In-memory state shared across mocks + tests ────────────────────────────
 const _sent = [];
 const _webClients = new Map();
+const _previewFiles = new Map();
 
 function _reset() {
   _sent.length = 0;
   _webClients.clear();
+  _previewFiles.clear();
 }
 
 // ── Mocks (must be hoisted before the import below) ───────────────────────
@@ -45,7 +47,7 @@ vi.mock('../../server/ws-utils.js', () => ({
 
 vi.mock('../../server/context.js', () => ({
   webClients: _webClients,
-  previewFiles: new Map(),
+  previewFiles: _previewFiles,
   trackMessage: vi.fn(),
 }));
 
@@ -167,6 +169,60 @@ describe('agent-output.js — unify_output envelope passthrough', () => {
     expect(env.groupId).toBe('');
     expect(env.vpId).toBe('');
     expect(env.turnId).toBe('');
+  });
+
+  it('hydrates previewData into preview URLs on unify_output user attachments', async () => {
+    addClient('c1');
+    const data = Buffer.from('image-bytes').toString('base64');
+    await handleAgentOutput('a1', baseAgent, {
+      type: 'unify_output',
+      conversationId: 'conv1',
+      groupId: 'grp_img',
+      data: {
+        type: 'user',
+        message: {
+          content: 'see image',
+          attachments: [{
+            name: 'pic.png',
+            mimeType: 'image/png',
+            isImage: true,
+            previewData: { data, mimeType: 'image/png', filename: 'pic.png' },
+          }],
+        },
+      },
+    });
+
+    const att = _sent[0].envelope.data.message.attachments[0];
+    expect(att.preview).toMatch(/^\/api\/preview\/[^?]+\?token=/);
+    expect(att).not.toHaveProperty('previewData');
+    expect(_previewFiles.size).toBe(1);
+    expect(Array.from(_previewFiles.values())[0]).toEqual(expect.objectContaining({
+      buffer: Buffer.from('image-bytes'),
+      mimeType: 'image/png',
+      filename: 'pic.png',
+    }));
+  });
+
+  it('hydrates previewData into preview URLs on history chunks', async () => {
+    addClient('c1');
+    const data = Buffer.from('older-image').toString('base64');
+    await handleAgentOutput('a1', baseAgent, {
+      type: 'unify_history_chunk',
+      conversationId: 'conv1',
+      groupId: 'grp_img',
+      messages: [{
+        role: 'user',
+        content: 'old image',
+        attachments: [{ name: 'old.png', mimeType: 'image/png', isImage: true, previewData: { data } }],
+      }],
+      oldestSeq: 5,
+      hasMore: false,
+    });
+
+    const att = _sent[0].envelope.messages[0].attachments[0];
+    expect(att.preview).toMatch(/^\/api\/preview\/[^?]+\?token=/);
+    expect(att).not.toHaveProperty('previewData');
+    expect(_previewFiles.size).toBe(1);
   });
 
   it('forwards groupId on history chunks using the same `!= null` semantics', async () => {

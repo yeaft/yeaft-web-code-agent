@@ -3,6 +3,39 @@ import { messageDb } from '../database.js';
 import { broadcastAgentList, forwardToClients, sendToWebClient } from '../ws-utils.js';
 import { trackMessage, webClients, previewFiles } from '../context.js';
 import { CONFIG } from '../config.js';
+import { randomUUID } from 'crypto';
+
+function hydrateMessagePreviewData(message) {
+  const attachments = message?.attachments;
+  if (!Array.isArray(attachments) || attachments.length === 0) return message;
+  let changed = false;
+  const hydrated = attachments.map((att) => {
+    const previewData = att?.previewData;
+    if (!previewData?.data || att.preview) return att;
+    const fileId = randomUUID();
+    const token = randomUUID();
+    previewFiles.set(fileId, {
+      buffer: Buffer.from(previewData.data, 'base64'),
+      mimeType: previewData.mimeType || att.mimeType || 'application/octet-stream',
+      filename: previewData.filename || att.name || `attachment-${Date.now()}`,
+      createdAt: Date.now(),
+      token,
+    });
+    changed = true;
+    const { previewData: _previewData, ...rest } = att;
+    return {
+      ...rest,
+      preview: `/api/preview/${fileId}?token=${encodeURIComponent(token)}`,
+    };
+  });
+  return changed ? { ...message, attachments: hydrated } : message;
+}
+
+function hydrateInlinePreviewData(data) {
+  if (!data?.message) return data;
+  const message = hydrateMessagePreviewData(data.message);
+  return message === data.message ? data : { ...data, message };
+}
 
 /**
  * Handle Claude output and interaction messages from agent.
@@ -315,7 +348,8 @@ export async function handleAgentOutput(agentId, agent, msg) {
       break;
     }
 
-    case 'unify_output':
+    case 'unify_output': {
+      const data = hydrateInlinePreviewData(msg.data);
       // Forward Unify output to all authenticated clients of this agent's owner.
       // Payload carries { conversationId, data } (claude_output format) or { event } (metadata).
       //
@@ -344,14 +378,18 @@ export async function handleAgentOutput(agentId, agent, msg) {
             ...(msg.groupId != null ? { groupId: msg.groupId } : {}),
             ...(msg.vpId != null ? { vpId: msg.vpId } : {}),
             ...(msg.turnId != null ? { turnId: msg.turnId } : {}),
-            data: msg.data,
+            data,
             event: msg.event,
           });
         }
       }
       break;
+    }
 
-    case 'unify_history_chunk':
+    case 'unify_history_chunk': {
+      const messages = Array.isArray(msg.messages)
+        ? msg.messages.map(hydrateMessagePreviewData)
+        : [];
       // Forward a "load older messages" pagination chunk to the same
       // authenticated clients. Distinct from `unify_output` because the
       // frontend needs to PREPEND these older messages above the current
@@ -362,13 +400,14 @@ export async function handleAgentOutput(agentId, agent, msg) {
             type: 'unify_history_chunk',
             conversationId: msg.conversationId,
             ...(msg.groupId != null ? { groupId: msg.groupId } : {}),
-            messages: msg.messages || [],
+            messages,
             oldestSeq: msg.oldestSeq ?? null,
             hasMore: !!msg.hasMore,
           });
         }
       }
       break;
+    }
 
     case 'unify_dream_status':
     case 'unify_dream_result':

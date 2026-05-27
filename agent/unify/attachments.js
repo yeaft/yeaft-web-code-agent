@@ -40,8 +40,8 @@
  *     than swallowing it in a console.warn.
  */
 
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { basename, extname, join } from 'node:path';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, statSync } from 'node:fs';
+import { basename, extname, join, resolve, relative, isAbsolute } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
 // Same dir name Chat mode uses, so ".gitignore" rules and tool-side
@@ -54,6 +54,7 @@ const TEMP_UPLOAD_DIR = '.claude-tmp-attachments';
 //   - MAX_TOTAL_BYTES:    50 MiB across all files in one turn.
 export const MAX_FILES_PER_TURN = 16;
 export const MAX_TOTAL_BYTES = 50 * 1024 * 1024;
+export const MAX_PREVIEW_BYTES = 10 * 1024 * 1024;
 
 /**
  * Sanitize a user-supplied filename's basename for use as an on-disk
@@ -227,4 +228,50 @@ export function attachmentsForPersistence(promptAttachments) {
     mimeType: f.mimeType,
     isImage: !!f.isImage,
   }));
+}
+
+/**
+ * Resolve a persisted Unify attachment path to an on-disk file. The persisted
+ * path is intentionally relative (for tool use), so preview hydration must
+ * keep it inside the upload root instead of serving arbitrary files.
+ *
+ * @param {string} attachmentPath
+ * @param {{ cwd?: string }} [opts]
+ * @returns {string|null}
+ */
+export function resolvePersistedAttachmentPath(attachmentPath, opts = {}) {
+  if (!attachmentPath || typeof attachmentPath !== 'string') return null;
+  if (isAbsolute(attachmentPath)) return null;
+  const cwd = resolve(opts.cwd || process.cwd());
+  const uploadRoot = resolve(cwd, TEMP_UPLOAD_DIR);
+  const absPath = resolve(cwd, attachmentPath);
+  const rel = relative(uploadRoot, absPath);
+  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return null;
+  return absPath;
+}
+
+/**
+ * Read a persisted image attachment into a short-lived preview payload for the
+ * web server. Returns null for non-images, bad paths, missing files, or files
+ * too large to cache as previews.
+ *
+ * @param {{name?:string, path?:string, mimeType?:string, isImage?:boolean}} att
+ * @param {{ cwd?: string }} [opts]
+ * @returns {{data:string,mimeType:string,filename:string}|null}
+ */
+export function persistedAttachmentPreviewPayload(att, opts = {}) {
+  if (!att || !att.isImage || !att.path) return null;
+  const absPath = resolvePersistedAttachmentPath(att.path, opts);
+  if (!absPath) return null;
+  try {
+    const st = statSync(absPath);
+    if (!st.isFile() || st.size > MAX_PREVIEW_BYTES) return null;
+    return {
+      data: readFileSync(absPath).toString('base64'),
+      mimeType: att.mimeType || 'application/octet-stream',
+      filename: att.name || basename(absPath),
+    };
+  } catch {
+    return null;
+  }
 }
