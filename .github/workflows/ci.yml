@@ -1,6 +1,8 @@
 name: CI
 
 on:
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 jobs:
@@ -24,6 +26,9 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+      - name: Run release guards
+        run: npm run release:guard
 
       - name: Build frontend
         run: npm run build
