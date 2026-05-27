@@ -59,6 +59,15 @@ describe('MessageList thread-block rendering source', () => {
     expect(src).toContain(':data-thread-id="block.threadId"');
   });
 
+  it('renders flat chat-mode rows when threadBlocks returns turnGroups unchanged', () => {
+    const fallbackIdx = src.indexOf('<template v-else>');
+    expect(fallbackIdx).toBeGreaterThan(-1);
+    const fallbackBody = src.slice(fallbackIdx, fallbackIdx + 1000);
+    expect(fallbackBody).toContain('block.type === \'user\'');
+    expect(fallbackBody).toContain('block.type === \'assistant-turn\'');
+    expect(fallbackBody).toContain('<AssistantTurn v-else-if="block.type === \'assistant-turn\'"');
+  });
+
   it('derives the first-level block id from threadId before turnId', () => {
     const idx = src.indexOf('const threadBlockIdForItem');
     expect(idx).toBeGreaterThan(-1);
