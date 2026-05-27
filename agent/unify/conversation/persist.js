@@ -107,6 +107,12 @@ function serializeMessage(msg) {
   // the speaker so the UI can render the message on the correct VP track.
   // For real user messages this is unset.
   if (msg.speakerVpId) fm.push(`speakerVpId: ${msg.speakerVpId}`);
+  if (Array.isArray(msg.attachments) && msg.attachments.length > 0) {
+    try {
+      const b64 = Buffer.from(JSON.stringify(msg.attachments)).toString('base64');
+      fm.push(`attachmentsB64: ${b64}`);
+    } catch { /* best-effort: attachments are UI metadata, not engine-critical */ }
+  }
   // Internal/synthetic rows must round-trip so refresh/history replay can
   // keep them out of the user-visible conversation. Reflection folding uses
   // `_reflection`; other engine-only rows may use one of the explicit flags.
@@ -213,6 +219,12 @@ export function parseMessage(raw) {
       case 'sourceThreadId': msg.sourceThreadId = value; break;
       case 'groupId': msg.groupId = value; break;
       case 'speakerVpId': msg.speakerVpId = value; break;
+      case 'attachmentsB64':
+        try {
+          const parsed = JSON.parse(Buffer.from(value, 'base64').toString('utf8'));
+          if (Array.isArray(parsed)) msg.attachments = parsed;
+        } catch { /* best-effort: ignore malformed attachment metadata */ }
+        break;
       case '_reflection': msg._reflection = value === 'true'; break;
       case 'internal': msg.internal = value === 'true'; break;
       case 'systemOnly': msg.systemOnly = value === 'true'; break;

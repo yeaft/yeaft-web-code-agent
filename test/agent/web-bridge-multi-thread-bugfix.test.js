@@ -278,6 +278,23 @@ describe('fix-vp-multi-thread bugfix guards', () => {
     }
   });
 
+  it('fetchRecentDebugHistory returns recent persisted dream events scoped to group', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'debug-trace-test-'));
+    const dbPath = join(dir, 'trace.sqlite');
+    try {
+      const trace = new DebugTrace(dbPath);
+      trace.logEvent({ traceId: 'dream-1', eventType: 'dream_progress', eventData: { phase: 'triage', groupId: 'g1', ts: 100 } });
+      trace.logEvent({ traceId: 'dream-2', eventType: 'dream_progress', eventData: { phase: 'apply', target: 'group/g2', ts: 200 } });
+      trace.logEvent({ traceId: 'dream-3', eventType: 'dream_progress', eventData: { phase: 'done', ts: 300 } });
+
+      const out = trace.fetchRecentDebugHistory({ groupId: 'g1', dreamLimit: 5 });
+      expect(out.dreamEvents.map(e => e.phase)).toEqual(['triage', 'done']);
+      expect(out.dreamEvents[0]).toEqual(expect.objectContaining({ type: 'dream_progress', groupId: 'g1' }));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('bug 4: opening an old DB without the new columns auto-migrates without throwing', async () => {
     // Simulate the pre-bugfix DB shape: create the file by writing to a
     // stripped-down SCHEMA, then re-open via DebugTrace and verify the

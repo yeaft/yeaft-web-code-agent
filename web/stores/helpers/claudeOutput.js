@@ -3,6 +3,37 @@
 import { resetProcessingWatchdog, stopProcessingWatchdog } from './watchdog.js';
 import { markAllToolsCompleted } from './handlers/conversationHandler.js';
 
+function normalizeUserVisibleContent(content) {
+  let value = content;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if ((trimmed.startsWith('[') && trimmed.endsWith(']')) || (trimmed.startsWith('{') && trimmed.endsWith('}'))) {
+      try { value = JSON.parse(trimmed); } catch { value = content; }
+    }
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (!part || typeof part !== 'object') return '';
+        if (part.type === 'text' && typeof part.text === 'string') return part.text;
+        if (part.type === 'input_text' && typeof part.text === 'string') return part.text;
+        return '';
+      })
+      .join('')
+      .replace(/\n\n\[Uploaded files\][\s\S]*$/m, '')
+      .trim();
+  }
+  if (value && typeof value === 'object') {
+    if (typeof value.text === 'string') return value.text.trim();
+    if (typeof value.content === 'string') return value.content.trim();
+    return '';
+  }
+  return typeof value === 'string'
+    ? value.replace(/\n\n\[Uploaded files\][\s\S]*$/m, '').trim()
+    : '';
+}
+
 export function getOrCreateExecutionStatus(store, conversationId) {
   if (!store.executionStatusMap[conversationId]) {
     store.executionStatusMap[conversationId] = {
@@ -99,7 +130,8 @@ export function handleClaudeOutput(store, conversationId, data) {
   } else if (data.type === 'user') {
     // 检查是否是 skill/slash command 的本地输出（如 /context, /cost 等）
     // Claude CLI 将这些结果以 user 消息返回，content 用 <local-command-stdout> 包裹
-    const userContent = data.message?.content;
+    const rawUserContent = data.message?.content;
+    const userContent = normalizeUserVisibleContent(rawUserContent);
 
     // 过滤 compact summary 消息（compact 后的上下文摘要，不应显示在 UI 中）
     // Claude Code compact summary 特征检测 — 兜底防线，即使 agent 端没过滤也不会泄漏到 UI
@@ -172,7 +204,7 @@ export function handleClaudeOutput(store, conversationId, data) {
       }
 
       execStatus.currentTool = null;
-    } else if (typeof userContent === 'string' && userContent.trim()) {
+    } else if ((typeof userContent === 'string' && userContent.trim()) || (Array.isArray(data.message?.attachments) && data.message.attachments.length > 0)) {
       // 普通用户消息（agent 广播回来的）
       // 发送端已通过 addMessage 本地添加，检查是否已存在以避免重复
       const msgs = store.messagesMap[conversationId] || [];

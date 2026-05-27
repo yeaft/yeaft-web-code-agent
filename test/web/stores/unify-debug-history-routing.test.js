@@ -34,6 +34,18 @@ function mkStore() {
     unifyDebugHistoryLoading: true,
     unifyDebugHistoryError: null,
     unifyDebugHistoryFetchedAt: 0,
+    unifyDreamEvents: {},
+    unifyDreamLatest: {},
+    _appendDreamEvent(scope, event) {
+      const prev = this.unifyDreamEvents[scope] || [];
+      this.unifyDreamEvents = { ...this.unifyDreamEvents, [scope]: [...prev, event] };
+    },
+    handleUnifyOutput(msg) {
+      const event = msg?.event;
+      if (!event || event.type !== 'dream_progress') return;
+      const scope = event.groupId ? `group/${event.groupId}` : (event.target || '*');
+      this.unifyDreamLatest = { ...this.unifyDreamLatest, [scope]: { phase: event.phase, status: event.phase === 'done' ? 'success' : 'running', finishedAt: event.phase === 'done' ? event.ts : null } };
+    },
     addMessage() {},
   };
 }
@@ -156,6 +168,22 @@ describe('messageHandler — unify_debug_history routing', () => {
     });
     expect(Object.keys(store.unifyDebugTurnsById)).toEqual(['t1']);
     expect(store.unifyDebugTurnOrder).toEqual(['t1']);
+  });
+
+  it('hydrates persisted dream events into the Dream debug state', () => {
+    handleMessage(store, {
+      type: 'unify_debug_history',
+      loops: [],
+      turns: [],
+      dreamEvents: [
+        { type: 'dream_progress', phase: 'triage', groupId: 'g1', ts: 100, at: 100 },
+        { type: 'dream_progress', phase: 'done', ts: 200, at: 200 },
+      ],
+    });
+    expect(store.unifyDreamEvents['group/g1']).toHaveLength(1);
+    expect(store.unifyDreamEvents['*']).toHaveLength(1);
+    expect(store.unifyDreamLatest['group/g1']).toEqual(expect.objectContaining({ phase: 'triage' }));
+    expect(store.unifyDreamLatest['*']).toEqual(expect.objectContaining({ phase: 'done', status: 'success' }));
   });
 
   it('surfaces error string from agent into unifyDebugHistoryError', () => {

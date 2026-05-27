@@ -690,7 +690,11 @@ export default {
     // manually. That's intentional — better to nudge once than to
     // silently let dream rot.
     const dreamStale = Vue.computed(() => {
-      const t = dreamLastRunAt.value;
+      const groupId = dreamButtonGroupId.value;
+      const scope = groupId ? `group/${groupId}` : '*';
+      const debugLatest = store.unifyDreamLatest?.[scope] || store.unifyDreamLatest?.['*'] || null;
+      const debugFinishedAt = debugLatest?.finishedAt || null;
+      const t = dreamLastRunAt.value || debugFinishedAt;
       if (!t) return true;
       return (dreamTickMs.value - t) > DREAM_REDDOT_THRESHOLD_MS;
     });

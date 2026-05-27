@@ -438,6 +438,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
             type: 'unify_debug_history',
             loops: Array.isArray(msg.loops) ? msg.loops : [],
             turns: Array.isArray(msg.turns) ? msg.turns : [],
+            dreamEvents: Array.isArray(msg.dreamEvents) ? msg.dreamEvents : [],
             ...(msg.groupId != null ? { groupId: msg.groupId } : {}),
             ...(msg.threadId != null ? { threadId: msg.threadId } : {}),
             ...(msg.error != null ? { error: msg.error } : {}),
