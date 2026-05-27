@@ -295,6 +295,33 @@ describe('fix-vp-multi-thread bugfix guards', () => {
     }
   });
 
+  it('fetchRecentDebugHistory returns persisted dream metrics and loop events after reload', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'debug-trace-test-'));
+    const dbPath = join(dir, 'trace.sqlite');
+    try {
+      const trace = new DebugTrace(dbPath);
+      trace.event('dream_loop', {
+        type: 'loop',
+        turnId: 'dream-1',
+        groupId: 'g1',
+        pass: 'triage-pass1',
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+        latencyMs: 12,
+      });
+      trace.event('dream_run', {
+        type: 'dream_run',
+        turnId: 'dream-1',
+        groupId: 'g1',
+        phase: 'result',
+        metrics: { durationMs: 20, llmCallCount: 1, inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+      });
+      const out = trace.fetchRecentDebugHistory({ groupId: 'g1', dreamLimit: 5 });
+      expect(out.dreamEvents.map(e => e.type)).toEqual(['loop', 'dream_run']);
+      expect(out.dreamEvents[1].metrics).toEqual(expect.objectContaining({ llmCallCount: 1, totalTokens: 15 }));
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+
   it('bug 4: opening an old DB without the new columns auto-migrates without throwing', async () => {
     // Simulate the pre-bugfix DB shape: create the file by writing to a
     // stripped-down SCHEMA, then re-open via DebugTrace and verify the

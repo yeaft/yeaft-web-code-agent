@@ -3222,6 +3222,13 @@ export function normalizeDreamResult(result) {
 
   return {
     success,
+    durationMs: Number.isFinite(Number(result?.durationMs)) ? Number(result.durationMs) : 0,
+    llmCallCount: Number.isFinite(Number(result?.llmCallCount)) ? Number(result.llmCallCount) : 0,
+    inputTokens: Number.isFinite(Number(result?.inputTokens)) ? Number(result.inputTokens) : 0,
+    outputTokens: Number.isFinite(Number(result?.outputTokens)) ? Number(result.outputTokens) : 0,
+    totalTokens: Number.isFinite(Number(result?.totalTokens)) ? Number(result.totalTokens) : 0,
+    metrics: result?.metrics || null,
+    passBreakdown: result?.passBreakdown || result?.metrics?.passBreakdown || null,
     skipped,
     skippedReason,
     groupsProcessed,
@@ -3289,6 +3296,7 @@ export async function handleUnifyDreamTrigger(msg = {}) {
   // OTHER groupIds chain (last-installed wins) but each restoration
   // unwinds back to its predecessor.
   const originalSink = session?._dreamProgressSink;
+  if (groupId) session._dreamActiveGroupId = groupId;
   if (groupId && typeof originalSink === 'function') {
     inflightScopedDreamGroups.add(groupId);
     session._dreamProgressSink = (evt) => {
@@ -3345,6 +3353,7 @@ export async function handleUnifyDreamTrigger(msg = {}) {
     });
   } finally {
     // Restore the original sink and release the per-group inflight lock.
+    if (groupId && session?._dreamActiveGroupId === groupId) session._dreamActiveGroupId = null;
     if (groupId && typeof originalSink === 'function') {
       session._dreamProgressSink = originalSink;
       inflightScopedDreamGroups.delete(groupId);

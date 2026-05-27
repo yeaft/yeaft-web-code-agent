@@ -171,6 +171,11 @@ describe('vp store — group Dream status', () => {
       entriesCreated: 2,
       targetsApplied: 2,
       groupsProcessed: 1,
+      durationMs: 12400,
+      llmCallCount: 5,
+      inputTokens: 12000,
+      outputTokens: 6200,
+      totalTokens: 18200,
     });
 
     expect(groupStatus(store, 'grp_demo')).toMatchObject({
@@ -181,6 +186,9 @@ describe('vp store — group Dream status', () => {
         entriesCreated: 2,
         targetsApplied: 2,
         groupsProcessed: 1,
+        durationMs: 12400,
+        llmCallCount: 5,
+        totalTokens: 18200,
       },
     });
   });

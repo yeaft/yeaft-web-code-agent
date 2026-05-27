@@ -182,7 +182,8 @@ export default {
       }
       const parts = ['done'];
       if (typeof d.mergedCount === 'number') parts.push(`merged ${d.mergedCount}`);
-      if (typeof d.durationMs === 'number') parts.push(this.formatMs(d.durationMs));
+      const metrics = this.formatDreamMetrics(d);
+      if (metrics) parts.push(metrics);
       return parts.join(' · ');
     },
     dreamLatestKindLabel() {
@@ -251,6 +252,7 @@ export default {
       } else if (phase === 'result') {
         parts.push(evt.success ? 'success' : 'error');
         if (typeof evt.entriesCreated === 'number') parts.push(`entries ${evt.entriesCreated}`);
+        if (this.formatDreamMetrics(evt)) parts.push(this.formatDreamMetrics(evt));
         if (!evt.success && evt.error) parts.push(evt.error);
         if (evt.skipped) parts.push(`skipped: ${evt.skippedReason || 'unknown'}`);
       } else {
@@ -325,7 +327,7 @@ export default {
       if (typeof evt.actions === 'number') parts.push(`actions ${evt.actions}`);
       if (typeof evt.targets === 'number') parts.push(`targets ${evt.targets}`);
       if (typeof evt.duration === 'number') parts.push(this.formatMs(evt.duration));
-      if (typeof evt.durationMs === 'number') parts.push(this.formatMs(evt.durationMs));
+      if (this.formatDreamMetrics(evt)) parts.push(this.formatDreamMetrics(evt));
       if (Array.isArray(evt.targetErrors) && evt.targetErrors.length > 0) {
         parts.push(`errors ${evt.targetErrors.length}: ${this.truncate(evt.targetErrors.map(e => e.target ? `${e.target}: ${e.error}` : e.error).join('; '), 160)}`);
       }
@@ -356,6 +358,14 @@ export default {
       const v = Number(n) || 0;
       if (v >= 1000) return `${(v / 1000).toFixed(1)}k`;
       return String(v);
+    },
+    formatDreamMetrics(d) {
+      if (!d) return '';
+      const parts = [];
+      if (typeof d.durationMs === 'number') parts.push(this.formatMs(d.durationMs));
+      if (typeof d.llmCallCount === 'number') parts.push(`${d.llmCallCount} LLM calls`);
+      if (typeof d.totalTokens === 'number') parts.push(`${this.formatTokens(d.totalTokens)} tok`);
+      return parts.join(' · ');
     },
     formatTimestamp(ms) {
       if (!ms) return '';

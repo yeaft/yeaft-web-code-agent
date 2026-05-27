@@ -312,6 +312,19 @@ export class DebugTrace {
     return id;
   }
 
+  /**
+   * Compatibility helper used by older engine/dream call sites.
+   * @param {string} eventType
+   * @param {unknown} eventData
+   * @returns {string}
+   */
+  event(eventType, eventData = null) {
+    const traceId = (eventData && typeof eventData === 'object' && (eventData.turnId || eventData.runId))
+      ? String(eventData.turnId || eventData.runId)
+      : String(eventType || 'event');
+    return this.logEvent({ traceId, eventType, eventData });
+  }
+
   // ─── Read API ────────────────────────────────────────────────
 
   /**
@@ -477,7 +490,9 @@ export class DebugTrace {
     const dreamEvents = [];
     if (dreamLim > 0) {
       const eventRows = this.#db.prepare(`
-        SELECT * FROM trace_events WHERE event_type = 'dream_progress' ORDER BY created_at DESC LIMIT ?
+        SELECT * FROM trace_events
+        WHERE event_type IN ('dream_progress', 'dream_loop', 'dream_turn_open', 'dream_turn_close', 'dream_run')
+        ORDER BY created_at DESC LIMIT ?
       `).all(Math.max(dreamLim * 5, dreamLim));
       for (const er of eventRows) {
         const data = parseJsonSafe(er.event_data) || {};
@@ -488,7 +503,12 @@ export class DebugTrace {
           const isThisGroup = evtGroupId === groupId || target === `group/${groupId}`;
           if (!isBroadcast && !isThisGroup) continue;
         }
-        dreamEvents.push({ type: 'dream_progress', ...data, at: er.created_at, ts: data.ts || er.created_at });
+        dreamEvents.push({
+          type: data.type || (er.event_type === 'dream_progress' ? 'dream_progress' : er.event_type),
+          ...data,
+          at: er.created_at,
+          ts: data.ts || data.at || er.created_at,
+        });
         if (dreamEvents.length >= dreamLim) break;
       }
       dreamEvents.reverse();
@@ -638,6 +658,7 @@ export class NullTrace {
   endTurn() {}
   logTool() { return 'null'; }
   logEvent() { return 'null'; }
+  event() { return 'null'; }
   queryByMessage() { return { turns: [], tools: [], events: [] }; }
   queryByTrace() { return { turns: [], tools: [], events: [] }; }
   queryRecent() { return []; }
