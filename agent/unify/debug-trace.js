@@ -521,7 +521,7 @@ export class DebugTrace {
       const eventRows = this.#db.prepare(`
         SELECT * FROM trace_events
         WHERE event_type IN ('dream_progress', 'dream_loop', 'dream_turn_open', 'dream_turn_close', 'dream_run')
-        ORDER BY created_at DESC LIMIT ?
+        ORDER BY created_at DESC, rowid DESC LIMIT ?
       `).all(Math.max(dreamLim * 5, dreamLim));
       for (const er of eventRows) {
         const data = parseJsonSafe(er.event_data) || {};
