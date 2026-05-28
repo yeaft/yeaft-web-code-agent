@@ -113,9 +113,9 @@ describe('resolveRawToken — priority order', () => {
   it('falls back to gh CLI last', async () => {
     const cp = await import('child_process');
     cp.__setExecFileImpl((_bin, _args, _opts, cb) =>
-      cb(null, { stdout: 'gho_from_gh\n', stderr: '' }));
+      cb(null, { stdout: 'gho_aaaaaaaaaaaaaaaaaaaaaaaa\n', stderr: '' }));
     const r = await resolveRawToken();
-    expect(r).toEqual({ token: 'gho_from_gh', source: 'gh-cli' });
+    expect(r).toEqual({ token: 'gho_aaaaaaaaaaaaaaaaaaaaaaaa', source: 'gh-cli' });
   });
 
   it('returns null when nothing works', async () => {
@@ -131,14 +131,21 @@ describe('tryGhCliToken strips GITHUB_TOKEN/GH_TOKEN from subprocess env', () =>
     const cp = await import('child_process');
     cp.__setExecFileImpl((_bin, _args, opts, cb) => {
       observedEnv = opts.env;
-      cb(null, { stdout: 'gho_clean\n', stderr: '' });
+      cb(null, { stdout: 'gho_cleancleancleancleanclean\n', stderr: '' });
     });
     const tok = await tryGhCliToken();
-    expect(tok).toBe('gho_clean');
+    expect(tok).toBe('gho_cleancleancleancleanclean');
     expect(observedEnv.GITHUB_TOKEN).toBeUndefined();
     expect(observedEnv.GH_TOKEN).toBeUndefined();
     delete process.env.GITHUB_TOKEN;
     delete process.env.GH_TOKEN;
+  });
+
+  it('rejects non-token output (e.g. gh help banner)', async () => {
+    const cp = await import('child_process');
+    cp.__setExecFileImpl((_bin, _args, _opts, cb) =>
+      cb(null, { stdout: 'Usage:  gh auth token [flags]\n', stderr: '' }));
+    expect(await tryGhCliToken()).toBeNull();
   });
 });
 

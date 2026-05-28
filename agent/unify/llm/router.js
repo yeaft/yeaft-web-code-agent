@@ -296,6 +296,17 @@ export class AdapterRouter extends LLMAdapter {
     const cached = this.#adapterCache.get(cacheKey);
     if (cached) return cached;
 
+    // Token rotation eviction: when a credential provider hands us a NEW
+    // fingerprint for the same (provider, protocol) pair, drop the stale
+    // entry so the cache doesn't grow unboundedly over a long-lived process
+    // (Copilot tokens rotate every ~30 min). Static-apiKey providers never
+    // change fingerprint, so this loop never finds anything to evict for
+    // them — back-compat preserved.
+    const prefix = `${provider.name}::${protocol}::`;
+    for (const key of this.#adapterCache.keys()) {
+      if (key.startsWith(prefix)) this.#adapterCache.delete(key);
+    }
+
     let adapter;
 
     if (protocol === 'anthropic') {
@@ -338,12 +349,13 @@ export class AdapterRouter extends LLMAdapter {
   async #resolveApiKey(provider) {
     const name = provider && provider.credentialProvider;
     if (!name) return provider?.apiKey || '';
-    const { getCredentialProvider } = await import('./credentials/index.js');
+    const { getCredentialProvider, CREDENTIAL_PROVIDER_NAMES } = await import('./credentials/index.js');
     const cp = getCredentialProvider(name);
     if (!cp) {
       throw new Error(
         `Unknown credentialProvider "${name}" on provider "${provider.name}". ` +
-        `Known providers: github-copilot. Remove the field to use the static apiKey.`
+        `Known providers: ${CREDENTIAL_PROVIDER_NAMES.join(', ')}. ` +
+        `Remove the field to use the static apiKey.`
       );
     }
     return cp.getApiKey();

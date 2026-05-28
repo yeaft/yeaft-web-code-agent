@@ -33,7 +33,7 @@
 
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { readFile, writeFile, mkdir, stat } from 'fs/promises';
+import { readFile, writeFile, mkdir, stat, chmod } from 'fs/promises';
 import { createHash } from 'crypto';
 import { homedir } from 'os';
 import { join, dirname } from 'path';
@@ -67,12 +67,26 @@ const CREDENTIALS_FILE = join(CREDENTIALS_DIR, 'github-copilot.json');
 // in two places. Reset via _resetCacheForTests.
 const _jwtCache = new Map();
 
+// In-flight exchange promises keyed by fingerprint. Dedupes concurrent
+// `exchangeToken` calls for the same raw token so we make ONE network call
+// instead of N when several requests race during a cold start or a refresh.
+const _exchangeInFlight = new Map();
+
 /**
  * Reset all in-process state. Tests only.
  */
 export function _resetCacheForTests() {
   _jwtCache.clear();
+  _exchangeInFlight.clear();
 }
+
+/**
+ * Anchor for `gh auth token` output validation. gh prints either a bare
+ * token followed by a newline or, on misconfiguration, a help banner /
+ * error text. We only accept output that looks like a GitHub token, so
+ * the help banner doesn't get treated as a credential.
+ */
+const GH_TOKEN_SHAPE = /^(gho_|github_pat_|ghu_|ghs_)[A-Za-z0-9_]{20,}$/;
 
 /**
  * Validate a raw GitHub token shape. Copilot API rejects classic PATs.
@@ -133,7 +147,6 @@ export async function writePersistedToken({ token, source }) {
   try {
     const s = await stat(CREDENTIALS_DIR);
     if ((s.mode & 0o077) !== 0) {
-      const { chmod } = await import('fs/promises');
       await chmod(CREDENTIALS_DIR, 0o700);
     }
   } catch { /* best effort */ }
@@ -165,7 +178,11 @@ export async function tryGhCliToken({ hostname } = {}) {
       windowsHide: true,
     });
     const trimmed = (stdout || '').trim();
-    return trimmed || null;
+    if (!trimmed) return null;
+    // Guard against gh printing a help banner / error text when not logged
+    // in. We only trust output that matches the GitHub token shape.
+    if (!GH_TOKEN_SHAPE.test(trimmed)) return null;
+    return trimmed;
   } catch {
     return null;
   }
@@ -235,33 +252,48 @@ export async function exchangeToken(rawToken, { fetchFn = fetch } = {}) {
     return cached;
   }
 
-  const res = await fetchFn(TOKEN_EXCHANGE_URL, {
-    method: 'GET',
-    headers: {
-      Authorization: `token ${rawToken}`,
-      'User-Agent': EXCHANGE_USER_AGENT,
-      Accept: 'application/json',
-      'Editor-Version': EDITOR_VERSION,
-    },
-  });
+  // Dedupe: if another caller is already exchanging the same token, await
+  // their result instead of firing a parallel request. Cleared in finally
+  // so a failure doesn't poison the next attempt.
+  const inFlight = _exchangeInFlight.get(fp);
+  if (inFlight) return inFlight;
 
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`Copilot token exchange failed: HTTP ${res.status} ${body.slice(0, 200)}`);
+  const promise = (async () => {
+    const res = await fetchFn(TOKEN_EXCHANGE_URL, {
+      method: 'GET',
+      headers: {
+        Authorization: `token ${rawToken}`,
+        'User-Agent': EXCHANGE_USER_AGENT,
+        Accept: 'application/json',
+        'Editor-Version': EDITOR_VERSION,
+      },
+    });
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`Copilot token exchange failed: HTTP ${res.status} ${body.slice(0, 200)}`);
+    }
+    const data = await res.json();
+    const apiToken = data && typeof data.token === 'string' ? data.token : '';
+    if (!apiToken) throw new Error('Copilot token exchange returned empty token');
+
+    const expiresAtRaw = data.expires_at;
+    const expiresAt =
+      typeof expiresAtRaw === 'number' && expiresAtRaw > 0
+        ? expiresAtRaw
+        : now + 1800; // hermes default: 30 minutes
+
+    const entry = { apiToken, expiresAt };
+    _jwtCache.set(fp, entry);
+    return entry;
+  })();
+
+  _exchangeInFlight.set(fp, promise);
+  try {
+    return await promise;
+  } finally {
+    _exchangeInFlight.delete(fp);
   }
-  const data = await res.json();
-  const apiToken = data && typeof data.token === 'string' ? data.token : '';
-  if (!apiToken) throw new Error('Copilot token exchange returned empty token');
-
-  const expiresAtRaw = data.expires_at;
-  const expiresAt =
-    typeof expiresAtRaw === 'number' && expiresAtRaw > 0
-      ? expiresAtRaw
-      : now + 1800; // hermes default: 30 minutes
-
-  const entry = { apiToken, expiresAt };
-  _jwtCache.set(fp, entry);
-  return entry;
 }
 
 /**
@@ -434,10 +466,19 @@ export async function runDeviceFlow({
   let interval = start.interval;
   while (Date.now() < deadline) {
     if (signal?.aborted) throw new Error('device flow aborted');
-    await sleepFn((interval + DEVICE_POLL_SAFETY_MARGIN_SECONDS) * 1000);
+    // Race the sleep against the abort signal so cancellation is observed
+    // immediately instead of waiting out the current poll interval.
+    await abortableSleep(sleepFn, (interval + DEVICE_POLL_SAFETY_MARGIN_SECONDS) * 1000, signal);
+    if (signal?.aborted) throw new Error('device flow aborted');
     const r = await pollDeviceFlow({ deviceCode: start.deviceCode, host, fetchFn });
     if (r.status === 'success') {
-      await writePersistedToken({ token: r.token, source: 'device-flow' });
+      // Don't fail the flow if persist fails — the token in memory is still
+      // usable for this process. Warn so a recurring failure stays visible.
+      try {
+        await writePersistedToken({ token: r.token, source: 'device-flow' });
+      } catch (err) {
+        console.warn(`[copilot-auth] failed to persist device-flow token: ${err.message}`);
+      }
       return r.token;
     }
     if (r.status === 'pending') continue;
@@ -451,4 +492,30 @@ export async function runDeviceFlow({
     // status === 'error' — treat as transient; loop continues.
   }
   throw new Error('device flow timed out');
+}
+
+/**
+ * Sleep that resolves either when the timeout elapses or when the abort
+ * signal fires (whichever comes first). The signal listener is removed in
+ * the cleanup paths so we don't leak listeners across many poll cycles.
+ */
+function abortableSleep(sleepFn, ms, signal) {
+  if (!signal) return sleepFn(ms);
+  return new Promise(resolve => {
+    let done = false;
+    const onAbort = () => {
+      if (done) return;
+      done = true;
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    };
+    if (signal.aborted) return onAbort();
+    signal.addEventListener('abort', onAbort);
+    sleepFn(ms).then(() => {
+      if (done) return;
+      done = true;
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    });
+  });
 }

@@ -493,10 +493,18 @@ export default {
     // token at request time from env / gh CLI / persisted device-flow token.
     toggleAutoAuth(idx, event) {
       const on = !!event.target.checked;
-      this.localProviders[idx].credentialProvider = on ? 'github-copilot' : null;
+      const row = this.localProviders[idx];
+      row.credentialProvider = on ? 'github-copilot' : null;
       if (on) {
-        // Don't leak a previously-typed apiKey across the toggle.
-        this.localProviders[idx].apiKey = '';
+        // Stash the previously-typed apiKey on the local row so a user who
+        // toggles on then off doesn't lose their static key. Cleared at
+        // save time (saveConfig forces apiKey='' when credentialProvider
+        // is set, so what gets persisted is still the regression-safe shape).
+        if (row.apiKey) row._stashedApiKey = row.apiKey;
+        row.apiKey = '';
+      } else if (row._stashedApiKey) {
+        row.apiKey = row._stashedApiKey;
+        row._stashedApiKey = '';
       }
       this.markDirty();
     },
