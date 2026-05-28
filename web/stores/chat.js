@@ -599,7 +599,41 @@ export const useChatStore = defineStore('chat', {
           if (!turnMatchesSearch(turn, loops, refls, search)) continue;
         }
 
-        out.push({ ...turn, loops, reflections: refls });
+        // fix-debug-panel-live-aggregates: the turn header (NL · Xms · Y tok)
+        // is sourced from `turn.loopCount` / `totalMs` / `totalTokens`, which
+        // are only stamped by the `turn_close` event (chat.js:1130). While a
+        // turn is still in flight those fields are 0, so the header shows
+        // "0L 0ms 0 tok". Worse, the template falls back to
+        // `turn.loops.length` for the L count, but the global loop ring is
+        // capped at MAX_UNIFY_DEBUG_LOOPS (=50), so a long in-flight turn
+        // pins the header at "50L". For old turns hydrated from SQLite
+        // whose `turn_close` was never persisted, the row stays "0L" forever.
+        //
+        // Fix: derive live aggregates from the per-turn loops we just
+        // grouped and prefer them whenever the turn isn't closed. For
+        // closed turns we trust the stamped totals (they include the
+        // final partial loop), but still backfill loopCount when it's 0
+        // — that's the SQLite-hydration case where the engine recorded
+        // every loop row but never wrote a turn-level summary.
+        const liveLoopCount = loops.length;
+        let liveTokens = 0;
+        let liveMs = 0;
+        for (const lp of loops) {
+          const u = lp && lp.usage;
+          if (u && Number.isFinite(u.totalTokens)) liveTokens += u.totalTokens;
+          else if (u) liveTokens += (u.inputTokens || 0) + (u.outputTokens || 0);
+          if (lp && Number.isFinite(lp.latencyMs)) liveMs += lp.latencyMs;
+        }
+        const isOpen = !turn.closedAt;
+        const merged = {
+          ...turn,
+          loopCount: (isOpen || !turn.loopCount) ? liveLoopCount : turn.loopCount,
+          totalTokens: (isOpen || !turn.totalTokens) ? liveTokens : turn.totalTokens,
+          totalMs: (isOpen || !turn.totalMs) ? liveMs : turn.totalMs,
+          loops,
+          reflections: refls,
+        };
+        out.push(merged);
       }
       return out;
     },
