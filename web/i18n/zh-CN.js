@@ -583,6 +583,8 @@ export default {
   'settings.llm.baseUrlPlaceholder': '例如 http://localhost:6628/v1',
   'settings.llm.apiKey': 'API Key',
   'settings.llm.apiKeyPlaceholder': '输入 API Key',
+  'settings.llm.autoAuthGithubCopilot': '使用 GitHub Copilot 自动认证（环境变量 / gh CLI）',
+  'settings.llm.autoAuthGithubCopilotHint': '每次请求时从 COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN、~/.yeaft/credentials/github-copilot.json 或 `gh auth token` 自动解析 Token，无需手动粘贴 API Key。',
   'settings.llm.protocol': '协议',
   'settings.llm.protocolOpenAI': 'OpenAI 兼容',
   'settings.llm.protocolOpenAIResponses': 'OpenAI Responses (GPT-5)',
