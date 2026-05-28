@@ -25,6 +25,30 @@ function normalizeHistoryTimestamp(m) {
   return null;
 }
 
+function resolveGroupDefaultVpId(groupId) {
+  if (!groupId || typeof window === 'undefined') return null;
+  try {
+    const pinia = window.Pinia || null;
+    const groupsStore = pinia && typeof pinia.useGroupsStore === 'function'
+      ? pinia.useGroupsStore()
+      : null;
+    if (!groupsStore) return null;
+    const group = typeof groupsStore.groupById === 'function'
+      ? groupsStore.groupById(groupId)
+      : (groupsStore.groups && groupsStore.groups[groupId]);
+    const vpId = group && typeof group.defaultVpId === 'string'
+      ? group.defaultVpId.trim()
+      : '';
+    return vpId || null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveHistorySpeakerVpId(m, groupId) {
+  return m.speakerVpId || m.vpId || m.vp_id || m.authorVpId || m.authorVP || resolveGroupDefaultVpId(groupId);
+}
+
 /** Mark all pending tool-use messages as completed for a conversation */
 export function markAllToolsCompleted(store, convId) {
   const msgs = store.messagesMap[convId] || [];
@@ -418,6 +442,7 @@ export function handleUnifyHistoryChunk(store, msg) {
       });
     } else if (m.role === 'assistant') {
       const threadId = m.threadId || m.turnId || 'main';
+      const speakerVpId = resolveHistorySpeakerVpId(m, m.groupId ?? msg.groupId ?? null);
       formatted.push({
         ...(stableId ? { id: stableId, messageId: stableId } : {}),
         type: 'assistant',
@@ -426,8 +451,9 @@ export function handleUnifyHistoryChunk(store, msg) {
         groupId: m.groupId ?? null,
         threadId,
         turnId: m.turnId || threadId,
-        ...(m.speakerVpId ? { vpId: m.speakerVpId, speakerVpId: m.speakerVpId } : {}),
+        ...(speakerVpId ? { vpId: speakerVpId, speakerVpId } : {}),
         isStreaming: false,
+        isHistory: true,
       });
     }
   }

@@ -121,6 +121,37 @@ function setActiveGroupFilter(groupId) {
 }
 
 describe('handleUnifyHistoryChunk', () => {
+  it('binds assistant history without VP attribution to the group default VP', () => {
+    const oldWindow = globalThis.window;
+    globalThis.window = {
+      Pinia: {
+        useGroupsStore: () => ({
+          groupById: (id) => id === 'g1' ? { id: 'g1', defaultVpId: 'linus' } : null,
+        }),
+      },
+    };
+    try {
+      const store = mkStore({ messagesMap: { 'unify-1': [] } });
+      handleUnifyHistoryChunk(store, {
+        conversationId: 'unify-1',
+        groupId: 'g1',
+        messages: [
+          { id: 'm0002', role: 'assistant', content: 'older-a1', groupId: 'g1' },
+        ],
+        oldestSeq: 1,
+        hasMore: false,
+      });
+
+      const [msg] = store.messagesMap['unify-1'];
+      expect(msg.vpId).toBe('linus');
+      expect(msg.speakerVpId).toBe('linus');
+      expect(msg.isStreaming).toBe(false);
+      expect(msg.isHistory).toBe(true);
+    } finally {
+      globalThis.window = oldWindow;
+    }
+  });
+
   it('prepends user + assistant rows at index 0 with isStreaming=false', () => {
     const store = mkStore({
       messagesMap: {

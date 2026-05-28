@@ -1231,12 +1231,24 @@ export async function __testResetVpState() {
  * Envelope fields: conversationId, groupId, vpId, turnId, threadId let the
  * frontend route incremental deltas to the correct per-VP/thread block.
  */
+function resolveGroupDefaultVpId(groupId) {
+  if (!groupId) return null;
+  try {
+    const meta = ensureGroupCoordinator(groupId)?.group?.getMeta?.();
+    const vpId = typeof meta?.defaultVpId === 'string' ? meta.defaultVpId.trim() : '';
+    return vpId || null;
+  } catch {
+    return null;
+  }
+}
+
 function sendUnifyOutput(data, { groupId, vpId, turnId, threadId } = {}) {
+  const resolvedVpId = vpId || resolveGroupDefaultVpId(groupId);
   sendToServer({
     type: 'unify_output',
     conversationId: unifyConversationId,
     ...(groupId ? { groupId } : {}),
-    ...(vpId ? { vpId } : {}),
+    ...(resolvedVpId ? { vpId: resolvedVpId } : {}),
     ...(turnId ? { turnId } : {}),
     ...(threadId ? { threadId } : {}),
     data,

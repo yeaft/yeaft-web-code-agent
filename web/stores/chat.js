@@ -1061,8 +1061,8 @@ export const useChatStore = defineStore('chat', {
           const prevThreadId = this._currentUnifyThreadId;
           const prevThreadTitle = this._currentUnifyThreadTitle;
           if (msg.groupId != null) this._currentUnifyGroupId = msg.groupId;
-          if (msg.vpId) this._currentUnifyVpId = msg.vpId;
-          if (msg.turnId) this._currentUnifyTurnId = msg.turnId;
+          if (msg.vpId && msg.data.type !== 'result') this._currentUnifyVpId = msg.vpId;
+          if (msg.turnId && msg.data.type !== 'result') this._currentUnifyTurnId = msg.turnId;
           if (msg.threadId) this._currentUnifyThreadId = msg.threadId;
           if (msg.threadTitle || msg.title) this._currentUnifyThreadTitle = msg.threadTitle || msg.title;
           if (msg.threadId) {
