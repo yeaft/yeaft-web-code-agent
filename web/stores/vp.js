@@ -25,24 +25,34 @@ function projectDreamDebugEvent(chat, event) {
   chat.handleUnifyOutput({ event });
 }
 
-// 12 zodiac-inspired default avatar motifs. The mapping is deterministic:
-// vpId -> 32-bit hash -> one of these 12 entries. Existing VP records can still
-// override `color`, but the web fallback no longer gives unknown VPs a plain
-// flat disk.
+// 12 high-contrast default avatar motifs. The mapping is deterministic:
+// vpId -> fixed known-VP entry when present, otherwise 32-bit hash -> one of
+// these 12 entries. Existing VP records can still override `color`, but the
+// web fallback no longer gives unknown VPs a low-contrast pastel disk.
 export const VP_AVATAR_MOTIFS = [
-  { key: 'rat', label: 'Rat', glyph: 'R', background: 'linear-gradient(135deg, #DCEAFE 0%, #8FB6F5 100%)', foreground: '#12305C' },
-  { key: 'ox', label: 'Ox', glyph: 'O', background: 'linear-gradient(135deg, #E9DDCF 0%, #B68B63 100%)', foreground: '#2F1D12' },
-  { key: 'tiger', label: 'Tiger', glyph: 'T', background: 'linear-gradient(135deg, #FFE2B8 0%, #E0873B 100%)', foreground: '#3B1D07' },
-  { key: 'rabbit', label: 'Rabbit', glyph: 'B', background: 'linear-gradient(135deg, #FCE2EA 0%, #D98FAA 100%)', foreground: '#451628' },
-  { key: 'dragon', label: 'Dragon', glyph: 'D', background: 'linear-gradient(135deg, #DDF5E7 0%, #58B184 100%)', foreground: '#0F3322' },
-  { key: 'snake', label: 'Snake', glyph: 'S', background: 'linear-gradient(135deg, #E5F4C8 0%, #8BB65A 100%)', foreground: '#24330F' },
-  { key: 'horse', label: 'Horse', glyph: 'H', background: 'linear-gradient(135deg, #FFE0CF 0%, #CB785E 100%)', foreground: '#3C160D' },
-  { key: 'goat', label: 'Goat', glyph: 'G', background: 'linear-gradient(135deg, #EEE7FF 0%, #9B86D9 100%)', foreground: '#251B4B' },
-  { key: 'monkey', label: 'Monkey', glyph: 'M', background: 'linear-gradient(135deg, #FFF0B8 0%, #D5A12F 100%)', foreground: '#3A2700' },
-  { key: 'rooster', label: 'Rooster', glyph: 'K', background: 'linear-gradient(135deg, #DDF7F5 0%, #58B7B2 100%)', foreground: '#0B3433' },
-  { key: 'dog', label: 'Dog', glyph: 'D', background: 'linear-gradient(135deg, #E2E8F0 0%, #8798AD 100%)', foreground: '#172232' },
-  { key: 'pig', label: 'Pig', glyph: 'P', background: 'linear-gradient(135deg, #FBE1F4 0%, #C983B5 100%)', foreground: '#3E1737' },
+  { key: 'rat', label: 'Rat', glyph: 'R', background: 'linear-gradient(135deg, #174EA6 0%, #0B2F6B 100%)', foreground: '#FFFFFF' },
+  { key: 'ox', label: 'Ox', glyph: 'O', background: 'linear-gradient(135deg, #8A4B12 0%, #4A2507 100%)', foreground: '#FFF7ED' },
+  { key: 'tiger', label: 'Tiger', glyph: 'T', background: 'linear-gradient(135deg, #B45309 0%, #7C2D12 100%)', foreground: '#FFF7ED' },
+  { key: 'rabbit', label: 'Rabbit', glyph: 'B', background: 'linear-gradient(135deg, #BE185D 0%, #831843 100%)', foreground: '#FFF1F2' },
+  { key: 'dragon', label: 'Dragon', glyph: 'D', background: 'linear-gradient(135deg, #047857 0%, #064E3B 100%)', foreground: '#ECFDF5' },
+  { key: 'snake', label: 'Snake', glyph: 'S', background: 'linear-gradient(135deg, #4D7C0F 0%, #365314 100%)', foreground: '#F7FEE7' },
+  { key: 'horse', label: 'Horse', glyph: 'H', background: 'linear-gradient(135deg, #C2410C 0%, #7C2D12 100%)', foreground: '#FFF7ED' },
+  { key: 'goat', label: 'Goat', glyph: 'G', background: 'linear-gradient(135deg, #6D28D9 0%, #4C1D95 100%)', foreground: '#F5F3FF' },
+  { key: 'monkey', label: 'Monkey', glyph: 'M', background: 'linear-gradient(135deg, #CA8A04 0%, #854D0E 100%)', foreground: '#FEFCE8' },
+  { key: 'rooster', label: 'Rooster', glyph: 'K', background: 'linear-gradient(135deg, #0891B2 0%, #155E75 100%)', foreground: '#ECFEFF' },
+  { key: 'dog', label: 'Dog', glyph: 'D', background: 'linear-gradient(135deg, #475569 0%, #1E293B 100%)', foreground: '#F8FAFC' },
+  { key: 'pig', label: 'Pig', glyph: 'P', background: 'linear-gradient(135deg, #A21CAF 0%, #701A75 100%)', foreground: '#FDF4FF' },
 ];
+
+// The default group roster needs the four common VPs to be visually distinct
+// even at 20-24px. Hashes are stable, but adjacent pastel-ish colours are not
+// good enough in a dark sidebar, so pin these identities to separated hues.
+export const VP_AVATAR_MOTIF_BY_ID = Object.freeze({
+  steve: VP_AVATAR_MOTIFS[8],  // amber
+  ada: VP_AVATAR_MOTIFS[3],    // magenta
+  linus: VP_AVATAR_MOTIFS[0],  // blue
+  martin: VP_AVATAR_MOTIFS[4], // green
+});
 
 export const VP_PALETTE = VP_AVATAR_MOTIFS.map((motif) => motif.background);
 
@@ -70,7 +80,9 @@ export function stableVpHash(value) {
  */
 export function fallbackAvatarMotif(vpId) {
   if (!vpId) return VP_AVATAR_MOTIFS[0];
-  return VP_AVATAR_MOTIFS[stableVpHash(vpId) % VP_AVATAR_MOTIFS.length];
+  const id = String(vpId).toLowerCase();
+  return VP_AVATAR_MOTIF_BY_ID[id]
+    || VP_AVATAR_MOTIFS[stableVpHash(id) % VP_AVATAR_MOTIFS.length];
 }
 
 /**
