@@ -102,7 +102,7 @@ const DEFAULT_CONFIG_JSON = `{
   "language": "en",
   "debug": false,
   "maxContextTokens": 200000,
-  "messageTokenBudget": 8192
+  "messageTokenBudget": 32768
 }
 `;
 

@@ -10,27 +10,15 @@
  */
 
 import { formatSize } from '../archive/tool-results.js';
-import { DEFAULT_CONTEXT_WINDOW } from '../models.js';
 
 /**
  * Per-tool-result hard cap.
  *
- * A single tool can return megabytes (a grep over a large repo, a large
- * file read, a paginated web fetch). If we forward that verbatim into the
- * next LLM request the model returns LLMContextError ("context_length_exceeded")
- * and the user sees a hard failure mid-turn. Cap at a fraction of the
- * model's context window so even a runaway tool can't kill the request.
- *
- * Cap = max(MIN_CAP, floor(contextWindow * RATIO))
- *   - RATIO = 10%: leaves 90% of context for system prompt, history, the
- *     model's own output, and other tools called this turn. Generous in
- *     absolute terms (25.6 KB on a 256 K window, ~20 K on a 200 K window),
- *     plenty for a real tool result; small enough that 5 such results
- *     still fit alongside everything else.
- *   - MIN_CAP = 8 KB: sanity floor for tiny test fixtures (4 K context
- *     models in tests would otherwise cap at 409 chars, defeating the
- *     test's purpose). Real production models all have ≥ 32 K context, so
- *     the floor never bites in practice.
+ * A single tool can return megabytes (a grep over a large repo, a large file
+ * read, a paginated web fetch). If we forward that verbatim into the next LLM
+ * request, persistence, or UI event, it bloats context and makes every replay
+ * expensive. Keep the hard boundary small and deterministic: one tool result
+ * gets at most 1 KiB before a visible truncation marker is appended.
  *
  * The truncation lands HERE (not in engine.js when pushing tool results
  * into messages) so the UI's `tool_end` event, the exec log, AND the
@@ -38,8 +26,7 @@ import { DEFAULT_CONTEXT_WINDOW } from '../models.js';
  * the user sees the full 2 MB output but the model gets a stub —
  * confusing.
  */
-const TOOL_RESULT_CAP_RATIO = 0.10;
-const TOOL_RESULT_MIN_CAP = 8 * 1024;
+export const TOOL_RESULT_MAX_BYTES = 1024;
 
 function normalizeLanguage(language) {
   return String(language || '').toLowerCase().startsWith('zh') ? 'zh' : 'en';
@@ -151,7 +138,7 @@ export class ToolExecutionTimeoutError extends Error {
 /**
  * Truncate a tool result if it exceeds the per-result cap. Non-string
  * outputs are JSON-stringified first (matching what engine.js eventually
- * pushes into `content`), then capped.
+ * pushes into `content`), then capped by UTF-8 byte length.
  *
  * Edge cases handled:
  *   - `undefined` → `JSON.stringify(undefined)` returns `undefined`, not
@@ -159,10 +146,10 @@ export class ToolExecutionTimeoutError extends Error {
  *   - circular refs / `JSON.stringify` throws → fall back to `String(...)`.
  *
  * @param {unknown} output
- * @param {{ contextWindow?: number, toolName: string }} opts
+ * @param {{ toolName: string, language?: string }} opts
  * @returns {string}
  */
-export function truncateToolResultIfNeeded(output, { contextWindow, toolName, language } = {}) {
+export function truncateToolResultIfNeeded(output, { toolName, language } = {}) {
   let text;
   if (typeof output === 'string') {
     text = output;
@@ -174,14 +161,21 @@ export function truncateToolResultIfNeeded(output, { contextWindow, toolName, la
       text = String(output);
     }
   }
-  const ctx = Number.isFinite(contextWindow) && contextWindow > 0
-    ? contextWindow : DEFAULT_CONTEXT_WINDOW;
-  const cap = Math.max(TOOL_RESULT_MIN_CAP, Math.floor(ctx * TOOL_RESULT_CAP_RATIO));
-  if (text.length <= cap) return text;
-  const head = text.slice(0, cap);
+  const originalBytes = Buffer.byteLength(text, 'utf8');
+  if (originalBytes <= TOOL_RESULT_MAX_BYTES) return text;
+
+  const chunks = [];
+  let used = 0;
+  for (const ch of text) {
+    const n = Buffer.byteLength(ch, 'utf8');
+    if (used + n > TOOL_RESULT_MAX_BYTES) break;
+    chunks.push(ch);
+    used += n;
+  }
+  const head = chunks.join('');
   const marker = normalizeLanguage(language) === 'zh'
-    ? `\n\n[已截断：${toolName} 返回 ${formatSize(text.length)}，上限为 ${formatSize(cap)}；模型不会看到剩余内容]`
-    : `\n\n[truncated: ${toolName} returned ${formatSize(text.length)}, capped at ${formatSize(cap)}; the model will not see the rest of this output]`;
+    ? `\n\n[已截断：${toolName} 返回 ${formatSize(originalBytes)}，上限为 ${formatSize(TOOL_RESULT_MAX_BYTES)}；原因：单个 tool result 超过 1KB，模型和持久化展示不会看到剩余内容]`
+    : `\n\n[truncated: ${toolName} returned ${formatSize(originalBytes)}, capped at ${formatSize(TOOL_RESULT_MAX_BYTES)}; reason: single tool result exceeded 1KB, the model and persisted display will not see the rest]`;
   return head + marker;
 }
 
@@ -325,9 +319,8 @@ export class ToolRegistry {
    * Execute a tool by name.
    *
    * The result is passed through {@link truncateToolResultIfNeeded} so that
-   * a single tool can never blow the context window. The cap derives from
-   * `ctx.contextWindow` (the live model's window, threaded by engine.js);
-   * fall back to a 200K default for callers that don't supply it.
+   * a single tool result never injects more than 1KB before the visible
+   * truncation marker.
    *
    * @param {string} name
    * @param {object} input
@@ -352,7 +345,6 @@ export class ToolRegistry {
       : await tool.execute(input, ctx);
 
     return truncateToolResultIfNeeded(output, {
-      contextWindow: ctx.contextWindow,
       toolName: name,
       language: ctx.config?.language,
     });

@@ -142,10 +142,10 @@ export const DEFAULT_RECENT_TURN_CAP = 25;
 
 /**
  * Default per-query token budget for the snapshot (separate from the
- * `tokenLimit` used by compact triggers). Mirrors the historical default
+ * `tokenLimit` used by compact triggers). Mirrors the default
  * carried in `~/.yeaft/config.json`'s `messageTokenBudget` field.
  */
-export const DEFAULT_MESSAGE_TOKEN_BUDGET = 8192;
+export const DEFAULT_MESSAGE_TOKEN_BUDGET = 32768;
 
 /**
  * Estimate the token weight of a single message including role overhead
@@ -628,7 +628,7 @@ export async function compactHistory(messages, options) {
  *      boundary and walks forward through `@vp-X` variants of the
  *      cut turn so the slice is pair-safe.
  *   2. **Token budget** — if the trimmed slice still exceeds
- *      `messageTokenBudget` tokens (default 8192 from
+ *      `messageTokenBudget` tokens (default 32768 from
  *      `~/.yeaft/config.json`), iteratively drop the oldest turn until
  *      we're under budget. We never drop below 1 turn — even a single
  *      huge turn is preferable to no context.
