@@ -74,12 +74,11 @@ describe('trimSnapshotForBudget — token budget cap', () => {
     expect(out.length).toBeGreaterThan(0);
   });
 
-  it('default token budget 8192 is enforced', () => {
-    // Build a single huge user message that alone exceeds 8192 tokens.
-    // ~10000 tokens of content in 25 turns: 25 turns × 1600 chars/msg × 2 msgs
-    // = ~80000 chars / 4 ≈ 20000 tokens. Cap should kick in.
-    const ms = buildSyntheticHistory(25, 1600);
-    const out = trimSnapshotForBudget(ms); // default budget = 8192
+  it('default token budget 32768 is enforced', () => {
+    // Build history that exceeds the default 32768-token message budget.
+    // 25 turns × 3000 chars/msg × 2 msgs = ~150000 chars / 4 ≈ 37500 tokens.
+    const ms = buildSyntheticHistory(25, 3000);
+    const out = trimSnapshotForBudget(ms); // default budget = 32768
     // Must produce at least one turn but fewer than the input.
     expect(out.length).toBeGreaterThan(0);
     expect(out.length).toBeLessThan(ms.length);

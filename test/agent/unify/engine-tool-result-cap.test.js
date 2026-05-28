@@ -4,17 +4,16 @@
  * Two layered defenses against runaway tool results:
  *
  *   1. **Per-tool-result hard cap** at the ToolRegistry.execute boundary.
- *      A single tool can never return more than `max(8KB, contextWindow*10%)`
- *      characters into the wire messages.
+ *      A single tool result can never inject more than 1KB before the
+ *      visible truncation marker.
  *
  *   2. **Pre-flight total-token guard** before adapter.stream().
  *      If approxTokens(system+messages) > contextWindow*85%, run an
  *      emergency archiveToolResults({turnAgeMin:0}) sweep.
  *
- * Together: a runaway grep gets capped to one window-fraction (defense
- * 1), and N capped results that still total too much trigger an emergency
- * sweep (defense 2). Compaction (#maybeConsolidate) remains the third
- * tier for "even after sweep, still too big" via LLMContextError.
+ * Together: a runaway grep gets capped at 1KB (defense 1), and N capped
+ * results that still total too much trigger an emergency sweep (defense 2).
+ * Compaction (#maybeConsolidate) remains the third tier.
  */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -127,14 +126,14 @@ describe('per-tool-result cap also applies to legacy #tools branch', () => {
 
     const toolMsg = adapter.calls[1].messages.find(m => m.role === 'tool' && m.toolCallId === 'tc-1');
     expect(toolMsg).toBeTruthy();
-    expect(toolMsg.content.length).toBeLessThan(26_000);
-    expect(toolMsg.content).toContain('[truncated: big_grep returned');
+    const head = toolMsg.content.split('\n\n[truncated:')[0];
+    expect(Buffer.byteLength(head, 'utf8')).toBe(1024);
+    expect(toolMsg.content).toContain('[truncated: big_grep returned 48.8KB, capped at 1.0KB; reason: single tool result exceeded 1KB');
   });
 });
 
 describe('per-tool-result hard cap (registry boundary)', () => {
-  it('caps at floor(contextWindow * 0.10) for normal-sized contexts', async () => {
-    // gpt-5 has contextWindow 256000 → cap = 25600 chars.
+  it('caps every tool result at 1KB before marker text', async () => {
     const huge = 'X'.repeat(50_000);
     const adapter = new ToolThenStopAdapter();
     const registry = mkRegistryWithBigGrep(huge);
@@ -147,17 +146,12 @@ describe('per-tool-result hard cap (registry boundary)', () => {
     const second = adapter.calls[1];
     const toolMsg = second.messages.find(m => m.role === 'tool' && m.toolCallId === 'tc-1');
     expect(toolMsg).toBeTruthy();
-    // The cap is 25600; the marker adds < 200 extra chars.
-    expect(toolMsg.content.length).toBeGreaterThan(25_000);
-    expect(toolMsg.content.length).toBeLessThan(26_000);
-    expect(toolMsg.content).toContain('[truncated: big_grep returned');
-    expect(toolMsg.content).toContain('capped at');
+    const head = toolMsg.content.split('\n\n[truncated:')[0];
+    expect(Buffer.byteLength(head, 'utf8')).toBe(1024);
+    expect(toolMsg.content).toContain('[truncated: big_grep returned 48.8KB, capped at 1.0KB; reason: single tool result exceeded 1KB');
   });
 
-  it('respects the 8KB floor for tiny-context test models', async () => {
-    // No registry entry → resolveModel returns null → fall back to
-    // config.maxContextTokens (here 4096). 10% of 4096 = 409, so the floor
-    // bites: cap = max(8192, 409) = 8192.
+  it('uses the same 1KB cap for tiny-context test models', async () => {
     const huge = 'X'.repeat(20_000);
     const adapter = new ToolThenStopAdapter();
     const registry = mkRegistryWithBigGrep(huge);
@@ -172,12 +166,12 @@ describe('per-tool-result hard cap (registry boundary)', () => {
 
     const toolMsg = adapter.calls[1].messages.find(m => m.role === 'tool' && m.toolCallId === 'tc-1');
     expect(toolMsg).toBeTruthy();
-    expect(toolMsg.content.length).toBeGreaterThan(8000);
-    expect(toolMsg.content.length).toBeLessThan(8500);
+    const head = toolMsg.content.split('\n\n[truncated:')[0];
+    expect(Buffer.byteLength(head, 'utf8')).toBe(1024);
     expect(toolMsg.content).toContain('[truncated:');
   });
 
-  it('truncation marker reports both the original size and the cap', async () => {
+  it('truncation marker reports both the original size and the 1KB cap', async () => {
     const huge = 'X'.repeat(60_000);
     const adapter = new ToolThenStopAdapter();
     const registry = mkRegistryWithBigGrep(huge);
@@ -186,8 +180,7 @@ describe('per-tool-result hard cap (registry boundary)', () => {
     for await (const _ of engine.query({ prompt: 'go', messages: [] })) { /* drain */ }
 
     const toolMsg = adapter.calls[1].messages.find(m => m.role === 'tool' && m.toolCallId === 'tc-1');
-    // Source size 60_000 chars ≈ 58.6KB; cap 25_600 chars ≈ 25.0KB.
-    expect(toolMsg.content).toMatch(/\[truncated: big_grep returned [\d.]+KB, capped at [\d.]+KB; the model will not see the rest of this output\]/);
+    expect(toolMsg.content).toMatch(/\[truncated: big_grep returned [\d.]+KB, capped at 1\.0KB; reason: single tool result exceeded 1KB/);
   });
 
   it('non-string tool output is JSON-stringified before capping', async () => {

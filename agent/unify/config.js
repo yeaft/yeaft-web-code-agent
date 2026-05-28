@@ -13,7 +13,7 @@
  *   "language": "en",
  *   "debug": false,
  *   "maxContextTokens": 200000,
- *   "messageTokenBudget": 8192
+ *   "messageTokenBudget": 32768
  * }
  *
  * Legacy: if config.json doesn't exist, falls back to old config.md + .env for migration.
@@ -31,7 +31,7 @@ const DEFAULTS = {
   dir: DEFAULT_YEAFT_DIR,
   maxContextTokens: 200000,
   maxOutputTokens: 16384,
-  messageTokenBudget: 8192,
+  messageTokenBudget: 32768,
   maxContinueTurns: 3,
   // task-318: Unify-specific runtime caps. `maxConcurrentThreads` gates
   // how many ThreadEngineRegistry instances may be live at once; dispatch

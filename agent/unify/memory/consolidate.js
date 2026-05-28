@@ -16,8 +16,8 @@
 
 // ─── Constants ──────────────────────────────────────────────────
 
-/** Default MESSAGE_TOKEN_BUDGET (context * 4%, default ~8192). */
-export const DEFAULT_MESSAGE_TOKEN_BUDGET = 8192;
+/** Default MESSAGE_TOKEN_BUDGET for hot message compaction. */
+export const DEFAULT_MESSAGE_TOKEN_BUDGET = 32768;
 
 /** After compact, keep this fraction of the budget. */
 export const COMPACT_KEEP_RATIO = 0.4;

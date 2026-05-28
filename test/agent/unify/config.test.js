@@ -92,6 +92,15 @@ describe('loadConfig — config.json', () => {
     expect(config.providers[0].models).toEqual(['gpt-5', 'claude-sonnet-4-20250514']);
   });
 
+  it('defaults messageTokenBudget to 32K when config omits it', () => {
+    writeFileSync(join(TEST_DIR, 'config.json'), JSON.stringify({
+      providers: [],
+    }));
+
+    const config = loadConfig({ dir: TEST_DIR });
+    expect(config.messageTokenBudget).toBe(32768);
+  });
+
   it('should resolve primaryModel from config.json', () => {
     writeFileSync(join(TEST_DIR, 'config.json'), JSON.stringify({
       providers: [

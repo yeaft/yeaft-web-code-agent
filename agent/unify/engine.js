@@ -1041,7 +1041,7 @@ export class Engine {
     if (!this.#conversationStore) return null;
     if (this.#config._readOnly) return null;
 
-    const budget = this.#config.messageTokenBudget || 8192;
+    const budget = this.#config.messageTokenBudget || 32768;
     const compactCfg = (this.#config && this.#config.compact) || {};
     return this.#runOrchestratorCompact(budget, compactCfg);
   }
@@ -2255,12 +2255,12 @@ export class Engine {
             } else {
               const tool = this.#tools.get(tc.name);
               const rawOutput = await tool.execute(tc.input, { signal });
-              // task-704b: legacy #tools branch must apply the same per-tool
-              // cap as ToolRegistry.execute. Otherwise a deployment using
-              // the legacy registration path bypasses the defense entirely.
+              // Legacy #tools branch must apply the same per-tool cap as
+              // ToolRegistry.execute. Otherwise a deployment using the legacy
+              // registration path bypasses the defense entirely.
               output = truncateToolResultIfNeeded(rawOutput, {
-                contextWindow: currentContextWindow,
                 toolName: tc.name,
+                language: this.#config?.language,
               });
             }
             yield { type: 'tool_end', id: tc.id, name: tc.name, output, isError: false, threadId: this.currentThreadId };
