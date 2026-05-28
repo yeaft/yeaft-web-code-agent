@@ -583,6 +583,8 @@ export default {
   'settings.llm.baseUrlPlaceholder': 'e.g. http://localhost:6628/v1',
   'settings.llm.apiKey': 'API Key',
   'settings.llm.apiKeyPlaceholder': 'Enter API key',
+  'settings.llm.autoAuthGithubCopilot': 'Use GitHub Copilot auto-auth (env / gh CLI)',
+  'settings.llm.autoAuthGithubCopilotHint': 'Token is resolved per request from COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN, ~/.yeaft/credentials/github-copilot.json, or `gh auth token`. No need to paste a key.',
   'settings.llm.protocol': 'Protocol',
   'settings.llm.protocolOpenAI': 'OpenAI Compatible',
   'settings.llm.protocolOpenAIResponses': 'OpenAI Responses (GPT-5)',

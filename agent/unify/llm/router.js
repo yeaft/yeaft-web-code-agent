@@ -279,23 +279,47 @@ export class AdapterRouter extends LLMAdapter {
     // two adapters (e.g. mixed config: openai-responses for gpt-5*, anthropic
     // for claude-*). Cache key includes the protocol.
     const protocol = this.#effectiveProtocol(provider, entry);
-    const cacheKey = `${provider.name}::${protocol}`;
+
+    // Resolve apiKey. Default path: provider.apiKey (static string from
+    // config.json) — completely unchanged from before. Opt-in path: when
+    // provider.credentialProvider is set, ask the credential registry for
+    // a live token. Throws with a clear hint if no token is available.
+    const apiKey = await this.#resolveApiKey(provider);
+
+    // Cache key includes a short fingerprint of the apiKey so that when a
+    // credential provider rotates the token (e.g. Copilot 30-min refresh)
+    // we rebuild the adapter rather than reuse one with a stale Authorization
+    // header. For static providers the apiKey never changes so this stays
+    // a one-time-build cache exactly like before.
+    const apiKeyFp = apiKey ? this.#shortFingerprint(apiKey) : 'none';
+    const cacheKey = `${provider.name}::${protocol}::${apiKeyFp}`;
     const cached = this.#adapterCache.get(cacheKey);
     if (cached) return cached;
+
+    // Token rotation eviction: when a credential provider hands us a NEW
+    // fingerprint for the same (provider, protocol) pair, drop the stale
+    // entry so the cache doesn't grow unboundedly over a long-lived process
+    // (Copilot tokens rotate every ~30 min). Static-apiKey providers never
+    // change fingerprint, so this loop never finds anything to evict for
+    // them — back-compat preserved.
+    const prefix = `${provider.name}::${protocol}::`;
+    for (const key of this.#adapterCache.keys()) {
+      if (key.startsWith(prefix)) this.#adapterCache.delete(key);
+    }
 
     let adapter;
 
     if (protocol === 'anthropic') {
       const { AnthropicAdapter } = await import('./anthropic.js');
       adapter = new AnthropicAdapter({
-        apiKey: provider.apiKey,
+        apiKey,
         baseUrl: provider.baseUrl,
       });
     } else if (protocol === 'openai-responses') {
       // OpenAI Responses API (/v1/responses) — canonical OpenAI-compatible path.
       const { OpenAIResponsesAdapter } = await import('./openai-responses.js');
       adapter = new OpenAIResponsesAdapter({
-        apiKey: provider.apiKey,
+        apiKey,
         baseUrl: provider.baseUrl,
       });
     } else {
@@ -308,6 +332,51 @@ export class AdapterRouter extends LLMAdapter {
 
     this.#adapterCache.set(cacheKey, adapter);
     return adapter;
+  }
+
+  /**
+   * Resolve the apiKey for a provider. If `credentialProvider` is set,
+   * delegate to the registry; otherwise return the static `apiKey` from
+   * config (unchanged from before this feature).
+   *
+   * Kept as a separate method so the credential registry is imported
+   * lazily — providers that don't use a credential provider never pay
+   * the import cost or touch `child_process` / disk.
+   *
+   * @param {object} provider
+   * @returns {Promise<string>}
+   */
+  async #resolveApiKey(provider) {
+    const name = provider && provider.credentialProvider;
+    if (!name) return provider?.apiKey || '';
+    const { getCredentialProvider, CREDENTIAL_PROVIDER_NAMES } = await import('./credentials/index.js');
+    const cp = getCredentialProvider(name);
+    if (!cp) {
+      throw new Error(
+        `Unknown credentialProvider "${name}" on provider "${provider.name}". ` +
+        `Known providers: ${CREDENTIAL_PROVIDER_NAMES.join(', ')}. ` +
+        `Remove the field to use the static apiKey.`
+      );
+    }
+    return cp.getApiKey();
+  }
+
+  /**
+   * Short stable fingerprint of an apiKey for use in the adapter cache key.
+   * Never log the apiKey itself. 8 hex chars is plenty for in-process
+   * uniqueness — we only need to distinguish "same token" vs "rotated".
+   */
+  #shortFingerprint(s) {
+    // Tiny non-crypto FNV-1a 32-bit hash — avoids loading `crypto` on the
+    // hot path. Collisions don't matter for security (the apiKey is still
+    // sent verbatim in the request); they only matter for cache freshness
+    // and FNV is more than enough.
+    let h = 0x811c9dc5;
+    for (let i = 0; i < s.length; i += 1) {
+      h ^= s.charCodeAt(i);
+      h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+    }
+    return h.toString(16).padStart(8, '0');
   }
 
   /**
