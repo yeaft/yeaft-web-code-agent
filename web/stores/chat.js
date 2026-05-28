@@ -2865,11 +2865,24 @@ export const useChatStore = defineStore('chat', {
       if (!agentId) {
         return Promise.resolve(this.modelsDevRegistry);
       }
+      // Piggyback only when the in-flight request is at least as strong.
+      // A pending non-force batch can't satisfy a forceRefresh caller —
+      // otherwise the refresh button is a no-op during the 20s window.
+      if (this._modelsDevPending && (!forceRefresh || this._modelsDevPending.force)) {
+        return new Promise(resolve => this._modelsDevPending.resolvers.push(resolve));
+      }
+      // Pre-empt a weaker in-flight batch (resolve its waiters with the
+      // current snapshot so they don't hang) before launching a stronger
+      // one.
       if (this._modelsDevPending) {
-        return new Promise(resolve => this._modelsDevPending.push(resolve));
+        const old = this._modelsDevPending;
+        this._modelsDevPending = null;
+        if (old.timer) clearTimeout(old.timer);
+        for (const r of old.resolvers) r(this.modelsDevRegistry);
       }
       return new Promise(resolve => {
-        this._modelsDevPending = [resolve];
+        const batch = { resolvers: [resolve], force: forceRefresh, timer: null };
+        this._modelsDevPending = batch;
         try {
           this.sendWsMessage({
             type: 'get_models_dev_registry',
@@ -2877,16 +2890,18 @@ export const useChatStore = defineStore('chat', {
             forceRefresh,
           });
         } catch (e) {
-          this._modelsDevPending = null;
+          if (this._modelsDevPending === batch) this._modelsDevPending = null;
           resolve(this.modelsDevRegistry);
+          return;
         }
         // Safety timeout: clear pending after 20s so a dropped reply
-        // doesn't permanently wedge the picker.
-        setTimeout(() => {
-          if (this._modelsDevPending) {
-            const pending = this._modelsDevPending;
+        // doesn't permanently wedge the picker. Guarded so a later batch
+        // (or a delivered reply that already cleared _modelsDevPending)
+        // is not double-resolved.
+        batch.timer = setTimeout(() => {
+          if (this._modelsDevPending === batch) {
             this._modelsDevPending = null;
-            for (const r of pending) r(this.modelsDevRegistry);
+            for (const r of batch.resolvers) r(this.modelsDevRegistry);
           }
         }, 20000);
       });

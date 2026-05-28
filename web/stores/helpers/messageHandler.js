@@ -653,9 +653,10 @@ export function handleMessage(store, msg) {
         loaded: true,
       };
       if (store._modelsDevPending) {
-        const resolvers = store._modelsDevPending;
+        const batch = store._modelsDevPending;
         store._modelsDevPending = null;
-        for (const r of resolvers) r(store.modelsDevRegistry);
+        if (batch.timer) clearTimeout(batch.timer);
+        for (const r of batch.resolvers) r(store.modelsDevRegistry);
       }
       break;
 

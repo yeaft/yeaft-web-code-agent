@@ -15,7 +15,7 @@
  * forceRefresh=true skips stages 1 and 2 (used by manual refresh button).
  */
 
-import { readFile, writeFile, stat, mkdir } from 'fs/promises';
+import { readFile, writeFile, stat, mkdir, rename } from 'fs/promises';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
 
@@ -57,7 +57,6 @@ async function saveDiskCache(yeaftDir, data) {
     await mkdir(dirname(path), { recursive: true });
     const tmp = path + '.tmp';
     await writeFile(tmp, JSON.stringify(data), 'utf8');
-    const { rename } = await import('fs/promises');
     await rename(tmp, path);
   } catch (e) {
     // Cache is best-effort. Failure to persist must not break callers.
