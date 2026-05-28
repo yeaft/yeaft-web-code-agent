@@ -85,6 +85,17 @@ export default {
         this.expandedTurns = turnsOpen;
       }
     },
+    // feat-always-on-trajectory-store: watch unifyAgentId. The mount-time
+    // hydration silently no-ops when the panel is opened before the
+    // agent socket finishes connecting (loadUnifyDebugHistory bails on
+    // !this.unifyAgentId). Without this watcher the panel stays empty
+    // for that whole session because mounted() never runs again. Now
+    // we re-fire as soon as the agent id becomes available.
+    'store.unifyAgentId'(now, prev) {
+      if (now && !prev && this.store && typeof this.store.loadUnifyDebugHistory === 'function') {
+        this.store.loadUnifyDebugHistory({ limit: 5, dreamLimit: 5 });
+      }
+    },
   },
   computed: {
     store() {
