@@ -236,13 +236,21 @@ export class AdapterRouter extends LLMAdapter {
     const providerLevel = provider.protocol;
     const resolved = perModel || providerLevel || inferred || 'openai-responses';
 
-    if (typeof modelId === 'string' && modelId.toLowerCase().includes('claude')) {
+    // Use the SAME predicate as inferProtocolFromModelId so the guard never
+    // disagrees with the inference (e.g. "my-claude-proxy" → infer=null →
+    // guard wouldn't fire either; "claude-opus-*" → infer=anthropic →
+    // guard enforces anthropic). Prevents confusing "resolved openai-responses
+    // for claude-*" errors on ids the heuristic didn't actually match.
+    if (inferred === 'anthropic') {
       if (resolved !== 'anthropic') {
+        const parts = [];
+        if (perModel) parts.push(`per-model="${perModel}"`);
+        if (providerLevel) parts.push(`provider-level="${providerLevel}"`);
+        const detail = parts.length ? ` (${parts.join(', ')})` : '';
         throw new Error(
           `Claude models require protocol="anthropic"; ` +
           `chat-completions fallback removed in Phase 7. ` +
-          `Provider "${provider.name}" resolved protocol="${resolved}" for model "${modelId}" ` +
-          `(per-model="${perModel || ''}", provider-level="${providerLevel || ''}").`
+          `Provider "${provider.name}" resolved protocol="${resolved}" for model "${modelId}"${detail}.`
         );
       }
       return 'anthropic';

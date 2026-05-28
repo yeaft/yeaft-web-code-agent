@@ -15,6 +15,11 @@
  * inferProtocolFromModelId() heuristic so what the user sees in the picker
  * matches what AdapterRouter will actually do at request time.
  *
+ * The two functions are intentionally byte-identical — the web bundle is
+ * served as static files and can't import from agent/, so we duplicate
+ * the rule. `test/web/preset-picker-protocol-lockstep.test.js` is the
+ * tripwire that fails if they drift.
+ *
  * Returns null when the id doesn't match a known family — the agent's
  * router falls back to the provider-level protocol (or the global default).
  */
@@ -211,7 +216,10 @@ export default {
       this.$emit('pick', {
         name: this.selectedProviderId,
         baseUrl: entry.api || '',
-        // Leave provider-level protocol empty so per-model entries win.
+        // Empty string is intentional: LlmTab.saveConfig drops empty/`'openai'`
+        // protocol values so the per-model entries are the sole source of truth.
+        // Do NOT default this back to a real protocol or you'll break mixed
+        // providers (the provider-level value would win over heuristic).
         protocol: '',
         models,
       });
