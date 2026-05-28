@@ -289,7 +289,9 @@ export default {
     },
     vpColorFor(vpId) {
       const fn = this.vpStore?.vpColor;
-      return typeof fn === 'function' ? fn(vpId) : '#5B8DEF';
+      return typeof fn === 'function'
+        ? fn(vpId)
+        : 'linear-gradient(135deg, #174EA6 0%, #0B2F6B 100%)';
     },
     vpInitialFor(vpId) {
       const fn = this.vpStore?.vpInitial;

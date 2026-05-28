@@ -19,6 +19,7 @@ globalThis.localStorage = globalThis.localStorage || {
 
 const {
   VP_AVATAR_MOTIFS,
+  VP_AVATAR_MOTIF_BY_ID,
   VP_PALETTE,
   fallbackAvatarMotif,
   fallbackColor,
@@ -43,7 +44,21 @@ describe('VP avatar fallback motifs', () => {
     expect(fallbackColor('linus')).toBe(first.background);
   });
 
-  it('cycles ids through the 12 motifs using a stable hash', () => {
+  it('pins common group VPs to separated high-contrast hues', () => {
+    expect(VP_AVATAR_MOTIF_BY_ID.steve.key).toBe('monkey');
+    expect(VP_AVATAR_MOTIF_BY_ID.ada.key).toBe('rabbit');
+    expect(VP_AVATAR_MOTIF_BY_ID.linus.key).toBe('rat');
+    expect(VP_AVATAR_MOTIF_BY_ID.martin.key).toBe('dragon');
+
+    expect(new Set([
+      fallbackAvatarMotif('steve').key,
+      fallbackAvatarMotif('ada').key,
+      fallbackAvatarMotif('linus').key,
+      fallbackAvatarMotif('martin').key,
+    ])).toHaveLength(4);
+  });
+
+  it('cycles unknown ids through the 12 motifs using a stable hash', () => {
     const id = 'custom-vp-over-12';
     const expected = VP_AVATAR_MOTIFS[stableVpHash(id) % VP_AVATAR_MOTIFS.length];
 

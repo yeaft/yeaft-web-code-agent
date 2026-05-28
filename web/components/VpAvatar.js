@@ -89,12 +89,20 @@ export default {
     const store = useVpStore();
     const initial = Vue.computed(() => store.vpInitial(props.vpId));
     const displayName = Vue.computed(() => store.vpLabel(props.vpId));
-    const color = Vue.computed(() => store.vpColor(props.vpId));
     const motif = Vue.computed(() => {
       const fn = store.vpAvatarMotif;
       return typeof fn === 'function'
         ? fn(props.vpId)
-        : { key: 'rat', glyph: 'R', foreground: '#12305C' };
+        : {
+          key: 'rat',
+          glyph: 'R',
+          background: 'linear-gradient(135deg, #174EA6 0%, #0B2F6B 100%)',
+          foreground: '#FFFFFF',
+        };
+    });
+    const color = Vue.computed(() => {
+      const fn = store.vpColor;
+      return typeof fn === 'function' ? fn(props.vpId) : motif.value.background;
     });
     const motifKey = Vue.computed(() => motif.value.key);
     const motifGlyph = Vue.computed(() => motif.value.glyph);
@@ -123,7 +131,7 @@ export default {
       height: props.size + 'px',
       background: color.value,
       color: motifColor.value,
-      fontSize: Math.round(props.size * 0.5) + 'px',
+      fontSize: Math.max(13, Math.round(props.size * 0.58)) + 'px',
     }));
     return {
       initial,
