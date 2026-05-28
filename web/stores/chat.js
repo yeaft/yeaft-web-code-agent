@@ -198,6 +198,12 @@ export const useChatStore = defineStore('chat', {
     // LLM config: agentId -> { providers, primaryModel, fastModel, language, loaded }
     llmConfig: {},
 
+    // models.dev community registry snapshot (shared across agents — same
+    // public catalog). Shape: { registry, fetchedAt, error, loaded }.
+    // Populated by store.loadModelsDevRegistry() on demand.
+    modelsDevRegistry: { registry: {}, fetchedAt: 0, error: null, loaded: false },
+    _modelsDevPending: null,
+
     // task-318: per-agent Unify runtime settings cache. Keyed by agentId.
     // Shape: { maxConcurrentThreads, autoArchiveIdleDays, error, loaded, at }
     unifySettings: {},
@@ -2843,6 +2849,47 @@ export const useChatStore = defineStore('chat', {
         if (mql.addEventListener) mql.addEventListener('change', apply);
         else if (mql.addListener) mql.addListener(apply);
       }
+    },
+
+    // models.dev registry loader. Returns the cached snapshot when fresh
+    // (<1h) unless forceRefresh is true. Coalesces concurrent requests so
+    // multiple LlmTab mounts don't fan out to N WebSocket requests.
+    loadModelsDevRegistry({ forceRefresh = false } = {}) {
+      const fresh = this.modelsDevRegistry.loaded
+        && !this.modelsDevRegistry.error
+        && (Date.now() - this.modelsDevRegistry.fetchedAt) < 60 * 60 * 1000;
+      if (!forceRefresh && fresh) {
+        return Promise.resolve(this.modelsDevRegistry);
+      }
+      const agentId = this.unifyAgentId || this.currentAgent;
+      if (!agentId) {
+        return Promise.resolve(this.modelsDevRegistry);
+      }
+      if (this._modelsDevPending) {
+        return new Promise(resolve => this._modelsDevPending.push(resolve));
+      }
+      return new Promise(resolve => {
+        this._modelsDevPending = [resolve];
+        try {
+          this.sendWsMessage({
+            type: 'get_models_dev_registry',
+            agentId,
+            forceRefresh,
+          });
+        } catch (e) {
+          this._modelsDevPending = null;
+          resolve(this.modelsDevRegistry);
+        }
+        // Safety timeout: clear pending after 20s so a dropped reply
+        // doesn't permanently wedge the picker.
+        setTimeout(() => {
+          if (this._modelsDevPending) {
+            const pending = this._modelsDevPending;
+            this._modelsDevPending = null;
+            for (const r of pending) r(this.modelsDevRegistry);
+          }
+        }, 20000);
+      });
     },
 
     changeLocale(locale) {

@@ -223,6 +223,26 @@ export async function handleAgentSync(agentId, agent, msg) {
       break;
     }
 
+    // models.dev registry response from agent — relay to owner clients
+    case 'models_dev_registry': {
+      for (const [, client] of webClients) {
+        if (client.authenticated && (CONFIG.skipAuth ||
+          (agent.ownerId && client.userId === agent.ownerId) ||
+          (!agent.ownerId && client.role === 'admin')
+        )) {
+          await sendToWebClient(client, {
+            type: 'models_dev_registry',
+            agentId,
+            requestId: msg.requestId,
+            registry: msg.registry,
+            fetchedAt: msg.fetchedAt,
+            error: msg.error,
+          });
+        }
+      }
+      break;
+    }
+
     // task-318: Unify runtime settings read / update ack — relay to owner
     case 'unify_settings':
     case 'unify_settings_updated': {

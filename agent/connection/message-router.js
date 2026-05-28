@@ -36,6 +36,7 @@ import { sendToServer, flushMessageBuffer } from './buffer.js';
 import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
 import { getLlmConfig, updateLlmConfig, getUnifySettings, updateUnifySettings, getSearchSettings, updateSearchSettings, fetchTavilyUsage } from '../unify/config-api.js';
+import { fetchModelsDev } from '../unify/llm/models-dev.js';
 import { handleUnifyGroupChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyLoadMoreHistory, handleUnifyAbortThread, handleUnifyAbortAll, handleUnifyAbortTurn, handleUnifyVpSubscribe, handleUnifyVpCreate, handleUnifyVpUpdate, handleUnifyVpDelete, handleUnifyVpRead, handleUnifyListGroups, handleUnifyCreateGroup, handleUnifyRenameGroup, handleUnifyUpdateGroup, handleUnifyUpdateGroupConfig, handleUnifyArchiveGroup, handleUnifyDeleteGroup, handleUnifyAddMember, handleUnifyRemoveMember, handleUnifySetDefaultVp, handleUnifyDreamTrigger, handleUnifyFetchToolStats, handleUnifyFetchDebugHistory, broadcastLanguageChange } from '../unify/web-bridge.js';
 
 export async function handleMessage(msg) {
@@ -344,6 +345,31 @@ export async function handleMessage(msg) {
         broadcastLanguageChange(result.language);
       }
       sendToServer({ type: 'llm_config_updated', ...result });
+      break;
+    }
+
+    // models.dev registry (community-maintained provider/model catalog).
+    // Used by the LLM settings preset picker to populate provider + model lists.
+    case 'get_models_dev_registry': {
+      try {
+        const data = await fetchModelsDev({
+          forceRefresh: !!msg.forceRefresh,
+          yeaftDir: ctx.CONFIG?.yeaftDir,
+        });
+        sendToServer({
+          type: 'models_dev_registry',
+          requestId: msg.requestId || null,
+          registry: data,
+          fetchedAt: Date.now(),
+        });
+      } catch (err) {
+        sendToServer({
+          type: 'models_dev_registry',
+          requestId: msg.requestId || null,
+          registry: {},
+          error: err?.message || String(err),
+        });
+      }
       break;
     }
 

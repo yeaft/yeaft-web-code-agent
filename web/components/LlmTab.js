@@ -1,7 +1,9 @@
 import { PROTOCOL_PRESET_MODELS } from '../utils/protocolPresets.js';
+import ProviderPresetPicker from './ProviderPresetPicker.js';
 
 export default {
   name: 'LlmTab',
+  components: { ProviderPresetPicker },
   props: {
     // task-343: 'chat' (default) binds provider CRUD to chatStore.currentAgent;
     // 'unify' binds to chatStore.unifyAgentId so Unify settings can reuse
@@ -120,11 +122,21 @@ export default {
           </div>
 
           <!-- Add provider button -->
-          <button class="sp-btn llm-add-btn" @click="addProvider">
-            <svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-            {{ $t('settings.llm.addProvider') }}
-          </button>
+          <div class="llm-add-row">
+            <button class="sp-btn llm-add-btn" @click="addProvider">
+              <svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+              {{ $t('settings.llm.addProvider') }}
+            </button>
+            <button v-if="context === 'unify'" class="sp-btn llm-add-btn" @click="showPresetPicker = true">
+              <svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z"/></svg>
+              {{ $t('settings.llm.addFromPreset') }}
+            </button>
+          </div>
         </div>
+
+        <provider-preset-picker v-if="showPresetPicker"
+          @close="showPresetPicker = false"
+          @pick="onPresetPick" />
 
         <!-- Model Selection Section -->
         <div class="sp-group">
@@ -214,7 +226,8 @@ export default {
       isDirty: false,
       saving: false,
       openDropdown: null,
-      showApiKey: {}
+      showApiKey: {},
+      showPresetPicker: false,
     };
   },
   computed: {
@@ -349,6 +362,30 @@ export default {
         models: []
       });
       this.providerModelsText.push('');
+      this.markDirty();
+    },
+
+    // Append a provider pre-filled from the models.dev preset picker.
+    // API key is intentionally left blank — picker has no way to know it.
+    onPresetPick(payload) {
+      this.showPresetPicker = false;
+      if (!payload || !payload.name) return;
+      // Avoid duplicate provider names — append numeric suffix if needed.
+      const existing = new Set(this.localProviders.map(p => (p.name || '').trim()));
+      let name = payload.name;
+      let n = 2;
+      while (existing.has(name)) {
+        name = `${payload.name}-${n++}`;
+      }
+      const models = Array.isArray(payload.models) ? payload.models.filter(Boolean) : [];
+      this.localProviders.push({
+        name,
+        baseUrl: payload.baseUrl || '',
+        apiKey: '',
+        protocol: payload.protocol || 'openai',
+        models,
+      });
+      this.providerModelsText.push(models.join(', '));
       this.markDirty();
     },
 

@@ -130,6 +130,19 @@ export async function handleClientMisc(clientId, client, msg, checkAgentAccess) 
       break;
     }
 
+    // models.dev registry — relay to agent
+    case 'get_models_dev_registry': {
+      const mdAgentId = msg.agentId || client.currentAgent;
+      if (!mdAgentId) break;
+      if (!await checkAgentAccess(mdAgentId)) break;
+      await forwardToAgent(mdAgentId, {
+        type: 'get_models_dev_registry',
+        forceRefresh: !!msg.forceRefresh,
+        requestId: msg.requestId || null,
+      });
+      break;
+    }
+
     // task-318: Unify runtime settings (thread cap + archive threshold)
     case 'get_unify_settings': {
       const unifyAgentId = msg.agentId || client.currentAgent;
