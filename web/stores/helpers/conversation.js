@@ -75,7 +75,7 @@ export function selectConversation(store, conversationId, agentId) {
 
   if (conversationId === store.currentConversation) return;
 
-  const conv = store.conversations.find(c => c.id === conversationId);
+  const conv = store.conversations.find(c => c.id === conversationId && c.type !== 'unify');
   if (conv && conv.agentId && conv.agentId !== store.currentAgent) {
     const agent = store.agents.find(a => a.id === conv.agentId);
     if (agent) {
@@ -128,7 +128,8 @@ export function selectConversation(store, conversationId, agentId) {
     }
   } else {
     const cachedMessages = store.messagesMap[conversationId];
-    if (cachedMessages && cachedMessages.length > 0) {
+    const hasUsableChatCache = store.currentView !== 'chat' && cachedMessages && cachedMessages.length > 0;
+    if (hasUsableChatCache) {
       // Messages already in messagesMap, nothing to do
     } else {
       store.messagesMap[conversationId] = [];

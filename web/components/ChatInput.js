@@ -215,8 +215,11 @@ export default {
     const isInUnifyGroupContext = () => {
       // task-338-F5: decouple gate from VP list hydration state so Unify
       // view always routes `@` to VP candidates. Empty-state rendering is
-      // handled downstream by VpMentionAutocomplete.
-      return store.currentView === 'unify';
+      // handled downstream by VpMentionAutocomplete. But keep the gate tied
+      // to the actual send surface: Chat mode must stay on the expert path,
+      // while group/Unify mode alone gets VP mentions. This prevents a mode
+      // check from making ordinary Chat messages follow group semantics.
+      return store.currentView === 'unify' && !!store.unifyAgentId;
     };
 
     const vpMentionQuery = Vue.computed(() => {

@@ -887,7 +887,10 @@ export default {
     });
 
     const threadBlocks = Vue.computed(() => {
-      if (store.currentView !== 'unify') return turnGroups.value;
+      // Thread-block wrappers are a group-conversation layout primitive.
+      // Chat mode needs the flat turn list so normal user/assistant rows keep
+      // rendering after the thread-block refactor.
+      if (store.currentView !== 'unify' || !activeGroupIdForBar.value) return turnGroups.value;
       const blocks = [];
       let current = null;
       const flush = () => {

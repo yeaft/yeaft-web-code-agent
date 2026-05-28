@@ -66,6 +66,12 @@ describe('MessageList thread-block rendering source', () => {
     expect(fallbackBody).toContain('block.type === \'user\'');
     expect(fallbackBody).toContain('block.type === \'assistant-turn\'');
     expect(fallbackBody).toContain('<AssistantTurn v-else-if="block.type === \'assistant-turn\'"');
+
+    const threadBlocksIdx = src.indexOf('const threadBlocks = Vue.computed');
+    expect(threadBlocksIdx).toBeGreaterThan(-1);
+    const threadBlocksBody = src.slice(threadBlocksIdx, threadBlocksIdx + 400);
+    expect(threadBlocksBody).toContain("store.currentView !== 'unify' || !activeGroupIdForBar.value");
+    expect(threadBlocksBody).toContain('return turnGroups.value');
   });
 
   it('derives the first-level block id from threadId before turnId', () => {
@@ -78,7 +84,7 @@ describe('MessageList thread-block rendering source', () => {
 });
 
 describe('thread block grouping behavior', () => {
-  it('keeps user input and assistant output in the same stable thread block after reload', () => {
+  it('keeps user input and assistant output in the same stable group thread block after reload', () => {
     const blocks = groupByThread([
       { type: 'user', id: 'u-1', message: { id: 'u-1', threadId: 'thr-a', content: 'question' } },
       { type: 'assistant-turn', id: 'a-1', threadId: 'thr-a', textContent: 'answer' },
@@ -87,6 +93,24 @@ describe('thread block grouping behavior', () => {
     expect(blocks).toHaveLength(1);
     expect(blocks[0].threadId).toBe('thr-a');
     expect(blocks[0].items.map(i => i.id)).toEqual(['u-1', 'a-1']);
+  });
+
+  it('leaves chat mode as flat rows while group mode wraps rows by thread', () => {
+    const rows = [
+      { type: 'user', id: 'u-chat', message: { id: 'u-chat', threadId: 'thr-chat' } },
+      { type: 'assistant-turn', id: 'a-chat', threadId: 'thr-chat' },
+    ];
+
+    const chatRows = rows;
+    const groupRows = groupByThread(rows);
+
+    expect(chatRows.map(r => r.id)).toEqual(['u-chat', 'a-chat']);
+    expect(groupRows).toHaveLength(1);
+    expect(groupRows[0]).toEqual(expect.objectContaining({
+      type: 'thread-block',
+      threadId: 'thr-chat',
+    }));
+    expect(groupRows[0].items.map(r => r.id)).toEqual(['u-chat', 'a-chat']);
   });
 
   it('splits pagination/realtime rows when threadId changes even if turnId is absent', () => {
