@@ -446,6 +446,9 @@ export function normalizeProviderModels(provider) {
       const max = coercePositiveInt(entry.maxOutput);
       if (ctx !== undefined) norm.contextWindow = ctx;
       if (max !== undefined) norm.maxOutput = max;
+      if (typeof entry.protocol === 'string' && entry.protocol.trim()) {
+        norm.protocol = entry.protocol.trim();
+      }
       out.push(norm);
     }
     // silently skip anything else (null / missing id / numbers)
@@ -465,10 +468,14 @@ export function serializeModelForPersistence(entry) {
   if (!entry || typeof entry !== 'object') return entry;
   const ctx = coercePositiveInt(entry.contextWindow);
   const max = coercePositiveInt(entry.maxOutput);
-  if (ctx === undefined && max === undefined) return entry.id;
+  const proto = typeof entry.protocol === 'string' && entry.protocol.trim()
+    ? entry.protocol.trim()
+    : undefined;
+  if (ctx === undefined && max === undefined && proto === undefined) return entry.id;
   const obj = { id: entry.id };
   if (ctx !== undefined) obj.contextWindow = ctx;
   if (max !== undefined) obj.maxOutput = max;
+  if (proto !== undefined) obj.protocol = proto;
   return obj;
 }
 

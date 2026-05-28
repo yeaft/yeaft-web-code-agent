@@ -6,9 +6,30 @@
  * Emits:
  *   - close          : user dismissed the picker
  *   - pick(payload)  : user confirmed a selection. Payload shape:
- *       { name, baseUrl, protocol, models: string[] }
+ *       { name, baseUrl, protocol, models: Array<string | {id, protocol?}> }
  *       Caller (LlmTab) appends this to localProviders.
  */
+
+/**
+ * Pick the wire protocol for a catalog model id. Mirrors the agent-side
+ * inferProtocolFromModelId() heuristic so what the user sees in the picker
+ * matches what AdapterRouter will actually do at request time.
+ *
+ * Returns null when the id doesn't match a known family — the agent's
+ * router falls back to the provider-level protocol (or the global default).
+ */
+export function pickProtocolForModelId(modelId) {
+  if (typeof modelId !== 'string' || !modelId) return null;
+  const id = modelId.toLowerCase();
+  if (id.startsWith('claude') || id.includes('/claude') || id.includes('.claude')) {
+    return 'anthropic';
+  }
+  if (/^(gpt-|o1|o3|o4|chatgpt-|codex-|omni-)/.test(id)) {
+    return 'openai-responses';
+  }
+  return null;
+}
+
 export default {
   name: 'ProviderPresetPicker',
   emits: ['close', 'pick'],
@@ -176,13 +197,23 @@ export default {
     confirm() {
       if (!this.selectedProviderId || this.selectedModels.size === 0) return;
       const entry = this.registry[this.selectedProviderId] || {};
-      // Detect Anthropic protocol from models.dev provider id.
-      const protocol = this.selectedProviderId === 'anthropic' ? 'anthropic' : 'openai';
+      // Per-model protocol assignment. We attach an explicit protocol when
+      // we can tell from the model id (claude-* → anthropic, gpt-/o1-/o3-/o4-/
+      // chatgpt-* → openai-responses). For anything else we leave protocol
+      // undefined so the agent's AdapterRouter heuristic + the provider-level
+      // fallback take over. This means one provider entry (e.g. GitHub
+      // Copilot) can serve both Anthropic and OpenAI families without
+      // splitting into two provider rows.
+      const models = Array.from(this.selectedModels).map(id => {
+        const proto = pickProtocolForModelId(id);
+        return proto ? { id, protocol: proto } : id;
+      });
       this.$emit('pick', {
         name: this.selectedProviderId,
         baseUrl: entry.api || '',
-        protocol,
-        models: Array.from(this.selectedModels),
+        // Leave provider-level protocol empty so per-model entries win.
+        protocol: '',
+        models,
       });
     },
   },

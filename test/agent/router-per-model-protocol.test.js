@@ -1,0 +1,122 @@
+/**
+ * Tests for AdapterRouter per-model protocol routing.
+ *
+ * Backwards-compat: legacy `provider.models: string[]` still works.
+ * New: per-model `{id, protocol}` overrides and id-based heuristics let
+ * a single provider serve both Anthropic and OpenAI families.
+ */
+
+import { describe, it, expect } from 'vitest';
+
+import {
+  AdapterRouter,
+  normalizeModelEntry,
+  inferProtocolFromModelId,
+} from '../../agent/unify/llm/router.js';
+
+describe('normalizeModelEntry', () => {
+  it('keeps bare strings', () => {
+    expect(normalizeModelEntry('gpt-5')).toEqual({ id: 'gpt-5' });
+  });
+  it('passes through {id, protocol}', () => {
+    expect(normalizeModelEntry({ id: 'claude-sonnet-4', protocol: 'anthropic' }))
+      .toEqual({ id: 'claude-sonnet-4', protocol: 'anthropic' });
+  });
+  it('drops invalid entries', () => {
+    expect(normalizeModelEntry('')).toBeNull();
+    expect(normalizeModelEntry({})).toBeNull();
+    expect(normalizeModelEntry(null)).toBeNull();
+    expect(normalizeModelEntry({ id: 123 })).toBeNull();
+  });
+});
+
+describe('inferProtocolFromModelId', () => {
+  it('matches the Anthropic family', () => {
+    expect(inferProtocolFromModelId('claude-sonnet-4-20250514')).toBe('anthropic');
+    expect(inferProtocolFromModelId('claude-opus-4')).toBe('anthropic');
+    expect(inferProtocolFromModelId('anthropic.claude-3-haiku')).toBe('anthropic');
+  });
+  it('matches the OpenAI Responses family', () => {
+    expect(inferProtocolFromModelId('gpt-5')).toBe('openai-responses');
+    expect(inferProtocolFromModelId('gpt-4o-mini')).toBe('openai-responses');
+    expect(inferProtocolFromModelId('o1-preview')).toBe('openai-responses');
+    expect(inferProtocolFromModelId('o3-mini')).toBe('openai-responses');
+    expect(inferProtocolFromModelId('chatgpt-5')).toBe('openai-responses');
+  });
+  it('returns null for unknown ids', () => {
+    expect(inferProtocolFromModelId('deepseek-chat')).toBeNull();
+    expect(inferProtocolFromModelId('llama-3')).toBeNull();
+    expect(inferProtocolFromModelId('')).toBeNull();
+    expect(inferProtocolFromModelId(null)).toBeNull();
+  });
+});
+
+describe('AdapterRouter resolution', () => {
+  it('routes legacy string[] models without breaking', () => {
+    const r = new AdapterRouter({
+      providers: [
+        { name: 'p1', baseUrl: 'https://x/', apiKey: 'k', protocol: 'openai-responses', models: ['gpt-5'] },
+      ],
+    });
+    expect(r.getProviderForModel('gpt-5')?.name).toBe('p1');
+    expect(r.listAvailableModels()).toEqual([{ modelId: 'gpt-5', providerName: 'p1' }]);
+  });
+
+  it('supports a mixed provider with id-inferred protocols', async () => {
+    const r = new AdapterRouter({
+      providers: [
+        {
+          name: 'github-copilot',
+          baseUrl: 'https://api.githubcopilot.com',
+          apiKey: 'k',
+          // No provider-level protocol — fully delegated to the heuristic.
+          models: ['gpt-5', 'claude-sonnet-4-20250514'],
+        },
+      ],
+    });
+    // Both should resolve to the same provider but two different adapters.
+    expect(r.getProviderForModel('gpt-5')?.name).toBe('github-copilot');
+    expect(r.getProviderForModel('claude-sonnet-4-20250514')?.name).toBe('github-copilot');
+  });
+
+  it('honors a per-model protocol override beating the heuristic', () => {
+    const r = new AdapterRouter({
+      providers: [
+        {
+          name: 'proxy',
+          baseUrl: 'https://x/',
+          apiKey: 'k',
+          // No provider-level protocol; per-model says "anthropic" even though
+          // id wouldn't infer it.
+          models: [{ id: 'weird-claude-alias', protocol: 'anthropic' }],
+        },
+      ],
+    });
+    // The lookup succeeds and the provider object is returned.
+    expect(r.getProviderForModel('weird-claude-alias')?.name).toBe('proxy');
+  });
+
+  it('throws when a claude model resolves to a non-anthropic protocol', async () => {
+    const r = new AdapterRouter({
+      providers: [
+        // Provider declares openai-responses but offers a claude-* model with
+        // no per-model override — should refuse rather than silently mis-route.
+        { name: 'bad', baseUrl: 'https://x/', apiKey: 'k', protocol: 'openai-responses',
+          models: [{ id: 'claude-sonnet-4', protocol: 'openai-responses' }] },
+      ],
+    });
+    await expect(async () => {
+      // Trigger #resolveAdapter via the public stream path with a minimal params.
+      const gen = r.stream({ model: 'claude-sonnet-4', messages: [] });
+      await gen.next();
+    }).rejects.toThrow(/Claude models require protocol="anthropic"/);
+  });
+
+  it('throws on unknown model id', async () => {
+    const r = new AdapterRouter({ providers: [] });
+    await expect(async () => {
+      const gen = r.stream({ model: 'nope', messages: [] });
+      await gen.next();
+    }).rejects.toThrow(/not found in any provider/);
+  });
+});

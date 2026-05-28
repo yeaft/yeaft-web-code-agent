@@ -329,18 +329,24 @@ export default {
       }
       this.loadError = null;
 
-      // Deep clone providers to avoid mutating store
+      // Deep clone providers to avoid mutating store. Model entries may be
+      // bare string ids OR { id, protocol? } objects — preserve whichever
+      // shape the agent persisted so per-model protocol metadata from the
+      // preset picker survives load → edit → save round trips.
       this.localProviders = (config.providers || []).map(p => ({
         name: p.name || '',
         baseUrl: p.baseUrl || '',
         apiKey: p.apiKey || '',
         protocol: p.protocol || 'openai',
-        models: Array.isArray(p.models) ? [...p.models] : []
+        models: Array.isArray(p.models)
+          ? p.models.map(m => (m && typeof m === 'object') ? { ...m } : m)
+          : []
       }));
 
-      // Build text representations for model textareas (comma-separated)
+      // Textareas only show ids — the protocol metadata is invisible to the
+      // user but preserved in the underlying objects (see onModelsTextChange).
       this.providerModelsText = this.localProviders.map(p =>
-        (p.models || []).join(', ')
+        (p.models || []).map(m => this._modelId(m)).join(', ')
       );
 
       this.localPrimaryModel = config.primaryModel || null;
@@ -350,7 +356,15 @@ export default {
     },
 
     parseModelsFromProvider(provider) {
-      return Array.isArray(provider.models) ? provider.models.filter(m => m) : [];
+      if (!Array.isArray(provider.models)) return [];
+      return provider.models.map(m => this._modelId(m)).filter(m => m);
+    },
+
+    // Extract the id string from either a bare string entry or { id, ... }.
+    _modelId(entry) {
+      if (typeof entry === 'string') return entry;
+      if (entry && typeof entry === 'object' && typeof entry.id === 'string') return entry.id;
+      return '';
     },
 
     addProvider() {
@@ -405,11 +419,22 @@ export default {
     onModelsTextChange(idx, event) {
       const text = event.target.value;
       this.providerModelsText[idx] = text;
-      // Parse text → models array (support both newline and comma separators)
+      // Parse text → model ids (support both newline and comma separators).
+      // For each id, look up the prior entry by id so per-model `protocol`
+      // metadata (e.g. attached by ProviderPresetPicker) survives the edit.
+      const prev = Array.isArray(this.localProviders[idx].models)
+        ? this.localProviders[idx].models
+        : [];
+      const prevById = new Map();
+      for (const m of prev) {
+        const id = this._modelId(m);
+        if (id) prevById.set(id, m);
+      }
       this.localProviders[idx].models = text
         .split(/[\n,]+/)
         .map(l => l.trim())
-        .filter(l => l);
+        .filter(l => l)
+        .map(id => prevById.has(id) ? prevById.get(id) : id);
       this.markDirty();
     },
 
@@ -475,7 +500,9 @@ export default {
             name: p.name.trim(),
             baseUrl: p.baseUrl.trim(),
             apiKey: p.apiKey || '',
-            models: (p.models || []).filter(m => m)
+            // Preserve mixed string/object entries — agent-side normalize
+            // collapses to plain string when no metadata is attached.
+            models: (p.models || []).filter(m => this._modelId(m))
           };
           if (p.protocol && p.protocol !== 'openai') {
             clean.protocol = p.protocol;

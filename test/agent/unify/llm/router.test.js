@@ -322,7 +322,7 @@ describe('AdapterRouter Phase 7 — claude-* protocol enforcement', () => {
     // claude-opus-4.7 → must throw (no chat-completions fallback)
     await expect(
       router.call({ model: 'claude-opus-4.7', system: 't', messages: [{ role: 'user', content: 'b' }] })
-    ).rejects.toThrow(/Claude models require provider\.protocol="anthropic"/);
+    ).rejects.toThrow(/Claude models require protocol="anthropic"/);
   });
 
   it('should leave anthropic-protocol providers untouched for claude-* models', async () => {
