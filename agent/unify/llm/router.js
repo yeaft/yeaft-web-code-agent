@@ -4,13 +4,19 @@
  * Given a providers array from config.json:
  *   [{ name, baseUrl, apiKey, protocol?, models[] }, ...]
  *
- * The router resolves model → provider, lazy-creates the right adapter
- * (AnthropicAdapter or OpenAIResponsesAdapter based on protocol), caches it,
- * and forwards stream()/call() to the resolved adapter.
+ * `models[]` accepts two shapes (mixable in the same provider):
+ *   - bare string id: "gpt-5"                          ← legacy, still supported
+ *   - object:         { id: "gpt-5", protocol?: "..." } ← per-model override
  *
- * protocol must be one of:
- *   - "anthropic"        — Anthropic Messages API (required for claude-* models)
- *   - "openai-responses" — OpenAI Responses API (default for everything else)
+ * Effective protocol for each (provider, model) is resolved in this order:
+ *   1. per-model `protocol` override on the model entry
+ *   2. provider-level `protocol` (explicit config wins over inference)
+ *   3. heuristic by model id (claude-* → anthropic, gpt-/o1-/o3-/o4-/chatgpt-* → openai-responses)
+ *   4. default `openai-responses`
+ *
+ * This lets a single provider (e.g. GitHub Copilot, a unified proxy) serve
+ * both Anthropic and OpenAI families without splitting into two provider
+ * entries.
  *
  * Phase 7 removed the legacy "openai" (Chat Completions) protocol entirely.
  */
@@ -18,6 +24,55 @@
 import { LLMAdapter } from './adapter.js';
 import { getThinkingCapability, normalizeEffort } from '../models.js';
 import { pairSanitize } from '../pair-sanitize.js';
+
+/**
+ * Normalize a model entry to its `{id, protocol?}` object form. Accepts
+ * either a bare string or an object so legacy `models: ["gpt-5"]` configs
+ * keep working unchanged.
+ *
+ * @param {string|object} entry
+ * @returns {{id: string, protocol?: string} | null}
+ */
+export function normalizeModelEntry(entry) {
+  if (typeof entry === 'string') {
+    return entry ? { id: entry } : null;
+  }
+  if (entry && typeof entry === 'object' && typeof entry.id === 'string' && entry.id) {
+    const out = { id: entry.id };
+    if (typeof entry.protocol === 'string' && entry.protocol) {
+      out.protocol = entry.protocol;
+    }
+    return out;
+  }
+  return null;
+}
+
+/**
+ * Infer the wire protocol from a model id when neither the model entry
+ * nor the provider declared one. Centralized so the LlmTab preview and
+ * the router agree on the same rule.
+ *
+ * Returns null when the id doesn't match a known family — the caller
+ * falls back to the provider-level protocol (or the global default).
+ */
+export function inferProtocolFromModelId(modelId) {
+  if (typeof modelId !== 'string' || !modelId) return null;
+  const id = modelId.toLowerCase();
+  // Anthropic family: claude-*, claude (bare), or anything starting with
+  // "claude" so vendor-prefixed ids like "anthropic.claude-..." also match.
+  if (id.startsWith('claude') || id.includes('/claude') || id.includes('.claude')) {
+    return 'anthropic';
+  }
+  // OpenAI Responses-API family. Models that route through /v1/responses:
+  //   gpt-*, o1*, o3*, o4*, chatgpt-*, codex-*, omni-*.
+  // Note: Chat-Completions-only models are intentionally NOT matched here —
+  // they fall through to the provider-level protocol and the router will
+  // refuse if that doesn't resolve to a supported value.
+  if (/^(gpt-|o1|o3|o4|chatgpt-|codex-|omni-)/.test(id)) {
+    return 'openai-responses';
+  }
+  return null;
+}
 
 /**
  * task-327a: feature-flag accessor. Read lazily so tests can flip.
@@ -123,10 +178,10 @@ function sliceUnchanged(original, cleaned) {
  * AdapterRouter — Implements LLMAdapter, routes by model → provider.
  */
 export class AdapterRouter extends LLMAdapter {
-  /** @type {Map<string, object>} modelId → provider config */
+  /** @type {Map<string, {provider: object, entry: {id: string, protocol?: string}}>} */
   #modelToProvider;
 
-  /** @type {Map<string, LLMAdapter>} providerName → cached adapter */
+  /** @type {Map<string, LLMAdapter>} providerName::protocol → cached adapter */
   #adapterCache;
 
   /** @type {object[]} raw providers array */
@@ -142,13 +197,17 @@ export class AdapterRouter extends LLMAdapter {
     this.#modelToProvider = new Map();
     this.#adapterCache = new Map();
 
-    // Build model → provider index
-    // First provider wins if model appears in multiple providers
+    // Build model id → { provider, entry } index. First provider wins if a
+    // model id appears in multiple providers. Each model entry may declare
+    // its own `protocol`; we keep the normalized entry so #effectiveProtocol
+    // can consult it later without re-parsing.
     for (const provider of providers) {
       if (!Array.isArray(provider.models)) continue;
-      for (const modelId of provider.models) {
-        if (!this.#modelToProvider.has(modelId)) {
-          this.#modelToProvider.set(modelId, provider);
+      for (const raw of provider.models) {
+        const entry = normalizeModelEntry(raw);
+        if (!entry) continue;
+        if (!this.#modelToProvider.has(entry.id)) {
+          this.#modelToProvider.set(entry.id, { provider, entry });
         }
       }
     }
@@ -157,27 +216,46 @@ export class AdapterRouter extends LLMAdapter {
   /**
    * Resolve the effective wire protocol for a (provider, model) pair.
    *
-   * Phase 7: only "anthropic" and "openai-responses" are supported. Claude
-   * model IDs require provider.protocol === "anthropic" — there is no
-   * chat-completions fallback any more.
+   * Resolution order:
+   *   1. Per-model entry override (provider.models[i].protocol)
+   *   2. Provider-level protocol (explicit config wins over inference)
+   *   3. Heuristic from model id (claude-* → anthropic, gpt-* → openai-responses)
+   *   4. Default "openai-responses"
+   *
+   * Claude model ids without an anthropic-compatible resolution still throw
+   * — chat-completions fallback was removed in Phase 7.
    *
    * @param {object} provider — Provider config
-   * @param {string} modelId
+   * @param {{id: string, protocol?: string}} entry — Normalized model entry
    * @returns {'anthropic' | 'openai-responses'}
    */
-  #effectiveProtocol(provider, modelId) {
-    const declared = provider.protocol || 'openai-responses';
-    if (typeof modelId === 'string' && modelId.startsWith('claude-')) {
-      if (declared !== 'anthropic') {
+  #effectiveProtocol(provider, entry) {
+    const modelId = entry.id;
+    const perModel = entry.protocol;
+    const inferred = inferProtocolFromModelId(modelId);
+    const providerLevel = provider.protocol;
+    const resolved = perModel || providerLevel || inferred || 'openai-responses';
+
+    // Use the SAME predicate as inferProtocolFromModelId so the guard never
+    // disagrees with the inference (e.g. "my-claude-proxy" → infer=null →
+    // guard wouldn't fire either; "claude-opus-*" → infer=anthropic →
+    // guard enforces anthropic). Prevents confusing "resolved openai-responses
+    // for claude-*" errors on ids the heuristic didn't actually match.
+    if (inferred === 'anthropic') {
+      if (resolved !== 'anthropic') {
+        const parts = [];
+        if (perModel) parts.push(`per-model="${perModel}"`);
+        if (providerLevel) parts.push(`provider-level="${providerLevel}"`);
+        const detail = parts.length ? ` (${parts.join(', ')})` : '';
         throw new Error(
-          `Claude models require provider.protocol="anthropic"; ` +
+          `Claude models require protocol="anthropic"; ` +
           `chat-completions fallback removed in Phase 7. ` +
-          `Provider "${provider.name}" declares protocol="${declared}" for model "${modelId}".`
+          `Provider "${provider.name}" resolved protocol="${resolved}" for model "${modelId}"${detail}.`
         );
       }
       return 'anthropic';
     }
-    return declared;
+    return resolved;
   }
 
   /**
@@ -187,19 +265,20 @@ export class AdapterRouter extends LLMAdapter {
    * @returns {Promise<LLMAdapter>}
    */
   async #resolveAdapter(modelId) {
-    const provider = this.#modelToProvider.get(modelId);
-    if (!provider) {
+    const hit = this.#modelToProvider.get(modelId);
+    if (!hit) {
       throw new Error(
         `Model "${modelId}" not found in any provider. ` +
         `Available models: ${[...this.#modelToProvider.keys()].join(', ') || '(none)'}. ` +
         `Check your config.json providers[].models arrays.`
       );
     }
+    const { provider, entry } = hit;
 
     // Compute the effective protocol per model — a single provider may need
     // two adapters (e.g. mixed config: openai-responses for gpt-5*, anthropic
     // for claude-*). Cache key includes the protocol.
-    const protocol = this.#effectiveProtocol(provider, modelId);
+    const protocol = this.#effectiveProtocol(provider, entry);
     const cacheKey = `${provider.name}::${protocol}`;
     const cached = this.#adapterCache.get(cacheKey);
     if (cached) return cached;
@@ -264,7 +343,8 @@ export class AdapterRouter extends LLMAdapter {
    * @returns {object|null} — Provider config or null
    */
   getProviderForModel(modelId) {
-    return this.#modelToProvider.get(modelId) || null;
+    const hit = this.#modelToProvider.get(modelId);
+    return hit ? hit.provider : null;
   }
 
   /**
@@ -274,8 +354,8 @@ export class AdapterRouter extends LLMAdapter {
    */
   listAvailableModels() {
     const result = [];
-    for (const [modelId, provider] of this.#modelToProvider) {
-      result.push({ modelId, providerName: provider.name });
+    for (const [modelId, hit] of this.#modelToProvider) {
+      result.push({ modelId, providerName: hit.provider.name });
     }
     return result;
   }
