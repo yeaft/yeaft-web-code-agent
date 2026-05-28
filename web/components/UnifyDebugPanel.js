@@ -89,10 +89,13 @@ export default {
     // hydration silently no-ops when the panel is opened before the
     // agent socket finishes connecting (loadUnifyDebugHistory bails on
     // !this.unifyAgentId). Without this watcher the panel stays empty
-    // for that whole session because mounted() never runs again. Now
-    // we re-fire as soon as the agent id becomes available.
+    // for that whole session because mounted() never runs again.
+    //
+    // Condition is `now && now !== prev` (not just `now && !prev`) so an
+    // agent A → agent B switch also re-fetches; otherwise the panel would
+    // keep showing agent A's trajectory after the user switches.
     'store.unifyAgentId'(now, prev) {
-      if (now && !prev && this.store && typeof this.store.loadUnifyDebugHistory === 'function') {
+      if (now && now !== prev && this.store && typeof this.store.loadUnifyDebugHistory === 'function') {
         this.store.loadUnifyDebugHistory({ limit: 5, dreamLimit: 5 });
       }
     },

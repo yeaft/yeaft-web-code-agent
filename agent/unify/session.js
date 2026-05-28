@@ -208,6 +208,13 @@ export async function loadSession(options = {}) {
     enabled: true,
     dbPath: join(yeaftDir, 'debug.db'),
   });
+  // Bound disk growth: prune trajectories older than 30 days on session load.
+  // Cheap (indexed DELETE), runs once per process start, not per turn. Without
+  // this the always-on store grows unbounded — cleanup() existed but had zero
+  // call sites before this PR.
+  try { trace.cleanup?.(30); } catch (err) {
+    console.warn('[Yeaft] trace.cleanup failed:', err?.message || err);
+  }
 
   // ─── 4. Create LLM adapter ────────────────────────────
   const adapter = await createLLMAdapter(config);
