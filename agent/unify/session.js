@@ -193,11 +193,28 @@ export async function loadSession(options = {}) {
     console.warn(`[Yeaft] ${yeaftDir} is not writable — running in read-only mode`);
   }
 
-  // ─── 3. Create debug trace ─────────────────────────────
+  // ─── 3. Create trajectory trace ─────────────────────────
+  // feat-always-on-trajectory-store: the trace is no longer gated on
+  // config.debug. It is a TRAJECTORY STORE: every turn's full
+  // (system_prompt, messages, tool_calls, tool_results, response, usage)
+  // is persisted to ~/.yeaft/debug.db so it can serve two purposes:
+  //   1. Debug panel hydration — user opens "请求日志" and sees prior turns.
+  //   2. SFT / RL training data — scripts can later dump JSONL trajectories.
+  // Cost is negligible (one insert per turn, WAL mode), and the data only
+  // accumulates while the user actually uses the agent. The previous gate
+  // silently discarded every turn unless the user had set debug:true in
+  // ~/.yeaft/config.json, which nobody ever did — wasting the asset.
   const trace = createTrace({
-    enabled: config.debug,
+    enabled: true,
     dbPath: join(yeaftDir, 'debug.db'),
   });
+  // Bound disk growth: prune trajectories older than 30 days on session load.
+  // Cheap (indexed DELETE), runs once per process start, not per turn. Without
+  // this the always-on store grows unbounded — cleanup() existed but had zero
+  // call sites before this PR.
+  try { trace.cleanup?.(30); } catch (err) {
+    console.warn('[Yeaft] trace.cleanup failed:', err?.message || err);
+  }
 
   // ─── 4. Create LLM adapter ────────────────────────────
   const adapter = await createLLMAdapter(config);
