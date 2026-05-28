@@ -644,6 +644,22 @@ export function handleMessage(store, msg) {
       }
       break;
 
+    // models.dev registry snapshot — populates the preset picker.
+    case 'models_dev_registry':
+      store.modelsDevRegistry = {
+        registry: msg.registry || {},
+        fetchedAt: msg.fetchedAt || Date.now(),
+        error: msg.error || null,
+        loaded: true,
+      };
+      if (store._modelsDevPending) {
+        const batch = store._modelsDevPending;
+        store._modelsDevPending = null;
+        if (batch.timer) clearTimeout(batch.timer);
+        for (const r of batch.resolvers) r(store.modelsDevRegistry);
+      }
+      break;
+
     // task-318: Unify runtime settings (thread cap + auto-archive days)
     case 'unify_settings':
     case 'unify_settings_updated':

@@ -198,6 +198,12 @@ export const useChatStore = defineStore('chat', {
     // LLM config: agentId -> { providers, primaryModel, fastModel, language, loaded }
     llmConfig: {},
 
+    // models.dev community registry snapshot (shared across agents — same
+    // public catalog). Shape: { registry, fetchedAt, error, loaded }.
+    // Populated by store.loadModelsDevRegistry() on demand.
+    modelsDevRegistry: { registry: {}, fetchedAt: 0, error: null, loaded: false },
+    _modelsDevPending: null,
+
     // task-318: per-agent Unify runtime settings cache. Keyed by agentId.
     // Shape: { maxConcurrentThreads, autoArchiveIdleDays, error, loaded, at }
     unifySettings: {},
@@ -2843,6 +2849,62 @@ export const useChatStore = defineStore('chat', {
         if (mql.addEventListener) mql.addEventListener('change', apply);
         else if (mql.addListener) mql.addListener(apply);
       }
+    },
+
+    // models.dev registry loader. Returns the cached snapshot when fresh
+    // (<1h) unless forceRefresh is true. Coalesces concurrent requests so
+    // multiple LlmTab mounts don't fan out to N WebSocket requests.
+    loadModelsDevRegistry({ forceRefresh = false } = {}) {
+      const fresh = this.modelsDevRegistry.loaded
+        && !this.modelsDevRegistry.error
+        && (Date.now() - this.modelsDevRegistry.fetchedAt) < 60 * 60 * 1000;
+      if (!forceRefresh && fresh) {
+        return Promise.resolve(this.modelsDevRegistry);
+      }
+      const agentId = this.unifyAgentId || this.currentAgent;
+      if (!agentId) {
+        return Promise.resolve(this.modelsDevRegistry);
+      }
+      // Piggyback only when the in-flight request is at least as strong.
+      // A pending non-force batch can't satisfy a forceRefresh caller —
+      // otherwise the refresh button is a no-op during the 20s window.
+      if (this._modelsDevPending && (!forceRefresh || this._modelsDevPending.force)) {
+        return new Promise(resolve => this._modelsDevPending.resolvers.push(resolve));
+      }
+      // Pre-empt a weaker in-flight batch (resolve its waiters with the
+      // current snapshot so they don't hang) before launching a stronger
+      // one.
+      if (this._modelsDevPending) {
+        const old = this._modelsDevPending;
+        this._modelsDevPending = null;
+        if (old.timer) clearTimeout(old.timer);
+        for (const r of old.resolvers) r(this.modelsDevRegistry);
+      }
+      return new Promise(resolve => {
+        const batch = { resolvers: [resolve], force: forceRefresh, timer: null };
+        this._modelsDevPending = batch;
+        try {
+          this.sendWsMessage({
+            type: 'get_models_dev_registry',
+            agentId,
+            forceRefresh,
+          });
+        } catch (e) {
+          if (this._modelsDevPending === batch) this._modelsDevPending = null;
+          resolve(this.modelsDevRegistry);
+          return;
+        }
+        // Safety timeout: clear pending after 20s so a dropped reply
+        // doesn't permanently wedge the picker. Guarded so a later batch
+        // (or a delivered reply that already cleared _modelsDevPending)
+        // is not double-resolved.
+        batch.timer = setTimeout(() => {
+          if (this._modelsDevPending === batch) {
+            this._modelsDevPending = null;
+            for (const r of batch.resolvers) r(this.modelsDevRegistry);
+          }
+        }, 20000);
+      });
     },
 
     changeLocale(locale) {
