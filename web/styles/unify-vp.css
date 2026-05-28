@@ -36,7 +36,12 @@
   justify-content: center;
   border-radius: 50%;
   color: var(--vp-avatar-fg);
-  font-weight: 600;
+  font-weight: 700;
+  overflow: hidden;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.42),
+    inset 0 -1px 0 rgba(15, 23, 42, 0.16);
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
   font-family: var(--font-sans, system-ui, sans-serif);
   position: relative;
   flex-shrink: 0;
@@ -45,8 +50,39 @@
 }
 
 .vp-avatar-letter {
-  display: inline-block;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
   transform: translateY(-0.5px);
+}
+
+.vp-avatar-motif-glyph {
+  position: absolute;
+  inset: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.18em;
+  font-weight: 800;
+  opacity: 0.22;
+  transform: translate(-0.08em, -0.06em) rotate(-10deg);
+}
+
+.vp-avatar-initial {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 58%;
+  height: 58%;
+  border-radius: 999px;
+  background: color-mix(in srgb, canvas 32%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, currentColor 16%, transparent);
+  font-size: 0.72em;
 }
 
 /* Illustrated portrait layer. Sits on top of the palette disk background
@@ -306,12 +342,17 @@
   width: 40px;
   height: 40px;
   border-radius: 50%;
-  color: #fff;
+  color: var(--vp-avatar-fg);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-weight: 600;
+  font-weight: 700;
   flex-shrink: 0;
+  overflow: hidden;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.42),
+    inset 0 -1px 0 rgba(15, 23, 42, 0.16);
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
 }
 
 .vp-crud-card-meta {

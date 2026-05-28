@@ -5,7 +5,8 @@
  * under web/assets/avatars/. Both avatar components render an <img>
  * pointing at that asset, falling back to the original letter+colour
  * disc when the SVG either does not exist (unknown vpId) or fails to
- * load at runtime.
+ * load at runtime. Unknown VP fallback avatars now use deterministic
+ * zodiac motifs.
  *
  * This test is a source-string contract — identical pattern to
  * test/web/vp-avatar-typing.test.js. No Vue mount, no DOM, no Pinia;
@@ -69,6 +70,15 @@ describe('VpAvatar — illustrated portrait branch', () => {
 
   it('avatarUrl points at the absolute /assets/avatars path', () => {
     expect(src).toContain('/assets/avatars/');
+  });
+
+  it('uses a deterministic zodiac motif for fallback avatars', () => {
+    expect(src).toContain('store.vpAvatarMotif');
+    expect(src).toContain('motifKey');
+    expect(src).toContain('motifGlyph');
+    expect(src).toMatch(/class="vp-avatar-motif-glyph"/);
+    expect(src).toMatch(/class="vp-avatar-initial"/);
+    expect(src).toMatch(/color:\s*motifColor\.value/);
   });
 
   it('does not request an illustrated avatar for Omni until omni.svg ships', () => {

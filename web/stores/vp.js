@@ -25,27 +25,62 @@ function projectDreamDebugEvent(chat, event) {
   chat.handleUnifyOutput({ event });
 }
 
-// 12-color palette (mirrors --vp-palette-1..12 in unify-vp.css).
-// Pre-vetted ≥4.5:1 contrast against white text in both light and dark.
-export const VP_PALETTE = [
-  '#5B8DEF', '#E07A5F', '#81B29A', '#F2CC8F', '#8367C7', '#5DB6A8',
-  '#E8A87C', '#C38D9E', '#3D5A80', '#EE6C4D', '#98C1D9', '#293241',
+// 12 zodiac-inspired default avatar motifs. The mapping is deterministic:
+// vpId -> 32-bit hash -> one of these 12 entries. Existing VP records can still
+// override `color`, but the web fallback no longer gives unknown VPs a plain
+// flat disk.
+export const VP_AVATAR_MOTIFS = [
+  { key: 'rat', label: 'Rat', glyph: 'R', background: 'linear-gradient(135deg, #DCEAFE 0%, #8FB6F5 100%)', foreground: '#12305C' },
+  { key: 'ox', label: 'Ox', glyph: 'O', background: 'linear-gradient(135deg, #E9DDCF 0%, #B68B63 100%)', foreground: '#2F1D12' },
+  { key: 'tiger', label: 'Tiger', glyph: 'T', background: 'linear-gradient(135deg, #FFE2B8 0%, #E0873B 100%)', foreground: '#3B1D07' },
+  { key: 'rabbit', label: 'Rabbit', glyph: 'B', background: 'linear-gradient(135deg, #FCE2EA 0%, #D98FAA 100%)', foreground: '#451628' },
+  { key: 'dragon', label: 'Dragon', glyph: 'D', background: 'linear-gradient(135deg, #DDF5E7 0%, #58B184 100%)', foreground: '#0F3322' },
+  { key: 'snake', label: 'Snake', glyph: 'S', background: 'linear-gradient(135deg, #E5F4C8 0%, #8BB65A 100%)', foreground: '#24330F' },
+  { key: 'horse', label: 'Horse', glyph: 'H', background: 'linear-gradient(135deg, #FFE0CF 0%, #CB785E 100%)', foreground: '#3C160D' },
+  { key: 'goat', label: 'Goat', glyph: 'G', background: 'linear-gradient(135deg, #EEE7FF 0%, #9B86D9 100%)', foreground: '#251B4B' },
+  { key: 'monkey', label: 'Monkey', glyph: 'M', background: 'linear-gradient(135deg, #FFF0B8 0%, #D5A12F 100%)', foreground: '#3A2700' },
+  { key: 'rooster', label: 'Rooster', glyph: 'K', background: 'linear-gradient(135deg, #DDF7F5 0%, #58B7B2 100%)', foreground: '#0B3433' },
+  { key: 'dog', label: 'Dog', glyph: 'D', background: 'linear-gradient(135deg, #E2E8F0 0%, #8798AD 100%)', foreground: '#172232' },
+  { key: 'pig', label: 'Pig', glyph: 'P', background: 'linear-gradient(135deg, #FBE1F4 0%, #C983B5 100%)', foreground: '#3E1737' },
 ];
 
+export const VP_PALETTE = VP_AVATAR_MOTIFS.map((motif) => motif.background);
+
 /**
- * Stable per-vpId color picker. Same input → same output. Pure.
- * Uses a deterministic 32-bit FNV-style hash (no Math.random).
+ * Stable per-vpId hash. Same input -> same output. Pure; no Math.random.
+ *
+ * @param {string} value
+ * @returns {number} unsigned 32-bit hash
+ */
+export function stableVpHash(value) {
+  const input = String(value || '');
+  let h = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    h ^= input.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h >>> 0;
+}
+
+/**
+ * Stable per-vpId zodiac motif picker.
  *
  * @param {string} vpId
- * @returns {string} hex color
+ * @returns {{key: string, label: string, glyph: string, background: string, foreground: string}}
+ */
+export function fallbackAvatarMotif(vpId) {
+  if (!vpId) return VP_AVATAR_MOTIFS[0];
+  return VP_AVATAR_MOTIFS[stableVpHash(vpId) % VP_AVATAR_MOTIFS.length];
+}
+
+/**
+ * Stable per-vpId background picker. Same input -> same output. Pure.
+ *
+ * @param {string} vpId
+ * @returns {string} CSS background
  */
 export function fallbackColor(vpId) {
-  if (!vpId) return VP_PALETTE[0];
-  let h = 0;
-  for (let i = 0; i < vpId.length; i++) {
-    h = (h * 31 + vpId.charCodeAt(i)) >>> 0;
-  }
-  return VP_PALETTE[h % VP_PALETTE.length];
+  return fallbackAvatarMotif(vpId).background;
 }
 
 export const useVpStore = defineStore('vp', {
@@ -138,6 +173,7 @@ export const useVpStore = defineStore('vp', {
       if (v && v.color) return v.color;
       return fallbackColor(id);
     },
+    vpAvatarMotif: () => (id) => fallbackAvatarMotif(id),
     /** R6 G3 — dream status row for a vpId (always returns an object). */
     dreamStatusFor: (state) => (id) => {
       return state.dreamStatus[id] || {
