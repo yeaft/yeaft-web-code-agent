@@ -45,6 +45,9 @@ export default {
       // event timeline. False = collapsed summary line only; true = show
       // full per-event ring buffer below.
       dreamExpanded: false,
+      // feat-dream-debug-detail: per-dream-event expand state, keyed by
+      // `${at}#${idx}` matching the v-for key used in the template.
+      expandedDreamEvents: {},
       activeTab: 'requests', // 'toolStats' | 'dream' | 'requests'
     };
   },
@@ -347,6 +350,119 @@ export default {
       }
       if (evt.error) parts.push(`error: ${evt.error}`);
       return parts.length > 0 ? parts.join(' · ') : this.dreamEventDetail(evt);
+    },
+    // feat-dream-debug-detail: classify a dream event so the template
+    // can render the right body. `loop` = an LLM call (has prompt +
+    // response), `turn_close` = pass-level metrics, `dream_run` =
+    // overall status, `progress` = phase event.
+    dreamEventKind(evt) {
+      if (!evt) return 'progress';
+      const t = evt.type;
+      if (t === 'loop') return 'loop';
+      if (t === 'turn_close' || t === 'dream_turn_close') return 'turn_close';
+      if (t === 'dream_run' && evt.phase === 'result') return 'result';
+      return 'progress';
+    },
+    isDreamEventExpandable(evt) {
+      const kind = this.dreamEventKind(evt);
+      if (kind === 'loop') return !!(evt && (evt.systemPrompt || evt.response || (Array.isArray(evt.messages) && evt.messages.length > 0)));
+      if (kind === 'turn_close' || kind === 'result') return !!(evt && (evt.metrics || evt.passBreakdown || evt.resultSummary));
+      if (kind === 'progress') {
+        return !!(evt && (evt.memoryMdPreview || evt.summaryMdPreview));
+      }
+      return false;
+    },
+    // Review fix (Fowler+Torvalds Minor): use a stable id so a ring-shift
+    // can't land an open-state on the wrong row. `at` (epoch ms) +
+    // turnId + (phase|type) is unique-enough for the panel's scale.
+    dreamEventKey(evt) {
+      if (!evt) return '';
+      return `${evt.at || 0}:${evt.turnId || ''}:${evt.phase || evt.type || ''}`;
+    },
+    toggleDreamEvent(evt) {
+      const key = this.dreamEventKey(evt);
+      if (!key) return;
+      // Review fix (Torvalds Important): prune stale keys so a long
+      // session that scrolls thousands of dream events through the
+      // bounded ring doesn't leak forever in expandedDreamEvents.
+      const live = new Set(this.dreamEvents.map((e) => this.dreamEventKey(e)));
+      const next = {};
+      for (const [k, v] of Object.entries(this.expandedDreamEvents)) {
+        if (live.has(k)) next[k] = v;
+      }
+      next[key] = !next[key];
+      this.expandedDreamEvents = next;
+    },
+    isDreamEventExpanded(evt) {
+      return !!this.expandedDreamEvents[this.dreamEventKey(evt)];
+    },
+    // Best-effort: render the user message a loop sent to the LLM. Loop
+    // events emitted by session-wiring have `messages: [{role:'user',content:str}]`.
+    dreamLoopUserContent(evt) {
+      const messages = Array.isArray(evt?.messages) ? evt.messages : [];
+      for (const m of messages) {
+        if (m && m.role === 'user') {
+          if (typeof m.content === 'string') return m.content;
+          if (m.content != null) return JSON.stringify(m.content, null, 2);
+        }
+      }
+      return '';
+    },
+    formatPassBreakdown(pb) {
+      if (!pb || typeof pb !== 'object') return '';
+      const out = [];
+      for (const [pass, rec] of Object.entries(pb)) {
+        if (!rec) continue;
+        const parts = [pass + ':'];
+        if (rec.llmCallCount) parts.push(`${rec.llmCallCount} call`);
+        if (rec.totalTokens) parts.push(`${this.formatTokens(rec.totalTokens)} tok`);
+        if (rec.durationMs) parts.push(this.formatMs(rec.durationMs));
+        out.push(parts.join(' '));
+      }
+      return out.join(' · ');
+    },
+    copyDreamEventAsMarkdown(evt) {
+      if (!evt) return;
+      const kind = this.dreamEventKind(evt);
+      const lines = [`# Dream event · ${kind} · ${evt.phase || evt.type || '?'}`];
+      lines.push(`- at: ${this.formatTimestamp(evt.at)}`);
+      if (evt.turnId) lines.push(`- turnId: ${evt.turnId}`);
+      if (evt.groupId) lines.push(`- groupId: ${evt.groupId}`);
+      if (evt.target) lines.push(`- target: ${evt.target}`);
+      if (kind === 'loop') {
+        lines.push(`- pass: ${evt.pass || '-'}`);
+        lines.push(`- model: ${evt.model || '-'}`);
+        lines.push(`- latency: ${this.formatMs(evt.latencyMs)}`);
+        const u = evt.usage || {};
+        lines.push(`- tokens: ${u.inputTokens || 0} in / ${u.outputTokens || 0} out / ${u.totalTokens || 0} total`);
+        lines.push('', '## System prompt', '```', evt.systemPrompt || '', '```');
+        lines.push('', '## User message', '```', this.dreamLoopUserContent(evt), '```');
+        lines.push('', '## Response', '```', evt.response || '', '```');
+      } else if (kind === 'turn_close') {
+        lines.push(`- loopCount: ${evt.loopCount ?? evt.metrics?.llmCallCount ?? 0}`);
+        lines.push(`- totalTokens: ${evt.totalTokens ?? evt.metrics?.totalTokens ?? 0}`);
+        lines.push(`- totalMs: ${evt.totalMs ?? evt.metrics?.durationMs ?? 0}`);
+        const pb = evt.passBreakdown || evt.metrics?.passBreakdown;
+        if (pb) {
+          lines.push('', '## Pass breakdown', '```json', JSON.stringify(pb, null, 2), '```');
+        }
+      } else if (kind === 'result') {
+        lines.push(`- status: ${evt.status || '-'}`);
+        if (evt.error) lines.push(`- error: ${evt.error}`);
+        if (evt.resultSummary) {
+          lines.push('', '## Result summary', '```json', JSON.stringify(evt.resultSummary, null, 2), '```');
+        }
+        if (evt.metrics) {
+          lines.push('', '## Metrics', '```json', JSON.stringify(evt.metrics, null, 2), '```');
+        }
+      } else {
+        if (evt.memoryMdPreview) lines.push('', '## memory.md (preview)', '```', evt.memoryMdPreview, '```');
+        if (evt.summaryMdPreview) lines.push('', '## summary.md (preview)', '```', evt.summaryMdPreview, '```');
+        if (!evt.memoryMdPreview && !evt.summaryMdPreview) {
+          lines.push('', '## Raw', '```json', JSON.stringify(evt, null, 2), '```');
+        }
+      }
+      this.copyText(lines.join('\n'), 'dream event');
     },
     toggleLoop(turnId, loopNumber) {
       const key = `${turnId}#${loopNumber}`;
@@ -693,6 +809,14 @@ export default {
             <strong>{{ formatTimestamp(dreamLatest.startedAt) || '-' }}</strong>
             <span>{{ $t('unify.dreamDebug.finished') }}</span>
             <strong>{{ formatTimestamp(dreamLatest.finishedAt) || '-' }}</strong>
+            <span>LLM calls</span>
+            <strong>{{ dreamLatest.llmCallCount || 0 }}</strong>
+            <span>Tokens</span>
+            <strong>{{ formatTokens(dreamLatest.totalTokens || 0) }}</strong>
+            <span v-if="dreamLatest.passBreakdown">Passes</span>
+            <strong v-if="dreamLatest.passBreakdown">{{ formatPassBreakdown(dreamLatest.passBreakdown) }}</strong>
+            <span v-if="dreamLatest.error">Error</span>
+            <strong v-if="dreamLatest.error" class="status-error">{{ dreamLatest.error }}</strong>
           </div>
           <div v-else class="unify-debug-dream-event-empty">{{ $t('unify.dreamDebug.noLatest') }}</div>
         </div>
@@ -706,19 +830,110 @@ export default {
             <span>{{ $t('unify.dreamDebug.location') }}</span>
             <span>{{ $t('unify.dreamDebug.result') }}</span>
           </div>
-          <div
-            v-for="(evt, idx) in dreamEvents"
-            :key="evt.at + ':dream-tab:' + idx"
-            class="unify-debug-dream-event detailed"
-            :class="'status-' + dreamEventStatus(evt)"
-          >
-            <span class="unify-debug-dream-event-time">{{ formatTimestamp(evt.at) }}</span>
-            <span class="unify-debug-dream-event-phase">{{ evt.phase || 'unknown' }}</span>
-            <span class="unify-debug-dream-event-detail">{{ dreamEventTrigger(evt) }}</span>
-            <span class="unify-debug-dream-event-detail">{{ dreamEventCall(evt) }}</span>
-            <span class="unify-debug-dream-event-detail">{{ dreamEventLocation(evt) }}</span>
-            <span class="unify-debug-dream-event-detail">{{ dreamEventResult(evt) }}</span>
-          </div>
+          <template v-for="(evt, idx) in dreamEvents" :key="evt.at + ':dream-tab:' + idx">
+            <div
+              class="unify-debug-dream-event detailed"
+              :class="['status-' + dreamEventStatus(evt), { expandable: isDreamEventExpandable(evt) }]"
+              @click="isDreamEventExpandable(evt) && toggleDreamEvent(evt)"
+            >
+              <span class="unify-debug-dream-event-time">{{ formatTimestamp(evt.at) }}</span>
+              <span class="unify-debug-dream-event-phase">
+                <span v-if="isDreamEventExpandable(evt)">{{ isDreamEventExpanded(evt) ? '▼' : '▶' }} </span>{{ evt.phase || evt.type || 'unknown' }}
+              </span>
+              <span class="unify-debug-dream-event-detail">{{ dreamEventTrigger(evt) }}</span>
+              <span class="unify-debug-dream-event-detail">{{ dreamEventCall(evt) }}</span>
+              <span class="unify-debug-dream-event-detail">{{ dreamEventLocation(evt) }}</span>
+              <span class="unify-debug-dream-event-detail">{{ dreamEventResult(evt) }}</span>
+            </div>
+            <div
+              v-if="isDreamEventExpanded(evt)"
+              class="unify-debug-dream-event-body"
+            >
+              <!-- Loop event: LLM call -->
+              <template v-if="dreamEventKind(evt) === 'loop'">
+                <div class="unify-debug-section-row">
+                  <span class="unify-debug-section-meta">
+                    pass={{ evt.pass || '?' }} · model={{ evt.model || '-' }} · {{ formatMs(evt.latencyMs) }}
+                    · {{ evt.usage?.inputTokens || 0 }}↑ / {{ evt.usage?.outputTokens || 0 }}↓
+                  </span>
+                  <button class="unify-debug-copy-btn" @click.stop="copyDreamEventAsMarkdown(evt)">copy</button>
+                </div>
+                <div class="unify-debug-section" v-if="evt.systemPrompt">
+                  <div class="unify-debug-section-row">
+                    <span class="unify-debug-section-title">System prompt</span>
+                    <button class="unify-debug-copy-btn" @click.stop="copyText(evt.systemPrompt, 'dream system prompt')">copy</button>
+                  </div>
+                  <pre class="unify-debug-pre">{{ evt.systemPrompt }}</pre>
+                </div>
+                <div class="unify-debug-section" v-if="dreamLoopUserContent(evt)">
+                  <div class="unify-debug-section-row">
+                    <span class="unify-debug-section-title">User message</span>
+                    <button class="unify-debug-copy-btn" @click.stop="copyText(dreamLoopUserContent(evt), 'dream user message')">copy</button>
+                  </div>
+                  <pre class="unify-debug-pre">{{ dreamLoopUserContent(evt) }}</pre>
+                </div>
+                <div class="unify-debug-section" v-if="evt.response">
+                  <div class="unify-debug-section-row">
+                    <span class="unify-debug-section-title">Response</span>
+                    <button class="unify-debug-copy-btn" @click.stop="copyText(evt.response, 'dream response')">copy</button>
+                  </div>
+                  <pre class="unify-debug-pre">{{ evt.response }}</pre>
+                </div>
+              </template>
+              <!-- Turn-close: per-pass metrics -->
+              <template v-else-if="dreamEventKind(evt) === 'turn_close'">
+                <div class="unify-debug-section-row">
+                  <span class="unify-debug-section-meta">
+                    {{ evt.loopCount || evt.metrics?.llmCallCount || 0 }} LLM calls ·
+                    {{ formatTokens(evt.totalTokens || evt.metrics?.totalTokens || 0) }} tok ·
+                    {{ formatMs(evt.totalMs || evt.metrics?.durationMs || 0) }}
+                  </span>
+                  <button class="unify-debug-copy-btn" @click.stop="copyDreamEventAsMarkdown(evt)">copy</button>
+                </div>
+                <div class="unify-debug-section" v-if="evt.passBreakdown || evt.metrics?.passBreakdown">
+                  <div class="unify-debug-section-title">Pass breakdown</div>
+                  <pre class="unify-debug-pre">{{ JSON.stringify(evt.passBreakdown || evt.metrics?.passBreakdown, null, 2) }}</pre>
+                </div>
+              </template>
+              <!-- Dream-run result -->
+              <template v-else-if="dreamEventKind(evt) === 'result'">
+                <div class="unify-debug-section-row">
+                  <span class="unify-debug-section-meta" :class="'status-' + (evt.status === 'done' ? 'success' : 'error')">
+                    status={{ evt.status || '-' }}
+                  </span>
+                  <button class="unify-debug-copy-btn" @click.stop="copyDreamEventAsMarkdown(evt)">copy</button>
+                </div>
+                <div class="unify-debug-section" v-if="evt.resultSummary">
+                  <div class="unify-debug-section-title">Result summary</div>
+                  <pre class="unify-debug-pre">{{ JSON.stringify(evt.resultSummary, null, 2) }}</pre>
+                </div>
+                <div class="unify-debug-section" v-if="evt.metrics">
+                  <div class="unify-debug-section-title">Metrics</div>
+                  <pre class="unify-debug-pre">{{ JSON.stringify(evt.metrics, null, 2) }}</pre>
+                </div>
+              </template>
+              <!-- Generic apply 'done': show generated previews -->
+              <template v-else>
+                <div class="unify-debug-section-row">
+                  <button class="unify-debug-copy-btn" @click.stop="copyDreamEventAsMarkdown(evt)">copy</button>
+                </div>
+                <div class="unify-debug-section" v-if="evt.memoryMdPreview">
+                  <div class="unify-debug-section-row">
+                    <span class="unify-debug-section-title">memory.md ({{ evt.memoryMdLength || 0 }} chars)</span>
+                    <button class="unify-debug-copy-btn" @click.stop="copyText(evt.memoryMdPreview, 'memory.md preview')">copy</button>
+                  </div>
+                  <pre class="unify-debug-pre">{{ evt.memoryMdPreview }}</pre>
+                </div>
+                <div class="unify-debug-section" v-if="evt.summaryMdPreview">
+                  <div class="unify-debug-section-row">
+                    <span class="unify-debug-section-title">summary.md ({{ evt.summaryMdLength || 0 }} chars)</span>
+                    <button class="unify-debug-copy-btn" @click.stop="copyText(evt.summaryMdPreview, 'summary.md preview')">copy</button>
+                  </div>
+                  <pre class="unify-debug-pre">{{ evt.summaryMdPreview }}</pre>
+                </div>
+              </template>
+            </div>
+          </template>
         </div>
         <div v-else class="unify-debug-dream-events">
           <div class="unify-debug-dream-event-empty">{{ $t('unify.dreamDebug.noEvents') }}</div>
