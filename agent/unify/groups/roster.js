@@ -56,6 +56,33 @@ export function isMember(meta, vpId) {
 }
 
 /**
+ * Resolve a user/tool supplied VP target to its canonical roster id.
+ *
+ * The persisted roster stores canonical VP ids such as `linus`, while UI
+ * mentions and route_forward callers may still send the display-style
+ * `vp-linus` alias. Prefer exact roster ids first so a real `vp-foo` member
+ * is never collapsed to `foo`.
+ *
+ * @param {object} meta
+ * @param {string} target
+ * @returns {string|null}
+ */
+export function resolveMemberId(meta, target) {
+  if (!meta || !Array.isArray(meta.roster) || typeof target !== 'string') {
+    return null;
+  }
+  if (meta.roster.includes(target)) return target;
+
+  const prefix = 'vp-';
+  if (target.startsWith(prefix)) {
+    const unprefixed = target.slice(prefix.length);
+    if (meta.roster.includes(unprefixed)) return unprefixed;
+  }
+
+  return null;
+}
+
+/**
  * Resolve which VP should answer a message with no explicit @-mention.
  * Per architecture G2: defaultVpId if set, else roster[0], else null.
  */

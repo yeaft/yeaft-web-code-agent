@@ -169,6 +169,15 @@ describe('selectRespondingVps', () => {
     expect(r.reason).toBe('mention');
   });
 
+  it('mention: accepts vp-prefixed aliases for canonical roster ids', () => {
+    const r = selectRespondingVps({
+      meta, fromUser: true, mentions: ['vp-alice', 'vp-bob', 'vp-stranger'],
+    });
+    expect(r.dispatched).toEqual(['alice', 'bob']);
+    expect(r.errors).toEqual([{ vpId: 'vp-stranger', error: 'not_in_roster' }]);
+    expect(r.reason).toBe('mention');
+  });
+
   it('@all: broadcasts to roster minus sender', () => {
     const r = selectRespondingVps({
       meta, fromUser: true, mentions: ['all'], sender: 'user',

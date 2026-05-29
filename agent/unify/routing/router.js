@@ -25,7 +25,7 @@
  *   (d) Tool schema uses defineTool (agent/unify/tools/types.js).
  */
 
-import { isMember } from '../groups/roster.js';
+import { resolveMemberId } from '../groups/roster.js';
 import { createLoopGuard, extendCausedBy } from './loop-guard.js';
 
 /**
@@ -86,18 +86,19 @@ export function createRouter(deps = {}) {
     if (typeof text !== 'string' || text.length === 0) {
       return { ok: false, error: 'text_required' };
     }
-    if (to === from) {
-      return { ok: false, error: 'self_forward_rejected' };
-    }
-
     const meta = coordinator.group.getMeta();
     if (!meta) return { ok: false, error: 'group_not_initialised' };
 
     // Roster membership — `all` is reserved broadcast sentinel handled by
-    // coordinator; anything else must be a real member so we fail fast with
-    // a VP-friendly error before hitting Coordinator.
-    if (to !== 'all' && !isMember(meta, to)) {
+    // coordinator; anything else must resolve to a real member so we fail fast
+    // with a VP-friendly error before hitting Coordinator. `vp-<id>` is a
+    // tolerated UI/tool alias for canonical roster ids such as `linus`.
+    const targetVpId = to === 'all' ? 'all' : resolveMemberId(meta, to);
+    if (targetVpId !== 'all' && !targetVpId) {
       return { ok: false, error: 'target_not_in_roster' };
+    }
+    if (targetVpId === from) {
+      return { ok: false, error: 'self_forward_rejected' };
     }
 
     // Build the causedBy chain BEFORE constructing the synthetic user-like
@@ -110,7 +111,7 @@ export function createRouter(deps = {}) {
     // Loop guard: for broadcast, use 'all' as the target key so one VP
     // spamming @all still gets throttled even if each cycle hits different
     // member inboxes.
-    const guardKey = to === 'all' ? 'all' : to;
+    const guardKey = targetVpId;
     const verdict = guard.check({
       groupId: meta.id,
       targetVpId: guardKey,
@@ -131,9 +132,9 @@ export function createRouter(deps = {}) {
     // stamp + `synthetic` marker let Coordinator's `selectRespondingVps`
     // still treat this like a routed turn (target VPs need to respond) even
     // though role is now 'assistant'.
-    const injectText = to === 'all'
+    const injectText = targetVpId === 'all'
       ? `@all ${text}`
-      : `@${to} ${text}`;
+      : `@${targetVpId} ${text}`;
 
     const report = coordinator.ingest(
       {
