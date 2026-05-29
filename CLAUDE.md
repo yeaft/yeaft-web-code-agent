@@ -1,31 +1,34 @@
 # Claude Web Chat (Yeaft)
 
-一个 Web 端的 AI 聊天应用，提供三种交互模式：**Chat**（基于 Claude CLI 的 1:1 对话）、**Crew**（多 Agent 团队协作）、**Unify**（自带引擎的单 session AI 伙伴）。
+一个 Web 端的 AI 聊天应用。产品名是 **Yeaft**。当前对外提供两类模式：**Claude Chat**（基于 Claude CLI 的 1:1 对话，旧模式）、**Crew**（多 Agent 团队协作）；以及 Yeaft 自有引擎下的 **Group Mode**（多 VP 群组协作，**当前主开发方向**）。Yeaft 的 **Chat Mode**（单 VP 1:1 对话）已规划，**尚未实现**，会复用同一套引擎。
+
+> 历史名词注记：早期 Yeaft 引擎叫做 "Unify"。代码里很多目录、文件、WebSocket 消息类型、store 字段都保留了 `unify` 前缀作为内部别名 — **不要为了改名而批量重命名**，会炸 wire compatibility。文档中一律称呼为 Yeaft；代码标识符按现状保留。
 
 ## 项目结构
 
 ```
 agent/           — Node.js Agent（运行在用户机器上，通过 WebSocket 连接 server）
-  claude.js      — Claude CLI 封装（Chat 模式）
-  conversation.js — Chat 会话管理
-  crew.js        — Crew 模式入口
-  crew/          — Crew 多 Agent 子系统
+  claude.js      — Claude CLI 封装（Claude Chat 旧模式）
+  conversation.js — Claude Chat 会话管理
+  crew.js / crew/ — Crew 多 Agent 子系统
   sdk/           — Claude SDK 封装（query / stream / utils）
   connection/    — WebSocket 连接、消息路由、心跳
-  unify/         — Yeaft Unify 引擎（自包含 AI 引擎，不依赖 Claude CLI）
+  unify/         — Yeaft 引擎（自包含 AI 引擎，不依赖 Claude CLI）
+                   注：目录名保留 "unify" 为历史别名，对外/文档统一叫 Yeaft
+  workbench/     — 文件 / 终端 / git 等工作台后端
 server/          — Express + WebSocket 服务（Agent 与 Web 客户端之间的中继）
   handlers/      — 消息处理器（agent-output、client-conversation 等）
 web/             — 前端（Vue 3 Options API，无构建步骤，静态文件直出）
-  components/    — Vue 组件（ChatPage、UnifyPage、MessageList 等）
+  components/    — Vue 组件（ChatPage、UnifyPage（= Yeaft 页）、MessageList 等）
   stores/        — Pinia store（chat.js 是主状态 store）
   styles/        — CSS 文件
 test/            — Vitest 测试
 ```
 
-## 三种模式
+## 模式总览
 
-### Chat 模式（旧）
-- 使用 Claude CLI（`agent/claude.js`）作为 AI 后端
+### Claude Chat 模式（旧）
+- 用 Claude CLI（`agent/claude.js`）作为 AI 后端
 - 每个会话 = 一个独立的 Claude CLI 进程
 - 支持多 session：侧栏列出多个 chat session
 - Agent 作为桥：web -> server -> agent -> Claude CLI -> agent -> server -> web
@@ -36,25 +39,40 @@ test/            — Vitest 测试
 - 角色间通过 `---ROUTE---` 协议路由消息
 - 通过 `.crew/context/features/` 和 `.crew/context/kanban.md` 跟踪 feature
 
-### Unify 模式（新 - 主开发方向）
-- **单 session** — 没有多 session 概念，一段连续对话
+### Yeaft Group Mode（当前主开发方向）
+- **多 VP 群组协作** — 用户拉一个 group，里面有若干个 VP（Virtual Person，可配置人格 / 模型 / 工具），同一个 user turn 可以并行 fan-out 到多个 VP
 - **自有引擎** — 不依赖 Claude CLI，自己跑 query loop（`agent/unify/engine.js`）
-- **记忆系统** — 持久化记忆，支持 recall、consolidation、dream 维护
-- **多 provider LLM** — 通过 `AdapterRouter` 路由到不同 provider
-- **工具系统** — 40+ 个内置工具，按 mode 过滤（chat vs work）
-- **多 Agent 编排** — 可派生子 Agent 并行执行任务
+- **记忆系统** — H2-AMS 持久化记忆，支持 scope 级 recall、consolidation、dream 维护
+- **多 provider LLM** — 通过 `AdapterRouter` 路由到不同 provider，支持 per-model protocol
+- **工具系统** — 40+ 个内置工具，按 mode 过滤
+- **多 Agent 编排** — VP 可派生子 Agent 并行执行任务
 
-## Unify 架构（agent/unify/）
+### Yeaft Chat Mode（规划中，尚未实现）
+- **单 VP 1:1 对话** — 不走 group fan-out，只跟一个 VP 说话
+- **共用引擎** — 复用 Group Mode 的 `engine.js` / 记忆 / 工具 / LLM 层；差别只在编排（不开 coordinator、不做并行 fan-out）和 UI（不显示 group selector）
+- **状态**：占位中。新代码如果跟"是否在 chat mode"无关，**不要**为这个未来分支引入分支判断 — 等真做的时候一起。
+
+## Yeaft 引擎架构（agent/unify/）
 
 ### 核心组件
 
 ```
 engine.js        — 主 query loop（turn-based：prompt -> LLM -> tool_calls -> execute -> 循环）
 session.js       — Session orchestrator（loadSession 把所有子系统串起来）
-web-bridge.js    — 把 Engine 事件翻译成 claude_output 格式，让前端复用
 config.js        — 从 ~/.yeaft/config.json 读配置（providers、models、limits）
 prompts.js       — 双语 system prompt builder（en/zh）
 models.js        — Model 注册表（上下文窗口、output limit、provider 推断）
+groups/          — Group Mode 编排（coordinator、roster、group-store、pre-flow 等）
+routing/         — Turn 内路由 + loop guard
+router/          — Continuity / thinking 相关路由策略
+memory/          — H2-AMS 记忆子系统
+llm/             — LLM 适配器层（router、anthropic、openai-responses、credentials）
+tools/           — 内置工具表
+templates/       — System prompt 模板（base.md、mode-unified.md、mode-dream.md 等）
+conversation/    — Message 持久化 + 搜索
+dream-v2/        — 后台记忆维护
+compact/         — 上下文 compact 策略
+eval/            — 评估脚本
 ```
 
 ### Engine Query Loop（engine.js）
@@ -72,13 +90,15 @@ models.js        — Model 注册表（上下文窗口、output limit、provider
 adapter.js           — Base LLMAdapter 类 + error 类型 + createLLMAdapter()
 router.js            — AdapterRouter：按 model 路由到 provider，lazy 创建 adapter
 anthropic.js         — Anthropic Messages API 适配器
-openai-responses.js  — OpenAI Responses API 适配器
+openai-responses.js  — OpenAI Responses API 适配器（/v1/responses）
+models-dev.js        — models.dev 注册表（UI 自动补全用）
 credentials/         — 动态凭证（github-copilot 等）
 ```
 - 配置：`~/.yeaft/config.json` 里的 `providers[]` 数组
 - 每个 provider：`{ name, baseUrl, apiKey?, credentialProvider?, protocol?, models[] }`
-- Protocol：`"anthropic"` 或 `"openai-responses"`
+- 支持的 Protocol：`"anthropic"` 或 `"openai-responses"`（旧的 chat-completions 已在 Phase 7 移除）
 - Models 项可以是字符串 `"gpt-5"`，也可以是对象 `{ id, protocol? }` 做 per-model 覆盖
+- Protocol 解析顺序：per-model > provider-level > 按 model id 启发式（claude-* → anthropic / gpt-* / o1-4 / chatgpt-* → openai-responses） > 默认 openai-responses
 
 ### 记忆系统（agent/unify/memory/）— H2-AMS 架构
 
@@ -90,15 +110,15 @@ index-db.js       — SQLite FTS5 索引（每段一行，按 scope 分）
 store-v2.js       — Layer-A summary 读写：<scope>/summary.md
 ams.js            — Active Memory Set：三层缓存（Resident summary / Recent / OnDemand）
 ams-registry.js   — Group 级 AMS 持久化（hydrate + persist with adjustRanThisSession）
-preflow.js        — 每 turn 前对相关 scope 做 FTS 召回 -> 注入 system prompt
-adjust.js         — Turn 后用 LLM 修正 AMS（每个 session 每个 group 最多一次）
-dream-v2.js       — 后台记忆维护：per-group diff -> triage -> merge -> apply
 budget.js         — AMS 各层的 token 预算计算
 keywords.js       — FTS 关键词抽取
-layout.js         — Scope -> 文件路径映射
-summary-store.js  — summary.md 周边工具
-types.js          — 记忆类型分类（type 字面量）
+preflow.js        — 每 turn 前对相关 scope 做 FTS 召回 -> 注入 system prompt
+adjust.js         — Turn 后用 LLM 修正 AMS（每个 session 每个 group 最多一次）
+consolidate.js    — 触发 dream 维护的 consolidation 决策
+seed-backfill.js  — 历史数据迁移 / 回填
 ```
+
+> Dream 维护本身在 `agent/unify/dream-v2/`，不在 memory 目录里。
 
 **Scope 是唯一维度。** 记忆存放在如下 scope 下：
 - `user/<userId>` — 用户级 profile / preference（替代旧的 shard 系统）
@@ -124,27 +144,35 @@ search.js   — 跨会话历史的全文搜索
 ```
 registry.js  — ToolRegistry：按 mode 过滤 + 执行分发
 types.js     — defineTool() + ToolDef/ToolContext 类型
-index.js     — 40+ 个内置工具，createFullRegistry()
+index.js     — 入口，把所有内置工具聚合成 createFullRegistry()
 ```
-- 工具按 mode 过滤：`chat` 类（web-search、memory、ask-user）vs `work` 类（bash、file-edit、grep）
-- 编排工具：agent、send-message、wait-agent、close-agent、list-agents
-- 任务管理：task-create、task-update、task-list、task-get
+按类别分文件（节选）：
+- 文件 / 编辑：`file-read.js` / `file-write.js` / `file-edit.js` / `apply-patch.js` / `notebook-edit.js`
+- 搜索 / 探索：`grep.js` / `glob.js` / `list-dir.js` / `history-search.js`
+- 执行：`bash.js` / `js-repl.js` / `enter-worktree.js` / `exit-worktree.js`
+- 网络 / 媒体：`web-fetch.js` / `web-search.js` / `image-generation.js` / `view-image.js`
+- 编排：`agent.js` / `send-message.js` / `wait-agent.js` / `close-agent.js` / `list-agents.js` / `route-forward.js`
+- 任务 / 计划：`todo-write.js` / `start-plan.js`
+- 对外集成：`ask-user.js` / `skill.js` / `mcp-tools.js`
 
 ### System Prompt 模板（agent/unify/templates/）
 ```
-base.md              — 核心身份 + 原则（双语）
-mode-chat.md         — Chat 模式：结对编程伙伴
-mode-worker.md       — Worker 模式：被指派的子任务执行者
-mode-coordinator.md  — Coordinator 模式：多 Agent 编排者
-mode-dream.md        — Dream 模式：记忆维护
-multi-agent.md       — 子 Agent 派生规则
-tool-guidance.md     — 工具使用最佳实践
-personality-*.md     — 性格变体（friendly、pragmatic）
+base.md             — 核心身份 + 原则（双语）
+identity-yeaft.md   — Yeaft 身份指令
+common-rules.md     — 公共行为规则
+mode-unified.md     — 当前唯一的运行 mode（覆盖 group 协作所需的全部指令）
+mode-dream.md       — Dream 模式：记忆维护
+plan-instruction.md — 计划阶段的额外指令
+tool-guidance.md    — 工具使用最佳实践
+personas/           — 人格变体
+harness/            — Harness 级指令（环境信息等）
 ```
 
+> 历史文档里出现过的 `mode-chat.md` / `mode-worker.md` / `mode-coordinator.md` / `multi-agent.md` / `personality-*.md` 已被收敛进 `mode-unified.md` + `personas/`，**不再单独存在**。
+
 ### Web Bridge（agent/unify/web-bridge.js）
-- 把 Engine 事件翻译成 `claude_output` 格式
-- 前端复用标准 Chat 渲染管线（MessageList、AssistantTurn、ToolLine 等）
+- 把 Engine 事件翻译成 `claude_output` 格式（保留这个 wire type 名是为了让前端复用 Claude Chat 渲染管线）
+- 前端复用标准渲染管线（MessageList、AssistantTurn、ToolLine 等）
 - 消息流：`unify_group_chat` -> agent message-router -> `handleUnifyGroupChat()` -> 按 VP 调 `runVpTurn()` -> Engine.query() -> 事件 -> `unify_output` -> server -> web
 
 ### Skills 和 MCP
@@ -157,30 +185,33 @@ mcp.js     — MCPManager：连接 MCP server，桥接其工具
 
 - **框架**：Vue 3（CDN，无构建步骤）+ Pinia
 - **API 风格**：Vue Options API，`template` 用字符串字面量（不用 SFC / `.vue` 文件）
-- **组件**：`web/components/*.js` — ChatPage、UnifyPage、MessageList、ChatInput 等
+- **组件**：`web/components/*.js` — `ChatPage`、`UnifyPage`（= Yeaft 页，文件名是历史别名）、`UnifySidebar`、`UnifySettings`、`MessageList`、`ChatInput`、`GroupCreateWizard`、`GroupSelector` 等
 - **状态**：`web/stores/chat.js` 是唯一的 Pinia store
-- **渲染**：Chat 和 Unify 复用同一套 MessageList / AssistantTurn 管线
-- **侧栏**：tab bar 含 Chat / Crew / Unify（session-tab-bar）
-- **样式**：纯 CSS 放在 `web/styles/`（sidebar.css、chat.css、unify.css 等）
-- **i18n**：内置 i18n，用 `$t()` 调用（en/zh）
+- **渲染**：Claude Chat 和 Yeaft 复用同一套 MessageList / AssistantTurn 管线
+- **侧栏**：tab bar（session-tab-bar）含 Chat / Crew / Yeaft 入口
+- **样式**：纯 CSS 放在 `web/styles/`，token 都集中在 `variables.css`
+- **i18n**：内置 i18n，用 `$t()` 调用（en / zh-CN）
 
-### Store 关键 state（Unify 相关）
+### Store 关键 state（Yeaft 相关）
+> 字段名保留 `unify` 前缀作为历史别名 — 不要为了改名而批量重命名。
+
 ```js
-currentView: 'chat' | 'unify'        // 顶层页面切换
+currentView: 'chat' | 'unify'        // 顶层页面切换（'unify' 即 Yeaft 页）
 unifyConversationId: null            // Agent session_ready 给出的虚拟 conversationId
 unifyModel: null                     // 当前 model
-unifyMode: 'chat' | 'work'           // Unify 内部 mode 切换
 unifySessionReady: false             // Session 初始化状态
 unifyStatus: null                    // { skills, mcpServers, tools }
+unifyActiveGroupFilter: null         // 当前选中的 group（Group Mode）
 ```
 
-### Store 关键 action（Unify 相关）
+### Store 关键 action（Yeaft 相关）
 ```js
-enterUnify(agentId?)     // 进入 Unify 页，创建虚拟 conversationId
-leaveUnify()             // 回 Chat 页
-sendUnifyGroupChat({groupId,text,mentions})  // Unify 唯一发送通道（type: 'unify_group_chat'）
+enterUnify(agentId?)     // 进入 Yeaft 页，创建虚拟 conversationId
+leaveUnify()             // 回 Claude Chat 页
+sendUnifyGroupChat({groupId, text, mentions, attachments})
+                         // Group Mode 唯一发送通道（wire type: 'unify_group_chat'）
+                         // 旧的 sendUnifyChat（1:1）已移除；Chat Mode 真做的时候会重新加
 handleUnifyOutput(msg)   // 把 Engine 事件丢给标准 claude_output 管线
-setUnifyMode(mode)       // 切 chat/work 模式
 clearUnifyMessages()     // 重置 session
 ```
 
@@ -194,13 +225,13 @@ clearUnifyMessages()     // 重置 session
 
 ## 数据流
 
-### Chat 模式
+### Claude Chat 模式
 ```
 Web 客户端 -> ws "send_message" -> Server -> ws agent -> Claude CLI 进程
 Claude CLI -> agent -> ws "claude_output" -> Server -> ws "claude_output" -> Web 客户端
 ```
 
-### Unify 模式
+### Yeaft Group Mode
 ```
 Web 客户端 -> ws "unify_group_chat" -> Server -> ws agent
   -> message-router.js -> handleUnifyGroupChat()
@@ -209,6 +240,8 @@ Web 客户端 -> ws "unify_group_chat" -> Server -> ws agent
   -> ws "unify_output" -> Web 客户端 -> handleUnifyOutput() -> handleClaudeOutput()
 ```
 
+> Yeaft Chat Mode 真做的时候会复用同一个 wire type（或新增一个对应 1:1 的类型），不另起一套引擎。
+
 ## 配置
 
 ### Agent 配置（~/.yeaft/config.json）
@@ -216,7 +249,10 @@ Web 客户端 -> ws "unify_group_chat" -> Server -> ws agent
 {
   "providers": [
     { "name": "my-proxy", "baseUrl": "http://localhost:6628/v1", "apiKey": "proxy",
-      "protocol": "openai-responses", "models": ["claude-sonnet-4-20250514", "gpt-5"] }
+      "protocol": "openai-responses", "models": ["claude-sonnet-4-20250514", "gpt-5"] },
+    { "name": "github-copilot", "baseUrl": "https://api.githubcopilot.com",
+      "credentialProvider": "github-copilot", "protocol": "openai-responses",
+      "models": [{ "id": "claude-sonnet-4.5", "protocol": "anthropic" }, "gpt-5"] }
   ],
   "primaryModel": "my-proxy/claude-sonnet-4-20250514",
   "fastModel": "my-proxy/claude-haiku-3-20250414",
@@ -227,12 +263,15 @@ Web 客户端 -> ws "unify_group_chat" -> Server -> ws agent
 }
 ```
 
+- `apiKey` 和 `credentialProvider` 二选一：填了 `credentialProvider` 就由 agent 在 request 时动态拿 token（目前支持 `github-copilot`），静态 `apiKey` 路径完全不变。
+- per-model `protocol` 用于同一个 provider 同时跑两种 wire 协议（典型场景：GitHub Copilot 既要 Claude 系也要 GPT 系）。
+
 ## 测试
 
 - **框架**：Vitest
 - **运行**：`npx vitest run`
 - **测试文件**：`test/` 目录，命名 `*.test.js`
-- **Unify 相关**：`test/agent/unify-phase5.test.js`、`unify-phase6.test.js`、`unify-eval.test.js`
+- **Unify 相关**：`test/agent/unify-phase5.test.js`、`unify-phase6.test.js`、`unify-eval.test.js`（命名沿用历史 "unify" 前缀，实际覆盖 Yeaft 引擎）
 
 ## 开发规范
 
@@ -310,10 +349,10 @@ Web 客户端 -> ws "unify_group_chat" -> Server -> ws agent
 - [ ] 没有水平分割线滥用（见下条）
 - [ ] 文案在 `web/i18n/en.js` 和 `web/i18n/zh-CN.js` 都已添加，组件里用 `$t()` 调用，不要写死中文/英文
 
-### 5. Unify UI 特别规则（保留旧规则）
+### 5. Yeaft UI 特别规则（保留旧规则）
 
-- **不要水平分割线 / 边框**：Unify 页面 sidebar 区段、sidebar header、topbar、detail panel header 上**不**用 `border-bottom` / `border-top`。用 padding / margin 制造视觉分组，而不是画线。和 Chat、Crew 的干净观感保持一致。
-- **侧栏样式一致**：Unify 侧栏视觉上必须和 Chat / Crew 侧栏一致 — 不画 section 边框、不写带下边框的大写 label、就是干净的分组 + padding。
+- **不要水平分割线 / 边框**：Yeaft 页面 sidebar 区段、sidebar header、topbar、detail panel header 上**不**用 `border-bottom` / `border-top`。用 padding / margin 制造视觉分组，而不是画线。和 Claude Chat、Crew 的干净观感保持一致。
+- **侧栏样式一致**：Yeaft 侧栏视觉上必须和 Claude Chat / Crew 侧栏一致 — 不画 section 边框、不写带下边框的大写 label、就是干净的分组 + padding。
 
 ### 6. "如果需要说明书才能用，就是设计失败"
 
