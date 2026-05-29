@@ -43,22 +43,28 @@ Blocked until PR0 and PR1 settle model boundaries and the storage contract. This
 
 ## Terminology and model boundaries
 
-Decision: keep provider/runtime family and surface/session type as separate dimensions.
+Decision: keep provider/runtime family and surface/session type as separate dimensions with concrete PR1 field names.
 
-Provider/runtime family answers what runs the model and tools:
+PR1 contract:
 
-- Claude Code: Claude CLI/runtime-backed execution.
-- Yeaft: Yeaft engine/runtime-backed execution.
+- `runtimeFamily` is the provider/runtime dimension. It is owned by agent/server routing and answers what runs the model and tools.
+- `surfaceType` is the user-facing session-shape dimension. It is owned by session creation, web routing, and UI state.
+- These fields must be carried separately anywhere PR1 needs to describe a Yeaft Chat session. A single overloaded `mode` enum is not acceptable.
 
-Surface/session type answers what user-facing session shape is active:
+Allowed initial `runtimeFamily` values:
 
-- Chat: one user-facing conversation.
-- Crew: coordinated role/team collaboration.
-- Group: multi-VP group conversation.
+- `claude-code`: Claude CLI/runtime-backed execution.
+- `yeaft`: Yeaft engine/runtime-backed execution.
 
-These dimensions must not collapse into one enum. For example, `Yeaft + Chat` is not the same kind of value as `Claude Code + Chat`; the first dimension chooses the runtime family and the second chooses the session surface.
+Allowed initial `surfaceType` values:
 
-Open question for PR0 review: should the code eventually use two explicit fields such as `runtimeFamily` and `surfaceType`, or different names? The names are less important than preventing a single overloaded mode enum.
+- `chat`: one user-facing conversation.
+- `crew`: coordinated role/team collaboration.
+- `group`: multi-VP group conversation.
+
+The values are lowercase wire contracts. UI labels may render them as `Claude Code`, `Yeaft`, `Chat`, `Crew`, and `Group`, but persisted records and message payloads should use the lowercase values above unless a later migration RFC changes them.
+
+These dimensions must not collapse into one enum. For example, `runtimeFamily: "yeaft"` with `surfaceType: "chat"` is not the same kind of value as `runtimeFamily: "claude-code"` with `surfaceType: "chat"`; the first field chooses the runtime family and the second chooses the session surface.
 
 ## Yeaft Chat semantics
 
@@ -70,14 +76,21 @@ Allowed semantic behavior in PR1:
 - Yeaft Chat can present clearer naming and routing as an alias/successor.
 - Any semantic delta must be documented before implementation.
 
+Minimum compatibility checklist for PR1:
+
+- Reuse `Engine.query()` through the wrapper; do not fork the engine loop.
+- Preserve memory recall and write behavior, including pre-turn recall, post-turn memory adjustment, and background maintenance triggers.
+- Preserve tool filtering semantics and chat/work capability boundaries unless a delta is explicitly documented and feature-gated.
+- Preserve message rendering compatibility with the existing web bridge and `claude_output`/`unify_output` rendering pipeline.
+- Preserve session lifecycle behavior for session creation, readiness, turn execution, cancellation/error reporting, and clearing/resetting the Yeaft Chat session.
+- Preserve conversation persistence semantics; PR1 must not silently change what is written, skipped, summarized, or replayed.
+
 Not allowed in PR1:
 
 - Silent changes to memory behavior.
 - Silent changes to tool availability.
 - Silent changes to conversation persistence.
 - Silent changes to UI/session semantics beyond aliasing and feature-gated shell wiring.
-
-Open question for PR0 review: list the exact old-Unify behaviors that become contractual compatibility requirements for Yeaft Chat PR1. At minimum this should cover `Engine.query()` reuse, memory recall/write behavior, tool filtering, message rendering expectations, and session lifecycle.
 
 ## Alias-first rule
 
@@ -132,20 +145,19 @@ Open question for PR0 review: whether the canonical log is one file per session,
 
 ## Project `.yeaft` root rule
 
-Blocking RFC item: no persistence implementation until root selection is specified.
+Architecture rule: no persistence implementation may start until it follows this root-selection contract.
 
-The project `.yeaft` root rule must answer:
+Project-scoped Yeaft Chat/Group data must live under the selected project root `.yeaft/`, not under an ambiguous cwd. User-global configuration can remain under `~/.yeaft/`, but project conversation/session data needs a deterministic project root.
 
-- How the active project root is selected.
-- Whether root selection follows the git worktree root, process cwd, explicit config, or a user-selected workspace.
-- How workspace switching changes active storage.
-- What happens when there is no git root.
-- Whether multiple browser tabs can point at different workspaces.
-- How the runtime prevents writes outside the selected root.
+Root-selection contract for PR1+:
 
-Recommended default for review: storage for project-scoped Yeaft Chat/Group data should live under the selected project root `.yeaft/`, not under an ambiguous cwd. User-global configuration can remain under `~/.yeaft/`, but project conversation/session data needs a deterministic project root.
-
-Open question for PR0 review: whether project root selection should be explicit in the session creation message, derived by the agent, or both with validation.
+- Session creation may include an explicit `projectRoot` selected by the web client/workspace UI.
+- The agent must canonicalize `projectRoot` with realpath/path resolution and validate it against an allowed workspace root or the detected git worktree root.
+- If no explicit `projectRoot` is provided, the agent may derive the root from the active workspace/git worktree root. It must not use raw process cwd as persistent storage authority.
+- If there is no git root and no explicit valid workspace root, project-scoped persistence must fail closed: run without project persistence or return an explicit error, but do not write to an inferred arbitrary directory.
+- Each session is pinned to the validated root at creation time. Workspace switching creates or selects another session; it must not move the storage root under an active session.
+- Multiple browser tabs may point at different workspaces only if each tab/session carries its own validated root and the agent keeps their storage isolated.
+- Every write under project `.yeaft/` must re-check that the resolved target path remains inside the pinned root.
 
 ## Path safety, scope isolation, and workspace switching
 
@@ -153,28 +165,26 @@ Blocking RFC item: path and scope behavior must be specified before persistence 
 
 Minimum safety rules:
 
-- Resolve storage paths against the selected project `.yeaft` root.
+- Resolve storage paths against the pinned project `.yeaft` root selected at session creation.
 - Reject path traversal outside the selected root.
 - Do not use user-provided ids directly as path segments without normalization.
+- Normalize ids to a restricted safe alphabet before using them in paths; reject empty, reserved, absolute, `.`/`..`, or separator-containing ids.
 - Isolate scopes such as user, VP, group, feature, and session.
 - Keep Group session storage separate from single-user Chat storage.
-- Define behavior when the workspace switches during an active session.
-
-Open question for PR0 review: whether active sessions should be pinned to the workspace selected at session creation. My default answer is yes. Changing workspaces mid-session should create or switch to a different session rather than moving the storage root underneath a running engine turn.
+- Treat workspace switching as session switching. It must not mutate the root of an active session.
 
 ## Feature flag granularity
 
-Decision: the feature flag must span agent, server, and web. A UI-only flag is not sufficient.
+Decision: use one shared top-level feature flag plus negotiated capabilities. A UI-only flag is not sufficient.
 
-PR1 should define feature-gated behavior at each layer:
+PR1 feature contract:
 
-- Agent: whether Yeaft Chat wrapper/session entrypoints are registered.
-- Server: whether Yeaft Chat messages are accepted and relayed.
-- Web: whether Yeaft Chat UI affordances are visible and usable.
-
-Feature flags must fail closed. If server or agent support is disabled, the web UI should not pretend the feature is available. If web enables a control but server rejects the message, the error path must be explicit.
-
-Open question for PR0 review: whether this is one shared flag name across all layers or layer-specific flags with a negotiated capability response. My preference is one top-level feature plus explicit capability reporting from agent/server to web.
+- Shared flag name: `yeaftChat`.
+- Agent: when `yeaftChat` is disabled, Yeaft Chat wrapper/session entrypoints are not registered and incoming Yeaft Chat requests are rejected with an explicit disabled-feature error.
+- Server: when `yeaftChat` is disabled, Yeaft Chat messages are not accepted or relayed; the server returns an explicit disabled-feature error.
+- Web: the UI may show Yeaft Chat affordances only when the server/agent capability response reports `yeaftChat: true`.
+- Capability negotiation is authoritative at runtime. Static config may request the feature, but the web must fail closed unless both server and agent report support.
+- If capabilities change or negotiation fails, the feature is treated as disabled and the error path must be visible to the user.
 
 ## Group history, pagination, and auto-load
 
@@ -214,25 +224,25 @@ Open question for Martin review: which of these should become hard PR1 acceptanc
 
 PR1 should not merge unless:
 
-- Runtime family and surface/session type remain separate concepts.
-- Yeaft Chat is an alias/successor shell for old Unify behavior.
+- Runtime family and surface/session type remain separate fields: `runtimeFamily` and `surfaceType`.
+- Yeaft Chat is an alias/successor shell for old Unify behavior and satisfies the minimum compatibility checklist.
 - No physical `agent/unify` rename occurs.
 - `Engine.query()` is reused through a wrapper.
 - Engine does not gain WS/UI/project-root concerns.
-- Feature flagging exists across agent, server, and web.
-- No canonical persistence implementation starts before JSONL/root/path-safety questions are resolved.
+- `yeaftChat` feature flagging and capability negotiation exist across agent, server, and web.
+- No canonical persistence implementation starts before JSONL/root/path-safety rules are implemented.
 - Group history, pagination, and auto-load are not included.
 
-## Blocking questions before PR1 starts
+## Resolved PR1 contracts from architecture review
 
-1. What exact field names represent runtime family and surface/session type?
-2. What old-Unify behaviors are contractual for Yeaft Chat alias compatibility?
-3. Is JSONL append-only log accepted as canonical persistence?
-4. What is the selected project `.yeaft` root algorithm?
-5. Are sessions pinned to a workspace root at creation time?
-6. What id normalization and path traversal rules are required for scope isolation?
-7. Is feature gating one shared flag with capabilities, or separate layer flags?
-8. What exact PR1 review checklist will Martin enforce?
+1. Runtime family and surface/session type are represented by separate fields: `runtimeFamily` and `surfaceType`.
+2. Yeaft Chat PR1 must satisfy the minimum old-Unify compatibility checklist in this RFC.
+3. JSONL append-only log is the preferred canonical persistence direction for future persistence work; markdown may only be a projection/export/debug format unless it explicitly owns ids, metadata, cursors, atomicity, migrations, and corruption recovery.
+4. Project `.yeaft` storage is rooted at the validated explicit `projectRoot` or agent-derived workspace/git root, never raw cwd.
+5. Sessions are pinned to a workspace root at creation time; workspace switching means session switching.
+6. Ids used in paths must be normalized to a safe alphabet and path traversal must fail closed.
+7. Feature gating uses one shared `yeaftChat` flag plus runtime capability negotiation across web, server, and agent.
+8. The PR1 review checklist is the acceptance checklist above; any deviation must be explicitly documented before implementation.
 
 ## Review request
 
