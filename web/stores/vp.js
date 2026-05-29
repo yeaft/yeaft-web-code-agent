@@ -95,6 +95,18 @@ export function fallbackColor(vpId) {
   return fallbackAvatarMotif(vpId).background;
 }
 
+/**
+ * Stable text color for VP identity labels. Uses the motif foreground rather
+ * than the old gradient background so lists can be text-only and still keep
+ * per-VP hue separation.
+ *
+ * @param {string} vpId
+ * @returns {string} CSS color
+ */
+export function fallbackTextColor(vpId) {
+  return fallbackAvatarMotif(vpId).foreground;
+}
+
 export const useVpStore = defineStore('vp', {
   state: () => ({
     /** @type {Record<string, object>} */
@@ -185,6 +197,7 @@ export const useVpStore = defineStore('vp', {
       if (v && v.color) return v.color;
       return fallbackColor(id);
     },
+    vpTextColor: () => (id) => fallbackTextColor(id),
     vpAvatarMotif: () => (id) => fallbackAvatarMotif(id),
     /** R6 G3 — dream status row for a vpId (always returns an object). */
     dreamStatusFor: (state) => (id) => {

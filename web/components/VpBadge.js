@@ -1,5 +1,5 @@
 /**
- * VpBadge — composite row (avatar + displayName + optional subtitle).
+ * VpBadge — composite row (displayName + optional subtitle).
  * task-334-ui-a §4.2.
  *
  * task-334-ui-c: opt-in `clickable` prop turns the badge into a focusable
@@ -9,11 +9,9 @@
  * the 334-ui-a static-badge contract.
  */
 import { useVpStore } from '../stores/vp.js';
-import VpAvatar from './VpAvatar.js';
 
 export default {
   name: 'VpBadge',
-  components: { VpAvatar },
   emits: ['open-detail'],
   props: {
     vpId: { type: String, required: true },
@@ -33,9 +31,8 @@ export default {
       :aria-label="displayName"
       @click.stop="$emit('open-detail', vpId)"
     >
-      <VpAvatar :vp-id="vpId" :size="size" :status="status" :typing="typing" />
       <span class="vp-badge-text">
-        <span class="vp-badge-name">{{ displayName }}</span>
+        <span class="vp-badge-name" :style="nameStyle">{{ displayName }}</span>
         <span
           v-if="showSubtitle && subtitle"
           class="vp-badge-subtitle"
@@ -43,9 +40,8 @@ export default {
       </span>
     </button>
     <span v-else class="vp-badge" :class="{ compact }">
-      <VpAvatar :vp-id="vpId" :size="size" :status="status" :typing="typing" />
       <span class="vp-badge-text">
-        <span class="vp-badge-name">{{ displayName }}</span>
+        <span class="vp-badge-name" :style="nameStyle">{{ displayName }}</span>
         <span
           v-if="showSubtitle && subtitle"
           class="vp-badge-subtitle"
@@ -60,6 +56,7 @@ export default {
       const v = store.vpById(props.vpId);
       return v ? (v.subtitle || v.role || '') : '';
     });
-    return { displayName, subtitle };
+    const nameStyle = Vue.computed(() => ({ color: store.vpTextColor(props.vpId) }));
+    return { displayName, subtitle, nameStyle };
   },
 };

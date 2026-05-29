@@ -105,10 +105,7 @@ export default {
                     :checked="form.roster.includes(vp.vpId)"
                     @change="toggleMember(vp.vpId, $event.target.checked)"
                   />
-                  <span class="group-wizard-roster-avatar" :style="{ background: vpColorFor(vp.vpId) }">
-                    {{ vpInitialFor(vp.vpId) }}
-                  </span>
-                  <span class="group-wizard-roster-name">{{ vpLabelFor(vp.vpId) }}</span>
+                  <span class="group-wizard-roster-name" :style="{ color: vpTextColorFor(vp.vpId) }">{{ vpLabelFor(vp.vpId) }}</span>
                 </label>
                 <button
                   v-if="form.roster.includes(vp.vpId)"
@@ -287,15 +284,9 @@ export default {
       const fn = this.vpStore?.vpLabel;
       return typeof fn === 'function' ? fn(vpId) : vpId;
     },
-    vpColorFor(vpId) {
-      const fn = this.vpStore?.vpColor;
-      return typeof fn === 'function'
-        ? fn(vpId)
-        : 'linear-gradient(135deg, #174EA6 0%, #0B2F6B 100%)';
-    },
-    vpInitialFor(vpId) {
-      const fn = this.vpStore?.vpInitial;
-      return typeof fn === 'function' ? fn(vpId) : (vpId ? vpId.charAt(0).toUpperCase() : '?');
+    vpTextColorFor(vpId) {
+      const fn = this.vpStore?.vpTextColor;
+      return typeof fn === 'function' ? fn(vpId) : 'var(--vp-avatar-rat-fg)';
     },
     openFolderPicker() {
       const agentId = this.folderPickerAgentId;

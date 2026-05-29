@@ -1,19 +1,12 @@
 /**
  * VpTurnBlock — Slack-style per-VP turn block (Slack-layout redesign,
- * 2026-05-09). Two-column grid: avatar gutter on the LEFT, content
- * column on the RIGHT. The content column has its own header on top
+ * 2026-05-09). Single content column with colored speaker text.
+ * The content column has its own header on top
  * (name + time + state cause + per-turn stop) and the message body
  * (text + tools + todo + ask + images + hand-off pills) below it.
  *
- * Why a 2-column grid (vs. the prior horizontal flex header + indented
- * body): the previous shape rendered `[avatar | name | time | toggle]`
- * across the FULL row width, with the body indented 36px below. After
- * a turn finished and entered `auto-collapsed`, the compact body
- * stripped most context, and several reports came back saying the
- * "who replied" identity disappeared visually because the eye-line
- * separated the bare text from the small avatar a row up. The grid
- * keeps avatar and message side-by-side at all times, like Slack /
- * Crew workspace's `crew-message` layout.
+ * Avatar display was removed after user feedback; the VP identity now lives
+ * in the colored name text so the sidebar stays readable at small sizes.
  *
  * Header content (always visible, never collapsed):
  *   [Display name] · [HH:MM start time] [· Ns elapsed while streaming]
@@ -51,7 +44,6 @@
  *                  MessageList while any turn is streaming.
  */
 import AssistantTurn from './AssistantTurn.js';
-import VpAvatar from './VpAvatar.js';
 import ToolLine from './ToolLine.js';
 import { useChatStore } from '../stores/chat.js';
 import { useVpStore } from '../stores/vp.js';
@@ -65,7 +57,7 @@ import {
 
 export default {
   name: 'VpTurnBlock',
-  components: { AssistantTurn, VpAvatar, ToolLine },
+  components: { AssistantTurn, ToolLine },
   props: {
     turn: { type: Object, required: true },
     conversationId: { type: String, default: null },
@@ -77,25 +69,7 @@ export default {
          :data-turn-id="turn.turnId || ''"
          :data-vp-id="turn.speakerVpId || ''">
 
-      <!-- Left gutter: avatar only. Clickable opens VP detail. The
-           name lives in the right column's header so it shares the
-           message column's text baseline (Slack style). -->
-      <div class="vp-turn-block-avatar"
-           :class="{ 'vp-turn-block-avatar-clickable': !!turn.speakerVpId }"
-           @click.stop="onAvatarClick"
-           :title="displayName"
-           :role="turn.speakerVpId ? 'button' : null"
-           :tabindex="turn.speakerVpId ? '0' : null"
-           @keydown.enter.stop="onAvatarClick"
-           @keydown.space.stop.prevent="onAvatarClick">
-        <VpAvatar
-          v-if="turn.speakerVpId"
-          :vp-id="turn.speakerVpId"
-          :size="36"
-          :typing="isTyping"
-        />
-      </div>
-
+      <!-- Header text carries VP identity; avatars were removed from the turn list. -->
       <!-- Right column: header (always visible) + body (collapsible) -->
       <div class="vp-turn-block-main">
         <div v-if="turn.threadId" class="vp-thread-summary" :class="{ 'vp-thread-summary-collapsed': threadSummaryCollapsed }">
@@ -106,6 +80,7 @@ export default {
           <span
             v-if="displayName"
             class="vp-turn-block-name"
+            :style="speakerNameStyle"
             @click.stop="onAvatarClick"
           >{{ displayName }}</span>
           <span

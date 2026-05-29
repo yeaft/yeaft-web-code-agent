@@ -34,11 +34,8 @@ export default {
           </div>
           <div class="vp-crud-card-grid">
             <div class="vp-crud-card" v-for="vp in vpList" :key="vp.vpId">
-              <div class="vp-crud-card-avatar" :style="{ background: vpColorFor(vp.vpId) }">
-                {{ vpInitialFor(vp.vpId) }}
-              </div>
               <div class="vp-crud-card-meta">
-                <div class="vp-crud-card-name">
+                <div class="vp-crud-card-name" :style="{ color: vpTextColorFor(vp.vpId) }">
                   <span>{{ vp.displayName || vp.vpId }}</span>
                   <span v-if="vp.isStock" class="vp-crud-stock-badge" :title="$t('unify.vp.crud.stockReadOnly')">
                     {{ $t('unify.vp.crud.stockBadge') }}
@@ -265,8 +262,7 @@ export default {
         persona: '',
       };
     },
-    vpColorFor(vpId) { return this.vpStore.vpColor(vpId); },
-    vpInitialFor(vpId) { return this.vpStore.vpInitial(vpId); },
+    vpTextColorFor(vpId) { return this.vpStore.vpTextColor(vpId); },
 
     /**
      * Populate `this.form` from a VP-shaped object (either a fresh read

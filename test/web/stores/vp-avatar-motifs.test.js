@@ -23,6 +23,7 @@ const {
   VP_PALETTE,
   fallbackAvatarMotif,
   fallbackColor,
+  fallbackTextColor,
   stableVpHash,
   useVpStore,
 } = await import('../../../web/stores/vp.js');
@@ -42,6 +43,7 @@ describe('VP avatar fallback motifs', () => {
 
     expect(first).toEqual(second);
     expect(fallbackColor('linus')).toBe(first.background);
+    expect(fallbackTextColor('linus')).toBe(first.foreground);
   });
 
   it('pins common group VPs to separated high-contrast hues', () => {
@@ -79,10 +81,11 @@ describe('VP avatar fallback motifs', () => {
     expect(VP_PALETTE).toEqual(VP_AVATAR_MOTIFS.map((motif) => motif.background));
   });
 
-  it('exposes the motif picker from the VP store getters', () => {
+  it('exposes the motif picker and text color from the VP store getters', () => {
     const schema = useVpStore();
     const motif = schema.getters.vpAvatarMotif()('ada');
 
     expect(motif).toBe(fallbackAvatarMotif('ada'));
+    expect(schema.getters.vpTextColor()('ada')).toBe(fallbackTextColor('ada'));
   });
 });
