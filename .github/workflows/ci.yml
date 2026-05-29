@@ -1,8 +1,9 @@
 name: CI
 
 on:
-  pull_request:
-    branches: [main]
+  # Disabled on pull_request by user request — was running on every PR push.
+  # Keep workflow_dispatch so the job is still runnable manually from the
+  # Actions tab when we want a full CI pass.
   workflow_dispatch:
 
 jobs:
