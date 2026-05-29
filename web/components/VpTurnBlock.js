@@ -223,6 +223,12 @@ export default {
       return vpStore.vpLabel(vpId) || vpId;
     });
 
+    const speakerNameStyle = Vue.computed(() => {
+      const vpId = props.turn && props.turn.speakerVpId;
+      if (!vpId || typeof vpStore.vpTextColor !== 'function') return {};
+      return { color: vpStore.vpTextColor(vpId) };
+    });
+
     const onStopTurn = () => {
       const turnId = props.turn && props.turn.turnId;
       if (!turnId) return;
@@ -327,6 +333,7 @@ export default {
       isTyping,
       showStop,
       displayName,
+      speakerNameStyle,
       compactText,
       lastTool,
       startedTimeText,
