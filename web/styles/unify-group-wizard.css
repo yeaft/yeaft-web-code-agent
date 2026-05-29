@@ -188,6 +188,10 @@
 .group-wizard-default-star:disabled {
   cursor: default;
 }
+.group-wizard-roster-row .vp-avatar {
+  flex: 0 0 auto;
+}
+
 .group-wizard-roster-name {
   flex: 1 1 auto;
   font-size: 13px;

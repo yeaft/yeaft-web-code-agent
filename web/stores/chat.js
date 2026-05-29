@@ -874,6 +874,11 @@ export const useChatStore = defineStore('chat', {
         const groupId = resolveActiveUnifyGroupId(this);
         const groupKey = groupId || '__all__';
         const savedState = this.unifyGroupHistoryState[groupKey] || null;
+        // If the group snapshot has not arrived yet, do not replay the
+        // unfiltered "all" history. That causes the visible pane to paint
+        // legacy/default rows and then repaint after group_list_updated picks
+        // the real active group. Ask only for session metadata now; the
+        // group_list_updated path below will hydrate exactly one group.
         const needMessages = !!groupId && !savedState?.loaded && !savedState?.loading;
         if (groupId && needMessages) {
           this.unifyGroupHistoryState = {
@@ -1106,10 +1111,17 @@ export const useChatStore = defineStore('chat', {
           const agentConvId = event.conversationId;
           const localConvId = this.unifyConversationId;
 
-          // Migrate messages from local placeholder to agent's conversationId
+          // Migrate messages from local placeholder to agent's conversationId.
+          // On Unify re-entry the server may replay session_ready with the same
+          // agent conversation id while a fresh local placeholder is active.
+          // Merge instead of replacing so cached/live rows don't disappear and
+          // then reappear when group history lands.
           if (localConvId && localConvId !== agentConvId) {
             const existingMsgs = this.messagesMap[localConvId] || [];
-            this.messagesMap[agentConvId] = existingMsgs;
+            const targetMsgs = this.messagesMap[agentConvId] || [];
+            this.messagesMap[agentConvId] = targetMsgs.length > 0
+              ? [...targetMsgs, ...existingMsgs].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
+              : existingMsgs;
             delete this.messagesMap[localConvId];
             // Migrate processing state
             if (this.processingConversations[localConvId]) {

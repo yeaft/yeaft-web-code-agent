@@ -20,9 +20,11 @@
  * are resolved via window.Pinia so the file stays node-importable for
  * unit tests that don't mount Pinia.
  */
+import VpAvatar from './VpAvatar.js';
 
 export default {
   name: 'GroupMemberEditor',
+  components: { VpAvatar },
   emits: ['close'],
   props: {
     groupId: { type: String, required: true },
@@ -82,6 +84,11 @@ export default {
                     :checked="isMember(vp.vpId)"
                     :disabled="busy"
                     @change="toggleMember(vp.vpId, $event.target.checked)"
+                  />
+                  <VpAvatar
+                    :vp-id="vp.vpId"
+                    :size="22"
+                    :aria-label="vpLabelFor(vp.vpId)"
                   />
                   <span class="group-wizard-roster-name" :style="{ color: vpTextColorFor(vp.vpId) }">{{ vpLabelFor(vp.vpId) }}</span>
                 </label>

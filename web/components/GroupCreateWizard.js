@@ -21,9 +21,11 @@
  */
 // Stores are resolved lazily via window.Pinia to keep this module
 // importable in node-only unit tests that don't mount Pinia.
+import VpAvatar from './VpAvatar.js';
 
 export default {
   name: 'GroupCreateWizard',
+  components: { VpAvatar },
   emits: ['close', 'created'],
   template: `
     <Teleport to="body">
@@ -104,6 +106,11 @@ export default {
                     :value="vp.vpId"
                     :checked="form.roster.includes(vp.vpId)"
                     @change="toggleMember(vp.vpId, $event.target.checked)"
+                  />
+                  <VpAvatar
+                    :vp-id="vp.vpId"
+                    :size="22"
+                    :aria-label="vpLabelFor(vp.vpId)"
                   />
                   <span class="group-wizard-roster-name" :style="{ color: vpTextColorFor(vp.vpId) }">{{ vpLabelFor(vp.vpId) }}</span>
                 </label>
