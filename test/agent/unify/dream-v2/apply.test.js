@@ -83,6 +83,15 @@ describe('UPDATE path', () => {
     const phases = events.map(e => `${e.phase}/${e.status || ''}`);
     expect(phases).toContain('apply/snapshot');
     expect(phases).toContain('apply/done');
+
+    // feat-dream-debug-detail: the done event carries previews of what
+    // was written so the debug panel can show generated segments.
+    const done = events.find(e => e.phase === 'apply' && e.status === 'done');
+    expect(done.kind).toBe('update');
+    expect(done.memoryMdPreview).toContain('new rewritten body');
+    expect(done.summaryMdPreview).toBe('new summary');
+    expect(done.memoryMdLength).toBeGreaterThan(0);
+    expect(done.summaryMdLength).toBe('new summary'.length);
   });
 
   it('batches when sources exceed cap, threading memory between batches', async () => {
