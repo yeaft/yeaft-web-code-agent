@@ -70,8 +70,8 @@ describe('VP avatar fallback motifs', () => {
       expect(motif.key).toMatch(/^[a-z]+$/);
       expect(motif.label.length).toBeGreaterThan(0);
       expect(motif.glyph).toMatch(/^[A-Z]$/);
-      expect(motif.foreground).toMatch(/^#[0-9A-F]{6}$/i);
-      expect(motif.background).toContain('linear-gradient');
+      expect(motif.foreground).toBe(`var(--vp-avatar-${motif.key}-fg)`);
+      expect(motif.background).toBe(`var(--vp-avatar-${motif.key}-bg)`);
     }
   });
 
