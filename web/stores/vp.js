@@ -25,23 +25,23 @@ function projectDreamDebugEvent(chat, event) {
   chat.handleUnifyOutput({ event });
 }
 
-// 12 high-contrast default avatar motifs. The mapping is deterministic:
+// 12 modern default avatar motifs. The mapping is deterministic:
 // vpId -> fixed known-VP entry when present, otherwise 32-bit hash -> one of
-// these 12 entries. Existing VP records can still override `color`, but the
-// web fallback no longer gives unknown VPs a low-contrast pastel disk.
+// these 12 entries. The concrete colors live in CSS variables so light and dark
+// themes can use distinct palettes without duplicating picker logic.
 export const VP_AVATAR_MOTIFS = [
-  { key: 'rat', label: 'Rat', glyph: 'R', background: 'linear-gradient(135deg, #174EA6 0%, #0B2F6B 100%)', foreground: '#FFFFFF' },
-  { key: 'ox', label: 'Ox', glyph: 'O', background: 'linear-gradient(135deg, #8A4B12 0%, #4A2507 100%)', foreground: '#FFF7ED' },
-  { key: 'tiger', label: 'Tiger', glyph: 'T', background: 'linear-gradient(135deg, #B45309 0%, #7C2D12 100%)', foreground: '#FFF7ED' },
-  { key: 'rabbit', label: 'Rabbit', glyph: 'B', background: 'linear-gradient(135deg, #BE185D 0%, #831843 100%)', foreground: '#FFF1F2' },
-  { key: 'dragon', label: 'Dragon', glyph: 'D', background: 'linear-gradient(135deg, #047857 0%, #064E3B 100%)', foreground: '#ECFDF5' },
-  { key: 'snake', label: 'Snake', glyph: 'S', background: 'linear-gradient(135deg, #4D7C0F 0%, #365314 100%)', foreground: '#F7FEE7' },
-  { key: 'horse', label: 'Horse', glyph: 'H', background: 'linear-gradient(135deg, #C2410C 0%, #7C2D12 100%)', foreground: '#FFF7ED' },
-  { key: 'goat', label: 'Goat', glyph: 'G', background: 'linear-gradient(135deg, #6D28D9 0%, #4C1D95 100%)', foreground: '#F5F3FF' },
-  { key: 'monkey', label: 'Monkey', glyph: 'M', background: 'linear-gradient(135deg, #CA8A04 0%, #854D0E 100%)', foreground: '#FEFCE8' },
-  { key: 'rooster', label: 'Rooster', glyph: 'K', background: 'linear-gradient(135deg, #0891B2 0%, #155E75 100%)', foreground: '#ECFEFF' },
-  { key: 'dog', label: 'Dog', glyph: 'D', background: 'linear-gradient(135deg, #475569 0%, #1E293B 100%)', foreground: '#F8FAFC' },
-  { key: 'pig', label: 'Pig', glyph: 'P', background: 'linear-gradient(135deg, #A21CAF 0%, #701A75 100%)', foreground: '#FDF4FF' },
+  { key: 'rat', label: 'Rat', glyph: 'R', background: 'var(--vp-avatar-rat-bg)', foreground: 'var(--vp-avatar-rat-fg)' },
+  { key: 'ox', label: 'Ox', glyph: 'O', background: 'var(--vp-avatar-ox-bg)', foreground: 'var(--vp-avatar-ox-fg)' },
+  { key: 'tiger', label: 'Tiger', glyph: 'T', background: 'var(--vp-avatar-tiger-bg)', foreground: 'var(--vp-avatar-tiger-fg)' },
+  { key: 'rabbit', label: 'Rabbit', glyph: 'B', background: 'var(--vp-avatar-rabbit-bg)', foreground: 'var(--vp-avatar-rabbit-fg)' },
+  { key: 'dragon', label: 'Dragon', glyph: 'D', background: 'var(--vp-avatar-dragon-bg)', foreground: 'var(--vp-avatar-dragon-fg)' },
+  { key: 'snake', label: 'Snake', glyph: 'S', background: 'var(--vp-avatar-snake-bg)', foreground: 'var(--vp-avatar-snake-fg)' },
+  { key: 'horse', label: 'Horse', glyph: 'H', background: 'var(--vp-avatar-horse-bg)', foreground: 'var(--vp-avatar-horse-fg)' },
+  { key: 'goat', label: 'Goat', glyph: 'G', background: 'var(--vp-avatar-goat-bg)', foreground: 'var(--vp-avatar-goat-fg)' },
+  { key: 'monkey', label: 'Monkey', glyph: 'M', background: 'var(--vp-avatar-monkey-bg)', foreground: 'var(--vp-avatar-monkey-fg)' },
+  { key: 'rooster', label: 'Rooster', glyph: 'K', background: 'var(--vp-avatar-rooster-bg)', foreground: 'var(--vp-avatar-rooster-fg)' },
+  { key: 'dog', label: 'Dog', glyph: 'D', background: 'var(--vp-avatar-dog-bg)', foreground: 'var(--vp-avatar-dog-fg)' },
+  { key: 'pig', label: 'Pig', glyph: 'P', background: 'var(--vp-avatar-pig-bg)', foreground: 'var(--vp-avatar-pig-fg)' },
 ];
 
 // The default group roster needs the four common VPs to be visually distinct
