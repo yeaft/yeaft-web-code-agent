@@ -23,7 +23,7 @@
  */
 
 import { runPreflow as runFtsPreflow } from '../memory/preflow.js';
-import { isMember, resolveFallbackVp } from './roster.js';
+import { resolveFallbackVp, resolveMemberId } from './roster.js';
 
 /** Matches `@vp-id` where id is [A-Za-z0-9_-]+. Captures the id. */
 const MENTION_RE = /(^|\s)@([A-Za-z0-9_][A-Za-z0-9_-]*)/g;
@@ -115,15 +115,16 @@ export function selectRespondingVps(input) {
     const dispatched = [];
     const errors = [];
     for (const vpId of mentions) {
-      if (!isMember(meta, vpId)) {
+      const canonicalVpId = resolveMemberId(meta, vpId);
+      if (!canonicalVpId) {
         errors.push({ vpId, error: 'not_in_roster' });
         continue;
       }
-      if (taskMembers && !taskMembers.includes(vpId)) {
+      if (taskMembers && !taskMembers.includes(canonicalVpId)) {
         errors.push({ vpId, error: 'not_in_task_members' });
         continue;
       }
-      dispatched.push(vpId);
+      if (!dispatched.includes(canonicalVpId)) dispatched.push(canonicalVpId);
     }
     return { dispatched, fallback: null, errors, reason: 'mention' };
   }

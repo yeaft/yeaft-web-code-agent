@@ -289,7 +289,30 @@ describe('route_forward.execute (task-707)', () => {
     expect(captured.reason).toBe('expertise');
   });
 
-  it('2b. broadcast forward sets broadcast:true on the requestEndTurn payload', async () => {
+  it('2b. accepts vp-prefixed aliases for canonical roster ids', async () => {
+    const { router, delivered } = setupRoute(['linus', 'martin']);
+    let captured = null;
+    const ctx = {
+      router,
+      senderVpId: 'martin',
+      requestEndTurn: (r) => { captured = r; },
+    };
+
+    const out = await routeForward.execute(
+      { to: 'vp-linus', text: 'please take this', reason: 'dev owner' },
+      ctx,
+    );
+
+    const parsed = JSON.parse(out);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.dispatched).toEqual(['linus']);
+    expect(delivered.map((d) => d.vpId)).toEqual(['linus']);
+    expect(delivered[0].envelope.msg.text).toBe('@linus please take this');
+    expect(captured).toBeTruthy();
+    expect(captured.dispatched).toEqual(['linus']);
+  });
+
+  it('2c. broadcast forward sets broadcast:true on the requestEndTurn payload', async () => {
     const { router } = setupRoute(['vp-a', 'vp-b', 'vp-c']);
     let captured = null;
     const ctx = {
@@ -314,7 +337,7 @@ describe('route_forward.execute (task-707)', () => {
     expect(captured.dispatched.sort()).toEqual(['vp-b', 'vp-c']);
   });
 
-  it('2c. failed forward (self_forward_rejected) does NOT call requestEndTurn', async () => {
+  it('2d. failed forward (self_forward_rejected) does NOT call requestEndTurn', async () => {
     const { router } = setupRoute(['vp-a', 'vp-b']);
     let called = false;
     const ctx = {
