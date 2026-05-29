@@ -2527,18 +2527,6 @@
   cursor: pointer;
 }
 
-.group-settings-roster-avatar {
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: #ffffff;
-  font-size: 11px;
-  font-weight: 600;
-  flex-shrink: 0;
-}
 
 .group-settings-roster-name {
   font-size: 13px;

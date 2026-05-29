@@ -59,15 +59,13 @@ describe('VpAvatar — typing prop + badge contract', () => {
   });
 });
 
-describe('VpBadge — typing prop forwarding', () => {
+describe('VpBadge — text-only VP identity', () => {
   const src = read('web/components/VpBadge.js');
 
-  it('declares a typing prop and forwards :typing to VpAvatar', () => {
+  it('keeps the typing prop for API compatibility but no longer renders VpAvatar', () => {
     expect(src).toMatch(/typing:\s*\{\s*type:\s*Boolean,\s*default:\s*false/);
-    // Forwarded TWICE — once in the clickable button branch, once in
-    // the v-else span branch. Both must wire :typing.
-    const forwards = src.match(/<VpAvatar[^>]*:typing="typing"/g) || [];
-    expect(forwards.length).toBeGreaterThanOrEqual(2);
+    expect(src).not.toMatch(/<VpAvatar\b/);
+    expect(src).toMatch(/class="vp-badge-name"\s+:style="nameStyle"/);
   });
 });
 

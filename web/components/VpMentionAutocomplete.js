@@ -22,8 +22,6 @@
  *   select (vp) — the VP record the user chose.
  *   hover-index (idx) — on mouseenter; parent mirrors into selectedIndex.
  */
-import VpAvatar from './VpAvatar.js';
-
 /** Max results shown in the dropdown (aligned with existing expert autocomplete). */
 export const VP_MENTION_MAX_RESULTS = 12;
 
@@ -134,7 +132,6 @@ export function applyMentionSelection(text, vpId) {
 
 export default {
   name: 'VpMentionAutocomplete',
-  components: { VpAvatar },
   emits: ['select', 'hover-index'],
   props: {
     vps: { type: Array, default: () => [] },
@@ -152,8 +149,7 @@ export default {
         @mousedown.prevent="$emit('select', vp)"
         @mouseenter="$emit('hover-index', idx)"
       >
-        <VpAvatar :vp-id="vp.vpId" :size="20" />
-        <span class="slash-cmd-name">{{ displayNameFor(vp) }}</span>
+        <span class="slash-cmd-name" :style="{ color: vpTextColorFor(vp.vpId) }">{{ displayNameFor(vp) }}</span>
         <span class="slash-cmd-desc vp-mention-id">@{{ vp.vpId }}</span>
         <span v-if="vp.role" class="vp-mention-role">{{ vp.role }}</span>
       </div>
@@ -171,6 +167,9 @@ export default {
     const chatStore = (typeof window !== 'undefined' && window.Pinia && window.Pinia.useChatStore)
       ? window.Pinia.useChatStore()
       : null;
+    const vpStore = (typeof window !== 'undefined' && window.Pinia && window.Pinia.useVpStore)
+      ? window.Pinia.useVpStore()
+      : null;
     function displayNameFor(vp) {
       if (!vp) return '';
       const locale = (chatStore && typeof chatStore.locale === 'string')
@@ -179,6 +178,11 @@ export default {
       if (locale.startsWith('zh') && vp.displayNameZh) return vp.displayNameZh;
       return vp.displayName || vp.vpId || '';
     }
-    return { filteredList, displayNameFor };
+    function vpTextColorFor(vpId) {
+      return vpStore && typeof vpStore.vpTextColor === 'function'
+        ? vpStore.vpTextColor(vpId)
+        : 'var(--text-primary)';
+    }
+    return { filteredList, displayNameFor, vpTextColorFor };
   },
 };

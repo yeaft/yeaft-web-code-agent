@@ -234,13 +234,9 @@ export default {
       const fn = this.vpStore?.vpLabel;
       return typeof fn === 'function' ? fn(vpId) : vpId;
     },
-    vpColorFor(vpId) {
-      const fn = this.vpStore?.vpColor;
-      return typeof fn === 'function' ? fn(vpId) : '#5B8DEF';
-    },
-    vpInitialFor(vpId) {
-      const fn = this.vpStore?.vpInitial;
-      return typeof fn === 'function' ? fn(vpId) : (vpId ? vpId.charAt(0).toUpperCase() : '?');
+    vpTextColorFor(vpId) {
+      const fn = this.vpStore?.vpTextColor;
+      return typeof fn === 'function' ? fn(vpId) : 'var(--vp-avatar-rat-fg)';
     },
     async toggleMember(vpId, checked) {
       if (this.membersBusy || !this.chat) return;
@@ -416,10 +412,7 @@ export default {
                       :disabled="membersBusy"
                       @change="toggleMember(vp.vpId, $event.target.checked)"
                     />
-                    <span class="group-settings-roster-avatar" :style="{ background: vpColorFor(vp.vpId) }">
-                      {{ vpInitialFor(vp.vpId) }}
-                    </span>
-                    <span class="group-settings-roster-name">{{ vpLabelFor(vp.vpId) }}</span>
+                    <span class="group-settings-roster-name" :style="{ color: vpTextColorFor(vp.vpId) }">{{ vpLabelFor(vp.vpId) }}</span>
                   </label>
                   <button
                     v-if="isMember(vp.vpId)"

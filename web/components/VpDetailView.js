@@ -2,7 +2,7 @@
  * VpDetailView.js — task-334-ui-c.
  *
  * Read-only detail page for a single Virtual Person. Reached by clicking a
- * VpAvatar / VpBadge / VP library row. Shows displayName, role, traits,
+ * VP library row. Shows displayName, role, traits,
  * modelHint, persona body (read-only), recent activity, and a personaHash
  * badge. Edit / CRUD is out of scope — entry point jumps to 334-ui-g.
  *
@@ -10,21 +10,13 @@
  *   main  ──click VP badge──▶ vp-detail
  *   vp-detail ──Esc / breadcrumb ←──▶ main
  *
- * Reuses 334-ui-a components:
- *   • VpAvatar — large (48px) hero avatar
- *   • VpBadge is NOT reused here because the detail hero lays out
- *     name + role differently; using the raw VpAvatar keeps the
- *     "compose primitives, don't sub-route" rule.
- *
  * Accessibility: focusable back button, Esc handled at UnifyPage level
  * (shared cascade with task-detail / thread-filter).
  */
-import VpAvatar from './VpAvatar.js';
 import { reasonToI18nKey } from '../utils/vp-reason.js';
 
 export default {
   name: 'VpDetailView',
-  components: { VpAvatar },
   emits: ['back'],
   props: {
     vpId: { type: String, required: true },
@@ -48,9 +40,8 @@ export default {
 
       <div class="vp-detail-body" v-if="vp">
         <header class="vp-detail-hero">
-          <VpAvatar :vp-id="vpId" :size="48" />
           <div class="vp-detail-hero-text">
-            <h2 class="vp-detail-name">{{ vp.displayName || vpId }}</h2>
+            <h2 class="vp-detail-name" :style="{ color: vpTextColor }">{{ vp.displayName || vpId }}</h2>
             <p class="vp-detail-role" v-if="vp.role">{{ vp.role }}</p>
             <span
               v-if="vp.personaHash"
@@ -140,6 +131,11 @@ export default {
     const vp = Vue.computed(() => {
       if (!vpStore) return null;
       return vpStore.vpById(props.vpId);
+    });
+
+    const vpTextColor = Vue.computed(() => {
+      if (!vpStore || typeof vpStore.vpTextColor !== 'function') return 'var(--text-primary)';
+      return vpStore.vpTextColor(props.vpId);
     });
 
     const traits = Vue.computed(() => {
@@ -256,6 +252,7 @@ export default {
 
     return {
       vp,
+      vpTextColor,
       traits,
       personaBody,
       shortHash,

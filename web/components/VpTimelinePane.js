@@ -9,7 +9,7 @@
  * v0.1.767 restored the pane WITHOUT the feature-aware row branch.
  *
  * Surfaces, for the active Unify conversation, one row per VP showing
- * avatar + name + live status (typing / streaming / idle). Pane sits
+ * colored name + live status (typing / streaming / idle). Pane sits
  * inside `unify-main` to the LEFT of the conversation, matching Crew's
  * members-left shape. The component itself is placement-agnostic —
  * only its parent container + the resize handle direction in CSS
@@ -34,11 +34,8 @@
  *                            .unify-detail pattern).
  *   cancel-vp-turn (vpId)  — abort button click for an active turn.
  */
-import VpAvatar from './VpAvatar.js';
-
 export default {
   name: 'VpTimelinePane',
-  components: { VpAvatar },
   emits: ['mention-vp', 'open-vp-detail', 'start-resize', 'cancel-vp-turn'],
   props: {
     rows: { type: Array, required: true },
@@ -74,13 +71,8 @@ export default {
           @keydown.enter.prevent="$emit('mention-vp', row.vpId)"
           @keydown.space.prevent="$emit('mention-vp', row.vpId)"
         >
-          <VpAvatar
-            :vp-id="row.vpId"
-            :size="24"
-            :typing="row.status === 'typing'"
-          />
           <div class="unify-vp-timeline-row-body">
-            <span class="unify-vp-timeline-row-name">{{ row.displayName }}</span>
+            <span class="unify-vp-timeline-row-name" :style="{ color: vpTextColorFor(row.vpId) }">{{ row.displayName }}</span>
             <span class="unify-vp-timeline-row-status">{{ statusLabel(row) }}</span>
             <span
               v-if="row.runningThreadCount > 1"
@@ -133,6 +125,13 @@ export default {
     </aside>
   `,
   setup() {
+    const vpStore = (window.Pinia && window.Pinia.useVpStore)
+      ? window.Pinia.useVpStore()
+      : null;
+    const vpTextColorFor = (vpId) => (vpStore && typeof vpStore.vpTextColor === 'function'
+      ? vpStore.vpTextColor(vpId)
+      : 'var(--text-primary)');
+
     // Capture $t ONCE at mount via getCurrentInstance(); reusing the
     // same reference for every status label avoids re-walking
     // appContext on every render (40 lookups for 20 rows otherwise).
