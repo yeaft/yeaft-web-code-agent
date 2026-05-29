@@ -360,29 +360,41 @@ export default {
       const t = evt.type;
       if (t === 'loop') return 'loop';
       if (t === 'turn_close' || t === 'dream_turn_close') return 'turn_close';
-      if (t === 'turn_open' || t === 'dream_turn_open') return 'turn_open';
       if (t === 'dream_run' && evt.phase === 'result') return 'result';
       return 'progress';
     },
     isDreamEventExpandable(evt) {
       const kind = this.dreamEventKind(evt);
-      if (kind === 'loop') return !!(evt && (evt.systemPrompt || evt.response || (evt.messages && evt.messages.length > 0)));
+      if (kind === 'loop') return !!(evt && (evt.systemPrompt || evt.response || (Array.isArray(evt.messages) && evt.messages.length > 0)));
       if (kind === 'turn_close' || kind === 'result') return !!(evt && (evt.metrics || evt.passBreakdown || evt.resultSummary));
       if (kind === 'progress') {
-        // 'apply done' carries the generated md previews
         return !!(evt && (evt.memoryMdPreview || evt.summaryMdPreview));
       }
       return false;
     },
-    dreamEventKey(evt, idx) {
-      return `${evt?.at || 0}#${idx}`;
+    // Review fix (Fowler+Torvalds Minor): use a stable id so a ring-shift
+    // can't land an open-state on the wrong row. `at` (epoch ms) +
+    // turnId + (phase|type) is unique-enough for the panel's scale.
+    dreamEventKey(evt) {
+      if (!evt) return '';
+      return `${evt.at || 0}:${evt.turnId || ''}:${evt.phase || evt.type || ''}`;
     },
-    toggleDreamEvent(evt, idx) {
-      const key = this.dreamEventKey(evt, idx);
-      this.expandedDreamEvents = { ...this.expandedDreamEvents, [key]: !this.expandedDreamEvents[key] };
+    toggleDreamEvent(evt) {
+      const key = this.dreamEventKey(evt);
+      if (!key) return;
+      // Review fix (Torvalds Important): prune stale keys so a long
+      // session that scrolls thousands of dream events through the
+      // bounded ring doesn't leak forever in expandedDreamEvents.
+      const live = new Set(this.dreamEvents.map((e) => this.dreamEventKey(e)));
+      const next = {};
+      for (const [k, v] of Object.entries(this.expandedDreamEvents)) {
+        if (live.has(k)) next[k] = v;
+      }
+      next[key] = !next[key];
+      this.expandedDreamEvents = next;
     },
-    isDreamEventExpanded(evt, idx) {
-      return !!this.expandedDreamEvents[this.dreamEventKey(evt, idx)];
+    isDreamEventExpanded(evt) {
+      return !!this.expandedDreamEvents[this.dreamEventKey(evt)];
     },
     // Best-effort: render the user message a loop sent to the LLM. Loop
     // events emitted by session-wiring have `messages: [{role:'user',content:str}]`.
@@ -821,13 +833,12 @@ export default {
           <template v-for="(evt, idx) in dreamEvents" :key="evt.at + ':dream-tab:' + idx">
             <div
               class="unify-debug-dream-event detailed"
-              :class="'status-' + dreamEventStatus(evt)"
-              @click="isDreamEventExpandable(evt) && toggleDreamEvent(evt, idx)"
-              :style="isDreamEventExpandable(evt) ? 'cursor:pointer' : ''"
+              :class="['status-' + dreamEventStatus(evt), { expandable: isDreamEventExpandable(evt) }]"
+              @click="isDreamEventExpandable(evt) && toggleDreamEvent(evt)"
             >
               <span class="unify-debug-dream-event-time">{{ formatTimestamp(evt.at) }}</span>
               <span class="unify-debug-dream-event-phase">
-                <span v-if="isDreamEventExpandable(evt)">{{ isDreamEventExpanded(evt, idx) ? '▼' : '▶' }} </span>{{ evt.phase || evt.type || 'unknown' }}
+                <span v-if="isDreamEventExpandable(evt)">{{ isDreamEventExpanded(evt) ? '▼' : '▶' }} </span>{{ evt.phase || evt.type || 'unknown' }}
               </span>
               <span class="unify-debug-dream-event-detail">{{ dreamEventTrigger(evt) }}</span>
               <span class="unify-debug-dream-event-detail">{{ dreamEventCall(evt) }}</span>
@@ -835,7 +846,7 @@ export default {
               <span class="unify-debug-dream-event-detail">{{ dreamEventResult(evt) }}</span>
             </div>
             <div
-              v-if="isDreamEventExpanded(evt, idx)"
+              v-if="isDreamEventExpanded(evt)"
               class="unify-debug-dream-event-body"
             >
               <!-- Loop event: LLM call -->

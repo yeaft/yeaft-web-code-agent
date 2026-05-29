@@ -2754,6 +2754,12 @@
 .unify-debug-dream-event.status-success .unify-debug-dream-event-phase { color: #22c55e; }
 .unify-debug-dream-event.status-skipped .unify-debug-dream-event-phase { color: var(--text-secondary); }
 .unify-debug-dream-event.status-error   .unify-debug-dream-event-phase { color: #ef4444; }
+.unify-debug-dream-event.expandable { cursor: pointer; }
+.unify-debug-dream-event-body {
+  padding: 4px 8px 8px;
+  border-left: 2px solid var(--border-color, #2a2a2a);
+  margin-left: 4px;
+}
 .unify-debug-dream-event-empty {
   color: var(--text-tertiary, var(--text-secondary));
   font-style: italic;

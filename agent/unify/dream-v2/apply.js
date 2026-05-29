@@ -264,11 +264,20 @@ function scopeRelDir(scope) {
 function oneLine(s) { return String(s || '').replace(/\s+/g, ' ').trim().slice(0, 200); }
 
 /**
- * Truncate a markdown blob so it fits comfortably in a debug-panel cell
- * without bloating the WS frame. We keep enough to be useful (~2 KB)
- * and append a … marker so the user knows it's cut.
+ * Per-field truncation cap for debug previews emitted on `apply/done`.
+ * Keep this small — the dream panel only needs a recognisable snippet.
+ * Total worst-case payload is `PREVIEW_MAX * 2 * targets_per_run` per
+ * dream pass; with N=50 targets that's ~200 KB. The full bytes are on
+ * disk under <root>/<scope>/{memory,summary}.md anyway — these previews
+ * are for at-a-glance debugging only.
  */
-function truncateForDebug(s, max = 2048) {
+const PREVIEW_MAX = 2048;
+
+/**
+ * Truncate a markdown blob for inclusion in a debug-panel cell. Adds a
+ * "…(+N chars)" marker so the user knows it was cut.
+ */
+function truncateForDebug(s, max = PREVIEW_MAX) {
   const str = String(s || '');
   if (str.length <= max) return str;
   return str.slice(0, max) + `…(+${str.length - max} chars)`;

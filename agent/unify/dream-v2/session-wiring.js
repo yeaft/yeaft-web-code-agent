@@ -7,6 +7,35 @@
  *
  * Memory v2 is the only path. The legacy `config.memoryV2` opt-out flag was
  * retired (task-710) — the wiring is unconditional.
+ *
+ * ─────────────────────────────────────────────────────────────────────
+ * Wire contract — DreamEvent (consumed by web/components/UnifyDebugPanel.js)
+ * ─────────────────────────────────────────────────────────────────────
+ * The events persisted to trace_events with these event_type values are
+ * load-bearing for the debug panel. Renaming a field on this side
+ * silently degrades that UI to a generic JSON dump.
+ *
+ *   dream_turn_open:   { type:'turn_open',  turnId, userPrompt, vpId, groupId, at }
+ *   dream_loop:        { type:'loop',       turnId, loopNumber, pass, model,
+ *                        systemPrompt: string,
+ *                        messages: [{ role:'user', content:string }],
+ *                        response: string,
+ *                        toolCalls: [], usage: { inputTokens, outputTokens, totalTokens },
+ *                        latencyMs, ttfbMs, stopReason, rawRequest, rawResponse }
+ *   dream_turn_close:  { type:'turn_close', turnId, totalMs, totalTokens, loopCount,
+ *                        metrics: { llmCallCount, inputTokens, outputTokens,
+ *                                   totalTokens, durationMs, passBreakdown:{[pass]:{
+ *                                     llmCallCount, inputTokens, outputTokens,
+ *                                     totalTokens, durationMs }} } }
+ *   dream_run:         { type:'dream_run',  turnId, phase:'result',
+ *                        status:'done'|'error', metrics, resultSummary:{ groups,
+ *                        targets, error, skipped, skippedReason } }
+ *   dream_progress:    runner-emitted phase events (`start`/`load-diff`/`triage`/
+ *                      `merge`/`apply`/`done`). The `apply/done` variant carries
+ *                      `kind, memoryMdPreview, summaryMdPreview, memoryMdLength,
+ *                      summaryMdLength` (see apply.js).
+ *
+ * `groupId` may be inherited via `stampDreamScope()` when a scope is active.
  */
 
 import { join } from 'path';
