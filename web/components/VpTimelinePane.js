@@ -169,6 +169,6 @@ export default {
         .join('\n');
     };
 
-    return { statusLabel, isActiveStatus, threadCountTitle };
+    return { statusLabel, isActiveStatus, threadCountTitle, vpTextColorFor };
   },
 };
