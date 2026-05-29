@@ -76,6 +76,53 @@ describe('Unify group history re-entry', () => {
   });
 
 
+  it('requests metadata only on Unify entry until the group snapshot selects an active group', () => {
+    const store = makeStore();
+    store.unifyConversationId = 'unify-1';
+    store.unifyAgentId = 'agent-1';
+    store.currentAgent = 'agent-1';
+    store.unifyActiveGroupFilter = null;
+
+    store.enterUnify('agent-1');
+
+    expect(store.sent).toEqual([{
+      type: 'unify_load_history',
+      agentId: 'agent-1',
+      limit: 0,
+      groupId: null,
+    }]);
+    expect(store.unifyGroupHistoryState).toEqual({});
+    expect(store.unifyLoadingMoreHistory).toBe(false);
+  });
+
+  it('merges local placeholder rows into an existing agent conversation on session_ready replay', () => {
+    const store = makeStore();
+    store.unifyConversationId = 'unify-local-1';
+    store.messagesMap = {
+      'unify-agent-1': [
+        { id: 'old', type: 'user', content: 'cached row', timestamp: 10, groupId: 'grp_fun' },
+      ],
+      'unify-local-1': [
+        { id: 'new', type: 'user', content: 'local row', timestamp: 20, groupId: 'grp_fun' },
+      ],
+    };
+
+    store.handleUnifyOutput({
+      event: {
+        type: 'session_ready',
+        conversationId: 'unify-agent-1',
+        model: 'sonnet',
+        availableModels: [],
+        skills: [],
+        mcpServers: [],
+        tools: [],
+      },
+    });
+
+    expect(store.messagesMap['unify-agent-1'].map(m => m.id)).toEqual(['old', 'new']);
+    expect(store.messagesMap['unify-local-1']).toBeUndefined();
+  });
+
   it('hydrates the active group after session_ready replays the group snapshot', () => {
     const store = makeStore();
     store.currentView = 'unify';
