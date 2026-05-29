@@ -65,8 +65,11 @@ describe('fetchModelsDev', () => {
 
   it('listProviders and listProviderModels read from the cache', async () => {
     writeFileSync(join(tmpDir, 'models_dev_cache.json'), JSON.stringify(SAMPLE));
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
     expect(await listProviders({ yeaftDir: tmpDir })).toEqual(['anthropic', 'openai']);
     expect(await listProviderModels('anthropic', { yeaftDir: tmpDir })).toEqual(['claude-sonnet', 'claude-haiku']);
     expect(await listProviderModels('missing', { yeaftDir: tmpDir })).toEqual([]);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
