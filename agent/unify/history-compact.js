@@ -94,13 +94,14 @@ export const countTurns = countTurnsImpl;
  * Token thresholds are derived from `maxContextTokens` at evaluation
  * time so the policy auto-adjusts to the user's configured context.
  */
-export const DEFAULT_TURN_LIMIT = 30;
-export const DEFAULT_MIN_TOKEN_FLOOR = 12_000;
+export const DEFAULT_TURN_LIMIT = Infinity;
+export const DEFAULT_MIN_TOKEN_FLOOR = 0;
 export const DEFAULT_MAX_CONTEXT_TOKENS = 200_000;
-export const DEFAULT_TOKEN_FRACTION = 0.8;
-export const DEFAULT_HARD_TOKEN_CEILING = 200_000;
-export const DEFAULT_MIN_TURNS_FOR_COMPACT = 5;
+export const DEFAULT_TOKEN_FRACTION = 0.5;
+export const DEFAULT_HARD_TOKEN_CEILING = Infinity;
+export const DEFAULT_MIN_TURNS_FOR_COMPACT = 0;
 export const DEFAULT_KEEP_TOOL_TURNS = 3;
+export const DEFAULT_TOOL_CALL_COMPACT_THRESHOLD = 30;
 /**
  * Effective default token trigger when no `maxContextTokens` is provided:
  *   min(80% of 200K, 200K) = 160K. Preserved as `DEFAULT_TOKEN_LIMIT` for
@@ -116,7 +117,7 @@ export const DEFAULT_TOKEN_LIMIT = Math.min(
  * replaces everything before this window. 2 keeps "what we were just
  * talking about" lossless.
  */
-export const DEFAULT_KEEP_RECENT_TURNS = 2;
+export const DEFAULT_KEEP_RECENT_TURNS = 3;
 
 /**
  * Default cap on the number of turns kept in the per-call snapshot fed
@@ -233,9 +234,10 @@ export function shouldCompactHistory(messages, opts = {}) {
   const tokenCount = estimateMessagesTokens(messages);
 
   let reason = null;
-  // (1) Soft floor: never compact small conversations.
-  // (2) Short-history guard: fewer than five turns should not compact unless
-  //     the estimated prompt is already at the context-pressure threshold.
+  // Product rule: async group compact is allowed only when the current
+  // conversation exceeds the model context window threshold. Turn count is
+  // preserved as an explicit test/future-config override, but defaults to
+  // Infinity so it cannot compact a small context by itself.
   if (tokenCount < minTokenFloor || (turnCount < minTurnsForCompact && tokenCount < tokenLimit)) {
     return {
       trigger: false,
@@ -249,10 +251,8 @@ export function shouldCompactHistory(messages, opts = {}) {
       hardTokenCeiling,
     };
   }
-  // (2) Trigger evaluation. Turn check is opt-in (Infinity by default).
-  if (Number.isFinite(turnLimit) && turnCount > turnLimit) reason = 'turn_count';
-  else if (tokenCount > hardTokenCeiling) reason = 'token_ceiling';
-  else if (tokenCount >= tokenLimit) reason = 'token_threshold';
+  if (tokenCount > hardTokenCeiling) reason = 'token_ceiling';
+  else if (tokenCount > tokenLimit) reason = 'token_threshold';
 
   return {
     trigger: reason !== null,
@@ -271,6 +271,27 @@ function hasContentAfterToolStrip(content) {
   if (typeof content === 'string') return content.trim().length > 0;
   if (Array.isArray(content)) return content.length > 0;
   return content != null;
+}
+
+function countToolCallsInContent(content) {
+  if (!Array.isArray(content)) return 0;
+  let n = 0;
+  for (const part of content) {
+    if (!part || typeof part !== 'object') continue;
+    if (part.type === 'tool_use' || part.type === 'function_call') n++;
+  }
+  return n;
+}
+
+function countToolCallsInMessages(messages) {
+  if (!Array.isArray(messages)) return 0;
+  let n = 0;
+  for (const m of messages) {
+    if (!m || typeof m !== 'object') continue;
+    if (Array.isArray(m.toolCalls)) n += m.toolCalls.length;
+    n += countToolCallsInContent(m.content);
+  }
+  return n;
 }
 
 function stripToolContentParts(content) {
@@ -324,6 +345,31 @@ export function stripToolNoiseFromOlderTurns(messages, opts = {}) {
   }
 
   return [...cleanedOlder, ...recent.map(m => ({ ...m }))];
+}
+
+/**
+ * Apply the async compact retained-tail tool policy. Small retained tails keep
+ * every tool pair intact. Once the retained tail exceeds the threshold, keep
+ * full tool history only for the latest turn and strip tool noise from the
+ * earlier retained turns while preserving their normal text.
+ *
+ * @param {Array<object>} tail
+ * @param {{ keepToolTurns?: number, toolCallCompactThreshold?: number }} [opts]
+ * @returns {Array<object>}
+ */
+export function compactRetainedTailToolCalls(tail, opts = {}) {
+  if (!Array.isArray(tail) || tail.length === 0) return [];
+
+  const threshold = Number.isFinite(opts.toolCallCompactThreshold) && opts.toolCallCompactThreshold >= 0
+    ? opts.toolCallCompactThreshold
+    : DEFAULT_TOOL_CALL_COMPACT_THRESHOLD;
+  const toolCallCount = countToolCallsInMessages(tail);
+  if (toolCallCount <= threshold) return tail.map(m => ({ ...m }));
+
+  const keepToolTurns = Number.isFinite(opts.keepToolTurns) && opts.keepToolTurns >= 0
+    ? opts.keepToolTurns
+    : 1;
+  return stripToolNoiseFromOlderTurns(tail, { keepToolTurns });
 }
 
 /**
@@ -499,6 +545,8 @@ export async function compactHistory(messages, options) {
     tokenFraction,
     hardTokenCeiling,
     language,
+    keepToolTurns,
+    toolCallCompactThreshold,
   } = options || {};
 
   if (typeof summarize !== 'function') {
@@ -600,7 +648,11 @@ export async function compactHistory(messages, options) {
   // whose tool_use IDs aren't fully matched in the tail. This is what
   // keeps the next adapter call from 400-ing on tool_use/tool_result
   // mismatch when the storage / fan-out layer reorders messages.
-  const safeTail = pairSanitize(tail);
+  const compactedTail = compactRetainedTailToolCalls(tail, {
+    keepToolTurns,
+    toolCallCompactThreshold,
+  });
+  const safeTail = pairSanitize(compactedTail);
 
   const newMessages = [summaryMsg, ...safeTail];
   const after = shouldCompactHistory(newMessages, triggerOpts);
