@@ -40,6 +40,7 @@ import {
   DEFAULT_TOKEN_LIMIT,
   DEFAULT_KEEP_RECENT_TURNS,
   DEFAULT_MIN_TURNS_FOR_COMPACT,
+  DEFAULT_TOOL_CALL_COMPACT_THRESHOLD,
   estimateMessageTokens,
   estimateMessagesTokens,
   countTurns,
@@ -50,7 +51,7 @@ import {
   buildSummaryPrompt,
   compactHistory,
   stripToolNoiseFromOlderTurns,
-  compactRecentToolCalls,
+  compactRetainedTailToolCalls,
 } from '../../../../agent/unify/history-compact.js';
 
 // ─── Default policy ─────────────────────────────────────────────────
@@ -658,6 +659,87 @@ describe('compactHistory (end-to-end)', () => {
     expect(r.compacted).toBe(false);
     expect(r.messages).toBe(ms);
     expect(r.reason).toBe('token_threshold');
+  });
+
+
+  it('preserves all retained-tail tool pairs when tool calls are at or below threshold', async () => {
+    const ms = [];
+    for (let i = 0; i < 4; i++) {
+      ms.push({ role: 'user', content: `old${i}` });
+      ms.push({ role: 'assistant', content: `old-a${i}` });
+    }
+    for (let turn = 0; turn < 3; turn++) {
+      ms.push({ role: 'user', content: `u${turn}` });
+      for (let call = 0; call < 10; call++) {
+        const id = `t${turn}-${call}`;
+        ms.push({
+          role: 'assistant',
+          content: `assistant text ${turn}-${call}`,
+          toolCalls: [{ id, name: 'bash', input: { command: `echo ${turn}-${call}` } }],
+        });
+        ms.push({ role: 'tool', toolCallId: id, content: `result ${turn}-${call}` });
+      }
+    }
+
+    const r = await compactHistory(ms, {
+      summarize: async () => 'summary',
+      tokenLimit: 0,
+      toolCallCompactThreshold: DEFAULT_TOOL_CALL_COMPACT_THRESHOLD,
+    });
+
+    expect(r.compacted).toBe(true);
+    const tail = r.messages.slice(1);
+    expect(tail.filter(m => m.role === 'assistant' && Array.isArray(m.toolCalls)).length).toBe(30);
+    expect(tail.filter(m => m.role === 'tool').length).toBe(30);
+    expect(tail.find(m => m.content === 'assistant text 0-0')?.toolCalls).toHaveLength(1);
+    expect(tail.some(m => m.role === 'tool' && m.toolCallId === 't0-0')).toBe(true);
+  });
+
+  it('strips tool pairs from earlier retained turns when tool calls exceed threshold', async () => {
+    const ms = [];
+    for (let i = 0; i < 4; i++) {
+      ms.push({ role: 'user', content: `old${i}` });
+      ms.push({ role: 'assistant', content: `old-a${i}` });
+    }
+    for (let turn = 0; turn < 3; turn++) {
+      ms.push({ role: 'user', content: `u${turn}` });
+      for (let call = 0; call < 11; call++) {
+        const id = `t${turn}-${call}`;
+        ms.push({
+          role: 'assistant',
+          content: `assistant text ${turn}-${call}`,
+          toolCalls: [{ id, name: 'bash', input: { command: `echo ${turn}-${call}` } }],
+        });
+        ms.push({ role: 'tool', toolCallId: id, content: `result ${turn}-${call}` });
+      }
+    }
+
+    const r = await compactHistory(ms, {
+      summarize: async () => 'summary',
+      tokenLimit: 0,
+      toolCallCompactThreshold: DEFAULT_TOOL_CALL_COMPACT_THRESHOLD,
+    });
+
+    expect(r.compacted).toBe(true);
+    const tail = r.messages.slice(1);
+
+    // Earlier retained turns keep normal text, but lose tool calls/results.
+    expect(tail.find(m => m.content === 'assistant text 0-0')).toEqual({
+      role: 'assistant',
+      content: 'assistant text 0-0',
+    });
+    expect(tail.find(m => m.content === 'assistant text 1-0')).toEqual({
+      role: 'assistant',
+      content: 'assistant text 1-0',
+    });
+    expect(tail.some(m => m.role === 'tool' && m.toolCallId === 't0-0')).toBe(false);
+    expect(tail.some(m => m.role === 'tool' && m.toolCallId === 't1-0')).toBe(false);
+
+    // Latest retained turn stays lossless.
+    expect(tail.find(m => m.content === 'assistant text 2-0')?.toolCalls).toHaveLength(1);
+    expect(tail.filter(m => m.role === 'assistant' && Array.isArray(m.toolCalls)).length).toBe(11);
+    expect(tail.filter(m => m.role === 'tool').length).toBe(11);
+    expect(tail.some(m => m.role === 'tool' && m.toolCallId === 't2-0')).toBe(true);
   });
 
   // ─── 2026-05-01 policy: pair-aware tail sanitation ───

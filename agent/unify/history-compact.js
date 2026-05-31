@@ -273,6 +273,27 @@ function hasContentAfterToolStrip(content) {
   return content != null;
 }
 
+function countToolCallsInContent(content) {
+  if (!Array.isArray(content)) return 0;
+  let n = 0;
+  for (const part of content) {
+    if (!part || typeof part !== 'object') continue;
+    if (part.type === 'tool_use' || part.type === 'function_call') n++;
+  }
+  return n;
+}
+
+function countToolCallsInMessages(messages) {
+  if (!Array.isArray(messages)) return 0;
+  let n = 0;
+  for (const m of messages) {
+    if (!m || typeof m !== 'object') continue;
+    if (Array.isArray(m.toolCalls)) n += m.toolCalls.length;
+    n += countToolCallsInContent(m.content);
+  }
+  return n;
+}
+
 function stripToolContentParts(content) {
   if (!Array.isArray(content)) return content;
   return content.filter(part => {
@@ -324,6 +345,31 @@ export function stripToolNoiseFromOlderTurns(messages, opts = {}) {
   }
 
   return [...cleanedOlder, ...recent.map(m => ({ ...m }))];
+}
+
+/**
+ * Apply the async compact retained-tail tool policy. Small retained tails keep
+ * every tool pair intact. Once the retained tail exceeds the threshold, keep
+ * full tool history only for the latest turn and strip tool noise from the
+ * earlier retained turns while preserving their normal text.
+ *
+ * @param {Array<object>} tail
+ * @param {{ keepToolTurns?: number, toolCallCompactThreshold?: number }} [opts]
+ * @returns {Array<object>}
+ */
+export function compactRetainedTailToolCalls(tail, opts = {}) {
+  if (!Array.isArray(tail) || tail.length === 0) return [];
+
+  const threshold = Number.isFinite(opts.toolCallCompactThreshold) && opts.toolCallCompactThreshold >= 0
+    ? opts.toolCallCompactThreshold
+    : DEFAULT_TOOL_CALL_COMPACT_THRESHOLD;
+  const toolCallCount = countToolCallsInMessages(tail);
+  if (toolCallCount <= threshold) return tail.map(m => ({ ...m }));
+
+  const keepToolTurns = Number.isFinite(opts.keepToolTurns) && opts.keepToolTurns >= 0
+    ? opts.keepToolTurns
+    : 1;
+  return stripToolNoiseFromOlderTurns(tail, { keepToolTurns });
 }
 
 /**
@@ -499,6 +545,8 @@ export async function compactHistory(messages, options) {
     tokenFraction,
     hardTokenCeiling,
     language,
+    keepToolTurns,
+    toolCallCompactThreshold,
   } = options || {};
 
   if (typeof summarize !== 'function') {
@@ -600,7 +648,11 @@ export async function compactHistory(messages, options) {
   // whose tool_use IDs aren't fully matched in the tail. This is what
   // keeps the next adapter call from 400-ing on tool_use/tool_result
   // mismatch when the storage / fan-out layer reorders messages.
-  const safeTail = pairSanitize(tail);
+  const compactedTail = compactRetainedTailToolCalls(tail, {
+    keepToolTurns,
+    toolCallCompactThreshold,
+  });
+  const safeTail = pairSanitize(compactedTail);
 
   const newMessages = [summaryMsg, ...safeTail];
   const after = shouldCompactHistory(newMessages, triggerOpts);
