@@ -94,13 +94,14 @@ export const countTurns = countTurnsImpl;
  * Token thresholds are derived from `maxContextTokens` at evaluation
  * time so the policy auto-adjusts to the user's configured context.
  */
-export const DEFAULT_TURN_LIMIT = 30;
-export const DEFAULT_MIN_TOKEN_FLOOR = 12_000;
+export const DEFAULT_TURN_LIMIT = Infinity;
+export const DEFAULT_MIN_TOKEN_FLOOR = 0;
 export const DEFAULT_MAX_CONTEXT_TOKENS = 200_000;
-export const DEFAULT_TOKEN_FRACTION = 0.8;
-export const DEFAULT_HARD_TOKEN_CEILING = 200_000;
-export const DEFAULT_MIN_TURNS_FOR_COMPACT = 5;
+export const DEFAULT_TOKEN_FRACTION = 0.5;
+export const DEFAULT_HARD_TOKEN_CEILING = Infinity;
+export const DEFAULT_MIN_TURNS_FOR_COMPACT = 0;
 export const DEFAULT_KEEP_TOOL_TURNS = 3;
+export const DEFAULT_TOOL_CALL_COMPACT_THRESHOLD = 30;
 /**
  * Effective default token trigger when no `maxContextTokens` is provided:
  *   min(80% of 200K, 200K) = 160K. Preserved as `DEFAULT_TOKEN_LIMIT` for
@@ -116,7 +117,7 @@ export const DEFAULT_TOKEN_LIMIT = Math.min(
  * replaces everything before this window. 2 keeps "what we were just
  * talking about" lossless.
  */
-export const DEFAULT_KEEP_RECENT_TURNS = 2;
+export const DEFAULT_KEEP_RECENT_TURNS = 3;
 
 /**
  * Default cap on the number of turns kept in the per-call snapshot fed
@@ -233,9 +234,10 @@ export function shouldCompactHistory(messages, opts = {}) {
   const tokenCount = estimateMessagesTokens(messages);
 
   let reason = null;
-  // (1) Soft floor: never compact small conversations.
-  // (2) Short-history guard: fewer than five turns should not compact unless
-  //     the estimated prompt is already at the context-pressure threshold.
+  // Product rule: async group compact is allowed only when the current
+  // conversation exceeds the model context window threshold. Turn count is
+  // preserved as an explicit test/future-config override, but defaults to
+  // Infinity so it cannot compact a small context by itself.
   if (tokenCount < minTokenFloor || (turnCount < minTurnsForCompact && tokenCount < tokenLimit)) {
     return {
       trigger: false,
@@ -249,10 +251,8 @@ export function shouldCompactHistory(messages, opts = {}) {
       hardTokenCeiling,
     };
   }
-  // (2) Trigger evaluation. Turn check is opt-in (Infinity by default).
-  if (Number.isFinite(turnLimit) && turnCount > turnLimit) reason = 'turn_count';
-  else if (tokenCount > hardTokenCeiling) reason = 'token_ceiling';
-  else if (tokenCount >= tokenLimit) reason = 'token_threshold';
+  if (tokenCount > hardTokenCeiling) reason = 'token_ceiling';
+  else if (tokenCount > tokenLimit) reason = 'token_threshold';
 
   return {
     trigger: reason !== null,
