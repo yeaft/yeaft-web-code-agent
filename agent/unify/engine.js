@@ -302,6 +302,10 @@ export class Engine {
 
   /** @type {string|null} */
   #yeaftDir;
+  /** @type {string|null} — set when this engine is bound to a specific group (per-VP fan-out path). */
+  #groupId = null;
+  /** @type {string|null} — set when this engine is bound to a specific VP (per-VP fan-out path). */
+  #vpId = null;
 
   /** @type {import('./stats/tool-usage.js').ToolUsageStats|null} — per-tool call/latency counters */
   #toolStats = null;
@@ -402,7 +406,7 @@ export class Engine {
    *   toolStats?: import('./stats/tool-usage.js').ToolUsageStats,
    * }} params
    */
-  constructor({ adapter, trace, config, conversationStore, memoryIndex, amsRegistry, toolRegistry, skillManager, mcpManager, yeaftDir, toolStats = null }) {
+  constructor({ adapter, trace, config, conversationStore, memoryIndex, amsRegistry, toolRegistry, skillManager, mcpManager, yeaftDir, toolStats = null, groupId = null, vpId = null }) {
     this.#adapter = adapter;
     this.#trace = trace;
     this.#config = config;
@@ -416,6 +420,14 @@ export class Engine {
     this.#mcpManager = mcpManager || null;
     this.#yeaftDir = yeaftDir || null;
     this.#toolStats = toolStats || null;
+    // Per-VP fan-out (2026-06-01): engine instances in the group path are
+    // keyed by ${groupId}::${vpId}::${threadId}, so binding the engine to
+    // its (groupId, vpId) pair at construction lets post-turn compact
+    // scope its read/write to THIS VP's view of the conversation instead
+    // of clobbering a session-global compact.md. Legacy / sub-agent
+    // callers leave both null → fall back to the global file.
+    this.#groupId = (typeof groupId === 'string' && groupId) ? groupId : null;
+    this.#vpId = (typeof vpId === 'string' && vpId) ? vpId : null;
 
     // PR-L: tool history reflection log. Keyed by traceId so distinct
     // engine instances don't stomp on each other's jsonl files. When
@@ -978,6 +990,13 @@ export class Engine {
    */
   #getCompactSummary() {
     if (!this.#conversationStore) return '';
+    // Per-(group, vp) scoping: when this engine is bound to a fan-out VP,
+    // read its own summary file. Falls back to the legacy global file
+    // for sub-agent / non-group callers that never set the pair.
+    if (this.#groupId && this.#vpId
+        && typeof this.#conversationStore.readCompactSummaryFor === 'function') {
+      return this.#conversationStore.readCompactSummaryFor(this.#groupId, this.#vpId);
+    }
     return this.#conversationStore.readCompactSummary();
   }
 
@@ -1063,14 +1082,30 @@ export class Engine {
     const adapter = this.#adapter;
     const fastConfig = this.#fastConfig;
 
+    // Per-(group, vp) scoping: when this engine is bound to a fan-out VP
+    // (the common case in group mode), load only the rows THIS VP saw in
+    // its context — user prompts + every VP's assistant text, with other
+    // VPs' tool calls/results stripped (see persist.loadGroupHistoryForVp).
+    //
+    // Legacy / sub-agent callers (no groupId/vpId pair) keep the global
+    // loadAll() behaviour so we don't break those flows.
     let messages;
+    const scoped = !!(this.#groupId && this.#vpId
+      && typeof conversationStore.loadGroupHistoryForVp === 'function');
     try {
-      messages = conversationStore.loadAll();
+      messages = scoped
+        ? conversationStore.loadGroupHistoryForVp(this.#groupId, this.#vpId)
+        : conversationStore.loadAll();
     } catch { return null; }
     if (!Array.isArray(messages) || messages.length === 0) return null;
 
     const tokenCount = conversationStore.hotTokens();
-    const groupId = messages.find(m => m && typeof m.groupId === 'string' && m.groupId)?.groupId || null;
+    // In the scoped path, groupId is the engine's binding (authoritative).
+    // In the legacy path, fall back to scanning the messages (best-effort,
+    // used only for the group context-window gate).
+    const groupId = this.#groupId
+      || messages.find(m => m && typeof m.groupId === 'string' && m.groupId)?.groupId
+      || null;
     const groupContextGate = shouldAllowGroupReflection({
       system: '',
       messages,
@@ -1150,10 +1185,28 @@ export class Engine {
       const out = await runCompactOrchestrator({
         messages, keepHot: 10, hooks,
       });
-      if (archiveIds.length > 0) conversationStore.moveToColdBatch(archiveIds);
-      if (out.compactSummary) conversationStore.updateCompactSummary(out.compactSummary);
-      const lastKept = messages[messages.length - 1];
-      conversationStore.updateIndex({ lastMessageId: lastKept?.id || null });
+      // Scoped path (per-(group, vp)): do NOT moveToColdBatch — those
+      // archive ids include user rows and other VPs' assistant rows that
+      // sibling VPs in this group still need in their hot context. The
+      // per-VP summary written below is the durable win; physical
+      // cold-archival across shared rows is the dream-level orchestrator's
+      // job, not post-turn compact's.
+      if (!scoped && archiveIds.length > 0) {
+        conversationStore.moveToColdBatch(archiveIds);
+      }
+      if (out.compactSummary) {
+        if (scoped && typeof conversationStore.updateCompactSummaryFor === 'function') {
+          conversationStore.updateCompactSummaryFor(this.#groupId, this.#vpId, out.compactSummary);
+        } else {
+          conversationStore.updateCompactSummary(out.compactSummary);
+        }
+      }
+      // Index update only makes sense for the legacy path that actually
+      // moved rows to cold. In the scoped path, nothing on disk changed.
+      if (!scoped) {
+        const lastKept = messages[messages.length - 1];
+        conversationStore.updateIndex({ lastMessageId: lastKept?.id || null });
+      }
 
       return {
         archivedCount: out.archivedMessages,

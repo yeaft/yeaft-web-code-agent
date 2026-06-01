@@ -851,6 +851,12 @@ function getOrCreateVpEngine(groupId, vpId, threadId = 'main') {
     // (`if (this.#toolStats && ...)`) is false and group VP tool calls
     // are silently dropped.
     toolStats: session.toolStats || null,
+    // Per-VP fan-out: bind the engine to its (groupId, vpId) so post-turn
+    // compact reads/writes a scoped summary instead of the legacy global
+    // compact.md (which every VP would otherwise share, producing
+    // identical, ever-growing summaries across groups).
+    groupId,
+    vpId,
   });
   vpEngines.set(key, eng);
   return eng;
@@ -3634,10 +3640,21 @@ export async function handleUnifyLoadHistory(msg) {
     oldestSeq = visiblePage.oldestSeq;
   }
 
+  // hasCompactSummary used to read a single session-global file, so it
+  // was always true once ANY group/VP in the session had compacted.
+  // Now we check (a) the scoped dir for any per-VP summary file in this
+  // group, falling back to (b) the legacy global file for sessions that
+  // pre-date the per-(group, vp) split.
+  let hasCompactSummaryFlag = !!compactSummary;
+  if (groupId && typeof session.conversationStore.hasAnyCompactSummaryForGroup === 'function') {
+    hasCompactSummaryFlag = session.conversationStore.hasAnyCompactSummaryForGroup(groupId)
+      || hasCompactSummaryFlag;
+  }
+
   sendUnifyEvent({
     type: 'history_loaded',
     count: replayEntries.length,
-    hasCompactSummary: !!compactSummary,
+    hasCompactSummary: hasCompactSummaryFlag,
     totalHot: session.conversationStore.countHot(),
     totalCold: session.conversationStore.countCold(),
     groupId,
