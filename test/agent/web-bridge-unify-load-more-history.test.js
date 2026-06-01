@@ -4,10 +4,10 @@
  * Validates `handleUnifyLoadMoreHistory`:
  *   - emits a `unify_history_chunk` envelope with the projected
  *     user/assistant rows, oldestSeq, hasMore from
- *     ConversationStore.loadOlderByGroup
+ *     ConversationStore.loadVisibleByGroup
  *   - empty branch (no session yet, or no groupId) still emits a chunk so
  *     the frontend spinner clears
- *   - error branch (loadOlderByGroup throws) still emits an empty chunk
+ *   - error branch (loadVisibleByGroup throws) still emits an empty chunk
  *
  * Also covers the `handleUnifyLoadHistory` extension that primes the
  * pagination cursor: after bootstrap replay, the `history_loaded` event
@@ -212,8 +212,8 @@ describe('handleUnifyLoadMoreHistory — chunk emission', () => {
     const gid = 'g_throw';
     seedTurns(gid, 3);
 
-    const original = sharedStore.loadOlderByGroup.bind(sharedStore);
-    sharedStore.loadOlderByGroup = () => { throw new Error('disk gone'); };
+    const original = sharedStore.loadVisibleByGroup.bind(sharedStore);
+    sharedStore.loadVisibleByGroup = () => { throw new Error('disk gone'); };
     try {
       await handleUnifyLoadMoreHistory({ groupId: gid, beforeSeq: null, turns: 2 });
       const chunk = lastChunk();
@@ -222,30 +222,30 @@ describe('handleUnifyLoadMoreHistory — chunk emission', () => {
       expect(chunk.oldestSeq).toBeNull();
       expect(chunk.hasMore).toBe(false);
     } finally {
-      sharedStore.loadOlderByGroup = original;
+      sharedStore.loadVisibleByGroup = original;
     }
   });
 
-  it('defaults turns to 20 when caller omits it', async () => {
+  it('defaults turns to 10 when caller omits it', async () => {
     const gid = 'g_default';
     seedTurns(gid, 25);
 
     await handleUnifyLoadMoreHistory({ groupId: gid, beforeSeq: null /* turns omitted */ });
     const chunk = lastChunk();
-    expect(chunk.messages).toHaveLength(40); // 20 turns × (user + assistant)
-    expect(chunk.messages[0].content).toBe('q6');
+    expect(chunk.messages).toHaveLength(20); // 10 turns × (user + assistant)
+    expect(chunk.messages[0].content).toBe('q16');
     expect(chunk.messages.at(-1).content).toBe('aq25');
     expect(chunk.hasMore).toBe(true);
   });
 
-  it('rejects non-positive turns and falls back to default 20', async () => {
+  it('rejects non-positive turns and falls back to default 10', async () => {
     const gid = 'g_default2';
     seedTurns(gid, 25);
 
     await handleUnifyLoadMoreHistory({ groupId: gid, beforeSeq: null, turns: 0 });
     const chunk = lastChunk();
-    expect(chunk.messages).toHaveLength(40); // 20 turns × (user + assistant)
-    expect(chunk.messages[0].content).toBe('q6');
+    expect(chunk.messages).toHaveLength(20); // 10 turns × (user + assistant)
+    expect(chunk.messages[0].content).toBe('q16');
     expect(chunk.messages.at(-1).content).toBe('aq25');
     expect(chunk.hasMore).toBe(true);
   });
@@ -384,11 +384,14 @@ describe('handleUnifyLoadHistory — pagination cursor priming', () => {
     expect(user.data.message).not.toHaveProperty('attachments');
   });
 
-  it('initial group replay pages over visible rows when latest turns are invisible', async () => {
+  it('initial group replay pages over visible rows without raw unbounded fallback', async () => {
     const gid = 'g_initial_invisible_tail';
-    sharedStore.appendBatch([
+    const before = sharedStore.appendBatch([
       { role: 'user', content: 'visible one', groupId: gid },
       { role: 'assistant', content: 'visible answer one', groupId: gid, speakerVpId: 'vp-ada' },
+    ]);
+    sharedStore.moveToColdBatch(before.map(m => m.id));
+    sharedStore.appendBatch([
       { role: 'user', content: 'visible two', groupId: gid },
       { role: 'assistant', content: 'visible answer two', groupId: gid, speakerVpId: 'vp-linus' },
       { role: 'user', content: 'reflection one', groupId: gid, _reflection: true },
@@ -421,7 +424,7 @@ describe('handleUnifyLoadHistory — pagination cursor priming', () => {
   it('history_loaded reports hasMore=false when the bootstrap covers everything', async () => {
     const gid = 'g_prime_all';
     seedTurns(gid, 2);
-    await handleUnifyLoadHistory({ groupId: gid, limit: 50 });
+    await handleUnifyLoadHistory({ groupId: gid, limit: 10 });
 
     const evt = lastHistoryLoadedEvent();
     expect(evt).toBeDefined();
@@ -430,7 +433,7 @@ describe('handleUnifyLoadHistory — pagination cursor priming', () => {
   });
 
   it('history_loaded reports hasMore=false and oldestSeq=null when the group has no history', async () => {
-    await handleUnifyLoadHistory({ groupId: 'g_empty_unique', limit: 50 });
+    await handleUnifyLoadHistory({ groupId: 'g_empty_unique', limit: 10 });
 
     const evt = lastHistoryLoadedEvent();
     expect(evt).toBeDefined();

@@ -281,3 +281,40 @@ describe('loadOlderByGroup — race-with-streaming safety', () => {
     expect(p2.messages.map(m => m.content)).toEqual(['q2', 'aq2']);
   });
 });
+
+describe('loadVisibleByGroup — internal marker filtering', () => {
+  it('keeps visible messages that quote internal frontmatter markers in the body', () => {
+    store.appendBatch([
+      {
+        role: 'user',
+        content: 'Please explain this YAML:\ninternal: true\n_reflection: true',
+        groupId: 'g1',
+      },
+      {
+        role: 'assistant',
+        content: 'That quoted YAML is user-visible content, not metadata.',
+        groupId: 'g1',
+      },
+    ]);
+
+    const r = store.loadVisibleByGroup('g1', null, 10);
+    expect(r.messages.map(m => m.content)).toEqual([
+      'Please explain this YAML:\ninternal: true\n_reflection: true',
+      'That quoted YAML is user-visible content, not metadata.',
+    ]);
+    expect(r.hasMore).toBe(false);
+  });
+
+  it('drops messages whose parsed frontmatter marks them internal/system-only', () => {
+    store.appendBatch([
+      { role: 'user', content: 'visible', groupId: 'g1' },
+      { role: 'assistant', content: 'hidden internal', groupId: 'g1', internal: true },
+      { role: 'assistant', content: 'hidden system', groupId: 'g1', systemOnlyMessage: true },
+      { role: 'assistant', content: 'also visible', groupId: 'g1' },
+    ]);
+
+    const r = store.loadVisibleByGroup('g1', null, 10);
+    expect(r.messages.map(m => m.content)).toEqual(['visible', 'also visible']);
+    expect(r.hasMore).toBe(false);
+  });
+});

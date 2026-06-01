@@ -60,7 +60,7 @@ function loadMoreUnifyHistory() {
     agentId: this.unifyAgentId,
     groupId,
     beforeSeq: this.unifyOldestLoadedSeq,
-    turns: 20,
+    turns: 10,
   });
 }
 
@@ -549,7 +549,7 @@ describe('loadMoreUnifyHistory — action gates', () => {
       agentId: 'agent-1',
       groupId: null,
       beforeSeq: 42,
-      turns: 20,
+      turns: 10,
     });
   });
 

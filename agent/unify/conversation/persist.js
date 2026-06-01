@@ -22,7 +22,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rename
 import { join, basename } from 'path';
 import { isPermissionError } from '../init.js';
 import { pairSanitize } from '../pair-sanitize.js';
-import { sliceLastNTurns } from '../turn-utils.js';
+import { indexOfNthTurnFromEnd, sliceLastNTurns } from '../turn-utils.js';
 
 /**
  * Default cold-start "recent window" size, expressed in TURNS (not raw
@@ -871,6 +871,43 @@ export class ConversationStore {
   }
 
   /**
+   * Visible UI pagination read for one group. Unlike `loadOlderByGroup`, this
+   * projects out internal/reflection/system rows BEFORE applying the turn
+   * window, so a dense run of hidden metadata cannot force the first screen to
+   * scan and materialize the group's entire history in the web bridge.
+   *
+   * @param {string} groupId
+   * @param {number|null} beforeSeq — exclusive upper bound, or null for newest
+   * @param {number} [turnsLimit=DEFAULT_RECENT_TURNS]
+   * @returns {{ messages: object[], oldestSeq: number|null, hasMore: boolean }}
+   */
+  loadVisibleByGroup(groupId, beforeSeq, turnsLimit = DEFAULT_RECENT_TURNS) {
+    if (!groupId || !(turnsLimit > 0)) return { messages: [], oldestSeq: null, hasMore: false };
+
+    const cutoff = Number.isFinite(beforeSeq) ? beforeSeq : Infinity;
+    const hot = this.#loadVisibleFromDirByGroup(this.#msgDir, groupId, cutoff);
+    const cold = this.#loadVisibleFromDirByGroup(this.#coldDir, groupId, cutoff);
+    const visible = [...cold, ...hot];
+    if (visible.length === 0) return { messages: [], oldestSeq: null, hasMore: false };
+
+    const startIdx = indexOfNthTurnFromEnd(visible, turnsLimit);
+    const start = startIdx === -1 ? 0 : startIdx;
+    const messages = pairSanitize(visible.slice(start));
+    const oldestSeq = messages.length ? parseSeqFromId(messages[0].id) : null;
+    const firstVisibleSeq = parseSeqFromId(visible[0].id);
+    const hasMore = messages.length > 0
+      && Number.isFinite(oldestSeq)
+      && Number.isFinite(firstVisibleSeq)
+      && oldestSeq > firstVisibleSeq;
+
+    return {
+      messages,
+      oldestSeq: Number.isFinite(oldestSeq) ? oldestSeq : null,
+      hasMore,
+    };
+  }
+
+  /**
    * Count hot messages.
    *
    * @returns {number}
@@ -1317,6 +1354,32 @@ export class ConversationStore {
     }
 
     return messages;
+  }
+
+  #loadVisibleFromDirByGroup(dir, groupId, beforeSeq) {
+    if (!existsSync(dir)) return [];
+
+    const files = readdirSync(dir)
+      .filter(f => f.endsWith('.md'))
+      .sort();
+
+    const out = [];
+    for (const file of files) {
+      const seq = parseSeqFromId(basename(file, '.md'));
+      if (!Number.isFinite(seq) || seq >= beforeSeq) continue;
+
+      const raw = readFileSync(join(dir, file), 'utf8');
+      if (!raw.includes(`groupId: ${groupId}`)) continue;
+      if (!raw.includes('role: user') && !raw.includes('role: assistant')) continue;
+
+      const parsed = parseMessage(raw);
+      if (!parsed || parsed.groupId !== groupId) continue;
+      if (parsed._reflection || parsed.internal || parsed.systemOnly || parsed.systemOnlyMessage) continue;
+      if (parsed.role !== 'user' && parsed.role !== 'assistant') continue;
+      out.push(parsed);
+    }
+
+    return out;
   }
 
   /**
