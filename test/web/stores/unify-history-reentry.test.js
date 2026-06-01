@@ -45,7 +45,7 @@ describe('Unify group history re-entry', () => {
     expect(store.sent).toEqual([{
       type: 'unify_load_history',
       agentId: 'agent-1',
-      limit: 50,
+      limit: 10,
       groupId: 'grp_fun',
     }]);
     expect(store.unifyGroupHistoryState.grp_fun).toEqual(expect.objectContaining({
@@ -70,7 +70,7 @@ describe('Unify group history re-entry', () => {
     expect(store.sent).toEqual([{
       type: 'unify_load_history',
       agentId: 'agent-1',
-      limit: 50,
+      limit: 10,
       groupId: 'grp_fun',
     }]);
   });
@@ -170,7 +170,7 @@ describe('Unify group history re-entry', () => {
     expect(store.sent).toEqual([{
       type: 'unify_load_history',
       agentId: 'agent-1',
-      limit: 50,
+      limit: 10,
       groupId: 'grp_fun',
     }]);
   });

@@ -890,7 +890,7 @@ export const useChatStore = defineStore('chat', {
         this.sendWsMessage({
           type: 'unify_load_history',
           agentId: this.unifyAgentId,
-          limit: needMessages ? 50 : 0,
+          limit: needMessages ? 10 : 0,
           groupId,
         });
       }
@@ -2150,7 +2150,7 @@ export const useChatStore = defineStore('chat', {
         this.sendWsMessage({
           type: 'unify_load_history',
           agentId: this.unifyAgentId,
-          limit: 50,
+          limit: 10,
           groupId: next,
         });
       }
@@ -2802,7 +2802,7 @@ export const useChatStore = defineStore('chat', {
         agentId: this.unifyAgentId,
         groupId,
         beforeSeq: this.unifyOldestLoadedSeq,
-        turns: 20,
+        turns: 10,
       });
     },
 

@@ -602,10 +602,16 @@ function loadVisibleGroupHistoryPage(store, groupId, limit, beforeSeq = null) {
 
   let rows = [];
   try {
-    if (typeof store.loadOlderByGroup === 'function') {
-      // Use an unbounded raw prefix, then project/slice visible rows below.
-      // This preserves loadOlderByGroup's hot+cold scan without letting raw
-      // reflection/internal rows consume the UI-visible page window.
+    if (typeof store.loadVisibleByGroup === 'function') {
+      const page = store.loadVisibleByGroup(groupId, beforeSeq, limit);
+      return {
+        messages: (page.messages || []).map(projectPersistedToVisibleHistoryEntry).filter(Boolean),
+        oldestSeq: (typeof page.oldestSeq === 'number') ? page.oldestSeq : null,
+        hasMore: !!page.hasMore,
+      };
+    } else if (typeof store.loadOlderByGroup === 'function') {
+      // Compatibility fallback for older test doubles: use an unbounded raw
+      // prefix, then project/slice visible rows below.
       rows = store.loadOlderByGroup(groupId, beforeSeq, Infinity).messages || [];
     } else if (Number.isFinite(beforeSeq)) {
       const all = typeof store.loadAllByGroup === 'function'
@@ -3582,11 +3588,10 @@ export async function handleUnifyLoadHistory(msg) {
   }
 
   // `msg.limit` is the replay-scrollback request from the frontend (UI
-  // history pane, not engine context). Semantics changed (2026-05-01):
-  // now expressed in TURNS. The previous default (50 messages) maps to
-  // ~20–25 turns; in the turn-count world 50 turns of UI scrollback is
-  // still cheap and matches what the frontend already passes through.
-  const limit = (typeof msg.limit === 'number') ? msg.limit : 50;
+  // history pane, not engine context). Keep the bootstrap window small so
+  // opening a group can paint the latest messages quickly; older rows are
+  // paged via `unify_load_more_history` when the user scrolls upward.
+  const limit = (typeof msg.limit === 'number') ? msg.limit : 10;
   const visiblePage = groupId
     ? loadVisibleGroupHistoryPage(session.conversationStore, groupId, limit)
     : { messages: limit > 0 ? pickRecent(session.conversationStore, limit) : [], oldestSeq: null, hasMore: false };
@@ -3691,7 +3696,7 @@ export async function handleUnifyLoadMoreHistory(msg) {
   }
 
   const beforeSeq = (typeof msg.beforeSeq === 'number') ? msg.beforeSeq : null;
-  const turns = (typeof msg.turns === 'number' && msg.turns > 0) ? msg.turns : 20;
+  const turns = (typeof msg.turns === 'number' && msg.turns > 0) ? msg.turns : 10;
 
   let result;
   try {
