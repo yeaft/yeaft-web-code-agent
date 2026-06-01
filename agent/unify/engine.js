@@ -991,11 +991,14 @@ export class Engine {
   #getCompactSummary() {
     if (!this.#conversationStore) return '';
     // Per-(group, vp) scoping: when this engine is bound to a fan-out VP,
-    // read its own summary file. Falls back to the legacy global file
-    // for sub-agent / non-group callers that never set the pair.
+    // read its own summary file. On a miss (empty scoped file) we fall
+    // through to the legacy global file so pre-PR sessions whose only
+    // summary lives in compact.md still surface their context — matches
+    // the OR-fallback in web-bridge's `hasCompactSummary` flag.
     if (this.#groupId && this.#vpId
         && typeof this.#conversationStore.readCompactSummaryFor === 'function') {
-      return this.#conversationStore.readCompactSummaryFor(this.#groupId, this.#vpId);
+      const scoped = this.#conversationStore.readCompactSummaryFor(this.#groupId, this.#vpId);
+      if (scoped) return scoped;
     }
     return this.#conversationStore.readCompactSummary();
   }
@@ -1165,7 +1168,13 @@ export class Engine {
         }
       },
       archive: async (_groupIdx, groupMsgs) => {
-        for (const m of groupMsgs) if (m.id) archiveIds.push(m.id);
+        // Only collect archive ids when we'll actually use them. In the
+        // scoped (per-VP) path we never call moveToColdBatch — those
+        // rows are shared with sibling VPs in this group — so leaving
+        // the push in would be dead state a future reader has to chase.
+        if (!scoped) {
+          for (const m of groupMsgs) if (m.id) archiveIds.push(m.id);
+        }
         const turnId = groupMsgs[0]?.id || `g_${Date.now()}`;
         if (this.#yeaftDir) {
           try {

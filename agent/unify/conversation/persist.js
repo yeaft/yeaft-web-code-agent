@@ -487,19 +487,32 @@ export class ConversationStore {
   }
 
   /**
-   * Sanitize a (groupId, vpId) pair into a safe filename component. We
-   * accept arbitrary user strings here (groupIds and vpIds are user-set),
-   * so anything non-alphanumeric collapses to `_`. The result is purely a
-   * filename — never parsed back.
+   * Sanitize one id (groupId or vpId) into a safe filename component.
+   * Anything outside `[A-Za-z0-9._-]` collapses to `_`; max 120 chars.
+   * The result is only ever used as a basename joined to `compactScopedDir`
+   * — path traversal is blocked by the basename-only `join`, not by the
+   * regex (a literal `..` stays as `..` here and becomes part of a
+   * regular filename via the `__` separator + `.md` suffix).
+   *
+   * @param {string} s
+   * @returns {string}
+   */
+  #safeIdComponent(s) {
+    return String(s).replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 120);
+  }
+
+  /**
+   * Sanitize a (groupId, vpId) pair into a safe filename. We accept
+   * arbitrary user strings here (groupIds and vpIds are user-set), so
+   * the result is purely a basename — never parsed back.
    *
    * @param {string} groupId
    * @param {string} vpId
-   * @returns {string|null} — sanitized basename, or null if either id missing
+   * @returns {string|null} — full path, or null if either id missing
    */
   #scopedCompactPath(groupId, vpId) {
     if (!groupId || !vpId) return null;
-    const safe = (s) => String(s).replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 120);
-    return join(this.#compactScopedDir, `${safe(groupId)}__${safe(vpId)}.md`);
+    return join(this.#compactScopedDir, `${this.#safeIdComponent(groupId)}__${this.#safeIdComponent(vpId)}.md`);
   }
 
   /**
@@ -569,8 +582,7 @@ export class ConversationStore {
   hasAnyCompactSummaryForGroup(groupId) {
     if (!groupId) return false;
     if (!existsSync(this.#compactScopedDir)) return false;
-    const safeGroup = String(groupId).replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 120);
-    const prefix = `${safeGroup}__`;
+    const prefix = `${this.#safeIdComponent(groupId)}__`;
     try {
       for (const f of readdirSync(this.#compactScopedDir)) {
         if (f.startsWith(prefix) && f.endsWith('.md')) return true;
@@ -743,7 +755,9 @@ export class ConversationStore {
    *
    *   - User rows (no speakerVpId): KEEP — every VP sees the prompt.
    *   - This VP's own assistant rows + their paired tool rows: KEEP.
-   *   - OTHER VPs' assistant rows: KEEP TEXT ONLY (strip toolCalls).
+   *   - OTHER VPs' assistant rows: KEEP TEXT ONLY (strip toolCalls AND
+   *     thinkingBlocks — thinking is VP-private per Anthropic's signed-
+   *     block contract and would never appear in another VP's context).
    *   - OTHER VPs' tool result rows (role:'tool'): DROP — they pair with
    *     stripped tool_use ids and would orphan on replay.
    *   - Rows with `_reflection` / `internal` / `systemOnly`: DROP — they
