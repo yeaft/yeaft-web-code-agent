@@ -63,7 +63,7 @@ describe('E-b compact summary placement (DESIGN-PROMPT §4.3)', () => {
       readMessages: () => [],
       readArchivedGroups: () => [],
       replaceMessages: () => {},
-      updateCompactSummary: () => {},
+      replaceCompactSummary: () => {},
     };
     const engine = mkEngine(adapter, { conversationStore });
 
@@ -95,7 +95,7 @@ describe('E-b compact summary placement (DESIGN-PROMPT §4.3)', () => {
       readMessages: () => [],
       readArchivedGroups: () => [],
       replaceMessages: () => {},
-      updateCompactSummary: () => {},
+      replaceCompactSummary: () => {},
     };
     const engine = mkEngine(adapter, { conversationStore });
 
@@ -119,7 +119,7 @@ describe('E-b compact summary placement (DESIGN-PROMPT §4.3)', () => {
       readMessages: () => [],
       readArchivedGroups: () => [],
       replaceMessages: () => {},
-      updateCompactSummary: () => {},
+      replaceCompactSummary: () => {},
     };
     const engine = mkEngine(adapter, { conversationStore });
 
