@@ -3595,7 +3595,10 @@ export async function handleUnifyLoadHistory(msg) {
   const visiblePage = groupId
     ? loadVisibleGroupHistoryPage(session.conversationStore, groupId, limit)
     : { messages: limit > 0 ? pickRecent(session.conversationStore, limit) : [], oldestSeq: null, hasMore: false };
-  const compactSummary = session.conversationStore.readCompactSummary();
+  // Legacy compact.md is a non-group fallback only. For group replay, reading
+  // it makes every group show "has compact" once any legacy/non-scoped compact
+  // exists, even when this group has no scoped summary.
+  const compactSummary = groupId ? '' : session.conversationStore.readCompactSummary();
   const replayEntries = groupId
     ? visiblePage.messages
     : visiblePage.messages
@@ -3645,15 +3648,13 @@ export async function handleUnifyLoadHistory(msg) {
     oldestSeq = visiblePage.oldestSeq;
   }
 
-  // hasCompactSummary used to read a single session-global file, so it
-  // was always true once ANY group/VP in the session had compacted.
-  // Now we check (a) the scoped dir for any per-VP summary file in this
-  // group, falling back to (b) the legacy global file for sessions that
-  // pre-date the per-(group, vp) split.
+  // hasCompactSummary used to read a single session-global file, so it was
+  // always true once ANY group/VP in the session had compacted. For group
+  // replay, only scoped per-(group, vp) summaries count; legacy compact.md is
+  // reserved for non-group / pre-scoped 1:1 callers.
   let hasCompactSummaryFlag = !!compactSummary;
   if (groupId && typeof session.conversationStore.hasAnyCompactSummaryForGroup === 'function') {
-    hasCompactSummaryFlag = session.conversationStore.hasAnyCompactSummaryForGroup(groupId)
-      || hasCompactSummaryFlag;
+    hasCompactSummaryFlag = session.conversationStore.hasAnyCompactSummaryForGroup(groupId);
   }
 
   sendUnifyEvent({
