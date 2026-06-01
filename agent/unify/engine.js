@@ -991,14 +991,12 @@ export class Engine {
   #getCompactSummary() {
     if (!this.#conversationStore) return '';
     // Per-(group, vp) scoping: when this engine is bound to a fan-out VP,
-    // read its own summary file. On a miss (empty scoped file) we fall
-    // through to the legacy global file so pre-PR sessions whose only
-    // summary lives in compact.md still surface their context — matches
-    // the OR-fallback in web-bridge's `hasCompactSummary` flag.
+    // read ONLY its own summary file. Falling back to legacy compact.md here
+    // leaks another group/VP's summary into every new group turn after one
+    // post-turn compact writes the session-global file.
     if (this.#groupId && this.#vpId
         && typeof this.#conversationStore.readCompactSummaryFor === 'function') {
-      const scoped = this.#conversationStore.readCompactSummaryFor(this.#groupId, this.#vpId);
-      if (scoped) return scoped;
+      return this.#conversationStore.readCompactSummaryFor(this.#groupId, this.#vpId);
     }
     return this.#conversationStore.readCompactSummary();
   }

@@ -24,7 +24,9 @@ const { runCompact: runCompactOrchestrator } =
   await import('../../agent/unify/compact/orchestrator.js');
 
 class CapturingAdapter {
-  async *stream() {
+  constructor() { this.streamCalls = []; }
+  async *stream(args) {
+    this.streamCalls.push(args);
     yield { type: 'text_delta', text: 'ok' };
     yield { type: 'stop', stopReason: 'end_turn' };
   }
@@ -39,12 +41,19 @@ class FakeStore {
     this.movedToCold = [];
     this.compactSummaries = [];
     this.indexUpdates = [];
+    this.scopedCompactSummaries = new Map();
   }
   loadAll() { return this._messages; }
   hotTokens() { return 20000; }
   countHot() { return this._messages.length; }
   moveToColdBatch(ids) { this.movedToCold.push(...ids); }
   replaceCompactSummary(s) { this.compactSummaries.push(s); }
+  replaceCompactSummaryFor(groupId, vpId, s) {
+    this.scopedCompactSummaries.set(`${groupId}:${vpId}`, s);
+  }
+  readCompactSummaryFor(groupId, vpId) {
+    return this.scopedCompactSummaries.get(`${groupId}:${vpId}`) || '';
+  }
   updateIndex(info) { this.indexUpdates.push(info); }
   append() {}
   readCompactSummary() { return ''; }
@@ -58,7 +67,7 @@ class CapturingTrace {
   logEvent(e) { this.events.push(e); }
 }
 
-function mkEngine() {
+function mkEngine(options = {}) {
   const adapter = new CapturingAdapter();
   const trace = new CapturingTrace();
   const conversationStore = new FakeStore();
@@ -72,11 +81,30 @@ function mkEngine() {
       maxContextTokens: 20000,
     },
     conversationStore,
+    ...options,
   });
   return { engine, adapter, trace, conversationStore };
 }
 
-describe('default config routes through runCompact', () => {
+describe('compact summary injection and orchestrator routing', () => {
+
+
+  it('does not fall back to legacy global compact.md for group VP turns', async () => {
+    runCompactOrchestrator.mockClear();
+    const { engine, adapter, conversationStore } = mkEngine({ groupId: 'grp_fun', vpId: 'linus' });
+    conversationStore.readCompactSummary = () => 'legacy global compact for another group';
+
+    const out = [];
+    for await (const ev of engine.query({
+      prompt: 'hi',
+      messages: [],
+      groupId: 'grp_fun',
+    })) out.push(ev);
+
+    const sent = adapter.streamCalls[0]?.messages || [];
+    expect(sent.map(m => m.content).join('\n')).not.toContain('legacy global compact for another group');
+  });
+
   it('runCompact invoked', async () => {
     runCompactOrchestrator.mockClear();
     const { engine } = mkEngine();
