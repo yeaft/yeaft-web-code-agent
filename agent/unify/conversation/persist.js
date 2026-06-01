@@ -1370,14 +1370,11 @@ export class ConversationStore {
 
       const raw = readFileSync(join(dir, file), 'utf8');
       if (!raw.includes(`groupId: ${groupId}`)) continue;
-      if (raw.includes('_reflection: true')
-        || raw.includes('internal: true')
-        || raw.includes('systemOnly: true')
-        || raw.includes('systemOnlyMessage: true')) continue;
       if (!raw.includes('role: user') && !raw.includes('role: assistant')) continue;
 
       const parsed = parseMessage(raw);
       if (!parsed || parsed.groupId !== groupId) continue;
+      if (parsed._reflection || parsed.internal || parsed.systemOnly || parsed.systemOnlyMessage) continue;
       if (parsed.role !== 'user' && parsed.role !== 'assistant') continue;
       out.push(parsed);
     }
