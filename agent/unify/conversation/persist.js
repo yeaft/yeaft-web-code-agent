@@ -463,8 +463,9 @@ export class ConversationStore {
    * @param {string} summary — the new, complete summary to persist
    */
   replaceCompactSummary(summary) {
+    if (typeof summary !== 'string' || !summary) return;
     try {
-      writeFileSync(this.#compactPath, String(summary || ''), { encoding: 'utf8', mode: 0o644 });
+      writeFileSync(this.#compactPath, summary, { encoding: 'utf8', mode: 0o644 });
     } catch (err) {
       if (isPermissionError(err)) {
         if (!_permissionWarned) {
@@ -548,10 +549,11 @@ export class ConversationStore {
    * @param {string} summary
    */
   replaceCompactSummaryFor(groupId, vpId, summary) {
+    if (typeof summary !== 'string' || !summary) return;
     const path = this.#scopedCompactPath(groupId, vpId);
     if (!path) return;
     try {
-      writeFileSync(path, String(summary || ''), { encoding: 'utf8', mode: 0o644 });
+      writeFileSync(path, summary, { encoding: 'utf8', mode: 0o644 });
     } catch (err) {
       if (isPermissionError(err)) {
         if (!_permissionWarned) {

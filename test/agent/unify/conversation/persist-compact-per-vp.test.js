@@ -2,7 +2,7 @@
  * persist-compact-per-vp.test.js — isolation tests for per-(groupId, vpId)
  * compact summary + the VP-scoped hot-history loader.
  *
- * Regression: before 2026-06-01, `readCompactSummary` / `updateCompactSummary`
+ * Regression: before 2026-06-01, `readCompactSummary` / `replaceCompactSummary`
  * pointed at a single session-global compact.md, so every group + every VP
  * in a session shared (and clobbered) the same file. We now want:
  *   - per-(group, vp) summaries are isolated
