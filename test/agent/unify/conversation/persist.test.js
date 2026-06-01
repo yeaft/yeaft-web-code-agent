@@ -434,16 +434,19 @@ describe('ConversationStore', () => {
 
   describe('compact summary', () => {
     it('should write and read compact summary', () => {
-      store.updateCompactSummary('User discussed TypeScript.');
+      store.replaceCompactSummary('User discussed TypeScript.');
       const summary = store.readCompactSummary();
       expect(summary).toContain('User discussed TypeScript.');
     });
 
-    it('should accumulate summaries', () => {
-      store.updateCompactSummary('First summary.');
-      store.updateCompactSummary('Second summary.');
+    it('should overwrite on each call (rewrite-in-place semantics)', () => {
+      // Each compact pass rewrites the running summary. Appending was
+      // the legacy behaviour but produced an unbounded prompt block —
+      // see persist.js#replaceCompactSummary.
+      store.replaceCompactSummary('First summary.');
+      store.replaceCompactSummary('Second summary.');
       const summary = store.readCompactSummary();
-      expect(summary).toContain('First summary.');
+      expect(summary).not.toContain('First summary.');
       expect(summary).toContain('Second summary.');
     });
 
@@ -503,7 +506,7 @@ describe('ConversationStore', () => {
         { role: 'assistant', content: 'B' },
       ]);
       store.moveToCold('m0001');
-      store.updateCompactSummary('Summary');
+      store.replaceCompactSummary('Summary');
 
       store.clear();
 

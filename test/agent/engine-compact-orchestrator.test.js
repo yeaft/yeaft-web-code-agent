@@ -44,7 +44,7 @@ class FakeStore {
   hotTokens() { return 20000; }
   countHot() { return this._messages.length; }
   moveToColdBatch(ids) { this.movedToCold.push(...ids); }
-  updateCompactSummary(s) { this.compactSummaries.push(s); }
+  replaceCompactSummary(s) { this.compactSummaries.push(s); }
   updateIndex(info) { this.indexUpdates.push(info); }
   append() {}
   readCompactSummary() { return ''; }
