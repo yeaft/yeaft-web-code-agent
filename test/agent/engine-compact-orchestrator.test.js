@@ -47,8 +47,8 @@ class FakeStore {
   hotTokens() { return 20000; }
   countHot() { return this._messages.length; }
   moveToColdBatch(ids) { this.movedToCold.push(...ids); }
-  updateCompactSummary(s) { this.compactSummaries.push(s); }
-  updateCompactSummaryFor(groupId, vpId, s) {
+  replaceCompactSummary(s) { this.compactSummaries.push(s); }
+  replaceCompactSummaryFor(groupId, vpId, s) {
     this.scopedCompactSummaries.set(`${groupId}:${vpId}`, s);
   }
   readCompactSummaryFor(groupId, vpId) {

@@ -2,7 +2,7 @@
  * persist-compact-per-vp.test.js — isolation tests for per-(groupId, vpId)
  * compact summary + the VP-scoped hot-history loader.
  *
- * Regression: before 2026-06-01, `readCompactSummary` / `updateCompactSummary`
+ * Regression: before 2026-06-01, `readCompactSummary` / `replaceCompactSummary`
  * pointed at a single session-global compact.md, so every group + every VP
  * in a session shared (and clobbered) the same file. We now want:
  *   - per-(group, vp) summaries are isolated
@@ -30,9 +30,9 @@ describe('compact summary per-(groupId, vpId) isolation', () => {
 
   it('isolates summaries between (group, vp) pairs', () => {
     const store = new ConversationStore(TEST_DIR);
-    store.updateCompactSummaryFor('g1', 'vpA', 'A in g1 says hi');
-    store.updateCompactSummaryFor('g1', 'vpB', 'B in g1 says bye');
-    store.updateCompactSummaryFor('g2', 'vpA', 'A in g2 different group');
+    store.replaceCompactSummaryFor('g1', 'vpA', 'A in g1 says hi');
+    store.replaceCompactSummaryFor('g1', 'vpB', 'B in g1 says bye');
+    store.replaceCompactSummaryFor('g2', 'vpA', 'A in g2 different group');
 
     expect(store.readCompactSummaryFor('g1', 'vpA')).toContain('A in g1 says hi');
     expect(store.readCompactSummaryFor('g1', 'vpA')).not.toContain('B in g1');
@@ -42,28 +42,28 @@ describe('compact summary per-(groupId, vpId) isolation', () => {
     expect(store.readCompactSummaryFor('g2', 'vpA')).toContain('A in g2 different group');
   });
 
-  it('appends successive summaries (does not overwrite)', () => {
+  it('overwrites on each call (rewrite-in-place semantics)', () => {
     const store = new ConversationStore(TEST_DIR);
-    store.updateCompactSummaryFor('g1', 'vpA', 'first entry');
-    store.updateCompactSummaryFor('g1', 'vpA', 'second entry');
+    store.replaceCompactSummaryFor('g1', 'vpA', 'first entry');
+    store.replaceCompactSummaryFor('g1', 'vpA', 'second entry');
     const out = store.readCompactSummaryFor('g1', 'vpA');
-    expect(out).toContain('first entry');
+    expect(out).not.toContain('first entry');
     expect(out).toContain('second entry');
   });
 
   it('hasAnyCompactSummaryForGroup is per-group, not session-global', () => {
     const store = new ConversationStore(TEST_DIR);
-    store.updateCompactSummaryFor('g1', 'vpA', 'hi');
+    store.replaceCompactSummaryFor('g1', 'vpA', 'hi');
     expect(store.hasAnyCompactSummaryForGroup('g1')).toBe(true);
     expect(store.hasAnyCompactSummaryForGroup('g2')).toBe(false);
   });
 
   it('returns empty when groupId or vpId missing (legacy callers)', () => {
     const store = new ConversationStore(TEST_DIR);
-    store.updateCompactSummaryFor('g1', 'vpA', 'real');
+    store.replaceCompactSummaryFor('g1', 'vpA', 'real');
     expect(store.readCompactSummaryFor(null, 'vpA')).toBe('');
     expect(store.readCompactSummaryFor('g1', null)).toBe('');
-    store.updateCompactSummaryFor(null, 'vpA', 'ignored');
+    store.replaceCompactSummaryFor(null, 'vpA', 'ignored');
     expect(store.readCompactSummaryFor('g1', 'vpA')).not.toContain('ignored');
   });
 
@@ -71,8 +71,8 @@ describe('compact summary per-(groupId, vpId) isolation', () => {
     const store = new ConversationStore(TEST_DIR);
     // Both "../" attempts and weird whitespace should land in the scoped
     // dir (not escape it) and remain distinct from a normal pair.
-    store.updateCompactSummaryFor('../weird', 'vp', 'A');
-    store.updateCompactSummaryFor('plain', 'vp', 'B');
+    store.replaceCompactSummaryFor('../weird', 'vp', 'A');
+    store.replaceCompactSummaryFor('plain', 'vp', 'B');
     expect(store.readCompactSummaryFor('../weird', 'vp')).toContain('A');
     expect(store.readCompactSummaryFor('plain', 'vp')).toContain('B');
     expect(store.readCompactSummaryFor('../weird', 'vp')).not.toContain('B');

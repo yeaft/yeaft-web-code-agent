@@ -1147,18 +1147,32 @@ export class Engine {
     // a jarring locale flip mid-context.
     const isZh = String(this.#config.language || '').toLowerCase().startsWith('zh');
     const summariserSystem = isZh
-      ? '你是对话摘要器。请用中文写出 2–3 段简明摘要，保留决策、事实与上下文。'
-      : 'You are a conversation summarizer. Summarize concisely in 2–3 paragraphs, preserving decisions, facts, and context.';
+      ? '你是对话摘要器。下面包含「先前累计摘要」（可能为空）与「新待压缩对话」。请融合两者，输出一份「重写后的累计摘要」——不要分段罗列日期、不要保留 "## 2026-..." 等历史分节，直接产出一份连贯、可被下一轮直接重新注入 prompt 的摘要。保留关键决策、事实、上下文与人物意图。'
+      : 'You are a conversation summarizer. The input contains a "previous cumulative summary" (may be empty) plus a "new conversation to absorb". Merge them into ONE rewritten cumulative summary — do NOT keep dated section headers or any historical log structure. Output a single coherent summary suitable to be re-injected into the next turn\'s prompt as-is. Preserve key decisions, facts, context, and intent.';
     const summariserPromptPrefix = isZh ? '请概括：\n\n' : 'Summarize:\n\n';
 
     const hooks = {
       summarise: async () => {
         try {
+          // Read prior summary at call time, not at orchestrator setup,
+          // so the merge always sees the freshest on-disk state even if
+          // future orchestrator changes invoke summarise more than once.
+          const priorSummary = this.#getCompactSummary() || '';
+          const priorBlock = priorSummary
+            ? (isZh
+                ? `【先前累计摘要】\n${priorSummary}\n\n【新待压缩对话】\n`
+                : `[Previous cumulative summary]\n${priorSummary}\n\n[New conversation to absorb]\n`)
+            : '';
           const result = await adapter.call({
             model: fastConfig.model,
             system: summariserSystem,
-            messages: [{ role: 'user', content: `${summariserPromptPrefix}${toArchive.map(m => `[${m.role}] ${(m.content || '').slice(0, 500)}`).join('\n\n')}` }],
-            maxTokens: 1024,
+            messages: [{ role: 'user', content: `${summariserPromptPrefix}${priorBlock}${toArchive.map(m => `[${m.role}] ${(m.content || '').slice(0, 500)}`).join('\n\n')}` }],
+            // 10k output budget: the running summary is the engine's
+            // long-term memory of cold turns, so it deserves room to
+            // actually preserve detail. We rewrite-in-place each round,
+            // so size stays bounded by maxTokens regardless of how many
+            // compact passes have run.
+            maxTokens: 10240,
           });
           return (result.text || '').trim();
         } catch {
@@ -1202,10 +1216,10 @@ export class Engine {
         conversationStore.moveToColdBatch(archiveIds);
       }
       if (out.compactSummary) {
-        if (scoped && typeof conversationStore.updateCompactSummaryFor === 'function') {
-          conversationStore.updateCompactSummaryFor(this.#groupId, this.#vpId, out.compactSummary);
+        if (scoped && typeof conversationStore.replaceCompactSummaryFor === 'function') {
+          conversationStore.replaceCompactSummaryFor(this.#groupId, this.#vpId, out.compactSummary);
         } else {
-          conversationStore.updateCompactSummary(out.compactSummary);
+          conversationStore.replaceCompactSummary(out.compactSummary);
         }
       }
       // Index update only makes sense for the legacy path that actually

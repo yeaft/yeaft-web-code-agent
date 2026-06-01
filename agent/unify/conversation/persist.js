@@ -450,20 +450,22 @@ export class ConversationStore {
   }
 
   /**
-   * Update the compact summary (cumulative).
+   * Rewrite the compact summary in place.
    *
-   * @param {string} summary — new summary to append
+   * Compact's semantics are "the running summary of everything older than
+   * the hot window". Each compact pass already received the previous
+   * summary text as input and produced a *new* cumulative summary — so
+   * we overwrite, we never append. Appending was the original behaviour
+   * (kept around as a diary), but the engine reads the whole file back
+   * into `<conversation_summary>` on every turn, so appending grows the
+   * per-turn prompt without bound until it defeats compaction itself.
+   *
+   * @param {string} summary — the new, complete summary to persist
    */
-  updateCompactSummary(summary) {
-    let existing = '';
-    if (existsSync(this.#compactPath)) {
-      existing = readFileSync(this.#compactPath, 'utf8');
-    }
-
-    const date = new Date().toISOString().split('T')[0];
-    const entry = `\n## ${date}\n\n${summary}\n`;
+  replaceCompactSummary(summary) {
+    if (typeof summary !== 'string' || !summary) return;
     try {
-      writeFileSync(this.#compactPath, existing + entry, { encoding: 'utf8', mode: 0o644 });
+      writeFileSync(this.#compactPath, summary, { encoding: 'utf8', mode: 0o644 });
     } catch (err) {
       if (isPermissionError(err)) {
         if (!_permissionWarned) {
@@ -539,26 +541,19 @@ export class ConversationStore {
   }
 
   /**
-   * Append a per-(groupId, vpId) compact summary entry. Same append-only
-   * "## YYYY-MM-DD ..." structure as the legacy `updateCompactSummary`,
-   * but isolated to one file per (group, vp).
+   * Rewrite a per-(groupId, vpId) compact summary in place. See
+   * `replaceCompactSummary` for the rationale — same reason, scoped file.
    *
    * @param {string} groupId
    * @param {string} vpId
    * @param {string} summary
    */
-  updateCompactSummaryFor(groupId, vpId, summary) {
+  replaceCompactSummaryFor(groupId, vpId, summary) {
+    if (typeof summary !== 'string' || !summary) return;
     const path = this.#scopedCompactPath(groupId, vpId);
     if (!path) return;
-    let existing = '';
-    if (existsSync(path)) {
-      try { existing = readFileSync(path, 'utf8'); }
-      catch { existing = ''; }
-    }
-    const date = new Date().toISOString().split('T')[0];
-    const entry = `\n## ${date}\n\n${summary}\n`;
     try {
-      writeFileSync(path, existing + entry, { encoding: 'utf8', mode: 0o644 });
+      writeFileSync(path, summary, { encoding: 'utf8', mode: 0o644 });
     } catch (err) {
       if (isPermissionError(err)) {
         if (!_permissionWarned) {

@@ -27,7 +27,7 @@ class NoopStore {
   hotTokens() { return 0; }
   countHot() { return 0; }
   moveToColdBatch() {}
-  updateCompactSummary() {}
+  replaceCompactSummary() {}
   updateIndex() {}
   append() {}
   readCompactSummary() { return ''; }
