@@ -329,6 +329,7 @@ export class ConversationStore {
   #coldDir;     // ~/.yeaft/conversation/cold
   #indexPath;   // ~/.yeaft/conversation/index.md
   #compactPath; // ~/.yeaft/conversation/compact.md
+  #compactScopedDir; // ~/.yeaft/conversation/compact/  (per-(group,vp))
   #nextSeq;     // next message sequence number (global, legacy)
   #nextSeqByThread; // Map<threadId, number> — per-thread counters (task-314)
 
@@ -342,11 +343,15 @@ export class ConversationStore {
     this.#coldDir = join(dir, 'conversation', 'cold');
     this.#indexPath = join(dir, 'conversation', 'index.md');
     this.#compactPath = join(dir, 'conversation', 'compact.md');
+    // Per-(groupId, vpId) compact summary files live here. The legacy
+    // single-file `compact.md` above is kept for backward compatibility
+    // and the "no groupId/vpId" fallback (sub-agents, legacy callers).
+    this.#compactScopedDir = join(dir, 'conversation', 'compact');
     this.#nextSeq = null;
     this.#nextSeqByThread = new Map();
 
     // Ensure directories exist (graceful on permission errors)
-    for (const d of [this.#convDir, this.#msgDir, this.#coldDir]) {
+    for (const d of [this.#convDir, this.#msgDir, this.#coldDir, this.#compactScopedDir]) {
       try {
         if (!existsSync(d)) mkdirSync(d, { recursive: true, mode: 0o755 });
       } catch (err) {
@@ -479,6 +484,111 @@ export class ConversationStore {
   readCompactSummary() {
     if (!existsSync(this.#compactPath)) return '';
     return readFileSync(this.#compactPath, 'utf8');
+  }
+
+  /**
+   * Sanitize one id (groupId or vpId) into a safe filename component.
+   * Anything outside `[A-Za-z0-9._-]` collapses to `_`; max 120 chars.
+   * The result is only ever used as a basename joined to `compactScopedDir`
+   * — path traversal is blocked by the basename-only `join`, not by the
+   * regex (a literal `..` stays as `..` here and becomes part of a
+   * regular filename via the `__` separator + `.md` suffix).
+   *
+   * @param {string} s
+   * @returns {string}
+   */
+  #safeIdComponent(s) {
+    return String(s).replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 120);
+  }
+
+  /**
+   * Sanitize a (groupId, vpId) pair into a safe filename. We accept
+   * arbitrary user strings here (groupIds and vpIds are user-set), so
+   * the result is purely a basename — never parsed back.
+   *
+   * @param {string} groupId
+   * @param {string} vpId
+   * @returns {string|null} — full path, or null if either id missing
+   */
+  #scopedCompactPath(groupId, vpId) {
+    if (!groupId || !vpId) return null;
+    return join(this.#compactScopedDir, `${this.#safeIdComponent(groupId)}__${this.#safeIdComponent(vpId)}.md`);
+  }
+
+  /**
+   * Read a per-(groupId, vpId) compact summary. Returns '' if no summary
+   * has been written yet. Falls back to nothing — callers that need the
+   * legacy global file should call `readCompactSummary()` explicitly.
+   *
+   * The (group, vp) scoping was introduced after we noticed the legacy
+   * single-file `compact.md` was shared across every group AND every VP
+   * in a session — so each new compact would clobber/append on top of
+   * unrelated content and every VP read the same merged blob. See
+   * `engine.#runOrchestratorCompact`.
+   *
+   * @param {string} groupId
+   * @param {string} vpId
+   * @returns {string}
+   */
+  readCompactSummaryFor(groupId, vpId) {
+    const path = this.#scopedCompactPath(groupId, vpId);
+    if (!path) return '';
+    if (!existsSync(path)) return '';
+    try { return readFileSync(path, 'utf8'); }
+    catch { return ''; }
+  }
+
+  /**
+   * Append a per-(groupId, vpId) compact summary entry. Same append-only
+   * "## YYYY-MM-DD ..." structure as the legacy `updateCompactSummary`,
+   * but isolated to one file per (group, vp).
+   *
+   * @param {string} groupId
+   * @param {string} vpId
+   * @param {string} summary
+   */
+  updateCompactSummaryFor(groupId, vpId, summary) {
+    const path = this.#scopedCompactPath(groupId, vpId);
+    if (!path) return;
+    let existing = '';
+    if (existsSync(path)) {
+      try { existing = readFileSync(path, 'utf8'); }
+      catch { existing = ''; }
+    }
+    const date = new Date().toISOString().split('T')[0];
+    const entry = `\n## ${date}\n\n${summary}\n`;
+    try {
+      writeFileSync(path, existing + entry, { encoding: 'utf8', mode: 0o644 });
+    } catch (err) {
+      if (isPermissionError(err)) {
+        if (!_permissionWarned) {
+          console.warn(`[Yeaft] Cannot write scoped compact summary: ${err.code}`);
+          _permissionWarned = true;
+        }
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  /**
+   * Check whether ANY per-(group, vp) compact summary exists for `groupId`.
+   * Used by the history-replay path to decide whether to flag
+   * `hasCompactSummary` for the UI without committing to one VP's view.
+   *
+   * @param {string} groupId
+   * @returns {boolean}
+   */
+  hasAnyCompactSummaryForGroup(groupId) {
+    if (!groupId) return false;
+    if (!existsSync(this.#compactScopedDir)) return false;
+    const prefix = `${this.#safeIdComponent(groupId)}__`;
+    try {
+      for (const f of readdirSync(this.#compactScopedDir)) {
+        if (f.startsWith(prefix) && f.endsWith('.md')) return true;
+      }
+    } catch { /* best-effort */ }
+    return false;
   }
 
   /**
@@ -633,6 +743,71 @@ export class ConversationStore {
    */
   loadAllByGroup(groupId) {
     return this.loadRecentByGroup(groupId, Infinity);
+  }
+
+  /**
+   * VP-scoped view of group history, used by per-VP post-turn compact.
+   *
+   * Compact must operate on what the VP actually *saw* in its context,
+   * not the union of every VP's tool calls/results — otherwise compact
+   * tries to summarize tool transcripts that were never in this VP's
+   * prompt window. The rule we settled on (with the user, 2026-06-01):
+   *
+   *   - User rows (no speakerVpId): KEEP — every VP sees the prompt.
+   *   - This VP's own assistant rows + their paired tool rows: KEEP.
+   *   - OTHER VPs' assistant rows: KEEP TEXT ONLY (strip toolCalls AND
+   *     thinkingBlocks — thinking is VP-private per Anthropic's signed-
+   *     block contract and would never appear in another VP's context).
+   *   - OTHER VPs' tool result rows (role:'tool'): DROP — they pair with
+   *     stripped tool_use ids and would orphan on replay.
+   *   - Rows with `_reflection` / `internal` / `systemOnly`: DROP — they
+   *     are engine-private and never enter another VP's context.
+   *
+   * The output is pair-safe by construction for THIS VP's tool arcs and
+   * carries only summary-relevant text for the other VPs.
+   *
+   * @param {string} groupId
+   * @param {string} vpId
+   * @returns {object[]}
+   */
+  loadGroupHistoryForVp(groupId, vpId) {
+    if (!groupId || !vpId) return [];
+    const all = this.#loadFromDir(this.#msgDir, Infinity);
+    const out = [];
+    for (const m of all) {
+      if (!m || m.groupId !== groupId) continue;
+      if (m._reflection || m.internal || m.systemOnly || m.systemOnlyMessage) continue;
+      if (m.role === 'user') {
+        out.push(m);
+        continue;
+      }
+      if (m.role === 'assistant') {
+        if (m.speakerVpId === vpId) {
+          out.push(m);
+        } else {
+          // Other VP's assistant text only — drop their toolCalls so the
+          // following role:'tool' rows (which we also drop) don't leave
+          // orphan tool_use ids in the compact input.
+          const copy = { ...m };
+          delete copy.toolCalls;
+          delete copy.thinkingBlocks;
+          out.push(copy);
+        }
+        continue;
+      }
+      if (m.role === 'tool') {
+        // Tool results belong to the assistant turn that emitted the
+        // tool_use. Only keep ours; other VPs' results were dropped via
+        // their assistant's stripped toolCalls.
+        if (m.speakerVpId === vpId) out.push(m);
+        continue;
+      }
+    }
+    // Note: we don't run `sliceLastNTurns` here. The caller
+    // (#runOrchestratorCompact) decides what's "cooling" via
+    // `partitionMessages`, and we don't want to pre-truncate before that
+    // budget calc sees the full picture.
+    return pairSanitize(out);
   }
 
   /**
