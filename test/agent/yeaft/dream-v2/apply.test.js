@@ -24,13 +24,19 @@ afterEach(() => { rmSync(root, { recursive: true, force: true }); });
 describe('targetToScope', () => {
   it('maps scope strings', () => {
     expect(targetToScope('user')).toEqual({ kind: 'user' });
-    expect(targetToScope('vp/zhang')).toEqual({ kind: 'vp', id: 'zhang' });
     expect(targetToScope('group/g1')).toEqual({ kind: 'group', id: 'g1' });
-    expect(targetToScope('feature/f1')).toEqual({ kind: 'feature', id: 'f1' });
-    expect(targetToScope('topic/sci/phys')).toEqual({ kind: 'topic', path: ['sci', 'phys'] });
+    expect(targetToScope('group/g1/user')).toEqual({ kind: 'group-user', groupId: 'g1' });
+    expect(targetToScope('group/g1/vp/zhang')).toEqual({ kind: 'group-vp', groupId: 'g1', id: 'zhang' });
+    expect(targetToScope('group/g1/feature/f1')).toEqual({ kind: 'group-feature', groupId: 'g1', id: 'f1' });
+    expect(targetToScope('group/g1/topic/sci/phys'))
+      .toEqual({ kind: 'group-topic', groupId: 'g1', path: ['sci', 'phys'] });
+  });
+  it('rejects legacy root scopes', () => {
+    expect(() => targetToScope('vp/zhang')).toThrow(/legacy/);
+    expect(() => targetToScope('feature/f1')).toThrow(/legacy/);
+    expect(() => targetToScope('topic/sci')).toThrow(/legacy/);
   });
   it('throws on garbage', () => {
-    expect(() => targetToScope('vp')).toThrow();
     expect(() => targetToScope('mystery/x')).toThrow();
   });
 });
@@ -148,31 +154,31 @@ describe('CREATE path', () => {
     };
     const r = await applyMergedTarget(
       {
-        target: 'topic/science/physics',
+        target: 'group/g-eng/topic/science/physics',
         kind: 'create',
         sources: [{ groupId: 'g-eng', diff: [{ role: 'user', body: 'hi' }] }],
       },
       { root, ts: 'TS-4', llm, nowIso: () => '2026-04-28T03:07:00Z' },
     );
     expect(r.kind).toBe('create');
-    const mem = readFileSync(join(root, 'topic', 'science', 'physics', 'memory.md'), 'utf8');
+    const mem = readFileSync(join(root, 'group', 'g-eng', 'topic', 'science', 'physics', 'memory.md'), 'utf8');
     expect(mem).toContain('# physics');
     expect(mem).toContain('lastDreamAt: 2026-04-28T03:07:00Z');
   });
 
   it('downgrades CREATE to UPDATE when files already exist', async () => {
-    mkdirSync(join(root, 'topic', 'science', 'physics'), { recursive: true });
-    writeFileSync(join(root, 'topic', 'science', 'physics', 'memory.md'), 'PRESERVED\n');
-    writeFileSync(join(root, 'topic', 'science', 'physics', 'summary.md'), 'old\n');
+    mkdirSync(join(root, 'group', 'g', 'topic', 'science', 'physics'), { recursive: true });
+    writeFileSync(join(root, 'group', 'g', 'topic', 'science', 'physics', 'memory.md'), 'PRESERVED\n');
+    writeFileSync(join(root, 'group', 'g', 'topic', 'science', 'physics', 'summary.md'), 'old\n');
     const llm = async ({ pass }) => {
-      expect(pass).toBe('update'); // not 'create'
+      expect(pass).toBe('update');
       return JSON.stringify({ memory_md: 'NEW\n', summary_md: 'new' });
     };
     await applyMergedTarget(
-      { target: 'topic/science/physics', kind: 'create', sources: [{ groupId: 'g', diff: [] }] },
+      { target: 'group/g/topic/science/physics', kind: 'create', sources: [{ groupId: 'g', diff: [] }] },
       { root, ts: 'TS-5', llm },
     );
-    expect(readFileSync(join(root, 'topic', 'science', 'physics', 'memory.md'), 'utf8'))
+    expect(readFileSync(join(root, 'group', 'g', 'topic', 'science', 'physics', 'memory.md'), 'utf8'))
       .toContain('NEW');
   });
 });

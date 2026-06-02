@@ -17,6 +17,7 @@
 
 import { extractKeywords } from './keywords.js';
 import { approxTokens } from './budget.js';
+import { isVpForeign } from './store-v2.js';
 
 /**
  * @typedef {object} PreflowOptions
@@ -118,12 +119,7 @@ export function buildFtsQuery(keywords) {
  * @returns {string[]}
  */
 export function filterScopes(scopes, ownVpId) {
-  return scopes.filter(s => {
-    if (!s.startsWith('vp/')) return true;
-    if (!ownVpId) return true;
-    const other = s.slice(3).split('/')[0];
-    return other === ownVpId;
-  });
+  return scopes.filter(s => !isVpForeign(s, ownVpId));
 }
 
 /**

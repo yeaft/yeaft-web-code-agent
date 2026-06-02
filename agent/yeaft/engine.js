@@ -569,8 +569,8 @@ export class Engine {
       groupId
         ? readScopeSummary({ kind: 'group', id: groupId }, { root: memoryRoot, language }).catch(() => '')
         : Promise.resolve(''),
-      vpId
-        ? readScopeSummary({ kind: 'vp', id: vpId }, { root: memoryRoot, language }).catch(() => '')
+      vpId && groupId
+        ? readScopeSummary({ kind: 'group-vp', groupId, id: vpId }, { root: memoryRoot, language }).catch(() => '')
         : Promise.resolve(''),
     ];
     const [user, group, vp] = await Promise.all(tasks);

@@ -167,6 +167,15 @@ export function selectRespondingVps(input) {
  */
 function scopeHeading(scope) {
   if (scope === 'user') return '## Memory: User';
+  // Nested group scopes first.
+  let m = /^group\/([^/]+)\/vp\/(.+)$/.exec(scope);
+  if (m) return `## Memory: VP ${m[2]}`;
+  m = /^group\/([^/]+)\/user$/.exec(scope);
+  if (m) return `## Memory: Group ${m[1]} (user)`;
+  m = /^group\/([^/]+)\/feature\/(.+)$/.exec(scope);
+  if (m) return `## Memory: Feature ${m[2]}`;
+  m = /^group\/([^/]+)\/topic\/(.+)$/.exec(scope);
+  if (m) return `## Memory: Topic ${m[2]}`;
   if (scope.startsWith('group/')) return `## Memory: Group ${scope.slice(6)}`;
   if (scope.startsWith('vp/')) return `## Memory: VP ${scope.slice(3)}`;
   if (scope.startsWith('feature/')) return `## Memory: Feature ${scope.slice(8)}`;
@@ -238,8 +247,11 @@ export function formatPickedForInjection(picked) {
  */
 export function buildRelevantScopes({ groupId, vpId, extra } = {}) {
   const scopes = ['user'];
-  if (groupId) scopes.push(`group/${groupId}`);
-  if (vpId) scopes.push(`vp/${vpId}`);
+  if (groupId) {
+    scopes.push(`group/${groupId}`);
+    scopes.push(`group/${groupId}/user`);
+    if (vpId) scopes.push(`group/${groupId}/vp/${vpId}`);
+  }
   if (Array.isArray(extra)) {
     for (const s of extra) {
       if (s && !scopes.includes(s)) scopes.push(s);

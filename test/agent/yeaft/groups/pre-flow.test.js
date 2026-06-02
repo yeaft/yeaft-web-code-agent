@@ -47,15 +47,15 @@ describe('buildRelevantScopes', () => {
   it('always includes user scope', () => {
     expect(buildRelevantScopes({})).toEqual(['user']);
   });
-  it('orders user → group → vp (featureId is silently ignored — Feature system removed)', () => {
+  it('orders user → group → group-user → group-vp', () => {
     expect(
-      buildRelevantScopes({ groupId: 'g1', vpId: 'alice', featureId: 'auth' }),
-    ).toEqual(['user', 'group/g1', 'vp/alice']);
+      buildRelevantScopes({ groupId: 'g1', vpId: 'alice' }),
+    ).toEqual(['user', 'group/g1', 'group/g1/user', 'group/g1/vp/alice']);
   });
   it('appends extra scopes once', () => {
     expect(
-      buildRelevantScopes({ groupId: 'g1', extra: ['topic/x', 'group/g1'] }),
-    ).toEqual(['user', 'group/g1', 'topic/x']);
+      buildRelevantScopes({ groupId: 'g1', extra: ['group/g1/topic/x', 'group/g1'] }),
+    ).toEqual(['user', 'group/g1', 'group/g1/user', 'group/g1/topic/x']);
   });
 });
 
@@ -97,11 +97,11 @@ describe('runMemoryPreflow', () => {
       body: 'User loves jwt-based authentication.',
     }));
     idx.upsert(makeSegment({
-      scope: 'vp/alice', kind: 'fact', tags: ['auth'],
+      scope: 'group/g1/vp/alice', kind: 'fact', tags: ['auth'],
       body: 'Alice prefers refresh tokens with jwt.',
     }));
     idx.upsert(makeSegment({
-      scope: 'vp/bob', kind: 'fact', tags: ['auth'],
+      scope: 'group/g1/vp/bob', kind: 'fact', tags: ['auth'],
       body: 'Bob hates jwt; prefers session cookies.',
     }));
 
@@ -111,11 +111,10 @@ describe('runMemoryPreflow', () => {
       groupId: 'g1',
     });
 
-    // alice scope is allowed; bob scope must be filtered.
     const scopes = r.entries.map(e => e.scope);
     expect(scopes).toContain('user');
-    expect(scopes).toContain('vp/alice');
-    expect(scopes).not.toContain('vp/bob');
+    expect(scopes).toContain('group/g1/vp/alice');
+    expect(scopes).not.toContain('group/g1/vp/bob');
 
     expect(r.formatted).toContain('## Memory: User');
     expect(r.formatted).toContain('## Memory: VP alice');

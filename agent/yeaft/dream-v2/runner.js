@@ -95,9 +95,14 @@ export async function runDream(opts) {
   const processedGroups = [];
 
   // 2. per-group: skip / segment / triage
-  const topicSummaries = opts.listTopicSummaries
-    ? await safeCall(opts.listTopicSummaries, [])
-    : await defaultListTopicSummaries(opts.root, opts.language).catch(() => []);
+  // Topic summaries are now per-group (group/<g>/topic/...), so resolve
+  // them inside the per-group loop instead of once up front.
+  const resolveTopicSummaries = async (groupId) => {
+    if (opts.listTopicSummaries) {
+      return await safeCall(() => opts.listTopicSummaries(groupId), []);
+    }
+    return await defaultListTopicSummaries(opts.root, groupId, opts.language).catch(() => []);
+  };
 
   for (const groupId of groupIds) {
     // Current-group manual dream passes are the one case where scopeFilter
@@ -152,6 +157,7 @@ export async function runDream(opts) {
 
     let actions;
     try {
+      const topicSummaries = await resolveTopicSummaries(groupId);
       actions = await triageGroupSegments({
         groupId,
         segments,
@@ -304,11 +310,12 @@ async function safeCall(fn, fallback) {
   }
 }
 
-async function defaultListTopicSummaries(root, language) {
+async function defaultListTopicSummaries(root, groupId, language) {
   const all = await listScopes({ root });
   const out = [];
   for (const sc of all) {
-    if (sc.kind !== 'topic') continue;
+    if (sc.kind !== 'group-topic') continue;
+    if (sc.groupId !== groupId) continue;
     const summary = await readSummary(sc, { root, language });
     out.push({ path: sc.path.join('/'), summary });
   }

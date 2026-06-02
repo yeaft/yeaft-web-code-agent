@@ -204,11 +204,11 @@ describe('group-chat round-trip', () => {
       body: 'User loves jwt-based authentication.',
     }));
     idx.upsert(makeSegment({
-      scope: 'vp/alice', kind: 'fact', tags: ['auth'],
+      scope: 'group/g1/vp/alice', kind: 'fact', tags: ['auth'],
       body: 'Alice prefers refresh tokens with jwt.',
     }));
     idx.upsert(makeSegment({
-      scope: 'vp/bob', kind: 'fact', tags: ['auth'],
+      scope: 'group/g1/vp/bob', kind: 'fact', tags: ['auth'],
       body: 'Bob hates jwt; prefers session cookies.',
     }));
 
@@ -232,12 +232,12 @@ describe('group-chat round-trip', () => {
     const alice = recalls.find(r => r.vpId === 'alice');
     const bob = recalls.find(r => r.vpId === 'bob');
 
-    expect(alice.scopes).toContain('vp/alice');
-    expect(alice.scopes).not.toContain('vp/bob');
+    expect(alice.scopes).toContain('group/g1/vp/alice');
+    expect(alice.scopes).not.toContain('group/g1/vp/bob');
     expect(alice.formatted).not.toContain('Bob hates');
 
-    expect(bob.scopes).toContain('vp/bob');
-    expect(bob.scopes).not.toContain('vp/alice');
+    expect(bob.scopes).toContain('group/g1/vp/bob');
+    expect(bob.scopes).not.toContain('group/g1/vp/alice');
     expect(bob.formatted).not.toContain('refresh tokens');
   });
 
