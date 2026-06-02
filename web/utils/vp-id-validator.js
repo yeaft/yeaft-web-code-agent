@@ -1,5 +1,5 @@
 /**
- * vp-id-validator.js — Client-side mirror of agent/unify/groups/ids.js
+ * vp-id-validator.js — Client-side mirror of agent/yeaft/groups/ids.js
  * validateVpId.
  *
  * Task-334-ui-g: we need synchronous onBlur validation in the form without
@@ -45,17 +45,17 @@ export function isValidVpId(id) {
  * round-trip every reason without rendering a Vue component.
  */
 export const REASON_I18N_KEY = Object.freeze({
-  empty_or_non_string: 'unify.vp.idError.empty_or_non_string',
-  too_long: 'unify.vp.idError.too_long',
-  illegal_character: 'unify.vp.idError.illegal_character',
-  underscore_prefix_reserved: 'unify.vp.idError.underscore_prefix_reserved',
-  pure_digits: 'unify.vp.idError.pure_digits',
-  reserved: 'unify.vp.idError.reserved',
+  empty_or_non_string: 'yeaft.vp.idError.empty_or_non_string',
+  too_long: 'yeaft.vp.idError.too_long',
+  illegal_character: 'yeaft.vp.idError.illegal_character',
+  underscore_prefix_reserved: 'yeaft.vp.idError.underscore_prefix_reserved',
+  pure_digits: 'yeaft.vp.idError.pure_digits',
+  reserved: 'yeaft.vp.idError.reserved',
   // Backend-only codes surfaced by vp-crud.js.
-  duplicate: 'unify.vp.idError.duplicate',
-  not_found: 'unify.vp.idError.not_found',
-  stock_readonly: 'unify.vp.idError.stock_readonly',
-  unknown: 'unify.vp.idError.unknown',
+  duplicate: 'yeaft.vp.idError.duplicate',
+  not_found: 'yeaft.vp.idError.not_found',
+  stock_readonly: 'yeaft.vp.idError.stock_readonly',
+  unknown: 'yeaft.vp.idError.unknown',
 });
 
 /**

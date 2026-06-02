@@ -6,9 +6,9 @@
  * Strategy: inspect the component object's declarative metadata (emits +
  * template string) without rendering. The repository renders Vue from CDN
  * at runtime, so mount-based testing isn't the pattern here — see
- * `unify-page-setup-tdz.test.js` for the analogous sandbox approach.
+ * `yeaft-page-setup-tdz.test.js` for the analogous sandbox approach.
  *
- * The UnifyPage handler that this emit drives (`openVpLibraryFromGroupSettings`
+ * The YeaftPage handler that this emit drives (`openVpLibraryFromGroupSettings`
  * → `closeGroupSettings()` + `openSettings({initialTab:'vp'})`) is covered
  * separately by the syntax-check + setup-tdz tests; here we only guard
  * the GroupSettingsModal end of the contract.
@@ -30,7 +30,7 @@ describe('GroupSettingsModal — open-vp-library wiring', () => {
     // Section header layout wrapper.
     expect(tpl).toMatch(/group-settings-section-header/);
     // The button uses the new i18n key.
-    expect(tpl).toMatch(/unify\.group\.members\.openLibrary/);
+    expect(tpl).toMatch(/yeaft\.group\.members\.openLibrary/);
     // And emits the event verbatim.
     expect(tpl).toMatch(/\$emit\(['"]open-vp-library['"]\)/);
     // Stays inside the Members section (sanity check — the button must
@@ -44,7 +44,7 @@ describe('GroupSettingsModal — open-vp-library wiring', () => {
 
   it('hint text is wired as a title attribute for accessibility', () => {
     const tpl = String(GroupSettingsModal.template || '');
-    expect(tpl).toMatch(/unify\.group\.members\.openLibraryHint/);
+    expect(tpl).toMatch(/yeaft\.group\.members\.openLibraryHint/);
   });
 
   it('does not expose standalone per-group model configuration UI', () => {

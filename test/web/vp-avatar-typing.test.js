@@ -175,7 +175,7 @@ describe('MessageList aggregator — every VP turn keeps its avatar (no collapse
 });
 
 describe('CSS — typing badge styles + obsolete rules pruned', () => {
-  const src = read('web/styles/unify-vp.css');
+  const src = read('web/styles/yeaft-vp.css');
 
   it('defines .vp-avatar-typing-badge and .vp-avatar-typing-dot', () => {
     expect(src).toContain('.vp-avatar-typing-badge');
@@ -201,10 +201,10 @@ describe('CSS — typing badge styles + obsolete rules pruned', () => {
 describe('chat.js::changeLocale — propagates language to agent', () => {
   const src = read('web/stores/chat.js');
 
-  it('calls sendWsMessage with type:update_llm_config when unifyAgentId is set', () => {
-    // The fix wraps the WS send in `if (this.unifyAgentId) { ... }`.
+  it('calls sendWsMessage with type:update_llm_config when yeaftAgentId is set', () => {
+    // The fix wraps the WS send in `if (this.yeaftAgentId) { ... }`.
     // Both the guard and the payload shape are part of the contract.
-    expect(src).toMatch(/changeLocale\(locale\)\s*\{[\s\S]*?if\s*\(\s*this\.unifyAgentId\s*\)/);
+    expect(src).toMatch(/changeLocale\(locale\)\s*\{[\s\S]*?if\s*\(\s*this\.yeaftAgentId\s*\)/);
     expect(src).toMatch(/changeLocale\(locale\)\s*\{[\s\S]*?type:\s*['"]update_llm_config['"]/);
     expect(src).toMatch(/changeLocale\(locale\)\s*\{[\s\S]*?language:\s*locale/);
   });

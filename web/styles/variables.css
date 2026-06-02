@@ -175,7 +175,7 @@ select option:checked {
   --cat-eye-fill: var(--bg-primary, #fff);
   --cat-pupil-fill: var(--text-primary);
 
-  /* ── Unified alias tokens (used by unify/* + crew/* + git/* CSS) ── */
+  /* ── Unified alias tokens (used by yeaft/* + crew/* + git/* CSS) ── */
   /* Surfaces */
   --surface-0: var(--bg-main);
   --surface-1: var(--bg-workbench);
@@ -200,7 +200,7 @@ select option:checked {
   --mention-bg: rgba(74, 124, 201, 0.10);
   --pinned-bg: rgba(163, 129, 51, 0.08);
   --link-color: var(--accent-blue);
-  /* Task accent (used by Unify task chips) — reuse accent-blue */
+  /* Task accent (used by Yeaft task chips) — reuse accent-blue */
   --task-accent: var(--accent-blue);
   --task-accent-bg: rgba(74, 124, 201, 0.10);
   /* Status text/bg */

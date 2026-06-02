@@ -347,20 +347,20 @@ export async function handleAgentOutput(agentId, agent, msg) {
       break;
     }
 
-    case 'unify_output': {
+    case 'yeaft_output': {
       const data = hydrateInlinePreviewData(msg.data);
-      // Forward Unify output to all authenticated clients of this agent's owner.
+      // Forward Yeaft output to all authenticated clients of this agent's owner.
       // Payload carries { conversationId, data } (claude_output format) or { event } (metadata).
       //
       // Envelope passthrough — every field the agent stamped on the envelope
       // (groupId, vpId, turnId) MUST be forwarded verbatim. The
-      // frontend uses vpId + turnId in `handleUnifyOutput` to set
-      // `_currentUnifyVpId` / `_currentUnifyTurnId`, which in turn drive
+      // frontend uses vpId + turnId in `handleYeaftOutput` to set
+      // `_currentYeaftVpId` / `_currentYeaftTurnId`, which in turn drive
       // `stampSpeakerOnVpMessage` so streaming assistant deltas get a
       // `speakerVpId`. Without that, MessageList falls through from
       // VpTurnBlock (with avatar) to a plain AssistantTurn (no avatar) —
       // the bug v0.1.756 fixed. Keep this spread in sync with the agent
-      // side `sendUnifyOutput` / `sendUnifyEvent` in agent/unify/web-bridge.js.
+      // side `sendYeaftOutput` / `sendYeaftEvent` in agent/yeaft/web-bridge.js.
       //
       // (2026-05-13: `featureId` field dropped from the envelope along
       // with the rest of the Feature system.)
@@ -372,7 +372,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
       for (const [cId, c] of webClients) {
         if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
           await sendToWebClient(c, {
-            type: 'unify_output',
+            type: 'yeaft_output',
             conversationId: msg.conversationId,
             ...(msg.groupId != null ? { groupId: msg.groupId } : {}),
             ...(msg.vpId != null ? { vpId: msg.vpId } : {}),
@@ -385,18 +385,18 @@ export async function handleAgentOutput(agentId, agent, msg) {
       break;
     }
 
-    case 'unify_history_chunk': {
+    case 'yeaft_history_chunk': {
       const messages = Array.isArray(msg.messages)
         ? msg.messages.map(hydrateMessagePreviewData)
         : [];
       // Forward a "load older messages" pagination chunk to the same
-      // authenticated clients. Distinct from `unify_output` because the
+      // authenticated clients. Distinct from `yeaft_output` because the
       // frontend needs to PREPEND these older messages above the current
-      // history (whereas unify_output flows through an append pipeline).
+      // history (whereas yeaft_output flows through an append pipeline).
       for (const [cId, c] of webClients) {
         if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
           await sendToWebClient(c, {
-            type: 'unify_history_chunk',
+            type: 'yeaft_history_chunk',
             conversationId: msg.conversationId,
             ...(msg.groupId != null ? { groupId: msg.groupId } : {}),
             messages,
@@ -408,12 +408,12 @@ export async function handleAgentOutput(agentId, agent, msg) {
       break;
     }
 
-    case 'unify_dream_status':
-    case 'unify_dream_result':
+    case 'yeaft_dream_status':
+    case 'yeaft_dream_result':
       // Forward Dream lifecycle envelopes to the web client.
       //
-      // The bug this fixes: `handleUnifyDreamTrigger` in
-      // `agent/unify/web-bridge.js` emits these as BARE top-level
+      // The bug this fixes: `handleYeaftDreamTrigger` in
+      // `agent/yeaft/web-bridge.js` emits these as BARE top-level
       // messages when the user clicks "Run dream now" (in the topbar or
       // group settings). Without a case here, the switch hit
       // `default: return false` and silently dropped the message,
@@ -421,10 +421,10 @@ export async function handleAgentOutput(agentId, agent, msg) {
       // completed.
       //
       // Whitelist spread matches the pattern used by sibling cases
-      // (`unify_output`, `unify_history_chunk`) so a future agent-side
+      // (`yeaft_output`, `yeaft_history_chunk`) so a future agent-side
       // bug that tags an internal field onto a dream envelope can't
       // leak it to the web client. Keep in sync with the agent emit at
-      // `handleUnifyDreamTrigger`.
+      // `handleYeaftDreamTrigger`.
       for (const [, c] of webClients) {
         if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
           await sendToWebClient(c, {
@@ -445,7 +445,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
       }
       break;
 
-    case 'unify_tool_stats':
+    case 'yeaft_tool_stats':
       // 2026-05-13: relay tool-call counters from the agent to the web
       // client that requested them. Whitelist `snapshot`/`registered`/
       // `unused` so a future schema bump can't leak unrelated fields,
@@ -453,7 +453,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
       for (const [, c] of webClients) {
         if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
           await sendToWebClient(c, {
-            type: 'unify_tool_stats',
+            type: 'yeaft_tool_stats',
             ...(msg.snapshot && typeof msg.snapshot === 'object' ? { snapshot: msg.snapshot } : { snapshot: {} }),
             ...(Array.isArray(msg.registered) ? { registered: msg.registered } : { registered: [] }),
             ...(Array.isArray(msg.unused) ? { unused: msg.unused } : { unused: [] }),
@@ -463,17 +463,17 @@ export async function handleAgentOutput(agentId, agent, msg) {
       }
       break;
 
-    case 'unify_debug_history':
+    case 'yeaft_debug_history':
       // fix-vp-multi-thread (bug 4): relay the persistent SQLite trace
       // snapshot from the agent to the web client that requested it via
-      // `unify_fetch_debug_history`. Without this case the agent's
+      // `yeaft_fetch_debug_history`. Without this case the agent's
       // bare-message reply is dropped here and the UI never hydrates.
       // Whitelist `loops`/`turns`/`groupId`/`threadId`/`error` to fence
       // off accidental leakage of new fields in future schema bumps.
       for (const [, c] of webClients) {
         if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
           await sendToWebClient(c, {
-            type: 'unify_debug_history',
+            type: 'yeaft_debug_history',
             loops: Array.isArray(msg.loops) ? msg.loops : [],
             turns: Array.isArray(msg.turns) ? msg.turns : [],
             dreamEvents: Array.isArray(msg.dreamEvents) ? msg.dreamEvents : [],

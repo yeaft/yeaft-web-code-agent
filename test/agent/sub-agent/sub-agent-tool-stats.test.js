@@ -23,12 +23,12 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { Engine } from '../../../agent/unify/engine.js';
-import { NullTrace } from '../../../agent/unify/debug-trace.js';
-import { ToolRegistry } from '../../../agent/unify/tools/registry.js';
-import { defineTool } from '../../../agent/unify/tools/types.js';
-import { _resetAgentRegistry, getAgentRegistry } from '../../../agent/unify/tools/agent.js';
-import agentTool from '../../../agent/unify/tools/agent.js';
+import { Engine } from '../../../agent/yeaft/engine.js';
+import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
+import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
+import { defineTool } from '../../../agent/yeaft/tools/types.js';
+import { _resetAgentRegistry, getAgentRegistry } from '../../../agent/yeaft/tools/agent.js';
+import agentTool from '../../../agent/yeaft/tools/agent.js';
 import { mkStatsStub, OneShotToolAdapter } from '../../helpers/tool-stats.js';
 
 describe('Engine threads its own #toolStats into parentEngineDeps', () => {
@@ -66,7 +66,7 @@ describe('Engine threads its own #toolStats into parentEngineDeps', () => {
     expect(capturedCtx).toBeTruthy();
     expect(capturedCtx.parentEngineDeps).toBeTruthy();
     // Same instance — not a clone — so a sub-agent that records into it
-    // updates the snapshot the parent (and the unify_fetch_tool_stats
+    // updates the snapshot the parent (and the yeaft_fetch_tool_stats
     // handler) reads.
     expect(capturedCtx.parentEngineDeps.toolStats).toBe(stats);
   });

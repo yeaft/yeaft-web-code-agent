@@ -140,7 +140,7 @@ export default {
   },
   template: `
     <div class="slash-autocomplete vp-mention-autocomplete" v-if="filteredList.length > 0">
-      <div class="slash-group-label">{{ $t('unify.vp.mention.placeholder') }}</div>
+      <div class="slash-group-label">{{ $t('yeaft.vp.mention.placeholder') }}</div>
       <div
         v-for="(vp, idx) in filteredList"
         :key="vp.vpId"

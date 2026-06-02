@@ -1,7 +1,7 @@
 /**
  * debug-retention.test.js — feat-openai-raw-exchange-parity follow-up.
  *
- * Pinpoints the count-based GC that bounds Unify's debug retention. The
+ * Pinpoints the count-based GC that bounds Yeaft's debug retention. The
  * companion fix (PR #702 + the 76bae660 follow-up) removed every
  * per-payload truncation path; the only thing keeping memory bounded now
  * is this trim. If it regresses — or worse, evicts open turns under

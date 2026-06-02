@@ -3,7 +3,7 @@
  * stock-readonly behaviour of VpCrudPanel.
  *
  * Strategy: import the component object directly and drive its methods +
- * data as plain JS — same approach UnifyPage/Phase tests use across this
+ * data as plain JS — same approach YeaftPage/Phase tests use across this
  * repo (no Vue mount/render, since the project keeps the runtime via CDN
  * and tests stay node-level).
  *

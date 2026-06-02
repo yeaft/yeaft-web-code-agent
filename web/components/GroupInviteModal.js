@@ -5,7 +5,7 @@
  * (i.e. `groupsStore.activeNeedsInvite === true`). Drives the hard-
  * constraint (c) default-VP fallback path per R6 §Δ10.
  *
- * Two CTAs: "Open VP Library" (bubbles `open-library` up to UnifyPage
+ * Two CTAs: "Open VP Library" (bubbles `open-library` up to YeaftPage
  * which flips vpLibraryOpen) and "Not now" (dismiss; sets a per-group
  * suppression flag so it won't re-pop mid-session).
  *
@@ -20,20 +20,20 @@ export default {
     groupName: { type: String, default: '' },
   },
   template: `
-    <div class="group-invite-overlay" @click.self="onDismiss" role="dialog" aria-modal="true" :aria-label="$t('unify.group.invite.title')">
+    <div class="group-invite-overlay" @click.self="onDismiss" role="dialog" aria-modal="true" :aria-label="$t('yeaft.group.invite.title')">
       <div class="group-invite-modal">
         <header class="group-invite-header">
-          <span class="group-invite-title">{{ $t('unify.group.invite.title') }}</span>
+          <span class="group-invite-title">{{ $t('yeaft.group.invite.title') }}</span>
         </header>
         <div class="group-invite-body">
-          <p>{{ $t('unify.group.invite.body', { name: groupName || '' }) }}</p>
+          <p>{{ $t('yeaft.group.invite.body', { name: groupName || '' }) }}</p>
         </div>
         <div class="group-invite-actions">
           <button type="button" class="group-invite-dismiss" @click="onDismiss">
-            {{ $t('unify.group.invite.dismiss') }}
+            {{ $t('yeaft.group.invite.dismiss') }}
           </button>
           <button type="button" class="group-invite-primary" @click="onOpen">
-            {{ $t('unify.group.invite.openLibrary') }}
+            {{ $t('yeaft.group.invite.openLibrary') }}
           </button>
         </div>
       </div>

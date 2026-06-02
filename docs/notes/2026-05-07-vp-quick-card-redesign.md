@@ -1,13 +1,13 @@
 # Design: Group-Chat VP Card + Right-Side Detail Panel
 
 > **Status**: Approved (2026-05-07) — open points resolved, ready for plan
-> **Scope**: Unify group-chat UI redesign — replace the inline "expanded VP turn" pattern with a card-based main feed and a right-side detail drawer for `feature` turns. `quick` turns stay rendered inline as today.
+> **Scope**: Yeaft group-chat UI redesign — replace the inline "expanded VP turn" pattern with a card-based main feed and a right-side detail drawer for `feature` turns. `quick` turns stay rendered inline as today.
 
 ---
 
 ## 目标
 
-把 Unify 群聊里 VP turn 的展示方式从「主消息流里把每个 VP 的全部内容（文字 + tool use + 图片）都展开渲染」改成：
+把 Yeaft 群聊里 VP turn 的展示方式从「主消息流里把每个 VP 的全部内容（文字 + tool use + 图片）都展开渲染」改成：
 
 | Intent | 主消息流表现 | Detail 来源 |
 |---|---|---|
@@ -22,9 +22,9 @@ Detail drawer 默认隐藏，从右侧滑入，主消息流仍占满宽度（dra
 
 经过 Explore agent 确认，所有数据通路都已就绪：
 
-- **Track-A 引擎**：`agent/unify/quick-response.js` + `agent/unify/feature-arc.js`。每个 VP turn 都 fire-and-forget 一次 LLM call，140 字内的 preview 文字，8s 超时，最多 1 次重试。返回 `{intent: "quick"|"feature", preview}`。
-- **Wire 格式**：`sendUnifyEvent({type:'quick_preview', vpId, turnId, intent, preview}, envelope)`。已经在跑。
-- **Web 状态**：`store.unifyQuickPreviews[vpId:turnId] = {intent, preview, ts, ...}`。`MessageList.turnGroups` 已经在调 `injectQuickPreviews(items, previewMap)`。
+- **Track-A 引擎**：`agent/yeaft/quick-response.js` + `agent/yeaft/feature-arc.js`。每个 VP turn 都 fire-and-forget 一次 LLM call，140 字内的 preview 文字，8s 超时，最多 1 次重试。返回 `{intent: "quick"|"feature", preview}`。
+- **Wire 格式**：`sendYeaftEvent({type:'quick_preview', vpId, turnId, intent, preview}, envelope)`。已经在跑。
+- **Web 状态**：`store.yeaftQuickPreviews[vpId:turnId] = {intent, preview, ts, ...}`。`MessageList.turnGroups` 已经在调 `injectQuickPreviews(items, previewMap)`。
 - **VP detail view**：`enterVpDetailView(vpId)` + `VpDetailView.js` 已存在，但目前是中间列全屏，渲染 persona / dream，**不渲染 messages + tool use**。
 
 > 关键洞察：架构已经搭好了，这次主要是**UI 渲染分流 + detail panel 重定向**。Track-A 不用动。
@@ -38,7 +38,7 @@ Detail drawer 默认隐藏，从右侧滑入，主消息流仍占满宽度（dra
 `MessageList.turnGroups` 计算结果里给 `assistant-turn` 加一个 `intent` 字段，由该 turn 对应的 quickPreview 决定：
 
 ```
-intent = store.unifyQuickPreviews[vpId:turnId]?.intent || 'quick'
+intent = store.yeaftQuickPreviews[vpId:turnId]?.intent || 'quick'
 ```
 
 > **缺省值是 `quick`**：Track-A 还在跑（preview 没回来）或失败的情况下，turn 走老路渲染（不收起）。这等于"feature 是显式收起，quick 是默认行为"——失败时降级为可见，比降级为不可见要安全。
@@ -62,7 +62,7 @@ intent = store.unifyQuickPreviews[vpId:turnId]?.intent || 'quick'
 
 **决策（2026-05-07）：fallback to quick mode。**
 
-Track-A 失败时 web 不会收到 `quick_preview` 事件——`store.unifyQuickPreviews[key]` 永远是空。`intent` fallback 到 `'quick'`，turn 走老路完整渲染（`AssistantTurn` 完整展开）。
+Track-A 失败时 web 不会收到 `quick_preview` 事件——`store.yeaftQuickPreviews[key]` 永远是空。`intent` fallback 到 `'quick'`，turn 走老路完整渲染（`AssistantTurn` 完整展开）。
 
 理由：(1) Track-A 失败是异常路径，用户更想直接看到内容；(2) 转圈卡片下方藏着完整内容会很怪；(3) "VP is responding" generic 文字本身没信息量。这条路径不需要专门写 fallback 分支，是 turnGroups intent 默认值的天然产物。
 
@@ -114,19 +114,19 @@ Info button (`ⓘ`) 点击 → drawer 内部叠加一层 popover/expand，显示
 
 ```js
 // chat.js state additions
-unifyOpenVpTurnDetail: null,  // { vpId, turnId } | null
-// (replaces or coexists with the existing unifyActiveVpDetailId — TBD)
+yeaftOpenVpTurnDetail: null,  // { vpId, turnId } | null
+// (replaces or coexists with the existing yeaftActiveVpDetailId — TBD)
 ```
 
 ```js
 // chat.js actions
-openVpTurnDetail({ vpId, turnId }) { this.unifyOpenVpTurnDetail = { vpId, turnId }; }
-closeVpTurnDetail() { this.unifyOpenVpTurnDetail = null; }
+openVpTurnDetail({ vpId, turnId }) { this.yeaftOpenVpTurnDetail = { vpId, turnId }; }
+closeVpTurnDetail() { this.yeaftOpenVpTurnDetail = null; }
 ```
 
-UnifyPage 监听这个状态，drawer 显隐由它控制。点击主流另一个 feature 卡片 → 切换 detail 内容（同一 drawer 实例）。
+YeaftPage 监听这个状态，drawer 显隐由它控制。点击主流另一个 feature 卡片 → 切换 detail 内容（同一 drawer 实例）。
 
-### 与现有 VpDetailView (`unifyActiveVpDetailId`) 的关系
+### 与现有 VpDetailView (`yeaftActiveVpDetailId`) 的关系
 
 这是个重要决策：现在已存在 `enterVpDetailView(vpId)` → 中间列全屏的 VpDetailView（显示 persona 元数据）。这次新加的右侧 drawer 是**针对单个 turn**的（vpId+turnId），跟旧的 `vpId-only` detail 是不同维度。两个并存：
 
@@ -141,14 +141,14 @@ UnifyPage 监听这个状态，drawer 显隐由它控制。点击主流另一个
 
 ### Quick path（intent=quick）
 ```
-runVpTurn → Track-A LLM → quick_preview event → store.unifyQuickPreviews[k]={intent:"quick"}
+runVpTurn → Track-A LLM → quick_preview event → store.yeaftQuickPreviews[k]={intent:"quick"}
             ↓
             完整 stream → 主流 AssistantTurn 渲染（不变）
 ```
 
 ### Feature path（intent=feature）
 ```
-runVpTurn → Track-A LLM → quick_preview event → store.unifyQuickPreviews[k]={intent:"feature", preview:"…"}
+runVpTurn → Track-A LLM → quick_preview event → store.yeaftQuickPreviews[k]={intent:"feature", preview:"…"}
             ↓
             完整 stream → store.messagesMap[…] 持续写入 turn 的 messages
             ↓
@@ -162,7 +162,7 @@ runVpTurn → Track-A LLM → quick_preview event → store.unifyQuickPreviews[k
 ### 持久化（决策已锁定）
 - **挂载位置（2026-05-07 决定）**：挂在 turn 的第一条 assistant message 上。`(vpId, turnId)` 是查找键，写一次。不新建独立表。
 - **Schema 改动**：`message-db.js` 给 messages 加 `quick_preview` + `quick_intent` 两列（文本，可空）。仅在 `runVpTurn` 完成时写一次。
-- **加载路径**：`bulkAddHistory` / `formatDbMessage` 把这两列读回来填到 `unifyQuickPreviews` map。
+- **加载路径**：`bulkAddHistory` / `formatDbMessage` 把这两列读回来填到 `yeaftQuickPreviews` map。
 - **代价**：列对绝大多数 message 是 NULL（稀疏），可接受；好处是不引入新 schema 维度，加载时无 join。
 
 ---
@@ -174,15 +174,15 @@ runVpTurn → Track-A LLM → quick_preview event → store.unifyQuickPreviews[k
 | `web/components/VpQuickCard.js` | 新增 | feature turn 卡片：avatar + name + preview + status |
 | `web/components/VpTurnDetailDrawer.js` | 新增 | 右侧 drawer 容器，内部嵌 AssistantTurn |
 | `web/components/MessageList.js` | 修改 | turnGroups 标 intent；模板按 intent 分流；新增 `onOpenVpTurnDetail` |
-| `web/components/UnifyPage.js` | 修改 | 加 `<VpTurnDetailDrawer v-if="store.unifyOpenVpTurnDetail" />` |
-| `web/stores/chat.js` | 修改 | 新增 `unifyOpenVpTurnDetail` state + `openVpTurnDetail/closeVpTurnDetail` actions；handleUnifyOutput 不变 |
+| `web/components/YeaftPage.js` | 修改 | 加 `<VpTurnDetailDrawer v-if="store.yeaftOpenVpTurnDetail" />` |
+| `web/stores/chat.js` | 修改 | 新增 `yeaftOpenVpTurnDetail` state + `openVpTurnDetail/closeVpTurnDetail` actions；handleYeaftOutput 不变 |
 | `web/stores/helpers/turn-intent.js` | 新增 | 纯函数：从 (turn, quickPreviewMap) 推导 turn.intent |
-| `web/styles/unify-vp-card.css` | 新增 | VpQuickCard 卡片样式（紧凑 chip-like）+ status indicator |
-| `web/styles/unify-detail-drawer.css` | 新增 | drawer 滑入动画 + 右侧定位 |
-| `agent/unify/conversation/persist.js` | 修改 | 写入 quick_preview + quick_intent |
+| `web/styles/yeaft-vp-card.css` | 新增 | VpQuickCard 卡片样式（紧凑 chip-like）+ status indicator |
+| `web/styles/yeaft-detail-drawer.css` | 新增 | drawer 滑入动画 + 右侧定位 |
+| `agent/yeaft/conversation/persist.js` | 修改 | 写入 quick_preview + quick_intent |
 | `server/db/message-db.js` | 修改 | schema 加列 + migration |
 | `server/db/migrations/00XX-add-quick-preview.sql` | 新增 | migration 脚本 |
-| `web/stores/helpers/messages.js`（formatDbMessage） | 修改 | 反向加载 quick_preview/intent 到 unifyQuickPreviews |
+| `web/stores/helpers/messages.js`（formatDbMessage） | 修改 | 反向加载 quick_preview/intent 到 yeaftQuickPreviews |
 
 ---
 
@@ -192,9 +192,9 @@ runVpTurn → Track-A LLM → quick_preview event → store.unifyQuickPreviews[k
 |---|---|
 | `test/web/stores/helpers/turn-intent.test.js` | 纯函数推导：preview 不在 / preview 在但 intent=quick / intent=feature 三种路径 |
 | `test/web/vp-quick-card.test.js` | VpQuickCard 行为：状态机切换（streaming → done / aborted），点击触发 openVpTurnDetail |
-| `test/web/vp-turn-detail-drawer.test.js` | drawer 显隐由 store.unifyOpenVpTurnDetail 驱动；内部 info popover 切换 |
+| `test/web/vp-turn-detail-drawer.test.js` | drawer 显隐由 store.yeaftOpenVpTurnDetail 驱动；内部 info popover 切换 |
 | `test/server/db/quick-preview-persist.test.js` | DB 列写入 + 读回 + migration 兼容老数据 |
-| `test/agent/unify/quick-preview-persist-roundtrip.test.js` | runVpTurn 完成时正确写入 turn 的最后 assistant message |
+| `test/agent/yeaft/quick-preview-persist-roundtrip.test.js` | runVpTurn 完成时正确写入 turn 的最后 assistant message |
 | `test/web/group-chat-tool-order.test.js`（已存在） | 仍然 green（这次不动 turnGroups 排序逻辑） |
 
 ---
@@ -207,7 +207,7 @@ runVpTurn → Track-A LLM → quick_preview event → store.unifyQuickPreviews[k
 - ❌ 在 detail drawer 里嵌入新对话输入框（这是 detail，不是 reply）
 - ❌ 修改 Track-A 的触发条件（现在是always-on，保留）
 - ❌ 重构 AssistantTurn.js（直接复用作为 drawer body）
-- ❌ 独立 `unify_quick_preview` 表（决策：直接挂在 assistant message 上）
+- ❌ 独立 `yeaft_quick_preview` 表（决策：直接挂在 assistant message 上）
 
 ---
 
@@ -223,7 +223,7 @@ runVpTurn → Track-A LLM → quick_preview event → store.unifyQuickPreviews[k
 1. 持久化 schema + migration（最底层）
 2. `turn-intent.js` 纯函数 + 单测
 3. VpQuickCard 组件 + 状态指示器 + 单测
-4. UnifyPage drawer 接入 + Drawer 容器 + 单测
+4. YeaftPage drawer 接入 + Drawer 容器 + 单测
 5. MessageList 渲染分流 + onOpenVpTurnDetail 接线
 6. Drawer 里 info popover
 7. 全量回归 vitest（必须 1670+ 全绿）

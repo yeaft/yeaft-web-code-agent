@@ -18,11 +18,11 @@ function _settleConnectResolvers(success) {
 }
 
 // Message types that operate on server-backed conversations (sessionDb).
-// Unify uses a purely client-side virtual conversationId ('unify-<ts>') that has
-// no server-side state, so sending these in Unify view triggers
+// Yeaft uses a purely client-side virtual conversationId ('yeaft-<ts>') that has
+// no server-side state, so sending these in Yeaft view triggers
 // verifyConversationOwnership → 'Permission denied' replies.
-// Guard: silently skip these when currentView === 'unify'.
-const UNIFY_INCOMPATIBLE_TYPES = new Set([
+// Guard: silently skip these when currentView === 'yeaft'.
+const YEAFT_INCOMPATIBLE_TYPES = new Set([
   'sync_messages',
   'refresh_conversation',
   'select_conversation',
@@ -38,12 +38,12 @@ export function sendWsMessage(store, msg) {
     return false;
   }
 
-  // A: Short-circuit server-sync messages while in Unify view. These
-  // operate on server-registered conversations; Unify's virtual id has
+  // A: Short-circuit server-sync messages while in Yeaft view. These
+  // operate on server-registered conversations; Yeaft's virtual id has
   // no DB row and would produce 'Permission denied' noise.
-  if (store.currentView === 'unify' && UNIFY_INCOMPATIBLE_TYPES.has(msg.type)) {
+  if (store.currentView === 'yeaft' && YEAFT_INCOMPATIBLE_TYPES.has(msg.type)) {
     const convId = msg.conversationId;
-    if (!convId || (typeof convId === 'string' && convId.startsWith('unify-')) || convId === store.unifyConversationId) {
+    if (!convId || (typeof convId === 'string' && convId.startsWith('yeaft-')) || convId === store.yeaftConversationId) {
       return false;
     }
   }

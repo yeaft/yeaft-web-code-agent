@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { Engine } from '../../agent/unify/engine.js';
+import { Engine } from '../../agent/yeaft/engine.js';
 
 class TextOnlyAdapter {
   async *stream() {

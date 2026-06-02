@@ -1,7 +1,7 @@
 /**
  * helpers/debug-search.js — feat-6af5f9f1 PR C.
  *
- * Pure substring matcher for the Unify debug panel toolbar. Extracted from
+ * Pure substring matcher for the Yeaft debug panel toolbar. Extracted from
  * chat.js so it can be unit-tested without pulling in the full Pinia store
  * (which depends on browser globals).
  *
@@ -21,7 +21,7 @@
  */
 
 /**
- * @param {object}   turn         turn record from unifyDebugTurnsById
+ * @param {object}   turn         turn record from yeaftDebugTurnsById
  * @param {object[]} loops        loop records belonging to this turn
  * @param {object[]} reflections  reflection cards for this turn
  * @param {string}   qLower       already-lowercased query string;

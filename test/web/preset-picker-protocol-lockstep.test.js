@@ -9,7 +9,7 @@
  * forgets the other.
  */
 import { describe, it, expect } from 'vitest';
-import { inferProtocolFromModelId } from '../../agent/unify/llm/router.js';
+import { inferProtocolFromModelId } from '../../agent/yeaft/llm/router.js';
 import { pickProtocolForModelId } from '../../web/components/ProviderPresetPicker.js';
 
 const CORPUS = [

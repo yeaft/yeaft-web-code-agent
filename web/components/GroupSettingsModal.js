@@ -71,7 +71,7 @@ export default {
       const g = this.group;
       if (!g) return '';
       if (g.id === 'grp_default' && (g.name === 'Default' || !g.name)) {
-        return this.$t('unify.group.defaultName') || g.name || g.id;
+        return this.$t('yeaft.group.defaultName') || g.name || g.id;
       }
       return g.name || g.id;
     },
@@ -96,11 +96,11 @@ export default {
     },
     sections() {
       return [
-        { id: 'announcement', label: this.$t('unify.group.settings.nav.announcement') },
-        { id: 'members', label: this.$t('unify.group.settings.nav.members') },
-        { id: 'rename', label: this.$t('unify.group.settings.nav.rename') },
-        { id: 'memory', label: this.$t('unify.group.settings.nav.memory') },
-        { id: 'danger', label: this.$t('unify.group.settings.nav.danger') },
+        { id: 'announcement', label: this.$t('yeaft.group.settings.nav.announcement') },
+        { id: 'members', label: this.$t('yeaft.group.settings.nav.members') },
+        { id: 'rename', label: this.$t('yeaft.group.settings.nav.rename') },
+        { id: 'memory', label: this.$t('yeaft.group.settings.nav.memory') },
+        { id: 'danger', label: this.$t('yeaft.group.settings.nav.danger') },
       ];
     },
     /**
@@ -163,7 +163,7 @@ export default {
       if (this.vpStore && this.vpStore.lastSnapshotAt === 0) {
         const chat = this.chat;
         if (chat && typeof chat.sendWsMessage === 'function') {
-          chat.sendWsMessage({ type: 'unify_vp_subscribe' });
+          chat.sendWsMessage({ type: 'yeaft_vp_subscribe' });
         }
       }
     } catch (_) { /* test env */ }
@@ -202,7 +202,7 @@ export default {
         if (!res || !res.ok) {
           const code = (res && res.error && res.error.code) || 'unknown';
           const message = (res && res.error && res.error.message) || code;
-          this.announcementError = this.$t('unify.group.announcement.saveFailed', { error: message });
+          this.announcementError = this.$t('yeaft.group.announcement.saveFailed', { error: message });
         }
       } finally {
         this.announcementBusy = false;
@@ -222,7 +222,7 @@ export default {
         if (!res || !res.ok) {
           const code = (res && res.error && res.error.code) || 'unknown';
           const message = (res && res.error && res.error.message) || code;
-          this.renameError = this.$t('unify.group.error.unknown', { message });
+          this.renameError = this.$t('yeaft.group.error.unknown', { message });
         }
       } finally {
         this.renameBusy = false;
@@ -248,7 +248,7 @@ export default {
         if (!res || !res.ok) {
           const code = (res && res.error && res.error.code) || 'unknown';
           const message = (res && res.error && res.error.message) || code;
-          this.membersError = this.$t('unify.group.members.actionFailed', { error: message });
+          this.membersError = this.$t('yeaft.group.members.actionFailed', { error: message });
         } else if (op === 'add_member' && !this.defaultVpId) {
           // First-add convenience: promote to default automatically.
           // Surface failures inline like the primary toggle — silent
@@ -259,7 +259,7 @@ export default {
           if (defRes && !defRes.ok) {
             const code2 = (defRes.error && defRes.error.code) || 'unknown';
             const message2 = (defRes.error && defRes.error.message) || code2;
-            this.membersError = this.$t('unify.group.members.actionFailed', { error: message2 });
+            this.membersError = this.$t('yeaft.group.members.actionFailed', { error: message2 });
           }
         }
       } finally {
@@ -277,7 +277,7 @@ export default {
         if (!res || !res.ok) {
           const code = (res && res.error && res.error.code) || 'unknown';
           const message = (res && res.error && res.error.message) || code;
-          this.membersError = this.$t('unify.group.members.actionFailed', { error: message });
+          this.membersError = this.$t('yeaft.group.members.actionFailed', { error: message });
         }
       } finally {
         this.membersBusy = false;
@@ -286,7 +286,7 @@ export default {
     // ── Memory (manual dream trigger) ───────────────────────
     // v0.1.754: lets the user kick the dream scheduler for this group
     // after observing that the Resident layer is stuck on the bootstrap
-    // seed. Status flows back as a `groupId`-tagged unify_dream_result
+    // seed. Status flows back as a `groupId`-tagged yeaft_dream_result
     // and lands in `vpStore.groupDreamStatus`.
     runDream() {
       if (!this.vpStore || this.dreamRunning) return;
@@ -306,7 +306,7 @@ export default {
         if (!res || !res.ok) {
           const code = (res && res.error && res.error.code) || 'unknown';
           const message = (res && res.error && res.error.message) || code;
-          this.deleteError = this.$t('unify.group.error.unknown', { message });
+          this.deleteError = this.$t('yeaft.group.error.unknown', { message });
           return;
         }
         // Success — close so the parent re-renders against the new
@@ -324,19 +324,19 @@ export default {
       @click.self="onOverlayClick"
       role="dialog"
       aria-modal="true"
-      :aria-label="$t('unify.group.settings.title', { name: groupDisplayName })"
+      :aria-label="$t('yeaft.group.settings.title', { name: groupDisplayName })"
     >
       <div class="group-settings-modal">
         <header class="group-settings-header">
           <span class="group-settings-title">
-            {{ $t('unify.group.settings.title', { name: groupDisplayName }) }}
+            {{ $t('yeaft.group.settings.title', { name: groupDisplayName }) }}
           </span>
           <button
             class="group-settings-close"
             type="button"
             @click="requestClose"
             :disabled="announcementBusy || renameBusy || membersBusy || deleteBusy"
-            :aria-label="$t('unify.group.settings.close')"
+            :aria-label="$t('yeaft.group.settings.close')"
           >×</button>
         </header>
 
@@ -359,12 +359,12 @@ export default {
           <section class="group-settings-pane">
             <!-- Announcement -->
             <div v-if="section === 'announcement'" class="group-settings-section">
-              <h3 class="group-settings-heading">{{ $t('unify.group.settings.announcement.heading') }}</h3>
-              <p class="group-settings-help">{{ $t('unify.group.settings.announcement.help') }}</p>
+              <h3 class="group-settings-heading">{{ $t('yeaft.group.settings.announcement.heading') }}</h3>
+              <p class="group-settings-help">{{ $t('yeaft.group.settings.announcement.help') }}</p>
               <textarea
                 class="group-settings-textarea"
                 v-model="announcementDraft"
-                :placeholder="$t('unify.group.announcement.placeholder')"
+                :placeholder="$t('yeaft.group.announcement.placeholder')"
                 :disabled="announcementBusy"
                 rows="10"
               ></textarea>
@@ -375,27 +375,27 @@ export default {
                   class="group-settings-primary"
                   :disabled="announcementBusy || announcementDraft === announcement"
                   @click="saveAnnouncement"
-                >{{ announcementBusy ? $t('unify.group.announcement.saving') : $t('common.save') }}</button>
+                >{{ announcementBusy ? $t('yeaft.group.announcement.saving') : $t('common.save') }}</button>
               </div>
             </div>
 
             <!-- Members -->
             <div v-else-if="section === 'members'" class="group-settings-section">
               <div class="group-settings-section-header">
-                <h3 class="group-settings-heading">{{ $t('unify.group.settings.members.heading') }}</h3>
+                <h3 class="group-settings-heading">{{ $t('yeaft.group.settings.members.heading') }}</h3>
                 <button
                   type="button"
                   class="group-settings-link-btn"
-                  :title="$t('unify.group.members.openLibraryHint')"
+                  :title="$t('yeaft.group.members.openLibraryHint')"
                   @click="$emit('open-vp-library')"
-                >{{ $t('unify.group.members.openLibrary') }}</button>
+                >{{ $t('yeaft.group.members.openLibrary') }}</button>
               </div>
-              <p class="group-settings-help">{{ $t('unify.group.members.defaultHint') }}</p>
+              <p class="group-settings-help">{{ $t('yeaft.group.members.defaultHint') }}</p>
               <div v-if="vpList.length === 0 && vpLibraryEmpty" class="group-settings-empty">
-                {{ $t('unify.group.members.empty') }}
+                {{ $t('yeaft.group.members.empty') }}
               </div>
               <div v-else-if="vpList.length === 0" class="group-settings-empty">
-                {{ $t('unify.group.members.loading') }}
+                {{ $t('yeaft.group.members.loading') }}
               </div>
               <ul v-else class="group-settings-roster" role="listbox" aria-multiselectable="true">
                 <li
@@ -419,7 +419,7 @@ export default {
                     type="button"
                     class="group-settings-default-star"
                     :class="{ 'is-on': defaultVpId === vp.vpId }"
-                    :title="$t('unify.group.wizard.defaultVpHint')"
+                    :title="$t('yeaft.group.wizard.defaultVpHint')"
                     :aria-pressed="defaultVpId === vp.vpId"
                     :disabled="membersBusy || defaultVpId === vp.vpId"
                     @click.stop="setDefault(vp.vpId)"
@@ -431,8 +431,8 @@ export default {
 
             <!-- Rename -->
             <div v-else-if="section === 'rename'" class="group-settings-section">
-              <h3 class="group-settings-heading">{{ $t('unify.group.settings.rename.heading') }}</h3>
-              <label class="group-settings-field-label">{{ $t('unify.group.settings.rename.label') }}</label>
+              <h3 class="group-settings-heading">{{ $t('yeaft.group.settings.rename.heading') }}</h3>
+              <label class="group-settings-field-label">{{ $t('yeaft.group.settings.rename.label') }}</label>
               <input
                 type="text"
                 class="group-settings-input"
@@ -447,14 +447,14 @@ export default {
                   class="group-settings-primary"
                   :disabled="renameBusy || !renameDraft.trim() || renameDraft.trim() === groupDisplayName"
                   @click="saveRename"
-                >{{ renameBusy ? $t('unify.group.settings.rename.saving') : $t('unify.group.settings.rename.save') }}</button>
+                >{{ renameBusy ? $t('yeaft.group.settings.rename.saving') : $t('yeaft.group.settings.rename.save') }}</button>
               </div>
             </div>
 
             <!-- Memory (manual dream trigger) -->
             <div v-else-if="section === 'memory'" class="group-settings-section">
-              <h3 class="group-settings-heading">{{ $t('unify.group.settings.memory.heading') }}</h3>
-              <p class="group-settings-help">{{ $t('unify.group.settings.memory.help') }}</p>
+              <h3 class="group-settings-heading">{{ $t('yeaft.group.settings.memory.heading') }}</h3>
+              <p class="group-settings-help">{{ $t('yeaft.group.settings.memory.help') }}</p>
               <div class="group-settings-actions">
                 <button
                   type="button"
@@ -462,13 +462,13 @@ export default {
                   :disabled="dreamRunning"
                   @click="runDream"
                 >{{ dreamRunning
-                    ? $t('unify.group.settings.memory.running')
-                    : $t('unify.group.settings.memory.runNow') }}</button>
+                    ? $t('yeaft.group.settings.memory.running')
+                    : $t('yeaft.group.settings.memory.runNow') }}</button>
               </div>
               <p
                 v-if="groupDreamStatus.status === 'success' && groupDreamStatus.lastRunAt"
                 class="group-settings-help group-settings-memory-status group-settings-memory-status-success"
-              >{{ $t('unify.group.settings.memory.lastSuccess', {
+              >{{ $t('yeaft.group.settings.memory.lastSuccess', {
                   time: formatDreamTimestamp(groupDreamStatus.lastRunAt),
                   count: groupDreamStatus.lastResult?.entriesCreated ?? 0,
               }) }}</p>
@@ -476,15 +476,15 @@ export default {
                 v-else-if="groupDreamStatus.status === 'error'"
                 class="group-settings-error group-settings-memory-status"
                 role="alert"
-              >{{ $t('unify.group.settings.memory.lastError', { error: groupDreamStatus.lastError || 'unknown' }) }}</p>
+              >{{ $t('yeaft.group.settings.memory.lastError', { error: groupDreamStatus.lastError || 'unknown' }) }}</p>
             </div>
 
             <!-- Danger zone -->
             <div v-else-if="section === 'danger'" class="group-settings-section group-settings-section-danger">
-              <h3 class="group-settings-heading">{{ $t('unify.group.settings.danger.heading') }}</h3>
-              <p class="group-settings-help">{{ $t('unify.group.settings.danger.deleteHelp') }}</p>
+              <h3 class="group-settings-heading">{{ $t('yeaft.group.settings.danger.heading') }}</h3>
+              <p class="group-settings-help">{{ $t('yeaft.group.settings.danger.deleteHelp') }}</p>
               <label class="group-settings-field-label">
-                {{ $t('unify.group.deleteConfirm', { name: groupDisplayName }) }}
+                {{ $t('yeaft.group.deleteConfirm', { name: groupDisplayName }) }}
               </label>
               <input
                 type="text"
@@ -500,7 +500,7 @@ export default {
                   class="group-settings-danger-btn"
                   :disabled="!deleteConfirmReady || deleteBusy"
                   @click="confirmDelete"
-                >{{ deleteBusy ? $t('unify.group.deletingEllipsis') : $t('unify.group.settings.danger.deleteBtn') }}</button>
+                >{{ deleteBusy ? $t('yeaft.group.deletingEllipsis') : $t('yeaft.group.settings.danger.deleteBtn') }}</button>
               </div>
             </div>
           </section>

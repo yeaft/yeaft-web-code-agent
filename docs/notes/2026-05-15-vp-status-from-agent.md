@@ -33,7 +33,7 @@ Frontend consumes them as the *only* source of VP-level status.
 
 ### Wire protocol
 
-Two new events, both ride existing `unify_output` envelope (so the
+Two new events, both ride existing `yeaft_output` envelope (so the
 server's relay is unchanged).
 
 ```js
@@ -112,17 +112,17 @@ When the WS connection is not `connected`, every row renders as
 
 | File | Change |
 |---|---|
-| `agent/unify/vp-status-broker.js` (new) | Holds last-known status per `(groupId, vpId)`; `transition()` checks dedup + emits `vp_status_changed`; `snapshot()` returns the full table for `vp_status_snapshot`. |
-| `agent/unify/web-bridge.js` | Call `broker.transition()` from: `enqueueForVp` (→ typing), `runVpTurn` start (→ thinking), `runVpTurn` finally (→ idle), `runVpTurn` catch (→ error then idle). In `handleEngineEvent`, transition on `text_delta` (→ streaming on first delta), `tool_call` (→ tool), `tool_end` (→ streaming). On `ensureSessionLoaded` + `session_ready` replay paths, broadcast `vp_status_snapshot`. |
-| `web/stores/chat.js` | New state `vpStatuses: { [vpId]: { state, since, turnId } }`; handle `vp_status_changed` + `vp_status_snapshot` cases. Clear on `unify_session_reset`. |
+| `agent/yeaft/vp-status-broker.js` (new) | Holds last-known status per `(groupId, vpId)`; `transition()` checks dedup + emits `vp_status_changed`; `snapshot()` returns the full table for `vp_status_snapshot`. |
+| `agent/yeaft/web-bridge.js` | Call `broker.transition()` from: `enqueueForVp` (→ typing), `runVpTurn` start (→ thinking), `runVpTurn` finally (→ idle), `runVpTurn` catch (→ error then idle). In `handleEngineEvent`, transition on `text_delta` (→ streaming on first delta), `tool_call` (→ tool), `tool_end` (→ streaming). On `ensureSessionLoaded` + `session_ready` replay paths, broadcast `vp_status_snapshot`. |
+| `web/stores/chat.js` | New state `vpStatuses: { [vpId]: { state, since, turnId } }`; handle `vp_status_changed` + `vp_status_snapshot` cases. Clear on `yeaft_session_reset`. |
 | `web/stores/helpers/vp-timeline.js` | `statusFor(vpId, ctx)` reads `ctx.vpStatuses[vpId]?.state` (single source). When `ctx.connectionState !== 'connected'`, returns `'offline'`. Drop the `streamingSet` reverse-inference from messages entirely. Drop the message-tail pass — the tail roster is rebuilt from `vpStatuses` keys + roster. |
-| `web/components/UnifyPage.js` | Pass `vpStatuses` + `connectionState` into `buildTimelineRows`; drop the now-unused `messages` filter on the input. |
+| `web/components/YeaftPage.js` | Pass `vpStatuses` + `connectionState` into `buildTimelineRows`; drop the now-unused `messages` filter on the input. |
 | `web/components/VpTimelinePane.js` | Render `offline / thinking / streaming / tool / error` labels. Add `is-status-offline` row class for muted styling. |
 | `web/i18n/{en,zh-CN}.js` | Add `offline / thinking / tool / error` keys. |
 
 ## Test plan
 
-* **Unit (agent)** — `test/agent/unify-vp-status-broker.test.js`:
+* **Unit (agent)** — `test/agent/yeaft-vp-status-broker.test.js`:
   - dedup: same state twice = one emit
   - transition path: idle → typing → thinking → streaming → tool →
     streaming → idle

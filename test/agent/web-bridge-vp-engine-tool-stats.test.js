@@ -4,7 +4,7 @@
  * built WITHOUT the session's `toolStats`, so tool calls executed by VPs
  * in a group conversation were silently dropped from the
  * `~/.yeaft/stats/tool-usage.json` snapshot read by
- * `unify_fetch_tool_stats`. The user-visible bug was "tool usage stats
+ * `yeaft_fetch_tool_stats`. The user-visible bug was "tool usage stats
  * in group conversations don't work".
  *
  * Two-layer assertion:
@@ -24,10 +24,10 @@ import {
   __testSetSession,
   __testGetOrCreateVpEngine,
   __testResetVpState,
-} from '../../agent/unify/web-bridge.js';
-import { NullTrace } from '../../agent/unify/debug-trace.js';
-import { ToolRegistry } from '../../agent/unify/tools/registry.js';
-import { defineTool } from '../../agent/unify/tools/types.js';
+} from '../../agent/yeaft/web-bridge.js';
+import { NullTrace } from '../../agent/yeaft/debug-trace.js';
+import { ToolRegistry } from '../../agent/yeaft/tools/registry.js';
+import { defineTool } from '../../agent/yeaft/tools/types.js';
 import { mkStatsStub, OneShotToolAdapter } from '../helpers/tool-stats.js';
 
 function mkSession({ toolRegistry, adapter, toolStats }) {
@@ -78,7 +78,7 @@ describe('getOrCreateVpEngine: per-VP engine inherits session.toolStats', () => 
       // drain
     }
     // Identity, not just shape — guarantees the same instance the
-    // unify_fetch_tool_stats handler reads back.
+    // yeaft_fetch_tool_stats handler reads back.
     expect(capturedCtx.parentEngineDeps.toolStats).toBe(stats);
   });
 

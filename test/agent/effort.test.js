@@ -1,5 +1,5 @@
 /**
- * task-327b: Unify LLM thinking/reasoning — scenario → effort decision
+ * task-327b: Yeaft LLM thinking/reasoning — scenario → effort decision
  * tree + `/effort` prompt-prefix parser + engine wiring sanity.
  *
  * Coverage:
@@ -21,7 +21,7 @@ import {
   parseEffortPrefix,
   SCENARIO_EFFORT,
   LONG_LOOP_TURN_THRESHOLD,
-} from '../../agent/unify/effort.js';
+} from '../../agent/yeaft/effort.js';
 
 describe('task-327b: SCENARIO_EFFORT table', () => {
   it('chat defaults to max (per user 2026-05-22 — quality over latency)', () => {

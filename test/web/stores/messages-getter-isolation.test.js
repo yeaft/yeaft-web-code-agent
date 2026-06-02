@@ -1,23 +1,23 @@
 /**
  * Regression test — chat-mode messages must NOT bleed into the open
- * Unify view, even when chat-mode WS handlers (conversation_resumed,
+ * Yeaft view, even when chat-mode WS handlers (conversation_resumed,
  * conversation_selected, agent_list restore, crew session restore)
- * clobber `activeConversations` while the user is sitting on Unify.
+ * clobber `activeConversations` while the user is sitting on Yeaft.
  *
  * Bug:
- *   1. User in Unify, `unifyConversationId === 'unify-conv-1'`,
- *      `activeConversations === ['unify-conv-1']`.
+ *   1. User in Yeaft, `yeaftConversationId === 'yeaft-conv-1'`,
+ *      `activeConversations === ['yeaft-conv-1']`.
  *   2. A backgrounded chat WS event (e.g. conversation_resumed for an
  *      agent reconnect) writes `activeConversations = ['chat-A']`
  *      regardless of `currentView`.
  *   3. Every getter that read `activeConversations[0]` immediately
- *      sourced chat data into the Unify view (`messages` showed chat
+ *      sourced chat data into the Yeaft view (`messages` showed chat
  *      content; `vpsTypingInCurrentConv` looked up the wrong key and
  *      came back empty).
  *
  * Fix: a single canonical selector,
  *   web/stores/helpers/active-conv.js#selectActiveConversationId.
- * In Unify view it returns `unifyConversationId`; in Chat / Crew it
+ * In Yeaft view it returns `yeaftConversationId`; in Chat / Crew it
  * returns `activeConversations[0]`. The store getters route through
  * it instead of reading `activeConversations[0]` directly.
  *
@@ -31,7 +31,7 @@ function mkState(overrides = {}) {
   return {
     currentView: 'chat',
     activeConversations: [],
-    unifyConversationId: null,
+    yeaftConversationId: null,
     ...overrides,
   };
 }
@@ -41,7 +41,7 @@ describe('selectActiveConversationId — view routing', () => {
     const state = mkState({
       currentView: 'chat',
       activeConversations: ['chat-A', 'chat-B'],
-      unifyConversationId: 'unify-1',
+      yeaftConversationId: 'yeaft-1',
     });
     expect(selectActiveConversationId(state)).toBe('chat-A');
   });
@@ -55,30 +55,30 @@ describe('selectActiveConversationId — view routing', () => {
     const state = mkState({
       currentView: 'crew',
       activeConversations: ['crew-conv-1'],
-      unifyConversationId: 'unify-1',
+      yeaftConversationId: 'yeaft-1',
     });
     expect(selectActiveConversationId(state)).toBe('crew-conv-1');
   });
 
-  it('unify view: returns unifyConversationId, IGNORING activeConversations[0]', () => {
+  it('yeaft view: returns yeaftConversationId, IGNORING activeConversations[0]', () => {
     // The bleed scenario: a backgrounded chat handler clobbered
-    // activeConversations while the user is in Unify. The selector
+    // activeConversations while the user is in Yeaft. The selector
     // must NOT see the clobbered value.
     const state = mkState({
-      currentView: 'unify',
+      currentView: 'yeaft',
       activeConversations: ['chat-A'],
-      unifyConversationId: 'unify-1',
+      yeaftConversationId: 'yeaft-1',
     });
-    expect(selectActiveConversationId(state)).toBe('unify-1');
+    expect(selectActiveConversationId(state)).toBe('yeaft-1');
   });
 
-  it('unify view with no unifyConversationId: returns null (does NOT fall back to chat)', () => {
-    // Hardening: even if the unify session hasn't been initialised,
+  it('yeaft view with no yeaftConversationId: returns null (does NOT fall back to chat)', () => {
+    // Hardening: even if the yeaft session hasn't been initialised,
     // we refuse to fall back to activeConversations.
     const state = mkState({
-      currentView: 'unify',
+      currentView: 'yeaft',
       activeConversations: ['chat-A'],
-      unifyConversationId: null,
+      yeaftConversationId: null,
     });
     expect(selectActiveConversationId(state)).toBeNull();
   });
@@ -91,44 +91,44 @@ describe('selectActiveConversationId — view routing', () => {
  * to confirm — but the routing CALL itself is the production helper,
  * not a reimplementation.
  */
-describe('store getters — Unify isolation via selectActiveConversationId', () => {
+describe('store getters — Yeaft isolation via selectActiveConversationId', () => {
   // Slice that mirrors chat.js#messages — only the parts the bug
   // touches. The selector call here is the REAL one.
   const EMPTY = Object.freeze([]);
   function getMessages(state) {
     const convId = selectActiveConversationId(state);
     const raw = convId ? (state.messagesMap[convId] || EMPTY) : EMPTY;
-    if (state.currentView === 'unify' && state.unifyActiveGroupFilter) {
-      return raw.filter(m => m && m.groupId === state.unifyActiveGroupFilter);
+    if (state.currentView === 'yeaft' && state.yeaftActiveGroupFilter) {
+      return raw.filter(m => m && m.groupId === state.yeaftActiveGroupFilter);
     }
     return raw;
   }
 
-  it('unify view: messages stays scoped to unifyConversationId despite activeConversations clobber', () => {
+  it('yeaft view: messages stays scoped to yeaftConversationId despite activeConversations clobber', () => {
     const state = mkState({
-      currentView: 'unify',
+      currentView: 'yeaft',
       activeConversations: ['chat-A'],
-      unifyConversationId: 'unify-1',
-      unifyActiveGroupFilter: null,
+      yeaftConversationId: 'yeaft-1',
+      yeaftActiveGroupFilter: null,
       messagesMap: {
         'chat-A': [{ id: 'leaked' }],
-        'unify-1': [{ id: 'u1' }],
+        'yeaft-1': [{ id: 'u1' }],
       },
     });
     expect(getMessages(state).map(m => m.id)).toEqual(['u1']);
   });
 
-  it('unify view + group filter: still scoped to unify stream and filtered by groupId', () => {
+  it('yeaft view + group filter: still scoped to yeaft stream and filtered by groupId', () => {
     const state = mkState({
-      currentView: 'unify',
+      currentView: 'yeaft',
       activeConversations: ['chat-A'],
-      unifyConversationId: 'unify-1',
-      unifyActiveGroupFilter: 'grp_alpha',
+      yeaftConversationId: 'yeaft-1',
+      yeaftActiveGroupFilter: 'grp_alpha',
       messagesMap: {
         // Same groupId on the leaked side — strict equality alone
         // would let it through; the selector is what blocks it.
         'chat-A': [{ id: 'leaked', groupId: 'grp_alpha' }],
-        'unify-1': [
+        'yeaft-1': [
           { id: 'u1', groupId: 'grp_alpha' },
           { id: 'u2', groupId: 'grp_beta' },
         ],
@@ -141,10 +141,10 @@ describe('store getters — Unify isolation via selectActiveConversationId', () 
     const state = mkState({
       currentView: 'chat',
       activeConversations: ['chat-A'],
-      unifyConversationId: 'unify-1',
+      yeaftConversationId: 'yeaft-1',
       messagesMap: {
         'chat-A': [{ id: 'm1' }, { id: 'm2' }],
-        'unify-1': [{ id: 'u1' }],
+        'yeaft-1': [{ id: 'u1' }],
       },
     });
     expect(getMessages(state).map(m => m.id)).toEqual(['m1', 'm2']);

@@ -10,7 +10,7 @@ vi.mock('../../agent/connection/buffer.js', () => ({
   sendToServer: vi.fn(),
 }));
 
-vi.mock('../../agent/unify/vp/vp-crud.js', async (orig) => {
+vi.mock('../../agent/yeaft/vp/vp-crud.js', async (orig) => {
   const real = await orig();
   return {
     ...real,
@@ -32,8 +32,8 @@ import {
   __testSetSession,
   __testSetThreadClassifier,
   __testWaitForRoutePromises,
-} from '../../agent/unify/web-bridge.js';
-import { NullTrace } from '../../agent/unify/debug-trace.js';
+} from '../../agent/yeaft/web-bridge.js';
+import { NullTrace } from '../../agent/yeaft/debug-trace.js';
 
 class QuietAdapter {
   constructor({ delayMs = 0 } = {}) {
@@ -108,7 +108,7 @@ describe('web-bridge VP thread routing', () => {
     expect(threads[0].pendingQueries).toHaveLength(0);
 
     expect(sendToServer).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'unify_output',
+      type: 'yeaft_output',
       event: expect.objectContaining({
         type: 'vp_typing_start',
         threadId: threads[0].threadId,
@@ -132,7 +132,7 @@ describe('web-bridge VP thread routing', () => {
     expect(second).toHaveLength(1);
     expect(second[0].threadId).toBe(targetThreadId);
     expect(sendToServer).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'unify_output',
+      type: 'yeaft_output',
       event: expect.objectContaining({
         type: 'vp_thread_user_appended',
         threadId: targetThreadId,
@@ -236,7 +236,7 @@ describe('web-bridge VP thread routing', () => {
     expect(classifier).toHaveBeenCalledTimes(1);
     expect(after).toHaveLength(2);
     expect(sendToServer).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'unify_output',
+      type: 'yeaft_output',
       event: expect.objectContaining({
         type: 'vp_thread_user_appended',
         threadId: exportThreadId,

@@ -79,9 +79,9 @@ describe('turnMatchesSearch', () => {
 
   it('matches tool input (JSON-serialized)', () => {
     const loops = [mkLoop({
-      toolCalls: [{ id: 'c1', name: 'Grep', input: { pattern: 'unifyDebugPanel' } }],
+      toolCalls: [{ id: 'c1', name: 'Grep', input: { pattern: 'yeaftDebugPanel' } }],
     })];
-    expect(turnMatchesSearch(mkTurn(), loops, [], 'unifydebugpanel')).toBe(true);
+    expect(turnMatchesSearch(mkTurn(), loops, [], 'yeaftdebugpanel')).toBe(true);
   });
 
   it('matches tool output via tool message content', () => {

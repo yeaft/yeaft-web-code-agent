@@ -1,5 +1,5 @@
 /**
- * Tests for agent/unify/llm/models-dev.js — layered cache fetcher.
+ * Tests for agent/yeaft/llm/models-dev.js — layered cache fetcher.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -7,7 +7,7 @@ import { mkdtempSync, rmSync, writeFileSync, statSync, utimesSync, existsSync, r
 import { join } from 'path';
 import { tmpdir } from 'os';
 
-import { fetchModelsDev, listProviders, listProviderModels, _resetMemCache } from '../../agent/unify/llm/models-dev.js';
+import { fetchModelsDev, listProviders, listProviderModels, _resetMemCache } from '../../agent/yeaft/llm/models-dev.js';
 
 const SAMPLE = {
   anthropic: { name: 'Anthropic', api: 'https://api.anthropic.com', models: { 'claude-sonnet': {}, 'claude-haiku': {} } },

@@ -17,7 +17,7 @@ vi.mock('../../agent/connection/buffer.js', () => ({
   sendToServer: vi.fn(),
 }));
 
-vi.mock('../../agent/unify/vp/vp-crud.js', async (orig) => {
+vi.mock('../../agent/yeaft/vp/vp-crud.js', async (orig) => {
   const real = await orig();
   return {
     ...real,
@@ -39,9 +39,9 @@ import {
   __testSetThreadClassifier,
   __testWaitForRoutePromises,
   __testDrainVpDrivers,
-  handleUnifyFetchDebugHistory,
-} from '../../agent/unify/web-bridge.js';
-import { NullTrace, DebugTrace } from '../../agent/unify/debug-trace.js';
+  handleYeaftFetchDebugHistory,
+} from '../../agent/yeaft/web-bridge.js';
+import { NullTrace, DebugTrace } from '../../agent/yeaft/debug-trace.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -166,21 +166,21 @@ describe('fix-vp-multi-thread bugfix guards', () => {
   });
 
   // ─── bug 4 ──────────────────────────────────────────────────────────
-  it('bug 4: handleUnifyFetchDebugHistory replies with an empty snapshot when no session', async () => {
+  it('bug 4: handleYeaftFetchDebugHistory replies with an empty snapshot when no session', async () => {
     // Detach session so handler hits the no-trace branch and replies safely.
     __testSetSession(null);
     sendToServer.mockClear();
 
-    await handleUnifyFetchDebugHistory({});
+    await handleYeaftFetchDebugHistory({});
 
     expect(sendToServer).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'unify_debug_history',
+      type: 'yeaft_debug_history',
       loops: [],
       turns: [],
     }));
   });
 
-  it('bug 4: handleUnifyFetchDebugHistory round-trips persisted SQLite rows back as loops + turns', async () => {
+  it('bug 4: handleYeaftFetchDebugHistory round-trips persisted SQLite rows back as loops + turns', async () => {
     // Build a real DebugTrace backed by a temp file, write one fake
     // turn, then call the handler and assert the reply contains it.
     const dir = mkdtempSync(join(tmpdir(), 'debug-trace-test-'));
@@ -190,7 +190,7 @@ describe('fix-vp-multi-thread bugfix guards', () => {
       const turnId = trace.startTurn({
         traceId: 'trace-1',
         messageId: 'msg-1',
-        mode: 'unify',
+        mode: 'yeaft',
         turnNumber: 1,
         groupId: 'g1',
         vpId: 'linus',
@@ -219,10 +219,10 @@ describe('fix-vp-multi-thread bugfix guards', () => {
       __testSetSession(mkSession({ trace }));
       sendToServer.mockClear();
 
-      await handleUnifyFetchDebugHistory({ limit: 50 });
+      await handleYeaftFetchDebugHistory({ limit: 50 });
 
       const call = sendToServer.mock.calls.find(
-        ([m]) => m && m.type === 'unify_debug_history'
+        ([m]) => m && m.type === 'yeaft_debug_history'
       );
       expect(call).toBeDefined();
       const [payload] = call;

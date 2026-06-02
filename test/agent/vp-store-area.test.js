@@ -12,8 +12,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { loadVpFromDir, parseRoleMd, scanVpLibrary } from '../../agent/unify/vp/vp-store.js';
-import { buildRoleMd } from '../../agent/unify/vp/vp-crud.js';
+import { loadVpFromDir, parseRoleMd, scanVpLibrary } from '../../agent/yeaft/vp/vp-store.js';
+import { buildRoleMd } from '../../agent/yeaft/vp/vp-crud.js';
 
 let tmpRoot;
 let libDir;

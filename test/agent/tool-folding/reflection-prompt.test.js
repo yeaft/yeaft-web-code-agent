@@ -6,7 +6,7 @@ import {
   buildReflectionPrompt,
   REFLECTION_TEMPLATE_EN,
   REFLECTION_TEMPLATE_ZH,
-} from '../../../agent/unify/tool-folding/reflection-prompt.js';
+} from '../../../agent/yeaft/tool-folding/reflection-prompt.js';
 
 describe('buildReflectionPrompt', () => {
   it('contains all five required section headings', () => {

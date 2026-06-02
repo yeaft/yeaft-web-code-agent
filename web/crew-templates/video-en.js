@@ -150,7 +150,7 @@ All met = 100% completion; any unmet item deducts proportionally
 ### Typical Iteration Scenarios
 - **Script stage rejection**: Incomplete narrative arc or missing emotional anchor — ROUTE to scriptwriter for revisions, re-review
 - **Storyboard stage rejection**: Insufficient visual coherence or camera movement lacks narrative purpose — ROUTE to storyboard artist
-- **Consistency issues**: Anchor descriptions inconsistent across segments — ROUTE to corresponding role to unify and rewrite
+- **Consistency issues**: Anchor descriptions inconsistent across segments — ROUTE to corresponding role to yeaft and rewrite
 - **Final prompt stage**: Consistency prefix missing or style drift — ROUTE to editor for correction
 - **Two rounds without convergence**: Loop back to STEP 2 for roundtable re-discussion — the creative direction itself may need adjustment
 

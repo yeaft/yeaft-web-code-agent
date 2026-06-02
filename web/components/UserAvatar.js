@@ -1,5 +1,5 @@
 /**
- * UserAvatar — human-side circular avatar used by the Unify group-chat
+ * UserAvatar — human-side circular avatar used by the Yeaft group-chat
  * dual-column layout (Issue C, IM-style: VP left / human right).
  *
  * Visual stack (back → front):
@@ -18,7 +18,7 @@
  * Props:
  *   size      — px diameter (default 36, mirrors VpAvatar in turn blocks).
  *   initial   — optional override. When unset we fall back to the
- *               i18n-provided 'unify.user.youLabel' first char so zh
+ *               i18n-provided 'yeaft.user.youLabel' first char so zh
  *               users see "我" and en users see "Y". Passed strings
  *               longer than one character are reduced to first codepoint.
  *   ariaLabel — accessibility label (default 'You').
@@ -60,7 +60,7 @@ export default {
       if (!raw) {
         // Fall back to the localised "you" label so the rendered glyph
         // matches the user's UI language (zh → 我, en → Y).
-        raw = (t ? t('unify.user.youLabel') : 'Y').trim() || 'Y';
+        raw = (t ? t('yeaft.user.youLabel') : 'Y').trim() || 'Y';
       }
       // First visible codepoint — handles CJK + emoji correctly.
       const first = Array.from(raw)[0] || 'Y';

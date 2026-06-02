@@ -10,7 +10,7 @@
  * Behavior:
  *   - Collapsed by default (icon + 1-line preview), click to expand.
  *   - Click ✏️ to enter edit mode → textarea with Save / Cancel.
- *   - Save sends `unify_update_group` via store.groupCrudRequest('update').
+ *   - Save sends `yeaft_update_group` via store.groupCrudRequest('update').
  *   - Empty/whitespace announcements clear the field on the agent side.
  *   - "Open settings" link emits a request to the parent page so the user
  *     can jump to the full GroupSettingsModal (which surfaces the same
@@ -107,7 +107,7 @@ export default {
         } else {
           const code = (res && res.error && res.error.code) || 'unknown';
           const message = (res && res.error && res.error.message) || code;
-          this.error = this.$t('unify.group.announcement.saveFailed', { error: message });
+          this.error = this.$t('yeaft.group.announcement.saveFailed', { error: message });
         }
       } finally {
         this.busy = false;
@@ -140,7 +140,7 @@ export default {
           <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M18 11v3.5l-2.5-1.5h-7C7.67 13 7 12.33 7 11.5v-7C7 3.67 7.67 3 8.5 3h11c.83 0 1.5.67 1.5 1.5v5c0 .83-.67 1.5-1.5 1.5H18zm-13.5 1H6v3.5L8.5 14h7c.83 0 1.5-.67 1.5-1.5V12h2v.5c0 1.93-1.57 3.5-3.5 3.5h-6L4 19v-5.5C2.9 13.5 2 12.6 2 11.5v-5C2 5.4 2.9 4.5 4 4.5v6c0 .83.22 1.5.5 1.5z"/></svg>
         </span>
         <span class="group-announcement-bar__label">
-          {{ $t('unify.group.announcement.label') }}
+          {{ $t('yeaft.group.announcement.label') }}
         </span>
         <span
           v-if="hasAnnouncement && !expanded"
@@ -149,13 +149,13 @@ export default {
         <span
           v-else-if="!hasAnnouncement && !expanded"
           class="group-announcement-bar__hint"
-        >{{ $t('unify.group.announcement.hintEmpty') }}</span>
+        >{{ $t('yeaft.group.announcement.hintEmpty') }}</span>
         <button
           v-if="!editing"
           type="button"
           class="group-announcement-bar__edit-btn"
-          :title="$t('unify.group.announcement.edit')"
-          :aria-label="$t('unify.group.announcement.edit')"
+          :title="$t('yeaft.group.announcement.edit')"
+          :aria-label="$t('yeaft.group.announcement.edit')"
           @click.stop="startEdit"
         >
           <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
@@ -174,13 +174,13 @@ export default {
         <p
           v-else-if="!editing"
           class="group-announcement-bar__empty"
-        >{{ $t('unify.group.announcement.emptyBody') }}</p>
+        >{{ $t('yeaft.group.announcement.emptyBody') }}</p>
         <template v-else>
           <textarea
             ref="textarea"
             v-model="draft"
             class="group-announcement-bar__textarea"
-            :placeholder="$t('unify.group.announcement.placeholder')"
+            :placeholder="$t('yeaft.group.announcement.placeholder')"
             :disabled="busy"
             rows="6"
           ></textarea>
@@ -197,7 +197,7 @@ export default {
               class="group-announcement-bar__save"
               :disabled="busy || draft === announcement"
               @click="saveEdit"
-            >{{ busy ? $t('unify.group.announcement.saving') : $t('common.save') }}</button>
+            >{{ busy ? $t('yeaft.group.announcement.saving') : $t('common.save') }}</button>
           </div>
         </template>
         <button
@@ -205,7 +205,7 @@ export default {
           type="button"
           class="group-announcement-bar__settings-link"
           @click="onOpenSettings"
-        >{{ $t('unify.group.announcement.openSettings') }}</button>
+        >{{ $t('yeaft.group.announcement.openSettings') }}</button>
       </div>
     </div>
   `,

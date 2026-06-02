@@ -10,7 +10,7 @@
  *   main  ──click VP badge──▶ vp-detail
  *   vp-detail ──Esc / breadcrumb ←──▶ main
  *
- * Accessibility: focusable back button, Esc handled at UnifyPage level
+ * Accessibility: focusable back button, Esc handled at YeaftPage level
  * (shared cascade with task-detail / thread-filter).
  */
 import { reasonToI18nKey } from '../utils/vp-reason.js';
@@ -22,19 +22,19 @@ export default {
     vpId: { type: String, required: true },
   },
   template: `
-    <div class="vp-detail-view" role="region" :aria-label="$t('unify.vp.detail.title')">
+    <div class="vp-detail-view" role="region" :aria-label="$t('yeaft.vp.detail.title')">
       <div class="vp-detail-breadcrumb">
         <button
           class="vp-detail-back"
           type="button"
-          :aria-label="$t('unify.vp.detail.backAria')"
-          :title="$t('unify.vp.detail.backAria')"
+          :aria-label="$t('yeaft.vp.detail.backAria')"
+          :title="$t('yeaft.vp.detail.backAria')"
           @click="$emit('back')"
         >
           <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
             <path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/>
           </svg>
-          <span>{{ $t('unify.vp.detail.back') }}</span>
+          <span>{{ $t('yeaft.vp.detail.back') }}</span>
         </button>
       </div>
 
@@ -56,7 +56,7 @@ export default {
         <section
           class="vp-detail-section vp-detail-dream"
           :class="'dream-status-' + dreamStatus.status"
-          :aria-label="$t('unify.vp.dream.aria')"
+          :aria-label="$t('yeaft.vp.dream.aria')"
         >
           <div class="vp-detail-dream-row">
             <span class="vp-detail-dream-label">
@@ -67,40 +67,40 @@ export default {
               class="vp-detail-dream-btn"
               type="button"
               :disabled="dreamStatus.status === 'running'"
-              :aria-label="$t('unify.vp.dream.runNowAria')"
+              :aria-label="$t('yeaft.vp.dream.runNowAria')"
               @click="onRunDream"
-            >{{ $t('unify.vp.dream.runNow') }}</button>
+            >{{ $t('yeaft.vp.dream.runNow') }}</button>
           </div>
           <p
             v-if="dreamStatus.status === 'error' && dreamStatus.lastError"
             class="vp-detail-dream-error"
-          >{{ $t('unify.vp.dream.failed', { error: dreamStatus.lastError }) }}</p>
+          >{{ $t('yeaft.vp.dream.failed', { error: dreamStatus.lastError }) }}</p>
         </section>
 
         <section class="vp-detail-section">
-          <h3 class="vp-detail-section-title">{{ $t('unify.vp.detail.traits') }}</h3>
+          <h3 class="vp-detail-section-title">{{ $t('yeaft.vp.detail.traits') }}</h3>
           <ul class="vp-detail-traits" v-if="traits.length">
             <li v-for="t in traits" :key="t" class="vp-detail-trait-chip">{{ t }}</li>
           </ul>
-          <p v-else class="vp-detail-empty">{{ $t('unify.vp.detail.traitsEmpty') }}</p>
+          <p v-else class="vp-detail-empty">{{ $t('yeaft.vp.detail.traitsEmpty') }}</p>
         </section>
 
         <section class="vp-detail-section">
-          <h3 class="vp-detail-section-title">{{ $t('unify.vp.detail.modelHint') }}</h3>
+          <h3 class="vp-detail-section-title">{{ $t('yeaft.vp.detail.modelHint') }}</h3>
           <p class="vp-detail-model-hint">
             <code v-if="vp.modelHint">{{ vp.modelHint }}</code>
-            <span v-else class="vp-detail-empty">{{ $t('unify.vp.detail.modelHintEmpty') }}</span>
+            <span v-else class="vp-detail-empty">{{ $t('yeaft.vp.detail.modelHintEmpty') }}</span>
           </p>
         </section>
 
         <section class="vp-detail-section">
-          <h3 class="vp-detail-section-title">{{ $t('unify.vp.detail.persona') }}</h3>
+          <h3 class="vp-detail-section-title">{{ $t('yeaft.vp.detail.persona') }}</h3>
           <pre class="vp-detail-persona" v-if="personaBody">{{ personaBody }}</pre>
-          <p v-else class="vp-detail-empty">{{ $t('unify.vp.detail.personaEmpty') }}</p>
+          <p v-else class="vp-detail-empty">{{ $t('yeaft.vp.detail.personaEmpty') }}</p>
         </section>
 
         <section class="vp-detail-section">
-          <h3 class="vp-detail-section-title">{{ $t('unify.vp.detail.activity') }}</h3>
+          <h3 class="vp-detail-section-title">{{ $t('yeaft.vp.detail.activity') }}</h3>
           <ul class="vp-detail-activity" v-if="activityRows.length">
             <li v-for="row in activityRows" :key="row.key" class="vp-detail-activity-row" :class="'kind-' + row.kind">
               <span class="vp-detail-activity-time">{{ row.timeLabel }}</span>
@@ -108,15 +108,15 @@ export default {
               <span v-if="row.reasonKey" class="vp-detail-activity-reason">{{ $t(row.reasonKey) }}</span>
             </li>
           </ul>
-          <p v-else class="vp-detail-empty">{{ $t('unify.vp.detail.activityEmpty') }}</p>
-          <p class="vp-detail-activity-hint">{{ $t('unify.vp.detail.activityPrivate') }}</p>
+          <p v-else class="vp-detail-empty">{{ $t('yeaft.vp.detail.activityEmpty') }}</p>
+          <p class="vp-detail-activity-hint">{{ $t('yeaft.vp.detail.activityPrivate') }}</p>
         </section>
 
-        <p class="vp-detail-edit-hint">{{ $t('unify.vp.detail.editHint') }}</p>
+        <p class="vp-detail-edit-hint">{{ $t('yeaft.vp.detail.editHint') }}</p>
       </div>
 
       <div class="vp-detail-missing" v-else>
-        <p>{{ $t('unify.vp.detail.notFound') }}</p>
+        <p>{{ $t('yeaft.vp.detail.notFound') }}</p>
       </div>
     </div>
   `,
@@ -174,7 +174,7 @@ export default {
     const activityRows = Vue.computed(() => {
       const rows = [];
       if (chatStore) {
-        const convId = chatStore.unifyConversationId;
+        const convId = chatStore.yeaftConversationId;
         const msgs = convId ? (chatStore.messagesMap[convId] || []) : [];
         // Limit to the 10 most recent VP-authored messages to keep the
         // detail view skim-able.
@@ -226,21 +226,21 @@ export default {
         if (i18n && typeof i18n.$t === 'function') return i18n.$t(key, params);
         return key;
       };
-      if (ds.status === 'running') return t('unify.vp.dream.running');
+      if (ds.status === 'running') return t('yeaft.vp.dream.running');
       if (ds.status === 'success') {
         const merged = ds.lastResult && ds.lastResult.mergedCount;
         if (ds.lastResult && ds.lastResult.skipped) {
-          return t('unify.vp.dream.skipped');
+          return t('yeaft.vp.dream.skipped');
         }
-        return t('unify.vp.dream.lastRun', {
+        return t('yeaft.vp.dream.lastRun', {
           relative: relativeTime(ds.lastRunAt),
           merged: merged != null ? merged : 0,
         });
       }
       if (ds.status === 'error') {
-        return t('unify.vp.dream.errored', { relative: relativeTime(ds.lastRunAt) });
+        return t('yeaft.vp.dream.errored', { relative: relativeTime(ds.lastRunAt) });
       }
-      return t('unify.vp.dream.never');
+      return t('yeaft.vp.dream.never');
     });
 
     function onRunDream() {

@@ -1,19 +1,19 @@
 /**
- * web-bridge-router-wiring.test.js — pin the invariant that every Unify
+ * web-bridge-router-wiring.test.js — pin the invariant that every Yeaft
  * turn carries a `router` in its query opts whenever a coordinator is
  * supplied. Bug history (visible as `router_unavailable` in the UI):
  *
  *   1. v0.1.598 wired `createRouter` into buildVpQueryOpts when a
- *      coordinator is supplied — but only the `unify_group_chat` path
- *      supplied one. The legacy `unify_chat` path (no group) silently
+ *      coordinator is supplied — but only the `yeaft_group_chat` path
+ *      supplied one. The legacy `yeaft_chat` path (no group) silently
  *      dropped ctx.router, and any `route_forward` call from a VP
  *      exploded with `router_unavailable`.
  *
- *   2. The product semantics are "Unify is a single conversation backed
+ *   2. The product semantics are "Yeaft is a single conversation backed
  *      by grp_default" — there is no legitimate path where the user is
- *      in Unify but no group exists. v0.1.671 ensured the frontend
- *      ALWAYS sends `unify_group_chat` with `grp_default`; v0.1.672 then
- *      deleted the `unify_chat` / `handleUnifyChat` legacy path entirely.
+ *      in Yeaft but no group exists. v0.1.671 ensured the frontend
+ *      ALWAYS sends `yeaft_group_chat` with `grp_default`; v0.1.672 then
+ *      deleted the `yeaft_chat` / `handleYeaftChat` legacy path entirely.
  *      So `route_forward` ALWAYS has a router to call into.
  *
  * These tests guard the buildVpQueryOpts contract directly.
@@ -21,7 +21,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 
-vi.mock('../../agent/unify/vp/vp-crud.js', async (orig) => {
+vi.mock('../../agent/yeaft/vp/vp-crud.js', async (orig) => {
   const real = await orig();
   return {
     ...real,
@@ -34,7 +34,7 @@ vi.mock('../../agent/unify/vp/vp-crud.js', async (orig) => {
   };
 });
 
-vi.mock('../../agent/unify/vp/vp-store.js', async (orig) => {
+vi.mock('../../agent/yeaft/vp/vp-store.js', async (orig) => {
   const real = await orig();
   return {
     ...real,
@@ -45,7 +45,7 @@ vi.mock('../../agent/unify/vp/vp-store.js', async (orig) => {
   };
 });
 
-import { buildVpQueryOpts } from '../../agent/unify/web-bridge.js';
+import { buildVpQueryOpts } from '../../agent/yeaft/web-bridge.js';
 
 function makeCoordinator() {
   return {
@@ -67,8 +67,8 @@ describe('buildVpQueryOpts — router wiring invariant', () => {
 
   it('no router is attached when no coordinator is supplied', () => {
     // After v0.1.672 there is no production caller that omits a
-    // coordinator — `handleUnifyGroupChat` always builds one and
-    // there's no longer a `handleUnifyChat` entry point. This test
+    // coordinator — `handleYeaftGroupChat` always builds one and
+    // there's no longer a `handleYeaftChat` entry point. This test
     // pins the buildVpQueryOpts function-level contract: given no
     // coordinator, no router. Defensive only.
     const out = buildVpQueryOpts({ vpId: 'linus' });

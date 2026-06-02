@@ -1,7 +1,7 @@
 /**
  * chat-conversation-mode.test.js — Chat-mode message identity and loading.
  *
- * Chat and group/Unify use different message stores and wire verbs. A fix for
+ * Chat and group/Yeaft use different message stores and wire verbs. A fix for
  * one mode must not make the other mode reuse cached rows or send through the
  * wrong path.
  */
@@ -71,15 +71,15 @@ describe('Chat-mode conversation messages', () => {
     ]);
   });
 
-  it('chat send uses the server chat verb and active chat conversation, not Unify group routing', () => {
+  it('chat send uses the server chat verb and active chat conversation, not Yeaft group routing', () => {
     const store = makeStore();
     store.currentView = 'chat';
     store.currentAgent = 'agent-1';
     store.currentWorkDir = '/repo';
     store.activeConversations = ['chat-1'];
     store.conversations = [{ id: 'chat-1', agentId: 'agent-1', type: 'chat', workDir: '/repo' }];
-    store.unifyConversationId = 'unify-1';
-    store.unifyActiveGroupFilter = 'grp_fun';
+    store.yeaftConversationId = 'yeaft-1';
+    store.yeaftActiveGroupFilter = 'grp_fun';
 
     store.sendMessageToConversation('chat-1', 'hello chat', [], {});
 
@@ -90,7 +90,7 @@ describe('Chat-mode conversation messages', () => {
       conversationId: 'chat-1',
       workDir: '/repo',
     }));
-    expect(store.sent[0].type).not.toBe('unify_group_chat');
+    expect(store.sent[0].type).not.toBe('yeaft_group_chat');
     expect(store.messagesMap['chat-1'].some(m => m.type === 'user' && m.content === 'hello chat')).toBe(true);
   });
 });

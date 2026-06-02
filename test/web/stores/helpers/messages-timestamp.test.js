@@ -9,19 +9,19 @@
  *
  * Fix:
  *   1. If msg.ts is present (ISO string from agent), use it.
- *   2. After push, sort Unify messages by timestamp.
+ *   2. After push, sort Yeaft messages by timestamp.
  */
 import { describe, it, expect } from 'vitest';
 import { addMessageToConversation } from '../../../../web/stores/helpers/messages.js';
 
 function mkStore(overrides = {}) {
   return {
-    currentView: 'unify',
-    unifyConversationId: 'conv-1',
-    unifyActiveGroupFilter: null,
-    _currentUnifyGroupId: null,
-    _currentUnifyVpId: null,
-    _currentUnifyTurnId: null,
+    currentView: 'yeaft',
+    yeaftConversationId: 'conv-1',
+    yeaftActiveGroupFilter: null,
+    _currentYeaftGroupId: null,
+    _currentYeaftVpId: null,
+    _currentYeaftTurnId: null,
     messagesMap: { 'conv-1': [] },
     ...overrides,
   };
@@ -118,9 +118,9 @@ describe('addMessageToConversation: timestamp from agent ts', () => {
     expect(msgs[2].content).toBe('msg3'); // newest
   });
 
-  it('does NOT sort non-Unify conversations (crew conversation)', () => {
-    const store = mkStore({ unifyConversationId: 'unify-conv' });
-    // This is a crew conversation, not the Unify conversation
+  it('does NOT sort non-Yeaft conversations (crew conversation)', () => {
+    const store = mkStore({ yeaftConversationId: 'yeaft-conv' });
+    // This is a crew conversation, not the Yeaft conversation
     addMessageToConversation(store, 'crew-conv', {
       type: 'user',
       content: 'msg3',

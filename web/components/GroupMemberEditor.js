@@ -36,36 +36,36 @@ export default {
       @click.self="onOverlayClick"
       role="dialog"
       aria-modal="true"
-      :aria-label="$t('unify.group.members.aria')"
+      :aria-label="$t('yeaft.group.members.aria')"
     >
       <div class="group-edit-modal group-wizard-modal">
         <header class="group-edit-header">
           <span class="group-edit-title">
-            {{ $t('unify.group.members.title', { name: groupDisplayName }) }}
+            {{ $t('yeaft.group.members.title', { name: groupDisplayName }) }}
           </span>
           <button
             class="group-edit-close"
             type="button"
             @click="requestClose"
-            :aria-label="$t('unify.group.members.close')"
+            :aria-label="$t('yeaft.group.members.close')"
           >×</button>
         </header>
 
         <div class="group-wizard-body group-wizard-body-single">
           <div class="group-wizard-field">
             <span class="group-wizard-field-label">
-              {{ $t('unify.group.wizard.roster') }}
+              {{ $t('yeaft.group.wizard.roster') }}
               <span class="group-member-editor-count">
-                · {{ $t('unify.group.members.memberCount', { count: roster.length }) }}
+                · {{ $t('yeaft.group.members.memberCount', { count: roster.length }) }}
               </span>
             </span>
-            <span class="group-wizard-hint">{{ $t('unify.group.members.defaultHint') }}</span>
+            <span class="group-wizard-hint">{{ $t('yeaft.group.members.defaultHint') }}</span>
 
             <div v-if="vpList.length === 0 && vpLibraryEmpty" class="group-wizard-empty">
-              {{ $t('unify.group.members.empty') }}
+              {{ $t('yeaft.group.members.empty') }}
             </div>
             <div v-else-if="vpList.length === 0" class="group-wizard-empty group-wizard-empty-loading">
-              {{ $t('unify.group.members.loading') }}
+              {{ $t('yeaft.group.members.loading') }}
             </div>
             <ul v-else class="group-wizard-roster-list" role="listbox" aria-multiselectable="true">
               <li
@@ -97,9 +97,9 @@ export default {
                   type="button"
                   class="group-wizard-default-star"
                   :class="{ 'is-on': defaultVpId === vp.vpId }"
-                  :aria-label="$t('unify.group.wizard.defaultVpHint')"
+                  :aria-label="$t('yeaft.group.wizard.defaultVpHint')"
                   :aria-pressed="defaultVpId === vp.vpId"
-                  :title="$t('unify.group.wizard.defaultVpHint')"
+                  :title="$t('yeaft.group.wizard.defaultVpHint')"
                   :disabled="busy || defaultVpId === vp.vpId"
                   @click.stop="setDefault(vp.vpId)"
                 >
@@ -115,7 +115,7 @@ export default {
 
           <div class="group-wizard-actions">
             <button class="group-wizard-primary-btn" type="button" @click="requestClose" :disabled="busy">
-              {{ $t('unify.group.members.done') }}
+              {{ $t('yeaft.group.members.done') }}
             </button>
           </div>
         </div>
@@ -164,7 +164,7 @@ export default {
       if (!g) return '';
       // D1 seed: render localized label for the seed Default group.
       if (g.id === 'grp_default' && (g.name === 'Default' || !g.name)) {
-        return this.$t('unify.group.defaultName') || g.name || g.id;
+        return this.$t('yeaft.group.defaultName') || g.name || g.id;
       }
       return g.name || g.id;
     },
@@ -192,7 +192,7 @@ export default {
       if (this.vpStore && this.vpStore.lastSnapshotAt === 0) {
         const chat = this.chat;
         if (chat && typeof chat.sendWsMessage === 'function') {
-          chat.sendWsMessage({ type: 'unify_vp_subscribe' });
+          chat.sendWsMessage({ type: 'yeaft_vp_subscribe' });
         }
       }
     } catch (_) { /* test env without Pinia/ws */ }
@@ -251,7 +251,7 @@ export default {
     surfaceError(res) {
       const code = (res && res.error && res.error.code) || 'unknown';
       const message = (res && res.error && res.error.message) || code;
-      this.actionError = this.$t('unify.group.members.actionFailed', { error: message });
+      this.actionError = this.$t('yeaft.group.members.actionFailed', { error: message });
     },
   },
 };

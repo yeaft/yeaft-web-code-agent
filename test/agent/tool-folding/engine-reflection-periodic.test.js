@@ -19,9 +19,9 @@
  * number so the contract follows the constant.
  */
 import { describe, it, expect } from 'vitest';
-import { Engine } from '../../../agent/unify/engine.js';
-import { NullTrace } from '../../../agent/unify/debug-trace.js';
-import { TOOL_BATCH_SIZE } from '../../../agent/unify/tool-folding/index.js';
+import { Engine } from '../../../agent/yeaft/engine.js';
+import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
+import { TOOL_BATCH_SIZE } from '../../../agent/yeaft/tool-folding/index.js';
 
 class ScriptedAdapter {
   constructor({ toolUseTurns = TOOL_BATCH_SIZE * 2 } = {}) {

@@ -7,8 +7,8 @@
  * end-to-end rewrite in engine-reflection-integration.test.js.
  */
 import { describe, it, expect } from 'vitest';
-import { runT1Reflection } from '../../../agent/unify/tool-folding/t1-reflector.js';
-import { collapseRangeToReflection } from '../../../agent/unify/tool-folding/index.js';
+import { runT1Reflection } from '../../../agent/yeaft/tool-folding/t1-reflector.js';
+import { collapseRangeToReflection } from '../../../agent/yeaft/tool-folding/index.js';
 
 const fakeAdapter = (textOrError) => ({
   async call(params) {

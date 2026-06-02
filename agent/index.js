@@ -61,7 +61,7 @@ function saveConfig(config) {
 
 const fileConfig = loadConfig();
 
-// task-fix (5-bugs): the Unify web-bridge reads `ctx.CONFIG.yeaftDir`
+// task-fix (5-bugs): the Yeaft web-bridge reads `ctx.CONFIG.yeaftDir`
 // for every group / VP / memory operation. If unset, `path.join(undefined, …)`
 // throws `The "path" argument must be of type string. Received undefined`
 // and the UI surfaces "群组操作失败: …" with a raw node error. Resolve the

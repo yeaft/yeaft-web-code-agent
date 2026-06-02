@@ -228,8 +228,8 @@ export function handleClaudeOutput(store, conversationId, data) {
     stopProcessingWatchdog(store, conversationId);
 
     // Clear per-VP turn tracking if this result belongs to a specific turnId.
-    if (store._currentUnifyTurnId && store.activeVpTurns[store._currentUnifyTurnId]) {
-      const { [store._currentUnifyTurnId]: _removed, ...rest } = store.activeVpTurns;
+    if (store._currentYeaftTurnId && store.activeVpTurns[store._currentYeaftTurnId]) {
+      const { [store._currentYeaftTurnId]: _removed, ...rest } = store.activeVpTurns;
       store.activeVpTurns = rest;
     }
     // ★ 设置防护窗口，防止后续 agent_list 中的 stale processing:true 重新设回

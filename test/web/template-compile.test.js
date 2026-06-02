@@ -3,11 +3,11 @@
  *
  * Background — what went wrong in v0.1.750:
  *
- *   web/components/UnifyPage.js had this dynamic title binding (lines 171-173):
+ *   web/components/YeaftPage.js had this dynamic title binding (lines 171-173):
  *
  *     :title="dreamLastRunRelative
- *       ? ($t('unify.dream.runNow') + '\n' + $t(...))
- *       : ($t('unify.dream.runNow') + '\n' + $t(...))"
+ *       ? ($t('yeaft.dream.runNow') + '\n' + $t(...))
+ *       : ($t('yeaft.dream.runNow') + '\n' + $t(...))"
  *
  *   Because the component's `template:` is itself a JS template literal,
  *   the source-level `\n` got evaluated to a real newline character BEFORE
@@ -15,7 +15,7 @@
  *   literal LF inside a single-quoted JS sub-expression, which Vue's runtime
  *   template compiler tried to emit verbatim into a `new Function(...)`
  *   render-fn body. Result: `SyntaxError: Invalid or unexpected token` at
- *   the unterminated `'` string literal — the entire UnifyPage failed to
+ *   the unterminated `'` string literal — the entire YeaftPage failed to
  *   mount, so opening group mode crashed.
  *
  *   The earlier v0.1.750 patch fixed a separate TDZ in setup(); that TDZ

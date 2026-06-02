@@ -366,23 +366,23 @@ export function handleSyncMessagesResult(store, msg) {
 }
 
 /**
- * Handle a `unify_history_chunk` envelope — the response to
- * `unify_load_more_history`. Unlike Chat-mode's `sync_messages_result`,
- * Unify history doesn't live in a SQLite DB and isn't keyed by
+ * Handle a `yeaft_history_chunk` envelope — the response to
+ * `yeaft_load_more_history`. Unlike Chat-mode's `sync_messages_result`,
+ * Yeaft history doesn't live in a SQLite DB and isn't keyed by
  * `dbMessageId`; the agent computes the page directly from on-disk
  * markdown. The chunk is GUARANTEED to be strictly older than every
- * message currently in `messagesMap[unifyConversationId]` (the cursor
+ * message currently in `messagesMap[yeaftConversationId]` (the cursor
  * was the oldest currently-loaded seq), so prepending at index 0 is
  * always correct.
  *
- * Always clears `unifyLoadingMoreHistory` — even on an empty / error
+ * Always clears `yeaftLoadingMoreHistory` — even on an empty / error
  * chunk — so the spinner doesn't get stuck. Always overwrites
- * `unifyHasMoreHistory` from the server's authoritative value.
+ * `yeaftHasMoreHistory` from the server's authoritative value.
  */
-export function handleUnifyHistoryChunk(store, msg) {
-  const convId = msg.conversationId || store.unifyConversationId;
+export function handleYeaftHistoryChunk(store, msg) {
+  const convId = msg.conversationId || store.yeaftConversationId;
   if (!convId) {
-    store.unifyLoadingMoreHistory = false;
+    store.yeaftLoadingMoreHistory = false;
     return;
   }
   // Stale-chunk guard: between the request fly-out and this chunk landing,
@@ -392,25 +392,25 @@ export function handleUnifyHistoryChunk(store, msg) {
   // separately so accepting this chunk would cross-pollute group history.
   // The chunk's groupId is authoritative — it's stamped by the agent
   // from the request groupId, not from messagesMap state.
-  const activeFilter = store.unifyActiveGroupFilter ?? null;
+  const activeFilter = store.yeaftActiveGroupFilter ?? null;
   const hasChunkGroup = msg.groupId != null;
   if (hasChunkGroup && activeFilter && msg.groupId !== activeFilter) {
     const staleKey = msg.groupId ?? '__all__';
-    if (store.unifyGroupHistoryState) {
-      store.unifyGroupHistoryState = {
-        ...store.unifyGroupHistoryState,
+    if (store.yeaftGroupHistoryState) {
+      store.yeaftGroupHistoryState = {
+        ...store.yeaftGroupHistoryState,
         [staleKey]: {
-          ...(store.unifyGroupHistoryState[staleKey] || {}),
+          ...(store.yeaftGroupHistoryState[staleKey] || {}),
           loading: false,
         },
       };
     }
-    store.unifyLoadingMoreHistory = false;
+    store.yeaftLoadingMoreHistory = false;
     return;
   }
   if (!store.messagesMap[convId]) store.messagesMap[convId] = [];
 
-  // Same visible projection as handleUnifyLoadHistory's bootstrap replay:
+  // Same visible projection as handleYeaftLoadHistory's bootstrap replay:
   // only user / assistant text rows. Reflection, internal, and system-only
   // records may be persisted as role=user, but they are not user-authored UI
   // messages and must never be prepended as user bubbles.
@@ -467,21 +467,21 @@ export function handleUnifyHistoryChunk(store, msg) {
     loaded: true,
     loading: false,
     hasMore: !!msg.hasMore,
-    oldestSeq: (typeof msg.oldestSeq === 'number') ? msg.oldestSeq : store.unifyOldestLoadedSeq,
+    oldestSeq: (typeof msg.oldestSeq === 'number') ? msg.oldestSeq : store.yeaftOldestLoadedSeq,
     count: formatted.length,
   };
-  if (store.unifyGroupHistoryState) {
-    store.unifyGroupHistoryState = {
-      ...store.unifyGroupHistoryState,
+  if (store.yeaftGroupHistoryState) {
+    store.yeaftGroupHistoryState = {
+      ...store.yeaftGroupHistoryState,
       [groupKey]: nextState,
     };
   }
-  const activeKey = store.unifyActiveGroupFilter ?? '__all__';
+  const activeKey = store.yeaftActiveGroupFilter ?? '__all__';
   if (groupKey === activeKey) {
-    store.unifyHasMoreHistory = nextState.hasMore;
+    store.yeaftHasMoreHistory = nextState.hasMore;
     if (typeof msg.oldestSeq === 'number') {
-      store.unifyOldestLoadedSeq = msg.oldestSeq;
+      store.yeaftOldestLoadedSeq = msg.oldestSeq;
     }
-    store.unifyLoadingMoreHistory = false;
+    store.yeaftLoadingMoreHistory = false;
   }
 }

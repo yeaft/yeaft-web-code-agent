@@ -1,7 +1,7 @@
 /**
  * protocolPresets.js — Single source of truth for LLM protocol model presets.
  *
- * Consumed by both Unify Settings (UnifySettings.js) and the legacy
+ * Consumed by both Yeaft Settings (YeaftSettings.js) and the legacy
  * LLM settings tab (LlmTab.js). When a user picks a protocol for a new
  * provider and the models list is empty, these presets are used to
  * pre-fill the field.

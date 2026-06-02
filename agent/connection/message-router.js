@@ -35,9 +35,9 @@ import {
 import { sendToServer, flushMessageBuffer } from './buffer.js';
 import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
-import { getLlmConfig, updateLlmConfig, getUnifySettings, updateUnifySettings, getSearchSettings, updateSearchSettings, fetchTavilyUsage } from '../unify/config-api.js';
-import { fetchModelsDev } from '../unify/llm/models-dev.js';
-import { handleUnifyGroupChat, handleUnifyModeSwitch, handleUnifyModelSwitch, resetUnifySession, handleUnifyLoadHistory, handleUnifyLoadMoreHistory, handleUnifyAbortThread, handleUnifyAbortAll, handleUnifyAbortTurn, handleUnifyVpSubscribe, handleUnifyVpCreate, handleUnifyVpUpdate, handleUnifyVpDelete, handleUnifyVpRead, handleUnifyListGroups, handleUnifyCreateGroup, handleUnifyRenameGroup, handleUnifyUpdateGroup, handleUnifyUpdateGroupConfig, handleUnifyArchiveGroup, handleUnifyDeleteGroup, handleUnifyAddMember, handleUnifyRemoveMember, handleUnifySetDefaultVp, handleUnifyDreamTrigger, handleUnifyFetchToolStats, handleUnifyFetchDebugHistory, broadcastLanguageChange } from '../unify/web-bridge.js';
+import { getLlmConfig, updateLlmConfig, getYeaftSettings, updateYeaftSettings, getSearchSettings, updateSearchSettings, fetchTavilyUsage } from '../yeaft/config-api.js';
+import { fetchModelsDev } from '../yeaft/llm/models-dev.js';
+import { handleYeaftGroupChat, handleYeaftModeSwitch, handleYeaftModelSwitch, resetYeaftSession, handleYeaftLoadHistory, handleYeaftLoadMoreHistory, handleYeaftAbortThread, handleYeaftAbortAll, handleYeaftAbortTurn, handleYeaftVpSubscribe, handleYeaftVpCreate, handleYeaftVpUpdate, handleYeaftVpDelete, handleYeaftVpRead, handleYeaftListGroups, handleYeaftCreateGroup, handleYeaftRenameGroup, handleYeaftUpdateGroup, handleYeaftUpdateGroupConfig, handleYeaftArchiveGroup, handleYeaftDeleteGroup, handleYeaftAddMember, handleYeaftRemoveMember, handleYeaftSetDefaultVp, handleYeaftDreamTrigger, handleYeaftFetchToolStats, handleYeaftFetchDebugHistory, broadcastLanguageChange } from '../yeaft/web-bridge.js';
 
 export async function handleMessage(msg) {
   switch (msg.type) {
@@ -373,27 +373,29 @@ export async function handleMessage(msg) {
       break;
     }
 
-    // task-318: Unify runtime settings (thread concurrency + auto-archive).
-    // Read/write the nested `unify` section of config.json — LLM fields
-    // untouched. On update we broadcast a `unify_settings_updated` event
+    // task-318: Yeaft runtime settings (thread concurrency + auto-archive).
+    // Read/write the nested `yeaft` section of config.json — LLM fields
+    // untouched. On update we broadcast a `yeaft_settings_updated` event
     // so the UI reflects the new values and in-process consumers
     // (ThreadEngineRegistry, ThreadStore) can reload their caps.
+    case 'get_yeaft_settings':
     case 'get_unify_settings': {
-      const settings = getUnifySettings(ctx.CONFIG?.yeaftDir);
-      sendToServer({ type: 'unify_settings', ...settings });
+      const settings = getYeaftSettings(ctx.CONFIG?.yeaftDir);
+      sendToServer({ type: 'yeaft_settings', ...settings });
       break;
     }
 
+    case 'update_yeaft_settings':
     case 'update_unify_settings': {
-      const result = updateUnifySettings(msg.settings || msg.config || {}, ctx.CONFIG?.yeaftDir);
+      const result = updateYeaftSettings(msg.settings || msg.config || {}, ctx.CONFIG?.yeaftDir);
       // Let live consumers pick up the new caps without a session restart.
       // The registry/store are created per-session; we update the exported
       // accessors so subsequent dispatches see the new values.
-      if (!result.error && ctx.unifyRuntimeSettings) {
-        ctx.unifyRuntimeSettings.maxConcurrentThreads = result.maxConcurrentThreads;
-        ctx.unifyRuntimeSettings.autoArchiveIdleDays = result.autoArchiveIdleDays;
+      if (!result.error && ctx.yeaftRuntimeSettings) {
+        ctx.yeaftRuntimeSettings.maxConcurrentThreads = result.maxConcurrentThreads;
+        ctx.yeaftRuntimeSettings.autoArchiveIdleDays = result.autoArchiveIdleDays;
       }
-      sendToServer({ type: 'unify_settings_updated', ...result });
+      sendToServer({ type: 'yeaft_settings_updated', ...result });
       break;
     }
 
@@ -420,123 +422,150 @@ export async function handleMessage(msg) {
       break;
     }
 
-    // Unify — single conversation backed by the default group.
+    // Yeaft — single conversation backed by the default group.
+    case 'yeaft_group_chat':
     case 'unify_group_chat':
-      await handleUnifyGroupChat(msg);
+      await handleYeaftGroupChat(msg);
       break;
 
+    case 'yeaft_load_history':
     case 'unify_load_history':
-      await handleUnifyLoadHistory(msg);
+      await handleYeaftLoadHistory(msg);
       break;
 
+    case 'yeaft_load_more_history':
     case 'unify_load_more_history':
-      await handleUnifyLoadMoreHistory(msg);
+      await handleYeaftLoadMoreHistory(msg);
       break;
 
+    case 'yeaft_mode_switch':
     case 'unify_mode_switch':
-      handleUnifyModeSwitch(msg);
+      handleYeaftModeSwitch(msg);
       break;
 
+    case 'yeaft_model_switch':
     case 'unify_model_switch':
-      handleUnifyModelSwitch(msg);
+      handleYeaftModelSwitch(msg);
       break;
 
+    case 'yeaft_reset':
     case 'unify_reset':
-      await resetUnifySession();
+      await resetYeaftSession();
       break;
 
+    case 'yeaft_abort_thread':
     case 'unify_abort_thread':
       // task-325c: user-initiated abort of an in-flight query. The
       // legacy `threadId` field on the payload is accepted but ignored
       // (H2.f.5: single-conversation model).
-      handleUnifyAbortThread(msg);
+      handleYeaftAbortThread(msg);
       break;
 
+    case 'yeaft_abort_all':
     case 'unify_abort_all':
       // task-325c: user-initiated abort of ALL in-flight queries across
-      // every thread. Always emits `unify_aborted` ack.
-      handleUnifyAbortAll();
+      // every thread. Always emits `yeaft_aborted` ack.
+      handleYeaftAbortAll();
       break;
 
+    case 'yeaft_abort_turn':
     case 'unify_abort_turn':
       // Per-VP stop: abort a single VP turn by turnId.
-      handleUnifyAbortTurn(msg);
+      handleYeaftAbortTurn(msg);
       break;
 
     // task-334-ui-a: VP library subscribe — replies with one-shot
     // vp_snapshot event. Live diff (vp_updated/vp_removed) deferred to 334h.
+    case 'yeaft_vp_subscribe':
     case 'unify_vp_subscribe':
-      handleUnifyVpSubscribe(msg);
+      handleYeaftVpSubscribe(msg);
       break;
 
     // task-334-ui-g: VP CRUD (create / update / delete / read-single).
     // All four reply via `vp_crud_result`; VpLoader's rescan emits the
     // authoritative `vp_updated` / `vp_removed` events so the store stays
     // in sync without a bespoke ack path.
+    case 'yeaft_vp_create':
     case 'unify_vp_create':
-      handleUnifyVpCreate(msg);
+      handleYeaftVpCreate(msg);
       break;
+    case 'yeaft_vp_update':
     case 'unify_vp_update':
-      handleUnifyVpUpdate(msg);
+      handleYeaftVpUpdate(msg);
       break;
+    case 'yeaft_vp_delete':
     case 'unify_vp_delete':
-      handleUnifyVpDelete(msg);
+      handleYeaftVpDelete(msg);
       break;
+    case 'yeaft_vp_read':
     case 'unify_vp_read':
-      handleUnifyVpRead(msg);
+      handleYeaftVpRead(msg);
       break;
 
     // task-334m: Group CRUD + D1 seed wiring (§Δ10 334m + R6 §Δ31.2).
     // All handlers reply via `group_crud_result`; mutating ops additionally
     // emit `group_roster_changed` (add/remove/default) or
     // `group_list_updated` (create/rename/archive) for listener sync.
+    case 'yeaft_list_groups':
     case 'unify_list_groups':
-      handleUnifyListGroups(msg);
+      handleYeaftListGroups(msg);
       break;
+    case 'yeaft_create_group':
     case 'unify_create_group':
-      handleUnifyCreateGroup(msg);
+      handleYeaftCreateGroup(msg);
       break;
+    case 'yeaft_rename_group':
     case 'unify_rename_group':
-      handleUnifyRenameGroup(msg);
+      handleYeaftRenameGroup(msg);
       break;
+    case 'yeaft_update_group':
     case 'unify_update_group':
-      handleUnifyUpdateGroup(msg);
+      handleYeaftUpdateGroup(msg);
       break;
+    case 'yeaft_update_group_config':
     case 'unify_update_group_config':
-      handleUnifyUpdateGroupConfig(msg);
+      handleYeaftUpdateGroupConfig(msg);
       break;
+    case 'yeaft_archive_group':
     case 'unify_archive_group':
-      handleUnifyArchiveGroup(msg);
+      handleYeaftArchiveGroup(msg);
       break;
+    case 'yeaft_delete_group':
     case 'unify_delete_group':
-      handleUnifyDeleteGroup(msg);
+      handleYeaftDeleteGroup(msg);
       break;
+    case 'yeaft_add_member':
     case 'unify_add_member':
-      handleUnifyAddMember(msg);
+      handleYeaftAddMember(msg);
       break;
+    case 'yeaft_remove_member':
     case 'unify_remove_member':
-      handleUnifyRemoveMember(msg);
+      handleYeaftRemoveMember(msg);
       break;
+    case 'yeaft_set_default_vp':
     case 'unify_set_default_vp':
-      handleUnifySetDefaultVp(msg);
+      handleYeaftSetDefaultVp(msg);
       break;
 
     // wave-6b: manual dream trigger from VP detail page
+    case 'yeaft_dream_trigger':
     case 'unify_dream_trigger':
-      await handleUnifyDreamTrigger(msg);
+      await handleYeaftDreamTrigger(msg);
       break;
 
-    // 2026-05-13: per-tool call counters for the Unify debug drawer.
+    // 2026-05-13: per-tool call counters for the Yeaft debug drawer.
+    case 'yeaft_fetch_tool_stats':
     case 'unify_fetch_tool_stats':
-      await handleUnifyFetchToolStats(msg);
+      await handleYeaftFetchToolStats(msg);
       break;
 
-    // fix-vp-multi-thread (bug 4): hydrate the Unify debug panel from
+    // fix-vp-multi-thread (bug 4): hydrate the Yeaft debug panel from
     // the persistent SQLite trace. Without this, the panel only shows
     // turns that happened after the panel was opened — every previous
     // turn is invisible.
+    case 'yeaft_fetch_debug_history':
     case 'unify_fetch_debug_history':
-      await handleUnifyFetchDebugHistory(msg);
+      await handleYeaftFetchDebugHistory(msg);
       break;
 
     // Expert roles definition (for ExpertPanel detail view)

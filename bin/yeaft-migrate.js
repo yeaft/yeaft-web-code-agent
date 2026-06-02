@@ -18,11 +18,11 @@
 
 import { homedir } from 'os';
 import { join } from 'path';
-import { runMigration } from '../agent/unify/migration/v0-to-v1.js';
+import { runMigration } from '../agent/yeaft/migration/v0-to-v1.js';
 import {
   applyR5ToR6Migration,
   rollbackR5ToR6Migration,
-} from '../agent/unify/memory/migrate-r5-to-r6.js';
+} from '../agent/yeaft/memory/migrate-r5-to-r6.js';
 
 function parseArgs(argv) {
   const opts = {

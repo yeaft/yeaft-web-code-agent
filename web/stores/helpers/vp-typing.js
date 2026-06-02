@@ -1,12 +1,12 @@
 // Helper for the per-conversation, per-VP typing-indicator counter.
 //
-// `unifyVpTyping` lives on the chat store as a nested map:
+// `yeaftVpTyping` lives on the chat store as a nested map:
 //
 //   { [conversationId]: { [vpId]: refCount } }
 //
-// The nesting is what isolates Unify typing state from the Chat view —
+// The nesting is what isolates Yeaft typing state from the Chat view —
 // when the user is in a Chat tab, `currentConversation` is a chat conv id,
-// the lookup yields an empty inner object, and no Unify typing rows or
+// the lookup yields an empty inner object, and no Yeaft typing rows or
 // dots leak across the mode boundary. (Bug A in PR #698 follow-up.)
 //
 // `vp_typing_start` increments the counter; `vp_typing_end` decrements
@@ -73,7 +73,7 @@ export function getVpTyping(root, conversationId, vpId) {
 /**
  * Return the list of vpIds currently typing in a given conversation.
  * Empty array when conversation is unknown — exactly the property that
- * keeps Chat-view lookups quiet while Unify is mid-stream.
+ * keeps Chat-view lookups quiet while Yeaft is mid-stream.
  *
  * @param {Record<string, Record<string, number>>} root
  * @param {string|null|undefined} conversationId

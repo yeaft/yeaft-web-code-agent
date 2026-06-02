@@ -1,7 +1,7 @@
 /**
  * MessageList history pagination scroll anchoring.
  *
- * Group/Unify history prepends older messages at the top of the list. The
+ * Group/Yeaft history prepends older messages at the top of the list. The
  * viewport must keep the same visible row after the document grows above it,
  * both for automatic near-top loading and the explicit "load more" affordance.
  */
@@ -29,12 +29,12 @@ describe('MessageList history pagination scroll anchoring', () => {
 
     const scrollSegment = src.slice(src.indexOf('const onScroll = () => {'), src.indexOf('const scrollToBottom = () => {'));
     expect(scrollSegment).toContain('preserveScrollAnchorDuringLoad(');
-    expect(scrollSegment).toContain('store.loadMoreUnifyHistory()');
+    expect(scrollSegment).toContain('store.loadMoreYeaftHistory()');
     expect(scrollSegment).toContain('store.loadMoreMessages()');
 
     const clickSegment = src.slice(src.indexOf('const onClickLoadMore = () => {'), src.indexOf('return {', src.indexOf('const onClickLoadMore = () => {')));
     expect(clickSegment).toContain('preserveScrollAnchorDuringLoad(');
-    expect(clickSegment).toContain('store.loadMoreUnifyHistory()');
+    expect(clickSegment).toContain('store.loadMoreYeaftHistory()');
     expect(clickSegment).toContain('store.loadMoreMessages()');
   });
 

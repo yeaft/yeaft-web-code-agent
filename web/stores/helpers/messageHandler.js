@@ -19,7 +19,7 @@ import {
   handleConversationRefresh,
   handleExecutionCancelled,
   handleSyncMessagesResult,
-  handleUnifyHistoryChunk
+  handleYeaftHistoryChunk
 } from './handlers/conversationHandler.js';
 
 export function handleMessage(store, msg) {
@@ -137,35 +137,35 @@ export function handleMessage(store, msg) {
       store.handleClaudeOutput(msg.conversationId, msg.data);
       break;
 
-    case 'unify_output':
-      store.handleUnifyOutput(msg);
+    case 'yeaft_output':
+      store.handleYeaftOutput(msg);
       break;
 
-    case 'unify_history_chunk':
-      handleUnifyHistoryChunk(store, msg);
+    case 'yeaft_history_chunk':
+      handleYeaftHistoryChunk(store, msg);
       break;
 
     // 2026-05-16: tool-usage stats reply from the agent. The agent
     // emits this as a BARE top-level message (see
-    // `agent/unify/web-bridge.js#handleUnifyFetchToolStats` —
-    // `sendToServer({type:'unify_tool_stats', ...})` — NOT wrapped in
-    // a `unify_output` envelope), so we MUST route it from the
+    // `agent/yeaft/web-bridge.js#handleYeaftFetchToolStats` —
+    // `sendToServer({type:'yeaft_tool_stats', ...})` — NOT wrapped in
+    // a `yeaft_output` envelope), so we MUST route it from the
     // top-level switch. A previous version put the case inside
-    // `handleUnifyOutput`'s inner `switch (event.type)`, which was
+    // `handleYeaftOutput`'s inner `switch (event.type)`, which was
     // unreachable for this protocol shape — the reply was silently
-    // dropped, the 10-second timeout in `fetchUnifyToolStats` always
+    // dropped, the 10-second timeout in `fetchYeaftToolStats` always
     // fired, and the drawer rendered "Tool stats are unavailable
     // right now" even though the agent had answered in <100ms.
     //
     // Server may also synthesize a fast-fail reply with
     // `{snapshot:{}, registered:[], unused:[], notice}` when no
     // agent is selected / available / online — see
-    // `server/handlers/client-conversation.js#emptyUnifyToolStats`.
+    // `server/handlers/client-conversation.js#emptyYeaftToolStats`.
     // Both paths land here; the store distinguishes via `notice`.
-    case 'unify_tool_stats': {
-      if (store._fetchUnifyToolStatsTimer) {
-        clearTimeout(store._fetchUnifyToolStatsTimer);
-        store._fetchUnifyToolStatsTimer = null;
+    case 'yeaft_tool_stats': {
+      if (store._fetchYeaftToolStatsTimer) {
+        clearTimeout(store._fetchYeaftToolStatsTimer);
+        store._fetchYeaftToolStatsTimer = null;
       }
       // `typeof [] === 'object'` — be specific about plain-object so an
       // accidental array payload doesn't surface as numeric-keyed rows.
@@ -173,7 +173,7 @@ export function handleMessage(store, msg) {
       const snapshot = rawSnap && typeof rawSnap === 'object' && !Array.isArray(rawSnap)
         ? rawSnap
         : {};
-      store.unifyToolStats = {
+      store.yeaftToolStats = {
         snapshot,
         registered: Array.isArray(msg?.registered) ? msg.registered : [],
         unused: Array.isArray(msg?.unused) ? msg.unused : [],
@@ -181,48 +181,48 @@ export function handleMessage(store, msg) {
         notice: typeof msg?.notice === 'string' ? msg.notice : null,
         fetchedAt: Date.now(),
       };
-      store.unifyToolStatsLoading = false;
+      store.yeaftToolStatsLoading = false;
       break;
     }
 
-    // fix-vp-multi-thread (bug 4): hydrate the Unify debug panel from the
+    // fix-vp-multi-thread (bug 4): hydrate the Yeaft debug panel from the
     // persistent SQLite trace. The agent replies via a bare top-level
-    // `unify_debug_history` message (mirrors `unify_tool_stats` shape —
-    // NOT a `unify_output` envelope), so we route it from the top-level
+    // `yeaft_debug_history` message (mirrors `yeaft_tool_stats` shape —
+    // NOT a `yeaft_output` envelope), so we route it from the top-level
     // switch here. Without this, the debug panel only shows turns that
     // happened after the panel was opened — every previous turn is
-    // invisible even though `~/.yeaft/cache/unify-debug-trace.sqlite`
+    // invisible even though `~/.yeaft/cache/yeaft-debug-trace.sqlite`
     // has them.
-    case 'unify_debug_history': {
-      if (store._fetchUnifyDebugHistoryTimer) {
-        clearTimeout(store._fetchUnifyDebugHistoryTimer);
-        store._fetchUnifyDebugHistoryTimer = null;
+    case 'yeaft_debug_history': {
+      if (store._fetchYeaftDebugHistoryTimer) {
+        clearTimeout(store._fetchYeaftDebugHistoryTimer);
+        store._fetchYeaftDebugHistoryTimer = null;
       }
       const loops = Array.isArray(msg?.loops) ? msg.loops : [];
       const turns = Array.isArray(msg?.turns) ? msg.turns : [];
       const dreamEvents = Array.isArray(msg?.dreamEvents) ? msg.dreamEvents : [];
       // Merge into existing in-memory state. Live-streamed turns/loops
-      // (received via `unify_output` while the panel was open) win because
+      // (received via `yeaft_output` while the panel was open) win because
       // they may carry richer in-flight detail (e.g. memoryUsed/Adjust
       // attached after turn_open). Hydrated rows backfill anything we
       // never saw. The order is computed as hydrated loops first
       // (oldest-first per fetchRecentDebugHistory's `.reverse()`), then
       // any live turn IDs we already had appended at the tail.
-      if (!store.unifyDebugTurnsById || typeof store.unifyDebugTurnsById !== 'object') {
-        store.unifyDebugTurnsById = {};
+      if (!store.yeaftDebugTurnsById || typeof store.yeaftDebugTurnsById !== 'object') {
+        store.yeaftDebugTurnsById = {};
       }
-      if (!Array.isArray(store.unifyDebugLoops)) {
-        store.unifyDebugLoops = [];
+      if (!Array.isArray(store.yeaftDebugLoops)) {
+        store.yeaftDebugLoops = [];
       }
-      if (!Array.isArray(store.unifyDebugTurnOrder)) {
-        store.unifyDebugTurnOrder = [];
+      if (!Array.isArray(store.yeaftDebugTurnOrder)) {
+        store.yeaftDebugTurnOrder = [];
       }
       // C1 fix: keys are `turnId`, NOT `id`. Both turn records (from
       // fetchRecentDebugHistory) and live `turn_open` events use `turnId`
       // throughout the codebase — see chat.js:1041 and the Turn shape in
-      // unifyDebugTurnsById's selectors. Reading `turn.id` here would
+      // yeaftDebugTurnsById's selectors. Reading `turn.id` here would
       // silently drop every hydrated row.
-      const nextTurnsById = { ...store.unifyDebugTurnsById };
+      const nextTurnsById = { ...store.yeaftDebugTurnsById };
       for (const turn of turns) {
         const tid = turn?.turnId;
         if (!tid) continue;
@@ -237,12 +237,12 @@ export function handleMessage(store, msg) {
           nextTurnsById[tid] = turn;
         }
       }
-      store.unifyDebugTurnsById = nextTurnsById;
+      store.yeaftDebugTurnsById = nextTurnsById;
       // I1 fix: merge loops by turnId+loopNumber instead of clobbering.
       // Live-streamed loops collected between request-issued and
       // reply-arrived would otherwise be silently overwritten.
       const loopKey = (l) => `${l?.turnId || ''}#${l?.loopNumber || 0}`;
-      const liveLoops = store.unifyDebugLoops;
+      const liveLoops = store.yeaftDebugLoops;
       const haveKeys = new Set(liveLoops.map(loopKey));
       const mergedLoops = [];
       for (const hydrated of loops) {
@@ -254,7 +254,7 @@ export function handleMessage(store, msg) {
       // Append the live loops in their existing order so anything
       // observed in real time still shows up exactly once.
       for (const live of liveLoops) mergedLoops.push(live);
-      store.unifyDebugLoops = mergedLoops;
+      store.yeaftDebugLoops = mergedLoops;
       // Rebuild turn order: hydrated turns first (in arrival order),
       // then any live turn IDs not present in hydration.
       const seenIds = new Set();
@@ -265,12 +265,12 @@ export function handleMessage(store, msg) {
         seenIds.add(tid);
         mergedOrder.push(tid);
       }
-      for (const tid of store.unifyDebugTurnOrder) {
+      for (const tid of store.yeaftDebugTurnOrder) {
         if (!tid || seenIds.has(tid)) continue;
         seenIds.add(tid);
         mergedOrder.push(tid);
       }
-      store.unifyDebugTurnOrder = mergedOrder;
+      store.yeaftDebugTurnOrder = mergedOrder;
       for (const evt of dreamEvents) {
         if (!evt) continue;
         let scope = null;
@@ -278,13 +278,13 @@ export function handleMessage(store, msg) {
         else if (typeof evt.groupId === 'string' && evt.groupId) scope = `group/${evt.groupId}`;
         else scope = '*';
         if (typeof store._appendDreamEvent === 'function') store._appendDreamEvent(scope, evt);
-        if (evt.type === 'dream_progress' && typeof store.handleUnifyOutput === 'function') {
-          store.handleUnifyOutput({ event: evt });
+        if (evt.type === 'dream_progress' && typeof store.handleYeaftOutput === 'function') {
+          store.handleYeaftOutput({ event: evt });
         }
       }
-      store.unifyDebugHistoryLoading = false;
-      store.unifyDebugHistoryError = typeof msg?.error === 'string' ? msg.error : null;
-      store.unifyDebugHistoryFetchedAt = Date.now();
+      store.yeaftDebugHistoryLoading = false;
+      store.yeaftDebugHistoryError = typeof msg?.error === 'string' ? msg.error : null;
+      store.yeaftDebugHistoryFetchedAt = Date.now();
       break;
     }
 
@@ -660,11 +660,11 @@ export function handleMessage(store, msg) {
       }
       break;
 
-    // task-318: Unify runtime settings (thread cap + auto-archive days)
-    case 'unify_settings':
-    case 'unify_settings_updated':
+    // task-318: Yeaft runtime settings (thread cap + auto-archive days)
+    case 'yeaft_settings':
+    case 'yeaft_settings_updated':
       if (msg.agentId) {
-        store.unifySettings[msg.agentId] = {
+        store.yeaftSettings[msg.agentId] = {
           maxConcurrentThreads: msg.maxConcurrentThreads ?? 6,
           autoArchiveIdleDays: msg.autoArchiveIdleDays ?? 30,
           error: msg.error || null,
@@ -674,7 +674,7 @@ export function handleMessage(store, msg) {
       }
       break;
 
-    // Search settings — Search tab in UnifySettings. The store's
+    // Search settings — Search tab in YeaftSettings. The store's
     // `loadSearchSettings` / `updateSearchSettings` register one-shot
     // resolvers under `_searchPending`; we pop the matching resolver
     // here. We always update `searchSettings` itself too so any

@@ -70,8 +70,8 @@ export function resetProcessingWatchdog(store, conversationId) {
       delete store.sessionHealth[conversationId];
     }
     // Restart the correct watchdog type
-    if (store._unifyWatchdogConvs?.has(conversationId)) {
-      startUnifyWatchdog(store, conversationId);
+    if (store._yeaftWatchdogConvs?.has(conversationId)) {
+      startYeaftWatchdog(store, conversationId);
     } else {
       startProcessingWatchdog(store, conversationId);
     }
@@ -99,8 +99,8 @@ export function stopProcessingWatchdog(store, conversationId) {
   if (store._autoRefreshed?.[conversationId]) {
     delete store._autoRefreshed[conversationId];
   }
-  // Clean up Unify watchdog tracking
-  store._unifyWatchdogConvs?.delete(conversationId);
+  // Clean up Yeaft watchdog tracking
+  store._yeaftWatchdogConvs?.delete(conversationId);
 }
 
 /**
@@ -133,7 +133,7 @@ export function startLegacyWatchdog(store, conversationId) {
 }
 
 /**
- * Unify watchdog — simpler than ping-based watchdog since Unify
+ * Yeaft watchdog — simpler than ping-based watchdog since Yeaft
  * doesn't support ping_session. After 150s of silence (no events
  * received), force-clears processing state. The 150s is deliberately
  * longer than the 120s agent-side query timeout, so the agent aborts
@@ -142,15 +142,15 @@ export function startLegacyWatchdog(store, conversationId) {
  * Reuses the same _processingWatchdogs slot so resetProcessingWatchdog
  * (called from handleClaudeOutput on every event) keeps resetting it.
  */
-export function startUnifyWatchdog(store, conversationId) {
+export function startYeaftWatchdog(store, conversationId) {
   stopProcessingWatchdog(store, conversationId);
   if (!store._processingWatchdogs) store._processingWatchdogs = {};
-  // Track this as a Unify watchdog so resetProcessingWatchdog restarts the correct type
-  if (!store._unifyWatchdogConvs) store._unifyWatchdogConvs = new Set();
-  store._unifyWatchdogConvs.add(conversationId);
+  // Track this as a Yeaft watchdog so resetProcessingWatchdog restarts the correct type
+  if (!store._yeaftWatchdogConvs) store._yeaftWatchdogConvs = new Set();
+  store._yeaftWatchdogConvs.add(conversationId);
   store._processingWatchdogs[conversationId] = setTimeout(() => {
     if (store.processingConversations[conversationId]) {
-      console.warn(`[Unify Watchdog] Force-clearing stale processing state for ${conversationId} after 150s`);
+      console.warn(`[Yeaft Watchdog] Force-clearing stale processing state for ${conversationId} after 150s`);
       delete store.processingConversations[conversationId];
       const status = store.executionStatusMap[conversationId];
       if (status) status.currentTool = null;
