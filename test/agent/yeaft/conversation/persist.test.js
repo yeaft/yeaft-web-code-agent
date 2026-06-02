@@ -128,11 +128,11 @@ describe('ConversationStore', () => {
   });
 
   describe('constructor', () => {
-    it('should create chat and group history directories', () => {
+    it('should create chat and groups root but not the obsolete flat group history directory', () => {
       expect(existsSync(join(TEST_DIR, 'chat', 'messages'))).toBe(true);
       expect(existsSync(join(TEST_DIR, 'chat', 'cold'))).toBe(true);
-      expect(existsSync(join(TEST_DIR, 'group', 'messages'))).toBe(true);
-      expect(existsSync(join(TEST_DIR, 'group', 'cold'))).toBe(true);
+      expect(existsSync(join(TEST_DIR, 'groups'))).toBe(true);
+      expect(existsSync(join(TEST_DIR, 'group'))).toBe(false);
       expect(existsSync(join(TEST_DIR, 'conversation'))).toBe(false);
     });
   });
@@ -166,10 +166,10 @@ describe('ConversationStore', () => {
   });
 
 
-    it('should write group messages under group history', () => {
+    it("should write group messages under that group's conversation history", () => {
       const msg = store.append({ role: 'user', content: 'Hello group', groupId: 'grp_fun' });
       expect(msg.id).toBe('m0001');
-      expect(existsSync(join(TEST_DIR, 'group', 'messages', 'm0001.md'))).toBe(true);
+      expect(existsSync(join(TEST_DIR, 'groups', 'grp_fun', 'conversation', 'messages', 'm0001.md'))).toBe(true);
       expect(existsSync(join(TEST_DIR, 'chat', 'messages', 'm0001.md'))).toBe(false);
       expect(store.loadRecent(10)).toEqual([]);
       expect(store.loadRecentByGroup('grp_fun', 10)).toHaveLength(1);
@@ -183,11 +183,11 @@ describe('ConversationStore', () => {
       const groupMsg = chatStore.append({ role: 'user', content: 'legacy group', groupId: 'grp_fun' });
       // Move freshly-written records into the legacy layout to simulate an
       // existing user profile from versions before ~/.yeaft/chat and
-      // ~/.yeaft/group were split.
+      // per-group conversation directories were split.
       const chatRaw = readFileSync(join(TEST_DIR, 'chat', 'messages', `${chatMsg.id}.md`), 'utf8');
-      const groupRaw = readFileSync(join(TEST_DIR, 'group', 'messages', `${groupMsg.id}.md`), 'utf8');
+      const groupRaw = readFileSync(join(TEST_DIR, 'groups', 'grp_fun', 'conversation', 'messages', `${groupMsg.id}.md`), 'utf8');
       rmSync(join(TEST_DIR, 'chat', 'messages', `${chatMsg.id}.md`));
-      rmSync(join(TEST_DIR, 'group', 'messages', `${groupMsg.id}.md`));
+      rmSync(join(TEST_DIR, 'groups', 'grp_fun', 'conversation', 'messages', `${groupMsg.id}.md`));
       writeFileSync(join(legacyMessages, `${chatMsg.id}.md`), chatRaw);
       writeFileSync(join(legacyMessages, `${groupMsg.id}.md`), groupRaw);
 
@@ -340,7 +340,7 @@ describe('ConversationStore', () => {
       expect(store.loadAll().map(m => m.content).sort()).toEqual(['B1', 'untagged']);
       expect(existsSync(join(TEST_DIR, 'chat', 'messages', 'm0001.md'))).toBe(false);
       expect(existsSync(join(TEST_DIR, 'chat', 'messages', 'm0002.md'))).toBe(false);
-      expect(existsSync(join(TEST_DIR, 'group', 'messages', 'm0003.md'))).toBe(true);
+      expect(existsSync(join(TEST_DIR, 'groups', 'grp_b', 'conversation', 'messages', 'm0003.md'))).toBe(true);
       expect(existsSync(join(TEST_DIR, 'chat', 'messages', 'm0004.md'))).toBe(true);
     });
 

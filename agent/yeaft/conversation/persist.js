@@ -2,7 +2,7 @@
  * persist.js — Conversation message persistence
  *
  * Each message is stored as a .md file with YAML frontmatter in
- * ~/.yeaft/chat/messages/ or ~/.yeaft/group/messages/. Design: zero JSON, all Markdown.
+ * ~/.yeaft/chat/messages/ or ~/.yeaft/groups/<groupId>/conversation/messages/. Design: zero JSON, all Markdown.
  *
  * Message format:
  *   ---
@@ -18,7 +18,7 @@
  * Reference: yeaft-yeaft-core-systems.md §4.1, yeaft-yeaft-brainstorm-v5.1.md
  */
 
-import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, renameSync, unlinkSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, renameSync, unlinkSync, statSync } from 'fs';
 import { join, basename } from 'path';
 import { isPermissionError } from '../init.js';
 import { pairSanitize } from '../pair-sanitize.js';
@@ -328,34 +328,30 @@ export function parseMessage(raw) {
  *     messages/
  *     cold/
  *     blobs/
- *   group/           — group mode history
- *     index.md
- *     compact.md
+ *   groups/<groupId>/conversation/
+ *     compact/
  *     messages/
  *     cold/
  *     blobs/
  *
  * Legacy compatibility: ~/.yeaft/conversation is read as an old mixed store.
- * New writes are split by mode: records with groupId go to group/, all others
- * go to chat/.
+ * New writes are split by mode: records with groupId go to
+ * groups/<groupId>/conversation/, all others go to chat/.
  */
 export class ConversationStore {
   #dir;         // root dir (e.g. ~/.yeaft)
   #chatDir;     // ~/.yeaft/chat
-  #groupDir;    // ~/.yeaft/group
+  #groupsDir;   // ~/.yeaft/groups
   #legacyConvDir; // ~/.yeaft/conversation (read-only compatibility)
   #convDir;     // default thread dir root: ~/.yeaft/chat
   #msgDir;      // default hot messages dir: ~/.yeaft/chat/messages
   #coldDir;     // default cold messages dir: ~/.yeaft/chat/cold
   #indexPath;   // ~/.yeaft/chat/index.md
   #compactPath; // ~/.yeaft/chat/compact.md
-  #compactScopedDir; // ~/.yeaft/group/compact/  (per-(group,vp))
   #legacyCompactPath;
   #legacyCompactScopedDir;
   #chatMsgDir;
   #chatColdDir;
-  #groupMsgDir;
-  #groupColdDir;
   #legacyMsgDir;
   #legacyColdDir;
   #nextSeq;     // next message sequence number across chat/group/legacy
@@ -367,7 +363,7 @@ export class ConversationStore {
   constructor(dir) {
     this.#dir = dir;
     this.#chatDir = join(dir, 'chat');
-    this.#groupDir = join(dir, 'group');
+    this.#groupsDir = join(dir, 'groups');
     this.#legacyConvDir = join(dir, 'conversation');
 
     this.#convDir = this.#chatDir;
@@ -379,23 +375,23 @@ export class ConversationStore {
 
     this.#chatMsgDir = this.#msgDir;
     this.#chatColdDir = this.#coldDir;
-    this.#groupMsgDir = join(this.#groupDir, 'messages');
-    this.#groupColdDir = join(this.#groupDir, 'cold');
     this.#legacyMsgDir = join(this.#legacyConvDir, 'messages');
     this.#legacyColdDir = join(this.#legacyConvDir, 'cold');
 
-    // Per-(groupId, vpId) compact summary files live in group mode. The legacy
-    // ~/.yeaft/conversation/compact directory is read for compatibility.
-    this.#compactScopedDir = join(this.#groupDir, 'compact');
+    // Per-(groupId, vpId) compact summary files live under that group's
+    // conversation directory. The legacy ~/.yeaft/conversation/compact directory
+    // is read for compatibility.
     this.#legacyCompactScopedDir = join(this.#legacyConvDir, 'compact');
     this.#nextSeq = null;
     this.#nextSeqByThread = new Map();
 
-    // Ensure new chat/group directories exist (graceful on permission errors).
-    // The legacy conversation directory is never created by new versions.
+    // Ensure new chat and group-root directories exist (graceful on permission
+    // errors). Per-group conversation directories are created lazily once a
+    // groupId is known. The legacy conversation directory is never created by
+    // new versions.
     for (const d of [
       this.#chatDir, join(this.#chatDir, 'blobs'), this.#chatMsgDir, this.#chatColdDir,
-      this.#groupDir, join(this.#groupDir, 'blobs'), this.#groupMsgDir, this.#groupColdDir, this.#compactScopedDir,
+      this.#groupsDir,
     ]) {
       try {
         if (!existsSync(d)) mkdirSync(d, { recursive: true, mode: 0o755 });
@@ -539,16 +535,19 @@ export class ConversationStore {
   /**
    * Sanitize one id (groupId or vpId) into a safe filename component.
    * Anything outside `[A-Za-z0-9._-]` collapses to `_`; max 120 chars.
-   * The result is only ever used as a basename joined to `compactScopedDir`
-   * — path traversal is blocked by the basename-only `join`, not by the
-   * regex (a literal `..` stays as `..` here and becomes part of a
-   * regular filename via the `__` separator + `.md` suffix).
+   * For directory path components, use `#safeDirComponent` instead; this
+   * helper intentionally preserves historical compact-summary filenames.
    *
    * @param {string} s
    * @returns {string}
    */
   #safeIdComponent(s) {
     return String(s).replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 120);
+  }
+
+  #safeDirComponent(s) {
+    const safe = this.#safeIdComponent(s).replace(/^\.+$/, '_');
+    return safe || '_';
   }
 
   /**
@@ -562,7 +561,8 @@ export class ConversationStore {
    */
   #scopedCompactPath(groupId, vpId) {
     if (!groupId || !vpId) return null;
-    return join(this.#compactScopedDir, `${this.#safeIdComponent(groupId)}__${this.#safeIdComponent(vpId)}.md`);
+    const compactDir = join(this.#groupConversationDir(groupId, { create: true }), 'compact');
+    return join(compactDir, `${this.#safeIdComponent(vpId)}.md`);
   }
 
   #legacyScopedCompactPath(groupId, vpId) {
@@ -632,12 +632,13 @@ export class ConversationStore {
    */
   hasAnyCompactSummaryForGroup(groupId) {
     if (!groupId) return false;
-    const prefix = `${this.#safeIdComponent(groupId)}__`;
-    for (const dir of [this.#compactScopedDir, this.#legacyCompactScopedDir]) {
+    const compactDir = join(this.#groupConversationDir(groupId), 'compact');
+    for (const dir of [compactDir, this.#legacyCompactScopedDir]) {
       if (!existsSync(dir)) continue;
       try {
         for (const f of readdirSync(dir)) {
-          if (f.startsWith(prefix) && f.endsWith('.md')) return true;
+          if (dir === compactDir && f.endsWith('.md')) return true;
+          if (dir === this.#legacyCompactScopedDir && f.startsWith(`${this.#safeIdComponent(groupId)}__`) && f.endsWith('.md')) return true;
         }
       } catch { /* best-effort */ }
     }
@@ -686,7 +687,7 @@ export class ConversationStore {
    * Clear all messages (hot + cold + compact).
    */
   clear() {
-    for (const dir of [this.#chatMsgDir, this.#chatColdDir, this.#groupMsgDir, this.#groupColdDir]) {
+    for (const dir of [this.#chatMsgDir, this.#chatColdDir, ...this.#groupMessageDirs('messages'), ...this.#groupMessageDirs('cold')]) {
       if (existsSync(dir)) {
         for (const file of readdirSync(dir)) {
           if (file.endsWith('.md')) {
@@ -785,7 +786,7 @@ export class ConversationStore {
    */
   loadRecentByGroup(groupId, turnsLimit = DEFAULT_RECENT_TURNS) {
     if (!groupId) return [];
-    const all = this.#loadGroupMessages();
+    const all = this.#loadGroupMessages(groupId)
     const filtered = all.filter(m => m && m.groupId === groupId);
     if (turnsLimit === Infinity || turnsLimit < 0) return pairSanitize(filtered);
     return pairSanitize(sliceLastNTurns(filtered, turnsLimit));
@@ -828,7 +829,7 @@ export class ConversationStore {
    */
   loadGroupHistoryForVp(groupId, vpId) {
     if (!groupId || !vpId) return [];
-    const all = this.#loadGroupMessages();
+    const all = this.#loadGroupMessages(groupId)
     const out = [];
     for (const m of all) {
       if (!m || m.groupId !== groupId) continue;
@@ -900,8 +901,8 @@ export class ConversationStore {
    */
   loadOlderByGroup(groupId, beforeSeq, turnsLimit = DEFAULT_RECENT_TURNS) {
     if (!groupId) return { messages: [], oldestSeq: null, hasMore: false };
-    const hot = this.#loadGroupHotMessages();
-    const cold = this.#loadGroupColdMessages();
+    const hot = this.#loadGroupHotMessages(groupId);
+    const cold = this.#loadGroupColdMessages(groupId);
     // Cold ids strictly < hot ids by construction → chronological concat.
     const all = [...cold, ...hot];
     const cutoff = Number.isFinite(beforeSeq) ? beforeSeq : Infinity;
@@ -941,8 +942,8 @@ export class ConversationStore {
     if (!groupId || !(turnsLimit > 0)) return { messages: [], oldestSeq: null, hasMore: false };
 
     const cutoff = Number.isFinite(beforeSeq) ? beforeSeq : Infinity;
-    const hot = this.#loadVisibleFromDirsByGroup([this.#groupMsgDir, this.#legacyMsgDir], groupId, cutoff);
-    const cold = this.#loadVisibleFromDirsByGroup([this.#groupColdDir, this.#legacyColdDir], groupId, cutoff);
+    const hot = this.#loadVisibleFromDirsByGroup([...this.#groupMessageDirs('messages', groupId), this.#legacyMsgDir], groupId, cutoff);
+    const cold = this.#loadVisibleFromDirsByGroup([...this.#groupMessageDirs('cold', groupId), this.#legacyColdDir], groupId, cutoff);
     const visible = [...cold, ...hot];
     if (visible.length === 0) return { messages: [], oldestSeq: null, hasMore: false };
 
@@ -969,7 +970,7 @@ export class ConversationStore {
    * @returns {number}
    */
   countHot() {
-    return this.#countFilesInDirs([this.#chatMsgDir, this.#groupMsgDir, this.#legacyMsgDir]);
+    return this.#countFilesInDirs([this.#chatMsgDir, ...this.#groupMessageDirs('messages'), this.#legacyMsgDir]);
   }
 
   /**
@@ -978,7 +979,7 @@ export class ConversationStore {
    * @returns {number}
    */
   countCold() {
-    return this.#countFilesInDirs([this.#chatColdDir, this.#groupColdDir, this.#legacyColdDir]);
+    return this.#countFilesInDirs([this.#chatColdDir, ...this.#groupMessageDirs('cold'), this.#legacyColdDir]);
   }
 
   /**
@@ -1034,7 +1035,7 @@ export class ConversationStore {
   deleteByGroup(groupId) {
     if (!groupId) return 0;
     let removed = 0;
-    for (const dir of [this.#chatMsgDir, this.#chatColdDir, this.#groupMsgDir, this.#groupColdDir, this.#legacyMsgDir, this.#legacyColdDir]) {
+    for (const dir of [this.#chatMsgDir, this.#chatColdDir, ...this.#groupMessageDirs('messages'), ...this.#groupMessageDirs('cold'), this.#legacyMsgDir, this.#legacyColdDir]) {
       if (!existsSync(dir)) continue;
       let files;
       try {
@@ -1092,7 +1093,7 @@ export class ConversationStore {
     let scanned = 0;
     let removed = 0;
     const orphans = [];
-    for (const dir of [this.#chatMsgDir, this.#chatColdDir, this.#groupMsgDir, this.#groupColdDir, this.#legacyMsgDir, this.#legacyColdDir]) {
+    for (const dir of [this.#chatMsgDir, this.#chatColdDir, ...this.#groupMessageDirs('messages'), ...this.#groupMessageDirs('cold'), this.#legacyMsgDir, this.#legacyColdDir]) {
       if (!existsSync(dir)) continue;
       let files;
       try {
@@ -1146,7 +1147,7 @@ export class ConversationStore {
   reassignThread(sourceId, targetId) {
     if (!sourceId || !targetId || sourceId === targetId) return 0;
     let rewritten = 0;
-    for (const dir of [this.#chatMsgDir, this.#chatColdDir, this.#groupMsgDir, this.#groupColdDir, this.#legacyMsgDir, this.#legacyColdDir]) {
+    for (const dir of [this.#chatMsgDir, this.#chatColdDir, ...this.#groupMessageDirs('messages'), ...this.#groupMessageDirs('cold'), this.#legacyMsgDir, this.#legacyColdDir]) {
       if (!existsSync(dir)) continue;
       let files;
       try {
@@ -1225,7 +1226,7 @@ export class ConversationStore {
 
     // Collect source-thread candidate files from both hot + cold dirs.
     const candidates = [];
-    for (const dir of [this.#chatColdDir, this.#chatMsgDir, this.#groupColdDir, this.#groupMsgDir, this.#legacyColdDir, this.#legacyMsgDir]) {
+    for (const dir of [this.#chatColdDir, this.#chatMsgDir, ...this.#groupMessageDirs('cold'), ...this.#groupMessageDirs('messages'), this.#legacyColdDir, this.#legacyMsgDir]) {
       if (!existsSync(dir)) continue;
       let files;
       try {
@@ -1332,7 +1333,7 @@ export class ConversationStore {
     }
     // Legacy: messages live in the flat dir stamped with threadId.
     const collected = [];
-    for (const dir of [this.#chatColdDir, this.#chatMsgDir, this.#groupColdDir, this.#groupMsgDir, this.#legacyColdDir, this.#legacyMsgDir]) {
+    for (const dir of [this.#chatColdDir, this.#chatMsgDir, ...this.#groupMessageDirs('cold'), ...this.#groupMessageDirs('messages'), this.#legacyColdDir, this.#legacyMsgDir]) {
       if (!existsSync(dir)) continue;
       for (const f of readdirSync(dir).filter(x => x.endsWith('.md'))) {
         try {
@@ -1353,13 +1354,53 @@ export class ConversationStore {
   }
 
   #messageDirFor(msg) {
-    return msg?.groupId ? this.#groupMsgDir : this.#chatMsgDir;
+    if (!msg?.groupId) return this.#chatMsgDir;
+    return join(this.#groupConversationDir(msg.groupId, { create: true }), 'messages');
+  }
+
+  #groupConversationDir(groupId, { create = false } = {}) {
+    const dir = join(this.#groupsDir, this.#safeDirComponent(groupId), 'conversation');
+    if (create) this.#ensureConversationDirs(dir);
+    return dir;
+  }
+
+  #ensureConversationDirs(dir) {
+    for (const d of [dir, join(dir, 'blobs'), join(dir, 'messages'), join(dir, 'cold'), join(dir, 'compact')]) {
+      if (!existsSync(d)) mkdirSync(d, { recursive: true, mode: 0o755 });
+    }
+  }
+
+  #groupConversationDirs() {
+    if (!existsSync(this.#groupsDir)) return [];
+    const dirs = [];
+    for (const name of readdirSync(this.#groupsDir)) {
+      const groupDir = join(this.#groupsDir, name);
+      try {
+        if (!statSync(groupDir).isDirectory()) continue;
+      } catch (err) {
+        if (isPermissionError(err)) continue;
+        throw err;
+      }
+      const conversationDir = join(groupDir, 'conversation');
+      if (existsSync(conversationDir)) dirs.push(conversationDir);
+    }
+    return dirs;
+  }
+
+  #groupMessageDirs(kind, groupId = null) {
+    if (groupId) {
+      const dir = join(this.#groupConversationDir(groupId), kind);
+      return existsSync(dir) ? [dir] : [];
+    }
+    return this.#groupConversationDirs()
+      .map(dir => join(dir, kind))
+      .filter(dir => existsSync(dir));
   }
 
   #hotColdDirPairs({ includeLegacy = true } = {}) {
     const pairs = [
       [this.#chatMsgDir, this.#chatColdDir],
-      [this.#groupMsgDir, this.#groupColdDir],
+      ...this.#groupConversationDirs().map(dir => [join(dir, 'messages'), join(dir, 'cold')]),
     ];
     if (includeLegacy) pairs.push([this.#legacyMsgDir, this.#legacyColdDir]);
     return pairs;
@@ -1375,22 +1416,22 @@ export class ConversationStore {
     ].sort(compareMessagesBySeq);
   }
 
-  #loadGroupHotMessages() {
+  #loadGroupHotMessages(groupId = null) {
     return [
       ...this.#loadFromDir(this.#legacyMsgDir, Infinity).filter(m => m?.groupId),
-      ...this.#loadFromDir(this.#groupMsgDir, Infinity),
+      ...this.#groupMessageDirs('messages', groupId).flatMap(dir => this.#loadFromDir(dir, Infinity)),
     ].sort(compareMessagesBySeq);
   }
 
-  #loadGroupColdMessages() {
+  #loadGroupColdMessages(groupId = null) {
     return [
       ...this.#loadFromDir(this.#legacyColdDir, Infinity).filter(m => m?.groupId),
-      ...this.#loadFromDir(this.#groupColdDir, Infinity),
+      ...this.#groupMessageDirs('cold', groupId).flatMap(dir => this.#loadFromDir(dir, Infinity)),
     ].sort(compareMessagesBySeq);
   }
 
-  #loadGroupMessages() {
-    return [...this.#loadGroupColdMessages(), ...this.#loadGroupHotMessages()].sort(compareMessagesBySeq);
+  #loadGroupMessages(groupId = null) {
+    return [...this.#loadGroupColdMessages(groupId), ...this.#loadGroupHotMessages(groupId)].sort(compareMessagesBySeq);
   }
 
   #loadAllMessages() {
@@ -1399,8 +1440,8 @@ export class ConversationStore {
       ...this.#loadFromDir(this.#legacyMsgDir, Infinity),
       ...this.#loadFromDir(this.#chatColdDir, Infinity),
       ...this.#loadFromDir(this.#chatMsgDir, Infinity),
-      ...this.#loadFromDir(this.#groupColdDir, Infinity),
-      ...this.#loadFromDir(this.#groupMsgDir, Infinity),
+      ...this.#groupMessageDirs('cold').flatMap(dir => this.#loadFromDir(dir, Infinity)),
+      ...this.#groupMessageDirs('messages').flatMap(dir => this.#loadFromDir(dir, Infinity)),
     ].sort(compareMessagesBySeq);
   }
 
@@ -1514,7 +1555,7 @@ export class ConversationStore {
     if (this.#nextSeq != null) return this.#nextSeq;
 
     let maxSeq = 0;
-    for (const dir of [this.#chatMsgDir, this.#chatColdDir, this.#groupMsgDir, this.#groupColdDir, this.#legacyMsgDir, this.#legacyColdDir]) {
+    for (const dir of [this.#chatMsgDir, this.#chatColdDir, ...this.#groupMessageDirs('messages'), ...this.#groupMessageDirs('cold'), this.#legacyMsgDir, this.#legacyColdDir]) {
       if (!existsSync(dir)) continue;
       for (const file of readdirSync(dir)) {
         const match = file.match(/^m(\d+)\.md$/);
