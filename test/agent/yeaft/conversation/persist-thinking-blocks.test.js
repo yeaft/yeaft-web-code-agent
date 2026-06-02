@@ -29,7 +29,7 @@ describe('task-327d: thinkingBlocks persistence round-trip', () => {
       ],
     };
     const written = store.append(original);
-    const raw = readFileSync(join(TEST_DIR, 'conversation', 'messages', `${written.id}.md`), 'utf8');
+    const raw = readFileSync(join(TEST_DIR, 'chat', 'messages', `${written.id}.md`), 'utf8');
     expect(raw).toContain('thinkingBlocks:');
     expect(raw).toContain('thinkingB64:');
     expect(raw).toContain('signatureB64:');
@@ -49,7 +49,7 @@ describe('task-327d: thinkingBlocks persistence round-trip', () => {
       { thinking: 'third', signature: 'sig-3' },
     ];
     const written = store.append({ role: 'assistant', content: 'ok', thinkingBlocks: blocks });
-    const raw = readFileSync(join(TEST_DIR, 'conversation', 'messages', `${written.id}.md`), 'utf8');
+    const raw = readFileSync(join(TEST_DIR, 'chat', 'messages', `${written.id}.md`), 'utf8');
     const parsed = parseMessage(raw);
     expect(parsed.thinkingBlocks).toEqual(blocks);
   });
@@ -78,7 +78,7 @@ hi`;
       { thinking: 'visible thought', signature: 'sig-v' },
     ];
     const written = store.append({ role: 'assistant', content: 'ok', thinkingBlocks: blocks });
-    const raw = readFileSync(join(TEST_DIR, 'conversation', 'messages', `${written.id}.md`), 'utf8');
+    const raw = readFileSync(join(TEST_DIR, 'chat', 'messages', `${written.id}.md`), 'utf8');
     expect(raw).toContain('redacted: true');
     expect(raw).toContain('dataB64:');
     const parsed = parseMessage(raw);
@@ -88,7 +88,7 @@ hi`;
   it('messages without thinkingBlocks serialize without the field', () => {
     const store = new ConversationStore(TEST_DIR);
     const written = store.append({ role: 'assistant', content: 'plain reply' });
-    const raw = readFileSync(join(TEST_DIR, 'conversation', 'messages', `${written.id}.md`), 'utf8');
+    const raw = readFileSync(join(TEST_DIR, 'chat', 'messages', `${written.id}.md`), 'utf8');
     expect(raw).not.toContain('thinkingBlocks:');
     const parsed = parseMessage(raw);
     expect(parsed.thinkingBlocks).toBeUndefined();
