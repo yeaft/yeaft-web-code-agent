@@ -51,7 +51,13 @@ afterEach(() => {
  * (which equals chronological order via mNNNN.md sequencing).
  */
 function readAllPersisted() {
-  const dirs = [join(TEST_DIR, 'chat', 'messages'), join(TEST_DIR, 'group', 'messages')];
+  const dirs = [join(TEST_DIR, 'chat', 'messages')];
+  const groupsDir = join(TEST_DIR, 'groups');
+  if (existsSync(groupsDir)) {
+    for (const groupId of readdirSync(groupsDir)) {
+      dirs.push(join(groupsDir, groupId, 'conversation', 'messages'));
+    }
+  }
   const entries = [];
   for (const dir of dirs) {
     if (!existsSync(dir)) continue;

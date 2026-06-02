@@ -4,7 +4,7 @@
  * Simple keyword search across hot and cold messages.
  */
 
-import { existsSync, readdirSync, readFileSync } from 'fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
 import { parseMessage, parseSeqFromId } from './persist.js';
 
@@ -35,15 +35,34 @@ function searchDir(dir, keyword) {
   return results;
 }
 
-function compareNewestFirst(a, b) {
+function compareNewest(a, b) {
   const sa = parseSeqFromId(a?.id);
   const sb = parseSeqFromId(b?.id);
   if (Number.isFinite(sa) && Number.isFinite(sb) && sa !== sb) return sb - sa;
   return String(b?.time || '').localeCompare(String(a?.time || ''));
 }
 
+function groupConversationMessageDirs(dir) {
+  const groupsDir = join(dir, 'groups');
+  if (!existsSync(groupsDir)) return [];
+
+  const dirs = [];
+  for (const name of readdirSync(groupsDir)) {
+    const groupDir = join(groupsDir, name);
+    try {
+      if (!statSync(groupDir).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+
+    const conversationDir = join(groupDir, 'conversation');
+    dirs.push(join(conversationDir, 'messages'), join(conversationDir, 'cold'));
+  }
+  return dirs;
+}
+
 /**
- * Search Yeaft history (chat + group + legacy conversation) for a keyword.
+ * Search Yeaft history (chat + per-group + legacy conversation) for a keyword.
  *
  * @param {string} dir — Yeaft root directory (e.g. ~/.yeaft)
  * @param {string} keyword — search term
@@ -56,8 +75,7 @@ export function searchMessages(dir, keyword, limit = 20) {
   const dirs = [
     join(dir, 'chat', 'messages'),
     join(dir, 'chat', 'cold'),
-    join(dir, 'group', 'messages'),
-    join(dir, 'group', 'cold'),
+    ...groupConversationMessageDirs(dir),
     // Compatibility for profiles created before chat/group split.
     join(dir, 'conversation', 'messages'),
     join(dir, 'conversation', 'cold'),
@@ -65,6 +83,6 @@ export function searchMessages(dir, keyword, limit = 20) {
 
   return dirs
     .flatMap(d => searchDir(d, keyword))
-    .sort(compareNewestFirst)
+    .sort(compareNewest)
     .slice(0, limit);
 }
