@@ -1,4 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { EventEmitter } from 'events';
+import { Readable } from 'stream';
 import { translateCopilotEvent, createNdjsonParser } from '../../../agent/providers/copilot.js';
 
 describe('copilot driver — translateCopilotEvent', () => {
@@ -72,5 +74,39 @@ describe('copilot driver — NDJSON parser', () => {
     const p = createNdjsonParser((e) => events.push(e));
     p.push('not-json\n{"type":"done"}\n');
     expect(events).toEqual([{ type: 'done' }]);
+  });
+});
+
+describe('copilot driver — sendInput end-to-end (mocked spawn)', () => {
+  it('synthesizes an error result envelope when child exits nonzero with no stdout', async () => {
+    vi.resetModules();
+    const ctxMod = await import('../../../agent/context.js');
+    const sent = [];
+    ctxMod.default.sendToServer = (m) => sent.push(m);
+    ctxMod.default.CONFIG = ctxMod.default.CONFIG || {};
+
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => {};
+
+    vi.doMock('child_process', () => ({ spawn: () => child }));
+    const copilot = await import('../../../agent/providers/copilot.js?fresh=1');
+
+    const state = await copilot.start({ conversationId: 'c1', workDir: '/tmp' });
+    const pending = copilot.sendInput(state, 'hi', { conversationId: 'c1' });
+    queueMicrotask(() => {
+      child.stderr.emit('data', Buffer.from('boom'));
+      child.emit('close', 1);
+    });
+    await pending;
+
+    const result = sent.find((m) => m.type === 'claude_output' && m.data?.type === 'result');
+    expect(result).toBeTruthy();
+    expect(result.data.is_error).toBe(true);
+    expect(result.data.error).toContain('boom');
+    const turn = sent.find((m) => m.type === 'turn_completed');
+    expect(turn).toBeTruthy();
+    vi.doUnmock('child_process');
   });
 });

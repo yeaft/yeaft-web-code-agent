@@ -5,7 +5,10 @@ import ctx from '../context.js';
 export const name = 'copilot';
 
 const COPILOT_BIN = process.env.COPILOT_BIN || 'copilot';
-const YOLO = process.env.COPILOT_YOLO !== '0';
+// Opt-in only: --allow-all-tools is a destructive footgun by default in a
+// multi-tenant agent. Set COPILOT_YOLO=1 (and only if you know what you're
+// doing) to skip Copilot's tool prompts.
+const YOLO = process.env.COPILOT_YOLO === '1';
 
 /**
  * Start (or resume) a Copilot session.
@@ -24,6 +27,7 @@ export async function start(opts) {
   const sessionId = opts.resumeSessionId || randomUUID();
   const state = {
     providerName: name,
+    conversationId: opts.conversationId,
     query: null,
     inputStream: null,
     workDir: opts.workDir,
@@ -44,9 +48,10 @@ export async function start(opts) {
   return state;
 }
 
-export async function sendInput(state, prompt, _opts) {
-  const conversationId = findConversationId(state);
-  if (!conversationId) throw new Error('copilot: conversationId not found for state');
+export async function sendInput(state, prompt, opts = {}) {
+  const conversationId = opts.conversationId || state.conversationId;
+  if (!conversationId) throw new Error('copilot: conversationId required');
+  if (!state.sessionId) state.sessionId = randomUUID();
 
   // Abort any in-flight turn.
   if (state.copilotChild) {
@@ -61,18 +66,50 @@ export async function sendInput(state, prompt, _opts) {
   const args = ['-p', prompt, '--output-format', 'json', '-C', state.workDir, '--session-id', state.sessionId];
   if (YOLO) args.push('--allow-all-tools');
 
-  const child = spawn(COPILOT_BIN, args, {
-    cwd: state.workDir,
-    env: process.env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  let child;
+  try {
+    child = spawn(COPILOT_BIN, args, {
+      cwd: state.workDir,
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (err) {
+    sendOutput(conversationId, {
+      type: 'result',
+      subtype: 'error',
+      session_id: state.sessionId,
+      is_error: true,
+      error: `copilot spawn failed: ${err?.message || err}`,
+    });
+    state.turnActive = false;
+    ctx.sendToServer({ type: 'turn_completed', conversationId, claudeSessionId: state.sessionId, workDir: state.workDir });
+    return;
+  }
   state.copilotChild = child;
 
+  // Pre-register error handler so async ENOENT from spawn is never unhandled.
+  child.on('error', (err) => {
+    sendOutput(conversationId, {
+      type: 'result',
+      subtype: 'error',
+      session_id: state.sessionId,
+      is_error: true,
+      error: `copilot process error: ${err?.message || err}`,
+    });
+  });
+
+  let killTimer = null;
   abortController.signal.addEventListener('abort', () => {
     try { child.kill('SIGTERM'); } catch { /* noop */ }
+    // Escalate to SIGKILL if the child ignores SIGTERM, so the awaited
+    // close promise resolves and the next turn isn't blocked forever.
+    killTimer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch { /* noop */ }
+    }, 5000);
   });
 
   let stderrBuf = '';
+  const STDERR_CAP = 64 * 1024;
   let sawResult = false;
 
   const parser = createNdjsonParser((evt) => {
@@ -84,21 +121,15 @@ export async function sendInput(state, prompt, _opts) {
   });
 
   child.stdout.on('data', (chunk) => parser.push(chunk));
-  child.stderr.on('data', (chunk) => { stderrBuf += chunk.toString('utf8'); });
+  child.stderr.on('data', (chunk) => {
+    if (stderrBuf.length < STDERR_CAP) {
+      stderrBuf += chunk.toString('utf8').slice(0, STDERR_CAP - stderrBuf.length);
+    }
+  });
 
   await new Promise((resolve) => {
-    child.on('error', (err) => {
-      sendOutput(conversationId, {
-        type: 'result',
-        subtype: 'error',
-        session_id: state.sessionId,
-        is_error: true,
-        error: `copilot spawn failed: ${err?.message || err}`,
-      });
-      finalize();
-      resolve();
-    });
     child.on('close', (code) => {
+      if (killTimer) clearTimeout(killTimer);
       parser.flush();
       if (!sawResult) {
         const ok = code === 0;
@@ -110,21 +141,17 @@ export async function sendInput(state, prompt, _opts) {
           error: ok ? undefined : (stderrBuf.trim().slice(0, 2000) || `copilot exited with code ${code}`),
         });
       }
-      finalize();
+      state.copilotChild = null;
+      state.turnActive = false;
+      ctx.sendToServer({
+        type: 'turn_completed',
+        conversationId,
+        claudeSessionId: state.sessionId,
+        workDir: state.workDir,
+      });
       resolve();
     });
   });
-
-  function finalize() {
-    state.copilotChild = null;
-    state.turnActive = false;
-    ctx.sendToServer({
-      type: 'turn_completed',
-      conversationId,
-      claudeSessionId: state.sessionId,
-      workDir: state.workDir,
-    });
-  }
 }
 
 export function abort(state) {
@@ -137,11 +164,6 @@ export function abort(state) {
 }
 
 // ---------- internals ----------
-
-function findConversationId(state) {
-  for (const [id, s] of ctx.conversations) if (s === state) return id;
-  return null;
-}
 
 function sendOutput(conversationId, data) {
   ctx.sendToServer({ type: 'claude_output', conversationId, data });
@@ -160,7 +182,7 @@ export function createNdjsonParser(onEvent) {
         let evt;
         try { evt = JSON.parse(line); }
         catch (err) {
-          console.warn('[copilot] dropping unparsable line:', line.slice(0, 200));
+          if (ctx?.CONFIG?.debug) console.warn('[copilot] dropping unparsable line:', line.slice(0, 200));
           continue;
         }
         try { onEvent(evt); }
@@ -243,7 +265,7 @@ export function translateCopilotEvent(evt, state) {
     }];
   }
 
-  console.warn('[copilot] dropping unknown event type:', t);
+  if (ctx?.CONFIG?.debug) console.warn('[copilot] dropping unknown event type:', t);
   return [];
 }
 

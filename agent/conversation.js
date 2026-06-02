@@ -363,30 +363,36 @@ export async function createConversation(msg) {
   console.log(`Creating conversation: ${conversationId} in ${effectiveWorkDir} (lazy start, provider=${provider})`);
   if (username) console.log(`  User: ${username} (${userId})`);
 
-  // 只创建 conversation 状态，不启动 Claude 进程
-  // Claude 进程会在用户发送第一条消息时启动 (见 handleUserInput)
-  ctx.conversations.set(conversationId, {
-    query: null,
-    inputStream: null,
-    workDir: effectiveWorkDir,
-    claudeSessionId: null,
-    createdAt: Date.now(),
-    abortController: null,
-    tools: [],
-    slashCommands: [],
-    model: null,
-    userId,
-    username,
-    providerName: provider,
-    disallowedTools: disallowedTools || null,  // null = 使用全局默认
-    usage: {
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheRead: 0,
-      cacheCreation: 0,
-      totalCostUsd: 0
-    }
-  });
+  if (provider === 'claude-code') {
+    // Claude path: lazy-init state, real CLI boots on first message.
+    ctx.conversations.set(conversationId, {
+      query: null,
+      inputStream: null,
+      workDir: effectiveWorkDir,
+      claudeSessionId: null,
+      createdAt: Date.now(),
+      abortController: null,
+      tools: [],
+      slashCommands: [],
+      model: null,
+      userId,
+      username,
+      providerName: provider,
+      disallowedTools: disallowedTools || null,
+      usage: { inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheCreation: 0, totalCostUsd: 0 }
+    });
+  } else {
+    // Non-Claude providers own their own state construction.
+    const driver = getProvider(provider);
+    const state = await driver.start({
+      conversationId,
+      workDir: effectiveWorkDir,
+      resumeSessionId: null,
+      userId,
+      username,
+    });
+    state.disallowedTools = disallowedTools || null;
+  }
 
   ctx.sendToServer({
     type: 'conversation_created',
@@ -476,6 +482,19 @@ export async function resumeConversation(msg) {
       totalCostUsd: 0
     }
   });
+
+  // Non-Claude providers: re-init state via driver so sessionId/providerName are set correctly.
+  if (provider !== 'claude-code') {
+    const driver = getProvider(provider);
+    const state = await driver.start({
+      conversationId,
+      workDir: effectiveWorkDir,
+      resumeSessionId: claudeSessionId || null,
+      userId,
+      username,
+    });
+    state.disallowedTools = disallowedTools || null;
+  }
 
   ctx.sendToServer({
     type: 'conversation_resumed',
@@ -733,7 +752,7 @@ export async function handleUserInput(msg) {
     state.turnActive = true;
     sendConversationList();
     try {
-      await driver.sendInput(state, prompt, { raw: msg });
+      await driver.sendInput(state, prompt, { conversationId, raw: msg });
     } catch (err) {
       sendOutput(conversationId, {
         type: 'result',
@@ -742,6 +761,7 @@ export async function handleUserInput(msg) {
         is_error: true,
         error: `${providerName} error: ${err?.message || err}`,
       });
+    } finally {
       state.turnActive = false;
       sendConversationList();
     }
