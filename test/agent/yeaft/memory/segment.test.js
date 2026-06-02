@@ -39,7 +39,7 @@ describe('makeSegment', () => {
   });
 
   it('accepts all valid scope shapes', () => {
-    for (const scope of ['user', 'vp/alice', 'group/g1', 'feature/auth', 'topic/lang', 'topic/lang/js']) {
+    for (const scope of ['user', 'group/g1', 'group/g1/user', 'group/g1/vp/alice', 'group/g1/feature/auth', 'group/g1/topic/lang', 'group/g1/topic/lang/js']) {
       expect(() => makeSegment({ scope, body: 'x' })).not.toThrow();
     }
   });
@@ -57,10 +57,10 @@ describe('parseSegments — tolerant', () => {
   });
 
   it('parses pure body (no frontmatter) using defaultScope', () => {
-    const segs = parseSegments('User decided to use JWT.', { defaultScope: 'feature/auth' });
+    const segs = parseSegments('User decided to use JWT.', { defaultScope: 'group/g1/feature/auth' });
     expect(segs).toHaveLength(1);
     expect(segs[0].body).toBe('User decided to use JWT.');
-    expect(segs[0].scope).toBe('feature/auth');
+    expect(segs[0].scope).toBe('group/g1/feature/auth');
     expect(segs[0].kind).toBe('context');
   });
 
@@ -73,10 +73,10 @@ describe('parseSegments — tolerant', () => {
 kind: decision
 ---
 JWT chosen over sessions.`;
-    const segs = parseSegments(text, { defaultScope: 'feature/auth' });
+    const segs = parseSegments(text, { defaultScope: 'group/g1/feature/auth' });
     expect(segs).toHaveLength(1);
     expect(segs[0].kind).toBe('decision');
-    expect(segs[0].scope).toBe('feature/auth');
+    expect(segs[0].scope).toBe('group/g1/feature/auth');
     expect(segs[0].tags).toEqual([]);
   });
 

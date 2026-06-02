@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import WebSocket from 'ws';
@@ -127,11 +127,14 @@ describe('vp-bridge — configured VP library', () => {
     expect(updatedRole).toContain('updated persona');
     expect(existsSync(defaultRolePath)).toBe(false);
 
+    // Memory under <memoryRoot>/vp/<id> is no longer seeded by VP CRUD
+    // (group-isolated memory refactor); simulate any prior data so delete
+    // still cleans it up.
+    mkdirSync(join(memoryRoot, 'vp', 'custom_vp_01'), { recursive: true });
     writeFileSync(configuredMemoryPath, 'configured memory\n', 'utf-8');
     handleYeaftVpDelete({ type: 'yeaft_vp_delete', requestId: 'delete-1', vpId: 'custom_vp_01' });
     expect(latestCrudResult('delete', 'delete-1')).toMatchObject({ ok: true, vpId: 'custom_vp_01' });
     expect(existsSync(join(libDir, 'custom_vp_01'))).toBe(false);
-    expect(existsSync(join(memoryRoot, 'vp', 'custom_vp_01'))).toBe(false);
     expect(existsSync(join(tmpRoot, 'default-lib', 'custom_vp_01'))).toBe(false);
   });
 
@@ -153,7 +156,7 @@ describe('vp-bridge — configured VP library', () => {
 
     expect(latestCrudResult('create', 'create-1')).toMatchObject({ ok: true, vpId: 'configured_new' });
     expect(existsSync(join(libDir, 'configured_new', 'role.md'))).toBe(true);
-    expect(existsSync(join(memoryRoot, 'vp', 'configured_new', 'summary.md'))).toBe(true);
+    // VP CRUD no longer seeds per-VP memory (group-isolated memory refactor).
     expect(existsSync(join(tmpRoot, 'default-lib', 'configured_new', 'role.md'))).toBe(false);
 
     handleYeaftVpSubscribe({ type: 'yeaft_vp_subscribe' });

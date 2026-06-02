@@ -45,7 +45,7 @@ import { ToolUsageStats } from './stats/tool-usage.js';
 import { ensureDefaultGroupIfEmpty } from './groups/group-crud.js';
 import { seedDefaultVps } from './vp/seed-defaults.js';
 import { topUpDefaultVps } from './vp/seed-topup.js';
-import { runSummaryBackfill } from './memory/seed-backfill.js';
+import { runSummaryBackfill, archiveLegacyScopes } from './memory/seed-backfill.js';
 import { createV2DreamScheduler, bootInitEmptyGroups, bootCatchUpStaleDream } from './dream-v2/session-wiring.js';
 import { openSegmentIndex } from './memory/index-db.js';
 import { syncAll as syncSegmentIndex } from './memory/segment-sync.js';
@@ -235,6 +235,16 @@ export async function loadSession(options = {}) {
       const indexPath = join(yeaftDir, 'memory', 'index.db');
       memoryIndex = openSegmentIndex(indexPath);
       const memoryRoot = join(yeaftDir, 'memory');
+      // One-shot migration to the group-isolated memory layout: move any
+      // remaining top-level vp/ feature/ topic/ dirs into .legacy/ before
+      // we open the FTS index and re-sync from disk.
+      try {
+        archiveLegacyScopes(memoryRoot);
+      } catch (archiveErr) {
+        if (config.debug) {
+          console.warn(`[Yeaft] legacy scope archive warning: ${archiveErr?.message || archiveErr}`);
+        }
+      }
       try {
         syncSegmentIndex(memoryRoot, memoryIndex);
       } catch (syncErr) {

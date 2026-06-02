@@ -119,10 +119,10 @@ export function buildFtsQuery(keywords) {
  */
 export function filterScopes(scopes, ownVpId) {
   return scopes.filter(s => {
-    if (!s.startsWith('vp/')) return true;
+    const m = /^group\/[^/]+\/vp\/([^/]+)(?:\/|$)/.exec(s);
+    if (!m) return true;
     if (!ownVpId) return true;
-    const other = s.slice(3).split('/')[0];
-    return other === ownVpId;
+    return m[1] === ownVpId;
   });
 }
 

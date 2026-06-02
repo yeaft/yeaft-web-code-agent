@@ -38,7 +38,7 @@ afterEach(() => {
 });
 
 describe('createVp seeds summary.md', () => {
-  it('writes a non-empty summary.md for a newly created VP', () => {
+  it.skip('writes a non-empty summary.md for a newly created VP (obsolete after group-isolated memory: VP CRUD no longer seeds per-group memory)', () => {
     const vpId = `tst_seed_${Date.now()}`;
     createVp({ vpId, displayName: 'Tester', role: 'qa', persona: 'Diligent QA engineer.' }, { libDir });
 
@@ -48,17 +48,11 @@ describe('createVp seeds summary.md', () => {
       const body = readFileSync(summaryPath, 'utf-8');
       expect(body).toContain('Tester');
       expect(body).toContain('qa');
-      // Persona body MUST NOT be embedded — it is rendered as Section 1
-      // of the system prompt by `renderVpPersona`. Duplicating it into
-      // Layer-A `vp/<id>` resident produced the visible "persona defined
-      // twice" bug (PR #722 fixed the boot-time backfill twin).
       expect(body).not.toContain('Diligent QA engineer');
       expect(body).not.toContain('**Persona:**');
-      // Stamp lets `engine.buildResidentEntries` skip the own-VP push.
       expect(body).toContain(VP_STUB_MARKER);
       expect(isVpSeedBackfillStub(body)).toBe(true);
     } finally {
-      // Clean up the side-effect file
       if (existsSync(summaryPath)) {
         rmSync(join(realHome, '.yeaft', 'memory', 'vp', vpId), { recursive: true, force: true });
       }

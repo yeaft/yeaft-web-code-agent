@@ -15,7 +15,7 @@
  * a permission error must NEVER prevent the session from loading.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, renameSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { parseRoleMd } from '../vp/vp-store.js';
@@ -291,4 +291,44 @@ export function runSummaryBackfill({ yeaftDir, libDir, root = DEFAULT_MEMORY_ROO
     console.warn('[seed-backfill] group pass failed:', err?.message || err);
   }
   return { migrate, vp, group };
+}
+
+/**
+ * archiveLegacyScopes(root) — one-shot migration for the group-isolated
+ * memory refactor. The legacy flat layout had `vp/<id>/`, `feature/<id>/`,
+ * and `topic/<l1>[/<l2>]/` directories at the memory root; the new layout
+ * tucks each into `group/<g>/{vp,feature,topic}/...`. Per user directive
+ * "硬切，老的就不要了" — we do NOT migrate per-record, we just move the
+ * top-level dirs to `<root>/.legacy/<kind>/` once. They are never read
+ * again; this is forensics-only.
+ *
+ * Idempotent: a second invocation is a no-op when no legacy dirs remain at
+ * the root. If `.legacy/<kind>/` already exists, the new move is suffixed
+ * with a timestamp so re-attempts after a partial first run don't clobber.
+ *
+ * @param {string} root  memory root (typically <yeaftDir>/memory)
+ * @returns {{moved: string[]}}
+ */
+export function archiveLegacyScopes(root) {
+  const moved = [];
+  if (!root || !existsSync(root)) return { moved };
+  const legacyRoot = join(root, '.legacy');
+  for (const kind of ['vp', 'feature', 'topic']) {
+    const src = join(root, kind);
+    if (!existsSync(src)) continue;
+    try {
+      mkdirSync(legacyRoot, { recursive: true });
+      let dst = join(legacyRoot, kind);
+      if (existsSync(dst)) {
+        const ts = new Date().toISOString().replace(/[:.]/g, '-');
+        dst = `${dst}.${ts}`;
+      }
+      // eslint-disable-next-line global-require
+      renameSync(src, dst);
+      moved.push(kind);
+    } catch (err) {
+      console.warn(`[seed-backfill] archiveLegacyScopes(${kind}) failed:`, err?.message || err);
+    }
+  }
+  return { moved };
 }

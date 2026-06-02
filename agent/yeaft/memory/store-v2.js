@@ -54,16 +54,24 @@ import { homedir } from 'os';
 /** Default memory root. Tests override via `opts.root`. */
 export const DEFAULT_MEMORY_ROOT = join(homedir(), '.yeaft', 'memory');
 
-/** Scope kinds recognised by v2. */
-export const SCOPE_KINDS = Object.freeze(['user', 'vp', 'group', 'feature', 'topic']);
+/** Scope kinds recognised by v2 (group-isolated layout). */
+export const SCOPE_KINDS = Object.freeze([
+  'user',
+  'group',
+  'group-user',
+  'group-vp',
+  'group-feature',
+  'group-topic',
+]);
 
-/** @typedef {'user'|'vp'|'group'|'feature'|'topic'} ScopeKind */
+/** @typedef {'user'|'group'|'group-user'|'group-vp'|'group-feature'|'group-topic'} ScopeKind */
 
 /**
  * @typedef {Object} Scope
  * @property {ScopeKind} kind
- * @property {string} [id]      — required for vp / group / feature
- * @property {string[]} [path]  — required for topic; 1–2 segments
+ * @property {string} [id]        — required for group; for group-vp / group-feature the per-kind id
+ * @property {string} [groupId]   — required for every group-* kind
+ * @property {string[]} [path]    — required for group-topic; 1–2 segments
  */
 
 /**
@@ -81,25 +89,38 @@ export function scopeDir(scope) {
   switch (scope.kind) {
     case 'user':
       return 'user';
-    case 'vp':
-      if (!scope.id) throw new Error('scopeDir: vp scope requires id');
-      assertSafeSegment(scope.id, 'vp.id');
-      return `vp/${scope.id}`;
     case 'group':
       if (!scope.id) throw new Error('scopeDir: group scope requires id');
       assertSafeSegment(scope.id, 'group.id');
       return `group/${scope.id}`;
-    case 'feature':
-      if (!scope.id) throw new Error('scopeDir: feature scope requires id');
-      assertSafeSegment(scope.id, 'feature.id');
-      return `feature/${scope.id}`;
-    case 'topic': {
+    case 'group-user': {
+      if (!scope.groupId) throw new Error('scopeDir: group-user scope requires groupId');
+      assertSafeSegment(scope.groupId, 'group-user.groupId');
+      return `group/${scope.groupId}/user`;
+    }
+    case 'group-vp': {
+      if (!scope.groupId) throw new Error('scopeDir: group-vp scope requires groupId');
+      if (!scope.id) throw new Error('scopeDir: group-vp scope requires id');
+      assertSafeSegment(scope.groupId, 'group-vp.groupId');
+      assertSafeSegment(scope.id, 'group-vp.id');
+      return `group/${scope.groupId}/vp/${scope.id}`;
+    }
+    case 'group-feature': {
+      if (!scope.groupId) throw new Error('scopeDir: group-feature scope requires groupId');
+      if (!scope.id) throw new Error('scopeDir: group-feature scope requires id');
+      assertSafeSegment(scope.groupId, 'group-feature.groupId');
+      assertSafeSegment(scope.id, 'group-feature.id');
+      return `group/${scope.groupId}/feature/${scope.id}`;
+    }
+    case 'group-topic': {
+      if (!scope.groupId) throw new Error('scopeDir: group-topic scope requires groupId');
+      assertSafeSegment(scope.groupId, 'group-topic.groupId');
       const segs = Array.isArray(scope.path) ? scope.path : [];
       if (segs.length === 0 || segs.length > 2) {
-        throw new Error('scopeDir: topic.path must have 1 or 2 segments');
+        throw new Error('scopeDir: group-topic.path must have 1 or 2 segments');
       }
-      for (const s of segs) assertSafeSegment(s, 'topic.path');
-      return `topic/${segs.join('/')}`;
+      for (const s of segs) assertSafeSegment(s, 'group-topic.path');
+      return `group/${scope.groupId}/topic/${segs.join('/')}`;
     }
     default:
       throw new Error(`scopeDir: unknown kind ${JSON.stringify(scope.kind)}`);
@@ -140,7 +161,8 @@ function assertSafeSegment(s, ctx) {
  * @returns {boolean}
  */
 export function isValidTopic(scope) {
-  if (!scope || scope.kind !== 'topic') return false;
+  if (!scope || scope.kind !== 'group-topic') return false;
+  if (!scope.groupId || typeof scope.groupId !== 'string') return false;
   if (!Array.isArray(scope.path)) return false;
   if (scope.path.length < 1 || scope.path.length > 2) return false;
   for (const s of scope.path) {
@@ -155,7 +177,9 @@ export function isValidTopic(scope) {
 // ─── ACL ───────────────────────────────────────────────────────
 
 /**
- * The single ACL: `vp/<other>` is foreign when `currentVpId` is given.
+ * The single ACL: `group/<g>/vp/<other>` is foreign when `currentVpId` is given.
+ * Across groups, every `group/<g>/vp/...` path is foreign by construction
+ * (the calling VP only runs inside its own group dir).
  *
  * @param {string} relPath
  * @param {string} currentVpId
@@ -163,7 +187,7 @@ export function isValidTopic(scope) {
  */
 export function isVpForeign(relPath, currentVpId) {
   if (!relPath || !currentVpId) return false;
-  const m = /^vp\/([^/]+)(?:\/|$)/.exec(relPath);
+  const m = /^group\/[^/]+\/vp\/([^/]+)(?:\/|$)/.exec(relPath);
   if (!m) return false;
   return m[1] !== currentVpId;
 }
@@ -419,6 +443,23 @@ export async function ensureScope(scope, opts = {}) {
  * @param {{ root?: string }} [opts]
  * @returns {Promise<Scope[]>}
  */
+/**
+ * Enumerate all scopes present on disk. Returns Scope shapes that round-trip
+ * back through `scopeDir`. Used by Triage to list candidate scopes.
+ *
+ * Walks shallowly:
+ *   user/                                  → { kind: 'user' }
+ *   group/<g>/                             → { kind: 'group', id: g }
+ *   group/<g>/user/                        → { kind: 'group-user', groupId: g }
+ *   group/<g>/vp/<v>/                      → { kind: 'group-vp', groupId: g, id: v }
+ *   group/<g>/feature/<f>/                 → { kind: 'group-feature', groupId: g, id: f }
+ *   group/<g>/topic/<l1>[/<l2>]/           → { kind: 'group-topic', groupId: g, path: [...] }
+ *
+ * Skips `.legacy/` and any dotfile / unsafe segment.
+ *
+ * @param {{ root?: string }} [opts]
+ * @returns {Promise<Scope[]>}
+ */
 export async function listScopes(opts = {}) {
   const { root = DEFAULT_MEMORY_ROOT } = opts;
   const out = [];
@@ -427,53 +468,77 @@ export async function listScopes(opts = {}) {
   // user/
   if (existsSync(join(root, 'user'))) out.push({ kind: 'user' });
 
-  // vp/, group/, feature/ — single-level ids
-  for (const kind of ['vp', 'group', 'feature']) {
-    const dir = join(root, kind);
-    let names;
-    try { names = await fsp.readdir(dir, { withFileTypes: true }); }
-    catch (err) {
-      if (err && err.code === 'ENOENT') continue;
-      throw err;
-    }
-    for (const ent of names) {
-      if (!ent.isDirectory()) continue;
-      const id = ent.name;
-      if (!isSafeId(id)) continue;
-      out.push({ kind, id });
-    }
+  // group/<g>/...
+  const groupRoot = join(root, 'group');
+  let groups;
+  try { groups = await fsp.readdir(groupRoot, { withFileTypes: true }); }
+  catch (err) {
+    if (err && err.code === 'ENOENT') return out;
+    throw err;
   }
 
-  // topic/<l1>/[<l2>/]
-  const topicDir = join(root, 'topic');
-  let l1s;
-  try { l1s = await fsp.readdir(topicDir, { withFileTypes: true }); }
-  catch (err) {
-    if (err && err.code === 'ENOENT') l1s = [];
-    else throw err;
-  }
-  for (const l1ent of l1s) {
-    if (!l1ent.isDirectory()) continue;
-    if (!isSafeId(l1ent.name)) continue;
-    const l1 = l1ent.name;
-    // Read l2 entries; if l1 itself contains memory.md, treat as 1-level topic
-    const l1abs = join(topicDir, l1);
-    let l2s;
-    try { l2s = await fsp.readdir(l1abs, { withFileTypes: true }); }
-    catch { l2s = []; }
-    let hasL2 = false;
-    for (const l2ent of l2s) {
-      if (!l2ent.isDirectory()) continue;
-      if (!isSafeId(l2ent.name)) continue;
-      out.push({ kind: 'topic', path: [l1, l2ent.name] });
-      hasL2 = true;
+  for (const gent of groups) {
+    if (!gent.isDirectory()) continue;
+    if (gent.name.startsWith('.')) continue;
+    if (!isSafeId(gent.name)) continue;
+    const g = gent.name;
+    out.push({ kind: 'group', id: g });
+    const gAbs = join(groupRoot, g);
+
+    // group/<g>/user/
+    if (existsSync(join(gAbs, 'user'))) {
+      out.push({ kind: 'group-user', groupId: g });
     }
-    // 1-level topic: present iff l1 has memory.md or summary.md directly
-    if (!hasL2) {
-      const hasMemory = existsSync(join(l1abs, 'memory.md'));
-      const hasSummary = existsSync(join(l1abs, 'summary.md'));
-      if (hasMemory || hasSummary) {
-        out.push({ kind: 'topic', path: [l1] });
+
+    // group/<g>/vp/<v>/  and  group/<g>/feature/<f>/
+    for (const kind of ['vp', 'feature']) {
+      const dir = join(gAbs, kind);
+      let names;
+      try { names = await fsp.readdir(dir, { withFileTypes: true }); }
+      catch (err) {
+        if (err && err.code === 'ENOENT') continue;
+        throw err;
+      }
+      for (const ent of names) {
+        if (!ent.isDirectory()) continue;
+        if (!isSafeId(ent.name)) continue;
+        out.push({
+          kind: kind === 'vp' ? 'group-vp' : 'group-feature',
+          groupId: g,
+          id: ent.name,
+        });
+      }
+    }
+
+    // group/<g>/topic/<l1>/[<l2>/]
+    const topicDir = join(gAbs, 'topic');
+    let l1s;
+    try { l1s = await fsp.readdir(topicDir, { withFileTypes: true }); }
+    catch (err) {
+      if (err && err.code === 'ENOENT') l1s = [];
+      else throw err;
+    }
+    for (const l1ent of l1s) {
+      if (!l1ent.isDirectory()) continue;
+      if (!isSafeId(l1ent.name)) continue;
+      const l1 = l1ent.name;
+      const l1abs = join(topicDir, l1);
+      let l2s;
+      try { l2s = await fsp.readdir(l1abs, { withFileTypes: true }); }
+      catch { l2s = []; }
+      let hasL2 = false;
+      for (const l2ent of l2s) {
+        if (!l2ent.isDirectory()) continue;
+        if (!isSafeId(l2ent.name)) continue;
+        out.push({ kind: 'group-topic', groupId: g, path: [l1, l2ent.name] });
+        hasL2 = true;
+      }
+      if (!hasL2) {
+        const hasMemory = existsSync(join(l1abs, 'memory.md'));
+        const hasSummary = existsSync(join(l1abs, 'summary.md'));
+        if (hasMemory || hasSummary) {
+          out.push({ kind: 'group-topic', groupId: g, path: [l1] });
+        }
       }
     }
   }

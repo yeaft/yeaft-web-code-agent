@@ -120,12 +120,28 @@ export function targetToScope(target) {
   if (!target || typeof target !== 'string') throw new Error('apply.targetToScope: target required');
   if (target === 'user') return { kind: 'user' };
   const segs = target.split('/').filter(Boolean);
-  const head = segs[0];
-  if (head === 'vp' && segs.length === 2) return { kind: 'vp', id: segs[1] };
-  if (head === 'group' && segs.length === 2) return { kind: 'group', id: segs[1] };
-  if (head === 'feature' && segs.length === 2) return { kind: 'feature', id: segs[1] };
-  if (head === 'topic' && (segs.length === 2 || segs.length === 3)) {
-    return { kind: 'topic', path: segs.slice(1) };
+  // Legacy scopes — explicitly rejected. Old data lives under .legacy/.
+  if (segs[0] === 'vp' || segs[0] === 'feature' || segs[0] === 'topic') {
+    throw new Error(`apply.targetToScope: legacy root scope ${JSON.stringify(target)} rejected — use group/<g>/${segs[0]}/...`);
+  }
+  if (segs[0] === 'group') {
+    if (segs.length === 2) return { kind: 'group', id: segs[1] };
+    // group/<g>/user
+    if (segs.length === 3 && segs[2] === 'user') {
+      return { kind: 'group-user', groupId: segs[1] };
+    }
+    // group/<g>/vp/<v>
+    if (segs.length === 4 && segs[2] === 'vp') {
+      return { kind: 'group-vp', groupId: segs[1], id: segs[3] };
+    }
+    // group/<g>/feature/<f>
+    if (segs.length === 4 && segs[2] === 'feature') {
+      return { kind: 'group-feature', groupId: segs[1], id: segs[3] };
+    }
+    // group/<g>/topic/<l1>[/<l2>]
+    if (segs[2] === 'topic' && (segs.length === 4 || segs.length === 5)) {
+      return { kind: 'group-topic', groupId: segs[1], path: segs.slice(3) };
+    }
   }
   throw new Error(`apply.targetToScope: malformed target ${JSON.stringify(target)}`);
 }
@@ -252,11 +268,12 @@ export async function applyMergedTarget(merged, opts) {
 
 function scopeRelDir(scope) {
   switch (scope.kind) {
-    case 'user':    return 'user';
-    case 'vp':      return `vp/${scope.id}`;
-    case 'group':   return `group/${scope.id}`;
-    case 'feature': return `feature/${scope.id}`;
-    case 'topic':   return `topic/${scope.path.join('/')}`;
+    case 'user':          return 'user';
+    case 'group':         return `group/${scope.id}`;
+    case 'group-user':    return `group/${scope.groupId}/user`;
+    case 'group-vp':      return `group/${scope.groupId}/vp/${scope.id}`;
+    case 'group-feature': return `group/${scope.groupId}/feature/${scope.id}`;
+    case 'group-topic':   return `group/${scope.groupId}/topic/${scope.path.join('/')}`;
     default: throw new Error(`apply.scopeRelDir: unknown kind ${scope.kind}`);
   }
 }

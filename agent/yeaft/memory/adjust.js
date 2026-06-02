@@ -104,10 +104,10 @@ function firstSentence(body) {
 }
 
 function isOwnOrNonVp(scope, ownVpId) {
-  if (!scope.startsWith('vp/')) return true;
+  const m = /^group\/[^/]+\/vp\/([^/]+)(?:\/|$)/.exec(scope);
+  if (!m) return true;
   if (!ownVpId) return true;
-  const other = scope.slice(3).split('/')[0];
-  return other === ownVpId;
+  return m[1] === ownVpId;
 }
 
 /**

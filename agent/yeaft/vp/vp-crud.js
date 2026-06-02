@@ -23,7 +23,6 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { validateVpId } from '../groups/ids.js';
 import { DEFAULT_VP_LIB_DIR, parseRoleMd } from './vp-store.js';
-import { seedSummaryIfMissingSync, removeScopeDirSync } from '../memory/store-v2.js';
 import { VP_STUB_MARKER } from '../memory/seed-backfill.js';
 import { STOCK_VP_IDS } from './stock-ids.js';
 
@@ -178,22 +177,9 @@ export function createVp(payload, options = {}) {
   mkdirSync(join(dir, 'memory'), { recursive: true });
   writeFileSync(vpRolePathFor(libDir, vpId), buildRoleMd({ ...payload, vpId }), 'utf-8');
 
-  // Seed the VP's Layer-A resident summary so the first session has SOMETHING
-  // for engine.#loadLayerASummaries to read. Without this, fresh VPs have
-  // an empty memory section in the system prompt until Dream-v2 runs (which
-  // requires a non-empty diff stream — i.e. several turns of activity).
-  // We only seed when the file is missing/empty: this is safe to re-run and
-  // never clobbers Dream-v2 writes. Failures are best-effort: a memory-root
-  // permission failure must NOT break VP creation.
-  try {
-    seedSummaryIfMissingSync(
-      { kind: 'vp', id: vpId },
-      buildVpSeedSummary({ ...payload, vpId }),
-      { root: memoryRoot },
-    );
-  } catch (err) {
-    console.warn(`[vp-crud] failed to seed summary.md for ${vpId}:`, err?.message || err);
-  }
+  // Note: VP memory is now per-group (group/<g>/vp/<vpId>/...) — no global
+  // VP scope to seed at create time. Per-group summaries spring into being
+  // when dream first writes for that VP inside a group.
 
   return { vpId, dir };
 }
@@ -258,13 +244,10 @@ export function deleteVp(vpId, options = {}) {
     throw new VpCrudError('not_found', vpId);
   }
   rmSync(dir, { recursive: true, force: true });
-  // Cascade: drop the VP's memory scope so a recreate with the same id
-  // starts clean. Best-effort — never let memory cleanup fail the CRUD op.
-  try {
-    removeScopeDirSync({ kind: 'vp', id: vpId }, { root: memoryRoot });
-  } catch (err) {
-    console.warn(`[vp-crud] failed to remove memory dir for ${vpId}:`, err?.message || err);
-  }
+  // VP memory is per-group now (group/<g>/vp/<id>/...). We deliberately do
+  // NOT cascade-delete across every group dir on disk — that would couple
+  // VP CRUD to the group registry. Stale per-group VP scopes get pruned by
+  // dream's natural rewrite cycle, or by group deletion.
   return { vpId };
 }
 

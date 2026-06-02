@@ -62,20 +62,24 @@ export function applyHardRules({ groupId, messages }) {
   const out = new Map();
   const add = (scope) => { if (!out.has(scope)) out.set(scope, { kind: 'update', scope }); };
 
-  // user is always in.
+  // global user is always in.
   add('user');
 
-  // active group, except the virtual _no-group bucket.
-  if (groupId && groupId !== '_no-group') add(`group/${groupId}`);
+  // active group + its per-group user layer, except the virtual _no-group bucket.
+  if (groupId && groupId !== '_no-group') {
+    add(`group/${groupId}`);
+    add(`group/${groupId}/user`);
+  }
 
   for (const m of (messages || [])) {
     if (!m || typeof m !== 'object') continue;
-    // Active VP: any assistant message's vpId.
+    // Active VP: any assistant message's vpId — now group-internal.
     if (m.role === 'assistant') {
       const vp = m.vpId || (m.author && /^vp:(.+)$/.exec(m.author)?.[1]);
-      if (vp && /^[A-Za-z0-9_\-.一-鿿]+$/.test(vp)) add(`vp/${vp}`);
+      if (vp && /^[A-Za-z0-9_\-.一-鿿]+$/.test(vp) && groupId && groupId !== '_no-group') {
+        add(`group/${groupId}/vp/${vp}`);
+      }
     }
-    // (Active feature scope was dropped 2026-05-13 with the Feature system.)
   }
 
   return Array.from(out.values());
@@ -161,8 +165,9 @@ export async function classifySoft({ groupId, messages, topicSummaries, llm, lan
     const path = String(pass2.path || '').trim();
     if (!path) continue;
     const segs = path.split('/').filter(Boolean);
-    if (!isValidTopic({ kind: 'topic', path: segs })) continue;
-    const scope = `topic/${segs.join('/')}`;
+    if (!groupId || groupId === '_no-group') continue;
+    if (!isValidTopic({ kind: 'group-topic', groupId, path: segs })) continue;
+    const scope = `group/${groupId}/topic/${segs.join('/')}`;
     if (pass2.decision === 'match') {
       out.push({ kind: 'update', scope });
     } else if (pass2.decision === 'new') {

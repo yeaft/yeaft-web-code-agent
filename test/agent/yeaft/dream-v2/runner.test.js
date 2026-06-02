@@ -96,8 +96,8 @@ describe('runDream — happy path', () => {
     expect(userMem).toContain('lastDreamAt: 2026-04-28T03:07:00Z');
     // group/g-eng was also written.
     expect(existsSync(join(root, 'group', 'g-eng', 'memory.md'))).toBe(true);
-    // vp/zhang-san was written via the assistant-vp hard rule.
-    expect(existsSync(join(root, 'vp', 'zhang-san', 'memory.md'))).toBe(true);
+    // group/g-eng/vp/zhang-san was written via the assistant-vp hard rule.
+    expect(existsSync(join(root, 'group', 'g-eng', 'vp', 'zhang-san', 'memory.md'))).toBe(true);
     // Bookkeeping: g-eng's lastDreamMessageId advanced to the tail.
     const state = await readGroupState(root, 'g-eng');
     expect(state.lastDreamMessageId).toBe('m25');
@@ -208,7 +208,7 @@ describe('runDream — happy path', () => {
       reason: 'scope-filtered',
     });
     const targets = r.targets.map(t => t.target).sort();
-    expect(targets).toEqual(['group/g-current', 'user']);
+    expect(targets).toEqual(['group/g-current', 'group/g-current/user', 'user']);
   });
 
   it('reruns scoped manual group dreams over prior messages and persists memory summaries', async () => {
@@ -254,7 +254,7 @@ describe('runDream — happy path', () => {
       status: 'skipped',
       reason: 'scope-filtered',
     });
-    expect(r.targets.map(t => t.target).sort()).toEqual(['group/g-current', 'user', 'vp/linus']);
+    expect(r.targets.map(t => t.target).sort()).toEqual(['group/g-current', 'group/g-current/user', 'group/g-current/vp/linus', 'user']);
 
     const groupMem = readFileSync(join(root, 'group', 'g-current', 'memory.md'), 'utf8');
     const groupSummary = readFileSync(join(root, 'group', 'g-current', 'summary.md'), 'utf8');

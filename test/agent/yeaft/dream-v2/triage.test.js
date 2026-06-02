@@ -26,7 +26,7 @@ describe('applyHardRules', () => {
     expect(applyHardRules({ groupId: '_no-group', messages: [] }).map(a => a.scope))
       .not.toContain('group/_no-group');
   });
-  it('adds vp/<id> for each assistant message vpId', () => {
+  it('adds group/<g>/vp/<id> for each assistant message vpId', () => {
     const out = applyHardRules({
       groupId: 'g-eng',
       messages: [
@@ -36,15 +36,16 @@ describe('applyHardRules', () => {
       ],
     });
     const scopes = out.map(a => a.scope);
-    expect(scopes).toContain('vp/zhang-san');
-    expect(scopes).toContain('vp/li-si');
+    expect(scopes).toContain('group/g-eng/vp/zhang-san');
+    expect(scopes).toContain('group/g-eng/vp/li-si');
+    expect(scopes).toContain('group/g-eng/user');
   });
   it('extracts vp from author "vp:<id>" format', () => {
     const out = applyHardRules({
       groupId: 'g',
       messages: [{ role: 'assistant', author: 'vp:wang-wu' }],
     });
-    expect(out.map(a => a.scope)).toContain('vp/wang-wu');
+    expect(out.map(a => a.scope)).toContain('group/g/vp/wang-wu');
   });
   it('does NOT create feature scopes from messages (Feature system removed)', () => {
     const out = applyHardRules({
@@ -113,9 +114,9 @@ describe('classifySoft', () => {
     expect(calls.filter(c => c === 'triage-pass2').length).toBe(2);
     const scopes = out.map(a => a.scope);
     expect(scopes).toContain('user');
-    expect(scopes).toContain('topic/science/physics');
-    expect(scopes).toContain('topic/life/parenting');
-    const created = out.find(a => a.scope === 'topic/life/parenting');
+    expect(scopes).toContain('group/g/topic/science/physics');
+    expect(scopes).toContain('group/g/topic/life/parenting');
+    const created = out.find(a => a.scope === 'group/g/topic/life/parenting');
     expect(created.kind).toBe('create');
   });
   it('rejects topic paths exceeding 2 levels', async () => {
@@ -124,7 +125,7 @@ describe('classifySoft', () => {
       return JSON.stringify({ decision: 'new', path: 'a/b/c' });
     };
     const out = await classifySoft({ groupId: 'g', messages: [], topicSummaries: [], llm });
-    expect(out.find(a => a.scope.startsWith('topic/'))).toBeUndefined();
+    expect(out.find(a => /^group\/.+\/topic\//.test(a.scope))).toBeUndefined();
   });
   it('skips Pass-2 when Pass-1 returns no topics', async () => {
     const calls = [];
@@ -161,8 +162,8 @@ describe('triageOneSegment + triageGroupSegments', () => {
     const scopes = out.map(a => a.scope);
     expect(scopes).toContain('user');
     expect(scopes).toContain('group/g-eng');
-    expect(scopes).toContain('vp/zhang-san');
-    expect(scopes).toContain('topic/science/physics');
+    expect(scopes).toContain('group/g-eng/vp/zhang-san');
+    expect(scopes).toContain('group/g-eng/topic/science/physics');
   });
   it('dedupes across multiple segments', async () => {
     let calls = 0;
@@ -182,7 +183,7 @@ describe('triageOneSegment + triageGroupSegments', () => {
       llm,
     });
     // vp/zhang-san should appear once.
-    expect(out.filter(a => a.scope === 'vp/zhang-san').length).toBe(1);
+    expect(out.filter(a => a.scope === 'group/g/vp/zhang-san').length).toBe(1);
     expect(calls).toBe(2); // Pass-1 ran for each segment, no Pass-2 (no topics)
   });
 });

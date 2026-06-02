@@ -66,18 +66,18 @@ describe('openSegmentIndex', () => {
     const idx = openSegmentIndex(DB_PATH);
     idx.upsert(makeSegment({ scope: 'user', kind: 'fact', body: 'a' }));
     idx.upsert(makeSegment({ scope: 'user', kind: 'fact', body: 'b' }));
-    idx.upsert(makeSegment({ scope: 'vp/alice', kind: 'fact', body: 'c' }));
+    idx.upsert(makeSegment({ scope: 'group/g1/vp/alice', kind: 'fact', body: 'c' }));
     expect(idx.listByScope('user')).toHaveLength(2);
-    expect(idx.listByScope('vp/alice')).toHaveLength(1);
+    expect(idx.listByScope('group/g1/vp/alice')).toHaveLength(1);
     idx.close();
   });
 
   it('deleteScope removes all under scope', () => {
     const idx = openSegmentIndex(DB_PATH);
-    idx.upsert(makeSegment({ scope: 'feature/x', kind: 'fact', body: 'a' }));
-    idx.upsert(makeSegment({ scope: 'feature/x', kind: 'fact', body: 'b' }));
-    idx.deleteScope('feature/x');
-    expect(idx.listByScope('feature/x')).toHaveLength(0);
+    idx.upsert(makeSegment({ scope: 'group/g1/feature/x', kind: 'fact', body: 'a' }));
+    idx.upsert(makeSegment({ scope: 'group/g1/feature/x', kind: 'fact', body: 'b' }));
+    idx.deleteScope('group/g1/feature/x');
+    expect(idx.listByScope('group/g1/feature/x')).toHaveLength(0);
     idx.close();
   });
 
@@ -93,7 +93,7 @@ describe('openSegmentIndex', () => {
   it('search respects scopeFilter', () => {
     const idx = openSegmentIndex(DB_PATH);
     idx.upsert(makeSegment({ scope: 'user', kind: 'fact', body: 'JWT note A' }));
-    idx.upsert(makeSegment({ scope: 'vp/alice', kind: 'fact', body: 'JWT note B' }));
+    idx.upsert(makeSegment({ scope: 'group/g1/vp/alice', kind: 'fact', body: 'JWT note B' }));
     const hits = idx.search({ query: 'JWT', scopeFilter: ['user'] });
     expect(hits).toHaveLength(1);
     expect(hits[0].scope).toBe('user');
@@ -129,10 +129,10 @@ describe('segment-store disk I/O', () => {
   it('listScopes finds all memory.md files', () => {
     mkdirSync(join(TEST_DIR, 'user'), { recursive: true });
     writeFileSync(join(TEST_DIR, 'user', 'memory.md'), 'pure body\n');
-    mkdirSync(join(TEST_DIR, 'vp', 'alice'), { recursive: true });
-    writeFileSync(join(TEST_DIR, 'vp', 'alice', 'memory.md'), 'pure body\n');
+    mkdirSync(join(TEST_DIR, 'group', 'g1', 'vp', 'alice'), { recursive: true });
+    writeFileSync(join(TEST_DIR, 'group', 'g1', 'vp', 'alice', 'memory.md'), 'pure body\n');
     const scopes = listScopes(TEST_DIR);
-    expect(scopes.sort()).toEqual(['user', 'vp/alice']);
+    expect(scopes.sort()).toEqual(['group/g1/vp/alice', 'user']);
   });
 });
 
@@ -177,35 +177,35 @@ describe('syncScope / syncAll', () => {
 
   it('syncAll handles multiple scopes + drops orphans', () => {
     writeScope(TEST_DIR, 'user', [makeSegment({ scope: 'user', kind: 'fact', body: 'A' })]);
-    writeScope(TEST_DIR, 'vp/alice', [makeSegment({ scope: 'vp/alice', kind: 'fact', body: 'B' })]);
+    writeScope(TEST_DIR, 'group/g1/vp/alice', [makeSegment({ scope: 'group/g1/vp/alice', kind: 'fact', body: 'B' })]);
     const idx = openSegmentIndex(DB_PATH);
     syncAll(TEST_DIR, idx);
     expect(idx.count()).toBe(2);
 
-    // remove 'vp/alice' file content (write empty file)
-    writeScope(TEST_DIR, 'vp/alice', []);
+    // remove 'group/g1/vp/alice' file content (write empty file)
+    writeScope(TEST_DIR, 'group/g1/vp/alice', []);
     const r = syncAll(TEST_DIR, idx);
     expect(r.deleted).toBe(1);
-    expect(idx.listByScope('vp/alice')).toHaveLength(0);
+    expect(idx.listByScope('group/g1/vp/alice')).toHaveLength(0);
     idx.close();
   });
 
   it('end-to-end: write disk, sync, search', () => {
-    writeScope(TEST_DIR, 'feature/auth', [
+    writeScope(TEST_DIR, 'group/g1/feature/auth', [
       makeSegment({
-        scope: 'feature/auth', kind: 'decision',
+        scope: 'group/g1/feature/auth', kind: 'decision',
         body: 'Use JWT tokens for stateless auth',
         tags: ['auth', 'jwt'],
       }),
       makeSegment({
-        scope: 'feature/auth', kind: 'fact',
+        scope: 'group/g1/feature/auth', kind: 'fact',
         body: 'Refresh tokens stored in HTTP-only cookies',
         tags: ['auth', 'cookies'],
       }),
     ]);
     const idx = openSegmentIndex(DB_PATH);
     syncAll(TEST_DIR, idx);
-    const hits = idx.search({ query: 'JWT', scopeFilter: ['feature/auth'] });
+    const hits = idx.search({ query: 'JWT', scopeFilter: ['group/g1/feature/auth'] });
     expect(hits.length).toBeGreaterThanOrEqual(1);
     expect(hits[0].body).toContain('JWT');
     idx.close();

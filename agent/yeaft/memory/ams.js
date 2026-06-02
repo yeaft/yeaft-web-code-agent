@@ -189,9 +189,10 @@ export class ActiveMemorySet {
   // ────────────────────────── privacy ──────────────────────────
 
   _isForeignVp(scope) {
-    if (!scope || !scope.startsWith('vp/')) return false;
-    if (!this.ownVpId) return false;        // no own id → no filtering
-    const other = scope.slice(3).split('/')[0];
-    return other !== this.ownVpId;
+    if (!scope) return false;
+    const m = /^group\/[^/]+\/vp\/([^/]+)(?:\/|$)/.exec(scope);
+    if (!m) return false;
+    if (!this.ownVpId) return false;
+    return m[1] !== this.ownVpId;
   }
 }

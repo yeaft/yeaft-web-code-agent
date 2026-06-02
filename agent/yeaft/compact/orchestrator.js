@@ -28,7 +28,6 @@
  */
 
 import { groupTurns, pickCoolingGroups, indicesFromGroups } from './turn-group.js';
-import { writeSummary } from '../memory/store-v2.js';
 
 /**
  * @typedef {{
@@ -57,7 +56,7 @@ import { writeSummary } from '../memory/store-v2.js';
  *   nextMessages: object[],
  * }>}
  */
-export async function runCompact({ messages, keepHot = 10, taskId = null, root, hooks }) {
+export async function runCompact({ messages, keepHot = 10, hooks }) {
   if (!Array.isArray(messages)) {
     throw new Error('runCompact: messages array required');
   }
@@ -104,17 +103,12 @@ export async function runCompact({ messages, keepHot = 10, taskId = null, root, 
     archiveResults.push({ ...g, turnId: r?.turnId });
   }
 
-  // Track 2 — refresh task summary if applicable.
-  let taskSummaryRefreshed = false;
-  if (taskId && root && typeof hooks.refreshTaskSummary === 'function') {
-    const prior = typeof hooks.readPriorTaskSummary === 'function'
-      ? await hooks.readPriorTaskSummary() : '';
-    const next = await hooks.refreshTaskSummary(coolingMessages, prior);
-    if (typeof next === 'string' && next.trim()) {
-      await writeSummary({ kind: 'feature', id: taskId }, next, { root });
-      taskSummaryRefreshed = true;
-    }
-  }
+  // Track 2 — task summary refresh: removed. The legacy `feature/<id>` root
+  // scope was dropped along with the Feature system (2026-05-13); under the
+  // group-isolated layout feature summaries would live at
+  // `group/<g>/feature/<id>/` and are written by dream, not by post-turn
+  // compact. Engine no longer passes `taskId`/`root` to this orchestrator.
+  const taskSummaryRefreshed = false;
 
   // Track 3 — memory extraction.
   let extractedCount = 0;
