@@ -162,16 +162,23 @@ describe('extractTemplateForScope', () => {
   it('routes user scope', () => {
     expect(extractTemplateForScope('user')).toBe('extractUser');
   });
-  it('routes vp/* scope', () => {
-    expect(extractTemplateForScope('vp/alice')).toBe('extractVp');
+  it('routes group/<g>/vp/<v> to extractVp (nested before bare group)', () => {
+    expect(extractTemplateForScope('group/eng/vp/alice')).toBe('extractVp');
   });
-  it('routes group/* scope', () => {
+  it('routes bare group/<g> to extractGroup', () => {
     expect(extractTemplateForScope('group/eng')).toBe('extractGroup');
   });
-  it('routes feature/* scope falls back to extractTopic (Feature system removed)', () => {
-    expect(extractTemplateForScope('feature/memory-h2')).toBe('extractTopic');
+  it('routes group/<g>/user to extractUser', () => {
+    expect(extractTemplateForScope('group/eng/user')).toBe('extractUser');
   });
-  it('routes topic/* scope', () => {
+  it('routes group/<g>/topic/* to extractTopic', () => {
+    expect(extractTemplateForScope('group/eng/topic/auth/jwt')).toBe('extractTopic');
+  });
+  it('routes group/<g>/feature/* to extractGroup (no dedicated feature template)', () => {
+    expect(extractTemplateForScope('group/eng/feature/memory-h2')).toBe('extractGroup');
+  });
+  it('still routes legacy bare vp/* and topic/* (defensive)', () => {
+    expect(extractTemplateForScope('vp/alice')).toBe('extractVp');
     expect(extractTemplateForScope('topic/auth/jwt')).toBe('extractTopic');
   });
   it('falls back to extractTopic for unknown scope', () => {

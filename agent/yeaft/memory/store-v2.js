@@ -427,24 +427,6 @@ export async function ensureScope(scope, opts = {}) {
 
 /**
  * Enumerate all scopes present on disk. Returns Scope shapes that round-trip
- * back through `scopeDir`. Used by Triage to list candidate
- * scopes for a group's diff.
- *
- * Walks shallowly:
- *   user/                       → { kind: 'user' }
- *   vp/<id>/                    → { kind: 'vp', id }
- *   group/<id>/                 → { kind: 'group', id }
- *   feature/<id>/               → { kind: 'feature', id }
- *   topic/<l1>/[<l2>/]          → { kind: 'topic', path: [...] }
- *
- * Skips entries that are not directories, and any name that fails segment
- * validation (e.g. accidental `.tmp.*` files at scope root, dotfiles).
- *
- * @param {{ root?: string }} [opts]
- * @returns {Promise<Scope[]>}
- */
-/**
- * Enumerate all scopes present on disk. Returns Scope shapes that round-trip
  * back through `scopeDir`. Used by Triage to list candidate scopes.
  *
  * Walks shallowly:

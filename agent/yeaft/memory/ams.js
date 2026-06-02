@@ -17,6 +17,7 @@
  */
 
 import { approxTokens, packWithinBudget } from './budget.js';
+import { isVpForeign } from './store-v2.js';
 
 const RECENT_DEFAULT_CAPACITY = 64;
 
@@ -189,10 +190,6 @@ export class ActiveMemorySet {
   // ────────────────────────── privacy ──────────────────────────
 
   _isForeignVp(scope) {
-    if (!scope) return false;
-    const m = /^group\/[^/]+\/vp\/([^/]+)(?:\/|$)/.exec(scope);
-    if (!m) return false;
-    if (!this.ownVpId) return false;
-    return m[1] !== this.ownVpId;
+    return isVpForeign(scope, this.ownVpId);
   }
 }

@@ -28,6 +28,7 @@
  */
 
 import { approxTokens } from './budget.js';
+import { isVpForeign } from './store-v2.js';
 
 /**
  * @typedef {object} AdjustTriggerInput
@@ -104,10 +105,7 @@ function firstSentence(body) {
 }
 
 function isOwnOrNonVp(scope, ownVpId) {
-  const m = /^group\/[^/]+\/vp\/([^/]+)(?:\/|$)/.exec(scope);
-  if (!m) return true;
-  if (!ownVpId) return true;
-  return m[1] === ownVpId;
+  return !isVpForeign(scope, ownVpId);
 }
 
 /**

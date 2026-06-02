@@ -28,12 +28,12 @@ describe('mergeByTarget', () => {
         actions: [
           { kind: 'update', scope: 'user' },
           { kind: 'update', scope: 'group/g-eng' },
-          { kind: 'update', scope: 'vp/zhang-san' },
+          { kind: 'update', scope: 'group/g-eng/vp/zhang-san' },
         ],
       },
     ]);
     const targets = merged.map(m => m.target);
-    expect(targets).toEqual(['group/g-eng', 'group/g-life', 'user', 'vp/zhang-san']);
+    expect(targets).toEqual(['group/g-eng', 'group/g-eng/vp/zhang-san', 'group/g-life', 'user']);
     const userEntry = merged.find(m => m.target === 'user');
     expect(userEntry.sources.map(s => s.groupId)).toEqual(['g-eng', 'g-life']);
     expect(userEntry.kind).toBe('update');

@@ -41,8 +41,15 @@ const FILES = {
 export function extractTemplateForScope(scope) {
   if (!scope || typeof scope !== 'string') return 'extractTopic';
   if (scope === 'user') return 'extractUser';
-  if (scope.startsWith('vp/')) return 'extractVp';
+  // Nested group-isolated scopes must be matched BEFORE the bare `group/<g>`
+  // branch so VPs/topics/features under a group don't get the group template.
+  if (/^group\/[^/]+\/vp\//.test(scope)) return 'extractVp';
+  if (/^group\/[^/]+\/topic\//.test(scope)) return 'extractTopic';
+  if (/^group\/[^/]+\/user(?:\/|$)/.test(scope)) return 'extractUser';
   if (scope.startsWith('group/')) return 'extractGroup';
+  // Legacy top-level vp/topic scopes (archived to .legacy/ on boot — kept
+  // here defensively in case something still constructs the old strings).
+  if (scope.startsWith('vp/')) return 'extractVp';
   if (scope.startsWith('topic/')) return 'extractTopic';
   return 'extractTopic';
 }
