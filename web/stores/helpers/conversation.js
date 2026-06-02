@@ -75,7 +75,7 @@ export function selectConversation(store, conversationId, agentId) {
 
   if (conversationId === store.currentConversation) return;
 
-  const conv = store.conversations.find(c => c.id === conversationId && c.type !== 'unify');
+  const conv = store.conversations.find(c => c.id === conversationId && c.type !== 'yeaft');
   if (conv && conv.agentId && conv.agentId !== store.currentAgent) {
     const agent = store.agents.find(a => a.id === conv.agentId);
     if (agent) {

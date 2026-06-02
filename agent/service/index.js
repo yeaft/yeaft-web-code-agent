@@ -9,7 +9,7 @@ import {
   saveServiceConfig, loadServiceConfig,
   parseServiceArgs, validateConfig
 } from './config.js';
-import { initYeaftDir } from '../unify/init.js';
+import { initYeaftDir } from '../yeaft/init.js';
 import { getSystemdServicePath, linuxInstall, linuxUninstall, linuxStart, linuxStop, linuxRestart, linuxStatus, linuxLogs } from './linux.js';
 import { getLaunchdPlistPath, macInstall, macUninstall, macStart, macStop, macRestart, macStatus, macLogs } from './macos.js';
 import { winInstall, winUninstall, winStart, winStop, winRestart, winStatus, winLogs } from './windows.js';

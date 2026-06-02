@@ -17,8 +17,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { Engine } from '../../agent/unify/engine.js';
-import { NullTrace } from '../../agent/unify/debug-trace.js';
+import { Engine } from '../../agent/yeaft/engine.js';
+import { NullTrace } from '../../agent/yeaft/debug-trace.js';
 
 class CapturingAdapter {
   constructor() { this.calls = []; }

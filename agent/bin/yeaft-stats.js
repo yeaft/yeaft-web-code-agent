@@ -17,9 +17,9 @@
 
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { ToolUsageStats } from '../unify/stats/tool-usage.js';
-import { allTools } from '../unify/tools/index.js';
-import { formatMs, formatPct, formatLastCalled } from '../unify/stats/format.js';
+import { ToolUsageStats } from '../yeaft/stats/tool-usage.js';
+import { allTools } from '../yeaft/tools/index.js';
+import { formatMs, formatPct, formatLastCalled } from '../yeaft/stats/format.js';
 
 function parseArgs(argv) {
   const opts = {

@@ -1,9 +1,9 @@
-/* search-settings.css — Styles for the Search tab in UnifySettings.
+/* search-settings.css — Styles for the Search tab in YeaftSettings.
  *
  * Reuses the .settings-pane container token from settings.css; adds
  * its own .settings-section / form / usage-card subsystem so the tab
  * is self-contained. Kept visually consistent with the rest of
- * UnifySettings (no horizontal dividers per CLAUDE.md "Unify UI Design
+ * YeaftSettings (no horizontal dividers per CLAUDE.md "Yeaft UI Design
  * Rules") — separation is via spacing only.
  */
 

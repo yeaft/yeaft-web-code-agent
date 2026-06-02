@@ -7,9 +7,9 @@ import {
   broadcastAgentList, verifyConversationOwnership, verifyAgentOwnership
 } from '../ws-utils.js';
 
-function emptyUnifyToolStats(reason = '') {
+function emptyYeaftToolStats(reason = '') {
   const payload = {
-    type: 'unify_tool_stats',
+    type: 'yeaft_tool_stats',
     snapshot: {},
     registered: [],
     unused: [],
@@ -18,9 +18,9 @@ function emptyUnifyToolStats(reason = '') {
   return payload;
 }
 
-function skippedUnifyDreamResult(msg, reason) {
+function skippedYeaftDreamResult(msg, reason) {
   const payload = {
-    type: 'unify_dream_result',
+    type: 'yeaft_dream_result',
     success: false,
     skipped: true,
     skippedReason: reason,
@@ -637,24 +637,26 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       break;
     }
 
+    case 'yeaft_load_history':
     case 'unify_load_history': {
       const histAgentId = msg.agentId || client.currentAgent;
       if (!histAgentId) return;
       if (!await checkAgentAccess(histAgentId)) return;
       await forwardToAgent(histAgentId, {
-        type: 'unify_load_history',
+        type: 'yeaft_load_history',
         limit: msg.limit,
         groupId: msg.groupId || null,
       });
       break;
     }
 
+    case 'yeaft_load_more_history':
     case 'unify_load_more_history': {
       const moreAgentId = msg.agentId || client.currentAgent;
       if (!moreAgentId) return;
       if (!await checkAgentAccess(moreAgentId)) return;
       await forwardToAgent(moreAgentId, {
-        type: 'unify_load_more_history',
+        type: 'yeaft_load_more_history',
         groupId: msg.groupId || null,
         beforeSeq: typeof msg.beforeSeq === 'number' ? msg.beforeSeq : null,
         turns: typeof msg.turns === 'number' ? msg.turns : 20,
@@ -662,56 +664,61 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       break;
     }
 
+    case 'yeaft_mode_switch':
     case 'unify_mode_switch': {
       const modeAgentId = msg.agentId || client.currentAgent;
       if (!modeAgentId) return;
       if (!await checkAgentAccess(modeAgentId)) return;
       await forwardToAgent(modeAgentId, {
-        type: 'unify_mode_switch',
+        type: 'yeaft_mode_switch',
         mode: msg.mode,
       });
       break;
     }
 
+    case 'yeaft_model_switch':
     case 'unify_model_switch': {
       const modelAgentId = msg.agentId || client.currentAgent;
       if (!modelAgentId) return;
       if (!await checkAgentAccess(modelAgentId)) return;
       await forwardToAgent(modelAgentId, {
-        type: 'unify_model_switch',
+        type: 'yeaft_model_switch',
         model: msg.model,
       });
       break;
     }
 
+    case 'yeaft_reset':
     case 'unify_reset': {
       const resetAgentId = msg.agentId || client.currentAgent;
       if (!resetAgentId) return;
       if (!await checkAgentAccess(resetAgentId)) return;
       await forwardToAgent(resetAgentId, {
-        type: 'unify_reset',
+        type: 'yeaft_reset',
       });
       break;
     }
 
+    case 'yeaft_merge_thread':
     case 'unify_merge_thread': {
       const mergeAgentId = msg.agentId || client.currentAgent;
       if (!mergeAgentId) return;
       if (!await checkAgentAccess(mergeAgentId)) return;
       await forwardToAgent(mergeAgentId, {
-        type: 'unify_merge_thread',
+        type: 'yeaft_merge_thread',
         sourceId: msg.sourceId,
         targetId: msg.targetId,
       });
       break;
     }
 
+    case 'yeaft_fork_thread':
     case 'unify_fork_thread': {
       const forkAgentId = msg.agentId || client.currentAgent;
       if (!forkAgentId) return;
       if (!await checkAgentAccess(forkAgentId)) return;
       await forwardToAgent(forkAgentId, {
-        type: 'unify_fork_thread',
+        type: 'yeaft_fork_thread',
         sourceThreadId: msg.sourceThreadId,
         atMessageId: msg.atMessageId,
         name: msg.name,
@@ -719,6 +726,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       break;
     }
 
+    case 'yeaft_abort_thread':
     case 'unify_abort_thread': {
       // task-325c: relay targeted abort command to the agent. Payload
       // carries `threadId` only — no extra fields. Unknown thread is a
@@ -727,63 +735,66 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       if (!abortAgentId) return;
       if (!await checkAgentAccess(abortAgentId)) return;
       await forwardToAgent(abortAgentId, {
-        type: 'unify_abort_thread',
+        type: 'yeaft_abort_thread',
         threadId: msg.threadId,
       });
       break;
     }
 
+    case 'yeaft_abort_all':
     case 'unify_abort_all': {
       // task-325c: relay "abort everything" command. Empty payload.
       const abortAllAgentId = msg.agentId || client.currentAgent;
       if (!abortAllAgentId) return;
       if (!await checkAgentAccess(abortAllAgentId)) return;
-      await forwardToAgent(abortAllAgentId, { type: 'unify_abort_all' });
+      await forwardToAgent(abortAllAgentId, { type: 'yeaft_abort_all' });
       break;
     }
 
     default: {
-      // task-fix: generic relay for all `unify_*` messages so any new
-      // agent-router case (unify_vp_*, unify_user_memory_*, unify_*_group,
-      // unify_dream_*, etc.) works without a dedicated server case.
-      // Without this, messages like `unify_vp_subscribe` arrive at the
+      // task-fix: generic relay for all `yeaft_*` messages so any new
+      // agent-router case (yeaft_vp_*, yeaft_user_memory_*, yeaft_*_group,
+      // yeaft_dream_*, etc.) works without a dedicated server case.
+      // Without this, messages like `yeaft_vp_subscribe` arrive at the
       // server, fall through to default, return false, and are silently
       // dropped — which is why the GroupCreateWizard's "VP 加载中..."
       // hung forever.
-      if (typeof msg.type === 'string' && msg.type.startsWith('unify_')) {
+      if (typeof msg.type === 'string' && (msg.type.startsWith('yeaft_') || msg.type.startsWith('unify_'))) {
+        const relayType = msg.type.startsWith('unify_') ? `yeaft_${msg.type.slice('unify_'.length)}` : msg.type;
         const relayAgentId = msg.agentId || client.currentAgent;
         if (!relayAgentId) {
-          if (msg.type === 'unify_fetch_tool_stats') {
-            await sendToWebClient(client, emptyUnifyToolStats('No agent selected.'));
-          } else if (msg.type === 'unify_dream_trigger') {
-            await sendToWebClient(client, skippedUnifyDreamResult(msg, 'no-agent-selected'));
+          if (relayType === 'yeaft_fetch_tool_stats') {
+            await sendToWebClient(client, emptyYeaftToolStats('No agent selected.'));
+          } else if (relayType === 'yeaft_dream_trigger') {
+            await sendToWebClient(client, skippedYeaftDreamResult(msg, 'no-agent-selected'));
           }
           return true; // swallow silently for legacy fire-and-forget messages
         }
         if (!await checkAgentAccess(relayAgentId)) {
-          if (msg.type === 'unify_fetch_tool_stats') {
-            await sendToWebClient(client, emptyUnifyToolStats('Agent is not available.'));
-          } else if (msg.type === 'unify_dream_trigger') {
-            await sendToWebClient(client, skippedUnifyDreamResult(msg, 'agent-not-available'));
+          if (relayType === 'yeaft_fetch_tool_stats') {
+            await sendToWebClient(client, emptyYeaftToolStats('Agent is not available.'));
+          } else if (relayType === 'yeaft_dream_trigger') {
+            await sendToWebClient(client, skippedYeaftDreamResult(msg, 'agent-not-available'));
           }
           return true;
         }
         const relayAgent = agents.get(relayAgentId);
         if (!relayAgent || relayAgent.ws?.readyState !== 1) {
-          if (msg.type === 'unify_fetch_tool_stats') {
-            await sendToWebClient(client, emptyUnifyToolStats('Agent is offline.'));
+          if (relayType === 'yeaft_fetch_tool_stats') {
+            await sendToWebClient(client, emptyYeaftToolStats('Agent is offline.'));
             return true;
           }
-          if (msg.type === 'unify_dream_trigger') {
-            await sendToWebClient(client, skippedUnifyDreamResult(msg, 'agent-offline'));
+          if (relayType === 'yeaft_dream_trigger') {
+            await sendToWebClient(client, skippedYeaftDreamResult(msg, 'agent-offline'));
             return true;
           }
         }
         // Forward the entire message minus the agentId field; the agent
         // router is the authoritative consumer of the payload shape.
         const { agentId: _discard, ...rest } = msg;
+        rest.type = relayType;
 
-        if (rest.type === 'unify_group_chat' && !rest.id) {
+        if (rest.type === 'yeaft_group_chat' && !rest.id) {
           rest.id = `u_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
         }
 
@@ -791,7 +802,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         // the chat / crew handlers. The agent never sees fileIds — it
         // only handles `files: [{ name, mimeType, data, isImage }]`.
         // Same-shape resolution as `client-crew.js#crew_human_input` so
-        // the unify side can share helpers with crew if it wants to.
+        // the yeaft side can share helpers with crew if it wants to.
         if (Array.isArray(rest.attachments) && rest.attachments.length > 0) {
           const resolvedFiles = [];
           for (const att of rest.attachments) {
@@ -806,7 +817,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
               });
               pendingFiles.delete(att.fileId);
             } else if (file && file.userId !== client.userId) {
-              console.warn(`[Security] User ${client.userId} attempted to use unify file ${att.fileId} owned by ${file.userId}`);
+              console.warn(`[Security] User ${client.userId} attempted to use yeaft file ${att.fileId} owned by ${file.userId}`);
             }
           }
           if (resolvedFiles.length > 0) {

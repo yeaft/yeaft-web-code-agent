@@ -6,7 +6,7 @@
   "type": "module",
   "bin": {
     "yeaft-agent": "./cli.js",
-    "yeaft": "./unify/cli.js",
+    "yeaft": "./yeaft/cli.js",
     "yeaft-stats": "./bin/yeaft-stats.js"
   },
   "scripts": {
@@ -35,8 +35,8 @@
   },
   "files": [
     "**/*.js",
-    "unify/templates/**/*.md",
-    "unify/dream-v2/prompts/**/*.md"
+    "yeaft/templates/**/*.md",
+    "yeaft/dream-v2/prompts/**/*.md"
   ],
   "license": "MIT",
   "author": "Yeaft",

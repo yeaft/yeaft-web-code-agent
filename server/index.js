@@ -22,13 +22,13 @@ const app = express();
 app.set('trust proxy', 1);
 const server = createServer(app);
 // maxPayload: defaults to 256 MiB but is env-overridable so operators on
-// constrained VMs can throttle without a redeploy. The Unify debug feature
+// constrained VMs can throttle without a redeploy. The Yeaft debug feature
 // ships verbatim LLM raw request/response bodies through this WebSocket
 // (see anthropic.js / openai-responses.js onRawExchange — payloads are
 // never truncated). A pathological tool result or a long SSE stream can
 // plausibly exceed the `ws` library's 100 MiB default. The default 256 MiB
 // covers realistic worst case; the per-tab retention is bounded separately
-// on the client by MAX_UNIFY_DEBUG_LOOPS in web/stores/chat.js.
+// on the client by MAX_YEAFT_DEBUG_LOOPS in web/stores/chat.js.
 //
 // Memory math: with N concurrent agents each delivering one full-frame
 // payload, the server transiently holds N × maxPayload before dispatch.

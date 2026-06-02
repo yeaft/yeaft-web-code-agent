@@ -10,7 +10,7 @@ import * as convHelpers from './helpers/conversation.js';
 import * as sessionHelpers from './helpers/session.js';
 import * as watchdogHelpers from './helpers/watchdog.js';
 import * as crewHelpers from './helpers/crew.js';
-import * as unifyViewHelpers from './helpers/unify-view.js';
+import * as yeaftViewHelpers from './helpers/yeaft-view.js';
 import { incVpTyping, decVpTyping } from './helpers/vp-typing.js';
 import { selectActiveConversationId } from './helpers/active-conv.js';
 import { turnMatchesSearch } from './helpers/debug-search.js';
@@ -39,8 +39,8 @@ function getGroupsStore() {
   }
 }
 
-function resolveActiveUnifyGroupId(state, { fallbackDefault = false } = {}) {
-  if (state?.unifyActiveGroupFilter) return state.unifyActiveGroupFilter;
+function resolveActiveYeaftGroupId(state, { fallbackDefault = false } = {}) {
+  if (state?.yeaftActiveGroupFilter) return state.yeaftActiveGroupFilter;
   const gs = getGroupsStore();
   if (gs?.activeGroupId) return gs.activeGroupId;
   if (fallbackDefault) return 'grp_default';
@@ -48,10 +48,10 @@ function resolveActiveUnifyGroupId(state, { fallbackDefault = false } = {}) {
 }
 
 function resolveActiveDreamDebugGroupId(state) {
-  const debugFilter = state.unifyDebugGroupFilter;
+  const debugFilter = state.yeaftDebugGroupFilter;
   if (debugFilter === '__all__') return null;
   if (debugFilter) return debugFilter;
-  const resolved = resolveActiveUnifyGroupId(state);
+  const resolved = resolveActiveYeaftGroupId(state);
   if (resolved) return resolved;
   const gs = getGroupsStore();
   if (gs?.groups?.grp_default) return 'grp_default';
@@ -66,7 +66,7 @@ function resolveActiveDreamDebugGroupId(state) {
 // what was sent to the LLM (so "copy request" matches reality); we cap
 // growth here by dropping the oldest loop entries — and the orphaned
 // turn records that no surviving loop references — once we exceed
-// MAX_UNIFY_DEBUG_LOOPS. This replaces the old per-payload mutilation
+// MAX_YEAFT_DEBUG_LOOPS. This replaces the old per-payload mutilation
 // path that lied about what the model actually saw.
 //
 // Why 50, not 200 / 1000:
@@ -79,15 +79,15 @@ function resolveActiveDreamDebugGroupId(state) {
 // single loop (e.g. a 100 MiB tool dump kept verbatim) is *not* protected
 // by this cap; the design accepts that trade-off because the alternative
 // (silently truncating payloads) is what this PR is removing.
-const MAX_UNIFY_DEBUG_LOOPS = 50;
+const MAX_YEAFT_DEBUG_LOOPS = 50;
 
 // PR feat-dream-debug-panel-full: per-scope ring buffer cap for dream
-// events. Bounds the unifyDreamEvents map so long-running sessions
+// events. Bounds the yeaftDreamEvents map so long-running sessions
 // (auto-dream every hour) don't grow unbounded. 200 is generous:
 // a typical dream pass emits ~6-10 events (start, load-diff per
 // group, triage per group, merge, apply per target, done, result),
 // so this holds ~20-30 recent passes.
-const MAX_UNIFY_DREAM_EVENTS_PER_SCOPE = 200;
+const MAX_YEAFT_DREAM_EVENTS_PER_SCOPE = 200;
 
 export const useChatStore = defineStore('chat', {
   state: () => ({
@@ -166,22 +166,22 @@ export const useChatStore = defineStore('chat', {
     // ★ Phase 6: 消息分页状态
     hasMoreMessages: false,
     loadingMoreMessages: false,
-    // Unify 分页状态 (parallel to the Chat-mode flags above):
-    //  - unifyHasMoreHistory: server told us there's at least one earlier
+    // Yeaft 分页状态 (parallel to the Chat-mode flags above):
+    //  - yeaftHasMoreHistory: server told us there's at least one earlier
     //    turn for the active group that we haven't loaded yet.
-    //  - unifyLoadingMoreHistory: a `unify_load_more_history` request is
+    //  - yeaftLoadingMoreHistory: a `yeaft_load_more_history` request is
     //    in flight; gates the click handler + drives the spinner.
-    //  - unifyOldestLoadedSeq: the seq of the oldest message currently
-    //    in messagesMap[unifyConversationId]. Doubles as the cursor
+    //  - yeaftOldestLoadedSeq: the seq of the oldest message currently
+    //    in messagesMap[yeaftConversationId]. Doubles as the cursor
     //    (`beforeSeq`) for the next page request.
-    unifyHasMoreHistory: false,
-    unifyLoadingMoreHistory: false,
-    unifyOldestLoadedSeq: null,
-    // Group-scoped Unify history cursors/cache metadata. The legacy three
+    yeaftHasMoreHistory: false,
+    yeaftLoadingMoreHistory: false,
+    yeaftOldestLoadedSeq: null,
+    // Group-scoped Yeaft history cursors/cache metadata. The legacy three
     // flags above mirror the currently active group for component
     // compatibility; this map is the source of truth across group switches.
     // Shape: { [groupId || '__all__']: { loaded, hasMore, loading, oldestSeq, count } }
-    unifyGroupHistoryState: {},
+    yeaftGroupHistoryState: {},
     // 可用的 slash commands 列表（按 conversationId 隔离，从 Claude SDK init 消息获取）
     slashCommandsMap: {},  // { [conversationId]: string[] }
     // Slash command 描述映射（从 agent 端传递，所有 conversation 共用）
@@ -204,13 +204,13 @@ export const useChatStore = defineStore('chat', {
     modelsDevRegistry: { registry: {}, fetchedAt: 0, error: null, loaded: false },
     _modelsDevPending: null,
 
-    // task-318: per-agent Unify runtime settings cache. Keyed by agentId.
+    // task-318: per-agent Yeaft runtime settings cache. Keyed by agentId.
     // Shape: { maxConcurrentThreads, autoArchiveIdleDays, error, loaded, at }
-    unifySettings: {},
+    yeaftSettings: {},
 
     // Search settings cache (web-search backend + Tavily key state).
     // Single record (not per-agent) — config.json is one file per agent's
-    // ~/.yeaft, so the active unifyAgentId determines which agent we
+    // ~/.yeaft, so the active yeaftAgentId determines which agent we
     // talked to last. Shape:
     //   { backend, tavilyKeyConfigured, tavilyKeyMasked, disableHtmlFallback,
     //     loaded, error, at }
@@ -269,118 +269,118 @@ export const useChatStore = defineStore('chat', {
     pinnedSessions: JSON.parse(localStorage.getItem('pinned-sessions') || '[]'),
 
     // =====================
-    // Unify 独立页面状态
+    // Yeaft 独立页面状态
     // =====================
-    currentView: 'chat',           // 'chat' | 'unify' — 顶级页面切换
-    unifyConversationId: null,     // 虚拟 conversationId（从 agent session_ready 获取）
-    unifyModel: null,              // 当前 Unify 模型名
-    unifyAgentId: null,            // 绑定的 agent ID
-    unifySessionReady: false,     // Session 是否已初始化
-    unifyStatus: null,            // { skills, mcpServers, tools } 从 session_ready 获取
-    unifyAvailableModels: [],     // 可用模型列表 [{ id, provider, label }]
-    unifyYeaftDir: null,          // agent 的 ~/.yeaft 绝对路径（session_ready 携带）— Unify workbench 的默认 workDir
-    // 2026-05-13: tool-call usage stats for the Unify debug drawer.
-    // Populated by `fetchUnifyToolStats()` → backend → `unify_tool_stats`
-    // case in handleUnifyOutput. Shape:
+    currentView: 'chat',           // 'chat' | 'yeaft' — 顶级页面切换
+    yeaftConversationId: null,     // 虚拟 conversationId（从 agent session_ready 获取）
+    yeaftModel: null,              // 当前 Yeaft 模型名
+    yeaftAgentId: null,            // 绑定的 agent ID
+    yeaftSessionReady: false,     // Session 是否已初始化
+    yeaftStatus: null,            // { skills, mcpServers, tools } 从 session_ready 获取
+    yeaftAvailableModels: [],     // 可用模型列表 [{ id, provider, label }]
+    yeaftYeaftDir: null,          // agent 的 ~/.yeaft 绝对路径（session_ready 携带）— Yeaft workbench 的默认 workDir
+    // 2026-05-13: tool-call usage stats for the Yeaft debug drawer.
+    // Populated by `fetchYeaftToolStats()` → backend → `yeaft_tool_stats`
+    // case in handleYeaftOutput. Shape:
     //   { snapshot: {[name]: {callCount, errorCount, errorRate, avgMs,
     //                          p50Ms, p95Ms, lastCalledAt, lastError}},
     //     registered: string[],   // all built-in tool names
     //     unused: string[],       // registered & callCount==0
     //     error: string|null,
     //     fetchedAt: number }
-    unifyToolStats: null,
-    unifyToolStatsLoading: false,
+    yeaftToolStats: null,
+    yeaftToolStatsLoading: false,
     // feat-6af5f9f1 PR B: debug panel data refactor.
     //
     //   Turn = one user prompt + all AI responses (top level)
     //   Loop = one LLM call inside a Turn
     //   Tool = one tool execution inside a Loop
     //
-    // `unifyDebugLoops` is a flat list (per-LLM-call). `unifyDebugTurnsById`
+    // `yeaftDebugLoops` is a flat list (per-LLM-call). `yeaftDebugTurnsById`
     // is a {turnId -> turn record} map carrying turn-level data (user
     // prompt, vp, group, memory_used, memory_adjust, totals).
-    // `unifyDebugTurnOrder` preserves insertion order so the panel can
+    // `yeaftDebugTurnOrder` preserves insertion order so the panel can
     // render newest-first.
-    unifyDebugLoops: [],
-    unifyDebugTurnsById: {},
-    unifyDebugTurnOrder: [],
+    yeaftDebugLoops: [],
+    yeaftDebugTurnsById: {},
+    yeaftDebugTurnOrder: [],
     // fix-vp-multi-thread (bug 4): hydration status for the persistent
-    // SQLite trace round-trip. `loadUnifyDebugHistory()` flips
-    // `unifyDebugHistoryLoading` while the request is in flight; the
-    // `unify_debug_history` case in messageHandler resets it and stamps
-    // `unifyDebugHistoryFetchedAt`. `unifyDebugHistoryError` is non-null
+    // SQLite trace round-trip. `loadYeaftDebugHistory()` flips
+    // `yeaftDebugHistoryLoading` while the request is in flight; the
+    // `yeaft_debug_history` case in messageHandler resets it and stamps
+    // `yeaftDebugHistoryFetchedAt`. `yeaftDebugHistoryError` is non-null
     // when the 10-second guard timer fires before the agent replies
     // (agent down / relay loss).
-    unifyDebugHistoryLoading: false,
-    unifyDebugHistoryError: null,
-    unifyDebugHistoryFetchedAt: 0,
+    yeaftDebugHistoryLoading: false,
+    yeaftDebugHistoryError: null,
+    yeaftDebugHistoryFetchedAt: 0,
     // feat-6af5f9f1 PR C: debug-panel toolbar state.
-    //   - `unifyDebugSearch` is a substring filter applied to user prompt,
+    //   - `yeaftDebugSearch` is a substring filter applied to user prompt,
     //     vpId, tool name, tool input/output, system prompt, raw url.
-    //   - `unifyDebugGroupFilter` is INDEPENDENT of the main pane's group
+    //   - `yeaftDebugGroupFilter` is INDEPENDENT of the main pane's group
     //     filter (per user spec): debug can show all groups while the
     //     main pane is scoped to one. Default null = "All".
-    unifyDebugSearch: '',
-    unifyDebugGroupFilter: null,
+    yeaftDebugSearch: '',
+    yeaftDebugGroupFilter: null,
     // v0.1.755: latest dream pass status per scope, keyed by scope string
     // (e.g. 'group/abc', 'vp/alice'). Auto-triggered and manual passes both
     // feed the same map via `dream_progress` events. Schema per entry:
     //   { scope, status: 'running'|'success'|'error', startedAt, finishedAt?,
     //     stage?, mergedCount?, error?, manual?, durationMs? }
-    // UnifyDebugPanel reads `unifyDreamLatestForActiveGroup` (getter) to
+    // YeaftDebugPanel reads `yeaftDreamLatestForActiveGroup` (getter) to
     // render a single row showing the most recent pass for the active
     // group's scope.
-    unifyDreamLatest: {},
+    yeaftDreamLatest: {},
     // PR feat-dream-debug-panel-full: per-scope ring buffer of dream
     // events. Each entry is the raw event payload augmented with `at`
-    // (receive timestamp). Buffer is capped at UNIFY_DREAM_EVENT_LIMIT
+    // (receive timestamp). Buffer is capped at YEAFT_DREAM_EVENT_LIMIT
     // per scope so the array stays bounded across long sessions. Both
     // auto-triggered and manually-triggered passes append here. The
     // debug panel renders this under the Dream row when expanded.
     // Shape: { [scope: string]: Array<{phase, status?, target?, groupId?,
     //   error?, segments?, actions?, manual?, ts, at, ...}> }
-    unifyDreamEvents: {},
+    yeaftDreamEvents: {},
     // PR-L: V7 tool-history reflection cards. Keyed by `${conversationId}:${trigger}:${loopRange[0]}-${loopRange[1]}`.
     // Each entry: { trigger, status, loopRange, toolCount, content, durationMs, error,
     // anchorMsgId, anchorOrder }. Rendered inline by MessageList — anchored
     // after the message present at first emit (`pending`).
-    unifyReflectionCards: {},
+    yeaftReflectionCards: {},
     // PR-M3: sub-agent cards. Keyed by `${conversationId}:${agentId}`.
     // Each entry: { agentId, agentName, status, text, toolCalls[], turns,
     // error, anchorMsgId, anchorOrder, expanded, updatedAt }.
     // Populated by `sub_agent_event` handler — fed by Engine
-    // sub-agent event sink → web-bridge.js → unify_output.
-    unifySubAgentCards: {},
+    // sub-agent event sink → web-bridge.js → yeaft_output.
+    yeaftSubAgentCards: {},
     // ★ task-341: Sidebar V2 is now the only sidebar. Flag kept as a
     // constant `true` for backward-compat with any lingering reads.
-    // Legacy <aside class="unify-sidebar"> deleted in UnifyPage.
-    unifySidebarV2Enabled: true,
+    // Legacy <aside class="yeaft-sidebar"> deleted in YeaftPage.
+    yeaftSidebarV2Enabled: true,
 
-    // ★ task-fix (group-switch): active group filter for the Unify stream.
+    // ★ task-fix (group-switch): active group filter for the Yeaft stream.
     // When a user clicks a group row in the sidebar, the main pane narrows
     // to messages tagged with that groupId (both inbound agent messages
     // and outbound user messages sent via the group-chat action). null =
-    // no group filter. Mutually exclusive with unifyActiveThreadFilter —
+    // no group filter. Mutually exclusive with yeaftActiveThreadFilter —
     // setting one clears the other so the view has a single predicate.
-    unifyActiveGroupFilter: null,
+    yeaftActiveGroupFilter: null,
 
     // (PR #693 review I4 + Fowler M2: removed `pendingGroupSettingsRequest`
     // store-as-event-bus field — replaced by a normal emit chain since
-    // MessageList is mounted directly inside UnifyPage.)
+    // MessageList is mounted directly inside YeaftPage.)
 
     // Bug 1: in-flight SEND-context group, set transiently by
-    // handleUnifyOutput before dispatching streaming chunks. Read by
+    // handleYeaftOutput before dispatching streaming chunks. Read by
     // addMessageToConversation so arriving messages get stamped with the
-    // ORIGINATING group (carried in the unify_output envelope) rather than
+    // ORIGINATING group (carried in the yeaft_output envelope) rather than
     // the user's CURRENT filter (which can change while a reply streams).
-    _currentUnifyGroupId: null,
+    _currentYeaftGroupId: null,
 
-    // Per-VP turn routing: set transiently by handleUnifyOutput so that
+    // Per-VP turn routing: set transiently by handleYeaftOutput so that
     // addMessageToConversation / appendToAssistant can route by turnId.
-    _currentUnifyVpId: null,
-    _currentUnifyTurnId: null,
-    _currentUnifyThreadId: null,
-    _currentUnifyThreadTitle: null,
+    _currentYeaftVpId: null,
+    _currentYeaftTurnId: null,
+    _currentYeaftThreadId: null,
+    _currentYeaftThreadTitle: null,
     // Feature system fully removed 2026-05-13; per-VP turns are folded
     // by VpTurnBlock keyed off vpId + turnId + threadId.
 
@@ -408,21 +408,21 @@ export const useChatStore = defineStore('chat', {
     // but group VP messages are explicitly tagged by threadId so MessageList
     // can keep tools/todos/progress inside the correct VP thread block.
 
-    // task-fix: per-VP typing indicator for Unify group chat.
+    // task-fix: per-VP typing indicator for Yeaft group chat.
     //   Shape: { [conversationId]: { [vpId]: refCount } }
-    //   Nesting by conversationId is what isolates Unify typing state from
+    //   Nesting by conversationId is what isolates Yeaft typing state from
     //   the Chat view — so a VP that's still streaming when the user
     //   switches to a Chat tab does NOT bleed its avatar / typing dots
     //   into the Chat view (cross-mode state leak).
     // Populated by `vp_typing_start` / `vp_typing_end` events emitted from
-    // the agent's handleUnifyGroupChat fan-out loop. Consumed by
+    // the agent's handleYeaftGroupChat fan-out loop. Consumed by
     // VpSpeakerHeader to render a three-dot animation next to the VP's
     // avatar — replaces the old global "running cat" which was ambiguous
     // when N VPs were speaking concurrently.
     // The refCount (not a boolean) is so overlapping sends to the same VP
     // degrade gracefully — the dot stays on until the last concurrent
     // dispatch ends.
-    unifyVpTyping: {},
+    yeaftVpTyping: {},
 
     // ★ task-334-ui-g: VP CRUD pending-request map.
     // Each `vpCrudRequest()` stashes its resolver here keyed by requestId;
@@ -432,15 +432,15 @@ export const useChatStore = defineStore('chat', {
     // hydration from SSR / rehydration doesn't trip on a non-Map value.
     _vpCrudPending: null,
 
-    // ★ task-334-ui-c: VP detail view. When non-null, UnifyPage switches
+    // ★ task-334-ui-c: VP detail view. When non-null, YeaftPage switches
     // the center pane to the VpDetailView component (mirrors the
     // task-315 pattern). Esc / breadcrumb back clears. Stays null in
     // legacy 1:1 mode — only entered by clicking a VpAvatar/VpBadge in
     // a VP-speaker-headed turn or a VP library row.
-    unifyActiveVpDetailId: null,
+    yeaftActiveVpDetailId: null,
 
     // VP-block redesign (2026-05-08): the per-turn detail drawer
-    // (`unifyOpenVpTurnDetail`) was retired alongside VpQuickCard /
+    // (`yeaftOpenVpTurnDetail`) was retired alongside VpQuickCard /
     // VpTurnDetailDrawer. Per-turn inspection now happens through the
     // VpTurnBlock collapse layer in the message list.
   }),
@@ -459,34 +459,34 @@ export const useChatStore = defineStore('chat', {
       const convId = this.activeConversationId;
       const raw = convId ? (state.messagesMap[convId] || EMPTY_ARRAY) : EMPTY_ARRAY;
       // task-fix (group-switch): group filter narrows the stream to one group.
-      // Every Unify message is stamped with a groupId at creation time
+      // Every Yeaft message is stamped with a groupId at creation time
       // (addMessageToConversation defaults to grp_default), so strict
       // equality is safe — no message can slip through "untagged".
-      if (state.currentView === 'unify' && state.unifyActiveGroupFilter) {
-        const target = state.unifyActiveGroupFilter;
+      if (state.currentView === 'yeaft' && state.yeaftActiveGroupFilter) {
+        const target = state.yeaftActiveGroupFilter;
         return raw.filter(m => m && m.groupId === target);
       }
       return raw;
     },
-    // ★ Unify: the raw message list for the active Unify conversation (no thread filter applied).
-    unifyAllMessages: (state) => {
-      const convId = state.unifyConversationId;
+    // ★ Yeaft: the raw message list for the active Yeaft conversation (no thread filter applied).
+    yeaftAllMessages: (state) => {
+      const convId = state.yeaftConversationId;
       return convId ? (state.messagesMap[convId] || EMPTY_ARRAY) : EMPTY_ARRAY;
     },
     // task-fix: per-VP typing-indicator getters scoped to the CURRENT
     // conversation. Components read these instead of the underlying
-    // `unifyVpTyping` shape so the nested data layout stays an internal
+    // `yeaftVpTyping` shape so the nested data layout stays an internal
     // detail of the store. The cross-mode isolation invariant is then
     // a property of the getter contract, not something each consumer has
     // to remember to enforce.
     //
     // Routes through `activeConversationId` so chat-mode handlers that
-    // clobber `activeConversations` while the user is in Unify cannot
+    // clobber `activeConversations` while the user is in Yeaft cannot
     // make typing badges silently disappear.
     vpsTypingInCurrentConv(state) {
       const convId = this.activeConversationId;
       if (!convId) return EMPTY_ARRAY;
-      const inner = (state.unifyVpTyping || {})[convId];
+      const inner = (state.yeaftVpTyping || {})[convId];
       if (!inner) return EMPTY_ARRAY;
       const ids = Object.keys(inner).filter((vpId) => (inner[vpId] || 0) > 0);
       return ids.length === 0 ? EMPTY_ARRAY : ids;
@@ -501,38 +501,38 @@ export const useChatStore = defineStore('chat', {
         if (!vpId) return false;
         const convId = this.activeConversationId;
         if (!convId) return false;
-        const inner = (state.unifyVpTyping || {})[convId];
+        const inner = (state.yeaftVpTyping || {})[convId];
         if (!inner) return false;
         return (inner[vpId] || 0) > 0;
       };
     },
     // v0.1.755: latest dream pass for the currently-focused group (or null).
-    // Reads from `unifyDreamLatest` keyed by scope. The active group's
-    // scope is `group/<id>` — we resolve that from `unifyActiveGroupFilter`
+    // Reads from `yeaftDreamLatest` keyed by scope. The active group's
+    // scope is `group/<id>` — we resolve that from `yeaftActiveGroupFilter`
     // (or fall back to the debug-side filter). Returns null when nothing
     // has been recorded yet for this scope.
-    unifyDreamLatestForActiveGroup(state) {
+    yeaftDreamLatestForActiveGroup(state) {
       const targetGroupId = resolveActiveDreamDebugGroupId(state);
       if (!targetGroupId) return null;
       const scope = `group/${targetGroupId}`;
-      return state.unifyDreamLatest?.[scope] || null;
+      return state.yeaftDreamLatest?.[scope] || null;
     },
     // PR feat-dream-debug-panel-full: per-group event log for the
     // expanded debug-panel view. Same filter precedence as
-    // `unifyDreamLatestForActiveGroup`. Returns the full ring-buffer
+    // `yeaftDreamLatestForActiveGroup`. Returns the full ring-buffer
     // array for the active group's scope (oldest first), or an empty
     // array. Includes `'*'`-scoped events broadcast to all groups
     // (start/done) merged in chronological order so the user sees a
     // single coherent timeline regardless of whether a given event
     // landed in the scoped bucket or the broadcast bucket.
-    unifyDreamEventsForActiveGroup(state) {
+    yeaftDreamEventsForActiveGroup(state) {
       const targetGroupId = resolveActiveDreamDebugGroupId(state);
       if (!targetGroupId) return [];
       const scope = `group/${targetGroupId}`;
-      const scoped = Array.isArray(state.unifyDreamEvents?.[scope])
-        ? state.unifyDreamEvents[scope] : [];
-      const broadcast = Array.isArray(state.unifyDreamEvents?.['*'])
-        ? state.unifyDreamEvents['*'] : [];
+      const scoped = Array.isArray(state.yeaftDreamEvents?.[scope])
+        ? state.yeaftDreamEvents[scope] : [];
+      const broadcast = Array.isArray(state.yeaftDreamEvents?.['*'])
+        ? state.yeaftDreamEvents['*'] : [];
       if (broadcast.length === 0) return scoped;
       if (scoped.length === 0) return broadcast;
       // Merge by `at` timestamp (already monotonic per source since both
@@ -547,8 +547,8 @@ export const useChatStore = defineStore('chat', {
     // sorted newest-first.
     //
     // PR C: filter precedence is now:
-    //   1. `unifyDebugGroupFilter` (independent debug-side filter; user's spec)
-    //   2. fall back to `unifyActiveGroupFilter` (main pane filter) ONLY if
+    //   1. `yeaftDebugGroupFilter` (independent debug-side filter; user's spec)
+    //   2. fall back to `yeaftActiveGroupFilter` (main pane filter) ONLY if
     //      the debug filter is null AND the user has selected a main group.
     //   3. otherwise show all turns.
     //
@@ -556,14 +556,14 @@ export const useChatStore = defineStore('chat', {
     // doesn't match the main pane) shows just that group. Setting it to
     // the empty-string sentinel `'__all__'` forces "show all" even when
     // the main pane is filtered.
-    unifyDebugTurnsForActiveGroup: (state) => {
-      const order = state.unifyDebugTurnOrder || EMPTY_ARRAY;
-      const byId = state.unifyDebugTurnsById || {};
-      const allLoops = state.unifyDebugLoops || EMPTY_ARRAY;
-      const reflections = state.unifyReflectionCards || {};
+    yeaftDebugTurnsForActiveGroup: (state) => {
+      const order = state.yeaftDebugTurnOrder || EMPTY_ARRAY;
+      const byId = state.yeaftDebugTurnsById || {};
+      const allLoops = state.yeaftDebugLoops || EMPTY_ARRAY;
+      const reflections = state.yeaftReflectionCards || {};
 
-      const debugFilter = state.unifyDebugGroupFilter;
-      const mainFilter = state.unifyActiveGroupFilter || null;
+      const debugFilter = state.yeaftDebugGroupFilter;
+      const mainFilter = state.yeaftActiveGroupFilter || null;
       let target;
       if (debugFilter === '__all__') {
         target = null;
@@ -589,7 +589,7 @@ export const useChatStore = defineStore('chat', {
         reflectionsByTurn[card.turnId].push(card);
       }
 
-      const search = (state.unifyDebugSearch || '').trim().toLowerCase();
+      const search = (state.yeaftDebugSearch || '').trim().toLowerCase();
 
       const out = [];
       for (let i = order.length - 1; i >= 0; i--) {
@@ -611,7 +611,7 @@ export const useChatStore = defineStore('chat', {
         // turn is still in flight those fields are 0, so the header shows
         // "0L 0ms 0 tok". Worse, the template falls back to
         // `turn.loops.length` for the L count, but the global loop ring is
-        // capped at MAX_UNIFY_DEBUG_LOOPS (=50), so a long in-flight turn
+        // capped at MAX_YEAFT_DEBUG_LOOPS (=50), so a long in-flight turn
         // pins the header at "50L". For old turns hydrated from SQLite
         // whose `turn_close` was never persisted, the row stays "0L" forever.
         //
@@ -645,25 +645,25 @@ export const useChatStore = defineStore('chat', {
     },
     // PR C: distinct groupIds present in the current debug history,
     // for the toolbar group-filter dropdown.
-    unifyDebugAvailableGroups: (state) => {
+    yeaftDebugAvailableGroups: (state) => {
       const seen = new Set();
-      for (const turnId of state.unifyDebugTurnOrder || EMPTY_ARRAY) {
-        const turn = state.unifyDebugTurnsById[turnId];
+      for (const turnId of state.yeaftDebugTurnOrder || EMPTY_ARRAY) {
+        const turn = state.yeaftDebugTurnsById[turnId];
         if (turn && turn.groupId) seen.add(turn.groupId);
       }
       return Array.from(seen).sort();
     },
     // PR C: total turns ignoring filters — used to render "showing M of N"
     // in the toolbar so the user knows when they have unsearched data.
-    unifyDebugTurnTotal: (state) => {
-      return (state.unifyDebugTurnOrder || EMPTY_ARRAY).length;
+    yeaftDebugTurnTotal: (state) => {
+      return (state.yeaftDebugTurnOrder || EMPTY_ARRAY).length;
     },
-    // ★ Unify: the currently visible messages (H2.f.3: thread filter dropped).
-    unifyVisibleMessages: (state) => {
-      const convId = state.unifyConversationId;
+    // ★ Yeaft: the currently visible messages (H2.f.3: thread filter dropped).
+    yeaftVisibleMessages: (state) => {
+      const convId = state.yeaftConversationId;
       const raw = convId ? (state.messagesMap[convId] || EMPTY_ARRAY) : EMPTY_ARRAY;
-      if (state.unifyActiveGroupFilter) {
-        const target = state.unifyActiveGroupFilter;
+      if (state.yeaftActiveGroupFilter) {
+        const target = state.yeaftActiveGroupFilter;
         return raw.filter(m => m && m.groupId === target);
       }
       return raw;
@@ -693,7 +693,7 @@ export const useChatStore = defineStore('chat', {
     // Chat mode: the conversation's project dir (`currentWorkDir`) takes
     // precedence, falling back to the agent's cwd. Preserves prior behavior.
     //
-    // Unify mode: the Chat agent's cwd is the wrong default — it leaks
+    // Yeaft mode: the Chat agent's cwd is the wrong default — it leaks
     // whichever Chat conversation the user last opened into the group's
     // workbench. Precedence:
     //   1. active group's own workDir (groups don't carry one on main yet,
@@ -702,14 +702,14 @@ export const useChatStore = defineStore('chat', {
     //   2. agent's ~/.yeaft home, advertised via session_ready.yeaftDir,
     //   3. agent cwd as a final fallback if session_ready hasn't landed.
     //
-    // Until `unifySessionReady`, we still return the fallback chain rather
+    // Until `yeaftSessionReady`, we still return the fallback chain rather
     // than '' so first-paint Files/Git RPCs don't hit a no-op — a brief
     // flicker is preferable to a blank workbench during the ~1 tick gap.
     effectiveWorkDir: (state) => {
-      if (state.currentView === 'unify') {
+      if (state.currentView === 'yeaft') {
         const groupWorkDir = getGroupsStore()?.activeGroup?.workDir;
         return groupWorkDir
-          || state.unifyYeaftDir
+          || state.yeaftYeaftDir
           || state.currentAgentInfo?.workDir
           || '';
       }
@@ -806,58 +806,58 @@ export const useChatStore = defineStore('chat', {
 
   actions: {
     // =====================
-    // Unify 页面
+    // Yeaft 页面
     // =====================
-    enterUnify(agentId = null) {
+    enterYeaft(agentId = null) {
       // Capture the chat-side activeConversations snapshot BEFORE flipping
       // currentView. The transition helper is idempotent: if we're
-      // already in Unify (e.g. switching agents, programmatic re-entry,
+      // already in Yeaft (e.g. switching agents, programmatic re-entry,
       // a redundant call), it will NOT overwrite the existing snapshot
-      // with the unify-only array — which would otherwise cause
-      // leaveUnify to "restore" the unify conversationId back into Chat
-      // and leak unify messages into the Chat view.
-      if (agentId) this.unifyAgentId = agentId;
-      else if (!this.unifyAgentId) {
+      // with the yeaft-only array — which would otherwise cause
+      // leaveYeaft to "restore" the yeaft conversationId back into Chat
+      // and leak yeaft messages into the Chat view.
+      if (agentId) this.yeaftAgentId = agentId;
+      else if (!this.yeaftAgentId) {
         const online = this.agents.find(a => a.online);
-        if (online) this.unifyAgentId = online.id;
+        if (online) this.yeaftAgentId = online.id;
       }
-      // Keep currentAgent / currentAgentInfo in sync with the Unify agent
+      // Keep currentAgent / currentAgentInfo in sync with the Yeaft agent
       // selection. The sidebar header indicator and the entire Files /
       // Workbench subsystem key off `currentAgent` (e.g. file ops send
       // `agentId: store.currentAgent`). Without this sync they remained
       // stuck on whichever agent Chat had auto-selected first, so opening
-      // Unify for the 2nd/3rd agent showed the wrong agent badge and
+      // Yeaft for the 2nd/3rd agent showed the wrong agent badge and
       // browsed the first agent's folder.
-      if (this.unifyAgentId && this.currentAgent !== this.unifyAgentId) {
-        this.selectAgent(this.unifyAgentId);
+      if (this.yeaftAgentId && this.currentAgent !== this.yeaftAgentId) {
+        this.selectAgent(this.yeaftAgentId);
       }
       // Create a local conversationId immediately so MessageList has something to render
-      if (!this.unifyConversationId) {
-        this.unifyConversationId = `unify-local-${Date.now()}`;
+      if (!this.yeaftConversationId) {
+        this.yeaftConversationId = `yeaft-local-${Date.now()}`;
       }
-      if (!this.messagesMap[this.unifyConversationId]) {
-        this.messagesMap[this.unifyConversationId] = [];
+      if (!this.messagesMap[this.yeaftConversationId]) {
+        this.messagesMap[this.yeaftConversationId] = [];
       }
-      // Snapshot (only on the Chat → Unify edge) and swap activeConversations.
+      // Snapshot (only on the Chat → Yeaft edge) and swap activeConversations.
       // Reads `this.currentView` to decide; must run BEFORE the flip below.
-      unifyViewHelpers.applyEnterUnifyTransition(this);
-      this.currentView = 'unify';
-      // task-fix-unify-load-more-empty: clear leaked Chat-mode pagination
+      yeaftViewHelpers.applyEnterYeaftTransition(this);
+      this.currentView = 'yeaft';
+      // task-fix-yeaft-load-more-empty: clear leaked Chat-mode pagination
       // flags. `hasMoreMessages` is set true by Chat's `db_messages_loaded`
       // / `sync_messages_result` handlers and would otherwise survive the
-      // Chat → Unify transition, surfacing a "加载更多消息" hint that does
-      // nothing in Unify (Unify history doesn't live in messageDb).
+      // Chat → Yeaft transition, surfacing a "加载更多消息" hint that does
+      // nothing in Yeaft (Yeaft history doesn't live in messageDb).
       this.hasMoreMessages = false;
       this.loadingMoreMessages = false;
-      // Reset Unify pagination cursor on every entry. The agent will re-prime
+      // Reset Yeaft pagination cursor on every entry. The agent will re-prime
       // these via `history_loaded` once the bootstrap replay completes.
-      this.unifyHasMoreHistory = false;
-      this.unifyLoadingMoreHistory = false;
-      this.unifyOldestLoadedSeq = null;
+      this.yeaftHasMoreHistory = false;
+      this.yeaftLoadingMoreHistory = false;
+      this.yeaftOldestLoadedSeq = null;
 
       // Always request a session_ready replay so model + status + groups
-      // snapshot are repopulated on every Unify entry. Backend's
-      // handleUnifyLoadHistory is idempotent: the session_ready handler
+      // snapshot are repopulated on every Yeaft entry. Backend's
+      // handleYeaftLoadHistory is idempotent: the session_ready handler
       // either migrates the local convId (first time) or refreshes model /
       // status fields (re-entry). For the active group, also replay the
       // visible history unless that group has already completed a history
@@ -866,14 +866,14 @@ export const useChatStore = defineStore('chat', {
       // persisted rows were written during a previous page/session.
       //
       // Group-history-isolation (Bug 7): pass `groupId` so the agent only
-      // replays messages stamped with the active group. The visible Unify
+      // replays messages stamped with the active group. The visible Yeaft
       // filter is authoritative; groupsStore.activeGroupId is only a lazy
       // fallback so quick group switches don't request another group's
       // history into the active pane.
-      if (this.unifyAgentId) {
-        const groupId = resolveActiveUnifyGroupId(this);
+      if (this.yeaftAgentId) {
+        const groupId = resolveActiveYeaftGroupId(this);
         const groupKey = groupId || '__all__';
-        const savedState = this.unifyGroupHistoryState[groupKey] || null;
+        const savedState = this.yeaftGroupHistoryState[groupKey] || null;
         // If the group snapshot has not arrived yet, do not replay the
         // unfiltered "all" history. That causes the visible pane to paint
         // legacy/default rows and then repaint after group_list_updated picks
@@ -881,104 +881,104 @@ export const useChatStore = defineStore('chat', {
         // group_list_updated path below will hydrate exactly one group.
         const needMessages = !!groupId && !savedState?.loaded && !savedState?.loading;
         if (groupId && needMessages) {
-          this.unifyGroupHistoryState = {
-            ...this.unifyGroupHistoryState,
+          this.yeaftGroupHistoryState = {
+            ...this.yeaftGroupHistoryState,
             [groupKey]: { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },
           };
-          this.unifyLoadingMoreHistory = true;
+          this.yeaftLoadingMoreHistory = true;
         }
         this.sendWsMessage({
-          type: 'unify_load_history',
-          agentId: this.unifyAgentId,
+          type: 'yeaft_load_history',
+          agentId: this.yeaftAgentId,
           limit: needMessages ? 10 : 0,
           groupId,
         });
       }
     },
-    leaveUnify() {
+    leaveYeaft() {
       this.currentView = 'chat';
       // VP-block redesign (2026-05-08): the per-turn detail drawer was
       // retired; nothing to clear here.
       // Restore the original activeConversations snapshot taken on the
-      // last real Chat → Unify transition (idempotent — no-op if cold).
-      unifyViewHelpers.applyLeaveUnifyTransition(this);
+      // last real Chat → Yeaft transition (idempotent — no-op if cold).
+      yeaftViewHelpers.applyLeaveYeaftTransition(this);
     },
     /**
      * 2026-05-13: ask the agent for the latest tool-call usage stats.
-     * Round-trip: web → server → agent (handleUnifyFetchToolStats) →
-     * web (`unify_tool_stats` case writes to this.unifyToolStats).
-     * Used by the UnifyDebugDrawer "Tool Stats" panel.
+     * Round-trip: web → server → agent (handleYeaftFetchToolStats) →
+     * web (`yeaft_tool_stats` case writes to this.yeaftToolStats).
+     * Used by the YeaftDebugDrawer "Tool Stats" panel.
      */
-    fetchUnifyToolStats() {
-      if (!this.unifyAgentId) return;
-      this.unifyToolStatsLoading = true;
+    fetchYeaftToolStats() {
+      if (!this.yeaftAgentId) return;
+      this.yeaftToolStatsLoading = true;
       this.sendWsMessage({
-        type: 'unify_fetch_tool_stats',
-        agentId: this.unifyAgentId,
+        type: 'yeaft_fetch_tool_stats',
+        agentId: this.yeaftAgentId,
       });
       // Guard against silent drops (agent down, relay loss). Without a
       // timeout the drawer spinner runs forever; surface the failure to
       // the user so they at least know to retry / reload.
-      if (this._fetchUnifyToolStatsTimer) clearTimeout(this._fetchUnifyToolStatsTimer);
-      this._fetchUnifyToolStatsTimer = setTimeout(() => {
-        if (this.unifyToolStatsLoading) {
-          this.unifyToolStatsLoading = false;
-          this.unifyToolStats = {
-            ...(this.unifyToolStats || { snapshot: {}, registered: [], unused: [] }),
+      if (this._fetchYeaftToolStatsTimer) clearTimeout(this._fetchYeaftToolStatsTimer);
+      this._fetchYeaftToolStatsTimer = setTimeout(() => {
+        if (this.yeaftToolStatsLoading) {
+          this.yeaftToolStatsLoading = false;
+          this.yeaftToolStats = {
+            ...(this.yeaftToolStats || { snapshot: {}, registered: [], unused: [] }),
             error: null,
             notice: 'Tool stats are unavailable right now. Try again after the agent reconnects.',
             fetchedAt: Date.now(),
           };
         }
-        this._fetchUnifyToolStatsTimer = null;
+        this._fetchYeaftToolStatsTimer = null;
       }, 10_000);
     },
     /**
-     * fix-vp-multi-thread (bug 4): hydrate the Unify debug panel from the
+     * fix-vp-multi-thread (bug 4): hydrate the Yeaft debug panel from the
      * persistent SQLite trace. The agent maintains a per-call SQLite log at
-     * `~/.yeaft/cache/unify-debug-trace.sqlite`; before this action existed
-     * the panel only displayed turns observed live via `unify_output`, so
+     * `~/.yeaft/cache/yeaft-debug-trace.sqlite`; before this action existed
+     * the panel only displayed turns observed live via `yeaft_output`, so
      * everything before the panel was mounted was invisible.
      *
-     * Round-trip: web → server → agent (handleUnifyFetchDebugHistory) →
-     * web (`unify_debug_history` case in messageHandler merges into
-     * `unifyDebugLoops` / `unifyDebugTurnsById` / `unifyDebugTurnOrder`).
+     * Round-trip: web → server → agent (handleYeaftFetchDebugHistory) →
+     * web (`yeaft_debug_history` case in messageHandler merges into
+     * `yeaftDebugLoops` / `yeaftDebugTurnsById` / `yeaftDebugTurnOrder`).
      */
-    loadUnifyDebugHistory({ groupId, threadId, limit, dreamLimit } = {}) {
-      if (!this.unifyAgentId) return;
-      this.unifyDebugHistoryLoading = true;
-      this.unifyDebugHistoryError = null;
+    loadYeaftDebugHistory({ groupId, threadId, limit, dreamLimit } = {}) {
+      if (!this.yeaftAgentId) return;
+      this.yeaftDebugHistoryLoading = true;
+      this.yeaftDebugHistoryError = null;
       const payload = {
-        type: 'unify_fetch_debug_history',
-        agentId: this.unifyAgentId,
+        type: 'yeaft_fetch_debug_history',
+        agentId: this.yeaftAgentId,
         limit: Number.isFinite(limit) && limit > 0 ? limit : 5,
         dreamLimit: Number.isFinite(dreamLimit) && dreamLimit > 0 ? dreamLimit : 5,
       };
       if (typeof groupId === 'string' && groupId) payload.groupId = groupId;
       if (typeof threadId === 'string' && threadId) payload.threadId = threadId;
       this.sendWsMessage(payload);
-      if (this._fetchUnifyDebugHistoryTimer) clearTimeout(this._fetchUnifyDebugHistoryTimer);
-      this._fetchUnifyDebugHistoryTimer = setTimeout(() => {
-        if (this.unifyDebugHistoryLoading) {
-          this.unifyDebugHistoryLoading = false;
-          this.unifyDebugHistoryError = 'Debug history is unavailable right now. Try again after the agent reconnects.';
+      if (this._fetchYeaftDebugHistoryTimer) clearTimeout(this._fetchYeaftDebugHistoryTimer);
+      this._fetchYeaftDebugHistoryTimer = setTimeout(() => {
+        if (this.yeaftDebugHistoryLoading) {
+          this.yeaftDebugHistoryLoading = false;
+          this.yeaftDebugHistoryError = 'Debug history is unavailable right now. Try again after the agent reconnects.';
         }
-        this._fetchUnifyDebugHistoryTimer = null;
+        this._fetchYeaftDebugHistoryTimer = null;
       }, 10_000);
     },
     /**
-     * Send a group-scoped Unify chat message. Routes through the agent-side
+     * Send a group-scoped Yeaft chat message. Routes through the agent-side
      * GroupCoordinator which fans out to the target VP(s) or falls back to
-     * the group's defaultVpId. This is the SOLE Unify send path —
-     * `sendUnifyChat` (legacy 1:1) was removed; callers without a real
+     * the group's defaultVpId. This is the SOLE Yeaft send path —
+     * `sendYeaftChat` (legacy 1:1) was removed; callers without a real
      * groupId should pass `'grp_default'`.
      *
      * @param {{groupId:string, text:string, mentions?:string[],
      *           attachments?:Array<{fileId:string,name:string,preview?:string,
      *                               isImage?:boolean,mimeType?:string}>}} payload
      */
-    sendUnifyGroupChat({ groupId, text, mentions, attachments }) {
-      if (!groupId || !this.unifyAgentId) return;
+    sendYeaftGroupChat({ groupId, text, mentions, attachments }) {
+      if (!groupId || !this.yeaftAgentId) return;
       const safeAttachments = Array.isArray(attachments)
         ? attachments.filter((a) => a && a.fileId)
         : [];
@@ -992,7 +992,7 @@ export const useChatStore = defineStore('chat', {
       const effectiveText = text?.trim() ? text : '(attached files)';
       const clientMessageId = `u_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
       const clientThreadId = `pending_${clientMessageId}`;
-      if (this.unifyConversationId) {
+      if (this.yeaftConversationId) {
         const localMsg = {
           id: clientMessageId,
           messageId: clientMessageId,
@@ -1020,18 +1020,18 @@ export const useChatStore = defineStore('chat', {
             mimeType: a.mimeType || '',
           }));
         }
-        this.addMessageToConversation(this.unifyConversationId, localMsg);
-        this.processingConversations[this.unifyConversationId] = true;
-        this._turnCompletedConvs?.delete(this.unifyConversationId);
-        if (this._closedAt?.[this.unifyConversationId]) {
-          delete this._closedAt[this.unifyConversationId];
+        this.addMessageToConversation(this.yeaftConversationId, localMsg);
+        this.processingConversations[this.yeaftConversationId] = true;
+        this._turnCompletedConvs?.delete(this.yeaftConversationId);
+        if (this._closedAt?.[this.yeaftConversationId]) {
+          delete this._closedAt[this.yeaftConversationId];
         }
-        this.getOrCreateExecutionStatus(this.unifyConversationId);
-        watchdogHelpers.startUnifyWatchdog(this, this.unifyConversationId);
+        this.getOrCreateExecutionStatus(this.yeaftConversationId);
+        watchdogHelpers.startYeaftWatchdog(this, this.yeaftConversationId);
       }
       const wsMsg = {
-        type: 'unify_group_chat',
-        agentId: this.unifyAgentId,
+        type: 'yeaft_group_chat',
+        agentId: this.yeaftAgentId,
         id: clientMessageId,
         groupId,
         text: effectiveText,
@@ -1039,7 +1039,7 @@ export const useChatStore = defineStore('chat', {
       };
       if (safeAttachments.length > 0) {
         // Wire-side: only the fields the server resolver needs. The
-        // server (`client-conversation.js` unify_* relay) consumes
+        // server (`client-conversation.js` yeaft_* relay) consumes
         // `attachments[].fileId` against pendingFiles and forwards
         // `files: [{name,mimeType,data:base64,isImage}]` to the agent.
         wsMsg.attachments = safeAttachments.map((a) => ({
@@ -1049,33 +1049,33 @@ export const useChatStore = defineStore('chat', {
       }
       this.sendWsMessage(wsMsg);
     },
-    handleUnifyOutput(msg) {
+    handleYeaftOutput(msg) {
       if (!msg) return;
 
       // ── claude_output-format data: dispatch through standard pipeline ──
       if (msg.data) {
-        const conversationId = msg.conversationId || this.unifyConversationId;
+        const conversationId = msg.conversationId || this.yeaftConversationId;
         if (conversationId) {
           // Ensure messagesMap exists for this conversation
           if (!this.messagesMap[conversationId]) {
             this.messagesMap[conversationId] = [];
           }
           // Store the conversationId if we didn't have it yet
-          if (!this.unifyConversationId) {
-            this.unifyConversationId = conversationId;
+          if (!this.yeaftConversationId) {
+            this.yeaftConversationId = conversationId;
           }
           // Bug 1: stamp the in-flight SEND-context group so messages land
           // in the originating group regardless of the user's current filter.
-          const prevGroup = this._currentUnifyGroupId;
-          const prevVpId = this._currentUnifyVpId;
-          const prevTurnId = this._currentUnifyTurnId;
-          const prevThreadId = this._currentUnifyThreadId;
-          const prevThreadTitle = this._currentUnifyThreadTitle;
-          if (msg.groupId != null) this._currentUnifyGroupId = msg.groupId;
-          if (msg.vpId && msg.data.type !== 'result') this._currentUnifyVpId = msg.vpId;
-          if (msg.turnId && msg.data.type !== 'result') this._currentUnifyTurnId = msg.turnId;
-          if (msg.threadId) this._currentUnifyThreadId = msg.threadId;
-          if (msg.threadTitle || msg.title) this._currentUnifyThreadTitle = msg.threadTitle || msg.title;
+          const prevGroup = this._currentYeaftGroupId;
+          const prevVpId = this._currentYeaftVpId;
+          const prevTurnId = this._currentYeaftTurnId;
+          const prevThreadId = this._currentYeaftThreadId;
+          const prevThreadTitle = this._currentYeaftThreadTitle;
+          if (msg.groupId != null) this._currentYeaftGroupId = msg.groupId;
+          if (msg.vpId && msg.data.type !== 'result') this._currentYeaftVpId = msg.vpId;
+          if (msg.turnId && msg.data.type !== 'result') this._currentYeaftTurnId = msg.turnId;
+          if (msg.threadId) this._currentYeaftThreadId = msg.threadId;
+          if (msg.threadTitle || msg.title) this._currentYeaftThreadTitle = msg.threadTitle || msg.title;
           if (msg.threadId) {
             const rows = this.messagesMap[conversationId] || [];
             for (let i = rows.length - 1; i >= 0; i--) {
@@ -1092,11 +1092,11 @@ export const useChatStore = defineStore('chat', {
           try {
             this.handleClaudeOutput(conversationId, msg.data);
           } finally {
-            this._currentUnifyGroupId = prevGroup;
-            this._currentUnifyVpId = prevVpId;
-            this._currentUnifyTurnId = prevTurnId;
-            this._currentUnifyThreadId = prevThreadId;
-            this._currentUnifyThreadTitle = prevThreadTitle;
+            this._currentYeaftGroupId = prevGroup;
+            this._currentYeaftVpId = prevVpId;
+            this._currentYeaftTurnId = prevTurnId;
+            this._currentYeaftThreadId = prevThreadId;
+            this._currentYeaftThreadTitle = prevThreadTitle;
           }
         }
         return;
@@ -1109,10 +1109,10 @@ export const useChatStore = defineStore('chat', {
       switch (event.type) {
         case 'session_ready': {
           const agentConvId = event.conversationId;
-          const localConvId = this.unifyConversationId;
+          const localConvId = this.yeaftConversationId;
 
           // Migrate messages from local placeholder to agent's conversationId.
-          // On Unify re-entry the server may replay session_ready with the same
+          // On Yeaft re-entry the server may replay session_ready with the same
           // agent conversation id while a fresh local placeholder is active.
           // Merge instead of replacing so cached/live rows don't disappear and
           // then reappear when group history lands.
@@ -1137,15 +1137,15 @@ export const useChatStore = defineStore('chat', {
             this.messagesMap[agentConvId] = [];
           }
 
-          this.unifyConversationId = agentConvId;
-          this.unifyModel = event.model;
-          this.unifySessionReady = true;
-          this.unifyAvailableModels = event.availableModels || [];
-          // Surface agent's yeaft home dir so Unify workbench (Files/Git tabs)
+          this.yeaftConversationId = agentConvId;
+          this.yeaftModel = event.model;
+          this.yeaftSessionReady = true;
+          this.yeaftAvailableModels = event.availableModels || [];
+          // Surface agent's yeaft home dir so Yeaft workbench (Files/Git tabs)
           // can default to a sensible folder instead of leaking through
           // currentAgentInfo.workDir (which is Chat's cwd, not the group's).
-          if (event.yeaftDir) this.unifyYeaftDir = event.yeaftDir;
-          this.unifyStatus = {
+          if (event.yeaftDir) this.yeaftYeaftDir = event.yeaftDir;
+          this.yeaftStatus = {
             skills: event.skills,
             mcpServers: event.mcpServers,
             tools: event.tools,
@@ -1157,14 +1157,14 @@ export const useChatStore = defineStore('chat', {
           };
 
           // Update activeConversations to point to the agent's conversationId
-          if (this.currentView === 'unify') {
+          if (this.currentView === 'yeaft') {
             this.activeConversations = [agentConvId];
           }
 
           // ★ task-334-ui-a: subscribe to VP library snapshot.
           // Snapshot-only this slice; live diff (vp_updated/vp_removed)
           // arrives via the same channel once 334h ships.
-          this.sendWsMessage({ type: 'unify_vp_subscribe' });
+          this.sendWsMessage({ type: 'yeaft_vp_subscribe' });
           break;
         }
 
@@ -1195,19 +1195,19 @@ export const useChatStore = defineStore('chat', {
             memoryAdjust: null,
             tools: [],
           };
-          this.unifyDebugTurnsById = { ...this.unifyDebugTurnsById, [event.turnId]: turn };
-          if (!this.unifyDebugTurnOrder.includes(event.turnId)) {
-            this.unifyDebugTurnOrder = [...this.unifyDebugTurnOrder, event.turnId];
+          this.yeaftDebugTurnsById = { ...this.yeaftDebugTurnsById, [event.turnId]: turn };
+          if (!this.yeaftDebugTurnOrder.includes(event.turnId)) {
+            this.yeaftDebugTurnOrder = [...this.yeaftDebugTurnOrder, event.turnId];
           }
           break;
         }
 
         case 'turn_close': {
           if (!event.turnId) break;
-          const prev = this.unifyDebugTurnsById[event.turnId];
+          const prev = this.yeaftDebugTurnsById[event.turnId];
           if (!prev) break;
-          this.unifyDebugTurnsById = {
-            ...this.unifyDebugTurnsById,
+          this.yeaftDebugTurnsById = {
+            ...this.yeaftDebugTurnsById,
             [event.turnId]: {
               ...prev,
               closedAt: Date.now(),
@@ -1221,10 +1221,10 @@ export const useChatStore = defineStore('chat', {
 
         case 'memory_used': {
           if (!event.turnId) break;
-          const prev = this.unifyDebugTurnsById[event.turnId];
+          const prev = this.yeaftDebugTurnsById[event.turnId];
           if (!prev) break;
-          this.unifyDebugTurnsById = {
-            ...this.unifyDebugTurnsById,
+          this.yeaftDebugTurnsById = {
+            ...this.yeaftDebugTurnsById,
             [event.turnId]: {
               ...prev,
               memoryLoaded: Array.isArray(event.loaded) ? event.loaded : [],
@@ -1235,10 +1235,10 @@ export const useChatStore = defineStore('chat', {
 
         case 'memory_adjust': {
           if (!event.turnId) break;
-          const prev = this.unifyDebugTurnsById[event.turnId];
+          const prev = this.yeaftDebugTurnsById[event.turnId];
           if (!prev) break;
-          this.unifyDebugTurnsById = {
-            ...this.unifyDebugTurnsById,
+          this.yeaftDebugTurnsById = {
+            ...this.yeaftDebugTurnsById,
             [event.turnId]: {
               ...prev,
               memoryAdjust: {
@@ -1257,7 +1257,7 @@ export const useChatStore = defineStore('chat', {
           // feat-6af5f9f1 PR B: pin the tool execution to its turn so the
           // panel can show per-tool timing without scanning loops.messages.
           if (!event.turnId) break;
-          const prev = this.unifyDebugTurnsById[event.turnId];
+          const prev = this.yeaftDebugTurnsById[event.turnId];
           if (!prev) break;
           const tools = [...(prev.tools || []), {
             loopNumber: event.loopNumber || 0,
@@ -1266,8 +1266,8 @@ export const useChatStore = defineStore('chat', {
             durationMs: event.durationMs || 0,
             isError: !!event.isError,
           }];
-          this.unifyDebugTurnsById = {
-            ...this.unifyDebugTurnsById,
+          this.yeaftDebugTurnsById = {
+            ...this.yeaftDebugTurnsById,
             [event.turnId]: { ...prev, tools },
           };
           break;
@@ -1275,9 +1275,9 @@ export const useChatStore = defineStore('chat', {
 
         case 'loop': {
           // feat-6af5f9f1 PR B: replaces `debug_turn`. Each entry is one
-          // LLM call; the parent Turn record lives in unifyDebugTurnsById
+          // LLM call; the parent Turn record lives in yeaftDebugTurnsById
           // under loop.turnId.
-          this.unifyDebugLoops.push({
+          this.yeaftDebugLoops.push({
             turnId: event.turnId || null,
             loopNumber: event.loopNumber || 0,
             model: event.model,
@@ -1306,10 +1306,10 @@ export const useChatStore = defineStore('chat', {
           // fix-debug-copy-no-truncate: bound retention by count.
           // Drop oldest loop entries when the cap is exceeded, then
           // garbage-collect any turn record whose loops are all gone
-          // (so unifyDebugTurnsById / unifyDebugTurnOrder don't grow
+          // (so yeaftDebugTurnsById / yeaftDebugTurnOrder don't grow
           // unboundedly either). This is the architectural counterpart
           // to removing per-payload truncation: payloads are kept
-          // verbatim, but we keep at most MAX_UNIFY_DEBUG_LOOPS of them.
+          // verbatim, but we keep at most MAX_YEAFT_DEBUG_LOOPS of them.
           //
           // IMPORTANT under multi-VP parallel ingest: a turn opened by
           // VP-A whose first loop hasn't arrived yet has no entry in
@@ -1321,16 +1321,16 @@ export const useChatStore = defineStore('chat', {
           //
           // Logic lives in helpers/debug-retention.js so it's
           // unit-testable without Pinia/Vue globals.
-          if (this.unifyDebugLoops.length > MAX_UNIFY_DEBUG_LOOPS) {
+          if (this.yeaftDebugLoops.length > MAX_YEAFT_DEBUG_LOOPS) {
             const next = trimDebugRetention({
-              loops: this.unifyDebugLoops,
-              turnsById: this.unifyDebugTurnsById,
-              turnOrder: this.unifyDebugTurnOrder,
-              maxLoops: MAX_UNIFY_DEBUG_LOOPS,
+              loops: this.yeaftDebugLoops,
+              turnsById: this.yeaftDebugTurnsById,
+              turnOrder: this.yeaftDebugTurnOrder,
+              maxLoops: MAX_YEAFT_DEBUG_LOOPS,
             });
-            this.unifyDebugLoops = next.loops;
-            this.unifyDebugTurnsById = next.turnsById;
-            this.unifyDebugTurnOrder = next.turnOrder;
+            this.yeaftDebugLoops = next.loops;
+            this.yeaftDebugTurnsById = next.turnsById;
+            this.yeaftDebugTurnOrder = next.turnOrder;
           }
           break;
         }
@@ -1356,7 +1356,7 @@ export const useChatStore = defineStore('chat', {
           // We store the latest state keyed by conversationId + trigger
           // + loopRange so the UI can swap "thinking…" placeholder for
           // the rendered card.
-          const convId = msg.conversationId || this.unifyConversationId || 'unknown';
+          const convId = msg.conversationId || this.yeaftConversationId || 'unknown';
           const range = Array.isArray(event.loopRange) ? event.loopRange : [0, 0];
           const key = `${convId}:${event.trigger}:${range[0]}-${range[1]}`;
           // Anchor the card to the current tail of the message list so
@@ -1364,7 +1364,7 @@ export const useChatStore = defineStore('chat', {
           // message present at arrival time). Latch on first emit
           // (`pending`); preserve across `ready`/`error` transitions so
           // the card doesn't jump position when the body fills in.
-          const existing = this.unifyReflectionCards[key];
+          const existing = this.yeaftReflectionCards[key];
           const tailMsgs = this.messagesMap[convId] || [];
           const anchorMsgId = existing
             ? existing.anchorMsgId
@@ -1372,8 +1372,8 @@ export const useChatStore = defineStore('chat', {
           const anchorOrder = existing
             ? existing.anchorOrder
             : tailMsgs.length;
-          this.unifyReflectionCards = {
-            ...this.unifyReflectionCards,
+          this.yeaftReflectionCards = {
+            ...this.yeaftReflectionCards,
             [key]: {
               key,
               conversationId: convId,
@@ -1398,7 +1398,7 @@ export const useChatStore = defineStore('chat', {
         }
 
         case 'model_switched':
-          this.unifyModel = event.model;
+          this.yeaftModel = event.model;
           break;
 
         case 'sub_agent_event': {
@@ -1408,12 +1408,12 @@ export const useChatStore = defineStore('chat', {
           // We accumulate per-agent state into a single card keyed by
           // ${convId}:${agentId} — anchored to the message present at the
           // first emit so MessageList can render it inline.
-          const convId = msg.conversationId || this.unifyConversationId || 'unknown';
+          const convId = msg.conversationId || this.yeaftConversationId || 'unknown';
           const agentId = event.agentId;
           if (!agentId) break;
           const payload = event.payload || {};
           const key = `${convId}:${agentId}`;
-          const existing = this.unifySubAgentCards[key];
+          const existing = this.yeaftSubAgentCards[key];
           const tailMsgs = this.messagesMap[convId] || [];
           const anchorMsgId = existing
             ? existing.anchorMsgId
@@ -1489,16 +1489,16 @@ export const useChatStore = defineStore('chat', {
           }
 
           next.updatedAt = Date.now();
-          this.unifySubAgentCards = { ...this.unifySubAgentCards, [key]: next };
+          this.yeaftSubAgentCards = { ...this.yeaftSubAgentCards, [key]: next };
           break;
         }
 
         case 'history_loaded':
-          // History messages already rendered via sendUnifyOutput (data path).
+          // History messages already rendered via sendYeaftOutput (data path).
           // This event just signals completion — capture the pagination
           // cursor (`oldestSeq`) and `hasMore` flag so the MessageList can
           // show / hide the "Load older messages" hint and the
-          // `loadMoreUnifyHistory` action knows where to start the next
+          // `loadMoreYeaftHistory` action knows where to start the next
           // page.
           {
             const groupKey = event.groupId || '__all__';
@@ -1509,15 +1509,15 @@ export const useChatStore = defineStore('chat', {
               oldestSeq: (typeof event.oldestSeq === 'number') ? event.oldestSeq : null,
               count: (typeof event.count === 'number') ? event.count : 0,
             };
-            this.unifyGroupHistoryState = {
-              ...this.unifyGroupHistoryState,
+            this.yeaftGroupHistoryState = {
+              ...this.yeaftGroupHistoryState,
               [groupKey]: nextState,
             };
-            const activeKey = this.unifyActiveGroupFilter || '__all__';
+            const activeKey = this.yeaftActiveGroupFilter || '__all__';
             if (groupKey === activeKey) {
-              this.unifyHasMoreHistory = nextState.hasMore;
-              this.unifyLoadingMoreHistory = false;
-              this.unifyOldestLoadedSeq = nextState.oldestSeq;
+              this.yeaftHasMoreHistory = nextState.hasMore;
+              this.yeaftLoadingMoreHistory = false;
+              this.yeaftOldestLoadedSeq = nextState.oldestSeq;
             }
           }
           break;
@@ -1567,10 +1567,10 @@ export const useChatStore = defineStore('chat', {
           const prevGroupId = gs ? (gs.activeGroupId || null) : null;
           if (gs) gs.applySnapshot(event.groups);
           const newGroupId = gs ? (gs.activeGroupId || null) : null;
-          // Bug 1: after enterUnify the group snapshot may arrive *after*
+          // Bug 1: after enterYeaft the group snapshot may arrive *after*
           // initial history load (which happened with groupId:null), so
           // reload history for the correct group when activeGroupId changes.
-          if (this.currentView === 'unify' && newGroupId && newGroupId !== prevGroupId) {
+          if (this.currentView === 'yeaft' && newGroupId && newGroupId !== prevGroupId) {
             this.setActiveGroupFilter(newGroupId);
           }
           break;
@@ -1603,14 +1603,14 @@ export const useChatStore = defineStore('chat', {
         // H2.f.6: thread_list_updated never arrives anymore — bridge stopped
         // emitting. Case removed; legacy replay would silently fall through.
 
-        // (2026-05-13) `unify_summary_history` / `unify_feature_crud_result`
+        // (2026-05-13) `yeaft_summary_history` / `yeaft_feature_crud_result`
         // cases removed along with the Feature system.
 
         // H2.f.6: thread_merged / thread_forked / *_failed cases removed —
         // bridge no longer emits them.
 
         // task-fix: per-VP typing indicator (group chat only).
-        //   vp_typing_start → increment unifyVpTyping[vpId]
+        //   vp_typing_start → increment yeaftVpTyping[vpId]
         //   vp_typing_end   → decrement; delete when 0 so the getter lookup
         //                     returns falsy without retaining dead keys.
         // We use `{ ...obj }` reassignment to ensure Pinia/Vue picks up the
@@ -1637,7 +1637,7 @@ export const useChatStore = defineStore('chat', {
           this.activeVpTurns = rest;
           break;
         }
-        case 'unify_turn_aborted': {
+        case 'yeaft_turn_aborted': {
           if (!event.turnId) break;
           const { [event.turnId]: _removed, ...rest } = this.activeVpTurns;
           this.activeVpTurns = rest;
@@ -1659,20 +1659,20 @@ export const useChatStore = defineStore('chat', {
         // streams over the same wire.
         case 'vp_typing_start': {
           if (!event.vpId) break;
-          // Nest by conversationId so Unify typing state never leaks into
+          // Nest by conversationId so Yeaft typing state never leaks into
           // the Chat view (cross-mode state leak). The conversationId rides
-          // on the unify_output envelope (msg.conversationId) — fall back to
-          // the current Unify session id if absent.
-          const convId = msg.conversationId || this.unifyConversationId;
+          // on the yeaft_output envelope (msg.conversationId) — fall back to
+          // the current Yeaft session id if absent.
+          const convId = msg.conversationId || this.yeaftConversationId;
           if (!convId) break;
-          this.unifyVpTyping = incVpTyping(this.unifyVpTyping, convId, event.vpId);
+          this.yeaftVpTyping = incVpTyping(this.yeaftVpTyping, convId, event.vpId);
           break;
         }
         case 'vp_typing_end': {
           if (!event.vpId) break;
-          const convId = msg.conversationId || this.unifyConversationId;
+          const convId = msg.conversationId || this.yeaftConversationId;
           if (!convId) break;
-          this.unifyVpTyping = decVpTyping(this.unifyVpTyping, convId, event.vpId);
+          this.yeaftVpTyping = decVpTyping(this.yeaftVpTyping, convId, event.vpId);
           break;
         }
 
@@ -1762,25 +1762,25 @@ export const useChatStore = defineStore('chat', {
         }
 
         // ★ R6 G3: dream activity events. Forwarded from
-        // agent/unify/web-bridge.js handleUnifyDreamTrigger.
-        // unify_dream_status carries { vpId, status: 'running' } during the
-        // run; unify_dream_result carries { vpId, success, mergedCount, ... }
+        // agent/yeaft/web-bridge.js handleYeaftDreamTrigger.
+        // yeaft_dream_status carries { vpId, status: 'running' } during the
+        // run; yeaft_dream_result carries { vpId, success, mergedCount, ... }
         // when finished. Both flow into vpStore.dreamStatus[vpId] so the
         // VpDetailView status bar can update without polling.
-        case 'unify_dream_status': {
+        case 'yeaft_dream_status': {
           const vp = window.Pinia?.useVpStore?.() || (window.__useVpStore && window.__useVpStore());
           if (vp) vp.applyDreamStatus(event);
           break;
         }
-        case 'unify_dream_result': {
+        case 'yeaft_dream_result': {
           const vp = window.Pinia?.useVpStore?.() || (window.__useVpStore && window.__useVpStore());
           if (vp) vp.applyDreamResult(event);
-          // PR feat-dream-debug-panel-full: `unify_dream_result` is the
+          // PR feat-dream-debug-panel-full: `yeaft_dream_result` is the
           // SOLE terminal projection for a scoped dream pass. We write
           // both:
-          //   1. `unifyDreamLatest[group/<id>]` — the most-recent-pass
+          //   1. `yeaftDreamLatest[group/<id>]` — the most-recent-pass
           //      row the Dream UI reads.
-          //   2. `unifyDreamEvents[group/<id>]` — append a synthetic
+          //   2. `yeaftDreamEvents[group/<id>]` — append a synthetic
           //      terminal record into the timeline ring buffer so the
           //      debug panel doesn't end on the last `phase:'apply'`
           //      event with no outcome.
@@ -1789,19 +1789,19 @@ export const useChatStore = defineStore('chat', {
           // dream_progress event for #2, but that mirror raced through
           // the `dream_progress` projection (which doesn't recognise
           // `phase:'result'` as terminal) and clobbered the
-          // `unifyDreamLatest` success row back to 'running'. The fix
+          // `yeaftDreamLatest` success row back to 'running'. The fix
           // is to consolidate both writes here.
           if (typeof event?.groupId === 'string' && event.groupId) {
             const scope = `group/${event.groupId}`;
-            const prev = this.unifyDreamLatest[scope] || null;
+            const prev = this.yeaftDreamLatest[scope] || null;
             // Defaults when no prior running entry exists (network
             // reorder, fresh-tab reconnect): leave nullable fields
             // null rather than synthesising `Date.now()` /
             // `manual: true`. UI consumers already handle missing
             // startedAt; misattributing an auto run as manual is worse
             // than rendering 'unknown'.
-            this.unifyDreamLatest = {
-              ...this.unifyDreamLatest,
+            this.yeaftDreamLatest = {
+              ...this.yeaftDreamLatest,
               [scope]: {
                 scope,
                 phase: 'result',
@@ -1856,14 +1856,14 @@ export const useChatStore = defineStore('chat', {
           }
           break;
         }
-        // 2026-05-16: `unify_tool_stats` is NOT a `unify_output` event —
+        // 2026-05-16: `yeaft_tool_stats` is NOT a `yeaft_output` event —
         // the agent emits it as a bare top-level message via
-        // `sendToServer({type:'unify_tool_stats', ...})`. Routing lives
+        // `sendToServer({type:'yeaft_tool_stats', ...})`. Routing lives
         // in `helpers/messageHandler.js`. The previous case here was
         // unreachable and is intentionally removed to prevent future
         // confusion about which switch owns this protocol.
         // v0.1.755: dream_progress events emitted by both manual + auto
-        // dream runs (see agent/unify/web-bridge.js _dreamProgressSink).
+        // dream runs (see agent/yeaft/web-bridge.js _dreamProgressSink).
         // Per-group events carry `groupId`; per-target merge/apply events
         // carry `target` (already a scope string like 'group/...' / 'vp/...').
         // Top-level start/done/merge events carry neither — those we attach
@@ -1873,7 +1873,7 @@ export const useChatStore = defineStore('chat', {
         //   { scope, status: 'running'|'success'|'error', startedAt,
         //     finishedAt?, phase, mergedCount?, error?, manual?,
         //     durationMs? }.
-        // UnifyDebugPanel reads `unifyDreamLatestForActiveGroup` (getter)
+        // YeaftDebugPanel reads `yeaftDreamLatestForActiveGroup` (getter)
         // to render a single row showing the most recent pass for the
         // active group's scope ("dream只需要看最新的一次就行").
         case 'dream_progress': {
@@ -1895,7 +1895,7 @@ export const useChatStore = defineStore('chat', {
           const isError = phase === 'error' || (event?.status === 'error');
           const isRunning = !isDone && !isError;
           const updateScope = (key) => {
-            const prev = this.unifyDreamLatest[key] || null;
+            const prev = this.yeaftDreamLatest[key] || null;
             return {
               scope: key,
               phase,
@@ -1940,15 +1940,15 @@ export const useChatStore = defineStore('chat', {
             // scope-specific pass. UI consumers should treat the dream row
             // as "most recent activity touching this group", not "this
             // group's own pass".
-            const next = { ...this.unifyDreamLatest, '*': updateScope('*') };
-            for (const k of Object.keys(this.unifyDreamLatest)) {
+            const next = { ...this.yeaftDreamLatest, '*': updateScope('*') };
+            for (const k of Object.keys(this.yeaftDreamLatest)) {
               if (k === '*') continue;
               next[k] = updateScope(k);
             }
-            this.unifyDreamLatest = next;
+            this.yeaftDreamLatest = next;
           } else {
-            this.unifyDreamLatest = {
-              ...this.unifyDreamLatest,
+            this.yeaftDreamLatest = {
+              ...this.yeaftDreamLatest,
               [scope]: updateScope(scope),
             };
           }
@@ -1957,7 +1957,7 @@ export const useChatStore = defineStore('chat', {
           // the latest summary line). We append to the SAME scope that the
           // latest-projection resolved — for '*' events that means the
           // broadcast bucket, which the getter merges with the active
-          // group's bucket. Cap at MAX_UNIFY_DREAM_EVENTS_PER_SCOPE so the
+          // group's bucket. Cap at MAX_YEAFT_DREAM_EVENTS_PER_SCOPE so the
           // buffer stays bounded.
           this._appendDreamEvent(scope, event);
           break;
@@ -1965,7 +1965,7 @@ export const useChatStore = defineStore('chat', {
       }
     },
     // PR feat-dream-debug-panel-full: append a dream event to the per-scope
-    // ring buffer. Caps the buffer at MAX_UNIFY_DREAM_EVENTS_PER_SCOPE so a
+    // ring buffer. Caps the buffer at MAX_YEAFT_DREAM_EVENTS_PER_SCOPE so a
     // long-running session can't grow the array unboundedly. Caller
     // resolves the scope ('group/<id>' for scoped events; '*' for top-level
     // broadcast events that don't carry a groupId).
@@ -1978,18 +1978,18 @@ export const useChatStore = defineStore('chat', {
       if (!scope || !event) return;
       const at = Date.now();
       const record = { ...event, at };
-      const prev = Array.isArray(this.unifyDreamEvents?.[scope])
-        ? this.unifyDreamEvents[scope]
+      const prev = Array.isArray(this.yeaftDreamEvents?.[scope])
+        ? this.yeaftDreamEvents[scope]
         : [];
       const keyOf = (e) => [e?.type || '', e?.phase || '', e?.groupId || '', e?.target || '', e?.ts || e?.at || ''].join('|');
       const recordKey = keyOf(record);
       if (prev.some(e => keyOf(e) === recordKey)) return;
       const next = [...prev, record];
-      if (next.length > MAX_UNIFY_DREAM_EVENTS_PER_SCOPE) {
-        next.splice(0, next.length - MAX_UNIFY_DREAM_EVENTS_PER_SCOPE);
+      if (next.length > MAX_YEAFT_DREAM_EVENTS_PER_SCOPE) {
+        next.splice(0, next.length - MAX_YEAFT_DREAM_EVENTS_PER_SCOPE);
       }
-      this.unifyDreamEvents = {
-        ...this.unifyDreamEvents,
+      this.yeaftDreamEvents = {
+        ...this.yeaftDreamEvents,
         [scope]: next,
       };
     },
@@ -2005,19 +2005,19 @@ export const useChatStore = defineStore('chat', {
     },
     // ★ task-341: V2 sidebar is the only sidebar. Setter kept as no-op
     // for backward compat; also sweeps the stale localStorage key once.
-    setUnifySidebarEnabled(_enabled) {
+    setYeaftSidebarEnabled(_enabled) {
       try {
         if (typeof localStorage !== 'undefined') {
-          localStorage.removeItem('unify-sidebar-enabled');
+          localStorage.removeItem('yeaft-sidebar-enabled');
         }
       } catch (_) { /* ignore storage errors */ }
     },
     // H2.f.6: thread filter / merge / fork / setActive actions removed.
-    // setUnifyThreadFilter, clearUnifyThreadFilter, mergeUnifyThread,
-    // forkUnifyThread, setActiveThread no longer exist.
+    // setYeaftThreadFilter, clearYeaftThreadFilter, mergeYeaftThread,
+    // forkYeaftThread, setActiveThread no longer exist.
 
     // ★ task-334-ui-g: VP CRUD request dispatcher.
-    // Wraps `unify_vp_{create,update,delete,read}` in a Promise that
+    // Wraps `yeaft_vp_{create,update,delete,read}` in a Promise that
     // resolves when the matching `vp_crud_result` arrives (or times out
     // after 10s so the modal never hangs on a dropped WS). Returns a
     // uniform `{ok, op, vpId, vp?, error?}` shape regardless of op.
@@ -2033,10 +2033,10 @@ export const useChatStore = defineStore('chat', {
       }
       const requestId = 'vpc_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
       const typeMap = {
-        create: 'unify_vp_create',
-        update: 'unify_vp_update',
-        delete: 'unify_vp_delete',
-        read: 'unify_vp_read',
+        create: 'yeaft_vp_create',
+        update: 'yeaft_vp_update',
+        delete: 'yeaft_vp_delete',
+        read: 'yeaft_vp_read',
       };
       const type = typeMap[op];
       if (!type) {
@@ -2077,16 +2077,16 @@ export const useChatStore = defineStore('chat', {
       }
       const requestId = 'grc_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
       const typeMap = {
-        list: 'unify_list_groups',
-        create: 'unify_create_group',
-        rename: 'unify_rename_group',
-        update: 'unify_update_group',
-        update_config: 'unify_update_group_config',
-        archive: 'unify_archive_group',
-        delete: 'unify_delete_group',
-        add_member: 'unify_add_member',
-        remove_member: 'unify_remove_member',
-        set_default_vp: 'unify_set_default_vp',
+        list: 'yeaft_list_groups',
+        create: 'yeaft_create_group',
+        rename: 'yeaft_rename_group',
+        update: 'yeaft_update_group',
+        update_config: 'yeaft_update_group_config',
+        archive: 'yeaft_archive_group',
+        delete: 'yeaft_delete_group',
+        add_member: 'yeaft_add_member',
+        remove_member: 'yeaft_remove_member',
+        set_default_vp: 'yeaft_set_default_vp',
       };
       const type = typeMap[op];
       if (!type) {
@@ -2118,7 +2118,7 @@ export const useChatStore = defineStore('chat', {
     // the main pane to that group. Clears task-detail filter so exactly one
     // scope is active at a time.
     //
-    // Group conversation consistency: do NOT clear the shared Unify stream
+    // Group conversation consistency: do NOT clear the shared Yeaft stream
     // on group switch. `messages` already filters by groupId; clearing the
     // backing array caused flicker and destroyed the live state for the
     // group the user just left. Keep group-stamped rows cached, but do not
@@ -2128,28 +2128,28 @@ export const useChatStore = defineStore('chat', {
     // still ask the agent for authoritative history unless this group has
     // already completed a history load in the current UI lifecycle.
     setActiveGroupFilter(groupId, opts = {}) {
-      const prev = this.unifyActiveGroupFilter || null;
+      const prev = this.yeaftActiveGroupFilter || null;
       const next = groupId || null;
       const force = !!opts.force;
-      this.unifyActiveGroupFilter = next;
+      this.yeaftActiveGroupFilter = next;
       if (!force && next === prev) return;
 
       const groupKey = next || '__all__';
-      const savedState = this.unifyGroupHistoryState[groupKey] || null;
-      this.unifyHasMoreHistory = !!savedState?.hasMore;
-      this.unifyLoadingMoreHistory = !!savedState?.loading;
-      this.unifyOldestLoadedSeq = (typeof savedState?.oldestSeq === 'number') ? savedState.oldestSeq : null;
+      const savedState = this.yeaftGroupHistoryState[groupKey] || null;
+      this.yeaftHasMoreHistory = !!savedState?.hasMore;
+      this.yeaftLoadingMoreHistory = !!savedState?.loading;
+      this.yeaftOldestLoadedSeq = (typeof savedState?.oldestSeq === 'number') ? savedState.oldestSeq : null;
 
       const needsHydrate = !savedState?.loaded && !savedState?.loading;
-      if (this.unifyAgentId && next && needsHydrate) {
-        this.unifyGroupHistoryState = {
-          ...this.unifyGroupHistoryState,
+      if (this.yeaftAgentId && next && needsHydrate) {
+        this.yeaftGroupHistoryState = {
+          ...this.yeaftGroupHistoryState,
           [groupKey]: { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },
         };
-        this.unifyLoadingMoreHistory = true;
+        this.yeaftLoadingMoreHistory = true;
         this.sendWsMessage({
-          type: 'unify_load_history',
-          agentId: this.unifyAgentId,
+          type: 'yeaft_load_history',
+          agentId: this.yeaftAgentId,
           limit: 10,
           groupId: next,
         });
@@ -2158,15 +2158,15 @@ export const useChatStore = defineStore('chat', {
     // ★ task-334-ui-c: VP detail view entry / exit.
     enterVpDetailView(vpId) {
       if (!vpId) return;
-      this.unifyActiveVpDetailId = String(vpId);
+      this.yeaftActiveVpDetailId = String(vpId);
     },
     leaveVpDetailView() {
-      this.unifyActiveVpDetailId = null;
+      this.yeaftActiveVpDetailId = null;
     },
-    // H2.f.6: setUnifyFeatureReplyThreadId / setUnifyJumpTarget /
-    // clearUnifyJumpTarget actions removed.
-    async switchUnifyModel(modelId, groupId = null) {
-      if (!modelId || !this.unifyAgentId) return;
+    // H2.f.6: setYeaftFeatureReplyThreadId / setYeaftJumpTarget /
+    // clearYeaftJumpTarget actions removed.
+    async switchYeaftModel(modelId, groupId = null) {
+      if (!modelId || !this.yeaftAgentId) return;
       const targetGroupId = groupId || null;
       if (targetGroupId) {
         const res = await this.groupCrudRequest('update_config', {
@@ -2174,14 +2174,14 @@ export const useChatStore = defineStore('chat', {
           config: { model: modelId },
         });
         if (res && res.ok) {
-          this.unifyModel = modelId;
+          this.yeaftModel = modelId;
         }
         return res;
       }
       this.sendWsMessage({
-        type: 'unify_model_switch',
+        type: 'yeaft_model_switch',
         model: modelId,
-        agentId: this.unifyAgentId,
+        agentId: this.yeaftAgentId,
       });
       return null;
     },
@@ -2189,36 +2189,36 @@ export const useChatStore = defineStore('chat', {
     // Substring filter (case-insensitive) applied to the per-turn fields
     // listed in turnMatchesSearch(). Not persisted — search is a transient
     // exploration tool, not a session preference.
-    setUnifyDebugSearch(query) {
-      this.unifyDebugSearch = typeof query === 'string' ? query : '';
+    setYeaftDebugSearch(query) {
+      this.yeaftDebugSearch = typeof query === 'string' ? query : '';
     },
 
     // feat-6af5f9f1 PR C: independent debug-panel group filter. Distinct
-    // from `unifyActiveGroupFilter` (the main pane's filter) so the user
+    // from `yeaftActiveGroupFilter` (the main pane's filter) so the user
     // can debug across all groups even when the main pane is narrowed.
     //   - null      : fall back to main pane filter (default)
     //   - '__all__' : force "show all" regardless of main pane
     //   - <groupId> : pin to a specific group
-    setUnifyDebugGroupFilter(groupId) {
+    setYeaftDebugGroupFilter(groupId) {
       if (groupId === null || groupId === undefined) {
-        this.unifyDebugGroupFilter = null;
+        this.yeaftDebugGroupFilter = null;
       } else {
-        this.unifyDebugGroupFilter = String(groupId);
+        this.yeaftDebugGroupFilter = String(groupId);
       }
     },
 
     toggleSubAgentCardExpand(key) {
-      const card = this.unifySubAgentCards?.[key];
+      const card = this.yeaftSubAgentCards?.[key];
       if (!card) return;
-      this.unifySubAgentCards = {
-        ...this.unifySubAgentCards,
+      this.yeaftSubAgentCards = {
+        ...this.yeaftSubAgentCards,
         [key]: { ...card, expanded: !card.expanded },
       };
     },
 
     // ─── Search settings (Tavily backend + key + on-demand quota) ───
     //
-    // The Search tab in UnifySettings uses these. They use
+    // The Search tab in YeaftSettings uses these. They use
     // request/response promises keyed off the WS reply types
     // (`search_settings`, `search_settings_updated`, `tavily_usage`).
     // Since chat.js's WS layer has no first-class request/response
@@ -2234,14 +2234,14 @@ export const useChatStore = defineStore('chat', {
      * an `{ error }` shape if the agent returns one).
      */
     loadSearchSettings() {
-      if (!this.unifyAgentId) {
+      if (!this.yeaftAgentId) {
         this.searchSettings = { backend: 'tavily', tavilyKeyConfigured: false, tavilyKeyMasked: null, disableHtmlFallback: false, loaded: true };
         return Promise.resolve(this.searchSettings);
       }
       return new Promise((resolve) => {
         if (!this._searchPending) this._searchPending = {};
         this._searchPending.load = resolve;
-        this.sendWsMessage({ type: 'get_search_settings', agentId: this.unifyAgentId });
+        this.sendWsMessage({ type: 'get_search_settings', agentId: this.yeaftAgentId });
       });
     },
 
@@ -2252,13 +2252,13 @@ export const useChatStore = defineStore('chat', {
      * passes only when the user actually edited the input.
      */
     updateSearchSettings(payload) {
-      if (!this.unifyAgentId) return Promise.resolve({ error: 'no agent' });
+      if (!this.yeaftAgentId) return Promise.resolve({ error: 'no agent' });
       return new Promise((resolve) => {
         if (!this._searchPending) this._searchPending = {};
         this._searchPending.update = resolve;
         this.sendWsMessage({
           type: 'update_search_settings',
-          agentId: this.unifyAgentId,
+          agentId: this.yeaftAgentId,
           settings: payload || {},
         });
       });
@@ -2270,60 +2270,60 @@ export const useChatStore = defineStore('chat', {
      * never on a timer.
      */
     loadTavilyUsage() {
-      if (!this.unifyAgentId) return Promise.resolve(null);
+      if (!this.yeaftAgentId) return Promise.resolve(null);
       this.tavilyUsageLoading = true;
       return new Promise((resolve) => {
         if (!this._searchPending) this._searchPending = {};
         this._searchPending.usage = resolve;
-        this.sendWsMessage({ type: 'get_tavily_usage', agentId: this.unifyAgentId });
+        this.sendWsMessage({ type: 'get_tavily_usage', agentId: this.yeaftAgentId });
       });
     },
 
-    clearUnifyMessages() {
-      const oldConvId = this.unifyConversationId;
+    clearYeaftMessages() {
+      const oldConvId = this.yeaftConversationId;
       if (oldConvId) {
         delete this.messagesMap[oldConvId];
         delete this.processingConversations[oldConvId];
         delete this.executionStatusMap[oldConvId];
       }
       // Create a fresh local conversationId
-      this.unifyConversationId = `unify-local-${Date.now()}`;
-      this.messagesMap[this.unifyConversationId] = [];
-      this.activeConversations = [this.unifyConversationId];
-      this.unifySessionReady = false;
-      this.unifyModel = null;
-      this.unifyAvailableModels = [];
-      this.unifyStatus = null;
+      this.yeaftConversationId = `yeaft-local-${Date.now()}`;
+      this.messagesMap[this.yeaftConversationId] = [];
+      this.activeConversations = [this.yeaftConversationId];
+      this.yeaftSessionReady = false;
+      this.yeaftModel = null;
+      this.yeaftAvailableModels = [];
+      this.yeaftStatus = null;
       // feat-6af5f9f1 PR B: clear new Turn-grouped debug shape.
-      this.unifyDebugLoops = [];
-      this.unifyDebugTurnsById = {};
-      this.unifyDebugTurnOrder = [];
+      this.yeaftDebugLoops = [];
+      this.yeaftDebugTurnsById = {};
+      this.yeaftDebugTurnOrder = [];
       // fix-vp-multi-thread (bug 4): reset hydration state — the new session
       // will start re-collecting live trace events, and the next mount of
-      // the debug panel will re-issue `loadUnifyDebugHistory` to refill.
-      this.unifyDebugHistoryLoading = false;
-      this.unifyDebugHistoryError = null;
-      this.unifyDebugHistoryFetchedAt = 0;
+      // the debug panel will re-issue `loadYeaftDebugHistory` to refill.
+      this.yeaftDebugHistoryLoading = false;
+      this.yeaftDebugHistoryError = null;
+      this.yeaftDebugHistoryFetchedAt = 0;
       // feat-6af5f9f1 PR C: clear toolbar transient state too. The group
       // filter is intentionally cleared on session reset so a stale pin
       // from a previous session doesn't hide all incoming turns.
-      this.unifyDebugSearch = '';
-      this.unifyDebugGroupFilter = null;
-      this.unifyReflectionCards = {};
-      this.unifySubAgentCards = {};
+      this.yeaftDebugSearch = '';
+      this.yeaftDebugGroupFilter = null;
+      this.yeaftReflectionCards = {};
+      this.yeaftSubAgentCards = {};
       // VP-block redesign (2026-05-08): per-turn detail drawer retired.
       // v0.1.755: reset dream-pass projection so a previous session's
       // "latest pass" doesn't bleed into the fresh session.
-      this.unifyDreamLatest = {};
-      this.unifyDreamEvents = {};
+      this.yeaftDreamLatest = {};
+      this.yeaftDreamEvents = {};
       // vp-status: drop the cached per-VP status table on session reset.
       // The agent will re-broadcast a fresh snapshot after re-init.
       this.vpStatuses = {};
       // Tell agent to reset session so Engine gets a fresh start
-      if (this.unifyAgentId) {
+      if (this.yeaftAgentId) {
         this.sendWsMessage({
-          type: 'unify_reset',
-          agentId: this.unifyAgentId,
+          type: 'yeaft_reset',
+          agentId: this.yeaftAgentId,
         });
       }
     },
@@ -2704,26 +2704,26 @@ export const useChatStore = defineStore('chat', {
     sendMessage(text, attachments = [], options = {}) { convHelpers.sendMessage(this, text, attachments, options); },
     cancelExecution() { convHelpers.cancelExecution(this); },
     /**
-     * Bug 5: Unify-mode stop. ChatInput's default cancel calls
+     * Bug 5: Yeaft-mode stop. ChatInput's default cancel calls
      * cancelExecution() (Chat-mode), which sends `cancel_execution` keyed
-     * to a Claude-CLI conversationId — that is a no-op for Unify because
-     * Unify runs its own engine inside the agent and tracks abort
-     * controllers per-thread. Send `unify_abort_all` instead so every
+     * to a Claude-CLI conversationId — that is a no-op for Yeaft because
+     * Yeaft runs its own engine inside the agent and tracks abort
+     * controllers per-thread. Send `yeaft_abort_all` instead so every
      * in-flight thread's AbortController fires. The agent emits
-     * `unify_aborted` ack which clears `processingConversations` via the
+     * `yeaft_aborted` ack which clears `processingConversations` via the
      * standard pipeline.
      */
-    cancelUnify() {
-      if (!this.unifyAgentId) return;
+    cancelYeaft() {
+      if (!this.yeaftAgentId) return;
       this.sendWsMessage({
-        type: 'unify_abort_all',
-        agentId: this.unifyAgentId,
+        type: 'yeaft_abort_all',
+        agentId: this.yeaftAgentId,
       });
       // Optimistic UX: clear the local processing flag immediately so the
       // stop button hides without waiting for the round-trip. The agent's
-      // unify_aborted event is idempotent.
-      if (this.unifyConversationId) {
-        this.processingConversations[this.unifyConversationId] = false;
+      // yeaft_aborted event is idempotent.
+      if (this.yeaftConversationId) {
+        this.processingConversations[this.yeaftConversationId] = false;
       }
       this.activeVpTurns = {};
     },
@@ -2731,10 +2731,10 @@ export const useChatStore = defineStore('chat', {
      * Per-VP stop: abort a single VP turn by turnId without affecting siblings.
      */
     cancelVpTurn(turnId) {
-      if (!this.unifyAgentId || !turnId) return;
+      if (!this.yeaftAgentId || !turnId) return;
       this.sendWsMessage({
-        type: 'unify_abort_turn',
-        agentId: this.unifyAgentId,
+        type: 'yeaft_abort_turn',
+        agentId: this.yeaftAgentId,
         turnId,
       });
       // Optimistic: remove from activeVpTurns immediately.
@@ -2749,13 +2749,13 @@ export const useChatStore = defineStore('chat', {
 
     // ★ Phase 6.1: 分页加载（基于 turn，统一走 DB）
     loadMoreMessages() {
-      // task-fix-unify-load-more-empty: action-level guard. The hint and
+      // task-fix-yeaft-load-more-empty: action-level guard. The hint and
       // scroll-trigger in MessageList both gate on currentView, but this
-      // is the authoritative stop — Unify history doesn't live in the
+      // is the authoritative stop — Yeaft history doesn't live in the
       // SQLite messageDb that `sync_messages` queries, so dispatching
-      // here from Unify always returns empty. Any future caller (hotkey,
+      // here from Yeaft always returns empty. Any future caller (hotkey,
       // devtools, programmatic) is covered by this single line.
-      if (this.currentView === 'unify') return;
+      if (this.currentView === 'yeaft') return;
       if (this.loadingMoreMessages || !this.hasMoreMessages || !this.currentConversation) return;
       this.loadingMoreMessages = true;
 
@@ -2770,38 +2770,38 @@ export const useChatStore = defineStore('chat', {
     },
 
     /**
-     * Unify-side counterpart to loadMoreMessages. Requests one more page of
+     * Yeaft-side counterpart to loadMoreMessages. Requests one more page of
      * older history (20 turns by default) for the active group, using the
-     * cursor stamped by the latest `history_loaded` / `unify_history_chunk`
+     * cursor stamped by the latest `history_loaded` / `yeaft_history_chunk`
      * event. The agent reads from the persisted hot+cold conversation and
-     * replies with a `unify_history_chunk` envelope; the chunk handler
+     * replies with a `yeaft_history_chunk` envelope; the chunk handler
      * prepends the messages to messagesMap and updates the cursor.
      *
      * Idempotent: re-entering while a page is in flight is a no-op
-     * (`unifyLoadingMoreHistory` gates), and we don't fire if the agent
+     * (`yeaftLoadingMoreHistory` gates), and we don't fire if the agent
      * already told us there's nothing more to load.
      */
-    loadMoreUnifyHistory() {
-      if (this.currentView !== 'unify') return;
-      if (this.unifyLoadingMoreHistory || !this.unifyHasMoreHistory) return;
-      if (!this.unifyAgentId || this.unifyOldestLoadedSeq == null) return;
+    loadMoreYeaftHistory() {
+      if (this.currentView !== 'yeaft') return;
+      if (this.yeaftLoadingMoreHistory || !this.yeaftHasMoreHistory) return;
+      if (!this.yeaftAgentId || this.yeaftOldestLoadedSeq == null) return;
 
-      const groupId = resolveActiveUnifyGroupId(this);
+      const groupId = resolveActiveYeaftGroupId(this);
 
-      this.unifyLoadingMoreHistory = true;
+      this.yeaftLoadingMoreHistory = true;
       const groupKey = groupId || '__all__';
-      this.unifyGroupHistoryState = {
-        ...this.unifyGroupHistoryState,
+      this.yeaftGroupHistoryState = {
+        ...this.yeaftGroupHistoryState,
         [groupKey]: {
-          ...(this.unifyGroupHistoryState[groupKey] || {}),
+          ...(this.yeaftGroupHistoryState[groupKey] || {}),
           loading: true,
         },
       };
       this.sendWsMessage({
-        type: 'unify_load_more_history',
-        agentId: this.unifyAgentId,
+        type: 'yeaft_load_more_history',
+        agentId: this.yeaftAgentId,
         groupId,
-        beforeSeq: this.unifyOldestLoadedSeq,
+        beforeSeq: this.yeaftOldestLoadedSeq,
         turns: 10,
       });
     },
@@ -2873,7 +2873,7 @@ export const useChatStore = defineStore('chat', {
       if (!forceRefresh && fresh) {
         return Promise.resolve(this.modelsDevRegistry);
       }
-      const agentId = this.unifyAgentId || this.currentAgent;
+      const agentId = this.yeaftAgentId || this.currentAgent;
       if (!agentId) {
         return Promise.resolve(this.modelsDevRegistry);
       }
@@ -2925,13 +2925,13 @@ export const useChatStore = defineStore('chat', {
       // task-708: live-locale propagation. Push the new language to the
       // agent so the per-VP Engine pool (and 1:1-chat session.engine)
       // re-renders the system prompt in the chosen language on the very
-      // next turn — no session reload required. Skipped when no Unify
+      // next turn — no session reload required. Skipped when no Yeaft
       // agent is bound (Chat-only or pre-connect state).
-      if (this.unifyAgentId) {
+      if (this.yeaftAgentId) {
         try {
           this.sendWsMessage({
             type: 'update_llm_config',
-            agentId: this.unifyAgentId,
+            agentId: this.yeaftAgentId,
             config: { language: locale },
           });
         } catch { /* best-effort; locale already applied to UI */ }

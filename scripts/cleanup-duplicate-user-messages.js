@@ -3,7 +3,7 @@
  * scripts/cleanup-duplicate-user-messages.js
  *
  * One-time cleanup for the multi-VP fan-out user-row duplication bug
- * (PR-fix-unify-group-history-dedup).
+ * (PR-fix-yeaft-group-history-dedup).
  *
  * What was wrong:
  *   When a user prompt fanned out to N VPs in a group, each VP's Engine
@@ -34,7 +34,7 @@
  *   - Will NEVER delete a non-user record. Will NEVER delete the EARLIEST
  *     copy in a cluster (the canonical row).
  *   - Refuses to run on a directory it can't recognize (must contain
- *     `mNNNN.md` files matching the schema in agent/unify/conversation/persist.js).
+ *     `mNNNN.md` files matching the schema in agent/yeaft/conversation/persist.js).
  *
  * Usage:
  *   node scripts/cleanup-duplicate-user-messages.js               # dry-run, default ~/.yeaft
@@ -56,7 +56,7 @@ import {
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
-import { parseMessage } from '../agent/unify/conversation/persist.js';
+import { parseMessage } from '../agent/yeaft/conversation/persist.js';
 
 // ─── CLI parsing ───────────────────────────────────────────
 

@@ -15,13 +15,13 @@
 @import './btw.css';
 @import './ask-card.css';
 @import './split-screen.css';
-@import './unify.css';
-@import './unify-sidebar.css';
-/* H2.f.6: unify-thread-pill.css removed alongside the multi-thread engine. */
-@import './unify-vp.css';
-/* unify-vp-card.css and unify-detail-drawer.css removed alongside the
+@import './yeaft.css';
+@import './yeaft-sidebar.css';
+/* H2.f.6: yeaft-thread-pill.css removed alongside the multi-thread engine. */
+@import './yeaft-vp.css';
+/* yeaft-vp-card.css and yeaft-detail-drawer.css removed alongside the
    VpQuickCard / VpTurnDetailDrawer components (VP-block redesign 2026-05-08). */
-@import './unify-group-wizard.css';
+@import './yeaft-group-wizard.css';
 @import './group-invite.css';
 @import './reflection.css';
 @import './sub-agent.css';

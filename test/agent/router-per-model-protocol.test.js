@@ -12,7 +12,7 @@ import {
   AdapterRouter,
   normalizeModelEntry,
   inferProtocolFromModelId,
-} from '../../agent/unify/llm/router.js';
+} from '../../agent/yeaft/llm/router.js';
 
 describe('normalizeModelEntry', () => {
   it('keeps bare strings', () => {

@@ -1062,11 +1062,11 @@ describe('Server Restart: DB conversation recovery (task-37/task-44)', () => {
 });
 
 describe('CONV_EXEMPT_TYPES — workbench responses must bypass conversation-id gate', () => {
-  // Regression for fix-unify-workbench-file-content-drop: Unify uses a
-  // virtual `unify-<timestamp>` conversationId that is never registered
+  // Regression for fix-yeaft-workbench-file-content-drop: Yeaft uses a
+  // virtual `yeaft-<timestamp>` conversationId that is never registered
   // in agent.conversations. Workbench responses (file_content, file_saved,
   // file_op_result, file_search_result, git_*_result) MUST be exempted
-  // from the conversation-id gate or "open file" in the Unify workbench
+  // from the conversation-id gate or "open file" in the Yeaft workbench
   // is silently dropped. The real ownership check for these messages is
   // _requestUserId enforced downstream by forwardToClients.
   //
@@ -1076,7 +1076,7 @@ describe('CONV_EXEMPT_TYPES — workbench responses must bypass conversation-id 
     'agent_sync_complete', 'sync_sessions', 'proxy_response', 'proxy_response_chunk',
     'proxy_response_end', 'proxy_ports_update', 'proxy_ws_opened', 'proxy_ws_message',
     'proxy_ws_closed', 'proxy_ws_error', 'restart_agent_ack', 'upgrade_agent_ack',
-    'directory_listing', 'folders_list', 'unify_output',
+    'directory_listing', 'folders_list', 'yeaft_output',
     'file_content', 'file_saved', 'file_op_result', 'file_search_result',
     'git_status_result', 'git_diff_result', 'git_op_result'
   ]);
@@ -1091,28 +1091,28 @@ describe('CONV_EXEMPT_TYPES — workbench responses must bypass conversation-id 
     return false;
   }
 
-  it('passes file_content through for an unknown (Unify-style) conversationId', () => {
+  it('passes file_content through for an unknown (Yeaft-style) conversationId', () => {
     const agent = createMockAgent(); // empty conversations Map
     const msg = {
       type: 'file_content',
-      conversationId: 'unify-1762400000000',
+      conversationId: 'yeaft-1762400000000',
       _requestUserId: 'user_1',
       content: 'file contents'
     };
     expect(isDropped(agent, msg)).toBe(false);
   });
 
-  it('passes file_saved / file_op_result / file_search_result for Unify ids', () => {
+  it('passes file_saved / file_op_result / file_search_result for Yeaft ids', () => {
     const agent = createMockAgent();
-    const cid = 'unify-1762400000000';
+    const cid = 'yeaft-1762400000000';
     for (const type of ['file_saved', 'file_op_result', 'file_search_result']) {
       expect(isDropped(agent, { type, conversationId: cid, _requestUserId: 'u1' })).toBe(false);
     }
   });
 
-  it('passes git_*_result for Unify ids (git workbench tab parity)', () => {
+  it('passes git_*_result for Yeaft ids (git workbench tab parity)', () => {
     const agent = createMockAgent();
-    const cid = 'unify-1762400000000';
+    const cid = 'yeaft-1762400000000';
     for (const type of ['git_status_result', 'git_diff_result', 'git_op_result']) {
       expect(isDropped(agent, { type, conversationId: cid, _requestUserId: 'u1' })).toBe(false);
     }
@@ -1159,7 +1159,7 @@ describe('CONV_EXEMPT_TYPES — workbench responses must bypass conversation-id 
     const agent = createMockAgent();
     const msg = {
       type: 'directory_listing',
-      conversationId: 'unify-1762400000000',
+      conversationId: 'yeaft-1762400000000',
       entries: []
     };
     // This was working pre-fix — it's the proof that file_content needed

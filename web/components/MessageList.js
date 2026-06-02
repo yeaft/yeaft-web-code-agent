@@ -84,7 +84,7 @@ export default {
       <div v-else class="messages">
         <!-- Group announcement bar — surfaces a CLAUDE.md-style shared
              prefix that's injected into every VP's system prompt.
-             Shown only in Unify mode when an active group is selected. -->
+             Shown only in Yeaft mode when an active group is selected. -->
         <GroupAnnouncementBar
           v-if="activeGroupIdForBar"
           :group-id="activeGroupIdForBar"
@@ -112,13 +112,13 @@ export default {
         <!-- Load-more hint + spinner. Two parallel paths share one row:
              - Chat mode dispatches 'sync_messages' against the SQLite
                messageDb (gated on store.hasMoreMessages).
-             - Unify mode dispatches 'unify_load_more_history' which the
+             - Yeaft mode dispatches 'yeaft_load_more_history' which the
                agent reads from disk-backed conversationStore (gated on
-               store.unifyHasMoreHistory).
+               store.yeaftHasMoreHistory).
              onClickLoadMore branches by currentView so a single visual
              affordance can drive either mode without leaking state. -->
-        <div v-if="(store.loadingMoreMessages && store.currentView !== 'unify') || store.unifyLoadingMoreHistory" class="loading-more">{{ $t('message.loadingMore') }}</div>
-        <div v-else-if="(store.hasMoreMessages && store.currentView !== 'unify') || store.unifyHasMoreHistory" class="load-more-hint" @click="onClickLoadMore">{{ $t('message.loadMore') }}</div>
+        <div v-if="(store.loadingMoreMessages && store.currentView !== 'yeaft') || store.yeaftLoadingMoreHistory" class="loading-more">{{ $t('message.loadingMore') }}</div>
+        <div v-else-if="(store.hasMoreMessages && store.currentView !== 'yeaft') || store.yeaftHasMoreHistory" class="load-more-hint" @click="onClickLoadMore">{{ $t('message.loadMore') }}</div>
         <template v-for="block in threadBlocks" :key="block.id">
           <section
             v-if="block.type === 'thread-block'"
@@ -126,10 +126,10 @@ export default {
             :data-thread-id="block.threadId"
           >
             <template v-for="item in block.items" :key="item.id">
-              <!-- task-312: wrapper carries data-msg-id so the Unify sidebar
+              <!-- task-312: wrapper carries data-msg-id so the Yeaft sidebar
                    jump-to-message feature can scroll/flash a specific row. -->
               <div class="msg-row" :data-msg-id="item.id" :class="{ 'msg-flash': item.id === flashMsgId }">
-                <!-- User message in Unify group view: render IM-style on the
+                <!-- User message in Yeaft group view: render IM-style on the
                      right side via UserTurnBlock (mirror of VpTurnBlock).
                      Outside of group view (legacy 1:1 chat) keep the original
                      MessageItem path so chat-mode is untouched. -->
@@ -141,7 +141,7 @@ export default {
                 <MessageItem v-else-if="item.type === 'user' || item.type === 'system' || item.type === 'error'" :message="item.message" />
 
                 <!-- Assistant turn — VP-block redesign (2026-05-08).
-                     - Unify multi-VP turns (speakerVpId set) -> VpTurnBlock,
+                     - Yeaft multi-VP turns (speakerVpId set) -> VpTurnBlock,
                        the collapsible per-VP wrapper that renders avatar +
                        start time + live elapsed ticker, with a 4-state expand
                        machine (see web/stores/helpers/turn-compact.js).
@@ -158,10 +158,10 @@ export default {
               <!-- feat-6af5f9f1 PR A: ReflectionCard mounts removed from the
                    main message stream. Reflection is an engine-internal context
                    compaction step - surfacing it inline during normal chat is
-                   noise. Cards remain in store.unifyReflectionCards so the
+                   noise. Cards remain in store.yeaftReflectionCards so the
                    debug panel (PR B) can render them under the loop they
                    summarize. The component is still imported because PR B
-                   will reuse it inside UnifyDebugPanel. -->
+                   will reuse it inside YeaftDebugPanel. -->
               <!-- PR-M3: sub-agent cards anchored to this row. -->
               <SubAgentCard
                 v-for="card in subAgentCardsForRow(item)"
@@ -523,7 +523,7 @@ export default {
     const containerRef = Vue.ref(null);
 
     // Resolve the active group id for the announcement bar. The bar should
-    // appear only when the user is on the Unify page AND has an active
+    // appear only when the user is on the Yeaft page AND has an active
     // group selected (filter or default). We read the groups store via the
     // Pinia global so the component still imports cleanly in node tests.
     const groupsStore = (() => {
@@ -531,22 +531,22 @@ export default {
       catch (_) { return null; }
     });
     const activeGroupIdForBar = Vue.computed(() => {
-      // Only render the bar in Unify view. Chat mode has no group concept.
-      if (store.currentView !== 'unify') return null;
+      // Only render the bar in Yeaft view. Chat mode has no group concept.
+      if (store.currentView !== 'yeaft') return null;
       const gs = groupsStore();
       if (!gs) return null;
       // Prefer the explicit "filter" the user picked from the sidebar; fall
       // back to whatever the store considers active.
-      const filterId = store.unifyActiveGroupFilter || null;
+      const filterId = store.yeaftActiveGroupFilter || null;
       if (filterId && gs.groups[filterId]) return filterId;
       if (gs.activeGroupId && gs.groups[gs.activeGroupId]) return gs.activeGroupId;
       return null;
     });
 
     // Issue C (2026-05-12) — IM-style dual-column layout gate.
-    // The user explicitly scoped this to Unify GROUP conversations only:
+    // The user explicitly scoped this to Yeaft GROUP conversations only:
     // 1:1 chat and crew are unchanged. We reuse the same predicate as
-    // the announcement bar — Unify view + an active group is selected —
+    // the announcement bar — Yeaft view + an active group is selected —
     // so user messages render as right-side bubbles (UserTurnBlock) and
     // VP turns stay on the left (existing VpTurnBlock). Outside a group,
     // user messages fall through to the legacy centered MessageItem.
@@ -627,7 +627,7 @@ export default {
       //   (2) when `vp_typing_end` cleared the typing set, the placeholder
       //       vanished and the real turn never had a speaker → avatar
       //       disappeared once the message completed.
-      // Latching from any Unify-stamped message is idempotent (only fills
+      // Latching from any Yeaft-stamped message is idempotent (only fills
       // missing fields) and matches what `messages-speaker.js` stamps on
       // assistants — `m.vpId` is the falsy fallback when an inbound
       // tool-use was stamped before its assistant peer arrived.
@@ -890,7 +890,7 @@ export default {
       // Thread-block wrappers are a group-conversation layout primitive.
       // Chat mode needs the flat turn list so normal user/assistant rows keep
       // rendering after the thread-block refactor.
-      if (store.currentView !== 'unify' || !activeGroupIdForBar.value) return turnGroups.value;
+      if (store.currentView !== 'yeaft' || !activeGroupIdForBar.value) return turnGroups.value;
       const blocks = [];
       let current = null;
       const flush = () => {
@@ -926,8 +926,8 @@ export default {
     // current turn list (or never had one) are flushed at the tail of the
     // stream so they're never lost.
     const reflectionCardsByAnchor = Vue.computed(() => {
-      const map = store.unifyReflectionCards || {};
-      const convId = store.unifyConversationId;
+      const map = store.yeaftReflectionCards || {};
+      const convId = store.yeaftConversationId;
       const out = { __orphans: [] };
       const sorted = Object.values(map)
         .filter((c) => c && c.conversationId === convId)
@@ -974,8 +974,8 @@ export default {
     // anchor row now — same behavior as cards that lacked `featureId` in
     // the prior code.
     const subAgentCardsByAnchor = Vue.computed(() => {
-      const map = store.unifySubAgentCards || {};
-      const convId = store.unifyConversationId;
+      const map = store.yeaftSubAgentCards || {};
+      const convId = store.yeaftConversationId;
       const out = { __orphans: [] };
       const sorted = Object.values(map)
         .filter((c) => c && c.conversationId === convId)
@@ -1255,7 +1255,7 @@ export default {
     // Root cause: `showTypingDots = isProcessing && !hasStreamingMessage` is
     // true only during the pre-TTFB window — from the user's send to the
     // first `text_delta`. For low-latency providers (especially some routed
-    // through the Unify engine where the LLM proxy can respond in <100 ms),
+    // through the Yeaft engine where the LLM proxy can respond in <100 ms),
     // that window is shorter than a single browser paint frame, so the
     // running-cat animation never becomes visible. Chat mode happens to
     // avoid this because spawning the Claude CLI always adds ≥300 ms of
@@ -1265,7 +1265,7 @@ export default {
     // latch-OFF until at least `MIN_VISIBLE_MS` has elapsed since the ON
     // transition. This is purely presentational — it does NOT delay any
     // store state, assistant rendering, or scroll behavior, and it affects
-    // both Chat and Unify identically (no mode-specific branching).
+    // both Chat and Yeaft identically (no mode-specific branching).
     const MIN_VISIBLE_MS = 600;
     const displayTypingDots = Vue.ref(false);
     let typingHideTimer = null;
@@ -1436,15 +1436,15 @@ export default {
         // Auto-fire load-more when the user scrolls near the top. Two
         // independent paths share this trigger, gated on currentView so
         // that the wrong store-flag pair never wins.
-        const isUnify = store.currentView === 'unify';
-        const eligible = isUnify
-          ? (store.unifyHasMoreHistory && !store.unifyLoadingMoreHistory && store.unifyOldestLoadedSeq != null)
+        const isYeaft = store.currentView === 'yeaft';
+        const eligible = isYeaft
+          ? (store.yeaftHasMoreHistory && !store.yeaftLoadingMoreHistory && store.yeaftOldestLoadedSeq != null)
           : (store.hasMoreMessages && !store.loadingMoreMessages);
         if (!eligible) return;
 
         preserveScrollAnchorDuringLoad(
-          isUnify ? () => store.loadMoreUnifyHistory() : () => store.loadMoreMessages(),
-          isUnify ? () => store.unifyLoadingMoreHistory : () => store.loadingMoreMessages
+          isYeaft ? () => store.loadMoreYeaftHistory() : () => store.loadMoreMessages(),
+          isYeaft ? () => store.yeaftLoadingMoreHistory : () => store.loadingMoreMessages
         );
       }
     };
@@ -1457,7 +1457,7 @@ export default {
     };
 
     const scrollToLatest = () => {
-      // If the user jumped away while an initial Unify group page was still
+      // If the user jumped away while an initial Yeaft group page was still
       // being hydrated, make the intent explicit: stay on the newest loaded
       // row, and when the in-flight page lands the existing smart-scroll
       // watchers will keep us pinned because isAtBottom is true.
@@ -1482,7 +1482,7 @@ export default {
       }
     );
 
-    // H2.f.6: unifyJumpTarget watcher removed (sidebar no longer emits
+    // H2.f.6: yeaftJumpTarget watcher removed (sidebar no longer emits
     // jump-to-message events; multi-thread navigation is gone). The
     // flashMsgId ref is kept (currently unused) so any v-bind referencing
     // it stays valid.
@@ -1506,11 +1506,11 @@ export default {
     });
 
     // GroupAnnouncementBar's "open settings" link bubbles a request up
-    // to the parent page (UnifyPage) so the unified GroupSettingsModal
+    // to the parent page (YeaftPage) so the unified GroupSettingsModal
     // can be opened with the right group id and an initial section
-    // focus. MessageList is mounted directly inside UnifyPage, so a
+    // focus. MessageList is mounted directly inside YeaftPage, so a
     // normal emit chain — rather than a store-as-bus signal — is the
-    // simpler path. UnifyPage listens for `@open-group-settings`.
+    // simpler path. YeaftPage listens for `@open-group-settings`.
     const onOpenGroupSettings = (payload) => {
       const norm = typeof payload === 'string'
         ? { groupId: payload, section: 'announcement' }
@@ -1520,14 +1520,14 @@ export default {
     };
 
     // Single click handler for the load-more hint. Branches by view so
-    // Chat-mode and Unify-mode can share one button while dispatching to
+    // Chat-mode and Yeaft-mode can share one button while dispatching to
     // their own pagination paths (different store actions, different
     // wire verbs, different cursor semantics).
     const onClickLoadMore = () => {
-      const isUnify = store.currentView === 'unify';
+      const isYeaft = store.currentView === 'yeaft';
       preserveScrollAnchorDuringLoad(
-        isUnify ? () => store.loadMoreUnifyHistory() : () => store.loadMoreMessages(),
-        isUnify ? () => store.unifyLoadingMoreHistory : () => store.loadingMoreMessages
+        isYeaft ? () => store.loadMoreYeaftHistory() : () => store.loadMoreMessages(),
+        isYeaft ? () => store.yeaftLoadingMoreHistory : () => store.loadingMoreMessages
       );
     };
 

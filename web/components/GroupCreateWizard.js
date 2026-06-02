@@ -29,21 +29,21 @@ export default {
   emits: ['close', 'created'],
   template: `
     <Teleport to="body">
-    <div class="group-edit-overlay group-wizard-overlay" @click.self="onOverlayClick" role="dialog" aria-modal="true" :aria-label="$t('unify.group.wizard.title')">
+    <div class="group-edit-overlay group-wizard-overlay" @click.self="onOverlayClick" role="dialog" aria-modal="true" :aria-label="$t('yeaft.group.wizard.title')">
       <div class="group-edit-modal group-wizard-modal">
         <header class="group-edit-header">
-          <span class="group-edit-title">{{ $t('unify.group.wizard.title') }}</span>
-          <button class="group-edit-close" type="button" @click="requestClose" :aria-label="$t('unify.group.wizard.close')">×</button>
+          <span class="group-edit-title">{{ $t('yeaft.group.wizard.title') }}</span>
+          <button class="group-edit-close" type="button" @click="requestClose" :aria-label="$t('yeaft.group.wizard.close')">×</button>
         </header>
 
         <div class="group-wizard-body group-wizard-body-single">
           <!-- NAME -->
           <label class="group-wizard-field">
-            <span class="group-wizard-field-label">{{ $t('unify.group.wizard.step.name') }}</span>
+            <span class="group-wizard-field-label">{{ $t('yeaft.group.wizard.step.name') }}</span>
             <input
               type="text"
               v-model.trim="form.name"
-              :placeholder="$t('unify.group.wizard.namePlaceholder')"
+              :placeholder="$t('yeaft.group.wizard.namePlaceholder')"
               maxlength="60"
               autocomplete="off"
               class="group-wizard-input"
@@ -51,18 +51,18 @@ export default {
               ref="nameInput"
               @keydown.enter.prevent="onSubmit"
             />
-            <span class="group-wizard-hint">{{ $t('unify.group.wizard.nameHint') }}</span>
+            <span class="group-wizard-hint">{{ $t('yeaft.group.wizard.nameHint') }}</span>
             <span v-if="nameError" class="group-wizard-error">{{ nameError }}</span>
           </label>
 
           <!-- WORK DIR -->
           <label class="group-wizard-field">
-            <span class="group-wizard-field-label">{{ $t('unify.group.wizard.workDir') }}</span>
+            <span class="group-wizard-field-label">{{ $t('yeaft.group.wizard.workDir') }}</span>
             <div class="group-wizard-workdir-row">
               <input
                 type="text"
                 v-model.trim="form.workDir"
-                :placeholder="$t('unify.group.wizard.workDirPlaceholder')"
+                :placeholder="$t('yeaft.group.wizard.workDirPlaceholder')"
                 autocomplete="off"
                 class="group-wizard-input"
                 @keydown.enter.prevent="onSubmit"
@@ -77,18 +77,18 @@ export default {
                 <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
               </button>
             </div>
-            <span class="group-wizard-hint">{{ $t('unify.group.wizard.workDirHint') }}</span>
+            <span class="group-wizard-hint">{{ $t('yeaft.group.wizard.workDirHint') }}</span>
           </label>
 
           <!-- ROSTER -->
           <div class="group-wizard-field">
-            <span class="group-wizard-field-label">{{ $t('unify.group.wizard.roster') }}</span>
-            <span class="group-wizard-hint">{{ $t('unify.group.wizard.rosterHint') }}</span>
+            <span class="group-wizard-field-label">{{ $t('yeaft.group.wizard.roster') }}</span>
+            <span class="group-wizard-hint">{{ $t('yeaft.group.wizard.rosterHint') }}</span>
             <div v-if="vpList.length === 0 && vpLibraryEmpty" class="group-wizard-empty">
-              {{ $t('unify.group.wizard.rosterEmpty') }}
+              {{ $t('yeaft.group.wizard.rosterEmpty') }}
             </div>
             <div v-else-if="vpList.length === 0" class="group-wizard-empty group-wizard-empty-loading">
-              {{ $t('unify.group.wizard.rosterLoading') }}
+              {{ $t('yeaft.group.wizard.rosterLoading') }}
             </div>
             <ul v-else class="group-wizard-roster-list" role="listbox" aria-multiselectable="true">
               <li
@@ -119,9 +119,9 @@ export default {
                   type="button"
                   class="group-wizard-default-star"
                   :class="{ 'is-on': form.defaultVpId === vp.vpId }"
-                  :aria-label="$t('unify.group.wizard.defaultVpHint')"
+                  :aria-label="$t('yeaft.group.wizard.defaultVpHint')"
                   :aria-pressed="form.defaultVpId === vp.vpId"
-                  :title="$t('unify.group.wizard.defaultVpHint')"
+                  :title="$t('yeaft.group.wizard.defaultVpHint')"
                   @click.stop="form.defaultVpId = vp.vpId"
                 >
                   <span aria-hidden="true">{{ form.defaultVpId === vp.vpId ? '★' : '☆' }}</span>
@@ -136,7 +136,7 @@ export default {
 
           <div class="group-wizard-actions">
             <button class="group-wizard-link-btn" type="button" @click="requestClose" :disabled="busy">
-              {{ $t('unify.group.wizard.cancel') }}
+              {{ $t('yeaft.group.wizard.cancel') }}
             </button>
             <button
               class="group-wizard-primary-btn"
@@ -144,7 +144,7 @@ export default {
               @click="onSubmit"
               :disabled="busy || !canAdvanceFromName"
             >
-              {{ busy ? $t('unify.group.wizard.creating') : $t('unify.group.wizard.create') }}
+              {{ busy ? $t('yeaft.group.wizard.creating') : $t('yeaft.group.wizard.create') }}
             </button>
           </div>
         </div>
@@ -258,7 +258,7 @@ export default {
       if (this.vpStore && this.vpStore.lastSnapshotAt === 0) {
         const chat = this.chat;
         if (chat && typeof chat.sendWsMessage === 'function') {
-          chat.sendWsMessage({ type: 'unify_vp_subscribe' });
+          chat.sendWsMessage({ type: 'yeaft_vp_subscribe' });
         }
       }
     } catch (_) { /* test env without Pinia/ws — no-op */ }
@@ -403,14 +403,14 @@ export default {
       this.nameError = '';
       if (this.busy) return;
       if (!this.canAdvanceFromName) {
-        this.nameError = this.$t('unify.group.error.invalid_name');
+        this.nameError = this.$t('yeaft.group.error.invalid_name');
         return;
       }
       this.busy = true;
       try {
         const defaultVpId = this.form.defaultVpId || this.form.roster[0] || null;
         if (!this.chat) {
-          this.submitError = this.$t('unify.group.error.unknown', { message: 'store unavailable' });
+          this.submitError = this.$t('yeaft.group.error.unknown', { message: 'store unavailable' });
           return;
         }
         const res = await this.chat.groupCrudRequest('create', {
@@ -426,19 +426,19 @@ export default {
         }
         const code = (res && res.error && res.error.code) || 'unknown';
         const message = (res && res.error && res.error.message) || '';
-        const msgKey = `unify.group.error.${code}`;
+        const msgKey = `yeaft.group.error.${code}`;
         // Always pass `{ message }` so any translation containing the
-        // `{message}` placeholder (e.g. unify.group.error.unknown) gets
+        // `{message}` placeholder (e.g. yeaft.group.error.unknown) gets
         // interpolated. If the key is missing, $t falls back to the key
         // itself — in that case, render the unknown fallback explicitly.
         const translated = this.$t(msgKey, { message });
         if (translated === msgKey) {
-          this.submitError = this.$t('unify.group.error.unknown', { message });
+          this.submitError = this.$t('yeaft.group.error.unknown', { message });
         } else {
           this.submitError = translated;
         }
       } catch (err) {
-        this.submitError = this.$t('unify.group.error.unknown', { message: err && err.message || String(err) });
+        this.submitError = this.$t('yeaft.group.error.unknown', { message: err && err.message || String(err) });
       } finally {
         this.busy = false;
       }

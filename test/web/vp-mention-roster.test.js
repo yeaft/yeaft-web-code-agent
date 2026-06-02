@@ -48,14 +48,14 @@ describe('selectMentionCandidates', () => {
   it('emits results in input (library) order, not roster order', () => {
     // The dropdown is stable across renders because the helper uses
     // Array.prototype.filter on the library list. If we ever switch to
-    // roster-order output (matching UnifyPage's timeline), update this.
+    // roster-order output (matching YeaftPage's timeline), update this.
     const group = { id: 'g1', roster: ['fowler', 'linus'] };
     const out = selectMentionCandidates(VPS, group);
     expect(out.map(v => v.vpId)).toEqual(['linus', 'fowler']);
   });
 
   it('returns an empty list when the group has an empty roster', () => {
-    // Matches the VP timeline (UnifyPage): a group with no members has
+    // Matches the VP timeline (YeaftPage): a group with no members has
     // nothing to @-mention. The autocomplete's v-if hides the popover
     // when filteredList is empty, so the user sees no dropdown.
     expect(selectMentionCandidates(VPS, { id: 'g1', roster: [] })).toEqual([]);

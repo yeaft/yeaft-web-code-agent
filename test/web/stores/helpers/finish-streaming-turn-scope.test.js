@@ -2,7 +2,7 @@
  * Tests for v0.1.768 streaming-stuck fixes in the message helpers.
  *
  * Bug guarded against:
- *   In Unify multi-VP fan-out, several VP turns stream concurrently inside
+ *   In Yeaft multi-VP fan-out, several VP turns stream concurrently inside
  *   the same conversation, each tagged with its own `turnId`. When VP-A's
  *   `result` fires the legacy blanket-clear in `finishStreamingForConversation`
  *   walked back across VP-B's still-streaming message and flipped its
@@ -13,7 +13,7 @@
  *
  * Two-part fix:
  *   1) `finishStreamingForConversation` scopes the walk-back to
- *      `_currentUnifyTurnId` so VP-A's result can only finish VP-A's
+ *      `_currentYeaftTurnId` so VP-A's result can only finish VP-A's
  *      messages.
  *   2) `sweepStaleStreamingForConversation` is a safety net: when both
  *      `processingConversations[convId]` and `activeVpTurns` are empty,
@@ -28,12 +28,12 @@ import {
 
 function mkStore(overrides = {}) {
   return {
-    currentView: 'unify',
-    unifyConversationId: 'conv-1',
-    unifyActiveGroupFilter: null,
-    _currentUnifyGroupId: null,
-    _currentUnifyVpId: null,
-    _currentUnifyTurnId: null,
+    currentView: 'yeaft',
+    yeaftConversationId: 'conv-1',
+    yeaftActiveGroupFilter: null,
+    _currentYeaftGroupId: null,
+    _currentYeaftVpId: null,
+    _currentYeaftTurnId: null,
     activeVpTurns: {},
     processingConversations: {},
     messagesMap: { 'conv-1': [] },
@@ -47,7 +47,7 @@ describe('finishStreamingForConversation: per-turn isolation', () => {
     // still mid-stream. The old blanket-clear walked into VP-B's message —
     // the fix scopes the walk to turnId.
     const store = mkStore({
-      _currentUnifyTurnId: 'turn-a',
+      _currentYeaftTurnId: 'turn-a',
       messagesMap: {
         'conv-1': [
           { type: 'user', content: 'go' },
@@ -68,7 +68,7 @@ describe('finishStreamingForConversation: per-turn isolation', () => {
     // tail, the old code would have flipped VP-B's flag because it was the
     // first streaming assistant the walk encountered.
     const store = mkStore({
-      _currentUnifyTurnId: 'turn-a',
+      _currentYeaftTurnId: 'turn-a',
       messagesMap: {
         'conv-1': [
           { type: 'user', content: 'go' },
@@ -85,7 +85,7 @@ describe('finishStreamingForConversation: per-turn isolation', () => {
 
   it('stops at the user message turn fence and does not wander into older history', () => {
     const store = mkStore({
-      _currentUnifyTurnId: 'turn-a',
+      _currentYeaftTurnId: 'turn-a',
       messagesMap: {
         'conv-1': [
           { type: 'assistant', content: 'older orphan', isStreaming: true, turnId: 'turn-x', vpId: 'vp-x' },
@@ -100,11 +100,11 @@ describe('finishStreamingForConversation: per-turn isolation', () => {
     expect(msgs[2].isStreaming).toBe(false); // current turn: cleared
   });
 
-  it('legacy single-turn path (no _currentUnifyTurnId) keeps blanket-clear', () => {
-    // Non-Unify chats never set _currentUnifyTurnId. The walk must still
+  it('legacy single-turn path (no _currentYeaftTurnId) keeps blanket-clear', () => {
+    // Non-Yeaft chats never set _currentYeaftTurnId. The walk must still
     // clear every streaming message until the user turn fence.
     const store = mkStore({
-      _currentUnifyTurnId: null,
+      _currentYeaftTurnId: null,
       messagesMap: {
         'conv-1': [
           { type: 'user', content: 'q' },

@@ -38,10 +38,10 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Engine } from '../../../agent/unify/engine.js';
-import { NullTrace } from '../../../agent/unify/debug-trace.js';
-import { ConversationStore } from '../../../agent/unify/conversation/persist.js';
-import { TOOL_BATCH_SIZE } from '../../../agent/unify/tool-folding/index.js';
+import { Engine } from '../../../agent/yeaft/engine.js';
+import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
+import { ConversationStore } from '../../../agent/yeaft/conversation/persist.js';
+import { TOOL_BATCH_SIZE } from '../../../agent/yeaft/tool-folding/index.js';
 
 class ScriptedAdapter {
   constructor({ toolUseTurns = TOOL_BATCH_SIZE } = {}) {

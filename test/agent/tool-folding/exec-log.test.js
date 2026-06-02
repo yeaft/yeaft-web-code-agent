@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { ExecLog, buildEntry, argsHashOf } from '../../../agent/unify/tool-folding/exec-log.js';
+import { ExecLog, buildEntry, argsHashOf } from '../../../agent/yeaft/tool-folding/exec-log.js';
 
 function tmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'exec-log-'));

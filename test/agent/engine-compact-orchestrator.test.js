@@ -7,9 +7,9 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { Engine } from '../../agent/unify/engine.js';
+import { Engine } from '../../agent/yeaft/engine.js';
 
-vi.mock('../../agent/unify/compact/orchestrator.js', async (importOriginal) => {
+vi.mock('../../agent/yeaft/compact/orchestrator.js', async (importOriginal) => {
   const orig = await importOriginal();
   return {
     ...orig,
@@ -21,7 +21,7 @@ vi.mock('../../agent/unify/compact/orchestrator.js', async (importOriginal) => {
 });
 
 const { runCompact: runCompactOrchestrator } =
-  await import('../../agent/unify/compact/orchestrator.js');
+  await import('../../agent/yeaft/compact/orchestrator.js');
 
 class CapturingAdapter {
   constructor() { this.streamCalls = []; }

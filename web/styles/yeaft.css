@@ -1,0 +1,3423 @@
+/* ========================================
+   Yeaft Page — Three-Column Layout
+   Left sidebar + Center conversation + Right detail panel.
+   Conversation area reuses standard Chat components (MessageList + ChatInput).
+   ======================================== */
+
+.yeaft-page {
+  display: flex;
+  flex-direction: row;
+  height: 100vh;
+  height: 100dvh;
+  background: var(--bg-main);
+  color: var(--text-primary);
+}
+
+/* ── Left Sidebar (minimal: back + settings) ── */
+
+.yeaft-sidebar {
+  width: 260px;
+  min-width: 260px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-sidebar);
+  overflow: hidden;
+  flex-shrink: 0;
+  transition: width 0.2s ease, min-width 0.2s ease, opacity 0.2s ease;
+}
+
+.yeaft-sidebar.collapsed {
+  width: 48px;
+  min-width: 48px;
+  border-right: 1px solid var(--border-color);
+}
+
+/* When collapsed, hide the full sidebar contents and only show the icon bar.
+   Mirrors Chat sidebar behavior so the user can re-expand instead of having
+   the sidebar disappear entirely. */
+.yeaft-sidebar.collapsed .us-header-row,
+.yeaft-sidebar.collapsed .us-scroll,
+.yeaft-sidebar.collapsed .sidebar-bottom {
+  display: none;
+}
+
+.yeaft-sidebar-header {
+  padding: 10px 8px;
+}
+
+.yeaft-back-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 8px;
+  font-size: 13px;
+  width: 100%;
+  transition: background 0.15s, color 0.15s;
+}
+
+.yeaft-back-btn:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.yeaft-back-btn svg {
+  flex-shrink: 0;
+}
+
+.yeaft-back-text {
+  display: none;
+}
+
+.yeaft-sidebar-spacer {
+  flex: 1;
+}
+
+.yeaft-sidebar-footer {
+  padding: 8px;
+}
+
+/* Sidebar sections (kept for backward compat but simplified) */
+
+.yeaft-sidebar-section {
+  padding: 8px 12px;
+}
+
+.yeaft-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+/* ── Settings Button (sidebar bottom — icon only) ── */
+
+.yeaft-settings-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 8px;
+  font-size: 13px;
+  width: 100%;
+  transition: background 0.15s, color 0.15s;
+}
+
+.yeaft-settings-btn span {
+  display: none;
+}
+
+.yeaft-settings-btn:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.yeaft-settings-btn.active {
+  color: var(--accent);
+  background: var(--sidebar-selected);
+}
+
+.yeaft-settings-btn svg {
+  flex-shrink: 0;
+}
+
+/* ── Center Conversation ── */
+
+.yeaft-main {
+  flex: 1;
+  display: flex;
+  /* Layout realign — VP list on the LEFT of the conversation (mirrors
+     Crew). Outer axis is row; the conversation column lives in
+     .yeaft-main-center which preserves the old vertical stack. */
+  flex-direction: row;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Conversation column inside yeaft-main. Holds the topbar, body
+   (settings | VP detail | empty hero | message list), and ChatInput.
+   Reproduces the column flex that .yeaft-main itself used to be. */
+.yeaft-main-center {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Topbar — model selector + mode toggle + actions */
+
+.yeaft-topbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 16px;
+  background: var(--bg-main);
+  min-height: 40px;
+  flex-shrink: 0;
+}
+
+.yeaft-sidebar-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 6px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.yeaft-sidebar-toggle:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+/* ── Model Selector (topbar compact dropdown) ── */
+
+.yeaft-topbar-model {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  padding: 4px 10px;
+  border-radius: 8px;
+  position: relative;
+  transition: background 0.15s;
+}
+
+.yeaft-topbar-model:hover {
+  background: var(--sidebar-hover);
+}
+
+.yeaft-topbar-model-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.yeaft-model-chevron {
+  flex-shrink: 0;
+  transition: transform 0.15s;
+  color: var(--text-muted);
+}
+
+.yeaft-model-chevron.open {
+  transform: rotate(180deg);
+}
+
+.yeaft-topbar-model-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  z-index: 50;
+  min-width: 220px;
+}
+
+/* Model dropdown (shared) */
+
+.yeaft-model-dropdown {
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.yeaft-model-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-secondary);
+  transition: background 0.12s;
+}
+
+.yeaft-model-option:hover {
+  background: var(--sidebar-hover);
+}
+
+.yeaft-model-option.active {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.yeaft-model-check {
+  width: 14px;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--accent);
+  text-align: center;
+}
+
+.yeaft-model-option-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.yeaft-model-option-provider {
+  font-size: 10px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.yeaft-model-option-ctx {
+  font-size: 10px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  opacity: 0.75;
+  margin-left: 4px;
+}
+
+/* ── Provider edit — per-model row (id + ctx + max) ── */
+
+.yeaft-settings-model-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.yeaft-settings-model-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.yeaft-settings-model-row .yeaft-settings-model-id {
+  flex: 1;
+  min-width: 160px;
+}
+
+.yeaft-settings-model-row .yeaft-settings-model-ctx,
+.yeaft-settings-model-row .yeaft-settings-model-max {
+  flex: 0 0 80px;
+  width: 80px;
+}
+
+.yeaft-settings-protocol-hint {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.llm-protocol-hint {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+/* ── Mode Toggle (removed — Yeaft is single-mode as of task-297) ── */
+
+/* Legacy model badge (no longer used, kept for compat) */
+
+.yeaft-model-badge {
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--bg-input-wrapper);
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-weight: 500;
+}
+
+.yeaft-topbar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ── Group Selector (task-338-F3) ── */
+
+.yeaft-topbar-group {
+  position: relative;
+}
+
+.yeaft-topbar-group-trigger {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  padding: 4px 10px;
+  border-radius: 8px;
+  transition: background 0.15s;
+}
+
+.yeaft-topbar-group-trigger:hover {
+  background: var(--sidebar-hover);
+}
+
+.yeaft-topbar-group-icon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.yeaft-topbar-group-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.yeaft-topbar-group-count {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.yeaft-topbar-group-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  z-index: 50;
+  min-width: 260px;
+}
+
+.yeaft-topbar-group-empty {
+  padding: 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.yeaft-topbar-group-option {
+  position: relative;
+}
+
+.yeaft-topbar-group-kebab {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.yeaft-topbar-group-kebab:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.yeaft-topbar-group-menu {
+  position: absolute;
+  top: 100%;
+  right: 4px;
+  margin-top: 2px;
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  z-index: 60;
+  min-width: 120px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+}
+
+.yeaft-topbar-group-menu-item {
+  background: none;
+  border: none;
+  text-align: left;
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.yeaft-topbar-group-menu-item:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.yeaft-topbar-group-menu-item.is-danger {
+  color: var(--error);
+}
+
+.yeaft-topbar-group-menu-item.is-danger:hover {
+  background: var(--error-bg, rgba(214, 93, 93, 0.12));
+  color: var(--error);
+}
+
+/* N2+N5: keyboard-driven highlight (aria-activedescendant target) */
+.yeaft-topbar-group-option.is-highlighted {
+  background: var(--sidebar-hover);
+}
+
+/* N3: busy-state row — dim + disable pointer while WS CRUD is in flight */
+.yeaft-topbar-group-option.is-busy {
+  opacity: 0.7;
+  pointer-events: none;
+  cursor: progress;
+}
+
+.yeaft-topbar-group-spinner {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.yeaft-topbar-group-spinner-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--border-color);
+  border-top-color: var(--text-secondary);
+  animation: yeaft-topbar-group-spin 0.9s linear infinite;
+}
+
+@keyframes yeaft-topbar-group-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* N1: GroupEditModal — VpCrudModal-aligned overlay + card */
+.group-edit-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.group-edit-modal {
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+  width: min(440px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 40px);
+  overflow: hidden;
+}
+
+.group-edit-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px 8px;
+  /* Yeaft UI rule: no horizontal dividers — use spacing instead. */
+}
+
+.group-edit-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: 0.01em;
+}
+
+.group-edit-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.group-edit-close:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.group-edit-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+}
+
+.group-edit-message {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.group-edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.group-edit-field-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.group-edit-input {
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 8px 10px;
+  outline: none;
+}
+
+.group-edit-input:focus {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.group-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.group-edit-btn {
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.group-edit-btn:hover:not(:disabled) {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.group-edit-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.group-edit-btn.is-primary {
+  background: var(--accent);
+  color: var(--bg-main);
+  border-color: var(--accent);
+}
+
+.group-edit-btn.is-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  color: var(--bg-main);
+}
+
+.group-edit-btn.is-primary.is-danger {
+  background: var(--error);
+  border-color: var(--error);
+  color: var(--bg-main);
+}
+
+.group-edit-btn.is-primary.is-danger:hover:not(:disabled) {
+  background: var(--error);
+  filter: brightness(1.08);
+}
+
+.yeaft-topbar-group-sep {
+  height: 1px;
+  background: var(--border-color);
+  margin: 4px 0;
+}
+
+.yeaft-topbar-group-new {
+  border: none;
+  background: none;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+
+.yeaft-topbar-group-new-plus {
+  display: inline-block;
+  width: 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+
+.yeaft-clear-btn,
+.yeaft-reload-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 6px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.yeaft-clear-btn:hover {
+  background: var(--sidebar-hover);
+  color: var(--error);
+}
+
+.yeaft-reload-btn:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+/* ── Right Detail Panel ── */
+
+.yeaft-detail {
+  width: var(--yeaft-detail-width, 500px);
+  min-width: var(--yeaft-detail-width, 500px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-sidebar);
+  flex-shrink: 0;
+  transition: width 0.2s ease, min-width 0.2s ease, opacity 0.2s ease;
+  position: relative;
+}
+
+.yeaft-detail.resizing {
+  transition: none;
+  user-select: none;
+}
+
+/* Drag handle on left edge */
+.yeaft-detail-drag-handle {
+  position: absolute;
+  left: -3px;
+  top: 0;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 10;
+  background: transparent;
+  transition: background 0.15s;
+}
+
+.yeaft-detail-drag-handle:hover,
+.yeaft-detail-drag-handle.active {
+  background: var(--accent);
+  opacity: 0.5;
+}
+
+/* ── Debug Button ── */
+
+.yeaft-debug-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 6px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.yeaft-debug-btn:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.yeaft-debug-btn.active {
+  color: var(--accent);
+  background: var(--sidebar-selected);
+}
+
+/* ── Debug Panel ── */
+
+.yeaft-debug-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* task-345: align header padding + title/count sizes to Chat right-panel tokens
+   (expert-panel-header / subagent-panel-header: padding 12px 16px; title 14/600; count 12px). */
+.yeaft-debug-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  flex-shrink: 0;
+}
+
+.yeaft-debug-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.yeaft-debug-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 12px 8px;
+  flex-shrink: 0;
+}
+
+.yeaft-debug-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.yeaft-debug-tab:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.yeaft-debug-tab.active {
+  background: var(--sidebar-selected);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.yeaft-debug-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.yeaft-debug-tab-count {
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--bg-tertiary, var(--sidebar-hover));
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.yeaft-debug-tab.active .yeaft-debug-tab-count {
+  color: var(--text-secondary);
+}
+
+.yeaft-debug-count {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.yeaft-debug-turns {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 12px 16px;
+}
+
+.yeaft-debug-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* No card chrome, no hairlines — turns separate by spacing alone, per the
+   project "no horizontal divider" design rule. The header gets a hover bg
+   for affordance; that's enough. */
+.yeaft-debug-turn {
+  border: none;
+  border-radius: 0;
+  margin: 0;
+  padding: 4px 0 8px;
+}
+
+.yeaft-debug-turn-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 6px;
+  margin: 0 -6px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: transparent;
+  user-select: none;
+  transition: background 0.15s;
+}
+
+.yeaft-debug-turn-header:hover {
+  background: var(--sidebar-hover);
+}
+
+.yeaft-debug-turn-chevron {
+  flex-shrink: 0;
+  transition: transform 0.15s;
+}
+
+.yeaft-debug-turn-chevron.expanded {
+  transform: rotate(90deg);
+}
+
+.yeaft-debug-turn-num {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.yeaft-debug-turn-model {
+  color: var(--text-muted);
+}
+
+.yeaft-debug-turn-stats {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.yeaft-debug-turn-body {
+  padding: 4px 6px 4px 22px; /* indent past the chevron column */
+}
+
+.yeaft-debug-section {
+  margin-bottom: 10px;
+}
+
+.yeaft-debug-section:last-child {
+  margin-bottom: 0;
+}
+
+.yeaft-debug-section-title {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+/* Block-level pre (assistant text, system prompt, etc.) — render
+   like a real code block, not an inline form field. The shared "code-block
+   recipe" below is also reused by .yeaft-debug-error and (via composition)
+   .yeaft-debug-pre-soft. */
+.yeaft-debug-pre {
+  background: var(--code-bg, var(--bg-input-wrapper));
+  border: none;
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--code-text, var(--text-secondary));
+  white-space: pre-wrap;
+  overflow-wrap: anywhere; /* never break_all — preserves token shapes */
+  max-height: 240px;
+  overflow-y: auto;
+  margin: 4px 0 0;
+}
+
+.yeaft-debug-token-row {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.yeaft-debug-token-label {
+  color: var(--text-muted);
+}
+
+/* ── task-331: Function Calls panel + structured message rendering ── */
+
+.yeaft-debug-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.yeaft-debug-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  border-left: 1px solid var(--border-light);
+}
+.yeaft-debug-msg-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 11px;
+}
+.yeaft-debug-msg-role {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.yeaft-debug-msg-callid {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.yeaft-debug-msg-err {
+  color: var(--error);
+  font-size: 10px;
+}
+.yeaft-debug-tc {
+  margin-top: 2px;
+}
+.yeaft-debug-tc > summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 2px 0;
+  list-style: none;
+}
+.yeaft-debug-tc > summary::-webkit-details-marker {
+  display: none;
+}
+.yeaft-debug-tc-id {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.yeaft-debug-fncalls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.yeaft-debug-fncall {
+  padding: 4px 8px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  border-left: 1px solid var(--border-light);
+}
+.yeaft-debug-fncall-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin-bottom: 2px;
+  font-size: 11px;
+}
+.yeaft-debug-fncall-num {
+  color: var(--text-muted);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.yeaft-debug-fncall-name {
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+.yeaft-debug-fncall-id {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.yeaft-debug-fncall-pending { color: var(--text-muted); font-size: 11px; }
+.yeaft-debug-fncall-ok      { color: var(--success); font-size: 11px; }
+.yeaft-debug-fncall-err     { color: var(--error); font-size: 11px; }
+.yeaft-debug-fncall > details > summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 2px 0;
+  list-style: none;
+}
+.yeaft-debug-fncall > details > summary::-webkit-details-marker {
+  display: none;
+}
+.yeaft-debug-empty-inline {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 4px 0;
+  font-style: italic;
+}
+
+/* ── YeaftSettings Panel ── */
+
+.yeaft-settings {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.yeaft-settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  flex-shrink: 0;
+}
+
+.yeaft-settings-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.yeaft-settings-close-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 6px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.yeaft-settings-close-btn:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.yeaft-settings-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 20px 20px;
+}
+
+.yeaft-settings-status {
+  padding: 20px 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.yeaft-settings-error {
+  color: var(--error);
+}
+
+.yeaft-settings-success {
+  color: var(--accent);
+}
+
+.yeaft-settings-banner {
+  display: flex;
+  gap: 10px;
+  padding: 12px;
+  background: var(--bg-input-wrapper);
+  border-radius: 8px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.yeaft-settings-banner svg {
+  flex-shrink: 0;
+  color: var(--accent);
+  margin-top: 2px;
+}
+
+.yeaft-settings-banner p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.yeaft-settings-group {
+  margin-bottom: 20px;
+}
+
+.yeaft-settings-group-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.yeaft-settings-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0 0 10px;
+}
+
+.yeaft-settings-provider {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 8px;
+}
+
+.yeaft-settings-provider-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.yeaft-settings-provider-idx {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.yeaft-settings-icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.yeaft-settings-icon-btn:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.yeaft-settings-row {
+  display: flex;
+  gap: 10px;
+}
+
+.yeaft-settings-field {
+  margin-bottom: 8px;
+}
+
+.yeaft-settings-field label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.yeaft-settings-field input,
+.yeaft-settings-field select,
+.yeaft-settings-field textarea {
+  width: 100%;
+  padding: 6px 10px;
+  background: var(--bg-input-wrapper);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s;
+  box-sizing: border-box;
+}
+
+.yeaft-settings-field input:focus,
+.yeaft-settings-field select:focus,
+.yeaft-settings-field textarea:focus {
+  border-color: var(--accent);
+}
+
+.yeaft-settings-field textarea {
+  resize: vertical;
+  min-height: 60px;
+}
+
+.yeaft-settings-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 0 0 4px;
+}
+
+.yeaft-settings-secret {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.yeaft-settings-secret input {
+  flex: 1;
+}
+
+.yeaft-settings-add-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: 1px dashed var(--border-color);
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  width: 100%;
+  justify-content: center;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.yeaft-settings-add-btn:hover {
+  background: var(--sidebar-hover);
+  border-color: var(--text-muted);
+}
+
+.yeaft-settings-save-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding-top: 8px;
+}
+
+.yeaft-settings-dirty {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.yeaft-settings-save-btn {
+  padding: 6px 18px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-input-wrapper);
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.yeaft-settings-save-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+
+.yeaft-settings-save-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── Yeaft Conversation Width Overrides ── */
+/* Shared .messages and .input-wrapper default to max-width: 60%.
+   In Yeaft, we want wider content — the sidebar already eats horizontal space. */
+
+.yeaft-page .messages {
+  max-width: 90%;
+  padding: 0 16px;
+}
+
+.yeaft-page .input-area {
+  padding: 12px 16px 20px;
+  padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+}
+
+.yeaft-page .input-wrapper {
+  max-width: 90%;
+}
+
+.yeaft-page .attachments-preview {
+  max-width: 90%;
+}
+
+/* ── Mobile Sidebar Overlay ── */
+
+.yeaft-sidebar-overlay {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 99;
+}
+
+/* ── Mobile Responsive ── */
+
+@media (max-width: 1024px) {
+  /* Hide right panel on tablet/narrow screens */
+  .yeaft-detail {
+    display: none;
+  }
+
+  /* fix/yeaft-mobile-debug-panel: when debug mode is on, escalate the
+     detail panel to a fullscreen overlay so the toggle isn't a silent
+     no-op on tablets. The base 1024 rule above hides .yeaft-detail
+     unconditionally; .mobile-debug re-enables it as `display: flex`
+     and pins it over the chat surface. The selector specificity
+     (`.yeaft-detail.mobile-debug`) beats the bare `.yeaft-detail`
+     rule above, so this works without `!important`. */
+  .yeaft-detail.mobile-debug {
+    display: flex;
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: 100vw;
+    min-width: 0;
+    z-index: 110;
+    box-shadow: -4px 0 16px rgba(0, 0, 0, 0.2);
+  }
+
+  /* Drag handle is meaningless when the panel is fullscreen — hide it
+     so it can't intercept touches near the edge. */
+  .yeaft-detail.mobile-debug .yeaft-detail-drag-handle {
+    display: none;
+  }
+}
+
+/* fix/yeaft-mobile-debug-panel: in-panel close button, only rendered
+   (and only visible via @media) on narrow viewports because the topbar
+   toggle is occluded by the overlay. Apple-style icon button — neutral
+   chrome, hover lift. */
+.yeaft-debug-mobile-close {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.yeaft-debug-mobile-close:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+/* task-fix-mobile-group-settings: topbar hamburger — hidden on desktop
+   (the V2 sidebar header has its own collapse control), shown on mobile
+   via the @media block below. Mirrors `.header-sidebar-toggle` chrome. */
+.yeaft-topbar-sidebar-toggle {
+  display: none;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary, #555);
+  border-radius: 6px;
+  cursor: pointer;
+  flex-shrink: 0;
+  margin-right: 4px;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.yeaft-topbar-sidebar-toggle:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+/* task-fix-mobile-group-settings: topbar group ⚙ — opens the unified
+   GroupSettingsModal for the active group. Visible on every viewport
+   (no hover-reveal) so touch users always have a settings entry-point.
+   Sits inside `.yeaft-topbar-right` next to clear/debug/detail. */
+.yeaft-topbar-group-settings {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary, #555);
+  border-radius: 6px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.yeaft-topbar-group-settings:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+@media (max-width: 768px) {
+  /* Yeaft conversation: narrower padding on mobile */
+  .yeaft-page .messages {
+    max-width: 100%;
+    padding: 0 10px;
+  }
+
+  .yeaft-page .input-area {
+    padding: 8px 10px 16px;
+    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .yeaft-page .input-wrapper {
+    max-width: 100%;
+  }
+
+  .yeaft-page .attachments-preview {
+    max-width: 100%;
+  }
+
+  /* Hide right panel */
+  .yeaft-detail {
+    display: none;
+  }
+
+  /* fix/yeaft-mobile-debug-panel: same overlay escalation for the
+     <=768 phone block. Without this, the 1024 override would be
+     beaten by the bare-selector rule directly above. */
+  .yeaft-detail.mobile-debug {
+    display: flex;
+  }
+
+  /* Show overlay backdrop when sidebar is open */
+  .yeaft-sidebar-overlay {
+    display: block;
+  }
+
+  /* Left sidebar becomes collapsible overlay */
+  .yeaft-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 100;
+    height: 100vh;
+    height: 100dvh;
+    box-shadow: 4px 0 16px rgba(0, 0, 0, 0.2);
+  }
+
+  .yeaft-sidebar.collapsed {
+    width: 0;
+    min-width: 0;
+    box-shadow: none;
+    border-right: none;
+  }
+  /* On mobile, fully hide the icon bar too — sidebar slides off-screen. */
+  .yeaft-sidebar.collapsed .sidebar-collapsed-bar {
+    display: none;
+  }
+
+  .yeaft-topbar-model-name {
+    max-width: 120px;
+    font-size: 12px;
+  }
+
+  .yeaft-topbar {
+    padding: 6px 10px;
+  }
+
+  /* task-fix-mobile-group-settings: show the topbar hamburger so users
+     can re-open the sidebar after a group/task selection collapses it. */
+  .yeaft-topbar-sidebar-toggle {
+    display: flex;
+  }
+}
+
+/* =====================================================
+ * Yeaft Breadcrumb — dual-view chat stream filter banner
+ * =====================================================
+ * Shown above MessageList when a thread filter is active.
+ * Follows the project rule: NO horizontal border/divider.
+ * Uses background tint + padding to separate from topbar/messages.
+ */
+.yeaft-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  font-size: 13px;
+  color: var(--text-secondary, #555);
+  background: var(--bg-subtle, rgba(0, 0, 0, 0.025));
+  /* Intentionally no border-top / border-bottom — use spacing instead. */
+}
+
+.yeaft-breadcrumb-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--link-color, #2d7ff9);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.yeaft-breadcrumb-back:hover {
+  background: var(--bg-hover, rgba(45, 127, 249, 0.08));
+}
+
+.yeaft-breadcrumb-arrow {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.yeaft-breadcrumb-sep {
+  color: var(--text-tertiary, #bbb);
+  user-select: none;
+}
+
+.yeaft-breadcrumb-thread {
+  font-weight: 500;
+  color: var(--text-primary, #222);
+}
+
+.yeaft-breadcrumb-hash {
+  color: var(--text-tertiary, #999);
+  margin-right: 1px;
+}
+
+/* ============ task-315: Task Detail View (cross-thread aggregation) ============ */
+.yeaft-feature-detail {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.yeaft-feature-detail-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  font-size: 13px;
+  color: var(--text-secondary, #555);
+  /* Per CLAUDE.md: Yeaft page must NOT have horizontal border-bottom/border-top. */
+}
+.yeaft-feature-detail-crumb {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+}
+.yeaft-feature-detail-crumb-id {
+  font-weight: 600;
+  color: var(--text-primary, #222);
+}
+.yeaft-feature-detail-crumb-slash {
+  color: var(--text-tertiary, #999);
+}
+.yeaft-feature-detail-crumb-title {
+  color: var(--text-primary, #222);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 50vw;
+  white-space: nowrap;
+}
+.yeaft-feature-detail-crumb-status {
+  margin-left: auto;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--surface-2, #eee);
+  color: var(--text-secondary, #555);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.yeaft-feature-detail-messages {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 10px 18px 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.yeaft-feature-detail-empty {
+  color: var(--text-tertiary, #999);
+  padding: 40px 10px;
+  text-align: center;
+  font-size: 13px;
+}
+.yeaft-feature-detail-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--surface-1, #fafafa);
+}
+.yeaft-feature-detail-msg-user {
+  background: var(--accent-soft, #eef5ff);
+}
+.yeaft-feature-detail-msg-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-secondary, #666);
+}
+.yeaft-feature-detail-msg-role {
+  font-weight: 600;
+}
+.yeaft-feature-detail-thread-pill {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle, #e0e0e0);
+  background: transparent;
+  color: var(--text-tertiary, #888);
+  cursor: pointer;
+  line-height: 1.4;
+}
+.yeaft-feature-detail-thread-pill:hover {
+  color: var(--text-primary, #222);
+  border-color: var(--border-strong, #bbb);
+}
+.yeaft-feature-detail-msg-time {
+  margin-left: auto;
+  color: var(--text-tertiary, #999);
+}
+.yeaft-feature-detail-msg-body {
+  font-size: 13px;
+  color: var(--text-primary, #222);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+}
+.yeaft-feature-detail-reply {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 18px;
+  font-size: 12px;
+  color: var(--text-secondary, #555);
+}
+.yeaft-feature-detail-reply-label {
+  color: var(--text-tertiary, #888);
+}
+.yeaft-feature-detail-thread-select {
+  font-size: 12px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border-subtle, #ddd);
+  background: var(--surface-0, #fff);
+  color: var(--text-primary, #222);
+}
+.yeaft-feature-detail-fork-hint {
+  color: var(--warn-text, #c07a00);
+  font-style: italic;
+}
+
+
+/* ============================
+ * task-334j: VP Mention Autocomplete
+ * ============================ */
+.vp-mention-autocomplete .vp-mention-id {
+  color: var(--text-tertiary, #999);
+  font-size: 12px;
+}
+.vp-mention-autocomplete .vp-mention-role {
+  font-size: 11px;
+  color: var(--text-tertiary, #aaa);
+  margin-left: auto;
+}
+
+/* feat-6af5f9f1 PR B — YeaftDebugPanel additions
+ * Reuses existing .yeaft-debug-panel / .yeaft-debug-header / -title /
+ * -toggle-chip / -count / -empty / -section / -pre / -turns / -turn from
+ * the legacy block above. New rules below add Loop sub-rows, copy
+ * buttons, memory + tools lists, and the turn-header reshape.
+ */
+
+.yeaft-debug-turn-prompt {
+  flex: 1 1 auto;
+  font-size: 12px;
+  color: var(--text-primary);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.yeaft-debug-turn-stats {
+  display: flex;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+  align-items: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Chip-less chips: no background, no padding, just muted mono text.
+   The visual hierarchy comes from the prompt being darker/heavier than
+   the metadata, not from boxes around each metric. */
+.yeaft-debug-turn-vp,
+.yeaft-debug-turn-group {
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.yeaft-debug-turn-loopcount,
+.yeaft-debug-turn-time,
+.yeaft-debug-turn-tokens {
+  font-variant-numeric: tabular-nums;
+}
+
+.yeaft-debug-section-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0 4px;
+  font-size: 12px;
+}
+
+.yeaft-debug-section-row .yeaft-debug-section-title {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.yeaft-debug-section-meta {
+  flex: 1 1 auto;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* One unified secondary-button style. Borderless, hover-only background.
+   `.small` keeps the same shape — it just dials the size down a notch. */
+.yeaft-debug-copy-btn,
+.yeaft-debug-show-btn {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  font-size: 11px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.15s, color 0.15s;
+}
+
+.yeaft-debug-copy-btn:hover,
+.yeaft-debug-show-btn:hover:not(:disabled) {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.yeaft-debug-show-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: transparent;
+}
+
+.yeaft-debug-copy-btn.small {
+  padding: 1px 6px;
+  font-size: 10px;
+}
+
+.yeaft-debug-copied-flash {
+  margin-left: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: normal;
+  padding: 1px 8px;
+  background: var(--sidebar-hover);
+  border-radius: 10px;
+}
+
+.yeaft-debug-loop {
+  margin: 6px 0 4px;
+  border-left: 1px solid var(--border-light);
+  padding-left: 10px;
+}
+
+.yeaft-debug-loop-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 4px 6px;
+  margin: 0 -6px;
+  border-radius: 4px;
+  font-size: 12px;
+  transition: background 0.15s;
+}
+
+.yeaft-debug-loop-header:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.yeaft-debug-loop-num {
+  font-weight: 600;
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+}
+
+.yeaft-debug-loop-model {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.yeaft-debug-loop-stats {
+  display: flex;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.yeaft-debug-loop-meta {
+  color: var(--text-muted);
+}
+
+.yeaft-debug-loop-body {
+  margin-top: 4px;
+  margin-left: 10px;
+}
+
+.yeaft-debug-tool-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 3px 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.yeaft-debug-tool-num {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.yeaft-debug-tool-name {
+  flex: 0 0 auto;
+  font-weight: 500;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.yeaft-debug-tool-status.ok {
+  color: var(--success);
+  font-weight: 600;
+}
+
+.yeaft-debug-tool-status.err {
+  color: var(--error);
+  font-weight: 600;
+}
+
+.yeaft-debug-tool-time {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.yeaft-debug-mem-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0 0 0;
+  font-size: 11px;
+}
+
+.yeaft-debug-mem-list li {
+  padding: 2px 0;
+}
+
+.yeaft-debug-mem-list code {
+  background: var(--inline-code-bg, var(--sidebar-hover));
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+.yeaft-debug-mem-meta {
+  margin-left: 8px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Error body — render as a code block, not flowing text. Long JSON
+   error envelopes (Anthropic 400 / 4xx) are the most common payload
+   here, and `word-break: break-all` was chopping them mid-token. */
+.yeaft-debug-error {
+  font-size: 11px;
+  color: var(--error);
+  background: var(--code-bg, var(--bg-input-wrapper));
+  font-family: var(--font-mono);
+  line-height: 1.5;
+  padding: 10px 12px;
+  border-radius: 6px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 240px;
+  overflow-y: auto;
+  margin: 4px 0 0;
+}
+
+/* Soft variant — composes with .yeaft-debug-pre via
+   `class="yeaft-debug-pre yeaft-debug-pre-soft"`. Only the delta lives here:
+   reflection content reads as "secondary" by being slightly muted. */
+.yeaft-debug-pre-soft {
+  color: var(--text-secondary);
+  opacity: 0.85;
+}
+
+/* RAW row — buttons on the title line, URL/status on its own muted
+   monospace line below. Avoids the previous "all-on-one-line" cram. */
+.yeaft-debug-raw-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: center;
+  font-size: 11px;
+}
+
+.yeaft-debug-raw-row .yeaft-debug-section-meta {
+  flex: 1 1 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  padding-top: 2px;
+}
+
+/* ============================================================
+   Group Announcement Bar — collapsible CLAUDE.md-style banner
+   shown at the top of MessageList in Yeaft mode. Per the Yeaft
+   UI rule, no hard horizontal dividers — separation is via
+   spacing + a subtle background tint.
+   ============================================================ */
+
+.group-announcement-bar {
+  /* Sits above the message stream, below the yeaft topbar. Padding
+     mirrors the message gutter so the preview line aligns visually
+     with subsequent message rows. */
+  margin: 8px 12px 4px;
+  border-radius: 10px;
+  background: var(--sidebar-hover, rgba(0, 0, 0, 0.04));
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  transition: background 0.15s ease;
+}
+
+.group-announcement-bar.is-empty .group-announcement-bar__label {
+  color: var(--text-muted);
+}
+
+.group-announcement-bar__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.group-announcement-bar__header:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: -2px;
+  border-radius: 10px;
+}
+
+.group-announcement-bar__icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+  flex: 0 0 auto;
+}
+
+.group-announcement-bar__label {
+  font-weight: 600;
+  color: var(--text-secondary);
+  flex: 0 0 auto;
+}
+
+.group-announcement-bar__preview {
+  flex: 1 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-secondary);
+}
+
+.group-announcement-bar__hint {
+  flex: 1 1 auto;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.group-announcement-bar__edit-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  transition: background 0.15s, color 0.15s;
+}
+
+.group-announcement-bar__edit-btn:hover {
+  background: var(--bg-input, rgba(0, 0, 0, 0.06));
+  color: var(--text-primary);
+}
+
+.group-announcement-bar__chevron {
+  color: var(--text-muted);
+  display: inline-flex;
+  transition: transform 0.15s ease;
+}
+
+.group-announcement-bar__chevron.open {
+  transform: rotate(180deg);
+}
+
+.group-announcement-bar__body {
+  padding: 4px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  cursor: default;
+}
+
+.group-announcement-bar__text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.group-announcement-bar__empty {
+  margin: 0;
+  font-style: italic;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.group-announcement-bar__textarea {
+  width: 100%;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 8px 10px;
+  outline: none;
+  resize: vertical;
+  min-height: 96px;
+  box-sizing: border-box;
+}
+
+.group-announcement-bar__textarea:focus {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.group-announcement-bar__error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--accent-red, #c0392b);
+}
+
+.group-announcement-bar__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.group-announcement-bar__cancel,
+.group-announcement-bar__save {
+  font-size: 12.5px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, opacity 0.15s;
+}
+
+.group-announcement-bar__cancel {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.group-announcement-bar__cancel:hover:not(:disabled) {
+  background: var(--sidebar-hover);
+}
+
+.group-announcement-bar__save {
+  background: var(--accent-blue);
+  color: white;
+  border-color: var(--accent-blue);
+  font-weight: 600;
+}
+
+.group-announcement-bar__save:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+.group-announcement-bar__cancel:disabled,
+.group-announcement-bar__save:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.group-announcement-bar__settings-link {
+  background: none;
+  border: none;
+  color: var(--accent-blue);
+  font-size: 12px;
+  cursor: pointer;
+  align-self: flex-start;
+  padding: 2px 0;
+}
+
+.group-announcement-bar__settings-link:hover {
+  text-decoration: underline;
+}
+
+/* ───────────────────────────────────────────────────────────
+ * GroupSettingsModal — unified left-nav / right-pane dialog
+ * Replaces the previous standalone GroupMemberEditor.
+ * Sections: announcement / members / rename / danger.
+ * ─────────────────────────────────────────────────────────── */
+
+.group-settings-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 24px;
+}
+
+.group-settings-modal {
+  width: min(720px, 100%);
+  max-height: min(640px, 100vh - 48px);
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.28);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.group-settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+}
+
+.group-settings-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.group-settings-close {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 6px;
+  border-radius: 6px;
+}
+
+.group-settings-close:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.group-settings-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.group-settings-nav {
+  width: 168px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  overflow-y: auto;
+}
+
+.group-settings-nav-item {
+  appearance: none;
+  background: none;
+  border: none;
+  text-align: left;
+  font-size: 13px;
+  color: var(--text-primary);
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.group-settings-nav-item:hover {
+  background: var(--sidebar-hover);
+}
+
+.group-settings-nav-item.is-active {
+  background: var(--accent-blue);
+  color: #ffffff;
+}
+
+.group-settings-nav-item.is-active:hover {
+  background: var(--accent-blue);
+  filter: brightness(1.05);
+}
+
+.group-settings-nav-item.is-danger:not(.is-active) {
+  color: #c83737;
+}
+
+.group-settings-nav-item:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.group-settings-pane {
+  flex: 1;
+  min-width: 0;
+  padding: 18px 22px;
+  overflow-y: auto;
+}
+
+.group-settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.group-settings-heading {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* task-vp-customize: members section header lays the "Open VP Library"
+ * shortcut on the same line as the heading. */
+.group-settings-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.group-settings-link-btn {
+  background: transparent;
+  color: var(--accent, var(--text-primary));
+  border: 1px solid var(--border-subtle, rgba(0,0,0,0.1));
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12.5px;
+  cursor: pointer;
+  line-height: 1.4;
+}
+.group-settings-link-btn:hover {
+  background: var(--bg-user-msg);
+}
+
+.group-settings-help {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.group-settings-textarea {
+  width: 100%;
+  min-height: 180px;
+  resize: vertical;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-sizing: border-box;
+}
+
+.group-settings-textarea:focus {
+  outline: none;
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.group-settings-input {
+  width: 100%;
+  padding: 8px 12px;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-sizing: border-box;
+}
+
+.group-settings-input:focus {
+  outline: none;
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.group-settings-field-label {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  display: block;
+}
+
+.group-settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.group-settings-primary {
+  background: var(--accent-blue);
+  color: #ffffff;
+  border: 1px solid var(--accent-blue);
+  border-radius: 6px;
+  padding: 6px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.15s, opacity 0.15s;
+}
+
+.group-settings-primary:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+.group-settings-primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.group-settings-error {
+  margin: 0;
+  font-size: 12.5px;
+  color: #c83737;
+}
+
+.group-settings-empty {
+  font-size: 13px;
+  color: var(--text-secondary);
+  padding: 16px 0;
+}
+
+.group-settings-roster {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.group-settings-roster-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+
+.group-settings-roster-item:hover {
+  background: var(--sidebar-hover);
+}
+
+.group-settings-roster-item.is-default {
+  background: rgba(91, 141, 239, 0.08);
+}
+
+.group-settings-roster-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.group-settings-roster-row input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+}
+
+
+.group-settings-roster-name {
+  font-size: 13px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.group-settings-default-star {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  transition: color 0.15s, background 0.15s;
+}
+
+.group-settings-default-star.is-on {
+  color: #f5a623;
+}
+
+.group-settings-default-star:hover:not(:disabled) {
+  background: var(--sidebar-hover);
+}
+
+.group-settings-default-star:disabled {
+  cursor: default;
+}
+
+.group-settings-section-danger .group-settings-heading {
+  color: #c83737;
+}
+
+.group-settings-danger-btn {
+  background: #c83737;
+  color: #ffffff;
+  border: 1px solid #c83737;
+  border-radius: 6px;
+  padding: 6px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.15s, opacity 0.15s;
+}
+
+.group-settings-danger-btn:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.group-settings-danger-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* feat-6af5f9f1 PR C — YeaftDebugPanel toolbar
+ * Theme-consistency fix: the original PR-C drop used --surface and
+ * --border-soft, neither of which are defined in variables.css, so the
+ * #fff / #e1e4e9 fallbacks fired in BOTH themes — including dark, where
+ * a white input over a dark backdrop is the visible bug. Re-anchored to
+ * the same tokens the rest of yeaft uses. */
+.yeaft-debug-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 10px 8px 10px;
+  align-items: center;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.yeaft-debug-search {
+  min-width: 160px;
+}
+
+.yeaft-debug-group-select {
+  max-width: 100%;
+}
+
+/* v0.1.755 + PR feat-dream-debug-panel-full: Dream pass status row.
+ * Header line shows the most recent pass; clicking it expands the
+ * per-event timeline below. Per Yeaft design rule (CLAUDE.md): no
+ * horizontal divider — spacing only. */
+.yeaft-debug-dream-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+.yeaft-debug-dream-row:hover {
+  background: var(--bg-tertiary, rgba(0,0,0,0.04));
+}
+.yeaft-debug-dream-chevron {
+  flex: 0 0 auto;
+  transform: rotate(0deg);
+  transition: transform 0.12s ease;
+  color: var(--text-tertiary, var(--text-secondary));
+}
+.yeaft-debug-dream-chevron.expanded {
+  transform: rotate(90deg);
+}
+.yeaft-debug-dream-label {
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: 0.04em;
+}
+.yeaft-debug-dream-kind {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: var(--bg-tertiary, rgba(0,0,0,0.04));
+  color: var(--text-secondary);
+}
+.yeaft-debug-dream-kind.kind-manual {
+  background: rgba(59,130,246,0.12);
+  color: #3b82f6;
+}
+.yeaft-debug-dream-kind.kind-auto {
+  background: rgba(34,197,94,0.12);
+  color: #22c55e;
+}
+.yeaft-debug-dream-status {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.yeaft-debug-dream-status.status-running { color: #f59e0b; }
+.yeaft-debug-dream-status.status-success { color: #22c55e; }
+.yeaft-debug-dream-status.status-error   { color: #ef4444; }
+.yeaft-debug-dream-time {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-tertiary, var(--text-secondary));
+}
+
+/* PR feat-dream-debug-panel-full: expanded dream event timeline.
+ * Rendered when the user clicks the Dream row; one line per event
+ * (oldest first). Indented under the row to keep the timeline
+ * visually nested without a divider. */
+.yeaft-debug-dream-events {
+  background: var(--bg-secondary);
+  padding: 4px 10px 8px 26px;
+  font-size: 11px;
+  font-family: var(--mono-font, ui-monospace, monospace);
+}
+.yeaft-debug-dream-event {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 0;
+  color: var(--text-secondary);
+}
+.yeaft-debug-dream-event-time {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-tertiary, var(--text-secondary));
+  min-width: 64px;
+}
+.yeaft-debug-dream-event-phase {
+  flex: 0 0 auto;
+  font-weight: 600;
+  color: var(--text-primary);
+  min-width: 72px;
+}
+.yeaft-debug-dream-event-detail {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.yeaft-debug-dream-panel {
+  background: var(--bg-secondary);
+}
+.yeaft-debug-dream-summary {
+  padding: 10px;
+  font-size: 12px;
+}
+.yeaft-debug-dream-summary-title {
+  margin-bottom: 8px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.yeaft-debug-dream-summary-grid {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 12px;
+  color: var(--text-secondary);
+}
+.yeaft-debug-dream-summary-grid strong {
+  min-width: 0;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.yeaft-debug-dream-summary-grid .status-running { color: #f59e0b; }
+.yeaft-debug-dream-summary-grid .status-success { color: #22c55e; }
+.yeaft-debug-dream-summary-grid .status-skipped { color: var(--text-secondary); }
+.yeaft-debug-dream-summary-grid .status-error { color: #ef4444; }
+.yeaft-debug-dream-event-header,
+.yeaft-debug-dream-event.detailed {
+  display: grid;
+  grid-template-columns: 72px 82px 72px 170px 150px minmax(180px, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+.yeaft-debug-dream-event-header {
+  padding: 2px 0 4px;
+  font-weight: 600;
+  color: var(--text-tertiary, var(--text-secondary));
+}
+.yeaft-debug-dream-event.status-running .yeaft-debug-dream-event-phase { color: #f59e0b; }
+.yeaft-debug-dream-event.status-success .yeaft-debug-dream-event-phase { color: #22c55e; }
+.yeaft-debug-dream-event.status-skipped .yeaft-debug-dream-event-phase { color: var(--text-secondary); }
+.yeaft-debug-dream-event.status-error   .yeaft-debug-dream-event-phase { color: #ef4444; }
+.yeaft-debug-dream-event.expandable { cursor: pointer; }
+.yeaft-debug-dream-event-body {
+  padding: 4px 8px 8px;
+  border-left: 2px solid var(--border-color, #2a2a2a);
+  margin-left: 4px;
+}
+.yeaft-debug-dream-event-empty {
+  color: var(--text-tertiary, var(--text-secondary));
+  font-style: italic;
+  padding: 4px 0;
+}
+
+.yeaft-debug-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-family: inherit;
+}
+
+.yeaft-debug-search:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.yeaft-debug-group-select {
+  flex: 0 0 auto;
+  padding: 3px 6px;
+  font-size: 11px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-family: inherit;
+  cursor: pointer;
+  max-width: 180px;
+}
+
+/* ============================================================
+ * (Track-A FeatureArc / FeaturePill / QuickPreview removed —
+ *  see commit log "VP-block redesign" 2026-05-08. Roughly 220
+ *  lines of `.feature-pill-*` and `.quick-preview-*` rules
+ *  lived here; the per-VP turn block component carries that
+ *  visual story now.)
+ * ============================================================ */
+
+/* ── VP Timeline pane (left-of-conversation VP list). ─────────────────
+   Restored in v0.1.767 after PR #767 inadvertently removed it together
+   with the Feature system. Feature-only rules (.yeaft-vp-timeline-
+   feature-title, -trigger, -elapsed, .is-status-in-feature) NOT
+   restored — status is now idle / typing / streaming only. */
+.yeaft-vp-timeline {
+  width: var(--yeaft-vp-timeline-width, 280px);
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-main);
+  flex-shrink: 0;
+  padding: 12px 8px 16px;
+  gap: 4px;
+  overflow-y: auto;
+  /* Prevent the horizontal scrollbar that appeared at the bottom of
+     the pane when row content was wider than the pane. The pane is
+     column-scoped — nothing to pan horizontally. */
+  overflow-x: hidden;
+  position: relative; /* anchor for the absolute resize handle */
+  box-sizing: border-box;
+}
+.yeaft-vp-timeline-resize-handle {
+  position: absolute;
+  /* Straddle the RIGHT edge of the pane (boundary with the conversation
+     column) so the hit-target spans both panes. Matches the
+     handedness of .yeaft-detail-drag-handle on the detail pane's left
+     edge — both handles sit at their pane's "outer" edge. */
+  right: -3px;
+  left: auto;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+  background: transparent;
+  z-index: 1;
+}
+.yeaft-vp-timeline-resize-handle:hover {
+  background: var(--accent-soft, rgba(99, 102, 241, 0.15));
+}
+.yeaft-vp-timeline-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px 8px;
+}
+.yeaft-vp-timeline-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted, var(--text-secondary, #888));
+}
+.yeaft-vp-timeline-count {
+  font-size: 11px;
+  color: var(--text-muted, var(--text-secondary, #888));
+}
+.yeaft-vp-timeline-empty {
+  color: var(--text-muted, var(--text-secondary, #888));
+  font-size: 12px;
+  padding: 8px;
+}
+.yeaft-vp-timeline-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  /* Prevent grid columns that expand to fit long status from pushing
+     the list past pane width. */
+  min-width: 0;
+}
+/* Row collapsed to a single line: name + inline status, mirroring
+   Crew's compact role card. */
+.yeaft-vp-timeline-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.yeaft-vp-timeline-row:hover,
+.yeaft-vp-timeline-row:focus-visible {
+  background: var(--sidebar-hover, var(--surface-1, rgba(0, 0, 0, 0.04)));
+  outline: none;
+}
+.yeaft-vp-timeline-row-body {
+  flex: 1;
+  min-width: 0;          /* let inner ellipsis work inside the flex item */
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  overflow: hidden;
+}
+.yeaft-vp-timeline-row-name {
+  font-size: 13px;
+  color: var(--text-primary, #1f2937);
+  font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.yeaft-vp-timeline-row-status {
+  font-size: 11px;
+  color: var(--text-secondary, #555);
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: nowrap;
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 1024px) {
+  /* Pane disappears at the same breakpoint .yeaft-detail does so the
+     conversation pane keeps the right-column real estate. */
+  .yeaft-vp-timeline {
+    display: none;
+  }
+}
+
+/* ── Per-VP right-side action cluster (abort + info icons) ──
+   Both use <span role="button"> rather than <button> because the
+   parent row is already role="button" and nesting native buttons is
+   an a11y violation. */
+.yeaft-vp-timeline-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.yeaft-vp-timeline-abort,
+.yeaft-vp-timeline-info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  color: var(--text-muted, var(--text-secondary, #888));
+  cursor: pointer;
+  /* Hover-revealed (Crew parity). Idle = opacity 0; row-hover or
+     focus-within bumps to 0.7; direct hover bumps to 1 + accent /
+     danger color — see the row-scoped rules below. */
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+}
+/* Keyboard-focus styling mirrors hover styling so a keyboard user can
+   tell destructive (abort = red) from informational (info = accent)
+   without having to read the aria-label. */
+.yeaft-vp-timeline-abort:focus-visible {
+  background: rgba(231, 76, 60, 0.15);
+  color: var(--error-color, #e74c3c);
+  outline: none;
+  opacity: 1;
+}
+.yeaft-vp-timeline-info:focus-visible {
+  background: var(--accent-soft, rgba(99, 102, 241, 0.12));
+  color: var(--accent, #6366f1);
+  outline: none;
+  opacity: 1;
+}
+.yeaft-vp-timeline-row:hover .yeaft-vp-timeline-abort,
+.yeaft-vp-timeline-row:hover .yeaft-vp-timeline-info,
+.yeaft-vp-timeline-row:focus-within .yeaft-vp-timeline-abort,
+.yeaft-vp-timeline-row:focus-within .yeaft-vp-timeline-info {
+  opacity: 0.7;
+}
+.yeaft-vp-timeline-row .yeaft-vp-timeline-abort:hover {
+  opacity: 1;
+  color: var(--error-color, #e74c3c);
+  background: rgba(231, 76, 60, 0.15);
+}
+.yeaft-vp-timeline-row .yeaft-vp-timeline-info:hover {
+  opacity: 1;
+  color: var(--accent, #6366f1);
+  background: var(--accent-soft, rgba(99, 102, 241, 0.12));
+}
+
+/* Streaming/typing/thinking/tool breathing animation on the row name.
+   Crew uses an identical 3 s ease-in-out infinite cycle. All four
+   "in-flight" labels share the same animation so a turn that switches
+   thinking → streaming → tool visually reads as one continuous
+   activity instead of stop-start. */
+.yeaft-vp-timeline-row.is-status-streaming .yeaft-vp-timeline-row-name,
+.yeaft-vp-timeline-row.is-status-typing .yeaft-vp-timeline-row-name,
+.yeaft-vp-timeline-row.is-status-thinking .yeaft-vp-timeline-row-name,
+.yeaft-vp-timeline-row.is-status-tool .yeaft-vp-timeline-row-name {
+  animation: yeaftVpNameBreathing 3s ease-in-out infinite;
+}
+@keyframes yeaftVpNameBreathing {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .yeaft-vp-timeline-row.is-status-streaming .yeaft-vp-timeline-row-name,
+  .yeaft-vp-timeline-row.is-status-typing .yeaft-vp-timeline-row-name,
+  .yeaft-vp-timeline-row.is-status-thinking .yeaft-vp-timeline-row-name,
+  .yeaft-vp-timeline-row.is-status-tool .yeaft-vp-timeline-row-name {
+    animation: none;
+  }
+}
+
+/* Offline = agent connection lost. Mute everything so the user can
+   tell at a glance that this row isn't actionable. Error = the turn
+   ended in a failure; tint the status label red but keep the rest of
+   the row legible (the user may still want to @-mention or open the
+   detail view). */
+.yeaft-vp-timeline-row.is-status-offline {
+  opacity: 0.55;
+}
+.yeaft-vp-timeline-row.is-status-offline .yeaft-vp-timeline-row-status {
+  color: var(--text-muted, #94a3b8);
+  font-style: italic;
+}
+.yeaft-vp-timeline-row.is-status-error .yeaft-vp-timeline-row-status {
+  color: var(--danger, #e74c3c);
+}
+
+/* ── Topbar VP-list toggle button ────────────────────────────────────
+   Sits next to .yeaft-debug-btn on the right side of the topbar.
+   Inactive = muted icon; active = accent-tinted background. Same
+   shape/size as the existing topbar buttons. */
+.yeaft-topbar-vp-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--text-muted, var(--text-secondary, #888));
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 6px;
+  transition: background 0.15s, color 0.15s;
+}
+.yeaft-topbar-vp-toggle:hover,
+.yeaft-topbar-vp-toggle:focus-visible {
+  background: var(--sidebar-hover, var(--surface-1, rgba(0, 0, 0, 0.05)));
+  color: var(--text-primary, #1f2937);
+  outline: none;
+}
+.yeaft-topbar-vp-toggle.active {
+  color: var(--accent, #6366f1);
+  background: var(--accent-soft, rgba(99, 102, 241, 0.10));
+}
+
+
+/* ── fix/dream-cadence-and-ui-trigger: manual dream trigger button ──
+   Sits to the LEFT of .yeaft-topbar-vp-toggle. Mirrors the shape of
+   the other topbar buttons (16 px icon, ~28 px hit-target). Three
+   visual states overlay on the same button so layout stays stable:
+     - idle:           muted icon
+     - running:        spin animation, disabled hit
+     - just-finished:  +N bubble (3 s)
+   A 24h-stale red dot may appear at the top-right when idle. */
+.yeaft-topbar-dream-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--text-muted, var(--text-secondary, #888));
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 6px;
+  transition: background 0.15s, color 0.15s;
+}
+.yeaft-topbar-dream-toggle:hover:not(:disabled),
+.yeaft-topbar-dream-toggle:focus-visible {
+  background: var(--sidebar-hover, var(--surface-1, rgba(0, 0, 0, 0.05)));
+  color: var(--text-primary, #1f2937);
+  outline: none;
+}
+.yeaft-topbar-dream-toggle:disabled {
+  cursor: default;
+  opacity: 0.85;
+}
+.yeaft-topbar-dream-toggle.running {
+  color: var(--accent, #6366f1);
+}
+.yeaft-topbar-dream-toggle.running .yeaft-topbar-dream-icon {
+  animation: yeaft-dream-spin 0.9s linear infinite;
+  transform-origin: 50% 50%;
+}
+.yeaft-topbar-dream-toggle.just-finished {
+  color: var(--success, #16a34a);
+}
+@keyframes yeaft-dream-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* Post-success "+N entries" bubble. Anchors to the button so the topbar
+   does not reflow. */
+.yeaft-topbar-dream-bubble {
+  position: absolute;
+  top: -6px;
+  right: -10px;
+  min-width: 18px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--success, #16a34a);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+  /* gentle fade-in; the disappearance is timer-driven (v-if flip) */
+  animation: yeaft-dream-bubble-in 0.18s ease-out;
+}
+@keyframes yeaft-dream-bubble-in {
+  from { opacity: 0; transform: translateY(2px) scale(0.9); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* 24h-stale red dot. 6 px solid; no animation, no number — the spec
+   explicitly calls for a subtle visual nudge, not a notification. */
+.yeaft-topbar-dream-staledot {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--error, #dc2626);
+  pointer-events: none;
+}
+
+/* ── 2026-05-13 Tool Usage Stats drawer ──────────────────────────── */
+
+.tool-stats-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 100;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.tool-stats-drawer {
+  width: min(720px, 92vw);
+  height: 100%;
+  background: var(--bg-elevated, var(--bg, #1f1f1f));
+  color: var(--text, #e6e6e6);
+  display: flex;
+  flex-direction: column;
+  box-shadow: -4px 0 18px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+}
+
+.tool-stats-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+}
+
+.tool-stats-drawer-header h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.tool-stats-drawer-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.tool-stats-drawer-actions .btn-icon {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.tool-stats-drawer-actions .btn-icon:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+}
+
+.tool-stats-drawer-actions .btn-icon:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.tool-stats-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 16px 8px;
+}
+
+.tool-stats-tab {
+  background: transparent;
+  border: 0;
+  color: var(--text-muted, #999);
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.tool-stats-tab.active {
+  color: var(--text, #e6e6e6);
+  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+}
+
+.yeaft-debug-tool-stats {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 12px 16px;
+}
+
+.yeaft-debug-tool-stats-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.yeaft-debug-tool-stats-title {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.yeaft-debug-tool-stats-meta {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.yeaft-debug-tool-stats-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.yeaft-debug-tool-stats .tool-stats-table {
+  min-width: 640px;
+}
+
+.yeaft-debug-unused-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.yeaft-debug-unused-tools .yeaft-debug-section-title {
+  flex: 1 0 100%;
+  margin-bottom: 0;
+}
+
+.yeaft-debug-unused-tool {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--sidebar-hover);
+  color: var(--text-secondary);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+}
+
+.tool-stats-tab-count {
+  margin-left: 4px;
+  opacity: 0.7;
+}
+
+.tool-stats-drawer-body {
+  flex: 1;
+  overflow: auto;
+  padding: 8px 16px 16px;
+}
+
+.tool-stats-loading,
+.tool-stats-empty,
+.tool-stats-error,
+.tool-stats-empty-row {
+  padding: 12px;
+  text-align: center;
+  color: var(--text-muted, #999);
+  font-size: 13px;
+}
+
+.tool-stats-error {
+  color: var(--error, #dc2626);
+}
+
+/*
+ * 2026-05-16: top-banner variant of the previous "notice replaces
+ * everything" pattern. Sits above the table so the registered-tool
+ * fallback rows still render — the user sees the catalog even when
+ * the live fetch was a fast-fail. Class name follows the existing
+ * `*-banner` convention used by `.compact-status-banner` (sidebar)
+ * and `.typing-status-banner` (chat) so future banner-greps find it.
+ */
+.tool-stats-banner {
+  padding: 8px 12px;
+  margin: 0 0 8px;
+  border-radius: 6px;
+  background: var(--bg-subtle, rgba(255, 255, 255, 0.04));
+  color: var(--text-muted, #999);
+  font-size: 12px;
+  text-align: center;
+}
+
+.tool-stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.tool-stats-table th,
+.tool-stats-table td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06));
+}
+
+.tool-stats-table th {
+  font-weight: 600;
+  color: var(--text-muted, #aaa);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tool-stats-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.tool-stats-name {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+
+.tool-stats-last {
+  color: var(--text-muted, #aaa);
+  white-space: nowrap;
+}
+
+.tool-stats-unused ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.tool-stats-unused-row {
+  padding: 6px 8px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06));
+}
+
+.tool-stats-footer {
+  padding: 8px 16px;
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  text-align: right;
+}
+
+
+/* VP multi-thread summary inside a VP turn block. */
+.vp-thread-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  margin: 0 0 4px;
+  color: var(--text-secondary, #64748b);
+  font-size: 12px;
+}
+
+.vp-thread-summary-collapsed {
+  opacity: 0.9;
+}
+
+.vp-thread-title {
+  color: var(--text-primary, #0f172a);
+  font-weight: 600;
+}
+
+.vp-thread-meta {
+  color: var(--text-tertiary, #94a3b8);
+}
+
+
+.yeaft-vp-timeline-thread-count {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  margin-top: 2px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-muted, #f1f5f9);
+  color: var(--text-tertiary, #64748b);
+  font-size: 11px;
+  line-height: 16px;
+}

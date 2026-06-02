@@ -2,11 +2,11 @@
  * parseMentions.js — client-side `@vpId` token extraction for task-334j.
  *
  * Pure function; no DOM, no store, no i18n. Mirrors the vpId shape rules
- * from `agent/unify/groups/ids.js#validateVpId` (strict whitelist: letters,
+ * from `agent/yeaft/groups/ids.js#validateVpId` (strict whitelist: letters,
  * digits, `-`, `_`; max 40 chars; must NOT start with `_`; must NOT be all
  * digits; must NOT be a reserved id: all/user/system/everyone).
  *
- * The agent re-validates server-side (see `agent/unify/task-message.js`);
+ * The agent re-validates server-side (see `agent/yeaft/task-message.js`);
  * this client-side pass is a UX affordance — strip obvious non-mentions so
  * the `mentions` field sent on the wire is clean.
  *
@@ -20,7 +20,7 @@
  * aligning with `MAX_TEXT_LENGTH`/§Δ26.3 envelope and the agent
  * validator's own slice(0, 32) post-filter.
  */
-/** Reserved vpIds (must match agent/unify/groups/ids.js#RESERVED_VP_IDS). */
+/** Reserved vpIds (must match agent/yeaft/groups/ids.js#RESERVED_VP_IDS). */
 const RESERVED_VP_IDS = new Set(['all', 'user', 'system', 'everyone']);
 
 const MENTION_RE = /(^|[\s\p{P}])@([A-Za-z0-9_-]{1,40})(?=$|[\s\p{P}])/gu;

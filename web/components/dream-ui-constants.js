@@ -2,7 +2,7 @@
  * dream-ui-constants.js — fix/dream-cadence-and-ui-trigger.
  *
  * Centralised magic numbers for the manual dream-trigger button. Kept
- * out of UnifyPage.js so the button's behaviour is tunable and visible
+ * out of YeaftPage.js so the button's behaviour is tunable and visible
  * in one place; also makes the constants importable by tests if we
  * grow any.
  *

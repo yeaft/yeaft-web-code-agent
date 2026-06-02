@@ -6,7 +6,7 @@ export default {
   components: { ProviderPresetPicker },
   props: {
     // task-343: 'chat' (default) binds provider CRUD to chatStore.currentAgent;
-    // 'unify' binds to chatStore.unifyAgentId so Unify settings can reuse
+    // 'yeaft' binds to chatStore.yeaftAgentId so Yeaft settings can reuse
     // this tab without cross-polluting the Chat agent config.
     context: { type: String, default: 'chat' },
   },
@@ -136,7 +136,7 @@ export default {
               <svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
               {{ $t('settings.llm.addProvider') }}
             </button>
-            <button v-if="context === 'unify'" class="sp-btn llm-add-btn" @click="showPresetPicker = true">
+            <button v-if="context === 'yeaft'" class="sp-btn llm-add-btn" @click="showPresetPicker = true">
               <svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z"/></svg>
               {{ $t('settings.llm.addFromPreset') }}
             </button>
@@ -247,16 +247,16 @@ export default {
     // cascades to agentOnline / currentConfig / requestConfig / saveConfig
     // without any other call-site changes.
     effectiveAgentId() {
-      return this.context === 'unify'
-        ? this.chatStore.unifyAgentId
+      return this.context === 'yeaft'
+        ? this.chatStore.yeaftAgentId
         : this.chatStore.currentAgent;
     },
     agentOnline() {
       const agentId = this.effectiveAgentId;
       if (!agentId) return false;
-      // Unify context: the "agent" is the embedded unify runtime, which is
+      // Yeaft context: the "agent" is the embedded yeaft runtime, which is
       // always online when an agentId exists (no separate agent record).
-      if (this.context === 'unify') return true;
+      if (this.context === 'yeaft') return true;
       const agent = this.chatStore.agents.find(a => a.id === agentId);
       return agent ? agent.online : false;
     },
@@ -584,8 +584,8 @@ export default {
           } else {
             this.isDirty = false;
             this.$emit('message', this.$t('settings.llm.saved'), false);
-            // task-343: notify host (e.g. UnifySettings) to dispatch
-            // unify_reset so the Engine picks up new provider config.
+            // task-343: notify host (e.g. YeaftSettings) to dispatch
+            // yeaft_reset so the Engine picks up new provider config.
             this.$emit('saved');
           }
           unwatch();

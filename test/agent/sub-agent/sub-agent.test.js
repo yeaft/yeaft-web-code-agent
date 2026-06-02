@@ -16,15 +16,15 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { _resetAgentRegistry, getAgentRegistry } from '../../../agent/unify/tools/agent.js';
-import agentTool from '../../../agent/unify/tools/agent.js';
-import sendMessage from '../../../agent/unify/tools/send-message.js';
-import waitAgent from '../../../agent/unify/tools/wait-agent.js';
-import closeAgent from '../../../agent/unify/tools/close-agent.js';
-import { ToolRegistry } from '../../../agent/unify/tools/registry.js';
-import { defineTool } from '../../../agent/unify/tools/types.js';
-import { buildChildToolRegistry, isRestrictedToolName } from '../../../agent/unify/sub-agent/runner.js';
-import { NullTrace } from '../../../agent/unify/debug-trace.js';
+import { _resetAgentRegistry, getAgentRegistry } from '../../../agent/yeaft/tools/agent.js';
+import agentTool from '../../../agent/yeaft/tools/agent.js';
+import sendMessage from '../../../agent/yeaft/tools/send-message.js';
+import waitAgent from '../../../agent/yeaft/tools/wait-agent.js';
+import closeAgent from '../../../agent/yeaft/tools/close-agent.js';
+import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
+import { defineTool } from '../../../agent/yeaft/tools/types.js';
+import { buildChildToolRegistry, isRestrictedToolName } from '../../../agent/yeaft/sub-agent/runner.js';
+import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
 
 // recall-r6 was deleted in GC.1 follow-up; engine now recalls via FTS5
 // pre-flow only when memoryIndex is wired (it isn't here), so no mock

@@ -243,9 +243,9 @@ export async function handleAgentSync(agentId, agent, msg) {
       break;
     }
 
-    // task-318: Unify runtime settings read / update ack — relay to owner
-    case 'unify_settings':
-    case 'unify_settings_updated': {
+    // task-318: Yeaft runtime settings read / update ack — relay to owner
+    case 'yeaft_settings':
+    case 'yeaft_settings_updated': {
       for (const [, client] of webClients) {
         if (client.authenticated && (CONFIG.skipAuth ||
           (agent.ownerId && client.userId === agent.ownerId) ||

@@ -27,8 +27,8 @@ import {
   readSeedVersions,
   insertAreaLine,
   insertNameZhLine,
-} from '../../agent/unify/vp/seed-topup.js';
-import { DEFAULT_VPS } from '../../agent/unify/vp/seed-defaults.js';
+} from '../../agent/yeaft/vp/seed-topup.js';
+import { DEFAULT_VPS } from '../../agent/yeaft/vp/seed-defaults.js';
 
 let tmpRoot;
 let libDir;

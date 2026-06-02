@@ -1,7 +1,7 @@
 /**
  * VpAvatar / UserAvatar — illustrated portrait branch contract.
  *
- * The Unify group view ships pre-generated DiceBear `personas` SVGs
+ * The Yeaft group view ships pre-generated DiceBear `personas` SVGs
  * under web/assets/avatars/. Both avatar components render an <img>
  * pointing at that asset, falling back to the original letter+colour
  * disc when the SVG either does not exist (unknown vpId) or fails to

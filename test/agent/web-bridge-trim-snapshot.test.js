@@ -5,7 +5,7 @@
  *
  * Bug being guarded against:
  *   The flat module-level `conversationMessages` array in
- *   `agent/unify/web-bridge.js` grows unbounded. Each multi-VP fan-out
+ *   `agent/yeaft/web-bridge.js` grows unbounded. Each multi-VP fan-out
  *   used to feed the WHOLE thing to `engine.query`. Once a long chat
  *   accumulated 700+ messages the LLM provider returned a 4xx
  *   "context window exceeded". `history-compact.js` only fires above a
@@ -15,8 +15,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { DEFAULT_KEEP_TOOL_TURNS, trimSnapshotForBudget } from '../../agent/unify/history-compact.js';
-import { countTurns } from '../../agent/unify/turn-utils.js';
+import { DEFAULT_KEEP_TOOL_TURNS, trimSnapshotForBudget } from '../../agent/yeaft/history-compact.js';
+import { countTurns } from '../../agent/yeaft/turn-utils.js';
 
 function buildSyntheticHistory(turnCount, charsPerMsg = 10) {
   const ms = [];

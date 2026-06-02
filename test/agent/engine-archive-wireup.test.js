@@ -9,14 +9,14 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { Engine } from '../../agent/unify/engine.js';
-import { NullTrace } from '../../agent/unify/debug-trace.js';
+import { Engine } from '../../agent/yeaft/engine.js';
+import { NullTrace } from '../../agent/yeaft/debug-trace.js';
 
 // recall-r6 was deleted in GC.1 follow-up; engine now recalls via FTS5
 // pre-flow only when memoryIndex is wired (it isn't here), so no mock
 // needed.
 
-vi.mock('../../agent/unify/archive/tool-results.js', async (importOriginal) => {
+vi.mock('../../agent/yeaft/archive/tool-results.js', async (importOriginal) => {
   const orig = await importOriginal();
   return {
     ...orig,
@@ -33,7 +33,7 @@ vi.mock('../../agent/unify/archive/tool-results.js', async (importOriginal) => {
   };
 });
 
-const { archiveToolResults } = await import('../../agent/unify/archive/tool-results.js');
+const { archiveToolResults } = await import('../../agent/yeaft/archive/tool-results.js');
 
 class CapturingAdapter {
   constructor() { this.calls = []; }

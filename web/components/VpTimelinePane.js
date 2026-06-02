@@ -8,9 +8,9 @@
  * of the core group conversation UI) with feature-specific surfaces.
  * v0.1.767 restored the pane WITHOUT the feature-aware row branch.
  *
- * Surfaces, for the active Unify conversation, one row per VP showing
+ * Surfaces, for the active Yeaft conversation, one row per VP showing
  * colored name + live status (typing / streaming / idle). Pane sits
- * inside `unify-main` to the LEFT of the conversation, matching Crew's
+ * inside `yeaft-main` to the LEFT of the conversation, matching Crew's
  * members-left shape. The component itself is placement-agnostic —
  * only its parent container + the resize handle direction in CSS
  * reflect the side it's on.
@@ -25,13 +25,13 @@
  *   rows — TimelineRow[] (see web/stores/helpers/vp-timeline.js for shape).
  *
  * Emits:
- *   mention-vp (vpId)      — primary row click / Enter / Space. UnifyPage
+ *   mention-vp (vpId)      — primary row click / Enter / Space. YeaftPage
  *                            forwards to the chat input which appends
  *                            `@<vpId> ` to the current draft.
  *   open-vp-detail (vpId)  — hover-revealed info button on the row.
- *   start-resize  (event)  — mousedown on the resize handle; UnifyPage
+ *   start-resize  (event)  — mousedown on the resize handle; YeaftPage
  *                            owns the drag bookkeeping (matches the
- *                            .unify-detail pattern).
+ *                            .yeaft-detail pattern).
  *   cancel-vp-turn (vpId)  — abort button click for an active turn.
  */
 export default {
@@ -41,42 +41,42 @@ export default {
     rows: { type: Array, required: true },
   },
   template: `
-    <aside class="unify-vp-timeline" :aria-label="$t('unify.vpTimeline.aria')">
+    <aside class="yeaft-vp-timeline" :aria-label="$t('yeaft.vpTimeline.aria')">
       <div
-        class="unify-vp-timeline-resize-handle"
+        class="yeaft-vp-timeline-resize-handle"
         @mousedown.prevent="$emit('start-resize', $event)"
-        :title="$t('unify.vpTimeline.resizeTitle')"
+        :title="$t('yeaft.vpTimeline.resizeTitle')"
         aria-hidden="true"
       ></div>
-      <header class="unify-vp-timeline-header">
-        <span class="unify-vp-timeline-title">{{ $t('unify.vpTimeline.title') }}</span>
-        <span class="unify-vp-timeline-count" v-if="rows.length">{{ rows.length }}</span>
+      <header class="yeaft-vp-timeline-header">
+        <span class="yeaft-vp-timeline-title">{{ $t('yeaft.vpTimeline.title') }}</span>
+        <span class="yeaft-vp-timeline-count" v-if="rows.length">{{ rows.length }}</span>
       </header>
 
-      <div v-if="!rows.length" class="unify-vp-timeline-empty">
-        {{ $t('unify.vpTimeline.empty') }}
+      <div v-if="!rows.length" class="yeaft-vp-timeline-empty">
+        {{ $t('yeaft.vpTimeline.empty') }}
       </div>
 
-      <ul v-else class="unify-vp-timeline-list">
+      <ul v-else class="yeaft-vp-timeline-list">
         <li
           v-for="row in rows"
           :key="row.vpId"
-          class="unify-vp-timeline-row"
+          class="yeaft-vp-timeline-row"
           :class="['is-status-' + row.status]"
           tabindex="0"
           role="button"
           :aria-label="row.displayName + ' — ' + statusLabel(row)"
-          :title="$t('unify.vpTimeline.mention')"
+          :title="$t('yeaft.vpTimeline.mention')"
           @click="$emit('mention-vp', row.vpId)"
           @keydown.enter.prevent="$emit('mention-vp', row.vpId)"
           @keydown.space.prevent="$emit('mention-vp', row.vpId)"
         >
-          <div class="unify-vp-timeline-row-body">
-            <span class="unify-vp-timeline-row-name" :style="{ color: vpTextColorFor(row.vpId) }">{{ row.displayName }}</span>
-            <span class="unify-vp-timeline-row-status">{{ statusLabel(row) }}</span>
+          <div class="yeaft-vp-timeline-row-body">
+            <span class="yeaft-vp-timeline-row-name" :style="{ color: vpTextColorFor(row.vpId) }">{{ row.displayName }}</span>
+            <span class="yeaft-vp-timeline-row-status">{{ statusLabel(row) }}</span>
             <span
               v-if="row.runningThreadCount > 1"
-              class="unify-vp-timeline-thread-count"
+              class="yeaft-vp-timeline-thread-count"
               :title="threadCountTitle(row)"
             >{{ row.runningThreadCount }} threads</span>
           </div>
@@ -87,14 +87,14 @@ export default {
             is actually doing something; the info button is hover-revealed
             (CSS) so the row stays visually quiet at rest.
           -->
-          <span class="unify-vp-timeline-row-actions">
+          <span class="yeaft-vp-timeline-row-actions">
             <span
               v-if="isActiveStatus(row.status)"
-              class="unify-vp-timeline-abort"
+              class="yeaft-vp-timeline-abort"
               role="button"
               tabindex="0"
-              :aria-label="$t('unify.vpTimeline.abort')"
-              :title="$t('unify.vpTimeline.abort')"
+              :aria-label="$t('yeaft.vpTimeline.abort')"
+              :title="$t('yeaft.vpTimeline.abort')"
               @click.stop="$emit('cancel-vp-turn', row.vpId)"
               @keydown.enter.stop.prevent="$emit('cancel-vp-turn', row.vpId)"
               @keydown.space.stop.prevent="$emit('cancel-vp-turn', row.vpId)"
@@ -104,11 +104,11 @@ export default {
               </svg>
             </span>
             <span
-              class="unify-vp-timeline-info"
+              class="yeaft-vp-timeline-info"
               role="button"
               tabindex="0"
-              :aria-label="$t('unify.vpTimeline.info')"
-              :title="$t('unify.vpTimeline.info')"
+              :aria-label="$t('yeaft.vpTimeline.info')"
+              :title="$t('yeaft.vpTimeline.info')"
               @click.stop="$emit('open-vp-detail', row.vpId)"
               @keydown.enter.stop.prevent="$emit('open-vp-detail', row.vpId)"
               @keydown.space.stop.prevent="$emit('open-vp-detail', row.vpId)"
@@ -140,13 +140,13 @@ export default {
 
     const statusLabel = (row) => {
       switch (row.status) {
-        case 'idle':      return $t('unify.vpTimeline.status.idle');
-        case 'typing':    return $t('unify.vpTimeline.status.typing');
-        case 'thinking':  return $t('unify.vpTimeline.status.thinking');
-        case 'streaming': return $t('unify.vpTimeline.status.streaming');
-        case 'tool':      return $t('unify.vpTimeline.status.tool');
-        case 'error':     return $t('unify.vpTimeline.status.error');
-        case 'offline':   return $t('unify.vpTimeline.status.offline');
+        case 'idle':      return $t('yeaft.vpTimeline.status.idle');
+        case 'typing':    return $t('yeaft.vpTimeline.status.typing');
+        case 'thinking':  return $t('yeaft.vpTimeline.status.thinking');
+        case 'streaming': return $t('yeaft.vpTimeline.status.streaming');
+        case 'tool':      return $t('yeaft.vpTimeline.status.tool');
+        case 'error':     return $t('yeaft.vpTimeline.status.error');
+        case 'offline':   return $t('yeaft.vpTimeline.status.offline');
         default:          return row.status;
       }
     };

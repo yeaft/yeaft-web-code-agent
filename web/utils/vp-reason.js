@@ -14,10 +14,10 @@
 
 /** @type {Readonly<Record<string,string>>} */
 export const REASON_I18N = Object.freeze({
-  'persona.edit': 'unify.vp.reason.personaEdit',
-  'traits.edit': 'unify.vp.reason.traitsEdit',
-  'manual.reload': 'unify.vp.reason.manualReload',
-  'file.removed': 'unify.vp.reason.fileRemoved',
+  'persona.edit': 'yeaft.vp.reason.personaEdit',
+  'traits.edit': 'yeaft.vp.reason.traitsEdit',
+  'manual.reload': 'yeaft.vp.reason.manualReload',
+  'file.removed': 'yeaft.vp.reason.fileRemoved',
 });
 
 const FALLBACK_KEY = REASON_I18N['manual.reload'];

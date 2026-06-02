@@ -113,7 +113,7 @@
  * obvious.
  * ------------------------------------------------------------ */
 
-.unify-empty-group-hero {
+.yeaft-empty-group-hero {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -125,7 +125,7 @@
   color: var(--text-secondary);
 }
 
-.unify-empty-group-hero__icon {
+.yeaft-empty-group-hero__icon {
   width: 56px;
   height: 56px;
   border-radius: 50%;
@@ -136,21 +136,21 @@
   color: var(--accent, #4f8cff);
 }
 
-.unify-empty-group-hero__title {
+.yeaft-empty-group-hero__title {
   font-size: 16px;
   font-weight: 600;
   color: var(--text-primary);
   margin: 0;
 }
 
-.unify-empty-group-hero__hint {
+.yeaft-empty-group-hero__hint {
   font-size: 13.5px;
   line-height: 1.6;
   max-width: 380px;
   margin: 0;
 }
 
-.unify-empty-group-hero__cta {
+.yeaft-empty-group-hero__cta {
   margin-top: 6px;
   background: var(--accent, #4f8cff);
   border: 1px solid var(--accent, #4f8cff);
@@ -163,8 +163,8 @@
   transition: filter 0.15s, transform 0.05s;
 }
 
-.unify-empty-group-hero__cta:hover { filter: brightness(1.08); }
-.unify-empty-group-hero__cta:active { transform: translateY(1px); }
+.yeaft-empty-group-hero__cta:hover { filter: brightness(1.08); }
+.yeaft-empty-group-hero__cta:active { transform: translateY(1px); }
 
 /* ------------------------------------------------------------
  * Sidebar empty-group accent — distinguishes "container waiting

@@ -143,28 +143,28 @@ export async function handleClientMisc(clientId, client, msg, checkAgentAccess) 
       break;
     }
 
-    // task-318: Unify runtime settings (thread cap + archive threshold)
-    case 'get_unify_settings': {
-      const unifyAgentId = msg.agentId || client.currentAgent;
-      if (!unifyAgentId) break;
-      if (!await checkAgentAccess(unifyAgentId)) break;
-      await forwardToAgent(unifyAgentId, { type: 'get_unify_settings' });
+    // task-318: Yeaft runtime settings (thread cap + archive threshold)
+    case 'get_yeaft_settings': {
+      const yeaftAgentId = msg.agentId || client.currentAgent;
+      if (!yeaftAgentId) break;
+      if (!await checkAgentAccess(yeaftAgentId)) break;
+      await forwardToAgent(yeaftAgentId, { type: 'get_yeaft_settings' });
       break;
     }
 
-    case 'update_unify_settings': {
-      const unifyUpdateAgentId = msg.agentId || client.currentAgent;
-      if (!unifyUpdateAgentId) break;
-      if (!await checkAgentAccess(unifyUpdateAgentId)) break;
-      await forwardToAgent(unifyUpdateAgentId, {
-        type: 'update_unify_settings',
+    case 'update_yeaft_settings': {
+      const yeaftUpdateAgentId = msg.agentId || client.currentAgent;
+      if (!yeaftUpdateAgentId) break;
+      if (!await checkAgentAccess(yeaftUpdateAgentId)) break;
+      await forwardToAgent(yeaftUpdateAgentId, {
+        type: 'update_yeaft_settings',
         settings: msg.settings || msg.config || {}
       });
       break;
     }
 
     // Search settings (web-search backend + Tavily key + on-demand usage probe).
-    // Mirrors the get/update_unify_settings pair: the agent owns the
+    // Mirrors the get/update_yeaft_settings pair: the agent owns the
     // config file, server is just a relay.
     case 'get_search_settings': {
       const a = msg.agentId || client.currentAgent;

@@ -1,11 +1,11 @@
 /**
- * debug-retention.js — Pure helper for the Unify debug panel's count-based
+ * debug-retention.js — Pure helper for the Yeaft debug panel's count-based
  * retention bound.
  *
- * The Unify debug feature ships verbatim LLM raw request/response bodies to
+ * The Yeaft debug feature ships verbatim LLM raw request/response bodies to
  * the client (no per-payload truncation — see anthropic.js / openai-responses.js
  * onRawExchange and `redactRawRequest` in adapter.js). To keep memory bounded
- * we cap the *number* of loops retained per tab via MAX_UNIFY_DEBUG_LOOPS.
+ * we cap the *number* of loops retained per tab via MAX_YEAFT_DEBUG_LOOPS.
  *
  * When the cap is exceeded:
  *   1. Drop the oldest loop entries past the cap.

@@ -3,7 +3,7 @@
  *
  * This must test Vitest's own discovery, not a hand-rolled tinyglobby
  * approximation. Focused positional runs such as:
- *   vitest list --filesOnly test/agent/unify/store-v2.test.js
+ *   vitest list --filesOnly test/agent/yeaft/store-v2.test.js
  * can match same-named files under cloned worktrees unless config/script
  * excludes keep `.claude/worktrees/**`, `.worktrees/**`, and
  * `.yeaft/worktrees/**` out of Vitest's file set.
@@ -18,12 +18,12 @@ const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const REQUESTED_FILES = [
-  'test/agent/unify/dream-trigger-routing.test.js',
-  'test/agent/unify/dream-v2/runner.test.js',
-  'test/agent/unify/dream-v2/prompts.test.js',
-  'test/agent/unify/store-v2.test.js',
+  'test/agent/yeaft/dream-trigger-routing.test.js',
+  'test/agent/yeaft/dream-v2/runner.test.js',
+  'test/agent/yeaft/dream-v2/prompts.test.js',
+  'test/agent/yeaft/store-v2.test.js',
   'test/vitest-discovery-smoke.test.js',
-  'test/web/unify-page-setup-tdz.test.js',
+  'test/web/yeaft-page-setup-tdz.test.js',
 ];
 const FOCUSED_ARGS = [
   '--config',

@@ -2,8 +2,8 @@
  * fallback-stub.test.js — PR-L
  */
 import { describe, it, expect } from 'vitest';
-import { buildFallbackStub } from '../../../agent/unify/tool-folding/fallback-stub.js';
-import { buildEntry } from '../../../agent/unify/tool-folding/exec-log.js';
+import { buildFallbackStub } from '../../../agent/yeaft/tool-folding/fallback-stub.js';
+import { buildEntry } from '../../../agent/yeaft/tool-folding/exec-log.js';
 
 describe('buildFallbackStub', () => {
   it('produces a markdown string with the 5 canonical sections', () => {

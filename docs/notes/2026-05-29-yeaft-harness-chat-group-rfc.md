@@ -14,11 +14,11 @@ PR0 does not implement runtime behavior.
 ## Non-goals for PR0
 
 - No code changes.
-- No physical `agent/unify` rename.
+- No physical `agent/yeaft` rename.
 - No PR1 provider shell implementation.
 - No persistence implementation.
 - No Group history, pagination, or auto-load implementation.
-- No behavior rewrite of old Unify.
+- No behavior rewrite of old Yeaft.
 
 ## Staged plan
 
@@ -30,10 +30,10 @@ This PR documents decisions, open questions, and architecture gates. It must set
 
 Allowed after PR0 review resolves the blocking questions:
 
-- Add Yeaft Chat as an alias/successor surface for old Unify.
+- Add Yeaft Chat as an alias/successor surface for old Yeaft.
 - Reuse the existing engine via a new session wrapper.
 - Add feature flags across agent, server, and web.
-- Do not physically rename `agent/unify`.
+- Do not physically rename `agent/yeaft`.
 - Do not fork `Engine.query()`.
 - Do not implement Group history, pagination, or auto-load.
 
@@ -68,11 +68,11 @@ These dimensions must not collapse into one enum. For example, `runtimeFamily: "
 
 ## Yeaft Chat semantics
 
-Decision: Yeaft Chat initially means the single-user successor/alias of old Unify. It is not a behavior rewrite.
+Decision: Yeaft Chat initially means the single-user successor/alias of old Yeaft. It is not a behavior rewrite.
 
 Allowed semantic behavior in PR1:
 
-- Existing old-Unify behavior remains the baseline.
+- Existing old-Yeaft behavior remains the baseline.
 - Yeaft Chat can present clearer naming and routing as an alias/successor.
 - Any semantic delta must be documented before implementation.
 
@@ -81,7 +81,7 @@ Minimum compatibility checklist for PR1:
 - Reuse `Engine.query()` through the wrapper; do not fork the engine loop.
 - Preserve memory recall and write behavior, including pre-turn recall, post-turn memory adjustment, and background maintenance triggers.
 - Preserve tool filtering semantics and chat/work capability boundaries unless a delta is explicitly documented and feature-gated.
-- Preserve message rendering compatibility with the existing web bridge and `claude_output`/`unify_output` rendering pipeline.
+- Preserve message rendering compatibility with the existing web bridge and `claude_output`/`yeaft_output` rendering pipeline.
 - Preserve session lifecycle behavior for session creation, readiness, turn execution, cancellation/error reporting, and clearing/resetting the Yeaft Chat session.
 - Preserve conversation persistence semantics; PR1 must not silently change what is written, skipped, summarized, or replayed.
 
@@ -94,9 +94,9 @@ Not allowed in PR1:
 
 ## Alias-first rule
 
-Decision: PR0 and PR1 must not physically rename `agent/unify`.
+Decision: PR0 and PR1 must not physically rename `agent/yeaft`.
 
-PR1 may add alias/export/wrapper modules that make the Yeaft Chat name visible at the edges, but the old `agent/unify` directory remains in place. A physical rename is only allowed in a late cleanup/rename PR after compatibility, storage, and rollout concerns are settled.
+PR1 may add alias/export/wrapper modules that make the Yeaft Chat name visible at the edges, but the old `agent/yeaft` directory remains in place. A physical rename is only allowed in a late cleanup/rename PR after compatibility, storage, and rollout concerns are settled.
 
 Reason: a physical rename creates churn and makes it harder to review real behavior changes. The first step should prove the model boundary, not move files around.
 
@@ -225,8 +225,8 @@ Open question for Martin review: which of these should become hard PR1 acceptanc
 PR1 should not merge unless:
 
 - Runtime family and surface/session type remain separate fields: `runtimeFamily` and `surfaceType`.
-- Yeaft Chat is an alias/successor shell for old Unify behavior and satisfies the minimum compatibility checklist.
-- No physical `agent/unify` rename occurs.
+- Yeaft Chat is an alias/successor shell for old Yeaft behavior and satisfies the minimum compatibility checklist.
+- No physical `agent/yeaft` rename occurs.
 - `Engine.query()` is reused through a wrapper.
 - Engine does not gain WS/UI/project-root concerns.
 - `yeaftChat` feature flagging and capability negotiation exist across agent, server, and web.
@@ -236,7 +236,7 @@ PR1 should not merge unless:
 ## Resolved PR1 contracts from architecture review
 
 1. Runtime family and surface/session type are represented by separate fields: `runtimeFamily` and `surfaceType`.
-2. Yeaft Chat PR1 must satisfy the minimum old-Unify compatibility checklist in this RFC.
+2. Yeaft Chat PR1 must satisfy the minimum old-Yeaft compatibility checklist in this RFC.
 3. JSONL append-only log is the preferred canonical persistence direction for future persistence work; markdown may only be a projection/export/debug format unless it explicitly owns ids, metadata, cursors, atomicity, migrations, and corruption recovery.
 4. Project `.yeaft` storage is rooted at the validated explicit `projectRoot` or agent-derived workspace/git root, never raw cwd.
 5. Sessions are pinned to a workspace root at creation time; workspace switching means session switching.
@@ -249,8 +249,8 @@ PR1 should not merge unless:
 Martin should review PR0 against these gates:
 
 1. Provider/runtime family and surface/session type remain separate dimensions: Claude Code vs Yeaft; Chat/Crew/Group.
-2. Yeaft Chat starts as the single-user successor/alias of old Unify, not a behavior rewrite.
-3. Alias-first is mandatory; no physical `agent/unify` rename in PR0/PR1.
+2. Yeaft Chat starts as the single-user successor/alias of old Yeaft, not a behavior rewrite.
+3. Alias-first is mandatory; no physical `agent/yeaft` rename in PR0/PR1.
 4. `Engine.query()` is reused through a session wrapper; Engine does not learn WS/UI/project-root concerns.
 5. JSONL append-only log is the preferred canonical persistence contract; Markdown is export/debug unless fully specified as canonical.
 6. Project `.yeaft` root selection, path safety, scope isolation, and workspace switching are blocking RFC items.

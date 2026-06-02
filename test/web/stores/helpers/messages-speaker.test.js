@@ -2,7 +2,7 @@
  * Tests for VP speaker-attribution stamping in the message helpers.
  *
  * The bug this guards against:
- *   In Unify multi-VP fan-out, the standalone <vp-typing-row> renders
+ *   In Yeaft multi-VP fan-out, the standalone <vp-typing-row> renders
  *   VpSpeakerHeader while a VP is streaming, so the avatar is visible in
  *   that interim. When `vp_typing_end` fires, the standalone row goes
  *   away and AssistantTurn is supposed to take over with its OWN
@@ -29,12 +29,12 @@ import {
 
 function mkStore(overrides = {}) {
   return {
-    currentView: 'unify',
-    unifyConversationId: 'conv-1',
-    unifyActiveGroupFilter: null,
-    _currentUnifyGroupId: null,
-    _currentUnifyVpId: null,
-    _currentUnifyTurnId: null,
+    currentView: 'yeaft',
+    yeaftConversationId: 'conv-1',
+    yeaftActiveGroupFilter: null,
+    _currentYeaftGroupId: null,
+    _currentYeaftVpId: null,
+    _currentYeaftTurnId: null,
     messagesMap: { 'conv-1': [] },
     ...overrides,
   };
@@ -42,7 +42,7 @@ function mkStore(overrides = {}) {
 
 describe('appendToAssistantMessageForConversation: speakerVpId stamping', () => {
   it('stamps speakerVpId on a freshly-created streaming message when vpId routing context is set', () => {
-    const store = mkStore({ _currentUnifyVpId: 'vp-jobs' });
+    const store = mkStore({ _currentYeaftVpId: 'vp-jobs' });
     appendToAssistantMessageForConversation(store, 'conv-1', 'hello');
     const msgs = store.messagesMap['conv-1'];
     expect(msgs).toHaveLength(1);
@@ -56,7 +56,7 @@ describe('appendToAssistantMessageForConversation: speakerVpId stamping', () => 
     // Simulate a streaming message that was created before the routing
     // context was set — so it has no vpId / speakerVpId.
     const store = mkStore({
-      _currentUnifyVpId: 'vp-rams',
+      _currentYeaftVpId: 'vp-rams',
       messagesMap: {
         'conv-1': [
           { id: 'm1', type: 'assistant', content: 'partial', isStreaming: true },
@@ -73,8 +73,8 @@ describe('appendToAssistantMessageForConversation: speakerVpId stamping', () => 
 
   it('routes by turnId when active and stamps the matching streaming message', () => {
     const store = mkStore({
-      _currentUnifyVpId: 'vp-jobs',
-      _currentUnifyTurnId: 'turn-A',
+      _currentYeaftVpId: 'vp-jobs',
+      _currentYeaftTurnId: 'turn-A',
       messagesMap: {
         'conv-1': [
           // A different turn's streaming message — must NOT receive this delta.
@@ -100,7 +100,7 @@ describe('appendToAssistantMessageForConversation: speakerVpId stamping', () => 
 
   it('does NOT overwrite a pre-existing speakerVpId (idempotent)', () => {
     const store = mkStore({
-      _currentUnifyVpId: 'vp-different',
+      _currentYeaftVpId: 'vp-different',
       messagesMap: {
         'conv-1': [
           {
@@ -117,10 +117,10 @@ describe('appendToAssistantMessageForConversation: speakerVpId stamping', () => 
     expect(msgs[0].vpId).toBe('vp-original');
   });
 
-  it('does NOT stamp when not in unify view', () => {
+  it('does NOT stamp when not in yeaft view', () => {
     const store = mkStore({
       currentView: 'chat',
-      _currentUnifyVpId: 'vp-jobs',
+      _currentYeaftVpId: 'vp-jobs',
       messagesMap: {
         'conv-1': [
           { id: 'm1', type: 'assistant', content: 'x', isStreaming: true },
@@ -136,8 +136,8 @@ describe('appendToAssistantMessageForConversation: speakerVpId stamping', () => 
 describe('finishStreamingForConversation: defensive speaker stamp', () => {
   it('fills speakerVpId on the last streaming message at finalize time when missing', () => {
     const store = mkStore({
-      _currentUnifyVpId: 'vp-jobs',
-      _currentUnifyTurnId: 'turn-A',
+      _currentYeaftVpId: 'vp-jobs',
+      _currentYeaftTurnId: 'turn-A',
       messagesMap: {
         'conv-1': [
           { id: 'u1', type: 'user', content: 'hi' },
@@ -155,7 +155,7 @@ describe('finishStreamingForConversation: defensive speaker stamp', () => {
 
   it('stops at the last user message when scanning back', () => {
     const store = mkStore({
-      _currentUnifyVpId: 'vp-jobs',
+      _currentYeaftVpId: 'vp-jobs',
       messagesMap: {
         'conv-1': [
           // Older turn — must not be touched.
@@ -173,10 +173,10 @@ describe('finishStreamingForConversation: defensive speaker stamp', () => {
     expect(msgs[0].speakerVpId).toBeUndefined();
   });
 
-  it('is a no-op when not in unify view', () => {
+  it('is a no-op when not in yeaft view', () => {
     const store = mkStore({
       currentView: 'chat',
-      _currentUnifyVpId: 'vp-jobs',
+      _currentYeaftVpId: 'vp-jobs',
       messagesMap: {
         'conv-1': [
           { id: 'm1', type: 'assistant', content: 'reply', isStreaming: true },
@@ -191,8 +191,8 @@ describe('finishStreamingForConversation: defensive speaker stamp', () => {
 });
 
 describe('addMessageToConversation: speakerVpId on creation', () => {
-  it('stamps speakerVpId on a brand-new assistant message in unify mode', () => {
-    const store = mkStore({ _currentUnifyVpId: 'vp-jobs' });
+  it('stamps speakerVpId on a brand-new assistant message in yeaft mode', () => {
+    const store = mkStore({ _currentYeaftVpId: 'vp-jobs' });
     addMessageToConversation(store, 'conv-1', { type: 'assistant', content: 'hi' });
     const msgs = store.messagesMap['conv-1'];
     expect(msgs[0].vpId).toBe('vp-jobs');
@@ -200,13 +200,13 @@ describe('addMessageToConversation: speakerVpId on creation', () => {
   });
 
   it('does NOT stamp speakerVpId on user messages (only on assistant / tool-use)', () => {
-    const store = mkStore({ _currentUnifyVpId: 'vp-jobs' });
+    const store = mkStore({ _currentYeaftVpId: 'vp-jobs' });
     addMessageToConversation(store, 'conv-1', { type: 'user', content: 'hi' });
     const msgs = store.messagesMap['conv-1'];
     // speakerVpId is the speaker-attribution for assistant turns; users
     // don't have a "speaker" in that sense.
     expect(msgs[0].speakerVpId).toBeUndefined();
-    // vpId itself IS stamped on every Unify message — it's the
+    // vpId itself IS stamped on every Yeaft message — it's the
     // routing/turn-context tag, not the speaker tag.
     expect(msgs[0].vpId).toBe('vp-jobs');
   });
@@ -216,10 +216,10 @@ describe('addMessageToConversation: speakerVpId on creation', () => {
   // If this message lacks speakerVpId on persist, reload-from-history will
   // render the tool block with no avatar above it. Keep speakerVpId in sync
   // with assistant messages so the turn header always has data to latch.
-  it('stamps speakerVpId on a brand-new tool-use message in unify mode', () => {
+  it('stamps speakerVpId on a brand-new tool-use message in yeaft mode', () => {
     const store = mkStore({
-      _currentUnifyVpId: 'vp-jobs',
-      _currentUnifyTurnId: 'turn-A',
+      _currentYeaftVpId: 'vp-jobs',
+      _currentYeaftTurnId: 'turn-A',
     });
     addMessageToConversation(store, 'conv-1', {
       type: 'tool-use',

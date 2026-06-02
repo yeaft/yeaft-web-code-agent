@@ -5,15 +5,15 @@ import { describe, expect, it } from 'vitest';
 const execFileAsync = promisify(execFile);
 
 const DREAM_PROMPTS = [
-  'unify/dream-v2/prompts/triage-pass1.md',
-  'unify/dream-v2/prompts/triage-pass2.md',
-  'unify/dream-v2/prompts/update.md',
-  'unify/dream-v2/prompts/create.md',
-  'unify/dream-v2/prompts/extract-user.md',
-  'unify/dream-v2/prompts/extract-vp.md',
-  'unify/dream-v2/prompts/extract-group.md',
-  'unify/dream-v2/prompts/extract-topic.md',
-  'unify/dream-v2/prompts/summarize-scope.md',
+  'yeaft/dream-v2/prompts/triage-pass1.md',
+  'yeaft/dream-v2/prompts/triage-pass2.md',
+  'yeaft/dream-v2/prompts/update.md',
+  'yeaft/dream-v2/prompts/create.md',
+  'yeaft/dream-v2/prompts/extract-user.md',
+  'yeaft/dream-v2/prompts/extract-vp.md',
+  'yeaft/dream-v2/prompts/extract-group.md',
+  'yeaft/dream-v2/prompts/extract-topic.md',
+  'yeaft/dream-v2/prompts/summarize-scope.md',
 ];
 
 describe('agent package files', () => {

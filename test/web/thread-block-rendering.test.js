@@ -1,9 +1,9 @@
 /**
- * thread-block-rendering.test.js — threadId is the first-level Unify block boundary.
+ * thread-block-rendering.test.js — threadId is the first-level Yeaft block boundary.
  *
  * The production MessageList keeps detailed assistant-turn aggregation inline,
  * so this test pins the thread-block layer as a small logic replica plus source
- * guards. The rule is simple: in Unify, visible rows are wrapped into
+ * guards. The rule is simple: in Yeaft, visible rows are wrapped into
  * consecutive blocks keyed by stable threadId, with turnId only as a legacy
  * fallback.
  */
@@ -70,7 +70,7 @@ describe('MessageList thread-block rendering source', () => {
     const threadBlocksIdx = src.indexOf('const threadBlocks = Vue.computed');
     expect(threadBlocksIdx).toBeGreaterThan(-1);
     const threadBlocksBody = src.slice(threadBlocksIdx, threadBlocksIdx + 400);
-    expect(threadBlocksBody).toContain("store.currentView !== 'unify' || !activeGroupIdForBar.value");
+    expect(threadBlocksBody).toContain("store.currentView !== 'yeaft' || !activeGroupIdForBar.value");
     expect(threadBlocksBody).toContain('return turnGroups.value');
   });
 

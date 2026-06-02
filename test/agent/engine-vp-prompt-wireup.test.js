@@ -21,8 +21,8 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { Engine } from '../../agent/unify/engine.js';
-import { NullTrace } from '../../agent/unify/debug-trace.js';
+import { Engine } from '../../agent/yeaft/engine.js';
+import { NullTrace } from '../../agent/yeaft/debug-trace.js';
 
 // recall-r6 was deleted in GC.1 follow-up; engine now recalls via FTS5
 // pre-flow only when memoryIndex is wired (it isn't here), so no mock

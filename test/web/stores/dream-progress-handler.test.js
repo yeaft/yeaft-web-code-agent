@@ -1,11 +1,11 @@
 /**
  * dream-progress-handler.test.js — v0.1.755 Issue A regression.
  *
- * UnifyDebugPanel needs a single most-recent dream-pass row for the
+ * YeaftDebugPanel needs a single most-recent dream-pass row for the
  * active group's scope ("dream只需要看最新的一次就行"). The chat-store
- * `handleUnifyOutput` switch case `'dream_progress'` is the projection
+ * `handleYeaftOutput` switch case `'dream_progress'` is the projection
  * point: each inbound progress event is reduced into
- * `state.unifyDreamLatest[scope]` as a single record with
+ * `state.yeaftDreamLatest[scope]` as a single record with
  * `{ scope, phase, status, startedAt, finishedAt, mergedCount, error,
  *    manual, durationMs, isRunning }`.
  *
@@ -24,15 +24,15 @@
  *   5. `manual: true` carried into running phase persists through done.
  *
  * Unit-only — same Pinia.defineStore shim pattern as
- * chat-input-dispatch.test.js. Invokes the captured `actions.handleUnifyOutput`
- * against a hand-rolled `this` with `unifyDreamLatest: {}`.
+ * chat-input-dispatch.test.js. Invokes the captured `actions.handleYeaftOutput`
+ * against a hand-rolled `this` with `yeaftDreamLatest: {}`.
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 
 let capturedOptions = null;
 globalThis.Pinia = globalThis.Pinia || {};
 globalThis.Pinia.defineStore = (_id, options) => {
-  if (options && options.actions && options.actions.handleUnifyOutput) {
+  if (options && options.actions && options.actions.handleYeaftOutput) {
     capturedOptions = options;
   }
   return () => ({});
@@ -49,33 +49,33 @@ beforeAll(async () => {
 
 /**
  * Minimal `this` surface that the dream_progress branch actually
- * touches. Everything else in handleUnifyOutput short-circuits before
+ * touches. Everything else in handleYeaftOutput short-circuits before
  * the switch when there's no msg.data and event.type !== other cases.
  */
 function mkStore() {
   return {
-    unifyDreamLatest: {},
+    yeaftDreamLatest: {},
     // PR feat-dream-debug-panel-full: ring buffer + sibling action are
     // touched by the same dream_progress branch we're exercising.
-    unifyDreamEvents: {},
+    yeaftDreamEvents: {},
     _appendDreamEvent: actions._appendDreamEvent,
     // Other state the function MAY read on un-related branches. Safe
     // defaults so the function never crashes if it walks past our case.
-    unifyConversationId: null,
+    yeaftConversationId: null,
     messagesMap: {},
     processingConversations: {},
     executionStatusMap: {},
     activeConversations: [],
-    currentView: 'unify',
+    currentView: 'yeaft',
     sendWsMessage() {},
   };
 }
 
 const send = (store, event) => {
-  actions.handleUnifyOutput.call(store, { event });
+  actions.handleYeaftOutput.call(store, { event });
 };
 
-describe('handleUnifyOutput — dream_progress projection', () => {
+describe('handleYeaftOutput — dream_progress projection', () => {
   it('routes per-target events into target scope', () => {
     const store = mkStore();
     send(store, {
@@ -84,8 +84,8 @@ describe('handleUnifyOutput — dream_progress projection', () => {
       target: 'group/grp_demo',
       ts: 1000,
     });
-    expect(Object.keys(store.unifyDreamLatest)).toEqual(['group/grp_demo']);
-    const entry = store.unifyDreamLatest['group/grp_demo'];
+    expect(Object.keys(store.yeaftDreamLatest)).toEqual(['group/grp_demo']);
+    const entry = store.yeaftDreamLatest['group/grp_demo'];
     expect(entry.scope).toBe('group/grp_demo');
     expect(entry.status).toBe('running');
     expect(entry.phase).toBe('merge');
@@ -102,9 +102,9 @@ describe('handleUnifyOutput — dream_progress projection', () => {
       groupId: 'grp_x',
       ts: 2000,
     });
-    expect(store.unifyDreamLatest['group/grp_x']).toBeDefined();
-    expect(store.unifyDreamLatest['group/grp_x'].scope).toBe('group/grp_x');
-    expect(store.unifyDreamLatest['group/grp_x'].status).toBe('running');
+    expect(store.yeaftDreamLatest['group/grp_x']).toBeDefined();
+    expect(store.yeaftDreamLatest['group/grp_x'].scope).toBe('group/grp_x');
+    expect(store.yeaftDreamLatest['group/grp_x'].status).toBe('running');
   });
 
   it('top-level events (no target/groupId) land in "*" bucket', () => {
@@ -114,9 +114,9 @@ describe('handleUnifyOutput — dream_progress projection', () => {
       phase: 'start',
       ts: 3000,
     });
-    expect(store.unifyDreamLatest['*']).toBeDefined();
-    expect(store.unifyDreamLatest['*'].scope).toBe('*');
-    expect(store.unifyDreamLatest['*'].isRunning).toBe(true);
+    expect(store.yeaftDreamLatest['*']).toBeDefined();
+    expect(store.yeaftDreamLatest['*'].scope).toBe('*');
+    expect(store.yeaftDreamLatest['*'].isRunning).toBe(true);
   });
 
   it('top-level events mirror onto every existing scope', () => {
@@ -127,10 +127,10 @@ describe('handleUnifyOutput — dream_progress projection', () => {
     // Now a top-level "done" event arrives.
     send(store, { type: 'dream_progress', phase: 'done', ts: 200 });
     // Both prior scopes plus '*' bucket all reflect done.
-    expect(store.unifyDreamLatest['*'].status).toBe('success');
-    expect(store.unifyDreamLatest['group/g1'].status).toBe('success');
-    expect(store.unifyDreamLatest['vp/v1'].status).toBe('success');
-    expect(store.unifyDreamLatest['group/g1'].finishedAt).toBe(200);
+    expect(store.yeaftDreamLatest['*'].status).toBe('success');
+    expect(store.yeaftDreamLatest['group/g1'].status).toBe('success');
+    expect(store.yeaftDreamLatest['vp/v1'].status).toBe('success');
+    expect(store.yeaftDreamLatest['group/g1'].finishedAt).toBe(200);
   });
 
   it('phase=done flips status to success and stamps finishedAt', () => {
@@ -148,7 +148,7 @@ describe('handleUnifyOutput — dream_progress projection', () => {
       ts: 1500,
       mergedCount: 3,
     });
-    const entry = store.unifyDreamLatest['group/grp_demo'];
+    const entry = store.yeaftDreamLatest['group/grp_demo'];
     expect(entry.status).toBe('success');
     expect(entry.phase).toBe('done');
     expect(entry.finishedAt).toBe(1500);
@@ -170,8 +170,8 @@ describe('handleUnifyOutput — dream_progress projection', () => {
       target: 'group/grp_demo',
       ts: 700,
     });
-    expect(store.unifyDreamLatest['group/grp_demo'].startedAt).toBe(500);
-    expect(store.unifyDreamLatest['group/grp_demo'].phase).toBe('merge');
+    expect(store.yeaftDreamLatest['group/grp_demo'].startedAt).toBe(500);
+    expect(store.yeaftDreamLatest['group/grp_demo'].phase).toBe('merge');
   });
 
   it('phase=error sets status=error + carries error message', () => {
@@ -183,7 +183,7 @@ describe('handleUnifyOutput — dream_progress projection', () => {
       ts: 800,
       error: 'fts segment write failed',
     });
-    const entry = store.unifyDreamLatest['group/grp_demo'];
+    const entry = store.yeaftDreamLatest['group/grp_demo'];
     expect(entry.status).toBe('error');
     expect(entry.error).toBe('fts segment write failed');
     expect(entry.finishedAt).toBe(800);
@@ -200,8 +200,8 @@ describe('handleUnifyOutput — dream_progress projection', () => {
       ts: 900,
       error: 'boom',
     });
-    expect(store.unifyDreamLatest['group/grp_demo'].status).toBe('error');
-    expect(store.unifyDreamLatest['group/grp_demo'].error).toBe('boom');
+    expect(store.yeaftDreamLatest['group/grp_demo'].status).toBe('error');
+    expect(store.yeaftDreamLatest['group/grp_demo'].error).toBe('boom');
   });
 
   it('manual flag from a running event survives to the done event', () => {
@@ -221,7 +221,7 @@ describe('handleUnifyOutput — dream_progress projection', () => {
       target: 'group/grp_demo',
       ts: 200,
     });
-    expect(store.unifyDreamLatest['group/grp_demo'].manual).toBe(true);
+    expect(store.yeaftDreamLatest['group/grp_demo'].manual).toBe(true);
   });
 
   it('manual=false is preserved when later events omit the flag', () => {
@@ -239,7 +239,7 @@ describe('handleUnifyOutput — dream_progress projection', () => {
       target: 'group/grp_demo',
       ts: 200,
     });
-    expect(store.unifyDreamLatest['group/grp_demo'].manual).toBe(false);
+    expect(store.yeaftDreamLatest['group/grp_demo'].manual).toBe(false);
   });
 
   it('durationMs from event.duration is captured on done', () => {
@@ -251,7 +251,7 @@ describe('handleUnifyOutput — dream_progress projection', () => {
       duration: 1234,
       ts: 1000,
     });
-    expect(store.unifyDreamLatest['group/grp_demo'].durationMs).toBe(1234);
+    expect(store.yeaftDreamLatest['group/grp_demo'].durationMs).toBe(1234);
   });
 
   it('mergedCount falls back to event.targets when mergedCount absent', () => {
@@ -263,6 +263,6 @@ describe('handleUnifyOutput — dream_progress projection', () => {
       targets: 5,
       ts: 100,
     });
-    expect(store.unifyDreamLatest['group/grp_demo'].mergedCount).toBe(5);
+    expect(store.yeaftDreamLatest['group/grp_demo'].mergedCount).toBe(5);
   });
 });

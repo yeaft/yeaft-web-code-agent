@@ -113,7 +113,7 @@ export default {
           v-if="turnTime"
           class="turn-time"
           :title="turnTimeFull"
-          :aria-label="$t('unify.message.timeAria', { time: turnTimeFull })"
+          :aria-label="$t('yeaft.message.timeAria', { time: turnTimeFull })"
         >{{ turnTime }}</span>
         <button class="screenshot-btn" @click="screenshotContent" :title="screenshotting ? $t('message.screenshotting') : $t('message.screenshot')">
           <svg v-if="!screenshotting" viewBox="0 0 24 24" width="14" height="14">
@@ -399,11 +399,11 @@ export default {
     // H2.f.6: canFork / forkFromHere removed alongside the multi-thread engine.
 
     // task-334-ui-c: forward VP speaker click → parent (MessageList →
-    // UnifyPage → chatStore.enterVpDetailView). Kept opt-in via the
+    // YeaftPage → chatStore.enterVpDetailView). Kept opt-in via the
     // speaker header's `clickable` path so legacy 1:1 turns are unaffected.
     const onOpenVpDetail = (vpId) => {
       if (!vpId) return;
-      // Emit for MessageList/UnifyPage to handle; fall back to direct store
+      // Emit for MessageList/YeaftPage to handle; fall back to direct store
       // call if the enclosing page did not wire the listener.
       try {
         if (typeof store.enterVpDetailView === 'function') {

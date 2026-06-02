@@ -6,7 +6,7 @@
  *   regression test proved that *given* a vpPersona, the system prompt
  *   speaks as the VP. But the live web-bridge caller `buildVpQueryOpts`
  *   returned `undefined` whenever no vpId was on the inbound message —
- *   which is exactly what the legacy `unify_chat` (no-group) path and the
+ *   which is exactly what the legacy `yeaft_chat` (no-group) path and the
  *   coordinator-fallback paths did. Engine therefore got `vpPersona:
  *   undefined` and fell back to the legacy "Yeaft — AI Companion"
  *   identity in production, even though every engine-level test was green.
@@ -28,7 +28,7 @@ import { join } from 'node:path';
 // Mock readVp + scanVpLibrary so the resolver is deterministic without
 // needing a populated ~/.yeaft/virtual-persons on disk. The mocks live at
 // the same path web-bridge imports them from.
-vi.mock('../../agent/unify/vp/vp-crud.js', async (orig) => {
+vi.mock('../../agent/yeaft/vp/vp-crud.js', async (orig) => {
   const real = await orig();
   return {
     ...real,
@@ -43,7 +43,7 @@ vi.mock('../../agent/unify/vp/vp-crud.js', async (orig) => {
   };
 });
 
-vi.mock('../../agent/unify/vp/vp-store.js', async (orig) => {
+vi.mock('../../agent/yeaft/vp/vp-store.js', async (orig) => {
   const real = await orig();
   return {
     ...real,
@@ -54,8 +54,8 @@ vi.mock('../../agent/unify/vp/vp-store.js', async (orig) => {
   };
 });
 
-import { buildSystemPrompt } from '../../agent/unify/prompts.js';
-import { buildVpQueryOpts } from '../../agent/unify/web-bridge.js';
+import { buildSystemPrompt } from '../../agent/yeaft/prompts.js';
+import { buildVpQueryOpts } from '../../agent/yeaft/web-bridge.js';
 
 describe('PR-G — buildVpQueryOpts resolves a default VP when none is supplied', () => {
   it('uses caller-supplied vpId when present (legacy behaviour preserved)', () => {
@@ -98,7 +98,7 @@ describe('PR-G — buildVpQueryOpts resolves a default VP when none is supplied'
   });
 
   it('returns undefined only when the VP library is empty (cold start)', async () => {
-    const store = await import('../../agent/unify/vp/vp-store.js');
+    const store = await import('../../agent/yeaft/vp/vp-store.js');
     store.scanVpLibrary.mockReturnValueOnce([]);
     const out = buildVpQueryOpts({ vpId: null });
     expect(out).toBeUndefined();

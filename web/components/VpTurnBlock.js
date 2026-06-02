@@ -101,7 +101,7 @@ export default {
             >·</span>
             <span
               class="vp-turn-block-elapsed"
-              :title="$t ? $t('unify.vp.turnBlock.elapsedTitle') : 'Elapsed time'"
+              :title="$t ? $t('yeaft.vp.turnBlock.elapsedTitle') : 'Elapsed time'"
               aria-live="polite"
             >{{ elapsedText }}</span>
           </template>
@@ -111,8 +111,8 @@ export default {
             type="button"
             class="vp-turn-block-stop"
             @click.stop="onStopTurn"
-            :title="$t ? $t('unify.vp.speaker.stop') : 'Stop'"
-            :aria-label="$t ? $t('unify.vp.speaker.stop') : 'Stop'"
+            :title="$t ? $t('yeaft.vp.speaker.stop') : 'Stop'"
+            :aria-label="$t ? $t('yeaft.vp.speaker.stop') : 'Stop'"
           ><svg viewBox="0 0 24 24" width="14" height="14"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></svg></button>
           <button
             type="button"
@@ -289,22 +289,22 @@ export default {
     const truncatedTitle = Vue.computed(() => {
       const total = compactText.value.totalLines;
       return t
-        ? t('unify.vp.turnBlock.truncated', { total })
+        ? t('yeaft.vp.turnBlock.truncated', { total })
         : `Showing last 6 of ${total} lines — click to expand.`;
     });
 
     const emptyText = Vue.computed(() => {
       if (props.turn.isStreaming) {
-        return t ? t('unify.vp.turnBlock.thinking') : 'thinking…';
+        return t ? t('yeaft.vp.turnBlock.thinking') : 'thinking…';
       }
-      return t ? t('unify.vp.turnBlock.empty') : '(no text)';
+      return t ? t('yeaft.vp.turnBlock.empty') : '(no text)';
     });
 
     const toggleExpandTitle = Vue.computed(() =>
-      t ? t('unify.vp.turnBlock.expand') : 'Expand turn'
+      t ? t('yeaft.vp.turnBlock.expand') : 'Expand turn'
     );
     const toggleCollapseTitle = Vue.computed(() =>
-      t ? t('unify.vp.turnBlock.collapse') : 'Collapse turn'
+      t ? t('yeaft.vp.turnBlock.collapse') : 'Collapse turn'
     );
 
     const threadTitle = Vue.computed(() => {

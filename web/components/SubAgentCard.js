@@ -1,13 +1,13 @@
 /**
  * SubAgentCard — PR-M3: a collapsible card showing one sub-agent's
- * activity stream within a Unify conversation.
+ * activity stream within a Yeaft conversation.
  *
- * Backed by `chatStore.unifySubAgentCards[key]` where key = `${convId}:${agentId}`.
+ * Backed by `chatStore.yeaftSubAgentCards[key]` where key = `${convId}:${agentId}`.
  * The card aggregates per-agent state populated by the `sub_agent_event`
  * dispatcher in chat.js: status badge, accumulated text, tool-call list,
  * and turn count.
  *
- * Per CLAUDE.md "Unify UI Design Rules": no horizontal dividers, soft
+ * Per CLAUDE.md "Yeaft UI Design Rules": no horizontal dividers, soft
  * surface, spacing-only separation.
  */
 export default {

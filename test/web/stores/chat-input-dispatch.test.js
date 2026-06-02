@@ -1,17 +1,17 @@
 /**
- * chat-input-dispatch.test.js — PR #721 regression: ChatInput's unify
+ * chat-input-dispatch.test.js — PR #721 regression: ChatInput's yeaft
  * dispatch must forward `attachments` end-to-end.
  *
  * What broke before #721:
- *   - In `web/components/ChatInput.js#send()`, the unify-group branch
+ *   - In `web/components/ChatInput.js#send()`, the yeaft-group branch
  *     `return`ed early without ever consulting the local `attachments[]`
  *     ref. Files the user had paperclipped vanished into the void.
- *   - The store helper `sendUnifyGroupChat` also short-circuited on
+ *   - The store helper `sendYeaftGroupChat` also short-circuited on
  *     empty text, so an image-only send produced zero WS frames.
  *
  * What this file pins:
- *   1. `sendUnifyGroupChat` forwards `attachments[].fileId` onto the
- *      outbound `unify_group_chat` WS frame.
+ *   1. `sendYeaftGroupChat` forwards `attachments[].fileId` onto the
+ *      outbound `yeaft_group_chat` WS frame.
  *   2. The same call accepts an image-only send (empty text) — it
  *      synthesizes a placeholder text and still ships the frame.
  *
@@ -30,7 +30,7 @@ globalThis.Pinia.defineStore = (_id, options) => {
   // The chat store is by far the largest defineStore call in the
   // codebase — capture it. Other (smaller) stores imported transitively
   // get a no-op stub.
-  if (options && options.actions && options.actions.sendUnifyGroupChat) {
+  if (options && options.actions && options.actions.sendYeaftGroupChat) {
     capturedOptions = options;
   }
   return () => ({});
@@ -52,10 +52,10 @@ function mkStore() {
   const sent = [];
   return {
     sent,
-    unifyAgentId: 'agent-x',
-    unifyConversationId: null, // skip the local-render branch in this test
+    yeaftAgentId: 'agent-x',
+    yeaftConversationId: null, // skip the local-render branch in this test
     sendWsMessage(msg) { sent.push(msg); },
-    addMessageToConversation() {}, // unused when unifyConversationId is null
+    addMessageToConversation() {}, // unused when yeaftConversationId is null
     processingConversations: {},
     _turnCompletedConvs: new Set(),
     _closedAt: {},
@@ -63,10 +63,10 @@ function mkStore() {
   };
 }
 
-describe('sendUnifyGroupChat — attachment passthrough', () => {
-  it('forwards attachments[].fileId onto the unify_group_chat WS frame', () => {
+describe('sendYeaftGroupChat — attachment passthrough', () => {
+  it('forwards attachments[].fileId onto the yeaft_group_chat WS frame', () => {
     const store = mkStore();
-    actions.sendUnifyGroupChat.call(store, {
+    actions.sendYeaftGroupChat.call(store, {
       groupId: 'grp_1',
       text: 'hi',
       mentions: [],
@@ -77,7 +77,7 @@ describe('sendUnifyGroupChat — attachment passthrough', () => {
     });
     expect(store.sent).toHaveLength(1);
     const frame = store.sent[0];
-    expect(frame.type).toBe('unify_group_chat');
+    expect(frame.type).toBe('yeaft_group_chat');
     expect(frame.attachments).toEqual([
       { fileId: 'f-aaa', isImage: true },
       { fileId: 'f-bbb', isImage: false },
@@ -89,7 +89,7 @@ describe('sendUnifyGroupChat — attachment passthrough', () => {
 
   it('image-only send (empty text) is allowed — synthesizes placeholder text', () => {
     const store = mkStore();
-    actions.sendUnifyGroupChat.call(store, {
+    actions.sendYeaftGroupChat.call(store, {
       groupId: 'grp_1',
       text: '',
       attachments: [{ fileId: 'f-img', isImage: true, mimeType: 'image/png' }],
@@ -101,7 +101,7 @@ describe('sendUnifyGroupChat — attachment passthrough', () => {
 
   it('drops entries without a fileId before forwarding', () => {
     const store = mkStore();
-    actions.sendUnifyGroupChat.call(store, {
+    actions.sendYeaftGroupChat.call(store, {
       groupId: 'grp_1',
       text: 'hi',
       attachments: [
@@ -115,7 +115,7 @@ describe('sendUnifyGroupChat — attachment passthrough', () => {
 
   it('no-op when both text and attachments are empty', () => {
     const store = mkStore();
-    actions.sendUnifyGroupChat.call(store, { groupId: 'grp_1', text: '' });
+    actions.sendYeaftGroupChat.call(store, { groupId: 'grp_1', text: '' });
     expect(store.sent).toHaveLength(0);
   });
 });

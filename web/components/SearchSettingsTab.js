@@ -1,5 +1,5 @@
 /**
- * SearchSettingsTab.js — Unify Settings → Search tab.
+ * SearchSettingsTab.js — Yeaft Settings → Search tab.
  *
  * Lets the user pick which web-search backend the engine uses
  * (Tavily today; Playwright service is a placeholder for the upcoming

@@ -77,10 +77,10 @@ export default {
                   <span class="agent-dropdown-status" v-if="restartingAgents[agent.id]">{{ $t('chat.agent.restarting') }}</span>
                   <span class="agent-dropdown-status" v-else-if="upgradingAgents[agent.id]">{{ $t('chat.agent.upgrading') }}</span>
                   <button
-                    class="agent-dropdown-unify-btn"
-                    @click.stop="store.enterUnify(agent.id); agentManagerOpen = false"
+                    class="agent-dropdown-yeaft-btn"
+                    @click.stop="store.enterYeaft(agent.id); agentManagerOpen = false"
                     :disabled="!agent.online"
-                    :title="$t('chat.agent.unify')"
+                    :title="$t('chat.agent.yeaft')"
                   >
                     <svg viewBox="0 0 24 24" width="13" height="13"><path fill="currentColor" d="M7 2v11h3v9l7-12h-4l4-8z"/></svg>
                   </button>

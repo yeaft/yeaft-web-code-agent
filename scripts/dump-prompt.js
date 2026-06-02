@@ -1,18 +1,18 @@
 #!/usr/bin/env node
 /**
- * scripts/dump-prompt.js — Dump Unify's assembled system prompt for review.
+ * scripts/dump-prompt.js — Dump Yeaft's assembled system prompt for review.
  *
  * Purpose (task-332 F2):
- *   Let a human eyeball the final prompt that Unify sends to the LLM.
+ *   Let a human eyeball the final prompt that Yeaft sends to the LLM.
  *   Historically the runtime quietly assembled 7 sections from templates,
  *   and nobody could see the result unless they logged it inside the
  *   engine. This script provides a side-channel: invoke buildSystemPrompt
  *   the same way the engine does, print the output, and compare against
- *   the budget in `docs/unify-prompt-token-budget.md`.
+ *   the budget in `docs/yeaft-prompt-token-budget.md`.
  *
  * Red line:
  *   - Read-only. Does not touch ~/.yeaft, does not call any LLM.
- *   - Uses the real `buildSystemPrompt` from agent/unify/prompts.js —
+ *   - Uses the real `buildSystemPrompt` from agent/yeaft/prompts.js —
  *     no mock, no copy, no divergence.
  *
  * Usage:
@@ -31,9 +31,9 @@
  * this layer (adapters add model-specific framing later in the pipeline).
  */
 
-import { buildSystemPrompt } from '../agent/unify/prompts.js';
+import { buildSystemPrompt } from '../agent/yeaft/prompts.js';
 
-// ─── Ceilings (from docs/unify-prompt-token-budget.md §2) ─────────
+// ─── Ceilings (from docs/yeaft-prompt-token-budget.md §2) ─────────
 
 const CEILINGS_TOKENS = {
   identity: 1500,
@@ -98,7 +98,7 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`dump-prompt — print the assembled Unify system prompt
+  console.log(`dump-prompt — print the assembled Yeaft system prompt
 
 Usage:
   node scripts/dump-prompt.js [flags]
@@ -115,7 +115,7 @@ Flags:
   --budget-check                Exit non-zero if any section breaches ceiling.
   -h, --help                    Show this help.
 
-Budget ceilings come from docs/unify-prompt-token-budget.md.
+Budget ceilings come from docs/yeaft-prompt-token-budget.md.
 Token counts use the 4-chars-per-token heuristic; exact counts differ by tokenizer.
 `);
 }
@@ -127,7 +127,7 @@ const SAMPLE_MEMORY_INJECTION = `## Memory Index
 Available memory files under ~/.yeaft/memory/:
 - user-preferences.md — merged user preferences
 - by-project/claude-web-chat.md — current project summary
-- by-topic/unify-prompts.md — notes on prompt assembly
+- by-topic/yeaft-prompts.md — notes on prompt assembly
 
 ## User Preferences (excerpt)
 
@@ -138,12 +138,12 @@ Available memory files under ~/.yeaft/memory/:
 ## Project Header (claude-web-chat)
 
 Web-based AI chat with three modes: Chat (Claude CLI), Crew (multi-agent),
-Unify (own engine). Tag format v0.1.X. Main branch protected.
+Yeaft (own engine). Tag format v0.1.X. Main branch protected.
 `;
 
-const SAMPLE_COMPACT_SUMMARY = `Earlier in this conversation the user asked to audit Unify's prompt
+const SAMPLE_COMPACT_SUMMARY = `Earlier in this conversation the user asked to audit Yeaft's prompt
 assembly, recover the task-270 spec, write a budget doc, and add a dump
-script. The worktree is feat-unify-prompt-f2. No runtime code changes.`;
+script. The worktree is feat-yeaft-prompt-f2. No runtime code changes.`;
 
 const SAMPLE_SKILL_CONTENT = `## Skills
 
@@ -210,7 +210,7 @@ function main() {
   const args = parseArgs(process.argv);
   if (args.help) { printHelp(); return; }
 
-  // Representative tool names — approximately the set a loaded Unify
+  // Representative tool names — approximately the set a loaded Yeaft
   // session sees after createFullRegistry(). We hardcode the count +
   // names so the dump is reproducible without touching the live
   // registry (keeps the script side-effect-free).
@@ -289,7 +289,7 @@ function main() {
   } else {
     const hr = '─'.repeat(72);
     process.stdout.write(`${hr}\n`);
-    process.stdout.write(`Unify System Prompt Dump\n`);
+    process.stdout.write(`Yeaft System Prompt Dump\n`);
     process.stdout.write(`  mode=${args.mode}  language=${args.language}  model=${args.model || '(n/a)'}\n`);
     process.stdout.write(`  include: memory=${args.includeMemory} compact=${args.includeCompact} skill=${args.includeSkill}\n`);
     process.stdout.write(`${hr}\n\n`);

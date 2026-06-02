@@ -48,7 +48,7 @@ export default {
         v-if="stateCause"
         class="vp-speaker-state-cause"
         :title="stateCause"
-        :aria-label="$t('unify.vp.speaker.stateCauseAria', { cause: stateCause })"
+        :aria-label="$t('yeaft.vp.speaker.stateCauseAria', { cause: stateCause })"
         role="img"
       >●</span>
       <span
@@ -60,7 +60,7 @@ export default {
         v-if="showStop"
         class="vp-speaker-stop-btn"
         @click.stop="$emit('stop-turn', turnId)"
-        :title="$t ? $t('unify.vp.speaker.stop') : 'Stop'"
+        :title="$t ? $t('yeaft.vp.speaker.stop') : 'Stop'"
       ><svg viewBox="0 0 24 24" width="14" height="14"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></svg></button>
     </div>
   `,

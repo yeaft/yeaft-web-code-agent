@@ -1,0 +1,1163 @@
+/* ============================================================
+ * yeaft-vp.css — task-334-ui-a §5
+ * VP avatar + badge + library link.
+ * ============================================================ */
+
+:root {
+  --vp-palette-1:  var(--vp-avatar-rat-bg);
+  --vp-palette-2:  var(--vp-avatar-ox-bg);
+  --vp-palette-3:  var(--vp-avatar-tiger-bg);
+  --vp-palette-4:  var(--vp-avatar-rabbit-bg);
+  --vp-palette-5:  var(--vp-avatar-dragon-bg);
+  --vp-palette-6:  var(--vp-avatar-snake-bg);
+  --vp-palette-7:  var(--vp-avatar-horse-bg);
+  --vp-palette-8:  var(--vp-avatar-goat-bg);
+  --vp-palette-9:  var(--vp-avatar-monkey-bg);
+  --vp-palette-10: var(--vp-avatar-rooster-bg);
+  --vp-palette-11: var(--vp-avatar-dog-bg);
+  --vp-palette-12: var(--vp-avatar-pig-bg);
+
+  --vp-avatar-fg: #ffffff;
+  --vp-avatar-ring: rgba(15, 23, 42, 0.14);
+  --vp-avatar-border: color-mix(in srgb, currentColor 24%, transparent);
+  --vp-avatar-highlight: rgba(255, 255, 255, 0.48);
+  --vp-avatar-shade: rgba(15, 23, 42, 0.16);
+  --vp-avatar-initial-bg: color-mix(in srgb, currentColor 14%, rgba(255, 255, 255, 0.62));
+  --vp-avatar-initial-ring: color-mix(in srgb, currentColor 36%, transparent);
+
+  --vp-avatar-rat-bg: linear-gradient(135deg, #E8F1FF 0%, #C8DAF4 100%);
+  --vp-avatar-rat-fg: #173E7A;
+  --vp-avatar-ox-bg: linear-gradient(135deg, #F4EBDD 0%, #DEC8AC 100%);
+  --vp-avatar-ox-fg: #5C3A19;
+  --vp-avatar-tiger-bg: linear-gradient(135deg, #F7E6D4 0%, #E4BA8E 100%);
+  --vp-avatar-tiger-fg: #7A3A16;
+  --vp-avatar-rabbit-bg: linear-gradient(135deg, #F8E2EA 0%, #E8BACB 100%);
+  --vp-avatar-rabbit-fg: #7B2446;
+  --vp-avatar-dragon-bg: linear-gradient(135deg, #DDF1EA 0%, #ABD7C8 100%);
+  --vp-avatar-dragon-fg: #0F5D49;
+  --vp-avatar-snake-bg: linear-gradient(135deg, #E8F1D8 0%, #C8DAA2 100%);
+  --vp-avatar-snake-fg: #48621A;
+  --vp-avatar-horse-bg: linear-gradient(135deg, #F9E7DC 0%, #E6B59A 100%);
+  --vp-avatar-horse-fg: #7A351B;
+  --vp-avatar-goat-bg: linear-gradient(135deg, #E4EEFC 0%, #BDD0EC 100%);
+  --vp-avatar-goat-fg: #274D7F;
+  --vp-avatar-monkey-bg: linear-gradient(135deg, #F8EDC9 0%, #E0C164 100%);
+  --vp-avatar-monkey-fg: #5F4708;
+  --vp-avatar-rooster-bg: linear-gradient(135deg, #DBF1F3 0%, #9CCFD7 100%);
+  --vp-avatar-rooster-fg: #145665;
+  --vp-avatar-dog-bg: linear-gradient(135deg, #EAEEF3 0%, #C7D0DB 100%);
+  --vp-avatar-dog-fg: #334155;
+  --vp-avatar-pig-bg: linear-gradient(135deg, #F1E1F1 0%, #D8B6D8 100%);
+  --vp-avatar-pig-fg: #6C2D6D;
+
+  --vp-status-online: #3fb950;
+  --vp-status-busy:   #f2994a;
+
+  --vp-badge-subtitle-fg: var(--text-secondary, #6b7280);
+}
+
+[data-theme="dark"] {
+  --vp-avatar-ring: rgba(255, 255, 255, 0.18);
+  --vp-avatar-border: color-mix(in srgb, currentColor 42%, transparent);
+  --vp-avatar-highlight: rgba(255, 255, 255, 0.20);
+  --vp-avatar-shade: rgba(0, 0, 0, 0.36);
+  --vp-avatar-initial-bg: color-mix(in srgb, #020617 34%, transparent);
+  --vp-avatar-initial-ring: color-mix(in srgb, currentColor 46%, transparent);
+
+  --vp-avatar-rat-bg: linear-gradient(135deg, #2D5F9F 0%, #173A68 100%);
+  --vp-avatar-rat-fg: #EAF3FF;
+  --vp-avatar-ox-bg: linear-gradient(135deg, #7B5938 0%, #4B3320 100%);
+  --vp-avatar-ox-fg: #FFF1DF;
+  --vp-avatar-tiger-bg: linear-gradient(135deg, #9A5A2E 0%, #65351B 100%);
+  --vp-avatar-tiger-fg: #FFEBDD;
+  --vp-avatar-rabbit-bg: linear-gradient(135deg, #8A3C5A 0%, #5A263A 100%);
+  --vp-avatar-rabbit-fg: #FFEAF2;
+  --vp-avatar-dragon-bg: linear-gradient(135deg, #2E745F 0%, #194C3E 100%);
+  --vp-avatar-dragon-fg: #E4FFF5;
+  --vp-avatar-snake-bg: linear-gradient(135deg, #647A36 0%, #3D4D22 100%);
+  --vp-avatar-snake-fg: #F4FFD8;
+  --vp-avatar-horse-bg: linear-gradient(135deg, #94563C 0%, #5F3424 100%);
+  --vp-avatar-horse-fg: #FFECE2;
+  --vp-avatar-goat-bg: linear-gradient(135deg, #466D9E 0%, #2A466B 100%);
+  --vp-avatar-goat-fg: #EDF5FF;
+  --vp-avatar-monkey-bg: linear-gradient(135deg, #876B24 0%, #554314 100%);
+  --vp-avatar-monkey-fg: #FFF6C9;
+  --vp-avatar-rooster-bg: linear-gradient(135deg, #2A7483 0%, #174B56 100%);
+  --vp-avatar-rooster-fg: #E7FCFF;
+  --vp-avatar-dog-bg: linear-gradient(135deg, #596575 0%, #2F3846 100%);
+  --vp-avatar-dog-fg: #F3F7FC;
+  --vp-avatar-pig-bg: linear-gradient(135deg, #72447B 0%, #4B2A52 100%);
+  --vp-avatar-pig-fg: #FAE9FF;
+
+  --vp-status-online: #56d364;
+  --vp-status-busy:   #ff9e2c;
+}
+
+/* ─── VpAvatar ───────────────────────────────────────────── */
+.vp-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--vp-avatar-fg);
+  font-weight: 800;
+  overflow: hidden;
+  box-shadow:
+    inset 0 1px 0 var(--vp-avatar-highlight),
+    inset 0 -1px 0 var(--vp-avatar-shade),
+    0 0 0 1px var(--vp-avatar-ring);
+  border: 1px solid var(--vp-avatar-border);
+  font-family: var(--font-sans, system-ui, sans-serif);
+  position: relative;
+  flex-shrink: 0;
+  line-height: 1;
+  text-shadow: 0 1px 1px rgba(15, 23, 42, 0.30);
+  user-select: none;
+}
+
+.vp-avatar-letter {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  transform: translateY(-0.5px);
+}
+
+.vp-avatar-motif-glyph {
+  position: absolute;
+  inset: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.14em;
+  font-weight: 900;
+  opacity: 0.16;
+  transform: translate(-0.08em, -0.06em) rotate(-10deg);
+}
+
+.vp-avatar-initial {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 68%;
+  height: 68%;
+  border-radius: 999px;
+  background: var(--vp-avatar-initial-bg);
+  box-shadow: 0 0 0 1px var(--vp-avatar-initial-ring);
+  font-size: 0.82em;
+  font-weight: 900;
+  letter-spacing: -0.04em;
+}
+
+/* Illustrated portrait layer. Sits on top of the palette disk background
+ * with a transparent SVG, so per-VP color identity still shows through
+ * any empty pixels. Rendered only when `vpId` is in the known-set
+ * (KNOWN_AVATAR_IDS in VpAvatar.js); unknown IDs and load failures fall
+ * back to .vp-avatar-letter. */
+.vp-avatar-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  pointer-events: none;
+  -webkit-user-drag: none;
+}
+
+.vp-avatar-status-dot {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 2px solid var(--bg-main, #ffffff);
+  box-sizing: content-box;
+}
+.vp-avatar-status-dot.status-online { background: var(--vp-status-online); }
+.vp-avatar-status-dot.status-busy {
+  background: var(--vp-status-busy);
+  animation: vp-busy-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes vp-busy-pulse {
+  0%, 100% { opacity: 1;    transform: scale(1); }
+  50%      { opacity: 0.55; transform: scale(0.85); }
+}
+
+/* task-708: typing badge anchored to the avatar itself. Rendered ONLY
+ * when `typing` prop is true AND no `status` is set (status takes
+ * precedence — busy/online dominates over typing).
+ *
+ * Visual: a small translucent capsule pinned to the bottom-right of
+ * the circle (same slot as `.vp-avatar-status-dot`), containing
+ * three bouncing dots that ride the existing `vp-typing-bounce`
+ * keyframes. The avatar is THE persistent surface that signals
+ * which VP is speaking; the badge fades in/out without the avatar
+ * itself disappearing — that's the fix for the "VP avatar gone /
+ * type-dot only" bug.
+ */
+.vp-avatar-typing-badge {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 1.5px;
+  padding: 2px 4px;
+  border-radius: 6px;
+  background: var(--vp-status-busy, #f2994a);
+  border: 1.5px solid var(--bg-main, #ffffff);
+  pointer-events: none;
+  /* Sized so it scales gracefully on the 14 / 20 / 24 / 32 avatar
+   * variants. The capsule itself is small — three 2.5px dots plus
+   * gaps + padding ≈ 14px wide, fits inside the corner slot the
+   * status-dot already uses without overflowing the avatar's
+   * bounding box. */
+}
+.vp-avatar-typing-dot {
+  width: 2.5px;
+  height: 2.5px;
+  border-radius: 50%;
+  background: #ffffff;
+  opacity: 0.5;
+  animation: vp-typing-bounce 1.2s infinite ease-in-out both;
+}
+.vp-avatar-typing-dot:nth-child(1) { animation-delay: -0.32s; }
+.vp-avatar-typing-dot:nth-child(2) { animation-delay: -0.16s; }
+.vp-avatar-typing-dot:nth-child(3) { animation-delay: 0s; }
+
+/* ─── VpBadge ────────────────────────────────────────────── */
+.vp-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.vp-badge.compact { gap: 6px; }
+
+.vp-badge-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.2;
+}
+.vp-badge-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vp-badge-subtitle {
+  font-size: 12px;
+  color: var(--vp-badge-subtitle-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ─── VpLibraryLink (removed in task-343 — VP is now a Settings tab) ─── */
+
+/* ─── VpSpeakerHeader (task-334-ui-b) ─────────────────────
+ * Speaker attribution strip sitting above a VP assistant bubble.
+ *
+ * Design notes (§17 Designer-Diff):
+ *   • Visual weight stays LIGHT — this is metadata, not content. The
+ *     bubble itself should still be the reading focus.
+ *   • No horizontal rule / no border; spacing separates sections
+ *     (consistent with the Yeaft UI rules in CLAUDE.md).
+ *   • Subtitle (role) sits under the name inside VpBadge, matching the
+ *     Slack-style "Name / role" two-liner.
+ *   • Dark-mode uses existing --text-secondary / --vp-status-* vars so
+ *     no new theme tokens are introduced.
+ * ---------------------------------------------------------- */
+.vp-speaker-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 6px;
+  padding: 0;
+  min-width: 0;
+  /* the header itself is metadata — keep its tap surface minimal. */
+  pointer-events: none;
+}
+.vp-speaker-header .vp-badge {
+  /* Re-enable pointer for the badge so future hover-tooltips still work. */
+  pointer-events: auto;
+}
+
+.vp-speaker-state-cause {
+  font-size: 10px;
+  line-height: 1;
+  color: var(--vp-status-busy, #f2994a);
+  cursor: help;
+  pointer-events: auto;
+  flex-shrink: 0;
+  /* Dot glyph is already a solid filled circle; no extra chrome. */
+}
+
+/* task-708: `.vp-typing-row` (standalone pre-turn typing card) and
+ * `.vp-speaker-typing` (inline 3-dot row in VpSpeakerHeader) were
+ * removed. Typing is now an avatar-attached badge — see
+ * `.vp-avatar-typing-badge` above. The `vp-typing-bounce` keyframes
+ * are kept because the new badge dots reuse them. */
+@keyframes vp-typing-bounce {
+  0%, 80%, 100% { transform: scale(0.8); opacity: 0.4; }
+  40% { transform: scale(1.2); opacity: 1; }
+}
+
+.vp-speaker-time {
+  font-size: 11px;
+  color: var(--text-secondary, #6b7280);
+  margin-left: auto;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Dark-mode: the time gets a slightly brighter muted tone so it doesn't
+ * wash out against the bubble. `.vp-speaker-state-cause` already uses
+ * the dark-mode --vp-status-busy token defined above. */
+[data-theme="dark"] .vp-speaker-time {
+  color: var(--text-secondary, #9ca3af);
+}
+
+/* Per-VP turn stop button — small inline stop icon in the speaker header */
+.vp-speaker-stop-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary, #6b7280);
+  cursor: pointer;
+  margin-left: 6px;
+  padding: 0;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+.vp-speaker-stop-btn:hover {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.06));
+  color: var(--text-primary, #374151);
+}
+[data-theme="dark"] .vp-speaker-stop-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary, #e5e7eb);
+}
+
+/* When the speaker header is rendered, tighten the bubble's top padding
+ * just a touch so the name→content vertical rhythm feels intentional
+ * instead of accidentally doubled. */
+.assistant-turn.has-vp-speaker > .turn-content {
+  margin-top: 2px;
+}
+
+/* ================================================================== * VpCrudPanel — task-343 (was VpCrudModal)
+ * The panel lives inside YeaftSettings's .settings-pane; the overlay /
+ * dialog chrome moved to .settings-overlay / .settings-dialog. Only the
+ * list + form body selectors remain (reused verbatim by VpCrudPanel).
+ * ========================================================================= */
+
+.vp-crud-body {
+  padding: 12px 20px 20px;
+  overflow-y: auto;
+}
+
+/* ---------- List view ---------- */
+.vp-crud-list-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
+.vp-crud-empty {
+  text-align: center;
+  padding: 48px 0 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+.vp-crud-empty-text {
+  color: var(--text-secondary);
+  max-width: 420px;
+}
+
+.vp-crud-card-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.vp-crud-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--bg-sidebar);
+}
+
+
+.vp-crud-card-meta {
+  flex: 1;
+  min-width: 0;
+}
+.vp-crud-card-name { font-weight: 600; color: var(--text-primary); }
+.vp-crud-card-id {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.vp-crud-card-role {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+.vp-crud-card-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* ---------- Form view ---------- */
+.vp-crud-form-header {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: var(--text-primary);
+}
+
+.vp-crud-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+
+.vp-crud-field-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.vp-crud-input,
+.vp-crud-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.vp-crud-input:focus,
+.vp-crud-textarea:focus {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+.vp-crud-input::placeholder,
+.vp-crud-textarea::placeholder {
+  color: var(--text-secondary);
+}
+.vp-crud-input:disabled,
+.vp-crud-input[readonly] {
+  background: var(--bg-user-msg);
+  color: var(--text-secondary);
+}
+
+.vp-crud-input.is-error {
+  border-color: var(--error);
+  box-shadow: 0 0 0 3px rgba(214, 93, 93, 0.15);
+}
+.vp-crud-input.is-ok {
+  border-color: var(--success);
+  box-shadow: 0 0 0 3px rgba(74, 158, 92, 0.15);
+}
+
+.vp-crud-textarea {
+  min-height: 140px;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.vp-crud-hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.vp-crud-hint-muted { opacity: .8; }
+
+.vp-crud-field-error {
+  font-size: 12px;
+  color: var(--error);
+}
+.vp-crud-field-ok {
+  font-size: 12px;
+  color: var(--success);
+}
+
+.vp-crud-form-error {
+  color: var(--error);
+  background: rgba(214, 93, 93, 0.08);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+.vp-crud-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+/* ---------- Buttons ----------
+ * Align to Yeaft btn-primary / btn-secondary (chat-modals.css L217-255).
+ * Light mode primary is dark (#171717 bg / #fff color); dark mode primary is
+ * inverted. Secondary is transparent + border.
+ */
+.vp-crud-primary-btn {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border: none;
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s, opacity 0.2s;
+}
+.vp-crud-primary-btn:hover:not(:disabled) { opacity: 0.85; }
+.vp-crud-primary-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.vp-crud-link-btn {
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  padding: 10px 20px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
+}
+.vp-crud-link-btn:hover:not(:disabled) {
+  background: var(--bg-user-msg);
+}
+.vp-crud-link-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.vp-crud-link-btn.is-danger { color: var(--error); }
+.vp-crud-link-btn.is-danger:hover:not(:disabled) {
+  background: rgba(214, 93, 93, 0.08);
+  border-color: var(--error);
+}
+
+/* ─────────────────────────────────────────────────────────────
+ * task-vp-customize: "Stock" badge + read-only detail view.
+ * ───────────────────────────────────────────────────────────── */
+.vp-crud-card-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.vp-crud-stock-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--bg-user-msg);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  border: 1px solid var(--border-subtle, rgba(0,0,0,0.08));
+}
+.vp-crud-stock-badge--compact {
+  /* Detail view header sits the badge next to the title text, so we
+   * push it off the title with a small left margin. The base
+   * `.vp-crud-stock-badge` is already inline-block — this modifier
+   * only adds spacing, not display. */
+  margin-left: 8px;
+}
+.vp-crud-detail .vp-crud-field-readonly {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.vp-crud-readonly-value {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--bg-user-msg);
+  color: var(--text-primary);
+  font-size: 13px;
+  word-break: break-word;
+}
+.vp-crud-readonly-empty {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+.vp-crud-persona-preview {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--bg-user-msg);
+  color: var(--text-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 400px;
+  overflow: auto;
+}
+
+/* ─────────────────────────────────────────────────────────────
+ * task-334-ui-c: VP detail view + clickable badge + hover time
+ * Aligned to Yeaft design tokens (task-336).
+ * ───────────────────────────────────────────────────────────── */
+
+/* Clickable VpBadge — when consumers pass `clickable=true` (VpSpeakerHeader
+ * today, VP library rows in -ui-g tomorrow) the badge renders as a bare
+ * button so it sits flush in surrounding chrome without visible borders. */
+.vp-badge-clickable {
+  background: transparent;
+  border: 0;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  transition: background-color 120ms ease;
+}
+.vp-badge-clickable:hover {
+  background: var(--sidebar-hover);
+}
+.vp-badge-clickable:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 1px;
+}
+
+/* ── Per-turn hover timestamp (deliverable C) ─────────────── */
+.turn-time {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-right: auto;
+  opacity: 0;
+  transition: opacity 120ms ease;
+  pointer-events: none;
+  user-select: none;
+  white-space: nowrap;
+}
+.turn-footer:hover .turn-time,
+.assistant-turn:hover .turn-footer .turn-time,
+.turn-time:focus-visible {
+  opacity: 0.8;
+}
+
+/* ── VP Detail View ───────────────────────────────────────── */
+.vp-detail-view {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 20px 24px;
+  max-width: 720px;
+  margin: 0 auto;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.vp-detail-breadcrumb {
+  display: flex;
+  align-items: center;
+}
+
+.vp-detail-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  padding: 8px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+.vp-detail-back:hover {
+  background: var(--bg-user-msg);
+}
+.vp-detail-back:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 1px;
+}
+
+.vp-detail-body {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.vp-detail-hero {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 12px 0 20px;
+  /* Yeaft 无横向分割线铁律 — 用 padding 创造呼吸感分段，禁用 border-bottom */
+}
+
+.vp-detail-hero-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.vp-detail-name {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.vp-detail-role {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.vp-detail-persona-hash {
+  display: inline-block;
+  margin-top: 4px;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--inline-code-bg);
+  border-radius: 4px;
+  padding: 1px 6px;
+  cursor: help;
+  align-self: flex-start;
+}
+
+.vp-detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.vp-detail-section-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+.vp-detail-traits {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.vp-detail-trait-chip {
+  display: inline-block;
+  padding: 2px 10px;
+  font-size: 12px;
+  border-radius: 999px;
+  background: var(--bg-sidebar);
+  color: var(--text-primary);
+}
+
+.vp-detail-model-hint code {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  background: var(--inline-code-bg);
+  color: var(--text-primary);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.vp-detail-persona {
+  margin: 0;
+  padding: 12px 14px;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow: auto;
+  color: var(--text-primary);
+}
+
+.vp-detail-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.vp-detail-activity {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.vp-detail-activity-row {
+  display: grid;
+  grid-template-columns: 90px 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  transition: background-color 120ms ease;
+  /* Yeaft 无横向分割线铁律 — 用 zebra + hover 背景替代 border-bottom */
+}
+.vp-detail-activity-row:nth-child(even) {
+  background: var(--bg-user-msg-subtle);
+}
+.vp-detail-activity-row:hover {
+  background: var(--sidebar-hover);
+}
+
+.vp-detail-activity-row.kind-diff-updated,
+.vp-detail-activity-row.kind-diff-removed {
+  color: var(--accent-blue);
+  font-style: italic;
+}
+
+.vp-detail-activity-time {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.vp-detail-activity-text {
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vp-detail-activity-reason {
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--inline-code-bg);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.vp-detail-activity-hint,
+.vp-detail-edit-hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.vp-detail-missing {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+/* Mobile responsive — collapse the activity row grid and tighten padding */
+@media (max-width: 640px) {
+  .vp-detail-view { padding: 12px 12px 20px; }
+  .vp-detail-name { font-size: 17px; }
+  .vp-detail-hero { gap: 10px; }
+  .vp-detail-activity-row {
+    grid-template-columns: 1fr;
+    gap: 2px;
+    padding: 6px 0;
+  }
+  .vp-detail-activity-text { white-space: normal; }
+  .vp-detail-persona { max-height: 240px; }
+}
+
+/* ---------------------------------------------------------------------
+ * VpTurnBlock — Slack-style two-column turn block (2026-05-09).
+ *
+ * Two-column grid: avatar gutter | main column (header + body).
+ *
+ *   ┌──────────────────────────────────────────────────────────┐
+ *   │ ┌─avatar──┐  Display Name · 15:42 · 5s     [stop] [^]    │
+ *   │ │ [36px]  │  body (text + tools, full or 6-line tail)    │
+ *   │ └─────────┘                                              │
+ *   └──────────────────────────────────────────────────────────┘
+ *
+ * The header stays visible regardless of collapse state, so "who
+ * replied" never disappears post-streaming. The body is the only
+ * thing the 4-state machine collapses.
+ *
+ * Per CLAUDE.md "No horizontal dividers" — block boundaries are drawn
+ * by spacing alone (margin: 12px 0).
+ * ------------------------------------------------------------------ */
+.vp-turn-block {
+  position: relative;
+  margin: 12px 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.vp-turn-block-main {
+  grid-column: 1;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.vp-turn-block-main-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  padding: 0;
+  margin-bottom: 2px;
+}
+.vp-turn-block-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, #222);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.vp-turn-block-name:hover {
+  text-decoration: underline;
+}
+.vp-turn-block-time,
+.vp-turn-block-sep,
+.vp-turn-block-elapsed {
+  font-size: 11px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.vp-turn-block-time {
+  color: var(--text-secondary, #6b7280);
+  font-variant-numeric: tabular-nums;
+}
+.vp-turn-block-sep {
+  font-family: system-ui;
+  color: var(--text-tertiary, var(--text-secondary, #9ca3af));
+  user-select: none;
+}
+.vp-turn-block-elapsed {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-tertiary, var(--text-secondary, #9ca3af));
+  /* Subtle 2s opacity pulse so the live ticker reads as "active" without
+     being loud. Independent of the 1Hz nowMs ref — the ref drives the
+     numeric updates, this animation just gives the digits a heartbeat. */
+  animation: vp-turn-elapsed-pulse 2s ease-in-out infinite;
+}
+@keyframes vp-turn-elapsed-pulse {
+  0%, 100% { opacity: 0.85; }
+  50%      { opacity: 0.55; }
+}
+/* Spacer pushes stop / toggle to the right edge of the main column. */
+.vp-turn-block-spacer {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.vp-turn-block-stop,
+.vp-turn-block-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted, var(--text-secondary, #888));
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+.vp-turn-block-stop:hover,
+.vp-turn-block-stop:focus-visible {
+  background: rgba(220, 38, 38, 0.12);
+  color: #dc2626;
+  outline: none;
+}
+.vp-turn-block-toggle:hover,
+.vp-turn-block-toggle:focus-visible {
+  background: var(--surface-hover, rgba(0, 0, 0, 0.05));
+  color: var(--text-primary, var(--text-secondary, #222));
+  outline: none;
+}
+
+/* Body: nested AssistantTurn or compact tail. Both inherit the main
+   column width — no extra indent (the avatar gutter already gives the
+   eye-line). */
+.vp-turn-block-body-expanded,
+.vp-turn-block-compact {
+  margin-top: 2px;
+}
+
+.vp-turn-block-compact {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 2px 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary, #222);
+}
+.vp-turn-block-compact-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  /* Last-N-lines view: render plain text (no markdown) so streaming
+     mid-formatting doesn't flicker. The expanded body still gets full
+     markdown via AssistantTurn. */
+}
+.vp-turn-block-compact-truncated {
+  /* Soft top fade hints there's more above when expanded. */
+  position: relative;
+  padding-top: 2px;
+}
+.vp-turn-block-compact-truncated::before {
+  content: '⋯';
+  display: block;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-tertiary, var(--text-secondary, #9ca3af));
+  margin-bottom: 2px;
+}
+.vp-turn-block-compact-empty {
+  font-size: 12px;
+  color: var(--text-tertiary, var(--text-secondary, #9ca3af));
+  font-style: italic;
+}
+.vp-turn-block-compact-tool {
+  /* Single-tool preview — let ToolLine carry its own chrome. */
+  margin-top: 2px;
+}
+
+/* Dark-mode parity: bump elapsed/time contrast slightly. */
+[data-theme="dark"] .vp-turn-block-name {
+  color: var(--text-primary, #f9fafb);
+}
+[data-theme="dark"] .vp-turn-block-elapsed,
+[data-theme="dark"] .vp-turn-block-time {
+  color: var(--text-tertiary, var(--text-secondary, #9ca3af));
+}
+[data-theme="dark"] .vp-turn-block-stop:hover,
+[data-theme="dark"] .vp-turn-block-stop:focus-visible {
+  background: rgba(248, 113, 113, 0.18);
+  color: #f87171;
+}
+
+/* ─── Issue C (2026-05-12) — UserTurnBlock + UserAvatar ──────────────
+   IM-style human row in the Yeaft group view. Mirror of .vp-turn-block:
+   VP turns sit on the left (gutter 36px, content 1fr); human turns sit
+   on the right (content 1fr, gutter 36px). Same 36px avatar size on
+   both sides so the eye-line stays even down the conversation. The
+   inner MessageItem keeps its own bubble styling (.message.user is
+   already `align-items: flex-end` so the content right-aligns inside
+   the left grid cell). */
+.user-turn-block {
+  position: relative;
+  margin: 12px 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1fr 36px;
+  column-gap: 10px;
+}
+.user-turn-block-main {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+.user-turn-block-main > .message.user {
+  /* MessageItem renders the bubble as .message.user; cap its width so the
+     long-text wrap looks like a chat bubble (not full-row paragraph). */
+  max-width: 100%;
+  margin: 0;
+}
+.user-turn-block-avatar {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 2px;
+}
+
+/* UserAvatar — circular initial badge. The accent color is intentionally
+   distinct from VP palette so the eye reads "human" at a glance. We use
+   the theme accent so dark/light parity comes for free. */
+.user-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent, #6366f1) 0%, var(--accent-blue, #2563eb) 100%);
+  color: #fff;
+  font-weight: 700;
+  font-family: inherit;
+  user-select: none;
+  line-height: 1;
+  flex-shrink: 0;
+  overflow: hidden;
+  box-shadow:
+    inset 0 1px 0 var(--vp-avatar-highlight),
+    inset 0 -1px 0 var(--vp-avatar-shade),
+    0 0 0 1px var(--vp-avatar-ring);
+  border: 1px solid var(--vp-avatar-border);
+}
+.user-avatar-letter {
+  display: inline-block;
+  line-height: 1;
+}
+/* Illustrated portrait layer for the human side. Mirrors .vp-avatar-img
+ * so the IM thread reads as a single visual world. Falls back to
+ * .user-avatar-letter on load failure (see UserAvatar.js onImgError). */
+.user-avatar-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  pointer-events: none;
+  -webkit-user-drag: none;
+}
+[data-theme="dark"] .user-avatar {
+  background: linear-gradient(135deg, var(--accent, #818cf8) 0%, var(--accent-blue, #60a5fa) 100%);
+  color: #fff;
+}

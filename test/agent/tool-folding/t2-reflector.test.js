@@ -6,7 +6,7 @@
  * with the resolved markdown.
  */
 import { describe, it, expect } from 'vitest';
-import { runT2Reflection } from '../../../agent/unify/tool-folding/t2-reflector.js';
+import { runT2Reflection } from '../../../agent/yeaft/tool-folding/t2-reflector.js';
 
 describe('runT2Reflection — async behaviour', () => {
   it('returns a promise that resolves to { content, durationMs }', async () => {

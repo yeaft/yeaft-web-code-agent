@@ -1,5 +1,5 @@
 /**
- * UserTurnBlock — IM-style human-side row for the Unify group-chat view.
+ * UserTurnBlock — IM-style human-side row for the Yeaft group-chat view.
  * The mirror image of VpTurnBlock: VP turns sit on the LEFT with the
  * avatar in a 36px gutter on the left and the content right-aligned to
  * the right of the gutter; UserTurnBlock puts the content column on the
@@ -22,7 +22,7 @@
  *   │ message body (right-aligned bubble)      │ avatar │
  *   └──────────────────────────────────────────┴────────┘
  *
- * Mounted only by MessageList in Unify mode when the active view is a
+ * Mounted only by MessageList in Yeaft mode when the active view is a
  * group conversation. Chat-mode user messages still go straight to
  * MessageItem (no IM-style frame, no avatar).
  *
@@ -50,7 +50,7 @@ export default {
   `,
   setup() {
     const t = Vue.inject('t', null);
-    const avatarLabel = Vue.computed(() => (t ? t('unify.user.youLabel') : 'You'));
+    const avatarLabel = Vue.computed(() => (t ? t('yeaft.user.youLabel') : 'You'));
     return { avatarLabel };
   },
 };

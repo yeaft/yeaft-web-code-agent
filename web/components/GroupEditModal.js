@@ -3,7 +3,7 @@
  *
  * Modal replacement for the native window.prompt() / window.confirm() used
  * by GroupSelector for rename/delete. Styled after VpCrudModal's overlay
- * pattern so the unify surface is coherent.
+ * pattern so the yeaft surface is coherent.
  *
  * Props:
  *   mode     — 'rename' | 'delete'
@@ -47,18 +47,18 @@ export default {
     },
     titleKey() {
       return this.isRename
-        ? 'unify.group.editModal.renameTitle'
-        : 'unify.group.editModal.deleteTitle';
+        ? 'yeaft.group.editModal.renameTitle'
+        : 'yeaft.group.editModal.deleteTitle';
     },
     bodyKey() {
       return this.isRename
-        ? 'unify.group.editModal.renameBody'
-        : 'unify.group.editModal.deleteBody';
+        ? 'yeaft.group.editModal.renameBody'
+        : 'yeaft.group.editModal.deleteBody';
     },
     submitKey() {
       return this.isRename
-        ? 'unify.group.editModal.renameSubmit'
-        : 'unify.group.editModal.deleteSubmit';
+        ? 'yeaft.group.editModal.renameSubmit'
+        : 'yeaft.group.editModal.deleteSubmit';
     },
   },
   mounted() {
@@ -107,7 +107,7 @@ export default {
             type="button"
             class="group-edit-close"
             @click="requestClose"
-            :aria-label="tr('unify.group.editModal.close')"
+            :aria-label="tr('yeaft.group.editModal.close')"
           >×</button>
         </header>
 
@@ -115,7 +115,7 @@ export default {
           <p class="group-edit-message">{{ tr(bodyKey, { name: groupLabel }) }}</p>
 
           <label v-if="isRename" class="group-edit-field">
-            <span class="group-edit-field-label">{{ tr('unify.group.editModal.newNameLabel') }}</span>
+            <span class="group-edit-field-label">{{ tr('yeaft.group.editModal.newNameLabel') }}</span>
             <input
               ref="nameInput"
               type="text"
@@ -129,7 +129,7 @@ export default {
 
           <div class="group-edit-actions">
             <button type="button" class="group-edit-btn" @click="requestClose" :disabled="submitted">
-              {{ tr('unify.group.editModal.cancel') }}
+              {{ tr('yeaft.group.editModal.cancel') }}
             </button>
             <button
               type="submit"

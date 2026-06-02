@@ -2,7 +2,7 @@
  * VpCrudPanel — task-343.
  *
  * Extracted from VpCrudModal body (no overlay / no modal chrome) so the VP
- * library can live as a tab inside UnifySettings. All CRUD logic is kept
+ * library can live as a tab inside YeaftSettings. All CRUD logic is kept
  * verbatim: list view (card grid), create form, edit form, delete confirm,
  * synchronous onBlur vpId validation via web/utils/vp-id-validator.js.
  *
@@ -20,16 +20,16 @@ export default {
       <!-- LIST VIEW -->
       <div v-if="view === 'list'" class="vp-crud-body vp-crud-list">
         <div v-if="vpList.length === 0" class="vp-crud-empty">
-          <span class="vp-crud-empty-text">{{ $t('unify.vp.crud.empty') }}</span>
+          <span class="vp-crud-empty-text">{{ $t('yeaft.vp.crud.empty') }}</span>
           <button class="vp-crud-primary-btn" type="button" @click="startCreate">
-            {{ $t('unify.vp.createFirst') }}
+            {{ $t('yeaft.vp.createFirst') }}
           </button>
         </div>
 
         <template v-else>
           <div class="vp-crud-list-toolbar">
             <button class="vp-crud-primary-btn" type="button" @click="startCreate">
-              {{ $t('unify.vp.crud.addNew') }}
+              {{ $t('yeaft.vp.crud.addNew') }}
             </button>
           </div>
           <div class="vp-crud-card-grid">
@@ -37,8 +37,8 @@ export default {
               <div class="vp-crud-card-meta">
                 <div class="vp-crud-card-name" :style="{ color: vpTextColorFor(vp.vpId) }">
                   <span>{{ vp.displayName || vp.vpId }}</span>
-                  <span v-if="vp.isStock" class="vp-crud-stock-badge" :title="$t('unify.vp.crud.stockReadOnly')">
-                    {{ $t('unify.vp.crud.stockBadge') }}
+                  <span v-if="vp.isStock" class="vp-crud-stock-badge" :title="$t('yeaft.vp.crud.stockReadOnly')">
+                    {{ $t('yeaft.vp.crud.stockBadge') }}
                   </span>
                 </div>
                 <div class="vp-crud-card-id">@{{ vp.vpId }}</div>
@@ -51,25 +51,25 @@ export default {
                   @click="startView(vp)"
                   :disabled="busy"
                 >
-                  {{ $t('unify.vp.crud.viewPrompt') }}
+                  {{ $t('yeaft.vp.crud.viewPrompt') }}
                 </button>
                 <button
                   class="vp-crud-link-btn"
                   type="button"
                   @click="startEdit(vp)"
                   :disabled="busy || vp.isStock"
-                  :title="vp.isStock ? $t('unify.vp.crud.stockReadOnly') : ''"
+                  :title="vp.isStock ? $t('yeaft.vp.crud.stockReadOnly') : ''"
                 >
-                  {{ $t('unify.vp.crud.edit') }}
+                  {{ $t('yeaft.vp.crud.edit') }}
                 </button>
                 <button
                   class="vp-crud-link-btn is-danger"
                   type="button"
                   @click="confirmDelete(vp)"
                   :disabled="busy || vp.isStock"
-                  :title="vp.isStock ? $t('unify.vp.crud.stockReadOnly') : ''"
+                  :title="vp.isStock ? $t('yeaft.vp.crud.stockReadOnly') : ''"
                 >
-                  {{ $t('unify.vp.crud.delete') }}
+                  {{ $t('yeaft.vp.crud.delete') }}
                 </button>
               </div>
             </div>
@@ -80,47 +80,47 @@ export default {
       <!-- DETAIL (VIEW PROMPT) VIEW — read-only -->
       <div v-else-if="view === 'detail'" class="vp-crud-body vp-crud-detail">
         <div class="vp-crud-form-header">
-          <span>{{ $t('unify.vp.crud.view.title') }}</span>
+          <span>{{ $t('yeaft.vp.crud.view.title') }}</span>
           <span v-if="detail && detail.isStock" class="vp-crud-stock-badge vp-crud-stock-badge--compact">
-            {{ $t('unify.vp.crud.stockBadge') }}
+            {{ $t('yeaft.vp.crud.stockBadge') }}
           </span>
         </div>
 
-        <div v-if="detailLoading" class="vp-crud-empty-text">{{ $t('unify.vp.crud.saving') }}</div>
+        <div v-if="detailLoading" class="vp-crud-empty-text">{{ $t('yeaft.vp.crud.saving') }}</div>
         <template v-else-if="detail">
           <div class="vp-crud-field vp-crud-field-readonly">
-            <span class="vp-crud-field-label">{{ $t('unify.vp.crud.form.vpId') }}</span>
+            <span class="vp-crud-field-label">{{ $t('yeaft.vp.crud.form.vpId') }}</span>
             <div class="vp-crud-readonly-value">@{{ detail.vpId }}</div>
           </div>
           <div class="vp-crud-field vp-crud-field-readonly">
-            <span class="vp-crud-field-label">{{ $t('unify.vp.crud.form.displayName') }}</span>
+            <span class="vp-crud-field-label">{{ $t('yeaft.vp.crud.form.displayName') }}</span>
             <div class="vp-crud-readonly-value">{{ detail.displayName || detail.vpId }}</div>
           </div>
           <div class="vp-crud-field vp-crud-field-readonly" v-if="detail.role">
-            <span class="vp-crud-field-label">{{ $t('unify.vp.crud.form.role') }}</span>
+            <span class="vp-crud-field-label">{{ $t('yeaft.vp.crud.form.role') }}</span>
             <div class="vp-crud-readonly-value">{{ detail.role }}</div>
           </div>
           <div class="vp-crud-field vp-crud-field-readonly" v-if="detail.traits && detail.traits.length">
-            <span class="vp-crud-field-label">{{ $t('unify.vp.crud.form.traits') }}</span>
+            <span class="vp-crud-field-label">{{ $t('yeaft.vp.crud.form.traits') }}</span>
             <div class="vp-crud-readonly-value">{{ detail.traits.join(', ') }}</div>
           </div>
           <div class="vp-crud-field vp-crud-field-readonly" v-if="detail.modelHint">
-            <span class="vp-crud-field-label">{{ $t('unify.vp.crud.form.modelHint') }}</span>
+            <span class="vp-crud-field-label">{{ $t('yeaft.vp.crud.form.modelHint') }}</span>
             <div class="vp-crud-readonly-value">{{ detail.modelHint }}</div>
           </div>
           <div class="vp-crud-field vp-crud-field-readonly">
-            <span class="vp-crud-field-label">{{ $t('unify.vp.crud.form.persona') }}</span>
+            <span class="vp-crud-field-label">{{ $t('yeaft.vp.crud.form.persona') }}</span>
             <pre v-if="detail.persona" class="vp-crud-persona-preview">{{ detail.persona }}</pre>
             <div v-else class="vp-crud-readonly-value vp-crud-readonly-empty">
-              {{ $t('unify.vp.crud.view.personaEmpty') }}
+              {{ $t('yeaft.vp.crud.view.personaEmpty') }}
             </div>
           </div>
         </template>
-        <div v-else class="vp-crud-form-error">{{ detailError || $t('unify.vp.idError.unknown') }}</div>
+        <div v-else class="vp-crud-form-error">{{ detailError || $t('yeaft.vp.idError.unknown') }}</div>
 
         <div class="vp-crud-form-actions">
           <button type="button" class="vp-crud-link-btn" @click="returnToList">
-            {{ $t('unify.vp.crud.view.back') }}
+            {{ $t('yeaft.vp.crud.view.back') }}
           </button>
           <button
             v-if="detail && !detail.isStock"
@@ -129,7 +129,7 @@ export default {
             @click="editFromDetail"
             :disabled="busy"
           >
-            {{ $t('unify.vp.crud.view.editFromHere') }}
+            {{ $t('yeaft.vp.crud.view.editFromHere') }}
           </button>
         </div>
       </div>
@@ -137,11 +137,11 @@ export default {
       <!-- FORM VIEW -->
       <form v-else class="vp-crud-body vp-crud-form" @submit.prevent="onSubmit" novalidate>
         <div class="vp-crud-form-header">
-          <span>{{ editing ? $t('unify.vp.crud.form.update') : $t('unify.vp.crud.form.create') }}</span>
+          <span>{{ editing ? $t('yeaft.vp.crud.form.update') : $t('yeaft.vp.crud.form.create') }}</span>
         </div>
 
         <label class="vp-crud-field">
-          <span class="vp-crud-field-label">{{ $t('unify.vp.crud.form.vpId') }}</span>
+          <span class="vp-crud-field-label">{{ $t('yeaft.vp.crud.form.vpId') }}</span>
           <input
             type="text"
             v-model.trim="form.vpId"
@@ -156,61 +156,61 @@ export default {
             :class="{ 'is-error': idStatus === 'error', 'is-ok': idStatus === 'ok' }"
             ref="vpIdInput"
           />
-          <span class="vp-crud-hint">{{ $t('unify.vp.crud.form.vpId.tooltip') }}</span>
+          <span class="vp-crud-hint">{{ $t('yeaft.vp.crud.form.vpId.tooltip') }}</span>
           <span v-if="idStatus === 'error' && idErrorKey" class="vp-crud-field-error">
             {{ $t(idErrorKey) }}
           </span>
           <span v-else-if="idStatus === 'ok'" class="vp-crud-field-ok">
-            ✓ {{ $t('unify.vp.crud.form.ok') }}
+            ✓ {{ $t('yeaft.vp.crud.form.ok') }}
           </span>
           <span v-else-if="editing" class="vp-crud-hint vp-crud-hint-muted">
-            {{ $t('unify.vp.crud.form.idLocked') }}
+            {{ $t('yeaft.vp.crud.form.idLocked') }}
           </span>
         </label>
 
         <label class="vp-crud-field">
-          <span class="vp-crud-field-label">{{ $t('unify.vp.crud.form.displayName') }}</span>
+          <span class="vp-crud-field-label">{{ $t('yeaft.vp.crud.form.displayName') }}</span>
           <input type="text" v-model.trim="form.displayName" class="vp-crud-input" maxlength="80" />
         </label>
 
         <label class="vp-crud-field">
-          <span class="vp-crud-field-label">{{ $t('unify.vp.crud.form.role') }}</span>
+          <span class="vp-crud-field-label">{{ $t('yeaft.vp.crud.form.role') }}</span>
           <input
             type="text"
             v-model.trim="form.role"
             class="vp-crud-input"
-            :placeholder="$t('unify.vp.crud.form.rolePlaceholder')"
+            :placeholder="$t('yeaft.vp.crud.form.rolePlaceholder')"
             maxlength="120"
           />
         </label>
 
         <label class="vp-crud-field">
-          <span class="vp-crud-field-label">{{ $t('unify.vp.crud.form.traits') }}</span>
+          <span class="vp-crud-field-label">{{ $t('yeaft.vp.crud.form.traits') }}</span>
           <input
             type="text"
             v-model="form.traitsRaw"
             class="vp-crud-input"
             maxlength="200"
           />
-          <span class="vp-crud-hint">{{ $t('unify.vp.crud.form.traitsHint') }}</span>
+          <span class="vp-crud-hint">{{ $t('yeaft.vp.crud.form.traitsHint') }}</span>
         </label>
 
         <label class="vp-crud-field">
-          <span class="vp-crud-field-label">{{ $t('unify.vp.crud.form.modelHint') }}</span>
+          <span class="vp-crud-field-label">{{ $t('yeaft.vp.crud.form.modelHint') }}</span>
           <select v-model="form.modelHint" class="vp-crud-input">
-            <option value="">{{ $t('unify.vp.crud.form.modelHint.none') }}</option>
-            <option value="primary">{{ $t('unify.vp.crud.form.modelHint.primary') }}</option>
-            <option value="fast">{{ $t('unify.vp.crud.form.modelHint.fast') }}</option>
+            <option value="">{{ $t('yeaft.vp.crud.form.modelHint.none') }}</option>
+            <option value="primary">{{ $t('yeaft.vp.crud.form.modelHint.primary') }}</option>
+            <option value="fast">{{ $t('yeaft.vp.crud.form.modelHint.fast') }}</option>
           </select>
         </label>
 
         <label class="vp-crud-field">
-          <span class="vp-crud-field-label">{{ $t('unify.vp.crud.form.persona') }}</span>
+          <span class="vp-crud-field-label">{{ $t('yeaft.vp.crud.form.persona') }}</span>
           <textarea
             v-model="form.persona"
             class="vp-crud-textarea"
             rows="8"
-            :placeholder="$t('unify.vp.crud.form.personaPlaceholder')"
+            :placeholder="$t('yeaft.vp.crud.form.personaPlaceholder')"
           ></textarea>
         </label>
 
@@ -218,10 +218,10 @@ export default {
 
         <div class="vp-crud-form-actions">
           <button type="button" class="vp-crud-link-btn" @click="returnToList" :disabled="busy">
-            {{ $t('unify.vp.crud.form.cancel') }}
+            {{ $t('yeaft.vp.crud.form.cancel') }}
           </button>
           <button type="submit" class="vp-crud-primary-btn" :disabled="!canSubmit">
-            {{ busy ? $t('unify.vp.crud.saving') : $t('unify.vp.crud.form.submit') }}
+            {{ busy ? $t('yeaft.vp.crud.saving') : $t('yeaft.vp.crud.form.submit') }}
           </button>
         </div>
       </form>
@@ -379,7 +379,7 @@ export default {
             : ((res && res.error && res.error.message) || code);
         }
       } catch (err) {
-        this.detailError = (err && err.message) || this.$t('unify.vp.idError.unknown');
+        this.detailError = (err && err.message) || this.$t('yeaft.vp.idError.unknown');
       } finally {
         this.detailLoading = false;
         this.busy = false;
@@ -406,7 +406,7 @@ export default {
       // Defence-in-depth: stock VPs cannot be deleted from the UI.
       if (vp && vp.isStock) return;
       const label = vp.displayName || vp.vpId;
-      const prompt = this.$t('unify.vp.crud.deleteConfirm').replace('{name}', label);
+      const prompt = this.$t('yeaft.vp.crud.deleteConfirm').replace('{name}', label);
       if (typeof window !== 'undefined' && window.confirm && !window.confirm(prompt)) return;
       this.busy = true;
       try {
@@ -415,7 +415,7 @@ export default {
           const code = (res.error && res.error.code) || 'unknown';
           const key = i18nKeyForReason(code);
           const translated = this.$t(key);
-          this.formError = this.$t('unify.vp.crud.deleteFailed').replace(
+          this.formError = this.$t('yeaft.vp.crud.deleteFailed').replace(
             '{error}',
             translated && translated !== key ? translated : ((res.error && res.error.message) || code),
           );
@@ -479,7 +479,7 @@ export default {
           const code = (res.error && res.error.code) || 'unknown';
           const key = i18nKeyForReason(code);
           const translated = this.$t(key);
-          this.formError = this.$t('unify.vp.crud.saveFailed').replace(
+          this.formError = this.$t('yeaft.vp.crud.saveFailed').replace(
             '{error}',
             translated && translated !== key ? translated : ((res.error && res.error.message) || code),
           );
@@ -518,7 +518,7 @@ export default {
         // with a translated notice. Avoid stomping a more specific error
         // that the user is currently looking at.
         if (this.view === 'detail' || this.view === 'form') {
-          this.returnToList(this.$t('unify.vp.crud.view.removed'));
+          this.returnToList(this.$t('yeaft.vp.crud.view.removed'));
         }
       },
     },

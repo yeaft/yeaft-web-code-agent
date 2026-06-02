@@ -132,7 +132,7 @@ export default {
     const store = Pinia.useChatStore();
     const authStore = Pinia.useAuthStore();
     const vpStore = Pinia.useVpStore();
-    // task-338-F4: resolve groups store for Unify group-chat dispatch routing.
+    // task-338-F4: resolve groups store for Yeaft group-chat dispatch routing.
     const groupsStore = (Pinia.useGroupsStore ? Pinia.useGroupsStore() : null);
     const inputText = Vue.ref('');
     const inputRef = Vue.ref(null);
@@ -208,18 +208,18 @@ export default {
     const getExpertLabel = (sel) => getSelectionLabel(sel, store.customExpertRoles);
 
     // ★ task-334j: VP @ autocomplete state (mutually exclusive with expert autocomplete).
-    // Gating: show VP autocomplete when in Unify multi-VP context; otherwise expert.
+    // Gating: show VP autocomplete when in Yeaft multi-VP context; otherwise expert.
     const showVpAutocomplete = Vue.ref(false);
     const vpSelectedIndex = Vue.ref(0);
 
-    const isInUnifyGroupContext = () => {
-      // task-338-F5: decouple gate from VP list hydration state so Unify
+    const isInYeaftGroupContext = () => {
+      // task-338-F5: decouple gate from VP list hydration state so Yeaft
       // view always routes `@` to VP candidates. Empty-state rendering is
       // handled downstream by VpMentionAutocomplete. But keep the gate tied
       // to the actual send surface: Chat mode must stay on the expert path,
-      // while group/Unify mode alone gets VP mentions. This prevents a mode
+      // while group/Yeaft mode alone gets VP mentions. This prevents a mode
       // check from making ordinary Chat messages follow group semantics.
-      return store.currentView === 'unify' && !!store.unifyAgentId;
+      return store.currentView === 'yeaft' && !!store.yeaftAgentId;
     };
 
     const vpMentionQuery = Vue.computed(() => {
@@ -230,16 +230,16 @@ export default {
     });
 
     // Group-scoped `@` autocomplete: only roster VPs are mentionable.
-    // Active-group resolution mirrors UnifyPage's middle-column resolver
+    // Active-group resolution mirrors YeaftPage's middle-column resolver
     // (filter wins, then groupsStore.activeGroupId, then no group).
     //
-    // TODO(arch): this `unifyActiveGroupFilter || activeGroupId` chain is
-    //   duplicated in UnifyPage.js (timeline + topbar) and MessageList.js
+    // TODO(arch): this `yeaftActiveGroupFilter || activeGroupId` chain is
+    //   duplicated in YeaftPage.js (timeline + topbar) and MessageList.js
     //   (announcement bar). Consolidate into a `groupsStore.activeGroupIdResolved`
     //   getter and migrate all four call sites in a follow-up PR.
     const mentionVpCandidates = Vue.computed(() => {
       if (!groupsStore) return vpStore.vpList || [];
-      const activeGroupId = store.unifyActiveGroupFilter || groupsStore.activeGroupId || null;
+      const activeGroupId = store.yeaftActiveGroupFilter || groupsStore.activeGroupId || null;
       return selectMentionCandidates(vpStore.vpList, groupsStore.groups?.[activeGroupId]);
     });
 
@@ -276,12 +276,12 @@ export default {
     });
 
     // feat-vp-list-ui-polish: external mention API. Parents that need to
-    // inject an `@<vpId> ` token into the draft (e.g. UnifyPage when its
+    // inject an `@<vpId> ` token into the draft (e.g. YeaftPage when its
     // VP list pane gets clicked) call this via a template ref. Keeping
-    // the mechanism imperative — and the Unify-specific knowledge
+    // the mechanism imperative — and the Yeaft-specific knowledge
     // (`@<vpId>` syntax, which view it lives in) out of this generic
     // component — avoids a reverse dependency where the shared input
-    // would need to know about Unify state. A leading space is added so
+    // would need to know about Yeaft state. A leading space is added so
     // the boundary regex in parseMentions accepts the mention; trailing
     // space gives the user a clean place to keep typing.
     const appendMention = (vpId) => {
@@ -347,7 +347,7 @@ export default {
       const hasText = !!inputText.value.trim();
       const hasAttachments = attachments.value.length > 0;
 
-      // Custom send mode (e.g. Unify page): simplified check — no conversation needed
+      // Custom send mode (e.g. Yeaft page): simplified check — no conversation needed
       if (isCustomSend.value) {
         const notUploading = !uploading.value && attachments.value.every(a => a.fileId);
         return (hasText || hasAttachments) && notUploading;
@@ -386,7 +386,7 @@ export default {
       if (atIdx !== -1 && !showAutocomplete.value) {
         const charBefore = atIdx > 0 ? rawText[atIdx - 1] : ' ';
         if (charBefore === ' ' || charBefore === '\n' || atIdx === 0) {
-          if (isInUnifyGroupContext()) {
+          if (isInYeaftGroupContext()) {
             showVpAutocomplete.value = true;
             vpSelectedIndex.value = 0;
             showExpertAutocomplete.value = false;
@@ -577,10 +577,10 @@ export default {
         return;
       }
 
-      // Build attachmentInfos once — every send branch (chat / unify
-      // group) wants the same shape. Previously the Unify branches
+      // Build attachmentInfos once — every send branch (chat / yeaft
+      // group) wants the same shape. Previously the Yeaft branches
       // `return`ed before this, silently dropping the user's selected
-      // files. Now the store-side helpers (`sendUnify*`) know how to
+      // files. Now the store-side helpers (`sendYeaft*`) know how to
       // forward them; we just need to make sure the array is available
       // before the dispatch.
       const attachmentInfos = attachments.value
@@ -593,22 +593,22 @@ export default {
           mimeType: a.file?.type || ''
         }));
 
-      // Unify group-chat branch — Unify is conceptually a single conversation
-      // backed by a group (default: grp_default). All Unify turns go through
+      // Yeaft group-chat branch — Yeaft is conceptually a single conversation
+      // backed by a group (default: grp_default). All Yeaft turns go through
       // the group path so the agent builds a coordinator and wires
       // ctx.router for the per-VP Engine query; otherwise `route_forward`
       // would bomb out with `router_unavailable` the moment a VP @-mentions
       // another VP. There is no longer a no-group backstop — the legacy
-      // `unify_chat` WS frame and `handleUnifyChat` agent handler were
+      // `yeaft_chat` WS frame and `handleYeaftChat` agent handler were
       // removed in v0.1.672.
       //
       // PR #721: also fire when text is empty but attachments are present
       // (image-only send). The store helper synthesizes a placeholder
       // text so the agent path runs end-to-end.
-      if (store.currentView === 'unify' && (trimmed || attachmentInfos.length > 0)) {
+      if (store.currentView === 'yeaft' && (trimmed || attachmentInfos.length > 0)) {
         const mentions = parseMentions(trimmed).mentions;
-        const groupId = store.unifyActiveGroupFilter || groupsStore?.activeGroupId || 'grp_default';
-        store.sendUnifyGroupChat({
+        const groupId = store.yeaftActiveGroupFilter || groupsStore?.activeGroupId || 'grp_default';
+        store.sendYeaftGroupChat({
           groupId,
           text: trimmed,
           mentions,
@@ -776,7 +776,7 @@ export default {
       vpMentionQuery,
       mentionVpCandidates,
       selectVpMention,
-      // feat-vp-list-ui-polish: imperative API for parents (UnifyPage)
+      // feat-vp-list-ui-polish: imperative API for parents (YeaftPage)
       // to append an `@<vpId> ` token to the draft. Exposed via the
       // setup return so it shows up on the template ref.
       appendMention,

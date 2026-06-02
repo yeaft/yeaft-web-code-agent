@@ -2,7 +2,7 @@
  * vp.js — Virtual Person (VP) store. task-334-ui-a §3.1 + 334h live-diff.
  *
  * Receives `vp_snapshot` (one-shot) plus `vp_updated` / `vp_removed` live
- * diff events from the agent VpLoader (see agent/unify/vp/vp-bridge.js).
+ * diff events from the agent VpLoader (see agent/yeaft/vp/vp-bridge.js).
  *
  * Per ruling §1 (D1=(b)): wire-format payloads from agent already use
  * `vpId / displayName`; this store consumes them as-is.
@@ -21,8 +21,8 @@
 const { defineStore } = Pinia;
 
 function projectDreamDebugEvent(chat, event) {
-  if (!chat || typeof chat.handleUnifyOutput !== 'function' || !event) return;
-  chat.handleUnifyOutput({ event });
+  if (!chat || typeof chat.handleYeaftOutput !== 'function' || !event) return;
+  chat.handleYeaftOutput({ event });
 }
 
 // 12 modern default avatar motifs. The mapping is deterministic:
@@ -124,7 +124,7 @@ export const useVpStore = defineStore('vp', {
     lastChange: null,
     /**
      * R6 G3 — per-VP dream activity state. Populated from
-     * unify_dream_status (status='running') and unify_dream_result
+     * yeaft_dream_status (status='running') and yeaft_dream_result
      * (status='success' | 'error') events. Shape:
      *   {
      *     status: 'idle'|'running'|'success'|'error',
@@ -139,7 +139,7 @@ export const useVpStore = defineStore('vp', {
     /**
      * v0.1.754 — per-GROUP dream activity state. Same shape as
      * `dreamStatus` but keyed by groupId instead of vpId. Populated
-     * from unify_dream_status / unify_dream_result events that carry a
+     * from yeaft_dream_status / yeaft_dream_result events that carry a
      * `groupId` field (i.e. triggered via `triggerGroupDream(groupId)`
      * rather than the legacy per-VP path).
      * @type {Record<string, object>}
@@ -267,9 +267,9 @@ export const useVpStore = defineStore('vp', {
 
     // ── R6 G3: Dream trigger + status ────────────────────────────
     /**
-     * Send unify_dream_trigger over WS. Optimistically marks the VP as
-     * 'running'; the agent will subsequently emit unify_dream_status
-     * (running) and unify_dream_result (success|error).
+     * Send yeaft_dream_trigger over WS. Optimistically marks the VP as
+     * 'running'; the agent will subsequently emit yeaft_dream_status
+     * (running) and yeaft_dream_result (success|error).
      *
      * @param {string} vpId
      */
@@ -287,7 +287,7 @@ export const useVpStore = defineStore('vp', {
         ? window.Pinia.useChatStore()
         : null;
       if (chat && typeof chat.sendWsMessage === 'function') {
-        chat.sendWsMessage({ type: 'unify_dream_trigger', vpId });
+        chat.sendWsMessage({ type: 'yeaft_dream_trigger', vpId });
       }
     },
 
@@ -295,10 +295,10 @@ export const useVpStore = defineStore('vp', {
      * Per-group manual dream trigger (added v0.1.754 to give users a
      * way to kick the dream scheduler after seeing the Resident layer
      * stuck on a group's bootstrap seed). Sends
-     * `{ type: 'unify_dream_trigger', groupId }` over WS; the agent's
-     * `handleUnifyDreamTrigger` routes to `triggerDreamForScopes(['group/X'])`
+     * `{ type: 'yeaft_dream_trigger', groupId }` over WS; the agent's
+     * `handleYeaftDreamTrigger` routes to `triggerDreamForScopes(['group/X'])`
      * so unrelated groups are not processed. Status flows back via
-     * unify_dream_status / unify_dream_result events tagged with
+     * yeaft_dream_status / yeaft_dream_result events tagged with
      * `groupId` instead of `vpId`.
      *
      * @param {string} groupId
@@ -328,7 +328,7 @@ export const useVpStore = defineStore('vp', {
       });
       if (!chat || typeof chat.sendWsMessage !== 'function') {
         projectDreamDebugEvent(chat, {
-          type: 'unify_dream_result',
+          type: 'yeaft_dream_result',
           groupId,
           success: false,
           skipped: true,
@@ -338,12 +338,12 @@ export const useVpStore = defineStore('vp', {
         });
         return;
       }
-      const frame = { type: 'unify_dream_trigger', groupId };
-      if (chat.unifyAgentId) frame.agentId = chat.unifyAgentId;
+      const frame = { type: 'yeaft_dream_trigger', groupId };
+      if (chat.yeaftAgentId) frame.agentId = chat.yeaftAgentId;
       const sent = chat.sendWsMessage(frame);
       if (sent === false) {
         projectDreamDebugEvent(chat, {
-          type: 'unify_dream_result',
+          type: 'yeaft_dream_result',
           groupId,
           success: false,
           skipped: true,
@@ -355,7 +355,7 @@ export const useVpStore = defineStore('vp', {
     },
 
     /**
-     * Apply unify_dream_status event (status='running' from agent).
+     * Apply yeaft_dream_status event (status='running' from agent).
      * Routes by which id field the event carries (vpId vs groupId).
      */
     applyDreamStatus(event) {
@@ -383,7 +383,7 @@ export const useVpStore = defineStore('vp', {
     },
 
     /**
-     * Apply unify_dream_result event (success or error). Routes by
+     * Apply yeaft_dream_result event (success or error). Routes by
      * which id field the event carries.
      */
     applyDreamResult(event) {

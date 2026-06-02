@@ -108,7 +108,7 @@ const _MD_CACHE_MAX = 2000;
 export function renderMarkdown(text) {
   if (!text || typeof text !== 'string') return '';
   // task-328: defensive strip — Crew renderer normally pre-cleans via
-  // `stripRouteBlocks`, but other callers (Chat / Unify) and streaming
+  // `stripRouteBlocks`, but other callers (Chat / Yeaft) and streaming
   // bursts may still arrive with raw ROUTE/TASKS markers. The strip is
   // bounded so post-ROUTE prose is preserved.
   text = stripRouteBlocks(text);

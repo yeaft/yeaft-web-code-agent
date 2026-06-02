@@ -1,22 +1,22 @@
 // Message CRUD and streaming helpers
 
-// Default group identifier used by the Unify "Default" group seed
-// (mirrors agent/unify/groups/seed-default.js DEFAULT_GROUP_ID).
-// Every Unify message is tagged with a groupId — either the currently
+// Default group identifier used by the Yeaft "Default" group seed
+// (mirrors agent/yeaft/groups/seed-default.js DEFAULT_GROUP_ID).
+// Every Yeaft message is tagged with a groupId — either the currently
 // active group filter or this default — so the group filter getters
 // can use strict equality without hiding "untagged" messages.
 const DEFAULT_GROUP_ID = 'grp_default';
 
-// Are we currently writing into the *active* Unify conversation? Both
+// Are we currently writing into the *active* Yeaft conversation? Both
 // the speaker-attribution stamper and the groupId stamper key off this
 // same predicate; centralising it keeps the rules in one place.
-function inActiveUnifyConv(store, conversationId) {
-  return store.currentView === 'unify'
-    && conversationId === store.unifyConversationId;
+function inActiveYeaftConv(store, conversationId) {
+  return store.currentView === 'yeaft'
+    && conversationId === store.yeaftConversationId;
 }
 
 // Idempotently mirror the routing context (vpId / turnId / threadId / speakerVpId)
-// onto a Unify message that carries VP attribution (assistant or
+// onto a Yeaft message that carries VP attribution (assistant or
 // tool-use). Used at three points:
 //   1. on creation in addMessageToConversation
 //   2. defensively on each delta in appendToAssistantMessageForConversation
@@ -35,11 +35,11 @@ function inActiveUnifyConv(store, conversationId) {
 function stampSpeakerOnVpMessage(store, conversationId, m) {
   if (!m) return;
   if (m.type !== 'assistant' && m.type !== 'tool-use') return;
-  if (!inActiveUnifyConv(store, conversationId)) return;
-  if (!m.vpId && store._currentUnifyVpId) m.vpId = store._currentUnifyVpId;
-  if (!m.turnId && store._currentUnifyTurnId) m.turnId = store._currentUnifyTurnId;
-  if (!m.threadId && store._currentUnifyThreadId) m.threadId = store._currentUnifyThreadId;
-  if (!m.threadTitle && store._currentUnifyThreadTitle) m.threadTitle = store._currentUnifyThreadTitle;
+  if (!inActiveYeaftConv(store, conversationId)) return;
+  if (!m.vpId && store._currentYeaftVpId) m.vpId = store._currentYeaftVpId;
+  if (!m.turnId && store._currentYeaftTurnId) m.turnId = store._currentYeaftTurnId;
+  if (!m.threadId && store._currentYeaftThreadId) m.threadId = store._currentYeaftThreadId;
+  if (!m.threadTitle && store._currentYeaftThreadTitle) m.threadTitle = store._currentYeaftThreadTitle;
   if (!m.speakerVpId && m.vpId) m.speakerVpId = m.vpId;
 }
 
@@ -75,36 +75,36 @@ export function addMessageToConversation(store, conversationId, msg) {
     timestamp: normalizeMessageTimestamp(msg),
   };
 
-  // Unify uniformity: stamp every message that lands in the active Unify
+  // Yeaft uniformity: stamp every message that lands in the active Yeaft
   // conversation with a groupId. Never overwrite an explicit groupId set
-  // by the caller (e.g. sendUnifyGroupChat or task_message handler).
-  // Bug 1: prefer `_currentUnifyGroupId` (the SEND-context group set by
-  // handleUnifyOutput before dispatching streaming chunks) over the user's
+  // by the caller (e.g. sendYeaftGroupChat or task_message handler).
+  // Bug 1: prefer `_currentYeaftGroupId` (the SEND-context group set by
+  // handleYeaftOutput before dispatching streaming chunks) over the user's
   // current filter — otherwise messages arriving while the user has
   // switched groups get stamped with the wrong group.
-  if (inActiveUnifyConv(store, conversationId) && !newMsg.groupId) {
-    newMsg.groupId = store._currentUnifyGroupId
-      || store.unifyActiveGroupFilter
+  if (inActiveYeaftConv(store, conversationId) && !newMsg.groupId) {
+    newMsg.groupId = store._currentYeaftGroupId
+      || store.yeaftActiveGroupFilter
       || DEFAULT_GROUP_ID;
   }
 
-  // Unify per-VP turn: stamp vpId + turnId on the message for turn-level
+  // Yeaft per-VP turn: stamp vpId + turnId on the message for turn-level
   // routing. Without this, concurrent VP streams would collide. The
   // speakerVpId derivation lives inside stampSpeakerOnVpMessage — but
-  // every Unify message (assistant *or* user) still gets vpId / turnId,
+  // every Yeaft message (assistant *or* user) still gets vpId / turnId,
   // so we keep that here.
-  if (inActiveUnifyConv(store, conversationId)) {
-    if (!newMsg.vpId && store._currentUnifyVpId) {
-      newMsg.vpId = store._currentUnifyVpId;
+  if (inActiveYeaftConv(store, conversationId)) {
+    if (!newMsg.vpId && store._currentYeaftVpId) {
+      newMsg.vpId = store._currentYeaftVpId;
     }
-    if (!newMsg.turnId && store._currentUnifyTurnId) {
-      newMsg.turnId = store._currentUnifyTurnId;
+    if (!newMsg.turnId && store._currentYeaftTurnId) {
+      newMsg.turnId = store._currentYeaftTurnId;
     }
-    if (!newMsg.threadId && store._currentUnifyThreadId) {
-      newMsg.threadId = store._currentUnifyThreadId;
+    if (!newMsg.threadId && store._currentYeaftThreadId) {
+      newMsg.threadId = store._currentYeaftThreadId;
     }
-    if (!newMsg.threadTitle && store._currentUnifyThreadTitle) {
-      newMsg.threadTitle = store._currentUnifyThreadTitle;
+    if (!newMsg.threadTitle && store._currentYeaftThreadTitle) {
+      newMsg.threadTitle = store._currentYeaftThreadTitle;
     }
     // Speaker derivation is gated by message type (assistant / tool-use)
     // inside the helper itself.
@@ -117,8 +117,8 @@ export function addMessageToConversation(store, conversationId, msg) {
   store.messagesMap[conversationId].push(newMsg);
   // Bug 1: keep messages sorted by timestamp so history loaded out-of-order
   // (e.g. from different groups) still displays chronologically.
-  // Only sort Unify conversations; crew conversations need insertion order.
-  if (conversationId === store.unifyConversationId) {
+  // Only sort Yeaft conversations; crew conversations need insertion order.
+  if (conversationId === store.yeaftConversationId) {
     store.messagesMap[conversationId].sort((a, b) => a.timestamp - b.timestamp);
   }
 }
@@ -135,8 +135,8 @@ export function appendToAssistantMessageForConversation(store, conversationId, t
   // Per-VP turn routing: when a turnId is active, find the streaming
   // message for THAT turn (not just the last message). This prevents
   // concurrent VP streams from interleaving into the same message.
-  const turnId = store._currentUnifyTurnId;
-  const threadId = store._currentUnifyThreadId || null;
+  const turnId = store._currentYeaftTurnId;
+  const threadId = store._currentYeaftThreadId || null;
   if (turnId || threadId) {
     for (let i = msgs.length - 1; i >= 0; i--) {
       const turnMatches = !turnId || msgs[i].turnId === turnId;
@@ -189,7 +189,7 @@ export function finishStreamingForConversation(store, conversationId) {
   const msgs = store.messagesMap[conversationId];
   if (!msgs || msgs.length === 0) return;
 
-  // v0.1.768 — per-turn isolation. When a Unify turnId is active, ONLY
+  // v0.1.768 — per-turn isolation. When a Yeaft turnId is active, ONLY
   // clear streaming flags on messages that belong to that turn. Multi-VP
   // fan-out runs concurrent turns inside the same conversation: VP-A's
   // `result` lands before VP-B finishes streaming. Without this guard,
@@ -203,10 +203,10 @@ export function finishStreamingForConversation(store, conversationId) {
   // — and if that result is lost (WS hiccup, agent crash, page reload),
   // it stays `isStreaming: true` forever and the VP shows '生成中'
   // permanently. Scoping the walk-back to turnId eliminates the
-  // cascade. Legacy single-turn path (no _currentUnifyTurnId) keeps the
-  // original blanket-clear so non-Unify chats are unaffected.
-  const targetTurnId = store._currentUnifyTurnId || null;
-  const targetThreadId = store._currentUnifyThreadId || null;
+  // cascade. Legacy single-turn path (no _currentYeaftTurnId) keeps the
+  // original blanket-clear so non-Yeaft chats are unaffected.
+  const targetTurnId = store._currentYeaftTurnId || null;
+  const targetThreadId = store._currentYeaftThreadId || null;
 
   // ★ Finish ALL streaming messages in the current turn, not just the last one.
   // Non-streaming messages (chat-image, tool-use) can be appended after

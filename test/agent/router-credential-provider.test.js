@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { AdapterRouter } from '../../agent/unify/llm/router.js';
+import { AdapterRouter } from '../../agent/yeaft/llm/router.js';
 
 describe('AdapterRouter — credentialProvider integration', () => {
   beforeEach(() => {
@@ -18,7 +18,7 @@ describe('AdapterRouter — credentialProvider integration', () => {
   it('static apiKey path unchanged when credentialProvider is absent', async () => {
     // Spy on the credentials module — it must NOT be touched for a static
     // provider. We do this by importing the module and watching its export.
-    const credMod = await import('../../agent/unify/llm/credentials/index.js');
+    const credMod = await import('../../agent/yeaft/llm/credentials/index.js');
     const spy = vi.spyOn(credMod, 'getCredentialProvider');
 
     const router = new AdapterRouter({
@@ -47,7 +47,7 @@ describe('AdapterRouter — credentialProvider integration', () => {
 
   it('routes through the credential provider when credentialProvider is set', async () => {
     // Stub the credential registry so we don't need a live token.
-    const credMod = await import('../../agent/unify/llm/credentials/index.js');
+    const credMod = await import('../../agent/yeaft/llm/credentials/index.js');
     const fakeGetApiKey = vi.fn(async () => 'live-token-abc');
     vi.spyOn(credMod, 'getCredentialProvider').mockReturnValue({
       name: 'github-copilot',
@@ -91,7 +91,7 @@ describe('AdapterRouter — credentialProvider integration', () => {
 
   it('rebuilds adapter when credential rotates (cache keyed by apiKey fingerprint)', async () => {
     let tokenIdx = 0;
-    const credMod = await import('../../agent/unify/llm/credentials/index.js');
+    const credMod = await import('../../agent/yeaft/llm/credentials/index.js');
     vi.spyOn(credMod, 'getCredentialProvider').mockReturnValue({
       name: 'github-copilot',
       getApiKey: async () => {

@@ -3,7 +3,7 @@
  *
  * The topbar Dream control calls vpStore.triggerGroupDream(groupId), then
  * renders its spinner from groupDreamStatusFor(groupId). A terminal
- * unify_dream_result event must always flip that row out of running, both for
+ * yeaft_dream_result event must always flip that row out of running, both for
  * success and error, so the UI cannot spin forever.
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
@@ -38,18 +38,18 @@ function mkStore(options = {}) {
   const sendResult = Object.prototype.hasOwnProperty.call(options, 'sendResult')
     ? options.sendResult
     : true;
-  const unifyAgentId = Object.prototype.hasOwnProperty.call(options, 'unifyAgentId')
-    ? options.unifyAgentId
+  const yeaftAgentId = Object.prototype.hasOwnProperty.call(options, 'yeaftAgentId')
+    ? options.yeaftAgentId
     : null;
   globalThis.window = globalThis.window || {};
   globalThis.window.Pinia = {
     useChatStore: () => ({
-      unifyAgentId,
+      yeaftAgentId,
       sendWsMessage: msg => {
         sent.push(msg);
         return sendResult;
       },
-      handleUnifyOutput: msg => projected.push(msg),
+      handleYeaftOutput: msg => projected.push(msg),
     }),
   };
   return {
@@ -75,7 +75,7 @@ describe('vp store — group Dream status', () => {
 
     actions.triggerGroupDream.call(store, 'grp_demo');
 
-    expect(store.sent).toEqual([{ type: 'unify_dream_trigger', groupId: 'grp_demo' }]);
+    expect(store.sent).toEqual([{ type: 'yeaft_dream_trigger', groupId: 'grp_demo' }]);
     expect(store.projected).toEqual([{
       event: {
         type: 'dream_progress',
@@ -93,15 +93,15 @@ describe('vp store — group Dream status', () => {
     });
   });
 
-  it('includes the active Unify agent id so the server can route to the agent bridge', () => {
-    const store = mkStore({ unifyAgentId: 'agent-unify' });
+  it('includes the active Yeaft agent id so the server can route to the agent bridge', () => {
+    const store = mkStore({ yeaftAgentId: 'agent-yeaft' });
 
     actions.triggerGroupDream.call(store, 'grp_demo');
 
     expect(store.sent).toEqual([{
-      type: 'unify_dream_trigger',
+      type: 'yeaft_dream_trigger',
       groupId: 'grp_demo',
-      agentId: 'agent-unify',
+      agentId: 'agent-yeaft',
     }]);
   });
 
@@ -110,7 +110,7 @@ describe('vp store — group Dream status', () => {
 
     actions.triggerGroupDream.call(store, 'grp_demo');
 
-    expect(store.sent).toEqual([{ type: 'unify_dream_trigger', groupId: 'grp_demo' }]);
+    expect(store.sent).toEqual([{ type: 'yeaft_dream_trigger', groupId: 'grp_demo' }]);
     expect(store.projected).toEqual([
       {
         event: {
@@ -125,7 +125,7 @@ describe('vp store — group Dream status', () => {
       },
       {
         event: {
-          type: 'unify_dream_result',
+          type: 'yeaft_dream_result',
           groupId: 'grp_demo',
           success: false,
           skipped: true,
@@ -142,7 +142,7 @@ describe('vp store — group Dream status', () => {
     actions.triggerGroupDream.call(store, 'grp_demo');
 
     actions.applyDreamResult.call(store, {
-      type: 'unify_dream_result',
+      type: 'yeaft_dream_result',
       groupId: 'grp_demo',
       success: false,
       skipped: true,
@@ -165,7 +165,7 @@ describe('vp store — group Dream status', () => {
     actions.triggerGroupDream.call(store, 'grp_demo');
 
     actions.applyDreamResult.call(store, {
-      type: 'unify_dream_result',
+      type: 'yeaft_dream_result',
       groupId: 'grp_demo',
       success: true,
       entriesCreated: 2,
@@ -198,7 +198,7 @@ describe('vp store — group Dream status', () => {
     actions.triggerGroupDream.call(store, 'grp_demo');
 
     actions.applyDreamResult.call(store, {
-      type: 'unify_dream_result',
+      type: 'yeaft_dream_result',
       groupId: 'grp_demo',
       success: false,
       error: 'Dream scheduler not initialized — session not loaded.',

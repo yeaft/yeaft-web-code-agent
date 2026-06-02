@@ -16,7 +16,7 @@ import {
   pollDeviceFlow,
   runDeviceFlow,
   _resetCacheForTests,
-} from '../../agent/unify/llm/credentials/github-copilot.js';
+} from '../../agent/yeaft/llm/credentials/github-copilot.js';
 
 // Stub child_process.execFile via the module the provider uses.
 vi.mock('child_process', () => {

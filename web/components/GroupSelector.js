@@ -13,7 +13,7 @@
  *   - CRUD round-trips via `useChatStore().groupCrudRequest(op, data)`
  *     which wraps the WS call in a 10 s-timeout promise.
  *
- * Visual language mirrors `unify-topbar-model` (see unify.css) — compact
+ * Visual language mirrors `yeaft-topbar-model` (see yeaft.css) — compact
  * label + chevron + floating dropdown — so the topbar looks coherent.
  *
  * Keyboard (when dropdown is open, focus on trigger):
@@ -31,43 +31,43 @@ export default {
   name: 'GroupSelector',
   components: { GroupCreateWizard, GroupEditModal },
   template: `
-    <div class="unify-topbar-group" :class="{ 'is-open': open }">
+    <div class="yeaft-topbar-group" :class="{ 'is-open': open }">
       <div
-        class="unify-topbar-group-trigger"
+        class="yeaft-topbar-group-trigger"
         @click.stop="toggle"
         @keydown="onTriggerKey"
-        :title="$t('unify.group.sidebarTitle')"
+        :title="$t('yeaft.group.sidebarTitle')"
         tabindex="0"
         role="combobox"
         aria-haspopup="listbox"
         :aria-expanded="open ? 'true' : 'false'"
         :aria-activedescendant="open && activeDescendantId ? activeDescendantId : null"
       >
-        <svg viewBox="0 0 24 24" width="14" height="14" class="unify-topbar-group-icon">
+        <svg viewBox="0 0 24 24" width="14" height="14" class="yeaft-topbar-group-icon">
           <path fill="currentColor" d="M16 11c1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3 1.34 3 3 3zm-8 0c1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3 1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/>
         </svg>
-        <span class="unify-topbar-group-name">{{ activeLabel }}</span>
-        <span class="unify-topbar-group-count" v-if="activeCount !== null">({{ activeCount }})</span>
-        <svg class="unify-model-chevron" :class="{ open }" viewBox="0 0 24 24" width="12" height="12">
+        <span class="yeaft-topbar-group-name">{{ activeLabel }}</span>
+        <span class="yeaft-topbar-group-count" v-if="activeCount !== null">({{ activeCount }})</span>
+        <svg class="yeaft-model-chevron" :class="{ open }" viewBox="0 0 24 24" width="12" height="12">
           <path fill="currentColor" d="M7 10l5 5 5-5z"/>
         </svg>
       </div>
 
       <div
         v-if="open"
-        class="unify-model-dropdown unify-topbar-group-dropdown"
+        class="yeaft-model-dropdown yeaft-topbar-group-dropdown"
         role="listbox"
         @click.stop
       >
-        <div v-if="groupList.length === 0" class="unify-topbar-group-empty">
-          {{ $t('unify.group.empty') }}
+        <div v-if="groupList.length === 0" class="yeaft-topbar-group-empty">
+          {{ $t('yeaft.group.empty') }}
         </div>
         <div
           v-for="(g, idx) in groupList"
           :key="g.id"
           :id="'group-option-' + g.id"
           role="option"
-          class="unify-model-option unify-topbar-group-option"
+          class="yeaft-model-option yeaft-topbar-group-option"
           :class="{
             active: g.id === activeGroupId,
             'is-highlighted': idx === highlightIdx,
@@ -78,48 +78,48 @@ export default {
           @click="selectGroup(g)"
           @mouseenter="highlightIdx = idx"
         >
-          <span class="unify-model-check" v-if="g.id === activeGroupId">&#10003;</span>
-          <span class="unify-model-check" v-else></span>
-          <span class="unify-model-option-label">{{ groupDisplayName(g) }}</span>
-          <span class="unify-model-option-ctx">{{ memberLabel(g) }}</span>
+          <span class="yeaft-model-check" v-if="g.id === activeGroupId">&#10003;</span>
+          <span class="yeaft-model-check" v-else></span>
+          <span class="yeaft-model-option-label">{{ groupDisplayName(g) }}</span>
+          <span class="yeaft-model-option-ctx">{{ memberLabel(g) }}</span>
 
           <span
             v-if="busyGroupIds.has(g.id)"
-            class="unify-topbar-group-spinner"
+            class="yeaft-topbar-group-spinner"
             role="status"
             aria-live="polite"
           >
-            <span class="unify-topbar-group-spinner-dot"></span>
-            <span class="unify-topbar-group-spinner-text">{{ busyLabelFor(g.id) }}</span>
+            <span class="yeaft-topbar-group-spinner-dot"></span>
+            <span class="yeaft-topbar-group-spinner-text">{{ busyLabelFor(g.id) }}</span>
           </span>
 
           <button
             v-else
             type="button"
-            class="unify-topbar-group-kebab"
-            :aria-label="$t('unify.group.moreActions')"
+            class="yeaft-topbar-group-kebab"
+            :aria-label="$t('yeaft.group.moreActions')"
             @click.stop="toggleMenu(g.id)"
           >⋯</button>
 
-          <div v-if="menuFor === g.id" class="unify-topbar-group-menu" @click.stop>
-            <button type="button" class="unify-topbar-group-menu-item" @click="onRename(g)">
-              {{ $t('unify.group.rename') }}
+          <div v-if="menuFor === g.id" class="yeaft-topbar-group-menu" @click.stop>
+            <button type="button" class="yeaft-topbar-group-menu-item" @click="onRename(g)">
+              {{ $t('yeaft.group.rename') }}
             </button>
-            <button type="button" class="unify-topbar-group-menu-item is-danger" @click="onDelete(g)">
-              {{ $t('unify.group.delete') }}
+            <button type="button" class="yeaft-topbar-group-menu-item is-danger" @click="onDelete(g)">
+              {{ $t('yeaft.group.delete') }}
             </button>
           </div>
         </div>
 
-        <div class="unify-topbar-group-sep" role="separator"></div>
+        <div class="yeaft-topbar-group-sep" role="separator"></div>
         <button
           type="button"
-          class="unify-model-option unify-topbar-group-new"
+          class="yeaft-model-option yeaft-topbar-group-new"
           @click="openWizard"
-          :aria-label="$t('unify.group.newButtonAria')"
+          :aria-label="$t('yeaft.group.newButtonAria')"
         >
-          <span class="unify-topbar-group-new-plus">+</span>
-          <span class="unify-model-option-label">{{ $t('unify.group.newButton') }}</span>
+          <span class="yeaft-topbar-group-new-plus">+</span>
+          <span class="yeaft-model-option-label">{{ $t('yeaft.group.newButton') }}</span>
         </button>
       </div>
 
@@ -178,7 +178,7 @@ export default {
     activeLabel() {
       const g = this.activeGroup;
       if (g) return this.groupDisplayName(g);
-      if (typeof this.$t === 'function') return this.$t('unify.group.defaultName');
+      if (typeof this.$t === 'function') return this.$t('yeaft.group.defaultName');
       return 'Default';
     },
     activeCount() {
@@ -264,13 +264,13 @@ export default {
       const roster = Array.isArray(g?.roster) ? g.roster : [];
       const n = roster.length;
       if (typeof this.$t !== 'function') return `${n} members`;
-      if (n === 0) return this.$t('unify.group.noMembers');
-      if (n === 1) return this.$t('unify.group.oneMember');
-      return this.$t('unify.group.membersCount', { count: n });
+      if (n === 0) return this.$t('yeaft.group.noMembers');
+      if (n === 1) return this.$t('yeaft.group.oneMember');
+      return this.$t('yeaft.group.membersCount', { count: n });
     },
     busyLabelFor(gid) {
       const op = this.busyOpByGroup[gid];
-      const key = op === 'delete' ? 'unify.group.deletingEllipsis' : 'unify.group.renamingEllipsis';
+      const key = op === 'delete' ? 'yeaft.group.deletingEllipsis' : 'yeaft.group.renamingEllipsis';
       if (typeof this.$t === 'function') return this.$t(key);
       return op === 'delete' ? 'Deleting…' : 'Renaming…';
     },
