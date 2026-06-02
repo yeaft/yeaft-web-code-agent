@@ -2,7 +2,7 @@
  * init.js — Yeaft directory structure initialization
  *
  * Ensures ~/.yeaft/ and all required subdirectories exist.
- * Creates default config.md, MEMORY.md, chat/index.md, and group/index.md if missing.
+ * Creates default config.md, MEMORY.md, and chat/index.md if missing.
  */
 
 import { existsSync, mkdirSync, writeFileSync, accessSync, constants } from 'fs';
@@ -197,12 +197,10 @@ export function initYeaftDir(dir) {
     created.push(memoryPath);
   }
 
-  for (const mode of ['chat', 'group']) {
-    const indexPath = join(root, mode, 'index.md');
-    if (!existsSync(indexPath)) {
-      safeWriteFile(indexPath, DEFAULT_CONVERSATION_INDEX, warnings);
-      created.push(indexPath);
-    }
+  const chatIndexPath = join(root, 'chat', 'index.md');
+  if (!existsSync(chatIndexPath)) {
+    safeWriteFile(chatIndexPath, DEFAULT_CONVERSATION_INDEX, warnings);
+    created.push(chatIndexPath);
   }
 
   // mcp.json.example — reference template for MCP server configuration
