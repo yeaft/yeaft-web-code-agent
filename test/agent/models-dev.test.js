@@ -63,6 +63,21 @@ describe('fetchModelsDev', () => {
     expect(JSON.parse(readFileSync(join(tmpDir, 'models_dev_cache.json'), 'utf8'))).toEqual(SAMPLE);
   });
 
+  it('does not reuse the in-memory cache across yeaftDir overrides', async () => {
+    const otherDir = mkdtempSync(join(tmpdir(), 'models-dev-test-other-'));
+    try {
+      writeFileSync(join(tmpDir, 'models_dev_cache.json'), JSON.stringify(SAMPLE));
+      writeFileSync(join(otherDir, 'models_dev_cache.json'), JSON.stringify({ local: { models: { 'local-model': {} } } }));
+      const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+      expect(await listProviders({ yeaftDir: tmpDir })).toEqual(['anthropic', 'openai']);
+      expect(await listProviders({ yeaftDir: otherDir })).toEqual(['local']);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      rmSync(otherDir, { recursive: true, force: true });
+    }
+  });
+
   it('listProviders and listProviderModels read from the cache', async () => {
     writeFileSync(join(tmpDir, 'models_dev_cache.json'), JSON.stringify(SAMPLE));
     const fetchSpy = vi.spyOn(globalThis, 'fetch');

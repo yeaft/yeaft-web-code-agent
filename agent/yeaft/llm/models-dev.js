@@ -25,6 +25,7 @@ const NETWORK_TIMEOUT_MS = 15000;
 const STALE_GRACE_MS = 5 * 60 * 1000; // 5 minutes when serving stale-after-failure
 
 let _memCache = null;
+let _memCachePath = null;
 let _memCacheTime = 0;
 
 function getCachePath(yeaftDir) {
@@ -71,8 +72,10 @@ async function saveDiskCache(yeaftDir, data) {
  * @returns {Promise<object>} provider-id → provider entry; {} on total failure.
  */
 export async function fetchModelsDev({ forceRefresh = false, yeaftDir = null } = {}) {
+  const cachePath = getCachePath(yeaftDir);
+
   // Stage 1: in-memory cache.
-  if (!forceRefresh && _memCache && Date.now() - _memCacheTime < CACHE_TTL_MS) {
+  if (!forceRefresh && _memCache && _memCachePath === cachePath && Date.now() - _memCacheTime < CACHE_TTL_MS) {
     return _memCache;
   }
 
@@ -83,6 +86,7 @@ export async function fetchModelsDev({ forceRefresh = false, yeaftDir = null } =
       const data = await loadDiskCache(yeaftDir);
       if (data && typeof data === 'object') {
         _memCache = data;
+        _memCachePath = cachePath;
         _memCacheTime = Date.now() - age;
         return _memCache;
       }
@@ -99,6 +103,7 @@ export async function fetchModelsDev({ forceRefresh = false, yeaftDir = null } =
       const data = await res.json();
       if (data && typeof data === 'object') {
         _memCache = data;
+        _memCachePath = cachePath;
         _memCacheTime = Date.now();
         await saveDiskCache(yeaftDir, data);
         return data;
@@ -111,15 +116,16 @@ export async function fetchModelsDev({ forceRefresh = false, yeaftDir = null } =
   }
 
   // Stage 4: stale disk cache fallback with short grace TTL so we retry soon.
-  if (!_memCache) {
+  if (!_memCache || _memCachePath !== cachePath) {
     const data = await loadDiskCache(yeaftDir);
     if (data && typeof data === 'object') {
       _memCache = data;
+      _memCachePath = cachePath;
       _memCacheTime = Date.now() - CACHE_TTL_MS + STALE_GRACE_MS;
     }
   }
 
-  return _memCache || {};
+  return _memCachePath === cachePath ? (_memCache || {}) : {};
 }
 
 /**
@@ -156,5 +162,6 @@ export async function listProviderModels(providerId, { yeaftDir = null } = {}) {
  */
 export function _resetMemCache() {
   _memCache = null;
+  _memCachePath = null;
   _memCacheTime = 0;
 }

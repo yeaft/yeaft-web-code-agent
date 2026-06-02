@@ -51,10 +51,17 @@ afterEach(() => {
  * (which equals chronological order via mNNNN.md sequencing).
  */
 function readAllPersisted() {
-  const dir = join(TEST_DIR, 'conversation', 'messages');
-  if (!existsSync(dir)) return [];
-  const files = readdirSync(dir).filter(f => f.endsWith('.md')).sort();
-  return files.map(f => parseMessage(readFileSync(join(dir, f), 'utf8')));
+  const dirs = [join(TEST_DIR, 'chat', 'messages'), join(TEST_DIR, 'group', 'messages')];
+  const entries = [];
+  for (const dir of dirs) {
+    if (!existsSync(dir)) continue;
+    for (const file of readdirSync(dir).filter(f => f.endsWith('.md'))) {
+      entries.push({ file, msg: parseMessage(readFileSync(join(dir, file), 'utf8')) });
+    }
+  }
+  return entries
+    .sort((a, b) => a.file.localeCompare(b.file))
+    .map(entry => entry.msg);
 }
 
 describe('runStopHooks userAlreadyPersisted (group-history-dedup)', () => {
