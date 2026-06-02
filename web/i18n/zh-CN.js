@@ -315,6 +315,9 @@ export default {
   'modal.newConv.selectAgent': '请先选择一个在线的 Agent',
   'modal.newConv.create': '创建会话',
   'modal.newConv.folderLabel': '📁 工作目录',
+  'modal.newConv.provider': '提供方',
+  'provider.claudeCode': 'Claude Code',
+  'provider.copilot': 'Copilot',
 
   'modal.resume.workDir': '工作目录',
   'modal.resume.inputOrSelect': '输入或选择工作目录',

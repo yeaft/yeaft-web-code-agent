@@ -315,6 +315,9 @@ export default {
   'modal.newConv.selectAgent': 'Please select an online Agent first',
   'modal.newConv.create': 'Create Conversation',
   'modal.newConv.folderLabel': '📁 Work Directories',
+  'modal.newConv.provider': 'Provider',
+  'provider.claudeCode': 'Claude Code',
+  'provider.copilot': 'Copilot',
 
   'modal.resume.workDir': 'Work Directory',
   'modal.resume.inputOrSelect': 'Enter or select a work directory',

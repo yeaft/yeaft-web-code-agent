@@ -210,6 +210,7 @@ export default {
                 <div class="session-info">
                   <span class="session-path">{{ shortenPath(conv.workDir) }}</span>
                   <span class="session-agent" v-if="conv.agentName">{{ conv.agentName }}</span>
+                  <span class="session-agent" v-if="conv.provider && conv.provider !== 'claude-code'">· {{ providerLabel(conv.provider) }}</span>
                   <span class="latency-indicator" v-if="getAgentLatency(conv.agentId)" :class="getLatencyClass(getAgentLatency(conv.agentId))" :title="getAgentLatency(conv.agentId) + 'ms'">
                     <svg viewBox="0 0 24 24" width="10" height="10"><circle cx="12" cy="12" r="5" fill="currentColor"/></svg>
                     {{ getAgentLatency(conv.agentId) }}ms
@@ -265,6 +266,7 @@ export default {
                 <div class="session-info">
                   <span class="session-path">{{ shortenPath(conv.workDir) }}</span>
                   <span class="session-agent" v-if="conv.agentName">{{ conv.agentName }}</span>
+                  <span class="session-agent" v-if="conv.provider && conv.provider !== 'claude-code'">· {{ providerLabel(conv.provider) }}</span>
                   <span class="latency-indicator" v-if="getAgentLatency(conv.agentId)" :class="getLatencyClass(getAgentLatency(conv.agentId))" :title="getAgentLatency(conv.agentId) + 'ms'">
                     <svg viewBox="0 0 24 24" width="10" height="10"><circle cx="12" cy="12" r="5" fill="currentColor"/></svg>
                     {{ getAgentLatency(conv.agentId) }}ms
@@ -326,6 +328,7 @@ export default {
                 <div class="session-info">
                   <span class="session-path">{{ shortenPath(conv.workDir) }}</span>
                   <span class="session-agent" v-if="conv.agentName">{{ conv.agentName }}</span>
+                  <span class="session-agent" v-if="conv.provider && conv.provider !== 'claude-code'">· {{ providerLabel(conv.provider) }}</span>
                   <span class="latency-indicator" v-if="getAgentLatency(conv.agentId)" :class="getLatencyClass(getAgentLatency(conv.agentId))" :title="getAgentLatency(conv.agentId) + 'ms'">
                     <svg viewBox="0 0 24 24" width="10" height="10"><circle cx="12" cy="12" r="5" fill="currentColor"/></svg>
                     {{ getAgentLatency(conv.agentId) }}ms
@@ -382,6 +385,7 @@ export default {
                 <div class="session-info">
                   <span class="session-path">{{ shortenPath(conv.workDir) }}</span>
                   <span class="session-agent" v-if="conv.agentName">{{ conv.agentName }}</span>
+                  <span class="session-agent" v-if="conv.provider && conv.provider !== 'claude-code'">· {{ providerLabel(conv.provider) }}</span>
                   <span class="latency-indicator" v-if="getAgentLatency(conv.agentId)" :class="getLatencyClass(getAgentLatency(conv.agentId))" :title="getAgentLatency(conv.agentId) + 'ms'">
                     <svg viewBox="0 0 24 24" width="10" height="10"><circle cx="12" cy="12" r="5" fill="currentColor"/></svg>
                     {{ getAgentLatency(conv.agentId) }}ms
@@ -487,6 +491,16 @@ export default {
                   <option v-for="agent in store.agents.filter(a => a.online)" :key="agent.id" :value="agent.id">
                     {{ agent.name }}{{ agent.latency ? ' (' + agent.latency + 'ms)' : '' }}
                   </option>
+                </select>
+                <svg class="select-arrow" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
+              </div>
+            </div>
+            <div class="resume-control-row" v-if="convModalAgent">
+              <label class="resume-control-label">{{ $t('modal.newConv.provider') }}</label>
+              <div class="select-wrapper">
+                <select v-model="convModalProvider" class="resume-select">
+                  <option value="claude-code">{{ $t('provider.claudeCode') }}</option>
+                  <option value="copilot">{{ $t('provider.copilot') }}</option>
                 </select>
                 <svg class="select-arrow" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
               </div>
@@ -645,6 +659,7 @@ export default {
       showConversationModal: false,
       convModalAgent: '',
       convModalWorkDir: '',
+      convModalProvider: 'claude-code',
       selectedResumeSession: null,
       historyLoaded: false,
       windowWidth: window.innerWidth,
@@ -866,7 +881,7 @@ export default {
       if (!this.convModalAgent) return;
       this.store.selectAgent(this.convModalAgent);
       const workDir = this.convModalWorkDir.trim() || this.selectedConvModalAgentWorkDir;
-      this.store.createConversation(workDir, this.convModalAgent);
+      this.store.createConversation(workDir, this.convModalAgent, null, { provider: this.convModalProvider });
       this.closeConversationModal();
     },
     resumeSession(session) {
@@ -1044,6 +1059,11 @@ export default {
         return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
       }
       return date.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' });
+    },
+    providerLabel(p) {
+      if (p === 'copilot') return this.$t('provider.copilot');
+      if (p === 'claude-code') return this.$t('provider.claudeCode');
+      return p || '';
     },
     shortenPath(path) {
       if (!path) return '-';

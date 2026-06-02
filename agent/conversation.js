@@ -6,6 +6,7 @@ import { query } from './sdk/index.js';
 import { loadSessionHistory } from './history.js';
 import { startClaudeQuery } from './claude.js';
 import { crewSessions, loadCrewIndex } from './crew.js';
+import { getProvider, DEFAULT_PROVIDER, isValidProvider } from './providers/index.js';
 
 // 不支持的斜杠命令（真正需要交互式 CLI 的命令）
 const UNSUPPORTED_SLASH_COMMANDS = ['/help', '/bug', '/login', '/logout', '/terminal-setup', '/vim', '/config'];
@@ -293,7 +294,8 @@ export async function sendConversationList() {
       createdAt: state.createdAt,
       processing: !!state.turnActive,
       userId: state.userId,
-      username: state.username
+      username: state.username,
+      provider: state.providerName || DEFAULT_PROVIDER
     };
     list.push(entry);
   }
@@ -356,8 +358,9 @@ export function sendError(conversationId, message) {
 export async function createConversation(msg) {
   const { conversationId, workDir, userId, username, disallowedTools } = msg;
   const effectiveWorkDir = workDir || ctx.CONFIG.workDir;
+  const provider = isValidProvider(msg.provider) ? msg.provider : DEFAULT_PROVIDER;
 
-  console.log(`Creating conversation: ${conversationId} in ${effectiveWorkDir} (lazy start)`);
+  console.log(`Creating conversation: ${conversationId} in ${effectiveWorkDir} (lazy start, provider=${provider})`);
   if (username) console.log(`  User: ${username} (${userId})`);
 
   // 只创建 conversation 状态，不启动 Claude 进程
@@ -374,6 +377,7 @@ export async function createConversation(msg) {
     model: null,
     userId,
     username,
+    providerName: provider,
     disallowedTools: disallowedTools || null,  // null = 使用全局默认
     usage: {
       inputTokens: 0,
@@ -390,6 +394,7 @@ export async function createConversation(msg) {
     workDir: effectiveWorkDir,
     userId,
     username,
+    provider,
     disallowedTools: disallowedTools || null
   });
 
@@ -414,13 +419,16 @@ export async function createConversation(msg) {
 
   // ★ Prestart Claude CLI in background to eagerly fetch skills/tools/model
   // Fire-and-forget: failure just degrades to lazy-start behavior
-  prestartClaude(conversationId, effectiveWorkDir, null);
+  if (provider === 'claude-code') {
+    prestartClaude(conversationId, effectiveWorkDir, null);
+  }
 }
 
 // Resume 历史 conversation (延迟启动 Claude，等待用户发送第一条消息)
 export async function resumeConversation(msg) {
   const { conversationId, claudeSessionId, workDir, userId, username, disallowedTools } = msg;
   const effectiveWorkDir = workDir || ctx.CONFIG.workDir;
+  const provider = isValidProvider(msg.provider) ? msg.provider : DEFAULT_PROVIDER;
 
   console.log(`[Resume] conversationId: ${conversationId}`);
   console.log(`[Resume] claudeSessionId: ${claudeSessionId}`);
@@ -458,6 +466,7 @@ export async function resumeConversation(msg) {
     model: null,
     userId,
     username,
+    providerName: provider,
     disallowedTools: disallowedTools || null,  // null = 使用全局默认
     usage: {
       inputTokens: 0,
@@ -475,7 +484,8 @@ export async function resumeConversation(msg) {
     workDir: effectiveWorkDir,
     historyMessages,
     userId,
-    username
+    username,
+    provider
   });
 
   // 立即发送 agent 级别的 MCP servers 列表
@@ -498,7 +508,7 @@ export async function resumeConversation(msg) {
   // ★ Prestart Claude CLI in background to eagerly fetch skills/tools/model
   // Skip if conversation already has an active query (shouldn't happen, but safety check)
   const resumeState = ctx.conversations.get(conversationId);
-  if (!resumeState?.query) {
+  if (provider === 'claude-code' && !resumeState?.query) {
     prestartClaude(conversationId, effectiveWorkDir, claudeSessionId);
   }
 }
@@ -703,6 +713,40 @@ export async function handleUserInput(msg) {
   }
 
   let state = ctx.conversations.get(conversationId);
+
+  // ★ Non-Claude providers: dispatch to driver and return
+  const providerName = state?.providerName || DEFAULT_PROVIDER;
+  if (providerName !== 'claude-code') {
+    const driver = getProvider(providerName);
+    const effectiveWorkDir = workDir || state?.workDir || ctx.CONFIG.workDir;
+    if (!state) {
+      state = await driver.start({
+        conversationId,
+        workDir: effectiveWorkDir,
+        resumeSessionId: claudeSessionId || null,
+        userId: msg.userId,
+        username: msg.username,
+      });
+    }
+    if (workDir) state.workDir = workDir;
+    sendOutput(conversationId, { type: 'user', message: { role: 'user', content: prompt } });
+    state.turnActive = true;
+    sendConversationList();
+    try {
+      await driver.sendInput(state, prompt, { raw: msg });
+    } catch (err) {
+      sendOutput(conversationId, {
+        type: 'result',
+        subtype: 'error',
+        session_id: state.sessionId || null,
+        is_error: true,
+        error: `${providerName} error: ${err?.message || err}`,
+      });
+      state.turnActive = false;
+      sendConversationList();
+    }
+    return;
+  }
 
   // 如果没有活跃的查询，启动新的
   if (!state || !state.query || !state.inputStream) {
