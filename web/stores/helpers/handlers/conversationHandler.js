@@ -77,6 +77,7 @@ export function handleConversationCreated(store, msg) {
     createdAt: Date.now(),
     processing: false,
     type: 'chat',
+    provider: msg.provider || 'claude-code',
     disallowedTools: msg.disallowedTools ?? null
   });
   store.currentAgent = msg.agentId;
@@ -128,6 +129,7 @@ export function handleConversationResumed(store, msg) {
     createdAt: Date.now(),
     processing: false,
     type: 'chat',
+    provider: msg.provider || 'claude-code',
     disallowedTools: msg.disallowedTools ?? null
   });
   store.currentAgent = msg.agentId;

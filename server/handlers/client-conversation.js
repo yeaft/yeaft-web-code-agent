@@ -171,6 +171,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         workDir: msg.workDir,
         userId: client.userId,
         username: client.username,
+        provider: msg.provider,
         disallowedTools: msg.disallowedTools
       });
       break;
@@ -196,6 +197,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         workDir: msg.workDir,
         userId: client.userId,
         username: client.username,
+        provider: msg.provider,
         disallowedTools: msg.disallowedTools
       });
       break;
