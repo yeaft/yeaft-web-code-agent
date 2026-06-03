@@ -27,6 +27,15 @@ export default {
         </header>
 
         <div class="group-wizard-body group-wizard-body-single">
+          <label class="group-wizard-field" v-if="agentOptions.length > 1">
+            <span class="group-wizard-field-label">{{ $t('yeaft.session.create.agentLabel') }}</span>
+            <select v-model="form.agentId" class="group-wizard-input">
+              <option v-for="a in agentOptions" :key="a.id" :value="a.id" :disabled="!a.online">
+                {{ a.name || a.id }}{{ a.online ? '' : ' (offline)' }}
+              </option>
+            </select>
+          </label>
+
           <label class="group-wizard-field">
             <span class="group-wizard-field-label">{{ $t('yeaft.session.create.nameLabel') }}</span>
             <input
@@ -105,6 +114,9 @@ export default {
         // back to the first available VP so the submit always produces a
         // session with at least one real roster member.
         vpIds: [],
+        // Which agent owns the new session. Defaults to current Yeaft
+        // agent (or first online) and is auto-populated in mounted().
+        agentId: null,
       },
       busy: false,
       submitError: '',
@@ -127,19 +139,45 @@ export default {
       return null;
     },
     vpList() { return this.vpStore?.vpList || []; },
+    agentOptions() {
+      const s = this.chat;
+      if (!s || !Array.isArray(s.agents)) return [];
+      return s.agents.map(a => ({ id: a.id, name: a.name, online: !!a.online }));
+    },
     vpLibraryEmpty() {
       const s = this.vpStore;
       if (!s) return false;
       if (s.emptyLibrary === true) return true;
       return !!(s.lastSnapshotAt && s.lastSnapshotAt > 0 && (s.vpOrder?.length || 0) === 0);
     },
-    canSubmit() { return this.form.vpIds.length > 0; },
+    canSubmit() {
+      // Need at least one VP and an agent that is currently online.
+      if (this.form.vpIds.length === 0) return false;
+      if (!this.form.agentId) return false;
+      const a = this.agentOptions.find(x => x.id === this.form.agentId);
+      return !!(a && a.online);
+    },
   },
   mounted() {
     window.addEventListener('keydown', this.onEsc);
     this.$nextTick(() => {
       try { this.$refs.nameInput?.focus(); } catch (_) {}
     });
+    // Seed agent default: prefer the current Yeaft agent, else first online.
+    // Never seed an offline agent — sending create to a dead ws is silent
+    // failure. If nothing is online, leave agentId null and let canSubmit
+    // gate the form.
+    try {
+      const chat = this.chat;
+      if (chat) {
+        const preferred = chat.yeaftAgentId || chat.currentAgent || null;
+        const agents = this.agentOptions;
+        const onlinePick = agents.find(a => a.id === preferred && a.online)
+          || agents.find(a => a.online)
+          || null;
+        if (onlinePick) this.form.agentId = onlinePick.id;
+      }
+    } catch (_) {}
     // Subscribe to VP snapshot if not yet hydrated (mirrors GroupCreateWizard).
     try {
       if (this.vpStore && this.vpStore.lastSnapshotAt === 0) {
@@ -209,6 +247,7 @@ export default {
         const res = await this.chat.createYeaftSession({
           displayName: this.form.name.trim(),
           vpIds: submittedVpIds,
+          agentId: this.form.agentId || null,
         });
         if (res && res.ok) {
           this.$emit('created', res.group);

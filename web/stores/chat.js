@@ -1059,13 +1059,13 @@ export const useChatStore = defineStore('chat', {
     // shared sessionCrudRequest path so callers can `await` and surface
     // the new session row immediately. Phase 4 will rename the wire +
     // store fields; until then this is a thin facade.
-    createYeaftSession({ displayName, vpIds } = {}) {
+    createYeaftSession({ displayName, vpIds, agentId } = {}) {
       const roster = Array.isArray(vpIds) ? vpIds.slice() : [];
       const defaultVpId = roster[0] || null;
       const trimmed = (displayName || '').trim();
       const payload = { roster, defaultVpId };
       if (trimmed) payload.name = trimmed;
-      return this.sessionCrudRequest('create', payload);
+      return this.sessionCrudRequest('create', payload, { agentId });
     },
     handleYeaftOutput(msg) {
       if (!msg) return;
@@ -2089,7 +2089,7 @@ export const useChatStore = defineStore('chat', {
     //   add_member        { groupId, vpId }                → flat
     //   remove_member     { groupId, vpId }                → flat
     //   set_default_vp    { groupId, vpId }                → flat
-    sessionCrudRequest(op, data) {
+    sessionCrudRequest(op, data, opts = {}) {
       if (!this._sessionCrudPending || typeof this._sessionCrudPending.get !== 'function') {
         this._sessionCrudPending = new Map();
       }
@@ -2113,6 +2113,11 @@ export const useChatStore = defineStore('chat', {
       const msg = { type, requestId };
       if (op === 'create') msg.payload = data || {};
       else if (data && typeof data === 'object') Object.assign(msg, data);
+      // Per-message agentId override — lets the create modal send the new
+      // session to a chosen agent rather than the active one. Server will
+      // fall back to client.currentAgent when omitted.
+      const overrideAgentId = opts && opts.agentId ? opts.agentId : null;
+      if (overrideAgentId) msg.agentId = overrideAgentId;
 
       const gs = window.Pinia?.useSessionsStore?.() || (window.__useSessionsStore && window.__useSessionsStore());
       if (gs) gs.markPending(requestId, op);

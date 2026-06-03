@@ -575,6 +575,7 @@ export default {
   'yeaft.session.create.title': '新建会话',
   'yeaft.session.create.nameLabel': '名称',
   'yeaft.session.create.namePlaceholder': '会话名称（可选）',
+  'yeaft.session.create.agentLabel': 'Agent',
   'yeaft.session.create.vpPicker': '选择 VP',
   'yeaft.session.create.submit': '创建',
   'yeaft.session.empty': '还没有会话，点击 + 新建一个。',
