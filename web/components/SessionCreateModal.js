@@ -12,13 +12,10 @@
  * so the look-and-feel stays consistent. All colours pulled from
  * design tokens in web/styles/variables.css — no hardcoded values.
  */
-import VpAvatar from './VpAvatar.js';
-
 const OMNI_VP_ID = 'omni';
 
 export default {
   name: 'SessionCreateModal',
-  components: { VpAvatar },
   emits: ['close', 'created'],
   template: `
     <Teleport to="body">
@@ -69,7 +66,6 @@ export default {
                     :checked="form.vpIds.includes(vp.vpId)"
                     @change="toggleVp(vp.vpId, $event.target.checked)"
                   />
-                  <VpAvatar :vp-id="vp.vpId" :size="22" :aria-label="vpLabelFor(vp.vpId)" />
                   <span class="group-wizard-roster-name" :style="{ color: vpTextColorFor(vp.vpId) }">{{ vpLabelFor(vp.vpId) }}</span>
                 </label>
               </li>
