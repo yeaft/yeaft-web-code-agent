@@ -1667,6 +1667,13 @@
   min-width: 0;
 }
 
+/* Make ModernSelect rows align with input rows — same flex behavior so all
+   three rows (Agent / Provider / Model / WorkDir) have identical width. */
+.resume-control-row > .modern-select {
+  flex: 1;
+  min-width: 0;
+}
+
 .workdir-browse-btn {
   flex-shrink: 0;
   display: flex;

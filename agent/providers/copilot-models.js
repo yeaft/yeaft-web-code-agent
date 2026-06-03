@@ -17,15 +17,25 @@ import { readFile } from 'fs/promises';
 import { homedir } from 'os';
 import { join } from 'path';
 
-// Curated fallback — small, but covers the common picks if /models is down or
-// the user has no Copilot auth available yet.
+// Curated fallback — mirrors the CLI's own hardcoded default model list
+// (`jF` in @github/copilot/app.js@1.0.59). Used when /models is unavailable
+// or when org policy hides the picker list at the API (some enterprise orgs
+// gate it). `--model <id>` still accepts these IDs at chat time.
 export const FALLBACK_COPILOT_MODELS = Object.freeze([
+  { id: 'claude-sonnet-4.6',  label: 'Claude Sonnet 4.6', vendor: 'Anthropic' },
   { id: 'claude-sonnet-4.5',  label: 'Claude Sonnet 4.5', vendor: 'Anthropic' },
-  { id: 'claude-sonnet-4',    label: 'Claude Sonnet 4',   vendor: 'Anthropic' },
-  { id: 'claude-opus-4.1',    label: 'Claude Opus 4.1',   vendor: 'Anthropic' },
-  { id: 'gpt-5',              label: 'GPT-5',             vendor: 'OpenAI'    },
+  { id: 'claude-haiku-4.5',   label: 'Claude Haiku 4.5',  vendor: 'Anthropic' },
+  { id: 'claude-opus-4.8',    label: 'Claude Opus 4.8',   vendor: 'Anthropic' },
+  { id: 'claude-opus-4.7',    label: 'Claude Opus 4.7',   vendor: 'Anthropic' },
+  { id: 'claude-opus-4.6',    label: 'Claude Opus 4.6',   vendor: 'Anthropic' },
+  { id: 'claude-opus-4.5',    label: 'Claude Opus 4.5',   vendor: 'Anthropic' },
+  { id: 'gpt-5.5',            label: 'GPT-5.5',           vendor: 'OpenAI'    },
+  { id: 'gpt-5.4',            label: 'GPT-5.4',           vendor: 'OpenAI'    },
+  { id: 'gpt-5.3-codex',      label: 'GPT-5.3 Codex',     vendor: 'OpenAI'    },
+  { id: 'gpt-5.2-codex',      label: 'GPT-5.2 Codex',     vendor: 'OpenAI'    },
+  { id: 'gpt-5.2',            label: 'GPT-5.2',           vendor: 'OpenAI'    },
+  { id: 'gpt-5.4-mini',       label: 'GPT-5.4 Mini',      vendor: 'OpenAI'    },
   { id: 'gpt-5-mini',         label: 'GPT-5 Mini',        vendor: 'OpenAI'    },
-  { id: 'gpt-4.1',            label: 'GPT-4.1',           vendor: 'OpenAI'    },
   { id: 'gemini-2.5-pro',     label: 'Gemini 2.5 Pro',    vendor: 'Google'    },
 ]);
 
