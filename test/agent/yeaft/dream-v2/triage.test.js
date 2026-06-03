@@ -17,18 +17,18 @@ import {
 
 describe('applyHardRules', () => {
   it('always includes user', () => {
-    const out = applyHardRules({ groupId: 'g-eng', messages: [] });
+    const out = applyHardRules({ sessionId: 'g-eng', messages: [] });
     expect(out.find(a => a.scope === 'user')).toBeTruthy();
   });
   it('includes the active group except _no-group', () => {
-    expect(applyHardRules({ groupId: 'g-eng', messages: [] }).map(a => a.scope))
+    expect(applyHardRules({ sessionId: 'g-eng', messages: [] }).map(a => a.scope))
       .toContain('group/g-eng');
-    expect(applyHardRules({ groupId: '_no-group', messages: [] }).map(a => a.scope))
+    expect(applyHardRules({ sessionId: '_no-session', messages: [] }).map(a => a.scope))
       .not.toContain('group/_no-group');
   });
   it('adds group/<g>/vp/<id> for each assistant message vpId', () => {
     const out = applyHardRules({
-      groupId: 'g-eng',
+      sessionId: 'g-eng',
       messages: [
         { role: 'assistant', vpId: 'zhang-san' },
         { role: 'assistant', vpId: 'li-si' },
@@ -42,21 +42,21 @@ describe('applyHardRules', () => {
   });
   it('extracts vp from author "vp:<id>" format', () => {
     const out = applyHardRules({
-      groupId: 'g',
+      sessionId: 'g',
       messages: [{ role: 'assistant', author: 'vp:wang-wu' }],
     });
     expect(out.map(a => a.scope)).toContain('group/g/vp/wang-wu');
   });
   it('does NOT create feature scopes from messages (Feature system removed)', () => {
     const out = applyHardRules({
-      groupId: 'g-eng',
+      sessionId: 'g-eng',
       messages: [{ role: 'user', featureId: 'abc-123' }],
     });
     expect(out.map(a => a.scope).some(s => s.startsWith('feature/'))).toBe(false);
   });
   it('rejects unsafe vp ids silently', () => {
     const out = applyHardRules({
-      groupId: 'g',
+      sessionId: 'g',
       messages: [
         { role: 'assistant', vpId: '../etc/passwd' },
       ],
@@ -105,7 +105,7 @@ describe('classifySoft', () => {
       return '{}';
     };
     const out = await classifySoft({
-      groupId: 'g',
+      sessionId: 'g',
       messages: [{ role: 'user', body: 'hi' }],
       topicSummaries: [{ path: 'science/physics', summary: 'physics talks' }],
       llm,
@@ -124,7 +124,7 @@ describe('classifySoft', () => {
       if (pass === 'triage-pass1') return JSON.stringify({ user_profile_signals: false, topics: ['too deep'] });
       return JSON.stringify({ decision: 'new', path: 'a/b/c' });
     };
-    const out = await classifySoft({ groupId: 'g', messages: [], topicSummaries: [], llm });
+    const out = await classifySoft({ sessionId: 'g', messages: [], topicSummaries: [], llm });
     expect(out.find(a => /^group\/.+\/topic\//.test(a.scope))).toBeUndefined();
   });
   it('skips Pass-2 when Pass-1 returns no topics', async () => {
@@ -133,7 +133,7 @@ describe('classifySoft', () => {
       calls.push(pass);
       return JSON.stringify({ user_profile_signals: false, topics: [], trivial_only: true });
     };
-    const out = await classifySoft({ groupId: 'g', messages: [], topicSummaries: [], llm });
+    const out = await classifySoft({ sessionId: 'g', messages: [], topicSummaries: [], llm });
     expect(calls).toEqual(['triage-pass1']);
     expect(out).toEqual([]);
   });
@@ -142,7 +142,7 @@ describe('classifySoft', () => {
       if (pass === 'triage-pass1') return JSON.stringify({ topics: ['x'] });
       return 'sorry, not JSON at all';
     };
-    const out = await classifySoft({ groupId: 'g', messages: [], topicSummaries: [], llm });
+    const out = await classifySoft({ sessionId: 'g', messages: [], topicSummaries: [], llm });
     expect(out).toEqual([]);
   });
 });
@@ -154,7 +154,7 @@ describe('triageOneSegment + triageGroupSegments', () => {
       return JSON.stringify({ decision: 'match', path: 'science/physics' });
     };
     const out = await triageOneSegment({
-      groupId: 'g-eng',
+      sessionId: 'g-eng',
       messages: [{ role: 'assistant', vpId: 'zhang-san' }],
       topicSummaries: [{ path: 'science/physics', summary: '' }],
       llm,
@@ -177,7 +177,7 @@ describe('triageOneSegment + triageGroupSegments', () => {
       { messages: [{ role: 'assistant', vpId: 'zhang-san' }] },
     ];
     const out = await triageGroupSegments({
-      groupId: 'g',
+      sessionId: 'g',
       segments: segs,
       topicSummaries: [],
       llm,
@@ -190,7 +190,7 @@ describe('triageOneSegment + triageGroupSegments', () => {
 
 describe('prompt builders contain expected scaffolding', () => {
   it('Pass-1 prompt mentions hard-rule exclusions', () => {
-    const p = buildPass1Prompt({ groupId: 'g', messages: [{ role: 'user', body: 'hi' }], topicSummaries: [] });
+    const p = buildPass1Prompt({ sessionId: 'g', messages: [{ role: 'user', body: 'hi' }], topicSummaries: [] });
     expect(p).toContain('user_profile_signals');
     expect(p).toContain('topics');
     expect(p).toMatch(/Do NOT mention vp\/, group\/, or feature\//);

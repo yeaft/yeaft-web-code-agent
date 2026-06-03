@@ -11,7 +11,7 @@
  *
  * Per-thread isolation: each running VP thread keeps its own current todo
  * list. The web-bridge injects `ctx.getCurrentTodos()` /
- * `ctx.setCurrentTodos()` pointing at a per-(groupId,vpId,threadId) slot so
+ * `ctx.setCurrentTodos()` pointing at a per-(sessionId,vpId,threadId) slot so
  * two concurrent threads for the same VP cannot overwrite each other's
  * progress.
  *

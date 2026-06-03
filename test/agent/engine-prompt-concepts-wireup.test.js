@@ -12,7 +12,7 @@
  *        reply, NOT in the system prompt (DESIGN-PROMPT §4.3).
  *
  *   E-c  Active Scope is rendered as a `## active_scope` block from
- *        engine-side fields (groupId / vpId / inboundEnvelope.featureId)
+ *        engine-side fields (sessionId / vpId / inboundEnvelope.featureId)
  *        — DESIGN-PROMPT §3 ④.
  */
 
@@ -169,7 +169,7 @@ describe('E-c Active Scope is wired from engine context', () => {
     for await (const _ of engine.query({
       prompt: 'go',
       messages: [],
-      groupId: 'team-x',
+      sessionId: 'team-x',
       vpPersona: { vpId: 'alice', displayName: 'Alice', persona: 'Cool dev.' },
       inboundEnvelope: { senderVpId: 'bob' },
     })) { /* drain */ }
@@ -188,7 +188,7 @@ describe('E-c Active Scope is wired from engine context', () => {
     for await (const _ of engine.query({
       prompt: 'go',
       messages: [],
-      groupId: 'team-x',
+      sessionId: 'team-x',
       vpPersona: { vpId: 'alice', displayName: 'Alice', persona: 'Cool dev.' },
     })) { /* drain */ }
 

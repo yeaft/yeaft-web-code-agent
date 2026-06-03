@@ -9,11 +9,11 @@
  *     → each VP turn gets its own scope-isolated FTS recall
  *     → AbortController fans out to every in-flight turn
  *
- * The real `handleYeaftGroupChat` is a thin shell over the same pieces:
+ * The real `handleYeaftSessionSend` is a thin shell over the same pieces:
  *   open group → coord.ingest → for each captured envelope, call
  *   `runVpTurn` (private to web-bridge) in Promise.all. We exercise the
  *   load-bearing coordination here with the real `createCoordinator`, the
- *   real `createGroup` on a tmp ~/.yeaft, and the real `runMemoryPreflow`
+ *   real `createSession` on a tmp ~/.yeaft, and the real `runMemoryPreflow`
  *   over a real SQLite FTS5 index — but stub the LLM call (the per-VP
  *   turn pulls in adapters/config we don't need).
  *
@@ -23,7 +23,7 @@
  *   3. @all broadcast capped by perGroupFanOut
  *   4. fallback to defaultVpId
  *   5. empty roster → no_default_vp error (auto-heal happens upstream
- *      in handleYeaftGroupChat; coordinator alone reports the error)
+ *      in handleYeaftSessionSend; coordinator alone reports the error)
  *   6. VP-author no-op (route_forward owns VP→VP)
  *   7. memory pre-injection per VP — alice gets vp/alice; not vp/bob
  *   8. abort cancels every parallel turn
@@ -34,19 +34,19 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { createGroup } from '../../../../agent/yeaft/groups/group-store.js';
-import { createCoordinator } from '../../../../agent/yeaft/groups/coordinator.js';
-import { runMemoryPreflow } from '../../../../agent/yeaft/groups/pre-flow.js';
+import { createSession } from '../../../../agent/yeaft/sessions/session-store.js';
+import { createCoordinator } from '../../../../agent/yeaft/sessions/coordinator.js';
+import { runMemoryPreflow } from '../../../../agent/yeaft/sessions/pre-flow.js';
 import { openSegmentIndex } from '../../../../agent/yeaft/memory/index-db.js';
 import { makeSegment } from '../../../../agent/yeaft/memory/segment.js';
 
 let TEST_DIR;
-let groupsRoot;
+let sessionsRoot;
 let idx;
 
 beforeEach(() => {
   TEST_DIR = mkdtempSync(join(tmpdir(), 'gc3-'));
-  groupsRoot = join(TEST_DIR, 'groups');
+  sessionsRoot = join(TEST_DIR, 'sessions');
   idx = openSegmentIndex(join(TEST_DIR, 'idx.db'));
 });
 
@@ -66,11 +66,11 @@ async function fanOut(captured, runTurn) {
 
 describe('group-chat round-trip', () => {
   it('1. single mention: coordinator dispatches one envelope, parallel fan-out invokes one turn', async () => {
-    createGroup(groupsRoot, {
+    createSession(sessionsRoot, {
       id: 'g1', name: 'g1', roster: ['alice', 'bob'], defaultVpId: 'alice',
     });
-    const { openGroup } = await import('../../../../agent/yeaft/groups/group-store.js');
-    const group = openGroup(groupsRoot, 'g1');
+    const { openSession } = await import('../../../../agent/yeaft/sessions/session-store.js');
+    const group = openSession(sessionsRoot, 'g1');
 
     const captured = [];
     const coord = createCoordinator(group, {
@@ -90,11 +90,11 @@ describe('group-chat round-trip', () => {
   });
 
   it('2. multi-VP: parallel fan-out runs concurrently (wall-clock < sum)', async () => {
-    createGroup(groupsRoot, {
+    createSession(sessionsRoot, {
       id: 'g1', name: 'g1', roster: ['alice', 'bob'], defaultVpId: 'alice',
     });
-    const { openGroup } = await import('../../../../agent/yeaft/groups/group-store.js');
-    const group = openGroup(groupsRoot, 'g1');
+    const { openSession } = await import('../../../../agent/yeaft/sessions/session-store.js');
+    const group = openSession(sessionsRoot, 'g1');
 
     const captured = [];
     const coord = createCoordinator(group, {
@@ -116,13 +116,13 @@ describe('group-chat round-trip', () => {
   });
 
   it('3. @all broadcast respects perGroupFanOut cap', async () => {
-    createGroup(groupsRoot, {
+    createSession(sessionsRoot, {
       id: 'g1', name: 'g1',
       roster: ['a', 'b', 'c', 'd', 'e'],
       defaultVpId: 'a',
     });
-    const { openGroup } = await import('../../../../agent/yeaft/groups/group-store.js');
-    const group = openGroup(groupsRoot, 'g1');
+    const { openSession } = await import('../../../../agent/yeaft/sessions/session-store.js');
+    const group = openSession(sessionsRoot, 'g1');
 
     const captured = [];
     const coord = createCoordinator(group, {
@@ -137,11 +137,11 @@ describe('group-chat round-trip', () => {
   });
 
   it('4. no mention falls back to defaultVpId', async () => {
-    createGroup(groupsRoot, {
+    createSession(sessionsRoot, {
       id: 'g1', name: 'g1', roster: ['alice', 'bob'], defaultVpId: 'alice',
     });
-    const { openGroup } = await import('../../../../agent/yeaft/groups/group-store.js');
-    const group = openGroup(groupsRoot, 'g1');
+    const { openSession } = await import('../../../../agent/yeaft/sessions/session-store.js');
+    const group = openSession(sessionsRoot, 'g1');
 
     const captured = [];
     const coord = createCoordinator(group, {
@@ -155,11 +155,11 @@ describe('group-chat round-trip', () => {
   });
 
   it('5. empty roster + no defaultVpId → no_default_vp, no dispatch', async () => {
-    createGroup(groupsRoot, {
+    createSession(sessionsRoot, {
       id: 'g1', name: 'g1', roster: [], defaultVpId: null,
     });
-    const { openGroup } = await import('../../../../agent/yeaft/groups/group-store.js');
-    const group = openGroup(groupsRoot, 'g1');
+    const { openSession } = await import('../../../../agent/yeaft/sessions/session-store.js');
+    const group = openSession(sessionsRoot, 'g1');
 
     const captured = [];
     const coord = createCoordinator(group, {
@@ -173,11 +173,11 @@ describe('group-chat round-trip', () => {
   });
 
   it('6. VP-author message: persisted but never dispatched (route_forward owns VP→VP)', async () => {
-    createGroup(groupsRoot, {
+    createSession(sessionsRoot, {
       id: 'g1', name: 'g1', roster: ['alice', 'bob'], defaultVpId: 'alice',
     });
-    const { openGroup } = await import('../../../../agent/yeaft/groups/group-store.js');
-    const group = openGroup(groupsRoot, 'g1');
+    const { openSession } = await import('../../../../agent/yeaft/sessions/session-store.js');
+    const group = openSession(sessionsRoot, 'g1');
 
     const captured = [];
     const coord = createCoordinator(group, {
@@ -193,22 +193,22 @@ describe('group-chat round-trip', () => {
   });
 
   it('7. memory pre-injection per VP: alice sees vp/alice, bob sees vp/bob — never the other', async () => {
-    createGroup(groupsRoot, {
+    createSession(sessionsRoot, {
       id: 'g1', name: 'g1', roster: ['alice', 'bob'], defaultVpId: 'alice',
     });
-    const { openGroup } = await import('../../../../agent/yeaft/groups/group-store.js');
-    const group = openGroup(groupsRoot, 'g1');
+    const { openSession } = await import('../../../../agent/yeaft/sessions/session-store.js');
+    const group = openSession(sessionsRoot, 'g1');
 
     idx.upsert(makeSegment({
       scope: 'user', kind: 'fact', tags: ['profile'],
       body: 'User loves jwt-based authentication.',
     }));
     idx.upsert(makeSegment({
-      scope: 'group/g1/vp/alice', kind: 'fact', tags: ['auth'],
+      scope: 'session/g1/vp/alice', kind: 'fact', tags: ['auth'],
       body: 'Alice prefers refresh tokens with jwt.',
     }));
     idx.upsert(makeSegment({
-      scope: 'group/g1/vp/bob', kind: 'fact', tags: ['auth'],
+      scope: 'session/g1/vp/bob', kind: 'fact', tags: ['auth'],
       body: 'Bob hates jwt; prefers session cookies.',
     }));
 
@@ -223,7 +223,7 @@ describe('group-chat round-trip', () => {
     const recalls = await fanOut(captured, async (vpId, envelope) => {
       const recall = runMemoryPreflow(idx, {
         userMsg: envelope.msg.text,
-        groupId: 'g1',
+        sessionId: 'g1',
         vpId,
       });
       return { vpId, scopes: recall.entries.map(e => e.scope), formatted: recall.formatted };
@@ -232,21 +232,21 @@ describe('group-chat round-trip', () => {
     const alice = recalls.find(r => r.vpId === 'alice');
     const bob = recalls.find(r => r.vpId === 'bob');
 
-    expect(alice.scopes).toContain('group/g1/vp/alice');
-    expect(alice.scopes).not.toContain('group/g1/vp/bob');
+    expect(alice.scopes).toContain('session/g1/vp/alice');
+    expect(alice.scopes).not.toContain('session/g1/vp/bob');
     expect(alice.formatted).not.toContain('Bob hates');
 
-    expect(bob.scopes).toContain('group/g1/vp/bob');
-    expect(bob.scopes).not.toContain('group/g1/vp/alice');
+    expect(bob.scopes).toContain('session/g1/vp/bob');
+    expect(bob.scopes).not.toContain('session/g1/vp/alice');
     expect(bob.formatted).not.toContain('refresh tokens');
   });
 
   it('8. abort cancels every parallel turn (each VP gets its own AbortSignal)', async () => {
-    createGroup(groupsRoot, {
+    createSession(sessionsRoot, {
       id: 'g1', name: 'g1', roster: ['alice', 'bob'], defaultVpId: 'alice',
     });
-    const { openGroup } = await import('../../../../agent/yeaft/groups/group-store.js');
-    const group = openGroup(groupsRoot, 'g1');
+    const { openSession } = await import('../../../../agent/yeaft/sessions/session-store.js');
+    const group = openSession(sessionsRoot, 'g1');
 
     const captured = [];
     const coord = createCoordinator(group, {

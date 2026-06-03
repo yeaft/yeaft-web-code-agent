@@ -2,7 +2,7 @@
  * persist.js — Conversation message persistence
  *
  * Each message is stored as a .md file with YAML frontmatter in
- * ~/.yeaft/chat/messages/ or ~/.yeaft/groups/<groupId>/conversation/messages/. Design: zero JSON, all Markdown.
+ * ~/.yeaft/chat/messages/ or ~/.yeaft/groups/<sessionId>/conversation/messages/. Design: zero JSON, all Markdown.
  *
  * Message format:
  *   ---
@@ -104,11 +104,11 @@ function serializeMessage(msg) {
   // their original thread id in `sourceThreadId` so the UI can still
   // render a small "#source" pill next to each bubble.
   if (msg.sourceThreadId) fm.push(`sourceThreadId: ${msg.sourceThreadId}`);
-  // Bug 6: persist groupId so history replay can stamp messages with the
+  // Bug 6: persist sessionId so history replay can stamp messages with the
   // group they originated in. Without this, every replayed message lands
   // in the default group and switching back to the originating group
   // shows an empty pane.
-  if (msg.groupId) fm.push(`groupId: ${msg.groupId}`);
+  if (msg.sessionId) fm.push(`sessionId: ${msg.sessionId}`);
   if (msg.chatId) fm.push(`chatId: ${msg.chatId}`);
   // Group-chat attribution: when a VP authors an assistant turn (either
   // its own reply or a route_forward injection from another VP), stamp
@@ -225,7 +225,7 @@ export function parseMessage(raw) {
       case 'tokens_est': msg.tokens_est = parseInt(value, 10); break;
       case 'threadId': msg.threadId = value; break;
       case 'sourceThreadId': msg.sourceThreadId = value; break;
-      case 'groupId': msg.groupId = value; break;
+      case 'sessionId': msg.sessionId = value; break;
       case 'chatId': msg.chatId = value; break;
       case 'speakerVpId': msg.speakerVpId = value; break;
       case 'attachmentsB64':
@@ -330,15 +330,15 @@ export function parseMessage(raw) {
  *     messages/
  *     cold/
  *     blobs/
- *   groups/<groupId>/conversation/
+ *   groups/<sessionId>/conversation/
  *     compact/
  *     messages/
  *     cold/
  *     blobs/
  *
  * Legacy compatibility: ~/.yeaft/conversation is read as an old mixed store.
- * New writes are split by mode: records with groupId go to
- * groups/<groupId>/conversation/, all others go to chat/.
+ * New writes are split by mode: records with sessionId go to
+ * groups/<sessionId>/conversation/, all others go to chat/.
  */
 export class ConversationStore {
   #dir;         // root dir (e.g. ~/.yeaft)
@@ -380,7 +380,7 @@ export class ConversationStore {
     this.#legacyMsgDir = join(this.#legacyConvDir, 'messages');
     this.#legacyColdDir = join(this.#legacyConvDir, 'cold');
 
-    // Per-(groupId, vpId) compact summary files live under that group's
+    // Per-(sessionId, vpId) compact summary files live under that group's
     // conversation directory. The legacy ~/.yeaft/conversation/compact directory
     // is read for compatibility.
     this.#legacyCompactScopedDir = join(this.#legacyConvDir, 'compact');
@@ -389,7 +389,7 @@ export class ConversationStore {
 
     // Ensure new chat and group-root directories exist (graceful on permission
     // errors). Per-group conversation directories are created lazily once a
-    // groupId is known. The legacy conversation directory is never created by
+    // sessionId is known. The legacy conversation directory is never created by
     // new versions.
     for (const d of [
       this.#chatDir, join(this.#chatDir, 'blobs'), this.#chatMsgDir, this.#chatColdDir,
@@ -535,7 +535,7 @@ export class ConversationStore {
   }
 
   /**
-   * Sanitize one id (groupId or vpId) into a safe filename component.
+   * Sanitize one id (sessionId or vpId) into a safe filename component.
    * Anything outside `[A-Za-z0-9._-]` collapses to `_`; max 120 chars.
    * For directory path components, use `#safeDirComponent` instead; this
    * helper intentionally preserves historical compact-summary filenames.
@@ -553,27 +553,27 @@ export class ConversationStore {
   }
 
   /**
-   * Sanitize a (groupId, vpId) pair into a safe filename. We accept
-   * arbitrary user strings here (groupIds and vpIds are user-set), so
+   * Sanitize a (sessionId, vpId) pair into a safe filename. We accept
+   * arbitrary user strings here (sessionIds and vpIds are user-set), so
    * the result is purely a basename — never parsed back.
    *
-   * @param {string} groupId
+   * @param {string} sessionId
    * @param {string} vpId
    * @returns {string|null} — full path, or null if either id missing
    */
-  #scopedCompactPath(groupId, vpId) {
-    if (!groupId || !vpId) return null;
-    const compactDir = join(this.#groupConversationDir(groupId, { create: true }), 'compact');
+  #scopedCompactPath(sessionId, vpId) {
+    if (!sessionId || !vpId) return null;
+    const compactDir = join(this.#groupConversationDir(sessionId, { create: true }), 'compact');
     return join(compactDir, `${this.#safeIdComponent(vpId)}.md`);
   }
 
-  #legacyScopedCompactPath(groupId, vpId) {
-    if (!groupId || !vpId) return null;
-    return join(this.#legacyCompactScopedDir, `${this.#safeIdComponent(groupId)}__${this.#safeIdComponent(vpId)}.md`);
+  #legacyScopedCompactPath(sessionId, vpId) {
+    if (!sessionId || !vpId) return null;
+    return join(this.#legacyCompactScopedDir, `${this.#safeIdComponent(sessionId)}__${this.#safeIdComponent(vpId)}.md`);
   }
 
   /**
-   * Read a per-(groupId, vpId) compact summary. Returns '' if no summary
+   * Read a per-(sessionId, vpId) compact summary. Returns '' if no summary
    * has been written yet. Falls back to nothing — callers that need the
    * legacy global file should call `readCompactSummary()` explicitly.
    *
@@ -583,13 +583,13 @@ export class ConversationStore {
    * unrelated content and every VP read the same merged blob. See
    * `engine.#runOrchestratorCompact`.
    *
-   * @param {string} groupId
+   * @param {string} sessionId
    * @param {string} vpId
    * @returns {string}
    */
-  readCompactSummaryFor(groupId, vpId) {
-    const path = this.#scopedCompactPath(groupId, vpId);
-    const legacyPath = this.#legacyScopedCompactPath(groupId, vpId);
+  readCompactSummaryFor(sessionId, vpId) {
+    const path = this.#scopedCompactPath(sessionId, vpId);
+    const legacyPath = this.#legacyScopedCompactPath(sessionId, vpId);
     for (const candidate of [path, legacyPath]) {
       if (!candidate || !existsSync(candidate)) continue;
       try { return readFileSync(candidate, 'utf8'); }
@@ -599,16 +599,16 @@ export class ConversationStore {
   }
 
   /**
-   * Rewrite a per-(groupId, vpId) compact summary in place. See
+   * Rewrite a per-(sessionId, vpId) compact summary in place. See
    * `replaceCompactSummary` for the rationale — same reason, scoped file.
    *
-   * @param {string} groupId
+   * @param {string} sessionId
    * @param {string} vpId
    * @param {string} summary
    */
-  replaceCompactSummaryFor(groupId, vpId, summary) {
+  replaceCompactSummaryFor(sessionId, vpId, summary) {
     if (typeof summary !== 'string' || !summary) return;
-    const path = this.#scopedCompactPath(groupId, vpId);
+    const path = this.#scopedCompactPath(sessionId, vpId);
     if (!path) return;
     try {
       writeFileSync(path, summary, { encoding: 'utf8', mode: 0o644 });
@@ -625,22 +625,22 @@ export class ConversationStore {
   }
 
   /**
-   * Check whether ANY per-(group, vp) compact summary exists for `groupId`.
+   * Check whether ANY per-(group, vp) compact summary exists for `sessionId`.
    * Used by the history-replay path to decide whether to flag
    * `hasCompactSummary` for the UI without committing to one VP's view.
    *
-   * @param {string} groupId
+   * @param {string} sessionId
    * @returns {boolean}
    */
-  hasAnyCompactSummaryForGroup(groupId) {
-    if (!groupId) return false;
-    const compactDir = join(this.#groupConversationDir(groupId), 'compact');
+  hasAnyCompactSummaryForGroup(sessionId) {
+    if (!sessionId) return false;
+    const compactDir = join(this.#groupConversationDir(sessionId), 'compact');
     for (const dir of [compactDir, this.#legacyCompactScopedDir]) {
       if (!existsSync(dir)) continue;
       try {
         for (const f of readdirSync(dir)) {
           if (dir === compactDir && f.endsWith('.md')) return true;
-          if (dir === this.#legacyCompactScopedDir && f.startsWith(`${this.#safeIdComponent(groupId)}__`) && f.endsWith('.md')) return true;
+          if (dir === this.#legacyCompactScopedDir && f.startsWith(`${this.#safeIdComponent(sessionId)}__`) && f.endsWith('.md')) return true;
         }
       } catch { /* best-effort */ }
     }
@@ -755,11 +755,11 @@ export class ConversationStore {
   }
 
   /**
-   * Load recent hot messages stamped with `groupId`, sliced to the last
+   * Load recent hot messages stamped with `sessionId`, sliced to the last
    * `turnsLimit` TURNS and sorted chronologically.
    *
    * Group-history-isolation (Bug 7): a message lives in exactly one
-   * group. Messages without a `groupId` frontmatter (legacy / pre-
+   * group. Messages without a `sessionId` frontmatter (legacy / pre-
    * grouping) are NOT returned — they would otherwise leak into every
    * group's stream.
    *
@@ -782,26 +782,26 @@ export class ConversationStore {
    * typical inboxes (≤ a few thousand hot messages) this is cheap; if
    * it ever becomes a hot path we add a per-group on-disk index.
    *
-   * @param {string} groupId — required; null/empty returns []
+   * @param {string} sessionId — required; null/empty returns []
    * @param {number} [turnsLimit=DEFAULT_RECENT_TURNS]
    * @returns {object[]}
    */
-  loadRecentByGroup(groupId, turnsLimit = DEFAULT_RECENT_TURNS) {
-    if (!groupId) return [];
-    const all = this.#loadGroupMessages(groupId)
-    const filtered = all.filter(m => m && m.groupId === groupId);
+  loadRecentByGroup(sessionId, turnsLimit = DEFAULT_RECENT_TURNS) {
+    if (!sessionId) return [];
+    const all = this.#loadGroupMessages(sessionId)
+    const filtered = all.filter(m => m && m.sessionId === sessionId);
     if (turnsLimit === Infinity || turnsLimit < 0) return pairSanitize(filtered);
     return pairSanitize(sliceLastNTurns(filtered, turnsLimit));
   }
 
   /**
-   * Load every hot message stamped with `groupId`.
+   * Load every hot message stamped with `sessionId`.
    *
-   * @param {string} groupId
+   * @param {string} sessionId
    * @returns {object[]}
    */
-  loadAllByGroup(groupId) {
-    return this.loadRecentByGroup(groupId, Infinity);
+  loadAllByGroup(sessionId) {
+    return this.loadRecentByGroup(sessionId, Infinity);
   }
 
   /**
@@ -825,16 +825,16 @@ export class ConversationStore {
    * The output is pair-safe by construction for THIS VP's tool arcs and
    * carries only summary-relevant text for the other VPs.
    *
-   * @param {string} groupId
+   * @param {string} sessionId
    * @param {string} vpId
    * @returns {object[]}
    */
-  loadGroupHistoryForVp(groupId, vpId) {
-    if (!groupId || !vpId) return [];
-    const all = this.#loadGroupMessages(groupId)
+  loadGroupHistoryForVp(sessionId, vpId) {
+    if (!sessionId || !vpId) return [];
+    const all = this.#loadGroupMessages(sessionId)
     const out = [];
     for (const m of all) {
-      if (!m || m.groupId !== groupId) continue;
+      if (!m || m.sessionId !== sessionId) continue;
       if (m._reflection || m.internal || m.systemOnly || m.systemOnlyMessage) continue;
       if (m.role === 'user') {
         out.push(m);
@@ -871,7 +871,7 @@ export class ConversationStore {
 
   /**
    * Pagination-cursor read: load the page of `turnsLimit` TURNS that ends
-   * just before `beforeSeq` (exclusive) for the given `groupId`. Used by
+   * just before `beforeSeq` (exclusive) for the given `sessionId`. Used by
    * the Yeaft "Load older messages" UI to walk backwards through history
    * one click at a time.
    *
@@ -889,7 +889,7 @@ export class ConversationStore {
    * are already pair-safe, but historical / hand-edited stores may
    * contain orphan tool_use/tool_result pairs.
    *
-   * @param {string} groupId — required; null/empty returns empty result
+   * @param {string} sessionId — required; null/empty returns empty result
    * @param {number|null} beforeSeq — exclusive upper bound on message
    *   sequence id. Special cases:
    *   - `null` / `undefined` / non-finite (e.g. `Infinity`, `NaN`) → start
@@ -901,14 +901,14 @@ export class ConversationStore {
    * @param {number} [turnsLimit=DEFAULT_RECENT_TURNS] — max turns per page
    * @returns {{ messages: object[], oldestSeq: number|null, hasMore: boolean }}
    */
-  loadOlderByGroup(groupId, beforeSeq, turnsLimit = DEFAULT_RECENT_TURNS) {
-    if (!groupId) return { messages: [], oldestSeq: null, hasMore: false };
-    const hot = this.#loadGroupHotMessages(groupId);
-    const cold = this.#loadGroupColdMessages(groupId);
+  loadOlderByGroup(sessionId, beforeSeq, turnsLimit = DEFAULT_RECENT_TURNS) {
+    if (!sessionId) return { messages: [], oldestSeq: null, hasMore: false };
+    const hot = this.#loadGroupHotMessages(sessionId);
+    const cold = this.#loadGroupColdMessages(sessionId);
     // Cold ids strictly < hot ids by construction → chronological concat.
     const all = [...cold, ...hot];
     const cutoff = Number.isFinite(beforeSeq) ? beforeSeq : Infinity;
-    const prefix = all.filter(m => m && m.groupId === groupId
+    const prefix = all.filter(m => m && m.sessionId === sessionId
       && parseSeqFromId(m.id) < cutoff);
     if (prefix.length === 0) return { messages: [], oldestSeq: null, hasMore: false };
     const sliced = pairSanitize(sliceLastNTurns(prefix, turnsLimit));
@@ -935,17 +935,17 @@ export class ConversationStore {
    * window, so a dense run of hidden metadata cannot force the first screen to
    * scan and materialize the group's entire history in the web bridge.
    *
-   * @param {string} groupId
+   * @param {string} sessionId
    * @param {number|null} beforeSeq — exclusive upper bound, or null for newest
    * @param {number} [turnsLimit=DEFAULT_RECENT_TURNS]
    * @returns {{ messages: object[], oldestSeq: number|null, hasMore: boolean }}
    */
-  loadVisibleByGroup(groupId, beforeSeq, turnsLimit = DEFAULT_RECENT_TURNS) {
-    if (!groupId || !(turnsLimit > 0)) return { messages: [], oldestSeq: null, hasMore: false };
+  loadVisibleByGroup(sessionId, beforeSeq, turnsLimit = DEFAULT_RECENT_TURNS) {
+    if (!sessionId || !(turnsLimit > 0)) return { messages: [], oldestSeq: null, hasMore: false };
 
     const cutoff = Number.isFinite(beforeSeq) ? beforeSeq : Infinity;
-    const hot = this.#loadVisibleFromDirsByGroup([...this.#groupMessageDirs('messages', groupId), this.#legacyMsgDir], groupId, cutoff);
-    const cold = this.#loadVisibleFromDirsByGroup([...this.#groupMessageDirs('cold', groupId), this.#legacyColdDir], groupId, cutoff);
+    const hot = this.#loadVisibleFromDirsByGroup([...this.#groupMessageDirs('messages', sessionId), this.#legacyMsgDir], sessionId, cutoff);
+    const cold = this.#loadVisibleFromDirsByGroup([...this.#groupMessageDirs('cold', sessionId), this.#legacyColdDir], sessionId, cutoff);
     const visible = [...cold, ...hot];
     if (visible.length === 0) return { messages: [], oldestSeq: null, hasMore: false };
 
@@ -1018,9 +1018,9 @@ export class ConversationStore {
   // ─── Internal ───────────────────────────────────────────
 
   /**
-   * Delete every persisted message stamped with `groupId`. Scans both hot
+   * Delete every persisted message stamped with `sessionId`. Scans both hot
    * (`messages/`) and cold (`cold/`) directories and `unlink`s matching
-   * files. Messages without a `groupId` frontmatter are NOT touched —
+   * files. Messages without a `sessionId` frontmatter are NOT touched —
    * they may be legitimate pre-grouping legacy messages and are handled
    * by `compactOrphans` instead.
    *
@@ -1031,11 +1031,11 @@ export class ConversationStore {
    * Idempotent and safe: missing dirs / unparseable files are skipped.
    * Returns the number of message files removed.
    *
-   * @param {string} groupId
+   * @param {string} sessionId
    * @returns {number}
    */
-  deleteByGroup(groupId) {
-    if (!groupId) return 0;
+  deleteByGroup(sessionId) {
+    if (!sessionId) return 0;
     let removed = 0;
     for (const dir of [this.#chatMsgDir, this.#chatColdDir, ...this.#groupMessageDirs('messages'), ...this.#groupMessageDirs('cold'), this.#legacyMsgDir, this.#legacyColdDir]) {
       if (!existsSync(dir)) continue;
@@ -1056,7 +1056,7 @@ export class ConversationStore {
           throw err;
         }
         const msg = parseMessage(raw);
-        if (!msg || msg.groupId !== groupId) continue;
+        if (!msg || msg.sessionId !== sessionId) continue;
         try {
           unlinkSync(path);
           removed += 1;
@@ -1073,7 +1073,7 @@ export class ConversationStore {
 
   /**
    * Sweep messages that don't belong to any live group. A message is
-   * considered an orphan when its frontmatter `groupId`:
+   * considered an orphan when its frontmatter `sessionId`:
    *   - is missing entirely (legacy / pre-grouping); OR
    *   - is set to a value not in `keepGroupIds`.
    *
@@ -1116,7 +1116,7 @@ export class ConversationStore {
         const msg = parseMessage(raw);
         if (!msg) continue;
         scanned += 1;
-        const isOrphan = !msg.groupId || !keep.has(msg.groupId);
+        const isOrphan = !msg.sessionId || !keep.has(msg.sessionId);
         if (!isOrphan) continue;
         orphans.push(path);
         if (dryRun) continue;
@@ -1357,8 +1357,8 @@ export class ConversationStore {
 
   #messageDirFor(msg) {
     if (msg?.chatId) return join(this.#chatConversationDir(msg.chatId, { create: true }), 'messages');
-    if (!msg?.groupId) return this.#chatMsgDir;
-    return join(this.#groupConversationDir(msg.groupId, { create: true }), 'messages');
+    if (!msg?.sessionId) return this.#chatMsgDir;
+    return join(this.#groupConversationDir(msg.sessionId, { create: true }), 'messages');
   }
 
   #chatConversationDir(chatId, { create = false } = {}) {
@@ -1456,8 +1456,8 @@ export class ConversationStore {
     return pairSanitize(out);
   }
 
-  #groupConversationDir(groupId, { create = false } = {}) {
-    const dir = join(this.#groupsDir, this.#safeDirComponent(groupId), 'conversation');
+  #groupConversationDir(sessionId, { create = false } = {}) {
+    const dir = join(this.#groupsDir, this.#safeDirComponent(sessionId), 'conversation');
     if (create) this.#ensureConversationDirs(dir);
     return dir;
   }
@@ -1472,22 +1472,22 @@ export class ConversationStore {
     if (!existsSync(this.#groupsDir)) return [];
     const dirs = [];
     for (const name of readdirSync(this.#groupsDir)) {
-      const groupDir = join(this.#groupsDir, name);
+      const sessionDir = join(this.#groupsDir, name);
       try {
-        if (!statSync(groupDir).isDirectory()) continue;
+        if (!statSync(sessionDir).isDirectory()) continue;
       } catch (err) {
         if (isPermissionError(err)) continue;
         throw err;
       }
-      const conversationDir = join(groupDir, 'conversation');
+      const conversationDir = join(sessionDir, 'conversation');
       if (existsSync(conversationDir)) dirs.push(conversationDir);
     }
     return dirs;
   }
 
-  #groupMessageDirs(kind, groupId = null) {
-    if (groupId) {
-      const dir = join(this.#groupConversationDir(groupId), kind);
+  #groupMessageDirs(kind, sessionId = null) {
+    if (sessionId) {
+      const dir = join(this.#groupConversationDir(sessionId), kind);
       return existsSync(dir) ? [dir] : [];
     }
     return this.#groupConversationDirs()
@@ -1507,29 +1507,29 @@ export class ConversationStore {
   #loadChatMessages() {
     // Legacy ~/.yeaft/conversation held both chat and group records. For chat
     // mode compatibility, only import legacy records that are not stamped with
-    // a groupId, so group mode cannot bleed into chat.
+    // a sessionId, so group mode cannot bleed into chat.
     return [
-      ...this.#loadFromDir(this.#legacyMsgDir, Infinity).filter(m => !m?.groupId),
+      ...this.#loadFromDir(this.#legacyMsgDir, Infinity).filter(m => !m?.sessionId),
       ...this.#loadFromDir(this.#chatMsgDir, Infinity),
     ].sort(compareMessagesBySeq);
   }
 
-  #loadGroupHotMessages(groupId = null) {
+  #loadGroupHotMessages(sessionId = null) {
     return [
-      ...this.#loadFromDir(this.#legacyMsgDir, Infinity).filter(m => m?.groupId),
-      ...this.#groupMessageDirs('messages', groupId).flatMap(dir => this.#loadFromDir(dir, Infinity)),
+      ...this.#loadFromDir(this.#legacyMsgDir, Infinity).filter(m => m?.sessionId),
+      ...this.#groupMessageDirs('messages', sessionId).flatMap(dir => this.#loadFromDir(dir, Infinity)),
     ].sort(compareMessagesBySeq);
   }
 
-  #loadGroupColdMessages(groupId = null) {
+  #loadGroupColdMessages(sessionId = null) {
     return [
-      ...this.#loadFromDir(this.#legacyColdDir, Infinity).filter(m => m?.groupId),
-      ...this.#groupMessageDirs('cold', groupId).flatMap(dir => this.#loadFromDir(dir, Infinity)),
+      ...this.#loadFromDir(this.#legacyColdDir, Infinity).filter(m => m?.sessionId),
+      ...this.#groupMessageDirs('cold', sessionId).flatMap(dir => this.#loadFromDir(dir, Infinity)),
     ].sort(compareMessagesBySeq);
   }
 
-  #loadGroupMessages(groupId = null) {
-    return [...this.#loadGroupColdMessages(groupId), ...this.#loadGroupHotMessages(groupId)].sort(compareMessagesBySeq);
+  #loadGroupMessages(sessionId = null) {
+    return [...this.#loadGroupColdMessages(sessionId), ...this.#loadGroupHotMessages(sessionId)].sort(compareMessagesBySeq);
   }
 
   #loadAllMessages() {
@@ -1556,8 +1556,8 @@ export class ConversationStore {
     return total;
   }
 
-  #loadVisibleFromDirsByGroup(dirs, groupId, beforeSeq) {
-    return dirs.flatMap(dir => this.#loadVisibleFromDirByGroup(dir, groupId, beforeSeq))
+  #loadVisibleFromDirsByGroup(dirs, sessionId, beforeSeq) {
+    return dirs.flatMap(dir => this.#loadVisibleFromDirByGroup(dir, sessionId, beforeSeq))
       .sort(compareMessagesBySeq);
   }
 
@@ -1619,7 +1619,7 @@ export class ConversationStore {
     return messages;
   }
 
-  #loadVisibleFromDirByGroup(dir, groupId, beforeSeq) {
+  #loadVisibleFromDirByGroup(dir, sessionId, beforeSeq) {
     if (!existsSync(dir)) return [];
 
     const files = readdirSync(dir)
@@ -1632,11 +1632,11 @@ export class ConversationStore {
       if (!Number.isFinite(seq) || seq >= beforeSeq) continue;
 
       const raw = readFileSync(join(dir, file), 'utf8');
-      if (!raw.includes(`groupId: ${groupId}`)) continue;
+      if (!raw.includes(`sessionId: ${sessionId}`)) continue;
       if (!raw.includes('role: user') && !raw.includes('role: assistant')) continue;
 
       const parsed = parseMessage(raw);
-      if (!parsed || parsed.groupId !== groupId) continue;
+      if (!parsed || parsed.sessionId !== sessionId) continue;
       if (parsed._reflection || parsed.internal || parsed.systemOnly || parsed.systemOnlyMessage) continue;
       if (parsed.role !== 'user' && parsed.role !== 'assistant') continue;
       out.push(parsed);

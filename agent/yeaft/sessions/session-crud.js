@@ -3,29 +3,29 @@
  *
  * Wraps the primitives from group-store.js + roster.js into the 5 operations
  * wired to WS events (§Δ10 334m + R6 §Δ31.2):
- *   createGroupFromSpec  — wizard "create new group" (empty or user-picked roster)
- *   renameGroup          — update meta.name; preserves roster / defaultVpId
- *   archiveGroup         — rename dir to `.archived-<ts>-<id>` (soft delete)
+ *   createSessionFromSpec  — wizard "create new group" (empty or user-picked roster)
+ *   renameSession          — update meta.name; preserves roster / defaultVpId
+ *   archiveSession         — rename dir to `.archived-<ts>-<id>` (soft delete)
  *   addMember            — roster.addVp + save; sets defaultVpId if first
  *   removeMember         — roster.removeVp + save; clears/rotates defaultVpId
  *
  * Plus the D1 bootstrap helper:
- *   ensureDefaultGroupIfEmpty(yeaftDir, {libDir}) — if NO group exists on
+ *   ensureDefaultSessionIfEmpty(yeaftDir, {libDir}) — if NO group exists on
  *   disk, seed `grp_default` with roster = every VP in the library, and
  *   defaultVpId = alphabetically first vpId. No-op when ≥1 group present.
  *
  * Hard constraints (PM):
  *   (a) We don't touch 334o storage primitives (storage/index.js) — we call
- *       group-store.openGroup / saveMeta which already go through openLog.
+ *       group-store.openSession / saveMeta which already go through openLog.
  *   (b) We don't touch VP entity (vp-store.js / vp-loader.js) — only read
  *       via scanVpLibrary to know which VPs exist at seed time.
  *   (c) When `addMember` is called with an empty roster and no defaultVpId
- *       resolvable, callers surface `no_default_vp` via `createGroupFromSpec`;
+ *       resolvable, callers surface `no_default_vp` via `createSessionFromSpec`;
  *       on `removeMember` we permit the empty state (UI nudges the user).
  *
- * Error shape — every throw is a `GroupCrudError` with a stable `.code`:
+ * Error shape — every throw is a `SessionCrudError` with a stable `.code`:
  *   'not_found'        — group id has no dir / meta
- *   'duplicate'        — createGroup collided with an existing id
+ *   'duplicate'        — createSession collided with an existing id
  *   'invalid_name'     — display name empty after trim
  *   'no_default_vp'    — seed with empty VP library OR roster empties to []
  *                        and the caller asked for a defaultVpId. (D1 spec)
@@ -46,14 +46,14 @@ import { randomBytes } from 'crypto';
 import { homedir } from 'os';
 import { isAbsolute, join, resolve } from 'path';
 import {
-  openGroup, createGroup, listGroups, loadGroupMeta,
-} from './group-store.js';
+  openSession, createSession, listSessions, loadSessionMeta,
+} from './session-store.js';
 import { addVp as rosterAdd, removeVp as rosterRemove, setDefaultVp } from './roster.js';
-import { seedDefaultGroup, DEFAULT_GROUP_ID } from './seed-default.js';
-import { nextGroupId, validateVpId, isReservedVpId } from './ids.js';
+import { seedDefaultSession, DEFAULT_SESSION_ID } from './seed-default.js';
+import { nextSessionId, validateVpId, isReservedVpId } from './ids.js';
 import { scanVpLibrary, DEFAULT_VP_LIB_DIR } from '../vp/vp-store.js';
 import { seedSummaryIfMissingSync, removeScopeDirSync } from '../memory/store-v2.js';
-import { ensureGroupConfigFile, saveGroupConfig, loadGroupConfig } from './group-config.js';
+import { ensureSessionConfigFile, saveSessionConfig, loadSessionConfig } from './session-config.js';
 
 /**
  * Default memory root used when callers don't pass `options.memoryRoot`.
@@ -73,7 +73,7 @@ const DEFAULT_MEMORY_ROOT = join(homedir(), '.yeaft', 'memory');
  * @param {{name:string, roster?:string[], defaultVpId?:string|null}} spec
  * @returns {string}
  */
-export function buildGroupSeedSummary(spec) {
+export function buildSessionSeedSummary(spec) {
   const name = String(spec?.name || '').trim();
   const roster = Array.isArray(spec?.roster) ? spec.roster : [];
   const lines = [];
@@ -88,19 +88,19 @@ export function buildGroupSeedSummary(spec) {
   return lines.join('\n').trim();
 }
 
-export class GroupCrudError extends Error {
-  constructor(code, groupId, message) {
-    super(message || `${code}: ${groupId}`);
-    this.name = 'GroupCrudError';
+export class SessionCrudError extends Error {
+  constructor(code, sessionId, message) {
+    super(message || `${code}: ${sessionId}`);
+    this.name = 'SessionCrudError';
     this.code = code;
-    this.groupId = groupId;
+    this.sessionId = sessionId;
   }
 }
 
 const GROUP_WORKDIR_REGISTRY = 'group-workdirs.json';
 
-export function groupsRoot(yeaftDir) {
-  return join(yeaftDir, 'groups');
+export function sessionsRoot(yeaftDir) {
+  return join(yeaftDir, 'sessions');
 }
 
 export function normalizeWorkDir(workDir) {
@@ -136,46 +136,46 @@ function writeWorkDirRegistry(yeaftDir, registry) {
   writeFileSync(registryPath(yeaftDir), `${JSON.stringify(registry, null, 2)}\n`);
 }
 
-export function registerGroupWorkDir(defaultYeaftDir, groupId, workDir) {
+export function registerSessionWorkDir(defaultYeaftDir, sessionId, workDir) {
   const normalized = normalizeWorkDir(workDir);
-  if (!defaultYeaftDir || !groupId || !normalized) return;
+  if (!defaultYeaftDir || !sessionId || !normalized) return;
   const registry = readWorkDirRegistry(defaultYeaftDir);
-  registry[groupId] = normalized;
+  registry[sessionId] = normalized;
   writeWorkDirRegistry(defaultYeaftDir, registry);
 }
 
-export function unregisterGroupWorkDir(defaultYeaftDir, groupId) {
-  if (!defaultYeaftDir || !groupId) return;
+export function unregisterSessionWorkDir(defaultYeaftDir, sessionId) {
+  if (!defaultYeaftDir || !sessionId) return;
   const registry = readWorkDirRegistry(defaultYeaftDir);
-  if (!Object.prototype.hasOwnProperty.call(registry, groupId)) return;
-  delete registry[groupId];
+  if (!Object.prototype.hasOwnProperty.call(registry, sessionId)) return;
+  delete registry[sessionId];
   writeWorkDirRegistry(defaultYeaftDir, registry);
 }
 
-export function resolveGroupYeaftDir(defaultYeaftDir, groupId) {
-  if (!defaultYeaftDir || !groupId) return defaultYeaftDir;
-  const defaultGroupDir = join(groupsRoot(defaultYeaftDir), groupId);
-  if (existsSync(defaultGroupDir) && loadGroupMeta(defaultGroupDir)) return defaultYeaftDir;
+export function resolveSessionYeaftDir(defaultYeaftDir, sessionId) {
+  if (!defaultYeaftDir || !sessionId) return defaultYeaftDir;
+  const defaultGroupDir = join(sessionsRoot(defaultYeaftDir), sessionId);
+  if (existsSync(defaultGroupDir) && loadSessionMeta(defaultGroupDir)) return defaultYeaftDir;
 
   const registry = readWorkDirRegistry(defaultYeaftDir);
-  const workDir = normalizeWorkDir(registry[groupId]);
+  const workDir = normalizeWorkDir(registry[sessionId]);
   if (workDir) {
     const candidate = yeaftDirForWorkDir(workDir);
-    const candidateDir = join(groupsRoot(candidate), groupId);
-    if (existsSync(candidateDir) && loadGroupMeta(candidateDir)) return candidate;
+    const candidateDir = join(sessionsRoot(candidate), sessionId);
+    if (existsSync(candidateDir) && loadSessionMeta(candidateDir)) return candidate;
   }
 
   return defaultYeaftDir;
 }
 
 /** Build a safe group id from a display name (slug + ulid-lite suffix). */
-export function makeGroupId(name) {
+export function makeSessionId(name) {
   const slug = String(name || 'group')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 24) || 'group';
-  return nextGroupId(slug);
+  return nextSessionId(slug);
 }
 
 /**
@@ -188,12 +188,12 @@ export function makeGroupId(name) {
  * the UI has somewhere to land — but defaultVpId is null and downstream
  * message send will return `no_default_vp` until the user adds a VP.
  */
-export function ensureDefaultGroupIfEmpty(yeaftDir, options = {}) {
+export function ensureDefaultSessionIfEmpty(yeaftDir, options = {}) {
   const libDir = options.libDir || DEFAULT_VP_LIB_DIR;
   const memoryRoot = options.memoryRoot || DEFAULT_MEMORY_ROOT;
-  const existing = listGroups(groupsRoot(yeaftDir));
+  const existing = listSessions(sessionsRoot(yeaftDir));
   if (existing.length > 0) {
-    return { seeded: false, groupId: existing[0].id };
+    return { seeded: false, sessionId: existing[0].id };
   }
 
   // Sort VP ids alphabetically (stable for tests / deterministic UI).
@@ -204,7 +204,7 @@ export function ensureDefaultGroupIfEmpty(yeaftDir, options = {}) {
   vps.sort((a, b) => a.localeCompare(b));
 
   const defaultVpId = vps[0] || null;
-  const { group, created } = seedDefaultGroup(yeaftDir, {
+  const { group, created } = seedDefaultSession(yeaftDir, {
     name: options.name || 'Default',
     roster: vps,
     defaultVpId,
@@ -212,7 +212,7 @@ export function ensureDefaultGroupIfEmpty(yeaftDir, options = {}) {
   });
   return {
     seeded: created,
-    groupId: group.id,
+    sessionId: group.id,
     defaultVpId,
     rosterSize: vps.length,
   };
@@ -226,21 +226,21 @@ export function ensureDefaultGroupIfEmpty(yeaftDir, options = {}) {
  * @param {{name:string, roster?:string[], defaultVpId?:string|null, workDir?:string}} spec
  * @returns {{id:string, name:string, roster:string[], defaultVpId:string|null, workDir?:string}}
  */
-export function createGroupFromSpec(yeaftDir, spec, options = {}) {
+export function createSessionFromSpec(yeaftDir, spec, options = {}) {
   const normalizedWorkDir = normalizeWorkDir(spec && spec.workDir);
   const groupYeaftDir = normalizedWorkDir ? yeaftDirForWorkDir(normalizedWorkDir) : yeaftDir;
   const memoryRoot = options.memoryRoot || (groupYeaftDir ? join(groupYeaftDir, 'memory') : DEFAULT_MEMORY_ROOT);
   const name = String(spec && spec.name || '').trim();
-  if (!name) throw new GroupCrudError('invalid_name', null, 'group name required');
+  if (!name) throw new SessionCrudError('invalid_name', null, 'group name required');
 
   const roster = Array.isArray(spec.roster) ? spec.roster.slice() : [];
   // Validate every member up-front so we fail before touching fs.
   for (const vpId of roster) {
     if (isReservedVpId(vpId)) {
-      throw new GroupCrudError('reserved', null, `reserved vpId: ${vpId}`);
+      throw new SessionCrudError('reserved', null, `reserved vpId: ${vpId}`);
     }
     const v = validateVpId(vpId);
-    if (!v.ok) throw new GroupCrudError(v.reason, null, `invalid vpId: ${vpId}`);
+    if (!v.ok) throw new SessionCrudError(v.reason, null, `invalid vpId: ${vpId}`);
   }
 
   // defaultVpId resolution: explicit > roster[0] > null. Null is allowed at
@@ -248,21 +248,21 @@ export function createGroupFromSpec(yeaftDir, spec, options = {}) {
   // (task-334m spec: `no_default_vp` surfaced on first send, not on create).
   let defaultVpId = spec.defaultVpId || null;
   if (defaultVpId && !roster.includes(defaultVpId)) {
-    throw new GroupCrudError('default_not_in_roster', null, `${defaultVpId} not in roster`);
+    throw new SessionCrudError('default_not_in_roster', null, `${defaultVpId} not in roster`);
   }
   if (!defaultVpId) defaultVpId = roster[0] || null;
 
-  const id = makeGroupId(name);
-  const root = groupsRoot(groupYeaftDir);
+  const id = makeSessionId(name);
+  const root = sessionsRoot(groupYeaftDir);
   if (existsSync(join(root, id))) {
     // Extremely unlikely (ulid suffix), but surface deterministically.
-    throw new GroupCrudError('duplicate', id);
+    throw new SessionCrudError('duplicate', id);
   }
 
-  const handle = createGroup(root, { id, name, roster, defaultVpId, workDir: normalizedWorkDir });
+  const handle = createSession(root, { id, name, roster, defaultVpId, workDir: normalizedWorkDir });
   const meta = handle.getMeta();
   handle.close();
-  if (normalizedWorkDir) registerGroupWorkDir(yeaftDir, id, normalizedWorkDir);
+  if (normalizedWorkDir) registerSessionWorkDir(yeaftDir, id, normalizedWorkDir);
 
   // Per-group config (v1: model only). We always create an empty
   // config.json so the file's presence signals "owned by this group" and
@@ -270,9 +270,9 @@ export function createGroupFromSpec(yeaftDir, spec, options = {}) {
   // wizard spec (currently just `config.model`) are persisted here so
   // the engine cache picks them up on the very first turn.
   try {
-    ensureGroupConfigFile(yeaftDir, id);
+    ensureSessionConfigFile(yeaftDir, id);
     if (spec && spec.config && typeof spec.config === 'object') {
-      saveGroupConfig(yeaftDir, id, spec.config);
+      saveSessionConfig(yeaftDir, id, spec.config);
     }
   } catch (err) {
     console.warn(`[group-crud] failed to seed config.json for ${id}:`, err?.message || err);
@@ -284,7 +284,7 @@ export function createGroupFromSpec(yeaftDir, spec, options = {}) {
   try {
     seedSummaryIfMissingSync(
       { kind: 'group', id },
-      buildGroupSeedSummary({ name, roster, defaultVpId }),
+      buildSessionSeedSummary({ name, roster, defaultVpId }),
       { root: memoryRoot },
     );
   } catch (err) {
@@ -297,10 +297,10 @@ export function createGroupFromSpec(yeaftDir, spec, options = {}) {
 /**
  * (A.2) Rename — updates meta.name; preserves everything else.
  */
-export function renameGroup(yeaftDir, groupId, newName) {
+export function renameSession(yeaftDir, sessionId, newName) {
   const name = String(newName || '').trim();
-  if (!name) throw new GroupCrudError('invalid_name', groupId);
-  const handle = requireGroup(yeaftDir, groupId);
+  if (!name) throw new SessionCrudError('invalid_name', sessionId);
+  const handle = requireSession(yeaftDir, sessionId);
   const meta = handle.getMeta();
   handle.saveMeta({ ...meta, name });
   const next = handle.getMeta();
@@ -315,12 +315,12 @@ export function renameGroup(yeaftDir, groupId, newName) {
  * `text` must be a string. Trimmed before persist so leading/trailing
  * whitespace doesn't pollute the prompt.
  */
-export function updateGroupAnnouncement(yeaftDir, groupId, text) {
+export function updateSessionAnnouncement(yeaftDir, sessionId, text) {
   if (typeof text !== 'string') {
-    throw new GroupCrudError('invalid_announcement', groupId);
+    throw new SessionCrudError('invalid_announcement', sessionId);
   }
   const announcement = text.trim();
-  const handle = requireGroup(yeaftDir, groupId);
+  const handle = requireSession(yeaftDir, sessionId);
   const meta = handle.getMeta();
   handle.saveMeta({ ...meta, announcement });
   const next = handle.getMeta();
@@ -332,13 +332,13 @@ export function updateGroupAnnouncement(yeaftDir, groupId, text) {
  * (A.2.c) Persist the model selected in the group conversation header.
  * Returns the persisted config object so the caller can broadcast it.
  *
- * Throws GroupConfigError on validation failure (unknown key, bad type).
- * Group must exist (we call requireGroup to assert).
+ * Throws SessionConfigError on validation failure (unknown key, bad type).
+ * Group must exist (we call requireSession to assert).
  */
-export function updateGroupConfig(yeaftDir, groupId, partial) {
-  const handle = requireGroup(yeaftDir, groupId);
+export function updateSessionConfig(yeaftDir, sessionId, partial) {
+  const handle = requireSession(yeaftDir, sessionId);
   try {
-    return saveGroupConfig(yeaftDir, groupId, partial || {});
+    return saveSessionConfig(yeaftDir, sessionId, partial || {});
   } finally {
     handle.close();
   }
@@ -346,26 +346,26 @@ export function updateGroupConfig(yeaftDir, groupId, partial) {
 
 /**
  * (A.3) Archive — renames the dir to `.archived-<ts>-<id>`. Directory
- * prefix `.` keeps `listGroups` from picking it up (readdirSync filter in
+ * prefix `.` keeps `listSessions` from picking it up (readdirSync filter in
  * the caller). Reversible: user can rename back manually for recovery.
  *
  * We do NOT support hard-delete here — that's an upstream UI flow with its
  * own second-confirm modal (acceptance #4 in task-334-slice-specs.md 334m).
  */
-export function archiveGroup(yeaftDir, groupId) {
-  const groupYeaftDir = resolveGroupYeaftDir(yeaftDir, groupId);
-  const root = groupsRoot(groupYeaftDir);
-  const srcDir = join(root, groupId);
-  if (!existsSync(srcDir) || !loadGroupMeta(srcDir)) {
-    throw new GroupCrudError('not_found', groupId);
+export function archiveSession(yeaftDir, sessionId) {
+  const groupYeaftDir = resolveSessionYeaftDir(yeaftDir, sessionId);
+  const root = sessionsRoot(groupYeaftDir);
+  const srcDir = join(root, sessionId);
+  if (!existsSync(srcDir) || !loadSessionMeta(srcDir)) {
+    throw new SessionCrudError('not_found', sessionId);
   }
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
   // Append 4 hex chars to disambiguate same-millisecond archives (nit #5).
   const suffix = randomBytes(2).toString('hex');
-  const dstDir = join(root, `.archived-${ts}-${suffix}-${groupId}`);
+  const dstDir = join(root, `.archived-${ts}-${suffix}-${sessionId}`);
   renameSync(srcDir, dstDir);
-  unregisterGroupWorkDir(yeaftDir, groupId);
-  return { groupId, archivedAs: dstDir };
+  unregisterSessionWorkDir(yeaftDir, sessionId);
+  return { sessionId, archivedAs: dstDir };
 }
 
 /**
@@ -373,27 +373,27 @@ export function archiveGroup(yeaftDir, groupId) {
  * contents (group.json, messages/, tasks/, vps/). Irreversible.
  *
  * Bug 8 fix: replaces the soft-archive flow that left `.archived-*` dirs
- * lying around in `~/.yeaft/groups/`. Per user request, "delete" means
+ * lying around in `~/.yeaft/sessions/`. Per user request, "delete" means
  * physical deletion, not rename.
  *
- * Also sweeps any sibling `.archived-*-<groupId>` dirs that were left
+ * Also sweeps any sibling `.archived-*-<sessionId>` dirs that were left
  * behind by the previous soft-archive implementation, so a single
  * delete cleans up legacy state too.
  */
-export function deleteGroup(yeaftDir, groupId, options = {}) {
-  const groupYeaftDir = resolveGroupYeaftDir(yeaftDir, groupId);
+export function deleteSession(yeaftDir, sessionId, options = {}) {
+  const groupYeaftDir = resolveSessionYeaftDir(yeaftDir, sessionId);
   const memoryRoot = options.memoryRoot || (groupYeaftDir ? join(groupYeaftDir, 'memory') : DEFAULT_MEMORY_ROOT);
-  const root = groupsRoot(groupYeaftDir);
-  const srcDir = join(root, groupId);
-  const liveExists = existsSync(srcDir) && !!loadGroupMeta(srcDir);
+  const root = sessionsRoot(groupYeaftDir);
+  const srcDir = join(root, sessionId);
+  const liveExists = existsSync(srcDir) && !!loadSessionMeta(srcDir);
 
-  // Collect any leftover soft-archive directories matching this groupId.
+  // Collect any leftover soft-archive directories matching this sessionId.
   const legacyDirs = [];
   if (existsSync(root)) {
     for (const name of readdirSync(root)) {
       if (!name.startsWith('.archived-')) continue;
-      // Soft-archive format: .archived-<ts>-<suffix>-<groupId>
-      if (!name.endsWith(`-${groupId}`)) continue;
+      // Soft-archive format: .archived-<ts>-<suffix>-<sessionId>
+      if (!name.endsWith(`-${sessionId}`)) continue;
       const p = join(root, name);
       try {
         if (statSync(p).isDirectory()) legacyDirs.push(p);
@@ -402,7 +402,7 @@ export function deleteGroup(yeaftDir, groupId, options = {}) {
   }
 
   if (!liveExists && legacyDirs.length === 0) {
-    throw new GroupCrudError('not_found', groupId);
+    throw new SessionCrudError('not_found', sessionId);
   }
 
   if (liveExists) {
@@ -415,13 +415,13 @@ export function deleteGroup(yeaftDir, groupId, options = {}) {
   // Cascade: drop the group's memory scope so a recreate with the same id
   // starts clean. Best-effort — never let memory cleanup fail the CRUD op.
   try {
-    removeScopeDirSync({ kind: 'group', id: groupId }, { root: memoryRoot });
+    removeScopeDirSync({ kind: 'group', id: sessionId }, { root: memoryRoot });
   } catch (err) {
-    console.warn(`[group-crud] failed to remove memory dir for ${groupId}:`, err?.message || err);
+    console.warn(`[group-crud] failed to remove memory dir for ${sessionId}:`, err?.message || err);
   }
 
-  unregisterGroupWorkDir(yeaftDir, groupId);
-  return { groupId, deleted: true, legacyCleanedUp: legacyDirs.length };
+  unregisterSessionWorkDir(yeaftDir, sessionId);
+  return { sessionId, deleted: true, legacyCleanedUp: legacyDirs.length };
 }
 
 /**
@@ -429,8 +429,8 @@ export function deleteGroup(yeaftDir, groupId, options = {}) {
  * orphans of the old soft-archive flow. Used at boot so users don't see
  * ghost groups in subsequent loads. Returns the list of removed paths.
  */
-export function purgeArchivedGroups(yeaftDir) {
-  const root = groupsRoot(yeaftDir);
+export function purgeArchivedSessions(yeaftDir) {
+  const root = sessionsRoot(yeaftDir);
   if (!existsSync(root)) return [];
   const removed = [];
   for (const name of readdirSync(root)) {
@@ -451,8 +451,8 @@ export function purgeArchivedGroups(yeaftDir) {
  * (A.4) Add a VP to the group roster. Idempotent — no-op if already present.
  * Returns the new meta.
  */
-export function addMember(yeaftDir, groupId, vpId) {
-  const handle = requireGroup(yeaftDir, groupId);
+export function addMember(yeaftDir, sessionId, vpId) {
+  const handle = requireSession(yeaftDir, sessionId);
   try {
     const meta = handle.getMeta();
     const next = rosterAdd(meta, vpId);
@@ -467,8 +467,8 @@ export function addMember(yeaftDir, groupId, vpId) {
  * (A.5) Remove a VP from the group roster. If the removed id was default,
  * roster.removeVp rotates to the next member (or null).
  */
-export function removeMember(yeaftDir, groupId, vpId) {
-  const handle = requireGroup(yeaftDir, groupId);
+export function removeMember(yeaftDir, sessionId, vpId) {
+  const handle = requireSession(yeaftDir, sessionId);
   try {
     const meta = handle.getMeta();
     if (!meta.roster.includes(vpId)) {
@@ -484,8 +484,8 @@ export function removeMember(yeaftDir, groupId, vpId) {
 }
 
 /** Expose default-VP setter for UI "set as default" affordance. */
-export function setGroupDefaultVp(yeaftDir, groupId, vpId) {
-  const handle = requireGroup(yeaftDir, groupId);
+export function setSessionDefaultVp(yeaftDir, sessionId, vpId) {
+  const handle = requireSession(yeaftDir, sessionId);
   try {
     const meta = handle.getMeta();
     const next = setDefaultVp(meta, vpId);
@@ -496,35 +496,35 @@ export function setGroupDefaultVp(yeaftDir, groupId, vpId) {
   }
 }
 
-export function requireGroup(yeaftDir, groupId) {
-  const groupYeaftDir = resolveGroupYeaftDir(yeaftDir, groupId);
-  const root = groupsRoot(groupYeaftDir);
-  const dir = join(root, groupId);
-  if (!existsSync(dir) || !loadGroupMeta(dir)) {
-    throw new GroupCrudError('not_found', groupId);
+export function requireSession(yeaftDir, sessionId) {
+  const groupYeaftDir = resolveSessionYeaftDir(yeaftDir, sessionId);
+  const root = sessionsRoot(groupYeaftDir);
+  const dir = join(root, sessionId);
+  if (!existsSync(dir) || !loadSessionMeta(dir)) {
+    throw new SessionCrudError('not_found', sessionId);
   }
-  return openGroup(root, groupId);
+  return openSession(root, sessionId);
 }
 
 /** Convenience: snapshot all non-archived groups for WS broadcast. */
-export function snapshotGroups(yeaftDir) {
+export function snapshotSessions(yeaftDir) {
   const byId = new Map();
-  for (const group of listGroups(groupsRoot(yeaftDir))) {
+  for (const group of listSessions(sessionsRoot(yeaftDir))) {
     byId.set(group.id, group);
   }
   const registry = readWorkDirRegistry(yeaftDir);
-  for (const [groupId, workDir] of Object.entries(registry)) {
+  for (const [sessionId, workDir] of Object.entries(registry)) {
     const groupYeaftDir = yeaftDirForWorkDir(workDir);
-    const dir = join(groupsRoot(groupYeaftDir), groupId);
-    const meta = existsSync(dir) ? loadGroupMeta(dir) : null;
+    const dir = join(sessionsRoot(groupYeaftDir), sessionId);
+    const meta = existsSync(dir) ? loadSessionMeta(dir) : null;
     if (meta) byId.set(meta.id, meta);
   }
   // Attach per-group config overrides (v1: just `model`). Frontend can
   // render the effective model without re-querying.
   for (const meta of byId.values()) {
-    meta.config = loadGroupConfig(yeaftDir, meta.id);
+    meta.config = loadSessionConfig(yeaftDir, meta.id);
   }
   return Array.from(byId.values()).sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
 }
 
-export { DEFAULT_GROUP_ID };
+export { DEFAULT_SESSION_ID };

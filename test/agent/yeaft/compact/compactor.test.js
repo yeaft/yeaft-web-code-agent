@@ -147,8 +147,8 @@ describe('Compactor', () => {
 
       // Sink fired with the expected fields.
       expect(onCompacted).toHaveBeenCalledTimes(1);
-      const [groupId, result] = onCompacted.mock.calls[0];
-      expect(groupId).toBe('grp');
+      const [sessionId, result] = onCompacted.mock.calls[0];
+      expect(sessionId).toBe('grp');
       expect(result).toMatchObject({
         beforeTurns: expect.any(Number),
         afterTurns: expect.any(Number),

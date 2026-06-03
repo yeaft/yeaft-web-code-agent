@@ -18,7 +18,7 @@ import {
   readProjectDoc,
   PROJECT_DOC_FILENAMES,
   DEFAULT_PROJECT_DOC_MAX_BYTES,
-} from '../../../../agent/yeaft/groups/project-doc.js';
+} from '../../../../agent/yeaft/sessions/project-doc.js';
 
 describe('pickProjectDocFile', () => {
   let workDir;

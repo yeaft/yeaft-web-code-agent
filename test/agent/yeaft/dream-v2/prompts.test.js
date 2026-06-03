@@ -9,17 +9,17 @@ describe('dream-v2 prompts loader', () => {
   it('renders triagePass1 with substituted vars', () => {
     _resetCache();
     const out = render('triagePass1', {
-      groupId: 'g-eng',
+      sessionId: 'g-eng',
       topicSummaries: '  - topic/a — x',
       conversation: '[user]\nhi',
     });
-    expect(out).toContain('Group: g-eng');
+    expect(out).toContain('Session: g-eng');
     expect(out).toContain('  - topic/a — x');
     expect(out).toContain('[user]\nhi');
   });
 
   it('throws on missing template var', () => {
-    expect(() => render('triagePass1', { groupId: 'g' })).toThrow(/missing var/);
+    expect(() => render('triagePass1', { sessionId: 'g' })).toThrow(/missing var/);
   });
 
   it('throws on unknown template name', () => {
@@ -79,7 +79,7 @@ describe('dream-v2 prompts loader', () => {
   it('builds zh triage prompts with Chinese visible instructions and English protocol keys', () => {
     const out = buildPass1Prompt({
       language: 'zh',
-      groupId: 'g-eng',
+      sessionId: 'g-eng',
       topicSummaries: [],
       messages: [{ role: 'user', kind: 'overlap', body: '你好' }],
     });
@@ -96,7 +96,7 @@ describe('dream-v2 prompts loader', () => {
       target: 'user',
       memoryMd: '旧记忆',
       summaryMd: '摘要',
-      sources: [{ groupId: 'g', diff: [{ role: 'user', kind: 'overlap', body: '新的事实' }] }],
+      sources: [{ sessionId: 'g', diff: [{ role: 'user', kind: 'overlap', body: '新的事实' }] }],
       batchInfo: { index: 1, total: 2 },
     });
     expect(update).toContain('这是第 1/2 批');
@@ -108,7 +108,7 @@ describe('dream-v2 prompts loader', () => {
     const create = buildCreatePrompt({
       language: 'zh',
       target: 'topic/auth/jwt',
-      sources: [{ groupId: 'g', diff: [{ role: 'user', body: 'JWT 讨论' }] }],
+      sources: [{ sessionId: 'g', diff: [{ role: 'user', body: 'JWT 讨论' }] }],
       siblingTopics: [{ path: 'auth/oauth', summary: 'OAuth notes' }],
     });
     expect(create).toContain('语气参考');
@@ -133,8 +133,8 @@ describe('dream-v2 per-scope extract prompts (H2.e)', () => {
     expect(out).toMatch(/persona|voice|expertise|interaction/i);
   });
 
-  it('extractGroup substitutes groupId', () => {
-    const out = render('extractGroup', { groupId: 'g-eng' });
+  it('extractSession substitutes sessionId', () => {
+    const out = render('extractSession', { sessionId: 'g-eng' });
     expect(out).toContain('g-eng');
     expect(out).toMatch(/purpose|members|conventions/i);
   });
@@ -165,8 +165,8 @@ describe('extractTemplateForScope', () => {
   it('routes group/<g>/vp/<v> to extractVp (nested before bare group)', () => {
     expect(extractTemplateForScope('group/eng/vp/alice')).toBe('extractVp');
   });
-  it('routes bare group/<g> to extractGroup', () => {
-    expect(extractTemplateForScope('group/eng')).toBe('extractGroup');
+  it('routes bare group/<g> to extractSession', () => {
+    expect(extractTemplateForScope('group/eng')).toBe('extractSession');
   });
   it('routes group/<g>/user to extractUser', () => {
     expect(extractTemplateForScope('group/eng/user')).toBe('extractUser');
@@ -174,8 +174,8 @@ describe('extractTemplateForScope', () => {
   it('routes group/<g>/topic/* to extractTopic', () => {
     expect(extractTemplateForScope('group/eng/topic/auth/jwt')).toBe('extractTopic');
   });
-  it('routes group/<g>/feature/* to extractGroup (no dedicated feature template)', () => {
-    expect(extractTemplateForScope('group/eng/feature/memory-h2')).toBe('extractGroup');
+  it('routes group/<g>/feature/* to extractSession (no dedicated feature template)', () => {
+    expect(extractTemplateForScope('group/eng/feature/memory-h2')).toBe('extractSession');
   });
   it('still routes legacy bare vp/* and topic/* (defensive)', () => {
     expect(extractTemplateForScope('vp/alice')).toBe('extractVp');

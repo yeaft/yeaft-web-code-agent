@@ -69,7 +69,7 @@ function mkSession({ delayMs = 0 } = {}) {
 
 function envelope(id, text) {
   return {
-    groupId: 'g1',
+    sessionId: 'g1',
     taskId: `task-${id}`,
     trigger: 'mention',
     msg: {

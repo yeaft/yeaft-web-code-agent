@@ -4,7 +4,7 @@
  * Verifies the Bug 2 fix: concurrent VP turns don't cancel each other.
  *
  * Pre-707 problems (see plan):
- *   1. Every entry to handleYeaftGroupChat did a blanket abort() that
+ *   1. Every entry to handleYeaftSessionSend did a blanket abort() that
  *      killed every in-flight VP turn.
  *   2. The shared session.engine instance had `#`-private fields
  *      (`#currentAbortCtrl`, `#__queryCounter`, `#pendingT2`,
@@ -12,7 +12,7 @@
  *      between VPs running in parallel.
  *
  * Post-707:
- *   - Per-VP Engine instances (one per (groupId, vpId)). Verified by
+ *   - Per-VP Engine instances (one per (sessionId, vpId)). Verified by
  *     constructing two engines and confirming their `traceId` /
  *     `isRunning` state is independent.
  *   - Per-VP AbortControllers. Verified by constructing two controllers
@@ -23,7 +23,7 @@
  *
  * The full bridge entry-gate selective-abort scenario (a VP-A long
  * tool call survives a fresh @vp-b user message) requires
- * `handleYeaftGroupChat` which boots loadSession; that's covered by
+ * `handleYeaftSessionSend` which boots loadSession; that's covered by
  * the manual smoke matrix in the plan file.
  */
 
@@ -36,8 +36,8 @@ import { Engine } from '../../../agent/yeaft/engine.js';
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
 import { defineTool } from '../../../agent/yeaft/tools/types.js';
-import { createGroup, openGroup } from '../../../agent/yeaft/groups/group-store.js';
-import { createCoordinator } from '../../../agent/yeaft/groups/coordinator.js';
+import { createSession, openSession } from '../../../agent/yeaft/sessions/session-store.js';
+import { createCoordinator } from '../../../agent/yeaft/sessions/coordinator.js';
 
 class MockAdapter {
   constructor() {
@@ -75,11 +75,11 @@ class MockAdapter {
 }
 
 let TEST_DIR;
-let groupsRoot;
+let sessionsRoot;
 
 beforeEach(() => {
   TEST_DIR = mkdtempSync(join(tmpdir(), 'concurrent-vps-'));
-  groupsRoot = join(TEST_DIR, 'groups');
+  sessionsRoot = join(TEST_DIR, 'groups');
 });
 afterEach(() => {
   try {
@@ -228,12 +228,12 @@ describe('Per-VP AbortController (task-707 Bug 2)', () => {
 
 describe('Coordinator deliver routes to per-VP inboxes (task-707 Bug 1+2)', () => {
   it('1. multi-mention dispatch creates one envelope per VP, each with the same trigger but distinct vpIds', () => {
-    createGroup(groupsRoot, {
+    createSession(sessionsRoot, {
       id: 'g1', name: 'g1',
       roster: ['alice', 'bob', 'carol'],
       defaultVpId: 'alice',
     });
-    const group = openGroup(groupsRoot, 'g1');
+    const group = openSession(sessionsRoot, 'g1');
     const inboxes = new Map();
     const coord = createCoordinator(group, {
       deliver: (vpId, envelope) => {
@@ -258,11 +258,11 @@ describe('Coordinator deliver routes to per-VP inboxes (task-707 Bug 1+2)', () =
   });
 
   it('2. a follow-up user message can selectively re-target without disturbing other VPs inboxes', () => {
-    createGroup(groupsRoot, {
+    createSession(sessionsRoot, {
       id: 'g2', name: 'g2',
       roster: ['alice', 'bob'], defaultVpId: 'alice',
     });
-    const group = openGroup(groupsRoot, 'g2');
+    const group = openSession(sessionsRoot, 'g2');
     const inboxes = new Map();
     const coord = createCoordinator(group, {
       deliver: (vpId, envelope) => {

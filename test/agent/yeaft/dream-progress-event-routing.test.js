@@ -3,15 +3,15 @@
  *
  * The debug panel's per-group event timeline only works if every
  * dream_progress event reaches the active group's bucket in the
- * frontend store. The runner emits some events without a groupId
+ * frontend store. The runner emits some events without a sessionId
  * (start / merge / done — top-level wrap events). Before this PR
  * those events landed in the store's `'*'` bucket and never
  * cross-contaminated the active group's bucket, leaving the panel
  * empty until the next pass.
  *
- * The bridge fix: `handleYeaftDreamTrigger({groupId})` wraps the
+ * The bridge fix: `handleYeaftDreamTrigger({sessionId})` wraps the
  * session's `_dreamProgressSink` for the lifetime of the trigger
- * with a closure that injects the active groupId onto top-level
+ * with a closure that injects the active sessionId onto top-level
  * events. The base sink is a pure passthrough. Concurrent scoped
  * triggers for the SAME group are rejected with an error envelope
  * so the wrappers don't race each other.
@@ -75,16 +75,16 @@ beforeEach(() => {
 });
 
 describe('dream_progress event routing', () => {
-  it('stamps the active groupId onto events emitted without one during a scoped run', async () => {
+  it('stamps the active sessionId onto events emitted without one during a scoped run', async () => {
     // Wire a real `_dreamProgressSink` via installYeaftRuntimeBridge so
     // we exercise the production sink, not a stub. The scheduler mock
     // emits events through that sink as the runner would.
     const session = makeSession({
       triggerDreamForScopes: vi.fn(async () => {
-        // Simulate runner-style events: start (no groupId), one
-        // per-group event WITH groupId, then merge + done (no groupId).
+        // Simulate runner-style events: start (no sessionId), one
+        // per-group event WITH sessionId, then merge + done (no sessionId).
         session._dreamProgressSink({ phase: 'start', manual: true, ts: 1 });
-        session._dreamProgressSink({ phase: 'load-diff', groupId: 'g1' });
+        session._dreamProgressSink({ phase: 'load-diff', sessionId: 'g1' });
         session._dreamProgressSink({ phase: 'merge', targets: 1 });
         session._dreamProgressSink({ phase: 'done', groups: 1, targets: 1, duration: 42 });
         return {
@@ -96,7 +96,7 @@ describe('dream_progress event routing', () => {
     installYeaftRuntimeBridge(session);
     __testSetSession(session);
 
-    await handleYeaftDreamTrigger({ groupId: 'g1' });
+    await handleYeaftDreamTrigger({ sessionId: 'g1' });
 
     const progress = findProgress();
     // start, load-diff, merge, done — no synthetic phase:'result' mirror
@@ -104,18 +104,18 @@ describe('dream_progress event routing', () => {
     expect(progress.length).toBe(4);
 
     // Top-level events (start / merge / done) — runner did NOT supply
-    // a groupId, but the bridge stamped it.
+    // a sessionId, but the bridge stamped it.
     const top = progress.filter(p => ['start', 'merge', 'done'].includes(p.event.phase));
     expect(top.length).toBe(3);
     for (const p of top) {
-      expect(p.event.groupId).toBe('g1');
-      // envelope's outer groupId is set so server-side scope filters work
-      expect(p.envelope.groupId).toBe('g1');
+      expect(p.event.sessionId).toBe('g1');
+      // envelope's outer sessionId is set so server-side scope filters work
+      expect(p.envelope.sessionId).toBe('g1');
     }
 
-    // The per-group event already had groupId — it passes through unchanged.
+    // The per-group event already had sessionId — it passes through unchanged.
     const loadDiff = progress.find(p => p.event.phase === 'load-diff');
-    expect(loadDiff.event.groupId).toBe('g1');
+    expect(loadDiff.event.sessionId).toBe('g1');
   });
 
   it('does NOT mirror a synthetic phase:"result" event after a successful scoped run', async () => {
@@ -123,7 +123,7 @@ describe('dream_progress event routing', () => {
     installYeaftRuntimeBridge(session);
     __testSetSession(session);
 
-    await handleYeaftDreamTrigger({ groupId: 'g1' });
+    await handleYeaftDreamTrigger({ sessionId: 'g1' });
 
     // Synthetic mirror removed — the terminal record is appended by the
     // store when it receives `yeaft_dream_result`. The bridge only sends
@@ -134,7 +134,7 @@ describe('dream_progress event routing', () => {
     expect(result.length).toBe(1);
     expect(result[0].success).toBe(true);
     expect(result[0].entriesCreated).toBe(1);
-    expect(result[0].groupId).toBe('g1');
+    expect(result[0].sessionId).toBe('g1');
   });
 
   it('does NOT mirror a synthetic phase:"result" event when the scheduler throws', async () => {
@@ -146,7 +146,7 @@ describe('dream_progress event routing', () => {
     installYeaftRuntimeBridge(session);
     __testSetSession(session);
 
-    await handleYeaftDreamTrigger({ groupId: 'g1' });
+    await handleYeaftDreamTrigger({ sessionId: 'g1' });
 
     const progress = findProgress();
     expect(progress.find(p => p.event.phase === 'result')).toBeUndefined();
@@ -155,7 +155,7 @@ describe('dream_progress event routing', () => {
     expect(result.length).toBe(1);
     expect(result[0].success).toBe(false);
     expect(result[0].error).toBe('disk full');
-    expect(result[0].groupId).toBe('g1');
+    expect(result[0].sessionId).toBe('g1');
   });
 
   it('restores the base sink after the trigger settles', async () => {
@@ -163,21 +163,21 @@ describe('dream_progress event routing', () => {
     installYeaftRuntimeBridge(session);
     __testSetSession(session);
 
-    await handleYeaftDreamTrigger({ groupId: 'g1' });
+    await handleYeaftDreamTrigger({ sessionId: 'g1' });
 
     // A subsequent sink call (e.g. an auto-dream firing later) should
-    // NOT inherit the prior groupId. We emit a top-level event after
-    // the trigger has settled and verify it carries no groupId — proves
+    // NOT inherit the prior sessionId. We emit a top-level event after
+    // the trigger has settled and verify it carries no sessionId — proves
     // the wrapper was uninstalled and the base passthrough sink is back.
     outbound.length = 0;
     session._dreamProgressSink({ phase: 'start', manual: false, ts: 99 });
     const progress = findProgress();
     expect(progress.length).toBe(1);
-    expect(progress[0].event.groupId).toBeUndefined();
-    expect(progress[0].envelope.groupId).toBeUndefined();
+    expect(progress[0].event.sessionId).toBeUndefined();
+    expect(progress[0].envelope.sessionId).toBeUndefined();
   });
 
-  it('does NOT stamp groupId during vpId (unscoped) runs', async () => {
+  it('does NOT stamp sessionId during vpId (unscoped) runs', async () => {
     const session = makeSession({
       triggerDreamNow: vi.fn(async () => {
         session._dreamProgressSink({ phase: 'start', manual: true });
@@ -196,8 +196,8 @@ describe('dream_progress event routing', () => {
     const progress = findProgress();
     expect(progress.length).toBe(2);
     for (const p of progress) {
-      expect(p.event.groupId).toBeUndefined();
-      expect(p.envelope.groupId).toBeUndefined();
+      expect(p.event.sessionId).toBeUndefined();
+      expect(p.envelope.sessionId).toBeUndefined();
     }
   });
 
@@ -216,15 +216,15 @@ describe('dream_progress event routing', () => {
     installYeaftRuntimeBridge(session);
     __testSetSession(session);
 
-    const a = handleYeaftDreamTrigger({ groupId: 'g1' });
+    const a = handleYeaftDreamTrigger({ sessionId: 'g1' });
     // Give microtasks a tick so A reaches its await.
     await Promise.resolve();
-    await handleYeaftDreamTrigger({ groupId: 'g1' }); // same-group reject
-    await handleYeaftDreamTrigger({ groupId: 'g2' }); // cross-group reject
+    await handleYeaftDreamTrigger({ sessionId: 'g1' }); // same-group reject
+    await handleYeaftDreamTrigger({ sessionId: 'g2' }); // cross-group reject
 
     const results = findAll('yeaft_dream_result');
     expect(results.length).toBe(2);
-    expect(results.map(r => r.groupId)).toEqual(['g1', 'g2']);
+    expect(results.map(r => r.sessionId)).toEqual(['g1', 'g2']);
     for (const r of results) {
       expect(r.success).toBe(false);
       expect(r.skipped).toBe(true);
@@ -249,7 +249,7 @@ describe('dream_progress event routing', () => {
     const baseSink = session._dreamProgressSink;
     __testSetSession(session);
 
-    await handleYeaftDreamTrigger({ groupId: 'g1' });
+    await handleYeaftDreamTrigger({ sessionId: 'g1' });
 
     expect(session.dreamScheduler.triggerDreamForScopes).not.toHaveBeenCalled();
     expect(session._dreamActiveGroupId).toBeUndefined();
@@ -258,15 +258,15 @@ describe('dream_progress event routing', () => {
     const results = findAll('yeaft_dream_result');
     expect(results).toHaveLength(1);
 
-    // Existing unscoped auto-run events must keep flowing without a stamped groupId.
+    // Existing unscoped auto-run events must keep flowing without a stamped sessionId.
     outbound.length = 0;
     session._dreamProgressSink({ phase: 'done', manual: false });
     const progress = findProgress();
     expect(progress).toHaveLength(1);
-    expect(progress[0].event.groupId).toBeUndefined();
-    expect(progress[0].envelope.groupId).toBeUndefined();
+    expect(progress[0].event.sessionId).toBeUndefined();
+    expect(progress[0].envelope.sessionId).toBeUndefined();
     expect(results[0]).toEqual(expect.objectContaining({
-      groupId: 'g1',
+      sessionId: 'g1',
       success: false,
       skipped: true,
       skippedReason: 'already-running',

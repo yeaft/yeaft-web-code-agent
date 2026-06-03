@@ -20,7 +20,7 @@ const FILES = {
   // H2.e — per-scope segment extraction prompts (one per scope family)
   extractUser: 'extract-user.md',
   extractVp: 'extract-vp.md',
-  extractGroup: 'extract-group.md',
+  extractSession: 'extract-session.md',
   extractTopic: 'extract-topic.md',
   // H2.e — per-scope summary compression
   summarizeScope: 'summarize-scope.md',
@@ -46,10 +46,10 @@ export function extractTemplateForScope(scope) {
   if (/^group\/[^/]+\/vp\//.test(scope)) return 'extractVp';
   if (/^group\/[^/]+\/topic\//.test(scope)) return 'extractTopic';
   if (/^group\/[^/]+\/user(?:\/|$)/.test(scope)) return 'extractUser';
-  if (scope.startsWith('group/')) return 'extractGroup';
+  if (scope.startsWith('group/')) return 'extractSession';
   // Chat-isolated scopes: same template family as groups.
   if (/^chat\/[^/]+\/vp\//.test(scope)) return 'extractVp';
-  if (scope.startsWith('chat/')) return 'extractGroup';
+  if (scope.startsWith('chat/')) return 'extractSession';
   // Legacy top-level vp/topic scopes (archived to .legacy/ on boot — kept
   // here defensively in case something still constructs the old strings).
   if (scope.startsWith('vp/')) return 'extractVp';

@@ -3,10 +3,10 @@
  *
  * The handler accepts two call shapes:
  *
- *   { type: 'yeaft_dream_trigger', groupId } — new in v0.1.754. Routes
+ *   { type: 'yeaft_dream_trigger', sessionId } — new in v0.1.754. Routes
  *     to `session.dreamScheduler.triggerDreamForScopes(['group/<id>'])`
  *     so unrelated groups aren't reprocessed. Status + result events
- *     are tagged with `groupId`.
+ *     are tagged with `sessionId`.
  *
  *   { type: 'yeaft_dream_trigger', vpId }    — legacy per-VP trigger.
  *     Routes to `triggerDreamNow()` (unscoped pass). Events tagged
@@ -15,7 +15,7 @@
  * This suite pins:
  *   (a) the correct scheduler method is called for each shape
  *   (b) outbound `yeaft_dream_status` + `yeaft_dream_result` envelopes
- *       carry the right id field (groupId XOR vpId — never both)
+ *       carry the right id field (sessionId XOR vpId — never both)
  *   (c) when the scheduler is uninitialised, an error envelope is sent
  *       (no exception escapes)
  *   (d) scheduler exceptions are caught and surfaced as a result
@@ -42,12 +42,12 @@ function makeSession(overrides = {}) {
     dreamScheduler: {
       triggerDreamForScopes: vi.fn(async () => ({
         startedAt: '2026-05-11T08:00:00.000Z',
-        groups: [{ groupId: 'g1', status: 'triaged', new: 1 }],
+        groups: [{ sessionId: 'g1', status: 'triaged', new: 1 }],
         targets: [{ target: 'group/g1', status: 'done' }],
       })),
       triggerDreamNow: vi.fn(async () => ({
         startedAt: '2026-05-11T08:00:00.000Z',
-        groups: [{ groupId: 'g', status: 'triaged', new: 1 }],
+        groups: [{ sessionId: 'g', status: 'triaged', new: 1 }],
         targets: [
           { target: 'user', status: 'done' },
           { target: 'group/g', status: 'done' },
@@ -69,11 +69,11 @@ beforeEach(() => {
 });
 
 describe('handleYeaftDreamTrigger — routing', () => {
-  it('groupId path → triggerDreamForScopes(["group/<id>"]) + envelopes tagged with groupId', async () => {
+  it('sessionId path → triggerDreamForScopes(["group/<id>"]) + envelopes tagged with sessionId', async () => {
     const session = makeSession();
     __testSetSession(session);
 
-    await handleYeaftDreamTrigger({ type: 'yeaft_dream_trigger', groupId: 'g1' });
+    await handleYeaftDreamTrigger({ type: 'yeaft_dream_trigger', sessionId: 'g1' });
 
     expect(session.dreamScheduler.triggerDreamForScopes).toHaveBeenCalledTimes(1);
     expect(session.dreamScheduler.triggerDreamForScopes).toHaveBeenCalledWith(['group/g1']);
@@ -81,13 +81,13 @@ describe('handleYeaftDreamTrigger — routing', () => {
 
     const status = find('yeaft_dream_status');
     expect(status).toBeTruthy();
-    expect(status.groupId).toBe('g1');
+    expect(status.sessionId).toBe('g1');
     expect(status.vpId).toBeUndefined();
     expect(status.status).toBe('running');
 
     const result = find('yeaft_dream_result');
     expect(result).toBeTruthy();
-    expect(result.groupId).toBe('g1');
+    expect(result.sessionId).toBe('g1');
     expect(result.vpId).toBeUndefined();
     expect(result.success).toBe(true);
     expect(result.skipped).toBe(false);
@@ -103,7 +103,7 @@ describe('handleYeaftDreamTrigger — routing', () => {
       dreamScheduler: {
         triggerDreamForScopes: vi.fn(async () => ({
           startedAt: '2026-05-11T08:00:00.000Z',
-          groups: [{ groupId: 'g1', status: 'skipped', reason: 'no-new-messages', new: 0 }],
+          groups: [{ sessionId: 'g1', status: 'skipped', reason: 'no-new-messages', new: 0 }],
           targets: [],
         })),
         triggerDreamNow: vi.fn(),
@@ -111,10 +111,10 @@ describe('handleYeaftDreamTrigger — routing', () => {
     });
     __testSetSession(session);
 
-    await handleYeaftDreamTrigger({ type: 'yeaft_dream_trigger', groupId: 'g1' });
+    await handleYeaftDreamTrigger({ type: 'yeaft_dream_trigger', sessionId: 'g1' });
 
     const result = find('yeaft_dream_result');
-    expect(result.groupId).toBe('g1');
+    expect(result.sessionId).toBe('g1');
     expect(result.success).toBe(false);
     expect(result.skipped).toBe(true);
     expect(result.skippedReason).toBe('no-new-messages');
@@ -143,7 +143,7 @@ describe('handleYeaftDreamTrigger — routing', () => {
   it('normalizes target errors as failure with targetErrors', () => {
     const normalized = normalizeDreamResult({
       startedAt: '2026-05-11T08:00:00.000Z',
-      groups: [{ groupId: 'g1', status: 'triaged' }],
+      groups: [{ sessionId: 'g1', status: 'triaged' }],
       targets: [{ target: 'group/g1', status: 'error', error: 'bad json' }],
     });
     expect(normalized.success).toBe(false);
@@ -165,32 +165,32 @@ describe('handleYeaftDreamTrigger — routing', () => {
 
     const status = find('yeaft_dream_status');
     expect(status.vpId).toBe('steve');
-    expect(status.groupId).toBeUndefined();
+    expect(status.sessionId).toBeUndefined();
 
     const result = find('yeaft_dream_result');
     expect(result.vpId).toBe('steve');
-    expect(result.groupId).toBeUndefined();
+    expect(result.sessionId).toBeUndefined();
     expect(result.success).toBe(true);
     expect(result.groupsProcessed).toBe(1);
     expect(result.targetsApplied).toBe(2);
     expect(result.entriesCreated).toBe(2);
   });
 
-  it('groupId takes precedence over vpId when both are set', async () => {
+  it('sessionId takes precedence over vpId when both are set', async () => {
     // Defensive: the UI should never send both, but if it does the
-    // groupId is the more specific request so it wins. Pinning this
+    // sessionId is the more specific request so it wins. Pinning this
     // explicitly prevents a regression where both ids leak through
     // and the frontend store can't decide which row to update.
     const session = makeSession();
     __testSetSession(session);
 
-    await handleYeaftDreamTrigger({ groupId: 'g1', vpId: 'steve' });
+    await handleYeaftDreamTrigger({ sessionId: 'g1', vpId: 'steve' });
 
     expect(session.dreamScheduler.triggerDreamForScopes).toHaveBeenCalledWith(['group/g1']);
     expect(session.dreamScheduler.triggerDreamNow).not.toHaveBeenCalled();
 
     const result = find('yeaft_dream_result');
-    expect(result.groupId).toBe('g1');
+    expect(result.sessionId).toBe('g1');
     expect(result.vpId).toBeUndefined();
   });
 
@@ -207,17 +207,17 @@ describe('handleYeaftDreamTrigger — routing', () => {
 
   it('sends an error envelope when the scheduler is uninitialised', async () => {
     __testSetSession({ dreamScheduler: null });
-    await handleYeaftDreamTrigger({ groupId: 'g1' });
+    await handleYeaftDreamTrigger({ sessionId: 'g1' });
     const result = find('yeaft_dream_result');
     expect(result).toBeTruthy();
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/not initialized/i);
     // Regression (PR #757 review, Torvalds Important): the error
-    // envelope MUST carry the `groupId` tag so the frontend store can
+    // envelope MUST carry the `sessionId` tag so the frontend store can
     // route the failure to the right row. Without this the per-group
     // "Run dream now" button stays stuck on "Running…" forever
     // because `applyDreamResult` can't find a row to update.
-    expect(result.groupId).toBe('g1');
+    expect(result.sessionId).toBe('g1');
     expect(result.vpId).toBeUndefined();
   });
 
@@ -227,7 +227,7 @@ describe('handleYeaftDreamTrigger — routing', () => {
     const result = find('yeaft_dream_result');
     expect(result.success).toBe(false);
     expect(result.vpId).toBe('steve');
-    expect(result.groupId).toBeUndefined();
+    expect(result.sessionId).toBeUndefined();
   });
 
   it('catches scheduler exceptions and emits success=false with the message', async () => {
@@ -241,13 +241,13 @@ describe('handleYeaftDreamTrigger — routing', () => {
     });
     __testSetSession(session);
 
-    await handleYeaftDreamTrigger({ groupId: 'g1' });
+    await handleYeaftDreamTrigger({ sessionId: 'g1' });
 
     const status = find('yeaft_dream_status');
     expect(status.status).toBe('running');
 
     const result = find('yeaft_dream_result');
-    expect(result.groupId).toBe('g1');
+    expect(result.sessionId).toBe('g1');
     expect(result.success).toBe(false);
     expect(result.error).toBe('disk full');
   });

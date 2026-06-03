@@ -11,7 +11,7 @@ const DREAM_PROMPTS = [
   'yeaft/dream-v2/prompts/create.md',
   'yeaft/dream-v2/prompts/extract-user.md',
   'yeaft/dream-v2/prompts/extract-vp.md',
-  'yeaft/dream-v2/prompts/extract-group.md',
+  'yeaft/dream-v2/prompts/extract-session.md',
   'yeaft/dream-v2/prompts/extract-topic.md',
   'yeaft/dream-v2/prompts/summarize-scope.md',
 ];

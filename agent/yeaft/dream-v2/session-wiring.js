@@ -15,7 +15,7 @@
  * load-bearing for the debug panel. Renaming a field on this side
  * silently degrades that UI to a generic JSON dump.
  *
- *   dream_turn_open:   { type:'turn_open',  turnId, userPrompt, vpId, groupId, at }
+ *   dream_turn_open:   { type:'turn_open',  turnId, userPrompt, vpId, sessionId, at }
  *   dream_loop:        { type:'loop',       turnId, loopNumber, pass, model,
  *                        systemPrompt: string,
  *                        messages: [{ role:'user', content:string }],
@@ -35,19 +35,19 @@
  *                      `kind, memoryMdPreview, summaryMdPreview, memoryMdLength,
  *                      summaryMdLength` (see apply.js).
  *
- * `groupId` may be inherited via `stampDreamScope()` when a scope is active.
+ * `sessionId` may be inherited via `stampDreamScope()` when a scope is active.
  */
 
 import { join } from 'path';
 import { runDream } from './runner.js';
 import { createDreamScheduler } from './schedule.js';
-import { listGroups, openGroup } from '../groups/group-store.js';
+import { listSessions, openSession } from '../sessions/session-store.js';
 import { readGroupState } from './state.js';
 import { DREAM_NUDGE_AFTER_MESSAGES, DREAM_INTERVAL_HOURS } from './limits.js';
 
 /**
  * Build the per-call options for runDream. Pure: takes a session and returns
- * the closures runDream needs (listGroups, countMessages, loadGroupDiff, etc.).
+ * the closures runDream needs (listSessions, countMessages, loadGroupDiff, etc.).
  *
  * @param {Object} session  — the live Session object from loadSession()
  * @param {(event: object) => void} [onProgress]
@@ -56,19 +56,19 @@ import { DREAM_NUDGE_AFTER_MESSAGES, DREAM_INTERVAL_HOURS } from './limits.js';
 export function buildRunDreamOpts(session, onProgress) {
   const yeaftDir = session.yeaftDir;
   const memoryRoot = join(yeaftDir, 'memory');
-  const groupsRoot = join(yeaftDir, 'groups');
+  const sessionsRoot = join(yeaftDir, 'sessions');
 
   return {
     root: memoryRoot,
     language: session.config?.language || 'en',
     llm: makeLlm(session),
-    listGroups: async () => {
-      try { return listGroups(groupsRoot).map(g => g.id); }
+    listSessions: async () => {
+      try { return listSessions(sessionsRoot).map(g => g.id); }
       catch { return []; }
     },
     countMessages: async (gid) => {
       try {
-        const h = openGroup(groupsRoot, gid);
+        const h = openSession(sessionsRoot, gid);
         let n = 0;
         for (const _m of h.streamMessages()) n += 1;
         return n;
@@ -76,7 +76,7 @@ export function buildRunDreamOpts(session, onProgress) {
     },
     loadGroupDiff: async (gid, sinceId) => {
       try {
-        const h = openGroup(groupsRoot, gid);
+        const h = openSession(sessionsRoot, gid);
         const out = [];
         let started = !sinceId;
         for (const m of h.streamMessages()) {
@@ -91,7 +91,7 @@ export function buildRunDreamOpts(session, onProgress) {
     },
     loadOverlapPreamble: async (gid, beforeId, n) => {
       try {
-        const h = openGroup(groupsRoot, gid);
+        const h = openSession(sessionsRoot, gid);
         const buf = [];
         for (const m of h.streamMessages()) {
           if (m.id === beforeId) break;
@@ -199,8 +199,8 @@ function makeLlm(session) {
 
 function stampDreamScope(session, evt) {
   if (!evt || typeof evt !== 'object') return evt;
-  if (evt.groupId || !session?._dreamActiveGroupId) return evt;
-  return { ...evt, groupId: session._dreamActiveGroupId };
+  if (evt.sessionId || !session?._dreamActiveGroupId) return evt;
+  return { ...evt, sessionId: session._dreamActiveGroupId };
 }
 
 function finiteNumber(v) {
@@ -326,7 +326,7 @@ export function createV2DreamScheduler(session) {
       turnId,
       userPrompt: '[dream] automatic memory consolidation',
       vpId: null,
-      groupId: null,
+      sessionId: null,
       at: startedAt,
     });
     persistDreamTrace(session, 'dream_turn_open', turnOpen);
@@ -341,7 +341,7 @@ export function createV2DreamScheduler(session) {
     }).then((result) => {
       // Bug 2: emit turn_close when the dream pass completes.
       result.trigger = opts.manual ? 'manual' : 'auto';
-      if (session._dreamActiveGroupId && !result.groupId) result.groupId = session._dreamActiveGroupId;
+      if (session._dreamActiveGroupId && !result.sessionId) result.sessionId = session._dreamActiveGroupId;
       const metrics = finalizeDreamMetrics(session._dreamMetrics, Date.now() - startedAt);
       result.metrics = metrics;
       result.durationMs = metrics.durationMs;
@@ -449,9 +449,9 @@ export function createV2DreamScheduler(session) {
 export async function bootInitEmptyGroups(args) {
   const out = { triggered: [] };
   if (!args || !args.memoryIndex || !args.dreamScheduler) return out;
-  const groupsRoot = join(args.yeaftDir, 'groups');
+  const sessionsRoot = join(args.yeaftDir, 'sessions');
   let ids;
-  try { ids = listGroups(groupsRoot).map(g => g.id); }
+  try { ids = listSessions(sessionsRoot).map(g => g.id); }
   catch { return out; }
   const empty = [];
   for (const gid of ids) {
@@ -461,7 +461,7 @@ export async function bootInitEmptyGroups(args) {
     if (segCount > 0) continue;
     let hasMessages = false;
     try {
-      const h = openGroup(groupsRoot, gid);
+      const h = openSession(sessionsRoot, gid);
       // Any message at all is enough — pull the first record off the
       // iterator and stop.
       const first = h.streamMessages().next();
@@ -516,18 +516,18 @@ export async function bootCatchUpStaleDream(args) {
   if (!args || !args.dreamScheduler) return out;
 
   const memoryRoot = join(args.yeaftDir, 'memory');
-  const groupsRoot = join(args.yeaftDir, 'groups');
+  const sessionsRoot = join(args.yeaftDir, 'sessions');
   const intervalMs = (args.intervalHours ?? DREAM_INTERVAL_HOURS) * 60 * 60 * 1000;
   const now = args.now ?? Date.now();
 
-  let groupIds;
-  try { groupIds = listGroups(groupsRoot).map(g => g.id); }
+  let sessionIds;
+  try { sessionIds = listSessions(sessionsRoot).map(g => g.id); }
   catch { return out; }
 
   // Find the newest lastDreamAt across all groups.
   let newestAt = null;
   let anyTraffic = false;
-  for (const gid of groupIds) {
+  for (const gid of sessionIds) {
     let st;
     try { st = await readGroupState(memoryRoot, gid); }
     catch { continue; }
@@ -537,7 +537,7 @@ export async function bootCatchUpStaleDream(args) {
     }
     if (!anyTraffic) {
       try {
-        const h = openGroup(groupsRoot, gid);
+        const h = openSession(sessionsRoot, gid);
         const first = h.streamMessages().next();
         if (!first.done) anyTraffic = true;
       } catch { /* keep going */ }

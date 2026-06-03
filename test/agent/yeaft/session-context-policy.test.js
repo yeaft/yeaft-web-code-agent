@@ -3,7 +3,7 @@ import {
   GROUP_CONTEXT_PRESSURE_RATIO,
   shouldAllowGroupReflection,
 } from '../../../agent/yeaft/engine.js';
-import { resolveGroupConfig } from '../../../agent/yeaft/groups/group-config.js';
+import { resolveSessionConfig } from '../../../agent/yeaft/sessions/session-config.js';
 
 function messagesWithTokens(approxTokenCount, turns = 1) {
   const charsPerTurn = Math.max(4, Math.ceil((approxTokenCount * 4) / turns));
@@ -22,7 +22,7 @@ describe('group context policy', () => {
       messages: messagesWithTokens(60_000, 6),
       model: 'unknown-model-for-test',
       config: { maxContextTokens: 100_000 },
-      groupId: 'grp-a',
+      sessionId: 'grp-a',
     });
 
     expect(gate.allowed).toBe(false);
@@ -37,7 +37,7 @@ describe('group context policy', () => {
       messages: messagesWithTokens(82_000, 6),
       model: 'unknown-model-for-test',
       config: { maxContextTokens: 100_000 },
-      groupId: 'grp-a',
+      sessionId: 'grp-a',
     });
 
     expect(gate.allowed).toBe(true);
@@ -50,7 +50,7 @@ describe('group context policy', () => {
       messages: messagesWithTokens(60_000, 4),
       model: 'unknown-model-for-test',
       config: { maxContextTokens: 100_000 },
-      groupId: 'grp-a',
+      sessionId: 'grp-a',
     });
 
     expect(gate.allowed).toBe(false);
@@ -64,7 +64,7 @@ describe('group context policy', () => {
       messages: [],
       model: 'definitely-not-in-registry',
       config: {},
-      groupId: 'grp-a',
+      sessionId: 'grp-a',
     });
 
     expect(gate.contextWindow).toBe(200_000);
@@ -73,7 +73,7 @@ describe('group context policy', () => {
   });
 
   it('uses the effective per-group model override for registry context windows', () => {
-    const effectiveConfig = resolveGroupConfig(
+    const effectiveConfig = resolveSessionConfig(
       { model: 'gpt-4.1', primaryModel: 'gpt-4.1' },
       { model: 'claude-sonnet-4-20250514' },
     );
@@ -82,7 +82,7 @@ describe('group context policy', () => {
       messages: messagesWithTokens(220_000, 6),
       model: effectiveConfig.model,
       config: effectiveConfig,
-      groupId: 'grp-a',
+      sessionId: 'grp-a',
     });
 
     expect(effectiveConfig.model).toBe('claude-sonnet-4-20250514');
@@ -92,7 +92,7 @@ describe('group context policy', () => {
   });
 
   it('uses the effective per-group model before user model context metadata', () => {
-    const effectiveConfig = resolveGroupConfig(
+    const effectiveConfig = resolveSessionConfig(
       { model: 'claude-sonnet-4-20250514', primaryModel: 'claude-sonnet-4-20250514' },
       { model: 'gpt-4.1' },
     );
@@ -101,7 +101,7 @@ describe('group context policy', () => {
       messages: messagesWithTokens(220_000, 6),
       model: effectiveConfig.model,
       config: effectiveConfig,
-      groupId: 'grp-a',
+      sessionId: 'grp-a',
     });
 
     expect(effectiveConfig.model).toBe('gpt-4.1');
@@ -116,7 +116,7 @@ describe('group context policy', () => {
       messages: [],
       model: 'unknown-model-for-test',
       config: {},
-      groupId: null,
+      sessionId: null,
     });
 
     expect(gate.allowed).toBe(true);

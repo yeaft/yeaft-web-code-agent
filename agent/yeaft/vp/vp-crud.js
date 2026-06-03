@@ -21,7 +21,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
-import { validateVpId } from '../groups/ids.js';
+import { validateVpId } from '../sessions/ids.js';
 import { DEFAULT_VP_LIB_DIR, parseRoleMd } from './vp-store.js';
 import { VP_STUB_MARKER } from '../memory/seed-backfill.js';
 import { STOCK_VP_IDS } from './stock-ids.js';

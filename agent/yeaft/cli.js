@@ -32,7 +32,7 @@ import { listModels, resolveModel, parseModelRef } from './models.js';
 import { buildSystemPrompt } from './prompts.js';
 import { searchMessages } from './conversation/search.js';
 import { ConversationStore } from './conversation/persist.js';
-import { snapshotGroups } from './groups/group-crud.js';
+import { snapshotSessions } from './sessions/session-crud.js';
 
 // ─── Argument parsing ──────────────────────────────────────────
 
@@ -50,7 +50,7 @@ function parseArgs(argv) {
     skipSkills: false,
     compactOrphans: false,
     compactOrphansDry: false,
-    deleteGroup: null,
+    deleteSession: null,
     prompt: null,
   };
 
@@ -100,7 +100,7 @@ function parseArgs(argv) {
         args.compactOrphansDry = true;
         break;
       case '--delete-group':
-        args.deleteGroup = rest[++i] || null;
+        args.deleteSession = rest[++i] || null;
         break;
       default:
         if (!arg.startsWith('-') && !args.prompt) {
@@ -216,7 +216,7 @@ function handleDryRun(args, config) {
 
 /**
  * One-shot orphan-message sweep. Reads the live group list off disk and
- * deletes every persisted message whose `groupId` frontmatter is missing
+ * deletes every persisted message whose `sessionId` frontmatter is missing
  * or points to a group that no longer exists.
  *
  * Exposed via `--compact-orphans` (delete) and `--compact-orphans-dry`
@@ -227,7 +227,7 @@ function handleCompactOrphans(config, { dryRun = false } = {}) {
   const yeaftDir = config.dir;
   let groups;
   try {
-    groups = snapshotGroups(yeaftDir);
+    groups = snapshotSessions(yeaftDir);
   } catch (err) {
     console.error(`Cannot read groups directory: ${err.message}`);
     console.error('Refusing to compact orphans without an authoritative live-group list.');
@@ -258,30 +258,30 @@ function handleCompactOrphans(config, { dryRun = false } = {}) {
  * as the web-bridge `yeaft_delete_group` op, but reachable from the CLI
  * for scripted maintenance.
  */
-function handleDeleteGroup(config, groupId) {
+function handleDeleteGroup(config, sessionId) {
   const yeaftDir = config.dir;
   // Lazy import to avoid loading the whole groups module on every CLI call.
   // (Static `import` at top is fine too — kept dynamic to mirror the web-bridge
   // pattern and keep the maintenance path self-contained.)
   // eslint-disable-next-line global-require
-  return import('./groups/group-crud.js').then(({ deleteGroup }) => {
+  return import('./sessions/session-crud.js').then(({ deleteSession }) => {
     let result;
     try {
-      result = deleteGroup(yeaftDir, groupId);
+      result = deleteSession(yeaftDir, sessionId);
     } catch (err) {
-      console.error(`Failed to delete group ${groupId}: ${err.message}`);
+      console.error(`Failed to delete group ${sessionId}: ${err.message}`);
       process.exitCode = 1;
       return;
     }
     let messagesRemoved = 0;
     try {
       const store = new ConversationStore(yeaftDir);
-      messagesRemoved = store.deleteByGroup(groupId);
+      messagesRemoved = store.deleteByGroup(sessionId);
     } catch (err) {
       console.warn(`Group dir removed, but cascade failed: ${err.message}`);
     }
     console.log('=== DELETE GROUP ===');
-    console.log(`  Group:               ${result.groupId}`);
+    console.log(`  Group:               ${result.sessionId}`);
     console.log(`  Legacy archives swept: ${result.legacyCleanedUp}`);
     console.log(`  Messages cascaded:   ${messagesRemoved}`);
   });
@@ -784,8 +784,8 @@ async function main() {
     handleCompactOrphans(config, { dryRun: args.compactOrphansDry });
     return;
   }
-  if (args.deleteGroup) {
-    await handleDeleteGroup(config, args.deleteGroup);
+  if (args.deleteSession) {
+    await handleDeleteGroup(config, args.deleteSession);
     return;
   }
 

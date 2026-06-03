@@ -80,7 +80,7 @@ function mkSession({ delayMs = 0, trace = new NullTrace() } = {}) {
 
 function envelope(id, text) {
   return {
-    groupId: 'g1',
+    sessionId: 'g1',
     taskId: `task-${id}`,
     trigger: 'mention',
     msg: {
@@ -192,7 +192,7 @@ describe('fix-vp-multi-thread bugfix guards', () => {
         messageId: 'msg-1',
         mode: 'yeaft',
         turnNumber: 1,
-        groupId: 'g1',
+        sessionId: 'g1',
         vpId: 'linus',
         threadId: 'thr_a',
         // C2 fix: persist the user prompt EXPLICITLY at startTurn time
@@ -232,7 +232,7 @@ describe('fix-vp-multi-thread bugfix guards', () => {
       expect(payload.loops[0]).toMatchObject({
         turnId: 'trace-1',
         loopNumber: 1,
-        groupId: 'g1',
+        sessionId: 'g1',
         vpId: 'linus',
         threadId: 'thr_a',
         model: 'test-model',
@@ -240,7 +240,7 @@ describe('fix-vp-multi-thread bugfix guards', () => {
       expect(payload.turns).toHaveLength(1);
       expect(payload.turns[0]).toMatchObject({
         turnId: 'trace-1',
-        groupId: 'g1',
+        sessionId: 'g1',
         vpId: 'linus',
         threadId: 'thr_a',
         loopCount: 1,
@@ -253,25 +253,25 @@ describe('fix-vp-multi-thread bugfix guards', () => {
     }
   });
 
-  it('bug 4: fetchRecentDebugHistory respects groupId + threadId filters', async () => {
+  it('bug 4: fetchRecentDebugHistory respects sessionId + threadId filters', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'debug-trace-test-'));
     const dbPath = join(dir, 'trace.sqlite');
     try {
       const trace = new DebugTrace(dbPath);
-      const t1 = trace.startTurn({ traceId: 't1', groupId: 'g1', vpId: 'linus', threadId: 'thr_a' });
+      const t1 = trace.startTurn({ traceId: 't1', sessionId: 'g1', vpId: 'linus', threadId: 'thr_a' });
       trace.endTurn(t1, { latencyMs: 1, messages: [{ role: 'user', content: 'a' }] });
-      const t2 = trace.startTurn({ traceId: 't2', groupId: 'g1', vpId: 'linus', threadId: 'thr_b' });
+      const t2 = trace.startTurn({ traceId: 't2', sessionId: 'g1', vpId: 'linus', threadId: 'thr_b' });
       trace.endTurn(t2, { latencyMs: 1, messages: [{ role: 'user', content: 'b' }] });
-      const t3 = trace.startTurn({ traceId: 't3', groupId: 'g2', vpId: 'linus', threadId: 'thr_a' });
+      const t3 = trace.startTurn({ traceId: 't3', sessionId: 'g2', vpId: 'linus', threadId: 'thr_a' });
       trace.endTurn(t3, { latencyMs: 1, messages: [{ role: 'user', content: 'c' }] });
 
-      const filteredByGroup = trace.fetchRecentDebugHistory({ groupId: 'g1' });
+      const filteredByGroup = trace.fetchRecentDebugHistory({ sessionId: 'g1' });
       expect(filteredByGroup.loops.map((l) => l.turnId).sort()).toEqual(['t1', 't2']);
 
       const filteredByThread = trace.fetchRecentDebugHistory({ threadId: 'thr_a' });
       expect(filteredByThread.loops.map((l) => l.turnId).sort()).toEqual(['t1', 't3']);
 
-      const filteredByBoth = trace.fetchRecentDebugHistory({ groupId: 'g2', threadId: 'thr_a' });
+      const filteredByBoth = trace.fetchRecentDebugHistory({ sessionId: 'g2', threadId: 'thr_a' });
       expect(filteredByBoth.loops.map((l) => l.turnId)).toEqual(['t3']);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -283,13 +283,13 @@ describe('fix-vp-multi-thread bugfix guards', () => {
     const dbPath = join(dir, 'trace.sqlite');
     try {
       const trace = new DebugTrace(dbPath);
-      trace.logEvent({ traceId: 'dream-1', eventType: 'dream_progress', eventData: { phase: 'triage', groupId: 'g1', ts: 100 } });
+      trace.logEvent({ traceId: 'dream-1', eventType: 'dream_progress', eventData: { phase: 'triage', sessionId: 'g1', ts: 100 } });
       trace.logEvent({ traceId: 'dream-2', eventType: 'dream_progress', eventData: { phase: 'apply', target: 'group/g2', ts: 200 } });
       trace.logEvent({ traceId: 'dream-3', eventType: 'dream_progress', eventData: { phase: 'done', ts: 300 } });
 
-      const out = trace.fetchRecentDebugHistory({ groupId: 'g1', dreamLimit: 5 });
+      const out = trace.fetchRecentDebugHistory({ sessionId: 'g1', dreamLimit: 5 });
       expect(out.dreamEvents.map(e => e.phase)).toEqual(['triage', 'done']);
-      expect(out.dreamEvents[0]).toEqual(expect.objectContaining({ type: 'dream_progress', groupId: 'g1' }));
+      expect(out.dreamEvents[0]).toEqual(expect.objectContaining({ type: 'dream_progress', sessionId: 'g1' }));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -303,7 +303,7 @@ describe('fix-vp-multi-thread bugfix guards', () => {
       trace.event('dream_loop', {
         type: 'loop',
         turnId: 'dream-1',
-        groupId: 'g1',
+        sessionId: 'g1',
         pass: 'triage-pass1',
         usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
         latencyMs: 12,
@@ -311,11 +311,11 @@ describe('fix-vp-multi-thread bugfix guards', () => {
       trace.event('dream_run', {
         type: 'dream_run',
         turnId: 'dream-1',
-        groupId: 'g1',
+        sessionId: 'g1',
         phase: 'result',
         metrics: { durationMs: 20, llmCallCount: 1, inputTokens: 10, outputTokens: 5, totalTokens: 15 },
       });
-      const out = trace.fetchRecentDebugHistory({ groupId: 'g1', dreamLimit: 5 });
+      const out = trace.fetchRecentDebugHistory({ sessionId: 'g1', dreamLimit: 5 });
       expect(out.dreamEvents.map(e => e.type)).toEqual(['loop', 'dream_run']);
       expect(out.dreamEvents[1].metrics).toEqual(expect.objectContaining({ llmCallCount: 1, totalTokens: 15 }));
     } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -330,7 +330,7 @@ describe('fix-vp-multi-thread bugfix guards', () => {
       trace.event('dream_loop', {
         type: 'loop',
         turnId: 'dream-large',
-        groupId: 'g1',
+        sessionId: 'g1',
         systemPrompt: large,
         messages: [{ role: 'user', content: large }],
         response: large,
@@ -338,7 +338,7 @@ describe('fix-vp-multi-thread bugfix guards', () => {
         rawResponse: { body: large },
       });
 
-      const out = trace.fetchRecentDebugHistory({ groupId: 'g1', dreamLimit: 1 });
+      const out = trace.fetchRecentDebugHistory({ sessionId: 'g1', dreamLimit: 1 });
       expect(out.dreamEvents).toHaveLength(1);
       const evt = out.dreamEvents[0];
       expect(evt.systemPrompt.length).toBeLessThan(270 * 1024);
@@ -405,11 +405,11 @@ describe('fix-vp-multi-thread bugfix guards', () => {
       // Open via DebugTrace — auto-migration runs in the constructor.
       const trace = new DebugTrace(dbPath);
       // Use it: write + read should work end-to-end.
-      const turnId = trace.startTurn({ traceId: 'migrated', groupId: 'g1', vpId: 'linus', threadId: 'thr_a' });
+      const turnId = trace.startTurn({ traceId: 'migrated', sessionId: 'g1', vpId: 'linus', threadId: 'thr_a' });
       trace.endTurn(turnId, { latencyMs: 2, messages: [{ role: 'user', content: 'after-migration' }] });
-      const out = trace.fetchRecentDebugHistory({ groupId: 'g1' });
+      const out = trace.fetchRecentDebugHistory({ sessionId: 'g1' });
       expect(out.loops).toHaveLength(1);
-      expect(out.loops[0].groupId).toBe('g1');
+      expect(out.loops[0].sessionId).toBe('g1');
       expect(out.loops[0].threadId).toBe('thr_a');
     } finally {
       rmSync(dir, { recursive: true, force: true });

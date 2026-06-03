@@ -50,15 +50,15 @@ function triageSystem(language) {
  * structure of the diff.
  *
  * Inputs:
- *   - groupId: the active group ('_no-group' is allowed and skips the
+ *   - sessionId: the active group ('_no-session' is allowed and skips the
  *     `group/<id>` entry — by convention the virtual group has no scope
  *     of its own).
  *   - messages: the diff (already overlap-prefixed if applicable).
  *
- * @param {{ groupId: string, messages: Array<object> }} args
+ * @param {{ sessionId: string, messages: Array<object> }} args
  * @returns {Array<{ kind: 'update', scope: string }>}
  */
-export function applyHardRules({ groupId, chatId, messages }) {
+export function applyHardRules({ sessionId, chatId, messages }) {
   const out = new Map();
   const add = (scope) => { if (!out.has(scope)) out.set(scope, { kind: 'update', scope }); };
 
@@ -81,9 +81,9 @@ export function applyHardRules({ groupId, chatId, messages }) {
   }
 
   // active group + its per-group user layer, except the virtual _no-group bucket.
-  if (groupId && groupId !== '_no-group') {
-    add(`group/${groupId}`);
-    add(`group/${groupId}/user`);
+  if (sessionId && sessionId !== '_no-session') {
+    add(`group/${sessionId}`);
+    add(`group/${sessionId}/user`);
   }
 
   for (const m of (messages || [])) {
@@ -91,8 +91,8 @@ export function applyHardRules({ groupId, chatId, messages }) {
     // Active VP: any assistant message's vpId — now group-internal.
     if (m.role === 'assistant') {
       const vp = m.vpId || (m.author && /^vp:(.+)$/.exec(m.author)?.[1]);
-      if (vp && /^[A-Za-z0-9_\-.一-鿿]+$/.test(vp) && groupId && groupId !== '_no-group') {
-        add(`group/${groupId}/vp/${vp}`);
+      if (vp && /^[A-Za-z0-9_\-.一-鿿]+$/.test(vp) && sessionId && sessionId !== '_no-session') {
+        add(`group/${sessionId}/vp/${vp}`);
       }
     }
   }
@@ -105,7 +105,7 @@ export function applyHardRules({ groupId, chatId, messages }) {
 /**
  * Build the prompt used for Pass-1.
  *
- * @param {{ groupId: string, messages: Array<object>, topicSummaries: Array<{ path: string, summary: string }> }} ctx
+ * @param {{ sessionId: string, messages: Array<object>, topicSummaries: Array<{ path: string, summary: string }> }} ctx
  */
 export function buildPass1Prompt(ctx) {
   const topicSummaries = (!ctx.topicSummaries || ctx.topicSummaries.length === 0)
@@ -119,7 +119,7 @@ export function buildPass1Prompt(ctx) {
     conv.push('');
   }
   return render('triagePass1', {
-    groupId: ctx.groupId,
+    sessionId: ctx.sessionId,
     topicSummaries,
     conversation: conv.join('\n').trimEnd(),
   }, { language: ctx.language });
@@ -144,16 +144,16 @@ export function buildPass2Prompt(ctx) {
  * Run soft classification for one segment of one group's diff.
  *
  * @param {{
- *   groupId: string,
+ *   sessionId: string,
  *   messages: Array<object>,
  *   topicSummaries: Array<{ path: string, summary: string }>,
  *   llm: (req: { pass: string, prompt: string, system: string }) => Promise<string>,
  * }} args
  * @returns {Promise<Array<{ kind: 'update'|'create', scope: string }>>}
  */
-export async function classifySoft({ groupId, messages, topicSummaries, llm, language }) {
+export async function classifySoft({ sessionId, messages, topicSummaries, llm, language }) {
   if (!llm) throw new Error('triage.classifySoft: llm callable required');
-  const pass1Prompt = buildPass1Prompt({ groupId, messages, topicSummaries, language });
+  const pass1Prompt = buildPass1Prompt({ sessionId, messages, topicSummaries, language });
   const pass1Raw = await llm({ pass: 'triage-pass1', prompt: pass1Prompt, system: triageSystem(language) });
   const pass1 = parseJsonSafe(pass1Raw);
   const out = [];
@@ -180,9 +180,9 @@ export async function classifySoft({ groupId, messages, topicSummaries, llm, lan
     const path = String(pass2.path || '').trim();
     if (!path) continue;
     const segs = path.split('/').filter(Boolean);
-    if (!groupId || groupId === '_no-group') continue;
-    if (!isValidTopic({ kind: 'group-topic', groupId, path: segs })) continue;
-    const scope = `group/${groupId}/topic/${segs.join('/')}`;
+    if (!sessionId || sessionId === '_no-session') continue;
+    if (!isValidTopic({ kind: 'group-topic', sessionId, path: segs })) continue;
+    const scope = `group/${sessionId}/topic/${segs.join('/')}`;
     if (pass2.decision === 'match') {
       out.push({ kind: 'update', scope });
     } else if (pass2.decision === 'new') {
@@ -197,7 +197,7 @@ export async function classifySoft({ groupId, messages, topicSummaries, llm, lan
  * Dedupes by scope — `update` wins if any source said update.
  *
  * @param {{
- *   groupId: string,
+ *   sessionId: string,
  *   messages: Array<object>,
  *   topicSummaries: Array<{ path: string, summary: string }>,
  *   llm: (req: { pass: string, prompt: string, system: string }) => Promise<string>,
@@ -205,7 +205,7 @@ export async function classifySoft({ groupId, messages, topicSummaries, llm, lan
  * @returns {Promise<Array<{ kind: 'update'|'create', scope: string }>>}
  */
 export async function triageOneSegment(args) {
-  const hard = applyHardRules({ groupId: args.groupId, messages: args.messages });
+  const hard = applyHardRules({ sessionId: args.sessionId, messages: args.messages });
   const soft = await classifySoft(args);
   return dedupeActions([...hard, ...soft]);
 }
@@ -215,7 +215,7 @@ export async function triageOneSegment(args) {
  * Runs each segment serially, accumulates and dedupes actions.
  *
  * @param {{
- *   groupId: string,
+ *   sessionId: string,
  *   segments: Array<{ messages: Array<object> }>,
  *   topicSummaries: Array<{ path: string, summary: string }>,
  *   llm: (req: { pass: string, prompt: string, system: string }) => Promise<string>,
@@ -223,14 +223,14 @@ export async function triageOneSegment(args) {
  * }} args
  * @returns {Promise<Array<{ kind: 'update'|'create', scope: string }>>}
  */
-export async function triageGroupSegments({ groupId, segments, topicSummaries, llm, onProgress, language }) {
+export async function triageGroupSegments({ sessionId, segments, topicSummaries, llm, onProgress, language }) {
   let acc = [];
   let i = 0;
   for (const seg of (segments || [])) {
     i += 1;
-    if (onProgress) onProgress({ phase: 'triage', groupId, segment: i, total: segments.length });
+    if (onProgress) onProgress({ phase: 'triage', sessionId, segment: i, total: segments.length });
     const segActions = await triageOneSegment({
-      groupId,
+      sessionId,
       messages: seg.messages,
       topicSummaries,
       llm,

@@ -1,8 +1,8 @@
 /**
  * vp-status-broker.js — thread-aware source of truth for VP runtime status.
  *
- * Internally stores rows by (groupId, vpId, threadId). The wire still emits
- * one aggregate row per (groupId, vpId), with `threads[]` and
+ * Internally stores rows by (sessionId, vpId, threadId). The wire still emits
+ * one aggregate row per (sessionId, vpId), with `threads[]` and
  * `runningThreadCount`, so old UI code that only reads `state` keeps working
  * while new UI can show concurrent threads.
  */
@@ -29,13 +29,13 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
   /** @type {Map<string, any>} */
   const threads = new Map();
 
-  const vpKeyOf = (groupId, vpId) => `${groupId || ''}::${vpId}`;
-  const threadKeyOf = (groupId, vpId, threadId) => `${groupId || ''}::${vpId}::${threadId || 'main'}`;
+  const vpKeyOf = (sessionId, vpId) => `${sessionId || ''}::${vpId}`;
+  const threadKeyOf = (sessionId, vpId, threadId) => `${sessionId || ''}::${vpId}::${threadId || 'main'}`;
 
-  function aggregateFor(groupId, vpId) {
+  function aggregateFor(sessionId, vpId) {
     const rows = [];
     for (const row of threads.values()) {
-      if ((row.groupId || null) === (groupId || null) && row.vpId === vpId) rows.push(row);
+      if ((row.sessionId || null) === (sessionId || null) && row.vpId === vpId) rows.push(row);
     }
     rows.sort((a, b) => (b.updatedAt || b.since || 0) - (a.updatedAt || a.since || 0));
 
@@ -55,7 +55,7 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
     const runningThreadCount = rows.filter(r => RUNNING_STATES.has(r.state)).length;
     const latest = rows[0] || null;
     return {
-      groupId: groupId || null,
+      sessionId: sessionId || null,
       vpId,
       state,
       since: latest ? latest.since : now(),
@@ -76,10 +76,10 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
     };
   }
 
-  function prune(groupId, vpId) {
+  function prune(sessionId, vpId) {
     const rows = [];
     for (const [key, row] of threads.entries()) {
-      if ((row.groupId || null) === (groupId || null) && row.vpId === vpId) rows.push([key, row]);
+      if ((row.sessionId || null) === (sessionId || null) && row.vpId === vpId) rows.push([key, row]);
     }
     const cutoff = now() - COMPLETED_TTL_MS;
     for (const [key, row] of rows) {
@@ -94,18 +94,18 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
     }
   }
 
-  function emitAggregate(groupId, vpId) {
-    prune(groupId, vpId);
-    send({ type: 'vp_status_changed', ...aggregateFor(groupId, vpId) });
+  function emitAggregate(sessionId, vpId) {
+    prune(sessionId, vpId);
+    send({ type: 'vp_status_changed', ...aggregateFor(sessionId, vpId) });
   }
 
-  function transition({ groupId, vpId, state, turnId = null, threadId = 'main', title = '', messageCount } = {}) {
+  function transition({ sessionId, vpId, state, turnId = null, threadId = 'main', title = '', messageCount } = {}) {
     if (!vpId) return false;
     if (!VALID_STATES.has(state)) {
       throw new RangeError(`vp-status-broker: invalid state '${state}'`);
     }
     const tid = threadId || 'main';
-    const key = threadKeyOf(groupId, vpId, tid);
+    const key = threadKeyOf(sessionId, vpId, tid);
     const prev = threads.get(key);
     if (prev && prev.state === state && prev.turnId === turnId && (!title || prev.title === title)) {
       return false;
@@ -113,7 +113,7 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
     const ts = now();
     const row = {
       ...(prev || {}),
-      groupId: groupId || null,
+      sessionId: sessionId || null,
       vpId,
       threadId: tid,
       state,
@@ -125,41 +125,41 @@ export function createVpStatusBroker({ send, now = Date.now } = {}) {
       messageCount: Number.isFinite(messageCount) ? messageCount : (prev?.messageCount || 0),
     };
     threads.set(key, row);
-    emitAggregate(groupId, vpId);
+    emitAggregate(sessionId, vpId);
     return true;
   }
 
-  function settleIdle({ groupId, vpId, threadId = 'main', title = '', messageCount } = {}) {
-    return transition({ groupId, vpId, threadId, state: 'idle', turnId: null, title, messageCount });
+  function settleIdle({ sessionId, vpId, threadId = 'main', title = '', messageCount } = {}) {
+    return transition({ sessionId, vpId, threadId, state: 'idle', turnId: null, title, messageCount });
   }
 
-  function snapshot(groupId) {
+  function snapshot(sessionId) {
     const seen = new Set();
     const out = [];
     for (const row of threads.values()) {
-      if (groupId !== undefined && groupId !== null && row.groupId !== groupId) continue;
-      const key = vpKeyOf(row.groupId, row.vpId);
+      if (sessionId !== undefined && sessionId !== null && row.sessionId !== sessionId) continue;
+      const key = vpKeyOf(row.sessionId, row.vpId);
       if (seen.has(key)) continue;
       seen.add(key);
-      out.push(aggregateFor(row.groupId, row.vpId));
+      out.push(aggregateFor(row.sessionId, row.vpId));
     }
     return out;
   }
 
-  function broadcastSnapshot({ groupId } = {}) {
+  function broadcastSnapshot({ sessionId } = {}) {
     send({
       type: 'vp_status_snapshot',
-      groupId: groupId === undefined ? null : groupId,
-      statuses: snapshot(groupId),
+      sessionId: sessionId === undefined ? null : sessionId,
+      statuses: snapshot(sessionId),
     });
   }
 
-  function forget({ groupId, vpId, threadId } = {}) {
+  function forget({ sessionId, vpId, threadId } = {}) {
     if (threadId) {
-      threads.delete(threadKeyOf(groupId, vpId, threadId));
+      threads.delete(threadKeyOf(sessionId, vpId, threadId));
     } else {
       for (const key of Array.from(threads.keys())) {
-        if (key.startsWith(`${groupId || ''}::${vpId}::`)) threads.delete(key);
+        if (key.startsWith(`${sessionId || ''}::${vpId}::`)) threads.delete(key);
       }
     }
   }

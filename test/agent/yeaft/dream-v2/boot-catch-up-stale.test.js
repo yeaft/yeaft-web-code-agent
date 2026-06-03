@@ -18,7 +18,7 @@ import { join } from 'node:path';
 
 import { bootCatchUpStaleDream } from '../../../../agent/yeaft/dream-v2/session-wiring.js';
 import { writeGroupState } from '../../../../agent/yeaft/dream-v2/state.js';
-import { createGroup } from '../../../../agent/yeaft/groups/group-store.js';
+import { createSession } from '../../../../agent/yeaft/sessions/session-store.js';
 import { DREAM_INTERVAL_HOURS } from '../../../../agent/yeaft/dream-v2/limits.js';
 
 let yeaftDir;
@@ -42,8 +42,8 @@ function fakeScheduler() {
 
 /** Helper: seed a group dir with a single message so streamMessages() yields. */
 function seedGroupWithMessage(id) {
-  const groupsRoot = join(yeaftDir, 'groups');
-  const h = createGroup(groupsRoot, { id, roster: [], defaultVpId: null });
+  const sessionsRoot = join(yeaftDir, 'sessions');
+  const h = createSession(sessionsRoot, { id, roster: [], defaultVpId: null });
   h.appendMessage({ from: 'user', text: 'hello' });
 }
 
@@ -63,8 +63,8 @@ describe('bootCatchUpStaleDream', () => {
   });
 
   it('returns no-op when groups exist but none have any user messages', async () => {
-    const groupsRoot = join(yeaftDir, 'groups');
-    createGroup(groupsRoot, { id: 'silent', roster: [], defaultVpId: null });
+    const sessionsRoot = join(yeaftDir, 'sessions');
+    createSession(sessionsRoot, { id: 'silent', roster: [], defaultVpId: null });
     const sched = fakeScheduler();
     const r = await bootCatchUpStaleDream({ yeaftDir, dreamScheduler: sched });
     expect(r.fired).toBe(false);
@@ -168,8 +168,8 @@ describe('bootCatchUpStaleDream', () => {
     // Group exists, has a stale dream-state, but no user messages → nothing
     // to dream about. MIN_NEW_PER_GROUP would skip anyway, but we don't
     // even fire the tick.
-    const groupsRoot = join(yeaftDir, 'groups');
-    createGroup(groupsRoot, { id: 'silent', roster: [], defaultVpId: null });
+    const sessionsRoot = join(yeaftDir, 'sessions');
+    createSession(sessionsRoot, { id: 'silent', roster: [], defaultVpId: null });
     const longAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
     await writeGroupState(join(yeaftDir, 'memory'), 'silent', { lastDreamAt: longAgo });
     const sched = fakeScheduler();

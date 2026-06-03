@@ -1,12 +1,12 @@
 /**
- * persist-compact-per-vp.test.js — isolation tests for per-(groupId, vpId)
+ * persist-compact-per-vp.test.js — isolation tests for per-(sessionId, vpId)
  * compact summary + the VP-scoped hot-history loader.
  *
  * Regression: before 2026-06-01, `readCompactSummary` / `replaceCompactSummary`
  * pointed at a single session-global compact.md, so every group + every VP
  * in a session shared (and clobbered) the same file. We now want:
  *   - per-(group, vp) summaries are isolated
- *   - loadGroupHistoryForVp scopes by groupId AND filters tool transcripts
+ *   - loadGroupHistoryForVp scopes by sessionId AND filters tool transcripts
  *     of OTHER VPs while keeping their assistant text + this VP's tool arcs
  *   - hasAnyCompactSummaryForGroup is per-group
  */
@@ -21,7 +21,7 @@ const TEST_DIR = join(tmpdir(), `yeaft-test-compact-per-vp-${Date.now()}-${Math.
 beforeEach(() => { mkdirSync(TEST_DIR, { recursive: true }); });
 afterEach(() => { if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true, force: true }); });
 
-describe('compact summary per-(groupId, vpId) isolation', () => {
+describe('compact summary per-(sessionId, vpId) isolation', () => {
   it('returns empty when neither file nor pair has been written', () => {
     const store = new ConversationStore(TEST_DIR);
     expect(store.readCompactSummaryFor('g1', 'vpA')).toBe('');
@@ -58,7 +58,7 @@ describe('compact summary per-(groupId, vpId) isolation', () => {
     expect(store.hasAnyCompactSummaryForGroup('g2')).toBe(false);
   });
 
-  it('returns empty when groupId or vpId missing (legacy callers)', () => {
+  it('returns empty when sessionId or vpId missing (legacy callers)', () => {
     const store = new ConversationStore(TEST_DIR);
     store.replaceCompactSummaryFor('g1', 'vpA', 'real');
     expect(store.readCompactSummaryFor(null, 'vpA')).toBe('');
@@ -82,36 +82,36 @@ describe('compact summary per-(groupId, vpId) isolation', () => {
 describe('loadGroupHistoryForVp', () => {
   function seed(store) {
     // g1, multi-VP fan-out arc
-    store.append({ role: 'user', content: 'hello team', groupId: 'g1' });
+    store.append({ role: 'user', content: 'hello team', sessionId: 'g1' });
     store.append({
       role: 'assistant',
       content: 'A reply',
-      groupId: 'g1',
+      sessionId: 'g1',
       speakerVpId: 'vpA',
       toolCalls: [{ id: 'tA1', name: 'bash', input: { cmd: 'ls' } }],
     });
     store.append({
-      role: 'tool', content: 'A tool result', groupId: 'g1',
+      role: 'tool', content: 'A tool result', sessionId: 'g1',
       speakerVpId: 'vpA', toolCallId: 'tA1',
     });
     store.append({
       role: 'assistant',
       content: 'B reply',
-      groupId: 'g1',
+      sessionId: 'g1',
       speakerVpId: 'vpB',
       toolCalls: [{ id: 'tB1', name: 'bash', input: { cmd: 'pwd' } }],
     });
     store.append({
-      role: 'tool', content: 'B tool result', groupId: 'g1',
+      role: 'tool', content: 'B tool result', sessionId: 'g1',
       speakerVpId: 'vpB', toolCallId: 'tB1',
     });
     // Other group — must not leak in.
-    store.append({ role: 'user', content: 'g2 prompt', groupId: 'g2' });
-    store.append({ role: 'assistant', content: 'g2 reply', groupId: 'g2', speakerVpId: 'vpA' });
+    store.append({ role: 'user', content: 'g2 prompt', sessionId: 'g2' });
+    store.append({ role: 'assistant', content: 'g2 reply', sessionId: 'g2', speakerVpId: 'vpA' });
     // Internal/reflection row — must always be dropped.
     store.append({
       role: 'assistant', content: 'reflection chatter',
-      groupId: 'g1', speakerVpId: 'vpA', _reflection: true,
+      sessionId: 'g1', speakerVpId: 'vpA', _reflection: true,
     });
   }
 
@@ -122,11 +122,11 @@ describe('loadGroupHistoryForVp', () => {
     expect(store.loadGroupHistoryForVp('g1', null)).toEqual([]);
   });
 
-  it('scopes by groupId — other groups never leak in', () => {
+  it('scopes by sessionId — other groups never leak in', () => {
     const store = new ConversationStore(TEST_DIR);
     seed(store);
     const out = store.loadGroupHistoryForVp('g1', 'vpA');
-    expect(out.every(m => m.groupId === 'g1')).toBe(true);
+    expect(out.every(m => m.sessionId === 'g1')).toBe(true);
     expect(out.find(m => m.content === 'g2 prompt')).toBeUndefined();
     expect(out.find(m => m.content === 'g2 reply')).toBeUndefined();
   });

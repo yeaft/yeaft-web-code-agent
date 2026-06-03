@@ -125,7 +125,7 @@ describe('Reflect persistence — T1 collapse should land on disk in collapsed f
       for await (const _ of engine.query({
         prompt: 'do something with one batch of tools',
         messages: highPressureHistory(),
-        groupId: 'g1',
+        sessionId: 'g1',
       })) {
         /* drain */
       }
@@ -184,7 +184,7 @@ describe('Reflect persistence — T1 collapse should land on disk in collapsed f
       for await (const _ of engine.query({
         prompt: 'do something with two batches of tools',
         messages: highPressureHistory(),
-        groupId: 'g1',
+        sessionId: 'g1',
       })) {
         /* drain */
       }
@@ -220,7 +220,7 @@ describe('Reflect persistence — T1 collapse should land on disk in collapsed f
       for await (const _ of engine.query({
         prompt: 'first turn',
         messages: highPressureHistory(),
-        groupId: 'g1',
+        sessionId: 'g1',
       })) {
         /* drain */
       }

@@ -36,13 +36,13 @@ function applySystem(language) {
 
 /**
  * Build the UPDATE prompt body. Accepts the current scope state +
- * one or more `(groupId, diff)` source blocks.
+ * one or more `(sessionId, diff)` source blocks.
  *
  * @param {{
  *   target: string,
  *   memoryMd: string,
  *   summaryMd: string,
- *   sources: Array<{ groupId: string, diff: Array<object> }>,
+ *   sources: Array<{ sessionId: string, diff: Array<object> }>,
  *   batchInfo?: { index: number, total: number },
  * }} ctx
  */
@@ -68,7 +68,7 @@ export function buildUpdatePrompt(ctx) {
  *
  * @param {{
  *   target: string,
- *   sources: Array<{ groupId: string, diff: Array<object> }>,
+ *   sources: Array<{ sessionId: string, diff: Array<object> }>,
  *   siblingTopics?: Array<{ path: string, summary: string }>,
  * }} ctx
  */
@@ -89,17 +89,17 @@ export function buildCreatePrompt(ctx) {
 }
 
 /**
- * Render a list of `(groupId, diff)` source blocks for inclusion in the
+ * Render a list of `(sessionId, diff)` source blocks for inclusion in the
  * update / create prompts. Single-source aware: omits leading blank line
  * if there's only one source, to keep small prompts compact.
  *
- * @param {Array<{ groupId: string, diff: Array<object> }>} sources
+ * @param {Array<{ sessionId: string, diff: Array<object> }>} sources
  */
 function renderSourceBlocks(sources, language) {
   const out = [];
   for (const src of (sources || [])) {
     out.push('');
-    out.push(`[group/${src.groupId}]`);
+    out.push(`[group/${src.sessionId}]`);
     for (const m of (src.diff || [])) {
       const head = `[${m.role || 'message'}${m.kind === 'overlap' ? (String(language || '').toLowerCase().startsWith('zh') ? '（已处理）' : ' (already processed)') : ''}]`;
       out.push(head);
@@ -128,19 +128,19 @@ export function targetToScope(target) {
     if (segs.length === 2) return { kind: 'group', id: segs[1] };
     // group/<g>/user
     if (segs.length === 3 && segs[2] === 'user') {
-      return { kind: 'group-user', groupId: segs[1] };
+      return { kind: 'group-user', sessionId: segs[1] };
     }
     // group/<g>/vp/<v>
     if (segs.length === 4 && segs[2] === 'vp') {
-      return { kind: 'group-vp', groupId: segs[1], id: segs[3] };
+      return { kind: 'group-vp', sessionId: segs[1], id: segs[3] };
     }
     // group/<g>/feature/<f>
     if (segs.length === 4 && segs[2] === 'feature') {
-      return { kind: 'group-feature', groupId: segs[1], id: segs[3] };
+      return { kind: 'group-feature', sessionId: segs[1], id: segs[3] };
     }
     // group/<g>/topic/<l1>[/<l2>]
     if (segs[2] === 'topic' && (segs.length === 4 || segs.length === 5)) {
-      return { kind: 'group-topic', groupId: segs[1], path: segs.slice(3) };
+      return { kind: 'group-topic', sessionId: segs[1], path: segs.slice(3) };
     }
   }
   if (segs[0] === 'chat') {
@@ -159,7 +159,7 @@ export function targetToScope(target) {
  * @param {{
  *   target: string,
  *   kind: 'update'|'create',
- *   sources: Array<{ groupId: string, diff: any }>,
+ *   sources: Array<{ sessionId: string, diff: any }>,
  * }} merged
  * @param {{
  *   root: string,
@@ -276,10 +276,10 @@ function scopeRelDir(scope) {
   switch (scope.kind) {
     case 'user':          return 'user';
     case 'group':         return `group/${scope.id}`;
-    case 'group-user':    return `group/${scope.groupId}/user`;
-    case 'group-vp':      return `group/${scope.groupId}/vp/${scope.id}`;
-    case 'group-feature': return `group/${scope.groupId}/feature/${scope.id}`;
-    case 'group-topic':   return `group/${scope.groupId}/topic/${scope.path.join('/')}`;
+    case 'group-user':    return `group/${scope.sessionId}/user`;
+    case 'group-vp':      return `group/${scope.sessionId}/vp/${scope.id}`;
+    case 'group-feature': return `group/${scope.sessionId}/feature/${scope.id}`;
+    case 'group-topic':   return `group/${scope.sessionId}/topic/${scope.path.join('/')}`;
     case 'chat':          return `chat/${scope.id}`;
     case 'chat-vp':       return `chat/${scope.chatId}/vp/${scope.id}`;
     default: throw new Error(`apply.scopeRelDir: unknown kind ${scope.kind}`);

@@ -33,7 +33,7 @@ describe('route_forward turn status', () => {
   it('settles the forwarding VP and emits vp_turn_end on route_forward tool_handoff', () => {
     const thread = { status: 'thinking', title: 'Forward bug', messageIds: ['m1'] };
     const hctx = {
-      groupId: 'grp_fun',
+      sessionId: 'grp_fun',
       vpId: 'linus',
       threadId: 'thr_forward',
       turnId: 'turn_forward:linus',
@@ -56,7 +56,7 @@ describe('route_forward turn status', () => {
     expect(thread.status).toBe('idle');
     expect(sendToServer).toHaveBeenCalledWith(expect.objectContaining({
       type: 'yeaft_output',
-      groupId: 'grp_fun',
+      sessionId: 'grp_fun',
       vpId: 'linus',
       event: expect.objectContaining({
         type: 'vp_status_changed',
@@ -67,13 +67,13 @@ describe('route_forward turn status', () => {
     }));
     expect(sendToServer).toHaveBeenCalledWith(expect.objectContaining({
       type: 'yeaft_output',
-      groupId: 'grp_fun',
+      sessionId: 'grp_fun',
       vpId: 'linus',
       turnId: 'turn_forward:linus',
       threadId: 'thr_forward',
       event: expect.objectContaining({
         type: 'vp_turn_end',
-        groupId: 'grp_fun',
+        sessionId: 'grp_fun',
         vpId: 'linus',
         threadId: 'thr_forward',
         turnId: 'turn_forward:linus',
@@ -91,7 +91,7 @@ describe('route_forward turn status', () => {
       stopReason: 'tool_use',
       threadId: 'thr_tool',
     }, {
-      groupId: 'grp_fun',
+      sessionId: 'grp_fun',
       vpId: 'linus',
       threadId: 'thr_tool',
       turnId: 'turn_tool:linus',

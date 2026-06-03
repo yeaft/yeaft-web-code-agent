@@ -59,7 +59,7 @@ function makeCoordinator() {
 describe('buildVpQueryOpts — router wiring invariant', () => {
   it('attaches a router with .forward() when a coordinator is supplied', () => {
     const coord = makeCoordinator();
-    const out = buildVpQueryOpts({ vpId: 'linus', groupCoordinator: coord, groupId: 'grp_default' });
+    const out = buildVpQueryOpts({ vpId: 'linus', sessionCoordinator: coord, sessionId: 'grp_default' });
     expect(out).toBeDefined();
     expect(out.router).toBeDefined();
     expect(typeof out.router.forward).toBe('function');
@@ -67,7 +67,7 @@ describe('buildVpQueryOpts — router wiring invariant', () => {
 
   it('no router is attached when no coordinator is supplied', () => {
     // After v0.1.672 there is no production caller that omits a
-    // coordinator — `handleYeaftGroupChat` always builds one and
+    // coordinator — `handleYeaftSessionSend` always builds one and
     // there's no longer a `handleYeaftChat` entry point. This test
     // pins the buildVpQueryOpts function-level contract: given no
     // coordinator, no router. Defensive only.
@@ -86,7 +86,7 @@ describe('buildVpQueryOpts — router wiring invariant', () => {
     const broken = { ingest: 'not-a-function' };
     let out;
     expect(() => {
-      out = buildVpQueryOpts({ vpId: 'linus', groupCoordinator: broken });
+      out = buildVpQueryOpts({ vpId: 'linus', sessionCoordinator: broken });
     }).not.toThrow();
     expect(out).toBeDefined();
     expect(out.router).toBeUndefined();

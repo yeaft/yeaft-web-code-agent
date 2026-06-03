@@ -41,26 +41,26 @@ describe('A. scopeDir', () => {
     expect(scopeDir({ kind: 'group', id: 'g-eng' })).toBe('group/g-eng');
   });
   it('group-user → "group/<g>/user"', () => {
-    expect(scopeDir({ kind: 'group-user', groupId: 'g1' })).toBe('group/g1/user');
+    expect(scopeDir({ kind: 'group-user', sessionId: 'g1' })).toBe('group/g1/user');
   });
   it('group-vp → "group/<g>/vp/<id>"', () => {
-    expect(scopeDir({ kind: 'group-vp', groupId: 'g1', id: 'zhang-san' }))
+    expect(scopeDir({ kind: 'group-vp', sessionId: 'g1', id: 'zhang-san' }))
       .toBe('group/g1/vp/zhang-san');
   });
   it('group-feature → "group/<g>/feature/<id>"', () => {
-    expect(scopeDir({ kind: 'group-feature', groupId: 'g1', id: 'abc-123' }))
+    expect(scopeDir({ kind: 'group-feature', sessionId: 'g1', id: 'abc-123' }))
       .toBe('group/g1/feature/abc-123');
   });
   it('group-topic 1-level → "group/<g>/topic/<l1>"', () => {
-    expect(scopeDir({ kind: 'group-topic', groupId: 'g1', path: ['work'] }))
+    expect(scopeDir({ kind: 'group-topic', sessionId: 'g1', path: ['work'] }))
       .toBe('group/g1/topic/work');
   });
   it('group-topic 2-level → "group/<g>/topic/<l1>/<l2>"', () => {
-    expect(scopeDir({ kind: 'group-topic', groupId: 'g1', path: ['science', 'physics'] }))
+    expect(scopeDir({ kind: 'group-topic', sessionId: 'g1', path: ['science', 'physics'] }))
       .toBe('group/g1/topic/science/physics');
   });
   it('group-topic CJK in path is allowed', () => {
-    expect(scopeDir({ kind: 'group-topic', groupId: 'g1', path: ['科学', '物理'] }))
+    expect(scopeDir({ kind: 'group-topic', sessionId: 'g1', path: ['科学', '物理'] }))
       .toBe('group/g1/topic/科学/物理');
   });
   it('throws on legacy root vp kind', () => {
@@ -78,28 +78,28 @@ describe('B. scopeDir rejection paths', () => {
   });
   it('throws when group/group-vp/group-feature lack id', () => {
     expect(() => scopeDir({ kind: 'group' })).toThrow();
-    expect(() => scopeDir({ kind: 'group-vp', groupId: 'g' })).toThrow();
-    expect(() => scopeDir({ kind: 'group-feature', groupId: 'g' })).toThrow();
+    expect(() => scopeDir({ kind: 'group-vp', sessionId: 'g' })).toThrow();
+    expect(() => scopeDir({ kind: 'group-feature', sessionId: 'g' })).toThrow();
   });
-  it('throws when group-* lacks groupId', () => {
+  it('throws when group-* lacks sessionId', () => {
     expect(() => scopeDir({ kind: 'group-user' })).toThrow();
     expect(() => scopeDir({ kind: 'group-vp', id: 'v' })).toThrow();
     expect(() => scopeDir({ kind: 'group-topic', path: ['a'] })).toThrow();
   });
   it('throws on group-topic with no path', () => {
-    expect(() => scopeDir({ kind: 'group-topic', groupId: 'g' })).toThrow();
+    expect(() => scopeDir({ kind: 'group-topic', sessionId: 'g' })).toThrow();
   });
   it('throws on group-topic path exceeding 2 levels', () => {
-    expect(() => scopeDir({ kind: 'group-topic', groupId: 'g', path: ['a', 'b', 'c'] }))
+    expect(() => scopeDir({ kind: 'group-topic', sessionId: 'g', path: ['a', 'b', 'c'] }))
       .toThrow(/1 or 2 segments/);
   });
   it('throws on path-traversal segments', () => {
-    expect(() => scopeDir({ kind: 'group-vp', groupId: 'g', id: '..' })).toThrow();
-    expect(() => scopeDir({ kind: 'group-topic', groupId: 'g', path: ['..', 'foo'] })).toThrow();
+    expect(() => scopeDir({ kind: 'group-vp', sessionId: 'g', id: '..' })).toThrow();
+    expect(() => scopeDir({ kind: 'group-topic', sessionId: 'g', path: ['..', 'foo'] })).toThrow();
   });
   it('throws on separator in segment', () => {
-    expect(() => scopeDir({ kind: 'group-vp', groupId: 'g', id: 'a/b' })).toThrow();
-    expect(() => scopeDir({ kind: 'group-topic', groupId: 'g', path: ['a/b'] })).toThrow();
+    expect(() => scopeDir({ kind: 'group-vp', sessionId: 'g', id: 'a/b' })).toThrow();
+    expect(() => scopeDir({ kind: 'group-topic', sessionId: 'g', path: ['a/b'] })).toThrow();
   });
   it('throws on unknown kind', () => {
     expect(() => scopeDir({ kind: 'mystery' })).toThrow(/unknown kind/);
@@ -117,7 +117,7 @@ describe('C. memory.md read/write/append', () => {
   });
 
   it('write then read round-trip', async () => {
-    const scope = { kind: 'group-topic', groupId: 'g1', path: ['life', 'parenting'] };
+    const scope = { kind: 'group-topic', sessionId: 'g1', path: ['life', 'parenting'] };
     await writeMemory(scope, '# parenting\n\n- tip\n', { root });
     const txt = await readMemory(scope, { root });
     expect(txt).toBe('# parenting\n\n- tip\n');
@@ -135,7 +135,7 @@ describe('C. memory.md read/write/append', () => {
   });
 
   it('append concatenates without overwriting prior content', async () => {
-    const scope = { kind: 'group-feature', groupId: 'g1', id: 'f-1' };
+    const scope = { kind: 'group-feature', sessionId: 'g1', id: 'f-1' };
     await writeMemory(scope, 'L1\n', { root });
     await appendMemory(scope, 'L2\n', { root });
     await appendMemory(scope, 'L3\n', { root });
@@ -143,13 +143,13 @@ describe('C. memory.md read/write/append', () => {
   });
 
   it('append on missing file creates the file', async () => {
-    const scope = { kind: 'group-feature', groupId: 'g1', id: 'f-fresh' };
+    const scope = { kind: 'group-feature', sessionId: 'g1', id: 'f-fresh' };
     await appendMemory(scope, 'first\n', { root });
     expect(await readMemory(scope, { root })).toBe('first\n');
   });
 
   it('append empty string is a no-op', async () => {
-    const scope = { kind: 'group-feature', groupId: 'g1', id: 'f-empty' };
+    const scope = { kind: 'group-feature', sessionId: 'g1', id: 'f-empty' };
     await writeMemory(scope, 'x', { root });
     await appendMemory(scope, '', { root });
     expect(await readMemory(scope, { root })).toBe('x');
@@ -165,7 +165,7 @@ describe('D. summary.md read/write', () => {
     expect(await readSummary({ kind: 'user' }, { root })).toBe('');
   });
   it('write then read round-trip with trim', async () => {
-    const scope = { kind: 'group-vp', groupId: 'g1', id: 'zhang-san' };
+    const scope = { kind: 'group-vp', sessionId: 'g1', id: 'zhang-san' };
     await writeSummary(scope, '   one-liner.   \n', { root });
     expect(await readSummary(scope, { root })).toBe('one-liner.');
     const onDisk = readFileSync(
@@ -173,7 +173,7 @@ describe('D. summary.md read/write', () => {
     expect(onDisk).toBe('one-liner.\n');
   });
   it('writeSummary("") writes "\\n"', async () => {
-    const scope = { kind: 'group-vp', groupId: 'g1', id: 'li-si' };
+    const scope = { kind: 'group-vp', sessionId: 'g1', id: 'li-si' };
     await writeSummary(scope, '', { root });
     const onDisk = readFileSync(
       join(root, 'group', 'g1', 'vp', 'li-si', 'summary.md'), 'utf8');
@@ -201,14 +201,14 @@ describe('D. summary.md read/write', () => {
   });
 
   it('seedSummaryIfMissing writes when summary.md is absent', async () => {
-    const scope = { kind: 'group-vp', groupId: 'g1', id: 'seedy' };
+    const scope = { kind: 'group-vp', sessionId: 'g1', id: 'seedy' };
     const seeded = await seedSummaryIfMissing(scope, 'seed body', { root });
     expect(seeded).toBe(true);
     expect(await readSummary(scope, { root })).toBe('seed body');
   });
 
   it('seedSummaryIfMissing is a no-op when a non-empty summary.md exists', async () => {
-    const scope = { kind: 'group-vp', groupId: 'g1', id: 'protected' };
+    const scope = { kind: 'group-vp', sessionId: 'g1', id: 'protected' };
     await writeSummary(scope, 'KEEP ME', { root });
     const seeded = await seedSummaryIfMissing(scope, 'overwrite attempt', { root });
     expect(seeded).toBe(false);
@@ -216,7 +216,7 @@ describe('D. summary.md read/write', () => {
   });
 
   it('seedSummaryIfMissing rewrites an empty summary.md', async () => {
-    const scope = { kind: 'group-vp', groupId: 'g1', id: 'empty-existing' };
+    const scope = { kind: 'group-vp', sessionId: 'g1', id: 'empty-existing' };
     await writeSummary(scope, '', { root });
     const seeded = await seedSummaryIfMissing(scope, 'fresh seed', { root });
     expect(seeded).toBe(true);
@@ -240,7 +240,7 @@ describe('E. VP ACL', () => {
   });
 
   it('readMemory of group/<g>/vp/<other> with currentVpId throws acl_blocked', async () => {
-    const scope = { kind: 'group-vp', groupId: 'g1', id: 'B' };
+    const scope = { kind: 'group-vp', sessionId: 'g1', id: 'B' };
     await writeMemory(scope, 'secret', { root });
     await expect(readMemory(scope, { root, currentVpId: 'A' }))
       .rejects.toMatchObject({ code: 'acl_blocked' });
@@ -248,12 +248,12 @@ describe('E. VP ACL', () => {
 
   it('writeMemory of group/<g>/vp/<other> with currentVpId throws acl_blocked', async () => {
     await expect(
-      writeMemory({ kind: 'group-vp', groupId: 'g1', id: 'B' }, 'x', { root, currentVpId: 'A' })
+      writeMemory({ kind: 'group-vp', sessionId: 'g1', id: 'B' }, 'x', { root, currentVpId: 'A' })
     ).rejects.toMatchObject({ code: 'acl_blocked' });
   });
 
   it('same vp passes', async () => {
-    const scope = { kind: 'group-vp', groupId: 'g1', id: 'A' };
+    const scope = { kind: 'group-vp', sessionId: 'g1', id: 'A' };
     await writeMemory(scope, 'self', { root, currentVpId: 'A' });
     expect(await readMemory(scope, { root, currentVpId: 'A' })).toBe('self');
   });
@@ -277,26 +277,26 @@ describe('F. listScopes', () => {
   it('enumerates user + group/<g>/{user,vp,feature,topic}', async () => {
     await ensureScope({ kind: 'user' }, { root });
     await ensureScope({ kind: 'group', id: 'g-eng' }, { root });
-    await ensureScope({ kind: 'group-user', groupId: 'g-eng' }, { root });
-    await ensureScope({ kind: 'group-vp', groupId: 'g-eng', id: 'zhang-san' }, { root });
-    await ensureScope({ kind: 'group-vp', groupId: 'g-eng', id: 'li-si' }, { root });
-    await ensureScope({ kind: 'group-feature', groupId: 'g-eng', id: 'f-1' }, { root });
-    await ensureScope({ kind: 'group-topic', groupId: 'g-eng', path: ['science', 'physics'] }, { root });
-    await ensureScope({ kind: 'group-topic', groupId: 'g-eng', path: ['life', 'parenting'] }, { root });
-    await writeMemory({ kind: 'group-topic', groupId: 'g-eng', path: ['work'] }, '', { root });
+    await ensureScope({ kind: 'group-user', sessionId: 'g-eng' }, { root });
+    await ensureScope({ kind: 'group-vp', sessionId: 'g-eng', id: 'zhang-san' }, { root });
+    await ensureScope({ kind: 'group-vp', sessionId: 'g-eng', id: 'li-si' }, { root });
+    await ensureScope({ kind: 'group-feature', sessionId: 'g-eng', id: 'f-1' }, { root });
+    await ensureScope({ kind: 'group-topic', sessionId: 'g-eng', path: ['science', 'physics'] }, { root });
+    await ensureScope({ kind: 'group-topic', sessionId: 'g-eng', path: ['life', 'parenting'] }, { root });
+    await writeMemory({ kind: 'group-topic', sessionId: 'g-eng', path: ['work'] }, '', { root });
 
     const scopes = await listScopes({ root });
     const sorted = scopes.map(s => JSON.stringify(s)).sort();
     expect(sorted).toEqual([
       JSON.stringify({ kind: 'user' }),
       JSON.stringify({ kind: 'group', id: 'g-eng' }),
-      JSON.stringify({ kind: 'group-user', groupId: 'g-eng' }),
-      JSON.stringify({ kind: 'group-vp', groupId: 'g-eng', id: 'li-si' }),
-      JSON.stringify({ kind: 'group-vp', groupId: 'g-eng', id: 'zhang-san' }),
-      JSON.stringify({ kind: 'group-feature', groupId: 'g-eng', id: 'f-1' }),
-      JSON.stringify({ kind: 'group-topic', groupId: 'g-eng', path: ['life', 'parenting'] }),
-      JSON.stringify({ kind: 'group-topic', groupId: 'g-eng', path: ['science', 'physics'] }),
-      JSON.stringify({ kind: 'group-topic', groupId: 'g-eng', path: ['work'] }),
+      JSON.stringify({ kind: 'group-user', sessionId: 'g-eng' }),
+      JSON.stringify({ kind: 'group-vp', sessionId: 'g-eng', id: 'li-si' }),
+      JSON.stringify({ kind: 'group-vp', sessionId: 'g-eng', id: 'zhang-san' }),
+      JSON.stringify({ kind: 'group-feature', sessionId: 'g-eng', id: 'f-1' }),
+      JSON.stringify({ kind: 'group-topic', sessionId: 'g-eng', path: ['life', 'parenting'] }),
+      JSON.stringify({ kind: 'group-topic', sessionId: 'g-eng', path: ['science', 'physics'] }),
+      JSON.stringify({ kind: 'group-topic', sessionId: 'g-eng', path: ['work'] }),
     ].sort());
   });
 
@@ -310,7 +310,7 @@ describe('F. listScopes', () => {
     const sorted = scopes.map(s => JSON.stringify(s)).sort();
     expect(sorted).toEqual([
       JSON.stringify({ kind: 'group', id: 'g1' }),
-      JSON.stringify({ kind: 'group-vp', groupId: 'g1', id: 'ok' }),
+      JSON.stringify({ kind: 'group-vp', sessionId: 'g1', id: 'ok' }),
     ].sort());
   });
 
@@ -323,24 +323,24 @@ describe('F. listScopes', () => {
 
 describe('G. isValidTopic', () => {
   it('accepts 1-level and 2-level group-topic', () => {
-    expect(isValidTopic({ kind: 'group-topic', groupId: 'g', path: ['x'] })).toBe(true);
-    expect(isValidTopic({ kind: 'group-topic', groupId: 'g', path: ['x', 'y'] })).toBe(true);
+    expect(isValidTopic({ kind: 'group-topic', sessionId: 'g', path: ['x'] })).toBe(true);
+    expect(isValidTopic({ kind: 'group-topic', sessionId: 'g', path: ['x', 'y'] })).toBe(true);
   });
   it('rejects non-topic kinds', () => {
     expect(isValidTopic({ kind: 'user' })).toBe(false);
-    expect(isValidTopic({ kind: 'group-vp', groupId: 'g', id: 'a' })).toBe(false);
+    expect(isValidTopic({ kind: 'group-vp', sessionId: 'g', id: 'a' })).toBe(false);
   });
-  it('rejects missing groupId', () => {
+  it('rejects missing sessionId', () => {
     expect(isValidTopic({ kind: 'group-topic', path: ['x'] })).toBe(false);
   });
   it('rejects empty / overlong paths', () => {
-    expect(isValidTopic({ kind: 'group-topic', groupId: 'g', path: [] })).toBe(false);
-    expect(isValidTopic({ kind: 'group-topic', groupId: 'g', path: ['a', 'b', 'c'] })).toBe(false);
+    expect(isValidTopic({ kind: 'group-topic', sessionId: 'g', path: [] })).toBe(false);
+    expect(isValidTopic({ kind: 'group-topic', sessionId: 'g', path: ['a', 'b', 'c'] })).toBe(false);
   });
   it('rejects unsafe segments', () => {
-    expect(isValidTopic({ kind: 'group-topic', groupId: 'g', path: ['..'] })).toBe(false);
-    expect(isValidTopic({ kind: 'group-topic', groupId: 'g', path: ['a/b'] })).toBe(false);
-    expect(isValidTopic({ kind: 'group-topic', groupId: 'g', path: [''] })).toBe(false);
-    expect(isValidTopic({ kind: 'group-topic', groupId: 'g', path: ['ok', '..'] })).toBe(false);
+    expect(isValidTopic({ kind: 'group-topic', sessionId: 'g', path: ['..'] })).toBe(false);
+    expect(isValidTopic({ kind: 'group-topic', sessionId: 'g', path: ['a/b'] })).toBe(false);
+    expect(isValidTopic({ kind: 'group-topic', sessionId: 'g', path: [''] })).toBe(false);
+    expect(isValidTopic({ kind: 'group-topic', sessionId: 'g', path: ['ok', '..'] })).toBe(false);
   });
 });

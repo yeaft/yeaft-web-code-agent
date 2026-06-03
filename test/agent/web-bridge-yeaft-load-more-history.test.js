@@ -5,7 +5,7 @@
  *   - emits a `yeaft_history_chunk` envelope with the projected
  *     user/assistant rows, oldestSeq, hasMore from
  *     ConversationStore.loadVisibleByGroup
- *   - empty branch (no session yet, or no groupId) still emits a chunk so
+ *   - empty branch (no session yet, or no sessionId) still emits a chunk so
  *     the frontend spinner clears
  *   - error branch (loadVisibleByGroup throws) still emits an empty chunk
  *
@@ -18,7 +18,7 @@
  * as module-level vars that can't be reset from outside. Once the first
  * `handleYeaftLoadHistory` populates them, subsequent tests inherit the
  * same `session.conversationStore`. We work with that by sharing ONE store
- * across all tests and isolating tests via unique groupIds + scoped
+ * across all tests and isolating tests via unique sessionIds + scoped
  * `outbound` clears in beforeEach.
  */
 
@@ -89,48 +89,48 @@ function lastHistoryLoadedEvent() {
   return null;
 }
 
-function seedTurns(groupId, n, prefix = 'q') {
+function seedTurns(sessionId, n, prefix = 'q') {
   const batch = [];
   for (let i = 1; i <= n; i++) {
-    batch.push({ role: 'user',      content: `${prefix}${i}`, groupId });
-    batch.push({ role: 'assistant', content: `a${prefix}${i}`, groupId });
+    batch.push({ role: 'user',      content: `${prefix}${i}`, sessionId });
+    batch.push({ role: 'assistant', content: `a${prefix}${i}`, sessionId });
   }
   sharedStore.appendBatch(batch);
 }
 
 describe('handleYeaftLoadMoreHistory — chunk emission', () => {
-  it('emits an empty chunk when groupId is missing', async () => {
-    await handleYeaftLoadMoreHistory({ groupId: null, beforeSeq: null, turns: 5 });
+  it('emits an empty chunk when sessionId is missing', async () => {
+    await handleYeaftLoadMoreHistory({ sessionId: null, beforeSeq: null, turns: 5 });
     const chunk = lastChunk();
     expect(chunk).toBeDefined();
     expect(chunk.type).toBe('yeaft_history_chunk');
     expect(chunk.messages).toEqual([]);
     expect(chunk.oldestSeq).toBeNull();
     expect(chunk.hasMore).toBe(false);
-    // Defensive: empty branch still stamps groupId so the server relay
+    // Defensive: empty branch still stamps sessionId so the server relay
     // routing can't choke on undefined.
-    expect(chunk.groupId).toBeNull();
+    expect(chunk.sessionId).toBeNull();
   });
 
   it('emits a chunk with projected rows + cursor + hasMore for a populated group', async () => {
     const gid = 'g_chunk';
     seedTurns(gid, 5);
 
-    await handleYeaftLoadMoreHistory({ groupId: gid, beforeSeq: null, turns: 2 });
+    await handleYeaftLoadMoreHistory({ sessionId: gid, beforeSeq: null, turns: 2 });
     const chunk = lastChunk();
     expect(chunk).toBeDefined();
     expect(chunk.type).toBe('yeaft_history_chunk');
-    expect(chunk.groupId).toBe(gid);
+    expect(chunk.sessionId).toBe(gid);
     // 2 newest turns: q4/aq4, q5/aq5.
     expect(chunk.messages.map(m => m.content))
       .toEqual(['q4', 'aq4', 'q5', 'aq5']);
-    // Each row carries role/content/groupId; stable ids and assistant
+    // Each row carries role/content/sessionId; stable ids and assistant
     // speaker attribution are included when present.
     for (const m of chunk.messages) {
       expect(m).toEqual(expect.objectContaining({
         role: expect.stringMatching(/^(user|assistant)$/),
         content: expect.any(String),
-        groupId: gid,
+        sessionId: gid,
       }));
       expect(m).not.toHaveProperty('time');
     }
@@ -143,39 +143,39 @@ describe('handleYeaftLoadMoreHistory — chunk emission', () => {
   it('filters internal reflection rows and preserves ids + speaker attribution in older history', async () => {
     const gid = 'g_chunk_visible_projection';
     sharedStore.appendBatch([
-      { id: 'visible-u', role: 'user', content: 'visible question', groupId: gid },
-      { id: 'reflection-u', role: 'user', content: 'The previous tool calls have been folded', groupId: gid, _reflection: true },
-      { id: 'internal-a', role: 'assistant', content: 'internal assistant', groupId: gid, internal: true, speakerVpId: 'vp-hidden' },
-      { id: 'visible-a', role: 'assistant', content: 'visible answer', groupId: gid, speakerVpId: 'vp-linus' },
+      { id: 'visible-u', role: 'user', content: 'visible question', sessionId: gid },
+      { id: 'reflection-u', role: 'user', content: 'The previous tool calls have been folded', sessionId: gid, _reflection: true },
+      { id: 'internal-a', role: 'assistant', content: 'internal assistant', sessionId: gid, internal: true, speakerVpId: 'vp-hidden' },
+      { id: 'visible-a', role: 'assistant', content: 'visible answer', sessionId: gid, speakerVpId: 'vp-linus' },
     ]);
 
-    await handleYeaftLoadMoreHistory({ groupId: gid, beforeSeq: null, turns: 10 });
+    await handleYeaftLoadMoreHistory({ sessionId: gid, beforeSeq: null, turns: 10 });
     const chunk = lastChunk();
     expect(chunk).toBeDefined();
     expect(chunk.messages.map(m => m.content)).toEqual(['visible question', 'visible answer']);
-    expect(chunk.messages[0]).toEqual(expect.objectContaining({ role: 'user', groupId: gid }));
+    expect(chunk.messages[0]).toEqual(expect.objectContaining({ role: 'user', sessionId: gid }));
     expect(chunk.messages[0].id).toEqual(expect.any(String));
-    expect(chunk.messages[1]).toEqual(expect.objectContaining({ role: 'assistant', groupId: gid, speakerVpId: 'vp-linus' }));
+    expect(chunk.messages[1]).toEqual(expect.objectContaining({ role: 'assistant', sessionId: gid, speakerVpId: 'vp-linus' }));
     expect(chunk.messages[1].id).toEqual(expect.any(String));
   });
 
   it('older history pages over invisible rows before the cursor', async () => {
     const gid = 'g_chunk_invisible_before_cursor';
     sharedStore.appendBatch([
-      { role: 'user', content: 'older visible', groupId: gid },
-      { role: 'assistant', content: 'older answer', groupId: gid, speakerVpId: 'vp-ada' },
-      { role: 'user', content: 'old reflection', groupId: gid, _reflection: true },
-      { role: 'assistant', content: 'old internal', groupId: gid, internal: true, speakerVpId: 'vp-hidden' },
-      { role: 'user', content: 'newer visible', groupId: gid },
-      { role: 'assistant', content: 'newer answer', groupId: gid, speakerVpId: 'vp-linus' },
+      { role: 'user', content: 'older visible', sessionId: gid },
+      { role: 'assistant', content: 'older answer', sessionId: gid, speakerVpId: 'vp-ada' },
+      { role: 'user', content: 'old reflection', sessionId: gid, _reflection: true },
+      { role: 'assistant', content: 'old internal', sessionId: gid, internal: true, speakerVpId: 'vp-hidden' },
+      { role: 'user', content: 'newer visible', sessionId: gid },
+      { role: 'assistant', content: 'newer answer', sessionId: gid, speakerVpId: 'vp-linus' },
     ]);
 
-    await handleYeaftLoadMoreHistory({ groupId: gid, beforeSeq: Number.MAX_SAFE_INTEGER, turns: 1 });
+    await handleYeaftLoadMoreHistory({ sessionId: gid, beforeSeq: Number.MAX_SAFE_INTEGER, turns: 1 });
     const newest = lastChunk();
     expect(newest.messages.map(m => m.content)).toEqual(['newer visible', 'newer answer']);
 
     outbound.length = 0;
-    await handleYeaftLoadMoreHistory({ groupId: gid, beforeSeq: newest.oldestSeq, turns: 1 });
+    await handleYeaftLoadMoreHistory({ sessionId: gid, beforeSeq: newest.oldestSeq, turns: 1 });
     const older = lastChunk();
     expect(older.messages.map(m => m.content)).toEqual(['older visible', 'older answer']);
     expect(older.hasMore).toBe(false);
@@ -187,21 +187,21 @@ describe('handleYeaftLoadMoreHistory — chunk emission', () => {
     seedTurns(gid, 3);
 
     // Page 1.
-    await handleYeaftLoadMoreHistory({ groupId: gid, beforeSeq: null, turns: 2 });
+    await handleYeaftLoadMoreHistory({ sessionId: gid, beforeSeq: null, turns: 2 });
     const p1 = lastChunk();
     expect(p1.messages.map(m => m.content)).toEqual(['q2', 'aq2', 'q3', 'aq3']);
     expect(p1.hasMore).toBe(true);
 
     outbound.length = 0;
     // Page 2 — final.
-    await handleYeaftLoadMoreHistory({ groupId: gid, beforeSeq: p1.oldestSeq, turns: 2 });
+    await handleYeaftLoadMoreHistory({ sessionId: gid, beforeSeq: p1.oldestSeq, turns: 2 });
     const p2 = lastChunk();
     expect(p2.messages.map(m => m.content)).toEqual(['q1', 'aq1']);
     expect(p2.hasMore).toBe(false);
 
     outbound.length = 0;
     // Page 3 — empty.
-    await handleYeaftLoadMoreHistory({ groupId: gid, beforeSeq: p2.oldestSeq, turns: 2 });
+    await handleYeaftLoadMoreHistory({ sessionId: gid, beforeSeq: p2.oldestSeq, turns: 2 });
     const p3 = lastChunk();
     expect(p3.messages).toEqual([]);
     expect(p3.oldestSeq).toBeNull();
@@ -215,7 +215,7 @@ describe('handleYeaftLoadMoreHistory — chunk emission', () => {
     const original = sharedStore.loadVisibleByGroup.bind(sharedStore);
     sharedStore.loadVisibleByGroup = () => { throw new Error('disk gone'); };
     try {
-      await handleYeaftLoadMoreHistory({ groupId: gid, beforeSeq: null, turns: 2 });
+      await handleYeaftLoadMoreHistory({ sessionId: gid, beforeSeq: null, turns: 2 });
       const chunk = lastChunk();
       expect(chunk).toBeDefined();
       expect(chunk.messages).toEqual([]);
@@ -230,7 +230,7 @@ describe('handleYeaftLoadMoreHistory — chunk emission', () => {
     const gid = 'g_default';
     seedTurns(gid, 25);
 
-    await handleYeaftLoadMoreHistory({ groupId: gid, beforeSeq: null /* turns omitted */ });
+    await handleYeaftLoadMoreHistory({ sessionId: gid, beforeSeq: null /* turns omitted */ });
     const chunk = lastChunk();
     expect(chunk.messages).toHaveLength(20); // 10 turns × (user + assistant)
     expect(chunk.messages[0].content).toBe('q16');
@@ -242,7 +242,7 @@ describe('handleYeaftLoadMoreHistory — chunk emission', () => {
     const gid = 'g_default2';
     seedTurns(gid, 25);
 
-    await handleYeaftLoadMoreHistory({ groupId: gid, beforeSeq: null, turns: 0 });
+    await handleYeaftLoadMoreHistory({ sessionId: gid, beforeSeq: null, turns: 0 });
     const chunk = lastChunk();
     expect(chunk.messages).toHaveLength(20); // 10 turns × (user + assistant)
     expect(chunk.messages[0].content).toBe('q16');
@@ -257,22 +257,22 @@ describe('handleYeaftLoadHistory — pagination cursor priming', () => {
     const gid = 'g_initial_latest_window';
     seedTurns(gid, 5, 'latest');
 
-    await handleYeaftLoadHistory({ groupId: gid, limit: 2 });
+    await handleYeaftLoadHistory({ sessionId: gid, limit: 2 });
 
     const replay = outbound.filter(m => m.type === 'yeaft_output' && m.data);
     const userTexts = replay
-      .filter(m => m.groupId === gid && m.data.type === 'user')
+      .filter(m => m.sessionId === gid && m.data.type === 'user')
       .map(m => m.data.message.content);
     const assistantTexts = replay
-      .filter(m => m.groupId === gid && m.data.type === 'assistant')
+      .filter(m => m.sessionId === gid && m.data.type === 'assistant')
       .map(m => m.data.message.content[0].text);
 
     expect(userTexts).toEqual(['latest4', 'latest5']);
     expect(assistantTexts).toEqual(['alatest4', 'alatest5']);
-    expect(replay.some(m => m.groupId === gid && JSON.stringify(m.data).includes('latest1'))).toBe(false);
+    expect(replay.some(m => m.sessionId === gid && JSON.stringify(m.data).includes('latest1'))).toBe(false);
 
     const evt = lastHistoryLoadedEvent();
-    expect(evt).toEqual(expect.objectContaining({ groupId: gid, count: 4, hasMore: true }));
+    expect(evt).toEqual(expect.objectContaining({ sessionId: gid, count: 4, hasMore: true }));
     expect(typeof evt.oldestSeq).toBe('number');
   });
 
@@ -280,12 +280,12 @@ describe('handleYeaftLoadHistory — pagination cursor priming', () => {
     const gid = 'g_prime_more';
     seedTurns(gid, 5);
 
-    await handleYeaftLoadHistory({ groupId: gid, limit: 2 });
+    await handleYeaftLoadHistory({ sessionId: gid, limit: 2 });
 
     const evt = lastHistoryLoadedEvent();
     expect(evt).toBeDefined();
     expect(evt.type).toBe('history_loaded');
-    expect(evt.groupId).toBe(gid);
+    expect(evt.sessionId).toBe(gid);
     expect(evt.count).toBe(4); // 2 turns × (user + assistant) = 4 messages
     expect(evt.hasMore).toBe(true);
     expect(typeof evt.oldestSeq).toBe('number');
@@ -296,20 +296,20 @@ describe('handleYeaftLoadHistory — pagination cursor priming', () => {
   it('refresh replay filters reflection/internal rows and emits stable ids + speaker envelopes', async () => {
     const gid = 'g_refresh_visible_projection';
     sharedStore.appendBatch([
-      { id: 'refresh-u', role: 'user', content: 'refresh question', groupId: gid },
-      { id: 'refresh-reflection', role: 'user', content: 'The previous 30 tool calls have been folded', groupId: gid, _reflection: true },
-      { id: 'refresh-internal', role: 'assistant', content: 'internal note', groupId: gid, internal: true, speakerVpId: 'vp-hidden' },
-      { id: 'refresh-a', role: 'assistant', content: 'refresh answer', groupId: gid, speakerVpId: 'vp-ada' },
+      { id: 'refresh-u', role: 'user', content: 'refresh question', sessionId: gid },
+      { id: 'refresh-reflection', role: 'user', content: 'The previous 30 tool calls have been folded', sessionId: gid, _reflection: true },
+      { id: 'refresh-internal', role: 'assistant', content: 'internal note', sessionId: gid, internal: true, speakerVpId: 'vp-hidden' },
+      { id: 'refresh-a', role: 'assistant', content: 'refresh answer', sessionId: gid, speakerVpId: 'vp-ada' },
     ]);
 
-    await handleYeaftLoadHistory({ groupId: gid, limit: 10 });
+    await handleYeaftLoadHistory({ sessionId: gid, limit: 10 });
 
     const replay = outbound.filter(m => m.type === 'yeaft_output' && m.data);
-    const visibleData = replay.map(m => ({ groupId: m.groupId, vpId: m.vpId || null, data: m.data }));
+    const visibleData = replay.map(m => ({ sessionId: m.sessionId, vpId: m.vpId || null, data: m.data }));
     expect(visibleData.filter(x => x.data.type === 'user').map(x => x.data.message.content)).toEqual(['refresh question']);
     expect(visibleData.filter(x => x.data.type === 'assistant').map(x => x.data.message.content[0].text)).toEqual(['refresh answer']);
     const assistant = visibleData.find(x => x.data.type === 'assistant');
-    expect(assistant).toEqual(expect.objectContaining({ groupId: gid, vpId: 'vp-ada' }));
+    expect(assistant).toEqual(expect.objectContaining({ sessionId: gid, vpId: 'vp-ada' }));
     expect(assistant.data.message.id).toEqual(expect.any(String));
     const user = visibleData.find(x => x.data.type === 'user');
     expect(user.data.message.id).toEqual(expect.any(String));
@@ -321,20 +321,20 @@ describe('handleYeaftLoadHistory — pagination cursor priming', () => {
     sharedStore.appendBatch([
       {
         role: 'user',
-        groupId: gid,
+        sessionId: gid,
         content: JSON.stringify([
           { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAABASE64' } },
           { type: 'text', text: 'please inspect this\n\n[Uploaded files]\n- .claude-tmp-attachments/g/a.png (image)' },
         ]),
         attachments: [{ name: 'a.png', path: '.claude-tmp-attachments/g/a.png', mimeType: 'image/png', isImage: true }],
       },
-      { role: 'assistant', content: 'ok', groupId: gid, speakerVpId: 'vp-linus' },
+      { role: 'assistant', content: 'ok', sessionId: gid, speakerVpId: 'vp-linus' },
     ]);
 
-    await handleYeaftLoadHistory({ groupId: gid, limit: 10 });
+    await handleYeaftLoadHistory({ sessionId: gid, limit: 10 });
 
     const replay = outbound.filter(m => m.type === 'yeaft_output' && m.data);
-    const user = replay.find(m => m.groupId === gid && m.data.type === 'user');
+    const user = replay.find(m => m.sessionId === gid && m.data.type === 'user');
     expect(user.data.message.content).toBe('please inspect this');
     expect(JSON.stringify(user.data.message)).not.toContain('AAAABASE64');
     expect(JSON.stringify(user.data.message)).not.toContain('Uploaded files');
@@ -351,15 +351,15 @@ describe('handleYeaftLoadHistory — pagination cursor priming', () => {
     sharedStore.appendBatch([
       {
         role: 'user',
-        groupId: gid,
+        sessionId: gid,
         content: 'image please',
         attachments: [{ name: 'pic.png', path: relPath, mimeType: 'image/png', isImage: true }],
       },
     ]);
 
-    await handleYeaftLoadHistory({ groupId: gid, limit: 10 });
+    await handleYeaftLoadHistory({ sessionId: gid, limit: 10 });
 
-    const user = outbound.find(m => m.type === 'yeaft_output' && m.groupId === gid && m.data?.type === 'user');
+    const user = outbound.find(m => m.type === 'yeaft_output' && m.sessionId === gid && m.data?.type === 'user');
     expect(user.data.message.attachments[0]).toEqual(expect.objectContaining({
       name: 'pic.png',
       path: relPath,
@@ -375,11 +375,11 @@ describe('handleYeaftLoadHistory — pagination cursor priming', () => {
 
   it('preserves no-attachment history replay shape unchanged', async () => {
     const gid = 'g_refresh_no_attachments';
-    sharedStore.appendBatch([{ role: 'user', groupId: gid, content: 'plain text' }]);
+    sharedStore.appendBatch([{ role: 'user', sessionId: gid, content: 'plain text' }]);
 
-    await handleYeaftLoadHistory({ groupId: gid, limit: 10 });
+    await handleYeaftLoadHistory({ sessionId: gid, limit: 10 });
 
-    const user = outbound.find(m => m.type === 'yeaft_output' && m.groupId === gid && m.data?.type === 'user');
+    const user = outbound.find(m => m.type === 'yeaft_output' && m.sessionId === gid && m.data?.type === 'user');
     expect(user.data.message.content).toBe('plain text');
     expect(user.data.message).not.toHaveProperty('attachments');
   });
@@ -387,27 +387,27 @@ describe('handleYeaftLoadHistory — pagination cursor priming', () => {
   it('initial group replay pages over visible rows without raw unbounded fallback', async () => {
     const gid = 'g_initial_invisible_tail';
     const before = sharedStore.appendBatch([
-      { role: 'user', content: 'visible one', groupId: gid },
-      { role: 'assistant', content: 'visible answer one', groupId: gid, speakerVpId: 'vp-ada' },
+      { role: 'user', content: 'visible one', sessionId: gid },
+      { role: 'assistant', content: 'visible answer one', sessionId: gid, speakerVpId: 'vp-ada' },
     ]);
     sharedStore.moveToColdBatch(before.map(m => m.id));
     sharedStore.appendBatch([
-      { role: 'user', content: 'visible two', groupId: gid },
-      { role: 'assistant', content: 'visible answer two', groupId: gid, speakerVpId: 'vp-linus' },
-      { role: 'user', content: 'reflection one', groupId: gid, _reflection: true },
-      { role: 'assistant', content: 'internal one', groupId: gid, internal: true, speakerVpId: 'vp-hidden' },
-      { role: 'user', content: 'reflection two', groupId: gid, _reflection: true },
-      { role: 'assistant', content: 'system only', groupId: gid, systemOnly: true, speakerVpId: 'vp-hidden' },
+      { role: 'user', content: 'visible two', sessionId: gid },
+      { role: 'assistant', content: 'visible answer two', sessionId: gid, speakerVpId: 'vp-linus' },
+      { role: 'user', content: 'reflection one', sessionId: gid, _reflection: true },
+      { role: 'assistant', content: 'internal one', sessionId: gid, internal: true, speakerVpId: 'vp-hidden' },
+      { role: 'user', content: 'reflection two', sessionId: gid, _reflection: true },
+      { role: 'assistant', content: 'system only', sessionId: gid, systemOnly: true, speakerVpId: 'vp-hidden' },
     ]);
 
-    await handleYeaftLoadHistory({ groupId: gid, limit: 1 });
+    await handleYeaftLoadHistory({ sessionId: gid, limit: 1 });
 
     const replay = outbound.filter(m => m.type === 'yeaft_output' && m.data);
     const userTexts = replay
-      .filter(m => m.groupId === gid && m.data.type === 'user')
+      .filter(m => m.sessionId === gid && m.data.type === 'user')
       .map(m => m.data.message.content);
     const assistantRows = replay
-      .filter(m => m.groupId === gid && m.data.type === 'assistant');
+      .filter(m => m.sessionId === gid && m.data.type === 'assistant');
 
     expect(userTexts).toEqual(['visible two']);
     expect(assistantRows.map(m => m.data.message.content[0].text)).toEqual(['visible answer two']);
@@ -417,14 +417,14 @@ describe('handleYeaftLoadHistory — pagination cursor priming', () => {
     expect(replay.some(m => JSON.stringify(m.data).includes('system only'))).toBe(false);
 
     const evt = lastHistoryLoadedEvent();
-    expect(evt).toEqual(expect.objectContaining({ groupId: gid, count: 2, hasMore: true }));
+    expect(evt).toEqual(expect.objectContaining({ sessionId: gid, count: 2, hasMore: true }));
     expect(typeof evt.oldestSeq).toBe('number');
   });
 
   it('history_loaded reports hasMore=false when the bootstrap covers everything', async () => {
     const gid = 'g_prime_all';
     seedTurns(gid, 2);
-    await handleYeaftLoadHistory({ groupId: gid, limit: 10 });
+    await handleYeaftLoadHistory({ sessionId: gid, limit: 10 });
 
     const evt = lastHistoryLoadedEvent();
     expect(evt).toBeDefined();
@@ -433,7 +433,7 @@ describe('handleYeaftLoadHistory — pagination cursor priming', () => {
   });
 
   it('history_loaded reports hasMore=false and oldestSeq=null when the group has no history', async () => {
-    await handleYeaftLoadHistory({ groupId: 'g_empty_unique', limit: 10 });
+    await handleYeaftLoadHistory({ sessionId: 'g_empty_unique', limit: 10 });
 
     const evt = lastHistoryLoadedEvent();
     expect(evt).toBeDefined();

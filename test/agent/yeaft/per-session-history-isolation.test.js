@@ -7,14 +7,14 @@
  * array shared across every group. A user message in group-A would land in
  * the array, then a user message in group-B would land in the same array,
  * and group-B's next turn would see group-A's prompt as part of its
- * `messages` snapshot. Disk was group-tagged correctly (groupId field on
+ * `messages` snapshot. Disk was group-tagged correctly (sessionId field on
  * each m{seq}.md), but the in-memory tape was unified — so within a single
  * agent process, switching groups leaked history.
  *
  * Post-refactor: GroupContext owns per-group `history`. Group-A and
  * group-B each have their own array; switching groups never bleeds.
  *
- * The test drives the bridge via `__testGroupHistory(groupId)` to read
+ * The test drives the bridge via `__testGroupHistory(sessionId)` to read
  * the per-group history snapshot directly (no need to boot a full
  * session). The contract being pinned:
  *
@@ -27,7 +27,7 @@
  *   4. After `__testResetVpState`, every group's history is gone — fresh
  *      groups recreate it on demand.
  *   5. Hydrate-from-disk: a session-backed read returns ONLY the records
- *      whose `groupId` matches; other groups' on-disk history must not
+ *      whose `sessionId` matches; other groups' on-disk history must not
  *      leak into the requested group's snapshot.
  *   6. Lazy-hydrate ordering: a partial entry seeded by an earlier
  *      `getCompactState`-style path (no history loaded yet) MUST still
@@ -88,14 +88,14 @@ describe('GroupContext.history — per-group isolation', () => {
     expect(fresh).not.toBe(hist);
   });
 
-  it('hydrate-from-disk: per-group records are isolated by groupId', () => {
+  it('hydrate-from-disk: per-group records are isolated by sessionId', () => {
     const dir = mkdtempSync(join(tmpdir(), 'yeaft-history-iso-'));
     try {
       const store = new ConversationStore(dir);
       // Seed disk with two groups; per-group hydrate must not bleed.
-      store.append({ role: 'user', content: 'A1', groupId: 'grpA' });
-      store.append({ role: 'assistant', content: 'A1 reply', groupId: 'grpA' });
-      store.append({ role: 'user', content: 'B1', groupId: 'grpB' });
+      store.append({ role: 'user', content: 'A1', sessionId: 'grpA' });
+      store.append({ role: 'assistant', content: 'A1 reply', sessionId: 'grpA' });
+      store.append({ role: 'user', content: 'B1', sessionId: 'grpB' });
       __testSetSession({ conversationStore: store });
 
       const histA = __testGroupHistory('grpA');
@@ -119,7 +119,7 @@ describe('GroupContext.history — per-group isolation', () => {
     const dir = mkdtempSync(join(tmpdir(), 'yeaft-history-iso-lazy-'));
     try {
       const store = new ConversationStore(dir);
-      store.append({ role: 'user', content: 'persisted before lookup', groupId: 'grpLazy' });
+      store.append({ role: 'user', content: 'persisted before lookup', sessionId: 'grpLazy' });
       __testSetSession({ conversationStore: store });
 
       // Force-create a partial entry the way `getCompactState` would
@@ -143,13 +143,13 @@ describe('GroupContext.history — per-group isolation', () => {
 
   it('setGroupHistory(_, []) marks hydrated so consolidate does not reload', () => {
     // Post-consolidate: engine emits `consolidate`, bridge calls
-    // `setGroupHistory(groupId, [])`. The next read MUST see the empty
+    // `setGroupHistory(sessionId, [])`. The next read MUST see the empty
     // array — not silently re-hydrate from disk and resurrect the
     // turns the consolidate just collapsed.
     const dir = mkdtempSync(join(tmpdir(), 'yeaft-history-iso-consolidate-'));
     try {
       const store = new ConversationStore(dir);
-      store.append({ role: 'user', content: 'old turn', groupId: 'grpC' });
+      store.append({ role: 'user', content: 'old turn', sessionId: 'grpC' });
       __testSetSession({ conversationStore: store });
 
       const before = __testGroupHistory('grpC');

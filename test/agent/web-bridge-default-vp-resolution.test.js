@@ -67,10 +67,10 @@ describe('PR-G — buildVpQueryOpts resolves a default VP when none is supplied'
   });
 
   it("falls back to group's defaultVpId when caller did not supply vpId", () => {
-    const groupCoordinator = {
+    const sessionCoordinator = {
       group: { getMeta: () => ({ defaultVpId: 'linus', roster: ['linus', 'grace'] }) },
     };
-    const out = buildVpQueryOpts({ vpId: null, groupCoordinator, groupId: 'g-1' });
+    const out = buildVpQueryOpts({ vpId: null, sessionCoordinator, sessionId: 'g-1' });
     expect(out).toBeDefined();
     expect(out.senderVpId).toBe('linus');
     expect(out.vpPersona.displayName).toBe('Linus');
@@ -86,7 +86,7 @@ describe('PR-G — buildVpQueryOpts resolves a default VP when none is supplied'
     expect(zhPrompt).not.toContain('kernel hacker');
     expect(zhPrompt).not.toContain('You are linus.');
 
-    expect(out.groupId).toBe('g-1');
+    expect(out.sessionId).toBe('g-1');
   });
 
   it('falls back to first library VP when no vpId, no group, no config', () => {

@@ -37,9 +37,16 @@ import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
 import { getLlmConfig, updateLlmConfig, getYeaftSettings, updateYeaftSettings, getSearchSettings, updateSearchSettings, fetchTavilyUsage } from '../yeaft/config-api.js';
 import { fetchModelsDev } from '../yeaft/llm/models-dev.js';
-import { handleYeaftGroupChat, handleYeaftModeSwitch, handleYeaftModelSwitch, resetYeaftSession, handleYeaftLoadHistory, handleYeaftLoadMoreHistory, handleYeaftAbortThread, handleYeaftAbortAll, handleYeaftAbortTurn, handleYeaftVpSubscribe, handleYeaftVpCreate, handleYeaftVpUpdate, handleYeaftVpDelete, handleYeaftVpRead, handleYeaftListGroups, handleYeaftCreateGroup, handleYeaftRenameGroup, handleYeaftUpdateGroup, handleYeaftUpdateGroupConfig, handleYeaftArchiveGroup, handleYeaftDeleteGroup, handleYeaftAddMember, handleYeaftRemoveMember, handleYeaftSetDefaultVp, handleYeaftDreamTrigger, handleYeaftFetchToolStats, handleYeaftFetchDebugHistory, broadcastLanguageChange } from '../yeaft/web-bridge.js';
+import { handleYeaftSessionSend, handleYeaftModeSwitch, handleYeaftModelSwitch, resetYeaftSession, handleYeaftLoadHistory, handleYeaftLoadMoreHistory, handleYeaftAbortThread, handleYeaftAbortAll, handleYeaftAbortTurn, handleYeaftVpSubscribe, handleYeaftVpCreate, handleYeaftVpUpdate, handleYeaftVpDelete, handleYeaftVpRead, handleYeaftListSessions, handleYeaftCreateSession, handleYeaftRenameSession, handleYeaftUpdateSession, handleYeaftUpdateSessionConfig, handleYeaftArchiveSession, handleYeaftDeleteSession, handleYeaftSessionAddMember, handleYeaftSessionRemoveMember, handleYeaftSessionSetDefaultVp, handleYeaftDreamTrigger, handleYeaftFetchToolStats, handleYeaftFetchDebugHistory, broadcastLanguageChange } from '../yeaft/web-bridge.js';
 
 export async function handleMessage(msg) {
+  // Wire-compat: old web bundles send `groupId` on Yeaft messages;
+  // the agent runtime has switched to `sessionId`. Coerce here so
+  // handlers don't each have to do it. Keep both fields populated.
+  if (msg && typeof msg === 'object') {
+    if (msg.sessionId == null && typeof msg.groupId === 'string') msg.sessionId = msg.groupId;
+    if (msg.groupId == null && typeof msg.sessionId === 'string') msg.groupId = msg.sessionId;
+  }
   switch (msg.type) {
     case 'registered':
       if (msg.sessionKey) {
@@ -429,7 +436,7 @@ export async function handleMessage(msg) {
     // Yeaft — single conversation backed by the default group.
     case 'yeaft_group_chat':
     case 'unify_group_chat':
-      await handleYeaftGroupChat(msg);
+      await handleYeaftSessionSend(msg);
       break;
 
     case 'yeaft_load_history':
@@ -513,56 +520,56 @@ export async function handleMessage(msg) {
     case 'yeaft_list_groups':
     case 'unify_list_groups':
     case 'yeaft_list_sessions':
-      handleYeaftListGroups(msg);
+      handleYeaftListSessions(msg);
       break;
     case 'yeaft_create_group':
     case 'unify_create_group':
     case 'yeaft_create_session':
-      handleYeaftCreateGroup(msg);
+      handleYeaftCreateSession(msg);
       break;
     case 'yeaft_rename_group':
     case 'unify_rename_group':
     case 'yeaft_rename_session':
-      handleYeaftRenameGroup(msg);
+      handleYeaftRenameSession(msg);
       break;
     case 'yeaft_update_group':
     case 'unify_update_group':
     case 'yeaft_update_session':
-      handleYeaftUpdateGroup(msg);
+      handleYeaftUpdateSession(msg);
       break;
     case 'yeaft_update_group_config':
     case 'unify_update_group_config':
     case 'yeaft_update_session_config':
-      handleYeaftUpdateGroupConfig(msg);
+      handleYeaftUpdateSessionConfig(msg);
       break;
     case 'yeaft_archive_group':
     case 'unify_archive_group':
     case 'yeaft_archive_session':
-      handleYeaftArchiveGroup(msg);
+      handleYeaftArchiveSession(msg);
       break;
     case 'yeaft_delete_group':
     case 'unify_delete_group':
     case 'yeaft_delete_session':
-      handleYeaftDeleteGroup(msg);
+      handleYeaftDeleteSession(msg);
       break;
     case 'yeaft_add_member':
     case 'unify_add_member':
     case 'yeaft_session_add_member':
-      handleYeaftAddMember(msg);
+      handleYeaftSessionAddMember(msg);
       break;
     case 'yeaft_remove_member':
     case 'unify_remove_member':
     case 'yeaft_session_remove_member':
-      handleYeaftRemoveMember(msg);
+      handleYeaftSessionRemoveMember(msg);
       break;
     case 'yeaft_set_default_vp':
     case 'unify_set_default_vp':
     case 'yeaft_session_set_default_vp':
-      handleYeaftSetDefaultVp(msg);
+      handleYeaftSessionSetDefaultVp(msg);
       break;
     // Phase 2: session_send is just group_chat (N≥1 fan-out already works).
     case 'yeaft_session_send':
-      handleYeaftGroupChat(msg);
+      handleYeaftSessionSend(msg);
       break;
 
     // wave-6b: manual dream trigger from VP detail page

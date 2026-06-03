@@ -23,7 +23,7 @@ describe('Active Scope rendering (DESIGN-PROMPT §3 ④)', () => {
     const out = buildSystemPrompt({
       language: 'en',
       toolNames: ['bash'],
-      activeScope: { groupId: 'team-x' },
+      activeScope: { sessionId: 'team-x' },
     });
     expect(out).toMatch(/## active_scope\ngroup: team-x/);
   });
@@ -47,7 +47,7 @@ describe('Active Scope rendering (DESIGN-PROMPT §3 ④)', () => {
       language: 'en',
       toolNames: ['bash'],
       activeScope: {
-        groupId: 'g1',
+        sessionId: 'g1',
         vpId: 'alice',
         envelope: { fromVpId: 'bob', intent: 'ask' },
       },
@@ -75,7 +75,7 @@ describe('Active Scope rendering (DESIGN-PROMPT §3 ④)', () => {
     const out = buildSystemPrompt({
       language: 'en',
       toolNames: ['bash'],
-      activeScope: { groupId: 'g1', envelope: {} },
+      activeScope: { sessionId: 'g1', envelope: {} },
     });
     expect(out).not.toMatch(/envelope:/);
   });
@@ -84,7 +84,7 @@ describe('Active Scope rendering (DESIGN-PROMPT §3 ④)', () => {
     const out = buildSystemPrompt({
       language: 'en',
       toolNames: ['bash'],
-      activeScope: { groupId: '   ', vpId: 'alice' },
+      activeScope: { sessionId: '   ', vpId: 'alice' },
     });
     expect(out).toMatch(/## active_scope\nvp: alice/);
     expect(out).not.toMatch(/group:/);
@@ -140,7 +140,7 @@ describe('System prompt language selection', () => {
     const out = buildSystemPrompt({
       language: 'zh',
       toolNames: ['Bash'],
-      groupAnnouncement: '所有 VP 先看这里。',
+      sessionAnnouncement: '所有 VP 先看这里。',
     });
     expect(out).toContain('[群组公告]');
     expect(out).toContain('日期：');
@@ -152,7 +152,7 @@ describe('System prompt language selection', () => {
     const out = buildSystemPrompt({
       language: 'zh-CN',
       toolNames: ['Bash'],
-      groupAnnouncement: '公告',
+      sessionAnnouncement: '公告',
     });
     expect(out).toContain('[群组公告]');
     expect(out).toContain('日期：');
@@ -166,7 +166,7 @@ describe('System prompt language selection', () => {
     const out = buildSystemPrompt({
       language: 'en',
       toolNames: ['Bash'],
-      groupAnnouncement: 'Read this first.',
+      sessionAnnouncement: 'Read this first.',
     });
     expect(out).toContain('[Group Announcement]');
     expect(out).toContain('Date:');

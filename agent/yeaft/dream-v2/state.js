@@ -59,11 +59,11 @@ const DREAM_BLOCK_CLOSE = '<!-- /dream-state -->';
  * Read a group's .dream-state. Missing file → defaults.
  *
  * @param {string} root — memory root, e.g. ~/.yeaft/memory
- * @param {string} groupId
+ * @param {string} sessionId
  * @returns {Promise<{ lastDreamMessageId: string|null, lastDreamAt: string|null, messageCount: number }>}
  */
-export async function readGroupState(root, groupId) {
-  const abs = join(root, 'group', groupId, STATE_FILE);
+export async function readGroupState(root, sessionId) {
+  const abs = join(root, 'group', sessionId, STATE_FILE);
   const empty = { lastDreamMessageId: null, lastDreamAt: null, messageCount: 0 };
   let raw;
   try { raw = await fsp.readFile(abs, 'utf8'); }
@@ -76,11 +76,11 @@ export async function readGroupState(root, groupId) {
  * absent. Unknown fields are ignored.
  *
  * @param {string} root
- * @param {string} groupId
+ * @param {string} sessionId
  * @param {{ lastDreamMessageId?: string|null, lastDreamAt?: string|null, messageCount?: number }} state
  */
-export async function writeGroupState(root, groupId, state) {
-  const dir = join(root, 'group', groupId);
+export async function writeGroupState(root, sessionId, state) {
+  const dir = join(root, 'group', sessionId);
   await fsp.mkdir(dir, { recursive: true });
   const abs = join(dir, STATE_FILE);
   const body =
@@ -131,7 +131,7 @@ function parseGroupState(raw) {
 /**
  * Resolve a memoryRoot + scope-string to the scope directory.
  * The scope string is the same shape dream-v2 already uses internally:
- * `'user'`, `'vp/<vpId>'`, `'group/<groupId>'`, `'feature/<id>'`, etc.
+ * `'user'`, `'vp/<vpId>'`, `'group/<sessionId>'`, `'feature/<id>'`, etc.
  *
  * Pure path-join; does NOT create the directory. The writer creates it.
  *

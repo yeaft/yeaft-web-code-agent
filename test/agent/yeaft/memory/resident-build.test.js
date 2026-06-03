@@ -26,7 +26,7 @@ describe('buildResidentEntries', () => {
 
   it('emits user + group + vp when all three are real summaries', () => {
     const out = buildResidentEntries({
-      groupId: 'grp_claude',
+      sessionId: 'grp_claude',
       ownVpId: 'steve',
       summaries: {
         user: '# Operator notes',
@@ -43,7 +43,7 @@ describe('buildResidentEntries', () => {
 
   it('skips vp/<ownVpId> when its summary is the seed-backfill stub', () => {
     const out = buildResidentEntries({
-      groupId: 'grp_claude',
+      sessionId: 'grp_claude',
       ownVpId: 'steve',
       summaries: {
         user: '# Operator notes',
@@ -58,7 +58,7 @@ describe('buildResidentEntries', () => {
   it('still emits user + group resident entries when the vp summary is a stub', () => {
     // Regression guard: skipping vp must NOT short-circuit the other scopes.
     const out = buildResidentEntries({
-      groupId: 'grp_claude',
+      sessionId: 'grp_claude',
       ownVpId: 'steve',
       summaries: {
         user: 'u',
@@ -69,7 +69,7 @@ describe('buildResidentEntries', () => {
     expect(out.length).toBe(2);
   });
 
-  it('omits group when groupId is missing even if a group summary is present', () => {
+  it('omits group when sessionId is missing even if a group summary is present', () => {
     const out = buildResidentEntries({
       summaries: { group: '# orphan' },
     });
@@ -98,7 +98,7 @@ describe('buildResidentEntries', () => {
 
   it('carries a real Dream group summary into the next system prompt memory block', () => {
     const entries = buildResidentEntries({
-      groupId: 'grp_demo',
+      sessionId: 'grp_demo',
       ownVpId: 'linus',
       summaries: {
         group: 'summary for group/grp_demo',

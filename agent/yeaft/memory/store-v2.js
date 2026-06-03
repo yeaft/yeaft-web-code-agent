@@ -8,7 +8,7 @@
  *   ~/.yeaft/memory/
  *     user/                    memory.md  summary.md
  *     vp/<vpId>/               memory.md  summary.md
- *     group/<groupId>/         memory.md  summary.md
+ *     group/<sessionId>/         memory.md  summary.md
  *     feature/<featureId>/     memory.md  summary.md
  *     topic/<l1>[/<l2>]/       memory.md  summary.md     (≤ 2 levels)
  *
@@ -74,7 +74,7 @@ export const SCOPE_KINDS = Object.freeze([
  * @typedef {Object} Scope
  * @property {ScopeKind} kind
  * @property {string} [id]        — required for group; for group-vp / group-feature the per-kind id
- * @property {string} [groupId]   — required for every group-* kind
+ * @property {string} [sessionId]   — required for every group-* kind
  * @property {string[]} [path]    — required for group-topic; 1–2 segments
  */
 
@@ -98,33 +98,33 @@ export function scopeDir(scope) {
       assertSafeSegment(scope.id, 'group.id');
       return `group/${scope.id}`;
     case 'group-user': {
-      if (!scope.groupId) throw new Error('scopeDir: group-user scope requires groupId');
-      assertSafeSegment(scope.groupId, 'group-user.groupId');
-      return `group/${scope.groupId}/user`;
+      if (!scope.sessionId) throw new Error('scopeDir: group-user scope requires sessionId');
+      assertSafeSegment(scope.sessionId, 'group-user.sessionId');
+      return `group/${scope.sessionId}/user`;
     }
     case 'group-vp': {
-      if (!scope.groupId) throw new Error('scopeDir: group-vp scope requires groupId');
+      if (!scope.sessionId) throw new Error('scopeDir: group-vp scope requires sessionId');
       if (!scope.id) throw new Error('scopeDir: group-vp scope requires id');
-      assertSafeSegment(scope.groupId, 'group-vp.groupId');
+      assertSafeSegment(scope.sessionId, 'group-vp.sessionId');
       assertSafeSegment(scope.id, 'group-vp.id');
-      return `group/${scope.groupId}/vp/${scope.id}`;
+      return `group/${scope.sessionId}/vp/${scope.id}`;
     }
     case 'group-feature': {
-      if (!scope.groupId) throw new Error('scopeDir: group-feature scope requires groupId');
+      if (!scope.sessionId) throw new Error('scopeDir: group-feature scope requires sessionId');
       if (!scope.id) throw new Error('scopeDir: group-feature scope requires id');
-      assertSafeSegment(scope.groupId, 'group-feature.groupId');
+      assertSafeSegment(scope.sessionId, 'group-feature.sessionId');
       assertSafeSegment(scope.id, 'group-feature.id');
-      return `group/${scope.groupId}/feature/${scope.id}`;
+      return `group/${scope.sessionId}/feature/${scope.id}`;
     }
     case 'group-topic': {
-      if (!scope.groupId) throw new Error('scopeDir: group-topic scope requires groupId');
-      assertSafeSegment(scope.groupId, 'group-topic.groupId');
+      if (!scope.sessionId) throw new Error('scopeDir: group-topic scope requires sessionId');
+      assertSafeSegment(scope.sessionId, 'group-topic.sessionId');
       const segs = Array.isArray(scope.path) ? scope.path : [];
       if (segs.length === 0 || segs.length > 2) {
         throw new Error('scopeDir: group-topic.path must have 1 or 2 segments');
       }
       for (const s of segs) assertSafeSegment(s, 'group-topic.path');
-      return `group/${scope.groupId}/topic/${segs.join('/')}`;
+      return `group/${scope.sessionId}/topic/${segs.join('/')}`;
     }
     case 'chat': {
       if (!scope.id) throw new Error('scopeDir: chat scope requires id');
@@ -190,7 +190,7 @@ function assertSafeSegment(s, ctx) {
  */
 export function isValidTopic(scope) {
   if (!scope || scope.kind !== 'group-topic') return false;
-  if (!scope.groupId || typeof scope.groupId !== 'string') return false;
+  if (!scope.sessionId || typeof scope.sessionId !== 'string') return false;
   if (!Array.isArray(scope.path)) return false;
   if (scope.path.length < 1 || scope.path.length > 2) return false;
   for (const s of scope.path) {
@@ -412,7 +412,7 @@ export function seedSummaryIfMissingSync(scope, body, opts = {}) {
 
 /**
  * Synchronously remove a scope's directory under the memory root. Used by
- * `deleteVp` / `deleteGroup` to cascade memory cleanup so a recreate of the
+ * `deleteVp` / `deleteSession` to cascade memory cleanup so a recreate of the
  * same id doesn't see stale `summary.md` / `memory.md` / `segments/` files.
  *
  * Idempotent — missing directory is a no-op.
@@ -460,10 +460,10 @@ export async function ensureScope(scope, opts = {}) {
  * Walks shallowly:
  *   user/                                  → { kind: 'user' }
  *   group/<g>/                             → { kind: 'group', id: g }
- *   group/<g>/user/                        → { kind: 'group-user', groupId: g }
- *   group/<g>/vp/<v>/                      → { kind: 'group-vp', groupId: g, id: v }
- *   group/<g>/feature/<f>/                 → { kind: 'group-feature', groupId: g, id: f }
- *   group/<g>/topic/<l1>[/<l2>]/           → { kind: 'group-topic', groupId: g, path: [...] }
+ *   group/<g>/user/                        → { kind: 'group-user', sessionId: g }
+ *   group/<g>/vp/<v>/                      → { kind: 'group-vp', sessionId: g, id: v }
+ *   group/<g>/feature/<f>/                 → { kind: 'group-feature', sessionId: g, id: f }
+ *   group/<g>/topic/<l1>[/<l2>]/           → { kind: 'group-topic', sessionId: g, path: [...] }
  *
  * Skips `.legacy/` and any dotfile / unsafe segment.
  *
@@ -478,13 +478,13 @@ export async function listScopes(opts = {}) {
   // user/
   if (existsSync(join(root, 'user'))) out.push({ kind: 'user' });
 
-  // group/<g>/...
+  // group/<g>/...  (LEGACY scope tree; kept for un-migrated data)
   const groupRoot = join(root, 'group');
   let groups;
   try { groups = await fsp.readdir(groupRoot, { withFileTypes: true }); }
   catch (err) {
-    if (err && err.code === 'ENOENT') return out;
-    throw err;
+    if (err && err.code === 'ENOENT') groups = [];
+    else throw err;
   }
 
   for (const gent of groups) {
@@ -497,7 +497,7 @@ export async function listScopes(opts = {}) {
 
     // group/<g>/user/
     if (existsSync(join(gAbs, 'user'))) {
-      out.push({ kind: 'group-user', groupId: g });
+      out.push({ kind: 'group-user', sessionId: g });
     }
 
     // group/<g>/vp/<v>/  and  group/<g>/feature/<f>/
@@ -514,7 +514,7 @@ export async function listScopes(opts = {}) {
         if (!isSafeId(ent.name)) continue;
         out.push({
           kind: kind === 'vp' ? 'group-vp' : 'group-feature',
-          groupId: g,
+          sessionId: g,
           id: ent.name,
         });
       }
@@ -540,14 +540,14 @@ export async function listScopes(opts = {}) {
       for (const l2ent of l2s) {
         if (!l2ent.isDirectory()) continue;
         if (!isSafeId(l2ent.name)) continue;
-        out.push({ kind: 'group-topic', groupId: g, path: [l1, l2ent.name] });
+        out.push({ kind: 'group-topic', sessionId: g, path: [l1, l2ent.name] });
         hasL2 = true;
       }
       if (!hasL2) {
         const hasMemory = existsSync(join(l1abs, 'memory.md'));
         const hasSummary = existsSync(join(l1abs, 'summary.md'));
         if (hasMemory || hasSummary) {
-          out.push({ kind: 'group-topic', groupId: g, path: [l1] });
+          out.push({ kind: 'group-topic', sessionId: g, path: [l1] });
         }
       }
     }

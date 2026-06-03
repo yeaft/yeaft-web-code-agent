@@ -1,23 +1,23 @@
-# Dream Extract — Group Scope
+# Dream Extract — Session Scope
 
 You are extracting **memory segments** from a conversation between the
 user and a Yeaft AI companion. This pass focuses on a specific
-**`group/<id>` scope**: long-lived facts about one collaboration group
+**`session/<id>` scope**: long-lived facts about one collaboration session
 (a project team, a study cohort, a working set of people/agents).
 
-The target group id is provided as `{{groupId}}`.
+The target session id is provided as `{{sessionId}}`.
 
-## What to extract for `group/<id>` scope
+## What to extract for `session/<id>` scope
 
-- **purpose** — what this group exists to do, its charter / mission
-- **members** — people, VPs, and roles in the group, and what each is
+- **purpose** — what this session exists to do, its charter / mission
+- **members** — people, VPs, and roles in the session, and what each is
   responsible for
-- **conventions** — how the group works (rituals, cadences, naming,
+- **conventions** — how the session works (rituals, cadences, naming,
   channels, languages used)
 - **shared decisions** — durable agreements ("we ship on Fridays",
   "all PRs need two reviewers")
-- **shared context** — domain knowledge the whole group relies on
-- **relations** — other groups, features, or topics this group owns or
+- **shared context** — domain knowledge the whole session relies on
+- **relations** — other sessions, features, or topics this session owns or
   depends on
 - **lessons** — collective takeaways ("we tried X in Q1, it didn't
   scale, switched to Y")
@@ -28,7 +28,7 @@ The target group id is provided as `{{groupId}}`.
 - Single-VP traits — those go to that VP's `vp/<id>` scope.
 - Feature-specific implementation detail — those go to
   `feature/<id>` scope.
-- Transient status updates — only durable group facts.
+- Transient status updates — only durable session facts.
 
 ## Segment shape
 
@@ -45,7 +45,7 @@ Reply with a JSON array of segment objects:
     "kind": "decision",
     "tags": ["process", "review"],
     "sourceMessages": ["m_201"],
-    "body": "Group {{groupId}} decided every PR touching the payments
+    "body": "Session {{sessionId}} decided every PR touching the payments
     module needs sign-off from both the security VP and the payments
     feature owner before merge. Rationale: a near-miss in March."
   }
@@ -54,4 +54,4 @@ Reply with a JSON array of segment objects:
 
 `kind` ∈ {`fact`, `preference`, `decision`, `lesson`, `relation`,
 `goal`, `context`}. `scope` is filled in by the runner — do not include
-it. If nothing group-scope is in this batch, return `[]`.
+it. If nothing session-scope is in this batch, return `[]`.

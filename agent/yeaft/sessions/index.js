@@ -9,15 +9,15 @@
  *   - Feature flag reader for `yeaft.multiVp.enabled`
  *   - First-boot default group seeder
  *
- * See agent/yeaft/groups/coordinator.js for the dispatch contract.
+ * See agent/yeaft/sessions/coordinator.js for the dispatch contract.
  */
 
 export {
-  openGroup,
-  createGroup,
-  loadGroupMeta,
-  listGroups,
-} from './group-store.js';
+  openSession,
+  createSession,
+  loadSessionMeta,
+  listSessions,
+} from './session-store.js';
 export {
   addVp,
   removeVp,
@@ -34,35 +34,35 @@ export {
   setMultiVpEnabled,
 } from './feature-flag.js';
 export {
-  seedDefaultGroup,
-  DEFAULT_GROUP_ID,
+  seedDefaultSession,
+  DEFAULT_SESSION_ID,
 } from './seed-default.js';
 export {
-  GroupCrudError,
-  makeGroupId,
-  ensureDefaultGroupIfEmpty,
-  createGroupFromSpec,
-  renameGroup,
-  archiveGroup,
-  deleteGroup,
-  purgeArchivedGroups,
+  SessionCrudError,
+  makeSessionId,
+  ensureDefaultSessionIfEmpty,
+  createSessionFromSpec,
+  renameSession,
+  archiveSession,
+  deleteSession,
+  purgeArchivedSessions,
   addMember,
   removeMember,
-  setGroupDefaultVp,
-  snapshotGroups,
-  updateGroupConfig,
-  updateGroupAnnouncement,
-} from './group-crud.js';
+  setSessionDefaultVp,
+  snapshotSessions,
+  updateSessionConfig,
+  updateSessionAnnouncement,
+} from './session-crud.js';
 export {
-  loadGroupConfig,
-  saveGroupConfig,
-  resolveGroupConfig,
-  validateGroupConfig,
-  GroupConfigError,
-} from './group-config.js';
+  loadSessionConfig,
+  saveSessionConfig,
+  resolveSessionConfig,
+  validateSessionConfig,
+  SessionConfigError,
+} from './session-config.js';
 export {
   nextMsgId,
-  nextGroupId,
+  nextSessionId,
   newUlidLite,
   isReservedVpId,
   RESERVED_VP_IDS,

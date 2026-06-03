@@ -49,7 +49,7 @@ describe('AmsRegistry — basic lifecycle', () => {
     expect(a).toBe(b);
   });
 
-  it('uses DEFAULT_GROUP_KEY when groupId is missing', () => {
+  it('uses DEFAULT_GROUP_KEY when sessionId is missing', () => {
     const reg = openAmsRegistry({ yeaftDir: YEAFT_DIR, memoryIndex, config: {} });
     const a = reg.getOrCreate(null);
     const b = reg.getOrCreate(undefined);

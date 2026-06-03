@@ -9,7 +9,7 @@
  *
  * Persistence is identity-only:
  *
- *   ~/.yeaft/memory/groups/<groupId>/ams.json
+ *   ~/.yeaft/memory/groups/<sessionId>/ams.json
  *   {
  *     "version": 1,
  *     "ownVpId": "alice"|null,
@@ -55,9 +55,9 @@ export const DEFAULT_GROUP_KEY = 'default';
  * Group-keyed in-memory cache + disk persistence for AMS instances.
  *
  * Lifecycle:
- *   - getOrCreate(groupId, {ownVpId}) — returns the cached AMS or loads
+ *   - getOrCreate(sessionId, {ownVpId}) — returns the cached AMS or loads
  *     from disk; falls through to a fresh empty AMS on cold start.
- *   - persist(groupId) — writes the current cached AMS to disk.
+ *   - persist(sessionId) — writes the current cached AMS to disk.
  *   - persistAll() — convenience for shutdown.
  *
  * The registry is intentionally narrow: it does not mutate the AMS
@@ -78,15 +78,15 @@ export class AmsRegistry {
   /**
    * Resolve the on-disk path for a group's ams.json.
    *
-   * `groupId` is trusted: `nextGroupId()` (groups/ids.js) emits ids matching
+   * `sessionId` is trusted: `nextSessionId()` (groups/ids.js) emits ids matching
    * `grp_[a-z0-9_-]+`, and the single-VP path uses the literal
    * `DEFAULT_GROUP_KEY`. No defensive escaping is needed.
    *
-   * @param {string} groupId
+   * @param {string} sessionId
    * @returns {string}
    */
-  amsPath(groupId) {
-    const key = String(groupId || DEFAULT_GROUP_KEY);
+  amsPath(sessionId) {
+    const key = String(sessionId || DEFAULT_GROUP_KEY);
     return join(this.yeaftDir, 'memory', 'groups', key, 'ams.json');
   }
 
@@ -107,12 +107,12 @@ export class AmsRegistry {
    * Loads persisted state from disk if any; on cold start returns an
    * empty AMS keyed to the supplied ownVpId.
    *
-   * @param {string|null|undefined} groupId
+   * @param {string|null|undefined} sessionId
    * @param {{ ownVpId?: string|null }} [opts]
    * @returns {ActiveMemorySet}
    */
-  getOrCreate(groupId, opts = {}) {
-    const key = groupId || DEFAULT_GROUP_KEY;
+  getOrCreate(sessionId, opts = {}) {
+    const key = sessionId || DEFAULT_GROUP_KEY;
     const cached = this._cache.get(key);
     if (cached) return cached.ams;
 
@@ -131,11 +131,11 @@ export class AmsRegistry {
    * group. Engine consults this on first AMS access so a reactivated group
    * doesn't re-run `runAdjust` on its first turn back online.
    *
-   * @param {string|null|undefined} groupId
+   * @param {string|null|undefined} sessionId
    * @returns {boolean}
    */
-  adjustRanThisSession(groupId) {
-    const key = groupId || DEFAULT_GROUP_KEY;
+  adjustRanThisSession(sessionId) {
+    const key = sessionId || DEFAULT_GROUP_KEY;
     return this._cache.get(key)?.adjustRanThisSession === true;
   }
 
@@ -144,11 +144,11 @@ export class AmsRegistry {
    * own — call `persist()` to flush). Engine flips this true after
    * `runAdjust` actually ran.
    *
-   * @param {string|null|undefined} groupId
+   * @param {string|null|undefined} sessionId
    * @param {boolean} value
    */
-  setAdjustRanThisSession(groupId, value) {
-    const key = groupId || DEFAULT_GROUP_KEY;
+  setAdjustRanThisSession(sessionId, value) {
+    const key = sessionId || DEFAULT_GROUP_KEY;
     const entry = this._cache.get(key);
     if (entry) entry.adjustRanThisSession = Boolean(value);
   }
@@ -157,10 +157,10 @@ export class AmsRegistry {
    * Mark a group's AMS as dirty so the next persist() actually writes.
    * The engine calls this after `runAdjust` mutates membership.
    *
-   * @param {string|null|undefined} groupId
+   * @param {string|null|undefined} sessionId
    */
-  markDirty(groupId) {
-    this._dirty.add(groupId || DEFAULT_GROUP_KEY);
+  markDirty(sessionId) {
+    this._dirty.add(sessionId || DEFAULT_GROUP_KEY);
   }
 
   /**
@@ -171,12 +171,12 @@ export class AmsRegistry {
    * entry so subsequent `adjustRanThisSession()` reads see the latest flag
    * without a round-trip through disk.
    *
-   * @param {string|null|undefined} groupId
+   * @param {string|null|undefined} sessionId
    * @param {{ force?: boolean, adjustRanThisSession?: boolean }} [opts]
    * @returns {boolean} true if the file was written
    */
-  persist(groupId, opts = {}) {
-    const key = groupId || DEFAULT_GROUP_KEY;
+  persist(sessionId, opts = {}) {
+    const key = sessionId || DEFAULT_GROUP_KEY;
     const entry = this._cache.get(key);
     if (!entry) return false;
     if (!opts.force && !this._dirty.has(key)) return false;
