@@ -48,7 +48,7 @@ export default {
       <!-- Sidebar header row — agent dropdown (parity with ChatPage) +
            mode toggle / collapse / workbench. -->
       <div class="us-header-row">
-        <div class="sidebar-brand agent-dropdown-trigger" @click.stop="agentManagerOpen = !agentManagerOpen" style="cursor: pointer;" :title="tr('chat.agent.manage', 'Manage agents')">
+        <div class="sidebar-brand agent-dropdown-trigger" @click.stop="agentManagerOpen = !agentManagerOpen" :title="tr('chat.agent.manage', 'Manage agents')">
           <span class="status-dot" :class="{ online: onlineAgentCount > 0 }"></span>
           <span class="brand-label">{{ onlineAgentCount }} Agent</span>
           <span class="latency-indicator" v-if="currentAgentLatency != null" :class="getLatencyClass(currentAgentLatency)" :title="currentAgentLatency + 'ms'">
