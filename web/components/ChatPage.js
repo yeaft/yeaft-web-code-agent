@@ -9,24 +9,26 @@ import ExpertPanel from './ExpertPanel.js';
 import SubAgentPanel from './SubAgentPanel.js';
 import BtwOverlay from './BtwOverlay.js';
 import SplitPane from './SplitPane.js';
+import ModernSelect from './ModernSelect.js';
 import { useAuthStore } from '../stores/auth.js';
 
-// Mirrors agent/providers/copilot-models.js. Update both together when the
-// Copilot CLI gains a new model.
-const COPILOT_MODELS = Object.freeze([
-  { id: 'gpt-5', label: 'GPT-5' },
-  { id: 'gpt-5-mini', label: 'GPT-5 Mini' },
-  { id: 'claude-sonnet-4', label: 'Claude Sonnet 4' },
-  { id: 'claude-sonnet-4.5', label: 'Claude Sonnet 4.5' },
-  { id: 'claude-opus-4', label: 'Claude Opus 4' },
-  { id: 'gpt-4o', label: 'GPT-4o' },
-  { id: 'o1', label: 'o1' },
+// Static fallback for the Copilot model picker, only used until the dynamic
+// /models response lands (or if it fails). Mirrors agent/providers/copilot-models.js
+// FALLBACK_COPILOT_MODELS.
+const FALLBACK_COPILOT_MODELS = Object.freeze([
+  { id: 'claude-sonnet-4.5',  label: 'Claude Sonnet 4.5', vendor: 'Anthropic' },
+  { id: 'claude-sonnet-4',    label: 'Claude Sonnet 4',   vendor: 'Anthropic' },
+  { id: 'claude-opus-4.1',    label: 'Claude Opus 4.1',   vendor: 'Anthropic' },
+  { id: 'gpt-5',              label: 'GPT-5',             vendor: 'OpenAI'    },
+  { id: 'gpt-5-mini',         label: 'GPT-5 Mini',        vendor: 'OpenAI'    },
+  { id: 'gpt-4.1',            label: 'GPT-4.1',           vendor: 'OpenAI'    },
+  { id: 'gemini-2.5-pro',     label: 'Gemini 2.5 Pro',    vendor: 'Google'    },
 ]);
 const DEFAULT_COPILOT_MODEL = 'claude-sonnet-4.5';
 
 export default {
   name: 'ChatPage',
-  components: { ChatHeader, MessageList, ChatInput, WorkbenchPanel, SettingsPanel, CrewConfigPanel, CrewChatView, ExpertPanel, SubAgentPanel, BtwOverlay, SplitPane },
+  components: { ChatHeader, MessageList, ChatInput, WorkbenchPanel, SettingsPanel, CrewConfigPanel, CrewChatView, ExpertPanel, SubAgentPanel, BtwOverlay, SplitPane, ModernSelect },
   template: `
     <div class="chat-page" :class="{ 'show-sidebar': showMobileSidebar }">
 
@@ -510,22 +512,21 @@ export default {
             </div>
             <div class="resume-control-row" v-if="convModalAgent">
               <label class="resume-control-label">{{ $t('modal.newConv.provider') }}</label>
-              <div class="select-wrapper">
-                <select v-model="convModalProvider" @change="onConvModalProviderChange" class="resume-select">
-                  <option value="claude-code">{{ $t('provider.claudeCode') }}</option>
-                  <option value="copilot">{{ $t('provider.copilot') }}</option>
-                </select>
-                <svg class="select-arrow" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
-              </div>
+              <modern-select
+                v-model="convModalProvider"
+                :options="providerOptions"
+                @change="onConvModalProviderChange"
+              />
             </div>
             <div class="resume-control-row" v-if="convModalAgent && convModalProvider === 'copilot'">
               <label class="resume-control-label">{{ $t('modal.newConv.model') }}</label>
-              <div class="select-wrapper">
-                <select v-model="convModalCopilotModel" class="resume-select">
-                  <option v-for="m in copilotModels" :key="m.id" :value="m.id">{{ m.label }}</option>
-                </select>
-                <svg class="select-arrow" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
-              </div>
+              <modern-select
+                v-model="convModalCopilotModel"
+                :options="copilotModelOptions"
+                :loading="store.providerModelsLoading"
+                :searchable="copilotModelOptions.length > 6"
+                :empty-text="$t('modal.newConv.modelEmpty') || 'No models'"
+              />
             </div>
             <div class="resume-control-row" v-if="convModalAgent && convModalProvider === 'copilot'">
               <label class="resume-control-label">{{ $t('modal.newConv.skipPermissions') }}</label>
@@ -718,7 +719,24 @@ export default {
       return Pinia.useChatStore();
     },
     copilotModels() {
-      return COPILOT_MODELS;
+      // Live list from agent (Copilot /models endpoint), with fallback.
+      const live = Array.isArray(this.store.providerModels) ? this.store.providerModels : [];
+      const src = live.length ? live : FALLBACK_COPILOT_MODELS;
+      return src;
+    },
+    copilotModelOptions() {
+      return this.copilotModels.map(m => ({
+        value: m.id,
+        label: m.label || m.id,
+        sublabel: m.vendor ? (m.preview ? `${m.vendor} · Preview` : m.vendor) : (m.preview ? 'Preview' : ''),
+        badge: m.preview ? 'preview' : null,
+      }));
+    },
+    providerOptions() {
+      return [
+        { value: 'claude-code', label: this.$t('provider.claudeCode') },
+        { value: 'copilot',     label: this.$t('provider.copilot')    },
+      ];
     },
     canUseWorkbench() {
       const role = useAuthStore().role;
@@ -848,6 +866,7 @@ export default {
             }, 1500);
           }
         });
+        if (this.convModalProvider === 'copilot') this._maybeFetchCopilotModels();
       }
     },
     openConversationModalResume() {
@@ -877,7 +896,20 @@ export default {
       this.historyLoaded = false;
       if (this.convModalAgent) {
         this.store.listFoldersForAgent(this.convModalAgent, this.convModalProvider);
+        if (this.convModalProvider === 'copilot') this._maybeFetchCopilotModels();
       }
+    },
+    _maybeFetchCopilotModels() {
+      if (!this.convModalAgent) return;
+      // Always re-fetch on open — cached on agent side for 10 min.
+      this.store.listModelsForAgent(this.convModalAgent, 'copilot').then((models) => {
+        if (!this.showConversationModal) return;
+        // If current selection isn't in returned list, pin to first.
+        const ids = (models || []).map(m => m.id);
+        if (ids.length && !ids.includes(this.convModalCopilotModel)) {
+          this.convModalCopilotModel = ids.includes(DEFAULT_COPILOT_MODEL) ? DEFAULT_COPILOT_MODEL : ids[0];
+        }
+      });
     },
     onConvModalWorkDirInput() {
       this.historyLoaded = false;

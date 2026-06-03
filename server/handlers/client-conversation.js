@@ -455,6 +455,19 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       break;
     }
 
+    case 'list_models': {
+      const modelsAgentId = msg.agentId || client.currentAgent;
+      if (!modelsAgentId) return;
+      if (!await checkAgentAccess(modelsAgentId)) return;
+      await forwardToAgent(modelsAgentId, {
+        type: 'list_models',
+        provider: msg.provider,
+        requestId: msg.requestId,
+        _requestClientId: clientId
+      });
+      break;
+    }
+
     case 'check_crew_context': {
       const crewCtxAgentId = msg.agentId || client.currentAgent;
       if (!crewCtxAgentId) return;

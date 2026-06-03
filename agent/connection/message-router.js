@@ -18,7 +18,7 @@ import {
   handleGitStatus, handleGitDiff, handleGitAdd, handleGitReset, handleGitRestore, handleGitCommit, handleGitPush,
   handleFileSearch, handleCreateFile, handleDeleteFiles, handleMoveFiles, handleCopyFiles, handleUploadToDir, handleTransferFiles
 } from '../workbench.js';
-import { handleListHistorySessions, handleListFolders } from '../history.js';
+import { handleListHistorySessions, handleListFolders, handleListModels } from '../history.js';
 import {
   createConversation, resumeConversation, deleteConversation,
   handleRefreshConversation, handleCancelExecution,
@@ -110,6 +110,10 @@ export async function handleMessage(msg) {
 
     case 'list_folders':
       await handleListFolders(msg);
+      break;
+
+    case 'list_models':
+      await handleListModels(msg);
       break;
 
     case 'transfer_files':

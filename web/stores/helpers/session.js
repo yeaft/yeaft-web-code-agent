@@ -337,6 +337,30 @@ export function listFoldersForAgent(store, agentId, provider) {
   });
 }
 
+export function listModelsForAgent(store, agentId, provider) {
+  if (!agentId) return Promise.resolve([]);
+  const requestId = `models-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+  store._modelsRequestId = requestId;
+  store.providerModelsLoading = true;
+  return new Promise((resolve) => {
+    if (store._modelsResolve) store._modelsResolve([]);
+    store._modelsResolve = resolve;
+    store.sendWsMessage({
+      type: 'list_models',
+      agentId,
+      provider: provider || 'claude-code',
+      requestId,
+    });
+    setTimeout(() => {
+      if (store._modelsResolve === resolve) {
+        store._modelsResolve([]);
+        store._modelsResolve = null;
+        store.providerModelsLoading = false;
+      }
+    }, 10000);
+  });
+}
+
 export function listHistorySessionsForAgent(store, agentId, workDir, provider) {
   if (!agentId) {
     store.historySessionsLoading = false;

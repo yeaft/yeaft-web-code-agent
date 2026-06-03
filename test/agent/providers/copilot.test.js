@@ -64,7 +64,7 @@ describe('copilot provider — sendInput surfaces ACP boot errors', () => {
     child.stdin = { write: () => { throw new Error('boom'); } };
     child.kill = () => {};
 
-    vi.doMock('child_process', () => ({ spawn: () => child }));
+    vi.doMock('child_process', () => ({ spawn: () => child, execFile: () => {}, exec: () => {} }));
     const copilot = await import('../../../agent/providers/copilot.js?fresh=acp');
 
     const state = await copilot.start({ conversationId: 'c1', workDir: '/tmp' });

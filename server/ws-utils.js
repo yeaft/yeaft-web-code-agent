@@ -160,7 +160,7 @@ export async function sendConversationList(clientId, agentId) {
 // 通知会话更新给相关客户端
 export async function notifyConversationUpdate(agentId, msg) {
   // 对于 folders_list、history_sessions_list、crew_sessions_list，优先定向发送给请求者
-  if (msg.type === 'folders_list' || msg.type === 'history_sessions_list' || msg.type === 'crew_sessions_list' || msg.type === 'crew_exists_result') {
+  if (msg.type === 'folders_list' || msg.type === 'history_sessions_list' || msg.type === 'crew_sessions_list' || msg.type === 'crew_exists_result' || msg.type === 'models_list') {
     const targetClientId = msg._requestClientId;
     if (targetClientId) {
       const targetClient = webClients.get(targetClientId);
