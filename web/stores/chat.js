@@ -1072,6 +1072,22 @@ export const useChatStore = defineStore('chat', {
       this.yeaftChatsLoading = true;
       this.sendWsMessage({ type: 'yeaft_list_chats', agentId: this.yeaftAgentId });
     },
+    // Phase 3: unified Session creation. A session is operationally a
+    // group with N≥1 VPs — `yeaft_create_session` is a wire alias for
+    // `yeaft_create_group` (Phase 2 router accepts both). Reuses the
+    // group_crud_result roundtrip so callers can `await` and surface
+    // the new session row immediately.
+    createYeaftSession({ displayName, vpIds } = {}) {
+      const roster = Array.isArray(vpIds) ? vpIds.slice() : [];
+      const defaultVpId = roster[0] || null;
+      return this.groupCrudRequest('create', {
+        // server bridge accepts `name` from the existing create-group
+        // payload shape; displayName is the user-visible label.
+        name: (displayName || '').trim() || 'Session',
+        roster,
+        defaultVpId,
+      });
+    },
     createYeaftChat({ displayName, vpId } = {}) {
       if (!this.yeaftAgentId) return;
       // vpId optional — agent defaults to the built-in Omni assistant
