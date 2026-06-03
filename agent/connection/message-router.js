@@ -512,43 +512,57 @@ export async function handleMessage(msg) {
     // `group_list_updated` (create/rename/archive) for listener sync.
     case 'yeaft_list_groups':
     case 'unify_list_groups':
+    case 'yeaft_list_sessions':
       handleYeaftListGroups(msg);
       break;
     case 'yeaft_create_group':
     case 'unify_create_group':
+    case 'yeaft_create_session':
       handleYeaftCreateGroup(msg);
       break;
     case 'yeaft_rename_group':
     case 'unify_rename_group':
+    case 'yeaft_rename_session':
       handleYeaftRenameGroup(msg);
       break;
     case 'yeaft_update_group':
     case 'unify_update_group':
+    case 'yeaft_update_session':
       handleYeaftUpdateGroup(msg);
       break;
     case 'yeaft_update_group_config':
     case 'unify_update_group_config':
+    case 'yeaft_update_session_config':
       handleYeaftUpdateGroupConfig(msg);
       break;
     case 'yeaft_archive_group':
     case 'unify_archive_group':
+    case 'yeaft_archive_session':
       handleYeaftArchiveGroup(msg);
       break;
     case 'yeaft_delete_group':
     case 'unify_delete_group':
+    case 'yeaft_delete_session':
       handleYeaftDeleteGroup(msg);
       break;
     case 'yeaft_add_member':
     case 'unify_add_member':
+    case 'yeaft_session_add_member':
       handleYeaftAddMember(msg);
       break;
     case 'yeaft_remove_member':
     case 'unify_remove_member':
+    case 'yeaft_session_remove_member':
       handleYeaftRemoveMember(msg);
       break;
     case 'yeaft_set_default_vp':
     case 'unify_set_default_vp':
+    case 'yeaft_session_set_default_vp':
       handleYeaftSetDefaultVp(msg);
+      break;
+    // Phase 2: session_send is just group_chat (N≥1 fan-out already works).
+    case 'yeaft_session_send':
+      handleYeaftGroupChat(msg);
       break;
 
     // Yeaft Chat Mode (1:1 single-VP) — separate from group fan-out.
