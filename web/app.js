@@ -1,7 +1,7 @@
 import { useChatStore } from './stores/chat.js';
 import { useAuthStore } from './stores/auth.js';
 import { useVpStore } from './stores/vp.js';
-import { useGroupsStore } from './stores/groups.js';
+import { useSessionsStore } from './stores/sessions.js';
 import { createI18n } from './utils/i18n.js';
 import { installAuthFetch } from './utils/auth-fetch.js';
 import zhCN from './i18n/zh-CN.js';
@@ -91,7 +91,7 @@ installAuthFetch();
 window.Pinia.useChatStore = useChatStore;
 window.Pinia.useAuthStore = useAuthStore;
 window.Pinia.useVpStore = useVpStore;
-window.Pinia.useGroupsStore = useGroupsStore;
+window.Pinia.useSessionsStore = useSessionsStore;
 
 // Register global components
 app.component('ToolLine', ToolLine);

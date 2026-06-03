@@ -30,8 +30,8 @@ function mkStore(overrides = {}) {
   return {
     currentView: 'yeaft',
     yeaftConversationId: 'conv-1',
-    yeaftActiveGroupFilter: null,
-    _currentYeaftGroupId: null,
+    yeaftActiveSessionFilter: null,
+    _currentYeaftSessionId: null,
     _currentYeaftVpId: null,
     _currentYeaftTurnId: null,
     activeVpTurns: {},

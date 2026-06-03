@@ -30,30 +30,30 @@ const EMPTY_ARRAY = Object.freeze([]);
 // deterministic.
 const vpStatusKey = (groupId, vpId) => `${groupId || ''}::${vpId}`;
 
-function getGroupsStore() {
+function getSessionsStore() {
   try {
     if (typeof window === 'undefined') return null;
-    return window.Pinia?.useGroupsStore?.() || (window.__useGroupsStore && window.__useGroupsStore()) || null;
+    return window.Pinia?.useSessionsStore?.() || (window.__useSessionsStore && window.__useSessionsStore()) || null;
   } catch {
     return null;
   }
 }
 
-function resolveActiveYeaftGroupId(state, { fallbackDefault = false } = {}) {
-  if (state?.yeaftActiveGroupFilter) return state.yeaftActiveGroupFilter;
-  const gs = getGroupsStore();
-  if (gs?.activeGroupId) return gs.activeGroupId;
+function resolveActiveYeaftSessionId(state, { fallbackDefault = false } = {}) {
+  if (state?.yeaftActiveSessionFilter) return state.yeaftActiveSessionFilter;
+  const gs = getSessionsStore();
+  if (gs?.activeSessionId) return gs.activeSessionId;
   if (fallbackDefault) return 'grp_default';
   return null;
 }
 
-function resolveActiveDreamDebugGroupId(state) {
-  const debugFilter = state.yeaftDebugGroupFilter;
+function resolveActiveDreamDebugSessionId(state) {
+  const debugFilter = state.yeaftDebugSessionFilter;
   if (debugFilter === '__all__') return null;
   if (debugFilter) return debugFilter;
-  const resolved = resolveActiveYeaftGroupId(state);
+  const resolved = resolveActiveYeaftSessionId(state);
   if (resolved) return resolved;
-  const gs = getGroupsStore();
+  const gs = getSessionsStore();
   if (gs?.groups?.grp_default) return 'grp_default';
   return null;
 }
@@ -183,7 +183,7 @@ export const useChatStore = defineStore('chat', {
     // flags above mirror the currently active group for component
     // compatibility; this map is the source of truth across group switches.
     // Shape: { [groupId || '__all__']: { loaded, hasMore, loading, oldestSeq, count } }
-    yeaftGroupHistoryState: {},
+    yeaftSessionHistoryState: {},
     // 可用的 slash commands 列表（按 conversationId 隔离，从 Claude SDK init 消息获取）
     slashCommandsMap: {},  // { [conversationId]: string[] }
     // Slash command 描述映射（从 agent 端传递，所有 conversation 共用）
@@ -319,17 +319,17 @@ export const useChatStore = defineStore('chat', {
     // feat-6af5f9f1 PR C: debug-panel toolbar state.
     //   - `yeaftDebugSearch` is a substring filter applied to user prompt,
     //     vpId, tool name, tool input/output, system prompt, raw url.
-    //   - `yeaftDebugGroupFilter` is INDEPENDENT of the main pane's group
+    //   - `yeaftDebugSessionFilter` is INDEPENDENT of the main pane's group
     //     filter (per user spec): debug can show all groups while the
     //     main pane is scoped to one. Default null = "All".
     yeaftDebugSearch: '',
-    yeaftDebugGroupFilter: null,
+    yeaftDebugSessionFilter: null,
     // v0.1.755: latest dream pass status per scope, keyed by scope string
     // (e.g. 'group/abc', 'vp/alice'). Auto-triggered and manual passes both
     // feed the same map via `dream_progress` events. Schema per entry:
     //   { scope, status: 'running'|'success'|'error', startedAt, finishedAt?,
     //     stage?, mergedCount?, error?, manual?, durationMs? }
-    // YeaftDebugPanel reads `yeaftDreamLatestForActiveGroup` (getter) to
+    // YeaftDebugPanel reads `yeaftDreamLatestForActiveSession` (getter) to
     // render a single row showing the most recent pass for the active
     // group's scope.
     yeaftDreamLatest: {},
@@ -364,7 +364,7 @@ export const useChatStore = defineStore('chat', {
     // and outbound user messages sent via the group-chat action). null =
     // no group filter. Mutually exclusive with yeaftActiveThreadFilter —
     // setting one clears the other so the view has a single predicate.
-    yeaftActiveGroupFilter: null,
+    yeaftActiveSessionFilter: null,
 
     // (PR #693 review I4 + Fowler M2: removed `pendingGroupSettingsRequest`
     // store-as-event-bus field — replaced by a normal emit chain since
@@ -375,7 +375,7 @@ export const useChatStore = defineStore('chat', {
     // addMessageToConversation so arriving messages get stamped with the
     // ORIGINATING group (carried in the yeaft_output envelope) rather than
     // the user's CURRENT filter (which can change while a reply streams).
-    _currentYeaftGroupId: null,
+    _currentYeaftSessionId: null,
 
     // Per-VP turn routing: set transiently by handleYeaftOutput so that
     // addMessageToConversation / appendToAssistant can route by turnId.
@@ -464,8 +464,8 @@ export const useChatStore = defineStore('chat', {
       // Every Yeaft message is stamped with a groupId at creation time
       // (addMessageToConversation defaults to grp_default), so strict
       // equality is safe — no message can slip through "untagged".
-      if (state.currentView === 'yeaft' && state.yeaftActiveGroupFilter) {
-        const target = state.yeaftActiveGroupFilter;
+      if (state.currentView === 'yeaft' && state.yeaftActiveSessionFilter) {
+        const target = state.yeaftActiveSessionFilter;
         return raw.filter(m => m && m.groupId === target);
       }
       return raw;
@@ -510,25 +510,25 @@ export const useChatStore = defineStore('chat', {
     },
     // v0.1.755: latest dream pass for the currently-focused group (or null).
     // Reads from `yeaftDreamLatest` keyed by scope. The active group's
-    // scope is `group/<id>` — we resolve that from `yeaftActiveGroupFilter`
+    // scope is `group/<id>` — we resolve that from `yeaftActiveSessionFilter`
     // (or fall back to the debug-side filter). Returns null when nothing
     // has been recorded yet for this scope.
-    yeaftDreamLatestForActiveGroup(state) {
-      const targetGroupId = resolveActiveDreamDebugGroupId(state);
+    yeaftDreamLatestForActiveSession(state) {
+      const targetGroupId = resolveActiveDreamDebugSessionId(state);
       if (!targetGroupId) return null;
       const scope = `group/${targetGroupId}`;
       return state.yeaftDreamLatest?.[scope] || null;
     },
     // PR feat-dream-debug-panel-full: per-group event log for the
     // expanded debug-panel view. Same filter precedence as
-    // `yeaftDreamLatestForActiveGroup`. Returns the full ring-buffer
+    // `yeaftDreamLatestForActiveSession`. Returns the full ring-buffer
     // array for the active group's scope (oldest first), or an empty
     // array. Includes `'*'`-scoped events broadcast to all groups
     // (start/done) merged in chronological order so the user sees a
     // single coherent timeline regardless of whether a given event
     // landed in the scoped bucket or the broadcast bucket.
-    yeaftDreamEventsForActiveGroup(state) {
-      const targetGroupId = resolveActiveDreamDebugGroupId(state);
+    yeaftDreamEventsForActiveSession(state) {
+      const targetGroupId = resolveActiveDreamDebugSessionId(state);
       if (!targetGroupId) return [];
       const scope = `group/${targetGroupId}`;
       const scoped = Array.isArray(state.yeaftDreamEvents?.[scope])
@@ -549,8 +549,8 @@ export const useChatStore = defineStore('chat', {
     // sorted newest-first.
     //
     // PR C: filter precedence is now:
-    //   1. `yeaftDebugGroupFilter` (independent debug-side filter; user's spec)
-    //   2. fall back to `yeaftActiveGroupFilter` (main pane filter) ONLY if
+    //   1. `yeaftDebugSessionFilter` (independent debug-side filter; user's spec)
+    //   2. fall back to `yeaftActiveSessionFilter` (main pane filter) ONLY if
     //      the debug filter is null AND the user has selected a main group.
     //   3. otherwise show all turns.
     //
@@ -558,14 +558,14 @@ export const useChatStore = defineStore('chat', {
     // doesn't match the main pane) shows just that group. Setting it to
     // the empty-string sentinel `'__all__'` forces "show all" even when
     // the main pane is filtered.
-    yeaftDebugTurnsForActiveGroup: (state) => {
+    yeaftDebugTurnsForActiveSession: (state) => {
       const order = state.yeaftDebugTurnOrder || EMPTY_ARRAY;
       const byId = state.yeaftDebugTurnsById || {};
       const allLoops = state.yeaftDebugLoops || EMPTY_ARRAY;
       const reflections = state.yeaftReflectionCards || {};
 
-      const debugFilter = state.yeaftDebugGroupFilter;
-      const mainFilter = state.yeaftActiveGroupFilter || null;
+      const debugFilter = state.yeaftDebugSessionFilter;
+      const mainFilter = state.yeaftActiveSessionFilter || null;
       let target;
       if (debugFilter === '__all__') {
         target = null;
@@ -647,7 +647,7 @@ export const useChatStore = defineStore('chat', {
     },
     // PR C: distinct groupIds present in the current debug history,
     // for the toolbar group-filter dropdown.
-    yeaftDebugAvailableGroups: (state) => {
+    yeaftDebugAvailableSessions: (state) => {
       const seen = new Set();
       for (const turnId of state.yeaftDebugTurnOrder || EMPTY_ARRAY) {
         const turn = state.yeaftDebugTurnsById[turnId];
@@ -664,8 +664,8 @@ export const useChatStore = defineStore('chat', {
     yeaftVisibleMessages: (state) => {
       const convId = state.yeaftConversationId;
       const raw = convId ? (state.messagesMap[convId] || EMPTY_ARRAY) : EMPTY_ARRAY;
-      if (state.yeaftActiveGroupFilter) {
-        const target = state.yeaftActiveGroupFilter;
+      if (state.yeaftActiveSessionFilter) {
+        const target = state.yeaftActiveSessionFilter;
         return raw.filter(m => m && m.groupId === target);
       }
       return raw;
@@ -709,7 +709,7 @@ export const useChatStore = defineStore('chat', {
     // flicker is preferable to a blank workbench during the ~1 tick gap.
     effectiveWorkDir: (state) => {
       if (state.currentView === 'yeaft') {
-        const groupWorkDir = getGroupsStore()?.activeGroup?.workDir;
+        const groupWorkDir = getSessionsStore()?.activeSession?.workDir;
         return groupWorkDir
           || state.yeaftYeaftDir
           || state.currentAgentInfo?.workDir
@@ -869,13 +869,13 @@ export const useChatStore = defineStore('chat', {
       //
       // Group-history-isolation (Bug 7): pass `groupId` so the agent only
       // replays messages stamped with the active group. The visible Yeaft
-      // filter is authoritative; groupsStore.activeGroupId is only a lazy
+      // filter is authoritative; sessionsStore.activeSessionId is only a lazy
       // fallback so quick group switches don't request another group's
       // history into the active pane.
       if (this.yeaftAgentId) {
-        const groupId = resolveActiveYeaftGroupId(this);
+        const groupId = resolveActiveYeaftSessionId(this);
         const groupKey = groupId || '__all__';
-        const savedState = this.yeaftGroupHistoryState[groupKey] || null;
+        const savedState = this.yeaftSessionHistoryState[groupKey] || null;
         // If the group snapshot has not arrived yet, do not replay the
         // unfiltered "all" history. That causes the visible pane to paint
         // legacy/default rows and then repaint after group_list_updated picks
@@ -883,8 +883,8 @@ export const useChatStore = defineStore('chat', {
         // group_list_updated path below will hydrate exactly one group.
         const needMessages = !!groupId && !savedState?.loaded && !savedState?.loading;
         if (groupId && needMessages) {
-          this.yeaftGroupHistoryState = {
-            ...this.yeaftGroupHistoryState,
+          this.yeaftSessionHistoryState = {
+            ...this.yeaftSessionHistoryState,
             [groupKey]: { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },
           };
           this.yeaftLoadingMoreHistory = true;
@@ -979,7 +979,7 @@ export const useChatStore = defineStore('chat', {
      *           attachments?:Array<{fileId:string,name:string,preview?:string,
      *                               isImage?:boolean,mimeType?:string}>}} payload
      */
-    sendYeaftGroupChat({ groupId, text, mentions, attachments }) {
+    sendYeaftSessionMessage({ groupId, text, mentions, attachments }) {
       if (!groupId || !this.yeaftAgentId) return;
       const safeAttachments = Array.isArray(attachments)
         ? attachments.filter((a) => a && a.fileId)
@@ -1032,7 +1032,7 @@ export const useChatStore = defineStore('chat', {
         watchdogHelpers.startYeaftWatchdog(this, this.yeaftConversationId);
       }
       const wsMsg = {
-        type: 'yeaft_group_chat',
+        type: 'yeaft_session_send',
         agentId: this.yeaftAgentId,
         id: clientMessageId,
         groupId,
@@ -1056,7 +1056,7 @@ export const useChatStore = defineStore('chat', {
     // Phase 3: unified Session creation. A session is operationally a
     // group with N≥1 VPs. Phase 2 router accepts `yeaft_create_session`
     // as an alias of `yeaft_create_group`; this action goes through the
-    // shared groupCrudRequest path so callers can `await` and surface
+    // shared sessionCrudRequest path so callers can `await` and surface
     // the new session row immediately. Phase 4 will rename the wire +
     // store fields; until then this is a thin facade.
     createYeaftSession({ displayName, vpIds } = {}) {
@@ -1065,7 +1065,7 @@ export const useChatStore = defineStore('chat', {
       const trimmed = (displayName || '').trim();
       const payload = { roster, defaultVpId };
       if (trimmed) payload.name = trimmed;
-      return this.groupCrudRequest('create', payload);
+      return this.sessionCrudRequest('create', payload);
     },
     handleYeaftOutput(msg) {
       if (!msg) return;
@@ -1084,12 +1084,12 @@ export const useChatStore = defineStore('chat', {
           }
           // Bug 1: stamp the in-flight SEND-context group so messages land
           // in the originating group regardless of the user's current filter.
-          const prevGroup = this._currentYeaftGroupId;
+          const prevGroup = this._currentYeaftSessionId;
           const prevVpId = this._currentYeaftVpId;
           const prevTurnId = this._currentYeaftTurnId;
           const prevThreadId = this._currentYeaftThreadId;
           const prevThreadTitle = this._currentYeaftThreadTitle;
-          if (msg.groupId != null) this._currentYeaftGroupId = msg.groupId;
+          if (msg.groupId != null) this._currentYeaftSessionId = msg.groupId;
           if (msg.vpId && msg.data.type !== 'result') this._currentYeaftVpId = msg.vpId;
           if (msg.turnId && msg.data.type !== 'result') this._currentYeaftTurnId = msg.turnId;
           if (msg.threadId) this._currentYeaftThreadId = msg.threadId;
@@ -1110,7 +1110,7 @@ export const useChatStore = defineStore('chat', {
           try {
             this.handleClaudeOutput(conversationId, msg.data);
           } finally {
-            this._currentYeaftGroupId = prevGroup;
+            this._currentYeaftSessionId = prevGroup;
             this._currentYeaftVpId = prevVpId;
             this._currentYeaftTurnId = prevTurnId;
             this._currentYeaftThreadId = prevThreadId;
@@ -1527,11 +1527,11 @@ export const useChatStore = defineStore('chat', {
               oldestSeq: (typeof event.oldestSeq === 'number') ? event.oldestSeq : null,
               count: (typeof event.count === 'number') ? event.count : 0,
             };
-            this.yeaftGroupHistoryState = {
-              ...this.yeaftGroupHistoryState,
+            this.yeaftSessionHistoryState = {
+              ...this.yeaftSessionHistoryState,
               [groupKey]: nextState,
             };
-            const activeKey = this.yeaftActiveGroupFilter || '__all__';
+            const activeKey = this.yeaftActiveSessionFilter || '__all__';
             if (groupKey === activeKey) {
               this.yeaftHasMoreHistory = nextState.hasMore;
               this.yeaftLoadingMoreHistory = false;
@@ -1581,29 +1581,29 @@ export const useChatStore = defineStore('chat', {
 
         // ★ task-334m: Group snapshot + roster delta + CRUD ack.
         case 'group_list_updated': {
-          const gs = window.Pinia?.useGroupsStore?.() || (window.__useGroupsStore && window.__useGroupsStore());
-          const prevGroupId = gs ? (gs.activeGroupId || null) : null;
+          const gs = window.Pinia?.useSessionsStore?.() || (window.__useSessionsStore && window.__useSessionsStore());
+          const prevGroupId = gs ? (gs.activeSessionId || null) : null;
           if (gs) gs.applySnapshot(event.groups);
-          const newGroupId = gs ? (gs.activeGroupId || null) : null;
+          const newGroupId = gs ? (gs.activeSessionId || null) : null;
           // Bug 1: after enterYeaft the group snapshot may arrive *after*
           // initial history load (which happened with groupId:null), so
           // reload history for the correct group when activeGroupId changes.
           if (this.currentView === 'yeaft' && newGroupId && newGroupId !== prevGroupId) {
-            this.setActiveGroupFilter(newGroupId);
+            this.setActiveSessionFilter(newGroupId);
           }
           break;
         }
         case 'group_roster_changed': {
-          const gs = window.Pinia?.useGroupsStore?.() || (window.__useGroupsStore && window.__useGroupsStore());
+          const gs = window.Pinia?.useSessionsStore?.() || (window.__useSessionsStore && window.__useSessionsStore());
           if (gs) gs.applyRosterChange(event);
           break;
         }
         case 'group_crud_result': {
-          const gs = window.Pinia?.useGroupsStore?.() || (window.__useGroupsStore && window.__useGroupsStore());
+          const gs = window.Pinia?.useSessionsStore?.() || (window.__useSessionsStore && window.__useSessionsStore());
           if (gs) gs.applyCrudResult(event);
-          const pending = this._groupCrudPending && this._groupCrudPending.get(event.requestId);
+          const pending = this._sessionCrudPending && this._sessionCrudPending.get(event.requestId);
           if (pending) {
-            this._groupCrudPending.delete(event.requestId);
+            this._sessionCrudPending.delete(event.requestId);
             pending.resolve({
               ok: !!event.ok,
               op: event.op,
@@ -1891,7 +1891,7 @@ export const useChatStore = defineStore('chat', {
         //   { scope, status: 'running'|'success'|'error', startedAt,
         //     finishedAt?, phase, mergedCount?, error?, manual?,
         //     durationMs? }.
-        // YeaftDebugPanel reads `yeaftDreamLatestForActiveGroup` (getter)
+        // YeaftDebugPanel reads `yeaftDreamLatestForActiveSession` (getter)
         // to render a single row showing the most recent pass for the
         // active group's scope ("dream只需要看最新的一次就行").
         case 'dream_progress': {
@@ -2089,22 +2089,22 @@ export const useChatStore = defineStore('chat', {
     //   add_member        { groupId, vpId }                → flat
     //   remove_member     { groupId, vpId }                → flat
     //   set_default_vp    { groupId, vpId }                → flat
-    groupCrudRequest(op, data) {
-      if (!this._groupCrudPending || typeof this._groupCrudPending.get !== 'function') {
-        this._groupCrudPending = new Map();
+    sessionCrudRequest(op, data) {
+      if (!this._sessionCrudPending || typeof this._sessionCrudPending.get !== 'function') {
+        this._sessionCrudPending = new Map();
       }
       const requestId = 'grc_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
       const typeMap = {
-        list: 'yeaft_list_groups',
-        create: 'yeaft_create_group',
-        rename: 'yeaft_rename_group',
-        update: 'yeaft_update_group',
-        update_config: 'yeaft_update_group_config',
-        archive: 'yeaft_archive_group',
-        delete: 'yeaft_delete_group',
-        add_member: 'yeaft_add_member',
-        remove_member: 'yeaft_remove_member',
-        set_default_vp: 'yeaft_set_default_vp',
+        list: 'yeaft_list_sessions',
+        create: 'yeaft_create_session',
+        rename: 'yeaft_rename_session',
+        update: 'yeaft_update_session',
+        update_config: 'yeaft_update_session_config',
+        archive: 'yeaft_archive_session',
+        delete: 'yeaft_delete_session',
+        add_member: 'yeaft_session_add_member',
+        remove_member: 'yeaft_session_remove_member',
+        set_default_vp: 'yeaft_session_set_default_vp',
       };
       const type = typeMap[op];
       if (!type) {
@@ -2114,17 +2114,17 @@ export const useChatStore = defineStore('chat', {
       if (op === 'create') msg.payload = data || {};
       else if (data && typeof data === 'object') Object.assign(msg, data);
 
-      const gs = window.Pinia?.useGroupsStore?.() || (window.__useGroupsStore && window.__useGroupsStore());
+      const gs = window.Pinia?.useSessionsStore?.() || (window.__useSessionsStore && window.__useSessionsStore());
       if (gs) gs.markPending(requestId, op);
 
       return new Promise((resolve) => {
         const timer = setTimeout(() => {
-          if (this._groupCrudPending && this._groupCrudPending.has(requestId)) {
-            this._groupCrudPending.delete(requestId);
+          if (this._sessionCrudPending && this._sessionCrudPending.has(requestId)) {
+            this._sessionCrudPending.delete(requestId);
             resolve({ ok: false, op, error: { code: 'timeout', message: 'group_crud timeout' } });
           }
         }, 10000);
-        this._groupCrudPending.set(requestId, {
+        this._sessionCrudPending.set(requestId, {
           resolve: (result) => { clearTimeout(timer); resolve(result); },
         });
         this.sendWsMessage(msg);
@@ -2145,23 +2145,23 @@ export const useChatStore = defineStore('chat', {
     // on disk after a refresh/re-entry; switching back to that group must
     // still ask the agent for authoritative history unless this group has
     // already completed a history load in the current UI lifecycle.
-    setActiveGroupFilter(groupId, opts = {}) {
-      const prev = this.yeaftActiveGroupFilter || null;
+    setActiveSessionFilter(groupId, opts = {}) {
+      const prev = this.yeaftActiveSessionFilter || null;
       const next = groupId || null;
       const force = !!opts.force;
-      this.yeaftActiveGroupFilter = next;
+      this.yeaftActiveSessionFilter = next;
       if (!force && next === prev) return;
 
       const groupKey = next || '__all__';
-      const savedState = this.yeaftGroupHistoryState[groupKey] || null;
+      const savedState = this.yeaftSessionHistoryState[groupKey] || null;
       this.yeaftHasMoreHistory = !!savedState?.hasMore;
       this.yeaftLoadingMoreHistory = !!savedState?.loading;
       this.yeaftOldestLoadedSeq = (typeof savedState?.oldestSeq === 'number') ? savedState.oldestSeq : null;
 
       const needsHydrate = !savedState?.loaded && !savedState?.loading;
       if (this.yeaftAgentId && next && needsHydrate) {
-        this.yeaftGroupHistoryState = {
-          ...this.yeaftGroupHistoryState,
+        this.yeaftSessionHistoryState = {
+          ...this.yeaftSessionHistoryState,
           [groupKey]: { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },
         };
         this.yeaftLoadingMoreHistory = true;
@@ -2187,7 +2187,7 @@ export const useChatStore = defineStore('chat', {
       if (!modelId || !this.yeaftAgentId) return;
       const targetGroupId = groupId || null;
       if (targetGroupId) {
-        const res = await this.groupCrudRequest('update_config', {
+        const res = await this.sessionCrudRequest('update_config', {
           groupId: targetGroupId,
           config: { model: modelId },
         });
@@ -2212,16 +2212,16 @@ export const useChatStore = defineStore('chat', {
     },
 
     // feat-6af5f9f1 PR C: independent debug-panel group filter. Distinct
-    // from `yeaftActiveGroupFilter` (the main pane's filter) so the user
+    // from `yeaftActiveSessionFilter` (the main pane's filter) so the user
     // can debug across all groups even when the main pane is narrowed.
     //   - null      : fall back to main pane filter (default)
     //   - '__all__' : force "show all" regardless of main pane
     //   - <groupId> : pin to a specific group
     setYeaftDebugGroupFilter(groupId) {
       if (groupId === null || groupId === undefined) {
-        this.yeaftDebugGroupFilter = null;
+        this.yeaftDebugSessionFilter = null;
       } else {
-        this.yeaftDebugGroupFilter = String(groupId);
+        this.yeaftDebugSessionFilter = String(groupId);
       }
     },
 
@@ -2326,7 +2326,7 @@ export const useChatStore = defineStore('chat', {
       // filter is intentionally cleared on session reset so a stale pin
       // from a previous session doesn't hide all incoming turns.
       this.yeaftDebugSearch = '';
-      this.yeaftDebugGroupFilter = null;
+      this.yeaftDebugSessionFilter = null;
       this.yeaftReflectionCards = {};
       this.yeaftSubAgentCards = {};
       // VP-block redesign (2026-05-08): per-turn detail drawer retired.
@@ -2804,14 +2804,14 @@ export const useChatStore = defineStore('chat', {
       if (this.yeaftLoadingMoreHistory || !this.yeaftHasMoreHistory) return;
       if (!this.yeaftAgentId || this.yeaftOldestLoadedSeq == null) return;
 
-      const groupId = resolveActiveYeaftGroupId(this);
+      const groupId = resolveActiveYeaftSessionId(this);
 
       this.yeaftLoadingMoreHistory = true;
       const groupKey = groupId || '__all__';
-      this.yeaftGroupHistoryState = {
-        ...this.yeaftGroupHistoryState,
+      this.yeaftSessionHistoryState = {
+        ...this.yeaftSessionHistoryState,
         [groupKey]: {
-          ...(this.yeaftGroupHistoryState[groupKey] || {}),
+          ...(this.yeaftSessionHistoryState[groupKey] || {}),
           loading: true,
         },
       };

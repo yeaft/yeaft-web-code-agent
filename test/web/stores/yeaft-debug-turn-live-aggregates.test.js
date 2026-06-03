@@ -1,7 +1,7 @@
 /**
  * yeaft-debug-turn-live-aggregates.test.js
  *
- * Pin the in-flight aggregate behavior of `yeaftDebugTurnsForActiveGroup`.
+ * Pin the in-flight aggregate behavior of `yeaftDebugTurnsForActiveSession`.
  *
  * Before fix-debug-panel-live-aggregates: the getter forwarded
  * `turn.loopCount` / `totalMs` / `totalTokens` verbatim — but those fields
@@ -39,13 +39,13 @@ function mkState({ turn, loops }) {
     yeaftDebugTurnsById: { [turn.turnId]: turn },
     yeaftDebugLoops: loops,
     yeaftReflectionCards: {},
-    yeaftDebugGroupFilter: null,
-    yeaftActiveGroupFilter: null,
+    yeaftDebugSessionFilter: null,
+    yeaftActiveSessionFilter: null,
     yeaftDebugSearch: '',
   };
 }
 
-describe('yeaftDebugTurnsForActiveGroup — live header aggregates', () => {
+describe('yeaftDebugTurnsForActiveSession — live header aggregates', () => {
   it('open turn: derives loopCount/totalMs/totalTokens from loops', () => {
     const state = mkState({
       turn: {
@@ -58,7 +58,7 @@ describe('yeaftDebugTurnsForActiveGroup — live header aggregates', () => {
         { turnId: 't1', loopNumber: 2, latencyMs: 80, usage: { totalTokens: 300 } },
       ],
     });
-    const [row] = getters.yeaftDebugTurnsForActiveGroup(state);
+    const [row] = getters.yeaftDebugTurnsForActiveSession(state);
     expect(row.loopCount).toBe(2);
     expect(row.totalMs).toBe(200);
     expect(row.totalTokens).toBe(800);
@@ -75,7 +75,7 @@ describe('yeaftDebugTurnsForActiveGroup — live header aggregates', () => {
         { turnId: 't2', loopNumber: 1, latencyMs: 1, usage: { totalTokens: 1 } },
       ],
     });
-    const [row] = getters.yeaftDebugTurnsForActiveGroup(state);
+    const [row] = getters.yeaftDebugTurnsForActiveSession(state);
     expect(row.loopCount).toBe(7);
     expect(row.totalMs).toBe(999);
     expect(row.totalTokens).toBe(1234);
@@ -95,7 +95,7 @@ describe('yeaftDebugTurnsForActiveGroup — live header aggregates', () => {
         { turnId: 't3', loopNumber: 2, latencyMs: 70, usage: { totalTokens: 200 } },
       ],
     });
-    const [row] = getters.yeaftDebugTurnsForActiveGroup(state);
+    const [row] = getters.yeaftDebugTurnsForActiveSession(state);
     expect(row.loopCount).toBe(2);
     expect(row.totalMs).toBe(120);
     expect(row.totalTokens).toBe(350); // 150 + 200
@@ -110,7 +110,7 @@ describe('yeaftDebugTurnsForActiveGroup — live header aggregates', () => {
       },
       loops: [],
     });
-    const [row] = getters.yeaftDebugTurnsForActiveGroup(state);
+    const [row] = getters.yeaftDebugTurnsForActiveSession(state);
     expect(row.loopCount).toBe(0);
     expect(row.totalMs).toBe(0);
     expect(row.totalTokens).toBe(0);

@@ -6,11 +6,11 @@
  *   - In `web/components/ChatInput.js#send()`, the yeaft-group branch
  *     `return`ed early without ever consulting the local `attachments[]`
  *     ref. Files the user had paperclipped vanished into the void.
- *   - The store helper `sendYeaftGroupChat` also short-circuited on
+ *   - The store helper `sendYeaftSessionMessage` also short-circuited on
  *     empty text, so an image-only send produced zero WS frames.
  *
  * What this file pins:
- *   1. `sendYeaftGroupChat` forwards `attachments[].fileId` onto the
+ *   1. `sendYeaftSessionMessage` forwards `attachments[].fileId` onto the
  *      outbound `yeaft_group_chat` WS frame.
  *   2. The same call accepts an image-only send (empty text) — it
  *      synthesizes a placeholder text and still ships the frame.
@@ -30,7 +30,7 @@ globalThis.Pinia.defineStore = (_id, options) => {
   // The chat store is by far the largest defineStore call in the
   // codebase — capture it. Other (smaller) stores imported transitively
   // get a no-op stub.
-  if (options && options.actions && options.actions.sendYeaftGroupChat) {
+  if (options && options.actions && options.actions.sendYeaftSessionMessage) {
     capturedOptions = options;
   }
   return () => ({});
@@ -63,10 +63,10 @@ function mkStore() {
   };
 }
 
-describe('sendYeaftGroupChat — attachment passthrough', () => {
+describe('sendYeaftSessionMessage — attachment passthrough', () => {
   it('forwards attachments[].fileId onto the yeaft_group_chat WS frame', () => {
     const store = mkStore();
-    actions.sendYeaftGroupChat.call(store, {
+    actions.sendYeaftSessionMessage.call(store, {
       groupId: 'grp_1',
       text: 'hi',
       mentions: [],
@@ -77,7 +77,7 @@ describe('sendYeaftGroupChat — attachment passthrough', () => {
     });
     expect(store.sent).toHaveLength(1);
     const frame = store.sent[0];
-    expect(frame.type).toBe('yeaft_group_chat');
+    expect(frame.type).toBe('yeaft_session_send');
     expect(frame.attachments).toEqual([
       { fileId: 'f-aaa', isImage: true },
       { fileId: 'f-bbb', isImage: false },
@@ -89,7 +89,7 @@ describe('sendYeaftGroupChat — attachment passthrough', () => {
 
   it('image-only send (empty text) is allowed — synthesizes placeholder text', () => {
     const store = mkStore();
-    actions.sendYeaftGroupChat.call(store, {
+    actions.sendYeaftSessionMessage.call(store, {
       groupId: 'grp_1',
       text: '',
       attachments: [{ fileId: 'f-img', isImage: true, mimeType: 'image/png' }],
@@ -101,7 +101,7 @@ describe('sendYeaftGroupChat — attachment passthrough', () => {
 
   it('drops entries without a fileId before forwarding', () => {
     const store = mkStore();
-    actions.sendYeaftGroupChat.call(store, {
+    actions.sendYeaftSessionMessage.call(store, {
       groupId: 'grp_1',
       text: 'hi',
       attachments: [
@@ -115,7 +115,7 @@ describe('sendYeaftGroupChat — attachment passthrough', () => {
 
   it('no-op when both text and attachments are empty', () => {
     const store = mkStore();
-    actions.sendYeaftGroupChat.call(store, { groupId: 'grp_1', text: '' });
+    actions.sendYeaftSessionMessage.call(store, { groupId: 'grp_1', text: '' });
     expect(store.sent).toHaveLength(0);
   });
 });

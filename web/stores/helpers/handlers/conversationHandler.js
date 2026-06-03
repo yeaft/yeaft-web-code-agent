@@ -29,13 +29,13 @@ function resolveGroupDefaultVpId(groupId) {
   if (!groupId || typeof window === 'undefined') return null;
   try {
     const pinia = window.Pinia || null;
-    const groupsStore = pinia && typeof pinia.useGroupsStore === 'function'
-      ? pinia.useGroupsStore()
+    const sessionsStore = pinia && typeof pinia.useSessionsStore === 'function'
+      ? pinia.useSessionsStore()
       : null;
-    if (!groupsStore) return null;
-    const group = typeof groupsStore.groupById === 'function'
-      ? groupsStore.groupById(groupId)
-      : (groupsStore.groups && groupsStore.groups[groupId]);
+    if (!sessionsStore) return null;
+    const group = typeof sessionsStore.sessionById === 'function'
+      ? sessionsStore.sessionById(groupId)
+      : (sessionsStore.sessions && sessionsStore.sessions[groupId]);
     const vpId = group && typeof group.defaultVpId === 'string'
       ? group.defaultVpId.trim()
       : '';
@@ -396,15 +396,15 @@ export function handleYeaftHistoryChunk(store, msg) {
   // separately so accepting this chunk would cross-pollute group history.
   // The chunk's groupId is authoritative — it's stamped by the agent
   // from the request groupId, not from messagesMap state.
-  const activeFilter = store.yeaftActiveGroupFilter ?? null;
+  const activeFilter = store.yeaftActiveSessionFilter ?? null;
   const hasChunkGroup = msg.groupId != null;
   if (hasChunkGroup && activeFilter && msg.groupId !== activeFilter) {
     const staleKey = msg.groupId ?? '__all__';
-    if (store.yeaftGroupHistoryState) {
-      store.yeaftGroupHistoryState = {
-        ...store.yeaftGroupHistoryState,
+    if (store.yeaftSessionHistoryState) {
+      store.yeaftSessionHistoryState = {
+        ...store.yeaftSessionHistoryState,
         [staleKey]: {
-          ...(store.yeaftGroupHistoryState[staleKey] || {}),
+          ...(store.yeaftSessionHistoryState[staleKey] || {}),
           loading: false,
         },
       };
@@ -474,13 +474,13 @@ export function handleYeaftHistoryChunk(store, msg) {
     oldestSeq: (typeof msg.oldestSeq === 'number') ? msg.oldestSeq : store.yeaftOldestLoadedSeq,
     count: formatted.length,
   };
-  if (store.yeaftGroupHistoryState) {
-    store.yeaftGroupHistoryState = {
-      ...store.yeaftGroupHistoryState,
+  if (store.yeaftSessionHistoryState) {
+    store.yeaftSessionHistoryState = {
+      ...store.yeaftSessionHistoryState,
       [groupKey]: nextState,
     };
   }
-  const activeKey = store.yeaftActiveGroupFilter ?? '__all__';
+  const activeKey = store.yeaftActiveSessionFilter ?? '__all__';
   if (groupKey === activeKey) {
     store.yeaftHasMoreHistory = nextState.hasMore;
     if (typeof msg.oldestSeq === 'number') {

@@ -23,7 +23,7 @@ export default {
       <div class="group-edit-modal group-wizard-modal">
         <header class="group-edit-header">
           <span class="group-edit-title">{{ $t('yeaft.session.create.title') }}</span>
-          <button class="group-edit-close" type="button" @click="requestClose" :aria-label="$t('yeaft.group.wizard.close')">×</button>
+          <button class="group-edit-close" type="button" @click="requestClose" :aria-label="$t('yeaft.session.wizard.close')">×</button>
         </header>
 
         <div class="group-wizard-body group-wizard-body-single">
@@ -44,10 +44,10 @@ export default {
           <div class="group-wizard-field">
             <span class="group-wizard-field-label">{{ $t('yeaft.session.create.vpPicker') }}</span>
             <div v-if="vpList.length === 0 && vpLibraryEmpty" class="group-wizard-empty">
-              {{ $t('yeaft.group.wizard.rosterEmpty') }}
+              {{ $t('yeaft.session.wizard.rosterEmpty') }}
             </div>
             <div v-else-if="vpList.length === 0" class="group-wizard-empty group-wizard-empty-loading">
-              {{ $t('yeaft.group.wizard.rosterLoading') }}
+              {{ $t('yeaft.session.wizard.rosterLoading') }}
             </div>
             <ul v-else class="group-wizard-roster-list" role="listbox" aria-multiselectable="true">
               <li
@@ -78,7 +78,7 @@ export default {
 
           <div class="group-wizard-actions">
             <button class="group-wizard-link-btn" type="button" @click="requestClose" :disabled="busy">
-              {{ $t('yeaft.group.wizard.cancel') }}
+              {{ $t('yeaft.session.wizard.cancel') }}
             </button>
             <button
               class="group-wizard-primary-btn"
@@ -86,7 +86,7 @@ export default {
               @click="onSubmit"
               :disabled="busy || !canSubmit"
             >
-              {{ busy ? $t('yeaft.group.wizard.creating') : $t('yeaft.session.create.submit') }}
+              {{ busy ? $t('yeaft.session.wizard.creating') : $t('yeaft.session.create.submit') }}
             </button>
           </div>
         </div>
@@ -194,7 +194,7 @@ export default {
       this.busy = true;
       try {
         if (!this.chat || typeof this.chat.createYeaftSession !== 'function') {
-          this.submitError = this.$t('yeaft.group.error.unknown', { message: 'store unavailable' });
+          this.submitError = this.$t('yeaft.session.error.unknown', { message: 'store unavailable' });
           return;
         }
         // Defensive: only submit vpIds that exist in the current VP
@@ -203,7 +203,7 @@ export default {
         const known = new Set((this.vpList || []).map(vp => vp && vp.vpId).filter(Boolean));
         const submittedVpIds = this.form.vpIds.filter(id => known.has(id));
         if (submittedVpIds.length === 0) {
-          this.submitError = this.$t('yeaft.group.error.unknown', { message: 'no valid VP selected' });
+          this.submitError = this.$t('yeaft.session.error.unknown', { message: 'no valid VP selected' });
           return;
         }
         const res = await this.chat.createYeaftSession({
@@ -217,13 +217,13 @@ export default {
         }
         const code = res?.error?.code || 'unknown';
         const message = res?.error?.message || '';
-        const key = `yeaft.group.error.${code}`;
+        const key = `yeaft.session.error.${code}`;
         const translated = this.$t(key, { message });
         this.submitError = translated === key
-          ? this.$t('yeaft.group.error.unknown', { message })
+          ? this.$t('yeaft.session.error.unknown', { message })
           : translated;
       } catch (err) {
-        this.submitError = this.$t('yeaft.group.error.unknown', { message: err?.message || String(err) });
+        this.submitError = this.$t('yeaft.session.error.unknown', { message: err?.message || String(err) });
       } finally {
         this.busy = false;
       }

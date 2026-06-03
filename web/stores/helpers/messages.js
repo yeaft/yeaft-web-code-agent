@@ -77,14 +77,14 @@ export function addMessageToConversation(store, conversationId, msg) {
 
   // Yeaft uniformity: stamp every message that lands in the active Yeaft
   // conversation with a groupId. Never overwrite an explicit groupId set
-  // by the caller (e.g. sendYeaftGroupChat or task_message handler).
-  // Bug 1: prefer `_currentYeaftGroupId` (the SEND-context group set by
+  // by the caller (e.g. sendYeaftSessionMessage or task_message handler).
+  // Bug 1: prefer `_currentYeaftSessionId` (the SEND-context group set by
   // handleYeaftOutput before dispatching streaming chunks) over the user's
   // current filter — otherwise messages arriving while the user has
   // switched groups get stamped with the wrong group.
   if (inActiveYeaftConv(store, conversationId) && !newMsg.groupId) {
-    newMsg.groupId = store._currentYeaftGroupId
-      || store.yeaftActiveGroupFilter
+    newMsg.groupId = store._currentYeaftSessionId
+      || store.yeaftActiveSessionFilter
       || DEFAULT_GROUP_ID;
   }
 

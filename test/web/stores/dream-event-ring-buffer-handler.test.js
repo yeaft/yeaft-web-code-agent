@@ -50,8 +50,8 @@ function mkStore() {
     yeaftDreamLatest: {},
     yeaftDreamEvents: {},
     yeaftConversationId: null,
-    yeaftDebugGroupFilter: null,
-    yeaftActiveGroupFilter: null,
+    yeaftDebugSessionFilter: null,
+    yeaftActiveSessionFilter: null,
     messagesMap: {},
     processingConversations: {},
     executionStatusMap: {},
@@ -67,10 +67,10 @@ const send = (store, event) => {
 };
 
 describe('handleYeaftOutput — dream event ring buffer', () => {
-  it('active-group getters fall back to groupsStore.activeGroupId when the main pane is not filtered', () => {
+  it('active-group getters fall back to sessionsStore.activeSessionId when the main pane is not filtered', () => {
     const store = mkStore();
-    globalThis.window.Pinia.useGroupsStore = () => ({
-      activeGroupId: 'grp_default',
+    globalThis.window.Pinia.useSessionsStore = () => ({
+      activeSessionId: 'grp_default',
       groups: { grp_default: { id: 'grp_default' } },
     });
 
@@ -84,12 +84,12 @@ describe('handleYeaftOutput — dream event ring buffer', () => {
       ts: 100,
     });
 
-    expect(getters.yeaftDreamLatestForActiveGroup(store)).toMatchObject({
+    expect(getters.yeaftDreamLatestForActiveSession(store)).toMatchObject({
       scope: 'group/grp_default',
       status: 'running',
       manual: true,
     });
-    expect(getters.yeaftDreamEventsForActiveGroup(store).map(e => e.phase)).toEqual(['start']);
+    expect(getters.yeaftDreamEventsForActiveSession(store).map(e => e.phase)).toEqual(['start']);
   });
 
   it('appends per-group events to yeaftDreamEvents["group/<id>"]', () => {

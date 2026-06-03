@@ -35,23 +35,23 @@ function loadMoreYeaftHistory() {
   if (this.yeaftLoadingMoreHistory || !this.yeaftHasMoreHistory) return;
   if (!this.yeaftAgentId || this.yeaftOldestLoadedSeq == null) return;
 
-  let groupId = this.yeaftActiveGroupFilter || null;
+  let groupId = this.yeaftActiveSessionFilter || null;
   if (!groupId) {
     try {
       const gs = (typeof window !== 'undefined') && (
-        window.Pinia?.useGroupsStore?.() ||
-        (window.__useGroupsStore && window.__useGroupsStore())
+        window.Pinia?.useSessionsStore?.() ||
+        (window.__useSessionsStore && window.__useSessionsStore())
       );
-      groupId = (gs && gs.activeGroupId) || null;
+      groupId = (gs && gs.activeSessionId) || null;
     } catch { /* groups store missing — agent treats null as no-op */ }
   }
 
   this.yeaftLoadingMoreHistory = true;
   const groupKey = groupId || '__all__';
-  this.yeaftGroupHistoryState = {
-    ...this.yeaftGroupHistoryState,
+  this.yeaftSessionHistoryState = {
+    ...this.yeaftSessionHistoryState,
     [groupKey]: {
-      ...(this.yeaftGroupHistoryState[groupKey] || {}),
+      ...(this.yeaftSessionHistoryState[groupKey] || {}),
       loading: true,
     },
   };
@@ -73,7 +73,7 @@ function mkStore(overrides = {}) {
     yeaftHasMoreHistory: true,
     yeaftLoadingMoreHistory: false,
     yeaftOldestLoadedSeq: 100,
-    yeaftGroupHistoryState: {},
+    yeaftSessionHistoryState: {},
     messagesMap: {},
     sendWsMessage(msg) { sent.push(msg); },
     _sent: sent,
@@ -86,28 +86,28 @@ function visibleMessages(state) {
     ? (state.yeaftConversationId || null)
     : (state.activeConversations?.[0] || null);
   const raw = convId ? (state.messagesMap[convId] || []) : [];
-  if (state.currentView === 'yeaft' && state.yeaftActiveGroupFilter) {
-    return raw.filter(m => m && m.groupId === state.yeaftActiveGroupFilter);
+  if (state.currentView === 'yeaft' && state.yeaftActiveSessionFilter) {
+    return raw.filter(m => m && m.groupId === state.yeaftActiveSessionFilter);
   }
   return raw;
 }
 
-function setActiveGroupFilter(groupId) {
-  const prev = this.yeaftActiveGroupFilter || null;
+function setActiveSessionFilter(groupId) {
+  const prev = this.yeaftActiveSessionFilter || null;
   const next = groupId || null;
-  this.yeaftActiveGroupFilter = next;
+  this.yeaftActiveSessionFilter = next;
   if (next === prev) return;
 
   const groupKey = next || '__all__';
-  const savedState = this.yeaftGroupHistoryState[groupKey] || null;
+  const savedState = this.yeaftSessionHistoryState[groupKey] || null;
   this.yeaftHasMoreHistory = !!savedState?.hasMore;
   this.yeaftLoadingMoreHistory = !!savedState?.loading;
   this.yeaftOldestLoadedSeq = (typeof savedState?.oldestSeq === 'number') ? savedState.oldestSeq : null;
 
   const needsHydrate = !savedState?.loaded && !savedState?.loading;
   if (this.yeaftAgentId && next && needsHydrate) {
-    this.yeaftGroupHistoryState = {
-      ...this.yeaftGroupHistoryState,
+    this.yeaftSessionHistoryState = {
+      ...this.yeaftSessionHistoryState,
       [groupKey]: { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },
     };
     this.yeaftLoadingMoreHistory = true;
@@ -125,8 +125,8 @@ describe('handleYeaftHistoryChunk', () => {
     const oldWindow = globalThis.window;
     globalThis.window = {
       Pinia: {
-        useGroupsStore: () => ({
-          groupById: (id) => id === 'g1' ? { id: 'g1', defaultVpId: 'linus' } : null,
+        useSessionsStore: () => ({
+          sessionById: (id) => id === 'g1' ? { id: 'g1', defaultVpId: 'linus' } : null,
         }),
       },
     };
@@ -205,7 +205,7 @@ describe('handleYeaftHistoryChunk', () => {
 
   it('preserves stable ids, thread ids, and assistant speaker attribution from older history rows', () => {
     const store = mkStore({
-      yeaftActiveGroupFilter: 'g1',
+      yeaftActiveSessionFilter: 'g1',
       messagesMap: { 'yeaft-1': [] },
     });
     handleYeaftHistoryChunk(store, {
@@ -227,8 +227,8 @@ describe('handleYeaftHistoryChunk', () => {
 
   it('keeps group-scoped cursor state isolated when accepting matching chunks', () => {
     const store = mkStore({
-      yeaftActiveGroupFilter: 'group-A',
-      yeaftGroupHistoryState: {
+      yeaftActiveSessionFilter: 'group-A',
+      yeaftSessionHistoryState: {
         'group-B': { loaded: true, loading: false, hasMore: true, oldestSeq: 77, count: 2 },
       },
       messagesMap: { 'yeaft-1': [] },
@@ -241,14 +241,14 @@ describe('handleYeaftHistoryChunk', () => {
       hasMore: false,
     });
 
-    expect(store.yeaftGroupHistoryState['group-A']).toEqual(expect.objectContaining({
+    expect(store.yeaftSessionHistoryState['group-A']).toEqual(expect.objectContaining({
       loaded: true,
       loading: false,
       hasMore: false,
       oldestSeq: 11,
       count: 1,
     }));
-    expect(store.yeaftGroupHistoryState['group-B']).toEqual(expect.objectContaining({
+    expect(store.yeaftSessionHistoryState['group-B']).toEqual(expect.objectContaining({
       hasMore: true,
       oldestSeq: 77,
     }));
@@ -339,7 +339,7 @@ describe('handleYeaftHistoryChunk', () => {
 
   it('keeps chronological order and dedupes rows when older group history overlaps cached rows', () => {
     const store = mkStore({
-      yeaftActiveGroupFilter: 'group-A',
+      yeaftActiveSessionFilter: 'group-A',
       messagesMap: {
         'yeaft-1': [
           { id: 'm0003', messageId: 'm0003', type: 'user', content: 'newer-q', groupId: 'group-A' },
@@ -404,7 +404,7 @@ describe('handleYeaftHistoryChunk', () => {
     // cleared messagesMap[convId] and reset the cursor; we must NOT
     // splice A's history into B's view when A's chunk finally lands.
     const store = mkStore({
-      yeaftActiveGroupFilter: 'group-B',
+      yeaftActiveSessionFilter: 'group-B',
       yeaftLoadingMoreHistory: true,           // spinner up from the A click
       messagesMap: {
         'yeaft-1': [
@@ -432,9 +432,9 @@ describe('handleYeaftHistoryChunk', () => {
 
   it('drops stale chunks with an empty-string groupId instead of treating them as unscoped history', () => {
     const store = mkStore({
-      yeaftActiveGroupFilter: 'group-B',
+      yeaftActiveSessionFilter: 'group-B',
       yeaftLoadingMoreHistory: true,
-      yeaftGroupHistoryState: {
+      yeaftSessionHistoryState: {
         '': { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },
         'group-B': { loaded: true, loading: false, hasMore: true, oldestSeq: 100, count: 1 },
       },
@@ -457,14 +457,14 @@ describe('handleYeaftHistoryChunk', () => {
 
     expect(store.messagesMap['yeaft-1'].map(m => m.content)).toEqual(['B-msg']);
     expect(store.yeaftLoadingMoreHistory).toBe(false);
-    expect(store.yeaftGroupHistoryState['']).toEqual(expect.objectContaining({ loading: false }));
-    expect(store.yeaftGroupHistoryState.__all__).toBeUndefined();
+    expect(store.yeaftSessionHistoryState['']).toEqual(expect.objectContaining({ loading: false }));
+    expect(store.yeaftSessionHistoryState.__all__).toBeUndefined();
     expect(store.yeaftOldestLoadedSeq).toBe(100);
   });
 
   it('preserves empty-string row groupId when accepting an empty-string chunk', () => {
     const store = mkStore({
-      yeaftActiveGroupFilter: '',
+      yeaftActiveSessionFilter: '',
       messagesMap: { 'yeaft-1': [] },
     });
 
@@ -483,13 +483,13 @@ describe('handleYeaftHistoryChunk', () => {
       expect.objectContaining({ id: 'm-empty-1', groupId: '' }),
       expect.objectContaining({ id: 'm-empty-2', groupId: '' }),
     ]);
-    expect(store.yeaftGroupHistoryState['']).toEqual(expect.objectContaining({ loading: false, hasMore: false }));
-    expect(store.yeaftGroupHistoryState.__all__).toBeUndefined();
+    expect(store.yeaftSessionHistoryState['']).toEqual(expect.objectContaining({ loading: false, hasMore: false }));
+    expect(store.yeaftSessionHistoryState.__all__).toBeUndefined();
   });
 
   it('accepts a chunk whose groupId matches the active filter', () => {
     const store = mkStore({
-      yeaftActiveGroupFilter: 'group-A',
+      yeaftActiveSessionFilter: 'group-A',
       messagesMap: { 'yeaft-1': [] },
     });
     handleYeaftHistoryChunk(store, {
@@ -509,7 +509,7 @@ describe('handleYeaftHistoryChunk', () => {
     // Edge case: bootstrap path before any group has been selected. The
     // chunk may carry a groupId stamp; without an active filter we accept.
     const store = mkStore({
-      yeaftActiveGroupFilter: null,
+      yeaftActiveSessionFilter: null,
       messagesMap: { 'yeaft-1': [] },
     });
     handleYeaftHistoryChunk(store, {
@@ -553,9 +553,9 @@ describe('loadMoreYeaftHistory — action gates', () => {
     });
   });
 
-  it('forwards activeGroupId from window.Pinia.useGroupsStore', () => {
+  it('forwards activeSessionId from window.Pinia.useSessionsStore', () => {
     globalThis.window.Pinia = {
-      useGroupsStore: () => ({ activeGroupId: 'grp-xyz' }),
+      useSessionsStore: () => ({ activeSessionId: 'grp-xyz' }),
     };
     const store = mkStore({ yeaftOldestLoadedSeq: 7 });
     loadMoreYeaftHistory.call(store);
@@ -563,20 +563,20 @@ describe('loadMoreYeaftHistory — action gates', () => {
     expect(store._sent[0].beforeSeq).toBe(7);
   });
 
-  it('prefers yeaftActiveGroupFilter over a stale groupsStore.activeGroupId', () => {
+  it('prefers yeaftActiveSessionFilter over a stale sessionsStore.activeSessionId', () => {
     globalThis.window.Pinia = {
-      useGroupsStore: () => ({ activeGroupId: 'grp-stale' }),
+      useSessionsStore: () => ({ activeSessionId: 'grp-stale' }),
     };
     const store = mkStore({
-      yeaftActiveGroupFilter: 'grp-visible',
+      yeaftActiveSessionFilter: 'grp-visible',
       yeaftOldestLoadedSeq: 9,
     });
 
     loadMoreYeaftHistory.call(store);
 
     expect(store._sent[0].groupId).toBe('grp-visible');
-    expect(store.yeaftGroupHistoryState['grp-visible'].loading).toBe(true);
-    expect(store.yeaftGroupHistoryState['grp-stale']).toBeUndefined();
+    expect(store.yeaftSessionHistoryState['grp-visible'].loading).toBe(true);
+    expect(store.yeaftSessionHistoryState['grp-stale']).toBeUndefined();
   });
 
   it('no-op when currentView is not yeaft', () => {
@@ -614,7 +614,7 @@ describe('loadMoreYeaftHistory — action gates', () => {
 
   it('survives a throwing groups-store accessor', () => {
     globalThis.window.Pinia = {
-      useGroupsStore: () => { throw new Error('not registered'); },
+      useSessionsStore: () => { throw new Error('not registered'); },
     };
     const store = mkStore({ yeaftOldestLoadedSeq: 1 });
     expect(() => loadMoreYeaftHistory.call(store)).not.toThrow();
@@ -623,26 +623,26 @@ describe('loadMoreYeaftHistory — action gates', () => {
   });
 });
 
-describe('setActiveGroupFilter — group-scoped conversation cache', () => {
+describe('setActiveSessionFilter — group-scoped conversation cache', () => {
   it('does not clear the shared Yeaft message stream when switching groups', () => {
     const store = mkStore({
-      yeaftActiveGroupFilter: 'group-A',
+      yeaftActiveSessionFilter: 'group-A',
       messagesMap: {
         'yeaft-1': [
           { id: 'a1', type: 'user', content: 'A before', groupId: 'group-A' },
           { id: 'b1', type: 'user', content: 'B before', groupId: 'group-B' },
         ],
       },
-      yeaftGroupHistoryState: {
+      yeaftSessionHistoryState: {
         'group-A': { loaded: true, loading: false, hasMore: true, oldestSeq: 10, count: 1 },
         'group-B': { loaded: true, loading: false, hasMore: false, oldestSeq: 20, count: 1 },
       },
     });
 
     const beforeA = visibleMessages(store).map(m => m.id);
-    setActiveGroupFilter.call(store, 'group-B');
+    setActiveSessionFilter.call(store, 'group-B');
     const afterB = visibleMessages(store).map(m => m.id);
-    setActiveGroupFilter.call(store, 'group-A');
+    setActiveSessionFilter.call(store, 'group-A');
     const afterA = visibleMessages(store).map(m => m.id);
 
     expect(beforeA).toEqual(['a1']);
@@ -656,28 +656,28 @@ describe('setActiveGroupFilter — group-scoped conversation cache', () => {
 
   it('hydrates only a group without cached rows or loaded history metadata', () => {
     const store = mkStore({
-      yeaftActiveGroupFilter: 'group-A',
+      yeaftActiveSessionFilter: 'group-A',
       messagesMap: {
         'yeaft-1': [{ id: 'a1', type: 'user', content: 'A before', groupId: 'group-A' }],
       },
-      yeaftGroupHistoryState: {
+      yeaftSessionHistoryState: {
         'group-A': { loaded: true, loading: false, hasMore: false, oldestSeq: null, count: 1 },
       },
     });
 
-    setActiveGroupFilter.call(store, 'group-C');
+    setActiveSessionFilter.call(store, 'group-C');
 
     expect(visibleMessages(store)).toEqual([]);
     expect(store.messagesMap['yeaft-1'].map(m => m.id)).toEqual(['a1']);
     expect(store._sent).toEqual([{ type: 'yeaft_load_history', agentId: 'agent-1', limit: 50, groupId: 'group-C' }]);
-    expect(store.yeaftGroupHistoryState['group-C']).toEqual(expect.objectContaining({ loading: true, loaded: false }));
+    expect(store.yeaftSessionHistoryState['group-C']).toEqual(expect.objectContaining({ loading: true, loaded: false }));
   });
 
   it('keeps selected group and pending history state isolated across groups', () => {
     const store = mkStore({
-      yeaftActiveGroupFilter: 'group-A',
+      yeaftActiveSessionFilter: 'group-A',
       yeaftLoadingMoreHistory: false,
-      yeaftGroupHistoryState: {
+      yeaftSessionHistoryState: {
         'group-A': { loaded: true, loading: false, hasMore: true, oldestSeq: 101, count: 2 },
         'group-B': { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },
       },
@@ -689,12 +689,12 @@ describe('setActiveGroupFilter — group-scoped conversation cache', () => {
       },
     });
 
-    setActiveGroupFilter.call(store, 'group-B');
+    setActiveSessionFilter.call(store, 'group-B');
     expect(visibleMessages(store).map(m => m.id)).toEqual(['b1']);
     expect(store.yeaftLoadingMoreHistory).toBe(true);
     expect(store.yeaftOldestLoadedSeq).toBeNull();
 
-    setActiveGroupFilter.call(store, 'group-A');
+    setActiveSessionFilter.call(store, 'group-A');
     expect(visibleMessages(store).map(m => m.id)).toEqual(['a1']);
     expect(store.yeaftLoadingMoreHistory).toBe(false);
     expect(store.yeaftHasMoreHistory).toBe(true);

@@ -4,7 +4,7 @@ import VpTurnBlock from './VpTurnBlock.js';
 import VpSpeakerHeader from './VpSpeakerHeader.js';
 import ReflectionCard from './ReflectionCard.js';
 import SubAgentCard from './SubAgentCard.js';
-import GroupAnnouncementBar from './GroupAnnouncementBar.js';
+import SessionAnnouncementBar from './SessionAnnouncementBar.js';
 import UserTurnBlock from './UserTurnBlock.js';
 // task-757: appendTypingPlaceholders removed from the pipeline.
 // The standalone typing card it produced (at the bottom of the
@@ -22,7 +22,7 @@ import UserTurnBlock from './UserTurnBlock.js';
 
 export default {
   name: 'MessageList',
-  components: { MessageItem, AssistantTurn, VpTurnBlock, VpSpeakerHeader, ReflectionCard, SubAgentCard, GroupAnnouncementBar, UserTurnBlock },
+  components: { MessageItem, AssistantTurn, VpTurnBlock, VpSpeakerHeader, ReflectionCard, SubAgentCard, SessionAnnouncementBar, UserTurnBlock },
   template: `
     <main class="chat-container" ref="containerRef">
       <!-- Session Loading Overlay - only covers message area -->
@@ -85,7 +85,7 @@ export default {
         <!-- Group announcement bar — surfaces a CLAUDE.md-style shared
              prefix that's injected into every VP's system prompt.
              Shown only in Yeaft mode when an active group is selected. -->
-        <GroupAnnouncementBar
+        <SessionAnnouncementBar
           v-if="activeGroupIdForBar"
           :group-id="activeGroupIdForBar"
           @open-settings="onOpenGroupSettings"
@@ -526,20 +526,20 @@ export default {
     // appear only when the user is on the Yeaft page AND has an active
     // group selected (filter or default). We read the groups store via the
     // Pinia global so the component still imports cleanly in node tests.
-    const groupsStore = (() => {
-      try { return window.Pinia?.useGroupsStore?.() || null; }
+    const sessionsStore = (() => {
+      try { return window.Pinia?.useSessionsStore?.() || null; }
       catch (_) { return null; }
     });
     const activeGroupIdForBar = Vue.computed(() => {
       // Only render the bar in Yeaft view. Chat mode has no group concept.
       if (store.currentView !== 'yeaft') return null;
-      const gs = groupsStore();
+      const gs = sessionsStore();
       if (!gs) return null;
       // Prefer the explicit "filter" the user picked from the sidebar; fall
       // back to whatever the store considers active.
-      const filterId = store.yeaftActiveGroupFilter || null;
-      if (filterId && gs.groups[filterId]) return filterId;
-      if (gs.activeGroupId && gs.groups[gs.activeGroupId]) return gs.activeGroupId;
+      const filterId = store.yeaftActiveSessionFilter || null;
+      if (filterId && gs.sessions[filterId]) return filterId;
+      if (gs.activeSessionId && gs.sessions[gs.activeSessionId]) return gs.activeSessionId;
       return null;
     });
 
@@ -1505,8 +1505,8 @@ export default {
       if (dogRafId) { cancelAnimationFrame(dogRafId); dogRafId = null; }
     });
 
-    // GroupAnnouncementBar's "open settings" link bubbles a request up
-    // to the parent page (YeaftPage) so the unified GroupSettingsModal
+    // SessionAnnouncementBar's "open settings" link bubbles a request up
+    // to the parent page (YeaftPage) so the unified SessionSettingsModal
     // can be opened with the right group id and an initial section
     // focus. MessageList is mounted directly inside YeaftPage, so a
     // normal emit chain — rather than a store-as-bus signal — is the
