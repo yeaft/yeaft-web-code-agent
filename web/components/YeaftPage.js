@@ -941,7 +941,7 @@ export default {
       const filter = store.yeaftActiveSessionFilter || gs?.activeSessionId || null;
       if (!filter) return [];
 
-      const group = gs?.groups?.[filter] ?? null;
+      const group = gs?.sessions?.[filter] ?? null;
       const roster = (group && Array.isArray(group.roster)) ? group.roster : [];
       if (roster.length === 0) return [];
       const rosterSet = new Set(roster);

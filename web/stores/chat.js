@@ -54,7 +54,7 @@ function resolveActiveDreamDebugSessionId(state) {
   const resolved = resolveActiveYeaftSessionId(state);
   if (resolved) return resolved;
   const gs = getSessionsStore();
-  if (gs?.groups?.grp_default) return 'grp_default';
+  if (gs?.sessions?.grp_default) return 'grp_default';
   return null;
 }
 
