@@ -962,13 +962,15 @@ export function handleAskUserQuestion(conversationId, input, toolCtx) {
  * 则按 conversationId 查找该 conversation 下唯一的 pending question 并 resolve。
  */
 export function handleAskUserAnswer(msg) {
-  // Copilot ACP permission round-trip: requestId is prefixed `copilot-perm-`
-  // and the answer arrives as `{answers: {optionId: '<optionId>'}}` or a
-  // single string value. Route it back into the driver instead of the
-  // generic AskUserQuestion path.
-  if (typeof msg.requestId === 'string' && msg.requestId.startsWith('copilot-perm-')) {
-    const state = msg.conversationId ? ctx.conversations.get(msg.conversationId) : null;
-    if (state) {
+  // Provider-driven permission round-trip (e.g. Copilot ACP
+  // session/request_permission): if any registered driver owns this
+  // requestId, route the answer back to its `respondToPermissionRequest`
+  // instead of through the generic AskUserQuestion path. Dispatch by
+  // capability + ownership, not by string prefix, so future providers
+  // (hermes-agent etc.) plug in without touching this code.
+  if (msg.conversationId && msg.requestId) {
+    const state = ctx.conversations.get(msg.conversationId);
+    if (state?.pendingPermissions?.has(msg.requestId)) {
       try {
         const driver = getProvider(state.providerName || DEFAULT_PROVIDER);
         if (typeof driver.respondToPermissionRequest === 'function') {
@@ -979,7 +981,7 @@ export function handleAskUserAnswer(msg) {
           return;
         }
       } catch (err) {
-        console.warn('[AskUser] copilot perm routing failed:', err?.message || err);
+        console.warn('[AskUser] provider perm routing failed:', err?.message || err);
       }
     }
   }

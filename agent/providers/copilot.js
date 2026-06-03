@@ -142,6 +142,9 @@ async function _bootAcp(state, resumeSessionId, model) {
       });
       state.turnActive = false;
     }
+    // Drain any in-flight permission prompts so the frontend dialog unwedges
+    // and the Promise GC roots release.
+    _drainPendingPermissions(state, 'child closed');
     state.copilotChild = null;
     state.acpClient = null;
     state.initialized = false;
@@ -177,6 +180,15 @@ async function _bootAcp(state, resumeSessionId, model) {
     state.claudeSessionId = resumeSessionId;
     if (Array.isArray(r?.modes?.availableModes)) state.acpModes = r.modes.availableModes;
   } else {
+    if (resumeSessionId && !state.acpCapabilities.loadSession) {
+      // Surface the downgrade — silently handing back a fresh session would
+      // confuse a user who asked to resume.
+      sendOutput(state.conversationId, {
+        type: 'system',
+        subtype: 'info',
+        message: 'Copilot CLI does not advertise loadSession capability — starting a new session instead of resuming.',
+      });
+    }
     const r = await client.request('session/new', {
       cwd: state.workDir,
       mcpServers: [],
@@ -301,6 +313,19 @@ export function abort(state) {
     try { state.acpClient.notify('session/cancel', { sessionId: state.sessionId }); }
     catch { /* noop */ }
   }
+  _drainPendingPermissions(state, 'aborted');
+  // Fallback: if Copilot ignores session/cancel and the prompt never resolves,
+  // SIGTERM the child after a grace period — the close handler will then
+  // synthesize the result envelope + turn_completed.
+  if (state?.copilotChild && !state._abortKillTimer) {
+    state._abortKillTimer = setTimeout(() => {
+      state._abortKillTimer = null;
+      if (state.turnActive && state.copilotChild) {
+        try { state.copilotChild.kill('SIGTERM'); } catch { /* noop */ }
+      }
+    }, 10000);
+    state._abortKillTimer.unref?.();
+  }
 }
 
 /**
@@ -309,6 +334,8 @@ export function abort(state) {
  */
 export async function clear(state) {
   if (!state?.acpClient) return;
+  // A fresh session invalidates any in-flight permission prompts.
+  _drainPendingPermissions(state, 'session cleared');
   try {
     const r = await state.acpClient.request('session/new', {
       cwd: state.workDir,
@@ -433,17 +460,23 @@ function _handleSessionUpdate(state, params) {
 }
 
 async function _handlePermissionRequest(state, params) {
+  const opt = Array.isArray(params?.options) ? params.options : [];
+  // Defensive: ACP forbids empty options but if a buggy server sends one,
+  // reject the request rather than fabricating an optionId Copilot won't
+  // recognise.
+  if (opt.length === 0) {
+    return { outcome: { outcome: 'cancelled' } };
+  }
   // Auto-approve if the user enabled allowAllTools (or YOLO env).
   if (state.allowAllTools) {
-    const allow = (params?.options || []).find(o => o.kind === 'allow_always' || o.kind === 'allow_once') || params?.options?.[0];
-    return { outcome: { outcome: 'selected', optionId: allow?.optionId || 'allow' } };
+    const allow = opt.find(o => o.kind === 'allow_always' || o.kind === 'allow_once') || opt[0];
+    return { outcome: { outcome: 'selected', optionId: allow.optionId } };
   }
   // Otherwise route through the existing ask-user wire path. We do it inline
   // here using a per-state Promise; the frontend responds via the standard
   // `ask_user_response` message which conversation.js routes back into the
   // driver via `respondToPermissionRequest(state, requestId, optionId)`.
   const requestId = `copilot-perm-${randomUUID()}`;
-  const opt = params?.options || [];
   return new Promise((resolve) => {
     state.pendingPermissions.set(requestId, { resolve, options: opt });
     ctx.sendToServer({
@@ -457,13 +490,31 @@ async function _handlePermissionRequest(state, params) {
 }
 
 /**
+ * Drain every in-flight permission prompt with a "cancelled" outcome. Called
+ * on child close, abort, and clear so dangling Promises don't pin GC roots
+ * and the frontend ask-user dialog unwedges.
+ */
+function _drainPendingPermissions(state, reason) {
+  const m = state?.pendingPermissions;
+  if (!m || m.size === 0) return;
+  for (const { resolve } of m.values()) {
+    try { resolve({ outcome: { outcome: 'cancelled' } }); } catch { /* noop */ }
+  }
+  m.clear();
+  if (ctx?.CONFIG?.debug) console.warn(`[copilot] drained pending permissions: ${reason}`);
+}
+
+/**
  * Called by conversation.js when the frontend posts an ask_user_response for
  * a permission prompt we issued. Exported so the message router can hand it
  * back without exposing the state internals.
  */
 export function respondToPermissionRequest(state, requestId, optionId) {
   const slot = state?.pendingPermissions?.get(requestId);
-  if (!slot) return false;
+  if (!slot) {
+    console.warn(`[copilot] respondToPermissionRequest: no pending permission for ${requestId}`);
+    return false;
+  }
   state.pendingPermissions.delete(requestId);
   const opt = slot.options.find(o => o.optionId === optionId) || slot.options[0];
   slot.resolve({ outcome: { outcome: 'selected', optionId: opt?.optionId || optionId } });
