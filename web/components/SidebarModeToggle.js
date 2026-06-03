@@ -20,20 +20,8 @@ export default {
   emits: ['flip'],
   computed: {
     isYeaft() { return this.view === 'yeaft'; },
-    chatLabel() {
-      if (typeof this.$t === 'function') {
-        const v = this.$t('sidebar.toggle.chat');
-        if (v && v !== 'sidebar.toggle.chat') return v;
-      }
-      return 'Chat';
-    },
-    yeaftLabel() {
-      if (typeof this.$t === 'function') {
-        const v = this.$t('sidebar.toggle.yeaft');
-        if (v && v !== 'sidebar.toggle.yeaft') return v;
-      }
-      return 'Yeaft';
-    },
+    chatLabel()  { return this.$t('sidebar.toggle.chat'); },
+    yeaftLabel() { return this.$t('sidebar.toggle.yeaft'); },
     titleText() {
       return this.isYeaft ? this.chatLabel : this.yeaftLabel;
     },

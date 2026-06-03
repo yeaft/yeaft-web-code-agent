@@ -309,6 +309,8 @@ export default {
       if (s && typeof s.toggleWorkbench === 'function') s.toggleWorkbench();
     },
     onModeFlip(target) {
+      // Only 'chat' is reachable from here — 'yeaft' is a no-op because
+      // we're already in the Yeaft view when this sidebar is mounted.
       if (target === 'chat') {
         this.$emit('back');
       }
