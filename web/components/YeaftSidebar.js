@@ -176,7 +176,7 @@ export default {
       <ChatCreateModal
         v-if="chatWizardOpen"
         @close="chatWizardOpen = false"
-        @created="onChatCreated"
+        @created="closeChatModal"
       />
 
       <!-- task-yeaft-group-editor: Per-group rename/delete formerly lived
@@ -359,7 +359,12 @@ export default {
       this.$emit('select-chat', c);
     },
     onChatCreated(_chat) {
-      // Store auto-activates via chat_crud_result handler.
+      // Store auto-activates via chat_crud_result handler; emit kept as a
+      // bridge so callers (modal) can simply emit('created') without
+      // worrying about local handler wiring.
+    },
+    closeChatModal() {
+      this.chatWizardOpen = false;
     },
     onSelectGroup(g) {
       if (!g || !g.id) return;

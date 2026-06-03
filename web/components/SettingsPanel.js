@@ -523,7 +523,6 @@ export default {
       return `${safe}-${id}`;
     },
     visibleTabs() {
-      const ySub = this.yeaftSubTabs; void ySub;
       const tabs = [
         { key: 'general', label: this.$t('settings.tabs.general') },
         { key: 'account', label: this.$t('settings.tabs.account') },
@@ -617,8 +616,12 @@ export default {
   watch: {
     visible(val) {
       if (val) {
-        // Honour caller-requested entry point each time the panel opens.
-        if (this.initialTab) this.activeTab = this.initialTab;
+        // Honour caller-requested entry point each time the panel opens,
+        // but only if the role-gated tab list actually contains it —
+        // otherwise free-tier users land on a blank pane.
+        if (this.initialTab && this.visibleTabs.some(t => t.key === this.initialTab)) {
+          this.activeTab = this.initialTab;
+        }
         if (this.initialSubTab && this.activeTab === 'yeaft') this.yeaftSubTab = this.initialSubTab;
         this.loadData();
       } else {

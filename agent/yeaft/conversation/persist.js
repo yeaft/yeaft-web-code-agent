@@ -109,6 +109,7 @@ function serializeMessage(msg) {
   // in the default group and switching back to the originating group
   // shows an empty pane.
   if (msg.groupId) fm.push(`groupId: ${msg.groupId}`);
+  if (msg.chatId) fm.push(`chatId: ${msg.chatId}`);
   // Group-chat attribution: when a VP authors an assistant turn (either
   // its own reply or a route_forward injection from another VP), stamp
   // the speaker so the UI can render the message on the correct VP track.
@@ -225,6 +226,7 @@ export function parseMessage(raw) {
       case 'threadId': msg.threadId = value; break;
       case 'sourceThreadId': msg.sourceThreadId = value; break;
       case 'groupId': msg.groupId = value; break;
+      case 'chatId': msg.chatId = value; break;
       case 'speakerVpId': msg.speakerVpId = value; break;
       case 'attachmentsB64':
         try {

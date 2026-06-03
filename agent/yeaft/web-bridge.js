@@ -1880,9 +1880,30 @@ export async function handleYeaftChatSend(msg) {
   }
   const vpId = meta.vpId;
 
+  // Persist attachments + build LLM-side multimodal parts. Same flow as
+  // the group path (handleYeaftGroupChat) so chat mode isn't a
+  // second-class citizen for images / files.
+  const inboundFiles = Array.isArray(msg.files) ? msg.files : [];
+  let attachmentBundle = { promptAttachments: [], promptSuffix: '', promptParts: [], failed: [] };
+  if (inboundFiles.length > 0) {
+    try {
+      attachmentBundle = persistYeaftAttachments(inboundFiles, { subdir: `chat-${chatId}` });
+    } catch (err) {
+      console.warn('[Yeaft] yeaft_chat_send: attachment persist failed', err?.message || err);
+    }
+  }
+  if (Array.isArray(attachmentBundle.failed) && attachmentBundle.failed.length > 0) {
+    const detail = attachmentBundle.failed.map((f) => `  - ${f.name}: ${f.error}`).join('\n');
+    sendYeaftOutput({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: `⚠️ ${attachmentBundle.failed.length} file(s) could not be attached:\n${detail}` }] },
+    }, { chatId });
+  }
+  const persistedAttachments = attachmentsForPersistence(attachmentBundle.promptAttachments);
+
   // Append the user message to the chat log so subsequent reads see it.
   try {
-    handle.appendMessage({ from: 'user', role: 'user', text });
+    handle.appendMessage({ from: 'user', role: 'user', text, meta: { attachments: persistedAttachments } });
   } catch (err) {
     console.warn('[Yeaft] chat appendMessage failed:', err?.message || err);
   } finally {
@@ -1935,11 +1956,11 @@ export async function handleYeaftChatSend(msg) {
 
     for await (const event of eng.query({
       prompt: text,
+      promptParts: attachmentBundle.promptParts && attachmentBundle.promptParts.length > 0 ? attachmentBundle.promptParts : null,
       signal: abort.signal,
       userAlreadyPersisted: false,
       threadId: 'main',
       senderVpId: vpId,
-      chatId,
     })) {
       resetQueryTimer();
       handleEngineEvent(event, handlerCtx);

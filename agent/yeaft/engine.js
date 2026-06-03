@@ -1040,8 +1040,9 @@ export class Engine {
         role: 'user',
         content: userContent,
         threadId,
-        // Bug 6: stamp groupId so history replay can route by group.
+        // Bug 6: stamp groupId/chatId so history replay can route by container.
         ...(groupId ? { groupId } : {}),
+        ...(this.#chatId ? { chatId: this.#chatId } : {}),
       });
     }
 
@@ -1052,6 +1053,7 @@ export class Engine {
       model: this.#config.model,
       threadId,
       ...(groupId ? { groupId } : {}),
+      ...(this.#chatId ? { chatId: this.#chatId } : {}),
     };
     if (toolCalls && toolCalls.length > 0) {
       assistantMsg.toolCalls = toolCalls;
