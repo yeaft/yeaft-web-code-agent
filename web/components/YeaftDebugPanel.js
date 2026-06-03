@@ -108,7 +108,7 @@ export default {
       return window.Pinia?.useChatStore?.() || null;
     },
     turns() {
-      return (this.store && this.store.yeaftDebugTurnsForActiveGroup) || [];
+      return (this.store && this.store.yeaftDebugTurnsForActiveSession) || [];
     },
     // feat-6af5f9f1 PR C: toolbar bindings.
     searchQuery: {
@@ -118,7 +118,7 @@ export default {
     groupFilter: {
       get() {
         if (!this.store) return '';
-        const g = this.store.yeaftDebugGroupFilter;
+        const g = this.store.yeaftDebugSessionFilter;
         // null (default — fall through to main pane filter) maps to ''
         // in the dropdown so the placeholder option is selected.
         return g === null || g === undefined ? '' : g;
@@ -130,7 +130,7 @@ export default {
       },
     },
     availableGroups() {
-      return (this.store && this.store.yeaftDebugAvailableGroups) || [];
+      return (this.store && this.store.yeaftDebugAvailableSessions) || [];
     },
     turnTotal() {
       return (this.store && this.store.yeaftDebugTurnTotal) || 0;
@@ -183,7 +183,7 @@ export default {
     // v0.1.755: latest dream pass for the active group (auto + manual share
     // this surface; user only cares about the most recent run).
     dreamLatest() {
-      return (this.store && this.store.yeaftDreamLatestForActiveGroup) || null;
+      return (this.store && this.store.yeaftDreamLatestForActiveSession) || null;
     },
     dreamLatestLabel() {
       const d = this.dreamLatest;
@@ -212,7 +212,7 @@ export default {
     // active group. Empty array when no events have been recorded yet.
     // Sorted oldest-first (matches the store getter's merge order).
     dreamEvents() {
-      const list = (this.store && this.store.yeaftDreamEventsForActiveGroup) || [];
+      const list = (this.store && this.store.yeaftDreamEventsForActiveSession) || [];
       return Array.isArray(list) ? list : [];
     },
     dreamEventCount() {

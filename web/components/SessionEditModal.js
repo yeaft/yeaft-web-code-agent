@@ -1,8 +1,8 @@
 /**
- * GroupEditModal — task-338-F3 follow-up (N1).
+ * SessionEditModal — task-338-F3 follow-up (N1).
  *
  * Modal replacement for the native window.prompt() / window.confirm() used
- * by GroupSelector for rename/delete. Styled after VpCrudModal's overlay
+ * by SessionSelector for rename/delete. Styled after VpCrudModal's overlay
  * pattern so the yeaft surface is coherent.
  *
  * Props:
@@ -13,12 +13,12 @@
  *   close    — user dismissed (overlay/cancel/Esc)
  *   confirm  — { mode, groupId, name? }
  *
- * The modal itself is dumb: parent (GroupSelector) owns the busy state + WS
+ * The modal itself is dumb: parent (SessionSelector) owns the busy state + WS
  * round-trip so this stays easy to test in isolation.
  */
 
 export default {
-  name: 'GroupEditModal',
+  name: 'SessionEditModal',
   props: {
     mode: { type: String, required: true },       // 'rename' | 'delete'
     group: { type: Object, required: true },
@@ -47,18 +47,18 @@ export default {
     },
     titleKey() {
       return this.isRename
-        ? 'yeaft.group.editModal.renameTitle'
-        : 'yeaft.group.editModal.deleteTitle';
+        ? 'yeaft.session.editModal.renameTitle'
+        : 'yeaft.session.editModal.deleteTitle';
     },
     bodyKey() {
       return this.isRename
-        ? 'yeaft.group.editModal.renameBody'
-        : 'yeaft.group.editModal.deleteBody';
+        ? 'yeaft.session.editModal.renameBody'
+        : 'yeaft.session.editModal.deleteBody';
     },
     submitKey() {
       return this.isRename
-        ? 'yeaft.group.editModal.renameSubmit'
-        : 'yeaft.group.editModal.deleteSubmit';
+        ? 'yeaft.session.editModal.renameSubmit'
+        : 'yeaft.session.editModal.deleteSubmit';
     },
   },
   mounted() {
@@ -107,7 +107,7 @@ export default {
             type="button"
             class="group-edit-close"
             @click="requestClose"
-            :aria-label="tr('yeaft.group.editModal.close')"
+            :aria-label="tr('yeaft.session.editModal.close')"
           >×</button>
         </header>
 
@@ -115,7 +115,7 @@ export default {
           <p class="group-edit-message">{{ tr(bodyKey, { name: groupLabel }) }}</p>
 
           <label v-if="isRename" class="group-edit-field">
-            <span class="group-edit-field-label">{{ tr('yeaft.group.editModal.newNameLabel') }}</span>
+            <span class="group-edit-field-label">{{ tr('yeaft.session.editModal.newNameLabel') }}</span>
             <input
               ref="nameInput"
               type="text"
@@ -129,7 +129,7 @@ export default {
 
           <div class="group-edit-actions">
             <button type="button" class="group-edit-btn" @click="requestClose" :disabled="submitted">
-              {{ tr('yeaft.group.editModal.cancel') }}
+              {{ tr('yeaft.session.editModal.cancel') }}
             </button>
             <button
               type="submit"

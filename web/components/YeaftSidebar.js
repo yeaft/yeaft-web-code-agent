@@ -91,7 +91,7 @@ export default {
                 v-for="s in sessionList"
                 :key="s.kind + ':' + s.id"
                 class="session-item"
-                :class="{ active: s.id === activeGroupId }"
+                :class="{ active: s.id === activeSessionId }"
                 @click="onSelectGroup(s.raw)"
                 @contextmenu.prevent="openGroupMenu(s.raw, $event)"
               >
@@ -104,8 +104,8 @@ export default {
                     type="button"
                     class="session-dots-btn"
                     :class="{ 'menu-open': groupMenu.open && groupMenu.groupId === s.id }"
-                    :title="$t('yeaft.group.moreActions')"
-                    :aria-label="$t('yeaft.group.moreActions')"
+                    :title="$t('yeaft.session.moreActions')"
+                    :aria-label="$t('yeaft.session.moreActions')"
                     aria-haspopup="menu"
                     :aria-expanded="groupMenu.open && groupMenu.groupId === s.id ? 'true' : 'false'"
                     @click.stop="openGroupMenu(s.raw, $event)"
@@ -114,16 +114,16 @@ export default {
                   </button>
                   <div v-if="groupMenu.open && groupMenu.groupId === s.id" class="session-menu" role="menu" @click.stop>
                     <button type="button" role="menuitem" class="session-menu-item" @click="openGroupSettingsFromMenu(s.raw, 'members')">
-                      {{ $t('yeaft.group.manageMembers') }}
+                      {{ $t('yeaft.session.manageMembers') }}
                     </button>
                     <button type="button" role="menuitem" class="session-menu-item" @click="openGroupSettingsFromMenu(s.raw, 'announcement')">
-                      {{ $t('yeaft.group.settings.nav.announcement') }}
+                      {{ $t('yeaft.session.settings.nav.announcement') }}
                     </button>
                     <button type="button" role="menuitem" class="session-menu-item" @click="openGroupSettingsFromMenu(s.raw, 'rename')">
-                      {{ $t('yeaft.group.rename') }}
+                      {{ $t('yeaft.session.rename') }}
                     </button>
                     <button type="button" role="menuitem" class="session-menu-item danger" @click="openGroupSettingsFromMenu(s.raw, 'danger')">
-                      {{ $t('yeaft.group.delete') }}
+                      {{ $t('yeaft.session.delete') }}
                     </button>
                   </div>
                 </div>
@@ -148,7 +148,7 @@ export default {
 
       <!-- task-yeaft-group-editor: Per-group rename/delete formerly lived
            in inline overlays here. They've been folded into the unified
-           GroupSettingsModal — opened via the kebab → unified modal at
+           SessionSettingsModal — opened via the kebab → unified modal at
            the proper section. YeaftPage owns the modal lifecycle. -->
 
       <!-- task-342: sidebar bottom — Settings entry + version badge. -->
@@ -174,7 +174,7 @@ export default {
       groupsOpen: true,
       // task-yeaft-group-editor: per-row action menu only — the rename
       // and delete modals have been folded into the unified
-      // GroupSettingsModal owned by YeaftPage.
+      // SessionSettingsModal owned by YeaftPage.
       groupMenu: { open: false, groupId: null },
       // task-342: server version shown in sidebar-bottom (mirrors ChatPage).
       serverVersion: '',
@@ -205,26 +205,26 @@ export default {
       return null;
     },
     // task-334m: groups store lookup (lazy, guarded like `store`).
-    groupsStore() {
+    sessionsStore() {
       try {
-        if (typeof window !== 'undefined' && window.Pinia?.useGroupsStore) {
-          return window.Pinia.useGroupsStore();
+        if (typeof window !== 'undefined' && window.Pinia?.useSessionsStore) {
+          return window.Pinia.useSessionsStore();
         }
       } catch (_) { /* no-pinia test env */ }
       return null;
     },
-    groupList() { return this.groupsStore?.groupList || []; },
-    activeGroupId() { return this.groupsStore?.activeGroupId || null; },
+    activeSessionId() { return this.sessionsStore?.activeSessionId || null; },
     // Phase 4: chat container removed. Session list is just groups now.
     sessionList() {
       const out = [];
-      for (const g of (this.groupList || [])) {
+      const raw = this.sessionsStore?.sessionList || [];
+      for (const g of raw) {
         if (g && g.id) out.push({ kind: 'group', id: g.id, raw: g });
       }
       return out;
     },
     chatStore() {
-      // Needed for `groupCrudRequest`. Reuses the same guarded lookup
+      // Needed for `sessionCrudRequest`. Reuses the same guarded lookup
       // as `store` above but via window.Pinia for consistency with the
       // groups-store lookup.
       try {
@@ -320,11 +320,11 @@ export default {
     },
     onSelectGroup(g) {
       if (!g || !g.id) return;
-      if (this.groupsStore) this.groupsStore.setActive(g.id);
+      if (this.sessionsStore) this.sessionsStore.setActive(g.id);
       this.$emit('select-group', g);
     },
     // task-yeaft-group-editor: ⚙ button on each group row opens the
-    // unified GroupSettingsModal (announcement / members / rename /
+    // unified SessionSettingsModal (announcement / members / rename /
     // danger). Default landing section is 'members' so the existing
     // muscle-memory of the kebab "Manage members" lands in the same
     // place. YeaftPage owns the modal lifecycle.
@@ -343,7 +343,7 @@ export default {
       if (!g) return '';
       // D1 seed sentinel: replace raw 'Default' on grp_default with i18n label.
       if (g.id === 'grp_default' && (g.name === 'Default' || !g.name)) {
-        return this.$t('yeaft.group.defaultName');
+        return this.$t('yeaft.session.defaultName');
       }
       return g.name || g.id || '';
     },
@@ -368,8 +368,8 @@ export default {
     groupSubtitle(g) {
       if (!g) return '';
       const n = Array.isArray(g.roster) ? g.roster.length : 0;
-      if (n === 0) return this.$t('yeaft.group.empty.title');
-      const key = n === 1 ? 'yeaft.group.memberCount.one' : 'yeaft.group.memberCount.other';
+      if (n === 0) return this.$t('yeaft.session.empty.title');
+      const key = n === 1 ? 'yeaft.session.memberCount.one' : 'yeaft.session.memberCount.other';
       return this.$t(key, { count: n });
     },
     // task-334m prev-2 rev: per-row kebab + rename/delete wiring.
@@ -393,7 +393,7 @@ export default {
     // task-yeaft-group-editor: per-group rename/delete + manage-members
     // formerly lived as discrete startManageMembers/startRenameGroup/
     // startDeleteGroup methods that mounted inline overlays. They've
-    // all been folded into the unified GroupSettingsModal opened via
+    // all been folded into the unified SessionSettingsModal opened via
     // openGroupSettingsFromMenu(g, section) above. YeaftPage owns the
     // modal lifecycle.
     // H2.f.6: thread display / tooltip / link / fork helpers removed.

@@ -65,8 +65,8 @@ describe('effectiveWorkDir getter — Yeaft defaults to ~/.yeaft', () => {
   it('Yeaft mode prefers the active group workDir when one is set (forward-compat)', () => {
     // Groups don't carry workDir on main yet; this test pins the precedence
     // so the day the feature lands, no consumer changes are required.
-    const fakeGroups = { activeGroup: { workDir: '/projects/group-workdir' } };
-    globalThis.window.Pinia.useGroupsStore = () => fakeGroups;
+    const fakeGroups = { activeSession: { workDir: '/projects/group-workdir' } };
+    globalThis.window.Pinia.useSessionsStore = () => fakeGroups;
     try {
       const store = makeStore();
       store.currentView = 'yeaft';
@@ -74,7 +74,7 @@ describe('effectiveWorkDir getter — Yeaft defaults to ~/.yeaft', () => {
       store.currentAgentInfo = { workDir: '/home/user/agent-cwd' };
       expect(store.effectiveWorkDir).toBe('/projects/group-workdir');
     } finally {
-      delete globalThis.window.Pinia.useGroupsStore;
+      delete globalThis.window.Pinia.useSessionsStore;
     }
   });
 });

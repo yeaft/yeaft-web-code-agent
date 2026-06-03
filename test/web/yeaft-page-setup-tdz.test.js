@@ -115,7 +115,7 @@ function makePiniaStub() {
   const sentGroupChats = [];
   const chatStore = {
     yeaftConversationId: null,
-    yeaftActiveGroupFilter: null,
+    yeaftActiveSessionFilter: null,
     yeaftActiveVpDetailId: null,
     yeaftAvailableModels: [],
     yeaftModel: null,
@@ -125,10 +125,10 @@ function makePiniaStub() {
     vpsTypingInCurrentConv: [],
     activeVpTurns: {},
     hasCapability: () => false,
-    setActiveGroupFilter: (groupId) => { chatStore.yeaftActiveGroupFilter = groupId; },
+    setActiveSessionFilter: (groupId) => { chatStore.yeaftActiveSessionFilter = groupId; },
     leaveVpDetailView: () => {},
     leaveYeaft: () => {},
-    sendYeaftGroupChat: (payload) => { sentGroupChats.push(payload); },
+    sendYeaftSessionMessage: (payload) => { sentGroupChats.push(payload); },
     cancelYeaft: () => {},
     clearYeaftMessages: () => {},
     switchYeaftModel: () => {},
@@ -158,22 +158,22 @@ function makePiniaStub() {
     vpList: [],
     vpLabel: (id) => id,
   };
-  const groupsStore = {
-    groups: { grp_default: { id: 'grp_default', name: 'Default', roster: [] } },
-    activeGroupId: 'grp_default',
-    activeGroup: { id: 'grp_default', name: 'Default', roster: [] },
+  const sessionsStore = {
+    sessions: { grp_default: { id: 'grp_default', name: 'Default', roster: [] } },
+    activeSessionId: 'grp_default',
+    activeSession: { id: 'grp_default', name: 'Default', roster: [] },
     activeNeedsInvite: false,
   };
   return {
     defineStore: (_name, _schema) => () => ({}),
     useChatStore: () => chatStore,
     useVpStore: () => vpStore,
-    useGroupsStore: () => groupsStore,
+    useSessionsStore: () => sessionsStore,
     __triggerGroupDreamCalls: triggerGroupDreamCalls,
     __projectedDreamEvents: projectedDreamEvents,
     __sentGroupChats: sentGroupChats,
     __chatStore: chatStore,
-    __groupsStore: groupsStore,
+    __groupsStore: sessionsStore,
   };
 }
 
@@ -275,11 +275,11 @@ describe('YeaftPage setup() — temporal dead zone regression', () => {
     ]);
 
     // Regression for group isolation: send routing must follow the visible
-    // Yeaft filter, not a stale groupsStore.activeGroupId. Quick group
+    // Yeaft filter, not a stale sessionsStore.activeSessionId. Quick group
     // switches can briefly leave those pointers divergent; using the stale
     // pointer stamps the new message with the wrong groupId.
-    Pinia.__chatStore.yeaftActiveGroupFilter = 'grp-visible';
-    Pinia.__groupsStore.activeGroupId = 'grp-stale';
+    Pinia.__chatStore.yeaftActiveSessionFilter = 'grp-visible';
+    Pinia.__groupsStore.activeSessionId = 'grp-stale';
     api.sendMessage('hello visible group', []);
     expect(Pinia.__sentGroupChats.at(-1)).toEqual(expect.objectContaining({
       groupId: 'grp-visible',

@@ -1,16 +1,16 @@
 /**
- * GroupSelector — task-338-F3.
+ * SessionSelector — task-338-F3.
  *
  * Compact topbar dropdown that displays the active group, lists all
  * non-archived groups with member counts, allows switching via click or
  * keyboard, provides rename/delete actions via a per-row kebab (routed
- * through <GroupEditModal>), and exposes a "+ New group" entry that mounts
+ * through <SessionEditModal>), and exposes a "+ New group" entry that mounts
  * the GroupCreateWizard.
  *
  * Data wiring:
- *   - Reads `groups[]` / `activeGroupId` from `useGroupsStore()` (pure UI
+ *   - Reads `groups[]` / `activeSessionId` from `useSessionsStore()` (pure UI
  *     pointer — no persistence side-effect).
- *   - CRUD round-trips via `useChatStore().groupCrudRequest(op, data)`
+ *   - CRUD round-trips via `useChatStore().sessionCrudRequest(op, data)`
  *     which wraps the WS call in a 10 s-timeout promise.
  *
  * Visual language mirrors `yeaft-topbar-model` (see yeaft.css) — compact
@@ -25,18 +25,18 @@
  */
 
 import GroupCreateWizard from './GroupCreateWizard.js';
-import GroupEditModal from './GroupEditModal.js';
+import SessionEditModal from './SessionEditModal.js';
 
 export default {
-  name: 'GroupSelector',
-  components: { GroupCreateWizard, GroupEditModal },
+  name: 'SessionSelector',
+  components: { GroupCreateWizard, SessionEditModal },
   template: `
     <div class="yeaft-topbar-group" :class="{ 'is-open': open }">
       <div
         class="yeaft-topbar-group-trigger"
         @click.stop="toggle"
         @keydown="onTriggerKey"
-        :title="$t('yeaft.group.sidebarTitle')"
+        :title="$t('yeaft.session.sidebarTitle')"
         tabindex="0"
         role="combobox"
         aria-haspopup="listbox"
@@ -59,26 +59,26 @@ export default {
         role="listbox"
         @click.stop
       >
-        <div v-if="groupList.length === 0" class="yeaft-topbar-group-empty">
-          {{ $t('yeaft.group.empty') }}
+        <div v-if="sessionList.length === 0" class="yeaft-topbar-group-empty">
+          {{ $t('yeaft.session.empty') }}
         </div>
         <div
-          v-for="(g, idx) in groupList"
+          v-for="(g, idx) in sessionList"
           :key="g.id"
           :id="'group-option-' + g.id"
           role="option"
           class="yeaft-model-option yeaft-topbar-group-option"
           :class="{
-            active: g.id === activeGroupId,
+            active: g.id === activeSessionId,
             'is-highlighted': idx === highlightIdx,
             'is-busy': busyGroupIds.has(g.id)
           }"
-          :aria-selected="g.id === activeGroupId ? 'true' : 'false'"
+          :aria-selected="g.id === activeSessionId ? 'true' : 'false'"
           :aria-busy="busyGroupIds.has(g.id) ? 'true' : 'false'"
           @click="selectGroup(g)"
           @mouseenter="highlightIdx = idx"
         >
-          <span class="yeaft-model-check" v-if="g.id === activeGroupId">&#10003;</span>
+          <span class="yeaft-model-check" v-if="g.id === activeSessionId">&#10003;</span>
           <span class="yeaft-model-check" v-else></span>
           <span class="yeaft-model-option-label">{{ groupDisplayName(g) }}</span>
           <span class="yeaft-model-option-ctx">{{ memberLabel(g) }}</span>
@@ -97,16 +97,16 @@ export default {
             v-else
             type="button"
             class="yeaft-topbar-group-kebab"
-            :aria-label="$t('yeaft.group.moreActions')"
+            :aria-label="$t('yeaft.session.moreActions')"
             @click.stop="toggleMenu(g.id)"
           >⋯</button>
 
           <div v-if="menuFor === g.id" class="yeaft-topbar-group-menu" @click.stop>
             <button type="button" class="yeaft-topbar-group-menu-item" @click="onRename(g)">
-              {{ $t('yeaft.group.rename') }}
+              {{ $t('yeaft.session.rename') }}
             </button>
             <button type="button" class="yeaft-topbar-group-menu-item is-danger" @click="onDelete(g)">
-              {{ $t('yeaft.group.delete') }}
+              {{ $t('yeaft.session.delete') }}
             </button>
           </div>
         </div>
@@ -116,10 +116,10 @@ export default {
           type="button"
           class="yeaft-model-option yeaft-topbar-group-new"
           @click="openWizard"
-          :aria-label="$t('yeaft.group.newButtonAria')"
+          :aria-label="$t('yeaft.session.newButtonAria')"
         >
           <span class="yeaft-topbar-group-new-plus">+</span>
-          <span class="yeaft-model-option-label">{{ $t('yeaft.group.newButton') }}</span>
+          <span class="yeaft-model-option-label">{{ $t('yeaft.session.newButton') }}</span>
         </button>
       </div>
 
@@ -129,7 +129,7 @@ export default {
         @created="onCreated"
       />
 
-      <GroupEditModal
+      <SessionEditModal
         v-if="editModal.open"
         :mode="editModal.mode"
         :group="editModal.group"
@@ -150,10 +150,10 @@ export default {
     };
   },
   computed: {
-    groupsStore() {
+    sessionsStore() {
       try {
-        if (typeof window !== 'undefined' && window.Pinia?.useGroupsStore) {
-          return window.Pinia.useGroupsStore();
+        if (typeof window !== 'undefined' && window.Pinia?.useSessionsStore) {
+          return window.Pinia.useSessionsStore();
         }
       } catch (_) { /* no-pinia env */ }
       return null;
@@ -166,33 +166,33 @@ export default {
       } catch (_) { /* no-pinia env */ }
       return null;
     },
-    groupList() {
-      return this.groupsStore?.groupList || [];
+    sessionList() {
+      return this.sessionsStore?.sessionList || [];
     },
-    activeGroupId() {
-      return this.groupsStore?.activeGroupId || null;
+    activeSessionId() {
+      return this.sessionsStore?.activeSessionId || null;
     },
-    activeGroup() {
-      return this.groupsStore?.activeGroup || null;
+    activeSession() {
+      return this.sessionsStore?.activeSession || null;
     },
     activeLabel() {
-      const g = this.activeGroup;
+      const g = this.activeSession;
       if (g) return this.groupDisplayName(g);
-      if (typeof this.$t === 'function') return this.$t('yeaft.group.defaultName');
+      if (typeof this.$t === 'function') return this.$t('yeaft.session.defaultName');
       return 'Default';
     },
     activeCount() {
-      const g = this.activeGroup;
+      const g = this.activeSession;
       if (!g) return null;
       return Array.isArray(g.roster) ? g.roster.length : 0;
     },
     activeDescendantId() {
       if (!this.open) return null;
-      const list = this.groupList;
+      const list = this.sessionList;
       if (!list.length) return null;
       const idx = this.highlightIdx >= 0 && this.highlightIdx < list.length
         ? this.highlightIdx
-        : list.findIndex(g => g.id === this.activeGroupId);
+        : list.findIndex(g => g.id === this.activeSessionId);
       const g = idx >= 0 ? list[idx] : list[0];
       return g ? `group-option-${g.id}` : null;
     },
@@ -213,8 +213,8 @@ export default {
         this.highlightIdx = -1;
       } else {
         // Seed highlight on the active row.
-        const list = this.groupList;
-        const idx = list.findIndex(g => g.id === this.activeGroupId);
+        const list = this.sessionList;
+        const idx = list.findIndex(g => g.id === this.activeSessionId);
         this.highlightIdx = idx >= 0 ? idx : (list.length ? 0 : -1);
       }
     },
@@ -235,7 +235,7 @@ export default {
       if (this.open) this.closeAll();
     },
     onTriggerKey(ev) {
-      const list = this.groupList;
+      const list = this.sessionList;
       if (ev.key === 'ArrowDown') {
         ev.preventDefault();
         if (!this.open) { this.toggle(); return; }
@@ -264,20 +264,20 @@ export default {
       const roster = Array.isArray(g?.roster) ? g.roster : [];
       const n = roster.length;
       if (typeof this.$t !== 'function') return `${n} members`;
-      if (n === 0) return this.$t('yeaft.group.noMembers');
-      if (n === 1) return this.$t('yeaft.group.oneMember');
-      return this.$t('yeaft.group.membersCount', { count: n });
+      if (n === 0) return this.$t('yeaft.session.noMembers');
+      if (n === 1) return this.$t('yeaft.session.oneMember');
+      return this.$t('yeaft.session.membersCount', { count: n });
     },
     busyLabelFor(gid) {
       const op = this.busyOpByGroup[gid];
-      const key = op === 'delete' ? 'yeaft.group.deletingEllipsis' : 'yeaft.group.renamingEllipsis';
+      const key = op === 'delete' ? 'yeaft.session.deletingEllipsis' : 'yeaft.session.renamingEllipsis';
       if (typeof this.$t === 'function') return this.$t(key);
       return op === 'delete' ? 'Deleting…' : 'Renaming…';
     },
     selectGroup(g) {
       if (!g || !g.id) return;
       if (this.busyGroupIds.has(g.id)) return;     // don't select while busy
-      if (this.groupsStore) this.groupsStore.setActive(g.id);
+      if (this.sessionsStore) this.sessionsStore.setActive(g.id);
       this.closeAll();
     },
     toggleMenu(gid) {
@@ -289,8 +289,8 @@ export default {
     },
     onCreated(group) {
       this.wizardOpen = false;
-      if (group && group.id && this.groupsStore) {
-        this.groupsStore.setActive(group.id);
+      if (group && group.id && this.sessionsStore) {
+        this.sessionsStore.setActive(group.id);
       }
     },
     onRename(g) {
@@ -314,9 +314,9 @@ export default {
       this._markBusy(groupId, mode);
       try {
         if (mode === 'rename') {
-          await this.chatStore.groupCrudRequest('rename', { groupId, name });
+          await this.chatStore.sessionCrudRequest('rename', { groupId, name });
         } else if (mode === 'delete') {
-          await this.chatStore.groupCrudRequest('delete', { groupId });
+          await this.chatStore.sessionCrudRequest('delete', { groupId });
         }
       } finally {
         this._clearBusy(groupId);

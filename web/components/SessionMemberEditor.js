@@ -1,9 +1,9 @@
 /**
- * GroupMemberEditor — task-fix-group-member-editor.
+ * SessionMemberEditor — task-fix-group-member-editor.
  *
  * Modal for managing the roster of an *existing* group. Visually mirrors
  * GroupCreateWizard (reuses `.group-edit-*` and `.group-wizard-*` styles)
- * but each interaction commits immediately via `groupCrudRequest`:
+ * but each interaction commits immediately via `sessionCrudRequest`:
  *
  *   - Toggle a VP checkbox        → add_member / remove_member
  *   - Click the ★ next to a VP    → set_default_vp
@@ -23,7 +23,7 @@
 import VpAvatar from './VpAvatar.js';
 
 export default {
-  name: 'GroupMemberEditor',
+  name: 'SessionMemberEditor',
   components: { VpAvatar },
   emits: ['close'],
   props: {
@@ -36,36 +36,36 @@ export default {
       @click.self="onOverlayClick"
       role="dialog"
       aria-modal="true"
-      :aria-label="$t('yeaft.group.members.aria')"
+      :aria-label="$t('yeaft.session.members.aria')"
     >
       <div class="group-edit-modal group-wizard-modal">
         <header class="group-edit-header">
           <span class="group-edit-title">
-            {{ $t('yeaft.group.members.title', { name: groupDisplayName }) }}
+            {{ $t('yeaft.session.members.title', { name: groupDisplayName }) }}
           </span>
           <button
             class="group-edit-close"
             type="button"
             @click="requestClose"
-            :aria-label="$t('yeaft.group.members.close')"
+            :aria-label="$t('yeaft.session.members.close')"
           >×</button>
         </header>
 
         <div class="group-wizard-body group-wizard-body-single">
           <div class="group-wizard-field">
             <span class="group-wizard-field-label">
-              {{ $t('yeaft.group.wizard.roster') }}
+              {{ $t('yeaft.session.wizard.roster') }}
               <span class="group-member-editor-count">
-                · {{ $t('yeaft.group.members.memberCount', { count: roster.length }) }}
+                · {{ $t('yeaft.session.members.memberCount', { count: roster.length }) }}
               </span>
             </span>
-            <span class="group-wizard-hint">{{ $t('yeaft.group.members.defaultHint') }}</span>
+            <span class="group-wizard-hint">{{ $t('yeaft.session.members.defaultHint') }}</span>
 
             <div v-if="vpList.length === 0 && vpLibraryEmpty" class="group-wizard-empty">
-              {{ $t('yeaft.group.members.empty') }}
+              {{ $t('yeaft.session.members.empty') }}
             </div>
             <div v-else-if="vpList.length === 0" class="group-wizard-empty group-wizard-empty-loading">
-              {{ $t('yeaft.group.members.loading') }}
+              {{ $t('yeaft.session.members.loading') }}
             </div>
             <ul v-else class="group-wizard-roster-list" role="listbox" aria-multiselectable="true">
               <li
@@ -97,9 +97,9 @@ export default {
                   type="button"
                   class="group-wizard-default-star"
                   :class="{ 'is-on': defaultVpId === vp.vpId }"
-                  :aria-label="$t('yeaft.group.wizard.defaultVpHint')"
+                  :aria-label="$t('yeaft.session.wizard.defaultVpHint')"
                   :aria-pressed="defaultVpId === vp.vpId"
-                  :title="$t('yeaft.group.wizard.defaultVpHint')"
+                  :title="$t('yeaft.session.wizard.defaultVpHint')"
                   :disabled="busy || defaultVpId === vp.vpId"
                   @click.stop="setDefault(vp.vpId)"
                 >
@@ -115,7 +115,7 @@ export default {
 
           <div class="group-wizard-actions">
             <button class="group-wizard-primary-btn" type="button" @click="requestClose" :disabled="busy">
-              {{ $t('yeaft.group.members.done') }}
+              {{ $t('yeaft.session.members.done') }}
             </button>
           </div>
         </div>
@@ -146,25 +146,25 @@ export default {
       } catch (_) {}
       return null;
     },
-    groupsStore() {
+    sessionsStore() {
       try {
-        if (typeof window !== 'undefined' && window.Pinia?.useGroupsStore) {
-          return window.Pinia.useGroupsStore();
+        if (typeof window !== 'undefined' && window.Pinia?.useSessionsStore) {
+          return window.Pinia.useSessionsStore();
         }
       } catch (_) {}
       return null;
     },
     group() {
-      const gs = this.groupsStore;
-      if (!gs || !gs.groups) return null;
-      return gs.groups[this.groupId] || null;
+      const gs = this.sessionsStore;
+      if (!gs || !gs.sessions) return null;
+      return gs.sessions[this.groupId] || null;
     },
     groupDisplayName() {
       const g = this.group;
       if (!g) return '';
       // D1 seed: render localized label for the seed Default group.
       if (g.id === 'grp_default' && (g.name === 'Default' || !g.name)) {
-        return this.$t('yeaft.group.defaultName') || g.name || g.id;
+        return this.$t('yeaft.session.defaultName') || g.name || g.id;
       }
       return g.name || g.id;
     },
@@ -223,13 +223,13 @@ export default {
       this.busy = true;
       try {
         const op = checked ? 'add_member' : 'remove_member';
-        const res = await this.chat.groupCrudRequest(op, { groupId: this.groupId, vpId });
+        const res = await this.chat.sessionCrudRequest(op, { groupId: this.groupId, vpId });
         if (!res || !res.ok) {
           this.surfaceError(res);
         } else if (op === 'add_member' && !this.defaultVpId) {
           // First member becomes the default automatically — saves the user
           // a second click on the star they couldn't see yet.
-          await this.chat.groupCrudRequest('set_default_vp', { groupId: this.groupId, vpId });
+          await this.chat.sessionCrudRequest('set_default_vp', { groupId: this.groupId, vpId });
         }
       } finally {
         this.busy = false;
@@ -240,7 +240,7 @@ export default {
       this.actionError = '';
       this.busy = true;
       try {
-        const res = await this.chat.groupCrudRequest('set_default_vp', {
+        const res = await this.chat.sessionCrudRequest('set_default_vp', {
           groupId: this.groupId, vpId,
         });
         if (!res || !res.ok) this.surfaceError(res);
@@ -251,7 +251,7 @@ export default {
     surfaceError(res) {
       const code = (res && res.error && res.error.code) || 'unknown';
       const message = (res && res.error && res.error.message) || code;
-      this.actionError = this.$t('yeaft.group.members.actionFailed', { error: message });
+      this.actionError = this.$t('yeaft.session.members.actionFailed', { error: message });
     },
   },
 };

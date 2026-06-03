@@ -1,7 +1,7 @@
 /**
- * GroupSettingsModal — unified left-nav / right-pane settings dialog.
+ * SessionSettingsModal — unified left-nav / right-pane settings dialog.
  *
- * Replaces the previous standalone GroupMemberEditor. Sections:
+ * Replaces the previous standalone SessionMemberEditor. Sections:
  *   - Announcement   (CLAUDE.md-style shared system-prompt prefix)
  *   - Members        (roster checkboxes + ★ default-VP picker)
  *   - Rename         (group display name)
@@ -12,7 +12,7 @@
  * `var(--accent-blue)` so it's visually distinct from hover (lesson
  * from PR #690 review where hover/active were indistinguishable).
  *
- * All mutations route through the existing `chat.groupCrudRequest()`
+ * All mutations route through the existing `chat.sessionCrudRequest()`
  * action, which has its own pending/timeout handling. Errors surface
  * inline per section.
  *
@@ -23,7 +23,7 @@
  */
 
 export default {
-  name: 'GroupSettingsModal',
+  name: 'SessionSettingsModal',
   emits: ['close', 'open-vp-library'],
   props: {
     groupId: { type: String, required: true },
@@ -60,18 +60,18 @@ export default {
     vpStore() {
       try { return window.Pinia?.useVpStore?.() || null; } catch (_) { return null; }
     },
-    groupsStore() {
-      try { return window.Pinia?.useGroupsStore?.() || null; } catch (_) { return null; }
+    sessionsStore() {
+      try { return window.Pinia?.useSessionsStore?.() || null; } catch (_) { return null; }
     },
     group() {
-      const gs = this.groupsStore;
-      return gs && gs.groups ? (gs.groups[this.groupId] || null) : null;
+      const gs = this.sessionsStore;
+      return gs && gs.sessions ? (gs.sessions[this.groupId] || null) : null;
     },
     groupDisplayName() {
       const g = this.group;
       if (!g) return '';
       if (g.id === 'grp_default' && (g.name === 'Default' || !g.name)) {
-        return this.$t('yeaft.group.defaultName') || g.name || g.id;
+        return this.$t('yeaft.session.defaultName') || g.name || g.id;
       }
       return g.name || g.id;
     },
@@ -96,11 +96,11 @@ export default {
     },
     sections() {
       return [
-        { id: 'announcement', label: this.$t('yeaft.group.settings.nav.announcement') },
-        { id: 'members', label: this.$t('yeaft.group.settings.nav.members') },
-        { id: 'rename', label: this.$t('yeaft.group.settings.nav.rename') },
-        { id: 'memory', label: this.$t('yeaft.group.settings.nav.memory') },
-        { id: 'danger', label: this.$t('yeaft.group.settings.nav.danger') },
+        { id: 'announcement', label: this.$t('yeaft.session.settings.nav.announcement') },
+        { id: 'members', label: this.$t('yeaft.session.settings.nav.members') },
+        { id: 'rename', label: this.$t('yeaft.session.settings.nav.rename') },
+        { id: 'memory', label: this.$t('yeaft.session.settings.nav.memory') },
+        { id: 'danger', label: this.$t('yeaft.session.settings.nav.danger') },
       ];
     },
     /**
@@ -195,14 +195,14 @@ export default {
       this.announcementBusy = true;
       this.announcementError = '';
       try {
-        const res = await this.chat.groupCrudRequest('update', {
+        const res = await this.chat.sessionCrudRequest('update', {
           groupId: this.groupId,
           patch: { announcement: this.announcementDraft },
         });
         if (!res || !res.ok) {
           const code = (res && res.error && res.error.code) || 'unknown';
           const message = (res && res.error && res.error.message) || code;
-          this.announcementError = this.$t('yeaft.group.announcement.saveFailed', { error: message });
+          this.announcementError = this.$t('yeaft.session.announcement.saveFailed', { error: message });
         }
       } finally {
         this.announcementBusy = false;
@@ -215,14 +215,14 @@ export default {
       this.renameBusy = true;
       this.renameError = '';
       try {
-        const res = await this.chat.groupCrudRequest('rename', {
+        const res = await this.chat.sessionCrudRequest('rename', {
           groupId: this.groupId,
           name: next,
         });
         if (!res || !res.ok) {
           const code = (res && res.error && res.error.code) || 'unknown';
           const message = (res && res.error && res.error.message) || code;
-          this.renameError = this.$t('yeaft.group.error.unknown', { message });
+          this.renameError = this.$t('yeaft.session.error.unknown', { message });
         }
       } finally {
         this.renameBusy = false;
@@ -244,22 +244,22 @@ export default {
       this.membersError = '';
       try {
         const op = checked ? 'add_member' : 'remove_member';
-        const res = await this.chat.groupCrudRequest(op, { groupId: this.groupId, vpId });
+        const res = await this.chat.sessionCrudRequest(op, { groupId: this.groupId, vpId });
         if (!res || !res.ok) {
           const code = (res && res.error && res.error.code) || 'unknown';
           const message = (res && res.error && res.error.message) || code;
-          this.membersError = this.$t('yeaft.group.members.actionFailed', { error: message });
+          this.membersError = this.$t('yeaft.session.members.actionFailed', { error: message });
         } else if (op === 'add_member' && !this.defaultVpId) {
           // First-add convenience: promote to default automatically.
           // Surface failures inline like the primary toggle — silent
           // retries hide bugs in the agent's roster mutator.
-          const defRes = await this.chat.groupCrudRequest('set_default_vp', {
+          const defRes = await this.chat.sessionCrudRequest('set_default_vp', {
             groupId: this.groupId, vpId,
           });
           if (defRes && !defRes.ok) {
             const code2 = (defRes.error && defRes.error.code) || 'unknown';
             const message2 = (defRes.error && defRes.error.message) || code2;
-            this.membersError = this.$t('yeaft.group.members.actionFailed', { error: message2 });
+            this.membersError = this.$t('yeaft.session.members.actionFailed', { error: message2 });
           }
         }
       } finally {
@@ -271,13 +271,13 @@ export default {
       this.membersBusy = true;
       this.membersError = '';
       try {
-        const res = await this.chat.groupCrudRequest('set_default_vp', {
+        const res = await this.chat.sessionCrudRequest('set_default_vp', {
           groupId: this.groupId, vpId,
         });
         if (!res || !res.ok) {
           const code = (res && res.error && res.error.code) || 'unknown';
           const message = (res && res.error && res.error.message) || code;
-          this.membersError = this.$t('yeaft.group.members.actionFailed', { error: message });
+          this.membersError = this.$t('yeaft.session.members.actionFailed', { error: message });
         }
       } finally {
         this.membersBusy = false;
@@ -302,11 +302,11 @@ export default {
       this.deleteBusy = true;
       this.deleteError = '';
       try {
-        const res = await this.chat.groupCrudRequest('delete', { groupId: this.groupId });
+        const res = await this.chat.sessionCrudRequest('delete', { groupId: this.groupId });
         if (!res || !res.ok) {
           const code = (res && res.error && res.error.code) || 'unknown';
           const message = (res && res.error && res.error.message) || code;
-          this.deleteError = this.$t('yeaft.group.error.unknown', { message });
+          this.deleteError = this.$t('yeaft.session.error.unknown', { message });
           return;
         }
         // Success — close so the parent re-renders against the new
@@ -324,19 +324,19 @@ export default {
       @click.self="onOverlayClick"
       role="dialog"
       aria-modal="true"
-      :aria-label="$t('yeaft.group.settings.title', { name: groupDisplayName })"
+      :aria-label="$t('yeaft.session.settings.title', { name: groupDisplayName })"
     >
       <div class="group-settings-modal">
         <header class="group-settings-header">
           <span class="group-settings-title">
-            {{ $t('yeaft.group.settings.title', { name: groupDisplayName }) }}
+            {{ $t('yeaft.session.settings.title', { name: groupDisplayName }) }}
           </span>
           <button
             class="group-settings-close"
             type="button"
             @click="requestClose"
             :disabled="announcementBusy || renameBusy || membersBusy || deleteBusy"
-            :aria-label="$t('yeaft.group.settings.close')"
+            :aria-label="$t('yeaft.session.settings.close')"
           >×</button>
         </header>
 
@@ -359,12 +359,12 @@ export default {
           <section class="group-settings-pane">
             <!-- Announcement -->
             <div v-if="section === 'announcement'" class="group-settings-section">
-              <h3 class="group-settings-heading">{{ $t('yeaft.group.settings.announcement.heading') }}</h3>
-              <p class="group-settings-help">{{ $t('yeaft.group.settings.announcement.help') }}</p>
+              <h3 class="group-settings-heading">{{ $t('yeaft.session.settings.announcement.heading') }}</h3>
+              <p class="group-settings-help">{{ $t('yeaft.session.settings.announcement.help') }}</p>
               <textarea
                 class="group-settings-textarea"
                 v-model="announcementDraft"
-                :placeholder="$t('yeaft.group.announcement.placeholder')"
+                :placeholder="$t('yeaft.session.announcement.placeholder')"
                 :disabled="announcementBusy"
                 rows="10"
               ></textarea>
@@ -375,27 +375,27 @@ export default {
                   class="group-settings-primary"
                   :disabled="announcementBusy || announcementDraft === announcement"
                   @click="saveAnnouncement"
-                >{{ announcementBusy ? $t('yeaft.group.announcement.saving') : $t('common.save') }}</button>
+                >{{ announcementBusy ? $t('yeaft.session.announcement.saving') : $t('common.save') }}</button>
               </div>
             </div>
 
             <!-- Members -->
             <div v-else-if="section === 'members'" class="group-settings-section">
               <div class="group-settings-section-header">
-                <h3 class="group-settings-heading">{{ $t('yeaft.group.settings.members.heading') }}</h3>
+                <h3 class="group-settings-heading">{{ $t('yeaft.session.settings.members.heading') }}</h3>
                 <button
                   type="button"
                   class="group-settings-link-btn"
-                  :title="$t('yeaft.group.members.openLibraryHint')"
+                  :title="$t('yeaft.session.members.openLibraryHint')"
                   @click="$emit('open-vp-library')"
-                >{{ $t('yeaft.group.members.openLibrary') }}</button>
+                >{{ $t('yeaft.session.members.openLibrary') }}</button>
               </div>
-              <p class="group-settings-help">{{ $t('yeaft.group.members.defaultHint') }}</p>
+              <p class="group-settings-help">{{ $t('yeaft.session.members.defaultHint') }}</p>
               <div v-if="vpList.length === 0 && vpLibraryEmpty" class="group-settings-empty">
-                {{ $t('yeaft.group.members.empty') }}
+                {{ $t('yeaft.session.members.empty') }}
               </div>
               <div v-else-if="vpList.length === 0" class="group-settings-empty">
-                {{ $t('yeaft.group.members.loading') }}
+                {{ $t('yeaft.session.members.loading') }}
               </div>
               <ul v-else class="group-settings-roster" role="listbox" aria-multiselectable="true">
                 <li
@@ -419,7 +419,7 @@ export default {
                     type="button"
                     class="group-settings-default-star"
                     :class="{ 'is-on': defaultVpId === vp.vpId }"
-                    :title="$t('yeaft.group.wizard.defaultVpHint')"
+                    :title="$t('yeaft.session.wizard.defaultVpHint')"
                     :aria-pressed="defaultVpId === vp.vpId"
                     :disabled="membersBusy || defaultVpId === vp.vpId"
                     @click.stop="setDefault(vp.vpId)"
@@ -431,8 +431,8 @@ export default {
 
             <!-- Rename -->
             <div v-else-if="section === 'rename'" class="group-settings-section">
-              <h3 class="group-settings-heading">{{ $t('yeaft.group.settings.rename.heading') }}</h3>
-              <label class="group-settings-field-label">{{ $t('yeaft.group.settings.rename.label') }}</label>
+              <h3 class="group-settings-heading">{{ $t('yeaft.session.settings.rename.heading') }}</h3>
+              <label class="group-settings-field-label">{{ $t('yeaft.session.settings.rename.label') }}</label>
               <input
                 type="text"
                 class="group-settings-input"
@@ -447,14 +447,14 @@ export default {
                   class="group-settings-primary"
                   :disabled="renameBusy || !renameDraft.trim() || renameDraft.trim() === groupDisplayName"
                   @click="saveRename"
-                >{{ renameBusy ? $t('yeaft.group.settings.rename.saving') : $t('yeaft.group.settings.rename.save') }}</button>
+                >{{ renameBusy ? $t('yeaft.session.settings.rename.saving') : $t('yeaft.session.settings.rename.save') }}</button>
               </div>
             </div>
 
             <!-- Memory (manual dream trigger) -->
             <div v-else-if="section === 'memory'" class="group-settings-section">
-              <h3 class="group-settings-heading">{{ $t('yeaft.group.settings.memory.heading') }}</h3>
-              <p class="group-settings-help">{{ $t('yeaft.group.settings.memory.help') }}</p>
+              <h3 class="group-settings-heading">{{ $t('yeaft.session.settings.memory.heading') }}</h3>
+              <p class="group-settings-help">{{ $t('yeaft.session.settings.memory.help') }}</p>
               <div class="group-settings-actions">
                 <button
                   type="button"
@@ -462,13 +462,13 @@ export default {
                   :disabled="dreamRunning"
                   @click="runDream"
                 >{{ dreamRunning
-                    ? $t('yeaft.group.settings.memory.running')
-                    : $t('yeaft.group.settings.memory.runNow') }}</button>
+                    ? $t('yeaft.session.settings.memory.running')
+                    : $t('yeaft.session.settings.memory.runNow') }}</button>
               </div>
               <p
                 v-if="groupDreamStatus.status === 'success' && groupDreamStatus.lastRunAt"
                 class="group-settings-help group-settings-memory-status group-settings-memory-status-success"
-              >{{ $t('yeaft.group.settings.memory.lastSuccess', {
+              >{{ $t('yeaft.session.settings.memory.lastSuccess', {
                   time: formatDreamTimestamp(groupDreamStatus.lastRunAt),
                   count: groupDreamStatus.lastResult?.entriesCreated ?? 0,
               }) }}</p>
@@ -476,15 +476,15 @@ export default {
                 v-else-if="groupDreamStatus.status === 'error'"
                 class="group-settings-error group-settings-memory-status"
                 role="alert"
-              >{{ $t('yeaft.group.settings.memory.lastError', { error: groupDreamStatus.lastError || 'unknown' }) }}</p>
+              >{{ $t('yeaft.session.settings.memory.lastError', { error: groupDreamStatus.lastError || 'unknown' }) }}</p>
             </div>
 
             <!-- Danger zone -->
             <div v-else-if="section === 'danger'" class="group-settings-section group-settings-section-danger">
-              <h3 class="group-settings-heading">{{ $t('yeaft.group.settings.danger.heading') }}</h3>
-              <p class="group-settings-help">{{ $t('yeaft.group.settings.danger.deleteHelp') }}</p>
+              <h3 class="group-settings-heading">{{ $t('yeaft.session.settings.danger.heading') }}</h3>
+              <p class="group-settings-help">{{ $t('yeaft.session.settings.danger.deleteHelp') }}</p>
               <label class="group-settings-field-label">
-                {{ $t('yeaft.group.deleteConfirm', { name: groupDisplayName }) }}
+                {{ $t('yeaft.session.deleteConfirm', { name: groupDisplayName }) }}
               </label>
               <input
                 type="text"
@@ -500,7 +500,7 @@ export default {
                   class="group-settings-danger-btn"
                   :disabled="!deleteConfirmReady || deleteBusy"
                   @click="confirmDelete"
-                >{{ deleteBusy ? $t('yeaft.group.deletingEllipsis') : $t('yeaft.group.settings.danger.deleteBtn') }}</button>
+                >{{ deleteBusy ? $t('yeaft.session.deletingEllipsis') : $t('yeaft.session.settings.danger.deleteBtn') }}</button>
               </div>
             </div>
           </section>

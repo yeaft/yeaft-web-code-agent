@@ -510,7 +510,7 @@
   to { transform: rotate(360deg); }
 }
 
-/* N1: GroupEditModal — VpCrudModal-aligned overlay + card */
+/* N1: SessionEditModal — VpCrudModal-aligned overlay + card */
 .group-edit-overlay {
   position: fixed;
   inset: 0;
@@ -1464,7 +1464,7 @@
 }
 
 /* task-fix-mobile-group-settings: topbar group ⚙ — opens the unified
-   GroupSettingsModal for the active group. Visible on every viewport
+   SessionSettingsModal for the active group. Visible on every viewport
    (no hover-reveal) so touch users always have a settings entry-point.
    Sits inside `.yeaft-topbar-right` next to clear/debug/detail. */
 .yeaft-topbar-group-settings {
@@ -2242,8 +2242,8 @@
 }
 
 /* ───────────────────────────────────────────────────────────
- * GroupSettingsModal — unified left-nav / right-pane dialog
- * Replaces the previous standalone GroupMemberEditor.
+ * SessionSettingsModal — unified left-nav / right-pane dialog
+ * Replaces the previous standalone SessionMemberEditor.
  * Sections: announcement / members / rename / danger.
  * ─────────────────────────────────────────────────────────── */
 

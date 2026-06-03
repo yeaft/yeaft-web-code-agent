@@ -29,7 +29,7 @@ function mkStore() {
     yeaftConversationId: 'yeaft-conv',
     activeVpTurns: {},
     vpStatuses: {},
-    _groupCrudPending: new Map(),
+    _sessionCrudPending: new Map(),
     yeaftVpTyping: {},
     connectionState: 'connected',
     messagesMap: {},
