@@ -1717,6 +1717,32 @@ function chatErrorPayload(err) {
   };
 }
 
+/**
+ * Build the vpPersona payload threaded into engine.query so the worker
+ * system prompt carries the VP's identity/role/persona/planInstruction.
+ * Returns null on miss — callers treat that as "use generic prompt".
+ * Shared by handleYeaftChatSend and the group fan-out path so the field
+ * set stays in lockstep.
+ */
+function buildVpPersona(vpId) {
+  if (!vpId) return null;
+  try {
+    const vp = readVp(vpId);
+    if (!vp) return null;
+    return {
+      vpId,
+      displayName: vp.displayName || vpId,
+      displayNameZh: vp.displayNameZh || '',
+      role: vp.role || '',
+      roleZh: vp.roleZh || '',
+      persona: vp.persona || '',
+      planInstruction: typeof vp.planInstruction === 'string' ? vp.planInstruction : '',
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function handleYeaftListChats(msg) {
   const requestId = msg && msg.requestId;
   try {
@@ -1743,6 +1769,12 @@ export function handleYeaftCreateChat(msg) {
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     if (!yeaftDir) throw new Error('no yeaft directory configured');
+    // Fail loud at create time if the requested VP (default: omni) is
+    // not installed — otherwise the chat would silently degrade to a
+    // generic prompt at first send.
+    if (!buildVpPersona(vpId)) {
+      throw new Error(`VP '${vpId}' is not installed`);
+    }
     const root = chatsRootFor(yeaftDir);
     const chatId = (explicitId && String(explicitId).trim())
       || `chat_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -1966,21 +1998,7 @@ export async function handleYeaftChatSend(msg) {
     // Load the VP persona (defaults to omni) so the engine's worker
     // prompt has the right identity/role/persona blocks. Without this,
     // chat mode runs with a generic system prompt instead of Omni.
-    let vpPersona = null;
-    try {
-      const vp = readVp(vpId);
-      if (vp) {
-        vpPersona = {
-          vpId,
-          displayName: vp.displayName || vpId,
-          displayNameZh: vp.displayNameZh || '',
-          role: vp.role || '',
-          roleZh: vp.roleZh || '',
-          persona: vp.persona || '',
-          planInstruction: typeof vp.planInstruction === 'string' ? vp.planInstruction : '',
-        };
-      }
-    } catch { /* best-effort */ }
+    const vpPersona = buildVpPersona(vpId);
 
     for await (const event of eng.query({
       prompt: text,
@@ -2789,23 +2807,8 @@ export function buildVpQueryOpts({ vpId, groupCoordinator, groupId, envelope, th
   if (groupMeta && typeof groupMeta.workDir === 'string' && groupMeta.workDir.trim()) {
     out.workDir = groupMeta.workDir.trim();
   }
-  try {
-    const vp = readVp(resolvedVpId);
-    if (vp) {
-      out.vpPersona = {
-        vpId: resolvedVpId,
-        displayName: vp.displayName || resolvedVpId,
-        displayNameZh: vp.displayNameZh || '',
-        role: vp.role || '',
-        roleZh: vp.roleZh || '',
-        persona: vp.persona || '',
-        // Optional per-VP planning style for the `StartPlan` tool. Empty
-        // string means "fall back to the default template" — the tool
-        // handles the lookup so callers stay ignorant of the default.
-        planInstruction: typeof vp.planInstruction === 'string' ? vp.planInstruction : '',
-      };
-    }
-  } catch { /* persona load is best-effort */ }
+  const persona = buildVpPersona(resolvedVpId);
+  if (persona) out.vpPersona = persona;
   if (groupCoordinator && typeof groupCoordinator.ingest === 'function') {
     try {
       out.router = createRouter({ coordinator: groupCoordinator });
