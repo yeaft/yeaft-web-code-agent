@@ -20,10 +20,11 @@ const DAY_MS = 24 * HOUR_MS;
 
 import GroupCreateWizard from './GroupCreateWizard.js';
 import ChatCreateModal from './ChatCreateModal.js';
+import SessionCreateModal from './SessionCreateModal.js';
 
 export default {
   name: 'YeaftSidebar',
-  components: { GroupCreateWizard, ChatCreateModal },
+  components: { GroupCreateWizard, ChatCreateModal, SessionCreateModal },
   emits: ['select-group', 'select-chat', 'toggle-sidebar', 'back', 'open-settings', 'open-group-settings'],
   template: `
     <aside class="yeaft-sidebar" :class="{ collapsed: collapsed }">
@@ -66,108 +67,83 @@ export default {
       </div>
 
       <div class="us-scroll">
-        <!-- Yeaft Chats section (1:1 single-VP). Sits above Groups so the
-             two creation entry points (+ New chat / + New group) are
-             clearly distinct in the same column. -->
-        <section class="us-group us-group-chats" :aria-label="$t('yeaft.sidebar.chatsHeader')">
+        <!-- Phase 3: unified "Sessions" surface. Chats (legacy 1:1) and
+             Groups (multi-VP) both render as session rows. A single
+             "+ New session" button opens SessionCreateModal. The
+             chat/group distinction is now an internal storage detail. -->
+        <section class="us-group us-group-sessions" :aria-label="$t('yeaft.session.title')">
           <div class="us-group-header us-group-header-tab">
             <svg class="us-group-header-icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>
-            <span class="us-group-label">{{ $t('yeaft.sidebar.chatsHeader') }}</span>
-            <button type="button" class="us-group-new-btn"
-              :title="$t('yeaft.sidebar.newChat')"
-              :aria-label="$t('yeaft.sidebar.newChat')"
-              @click.stop="onOpenChatWizard">
-              <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-            </button>
-          </div>
-          <div class="us-group-body" v-if="chatList.length > 0">
-            <div v-for="c in chatList" :key="c.id"
-              class="us-row us-chat-row"
-              :class="{ selected: c.id === activeChatId }"
-              @click="onSelectChat(c)">
-              <span class="us-dot us-dot-chat"></span>
-              <span class="us-row-name">{{ c.displayName || c.id }}</span>
-            </div>
-          </div>
-        </section>
-        <!-- task-yeaft-group-ui-cleanup: header now mirrors Chat sidebar
-             ".session-tab" — section-icon + label + create (+) button, no
-             count. Visible even when groupList is empty so the user always
-             has a one-click create entry. -->
-        <section class="us-group us-group-groups" :aria-label="$t('yeaft.group.sidebarAria')">
-          <div class="us-group-header us-group-header-tab">
-            <svg class="us-group-header-icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
-            <span class="us-group-label">{{ $t('yeaft.group.sidebarTitle') }}</span>
+            <span class="us-group-label">{{ $t('yeaft.session.title') }}</span>
             <button
               type="button"
               class="us-group-new-btn"
-              :title="$t('yeaft.group.newButtonAria')"
-              :aria-label="$t('yeaft.group.newButtonAria')"
-              @click.stop="onOpenGroupWizard"
+              :title="$t('yeaft.session.new')"
+              :aria-label="$t('yeaft.session.new')"
+              @click.stop="onOpenSessionWizard"
             >
               <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
             </button>
           </div>
-          <div class="us-group-body" v-if="groupList.length > 0">
-            <div
-              v-for="g in groupList"
-              :key="g.id"
-              class="us-row us-group-row"
-              :class="{
-                selected: g.id === activeGroupId,
-                'is-empty': !g.roster || g.roster.length === 0,
-                'is-default-empty': g.id === 'grp_default' && (!g.roster || g.roster.length === 0),
-              }"
-              @click="onSelectGroup(g)"
-              @contextmenu.prevent="openGroupMenu(g, $event)"
-            >
-              <span class="us-dot us-dot-group"></span>
-              <span class="us-row-name">{{ groupDisplayName(g) }}</span>
-              <!-- feat-group-row-cleanup: the inline "N 位成员" suffix and
-                   the standalone ⚙ gear button were removed. The row now
-                   shows just the group name; all configuration lives
-                   inside the kebab menu (manage members / announcement /
-                   rename / delete) so the dual-button affordance is no
-                   longer ambiguous. -->
-              <button
-                type="button"
-                class="us-group-row-kebab"
-                :title="$t('yeaft.group.moreActions')"
-                :aria-label="$t('yeaft.group.moreActions')"
-                aria-haspopup="menu"
-                :aria-expanded="groupMenu.open && groupMenu.groupId === g.id ? 'true' : 'false'"
-                @click.stop="openGroupMenu(g, $event)"
-              >⋯</button>
-              <div v-if="groupMenu.open && groupMenu.groupId === g.id" class="us-group-row-menu" role="menu" @click.stop>
-                <button type="button" role="menuitem" class="us-group-row-menu-item" @click="openGroupSettingsFromMenu(g, 'members')">
-                  {{ $t('yeaft.group.manageMembers') }}
-                </button>
-                <button type="button" role="menuitem" class="us-group-row-menu-item" @click="openGroupSettingsFromMenu(g, 'announcement')">
-                  {{ $t('yeaft.group.settings.nav.announcement') }}
-                </button>
-                <button type="button" role="menuitem" class="us-group-row-menu-item" @click="openGroupSettingsFromMenu(g, 'rename')">
-                  {{ $t('yeaft.group.rename') }}
-                </button>
-                <button type="button" role="menuitem" class="us-group-row-menu-item us-group-row-menu-danger" @click="openGroupSettingsFromMenu(g, 'danger')">
-                  {{ $t('yeaft.group.delete') }}
-                </button>
+          <div class="us-group-body" v-if="sessionList.length > 0">
+            <template v-for="s in sessionList" :key="s.kind + ':' + s.id">
+              <div v-if="s.kind === 'chat'"
+                class="us-row us-chat-row us-session-row"
+                :class="{ selected: s.id === activeChatId }"
+                @click="onSelectChat(s.raw)">
+                <span class="us-dot us-dot-chat"></span>
+                <span class="us-row-name">{{ s.raw.displayName || s.id }}</span>
               </div>
-            </div>
+              <div v-else
+                class="us-row us-group-row us-session-row"
+                :class="{
+                  selected: s.id === activeGroupId,
+                  'is-empty': !s.raw.roster || s.raw.roster.length === 0,
+                  'is-default-empty': s.id === 'grp_default' && (!s.raw.roster || s.raw.roster.length === 0),
+                }"
+                @click="onSelectGroup(s.raw)"
+                @contextmenu.prevent="openGroupMenu(s.raw, $event)"
+              >
+                <span class="us-dot us-dot-group"></span>
+                <span class="us-row-name">{{ groupDisplayName(s.raw) }}</span>
+                <button
+                  type="button"
+                  class="us-group-row-kebab"
+                  :title="$t('yeaft.group.moreActions')"
+                  :aria-label="$t('yeaft.group.moreActions')"
+                  aria-haspopup="menu"
+                  :aria-expanded="groupMenu.open && groupMenu.groupId === s.id ? 'true' : 'false'"
+                  @click.stop="openGroupMenu(s.raw, $event)"
+                >⋯</button>
+                <div v-if="groupMenu.open && groupMenu.groupId === s.id" class="us-group-row-menu" role="menu" @click.stop>
+                  <button type="button" role="menuitem" class="us-group-row-menu-item" @click="openGroupSettingsFromMenu(s.raw, 'members')">
+                    {{ $t('yeaft.group.manageMembers') }}
+                  </button>
+                  <button type="button" role="menuitem" class="us-group-row-menu-item" @click="openGroupSettingsFromMenu(s.raw, 'announcement')">
+                    {{ $t('yeaft.group.settings.nav.announcement') }}
+                  </button>
+                  <button type="button" role="menuitem" class="us-group-row-menu-item" @click="openGroupSettingsFromMenu(s.raw, 'rename')">
+                    {{ $t('yeaft.group.rename') }}
+                  </button>
+                  <button type="button" role="menuitem" class="us-group-row-menu-item us-group-row-menu-danger" @click="openGroupSettingsFromMenu(s.raw, 'danger')">
+                    {{ $t('yeaft.group.delete') }}
+                  </button>
+                </div>
+              </div>
+            </template>
           </div>
         </section>
-
-        <!-- task-yeaft-group-ui-cleanup: standalone empty-state button
-             retired — the section header now always renders with a "+"
-             create button, even when groupList is empty. -->
-
-        <!-- H2.f.6: Active / Idle / Archived thread sections removed. -->
-
-        <!-- task-339-F1: Groups section moved to top of sidebar (see above). -->
       </div>
 
       <!-- H2.f.6: merge target picker + irreversible confirm dialog removed. -->
 
-      <!-- task-334m: Create-group wizard (inline, modal overlay). -->
+      <!-- Phase 3: unified session create modal. -->
+      <SessionCreateModal
+        v-if="sessionWizardOpen"
+        @close="sessionWizardOpen = false"
+        @created="onSessionCreated"
+      />
+      <!-- Legacy creators retained until Phase 4 cleanup (not surfaced in UI). -->
       <GroupCreateWizard
         v-if="groupWizardOpen"
         @close="groupWizardOpen = false"
@@ -205,6 +181,7 @@ export default {
       // task-334m: group-create wizard visibility.
       groupWizardOpen: false,
       chatWizardOpen: false,
+      sessionWizardOpen: false,
       groupsOpen: true,
       // task-yeaft-group-editor: per-row action menu only — the rename
       // and delete modals have been folded into the unified
@@ -254,6 +231,20 @@ export default {
     },
     groupList() { return this.groupsStore?.groupList || []; },
     activeGroupId() { return this.groupsStore?.activeGroupId || null; },
+    // Phase 3: merge legacy chats + groups into one unified Session list.
+    // Render order: groups (multi-VP) above chats (legacy 1:1) so the
+    // primary surface is the canonical session type. Inside Phase 4 the
+    // chat branch will disappear entirely.
+    sessionList() {
+      const out = [];
+      for (const g of (this.groupList || [])) {
+        if (g && g.id) out.push({ kind: 'group', id: g.id, raw: g });
+      }
+      for (const c of (this.chatList || [])) {
+        if (c && c.id) out.push({ kind: 'chat', id: c.id, raw: c });
+      }
+      return out;
+    },
     chatList() {
       const s = this.chatStore || this.store;
       return (s && Array.isArray(s.yeaftChats)) ? s.yeaftChats : [];
@@ -352,6 +343,11 @@ export default {
     onOpenGroupWizard() { this.groupWizardOpen = true; },
     onCloseGroupWizard() { this.groupWizardOpen = false; },
     onOpenChatWizard() { this.chatWizardOpen = true; },
+    // Phase 3: unified session create — single entry point users see.
+    onOpenSessionWizard() { this.sessionWizardOpen = true; },
+    onSessionCreated(_group) {
+      // groups store auto-activates via applyCrudResult; modal closes itself.
+    },
     onSelectChat(c) {
       if (!c || !c.id) return;
       const s = this.chatStore || this.store;
