@@ -18,13 +18,11 @@
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
-import GroupCreateWizard from './GroupCreateWizard.js';
-import ChatCreateModal from './ChatCreateModal.js';
 import SessionCreateModal from './SessionCreateModal.js';
 
 export default {
   name: 'YeaftSidebar',
-  components: { GroupCreateWizard, ChatCreateModal, SessionCreateModal },
+  components: { SessionCreateModal },
   emits: ['select-group', 'select-chat', 'toggle-sidebar', 'back', 'open-settings', 'open-group-settings'],
   template: `
     <aside class="yeaft-sidebar" :class="{ collapsed: collapsed }">
@@ -87,14 +85,7 @@ export default {
           </div>
           <div class="us-group-body" v-if="sessionList.length > 0">
             <template v-for="s in sessionList" :key="s.kind + ':' + s.id">
-              <div v-if="s.kind === 'chat'"
-                class="us-row us-chat-row us-session-row"
-                :class="{ selected: s.id === activeChatId }"
-                @click="onSelectChat(s.raw)">
-                <span class="us-dot us-dot-chat"></span>
-                <span class="us-row-name">{{ s.raw.displayName || s.id }}</span>
-              </div>
-              <div v-else
+              <div
                 class="us-row us-group-row us-session-row"
                 :class="{
                   selected: s.id === activeGroupId,
@@ -143,17 +134,6 @@ export default {
         @close="sessionWizardOpen = false"
         @created="onSessionCreated"
       />
-      <!-- Legacy creators retained until Phase 4 cleanup (not surfaced in UI). -->
-      <GroupCreateWizard
-        v-if="groupWizardOpen"
-        @close="groupWizardOpen = false"
-        @created="onGroupCreated"
-      />
-      <ChatCreateModal
-        v-if="chatWizardOpen"
-        @close="chatWizardOpen = false"
-        @created="closeChatModal"
-      />
 
       <!-- task-yeaft-group-editor: Per-group rename/delete formerly lived
            in inline overlays here. They've been folded into the unified
@@ -179,8 +159,6 @@ export default {
     return {
       now: Date.now(),
       // task-334m: group-create wizard visibility.
-      groupWizardOpen: false,
-      chatWizardOpen: false,
       sessionWizardOpen: false,
       groupsOpen: true,
       // task-yeaft-group-editor: per-row action menu only — the rename
@@ -202,11 +180,6 @@ export default {
           .catch(() => {});
       }
     } catch (_) { /* no-fetch test env */ }
-    // Initial chat list load. Guarded — tests without a chat store skip.
-    try {
-      const s = this.chatStore || this.store;
-      if (s && typeof s.listYeaftChats === 'function' && s.yeaftAgentId) s.listYeaftChats();
-    } catch (_) {}
   },
   computed: {
     // Resolve the Pinia store lazily. Guarded so unit tests that mount
@@ -231,27 +204,13 @@ export default {
     },
     groupList() { return this.groupsStore?.groupList || []; },
     activeGroupId() { return this.groupsStore?.activeGroupId || null; },
-    // Phase 3: merge legacy chats + groups into one unified Session list.
-    // Render order: groups (multi-VP) above chats (legacy 1:1) so the
-    // primary surface is the canonical session type. Inside Phase 4 the
-    // chat branch will disappear entirely.
+    // Phase 4: chat container removed. Session list is just groups now.
     sessionList() {
       const out = [];
       for (const g of (this.groupList || [])) {
         if (g && g.id) out.push({ kind: 'group', id: g.id, raw: g });
       }
-      for (const c of (this.chatList || [])) {
-        if (c && c.id) out.push({ kind: 'chat', id: c.id, raw: c });
-      }
       return out;
-    },
-    chatList() {
-      const s = this.chatStore || this.store;
-      return (s && Array.isArray(s.yeaftChats)) ? s.yeaftChats : [];
-    },
-    activeChatId() {
-      const s = this.chatStore || this.store;
-      return s?.yeaftActiveChatId || null;
     },
     chatStore() {
       // Needed for `groupCrudRequest`. Reuses the same guarded lookup
@@ -340,27 +299,13 @@ export default {
       if (s && typeof s.toggleWorkbench === 'function') s.toggleWorkbench();
     },
     // task-334m: group-wizard + selection handlers.
-    onOpenGroupWizard() { this.groupWizardOpen = true; },
-    onCloseGroupWizard() { this.groupWizardOpen = false; },
-    onOpenChatWizard() { this.chatWizardOpen = true; },
+    onGroupCreated(_group) {
+      // Store auto-activates via applyCrudResult; modal closes itself.
+    },
     // Phase 3: unified session create — single entry point users see.
     onOpenSessionWizard() { this.sessionWizardOpen = true; },
     onSessionCreated(_group) {
       // groups store auto-activates via applyCrudResult; modal closes itself.
-    },
-    onSelectChat(c) {
-      if (!c || !c.id) return;
-      const s = this.chatStore || this.store;
-      if (s && typeof s.setActiveYeaftChat === 'function') s.setActiveYeaftChat(c.id);
-      this.$emit('select-chat', c);
-    },
-    onChatCreated(_chat) {
-      // Store auto-activates via chat_crud_result handler; emit kept as a
-      // bridge so callers (modal) can simply emit('created') without
-      // worrying about local handler wiring.
-    },
-    closeChatModal() {
-      this.chatWizardOpen = false;
     },
     onSelectGroup(g) {
       if (!g || !g.id) return;
@@ -382,9 +327,6 @@ export default {
     openGroupSettingsFromMenu(g, section) {
       this.groupMenu = { open: false, groupId: null };
       this.openGroupSettings(g, section);
-    },
-    onGroupCreated(_group) {
-      // Store auto-activates via applyCrudResult; wizard closes itself.
     },
     groupDisplayName(g) {
       if (!g) return '';

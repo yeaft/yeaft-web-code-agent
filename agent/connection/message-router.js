@@ -37,7 +37,7 @@ import { handleRestartAgent, handleUpgradeAgent } from './upgrade.js';
 import { loadMcpServers, updateMcpConfig } from '../mcp.js';
 import { getLlmConfig, updateLlmConfig, getYeaftSettings, updateYeaftSettings, getSearchSettings, updateSearchSettings, fetchTavilyUsage } from '../yeaft/config-api.js';
 import { fetchModelsDev } from '../yeaft/llm/models-dev.js';
-import { handleYeaftGroupChat, handleYeaftModeSwitch, handleYeaftModelSwitch, resetYeaftSession, handleYeaftLoadHistory, handleYeaftLoadMoreHistory, handleYeaftAbortThread, handleYeaftAbortAll, handleYeaftAbortTurn, handleYeaftVpSubscribe, handleYeaftVpCreate, handleYeaftVpUpdate, handleYeaftVpDelete, handleYeaftVpRead, handleYeaftListGroups, handleYeaftCreateGroup, handleYeaftRenameGroup, handleYeaftUpdateGroup, handleYeaftUpdateGroupConfig, handleYeaftArchiveGroup, handleYeaftDeleteGroup, handleYeaftAddMember, handleYeaftRemoveMember, handleYeaftSetDefaultVp, handleYeaftChatSend, handleYeaftListChats, handleYeaftCreateChat, handleYeaftRenameChat, handleYeaftArchiveChat, handleYeaftDeleteChat, handleYeaftDreamTrigger, handleYeaftFetchToolStats, handleYeaftFetchDebugHistory, broadcastLanguageChange } from '../yeaft/web-bridge.js';
+import { handleYeaftGroupChat, handleYeaftModeSwitch, handleYeaftModelSwitch, resetYeaftSession, handleYeaftLoadHistory, handleYeaftLoadMoreHistory, handleYeaftAbortThread, handleYeaftAbortAll, handleYeaftAbortTurn, handleYeaftVpSubscribe, handleYeaftVpCreate, handleYeaftVpUpdate, handleYeaftVpDelete, handleYeaftVpRead, handleYeaftListGroups, handleYeaftCreateGroup, handleYeaftRenameGroup, handleYeaftUpdateGroup, handleYeaftUpdateGroupConfig, handleYeaftArchiveGroup, handleYeaftDeleteGroup, handleYeaftAddMember, handleYeaftRemoveMember, handleYeaftSetDefaultVp, handleYeaftDreamTrigger, handleYeaftFetchToolStats, handleYeaftFetchDebugHistory, broadcastLanguageChange } from '../yeaft/web-bridge.js';
 
 export async function handleMessage(msg) {
   switch (msg.type) {
@@ -563,26 +563,6 @@ export async function handleMessage(msg) {
     // Phase 2: session_send is just group_chat (N≥1 fan-out already works).
     case 'yeaft_session_send':
       handleYeaftGroupChat(msg);
-      break;
-
-    // Yeaft Chat Mode (1:1 single-VP) — separate from group fan-out.
-    case 'yeaft_chat_send':
-      await handleYeaftChatSend(msg);
-      break;
-    case 'yeaft_list_chats':
-      await handleYeaftListChats(msg);
-      break;
-    case 'yeaft_create_chat':
-      await handleYeaftCreateChat(msg);
-      break;
-    case 'yeaft_rename_chat':
-      await handleYeaftRenameChat(msg);
-      break;
-    case 'yeaft_archive_chat':
-      await handleYeaftArchiveChat(msg);
-      break;
-    case 'yeaft_delete_chat':
-      await handleYeaftDeleteChat(msg);
       break;
 
     // wave-6b: manual dream trigger from VP detail page

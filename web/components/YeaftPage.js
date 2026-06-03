@@ -378,12 +378,9 @@ export default {
     // Yeaft Chat Mode (1:1): clicking a chat row narrows the main pane to
     // that chat. Setting an active chat also clears any group filter via
     // the store, so the two modes are mutually exclusive in the main pane.
-    const onSelectChat = (c) => {
-      const id = c && c.id ? c.id : null;
-      if (!id) return;
-      store.setActiveYeaftChat(id);
-      if (store.yeaftActiveVpDetailId) store.leaveVpDetailView();
-      if (isMobile.value) sidebarCollapsed.value = true;
+    const onSelectChat = (_c) => {
+      // Phase 4: chat container removed. Sidebar no longer emits select-chat;
+      // handler retained as a defensive no-op for any straggler emit.
     };
 
     // task-334-ui-c: exit the VP-detail view back to prior layer.
@@ -575,13 +572,6 @@ export default {
       // store helper strips `fileId` shape for the wire and keeps the
       // preview/name/mimeType on the local message render.
       const attachments = Array.isArray(attachmentInfos) ? attachmentInfos : undefined;
-      // Chat Mode (1:1) takes precedence over group: if a chat is active,
-      // route through the chat send path which targets a single VP and
-      // skips group fan-out entirely.
-      if (store.yeaftActiveChatId) {
-        store.sendYeaftChat({ chatId: store.yeaftActiveChatId, text, attachments });
-        return;
-      }
       store.sendYeaftGroupChat({ groupId, text, mentions, attachments });
     };
 
