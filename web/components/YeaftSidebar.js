@@ -45,12 +45,26 @@ export default {
         </button>
       </div>
 
-      <!-- task-341: sidebar header row — agent identifier + collapse/back/workbench. -->
+      <!-- Sidebar header row — agent dropdown (parity with ChatPage) +
+           mode toggle / collapse / workbench. -->
       <div class="us-header-row">
-        <div class="us-brand" :title="agentTitleText">
-          <span class="us-status-dot" :class="{ online: currentAgentOnline }"></span>
-          <span class="us-brand-label">{{ currentAgentName }}</span>
-          <span v-if="currentAgentLatency != null" class="us-latency" :class="getLatencyClass(currentAgentLatency)">{{ currentAgentLatency }}ms</span>
+        <div class="sidebar-brand agent-dropdown-trigger" @click.stop="agentManagerOpen = !agentManagerOpen" :title="tr('chat.agent.manage', 'Manage agents')">
+          <span class="status-dot" :class="{ online: onlineAgentCount > 0 }"></span>
+          <span class="brand-label">{{ onlineAgentCount }} Agent</span>
+          <span class="latency-indicator" v-if="currentAgentLatency != null" :class="getLatencyClass(currentAgentLatency)" :title="currentAgentLatency + 'ms'">
+            <svg viewBox="0 0 24 24" width="10" height="10"><circle cx="12" cy="12" r="5" fill="currentColor"/></svg>
+            {{ currentAgentLatency }}ms
+          </span>
+          <svg class="dropdown-chevron" :class="{ open: agentManagerOpen }" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z"/></svg>
+          <div class="agent-dropdown" v-if="agentManagerOpen" @click.stop>
+            <div v-for="agent in onlineAgents" :key="agent.id" class="agent-dropdown-item">
+              <span class="status-dot" :class="{ online: agent.online }"></span>
+              <span class="agent-dropdown-name">{{ agent.name }}</span>
+              <span class="agent-dropdown-version" v-if="agent.version">v{{ agent.version }}</span>
+              <span class="agent-dropdown-latency" v-if="agent.online && agent.latency" :class="getLatencyClass(agent.latency)">{{ agent.latency }}ms</span>
+            </div>
+            <div v-if="onlineAgents.length === 0" class="agent-dropdown-empty">{{ tr('chat.agent.none', 'No agents online') }}</div>
+          </div>
         </div>
         <div class="us-header-actions">
           <SidebarModeToggle view="yeaft" @flip="onModeFlip" />
@@ -176,11 +190,20 @@ export default {
       // and delete modals have been folded into the unified
       // SessionSettingsModal owned by YeaftPage.
       groupMenu: { open: false, groupId: null },
+      // Agent dropdown open state (parity with ChatPage).
+      agentManagerOpen: false,
       // task-342: server version shown in sidebar-bottom (mirrors ChatPage).
       serverVersion: '',
     };
   },
   created() {
+    // Outside-click closes the agent dropdown (parity with ChatPage).
+    this._onDocClickAgent = (e) => {
+      if (!this.agentManagerOpen) return;
+      if (e.target && e.target.closest && (e.target.closest('.agent-dropdown-trigger') || e.target.closest('.agent-dropdown'))) return;
+      this.agentManagerOpen = false;
+    };
+    if (typeof document !== 'undefined') document.addEventListener('click', this._onDocClickAgent, true);
     // task-342: lazily fetch /api/version once; silently swallow failures
     // (unit tests run without a server).
     try {
@@ -191,6 +214,11 @@ export default {
           .catch(() => {});
       }
     } catch (_) { /* no-fetch test env */ }
+  },
+  beforeUnmount() {
+    if (this._onDocClickAgent && typeof document !== 'undefined') {
+      document.removeEventListener('click', this._onDocClickAgent, true);
+    }
   },
   computed: {
     // Resolve the Pinia store lazily. Guarded so unit tests that mount

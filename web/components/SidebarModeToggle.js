@@ -59,16 +59,6 @@ export default {
       @keydown="onKeydown"
     >
       <span class="mode-toggle-track">
-        <span class="mode-toggle-label left" :class="{ active: !isYeaft }">
-          <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true">
-            <path fill="currentColor" d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/>
-          </svg>
-        </span>
-        <span class="mode-toggle-label right" :class="{ active: isYeaft }">
-          <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true">
-            <path fill="currentColor" d="M7 2v11h3v9l7-12h-4l4-8z"/>
-          </svg>
-        </span>
         <span class="mode-toggle-thumb"></span>
       </span>
     </button>
