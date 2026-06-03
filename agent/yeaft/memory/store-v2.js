@@ -62,9 +62,11 @@ export const SCOPE_KINDS = Object.freeze([
   'group-vp',
   'group-feature',
   'group-topic',
+  'chat',
+  'chat-vp',
 ]);
 
-/** @typedef {'user'|'group'|'group-user'|'group-vp'|'group-feature'|'group-topic'} ScopeKind */
+/** @typedef {'user'|'group'|'group-user'|'group-vp'|'group-feature'|'group-topic'|'chat'|'chat-vp'} ScopeKind */
 
 /**
  * @typedef {Object} Scope
@@ -121,6 +123,18 @@ export function scopeDir(scope) {
       }
       for (const s of segs) assertSafeSegment(s, 'group-topic.path');
       return `group/${scope.groupId}/topic/${segs.join('/')}`;
+    }
+    case 'chat': {
+      if (!scope.id) throw new Error('scopeDir: chat scope requires id');
+      assertSafeSegment(scope.id, 'chat.id');
+      return `chat/${scope.id}`;
+    }
+    case 'chat-vp': {
+      if (!scope.chatId) throw new Error('scopeDir: chat-vp scope requires chatId');
+      if (!scope.id) throw new Error('scopeDir: chat-vp scope requires id');
+      assertSafeSegment(scope.chatId, 'chat-vp.chatId');
+      assertSafeSegment(scope.id, 'chat-vp.id');
+      return `chat/${scope.chatId}/vp/${scope.id}`;
     }
     default:
       throw new Error(`scopeDir: unknown kind ${JSON.stringify(scope.kind)}`);
@@ -187,7 +201,7 @@ export function isValidTopic(scope) {
  */
 export function isVpForeign(relPath, currentVpId) {
   if (!relPath || !currentVpId) return false;
-  const m = /^group\/[^/]+\/vp\/([^/]+)(?:\/|$)/.exec(relPath);
+  const m = /^(?:group|chat)\/[^/]+\/vp\/([^/]+)(?:\/|$)/.exec(relPath);
   if (!m) return false;
   return m[1] !== currentVpId;
 }
@@ -522,6 +536,31 @@ export async function listScopes(opts = {}) {
           out.push({ kind: 'group-topic', groupId: g, path: [l1] });
         }
       }
+    }
+  }
+
+  // chat/<c>/  and  chat/<c>/vp/<v>/
+  const chatRoot = join(root, 'chat');
+  let chats;
+  try { chats = await fsp.readdir(chatRoot, { withFileTypes: true }); }
+  catch (err) {
+    if (err && err.code === 'ENOENT') chats = [];
+    else throw err;
+  }
+  for (const cent of chats) {
+    if (!cent.isDirectory()) continue;
+    if (cent.name.startsWith('.')) continue;
+    if (!isSafeId(cent.name)) continue;
+    const c = cent.name;
+    out.push({ kind: 'chat', id: c });
+    const vpDir = join(chatRoot, c, 'vp');
+    let vps;
+    try { vps = await fsp.readdir(vpDir, { withFileTypes: true }); }
+    catch { vps = []; }
+    for (const vent of vps) {
+      if (!vent.isDirectory()) continue;
+      if (!isSafeId(vent.name)) continue;
+      out.push({ kind: 'chat-vp', chatId: c, id: vent.name });
     }
   }
 

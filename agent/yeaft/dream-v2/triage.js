@@ -58,12 +58,27 @@ function triageSystem(language) {
  * @param {{ groupId: string, messages: Array<object> }} args
  * @returns {Array<{ kind: 'update', scope: string }>}
  */
-export function applyHardRules({ groupId, messages }) {
+export function applyHardRules({ groupId, chatId, messages }) {
   const out = new Map();
   const add = (scope) => { if (!out.has(scope)) out.set(scope, { kind: 'update', scope }); };
 
   // global user is always in.
   add('user');
+
+  // chat path takes precedence: chat sessions have no group context.
+  if (chatId) {
+    add(`chat/${chatId}`);
+    for (const m of (messages || [])) {
+      if (!m || typeof m !== 'object') continue;
+      if (m.role === 'assistant') {
+        const vp = m.vpId || (m.author && /^vp:(.+)$/.exec(m.author)?.[1]);
+        if (vp && /^[A-Za-z0-9_\-.一-鿿]+$/.test(vp)) {
+          add(`chat/${chatId}/vp/${vp}`);
+        }
+      }
+    }
+    return Array.from(out.values());
+  }
 
   // active group + its per-group user layer, except the virtual _no-group bucket.
   if (groupId && groupId !== '_no-group') {

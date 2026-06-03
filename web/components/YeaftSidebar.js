@@ -19,11 +19,12 @@ const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
 import GroupCreateWizard from './GroupCreateWizard.js';
+import ChatCreateModal from './ChatCreateModal.js';
 
 export default {
   name: 'YeaftSidebar',
-  components: { GroupCreateWizard },
-  emits: ['select-group', 'toggle-sidebar', 'back', 'open-settings', 'open-group-settings'],
+  components: { GroupCreateWizard, ChatCreateModal },
+  emits: ['select-group', 'select-chat', 'toggle-sidebar', 'back', 'open-settings', 'open-group-settings'],
   template: `
     <aside class="yeaft-sidebar" :class="{ collapsed: collapsed }">
       <!-- Collapsed Icon Bar — mirrors Chat's .sidebar-collapsed-bar so the
@@ -65,6 +66,30 @@ export default {
       </div>
 
       <div class="us-scroll">
+        <!-- Yeaft Chats section (1:1 single-VP). Sits above Groups so the
+             two creation entry points (+ New chat / + New group) are
+             clearly distinct in the same column. -->
+        <section class="us-group us-group-chats" :aria-label="$t('yeaft.sidebar.chatsHeader')">
+          <div class="us-group-header us-group-header-tab">
+            <svg class="us-group-header-icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>
+            <span class="us-group-label">{{ $t('yeaft.sidebar.chatsHeader') }}</span>
+            <button type="button" class="us-group-new-btn"
+              :title="$t('yeaft.sidebar.newChat')"
+              :aria-label="$t('yeaft.sidebar.newChat')"
+              @click.stop="onOpenChatWizard">
+              <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+            </button>
+          </div>
+          <div class="us-group-body" v-if="chatList.length > 0">
+            <div v-for="c in chatList" :key="c.id"
+              class="us-row us-chat-row"
+              :class="{ selected: c.id === activeChatId }"
+              @click="onSelectChat(c)">
+              <span class="us-dot us-dot-chat"></span>
+              <span class="us-row-name">{{ c.displayName || c.id }}</span>
+            </div>
+          </div>
+        </section>
         <!-- task-yeaft-group-ui-cleanup: header now mirrors Chat sidebar
              ".session-tab" — section-icon + label + create (+) button, no
              count. Visible even when groupList is empty so the user always
@@ -148,6 +173,11 @@ export default {
         @close="groupWizardOpen = false"
         @created="onGroupCreated"
       />
+      <ChatCreateModal
+        v-if="chatWizardOpen"
+        @close="chatWizardOpen = false"
+        @created="onChatCreated"
+      />
 
       <!-- task-yeaft-group-editor: Per-group rename/delete formerly lived
            in inline overlays here. They've been folded into the unified
@@ -174,6 +204,7 @@ export default {
       now: Date.now(),
       // task-334m: group-create wizard visibility.
       groupWizardOpen: false,
+      chatWizardOpen: false,
       groupsOpen: true,
       // task-yeaft-group-editor: per-row action menu only — the rename
       // and delete modals have been folded into the unified
@@ -194,6 +225,11 @@ export default {
           .catch(() => {});
       }
     } catch (_) { /* no-fetch test env */ }
+    // Initial chat list load. Guarded — tests without a chat store skip.
+    try {
+      const s = this.chatStore || this.store;
+      if (s && typeof s.listYeaftChats === 'function' && s.yeaftAgentId) s.listYeaftChats();
+    } catch (_) {}
   },
   computed: {
     // Resolve the Pinia store lazily. Guarded so unit tests that mount
@@ -218,6 +254,14 @@ export default {
     },
     groupList() { return this.groupsStore?.groupList || []; },
     activeGroupId() { return this.groupsStore?.activeGroupId || null; },
+    chatList() {
+      const s = this.chatStore || this.store;
+      return (s && Array.isArray(s.yeaftChats)) ? s.yeaftChats : [];
+    },
+    activeChatId() {
+      const s = this.chatStore || this.store;
+      return s?.yeaftActiveChatId || null;
+    },
     chatStore() {
       // Needed for `groupCrudRequest`. Reuses the same guarded lookup
       // as `store` above but via window.Pinia for consistency with the
@@ -307,6 +351,16 @@ export default {
     // task-334m: group-wizard + selection handlers.
     onOpenGroupWizard() { this.groupWizardOpen = true; },
     onCloseGroupWizard() { this.groupWizardOpen = false; },
+    onOpenChatWizard() { this.chatWizardOpen = true; },
+    onSelectChat(c) {
+      if (!c || !c.id) return;
+      const s = this.chatStore || this.store;
+      if (s && typeof s.setActiveYeaftChat === 'function') s.setActiveYeaftChat(c.id);
+      this.$emit('select-chat', c);
+    },
+    onChatCreated(_chat) {
+      // Store auto-activates via chat_crud_result handler.
+    },
     onSelectGroup(g) {
       if (!g || !g.id) return;
       if (this.groupsStore) this.groupsStore.setActive(g.id);
