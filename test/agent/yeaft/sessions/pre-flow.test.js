@@ -50,12 +50,27 @@ describe('buildRelevantScopes', () => {
   it('orders user → group → group-user → group-vp', () => {
     expect(
       buildRelevantScopes({ sessionId: 'g1', vpId: 'alice' }),
-    ).toEqual(['user', 'session/g1', 'session/g1/user', 'session/g1/vp/alice']);
+    ).toEqual([
+      'user',
+      'session/g1',
+      'session/g1/user',
+      'group/g1',
+      'group/g1/user',
+      'session/g1/vp/alice',
+      'group/g1/vp/alice',
+    ]);
   });
   it('appends extra scopes once', () => {
     expect(
       buildRelevantScopes({ sessionId: 'g1', extra: ['session/g1/topic/x', 'session/g1'] }),
-    ).toEqual(['user', 'session/g1', 'session/g1/user', 'session/g1/topic/x']);
+    ).toEqual([
+      'user',
+      'session/g1',
+      'session/g1/user',
+      'group/g1',
+      'group/g1/user',
+      'session/g1/topic/x',
+    ]);
   });
 });
 
