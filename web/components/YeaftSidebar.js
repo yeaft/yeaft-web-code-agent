@@ -330,8 +330,14 @@ export default {
       // Cross-agent routing: when selecting a session owned by an agent
       // other than the currently-selected one, switch the chat store's
       // active agent so subsequent CRUD/messaging hits the owning agent.
+      // Go through the store action (not bare assignment) so any side
+      // effects in selectAgent (caches, subscriptions) stay in sync.
       if (g.agentId && this.chatStore && this.chatStore.currentAgent !== g.agentId) {
-        try { this.chatStore.currentAgent = g.agentId; } catch (_) {}
+        if (typeof this.chatStore.selectAgent === 'function') {
+          this.chatStore.selectAgent(g.agentId);
+        } else {
+          this.chatStore.currentAgent = g.agentId;
+        }
       }
       if (this.sessionsStore) this.sessionsStore.setActive(g.id);
       this.$emit('select-group', g);

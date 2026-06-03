@@ -73,7 +73,14 @@ export const useSessionsStore = defineStore('sessions', {
     applySnapshot(sessions, agentId = null) {
       const arr = Array.isArray(sessions) ? sessions : [];
       if (!agentId) {
-        // Legacy path — single-agent stores.
+        // Legacy path — single-agent stores only. In a mixed deployment
+        // where one upgraded agent stamps agentId and one legacy agent
+        // doesn't, the legacy whole-replace would obliterate the
+        // upgraded agent's rows. Guard: if any current row already
+        // carries an agentId, treat this unstamped snapshot as
+        // unsafe and skip it rather than nuke cross-agent state.
+        const hasStampedRow = Object.values(this.sessions).some(s => s && s.agentId);
+        if (hasStampedRow) return;
         const nextMap = {};
         const nextOrder = [];
         for (const s of arr) {
@@ -107,7 +114,10 @@ export const useSessionsStore = defineStore('sessions', {
           const prev = this.sessions[id];
           return prev && prev.agentId !== agentId && nextMap[id];
         });
-        const thisAgent = arr.map(s => s.id).filter(id => nextMap[id]);
+        const thisAgent = [];
+        for (const s of arr) {
+          if (s && s.id && nextMap[s.id]) thisAgent.push(s.id);
+        }
         this.sessions = nextMap;
         this.sessionOrder = [...otherAgents, ...thisAgent];
       }
