@@ -74,12 +74,37 @@ export function migrateSessionsV1(yeaftDir) {
 
   let moved = 0;
 
+  // 0. Reconcile any half-migrated sessions/<id>/ from a prior crash:
+  // a leftover group.json/chat.json with no meta.json means the rename
+  // succeeded but the rewrite didn't. Repair before moving on so the
+  // session is usable post-migration.
+  for (const id of listDirs(sessionsRoot)) {
+    const dst = join(sessionsRoot, id);
+    if (existsSync(join(dst, 'meta.json'))) continue;
+    if (existsSync(join(dst, 'group.json'))) {
+      rewriteGroupMetaToSessionMeta(dst, warnings);
+      warnings.push(`reconciled partial migration at sessions/${id}`);
+    } else if (existsSync(join(dst, 'chat.json'))) {
+      rewriteChatMetaToSessionMeta(dst, warnings);
+      warnings.push(`reconciled partial migration at sessions/${id}`);
+    }
+  }
+
   // 1. groups/<g>/ → sessions/<g>/
   for (const id of groupIds) {
     const src = join(groupsRoot, id);
     const dst = join(sessionsRoot, id);
     if (existsSync(dst)) {
-      warnings.push(`sessions/${id} already exists; skipping groups/${id}`);
+      // Partial-run reconcile: if meta.json wasn't written yet, retry the
+      // rewrite from the leftover group.json at the destination. Avoids
+      // permanently broken sessions when the prior run crashed between
+      // renameSync and rewriteGroupMetaToSessionMeta.
+      if (!existsSync(join(dst, 'meta.json')) && existsSync(join(dst, 'group.json'))) {
+        rewriteGroupMetaToSessionMeta(dst, warnings);
+        warnings.push(`reconciled partial migration at sessions/${id}`);
+      } else {
+        warnings.push(`sessions/${id} already exists; skipping groups/${id}`);
+      }
       continue;
     }
     renameSync(src, dst);
@@ -92,7 +117,12 @@ export function migrateSessionsV1(yeaftDir) {
     const src = join(chatsRoot, id);
     const dst = join(sessionsRoot, id);
     if (existsSync(dst)) {
-      warnings.push(`sessions/${id} already exists; skipping chats/${id}`);
+      if (!existsSync(join(dst, 'meta.json')) && existsSync(join(dst, 'chat.json'))) {
+        rewriteChatMetaToSessionMeta(dst, warnings);
+        warnings.push(`reconciled partial migration at sessions/${id}`);
+      } else {
+        warnings.push(`sessions/${id} already exists; skipping chats/${id}`);
+      }
       continue;
     }
     renameSync(src, dst);
@@ -143,6 +173,12 @@ export function migrateSessionsV1(yeaftDir) {
   }
 
   // 6. sentinel
+  //
+  // PHASE 2 TODO: the SQLite FTS index (memory/index-db.js) still has rows
+  // pointing at group/<id> and chat/<id> scopes after this migration. When
+  // Phase 2 activates this migration from initYeaftDir(), it MUST also
+  // delete or rebuild the FTS index so the new session/<id> scopes get
+  // re-indexed. Preflow recall is broken until then.
   writeFileSync(sentinel, JSON.stringify({
     version: 1,
     migratedAt: new Date().toISOString(),
@@ -178,6 +214,9 @@ function rewriteGroupMetaToSessionMeta(sessionDir, warnings) {
       id: raw.id,
       displayName: raw.name || raw.id,
       vpIds: Array.isArray(raw.roster) && raw.roster.length > 0 ? raw.roster.slice() : ['omni'],
+      // Preserve defaultVpId so Phase 2 coordinator can resolve "which VP
+      // answers when no @-mention". Easy to keep now, hard to backfill later.
+      ...(raw.defaultVpId ? { defaultVpId: raw.defaultVpId } : {}),
       workDir: typeof raw.workDir === 'string' ? raw.workDir : '',
       createdAt: raw.createdAt || new Date().toISOString(),
       lastTurnAt: null,

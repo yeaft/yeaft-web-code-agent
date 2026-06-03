@@ -2,7 +2,7 @@
  * sessions-v1.test.js — migration test: groups/ + chats/ → sessions/
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { migrateSessionsV1 } from '../../../../agent/yeaft/migrate/sessions-v1.js';
@@ -103,5 +103,34 @@ describe('sessions-v1 migration', () => {
     const r2 = migrateSessionsV1(tmp);
     expect(r2.migrated).toBe(false);
     expect(r2.moved).toBe(0);
+  });
+
+  it('preserves defaultVpId from group.json into session meta', () => {
+    migrateSessionsV1(tmp);
+    const meta = JSON.parse(readFileSync(join(tmp, 'sessions', 'grp_alpha', 'meta.json'), 'utf8'));
+    expect(meta.defaultVpId).toBe('omni');
+  });
+
+  it('reconciles a partially migrated session (dir renamed, meta not written yet)', () => {
+    // Simulate a prior crash: sessions/grp_alpha/ exists with the leftover
+    // group.json (renameSync done, rewrite skipped). No sentinel.
+    const sessDir = join(tmp, 'sessions', 'grp_alpha');
+    mkdirSync(sessDir, { recursive: true });
+    writeFileSync(join(sessDir, 'group.json'), JSON.stringify({
+      id: 'grp_alpha',
+      name: 'Alpha',
+      roster: ['omni'],
+    }));
+    // groups/grp_alpha/ also still seeded by beforeEach; remove it so the
+    // collision check sees only the dst side.
+    rmSync(join(tmp, 'groups', 'grp_alpha'), { recursive: true, force: true });
+
+    const r = migrateSessionsV1(tmp);
+    expect(r.migrated).toBe(true);
+    // meta.json was repaired from the leftover group.json
+    expect(existsSync(join(sessDir, 'meta.json'))).toBe(true);
+    const meta = JSON.parse(readFileSync(join(sessDir, 'meta.json'), 'utf8'));
+    expect(meta.id).toBe('grp_alpha');
+    expect(meta.vpIds).toEqual(['omni']);
   });
 });
