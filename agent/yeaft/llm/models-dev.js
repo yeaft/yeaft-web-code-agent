@@ -36,8 +36,14 @@ function getCachePath(yeaftDir) {
 async function diskCacheAgeMs(yeaftDir) {
   try {
     const s = await stat(getCachePath(yeaftDir));
+    // Clamp negative ages (clock-skew between filesystem mtime and
+    // JS Date.now() can momentarily be a few ms ahead on some CI
+    // runners). Returning null here would skip stage-2 and force a
+    // network fetch — which broke the deterministic listProviders test
+    // by serving the live ~140-provider models.dev payload. A freshly
+    // written cache is, by definition, fresh.
     const age = Date.now() - s.mtimeMs;
-    return age < 0 ? null : age;
+    return age < 0 ? 0 : age;
   } catch {
     return null;
   }
