@@ -78,6 +78,7 @@ export function handleConversationCreated(store, msg) {
     processing: false,
     type: 'chat',
     provider: msg.provider || 'claude-code',
+    capabilities: msg.capabilities || null,
     disallowedTools: msg.disallowedTools ?? null
   });
   store.currentAgent = msg.agentId;
@@ -130,6 +131,7 @@ export function handleConversationResumed(store, msg) {
     processing: false,
     type: 'chat',
     provider: msg.provider || 'claude-code',
+    capabilities: msg.capabilities || null,
     disallowedTools: msg.disallowedTools ?? null
   });
   store.currentAgent = msg.agentId;

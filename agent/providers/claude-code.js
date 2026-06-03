@@ -10,6 +10,17 @@ import {
 
 export const name = 'claude-code';
 
+export const capabilities = Object.freeze({
+  compact: true,
+  clear: true,
+  expert: true,
+  mcp: true,
+  subagents: true,
+  attachments: true,
+  askUser: true,
+  modelPicker: true,
+});
+
 /**
  * Start (or resume) a Claude Code CLI session.
  * Returns the same state object that startClaudeQuery stores in ctx.conversations.
@@ -81,4 +92,4 @@ export async function loadHistory(workDir, sessionId, limit = 500) {
   return loadSessionHistory(workDir, sessionId, limit);
 }
 
-export default { name, start, sendInput, abort, listFolders, listSessions, loadHistory };
+export default { name, capabilities, start, sendInput, abort, listFolders, listSessions, loadHistory };

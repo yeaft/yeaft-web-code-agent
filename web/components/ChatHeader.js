@@ -47,14 +47,14 @@ export default {
           </svg>
           <span class="subagent-count-badge" v-if="runningSubagentCount > 0">{{ runningSubagentCount }}</span>
         </button>
-        <button class="header-action-btn" :class="{ active: effectiveRightPanel === 'experts' }" @click="toggleExpertPanel" :title="$t('chatHeader.expertPanel')" v-if="!isCrew && isClaudeCode">
+        <button class="header-action-btn" :class="{ active: effectiveRightPanel === 'experts' }" @click="toggleExpertPanel" :title="$t('chatHeader.expertPanel')" v-if="!isCrew && canExpert">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
           </svg>
           <span class="mcp-count-badge" v-if="store.expertSelections && store.expertSelections.length > 0">{{ store.expertSelections.length }}</span>
         </button>
         <!-- MCP Config Button -->
-        <div class="mcp-config-wrapper" v-if="isClaudeCode && store.currentMcpServers.length > 0">
+        <div class="mcp-config-wrapper" v-if="canMcp && store.currentMcpServers.length > 0">
           <button ref="mcpBtnRef" class="header-action-btn" :class="{ active: store.mcpPanelOpen }" @click="toggleMcpPanel" :title="$t('chatHeader.mcpConfig')">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
@@ -96,12 +96,12 @@ export default {
             <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
           </svg>
         </button>
-        <button class="header-action-btn" :class="{ 'btn-loading': isCompacting }" @click="compactContext" :disabled="isCompacting" :title="$t('chatHeader.compact')" v-if="isClaudeCode">
+        <button class="header-action-btn" :class="{ 'btn-loading': isCompacting }" @click="compactContext" :disabled="isCompacting" :title="$t('chatHeader.compact')" v-if="canCompact">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="8 4 12 8 16 4"/><line x1="4" y1="12" x2="20" y2="12"/><polyline points="8 20 12 16 16 20"/>
           </svg>
         </button>
-        <button class="header-action-btn" :class="{ 'btn-loading': isClearing }" @click="clearMessages" :disabled="isClearing" :title="$t('chatHeader.clear')" v-if="isClaudeCode">
+        <button class="header-action-btn" :class="{ 'btn-loading': isClearing }" @click="clearMessages" :disabled="isClearing" :title="$t('chatHeader.clear')" v-if="canClear">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
           </svg>
@@ -169,14 +169,30 @@ export default {
       return conv?.type === 'crew';
     });
 
-    // Provider-aware capability gate. Copilot doesn't support compact/clear/
-    // expert/subagent/MCP paths — hide those affordances so users don't get
-    // a hung click on a no-op.
+    // Provider-aware capability gates. Drivers self-declare what they support;
+    // UI hides any affordance the active driver can't deliver so we don't get a
+    // hung click on a no-op. `isClaudeCode` is kept for the few places that
+    // still want a provider-name boolean.
+    const activeConv = Vue.computed(() => {
+      if (!effectiveConvId.value) return null;
+      return store.conversations.find(c => c.id === effectiveConvId.value) || null;
+    });
+    const activeCaps = Vue.computed(() => activeConv.value?.capabilities || null);
     const isClaudeCode = Vue.computed(() => {
       if (!effectiveConvId.value) return true; // default: assume Claude UI
-      const conv = store.conversations.find(c => c.id === effectiveConvId.value);
-      return (conv?.provider || 'claude-code') === 'claude-code';
+      return (activeConv.value?.provider || 'claude-code') === 'claude-code';
     });
+    // Capability helpers — fall back to Claude defaults so the UI doesn't
+    // suddenly hide buttons on legacy state that has no `capabilities`.
+    const capOn = (key, defaultIfClaude = true) => {
+      const c = activeCaps.value;
+      if (c) return !!c[key];
+      return isClaudeCode.value ? defaultIfClaude : false;
+    };
+    const canCompact = Vue.computed(() => capOn('compact'));
+    const canClear   = Vue.computed(() => capOn('clear'));
+    const canExpert  = Vue.computed(() => capOn('expert'));
+    const canMcp     = Vue.computed(() => capOn('mcp'));
 
     const headerTitle = Vue.computed(() => {
       if (!effectiveConvId.value) {
@@ -428,6 +444,6 @@ export default {
       document.removeEventListener('click', closeMcpOnOutsideClick);
     });
 
-    return { store, effectiveConvId, effectiveRightPanel, isCrew, isClaudeCode, headerTitle, agentName, folderPath, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, hasStreamingRoles, isRefreshing, crewInProgress, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, openCrewEdit, onCrewPanelToggle, isCrewPanelActive, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel, toggleSubAgentPanel, runningSubagentCount };
+    return { store, effectiveConvId, effectiveRightPanel, isCrew, isClaudeCode, canCompact, canClear, canExpert, canMcp, headerTitle, agentName, folderPath, showStatusBanner, statusBannerClass, statusBannerSpinner, statusBannerMessage, contextUsage, contextColorClass, contextLabel, hasStreamingRoles, isRefreshing, crewInProgress, isCompacting, isClearing, canRefresh, refreshSession, reloadPage, compactContext, clearMessages, openCrewEdit, onCrewPanelToggle, isCrewPanelActive, mcpBtnRef, mcpDropdownStyle, mcpEnabledCount, currentConvNeedRestart, toggleMcpPanel, toggleMcpServer, toggleExpertPanel, toggleSubAgentPanel, runningSubagentCount };
   }
 };
