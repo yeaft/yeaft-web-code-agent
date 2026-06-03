@@ -47,6 +47,9 @@ export function extractTemplateForScope(scope) {
   if (/^group\/[^/]+\/topic\//.test(scope)) return 'extractTopic';
   if (/^group\/[^/]+\/user(?:\/|$)/.test(scope)) return 'extractUser';
   if (scope.startsWith('group/')) return 'extractGroup';
+  // Chat-isolated scopes: same template family as groups.
+  if (/^chat\/[^/]+\/vp\//.test(scope)) return 'extractVp';
+  if (scope.startsWith('chat/')) return 'extractGroup';
   // Legacy top-level vp/topic scopes (archived to .legacy/ on boot — kept
   // here defensively in case something still constructs the old strings).
   if (scope.startsWith('vp/')) return 'extractVp';

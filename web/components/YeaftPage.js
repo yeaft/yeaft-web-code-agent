@@ -1,6 +1,6 @@
 import ChatInput from './ChatInput.js';
 import MessageList from './MessageList.js';
-import YeaftSettings from './YeaftSettings.js';
+import SettingsPanel from './SettingsPanel.js';
 import YeaftSidebar from './YeaftSidebar.js';
 import VpDetailView from './VpDetailView.js';
 import GroupInviteModal from './GroupInviteModal.js';
@@ -18,7 +18,7 @@ import {
 
 export default {
   name: 'YeaftPage',
-  components: { ChatInput, MessageList, YeaftSettings, YeaftSidebar, VpDetailView, GroupInviteModal, GroupSettingsModal, WorkbenchPanel, YeaftDebugPanel, VpTimelinePane },
+  components: { ChatInput, MessageList, SettingsPanel, YeaftSidebar, VpDetailView, GroupInviteModal, GroupSettingsModal, WorkbenchPanel, YeaftDebugPanel, VpTimelinePane },
   template: `
     <div class="yeaft-page">
       <!-- Mobile sidebar overlay -->
@@ -28,6 +28,7 @@ export default {
       <YeaftSidebar
         :collapsed="sidebarCollapsed"
         @select-group="onSelectGroupV2"
+        @select-chat="onSelectChat"
         @toggle-sidebar="toggleSidebar"
         @back="goBack"
         @open-settings="toggleSettings"
@@ -262,7 +263,7 @@ export default {
         <MessageList v-if="!showSettings && !store.yeaftActiveVpDetailId && !isActiveGroupEmpty" @open-group-settings="openGroupSettings" />
 
         <!-- Settings Panel -->
-        <YeaftSettings v-if="showSettings" :initial-tab="settingsInitialTab" @close="showSettings = false" @saved="onSettingsSaved" />
+        <SettingsPanel v-if="showSettings" :visible="showSettings" :initial-tab="'yeaft'" :initial-sub-tab="settingsInitialTab" @close="showSettings = false" />
 
         <!-- Input Area -->
         <ChatInput
@@ -370,6 +371,17 @@ export default {
       if (!id) return;
       store.setActiveGroupFilter(id);
       // Also leave the VP detail view so the main stream is visible.
+      if (store.yeaftActiveVpDetailId) store.leaveVpDetailView();
+      if (isMobile.value) sidebarCollapsed.value = true;
+    };
+
+    // Yeaft Chat Mode (1:1): clicking a chat row narrows the main pane to
+    // that chat. Setting an active chat also clears any group filter via
+    // the store, so the two modes are mutually exclusive in the main pane.
+    const onSelectChat = (c) => {
+      const id = c && c.id ? c.id : null;
+      if (!id) return;
+      store.setActiveYeaftChat(id);
       if (store.yeaftActiveVpDetailId) store.leaveVpDetailView();
       if (isMobile.value) sidebarCollapsed.value = true;
     };
@@ -563,6 +575,13 @@ export default {
       // store helper strips `fileId` shape for the wire and keeps the
       // preview/name/mimeType on the local message render.
       const attachments = Array.isArray(attachmentInfos) ? attachmentInfos : undefined;
+      // Chat Mode (1:1) takes precedence over group: if a chat is active,
+      // route through the chat send path which targets a single VP and
+      // skips group fan-out entirely.
+      if (store.yeaftActiveChatId) {
+        store.sendYeaftChat({ chatId: store.yeaftActiveChatId, text, attachments });
+        return;
+      }
       store.sendYeaftGroupChat({ groupId, text, mentions, attachments });
     };
 
@@ -1040,6 +1059,7 @@ export default {
       onSettingsSaved,
       sidebarV2Enabled,
       onSelectGroupV2,
+      onSelectChat,
       exitVpDetailView,
       // task-340: workbench capability gate
       canUseWorkbench,

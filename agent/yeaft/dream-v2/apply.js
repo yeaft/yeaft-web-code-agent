@@ -143,6 +143,12 @@ export function targetToScope(target) {
       return { kind: 'group-topic', groupId: segs[1], path: segs.slice(3) };
     }
   }
+  if (segs[0] === 'chat') {
+    if (segs.length === 2) return { kind: 'chat', id: segs[1] };
+    if (segs.length === 4 && segs[2] === 'vp') {
+      return { kind: 'chat-vp', chatId: segs[1], id: segs[3] };
+    }
+  }
   throw new Error(`apply.targetToScope: malformed target ${JSON.stringify(target)}`);
 }
 
@@ -274,6 +280,8 @@ function scopeRelDir(scope) {
     case 'group-vp':      return `group/${scope.groupId}/vp/${scope.id}`;
     case 'group-feature': return `group/${scope.groupId}/feature/${scope.id}`;
     case 'group-topic':   return `group/${scope.groupId}/topic/${scope.path.join('/')}`;
+    case 'chat':          return `chat/${scope.id}`;
+    case 'chat-vp':       return `chat/${scope.chatId}/vp/${scope.id}`;
     default: throw new Error(`apply.scopeRelDir: unknown kind ${scope.kind}`);
   }
 }

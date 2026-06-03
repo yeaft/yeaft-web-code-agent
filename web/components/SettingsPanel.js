@@ -3,12 +3,16 @@ import { isMobile, isInAlipay, isInWeChat } from '../utils/device.js';
 import ProxyTab from './ProxyTab.js';
 import DashboardTab from './DashboardTab.js';
 import LlmTab from './LlmTab.js';
+import VpCrudPanel from './VpCrudPanel.js';
+import SearchSettingsTab from './SearchSettingsTab.js';
 
 export default {
   name: 'SettingsPanel',
-  components: { ProxyTab, DashboardTab, LlmTab },
+  components: { ProxyTab, DashboardTab, LlmTab, VpCrudPanel, SearchSettingsTab },
   props: {
-    visible: Boolean
+    visible: Boolean,
+    initialTab: { type: String, default: '' },
+    initialSubTab: { type: String, default: '' },
   },
   emits: ['close'],
   template: `
@@ -32,6 +36,7 @@ export default {
             <svg v-else-if="tab.key === 'dashboard'" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>
             <svg v-else-if="tab.key === 'tools'" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z"/></svg>
             <svg v-else-if="tab.key === 'llm'" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M21 10.12h-6.78l2.74-2.82c-2.73-2.7-7.15-2.8-9.88-.1-2.73 2.71-2.73 7.08 0 9.79s7.15 2.71 9.88 0C18.32 15.65 19 14.08 19 12.1h2c0 1.98-.88 4.55-2.64 6.29-3.51 3.48-9.21 3.48-12.72 0-3.5-3.47-3.5-9.11 0-12.58 3.51-3.47 9.14-3.49 12.65-.06L21 3v7.12zM12.5 8v4.25l3.5 2.08-.72 1.21L11 13V8h1.5z"/></svg>
+            <svg v-else-if="tab.key === 'yeaft'" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 2L2 7l10 5 10-5-10-5zm0 8L2 15l10 5 10-5-10-5z"/></svg>
             <span>{{ tab.label }}</span>
           </button>
         </div>
@@ -358,9 +363,27 @@ export default {
               <p class="sp-desc sp-tools-hint">{{ $t('settings.tools.hint') }}</p>
             </div>
 
-            <!-- LLM Configuration -->
-            <div v-show="activeTab === 'llm'" class="settings-pane">
-              <LlmTab @message="onLlmMessage" />
+            <!-- Yeaft sub-section (LLM / VPs / Search). Replaces the old
+                 standalone YeaftSettings modal — everything Yeaft-scoped
+                 lives behind this single nav entry. -->
+            <div v-show="activeTab === 'yeaft'" class="settings-pane">
+              <div class="sp-subtab-bar">
+                <button v-for="st in yeaftSubTabs" :key="st.key"
+                  class="sp-subtab"
+                  :class="{ active: yeaftSubTab === st.key }"
+                  @click="yeaftSubTab = st.key">
+                  {{ st.label }}
+                </button>
+              </div>
+              <div v-show="yeaftSubTab === 'llm'" class="sp-subpane">
+                <LlmTab context="yeaft" @message="onLlmMessage" @saved="onYeaftLlmSaved" />
+              </div>
+              <div v-show="yeaftSubTab === 'vp'" class="sp-subpane">
+                <VpCrudPanel />
+              </div>
+              <div v-show="yeaftSubTab === 'search'" class="sp-subpane">
+                <SearchSettingsTab @message="onLlmMessage" />
+              </div>
             </div>
 
             <!-- Dashboard (admin only) -->
@@ -429,6 +452,7 @@ export default {
     const chatStore = Pinia.useChatStore();
     return {
       activeTab: 'general',
+      yeaftSubTab: 'llm',
       profile: null,
       agentSecret: null,
       showSecret: false,
@@ -507,7 +531,7 @@ export default {
       if (this.authStore.role === 'admin' || this.authStore.role === 'pro') {
         tabs.push({ key: 'proxy', label: this.$t('settings.tabs.proxy') });
         tabs.push({ key: 'tools', label: this.$t('settings.tabs.tools') });
-        tabs.push({ key: 'llm', label: this.$t('settings.tabs.llm') });
+        tabs.push({ key: 'yeaft', label: this.$t('settings.tabs.yeaft') });
       }
       if (this.authStore.role === 'admin') {
         tabs.push({ key: 'invitations', label: this.$t('settings.tabs.invitations') });
@@ -523,6 +547,13 @@ export default {
       return [
         { value: 'light', label: this.$t('settings.general.lightTheme') },
         { value: 'dark', label: this.$t('settings.general.darkTheme') }
+      ];
+    },
+    yeaftSubTabs() {
+      return [
+        { key: 'llm', label: this.$t('settings.yeaft.tabs.llm') },
+        { key: 'vp', label: this.$t('settings.yeaft.tabs.vp') },
+        { key: 'search', label: this.$t('settings.yeaft.tabs.search') },
       ];
     },
     languageOptions() {
@@ -585,6 +616,13 @@ export default {
   watch: {
     visible(val) {
       if (val) {
+        // Honour caller-requested entry point each time the panel opens,
+        // but only if the role-gated tab list actually contains it —
+        // otherwise free-tier users land on a blank pane.
+        if (this.initialTab && this.visibleTabs.some(t => t.key === this.initialTab)) {
+          this.activeTab = this.initialTab;
+        }
+        if (this.initialSubTab && this.activeTab === 'yeaft') this.yeaftSubTab = this.initialSubTab;
         this.loadData();
       } else {
         // Closing settings while a bind QR is up should tear it down too.
@@ -1024,6 +1062,13 @@ export default {
 
     onLlmMessage(msg, isError) {
       this.showMessage(msg, isError);
+    },
+    onYeaftLlmSaved() {
+      // Mirror old YeaftSettings: bounce engine so new LLM config takes effect.
+      const agentId = this.chatStore?.yeaftAgentId;
+      if (agentId) {
+        this.chatStore.sendWsMessage({ type: 'yeaft_reset', agentId });
+      }
     }
   }
 };

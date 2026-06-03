@@ -167,8 +167,13 @@ export function selectRespondingVps(input) {
  */
 function scopeHeading(scope) {
   if (scope === 'user') return '## Memory: User';
-  // Nested group scopes first.
-  let m = /^group\/([^/]+)\/vp\/(.+)$/.exec(scope);
+  // Nested chat scopes first.
+  let m = /^chat\/([^/]+)\/vp\/(.+)$/.exec(scope);
+  if (m) return `## Memory: VP ${m[2]}`;
+  m = /^chat\/([^/]+)$/.exec(scope);
+  if (m) return `## Memory: Chat ${m[1]}`;
+  // Nested group scopes.
+  m = /^group\/([^/]+)\/vp\/(.+)$/.exec(scope);
   if (m) return `## Memory: VP ${m[2]}`;
   m = /^group\/([^/]+)\/user$/.exec(scope);
   if (m) return `## Memory: Group ${m[1]} (user)`;
@@ -245,9 +250,12 @@ export function formatPickedForInjection(picked) {
  * @param {{groupId?: string, vpId?: string, extra?: string[]}} ctx
  * @returns {string[]}
  */
-export function buildRelevantScopes({ groupId, vpId, extra } = {}) {
+export function buildRelevantScopes({ groupId, chatId, vpId, extra } = {}) {
   const scopes = ['user'];
-  if (groupId) {
+  if (chatId) {
+    scopes.push(`chat/${chatId}`);
+    if (vpId) scopes.push(`chat/${chatId}/vp/${vpId}`);
+  } else if (groupId) {
     scopes.push(`group/${groupId}`);
     scopes.push(`group/${groupId}/user`);
     if (vpId) scopes.push(`group/${groupId}/vp/${vpId}`);
@@ -286,6 +294,7 @@ export function runMemoryPreflow(index, opts) {
 
   const relevantScopes = buildRelevantScopes({
     groupId: opts.groupId,
+    chatId: opts.chatId,
     vpId: opts.vpId,
     extra: opts.extraScopes,
   });

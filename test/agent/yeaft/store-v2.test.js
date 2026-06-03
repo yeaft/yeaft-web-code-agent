@@ -27,7 +27,7 @@ import {
 describe('store-v2: SCOPE_KINDS contract', () => {
   it('exposes the group-isolated scope kinds, frozen', () => {
     expect(SCOPE_KINDS).toEqual([
-      'user', 'group', 'group-user', 'group-vp', 'group-feature', 'group-topic',
+      'user', 'group', 'group-user', 'group-vp', 'group-feature', 'group-topic', 'chat', 'chat-vp',
     ]);
     expect(Object.isFrozen(SCOPE_KINDS)).toBe(true);
   });

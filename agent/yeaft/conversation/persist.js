@@ -109,6 +109,7 @@ function serializeMessage(msg) {
   // in the default group and switching back to the originating group
   // shows an empty pane.
   if (msg.groupId) fm.push(`groupId: ${msg.groupId}`);
+  if (msg.chatId) fm.push(`chatId: ${msg.chatId}`);
   // Group-chat attribution: when a VP authors an assistant turn (either
   // its own reply or a route_forward injection from another VP), stamp
   // the speaker so the UI can render the message on the correct VP track.
@@ -225,6 +226,7 @@ export function parseMessage(raw) {
       case 'threadId': msg.threadId = value; break;
       case 'sourceThreadId': msg.sourceThreadId = value; break;
       case 'groupId': msg.groupId = value; break;
+      case 'chatId': msg.chatId = value; break;
       case 'speakerVpId': msg.speakerVpId = value; break;
       case 'attachmentsB64':
         try {
@@ -1354,8 +1356,104 @@ export class ConversationStore {
   }
 
   #messageDirFor(msg) {
+    if (msg?.chatId) return join(this.#chatConversationDir(msg.chatId, { create: true }), 'messages');
     if (!msg?.groupId) return this.#chatMsgDir;
     return join(this.#groupConversationDir(msg.groupId, { create: true }), 'messages');
+  }
+
+  #chatConversationDir(chatId, { create = false } = {}) {
+    const dir = join(this.#dir, 'chats', this.#safeDirComponent(chatId), 'conversation');
+    if (create) this.#ensureConversationDirs(dir);
+    return dir;
+  }
+
+  #chatConversationDirs() {
+    const root = join(this.#dir, 'chats');
+    if (!existsSync(root)) return [];
+    const dirs = [];
+    for (const name of readdirSync(root)) {
+      if (name.startsWith('.')) continue;
+      const chatDir = join(root, name);
+      try { if (!statSync(chatDir).isDirectory()) continue; }
+      catch (err) { if (isPermissionError(err)) continue; throw err; }
+      const conv = join(chatDir, 'conversation');
+      if (existsSync(conv)) dirs.push(conv);
+    }
+    return dirs;
+  }
+
+  #chatMessageDirs(kind, chatId = null) {
+    if (chatId) {
+      const dir = join(this.#chatConversationDir(chatId), kind);
+      return existsSync(dir) ? [dir] : [];
+    }
+    return this.#chatConversationDirs()
+      .map(dir => join(dir, kind))
+      .filter(dir => existsSync(dir));
+  }
+
+  /** Per-chat scoped compact summary path. */
+  #scopedChatCompactPath(chatId, vpId) {
+    if (!chatId || !vpId) return null;
+    const dir = join(this.#chatConversationDir(chatId, { create: true }), 'compact');
+    return join(dir, `${this.#safeIdComponent(vpId)}.md`);
+  }
+
+  /** Read per-(chatId, vpId) compact summary. */
+  readCompactSummaryForChat(chatId, vpId) {
+    const p = this.#scopedChatCompactPath(chatId, vpId);
+    if (!p || !existsSync(p)) return '';
+    try { return readFileSync(p, 'utf8'); } catch { return ''; }
+  }
+
+  /** Rewrite per-(chatId, vpId) compact summary. */
+  replaceCompactSummaryForChat(chatId, vpId, summary) {
+    if (typeof summary !== 'string' || !summary) return;
+    const p = this.#scopedChatCompactPath(chatId, vpId);
+    if (!p) return;
+    try { writeFileSync(p, summary, { encoding: 'utf8', mode: 0o644 }); }
+    catch (err) {
+      if (isPermissionError(err)) {
+        if (!_permissionWarned) {
+          console.warn(`[Yeaft] Cannot write scoped chat compact summary: ${err.code}`);
+          _permissionWarned = true;
+        }
+      } else throw err;
+    }
+  }
+
+  /** Recent messages for a chat — chat mode mirror of loadRecentByGroup. */
+  loadRecentByChat(chatId, turnsLimit = DEFAULT_RECENT_TURNS) {
+    if (!chatId) return [];
+    const all = [
+      ...this.#chatMessageDirs('messages', chatId).flatMap(dir => this.#loadFromDir(dir, Infinity)),
+      ...this.#chatMessageDirs('cold', chatId).flatMap(dir => this.#loadFromDir(dir, Infinity)),
+    ].sort(compareMessagesBySeq);
+    const filtered = all.filter(m => m && m.chatId === chatId);
+    if (turnsLimit === Infinity || turnsLimit < 0) return pairSanitize(filtered);
+    return pairSanitize(sliceLastNTurns(filtered, turnsLimit));
+  }
+
+  /** VP-scoped chat history — chat-mode mirror of loadGroupHistoryForVp. */
+  loadChatHistoryForVp(chatId, vpId) {
+    if (!chatId || !vpId) return [];
+    const all = [
+      ...this.#chatMessageDirs('messages', chatId).flatMap(dir => this.#loadFromDir(dir, Infinity)),
+      ...this.#chatMessageDirs('cold', chatId).flatMap(dir => this.#loadFromDir(dir, Infinity)),
+    ].sort(compareMessagesBySeq);
+    const out = [];
+    for (const m of all) {
+      if (!m || m.chatId !== chatId) continue;
+      if (m._reflection || m.internal || m.systemOnly || m.systemOnlyMessage) continue;
+      if (m.role === 'user') { out.push(m); continue; }
+      if (m.role === 'assistant') {
+        // Chat is 1:1 — every assistant row is "ours".
+        out.push(m);
+        continue;
+      }
+      if (m.role === 'tool') { out.push(m); continue; }
+    }
+    return pairSanitize(out);
   }
 
   #groupConversationDir(groupId, { create = false } = {}) {

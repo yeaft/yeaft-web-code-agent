@@ -45,6 +45,15 @@ import {
   groupsRoot,
 } from './groups/group-crud.js';
 import { openGroup, loadGroupMeta } from './groups/group-store.js';
+import {
+  createChat as createChatStore,
+  openChat,
+  listChats,
+  renameChat as renameChatStore,
+  archiveChat as archiveChatStore,
+  deleteChat as deleteChatStore,
+  touchChat,
+} from './chats/chat-store.js';
 import { loadGroupConfig, resolveGroupConfig, GroupConfigError } from './groups/group-config.js';
 import { updateGroupConfig } from './groups/group-crud.js';
 import { createCoordinator } from './groups/coordinator.js';
@@ -1254,12 +1263,13 @@ function resolveGroupDefaultVpId(groupId) {
   }
 }
 
-function sendYeaftOutput(data, { groupId, vpId, turnId, threadId } = {}) {
-  const resolvedVpId = vpId || resolveGroupDefaultVpId(groupId);
+function sendYeaftOutput(data, { groupId, chatId, vpId, turnId, threadId } = {}) {
+  const resolvedVpId = vpId || (groupId ? resolveGroupDefaultVpId(groupId) : null);
   sendToServer({
     type: 'yeaft_output',
     conversationId: yeaftConversationId,
     ...(groupId ? { groupId } : {}),
+    ...(chatId ? { chatId } : {}),
     ...(resolvedVpId ? { vpId: resolvedVpId } : {}),
     ...(turnId ? { turnId } : {}),
     ...(threadId ? { threadId } : {}),
@@ -1268,11 +1278,12 @@ function sendYeaftOutput(data, { groupId, vpId, turnId, threadId } = {}) {
 }
 
 /** Send a yeaft_output event (non-claude_output metadata). */
-function sendYeaftEvent(event, { groupId, vpId, turnId, threadId } = {}) {
+function sendYeaftEvent(event, { groupId, chatId, vpId, turnId, threadId } = {}) {
   sendToServer({
     type: 'yeaft_output',
     conversationId: yeaftConversationId,
     ...(groupId ? { groupId } : {}),
+    ...(chatId ? { chatId } : {}),
     ...(vpId ? { vpId } : {}),
     ...(turnId ? { turnId } : {}),
     ...(threadId ? { threadId } : {}),
@@ -1662,6 +1673,318 @@ export function handleYeaftSetDefaultVp(msg) {
     sendGroupRosterChanged(group);
   } catch (err) {
     sendGroupCrudResult({ op: 'set_default_vp', requestId, ok: false, error: groupErrorPayload(err) });
+  }
+}
+
+// ─── Yeaft Chat Mode ──────────────────────────────────────────
+//
+// 1:1 conversation between the user and a single VP. Reuses the engine,
+// memory, tool, and adapter stacks; bypasses the group coordinator and
+// fan-out machinery entirely. Persisted under `~/.yeaft/chats/<chatId>/`.
+
+const chatEngines = new Map();   // key: `${chatId}::${vpId}` → Engine
+const chatAborts = new Map();    // key: chatId → AbortController for the in-flight turn
+
+function chatsRootFor(yeaftDir) {
+  return join(yeaftDir, 'chats');
+}
+
+function snapshotChats(yeaftDir) {
+  if (!yeaftDir) return [];
+  try { return listChats(chatsRootFor(yeaftDir)); }
+  catch { return []; }
+}
+
+function sendChatCrudResult(payload) {
+  sendYeaftEvent({ type: 'chat_crud_result', ...payload });
+}
+
+function sendChatSnapshotBroadcast() {
+  try {
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    if (!yeaftDir) return;
+    sendYeaftEvent({ type: 'chat_list_updated', chats: snapshotChats(yeaftDir) });
+  } catch (err) {
+    console.warn('[Yeaft] sendChatSnapshotBroadcast failed:', err?.message || err);
+  }
+}
+
+function chatErrorPayload(err) {
+  return {
+    code: (err && err.code) || 'unknown',
+    chatId: err && err.chatId,
+    message: err && err.message,
+  };
+}
+
+export function handleYeaftListChats(msg) {
+  const requestId = msg && msg.requestId;
+  try {
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    sendChatCrudResult({ op: 'list', requestId, ok: true, chats: snapshotChats(yeaftDir) });
+  } catch (err) {
+    sendChatCrudResult({ op: 'list', requestId, ok: false, error: chatErrorPayload(err) });
+  }
+}
+
+export function handleYeaftCreateChat(msg) {
+  const requestId = msg && msg.requestId;
+  const payload = (msg && msg.payload) || {};
+  try {
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    if (!yeaftDir) throw new Error('no yeaft directory configured');
+    if (!payload.vpId) throw new Error('vpId required');
+    const root = chatsRootFor(yeaftDir);
+    const chatId = (payload.id && String(payload.id).trim())
+      || `chat_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const h = createChatStore(root, {
+      id: chatId,
+      vpId: payload.vpId,
+      displayName: payload.displayName,
+      workDir: payload.workDir,
+    });
+    const meta = h.getMeta();
+    h.close();
+    sendChatCrudResult({ op: 'create', requestId, ok: true, chat: meta });
+    sendChatSnapshotBroadcast();
+  } catch (err) {
+    sendChatCrudResult({ op: 'create', requestId, ok: false, error: chatErrorPayload(err) });
+  }
+}
+
+export function handleYeaftRenameChat(msg) {
+  const requestId = msg && msg.requestId;
+  const chatId = msg && msg.chatId;
+  const displayName = msg && msg.displayName;
+  try {
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    const chat = renameChatStore(chatsRootFor(yeaftDir), chatId, displayName);
+    sendChatCrudResult({ op: 'rename', requestId, ok: true, chat });
+    sendChatSnapshotBroadcast();
+  } catch (err) {
+    sendChatCrudResult({ op: 'rename', requestId, ok: false, error: chatErrorPayload(err) });
+  }
+}
+
+export function handleYeaftArchiveChat(msg) {
+  const requestId = msg && msg.requestId;
+  const chatId = msg && msg.chatId;
+  try {
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    const ok = archiveChatStore(chatsRootFor(yeaftDir), chatId);
+    if (!ok) throw new Error(`chat ${chatId} not found`);
+    invalidateChatRuntime(chatId);
+    sendChatCrudResult({ op: 'archive', requestId, ok: true, chatId });
+    sendChatSnapshotBroadcast();
+  } catch (err) {
+    sendChatCrudResult({ op: 'archive', requestId, ok: false, error: chatErrorPayload(err) });
+  }
+}
+
+export function handleYeaftDeleteChat(msg) {
+  const requestId = msg && msg.requestId;
+  const chatId = msg && msg.chatId;
+  try {
+    const yeaftDir = ctx.CONFIG?.yeaftDir;
+    const ok = deleteChatStore(chatsRootFor(yeaftDir), chatId);
+    if (!ok) throw new Error(`chat ${chatId} not found`);
+    invalidateChatRuntime(chatId);
+    sendChatCrudResult({ op: 'delete', requestId, ok: true, chatId });
+    sendChatSnapshotBroadcast();
+  } catch (err) {
+    sendChatCrudResult({ op: 'delete', requestId, ok: false, error: chatErrorPayload(err) });
+  }
+}
+
+function invalidateChatRuntime(chatId) {
+  if (!chatId) return;
+  const prefix = `${chatId}::`;
+  for (const k of Array.from(chatEngines.keys())) {
+    if (k.startsWith(prefix)) chatEngines.delete(k);
+  }
+  const ctrl = chatAborts.get(chatId);
+  if (ctrl) {
+    try { ctrl.abort(); } catch { /* best-effort */ }
+    chatAborts.delete(chatId);
+  }
+}
+
+function getOrCreateChatEngine(chatId, vpId) {
+  const key = `${chatId}::${vpId}`;
+  let eng = chatEngines.get(key);
+  if (eng) return eng;
+  if (!session) throw new Error('getOrCreateChatEngine: session not loaded');
+  eng = new Engine({
+    adapter: session.adapter,
+    trace: session.trace,
+    config: session.config,
+    conversationStore: session.conversationStore,
+    memoryIndex: session.memoryIndex || null,
+    amsRegistry: session.amsRegistry,
+    toolRegistry: session.toolRegistry,
+    skillManager: session.skillManager,
+    mcpManager: session.mcpManager,
+    yeaftDir: session.yeaftDir,
+    toolStats: session.toolStats || null,
+    chatId,
+    vpId,
+  });
+  chatEngines.set(key, eng);
+  return eng;
+}
+
+/**
+ * Send a single user turn in a chat session. 1:1 — no fan-out, no
+ * coordinator, no @-mention dispatch. Engine events are forwarded as
+ * yeaft_output with `chatId` instead of `groupId`.
+ */
+export async function handleYeaftChatSend(msg) {
+  if (!msg || typeof msg !== 'object') return;
+  const chatId = typeof msg.chatId === 'string' ? msg.chatId.trim() : '';
+  const text = typeof msg.text === 'string' ? msg.text : '';
+  if (!chatId) return;
+  if (!text.trim()) return;
+
+  const yeaftDir = ctx.CONFIG?.yeaftDir;
+  if (!yeaftDir) {
+    sendYeaftOutput({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: '⚠️ Yeaft session error: no yeaft directory configured.' }] },
+    }, { chatId });
+    sendYeaftOutput({ type: 'result', result_text: '' }, { chatId });
+    return;
+  }
+
+  await ensureSessionLoaded();
+
+  const root = chatsRootFor(yeaftDir);
+  let handle;
+  try { handle = openChat(root, chatId); }
+  catch (err) {
+    sendYeaftOutput({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: `⚠️ ${err.message}` }] },
+    }, { chatId });
+    sendYeaftOutput({ type: 'result', result_text: '' }, { chatId });
+    return;
+  }
+  const meta = handle.getMeta();
+  if (!meta) {
+    handle.close();
+    sendYeaftOutput({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: `⚠️ Chat ${chatId} not found.` }] },
+    }, { chatId });
+    sendYeaftOutput({ type: 'result', result_text: '' }, { chatId });
+    return;
+  }
+  const vpId = meta.vpId;
+
+  // Persist attachments + build LLM-side multimodal parts. Same flow as
+  // the group path (handleYeaftGroupChat) so chat mode isn't a
+  // second-class citizen for images / files.
+  const inboundFiles = Array.isArray(msg.files) ? msg.files : [];
+  let attachmentBundle = { promptAttachments: [], promptSuffix: '', promptParts: [], failed: [] };
+  if (inboundFiles.length > 0) {
+    try {
+      attachmentBundle = persistYeaftAttachments(inboundFiles, { subdir: `chat-${chatId}` });
+    } catch (err) {
+      console.warn('[Yeaft] yeaft_chat_send: attachment persist failed', err?.message || err);
+    }
+  }
+  if (Array.isArray(attachmentBundle.failed) && attachmentBundle.failed.length > 0) {
+    const detail = attachmentBundle.failed.map((f) => `  - ${f.name}: ${f.error}`).join('\n');
+    sendYeaftOutput({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: `⚠️ ${attachmentBundle.failed.length} file(s) could not be attached:\n${detail}` }] },
+    }, { chatId });
+  }
+  const persistedAttachments = attachmentsForPersistence(attachmentBundle.promptAttachments);
+
+  // Append the user message to the chat log so subsequent reads see it.
+  try {
+    handle.appendMessage({ from: 'user', role: 'user', text, meta: { attachments: persistedAttachments } });
+  } catch (err) {
+    console.warn('[Yeaft] chat appendMessage failed:', err?.message || err);
+  } finally {
+    handle.close();
+  }
+
+  const turnId = `t_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+  const envelope = { chatId, vpId, turnId };
+
+  // Cancel any in-flight turn on this chat — 1:1 has no parallelism.
+  const prior = chatAborts.get(chatId);
+  if (prior) { try { prior.abort(); } catch { /* ignore */ } }
+  const abort = new AbortController();
+  chatAborts.set(chatId, abort);
+
+  sendYeaftEvent({ type: 'vp_turn_start', vpId, threadId: 'main', turnId, chatId, title: meta.displayName || '' }, envelope);
+
+  let queryTimer = null;
+  const resetQueryTimer = () => {
+    if (queryTimer) clearTimeout(queryTimer);
+    queryTimer = setTimeout(() => {
+      if (!abort.signal.aborted) {
+        try { abort.abort(); } catch { /* ignore */ }
+      }
+    }, QUERY_TIMEOUT_MS);
+  };
+  resetQueryTimer();
+
+  try {
+    const assistantTextParts = [];
+    const toolCallsAccum = [];
+    const toolResultsAccum = [];
+    const thinkingBlocksAccum = [];
+    const appendedUserPrompts = [];
+
+    const eng = getOrCreateChatEngine(chatId, vpId);
+    const handlerCtx = {
+      assistantTextParts,
+      toolCallsAccum,
+      toolResultsAccum,
+      thinkingBlocksAccum,
+      resetQueryTimer,
+      chatId,
+      vpId,
+      turnId,
+      threadId: 'main',
+      thread: null,
+      appendedUserPrompts,
+    };
+
+    for await (const event of eng.query({
+      prompt: text,
+      promptParts: attachmentBundle.promptParts && attachmentBundle.promptParts.length > 0 ? attachmentBundle.promptParts : null,
+      signal: abort.signal,
+      userAlreadyPersisted: false,
+      threadId: 'main',
+      senderVpId: vpId,
+    })) {
+      resetQueryTimer();
+      handleEngineEvent(event, handlerCtx);
+    }
+
+    sendYeaftOutput({ type: 'assistant', message: { content: [] } }, envelope);
+    sendYeaftOutput({ type: 'result', result_text: '' }, envelope);
+
+    try { touchChat(root, chatId); } catch { /* best-effort */ }
+  } catch (err) {
+    const isAbort = err && (err.name === 'AbortError' || err.name === 'LLMAbortError');
+    if (isAbort) {
+      sendYeaftOutput({ type: 'result', result_text: '', stopped: true }, envelope);
+    } else {
+      console.error('[Yeaft] chat-send error:', err);
+      sendYeaftOutput({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: `⚠️ Chat error: ${err.message}` }] },
+      }, envelope);
+      sendYeaftOutput({ type: 'result', result_text: '' }, envelope);
+    }
+  } finally {
+    if (queryTimer) clearTimeout(queryTimer);
+    if (chatAborts.get(chatId) === abort) chatAborts.delete(chatId);
   }
 }
 

@@ -306,6 +306,8 @@ export class Engine {
   #groupId = null;
   /** @type {string|null} — set when this engine is bound to a specific VP (per-VP fan-out path). */
   #vpId = null;
+  /** @type {string|null} — set when this engine is bound to a chat session (Chat Mode). */
+  #chatId = null;
 
   /** @type {import('./stats/tool-usage.js').ToolUsageStats|null} — per-tool call/latency counters */
   #toolStats = null;
@@ -406,7 +408,7 @@ export class Engine {
    *   toolStats?: import('./stats/tool-usage.js').ToolUsageStats,
    * }} params
    */
-  constructor({ adapter, trace, config, conversationStore, memoryIndex, amsRegistry, toolRegistry, skillManager, mcpManager, yeaftDir, toolStats = null, groupId = null, vpId = null }) {
+  constructor({ adapter, trace, config, conversationStore, memoryIndex, amsRegistry, toolRegistry, skillManager, mcpManager, yeaftDir, toolStats = null, groupId = null, vpId = null, chatId = null }) {
     this.#adapter = adapter;
     this.#trace = trace;
     this.#config = config;
@@ -428,6 +430,7 @@ export class Engine {
     // callers leave both null → fall back to the global file.
     this.#groupId = (typeof groupId === 'string' && groupId) ? groupId : null;
     this.#vpId = (typeof vpId === 'string' && vpId) ? vpId : null;
+    this.#chatId = (typeof chatId === 'string' && chatId) ? chatId : null;
 
     // PR-L: tool history reflection log. Keyed by traceId so distinct
     // engine instances don't stomp on each other's jsonl files. When
@@ -972,6 +975,7 @@ export class Engine {
       const result = runMemoryPreflow(this.#memoryIndex, {
         userMsg: prompt,
         groupId: ctx.groupId,
+        chatId: ctx.chatId || this.#chatId,
         vpId: ctx.vpId,
       });
       memory.profile = result.profile || '';
@@ -994,6 +998,10 @@ export class Engine {
     // read ONLY its own summary file. Falling back to legacy compact.md here
     // leaks another group/VP's summary into every new group turn after one
     // post-turn compact writes the session-global file.
+    if (this.#chatId && this.#vpId
+        && typeof this.#conversationStore.readCompactSummaryForChat === 'function') {
+      return this.#conversationStore.readCompactSummaryForChat(this.#chatId, this.#vpId);
+    }
     if (this.#groupId && this.#vpId
         && typeof this.#conversationStore.readCompactSummaryFor === 'function') {
       return this.#conversationStore.readCompactSummaryFor(this.#groupId, this.#vpId);
@@ -1032,8 +1040,9 @@ export class Engine {
         role: 'user',
         content: userContent,
         threadId,
-        // Bug 6: stamp groupId so history replay can route by group.
+        // Bug 6: stamp groupId/chatId so history replay can route by container.
         ...(groupId ? { groupId } : {}),
+        ...(this.#chatId ? { chatId: this.#chatId } : {}),
       });
     }
 
@@ -1044,6 +1053,7 @@ export class Engine {
       model: this.#config.model,
       threadId,
       ...(groupId ? { groupId } : {}),
+      ...(this.#chatId ? { chatId: this.#chatId } : {}),
     };
     if (toolCalls && toolCalls.length > 0) {
       assistantMsg.toolCalls = toolCalls;
@@ -1091,12 +1101,16 @@ export class Engine {
     // Legacy / sub-agent callers (no groupId/vpId pair) keep the global
     // loadAll() behaviour so we don't break those flows.
     let messages;
-    const scoped = !!(this.#groupId && this.#vpId
+    const scopedChat = !!(this.#chatId && this.#vpId
+      && typeof conversationStore.loadChatHistoryForVp === 'function');
+    const scoped = !scopedChat && !!(this.#groupId && this.#vpId
       && typeof conversationStore.loadGroupHistoryForVp === 'function');
     try {
-      messages = scoped
-        ? conversationStore.loadGroupHistoryForVp(this.#groupId, this.#vpId)
-        : conversationStore.loadAll();
+      messages = scopedChat
+        ? conversationStore.loadChatHistoryForVp(this.#chatId, this.#vpId)
+        : scoped
+          ? conversationStore.loadGroupHistoryForVp(this.#groupId, this.#vpId)
+          : conversationStore.loadAll();
     } catch { return null; }
     if (!Array.isArray(messages) || messages.length === 0) return null;
 
@@ -1212,11 +1226,13 @@ export class Engine {
       // per-VP summary written below is the durable win; physical
       // cold-archival across shared rows is the dream-level orchestrator's
       // job, not post-turn compact's.
-      if (!scoped && archiveIds.length > 0) {
+      if (!scoped && !scopedChat && archiveIds.length > 0) {
         conversationStore.moveToColdBatch(archiveIds);
       }
       if (out.compactSummary) {
-        if (scoped && typeof conversationStore.replaceCompactSummaryFor === 'function') {
+        if (scopedChat && typeof conversationStore.replaceCompactSummaryForChat === 'function') {
+          conversationStore.replaceCompactSummaryForChat(this.#chatId, this.#vpId, out.compactSummary);
+        } else if (scoped && typeof conversationStore.replaceCompactSummaryFor === 'function') {
           conversationStore.replaceCompactSummaryFor(this.#groupId, this.#vpId, out.compactSummary);
         } else {
           conversationStore.replaceCompactSummary(out.compactSummary);

@@ -223,6 +223,9 @@ export default {
   'yeaft.settings.title': 'Settings',
   // task-343: tab labels for the two-column Settings dialog
   'yeaft.settings.tabs.llm': 'LLM',
+  'settings.yeaft.tabs.llm': 'LLM',
+  'settings.yeaft.tabs.vp': 'VP Library',
+  'settings.yeaft.tabs.search': 'Search',
   'yeaft.settings.tabs.vp': 'VP Library',
   'yeaft.settings.tabs.search': 'Search',
   // Search settings (web-search backend + Tavily key + quota)
@@ -561,6 +564,16 @@ export default {
 
   // Settings - LLM Configuration
   'settings.tabs.llm': 'LLM',
+  'settings.tabs.yeaft': 'Yeaft',
+  'yeaft.sidebar.chatsHeader': 'Chats',
+  'yeaft.sidebar.groupsHeader': 'Groups',
+  'yeaft.sidebar.newChat': 'New chat',
+  'yeaft.sidebar.newGroup': 'New group',
+  'yeaft.chat.create.title': 'New chat',
+  'yeaft.chat.create.nameLabel': 'Name',
+  'yeaft.chat.create.namePlaceholder': 'e.g. Brainstorm with Athena',
+  'yeaft.chat.create.vpLabel': 'Pick a VP',
+  'yeaft.chat.create.noVps': 'No VPs in your library yet. Create one in Settings → Yeaft → VP Library.',
   'settings.llm.noAgent': 'Please select an Agent first to manage LLM configuration.',
   'settings.llm.agentOffline': 'Agent is currently offline. LLM configuration will load when the agent comes online.',
   'settings.llm.loading': 'Loading configuration...',
