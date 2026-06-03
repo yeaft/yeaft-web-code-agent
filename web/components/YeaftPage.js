@@ -575,13 +575,6 @@ export default {
       // store helper strips `fileId` shape for the wire and keeps the
       // preview/name/mimeType on the local message render.
       const attachments = Array.isArray(attachmentInfos) ? attachmentInfos : undefined;
-      // Chat Mode (1:1) takes precedence over group: if a chat is active,
-      // route through the chat send path which targets a single VP and
-      // skips group fan-out entirely.
-      if (store.yeaftActiveChatId) {
-        store.sendYeaftChat({ chatId: store.yeaftActiveChatId, text, attachments });
-        return;
-      }
       store.sendYeaftGroupChat({ groupId, text, mentions, attachments });
     };
 

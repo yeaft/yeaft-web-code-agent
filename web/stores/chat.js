@@ -366,12 +366,6 @@ export const useChatStore = defineStore('chat', {
     // setting one clears the other so the view has a single predicate.
     yeaftActiveGroupFilter: null,
 
-    // Yeaft Chat Mode (1:1 single-VP). Parallel to groups but with no
-    // fan-out. Active chat takes precedence over active group.
-    yeaftChats: [],                 // [{id, displayName, vpId, lastTurnAt, ...}]
-    yeaftActiveChatId: null,        // currently selected chat id (or null)
-    yeaftChatsLoading: false,
-
     // (PR #693 review I4 + Fowler M2: removed `pendingGroupSettingsRequest`
     // store-as-event-bus field — replaced by a normal emit chain since
     // MessageList is mounted directly inside YeaftPage.)
@@ -1059,18 +1053,13 @@ export const useChatStore = defineStore('chat', {
     },
 
     // ─── Yeaft Chat Mode (1:1) ──────────────────────────────────
-    setActiveYeaftChat(chatId) {
-      this.yeaftActiveChatId = chatId || null;
-      if (chatId) {
-        // Selecting a chat clears any active group filter so the main
-        // pane scopes cleanly to chat messages.
-        this.yeaftActiveGroupFilter = null;
-      }
+    // Phase 4: chat container removed. setActiveYeaftChat is kept as a
+    // no-op so any straggler callers (e.g. older bookmarks) don't throw.
+    setActiveYeaftChat(_chatId) {
+      // no-op
     },
     listYeaftChats() {
-      if (!this.yeaftAgentId) return;
-      this.yeaftChatsLoading = true;
-      this.sendWsMessage({ type: 'yeaft_list_chats', agentId: this.yeaftAgentId });
+      // Removed in Phase 4 — sessions list now comes from yeaftGroups.
     },
     // Phase 3: unified Session creation. A session is operationally a
     // group with N≥1 VPs. Phase 2 router accepts `yeaft_create_session`
@@ -1085,77 +1074,6 @@ export const useChatStore = defineStore('chat', {
       const payload = { roster, defaultVpId };
       if (trimmed) payload.name = trimmed;
       return this.groupCrudRequest('create', payload);
-    },
-    createYeaftChat({ displayName, vpId } = {}) {
-      if (!this.yeaftAgentId) return;
-      // vpId optional — agent defaults to the built-in Omni assistant
-      // (Yeaft Chat Mode is 1:1 with Omni; specialist VPs live in Group Mode).
-      const payload = {
-        type: 'yeaft_create_chat',
-        agentId: this.yeaftAgentId,
-        displayName: displayName || '',
-      };
-      if (vpId) payload.vpId = vpId;
-      this.sendWsMessage(payload);
-    },
-    renameYeaftChat(chatId, displayName) {
-      if (!this.yeaftAgentId || !chatId) return;
-      this.sendWsMessage({
-        type: 'yeaft_rename_chat',
-        agentId: this.yeaftAgentId,
-        chatId,
-        displayName: displayName || '',
-      });
-    },
-    archiveYeaftChat(chatId) {
-      if (!this.yeaftAgentId || !chatId) return;
-      this.sendWsMessage({ type: 'yeaft_archive_chat', agentId: this.yeaftAgentId, chatId });
-    },
-    deleteYeaftChat(chatId) {
-      if (!this.yeaftAgentId || !chatId) return;
-      this.sendWsMessage({ type: 'yeaft_delete_chat', agentId: this.yeaftAgentId, chatId });
-      if (this.yeaftActiveChatId === chatId) this.yeaftActiveChatId = null;
-    },
-    sendYeaftChat({ chatId, text, attachments }) {
-      if (!chatId || !this.yeaftAgentId) return;
-      const safeAttachments = Array.isArray(attachments)
-        ? attachments.filter((a) => a && a.fileId)
-        : [];
-      const hasAttachments = safeAttachments.length > 0;
-      if (!text?.trim() && !hasAttachments) return;
-      const effectiveText = text?.trim() ? text : '(attached files)';
-      const clientMessageId = `u_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-      if (this.yeaftConversationId) {
-        const localMsg = {
-          id: clientMessageId,
-          messageId: clientMessageId,
-          type: 'user',
-          content: effectiveText,
-          chatId,
-        };
-        if (safeAttachments.length > 0) {
-          localMsg.attachments = safeAttachments.map((a) => ({
-            fileId: a.fileId, name: a.name, preview: a.preview,
-            isImage: !!a.isImage, mimeType: a.mimeType || '',
-          }));
-        }
-        this.addMessageToConversation(this.yeaftConversationId, localMsg);
-        this.processingConversations[this.yeaftConversationId] = true;
-        this._turnCompletedConvs?.delete(this.yeaftConversationId);
-        this.getOrCreateExecutionStatus(this.yeaftConversationId);
-        watchdogHelpers.startYeaftWatchdog(this, this.yeaftConversationId);
-      }
-      const wsMsg = {
-        type: 'yeaft_chat_send',
-        agentId: this.yeaftAgentId,
-        id: clientMessageId,
-        chatId,
-        text: effectiveText,
-      };
-      if (safeAttachments.length > 0) {
-        wsMsg.attachments = safeAttachments.map((a) => ({ fileId: a.fileId, isImage: !!a.isImage }));
-      }
-      this.sendWsMessage(wsMsg);
     },
     handleYeaftOutput(msg) {
       if (!msg) return;
@@ -1215,26 +1133,6 @@ export const useChatStore = defineStore('chat', {
       if (!event) return;
 
       switch (event.type) {
-        case 'chat_list_updated': {
-          this.yeaftChats = Array.isArray(event.chats) ? event.chats : [];
-          this.yeaftChatsLoading = false;
-          break;
-        }
-        case 'chat_crud_result': {
-          if (event.ok) {
-            if (event.op === 'list' && Array.isArray(event.chats)) {
-              this.yeaftChats = event.chats;
-              this.yeaftChatsLoading = false;
-            }
-            if (event.op === 'create' && event.chat && event.chat.id) {
-              this.setActiveYeaftChat(event.chat.id);
-              if (typeof this.listYeaftChats === 'function') this.listYeaftChats();
-            }
-          } else {
-            this.yeaftChatsLoading = false;
-          }
-          break;
-        }
         case 'session_ready': {
           const agentConvId = event.conversationId;
           const localConvId = this.yeaftConversationId;
