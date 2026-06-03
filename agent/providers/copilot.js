@@ -1,5 +1,9 @@
 import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
+import { existsSync } from 'fs';
+import { homedir } from 'os';
+import { join } from 'path';
+import { DatabaseSync } from 'node:sqlite';
 import ctx from '../context.js';
 
 export const name = 'copilot';
@@ -25,6 +29,7 @@ export async function start(opts) {
   }
 
   const sessionId = opts.resumeSessionId || randomUUID();
+  const providerOptions = opts.providerOptions || prior?.providerOptions || {};
   const state = {
     providerName: name,
     conversationId: opts.conversationId,
@@ -37,11 +42,12 @@ export async function start(opts) {
     abortController: null,
     tools: [],
     slashCommands: [],
-    model: 'copilot',
+    model: providerOptions.model || 'copilot',
     userId: opts.userId,
     username: opts.username,
     disallowedTools: prior?.disallowedTools || null,
     copilotChild: null,
+    providerOptions,
     usage: { inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheCreation: 0, totalCostUsd: 0 },
   };
   ctx.conversations.set(conversationId, state);
@@ -64,7 +70,15 @@ export async function sendInput(state, prompt, opts = {}) {
   state.turnResultReceived = false;
 
   const args = ['-p', prompt, '--output-format', 'json', '-C', state.workDir, '--session-id', state.sessionId];
-  if (YOLO) args.push('--allow-all-tools');
+  const po = { ...(state.providerOptions || {}), ...(opts.providerOptions || {}) };
+  if (po.model) args.push('--model', String(po.model));
+  if (po.effort) args.push('--effort', String(po.effort));
+  if (Array.isArray(po.addDirs)) {
+    for (const d of po.addDirs) args.push('--add-dir', String(d));
+  }
+  // YOLO env var still wins as a global override; per-conv allowAllTools
+  // lets the user opt in from the UI without setting an env var.
+  if (YOLO || po.allowAllTools) args.push('--allow-all-tools');
 
   let child;
   try {
@@ -275,4 +289,196 @@ function normalizeContent(content) {
   return [{ type: 'text', text: String(content ?? '') }];
 }
 
-export default { name, start, sendInput, abort };
+export default { name, start, sendInput, abort, listFolders, listSessions, loadHistory };
+
+// ---------- history surface (reads ~/.copilot/session-store.db) ----------
+
+export function getCopilotDbPath() {
+  return process.env.COPILOT_DB_PATH || join(homedir(), '.copilot', 'session-store.db');
+}
+
+let _dbHandle = null;
+let _dbHandlePath = null;
+function openDb() {
+  const path = getCopilotDbPath();
+  if (!existsSync(path)) return null;
+  if (_dbHandle && _dbHandlePath === path) return _dbHandle;
+  if (_dbHandle) {
+    try { _dbHandle.close(); } catch { /* noop */ }
+    _dbHandle = null;
+  }
+  try {
+    _dbHandle = new DatabaseSync(path, { readOnly: true });
+    _dbHandlePath = path;
+    return _dbHandle;
+  } catch (err) {
+    if (ctx?.CONFIG?.debug) console.warn('[copilot] cannot open session DB:', err?.message || err);
+    return null;
+  }
+}
+
+// Exposed for tests so they can drop the cached handle when swapping
+// COPILOT_DB_PATH between cases.
+export function _resetCopilotDbHandle() {
+  if (_dbHandle) {
+    try { _dbHandle.close(); } catch { /* noop */ }
+  }
+  _dbHandle = null;
+  _dbHandlePath = null;
+}
+
+function toEpochMs(iso) {
+  if (!iso) return 0;
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? t : 0;
+}
+
+export async function listFolders() {
+  const db = openDb();
+  if (!db) return [];
+  try {
+    const rows = db.prepare(`
+      SELECT cwd, COUNT(*) AS sessionCount, MAX(updated_at) AS lastUpdated
+      FROM sessions
+      WHERE cwd IS NOT NULL AND cwd <> ''
+      GROUP BY cwd
+      ORDER BY lastUpdated DESC
+    `).all();
+    return rows.map(r => ({
+      name: r.cwd,
+      path: r.cwd,
+      sessionCount: Number(r.sessionCount) || 0,
+      lastModified: toEpochMs(r.lastUpdated),
+    }));
+  } catch (err) {
+    if (ctx?.CONFIG?.debug) console.warn('[copilot] listFolders failed:', err?.message || err);
+    return [];
+  }
+}
+
+export async function listSessions(workDir) {
+  if (!workDir) return [];
+  const db = openDb();
+  if (!db) return [];
+  try {
+    const rows = db.prepare(`
+      SELECT s.id, s.summary, s.created_at, s.updated_at,
+             (SELECT user_message FROM turns WHERE session_id = s.id ORDER BY turn_index ASC LIMIT 1) AS first_user
+      FROM sessions s
+      WHERE s.cwd = ?
+      ORDER BY s.updated_at DESC
+    `).all(workDir);
+    return rows.map(r => {
+      const preview = (r.first_user || '').toString().slice(0, 100);
+      const title = (r.summary && r.summary.trim()) || preview || r.id.slice(0, 8);
+      return {
+        sessionId: r.id,
+        workDir,
+        title,
+        preview,
+        lastModified: toEpochMs(r.updated_at) || toEpochMs(r.created_at),
+      };
+    }).filter(s => s.title);
+  } catch (err) {
+    if (ctx?.CONFIG?.debug) console.warn('[copilot] listSessions failed:', err?.message || err);
+    return [];
+  }
+}
+
+export async function loadHistory(workDir, sessionId, limit = 500) {
+  if (!sessionId) return [];
+  const db = openDb();
+  if (!db) return [];
+  try {
+    const allTurns = db.prepare(`
+      SELECT turn_index, user_message, assistant_response, timestamp
+      FROM turns WHERE session_id = ? ORDER BY turn_index ASC
+    `).all(sessionId);
+    // Apply limit at the turn level so we never split a tool_use / tool_result
+    // pair when truncating. Each turn typically expands to <=4 messages, so
+    // ceil(limit/4) turns is a safe upper bound that preserves recency.
+    const turns = limit && allTurns.length > Math.ceil(limit / 4)
+      ? allTurns.slice(-Math.ceil(limit / 4))
+      : allTurns;
+
+    // Tool-call events per turn, in order. Copilot's schema is not fully
+    // documented; in some versions a single tool call writes multiple rows
+    // (e.g. a "started" row with the command and a "completed" row with
+    // output/exit_code). Dedupe by tool_call_id, preferring rows that
+    // carry output so we render one tool_use + one tool_result per call.
+    const events = db.prepare(`
+      SELECT id, turn_index, tool_call_id, event_type, command, output, exit_code,
+             event_key, event_value, created_at
+      FROM forge_trajectory_events
+      WHERE session_id = ?
+      ORDER BY turn_index ASC, id ASC
+    `).all(sessionId);
+
+    const mergedByCallId = new Map();
+    const orderedKeys = [];
+    for (const e of events) {
+      const key = e.tool_call_id || `__row:${e.id}`;
+      const prev = mergedByCallId.get(key);
+      if (!prev) {
+        orderedKeys.push(key);
+        mergedByCallId.set(key, { ...e });
+      } else {
+        // Merge later rows in; non-null values win so the "completed" row
+        // adds output/exit_code without erasing the "started" row's command.
+        for (const [k, v] of Object.entries(e)) {
+          if (v != null && v !== '') prev[k] = v;
+        }
+      }
+    }
+    const eventsByTurn = new Map();
+    for (const key of orderedKeys) {
+      const e = mergedByCallId.get(key);
+      const arr = eventsByTurn.get(e.turn_index) || [];
+      arr.push(e);
+      eventsByTurn.set(e.turn_index, arr);
+    }
+
+    const messages = [];
+    for (const t of turns) {
+      if (t.user_message) {
+        messages.push({
+          type: 'user',
+          message: { role: 'user', content: [{ type: 'text', text: String(t.user_message) }] },
+        });
+      }
+      // Render any tool calls captured for this turn as assistant tool_use +
+      // user tool_result pairs, then the final assistant text.
+      const turnEvents = eventsByTurn.get(t.turn_index) || [];
+      for (const e of turnEvents) {
+        if (!e.event_type) continue;
+        const toolId = e.tool_call_id || `copilot-${t.turn_index}-${messages.length}`;
+        const toolName = e.event_type;
+        const input = e.command
+          ? { command: e.command }
+          : (e.event_key ? { [e.event_key]: e.event_value } : {});
+        messages.push({
+          type: 'assistant',
+          message: { role: 'assistant', content: [{ type: 'tool_use', id: toolId, name: toolName, input }] },
+        });
+        const outText = e.output != null
+          ? String(e.output)
+          : (e.exit_code != null ? `exit ${e.exit_code}` : '');
+        messages.push({
+          type: 'user',
+          message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolId, content: outText }] },
+        });
+      }
+      if (t.assistant_response) {
+        messages.push({
+          type: 'assistant',
+          message: { role: 'assistant', content: [{ type: 'text', text: String(t.assistant_response) }] },
+        });
+      }
+    }
+    return messages;
+  } catch (err) {
+    if (ctx?.CONFIG?.debug) console.warn('[copilot] loadHistory failed:', err?.message || err);
+    return [];
+  }
+}
+

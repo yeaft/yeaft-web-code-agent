@@ -41,10 +41,13 @@ export function createConversation(store, workDir, agentId = null, disallowedToo
   if (options && typeof options.provider === 'string') {
     msg.provider = options.provider;
   }
+  if (options && options.providerOptions && typeof options.providerOptions === 'object') {
+    msg.providerOptions = options.providerOptions;
+  }
   store.sendWsMessage(msg);
 }
 
-export function resumeConversation(store, claudeSessionId, workDir, agentId = null, disallowedTools = null) {
+export function resumeConversation(store, claudeSessionId, workDir, agentId = null, disallowedToolsOrOptions = null, maybeOptions = null) {
   const targetAgent = agentId || store.currentAgent;
   if (!targetAgent) {
     store.addMessage({
@@ -52,6 +55,16 @@ export function resumeConversation(store, claudeSessionId, workDir, agentId = nu
       content: t('chat.agent.selectFirst')
     });
     return;
+  }
+  // Backwards-compatible: old call sites pass disallowedTools as 5th arg;
+  // new ChatPage passes { provider } as the 5th arg.
+  let disallowedTools = null;
+  let options = {};
+  if (disallowedToolsOrOptions && typeof disallowedToolsOrOptions === 'object' && !Array.isArray(disallowedToolsOrOptions)) {
+    options = disallowedToolsOrOptions;
+  } else {
+    disallowedTools = disallowedToolsOrOptions;
+    if (maybeOptions && typeof maybeOptions === 'object') options = maybeOptions;
   }
   setSessionLoading(store, true, t('chat.session.loadingHistory'));
   const msg = {
@@ -62,6 +75,12 @@ export function resumeConversation(store, claudeSessionId, workDir, agentId = nu
   };
   if (disallowedTools !== null) {
     msg.disallowedTools = disallowedTools;
+  }
+  if (typeof options.provider === 'string') {
+    msg.provider = options.provider;
+  }
+  if (options.providerOptions && typeof options.providerOptions === 'object') {
+    msg.providerOptions = options.providerOptions;
   }
   store.sendWsMessage(msg);
 }

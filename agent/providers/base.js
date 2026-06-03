@@ -18,6 +18,13 @@
  * @property {(opts: StartOpts) => Promise<Object>} start
  * @property {(state: Object, prompt: string, opts?: Object) => Promise<void>} sendInput
  * @property {(state: Object) => void} abort
+ * @property {() => Promise<FolderInfo[]>} listFolders
+ *   Return the list of work-directories that this provider has sessions for.
+ * @property {(workDir: string) => Promise<SessionInfo[]>} listSessions
+ *   Return resumable sessions for a given work-directory.
+ * @property {(workDir: string, sessionId: string, limit?: number) => Promise<HistoryMessage[]>} loadHistory
+ *   Return the resumable transcript as an array of `claude_output`-compatible
+ *   envelopes (the same shape the live stream would have produced).
  *
  * @typedef {Object} StartOpts
  * @property {string} conversationId
@@ -25,6 +32,23 @@
  * @property {string|null} [resumeSessionId]
  * @property {string} [userId]
  * @property {string} [username]
+ * @property {Object} [providerOptions]   per-provider knobs (model, allowAllTools, ...)
+ *
+ * @typedef {Object} FolderInfo
+ * @property {string} name           opaque folder identifier (provider-specific)
+ * @property {string} path           original cwd path
+ * @property {number} sessionCount
+ * @property {number} lastModified   epoch ms
+ *
+ * @typedef {Object} SessionInfo
+ * @property {string} sessionId
+ * @property {string} workDir
+ * @property {string} title
+ * @property {string} [preview]
+ * @property {number} lastModified
+ * @property {number} [size]
+ *
+ * @typedef {Object} HistoryMessage   a single claude_output `data` envelope
  */
 
 export const PROVIDER_NAMES = Object.freeze(['claude-code', 'copilot']);

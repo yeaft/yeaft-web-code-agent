@@ -390,6 +390,7 @@ export async function createConversation(msg) {
       resumeSessionId: null,
       userId,
       username,
+      providerOptions: msg.providerOptions || {},
     });
     state.disallowedTools = disallowedTools || null;
   }
@@ -441,9 +442,11 @@ export async function resumeConversation(msg) {
   console.log(`[Resume] workDir: ${effectiveWorkDir} (lazy start)`);
 
   // 清理旧条目：同 conversationId 或同 claudeSessionId 的条目（避免重复恢复同一个 session 累积）
+  let priorProviderOptions = null;
   for (const [id, conv] of ctx.conversations) {
     if (id === conversationId || (claudeSessionId && conv.claudeSessionId === claudeSessionId)) {
       console.log(`[Resume] Cleaning up old conversation: ${id} (claudeSessionId: ${conv.claudeSessionId})`);
+      if (conv.providerOptions && !priorProviderOptions) priorProviderOptions = conv.providerOptions;
       if (conv.abortController) {
         conv.abortController.abort();
       }
@@ -454,7 +457,15 @@ export async function resumeConversation(msg) {
     }
   }
 
-  const historyMessages = loadSessionHistory(effectiveWorkDir, claudeSessionId);
+  let driverForHistory;
+  try { driverForHistory = getProvider(provider); }
+  catch (err) {
+    console.warn(`[Resume] unknown provider "${provider}", falling back to claude-code history loader:`, err?.message || err);
+    driverForHistory = {};
+  }
+  const historyMessages = typeof driverForHistory.loadHistory === 'function'
+    ? await driverForHistory.loadHistory(effectiveWorkDir, claudeSessionId)
+    : loadSessionHistory(effectiveWorkDir, claudeSessionId);
   if (username) console.log(`[Resume] User: ${username} (${userId})`);
   console.log(`Loaded ${historyMessages.length} history messages`);
 
@@ -492,6 +503,7 @@ export async function resumeConversation(msg) {
       resumeSessionId: claudeSessionId || null,
       userId,
       username,
+      providerOptions: msg.providerOptions || priorProviderOptions || {},
     });
     state.disallowedTools = disallowedTools || null;
   }
@@ -656,9 +668,15 @@ export async function handleCancelExecution(msg) {
   // 标记为取消状态，防止 processClaudeOutput 的 finally 发送 conversation_closed
   state.cancelled = true;
 
-  // 中止当前查询
-  if (state.abortController) {
-    state.abortController.abort();
+  // 通过 driver 中止当前查询（Claude 走 abortController；Copilot 走 SIGTERM）
+  try {
+    const driver = getProvider(state.providerName || DEFAULT_PROVIDER);
+    if (typeof driver.abort === 'function') driver.abort(state);
+  } catch (err) {
+    console.warn(`[${conversationId}] driver.abort failed:`, err?.message || err);
+    if (state.abortController) {
+      try { state.abortController.abort(); } catch { /* noop */ }
+    }
   }
 
   // 关闭输入流

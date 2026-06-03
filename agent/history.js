@@ -2,6 +2,7 @@ import { homedir } from 'os';
 import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import ctx from './context.js';
+import { getProvider, DEFAULT_PROVIDER } from './providers/index.js';
 
 // Claude 项目目录
 export function getClaudeProjectsDir() {
@@ -184,18 +185,23 @@ export function loadSessionHistory(workDir, claudeSessionId, limit = 500) {
 }
 
 export async function handleListHistorySessions(msg) {
-  const { workDir, requestId, _requestClientId } = msg;
+  const { workDir, requestId, _requestClientId, provider } = msg;
   const effectiveWorkDir = workDir || ctx.CONFIG.workDir;
+  const providerName = provider || DEFAULT_PROVIDER;
 
-  console.log(`Listing history sessions for: ${effectiveWorkDir}`);
+  console.log(`Listing history sessions for: ${effectiveWorkDir} (provider=${providerName})`);
 
   try {
-    const sessions = await getHistorySessions(effectiveWorkDir);
+    const driver = getProvider(providerName);
+    const sessions = typeof driver.listSessions === 'function'
+      ? await driver.listSessions(effectiveWorkDir)
+      : await getHistorySessions(effectiveWorkDir);
     ctx.sendToServer({
       type: 'history_sessions_list',
       requestId,
       _requestClientId,
       workDir: effectiveWorkDir,
+      provider: providerName,
       sessions
     });
   } catch (e) {
@@ -205,85 +211,42 @@ export async function handleListHistorySessions(msg) {
       requestId,
       _requestClientId,
       workDir: effectiveWorkDir,
+      provider: providerName,
       sessions: [],
       error: e.message
     });
   }
 }
 
-// 列出 Claude projects 目录下的所有 folder (工作目录)
+// 列出指定 provider 下所有 folder (工作目录)
 export async function handleListFolders(msg) {
-  const { requestId, _requestClientId } = msg;
-  const projectsDir = getClaudeProjectsDir();
+  const { requestId, _requestClientId, provider } = msg;
+  const providerName = provider || DEFAULT_PROVIDER;
 
-  console.log(`Listing folders from: ${projectsDir}`);
+  console.log(`Listing folders for provider=${providerName}`);
 
   try {
-    const folders = [];
-
-    if (existsSync(projectsDir)) {
-      const entries = readdirSync(projectsDir);
-
-      for (const entry of entries) {
-        const entryPath = join(projectsDir, entry);
-        const stats = statSync(entryPath);
-
-        if (stats.isDirectory()) {
-          // 过滤掉 crew 角色的 session 文件夹
-          // crew 角色的 cwd 在 .crew/roles/{roleName} 下，对应的文件夹名包含 --crew-roles-
-          if (entry.includes('--crew-roles-')) {
-            continue;
-          }
-
-          // 从 session 文件读取真实的工作目录路径
-          const originalPath = getWorkDirFromProjectFolder(entryPath, entry);
-
-          // 快速计数：只数 .jsonl 文件数量，不读取文件内容
-          let sessionCount = 0;
-          let lastModified = stats.mtime.getTime();
-
-          try {
-            const files = readdirSync(entryPath);
-
-            for (const file of files) {
-              if (file.endsWith('.jsonl')) {
-                sessionCount++;
-                try {
-                  const fileStats = statSync(join(entryPath, file));
-                  if (fileStats.mtime.getTime() > lastModified) {
-                    lastModified = fileStats.mtime.getTime();
-                  }
-                } catch {}
-              }
-            }
-          } catch {}
-
-          folders.push({
-            name: entry,
-            path: originalPath,
-            sessionCount,
-            lastModified
-          });
-        }
-      }
+    const driver = getProvider(providerName);
+    let folders = [];
+    if (typeof driver.listFolders === 'function') {
+      folders = await driver.listFolders();
     }
-
-    folders.sort((a, b) => b.lastModified - a.lastModified);
-
-    console.log(`Found ${folders.length} folders, sending response...`);
+    folders.sort((a, b) => (b.lastModified || 0) - (a.lastModified || 0));
+    console.log(`Found ${folders.length} folders (provider=${providerName}), sending response...`);
     ctx.sendToServer({
       type: 'folders_list',
       requestId,
       _requestClientId,
+      provider: providerName,
       folders
     });
-    console.log(`folders_list sent with ${folders.length} folders`);
   } catch (e) {
     console.error('Error listing folders:', e);
     ctx.sendToServer({
       type: 'folders_list',
       requestId,
       _requestClientId,
+      provider: providerName,
       folders: [],
       error: e.message
     });

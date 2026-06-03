@@ -316,6 +316,9 @@ export default {
   'modal.newConv.create': 'Create Conversation',
   'modal.newConv.folderLabel': '📁 Work Directories',
   'modal.newConv.provider': 'Provider',
+  'modal.newConv.model': 'Model',
+  'modal.newConv.skipPermissions': 'Skip permissions',
+  'modal.newConv.skipPermissionsHint': 'Pass --allow-all-tools (Copilot will not prompt before running tools).',
   'provider.claudeCode': 'Claude Code',
   'provider.copilot': 'Copilot',
 
