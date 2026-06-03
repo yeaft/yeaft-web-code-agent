@@ -88,9 +88,8 @@ describe('SidebarModeToggle', () => {
     expect(src).toMatch(/aria-pressed/);
   });
 
-  it('template has thumb + two labeled stations', () => {
+  it('template has a thumb (plain switch — no inner labels)', () => {
     expect(src).toMatch(/mode-toggle-thumb/);
-    expect(src).toMatch(/mode-toggle-label\s+left/);
-    expect(src).toMatch(/mode-toggle-label\s+right/);
+    expect(src).not.toMatch(/mode-toggle-label/);
   });
 });
