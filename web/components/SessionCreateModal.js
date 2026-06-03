@@ -102,11 +102,19 @@ export default {
     return {
       form: {
         name: '',
-        // Omni pre-checked per Phase 3 spec.
-        vpIds: [OMNI_VP_ID],
+        // Phase 3 spec: pre-check Omni when available. Defensive: if the
+        // VP library hasn't hydrated yet, start empty and let the watcher
+        // backfill once vpList arrives. If omni is somehow missing (user
+        // deleted it — seed-topup will restore on next agent start), fall
+        // back to the first available VP so the submit always produces a
+        // session with at least one real roster member.
+        vpIds: [],
       },
       busy: false,
       submitError: '',
+      // Track whether the user has manually touched the picker; once true
+      // we stop auto-mutating their selection from the hydration watcher.
+      vpPickerTouched: false,
     };
   },
   computed: {
@@ -145,15 +153,31 @@ export default {
         }
       }
     } catch (_) {}
+    // Apply default selection synchronously if vpList already populated.
+    this.applyDefaultSelection();
+  },
+  watch: {
+    // Re-apply default selection once vpList hydrates (snapshot arrives
+    // after mount). Skip if the user already touched the picker.
+    'vpList.length'() { this.applyDefaultSelection(); },
   },
   beforeUnmount() {
     window.removeEventListener('keydown', this.onEsc);
   },
   methods: {
+    applyDefaultSelection() {
+      if (this.vpPickerTouched) return;
+      if (this.form.vpIds.length > 0) return;
+      const list = this.vpList || [];
+      if (list.length === 0) return;
+      const hasOmni = list.some(vp => vp && vp.vpId === OMNI_VP_ID);
+      this.form.vpIds = [hasOmni ? OMNI_VP_ID : list[0].vpId];
+    },
     onEsc(e) { if (e.key === 'Escape' && !this.busy) this.requestClose(); },
     onOverlayClick() { if (!this.busy) this.requestClose(); },
     requestClose() { this.$emit('close'); },
     toggleVp(vpId, checked) {
+      this.vpPickerTouched = true;
       if (checked) {
         if (!this.form.vpIds.includes(vpId)) this.form.vpIds.push(vpId);
       } else {
@@ -177,9 +201,18 @@ export default {
           this.submitError = this.$t('yeaft.group.error.unknown', { message: 'store unavailable' });
           return;
         }
+        // Defensive: only submit vpIds that exist in the current VP
+        // library. Guards against the picker carrying a stale id (e.g.
+        // user deleted a VP in another tab between selection and submit).
+        const known = new Set((this.vpList || []).map(vp => vp && vp.vpId).filter(Boolean));
+        const submittedVpIds = this.form.vpIds.filter(id => known.has(id));
+        if (submittedVpIds.length === 0) {
+          this.submitError = this.$t('yeaft.group.error.unknown', { message: 'no valid VP selected' });
+          return;
+        }
         const res = await this.chat.createYeaftSession({
           displayName: this.form.name.trim(),
-          vpIds: this.form.vpIds.slice(),
+          vpIds: submittedVpIds,
         });
         if (res && res.ok) {
           this.$emit('created', res.group);

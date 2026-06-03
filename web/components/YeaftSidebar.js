@@ -123,6 +123,9 @@ export default {
               </div>
             </template>
           </div>
+          <div v-else class="us-group-body us-group-empty">
+            <div class="us-empty-hint">{{ $t('yeaft.session.empty') }}</div>
+          </div>
         </section>
       </div>
 

@@ -77,6 +77,15 @@ export const useGroupsStore = defineStore('groups', {
       } else if (!this.activeGroupId && nextOrder.length > 0) {
         this.activeGroupId = nextOrder[0];
       }
+      // Phase 4 follow-up: sanitize the chat store's parallel filter so a
+      // persisted yeaftActiveGroupFilter pointing at a now-deleted group
+      // does not render the main pane as empty until the user clicks.
+      try {
+        const chat = window.Pinia?.useChatStore?.();
+        if (chat && chat.yeaftActiveGroupFilter && !nextMap[chat.yeaftActiveGroupFilter]) {
+          chat.yeaftActiveGroupFilter = nextOrder[0] || null;
+        }
+      } catch (_) {}
     },
 
     /** Apply a `group_roster_changed` delta (in-place merge). */
