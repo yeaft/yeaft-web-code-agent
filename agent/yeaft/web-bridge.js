@@ -1729,19 +1729,28 @@ export function handleYeaftListChats(msg) {
 
 export function handleYeaftCreateChat(msg) {
   const requestId = msg && msg.requestId;
+  // Accept fields at top-level (current wire shape) AND inside `payload`
+  // (legacy / future) — keeps backwards compatibility cheap.
+  const top = msg || {};
   const payload = (msg && msg.payload) || {};
+  const displayName = payload.displayName || top.displayName;
+  const workDir = payload.workDir || top.workDir;
+  const explicitId = payload.id || top.id;
+  // Chat mode is 1:1 with the built-in Omni assistant by default. The
+  // VP picker is gone from the UI; callers may still override vpId to
+  // bind a chat to a specialist, but the default is omni.
+  const vpId = payload.vpId || top.vpId || 'omni';
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     if (!yeaftDir) throw new Error('no yeaft directory configured');
-    if (!payload.vpId) throw new Error('vpId required');
     const root = chatsRootFor(yeaftDir);
-    const chatId = (payload.id && String(payload.id).trim())
+    const chatId = (explicitId && String(explicitId).trim())
       || `chat_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     const h = createChatStore(root, {
       id: chatId,
-      vpId: payload.vpId,
-      displayName: payload.displayName,
-      workDir: payload.workDir,
+      vpId,
+      displayName,
+      workDir,
     });
     const meta = h.getMeta();
     h.close();
@@ -1954,6 +1963,25 @@ export async function handleYeaftChatSend(msg) {
       appendedUserPrompts,
     };
 
+    // Load the VP persona (defaults to omni) so the engine's worker
+    // prompt has the right identity/role/persona blocks. Without this,
+    // chat mode runs with a generic system prompt instead of Omni.
+    let vpPersona = null;
+    try {
+      const vp = readVp(vpId);
+      if (vp) {
+        vpPersona = {
+          vpId,
+          displayName: vp.displayName || vpId,
+          displayNameZh: vp.displayNameZh || '',
+          role: vp.role || '',
+          roleZh: vp.roleZh || '',
+          persona: vp.persona || '',
+          planInstruction: typeof vp.planInstruction === 'string' ? vp.planInstruction : '',
+        };
+      }
+    } catch { /* best-effort */ }
+
     for await (const event of eng.query({
       prompt: text,
       promptParts: attachmentBundle.promptParts && attachmentBundle.promptParts.length > 0 ? attachmentBundle.promptParts : null,
@@ -1961,6 +1989,7 @@ export async function handleYeaftChatSend(msg) {
       userAlreadyPersisted: false,
       threadId: 'main',
       senderVpId: vpId,
+      vpPersona,
     })) {
       resetQueryTimer();
       handleEngineEvent(event, handlerCtx);

@@ -1070,14 +1070,17 @@ export const useChatStore = defineStore('chat', {
       this.yeaftChatsLoading = true;
       this.sendWsMessage({ type: 'yeaft_list_chats', agentId: this.yeaftAgentId });
     },
-    createYeaftChat({ displayName, vpId }) {
+    createYeaftChat({ displayName, vpId } = {}) {
       if (!this.yeaftAgentId) return;
-      this.sendWsMessage({
+      // vpId optional — agent defaults to the built-in Omni assistant
+      // (Yeaft Chat Mode is 1:1 with Omni; specialist VPs live in Group Mode).
+      const payload = {
         type: 'yeaft_create_chat',
         agentId: this.yeaftAgentId,
         displayName: displayName || '',
-        vpId,
-      });
+      };
+      if (vpId) payload.vpId = vpId;
+      this.sendWsMessage(payload);
     },
     renameYeaftChat(chatId, displayName) {
       if (!this.yeaftAgentId || !chatId) return;

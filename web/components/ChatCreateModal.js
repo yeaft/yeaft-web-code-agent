@@ -1,15 +1,13 @@
 /**
- * ChatCreateModal — Yeaft Chat Mode (1:1).
+ * ChatCreateModal — Yeaft Chat Mode (1:1 with Omni).
  *
- * Pick exactly one VP + give the chat a display name. Single page, single
- * scroll, mirrors GroupCreateWizard styling so the two creation flows feel
- * unified. Stores are resolved lazily for test compatibility.
+ * Yeaft Chat Mode runs against the built-in Omni assistant — no VP picker.
+ * Specialist VPs live in Group Mode. The modal only takes an optional
+ * display name and uses the same overlay/button vocabulary as
+ * GroupCreateWizard for visual parity.
  */
-import VpAvatar from './VpAvatar.js';
-
 export default {
   name: 'ChatCreateModal',
-  components: { VpAvatar },
   emits: ['close', 'created'],
   template: `
     <Teleport to="body">
@@ -27,58 +25,33 @@ export default {
               maxlength="60" autocomplete="off" class="group-wizard-input"
               ref="nameInput" @keydown.enter.prevent="onSubmit" />
           </label>
-          <div class="group-wizard-field">
-            <span class="group-wizard-field-label">{{ $t('yeaft.chat.create.vpLabel') }}</span>
-            <div v-if="vps.length === 0" class="group-wizard-hint">{{ $t('yeaft.chat.create.noVps') }}</div>
-            <div v-else class="group-wizard-roster">
-              <label v-for="vp in vps" :key="vp.id"
-                class="group-wizard-vp-row"
-                :class="{ selected: form.vpId === vp.id }">
-                <input type="radio" name="chat-vp" :value="vp.id" v-model="form.vpId" />
-                <VpAvatar :vp="vp" size="sm" />
-                <span class="group-wizard-vp-name">{{ vp.displayName || vp.id }}</span>
-              </label>
-            </div>
+          <p v-if="error" class="group-wizard-error" role="alert">{{ error }}</p>
+          <div class="group-wizard-actions">
+            <button class="group-wizard-link-btn" type="button" @click="requestClose" :disabled="busy">
+              {{ $t('common.cancel') }}
+            </button>
+            <button class="group-wizard-primary-btn" type="button" @click="onSubmit" :disabled="busy">
+              {{ busy ? $t('common.creating') : $t('common.create') }}
+            </button>
           </div>
-          <p v-if="error" class="group-wizard-error">{{ error }}</p>
         </div>
-        <footer class="group-edit-footer">
-          <button type="button" class="btn-secondary" @click="requestClose">{{ $t('common.cancel') }}</button>
-          <button type="button" class="btn-primary" :disabled="!canSubmit" @click="onSubmit">
-            {{ busy ? $t('common.creating') : $t('common.create') }}
-          </button>
-        </footer>
       </div>
     </div>
     </Teleport>
   `,
   data() {
     return {
-      form: { name: '', vpId: '' },
+      form: { name: '' },
       busy: false,
       error: '',
     };
   },
   computed: {
-    vpStore() {
-      try {
-        if (typeof window !== 'undefined' && window.Pinia?.useVpStore) return window.Pinia.useVpStore();
-      } catch (_) {}
-      return null;
-    },
     chatStore() {
       try {
         if (typeof window !== 'undefined' && window.Pinia?.useChatStore) return window.Pinia.useChatStore();
       } catch (_) {}
       return null;
-    },
-    vps() {
-      const s = this.vpStore;
-      if (!s) return [];
-      return Array.isArray(s.vps) ? s.vps : (Array.isArray(s.list) ? s.list : []);
-    },
-    canSubmit() {
-      return !!this.form.vpId && !this.busy;
     },
   },
   mounted() {
@@ -87,15 +60,15 @@ export default {
   methods: {
     requestClose() { if (!this.busy) this.$emit('close'); },
     onSubmit() {
-      if (!this.canSubmit) return;
+      if (this.busy) return;
       this.error = '';
       this.busy = true;
       try {
-        this.chatStore?.createYeaftChat({
-          displayName: this.form.name || '',
-          vpId: this.form.vpId,
-        });
-        this.$emit('created', { vpId: this.form.vpId });
+        // No vpId — agent defaults to omni. The chat-store still keys
+        // memory by (chatId, vpId) so a chat opened with omni gets its
+        // own isolated memory at chat/<c>/vp/omni.
+        this.chatStore?.createYeaftChat({ displayName: this.form.name || '' });
+        this.$emit('created', {});
         this.$emit('close');
       } catch (err) {
         this.error = err?.message || String(err);
