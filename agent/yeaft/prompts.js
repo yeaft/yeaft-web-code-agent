@@ -268,7 +268,7 @@ export function normalizePromptLanguage(language) {
  *
  *   Active Scope params (DESIGN-PROMPT §3 ④):
  *   @param {object} [activeScope] — structured scope summary for this turn
- *   @param {string} [activeScope.groupId]
+ *   @param {string} [activeScope.sessionId]
  *   @param {string} [activeScope.vpId]
  *   @param {object} [activeScope.envelope]          inbound routing info (sender, intent)
  *
@@ -280,7 +280,7 @@ export function normalizePromptLanguage(language) {
  *   skillContent?: string,
  *   activeScope?: object,
  *   vpPersona?: object,
- *   groupAnnouncement?: string,
+ *   sessionAnnouncement?: string,
  *   projectDoc?: string,
  * }} params
  * @returns {string}
@@ -293,7 +293,7 @@ export function buildSystemPrompt({
   skillContent,
   activeScope,
   vpPersona,
-  groupAnnouncement = '',
+  sessionAnnouncement = '',
   projectDoc = '',
 } = {}) {
   // Normalize app locales like `zh-CN` to prompt dictionary/template keys.
@@ -341,7 +341,7 @@ export function buildSystemPrompt({
   // When a group has set an announcement, every VP in the group sees it
   // near the top of the system prompt — before tools, memory, mode-specific
   // instructions. Empty/whitespace = no block emitted.
-  const annText = (typeof groupAnnouncement === 'string') ? groupAnnouncement.trim() : '';
+  const annText = (typeof sessionAnnouncement === 'string') ? sessionAnnouncement.trim() : '';
   if (annText) {
     parts.push(`${lang.groupAnnouncementHeader || '[Group Announcement]'}\n${annText}`);
   }
@@ -482,7 +482,7 @@ function hasCjk(text) {
  *
  * Schema:
  *   ## active_scope
- *   group:   <groupId>               (omitted when missing)
+ *   group:   <sessionId>               (omitted when missing)
  *   vp:      <vpId>                  (omitted when missing)
  *   envelope: from=<sender> intent=<intent>   (omitted when no envelope)
  *
@@ -491,7 +491,7 @@ function hasCjk(text) {
  * with the rest of the Feature system; the JSDoc once described them.)
  *
  * @param {object} [activeScope]
- * @param {string} [activeScope.groupId]
+ * @param {string} [activeScope.sessionId]
  * @param {string} [activeScope.vpId]
  * @param {object} [activeScope.envelope]   inbound routing summary
  * @param {object} lang
@@ -501,8 +501,8 @@ function renderActiveScope(activeScope, lang) {
   if (!activeScope || typeof activeScope !== 'object') return '';
 
   const lines = [];
-  const group = typeof activeScope.groupId === 'string' && activeScope.groupId.trim()
-    ? activeScope.groupId.trim()
+  const group = typeof activeScope.sessionId === 'string' && activeScope.sessionId.trim()
+    ? activeScope.sessionId.trim()
     : '';
   if (group) lines.push(`group: ${group}`);
 
@@ -615,7 +615,7 @@ export function renderLayerASummaries(summaries, language = 'en') {
  * Earlier task-322 / task-334e variants accepted `taskScope` and
  * `turnScope` pass-through strings so callers could append their own
  * scope blocks. DESIGN-PROMPT v1 retired that surface — Active Scope is
- * now structured (`activeScope: { groupId, vpId, envelope }`) and
+ * now structured (`activeScope: { sessionId, vpId, envelope }`) and
  * rendered by `buildSystemPrompt` itself. Both pass-through params
  * had zero remaining callers when v1 landed; removing them prevents the
  * "two ways to describe scope" drift §1 set out to eliminate.

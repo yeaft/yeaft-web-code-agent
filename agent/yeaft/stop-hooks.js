@@ -61,9 +61,9 @@ export async function runStopHooks(context) {
     turnStartIdx,
     taskId,
     trace,
-    // Bug 6: groupId/threadId stamped on every persisted message so
+    // Bug 6: sessionId/threadId stamped on every persisted message so
     // history replay can route messages back into the originating group.
-    groupId,
+    sessionId,
     threadId,
     // Multi-VP fan-out (history-dedup): when several engines run the
     // same user prompt in parallel, the orchestrator persists the user
@@ -161,8 +161,8 @@ export async function runStopHooks(context) {
           record.toolCalls = msg.toolCalls;
         }
         if (msg.isError) record.isError = true;
-        // Bug 6: stamp groupId / threadId so replay can re-route by group.
-        if (groupId) record.groupId = groupId;
+        // Bug 6: stamp sessionId / threadId so replay can re-route by group.
+        if (sessionId) record.sessionId = sessionId;
         if (threadId) record.threadId = threadId;
         conversationStore.append(record);
         result.messagesPersisted++;

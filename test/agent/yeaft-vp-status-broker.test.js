@@ -44,14 +44,14 @@ describe('vp-status-broker — basics', () => {
   it('throws RangeError on an unknown state', () => {
     const { broker } = makeBrokerWithSink();
     expect(() =>
-      broker.transition({ groupId: 'g1', vpId: 'v1', state: 'magic' })
+      broker.transition({ sessionId: 'g1', vpId: 'v1', state: 'magic' })
     ).toThrow(RangeError);
   });
 
   it('ignores transitions without a vpId (defensive)', () => {
     const { broker, events } = makeBrokerWithSink();
     const changed = broker.transition({
-      groupId: 'g1',
+      sessionId: 'g1',
       vpId: '',
       state: 'thinking',
     });
@@ -63,10 +63,10 @@ describe('vp-status-broker — basics', () => {
 describe('vp-status-broker — dedup', () => {
   it('emits once per real transition, not per call', () => {
     const { broker, events } = makeBrokerWithSink();
-    broker.transition({ groupId: 'g1', vpId: 'v1', state: 'typing', turnId: 't1' });
+    broker.transition({ sessionId: 'g1', vpId: 'v1', state: 'typing', turnId: 't1' });
     // Same state + same turnId → no event.
-    broker.transition({ groupId: 'g1', vpId: 'v1', state: 'typing', turnId: 't1' });
-    broker.transition({ groupId: 'g1', vpId: 'v1', state: 'typing', turnId: 't1' });
+    broker.transition({ sessionId: 'g1', vpId: 'v1', state: 'typing', turnId: 't1' });
+    broker.transition({ sessionId: 'g1', vpId: 'v1', state: 'typing', turnId: 't1' });
     expect(events.filter((e) => e.type === 'vp_status_changed').length).toBe(1);
   });
 
@@ -76,8 +76,8 @@ describe('vp-status-broker — dedup', () => {
     // stick to the old turn's start time and the activity indicator
     // would look stuck.
     const { broker, events } = makeBrokerWithSink();
-    broker.transition({ groupId: 'g1', vpId: 'v1', state: 'typing', turnId: 't1' });
-    broker.transition({ groupId: 'g1', vpId: 'v1', state: 'typing', turnId: 't2' });
+    broker.transition({ sessionId: 'g1', vpId: 'v1', state: 'typing', turnId: 't1' });
+    broker.transition({ sessionId: 'g1', vpId: 'v1', state: 'typing', turnId: 't2' });
     expect(events.filter((e) => e.type === 'vp_status_changed').length).toBe(2);
   });
 });
@@ -89,12 +89,12 @@ describe('vp-status-broker — happy-path state machine', () => {
     const g = 'g1';
     const v = 'v1';
 
-    broker.transition({ groupId: g, vpId: v, state: 'typing', turnId });
-    broker.transition({ groupId: g, vpId: v, state: 'thinking', turnId });
-    broker.transition({ groupId: g, vpId: v, state: 'streaming', turnId });
-    broker.transition({ groupId: g, vpId: v, state: 'tool', turnId });
-    broker.transition({ groupId: g, vpId: v, state: 'streaming', turnId });
-    broker.settleIdle({ groupId: g, vpId: v });
+    broker.transition({ sessionId: g, vpId: v, state: 'typing', turnId });
+    broker.transition({ sessionId: g, vpId: v, state: 'thinking', turnId });
+    broker.transition({ sessionId: g, vpId: v, state: 'streaming', turnId });
+    broker.transition({ sessionId: g, vpId: v, state: 'tool', turnId });
+    broker.transition({ sessionId: g, vpId: v, state: 'streaming', turnId });
+    broker.settleIdle({ sessionId: g, vpId: v });
 
     const states = events
       .filter((e) => e.type === 'vp_status_changed')
@@ -111,10 +111,10 @@ describe('vp-status-broker — happy-path state machine', () => {
 
   it('settleIdle is idempotent on a row already at idle', () => {
     const { broker, events } = makeBrokerWithSink();
-    broker.transition({ groupId: 'g', vpId: 'v', state: 'thinking', turnId: 't1' });
-    broker.settleIdle({ groupId: 'g', vpId: 'v' });
+    broker.transition({ sessionId: 'g', vpId: 'v', state: 'thinking', turnId: 't1' });
+    broker.settleIdle({ sessionId: 'g', vpId: 'v' });
     const before = events.length;
-    broker.settleIdle({ groupId: 'g', vpId: 'v' });
+    broker.settleIdle({ sessionId: 'g', vpId: 'v' });
     expect(events.length).toBe(before);
   });
 });
@@ -125,9 +125,9 @@ describe('vp-status-broker — error path', () => {
     // try/finally that always settles to idle. This test pins the
     // contract: a manual error transition stays until the next call.
     const { broker, events } = makeBrokerWithSink();
-    broker.transition({ groupId: 'g', vpId: 'v', state: 'streaming', turnId: 't1' });
-    broker.transition({ groupId: 'g', vpId: 'v', state: 'error', turnId: 't1' });
-    broker.settleIdle({ groupId: 'g', vpId: 'v' });
+    broker.transition({ sessionId: 'g', vpId: 'v', state: 'streaming', turnId: 't1' });
+    broker.transition({ sessionId: 'g', vpId: 'v', state: 'error', turnId: 't1' });
+    broker.settleIdle({ sessionId: 'g', vpId: 'v' });
     const states = events
       .filter((e) => e.type === 'vp_status_changed')
       .map((e) => e.state);
@@ -136,39 +136,39 @@ describe('vp-status-broker — error path', () => {
 });
 
 describe('vp-status-broker — snapshot', () => {
-  it('snapshot() returns one row per (groupId, vpId)', () => {
+  it('snapshot() returns one row per (sessionId, vpId)', () => {
     const { broker } = makeBrokerWithSink();
-    broker.transition({ groupId: 'g1', vpId: 'v1', state: 'thinking', turnId: 't1' });
-    broker.transition({ groupId: 'g1', vpId: 'v2', state: 'streaming', turnId: 't2' });
-    broker.transition({ groupId: 'g2', vpId: 'v1', state: 'tool', turnId: 't3' });
+    broker.transition({ sessionId: 'g1', vpId: 'v1', state: 'thinking', turnId: 't1' });
+    broker.transition({ sessionId: 'g1', vpId: 'v2', state: 'streaming', turnId: 't2' });
+    broker.transition({ sessionId: 'g2', vpId: 'v1', state: 'tool', turnId: 't3' });
 
     const all = broker.snapshot();
     expect(all).toHaveLength(3);
     const just_g1 = broker.snapshot('g1');
     expect(just_g1).toHaveLength(2);
     expect(new Set(just_g1.map((r) => r.vpId))).toEqual(new Set(['v1', 'v2']));
-    expect(just_g1.every((r) => r.groupId === 'g1')).toBe(true);
+    expect(just_g1.every((r) => r.sessionId === 'g1')).toBe(true);
   });
 
   it('broadcastSnapshot emits a single vp_status_snapshot event', () => {
     const { broker, events } = makeBrokerWithSink();
-    broker.transition({ groupId: 'g1', vpId: 'v1', state: 'streaming', turnId: 't1' });
-    broker.transition({ groupId: 'g1', vpId: 'v2', state: 'thinking', turnId: 't1' });
+    broker.transition({ sessionId: 'g1', vpId: 'v1', state: 'streaming', turnId: 't1' });
+    broker.transition({ sessionId: 'g1', vpId: 'v2', state: 'thinking', turnId: 't1' });
 
     events.length = 0;
     broker.broadcastSnapshot();
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe('vp_status_snapshot');
-    expect(events[0].groupId).toBe(null);
+    expect(events[0].sessionId).toBe(null);
     expect(events[0].statuses).toHaveLength(2);
   });
 
   it('forget() drops a row so it does not haunt the next snapshot', () => {
     const { broker, events } = makeBrokerWithSink();
-    broker.transition({ groupId: 'g1', vpId: 'v-old', state: 'streaming', turnId: 't1' });
-    broker.forget({ groupId: 'g1', vpId: 'v-old' });
+    broker.transition({ sessionId: 'g1', vpId: 'v-old', state: 'streaming', turnId: 't1' });
+    broker.forget({ sessionId: 'g1', vpId: 'v-old' });
     events.length = 0;
-    broker.broadcastSnapshot({ groupId: 'g1' });
+    broker.broadcastSnapshot({ sessionId: 'g1' });
     expect(events[0].statuses).toEqual([]);
   });
 });
@@ -177,14 +177,14 @@ describe('vp-status-broker — wire event shape', () => {
   it('vp_status_changed payload carries the documented fields', () => {
     const { broker, events } = makeBrokerWithSink();
     broker.transition({
-      groupId: 'g1',
+      sessionId: 'g1',
       vpId: 'v1',
       state: 'streaming',
       turnId: 't1',
     });
     expect(events[0]).toMatchObject({
       type: 'vp_status_changed',
-      groupId: 'g1',
+      sessionId: 'g1',
       vpId: 'v1',
       state: 'streaming',
       turnId: 't1',
@@ -196,9 +196,9 @@ describe('vp-status-broker — wire event shape', () => {
 describe('vp-status-broker — thread aggregate', () => {
   it('keeps one thread idle without clearing another running thread on the same VP', () => {
     const { broker, events } = makeBrokerWithSink();
-    broker.transition({ groupId: 'g1', vpId: 'v1', threadId: 'thr-a', state: 'streaming', turnId: 't-a', title: 'A' });
-    broker.transition({ groupId: 'g1', vpId: 'v1', threadId: 'thr-b', state: 'tool', turnId: 't-b', title: 'B' });
-    broker.settleIdle({ groupId: 'g1', vpId: 'v1', threadId: 'thr-a', title: 'A' });
+    broker.transition({ sessionId: 'g1', vpId: 'v1', threadId: 'thr-a', state: 'streaming', turnId: 't-a', title: 'A' });
+    broker.transition({ sessionId: 'g1', vpId: 'v1', threadId: 'thr-b', state: 'tool', turnId: 't-b', title: 'B' });
+    broker.settleIdle({ sessionId: 'g1', vpId: 'v1', threadId: 'thr-a', title: 'A' });
 
     const last = events.filter((e) => e.type === 'vp_status_changed').at(-1);
     expect(last.vpId).toBe('v1');
@@ -212,8 +212,8 @@ describe('vp-status-broker — thread aggregate', () => {
 
   it('snapshot emits aggregate rows with thread summaries', () => {
     const { broker } = makeBrokerWithSink();
-    broker.transition({ groupId: 'g1', vpId: 'v1', threadId: 'thr-a', state: 'thinking', turnId: 't-a', title: 'A', messageCount: 2 });
-    broker.transition({ groupId: 'g1', vpId: 'v1', threadId: 'thr-b', state: 'streaming', turnId: 't-b', title: 'B', messageCount: 3 });
+    broker.transition({ sessionId: 'g1', vpId: 'v1', threadId: 'thr-a', state: 'thinking', turnId: 't-a', title: 'A', messageCount: 2 });
+    broker.transition({ sessionId: 'g1', vpId: 'v1', threadId: 'thr-b', state: 'streaming', turnId: 't-b', title: 'B', messageCount: 3 });
 
     const [row] = broker.snapshot('g1');
     expect(row.state).toBe('streaming');

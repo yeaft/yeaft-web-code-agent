@@ -72,7 +72,7 @@ describe('batched apply', () => {
     const merged = {
       memoryMd: 'x'.repeat(20),
       summaryMd: '',
-      sources: [{ groupId: 'g1', diff: [{ role: 'user', body: 'x'.repeat(20) }] }],
+      sources: [{ sessionId: 'g1', diff: [{ role: 'user', body: 'x'.repeat(20) }] }],
     };
     expect(needsBatchedApply(merged, 1000)).toBe(false);
     expect(needsBatchedApply(merged, 2)).toBe(true);
@@ -82,15 +82,15 @@ describe('batched apply', () => {
       memoryMd: '',
       summaryMd: '',
       sources: [
-        { groupId: 'g1', diff: [{ role: 'user', body: 'x'.repeat(40) }] }, // ~10 tokens
-        { groupId: 'g2', diff: [{ role: 'user', body: 'x'.repeat(40) }] },
-        { groupId: 'g3', diff: [{ role: 'user', body: 'x'.repeat(40) }] },
+        { sessionId: 'g1', diff: [{ role: 'user', body: 'x'.repeat(40) }] }, // ~10 tokens
+        { sessionId: 'g2', diff: [{ role: 'user', body: 'x'.repeat(40) }] },
+        { sessionId: 'g3', diff: [{ role: 'user', body: 'x'.repeat(40) }] },
       ],
     };
     const batches = batchSourcesForApply(merged, 25);
     expect(batches.length).toBeGreaterThan(1);
     // Each batch's sources flatten back to the original ordered sources.
-    const flat = batches.flat().map(s => s.groupId);
+    const flat = batches.flat().map(s => s.sessionId);
     expect(flat).toEqual(['g1', 'g2', 'g3']);
   });
   it('a single oversized source still becomes its own batch', () => {
@@ -98,12 +98,12 @@ describe('batched apply', () => {
       memoryMd: '',
       summaryMd: '',
       sources: [
-        { groupId: 'big', diff: [{ role: 'user', body: 'x'.repeat(4000) }] }, // ~1000 tokens
+        { sessionId: 'big', diff: [{ role: 'user', body: 'x'.repeat(4000) }] }, // ~1000 tokens
       ],
     };
     const batches = batchSourcesForApply(merged, 50);
     expect(batches.length).toBe(1);
-    expect(batches[0][0].groupId).toBe('big');
+    expect(batches[0][0].sessionId).toBe('big');
   });
 });
 

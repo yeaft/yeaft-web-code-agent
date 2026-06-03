@@ -90,7 +90,7 @@ function sanitizeBaseName(base) {
  *        Resolved files from server (pendingFiles → base64).
  * @param {Object} [opts]
  * @param {string} [opts.subdir]   Sub-folder under TEMP_UPLOAD_DIR
- *        (e.g. groupId). Lets multiple groups co-exist without clobbering.
+ *        (e.g. sessionId). Lets multiple groups co-exist without clobbering.
  * @param {string} [opts.cwd]      Override base dir; defaults to process.cwd()
  *        which is what yeaft tools (file-read, bash, ...) resolve relative
  *        paths against.
@@ -104,7 +104,7 @@ function sanitizeBaseName(base) {
 export function persistYeaftAttachments(files, opts = {}) {
   const cwd = opts.cwd || process.cwd();
   // Subdir is OURS — it must remain ASCII-safe because we generate it
-  // from groupId. Keep the existing strict policy here; this is NOT
+  // from sessionId. Keep the existing strict policy here; this is NOT
   // user-visible.
   const subdir = opts.subdir ? String(opts.subdir).replace(/[^a-zA-Z0-9._-]/g, '_') : '';
   const uploadDir = subdir

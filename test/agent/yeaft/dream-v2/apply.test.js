@@ -25,11 +25,11 @@ describe('targetToScope', () => {
   it('maps scope strings', () => {
     expect(targetToScope('user')).toEqual({ kind: 'user' });
     expect(targetToScope('group/g1')).toEqual({ kind: 'group', id: 'g1' });
-    expect(targetToScope('group/g1/user')).toEqual({ kind: 'group-user', groupId: 'g1' });
-    expect(targetToScope('group/g1/vp/zhang')).toEqual({ kind: 'group-vp', groupId: 'g1', id: 'zhang' });
-    expect(targetToScope('group/g1/feature/f1')).toEqual({ kind: 'group-feature', groupId: 'g1', id: 'f1' });
+    expect(targetToScope('group/g1/user')).toEqual({ kind: 'group-user', sessionId: 'g1' });
+    expect(targetToScope('group/g1/vp/zhang')).toEqual({ kind: 'group-vp', sessionId: 'g1', id: 'zhang' });
+    expect(targetToScope('group/g1/feature/f1')).toEqual({ kind: 'group-feature', sessionId: 'g1', id: 'f1' });
     expect(targetToScope('group/g1/topic/sci/phys'))
-      .toEqual({ kind: 'group-topic', groupId: 'g1', path: ['sci', 'phys'] });
+      .toEqual({ kind: 'group-topic', sessionId: 'g1', path: ['sci', 'phys'] });
   });
   it('rejects legacy root scopes', () => {
     expect(() => targetToScope('vp/zhang')).toThrow(/legacy/);
@@ -58,7 +58,7 @@ describe('UPDATE path', () => {
     const merged = {
       target: 'user',
       kind: 'update',
-      sources: [{ groupId: 'g-eng', diff: [{ role: 'user', body: 'hi' }] }],
+      sources: [{ sessionId: 'g-eng', diff: [{ role: 'user', body: 'hi' }] }],
     };
     const events = [];
     const r = await applyMergedTarget(merged, {
@@ -115,7 +115,7 @@ describe('UPDATE path', () => {
         summary_md: `S${calls}`,
       });
     };
-    const big = (id) => ({ groupId: id, diff: [{ role: 'user', body: 'x'.repeat(2000) }] });
+    const big = (id) => ({ sessionId: id, diff: [{ role: 'user', body: 'x'.repeat(2000) }] });
     const merged = {
       target: 'group/g',
       kind: 'update',
@@ -137,7 +137,7 @@ describe('UPDATE path', () => {
     writeFileSync(join(root, 'user', 'summary.md'), 'y');
     const llm = async () => 'not even close to JSON';
     await expect(applyMergedTarget(
-      { target: 'user', kind: 'update', sources: [{ groupId: 'g', diff: [] }] },
+      { target: 'user', kind: 'update', sources: [{ sessionId: 'g', diff: [] }] },
       { root, ts: 'TS-3', llm },
     )).rejects.toThrow(/malformed JSON/);
   });
@@ -156,7 +156,7 @@ describe('CREATE path', () => {
       {
         target: 'group/g-eng/topic/science/physics',
         kind: 'create',
-        sources: [{ groupId: 'g-eng', diff: [{ role: 'user', body: 'hi' }] }],
+        sources: [{ sessionId: 'g-eng', diff: [{ role: 'user', body: 'hi' }] }],
       },
       { root, ts: 'TS-4', llm, nowIso: () => '2026-04-28T03:07:00Z' },
     );
@@ -175,7 +175,7 @@ describe('CREATE path', () => {
       return JSON.stringify({ memory_md: 'NEW\n', summary_md: 'new' });
     };
     await applyMergedTarget(
-      { target: 'group/g/topic/science/physics', kind: 'create', sources: [{ groupId: 'g', diff: [] }] },
+      { target: 'group/g/topic/science/physics', kind: 'create', sources: [{ sessionId: 'g', diff: [] }] },
       { root, ts: 'TS-5', llm },
     );
     expect(readFileSync(join(root, 'group', 'g', 'topic', 'science', 'physics', 'memory.md'), 'utf8'))
@@ -189,7 +189,7 @@ describe('prompt builders', () => {
       target: 'user',
       memoryMd: 'OLD MEM',
       summaryMd: 'OLD SUM',
-      sources: [{ groupId: 'g-eng', diff: [{ role: 'user', body: 'HELLO' }] }],
+      sources: [{ sessionId: 'g-eng', diff: [{ role: 'user', body: 'HELLO' }] }],
     });
     expect(p).toContain('Scope: user');
     expect(p).toContain('OLD MEM');
@@ -208,7 +208,7 @@ describe('prompt builders', () => {
   it('CREATE prompt includes path + sources', () => {
     const p = buildCreatePrompt({
       target: 'topic/x/y',
-      sources: [{ groupId: 'g', diff: [{ role: 'user', body: 'HI' }] }],
+      sources: [{ sessionId: 'g', diff: [{ role: 'user', body: 'HI' }] }],
       siblingTopics: [{ path: 'x/z', summary: 'sib' }],
     });
     expect(p).toContain('topic/x/y');

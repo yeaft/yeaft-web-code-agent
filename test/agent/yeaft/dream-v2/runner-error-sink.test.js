@@ -46,7 +46,7 @@ describe('runDream — error sink wiring', () => {
       root,
       manual: true,
       llm,
-      listGroups: async () => ['grp_fun'],
+      listSessions: async () => ['grp_fun'],
       countMessages: async () => 25,
       loadGroupDiff: async () => Array.from(
         { length: 25 },
@@ -56,7 +56,7 @@ describe('runDream — error sink wiring', () => {
     });
 
     // Runner did not throw, and surfaced the failure in the report.
-    const g = r.groups.find(x => x.groupId === 'grp_fun');
+    const g = r.groups.find(x => x.sessionId === 'grp_fun');
     expect(g.status).toBe('error');
     expect(g.error).toContain('LLM returned malformed JSON');
 
@@ -95,7 +95,7 @@ describe('runDream — error sink wiring', () => {
       root,
       manual: true,
       llm,
-      listGroups: async () => ['g'],
+      listSessions: async () => ['g'],
       countMessages: async () => 25,
       loadGroupDiff: async () => Array.from(
         { length: 25 },
@@ -135,7 +135,7 @@ describe('runDream — error sink wiring', () => {
         root,
         manual: true,
         llm,
-        listGroups: async () => ['g'],
+        listSessions: async () => ['g'],
         countMessages: async () => 25,
         loadGroupDiff: async () => Array.from(
           { length: 25 },

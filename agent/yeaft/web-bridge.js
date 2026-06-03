@@ -2,7 +2,7 @@
  * web-bridge.js — Bridge between web UI and Yeaft Yeaft Engine.
  *
  * PR #797: group VP runtime is threaded again. Each group VP can own multiple
- * classified threads, keyed by (groupId, vpId, threadId), with separate engine,
+ * classified threads, keyed by (sessionId, vpId, threadId), with separate engine,
  * inbox, abort, todo, persistence, and frontend timeline boundaries. Legacy
  * 1:1 chat paths still use the default `main` thread.
  *
@@ -30,25 +30,25 @@ import { createVp, updateVp, deleteVp, readVp, VpCrudError } from './vp/vp-crud.
 import { scanVpLibrary } from './vp/vp-store.js';
 import { createRouter } from './routing/router.js';
 import {
-  GroupCrudError,
-  createGroupFromSpec,
-  renameGroup,
-  updateGroupAnnouncement,
-  archiveGroup,
-  deleteGroup,
-  purgeArchivedGroups,
+  SessionCrudError,
+  createSessionFromSpec,
+  renameSession,
+  updateSessionAnnouncement,
+  archiveSession,
+  deleteSession,
+  purgeArchivedSessions,
   addMember,
   removeMember,
-  setGroupDefaultVp,
-  snapshotGroups,
-  resolveGroupYeaftDir,
-  groupsRoot,
-} from './groups/group-crud.js';
-import { openGroup, loadGroupMeta } from './groups/group-store.js';
-import { loadGroupConfig, resolveGroupConfig, GroupConfigError } from './groups/group-config.js';
-import { updateGroupConfig } from './groups/group-crud.js';
-import { createCoordinator } from './groups/coordinator.js';
-import { seedDefaultGroup } from './groups/seed-default.js';
+  setSessionDefaultVp,
+  snapshotSessions,
+  resolveSessionYeaftDir,
+  sessionsRoot,
+} from './sessions/session-crud.js';
+import { openSession, loadSessionMeta } from './sessions/session-store.js';
+import { loadSessionConfig, resolveSessionConfig, SessionConfigError } from './sessions/session-config.js';
+import { updateSessionConfig } from './sessions/session-crud.js';
+import { createCoordinator } from './sessions/coordinator.js';
+import { seedDefaultSession } from './sessions/seed-default.js';
 import {
   trimSnapshotForBudget,
 } from './history-compact.js';
@@ -70,7 +70,7 @@ export function __testSetThreadClassifier(fn) {
 
 /**
  * Tracks scoped-dream triggers that are currently inflight, keyed by
- * groupId. Used by `handleYeaftDreamTrigger` to reject any overlapping
+ * sessionId. Used by `handleYeaftDreamTrigger` to reject any overlapping
  * scoped trigger rather than racing the sink-wrapping logic against
  * itself.
  *
@@ -79,7 +79,7 @@ export function __testSetThreadClassifier(fn) {
  * the first's inflight promise and dropped its own scope filter. So
  * "B during A's run" doesn't actually produce a separate scoped pass
  * for B — letting B install a second sink wrapper would only mis-stamp
- * A's events with B's groupId. Reporting B as an explicit skipped
+ * A's events with B's sessionId. Reporting B as an explicit skipped
  * result is the honest answer; the user can re-click after A settles.
  * @type {Set<string>}
  */
@@ -90,7 +90,7 @@ const inflightScopedDreamGroups = new Set();
  * cancels the prior round (if any).
  *
  * Group VP turns do not flow through this slot. They each get their own
- * controller in `vpAborts` keyed by `${groupId}::${vpId}::${threadId}`.
+ * controller in `vpAborts` keyed by `${sessionId}::${vpId}::${threadId}`.
  * The `currentAbortCtrl` here is only mutated by 1:1 chat paths, the test
  * seeder, and the session-reset cleanup. Don't reach for it from group-flow
  * code; selective abort, abort-all, and abort-turn already operate against
@@ -112,7 +112,7 @@ const turnAbortCtrls = new Map();
 /**
  * Per-turn runtime ownership. Targeted thread aborts use this instead of
  * blindly aborting every turn controller in the process.
- * @type {Map<string, { groupId: string, vpId: string, threadId: string, key: string }>}
+ * @type {Map<string, { sessionId: string, vpId: string, threadId: string, key: string }>}
  */
 const turnAbortMeta = new Map();
 
@@ -136,13 +136,13 @@ function getVpStatusBroker() {
         // The broker emits both `vp_status_changed` and
         // `vp_status_snapshot`. Both ride the standard sendYeaftEvent
         // envelope so the frontend's existing yeaft_output dispatcher
-        // sees them. We stamp groupId/vpId on the envelope for
+        // sees them. We stamp sessionId/vpId on the envelope for
         // events that target a specific VP so the server's per-client
-        // routing (groupId scoping, etc.) works the same way as
+        // routing (sessionId scoping, etc.) works the same way as
         // typing events.
         const env = {};
         if (event && typeof event === 'object') {
-          if (event.groupId) env.groupId = event.groupId;
+          if (event.sessionId) env.sessionId = event.sessionId;
           if (event.vpId) env.vpId = event.vpId;
           if (event.turnId) env.turnId = event.turnId;
         }
@@ -168,7 +168,7 @@ function getVpStatusBroker() {
  *      (`#currentAbortCtrl`, `#__queryCounter`, `#pendingT2`,
  *      `#abortReason`, `#adjustRanByGroup`, `#execLog`, `#currentThreadId`)
  *      does not collide across concurrent VP turns. Engines are keyed by
- *      `${groupId}::${vpId}::${threadId}` rather than vpId alone because
+ *      `${sessionId}::${vpId}::${threadId}` rather than vpId alone because
  *      Engine cannot serve two concurrent queries safely — even if AMS state
  *      partitions correctly by groupKey, the non-group-keyed private state
  *      would collide if the same VP ran turns in two groups or two threads
@@ -183,7 +183,7 @@ const vpEngines = new Map();
 /** @type {Map<string, AbortController>} */
 const vpAborts = new Map();
 /**
- * Per-(groupId, vpId) current TodoWrite list. Each VP in a group keeps
+ * Per-(sessionId, vpId) current TodoWrite list. Each VP in a group keeps
  * its own todo state so two VPs in the same group can independently
  * track multi-step tasks without overwriting each other. Threaded into
  * the engine's tool ctx via buildVpQueryOpts → getCurrentTodos /
@@ -193,7 +193,7 @@ const vpAborts = new Map();
  * loses the "what was the most recent list?" peek without breaking the
  * UI replay.
  *
- * Key: `${groupId}::${vpId}` (matches vpEngines/vpAborts convention).
+ * Key: `${sessionId}::${vpId}` (matches vpEngines/vpAborts convention).
  * Value: `Array<{content, status, activeForm}>` — the last full list
  * the VP wrote with TodoWrite.
  *
@@ -202,33 +202,33 @@ const vpAborts = new Map();
 const vpCurrentTodos = new Map();
 /**
  * Per-group cached coordinator + router. Created on first
- * `handleYeaftGroupChat` for a given groupId; reused across user messages
+ * `handleYeaftSessionSend` for a given sessionId; reused across user messages
  * AND across `route_forward` deliveries inside running VP turns (the
  * router is wired into engine ctx; if we recreated coord per turn the
  * route_forward path would deliver into a freshly-created `captured[]`
  * that nobody consumes — exactly the pre-707 bug).
  *
  * Purge sites:
- *   - `invalidateGroupContext(groupId)` — called from every group CRUD
+ *   - `invalidateGroupContext(sessionId)` — called from every group CRUD
  *     handler that mutates roster / meta / lifecycle state on disk
  *     (rename, update announcement, archive, delete, add/remove member,
  *     set default VP).
- *   - `handleYeaftGroupChat` — invalidates inline when its own
+ *   - `handleYeaftSessionSend` — invalidates inline when its own
  *     auto-add / default-VP-heal pass mutated the roster.
  *   - `resetYeaftSession` and `__testResetVpState` clear the whole map.
  *
  * @type {Map<string, { coord: ReturnType<typeof createCoordinator>,
  *                     router: ReturnType<typeof createRouter>,
- *                     groupHandle: object }>}
+ *                     sessionHandle: object }>}
  */
 const groupContexts = new Map();
 
-function vpKey(groupId, vpId) {
-  return `${groupId}::${vpId}`;
+function vpKey(sessionId, vpId) {
+  return `${sessionId}::${vpId}`;
 }
 
-function threadKey(groupId, vpId, threadId) {
-  return `${groupId}::${vpId}::${threadId || 'main'}`;
+function threadKey(sessionId, vpId, threadId) {
+  return `${sessionId}::${vpId}::${threadId || 'main'}`;
 }
 
 function createThreadId() {
@@ -241,8 +241,8 @@ const vpThreads = new Map();
 /** @type {Map<string, Set<Promise<string|null>>>} */
 const routePromisesByMsgId = new Map();
 
-function getVpThreadMap(groupId, vpId) {
-  const key = vpKey(groupId, vpId);
+function getVpThreadMap(sessionId, vpId) {
+  const key = vpKey(sessionId, vpId);
   let map = vpThreads.get(key);
   if (!map) {
     map = new Map();
@@ -251,20 +251,20 @@ function getVpThreadMap(groupId, vpId) {
   return map;
 }
 
-function getRunningThreads(groupId, vpId) {
-  return Array.from(getVpThreadMap(groupId, vpId).values())
+function getRunningThreads(sessionId, vpId) {
+  return Array.from(getVpThreadMap(sessionId, vpId).values())
     .filter(t => t && RUNNING_THREAD_STATES.has(t.status));
 }
 
-function getOrCreateVpThread({ groupId, vpId, threadId, title }) {
-  const map = getVpThreadMap(groupId, vpId);
+function getOrCreateVpThread({ sessionId, vpId, threadId, title }) {
+  const map = getVpThreadMap(sessionId, vpId);
   const id = threadId || createThreadId();
   let thread = map.get(id);
   const now = Date.now();
   if (!thread) {
     thread = {
       threadId: id,
-      groupId,
+      sessionId,
       vpId,
       status: 'queued',
       title: title || '新任务',
@@ -348,23 +348,23 @@ async function waitForRoutePromises(msgId) {
  * Drop the cached coordinator + router for a group AND abort/clear any
  * in-flight VP turns belonging to it. Call this from every CRUD handler
  * that mutates the group's roster, meta, or lifecycle state on disk —
- * the cached coord holds a closed `groupHandle`, so without invalidation
+ * the cached coord holds a closed `sessionHandle`, so without invalidation
  * later route_forward / ingest calls would read zombie meta (stale
  * roster, pre-rename announcement, kicked members still routable).
  *
  * Idempotent — safe to call when no entry exists.
  */
-function invalidateGroupContext(groupId) {
-  if (!groupId) return;
-  groupContexts.delete(groupId);
-  const prefix = `${groupId}::`;
+function invalidateGroupContext(sessionId) {
+  if (!sessionId) return;
+  groupContexts.delete(sessionId);
+  const prefix = `${sessionId}::`;
   for (const [k, ctrl] of vpAborts) {
     if (!k.startsWith(prefix)) continue;
     try { if (!ctrl.signal.aborted) ctrl.abort(); } catch { /* best-effort */ }
     vpAborts.delete(k);
   }
   for (const [turnId, meta] of Array.from(turnAbortMeta.entries())) {
-    if (meta?.groupId !== groupId) continue;
+    if (meta?.sessionId !== sessionId) continue;
     turnAbortCtrls.delete(turnId);
     turnAbortMeta.delete(turnId);
   }
@@ -382,7 +382,7 @@ function invalidateGroupContext(groupId) {
   }
   // Engines are NOT torn down here on purpose. They hold subordinate
   // state (AMS adjustments) that should survive a meta change and a
-  // closed groupHandle — they don't reach the on-disk group meta
+  // closed sessionHandle — they don't reach the on-disk group meta
   // directly. They *are* dropped on `resetYeaftSession`.
 }
 
@@ -458,7 +458,7 @@ let _vpUnsubscribe = null;
 
 /**
  * Per-group conversation history lives on the GroupContext entry
- * (`groupContexts.get(groupId).history`). The pre-refactor module-level
+ * (`groupContexts.get(sessionId).history`). The pre-refactor module-level
  * `conversationMessages` was a single array shared across every group —
  * a user prompt in group-A would leak into group-B's next-turn snapshot
  * because the bridge appended every turn to the same array regardless
@@ -466,7 +466,7 @@ let _vpUnsubscribe = null;
  * the in-memory tape was unified.
  *
  * Post-refactor: each GroupContext owns its own `history`, lazily
- * hydrated from `conversationStore.loadRecentByGroup(groupId)` on first
+ * hydrated from `conversationStore.loadRecentByGroup(sessionId)` on first
  * access. Group-A and group-B are isolated.
  *
  * @typedef {Array<{role:'user'|'assistant'|'tool', content:string|Array, toolCalls?:Array, toolCallId?:string, isError?:boolean}>} GroupHistory
@@ -474,9 +474,9 @@ let _vpUnsubscribe = null;
 
 /**
  * @typedef {Object} GroupContextEntry
- * @property {object|null} coord — group coordinator (lazily built by getOrCreateGroupContext)
- * @property {object|null} router — message router (lazily built by getOrCreateGroupContext)
- * @property {object|null} groupHandle — opened group handle (lazily built by getOrCreateGroupContext)
+ * @property {object|null} coord — group coordinator (lazily built by getOrCreateSessionContext)
+ * @property {object|null} router — message router (lazily built by getOrCreateSessionContext)
+ * @property {object|null} sessionHandle — opened group handle (lazily built by getOrCreateSessionContext)
  * @property {GroupHistory} history — per-group conversation tape
  * @property {boolean} historyHydrated — true once history has been loaded
  *   from disk (or explicitly assigned). The flag is required because an
@@ -491,7 +491,7 @@ function makeGroupContextStub() {
   return {
     coord: null,
     router: null,
-    groupHandle: null,
+    sessionHandle: null,
     history: [],
     historyHydrated: false,
   };
@@ -564,7 +564,7 @@ function projectPersistedToHistoryEntry(m) {
   if (m.id) entry.id = m.id;
   entry.threadId = m.threadId || m.turnId || 'main';
   entry.turnId = m.turnId || entry.threadId;
-  if (m.groupId) entry.groupId = m.groupId;
+  if (m.sessionId) entry.sessionId = m.sessionId;
   if (m.speakerVpId) entry.speakerVpId = m.speakerVpId;
   if (m.toolCallId) entry.toolCallId = m.toolCallId;
   if (Array.isArray(m.toolCalls) && m.toolCalls.length > 0) {
@@ -597,13 +597,13 @@ function hydrateHistoryAttachmentPreviews(attachments) {
   });
 }
 
-function loadVisibleGroupHistoryPage(store, groupId, limit, beforeSeq = null) {
-  if (!store || !groupId || !(limit > 0)) return { messages: [], oldestSeq: null, hasMore: false };
+function loadVisibleGroupHistoryPage(store, sessionId, limit, beforeSeq = null) {
+  if (!store || !sessionId || !(limit > 0)) return { messages: [], oldestSeq: null, hasMore: false };
 
   let rows = [];
   try {
     if (typeof store.loadVisibleByGroup === 'function') {
-      const page = store.loadVisibleByGroup(groupId, beforeSeq, limit);
+      const page = store.loadVisibleByGroup(sessionId, beforeSeq, limit);
       return {
         messages: (page.messages || []).map(projectPersistedToVisibleHistoryEntry).filter(Boolean),
         oldestSeq: (typeof page.oldestSeq === 'number') ? page.oldestSeq : null,
@@ -612,16 +612,16 @@ function loadVisibleGroupHistoryPage(store, groupId, limit, beforeSeq = null) {
     } else if (typeof store.loadOlderByGroup === 'function') {
       // Compatibility fallback for older test doubles: use an unbounded raw
       // prefix, then project/slice visible rows below.
-      rows = store.loadOlderByGroup(groupId, beforeSeq, Infinity).messages || [];
+      rows = store.loadOlderByGroup(sessionId, beforeSeq, Infinity).messages || [];
     } else if (Number.isFinite(beforeSeq)) {
       const all = typeof store.loadAllByGroup === 'function'
-        ? store.loadAllByGroup(groupId)
-        : store.loadRecentByGroup(groupId, Infinity);
+        ? store.loadAllByGroup(sessionId)
+        : store.loadRecentByGroup(sessionId, Infinity);
       rows = all.filter(m => parseSeqFromId(m?.id) < beforeSeq);
     } else if (typeof store.loadAllByGroup === 'function') {
-      rows = store.loadAllByGroup(groupId);
+      rows = store.loadAllByGroup(sessionId);
     } else {
-      rows = store.loadRecentByGroup(groupId, Infinity);
+      rows = store.loadRecentByGroup(sessionId, Infinity);
     }
   } catch (err) {
     console.error('[Yeaft] visible history page load failed:', err?.message || err);
@@ -651,16 +651,16 @@ function loadVisibleGroupHistoryPage(store, groupId, limit, beforeSeq = null) {
  * conversation store. Returns an empty array if the session isn't
  * loaded yet (sub-agent / test paths) or if the load throws.
  *
- * @param {string} groupId
+ * @param {string} sessionId
  * @returns {GroupHistory}
  */
-function hydrateGroupHistory(groupId) {
-  if (!session?.conversationStore || !groupId) return [];
+function hydrateGroupHistory(sessionId) {
+  if (!session?.conversationStore || !sessionId) return [];
   let recent;
   try {
-    recent = session.conversationStore.loadRecentByGroup(groupId);
+    recent = session.conversationStore.loadRecentByGroup(sessionId);
   } catch (err) {
-    console.warn('[Yeaft] hydrateGroupHistory failed (groupId=%s):', groupId, err?.message || err);
+    console.warn('[Yeaft] hydrateGroupHistory failed (sessionId=%s):', sessionId, err?.message || err);
     return [];
   }
   const out = [];
@@ -675,7 +675,7 @@ function hydrateGroupHistory(groupId) {
  * Get-or-create the per-group history array. Used everywhere the bridge
  * needs to read/append/snapshot a group's conversation tape. Lazily
  * inserts an entry into `groupContexts` on first access — no
- * `groupHandle` required (history is independent of coord/router
+ * `sessionHandle` required (history is independent of coord/router
  * lifecycle, so a sub-agent / route_forward path that hasn't yet
  * opened the group can still read history).
  *
@@ -684,24 +684,24 @@ function hydrateGroupHistory(groupId) {
  * compact (race guard checks reference equality), `consolidate`
  * events, and session reset.
  *
- * @param {string} groupId
+ * @param {string} sessionId
  * @returns {GroupHistory}
  */
-function getOrCreateGroupHistory(groupId) {
-  if (!groupId) return [];
-  let entry = groupContexts.get(groupId);
+function getOrCreateGroupHistory(sessionId) {
+  if (!sessionId) return [];
+  let entry = groupContexts.get(sessionId);
   // Use `historyHydrated` rather than truthiness on `history` itself —
   // an empty array (post-consolidate, post-clear, or a partial entry
-  // seeded by an early `getOrCreateGroupContext` call before data was
+  // seeded by an early `getOrCreateSessionContext` call before data was
   // loaded) is legitimate state that does NOT mean "needs hydration"...
   // unless we never loaded from disk in the first place. The flag
   // separates the two cases.
   if (entry && entry.historyHydrated) return entry.history;
   if (!entry) {
     entry = makeGroupContextStub();
-    groupContexts.set(groupId, entry);
+    groupContexts.set(sessionId, entry);
   }
-  entry.history = hydrateGroupHistory(groupId);
+  entry.history = hydrateGroupHistory(sessionId);
   entry.historyHydrated = true;
   return entry.history;
 }
@@ -715,15 +715,15 @@ function getOrCreateGroupHistory(groupId) {
  * a hydration — even setting `[]` after `consolidate` means "this is the
  * canonical state right now, don't re-load from disk".
  *
- * @param {string} groupId
+ * @param {string} sessionId
  * @param {GroupHistory} next
  */
-function setGroupHistory(groupId, next) {
-  if (!groupId) return;
-  let entry = groupContexts.get(groupId);
+function setGroupHistory(sessionId, next) {
+  if (!sessionId) return;
+  let entry = groupContexts.get(sessionId);
   if (!entry) {
     entry = makeGroupContextStub();
-    groupContexts.set(groupId, entry);
+    groupContexts.set(sessionId, entry);
   }
   entry.history = next;
   entry.historyHydrated = true;
@@ -734,10 +734,10 @@ function setGroupHistory(groupId, next) {
  * `__testGroupHistory`. Lets tests pin the per-group isolation contract
  * without booting a full session.
  *
- * @param {string} groupId
+ * @param {string} sessionId
  */
-export function __testGroupHistory(groupId) {
-  return getOrCreateGroupHistory(groupId);
+export function __testGroupHistory(sessionId) {
+  return getOrCreateGroupHistory(sessionId);
 }
 
 /**
@@ -746,8 +746,8 @@ export function __testGroupHistory(groupId) {
  *
  * Tests that need to verify the hydrate-from-disk path can construct a
  * `ConversationStore` against a tmp dir, write per-group records via
- * `store.append({groupId, ...})`, then call this helper to wire the
- * store into the bridge before calling `__testGroupHistory(groupId)`.
+ * `store.append({sessionId, ...})`, then call this helper to wire the
+ * store into the bridge before calling `__testGroupHistory(sessionId)`.
  *
  * @param {{ conversationStore: object } | null} sessionLike
  */
@@ -760,10 +760,10 @@ export function __testSetSession(sessionLike) {
  * if never seeded). Lets tests assert the `historyHydrated` flag without
  * exporting the entire `groupContexts` Map.
  *
- * @param {string} groupId
+ * @param {string} sessionId
  */
-export function __testGroupContextEntry(groupId) {
-  return groupContexts.get(groupId);
+export function __testGroupContextEntry(sessionId) {
+  return groupContexts.get(sessionId);
 }
 
 /**
@@ -772,20 +772,20 @@ export function __testGroupContextEntry(groupId) {
  * dependencies (notably `toolStats`) come from the session reference —
  * see `test/agent/web-bridge-vp-engine-tool-stats.test.js`.
  *
- * @param {string} groupId
+ * @param {string} sessionId
  * @param {string} vpId
  */
-export function __testGetOrCreateVpEngine(groupId, vpId, threadId = 'main') {
-  return getOrCreateVpEngine(groupId, vpId, threadId);
+export function __testGetOrCreateVpEngine(sessionId, vpId, threadId = 'main') {
+  return getOrCreateVpEngine(sessionId, vpId, threadId);
 }
 
 
 /** Test-only: inspect runtime thread rows for a VP. */
-export function __testGetVpThreads(groupId, vpId) {
-  const map = vpThreads.get(vpKey(groupId, vpId));
+export function __testGetVpThreads(sessionId, vpId) {
+  const map = vpThreads.get(vpKey(sessionId, vpId));
   return Array.from((map || new Map()).values()).map((thread) => ({
     threadId: thread.threadId,
-    groupId: thread.groupId,
+    sessionId: thread.sessionId,
     vpId: thread.vpId,
     status: thread.status,
     title: thread.title,
@@ -800,8 +800,8 @@ export async function __testWaitForRoutePromises(msgId) {
 }
 
 /** Test-only: route one coordinator envelope into the VP thread runtime. */
-export function __testEnqueueForVp(groupId, vpId, envelope) {
-  return enqueueForVp(groupId, vpId, envelope);
+export function __testEnqueueForVp(sessionId, vpId, envelope) {
+  return enqueueForVp(sessionId, vpId, envelope);
 }
 
 /** Whether we've already sent a permission warning to the UI */
@@ -825,12 +825,12 @@ function isPermissionErrorMsg(msg) {
  * adapter / trace / config / stores so memory recall, conversation
  * persistence, and tool registry remain consistent.
  *
- * @param {string} groupId
+ * @param {string} sessionId
  * @param {string} vpId
  * @returns {import('./engine.js').Engine}
  */
-function getOrCreateVpEngine(groupId, vpId, threadId = 'main') {
-  const key = threadKey(groupId, vpId, threadId);
+function getOrCreateVpEngine(sessionId, vpId, threadId = 'main') {
+  const key = threadKey(sessionId, vpId, threadId);
   let eng = vpEngines.get(key);
   if (eng) return eng;
   if (!session) throw new Error('getOrCreateVpEngine: session not loaded');
@@ -838,8 +838,8 @@ function getOrCreateVpEngine(groupId, vpId, threadId = 'main') {
   // session's user-level config when no override is set. The resolver
   // never mutates session.config — it returns a new object.
   const yeaftDir = ctx.CONFIG?.yeaftDir || session.yeaftDir;
-  const groupCfg = loadGroupConfig(yeaftDir, groupId);
-  const effectiveConfig = resolveGroupConfig(session.config, groupCfg);
+  const groupCfg = loadSessionConfig(yeaftDir, sessionId);
+  const effectiveConfig = resolveSessionConfig(session.config, groupCfg);
   eng = new Engine({
     adapter: session.adapter,
     trace: session.trace,
@@ -857,11 +857,11 @@ function getOrCreateVpEngine(groupId, vpId, threadId = 'main') {
     // (`if (this.#toolStats && ...)`) is false and group VP tool calls
     // are silently dropped.
     toolStats: session.toolStats || null,
-    // Per-VP fan-out: bind the engine to its (groupId, vpId) so post-turn
+    // Per-VP fan-out: bind the engine to its (sessionId, vpId) so post-turn
     // compact reads/writes a scoped summary instead of the legacy global
     // compact.md (which every VP would otherwise share, producing
     // identical, ever-growing summaries across groups).
-    groupId,
+    sessionId,
     vpId,
   });
   vpEngines.set(key, eng);
@@ -873,42 +873,42 @@ function getOrCreateVpEngine(groupId, vpId, threadId = 'main') {
  *
  * The coordinator MUST be reused across user turns AND across in-flight
  * tool calls (route_forward) — its `deliver` callback is the only way
- * envelopes reach `vpInboxes`. If we recreated it per `handleYeaftGroupChat`
+ * envelopes reach `vpInboxes`. If we recreated it per `handleYeaftSessionSend`
  * call (the pre-707 design), `route_forward` running mid-turn would
  * deliver into a doomed `captured[]` while the new dispatch ran against
  * a fresh coordinator. The persistent coordinator + module-level inboxes
  * close that gap.
  *
- * Caller is responsible for passing in a freshly-opened groupHandle on
+ * Caller is responsible for passing in a freshly-opened sessionHandle on
  * first creation; subsequent calls reuse the cached coord.
  *
- * @param {string} groupId
- * @param {object} groupHandle — only used on first creation
- * @returns {{ coord: object, router: object, groupHandle: object }}
+ * @param {string} sessionId
+ * @param {object} sessionHandle — only used on first creation
+ * @returns {{ coord: object, router: object, sessionHandle: object }}
  */
-function getOrCreateGroupContext(groupId, groupHandle) {
-  let entry = groupContexts.get(groupId);
+function getOrCreateSessionContext(sessionId, sessionHandle) {
+  let entry = groupContexts.get(sessionId);
   if (entry && entry.coord && entry.router) return entry;
   // Either no entry, or a partial entry seeded by `getOrCreateGroupHistory`
   // (no coord/router yet). Build the coord/router and merge into the
   // existing record so the per-group history reference and hydration
   // flag are preserved.
-  const coord = createCoordinator(groupHandle, {
-    deliver: (vpId, envelope) => enqueueForVp(groupId, vpId, envelope),
+  const coord = createCoordinator(sessionHandle, {
+    deliver: (vpId, envelope) => enqueueForVp(sessionId, vpId, envelope),
   });
   const router = createRouter({ coordinator: coord });
   if (!entry) {
     entry = makeGroupContextStub();
-    groupContexts.set(groupId, entry);
+    groupContexts.set(sessionId, entry);
   }
   entry.coord = coord;
   entry.router = router;
-  entry.groupHandle = groupHandle;
+  entry.sessionHandle = sessionHandle;
   // Defend against a future caller that builds a coord/router without
   // having gone through `getOrCreateGroupHistory` first: a partial entry
   // could exist with `historyHydrated:false`, so do the load now.
   if (!entry.historyHydrated) {
-    entry.history = hydrateGroupHistory(groupId);
+    entry.history = hydrateGroupHistory(sessionId);
     entry.historyHydrated = true;
   }
   return entry;
@@ -923,23 +923,23 @@ function getOrCreateGroupContext(groupId, groupHandle) {
  * `route_forward` makes the target VP's typing dot light up before the
  * engine even starts that turn.
  *
- * @param {string} groupId
+ * @param {string} sessionId
  * @param {string} vpId
- * @param {object} envelope — coordinator envelope `{groupId, taskId, msg, trigger}`
+ * @param {object} envelope — coordinator envelope `{sessionId, taskId, msg, trigger}`
  */
-function enqueueForVp(groupId, vpId, envelope) {
-  const routePromise = routeEnvelopeToVpThread(groupId, vpId, envelope);
+function enqueueForVp(sessionId, vpId, envelope) {
+  const routePromise = routeEnvelopeToVpThread(sessionId, vpId, envelope);
   registerRoutePromise(envelope?.msg?.id, routePromise);
 }
 
-async function routeEnvelopeToVpThread(groupId, vpId, envelope) {
+async function routeEnvelopeToVpThread(sessionId, vpId, envelope) {
   const { text, prompt, promptParts } = buildVpPromptPayload(vpId, envelope);
-  const runningThreads = getRunningThreads(groupId, vpId);
+  const runningThreads = getRunningThreads(sessionId, vpId);
   let thread = null;
   let related = false;
 
   if (runningThreads.length === 0) {
-    thread = getOrCreateVpThread({ groupId, vpId, title: fallbackTitle(text) });
+    thread = getOrCreateVpThread({ sessionId, vpId, title: fallbackTitle(text) });
   } else {
     const decision = await threadClassifier({
       adapter: session?.adapter,
@@ -951,7 +951,7 @@ async function routeEnvelopeToVpThread(groupId, vpId, envelope) {
     const targetIsRunning = runningThreads.some((t) => t.threadId === decision.targetThreadId);
     if (decision.decision === 'related' && decision.targetThreadId && targetIsRunning) {
       thread = getOrCreateVpThread({
-        groupId,
+        sessionId,
         vpId,
         threadId: decision.targetThreadId,
         title: decision.title,
@@ -959,7 +959,7 @@ async function routeEnvelopeToVpThread(groupId, vpId, envelope) {
       related = true;
     } else {
       thread = getOrCreateVpThread({
-        groupId,
+        sessionId,
         vpId,
         title: decision.title || fallbackTitle(text),
       });
@@ -976,7 +976,7 @@ async function routeEnvelopeToVpThread(groupId, vpId, envelope) {
     persistInboundMessageOnceByMsgId({
       msgId: envelope?.msg?.id,
       text,
-      groupId,
+      sessionId,
       threadId: thread.threadId,
       role: envelope?.msg?.meta?.injectedBy === 'route_forward' ? 'assistant' : 'user',
       speakerVpId: envelope?.msg?.meta?.senderVpId || envelope?.msg?.from || null,
@@ -986,18 +986,18 @@ async function routeEnvelopeToVpThread(groupId, vpId, envelope) {
     try {
       sendYeaftEvent({
         type: 'vp_thread_user_appended',
-        groupId,
+        sessionId,
         vpId,
         threadId: thread.threadId,
         title: thread.title,
         turnId,
         ts: Date.now(),
-      }, { groupId, vpId, threadId: thread.threadId, turnId });
+      }, { sessionId, vpId, threadId: thread.threadId, turnId });
     } catch { /* never crash WS pipeline */ }
     return thread.threadId;
   }
 
-  const key = threadKey(groupId, vpId, thread.threadId);
+  const key = threadKey(sessionId, vpId, thread.threadId);
   let inbox = vpInboxes.get(key);
   if (!inbox) {
     inbox = [];
@@ -1008,18 +1008,18 @@ async function routeEnvelopeToVpThread(groupId, vpId, envelope) {
   try {
     sendYeaftEvent({
       type: 'vp_typing_start',
-      groupId,
+      sessionId,
       vpId,
       threadId: thread.threadId,
       turnId,
       ts: Date.now(),
-    }, { groupId, vpId, threadId: thread.threadId, turnId });
+    }, { sessionId, vpId, threadId: thread.threadId, turnId });
   } catch { /* never crash WS pipeline */ }
 
   try {
     thread.status = 'typing';
     getVpStatusBroker().transition({
-      groupId,
+      sessionId,
       vpId,
       threadId: thread.threadId,
       title: thread.title,
@@ -1031,24 +1031,24 @@ async function routeEnvelopeToVpThread(groupId, vpId, envelope) {
     console.warn('[Yeaft] vp-status typing transition failed:', err?.message || err);
   }
 
-  ensureDriverRunning(groupId, vpId, thread.threadId);
+  ensureDriverRunning(sessionId, vpId, thread.threadId);
   return thread.threadId;
 }
 
-function ensureDriverRunning(groupId, vpId, threadId = 'main') {
-  const key = threadKey(groupId, vpId, threadId);
+function ensureDriverRunning(sessionId, vpId, threadId = 'main') {
+  const key = threadKey(sessionId, vpId, threadId);
   if (vpDrivers.has(key)) return;
   const promise = (async () => {
     while (true) {
       const inbox = vpInboxes.get(key);
       if (!inbox || inbox.length === 0) break;
       const { envelope, turnId, thread: queuedThread } = inbox.shift();
-      const thread = queuedThread || getOrCreateVpThread({ groupId, vpId, threadId });
+      const thread = queuedThread || getOrCreateVpThread({ sessionId, vpId, threadId });
       const vpAbort = new AbortController();
       vpAborts.set(key, vpAbort);
       turnAbortCtrls.set(turnId, vpAbort);
-      turnAbortMeta.set(turnId, { groupId, vpId, threadId: thread.threadId, key });
-      const baseSnapshot = getOrCreateGroupHistory(groupId)
+      turnAbortMeta.set(turnId, { sessionId, vpId, threadId: thread.threadId, key });
+      const baseSnapshot = getOrCreateGroupHistory(sessionId)
         .filter((m) => !m.threadId || m.threadId === 'main' || m.threadId === thread.threadId);
       const trigger = envelope?.trigger || 'fallback';
       const { text, prompt, promptParts } = buildVpPromptPayload(vpId, envelope);
@@ -1062,7 +1062,7 @@ function ensureDriverRunning(groupId, vpId, threadId = 'main') {
           persistInboundMessageOnceByMsgId({
             msgId: envMsgId,
             text,
-            groupId,
+            sessionId,
             threadId: thread.threadId,
             role: isForward ? 'assistant' : 'user',
             speakerVpId: senderVpId,
@@ -1075,7 +1075,7 @@ function ensureDriverRunning(groupId, vpId, threadId = 'main') {
         await runVpTurnWithEscalation({
           prompt,
           promptParts,
-          groupId,
+          sessionId,
           vpId,
           threadId: thread.threadId,
           thread,
@@ -1093,19 +1093,19 @@ function ensureDriverRunning(groupId, vpId, threadId = 'main') {
         try {
           sendYeaftEvent({
             type: 'vp_typing_end',
-            groupId,
+            sessionId,
             vpId,
             threadId: thread.threadId,
             turnId,
             ts: Date.now(),
-          }, { groupId, vpId, threadId: thread.threadId, turnId });
+          }, { sessionId, vpId, threadId: thread.threadId, turnId });
         } catch { /* never crash WS pipeline */ }
       }
       try {
         if (text && envelope?.msg) {
           sendYeaftEvent({
             type: 'group_message',
-            groupId,
+            sessionId,
             vpId,
             threadId: thread.threadId,
             speakerVpId: vpId,
@@ -1113,7 +1113,7 @@ function ensureDriverRunning(groupId, vpId, threadId = 'main') {
             mentions: Array.isArray(envelope?.msg?.mentions) ? envelope.msg.mentions : [],
             trigger,
             ts: Date.now(),
-          }, { groupId, vpId, threadId: thread.threadId, turnId });
+          }, { sessionId, vpId, threadId: thread.threadId, turnId });
         }
       } catch { /* never crash WS pipeline */ }
 
@@ -1142,7 +1142,7 @@ function ensureDriverRunning(groupId, vpId, threadId = 'main') {
           if (!replayText && !replayParts) continue;
           const followUpId = `followup_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`;
           const followUpEnvelope = {
-            groupId,
+            sessionId,
             taskId: envelope?.taskId || null,
             trigger: 'pending_rescue',
             msg: {
@@ -1159,7 +1159,7 @@ function ensureDriverRunning(groupId, vpId, threadId = 'main') {
             thread.status = 'typing';
             thread.updatedAt = Date.now();
             getVpStatusBroker().transition({
-              groupId,
+              sessionId,
               vpId,
               threadId: thread.threadId,
               title: thread.title || '',
@@ -1173,19 +1173,19 @@ function ensureDriverRunning(groupId, vpId, threadId = 'main') {
           try {
             sendYeaftEvent({
               type: 'vp_typing_start',
-              groupId,
+              sessionId,
               vpId,
               threadId: thread.threadId,
               turnId: followUpTurnId,
               ts: Date.now(),
-            }, { groupId, vpId, threadId: thread.threadId, turnId: followUpTurnId });
+            }, { sessionId, vpId, threadId: thread.threadId, turnId: followUpTurnId });
           } catch { /* never crash WS pipeline */ }
         }
       }
     }
     vpDrivers.delete(key);
     const tail = vpInboxes.get(key);
-    if (tail && tail.length > 0) ensureDriverRunning(groupId, vpId, threadId);
+    if (tail && tail.length > 0) ensureDriverRunning(sessionId, vpId, threadId);
   })();
   vpDrivers.set(key, promise);
 }
@@ -1240,13 +1240,13 @@ export async function __testResetVpState() {
 
 /**
  * Send a yeaft_output message carrying claude_output-format data.
- * Envelope fields: conversationId, groupId, vpId, turnId, threadId let the
+ * Envelope fields: conversationId, sessionId, vpId, turnId, threadId let the
  * frontend route incremental deltas to the correct per-VP/thread block.
  */
-function resolveGroupDefaultVpId(groupId) {
-  if (!groupId) return null;
+function resolveGroupDefaultVpId(sessionId) {
+  if (!sessionId) return null;
   try {
-    const meta = ensureGroupCoordinator(groupId)?.group?.getMeta?.();
+    const meta = ensureGroupCoordinator(sessionId)?.group?.getMeta?.();
     const vpId = typeof meta?.defaultVpId === 'string' ? meta.defaultVpId.trim() : '';
     return vpId || null;
   } catch {
@@ -1254,12 +1254,12 @@ function resolveGroupDefaultVpId(groupId) {
   }
 }
 
-function sendYeaftOutput(data, { groupId, chatId, vpId, turnId, threadId } = {}) {
-  const resolvedVpId = vpId || (groupId ? resolveGroupDefaultVpId(groupId) : null);
+function sendYeaftOutput(data, { sessionId, chatId, vpId, turnId, threadId } = {}) {
+  const resolvedVpId = vpId || (sessionId ? resolveGroupDefaultVpId(sessionId) : null);
   sendToServer({
     type: 'yeaft_output',
     conversationId: yeaftConversationId,
-    ...(groupId ? { groupId } : {}),
+    ...(sessionId ? { sessionId } : {}),
     ...(chatId ? { chatId } : {}),
     ...(resolvedVpId ? { vpId: resolvedVpId } : {}),
     ...(turnId ? { turnId } : {}),
@@ -1269,11 +1269,11 @@ function sendYeaftOutput(data, { groupId, chatId, vpId, turnId, threadId } = {})
 }
 
 /** Send a yeaft_output event (non-claude_output metadata). */
-function sendYeaftEvent(event, { groupId, chatId, vpId, turnId, threadId } = {}) {
+function sendYeaftEvent(event, { sessionId, chatId, vpId, turnId, threadId } = {}) {
   sendToServer({
     type: 'yeaft_output',
     conversationId: yeaftConversationId,
-    ...(groupId ? { groupId } : {}),
+    ...(sessionId ? { sessionId } : {}),
     ...(chatId ? { chatId } : {}),
     ...(vpId ? { vpId } : {}),
     ...(turnId ? { turnId } : {}),
@@ -1375,7 +1375,7 @@ export function handleYeaftVpDelete(msg) {
     try {
       const broker = getVpStatusBroker();
       for (const row of broker.snapshot()) {
-        if (row.vpId === vpId) broker.forget({ groupId: row.groupId, vpId });
+        if (row.vpId === vpId) broker.forget({ sessionId: row.sessionId, vpId });
       }
     } catch (err) {
       console.warn('[Yeaft] vp-status forget on delete failed:', err?.message || err);
@@ -1416,60 +1416,73 @@ export function handleYeaftVpRead(msg) {
  * Group CRUD wired to WS events.
  */
 function sendGroupCrudResult(payload) {
-  sendYeaftEvent({ type: 'group_crud_result', ...payload });
+  // Wire-compat: emit BOTH legacy `group_crud_result` (old web bundles)
+  // and the new `session_crud_result` alias. Payload includes both
+  // `groupId` and `sessionId` for the same reason — see below.
+  const out = { ...payload };
+  if (out.sessionId != null && out.groupId == null) out.groupId = out.sessionId;
+  if (out.groupId != null && out.sessionId == null) out.sessionId = out.groupId;
+  sendYeaftEvent({ type: 'group_crud_result', ...out });
+  sendYeaftEvent({ type: 'session_crud_result', ...out });
 }
 
 function sendGroupSnapshotBroadcast() {
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     if (!yeaftDir) return;
-    const groups = snapshotGroups(yeaftDir);
-    sendYeaftEvent({ type: 'group_list_updated', groups });
+    const sessions = snapshotSessions(yeaftDir);
+    // Wire-compat: emit both legacy `group_list_updated` (groups field)
+    // and new `session_list_updated` (sessions field). Old web bundles
+    // listen on the former.
+    sendYeaftEvent({ type: 'group_list_updated', groups: sessions });
+    sendYeaftEvent({ type: 'session_list_updated', sessions });
   } catch (err) {
     console.warn('[Yeaft] sendGroupSnapshotBroadcast failed:', err?.message || err);
   }
 }
 
-function sendGroupRosterChanged(group) {
-  if (!group) return;
-  sendYeaftEvent({
-    type: 'group_roster_changed',
-    groupId: group.id,
-    name: group.name,
-    roster: group.roster,
-    defaultVpId: group.defaultVpId,
-    workDir: group.workDir || '',
-  });
+function sendGroupRosterChanged(session) {
+  if (!session) return;
+  const payload = {
+    sessionId: session.id,
+    groupId: session.id, // wire-compat for old web bundles
+    name: session.name,
+    roster: session.roster,
+    defaultVpId: session.defaultVpId,
+    workDir: session.workDir || '',
+  };
+  sendYeaftEvent({ type: 'group_roster_changed', ...payload });
+  sendYeaftEvent({ type: 'session_roster_changed', ...payload });
 }
 
 function groupErrorPayload(err) {
   let code = 'unknown';
-  if (err instanceof GroupCrudError) code = err.code;
-  else if (err instanceof GroupConfigError) code = err.code;
+  if (err instanceof SessionCrudError) code = err.code;
+  else if (err instanceof SessionConfigError) code = err.code;
   return {
     code,
-    groupId: err && err.groupId,
+    sessionId: err && err.sessionId,
     message: err && err.message,
   };
 }
 
-export function handleYeaftListGroups(msg) {
+export function handleYeaftListSessions(msg) {
   const requestId = msg && msg.requestId;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
-    const groups = snapshotGroups(yeaftDir);
+    const groups = snapshotSessions(yeaftDir);
     sendGroupCrudResult({ op: 'list', requestId, ok: true, groups });
   } catch (err) {
     sendGroupCrudResult({ op: 'list', requestId, ok: false, error: groupErrorPayload(err) });
   }
 }
 
-export function handleYeaftCreateGroup(msg) {
+export function handleYeaftCreateSession(msg) {
   const requestId = msg && msg.requestId;
   const payload = (msg && msg.payload) || {};
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
-    const group = createGroupFromSpec(yeaftDir, payload);
+    const group = createSessionFromSpec(yeaftDir, payload);
     sendGroupCrudResult({ op: 'create', requestId, ok: true, group });
     sendGroupSnapshotBroadcast();
   } catch (err) {
@@ -1477,14 +1490,14 @@ export function handleYeaftCreateGroup(msg) {
   }
 }
 
-export function handleYeaftRenameGroup(msg) {
+export function handleYeaftRenameSession(msg) {
   const requestId = msg && msg.requestId;
-  const groupId = msg && msg.groupId;
+  const sessionId = msg && msg.sessionId;
   const name = msg && msg.name;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
-    const group = renameGroup(yeaftDir, groupId, name);
-    invalidateGroupContext(groupId);
+    const group = renameSession(yeaftDir, sessionId, name);
+    invalidateGroupContext(sessionId);
     sendGroupCrudResult({ op: 'rename', requestId, ok: true, group });
     sendGroupSnapshotBroadcast();
   } catch (err) {
@@ -1496,7 +1509,7 @@ export function handleYeaftRenameGroup(msg) {
  * `yeaft_update_group` — generalised group meta patch. Currently accepts
  * `name` and `announcement` keys. Empty patch is rejected; an empty/
  * whitespace-only `name` is also rejected up front rather than letting
- * `renameGroup` raise a less-specific error deeper in the call stack.
+ * `renameSession` raise a less-specific error deeper in the call stack.
  *
  * Partial-success contract: when a single patch contains BOTH `name` and
  * `announcement`, the rename is committed first; if the announcement
@@ -1506,25 +1519,25 @@ export function handleYeaftRenameGroup(msg) {
  * so this is theoretical; readers extending the patch shape should know
  * the contract permits half-commits.
  */
-export function handleYeaftUpdateGroup(msg) {
+export function handleYeaftUpdateSession(msg) {
   const requestId = msg && msg.requestId;
-  const groupId = msg && msg.groupId;
+  const sessionId = msg && msg.sessionId;
   const patch = (msg && msg.patch && typeof msg.patch === 'object') ? msg.patch : null;
   try {
     const hasName = patch && typeof patch.name === 'string' && patch.name.trim().length > 0;
     const hasAnnouncement = patch && typeof patch.announcement === 'string';
     if (!patch || (!hasName && !hasAnnouncement)) {
-      throw new GroupCrudError('invalid_patch', groupId);
+      throw new SessionCrudError('invalid_patch', sessionId);
     }
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     let group = null;
     if (hasName) {
-      group = renameGroup(yeaftDir, groupId, patch.name);
+      group = renameSession(yeaftDir, sessionId, patch.name);
     }
     if (hasAnnouncement) {
-      group = updateGroupAnnouncement(yeaftDir, groupId, patch.announcement);
+      group = updateSessionAnnouncement(yeaftDir, sessionId, patch.announcement);
     }
-    invalidateGroupContext(groupId);
+    invalidateGroupContext(sessionId);
     sendGroupCrudResult({ op: 'update', requestId, ok: true, group });
     sendGroupSnapshotBroadcast();
   } catch (err) {
@@ -1534,54 +1547,54 @@ export function handleYeaftUpdateGroup(msg) {
 
 /**
  * Persist the model selected in the group conversation header. Cache invalidation:
- * drop every cached Engine whose key starts with `${groupId}::` so the
+ * drop every cached Engine whose key starts with `${sessionId}::` so the
  * next turn picks up the new model. The group meta itself is untouched.
  *
- * Payload: { groupId, requestId, config: { model?: string|null } }
+ * Payload: { sessionId, requestId, config: { model?: string|null } }
  *  - `model: ''` or `null` clears the selected group model (falls back to user default).
  */
-export function handleYeaftUpdateGroupConfig(msg) {
+export function handleYeaftUpdateSessionConfig(msg) {
   const requestId = msg && msg.requestId;
-  const groupId = msg && msg.groupId;
+  const sessionId = msg && msg.sessionId;
   const partial = (msg && msg.config && typeof msg.config === 'object') ? msg.config : null;
   try {
-    if (!groupId) throw new GroupConfigError('missing_group_id', 'groupId required');
-    if (!partial) throw new GroupConfigError('invalid_patch', 'config object required');
+    if (!sessionId) throw new SessionConfigError('missing_group_id', 'sessionId required');
+    if (!partial) throw new SessionConfigError('invalid_patch', 'config object required');
     const yeaftDir = ctx.CONFIG?.yeaftDir;
-    const savedConfig = updateGroupConfig(yeaftDir, groupId, partial);
+    const savedConfig = updateSessionConfig(yeaftDir, sessionId, partial);
     // Drop cached engines so the next VP turn rebuilds with the new model.
-    const prefix = `${groupId}::`;
+    const prefix = `${sessionId}::`;
     for (const k of Array.from(vpEngines.keys())) {
       if (k.startsWith(prefix)) vpEngines.delete(k);
     }
-    invalidateGroupContext(groupId);
-    sendGroupCrudResult({ op: 'update_config', requestId, ok: true, groupId, config: savedConfig });
+    invalidateGroupContext(sessionId);
+    sendGroupCrudResult({ op: 'update_config', requestId, ok: true, sessionId, config: savedConfig });
     sendGroupSnapshotBroadcast();
   } catch (err) {
     sendGroupCrudResult({ op: 'update_config', requestId, ok: false, error: groupErrorPayload(err) });
   }
 }
 
-export function handleYeaftArchiveGroup(msg) {
+export function handleYeaftArchiveSession(msg) {
   const requestId = msg && msg.requestId;
-  const groupId = msg && msg.groupId;
+  const sessionId = msg && msg.sessionId;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
-    const result = archiveGroup(yeaftDir, groupId);
-    invalidateGroupContext(groupId);
-    sendGroupCrudResult({ op: 'archive', requestId, ok: true, groupId: result.groupId });
+    const result = archiveSession(yeaftDir, sessionId);
+    invalidateGroupContext(sessionId);
+    sendGroupCrudResult({ op: 'archive', requestId, ok: true, sessionId: result.sessionId });
     sendGroupSnapshotBroadcast();
   } catch (err) {
     sendGroupCrudResult({ op: 'archive', requestId, ok: false, error: groupErrorPayload(err) });
   }
 }
 
-export function handleYeaftDeleteGroup(msg) {
+export function handleYeaftDeleteSession(msg) {
   const requestId = msg && msg.requestId;
-  const groupId = msg && msg.groupId;
+  const sessionId = msg && msg.sessionId;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
-    const result = deleteGroup(yeaftDir, groupId);
+    const result = deleteSession(yeaftDir, sessionId);
     // Cascade: remove every persisted message stamped with this group id.
     // Hard delete (per user spec): no soft-archive, the bytes are gone.
     // Skipped silently if the session/store isn't initialized — the next
@@ -1589,17 +1602,17 @@ export function handleYeaftDeleteGroup(msg) {
     let messagesRemoved = 0;
     try {
       if (session && session.conversationStore) {
-        messagesRemoved = session.conversationStore.deleteByGroup(groupId);
+        messagesRemoved = session.conversationStore.deleteByGroup(sessionId);
       }
     } catch (cascadeErr) {
-      console.warn(`[Yeaft] cascade delete for group ${groupId} failed: ${cascadeErr.message}`);
+      console.warn(`[Yeaft] cascade delete for group ${sessionId} failed: ${cascadeErr.message}`);
     }
     // Drop the cached coord/router and abort/clear any in-flight VP
     // turns for the deleted group. Engines for the deleted group are
     // also dropped — unlike rename/announcement updates, the group is
     // gone for good and there's nothing to preserve.
-    invalidateGroupContext(groupId);
-    const prefix = `${groupId}::`;
+    invalidateGroupContext(sessionId);
+    const prefix = `${sessionId}::`;
     for (const k of Array.from(vpEngines.keys())) {
       if (k.startsWith(prefix)) vpEngines.delete(k);
     }
@@ -1607,7 +1620,7 @@ export function handleYeaftDeleteGroup(msg) {
       op: 'delete',
       requestId,
       ok: true,
-      groupId: result.groupId,
+      sessionId: result.sessionId,
       messagesRemoved,
     });
     sendGroupSnapshotBroadcast();
@@ -1616,14 +1629,14 @@ export function handleYeaftDeleteGroup(msg) {
   }
 }
 
-export function handleYeaftAddMember(msg) {
+export function handleYeaftSessionAddMember(msg) {
   const requestId = msg && msg.requestId;
-  const groupId = msg && msg.groupId;
+  const sessionId = msg && msg.sessionId;
   const vpId = msg && msg.vpId;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
-    const group = addMember(yeaftDir, groupId, vpId);
-    invalidateGroupContext(groupId);
+    const group = addMember(yeaftDir, sessionId, vpId);
+    invalidateGroupContext(sessionId);
     sendGroupCrudResult({ op: 'add_member', requestId, ok: true, group });
     sendGroupRosterChanged(group);
   } catch (err) {
@@ -1631,17 +1644,17 @@ export function handleYeaftAddMember(msg) {
   }
 }
 
-export function handleYeaftRemoveMember(msg) {
+export function handleYeaftSessionRemoveMember(msg) {
   const requestId = msg && msg.requestId;
-  const groupId = msg && msg.groupId;
+  const sessionId = msg && msg.sessionId;
   const vpId = msg && msg.vpId;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
-    const group = removeMember(yeaftDir, groupId, vpId);
-    invalidateGroupContext(groupId);
+    const group = removeMember(yeaftDir, sessionId, vpId);
+    invalidateGroupContext(sessionId);
     // Also drop the kicked VP's thread engines — the next time they're
     // added back they should start with fresh per-thread state.
-    const removedPrefix = `${groupId}::${vpId}::`;
+    const removedPrefix = `${sessionId}::${vpId}::`;
     for (const key of Array.from(vpEngines.keys())) {
       if (key.startsWith(removedPrefix)) vpEngines.delete(key);
     }
@@ -1652,14 +1665,14 @@ export function handleYeaftRemoveMember(msg) {
   }
 }
 
-export function handleYeaftSetDefaultVp(msg) {
+export function handleYeaftSessionSetDefaultVp(msg) {
   const requestId = msg && msg.requestId;
-  const groupId = msg && msg.groupId;
+  const sessionId = msg && msg.sessionId;
   const vpId = msg && msg.vpId;
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
-    const group = setGroupDefaultVp(yeaftDir, groupId, vpId);
-    invalidateGroupContext(groupId);
+    const group = setSessionDefaultVp(yeaftDir, sessionId, vpId);
+    invalidateGroupContext(sessionId);
     sendGroupCrudResult({ op: 'set_default_vp', requestId, ok: true, group });
     sendGroupRosterChanged(group);
   } catch (err) {
@@ -1709,14 +1722,14 @@ export function installYeaftRuntimeBridge(s) {
   //
   // Group-id stamping is NO LONGER done here. It used to be: this sink
   // read a module-level `activeScopedDreamGroupId` that
-  // `handleYeaftDreamTrigger({groupId})` parked before awaiting the
+  // `handleYeaftDreamTrigger({sessionId})` parked before awaiting the
   // scope-filtered pass. That created a race when two scoped triggers
   // overlapped (auto-tick during a manual click; or two manual clicks
   // for different groups): the second handler's `finally` could clear
   // the module slot while the first run was still emitting events,
   // dropping the stamp from the tail of the first pass. The new design:
   // `handleYeaftDreamTrigger` wraps THIS sink for the lifetime of the
-  // trigger to inject `groupId` per-call (see that function below). The
+  // trigger to inject `sessionId` per-call (see that function below). The
   // base sink is intentionally a pure passthrough.
   //
   // Bug 2: also forward turn_open / turn_close / loop events emitted by
@@ -1724,11 +1737,11 @@ export function installYeaftRuntimeBridge(s) {
   s._dreamProgressSink = (evt) => {
     try {
       if (evt.type === 'turn_open' || evt.type === 'turn_close' || evt.type === 'loop') {
-        const tag = evt && evt.groupId ? { groupId: evt.groupId } : {};
+        const tag = evt && evt.sessionId ? { sessionId: evt.sessionId } : {};
         sendYeaftEvent(evt, tag);
       } else {
         const out = { type: 'dream_progress', ...evt };
-        const tag = evt && evt.groupId ? { groupId: evt.groupId } : {};
+        const tag = evt && evt.sessionId ? { sessionId: evt.sessionId } : {};
         sendYeaftEvent(out, tag);
       }
     } catch { /* never let event delivery throw */ }
@@ -1740,7 +1753,7 @@ export function installYeaftRuntimeBridge(s) {
   // present. Per-group `yeaft_history_compacted` events fire after a
   // successful summarize+swap.
   if (s.compactor && typeof s.compactor.setOnCompacted === 'function') {
-    s.compactor.setOnCompacted((groupId, result) => {
+    s.compactor.setOnCompacted((sessionId, result) => {
       try {
         sendYeaftEvent({
           type: 'yeaft_history_compacted',
@@ -1751,7 +1764,7 @@ export function installYeaftRuntimeBridge(s) {
           afterTokens: result?.afterTokens,
           archivedCount: result?.archivedCount,
           ts: Date.now(),
-        }, { groupId });
+        }, { sessionId });
       } catch { /* WS pipeline failure must not crash compact */ }
     });
   }
@@ -1769,7 +1782,7 @@ export function installYeaftRuntimeBridge(s) {
 
 /**
  * Mid-turn vp-status transitions (text_delta / tool_call / tool_end).
- * Tolerates `hctx` missing groupId/vpId — pre-707 1:1 chat paths don't
+ * Tolerates `hctx` missing sessionId/vpId — pre-707 1:1 chat paths don't
  * have either; they're tracked as the default broker key but the
  * frontend ignores rows it doesn't recognize.
  *
@@ -1784,7 +1797,7 @@ function maybeTransitionVpStatus(hctx, state) {
       hctx.thread.updatedAt = Date.now();
     }
     getVpStatusBroker().transition({
-      groupId: hctx.groupId || null,
+      sessionId: hctx.sessionId || null,
       vpId: hctx.vpId,
       state,
       turnId: hctx.turnId || null,
@@ -1803,7 +1816,7 @@ function maybeTransitionVpStatus(hctx, state) {
  * todos, debug cards, and persistence all share the same boundary.
  *
  * @param {object} event — engine event (text_delta / tool_call / …)
- * @param {{assistantTextParts:string[], toolCallsAccum:Array, toolResultsAccum:Array, thinkingBlocksAccum?:Array, resetQueryTimer:Function, groupId?:string, vpId?:string, turnId?:string}} hctx
+ * @param {{assistantTextParts:string[], toolCallsAccum:Array, toolResultsAccum:Array, thinkingBlocksAccum?:Array, resetQueryTimer:Function, sessionId?:string, vpId?:string, turnId?:string}} hctx
  */
 export function __testHandleEngineEvent(event, hctx) {
   return handleEngineEvent(event, hctx);
@@ -1812,7 +1825,7 @@ export function __testHandleEngineEvent(event, hctx) {
 function handleEngineEvent(event, hctx) {
   hctx.resetQueryTimer();
   const envelope = {
-    groupId: hctx.groupId,
+    sessionId: hctx.sessionId,
     vpId: hctx.vpId,
     turnId: hctx.turnId,
     threadId: hctx.threadId || event.threadId,
@@ -1942,7 +1955,7 @@ function handleEngineEvent(event, hctx) {
             hctx.thread.updatedAt = Date.now();
           }
           getVpStatusBroker().settleIdle({
-            groupId: hctx.groupId || null,
+            sessionId: hctx.sessionId || null,
             vpId: hctx.vpId,
             threadId: hctx.threadId || 'main',
             title: hctx.thread?.title || '',
@@ -1953,7 +1966,7 @@ function handleEngineEvent(event, hctx) {
         }
         sendYeaftEvent({
           type: 'vp_turn_end',
-          groupId: hctx.groupId,
+          sessionId: hctx.sessionId,
           vpId: hctx.vpId,
           threadId: hctx.threadId || event.threadId || 'main',
           turnId: hctx.turnId,
@@ -1983,7 +1996,7 @@ function handleEngineEvent(event, hctx) {
     case 'consolidate':
       // Engine compressed the context — clear THIS group's accumulated
       // history. Other groups' histories stay intact.
-      if (hctx.groupId) setGroupHistory(hctx.groupId, []);
+      if (hctx.sessionId) setGroupHistory(hctx.sessionId, []);
       sendYeaftEvent({
         type: 'consolidate',
         archivedCount: event.archivedCount,
@@ -2023,7 +2036,7 @@ function handleEngineEvent(event, hctx) {
         turnId: event.turnId,
         userPrompt: event.userPrompt,
         vpId: event.vpId,
-        groupId: event.groupId,
+        sessionId: event.sessionId,
         at: event.at,
       }, envelope);
       break;
@@ -2142,19 +2155,19 @@ function handleEngineEvent(event, hctx) {
  * conversation entry point.
  *
  * Contract (post-consolidation, was previously split between handleYeaftChat
- * and handleYeaftGroupChat):
+ * and handleYeaftSessionSend):
  *   - Frontend ALWAYS sends `yeaft_group_chat`. There is no `yeaft_chat`.
- *   - `groupId` defaults to `'grp_default'` if missing — Yeaft is a single
+ *   - `sessionId` defaults to `'grp_default'` if missing — Yeaft is a single
  *     conversation backed by the default group; the user is never "outside"
  *     a group.
  *   - If the group dir doesn't exist and the resolved id is `'grp_default'`,
- *     it is seeded on the fly. Any other unknown groupId surfaces an error.
+ *     it is seeded on the fly. Any other unknown sessionId surfaces an error.
  *   - Coordinator is MANDATORY (this is what guarantees ctx.router is wired
  *     so the `route_forward` tool can never trip `router_unavailable`).
  *   - No legacy "no-group" fallback paths — they were the source of the
  *     router_unavailable bug fixed in v0.1.671.
  */
-export async function handleYeaftGroupChat(msg) {
+export async function handleYeaftSessionSend(msg) {
   if (!msg || typeof msg !== 'object') return;
   const { text } = msg;
   // PR #721: image-only send is allowed — text may be empty when the
@@ -2165,8 +2178,8 @@ export async function handleYeaftGroupChat(msg) {
   const hasFiles = Array.isArray(msg.files) && msg.files.length > 0;
   if (!text?.trim() && !hasFiles) return;
   const mentions = Array.isArray(msg.mentions) ? msg.mentions : [];
-  const groupId = (typeof msg.groupId === 'string' && msg.groupId.trim())
-    ? msg.groupId.trim()
+  const sessionId = (typeof msg.sessionId === 'string' && msg.sessionId.trim())
+    ? msg.sessionId.trim()
     : 'grp_default';
 
   // Entry gate: if a compact is in flight from the previous turn IN
@@ -2178,7 +2191,7 @@ export async function handleYeaftGroupChat(msg) {
   // a session has loaded (or in test paths that never call
   // `ensureSessionLoaded`) it may be unavailable; skip gracefully.
   if (session?.compactor) {
-    await session.compactor.awaitInFlight(groupId);
+    await session.compactor.awaitInFlight(sessionId);
   }
 
   // yeaftDir is a hard prerequisite for both session boot and group seeding;
@@ -2189,8 +2202,8 @@ export async function handleYeaftGroupChat(msg) {
     sendYeaftOutput({
       type: 'assistant',
       message: { content: [{ type: 'text', text: '⚠️ Yeaft session error: no yeaft directory configured.' }] },
-    }, { groupId });
-    sendYeaftOutput({ type: 'result', result_text: '' }, { groupId });
+    }, { sessionId });
+    sendYeaftOutput({ type: 'result', result_text: '' }, { sessionId });
     return;
   }
 
@@ -2199,46 +2212,46 @@ export async function handleYeaftGroupChat(msg) {
   // Open the group; seed grp_default on the fly if absent. Track
   // seedFailed separately so a seed crash surfaces a different message
   // than a genuinely-missing group.
-  let groupHandle = null;
-  let groupRoot = null;
+  let sessionHandle = null;
+  let sessionRoot = null;
   let seedFailed = false;
   try {
-    const groupYeaftDir = resolveGroupYeaftDir(yeaftDir, groupId);
-    groupRoot = groupsRoot(groupYeaftDir);
-    const dir = join(groupRoot, groupId);
-    if (existsSync(dir) && loadGroupMeta(dir)) {
-      groupHandle = openGroup(groupRoot, groupId);
-    } else if (groupId === 'grp_default') {
+    const groupYeaftDir = resolveSessionYeaftDir(yeaftDir, sessionId);
+    sessionRoot = sessionsRoot(groupYeaftDir);
+    const dir = join(sessionRoot, sessionId);
+    if (existsSync(dir) && loadSessionMeta(dir)) {
+      sessionHandle = openSession(sessionRoot, sessionId);
+    } else if (sessionId === 'grp_default') {
       try {
-        const seeded = seedDefaultGroup(groupYeaftDir, { memoryRoot: join(groupYeaftDir, 'memory') });
-        groupHandle = seeded.group;
+        const seeded = seedDefaultSession(groupYeaftDir, { memoryRoot: join(groupYeaftDir, 'memory') });
+        sessionHandle = seeded.group;
       } catch (seedErr) {
         seedFailed = true;
-        console.warn('[Yeaft] yeaft_group_chat: seedDefaultGroup failed', seedErr?.message || seedErr);
+        console.warn('[Yeaft] yeaft_group_chat: seedDefaultSession failed', seedErr?.message || seedErr);
       }
     } else {
-      console.warn('[Yeaft] yeaft_group_chat: groupId %s not found', groupId);
+      console.warn('[Yeaft] yeaft_group_chat: sessionId %s not found', sessionId);
     }
   } catch (err) {
     console.warn('[Yeaft] yeaft_group_chat: group open failed', err?.message || err);
   }
 
-  if (!groupHandle) {
+  if (!sessionHandle) {
     const errText = seedFailed
-      ? `⚠️ Failed to seed default group ${groupId} — check group .yeaft permissions.`
-      : `⚠️ Group ${groupId} not found.`;
+      ? `⚠️ Failed to seed default group ${sessionId} — check group .yeaft permissions.`
+      : `⚠️ Group ${sessionId} not found.`;
     sendYeaftOutput({
       type: 'assistant',
       message: { content: [{ type: 'text', text: errText }] },
-    }, { groupId });
-    sendYeaftOutput({ type: 'result', result_text: '' }, { groupId });
+    }, { sessionId });
+    sendYeaftOutput({ type: 'result', result_text: '' }, { sessionId });
     return;
   }
 
   // Auto-add @-mentioned VPs from the library, heal missing defaultVpId.
   let rosterMutated = false;
   try {
-    const meta = groupHandle.getMeta();
+    const meta = sessionHandle.getMeta();
     const wantsAdd = mentions.filter(
       (m) => m && m !== 'all' && !meta.roster.includes(m)
     );
@@ -2247,23 +2260,23 @@ export async function handleYeaftGroupChat(msg) {
         try {
           const vp = readVp(vpId);
           if (!vp) continue;
-          addMember(yeaftDir, groupId, vpId);
+          addMember(yeaftDir, sessionId, vpId);
           rosterMutated = true;
         } catch { /* skip strangers */ }
       }
       if (rosterMutated) {
-        try { groupHandle.close && groupHandle.close(); } catch { /* best-effort */ }
-        groupHandle = openGroup(groupRoot, groupId);
-        sendGroupRosterChanged(groupHandle.getMeta());
+        try { sessionHandle.close && sessionHandle.close(); } catch { /* best-effort */ }
+        sessionHandle = openSession(sessionRoot, sessionId);
+        sendGroupRosterChanged(sessionHandle.getMeta());
       }
     }
-    const meta2 = groupHandle.getMeta();
+    const meta2 = sessionHandle.getMeta();
     if (!meta2.defaultVpId && meta2.roster.length) {
       try {
-        setGroupDefaultVp(yeaftDir, groupId, meta2.roster[0]);
-        try { groupHandle.close && groupHandle.close(); } catch { /* best-effort */ }
-        groupHandle = openGroup(groupRoot, groupId);
-        sendGroupRosterChanged(groupHandle.getMeta());
+        setSessionDefaultVp(yeaftDir, sessionId, meta2.roster[0]);
+        try { sessionHandle.close && sessionHandle.close(); } catch { /* best-effort */ }
+        sessionHandle = openSession(sessionRoot, sessionId);
+        sendGroupRosterChanged(sessionHandle.getMeta());
         rosterMutated = true;
       } catch { /* best-effort */ }
     }
@@ -2272,15 +2285,15 @@ export async function handleYeaftGroupChat(msg) {
   }
 
   // task-707: per-group persistent coordinator/router. Created once per
-  // groupId; reused across user messages AND across in-flight tool calls
+  // sessionId; reused across user messages AND across in-flight tool calls
   // (route_forward delivers via this same coord). If the roster mutated
   // we replace the cached coord so it points at the freshly-opened
-  // groupHandle.
+  // sessionHandle.
   if (rosterMutated) {
-    groupContexts.delete(groupId);
+    groupContexts.delete(sessionId);
   }
-  const groupCtx = getOrCreateGroupContext(groupId, groupHandle);
-  const coord = groupCtx.coord;
+  const sessionCtx = getOrCreateSessionContext(sessionId, sessionHandle);
+  const coord = sessionCtx.coord;
 
   // Multi-thread routing owns active-VP decisions. Do not abort an active
   // VP before classification: a new query may append to the running thread
@@ -2299,7 +2312,7 @@ export async function handleYeaftGroupChat(msg) {
   let attachmentBundle = { promptAttachments: [], promptSuffix: '', promptParts: [], failed: [] };
   if (inboundFiles.length > 0) {
     try {
-      attachmentBundle = persistYeaftAttachments(inboundFiles, { subdir: groupId });
+      attachmentBundle = persistYeaftAttachments(inboundFiles, { subdir: sessionId });
     } catch (err) {
       console.warn('[Yeaft] yeaft_group_chat: attachment persist failed', err?.message || err);
     }
@@ -2314,7 +2327,7 @@ export async function handleYeaftGroupChat(msg) {
     sendYeaftOutput({
       type: 'assistant',
       message: { content: [{ type: 'text', text: `⚠️ ${attachmentBundle.failed.length} file(s) could not be attached:\n${detail}` }] },
-    }, { groupId });
+    }, { sessionId });
   }
   const persistedAttachments = attachmentsForPersistence(attachmentBundle.promptAttachments);
 
@@ -2344,8 +2357,8 @@ export async function handleYeaftGroupChat(msg) {
     sendYeaftOutput({
       type: 'assistant',
       message: { content: [{ type: 'text', text: `⚠️ Group dispatch error: ${err?.message || err}` }] },
-    }, { groupId });
-    sendYeaftOutput({ type: 'result', result_text: '' }, { groupId });
+    }, { sessionId });
+    sendYeaftOutput({ type: 'result', result_text: '' }, { sessionId });
     return;
   }
 
@@ -2365,8 +2378,8 @@ export async function handleYeaftGroupChat(msg) {
     sendYeaftOutput({
       type: 'assistant',
       message: { content: [{ type: 'text', text: '⚠️ No VP available to respond — check the group roster.' }] },
-    }, { groupId });
-    sendYeaftOutput({ type: 'result', result_text: '' }, { groupId });
+    }, { sessionId });
+    sendYeaftOutput({ type: 'result', result_text: '' }, { sessionId });
     return;
   }
 
@@ -2404,33 +2417,33 @@ async function waitForVpDrivers(_groupId, driverKeys = []) {
  *
  * @param {object} args
  * @param {string} args.vpId
- * @param {object} args.groupCoordinator — the persistent coordinator for the
+ * @param {object} args.sessionCoordinator — the persistent coordinator for the
  *   group; used here for `group.getMeta()` (defaultVpId, announcement) and
  *   to bind the per-group router into toolCtx.
- * @param {string} [args.groupId]
+ * @param {string} [args.sessionId]
  * @param {object} [args.envelope] — the inbound coordinator envelope that
  *   triggered this turn. Threaded into toolCtx as `inboundEnvelope` so
  *   `route_forward` can extend `causedBy` chains correctly. Optional only
  *   for pre-707 callers that no longer exist in production.
  */
-export function buildVpQueryOpts({ vpId, groupCoordinator, groupId, envelope, threadId = 'main' }) {
+export function buildVpQueryOpts({ vpId, sessionCoordinator, sessionId, envelope, threadId = 'main' }) {
   // Read the group meta once and reuse for both defaultVpId fallback and
   // announcement injection. Each .getMeta() reload reads + parses the
   // group.json file, so calling it twice per turn is wasteful — and
   // (more importantly) opens a window where a concurrent group edit
   // could land between the two reads, giving the engine a defaultVpId
   // from one snapshot and an announcement from a newer one.
-  let groupMeta = null;
+  let sessionMeta = null;
   try {
-    groupMeta = groupCoordinator && groupCoordinator.group
-      && typeof groupCoordinator.group.getMeta === 'function'
-      ? groupCoordinator.group.getMeta() : null;
+    sessionMeta = sessionCoordinator && sessionCoordinator.group
+      && typeof sessionCoordinator.group.getMeta === 'function'
+      ? sessionCoordinator.group.getMeta() : null;
   } catch { /* coordinator inspection is best-effort */ }
 
   let resolvedVpId = vpId;
   if (!resolvedVpId) {
-    if (groupMeta && typeof groupMeta.defaultVpId === 'string' && groupMeta.defaultVpId) {
-      resolvedVpId = groupMeta.defaultVpId;
+    if (sessionMeta && typeof sessionMeta.defaultVpId === 'string' && sessionMeta.defaultVpId) {
+      resolvedVpId = sessionMeta.defaultVpId;
     }
   }
   if (!resolvedVpId) {
@@ -2450,27 +2463,27 @@ export function buildVpQueryOpts({ vpId, groupCoordinator, groupId, envelope, th
   if (!resolvedVpId) return undefined;
 
   const out = { senderVpId: resolvedVpId, threadId: threadId || 'main' };
-  if (typeof groupId === 'string' && groupId.trim()) {
-    out.groupId = groupId.trim();
+  if (typeof sessionId === 'string' && sessionId.trim()) {
+    out.sessionId = sessionId.trim();
   }
   // task-334-group-editor: surface the group announcement to the engine so
   // buildWorkerPrompt can inject it as a CLAUDE.md-style shared prefix.
   // Empty/missing reads as '' and prompts.js skips the section.
-  if (groupMeta && typeof groupMeta.announcement === 'string') {
-    out.groupAnnouncement = groupMeta.announcement;
+  if (sessionMeta && typeof sessionMeta.announcement === 'string') {
+    out.sessionAnnouncement = sessionMeta.announcement;
   }
   // Surface the group's configured working directory so the engine can
   // resolve CLAUDE.md / AGENTS.md at that path and inject it as a
   // [Project Doc] block above the announcement. Groups with no workDir
   // skip the block silently (matches the announcement contract).
-  if (groupMeta && typeof groupMeta.workDir === 'string' && groupMeta.workDir.trim()) {
-    out.workDir = groupMeta.workDir.trim();
+  if (sessionMeta && typeof sessionMeta.workDir === 'string' && sessionMeta.workDir.trim()) {
+    out.workDir = sessionMeta.workDir.trim();
   }
   const persona = buildVpPersona(resolvedVpId);
   if (persona) out.vpPersona = persona;
-  if (groupCoordinator && typeof groupCoordinator.ingest === 'function') {
+  if (sessionCoordinator && typeof sessionCoordinator.ingest === 'function') {
     try {
-      out.router = createRouter({ coordinator: groupCoordinator });
+      out.router = createRouter({ coordinator: sessionCoordinator });
     } catch {
       // Router build failure is non-fatal.
     }
@@ -2484,10 +2497,10 @@ export function buildVpQueryOpts({ vpId, groupCoordinator, groupId, envelope, th
     out.inboundEnvelope = envelope;
   }
   // TodoWrite per-thread isolation. Bind closures that read/write a slot
-  // keyed by `${groupId}::${vpId}::${threadId}` so concurrent threads for
+  // keyed by `${sessionId}::${vpId}::${threadId}` so concurrent threads for
   // the same VP cannot overwrite each other's lists, and the TodoWrite tool
   // can stay ignorant of routing details (it just calls ctx.setCurrentTodos).
-  const todosKey = threadKey(out.groupId || '', resolvedVpId, out.threadId || 'main');
+  const todosKey = threadKey(out.sessionId || '', resolvedVpId, out.threadId || 'main');
   out.getCurrentTodos = () => {
     const cached = vpCurrentTodos.get(todosKey);
     return Array.isArray(cached) ? cached.slice() : null;
@@ -2533,13 +2546,13 @@ async function ensureSessionLoaded() {
   // Bug 8: clean up legacy `.archived-*` group dirs at boot.
   try {
     if (yeaftDir) {
-      const removed = purgeArchivedGroups(yeaftDir);
+      const removed = purgeArchivedSessions(yeaftDir);
       if (removed && removed.length > 0) {
         console.log(`[Yeaft] purged ${removed.length} legacy .archived group dir(s)`);
       }
     }
   } catch (err) {
-    console.warn('[Yeaft] purgeArchivedGroups failed:', err?.message || err);
+    console.warn('[Yeaft] purgeArchivedSessions failed:', err?.message || err);
   }
 
   yeaftConversationId = `yeaft-${Date.now()}`;
@@ -2597,7 +2610,7 @@ async function ensureSessionLoaded() {
  * helpers) or for adapter implementations that ignore signal.
  */
 async function runVpTurnWithEscalation(args) {
-  const { groupId, vpId, turnId, threadId, thread } = args;
+  const { sessionId, vpId, turnId, threadId, thread } = args;
   const deadlineMs = QUERY_TIMEOUT_MS + ESCALATE_AFTER_ABORT_MS;
   await raceWithEscalation(runVpTurn(args), {
     deadlineMs,
@@ -2608,7 +2621,7 @@ async function runVpTurnWithEscalation(args) {
       try {
         sendYeaftOutput(
           { type: 'result', result_text: '', stopped: true },
-          { groupId, vpId, turnId, threadId },
+          { sessionId, vpId, turnId, threadId },
         );
       } catch { /* never crash WS pipeline */ }
       // vp-status: when the watchdog escalates, `runVpTurn`'s inner
@@ -2620,7 +2633,7 @@ async function runVpTurnWithEscalation(args) {
       // settling here would re-introduce the "stuck on streaming" bug
       // the whole PR is meant to fix.
       try {
-        getVpStatusBroker().settleIdle({ groupId, vpId, threadId: threadId || 'main', title: thread?.title || '' });
+        getVpStatusBroker().settleIdle({ sessionId, vpId, threadId: threadId || 'main', title: thread?.title || '' });
       } catch (err) {
         console.warn('[Yeaft] vp-status settleIdle (escalation) failed:', err?.message || err);
       }
@@ -2683,18 +2696,18 @@ async function raceWithEscalation(inner, { deadlineMs, onEscalate }) {
  * appended to `conversationMessages`.
  *
  * task-707: takes a coordinator `envelope` rather than the coordinator
- * itself; the persistent coord lives in `groupContexts[groupId]`. Uses
- * `getOrCreateVpEngine(groupId, vpId)` so each VP runs against its own
+ * itself; the persistent coord lives in `groupContexts[sessionId]`. Uses
+ * `getOrCreateVpEngine(sessionId, vpId)` so each VP runs against its own
  * Engine instance — private state (`#currentAbortCtrl`, `#__queryCounter`,
  * `#pendingT2`, `#abortReason`, `#adjustRanByGroup`, `#execLog`) does not
  * collide when VP-A and VP-B run concurrent turns.
  *
- * @param {{ prompt: string, groupId: string, vpId: string, turnId: string, envelope: object, vpAbort: AbortController, baseSnapshot: Array }} args
+ * @param {{ prompt: string, sessionId: string, vpId: string, turnId: string, envelope: object, vpAbort: AbortController, baseSnapshot: Array }} args
  */
-async function runVpTurn({ prompt, promptParts = null, groupId, vpId, threadId = 'main', thread = null, turnId, envelope: inboundEnvelope, vpAbort, baseSnapshot }) {
+async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId = 'main', thread = null, turnId, envelope: inboundEnvelope, vpAbort, baseSnapshot }) {
   if (!prompt?.trim()) return;
 
-  const envelope = { groupId, vpId, threadId, turnId };
+  const envelope = { sessionId, vpId, threadId, turnId };
 
   try {
     if (session?.dreamScheduler) {
@@ -2714,10 +2727,10 @@ async function runVpTurn({ prompt, promptParts = null, groupId, vpId, threadId =
     resetQueryTimer();
 
     // Emit turn_start so frontend can create the message block.
-    sendYeaftEvent({ type: 'vp_turn_start', vpId, threadId, turnId, groupId, title: thread?.title || '' }, envelope);
+    sendYeaftEvent({ type: 'vp_turn_start', vpId, threadId, turnId, sessionId, title: thread?.title || '' }, envelope);
     // vp-status: LLM call about to start, no text/tool yet → 'thinking'.
     try {
-      getVpStatusBroker().transition({ groupId, vpId, threadId, title: thread?.title || '', state: 'thinking', turnId, messageCount: thread?.messageIds?.length || 0 });
+      getVpStatusBroker().transition({ sessionId, vpId, threadId, title: thread?.title || '', state: 'thinking', turnId, messageCount: thread?.messageIds?.length || 0 });
     } catch (err) {
       console.warn('[Yeaft] vp-status thinking transition failed:', err?.message || err);
     }
@@ -2731,21 +2744,21 @@ async function runVpTurn({ prompt, promptParts = null, groupId, vpId, threadId =
       let vpEngine = null;
 
       // task-707: per-VP engine + persistent group coord. The coord is
-      // created in handleYeaftGroupChat via getOrCreateGroupContext and
+      // created in handleYeaftSessionSend via getOrCreateSessionContext and
       // cached on `groupContexts`; we pull it here so route_forward
       // (router built from this same coord) lands envelopes back on the
       // right inbox set.
-      const groupCtx = groupContexts.get(groupId);
-      const groupCoordinator = groupCtx?.coord || null;
+      const sessionCtx = groupContexts.get(sessionId);
+      const sessionCoordinator = sessionCtx?.coord || null;
       const queryOpts = buildVpQueryOpts({
         vpId,
-        groupCoordinator,
-        groupId,
+        sessionCoordinator,
+        sessionId,
         envelope: inboundEnvelope,
         threadId,
       });
 
-      vpEngine = getOrCreateVpEngine(groupId, vpId, threadId);
+      vpEngine = getOrCreateVpEngine(sessionId, vpId, threadId);
       if (thread) thread.engine = vpEngine;
 
       const handlerCtx = {
@@ -2754,7 +2767,7 @@ async function runVpTurn({ prompt, promptParts = null, groupId, vpId, threadId =
         toolResultsAccum,
         thinkingBlocksAccum,
         resetQueryTimer,
-        groupId,
+        sessionId,
         vpId,
         turnId,
         threadId,
@@ -2774,7 +2787,7 @@ async function runVpTurn({ prompt, promptParts = null, groupId, vpId, threadId =
         messages: trimmedMessages,
         signal: vpAbort.signal,
         // Multi-VP fan-out (history-dedup): the user row was persisted
-        // ONCE by handleYeaftGroupChat → persistUserMessageOnce before
+        // ONCE by handleYeaftSessionSend → persistUserMessageOnce before
         // fan-out. Tell the engine's stop-hook to skip the user-row
         // append for THIS VP's turn (it still writes assistant + tool
         // rows for this VP). Without this the magnet of N engines would
@@ -2793,7 +2806,7 @@ async function runVpTurn({ prompt, promptParts = null, groupId, vpId, threadId =
       }
 
       // Turn completed — atomically append this VP's output to shared history.
-      appendTurnToGroupHistory(groupId, threadId, [prompt, ...appendedUserPrompts], assistantTextParts, toolCallsAccum, toolResultsAccum, thinkingBlocksAccum);
+      appendTurnToGroupHistory(sessionId, threadId, [prompt, ...appendedUserPrompts], assistantTextParts, toolCallsAccum, toolResultsAccum, thinkingBlocksAccum);
 
       sendYeaftOutput({
         type: 'assistant',
@@ -2825,7 +2838,7 @@ async function runVpTurn({ prompt, promptParts = null, groupId, vpId, threadId =
     // identical to a normal turn end in the timeline — the user has
     // no way to tell from the row that something went wrong.
     try {
-      getVpStatusBroker().transition({ groupId, vpId, threadId, title: thread?.title || '', state: 'error', turnId, messageCount: thread?.messageIds?.length || 0 });
+      getVpStatusBroker().transition({ sessionId, vpId, threadId, title: thread?.title || '', state: 'error', turnId, messageCount: thread?.messageIds?.length || 0 });
     } catch (brokerErr) {
       console.warn('[Yeaft] vp-status error transition failed:', brokerErr?.message || brokerErr);
     }
@@ -2864,7 +2877,7 @@ async function runVpTurn({ prompt, promptParts = null, groupId, vpId, threadId =
     // the row must drop back to 'idle'. Wrapped in its own try so a
     // broker bug can't mask the original error.
     try {
-      getVpStatusBroker().settleIdle({ groupId, vpId, threadId: threadId || 'main', title: thread?.title || '' });
+      getVpStatusBroker().settleIdle({ sessionId, vpId, threadId: threadId || 'main', title: thread?.title || '' });
     } catch (err) {
       console.warn('[Yeaft] vp-status settleIdle failed:', err?.message || err);
     }
@@ -2899,9 +2912,9 @@ async function runVpTurn({ prompt, promptParts = null, groupId, vpId, threadId =
  * a session, this in-memory tape carries the un-collapsed form — which
  * is fine because each VP turn's `engine.query` re-collapses on the fly.
  */
-function appendTurnToGroupHistory(groupId, threadId, prompts, assistantTextParts, toolCallsAccum, toolResultsAccum, thinkingBlocksAccum) {
-  if (!groupId) return;
-  const history = getOrCreateGroupHistory(groupId);
+function appendTurnToGroupHistory(sessionId, threadId, prompts, assistantTextParts, toolCallsAccum, toolResultsAccum, thinkingBlocksAccum) {
+  if (!sessionId) return;
+  const history = getOrCreateGroupHistory(sessionId);
   const promptList = Array.isArray(prompts) ? prompts : [prompts];
   for (const prompt of promptList) {
     if (typeof prompt === 'string' && prompt.trim()) {
@@ -2948,7 +2961,7 @@ function appendTurnToGroupHistory(groupId, threadId, prompts, assistantTextParts
 /**
  * Persist an inbound message row to disk EXACTLY ONCE per
  * coordinator-ingest call, keyed by the coordinator-assigned `msgId`.
- * Both `handleYeaftGroupChat` (real user input, persists as
+ * Both `handleYeaftSessionSend` (real user input, persists as
  * role='user') and `enqueueForVp`'s driver loop (route_forward
  * synthetic injections, persists as role='assistant' attributed via
  * `speakerVpId`) call this — the Set guard makes either path the
@@ -2965,16 +2978,16 @@ function appendTurnToGroupHistory(groupId, threadId, prompts, assistantTextParts
  * still run, and the next user message will trigger another append.
  *
  * Note: we mirror `engine.#persistMessages`'s core user-row fields
- * (role/content/threadId/groupId) so existing parsers keep working.
+ * (role/content/threadId/sessionId) so existing parsers keep working.
  * Attachment UI metadata is persisted separately (without base64) so
  * refresh replay can render chips without leaking image source data into
  * the message body.
  *
- * @param {{ msgId:string, text:string, groupId:string, role?:string, speakerVpId?:string|null, attachments?:Array<object> }} args
+ * @param {{ msgId:string, text:string, sessionId:string, role?:string, speakerVpId?:string|null, attachments?:Array<object> }} args
  * @returns {boolean} true if this call wrote the row, false if a prior
  *   call already wrote it (dedup hit).
  */
-function persistInboundMessageOnceByMsgId({ msgId, text, groupId, threadId = 'main', role, speakerVpId, attachments }) {
+function persistInboundMessageOnceByMsgId({ msgId, text, sessionId, threadId = 'main', role, speakerVpId, attachments }) {
   if (!session?.conversationStore) return false;
   // No msgId means no dedup key — caller is responsible for guarding.
   // Both call sites already do (`if (envMsgId && text)` and
@@ -3006,7 +3019,7 @@ function persistInboundMessageOnceByMsgId({ msgId, text, groupId, threadId = 'ma
     }
   }
   try {
-    // role defaults to 'user' for back-compat: handleYeaftGroupChat's
+    // role defaults to 'user' for back-compat: handleYeaftSessionSend's
     // real-user call site passes no role and gets a user row. The driver
     // loop passes role='assistant' + speakerVpId for route_forward
     // injections so the on-disk record correctly attributes the text to
@@ -3017,7 +3030,7 @@ function persistInboundMessageOnceByMsgId({ msgId, text, groupId, threadId = 'ma
       content: text,
       threadId: threadId || 'main',
     };
-    if (groupId) record.groupId = groupId;
+    if (sessionId) record.sessionId = sessionId;
     // Stamp speakerVpId so the UI's loadHistory replay can route the row
     // to the correct VP block. Only meaningful when role='assistant'; for
     // a real user message we leave it unset (the UI's user track is
@@ -3182,28 +3195,28 @@ export function abortYeaftSession(opts = {}) {
   return { aborted: [], all: false };
 }
 
-function seedAbortController(threadId, ctrl, groupId = 'test', vpId = 'vp', turnId = null) {
+function seedAbortController(threadId, ctrl, sessionId = 'test', vpId = 'vp', turnId = null) {
   const tid = threadId || 'main';
-  const key = threadKey(groupId, vpId, tid);
+  const key = threadKey(sessionId, vpId, tid);
   if (ctrl) vpAborts.set(key, ctrl);
   if (turnId && ctrl) {
     turnAbortCtrls.set(turnId, ctrl);
-    turnAbortMeta.set(turnId, { groupId, vpId, threadId: tid, key });
+    turnAbortMeta.set(turnId, { sessionId, vpId, threadId: tid, key });
   }
 }
 
 /** Test-only: seed an in-flight VP runtime controller. */
-export function __testSeedAbortController(threadId, ctrl, groupId = 'test', vpId = 'vp') {
-  seedAbortController(threadId, ctrl, groupId, vpId);
+export function __testSeedAbortController(threadId, ctrl, sessionId = 'test', vpId = 'vp') {
+  seedAbortController(threadId, ctrl, sessionId, vpId);
 }
 
 /** Test-only: seed an in-flight VP turn controller. */
-export function __testSeedTurnAbortController(turnId, threadId, ctrl, groupId = 'test', vpId = 'vp') {
+export function __testSeedTurnAbortController(turnId, threadId, ctrl, sessionId = 'test', vpId = 'vp') {
   if (!turnId || !ctrl) return;
   const tid = threadId || 'main';
-  const key = threadKey(groupId, vpId, tid);
+  const key = threadKey(sessionId, vpId, tid);
   turnAbortCtrls.set(turnId, ctrl);
-  turnAbortMeta.set(turnId, { groupId, vpId, threadId: tid, key });
+  turnAbortMeta.set(turnId, { sessionId, vpId, threadId: tid, key });
 }
 
 /** Test-only: returns registered VP runtime thread ids. */
@@ -3233,12 +3246,12 @@ export const __testRaceWithEscalation = raceWithEscalation;
  *     VP-detail page button). Fires an unscoped dream pass; the result
  *     event is tagged with `vpId` so the per-VP store row updates.
  *
- *   { type: 'yeaft_dream_trigger', groupId }  — per-GROUP trigger (new
+ *   { type: 'yeaft_dream_trigger', sessionId }  — per-GROUP trigger (new
  *     in v0.1.754 — added so users can manually kick dream for a group
  *     after seeing the Resident layer stuck on the bootstrap seed).
  *     Fires a scope-filtered pass via `triggerDreamForScopes(['group/X'])`
  *     so unrelated groups don't get processed; the result event is
- *     tagged with `groupId` for the per-group UI row.
+ *     tagged with `sessionId` for the per-group UI row.
  *
  * Backwards-compat: when neither field is set, defaults to `vpId='default'`
  * which matches the pre-v0.1.754 behavior.
@@ -3286,14 +3299,14 @@ export function normalizeDreamResult(result) {
 
 export async function handleYeaftDreamTrigger(msg = {}) {
   // Resolve tag up-front so EVERY outbound envelope (including the
-  // scheduler-uninitialised early-return below) carries `groupId` /
+  // scheduler-uninitialised early-return below) carries `sessionId` /
   // `vpId`. Without this the frontend's `applyDreamResult` couldn't
   // route the error event back to the right row and the per-group
   // "Run dream now" button would stay stuck on "Running…" forever
   // (review feedback from PR #757).
-  const groupId = typeof msg.groupId === 'string' && msg.groupId ? msg.groupId : null;
-  const vpId = !groupId ? (msg.vpId || 'default') : null;
-  const tag = groupId ? { groupId } : { vpId };
+  const sessionId = typeof msg.sessionId === 'string' && msg.sessionId ? msg.sessionId : null;
+  const vpId = !sessionId ? (msg.vpId || 'default') : null;
+  const tag = sessionId ? { sessionId } : { vpId };
 
   if (!session?.dreamScheduler) {
     const error = 'Dream scheduler not initialized — session not loaded.';
@@ -3307,7 +3320,7 @@ export async function handleYeaftDreamTrigger(msg = {}) {
 
   // Concurrent-trigger guard for scoped runs. Two scoped clicks (same
   // group or different) overlapping the same inflight pass used to set
-  // the module-level groupId slot, race the sink wrapping, and let the
+  // the module-level sessionId slot, race the sink wrapping, and let the
   // second `finally` restore the original sink while the first run was
   // still emitting events. We now refuse scoped triggers while ANY dream
   // pass is already running: a scoped manual click during an unscoped
@@ -3317,7 +3330,7 @@ export async function handleYeaftDreamTrigger(msg = {}) {
   // and a different group's filter would have been silently dropped
   // anyway (see dream-v2/schedule.js inflight reuse), so the user-facing
   // semantics are unchanged ("you already asked").
-  if (groupId && (inflightScopedDreamGroups.size > 0 || session.dreamScheduler.isRunning)) {
+  if (sessionId && (inflightScopedDreamGroups.size > 0 || session.dreamScheduler.isRunning)) {
     const skippedResult = {
       skipped: true,
       skippedReason: 'already-running',
@@ -3333,21 +3346,21 @@ export async function handleYeaftDreamTrigger(msg = {}) {
   }
 
   // Per-call sink wrapper. For scoped runs we install a closure that
-  // injects this trigger's groupId onto top-level events the runner
+  // injects this trigger's sessionId onto top-level events the runner
   // emits without one (start/merge/done), then delegates to the
   // original passthrough sink. The wrapper lives only for the lifetime
   // of this trigger and is restored in `finally`; concurrent calls for
-  // OTHER groupIds chain (last-installed wins) but each restoration
+  // OTHER sessionIds chain (last-installed wins) but each restoration
   // unwinds back to its predecessor.
   const originalSink = session?._dreamProgressSink;
-  if (groupId) session._dreamActiveGroupId = groupId;
-  if (groupId && typeof originalSink === 'function') {
-    inflightScopedDreamGroups.add(groupId);
+  if (sessionId) session._dreamActiveGroupId = sessionId;
+  if (sessionId && typeof originalSink === 'function') {
+    inflightScopedDreamGroups.add(sessionId);
     session._dreamProgressSink = (evt) => {
       try {
-        const stamped = evt && evt.groupId
+        const stamped = evt && evt.sessionId
           ? evt
-          : { ...evt, groupId };
+          : { ...evt, sessionId };
         originalSink(stamped);
       } catch { /* never let event delivery throw */ }
     };
@@ -3360,8 +3373,8 @@ export async function handleYeaftDreamTrigger(msg = {}) {
       status: 'running',
     });
 
-    const result = groupId
-      ? await session.dreamScheduler.triggerDreamForScopes([`group/${groupId}`])
+    const result = sessionId
+      ? await session.dreamScheduler.triggerDreamForScopes([`group/${sessionId}`])
       : await session.dreamScheduler.triggerDreamNow();
 
     const normalized = normalizeDreamResult(result);
@@ -3397,10 +3410,10 @@ export async function handleYeaftDreamTrigger(msg = {}) {
     });
   } finally {
     // Restore the original sink and release the per-group inflight lock.
-    if (groupId && session?._dreamActiveGroupId === groupId) session._dreamActiveGroupId = null;
-    if (groupId && typeof originalSink === 'function') {
+    if (sessionId && session?._dreamActiveGroupId === sessionId) session._dreamActiveGroupId = null;
+    if (sessionId && typeof originalSink === 'function') {
       session._dreamProgressSink = originalSink;
-      inflightScopedDreamGroups.delete(groupId);
+      inflightScopedDreamGroups.delete(sessionId);
     }
   }
 }
@@ -3467,7 +3480,7 @@ export async function handleYeaftFetchToolStats(_msg = {}) {
  *
  * Inputs (all optional):
  *   - `limit`     — max number of loops to return (1..500, default 100)
- *   - `groupId`   — narrow by group
+ *   - `sessionId`   — narrow by group
  *   - `threadId`  — narrow by thread
  *
  * Sends:
@@ -3479,14 +3492,14 @@ export async function handleYeaftFetchToolStats(_msg = {}) {
 export async function handleYeaftFetchDebugHistory(msg = {}) {
   const limit = Number.isFinite(msg?.limit) ? Number(msg.limit) : 100;
   const dreamLimit = Number.isFinite(msg?.dreamLimit) ? Number(msg.dreamLimit) : 5;
-  const groupId = typeof msg?.groupId === 'string' && msg.groupId ? msg.groupId : null;
+  const sessionId = typeof msg?.sessionId === 'string' && msg.sessionId ? msg.sessionId : null;
   const threadId = typeof msg?.threadId === 'string' && msg.threadId ? msg.threadId : null;
   let loops = [];
   let turns = [];
   let dreamEvents = [];
   try {
     if (session?.trace && typeof session.trace.fetchRecentDebugHistory === 'function') {
-      const out = session.trace.fetchRecentDebugHistory({ limit, dreamLimit, groupId, threadId });
+      const out = session.trace.fetchRecentDebugHistory({ limit, dreamLimit, sessionId, threadId });
       loops = Array.isArray(out?.loops) ? out.loops : [];
       turns = Array.isArray(out?.turns) ? out.turns : [];
       dreamEvents = Array.isArray(out?.dreamEvents) ? out.dreamEvents : [];
@@ -3506,7 +3519,7 @@ export async function handleYeaftFetchDebugHistory(msg = {}) {
     loops,
     turns,
     dreamEvents,
-    groupId,
+    sessionId,
     threadId,
   });
 }
@@ -3540,20 +3553,20 @@ export function handleYeaftModelSwitch(msg) {
  * Handle history load request. Loads recent messages from ConversationStore
  * and replays them through the standard claude_output pipeline.
  *
- * Group-history-isolation (Bug 7): when `msg.groupId` is provided the
+ * Group-history-isolation (Bug 7): when `msg.sessionId` is provided the
  * replay AND the engine's bootstrap context are filtered to that group.
- * Messages tagged with another groupId — and legacy messages with no
- * groupId at all — are excluded so a stale `grp_default` (or any other
+ * Messages tagged with another sessionId — and legacy messages with no
+ * sessionId at all — are excluded so a stale `grp_default` (or any other
  * group) never bleeds into the active group's pane.
  */
 export async function handleYeaftLoadHistory(msg) {
-  const groupId = (msg && typeof msg.groupId === 'string' && msg.groupId) || null;
+  const sessionId = (msg && typeof msg.sessionId === 'string' && msg.sessionId) || null;
   // `lim` is now expressed in TURNS, not raw messages. `loadRecent` and
   // `loadRecentByGroup` use turn-based slicing so the cut never lands
   // mid-tool-arc. Pass `undefined` to use the persistence-layer default
   // (DEFAULT_RECENT_TURNS = 20 turns).
   const pickRecent = (store, lim) =>
-    groupId ? store.loadRecentByGroup(groupId, lim) : store.loadRecent(lim);
+    sessionId ? store.loadRecentByGroup(sessionId, lim) : store.loadRecent(lim);
 
   if (!session) {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
@@ -3568,16 +3581,16 @@ export async function handleYeaftLoadHistory(msg) {
     yeaftConversationId = `yeaft-${Date.now()}`;
 
     // Per-group history hydrates lazily via getOrCreateGroupHistory.
-    // When the load-history call carries a groupId, force-refresh THAT
+    // When the load-history call carries a sessionId, force-refresh THAT
     // group's tape so the next user message sees on-disk state. When
     // it doesn't (legacy callers), do nothing — the per-group lazy
     // hydration handles it.
-    if (groupId) setGroupHistory(groupId, hydrateGroupHistory(groupId));
-  } else if (groupId) {
+    if (sessionId) setGroupHistory(sessionId, hydrateGroupHistory(sessionId));
+  } else if (sessionId) {
     // Re-entering an existing session with a (possibly new) group filter:
     // re-seed THIS group's history from disk so it doesn't carry stale
     // in-memory state into the next turn's context.
-    setGroupHistory(groupId, hydrateGroupHistory(groupId));
+    setGroupHistory(sessionId, hydrateGroupHistory(sessionId));
   }
 
   // Always replay session_ready so refresh / reconnect rebuilds UI state.
@@ -3606,14 +3619,14 @@ export async function handleYeaftLoadHistory(msg) {
   // opening a group can paint the latest messages quickly; older rows are
   // paged via `yeaft_load_more_history` when the user scrolls upward.
   const limit = (typeof msg.limit === 'number') ? msg.limit : 10;
-  const visiblePage = groupId
-    ? loadVisibleGroupHistoryPage(session.conversationStore, groupId, limit)
+  const visiblePage = sessionId
+    ? loadVisibleGroupHistoryPage(session.conversationStore, sessionId, limit)
     : { messages: limit > 0 ? pickRecent(session.conversationStore, limit) : [], oldestSeq: null, hasMore: false };
   // Legacy compact.md is a non-group fallback only. For group replay, reading
   // it makes every group show "has compact" once any legacy/non-scoped compact
   // exists, even when this group has no scoped summary.
-  const compactSummary = groupId ? '' : session.conversationStore.readCompactSummary();
-  const replayEntries = groupId
+  const compactSummary = sessionId ? '' : session.conversationStore.readCompactSummary();
+  const replayEntries = sessionId
     ? visiblePage.messages
     : visiblePage.messages
       .map(projectPersistedToVisibleHistoryEntry)
@@ -3629,14 +3642,14 @@ export async function handleYeaftLoadHistory(msg) {
           ...(Array.isArray(entry.attachments) && entry.attachments.length > 0 ? { attachments: hydrateHistoryAttachmentPreviews(entry.attachments) } : {}),
         },
         ts: entry.ts || null,
-      }, { groupId: entry.groupId || null, threadId: entry.threadId || 'main', turnId: entry.turnId || entry.threadId || 'main' });
+      }, { sessionId: entry.sessionId || null, threadId: entry.threadId || 'main', turnId: entry.turnId || entry.threadId || 'main' });
     } else if (entry.role === 'assistant') {
       // speakerVpId rides on the envelope so the frontend can route this
       // replayed assistant text to the correct VP track. Without it, the
       // history replay would merge replies from different VPs onto one
       // anonymous assistant turn.
       const envelopeOpts = {
-        groupId: entry.groupId || null,
+        sessionId: entry.sessionId || null,
         threadId: entry.threadId || 'main',
         turnId: entry.turnId || entry.threadId || 'main',
       };
@@ -3657,7 +3670,7 @@ export async function handleYeaftLoadHistory(msg) {
   // tail rows cannot consume the bootstrap window or create false hasMore.
   let hasMore = false;
   let oldestSeq = null;
-  if (groupId) {
+  if (sessionId) {
     hasMore = visiblePage.hasMore;
     oldestSeq = visiblePage.oldestSeq;
   }
@@ -3667,8 +3680,8 @@ export async function handleYeaftLoadHistory(msg) {
   // replay, only scoped per-(group, vp) summaries count; legacy compact.md is
   // reserved for non-group / pre-scoped 1:1 callers.
   let hasCompactSummaryFlag = !!compactSummary;
-  if (groupId && typeof session.conversationStore.hasAnyCompactSummaryForGroup === 'function') {
-    hasCompactSummaryFlag = session.conversationStore.hasAnyCompactSummaryForGroup(groupId);
+  if (sessionId && typeof session.conversationStore.hasAnyCompactSummaryForGroup === 'function') {
+    hasCompactSummaryFlag = session.conversationStore.hasAnyCompactSummaryForGroup(sessionId);
   }
 
   sendYeaftEvent({
@@ -3677,7 +3690,7 @@ export async function handleYeaftLoadHistory(msg) {
     hasCompactSummary: hasCompactSummaryFlag,
     totalHot: session.conversationStore.countHot(),
     totalCold: session.conversationStore.countCold(),
-    groupId,
+    sessionId,
     hasMore,
     oldestSeq,
   });
@@ -3685,7 +3698,7 @@ export async function handleYeaftLoadHistory(msg) {
 
 /**
  * Handle a "load older messages" pagination request. Reads `turns` more
- * turns of history strictly older than `beforeSeq` for `groupId`, and
+ * turns of history strictly older than `beforeSeq` for `sessionId`, and
  * emits them in a single `yeaft_history_chunk` envelope (NOT a
  * `yeaft_output` — that pipeline appends, but the frontend needs to
  * PREPEND these older messages above what it already has).
@@ -3694,18 +3707,18 @@ export async function handleYeaftLoadHistory(msg) {
  * `handleYeaftLoadHistory` (user / assistant text only). On any internal
  * failure we still emit an empty chunk so the spinner clears.
  *
- * @param {object} msg — { groupId, beforeSeq, turns }
+ * @param {object} msg — { sessionId, beforeSeq, turns }
  */
 export async function handleYeaftLoadMoreHistory(msg) {
-  const groupId = (msg && typeof msg.groupId === 'string' && msg.groupId) || null;
+  const sessionId = (msg && typeof msg.sessionId === 'string' && msg.sessionId) || null;
   const emit = (payload) => sendToServer({
     type: 'yeaft_history_chunk',
     conversationId: yeaftConversationId,
-    groupId,
+    sessionId,
     ...payload,
   });
 
-  if (!session || !groupId) {
+  if (!session || !sessionId) {
     emit({ messages: [], oldestSeq: null, hasMore: false });
     return;
   }
@@ -3715,7 +3728,7 @@ export async function handleYeaftLoadMoreHistory(msg) {
 
   let result;
   try {
-    result = loadVisibleGroupHistoryPage(session.conversationStore, groupId, turns, beforeSeq);
+    result = loadVisibleGroupHistoryPage(session.conversationStore, sessionId, turns, beforeSeq);
   } catch (err) {
     console.error('[Yeaft] loadOlderByGroup failed:', err.message);
     result = { messages: [], oldestSeq: null, hasMore: false };
@@ -3731,7 +3744,7 @@ export async function handleYeaftLoadMoreHistory(msg) {
       role: m.role,
       content: m.content,
       ts: m.ts || m.time || null,
-      groupId: m.groupId || null,
+      sessionId: m.sessionId || null,
       threadId: m.threadId || m.turnId || 'main',
       turnId: m.turnId || m.threadId || 'main',
       ...(Array.isArray(m.attachments) && m.attachments.length > 0 ? { attachments: hydrateHistoryAttachmentPreviews(m.attachments) } : {}),

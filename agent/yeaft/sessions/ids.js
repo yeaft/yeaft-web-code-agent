@@ -1,7 +1,7 @@
 /**
  * ids.js — ID generators for the groups slice.
  *
- * Per slice-spec §4 (ID format): groupId uses a slug, msgId uses ULID-ish
+ * Per slice-spec §4 (ID format): sessionId uses a slug, msgId uses ULID-ish
  * lexicographic-sortable form. We implement a small crockford-base32 timestamp
  * + randomness scheme that works cross-platform without external deps.
  */
@@ -37,7 +37,7 @@ export function nextMsgId() {
   return `msg_${newUlidLite()}`;
 }
 
-export function nextGroupId(slug = 'default') {
+export function nextSessionId(slug = 'default') {
   // Slug-tolerant: lowercase a-z0-9_- only.
   const safe = String(slug).toLowerCase().replace(/[^a-z0-9_-]+/g, '-').slice(0, 32) || 'group';
   return `grp_${safe}`;
@@ -47,7 +47,7 @@ export function nextGroupId(slug = 'default') {
  * Reserved vpIds that must never be used as actual VP identifiers — they
  * collide with coordinator-level sentinels (`@all` broadcast, `user`/`system`
  * sender roles) and would cause silent footguns (a vpId=`all` VP would be
- * absorbed into broadcast). Enforced at CRUD boundaries (addVp, createGroup).
+ * absorbed into broadcast). Enforced at CRUD boundaries (addVp, createSession).
  *
  * prev-1 nit #4 (blocker-fix): @foo/@all/@user are the mental bedrock of all
  * future UI — protecting the names here prevents dirty data from reaching the

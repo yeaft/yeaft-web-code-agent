@@ -19,7 +19,7 @@
  * separately via `setOnCompacted`.
  *
  * Engine instances are per-VP-per-group (`vpEngines` keyed by
- * `${groupId}::${vpId}`), so this orchestration cannot live on `Engine`
+ * `${sessionId}::${vpId}`), so this orchestration cannot live on `Engine`
  * itself: a per-group single-flight slot pinned to a per-VP Engine is a
  * category error. Compactor is constructed once per session, beside the
  * `dreamScheduler`.
@@ -67,7 +67,7 @@ export class Compactor {
    *        `compactHistory` so the compactor's summary prompt + the
    *        "session continued" wrapper render in the user's preferred
    *        locale instead of always English.
-   * @param {(groupId: string, result: CompactedResult) => void} [opts.onCompacted]
+   * @param {(sessionId: string, result: CompactedResult) => void} [opts.onCompacted]
    *        Optional sink. Bridge wires this to send the
    *        `yeaft_history_compacted` WS event. Default: no-op. Can be
    *        replaced post-construction via `setOnCompacted`.
@@ -100,11 +100,11 @@ export class Compactor {
   }
 
   /** Get-or-create the per-group state record. */
-  _state(groupId) {
-    let s = this._states.get(groupId);
+  _state(sessionId) {
+    let s = this._states.get(sessionId);
     if (!s) {
       s = { inFlight: null, pending: false };
-      this._states.set(groupId, s);
+      this._states.set(sessionId, s);
     }
     return s;
   }
@@ -114,11 +114,11 @@ export class Compactor {
    * so a brand-new turn never reads a half-mutated history mid-compact.
    * Other groups' compacts never block this gate (per-group keying).
    *
-   * @param {string} groupId
+   * @param {string} sessionId
    */
-  async awaitInFlight(groupId) {
-    if (!groupId) return;
-    const s = this._states.get(groupId);
+  async awaitInFlight(sessionId) {
+    if (!sessionId) return;
+    const s = this._states.get(sessionId);
     if (s && s.inFlight) {
       try { await s.inFlight; } catch { /* _runOnce already logs */ }
     }
@@ -127,7 +127,7 @@ export class Compactor {
   /**
    * Post-turn fire-and-forget. Bridge calls after the per-VP fanout
    * completes for a turn. The `historyHandle` MUST be a per-call value:
-   * its `get` / `set` close over the bridge's groupId-scoped helpers
+   * its `get` / `set` close over the bridge's sessionId-scoped helpers
    * (`getOrCreateGroupHistory` / `setGroupHistory`), not over a frozen
    * snapshot, so a chained follow-up sees fresh state.
    *
@@ -136,12 +136,12 @@ export class Compactor {
    * the in-flight finishes, exactly one follow-up runs (no matter how
    * many turns piled up during the await).
    *
-   * @param {string} groupId
+   * @param {string} sessionId
    * @param {CompactorHistoryHandle} historyHandle
    */
-  scheduleAfterTurn(groupId, historyHandle) {
-    if (!groupId || !historyHandle) return;
-    const s = this._state(groupId);
+  scheduleAfterTurn(sessionId, historyHandle) {
+    if (!sessionId || !historyHandle) return;
+    const s = this._state(sessionId);
     if (s.inFlight) {
       // Anti-starvation: compact is already running. Mark a follow-up
       // so when it finishes, it re-evaluates and runs again if still
@@ -149,14 +149,14 @@ export class Compactor {
       s.pending = true;
       return;
     }
-    s.inFlight = this._runOnce(groupId, historyHandle).finally(() => {
+    s.inFlight = this._runOnce(sessionId, historyHandle).finally(() => {
       s.inFlight = null;
       // If turns piled up while we were running and compaction is still
       // needed, chain a follow-up. Use a microtask so the .finally
       // chain settles cleanly before the next promise is created.
       if (s.pending) {
         s.pending = false;
-        queueMicrotask(() => this.scheduleAfterTurn(groupId, historyHandle));
+        queueMicrotask(() => this.scheduleAfterTurn(sessionId, historyHandle));
       }
     });
   }
@@ -167,10 +167,10 @@ export class Compactor {
    * `historyHandle.set`, then notifies `onCompacted`. All errors are
    * swallowed (logged) so `inFlight` always clears.
    *
-   * @param {string} groupId
+   * @param {string} sessionId
    * @param {CompactorHistoryHandle} historyHandle
    */
-  async _runOnce(groupId, historyHandle) {
+  async _runOnce(sessionId, historyHandle) {
     try {
       // Capture reference AND length. If a different code path swaps the
       // array (`consolidate` event, session reset, manual clear) the
@@ -233,7 +233,7 @@ export class Compactor {
       );
 
       try {
-        this._onCompacted(groupId, {
+        this._onCompacted(sessionId, {
           reason: result.reason,
           beforeTurns: result.beforeTurns,
           afterTurns: result.afterTurns,
@@ -243,7 +243,7 @@ export class Compactor {
         });
       } catch { /* sink failure must not abort the orchestrator */ }
     } catch (err) {
-      console.warn(`[Yeaft] history compact: unexpected failure (groupId=${groupId})`, err?.message || err);
+      console.warn(`[Yeaft] history compact: unexpected failure (sessionId=${sessionId})`, err?.message || err);
     }
   }
 

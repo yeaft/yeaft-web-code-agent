@@ -3,21 +3,21 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
-  loadGroupConfig,
-  saveGroupConfig,
-  resolveGroupConfig,
-  validateGroupConfig,
-  ensureGroupConfigFile,
-  groupConfigPath,
-  GroupConfigError,
-} from '../../../../agent/yeaft/groups/group-config.js';
-import { createGroupFromSpec } from '../../../../agent/yeaft/groups/group-crud.js';
+  loadSessionConfig,
+  saveSessionConfig,
+  resolveSessionConfig,
+  validateSessionConfig,
+  ensureSessionConfigFile,
+  sessionConfigPath,
+  SessionConfigError,
+} from '../../../../agent/yeaft/sessions/session-config.js';
+import { createSessionFromSpec } from '../../../../agent/yeaft/sessions/session-crud.js';
 
 let yeaftDir;
 
 beforeEach(() => {
   yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-group-config-'));
-  mkdirSync(join(yeaftDir, 'groups'), { recursive: true });
+  mkdirSync(join(yeaftDir, 'sessions'), { recursive: true });
 });
 
 afterEach(() => {
@@ -25,79 +25,79 @@ afterEach(() => {
 });
 
 function makeGroup(name = 'Alpha') {
-  return createGroupFromSpec(yeaftDir, { name, roster: [] });
+  return createSessionFromSpec(yeaftDir, { name, roster: [] });
 }
 
-describe('group-config: loadGroupConfig', () => {
+describe('group-config: loadSessionConfig', () => {
   it('returns {} when the file is missing', () => {
     const { id } = makeGroup();
-    expect(loadGroupConfig(yeaftDir, id)).toEqual({});
+    expect(loadSessionConfig(yeaftDir, id)).toEqual({});
   });
 
   it('returns {} when JSON is corrupt', () => {
     const { id } = makeGroup();
-    writeFileSync(groupConfigPath(yeaftDir, id), '{not json');
-    expect(loadGroupConfig(yeaftDir, id)).toEqual({});
+    writeFileSync(sessionConfigPath(yeaftDir, id), '{not json');
+    expect(loadSessionConfig(yeaftDir, id)).toEqual({});
   });
 
   it('strips unknown keys defensively', () => {
     const { id } = makeGroup();
-    writeFileSync(groupConfigPath(yeaftDir, id), JSON.stringify({ model: 'm', stale: 1 }));
-    expect(loadGroupConfig(yeaftDir, id)).toEqual({ model: 'm' });
+    writeFileSync(sessionConfigPath(yeaftDir, id), JSON.stringify({ model: 'm', stale: 1 }));
+    expect(loadSessionConfig(yeaftDir, id)).toEqual({ model: 'm' });
   });
 });
 
-describe('group-config: saveGroupConfig', () => {
+describe('group-config: saveSessionConfig', () => {
   it('persists model overrides and trims whitespace', () => {
     const { id } = makeGroup();
-    const saved = saveGroupConfig(yeaftDir, id, { model: '  my/m1  ' });
+    const saved = saveSessionConfig(yeaftDir, id, { model: '  my/m1  ' });
     expect(saved).toEqual({ model: 'my/m1' });
-    expect(loadGroupConfig(yeaftDir, id)).toEqual({ model: 'my/m1' });
+    expect(loadSessionConfig(yeaftDir, id)).toEqual({ model: 'my/m1' });
   });
 
   it('clearing a field removes it', () => {
     const { id } = makeGroup();
-    saveGroupConfig(yeaftDir, id, { model: 'm' });
-    const cleared = saveGroupConfig(yeaftDir, id, { model: '' });
+    saveSessionConfig(yeaftDir, id, { model: 'm' });
+    const cleared = saveSessionConfig(yeaftDir, id, { model: '' });
     expect(cleared).toEqual({});
   });
 
   it('throws on unknown keys', () => {
     const { id } = makeGroup();
-    expect(() => saveGroupConfig(yeaftDir, id, { primaryModel: 'x' })).toThrow(GroupConfigError);
+    expect(() => saveSessionConfig(yeaftDir, id, { primaryModel: 'x' })).toThrow(SessionConfigError);
   });
 
   it('throws on non-string model', () => {
     const { id } = makeGroup();
-    expect(() => saveGroupConfig(yeaftDir, id, { model: 123 })).toThrow(GroupConfigError);
+    expect(() => saveSessionConfig(yeaftDir, id, { model: 123 })).toThrow(SessionConfigError);
   });
 });
 
-describe('group-config: validateGroupConfig', () => {
+describe('group-config: validateSessionConfig', () => {
   it('accepts null/empty input', () => {
-    expect(() => validateGroupConfig({})).not.toThrow();
-    expect(() => validateGroupConfig(null)).not.toThrow();
-    expect(() => validateGroupConfig(undefined)).not.toThrow();
+    expect(() => validateSessionConfig({})).not.toThrow();
+    expect(() => validateSessionConfig(null)).not.toThrow();
+    expect(() => validateSessionConfig(undefined)).not.toThrow();
   });
 
   it('rejects arrays', () => {
-    expect(() => validateGroupConfig([])).toThrow(GroupConfigError);
+    expect(() => validateSessionConfig([])).toThrow(SessionConfigError);
   });
 
   it('rejects unknown keys', () => {
-    expect(() => validateGroupConfig({ foo: 'bar' })).toThrow(GroupConfigError);
+    expect(() => validateSessionConfig({ foo: 'bar' })).toThrow(SessionConfigError);
   });
 
   it('allows clearing model with null/empty string', () => {
-    expect(() => validateGroupConfig({ model: null })).not.toThrow();
-    expect(() => validateGroupConfig({ model: '' })).not.toThrow();
+    expect(() => validateSessionConfig({ model: null })).not.toThrow();
+    expect(() => validateSessionConfig({ model: '' })).not.toThrow();
   });
 });
 
-describe('group-config: resolveGroupConfig', () => {
+describe('group-config: resolveSessionConfig', () => {
   it('falls back to user model when group has no override', () => {
     const user = { model: 'user/m', primaryModel: 'user/m', language: 'en' };
-    const resolved = resolveGroupConfig(user, {});
+    const resolved = resolveSessionConfig(user, {});
     expect(resolved.model).toBe('user/m');
     expect(resolved.primaryModel).toBe('user/m');
     expect(resolved.language).toBe('en');
@@ -105,7 +105,7 @@ describe('group-config: resolveGroupConfig', () => {
 
   it('group model overrides user model', () => {
     const user = { model: 'user/m', primaryModel: 'user/m', language: 'en' };
-    const resolved = resolveGroupConfig(user, { model: 'group/m' });
+    const resolved = resolveSessionConfig(user, { model: 'group/m' });
     expect(resolved.model).toBe('group/m');
     expect(resolved.primaryModel).toBe('group/m');
     expect(resolved.language).toBe('en'); // untouched
@@ -113,33 +113,33 @@ describe('group-config: resolveGroupConfig', () => {
 
   it('does not mutate the user config object', () => {
     const user = { model: 'user/m', primaryModel: 'user/m' };
-    resolveGroupConfig(user, { model: 'group/m' });
+    resolveSessionConfig(user, { model: 'group/m' });
     expect(user.model).toBe('user/m');
     expect(user.primaryModel).toBe('user/m');
   });
 
   it('empty / null user config still works', () => {
-    const resolved = resolveGroupConfig(null, { model: 'group/m' });
+    const resolved = resolveSessionConfig(null, { model: 'group/m' });
     expect(resolved.model).toBe('group/m');
   });
 });
 
-describe('group-config: ensureGroupConfigFile', () => {
+describe('group-config: ensureSessionConfigFile', () => {
   it('writes an empty json when missing', () => {
     const { id } = makeGroup();
-    const path = groupConfigPath(yeaftDir, id);
-    // createGroupFromSpec doesn't write config.json by default in v1 storage tests,
+    const path = sessionConfigPath(yeaftDir, id);
+    // createSessionFromSpec doesn't write config.json by default in v1 storage tests,
     // so we exercise the helper directly.
     if (existsSync(path)) rmSync(path);
-    ensureGroupConfigFile(yeaftDir, id);
+    ensureSessionConfigFile(yeaftDir, id);
     expect(existsSync(path)).toBe(true);
     expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual({});
   });
 
   it('does not overwrite an existing file', () => {
     const { id } = makeGroup();
-    saveGroupConfig(yeaftDir, id, { model: 'keep/me' });
-    ensureGroupConfigFile(yeaftDir, id);
-    expect(loadGroupConfig(yeaftDir, id)).toEqual({ model: 'keep/me' });
+    saveSessionConfig(yeaftDir, id, { model: 'keep/me' });
+    ensureSessionConfigFile(yeaftDir, id);
+    expect(loadSessionConfig(yeaftDir, id)).toEqual({ model: 'keep/me' });
   });
 });

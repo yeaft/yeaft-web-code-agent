@@ -141,7 +141,7 @@ export function segmentDiff(diff, maxTokens = MAX_DIFF_TOKENS_PER_TRIAGE, overla
 /**
  * Decide whether a merged apply target needs to be split into batches.
  *
- * @param {{ memoryMd?: string, summaryMd?: string, sources: Array<{ groupId: string, diff: any }> }} merged
+ * @param {{ memoryMd?: string, summaryMd?: string, sources: Array<{ sessionId: string, diff: any }> }} merged
  * @param {number} [maxTokens=MAX_APPLY_TOKENS]
  */
 export function needsBatchedApply(merged, maxTokens = MAX_APPLY_TOKENS) {
@@ -165,9 +165,9 @@ function totalApplyTokens(merged) {
  * goes into its own batch — we never split a source diff here (segment
  * happens earlier, in triage).
  *
- * @param {{ memoryMd?: string, summaryMd?: string, sources: Array<{ groupId: string, diff: any }> }} merged
+ * @param {{ memoryMd?: string, summaryMd?: string, sources: Array<{ sessionId: string, diff: any }> }} merged
  * @param {number} [maxTokens=MAX_APPLY_TOKENS]
- * @returns {Array<{ groupId: string, diff: any }[]>}
+ * @returns {Array<{ sessionId: string, diff: any }[]>}
  */
 export function batchSourcesForApply(merged, maxTokens = MAX_APPLY_TOKENS) {
   const sources = Array.isArray(merged.sources) ? merged.sources : [];

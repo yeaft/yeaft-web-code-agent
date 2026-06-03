@@ -20,8 +20,8 @@
 import { randomUUID } from 'crypto';
 import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
 import { LLMContextError, LLMAbortError } from './llm/adapter.js';
-import { runMemoryPreflow, buildRelevantScopes } from './groups/pre-flow.js';
-import { readProjectDoc, pickProjectDocFile, DEFAULT_PROJECT_DOC_MAX_BYTES } from './groups/project-doc.js';
+import { runMemoryPreflow, buildRelevantScopes } from './sessions/pre-flow.js';
+import { readProjectDoc, pickProjectDocFile, DEFAULT_PROJECT_DOC_MAX_BYTES } from './sessions/project-doc.js';
 import { shouldConsolidate, partitionMessages } from './memory/consolidate.js';
 import { runCompact as runCompactOrchestrator } from './compact/orchestrator.js';
 import { evaluateCompactTriggers } from './compact/triggers.js';
@@ -32,7 +32,7 @@ import { runAdjust } from './memory/adjust.js';
 import { isVpSeedBackfillStub } from './memory/seed-backfill.js';
 import { runStopHooks } from './stop-hooks.js';
 // Default thread marker for legacy / non-group flows. Group VP runtime may
-// pass a real threadId per (groupId, vpId, threadId) engine instance.
+// pass a real threadId per (sessionId, vpId, threadId) engine instance.
 const MAIN_THREAD_ID = 'main';
 import { pickEffort, parseEffortPrefix } from './effort.js';
 import { DEFAULT_CONTEXT_WINDOW, normalizeEffort, resolveContextWindow, resolveModel } from './models.js';
@@ -170,9 +170,9 @@ export function shouldAllowGroupReflection({
   messages = [],
   model = null,
   config = {},
-  groupId = null,
+  sessionId = null,
 } = {}) {
-  if (!groupId) {
+  if (!sessionId) {
     return {
       allowed: true,
       compactAllowed: true,
@@ -243,7 +243,7 @@ export function shouldAllowGroupReflection({
  * `#loadLayerASummaries`. Cross-VP context flows through onDemand recall.
  *
  * @param {{
- *   groupId?: string|null,
+ *   sessionId?: string|null,
  *   ownVpId?: string|null,
  *   summaries: { user?: string, group?: string, vp?: string }
  * }} args
@@ -253,8 +253,8 @@ export function buildResidentEntries(args) {
   const summaries = (args && args.summaries) || {};
   const out = [];
   if (summaries.user) out.push({ scope: 'user', summary: summaries.user });
-  if (args.groupId && summaries.group) {
-    out.push({ scope: `group/${args.groupId}`, summary: summaries.group });
+  if (args.sessionId && summaries.group) {
+    out.push({ scope: `group/${args.sessionId}`, summary: summaries.group });
   }
   if (args.ownVpId && summaries.vp && !isVpSeedBackfillStub(summaries.vp)) {
     out.push({ scope: `vp/${args.ownVpId}`, summary: summaries.vp });
@@ -303,7 +303,7 @@ export class Engine {
   /** @type {string|null} */
   #yeaftDir;
   /** @type {string|null} — set when this engine is bound to a specific group (per-VP fan-out path). */
-  #groupId = null;
+  #sessionId = null;
   /** @type {string|null} — set when this engine is bound to a specific VP (per-VP fan-out path). */
   #vpId = null;
   /** @type {string|null} — set when this engine is bound to a chat session (Chat Mode). */
@@ -372,7 +372,7 @@ export class Engine {
 
   /**
    * Per-group "adjust has run at least once this engine lifetime" flag.
-   * Keyed by groupId (or 'default'). The first turn always runs adjust;
+   * Keyed by sessionId (or 'default'). The first turn always runs adjust;
    * subsequent turns only run on budget pressure or new memory.
    * @type {Map<string, boolean>}
    */
@@ -408,7 +408,7 @@ export class Engine {
    *   toolStats?: import('./stats/tool-usage.js').ToolUsageStats,
    * }} params
    */
-  constructor({ adapter, trace, config, conversationStore, memoryIndex, amsRegistry, toolRegistry, skillManager, mcpManager, yeaftDir, toolStats = null, groupId = null, vpId = null, chatId = null }) {
+  constructor({ adapter, trace, config, conversationStore, memoryIndex, amsRegistry, toolRegistry, skillManager, mcpManager, yeaftDir, toolStats = null, sessionId = null, vpId = null, chatId = null }) {
     this.#adapter = adapter;
     this.#trace = trace;
     this.#config = config;
@@ -423,12 +423,12 @@ export class Engine {
     this.#yeaftDir = yeaftDir || null;
     this.#toolStats = toolStats || null;
     // Per-VP fan-out (2026-06-01): engine instances in the group path are
-    // keyed by ${groupId}::${vpId}::${threadId}, so binding the engine to
-    // its (groupId, vpId) pair at construction lets post-turn compact
+    // keyed by ${sessionId}::${vpId}::${threadId}, so binding the engine to
+    // its (sessionId, vpId) pair at construction lets post-turn compact
     // scope its read/write to THIS VP's view of the conversation instead
     // of clobbering a session-global compact.md. Legacy / sub-agent
     // callers leave both null → fall back to the global file.
-    this.#groupId = (typeof groupId === 'string' && groupId) ? groupId : null;
+    this.#sessionId = (typeof sessionId === 'string' && sessionId) ? sessionId : null;
     this.#vpId = (typeof vpId === 'string' && vpId) ? vpId : null;
     this.#chatId = (typeof chatId === 'string' && chatId) ? chatId : null;
 
@@ -554,26 +554,26 @@ export class Engine {
    *
    * Scopes:
    *   - user           → `user/summary.md`            (always attempted)
-   *   - group <gid>    → `groups/<gid>/summary.md`    (if groupId)
+   *   - group <gid>    → `groups/<gid>/summary.md`    (if sessionId)
    *   - vp <vpId>      → `vp/<vpId>/summary.md`       (if vpId)
    *
    * Each fetch is best-effort — missing files / read errors return ''. The
    * dream tick (Phase 6) is what populates these; on a fresh install they
    * all return ''.
    *
-   * @param {{groupId?: string, vpId?: string, language?: string}} ctx
+   * @param {{sessionId?: string, vpId?: string, language?: string}} ctx
    * @returns {Promise<{user:string, group:string, vp:string}>}
    */
-  async #loadLayerASummaries({ groupId, vpId, language } = {}) {
+  async #loadLayerASummaries({ sessionId, vpId, language } = {}) {
     if (!this.#yeaftDir) return { user: '', group: '', vp: '' };
     const memoryRoot = `${this.#yeaftDir}/memory`;
     const tasks = [
       readScopeSummary({ kind: 'user' }, { root: memoryRoot, language }).catch(() => ''),
-      groupId
-        ? readScopeSummary({ kind: 'group', id: groupId }, { root: memoryRoot, language }).catch(() => '')
+      sessionId
+        ? readScopeSummary({ kind: 'group', id: sessionId }, { root: memoryRoot, language }).catch(() => '')
         : Promise.resolve(''),
-      vpId && groupId
-        ? readScopeSummary({ kind: 'group-vp', groupId, id: vpId }, { root: memoryRoot, language }).catch(() => '')
+      vpId && sessionId
+        ? readScopeSummary({ kind: 'group-vp', sessionId, id: vpId }, { root: memoryRoot, language }).catch(() => '')
         : Promise.resolve(''),
     ];
     const [user, group, vp] = await Promise.all(tasks);
@@ -585,7 +585,7 @@ export class Engine {
    * to call when the AMS registry isn't wired (returns null).
    *
    * @param {{
-   *   groupId?: string,
+   *   sessionId?: string,
    *   ownVpId?: string|null,
    *   summaries: { user?: string, group?: string, vp?: string },
    *   recallEntries: object[],
@@ -600,7 +600,7 @@ export class Engine {
    */
   #prepareAms(args) {
     if (!this.#amsRegistry) return null;
-    const groupKey = args.groupId || 'default';
+    const groupKey = args.sessionId || 'default';
     const ownVpId = args.ownVpId || null;
     const ams = this.#amsRegistry.getOrCreate(groupKey, { ownVpId });
 
@@ -616,7 +616,7 @@ export class Engine {
     // (a) Resident: rebuild from the same scope summaries the worker
     // prompt is already going to see.
     const residentEntries = buildResidentEntries({
-      groupId: args.groupId,
+      sessionId: args.sessionId,
       ownVpId,
       summaries: args.summaries || {},
     });
@@ -630,7 +630,7 @@ export class Engine {
     const snapshotBlock = this.#renderAmsSnapshot(ams, this.#config.language || 'en');
 
     const scopes = buildRelevantScopes({
-      groupId: args.groupId,
+      sessionId: args.sessionId,
       vpId: ownVpId,
     });
 
@@ -763,12 +763,12 @@ export class Engine {
    * @param {string} args.memoryInjection — prebuilt Memory block from AMS
    * @param {object} [args.vpPersona]
    * @param {object} [args.activeScope] — DESIGN-PROMPT §3 ④ structured scope summary
-   * @param {string} [args.groupAnnouncement]
+   * @param {string} [args.sessionAnnouncement]
    * @param {string} [args.projectDoc] — resolved CLAUDE.md / AGENTS.md text (already truncated)
    * @param {object} [args.taskCtx] — legacy task-context sub-block (optional)
    * @returns {string}
    */
-  #buildSystemPrompt({ prompt, memoryInjection, vpPersona, activeScope, groupAnnouncement, projectDoc, taskCtx } = {}) {
+  #buildSystemPrompt({ prompt, memoryInjection, vpPersona, activeScope, sessionAnnouncement, projectDoc, taskCtx } = {}) {
     // Get relevant skill content if SkillManager is wired
     let skillContent = '';
     if (this.#skillManager && prompt) {
@@ -787,7 +787,7 @@ export class Engine {
       skillContent,
       vpPersona,
       activeScope,
-      groupAnnouncement,
+      sessionAnnouncement,
       projectDoc,
       taskCtx,
       // Worker-shape harness is descriptive metadata for human inspection;
@@ -965,7 +965,7 @@ export class Engine {
    * without injection.
    *
    * @param {string} prompt
-   * @param {{ groupId?: string, vpId?: string }} [ctx]
+   * @param {{ sessionId?: string, vpId?: string }} [ctx]
    * @returns {Promise<{ profile: string, entries: object[], formatted: string }|null>}
    */
   async #recallMemory(prompt, ctx = {}) {
@@ -974,7 +974,7 @@ export class Engine {
     try {
       const result = runMemoryPreflow(this.#memoryIndex, {
         userMsg: prompt,
-        groupId: ctx.groupId,
+        sessionId: ctx.sessionId,
         chatId: ctx.chatId || this.#chatId,
         vpId: ctx.vpId,
       });
@@ -1002,9 +1002,9 @@ export class Engine {
         && typeof this.#conversationStore.readCompactSummaryForChat === 'function') {
       return this.#conversationStore.readCompactSummaryForChat(this.#chatId, this.#vpId);
     }
-    if (this.#groupId && this.#vpId
+    if (this.#sessionId && this.#vpId
         && typeof this.#conversationStore.readCompactSummaryFor === 'function') {
-      return this.#conversationStore.readCompactSummaryFor(this.#groupId, this.#vpId);
+      return this.#conversationStore.readCompactSummaryFor(this.#sessionId, this.#vpId);
     }
     return this.#conversationStore.readCompactSummary();
   }
@@ -1022,10 +1022,10 @@ export class Engine {
    * @param {string} userContent
    * @param {string} assistantContent
    * @param {object[]} [toolCalls]
-   * @param {string} [groupId]
+   * @param {string} [sessionId]
    * @param {boolean} [userAlreadyPersisted]
    */
-  #persistMessages(userContent, assistantContent, toolCalls, groupId, userAlreadyPersisted = false) {
+  #persistMessages(userContent, assistantContent, toolCalls, sessionId, userAlreadyPersisted = false) {
     if (!this.#conversationStore) return;
     if (this.#config._readOnly) return;
 
@@ -1040,8 +1040,8 @@ export class Engine {
         role: 'user',
         content: userContent,
         threadId,
-        // Bug 6: stamp groupId/chatId so history replay can route by container.
-        ...(groupId ? { groupId } : {}),
+        // Bug 6: stamp sessionId/chatId so history replay can route by container.
+        ...(sessionId ? { sessionId } : {}),
         ...(this.#chatId ? { chatId: this.#chatId } : {}),
       });
     }
@@ -1052,7 +1052,7 @@ export class Engine {
       content: assistantContent,
       model: this.#config.model,
       threadId,
-      ...(groupId ? { groupId } : {}),
+      ...(sessionId ? { sessionId } : {}),
       ...(this.#chatId ? { chatId: this.#chatId } : {}),
     };
     if (toolCalls && toolCalls.length > 0) {
@@ -1098,52 +1098,52 @@ export class Engine {
     // its context — user prompts + every VP's assistant text, with other
     // VPs' tool calls/results stripped (see persist.loadGroupHistoryForVp).
     //
-    // Legacy / sub-agent callers (no groupId/vpId pair) keep the global
+    // Legacy / sub-agent callers (no sessionId/vpId pair) keep the global
     // loadAll() behaviour so we don't break those flows.
     let messages;
     const scopedChat = !!(this.#chatId && this.#vpId
       && typeof conversationStore.loadChatHistoryForVp === 'function');
-    const scoped = !scopedChat && !!(this.#groupId && this.#vpId
+    const scoped = !scopedChat && !!(this.#sessionId && this.#vpId
       && typeof conversationStore.loadGroupHistoryForVp === 'function');
     try {
       messages = scopedChat
         ? conversationStore.loadChatHistoryForVp(this.#chatId, this.#vpId)
         : scoped
-          ? conversationStore.loadGroupHistoryForVp(this.#groupId, this.#vpId)
+          ? conversationStore.loadGroupHistoryForVp(this.#sessionId, this.#vpId)
           : conversationStore.loadAll();
     } catch { return null; }
     if (!Array.isArray(messages) || messages.length === 0) return null;
 
     const tokenCount = conversationStore.hotTokens();
-    // In the scoped path, groupId is the engine's binding (authoritative).
+    // In the scoped path, sessionId is the engine's binding (authoritative).
     // In the legacy path, fall back to scanning the messages (best-effort,
     // used only for the group context-window gate).
-    const groupId = this.#groupId
-      || messages.find(m => m && typeof m.groupId === 'string' && m.groupId)?.groupId
+    const sessionId = this.#sessionId
+      || messages.find(m => m && typeof m.sessionId === 'string' && m.sessionId)?.sessionId
       || null;
     const groupContextGate = shouldAllowGroupReflection({
       system: '',
       messages,
       model: this.#config.model,
       config: this.#config,
-      groupId,
+      sessionId,
     });
-    if (groupId && groupContextGate?.usedFallbackContextWindow) {
+    if (sessionId && groupContextGate?.usedFallbackContextWindow) {
       this.#trace.log?.('group_context_window_fallback', {
-        groupId,
+        sessionId,
         model: this.#config.model,
         contextWindow: groupContextGate.contextWindow,
         threshold: groupContextGate.threshold,
       });
     }
-    if (groupId && !groupContextGate.compactAllowed) return null;
+    if (sessionId && !groupContextGate.compactAllowed) return null;
 
     const trig = evaluateCompactTriggers({
       messages,
       tokenCount,
       contextLimit: this.#config.maxContextTokens || 200000,
-      tokenRatio: groupId ? GROUP_CONTEXT_PRESSURE_RATIO : undefined,
-      maxMessages: groupId ? Number.POSITIVE_INFINITY : undefined,
+      tokenRatio: sessionId ? GROUP_CONTEXT_PRESSURE_RATIO : undefined,
+      maxMessages: sessionId ? Number.POSITIVE_INFINITY : undefined,
     });
     if (!trig.trigger) return null;
 
@@ -1233,7 +1233,7 @@ export class Engine {
         if (scopedChat && typeof conversationStore.replaceCompactSummaryForChat === 'function') {
           conversationStore.replaceCompactSummaryForChat(this.#chatId, this.#vpId, out.compactSummary);
         } else if (scoped && typeof conversationStore.replaceCompactSummaryFor === 'function') {
-          conversationStore.replaceCompactSummaryFor(this.#groupId, this.#vpId, out.compactSummary);
+          conversationStore.replaceCompactSummaryFor(this.#sessionId, this.#vpId, out.compactSummary);
         } else {
           conversationStore.replaceCompactSummary(out.compactSummary);
         }
@@ -1310,7 +1310,7 @@ export class Engine {
    *   string-prompt shape (no regression for existing callers).
    * @yields {EngineEvent}
    */
-  async *query({ prompt, promptParts = null, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement, workDir, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null, threadId = MAIN_THREAD_ID, drainPendingUserMessages = null } = {}) {
+  async *query({ prompt, promptParts = null, messages = [], signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, vpPlan, sessionAnnouncement, workDir, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null, threadId = MAIN_THREAD_ID, drainPendingUserMessages = null } = {}) {
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       yield {
         type: 'error',
@@ -1370,7 +1370,7 @@ export class Engine {
 
     try {
       this.#currentThreadId = threadId || MAIN_THREAD_ID;
-      yield* this.#runQuery({ prompt: effectivePrompt, promptParts, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement, workDir, userAlreadyPersisted, getCurrentTodos, setCurrentTodos, threadId: this.#currentThreadId, drainPendingUserMessages });
+      yield* this.#runQuery({ prompt: effectivePrompt, promptParts, messages, signal: runSignal, userEffort: effectiveUserEffort, scenario, vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, vpPlan, sessionAnnouncement, workDir, userAlreadyPersisted, getCurrentTodos, setCurrentTodos, threadId: this.#currentThreadId, drainPendingUserMessages });
     } finally {
       if (signal) {
         try { signal.removeEventListener('abort', onExternalAbort); } catch { /* ignore */ }
@@ -1390,7 +1390,7 @@ export class Engine {
    * in a try/finally without indenting the whole loop.
    * @private
    */
-  async *#runQuery({ prompt, promptParts = null, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, groupId, vpPlan, groupAnnouncement, workDir, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null, threadId = MAIN_THREAD_ID, drainPendingUserMessages = null }) {
+  async *#runQuery({ prompt, promptParts = null, messages, signal, userEffort = null, scenario = 'chat', vpPersona, router, senderVpId, inboundEnvelope, taskId, taskMembers, sessionId, vpPlan, sessionAnnouncement, workDir, userAlreadyPersisted = false, getCurrentTodos = null, setCurrentTodos = null, threadId = MAIN_THREAD_ID, drainPendingUserMessages = null }) {
 
     // ─── Pre-query: FTS5 Memory Recall + AMS snapshot ─────
     // Memory has a SINGLE render outlet now (DESIGN-PROMPT §3 ③):
@@ -1405,7 +1405,7 @@ export class Engine {
     let recallEntryCount = 0;
 
     const recallResult = await this.#recallMemory(prompt, {
-      groupId,
+      sessionId,
       vpId: vpPersona && typeof vpPersona === 'object' && typeof vpPersona.vpId === 'string'
         ? vpPersona.vpId
         : (typeof senderVpId === 'string' ? senderVpId : undefined),
@@ -1421,7 +1421,7 @@ export class Engine {
     // here so we can pass them into #prepareAms. (Rolling per-scope
     // synopsis maintained by the dream tick.) Failures are non-fatal.
     const summaries = await this.#loadLayerASummaries({
-      groupId,
+      sessionId,
       vpId: vpPersona && typeof vpPersona === 'object' && typeof vpPersona.vpId === 'string'
         ? vpPersona.vpId
         : (typeof senderVpId === 'string' ? senderVpId : undefined),
@@ -1440,7 +1440,7 @@ export class Engine {
       ? vpPersona.vpId
       : (typeof senderVpId === 'string' ? senderVpId : null);
     const amsContext = this.#prepareAms({
-      groupId,
+      sessionId,
       ownVpId: ownVpIdForAms,
       summaries,
       recallEntries: recallResult ? (recallResult.entries || []) : [],
@@ -1454,7 +1454,7 @@ export class Engine {
     // info. Long-form scope content lives in AMS — this block carries
     // only IDs + tiny labels. (Feature scope retired 2026-05-13.)
     const activeScope = {
-      groupId: groupId || '',
+      sessionId: sessionId || '',
       vpId: ownVpIdForAms || '',
       envelope: inboundEnvelope || null,
     };
@@ -1466,7 +1466,7 @@ export class Engine {
       memoryInjection,
       vpPersona,
       activeScope,
-      groupAnnouncement,
+      sessionAnnouncement,
       projectDoc,
     });
 
@@ -1519,12 +1519,12 @@ export class Engine {
       messages: conversationMessages,
       model: this.#config.model,
       config: this.#config,
-      groupId,
+      sessionId,
     });
     const groupReflectionAllowed = groupReflectionGate.allowed === true;
-    if (groupId && groupReflectionGate?.usedFallbackContextWindow) {
+    if (sessionId && groupReflectionGate?.usedFallbackContextWindow) {
       this.#trace.log?.('group_context_window_fallback', {
-        groupId,
+        sessionId,
         model: this.#config.model,
         contextWindow: groupReflectionGate.contextWindow,
         threshold: groupReflectionGate.threshold,
@@ -1589,7 +1589,7 @@ export class Engine {
       threadId,
       userPrompt: userQuestionPreview,
       vpId: queryVpId,
-      groupId: groupId || null,
+      sessionId: sessionId || null,
       at: queryStartedAt,
     };
 
@@ -1648,7 +1648,7 @@ export class Engine {
         // fix-vp-multi-thread (bug 4): stamp routing context so the
         // debug-trace SQL row carries enough info to be filtered by
         // group / thread / VP later when the panel hydrates from disk.
-        groupId: groupId || null,
+        sessionId: sessionId || null,
         vpId: queryVpId || null,
         threadId: threadId || null,
         // Persist the user prompt EXPLICITLY rather than reconstruct it
@@ -2141,7 +2141,7 @@ export class Engine {
             trace: this.#trace,
             // Bug 6: tag persisted messages with the originating group so
             // history replay can re-stamp them on reload.
-            groupId,
+            sessionId,
             threadId,
             // Multi-VP fan-out (history-dedup): skip the user-row append
             // in stop-hooks when the orchestrator already wrote it once
@@ -2155,7 +2155,7 @@ export class Engine {
           }
         } else {
           // Legacy path (no yeaftDir → use old behavior)
-          this.#persistMessages(prompt, fullResponseText, assistantMsg.toolCalls, groupId, userAlreadyPersisted);
+          this.#persistMessages(prompt, fullResponseText, assistantMsg.toolCalls, sessionId, userAlreadyPersisted);
 
           const consolidated = await this.#maybeConsolidate();
           if (consolidated && consolidated.archivedCount > 0) {

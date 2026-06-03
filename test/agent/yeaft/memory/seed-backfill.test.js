@@ -49,8 +49,8 @@ function writeRoleMd(vpId, body) {
   writeFileSync(join(libDir, vpId, 'role.md'), body, 'utf-8');
 }
 
-function writeGroupMeta(groupId, meta) {
-  const dir = join(yeaftDir, 'groups', groupId);
+function writeGroupMeta(sessionId, meta) {
+  const dir = join(yeaftDir, 'sessions', sessionId);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'group.json'), JSON.stringify(meta), 'utf-8');
 }

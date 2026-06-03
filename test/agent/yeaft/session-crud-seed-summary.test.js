@@ -1,5 +1,5 @@
 /**
- * group-crud-seed-summary.test.js — Pin the contract that `createGroupFromSpec`
+ * group-crud-seed-summary.test.js — Pin the contract that `createSessionFromSpec`
  * also seeds `<root>/memory/group/<id>/summary.md` so the FIRST session
  * has a non-empty memory section. Same Bug-2 reasoning as
  * `vp-crud-seed-summary.test.js`.
@@ -10,32 +10,32 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, existsSync, writeFileSync
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
-  createGroupFromSpec,
-  buildGroupSeedSummary,
-  groupsRoot,
+  createSessionFromSpec,
+  buildSessionSeedSummary,
+  sessionsRoot,
   readWorkDirRegistry,
-  requireGroup,
-  resolveGroupYeaftDir,
-  snapshotGroups,
-  updateGroupAnnouncement,
+  requireSession,
+  resolveSessionYeaftDir,
+  snapshotSessions,
+  updateSessionAnnouncement,
   yeaftDirForWorkDir,
-} from '../../../agent/yeaft/groups/group-crud.js';
-import { loadGroupMeta } from '../../../agent/yeaft/groups/group-store.js';
+} from '../../../agent/yeaft/sessions/session-crud.js';
+import { loadSessionMeta } from '../../../agent/yeaft/sessions/session-store.js';
 
 let yeaftDir;
 beforeEach(() => {
   const tmp = mkdtempSync(join(tmpdir(), 'group-seed-'));
   yeaftDir = tmp;
-  mkdirSync(join(yeaftDir, 'groups'), { recursive: true });
+  mkdirSync(join(yeaftDir, 'sessions'), { recursive: true });
 });
 
 afterEach(() => {
   rmSync(yeaftDir, { recursive: true, force: true });
 });
 
-describe('createGroupFromSpec seeds summary.md', () => {
+describe('createSessionFromSpec seeds summary.md', () => {
   it('writes a non-empty summary.md for a newly created group', () => {
-    const meta = createGroupFromSpec(yeaftDir, {
+    const meta = createSessionFromSpec(yeaftDir, {
       name: `TestGrp_${Date.now()}`,
       roster: ['alice', 'bob'],
       defaultVpId: 'alice',
@@ -57,7 +57,7 @@ describe('createGroupFromSpec seeds summary.md', () => {
 
   it('creates workDir-backed group state under <workDir>/.yeaft and keeps it discoverable', () => {
     const workDir = mkdtempSync(join(tmpdir(), 'group-workdir-'));
-    const meta = createGroupFromSpec(yeaftDir, {
+    const meta = createSessionFromSpec(yeaftDir, {
       name: `WorkdirGrp_${Date.now()}`,
       roster: ['alice'],
       defaultVpId: 'alice',
@@ -65,25 +65,25 @@ describe('createGroupFromSpec seeds summary.md', () => {
     });
 
     const groupYeaftDir = yeaftDirForWorkDir(workDir);
-    const groupDir = join(groupYeaftDir, 'groups', meta.id);
-    expect(existsSync(groupDir)).toBe(true);
-    expect(existsSync(join(yeaftDir, 'groups', meta.id))).toBe(false);
+    const sessionDir = join(groupYeaftDir, 'sessions', meta.id);
+    expect(existsSync(sessionDir)).toBe(true);
+    expect(existsSync(join(yeaftDir, 'sessions', meta.id))).toBe(false);
 
-    const stored = loadGroupMeta(groupDir);
+    const stored = loadSessionMeta(sessionDir);
     expect(stored.workDir).toBe(workDir);
-    expect(resolveGroupYeaftDir(yeaftDir, meta.id)).toBe(groupYeaftDir);
+    expect(resolveSessionYeaftDir(yeaftDir, meta.id)).toBe(groupYeaftDir);
     expect(readWorkDirRegistry(yeaftDir)[meta.id]).toBe(workDir);
 
-    const groups = snapshotGroups(yeaftDir);
+    const groups = snapshotSessions(yeaftDir);
     expect(groups.some((g) => g.id === meta.id && g.workDir === workDir)).toBe(true);
 
-    const handle = requireGroup(yeaftDir, meta.id);
+    const handle = requireSession(yeaftDir, meta.id);
     expect(handle.getMeta().workDir).toBe(workDir);
     handle.close();
 
-    const updated = updateGroupAnnouncement(yeaftDir, meta.id, 'Stored in project workdir');
+    const updated = updateSessionAnnouncement(yeaftDir, meta.id, 'Stored in project workdir');
     expect(updated.announcement).toBe('Stored in project workdir');
-    expect(loadGroupMeta(groupDir).announcement).toBe('Stored in project workdir');
+    expect(loadSessionMeta(sessionDir).announcement).toBe('Stored in project workdir');
 
     const summaryPath = join(groupYeaftDir, 'memory', 'group', meta.id, 'summary.md');
     expect(existsSync(summaryPath)).toBe(true);
@@ -91,27 +91,27 @@ describe('createGroupFromSpec seeds summary.md', () => {
   });
 
   it('keeps legacy groups without workDir under the default yeaftDir', () => {
-    const meta = createGroupFromSpec(yeaftDir, {
+    const meta = createSessionFromSpec(yeaftDir, {
       name: `LegacyGrp_${Date.now()}`,
       roster: ['alice'],
       defaultVpId: 'alice',
     });
 
-    expect(resolveGroupYeaftDir(yeaftDir, meta.id)).toBe(yeaftDir);
-    expect(existsSync(join(groupsRoot(yeaftDir), meta.id))).toBe(true);
+    expect(resolveSessionYeaftDir(yeaftDir, meta.id)).toBe(yeaftDir);
+    expect(existsSync(join(sessionsRoot(yeaftDir), meta.id))).toBe(true);
     expect(readWorkDirRegistry(yeaftDir)[meta.id]).toBeUndefined();
   });
 });
 
-describe('buildGroupSeedSummary', () => {
+describe('buildSessionSeedSummary', () => {
   it('includes name, member count and roster', () => {
-    const out = buildGroupSeedSummary({ name: 'X', roster: ['a', 'b', 'c'] });
+    const out = buildSessionSeedSummary({ name: 'X', roster: ['a', 'b', 'c'] });
     expect(out).toContain('# X');
     expect(out).toContain('3 members');
     expect(out).toContain('a, b, c');
   });
   it('handles empty roster', () => {
-    const out = buildGroupSeedSummary({ name: 'Empty', roster: [] });
+    const out = buildSessionSeedSummary({ name: 'Empty', roster: [] });
     expect(out).toContain('0 members');
   });
 });

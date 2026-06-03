@@ -25,14 +25,14 @@
  *   (d) Tool schema uses defineTool (agent/yeaft/tools/types.js).
  */
 
-import { resolveMemberId } from '../groups/roster.js';
+import { resolveMemberId } from '../sessions/roster.js';
 import { createLoopGuard, extendCausedBy } from './loop-guard.js';
 
 /**
  * Build a router bound to a single GroupCoordinator + loop guard.
  *
  * @param {{
- *   coordinator: import('../groups/coordinator.js').GroupCoordinator,
+ *   coordinator: import('../sessions/coordinator.js').GroupCoordinator,
  *   guard?: ReturnType<typeof createLoopGuard>,
  *   now?: () => number,
  * }} deps
@@ -62,7 +62,7 @@ export function createRouter(deps = {}) {
    *   ok: boolean,
    *   error?: string,
    *   dispatched?: string[],
-   *   report?: import('../groups/coordinator.js').DispatchReport,
+   *   report?: import('../sessions/coordinator.js').DispatchReport,
    * }}
    */
   function forward(args, opts = {}) {
@@ -113,7 +113,7 @@ export function createRouter(deps = {}) {
     // member inboxes.
     const guardKey = targetVpId;
     const verdict = guard.check({
-      groupId: meta.id,
+      sessionId: meta.id,
       targetVpId: guardKey,
       chain,
     });
@@ -157,7 +157,7 @@ export function createRouter(deps = {}) {
     // dispatches (e.g. task.members gate) we still count it as a hit —
     // the forwarder still tried, and the guard's job is to throttle the
     // sender's ability to keep trying.
-    guard.record({ groupId: meta.id, targetVpId: guardKey });
+    guard.record({ sessionId: meta.id, targetVpId: guardKey });
 
     return {
       ok: true,

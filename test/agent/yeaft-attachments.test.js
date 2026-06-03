@@ -4,7 +4,7 @@
  * Covers the three places we changed for image + file upload support:
  *
  *   1. `persistYeaftAttachments` writes resolved files to disk under
- *      the agent CWD's `.claude-tmp-attachments/<groupId>/` folder,
+ *      the agent CWD's `.claude-tmp-attachments/<sessionId>/` folder,
  *      strips base64 from the persistable record, and emits a
  *      `promptParts` array of `{type:'image', source:{type:'base64',...}}`
  *      blocks for the LLM call. PR #721 also adds a `failed` array
@@ -35,8 +35,8 @@ import {
   MAX_FILES_PER_TURN,
   MAX_TOTAL_BYTES,
 } from '../../agent/yeaft/attachments.js';
-import { createCoordinator } from '../../agent/yeaft/groups/coordinator.js';
-import { openGroup, createGroup } from '../../agent/yeaft/groups/group-store.js';
+import { createCoordinator } from '../../agent/yeaft/sessions/coordinator.js';
+import { openSession, createSession } from '../../agent/yeaft/sessions/session-store.js';
 
 // One-pixel transparent PNG, base64.
 const PNG_1x1 =
@@ -332,14 +332,14 @@ describe('appendMessage rejects ephemeral leaks (structural guard)', () => {
   });
 
   it('throws when a record has any `_`-prefixed field', () => {
-    const group = createGroup(tmp, { id: 'grp_assert', roster: ['vp_x'], defaultVpId: 'vp_x' });
+    const group = createSession(tmp, { id: 'grp_assert', roster: ['vp_x'], defaultVpId: 'vp_x' });
     expect(() =>
       group.appendMessage({ from: 'user', text: 'leak', _promptParts: [{ x: 1 }] })
     ).toThrow(/ephemeral fields leaked/);
   });
 
   it('accepts records with no `_`-prefixed fields', () => {
-    const group = createGroup(tmp, { id: 'grp_ok', roster: ['vp_y'], defaultVpId: 'vp_y' });
+    const group = createSession(tmp, { id: 'grp_ok', roster: ['vp_y'], defaultVpId: 'vp_y' });
     const stored = group.appendMessage({ from: 'user', text: 'hi' });
     expect(stored.text).toBe('hi');
     expect(stored.id).toBeTruthy();

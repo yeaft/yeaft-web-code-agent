@@ -5,7 +5,7 @@
  * startup + filesystem rescans; vp-bridge.js reads it to serve the
  * `vp_snapshot` and live-diff WS events.
  *
- * The previous RoleInstance map (per (vpId, groupId) pair, with LRU
+ * The previous RoleInstance map (per (vpId, sessionId) pair, with LRU
  * eviction) was removed in GC.2 — production fans out per-VP via
  * `handleYeaftGroupChat` -> `runVpTurn` directly and never instantiated
  * RoleInstance.

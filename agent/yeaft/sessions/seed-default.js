@@ -5,8 +5,8 @@
  * the provided roster (typically `[defaultVpId]`). Idempotent: if the group
  * already exists on disk, returns the existing handle without overwriting.
  *
- * Separation from group-store.createGroup:
- *   - createGroup throws on duplicate; seed returns the existing handle.
+ * Separation from group-store.createSession:
+ *   - createSession throws on duplicate; seed returns the existing handle.
  *   - seed picks a stable id `grp_default` so UI can deep-link to it.
  *   - seed is the only place that writes the "default group exists" side
  *     effect during the bootstrap flow.
@@ -15,10 +15,10 @@
 import { existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
-import { openGroup, createGroup, loadGroupMeta } from './group-store.js';
+import { openSession, createSession, loadSessionMeta } from './session-store.js';
 import { seedSummaryIfMissingSync } from '../memory/store-v2.js';
 
-export const DEFAULT_GROUP_ID = 'grp_default';
+export const DEFAULT_SESSION_ID = 'grp_default';
 
 /**
  * Default memory root used when callers don't pass `options.memoryRoot`.
@@ -30,14 +30,14 @@ const DEFAULT_MEMORY_ROOT = join(homedir(), '.yeaft', 'memory');
 
 /**
  * Build the default-group seed summary body. Pulled into a helper so
- * tests can pin the exact format. Mirrors `buildGroupSeedSummary` in
+ * tests can pin the exact format. Mirrors `buildSessionSeedSummary` in
  * `group-crud.js` shape, with the "Default group" wording reserved for
  * the bootstrap path.
  *
  * @param {{ name?: string, roster?: string[], defaultVpId?: string|null }} spec
  * @returns {string}
  */
-export function buildDefaultGroupSeedSummary(spec) {
+export function buildDefaultSessionSeedSummary(spec) {
   const name = String(spec?.name || 'Default').trim();
   const roster = Array.isArray(spec?.roster) ? spec.roster : [];
   const defaultVpId = spec?.defaultVpId || null;
@@ -51,16 +51,16 @@ export function buildDefaultGroupSeedSummary(spec) {
 /**
  * @param {string} yeaftDir
  * @param {{ defaultVpId?: string|null, roster?: string[], name?: string, memoryRoot?: string }} [spec]
- * @returns {{ group: import('./group-store.js').GroupHandle, created: boolean }}
+ * @returns {{ group: import('./session-store.js').GroupHandle, created: boolean }}
  */
-export function seedDefaultGroup(yeaftDir, spec = {}) {
+export function seedDefaultSession(yeaftDir, spec = {}) {
   const memoryRoot = spec.memoryRoot || DEFAULT_MEMORY_ROOT;
-  const groupsRoot = join(yeaftDir, 'groups');
-  if (!existsSync(groupsRoot)) mkdirSync(groupsRoot, { recursive: true });
+  const sessionsRoot = join(yeaftDir, 'sessions');
+  if (!existsSync(sessionsRoot)) mkdirSync(sessionsRoot, { recursive: true });
 
-  const existingDir = join(groupsRoot, DEFAULT_GROUP_ID);
-  if (existsSync(existingDir) && loadGroupMeta(existingDir)) {
-    return { group: openGroup(groupsRoot, DEFAULT_GROUP_ID), created: false };
+  const existingDir = join(sessionsRoot, DEFAULT_SESSION_ID);
+  if (existsSync(existingDir) && loadSessionMeta(existingDir)) {
+    return { group: openSession(sessionsRoot, DEFAULT_SESSION_ID), created: false };
   }
 
   const roster = Array.isArray(spec.roster) && spec.roster.length
@@ -69,8 +69,8 @@ export function seedDefaultGroup(yeaftDir, spec = {}) {
   const defaultVpId = spec.defaultVpId || roster[0] || null;
   const name = spec.name || 'Default';
 
-  const group = createGroup(groupsRoot, {
-    id: DEFAULT_GROUP_ID,
+  const group = createSession(sessionsRoot, {
+    id: DEFAULT_SESSION_ID,
     name,
     roster,
     defaultVpId,
@@ -79,16 +79,16 @@ export function seedDefaultGroup(yeaftDir, spec = {}) {
   // Seed Layer-A resident summary so the very first session — even on a
   // brand-new install where only `grp_default` exists — renders a non-
   // empty memory section in the system prompt. No-op once Dream-v2 (or
-  // createGroupFromSpec) has already written one. Best-effort: a memory-
+  // createSessionFromSpec) has already written one. Best-effort: a memory-
   // root permission failure must NOT break the bootstrap flow.
   try {
     seedSummaryIfMissingSync(
-      { kind: 'group', id: DEFAULT_GROUP_ID },
-      buildDefaultGroupSeedSummary({ name, roster, defaultVpId }),
+      { kind: 'group', id: DEFAULT_SESSION_ID },
+      buildDefaultSessionSeedSummary({ name, roster, defaultVpId }),
       { root: memoryRoot },
     );
   } catch (err) {
-    console.warn(`[seed-default] failed to seed summary.md for ${DEFAULT_GROUP_ID}:`, err?.message || err);
+    console.warn(`[seed-default] failed to seed summary.md for ${DEFAULT_SESSION_ID}:`, err?.message || err);
   }
 
   return { group, created: true };

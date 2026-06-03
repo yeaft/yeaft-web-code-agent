@@ -16,7 +16,7 @@
  * What this script does:
  *   Scans `~/.yeaft/conversation/messages/` (and optionally `cold/`),
  *   detects clusters of consecutive `role: user` records with identical
- *   `(content, groupId)` and timestamps within a short window (default
+ *   `(content, sessionId)` and timestamps within a short window (default
  *   30 s — the realistic upper bound on a single coordinator-ingest fan-
  *   out turn), and DELETES all but the EARLIEST in each cluster.
  *
@@ -146,7 +146,7 @@ function loadDir(dir) {
 /**
  * Group consecutive duplicate user rows.
  *
- * "Duplicate" = same (role:'user', content, groupId-or-undef) AND time
+ * "Duplicate" = same (role:'user', content, sessionId-or-undef) AND time
  * within `windowMs` of the previous row in the cluster. Multi-VP fan-
  * out writes are within a few seconds of each other on the same machine;
  * 30 s is comfortable headroom without absorbing genuinely separate
@@ -154,13 +154,13 @@ function loadDir(dir) {
  *
  * Note: we do NOT require positional adjacency — between the user copies,
  * one VP's assistant + tool rows often land. So we walk linearly and key
- * the cluster by content+groupId+near-time, regardless of what other
+ * the cluster by content+sessionId+near-time, regardless of what other
  * roles sit between them.
  */
 function findClusters(records, windowMs) {
   const clusters = [];
   // For each user row, find any later user rows that match by content +
-  // groupId AND are within windowMs of it. Greedy single-pass.
+  // sessionId AND are within windowMs of it. Greedy single-pass.
   const consumed = new Set(); // indices already attached to a cluster
   for (let i = 0; i < records.length; i++) {
     if (consumed.has(i)) continue;
@@ -177,8 +177,8 @@ function findClusters(records, windowMs) {
       const r = records[j];
       if (r.msg.role !== 'user') continue;
       if (r.msg.content !== head.msg.content) continue;
-      // groupId match (treat undefined === undefined)
-      if ((r.msg.groupId || null) !== (head.msg.groupId || null)) continue;
+      // sessionId match (treat undefined === undefined)
+      if ((r.msg.sessionId || null) !== (head.msg.sessionId || null)) continue;
       const t = Date.parse(r.msg.time);
       if (Number.isNaN(t)) continue;
       if (Math.abs(t - headTime) > windowMs) continue;
@@ -257,7 +257,7 @@ function main() {
       const head = keep.msg;
       const preview = (head.content || '').slice(0, 60).replace(/\n/g, ' ');
       console.log(
-        `cluster: ${cluster.length} copies | groupId=${head.groupId || '-'} | time=${head.time} | "${preview}"`
+        `cluster: ${cluster.length} copies | sessionId=${head.sessionId || '-'} | time=${head.time} | "${preview}"`
       );
       console.log(`  keep:   ${keep.filename}`);
       for (const d of dups) console.log(`  remove: ${d.filename}`);

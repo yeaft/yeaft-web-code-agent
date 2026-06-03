@@ -2,7 +2,7 @@
  * group-config.js — Per-group selected model state.
  *
  * Each group may carry its header-selected model in `config.json` at
- *   ~/.yeaft/groups/<groupId>/config.json
+ *   ~/.yeaft/sessions/<sessionId>/config.json
  *
  * v1 schema (intentionally tiny — extend via additive keys only):
  *   {
@@ -21,17 +21,17 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { writeAtomic } from '../storage/index.js';
-import { groupsRoot, resolveGroupYeaftDir } from './group-crud.js';
+import { sessionsRoot, resolveSessionYeaftDir } from './session-crud.js';
 
 const CONFIG_FILE = 'config.json';
 
 /** Whitelist of persisted group model-state fields. Reject everything else. */
 const ALLOWED_KEYS = new Set(['model']);
 
-export class GroupConfigError extends Error {
+export class SessionConfigError extends Error {
   constructor(code, message) {
     super(message || code);
-    this.name = 'GroupConfigError';
+    this.name = 'SessionConfigError';
     this.code = code;
   }
 }
@@ -41,24 +41,24 @@ export class GroupConfigError extends Error {
  * per-group workDir registry so groups bound to a project directory
  * keep their config alongside the group meta.
  */
-export function groupConfigPath(yeaftDir, groupId) {
+export function sessionConfigPath(yeaftDir, sessionId) {
   if (!yeaftDir) return null;
-  const groupYeaftDir = resolveGroupYeaftDir(yeaftDir, groupId);
-  return join(groupsRoot(groupYeaftDir), groupId, CONFIG_FILE);
+  const groupYeaftDir = resolveSessionYeaftDir(yeaftDir, sessionId);
+  return join(sessionsRoot(groupYeaftDir), sessionId, CONFIG_FILE);
 }
 
 /**
  * Read a group's config.json. Returns `{}` when the file is missing or
  * corrupt — callers fall back to user-level defaults via
- * `resolveGroupConfig`. We never auto-write on read.
+ * `resolveSessionConfig`. We never auto-write on read.
  *
  * @param {string} yeaftDir
- * @param {string} groupId
+ * @param {string} sessionId
  * @returns {object}
  */
-export function loadGroupConfig(yeaftDir, groupId) {
-  if (!groupId || !yeaftDir) return {};
-  const path = groupConfigPath(yeaftDir, groupId);
+export function loadSessionConfig(yeaftDir, sessionId) {
+  if (!sessionId || !yeaftDir) return {};
+  const path = sessionConfigPath(yeaftDir, sessionId);
   if (!path || !existsSync(path)) return {};
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8'));
@@ -76,25 +76,25 @@ export function loadGroupConfig(yeaftDir, groupId) {
 }
 
 /**
- * Validate a partial group-config object. Throws GroupConfigError on
+ * Validate a partial group-config object. Throws SessionConfigError on
  * any unknown key or malformed value. Empty / null values for known
  * keys are allowed — they signal "fall back to user default".
  *
  * @param {object} cfg
  */
-export function validateGroupConfig(cfg) {
+export function validateSessionConfig(cfg) {
   if (cfg === null || cfg === undefined) return;
   if (typeof cfg !== 'object' || Array.isArray(cfg)) {
-    throw new GroupConfigError('invalid_shape', 'config must be an object');
+    throw new SessionConfigError('invalid_shape', 'config must be an object');
   }
   for (const k of Object.keys(cfg)) {
     if (!ALLOWED_KEYS.has(k)) {
-      throw new GroupConfigError('unknown_key', `unknown config key: ${k}`);
+      throw new SessionConfigError('unknown_key', `unknown config key: ${k}`);
     }
   }
   if ('model' in cfg && cfg.model !== null && cfg.model !== undefined && cfg.model !== '') {
     if (typeof cfg.model !== 'string' || !cfg.model.trim()) {
-      throw new GroupConfigError('invalid_model', 'model must be a non-empty string');
+      throw new SessionConfigError('invalid_model', 'model must be a non-empty string');
     }
   }
 }
@@ -106,14 +106,14 @@ export function validateGroupConfig(cfg) {
  * back to the user default).
  *
  * @param {string} yeaftDir
- * @param {string} groupId
+ * @param {string} sessionId
  * @param {object} partial
  * @returns {object}
  */
-export function saveGroupConfig(yeaftDir, groupId, partial) {
-  if (!groupId) throw new GroupConfigError('missing_group_id', 'groupId required');
-  validateGroupConfig(partial);
-  const current = loadGroupConfig(yeaftDir, groupId);
+export function saveSessionConfig(yeaftDir, sessionId, partial) {
+  if (!sessionId) throw new SessionConfigError('missing_group_id', 'sessionId required');
+  validateSessionConfig(partial);
+  const current = loadSessionConfig(yeaftDir, sessionId);
   const next = { ...current };
   for (const [k, v] of Object.entries(partial || {})) {
     if (!ALLOWED_KEYS.has(k)) continue;
@@ -123,17 +123,17 @@ export function saveGroupConfig(yeaftDir, groupId, partial) {
       next[k] = typeof v === 'string' ? v.trim() : v;
     }
   }
-  const path = groupConfigPath(yeaftDir, groupId);
+  const path = sessionConfigPath(yeaftDir, sessionId);
   writeAtomic(path, `${JSON.stringify(next, null, 2)}\n`);
   return next;
 }
 
 /**
  * Initialise an empty config.json next to a brand-new group. Idempotent —
- * leaves an existing file untouched. Called by `createGroupFromSpec`.
+ * leaves an existing file untouched. Called by `createSessionFromSpec`.
  */
-export function ensureGroupConfigFile(yeaftDir, groupId) {
-  const path = groupConfigPath(yeaftDir, groupId);
+export function ensureSessionConfigFile(yeaftDir, sessionId) {
+  const path = sessionConfigPath(yeaftDir, sessionId);
   if (!path || existsSync(path)) return;
   try {
     writeAtomic(path, `${JSON.stringify({}, null, 2)}\n`);
@@ -152,12 +152,12 @@ export function ensureGroupConfigFile(yeaftDir, groupId) {
  * verbatim from the user config.
  *
  * @param {object} userConfig — loadConfig() result
- * @param {object} groupConfig — loadGroupConfig() result
+ * @param {object} sessionConfig — loadSessionConfig() result
  * @returns {object} — A new config object safe to hand to the engine.
  */
-export function resolveGroupConfig(userConfig, groupConfig) {
+export function resolveSessionConfig(userConfig, sessionConfig) {
   const base = userConfig ? { ...userConfig } : {};
-  const overrides = groupConfig && typeof groupConfig === 'object' ? groupConfig : {};
+  const overrides = sessionConfig && typeof sessionConfig === 'object' ? sessionConfig : {};
   if (overrides.model && typeof overrides.model === 'string' && overrides.model.trim()) {
     const model = overrides.model.trim();
     base.model = model;

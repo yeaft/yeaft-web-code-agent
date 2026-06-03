@@ -6,7 +6,7 @@
  *   - cursor walks turn-by-turn through hot history
  *   - hot↔cold transition is transparent (cold ids are strictly < hot ids
  *     because #getNextSeq is global and moveToCold is renameSync)
- *   - groupId filter excludes other groups
+ *   - sessionId filter excludes other groups
  *   - hasMore is computed in TURNS, not raw messages
  *   - empty / pathological inputs return `{ messages: [], oldestSeq: null,
  *     hasMore: false }` instead of throwing
@@ -40,12 +40,12 @@ afterEach(() => {
   }
 });
 
-/** Build N turns into `groupId`. Each turn = user + assistant. */
-function seedTurns(groupId, n, prefix = 'q') {
+/** Build N turns into `sessionId`. Each turn = user + assistant. */
+function seedTurns(sessionId, n, prefix = 'q') {
   const batch = [];
   for (let i = 1; i <= n; i++) {
-    batch.push({ role: 'user',      content: `${prefix}${i}`, groupId });
-    batch.push({ role: 'assistant', content: `a${prefix}${i}`, groupId });
+    batch.push({ role: 'user',      content: `${prefix}${i}`, sessionId });
+    batch.push({ role: 'assistant', content: `a${prefix}${i}`, sessionId });
   }
   store.appendBatch(batch);
 }
@@ -65,7 +65,7 @@ describe('parseSeqFromId', () => {
 });
 
 describe('loadOlderByGroup — empty / defensive paths', () => {
-  it('returns empty result for missing/empty groupId', () => {
+  it('returns empty result for missing/empty sessionId', () => {
     seedTurns('g1', 5);
     expect(store.loadOlderByGroup(null, null, 5))
       .toEqual({ messages: [], oldestSeq: null, hasMore: false });
@@ -186,20 +186,20 @@ describe('loadOlderByGroup — turn-boundary correctness', () => {
   });
 });
 
-describe('loadOlderByGroup — groupId isolation', () => {
+describe('loadOlderByGroup — sessionId isolation', () => {
   it('ignores messages from other groups', () => {
     // Interleave 3 turns each across two groups.
     store.appendBatch([
-      { role: 'user',      content: 'A1', groupId: 'g_a' },
-      { role: 'assistant', content: 'aA1', groupId: 'g_a' },
-      { role: 'user',      content: 'B1', groupId: 'g_b' },
-      { role: 'assistant', content: 'aB1', groupId: 'g_b' },
-      { role: 'user',      content: 'A2', groupId: 'g_a' },
-      { role: 'assistant', content: 'aA2', groupId: 'g_a' },
-      { role: 'user',      content: 'B2', groupId: 'g_b' },
-      { role: 'assistant', content: 'aB2', groupId: 'g_b' },
-      { role: 'user',      content: 'A3', groupId: 'g_a' },
-      { role: 'assistant', content: 'aA3', groupId: 'g_a' },
+      { role: 'user',      content: 'A1', sessionId: 'g_a' },
+      { role: 'assistant', content: 'aA1', sessionId: 'g_a' },
+      { role: 'user',      content: 'B1', sessionId: 'g_b' },
+      { role: 'assistant', content: 'aB1', sessionId: 'g_b' },
+      { role: 'user',      content: 'A2', sessionId: 'g_a' },
+      { role: 'assistant', content: 'aA2', sessionId: 'g_a' },
+      { role: 'user',      content: 'B2', sessionId: 'g_b' },
+      { role: 'assistant', content: 'aB2', sessionId: 'g_b' },
+      { role: 'user',      content: 'A3', sessionId: 'g_a' },
+      { role: 'assistant', content: 'aA3', sessionId: 'g_a' },
     ]);
     const a = store.loadOlderByGroup('g_a', null, 10);
     expect(a.messages.map(m => m.content)).toEqual([
@@ -216,9 +216,9 @@ describe('loadOlderByGroup — groupId isolation', () => {
 
   it('ignores untagged (legacy / pre-grouping) messages', () => {
     store.appendBatch([
-      { role: 'user',      content: 'orphan' }, // no groupId
-      { role: 'user',      content: 'A1',     groupId: 'g1' },
-      { role: 'assistant', content: 'aA1',    groupId: 'g1' },
+      { role: 'user',      content: 'orphan' }, // no sessionId
+      { role: 'user',      content: 'A1',     sessionId: 'g1' },
+      { role: 'assistant', content: 'aA1',    sessionId: 'g1' },
     ]);
     const r = store.loadOlderByGroup('g1', null, 10);
     expect(r.messages.map(m => m.content)).toEqual(['A1', 'aA1']);
@@ -255,7 +255,7 @@ describe('loadOlderByGroup — hot/cold tier crossing', () => {
     store.moveToCold('m0001');
     store.moveToCold('m0002');
     // After moveToCold, append more — new hot ids must be > cold ids.
-    store.append({ role: 'user', content: 'q4', groupId: 'g1' });
+    store.append({ role: 'user', content: 'q4', sessionId: 'g1' });
     const all = store.loadOlderByGroup('g1', null, 10);
     const ids = all.messages.map(m => parseSeqFromId(m.id));
     // Strictly increasing.
@@ -272,8 +272,8 @@ describe('loadOlderByGroup — race-with-streaming safety', () => {
     expect(p1.messages.map(m => m.content)).toEqual(['q3', 'aq3']);
 
     // Simulate concurrent streaming: a new turn lands AFTER our cursor.
-    store.append({ role: 'user',      content: 'q4', groupId: 'g1' });
-    store.append({ role: 'assistant', content: 'aq4', groupId: 'g1' });
+    store.append({ role: 'user',      content: 'q4', sessionId: 'g1' });
+    store.append({ role: 'assistant', content: 'aq4', sessionId: 'g1' });
 
     // Page 2 with the original cursor must NOT include the newly arrived
     // q4/aq4 — they're seq > p1.oldestSeq.
@@ -288,12 +288,12 @@ describe('loadVisibleByGroup — internal marker filtering', () => {
       {
         role: 'user',
         content: 'Please explain this YAML:\ninternal: true\n_reflection: true',
-        groupId: 'g1',
+        sessionId: 'g1',
       },
       {
         role: 'assistant',
         content: 'That quoted YAML is user-visible content, not metadata.',
-        groupId: 'g1',
+        sessionId: 'g1',
       },
     ]);
 
@@ -307,10 +307,10 @@ describe('loadVisibleByGroup — internal marker filtering', () => {
 
   it('drops messages whose parsed frontmatter marks them internal/system-only', () => {
     store.appendBatch([
-      { role: 'user', content: 'visible', groupId: 'g1' },
-      { role: 'assistant', content: 'hidden internal', groupId: 'g1', internal: true },
-      { role: 'assistant', content: 'hidden system', groupId: 'g1', systemOnlyMessage: true },
-      { role: 'assistant', content: 'also visible', groupId: 'g1' },
+      { role: 'user', content: 'visible', sessionId: 'g1' },
+      { role: 'assistant', content: 'hidden internal', sessionId: 'g1', internal: true },
+      { role: 'assistant', content: 'hidden system', sessionId: 'g1', systemOnlyMessage: true },
+      { role: 'assistant', content: 'also visible', sessionId: 'g1' },
     ]);
 
     const r = store.loadVisibleByGroup('g1', null, 10);

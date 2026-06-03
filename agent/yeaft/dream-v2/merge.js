@@ -12,7 +12,7 @@
  *
  *   [
  *     {
- *       groupId: 'g-eng',
+ *       sessionId: 'g-eng',
  *       diff: [<message>, ...],            // the per-group source diff
  *                                          // (already truncated/segmented if needed)
  *       actions: [
@@ -32,36 +32,36 @@
  *     { target: 'user',
  *       kind: 'update',                    // 'update' wins over 'create' if any group says update
  *       sources: [
- *         { groupId: 'g-eng',  diff: [...] },
- *         { groupId: 'g-life', diff: [...] },
+ *         { sessionId: 'g-eng',  diff: [...] },
+ *         { sessionId: 'g-life', diff: [...] },
  *       ],
  *     },
  *     { target: 'topic/life/parenting',
  *       kind: 'create',                    // create only if every contributing group said create
- *       sources: [{ groupId: 'g-life', diff: [...] }],
+ *       sources: [{ sessionId: 'g-life', diff: [...] }],
  *     },
  *     ...
  *   ]
  *
  * Determinism contract:
  *   - Targets are returned sorted alphabetically by target path.
- *   - Within a target, sources are sorted by groupId.
+ *   - Within a target, sources are sorted by sessionId.
  *   This makes the debug-panel output predictable across runs.
  */
 
 /**
  * Merge per-group triage outputs into per-target apply units.
  *
- * @param {Array<{ groupId: string, diff: any, actions: Array<{ kind: 'update'|'create', scope: string }> }>} groupTriages
- * @returns {Array<{ target: string, kind: 'update'|'create', sources: Array<{ groupId: string, diff: any }> }>}
+ * @param {Array<{ sessionId: string, diff: any, actions: Array<{ kind: 'update'|'create', scope: string }> }>} groupTriages
+ * @returns {Array<{ target: string, kind: 'update'|'create', sources: Array<{ sessionId: string, diff: any }> }>}
  */
 export function mergeByTarget(groupTriages) {
   const byTarget = new Map();
   for (const g of (groupTriages || [])) {
-    const groupId = g && g.groupId;
+    const sessionId = g && g.sessionId;
     const diff = g && g.diff;
     const actions = Array.isArray(g && g.actions) ? g.actions : [];
-    if (!groupId) continue;
+    if (!sessionId) continue;
     for (const a of actions) {
       if (!a || !a.scope) continue;
       const k = a.kind === 'create' ? 'create' : 'update';
@@ -75,13 +75,13 @@ export function mergeByTarget(groupTriages) {
       if (k === 'update') entry.kind = 'update';
       // Avoid duplicate (target, group) pairs — should never happen
       // in normal triage but be defensive.
-      if (!entry.sources.some(s => s.groupId === groupId)) {
-        entry.sources.push({ groupId, diff });
+      if (!entry.sources.some(s => s.sessionId === sessionId)) {
+        entry.sources.push({ sessionId, diff });
       }
     }
   }
   const out = Array.from(byTarget.values());
   out.sort((a, b) => a.target.localeCompare(b.target));
-  for (const e of out) e.sources.sort((a, b) => a.groupId.localeCompare(b.groupId));
+  for (const e of out) e.sources.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
   return out;
 }

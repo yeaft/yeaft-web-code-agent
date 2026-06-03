@@ -36,8 +36,8 @@ import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
 import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
 import { defineTool } from '../../../agent/yeaft/tools/types.js';
 import routeForward from '../../../agent/yeaft/tools/route-forward.js';
-import { createGroup, openGroup } from '../../../agent/yeaft/groups/group-store.js';
-import { createCoordinator } from '../../../agent/yeaft/groups/coordinator.js';
+import { createSession, openSession } from '../../../agent/yeaft/sessions/session-store.js';
+import { createCoordinator } from '../../../agent/yeaft/sessions/coordinator.js';
 import { createRouter } from '../../../agent/yeaft/routing/router.js';
 
 /**
@@ -66,11 +66,11 @@ class MockAdapter {
 }
 
 let TEST_DIR;
-let groupsRoot;
+let sessionsRoot;
 
 beforeEach(() => {
   TEST_DIR = mkdtempSync(join(tmpdir(), 'rf-handoff-'));
-  groupsRoot = join(TEST_DIR, 'groups');
+  sessionsRoot = join(TEST_DIR, 'groups');
 });
 afterEach(() => {
   try { rmSync(TEST_DIR, { recursive: true, force: true }); } catch { /* */ }
@@ -247,13 +247,13 @@ describe('route_forward.execute (task-707)', () => {
    * Build a fully-wired router pointing at a real coordinator over a
    * tmp group, plus the in-memory `delivered[]` list the coordinator's
    * deliver() callback feeds. This is the same coordinator + router
-   * pair the bridge wires up via getOrCreateGroupContext.
+   * pair the bridge wires up via getOrCreateSessionContext.
    */
   function setupRoute(vpRoster, defaultVpId = vpRoster[0]) {
-    createGroup(groupsRoot, {
+    createSession(sessionsRoot, {
       id: 'g-rf', name: 'g-rf', roster: vpRoster, defaultVpId,
     });
-    const group = openGroup(groupsRoot, 'g-rf');
+    const group = openSession(sessionsRoot, 'g-rf');
     const delivered = [];
     const coord = createCoordinator(group, {
       deliver: (vpId, envelope) => delivered.push({ vpId, envelope }),
@@ -413,11 +413,11 @@ describe('Engine + route_forward integration (task-707)', () => {
     // Set up a real group + coordinator + router. Inbox is the
     // delivered[] sink — represents what the bridge would push into
     // vpInboxes after task-707.
-    createGroup(groupsRoot, {
+    createSession(sessionsRoot, {
       id: 'g3a', name: 'g3a',
       roster: ['vp-a', 'vp-b'], defaultVpId: 'vp-a',
     });
-    const group = openGroup(groupsRoot, 'g3a');
+    const group = openSession(sessionsRoot, 'g3a');
     const inbox = [];
     const coord = createCoordinator(group, {
       deliver: (vpId, envelope) => inbox.push({ vpId, envelope }),
@@ -492,11 +492,11 @@ describe('Engine + route_forward integration (task-707)', () => {
   });
 
   it('3b. engine query that emits a FAILED route_forward (self) does NOT exit — engine continues to a second adapter call', async () => {
-    createGroup(groupsRoot, {
+    createSession(sessionsRoot, {
       id: 'g3b', name: 'g3b',
       roster: ['vp-a', 'vp-b'], defaultVpId: 'vp-a',
     });
-    const group = openGroup(groupsRoot, 'g3b');
+    const group = openSession(sessionsRoot, 'g3b');
     const coord = createCoordinator(group, { deliver: () => {} });
     const router = createRouter({ coordinator: coord });
 

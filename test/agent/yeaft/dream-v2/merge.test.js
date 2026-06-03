@@ -15,7 +15,7 @@ describe('mergeByTarget', () => {
   it('merges identical targets across groups, sorted', () => {
     const merged = mergeByTarget([
       {
-        groupId: 'g-life',
+        sessionId: 'g-life',
         diff: [{ id: 'L1' }],
         actions: [
           { kind: 'update', scope: 'user' },
@@ -23,7 +23,7 @@ describe('mergeByTarget', () => {
         ],
       },
       {
-        groupId: 'g-eng',
+        sessionId: 'g-eng',
         diff: [{ id: 'E1' }],
         actions: [
           { kind: 'update', scope: 'user' },
@@ -35,20 +35,20 @@ describe('mergeByTarget', () => {
     const targets = merged.map(m => m.target);
     expect(targets).toEqual(['group/g-eng', 'group/g-eng/vp/zhang-san', 'group/g-life', 'user']);
     const userEntry = merged.find(m => m.target === 'user');
-    expect(userEntry.sources.map(s => s.groupId)).toEqual(['g-eng', 'g-life']);
+    expect(userEntry.sources.map(s => s.sessionId)).toEqual(['g-eng', 'g-life']);
     expect(userEntry.kind).toBe('update');
   });
   it('update beats create when groups disagree', () => {
     const merged = mergeByTarget([
-      { groupId: 'g1', diff: [], actions: [{ kind: 'create', scope: 'topic/x' }] },
-      { groupId: 'g2', diff: [], actions: [{ kind: 'update', scope: 'topic/x' }] },
+      { sessionId: 'g1', diff: [], actions: [{ kind: 'create', scope: 'topic/x' }] },
+      { sessionId: 'g2', diff: [], actions: [{ kind: 'update', scope: 'topic/x' }] },
     ]);
     expect(merged[0].kind).toBe('update');
   });
   it('keeps create when every group says create', () => {
     const merged = mergeByTarget([
-      { groupId: 'g1', diff: [], actions: [{ kind: 'create', scope: 'topic/y' }] },
-      { groupId: 'g2', diff: [], actions: [{ kind: 'create', scope: 'topic/y' }] },
+      { sessionId: 'g1', diff: [], actions: [{ kind: 'create', scope: 'topic/y' }] },
+      { sessionId: 'g2', diff: [], actions: [{ kind: 'create', scope: 'topic/y' }] },
     ]);
     expect(merged[0].kind).toBe('create');
     expect(merged[0].sources.length).toBe(2);
@@ -56,7 +56,7 @@ describe('mergeByTarget', () => {
   it('dedupes (target, group) pairs', () => {
     const merged = mergeByTarget([
       {
-        groupId: 'g1',
+        sessionId: 'g1',
         diff: [],
         actions: [
           { kind: 'update', scope: 'user' },

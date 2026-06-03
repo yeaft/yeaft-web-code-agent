@@ -209,16 +209,16 @@ export class DebugTrace {
 
   /**
    * Start a new turn.
-   * @param {{ traceId: string, messageId?: string, mode?: string, turnNumber?: number, groupId?: string, vpId?: string, threadId?: string, userPrompt?: string }} opts
+   * @param {{ traceId: string, messageId?: string, mode?: string, turnNumber?: number, sessionId?: string, vpId?: string, threadId?: string, userPrompt?: string }} opts
    * @returns {string} — turnId
    */
-  startTurn({ traceId, messageId = null, mode = null, turnNumber = null, groupId = null, vpId = null, threadId = null, userPrompt = null }) {
+  startTurn({ traceId, messageId = null, mode = null, turnNumber = null, sessionId = null, vpId = null, threadId = null, userPrompt = null }) {
     const id = randomUUID();
     const now = Date.now();
     this.#prepare('insertTurn', `
       INSERT INTO trace_turns (id, trace_id, message_id, mode, turn_number, started_at, group_id, vp_id, thread_id, user_prompt)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, traceId, messageId, mode, turnNumber, now, groupId, vpId, threadId, truncate(userPrompt, MAX_LOOP_PAYLOAD));
+    `).run(id, traceId, messageId, mode, turnNumber, now, sessionId, vpId, threadId, truncate(userPrompt, MAX_LOOP_PAYLOAD));
     return id;
   }
 
@@ -406,17 +406,17 @@ export class DebugTrace {
    * fields the panel expects. JSON columns are parsed; truncated /
    * malformed payloads degrade to null instead of failing the call.
    *
-   * @param {{ limit?: number, dreamLimit?: number, groupId?: string|null, threadId?: string|null }} [opts]
+   * @param {{ limit?: number, dreamLimit?: number, sessionId?: string|null, threadId?: string|null }} [opts]
    * @returns {{ loops: object[], turns: object[], dreamEvents: object[] }}
    */
-  fetchRecentDebugHistory({ limit = 100, dreamLimit = 5, groupId = null, threadId = null } = {}) {
+  fetchRecentDebugHistory({ limit = 100, dreamLimit = 5, sessionId = null, threadId = null } = {}) {
     const lim = Math.max(1, Math.min(500, Number(limit) || 100));
     const dreamLim = Number.isFinite(Number(dreamLimit))
       ? Math.max(0, Math.min(50, Number(dreamLimit)))
       : 5;
     const where = [];
     const args = [];
-    if (groupId) { where.push('group_id = ?'); args.push(groupId); }
+    if (sessionId) { where.push('group_id = ?'); args.push(sessionId); }
     if (threadId) { where.push('thread_id = ?'); args.push(threadId); }
     const sql = `
       SELECT * FROM trace_turns
@@ -437,7 +437,7 @@ export class DebugTrace {
       try { return JSON.parse(s); }
       catch { return null; }
     };
-    // Group rows by (turnId, threadId, groupId, vpId) → frontend Turn
+    // Group rows by (turnId, threadId, sessionId, vpId) → frontend Turn
     // record. Each row is also surfaced as a Loop.
     const turnsById = new Map();
     const loops = rows.map((r) => {
@@ -461,7 +461,7 @@ export class DebugTrace {
         stopReason: r.stop_reason || null,
         rawRequest: r.raw_request || null,
         rawResponse: r.raw_response || null,
-        groupId: r.group_id || null,
+        sessionId: r.group_id || null,
         vpId: r.vp_id || null,
         threadId: r.thread_id || null,
       };
@@ -474,7 +474,7 @@ export class DebugTrace {
           // cumulative conversation snapshot, so `messages[0].content`
           // would be turn-1's prompt for every subsequent turn header.
           userPrompt: r.user_prompt || '',
-          groupId: r.group_id || null,
+          sessionId: r.group_id || null,
           vpId: r.vp_id || null,
           threadId: r.thread_id || null,
           openedAt: r.started_at || 0,
@@ -525,11 +525,11 @@ export class DebugTrace {
       `).all(Math.max(dreamLim * 5, dreamLim));
       for (const er of eventRows) {
         const data = parseJsonSafe(er.event_data) || {};
-        const evtGroupId = typeof data.groupId === 'string' && data.groupId ? data.groupId : null;
+        const evtGroupId = typeof data.sessionId === 'string' && data.sessionId ? data.sessionId : null;
         const target = typeof data.target === 'string' ? data.target : '';
-        if (groupId) {
+        if (sessionId) {
           const isBroadcast = !evtGroupId && !target;
-          const isThisGroup = evtGroupId === groupId || target === `group/${groupId}`;
+          const isThisGroup = evtGroupId === sessionId || target === `group/${sessionId}`;
           if (!isBroadcast && !isThisGroup) continue;
         }
         dreamEvents.push({

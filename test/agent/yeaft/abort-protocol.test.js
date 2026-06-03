@@ -2,7 +2,7 @@
  * Abort command protocol tests — PR #797 multi-thread VP runtime variant.
  *
  * PR #797 keeps the legacy 1:1 `currentAbortCtrl`, but group VP runtime work
- * is now keyed by `(groupId, vpId, threadId)`. The wire protocol
+ * is now keyed by `(sessionId, vpId, threadId)`. The wire protocol
  * (`yeaft_abort_thread`, `yeaft_abort_all`, `yeaft_aborted` ack) is preserved
  * for client back-compat, but `threadId` is meaningful again for group VP
  * thread aborts.

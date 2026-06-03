@@ -20,7 +20,7 @@ beforeEach(() => { yeaftDir = mkdtempSync(join(tmpdir(), 'dream-debug-')); });
 afterEach(() => { rmSync(yeaftDir, { recursive: true, force: true }); });
 
 function seedGroup(id, messages) {
-  const dir = join(yeaftDir, 'groups', id);
+  const dir = join(yeaftDir, 'sessions', id);
   mkdirSync(join(dir, 'messages'), { recursive: true });
   writeFileSync(join(dir, 'group.json'), JSON.stringify({
     id, name: id, roster: [], defaultVpId: null, createdAt: '2026-05-01T00:00:00Z',

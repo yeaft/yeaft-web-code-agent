@@ -28,7 +28,7 @@ import {
   formatPickedForInjection,
   parseMentions,
   selectRespondingVps,
-} from '../../../../agent/yeaft/groups/pre-flow.js';
+} from '../../../../agent/yeaft/sessions/pre-flow.js';
 
 let TEST_DIR;
 let idx;
@@ -49,13 +49,13 @@ describe('buildRelevantScopes', () => {
   });
   it('orders user → group → group-user → group-vp', () => {
     expect(
-      buildRelevantScopes({ groupId: 'g1', vpId: 'alice' }),
-    ).toEqual(['user', 'group/g1', 'group/g1/user', 'group/g1/vp/alice']);
+      buildRelevantScopes({ sessionId: 'g1', vpId: 'alice' }),
+    ).toEqual(['user', 'session/g1', 'session/g1/user', 'session/g1/vp/alice']);
   });
   it('appends extra scopes once', () => {
     expect(
-      buildRelevantScopes({ groupId: 'g1', extra: ['group/g1/topic/x', 'group/g1'] }),
-    ).toEqual(['user', 'group/g1', 'group/g1/user', 'group/g1/topic/x']);
+      buildRelevantScopes({ sessionId: 'g1', extra: ['session/g1/topic/x', 'session/g1'] }),
+    ).toEqual(['user', 'session/g1', 'session/g1/user', 'session/g1/topic/x']);
   });
 });
 
@@ -67,11 +67,11 @@ describe('formatPickedForInjection', () => {
   it('groups by scope with markdown headings', () => {
     const out = formatPickedForInjection([
       { scope: 'user', body: 'profile fact' },
-      { scope: 'group/g1', body: 'group note' },
+      { scope: 'session/g1', body: 'group note' },
       { scope: 'vp/alice', body: 'alice fact' },
     ]);
     expect(out).toContain('## Memory: User');
-    expect(out).toContain('## Memory: Group g1');
+    expect(out).toContain('## Memory: Session g1');
     expect(out).toContain('## Memory: VP alice');
     expect(out).toContain('profile fact');
   });
@@ -97,24 +97,24 @@ describe('runMemoryPreflow', () => {
       body: 'User loves jwt-based authentication.',
     }));
     idx.upsert(makeSegment({
-      scope: 'group/g1/vp/alice', kind: 'fact', tags: ['auth'],
+      scope: 'session/g1/vp/alice', kind: 'fact', tags: ['auth'],
       body: 'Alice prefers refresh tokens with jwt.',
     }));
     idx.upsert(makeSegment({
-      scope: 'group/g1/vp/bob', kind: 'fact', tags: ['auth'],
+      scope: 'session/g1/vp/bob', kind: 'fact', tags: ['auth'],
       body: 'Bob hates jwt; prefers session cookies.',
     }));
 
     const r = runMemoryPreflow(idx, {
       userMsg: 'how should we do jwt auth?',
       vpId: 'alice',
-      groupId: 'g1',
+      sessionId: 'g1',
     });
 
     const scopes = r.entries.map(e => e.scope);
     expect(scopes).toContain('user');
-    expect(scopes).toContain('group/g1/vp/alice');
-    expect(scopes).not.toContain('group/g1/vp/bob');
+    expect(scopes).toContain('session/g1/vp/alice');
+    expect(scopes).not.toContain('session/g1/vp/bob');
 
     expect(r.formatted).toContain('## Memory: User');
     expect(r.formatted).toContain('## Memory: VP alice');

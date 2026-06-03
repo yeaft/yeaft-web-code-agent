@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { bootInitEmptyGroups } from '../../../../agent/yeaft/dream-v2/session-wiring.js';
-import { createGroup } from '../../../../agent/yeaft/groups/group-store.js';
+import { createSession } from '../../../../agent/yeaft/sessions/session-store.js';
 
 let yeaftDir;
 
@@ -62,8 +62,8 @@ describe('bootInitEmptyGroups', () => {
   });
 
   it('skips groups with zero messages', async () => {
-    const groupsRoot = join(yeaftDir, 'groups');
-    createGroup(groupsRoot, { id: 'empty-grp', roster: [], defaultVpId: null });
+    const sessionsRoot = join(yeaftDir, 'sessions');
+    createSession(sessionsRoot, { id: 'empty-grp', roster: [], defaultVpId: null });
     const sched = fakeScheduler();
     const r = await bootInitEmptyGroups({
       yeaftDir,
@@ -75,8 +75,8 @@ describe('bootInitEmptyGroups', () => {
   });
 
   it('skips groups whose AMS already has segments', async () => {
-    const groupsRoot = join(yeaftDir, 'groups');
-    const h = createGroup(groupsRoot, { id: 'rich-grp', roster: [], defaultVpId: null });
+    const sessionsRoot = join(yeaftDir, 'sessions');
+    const h = createSession(sessionsRoot, { id: 'rich-grp', roster: [], defaultVpId: null });
     h.appendMessage({ from: 'user', text: 'hello' });
     const sched = fakeScheduler();
     const r = await bootInitEmptyGroups({
@@ -89,10 +89,10 @@ describe('bootInitEmptyGroups', () => {
   });
 
   it('triggers a scoped dream pass for groups with messages but no segments', async () => {
-    const groupsRoot = join(yeaftDir, 'groups');
-    const a = createGroup(groupsRoot, { id: 'a', roster: [], defaultVpId: null });
-    const b = createGroup(groupsRoot, { id: 'b', roster: [], defaultVpId: null });
-    const c = createGroup(groupsRoot, { id: 'c', roster: [], defaultVpId: null });
+    const sessionsRoot = join(yeaftDir, 'sessions');
+    const a = createSession(sessionsRoot, { id: 'a', roster: [], defaultVpId: null });
+    const b = createSession(sessionsRoot, { id: 'b', roster: [], defaultVpId: null });
+    const c = createSession(sessionsRoot, { id: 'c', roster: [], defaultVpId: null });
     a.appendMessage({ from: 'user', text: 'm1' });
     b.appendMessage({ from: 'user', text: 'm1' });
     // c has no messages → must be skipped
@@ -115,8 +115,8 @@ describe('bootInitEmptyGroups', () => {
   });
 
   it('survives a memoryIndex that throws (per-group skip)', async () => {
-    const groupsRoot = join(yeaftDir, 'groups');
-    const a = createGroup(groupsRoot, { id: 'a', roster: [], defaultVpId: null });
+    const sessionsRoot = join(yeaftDir, 'sessions');
+    const a = createSession(sessionsRoot, { id: 'a', roster: [], defaultVpId: null });
     a.appendMessage({ from: 'user', text: 'm1' });
     const sched = fakeScheduler();
     const r = await bootInitEmptyGroups({

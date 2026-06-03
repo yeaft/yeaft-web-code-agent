@@ -1,19 +1,20 @@
 /**
- * session-store.js — Per-session persistent store (collapses group + chat).
+ * group-store.js — Per-group persistent store for task-334b.
  *
- * Layout:
- *   ~/.yeaft/sessions/<sessionId>/
- *     meta.json   # { sessionId, vpIds[], displayName, workDir, createdAt, lastTurnAt, archivedAt? }
- *     messages/   # JSONL size-rotation log (storage/openLog)
+ * Layout (see architecture §2):
+ *   ~/.yeaft/sessions/<group-id>/
+ *     group.json          # { id, name, roster: [vpId...], defaultVpId, createdAt }
+ *     messages/           # JSONL size-rotation log (334o openLog)
  *       000001.jsonl
  *       index.json
+ *     tasks/              # populated by 334n — reserved here
+ *     vps/                # populated by 334c RoleInstance runtime — reserved here
  *
- * A session has N≥1 VPs. N=1 is the old "chat"; N>1 is the old "group".
- * The coordinator fan-out is identical for both — N=1 just resolves to
- * one VP turn per ingest.
+ * This module owns only the group.json + messages/ log. Roster mutation
+ * logic lives in roster.js so coordinator and group-store both compose it.
  *
- * Hard constraint: no @-mention parsing, no dispatch, no engine awareness.
- * Pure persistence.
+ * Hard constraint: the store does not parse @-mentions, does not dispatch,
+ * and has no knowledge of VP/RoleInstance. It is pure persistence over 334o.
  */
 
 import {
@@ -21,43 +22,34 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
-  renameSync,
-  rmSync,
   statSync,
 } from 'fs';
 import { join } from 'path';
 import { writeAtomic, openLog } from '../storage/index.js';
-import {
-  nextMsgId,
-  isReservedVpId,
-  ReservedVpIdError,
-  validateVpId,
-  InvalidVpIdError,
-} from '../groups/ids.js';
+import { nextMsgId, isReservedVpId, ReservedVpIdError, validateVpId, InvalidVpIdError } from './ids.js';
 
-const META_FILE = 'meta.json';
+const GROUP_FILE = 'group.json';
 const MESSAGES_DIR = 'messages';
-const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 /**
- * Open (or partially create) the directory for a session. Returns a handle
- * even when meta.json is absent — call createSession() to materialise it.
+ * Load (or create) the directory for a single group.
  *
- * @param {string} sessionsRoot
+ * @param {string} sessionsRoot  e.g. `${yeaftDir}/groups`
  * @param {string} sessionId
- * @returns {SessionHandle}
+ * @returns {GroupHandle}
  */
 export function openSession(sessionsRoot, sessionId) {
   if (!sessionId || typeof sessionId !== 'string') {
     throw new Error('openSession: sessionId required (string)');
   }
-  if (!SESSION_ID_RE.test(sessionId)) {
-    throw new Error(`openSession: invalid sessionId "${sessionId}"`);
-  }
   const dir = join(sessionsRoot, sessionId);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
   let meta = loadSessionMeta(dir);
+  if (!meta) {
+    // Fresh group — caller must call initGroup() next; we return a handle
+    // with meta=null so createSession() can write the initial file.
+  }
 
   const messagesDir = join(dir, MESSAGES_DIR);
   if (!existsSync(messagesDir)) mkdirSync(messagesDir, { recursive: true });
@@ -66,24 +58,38 @@ export function openSession(sessionsRoot, sessionId) {
   return {
     dir,
     id: sessionId,
+    /** Return current meta (reads fresh from memory after last save). */
     getMeta() { return meta ? structuredClone(meta) : null; },
+    /** Overwrite group.json atomically. */
     saveMeta(next) {
       validateMeta(next);
       meta = next;
-      writeAtomic(join(dir, META_FILE), JSON.stringify(meta, null, 2));
+      writeAtomic(join(dir, GROUP_FILE), JSON.stringify(meta, null, 2));
     },
+    /**
+     * Append a message to the group log. Assigns an id if absent.
+     * Returns the stored record (with id + ts).
+     *
+     * Structural invariant: NO field on `record` may start with `_`.
+     * The `_` prefix is reserved for ephemeral per-turn payloads (image
+     * base64, prompt suffixes) that must reach the driver but must
+     * never hit the persisted jsonl-log. If this throws, the caller
+     * forgot to partition ephemeral fields off — fix the caller.
+     */
     appendMessage(record) {
       if (!record || typeof record !== 'object') {
         throw new Error('appendMessage: record required');
       }
-      const leaked = Object.keys(record).filter((k) => typeof k === 'string' && k.startsWith('_'));
-      if (leaked.length > 0) {
-        throw new Error(`appendMessage: ephemeral fields leaked into log: ${leaked.join(', ')}`);
+      {
+        const leaked = Object.keys(record).filter((k) => typeof k === 'string' && k.startsWith('_'));
+        if (leaked.length > 0) {
+          throw new Error(`appendMessage: ephemeral fields leaked into log: ${leaked.join(', ')}`);
+        }
       }
       const stored = {
         id: record.id || nextMsgId(),
         ts: record.ts || new Date().toISOString(),
-        from: record.from,
+        from: record.from,   // vpId | 'user'
         role: record.role || (record.from === 'user' ? 'user' : 'assistant'),
         text: record.text ?? '',
         taskId: record.taskId || null,
@@ -93,71 +99,77 @@ export function openSession(sessionsRoot, sessionId) {
       log.append(stored);
       return stored;
     },
-    *streamMessages() { yield* log.streamAll(); },
-    *readMessageRange(firstId, lastId) { yield* log.readRange(firstId, lastId); },
+    /** Iterate all messages oldest→newest. */
+    *streamMessages() {
+      yield* log.streamAll();
+    },
+    /** Iterate a message id range inclusive. */
+    *readMessageRange(firstId, lastId) {
+      yield* log.readRange(firstId, lastId);
+    },
+    /** Flush + close underlying log (on shutdown). */
     close() { log.close(); },
   };
 }
 
 /**
- * Create a new session on disk. Fails if meta.json already exists.
- * @param {string} sessionsRoot
- * @param {{
- *   id: string,
- *   vpIds: string[],
- *   displayName?: string,
- *   workDir?: string,
- *   createdAt?: string,
- * }} spec
- * @returns {SessionHandle}
+ * Create a fresh group on disk. Fails if group.json already exists.
+ * @returns {GroupHandle}
  */
 export function createSession(sessionsRoot, spec) {
   if (!spec || !spec.id) throw new Error('createSession: spec.id required');
-  if (!Array.isArray(spec.vpIds) || spec.vpIds.length === 0) {
-    throw new Error('createSession: spec.vpIds required (non-empty array)');
+  const h = openSession(sessionsRoot, spec.id);
+  if (h.getMeta()) {
+    throw new Error(`group ${spec.id} already exists`);
   }
-  for (const v of spec.vpIds) {
+  const roster = Array.isArray(spec.roster) ? spec.roster.slice() : [];
+  for (const v of roster) {
     if (isReservedVpId(v)) throw new ReservedVpIdError(v);
     const verdict = validateVpId(v);
     if (!verdict.ok) throw new InvalidVpIdError(v, verdict.reason);
   }
-  const h = openSession(sessionsRoot, spec.id);
-  if (h.getMeta()) throw new Error(`session ${spec.id} already exists`);
+  if (spec.defaultVpId) {
+    if (isReservedVpId(spec.defaultVpId)) throw new ReservedVpIdError(spec.defaultVpId);
+    const dverdict = validateVpId(spec.defaultVpId);
+    if (!dverdict.ok) throw new InvalidVpIdError(spec.defaultVpId, dverdict.reason);
+  }
   const meta = {
     id: spec.id,
-    displayName: typeof spec.displayName === 'string' && spec.displayName.trim()
-      ? spec.displayName.trim() : spec.id,
-    vpIds: Array.from(new Set(spec.vpIds)),
+    name: spec.name || spec.id,
+    roster,
+    defaultVpId: spec.defaultVpId || null,
+    announcement: typeof spec.announcement === 'string' ? spec.announcement : '',
     workDir: typeof spec.workDir === 'string' ? spec.workDir.trim() : '',
     createdAt: spec.createdAt || new Date().toISOString(),
-    lastTurnAt: null,
   };
   h.saveMeta(meta);
   return h;
 }
 
-/** Non-destructive load — returns null if meta.json is missing/corrupt. */
+/** Non-destructive load — returns null if group.json is missing/corrupt. */
 export function loadSessionMeta(dir) {
-  const path = join(dir, META_FILE);
+  const path = join(dir, GROUP_FILE);
   if (!existsSync(path)) return null;
   try {
     const raw = readFileSync(path, 'utf8');
     const parsed = JSON.parse(raw);
     validateMeta(parsed);
-    if (typeof parsed.displayName !== 'string') parsed.displayName = parsed.id;
+    // Legacy groups created before optional fields were added are
+    // forward-compat: missing fields read back as safe empty strings.
+    if (typeof parsed.announcement !== 'string') parsed.announcement = '';
     if (typeof parsed.workDir !== 'string') parsed.workDir = '';
-    if (parsed.lastTurnAt === undefined) parsed.lastTurnAt = null;
     return parsed;
   } catch {
     return null;
   }
 }
 
-/** List every session directory under `sessionsRoot`. */
+/** List every group directory under `sessionsRoot`. */
 export function listSessions(sessionsRoot) {
   if (!existsSync(sessionsRoot)) return [];
   const out = [];
   for (const name of readdirSync(sessionsRoot)) {
+    // Skip dotfiles and legacy soft-archive dirs (`.archived-*`).
     if (name.startsWith('.')) continue;
     const p = join(sessionsRoot, name);
     try {
@@ -169,113 +181,32 @@ export function listSessions(sessionsRoot) {
   return out;
 }
 
-/** Update a session's displayName. */
-export function renameSession(sessionsRoot, sessionId, displayName) {
-  const h = openSession(sessionsRoot, sessionId);
-  const meta = h.getMeta();
-  if (!meta) throw new Error(`renameSession: session ${sessionId} not found`);
-  const next = { ...meta, displayName: String(displayName || '').trim() || meta.id };
-  h.saveMeta(next);
-  h.close();
-  return next;
-}
-
-/**
- * Patch a session's meta: add/remove VPs or change displayName/workDir.
- * @param {string} sessionsRoot
- * @param {string} sessionId
- * @param {{addVpIds?: string[], removeVpIds?: string[], displayName?: string, workDir?: string}} patch
- */
-export function updateSession(sessionsRoot, sessionId, patch = {}) {
-  const h = openSession(sessionsRoot, sessionId);
-  const meta = h.getMeta();
-  if (!meta) { h.close(); throw new Error(`updateSession: session ${sessionId} not found`); }
-  let vpIds = Array.from(meta.vpIds || []);
-  if (Array.isArray(patch.addVpIds)) {
-    for (const v of patch.addVpIds) {
-      if (isReservedVpId(v)) throw new ReservedVpIdError(v);
-      const verdict = validateVpId(v);
-      if (!verdict.ok) throw new InvalidVpIdError(v, verdict.reason);
-      if (!vpIds.includes(v)) vpIds.push(v);
-    }
-  }
-  if (Array.isArray(patch.removeVpIds)) {
-    const drop = new Set(patch.removeVpIds);
-    vpIds = vpIds.filter((v) => !drop.has(v));
-  }
-  if (vpIds.length === 0) {
-    h.close();
-    throw new Error('updateSession: refusing to leave session with zero VPs');
-  }
-  const next = { ...meta, vpIds };
-  if (typeof patch.displayName === 'string' && patch.displayName.trim()) {
-    next.displayName = patch.displayName.trim();
-  }
-  if (typeof patch.workDir === 'string') {
-    next.workDir = patch.workDir.trim();
-  }
-  h.saveMeta(next);
-  h.close();
-  return next;
-}
-
-/** Stamp lastTurnAt. */
-export function touchSession(sessionsRoot, sessionId, when = new Date().toISOString()) {
-  const h = openSession(sessionsRoot, sessionId);
-  const meta = h.getMeta();
-  if (!meta) { h.close(); return null; }
-  const next = { ...meta, lastTurnAt: when };
-  h.saveMeta(next);
-  h.close();
-  return next;
-}
-
-/** Soft-archive: rename dir to `.archived-<sessionId>-<ts>`. */
-export function archiveSession(sessionsRoot, sessionId) {
-  const src = join(sessionsRoot, sessionId);
-  if (!existsSync(src)) return false;
-  const ts = new Date().toISOString().replace(/[:.]/g, '-');
-  const dst = join(sessionsRoot, `.archived-${sessionId}-${ts}`);
-  renameSync(src, dst);
-  return true;
-}
-
-/** Permanently delete a session directory. */
-export function deleteSession(sessionsRoot, sessionId) {
-  const src = join(sessionsRoot, sessionId);
-  if (!existsSync(src)) return false;
-  rmSync(src, { recursive: true, force: true });
-  return true;
-}
-
 function validateMeta(meta) {
-  if (!meta || typeof meta !== 'object') throw new Error('session meta.json must be object');
-  if (!meta.id || typeof meta.id !== 'string') throw new Error('session.id required');
-  if (!Array.isArray(meta.vpIds) || meta.vpIds.length === 0) {
-    throw new Error('session.vpIds required (non-empty array)');
+  if (!meta || typeof meta !== 'object') throw new Error('group.json must be object');
+  if (!meta.id || typeof meta.id !== 'string') throw new Error('group.id required');
+  if (!Array.isArray(meta.roster)) throw new Error('group.roster must be array');
+  for (const v of meta.roster) {
+    if (typeof v !== 'string') throw new Error('group.roster must be string[]');
   }
-  for (const v of meta.vpIds) {
-    if (typeof v !== 'string') throw new Error('session.vpIds must be string[]');
+  if (meta.defaultVpId != null && typeof meta.defaultVpId !== 'string') {
+    throw new Error('group.defaultVpId must be string|null');
   }
-  if (meta.displayName != null && typeof meta.displayName !== 'string') {
-    throw new Error('session.displayName must be string');
+  if (meta.announcement != null && typeof meta.announcement !== 'string') {
+    throw new Error('group.announcement must be string');
   }
   if (meta.workDir != null && typeof meta.workDir !== 'string') {
-    throw new Error('session.workDir must be string');
-  }
-  if (meta.lastTurnAt != null && typeof meta.lastTurnAt !== 'string') {
-    throw new Error('session.lastTurnAt must be string|null');
+    throw new Error('group.workDir must be string');
   }
 }
 
 /**
- * @typedef {Object} SessionHandle
+ * @typedef {Object} GroupHandle
  * @property {string} dir
  * @property {string} id
  * @property {() => any} getMeta
- * @property {(next:any) => void} saveMeta
- * @property {(record:any) => any} appendMessage
+ * @property {(next:any)=>void} saveMeta
+ * @property {(record:any)=>any} appendMessage
  * @property {() => Generator<any>} streamMessages
- * @property {(first:string,last:string) => Generator<any>} readMessageRange
+ * @property {(first:string,last:string)=>Generator<any>} readMessageRange
  * @property {() => void} close
  */

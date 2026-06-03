@@ -52,7 +52,7 @@ describe('project doc injection', () => {
       language: 'en',
       toolNames: ['bash'],
       projectDoc: 'DOC_MARKER',
-      groupAnnouncement: 'ANN_MARKER',
+      sessionAnnouncement: 'ANN_MARKER',
     });
     const docPos = out.indexOf('DOC_MARKER');
     const annPos = out.indexOf('ANN_MARKER');

@@ -5,12 +5,12 @@
  *
  *   trigger
  *     ↓
- *   enumerateGroups()                  via opts.listGroups()
+ *   enumerateGroups()                  via opts.listSessions()
  *     ↓
  *   for each group with newCount ≥ MIN_NEW_PER_GROUP (auto)
  *                    or > 0 (manual)
  *                    or prior messages in a scoped manual group rerun:
- *       loadDiff()                     via opts.loadGroupDiff(groupId, sinceId)
+ *       loadDiff()                     via opts.loadGroupDiff(sessionId, sinceId)
  *       applyOverlap()                 via opts.loadOverlapPreamble(...)
  *       segment()                      segmentDiff(...)
  *       triageGroupSegments()          → group-local actions[]
@@ -58,10 +58,10 @@ import { tsForBackup, pruneOldSnapshots } from './snapshot.js';
  * @property {boolean} [manual=false]         — manual trigger overrides newCount<20 skip
  * @property {string[]} [scopeFilter]         — optional: only dream these targets; scoped manual group triggers rerun the current group when there are prior messages but no new cursor delta ('*' allowed)
  * @property {(req: {pass:string, prompt:string, system:string}) => Promise<string>} llm
- * @property {() => Promise<Array<string>>} listGroups   — return all group ids (incl. '_no-group')
- * @property {(groupId: string) => Promise<number>} countMessages   — total message count for a group
- * @property {(groupId: string, sinceMessageId: string|null) => Promise<Array<object>>} loadGroupDiff
- * @property {(groupId: string, beforeMessageId: string|null, count: number) => Promise<Array<object>>} loadOverlapPreamble
+ * @property {() => Promise<Array<string>>} listSessions   — return all group ids (incl. '_no-group')
+ * @property {(sessionId: string) => Promise<number>} countMessages   — total message count for a group
+ * @property {(sessionId: string, sinceMessageId: string|null) => Promise<Array<object>>} loadGroupDiff
+ * @property {(sessionId: string, beforeMessageId: string|null, count: number) => Promise<Array<object>>} loadOverlapPreamble
  * @property {() => Promise<Array<{path:string, summary:string}>>} [listTopicSummaries]
  * @property {(target: string) => Promise<Array<{path:string, summary:string}>>} [siblingTopicsFor]
  * @property {(event: object) => void} [onProgress]
@@ -87,7 +87,7 @@ export async function runDream(opts) {
   onProgress({ phase: 'start', manual: !!opts.manual, ts });
 
   // 1. enumerate groups
-  const groupIds = await safeCall(opts.listGroups, []);
+  const sessionIds = await safeCall(opts.listSessions, []);
   const filter = Array.isArray(opts.scopeFilter) ? new Set(opts.scopeFilter) : null;
   const groupFilter = deriveGroupFilter(filter);
   const groupsReport = [];
@@ -97,53 +97,53 @@ export async function runDream(opts) {
   // 2. per-group: skip / segment / triage
   // Topic summaries are now per-group (group/<g>/topic/...), so resolve
   // them inside the per-group loop instead of once up front.
-  const resolveTopicSummaries = async (groupId) => {
+  const resolveTopicSummaries = async (sessionId) => {
     if (opts.listTopicSummaries) {
-      return await safeCall(() => opts.listTopicSummaries(groupId), []);
+      return await safeCall(() => opts.listTopicSummaries(sessionId), []);
     }
-    return await defaultListTopicSummaries(opts.root, groupId, opts.language).catch(() => []);
+    return await defaultListTopicSummaries(opts.root, sessionId, opts.language).catch(() => []);
   };
 
-  for (const groupId of groupIds) {
+  for (const sessionId of sessionIds) {
     // Current-group manual dream passes are the one case where scopeFilter
     // must constrain enumeration too: clicking the conversation header means
     // "dream this group now", not "triage every group and then only apply
     // group/<id>". Pure target filters such as ['user'] still triage every
     // group so their hard-rule actions can contribute to the requested scope.
-    if (groupFilter && !groupFilter.has(groupId)) {
-      groupsReport.push({ groupId, new: 0, status: 'skipped', reason: 'scope-filtered' });
+    if (groupFilter && !groupFilter.has(sessionId)) {
+      groupsReport.push({ sessionId, new: 0, status: 'skipped', reason: 'scope-filtered' });
       continue;
     }
-    const state = await readGroupState(opts.root, groupId);
-    const beforeCount = await safeCall(() => opts.countMessages(groupId), 0);
+    const state = await readGroupState(opts.root, sessionId);
+    const beforeCount = await safeCall(() => opts.countMessages(sessionId), 0);
     const newCount = Math.max(0, beforeCount - (state.messageCount || 0));
 
     const rerunScopedManual = !!opts.manual
       && groupFilter
-      && groupFilter.has(groupId)
+      && groupFilter.has(sessionId)
       && newCount === 0
       && beforeCount > 0;
 
     if (newCount === 0 && !rerunScopedManual) {
-      groupsReport.push({ groupId, new: 0, status: 'skipped', reason: 'no-new-messages' });
+      groupsReport.push({ sessionId, new: 0, status: 'skipped', reason: 'no-new-messages' });
       continue;
     }
     if (!opts.manual && newCount < limits.MIN_NEW_PER_GROUP) {
-      groupsReport.push({ groupId, new: newCount, status: 'skipped', reason: 'below-threshold' });
+      groupsReport.push({ sessionId, new: newCount, status: 'skipped', reason: 'below-threshold' });
       continue;
     }
 
-    onProgress({ phase: 'load-diff', groupId });
+    onProgress({ phase: 'load-diff', sessionId });
     const diffCursor = rerunScopedManual ? null : state.lastDreamMessageId;
-    const diffNew = await safeCall(() => opts.loadGroupDiff(groupId, diffCursor), []);
+    const diffNew = await safeCall(() => opts.loadGroupDiff(sessionId, diffCursor), []);
     if (!diffNew || diffNew.length === 0) {
-      groupsReport.push({ groupId, new: newCount, status: 'skipped', reason: 'empty-diff' });
+      groupsReport.push({ sessionId, new: newCount, status: 'skipped', reason: 'empty-diff' });
       continue;
     }
     const overlapMessages = state.lastDreamMessageId && !rerunScopedManual
       ? await safeCall(
           () => opts.loadOverlapPreamble
-            ? opts.loadOverlapPreamble(groupId, state.lastDreamMessageId, limits.DREAM_OVERLAP)
+            ? opts.loadOverlapPreamble(sessionId, state.lastDreamMessageId, limits.DREAM_OVERLAP)
             : [],
           [],
         )
@@ -153,13 +153,13 @@ export async function runDream(opts) {
     const fullDiff = [...taggedOverlap, ...taggedNew];
 
     const segments = segmentDiff(fullDiff, limits.MAX_DIFF_TOKENS_PER_TRIAGE, limits.DREAM_OVERLAP);
-    onProgress({ phase: 'triage', groupId, status: 'running', segments: segments.length });
+    onProgress({ phase: 'triage', sessionId, status: 'running', segments: segments.length });
 
     let actions;
     try {
-      const topicSummaries = await resolveTopicSummaries(groupId);
+      const topicSummaries = await resolveTopicSummaries(sessionId);
       actions = await triageGroupSegments({
-        groupId,
+        sessionId,
         segments,
         topicSummaries,
         llm: opts.llm,
@@ -167,12 +167,12 @@ export async function runDream(opts) {
         language: opts.language,
       });
     } catch (err) {
-      groupsReport.push({ groupId, new: newCount, status: 'error', error: err.message });
-      onProgress({ phase: 'triage', groupId, status: 'error', error: err.message });
+      groupsReport.push({ sessionId, new: newCount, status: 'error', error: err.message });
+      onProgress({ phase: 'triage', sessionId, status: 'error', error: err.message });
       // Journal the failure on disk so operators can see WHY dream is
       // not advancing without having to enable `config.debug`. Best-
       // effort — `writeDreamError` swallows its own I/O errors.
-      await writeDreamError(opts.root, `group/${groupId}`, {
+      await writeDreamError(opts.root, `group/${sessionId}`, {
         phase: 'triage',
         message: err.message,
         stack: err.stack,
@@ -180,12 +180,12 @@ export async function runDream(opts) {
       continue;
     }
 
-    onProgress({ phase: 'triage', groupId, status: 'done', actions: actions.length });
-    groupTriages.push({ groupId, diff: fullDiff, actions });
+    onProgress({ phase: 'triage', sessionId, status: 'done', actions: actions.length });
+    groupTriages.push({ sessionId, diff: fullDiff, actions });
 
     const tailId = lastMessageId(diffNew);
-    processedGroups.push({ groupId, tailId, beforeCount, newCount, segments: segments.length, actions: actions.length });
-    groupsReport.push({ groupId, new: newCount, segments: segments.length, actions: actions.length, status: 'triaged', rerun: rerunScopedManual || undefined });
+    processedGroups.push({ sessionId, tailId, beforeCount, newCount, segments: segments.length, actions: actions.length });
+    groupsReport.push({ sessionId, new: newCount, segments: segments.length, actions: actions.length, status: 'triaged', rerun: rerunScopedManual || undefined });
   }
 
   // 3. merge
@@ -238,12 +238,12 @@ export async function runDream(opts) {
   // retries.)
   const successfulTargets = new Set(targetsReport.filter(r => r.status === 'done').map(r => r.target));
   for (const pg of processedGroups) {
-    const contributed = (groupTriages.find(g => g.groupId === pg.groupId) || { actions: [] })
+    const contributed = (groupTriages.find(g => g.sessionId === pg.sessionId) || { actions: [] })
       .actions.map(a => a.scope);
     const anySuccess = contributed.some(t => successfulTargets.has(t));
     if (!anySuccess) continue;
     if (pg.tailId) {
-      await writeGroupState(opts.root, pg.groupId, {
+      await writeGroupState(opts.root, pg.sessionId, {
         lastDreamMessageId: pg.tailId,
         lastDreamAt: nowIso,
         messageCount: pg.beforeCount,
@@ -297,7 +297,7 @@ function deriveGroupFilter(filter) {
 
 function sourceGroupId(mergedTarget) {
   const src = Array.isArray(mergedTarget?.sources) ? mergedTarget.sources[0] : null;
-  return src && typeof src.groupId === 'string' ? src.groupId : '';
+  return src && typeof src.sessionId === 'string' ? src.sessionId : '';
 }
 
 async function safeCall(fn, fallback) {
@@ -310,12 +310,12 @@ async function safeCall(fn, fallback) {
   }
 }
 
-async function defaultListTopicSummaries(root, groupId, language) {
+async function defaultListTopicSummaries(root, sessionId, language) {
   const all = await listScopes({ root });
   const out = [];
   for (const sc of all) {
     if (sc.kind !== 'group-topic') continue;
-    if (sc.groupId !== groupId) continue;
+    if (sc.sessionId !== sessionId) continue;
     const summary = await readSummary(sc, { root, language });
     out.push({ path: sc.path.join('/'), summary });
   }

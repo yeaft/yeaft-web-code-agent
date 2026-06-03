@@ -42,7 +42,7 @@ import { ToolUsageStats } from './stats/tool-usage.js';
 // resumes with the same onDemand/recent membership it had on
 // disconnect. Engine.#runQuery uses the registry to populate the
 // AMS each turn and to run `memory/adjust.js` post-turn.
-import { ensureDefaultGroupIfEmpty } from './groups/group-crud.js';
+import { ensureDefaultSessionIfEmpty } from './sessions/session-crud.js';
 import { seedDefaultVps } from './vp/seed-defaults.js';
 import { topUpDefaultVps } from './vp/seed-topup.js';
 import { runSummaryBackfill, archiveLegacyScopes } from './memory/seed-backfill.js';
@@ -261,7 +261,7 @@ export async function loadSession(options = {}) {
   }
 
   // ─── 5-ams. (GC.1 follow-up) Group-keyed AMS registry ────
-  //     The registry caches one ActiveMemorySet per groupId and
+  //     The registry caches one ActiveMemorySet per sessionId and
   //     persists their state to disk so a deactivated group can be
   //     reactivated with the same onDemand/recent membership it had
   //     on disconnect. Without memoryIndex we have nothing to
@@ -289,7 +289,7 @@ export async function loadSession(options = {}) {
   if (!config._readOnly) {
     // task-337: seed the default VPs (steve, linus, martin, kongzi, buffett, omni, …)
     // on a fresh install so the library is never empty. Idempotent — a no-op
-    // once the user has any VP on disk. Must run BEFORE ensureDefaultGroupIfEmpty
+    // once the user has any VP on disk. Must run BEFORE ensureDefaultSessionIfEmpty
     // so the default group's roster scan sees the seeded VPs. Must also run
     // before any VpLoader.start() (VpLoader is lazy-started in vp-bridge.js
     // on first subscribe, which happens strictly after loadSession returns).
@@ -324,9 +324,9 @@ export async function loadSession(options = {}) {
       console.warn(`[Yeaft] topUpDefaultVps failed: ${err?.message || err}`);
     }
     try {
-      ensureDefaultGroupIfEmpty(yeaftDir, { memoryRoot: join(yeaftDir, 'memory') });
+      ensureDefaultSessionIfEmpty(yeaftDir, { memoryRoot: join(yeaftDir, 'memory') });
     } catch (err) {
-      console.warn(`[Yeaft] ensureDefaultGroupIfEmpty failed: ${err?.message || err}`);
+      console.warn(`[Yeaft] ensureDefaultSessionIfEmpty failed: ${err?.message || err}`);
     }
 
     // task-fix-memory-load: backfill summary.md for VPs / groups created

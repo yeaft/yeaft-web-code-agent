@@ -1,21 +1,40 @@
 /**
- * sessions/pre-flow.js — explicit pre-flow stage for Yeaft (session-scoped).
+ * groups/pre-flow.js — explicit pre-flow stage for Yeaft.
  *
- * Ported from groups/pre-flow.js as part of the chat+group → session
- * unification. Scope strings use the unified `session/<id>` /
- * `session/<id>/vp/<vp>` shape instead of the legacy
- * `group/<g>` / `chat/<c>` shapes.
+ * Pre-flow is the "before any VP runs" stage. It owns:
  *
- * NOTE: the old groups/pre-flow.js is still in place — callers (web-bridge,
- * coordinator) will switch over in Phase A6/A7. Do not delete the old file
- * until every importer has been migrated.
+ *   (1) VP selection — which VP(s) respond to this user turn?
+ *       Pure function `selectRespondingVps({meta, fromUser, mentions,
+ *       sender, taskMembers, fanOutCap})` that mirrors the legacy
+ *       coordinator dispatch matrix: mention → broadcast → fallback to
+ *       defaultVpId, with VP-authored messages routed via the explicit
+ *       route_forward tool instead of free-text @-mentions.
+ *
+ *   (2) Memory recall — what memory gets pre-injected into each
+ *       responding VP's prompt? Thin wrapper around
+ *       memory/preflow.js's FTS5 recall.
+ *
+ * Commit C will flip the caller (web-bridge.js) to fan out responding
+ * VPs in parallel via Promise.all.
+ *
+ * Why one module: a single import surface for the full pre-flow stage,
+ * a stable seam for the engine, and a place to format FTS hits into the
+ * {profile, entries, formatted} shape the engine already consumes.
  */
 
 import { runPreflow as runFtsPreflow } from '../memory/preflow.js';
+import { resolveFallbackVp, resolveMemberId } from './roster.js';
 
 /** Matches `@vp-id` where id is [A-Za-z0-9_-]+. Captures the id. */
 const MENTION_RE = /(^|\s)@([A-Za-z0-9_][A-Za-z0-9_-]*)/g;
 
+/**
+ * Extract an ordered, unique list of @-mentions from a text string.
+ * Recognises the literal token `@all` as broadcast.
+ *
+ * @param {string} text
+ * @returns {string[]}
+ */
 export function parseMentions(text) {
   if (!text || typeof text !== 'string') return [];
   const out = [];
@@ -32,30 +51,42 @@ export function parseMentions(text) {
 }
 
 /**
- * Pure VP-selection for a session. Returns the list of VP ids that should
- * respond to a user turn — mention / @all / fallback to first roster
- * member. (Sessions have no `defaultVpId` field; the first VP in `vpIds`
- * is the fallback.)
+ * @typedef {object} SelectionInput
+ * @property {object}   meta          GroupHandle meta (roster + defaultVpId)
+ * @property {boolean}  fromUser      true = user-authored; false = VP-authored
+ * @property {string[]} mentions      Already-parsed @-mentions
+ * @property {string=}  sender        VP id when fromUser=false
+ * @property {number}   [fanOutCap=16]
+ * @property {string[]=} taskMembers  When set, restricts dispatch to this list
+ */
+
+/**
+ * @typedef {object} SelectionResult
+ * @property {string[]} dispatched              VP ids that should respond
+ * @property {string|null} fallback             The fallback vp, if any
+ * @property {Array<{vpId?:string,error:string}>} errors
+ * @property {'mention'|'broadcast'|'fallback'|'vp-author-no-text-routing'|'no-default'} reason
+ * @property {boolean=} truncatedAtFanOutCap
+ */
+
+/**
+ * Pure VP-selection step of pre-flow. Returns ids only — caller owns
+ * persistence + envelope construction + deliver().
  *
- * @param {{
- *   meta: { id: string, vpIds: string[] },
- *   fromUser: boolean,
- *   mentions: string[],
- *   sender?: string,
- *   fanOutCap?: number,
- *   taskMembers?: string[],
- * }} input
+ * @param {SelectionInput} input
+ * @returns {SelectionResult}
  */
 export function selectRespondingVps(input) {
-  const meta = input?.meta;
+  const meta = input.meta;
   if (!meta) {
-    return { dispatched: [], fallback: null, errors: [{ error: 'no_session_meta' }], reason: 'no-default' };
+    return { dispatched: [], fallback: null, errors: [{ error: 'no_group_meta' }], reason: 'no-default' };
   }
   const fanOutCap = Number.isFinite(input.fanOutCap) ? input.fanOutCap : 16;
   const taskMembers = Array.isArray(input.taskMembers) ? input.taskMembers : null;
   const mentions = Array.isArray(input.mentions) ? input.mentions : [];
-  const roster = Array.isArray(meta.vpIds) ? meta.vpIds : [];
 
+  // VP-authored messages: never auto-route through @-mentions; VPs hand
+  // off through the explicit route_forward tool instead.
   if (!input.fromUser) {
     return {
       dispatched: [],
@@ -65,36 +96,41 @@ export function selectRespondingVps(input) {
     };
   }
 
+  // @all broadcast — fan out to every roster member except the sender,
+  // honouring fanOutCap and taskMembers.
   if (mentions.includes('all')) {
-    const expanded = roster.filter((v) => v !== input.sender).slice(0, fanOutCap);
-    const scoped = taskMembers ? expanded.filter((v) => taskMembers.includes(v)) : expanded;
+    const roster = meta.roster.filter((v) => v !== input.sender).slice(0, fanOutCap);
+    const scoped = taskMembers ? roster.filter((v) => taskMembers.includes(v)) : roster;
     return {
       dispatched: scoped,
       fallback: null,
       errors: [],
       reason: 'broadcast',
-      truncatedAtFanOutCap: roster.length - 1 > fanOutCap,
+      truncatedAtFanOutCap: meta.roster.length - 1 > fanOutCap,
     };
   }
 
+  // Explicit @-mentions
   if (mentions.length > 0) {
     const dispatched = [];
     const errors = [];
     for (const vpId of mentions) {
-      if (!roster.includes(vpId)) {
+      const canonicalVpId = resolveMemberId(meta, vpId);
+      if (!canonicalVpId) {
         errors.push({ vpId, error: 'not_in_roster' });
         continue;
       }
-      if (taskMembers && !taskMembers.includes(vpId)) {
+      if (taskMembers && !taskMembers.includes(canonicalVpId)) {
         errors.push({ vpId, error: 'not_in_task_members' });
         continue;
       }
-      if (!dispatched.includes(vpId)) dispatched.push(vpId);
+      if (!dispatched.includes(canonicalVpId)) dispatched.push(canonicalVpId);
     }
     return { dispatched, fallback: null, errors, reason: 'mention' };
   }
 
-  const fallback = roster[0] || null;
+  // No @-mention → fallback to defaultVpId (architecture G2)
+  const fallback = resolveFallbackVp(meta);
   if (!fallback) {
     return {
       dispatched: [],
@@ -119,19 +155,63 @@ export function selectRespondingVps(input) {
   };
 }
 
+
+/**
+ * Build the heading for a single scope's formatted memory block.
+ *
+ * Heading style is the original recall-v2 format, kept so the system
+ * prompt the LLM sees stays stable across the FTS migration.
+ *
+ * @param {string} scope
+ * @returns {string}
+ */
 function scopeHeading(scope) {
   if (scope === 'user') return '## Memory: User';
-  let m = /^session\/([^/]+)\/vp\/(.+)$/.exec(scope);
+  // Nested chat scopes first.
+  let m = /^chat\/([^/]+)\/vp\/(.+)$/.exec(scope);
   if (m) return `## Memory: VP ${m[2]}`;
-  m = /^session\/([^/]+)$/.exec(scope);
-  if (m) return `## Memory: Session ${m[1]}`;
+  m = /^chat\/([^/]+)$/.exec(scope);
+  if (m) return `## Memory: Chat ${m[1]}`;
+  // Nested session scopes (current).
+  m = /^session\/([^/]+)\/vp\/(.+)$/.exec(scope);
+  if (m) return `## Memory: VP ${m[2]}`;
+  m = /^session\/([^/]+)\/user$/.exec(scope);
+  if (m) return `## Memory: Session ${m[1]} (user)`;
+  m = /^session\/([^/]+)\/feature\/(.+)$/.exec(scope);
+  if (m) return `## Memory: Feature ${m[2]}`;
+  m = /^session\/([^/]+)\/topic\/(.+)$/.exec(scope);
+  if (m) return `## Memory: Topic ${m[2]}`;
+  // Legacy nested group scopes (un-migrated data).
+  m = /^group\/([^/]+)\/vp\/(.+)$/.exec(scope);
+  if (m) return `## Memory: VP ${m[2]}`;
+  m = /^group\/([^/]+)\/user$/.exec(scope);
+  if (m) return `## Memory: Session ${m[1]} (user)`;
+  m = /^group\/([^/]+)\/feature\/(.+)$/.exec(scope);
+  if (m) return `## Memory: Feature ${m[2]}`;
+  m = /^group\/([^/]+)\/topic\/(.+)$/.exec(scope);
+  if (m) return `## Memory: Topic ${m[2]}`;
+  if (scope.startsWith('session/')) return `## Memory: Session ${scope.slice(8)}`;
+  if (scope.startsWith('group/')) return `## Memory: Session ${scope.slice(6)}`;
   if (scope.startsWith('vp/')) return `## Memory: VP ${scope.slice(3)}`;
+  if (scope.startsWith('feature/')) return `## Memory: Feature ${scope.slice(8)}`;
+  if (scope.startsWith('topic/')) return `## Memory: Topic ${scope.slice(6)}`;
   return `## Memory: ${scope}`;
 }
 
+/**
+ * Format FTS picked segments into the prompt-ready string.
+ *
+ * Picked segments are grouped by scope (preserving the FTS rerank
+ * order within each scope group), then rendered as markdown blocks
+ * with one heading per scope.
+ *
+ * @param {Array<{scope: string, body: string, tags?: string[], kind?: string}>} picked
+ * @returns {string}
+ */
 export function formatPickedForInjection(picked) {
   if (!picked || picked.length === 0) return '';
   const byScope = new Map();
+  // Preserve insertion order (which is rerank order within each scope).
   for (const seg of picked) {
     const scope = seg.scope || 'unknown';
     if (!byScope.has(scope)) byScope.set(scope, []);
@@ -144,21 +224,50 @@ export function formatPickedForInjection(picked) {
       const body = (s.body || '').trim();
       if (body) parts.push(body);
     }
-    parts.push('');
+    parts.push('');   // blank line between scopes
   }
   return parts.join('\n').trim();
 }
 
 /**
- * Canonical scope list for a session VP turn:
- *   ['user', 'session/<id>', 'session/<id>/vp/<vp>']
- *
- * @param {{ sessionId?: string, vpId?: string, extra?: string[] }} ctx
+ * @typedef {object} MemoryPreflowOptions
+ * @property {string}         userMsg              The user's message
+ * @property {string}         [sessionId]            Active group, if any
+ * @property {string}         [vpId]               Responding VP id, if any
+ * @property {string}         [featureId]          Active feature, if any
+ * @property {string[]}       [extraScopes]        Additional scopes to include
+ * @property {string[]}       [currentTags]        Contextual tags for rerank
+ * @property {number}         [topK]               Max FTS rows fetched (default 50)
+ * @property {number}         [budgetTokens]       Token budget for picked segments
  */
-export function buildRelevantScopes({ sessionId, vpId, extra } = {}) {
+
+/**
+ * @typedef {object} MemoryPreflowResult
+ * @property {string}                   profile      User-scope summary (best-effort)
+ * @property {object[]}                 entries      Picked segments (raw)
+ * @property {string}                   formatted    Prompt-ready string
+ * @property {object}                   meta         Raw FTS preflow metadata
+ */
+
+/**
+ * Build the canonical scope list for a given (sessionId, vpId).
+ * Always includes 'user'. The order is significant — preflow.js's scope
+ * filter accepts/rejects by membership, and the formatter renders in
+ * order.
+ *
+ * (2026-05-13: `featureId` scope dropped along with the Feature system.)
+ *
+ * @param {{sessionId?: string, vpId?: string, extra?: string[]}} ctx
+ * @returns {string[]}
+ */
+export function buildRelevantScopes({ sessionId, chatId, vpId, extra } = {}) {
   const scopes = ['user'];
-  if (sessionId) {
+  if (chatId) {
+    scopes.push(`chat/${chatId}`);
+    if (vpId) scopes.push(`chat/${chatId}/vp/${vpId}`);
+  } else if (sessionId) {
     scopes.push(`session/${sessionId}`);
+    scopes.push(`session/${sessionId}/user`);
     if (vpId) scopes.push(`session/${sessionId}/vp/${vpId}`);
   }
   if (Array.isArray(extra)) {
@@ -169,6 +278,21 @@ export function buildRelevantScopes({ sessionId, vpId, extra } = {}) {
   return scopes;
 }
 
+/**
+ * Run memory pre-flow for one VP turn. Thin wrapper around
+ * `memory/preflow.js::runPreflow` that:
+ *
+ *   - resolves canonical scope list from {sessionId, vpId, featureId},
+ *   - invokes FTS5 recall,
+ *   - formats picked segments for prompt injection.
+ *
+ * Returns the engine-consumable {profile, entries, formatted, meta}
+ * shape so the existing recall pipeline can swap in without changes.
+ *
+ * @param {import('../memory/index-db.js').SegmentIndex} index
+ * @param {MemoryPreflowOptions} opts
+ * @returns {MemoryPreflowResult}
+ */
 export function runMemoryPreflow(index, opts) {
   if (!index) {
     return { profile: '', entries: [], formatted: '', meta: { skipped: 'no-index' } };
@@ -180,6 +304,7 @@ export function runMemoryPreflow(index, opts) {
 
   const relevantScopes = buildRelevantScopes({
     sessionId: opts.sessionId,
+    chatId: opts.chatId,
     vpId: opts.vpId,
     extra: opts.extraScopes,
   });
@@ -193,8 +318,10 @@ export function runMemoryPreflow(index, opts) {
     budgetTokens: opts.budgetTokens,
   });
 
-  const userSeg = (result.picked || []).find((p) => p.scope === 'user');
+  // Best-effort profile: pick any user-scope segment body.
+  const userSeg = (result.picked || []).find(p => p.scope === 'user');
   const profile = userSeg ? (userSeg.body || '').trim() : '';
+
   const formatted = formatPickedForInjection(result.picked || []);
 
   return {

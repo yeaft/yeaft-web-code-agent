@@ -103,7 +103,7 @@ Response text`;
 id: m0042
 role: assistant
 time: 2026-05-12T10:00:00Z
-groupId: grp_demo
+sessionId: grp_demo
 speakerVpId: vp-alice
 tokens_est: 8
 ---
@@ -113,7 +113,7 @@ Forwarded payload from Alice`;
     const msg = parseMessage(raw);
     expect(msg.role).toBe('assistant');
     expect(msg.speakerVpId).toBe('vp-alice');
-    expect(msg.groupId).toBe('grp_demo');
+    expect(msg.sessionId).toBe('grp_demo');
     expect(msg.content).toBe('Forwarded payload from Alice');
   });
 });
@@ -167,7 +167,7 @@ describe('ConversationStore', () => {
 
 
     it("should write group messages under that group's conversation history", () => {
-      const msg = store.append({ role: 'user', content: 'Hello group', groupId: 'grp_fun' });
+      const msg = store.append({ role: 'user', content: 'Hello group', sessionId: 'grp_fun' });
       expect(msg.id).toBe('m0001');
       expect(existsSync(join(TEST_DIR, 'groups', 'grp_fun', 'conversation', 'messages', 'm0001.md'))).toBe(true);
       expect(existsSync(join(TEST_DIR, 'chat', 'messages', 'm0001.md'))).toBe(false);
@@ -180,7 +180,7 @@ describe('ConversationStore', () => {
       mkdirSync(legacyMessages, { recursive: true });
       const chatStore = new ConversationStore(TEST_DIR);
       const chatMsg = chatStore.append({ role: 'user', content: 'legacy chat' });
-      const groupMsg = chatStore.append({ role: 'user', content: 'legacy group', groupId: 'grp_fun' });
+      const groupMsg = chatStore.append({ role: 'user', content: 'legacy group', sessionId: 'grp_fun' });
       // Move freshly-written records into the legacy layout to simulate an
       // existing user profile from versions before ~/.yeaft/chat and
       // per-group conversation directories were split.
@@ -264,12 +264,12 @@ describe('ConversationStore', () => {
 
   // Group-history-isolation (Bug 7): group-scoped loaders.
   describe('loadRecentByGroup / loadAllByGroup', () => {
-    it('returns only messages stamped with the requested groupId', () => {
+    it('returns only messages stamped with the requested sessionId', () => {
       store.appendBatch([
-        { role: 'user',      content: 'A1', groupId: 'grp_a' },
-        { role: 'assistant', content: 'A2', groupId: 'grp_a' },
-        { role: 'user',      content: 'B1', groupId: 'grp_b' },
-        { role: 'user',      content: 'A3', groupId: 'grp_a' },
+        { role: 'user',      content: 'A1', sessionId: 'grp_a' },
+        { role: 'assistant', content: 'A2', sessionId: 'grp_a' },
+        { role: 'user',      content: 'B1', sessionId: 'grp_b' },
+        { role: 'user',      content: 'A3', sessionId: 'grp_a' },
       ]);
       const a = store.loadRecentByGroup('grp_a', 50);
       const b = store.loadRecentByGroup('grp_b', 50);
@@ -277,18 +277,18 @@ describe('ConversationStore', () => {
       expect(b.map(m => m.content)).toEqual(['B1']);
     });
 
-    it('excludes messages with no groupId (legacy / pre-grouping)', () => {
+    it('excludes messages with no sessionId (legacy / pre-grouping)', () => {
       store.appendBatch([
-        { role: 'user', content: 'orphan' },                       // no groupId
-        { role: 'user', content: 'tagged', groupId: 'grp_a' },
+        { role: 'user', content: 'orphan' },                       // no sessionId
+        { role: 'user', content: 'tagged', sessionId: 'grp_a' },
       ]);
       expect(store.loadRecentByGroup('grp_a', 50).map(m => m.content)).toEqual(['tagged']);
     });
 
     it('excludes messages from a deleted/other group', () => {
       store.appendBatch([
-        { role: 'user', content: 'leftover', groupId: 'grp_default' },
-        { role: 'user', content: 'mine',     groupId: 'grp_claude' },
+        { role: 'user', content: 'leftover', sessionId: 'grp_default' },
+        { role: 'user', content: 'mine',     sessionId: 'grp_claude' },
       ]);
       const out = store.loadRecentByGroup('grp_claude', 50);
       expect(out.map(m => m.content)).toEqual(['mine']);
@@ -296,26 +296,26 @@ describe('ConversationStore', () => {
 
     it('respects limit as "N most recent within this group"', () => {
       store.appendBatch([
-        { role: 'user', content: 'A1', groupId: 'grp_a' },
-        { role: 'user', content: 'B1', groupId: 'grp_b' },
-        { role: 'user', content: 'A2', groupId: 'grp_a' },
-        { role: 'user', content: 'B2', groupId: 'grp_b' },
-        { role: 'user', content: 'A3', groupId: 'grp_a' },
+        { role: 'user', content: 'A1', sessionId: 'grp_a' },
+        { role: 'user', content: 'B1', sessionId: 'grp_b' },
+        { role: 'user', content: 'A2', sessionId: 'grp_a' },
+        { role: 'user', content: 'B2', sessionId: 'grp_b' },
+        { role: 'user', content: 'A3', sessionId: 'grp_a' },
       ]);
       // Two most recent A messages, not "scan last 2 messages globally
       // and filter" (which would yield only A3).
       expect(store.loadRecentByGroup('grp_a', 2).map(m => m.content)).toEqual(['A2', 'A3']);
     });
 
-    it('returns [] for empty/null groupId without throwing', () => {
-      store.append({ role: 'user', content: 'X', groupId: 'grp_a' });
+    it('returns [] for empty/null sessionId without throwing', () => {
+      store.append({ role: 'user', content: 'X', sessionId: 'grp_a' });
       expect(store.loadRecentByGroup(null, 10)).toEqual([]);
       expect(store.loadRecentByGroup('', 10)).toEqual([]);
     });
 
     it('loadAllByGroup mirrors loadRecentByGroup with no limit', () => {
       const big = Array.from({ length: 80 }, (_, i) => ({
-        role: 'user', content: `m${i}`, groupId: 'grp_a',
+        role: 'user', content: `m${i}`, sessionId: 'grp_a',
       }));
       store.appendBatch(big);
       expect(store.loadAllByGroup('grp_a')).toHaveLength(80);
@@ -325,12 +325,12 @@ describe('ConversationStore', () => {
 
   // Cascade delete + orphan compaction.
   describe('deleteByGroup', () => {
-    it('removes only messages stamped with the matching groupId', () => {
+    it('removes only messages stamped with the matching sessionId', () => {
       store.appendBatch([
-        { role: 'user',      content: 'A1', groupId: 'grp_a' },
-        { role: 'assistant', content: 'A2', groupId: 'grp_a' },
-        { role: 'user',      content: 'B1', groupId: 'grp_b' },
-        { role: 'user',      content: 'untagged' }, // no groupId — must NOT be touched
+        { role: 'user',      content: 'A1', sessionId: 'grp_a' },
+        { role: 'assistant', content: 'A2', sessionId: 'grp_a' },
+        { role: 'user',      content: 'B1', sessionId: 'grp_b' },
+        { role: 'user',      content: 'untagged' }, // no sessionId — must NOT be touched
       ]);
 
       const removed = store.deleteByGroup('grp_a');
@@ -345,8 +345,8 @@ describe('ConversationStore', () => {
     });
 
     it('also removes matching messages that have been moved to cold', () => {
-      store.append({ role: 'user', content: 'cold-A', groupId: 'grp_a' });
-      store.append({ role: 'user', content: 'hot-A',  groupId: 'grp_a' });
+      store.append({ role: 'user', content: 'cold-A', sessionId: 'grp_a' });
+      store.append({ role: 'user', content: 'hot-A',  sessionId: 'grp_a' });
       store.moveToCold('m0001'); // archive cold-A
 
       const removed = store.deleteByGroup('grp_a');
@@ -355,27 +355,27 @@ describe('ConversationStore', () => {
       expect(store.countCold()).toBe(0);
     });
 
-    it('returns 0 and is a no-op for empty/null groupId', () => {
-      store.append({ role: 'user', content: 'A', groupId: 'grp_a' });
+    it('returns 0 and is a no-op for empty/null sessionId', () => {
+      store.append({ role: 'user', content: 'A', sessionId: 'grp_a' });
       expect(store.deleteByGroup(null)).toBe(0);
       expect(store.deleteByGroup('')).toBe(0);
       expect(store.countHot()).toBe(1);
     });
 
     it('returns 0 when no message matches', () => {
-      store.append({ role: 'user', content: 'A', groupId: 'grp_a' });
+      store.append({ role: 'user', content: 'A', sessionId: 'grp_a' });
       expect(store.deleteByGroup('grp_nonexistent')).toBe(0);
       expect(store.countHot()).toBe(1);
     });
   });
 
   describe('compactOrphans', () => {
-    it('deletes messages whose groupId is missing or unknown', () => {
+    it('deletes messages whose sessionId is missing or unknown', () => {
       store.appendBatch([
-        { role: 'user', content: 'live',     groupId: 'grp_live' },
-        { role: 'user', content: 'orphan-a', groupId: 'grp_dead' },
-        { role: 'user', content: 'orphan-b' },                       // no groupId
-        { role: 'user', content: 'live-2',   groupId: 'grp_live' },
+        { role: 'user', content: 'live',     sessionId: 'grp_live' },
+        { role: 'user', content: 'orphan-a', sessionId: 'grp_dead' },
+        { role: 'user', content: 'orphan-b' },                       // no sessionId
+        { role: 'user', content: 'live-2',   sessionId: 'grp_live' },
       ]);
 
       const result = store.compactOrphans({ keepGroupIds: ['grp_live'] });
@@ -387,7 +387,7 @@ describe('ConversationStore', () => {
 
     it('dryRun previews without deleting', () => {
       store.appendBatch([
-        { role: 'user', content: 'live',   groupId: 'grp_live' },
+        { role: 'user', content: 'live',   sessionId: 'grp_live' },
         { role: 'user', content: 'orphan' },
       ]);
 
@@ -400,7 +400,7 @@ describe('ConversationStore', () => {
     it('refuses to run when keepGroupIds is not an array (defensive)', () => {
       // If we let this through, a transient group-load failure would
       // wipe every persisted message. Bail instead.
-      store.append({ role: 'user', content: 'X', groupId: 'grp_a' });
+      store.append({ role: 'user', content: 'X', sessionId: 'grp_a' });
       const result = store.compactOrphans({ keepGroupIds: undefined });
       expect(result.skipped).toBe(true);
       expect(result.removed).toBe(0);
@@ -411,7 +411,7 @@ describe('ConversationStore', () => {
       // This is the legitimate use case: the user has zero groups left
       // and wants a clean wipe. We DO accept an empty array (vs undefined).
       store.appendBatch([
-        { role: 'user', content: 'A', groupId: 'grp_x' },
+        { role: 'user', content: 'A', sessionId: 'grp_x' },
         { role: 'user', content: 'B' },
       ]);
       const result = store.compactOrphans({ keepGroupIds: [] });
@@ -421,7 +421,7 @@ describe('ConversationStore', () => {
     });
 
     it('also sweeps orphans that have been moved to cold', () => {
-      store.append({ role: 'user', content: 'cold-orphan', groupId: 'grp_dead' });
+      store.append({ role: 'user', content: 'cold-orphan', sessionId: 'grp_dead' });
       store.moveToCold('m0001');
 
       const result = store.compactOrphans({ keepGroupIds: ['grp_live'] });

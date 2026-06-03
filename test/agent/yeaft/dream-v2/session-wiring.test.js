@@ -22,8 +22,8 @@ function seedGroup(id, messages) {
   writeFileSync(join(dir, 'group.json'), JSON.stringify({
     id, name: id, roster: [], defaultVpId: null, createdAt: '2026-04-28T00:00:00Z',
   }));
-  // Append messages via the openGroup API later; here just write a NDJSON-ish
-  // log to satisfy any reader. We rely on openGroup to use its log impl.
+  // Append messages via the openSession API later; here just write a NDJSON-ish
+  // log to satisfy any reader. We rely on openSession to use its log impl.
   const logPath = join(dir, 'messages', '0001.jsonl');
   const lines = messages.map(m => JSON.stringify(m)).join('\n');
   writeFileSync(logPath, lines + (lines ? '\n' : ''));
@@ -32,7 +32,7 @@ function seedGroup(id, messages) {
 describe('buildRunDreamOpts', () => {
   it('returns the expected hook shape', () => {
     const opts = buildRunDreamOpts({ yeaftDir, adapter: {}, config: {} });
-    expect(typeof opts.listGroups).toBe('function');
+    expect(typeof opts.listSessions).toBe('function');
     expect(typeof opts.countMessages).toBe('function');
     expect(typeof opts.loadGroupDiff).toBe('function');
     expect(typeof opts.loadOverlapPreamble).toBe('function');
@@ -40,9 +40,9 @@ describe('buildRunDreamOpts', () => {
     expect(opts.root).toBe(join(yeaftDir, 'memory'));
   });
 
-  it('listGroups returns empty when no groups dir', async () => {
+  it('listSessions returns empty when no groups dir', async () => {
     const opts = buildRunDreamOpts({ yeaftDir, adapter: {}, config: {} });
-    expect(await opts.listGroups()).toEqual([]);
+    expect(await opts.listSessions()).toEqual([]);
   });
 
   it('countMessages returns 0 for unknown group', async () => {

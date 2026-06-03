@@ -48,11 +48,11 @@ class FakeStore {
   countHot() { return this._messages.length; }
   moveToColdBatch(ids) { this.movedToCold.push(...ids); }
   replaceCompactSummary(s) { this.compactSummaries.push(s); }
-  replaceCompactSummaryFor(groupId, vpId, s) {
-    this.scopedCompactSummaries.set(`${groupId}:${vpId}`, s);
+  replaceCompactSummaryFor(sessionId, vpId, s) {
+    this.scopedCompactSummaries.set(`${sessionId}:${vpId}`, s);
   }
-  readCompactSummaryFor(groupId, vpId) {
-    return this.scopedCompactSummaries.get(`${groupId}:${vpId}`) || '';
+  readCompactSummaryFor(sessionId, vpId) {
+    return this.scopedCompactSummaries.get(`${sessionId}:${vpId}`) || '';
   }
   updateIndex(info) { this.indexUpdates.push(info); }
   append() {}
@@ -91,14 +91,14 @@ describe('compact summary injection and orchestrator routing', () => {
 
   it('does not fall back to legacy global compact.md for group VP turns', async () => {
     runCompactOrchestrator.mockClear();
-    const { engine, adapter, conversationStore } = mkEngine({ groupId: 'grp_fun', vpId: 'linus' });
+    const { engine, adapter, conversationStore } = mkEngine({ sessionId: 'grp_fun', vpId: 'linus' });
     conversationStore.readCompactSummary = () => 'legacy global compact for another group';
 
     const out = [];
     for await (const ev of engine.query({
       prompt: 'hi',
       messages: [],
-      groupId: 'grp_fun',
+      sessionId: 'grp_fun',
     })) out.push(ev);
 
     const sent = adapter.streamCalls[0]?.messages || [];

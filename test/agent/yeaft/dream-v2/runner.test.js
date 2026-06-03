@@ -43,7 +43,7 @@ describe('runDream — happy path', () => {
     const r = await runDream({
       root,
       llm: makeLlm(),
-      listGroups: async () => ['g-eng', 'g-quiet'],
+      listSessions: async () => ['g-eng', 'g-quiet'],
       countMessages: async (g) => g === 'g-eng' ? 50 : 5,
       loadGroupDiff: async (g) => g === 'g-eng'
         ? Array.from({ length: 50 }, (_, i) => ({ id: `e${i + 1}`, role: 'user', body: 'hi' }))
@@ -51,11 +51,11 @@ describe('runDream — happy path', () => {
       loadOverlapPreamble: async () => [],
       onProgress: e => events.push(e),
     });
-    const skipped = r.groups.find(x => x.groupId === 'g-quiet');
+    const skipped = r.groups.find(x => x.sessionId === 'g-quiet');
     expect(skipped.status).toBe('skipped');
     expect(skipped.reason).toBe('below-threshold');
 
-    const eng = r.groups.find(x => x.groupId === 'g-eng');
+    const eng = r.groups.find(x => x.sessionId === 'g-eng');
     expect(eng.status).toBe('triaged');
     expect(eng.actions).toBeGreaterThan(0); // hard rules at least
   });
@@ -65,16 +65,16 @@ describe('runDream — happy path', () => {
       root,
       manual: true,
       llm: makeLlm(),
-      listGroups: async () => ['g-eng', 'g-empty'],
+      listSessions: async () => ['g-eng', 'g-empty'],
       countMessages: async (g) => g === 'g-eng' ? 5 : 0,
       loadGroupDiff: async (g) => g === 'g-eng'
         ? [{ id: 'e1', role: 'user', body: 'hi' }]
         : [],
       loadOverlapPreamble: async () => [],
     });
-    expect(r.groups.find(x => x.groupId === 'g-eng').status).toBe('triaged');
-    expect(r.groups.find(x => x.groupId === 'g-empty').status).toBe('skipped');
-    expect(r.groups.find(x => x.groupId === 'g-empty').reason).toBe('no-new-messages');
+    expect(r.groups.find(x => x.sessionId === 'g-eng').status).toBe('triaged');
+    expect(r.groups.find(x => x.sessionId === 'g-empty').status).toBe('skipped');
+    expect(r.groups.find(x => x.sessionId === 'g-empty').reason).toBe('no-new-messages');
   });
 
   it('runs apply and bookkeeps lastDreamMessageId', async () => {
@@ -84,7 +84,7 @@ describe('runDream — happy path', () => {
     await runDream({
       root,
       llm: makeLlm(),
-      listGroups: async () => ['g-eng'],
+      listSessions: async () => ['g-eng'],
       countMessages: async () => diffMessages.length,
       loadGroupDiff: async () => diffMessages,
       loadOverlapPreamble: async () => [],
@@ -124,7 +124,7 @@ describe('runDream — happy path', () => {
     await runDream({
       root,
       llm,
-      listGroups: async () => ['g'],
+      listSessions: async () => ['g'],
       countMessages: async () => 125,
       loadGroupDiff: async () => newMessages,
       loadOverlapPreamble: async (gid, before, n) => {
@@ -154,7 +154,7 @@ describe('runDream — happy path', () => {
     const r = await runDream({
       root,
       llm,
-      listGroups: async () => ['g-fail'],
+      listSessions: async () => ['g-fail'],
       countMessages: async () => 25,
       loadGroupDiff: async () => Array.from({ length: 25 }, (_, i) => ({ id: `f${i + 1}`, role: 'user', body: 'x' })),
       loadOverlapPreamble: async () => [],
@@ -172,7 +172,7 @@ describe('runDream — happy path', () => {
       manual: true,
       scopeFilter: ['user'],
       llm: makeLlm(),
-      listGroups: async () => ['g'],
+      listSessions: async () => ['g'],
       countMessages: async () => 1,
       loadGroupDiff: async () => [{ id: 'm1', role: 'user', body: 'hi' }],
       loadOverlapPreamble: async () => [],
@@ -189,7 +189,7 @@ describe('runDream — happy path', () => {
       manual: true,
       scopeFilter: ['group/g-current'],
       llm: makeLlm(),
-      listGroups: async () => ['g-current', 'g-other'],
+      listSessions: async () => ['g-current', 'g-other'],
       countMessages: async (g) => {
         calls.push(`count:${g}`);
         return 1;
@@ -202,8 +202,8 @@ describe('runDream — happy path', () => {
     });
 
     expect(calls).toEqual(['count:g-current', 'diff:g-current']);
-    expect(r.groups.find(x => x.groupId === 'g-current').status).toBe('triaged');
-    expect(r.groups.find(x => x.groupId === 'g-other')).toMatchObject({
+    expect(r.groups.find(x => x.sessionId === 'g-current').status).toBe('triaged');
+    expect(r.groups.find(x => x.sessionId === 'g-other')).toMatchObject({
       status: 'skipped',
       reason: 'scope-filtered',
     });
@@ -228,7 +228,7 @@ describe('runDream — happy path', () => {
       manual: true,
       scopeFilter: ['group/g-current'],
       llm: makeLlm(),
-      listGroups: async () => ['g-current', 'g-other'],
+      listSessions: async () => ['g-current', 'g-other'],
       countMessages: async (g) => {
         calls.push(`count:${g}`);
         return g === 'g-current' ? priorMessages.length : 99;
@@ -245,12 +245,12 @@ describe('runDream — happy path', () => {
     });
 
     expect(calls).toEqual(['count:g-current', 'diff:g-current:<all>']);
-    expect(r.groups.find(x => x.groupId === 'g-current')).toMatchObject({
+    expect(r.groups.find(x => x.sessionId === 'g-current')).toMatchObject({
       status: 'triaged',
       new: 0,
       rerun: true,
     });
-    expect(r.groups.find(x => x.groupId === 'g-other')).toMatchObject({
+    expect(r.groups.find(x => x.sessionId === 'g-other')).toMatchObject({
       status: 'skipped',
       reason: 'scope-filtered',
     });
@@ -274,13 +274,13 @@ describe('runDream — happy path', () => {
       manual: true,
       scopeFilter: ['group/g-current'],
       llm: makeLlm(),
-      listGroups: async () => ['g-current', 'g-other'],
+      listSessions: async () => ['g-current', 'g-other'],
       countMessages: async () => 1,
       loadGroupDiff: async () => [],
       loadOverlapPreamble: async () => [],
     });
 
-    expect(r.groups.find(x => x.groupId === 'g-current')).toMatchObject({
+    expect(r.groups.find(x => x.sessionId === 'g-current')).toMatchObject({
       status: 'skipped',
       reason: 'empty-diff',
     });
@@ -292,7 +292,7 @@ describe('runDream — happy path', () => {
     await runDream({
       root,
       llm: makeLlm(),
-      listGroups: async () => ['g'],
+      listSessions: async () => ['g'],
       countMessages: async () => 25,
       loadGroupDiff: async () => Array.from({ length: 25 }, (_, i) => ({ id: `m${i + 1}`, role: 'user', body: 'x' })),
       loadOverlapPreamble: async () => [],

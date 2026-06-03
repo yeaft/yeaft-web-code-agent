@@ -4,7 +4,7 @@ You are deciding whether a recent group conversation carries:
 
 Do NOT mention vp/, group/, or feature/ scopes — those are handled by hard rules.
 
-Group: {{groupId}}
+Session: {{sessionId}}
 
 Existing topic scopes (path — summary):
 {{topicSummaries}}

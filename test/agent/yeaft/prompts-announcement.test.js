@@ -13,7 +13,7 @@ describe('group announcement injection', () => {
     const out = buildSystemPrompt({
       language: 'en',
       toolNames: ['bash'],
-      groupAnnouncement: 'Be concise.',
+      sessionAnnouncement: 'Be concise.',
     });
     expect(out).toMatch(/\[Group Announcement\]\nBe concise\./);
   });
@@ -24,16 +24,16 @@ describe('group announcement injection', () => {
     const out2 = buildSystemPrompt({
       language: 'en',
       toolNames: ['bash'],
-      groupAnnouncement: '   ',
+      sessionAnnouncement: '   ',
     });
     expect(out2).not.toMatch(/Group Announcement/);
   });
 
-  it('buildWorkerPrompt forwards groupAnnouncement to base layer', () => {
+  it('buildWorkerPrompt forwards sessionAnnouncement to base layer', () => {
     const out = buildWorkerPrompt({
       language: 'en',
       toolNames: ['bash'],
-      groupAnnouncement: 'Cite sources.',
+      sessionAnnouncement: 'Cite sources.',
     });
     expect(out).toMatch(/\[Group Announcement\]\nCite sources\./);
   });
@@ -42,7 +42,7 @@ describe('group announcement injection', () => {
     const out = buildSystemPrompt({
       language: 'en',
       toolNames: ['bash_xyz_marker'],
-      groupAnnouncement: 'TEAM_RULE_MARKER',
+      sessionAnnouncement: 'TEAM_RULE_MARKER',
     });
     const annPos = out.indexOf('TEAM_RULE_MARKER');
     const toolPos = out.indexOf('bash_xyz_marker');

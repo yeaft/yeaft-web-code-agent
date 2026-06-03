@@ -9,7 +9,7 @@
  *      rejects when the chain length would exceed MAX_CHAIN_DEPTH (10).
  *
  *   2. Rate throttle — within a sliding window (WINDOW_MS = 5000, default
- *      MAX_HITS_PER_WINDOW = 8), a single (groupId, vpId) target may be
+ *      MAX_HITS_PER_WINDOW = 8), a single (sessionId, vpId) target may be
  *      @-forwarded at most N times. On overflow, the forward returns a
  *      `throttled` error and does NOT dispatch. The counter uses a simple
  *      ring (timestamps array) so expired hits are collected on insert.
@@ -19,7 +19,7 @@
  * threat model is one runaway turn storm within a single process tick.
  *
  * Long-running process hygiene (N1, task-334d-followup):
- *   The `hits` Map is keyed by "groupId::vpId" and would otherwise grow
+ *   The `hits` Map is keyed by "sessionId::vpId" and would otherwise grow
  *   unboundedly over a long session. Two complementary bounds:
  *     - TTL sweep: on each NEW key insert, drop entries whose most
  *       recent hit is older than `ttlMultiplier × windowMs` (default 2×).
@@ -36,10 +36,10 @@
  *
  * Integration contract (routing/router.js):
  *   - router stamps envelope.meta.causedBy = [...prevChain, currentMsgId]
- *   - router calls `guard.check({ groupId, targetVpId, chain })` BEFORE
+ *   - router calls `guard.check({ sessionId, targetVpId, chain })` BEFORE
  *     calling coordinator.deliver; on `{ ok: false, reason }` returns a
  *     tool-level error.
- *   - on ok=true, router calls `guard.record({ groupId, targetVpId })` to
+ *   - on ok=true, router calls `guard.record({ sessionId, targetVpId })` to
  *     advance the rate counter.
  */
 
@@ -69,13 +69,13 @@ export function createLoopGuard(options = {}) {
   const ttlMultiplier = options.ttlMultiplier ?? DEFAULT_TTL_MULTIPLIER;
   const now = typeof options.now === 'function' ? options.now : Date.now;
 
-  /** Map<"groupId::vpId", number[]> — sorted ascending timestamps.
+  /** Map<"sessionId::vpId", number[]> — sorted ascending timestamps.
    * Map insertion order doubles as LRU recency: touching (delete+set) on
    * every access keeps the oldest-used entry at the front for eviction. */
   const hits = new Map();
   let evictions = 0;
 
-  function key(groupId, vpId) { return `${groupId}::${vpId}`; }
+  function key(sessionId, vpId) { return `${sessionId}::${vpId}`; }
 
   function trim(arr, cutoff) {
     let i = 0;
@@ -126,15 +126,15 @@ export function createLoopGuard(options = {}) {
 
   return {
     /**
-     * Check whether a forward to (groupId, vpId) with the supplied causedBy
+     * Check whether a forward to (sessionId, vpId) with the supplied causedBy
      * chain is permitted. Does NOT record — call record() after the caller
      * decides to proceed (keeps dry-run / simulation honest).
      *
-     * @param {{ groupId:string, targetVpId:string, chain?:string[] }} args
+     * @param {{ sessionId:string, targetVpId:string, chain?:string[] }} args
      * @returns {{ ok:true } | { ok:false, reason:'chain_depth_exceeded'|'throttled', detail?:any }}
      */
-    check({ groupId, targetVpId, chain = [] }) {
-      if (!groupId || !targetVpId) {
+    check({ sessionId, targetVpId, chain = [] }) {
+      if (!sessionId || !targetVpId) {
         return { ok: false, reason: 'chain_depth_exceeded', detail: { missing: true } };
       }
       if (Array.isArray(chain) && chain.length >= maxChainDepth) {
@@ -144,7 +144,7 @@ export function createLoopGuard(options = {}) {
           detail: { depth: chain.length, limit: maxChainDepth },
         };
       }
-      const k = key(groupId, targetVpId);
+      const k = key(sessionId, targetVpId);
       const arr = hits.get(k);
       if (arr) {
         const cutoff = now() - windowMs;
@@ -164,9 +164,9 @@ export function createLoopGuard(options = {}) {
     },
 
     /** Record a successful forward — advances the rate counter. */
-    record({ groupId, targetVpId }) {
-      if (!groupId || !targetVpId) return;
-      const k = key(groupId, targetVpId);
+    record({ sessionId, targetVpId }) {
+      if (!sessionId || !targetVpId) return;
+      const k = key(sessionId, targetVpId);
       let arr = hits.get(k);
       const creating = !arr;
       if (!arr) {

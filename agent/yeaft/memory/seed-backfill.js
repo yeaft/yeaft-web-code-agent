@@ -150,11 +150,11 @@ export function backfillVpSummaries({ libDir, root = DEFAULT_MEMORY_ROOT }) {
 /**
  * Build a synthetic group summary from group.json on disk.
  *
- * @param {string} groupDir
+ * @param {string} sessionDir
  * @returns {string|null}
  */
-function readGroupSummaryBody(groupDir) {
-  const metaPath = join(groupDir, 'group.json');
+function readGroupSummaryBody(sessionDir) {
+  const metaPath = join(sessionDir, 'group.json');
   if (!existsSync(metaPath)) return null;
   let meta;
   try { meta = JSON.parse(readFileSync(metaPath, 'utf-8')); } catch { return null; }
@@ -236,20 +236,20 @@ export function migrateLegacyVpSummaries({ libDir, root = DEFAULT_MEMORY_ROOT })
 export function backfillGroupSummaries({ yeaftDir, root = DEFAULT_MEMORY_ROOT }) {
   let scanned = 0;
   let seeded = 0;
-  const groupsRoot = join(yeaftDir, 'groups');
-  if (!existsSync(groupsRoot)) return { scanned, seeded };
+  const sessionsRoot = join(yeaftDir, 'sessions');
+  if (!existsSync(sessionsRoot)) return { scanned, seeded };
   let entries;
-  try { entries = readdirSync(groupsRoot); } catch { return { scanned, seeded }; }
+  try { entries = readdirSync(sessionsRoot); } catch { return { scanned, seeded }; }
   for (const name of entries) {
     if (name.startsWith('.')) continue;
-    const groupDir = join(groupsRoot, name);
+    const sessionDir = join(sessionsRoot, name);
     let isDir = false;
-    try { isDir = statSync(groupDir).isDirectory(); } catch { /* skip */ }
+    try { isDir = statSync(sessionDir).isDirectory(); } catch { /* skip */ }
     if (!isDir) continue;
     scanned++;
     const summaryPath = join(root, 'group', name, 'summary.md');
     if (readIfPresent(summaryPath)) continue;
-    const body = readGroupSummaryBody(groupDir);
+    const body = readGroupSummaryBody(sessionDir);
     if (!body) continue;
     try {
       writeAtomicSync(summaryPath, body);

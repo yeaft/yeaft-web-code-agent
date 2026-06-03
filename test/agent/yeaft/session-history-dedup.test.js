@@ -54,8 +54,8 @@ function readAllPersisted() {
   const dirs = [join(TEST_DIR, 'chat', 'messages')];
   const groupsDir = join(TEST_DIR, 'groups');
   if (existsSync(groupsDir)) {
-    for (const groupId of readdirSync(groupsDir)) {
-      dirs.push(join(groupsDir, groupId, 'conversation', 'messages'));
+    for (const sessionId of readdirSync(groupsDir)) {
+      dirs.push(join(groupsDir, sessionId, 'conversation', 'messages'));
     }
   }
   const entries = [];
@@ -83,7 +83,7 @@ describe('runStopHooks userAlreadyPersisted (group-history-dedup)', () => {
       adapter: {},
       config: { model: 'm' },
       messages,
-      groupId: 'g1',
+      sessionId: 'g1',
     });
     expect(result.errors).toEqual([]);
     expect(result.messagesPersisted).toBe(2);
@@ -92,7 +92,7 @@ describe('runStopHooks userAlreadyPersisted (group-history-dedup)', () => {
     expect(persisted).toHaveLength(2);
     expect(persisted[0].role).toBe('user');
     expect(persisted[0].content).toBe('hello');
-    expect(persisted[0].groupId).toBe('g1');
+    expect(persisted[0].sessionId).toBe('g1');
     expect(persisted[1].role).toBe('assistant');
     expect(persisted[1].content).toBe('hi from solo');
   });
@@ -109,7 +109,7 @@ describe('runStopHooks userAlreadyPersisted (group-history-dedup)', () => {
       adapter: {},
       config: { model: 'm' },
       messages,
-      groupId: 'g1',
+      sessionId: 'g1',
       userAlreadyPersisted: true,
     });
     expect(result.errors).toEqual([]);
@@ -126,7 +126,7 @@ describe('runStopHooks userAlreadyPersisted (group-history-dedup)', () => {
     // Step 1: orchestrator writes the user row exactly once before fan-out.
     // (In production, web-bridge.persistInboundMessageOnceByMsgId does this,
     //  keyed on coordinator-minted msg.id.)
-    store.append({ role: 'user', content: 'hello group', groupId: 'g1', threadId: 'main' });
+    store.append({ role: 'user', content: 'hello group', sessionId: 'g1', threadId: 'main' });
 
     // Step 2: VP-A's engine completes its turn and runs stop-hook with
     // the conversation prefix that includes the shared user message.
@@ -141,7 +141,7 @@ describe('runStopHooks userAlreadyPersisted (group-history-dedup)', () => {
       adapter: {},
       config: { model: 'm' },
       messages: messagesA,
-      groupId: 'g1',
+      sessionId: 'g1',
       userAlreadyPersisted: true,
     });
     expect(resA.errors).toEqual([]);
@@ -160,7 +160,7 @@ describe('runStopHooks userAlreadyPersisted (group-history-dedup)', () => {
       adapter: {},
       config: { model: 'm' },
       messages: messagesB,
-      groupId: 'g1',
+      sessionId: 'g1',
       userAlreadyPersisted: true,
     });
     expect(resB.errors).toEqual([]);
@@ -171,7 +171,7 @@ describe('runStopHooks userAlreadyPersisted (group-history-dedup)', () => {
     const assistantRows = persisted.filter(m => m.role === 'assistant');
     expect(userRows).toHaveLength(1);
     expect(userRows[0].content).toBe('hello group');
-    expect(userRows[0].groupId).toBe('g1');
+    expect(userRows[0].sessionId).toBe('g1');
     expect(assistantRows).toHaveLength(2);
     const assistantContents = assistantRows.map(m => m.content).sort();
     expect(assistantContents).toEqual(['A: hi back', 'B: hello to you'].sort());
@@ -194,7 +194,7 @@ describe('runStopHooks userAlreadyPersisted (group-history-dedup)', () => {
       adapter: {},
       config: { model: 'm' },
       messages,
-      groupId: 'g1',
+      sessionId: 'g1',
       userAlreadyPersisted: true,
     });
     expect(result.errors).toEqual([]);
@@ -214,7 +214,7 @@ describe('runStopHooks userAlreadyPersisted (group-history-dedup)', () => {
     expect(tool.toolCallId).toBe('tc1');
   });
 
-  it('5. groupId stamping still applies to non-user rows under userAlreadyPersisted', async () => {
+  it('5. sessionId stamping still applies to non-user rows under userAlreadyPersisted', async () => {
     const messages = [
       { role: 'user', content: 'q' },
       { role: 'assistant', content: 'a' },
@@ -226,12 +226,12 @@ describe('runStopHooks userAlreadyPersisted (group-history-dedup)', () => {
       adapter: {},
       config: { model: 'm' },
       messages,
-      groupId: 'group-xyz',
+      sessionId: 'group-xyz',
       userAlreadyPersisted: true,
     });
     const persisted = readAllPersisted();
     expect(persisted).toHaveLength(1);
     expect(persisted[0].role).toBe('assistant');
-    expect(persisted[0].groupId).toBe('group-xyz');
+    expect(persisted[0].sessionId).toBe('group-xyz');
   });
 });
