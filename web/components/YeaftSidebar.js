@@ -19,10 +19,11 @@ const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
 import SessionCreateModal from './SessionCreateModal.js';
+import SidebarModeToggle from './SidebarModeToggle.js';
 
 export default {
   name: 'YeaftSidebar',
-  components: { SessionCreateModal },
+  components: { SessionCreateModal, SidebarModeToggle },
   emits: ['select-group', 'select-chat', 'toggle-sidebar', 'back', 'open-settings', 'open-group-settings'],
   template: `
     <aside class="yeaft-sidebar" :class="{ collapsed: collapsed }">
@@ -52,9 +53,7 @@ export default {
           <span v-if="currentAgentLatency != null" class="us-latency" :class="getLatencyClass(currentAgentLatency)">{{ currentAgentLatency }}ms</span>
         </div>
         <div class="us-header-actions">
-          <button class="us-icon-btn active" :title="tr('yeaft.back', 'Back')" @click="$emit('back')">
-            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M7 2v11h3v9l7-12h-4l4-8z"/></svg>
-          </button>
+          <SidebarModeToggle view="yeaft" @flip="onModeFlip" />
           <button class="us-icon-btn" :title="tr('chat.sidebar.collapse', 'Collapse')" @click="$emit('toggle-sidebar')">
             <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 18h13v-2H3v2zm0-5h10v-2H3v2zm0-7v2h13V6H3zm18 9.59L17.42 12 21 8.41 19.59 7l-5 5 5 5L21 15.59z"/></svg>
           </button>
@@ -308,6 +307,11 @@ export default {
     onToggleWorkbench() {
       const s = this.chatStore || this.store;
       if (s && typeof s.toggleWorkbench === 'function') s.toggleWorkbench();
+    },
+    onModeFlip(target) {
+      if (target === 'chat') {
+        this.$emit('back');
+      }
     },
     // task-334m: group-wizard + selection handlers.
     onGroupCreated(_group) {

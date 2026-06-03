@@ -117,6 +117,8 @@ export default {
   'chat.agent.online': '{count} 个 Agent 在线',
   'chat.agent.selectFirst': '请先选择一个 Agent',
   'chat.agent.yeaft': 'Yeaft 对话',
+  'sidebar.toggle.chat': '切换到 Chat',
+  'sidebar.toggle.yeaft': '切换到 Yeaft',
 
   // ============ Yeaft 页面 ============
   'yeaft.back': '返回',
