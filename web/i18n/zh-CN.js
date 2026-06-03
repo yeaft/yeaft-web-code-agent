@@ -1141,6 +1141,8 @@ export default {
   'yeaft.session.deletingEllipsis': '删除中…',
   'yeaft.session.rename': '重命名',
   'yeaft.session.manageMembers': '管理成员',
+  'yeaft.session.memberCount.one': '1 位成员',
+  'yeaft.session.memberCount.other': '{count} 位成员',
   'yeaft.session.renamePrompt': '为「{name}」输入新名称：',
   'yeaft.session.renamingEllipsis': '重命名中…',
 

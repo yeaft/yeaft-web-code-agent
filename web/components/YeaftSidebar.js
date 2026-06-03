@@ -64,18 +64,17 @@ export default {
         </div>
       </div>
 
-      <div class="us-scroll">
-        <!-- Phase 3: unified "Sessions" surface. Chats (legacy 1:1) and
-             Groups (multi-VP) both render as session rows. A single
-             "+ New session" button opens SessionCreateModal. The
-             chat/group distinction is now an internal storage detail. -->
-        <section class="us-group us-group-sessions" :aria-label="$t('yeaft.session.title')">
-          <div class="us-group-header us-group-header-tab">
-            <svg class="us-group-header-icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>
-            <span class="us-group-label">{{ $t('yeaft.session.title') }}</span>
+      <div class="us-scroll us-scroll-flush">
+        <!-- Parity with Chat/Crew sidebar: session-tab-bar (single Chat tab,
+             no Crew) + session-item rows reusing sidebar.css classes. -->
+        <div class="session-tab-bar">
+          <div class="session-tab active">
+            <svg class="session-tab-icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/></svg>
+            <span>{{ $t('yeaft.session.title') }}</span>
+            <span class="session-tab-count" v-if="sessionList.length > 0">{{ sessionList.length }}</span>
             <button
               type="button"
-              class="us-group-new-btn"
+              class="session-tab-add-btn"
               :title="$t('yeaft.session.new')"
               :aria-label="$t('yeaft.session.new')"
               @click.stop="onOpenSessionWizard"
@@ -83,50 +82,59 @@ export default {
               <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
             </button>
           </div>
-          <div class="us-group-body" v-if="sessionList.length > 0">
-            <template v-for="s in sessionList" :key="s.kind + ':' + s.id">
+        </div>
+
+        <div class="session-panels">
+          <div class="session-panel-list">
+            <template v-if="sessionList.length > 0">
               <div
-                class="us-row us-group-row us-session-row"
-                :class="{
-                  selected: s.id === activeSessionId,
-                  'is-empty': !s.raw.roster || s.raw.roster.length === 0,
-                  'is-default-empty': s.id === 'grp_default' && (!s.raw.roster || s.raw.roster.length === 0),
-                }"
+                v-for="s in sessionList"
+                :key="s.kind + ':' + s.id"
+                class="session-item"
+                :class="{ active: s.id === activeSessionId }"
                 @click="onSelectGroup(s.raw)"
                 @contextmenu.prevent="openGroupMenu(s.raw, $event)"
               >
-                <span class="us-dot us-dot-group"></span>
-                <span class="us-row-name">{{ groupDisplayName(s.raw) }}</span>
-                <button
-                  type="button"
-                  class="us-group-row-kebab"
-                  :title="$t('yeaft.session.moreActions')"
-                  :aria-label="$t('yeaft.session.moreActions')"
-                  aria-haspopup="menu"
-                  :aria-expanded="groupMenu.open && groupMenu.groupId === s.id ? 'true' : 'false'"
-                  @click.stop="openGroupMenu(s.raw, $event)"
-                >⋯</button>
-                <div v-if="groupMenu.open && groupMenu.groupId === s.id" class="us-group-row-menu" role="menu" @click.stop>
-                  <button type="button" role="menuitem" class="us-group-row-menu-item" @click="openGroupSettingsFromMenu(s.raw, 'members')">
-                    {{ $t('yeaft.session.manageMembers') }}
+                <div class="session-item-header">
+                  <div class="title" :title="groupDisplayName(s.raw)">
+                    <span>{{ groupDisplayName(s.raw) }}</span>
+                  </div>
+                  <span class="session-time" v-if="groupTime(s.raw)">{{ groupTime(s.raw) }}</span>
+                  <button
+                    type="button"
+                    class="session-dots-btn"
+                    :class="{ 'menu-open': groupMenu.open && groupMenu.groupId === s.id }"
+                    :title="$t('yeaft.session.moreActions')"
+                    :aria-label="$t('yeaft.session.moreActions')"
+                    aria-haspopup="menu"
+                    :aria-expanded="groupMenu.open && groupMenu.groupId === s.id ? 'true' : 'false'"
+                    @click.stop="openGroupMenu(s.raw, $event)"
+                  >
+                    <svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
                   </button>
-                  <button type="button" role="menuitem" class="us-group-row-menu-item" @click="openGroupSettingsFromMenu(s.raw, 'announcement')">
-                    {{ $t('yeaft.session.settings.nav.announcement') }}
-                  </button>
-                  <button type="button" role="menuitem" class="us-group-row-menu-item" @click="openGroupSettingsFromMenu(s.raw, 'rename')">
-                    {{ $t('yeaft.session.rename') }}
-                  </button>
-                  <button type="button" role="menuitem" class="us-group-row-menu-item us-group-row-menu-danger" @click="openGroupSettingsFromMenu(s.raw, 'danger')">
-                    {{ $t('yeaft.session.delete') }}
-                  </button>
+                  <div v-if="groupMenu.open && groupMenu.groupId === s.id" class="session-menu" role="menu" @click.stop>
+                    <button type="button" role="menuitem" class="session-menu-item" @click="openGroupSettingsFromMenu(s.raw, 'members')">
+                      {{ $t('yeaft.session.manageMembers') }}
+                    </button>
+                    <button type="button" role="menuitem" class="session-menu-item" @click="openGroupSettingsFromMenu(s.raw, 'announcement')">
+                      {{ $t('yeaft.session.settings.nav.announcement') }}
+                    </button>
+                    <button type="button" role="menuitem" class="session-menu-item" @click="openGroupSettingsFromMenu(s.raw, 'rename')">
+                      {{ $t('yeaft.session.rename') }}
+                    </button>
+                    <button type="button" role="menuitem" class="session-menu-item danger" @click="openGroupSettingsFromMenu(s.raw, 'danger')">
+                      {{ $t('yeaft.session.delete') }}
+                    </button>
+                  </div>
+                </div>
+                <div class="session-info" v-if="groupSubtitle(s.raw)">
+                  <span class="session-path">{{ groupSubtitle(s.raw) }}</span>
                 </div>
               </div>
             </template>
+            <div v-else class="session-empty-hint">{{ $t('yeaft.session.empty') }}</div>
           </div>
-          <div v-else class="us-group-body us-group-empty">
-            <div class="us-empty-hint">{{ $t('yeaft.session.empty') }}</div>
-          </div>
-        </section>
+        </div>
       </div>
 
       <!-- H2.f.6: merge target picker + irreversible confirm dialog removed. -->
@@ -205,12 +213,12 @@ export default {
       } catch (_) { /* no-pinia test env */ }
       return null;
     },
-    sessionList() { return this.sessionsStore?.sessionList || []; },
     activeSessionId() { return this.sessionsStore?.activeSessionId || null; },
     // Phase 4: chat container removed. Session list is just groups now.
     sessionList() {
       const out = [];
-      for (const g of (this.sessionList || [])) {
+      const raw = this.sessionsStore?.sessionList || [];
+      for (const g of raw) {
         if (g && g.id) out.push({ kind: 'group', id: g.id, raw: g });
       }
       return out;
@@ -339,6 +347,31 @@ export default {
       }
       return g.name || g.id || '';
     },
+    // Relative time for the row's right-aligned timestamp (mirrors ChatPage's
+    // getConversationTime). Yeaft groups only expose createdAt today; later
+    // we'll surface lastMessageAt from group activity once the engine stores it.
+    groupTime(g) {
+      const ts = g && g.createdAt ? g.createdAt : null;
+      if (!ts) return '';
+      const date = new Date(ts);
+      const now = new Date();
+      const diff = now - date;
+      if (diff < 60_000) return this.$t('chat.time.justNow');
+      if (diff < 3_600_000) return this.$t('chat.time.minutesAgo', { count: Math.floor(diff / 60_000) });
+      if (date.toDateString() === now.toDateString()) {
+        return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+      }
+      return date.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' });
+    },
+    // Subtitle line (parity with .session-info / .session-path). For Yeaft
+    // groups we surface roster size, e.g. "2 members" or "Empty".
+    groupSubtitle(g) {
+      if (!g) return '';
+      const n = Array.isArray(g.roster) ? g.roster.length : 0;
+      if (n === 0) return this.$t('yeaft.session.empty.title');
+      const key = n === 1 ? 'yeaft.session.memberCount.one' : 'yeaft.session.memberCount.other';
+      return this.$t(key, { count: n });
+    },
     // task-334m prev-2 rev: per-row kebab + rename/delete wiring.
     openGroupMenu(g, evt) {
       if (!g || !g.id) return;
@@ -350,7 +383,7 @@ export default {
       this.groupMenu = { open: true, groupId: g.id };
       // Close on next outside click.
       const close = (ev) => {
-        if (ev && ev.target && ev.target.closest && ev.target.closest('.us-group-row-menu')) return;
+        if (ev && ev.target && ev.target.closest && ev.target.closest('.session-menu')) return;
         this.groupMenu = { open: false, groupId: null };
         window.removeEventListener('click', close, true);
       };
