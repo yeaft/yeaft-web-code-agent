@@ -11,7 +11,7 @@ const { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } = Vue;
 export default {
   name: 'ModernSelect',
   props: {
-    modelValue: { type: [String, Number, null], default: null },
+    modelValue: { type: [String, Number], default: null },
     options: { type: Array, default: () => [] }, // [{value, label, sublabel?, badge?}]
     placeholder: { type: String, default: '' },
     searchable: { type: Boolean, default: false },
@@ -25,6 +25,7 @@ export default {
     const search = ref('');
     const triggerEl = ref(null);
     const menuEl = ref(null);
+    const searchEl = ref(null);
     const activeIdx = ref(-1);
 
     const selected = computed(() => props.options.find(o => o.value === props.modelValue) || null);
@@ -45,6 +46,7 @@ export default {
         search.value = '';
         activeIdx.value = filtered.value.findIndex(o => o.value === props.modelValue);
         nextTick(() => {
+          if (props.searchable && searchEl.value && searchEl.value.focus) searchEl.value.focus();
           if (menuEl.value) {
             const el = menuEl.value.querySelector('.modern-select-option.is-active');
             if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
@@ -82,7 +84,7 @@ export default {
     onBeforeUnmount(() => document.removeEventListener('mousedown', onDocClick));
     watch(() => props.modelValue, () => { /* re-sync handled by computed */ });
 
-    return { open, search, triggerEl, menuEl, activeIdx, selected, filtered, toggle, close, pick, onKey };
+    return { open, search, triggerEl, menuEl, searchEl, activeIdx, selected, filtered, toggle, close, pick, onKey };
   },
   template: `
     <div class="modern-select" :class="{ 'is-open': open, 'is-disabled': disabled }">
@@ -109,9 +111,9 @@ export default {
             <input
               type="text"
               v-model="search"
+              ref="searchEl"
               :placeholder="$t ? $t('common.search') || 'Search…' : 'Search…'"
               @keydown="onKey"
-              autofocus
             >
           </div>
           <div class="modern-select-list">

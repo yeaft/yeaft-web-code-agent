@@ -406,6 +406,7 @@ export function handleMessage(store, msg) {
       if (msg.requestId && store._modelsRequestId && msg.requestId !== store._modelsRequestId) break;
       store.providerModels = msg.models || [];
       store.providerModelsLoading = false;
+      if (store._modelsTimeout) { clearTimeout(store._modelsTimeout); store._modelsTimeout = null; }
       if (store._modelsResolve) {
         store._modelsResolve(store.providerModels);
         store._modelsResolve = null;

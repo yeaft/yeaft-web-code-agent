@@ -12,7 +12,7 @@
  * does not need to paste an API key as long as Copilot CLI is logged in.
  */
 
-import { getApiToken, copilotRequestHeaders, validateRawToken } from '../yeaft/llm/credentials/github-copilot.js';
+import { getApiToken, copilotRequestHeaders, validateRawToken, resolveRawToken } from '../yeaft/llm/credentials/github-copilot.js';
 import { readFile } from 'fs/promises';
 import { homedir } from 'os';
 import { join } from 'path';
@@ -65,7 +65,6 @@ async function _resolveBearerToken() {
   // prefer the raw OAuth from the standard yeaft pipeline first, then fall
   // back to the Copilot CLI's own cached OAuth at ~/.copilot/config.json.
   try {
-    const { resolveRawToken } = await import('../yeaft/llm/credentials/github-copilot.js');
     const raw = await resolveRawToken();
     if (raw?.token) return raw.token;
   } catch { /* fall through */ }
@@ -78,41 +77,55 @@ async function _resolveBearerToken() {
 }
 
 let _cache = null; // { models, fetchedAt }
+let _inflight = null; // dedupes concurrent cold-cache calls
 
 /**
- * Returns a list of `{id, label, vendor, preview}` records, picker-enabled
- * chat models only. Cached for 10 minutes. Never throws — falls back to the
- * static list on any error.
+ * Returns a list of `{id, label, vendor, preview, family}` records,
+ * picker-enabled chat models only. Cached for 10 minutes. Never throws —
+ * falls back to the static list on any error (including network timeout).
  */
 export async function listCopilotModels({ force = false } = {}) {
   if (!force && _cache && Date.now() - _cache.fetchedAt < CACHE_TTL_MS) {
     return _cache.models.slice();
   }
+  if (_inflight) return (await _inflight).slice();
+  _inflight = (async () => {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 5000);
+    try {
+      const token = await _resolveBearerToken();
+      if (!token) return FALLBACK_COPILOT_MODELS.slice();
+      const res = await fetch(MODELS_ENDPOINT, {
+        signal: ac.signal,
+        headers: { ...copilotRequestHeaders({ isAgentTurn: false }), Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return FALLBACK_COPILOT_MODELS.slice();
+      const body = await res.json();
+      const data = Array.isArray(body?.data) ? body.data : [];
+      const models = data
+        .filter(m => m && m.model_picker_enabled && m.capabilities?.type === 'chat')
+        .map(m => ({
+          id: m.id,
+          label: m.name || m.id,
+          vendor: m.vendor || '',
+          preview: !!m.preview,
+          family: m.capabilities?.family || '',
+        }));
+      if (!models.length) return FALLBACK_COPILOT_MODELS.slice();
+      _cache = { models, fetchedAt: Date.now() };
+      return models.slice();
+    } catch {
+      return FALLBACK_COPILOT_MODELS.slice();
+    } finally {
+      clearTimeout(timer);
+    }
+  })();
   try {
-    const token = await _resolveBearerToken();
-    if (!token) return FALLBACK_COPILOT_MODELS.slice();
-    const res = await fetch(MODELS_ENDPOINT, {
-      headers: { ...copilotRequestHeaders({ isAgentTurn: false }), Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) return FALLBACK_COPILOT_MODELS.slice();
-    const body = await res.json();
-    const data = Array.isArray(body?.data) ? body.data : [];
-    const models = data
-      .filter(m => m && m.model_picker_enabled && m.capabilities?.type === 'chat')
-      .map(m => ({
-        id: m.id,
-        label: m.name || m.id,
-        vendor: m.vendor || '',
-        preview: !!m.preview,
-        family: m.capabilities?.family || '',
-      }));
-    if (!models.length) return FALLBACK_COPILOT_MODELS.slice();
-    _cache = { models, fetchedAt: Date.now() };
-    return models.slice();
-  } catch {
-    return FALLBACK_COPILOT_MODELS.slice();
+    return (await _inflight).slice();
+  } finally {
+    _inflight = null;
   }
 }
 
 /** Tests only. */
-export function _resetCopilotModelsCacheForTests() { _cache = null; }
+export function _resetCopilotModelsCacheForTests() { _cache = null; _inflight = null; }

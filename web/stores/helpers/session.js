@@ -344,6 +344,7 @@ export function listModelsForAgent(store, agentId, provider) {
   store.providerModelsLoading = true;
   return new Promise((resolve) => {
     if (store._modelsResolve) store._modelsResolve([]);
+    if (store._modelsTimeout) clearTimeout(store._modelsTimeout);
     store._modelsResolve = resolve;
     store.sendWsMessage({
       type: 'list_models',
@@ -351,12 +352,13 @@ export function listModelsForAgent(store, agentId, provider) {
       provider: provider || 'claude-code',
       requestId,
     });
-    setTimeout(() => {
+    store._modelsTimeout = setTimeout(() => {
       if (store._modelsResolve === resolve) {
         store._modelsResolve([]);
         store._modelsResolve = null;
         store.providerModelsLoading = false;
       }
+      store._modelsTimeout = null;
     }, 10000);
   });
 }

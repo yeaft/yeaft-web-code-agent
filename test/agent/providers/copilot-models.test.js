@@ -8,6 +8,8 @@ describe('copilot-models — listCopilotModels', () => {
   it('returns mapped picker-enabled chat models from /models', async () => {
     vi.doMock('../../../agent/yeaft/llm/credentials/github-copilot.js', () => ({
       getApiToken: async () => ({ token: 'tok', source: 'test', exchanged: true }),
+      resolveRawToken: async () => ({ token: 'tok', source: 'test' }),
+      validateRawToken: () => ({ valid: true }),
       copilotRequestHeaders: () => ({ 'X-T': '1' }),
     }));
     const fetchMock = vi.fn(async () => ({
@@ -32,6 +34,8 @@ describe('copilot-models — listCopilotModels', () => {
   it('falls back to static list when no auth available', async () => {
     vi.doMock('../../../agent/yeaft/llm/credentials/github-copilot.js', () => ({
       getApiToken: async () => null,
+      resolveRawToken: async () => null,
+      validateRawToken: () => ({ valid: false }),
       copilotRequestHeaders: () => ({}),
     }));
     const m = await import('../../../agent/providers/copilot-models.js');
@@ -44,6 +48,8 @@ describe('copilot-models — listCopilotModels', () => {
   it('falls back when /models returns non-OK', async () => {
     vi.doMock('../../../agent/yeaft/llm/credentials/github-copilot.js', () => ({
       getApiToken: async () => ({ token: 'tok', source: 'test', exchanged: true }),
+      resolveRawToken: async () => ({ token: 'tok', source: 'test' }),
+      validateRawToken: () => ({ valid: true }),
       copilotRequestHeaders: () => ({}),
     }));
     globalThis.fetch = vi.fn(async () => ({ ok: false, status: 500, text: async () => 'boom' }));
