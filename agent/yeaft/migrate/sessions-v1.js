@@ -43,7 +43,7 @@ const SENTINEL = '.session-migration-v1.done';
  * @param {string} yeaftDir
  * @returns {{ migrated: boolean, moved: number, warnings: string[] }}
  */
-export function migrateSessionsV1(yeaftDir) {
+export async function migrateSessionsV1(yeaftDir) {
   const warnings = [];
   if (!yeaftDir || !existsSync(yeaftDir)) {
     return { migrated: false, moved: 0, warnings: ['yeaftDir missing'] };
@@ -172,13 +172,32 @@ export function migrateSessionsV1(yeaftDir) {
     }
   }
 
-  // 6. sentinel
-  //
-  // PHASE 2 TODO: the SQLite FTS index (memory/index-db.js) still has rows
-  // pointing at group/<id> and chat/<id> scopes after this migration. When
-  // Phase 2 activates this migration from initYeaftDir(), it MUST also
-  // delete or rebuild the FTS index so the new session/<id> scopes get
-  // re-indexed. Preflow recall is broken until then.
+  // 6. Rewrite SQLite FTS index scope strings via the shared index-db
+  //    module (which already handles ABI loading). Idempotent: WHERE clause
+  //    skips already-rewritten rows.
+  try {
+    const dbPath = join(memoryRoot, 'index.db');
+    if (existsSync(dbPath)) {
+      const { openSegmentIndex } = await import('../memory/index-db.js');
+      const idx = openSegmentIndex(dbPath);
+      try {
+        const db = idx._db;
+        db.exec("BEGIN");
+        db.exec("UPDATE memory_segments SET scope = REPLACE(scope, 'group/', 'session/') WHERE scope LIKE 'group/%'");
+        db.exec("UPDATE memory_segments SET scope = REPLACE(scope, 'chat/', 'session/') WHERE scope LIKE 'chat/%'");
+        db.exec("COMMIT");
+      } catch (err) {
+        try { idx._db.exec("ROLLBACK"); } catch { /* ignore */ }
+        warnings.push(`FTS scope rewrite failed: ${err.message}`);
+      } finally {
+        try { idx.close(); } catch { /* ignore */ }
+      }
+    }
+  } catch (err) {
+    warnings.push(`FTS rewrite skipped: ${err.message}`);
+  }
+
+  // 7. sentinel
   writeFileSync(sentinel, JSON.stringify({
     version: 1,
     migratedAt: new Date().toISOString(),
