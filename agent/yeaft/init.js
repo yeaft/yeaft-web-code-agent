@@ -8,6 +8,9 @@
 import { existsSync, mkdirSync, writeFileSync, accessSync, constants } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+// NOTE: migrateSessionsV1 is imported by tests directly from
+// './migrate/sessions-v1.js' — not wired into initYeaftDir() yet (Phase 2
+// will activate it once the runtime reads from sessions/).
 
 /**
  * Check if an error is a permission error (EACCES or EPERM).
@@ -78,6 +81,7 @@ const SUBDIRS = [
   'chat/cold',
   'chat/blobs',
   'groups',
+  'sessions',
   'memory/entries',
   'tasks',
   'skills',
@@ -209,6 +213,13 @@ export function initYeaftDir(dir) {
     safeWriteFile(mcpExamplePath, DEFAULT_MCP_EXAMPLE, warnings);
     created.push(mcpExamplePath);
   }
+
+  // NOTE: sessions-v1 migration (collapse groups/ + chats/ → sessions/) is
+  // intentionally NOT wired here yet — Phase 1 ships the session-store +
+  // migration script + scope vocab as foundation only. Activating the
+  // migration before the runtime reads from sessions/ would move data out
+  // from under the live group/chat code paths. Phase 2 flips the runtime
+  // and then hooks `migrateSessionsV1(root)` here.
 
   return { dir: root, created, writable, warnings };
 }

@@ -64,9 +64,11 @@ export const SCOPE_KINDS = Object.freeze([
   'group-topic',
   'chat',
   'chat-vp',
+  'session',
+  'session-vp',
 ]);
 
-/** @typedef {'user'|'group'|'group-user'|'group-vp'|'group-feature'|'group-topic'|'chat'|'chat-vp'} ScopeKind */
+/** @typedef {'user'|'group'|'group-user'|'group-vp'|'group-feature'|'group-topic'|'chat'|'chat-vp'|'session'|'session-vp'} ScopeKind */
 
 /**
  * @typedef {Object} Scope
@@ -136,6 +138,18 @@ export function scopeDir(scope) {
       assertSafeSegment(scope.id, 'chat-vp.id');
       return `chat/${scope.chatId}/vp/${scope.id}`;
     }
+    case 'session': {
+      if (!scope.id) throw new Error('scopeDir: session scope requires id');
+      assertSafeSegment(scope.id, 'session.id');
+      return `session/${scope.id}`;
+    }
+    case 'session-vp': {
+      if (!scope.sessionId) throw new Error('scopeDir: session-vp scope requires sessionId');
+      if (!scope.id) throw new Error('scopeDir: session-vp scope requires id');
+      assertSafeSegment(scope.sessionId, 'session-vp.sessionId');
+      assertSafeSegment(scope.id, 'session-vp.id');
+      return `session/${scope.sessionId}/vp/${scope.id}`;
+    }
     default:
       throw new Error(`scopeDir: unknown kind ${JSON.stringify(scope.kind)}`);
   }
@@ -201,7 +215,7 @@ export function isValidTopic(scope) {
  */
 export function isVpForeign(relPath, currentVpId) {
   if (!relPath || !currentVpId) return false;
-  const m = /^(?:group|chat)\/[^/]+\/vp\/([^/]+)(?:\/|$)/.exec(relPath);
+  const m = /^(?:group|chat|session)\/[^/]+\/vp\/([^/]+)(?:\/|$)/.exec(relPath);
   if (!m) return false;
   return m[1] !== currentVpId;
 }
@@ -561,6 +575,31 @@ export async function listScopes(opts = {}) {
       if (!vent.isDirectory()) continue;
       if (!isSafeId(vent.name)) continue;
       out.push({ kind: 'chat-vp', chatId: c, id: vent.name });
+    }
+  }
+
+  // session/<s>/  and  session/<s>/vp/<v>/
+  const sessionRoot = join(root, 'session');
+  let sessions;
+  try { sessions = await fsp.readdir(sessionRoot, { withFileTypes: true }); }
+  catch (err) {
+    if (err && err.code === 'ENOENT') sessions = [];
+    else throw err;
+  }
+  for (const sent of sessions) {
+    if (!sent.isDirectory()) continue;
+    if (sent.name.startsWith('.')) continue;
+    if (!isSafeId(sent.name)) continue;
+    const s = sent.name;
+    out.push({ kind: 'session', id: s });
+    const vpDir = join(sessionRoot, s, 'vp');
+    let vps;
+    try { vps = await fsp.readdir(vpDir, { withFileTypes: true }); }
+    catch { vps = []; }
+    for (const vent of vps) {
+      if (!vent.isDirectory()) continue;
+      if (!isSafeId(vent.name)) continue;
+      out.push({ kind: 'session-vp', sessionId: s, id: vent.name });
     }
   }
 
