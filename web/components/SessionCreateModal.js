@@ -150,15 +150,23 @@ export default {
       if (s.emptyLibrary === true) return true;
       return !!(s.lastSnapshotAt && s.lastSnapshotAt > 0 && (s.vpOrder?.length || 0) === 0);
     },
-    canSubmit() { return this.form.vpIds.length > 0; },
+    canSubmit() {
+      // Need at least one VP and an agent that is currently online.
+      if (this.form.vpIds.length === 0) return false;
+      if (!this.form.agentId) return false;
+      const a = this.agentOptions.find(x => x.id === this.form.agentId);
+      return !!(a && a.online);
+    },
   },
   mounted() {
     window.addEventListener('keydown', this.onEsc);
     this.$nextTick(() => {
       try { this.$refs.nameInput?.focus(); } catch (_) {}
     });
-    // Seed agent default: prefer the current Yeaft agent, else first online,
-    // else first agent.
+    // Seed agent default: prefer the current Yeaft agent, else first online.
+    // Never seed an offline agent — sending create to a dead ws is silent
+    // failure. If nothing is online, leave agentId null and let canSubmit
+    // gate the form.
     try {
       const chat = this.chat;
       if (chat) {
@@ -166,7 +174,7 @@ export default {
         const agents = this.agentOptions;
         const onlinePick = agents.find(a => a.id === preferred && a.online)
           || agents.find(a => a.online)
-          || agents[0];
+          || null;
         if (onlinePick) this.form.agentId = onlinePick.id;
       }
     } catch (_) {}
