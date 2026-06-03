@@ -57,8 +57,8 @@ describe('sessions-v1 migration', () => {
     seedDir(tmp);
   });
 
-  it('moves group + chat to sessions with normalized meta', () => {
-    const r = migrateSessionsV1(tmp);
+  it('moves group + chat to sessions with normalized meta', async () => {
+    const r = await migrateSessionsV1(tmp);
     expect(r.migrated).toBe(true);
     expect(r.moved).toBe(2);
 
@@ -78,8 +78,8 @@ describe('sessions-v1 migration', () => {
     expect(existsSync(join(tmp, 'sessions', 'chat_beta', 'chat.json'))).toBe(false);
   });
 
-  it('moves memory dirs and rewrites segment scope', () => {
-    migrateSessionsV1(tmp);
+  it('moves memory dirs and rewrites segment scope', async () => {
+    await migrateSessionsV1(tmp);
     const segG = readFileSync(join(tmp, 'memory', 'session', 'grp_alpha', 'segments', 'seg1.md'), 'utf8');
     expect(segG).toContain('scope: session/grp_alpha');
     expect(segG).not.toContain('scope: group/');
@@ -91,27 +91,27 @@ describe('sessions-v1 migration', () => {
     expect(existsSync(join(tmp, 'memory', 'chat', 'chat_beta'))).toBe(false);
   });
 
-  it('moves AMS files into memory/sessions/<id>/', () => {
-    migrateSessionsV1(tmp);
+  it('moves AMS files into memory/sessions/<id>/', async () => {
+    await migrateSessionsV1(tmp);
     expect(existsSync(join(tmp, 'memory', 'sessions', 'grp_alpha', 'ams.json'))).toBe(true);
     expect(existsSync(join(tmp, 'memory', 'sessions', 'chat_beta', 'ams.json'))).toBe(true);
   });
 
-  it('writes sentinel + is idempotent on second run', () => {
-    migrateSessionsV1(tmp);
+  it('writes sentinel + is idempotent on second run', async () => {
+    await migrateSessionsV1(tmp);
     expect(existsSync(join(tmp, '.session-migration-v1.done'))).toBe(true);
-    const r2 = migrateSessionsV1(tmp);
+    const r2 = await migrateSessionsV1(tmp);
     expect(r2.migrated).toBe(false);
     expect(r2.moved).toBe(0);
   });
 
-  it('preserves defaultVpId from group.json into session meta', () => {
-    migrateSessionsV1(tmp);
+  it('preserves defaultVpId from group.json into session meta', async () => {
+    await migrateSessionsV1(tmp);
     const meta = JSON.parse(readFileSync(join(tmp, 'sessions', 'grp_alpha', 'meta.json'), 'utf8'));
     expect(meta.defaultVpId).toBe('omni');
   });
 
-  it('reconciles a partially migrated session (dir renamed, meta not written yet)', () => {
+  it('reconciles a partially migrated session (dir renamed, meta not written yet)', async () => {
     // Simulate a prior crash: sessions/grp_alpha/ exists with the leftover
     // group.json (renameSync done, rewrite skipped). No sentinel.
     const sessDir = join(tmp, 'sessions', 'grp_alpha');
@@ -125,12 +125,35 @@ describe('sessions-v1 migration', () => {
     // collision check sees only the dst side.
     rmSync(join(tmp, 'groups', 'grp_alpha'), { recursive: true, force: true });
 
-    const r = migrateSessionsV1(tmp);
+    const r = await migrateSessionsV1(tmp);
     expect(r.migrated).toBe(true);
     // meta.json was repaired from the leftover group.json
     expect(existsSync(join(sessDir, 'meta.json'))).toBe(true);
     const meta = JSON.parse(readFileSync(join(sessDir, 'meta.json'), 'utf8'));
     expect(meta.id).toBe('grp_alpha');
     expect(meta.vpIds).toEqual(['omni']);
+  });
+
+  it('rewrites SQLite FTS scope rows from group/<id> → session/<id>', async () => {
+    // Seed an FTS index with a row pointing at the legacy scope.
+    const { openSegmentIndex } = await import('../../../../agent/yeaft/memory/index-db.js');
+    const dbPath = join(tmp, 'memory', 'index.db');
+    const idx = openSegmentIndex(dbPath);
+    idx.upsert({
+      id: 'seg_aaaaaaaa', scope: 'group/grp_alpha', kind: 'fact',
+      tags: '', body: 'Body A', sourceMsgs: '',
+      createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    idx.close();
+
+    await migrateSessionsV1(tmp);
+
+    const idx2 = openSegmentIndex(dbPath);
+    const rows = idx2.listByScope('session/grp_alpha');
+    expect(rows.length).toBe(1);
+    expect(rows[0].id).toBe('seg_aaaaaaaa');
+    const legacy = idx2.listByScope('group/grp_alpha');
+    expect(legacy.length).toBe(0);
+    idx2.close();
   });
 });
