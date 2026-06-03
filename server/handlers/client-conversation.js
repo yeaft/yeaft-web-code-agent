@@ -172,6 +172,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         userId: client.userId,
         username: client.username,
         provider: msg.provider,
+        providerOptions: msg.providerOptions,
         disallowedTools: msg.disallowedTools
       });
       break;
@@ -198,6 +199,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         userId: client.userId,
         username: client.username,
         provider: msg.provider,
+        providerOptions: msg.providerOptions,
         disallowedTools: msg.disallowedTools
       });
       break;
@@ -433,6 +435,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       await forwardToAgent(historyAgentId, {
         type: 'list_history_sessions',
         workDir: msg.workDir,
+        provider: msg.provider,
         requestId: msg.requestId,
         _requestClientId: clientId
       });
@@ -445,6 +448,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       if (!await checkAgentAccess(foldersAgentId)) return;
       await forwardToAgent(foldersAgentId, {
         type: 'list_folders',
+        provider: msg.provider,
         requestId: msg.requestId,
         _requestClientId: clientId
       });

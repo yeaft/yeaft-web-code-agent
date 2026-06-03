@@ -498,12 +498,28 @@ export default {
             <div class="resume-control-row" v-if="convModalAgent">
               <label class="resume-control-label">{{ $t('modal.newConv.provider') }}</label>
               <div class="select-wrapper">
-                <select v-model="convModalProvider" class="resume-select">
+                <select v-model="convModalProvider" @change="onConvModalProviderChange" class="resume-select">
                   <option value="claude-code">{{ $t('provider.claudeCode') }}</option>
                   <option value="copilot">{{ $t('provider.copilot') }}</option>
                 </select>
                 <svg class="select-arrow" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
               </div>
+            </div>
+            <div class="resume-control-row" v-if="convModalAgent && convModalProvider === 'copilot'">
+              <label class="resume-control-label">{{ $t('modal.newConv.model') }}</label>
+              <input
+                type="text"
+                v-model="convModalCopilotModel"
+                placeholder="claude-sonnet-4.5"
+                class="resume-input"
+              >
+            </div>
+            <div class="resume-control-row" v-if="convModalAgent && convModalProvider === 'copilot'">
+              <label class="resume-control-label">{{ $t('modal.newConv.skipPermissions') }}</label>
+              <label class="resume-checkbox-wrapper">
+                <input type="checkbox" v-model="convModalCopilotAllowAll">
+                <span class="resume-checkbox-hint">{{ $t('modal.newConv.skipPermissionsHint') }}</span>
+              </label>
             </div>
             <div class="resume-control-row" v-if="convModalAgent">
               <label class="resume-control-label">{{ $t('modal.newConv.workDir') }}</label>
@@ -660,6 +676,8 @@ export default {
       convModalAgent: '',
       convModalWorkDir: '',
       convModalProvider: 'claude-code',
+      convModalCopilotModel: '',
+      convModalCopilotAllowAll: false,
       selectedResumeSession: null,
       historyLoaded: false,
       windowWidth: window.innerWidth,
@@ -803,13 +821,13 @@ export default {
       const selectedAgent = currentAgentOnline || onlineAgents[0];
       if (selectedAgent) {
         this.convModalAgent = selectedAgent.id;
-        this.store.listFoldersForAgent(this.convModalAgent).then(() => {
+        this.store.listFoldersForAgent(this.convModalAgent, this.convModalProvider).then(() => {
           // 如果首次加载结果为空且 modal 仍然打开，自动重试一次
           if (this.showConversationModal && this.store.folders.length === 0 && !this._foldersRetried) {
             this._foldersRetried = true;
             setTimeout(() => {
               if (this.showConversationModal && this.convModalAgent) {
-                this.store.listFoldersForAgent(this.convModalAgent);
+                this.store.listFoldersForAgent(this.convModalAgent, this.convModalProvider);
               }
             }, 1500);
           }
@@ -825,13 +843,24 @@ export default {
       this.convModalWorkDir = '';
       this.selectedResumeSession = null;
       this.historyLoaded = false;
+      this.convModalCopilotModel = '';
+      this.convModalCopilotAllowAll = false;
     },
     onConvModalAgentChange() {
       if (this.convModalAgent) {
         this.convModalWorkDir = '';
         this.selectedResumeSession = null;
         this.historyLoaded = false;
-        this.store.listFoldersForAgent(this.convModalAgent);
+        this.store.listFoldersForAgent(this.convModalAgent, this.convModalProvider);
+      }
+    },
+    onConvModalProviderChange() {
+      // Switching provider invalidates the folder/session lists — reload.
+      this.convModalWorkDir = '';
+      this.selectedResumeSession = null;
+      this.historyLoaded = false;
+      if (this.convModalAgent) {
+        this.store.listFoldersForAgent(this.convModalAgent, this.convModalProvider);
       }
     },
     onConvModalWorkDirInput() {
@@ -842,7 +871,7 @@ export default {
       }
       this._workDirInputTimer = setTimeout(() => {
         if (this.convModalWorkDir.trim() && this.convModalAgent) {
-          this.store.listHistorySessionsForAgent(this.convModalAgent, this.convModalWorkDir.trim());
+          this.store.listHistorySessionsForAgent(this.convModalAgent, this.convModalWorkDir.trim(), this.convModalProvider);
           this.historyLoaded = true;
         }
       }, 500);
@@ -852,18 +881,18 @@ export default {
       this.selectedResumeSession = null;
       // 自动加载该 folder 下的 sessions
       if (this.convModalAgent) {
-        this.store.listHistorySessionsForAgent(this.convModalAgent, path);
+        this.store.listHistorySessionsForAgent(this.convModalAgent, path, this.convModalProvider);
         this.historyLoaded = true;
       }
     },
     loadConvModalFolders() {
       if (this.convModalAgent) {
-        this.store.listFoldersForAgent(this.convModalAgent);
+        this.store.listFoldersForAgent(this.convModalAgent, this.convModalProvider);
       }
     },
     loadConvModalSessions() {
       if (this.convModalAgent && this.convModalWorkDir.trim()) {
-        this.store.listHistorySessionsForAgent(this.convModalAgent, this.convModalWorkDir.trim());
+        this.store.listHistorySessionsForAgent(this.convModalAgent, this.convModalWorkDir.trim(), this.convModalProvider);
         this.historyLoaded = true;
       }
     },
@@ -881,7 +910,13 @@ export default {
       if (!this.convModalAgent) return;
       this.store.selectAgent(this.convModalAgent);
       const workDir = this.convModalWorkDir.trim() || this.selectedConvModalAgentWorkDir;
-      this.store.createConversation(workDir, this.convModalAgent, null, { provider: this.convModalProvider });
+      const opts = { provider: this.convModalProvider };
+      if (this.convModalProvider === 'copilot') {
+        opts.providerOptions = {};
+        if (this.convModalCopilotModel.trim()) opts.providerOptions.model = this.convModalCopilotModel.trim();
+        if (this.convModalCopilotAllowAll) opts.providerOptions.allowAllTools = true;
+      }
+      this.store.createConversation(workDir, this.convModalAgent, null, opts);
       this.closeConversationModal();
     },
     resumeSession(session) {
@@ -889,7 +924,7 @@ export default {
       this.store.selectAgent(this.convModalAgent);
       this.store._pendingSessionTitle = session.title;
       const workDir = session.workDir || this.convModalWorkDir.trim() || this.selectedConvModalAgentWorkDir;
-      this.store.resumeConversation(session.sessionId, workDir, this.convModalAgent);
+      this.store.resumeConversation(session.sessionId, workDir, this.convModalAgent, { provider: this.convModalProvider });
       this.closeConversationModal();
     },
     resumeSelectedSession() {
@@ -897,7 +932,7 @@ export default {
       this.store.selectAgent(this.convModalAgent);
       this.store._pendingSessionTitle = this.selectedResumeSession.title;
       const workDir = this.selectedResumeSession.workDir || this.convModalWorkDir.trim() || this.selectedConvModalAgentWorkDir;
-      this.store.resumeConversation(this.selectedResumeSession.sessionId, workDir, this.convModalAgent);
+      this.store.resumeConversation(this.selectedResumeSession.sessionId, workDir, this.convModalAgent, { provider: this.convModalProvider });
       this.closeConversationModal();
     },
     formatDate(timestamp) {
@@ -1237,7 +1272,7 @@ export default {
       this.convModalWorkDir = path;
       this.selectedResumeSession = null;
       if (this.convModalAgent) {
-        this.store.listHistorySessionsForAgent(this.convModalAgent, path);
+        this.store.listHistorySessionsForAgent(this.convModalAgent, path, this.convModalProvider);
         this.historyLoaded = true;
       }
       this.folderPickerOpen = false;

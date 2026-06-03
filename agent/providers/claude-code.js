@@ -1,4 +1,12 @@
+import { existsSync, readdirSync, statSync } from 'fs';
+import { join } from 'path';
 import { startClaudeQuery } from '../claude.js';
+import {
+  getClaudeProjectsDir,
+  getHistorySessions,
+  loadSessionHistory,
+  getWorkDirFromProjectFolder,
+} from '../history.js';
 
 export const name = 'claude-code';
 
@@ -31,4 +39,46 @@ export function abort(state) {
   }
 }
 
-export default { name, start, sendInput, abort };
+// ---------- history surface ----------
+
+export async function listFolders() {
+  const projectsDir = getClaudeProjectsDir();
+  const folders = [];
+  if (!existsSync(projectsDir)) return folders;
+
+  for (const entry of readdirSync(projectsDir)) {
+    const entryPath = join(projectsDir, entry);
+    let stats;
+    try { stats = statSync(entryPath); } catch { continue; }
+    if (!stats.isDirectory()) continue;
+    if (entry.includes('--crew-roles-')) continue;
+
+    const originalPath = getWorkDirFromProjectFolder(entryPath, entry);
+    let sessionCount = 0;
+    let lastModified = stats.mtime.getTime();
+    try {
+      for (const file of readdirSync(entryPath)) {
+        if (!file.endsWith('.jsonl')) continue;
+        sessionCount++;
+        try {
+          const fs = statSync(join(entryPath, file));
+          if (fs.mtime.getTime() > lastModified) lastModified = fs.mtime.getTime();
+        } catch { /* noop */ }
+      }
+    } catch { /* noop */ }
+
+    folders.push({ name: entry, path: originalPath, sessionCount, lastModified });
+  }
+  folders.sort((a, b) => b.lastModified - a.lastModified);
+  return folders;
+}
+
+export async function listSessions(workDir) {
+  return await getHistorySessions(workDir);
+}
+
+export async function loadHistory(workDir, sessionId, limit = 500) {
+  return loadSessionHistory(workDir, sessionId, limit);
+}
+
+export default { name, start, sendInput, abort, listFolders, listSessions, loadHistory };

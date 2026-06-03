@@ -252,7 +252,7 @@ export function clearLastSession(store) {
   store.lastViewedConversation = null;
 }
 
-export function listHistorySessions(store, workDir) {
+export function listHistorySessions(store, workDir, provider) {
   if (!store.currentAgent) {
     store.historySessionsLoading = false;
     return;
@@ -269,11 +269,12 @@ export function listHistorySessions(store, workDir) {
   store.sendWsMessage({
     type: 'list_history_sessions',
     workDir,
+    provider: provider || 'claude-code',
     requestId
   });
 }
 
-export function listFolders(store) {
+export function listFolders(store, provider) {
   if (!store.currentAgent) {
     store.foldersLoading = false;
     return Promise.resolve();
@@ -285,13 +286,13 @@ export function listFolders(store) {
   store._foldersRequestId = requestId;
 
   return new Promise((resolve) => {
-    // 如果有旧的 pending resolve，先 resolve 它
     if (store._foldersResolve) {
       store._foldersResolve();
     }
     store._foldersResolve = resolve;
     store.sendWsMessage({
       type: 'list_folders',
+      provider: provider || 'claude-code',
       requestId
     });
     setTimeout(() => {
@@ -304,7 +305,7 @@ export function listFolders(store) {
   });
 }
 
-export function listFoldersForAgent(store, agentId) {
+export function listFoldersForAgent(store, agentId, provider) {
   if (!agentId) {
     store.foldersLoading = false;
     return Promise.resolve();
@@ -323,6 +324,7 @@ export function listFoldersForAgent(store, agentId) {
     store.sendWsMessage({
       type: 'list_folders',
       agentId,
+      provider: provider || 'claude-code',
       requestId
     });
     setTimeout(() => {
@@ -335,7 +337,7 @@ export function listFoldersForAgent(store, agentId) {
   });
 }
 
-export function listHistorySessionsForAgent(store, agentId, workDir) {
+export function listHistorySessionsForAgent(store, agentId, workDir, provider) {
   if (!agentId) {
     store.historySessionsLoading = false;
     return;
@@ -353,6 +355,7 @@ export function listHistorySessionsForAgent(store, agentId, workDir) {
     type: 'list_history_sessions',
     agentId,
     workDir,
+    provider: provider || 'claude-code',
     requestId
   });
 }
