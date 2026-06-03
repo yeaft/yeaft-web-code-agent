@@ -286,7 +286,7 @@ export default {
       if (!agentId || !this.chat || typeof this.chat.sendWsMessage !== 'function') return;
       this.chat.sendWsMessage({
         type: 'list_directory',
-        conversationId: '_yeaft_session_workdir_picker',
+        conversationId: '_workdir_picker',
         agentId,
         dirPath,
         workDir: this.defaultWorkDir || '',
@@ -347,7 +347,7 @@ export default {
     },
     handleFolderPickerMessage(event) {
       const msg = event.detail;
-      if (!msg || msg.type !== 'directory_listing' || msg.conversationId !== '_yeaft_session_workdir_picker') return;
+      if (!msg || msg.type !== 'directory_listing' || msg.conversationId !== '_workdir_picker') return;
       if (this._folderPickerTimer) {
         clearTimeout(this._folderPickerTimer);
         this._folderPickerTimer = null;
