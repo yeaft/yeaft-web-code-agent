@@ -11,6 +11,19 @@ import BtwOverlay from './BtwOverlay.js';
 import SplitPane from './SplitPane.js';
 import { useAuthStore } from '../stores/auth.js';
 
+// Mirrors agent/providers/copilot-models.js. Update both together when the
+// Copilot CLI gains a new model.
+const COPILOT_MODELS = Object.freeze([
+  { id: 'gpt-5', label: 'GPT-5' },
+  { id: 'gpt-5-mini', label: 'GPT-5 Mini' },
+  { id: 'claude-sonnet-4', label: 'Claude Sonnet 4' },
+  { id: 'claude-sonnet-4.5', label: 'Claude Sonnet 4.5' },
+  { id: 'claude-opus-4', label: 'Claude Opus 4' },
+  { id: 'gpt-4o', label: 'GPT-4o' },
+  { id: 'o1', label: 'o1' },
+]);
+const DEFAULT_COPILOT_MODEL = 'claude-sonnet-4.5';
+
 export default {
   name: 'ChatPage',
   components: { ChatHeader, MessageList, ChatInput, WorkbenchPanel, SettingsPanel, CrewConfigPanel, CrewChatView, ExpertPanel, SubAgentPanel, BtwOverlay, SplitPane },
@@ -507,12 +520,12 @@ export default {
             </div>
             <div class="resume-control-row" v-if="convModalAgent && convModalProvider === 'copilot'">
               <label class="resume-control-label">{{ $t('modal.newConv.model') }}</label>
-              <input
-                type="text"
-                v-model="convModalCopilotModel"
-                placeholder="claude-sonnet-4.5"
-                class="resume-input"
-              >
+              <div class="select-wrapper">
+                <select v-model="convModalCopilotModel" class="resume-select">
+                  <option v-for="m in copilotModels" :key="m.id" :value="m.id">{{ m.label }}</option>
+                </select>
+                <svg class="select-arrow" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
+              </div>
             </div>
             <div class="resume-control-row" v-if="convModalAgent && convModalProvider === 'copilot'">
               <label class="resume-control-label">{{ $t('modal.newConv.skipPermissions') }}</label>
@@ -676,7 +689,7 @@ export default {
       convModalAgent: '',
       convModalWorkDir: '',
       convModalProvider: 'claude-code',
-      convModalCopilotModel: '',
+      convModalCopilotModel: DEFAULT_COPILOT_MODEL,
       convModalCopilotAllowAll: false,
       selectedResumeSession: null,
       historyLoaded: false,
@@ -703,6 +716,9 @@ export default {
   computed: {
     store() {
       return Pinia.useChatStore();
+    },
+    copilotModels() {
+      return COPILOT_MODELS;
     },
     canUseWorkbench() {
       const role = useAuthStore().role;
@@ -843,7 +859,7 @@ export default {
       this.convModalWorkDir = '';
       this.selectedResumeSession = null;
       this.historyLoaded = false;
-      this.convModalCopilotModel = '';
+      this.convModalCopilotModel = DEFAULT_COPILOT_MODEL;
       this.convModalCopilotAllowAll = false;
     },
     onConvModalAgentChange() {
@@ -913,7 +929,7 @@ export default {
       const opts = { provider: this.convModalProvider };
       if (this.convModalProvider === 'copilot') {
         opts.providerOptions = {};
-        if (this.convModalCopilotModel.trim()) opts.providerOptions.model = this.convModalCopilotModel.trim();
+        if (this.convModalCopilotModel) opts.providerOptions.model = String(this.convModalCopilotModel).trim();
         if (this.convModalCopilotAllowAll) opts.providerOptions.allowAllTools = true;
       }
       this.store.createConversation(workDir, this.convModalAgent, null, opts);

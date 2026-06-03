@@ -15,9 +15,16 @@
  *
  * @typedef {Object} ChatProvider
  * @property {string} name
+ * @property {ProviderCapabilities} capabilities
+ *   Static feature flags the provider supports. UI uses these to decide which
+ *   header buttons / panels to show, rather than string-matching provider names.
  * @property {(opts: StartOpts) => Promise<Object>} start
  * @property {(state: Object, prompt: string, opts?: Object) => Promise<void>} sendInput
  * @property {(state: Object) => void} abort
+ * @property {(state: Object) => Promise<void>} [clear]
+ *   Optional. Reset in-flight conversation state (e.g. start a new ACP session
+ *   under the same conversationId). If not provided, the frontend falls back to
+ *   a client-side message wipe only.
  * @property {() => Promise<FolderInfo[]>} listFolders
  *   Return the list of work-directories that this provider has sessions for.
  * @property {(workDir: string) => Promise<SessionInfo[]>} listSessions
@@ -25,6 +32,16 @@
  * @property {(workDir: string, sessionId: string, limit?: number) => Promise<HistoryMessage[]>} loadHistory
  *   Return the resumable transcript as an array of `claude_output`-compatible
  *   envelopes (the same shape the live stream would have produced).
+ *
+ * @typedef {Object} ProviderCapabilities
+ * @property {boolean} [compact]      provider supports /compact (auto + manual)
+ * @property {boolean} [clear]        provider supports in-place /clear
+ * @property {boolean} [expert]       provider supports the expert panel / subagent injection
+ * @property {boolean} [mcp]          provider exposes MCP server toggles per conversation
+ * @property {boolean} [subagents]    provider drives subagent watcher events
+ * @property {boolean} [attachments]  provider accepts file / image attachments in prompts
+ * @property {boolean} [askUser]      provider supports the round-trip ask-user permission prompt
+ * @property {boolean} [modelPicker]  provider supports switching model from the UI
  *
  * @typedef {Object} StartOpts
  * @property {string} conversationId

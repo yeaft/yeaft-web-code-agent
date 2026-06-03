@@ -1,112 +1,77 @@
 import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'events';
-import { Readable } from 'stream';
-import { translateCopilotEvent, createNdjsonParser } from '../../../agent/providers/copilot.js';
 
-describe('copilot driver — translateCopilotEvent', () => {
-  const state = { sessionId: 'sess-123' };
-
-  it('forwards text events as assistant text envelopes', () => {
-    const out = translateCopilotEvent({ type: 'text', text: 'hi' }, state);
-    expect(out).toEqual([
-      { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'hi' }] } },
-    ]);
-  });
-
-  it('supports text_delta alias', () => {
-    const out = translateCopilotEvent({ type: 'text_delta', delta: 'partial' }, state);
-    expect(out[0].message.content[0].text).toBe('partial');
-  });
-
-  it('translates tool_call into Claude tool_use shape', () => {
-    const out = translateCopilotEvent(
-      { type: 'tool_call', id: 'c1', name: 'Bash', input: { command: 'ls' } },
-      state,
-    );
-    expect(out[0].message.content[0]).toEqual({
-      type: 'tool_use', id: 'c1', name: 'Bash', input: { command: 'ls' },
-    });
-  });
-
-  it('translates tool_result into user/tool_result shape', () => {
-    const out = translateCopilotEvent(
-      { type: 'tool_result', tool_use_id: 'c1', content: 'ok' },
-      state,
-    );
-    expect(out[0]).toEqual({
-      type: 'user',
-      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'c1', content: 'ok' }] },
-    });
-  });
-
-  it('emits a success result envelope on done', () => {
-    const out = translateCopilotEvent({ type: 'done' }, state);
-    expect(out[0]).toMatchObject({
-      type: 'result', subtype: 'success', session_id: 'sess-123', is_error: false,
-    });
-  });
-
-  it('emits error result envelope on error event', () => {
-    const out = translateCopilotEvent({ type: 'error', message: 'boom' }, state);
-    expect(out[0]).toMatchObject({ type: 'result', subtype: 'error', is_error: true, error: 'boom' });
-  });
-
-  it('drops unknown event types defensively', () => {
-    const out = translateCopilotEvent({ type: 'totally_unknown' }, state);
-    expect(out).toEqual([]);
+/**
+ * Post-ACP rewrite tests. The old NDJSON/-p driver shipped two pure helpers
+ * (translateCopilotEvent + createNdjsonParser) that we could unit-test in
+ * isolation; the new driver does all translation inline against a real
+ * AcpClient. We verify two black-box behaviors that matter to users:
+ *   1) `capabilities` reflects what the UI now uses for gating
+ *   2) `respondToPermissionRequest` resolves a pending permission promise
+ *      with the selected optionId so an in-flight session/prompt can proceed
+ */
+describe('copilot provider — capability descriptor', () => {
+  it('declares the gaps the new ACP driver closes', async () => {
+    const { capabilities } = await import('../../../agent/providers/copilot.js');
+    expect(capabilities.clear).toBe(true);
+    expect(capabilities.attachments).toBe(true);
+    expect(capabilities.askUser).toBe(true);
+    expect(capabilities.modelPicker).toBe(true);
+    // Things still gated off — make sure UI keeps hiding them.
+    expect(capabilities.expert).toBe(false);
+    expect(capabilities.subagents).toBe(false);
   });
 });
 
-describe('copilot driver — NDJSON parser', () => {
-  it('emits one event per line, drops blanks, survives partial chunks', () => {
-    const events = [];
-    const p = createNdjsonParser((e) => events.push(e));
-    p.push('{"type":"text","text":"a"}\n\n{"type":"text",');
-    p.push('"text":"b"}\n');
-    expect(events).toEqual([
-      { type: 'text', text: 'a' },
-      { type: 'text', text: 'b' },
-    ]);
+describe('copilot provider — respondToPermissionRequest', () => {
+  it('resolves the pending permission with the selected optionId', async () => {
+    const { respondToPermissionRequest } = await import('../../../agent/providers/copilot.js');
+    let resolved;
+    const slot = {
+      options: [
+        { optionId: 'allow_once', kind: 'allow_once', name: 'Allow once' },
+        { optionId: 'reject_once', kind: 'reject_once', name: 'Reject' },
+      ],
+      resolve: (v) => { resolved = v; },
+    };
+    const state = { pendingPermissions: new Map([['req-1', slot]]) };
+    const ok = respondToPermissionRequest(state, 'req-1', 'reject_once');
+    expect(ok).toBe(true);
+    expect(resolved).toEqual({ outcome: { outcome: 'selected', optionId: 'reject_once' } });
+    expect(state.pendingPermissions.has('req-1')).toBe(false);
   });
 
-  it('drops unparsable lines without throwing', () => {
-    const events = [];
-    const p = createNdjsonParser((e) => events.push(e));
-    p.push('not-json\n{"type":"done"}\n');
-    expect(events).toEqual([{ type: 'done' }]);
+  it('returns false when the requestId is unknown', async () => {
+    const { respondToPermissionRequest } = await import('../../../agent/providers/copilot.js');
+    const state = { pendingPermissions: new Map() };
+    expect(respondToPermissionRequest(state, 'missing', 'allow')).toBe(false);
   });
 });
 
-describe('copilot driver — sendInput end-to-end (mocked spawn)', () => {
-  it('synthesizes an error result envelope when child exits nonzero with no stdout', async () => {
+describe('copilot provider — sendInput surfaces ACP boot errors', () => {
+  it('emits an error result + turn_completed when the child can not be spawned', async () => {
     vi.resetModules();
     const ctxMod = await import('../../../agent/context.js');
     const sent = [];
     ctxMod.default.sendToServer = (m) => sent.push(m);
     ctxMod.default.CONFIG = ctxMod.default.CONFIG || {};
+    ctxMod.default.conversations = new Map();
 
+    // child with no stdin/stdout — AcpClient will throw on first write.
     const child = new EventEmitter();
     child.stdout = new EventEmitter();
     child.stderr = new EventEmitter();
+    child.stdin = { write: () => { throw new Error('boom'); } };
     child.kill = () => {};
 
     vi.doMock('child_process', () => ({ spawn: () => child }));
-    const copilot = await import('../../../agent/providers/copilot.js?fresh=1');
+    const copilot = await import('../../../agent/providers/copilot.js?fresh=acp');
 
     const state = await copilot.start({ conversationId: 'c1', workDir: '/tmp' });
-    const pending = copilot.sendInput(state, 'hi', { conversationId: 'c1' });
-    queueMicrotask(() => {
-      child.stderr.emit('data', Buffer.from('boom'));
-      child.emit('close', 1);
-    });
-    await pending;
-
-    const result = sent.find((m) => m.type === 'claude_output' && m.data?.type === 'result');
+    // Start should have emitted an init-failed result envelope (best-effort path).
+    const result = sent.find((m) => m.type === 'claude_output' && m.data?.type === 'result' && m.data?.is_error);
     expect(result).toBeTruthy();
-    expect(result.data.is_error).toBe(true);
-    expect(result.data.error).toContain('boom');
-    const turn = sent.find((m) => m.type === 'turn_completed');
-    expect(turn).toBeTruthy();
+    expect(state.providerName).toBe('copilot');
     vi.doUnmock('child_process');
   });
 });

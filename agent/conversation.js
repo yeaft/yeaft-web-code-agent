@@ -287,6 +287,11 @@ export function parseSlashCommand(message) {
 export async function sendConversationList() {
   const list = [];
   for (const [id, state] of ctx.conversations) {
+    let providerCaps = state.capabilities;
+    if (!providerCaps) {
+      try { providerCaps = getProvider(state.providerName || DEFAULT_PROVIDER).capabilities || null; }
+      catch { providerCaps = null; }
+    }
     const entry = {
       id,
       workDir: state.workDir,
@@ -295,7 +300,8 @@ export async function sendConversationList() {
       processing: !!state.turnActive,
       userId: state.userId,
       username: state.username,
-      provider: state.providerName || DEFAULT_PROVIDER
+      provider: state.providerName || DEFAULT_PROVIDER,
+      capabilities: providerCaps || undefined,
     };
     list.push(entry);
   }
@@ -395,6 +401,9 @@ export async function createConversation(msg) {
     state.disallowedTools = disallowedTools || null;
   }
 
+  let createdCaps = null;
+  try { createdCaps = getProvider(provider).capabilities || null; } catch { /* noop */ }
+
   ctx.sendToServer({
     type: 'conversation_created',
     conversationId,
@@ -402,6 +411,7 @@ export async function createConversation(msg) {
     userId,
     username,
     provider,
+    capabilities: createdCaps || undefined,
     disallowedTools: disallowedTools || null
   });
 
@@ -508,6 +518,9 @@ export async function resumeConversation(msg) {
     state.disallowedTools = disallowedTools || null;
   }
 
+  let resumedCaps = null;
+  try { resumedCaps = getProvider(provider).capabilities || null; } catch { /* noop */ }
+
   ctx.sendToServer({
     type: 'conversation_resumed',
     conversationId,
@@ -516,7 +529,8 @@ export async function resumeConversation(msg) {
     historyMessages,
     userId,
     username,
-    provider
+    provider,
+    capabilities: resumedCaps || undefined
   });
 
   // 立即发送 agent 级别的 MCP servers 列表
@@ -766,6 +780,23 @@ export async function handleUserInput(msg) {
       });
     }
     if (workDir) state.workDir = workDir;
+
+    // /clear for capable providers — reset session in-place without spawning new turn
+    if (slashCommand.type === 'slash' && slashCommand.command === '/clear') {
+      if (typeof driver.clear === 'function' && driver.capabilities?.clear) {
+        try { await driver.clear(state); } catch (err) {
+          console.warn(`[${conversationId}] driver.clear failed:`, err?.message || err);
+        }
+      }
+      ctx.sendToServer({
+        type: 'turn_completed',
+        conversationId,
+        claudeSessionId: state.sessionId || state.claudeSessionId,
+        workDir: state.workDir
+      });
+      return;
+    }
+
     sendOutput(conversationId, { type: 'user', message: { role: 'user', content: prompt } });
     state.turnActive = true;
     sendConversationList();
@@ -931,6 +962,28 @@ export function handleAskUserQuestion(conversationId, input, toolCtx) {
  * 则按 conversationId 查找该 conversation 下唯一的 pending question 并 resolve。
  */
 export function handleAskUserAnswer(msg) {
+  // Copilot ACP permission round-trip: requestId is prefixed `copilot-perm-`
+  // and the answer arrives as `{answers: {optionId: '<optionId>'}}` or a
+  // single string value. Route it back into the driver instead of the
+  // generic AskUserQuestion path.
+  if (typeof msg.requestId === 'string' && msg.requestId.startsWith('copilot-perm-')) {
+    const state = msg.conversationId ? ctx.conversations.get(msg.conversationId) : null;
+    if (state) {
+      try {
+        const driver = getProvider(state.providerName || DEFAULT_PROVIDER);
+        if (typeof driver.respondToPermissionRequest === 'function') {
+          const ans = msg.answers || {};
+          const optionId = typeof ans === 'string' ? ans
+            : ans.optionId || ans.option || Object.values(ans)[0];
+          driver.respondToPermissionRequest(state, msg.requestId, optionId);
+          return;
+        }
+      } catch (err) {
+        console.warn('[AskUser] copilot perm routing failed:', err?.message || err);
+      }
+    }
+  }
+
   let pending = ctx.pendingUserQuestions.get(msg.requestId);
   let matchedRequestId = msg.requestId;
 
