@@ -12,16 +12,25 @@ import SplitPane from './SplitPane.js';
 import ModernSelect from './ModernSelect.js';
 import { useAuthStore } from '../stores/auth.js';
 
-// Static fallback for the Copilot model picker, only used until the dynamic
-// /models response lands (or if it fails). Mirrors agent/providers/copilot-models.js
-// FALLBACK_COPILOT_MODELS.
+// Static fallback for the Copilot model picker — mirrors the CLI's own
+// hardcoded default list (jF in @github/copilot/app.js@1.0.59). Used until
+// the dynamic /models response lands, or when org policy hides the picker
+// list from /models. Keep in sync with agent/providers/copilot-models.js.
 const FALLBACK_COPILOT_MODELS = Object.freeze([
+  { id: 'claude-sonnet-4.6',  label: 'Claude Sonnet 4.6', vendor: 'Anthropic' },
   { id: 'claude-sonnet-4.5',  label: 'Claude Sonnet 4.5', vendor: 'Anthropic' },
-  { id: 'claude-sonnet-4',    label: 'Claude Sonnet 4',   vendor: 'Anthropic' },
-  { id: 'claude-opus-4.1',    label: 'Claude Opus 4.1',   vendor: 'Anthropic' },
-  { id: 'gpt-5',              label: 'GPT-5',             vendor: 'OpenAI'    },
+  { id: 'claude-haiku-4.5',   label: 'Claude Haiku 4.5',  vendor: 'Anthropic' },
+  { id: 'claude-opus-4.8',    label: 'Claude Opus 4.8',   vendor: 'Anthropic' },
+  { id: 'claude-opus-4.7',    label: 'Claude Opus 4.7',   vendor: 'Anthropic' },
+  { id: 'claude-opus-4.6',    label: 'Claude Opus 4.6',   vendor: 'Anthropic' },
+  { id: 'claude-opus-4.5',    label: 'Claude Opus 4.5',   vendor: 'Anthropic' },
+  { id: 'gpt-5.5',            label: 'GPT-5.5',           vendor: 'OpenAI'    },
+  { id: 'gpt-5.4',            label: 'GPT-5.4',           vendor: 'OpenAI'    },
+  { id: 'gpt-5.3-codex',      label: 'GPT-5.3 Codex',     vendor: 'OpenAI'    },
+  { id: 'gpt-5.2-codex',      label: 'GPT-5.2 Codex',     vendor: 'OpenAI'    },
+  { id: 'gpt-5.2',            label: 'GPT-5.2',           vendor: 'OpenAI'    },
+  { id: 'gpt-5.4-mini',       label: 'GPT-5.4 Mini',      vendor: 'OpenAI'    },
   { id: 'gpt-5-mini',         label: 'GPT-5 Mini',        vendor: 'OpenAI'    },
-  { id: 'gpt-4.1',            label: 'GPT-4.1',           vendor: 'OpenAI'    },
   { id: 'gemini-2.5-pro',     label: 'Gemini 2.5 Pro',    vendor: 'Google'    },
 ]);
 const DEFAULT_COPILOT_MODEL = 'claude-sonnet-4.5';
@@ -500,15 +509,12 @@ export default {
             </button>
             <div class="resume-control-row">
               <label class="resume-control-label">Agent</label>
-              <div class="resume-select-wrapper">
-                <select v-model="convModalAgent" @change="onConvModalAgentChange" class="resume-select">
-                  <option value="">{{ $t('chat.agent.select') }}</option>
-                  <option v-for="agent in store.agents.filter(a => a.online)" :key="agent.id" :value="agent.id">
-                    {{ agent.name }}{{ agent.latency ? ' (' + agent.latency + 'ms)' : '' }}
-                  </option>
-                </select>
-                <svg class="select-arrow" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
-              </div>
+              <modern-select
+                v-model="convModalAgent"
+                :options="agentOptions"
+                :placeholder="$t('chat.agent.select')"
+                @change="onConvModalAgentChange"
+              />
             </div>
             <div class="resume-control-row" v-if="convModalAgent">
               <label class="resume-control-label">{{ $t('modal.newConv.provider') }}</label>
@@ -737,6 +743,12 @@ export default {
         { value: 'claude-code', label: this.$t('provider.claudeCode') },
         { value: 'copilot',     label: this.$t('provider.copilot')    },
       ];
+    },
+    agentOptions() {
+      return this.store.agents.filter(a => a.online).map(a => ({
+        value: a.id,
+        label: `${a.name}${a.latency ? ` (${a.latency}ms)` : ''}`,
+      }));
     },
     canUseWorkbench() {
       const role = useAuthStore().role;
