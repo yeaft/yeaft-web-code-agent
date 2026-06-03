@@ -101,14 +101,6 @@ export default {
                   <span class="agent-dropdown-status" v-if="restartingAgents[agent.id]">{{ $t('chat.agent.restarting') }}</span>
                   <span class="agent-dropdown-status" v-else-if="upgradingAgents[agent.id]">{{ $t('chat.agent.upgrading') }}</span>
                   <button
-                    class="agent-dropdown-yeaft-btn"
-                    @click.stop="store.enterYeaft(agent.id); agentManagerOpen = false"
-                    :disabled="!agent.online"
-                    :title="$t('chat.agent.yeaft')"
-                  >
-                    <svg viewBox="0 0 24 24" width="13" height="13"><path fill="currentColor" d="M7 2v11h3v9l7-12h-4l4-8z"/></svg>
-                  </button>
-                  <button
                     class="agent-dropdown-upgrade-btn"
                     @click.stop="upgradeAgent(agent.id)"
                     :disabled="!agent.online || restartingAgents[agent.id] || upgradingAgents[agent.id]"
@@ -131,6 +123,14 @@ export default {
               </div>
             </div>
             <div class="sidebar-header-actions">
+              <button
+                class="sidebar-icon-btn"
+                @click="store.enterYeaft()"
+                :disabled="onlineAgentCount === 0"
+                :title="$t('chat.agent.yeaft')"
+              >
+                <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M7 2v11h3v9l7-12h-4l4-8z"/></svg>
+              </button>
               <button class="sidebar-icon-btn" @click="store.toggleSidebar()" :title="$t('chat.sidebar.collapse')">
                 <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 18h13v-2H3v2zm0-5h10v-2H3v2zm0-7v2h13V6H3zm18 9.59L17.42 12 21 8.41 19.59 7l-5 5 5 5L21 15.59z"/></svg>
               </button>

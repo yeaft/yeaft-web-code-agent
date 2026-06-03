@@ -575,6 +575,7 @@ export default {
   'yeaft.session.create.title': 'New session',
   'yeaft.session.create.nameLabel': 'Name',
   'yeaft.session.create.namePlaceholder': 'Session name (optional)',
+  'yeaft.session.create.agentLabel': 'Agent',
   'yeaft.session.create.vpPicker': 'Choose VPs',
   'yeaft.session.create.submit': 'Create',
   'yeaft.session.empty': 'No sessions yet. Click + to create one.',
