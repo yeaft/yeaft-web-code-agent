@@ -1052,15 +1052,7 @@ export const useChatStore = defineStore('chat', {
       this.sendWsMessage(wsMsg);
     },
 
-    // ─── Yeaft Chat Mode (1:1) ──────────────────────────────────
-    // Phase 4: chat container removed. setActiveYeaftChat is kept as a
-    // no-op so any straggler callers (e.g. older bookmarks) don't throw.
-    setActiveYeaftChat(_chatId) {
-      // no-op
-    },
-    listYeaftChats() {
-      // Removed in Phase 4 — sessions list now comes from yeaftGroups.
-    },
+    // ─── Yeaft Session creation ────────────────────────────────
     // Phase 3: unified Session creation. A session is operationally a
     // group with N≥1 VPs. Phase 2 router accepts `yeaft_create_session`
     // as an alias of `yeaft_create_group`; this action goes through the

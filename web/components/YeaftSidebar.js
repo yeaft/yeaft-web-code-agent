@@ -18,12 +18,11 @@
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
-import GroupCreateWizard from './GroupCreateWizard.js';
 import SessionCreateModal from './SessionCreateModal.js';
 
 export default {
   name: 'YeaftSidebar',
-  components: { GroupCreateWizard, SessionCreateModal },
+  components: { SessionCreateModal },
   emits: ['select-group', 'select-chat', 'toggle-sidebar', 'back', 'open-settings', 'open-group-settings'],
   template: `
     <aside class="yeaft-sidebar" :class="{ collapsed: collapsed }">
@@ -135,12 +134,6 @@ export default {
         @close="sessionWizardOpen = false"
         @created="onSessionCreated"
       />
-      <!-- Legacy group creator retained for tests / programmatic use; not surfaced in UI. -->
-      <GroupCreateWizard
-        v-if="groupWizardOpen"
-        @close="groupWizardOpen = false"
-        @created="onGroupCreated"
-      />
 
       <!-- task-yeaft-group-editor: Per-group rename/delete formerly lived
            in inline overlays here. They've been folded into the unified
@@ -166,7 +159,6 @@ export default {
     return {
       now: Date.now(),
       // task-334m: group-create wizard visibility.
-      groupWizardOpen: false,
       sessionWizardOpen: false,
       groupsOpen: true,
       // task-yeaft-group-editor: per-row action menu only — the rename
@@ -307,8 +299,9 @@ export default {
       if (s && typeof s.toggleWorkbench === 'function') s.toggleWorkbench();
     },
     // task-334m: group-wizard + selection handlers.
-    onOpenGroupWizard() { this.groupWizardOpen = true; },
-    onCloseGroupWizard() { this.groupWizardOpen = false; },
+    onGroupCreated(_group) {
+      // Store auto-activates via applyCrudResult; modal closes itself.
+    },
     // Phase 3: unified session create — single entry point users see.
     onOpenSessionWizard() { this.sessionWizardOpen = true; },
     onSessionCreated(_group) {
@@ -334,9 +327,6 @@ export default {
     openGroupSettingsFromMenu(g, section) {
       this.groupMenu = { open: false, groupId: null };
       this.openGroupSettings(g, section);
-    },
-    onGroupCreated(_group) {
-      // Store auto-activates via applyCrudResult; wizard closes itself.
     },
     groupDisplayName(g) {
       if (!g) return '';
