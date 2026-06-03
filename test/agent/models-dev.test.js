@@ -80,7 +80,10 @@ describe('fetchModelsDev', () => {
 
   it('listProviders and listProviderModels read from the cache', async () => {
     writeFileSync(join(tmpDir, 'models_dev_cache.json'), JSON.stringify(SAMPLE));
-    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    // Belt-and-suspenders: if stage-2 (fresh disk cache) ever short-circuits
+    // for an unexpected reason on CI (clock skew, FS oddity), the mock
+    // guarantees we don't hit the real models.dev and pull in 140 providers.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network blocked in test'));
 
     expect(await listProviders({ yeaftDir: tmpDir })).toEqual(['anthropic', 'openai']);
     expect(await listProviderModels('anthropic', { yeaftDir: tmpDir })).toEqual(['claude-sonnet', 'claude-haiku']);
