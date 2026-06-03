@@ -110,6 +110,68 @@
   color: var(--text-secondary);
 }
 
+/* Collapsed member picker -------------------------------------------------- */
+.group-wizard-member-picker {
+  position: relative;
+}
+.group-wizard-member-trigger {
+  width: 100%;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  padding: 8px 10px;
+  text-align: left;
+  cursor: pointer;
+}
+.group-wizard-member-trigger:hover,
+.group-wizard-member-trigger.is-open {
+  border-color: var(--border-hover);
+  background: var(--sidebar-hover);
+}
+.group-wizard-member-trigger:focus {
+  outline: none;
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+.group-wizard-member-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.group-wizard-member-summary.is-empty {
+  color: var(--text-muted);
+}
+.group-wizard-member-arrow {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+.group-wizard-folder-picker {
+  max-width: 560px;
+}
+
+.group-wizard-roster-dropdown {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  max-height: 240px;
+  padding: 4px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
 /* Roster list (step 1) ----------------------------------------------------- */
 .group-wizard-roster-list {
   list-style: none;

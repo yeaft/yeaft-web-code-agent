@@ -5,8 +5,9 @@
  * already handles N=1 fan-out). This single-screen modal replaces the
  * old chat / group split in the create-entry surface:
  *   - Name input (optional — agent derives a default if empty)
- *   - VP multi-picker (Omni pre-checked; user can pick more)
- *   - Create button → store.createYeaftSession({ displayName, vpIds })
+ *   - Work dir input (optional — placeholder mirrors the chat work-dir default)
+ *   - Collapsed VP multi-picker (Omni pre-checked; user can pick more)
+ *   - Create button → store.createYeaftSession({ displayName, vpIds, workDir })
  *
  * Visual vocabulary mirrors GroupCreateWizard (overlay + body + actions)
  * so the look-and-feel stays consistent. All colours pulled from
@@ -41,7 +42,24 @@ export default {
             />
           </label>
 
-          <div class="group-wizard-field">
+          <label class="group-wizard-field">
+            <span class="group-wizard-field-label">{{ $t('yeaft.session.create.workDirLabel') }}</span>
+            <span class="group-wizard-workdir-row">
+              <input
+                type="text"
+                v-model.trim="form.workDir"
+                :placeholder="workDirPlaceholder"
+                autocomplete="off"
+                class="group-wizard-input"
+                @keydown.enter.prevent="onSubmit"
+              />
+              <button class="group-wizard-browse-btn" type="button" @click="openFolderPicker" :disabled="!folderPickerAgentId" :title="$t('modal.newConv.browse')">
+                <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
+              </button>
+            </span>
+          </label>
+
+          <div class="group-wizard-field group-wizard-member-picker" ref="memberPicker">
             <span class="group-wizard-field-label">{{ $t('yeaft.session.create.vpPicker') }}</span>
             <div v-if="vpList.length === 0 && vpLibraryEmpty" class="group-wizard-empty">
               {{ $t('yeaft.session.wizard.rosterEmpty') }}
@@ -49,27 +67,42 @@ export default {
             <div v-else-if="vpList.length === 0" class="group-wizard-empty group-wizard-empty-loading">
               {{ $t('yeaft.session.wizard.rosterLoading') }}
             </div>
-            <ul v-else class="group-wizard-roster-list" role="listbox" aria-multiselectable="true">
-              <li
-                v-for="vp in vpList"
-                :key="vp.vpId"
-                class="group-wizard-roster-item"
-                :class="{ 'is-selected': form.vpIds.includes(vp.vpId) }"
-                role="option"
-                :aria-selected="form.vpIds.includes(vp.vpId)"
+            <template v-else>
+              <button
+                type="button"
+                class="group-wizard-member-trigger"
+                :class="{ 'is-open': memberPickerOpen }"
+                :aria-expanded="memberPickerOpen ? 'true' : 'false'"
+                aria-haspopup="listbox"
+                @click="toggleMemberPicker"
               >
-                <label class="group-wizard-roster-row">
-                  <input
-                    type="checkbox"
-                    class="group-wizard-roster-check"
-                    :value="vp.vpId"
-                    :checked="form.vpIds.includes(vp.vpId)"
-                    @change="toggleVp(vp.vpId, $event.target.checked)"
-                  />
-                  <span class="group-wizard-roster-name" :style="{ color: vpTextColorFor(vp.vpId) }">{{ vpLabelFor(vp.vpId) }}</span>
-                </label>
-              </li>
-            </ul>
+                <span class="group-wizard-member-summary" :class="{ 'is-empty': form.vpIds.length === 0 }">
+                  {{ memberSummary }}
+                </span>
+                <svg class="group-wizard-member-arrow" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
+              </button>
+              <ul v-if="memberPickerOpen" class="group-wizard-roster-list group-wizard-roster-dropdown" role="listbox" aria-multiselectable="true">
+                <li
+                  v-for="vp in vpList"
+                  :key="vp.vpId"
+                  class="group-wizard-roster-item"
+                  :class="{ 'is-selected': form.vpIds.includes(vp.vpId) }"
+                  role="option"
+                  :aria-selected="form.vpIds.includes(vp.vpId)"
+                >
+                  <label class="group-wizard-roster-row">
+                    <input
+                      type="checkbox"
+                      class="group-wizard-roster-check"
+                      :value="vp.vpId"
+                      :checked="form.vpIds.includes(vp.vpId)"
+                      @change="toggleVp(vp.vpId, $event.target.checked)"
+                    />
+                    <span class="group-wizard-roster-name" :style="{ color: vpTextColorFor(vp.vpId) }">{{ vpLabelFor(vp.vpId) }}</span>
+                  </label>
+                </li>
+              </ul>
+            </template>
           </div>
 
           <div v-if="submitError" class="group-wizard-error" role="alert">
@@ -89,6 +122,41 @@ export default {
               {{ busy ? $t('yeaft.session.wizard.creating') : $t('yeaft.session.create.submit') }}
             </button>
           </div>
+
+          <div v-if="folderPickerOpen" class="folder-picker-overlay" @click.self="closeFolderPicker">
+            <div class="folder-picker-dialog group-wizard-folder-picker">
+              <div class="folder-picker-header">
+                <span>{{ $t('modal.folderPicker.title') }}</span>
+                <button class="wb-btn-sm" type="button" @click="closeFolderPicker">&times;</button>
+              </div>
+              <div class="folder-picker-path">
+                <button class="wb-btn-sm" type="button" @click="folderPickerNavigateUp" :disabled="!folderPickerPath" :title="$t('modal.folderPicker.parentDir')">
+                  <svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+                </button>
+                <span class="folder-picker-current">{{ folderPickerPath || $t('common.rootDir') }}</span>
+              </div>
+              <div class="folder-picker-list">
+                <div class="git-loading" v-if="folderPickerLoading" style="padding:12px"><span class="spinner-mini"></span> {{ $t('common.loading') }}</div>
+                <template v-else>
+                  <div
+                    v-for="entry in folderPickerEntries"
+                    :key="entry.name"
+                    class="tree-item tree-dir folder-picker-item"
+                    :class="{ 'folder-picker-selected': folderPickerSelected === entry.name }"
+                    @click="folderPickerSelectItem(entry)"
+                    @dblclick="folderPickerEnter(entry)"
+                  >
+                    <span class="tree-icon"><svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg></span>
+                    <span class="tree-name">{{ entry.name }}</span>
+                  </div>
+                  <div class="tree-empty" v-if="folderPickerEntries.length === 0">{{ $t('common.noSubdirectories') }}</div>
+                </template>
+              </div>
+              <div class="folder-picker-footer">
+                <button class="modern-btn primary" type="button" @click="confirmFolderPicker" :disabled="!folderPickerPath">{{ $t('common.confirm') }}</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -105,7 +173,14 @@ export default {
         // back to the first available VP so the submit always produces a
         // session with at least one real roster member.
         vpIds: [],
+        workDir: '',
       },
+      memberPickerOpen: false,
+      folderPickerOpen: false,
+      folderPickerPath: '',
+      folderPickerEntries: [],
+      folderPickerLoading: false,
+      folderPickerSelected: '',
       busy: false,
       submitError: '',
       // Track whether the user has manually touched the picker; once true
@@ -127,11 +202,24 @@ export default {
       return null;
     },
     vpList() { return this.vpStore?.vpList || []; },
+    folderPickerAgentId() { return this.chat?.yeaftAgentId || this.chat?.currentAgent || ''; },
     vpLibraryEmpty() {
       const s = this.vpStore;
       if (!s) return false;
       if (s.emptyLibrary === true) return true;
       return !!(s.lastSnapshotAt && s.lastSnapshotAt > 0 && (s.vpOrder?.length || 0) === 0);
+    },
+    defaultWorkDir() {
+      return this.chat?.currentAgentInfo?.workDir || '';
+    },
+    workDirPlaceholder() {
+      return this.defaultWorkDir || this.$t('modal.newConv.inputOrSelect');
+    },
+    memberSummary() {
+      const count = this.form.vpIds.length;
+      if (count === 0) return this.$t('yeaft.session.create.selectMembers');
+      if (count <= 3) return this.form.vpIds.map(id => this.vpLabelFor(id)).join(this.$t('common.comma'));
+      return this.$t('yeaft.session.create.membersSelected', { count });
     },
     canSubmit() { return this.form.vpIds.length > 0; },
   },
@@ -149,8 +237,10 @@ export default {
         }
       }
     } catch (_) {}
-    // Apply default selection synchronously if vpList already populated.
+    // Apply default member selection synchronously if stores are already populated.
     this.applyDefaultSelection();
+    document.addEventListener('click', this.onDocumentClick);
+    window.addEventListener('workbench-message', this.handleFolderPickerMessage);
   },
   watch: {
     // Re-apply default selection once vpList hydrates (snapshot arrives
@@ -159,6 +249,9 @@ export default {
   },
   beforeUnmount() {
     window.removeEventListener('keydown', this.onEsc);
+    document.removeEventListener('click', this.onDocumentClick);
+    window.removeEventListener('workbench-message', this.handleFolderPickerMessage);
+    if (this._folderPickerTimer) clearTimeout(this._folderPickerTimer);
   },
   methods: {
     applyDefaultSelection() {
@@ -169,7 +262,115 @@ export default {
       const hasOmni = list.some(vp => vp && vp.vpId === OMNI_VP_ID);
       this.form.vpIds = [hasOmni ? OMNI_VP_ID : list[0].vpId];
     },
-    onEsc(e) { if (e.key === 'Escape' && !this.busy) this.requestClose(); },
+    toggleMemberPicker() { this.memberPickerOpen = !this.memberPickerOpen; },
+    openFolderPicker() {
+      const agentId = this.folderPickerAgentId;
+      if (!agentId || !this.chat || typeof this.chat.sendWsMessage !== 'function') return;
+      this.folderPickerOpen = true;
+      this.folderPickerSelected = '';
+      this.folderPickerLoading = true;
+      const defaultDir = this.form.workDir || this.defaultWorkDir || '';
+      this.folderPickerPath = defaultDir;
+      this.folderPickerEntries = [];
+      this.requestFolderPickerDir(defaultDir);
+    },
+    closeFolderPicker() {
+      this.folderPickerOpen = false;
+      if (this._folderPickerTimer) {
+        clearTimeout(this._folderPickerTimer);
+        this._folderPickerTimer = null;
+      }
+    },
+    requestFolderPickerDir(dirPath) {
+      const agentId = this.folderPickerAgentId;
+      if (!agentId || !this.chat || typeof this.chat.sendWsMessage !== 'function') return;
+      this.chat.sendWsMessage({
+        type: 'list_directory',
+        conversationId: '_yeaft_session_workdir_picker',
+        agentId,
+        dirPath,
+        workDir: this.defaultWorkDir || '',
+      });
+      if (this._folderPickerTimer) clearTimeout(this._folderPickerTimer);
+      this._folderPickerTimer = setTimeout(() => {
+        if (this.folderPickerLoading && this.folderPickerOpen) this.requestFolderPickerDir(dirPath);
+      }, 5000);
+    },
+    loadFolderPickerDir(dirPath) {
+      this.folderPickerLoading = true;
+      this.folderPickerSelected = '';
+      this.folderPickerEntries = [];
+      this.requestFolderPickerDir(dirPath);
+    },
+    folderPickerNavigateUp() {
+      if (!this.folderPickerPath) return;
+      const isWin = this.folderPickerPath.includes('\\');
+      const sep = isWin ? '\\' : '/';
+      const parts = this.folderPickerPath.replace(/[/\\]$/, '').split(/[/\\]/);
+      parts.pop();
+      if (parts.length === 0) {
+        this.folderPickerPath = '';
+        this.loadFolderPickerDir('');
+      } else if (isWin && parts.length === 1 && /^[A-Za-z]:$/.test(parts[0])) {
+        this.folderPickerPath = parts[0] + '\\';
+        this.loadFolderPickerDir(this.folderPickerPath);
+      } else {
+        const parent = parts.join(sep);
+        this.folderPickerPath = parent;
+        this.loadFolderPickerDir(parent);
+      }
+    },
+    folderPickerSelectItem(entry) {
+      this.folderPickerSelected = entry.name;
+    },
+    folderPickerEnter(entry) {
+      const isWin = this.folderPickerPath.includes('\\') || /^[A-Z]:/.test(entry.name);
+      const sep = isWin ? '\\' : '/';
+      let newPath;
+      if (!this.folderPickerPath) {
+        newPath = /^[A-Z]:$/.test(entry.name) ? entry.name + '\\' : '/' + entry.name;
+      } else {
+        newPath = this.folderPickerPath.replace(/[/\\]$/, '') + sep + entry.name;
+      }
+      this.folderPickerPath = newPath;
+      this.loadFolderPickerDir(newPath);
+    },
+    confirmFolderPicker() {
+      let path = this.folderPickerPath;
+      if (!path) return;
+      if (this.folderPickerSelected) {
+        const sep = path.includes('\\') ? '\\' : '/';
+        path = path.replace(/[/\\]$/, '') + sep + this.folderPickerSelected;
+      }
+      this.form.workDir = path;
+      this.closeFolderPicker();
+    },
+    handleFolderPickerMessage(event) {
+      const msg = event.detail;
+      if (!msg || msg.type !== 'directory_listing' || msg.conversationId !== '_yeaft_session_workdir_picker') return;
+      if (this._folderPickerTimer) {
+        clearTimeout(this._folderPickerTimer);
+        this._folderPickerTimer = null;
+      }
+      this.folderPickerLoading = false;
+      this.folderPickerEntries = (msg.entries || [])
+        .filter(e => e.type === 'directory')
+        .sort((a, b) => a.name.localeCompare(b.name));
+      if (msg.dirPath != null) this.folderPickerPath = msg.dirPath;
+    },
+    onDocumentClick(e) {
+      if (!this.memberPickerOpen) return;
+      const root = this.$refs.memberPicker;
+      if (root && !root.contains(e.target)) this.memberPickerOpen = false;
+    },
+    onEsc(e) {
+      if (e.key !== 'Escape') return;
+      if (this.memberPickerOpen) {
+        this.memberPickerOpen = false;
+        return;
+      }
+      if (!this.busy) this.requestClose();
+    },
     onOverlayClick() { if (!this.busy) this.requestClose(); },
     requestClose() { this.$emit('close'); },
     toggleVp(vpId, checked) {
@@ -209,6 +410,7 @@ export default {
         const res = await this.chat.createYeaftSession({
           displayName: this.form.name.trim(),
           vpIds: submittedVpIds,
+          workDir: this.form.workDir.trim(),
         });
         if (res && res.ok) {
           this.$emit('created', res.group);
