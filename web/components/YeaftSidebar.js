@@ -126,8 +126,9 @@ export default {
                     </button>
                   </div>
                 </div>
-                <div class="session-info" v-if="groupSubtitle(s.raw)">
-                  <span class="session-path">{{ groupSubtitle(s.raw) }}</span>
+                <div class="session-info" v-if="groupSubtitle(s.raw) || sessionAgentName(s.raw)">
+                  <span class="session-path" v-if="groupSubtitle(s.raw)">{{ groupSubtitle(s.raw) }}</span>
+                  <span class="session-agent" v-if="sessionAgentName(s.raw)">{{ sessionAgentName(s.raw) }}</span>
                 </div>
               </div>
             </template>
@@ -326,8 +327,31 @@ export default {
     },
     onSelectGroup(g) {
       if (!g || !g.id) return;
+      // Cross-agent routing: when selecting a session owned by an agent
+      // other than the currently-selected one, switch the chat store's
+      // active agent so subsequent CRUD/messaging hits the owning agent.
+      // Go through the store action (not bare assignment) so any side
+      // effects in selectAgent (caches, subscriptions) stay in sync.
+      if (g.agentId && this.chatStore && this.chatStore.currentAgent !== g.agentId) {
+        if (typeof this.chatStore.selectAgent === 'function') {
+          this.chatStore.selectAgent(g.agentId);
+        } else {
+          this.chatStore.currentAgent = g.agentId;
+        }
+      }
       if (this.sessionsStore) this.sessionsStore.setActive(g.id);
       this.$emit('select-group', g);
+    },
+    // Per-row agent badge — only shown when 2+ agents are online, to
+    // avoid clutter in the common single-agent setup.
+    sessionAgentName(g) {
+      if (!g || !g.agentId) return '';
+      if (this.onlineAgents.length < 2) return '';
+      const s = this.chatStore || this.store;
+      if (!s || !Array.isArray(s.agents)) return '';
+      const agent = s.agents.find(a => a && a.id === g.agentId);
+      if (!agent) return '';
+      return String(agent.name || agent.id || '');
     },
     // task-yeaft-group-editor: ⚙ button on each group row opens the
     // unified SessionSettingsModal (announcement / members / rename /

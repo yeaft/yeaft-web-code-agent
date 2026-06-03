@@ -374,6 +374,10 @@ export async function handleAgentOutput(agentId, agent, msg) {
           await sendToWebClient(c, {
             type: 'yeaft_output',
             conversationId: msg.conversationId,
+            // Stamp the source agent so the web sessions store can keep
+            // per-agent rosters (cross-agent listing in the unified
+            // sidebar). Older web bundles ignore the extra field.
+            agentId: agent.id,
             ...(msg.groupId != null ? { groupId: msg.groupId } : {}),
             ...(msg.vpId != null ? { vpId: msg.vpId } : {}),
             ...(msg.turnId != null ? { turnId: msg.turnId } : {}),
