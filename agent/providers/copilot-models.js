@@ -17,7 +17,7 @@
  */
 
 import { spawn } from 'child_process';
-import { randomUUID } from 'crypto';
+import { AcpClient } from './acp-client.js';
 
 // Curated fallback — last resort if no ACP cache and no live probe works.
 // Vendor inferred from id prefix when missing.
@@ -87,47 +87,40 @@ export function cacheCopilotModelsFromAcp(availableModels) {
  */
 function _probeAcpModels() {
   return new Promise((resolve, reject) => {
+    let child;
+    let client;
     let done = false;
     const finish = (err, models) => {
       if (done) return;
       done = true;
-      try { child.kill('SIGTERM'); } catch {}
+      clearTimeout(timer);
+      try { client?.close(); } catch {}
+      try { child?.kill('SIGTERM'); } catch {}
       if (err) reject(err); else resolve(models || []);
     };
-    let child;
     try {
       child = spawn('copilot', ['--acp'], { stdio: ['pipe', 'pipe', 'pipe'] });
     } catch (e) { return reject(e); }
     const timer = setTimeout(() => finish(new Error('ACP probe timeout')), PROBE_TIMEOUT_MS);
-    child.on('error', (e) => { clearTimeout(timer); finish(e); });
-    child.on('exit', () => { clearTimeout(timer); if (!done) finish(new Error('ACP child exited')); });
-
-    let buf = '';
-    let nextId = 0;
-    const send = (msg) => {
-      try { child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: ++nextId, ...msg }) + '\n'); } catch (e) { finish(e); }
-    };
-    child.stdout.on('data', (d) => {
-      buf += d.toString();
-      let idx;
-      while ((idx = buf.indexOf('\n')) !== -1) {
-        const line = buf.slice(0, idx); buf = buf.slice(idx + 1);
-        if (!line.trim()) continue;
-        let msg;
-        try { msg = JSON.parse(line); } catch { continue; }
-        if (msg.id === 1 && msg.result) {
-          send({ method: 'session/new', params: { cwd: process.cwd(), mcpServers: [] } });
-        } else if (msg.id === 2 && msg.result) {
-          clearTimeout(timer);
-          finish(null, msg.result?.models?.availableModels || []);
-        } else if (msg.error) {
-          clearTimeout(timer);
-          finish(new Error(`ACP error: ${msg.error.message || JSON.stringify(msg.error)}`));
-        }
-      }
-    });
+    child.on('error', (e) => finish(e));
+    child.on('exit', () => finish(new Error('ACP child exited')));
     child.stderr.on('data', () => { /* swallow */ });
-    send({ method: 'initialize', params: { protocolVersion: 1, clientCapabilities: {} } });
+
+    client = new AcpClient({
+      stdin: child.stdin,
+      stdout: child.stdout,
+      onError: (e) => finish(e),
+    });
+
+    (async () => {
+      try {
+        await client.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+        const r = await client.request('session/new', { cwd: process.cwd(), mcpServers: [] });
+        finish(null, r?.models?.availableModels || []);
+      } catch (e) {
+        finish(e);
+      }
+    })();
   });
 }
 

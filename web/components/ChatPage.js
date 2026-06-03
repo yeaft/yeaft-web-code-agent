@@ -547,7 +547,7 @@ export default {
                 </button>
                 <div class="copilot-model-panel" v-if="copilotModelOpen" @click.stop>
                   <div class="copilot-model-search" v-if="copilotModelOptions.length > 5">
-                    <input type="text" v-model="copilotModelSearch" :placeholder="$t('common.search') || 'Search…'" ref="copilotModelSearchInput">
+                    <input type="text" v-model="copilotModelSearch" :placeholder="$t('common.search') || 'Search…'" ref="copilotModelSearchInput" @keydown.esc="copilotModelOpen = false">
                   </div>
                   <div class="copilot-model-group" v-for="group in copilotModelGroups" :key="group.vendor">
                     <div class="copilot-model-group-label">{{ group.vendor || $t('modal.newConv.other') || 'Other' }}</div>
@@ -870,6 +870,11 @@ export default {
     crewSessionCount() {
       return this.store.conversations.filter(c => c.type === 'crew' && c.agentOnline !== false).length;
     }
+  },
+  watch: {
+    copilotModelOpen(v) {
+      if (v) this.$nextTick(() => { this.$refs.copilotModelSearchInput?.focus(); });
+    },
   },
   methods: {
     pickCopilotModel(m) {
