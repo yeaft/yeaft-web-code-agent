@@ -2703,3 +2703,175 @@
   }
 }
 
+
+/* ===== Copilot model picker ===== */
+.copilot-model-picker {
+  position: relative;
+  width: 100%;
+}
+.copilot-model-trigger {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.copilot-model-trigger:hover { border-color: var(--accent-blue); }
+.copilot-model-trigger.is-open {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.12);
+}
+.copilot-model-trigger-main {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+.copilot-model-trigger-vendor {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+.copilot-model-trigger-name {
+  font-size: 14px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.copilot-model-trigger-meta {
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--sidebar-hover);
+  flex-shrink: 0;
+}
+.copilot-model-caret {
+  color: var(--text-muted);
+  transition: transform 0.15s;
+  flex-shrink: 0;
+}
+.copilot-model-trigger.is-open .copilot-model-caret { transform: rotate(180deg); }
+
+.copilot-model-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 200;
+  max-height: 360px;
+  overflow-y: auto;
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+  padding: 6px;
+}
+.copilot-model-search {
+  padding: 6px;
+  position: sticky;
+  top: -6px;
+  background: var(--bg-input);
+  z-index: 1;
+}
+.copilot-model-search input {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-input-wrapper);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.copilot-model-search input:focus {
+  outline: none;
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.12);
+}
+.copilot-model-group + .copilot-model-group { margin-top: 4px; }
+.copilot-model-group-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  padding: 8px 10px 4px;
+}
+.copilot-model-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+  color: var(--text-primary);
+  text-align: left;
+  transition: background 0.1s;
+}
+.copilot-model-card:hover { background: var(--sidebar-hover); }
+.copilot-model-card.is-selected { background: var(--session-active); }
+.copilot-model-card-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.copilot-model-card-tags {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.copilot-model-tag {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.copilot-model-tag.tag-low {
+  background: rgba(34, 197, 94, 0.14);
+  color: rgb(22, 163, 74);
+}
+.copilot-model-tag.tag-medium {
+  background: rgba(59, 130, 246, 0.14);
+  color: rgb(37, 99, 235);
+}
+.copilot-model-tag.tag-high {
+  background: rgba(249, 115, 22, 0.16);
+  color: rgb(234, 88, 12);
+}
+.copilot-model-tag.tag-preview {
+  background: rgba(168, 85, 247, 0.14);
+  color: rgb(147, 51, 234);
+}
+[data-theme="dark"] .copilot-model-tag.tag-low { color: rgb(74, 222, 128); }
+[data-theme="dark"] .copilot-model-tag.tag-medium { color: rgb(96, 165, 250); }
+[data-theme="dark"] .copilot-model-tag.tag-high { color: rgb(251, 146, 60); }
+[data-theme="dark"] .copilot-model-tag.tag-preview { color: rgb(192, 132, 252); }
+.copilot-model-check {
+  color: var(--accent-blue);
+  flex-shrink: 0;
+}
+.copilot-model-empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}

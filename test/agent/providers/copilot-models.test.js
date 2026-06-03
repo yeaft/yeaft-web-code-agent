@@ -1,61 +1,72 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-describe('copilot-models — listCopilotModels', () => {
-  beforeEach(() => {
+describe('copilot-models', () => {
+  beforeEach(async () => {
     vi.resetModules();
-  });
-
-  it('returns mapped picker-enabled chat models from /models', async () => {
-    vi.doMock('../../../agent/yeaft/llm/credentials/github-copilot.js', () => ({
-      getApiToken: async () => ({ token: 'tok', source: 'test', exchanged: true }),
-      resolveRawToken: async () => ({ token: 'tok', source: 'test' }),
-      validateRawToken: () => ({ valid: true }),
-      copilotRequestHeaders: () => ({ 'X-T': '1' }),
-    }));
-    const fetchMock = vi.fn(async () => ({
-      ok: true,
-      json: async () => ({ data: [
-        { id: 'claude-sonnet-4.5', name: 'Claude Sonnet 4.5', vendor: 'Anthropic', model_picker_enabled: true, capabilities: { type: 'chat', family: 'claude-sonnet-4.5' } },
-        { id: 'gpt-5', name: 'GPT-5', vendor: 'OpenAI', model_picker_enabled: true, capabilities: { type: 'chat', family: 'gpt-5' }, preview: true },
-        { id: 'text-embedding-3', name: 'Embed', model_picker_enabled: true, capabilities: { type: 'embeddings' } }, // wrong type
-        { id: 'gpt-3.5', name: 'GPT-3.5', model_picker_enabled: false, capabilities: { type: 'chat' } },             // not picker-enabled
-      ] }),
-    }));
-    globalThis.fetch = fetchMock;
     const m = await import('../../../agent/providers/copilot-models.js');
     m._resetCopilotModelsCacheForTests();
-    const out = await m.listCopilotModels();
-    expect(out).toEqual([
-      { id: 'claude-sonnet-4.5', label: 'Claude Sonnet 4.5', vendor: 'Anthropic', preview: false, family: 'claude-sonnet-4.5' },
-      { id: 'gpt-5',             label: 'GPT-5',             vendor: 'OpenAI',    preview: true,  family: 'gpt-5' },
+  });
+
+  it('_normalizeAcpModel maps ACP model entries with metadata', async () => {
+    const m = await import('../../../agent/providers/copilot-models.js');
+    const out = m._normalizeAcpModelForTests({
+      modelId: 'claude-sonnet-4.5',
+      name: 'Claude Sonnet 4.5',
+      _meta: {
+        copilotUsage: '1x',
+        copilotPriceCategory: 'medium',
+        copilotEnablement: 'enabled',
+      },
+    });
+    expect(out).toEqual({
+      id: 'claude-sonnet-4.5',
+      label: 'Claude Sonnet 4.5',
+      vendor: 'Anthropic',
+      usage: '1x',
+      priceCategory: 'medium',
+      enablement: 'enabled',
+    });
+  });
+
+  it('_normalizeAcpModel skips the "auto" sentinel', async () => {
+    const m = await import('../../../agent/providers/copilot-models.js');
+    expect(m._normalizeAcpModelForTests({ modelId: 'auto', name: 'Auto' })).toBe(null);
+  });
+
+  it('_normalizeAcpModel infers vendor from id prefix', async () => {
+    const m = await import('../../../agent/providers/copilot-models.js');
+    expect(m._normalizeAcpModelForTests({ modelId: 'gpt-5' }).vendor).toBe('OpenAI');
+    expect(m._normalizeAcpModelForTests({ modelId: 'gemini-2.5-pro' }).vendor).toBe('Google');
+    expect(m._normalizeAcpModelForTests({ modelId: 'claude-opus-4.5' }).vendor).toBe('Anthropic');
+    expect(m._normalizeAcpModelForTests({ modelId: 'mystery-1' }).vendor).toBe('');
+  });
+
+  it('cacheCopilotModelsFromAcp primes the cache so listCopilotModels returns it without probing', async () => {
+    const m = await import('../../../agent/providers/copilot-models.js');
+    m.cacheCopilotModelsFromAcp([
+      { modelId: 'claude-sonnet-4.5', name: 'Claude Sonnet 4.5', _meta: { copilotUsage: '1x', copilotPriceCategory: 'medium' } },
+      { modelId: 'gpt-5', name: 'GPT-5', _meta: { copilotUsage: '1x', copilotPriceCategory: 'medium' } },
+      { modelId: 'auto', name: 'Auto' },
     ]);
+    const out = await m.listCopilotModels();
+    expect(out.map(x => x.id)).toEqual(['claude-sonnet-4.5', 'gpt-5']);
+    expect(out[0].usage).toBe('1x');
   });
 
-  it('falls back to static list when no auth available', async () => {
-    vi.doMock('../../../agent/yeaft/llm/credentials/github-copilot.js', () => ({
-      getApiToken: async () => null,
-      resolveRawToken: async () => null,
-      validateRawToken: () => ({ valid: false }),
-      copilotRequestHeaders: () => ({}),
-    }));
+  it('cacheCopilotModelsFromAcp ignores empty/invalid input', async () => {
     const m = await import('../../../agent/providers/copilot-models.js');
-    m._resetCopilotModelsCacheForTests();
+    m.cacheCopilotModelsFromAcp([]);
+    m.cacheCopilotModelsFromAcp(null);
+    m.cacheCopilotModelsFromAcp([{ name: 'no id' }]); // no modelId
+    // Cache still cold — falls back to static list (probe will fail since `copilot` likely not on PATH in CI; either way we get a non-empty result).
     const out = await m.listCopilotModels();
     expect(out.length).toBeGreaterThan(0);
-    expect(out).toEqual(m.FALLBACK_COPILOT_MODELS.slice());
   });
 
-  it('falls back when /models returns non-OK', async () => {
-    vi.doMock('../../../agent/yeaft/llm/credentials/github-copilot.js', () => ({
-      getApiToken: async () => ({ token: 'tok', source: 'test', exchanged: true }),
-      resolveRawToken: async () => ({ token: 'tok', source: 'test' }),
-      validateRawToken: () => ({ valid: true }),
-      copilotRequestHeaders: () => ({}),
-    }));
-    globalThis.fetch = vi.fn(async () => ({ ok: false, status: 500, text: async () => 'boom' }));
+  it('exposes FALLBACK_COPILOT_MODELS and DEFAULT_COPILOT_MODEL', async () => {
     const m = await import('../../../agent/providers/copilot-models.js');
-    m._resetCopilotModelsCacheForTests();
-    const out = await m.listCopilotModels();
-    expect(out).toEqual(m.FALLBACK_COPILOT_MODELS.slice());
+    expect(Array.isArray(m.FALLBACK_COPILOT_MODELS)).toBe(true);
+    expect(m.FALLBACK_COPILOT_MODELS.length).toBeGreaterThan(0);
+    expect(typeof m.DEFAULT_COPILOT_MODEL).toBe('string');
   });
 });

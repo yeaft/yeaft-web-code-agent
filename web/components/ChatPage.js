@@ -509,30 +509,67 @@ export default {
             </button>
             <div class="resume-control-row">
               <label class="resume-control-label">Agent</label>
-              <modern-select
-                v-model="convModalAgent"
-                :options="agentOptions"
-                :placeholder="$t('chat.agent.select')"
-                @change="onConvModalAgentChange"
-              />
+              <div class="resume-select-wrapper">
+                <select v-model="convModalAgent" @change="onConvModalAgentChange" class="resume-select">
+                  <option value="">{{ $t('chat.agent.select') }}</option>
+                  <option v-for="agent in onlineAgents" :key="agent.id" :value="agent.id">
+                    {{ agent.name }}{{ agent.latency ? ' (' + agent.latency + 'ms)' : '' }}
+                  </option>
+                </select>
+                <svg class="select-arrow" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
+              </div>
             </div>
             <div class="resume-control-row" v-if="convModalAgent">
               <label class="resume-control-label">{{ $t('modal.newConv.provider') }}</label>
-              <modern-select
-                v-model="convModalProvider"
-                :options="providerOptions"
-                @change="onConvModalProviderChange"
-              />
+              <div class="resume-select-wrapper">
+                <select v-model="convModalProvider" @change="onConvModalProviderChange" class="resume-select">
+                  <option value="claude-code">{{ $t('provider.claudeCode') }}</option>
+                  <option value="copilot">{{ $t('provider.copilot') }}</option>
+                </select>
+                <svg class="select-arrow" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
+              </div>
             </div>
             <div class="resume-control-row" v-if="convModalAgent && convModalProvider === 'copilot'">
               <label class="resume-control-label">{{ $t('modal.newConv.model') }}</label>
-              <modern-select
-                v-model="convModalCopilotModel"
-                :options="copilotModelOptions"
-                :loading="store.providerModelsLoading"
-                :searchable="copilotModelOptions.length > 6"
-                :empty-text="$t('modal.newConv.modelEmpty') || 'No models'"
-              />
+              <div class="copilot-model-picker">
+                <button
+                  type="button"
+                  class="copilot-model-trigger"
+                  @click="copilotModelOpen = !copilotModelOpen"
+                  :class="{ 'is-open': copilotModelOpen }"
+                >
+                  <span class="copilot-model-trigger-main">
+                    <span class="copilot-model-trigger-vendor" v-if="selectedCopilotModel?.vendor">{{ selectedCopilotModel.vendor }}</span>
+                    <span class="copilot-model-trigger-name">{{ selectedCopilotModel?.label || convModalCopilotModel || '—' }}</span>
+                  </span>
+                  <span class="copilot-model-trigger-meta" v-if="selectedCopilotModel?.usage">{{ selectedCopilotModel.usage }}</span>
+                  <svg class="copilot-model-caret" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
+                </button>
+                <div class="copilot-model-panel" v-if="copilotModelOpen" @click.stop>
+                  <div class="copilot-model-search" v-if="copilotModelOptions.length > 5">
+                    <input type="text" v-model="copilotModelSearch" :placeholder="$t('common.search') || 'Search…'" ref="copilotModelSearchInput">
+                  </div>
+                  <div class="copilot-model-group" v-for="group in copilotModelGroups" :key="group.vendor">
+                    <div class="copilot-model-group-label">{{ group.vendor || $t('modal.newConv.other') || 'Other' }}</div>
+                    <button
+                      type="button"
+                      v-for="m in group.models"
+                      :key="m.id"
+                      class="copilot-model-card"
+                      :class="{ 'is-selected': m.id === convModalCopilotModel }"
+                      @click="pickCopilotModel(m)"
+                    >
+                      <span class="copilot-model-card-name">{{ m.label }}</span>
+                      <span class="copilot-model-card-tags">
+                        <span v-if="m.usage" class="copilot-model-tag" :class="'tag-' + (m.priceCategory || 'medium')">{{ m.usage }}</span>
+                        <span v-if="m.preview" class="copilot-model-tag tag-preview">preview</span>
+                      </span>
+                      <svg v-if="m.id === convModalCopilotModel" class="copilot-model-check" viewBox="0 0 20 20" width="14" height="14"><path fill="currentColor" d="M7.629 13.514L3.886 9.77 2.471 11.186l5.158 5.158L17.385 6.586l-1.414-1.414z"/></svg>
+                    </button>
+                  </div>
+                  <div v-if="!copilotModelGroups.length" class="copilot-model-empty">{{ $t('modal.newConv.modelEmpty') || 'No models' }}</div>
+                </div>
+              </div>
             </div>
             <div class="resume-control-row" v-if="convModalAgent && convModalProvider === 'copilot'">
               <label class="resume-control-label">{{ $t('modal.newConv.skipPermissions') }}</label>
@@ -698,6 +735,8 @@ export default {
       convModalProvider: 'claude-code',
       convModalCopilotModel: DEFAULT_COPILOT_MODEL,
       convModalCopilotAllowAll: false,
+      copilotModelOpen: false,
+      copilotModelSearch: '',
       selectedResumeSession: null,
       historyLoaded: false,
       windowWidth: window.innerWidth,
@@ -737,6 +776,32 @@ export default {
         sublabel: m.vendor ? (m.preview ? `${m.vendor} · Preview` : m.vendor) : (m.preview ? 'Preview' : ''),
         badge: m.preview ? 'preview' : null,
       }));
+    },
+    selectedCopilotModel() {
+      const id = this.convModalCopilotModel;
+      return this.copilotModels.find(m => m.id === id) || null;
+    },
+    copilotModelGroups() {
+      const q = (this.copilotModelSearch || '').trim().toLowerCase();
+      const filtered = this.copilotModels.filter(m => {
+        if (!q) return true;
+        return (m.label || '').toLowerCase().includes(q)
+          || (m.id || '').toLowerCase().includes(q)
+          || (m.vendor || '').toLowerCase().includes(q);
+      });
+      const order = ['Anthropic', 'OpenAI', 'Google', ''];
+      const byVendor = new Map();
+      for (const m of filtered) {
+        const v = m.vendor || '';
+        if (!byVendor.has(v)) byVendor.set(v, []);
+        byVendor.get(v).push(m);
+      }
+      const groups = [];
+      for (const v of order) {
+        if (byVendor.has(v)) { groups.push({ vendor: v, models: byVendor.get(v) }); byVendor.delete(v); }
+      }
+      for (const [v, models] of byVendor) groups.push({ vendor: v, models });
+      return groups;
     },
     providerOptions() {
       return [
@@ -807,6 +872,11 @@ export default {
     }
   },
   methods: {
+    pickCopilotModel(m) {
+      this.convModalCopilotModel = m.id;
+      this.copilotModelOpen = false;
+      this.copilotModelSearch = '';
+    },
     sortByActivity(conversations) {
       return [...conversations].sort((a, b) => {
         // Sort by lastMessageAt (set when user sends a message), fall back to createdAt, descending
@@ -1361,6 +1431,9 @@ export default {
       }
       if (!e.target.closest('.session-dots-btn') && !e.target.closest('.session-menu')) {
         this.activeSessionMenu = null;
+      }
+      if (!e.target.closest('.copilot-model-picker')) {
+        this.copilotModelOpen = false;
       }
     };
     document.addEventListener('click', this._clickOutsideHandler);
