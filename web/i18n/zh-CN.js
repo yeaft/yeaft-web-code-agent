@@ -576,6 +576,7 @@ export default {
   'yeaft.session.create.nameLabel': '名称',
   'yeaft.session.create.namePlaceholder': '会话名称（可选）',
   'yeaft.session.create.workDirLabel': '工作目录',
+  'yeaft.session.create.agentLabel': 'Agent',
   'yeaft.session.create.vpPicker': '选择 VP',
   'yeaft.session.create.selectMembers': '选择成员',
   'yeaft.session.create.membersSelected': '已选择 {count} 名成员',

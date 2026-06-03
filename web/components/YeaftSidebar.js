@@ -52,11 +52,11 @@ export default {
           <span v-if="currentAgentLatency != null" class="us-latency" :class="getLatencyClass(currentAgentLatency)">{{ currentAgentLatency }}ms</span>
         </div>
         <div class="us-header-actions">
+          <button class="us-icon-btn active" :title="tr('yeaft.back', 'Back')" @click="$emit('back')">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M7 2v11h3v9l7-12h-4l4-8z"/></svg>
+          </button>
           <button class="us-icon-btn" :title="tr('chat.sidebar.collapse', 'Collapse')" @click="$emit('toggle-sidebar')">
             <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 18h13v-2H3v2zm0-5h10v-2H3v2zm0-7v2h13V6H3zm18 9.59L17.42 12 21 8.41 19.59 7l-5 5 5 5L21 15.59z"/></svg>
-          </button>
-          <button class="us-icon-btn" :title="tr('yeaft.back', 'Back')" @click="$emit('back')">
-            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
           </button>
           <button v-if="canUseWorkbench" class="us-icon-btn" :class="{ active: chatStore && chatStore.workbenchExpanded }" :title="tr('chat.sidebar.workbench', 'Workbench')" @click="onToggleWorkbench">
             <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M20 3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H4V5h16v14zM6 7h5v2H6V7zm0 4h5v2H6v-2zm0 4h5v2H6v-2zm7-8h5v10h-5V7z"/></svg>

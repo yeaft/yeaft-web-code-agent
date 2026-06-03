@@ -576,6 +576,7 @@ export default {
   'yeaft.session.create.nameLabel': 'Name',
   'yeaft.session.create.namePlaceholder': 'Session name (optional)',
   'yeaft.session.create.workDirLabel': 'Work Directory',
+  'yeaft.session.create.agentLabel': 'Agent',
   'yeaft.session.create.vpPicker': 'Choose VPs',
   'yeaft.session.create.selectMembers': 'Select members',
   'yeaft.session.create.membersSelected': '{count} members selected',
