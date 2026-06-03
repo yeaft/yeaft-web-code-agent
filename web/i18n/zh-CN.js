@@ -577,6 +577,7 @@ export default {
   'yeaft.session.create.namePlaceholder': '会话名称（可选）',
   'yeaft.session.create.vpPicker': '选择 VP',
   'yeaft.session.create.submit': '创建',
+  'yeaft.session.empty': '还没有会话，点击 + 新建一个。',
   'settings.llm.noAgent': '请先选择一个 Agent 以管理 LLM 配置。',
   'settings.llm.agentOffline': 'Agent 当前离线，无法加载 LLM 配置。请等待 Agent 上线后重试。',
   'settings.llm.loading': '正在加载配置...',

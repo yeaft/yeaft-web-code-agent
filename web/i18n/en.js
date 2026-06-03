@@ -577,6 +577,7 @@ export default {
   'yeaft.session.create.namePlaceholder': 'Session name (optional)',
   'yeaft.session.create.vpPicker': 'Choose VPs',
   'yeaft.session.create.submit': 'Create',
+  'yeaft.session.empty': 'No sessions yet. Click + to create one.',
   'settings.llm.noAgent': 'Please select an Agent first to manage LLM configuration.',
   'settings.llm.agentOffline': 'Agent is currently offline. LLM configuration will load when the agent comes online.',
   'settings.llm.loading': 'Loading configuration...',
