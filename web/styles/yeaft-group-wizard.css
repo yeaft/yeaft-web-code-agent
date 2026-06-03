@@ -2,7 +2,7 @@
    task-347: GroupCreateWizard — wizard-unique parts only.
 
    The outer shell (overlay / modal / header / title / close) reuses
-   GroupEditModal's `.group-edit-*` selectors from yeaft.css so the two
+   SessionEditModal's `.group-edit-*` selectors from yeaft.css so the two
    modals stay visually aligned. This file only defines the wizard's
    step-bar, roster list, default-vp list, summary chips, actions and
    helper text.

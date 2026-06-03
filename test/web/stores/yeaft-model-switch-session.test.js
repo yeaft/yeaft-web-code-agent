@@ -32,7 +32,7 @@ describe('chat store model switching', () => {
   it('persists header model selection to the active group config when groupId is provided', async () => {
     const store = makeStore();
     store.yeaftAgentId = 'agent-1';
-    store.groupCrudRequest = async (op, data) => ({ ok: true, op, groupId: data.groupId, config: data.config });
+    store.sessionCrudRequest = async (op, data) => ({ ok: true, op, groupId: data.groupId, config: data.config });
 
     const res = await store.switchYeaftModel('provider/model-a', 'grp-a');
 
@@ -58,12 +58,12 @@ describe('chat store model switching', () => {
   it('resolves group_crud_result with config so callers can observe persisted group model', () => {
     const store = makeStore();
     let resolved = null;
-    store._groupCrudPending = new Map([
+    store._sessionCrudPending = new Map([
       ['req-1', { resolve: (value) => { resolved = value; } }],
     ]);
     globalThis.window.Pinia = {
       ...globalThis.Pinia,
-      useGroupsStore: () => ({ applyCrudResult: () => {} }),
+      useSessionsStore: () => ({ applyCrudResult: () => {} }),
     };
 
     store.handleYeaftOutput({

@@ -133,7 +133,7 @@ export default {
     const authStore = Pinia.useAuthStore();
     const vpStore = Pinia.useVpStore();
     // task-338-F4: resolve groups store for Yeaft group-chat dispatch routing.
-    const groupsStore = (Pinia.useGroupsStore ? Pinia.useGroupsStore() : null);
+    const sessionsStore = (Pinia.useSessionsStore ? Pinia.useSessionsStore() : null);
     const inputText = Vue.ref('');
     const inputRef = Vue.ref(null);
     const fileInput = Vue.ref(null);
@@ -231,16 +231,16 @@ export default {
 
     // Group-scoped `@` autocomplete: only roster VPs are mentionable.
     // Active-group resolution mirrors YeaftPage's middle-column resolver
-    // (filter wins, then groupsStore.activeGroupId, then no group).
+    // (filter wins, then sessionsStore.activeSessionId, then no group).
     //
-    // TODO(arch): this `yeaftActiveGroupFilter || activeGroupId` chain is
+    // TODO(arch): this `yeaftActiveSessionFilter || activeSessionId` chain is
     //   duplicated in YeaftPage.js (timeline + topbar) and MessageList.js
-    //   (announcement bar). Consolidate into a `groupsStore.activeGroupIdResolved`
+    //   (announcement bar). Consolidate into a `sessionsStore.activeGroupIdResolved`
     //   getter and migrate all four call sites in a follow-up PR.
     const mentionVpCandidates = Vue.computed(() => {
-      if (!groupsStore) return vpStore.vpList || [];
-      const activeGroupId = store.yeaftActiveGroupFilter || groupsStore.activeGroupId || null;
-      return selectMentionCandidates(vpStore.vpList, groupsStore.groups?.[activeGroupId]);
+      if (!sessionsStore) return vpStore.vpList || [];
+      const activeSessionId = store.yeaftActiveSessionFilter || sessionsStore.activeSessionId || null;
+      return selectMentionCandidates(vpStore.vpList, sessionsStore.sessions?.[activeSessionId]);
     });
 
     const selectVpMention = (vp) => {
@@ -607,8 +607,8 @@ export default {
       // text so the agent path runs end-to-end.
       if (store.currentView === 'yeaft' && (trimmed || attachmentInfos.length > 0)) {
         const mentions = parseMentions(trimmed).mentions;
-        const groupId = store.yeaftActiveGroupFilter || groupsStore?.activeGroupId || 'grp_default';
-        store.sendYeaftGroupChat({
+        const groupId = store.yeaftActiveSessionFilter || sessionsStore?.activeSessionId || 'grp_default';
+        store.sendYeaftSessionMessage({
           groupId,
           text: trimmed,
           mentions,

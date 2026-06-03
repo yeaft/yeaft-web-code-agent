@@ -1,8 +1,8 @@
 /**
- * GroupInviteModal — task-334m prev-2 rev.
+ * SessionInviteModal — task-334m prev-2 rev.
  *
  * Shown whenever the active group has no default VP + empty roster
- * (i.e. `groupsStore.activeNeedsInvite === true`). Drives the hard-
+ * (i.e. `sessionsStore.activeNeedsInvite === true`). Drives the hard-
  * constraint (c) default-VP fallback path per R6 §Δ10.
  *
  * Two CTAs: "Open VP Library" (bubbles `open-library` up to YeaftPage
@@ -14,26 +14,26 @@
  */
 
 export default {
-  name: 'GroupInviteModal',
+  name: 'SessionInviteModal',
   emits: ['open-library', 'dismiss'],
   props: {
     groupName: { type: String, default: '' },
   },
   template: `
-    <div class="group-invite-overlay" @click.self="onDismiss" role="dialog" aria-modal="true" :aria-label="$t('yeaft.group.invite.title')">
+    <div class="group-invite-overlay" @click.self="onDismiss" role="dialog" aria-modal="true" :aria-label="$t('yeaft.session.invite.title')">
       <div class="group-invite-modal">
         <header class="group-invite-header">
-          <span class="group-invite-title">{{ $t('yeaft.group.invite.title') }}</span>
+          <span class="group-invite-title">{{ $t('yeaft.session.invite.title') }}</span>
         </header>
         <div class="group-invite-body">
-          <p>{{ $t('yeaft.group.invite.body', { name: groupName || '' }) }}</p>
+          <p>{{ $t('yeaft.session.invite.body', { name: groupName || '' }) }}</p>
         </div>
         <div class="group-invite-actions">
           <button type="button" class="group-invite-dismiss" @click="onDismiss">
-            {{ $t('yeaft.group.invite.dismiss') }}
+            {{ $t('yeaft.session.invite.dismiss') }}
           </button>
           <button type="button" class="group-invite-primary" @click="onOpen">
-            {{ $t('yeaft.group.invite.openLibrary') }}
+            {{ $t('yeaft.session.invite.openLibrary') }}
           </button>
         </div>
       </div>

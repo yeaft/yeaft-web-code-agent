@@ -1,5 +1,5 @@
 /* ============================================================
- * GroupInviteModal — empty-group "Invite a VP" prompt.
+ * SessionInviteModal — empty-group "Invite a VP" prompt.
  *
  * Visual language matches `.modal-overlay` / `.modal` in
  * chat-modals.css but stays self-contained so the component

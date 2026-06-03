@@ -3,8 +3,8 @@ import MessageList from './MessageList.js';
 import SettingsPanel from './SettingsPanel.js';
 import YeaftSidebar from './YeaftSidebar.js';
 import VpDetailView from './VpDetailView.js';
-import GroupInviteModal from './GroupInviteModal.js';
-import GroupSettingsModal from './GroupSettingsModal.js';
+import SessionInviteModal from './SessionInviteModal.js';
+import SessionSettingsModal from './SessionSettingsModal.js';
 import WorkbenchPanel from './WorkbenchPanel.js';
 import YeaftDebugPanel from './YeaftDebugPanel.js';
 import VpTimelinePane from './VpTimelinePane.js';
@@ -18,7 +18,7 @@ import {
 
 export default {
   name: 'YeaftPage',
-  components: { ChatInput, MessageList, SettingsPanel, YeaftSidebar, VpDetailView, GroupInviteModal, GroupSettingsModal, WorkbenchPanel, YeaftDebugPanel, VpTimelinePane },
+  components: { ChatInput, MessageList, SettingsPanel, YeaftSidebar, VpDetailView, SessionInviteModal, SessionSettingsModal, WorkbenchPanel, YeaftDebugPanel, VpTimelinePane },
   template: `
     <div class="yeaft-page">
       <!-- Mobile sidebar overlay -->
@@ -84,7 +84,7 @@ export default {
             <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>
           </button>
 
-        <!-- task-339-F1: GroupSelector removed from topbar — groups now surface via sidebar section. -->
+        <!-- task-339-F1: SessionSelector removed from topbar — groups now surface via sidebar section. -->
 
           <!-- Model selector (compact dropdown in topbar) -->
           <div class="yeaft-topbar-model" @click="toggleModelDropdown" :title="$t('yeaft.switchModel')">
@@ -129,8 +129,8 @@ export default {
               v-if="topbarGroup"
               class="yeaft-topbar-group-settings"
               @click="openTopbarGroupSettings"
-              :title="$t('yeaft.group.settings.title', { name: topbarGroupName })"
-              :aria-label="$t('yeaft.group.settings.title', { name: topbarGroupName })"
+              :title="$t('yeaft.session.settings.title', { name: topbarGroupName })"
+              :aria-label="$t('yeaft.session.settings.title', { name: topbarGroupName })"
             >
               <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
             </button>
@@ -252,12 +252,12 @@ export default {
           <div class="yeaft-empty-group-hero__icon" aria-hidden="true">
             <svg viewBox="0 0 24 24" width="28" height="28"><path fill="currentColor" d="M16 11c1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3 1.34 3 3 3zm-8 0c1.66 0 3-1.34 3-3S9.66 5 8 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5C15 14.17 10.33 13 8 13zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
           </div>
-          <h2 class="yeaft-empty-group-hero__title">{{ $t('yeaft.group.empty.title') }}</h2>
+          <h2 class="yeaft-empty-group-hero__title">{{ $t('yeaft.session.empty.title') }}</h2>
           <p class="yeaft-empty-group-hero__hint">
-            {{ $t('yeaft.group.empty.hint', { name: inviteGroupName || '' }) }}
+            {{ $t('yeaft.session.empty.hint', { name: inviteGroupName || '' }) }}
           </p>
           <button type="button" class="yeaft-empty-group-hero__cta" @click="onInviteOpenLibrary">
-            {{ $t('yeaft.group.empty.cta') }}
+            {{ $t('yeaft.session.empty.cta') }}
           </button>
         </div>
         <MessageList v-if="!showSettings && !store.yeaftActiveVpDetailId && !isActiveGroupEmpty" @open-group-settings="openGroupSettings" />
@@ -309,19 +309,19 @@ export default {
       <!-- task-fix-group-member-editor: invite modal CTA now opens the
            group's member editor directly (the previous flow dumped the
            user into VP-Settings, where there was no add-to-group UI). -->
-      <GroupInviteModal
+      <SessionInviteModal
         v-if="shouldShowInviteModal"
         :group-name="inviteGroupName"
         @open-library="onInviteOpenLibrary"
         @dismiss="onInviteDismiss"
       />
 
-      <!-- task-fix-group-member-editor → unified GroupSettingsModal: a
+      <!-- task-fix-group-member-editor → unified SessionSettingsModal: a
            single dialog (announcement / members / rename / danger) owned
            at this level so the empty-group hero CTA, the sidebar ⚙
            button, the invite-modal CTA, and the legacy openMemberEditor
            shim all converge here. -->
-      <GroupSettingsModal
+      <SessionSettingsModal
         v-if="groupSettingsOpen && groupSettingsId"
         :group-id="groupSettingsId"
         :initial-section="groupSettingsSection"
@@ -369,7 +369,7 @@ export default {
     const onSelectGroupV2 = (g) => {
       const id = g && g.id ? g.id : null;
       if (!id) return;
-      store.setActiveGroupFilter(id);
+      store.setActiveSessionFilter(id);
       // Also leave the VP detail view so the main stream is visible.
       if (store.yeaftActiveVpDetailId) store.leaveVpDetailView();
       if (isMobile.value) sidebarCollapsed.value = true;
@@ -554,25 +554,25 @@ export default {
       // If the active group has no roster + no defaultVpId, surface the
       // invite modal instead of sending a message that would round-trip
       // a `no_default_vp` error back as a silent toast.
-      const gs = groupsStore();
+      const gs = sessionsStore();
       if (gs && gs.activeNeedsInvite) {
-        const g = gs.activeGroup;
+        const g = gs.activeSession;
         if (g) inviteDismissedFor.delete(g.id); // force show
         return;
       }
       // Yeaft is conceptually a single conversation backed by a group.
       // The main pane filter is the authoritative group currently on screen;
-      // groupsStore.activeGroupId is only the fallback. Keeping send-path
+      // sessionsStore.activeSessionId is only the fallback. Keeping send-path
       // resolution aligned with the visible filter prevents quick group
       // switches from stamping a message with a different group's id.
-      const groupId = store.yeaftActiveGroupFilter || (gs && gs.activeGroupId) || 'grp_default';
+      const groupId = store.yeaftActiveSessionFilter || (gs && gs.activeSessionId) || 'grp_default';
       const mentions = parseMentions(text).mentions;
       // Attachments: ChatInput's custom-send path passes the resolved
       // info list as the second arg. We forward it untouched — the
       // store helper strips `fileId` shape for the wire and keeps the
       // preview/name/mimeType on the local message render.
       const attachments = Array.isArray(attachmentInfos) ? attachmentInfos : undefined;
-      store.sendYeaftGroupChat({ groupId, text, mentions, attachments });
+      store.sendYeaftSessionMessage({ groupId, text, mentions, attachments });
     };
 
     // Bug 5: ChatInput's default cancel triggers Chat-mode cancel_execution,
@@ -598,7 +598,7 @@ export default {
       window.location.reload();
     };
 
-    // groupsStore + topbarGroup must be declared BEFORE dreamButtonVpId.
+    // sessionsStore + topbarGroup must be declared BEFORE dreamButtonVpId.
     // The chain that hits TDZ otherwise:
     //   Vue.watch(dreamLastRunAt, …) eagerly resolves its source during
     //   setup → dreamLastRunAt.value reads dreamStatusEntry.value →
@@ -606,9 +606,9 @@ export default {
     // If topbarGroup is declared later in setup() the last step throws
     // "ReferenceError: Cannot access 'topbarGroup' before initialization"
     // and the component fails to mount, blanking out the page.
-    const groupsStore = () => {
+    const sessionsStore = () => {
       try {
-        return window.Pinia?.useGroupsStore?.() || null;
+        return window.Pinia?.useSessionsStore?.() || null;
       } catch { return null; }
     };
     // task-fix-mobile-group-settings: surface a group ⚙ in the topbar
@@ -616,15 +616,15 @@ export default {
     // collapses to a slide-over on mobile, hover-reveal affordances
     // don't exist on touch, and the announcement bar may not be
     // visible if the active group has none. Resolve the group from the
-    // groups store the same way `sendMessage` does (filter > activeGroupId
+    // groups store the same way `sendMessage` does (filter > activeSessionId
     // > grp_default fallback) so the gear targets whatever is on screen.
     const topbarGroup = Vue.computed(() => {
-      const gs = groupsStore();
-      if (!gs || !gs.groups) return null;
-      const filterId = store.yeaftActiveGroupFilter || null;
-      if (filterId && gs.groups[filterId]) return gs.groups[filterId];
-      if (gs.activeGroupId && gs.groups[gs.activeGroupId]) return gs.groups[gs.activeGroupId];
-      return gs.groups['grp_default'] || null;
+      const gs = sessionsStore();
+      if (!gs || !gs.sessions) return null;
+      const filterId = store.yeaftActiveSessionFilter || null;
+      if (filterId && gs.sessions[filterId]) return gs.sessions[filterId];
+      if (gs.activeSessionId && gs.sessions[gs.activeSessionId]) return gs.sessions[gs.activeSessionId];
+      return gs.sessions['grp_default'] || null;
     });
 
     const topbarModel = Vue.computed(() => {
@@ -782,7 +782,7 @@ export default {
     };
 
     // task-343: VP library lives inside Settings as a tab. Helper to open
-    // Settings at a specific tab (used by GroupInviteModal CTA).
+    // Settings at a specific tab (used by SessionInviteModal CTA).
     const openSettings = ({ initialTab = 'llm' } = {}) => {
       settingsInitialTab.value = initialTab === 'vp' ? 'vp' : 'llm';
       showSettings.value = true;
@@ -796,8 +796,8 @@ export default {
     // correctly re-surfaces the invite on the next empty state).
     const inviteDismissedFor = Vue.reactive(new Set());
     const activeGroupForInvite = Vue.computed(() => {
-      const gs = groupsStore();
-      return gs ? gs.activeGroup : null;
+      const gs = sessionsStore();
+      return gs ? gs.activeSession : null;
     });
     // D1 seed sentinel: translate raw 'Default' on grp_default via global
     // i18n. Used by `inviteGroupName` and the topbar ⚙ label so the two
@@ -808,7 +808,7 @@ export default {
         try {
           const globalI18n = (typeof window !== 'undefined') ? window.i18n : null;
           if (globalI18n && globalI18n.global && typeof globalI18n.global.t === 'function') {
-            return globalI18n.global.t('yeaft.group.defaultName');
+            return globalI18n.global.t('yeaft.session.defaultName');
           }
         } catch (_) {}
       }
@@ -818,9 +818,9 @@ export default {
       () => resolveGroupDisplayName(activeGroupForInvite.value),
     );
     const shouldShowInviteModal = Vue.computed(() => {
-      const gs = groupsStore();
+      const gs = sessionsStore();
       if (!gs || !gs.activeNeedsInvite) return false;
-      const g = gs.activeGroup;
+      const g = gs.activeSession;
       if (!g) return false;
       // Skip if the user already dismissed THIS empty-roster state.
       return !inviteDismissedFor.has(g.id);
@@ -829,7 +829,7 @@ export default {
     // hero state stays visible even after the user dismisses the modal —
     // the empty group still needs a clear next step in the main pane.
     const isActiveGroupEmpty = Vue.computed(() => {
-      const gs = groupsStore();
+      const gs = sessionsStore();
       return !!(gs && gs.activeNeedsInvite);
     });
     const onInviteOpenLibrary = () => {
@@ -838,7 +838,7 @@ export default {
       // task-fix-group-member-editor: open the in-place member editor
       // for the current group instead of routing through VP Settings.
       // The "open-library" event name is preserved for backwards-compat
-      // with GroupInviteModal's emits but the destination has changed.
+      // with SessionInviteModal's emits but the destination has changed.
       openMemberEditor(g ? g.id : null);
     };
     const onInviteDismiss = () => {
@@ -885,7 +885,7 @@ export default {
       openGroupSettings({ groupId: g.id, section: 'announcement' });
     };
     // I6: closeMemberEditor shim was unused — dropped. openMemberEditor
-    // remains because GroupInviteModal's "open library" CTA still calls
+    // remains because SessionInviteModal's "open library" CTA still calls
     // it (see line 622, onInviteOpenLibrary).
     // Re-arm the prompt whenever the active roster transitions back to
     // empty (i.e. after the user removed the last member), so the modal
@@ -937,8 +937,8 @@ export default {
       // The VP timeline is ALWAYS roster-scoped — no group means no
       // rows. This matches the user's mental model: the middle column
       // is "this group's roster", not "every VP in the library".
-      const gs = groupsStore();
-      const filter = store.yeaftActiveGroupFilter || gs?.activeGroupId || null;
+      const gs = sessionsStore();
+      const filter = store.yeaftActiveSessionFilter || gs?.activeSessionId || null;
       if (!filter) return [];
 
       const group = gs?.groups?.[filter] ?? null;

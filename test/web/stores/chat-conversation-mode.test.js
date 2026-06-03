@@ -79,7 +79,7 @@ describe('Chat-mode conversation messages', () => {
     store.activeConversations = ['chat-1'];
     store.conversations = [{ id: 'chat-1', agentId: 'agent-1', type: 'chat', workDir: '/repo' }];
     store.yeaftConversationId = 'yeaft-1';
-    store.yeaftActiveGroupFilter = 'grp_fun';
+    store.yeaftActiveSessionFilter = 'grp_fun';
 
     store.sendMessageToConversation('chat-1', 'hello chat', [], {});
 
@@ -90,7 +90,7 @@ describe('Chat-mode conversation messages', () => {
       conversationId: 'chat-1',
       workDir: '/repo',
     }));
-    expect(store.sent[0].type).not.toBe('yeaft_group_chat');
+    expect(store.sent[0].type).not.toBe('yeaft_session_send');
     expect(store.messagesMap['chat-1'].some(m => m.type === 'user' && m.content === 'hello chat')).toBe(true);
   });
 });

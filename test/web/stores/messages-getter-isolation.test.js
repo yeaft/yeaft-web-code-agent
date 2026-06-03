@@ -98,8 +98,8 @@ describe('store getters — Yeaft isolation via selectActiveConversationId', () 
   function getMessages(state) {
     const convId = selectActiveConversationId(state);
     const raw = convId ? (state.messagesMap[convId] || EMPTY) : EMPTY;
-    if (state.currentView === 'yeaft' && state.yeaftActiveGroupFilter) {
-      return raw.filter(m => m && m.groupId === state.yeaftActiveGroupFilter);
+    if (state.currentView === 'yeaft' && state.yeaftActiveSessionFilter) {
+      return raw.filter(m => m && m.groupId === state.yeaftActiveSessionFilter);
     }
     return raw;
   }
@@ -109,7 +109,7 @@ describe('store getters — Yeaft isolation via selectActiveConversationId', () 
       currentView: 'yeaft',
       activeConversations: ['chat-A'],
       yeaftConversationId: 'yeaft-1',
-      yeaftActiveGroupFilter: null,
+      yeaftActiveSessionFilter: null,
       messagesMap: {
         'chat-A': [{ id: 'leaked' }],
         'yeaft-1': [{ id: 'u1' }],
@@ -123,7 +123,7 @@ describe('store getters — Yeaft isolation via selectActiveConversationId', () 
       currentView: 'yeaft',
       activeConversations: ['chat-A'],
       yeaftConversationId: 'yeaft-1',
-      yeaftActiveGroupFilter: 'grp_alpha',
+      yeaftActiveSessionFilter: 'grp_alpha',
       messagesMap: {
         // Same groupId on the leaked side — strict equality alone
         // would let it through; the selector is what blocks it.
