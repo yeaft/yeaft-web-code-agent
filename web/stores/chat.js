@@ -132,6 +132,8 @@ export const useChatStore = defineStore('chat', {
     // 可用的工作目录列表
     folders: [],
     foldersLoading: false,
+    providerModels: [],
+    providerModelsLoading: false,
     // Context 用量
     contextUsage: null,
     // 上次使用的 agent 和 session（持久化）
@@ -2931,7 +2933,8 @@ export const useChatStore = defineStore('chat', {
     clearLastSession() { sessionHelpers.clearLastSession(this); },
     listHistorySessions(workDir) { sessionHelpers.listHistorySessions(this, workDir); },
     listFolders() { return sessionHelpers.listFolders(this); },
-    listFoldersForAgent(agentId) { return sessionHelpers.listFoldersForAgent(this, agentId); },
+    listFoldersForAgent(agentId, provider) { return sessionHelpers.listFoldersForAgent(this, agentId, provider); },
+    listModelsForAgent(agentId, provider) { return sessionHelpers.listModelsForAgent(this, agentId, provider); },
     listHistorySessionsForAgent(agentId, workDir) { sessionHelpers.listHistorySessionsForAgent(this, agentId, workDir); },
     async loadGlobalSessions(limit = 20) { return sessionHelpers.loadGlobalSessions(this, limit); },
     async deleteGlobalSession(sessionId) { return sessionHelpers.deleteGlobalSession(this, sessionId); },

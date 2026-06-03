@@ -252,3 +252,32 @@ export async function handleListFolders(msg) {
     });
   }
 }
+
+// 列出指定 provider 下可选 model
+export async function handleListModels(msg) {
+  const { requestId, _requestClientId, provider } = msg;
+  const providerName = provider || DEFAULT_PROVIDER;
+  try {
+    const driver = getProvider(providerName);
+    let models = [];
+    if (typeof driver.listModels === 'function') {
+      models = await driver.listModels();
+    }
+    ctx.sendToServer({
+      type: 'models_list',
+      requestId,
+      _requestClientId,
+      provider: providerName,
+      models: Array.isArray(models) ? models : [],
+    });
+  } catch (e) {
+    ctx.sendToServer({
+      type: 'models_list',
+      requestId,
+      _requestClientId,
+      provider: providerName,
+      models: [],
+      error: e.message,
+    });
+  }
+}

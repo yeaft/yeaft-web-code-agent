@@ -1,5 +1,6 @@
 /* CSS Entry Point - imports all style modules */
 @import './variables.css';
+@import './modern-select.css';
 @import './login.css';
 @import './sidebar.css';
 @import './chat.css';

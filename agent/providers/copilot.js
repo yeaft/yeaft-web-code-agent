@@ -6,7 +6,7 @@ import { join } from 'path';
 import { DatabaseSync } from 'node:sqlite';
 import ctx from '../context.js';
 import { AcpClient } from './acp-client.js';
-import { COPILOT_MODELS, DEFAULT_COPILOT_MODEL } from './copilot-models.js';
+import { listCopilotModels, DEFAULT_COPILOT_MODEL } from './copilot-models.js';
 
 export const name = 'copilot';
 
@@ -582,9 +582,12 @@ function _knownCopilotTools() {
   ];
 }
 
-/** Exported for the model picker UI. */
-export function listModels() {
-  return COPILOT_MODELS.slice();
+/**
+ * Exported for the model picker UI. Async — hits Copilot's /models endpoint
+ * (cached) and falls back to a static list if auth/network fails.
+ */
+export async function listModels() {
+  return await listCopilotModels();
 }
 
 export default { name, capabilities, start, sendInput, abort, clear, listFolders, listSessions, loadHistory, listModels, respondToPermissionRequest };
