@@ -166,7 +166,7 @@ export default {
     },
     vpTextColorFor(vpId) {
       const fn = this.vpStore?.vpTextColor;
-      return typeof fn === 'function' ? fn(vpId) : 'var(--vp-avatar-rat-fg)';
+      return typeof fn === 'function' ? fn(vpId) : 'var(--text-primary)';
     },
     async onSubmit() {
       if (this.busy || !this.canSubmit) return;
