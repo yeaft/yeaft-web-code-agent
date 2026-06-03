@@ -619,3 +619,20 @@
   color: var(--text-muted);
   line-height: 1.5;
 }
+
+/* ===== Parity with Chat/Crew sidebar (task: yeaft session list parity) =====
+   The session-* classes from sidebar.css are reused directly. We strip the
+   .us-scroll padding so .session-tab-bar / .session-panel-list can sit
+   edge-to-edge, matching Chat. */
+.yeaft-sidebar .us-scroll.us-scroll-flush {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.yeaft-sidebar .session-empty-hint {
+  padding: 24px 8px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
