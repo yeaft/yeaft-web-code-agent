@@ -117,6 +117,8 @@ export default {
   'chat.agent.online': '{count} Agent(s) online',
   'chat.agent.selectFirst': 'Please select an Agent first',
   'chat.agent.yeaft': 'Yeaft Chat',
+  'sidebar.toggle.chat': 'Switch to Chat',
+  'sidebar.toggle.yeaft': 'Switch to Yeaft',
 
   // ============ Yeaft Page ============
   'yeaft.back': 'Back',

@@ -10,6 +10,7 @@ import SubAgentPanel from './SubAgentPanel.js';
 import BtwOverlay from './BtwOverlay.js';
 import SplitPane from './SplitPane.js';
 import ModernSelect from './ModernSelect.js';
+import SidebarModeToggle from './SidebarModeToggle.js';
 import { useAuthStore } from '../stores/auth.js';
 
 // Static fallback for the Copilot model picker — mirrors the CLI's own
@@ -37,7 +38,7 @@ const DEFAULT_COPILOT_MODEL = 'claude-sonnet-4.5';
 
 export default {
   name: 'ChatPage',
-  components: { ChatHeader, MessageList, ChatInput, WorkbenchPanel, SettingsPanel, CrewConfigPanel, CrewChatView, ExpertPanel, SubAgentPanel, BtwOverlay, SplitPane, ModernSelect },
+  components: { ChatHeader, MessageList, ChatInput, WorkbenchPanel, SettingsPanel, CrewConfigPanel, CrewChatView, ExpertPanel, SubAgentPanel, BtwOverlay, SplitPane, ModernSelect, SidebarModeToggle },
   template: `
     <div class="chat-page" :class="{ 'show-sidebar': showMobileSidebar }">
 
@@ -123,14 +124,11 @@ export default {
               </div>
             </div>
             <div class="sidebar-header-actions">
-              <button
-                class="sidebar-icon-btn"
-                @click="store.enterYeaft()"
+              <SidebarModeToggle
+                :view="store.currentView"
                 :disabled="onlineAgentCount === 0"
-                :title="$t('chat.agent.yeaft')"
-              >
-                <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M7 2v11h3v9l7-12h-4l4-8z"/></svg>
-              </button>
+                @flip="onModeFlip"
+              />
               <button class="sidebar-icon-btn" @click="store.toggleSidebar()" :title="$t('chat.sidebar.collapse')">
                 <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 18h13v-2H3v2zm0-5h10v-2H3v2zm0-7v2h13V6H3zm18 9.59L17.42 12 21 8.41 19.59 7l-5 5 5 5L21 15.59z"/></svg>
               </button>
@@ -877,6 +875,13 @@ export default {
     },
   },
   methods: {
+    onModeFlip(target) {
+      if (target === 'yeaft') {
+        this.store.enterYeaft();
+      } else {
+        this.store.leaveYeaft();
+      }
+    },
     pickCopilotModel(m) {
       this.convModalCopilotModel = m.id;
       this.copilotModelOpen = false;
