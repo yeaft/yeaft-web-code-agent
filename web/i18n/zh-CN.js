@@ -1141,6 +1141,8 @@ export default {
   'yeaft.group.deletingEllipsis': '删除中…',
   'yeaft.group.rename': '重命名',
   'yeaft.group.manageMembers': '管理成员',
+  'yeaft.group.memberCount.one': '1 位成员',
+  'yeaft.group.memberCount.other': '{count} 位成员',
   'yeaft.group.renamePrompt': '为「{name}」输入新名称：',
   'yeaft.group.renamingEllipsis': '重命名中…',
 

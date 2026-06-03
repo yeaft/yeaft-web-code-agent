@@ -1142,6 +1142,8 @@ export default {
   'yeaft.group.deleteConfirm': 'Delete "{name}"? This permanently removes the group and all its data — this cannot be undone.',
   'yeaft.group.rename': 'Rename',
   'yeaft.group.manageMembers': 'Manage members',
+  'yeaft.group.memberCount.one': '1 member',
+  'yeaft.group.memberCount.other': '{count} members',
   'yeaft.group.renamePrompt': 'New name for "{name}":',
 
   // Edit modal (N1 — replaces window.prompt/confirm)

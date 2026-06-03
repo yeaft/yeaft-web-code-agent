@@ -368,11 +368,9 @@ export default {
     groupSubtitle(g) {
       if (!g) return '';
       const n = Array.isArray(g.roster) ? g.roster.length : 0;
-      if (n === 0) return this.$t('yeaft.group.empty') || this.$t('yeaft.session.empty') || '';
+      if (n === 0) return this.$t('yeaft.group.empty.title');
       const key = n === 1 ? 'yeaft.group.memberCount.one' : 'yeaft.group.memberCount.other';
-      const v = this.$t(key, { count: n });
-      if (v && v !== key) return v;
-      return n === 1 ? '1 member' : `${n} members`;
+      return this.$t(key, { count: n });
     },
     // task-334m prev-2 rev: per-row kebab + rename/delete wiring.
     openGroupMenu(g, evt) {
@@ -385,7 +383,7 @@ export default {
       this.groupMenu = { open: true, groupId: g.id };
       // Close on next outside click.
       const close = (ev) => {
-        if (ev && ev.target && ev.target.closest && ev.target.closest('.us-group-row-menu')) return;
+        if (ev && ev.target && ev.target.closest && ev.target.closest('.session-menu')) return;
         this.groupMenu = { open: false, groupId: null };
         window.removeEventListener('click', close, true);
       };
