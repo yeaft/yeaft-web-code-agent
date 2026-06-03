@@ -60,31 +60,70 @@ export const useSessionsStore = defineStore('sessions', {
   },
 
   actions: {
-    /** Replace the whole collection from `group_list_updated`. */
-    applySnapshot(sessions) {
+    /**
+     * Replace the slice of sessions owned by `agentId` from a
+     * `group_list_updated` / `session_list_updated` snapshot. Sessions
+     * from other agents are kept untouched, so the unified sidebar can
+     * aggregate sessions across all online agents.
+     *
+     * When `agentId` is missing (older agent that hasn't been upgraded
+     * to stamp it), falls back to the legacy whole-store replacement
+     * for back-compat.
+     */
+    applySnapshot(sessions, agentId = null) {
       const arr = Array.isArray(sessions) ? sessions : [];
-      const nextMap = {};
-      const nextOrder = [];
-      for (const s of arr) {
-        if (!s || !s.id) continue;
-        nextMap[s.id] = this._normalize(s);
-        nextOrder.push(s.id);
+      if (!agentId) {
+        // Legacy path — single-agent stores.
+        const nextMap = {};
+        const nextOrder = [];
+        for (const s of arr) {
+          if (!s || !s.id) continue;
+          nextMap[s.id] = this._normalize(s, null);
+          nextOrder.push(s.id);
+        }
+        this.sessions = nextMap;
+        this.sessionOrder = nextOrder;
+      } else {
+        // Per-agent replacement: drop only rows owned by this agent,
+        // then merge in the new ones, preserving snapshot order.
+        const nextMap = { ...this.sessions };
+        const incomingIds = new Set();
+        for (const s of arr) {
+          if (!s || !s.id) continue;
+          incomingIds.add(s.id);
+          nextMap[s.id] = this._normalize(s, agentId);
+        }
+        // Remove this agent's previously-known sessions that aren't in
+        // the new snapshot (handles delete / archive).
+        for (const id of this.sessionOrder) {
+          const prev = this.sessions[id];
+          if (prev && prev.agentId === agentId && !incomingIds.has(id)) {
+            delete nextMap[id];
+          }
+        }
+        // Recompute order: keep prior ordering for other-agent rows,
+        // then append this agent's snapshot in incoming order.
+        const otherAgents = this.sessionOrder.filter(id => {
+          const prev = this.sessions[id];
+          return prev && prev.agentId !== agentId && nextMap[id];
+        });
+        const thisAgent = arr.map(s => s.id).filter(id => nextMap[id]);
+        this.sessions = nextMap;
+        this.sessionOrder = [...otherAgents, ...thisAgent];
       }
-      this.sessions = nextMap;
-      this.sessionOrder = nextOrder;
       this.lastSnapshotAt = Date.now();
-      if (this.activeSessionId && !nextMap[this.activeSessionId]) {
-        this.activeSessionId = nextOrder[0] || null;
-      } else if (!this.activeSessionId && nextOrder.length > 0) {
-        this.activeSessionId = nextOrder[0];
+      if (this.activeSessionId && !this.sessions[this.activeSessionId]) {
+        this.activeSessionId = this.sessionOrder[0] || null;
+      } else if (!this.activeSessionId && this.sessionOrder.length > 0) {
+        this.activeSessionId = this.sessionOrder[0];
       }
       // Sanitize the chat store's parallel filter so a persisted
       // yeaftActiveSessionFilter pointing at a now-deleted session does not
       // render the main pane as empty until the user clicks.
       try {
         const chat = window.Pinia?.useChatStore?.();
-        if (chat && chat.yeaftActiveSessionFilter && !nextMap[chat.yeaftActiveSessionFilter]) {
-          chat.yeaftActiveSessionFilter = nextOrder[0] || null;
+        if (chat && chat.yeaftActiveSessionFilter && !this.sessions[chat.yeaftActiveSessionFilter]) {
+          chat.yeaftActiveSessionFilter = this.sessionOrder[0] || null;
         }
       } catch (_) {}
     },
@@ -116,7 +155,7 @@ export const useSessionsStore = defineStore('sessions', {
     },
 
     /** Record a `group_crud_result` for UI feedback. */
-    applyCrudResult(result) {
+    applyCrudResult(result, agentId = null) {
       if (!result) return;
       this.lastCrudResult = { ...result, at: Date.now() };
       if (result.requestId && this.pending[result.requestId]) {
@@ -124,7 +163,7 @@ export const useSessionsStore = defineStore('sessions', {
       }
       const session = result.session || result.group || null;
       if (result.ok && result.op === 'create' && session && session.id) {
-        this.applySnapshotUpsert(session);
+        this.applySnapshotUpsert(session, agentId);
         this.activeSessionId = session.id;
       }
       const opSessionId = result.sessionId || result.groupId;
@@ -147,12 +186,13 @@ export const useSessionsStore = defineStore('sessions', {
     },
 
     /** Insert or merge a single session record. */
-    applySnapshotUpsert(session) {
+    applySnapshotUpsert(session, agentId = null) {
       if (!session || !session.id) return;
       const existed = !!this.sessions[session.id];
+      const effectiveAgentId = agentId || (this.sessions[session.id] && this.sessions[session.id].agentId) || null;
       this.sessions[session.id] = {
         ...(this.sessions[session.id] || {}),
-        ...this._normalize(session),
+        ...this._normalize(session, effectiveAgentId),
       };
       if (!existed) this.sessionOrder.push(session.id);
     },
@@ -175,7 +215,7 @@ export const useSessionsStore = defineStore('sessions', {
       this.lastCrudResult = null;
     },
 
-    _normalize(s) {
+    _normalize(s, agentId = null) {
       return {
         id: s.id,
         name: s.name || s.id,
@@ -185,6 +225,11 @@ export const useSessionsStore = defineStore('sessions', {
         config: s.config && typeof s.config === 'object' ? { ...s.config } : {},
         workDir: typeof s.workDir === 'string' ? s.workDir : '',
         createdAt: s.createdAt || null,
+        // Cross-agent unified sidebar: each row stamped with the
+        // owning agent so the UI can render the agent badge + route
+        // CRUD ops to the right agent. May be null on the legacy
+        // single-agent path.
+        agentId: agentId || s.agentId || null,
       };
     },
   },

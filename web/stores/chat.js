@@ -1585,7 +1585,12 @@ export const useChatStore = defineStore('chat', {
         case 'group_list_updated': {
           const gs = window.Pinia?.useSessionsStore?.() || (window.__useSessionsStore && window.__useSessionsStore());
           const prevGroupId = gs ? (gs.activeSessionId || null) : null;
-          if (gs) gs.applySnapshot(event.groups);
+          // msg.agentId is stamped on yeaft_output envelopes by the
+          // server relay (since v0.1.882). Pass it through so the
+          // sessions store can keep per-agent rosters in the unified
+          // sidebar. Older agents/servers omit the field — the store
+          // falls back to the legacy whole-replacement path.
+          if (gs) gs.applySnapshot(event.groups, msg.agentId || null);
           const newGroupId = gs ? (gs.activeSessionId || null) : null;
           // Bug 1: after enterYeaft the group snapshot may arrive *after*
           // initial history load (which happened with groupId:null), so
@@ -1602,7 +1607,7 @@ export const useChatStore = defineStore('chat', {
         }
         case 'group_crud_result': {
           const gs = window.Pinia?.useSessionsStore?.() || (window.__useSessionsStore && window.__useSessionsStore());
-          if (gs) gs.applyCrudResult(event);
+          if (gs) gs.applyCrudResult(event, msg.agentId || null);
           const pending = this._sessionCrudPending && this._sessionCrudPending.get(event.requestId);
           if (pending) {
             this._sessionCrudPending.delete(event.requestId);
