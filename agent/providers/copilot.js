@@ -6,7 +6,7 @@ import { join } from 'path';
 import { DatabaseSync } from 'node:sqlite';
 import ctx from '../context.js';
 import { AcpClient } from './acp-client.js';
-import { listCopilotModels, DEFAULT_COPILOT_MODEL } from './copilot-models.js';
+import { listCopilotModels, DEFAULT_COPILOT_MODEL, cacheCopilotModelsFromAcp } from './copilot-models.js';
 
 export const name = 'copilot';
 
@@ -179,6 +179,7 @@ async function _bootAcp(state, resumeSessionId, model) {
     state.sessionId = resumeSessionId;
     state.claudeSessionId = resumeSessionId;
     if (Array.isArray(r?.modes?.availableModes)) state.acpModes = r.modes.availableModes;
+    if (Array.isArray(r?.models?.availableModels)) cacheCopilotModelsFromAcp(r.models.availableModels);
   } else {
     if (resumeSessionId && !state.acpCapabilities.loadSession) {
       // Surface the downgrade — silently handing back a fresh session would
@@ -196,6 +197,7 @@ async function _bootAcp(state, resumeSessionId, model) {
     state.sessionId = r?.sessionId || randomUUID();
     state.claudeSessionId = state.sessionId;
     if (Array.isArray(r?.modes?.availableModes)) state.acpModes = r.modes.availableModes;
+    if (Array.isArray(r?.models?.availableModels)) cacheCopilotModelsFromAcp(r.models.availableModels);
   }
 
   // 3) Emit a system_init envelope so the UI populates tools / model panels.

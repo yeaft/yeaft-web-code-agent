@@ -1,26 +1,26 @@
 /**
  * Copilot model list.
  *
- * The Copilot CLI accepts `--model <id>` and the agent-facing API exposes
- * `GET https://api.githubcopilot.com/models` — the same endpoint VS Code's
- * model picker uses. We hit it on demand (cached in-process for 10 min),
- * filter to picker-enabled chat models, and fall back to a curated static
- * list if the network call fails (so the UI never shows an empty picker).
+ * Source of truth (in order): another module can prime the in-process cache
+ * by calling `cacheCopilotModelsFromAcp(availableModels)` after a successful
+ * `session/new` — that response carries the full model list the CLI itself
+ * would show in its `/model` picker, including pricing/usage metadata. If
+ * the cache is cold when `listCopilotModels()` is called (e.g. the model
+ * picker is opened before any Copilot conversation has started), we spawn
+ * a one-shot `copilot --acp` child, do the `initialize` + `session/new`
+ * handshake to get the same list, then close. Falls back to a static curated
+ * list if even that fails.
  *
- * Auth re-uses the existing `agent/yeaft/llm/credentials/github-copilot.js`
- * credential pipeline — gh CLI / env / persisted OAuth all work; the user
- * does not need to paste an API key as long as Copilot CLI is logged in.
+ * Why ACP and not the HTTP `/models` endpoint: the HTTP endpoint is gated
+ * by org policy on enterprise accounts and frequently returns only legacy
+ * models. ACP `session/new` always returns the real per-account picker list.
  */
 
-import { getApiToken, copilotRequestHeaders, validateRawToken, resolveRawToken } from '../yeaft/llm/credentials/github-copilot.js';
-import { readFile } from 'fs/promises';
-import { homedir } from 'os';
-import { join } from 'path';
+import { spawn } from 'child_process';
+import { AcpClient } from './acp-client.js';
 
-// Curated fallback — mirrors the CLI's own hardcoded default model list
-// (`jF` in @github/copilot/app.js@1.0.59). Used when /models is unavailable
-// or when org policy hides the picker list at the API (some enterprise orgs
-// gate it). `--model <id>` still accepts these IDs at chat time.
+// Curated fallback — last resort if no ACP cache and no live probe works.
+// Vendor inferred from id prefix when missing.
 export const FALLBACK_COPILOT_MODELS = Object.freeze([
   { id: 'claude-sonnet-4.6',  label: 'Claude Sonnet 4.6', vendor: 'Anthropic' },
   { id: 'claude-sonnet-4.5',  label: 'Claude Sonnet 4.5', vendor: 'Anthropic' },
@@ -32,7 +32,6 @@ export const FALLBACK_COPILOT_MODELS = Object.freeze([
   { id: 'gpt-5.5',            label: 'GPT-5.5',           vendor: 'OpenAI'    },
   { id: 'gpt-5.4',            label: 'GPT-5.4',           vendor: 'OpenAI'    },
   { id: 'gpt-5.3-codex',      label: 'GPT-5.3 Codex',     vendor: 'OpenAI'    },
-  { id: 'gpt-5.2-codex',      label: 'GPT-5.2 Codex',     vendor: 'OpenAI'    },
   { id: 'gpt-5.2',            label: 'GPT-5.2',           vendor: 'OpenAI'    },
   { id: 'gpt-5.4-mini',       label: 'GPT-5.4 Mini',      vendor: 'OpenAI'    },
   { id: 'gpt-5-mini',         label: 'GPT-5 Mini',        vendor: 'OpenAI'    },
@@ -41,58 +40,93 @@ export const FALLBACK_COPILOT_MODELS = Object.freeze([
 
 export const DEFAULT_COPILOT_MODEL = 'claude-sonnet-4.5';
 
-const MODELS_ENDPOINT = 'https://api.githubcopilot.com/models';
-const CACHE_TTL_MS = 10 * 60 * 1000;
-const COPILOT_CLI_CONFIG = join(homedir(), '.copilot', 'config.json');
-
-/**
- * Last-resort token source: the Copilot CLI itself caches an OAuth token at
- * ~/.copilot/config.json after `copilot login`. If the standard yeaft
- * credential pipeline (env / gh CLI / persisted device flow) didn't surface
- * a token, we re-use the CLI's. Same auth surface — no extra perm needed.
- */
-async function _resolveCopilotCliToken() {
-  try {
-    const raw = await readFile(COPILOT_CLI_CONFIG, 'utf8');
-    // Copilot CLI's config.json starts with `//` comments. Strip line comments
-    // before JSON.parse — the file otherwise has no string-context `//`.
-    const cleaned = raw.split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
-    const cfg = JSON.parse(cleaned);
-    const tokens = cfg?.copilotTokens && typeof cfg.copilotTokens === 'object' ? cfg.copilotTokens : null;
-    if (!tokens) return null;
-    for (const tok of Object.values(tokens)) {
-      if (typeof tok === 'string' && validateRawToken(tok).valid) return tok;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-async function _resolveBearerToken() {
-  // The /models endpoint accepts the GitHub OAuth token directly as a Bearer
-  // — no token exchange needed (unlike the chat-completion endpoints). So we
-  // prefer the raw OAuth from the standard yeaft pipeline first, then fall
-  // back to the Copilot CLI's own cached OAuth at ~/.copilot/config.json.
-  try {
-    const raw = await resolveRawToken();
-    if (raw?.token) return raw.token;
-  } catch { /* fall through */ }
-  const cliRaw = await _resolveCopilotCliToken();
-  if (cliRaw) return cliRaw;
-  // Last resort: try exchanged token (works for chat endpoints; may also work
-  // if /models gained that auth path in future).
-  const cred = await getApiToken();
-  return cred?.token || null;
-}
+const CACHE_TTL_MS = 30 * 60 * 1000;
+const PROBE_TIMEOUT_MS = 8000;
 
 let _cache = null; // { models, fetchedAt }
-let _inflight = null; // dedupes concurrent cold-cache calls
+let _inflight = null;
+
+function _vendorFromId(id) {
+  const s = String(id || '').toLowerCase();
+  if (s.startsWith('claude')) return 'Anthropic';
+  if (s.startsWith('gpt') || s.startsWith('o1') || s.startsWith('o3') || s.startsWith('chatgpt')) return 'OpenAI';
+  if (s.startsWith('gemini')) return 'Google';
+  return '';
+}
+
+function _normalizeAcpModel(m) {
+  if (!m || !m.modelId) return null;
+  // Skip "auto" sentinel — not a real model, just a router placeholder.
+  if (m.modelId === 'auto') return null;
+  const meta = m._meta || {};
+  return {
+    id: m.modelId,
+    label: m.name || m.modelId,
+    vendor: _vendorFromId(m.modelId),
+    usage: meta.copilotUsage || '',              // "1x" / "0.33x" / "15x"
+    priceCategory: meta.copilotPriceCategory || '', // "low" / "medium" / "high"
+    enablement: meta.copilotEnablement || '',    // "enabled" / "disabled"
+  };
+}
 
 /**
- * Returns a list of `{id, label, vendor, preview, family}` records,
- * picker-enabled chat models only. Cached for 10 minutes. Never throws —
- * falls back to the static list on any error (including network timeout).
+ * Prime the in-process cache from an ACP `session/new` response (preferred).
+ * Called from copilot.js after a successful handshake.
+ */
+export function cacheCopilotModelsFromAcp(availableModels) {
+  if (!Array.isArray(availableModels)) return;
+  const models = availableModels.map(_normalizeAcpModel).filter(Boolean);
+  if (!models.length) return;
+  _cache = { models, fetchedAt: Date.now() };
+}
+
+/**
+ * Spawn a short-lived `copilot --acp` child, do initialize + session/new,
+ * pull `models.availableModels` out of the response, then close. Times out
+ * after PROBE_TIMEOUT_MS. Resolves to an array (possibly empty) or rejects.
+ */
+function _probeAcpModels() {
+  return new Promise((resolve, reject) => {
+    let child;
+    let client;
+    let done = false;
+    const finish = (err, models) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try { client?.close(); } catch {}
+      try { child?.kill('SIGTERM'); } catch {}
+      if (err) reject(err); else resolve(models || []);
+    };
+    try {
+      child = spawn('copilot', ['--acp'], { stdio: ['pipe', 'pipe', 'pipe'] });
+    } catch (e) { return reject(e); }
+    const timer = setTimeout(() => finish(new Error('ACP probe timeout')), PROBE_TIMEOUT_MS);
+    child.on('error', (e) => finish(e));
+    child.on('exit', () => finish(new Error('ACP child exited')));
+    child.stderr.on('data', () => { /* swallow */ });
+
+    client = new AcpClient({
+      stdin: child.stdin,
+      stdout: child.stdout,
+      onError: (e) => finish(e),
+    });
+
+    (async () => {
+      try {
+        await client.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+        const r = await client.request('session/new', { cwd: process.cwd(), mcpServers: [] });
+        finish(null, r?.models?.availableModels || []);
+      } catch (e) {
+        finish(e);
+      }
+    })();
+  });
+}
+
+/**
+ * Returns picker-enabled chat models for the signed-in Copilot account.
+ * Cache for 30 min. Never throws — falls back to the curated static list.
  */
 export async function listCopilotModels({ force = false } = {}) {
   if (!force && _cache && Date.now() - _cache.fetchedAt < CACHE_TTL_MS) {
@@ -100,35 +134,15 @@ export async function listCopilotModels({ force = false } = {}) {
   }
   if (_inflight) return (await _inflight).slice();
   _inflight = (async () => {
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), 5000);
     try {
-      const token = await _resolveBearerToken();
-      if (!token) return FALLBACK_COPILOT_MODELS.slice();
-      const res = await fetch(MODELS_ENDPOINT, {
-        signal: ac.signal,
-        headers: { ...copilotRequestHeaders({ isAgentTurn: false }), Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) return FALLBACK_COPILOT_MODELS.slice();
-      const body = await res.json();
-      const data = Array.isArray(body?.data) ? body.data : [];
-      const models = data
-        .filter(m => m && m.model_picker_enabled && m.capabilities?.type === 'chat')
-        .map(m => ({
-          id: m.id,
-          label: m.name || m.id,
-          vendor: m.vendor || '',
-          preview: !!m.preview,
-          family: m.capabilities?.family || '',
-        }));
-      if (!models.length) return FALLBACK_COPILOT_MODELS.slice();
-      _cache = { models, fetchedAt: Date.now() };
-      return models.slice();
-    } catch {
-      return FALLBACK_COPILOT_MODELS.slice();
-    } finally {
-      clearTimeout(timer);
-    }
+      const acpModels = await _probeAcpModels();
+      const models = acpModels.map(_normalizeAcpModel).filter(Boolean);
+      if (models.length) {
+        _cache = { models, fetchedAt: Date.now() };
+        return models;
+      }
+    } catch { /* fall through to static */ }
+    return FALLBACK_COPILOT_MODELS.slice();
   })();
   try {
     return (await _inflight).slice();
@@ -139,3 +153,5 @@ export async function listCopilotModels({ force = false } = {}) {
 
 /** Tests only. */
 export function _resetCopilotModelsCacheForTests() { _cache = null; _inflight = null; }
+/** Tests only. */
+export function _normalizeAcpModelForTests(m) { return _normalizeAcpModel(m); }

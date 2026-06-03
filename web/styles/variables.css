@@ -211,6 +211,15 @@ select option:checked {
   --warn-bg: rgba(176, 122, 31, 0.10);
   /* Focus ring (theme-aware replacement for hardcoded blue rings) */
   --focus-ring: rgba(74, 124, 201, 0.18);
+  /* Usage / price tags (Copilot model picker; reusable) */
+  --tag-low-bg: rgba(74, 158, 92, 0.14);
+  --tag-low-fg: var(--success);
+  --tag-medium-bg: rgba(74, 124, 201, 0.14);
+  --tag-medium-fg: var(--accent-blue);
+  --tag-high-bg: rgba(201, 138, 61, 0.16);
+  --tag-high-fg: #c98a3d;
+  --tag-preview-bg: rgba(147, 87, 173, 0.14);
+  --tag-preview-fg: #9357ad;
   /* Status dots (warm-leaning, replaces Apple #34c759/#ff9500/#ff3b30) */
   --status-online: #4a9e5c;
   --status-busy:   #c98a3d;
@@ -367,6 +376,15 @@ select option:checked {
   --warn-text: #d6b07a;
   --warn-bg: rgba(214, 176, 122, 0.10);
   --focus-ring: rgba(181, 178, 173, 0.22);
+  /* Usage / price tags (dark) */
+  --tag-low-bg: rgba(122, 184, 126, 0.16);
+  --tag-low-fg: var(--success);
+  --tag-medium-bg: rgba(181, 178, 173, 0.16);
+  --tag-medium-fg: var(--accent-blue);
+  --tag-high-bg: rgba(201, 159, 99, 0.18);
+  --tag-high-fg: #d6a87a;
+  --tag-preview-bg: rgba(192, 158, 211, 0.16);
+  --tag-preview-fg: #c09ed3;
   --status-online: #7ab87e;
   --status-busy:   #cda284;
   --status-error:  #d09090;
