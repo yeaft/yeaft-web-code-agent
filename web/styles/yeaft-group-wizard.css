@@ -428,3 +428,92 @@
   letter-spacing: 0;
   font-weight: 400;
 }
+
+/* ===========================================================================
+   Wizard V2 — VP roster row inside chat-modals.css shell.
+
+   The wizard now reuses `.modal-overlay` / `.modal.resume-modal` /
+   `.resume-modal-controls` from chat-modals.css. The Yeaft-unique bit is the
+   VP roster row + per-vp star button rendered next to the standard name /
+   workdir rows. Styles below are scoped to `.resume-control-row-vp` so they
+   don't leak into the legacy SessionMemberEditor / SessionCreateModal which
+   still use the `.group-wizard-*` classes above.
+   =========================================================================== */
+.resume-control-row-vp { align-items: flex-start; }
+.yeaft-wizard-roster {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.yeaft-wizard-roster-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 6px 4px;
+}
+.yeaft-wizard-roster-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 168px;
+  overflow-y: auto;
+}
+.yeaft-wizard-roster-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px 0 0;
+  border-radius: 6px;
+}
+.yeaft-wizard-roster-item.is-selected { background: var(--accent-bg); }
+.yeaft-wizard-roster-row {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  min-width: 0;
+}
+.yeaft-wizard-roster-row:hover { background: var(--sidebar-hover); }
+.yeaft-wizard-roster-row input[type="checkbox"] {
+  flex: 0 0 auto;
+  accent-color: var(--accent-blue, #4a9eff);
+  width: 14px;
+  height: 14px;
+}
+.yeaft-wizard-roster-name {
+  flex: 1 1 auto;
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.yeaft-wizard-default-star {
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.yeaft-wizard-default-star:hover { background: var(--sidebar-hover); color: var(--text-primary); }
+.yeaft-wizard-default-star.is-on { color: var(--warn-text); }
+
+.resume-modal-error {
+  font-size: 12px;
+  color: var(--error);
+  padding: 0 16px 8px;
+  line-height: 1.4;
+}

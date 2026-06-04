@@ -1196,6 +1196,10 @@ export default {
   'yeaft.session.wizard.creating': 'Creating…',
   'yeaft.session.wizard.back': 'Back',
   'yeaft.session.wizard.next': 'Next',
+  'yeaft.session.wizard.folderLabel': '📁 Work directories',
+  'yeaft.session.wizard.sessionLabel': '💬 Existing sessions',
+  'yeaft.session.wizard.noWorkDirs': 'No prior sessions yet — pick or type a work directory above.',
+  'yeaft.session.wizard.noSessions': 'No sessions in this directory yet — fill in the form and create one.',
 
   // Error / no_default_vp invite modal
   'yeaft.session.error.invalid_name': 'Group name cannot be empty.',
