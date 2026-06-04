@@ -51,82 +51,11 @@
 }
 
 /* ===========================================================================
-   Sidebar header row — agent brand, collapse, back, workbench.
+   Sidebar header — yeaft reuses Chat sidebar's .sidebar-top /
+   .sidebar-header-row / .sidebar-header-actions / .sidebar-icon-btn
+   classes (defined in sidebar.css) for pixel-perfect parity. No yeaft-
+   specific header styles live here anymore.
    =========================================================================== */
-/* Top spacer mirrors Chat sidebar's .sidebar-top padding so the agent
-   dropdown row sits at the same vertical position in both sidebars. */
-.us-header-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  padding: 16px 12px 16px 12px;
-  flex: 0 0 auto;
-}
-.us-brand {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  overflow: hidden;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary, #1d1d1f);
-}
-.us-status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--text-muted, #86868b);
-  flex: 0 0 auto;
-}
-.us-status-dot.online {
-  background: var(--status-online);
-}
-.us-brand-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.us-latency {
-  font-size: 10px;
-  font-weight: 500;
-  padding: 1px 6px;
-  border-radius: 8px;
-  color: var(--text-muted, #86868b);
-  background: var(--sidebar-hover, rgba(0,0,0,0.05));
-}
-.us-latency.latency-good { color: var(--status-online); }
-.us-latency.latency-warn { color: var(--status-busy); }
-.us-latency.latency-bad  { color: var(--status-error); }
-
-.us-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  flex: 0 0 auto;
-}
-.us-icon-btn {
-  width: 30px;
-  height: 30px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text-secondary, #515154);
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-.us-icon-btn:hover {
-  background: var(--sidebar-hover, rgba(0,0,0,0.06));
-  color: var(--text-primary, #1d1d1f);
-}
-.us-icon-btn.active {
-  background: var(--session-active, rgba(0,122,255,0.14));
-  color: var(--accent-blue, var(--accent));
-}
 
 /* ===========================================================================
    Sidebar bottom — Settings entry + version badge. Shared

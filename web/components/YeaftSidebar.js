@@ -47,23 +47,26 @@ export default {
         </button>
       </div>
 
-      <!-- Sidebar header row — shared SidebarAgentHeader (parity with
-           ChatPage). Per-page actions live in the right-hand slot. -->
-      <div class="us-header-row">
-        <SidebarAgentHeader
-          :online-agents="onlineAgents"
-          :online-agent-count="onlineAgentCount"
-          :current-agent-latency="currentAgentLatency"
-          :show-agent-actions="false"
-        />
-        <div class="us-header-actions">
-          <SidebarModeToggle view="yeaft" @flip="onModeFlip" />
-          <button class="us-icon-btn" :title="tr('chat.sidebar.collapse', 'Collapse')" @click="$emit('toggle-sidebar')">
-            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 18h13v-2H3v2zm0-5h10v-2H3v2zm0-7v2h13V6H3zm18 9.59L17.42 12 21 8.41 19.59 7l-5 5 5 5L21 15.59z"/></svg>
-          </button>
-          <button v-if="canUseWorkbench" class="us-icon-btn" :class="{ active: chatStore && chatStore.workbenchExpanded }" :title="tr('chat.sidebar.workbench', 'Workbench')" @click="onToggleWorkbench">
-            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M20 3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H4V5h16v14zM6 7h5v2H6V7zm0 4h5v2H6v-2zm0 4h5v2H6v-2zm7-8h5v10h-5V7z"/></svg>
-          </button>
+      <!-- Sidebar header — reuses Chat sidebar's .sidebar-top /
+           .sidebar-header-row / .sidebar-header-actions / .sidebar-icon-btn
+           so the two sidebars render pixel-identically. -->
+      <div class="sidebar-top">
+        <div class="sidebar-header-row">
+          <SidebarAgentHeader
+            :online-agents="onlineAgents"
+            :online-agent-count="onlineAgentCount"
+            :current-agent-latency="currentAgentLatency"
+            :show-agent-actions="false"
+          />
+          <div class="sidebar-header-actions">
+            <SidebarModeToggle view="yeaft" @flip="onModeFlip" />
+            <button class="sidebar-icon-btn" :title="tr('chat.sidebar.collapse', 'Collapse')" @click="$emit('toggle-sidebar')">
+              <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 18h13v-2H3v2zm0-5h10v-2H3v2zm0-7v2h13V6H3zm18 9.59L17.42 12 21 8.41 19.59 7l-5 5 5 5L21 15.59z"/></svg>
+            </button>
+            <button v-if="canUseWorkbench" class="sidebar-icon-btn" :class="{ active: chatStore && chatStore.workbenchExpanded }" :title="tr('chat.sidebar.workbench', 'Workbench')" @click="onToggleWorkbench">
+              <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M20 3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H4V5h16v14zM6 7h5v2H6V7zm0 4h5v2H6v-2zm0 4h5v2H6v-2zm7-8h5v10h-5V7z"/></svg>
+            </button>
+          </div>
         </div>
       </div>
 
