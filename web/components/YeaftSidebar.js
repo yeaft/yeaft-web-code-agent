@@ -200,8 +200,6 @@ export default {
       }
     } catch (_) { /* no-fetch test env */ }
   },
-  beforeUnmount() {
-  },
   computed: {
     // Resolve the Pinia store lazily. Guarded so unit tests that mount
     // the component without Pinia can still exercise the logic via the

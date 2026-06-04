@@ -2885,9 +2885,6 @@ export const useChatStore = defineStore('chat', {
     setCrewModeEnabled(enabled) {
       this.crewModeEnabled = !!enabled;
       localStorage.setItem('crewModeEnabled', this.crewModeEnabled ? 'true' : 'false');
-      // If user is currently viewing the Crew tab and just turned crew off,
-      // ChatPage's `sidebarTab` watcher does not exist — leave the active
-      // tab choice to the component; default sidebarTab is 'chat' anyway.
     },
 
     initTheme() {
