@@ -81,7 +81,7 @@ export default {
         <!-- Parity with Chat/Crew sidebar: session-tab-bar (single Chat tab,
              no Crew) + session-item rows reusing sidebar.css classes. -->
         <div class="session-tab-bar">
-          <div class="session-tab active">
+          <div class="session-tab session-tab-solo active">
             <svg class="session-tab-icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/></svg>
             <span>{{ $t('yeaft.session.title') }}</span>
             <span class="session-tab-count" v-if="sessionList.length > 0">{{ sessionList.length }}</span>
@@ -140,9 +140,13 @@ export default {
                     </button>
                   </div>
                 </div>
-                <div class="session-info" v-if="groupSubtitle(s.raw) || sessionAgentName(s.raw)">
-                  <span class="session-path" v-if="groupSubtitle(s.raw)">{{ groupSubtitle(s.raw) }}</span>
+                <div class="session-info">
+                  <span class="session-path">{{ groupPath(s.raw) }}</span>
                   <span class="session-agent" v-if="sessionAgentName(s.raw)">{{ sessionAgentName(s.raw) }}</span>
+                  <span class="latency-indicator" v-if="rowLatency(s.raw)" :class="getLatencyClass(rowLatency(s.raw))" :title="rowLatency(s.raw) + 'ms'">
+                    <svg viewBox="0 0 24 24" width="10" height="10"><circle cx="12" cy="12" r="5" fill="currentColor"/></svg>
+                    {{ rowLatency(s.raw) }}ms
+                  </span>
                 </div>
               </div>
             </template>
@@ -380,6 +384,30 @@ export default {
       const agent = s.agents.find(a => a && a.id === g.agentId);
       if (!agent) return '';
       return String(agent.name || agent.id || '');
+    },
+    // Path subtitle for parity with chat rows — falls back to roster
+    // size when the session has no workDir set.
+    groupPath(g) {
+      if (!g) return '-';
+      if (g.workDir) {
+        const path = String(g.workDir);
+        if (path.length <= 25) return path;
+        const parts = path.split(/[/\\]/);
+        if (parts.length <= 2) return path;
+        return '...' + parts.slice(-2).join('/');
+      }
+      const n = Array.isArray(g.roster) ? g.roster.length : 0;
+      if (n === 0) return this.$t('yeaft.session.empty.title');
+      const key = n === 1 ? 'yeaft.session.memberCount.one' : 'yeaft.session.memberCount.other';
+      return this.$t(key, { count: n });
+    },
+    // Per-row latency (parity with chat rows — shows the owning agent's ping).
+    rowLatency(g) {
+      if (!g || !g.agentId) return null;
+      const s = this.chatStore || this.store;
+      if (!s || !Array.isArray(s.agents)) return null;
+      const agent = s.agents.find(a => a && a.id === g.agentId);
+      return (agent && agent.latency != null) ? agent.latency : null;
     },
     // task-yeaft-group-editor: ⚙ button on each group row opens the
     // unified SessionSettingsModal (announcement / members / rename /
