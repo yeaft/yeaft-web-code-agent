@@ -11,6 +11,7 @@ import BtwOverlay from './BtwOverlay.js';
 import SplitPane from './SplitPane.js';
 import ModernSelect from './ModernSelect.js';
 import SidebarModeToggle from './SidebarModeToggle.js';
+import SidebarAgentHeader from './SidebarAgentHeader.js';
 import { shortenPath as shortenPathUtil } from '../utils/path-display.js';
 import { useAuthStore } from '../stores/auth.js';
 
@@ -39,7 +40,7 @@ const DEFAULT_COPILOT_MODEL = 'claude-sonnet-4.5';
 
 export default {
   name: 'ChatPage',
-  components: { ChatHeader, MessageList, ChatInput, WorkbenchPanel, SettingsPanel, CrewConfigPanel, CrewChatView, ExpertPanel, SubAgentPanel, BtwOverlay, SplitPane, ModernSelect, SidebarModeToggle },
+  components: { ChatHeader, MessageList, ChatInput, WorkbenchPanel, SettingsPanel, CrewConfigPanel, CrewChatView, ExpertPanel, SubAgentPanel, BtwOverlay, SplitPane, ModernSelect, SidebarModeToggle, SidebarAgentHeader },
   template: `
     <div class="chat-page" :class="{ 'show-sidebar': showMobileSidebar }">
 
@@ -85,45 +86,16 @@ export default {
         <div class="sidebar-top">
           <!-- Header Row: Agent status + action icons (Copilot style) -->
           <div class="sidebar-header-row">
-            <div class="sidebar-brand agent-dropdown-trigger" @click.stop="agentManagerOpen = !agentManagerOpen" style="cursor: pointer;" :title="$t('chat.agent.manage')">
-              <span class="status-dot" :class="{ online: onlineAgentCount > 0 }"></span>
-              <span class="brand-label">{{ onlineAgentCount }} Agent</span>
-              <span class="latency-indicator" v-if="currentAgentLatency" :class="getLatencyClass(currentAgentLatency)" :title="currentAgentLatency + 'ms'">
-                <svg viewBox="0 0 24 24" width="10" height="10"><circle cx="12" cy="12" r="5" fill="currentColor"/></svg>
-                {{ currentAgentLatency }}ms
-              </span>
-              <svg class="dropdown-chevron" :class="{ open: agentManagerOpen }" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z"/></svg>
-              <!-- Agent Dropdown Menu -->
-              <div class="agent-dropdown" v-if="agentManagerOpen" @click.stop>
-                <div v-for="agent in onlineAgents" :key="agent.id" class="agent-dropdown-item">
-                  <span class="status-dot" :class="{ online: agent.online, restarting: restartingAgents[agent.id], upgrading: upgradingAgents[agent.id] }"></span>
-                  <span class="agent-dropdown-name">{{ agent.name }}</span>
-                  <span class="agent-dropdown-version" v-if="agent.version">v{{ agent.version }}</span>
-                  <span class="agent-dropdown-latency" v-if="agent.online && agent.latency" :class="getLatencyClass(agent.latency)">{{ agent.latency }}ms</span>
-                  <span class="agent-dropdown-status" v-if="restartingAgents[agent.id]">{{ $t('chat.agent.restarting') }}</span>
-                  <span class="agent-dropdown-status" v-else-if="upgradingAgents[agent.id]">{{ $t('chat.agent.upgrading') }}</span>
-                  <button
-                    class="agent-dropdown-upgrade-btn"
-                    @click.stop="upgradeAgent(agent.id)"
-                    :disabled="!agent.online || restartingAgents[agent.id] || upgradingAgents[agent.id]"
-                    :title="$t('chat.agent.upgrade')"
-                  >
-                    <span v-if="upgradingAgents[agent.id]" class="spinner-mini"></span>
-                    <svg v-else viewBox="0 0 24 24" width="13" height="13"><path fill="currentColor" d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8-8 8z"/></svg>
-                  </button>
-                  <button
-                    class="agent-dropdown-restart-btn"
-                    @click.stop="restartAgent(agent.id)"
-                    :disabled="!agent.online || restartingAgents[agent.id] || upgradingAgents[agent.id]"
-                    :title="$t('chat.agent.restart')"
-                  >
-                    <span v-if="restartingAgents[agent.id]" class="spinner-mini"></span>
-                    <svg v-else viewBox="0 0 24 24" width="13" height="13"><path fill="currentColor" d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
-                  </button>
-                </div>
-                <div v-if="onlineAgents.length === 0" class="agent-dropdown-empty">{{ $t('chat.agent.none') }}</div>
-              </div>
-            </div>
+            <SidebarAgentHeader
+              :online-agents="onlineAgents"
+              :online-agent-count="onlineAgentCount"
+              :current-agent-latency="currentAgentLatency"
+              :restarting-agents="restartingAgents"
+              :upgrading-agents="upgradingAgents"
+              :show-agent-actions="true"
+              @restart-agent="restartAgent"
+              @upgrade-agent="upgradeAgent"
+            />
             <div class="sidebar-header-actions">
               <SidebarModeToggle
                 :view="store.currentView"
@@ -161,7 +133,7 @@ export default {
 
         <!-- Session Tab Bar -->
         <div class="session-tab-bar">
-          <div class="session-tab" :class="{ active: sidebarTab === 'chat' }" @click="sidebarTab = 'chat'">
+          <div class="session-tab" :class="{ active: sidebarTab === 'chat' || !store.crewModeEnabled, 'session-tab-solo': !store.crewModeEnabled }" @click="sidebarTab = 'chat'">
             <svg class="session-tab-icon" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/></svg>
             <span>Chat</span>
             <span class="session-tab-count" v-if="chatSessionCount > 0">{{ chatSessionCount }}</span>
@@ -169,7 +141,7 @@ export default {
               <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
             </button>
           </div>
-          <div class="session-tab" :class="{ active: sidebarTab === 'crew' }" @click="sidebarTab = 'crew'">
+          <div v-if="store.crewModeEnabled" class="session-tab" :class="{ active: sidebarTab === 'crew' }" @click="sidebarTab = 'crew'">
             <svg class="session-tab-icon" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
             <span>Crew</span>
             <span class="session-tab-count" v-if="crewSessionCount > 0">{{ crewSessionCount }}</span>
@@ -724,7 +696,6 @@ export default {
       showAgentDropdown: false,
       showMobileSidebar: false,
       showSettingsPanel: false,
-      agentManagerOpen: false,
       restartingAgents: {},
       upgradingAgents: {},
       // Unified conversation modal state
@@ -873,6 +844,11 @@ export default {
   watch: {
     copilotModelOpen(v) {
       if (v) this.$nextTick(() => { this.$refs.copilotModelSearchInput?.focus(); });
+    },
+    'store.crewModeEnabled'(enabled) {
+      // If crew was just turned off while user was viewing it, snap back
+      // to the Chat tab so the panel body stays in sync with the tab strip.
+      if (!enabled && this.sidebarTab === 'crew') this.sidebarTab = 'chat';
     },
   },
   methods: {
@@ -1432,9 +1408,6 @@ export default {
     this._clickOutsideHandler = (e) => {
       if (!e.target.closest('.agent-selector')) {
         this.showAgentDropdown = false;
-      }
-      if (!e.target.closest('.agent-dropdown-trigger') && !e.target.closest('.agent-dropdown')) {
-        this.agentManagerOpen = false;
       }
       if (!e.target.closest('.session-dots-btn') && !e.target.closest('.session-menu')) {
         this.activeSessionMenu = null;
