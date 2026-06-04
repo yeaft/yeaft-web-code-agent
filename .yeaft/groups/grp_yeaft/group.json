@@ -1,0 +1,14 @@
+{
+  "id": "grp_yeaft",
+  "name": "Yeaft",
+  "roster": [
+    "ada",
+    "martin",
+    "steve",
+    "linus"
+  ],
+  "defaultVpId": "steve",
+  "announcement": "当前项目是在 ~/projects/claude-web-chat。群内所有涉及到代码开发要按照人员分工来执行，Steve是PM，用来分析需求和优化需求， Linus为实际开发人员，涉及代码，测试和架构设计，Martin来做review，各自分工明确，steve和martin不能直接开发，开发需要forward给linus，linus做完后需要提交PR，然后forward 给Martin去做review，Martin需要把结果再route回dev，没问题后，dev再route给PM，让Steve去merge，成功后在main branch打tag。 \n提交PR需要用source ~/.zshrc 因为gh的key在zshrc中定义，所有代码改动需要用worktree。最重要的是如果在工作中，切记流程不要停，比如开发或者review完了，就需要forward给下一个人继续，直到整个工作执行完成。",
+  "workDir": "/home/azureuser/projects/claude-web-chat",
+  "createdAt": "2026-05-29T05:32:38.741Z"
+}
