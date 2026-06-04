@@ -1755,7 +1755,15 @@ export const useChatStore = defineStore('chat', {
           if (conv && Array.isArray(this.messagesMap[conv])) {
             const rows = this.messagesMap[conv];
             let mutated = false;
-            for (let i = rows.length - 1; i >= 0; i--) {
+            // Stamp EVERY pending assistant row owned by this turn — not
+            // just the last. A turn that produced multiple assistant
+            // rows (text, then tool_use, then more text) needs all of
+            // them flipped, or earlier rows sit in 'pending' forever.
+            // Walk forward from the user message that opened this turn
+            // for determinism; reducer is idempotent so order doesn't
+            // strictly matter, but forward walk keeps the per-row
+            // semantics readable when debugging.
+            for (let i = 0; i < rows.length; i++) {
               const m = rows[i];
               if (!m || m.type !== 'assistant') continue;
               if (event.sessionId && m.groupId && m.groupId !== event.sessionId) continue;
@@ -1768,7 +1776,6 @@ export const useChatStore = defineStore('chat', {
               if (event.detail) m.turnEndDetail = event.detail;
               if (Number.isFinite(event.durationMs)) m.turnDurationMs = event.durationMs;
               mutated = true;
-              break;
             }
             if (mutated) this.messagesMap = { ...this.messagesMap, [conv]: rows.slice() };
           }

@@ -979,7 +979,7 @@ export class ConversationStore {
   loadAfterSeqByGroup(sessionId, afterSeq, opts = {}) {
     if (!sessionId) return { messages: [], latestSeq: null };
     const limit = Number.isFinite(opts.limit) && opts.limit > 0 ? opts.limit : 500;
-    const cutoff = Number.isFinite(afterSeq) ? afterSeq : null;
+    const cutoff = Number.isFinite(afterSeq) && afterSeq >= 0 ? afterSeq : null;
     if (cutoff === null) return { messages: [], latestSeq: null };
     const hot = this.#loadGroupHotMessages(sessionId);
     const cold = this.#loadGroupColdMessages(sessionId);

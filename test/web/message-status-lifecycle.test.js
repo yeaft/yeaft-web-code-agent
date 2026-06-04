@@ -92,4 +92,26 @@ describe('Per-message vp_turn_end reducer', () => {
     });
     expect(store.messagesMap.conv1[0].status).toBe('errored');
   });
+
+  it('flips EVERY pending assistant row in the same turn (multi-row case)', () => {
+    // Turn produced 3 assistant rows (text → tool round → more text).
+    // All three must flip; before the break removal only the last one did.
+    const store = makeStore();
+    store.yeaftConversationId = 'conv1';
+    store.messagesMap = {
+      conv1: [
+        { type: 'user', content: 'go', groupId: 'grp_fun', speakerVpId: 'vp_a', turnId: 'turn-1' },
+        { type: 'assistant', content: 'part 1', groupId: 'grp_fun', speakerVpId: 'vp_a', turnId: 'turn-1', status: 'pending' },
+        { type: 'assistant', content: 'part 2', groupId: 'grp_fun', speakerVpId: 'vp_a', turnId: 'turn-1', status: 'pending' },
+        { type: 'assistant', content: 'part 3', groupId: 'grp_fun', speakerVpId: 'vp_a', turnId: 'turn-1', status: 'pending' },
+      ],
+    };
+    store.handleYeaftOutput({
+      event: { type: 'vp_turn_end', sessionId: 'grp_fun', vpId: 'vp_a', turnId: 'turn-1', reason: 'end_turn' },
+    });
+    const statuses = store.messagesMap.conv1
+      .filter((m) => m.type === 'assistant')
+      .map((m) => m.status);
+    expect(statuses).toEqual(['completed', 'completed', 'completed']);
+  });
 });
