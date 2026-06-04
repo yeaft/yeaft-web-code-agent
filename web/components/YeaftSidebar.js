@@ -59,7 +59,6 @@ export default {
             :restarting-agents="restartingAgents"
             :upgrading-agents="upgradingAgents"
             :show-agent-actions="true"
-            agent-action-mode="menu"
             @restart-agent="restartAgent"
             @upgrade-agent="upgradeAgent"
           />
