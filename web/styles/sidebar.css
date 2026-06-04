@@ -460,6 +460,15 @@
   opacity: 1;
 }
 
+/* Single-tab variant (used by Yeaft sidebar). Don't stretch to full
+   width — match the natural width chat's "Chat" tab has when it
+   shares the bar with Crew, so the two sidebars feel identical. */
+.session-tab.session-tab-solo {
+  flex: 0 0 auto;
+  justify-content: flex-start;
+  padding: 9px 12px;
+}
+
 .session-tab-count {
   font-size: 11px;
   background: rgba(255,255,255,0.08);

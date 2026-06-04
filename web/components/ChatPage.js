@@ -11,6 +11,7 @@ import BtwOverlay from './BtwOverlay.js';
 import SplitPane from './SplitPane.js';
 import ModernSelect from './ModernSelect.js';
 import SidebarModeToggle from './SidebarModeToggle.js';
+import { shortenPath as shortenPathUtil } from '../utils/path-display.js';
 import { useAuthStore } from '../stores/auth.js';
 
 // Static fallback for the Copilot model picker — mirrors the CLI's own
@@ -1241,11 +1242,7 @@ export default {
       return p || '';
     },
     shortenPath(path) {
-      if (!path) return '-';
-      if (path.length <= 25) return path;
-      const parts = path.split(/[/\\]/);
-      if (parts.length <= 2) return path;
-      return '...' + parts.slice(-2).join('/');
+      return shortenPathUtil(path);
     },
     formatTime(timestamp) {
       if (!timestamp) return '';
