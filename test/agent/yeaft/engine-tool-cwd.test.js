@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import { resolve as resolvePath } from 'path';
 import { Engine } from '../../../agent/yeaft/engine.js';
+import { ToolRegistry } from '../../../agent/yeaft/tools/registry.js';
 import { NullTrace } from '../../../agent/yeaft/debug-trace.js';
 
 class MockAdapter {
@@ -82,5 +84,59 @@ describe('Engine — toolCtx.cwd reflects query({ workDir })', () => {
       // drain
     }
     expect(getSeenCwd()).toBe(process.cwd());
+  });
+
+  it('resolves relative workDir to an absolute path (parity with Claude Chat spawn cwd)', async () => {
+    const { engine, getSeenCwd } = makeEngine();
+    adapter.pushResponse([
+      { type: 'tool_call', id: 'c1', name: 'probe_cwd', input: {} },
+      { type: 'stop', stopReason: 'tool_use' },
+    ]);
+    adapter.pushResponse([
+      { type: 'text_delta', text: 'done' },
+      { type: 'stop', stopReason: 'end_turn' },
+    ]);
+
+    for await (const _ of engine.query({ prompt: 'go', workDir: './sub/dir/' })) {
+      // drain
+    }
+    expect(getSeenCwd()).toBe(resolvePath('./sub/dir/'));
+    // Trailing slash normalized away.
+    expect(getSeenCwd().endsWith('/')).toBe(false);
+  });
+
+  it('also exposes ctx.cwd to tools registered via ToolRegistry (production path)', async () => {
+    // The `engine.registerTool` legacy `#tools` Map and the ToolRegistry
+    // path are two different execute branches in engine.js (~line 2350).
+    // Production wires ToolRegistry via the constructor; only legacy /
+    // tests use registerTool. Both must see the same ctx.cwd or the
+    // production fleet silently regresses while the test suite passes.
+    let seenCwd = null;
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'probe_cwd',
+      description: 'records ctx.cwd',
+      parameters: { type: 'object', properties: {} },
+      execute: async (_input, ctx) => { seenCwd = ctx?.cwd ?? null; return 'ok'; },
+    });
+    const engine = new Engine({
+      adapter,
+      trace: new NullTrace(),
+      config: { model: 'test-model', maxOutputTokens: 1024 },
+      toolRegistry: registry,
+    });
+    adapter.pushResponse([
+      { type: 'tool_call', id: 'c1', name: 'probe_cwd', input: {} },
+      { type: 'stop', stopReason: 'tool_use' },
+    ]);
+    adapter.pushResponse([
+      { type: 'text_delta', text: 'done' },
+      { type: 'stop', stopReason: 'end_turn' },
+    ]);
+
+    for await (const _ of engine.query({ prompt: 'go', workDir: '/tmp/yeaft-registry' })) {
+      // drain
+    }
+    expect(seenCwd).toBe('/tmp/yeaft-registry');
   });
 });

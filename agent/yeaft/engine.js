@@ -18,6 +18,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { resolve as resolvePath } from 'path';
 import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
 import { LLMContextError, LLMAbortError } from './llm/adapter.js';
 import { runMemoryPreflow, buildRelevantScopes } from './sessions/pre-flow.js';
@@ -878,14 +879,16 @@ export class Engine {
       signal,
       yeaftDir: this.#yeaftDir,
       // Group-scoped working directory. Threaded from #runQuery({ workDir })
-      // → set by web-bridge runVpTurn from sessionMeta.workDir. Falls back to
-      // the agent process cwd so non-group / test contexts still work. Tools
-      // like bash / file-read / file-write read `ctx.cwd` and resolve all
-      // relative paths against it — this is the parity hook with Claude
-      // Chat (where the conversation's workDir becomes the CLI spawn cwd).
-      cwd: (typeof vpCtx?.workDir === 'string' && vpCtx.workDir.trim())
-        ? vpCtx.workDir.trim()
-        : process.cwd(),
+      // → set by web-bridge runVpTurn from sessionMeta.workDir. Tools read
+      // `ctx.cwd` and resolve relative paths against it. Always absolute
+      // (path.resolve normalizes relative inputs + trailing slashes) so
+      // tools that string-concatenate don't accidentally walk from
+      // process.cwd(). Falls back to process.cwd() in non-group / test
+      // contexts.
+      cwd: (() => {
+        const raw = typeof vpCtx?.workDir === 'string' ? vpCtx.workDir.trim() : '';
+        return raw ? resolvePath(raw) : process.cwd();
+      })(),
       mcpManager: this.#mcpManager,
       skillManager: this.#skillManager,
       conversationStore: this.#conversationStore,
