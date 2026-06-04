@@ -56,7 +56,12 @@ export default {
             :online-agents="onlineAgents"
             :online-agent-count="onlineAgentCount"
             :current-agent-latency="currentAgentLatency"
-            :show-agent-actions="false"
+            :restarting-agents="restartingAgents"
+            :upgrading-agents="upgradingAgents"
+            :show-agent-actions="true"
+            agent-action-mode="menu"
+            @restart-agent="restartAgent"
+            @upgrade-agent="upgradeAgent"
           />
           <div class="sidebar-header-actions">
             <SidebarModeToggle view="yeaft" @flip="onModeFlip" />
@@ -189,6 +194,8 @@ export default {
       groupMenu: { open: false, groupId: null },
       // task-342: server version shown in sidebar-bottom (mirrors ChatPage).
       serverVersion: '',
+      restartingAgents: {},
+      upgradingAgents: {},
     };
   },
   created() {
@@ -353,26 +360,18 @@ export default {
       if (this.sessionsStore) this.sessionsStore.setActive(g.id);
       this.$emit('select-group', g);
     },
-    // Per-row agent badge — only shown when 2+ agents are online, to
-    // avoid clutter in the common single-agent setup.
+    // Per-row agent badge — mirrors chat session rows.
     sessionAgentName(g) {
       if (!g || !g.agentId) return '';
-      if (this.onlineAgents.length < 2) return '';
       const s = this.chatStore || this.store;
-      if (!s || !Array.isArray(s.agents)) return '';
+      if (!s || !Array.isArray(s.agents)) return String(g.agentName || g.agentId || '');
       const agent = s.agents.find(a => a && a.id === g.agentId);
-      if (!agent) return '';
-      return String(agent.name || agent.id || '');
+      return String(agent?.name || g.agentName || g.agentId || '');
     },
-    // Path subtitle for parity with chat rows — falls back to roster
-    // size when the session has no workDir set.
+    // Path subtitle for parity with chat rows. Do not fall back to member
+    // count; users need workDir + agent + latency here.
     groupPath(g) {
-      if (!g) return '-';
-      if (g.workDir) return shortenPath(g.workDir);
-      const n = Array.isArray(g.roster) ? g.roster.length : 0;
-      if (n === 0) return this.$t('yeaft.session.empty.title');
-      const key = n === 1 ? 'yeaft.session.memberCount.one' : 'yeaft.session.memberCount.other';
-      return this.$t(key, { count: n });
+      return shortenPath(g?.workDir);
     },
     // Per-row latency (parity with chat rows — shows the owning agent's ping).
     rowLatency(g) {
@@ -448,6 +447,26 @@ export default {
       };
       setTimeout(() => window.addEventListener('click', close, true), 0);
       if (evt && typeof evt.stopPropagation === 'function') evt.stopPropagation();
+    },
+    restartAgent(agentId) {
+      const s = this.chatStore || this.store;
+      if (!s || !Array.isArray(s.agents) || typeof s.restartAgent !== 'function') return;
+      const agent = s.agents.find(a => a && a.id === agentId);
+      const name = agent?.name || agentId;
+      if (!confirm(this.$t('chat.agent.restartConfirm', { name }))) return;
+      this.restartingAgents[agentId] = true;
+      setTimeout(() => { delete this.restartingAgents[agentId]; }, 120000);
+      s.restartAgent(agentId);
+    },
+    upgradeAgent(agentId) {
+      const s = this.chatStore || this.store;
+      if (!s || !Array.isArray(s.agents) || typeof s.upgradeAgent !== 'function') return;
+      const agent = s.agents.find(a => a && a.id === agentId);
+      const name = agent?.name || agentId;
+      if (!confirm(this.$t('chat.agent.upgradeConfirm', { name }))) return;
+      this.upgradingAgents[agentId] = { since: Date.now(), oldVersion: agent?.version || null };
+      setTimeout(() => { delete this.upgradingAgents[agentId]; }, 120000);
+      s.upgradeAgent(agentId);
     },
     // task-yeaft-group-editor: per-group rename/delete + manage-members
     // formerly lived as discrete startManageMembers/startRenameGroup/
