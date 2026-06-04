@@ -1659,15 +1659,24 @@ export const useChatStore = defineStore('chat', {
         }
 
         // ★ task-334m: Group snapshot + roster delta + CRUD ack.
-        case 'group_list_updated': {
+        case 'group_list_updated':
+        case 'session_list_updated':
+        case 'yeaft_session_hydrate': {
+          // fix-yeaft-session-server-persistence: `yeaft_session_hydrate`
+          // is the server-side replay on get_agents — payload shape
+          // matches a snapshot but the message arrives before any agent
+          // has gone through `session_ready`, so the unified sidebar can
+          // render the user's full cross-agent yeaft session list on
+          // reload before any agent connects.
           const gs = window.Pinia?.useSessionsStore?.() || (window.__useSessionsStore && window.__useSessionsStore());
           const prevGroupId = gs ? (gs.activeSessionId || null) : null;
+          const rows = event.sessions || event.groups || [];
           // msg.agentId is stamped on yeaft_output envelopes by the
           // server relay (since v0.1.882). Pass it through so the
           // sessions store can keep per-agent rosters in the unified
           // sidebar. Older agents/servers omit the field — the store
           // falls back to the legacy whole-replacement path.
-          if (gs) gs.applySnapshot(event.groups, msg.agentId || null);
+          if (gs) gs.applySnapshot(rows, msg.agentId || null);
           const newGroupId = gs ? (gs.activeSessionId || null) : null;
           // Bug 1: after enterYeaft the group snapshot may arrive *after*
           // initial history load (which happened with groupId:null), so
@@ -1677,12 +1686,14 @@ export const useChatStore = defineStore('chat', {
           }
           break;
         }
-        case 'group_roster_changed': {
+        case 'group_roster_changed':
+        case 'session_roster_changed': {
           const gs = window.Pinia?.useSessionsStore?.() || (window.__useSessionsStore && window.__useSessionsStore());
           if (gs) gs.applyRosterChange(event);
           break;
         }
-        case 'group_crud_result': {
+        case 'group_crud_result':
+        case 'session_crud_result': {
           const gs = window.Pinia?.useSessionsStore?.() || (window.__useSessionsStore && window.__useSessionsStore());
           if (gs) gs.applyCrudResult(event, msg.agentId || null);
           const pending = this._sessionCrudPending && this._sessionCrudPending.get(event.requestId);
@@ -2281,6 +2292,16 @@ export const useChatStore = defineStore('chat', {
       const next = groupId || null;
       const force = !!opts.force;
       this.yeaftActiveSessionFilter = next;
+      // fix-yeaft-session-server-persistence: remember the
+      // last-viewed yeaft session so reload + cross-agent switch
+      // restore it instead of arbitrarily landing on sessionOrder[0]
+      // (which manufactures the "phantom default group" bug the user
+      // reported). localStorage-only — mirrors how chat does
+      // `lastViewedConversation`.
+      try {
+        if (next) localStorage.setItem('lastViewedYeaftSession', next);
+        else localStorage.removeItem('lastViewedYeaftSession');
+      } catch (_) {}
       if (!force && next === prev) return;
 
       const groupKey = next || '__all__';

@@ -2223,15 +2223,13 @@ export async function handleYeaftSessionSend(msg) {
     const dir = join(sessionRoot, sessionId);
     if (existsSync(dir) && loadSessionMeta(dir)) {
       sessionHandle = openSession(sessionRoot, sessionId);
-    } else if (sessionId === 'grp_default') {
-      try {
-        const seeded = seedDefaultSession(groupYeaftDir, { memoryRoot: join(groupYeaftDir, 'memory') });
-        sessionHandle = seeded.group;
-      } catch (seedErr) {
-        seedFailed = true;
-        console.warn('[Yeaft] yeaft_group_chat: seedDefaultSession failed', seedErr?.message || seedErr);
-      }
     } else {
+      // fix-yeaft-session-server-persistence: the `grp_default` on-the-
+      // fly seed used to manufacture a missing session here. That
+      // hid the "session not found" error and re-created the phantom
+      // default-group row across agents. Now we surface the not-found
+      // case so the web can show an "agent offline / session missing"
+      // hint instead of silently creating a different session.
       console.warn('[Yeaft] yeaft_group_chat: sessionId %s not found', sessionId);
     }
   } catch (err) {

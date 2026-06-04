@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { CONFIG } from '../config.js';
-import { sessionDb, messageDb, userDb } from '../database.js';
+import { sessionDb, messageDb, userDb, yeaftSessionDb } from '../database.js';
 import { agents, pendingFiles } from '../context.js';
 import {
   sendToWebClient, forwardToAgent,
@@ -104,6 +104,31 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         }
       }
       await broadcastAgentList();
+      // Yeaft sessions hydrate — send the user's full cross-agent
+      // yeaft session list before any agent comes online so the
+      // unified sidebar can render the list immediately on reload.
+      // Grouped by agentId so the web sessions store can apply each
+      // slice via its existing per-agent applySnapshot path.
+      if (client.userId) {
+        try {
+          const allRows = yeaftSessionDb.getByUser(client.userId);
+          const byAgent = {};
+          for (const row of allRows) {
+            if (!row.agentId) continue;
+            (byAgent[row.agentId] ||= []).push(row);
+          }
+          for (const [agentId, sessions] of Object.entries(byAgent)) {
+            await sendToWebClient(client, {
+              type: 'yeaft_session_hydrate',
+              agentId,
+              sessions,
+              fromDb: true,
+            });
+          }
+        } catch (e) {
+          console.warn('[Server] yeaft session hydrate failed:', e?.message || e);
+        }
+      }
       break;
 
     case 'select_agent': {

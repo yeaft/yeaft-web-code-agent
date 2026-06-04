@@ -323,11 +323,15 @@ export async function loadSession(options = {}) {
     } catch (err) {
       console.warn(`[Yeaft] topUpDefaultVps failed: ${err?.message || err}`);
     }
-    try {
-      ensureDefaultSessionIfEmpty(yeaftDir, { memoryRoot: join(yeaftDir, 'memory') });
-    } catch (err) {
-      console.warn(`[Yeaft] ensureDefaultSessionIfEmpty failed: ${err?.message || err}`);
-    }
+    // fix-yeaft-session-server-persistence: stop auto-seeding a
+    // `grp_default` per agent. Previously every agent that booted with
+    // zero sessions would manufacture an empty default group, which on
+    // the unified sidebar shows up as a phantom row distinct from the
+    // user's real session — and on agent switch it stole the active-
+    // session slot. With server-side persistence the user's actual
+    // yeaft sessions are now hydrated from the DB; if they have none,
+    // the sidebar shows the empty state + "create session" CTA, which
+    // is the explicit behaviour the user asked for.
 
     // task-fix-memory-load: backfill summary.md for VPs / groups created
     // before the create-time seed was added. Without this, an existing

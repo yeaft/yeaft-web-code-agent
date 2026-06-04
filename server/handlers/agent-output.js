@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { messageDb } from '../database.js';
+import { messageDb, yeaftSessionDb } from '../database.js';
 import { broadcastAgentList, forwardToClients, sendToWebClient } from '../ws-utils.js';
 import { trackMessage, webClients, previewFiles } from '../context.js';
 import { CONFIG } from '../config.js';
@@ -466,6 +466,108 @@ export async function handleAgentOutput(agentId, agent, msg) {
         }
       }
       break;
+
+    case 'group_list_updated':
+    case 'session_list_updated': {
+      // Server-side persistence for yeaft sessions. Mirror the agent's
+      // authoritative snapshot into the `yeaft_sessions` table so the
+      // unified sidebar can show this user's yeaft sessions across all
+      // their agents (online or not) and survive reload. Pure shadow
+      // store — agent's on-disk `~/.yeaft/sessions/` remains canonical.
+      // Forwarding to the web continues unchanged below.
+      try {
+        const rows = Array.isArray(msg.sessions)
+          ? msg.sessions
+          : (Array.isArray(msg.groups) ? msg.groups : []);
+        if (agent.ownerId) {
+          yeaftSessionDb.reconcileFromSnapshot(agent.ownerId, agent.id, rows);
+        }
+      } catch (e) {
+        console.warn(`[Server] yeaft session persist failed for agent ${agent.id}:`, e?.message || e);
+      }
+      // Relay the envelope verbatim to the web. The agent emits both
+      // `group_list_updated` (legacy) and `session_list_updated` (new);
+      // forward whichever we received with the same payload shape +
+      // agentId stamp so the web sessions store can merge per-agent.
+      for (const [, c] of webClients) {
+        if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
+          await sendToWebClient(c, {
+            type: msg.type,
+            agentId: agent.id,
+            ...(Array.isArray(msg.groups) ? { groups: msg.groups } : {}),
+            ...(Array.isArray(msg.sessions) ? { sessions: msg.sessions } : {}),
+          });
+        }
+      }
+      break;
+    }
+
+    case 'group_roster_changed':
+    case 'session_roster_changed': {
+      // Delta event — update only the affected session row. Same as
+      // above: keep the DB shadow + forward to web.
+      try {
+        if (agent.ownerId && msg) {
+          const sessionId = msg.sessionId || msg.groupId;
+          if (sessionId) {
+            const existing = yeaftSessionDb.get(sessionId);
+            // Roster-delta path is a cache update, not authoritative
+            // creation. If we've never seen this row before, skip and
+            // wait for the next full snapshot (which carries truthful
+            // createdAt / workDir / config).
+            if (!existing) break;
+            const merged = {
+              id: sessionId,
+              name: msg.name != null ? msg.name : (existing?.name || sessionId),
+              roster: Array.isArray(msg.roster)
+                ? msg.roster
+                : (existing?.roster || []),
+              defaultVpId: msg.defaultVpId != null
+                ? msg.defaultVpId
+                : (existing?.defaultVpId || null),
+              workDir: existing?.workDir || '',
+              config: existing?.config || {},
+              announcement: typeof msg.announcement === 'string'
+                ? msg.announcement
+                : (existing?.announcement || ''),
+              createdAt: existing?.createdAt || Date.now(),
+            };
+            yeaftSessionDb.upsertFromSnapshot(agent.ownerId, agent.id, merged);
+          }
+        }
+      } catch (e) {
+        console.warn(`[Server] yeaft roster persist failed for agent ${agent.id}:`, e?.message || e);
+      }
+      for (const [, c] of webClients) {
+        if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
+          await sendToWebClient(c, { ...msg, agentId: agent.id });
+        }
+      }
+      break;
+    }
+
+    case 'group_crud_result':
+    case 'session_crud_result': {
+      // Surface op result to the web (the only client that cares about
+      // requestId routing). Also keep the DB shadow consistent for
+      // delete/archive — create/update are covered by the snapshot
+      // that follows from the agent.
+      try {
+        const op = msg.op;
+        const sessionId = msg.sessionId || msg.groupId;
+        if (msg.ok && sessionId && (op === 'delete' || op === 'archive')) {
+          yeaftSessionDb.delete(sessionId);
+        }
+      } catch (e) {
+        console.warn(`[Server] yeaft crud-result persist failed:`, e?.message || e);
+      }
+      for (const [, c] of webClients) {
+        if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
+          await sendToWebClient(c, { ...msg, agentId: agent.id });
+        }
+      }
+      break;
+    }
 
     case 'yeaft_debug_history':
       // fix-vp-multi-thread (bug 4): relay the persistent SQLite trace

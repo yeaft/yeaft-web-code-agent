@@ -122,10 +122,22 @@ export const useSessionsStore = defineStore('sessions', {
         this.sessionOrder = [...otherAgents, ...thisAgent];
       }
       this.lastSnapshotAt = Date.now();
+      // fix-yeaft-session-server-persistence: prefer the user's
+      // last-viewed yeaft session over a blind `sessionOrder[0]`
+      // fall-back. This is what stops "switch agent + reload" from
+      // arbitrarily landing on some other agent's first session
+      // (the phantom-default-group bug).
+      let lastViewed = null;
+      try { lastViewed = localStorage.getItem('lastViewedYeaftSession') || null; }
+      catch (_) {}
       if (this.activeSessionId && !this.sessions[this.activeSessionId]) {
-        this.activeSessionId = this.sessionOrder[0] || null;
+        this.activeSessionId = (lastViewed && this.sessions[lastViewed])
+          ? lastViewed
+          : (this.sessionOrder[0] || null);
       } else if (!this.activeSessionId && this.sessionOrder.length > 0) {
-        this.activeSessionId = this.sessionOrder[0];
+        this.activeSessionId = (lastViewed && this.sessions[lastViewed])
+          ? lastViewed
+          : this.sessionOrder[0];
       }
       // Sanitize the chat store's parallel filter so a persisted
       // yeaftActiveSessionFilter pointing at a now-deleted session does not
@@ -133,7 +145,11 @@ export const useSessionsStore = defineStore('sessions', {
       try {
         const chat = window.Pinia?.useChatStore?.();
         if (chat && chat.yeaftActiveSessionFilter && !this.sessions[chat.yeaftActiveSessionFilter]) {
-          chat.yeaftActiveSessionFilter = this.sessionOrder[0] || null;
+          chat.yeaftActiveSessionFilter = (lastViewed && this.sessions[lastViewed])
+            ? lastViewed
+            : (this.sessionOrder[0] || null);
+        } else if (chat && !chat.yeaftActiveSessionFilter && lastViewed && this.sessions[lastViewed]) {
+          chat.yeaftActiveSessionFilter = lastViewed;
         }
       } catch (_) {}
     },

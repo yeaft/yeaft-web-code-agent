@@ -125,6 +125,34 @@ const migrations = [
   `ALTER TABLE sessions ADD COLUMN is_custom_title INTEGER DEFAULT 0`
 ];
 
+// Yeaft sessions table — server-side persistence so the unified sidebar
+// can list yeaft sessions across all the user's agents (online or not)
+// and survive reload, mirroring how chat conversations work via the
+// `sessions` table. Schema is deliberately separate because the
+// lifecycle and metadata diverge (roster, defaultVpId, per-session
+// config overrides — none of which are chat concerns).
+const yeaftSessionsTable = `
+  CREATE TABLE IF NOT EXISTS yeaft_sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT REFERENCES users(id),
+    agent_id TEXT NOT NULL,
+    name TEXT,
+    roster_json TEXT,
+    default_vp_id TEXT,
+    work_dir TEXT,
+    config_json TEXT,
+    announcement TEXT,
+    created_at INTEGER,
+    updated_at INTEGER NOT NULL,
+    is_archived INTEGER DEFAULT 0
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_yeaft_sessions_user ON yeaft_sessions(user_id);
+  CREATE INDEX IF NOT EXISTS idx_yeaft_sessions_agent ON yeaft_sessions(agent_id);
+  CREATE INDEX IF NOT EXISTS idx_yeaft_sessions_updated ON yeaft_sessions(updated_at DESC);
+`;
+db.exec(yeaftSessionsTable);
+
 for (const migration of migrations) {
   try {
     db.exec(migration);
@@ -549,6 +577,9 @@ export const stmts = {
   deleteUserSessionsByUser: db.prepare(`
     DELETE FROM sessions WHERE user_id = ?
   `),
+  deleteYeaftSessionsByUserCascade: db.prepare(`
+    DELETE FROM yeaft_sessions WHERE user_id = ?
+  `),
   deleteIdentitiesForUser: db.prepare(`
     DELETE FROM user_identities WHERE user_id = ?
   `),
@@ -571,6 +602,54 @@ export const stmts = {
   `),
   deleteUserById: db.prepare(`
     DELETE FROM users WHERE id = ?
+  `),
+
+  // Yeaft session 操作
+  upsertYeaftSession: db.prepare(`
+    INSERT INTO yeaft_sessions
+      (id, user_id, agent_id, name, roster_json, default_vp_id, work_dir,
+       config_json, announcement, created_at, updated_at, is_archived)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      user_id = COALESCE(excluded.user_id, user_id),
+      agent_id = excluded.agent_id,
+      name = excluded.name,
+      roster_json = excluded.roster_json,
+      default_vp_id = excluded.default_vp_id,
+      work_dir = excluded.work_dir,
+      config_json = excluded.config_json,
+      announcement = excluded.announcement,
+      created_at = COALESCE(yeaft_sessions.created_at, excluded.created_at),
+      updated_at = excluded.updated_at,
+      is_archived = excluded.is_archived
+  `),
+
+  getYeaftSession: db.prepare(`
+    SELECT * FROM yeaft_sessions WHERE id = ?
+  `),
+
+  getYeaftSessionsByUser: db.prepare(`
+    SELECT * FROM yeaft_sessions
+    WHERE user_id = ? AND is_archived = 0
+    ORDER BY updated_at DESC
+  `),
+
+  getYeaftSessionsByAgent: db.prepare(`
+    SELECT * FROM yeaft_sessions
+    WHERE agent_id = ? AND is_archived = 0
+    ORDER BY updated_at DESC
+  `),
+
+  deleteYeaftSession: db.prepare(`
+    DELETE FROM yeaft_sessions WHERE id = ?
+  `),
+
+  deleteYeaftSessionsByUser: db.prepare(`
+    DELETE FROM yeaft_sessions WHERE user_id = ?
+  `),
+
+  setYeaftSessionArchived: db.prepare(`
+    UPDATE yeaft_sessions SET is_archived = ?, updated_at = ? WHERE id = ?
   `),
 
   // Dashboard 聚合
