@@ -151,7 +151,7 @@ const yeaftSessionsTable = `
   CREATE INDEX IF NOT EXISTS idx_yeaft_sessions_agent ON yeaft_sessions(agent_id);
   CREATE INDEX IF NOT EXISTS idx_yeaft_sessions_updated ON yeaft_sessions(updated_at DESC);
 `;
-try { db.exec(yeaftSessionsTable); } catch (e) { /* table already exists */ }
+db.exec(yeaftSessionsTable);
 
 for (const migration of migrations) {
   try {
@@ -630,7 +630,7 @@ export const stmts = {
 
   getYeaftSessionsByUser: db.prepare(`
     SELECT * FROM yeaft_sessions
-    WHERE (user_id = ? OR user_id IS NULL) AND is_archived = 0
+    WHERE user_id = ? AND is_archived = 0
     ORDER BY updated_at DESC
   `),
 

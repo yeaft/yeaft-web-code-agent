@@ -105,7 +105,8 @@ export const yeaftSessionDb = {
       // Only touch rows belonging to this user — guards against
       // accidentally wiping another user's rows if agent ownership is
       // ever shared (currently it isn't, but be defensive).
-      if (userId && row.user_id && row.user_id !== userId) continue;
+      // Treat NULL user_id as foreign too — never cross-delete.
+      if (userId && row.user_id !== userId) continue;
       if (!incomingIds.has(row.id)) {
         stmts.deleteYeaftSession.run(row.id);
       }

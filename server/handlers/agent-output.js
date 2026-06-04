@@ -511,6 +511,11 @@ export async function handleAgentOutput(agentId, agent, msg) {
           const sessionId = msg.sessionId || msg.groupId;
           if (sessionId) {
             const existing = yeaftSessionDb.get(sessionId);
+            // Roster-delta path is a cache update, not authoritative
+            // creation. If we've never seen this row before, skip and
+            // wait for the next full snapshot (which carries truthful
+            // createdAt / workDir / config).
+            if (!existing) break;
             const merged = {
               id: sessionId,
               name: msg.name != null ? msg.name : (existing?.name || sessionId),

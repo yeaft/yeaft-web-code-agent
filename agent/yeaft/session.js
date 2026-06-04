@@ -332,8 +332,6 @@ export async function loadSession(options = {}) {
     // yeaft sessions are now hydrated from the DB; if they have none,
     // the sidebar shows the empty state + "create session" CTA, which
     // is the explicit behaviour the user asked for.
-    //
-    // ensureDefaultSessionIfEmpty(yeaftDir, { memoryRoot: join(yeaftDir, 'memory') });
 
     // task-fix-memory-load: backfill summary.md for VPs / groups created
     // before the create-time seed was added. Without this, an existing
