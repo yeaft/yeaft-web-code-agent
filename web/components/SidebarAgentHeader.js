@@ -17,11 +17,10 @@ export default {
     upgradingAgents: { type: Object, default: () => ({}) },
     // Per-agent action buttons are optional.
     showAgentActions: { type: Boolean, default: false },
-    agentActionMode: { type: String, default: 'buttons' },
   },
   emits: ['restart-agent', 'upgrade-agent'],
   data() {
-    return { open: false, openActionAgentId: null };
+    return { open: false };
   },
   created() {
     this._onDocClick = (e) => {
@@ -29,11 +28,9 @@ export default {
       const t = e.target;
       if (t && t.closest && (
         t.closest('.agent-dropdown-trigger') ||
-        t.closest('.agent-dropdown') ||
-        t.closest('.agent-action-menu')
+        t.closest('.agent-dropdown')
       )) return;
       this.open = false;
-      this.openActionAgentId = null;
     };
     if (typeof document !== 'undefined') document.addEventListener('click', this._onDocClick, true);
   },
@@ -58,13 +55,6 @@ export default {
     canUseAgentAction(agent) {
       return !!(agent && agent.online && !this.restartingAgents[agent.id] && !this.upgradingAgents[agent.id]);
     },
-    toggleAgentActionMenu(agentId) {
-      this.openActionAgentId = this.openActionAgentId === agentId ? null : agentId;
-    },
-    emitAgentAction(type, agentId) {
-      this.openActionAgentId = null;
-      this.$emit(type === 'upgrade' ? 'upgrade-agent' : 'restart-agent', agentId);
-    },
   },
   template: `
     <div class="sidebar-brand agent-dropdown-trigger" @click.stop="open = !open" :title="tr('chat.agent.manage', 'Manage agents')">
@@ -83,30 +73,7 @@ export default {
           <span class="agent-dropdown-latency" v-if="agent.online && agent.latency" :class="getLatencyClass(agent.latency)">{{ agent.latency }}ms</span>
           <span class="agent-dropdown-status" v-if="restartingAgents[agent.id]">{{ tr('chat.agent.restarting', 'Restarting…') }}</span>
           <span class="agent-dropdown-status" v-else-if="upgradingAgents[agent.id]">{{ tr('chat.agent.upgrading', 'Upgrading…') }}</span>
-          <template v-if="showAgentActions && agentActionMode === 'menu'">
-            <button
-              type="button"
-              class="agent-action-dots-btn"
-              :class="{ 'menu-open': openActionAgentId === agent.id }"
-              @click.stop="toggleAgentActionMenu(agent.id)"
-              :disabled="!canUseAgentAction(agent)"
-              :title="tr('yeaft.session.moreActions', 'More actions')"
-              :aria-label="tr('yeaft.session.moreActions', 'More actions')"
-              aria-haspopup="menu"
-              :aria-expanded="openActionAgentId === agent.id ? 'true' : 'false'"
-            >
-              <svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
-            </button>
-            <div v-if="openActionAgentId === agent.id" class="agent-action-menu session-menu" role="menu" @click.stop>
-              <button type="button" role="menuitem" class="session-menu-item" @click.stop="emitAgentAction('upgrade', agent.id)">
-                {{ tr('chat.agent.upgrade', 'Upgrade') }}
-              </button>
-              <button type="button" role="menuitem" class="session-menu-item" @click.stop="emitAgentAction('restart', agent.id)">
-                {{ tr('chat.agent.restart', 'Restart') }}
-              </button>
-            </div>
-          </template>
-          <template v-else-if="showAgentActions">
+          <template v-if="showAgentActions">
             <button
               class="agent-dropdown-upgrade-btn"
               @click.stop="$emit('upgrade-agent', agent.id)"

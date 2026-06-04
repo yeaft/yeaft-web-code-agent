@@ -44,37 +44,6 @@
   position: relative;
 }
 
-.yeaft-sidebar .agent-action-dots-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  flex-shrink: 0;
-}
-
-.yeaft-sidebar .agent-action-dots-btn:hover:not(:disabled),
-.yeaft-sidebar .agent-action-dots-btn.menu-open {
-  background: var(--sidebar-hover);
-  color: var(--text-primary);
-}
-
-.yeaft-sidebar .agent-action-dots-btn:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-}
-
-.yeaft-sidebar .agent-action-dots-btn svg {
-  width: 16px;
-  height: 16px;
-  fill: currentColor;
-}
-
 /* Bottom settings row ------------------------------------------------------ */
 .yeaft-sidebar .sidebar-bottom {
   padding: 8px;
