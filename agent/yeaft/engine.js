@@ -18,6 +18,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { resolve as resolvePath } from 'path';
 import { buildSystemPrompt, buildWorkerPrompt } from './prompts.js';
 import { LLMContextError, LLMAbortError } from './llm/adapter.js';
 import { runMemoryPreflow, buildRelevantScopes } from './sessions/pre-flow.js';
@@ -877,7 +878,17 @@ export class Engine {
     return {
       signal,
       yeaftDir: this.#yeaftDir,
-      cwd: process.cwd(),
+      // Group-scoped working directory. Threaded from #runQuery({ workDir })
+      // → set by web-bridge runVpTurn from sessionMeta.workDir. Tools read
+      // `ctx.cwd` and resolve relative paths against it. Always absolute
+      // (path.resolve normalizes relative inputs + trailing slashes) so
+      // tools that string-concatenate don't accidentally walk from
+      // process.cwd(). Falls back to process.cwd() in non-group / test
+      // contexts.
+      cwd: (() => {
+        const raw = typeof vpCtx?.workDir === 'string' ? vpCtx.workDir.trim() : '';
+        return raw ? resolvePath(raw) : process.cwd();
+      })(),
       mcpManager: this.#mcpManager,
       skillManager: this.#skillManager,
       conversationStore: this.#conversationStore,
@@ -2266,6 +2277,7 @@ export class Engine {
         contextWindow: currentContextWindow,
         getCurrentTodos,
         setCurrentTodos,
+        workDir,
         requestEndTurn: (reason) => {
           // First call wins — preserve the kind/reason of the first tool
           // that asked to end the turn. Late callers (a second
@@ -2344,7 +2356,14 @@ export class Engine {
               output = await this.#toolRegistry.execute(tc.name, tc.input, toolCtx);
             } else {
               const tool = this.#tools.get(tc.name);
-              const rawOutput = await tool.execute(tc.input, { signal });
+              // Pass the full toolCtx (cwd, workDir, signal, …) — not just
+              // `{ signal }`. Legacy registerTool() callers historically got
+              // a 1-field ctx, but that means tools like bash/file-read run
+              // in the agent process cwd instead of the group's workDir.
+              // Real production goes through #toolRegistry; the legacy path
+              // is exercised by tests and a few standalone tools. Aligning
+              // both paths keeps `ctx.cwd` semantics consistent.
+              const rawOutput = await tool.execute(tc.input, toolCtx);
               // Legacy #tools branch must apply the same per-tool cap as
               // ToolRegistry.execute. Otherwise a deployment using the legacy
               // registration path bypasses the defense entirely.
