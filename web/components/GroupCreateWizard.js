@@ -1,27 +1,20 @@
 /**
- * GroupCreateWizard — single-page version (task-fix 5-bugs v2).
+ * GroupCreateWizard — mirrors Chat's new-conversation modal (chat-modals.css).
  *
- * One modal, one scroll:
- *   - Name field on top
- *   - Roster (VP checkboxes) below
- *   - Default-VP radio beside each selected member (compact)
- *   - Cancel + Create in the footer
+ * Layout:
+ *   - Top controls: name, workDir (+ browse), VP roster row (yeaft-unique).
+ *   - Content area: when workDir is empty, show distinct workDirs derived
+ *     from the existing sessions snapshot. When workDir is set, show the
+ *     sessions whose workDir matches (a "resume" list).
+ *   - Footer: Create button — runs sessionCrudRequest('create', …).
  *
- * Previous 2-step flow felt 罗嗦 (redundant). All fields are visible
- * simultaneously now — if the user changes their mind about the name
- * after picking members, they don't have to click "back".
- *
- * Roster is authoritative — the wizard does NOT auto-expand to the full
- * VP library (D1 seed is the only place that does). An empty roster is
- * permitted; the group opens in the `no_default_vp` invite state and the
- * invite modal nudges the user on first send.
- *
- * Flow: useChatStore().sessionCrudRequest('create', …) → 10s-timeout
- * WS round-trip → `{ok, op, group?, error?}`.
+ * Clicking an existing session in the resume list does NOT create — it
+ * sets that session active and closes the wizard (chat's resumeSession
+ * semantics). Per-folder aggregation comes from the client-side sessions
+ * store snapshot, no new agent op required.
  */
-// Stores are resolved lazily via window.Pinia to keep this module
-// importable in node-only unit tests that don't mount Pinia.
 import VpAvatar from './VpAvatar.js';
+import { getLastPathSegment, formatResumeDate } from '../utils/path-segments.js';
 
 export default {
   name: 'GroupCreateWizard',
@@ -29,35 +22,32 @@ export default {
   emits: ['close', 'created'],
   template: `
     <Teleport to="body">
-    <div class="group-edit-overlay group-wizard-overlay" @click.self="onOverlayClick" role="dialog" aria-modal="true" :aria-label="$t('yeaft.session.wizard.title')">
-      <div class="group-edit-modal group-wizard-modal">
-        <header class="group-edit-header">
-          <span class="group-edit-title">{{ $t('yeaft.session.wizard.title') }}</span>
-          <button class="group-edit-close" type="button" @click="requestClose" :aria-label="$t('yeaft.session.wizard.close')">×</button>
-        </header>
+    <div class="modal-overlay" @click.self="onOverlayClick" role="dialog" aria-modal="true" :aria-label="$t('yeaft.session.wizard.title')">
+      <div class="modal resume-modal">
+        <div class="resume-modal-controls">
+          <button class="resume-close-btn" type="button" @click="requestClose" :aria-label="$t('yeaft.session.wizard.close')">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+          </button>
 
-        <div class="group-wizard-body group-wizard-body-single">
-          <!-- NAME -->
-          <label class="group-wizard-field">
-            <span class="group-wizard-field-label">{{ $t('yeaft.session.wizard.step.name') }}</span>
+          <!-- Name -->
+          <div class="resume-control-row">
+            <label class="resume-control-label">{{ $t('yeaft.session.wizard.step.name') }}</label>
             <input
               type="text"
               v-model.trim="form.name"
               :placeholder="$t('yeaft.session.wizard.namePlaceholder')"
               maxlength="60"
               autocomplete="off"
-              class="group-wizard-input"
+              class="resume-input"
               :class="{ 'is-error': !!nameError }"
               ref="nameInput"
               @keydown.enter.prevent="onSubmit"
             />
-            <span class="group-wizard-hint">{{ $t('yeaft.session.wizard.nameHint') }}</span>
-            <span v-if="nameError" class="group-wizard-error">{{ nameError }}</span>
-          </label>
+          </div>
 
-          <!-- WORK DIR -->
-          <label class="group-wizard-field">
-            <span class="group-wizard-field-label">{{ $t('yeaft.session.wizard.workDir') }}</span>
+          <!-- Work directory -->
+          <div class="resume-control-row">
+            <label class="resume-control-label">{{ $t('yeaft.session.wizard.workDir') }}</label>
             <div class="workdir-input-group">
               <input
                 type="text"
@@ -72,83 +62,127 @@ export default {
                 type="button"
                 @click="openFolderPicker"
                 :disabled="busy || !folderPickerAgentId"
-                :title="$t('crewConfig.browse')"
+                :title="$t('modal.newConv.browse')"
               >
                 <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
               </button>
             </div>
-            <span class="group-wizard-hint">{{ $t('yeaft.session.wizard.workDirHint') }}</span>
-          </label>
+          </div>
 
-          <!-- ROSTER -->
-          <div class="group-wizard-field">
-            <span class="group-wizard-field-label">{{ $t('yeaft.session.wizard.roster') }}</span>
-            <span class="group-wizard-hint">{{ $t('yeaft.session.wizard.rosterHint') }}</span>
-            <div v-if="vpList.length === 0 && vpLibraryEmpty" class="group-wizard-empty">
-              {{ $t('yeaft.session.wizard.rosterEmpty') }}
-            </div>
-            <div v-else-if="vpList.length === 0" class="group-wizard-empty group-wizard-empty-loading">
-              {{ $t('yeaft.session.wizard.rosterLoading') }}
-            </div>
-            <ul v-else class="group-wizard-roster-list" role="listbox" aria-multiselectable="true">
-              <li
-                v-for="vp in vpList"
-                :key="vp.vpId"
-                class="group-wizard-roster-item"
-                :class="{ 'is-selected': form.roster.includes(vp.vpId), 'is-default': form.defaultVpId === vp.vpId }"
-                role="option"
-                :aria-selected="form.roster.includes(vp.vpId)"
-              >
-                <label class="group-wizard-roster-row">
-                  <input
-                    type="checkbox"
-                    class="group-wizard-roster-check"
-                    :value="vp.vpId"
-                    :checked="form.roster.includes(vp.vpId)"
-                    @change="toggleMember(vp.vpId, $event.target.checked)"
-                  />
-                  <VpAvatar
-                    :vp-id="vp.vpId"
-                    :size="22"
-                    :aria-label="vpLabelFor(vp.vpId)"
-                  />
-                  <span class="group-wizard-roster-name" :style="{ color: vpTextColorFor(vp.vpId) }">{{ vpLabelFor(vp.vpId) }}</span>
-                </label>
-                <button
-                  v-if="form.roster.includes(vp.vpId)"
-                  type="button"
-                  class="group-wizard-default-star"
-                  :class="{ 'is-on': form.defaultVpId === vp.vpId }"
-                  :aria-label="$t('yeaft.session.wizard.defaultVpHint')"
-                  :aria-pressed="form.defaultVpId === vp.vpId"
-                  :title="$t('yeaft.session.wizard.defaultVpHint')"
-                  @click.stop="form.defaultVpId = vp.vpId"
+          <!-- VP roster (yeaft-unique) -->
+          <div class="resume-control-row resume-control-row-vp">
+            <label class="resume-control-label">{{ $t('yeaft.session.wizard.roster') }}</label>
+            <div class="yeaft-wizard-roster">
+              <div v-if="vpList.length === 0 && vpLibraryEmpty" class="yeaft-wizard-roster-empty">
+                {{ $t('yeaft.session.wizard.rosterEmpty') }}
+              </div>
+              <div v-else-if="vpList.length === 0" class="yeaft-wizard-roster-empty">
+                {{ $t('yeaft.session.wizard.rosterLoading') }}
+              </div>
+              <ul v-else class="yeaft-wizard-roster-list" role="listbox" aria-multiselectable="true">
+                <li
+                  v-for="vp in vpList"
+                  :key="vp.vpId"
+                  class="yeaft-wizard-roster-item"
+                  :class="{ 'is-selected': form.roster.includes(vp.vpId), 'is-default': form.defaultVpId === vp.vpId }"
+                  role="option"
+                  :aria-selected="form.roster.includes(vp.vpId)"
                 >
-                  <span aria-hidden="true">{{ form.defaultVpId === vp.vpId ? '★' : '☆' }}</span>
-                </button>
-              </li>
-            </ul>
-          </div>
-
-          <div v-if="submitError" class="group-wizard-error" role="alert">
-            {{ submitError }}
-          </div>
-
-          <div class="group-wizard-actions">
-            <button class="group-wizard-link-btn" type="button" @click="requestClose" :disabled="busy">
-              {{ $t('yeaft.session.wizard.cancel') }}
-            </button>
-            <button
-              class="group-wizard-primary-btn"
-              type="button"
-              @click="onSubmit"
-              :disabled="busy || !canAdvanceFromName"
-            >
-              {{ busy ? $t('yeaft.session.wizard.creating') : $t('yeaft.session.wizard.create') }}
-            </button>
+                  <label class="yeaft-wizard-roster-row">
+                    <input
+                      type="checkbox"
+                      :value="vp.vpId"
+                      :checked="form.roster.includes(vp.vpId)"
+                      @change="toggleMember(vp.vpId, $event.target.checked)"
+                    />
+                    <VpAvatar :vp-id="vp.vpId" :size="20" :aria-label="vpLabelFor(vp.vpId)" />
+                    <span class="yeaft-wizard-roster-name" :style="{ color: vpTextColorFor(vp.vpId) }">{{ vpLabelFor(vp.vpId) }}</span>
+                  </label>
+                  <button
+                    v-if="form.roster.includes(vp.vpId)"
+                    type="button"
+                    class="yeaft-wizard-default-star"
+                    :class="{ 'is-on': form.defaultVpId === vp.vpId }"
+                    :aria-label="$t('yeaft.session.wizard.defaultVpHint')"
+                    :aria-pressed="form.defaultVpId === vp.vpId"
+                    :title="$t('yeaft.session.wizard.defaultVpHint')"
+                    @click.stop="form.defaultVpId = vp.vpId"
+                  >
+                    <span aria-hidden="true">{{ form.defaultVpId === vp.vpId ? '★' : '☆' }}</span>
+                  </button>
+                </li>
+              </ul>
+            </div>
           </div>
         </div>
 
+        <!-- Content area: folders or existing sessions for the chosen workDir -->
+        <div class="resume-modal-content">
+          <!-- Folder aggregation (workDir empty) -->
+          <div class="resume-panel" v-if="!form.workDir">
+            <div class="resume-panel-header">
+              <span>{{ $t('yeaft.session.wizard.folderLabel') }}</span>
+            </div>
+            <div class="resume-panel-list">
+              <div
+                v-for="folder in folderAggregates"
+                :key="folder.path"
+                class="resume-list-item folder-item-compact"
+                @click="selectFolder(folder.path)"
+              >
+                <div class="item-path">{{ folder.path }}</div>
+                <span class="item-badge">{{ folder.count }}</span>
+              </div>
+              <div class="resume-panel-empty" v-if="folderAggregates.length === 0">
+                {{ $t('yeaft.session.wizard.noWorkDirs') }}
+              </div>
+            </div>
+          </div>
+
+          <!-- Sessions for the chosen workDir -->
+          <div class="resume-panel" v-else>
+            <div class="resume-panel-header">
+              <div class="resume-panel-header-left">
+                <button class="refresh-btn-mini" @click="form.workDir = ''" :title="$t('yeaft.session.wizard.back')">
+                  <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+                </button>
+                <span>{{ $t('yeaft.session.wizard.sessionLabel') }} <span class="header-tag">{{ getLastPathSegment(form.workDir) }}</span></span>
+              </div>
+            </div>
+            <div class="resume-panel-list">
+              <div
+                v-for="session in sessionsForCurrentDir"
+                :key="session.id"
+                class="resume-list-item session-item-compact"
+                @click="resumeExisting(session)"
+              >
+                <div class="item-name">{{ session.name || session.id }}</div>
+                <div class="item-time">{{ formatDate(session.createdAt) }}</div>
+              </div>
+              <div class="resume-panel-empty" v-if="sessionsForCurrentDir.length === 0">
+                {{ $t('yeaft.session.wizard.noSessions') }}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="submitError || nameError" class="resume-modal-error" role="alert">
+          {{ submitError || nameError }}
+        </div>
+
+        <div class="resume-modal-footer">
+          <button
+            class="modern-btn"
+            type="button"
+            @click="onSubmit"
+            :disabled="busy || !canSubmit"
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+            {{ busy ? $t('yeaft.session.wizard.creating') : $t('yeaft.session.wizard.create') }}
+          </button>
+        </div>
+
+        <!-- Folder picker -->
         <div class="folder-picker-overlay" v-if="folderPickerOpen" @click.self="closeFolderPicker">
           <div class="folder-picker-dialog">
             <div class="folder-picker-header">
@@ -189,12 +223,7 @@ export default {
   `,
   data() {
     return {
-      form: {
-        name: '',
-        roster: [],
-        defaultVpId: null,
-        workDir: '',
-      },
+      form: { name: '', roster: [], defaultVpId: null, workDir: '' },
       busy: false,
       nameError: '',
       submitError: '',
@@ -208,42 +237,53 @@ export default {
   },
   computed: {
     chat() {
-      try {
-        if (typeof window !== 'undefined' && window.Pinia?.useChatStore) {
-          return window.Pinia.useChatStore();
-        }
-      } catch (_) {}
+      try { if (typeof window !== 'undefined' && window.Pinia?.useChatStore) return window.Pinia.useChatStore(); } catch (_) {}
       return null;
     },
     vpStore() {
-      try {
-        if (typeof window !== 'undefined' && window.Pinia?.useVpStore) {
-          return window.Pinia.useVpStore();
-        }
-      } catch (_) {}
+      try { if (typeof window !== 'undefined' && window.Pinia?.useVpStore) return window.Pinia.useVpStore(); } catch (_) {}
       return null;
     },
     sessionsStore() {
-      try {
-        if (typeof window !== 'undefined' && window.Pinia?.useSessionsStore) {
-          return window.Pinia.useSessionsStore();
-        }
-      } catch (_) {}
+      try { if (typeof window !== 'undefined' && window.Pinia?.useSessionsStore) return window.Pinia.useSessionsStore(); } catch (_) {}
       return null;
     },
     vpList() { return this.vpStore?.vpList || []; },
-    // task-339-F2 defensive: distinguish "snapshot received and empty" (emptyLibrary=true)
-    // from "snapshot not received yet" (emptyLibrary=false && vpList=0 && lastSnapshotAt=0).
     vpLibraryEmpty() {
       const s = this.vpStore;
       if (!s) return false;
       if (s.emptyLibrary === true) return true;
       return !!(s.lastSnapshotAt && s.lastSnapshotAt > 0 && (s.vpOrder?.length || 0) === 0);
     },
-    canAdvanceFromName() { return (this.form.name || '').trim().length > 0; },
+    canSubmit() { return (this.form.name || '').trim().length > 0; },
     folderPickerAgentId() {
       const chat = this.chat;
       return chat?.currentAgent || chat?.agents?.[0]?.id || '';
+    },
+    allSessions() {
+      return this.sessionsStore?.sessionList || [];
+    },
+    // Distinct workDirs aggregated across all known sessions, with a count.
+    // Sessions without a workDir bucket under "" (skipped from the panel —
+    // those are unrooted seed groups, not meaningful for "resume here").
+    folderAggregates() {
+      const map = new Map();
+      for (const s of this.allSessions) {
+        const wd = (s && typeof s.workDir === 'string') ? s.workDir.trim() : '';
+        if (!wd) continue;
+        const existing = map.get(wd) || { path: wd, count: 0 };
+        existing.count += 1;
+        map.set(wd, existing);
+      }
+      return Array.from(map.values()).sort((a, b) => a.path.localeCompare(b.path));
+    },
+    sessionsForCurrentDir() {
+      const wd = (this.form.workDir || '').trim();
+      if (!wd) return [];
+      return this.allSessions
+        .filter(s => (s && typeof s.workDir === 'string' ? s.workDir.trim() : '') === wd)
+        .slice()
+        .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
     },
   },
   mounted() {
@@ -253,7 +293,6 @@ export default {
       const el = this.$refs.nameInput;
       if (el && typeof el.focus === 'function') el.focus();
     });
-    // task-347 Fix 2: proactively subscribe to VP snapshot on mount.
     try {
       if (this.vpStore && this.vpStore.lastSnapshotAt === 0) {
         const chat = this.chat;
@@ -261,7 +300,7 @@ export default {
           chat.sendWsMessage({ type: 'yeaft_vp_subscribe' });
         }
       }
-    } catch (_) { /* test env without Pinia/ws — no-op */ }
+    } catch (_) { /* test env */ }
   },
   beforeUnmount() {
     window.removeEventListener('keydown', this.onEsc);
@@ -269,12 +308,8 @@ export default {
     if (this._folderPickerTimer) clearTimeout(this._folderPickerTimer);
   },
   methods: {
-    onEsc(e) {
-      if (e.key === 'Escape' && !this.busy) this.requestClose();
-    },
-    onOverlayClick() {
-      if (!this.busy) this.requestClose();
-    },
+    onEsc(e) { if (e.key === 'Escape' && !this.busy && !this.folderPickerOpen) this.requestClose(); },
+    onOverlayClick() { if (!this.busy) this.requestClose(); },
     requestClose() { this.$emit('close'); },
     toggleMember(vpId, checked) {
       if (checked) {
@@ -295,6 +330,14 @@ export default {
       const fn = this.vpStore?.vpTextColor;
       return typeof fn === 'function' ? fn(vpId) : 'var(--vp-avatar-rat-fg)';
     },
+    selectFolder(path) { this.form.workDir = path; },
+    resumeExisting(session) {
+      if (!session || !session.id) return;
+      if (this.sessionsStore) this.sessionsStore.setActive(session.id);
+      this.$emit('close');
+    },
+    getLastPathSegment(p) { return getLastPathSegment(p); },
+    formatDate(iso) { return formatResumeDate(iso, this.$t.bind(this)); },
     openFolderPicker() {
       const agentId = this.folderPickerAgentId;
       if (!agentId || !this.chat?.sendWsMessage) return;
@@ -322,10 +365,7 @@ export default {
     },
     closeFolderPicker() {
       this.folderPickerOpen = false;
-      if (this._folderPickerTimer) {
-        clearTimeout(this._folderPickerTimer);
-        this._folderPickerTimer = null;
-      }
+      if (this._folderPickerTimer) { clearTimeout(this._folderPickerTimer); this._folderPickerTimer = null; }
     },
     loadFolderPickerDir(dirPath) {
       const agentId = this.folderPickerAgentId;
@@ -360,9 +400,7 @@ export default {
         this.loadFolderPickerDir(parent);
       }
     },
-    folderPickerSelectItem(entry) {
-      this.folderPickerSelected = entry.name;
-    },
+    folderPickerSelectItem(entry) { this.folderPickerSelected = entry.name; },
     folderPickerEnter(entry) {
       const isWin = this.folderPickerPath.includes('\\') || /^[A-Z]:/.test(entry.name);
       const sep = isWin ? '\\' : '/';
@@ -388,10 +426,7 @@ export default {
     handleFolderPickerMessage(event) {
       const msg = event.detail;
       if (!msg || msg.type !== 'directory_listing' || msg.conversationId !== '_workdir_picker') return;
-      if (this._folderPickerTimer) {
-        clearTimeout(this._folderPickerTimer);
-        this._folderPickerTimer = null;
-      }
+      if (this._folderPickerTimer) { clearTimeout(this._folderPickerTimer); this._folderPickerTimer = null; }
       this.folderPickerLoading = false;
       this.folderPickerEntries = (msg.entries || [])
         .filter(e => e.type === 'directory')
@@ -402,7 +437,7 @@ export default {
       this.submitError = '';
       this.nameError = '';
       if (this.busy) return;
-      if (!this.canAdvanceFromName) {
+      if (!this.canSubmit) {
         this.nameError = this.$t('yeaft.session.error.invalid_name');
         return;
       }
@@ -427,16 +462,10 @@ export default {
         const code = (res && res.error && res.error.code) || 'unknown';
         const message = (res && res.error && res.error.message) || '';
         const msgKey = `yeaft.session.error.${code}`;
-        // Always pass `{ message }` so any translation containing the
-        // `{message}` placeholder (e.g. yeaft.session.error.unknown) gets
-        // interpolated. If the key is missing, $t falls back to the key
-        // itself — in that case, render the unknown fallback explicitly.
         const translated = this.$t(msgKey, { message });
-        if (translated === msgKey) {
-          this.submitError = this.$t('yeaft.session.error.unknown', { message });
-        } else {
-          this.submitError = translated;
-        }
+        this.submitError = translated === msgKey
+          ? this.$t('yeaft.session.error.unknown', { message })
+          : translated;
       } catch (err) {
         this.submitError = this.$t('yeaft.session.error.unknown', { message: err && err.message || String(err) });
       } finally {

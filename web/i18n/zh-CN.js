@@ -1196,6 +1196,10 @@ export default {
   'yeaft.session.wizard.creating': '创建中…',
   'yeaft.session.wizard.back': '上一步',
   'yeaft.session.wizard.next': '下一步',
+  'yeaft.session.wizard.folderLabel': '📁 工作目录',
+  'yeaft.session.wizard.sessionLabel': '💬 已有会话',
+  'yeaft.session.wizard.noWorkDirs': '还没有任何会话 — 在上方选择或输入工作目录开始。',
+  'yeaft.session.wizard.noSessions': '该目录下还没有会话 — 填好信息并创建一个。',
 
   // 错误与 no_default_vp 邀请弹窗
   'yeaft.session.error.invalid_name': '群组名称不能为空。',
