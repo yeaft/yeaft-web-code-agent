@@ -471,7 +471,9 @@
   flex: 1 1 auto;
   justify-content: flex-start;
   padding: 9px 12px;
-  border-bottom-color: transparent !important;
+}
+.session-tab.session-tab-solo.active {
+  border-bottom-color: transparent;
 }
 
 .session-tab-count {
