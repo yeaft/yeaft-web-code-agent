@@ -20,6 +20,7 @@ const DAY_MS = 24 * HOUR_MS;
 
 import SessionCreateModal from './SessionCreateModal.js';
 import SidebarModeToggle from './SidebarModeToggle.js';
+import { shortenPath } from '../utils/path-display.js';
 
 export default {
   name: 'YeaftSidebar',
@@ -389,13 +390,7 @@ export default {
     // size when the session has no workDir set.
     groupPath(g) {
       if (!g) return '-';
-      if (g.workDir) {
-        const path = String(g.workDir);
-        if (path.length <= 25) return path;
-        const parts = path.split(/[/\\]/);
-        if (parts.length <= 2) return path;
-        return '...' + parts.slice(-2).join('/');
-      }
+      if (g.workDir) return shortenPath(g.workDir);
       const n = Array.isArray(g.roster) ? g.roster.length : 0;
       if (n === 0) return this.$t('yeaft.session.empty.title');
       const key = n === 1 ? 'yeaft.session.memberCount.one' : 'yeaft.session.memberCount.other';
