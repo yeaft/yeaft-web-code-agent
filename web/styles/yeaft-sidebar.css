@@ -53,12 +53,14 @@
 /* ===========================================================================
    Sidebar header row — agent brand, collapse, back, workbench.
    =========================================================================== */
+/* Top spacer mirrors Chat sidebar's .sidebar-top padding so the agent
+   dropdown row sits at the same vertical position in both sidebars. */
 .us-header-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 6px;
-  padding: 10px 12px 4px 12px;
+  padding: 16px 12px 16px 12px;
   flex: 0 0 auto;
 }
 .us-brand {
