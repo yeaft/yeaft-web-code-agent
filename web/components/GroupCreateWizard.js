@@ -58,17 +58,17 @@ export default {
           <!-- WORK DIR -->
           <label class="group-wizard-field">
             <span class="group-wizard-field-label">{{ $t('yeaft.session.wizard.workDir') }}</span>
-            <div class="group-wizard-workdir-row">
+            <div class="workdir-input-group">
               <input
                 type="text"
                 v-model.trim="form.workDir"
                 :placeholder="$t('yeaft.session.wizard.workDirPlaceholder')"
                 autocomplete="off"
-                class="group-wizard-input"
+                class="resume-input"
                 @keydown.enter.prevent="onSubmit"
               />
               <button
-                class="group-wizard-browse-btn"
+                class="workdir-browse-btn"
                 type="button"
                 @click="openFolderPicker"
                 :disabled="busy || !folderPickerAgentId"

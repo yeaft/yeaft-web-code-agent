@@ -66,38 +66,10 @@
   line-height: 1.4;
 }
 
-.group-wizard-workdir-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.group-wizard-workdir-row .group-wizard-input {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.group-wizard-browse-btn {
-  flex: 0 0 auto;
-  width: 34px;
-  height: 34px;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  background: var(--bg-input);
-  color: var(--text-secondary);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-}
-.group-wizard-browse-btn:hover:not(:disabled) {
-  background: var(--sidebar-hover);
-  color: var(--text-primary);
-  border-color: var(--border-hover);
-}
-.group-wizard-browse-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
+/* Workdir row + browse button now reuse `.workdir-input-group` and
+   `.workdir-browse-btn` from chat-modals.css — kept in one place so the
+   Yeaft session wizard and the Claude Chat new-conversation modal stay
+   visually identical. The wizard input itself uses `.resume-input`. */
 
 /* Roster empty/loading placeholders ---------------------------------------- */
 .group-wizard-empty {
