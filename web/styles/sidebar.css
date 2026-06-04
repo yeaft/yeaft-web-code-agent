@@ -468,12 +468,25 @@
   border-bottom: none;
 }
 .session-tab.session-tab-solo {
+  position: relative;
   flex: 1 1 auto;
-  justify-content: flex-start;
-  padding: 9px 12px;
+  justify-content: center;
+  padding: 14px 40px;
+  font-size: 15px;
+  font-weight: 600;
 }
 .session-tab.session-tab-solo.active {
   border-bottom-color: transparent;
+}
+.session-tab.session-tab-solo .session-tab-icon {
+  width: 16px;
+  height: 16px;
+}
+.session-tab.session-tab-solo .session-tab-add-btn {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 .session-tab-count {
