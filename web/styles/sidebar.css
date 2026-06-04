@@ -468,12 +468,13 @@
   border-bottom: none;
 }
 .session-tab.session-tab-solo {
-  position: relative;
   flex: 1 1 auto;
-  justify-content: center;
-  padding: 14px 40px;
+  justify-content: flex-start;
+  gap: 12px;
+  padding: 16px 16px 14px;
   font-size: 15px;
   font-weight: 600;
+  letter-spacing: 0.01em;
 }
 .session-tab.session-tab-solo.active {
   border-bottom-color: transparent;
@@ -481,12 +482,22 @@
 .session-tab.session-tab-solo .session-tab-icon {
   width: 16px;
   height: 16px;
+  opacity: 0.85;
+}
+.session-tab.session-tab-solo .session-tab-count {
+  margin-left: 2px;
+  font-size: 12px;
+  padding: 2px 8px;
 }
 .session-tab.session-tab-solo .session-tab-add-btn {
-  position: absolute;
-  right: 8px;
-  top: 50%;
-  transform: translateY(-50%);
+  margin-left: auto;
+  width: 26px;
+  height: 26px;
+  opacity: 1;
+}
+.session-tab.session-tab-solo .session-tab-add-btn svg {
+  width: 16px;
+  height: 16px;
 }
 
 .session-tab-count {
