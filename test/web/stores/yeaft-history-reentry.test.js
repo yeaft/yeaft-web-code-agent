@@ -45,7 +45,7 @@ describe('Yeaft group history re-entry', () => {
     expect(store.sent).toEqual([{
       type: 'yeaft_load_history',
       agentId: 'agent-1',
-      limit: 10,
+      limit: 5,
       groupId: 'grp_fun',
     }]);
     expect(store.yeaftSessionHistoryState.grp_fun).toEqual(expect.objectContaining({
@@ -70,7 +70,7 @@ describe('Yeaft group history re-entry', () => {
     expect(store.sent).toEqual([{
       type: 'yeaft_load_history',
       agentId: 'agent-1',
-      limit: 10,
+      limit: 5,
       groupId: 'grp_fun',
     }]);
   });
@@ -170,18 +170,18 @@ describe('Yeaft group history re-entry', () => {
     expect(store.sent).toEqual([{
       type: 'yeaft_load_history',
       agentId: 'agent-1',
-      limit: 10,
+      limit: 5,
       groupId: 'grp_fun',
     }]);
   });
 
-  it('does not rehydrate a group that already completed history loading in this UI lifecycle', () => {
+  it('sends an afterSeq delta request when a group already has a cursor in this UI lifecycle', () => {
     const store = makeStore();
     store.yeaftConversationId = 'yeaft-1';
     store.yeaftAgentId = 'agent-1';
     store.yeaftActiveSessionFilter = 'grp_other';
     store.yeaftSessionHistoryState = {
-      grp_fun: { loaded: true, loading: false, hasMore: false, oldestSeq: 1, count: 2 },
+      grp_fun: { loaded: true, loading: false, hasMore: false, oldestSeq: 1, count: 2, latestSeq: 42 },
     };
     store.messagesMap = {
       'yeaft-1': [
@@ -191,7 +191,14 @@ describe('Yeaft group history re-entry', () => {
 
     store.setActiveSessionFilter('grp_fun');
 
-    expect(store.sent).toEqual([]);
+    // Always-ask delta: when a cursor exists, send afterSeq instead of
+    // limit. The agent will reply with zero rows if nothing's new.
+    expect(store.sent).toEqual([{
+      type: 'yeaft_load_history',
+      agentId: 'agent-1',
+      groupId: 'grp_fun',
+      afterSeq: 42,
+    }]);
   });
 
   it('merges loaded Fun history with cached rows instead of replacing the pane with old content', () => {

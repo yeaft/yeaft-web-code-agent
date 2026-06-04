@@ -967,6 +967,46 @@ export class ConversationStore {
   }
 
   /**
+   * Load messages strictly after a seq cursor, ordered by seq ascending.
+   * Used by the web client to fetch "everything new since my latest known
+   * message" when re-entering a session — the delta path.
+   *
+   * @param {string} sessionId
+   * @param {number|null} afterSeq — exclusive lower bound
+   * @param {{ limit?: number }} [opts]
+   * @returns {{ messages: object[], latestSeq: number|null }}
+   */
+  loadAfterSeqByGroup(sessionId, afterSeq, opts = {}) {
+    if (!sessionId) return { messages: [], latestSeq: null };
+    const limit = Number.isFinite(opts.limit) && opts.limit > 0 ? opts.limit : 500;
+    const cutoff = Number.isFinite(afterSeq) ? afterSeq : null;
+    if (cutoff === null) return { messages: [], latestSeq: null };
+    const hot = this.#loadGroupHotMessages(sessionId);
+    const cold = this.#loadGroupColdMessages(sessionId);
+    const all = [...cold, ...hot].sort(compareMessagesBySeq);
+    const after = all.filter((m) => {
+      if (!m || m.sessionId !== sessionId) return false;
+      const seq = parseSeqFromId(m.id);
+      return Number.isFinite(seq) && seq > cutoff;
+    });
+    const sliced = pairSanitize(after.slice(0, limit));
+    const lastSeq = sliced.length ? parseSeqFromId(sliced[sliced.length - 1].id) : null;
+    return { messages: sliced, latestSeq: Number.isFinite(lastSeq) ? lastSeq : null };
+  }
+
+  /**
+   * Convenience: extract the numeric seq embedded in a message id.
+   *
+   * @param {string} messageId
+   * @returns {number|null}
+   */
+  getMessageSeqById(messageId) {
+    if (!messageId || typeof messageId !== 'string') return null;
+    const seq = parseSeqFromId(messageId);
+    return Number.isFinite(seq) ? seq : null;
+  }
+
+  /**
    * Count hot messages.
    *
    * @returns {number}
