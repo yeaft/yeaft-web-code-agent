@@ -122,6 +122,11 @@ export const useChatStore = defineStore('chat', {
     theme: localStorage.getItem('theme') || (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'),
     themeFollowSystem: !localStorage.getItem('theme'),
     locale: localStorage.getItem('locale') || 'zh-CN',
+    // Crew mode is opt-in via Settings → General. When disabled, the
+    // sidebar collapses to a single full-width Chat tab, matching the
+    // visual structure of the Yeaft sidebar. Default: enabled (preserves
+    // existing behavior for current users).
+    crewModeEnabled: localStorage.getItem('crewModeEnabled') !== 'false',
     // Per-conversation 执行状态追踪：conversationId -> { currentTool, toolHistory, lastActivity }
     executionStatusMap: {},
     // Per-conversation session health: conversationId -> { status: 'agent-offline'|'session-lost'|'cli-exited' }
@@ -2875,6 +2880,14 @@ export const useChatStore = defineStore('chat', {
       localStorage.setItem('theme', this.theme);
       document.documentElement.setAttribute('data-theme', this.theme);
       document.documentElement.classList.toggle('light', this.theme === 'light');
+    },
+
+    setCrewModeEnabled(enabled) {
+      this.crewModeEnabled = !!enabled;
+      localStorage.setItem('crewModeEnabled', this.crewModeEnabled ? 'true' : 'false');
+      // If user is currently viewing the Crew tab and just turned crew off,
+      // ChatPage's `sidebarTab` watcher does not exist — leave the active
+      // tab choice to the component; default sidebarTab is 'chat' anyway.
     },
 
     initTheme() {

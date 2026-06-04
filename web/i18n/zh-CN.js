@@ -527,6 +527,8 @@ export default {
   'settings.general.lightTheme': '浅色',
   'settings.general.darkTheme': '深色',
   'settings.general.language': '语言',
+  'settings.general.crewMode': 'Crew 模式',
+  'settings.general.crewModeDesc': '在 Chat 侧栏启用 Crew（多 Agent 协作）标签页',
 
   // Settings - Invitations
   'settings.invite.create': '创建邀请码',

@@ -530,6 +530,8 @@ export default {
   'settings.general.lightTheme': 'Light',
   'settings.general.darkTheme': 'Dark',
   'settings.general.language': 'Language',
+  'settings.general.crewMode': 'Crew Mode',
+  'settings.general.crewModeDesc': 'Enable Crew (multi-agent collaboration) tab in the Chat sidebar',
 
   // Settings - Invitations
   'settings.invite.create': 'Create Invite Code',
