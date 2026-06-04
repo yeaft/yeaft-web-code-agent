@@ -13,6 +13,7 @@ import ModernSelect from './ModernSelect.js';
 import SidebarModeToggle from './SidebarModeToggle.js';
 import SidebarAgentHeader from './SidebarAgentHeader.js';
 import { shortenPath as shortenPathUtil } from '../utils/path-display.js';
+import { getLastPathSegment as _getLastPathSegment, formatResumeDate } from '../utils/path-segments.js';
 import { useAuthStore } from '../stores/auth.js';
 
 // Static fallback for the Copilot model picker — mirrors the CLI's own
@@ -1053,20 +1054,7 @@ export default {
       this.closeConversationModal();
     },
     formatDate(timestamp) {
-      if (!timestamp) return '';
-      const date = new Date(timestamp);
-      const now = new Date();
-      const diffDays = Math.floor((now - date) / (1000 * 60 * 60 * 24));
-
-      if (diffDays === 0) {
-        return this.$t('chat.time.today') + ' ' + date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-      } else if (diffDays === 1) {
-        return this.$t('chat.time.yesterday') + ' ' + date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-      } else if (diffDays < 7) {
-        return this.$t('chat.time.daysAgo', { count: diffDays });
-      } else {
-        return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-      }
+      return formatResumeDate(timestamp, this.$t.bind(this));
     },
     selectConversation(conversationId, agentId) {
       this.store.selectConversation(conversationId, agentId);
@@ -1226,9 +1214,7 @@ export default {
       return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     },
     getLastPathSegment(path) {
-      if (!path) return '';
-      const parts = path.split(/[/\\]/);
-      return parts[parts.length - 1] || parts[parts.length - 2] || path;
+      return _getLastPathSegment(path);
     },
     getParentPath(path) {
       if (!path) return '';

@@ -511,7 +511,7 @@
 .yeaft-wizard-default-star:hover { background: var(--sidebar-hover); color: var(--text-primary); }
 .yeaft-wizard-default-star.is-on { color: var(--warn-text); }
 
-.resume-modal-error {
+.resume-modal .resume-modal-error {
   font-size: 12px;
   color: var(--error);
   padding: 0 16px 8px;

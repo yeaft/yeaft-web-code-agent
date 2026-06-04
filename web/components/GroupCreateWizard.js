@@ -14,6 +14,7 @@
  * store snapshot, no new agent op required.
  */
 import VpAvatar from './VpAvatar.js';
+import { getLastPathSegment, formatResumeDate } from '../utils/path-segments.js';
 
 export default {
   name: 'GroupCreateWizard',
@@ -335,17 +336,8 @@ export default {
       if (this.sessionsStore) this.sessionsStore.setActive(session.id);
       this.$emit('close');
     },
-    getLastPathSegment(p) {
-      if (!p) return '';
-      const parts = String(p).replace(/[/\\]$/, '').split(/[/\\]/);
-      return parts[parts.length - 1] || p;
-    },
-    formatDate(iso) {
-      if (!iso) return '';
-      const d = new Date(iso);
-      if (isNaN(d.getTime())) return '';
-      return d.toLocaleString();
-    },
+    getLastPathSegment(p) { return getLastPathSegment(p); },
+    formatDate(iso) { return formatResumeDate(iso, this.$t.bind(this)); },
     openFolderPicker() {
       const agentId = this.folderPickerAgentId;
       if (!agentId || !this.chat?.sendWsMessage) return;
