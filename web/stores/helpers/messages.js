@@ -157,7 +157,9 @@ export function appendToAssistantMessageForConversation(store, conversationId, t
       ...(opts.timestamp ? { timestamp: opts.timestamp } : {}),
       type: 'assistant',
       content: text,
-      isStreaming: true
+      isStreaming: true,
+      status: 'pending',
+      turnStartAt: opts.timestamp || Date.now(),
     });
     return;
   }
@@ -178,7 +180,9 @@ export function appendToAssistantMessageForConversation(store, conversationId, t
       ...(opts.timestamp ? { timestamp: opts.timestamp } : {}),
       type: 'assistant',
       content: text,
-      isStreaming: true
+      isStreaming: true,
+      status: 'pending',
+      turnStartAt: opts.timestamp || Date.now(),
     });
   }
 }
@@ -232,6 +236,18 @@ export function finishStreamingForConversation(store, conversationId) {
     }
     if (m.isStreaming) {
       m.isStreaming = false;
+      // Per-message lifecycle: promote pending → completed at finalize
+      // time. The vp_turn_end reducer in the store is the live source
+      // of truth and runs FIRST when the turn really ends; this branch
+      // catches history-replay paths (no vp_turn_end fires) and any
+      // edge where finishStreaming runs without the broker event. We
+      // guard on status === 'pending' so live 'aborted' / 'errored'
+      // stamps from the store are never silently overwritten back to
+      // 'completed'.
+      if (m.status === 'pending') {
+        m.status = 'completed';
+        m.turnEndAt = Date.now();
+      }
     }
     // Defensive speaker-attribution stamp at finalize time. The avatar
     // header in AssistantTurn relies on `speakerVpId` to render after

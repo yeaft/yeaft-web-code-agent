@@ -1928,12 +1928,12 @@ function handleEngineEvent(event, hctx) {
           is_error: event.isError || false,
         }],
       }, envelope);
-      // Tool finished. The engine may either (a) emit more text-deltas
-      // before end_turn, or (b) go straight to end_turn. Settle the
-      // row back to 'thinking' — if (a), the next text_delta will flip
-      // it to 'streaming'; if (b), runVpTurn's finally will flip it to
-      // 'idle'. Either way we never strand the row in 'tool'.
-      maybeTransitionVpStatus(hctx, 'thinking');
+      // Tool finished. Do NOT speculatively flip to 'thinking' — the
+      // engine may emit more text-deltas (→ 'streaming') OR go straight
+      // to end_turn (→ 'idle' via runVpTurn's finally). The old
+      // speculative transition caused a visible 'tool → thinking →
+      // streaming' flicker on every tool call. Hold the 'tool' state
+      // until the next real event arrives.
       break;
 
     case 'turn_start':
@@ -1971,9 +1971,11 @@ function handleEngineEvent(event, hctx) {
           threadId: hctx.threadId || event.threadId || 'main',
           turnId: hctx.turnId,
           stopReason: event.stopReason,
+          reason: 'route_forward',
           detail: event.detail || null,
           ts: Date.now(),
         }, envelope);
+        if (typeof hctx.markTurnEnd === 'function') hctx.markTurnEnd('route_forward');
       }
       break;
 
@@ -2709,6 +2711,38 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
 
   const envelope = { sessionId, vpId, threadId, turnId };
 
+  // Per-message turn lifecycle: track start ts + which terminal reason
+  // we'll emit. `emitVpTurnEnd` is idempotent (route_forward emits inside
+  // the engine loop; normal end_turn / abort / error emit at runVpTurn
+  // boundaries — without idempotency a route_forward turn would emit
+  // twice). `markTurnEnd` lets the engine-event handler tell us that
+  // it already emitted, so we don't emit a duplicate at the runVpTurn
+  // normal-completion path.
+  const turnStartAt = Date.now();
+  let turnEndReason = 'end_turn';
+  let turnEndEmitted = false;
+  let turnEndDetail = null;
+  const markTurnEnd = (reason) => { turnEndEmitted = true; turnEndReason = reason; };
+  const emitVpTurnEnd = (reason, detail = null) => {
+    if (turnEndEmitted) return;
+    turnEndEmitted = true;
+    try {
+      sendYeaftEvent({
+        type: 'vp_turn_end',
+        sessionId,
+        vpId,
+        threadId: threadId || 'main',
+        turnId,
+        reason,
+        durationMs: Date.now() - turnStartAt,
+        detail: detail || null,
+        ts: Date.now(),
+      }, envelope);
+    } catch (err) {
+      console.warn('[Yeaft] vp_turn_end emit failed:', err?.message || err);
+    }
+  };
+
   try {
     if (session?.dreamScheduler) {
       session.dreamScheduler.noteUserMessage();
@@ -2773,6 +2807,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         threadId,
         thread,
         appendedUserPrompts,
+        markTurnEnd,
       };
       // Always trim the snapshot before passing to engine.query. This is
       // the second-line defense (history-compact only fires above 30K
@@ -2816,6 +2851,10 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         type: 'result',
         result_text: '',
       }, envelope);
+      // Normal end-of-turn (no route_forward, no abort, no error). Emit
+      // the message-status terminal so the web client can flip the
+      // assistant message status from 'pending' → 'completed'.
+      emitVpTurnEnd('end_turn');
     } finally {
       if (queryTimer) clearTimeout(queryTimer);
     }
@@ -2827,10 +2866,13 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
         result_text: '',
         stopped: true,
       }, envelope);
+      emitVpTurnEnd('aborted');
       return;
     }
 
     console.error('[Yeaft] query error:', err);
+    turnEndReason = 'errored';
+    turnEndDetail = { message: err?.message || String(err) };
 
     // vp-status: surface a transient `error` state so the row's status
     // label flips red for the brief window before the outer finally
@@ -2872,14 +2914,23 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
       result_text: '',
     }, envelope);
   } finally {
+    // Emit terminal vp_turn_end for the error path (normal + abort + route
+    // already emitted above). Done before settleIdle so the web client
+    // sees status flip BEFORE the broker's idle event lands.
+    if (turnEndReason === 'errored') emitVpTurnEnd('errored', turnEndDetail);
     // vp-status: guaranteed-settle. Regardless of how the turn exited
     // (normal completion, AbortError early-return, caught exception),
-    // the row must drop back to 'idle'. Wrapped in its own try so a
-    // broker bug can't mask the original error.
-    try {
-      getVpStatusBroker().settleIdle({ sessionId, vpId, threadId: threadId || 'main', title: thread?.title || '' });
-    } catch (err) {
-      console.warn('[Yeaft] vp-status settleIdle failed:', err?.message || err);
+    // the row must drop back to 'idle'. EXCEPTION: when the turn errored,
+    // we keep the broker's 'error' state visible until the next turn
+    // starts, so the user can see something failed instead of a silent
+    // green-state turn end. Wrapped in its own try so a broker bug
+    // can't mask the original error.
+    if (turnEndReason !== 'errored') {
+      try {
+        getVpStatusBroker().settleIdle({ sessionId, vpId, threadId: threadId || 'main', title: thread?.title || '' });
+      } catch (err) {
+        console.warn('[Yeaft] vp-status settleIdle failed:', err?.message || err);
+      }
     }
     // fix-vp-multi-thread (bug 2): the bridge tracks per-thread status
     // on `thread.status` separately from the broker. Multiple sites
@@ -3614,6 +3665,55 @@ export async function handleYeaftLoadHistory(msg) {
     console.warn('[Yeaft] vp-status snapshot broadcast (replay) failed:', err?.message || err);
   }
 
+  // Delta path: caller knows the latest seq (or message id) it has cached
+  // and wants only the messages that arrived after that cursor. Returns
+  // early with mode:'delta' so the frontend can append+dedupe instead of
+  // replacing the pane.
+  const afterSeqRaw = (msg && Number.isFinite(msg.afterSeq)) ? msg.afterSeq : null;
+  const afterMessageId = (msg && typeof msg.afterMessageId === 'string') ? msg.afterMessageId : null;
+  let afterSeq = afterSeqRaw;
+  if (afterSeq === null && afterMessageId && typeof session.conversationStore.getMessageSeqById === 'function') {
+    afterSeq = session.conversationStore.getMessageSeqById(afterMessageId);
+  }
+  if (sessionId && afterSeq !== null && typeof session.conversationStore.loadAfterSeqByGroup === 'function') {
+    const delta = session.conversationStore.loadAfterSeqByGroup(sessionId, afterSeq);
+    for (const entry of delta.messages) {
+      if (entry.role === 'user') {
+        sendYeaftOutput({
+          type: 'user',
+          message: {
+            content: entry.content,
+            id: entry.id || null,
+            ...(Array.isArray(entry.attachments) && entry.attachments.length > 0 ? { attachments: hydrateHistoryAttachmentPreviews(entry.attachments) } : {}),
+          },
+          ts: entry.ts || null,
+        }, { sessionId: entry.sessionId || null, threadId: entry.threadId || 'main', turnId: entry.turnId || entry.threadId || 'main' });
+      } else if (entry.role === 'assistant') {
+        const envelopeOpts = {
+          sessionId: entry.sessionId || null,
+          threadId: entry.threadId || 'main',
+          turnId: entry.turnId || entry.threadId || 'main',
+        };
+        if (entry.speakerVpId) envelopeOpts.vpId = entry.speakerVpId;
+        sendYeaftOutput({
+          type: 'assistant',
+          message: { id: entry.id || null, content: [{ type: 'text', text: entry.content }] },
+          ts: entry.ts || null,
+        }, envelopeOpts);
+        sendYeaftOutput({ type: 'result', result_text: '' }, envelopeOpts);
+      }
+    }
+    sendYeaftEvent({
+      type: 'history_loaded',
+      mode: 'delta',
+      count: delta.messages.length,
+      sessionId,
+      latestSeq: delta.latestSeq,
+      afterSeq,
+    });
+    return;
+  }
+
   // `msg.limit` is the replay-scrollback request from the frontend (UI
   // history pane, not engine context). Keep the bootstrap window small so
   // opening a group can paint the latest messages quickly; older rows are
@@ -3684,8 +3784,18 @@ export async function handleYeaftLoadHistory(msg) {
     hasCompactSummaryFlag = session.conversationStore.hasAnyCompactSummaryForGroup(sessionId);
   }
 
+  // Latest seq cursor in the recent-mode reply lets the frontend stamp its
+  // delta cursor on first paint, so the next session-switch can ask for
+  // afterSeq instead of a full recent-N replay.
+  let latestSeq = null;
+  if (replayEntries.length > 0 && typeof session.conversationStore.getMessageSeqById === 'function') {
+    const last = replayEntries[replayEntries.length - 1];
+    if (last && last.id) latestSeq = session.conversationStore.getMessageSeqById(last.id);
+  }
+
   sendYeaftEvent({
     type: 'history_loaded',
+    mode: 'recent',
     count: replayEntries.length,
     hasCompactSummary: hasCompactSummaryFlag,
     totalHot: session.conversationStore.countHot(),
@@ -3693,6 +3803,7 @@ export async function handleYeaftLoadHistory(msg) {
     sessionId,
     hasMore,
     oldestSeq,
+    latestSeq,
   });
 }
 

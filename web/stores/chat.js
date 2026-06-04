@@ -30,6 +30,22 @@ const EMPTY_ARRAY = Object.freeze([]);
 // deterministic.
 const vpStatusKey = (groupId, vpId) => `${groupId || ''}::${vpId}`;
 
+// Bootstrap pane window when no delta cursor is known yet (cold start, or
+// a session the UI has never seen). User-confirmed: 5 turns is the sweet
+// spot — small enough to paint instantly, large enough to give context.
+const YEAFT_RECENT_TURNS = 5;
+
+// Yeaft message ids are `NNNNNN-…` where NNNNNN is the zero-padded seq.
+// Pull the seq out so the store can stamp / advance its delta cursor on
+// every live message that arrives.
+function parseYeaftMessageSeq(id) {
+  if (!id || typeof id !== 'string') return null;
+  const m = id.match(/^(\d+)/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) ? n : null;
+}
+
 function getSessionsStore() {
   try {
     if (typeof window === 'undefined') return null;
@@ -881,25 +897,46 @@ export const useChatStore = defineStore('chat', {
         const groupId = resolveActiveYeaftSessionId(this);
         const groupKey = groupId || '__all__';
         const savedState = this.yeaftSessionHistoryState[groupKey] || null;
-        // If the group snapshot has not arrived yet, do not replay the
-        // unfiltered "all" history. That causes the visible pane to paint
-        // legacy/default rows and then repaint after group_list_updated picks
-        // the real active group. Ask only for session metadata now; the
-        // group_list_updated path below will hydrate exactly one group.
-        const needMessages = !!groupId && !savedState?.loaded && !savedState?.loading;
-        if (groupId && needMessages) {
+        // Always ask the agent for a delta (or initial window). The old
+        // `!savedState?.loaded` short-circuit meant any session visited
+        // earlier in this UI lifecycle could not see messages that
+        // arrived while the user was elsewhere — they had to refresh.
+        // Cost: one cheap WS round-trip per session entry; for a session
+        // with a known cursor the agent replies with zero rows.
+        if (groupId) {
+          const latestSeq = Number.isFinite(savedState?.latestSeq) ? savedState.latestSeq : null;
+          const payload = {
+            type: 'yeaft_load_history',
+            agentId: this.yeaftAgentId,
+            groupId,
+          };
+          if (latestSeq !== null) {
+            payload.afterSeq = latestSeq;
+          } else {
+            payload.limit = YEAFT_RECENT_TURNS;
+          }
           this.yeaftSessionHistoryState = {
             ...this.yeaftSessionHistoryState,
-            [groupKey]: { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },
+            [groupKey]: {
+              ...(savedState || { hasMore: false, oldestSeq: null, count: 0 }),
+              loaded: false,
+              loading: true,
+              latestSeq,
+            },
           };
           this.yeaftLoadingMoreHistory = true;
+          this.sendWsMessage(payload);
+        } else {
+          // No group yet — ask for metadata only (limit:0) so the group
+          // snapshot lands and the group_list_updated path can hydrate
+          // the chosen group.
+          this.sendWsMessage({
+            type: 'yeaft_load_history',
+            agentId: this.yeaftAgentId,
+            limit: 0,
+            groupId: null,
+          });
         }
-        this.sendWsMessage({
-          type: 'yeaft_load_history',
-          agentId: this.yeaftAgentId,
-          limit: needMessages ? 10 : 0,
-          groupId,
-        });
       }
     },
     leaveYeaft() {
@@ -1116,6 +1153,24 @@ export const useChatStore = defineStore('chat', {
           // (2026-05-13) featureId stamping removed along with the Feature system.
           try {
             this.handleClaudeOutput(conversationId, msg.data);
+            // Advance the delta cursor on every live user/assistant
+            // message arrival so the next re-entry of this session can
+            // request afterSeq instead of replaying the recent window.
+            // Cheap: only inspects the id and the prev cursor.
+            const data = msg.data;
+            const liveId = data?.message?.id || data?.id || null;
+            const seq = parseYeaftMessageSeq(liveId);
+            if (seq !== null && msg.groupId) {
+              const groupKey = msg.groupId;
+              const prevState = this.yeaftSessionHistoryState[groupKey] || {};
+              const prevLatest = Number.isFinite(prevState.latestSeq) ? prevState.latestSeq : -1;
+              if (seq > prevLatest) {
+                this.yeaftSessionHistoryState = {
+                  ...this.yeaftSessionHistoryState,
+                  [groupKey]: { ...prevState, latestSeq: seq },
+                };
+              }
+            }
           } finally {
             this._currentYeaftSessionId = prevGroup;
             this._currentYeaftVpId = prevVpId;
@@ -1520,29 +1575,46 @@ export const useChatStore = defineStore('chat', {
 
         case 'history_loaded':
           // History messages already rendered via sendYeaftOutput (data path).
-          // This event just signals completion — capture the pagination
-          // cursor (`oldestSeq`) and `hasMore` flag so the MessageList can
-          // show / hide the "Load older messages" hint and the
-          // `loadMoreYeaftHistory` action knows where to start the next
-          // page.
+          // This event just signals completion + carries cursors:
+          //   mode:'recent' (default) — full pane replay; stamp oldestSeq /
+          //     hasMore for the "Load older" hint AND latestSeq so the next
+          //     re-entry can ask for a delta.
+          //   mode:'delta' — incremental append; only latestSeq is meaningful.
+          //     Don't touch hasMore / oldestSeq (those describe the older
+          //     end and don't change on a delta tail-load).
           {
             const groupKey = event.groupId || '__all__';
-            const nextState = {
-              loaded: true,
-              loading: false,
-              hasMore: !!event.hasMore,
-              oldestSeq: (typeof event.oldestSeq === 'number') ? event.oldestSeq : null,
-              count: (typeof event.count === 'number') ? event.count : 0,
-            };
+            const mode = event.mode === 'delta' ? 'delta' : 'recent';
+            const prevState = this.yeaftSessionHistoryState[groupKey] || {};
+            const nextLatest = (Number.isFinite(event.latestSeq) ? event.latestSeq
+              : (Number.isFinite(prevState.latestSeq) ? prevState.latestSeq : null));
+            const nextState = mode === 'delta'
+              ? {
+                  ...prevState,
+                  loaded: true,
+                  loading: false,
+                  latestSeq: nextLatest,
+                  count: (prevState.count || 0) + (event.count || 0),
+                }
+              : {
+                  loaded: true,
+                  loading: false,
+                  hasMore: !!event.hasMore,
+                  oldestSeq: (typeof event.oldestSeq === 'number') ? event.oldestSeq : null,
+                  count: (typeof event.count === 'number') ? event.count : 0,
+                  latestSeq: nextLatest,
+                };
             this.yeaftSessionHistoryState = {
               ...this.yeaftSessionHistoryState,
               [groupKey]: nextState,
             };
             const activeKey = this.yeaftActiveSessionFilter || '__all__';
             if (groupKey === activeKey) {
-              this.yeaftHasMoreHistory = nextState.hasMore;
+              if (mode === 'recent') {
+                this.yeaftHasMoreHistory = nextState.hasMore;
+                this.yeaftOldestLoadedSeq = nextState.oldestSeq;
+              }
               this.yeaftLoadingMoreHistory = false;
-              this.yeaftOldestLoadedSeq = nextState.oldestSeq;
             }
           }
           break;
@@ -1665,6 +1737,48 @@ export const useChatStore = defineStore('chat', {
           if (!event.turnId) break;
           const { [event.turnId]: _removed, ...rest } = this.activeVpTurns;
           this.activeVpTurns = rest;
+          // Per-message lifecycle: flip every in-flight assistant message
+          // owned by this VP/turn from 'pending' to the terminal status
+          // carried on `event.reason` (end_turn → completed; route_forward
+          // → completed; aborted → aborted; errored → errored). VP status
+          // is a separate axis — this is the source of truth for "is this
+          // assistant turn done".
+          const reasonToStatus = {
+            end_turn: 'completed',
+            route_forward: 'completed',
+            aborted: 'aborted',
+            errored: 'errored',
+          };
+          const nextStatus = reasonToStatus[event.reason] || 'completed';
+          const stampedAt = Date.now();
+          const conv = this.yeaftConversationId;
+          if (conv && Array.isArray(this.messagesMap[conv])) {
+            const rows = this.messagesMap[conv];
+            let mutated = false;
+            // Stamp EVERY pending assistant row owned by this turn — not
+            // just the last. A turn that produced multiple assistant
+            // rows (text, then tool_use, then more text) needs all of
+            // them flipped, or earlier rows sit in 'pending' forever.
+            // Walk forward from the user message that opened this turn
+            // for determinism; reducer is idempotent so order doesn't
+            // strictly matter, but forward walk keeps the per-row
+            // semantics readable when debugging.
+            for (let i = 0; i < rows.length; i++) {
+              const m = rows[i];
+              if (!m || m.type !== 'assistant') continue;
+              if (event.sessionId && m.groupId && m.groupId !== event.sessionId) continue;
+              if (event.vpId && m.speakerVpId && m.speakerVpId !== event.vpId) continue;
+              if (event.turnId && m.turnId && m.turnId !== event.turnId) continue;
+              if (m.status && m.status !== 'pending') continue;
+              m.status = nextStatus;
+              m.turnEndAt = stampedAt;
+              m.turnEndReason = event.reason || null;
+              if (event.detail) m.turnEndDetail = event.detail;
+              if (Number.isFinite(event.durationMs)) m.turnDurationMs = event.durationMs;
+              mutated = true;
+            }
+            if (mutated) this.messagesMap = { ...this.messagesMap, [conv]: rows.slice() };
+          }
           break;
         }
         case 'yeaft_turn_aborted': {
@@ -2175,19 +2289,32 @@ export const useChatStore = defineStore('chat', {
       this.yeaftLoadingMoreHistory = !!savedState?.loading;
       this.yeaftOldestLoadedSeq = (typeof savedState?.oldestSeq === 'number') ? savedState.oldestSeq : null;
 
-      const needsHydrate = !savedState?.loaded && !savedState?.loading;
-      if (this.yeaftAgentId && next && needsHydrate) {
-        this.yeaftSessionHistoryState = {
-          ...this.yeaftSessionHistoryState,
-          [groupKey]: { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },
-        };
-        this.yeaftLoadingMoreHistory = true;
-        this.sendWsMessage({
+      // Always ask the agent — same rationale as enterYeaft. If we have a
+      // cursor for this group, request only what's new since; otherwise
+      // request the initial recent-N window.
+      if (this.yeaftAgentId && next) {
+        const latestSeq = Number.isFinite(savedState?.latestSeq) ? savedState.latestSeq : null;
+        const payload = {
           type: 'yeaft_load_history',
           agentId: this.yeaftAgentId,
-          limit: 10,
           groupId: next,
-        });
+        };
+        if (latestSeq !== null) {
+          payload.afterSeq = latestSeq;
+        } else {
+          payload.limit = YEAFT_RECENT_TURNS;
+        }
+        this.yeaftSessionHistoryState = {
+          ...this.yeaftSessionHistoryState,
+          [groupKey]: {
+            ...(savedState || { hasMore: false, oldestSeq: null, count: 0 }),
+            loaded: false,
+            loading: true,
+            latestSeq,
+          },
+        };
+        this.yeaftLoadingMoreHistory = true;
+        this.sendWsMessage(payload);
       }
     },
     // ★ task-334-ui-c: VP detail view entry / exit.
