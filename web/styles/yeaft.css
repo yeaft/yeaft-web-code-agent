@@ -35,7 +35,7 @@
 /* When collapsed, hide the full sidebar contents and only show the icon bar.
    Mirrors Chat sidebar behavior so the user can re-expand instead of having
    the sidebar disappear entirely. */
-.yeaft-sidebar.collapsed .us-header-row,
+.yeaft-sidebar.collapsed .sidebar-top,
 .yeaft-sidebar.collapsed .us-scroll,
 .yeaft-sidebar.collapsed .sidebar-bottom {
   display: none;

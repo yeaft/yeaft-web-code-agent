@@ -460,13 +460,20 @@
   opacity: 1;
 }
 
-/* Single-tab variant (used by Yeaft sidebar). Don't stretch to full
-   width — match the natural width chat's "Chat" tab has when it
-   shares the bar with Crew, so the two sidebars feel identical. */
+/* Single-tab variant (used by Yeaft sidebar, and by Chat sidebar when
+   Crew mode is disabled in Settings). The bar spans full width and
+   drops the active underline + bottom divider — there's nothing to
+   pick between, so the selection affordance only adds noise. */
+.session-tab-bar:has(> .session-tab-solo) {
+  border-bottom: none;
+}
 .session-tab.session-tab-solo {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
   justify-content: flex-start;
   padding: 9px 12px;
+}
+.session-tab.session-tab-solo.active {
+  border-bottom-color: transparent;
 }
 
 .session-tab-count {
