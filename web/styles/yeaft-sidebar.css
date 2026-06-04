@@ -28,6 +28,13 @@
   min-height: 0;
 }
 
+.yeaft-sidebar .session-empty-hint {
+  padding: 24px 8px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
 /* Keep Yeaft session row actions visible like chat rows, but only in Yeaft. */
 .yeaft-sidebar .session-dots-btn {
   opacity: 1;
