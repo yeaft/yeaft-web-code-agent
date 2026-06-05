@@ -45,6 +45,21 @@ function hydrateInlinePreviewData(data) {
  *        btw_stream, btw_done, btw_error
  */
 export async function handleAgentOutput(agentId, agent, msg) {
+  // Wire-compat shim: agent/yeaft/web-bridge.js stamps envelopes with
+  // `sessionId` after the groups→sessions rename (PR #881), but the web
+  // client (and every relay case below) still reads `msg.groupId`. Map
+  // one to the other once at the top so each relay case can stay simple
+  // and forward `groupId` verbatim. Mirrors the symmetric coercion done
+  // by the agent's `message-router.js` on inbound web → agent traffic.
+  //
+  // Without this, `yeaft_output` / `yeaft_history_chunk` history replay
+  // arrives at the browser with no group attribution, so the per-group
+  // history state machine (`yeaftSessionHistoryState[id].loading`) never
+  // flips loaded → and the session's message list stays empty.
+  if (msg && typeof msg === 'object') {
+    if (msg.groupId == null && typeof msg.sessionId === 'string') msg.groupId = msg.sessionId;
+    else if (msg.sessionId == null && typeof msg.groupId === 'string') msg.sessionId = msg.groupId;
+  }
   switch (msg.type) {
     case 'claude_output':
       // 保存消息到数据库

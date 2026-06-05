@@ -264,4 +264,50 @@ describe('agent-output.js — yeaft_output envelope passthrough', () => {
     expect(ids).toEqual(['c1', 'c2']);
     for (const s of _sent) expect(s.envelope.vpId).toBe('vp_alice');
   });
+
+  // ── sessionId → groupId compat shim (fix-yeaft-history-load) ─────────
+  // Background: after the groups→sessions rename (PR #881), agent
+  // web-bridge emits envelopes with `sessionId`. The web client and every
+  // relay case in this file still read `msg.groupId`. Without a coercion
+  // shim, yeaft_output / yeaft_history_chunk history replay arrives at
+  // the browser with no group attribution, so the per-group history
+  // state machine never flips `loading → loaded` and the session's
+  // message list stays empty.
+
+  it('coerces sessionId → groupId on yeaft_output envelopes', async () => {
+    addClient('c1');
+    await handleAgentOutput('a1', baseAgent, {
+      type: 'yeaft_output',
+      conversationId: 'conv1',
+      sessionId: 'grp_team',
+      vpId: 'vp_alice',
+      data: { type: 'assistant', message: { content: 'hi' } },
+    });
+    expect(_sent[0].envelope.groupId).toBe('grp_team');
+  });
+
+  it('coerces sessionId → groupId on yeaft_history_chunk envelopes', async () => {
+    addClient('c1');
+    await handleAgentOutput('a1', baseAgent, {
+      type: 'yeaft_history_chunk',
+      conversationId: 'conv1',
+      sessionId: 'grp_team',
+      messages: [],
+      oldestSeq: 1,
+      hasMore: false,
+    });
+    expect(_sent[0].envelope.groupId).toBe('grp_team');
+  });
+
+  it('prefers explicit groupId over sessionId when both are present', async () => {
+    addClient('c1');
+    await handleAgentOutput('a1', baseAgent, {
+      type: 'yeaft_output',
+      conversationId: 'conv1',
+      groupId: 'grp_explicit',
+      sessionId: 'grp_other',
+      data: { type: 'assistant', message: { content: 'hi' } },
+    });
+    expect(_sent[0].envelope.groupId).toBe('grp_explicit');
+  });
 });
