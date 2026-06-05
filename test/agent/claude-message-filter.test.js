@@ -1,7 +1,8 @@
 /**
- * Tests for parseTaskNotification and isCompactSummary in agent/claude.js.
+ * Tests for parseTaskNotification, isCompactSummary, extractUserText, and
+ * buildSyntheticToolUseMessage in agent/claude.js.
  *
- * These two helpers identify the two classes of "fake user messages" that
+ * These helpers identify the two classes of "fake user messages" that
  * Claude Code injects back into the main conversation:
  *   1. <task-notification>...</task-notification> — fired when a background
  *      Agent/Task tool completes; rewritten into __SubagentResult tool action.
@@ -12,7 +13,13 @@
  * Without these filters they would render as giant user bubbles in the UI.
  */
 import { describe, it, expect } from 'vitest';
-import { parseTaskNotification, isCompactSummary } from '../../agent/claude.js';
+import {
+  parseTaskNotification,
+  isCompactSummary,
+  extractUserText,
+  buildSyntheticToolUseMessage,
+} from '../../agent/claude.js';
+import { SYNTHETIC_TOOL_NAMES, isSyntheticToolName } from '../../agent/synthetic-tools.js';
 
 // =====================================================================
 // 1. parseTaskNotification — happy path
@@ -53,16 +60,39 @@ line 3</result>
     expect(parsed.result).toBe('line 1\nline 2\nline 3');
   });
 
-  it('returns empty strings for missing tags rather than failing', () => {
+  it('preserves nested <task-notification> mentions inside <result> (greedy match)', () => {
+    // If a subagent quotes Claude Code internals or talks about its own
+    // protocol, the <result> block can contain literal `<task-notification>`
+    // text. With a lazy regex this would truncate at the first close tag and
+    // silently corrupt the captured result. The greedy match below keeps
+    // the entire payload intact because the outer wrapper is always the
+    // last close tag in the message.
+    const inner = 'we observed <task-notification>...<result>inner-result</result></task-notification> in the dump';
+    const text = `<task-notification>
+  <task-id>nest1</task-id>
+  <tool-use-id>tu</tool-use-id>
+  <output-file></output-file>
+  <status>completed</status>
+  <summary>summary text</summary>
+  <result>${inner}</result>
+</task-notification>`;
+    const parsed = parseTaskNotification(text);
+    expect(parsed).not.toBeNull();
+    expect(parsed.taskId).toBe('nest1');
+    expect(parsed.result).toBe(inner);
+  });
+
+  it('returns empty strings for absent secondary fields, as long as at least one of status/summary/result survives', () => {
     const text = `<task-notification>
   <task-id>only-id</task-id>
+  <status>completed</status>
 </task-notification>`;
     const parsed = parseTaskNotification(text);
     expect(parsed).toEqual({
       taskId: 'only-id',
       toolUseId: '',
       outputFile: '',
-      status: '',
+      status: 'completed',
       summary: '',
       result: '',
     });
@@ -110,6 +140,23 @@ describe('parseTaskNotification — non-matching input returns null', () => {
 
   it('returns null for a different XML wrapper', () => {
     expect(parseTaskNotification('<system-reminder>foo</system-reminder>')).toBeNull();
+  });
+
+  it('returns null for degenerate notification with no useful fields (e.g. truncated stream)', () => {
+    // status/summary/result are all empty — declining to rewrite means the
+    // malformed text shows up somewhere debuggable instead of producing a
+    // content-less ToolLine.
+    const text = `<task-notification>
+  <task-id>only</task-id>
+</task-notification>`;
+    expect(parseTaskNotification(text)).toBeNull();
+  });
+
+  it('returns null for an opening tag with no closing tag at all', () => {
+    const text = `<task-notification>
+  <task-id>x</task-id>
+  <status>pending`;
+    expect(parseTaskNotification(text)).toBeNull();
   });
 });
 
@@ -171,5 +218,88 @@ describe('isCompactSummary — negative cases', () => {
     // Length guard requires >= 200 chars to avoid false positives on
     // someone deliberately quoting the marker as a question.
     expect(isCompactSummary('This session is being continued from a previous conversation')).toBe(false);
+  });
+});
+
+// =====================================================================
+// 5. extractUserText — papers over the four observed SDK message shapes
+// =====================================================================
+describe('extractUserText — SDK message shape coverage', () => {
+  it('returns string content directly', () => {
+    expect(extractUserText({ content: 'hello' })).toBe('hello');
+  });
+
+  it('returns string content nested under .message.content', () => {
+    expect(extractUserText({ message: { content: 'hi' } })).toBe('hi');
+  });
+
+  it('concatenates array of {type, text} blocks under .message.content', () => {
+    const msg = { message: { content: [{ type: 'text', text: 'foo' }, { type: 'text', text: 'bar' }] } };
+    expect(extractUserText(msg)).toBe('foobar');
+  });
+
+  it('concatenates array blocks under top-level .content', () => {
+    const msg = { content: [{ type: 'text', text: 'a' }, { type: 'text', text: 'b' }] };
+    expect(extractUserText(msg)).toBe('ab');
+  });
+
+  it('skips non-text blocks in arrays gracefully', () => {
+    const msg = { message: { content: [{ type: 'text', text: 'hi' }, { type: 'image' }, { type: 'text', text: ' there' }] } };
+    expect(extractUserText(msg)).toBe('hi there');
+  });
+
+  it('returns empty string for null / undefined / shape-unknown input', () => {
+    expect(extractUserText(null)).toBe('');
+    expect(extractUserText(undefined)).toBe('');
+    expect(extractUserText({})).toBe('');
+    expect(extractUserText({ foo: 'bar' })).toBe('');
+  });
+});
+
+// =====================================================================
+// 6. buildSyntheticToolUseMessage — wire shape contract
+// =====================================================================
+describe('buildSyntheticToolUseMessage — wire shape', () => {
+  it('produces an assistant message with a single tool_use block', () => {
+    const msg = buildSyntheticToolUseMessage(SYNTHETIC_TOOL_NAMES.SUBAGENT_RESULT, { summary: 'x' });
+    expect(msg.type).toBe('assistant');
+    expect(Array.isArray(msg.message.content)).toBe(true);
+    expect(msg.message.content).toHaveLength(1);
+    const block = msg.message.content[0];
+    expect(block.type).toBe('tool_use');
+    expect(block.name).toBe('__SubagentResult');
+    expect(block.input).toEqual({ summary: 'x' });
+    expect(typeof block.id).toBe('string');
+    expect(block.id.startsWith('synthetic-__SubagentResult-')).toBe(true);
+  });
+
+  it('uses different ids across calls (collision resistance within a session)', () => {
+    const a = buildSyntheticToolUseMessage(SYNTHETIC_TOOL_NAMES.COMPACT_SUMMARY, { summary: 'a' });
+    const b = buildSyntheticToolUseMessage(SYNTHETIC_TOOL_NAMES.COMPACT_SUMMARY, { summary: 'b' });
+    expect(a.message.content[0].id).not.toBe(b.message.content[0].id);
+  });
+});
+
+// =====================================================================
+// 7. SYNTHETIC_TOOL_NAMES — constants module
+// =====================================================================
+describe('SYNTHETIC_TOOL_NAMES — single source of truth for synthetic names', () => {
+  it('exposes the two expected names with the __ prefix', () => {
+    expect(SYNTHETIC_TOOL_NAMES.SUBAGENT_RESULT).toBe('__SubagentResult');
+    expect(SYNTHETIC_TOOL_NAMES.COMPACT_SUMMARY).toBe('__CompactSummary');
+  });
+
+  it('isSyntheticToolName recognises both sentinels and only those', () => {
+    expect(isSyntheticToolName('__SubagentResult')).toBe(true);
+    expect(isSyntheticToolName('__CompactSummary')).toBe(true);
+    expect(isSyntheticToolName('__Other')).toBe(false);
+    expect(isSyntheticToolName('Read')).toBe(false);
+    expect(isSyntheticToolName(null)).toBe(false);
+    expect(isSyntheticToolName(undefined)).toBe(false);
+    expect(isSyntheticToolName(42)).toBe(false);
+  });
+
+  it('is frozen — accidental rename would throw in strict mode', () => {
+    expect(Object.isFrozen(SYNTHETIC_TOOL_NAMES)).toBe(true);
   });
 });

@@ -136,7 +136,7 @@ export function handleClaudeOutput(store, conversationId, data) {
     // NOTE: Compact-summary and <task-notification> filtering used to live
     // here as a defensive web-side guard. As of feat-claude-chat-subagent-
     // compact-toolline (agent/claude.js parseTaskNotification +
-    // parseCompactSummary), the agent rewrites both classes of "fake user
+    // isCompactSummary), the agent rewrites both classes of "fake user
     // messages" into synthetic assistant.tool_use blocks (__SubagentResult,
     // __CompactSummary) BEFORE they ever reach this code path. Keeping a
     // second copy of the detection regex here would mean two places to keep

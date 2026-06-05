@@ -4,6 +4,7 @@ import { query, Stream } from './sdk/index.js';
 import ctx from './context.js';
 import { sendConversationList, sendOutput, sendError, handleAskUserQuestion } from './conversation.js';
 import { startSubagentWatcher, stopSubagentWatcher, cleanupSubagentWatchers } from './subagent.js';
+import { SYNTHETIC_TOOL_NAMES } from './synthetic-tools.js';
 
 /**
  * Detect whether a user message is a Claude Code compact summary.
@@ -42,6 +43,10 @@ export function isCompactSummary(text) {
  * We surface them as a synthetic __SubagentResult tool action so the UI
  * doesn't render them as a giant user bubble.
  *
+ * Returns null on degenerate input (no closing tag, every interesting field
+ * empty) so the caller falls through and the malformed text is at least
+ * visible somewhere debuggable rather than emitting a content-less ToolLine.
+ *
  * @param {string} text
  * @returns {{ taskId: string, toolUseId: string, outputFile: string, status: string, summary: string, result: string } | null}
  */
@@ -49,11 +54,13 @@ export function parseTaskNotification(text) {
   if (typeof text !== 'string') return null;
   const trimmed = text.trimStart();
   if (!trimmed.startsWith('<task-notification>')) return null;
+  // Greedy match — picks the LAST closing tag, so nested
+  // <task-notification> mentions inside <result> survive intact.
   const pick = (tag) => {
-    const m = text.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`));
+    const m = text.match(new RegExp(`<${tag}>([\\s\\S]*)<\\/${tag}>`));
     return m ? m[1].trim() : '';
   };
-  return {
+  const parsed = {
     taskId: pick('task-id'),
     toolUseId: pick('tool-use-id'),
     outputFile: pick('output-file'),
@@ -61,6 +68,33 @@ export function parseTaskNotification(text) {
     summary: pick('summary'),
     result: pick('result'),
   };
+  // Degenerate notification (truncated stream, no closing tag, etc.) —
+  // every field that would carry meaning is empty. Decline to rewrite.
+  if (!parsed.status && !parsed.summary && !parsed.result) return null;
+  return parsed;
+}
+
+/**
+ * Extract a plain-text view of a Claude SDK message's content.
+ * The SDK is inconsistent about where the content lives and whether it's a
+ * string or an array of {type, text} blocks; this helper papers over all
+ * four observed shapes so callers can work with a single string.
+ *
+ * @param {object} message
+ * @returns {string}
+ */
+export function extractUserText(message) {
+  if (!message) return '';
+  const candidates = [message.content, message.message?.content];
+  for (const c of candidates) {
+    if (typeof c === 'string') return c;
+    if (Array.isArray(c)) {
+      return c
+        .map(b => (b && typeof b === 'object' && typeof b.text === 'string') ? b.text : '')
+        .join('');
+    }
+  }
+  return '';
 }
 
 /**
@@ -69,11 +103,15 @@ export function parseTaskNotification(text) {
  * tool_use blocks as DB rows with message_type='tool_use'; the web ToolLine
  * component renders them with collapse/expand).
  *
- * @param {string} name  — synthetic tool name (e.g. '__SubagentResult')
+ * The `synthetic-` id prefix is intentional — any log scraper or debugger
+ * can tell synthetic blocks apart from real tool_use blocks (real
+ * Anthropic IDs look like `toolu_01ABC...`).
+ *
+ * @param {string} name  — synthetic tool name (one of SYNTHETIC_TOOL_NAMES)
  * @param {object} input — toolInput payload
  * @returns {object} a Claude SDK assistant-shaped message
  */
-function buildSyntheticToolUseMessage(name, input) {
+export function buildSyntheticToolUseMessage(name, input) {
   return {
     type: 'assistant',
     message: {
@@ -457,6 +495,9 @@ async function processClaudeOutput(conversationId, claudeQuery, state) {
         if (message.subtype === 'compact_boundary') {
           state._compacting = false;
           state._compactSummaryPending = true;
+          // Reset content-fallback de-dup so the second compaction in a
+          // long-running session still broadcasts "completed".
+          state._compactCompleteSent = false;
           console.log(`[${conversationId}] Compact completed (boundary)`);
           ctx.sendToServer({
             type: 'compact_status',
@@ -479,6 +520,7 @@ async function processClaudeOutput(conversationId, claudeQuery, state) {
         if (message.subtype === 'compact_complete' || message.subtype === 'compact_end') {
           state._compacting = false;
           state._compactSummaryPending = true;
+          state._compactCompleteSent = false;
           console.log(`[${conversationId}] Compact completed`);
           ctx.sendToServer({
             type: 'compact_status',
@@ -520,31 +562,34 @@ async function processClaudeOutput(conversationId, claudeQuery, state) {
       //      flag (set by the system message handler above) and a content
       //      fallback for sessions where Claude Code skips the boundary.
       if (message.type === 'user') {
-        // Extract a plain-text view of the message content (Claude SDK may
-        // wrap it as either a string or an array of {type,text} blocks).
-        const userText = typeof message.content === 'string'
-          ? message.content
-          : (typeof message.message?.content === 'string' ? message.message.content
-            : (Array.isArray(message.message?.content)
-              ? message.message.content.map(b => (b && typeof b === 'object' && typeof b.text === 'string') ? b.text : '').join('')
-              : (Array.isArray(message.content)
-                ? message.content.map(b => (b && typeof b === 'object' && typeof b.text === 'string') ? b.text : '').join('')
-                : '')));
+        const userText = extractUserText(message);
 
         // 1. <task-notification> from a completed background Agent/Task.
         const parsedTask = parseTaskNotification(userText);
         if (parsedTask) {
           console.log(`[${conversationId}] Rewriting <task-notification> as __SubagentResult tool action (task=${parsedTask.taskId})`);
-          sendOutput(conversationId, buildSyntheticToolUseMessage('__SubagentResult', parsedTask));
+          sendOutput(conversationId, buildSyntheticToolUseMessage(SYNTHETIC_TOOL_NAMES.SUBAGENT_RESULT, parsedTask));
           continue;
         }
 
-        // 2a. Compact summary tagged by an earlier compact_boundary system event.
+        // 2a. Compact summary tagged by an earlier compact_boundary system
+        // event AND matching the compact-summary content shape. Both signals
+        // required — the boundary flag alone is not enough to safely
+        // re-classify a user message, because the SDK can interleave other
+        // user-shaped messages (tool_result, slash-command metadata, even a
+        // genuine user keystroke caught mid-turn) right after the boundary.
+        // Without the content sniff we'd silently stuff that text into the
+        // synthetic summary field and lose it.
         if (state._compactSummaryPending) {
-          console.log(`[${conversationId}] Rewriting compact summary (pending flag) as __CompactSummary tool action`);
+          if (userText && isCompactSummary(userText)) {
+            console.log(`[${conversationId}] Rewriting compact summary (pending flag + content) as __CompactSummary tool action`);
+            state._compactSummaryPending = false;
+            sendOutput(conversationId, buildSyntheticToolUseMessage(SYNTHETIC_TOOL_NAMES.COMPACT_SUMMARY, { summary: userText }));
+            continue;
+          }
+          // Pending flag set but the user message doesn't look like a compact
+          // summary — clear the flag (we missed the window) and fall through.
           state._compactSummaryPending = false;
-          sendOutput(conversationId, buildSyntheticToolUseMessage('__CompactSummary', { summary: userText }));
-          continue;
         }
 
         // 2b. Compact summary content fallback (no boundary event was emitted).
@@ -559,7 +604,7 @@ async function processClaudeOutput(conversationId, claudeQuery, state) {
               message: 'Context compacted successfully'
             });
           }
-          sendOutput(conversationId, buildSyntheticToolUseMessage('__CompactSummary', { summary: userText }));
+          sendOutput(conversationId, buildSyntheticToolUseMessage(SYNTHETIC_TOOL_NAMES.COMPACT_SUMMARY, { summary: userText }));
           continue;
         }
       }
