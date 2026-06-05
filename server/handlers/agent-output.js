@@ -58,7 +58,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
   // flips loaded → and the session's message list stays empty.
   if (msg && typeof msg === 'object') {
     if (msg.groupId == null && typeof msg.sessionId === 'string') msg.groupId = msg.sessionId;
-    else if (msg.sessionId == null && typeof msg.groupId === 'string') msg.sessionId = msg.groupId;
+    if (msg.sessionId == null && typeof msg.groupId === 'string') msg.sessionId = msg.groupId;
   }
   switch (msg.type) {
     case 'claude_output':

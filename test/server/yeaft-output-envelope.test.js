@@ -310,4 +310,15 @@ describe('agent-output.js — yeaft_output envelope passthrough', () => {
     });
     expect(_sent[0].envelope.groupId).toBe('grp_explicit');
   });
+
+  it('does NOT coerce non-string sessionId (guards against future schema drift)', async () => {
+    addClient('c1');
+    await handleAgentOutput('a1', baseAgent, {
+      type: 'yeaft_output',
+      conversationId: 'conv1',
+      sessionId: 0,  // wrong type — shouldn't be silently copied
+      data: { type: 'assistant', message: { content: 'hi' } },
+    });
+    expect('groupId' in _sent[0].envelope).toBe(false);
+  });
 });
