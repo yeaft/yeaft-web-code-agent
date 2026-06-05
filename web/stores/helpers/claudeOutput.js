@@ -2,6 +2,7 @@
 
 import { resetProcessingWatchdog, stopProcessingWatchdog } from './watchdog.js';
 import { markAllToolsCompleted } from './handlers/conversationHandler.js';
+import { sameUserMessage } from './dedup.js';
 
 function normalizeUserVisibleContent(content) {
   let value = content;
@@ -199,8 +200,21 @@ export function handleClaudeOutput(store, conversationId, data) {
     } else if ((typeof userContent === 'string' && userContent.trim()) || (Array.isArray(data.message?.attachments) && data.message.attachments.length > 0)) {
       // 普通用户消息（agent 广播回来的）
       // 发送端已通过 addMessage 本地添加，检查是否已存在以避免重复
+      //
+      // fix-usermsg-dup: prefer the server-stamped `clientMessageId` for
+      // dedup. The shared `sameUserMessage` helper (web/stores/helpers/
+      // dedup.js) encodes the canonical rule — id-equality when both
+      // sides have an id, content-equality only as a legacy fallback.
+      // See review I2 (Fowler) for why this lives in a single helper
+      // rather than being reimplemented at each gate.
+      const echoClientMsgId = data.message?.clientMessageId || data.clientMessageId || null;
+      const echoCandidate = {
+        type: 'user',
+        content: userContent,
+        clientMessageId: echoClientMsgId
+      };
       const msgs = store.messagesMap[conversationId] || [];
-      const duplicate = msgs.some(m => m.type === 'user' && m.content === userContent);
+      const duplicate = msgs.some(m => sameUserMessage(m, echoCandidate));
       if (!duplicate) {
         store.addMessageToConversation(conversationId, {
           ...(data.message?.id ? { id: data.message.id, messageId: data.message.id } : {}),
@@ -209,9 +223,34 @@ export function handleClaudeOutput(store, conversationId, data) {
           content: userContent,
           // Preserve attachment metadata from agent history replay
           ...(data.message?.attachments ? { attachments: data.message.attachments } : {}),
+          // Stamp the echo id on the freshly-added message so any future
+          // dedup pass (e.g. sync_messages_result merge) still matches.
+          ...(echoClientMsgId ? { clientMessageId: echoClientMsgId } : {}),
           // Bug 1: forward original ts so history messages keep their real
           // timestamp instead of using arrival time.
         });
+      } else if (echoClientMsgId) {
+        // Common live-send path (NOT a rare race): the dedup gate above
+        // already collapsed the echo's row onto the optimistic row by
+        // clientMessageId. The optimistic row never has a `dbMessageId`
+        // or server-side `ts`/`id` — those only exist after the server
+        // persists the message. Stamp them now so subsequent
+        // `sync_messages_result` merges can match by `dbMessageId` in
+        // addition to `clientMessageId`, and so any sort-by-server-ts
+        // surfaces the correct ordering. Review T-I2 (Torvalds):
+        // previous comment made this look like a rare race-loser
+        // branch — it isn't, every successful send hits it.
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          if (msgs[i].type === 'user' && msgs[i].clientMessageId === echoClientMsgId) {
+            if (data.dbMessageId && !msgs[i].dbMessageId) msgs[i].dbMessageId = data.dbMessageId;
+            if (data.message?.id && !msgs[i].messageId) {
+              msgs[i].id = data.message.id;
+              msgs[i].messageId = data.message.id;
+            }
+            if (data.ts && !msgs[i].ts) msgs[i].ts = data.ts;
+            break;
+          }
+        }
       }
     }
   } else if (data.type === 'result') {

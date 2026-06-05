@@ -4,6 +4,7 @@
 
 import { isRecentlyClosed, stopProcessingWatchdog } from '../watchdog.js';
 import { clearSessionLoading } from '../session.js';
+import { sameUserMessage } from '../dedup.js';
 import { t } from '../../../utils/i18n.js';
 
 /** Filter out empty user messages — tool_result artifacts stored as empty user records in DB */
@@ -343,17 +344,36 @@ export function handleSyncMessagesResult(store, msg) {
           // appending a duplicate. We only collapse FINALIZED orphans —
           // an actively streaming partial (isStreaming: true) is left
           // alone so its content can keep growing.
+          //
+          // fix-usermsg-dup / Review I2 (Fowler): the user-row identity
+          // rule lives in `sameUserMessage` (web/stores/helpers/dedup.js)
+          // — id-equality when both sides have a `clientMessageId`,
+          // content-equality only when neither side has one. The same
+          // helper backs the live-echo dedup in claudeOutput.js so the
+          // two gates can't drift apart. Assistant rows never carry
+          // `clientMessageId`, so they keep the historical type+content
+          // match path inline.
           if (m.dbMessageId && (m.type === 'assistant' || m.type === 'user')) {
-            const orphan = msgs.find(existing =>
-              !existing.dbMessageId &&
-              !existing.isStreaming &&
-              existing.type === m.type &&
-              existing.content === m.content
-            );
+            let orphan = null;
+            if (m.type === 'user') {
+              orphan = msgs.find(existing =>
+                !existing.dbMessageId &&
+                !existing.isStreaming &&
+                sameUserMessage(existing, m)
+              );
+            } else {
+              orphan = msgs.find(existing =>
+                !existing.dbMessageId &&
+                !existing.isStreaming &&
+                existing.type === 'assistant' &&
+                existing.content === m.content
+              );
+            }
             if (orphan) {
               orphan.dbMessageId = m.dbMessageId;
               orphan.id = m.id;
               if (m.timestamp) orphan.timestamp = m.timestamp;
+              if (m.clientMessageId && !orphan.clientMessageId) orphan.clientMessageId = m.clientMessageId;
               continue;
             }
           }

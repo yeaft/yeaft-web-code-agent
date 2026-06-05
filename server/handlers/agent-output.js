@@ -75,13 +75,29 @@ export async function handleAgentOutput(agentId, agent, msg) {
             if (content) {
               // 检查 convInfo 上暂存的 expertSelections，保存为 metadata
               const conv = agent.conversations.get(msg.conversationId);
-              let metadata = null;
-              if (conv?._pendingExperts) {
-                metadata = JSON.stringify({ experts: conv._pendingExperts });
+              // fix-usermsg-dup: pull the client-stamped id stashed by the
+              // `chat` handler so the echo carries it back to the web for
+              // optimistic-dedup, AND so the DB row preserves it for
+              // post-refresh `sync_messages_result` replay. Without the DB
+              // half, refresh → resend would lose the dedup key and fall
+              // back to the unreliable content-equality path.
+              const clientMessageId = conv?._pendingClientMessageId || null;
+              // Review M2 (Torvalds): build the payload first, then
+              // clear the stash. Mixing mutation with build made the
+              // delete look conditional on the JSON construction.
+              const metaParts = {};
+              if (conv?._pendingExperts) metaParts.experts = conv._pendingExperts;
+              if (clientMessageId) metaParts.clientMessageId = clientMessageId;
+              if (conv) {
                 delete conv._pendingExperts;
+                delete conv._pendingClientMessageId;
               }
+              const metadata = Object.keys(metaParts).length > 0 ? JSON.stringify(metaParts) : null;
               const dbId = messageDb.add(msg.conversationId, 'user', content, 'user', null, null, metadata);
               msg.data.dbMessageId = dbId;
+              if (clientMessageId) {
+                msg.data.clientMessageId = clientMessageId;
+              }
               // Track user message count for stats
               trackMessage(conv?.userId || agent?.ownerId);
             }

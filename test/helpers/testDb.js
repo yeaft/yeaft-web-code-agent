@@ -85,7 +85,14 @@ const MIGRATIONS_NEW = [
   'ALTER TABLE users ADD COLUMN aad_oid TEXT',
   // fix-chat-title-sticky: mirror production migration so tests can
   // exercise the sticky-title persistence path.
-  'ALTER TABLE sessions ADD COLUMN is_custom_title INTEGER DEFAULT 0'
+  'ALTER TABLE sessions ADD COLUMN is_custom_title INTEGER DEFAULT 0',
+  // fix-session-dup: sessions can be pinned (kept active across the
+  // 2-day auto-deactivation sweep).
+  'ALTER TABLE sessions ADD COLUMN is_pinned INTEGER DEFAULT 0',
+  // fix-usermsg-dup: messages now carry an opaque JSON metadata blob
+  // that holds the `clientMessageId` round-trip key (and experts /
+  // askRequestId for other features).
+  'ALTER TABLE messages ADD COLUMN metadata TEXT'
 ];
 
 const POST_INDEXES = [
@@ -165,20 +172,26 @@ export function createDbOperations(db) {
     insertSession: db.prepare('INSERT INTO sessions (id, user_id, agent_id, agent_name, claude_session_id, work_dir, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'),
     updateSession: db.prepare('UPDATE sessions SET claude_session_id = COALESCE(?, claude_session_id), title = COALESCE(?, title), is_custom_title = COALESCE(?, is_custom_title), updated_at = ? WHERE id = ?'),
     updateSessionActive: db.prepare('UPDATE sessions SET is_active = ?, updated_at = ? WHERE id = ?'),
+    // fix-session-dup: re-point a session's owning agent. Production
+    // statement at server/db/connection.js#updateSessionAgent.
+    updateSessionAgent: db.prepare('UPDATE sessions SET agent_id = ?, agent_name = ?, updated_at = ? WHERE id = ?'),
+    updateSessionPinned: db.prepare('UPDATE sessions SET is_pinned = ?, updated_at = ? WHERE id = ?'),
     getSession: db.prepare('SELECT * FROM sessions WHERE id = ?'),
     getSessionsByAgent: db.prepare('SELECT * FROM sessions WHERE agent_id = ? ORDER BY updated_at DESC LIMIT ?'),
     getSessionsByUser: db.prepare('SELECT * FROM sessions WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?'),
     getSessionsByUserAndAgent: db.prepare('SELECT * FROM sessions WHERE user_id = ? AND agent_id = ? ORDER BY updated_at DESC LIMIT ?'),
     getAllSessions: db.prepare('SELECT * FROM sessions ORDER BY updated_at DESC LIMIT ?'),
     getActiveSessions: db.prepare('SELECT * FROM sessions WHERE is_active = 1 ORDER BY updated_at DESC'),
+    getActiveSessionsByUser: db.prepare('SELECT * FROM sessions WHERE (user_id = ? OR user_id IS NULL) AND is_active = 1 ORDER BY updated_at DESC'),
     deleteSession: db.prepare('DELETE FROM sessions WHERE id = ?'),
-    insertMessage: db.prepare('INSERT INTO messages (session_id, role, content, message_type, tool_name, tool_input, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'),
+    insertMessage: db.prepare('INSERT INTO messages (session_id, role, content, message_type, tool_name, tool_input, created_at, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'),
     getMessagesBySession: db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY id ASC'),
     getRecentMessages: db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT ?'),
     getMessagesAfterId: db.prepare('SELECT * FROM messages WHERE session_id = ? AND id > ? ORDER BY id ASC'),
     getMessagesBeforeId: db.prepare('SELECT * FROM messages WHERE session_id = ? AND id < ? ORDER BY id DESC LIMIT ?'),
     getMessageCount: db.prepare('SELECT COUNT(*) as count FROM messages WHERE session_id = ?'),
     deleteMessagesBySession: db.prepare('DELETE FROM messages WHERE session_id = ?'),
+    updateMessageMetadata: db.prepare('UPDATE messages SET metadata = ? WHERE id = ?'),
     getRecentUserMessageIds: db.prepare('SELECT id FROM messages WHERE session_id = ? AND role = \'user\' ORDER BY id DESC LIMIT ?'),
     getMessagesFromId: db.prepare('SELECT * FROM messages WHERE session_id = ? AND id >= ? ORDER BY id ASC'),
     getUserMessageIdsBeforeId: db.prepare('SELECT id FROM messages WHERE session_id = ? AND role = \'user\' AND id < ? ORDER BY id DESC LIMIT ?'),
@@ -286,6 +299,14 @@ export function createDbOperations(db) {
       );
     },
     setActive(id, active) { stmts.updateSessionActive.run(active ? 1 : 0, Date.now(), id); },
+    // fix-session-dup: mirror server/db/session-db.js#setAgent so the
+    // test fixture can rehearse the cross-agent transfer.
+    setAgent(id, agentId, agentName) {
+      stmts.updateSessionAgent.run(agentId, agentName ?? null, Date.now(), id);
+    },
+    setPinned(id, pinned) {
+      stmts.updateSessionPinned.run(pinned ? 1 : 0, Date.now(), id);
+    },
     get(id) { return mapSessionRow(stmts.getSession.get(id)); },
     exists(id) { return !!stmts.getSession.get(id); },
     getByAgent(agentId, limit = 50) { return stmts.getSessionsByAgent.all(agentId, limit).map(mapSessionRow); },
@@ -293,17 +314,25 @@ export function createDbOperations(db) {
     getByUserAndAgent(userId, agentId, limit = 50) { return stmts.getSessionsByUserAndAgent.all(userId, agentId, limit).map(mapSessionRow); },
     getAll(limit = 100) { return stmts.getAllSessions.all(limit).map(mapSessionRow); },
     getActive() { return stmts.getActiveSessions.all().map(mapSessionRow); },
+    getActiveByUser(userId) { return stmts.getActiveSessionsByUser.all(userId).map(mapSessionRow); },
     delete(id) { stmts.deleteSession.run(id); }
   };
 
   const messageDb = {
-    add(sessionId, role, content, messageType = null, toolName = null, toolInput = null) {
+    // fix-usermsg-dup: `metadata` is an opaque JSON-string blob that
+    // currently carries `{clientMessageId, experts?, askRequestId?}`. The
+    // call site in server/handlers/agent-output.js packs the object,
+    // formatDbMessage on the web side parses it back out.
+    add(sessionId, role, content, messageType = null, toolName = null, toolInput = null, metadata = null) {
       const now = Date.now();
-      const result = stmts.insertMessage.run(sessionId, role, content, messageType, toolName, toolInput, now);
+      const result = stmts.insertMessage.run(sessionId, role, content, messageType, toolName, toolInput, now, metadata);
       // fix-chat-title-sticky: bump updated_at without touching title /
       // sticky bit — pass null for all three nullable fields.
       stmts.updateSession.run(null, null, null, now, sessionId);
       return result.lastInsertRowid;
+    },
+    updateMetadata(id, metadata) {
+      stmts.updateMessageMetadata.run(metadata, id);
     },
     getBySession(sessionId) { return stmts.getMessagesBySession.all(sessionId); },
     getRecent(sessionId, limit = 50) { return stmts.getRecentMessages.all(sessionId, limit).reverse(); },
@@ -390,7 +419,7 @@ export function createDbOperations(db) {
             if (msg.type === 'user') {
               const text = extractUserText(msg);
               if (text) {
-                stmts.insertMessage.run(sessionId, 'user', text, 'user', null, null, ts);
+                stmts.insertMessage.run(sessionId, 'user', text, 'user', null, null, ts, null);
                 count++;
               }
             } else if (msg.type === 'assistant') {
@@ -398,12 +427,12 @@ export function createDbOperations(db) {
               if (!content || !Array.isArray(content)) continue;
               for (const block of content) {
                 if (block.type === 'text' && block.text) {
-                  stmts.insertMessage.run(sessionId, 'assistant', block.text, 'assistant', null, null, ts);
+                  stmts.insertMessage.run(sessionId, 'assistant', block.text, 'assistant', null, null, ts, null);
                   count++;
                 } else if (block.type === 'tool_use') {
                   stmts.insertMessage.run(
                     sessionId, 'assistant', JSON.stringify(block.input || {}),
-                    'tool_use', block.name, JSON.stringify(block.input || {}), ts
+                    'tool_use', block.name, JSON.stringify(block.input || {}), ts, null
                   );
                   count++;
                 }

@@ -7,6 +7,28 @@ import { markAllToolsCompleted } from './handlers/conversationHandler.js';
 import { t } from '../../utils/i18n.js';
 import { EXPERT_ROLES, buildClientExpertMessage } from '../../utils/expert-roles.js';
 
+/**
+ * fix-usermsg-dup: opaque client-side id stamped on optimistic user
+ * messages and forwarded to the server in the `chat` payload. The
+ * server echoes it back on the `claude_output` user message so the
+ * frontend dedup gate (claudeOutput.js) can match precisely instead of
+ * falling back to string-equality on normalized content.
+ *
+ * Review C2 (Fowler): use `crypto.randomUUID()` rather than a homemade
+ * `Date.now() + Math.random()` recipe. Two tabs hitting Send at the
+ * same millisecond would share the timestamp half, dropping the
+ * effective entropy to ~40 bits — birthday-bound that's a real
+ * collision risk for power users. `crypto.randomUUID()` is in every
+ * browser this app supports (Chrome 92+, Firefox 95+, Safari 15.4+)
+ * and in Node 14.17+, so there's no dependency cost.
+ *
+ * The `cm_` prefix is preserved for the server-side validator
+ * (C1) and to keep the id self-describing in logs / DB rows.
+ */
+function makeClientMessageId() {
+  return `cm_${crypto.randomUUID()}`;
+}
+
 export function selectAgent(store, agentId) {
   if (agentId === store.currentAgent) {
     console.log('[selectAgent] Same agent, skipping:', agentId);
@@ -367,9 +389,20 @@ export function sendMessage(store, text, attachments = [], options = {}) {
   const hasExpertSelections = options.expertSelections && options.expertSelections.length > 0;
   if ((!text.trim() && attachments.length === 0 && !hasExpertSelections) || !store.currentAgent || !store.currentConversation) return;
 
+  // fix-usermsg-dup: stamp a stable id on the optimistic message AND on
+  // the outgoing `chat` payload so the server can round-trip it back on
+  // the `claude_output` user echo. Without this, dedup in
+  // claudeOutput.js falls back to a fragile `content === content`
+  // string match which breaks the moment normalization differs
+  // (whitespace, `[Uploaded files]` marker, attachment-only sends, etc.),
+  // producing the "user message rendered twice" symptom that only
+  // reproduces after page refresh.
+  const clientMessageId = makeClientMessageId();
+
   store.addMessage({
     type: 'user',
     content: text,
+    clientMessageId,
     attachments: attachments.length > 0 ? attachments : undefined,
     expertSelections: hasExpertSelections ? options.expertSelections : undefined
   });
@@ -406,7 +439,10 @@ export function sendMessage(store, text, attachments = [], options = {}) {
     type: 'chat',
     prompt: text,
     fileIds,
-    workDir: store.currentWorkDir
+    workDir: store.currentWorkDir,
+    // fix-usermsg-dup: round-trips back on the user echo so the dedup
+    // gate matches by id, not by normalized-content string equality.
+    clientMessageId
   };
   // Pass targetRole for @mention routing
   if (options.targetRole) {
@@ -549,9 +585,13 @@ export function sendMessageToConversation(store, conversationId, text, attachmen
   const hasExpertSelections = options.expertSelections && options.expertSelections.length > 0;
   if ((!text.trim() && attachments.length === 0 && !hasExpertSelections) || !store.currentAgent || !conversationId) return;
 
+  // fix-usermsg-dup: see sendMessage above — same rationale, multi-column path.
+  const clientMessageId = makeClientMessageId();
+
   store.addMessageToConversation(conversationId, {
     type: 'user',
     content: text,
+    clientMessageId,
     attachments: attachments.length > 0 ? attachments : undefined,
     expertSelections: hasExpertSelections ? options.expertSelections : undefined
   });
@@ -586,7 +626,9 @@ export function sendMessageToConversation(store, conversationId, text, attachmen
     conversationId,
     prompt: text,
     fileIds,
-    workDir: conv?.workDir || store.currentWorkDir
+    workDir: conv?.workDir || store.currentWorkDir,
+    // fix-usermsg-dup: see sendMessage above — same rationale.
+    clientMessageId
   };
   if (options.targetRole) {
     wsMsg.targetRole = options.targetRole;

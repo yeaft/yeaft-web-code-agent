@@ -18,6 +18,26 @@ function emptyYeaftToolStats(reason = '') {
   return payload;
 }
 
+/**
+ * Review C1 (Fowler): the frontend stamps a `clientMessageId` on
+ * every `chat` payload (see web/stores/helpers/conversation.js#
+ * makeClientMessageId). The server is REQUIRED to round-trip the
+ * id unchanged, but must NOT trust its shape — a hostile client
+ * could otherwise stash a 10 MB string on `convInfo`, persist it
+ * to the messages.metadata column, broadcast it to every web
+ * subscriber, and replay it on every history hydrate.
+ *
+ * Format constraint matches `crypto.randomUUID()` output prefixed
+ * with `cm_`: `cm_<8>-<4>-<4>-<4>-<12>` (36 hex chars + 4 dashes
+ * + 3 fixed bytes = 39 chars total inside the prefix → 42 total).
+ * Allow a tolerant superset for forward-compat (any id-safe
+ * character, capped at 80 chars) so a future format bump doesn't
+ * have to ship in lockstep.
+ */
+function isValidClientMessageId(s) {
+  return typeof s === 'string' && /^cm_[a-zA-Z0-9_-]{1,80}$/.test(s);
+}
+
 function skippedYeaftDreamResult(msg, reason) {
   const payload = {
     type: 'yeaft_dream_result',
@@ -411,6 +431,24 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       // 暂存 expertSelections 供 agent-output 保存 user 消息时使用
       if (msg.expertSelections?.length > 0 && convInfo) {
         convInfo._pendingExperts = msg.expertSelections;
+      }
+
+      // fix-usermsg-dup: stash the client-stamped id so agent-output can
+      // round-trip it on the `claude_output` user echo (it's persisted in
+      // the DB row's metadata too so the post-refresh `sync_messages_result`
+      // payload carries the same dedup key). Without this, the echo path
+      // falls back to content-equality dedup, which loses races after page
+      // refresh (the optimistic add competes with the DB-sourced row, both
+      // sharing the same text but neither sharing a stable id).
+      //
+      // Review C1 (Fowler): validate at the trust boundary. The id is
+      // opaque to the server but it lands in the DB, the WS broadcast,
+      // and the agent's history rebuild — a hostile client must not be
+      // able to inject 10 MB strings or SQL-looking payloads. The
+      // dedup gate falls back to content-equality cleanly if we drop
+      // an invalid id, so failed validation degrades gracefully.
+      if (msg.clientMessageId && convInfo && isValidClientMessageId(msg.clientMessageId)) {
+        convInfo._pendingClientMessageId = msg.clientMessageId;
       }
 
       // 用用户输入的 prompt 更新会话标题（跳过用户自定义标题的会话）
