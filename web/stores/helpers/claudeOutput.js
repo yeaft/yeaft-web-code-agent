@@ -199,8 +199,29 @@ export function handleClaudeOutput(store, conversationId, data) {
     } else if ((typeof userContent === 'string' && userContent.trim()) || (Array.isArray(data.message?.attachments) && data.message.attachments.length > 0)) {
       // 普通用户消息（agent 广播回来的）
       // 发送端已通过 addMessage 本地添加，检查是否已存在以避免重复
+      //
+      // fix-usermsg-dup: prefer the server-stamped `clientMessageId` for
+      // dedup. It's the same id the frontend put on the optimistic
+      // message in `sendMessage`. Falling back to content-equality only
+      // covers messages that originated before the clientMessageId chain
+      // was wired (legacy DB rows, agent restarts mid-turn). The pure
+      // content fallback was the original bug source: when a session is
+      // viewed after page refresh, the synced DB row and the echo both
+      // share text but neither matches by id with the optimistic add,
+      // and the rebuild path's dbMessageId-based dedup is racing the
+      // echo path. Stamping clientMessageId end-to-end is what makes the
+      // dedup deterministic.
+      const echoClientMsgId = data.message?.clientMessageId || data.clientMessageId || null;
       const msgs = store.messagesMap[conversationId] || [];
-      const duplicate = msgs.some(m => m.type === 'user' && m.content === userContent);
+      const duplicate = msgs.some(m => {
+        if (m.type !== 'user') return false;
+        if (echoClientMsgId && m.clientMessageId && m.clientMessageId === echoClientMsgId) return true;
+        // Fallback: content equality, only when neither side carries an
+        // id we could've matched. This preserves the legacy behaviour
+        // for messages that pre-date the clientMessageId chain.
+        if (!echoClientMsgId) return m.content === userContent;
+        return false;
+      });
       if (!duplicate) {
         store.addMessageToConversation(conversationId, {
           ...(data.message?.id ? { id: data.message.id, messageId: data.message.id } : {}),
@@ -209,9 +230,27 @@ export function handleClaudeOutput(store, conversationId, data) {
           content: userContent,
           // Preserve attachment metadata from agent history replay
           ...(data.message?.attachments ? { attachments: data.message.attachments } : {}),
+          // Stamp the echo id on the freshly-added message so any future
+          // dedup pass (e.g. sync_messages_result merge) still matches.
+          ...(echoClientMsgId ? { clientMessageId: echoClientMsgId } : {}),
           // Bug 1: forward original ts so history messages keep their real
           // timestamp instead of using arrival time.
         });
+      } else if (echoClientMsgId) {
+        // Echo arrived after the optimistic add — stamp the existing
+        // optimistic row with the echo's dbMessageId / ts so subsequent
+        // sync replays can match by id as well.
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          if (msgs[i].type === 'user' && msgs[i].clientMessageId === echoClientMsgId) {
+            if (data.dbMessageId && !msgs[i].dbMessageId) msgs[i].dbMessageId = data.dbMessageId;
+            if (data.message?.id && !msgs[i].messageId) {
+              msgs[i].id = data.message.id;
+              msgs[i].messageId = data.message.id;
+            }
+            if (data.ts && !msgs[i].ts) msgs[i].ts = data.ts;
+            break;
+          }
+        }
       }
     }
   } else if (data.type === 'result') {

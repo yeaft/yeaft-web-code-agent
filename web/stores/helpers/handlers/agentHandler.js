@@ -330,7 +330,23 @@ export function handleAgentSelected(store, msg) {
     }
   }
 
-  const otherAgentConvs = store.conversations.filter(c => c.agentId !== msg.agentId);
+  // fix-session-dup: dedupe by `id`, not by `agentId`. Previously this
+  // partitioned `store.conversations` on `c.agentId !== msg.agentId` and
+  // spread the new agent's list on top — so a conv that was already in the
+  // store under a different agentId (because the server has it in two
+  // agents' in-memory Maps; see server/handlers/agent-conversation.js's
+  // resume path which doesn't transfer agent ownership) survived the
+  // filter AND got a second copy from `activeConvs`. Net effect: the same
+  // conversationId rendered twice in the sidebar with two different
+  // agent badges.
+  //
+  // Now: anything in `activeConvs` wins outright (it carries the freshest
+  // agentId/agentName for the selected agent); anything else in the store
+  // is preserved only if its id is NOT in the incoming set. `otherAgentConvs`
+  // is rebuilt below from this same filter so the stale-processing sweep
+  // (line ~367) still works.
+  const incomingIds = new Set(activeConvs.map(c => c.id));
+  const otherAgentConvs = store.conversations.filter(c => !incomingIds.has(c.id));
   store.conversations = [...otherAgentConvs, ...activeConvs];
 
   for (const conv of serverConvs) {

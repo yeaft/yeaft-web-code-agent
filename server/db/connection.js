@@ -385,6 +385,18 @@ export const stmts = {
     UPDATE sessions SET is_active = ?, updated_at = ? WHERE id = ?
   `),
 
+  // fix-session-dup: transfer a session row to a new owning agent.
+  // Needed when the user resumes a conversation against a different
+  // agent than the one that originally created it — without this,
+  // DB.agent_id keeps pointing at the old agent and on the next
+  // `get_agents` restore (client-conversation.js:`get_agents`) the
+  // conv gets reseated into the OLD agent's in-memory Map alongside
+  // the new owner, which is the server-side root of Bug 2 (one conv
+  // rendered as two sidebar rows with different agent badges).
+  updateSessionAgent: db.prepare(`
+    UPDATE sessions SET agent_id = ?, agent_name = ?, updated_at = ? WHERE id = ?
+  `),
+
   updateSessionPinned: db.prepare(`
     UPDATE sessions SET is_pinned = ?, updated_at = ? WHERE id = ?
   `),

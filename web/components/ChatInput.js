@@ -622,7 +622,7 @@ export default {
       }
 
       const currentExpertSelections = [...expertSelections.value];
-      store.sendMessage(inputText.value, attachmentInfos, { expertSelections: currentExpertSelections });
+      store.sendMessage(inputText.value.trim(), attachmentInfos, { expertSelections: currentExpertSelections });
 
       attachments.value = [];
       inputText.value = '';

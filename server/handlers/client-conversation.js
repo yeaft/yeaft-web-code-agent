@@ -413,6 +413,17 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         convInfo._pendingExperts = msg.expertSelections;
       }
 
+      // fix-usermsg-dup: stash the client-stamped id so agent-output can
+      // round-trip it on the `claude_output` user echo (it's persisted in
+      // the DB row's metadata too so the post-refresh `sync_messages_result`
+      // payload carries the same dedup key). Without this, the echo path
+      // falls back to content-equality dedup, which loses races after page
+      // refresh (the optimistic add competes with the DB-sourced row, both
+      // sharing the same text but neither sharing a stable id).
+      if (msg.clientMessageId && convInfo) {
+        convInfo._pendingClientMessageId = msg.clientMessageId;
+      }
+
       // 用用户输入的 prompt 更新会话标题（跳过用户自定义标题的会话）
       if (msg.prompt && msg.prompt.trim() && !(convInfo?.customTitle)) {
         const title = msg.prompt.trim().substring(0, 100);

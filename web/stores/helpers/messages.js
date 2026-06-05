@@ -416,10 +416,27 @@ export function formatDbMessage(dbMsg) {
   };
 
   if (dbMsg.role === 'user') {
+    // fix-usermsg-dup: surface the persisted clientMessageId so the
+    // sync-replay merge (conversationHandler.handleSyncMessagesResult)
+    // and the live echo merge (claudeOutput.js user branch) can both
+    // match by id. Without this, a session that was viewed AFTER page
+    // refresh — i.e. messages come from sync rather than the live echo
+    // path — has no dedup key and the next optimistic add produces the
+    // duplicate this fix targets.
+    let clientMessageId = null;
+    if (dbMsg.metadata) {
+      try {
+        const meta = JSON.parse(dbMsg.metadata);
+        if (meta && typeof meta.clientMessageId === 'string') {
+          clientMessageId = meta.clientMessageId;
+        }
+      } catch { /* invalid metadata JSON, ignore */ }
+    }
     return {
       ...base,
       type: 'user',
-      content: typeof dbMsg.content === 'string' ? dbMsg.content : String(dbMsg.content || '')
+      content: typeof dbMsg.content === 'string' ? dbMsg.content : String(dbMsg.content || ''),
+      ...(clientMessageId ? { clientMessageId } : {})
     };
   } else if (dbMsg.role === 'assistant') {
     const text = extractTextContent(dbMsg.content);

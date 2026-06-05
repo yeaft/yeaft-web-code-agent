@@ -7,6 +7,20 @@ import { markAllToolsCompleted } from './handlers/conversationHandler.js';
 import { t } from '../../utils/i18n.js';
 import { EXPERT_ROLES, buildClientExpertMessage } from '../../utils/expert-roles.js';
 
+/**
+ * fix-usermsg-dup: opaque client-side id stamped on optimistic user
+ * messages and forwarded to the server in the `chat` payload. The
+ * server echoes it back on the `claude_output` user message so the
+ * frontend dedup gate (claudeOutput.js) can match precisely instead of
+ * falling back to string-equality on normalized content. Cheap (no
+ * crypto/UUID dependency), collision-resistant enough for a single
+ * client process — only needs to be unique within one user's open
+ * messages window.
+ */
+function makeClientMessageId() {
+  return `cm_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export function selectAgent(store, agentId) {
   if (agentId === store.currentAgent) {
     console.log('[selectAgent] Same agent, skipping:', agentId);
@@ -367,9 +381,20 @@ export function sendMessage(store, text, attachments = [], options = {}) {
   const hasExpertSelections = options.expertSelections && options.expertSelections.length > 0;
   if ((!text.trim() && attachments.length === 0 && !hasExpertSelections) || !store.currentAgent || !store.currentConversation) return;
 
+  // fix-usermsg-dup: stamp a stable id on the optimistic message AND on
+  // the outgoing `chat` payload so the server can round-trip it back on
+  // the `claude_output` user echo. Without this, dedup in
+  // claudeOutput.js falls back to a fragile `content === content`
+  // string match which breaks the moment normalization differs
+  // (whitespace, `[Uploaded files]` marker, attachment-only sends, etc.),
+  // producing the "user message rendered twice" symptom that only
+  // reproduces after page refresh.
+  const clientMessageId = makeClientMessageId();
+
   store.addMessage({
     type: 'user',
     content: text,
+    clientMessageId,
     attachments: attachments.length > 0 ? attachments : undefined,
     expertSelections: hasExpertSelections ? options.expertSelections : undefined
   });
@@ -406,7 +431,10 @@ export function sendMessage(store, text, attachments = [], options = {}) {
     type: 'chat',
     prompt: text,
     fileIds,
-    workDir: store.currentWorkDir
+    workDir: store.currentWorkDir,
+    // fix-usermsg-dup: round-trips back on the user echo so the dedup
+    // gate matches by id, not by normalized-content string equality.
+    clientMessageId
   };
   // Pass targetRole for @mention routing
   if (options.targetRole) {
@@ -549,9 +577,13 @@ export function sendMessageToConversation(store, conversationId, text, attachmen
   const hasExpertSelections = options.expertSelections && options.expertSelections.length > 0;
   if ((!text.trim() && attachments.length === 0 && !hasExpertSelections) || !store.currentAgent || !conversationId) return;
 
+  // fix-usermsg-dup: see sendMessage above — same rationale, multi-column path.
+  const clientMessageId = makeClientMessageId();
+
   store.addMessageToConversation(conversationId, {
     type: 'user',
     content: text,
+    clientMessageId,
     attachments: attachments.length > 0 ? attachments : undefined,
     expertSelections: hasExpertSelections ? options.expertSelections : undefined
   });
@@ -586,7 +618,9 @@ export function sendMessageToConversation(store, conversationId, text, attachmen
     conversationId,
     prompt: text,
     fileIds,
-    workDir: conv?.workDir || store.currentWorkDir
+    workDir: conv?.workDir || store.currentWorkDir,
+    // fix-usermsg-dup: see sendMessage above — same rationale.
+    clientMessageId
   };
   if (options.targetRole) {
     wsMsg.targetRole = options.targetRole;

@@ -343,17 +343,36 @@ export function handleSyncMessagesResult(store, msg) {
           // appending a duplicate. We only collapse FINALIZED orphans —
           // an actively streaming partial (isStreaming: true) is left
           // alone so its content can keep growing.
+          //
+          // fix-usermsg-dup: for user-type rows, prefer matching by
+          // `clientMessageId` when both sides carry it. That's the
+          // server-stamped id that survives the optimistic→echo→DB
+          // round-trip. Content-equality is kept as a fallback for
+          // legacy rows (and for assistant messages, which never had a
+          // clientMessageId in the first place).
           if (m.dbMessageId && (m.type === 'assistant' || m.type === 'user')) {
-            const orphan = msgs.find(existing =>
-              !existing.dbMessageId &&
-              !existing.isStreaming &&
-              existing.type === m.type &&
-              existing.content === m.content
-            );
+            let orphan = null;
+            if (m.type === 'user' && m.clientMessageId) {
+              orphan = msgs.find(existing =>
+                !existing.dbMessageId &&
+                !existing.isStreaming &&
+                existing.type === 'user' &&
+                existing.clientMessageId === m.clientMessageId
+              );
+            }
+            if (!orphan) {
+              orphan = msgs.find(existing =>
+                !existing.dbMessageId &&
+                !existing.isStreaming &&
+                existing.type === m.type &&
+                existing.content === m.content
+              );
+            }
             if (orphan) {
               orphan.dbMessageId = m.dbMessageId;
               orphan.id = m.id;
               if (m.timestamp) orphan.timestamp = m.timestamp;
+              if (m.clientMessageId && !orphan.clientMessageId) orphan.clientMessageId = m.clientMessageId;
               continue;
             }
           }
