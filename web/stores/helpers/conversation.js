@@ -12,13 +12,21 @@ import { EXPERT_ROLES, buildClientExpertMessage } from '../../utils/expert-roles
  * messages and forwarded to the server in the `chat` payload. The
  * server echoes it back on the `claude_output` user message so the
  * frontend dedup gate (claudeOutput.js) can match precisely instead of
- * falling back to string-equality on normalized content. Cheap (no
- * crypto/UUID dependency), collision-resistant enough for a single
- * client process — only needs to be unique within one user's open
- * messages window.
+ * falling back to string-equality on normalized content.
+ *
+ * Review C2 (Fowler): use `crypto.randomUUID()` rather than a homemade
+ * `Date.now() + Math.random()` recipe. Two tabs hitting Send at the
+ * same millisecond would share the timestamp half, dropping the
+ * effective entropy to ~40 bits — birthday-bound that's a real
+ * collision risk for power users. `crypto.randomUUID()` is in every
+ * browser this app supports (Chrome 92+, Firefox 95+, Safari 15.4+)
+ * and in Node 14.17+, so there's no dependency cost.
+ *
+ * The `cm_` prefix is preserved for the server-side validator
+ * (C1) and to keep the id self-describing in logs / DB rows.
  */
 function makeClientMessageId() {
-  return `cm_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  return `cm_${crypto.randomUUID()}`;
 }
 
 export function selectAgent(store, agentId) {

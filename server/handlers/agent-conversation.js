@@ -3,6 +3,7 @@ import {
   broadcastAgentList, notifyConversationUpdate, forwardToClients
 } from '../ws-utils.js';
 import { agents } from '../context.js';
+import { CONFIG } from '../config.js';
 
 /**
  * Handle conversation lifecycle messages from agent.
@@ -31,7 +32,9 @@ export async function handleAgentConversation(agentId, agent, msg) {
         // the "same conv on two agents" condition.
         const dbForConv = sessionDb.get(conv.id);
         if (dbForConv && dbForConv.agent_id && dbForConv.agent_id !== agentId) {
-          console.log(`[conversation_list] dropping conv ${conv.id} from agent ${agentId} — DB owner is ${dbForConv.agent_id}`);
+          if (CONFIG.debug) {
+            console.log(`[conversation_list] dropping conv ${conv.id} from agent ${agentId} — DB owner is ${dbForConv.agent_id}`);
+          }
           agent.conversations.delete(conv.id);
           continue;
         }
@@ -110,7 +113,9 @@ export async function handleAgentConversation(agentId, agent, msg) {
       for (const [otherAgentId, otherAgent] of agents) {
         if (otherAgentId === agentId) continue;
         if (otherAgent.conversations.has(msg.conversationId)) {
-          console.log(`[conversation_resumed] transferring conv ${msg.conversationId} from agent ${otherAgentId} → ${agentId}`);
+          if (CONFIG.debug) {
+            console.log(`[conversation_resumed] transferring conv ${msg.conversationId} from agent ${otherAgentId} → ${agentId}`);
+          }
           otherAgent.conversations.delete(msg.conversationId);
         }
       }
@@ -157,7 +162,9 @@ export async function handleAgentConversation(agentId, agent, msg) {
             // restore path consults, so failing to update it would
             // re-summon the duplicate on the next reload.
             if (dbSessionData && dbSessionData.agent_id !== agentId) {
-              console.log(`[conversation_resumed] DB.agent_id ${dbSessionData.agent_id} → ${agentId} for ${msg.conversationId}`);
+              if (CONFIG.debug) {
+                console.log(`[conversation_resumed] DB.agent_id ${dbSessionData.agent_id} → ${agentId} for ${msg.conversationId}`);
+              }
               sessionDb.setAgent(msg.conversationId, agentId, agent.name);
             }
           } else {

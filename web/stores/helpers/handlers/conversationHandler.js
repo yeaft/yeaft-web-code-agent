@@ -4,6 +4,7 @@
 
 import { isRecentlyClosed, stopProcessingWatchdog } from '../watchdog.js';
 import { clearSessionLoading } from '../session.js';
+import { sameUserMessage } from '../dedup.js';
 import { t } from '../../../utils/i18n.js';
 
 /** Filter out empty user messages — tool_result artifacts stored as empty user records in DB */
@@ -344,27 +345,27 @@ export function handleSyncMessagesResult(store, msg) {
           // an actively streaming partial (isStreaming: true) is left
           // alone so its content can keep growing.
           //
-          // fix-usermsg-dup: for user-type rows, prefer matching by
-          // `clientMessageId` when both sides carry it. That's the
-          // server-stamped id that survives the optimistic→echo→DB
-          // round-trip. Content-equality is kept as a fallback for
-          // legacy rows (and for assistant messages, which never had a
-          // clientMessageId in the first place).
+          // fix-usermsg-dup / Review I2 (Fowler): the user-row identity
+          // rule lives in `sameUserMessage` (web/stores/helpers/dedup.js)
+          // — id-equality when both sides have a `clientMessageId`,
+          // content-equality only when neither side has one. The same
+          // helper backs the live-echo dedup in claudeOutput.js so the
+          // two gates can't drift apart. Assistant rows never carry
+          // `clientMessageId`, so they keep the historical type+content
+          // match path inline.
           if (m.dbMessageId && (m.type === 'assistant' || m.type === 'user')) {
             let orphan = null;
-            if (m.type === 'user' && m.clientMessageId) {
+            if (m.type === 'user') {
               orphan = msgs.find(existing =>
                 !existing.dbMessageId &&
                 !existing.isStreaming &&
-                existing.type === 'user' &&
-                existing.clientMessageId === m.clientMessageId
+                sameUserMessage(existing, m)
               );
-            }
-            if (!orphan) {
+            } else {
               orphan = msgs.find(existing =>
                 !existing.dbMessageId &&
                 !existing.isStreaming &&
-                existing.type === m.type &&
+                existing.type === 'assistant' &&
                 existing.content === m.content
               );
             }
