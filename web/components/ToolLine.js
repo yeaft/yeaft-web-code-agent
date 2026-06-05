@@ -109,7 +109,12 @@ export default {
     };
 
     const getToolIcon = (name) => {
-      const icons = { Read: '\u{1F4D6}', Edit: '\u270F\uFE0F', Write: '\u{1F4DD}', Bash: '\u26A1', Glob: '\u{1F50D}', Grep: '\u{1F50E}', Task: '\u{1F4CB}', WebFetch: '\u{1F310}', WebSearch: '\u{1F50D}', TodoWrite: '\u2705', RouteForward: '@' };
+      const icons = { Read: '\u{1F4D6}', Edit: '\u270F\uFE0F', Write: '\u{1F4DD}', Bash: '\u26A1', Glob: '\u{1F50D}', Grep: '\u{1F50E}', Task: '\u{1F4CB}', WebFetch: '\u{1F310}', WebSearch: '\u{1F50D}', TodoWrite: '\u2705', RouteForward: '@',
+        // Synthetic tools the agent rewrites Claude Code's fake-user messages
+        // into (see agent/claude.js parseTaskNotification / parseCompactSummary).
+        __SubagentResult: '\u{1F916}',  // robot
+        __CompactSummary: '\u{1F4DA}',  // books
+      };
       return icons[name] || '\u2699\uFE0F';
     };
 
@@ -155,6 +160,16 @@ export default {
       }
       if (toolName === 'RouteForward') {
         return formatRouteForwardToolLine(input, middleTruncate);
+      }
+      // Synthetic tools — agent rewrites Claude Code's fake-user messages
+      // into these blocks (see agent/claude.js).
+      if (toolName === '__SubagentResult') {
+        const label = input.summary || input.status || 'completed';
+        return `Sub-agent: ${middleTruncate(label, 80)}`;
+      }
+      if (toolName === '__CompactSummary') {
+        const len = typeof input.summary === 'string' ? input.summary.length : 0;
+        return `Context summarized (${len} chars)`;
       }
       return toolName;
     };

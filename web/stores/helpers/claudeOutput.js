@@ -133,26 +133,18 @@ export function handleClaudeOutput(store, conversationId, data) {
     const rawUserContent = data.message?.content;
     const userContent = normalizeUserVisibleContent(rawUserContent);
 
-    // 过滤 compact summary 消息（compact 后的上下文摘要，不应显示在 UI 中）
-    // Claude Code compact summary 特征检测 — 兜底防线，即使 agent 端没过滤也不会泄漏到 UI
-    if (typeof userContent === 'string' && userContent.length > 200) {
-      if (userContent.includes('This session is being continued from a previous conversation')
-          || userContent.includes('The summary below covers the earlier portion of the conversation')
-          || /Summary:[\s\S]*\d+\.\s*(Primary Request|Key Technical|Current Work)/m.test(userContent)) {
-        return;
-      }
-    }
-    // content 可能是数组形式（每个 block 是 { type: 'text', text: '...' }）
-    if (Array.isArray(userContent)) {
-      const fullText = userContent.map(b => (typeof b === 'string' ? b : b?.text || '')).join('');
-      if (fullText.length > 200 && (
-        fullText.includes('This session is being continued from a previous conversation')
-        || fullText.includes('The summary below covers the earlier portion of the conversation')
-        || /Summary:[\s\S]*\d+\.\s*(Primary Request|Key Technical|Current Work)/m.test(fullText)
-      )) {
-        return;
-      }
-    }
+    // NOTE: Compact-summary and <task-notification> filtering used to live
+    // here as a defensive web-side guard. As of feat-claude-chat-subagent-
+    // compact-toolline (agent/claude.js parseTaskNotification +
+    // parseCompactSummary), the agent rewrites both classes of "fake user
+    // messages" into synthetic assistant.tool_use blocks (__SubagentResult,
+    // __CompactSummary) BEFORE they ever reach this code path. Keeping a
+    // second copy of the detection regex here would mean two places to keep
+    // in sync — and worse, would silently drop the message when we want to
+    // surface it as a ToolLine. If the agent ever fails to recognise a new
+    // variant, the message will fall through and render as a user bubble;
+    // that's a visible regression we can fix at the source, not a silent
+    // data loss.
 
     // 过滤 Claude CLI 内部消息（不应显示在 UI 中）
     // - <local-command-caveat> — CLI 内部 caveat 标记
