@@ -96,23 +96,23 @@ export default {
           <!-- VP roster (yeaft-specific) -->
           <div class="resume-control-row resume-control-row-vp">
             <label class="resume-control-label">{{ $t('yeaft.session.create.vpPicker') }}</label>
-            <div class="yeaft-wizard-roster">
-              <div v-if="vpList.length === 0 && vpLibraryEmpty" class="yeaft-wizard-roster-empty">
+            <div class="yeaft-roster">
+              <div v-if="vpList.length === 0 && vpLibraryEmpty" class="yeaft-roster-empty">
                 {{ $t('yeaft.session.create.rosterEmpty') }}
               </div>
-              <div v-else-if="vpList.length === 0" class="yeaft-wizard-roster-empty">
+              <div v-else-if="vpList.length === 0" class="yeaft-roster-empty">
                 {{ $t('yeaft.session.create.rosterLoading') }}
               </div>
-              <ul v-else class="yeaft-wizard-roster-list" role="listbox" aria-multiselectable="true">
+              <ul v-else class="yeaft-roster-list" role="listbox" aria-multiselectable="true">
                 <li
                   v-for="vp in vpList"
                   :key="vp.vpId"
-                  class="yeaft-wizard-roster-item"
+                  class="yeaft-roster-item"
                   :class="{ 'is-selected': form.vpIds.includes(vp.vpId), 'is-default': form.defaultVpId === vp.vpId }"
                   role="option"
                   :aria-selected="form.vpIds.includes(vp.vpId)"
                 >
-                  <label class="yeaft-wizard-roster-row">
+                  <label class="yeaft-roster-row">
                     <input
                       type="checkbox"
                       :value="vp.vpId"
@@ -120,12 +120,12 @@ export default {
                       @change="toggleVp(vp.vpId, $event.target.checked)"
                     />
                     <VpAvatar :vp-id="vp.vpId" :size="20" :aria-label="vpLabelFor(vp.vpId)" />
-                    <span class="yeaft-wizard-roster-name" :style="{ color: vpTextColorFor(vp.vpId) }">{{ vpLabelFor(vp.vpId) }}</span>
+                    <span class="yeaft-roster-name" :style="{ color: vpTextColorFor(vp.vpId) }">{{ vpLabelFor(vp.vpId) }}</span>
                   </label>
                   <button
                     v-if="form.vpIds.includes(vp.vpId)"
                     type="button"
-                    class="yeaft-wizard-default-star"
+                    class="yeaft-roster-default-star"
                     :class="{ 'is-on': form.defaultVpId === vp.vpId }"
                     :aria-label="$t('yeaft.session.create.defaultVpHint')"
                     :aria-pressed="form.defaultVpId === vp.vpId"

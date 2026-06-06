@@ -583,8 +583,6 @@ export default {
   'yeaft.session.create.workDirLabel': 'Work Directory',
   'yeaft.session.create.agentLabel': 'Agent',
   'yeaft.session.create.vpPicker': 'Pick VPs',
-  'yeaft.session.create.selectMembers': 'Select members',
-  'yeaft.session.create.membersSelected': '{count} members selected',
   'yeaft.session.create.rosterEmpty': 'No VPs available — create one from the VP Library first.',
   'yeaft.session.create.rosterLoading': 'Loading VPs…',
   'yeaft.session.create.defaultVpHint': 'The VP that answers when no one is @-mentioned.',

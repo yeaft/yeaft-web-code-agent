@@ -583,8 +583,6 @@ export default {
   'yeaft.session.create.workDirLabel': '工作目录',
   'yeaft.session.create.agentLabel': 'Agent',
   'yeaft.session.create.vpPicker': '选择 VP',
-  'yeaft.session.create.selectMembers': '选择成员',
-  'yeaft.session.create.membersSelected': '已选择 {count} 名成员',
   'yeaft.session.create.rosterEmpty': '暂无可用 VP — 请先到角色库创建。',
   'yeaft.session.create.rosterLoading': 'VP 加载中…',
   'yeaft.session.create.defaultVpHint': '当没有 @ 提及时默认回答的 VP。',
