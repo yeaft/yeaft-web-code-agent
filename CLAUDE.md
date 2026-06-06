@@ -185,7 +185,7 @@ mcp.js     — MCPManager：连接 MCP server，桥接其工具
 
 - **框架**：Vue 3（CDN，无构建步骤）+ Pinia
 - **API 风格**：Vue Options API，`template` 用字符串字面量（不用 SFC / `.vue` 文件）
-- **组件**：`web/components/*.js` — `ChatPage`、`YeaftPage`（= Yeaft 页，文件名是历史别名）、`YeaftSidebar`、`YeaftSettings`、`MessageList`、`ChatInput`、`GroupCreateWizard`、`GroupSelector` 等
+- **组件**：`web/components/*.js` — `ChatPage`、`YeaftPage`（= Yeaft 页，文件名是历史别名）、`YeaftSidebar`、`YeaftSettings`、`MessageList`、`ChatInput`、`SessionCreateModal`、`SessionSettingsModal` 等
 - **状态**：`web/stores/chat.js` 是唯一的 Pinia store
 - **渲染**：Claude Chat 和 Yeaft 复用同一套 MessageList / AssistantTurn 管线
 - **侧栏**：tab bar（session-tab-bar）含 Chat / Crew / Yeaft 入口

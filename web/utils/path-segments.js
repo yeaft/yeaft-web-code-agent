@@ -1,9 +1,10 @@
 /**
  * path-segments.js — small shared helpers for path display in modals.
  *
- * Extracted so ChatPage's new-conversation modal and GroupCreateWizard
- * render the same shape for the same data (review feedback PR #901:
- * helper duplication was causing the two modals to drift).
+ * Extracted so ChatPage's new-conversation modal and Yeaft's
+ * SessionCreateModal render the same shape for the same data — keeps
+ * the two creation surfaces visually identical and avoids the helper
+ * duplication that caused them to drift (PR #901).
  */
 
 export function getLastPathSegment(path) {

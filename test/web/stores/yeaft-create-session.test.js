@@ -69,4 +69,28 @@ describe('createYeaftSession', () => {
       },
     ]);
   });
+
+  it('honours an explicit defaultVpId when it is a roster member', async () => {
+    const store = makeStore();
+
+    await store.createYeaftSession({
+      displayName: 'Pair work',
+      vpIds: ['linus', 'martin'],
+      defaultVpId: 'martin',
+    });
+
+    expect(store.sessionCrudCalls[0].data.defaultVpId).toBe('martin');
+  });
+
+  it('ignores an explicit defaultVpId outside the roster and falls back to the first VP', async () => {
+    const store = makeStore();
+
+    await store.createYeaftSession({
+      displayName: 'Solo',
+      vpIds: ['linus', 'martin'],
+      defaultVpId: 'ghost-vp',
+    });
+
+    expect(store.sessionCrudCalls[0].data.defaultVpId).toBe('linus');
+  });
 });

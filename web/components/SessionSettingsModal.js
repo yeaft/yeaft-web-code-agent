@@ -419,7 +419,7 @@ export default {
                     type="button"
                     class="group-settings-default-star"
                     :class="{ 'is-on': defaultVpId === vp.vpId }"
-                    :title="$t('yeaft.session.wizard.defaultVpHint')"
+                    :title="$t('yeaft.session.create.defaultVpHint')"
                     :aria-pressed="defaultVpId === vp.vpId"
                     :disabled="membersBusy || defaultVpId === vp.vpId"
                     @click.stop="setDefault(vp.vpId)"
