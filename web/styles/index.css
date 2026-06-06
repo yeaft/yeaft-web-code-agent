@@ -22,7 +22,7 @@
 @import './yeaft-vp.css';
 /* yeaft-vp-card.css and yeaft-detail-drawer.css removed alongside the
    VpQuickCard / VpTurnDetailDrawer components (VP-block redesign 2026-05-08). */
-@import './yeaft-group-wizard.css';
+@import './yeaft-session-create.css';
 @import './group-invite.css';
 @import './reflection.css';
 @import './sub-agent.css';

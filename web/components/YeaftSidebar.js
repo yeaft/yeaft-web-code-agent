@@ -87,7 +87,7 @@ export default {
               class="session-tab-add-btn"
               :title="$t('yeaft.session.new')"
               :aria-label="$t('yeaft.session.new')"
-              @click.stop="onOpenSessionWizard"
+              @click.stop="onOpenSessionCreate"
             >
               <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
             </button>
@@ -156,8 +156,8 @@ export default {
 
       <!-- Phase 3: unified session create modal. -->
       <SessionCreateModal
-        v-if="sessionWizardOpen"
-        @close="sessionWizardOpen = false"
+        v-if="sessionCreateOpen"
+        @close="sessionCreateOpen = false"
         @created="onSessionCreated"
       />
 
@@ -184,9 +184,8 @@ export default {
   data() {
     return {
       now: Date.now(),
-      // task-334m: group-create wizard visibility.
-      sessionWizardOpen: false,
-      groupsOpen: true,
+      // task-334m: session-create modal visibility.
+      sessionCreateOpen: false,
       // task-yeaft-group-editor: per-row action menu only — the rename
       // and delete modals have been folded into the unified
       // SessionSettingsModal owned by YeaftPage.
@@ -333,12 +332,12 @@ export default {
         this.$emit('back');
       }
     },
-    // task-334m: group-wizard + selection handlers.
+    // task-334m: session-create + selection handlers.
     onGroupCreated(_group) {
       // Store auto-activates via applyCrudResult; modal closes itself.
     },
     // Phase 3: unified session create — single entry point users see.
-    onOpenSessionWizard() { this.sessionWizardOpen = true; },
+    onOpenSessionCreate() { this.sessionCreateOpen = true; },
     onSessionCreated(_group) {
       // groups store auto-activates via applyCrudResult; modal closes itself.
     },

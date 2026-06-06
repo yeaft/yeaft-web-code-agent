@@ -1,0 +1,111 @@
+/* ===========================================================================
+   yeaft-session-create.css — Yeaft-specific additions on top of the chat
+   new-conversation modal shell (chat-modals.css `.resume-modal*`).
+
+   SessionCreateModal reuses the full chat shell verbatim. The only
+   yeaft-unique pieces are:
+     - A VP roster row (chat picks a provider/model; yeaft picks VPs).
+     - A per-row default-star button (which VP answers when no @-mention).
+     - An inline error band above the footer.
+
+   These selectors are scoped to `.resume-control-row-vp` / `.yeaft-roster-*`
+   so they don't leak into the chat new-conv modal or back into any other
+   resume-modal consumer.
+
+   No border-top / border-bottom anywhere (Yeaft UI rule). All colours
+   pulled from design tokens in variables.css.
+   =========================================================================== */
+
+.resume-control-row-vp { align-items: flex-start; }
+
+.yeaft-roster {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.yeaft-roster-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 6px 4px;
+}
+
+.yeaft-roster-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 168px;
+  overflow-y: auto;
+}
+
+.yeaft-roster-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px 0 0;
+  border-radius: 6px;
+}
+
+.yeaft-roster-item.is-selected { background: var(--accent-bg); }
+
+.yeaft-roster-row {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.yeaft-roster-row:hover { background: var(--sidebar-hover); }
+
+.yeaft-roster-row input[type="checkbox"] {
+  flex: 0 0 auto;
+  accent-color: var(--accent-blue, #4a9eff);
+  width: 14px;
+  height: 14px;
+}
+
+.yeaft-roster-name {
+  flex: 1 1 auto;
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.yeaft-roster-default-star {
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.yeaft-roster-default-star:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.yeaft-roster-default-star.is-on { color: var(--warn-text); }
+
+.resume-modal .resume-modal-error {
+  font-size: 12px;
+  color: var(--error);
+  padding: 0 16px 8px;
+  line-height: 1.4;
+}
