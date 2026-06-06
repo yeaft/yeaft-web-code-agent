@@ -4,6 +4,7 @@ import { startProcessingWatchdog, stopProcessingWatchdog } from './watchdog.js';
 import { setSessionLoading, saveOpenSessions } from './session.js';
 import { ensureConnected } from './websocket.js';
 import { markAllToolsCompleted } from './handlers/conversationHandler.js';
+import { maxDbMessageId } from './messages.js';
 import { t } from '../../utils/i18n.js';
 import { EXPERT_ROLES, buildClientExpertMessage } from '../../utils/expert-roles.js';
 
@@ -171,45 +172,23 @@ export function selectConversation(store, conversationId, agentId) {
       });
     }
   } else {
-    // perf-chat-session-switch-cache: when we've ever loaded this conv
-    // before, its messages are still sitting in messagesMap. The old
-    // code unconditionally blew them away and refetched the last 5
-    // turns, costing a white-screen + WS round-trip per sidebar click.
+    // perf-chat-session-switch-cache: when this conv was loaded before,
+    // reuse messagesMap as-is and ask the server only for the delta
+    // since max(dbMessageId). Old code unconditionally blew the cache
+    // away and refetched 5 turns on every sidebar click (a dead-code
+    // `currentView !== 'chat'` gate made the cache-reuse predicate
+    // always false in chat view — the only view we run in daily).
     //
-    // New flow:
-    //   1. If messagesMap[id] has at least one message that has a
-    //      dbMessageId, render those immediately (don't touch the map)
-    //      and ask the server only for what we haven't seen since
-    //      max(dbMessageId).
-    //   2. If the cache is empty OR every entry is an unflushed
-    //      streaming partial (no dbMessageId yet), there's nothing to
-    //      anchor an incremental sync on — fall back to the legacy
-    //      `turns: 5` cold-load path. handleSyncMessagesResult will
-    //      reseat the cache.
-    //
-    // The previous `store.currentView !== 'chat'` gate was effectively
-    // dead code — daily use is in chat view, so the condition was
-    // always false. See the plan for why crew / yeaft don't reach this
-    // branch (crew is short-circuited above; yeaft never calls
-    // selectConversation, it goes through enterYeaft).
+    // `maxDbMessageId` (web/stores/helpers/messages.js) is the
+    // single source of truth for the cursor selection rule
+    // (tail-safe, order-safe, zero-safe).
     const cachedMessages = store.messagesMap[conversationId];
-    let lastSeenDbId = null;
-    if (Array.isArray(cachedMessages) && cachedMessages.length > 0) {
-      // Must take the MAX, not the tail — the tail can be a streaming
-      // assistant partial without a dbMessageId, and using a stale id
-      // would re-pull rows we already have (dedup catches it, but it
-      // wastes bandwidth on every switch).
-      for (const m of cachedMessages) {
-        if (typeof m?.dbMessageId === 'number' && (lastSeenDbId === null || m.dbMessageId > lastSeenDbId)) {
-          lastSeenDbId = m.dbMessageId;
-        }
-      }
-    }
+    const lastSeenDbId = maxDbMessageId(cachedMessages);
 
     if (lastSeenDbId !== null) {
       // Cache hit + at least one persisted row → silent incremental sync.
-      // Don't touch messagesMap[id] — the cache is what the user sees
-      // the instant the sidebar click resolves.
+      // Don't touch messagesMap — the cache is what the user sees the
+      // instant the sidebar click resolves.
       store.sendWsMessage({
         type: 'sync_messages',
         conversationId,
@@ -232,8 +211,9 @@ export function selectConversation(store, conversationId, agentId) {
   //
   // hasMoreMessages now comes from per-conv chatSessionState so
   // switching away and back doesn't kill the "Load older" button on
-  // a conv that had pending older history. On a brand-new conv with
-  // no recorded state, fall back to false (old behavior).
+  // a conv with pending older history. On a brand-new conv with no
+  // recorded state, fall back to false (matches pre-PR behavior — the
+  // cold-load that's about to fire will overwrite it).
   store.loadingMoreMessages = false;
   const persisted = store.chatSessionState[conversationId];
   store.hasMoreMessages = !!persisted?.hasMoreOlder;

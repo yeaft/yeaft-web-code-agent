@@ -19,9 +19,11 @@
  *      the tail — the tail can be an in-flight assistant partial with
  *      no dbMessageId; using a stale id wastes bandwidth (dedup catches
  *      the dup, but every switch re-pulls the same rows).
- *   4. `chatSessionState[convId]` records `loaded / lastSyncedAt /
- *      lastSeenDbId / hasMoreOlder` so the cache-hit path is O(1) and
- *      multi-panel switches don't clobber per-conv pagination.
+ *   4. `chatSessionState[convId]` records `lastSeenDbId / hasMoreOlder`
+ *      so the cache-hit path is O(1) and multi-panel switches don't
+ *      clobber per-conv pagination. (Earlier drafts also tracked
+ *      `loaded` and `lastSyncedAt`; Torvalds review dropped them as
+ *      unused dead state — keep this shape minimal.)
  *   5. closeSession + handleConversationDeleted MUST delete the entry —
  *      a same-id rebirth would otherwise inherit the dead session's
  *      cursor.
@@ -70,7 +72,7 @@ if (typeof globalThis.CustomEvent === 'undefined') {
 const { selectConversation, closeSession } = await import(
   '../../../../web/stores/helpers/conversation.js'
 );
-const { handleSyncMessagesResult, handleConversationDeleted } = await import(
+const { handleSyncMessagesResult, handleConversationDeleted, handleConversationResumed } = await import(
   '../../../../web/stores/helpers/handlers/conversationHandler.js'
 );
 const { formatDbMessage } = await import(
@@ -222,6 +224,37 @@ describe('selectConversation — cache reuse + incremental sync', () => {
     const sync = store.__sentMessages.find(m => m.type === 'sync_messages');
     expect(sync.afterMessageId).toBe(5);
   });
+
+  it('cache with only dbMessageId === 0 → cold-load fallback (I3 zero-id safety)', () => {
+    // Bug context (Torvalds review I3 on PR #906): the original
+    // selectConversation cache-hit predicate `lastSeenDbId !== null`
+    // would treat dbMessageId=0 as a legitimate cursor, but SQLite
+    // AUTOINCREMENT starts at 1, so any `dbMessageId === 0` we ever
+    // saw came from a synthesizer bug or test fixture. The server side
+    // also had a falsy gate (`if (msg.afterMessageId)`) that would
+    // silently swap to cold-load on the server when we sent 0,
+    // re-issuing the entire window — but only on the server, so the
+    // client thought it was doing an incremental sync. Now we treat
+    // any dbMessageId <= 0 as "no real cursor" → fall back to cold-load
+    // explicitly on the client.
+    const cached = [
+      { type: 'user', content: 'a', dbMessageId: 0, id: 0 },
+    ];
+    const store = mkStore({
+      messagesMap: { 'conv-1': cached },
+      activeConversations: ['conv-other'],
+    });
+
+    selectConversation(store, 'conv-1');
+
+    const sync = store.__sentMessages.find(m => m.type === 'sync_messages');
+    expect(sync).toMatchObject({
+      type: 'sync_messages',
+      conversationId: 'conv-1',
+      turns: 5,
+    });
+    expect(sync.afterMessageId).toBeUndefined();
+  });
 });
 
 describe('handleSyncMessagesResult — chatSessionState writes', () => {
@@ -237,10 +270,9 @@ describe('handleSyncMessagesResult — chatSessionState writes', () => {
     };
   }
 
-  it('writes chatSessionState[convId] with loaded/lastSeenDbId/hasMoreOlder', () => {
+  it('writes chatSessionState[convId] with lastSeenDbId and hasMoreOlder', () => {
     const store = mkHandlerStore();
 
-    const before = Date.now();
     handleSyncMessagesResult(store, {
       conversationId: 'conv-1',
       messages: [
@@ -249,15 +281,14 @@ describe('handleSyncMessagesResult — chatSessionState writes', () => {
       ],
       hasMore: true,
     });
-    const after = Date.now();
 
     const state = store.chatSessionState['conv-1'];
     expect(state).toBeDefined();
-    expect(state.loaded).toBe(true);
     expect(state.hasMoreOlder).toBe(true);
     expect(state.lastSeenDbId).toBe(11);
-    expect(state.lastSyncedAt).toBeGreaterThanOrEqual(before);
-    expect(state.lastSyncedAt).toBeLessThanOrEqual(after);
+    // No dead fields — Torvalds review (PR #906) dropped loaded/lastSyncedAt.
+    expect(state.loaded).toBeUndefined();
+    expect(state.lastSyncedAt).toBeUndefined();
   });
 
   it('hasMoreOlder is false when the server omits hasMore', () => {
@@ -270,11 +301,11 @@ describe('handleSyncMessagesResult — chatSessionState writes', () => {
     expect(store.chatSessionState['conv-1'].hasMoreOlder).toBe(false);
   });
 
-  it('handles an empty sync result by stamping loaded + lastSeenDbId from existing cache', () => {
+  it('handles an empty sync result by stamping lastSeenDbId from existing cache', () => {
     // Realistic delta scenario: client sent afterMessageId, server has
-    // nothing new (`messages: []`). State must still flip to loaded so
-    // future switches take the cache-hit fast path with a fresh
-    // lastSyncedAt.
+    // nothing new (`messages: []`). State must still stamp lastSeenDbId
+    // from whatever is already in cache so future switches re-anchor on
+    // the correct cursor without re-walking messagesMap each time.
     const existing = formatDbMessage({ id: 42, role: 'user', content: 'hi', created_at: 100 });
     const store = mkHandlerStore([existing]);
 
@@ -282,13 +313,135 @@ describe('handleSyncMessagesResult — chatSessionState writes', () => {
       conversationId: 'conv-1',
       messages: [],
       hasMore: false,
+      afterMessageId: 42, // mark as delta sync
     });
 
     const state = store.chatSessionState['conv-1'];
-    expect(state.loaded).toBe(true);
     expect(state.lastSeenDbId).toBe(42);
+    // Delta sync with no new messages: hasMoreOlder is NOT mutated by
+    // an empty delta — see the "preserves prior hasMoreOlder" test below
+    // for the regression coverage that pins this contract.
     expect(state.hasMoreOlder).toBe(false);
   });
+
+  it('delta sync preserves prior hasMoreOlder when server reports an empty delta (C1)', () => {
+    // Bug context (PR #906 review, Fowler + Torvalds independently flagged):
+    //   Server's `hasMore` is computed from `getBeforeId(oldestId, 1)`.
+    //   On a delta where `messages: []`, oldestId is undefined, server
+    //   returns hasMore=false. If the client trusts this on delta path,
+    //   a single empty-delta wipes the previously-correct "there is
+    //   older history" flag and the "Load Older" button disappears.
+    //
+    // Contract: delta syncs (afterMessageId-anchored) MUST preserve the
+    // pre-existing hasMoreOlder. Only cold-load (turns:N) syncs are
+    // allowed to overwrite it.
+    const existing = formatDbMessage({ id: 42, role: 'user', content: 'hi', created_at: 100 });
+    const store = mkHandlerStore([existing]);
+    // Seed: prior cold-load said "yes, there's older history".
+    store.chatSessionState['conv-1'] = { lastSeenDbId: 42, hasMoreOlder: true };
+
+    handleSyncMessagesResult(store, {
+      conversationId: 'conv-1',
+      messages: [],
+      hasMore: false,        // server reports false — but on delta this is noise
+      afterMessageId: 42,    // marks this as a delta sync
+    });
+
+    expect(store.chatSessionState['conv-1'].hasMoreOlder).toBe(true);
+    // Also: global mirror must NOT be clobbered on delta.
+    expect(store.hasMoreMessages).toBe(false); // remained at its initial value
+  });
+
+  it('cold-load sync overwrites hasMoreOlder from server (C1 counter-example)', () => {
+    // Counterpart to the previous test: on cold-load (turns-anchored,
+    // no afterMessageId), the server's hasMore IS authoritative — we're
+    // looking at the first page of the conversation, so getBeforeId
+    // against the genuine oldest row is meaningful.
+    const store = mkHandlerStore();
+    store.chatSessionState['conv-1'] = { lastSeenDbId: null, hasMoreOlder: true };
+
+    handleSyncMessagesResult(store, {
+      conversationId: 'conv-1',
+      messages: [{ id: 1, role: 'user', content: 'hi', created_at: 100 }],
+      hasMore: false,
+      // afterMessageId omitted → cold load
+    });
+
+    expect(store.chatSessionState['conv-1'].hasMoreOlder).toBe(false);
+    expect(store.hasMoreMessages).toBe(false);
+  });
+});
+
+describe('handleConversationResumed — chatSessionState stamping (I1)', () => {
+  // Bug context (Fowler review I1 on PR #906):
+  //   `selectConversation` was the only path that wrote to
+  //   `chatSessionState`. But conv-resumed (cold-open of an existing
+  //   session via WebSocket replay) also seeds messagesMap and is the
+  //   path that runs on first-load after a browser refresh. Without
+  //   stamping here, a fresh page-load → switch-away → switch-back
+  //   would re-enter selectConversation with an empty chatSessionState
+  //   entry, fall back to hasMoreMessages=false, and the user would
+  //   lose the "Load Older" affordance for any conv they hadn't yet
+  //   delta-synced — i.e. literally on every browser refresh.
+  it('stamps lastSeenDbId from msg.dbMessages and hasMoreOlder from msg.hasMoreMessages', () => {
+    const store = mkConvResumedStore();
+    handleConversationResumed(store, {
+      conversationId: 'conv-1',
+      agentId: 'agent-a',
+      workDir: '/tmp/wd',
+      dbMessages: [
+        { id: 100, role: 'user',      content: 'hello',   created_at: 1000 },
+        { id: 101, role: 'assistant', content: 'response', created_at: 1100 },
+      ],
+      hasMoreMessages: true,
+    });
+
+    const state = store.chatSessionState['conv-1'];
+    expect(state).toBeDefined();
+    expect(state.lastSeenDbId).toBe(101);
+    expect(state.hasMoreOlder).toBe(true);
+  });
+
+  it('stamps lastSeenDbId=null when dbMessages is empty (brand-new conv)', () => {
+    // Edge: conversation_resumed can fire with zero history if the
+    // server has nothing persisted yet (cold-open of a session that
+    // had no committed turns). The state must still be stamped so the
+    // next selectConversation takes the fast path with a clean cursor.
+    const store = mkConvResumedStore();
+    handleConversationResumed(store, {
+      conversationId: 'conv-1',
+      agentId: 'agent-a',
+      workDir: '/tmp/wd',
+      dbMessages: [],
+      hasMoreMessages: false,
+    });
+
+    const state = store.chatSessionState['conv-1'];
+    expect(state).toBeDefined();
+    expect(state.lastSeenDbId).toBeNull();
+    expect(state.hasMoreOlder).toBe(false);
+  });
+
+  function mkConvResumedStore() {
+    return {
+      agents: [{ id: 'agent-a', name: 'Agent A' }],
+      conversations: [],
+      panels: [],
+      activeConversations: [],
+      messagesMap: {},
+      chatSessionState: {},
+      conversationTitles: {},
+      hasMoreMessages: false,
+      currentAgent: null,
+      currentAgentInfo: null,
+      currentWorkDir: null,
+      formatDbMessage,
+      addMessage() { /* no-op */ },
+      sendWsMessage() { /* no-op */ },
+      saveOpenSessions() { /* no-op */ },
+      setRefreshingSession() { /* no-op */ },
+    };
+  }
 });
 
 describe('chatSessionState lifecycle — cleanup', () => {
@@ -296,7 +449,7 @@ describe('chatSessionState lifecycle — cleanup', () => {
     const store = mkStore({
       messagesMap: { 'conv-1': [] },
       chatSessionState: {
-        'conv-1': { loaded: true, lastSyncedAt: 1, lastSeenDbId: 5, hasMoreOlder: false },
+        'conv-1': { lastSeenDbId: 5, hasMoreOlder: false },
       },
       conversations: [{ id: 'conv-1', agentId: 'agent-a', type: 'chat' }],
       activeConversations: ['conv-1'],
@@ -320,7 +473,7 @@ describe('chatSessionState lifecycle — cleanup', () => {
       conversations: [{ id: 'conv-1' }],
       messagesMap: { 'conv-1': [{ type: 'user', content: 'hi' }] },
       chatSessionState: {
-        'conv-1': { loaded: true, lastSyncedAt: 1, lastSeenDbId: 5, hasMoreOlder: false },
+        'conv-1': { lastSeenDbId: 5, hasMoreOlder: false },
       },
       conversationTitles: { 'conv-1': 'title' },
       customConversationTitles: {},
@@ -360,7 +513,7 @@ describe('selectConversation — pagination state (multi-panel safety)', () => {
     const store = mkStore({
       messagesMap: { 'conv-1': cached },
       chatSessionState: {
-        'conv-1': { loaded: true, lastSyncedAt: 1, lastSeenDbId: 5, hasMoreOlder: true },
+        'conv-1': { lastSeenDbId: 5, hasMoreOlder: true },
       },
       hasMoreMessages: false, // global was reset by a prior switch
       activeConversations: ['conv-other'],

@@ -357,6 +357,40 @@ export function loadHistoryMessages(store, historyMessages) {
   console.log('Messages after loading:', msgs);
 }
 
+/**
+ * Largest `dbMessageId` across `msgs`, or null if none of them carry one.
+ *
+ * Used as the `afterMessageId` cursor for incremental `sync_messages`
+ * requests (cache-hit branch in `selectConversation`, plus the cached
+ * `chatSessionState[convId].lastSeenDbId` stamp).
+ *
+ * Three contracts the call sites rely on:
+ *   1. **Tail-safe** — streaming assistant partials sit at the tail
+ *      without a `dbMessageId`; the naïve `msgs.at(-1)?.dbMessageId`
+ *      would yield `undefined` and force a wasteful cold-load.
+ *   2. **Order-safe** — older-history prepends can land smaller ids
+ *      after larger ones; we walk the whole array and take the max.
+ *   3. **Zero-safe** — `dbMessageId === 0` is **excluded** even though
+ *      it'd type-check as `number`. SQLite AUTOINCREMENT starts at 1,
+ *      so 0 cannot legitimately occur today. But the server uses
+ *      `if (msg.afterMessageId)` to discriminate the delta branch
+ *      (`client-conversation.js:341`); a literal 0 is falsy and would
+ *      silently fall through to `getRecent(limit)`, returning the last
+ *      100 rows instead of "everything strictly newer". Treat 0 as
+ *      "no cursor" so the cold-load fallback fires instead.
+ */
+export function maxDbMessageId(msgs) {
+  if (!Array.isArray(msgs)) return null;
+  let max = null;
+  for (const m of msgs) {
+    if (typeof m?.dbMessageId === 'number' && m.dbMessageId > 0
+        && (max === null || m.dbMessageId > max)) {
+      max = m.dbMessageId;
+    }
+  }
+  return max;
+}
+
 export function formatDbMessage(dbMsg) {
   if (!dbMsg) return null;
 

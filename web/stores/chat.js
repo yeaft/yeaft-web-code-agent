@@ -126,25 +126,34 @@ export const useChatStore = defineStore('chat', {
     currentWorkDir: null,
     // ★ Multi-column: unified message store, replaces old messages[] + messagesCache{}
     messagesMap: {},  // { [conversationId]: messages[] }
-    // perf-chat-session-switch-cache: per-conversation metadata about
-    // the in-memory cache in messagesMap. Lets selectConversation skip
-    // the "blow cache away + refetch 5 turns" path and instead reuse
-    // what's already in memory + ask the server only for the delta
-    // since lastSeenDbId.
+    // perf-chat-session-switch-cache: per-conversation pagination /
+    // cursor state for the chat-mode cache in messagesMap.
+    //
+    // Replaces the global `hasMoreMessages` singleton (still kept
+    // below as a backwards-compatible mirror for MessageList) — the
+    // singleton got clobbered on every selectConversation switch and
+    // silently dropped the "Load older" affordance in multi-panel use.
     //
     // Shape: { [conversationId]: {
-    //   loaded: boolean,           // has this conv ever been hydrated?
-    //   lastSyncedAt: number,      // ms epoch of last successful sync
-    //   lastSeenDbId: number|null, // max(dbMessageId) cached so we don't
-    //                              // re-traverse messagesMap on every switch
-    //   hasMoreOlder: boolean,     // per-conv "load older" pagination —
-    //                              // replaces the global hasMoreMessages
-    //                              // singleton that gets clobbered by
-    //                              // multi-panel switches
+    //   lastSeenDbId: number|null, // max(dbMessageId) cached so
+    //                              // selectConversation doesn't have
+    //                              // to re-walk messagesMap on every
+    //                              // sidebar click. `null` when the
+    //                              // conv was hydrated with only
+    //                              // streaming partials (cold-load
+    //                              // fallback re-anchors next sync).
+    //   hasMoreOlder: boolean,     // server-asserted "older rows
+    //                              // exist on disk." ONLY stamped
+    //                              // from cold-load / older-pagination
+    //                              // responses; delta syncs do NOT
+    //                              // overwrite it (the server's
+    //                              // `hasMore` field doesn't speak to
+    //                              // older history on the
+    //                              // `afterMessageId` branch — see
+    //                              // handleSyncMessagesResult).
     // } }
     //
-    // Modeled on yeaftSessionHistoryState (below) — the Yeaft side has
-    // had per-scope metadata for a while; this is the Chat-mode analog.
+    // Naming intentionally mirrors yeaftSessionHistoryState (below).
     chatSessionState: {},
     // ★ Split-screen: panel state (unified single/multi-panel)
     panels: [],  // [{ id: 'panel-0', conversationId: convId }, ...] — empty = single-screen mode

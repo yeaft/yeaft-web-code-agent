@@ -5,6 +5,7 @@
 import { isRecentlyClosed, stopProcessingWatchdog } from '../watchdog.js';
 import { clearSessionLoading } from '../session.js';
 import { sameUserMessage } from '../dedup.js';
+import { maxDbMessageId } from '../messages.js';
 import { t } from '../../../utils/i18n.js';
 
 /** Filter out empty user messages — tool_result artifacts stored as empty user records in DB */
@@ -179,6 +180,14 @@ export function handleConversationResumed(store, msg) {
     }
   }
   store.hasMoreMessages = !!msg.hasMoreMessages;
+  // perf-chat-session-switch-cache: stamp chatSessionState on cold-open so
+  // a switch-away → switch-back re-enters via the cache path with the
+  // correct lastSeenDbId and the preserved hasMoreOlder flag. Without this,
+  // the very first cache-hit after a conversation_resumed loses Load-Older.
+  store.chatSessionState[msg.conversationId] = {
+    lastSeenDbId: maxDbMessageId(store.messagesMap[msg.conversationId]),
+    hasMoreOlder: !!msg.hasMoreMessages,
+  };
   store.saveOpenSessions();
 }
 
@@ -319,6 +328,20 @@ export function handleSyncMessagesResult(store, msg) {
     store.messagesMap[msg.conversationId] = [];
   }
   const msgs = store.messagesMap[msg.conversationId];
+  // perf-chat-session-switch-cache: tell the cold-load and the delta
+  // paths apart so we don't lie about hasMoreOlder.
+  //
+  // The server's `msg.hasMore` is computed via getBeforeId(oldestId, 1).
+  // For a cold-load (turns / no anchor), `oldestId` is the oldest row of
+  // the page returned → hasMore correctly means "older rows exist."
+  // For a delta (afterMessageId), `oldestId` is the row just after our
+  // cursor → hasMore answers "is anything older than (cursor+1)" which
+  // is essentially constant-true, OR false on an empty delta — neither
+  // of which says anything about the older-history button. So:
+  // delta responses MUST NOT overwrite hasMoreOlder. Only cold-load and
+  // older-pagination responses get to.
+  const isDeltaSync =
+    typeof msg.afterMessageId === 'number' && msg.afterMessageId > 0;
   if (msg.conversationId && store.activeConversations.includes(msg.conversationId)) {
     const formatted = filterEmptyUserMessages(
       (msg.messages || []).map(m => store.formatDbMessage(m)).flat().filter(Boolean)
@@ -330,10 +353,10 @@ export function handleSyncMessagesResult(store, msg) {
           formatted[0].dbMessageId &&
           formatted[formatted.length - 1].dbMessageId < firstDbMsg.dbMessageId) {
         const insertIdx = msgs.indexOf(firstDbMsg);
-        console.log(`[Sync] Prepending ${formatted.length} older messages at index ${insertIdx}`);
+        if (store.debug) console.log(`[Sync] Prepending ${formatted.length} older messages at index ${insertIdx}`);
         msgs.splice(insertIdx, 0, ...formatted);
       } else {
-        console.log(`[Sync] Received ${formatted.length} messages`);
+        if (store.debug) console.log(`[Sync] Received ${formatted.length} messages`);
         for (const m of formatted) {
           if (m.dbMessageId && msgs.some(existing => existing.dbMessageId === m.dbMessageId)) {
             continue;
@@ -386,33 +409,29 @@ export function handleSyncMessagesResult(store, msg) {
       }
     }
 
-    store.hasMoreMessages = msg.hasMore ?? false;
+    // Global mirror — same delta-safety rule as the per-conv field below.
+    // Delta syncs preserve the prior value; cold/older replies overwrite.
+    if (!isDeltaSync) {
+      store.hasMoreMessages = msg.hasMore ?? false;
+    }
     clearSessionLoading(store);
+
+    // perf-chat-session-switch-cache: stamp per-conv state ONLY when we
+    // actually merged this response (i.e. the conv is still active).
+    // Stamping outside the guard would record a `lastSeenDbId` consistent
+    // with a discarded merge — fine today (the field is re-derived from
+    // messagesMap on read), but a trap for any future consumer.
+    const priorHasMoreOlder = store.chatSessionState[msg.conversationId]?.hasMoreOlder;
+    store.chatSessionState[msg.conversationId] = {
+      lastSeenDbId: maxDbMessageId(store.messagesMap[msg.conversationId]),
+      // Delta responses: keep whatever pagination state the cold-load /
+      // older-pagination path established. First-ever sync on a brand-new
+      // conv: fall back to false.
+      hasMoreOlder: isDeltaSync ? !!priorHasMoreOlder : !!msg.hasMore,
+    };
   }
   store.loadingMoreMessages = false;
   store.setRefreshingSession(msg.conversationId, false);
-
-  // perf-chat-session-switch-cache: stamp per-conv cache metadata so
-  // the next sidebar click can take the cache-hit path without
-  // re-walking messagesMap to derive lastSeenDbId, and so
-  // hasMoreOlder survives multi-panel switches (the old global
-  // store.hasMoreMessages singleton gets clobbered by every
-  // selectConversation).
-  if (msg.conversationId) {
-    let lastSeenDbId = null;
-    const finalMsgs = store.messagesMap[msg.conversationId] || [];
-    for (const m of finalMsgs) {
-      if (typeof m?.dbMessageId === 'number' && (lastSeenDbId === null || m.dbMessageId > lastSeenDbId)) {
-        lastSeenDbId = m.dbMessageId;
-      }
-    }
-    store.chatSessionState[msg.conversationId] = {
-      loaded: true,
-      lastSyncedAt: Date.now(),
-      lastSeenDbId,
-      hasMoreOlder: !!msg.hasMore,
-    };
-  }
 }
 
 /**
