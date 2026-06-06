@@ -126,6 +126,26 @@ export const useChatStore = defineStore('chat', {
     currentWorkDir: null,
     // ★ Multi-column: unified message store, replaces old messages[] + messagesCache{}
     messagesMap: {},  // { [conversationId]: messages[] }
+    // perf-chat-session-switch-cache: per-conversation metadata about
+    // the in-memory cache in messagesMap. Lets selectConversation skip
+    // the "blow cache away + refetch 5 turns" path and instead reuse
+    // what's already in memory + ask the server only for the delta
+    // since lastSeenDbId.
+    //
+    // Shape: { [conversationId]: {
+    //   loaded: boolean,           // has this conv ever been hydrated?
+    //   lastSyncedAt: number,      // ms epoch of last successful sync
+    //   lastSeenDbId: number|null, // max(dbMessageId) cached so we don't
+    //                              // re-traverse messagesMap on every switch
+    //   hasMoreOlder: boolean,     // per-conv "load older" pagination —
+    //                              // replaces the global hasMoreMessages
+    //                              // singleton that gets clobbered by
+    //                              // multi-panel switches
+    // } }
+    //
+    // Modeled on yeaftSessionHistoryState (below) — the Yeaft side has
+    // had per-scope metadata for a while; this is the Chat-mode analog.
+    chatSessionState: {},
     // ★ Split-screen: panel state (unified single/multi-panel)
     panels: [],  // [{ id: 'panel-0', conversationId: convId }, ...] — empty = single-screen mode
     activePanelId: null,  // Currently focused panel ID (for multi-panel click routing)

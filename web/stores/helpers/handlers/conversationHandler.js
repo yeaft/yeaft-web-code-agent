@@ -185,6 +185,10 @@ export function handleConversationResumed(store, msg) {
 export function handleConversationDeleted(store, msg) {
   store.conversations = store.conversations.filter(c => c.id !== msg.conversationId);
   delete store.messagesMap[msg.conversationId];
+  // perf-chat-session-switch-cache: mirror messagesMap cleanup — see
+  // closeSession in conversation.js for the same reason (stale state
+  // poisons a same-id rebirth).
+  delete store.chatSessionState[msg.conversationId];
   delete store.conversationTitles[msg.conversationId];
   delete store.customConversationTitles[msg.conversationId];
   delete store.processingConversations[msg.conversationId];
@@ -387,6 +391,28 @@ export function handleSyncMessagesResult(store, msg) {
   }
   store.loadingMoreMessages = false;
   store.setRefreshingSession(msg.conversationId, false);
+
+  // perf-chat-session-switch-cache: stamp per-conv cache metadata so
+  // the next sidebar click can take the cache-hit path without
+  // re-walking messagesMap to derive lastSeenDbId, and so
+  // hasMoreOlder survives multi-panel switches (the old global
+  // store.hasMoreMessages singleton gets clobbered by every
+  // selectConversation).
+  if (msg.conversationId) {
+    let lastSeenDbId = null;
+    const finalMsgs = store.messagesMap[msg.conversationId] || [];
+    for (const m of finalMsgs) {
+      if (typeof m?.dbMessageId === 'number' && (lastSeenDbId === null || m.dbMessageId > lastSeenDbId)) {
+        lastSeenDbId = m.dbMessageId;
+      }
+    }
+    store.chatSessionState[msg.conversationId] = {
+      loaded: true,
+      lastSyncedAt: Date.now(),
+      lastSeenDbId,
+      hasMoreOlder: !!msg.hasMore,
+    };
+  }
 }
 
 /**

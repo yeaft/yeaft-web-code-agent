@@ -171,13 +171,53 @@ export function selectConversation(store, conversationId, agentId) {
       });
     }
   } else {
+    // perf-chat-session-switch-cache: when we've ever loaded this conv
+    // before, its messages are still sitting in messagesMap. The old
+    // code unconditionally blew them away and refetched the last 5
+    // turns, costing a white-screen + WS round-trip per sidebar click.
+    //
+    // New flow:
+    //   1. If messagesMap[id] has at least one message that has a
+    //      dbMessageId, render those immediately (don't touch the map)
+    //      and ask the server only for what we haven't seen since
+    //      max(dbMessageId).
+    //   2. If the cache is empty OR every entry is an unflushed
+    //      streaming partial (no dbMessageId yet), there's nothing to
+    //      anchor an incremental sync on — fall back to the legacy
+    //      `turns: 5` cold-load path. handleSyncMessagesResult will
+    //      reseat the cache.
+    //
+    // The previous `store.currentView !== 'chat'` gate was effectively
+    // dead code — daily use is in chat view, so the condition was
+    // always false. See the plan for why crew / yeaft don't reach this
+    // branch (crew is short-circuited above; yeaft never calls
+    // selectConversation, it goes through enterYeaft).
     const cachedMessages = store.messagesMap[conversationId];
-    const hasUsableChatCache = store.currentView !== 'chat' && cachedMessages && cachedMessages.length > 0;
-    if (hasUsableChatCache) {
-      // Messages already in messagesMap, nothing to do
+    let lastSeenDbId = null;
+    if (Array.isArray(cachedMessages) && cachedMessages.length > 0) {
+      // Must take the MAX, not the tail — the tail can be a streaming
+      // assistant partial without a dbMessageId, and using a stale id
+      // would re-pull rows we already have (dedup catches it, but it
+      // wastes bandwidth on every switch).
+      for (const m of cachedMessages) {
+        if (typeof m?.dbMessageId === 'number' && (lastSeenDbId === null || m.dbMessageId > lastSeenDbId)) {
+          lastSeenDbId = m.dbMessageId;
+        }
+      }
+    }
+
+    if (lastSeenDbId !== null) {
+      // Cache hit + at least one persisted row → silent incremental sync.
+      // Don't touch messagesMap[id] — the cache is what the user sees
+      // the instant the sidebar click resolves.
+      store.sendWsMessage({
+        type: 'sync_messages',
+        conversationId,
+        afterMessageId: lastSeenDbId
+      });
     } else {
+      // No cache, or cache is all unflushed partials → cold-load 5 turns.
       store.messagesMap[conversationId] = [];
-      // ★ Phase 6.1: 使用 turns 加载最近 5 个 turn
       store.sendWsMessage({
         type: 'sync_messages',
         conversationId,
@@ -185,9 +225,18 @@ export function selectConversation(store, conversationId, agentId) {
       });
     }
   }
-  // ★ Bug #4: 重置分页状态
-  store.hasMoreMessages = false;
+  // ★ Bug #4 / perf-chat-session-switch-cache: pagination state.
+  //
+  // Reset loadingMoreMessages unconditionally — any in-flight load-more
+  // belonged to the previous conv and should not bleed across.
+  //
+  // hasMoreMessages now comes from per-conv chatSessionState so
+  // switching away and back doesn't kill the "Load older" button on
+  // a conv that had pending older history. On a brand-new conv with
+  // no recorded state, fall back to false (old behavior).
   store.loadingMoreMessages = false;
+  const persisted = store.chatSessionState[conversationId];
+  store.hasMoreMessages = !!persisted?.hasMoreOlder;
 
   // 保存 lastViewedConversation 到 localStorage
   saveOpenSessions(store);
@@ -274,6 +323,10 @@ export function closeSession(store, conversationId, agentId) {
 
   // Clean up caches
   delete store.messagesMap[conversationId];
+  // perf-chat-session-switch-cache: per-conv cache metadata follows the
+  // messages — without this, reopening a closed-then-recreated session
+  // would inherit the stale lastSeenDbId / hasMoreOlder of the old one.
+  delete store.chatSessionState[conversationId];
   delete store.processingConversations[conversationId];
   stopProcessingWatchdog(store, conversationId);
   delete store.executionStatusMap[conversationId];
