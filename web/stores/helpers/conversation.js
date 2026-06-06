@@ -4,6 +4,7 @@ import { startProcessingWatchdog, stopProcessingWatchdog } from './watchdog.js';
 import { setSessionLoading, saveOpenSessions } from './session.js';
 import { ensureConnected } from './websocket.js';
 import { markAllToolsCompleted } from './handlers/conversationHandler.js';
+import { maxDbMessageId } from './messages.js';
 import { t } from '../../utils/i18n.js';
 import { EXPERT_ROLES, buildClientExpertMessage } from '../../utils/expert-roles.js';
 
@@ -171,13 +172,31 @@ export function selectConversation(store, conversationId, agentId) {
       });
     }
   } else {
+    // perf-chat-session-switch-cache: when this conv was loaded before,
+    // reuse messagesMap as-is and ask the server only for the delta
+    // since max(dbMessageId). Old code unconditionally blew the cache
+    // away and refetched 5 turns on every sidebar click (a dead-code
+    // `currentView !== 'chat'` gate made the cache-reuse predicate
+    // always false in chat view — the only view we run in daily).
+    //
+    // `maxDbMessageId` (web/stores/helpers/messages.js) is the
+    // single source of truth for the cursor selection rule
+    // (tail-safe, order-safe, zero-safe).
     const cachedMessages = store.messagesMap[conversationId];
-    const hasUsableChatCache = store.currentView !== 'chat' && cachedMessages && cachedMessages.length > 0;
-    if (hasUsableChatCache) {
-      // Messages already in messagesMap, nothing to do
+    const lastSeenDbId = maxDbMessageId(cachedMessages);
+
+    if (lastSeenDbId !== null) {
+      // Cache hit + at least one persisted row → silent incremental sync.
+      // Don't touch messagesMap — the cache is what the user sees the
+      // instant the sidebar click resolves.
+      store.sendWsMessage({
+        type: 'sync_messages',
+        conversationId,
+        afterMessageId: lastSeenDbId
+      });
     } else {
+      // No cache, or cache is all unflushed partials → cold-load 5 turns.
       store.messagesMap[conversationId] = [];
-      // ★ Phase 6.1: 使用 turns 加载最近 5 个 turn
       store.sendWsMessage({
         type: 'sync_messages',
         conversationId,
@@ -185,9 +204,19 @@ export function selectConversation(store, conversationId, agentId) {
       });
     }
   }
-  // ★ Bug #4: 重置分页状态
-  store.hasMoreMessages = false;
+  // ★ Bug #4 / perf-chat-session-switch-cache: pagination state.
+  //
+  // Reset loadingMoreMessages unconditionally — any in-flight load-more
+  // belonged to the previous conv and should not bleed across.
+  //
+  // hasMoreMessages now comes from per-conv chatSessionState so
+  // switching away and back doesn't kill the "Load older" button on
+  // a conv with pending older history. On a brand-new conv with no
+  // recorded state, fall back to false (matches pre-PR behavior — the
+  // cold-load that's about to fire will overwrite it).
   store.loadingMoreMessages = false;
+  const persisted = store.chatSessionState[conversationId];
+  store.hasMoreMessages = !!persisted?.hasMoreOlder;
 
   // 保存 lastViewedConversation 到 localStorage
   saveOpenSessions(store);
@@ -274,6 +303,10 @@ export function closeSession(store, conversationId, agentId) {
 
   // Clean up caches
   delete store.messagesMap[conversationId];
+  // perf-chat-session-switch-cache: per-conv cache metadata follows the
+  // messages — without this, reopening a closed-then-recreated session
+  // would inherit the stale lastSeenDbId / hasMoreOlder of the old one.
+  delete store.chatSessionState[conversationId];
   delete store.processingConversations[conversationId];
   stopProcessingWatchdog(store, conversationId);
   delete store.executionStatusMap[conversationId];

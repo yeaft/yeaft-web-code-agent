@@ -338,7 +338,11 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
             const limit = msg.limit || 100;
             if (msg.beforeId) {
               messages = messageDb.getBeforeId(msg.conversationId, msg.beforeId, limit);
-            } else if (msg.afterMessageId) {
+            } else if (msg.afterMessageId !== undefined && msg.afterMessageId !== null) {
+              // perf-chat-session-switch-cache: explicit nullish check so a
+              // legitimate cursor of 0 (unlikely with AUTOINCREMENT but no
+              // reason to encode the assumption here) doesn't fall through
+              // to the cold-load branch and re-send the entire window.
               messages = messageDb.getAfterId(msg.conversationId, msg.afterMessageId);
             } else {
               messages = messageDb.getRecent(msg.conversationId, limit);

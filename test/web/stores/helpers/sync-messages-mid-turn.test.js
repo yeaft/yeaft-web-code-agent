@@ -43,6 +43,10 @@ const { formatDbMessage } = await import('../../../../web/stores/helpers/message
 function mkStore(initialMsgs = []) {
   return {
     messagesMap: { 'conv-1': [...initialMsgs] },
+    // perf-chat-session-switch-cache: handleSyncMessagesResult now
+    // writes per-conv metadata here. Match the production store shape
+    // so the handler can stamp it without crashing.
+    chatSessionState: {},
     activeConversations: ['conv-1'],
     hasMoreMessages: false,
     loadingMoreMessages: false,
