@@ -131,15 +131,70 @@ describe('SessionCreateModal toggleVp default-star bookkeeping', () => {
 });
 
 describe('SessionCreateModal resumeExisting', () => {
-  it('sets the clicked session active and emits close — does NOT create', () => {
+  it('sets active, fires setActiveSessionFilter with force, and emits close — does NOT create', () => {
     const emitted = [];
     let activated = null;
+    const filterCalls = [];
     const ctx = {
       sessionsStore: { setActive: (id) => { activated = id; } },
+      chat: {
+        currentAgent: 'agent-1',
+        setActiveSessionFilter: (id, opts) => { filterCalls.push([id, opts]); },
+      },
       $emit: (name, payload) => emitted.push([name, payload]),
     };
     SessionCreateModal.methods.resumeExisting.call(ctx, { id: 's7' });
     expect(activated).toBe('s7');
+    // setActiveSessionFilter is the action that actually triggers
+    // yeaft_load_history — without it, the modal closes but the main
+    // pane stays empty (this is the bug the user reported).
+    expect(filterCalls).toEqual([['s7', { force: true }]]);
+    expect(emitted).toEqual([['close', undefined]]);
+  });
+
+  it('switches the active agent when the session belongs to a different agent', () => {
+    const ctx = {
+      sessionsStore: { setActive: () => {} },
+      chat: {
+        currentAgent: 'agent-1',
+        selected: null,
+        selectAgent(id) { this.selected = id; },
+        setActiveSessionFilter: () => {},
+      },
+      $emit: () => {},
+    };
+    SessionCreateModal.methods.resumeExisting.call(ctx, { id: 's7', agentId: 'agent-2' });
+    expect(ctx.chat.selected).toBe('agent-2');
+  });
+
+  it('does not switch agent when the session is already on the current agent', () => {
+    const ctx = {
+      sessionsStore: { setActive: () => {} },
+      chat: {
+        currentAgent: 'agent-1',
+        selected: null,
+        selectAgent(id) { this.selected = id; },
+        setActiveSessionFilter: () => {},
+      },
+      $emit: () => {},
+    };
+    SessionCreateModal.methods.resumeExisting.call(ctx, { id: 's7', agentId: 'agent-1' });
+    expect(ctx.chat.selected).toBeNull();
+  });
+
+  it('survives a null chat / null sessionsStore (defensive guards)', () => {
+    // Teardown race: Pinia store can be null when modal closes mid-unmount.
+    // Each call is independently guarded; an emit('close') still has to fire
+    // so the host doesn't get stuck with a dangling modal.
+    const emitted = [];
+    const ctx = {
+      sessionsStore: null,
+      chat: null,
+      $emit: (name, payload) => emitted.push([name, payload]),
+    };
+    expect(() => {
+      SessionCreateModal.methods.resumeExisting.call(ctx, { id: 's7' });
+    }).not.toThrow();
     expect(emitted).toEqual([['close', undefined]]);
   });
 });
@@ -183,5 +238,111 @@ describe('SessionCreateModal onSubmit', () => {
     );
     await SessionCreateModal.methods.onSubmit.call(ctx);
     expect(calls[0].defaultVpId).toBe('omni');
+  });
+
+  it('auto-derives displayName from workDir basename when name is blank', async () => {
+    const calls = [];
+    const ctx = ctxWith(
+      { name: '   ', vpIds: ['omni'], defaultVpId: 'omni', workDir: '/repo/my-project', agentId: 'agent-1' },
+      {
+        canSubmit: true,
+        chat: {
+          createYeaftSession: (args) => { calls.push(args); return { ok: true }; },
+        },
+        $emit: () => {},
+        $t: (k) => k,
+      },
+    );
+    await SessionCreateModal.methods.onSubmit.call(ctx);
+    expect(calls[0].displayName).toBe('my-project');
+  });
+
+  it('auto-derives displayName from i18n "untitled" key when both name and workDir are blank', async () => {
+    const calls = [];
+    const ctx = ctxWith(
+      { name: '', vpIds: ['omni'], defaultVpId: 'omni', workDir: '', agentId: 'agent-1' },
+      {
+        canSubmit: true,
+        chat: {
+          createYeaftSession: (args) => { calls.push(args); return { ok: true }; },
+        },
+        $emit: () => {},
+        $t: (k) => k,
+      },
+    );
+    await SessionCreateModal.methods.onSubmit.call(ctx);
+    expect(calls[0].displayName).toBe('yeaft.session.create.untitled');
+  });
+});
+
+describe('SessionCreateModal vpRosterSummary', () => {
+  const fn = () => SessionCreateModal.computed.vpRosterSummary;
+
+  it('returns the "no VPs" placeholder when nothing is selected', () => {
+    const ctx = {
+      form: { vpIds: [] },
+      vpLabelFor: (id) => id,
+      $t: (k) => k,
+    };
+    expect(fn().call(ctx)).toBe('yeaft.session.create.vpNone');
+  });
+
+  it('joins ≤3 names with the localized comma', () => {
+    const ctx = {
+      form: { vpIds: ['omni', 'rat'] },
+      vpLabelFor: (id) => `Label-${id}`,
+      $t: (k) => k === 'common.comma' ? ', ' : k,
+    };
+    expect(fn().call(ctx)).toBe('Label-omni, Label-rat');
+  });
+
+  it('still joins inline at exactly 3 names (boundary)', () => {
+    // The doc comment says "3 is the inclusive threshold" — pin it so an
+    // off-by-one regression flips into "N selected" without anyone noticing.
+    const ctx = {
+      form: { vpIds: ['omni', 'rat', 'ox'] },
+      vpLabelFor: (id) => `Label-${id}`,
+      $t: (k) => k === 'common.comma' ? ', ' : k,
+    };
+    expect(fn().call(ctx)).toBe('Label-omni, Label-rat, Label-ox');
+  });
+
+  it('renders "N selected" once more than 3 VPs are picked', () => {
+    const ctx = {
+      form: { vpIds: ['a', 'b', 'c', 'd', 'e'] },
+      vpLabelFor: (id) => id,
+      $t: (k, args) => k === 'yeaft.session.create.vpCount' ? `${args.n} selected` : k,
+    };
+    expect(fn().call(ctx)).toBe('5 selected');
+  });
+});
+
+describe('SessionCreateModal handleOutsideRosterClick', () => {
+  it('closes the popup when the click is outside the roster root', () => {
+    const ctx = {
+      vpRosterOpen: true,
+      $refs: { vpRosterRoot: { contains: () => false } },
+    };
+    SessionCreateModal.methods.handleOutsideRosterClick.call(ctx, { target: {} });
+    expect(ctx.vpRosterOpen).toBe(false);
+  });
+
+  it('keeps the popup open when the click is inside the roster root', () => {
+    const ctx = {
+      vpRosterOpen: true,
+      $refs: { vpRosterRoot: { contains: () => true } },
+    };
+    SessionCreateModal.methods.handleOutsideRosterClick.call(ctx, { target: {} });
+    expect(ctx.vpRosterOpen).toBe(true);
+  });
+
+  it('is a no-op when the popup is already closed', () => {
+    const ctx = {
+      vpRosterOpen: false,
+      // $refs.vpRosterRoot intentionally missing — should never be read.
+      $refs: {},
+    };
+    SessionCreateModal.methods.handleOutsideRosterClick.call(ctx, { target: {} });
+    expect(ctx.vpRosterOpen).toBe(false);
   });
 });
