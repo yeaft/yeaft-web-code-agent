@@ -15,7 +15,7 @@ describe('ConversationStore.loadAfterSeqByGroup', () => {
     for (let i = 1; i <= 10; i++) {
       store.append({ role: i % 2 === 1 ? 'user' : 'assistant', content: `m${i}`, sessionId: 'grpA' });
     }
-    const all = store.loadRecentByGroup('grpA', Infinity);
+    const all = store.loadRecentBySession('grpA', Infinity);
     expect(all.length).toBe(10);
     const cursor = store.getMessageSeqById(all[4].id); // seq of m5
     const { messages, latestSeq } = store.loadAfterSeqByGroup('grpA', cursor);
@@ -34,7 +34,7 @@ describe('ConversationStore.loadAfterSeqByGroup', () => {
     for (let i = 1; i <= 8; i++) {
       store.append({ role: i % 2 === 1 ? 'user' : 'assistant', content: `m${i}`, sessionId: 'grpA' });
     }
-    const all = store.loadRecentByGroup('grpA', Infinity);
+    const all = store.loadRecentBySession('grpA', Infinity);
     const cursor = store.getMessageSeqById(all[0].id); // seq of m1 → expect m2..m8
     const { messages } = store.loadAfterSeqByGroup('grpA', cursor, { limit: 3 });
     expect(messages.map(m => m.content)).toEqual(['m2', 'm3', 'm4']);

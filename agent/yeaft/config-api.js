@@ -136,7 +136,7 @@ export function updateLlmConfig(update, dir) {
  * stable shape — `normaliseYeaftSection` guarantees that.
  *
  * @param {string} [dir] — Yeaft data directory
- * @returns {{ maxConcurrentThreads: number, autoArchiveIdleDays: number } | { error: string }}
+ * @returns {{ maxConcurrentThreads: number, autoArchiveIdleDays: number, recentTurnsLimit: number } | { error: string }}
  */
 export function getYeaftSettings(dir) {
   const root = dir || process.env.YEAFT_DIR || DEFAULT_YEAFT_DIR;
@@ -155,13 +155,14 @@ export function getYeaftSettings(dir) {
  * Update the Yeaft-section of config.json. Merges into existing config
  * (LLM provider / model fields are untouched) and validates each field:
  * `maxConcurrentThreads` must be 1..50, `autoArchiveIdleDays` must be
- * 1..3650. Invalid values are rejected outright so the UI sees an error
- * rather than silently reverting — a silent revert would make "I set it
- * to 100 and nothing happened" impossible to debug.
+ * 1..3650, `recentTurnsLimit` must be 1..500. Invalid values are rejected
+ * outright so the UI sees an error rather than silently reverting — a
+ * silent revert would make "I set it to 100 and nothing happened"
+ * impossible to debug.
  *
- * @param {{ maxConcurrentThreads?: number, autoArchiveIdleDays?: number }} update
+ * @param {{ maxConcurrentThreads?: number, autoArchiveIdleDays?: number, recentTurnsLimit?: number }} update
  * @param {string} [dir]
- * @returns {{ maxConcurrentThreads: number, autoArchiveIdleDays: number } | { error: string }}
+ * @returns {{ maxConcurrentThreads: number, autoArchiveIdleDays: number, recentTurnsLimit: number } | { error: string }}
  */
 export function updateYeaftSettings(update, dir) {
   const root = dir || process.env.YEAFT_DIR || DEFAULT_YEAFT_DIR;
@@ -185,6 +186,12 @@ export function updateYeaftSettings(update, dir) {
       return { error: 'autoArchiveIdleDays must be between 1 and 3650' };
     }
   }
+  if (update.recentTurnsLimit !== undefined) {
+    const n = Number(update.recentTurnsLimit);
+    if (!Number.isFinite(n) || n < 1 || n > 500) {
+      return { error: 'recentTurnsLimit must be between 1 and 500' };
+    }
+  }
 
   // Read existing config (preserve LLM and other top-level fields).
   let existing = {};
@@ -204,6 +211,9 @@ export function updateYeaftSettings(update, dir) {
     autoArchiveIdleDays: update.autoArchiveIdleDays !== undefined
       ? Math.floor(Number(update.autoArchiveIdleDays))
       : prev.autoArchiveIdleDays,
+    recentTurnsLimit: update.recentTurnsLimit !== undefined
+      ? Math.floor(Number(update.recentTurnsLimit))
+      : prev.recentTurnsLimit,
   };
   existing.yeaft = merged;
 

@@ -172,7 +172,7 @@ describe('ConversationStore', () => {
       expect(existsSync(join(TEST_DIR, 'groups', 'grp_fun', 'conversation', 'messages', 'm0001.md'))).toBe(true);
       expect(existsSync(join(TEST_DIR, 'chat', 'messages', 'm0001.md'))).toBe(false);
       expect(store.loadRecent(10)).toEqual([]);
-      expect(store.loadRecentByGroup('grp_fun', 10)).toHaveLength(1);
+      expect(store.loadRecentBySession('grp_fun', 10)).toHaveLength(1);
     });
 
     it('should read legacy conversation paths without mixing chat and group modes', () => {
@@ -193,7 +193,7 @@ describe('ConversationStore', () => {
 
       const compatStore = new ConversationStore(TEST_DIR);
       expect(compatStore.loadRecent(10).map(m => m.content)).toEqual(['legacy chat']);
-      expect(compatStore.loadRecentByGroup('grp_fun', 10).map(m => m.content)).toEqual(['legacy group']);
+      expect(compatStore.loadRecentBySession('grp_fun', 10).map(m => m.content)).toEqual(['legacy group']);
     });
 
   describe('appendBatch', () => {
@@ -263,7 +263,7 @@ describe('ConversationStore', () => {
   });
 
   // Group-history-isolation (Bug 7): group-scoped loaders.
-  describe('loadRecentByGroup / loadAllByGroup', () => {
+  describe('loadRecentBySession / loadAllBySession', () => {
     it('returns only messages stamped with the requested sessionId', () => {
       store.appendBatch([
         { role: 'user',      content: 'A1', sessionId: 'grp_a' },
@@ -271,8 +271,8 @@ describe('ConversationStore', () => {
         { role: 'user',      content: 'B1', sessionId: 'grp_b' },
         { role: 'user',      content: 'A3', sessionId: 'grp_a' },
       ]);
-      const a = store.loadRecentByGroup('grp_a', 50);
-      const b = store.loadRecentByGroup('grp_b', 50);
+      const a = store.loadRecentBySession('grp_a', 50);
+      const b = store.loadRecentBySession('grp_b', 50);
       expect(a.map(m => m.content)).toEqual(['A1', 'A2', 'A3']);
       expect(b.map(m => m.content)).toEqual(['B1']);
     });
@@ -282,7 +282,7 @@ describe('ConversationStore', () => {
         { role: 'user', content: 'orphan' },                       // no sessionId
         { role: 'user', content: 'tagged', sessionId: 'grp_a' },
       ]);
-      expect(store.loadRecentByGroup('grp_a', 50).map(m => m.content)).toEqual(['tagged']);
+      expect(store.loadRecentBySession('grp_a', 50).map(m => m.content)).toEqual(['tagged']);
     });
 
     it('excludes messages from a deleted/other group', () => {
@@ -290,7 +290,7 @@ describe('ConversationStore', () => {
         { role: 'user', content: 'leftover', sessionId: 'grp_default' },
         { role: 'user', content: 'mine',     sessionId: 'grp_claude' },
       ]);
-      const out = store.loadRecentByGroup('grp_claude', 50);
+      const out = store.loadRecentBySession('grp_claude', 50);
       expect(out.map(m => m.content)).toEqual(['mine']);
     });
 
@@ -304,22 +304,22 @@ describe('ConversationStore', () => {
       ]);
       // Two most recent A messages, not "scan last 2 messages globally
       // and filter" (which would yield only A3).
-      expect(store.loadRecentByGroup('grp_a', 2).map(m => m.content)).toEqual(['A2', 'A3']);
+      expect(store.loadRecentBySession('grp_a', 2).map(m => m.content)).toEqual(['A2', 'A3']);
     });
 
     it('returns [] for empty/null sessionId without throwing', () => {
       store.append({ role: 'user', content: 'X', sessionId: 'grp_a' });
-      expect(store.loadRecentByGroup(null, 10)).toEqual([]);
-      expect(store.loadRecentByGroup('', 10)).toEqual([]);
+      expect(store.loadRecentBySession(null, 10)).toEqual([]);
+      expect(store.loadRecentBySession('', 10)).toEqual([]);
     });
 
-    it('loadAllByGroup mirrors loadRecentByGroup with no limit', () => {
+    it('loadAllBySession mirrors loadRecentBySession with no limit', () => {
       const big = Array.from({ length: 80 }, (_, i) => ({
         role: 'user', content: `m${i}`, sessionId: 'grp_a',
       }));
       store.appendBatch(big);
-      expect(store.loadAllByGroup('grp_a')).toHaveLength(80);
-      expect(store.loadRecentByGroup('grp_a', 50)).toHaveLength(50);
+      expect(store.loadAllBySession('grp_a')).toHaveLength(80);
+      expect(store.loadRecentBySession('grp_a', 50)).toHaveLength(50);
     });
   });
 

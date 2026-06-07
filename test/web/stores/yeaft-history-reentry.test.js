@@ -27,8 +27,8 @@ function makeStore() {
   return store;
 }
 
-describe('Yeaft group history re-entry', () => {
-  it('hydrates the active Fun group on Yeaft entry even when stale rows are cached for that group', () => {
+describe('Yeaft session history re-entry', () => {
+  it('hydrates the active Fun session on Yeaft entry even when stale rows are cached for that session', () => {
     const store = makeStore();
     store.yeaftConversationId = 'yeaft-1';
     store.yeaftAgentId = 'agent-1';
@@ -46,7 +46,7 @@ describe('Yeaft group history re-entry', () => {
       type: 'yeaft_load_history',
       agentId: 'agent-1',
       limit: 5,
-      groupId: 'grp_fun',
+      sessionId: 'grp_fun',
     }]);
     expect(store.yeaftSessionHistoryState.grp_fun).toEqual(expect.objectContaining({
       loaded: false,
@@ -54,7 +54,7 @@ describe('Yeaft group history re-entry', () => {
     }));
   });
 
-  it('hydrates Fun group on group switch even when stale rows are cached for that group', () => {
+  it('hydrates Fun session on session switch even when stale rows are cached for that session', () => {
     const store = makeStore();
     store.yeaftConversationId = 'yeaft-1';
     store.yeaftAgentId = 'agent-1';
@@ -71,12 +71,12 @@ describe('Yeaft group history re-entry', () => {
       type: 'yeaft_load_history',
       agentId: 'agent-1',
       limit: 5,
-      groupId: 'grp_fun',
+      sessionId: 'grp_fun',
     }]);
   });
 
 
-  it('requests metadata only on Yeaft entry until the group snapshot selects an active group', () => {
+  it('requests metadata only on Yeaft entry until the session snapshot selects an active session', () => {
     const store = makeStore();
     store.yeaftConversationId = 'yeaft-1';
     store.yeaftAgentId = 'agent-1';
@@ -89,7 +89,7 @@ describe('Yeaft group history re-entry', () => {
       type: 'yeaft_load_history',
       agentId: 'agent-1',
       limit: 0,
-      groupId: null,
+      sessionId: null,
     }]);
     expect(store.yeaftSessionHistoryState).toEqual({});
     expect(store.yeaftLoadingMoreHistory).toBe(false);
@@ -123,7 +123,7 @@ describe('Yeaft group history re-entry', () => {
     expect(store.messagesMap['yeaft-local-1']).toBeUndefined();
   });
 
-  it('hydrates the active group after session_ready replays the group snapshot', () => {
+  it('hydrates the active session after session_ready replays the session snapshot', () => {
     const store = makeStore();
     store.currentView = 'yeaft';
     store.yeaftConversationId = 'yeaft-local-1';
@@ -171,11 +171,11 @@ describe('Yeaft group history re-entry', () => {
       type: 'yeaft_load_history',
       agentId: 'agent-1',
       limit: 5,
-      groupId: 'grp_fun',
+      sessionId: 'grp_fun',
     }]);
   });
 
-  it('sends an afterSeq delta request when a group already has a cursor in this UI lifecycle', () => {
+  it('sends an afterSeq delta request when a session already has a cursor in this UI lifecycle', () => {
     const store = makeStore();
     store.yeaftConversationId = 'yeaft-1';
     store.yeaftAgentId = 'agent-1';
@@ -196,7 +196,7 @@ describe('Yeaft group history re-entry', () => {
     expect(store.sent).toEqual([{
       type: 'yeaft_load_history',
       agentId: 'agent-1',
-      groupId: 'grp_fun',
+      sessionId: 'grp_fun',
       afterSeq: 42,
     }]);
   });

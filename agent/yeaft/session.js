@@ -17,7 +17,7 @@ import { initYeaftDir, DEFAULT_YEAFT_DIR, isWritable } from './init.js';
 import { loadConfig, loadMCPConfig } from './config.js';
 import { createTrace } from './debug-trace.js';
 import { createLLMAdapter } from './llm/adapter.js';
-import { ConversationStore } from './conversation/persist.js';
+import { ConversationStore, setDefaultRecentTurnsLimit } from './conversation/persist.js';
 import { SkillManager, createSkillManager } from './skills.js';
 import { MCPManager } from './mcp.js';
 import { createFullRegistry } from './tools/index.js';
@@ -155,6 +155,15 @@ export async function loadSession(options = {}) {
   // can decide whether to keep its interval timer alive (server) or
   // unref it (CLI / tests). Non-persisted — set per-session by caller.
   if (serverMode) config.serverMode = true;
+
+  // Propagate the (clamped) cold-start replay window to the conversation
+  // store. The default is 20 turns; a user wanting more recall after a
+  // fresh boot sets `yeaft.recentTurnsLimit` in ~/.yeaft/config.json.
+  // Called once per session boot — subsequent boots overwrite the
+  // module-level default safely (single-process model).
+  if (config?.yeaft?.recentTurnsLimit) {
+    setDefaultRecentTurnsLimit(config.yeaft.recentTurnsLimit);
+  }
 
   // ─── 2.1 Migration state check (task-334i) ────────────
   //        If the group-chat feature flag is on but migration has not

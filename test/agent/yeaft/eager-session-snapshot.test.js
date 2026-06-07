@@ -16,9 +16,10 @@
  * the "Agent B's sessions never even loaded" half is what this
  * eager-broadcast fixes.
  *
- * This test exercises the full envelope shape (both legacy
- * `group_list_updated` and new `session_list_updated` for wire
- * compat) and verifies the snapshot contents reflect what's on disk.
+ * This test exercises the full envelope shape (`session_list_updated`)
+ * and verifies the snapshot contents reflect what's on disk. The legacy
+ * `group_list_updated` dual-emit was removed as part of the
+ * group→session rename — the wire surface is single-name now.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { mkdtempSync } from 'node:fs';
@@ -48,7 +49,7 @@ describe('broadcastYeaftSessionSnapshotEager — eager on-register broadcast', (
     outbound.length = 0;
   });
 
-  it('emits both legacy group_list_updated and new session_list_updated', () => {
+  it('emits session_list_updated (legacy group_list_updated dual-emit removed)', () => {
     createSession(join(yeaftDir, 'sessions'), {
       id: 'grp_alpha_aaaaaaaa', name: 'Alpha', roster: [],
     }).close();
@@ -57,9 +58,8 @@ describe('broadcastYeaftSessionSnapshotEager — eager on-register broadcast', (
 
     const legacy = eventsOfType('group_list_updated');
     const modern = eventsOfType('session_list_updated');
-    expect(legacy).toHaveLength(1);
+    expect(legacy).toHaveLength(0);
     expect(modern).toHaveLength(1);
-    expect(legacy[0].groups).toBeInstanceOf(Array);
     expect(modern[0].sessions).toBeInstanceOf(Array);
   });
 

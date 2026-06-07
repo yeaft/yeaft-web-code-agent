@@ -937,7 +937,7 @@ export const useChatStore = defineStore('chat', {
           const payload = {
             type: 'yeaft_load_history',
             agentId: this.yeaftAgentId,
-            groupId,
+            sessionId: groupId,
           };
           if (latestSeq !== null) {
             payload.afterSeq = latestSeq;
@@ -956,14 +956,14 @@ export const useChatStore = defineStore('chat', {
           this.yeaftLoadingMoreHistory = true;
           this.sendWsMessage(payload);
         } else {
-          // No group yet — ask for metadata only (limit:0) so the group
-          // snapshot lands and the group_list_updated path can hydrate
-          // the chosen group.
+          // No session yet — ask for metadata only (limit:0) so the session
+          // snapshot lands and the session_list_updated path can hydrate
+          // the chosen session.
           this.sendWsMessage({
             type: 'yeaft_load_history',
             agentId: this.yeaftAgentId,
             limit: 0,
-            groupId: null,
+            sessionId: null,
           });
         }
       }
@@ -1027,7 +1027,7 @@ export const useChatStore = defineStore('chat', {
         limit: Number.isFinite(limit) && limit > 0 ? limit : 5,
         dreamLimit: Number.isFinite(dreamLimit) && dreamLimit > 0 ? dreamLimit : 5,
       };
-      if (typeof groupId === 'string' && groupId) payload.groupId = groupId;
+      if (typeof groupId === 'string' && groupId) payload.sessionId = groupId;
       if (typeof threadId === 'string' && threadId) payload.threadId = threadId;
       this.sendWsMessage(payload);
       if (this._fetchYeaftDebugHistoryTimer) clearTimeout(this._fetchYeaftDebugHistoryTimer);
@@ -1106,7 +1106,7 @@ export const useChatStore = defineStore('chat', {
         type: 'yeaft_session_send',
         agentId: this.yeaftAgentId,
         id: clientMessageId,
-        groupId,
+        sessionId: groupId,
         text: effectiveText,
         mentions: Array.isArray(mentions) ? mentions : [],
       };
@@ -1160,14 +1160,18 @@ export const useChatStore = defineStore('chat', {
           if (!this.yeaftConversationId) {
             this.yeaftConversationId = conversationId;
           }
-          // Bug 1: stamp the in-flight SEND-context group so messages land
-          // in the originating group regardless of the user's current filter.
+          // Stamp the in-flight SEND-context session so messages land in the
+          // originating session regardless of the user's current filter.
+          // Inbound envelopes now carry `sessionId` (legacy `groupId` is
+          // accepted as a fallback for older agents that haven't been
+          // upgraded yet — drop after the next major version).
+          const msgSessionId = msg.sessionId != null ? msg.sessionId : msg.groupId;
           const prevGroup = this._currentYeaftSessionId;
           const prevVpId = this._currentYeaftVpId;
           const prevTurnId = this._currentYeaftTurnId;
           const prevThreadId = this._currentYeaftThreadId;
           const prevThreadTitle = this._currentYeaftThreadTitle;
-          if (msg.groupId != null) this._currentYeaftSessionId = msg.groupId;
+          if (msgSessionId != null) this._currentYeaftSessionId = msgSessionId;
           if (msg.vpId && msg.data.type !== 'result') this._currentYeaftVpId = msg.vpId;
           if (msg.turnId && msg.data.type !== 'result') this._currentYeaftTurnId = msg.turnId;
           if (msg.threadId) this._currentYeaftThreadId = msg.threadId;
@@ -1177,7 +1181,7 @@ export const useChatStore = defineStore('chat', {
             for (let i = rows.length - 1; i >= 0; i--) {
               const row = rows[i];
               if (!row || row.type !== 'user') continue;
-              if (msg.groupId != null && row.groupId !== msg.groupId) continue;
+              if (msgSessionId != null && row.groupId !== msgSessionId) continue;
               if (row.threadId && !String(row.threadId).startsWith('pending_')) break;
               row.threadId = msg.threadId;
               if (!row.turnId || String(row.turnId).startsWith('pending_')) row.turnId = msg.threadId;
@@ -1194,8 +1198,8 @@ export const useChatStore = defineStore('chat', {
             const data = msg.data;
             const liveId = data?.message?.id || data?.id || null;
             const seq = parseYeaftMessageSeq(liveId);
-            if (seq !== null && msg.groupId) {
-              const groupKey = msg.groupId;
+            if (seq !== null && msgSessionId) {
+              const groupKey = msgSessionId;
               const prevState = this.yeaftSessionHistoryState[groupKey] || {};
               const prevLatest = Number.isFinite(prevState.latestSeq) ? prevState.latestSeq : -1;
               if (seq > prevLatest) {
@@ -1295,7 +1299,7 @@ export const useChatStore = defineStore('chat', {
             turnId: event.turnId,
             userPrompt: event.userPrompt || '',
             vpId: event.vpId || msg.vpId || null,
-            groupId: event.groupId || msg.groupId || null,
+            groupId: event.sessionId || msg.sessionId || event.groupId || msg.groupId || null,
             // fix-vp-multi-thread (bug 4): stamp threadId so a multi-
             // thread VP's debug rows can be filtered by thread in the
             // panel without re-deriving it from each loop body.
@@ -1407,8 +1411,10 @@ export const useChatStore = defineStore('chat', {
             rawRequest: event.rawRequest || null,
             rawResponse: event.rawResponse || null,
             // Bug 3 carry-over: stamp groupId so the panel filter narrows
-            // by group. Falls back to envelope groupId if engine omitted it.
-            groupId: msg.groupId || null,
+            // by session. Falls back to envelope sessionId/groupId if engine
+            // omitted it. (Field is named groupId for legacy compat with the
+            // debug-panel filter UI — slated for rename in a future cleanup.)
+            groupId: msg.sessionId || msg.groupId || null,
             // fix-vp-multi-thread (bug 4): stamp threadId / vpId so the
             // debug panel can show per-thread debug history for a VP
             // that runs N concurrent threads. Without these fields the
@@ -1502,7 +1508,7 @@ export const useChatStore = defineStore('chat', {
               content: event.content || '',
               durationMs: event.durationMs || 0,
               error: event.error || null,
-              groupId: msg.groupId || null,
+              groupId: msg.sessionId || msg.groupId || null,
               anchorMsgId,
               anchorOrder,
               updatedAt: Date.now(),
@@ -1548,7 +1554,7 @@ export const useChatStore = defineStore('chat', {
             anchorMsgId,
             anchorOrder,
             updatedAt: Date.now(),
-            groupId: msg.groupId || null,
+            groupId: msg.sessionId || msg.groupId || null,
             // (2026-05-13) featureId removed along with the Feature system.
           };
 
@@ -1617,7 +1623,7 @@ export const useChatStore = defineStore('chat', {
           //     Don't touch hasMore / oldestSeq (those describe the older
           //     end and don't change on a delta tail-load).
           {
-            const groupKey = event.groupId || '__all__';
+            const groupKey = event.sessionId || event.groupId || '__all__';
             const mode = event.mode === 'delta' ? 'delta' : 'recent';
             const prevState = this.yeaftSessionHistoryState[groupKey] || {};
             const nextLatest = (Number.isFinite(event.latestSeq) ? event.latestSeq
@@ -1736,9 +1742,9 @@ export const useChatStore = defineStore('chat', {
             pending.resolve({
               ok: !!event.ok,
               op: event.op,
-              group: event.group || null,
-              groupId: event.groupId || null,
-              groups: event.groups || null,
+              group: event.session || event.group || null,
+              groupId: event.sessionId || event.groupId || null,
+              groups: event.sessions || event.groups || null,
               config: event.config || null,
               error: event.error || null,
             });
@@ -1877,7 +1883,8 @@ export const useChatStore = defineStore('chat', {
         // See vp-status-broker.js `keyOf` for the canonical form.
         case 'vp_status_changed': {
           if (!event.vpId || !event.state) break;
-          const k = vpStatusKey(event.groupId, event.vpId);
+          const sessionId = event.sessionId || event.groupId || null;
+          const k = vpStatusKey(sessionId, event.vpId);
           this.vpStatuses = {
             ...this.vpStatuses,
             [k]: {
@@ -1888,7 +1895,7 @@ export const useChatStore = defineStore('chat', {
               title: event.title || '',
               runningThreadCount: event.runningThreadCount || 0,
               threads: Array.isArray(event.threads) ? event.threads : [],
-              groupId: event.groupId || null,
+              groupId: sessionId,
               vpId: event.vpId,
             },
           };
@@ -1896,18 +1903,20 @@ export const useChatStore = defineStore('chat', {
         }
         case 'vp_status_snapshot': {
           // Bulk hydrate. Snapshot scoping (see broker JSDoc):
-          //   - groupId == null → unscoped, replace the WHOLE table.
+          //   - sessionId == null → unscoped, replace the WHOLE table.
           //     This is what session_ready / reset broadcasts use, so
           //     the frontend's mirror always matches the agent's table
           //     after a reconnect.
-          //   - groupId === '<id>' → scoped, replace just that group's
-          //     slice. Other groups' entries survive.
+          //   - sessionId === '<id>' → scoped, replace just that session's
+          //     slice. Other sessions' entries survive.
           const statuses = Array.isArray(event.statuses) ? event.statuses : [];
-          if (event.groupId == null) {
+          const eventSessionId = event.sessionId != null ? event.sessionId : event.groupId;
+          if (eventSessionId == null) {
             const next = {};
             for (const row of statuses) {
               if (!row || !row.vpId) continue;
-              const k = vpStatusKey(row.groupId, row.vpId);
+              const rowSessionId = row.sessionId || row.groupId || null;
+              const k = vpStatusKey(rowSessionId, row.vpId);
               next[k] = {
                 state: row.state,
                 since: row.since || Date.now(),
@@ -1916,23 +1925,24 @@ export const useChatStore = defineStore('chat', {
                 title: row.title || '',
                 runningThreadCount: row.runningThreadCount || 0,
                 threads: Array.isArray(row.threads) ? row.threads : [],
-                groupId: row.groupId || null,
+                groupId: rowSessionId,
                 vpId: row.vpId,
               };
             }
             this.vpStatuses = next;
           } else {
             const merged = { ...this.vpStatuses };
-            // Drop every existing row for this groupId, regardless of
+            // Drop every existing row for this sessionId, regardless of
             // the map's internal key. Iterating by entry.groupId (not
-            // by key shape) means a stray null-group leak in the table
+            // by key shape) means a stray null-session leak in the table
             // doesn't haunt subsequent scoped reconnects.
             for (const [k, v] of Object.entries(merged)) {
-              if (v && v.groupId === event.groupId) delete merged[k];
+              if (v && v.groupId === eventSessionId) delete merged[k];
             }
             for (const row of statuses) {
               if (!row || !row.vpId) continue;
-              const k = vpStatusKey(row.groupId, row.vpId);
+              const rowSessionId = row.sessionId || row.groupId || null;
+              const k = vpStatusKey(rowSessionId, row.vpId);
               merged[k] = {
                 state: row.state,
                 since: row.since || Date.now(),
@@ -1941,7 +1951,7 @@ export const useChatStore = defineStore('chat', {
                 title: row.title || '',
                 runningThreadCount: row.runningThreadCount || 0,
                 threads: Array.isArray(row.threads) ? row.threads : [],
-                groupId: row.groupId || null,
+                groupId: rowSessionId,
                 vpId: row.vpId,
               };
             }
@@ -1980,8 +1990,8 @@ export const useChatStore = defineStore('chat', {
           // `phase:'result'` as terminal) and clobbered the
           // `yeaftDreamLatest` success row back to 'running'. The fix
           // is to consolidate both writes here.
-          if (typeof event?.groupId === 'string' && event.groupId) {
-            const scope = `group/${event.groupId}`;
+          if (typeof event?.sessionId === 'string' && event.sessionId) {
+            const scope = `group/${event.sessionId}`;
             const prev = this.yeaftDreamLatest[scope] || null;
             // Defaults when no prior running entry exists (network
             // reorder, fresh-tab reconnect): leave nullable fields
@@ -2023,7 +2033,7 @@ export const useChatStore = defineStore('chat', {
             this._appendDreamEvent(scope, {
               type: 'dream_progress',
               phase: 'result',
-              groupId: event.groupId,
+              groupId: event.sessionId,
               status: event.skipped ? 'skipped' : (event.success ? 'success' : 'error'),
               success: !!event.success,
               entriesCreated: typeof event.entriesCreated === 'number'
@@ -2071,8 +2081,8 @@ export const useChatStore = defineStore('chat', {
           let scope = null;
           if (typeof event?.target === 'string' && event.target.includes('/')) {
             scope = event.target;
-          } else if (typeof event?.groupId === 'string' && event.groupId) {
-            scope = `group/${event.groupId}`;
+          } else if (typeof event?.sessionId === 'string' && event.sessionId) {
+            scope = `group/${event.sessionId}`;
           } else {
             // Top-level event (start/merge/done/error without group context).
             // Apply to all known scopes — easiest to spread across whatever
@@ -2345,7 +2355,7 @@ export const useChatStore = defineStore('chat', {
       this.yeaftOldestLoadedSeq = (typeof savedState?.oldestSeq === 'number') ? savedState.oldestSeq : null;
 
       // Always ask the agent — same rationale as enterYeaft. If we have a
-      // cursor for this group, request only what's new since; otherwise
+      // cursor for this session, request only what's new since; otherwise
       // request the initial recent-N window.
       //
       // fix-yeaft-session-per-agent: the session may belong to an agent
@@ -2380,7 +2390,7 @@ export const useChatStore = defineStore('chat', {
         const payload = {
           type: 'yeaft_load_history',
           agentId: targetAgentId,
-          groupId: next,
+          sessionId: next,
         };
         if (latestSeq !== null) {
           payload.afterSeq = latestSeq;
@@ -2438,17 +2448,17 @@ export const useChatStore = defineStore('chat', {
       this.yeaftDebugSearch = typeof query === 'string' ? query : '';
     },
 
-    // feat-6af5f9f1 PR C: independent debug-panel group filter. Distinct
+    // feat-6af5f9f1 PR C: independent debug-panel session filter. Distinct
     // from `yeaftActiveSessionFilter` (the main pane's filter) so the user
-    // can debug across all groups even when the main pane is narrowed.
-    //   - null      : fall back to main pane filter (default)
-    //   - '__all__' : force "show all" regardless of main pane
-    //   - <groupId> : pin to a specific group
-    setYeaftDebugGroupFilter(groupId) {
-      if (groupId === null || groupId === undefined) {
+    // can debug across all sessions even when the main pane is narrowed.
+    //   - null        : fall back to main pane filter (default)
+    //   - '__all__'   : force "show all" regardless of main pane
+    //   - <sessionId> : pin to a specific session
+    setYeaftDebugSessionFilter(sessionId) {
+      if (sessionId === null || sessionId === undefined) {
         this.yeaftDebugSessionFilter = null;
       } else {
-        this.yeaftDebugSessionFilter = String(groupId);
+        this.yeaftDebugSessionFilter = String(sessionId);
       }
     },
 

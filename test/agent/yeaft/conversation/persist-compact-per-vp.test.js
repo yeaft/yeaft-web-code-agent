@@ -6,9 +6,9 @@
  * pointed at a single session-global compact.md, so every group + every VP
  * in a session shared (and clobbered) the same file. We now want:
  *   - per-(group, vp) summaries are isolated
- *   - loadGroupHistoryForVp scopes by sessionId AND filters tool transcripts
+ *   - loadSessionHistoryForVp scopes by sessionId AND filters tool transcripts
  *     of OTHER VPs while keeping their assistant text + this VP's tool arcs
- *   - hasAnyCompactSummaryForGroup is per-group
+ *   - hasAnyCompactSummaryForSession is per-group
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { existsSync, mkdirSync, rmSync } from 'fs';
@@ -25,7 +25,7 @@ describe('compact summary per-(sessionId, vpId) isolation', () => {
   it('returns empty when neither file nor pair has been written', () => {
     const store = new ConversationStore(TEST_DIR);
     expect(store.readCompactSummaryFor('g1', 'vpA')).toBe('');
-    expect(store.hasAnyCompactSummaryForGroup('g1')).toBe(false);
+    expect(store.hasAnyCompactSummaryForSession('g1')).toBe(false);
   });
 
   it('isolates summaries between (group, vp) pairs', () => {
@@ -51,11 +51,11 @@ describe('compact summary per-(sessionId, vpId) isolation', () => {
     expect(out).toContain('second entry');
   });
 
-  it('hasAnyCompactSummaryForGroup is per-group, not session-global', () => {
+  it('hasAnyCompactSummaryForSession is per-group, not session-global', () => {
     const store = new ConversationStore(TEST_DIR);
     store.replaceCompactSummaryFor('g1', 'vpA', 'hi');
-    expect(store.hasAnyCompactSummaryForGroup('g1')).toBe(true);
-    expect(store.hasAnyCompactSummaryForGroup('g2')).toBe(false);
+    expect(store.hasAnyCompactSummaryForSession('g1')).toBe(true);
+    expect(store.hasAnyCompactSummaryForSession('g2')).toBe(false);
   });
 
   it('returns empty when sessionId or vpId missing (legacy callers)', () => {
@@ -79,7 +79,7 @@ describe('compact summary per-(sessionId, vpId) isolation', () => {
   });
 });
 
-describe('loadGroupHistoryForVp', () => {
+describe('loadSessionHistoryForVp', () => {
   function seed(store) {
     // g1, multi-VP fan-out arc
     store.append({ role: 'user', content: 'hello team', sessionId: 'g1' });
@@ -118,14 +118,14 @@ describe('loadGroupHistoryForVp', () => {
   it('returns empty for missing args', () => {
     const store = new ConversationStore(TEST_DIR);
     seed(store);
-    expect(store.loadGroupHistoryForVp(null, 'vpA')).toEqual([]);
-    expect(store.loadGroupHistoryForVp('g1', null)).toEqual([]);
+    expect(store.loadSessionHistoryForVp(null, 'vpA')).toEqual([]);
+    expect(store.loadSessionHistoryForVp('g1', null)).toEqual([]);
   });
 
   it('scopes by sessionId — other groups never leak in', () => {
     const store = new ConversationStore(TEST_DIR);
     seed(store);
-    const out = store.loadGroupHistoryForVp('g1', 'vpA');
+    const out = store.loadSessionHistoryForVp('g1', 'vpA');
     expect(out.every(m => m.sessionId === 'g1')).toBe(true);
     expect(out.find(m => m.content === 'g2 prompt')).toBeUndefined();
     expect(out.find(m => m.content === 'g2 reply')).toBeUndefined();
@@ -134,7 +134,7 @@ describe('loadGroupHistoryForVp', () => {
   it('keeps THIS VP assistant + tool arc, strips OTHER VPs tool arc', () => {
     const store = new ConversationStore(TEST_DIR);
     seed(store);
-    const out = store.loadGroupHistoryForVp('g1', 'vpA');
+    const out = store.loadSessionHistoryForVp('g1', 'vpA');
 
     const aAsst = out.find(m => m.role === 'assistant' && m.speakerVpId === 'vpA');
     expect(aAsst).toBeTruthy();
@@ -157,17 +157,17 @@ describe('loadGroupHistoryForVp', () => {
   it('drops reflection/internal/systemOnly rows', () => {
     const store = new ConversationStore(TEST_DIR);
     seed(store);
-    const out = store.loadGroupHistoryForVp('g1', 'vpA');
+    const out = store.loadSessionHistoryForVp('g1', 'vpA');
     expect(out.find(m => m.content === 'reflection chatter')).toBeUndefined();
   });
 
   it('keeps user prompts (they have no speakerVpId)', () => {
     const store = new ConversationStore(TEST_DIR);
     seed(store);
-    const out = store.loadGroupHistoryForVp('g1', 'vpA');
+    const out = store.loadSessionHistoryForVp('g1', 'vpA');
     expect(out.find(m => m.role === 'user' && m.content === 'hello team')).toBeTruthy();
     // Same for vpB.
-    const outB = store.loadGroupHistoryForVp('g1', 'vpB');
+    const outB = store.loadSessionHistoryForVp('g1', 'vpB');
     expect(outB.find(m => m.role === 'user' && m.content === 'hello team')).toBeTruthy();
   });
 });

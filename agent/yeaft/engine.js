@@ -1107,7 +1107,7 @@ export class Engine {
     // Per-(group, vp) scoping: when this engine is bound to a fan-out VP
     // (the common case in group mode), load only the rows THIS VP saw in
     // its context — user prompts + every VP's assistant text, with other
-    // VPs' tool calls/results stripped (see persist.loadGroupHistoryForVp).
+    // VPs' tool calls/results stripped (see persist.loadSessionHistoryForVp).
     //
     // Legacy / sub-agent callers (no sessionId/vpId pair) keep the global
     // loadAll() behaviour so we don't break those flows.
@@ -1115,12 +1115,12 @@ export class Engine {
     const scopedChat = !!(this.#chatId && this.#vpId
       && typeof conversationStore.loadChatHistoryForVp === 'function');
     const scoped = !scopedChat && !!(this.#sessionId && this.#vpId
-      && typeof conversationStore.loadGroupHistoryForVp === 'function');
+      && typeof conversationStore.loadSessionHistoryForVp === 'function');
     try {
       messages = scopedChat
         ? conversationStore.loadChatHistoryForVp(this.#chatId, this.#vpId)
         : scoped
-          ? conversationStore.loadGroupHistoryForVp(this.#sessionId, this.#vpId)
+          ? conversationStore.loadSessionHistoryForVp(this.#sessionId, this.#vpId)
           : conversationStore.loadAll();
     } catch { return null; }
     if (!Array.isArray(messages) || messages.length === 0) return null;

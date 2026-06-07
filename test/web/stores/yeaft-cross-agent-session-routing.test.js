@@ -74,7 +74,7 @@ describe('Yeaft cross-agent session routing (setActiveSessionFilter)', () => {
     expect(store.sent).toEqual([{
       type: 'yeaft_load_history',
       agentId: 'agent-B',
-      groupId: 'grp_b_session',
+      sessionId: 'grp_b_session',
       limit: 5,
     }]);
   });
@@ -107,7 +107,7 @@ describe('Yeaft cross-agent session routing (setActiveSessionFilter)', () => {
     expect(store.sent).toEqual([{
       type: 'yeaft_load_history',
       agentId: 'agent-C',
-      groupId: 'grp_unknown',
+      sessionId: 'grp_unknown',
       limit: 5,
     }]);
     expect(store.yeaftAgentId).toBe('agent-C');
@@ -126,7 +126,7 @@ describe('Yeaft cross-agent session routing (setActiveSessionFilter)', () => {
     expect(store.sent).toEqual([{
       type: 'yeaft_load_history',
       agentId: 'agent-A',
-      groupId: 'grp_x',
+      sessionId: 'grp_x',
       limit: 5,
     }]);
   });
@@ -160,7 +160,7 @@ describe('Yeaft cross-agent session routing (setActiveSessionFilter)', () => {
     expect(store.sent[0]).toMatchObject({
       type: 'yeaft_load_history',
       agentId: 'agent-A',
-      groupId: 'grp_same',
+      sessionId: 'grp_same',
     });
   });
 });

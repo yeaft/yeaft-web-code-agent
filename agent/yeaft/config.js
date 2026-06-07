@@ -42,6 +42,12 @@ const DEFAULTS = {
   // plumb the knob through so the UI can set it).
   yeaftMaxConcurrentThreads: 6,
   yeaftAutoArchiveIdleDays: 30,
+  // Cold-start replay window: how many of the most recent turns
+  // ConversationStore.loadRecentBySession / loadSessionHistoryForVp
+  // bring back when no compact summary exists for the session. Raise
+  // this if your sessions routinely outgrow the 20-turn window
+  // before compaction fires. Range: 1–500.
+  yeaftRecentTurnsLimit: 20,
   // CLAUDE.md / AGENTS.md project-doc cap, in bytes. Mirrors Codex's
   // `project_doc_max_bytes`. 0 disables the feature (no project-doc
   // block is injected). Hand-edited values are NOT clamped — we let
@@ -167,12 +173,15 @@ export function normaliseYeaftSection(raw) {
   const out = {
     maxConcurrentThreads: DEFAULTS.yeaftMaxConcurrentThreads,
     autoArchiveIdleDays: DEFAULTS.yeaftAutoArchiveIdleDays,
+    recentTurnsLimit: DEFAULTS.yeaftRecentTurnsLimit,
   };
   if (!raw || typeof raw !== 'object') return out;
   const mc = clampYeaftField(raw.maxConcurrentThreads, 'maxConcurrentThreads');
   if (mc !== null) out.maxConcurrentThreads = mc;
   const ad = clampYeaftField(raw.autoArchiveIdleDays, 'autoArchiveIdleDays');
   if (ad !== null) out.autoArchiveIdleDays = ad;
+  const rt = clampYeaftField(raw.recentTurnsLimit, 'recentTurnsLimit');
+  if (rt !== null) out.recentTurnsLimit = rt;
   return out;
 }
 
@@ -183,14 +192,18 @@ export function normaliseYeaftSection(raw) {
  * (`normaliseYeaftSection`) and write (`updateYeaftSettings` validation).
  *
  * @param {unknown} v
- * @param {'maxConcurrentThreads'|'autoArchiveIdleDays'} field
+ * @param {'maxConcurrentThreads'|'autoArchiveIdleDays'|'recentTurnsLimit'} field
  * @returns {number | null}
  */
 export function clampYeaftField(v, field) {
   if (v === null || v === undefined) return null;
   const n = Number(v);
   if (!Number.isFinite(n)) return null;
-  const [lo, hi] = field === 'maxConcurrentThreads' ? [1, 50] : [1, 3650];
+  let lo;
+  let hi;
+  if (field === 'maxConcurrentThreads') { lo = 1; hi = 50; }
+  else if (field === 'recentTurnsLimit') { lo = 1; hi = 500; }
+  else { lo = 1; hi = 3650; } // autoArchiveIdleDays
   return Math.min(hi, Math.max(lo, Math.floor(n)));
 }
 

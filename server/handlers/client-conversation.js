@@ -47,7 +47,7 @@ function skippedYeaftDreamResult(msg, reason) {
     trigger: msg?.trigger || 'manual',
     error: null,
   };
-  if (msg?.groupId) payload.groupId = msg.groupId;
+  if (msg?.sessionId) payload.sessionId = msg.sessionId;
   if (msg?.vpId) payload.vpId = msg.vpId;
   return payload;
 }
@@ -731,7 +731,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       await forwardToAgent(histAgentId, {
         type: 'yeaft_load_history',
         limit: msg.limit,
-        groupId: msg.groupId || null,
+        sessionId: msg.sessionId || null,
       });
       break;
     }
@@ -743,7 +743,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
       if (!await checkAgentAccess(moreAgentId)) return;
       await forwardToAgent(moreAgentId, {
         type: 'yeaft_load_more_history',
-        groupId: msg.groupId || null,
+        sessionId: msg.sessionId || null,
         beforeSeq: typeof msg.beforeSeq === 'number' ? msg.beforeSeq : null,
         turns: typeof msg.turns === 'number' ? msg.turns : 20,
       });
@@ -880,7 +880,7 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
         const { agentId: _discard, ...rest } = msg;
         rest.type = relayType;
 
-        if (rest.type === 'yeaft_group_chat' && !rest.id) {
+        if (rest.type === 'yeaft_session_chat' && !rest.id) {
           rest.id = `u_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
         }
 
