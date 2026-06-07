@@ -2363,17 +2363,14 @@ export const useChatStore = defineStore('chat', {
       // route correctly after the cross-agent click.
       let targetAgentId = this.yeaftAgentId;
       if (next) {
-        try {
-          const gs = window.Pinia?.useSessionsStore?.()
-            || (window.__useSessionsStore && window.__useSessionsStore());
-          const sess = gs && typeof gs.sessionById === 'function'
-            ? gs.sessionById(next) : null;
-          if (sess && sess.agentId) {
-            targetAgentId = sess.agentId;
-          } else if (this.currentAgent) {
-            targetAgentId = this.currentAgent;
-          }
-        } catch (_) { /* fall back to yeaftAgentId */ }
+        const gs = getSessionsStore();
+        const sess = gs && typeof gs.sessionById === 'function'
+          ? gs.sessionById(next) : null;
+        if (sess && sess.agentId) {
+          targetAgentId = sess.agentId;
+        } else if (this.currentAgent) {
+          targetAgentId = this.currentAgent;
+        }
         if (targetAgentId && targetAgentId !== this.yeaftAgentId) {
           this.yeaftAgentId = targetAgentId;
         }

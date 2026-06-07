@@ -1456,9 +1456,7 @@ function sendGroupSnapshotBroadcast() {
  * ("I see A but not B even though B is online") and was a major
  * contributor to the "session list disappears on switch" symptom.
  */
-export function broadcastYeaftSessionSnapshotEager() {
-  sendGroupSnapshotBroadcast();
-}
+export { sendGroupSnapshotBroadcast as broadcastYeaftSessionSnapshotEager };
 
 function sendGroupRosterChanged(session) {
   if (!session) return;

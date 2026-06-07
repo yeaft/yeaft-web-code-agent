@@ -78,7 +78,9 @@ export async function handleMessage(msg) {
       // to send a first yeaft message (which is what historically
       // triggered ensureSessionLoaded → snapshot emit). This fixes the
       // "switch to Agent B and B's sessions are invisible" symptom.
-      try { broadcastYeaftSessionSnapshotEager(); } catch (_) {}
+      // The callee already wraps its FS scan + emit in try/catch and
+      // logs via console.warn — no second guard needed here.
+      broadcastYeaftSessionSnapshotEager();
 
       // ★ Flush 断连期间缓冲的消息
       await flushMessageBuffer();
