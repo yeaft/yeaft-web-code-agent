@@ -2154,13 +2154,14 @@ function handleEngineEvent(event, hctx) {
  * and handleYeaftSessionSend):
  *   - Frontend ALWAYS sends `yeaft_session_chat`. There is no `yeaft_chat`.
  *   - `sessionId` defaults to `'grp_default'` if missing — Yeaft is a single
- *     conversation backed by the default group; the user is never "outside"
- *     a group.
- *   - If the group dir doesn't exist and the resolved id is `'grp_default'`,
- *     it is seeded on the fly. Any other unknown sessionId surfaces an error.
+ *     conversation backed by the default session; the user is never "outside"
+ *     a session.
+ *   - Sessions are created up-front via `handleYeaftCreateSession`; this
+ *     handler does NOT seed missing sessions on the fly. An unknown
+ *     sessionId surfaces a clear "session not found" error to the UI.
  *   - Coordinator is MANDATORY (this is what guarantees ctx.router is wired
  *     so the `route_forward` tool can never trip `router_unavailable`).
- *   - No legacy "no-group" fallback paths — they were the source of the
+ *   - No legacy "no-session" fallback paths — they were the source of the
  *     router_unavailable bug fixed in v0.1.671.
  */
 export async function handleYeaftSessionSend(msg) {
@@ -2205,12 +2206,11 @@ export async function handleYeaftSessionSend(msg) {
 
   await ensureSessionLoaded();
 
-  // Open the group; seed grp_default on the fly if absent. Track
-  // seedFailed separately so a seed crash surfaces a different message
-  // than a genuinely-missing group.
+  // Open the session. The default `grp_default` no longer self-seeds
+  // here — session creation happens up-front via `handleYeaftCreateSession`,
+  // so a missing dir surfaces a clear error rather than masking it.
   let sessionHandle = null;
   let sessionRoot = null;
-  let seedFailed = false;
   try {
     const groupYeaftDir = resolveSessionYeaftDir(yeaftDir, sessionId);
     sessionRoot = sessionsRoot(groupYeaftDir);
@@ -2227,16 +2227,13 @@ export async function handleYeaftSessionSend(msg) {
       console.warn('[Yeaft] yeaft_session_chat: sessionId %s not found', sessionId);
     }
   } catch (err) {
-    console.warn('[Yeaft] yeaft_session_chat: group open failed', err?.message || err);
+    console.warn('[Yeaft] yeaft_session_chat: session open failed', err?.message || err);
   }
 
   if (!sessionHandle) {
-    const errText = seedFailed
-      ? `⚠️ Failed to seed default group ${sessionId} — check group .yeaft permissions.`
-      : `⚠️ Group ${sessionId} not found.`;
     sendYeaftOutput({
       type: 'assistant',
-      message: { content: [{ type: 'text', text: errText }] },
+      message: { content: [{ type: 'text', text: `⚠️ Session ${sessionId} not found.` }] },
     }, { sessionId });
     sendYeaftOutput({ type: 'result', result_text: '' }, { sessionId });
     return;
@@ -2350,7 +2347,7 @@ export async function handleYeaftSessionSend(msg) {
     console.warn('[Yeaft] yeaft_session_chat: coord.ingest failed', err?.message || err);
     sendYeaftOutput({
       type: 'assistant',
-      message: { content: [{ type: 'text', text: `⚠️ Group dispatch error: ${err?.message || err}` }] },
+      message: { content: [{ type: 'text', text: `⚠️ Session dispatch error: ${err?.message || err}` }] },
     }, { sessionId });
     sendYeaftOutput({ type: 'result', result_text: '' }, { sessionId });
     return;
@@ -3291,6 +3288,16 @@ export function __testGetRegisteredThreadIds() {
  * full session. See `test/agent/yeaft/web-bridge-escalation.test.js`.
  */
 export const __testRaceWithEscalation = raceWithEscalation;
+
+/**
+ * Test-only: invoke `appendTurnToSessionHistory` directly. Lets the VP
+ * stamp contract (`speakerVpId` on assistant + tool rows, none on user
+ * rows) be pinned with a table-driven test instead of booting a full
+ * session. See `test/agent/yeaft/web-bridge-append-turn-vp-stamp.test.js`.
+ */
+export function __testAppendTurnToSessionHistory(...args) {
+  return appendTurnToSessionHistory(...args);
+}
 
 /**
  * Manual dream trigger.

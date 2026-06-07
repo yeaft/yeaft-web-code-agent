@@ -34,11 +34,21 @@
  */
 export function filterSnapshotForVp(snapshot, vpId) {
   if (!Array.isArray(snapshot) || snapshot.length === 0) return [];
-  if (!vpId) return snapshot.slice();
   const out = [];
   for (const m of snapshot) {
     if (!m || typeof m !== 'object') continue;
+    // Reflection / engine-private rows are dropped regardless of vpId.
+    // Even the "no vpId, give me everything" code path must not leak
+    // these into a snapshot the caller will hand to an LLM — they were
+    // never meant to enter another VP's context, nor any VP's.
     if (m._reflection || m.internal || m.systemOnly || m.systemOnlyMessage) continue;
+    if (!vpId) {
+      // No VP scope known: treat every row as "own". This is the
+      // fallback used by callers that don't (yet) have a vpId; the
+      // reflection filter above still applies.
+      out.push(m);
+      continue;
+    }
     if (m.role === 'user') {
       out.push(m);
       continue;

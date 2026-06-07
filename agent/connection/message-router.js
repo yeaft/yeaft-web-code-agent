@@ -427,6 +427,14 @@ export async function handleMessage(msg) {
     }
 
     // Yeaft — single conversation backed by the default session.
+    //
+    // Wire-alias scope: the `yeaft_group_chat` op (and its envelope
+    // dual-emit) was REMOVED in this rename. The `unify_*` aliases (and
+    // the `yeaft_*_group` CRUD aliases below) are PRE-EXISTING wire-
+    // compat hooks from earlier renames (Unify→Yeaft, Phase 2
+    // group→session); they remain so older agent / web bundles in the
+    // wild keep working. Deleting them is a separate, future PR with
+    // its own deployment plan.
     case 'yeaft_session_chat':
     case 'unify_group_chat':
       await handleYeaftSessionSend(msg);

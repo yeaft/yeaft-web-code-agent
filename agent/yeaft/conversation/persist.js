@@ -4,6 +4,14 @@
  * Each message is stored as a .md file with YAML frontmatter in
  * ~/.yeaft/chat/messages/ or ~/.yeaft/groups/<sessionId>/conversation/messages/. Design: zero JSON, all Markdown.
  *
+ * Vocabulary note: the on-disk layout literally uses `groups/<id>/` (and
+ * the AMS registry uses `memory/sessions/<id>/`) — the asymmetry is
+ * deliberate. The `groups/` path predates the rename and we keep it as a
+ * literal string to avoid a destructive data migration; every API
+ * surface above the disk layer (method names, params, comments) uses
+ * "session" vocabulary. See `ConversationStore.#sessionsDir` for the
+ * boundary annotation.
+ *
  * Message format:
  *   ---
  *   id: m0355
@@ -42,18 +50,43 @@ import { countTurns, indexOfNthTurnFromEnd, sliceLastNTurns } from '../turn-util
  * Configurable via `~/.yeaft/config.json` → `yeaft.recentTurnsLimit`.
  * Session boot calls `setDefaultRecentTurnsLimit()` once with the
  * resolved config value; tests can call it directly.
+ *
+ * NB: this is intentionally `let` (not `const`) and read via
+ * `getDefaultRecentTurnsLimit()` from outside this module — ES module
+ * named exports ARE live bindings, but callers that snapshot the value
+ * at module load (`const cap = DEFAULT_RECENT_TURNS`) would not see
+ * runtime overrides. The reader function makes that always-correct.
  */
-export let DEFAULT_RECENT_TURNS = 20;
+let DEFAULT_RECENT_TURNS = 20;
+
+/** Read the current default cold-start replay window (turn count). */
+export function getDefaultRecentTurnsLimit() {
+  return DEFAULT_RECENT_TURNS;
+}
+
+// Back-compat re-export for callers that grab a snapshot at module load.
+// New code should call `getDefaultRecentTurnsLimit()` so it sees runtime
+// overrides applied by `setDefaultRecentTurnsLimit()`.
+export { DEFAULT_RECENT_TURNS };
 
 /**
  * Override the default cold-start replay window. Called once per
- * session boot (`session.js`) from the loaded config.
+ * session boot (`session.js`) from the loaded config. Silently ignores
+ * unparseable input but emits a `console.warn` so a hand-edited config
+ * (`recentTurnsLimit: "twenty"`) doesn't fail open without a signal.
  *
- * @param {number} n
+ * @param {number|string} n
  */
 export function setDefaultRecentTurnsLimit(n) {
   const v = Number(n);
-  if (!Number.isFinite(v) || v < 1) return;
+  if (!Number.isFinite(v) || v < 1) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[Yeaft] setDefaultRecentTurnsLimit(${JSON.stringify(n)}) ignored — ` +
+      `expected a positive number; keeping DEFAULT_RECENT_TURNS=${DEFAULT_RECENT_TURNS}.`
+    );
+    return;
+  }
   DEFAULT_RECENT_TURNS = Math.floor(v);
 }
 
@@ -61,8 +94,20 @@ export function setDefaultRecentTurnsLimit(n) {
  * Per-session warn-once tracker. Keyed by `${storeDir}::${sessionId}`
  * so a single process running multiple sessions only warns once per
  * session per boot.
+ *
+ * The Set is module-level (singleton) because the warning is about
+ * end-user UX (don't spam the console), not about test isolation. Tests
+ * that exercise the warn-once gate call `__resetTruncationWarned()` in
+ * their setup to start from a clean slate; without this seam two
+ * sequential tests in the same module would observe the gate from the
+ * first test silently suppress the second test's warn.
  */
 const _truncationWarned = new Set();
+
+/** Test-only: clear the warn-once gate (do not call in production). */
+export function __resetTruncationWarned() {
+  _truncationWarned.clear();
+}
 
 /**
  * Warn (once per session per process) when the cold-start replay window
@@ -842,7 +887,7 @@ export class ConversationStore {
    */
   loadRecentBySession(sessionId, turnsLimit = DEFAULT_RECENT_TURNS) {
     if (!sessionId) return [];
-    const all = this.#loadSessionMessages(sessionId)
+    const all = this.#loadSessionMessages(sessionId);
     const filtered = all.filter(m => m && m.sessionId === sessionId);
     if (turnsLimit === Infinity || turnsLimit < 0) return pairSanitize(filtered);
     const sliced = sliceLastNTurns(filtered, turnsLimit);
@@ -899,7 +944,7 @@ export class ConversationStore {
    */
   loadSessionHistoryForVp(sessionId, vpId) {
     if (!sessionId || !vpId) return [];
-    const all = this.#loadSessionMessages(sessionId)
+    const all = this.#loadSessionMessages(sessionId);
     const out = [];
     for (const m of all) {
       if (!m || m.sessionId !== sessionId) continue;

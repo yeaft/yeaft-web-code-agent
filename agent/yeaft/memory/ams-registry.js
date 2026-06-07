@@ -34,7 +34,7 @@ import { ActiveMemorySet } from './ams.js';
 import { computeBudget } from './budget.js';
 
 export const AMS_FILE_VERSION = 1;
-export const DEFAULT_GROUP_KEY = 'default';
+export const DEFAULT_SESSION_KEY = 'default';
 
 /**
  * @typedef {object} AmsRegistryDeps
@@ -79,13 +79,13 @@ export class AmsRegistry {
    *
    * `sessionId` is trusted: `nextSessionId()` (groups/ids.js) emits ids matching
    * `grp_[a-z0-9_-]+`, and the single-VP path uses the literal
-   * `DEFAULT_GROUP_KEY`. No defensive escaping is needed.
+   * `DEFAULT_SESSION_KEY`. No defensive escaping is needed.
    *
    * @param {string} sessionId
    * @returns {string}
    */
   amsPath(sessionId) {
-    const key = String(sessionId || DEFAULT_GROUP_KEY);
+    const key = String(sessionId || DEFAULT_SESSION_KEY);
     return join(this.yeaftDir, 'memory', 'sessions', key, 'ams.json');
   }
 
@@ -111,7 +111,7 @@ export class AmsRegistry {
    * @returns {ActiveMemorySet}
    */
   getOrCreate(sessionId, opts = {}) {
-    const key = sessionId || DEFAULT_GROUP_KEY;
+    const key = sessionId || DEFAULT_SESSION_KEY;
     const cached = this._cache.get(key);
     if (cached) return cached.ams;
 
@@ -134,7 +134,7 @@ export class AmsRegistry {
    * @returns {boolean}
    */
   adjustRanThisSession(sessionId) {
-    const key = sessionId || DEFAULT_GROUP_KEY;
+    const key = sessionId || DEFAULT_SESSION_KEY;
     return this._cache.get(key)?.adjustRanThisSession === true;
   }
 
@@ -147,7 +147,7 @@ export class AmsRegistry {
    * @param {boolean} value
    */
   setAdjustRanThisSession(sessionId, value) {
-    const key = sessionId || DEFAULT_GROUP_KEY;
+    const key = sessionId || DEFAULT_SESSION_KEY;
     const entry = this._cache.get(key);
     if (entry) entry.adjustRanThisSession = Boolean(value);
   }
@@ -159,7 +159,7 @@ export class AmsRegistry {
    * @param {string|null|undefined} sessionId
    */
   markDirty(sessionId) {
-    this._dirty.add(sessionId || DEFAULT_GROUP_KEY);
+    this._dirty.add(sessionId || DEFAULT_SESSION_KEY);
   }
 
   /**
@@ -175,7 +175,7 @@ export class AmsRegistry {
    * @returns {boolean} true if the file was written
    */
   persist(sessionId, opts = {}) {
-    const key = sessionId || DEFAULT_GROUP_KEY;
+    const key = sessionId || DEFAULT_SESSION_KEY;
     const entry = this._cache.get(key);
     if (!entry) return false;
     if (!opts.force && !this._dirty.has(key)) return false;
