@@ -2259,8 +2259,22 @@
 }
 
 .group-settings-modal {
-  width: min(720px, 100%);
-  max-height: min(640px, 100vh - 48px);
+  /* fix-yeaft-group-settings-fixed-shell — pinned shell.
+   *
+   * Bug: this used `max-height: min(640px, 100vh - 48px)` so the modal
+   * collapsed to its content height. Switching from Members (a long
+   * roster) to 群记忆 (one button + two help lines) snapped the shell
+   * from ~640px down to ~280px, kicking the dialog around the viewport
+   * and burying muscle memory for where the nav items sit.
+   *
+   * Per CLAUDE.md UI rule 3 (设置类弹窗必须给外壳一个固定的宽高比例),
+   * the shell stays at a single fixed size and the pane scrolls inside.
+   * Dimensions match `.settings-dialog` (web/styles/settings.css) so the
+   * group-settings modal has the same visual mass as the global settings
+   * modal — user asked for "和整体的全局设置一样".
+   */
+  width: min(900px, 92vw);
+  height: min(680px, 90vh);
   background: var(--bg-main);
   border: 1px solid var(--border-color);
   border-radius: 12px;
@@ -2306,7 +2320,13 @@
 }
 
 .group-settings-nav {
-  width: 168px;
+  /* fix-yeaft-group-settings-fixed-shell — width bumped from 168px to
+   * 200px to match `.settings-nav` in the global settings modal (the
+   * group-settings shell is now 900px wide, so 168px nav looked
+   * cramped against the wider right pane). The Yeaft rule of "no
+   * sidebar border" (CLAUDE.md UI rule 5) still applies — no
+   * border-right here, unlike global settings. */
+  width: 200px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -2486,14 +2506,17 @@
 }
 
 .group-settings-roster {
+  /* fix-yeaft-group-settings-fixed-shell — drop the inner max-height
+   * cap. With a fixed shell, the pane (`group-settings-pane`) is the
+   * scrolling layer; an inner scroller produced a nested scrollbar
+   * inside the Members tab and wasted the empty vertical space the
+   * fixed shell now reserves. */
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  max-height: 320px;
-  overflow-y: auto;
 }
 
 .group-settings-roster-item {
