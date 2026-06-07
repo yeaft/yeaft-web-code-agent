@@ -77,9 +77,10 @@ export class AmsRegistry {
   /**
    * Resolve the on-disk path for a group's ams.json.
    *
-   * `sessionId` is trusted: `nextSessionId()` (groups/ids.js) emits ids matching
-   * `grp_[a-z0-9_-]+`, and the single-VP path uses the literal
-   * `DEFAULT_SESSION_KEY`. No defensive escaping is needed.
+   * `sessionId` is trusted: `nextSessionId()` (sessions/ids.js) emits ids matching
+   * `grp_[a-z0-9_-]+_[0-9A-HJKMNP-TV-Z]{8}` (slug + 8-char crockford suffix),
+   * and the single-VP path uses the literal `DEFAULT_SESSION_KEY`. No defensive
+   * escaping is needed.
    *
    * @param {string} sessionId
    * @returns {string}
