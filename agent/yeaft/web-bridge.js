@@ -1441,6 +1441,25 @@ function sendGroupSnapshotBroadcast() {
   }
 }
 
+/**
+ * Eager-broadcast this agent's session snapshot to the server (which
+ * relays it to all owner clients with `agentId` stamped). Called on
+ * `registered` so the unified sidebar can render this agent's sessions
+ * the moment the agent connects — without waiting for the user to
+ * first enter Yeaft view and trigger `ensureSessionLoaded`. Cheap:
+ * pure FS scan of `~/.yeaft/sessions/`, no engine boot.
+ *
+ * fix-yeaft-session-per-agent: previously, Agent B's sessions were
+ * invisible in the unified sidebar until the user clicked into B's
+ * Yeaft view, because `sendGroupSnapshotBroadcast` only fired from
+ * `ensureSessionLoaded`. That made the cross-agent list look broken
+ * ("I see A but not B even though B is online") and was a major
+ * contributor to the "session list disappears on switch" symptom.
+ */
+export function broadcastYeaftSessionSnapshotEager() {
+  sendGroupSnapshotBroadcast();
+}
+
 function sendGroupRosterChanged(session) {
   if (!session) return;
   const payload = {

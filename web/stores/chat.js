@@ -2347,11 +2347,42 @@ export const useChatStore = defineStore('chat', {
       // Always ask the agent — same rationale as enterYeaft. If we have a
       // cursor for this group, request only what's new since; otherwise
       // request the initial recent-N window.
-      if (this.yeaftAgentId && next) {
+      //
+      // fix-yeaft-session-per-agent: the session may belong to an agent
+      // other than `yeaftAgentId` (cross-agent click from the unified
+      // sidebar or from the resume list in SessionCreateModal). Look up
+      // the session's owning agent from the sessions store first; fall
+      // back to currentAgent (just-selected via selectAgent on the same
+      // click), then to yeaftAgentId. Without this, `yeaft_load_history`
+      // gets routed to the wrong agent — which has no such session on
+      // disk — and the main pane stays empty while the previously-
+      // loaded snapshot for that other agent silently goes stale.
+      //
+      // Also sync yeaftAgentId to the resolved agent so downstream
+      // calls (sendYeaftGroupChat, switchYeaftModel, abort routes) all
+      // route correctly after the cross-agent click.
+      let targetAgentId = this.yeaftAgentId;
+      if (next) {
+        try {
+          const gs = window.Pinia?.useSessionsStore?.()
+            || (window.__useSessionsStore && window.__useSessionsStore());
+          const sess = gs && typeof gs.sessionById === 'function'
+            ? gs.sessionById(next) : null;
+          if (sess && sess.agentId) {
+            targetAgentId = sess.agentId;
+          } else if (this.currentAgent) {
+            targetAgentId = this.currentAgent;
+          }
+        } catch (_) { /* fall back to yeaftAgentId */ }
+        if (targetAgentId && targetAgentId !== this.yeaftAgentId) {
+          this.yeaftAgentId = targetAgentId;
+        }
+      }
+      if (targetAgentId && next) {
         const latestSeq = Number.isFinite(savedState?.latestSeq) ? savedState.latestSeq : null;
         const payload = {
           type: 'yeaft_load_history',
-          agentId: this.yeaftAgentId,
+          agentId: targetAgentId,
           groupId: next,
         };
         if (latestSeq !== null) {
