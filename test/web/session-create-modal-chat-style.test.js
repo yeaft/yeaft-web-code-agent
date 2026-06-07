@@ -181,6 +181,22 @@ describe('SessionCreateModal resumeExisting', () => {
     SessionCreateModal.methods.resumeExisting.call(ctx, { id: 's7', agentId: 'agent-1' });
     expect(ctx.chat.selected).toBeNull();
   });
+
+  it('survives a null chat / null sessionsStore (defensive guards)', () => {
+    // Teardown race: Pinia store can be null when modal closes mid-unmount.
+    // Each call is independently guarded; an emit('close') still has to fire
+    // so the host doesn't get stuck with a dangling modal.
+    const emitted = [];
+    const ctx = {
+      sessionsStore: null,
+      chat: null,
+      $emit: (name, payload) => emitted.push([name, payload]),
+    };
+    expect(() => {
+      SessionCreateModal.methods.resumeExisting.call(ctx, { id: 's7' });
+    }).not.toThrow();
+    expect(emitted).toEqual([['close', undefined]]);
+  });
 });
 
 describe('SessionCreateModal onSubmit', () => {
@@ -278,6 +294,17 @@ describe('SessionCreateModal vpRosterSummary', () => {
       $t: (k) => k === 'common.comma' ? ', ' : k,
     };
     expect(fn().call(ctx)).toBe('Label-omni, Label-rat');
+  });
+
+  it('still joins inline at exactly 3 names (boundary)', () => {
+    // The doc comment says "3 is the inclusive threshold" — pin it so an
+    // off-by-one regression flips into "N selected" without anyone noticing.
+    const ctx = {
+      form: { vpIds: ['omni', 'rat', 'ox'] },
+      vpLabelFor: (id) => `Label-${id}`,
+      $t: (k) => k === 'common.comma' ? ', ' : k,
+    };
+    expect(fn().call(ctx)).toBe('Label-omni, Label-rat, Label-ox');
   });
 
   it('renders "N selected" once more than 3 VPs are picked', () => {

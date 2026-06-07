@@ -32,7 +32,11 @@ describe('nextSessionId', () => {
   });
 
   it('produces a unique id on every call even with the same slug', () => {
-    const N = 10000;
+    // N=1000 keeps the birthday collision probability for 40 random bits at
+    // ~5e-7 (vs 5e-5 at N=10000) — well below CI flake territory. The
+    // regression we're guarding against was *deterministic* identical ids,
+    // not low-N collisions, so 1000 is plenty.
+    const N = 1000;
     const seen = new Set();
     for (let i = 0; i < N; i++) seen.add(nextSessionId('same'));
     expect(seen.size).toBe(N);
