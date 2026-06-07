@@ -9,8 +9,8 @@
  * What this file pins:
  *   1. dream_progress events are appended to the per-scope ring buffer
  *      (`yeaftDreamEvents[scope]`).
- *   2. Top-level events (no groupId/target) land in the '*' bucket so
- *      the active-group getter can merge them in chronologically.
+ *   2. Top-level events (no sessionId/target) land in the '*' bucket so
+ *      the active-session getter can merge them in chronologically.
  *   3. The ring buffer is bounded — long sessions don't grow it
  *      unboundedly.
  *   4. yeaft_dream_result projects success/error into the latest map
@@ -77,7 +77,7 @@ describe('handleYeaftOutput — dream event ring buffer', () => {
     send(store, {
       type: 'dream_progress',
       phase: 'start',
-      groupId: 'grp_default',
+      sessionId: 'grp_default',
       manual: true,
       trigger: 'manual',
       source: 'header-button',
@@ -92,17 +92,17 @@ describe('handleYeaftOutput — dream event ring buffer', () => {
     expect(getters.yeaftDreamEventsForActiveSession(store).map(e => e.phase)).toEqual(['start']);
   });
 
-  it('appends per-group events to yeaftDreamEvents["group/<id>"]', () => {
+  it('appends per-session events to yeaftDreamEvents["group/<id>"]', () => {
     const store = mkStore();
-    send(store, { type: 'dream_progress', phase: 'triage', groupId: 'g1', ts: 100 });
-    send(store, { type: 'dream_progress', phase: 'merge', groupId: 'g1', targets: 1, ts: 200 });
+    send(store, { type: 'dream_progress', phase: 'triage', sessionId: 'g1', ts: 100 });
+    send(store, { type: 'dream_progress', phase: 'merge', sessionId: 'g1', targets: 1, ts: 200 });
 
     const buf = store.yeaftDreamEvents['group/g1'];
     expect(Array.isArray(buf)).toBe(true);
     expect(buf.length).toBe(2);
     expect(buf[0].phase).toBe('triage');
     expect(buf[1].phase).toBe('merge');
-    // Augmented with receive timestamp `at` so the active-group getter
+    // Augmented with receive timestamp `at` so the active-session getter
     // can merge scoped+broadcast buckets in order.
     expect(typeof buf[0].at).toBe('number');
   });
@@ -143,8 +143,8 @@ describe('handleYeaftOutput — dream event ring buffer', () => {
 
   it('different scopes have independent ring buffers', () => {
     const store = mkStore();
-    send(store, { type: 'dream_progress', phase: 'triage', groupId: 'g1', ts: 100 });
-    send(store, { type: 'dream_progress', phase: 'triage', groupId: 'g2', ts: 200 });
+    send(store, { type: 'dream_progress', phase: 'triage', sessionId: 'g1', ts: 100 });
+    send(store, { type: 'dream_progress', phase: 'triage', sessionId: 'g2', ts: 200 });
 
     expect(store.yeaftDreamEvents['group/g1'].length).toBe(1);
     expect(store.yeaftDreamEvents['group/g2'].length).toBe(1);
@@ -155,7 +155,7 @@ describe('handleYeaftOutput — yeaft_dream_result projection', () => {
   it('projects success into yeaftDreamLatest[group/<id>] with status=success', () => {
     const store = mkStore();
     // Prime with a running entry.
-    send(store, { type: 'dream_progress', phase: 'triage', groupId: 'g1', ts: 100 });
+    send(store, { type: 'dream_progress', phase: 'triage', sessionId: 'g1', ts: 100 });
 
     // Final result envelope — DOES NOT use type: 'dream_progress';
     // this is the `yeaft_dream_result` case the bridge sends after
@@ -163,7 +163,7 @@ describe('handleYeaftOutput — yeaft_dream_result projection', () => {
     actions.handleYeaftOutput.call(store, {
       event: {
         type: 'yeaft_dream_result',
-        groupId: 'g1',
+        sessionId: 'g1',
         success: true,
         entriesCreated: 3,
       },
@@ -185,7 +185,7 @@ describe('handleYeaftOutput — yeaft_dream_result projection', () => {
     actions.handleYeaftOutput.call(store, {
       event: {
         type: 'yeaft_dream_result',
-        groupId: 'g1',
+        sessionId: 'g1',
         success: false,
         skipped: true,
         skippedReason: 'already-running',
@@ -212,7 +212,7 @@ describe('handleYeaftOutput — yeaft_dream_result projection', () => {
     actions.handleYeaftOutput.call(store, {
       event: {
         type: 'yeaft_dream_result',
-        groupId: 'g1',
+        sessionId: 'g1',
         success: false,
         error: 'disk full',
       },
@@ -236,7 +236,7 @@ describe('handleYeaftOutput — yeaft_dream_result projection', () => {
       },
     });
     // Per-VP rows are owned by vpStore.dreamStatus, not chat-store's
-    // yeaftDreamLatest. Without a groupId we should not invent a fake
+    // yeaftDreamLatest. Without a sessionId we should not invent a fake
     // scope key.
     expect(Object.keys(store.yeaftDreamLatest)).toEqual([]);
   });
@@ -253,7 +253,7 @@ describe('handleYeaftOutput — yeaft_dream_result projection', () => {
     actions.handleYeaftOutput.call(store, {
       event: {
         type: 'yeaft_dream_result',
-        groupId: 'g1',
+        sessionId: 'g1',
         success: true,
         entriesCreated: 0,
       },
@@ -268,7 +268,7 @@ describe('handleYeaftOutput — yeaft_dream_result projection', () => {
     actions.handleYeaftOutput.call(store, {
       event: {
         type: 'yeaft_dream_result',
-        groupId: 'g1',
+        sessionId: 'g1',
         success: true,
         manual: false,
         entriesCreated: 0,
@@ -283,7 +283,7 @@ describe('handleYeaftOutput — yeaft_dream_result projection', () => {
     actions.handleYeaftOutput.call(store, {
       event: {
         type: 'yeaft_dream_result',
-        groupId: 'g1',
+        sessionId: 'g1',
         success: true,
         entriesCreated: 4,
       },
@@ -314,15 +314,15 @@ describe('handleYeaftOutput — yeaft_dream_result projection', () => {
   it('survives the full production sequence: running → yeaft_dream_result (regression for synthetic-mirror clobber)', () => {
     const store = mkStore();
     // 1. Running event lands first (runner emitted load-diff / triage /
-    //    merge / apply with the bridge's stamped groupId).
-    send(store, { type: 'dream_progress', phase: 'triage', groupId: 'g1', ts: 100 });
+    //    merge / apply with the bridge's stamped sessionId).
+    send(store, { type: 'dream_progress', phase: 'triage', sessionId: 'g1', ts: 100 });
     expect(store.yeaftDreamLatest['group/g1'].status).toBe('running');
 
     // 2. Terminal envelope — bridge sends `yeaft_dream_result` only.
     actions.handleYeaftOutput.call(store, {
       event: {
         type: 'yeaft_dream_result',
-        groupId: 'g1',
+        sessionId: 'g1',
         success: true,
         entriesCreated: 2,
       },

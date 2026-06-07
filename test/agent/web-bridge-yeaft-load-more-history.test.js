@@ -4,10 +4,10 @@
  * Validates `handleYeaftLoadMoreHistory`:
  *   - emits a `yeaft_history_chunk` envelope with the projected
  *     user/assistant rows, oldestSeq, hasMore from
- *     ConversationStore.loadVisibleByGroup
+ *     ConversationStore.loadVisibleBySession
  *   - empty branch (no session yet, or no sessionId) still emits a chunk so
  *     the frontend spinner clears
- *   - error branch (loadVisibleByGroup throws) still emits an empty chunk
+ *   - error branch (loadVisibleBySession throws) still emits an empty chunk
  *
  * Also covers the `handleYeaftLoadHistory` extension that primes the
  * pagination cursor: after bootstrap replay, the `history_loaded` event
@@ -212,8 +212,8 @@ describe('handleYeaftLoadMoreHistory — chunk emission', () => {
     const gid = 'g_throw';
     seedTurns(gid, 3);
 
-    const original = sharedStore.loadVisibleByGroup.bind(sharedStore);
-    sharedStore.loadVisibleByGroup = () => { throw new Error('disk gone'); };
+    const original = sharedStore.loadVisibleBySession.bind(sharedStore);
+    sharedStore.loadVisibleBySession = () => { throw new Error('disk gone'); };
     try {
       await handleYeaftLoadMoreHistory({ sessionId: gid, beforeSeq: null, turns: 2 });
       const chunk = lastChunk();
@@ -222,7 +222,7 @@ describe('handleYeaftLoadMoreHistory — chunk emission', () => {
       expect(chunk.oldestSeq).toBeNull();
       expect(chunk.hasMore).toBe(false);
     } finally {
-      sharedStore.loadVisibleByGroup = original;
+      sharedStore.loadVisibleBySession = original;
     }
   });
 

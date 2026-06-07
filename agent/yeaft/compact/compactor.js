@@ -14,7 +14,7 @@
  *     diverges from the snapshot we captured before awaiting the LLM.
  *
  * History is passed in PER CALL via a `historyHandle = { get, set }` so
- * Compactor never has to know about `groupContexts`, `historyHydrated`,
+ * Compactor never has to know about `sessionContexts`, `historyHydrated`,
  * or any other bridge-internal field. The WS event sink is wired
  * separately via `setOnCompacted`.
  *
@@ -128,7 +128,7 @@ export class Compactor {
    * Post-turn fire-and-forget. Bridge calls after the per-VP fanout
    * completes for a turn. The `historyHandle` MUST be a per-call value:
    * its `get` / `set` close over the bridge's sessionId-scoped helpers
-   * (`getOrCreateGroupHistory` / `setGroupHistory`), not over a frozen
+   * (`getOrCreateSessionHistory` / `setGroupHistory`), not over a frozen
    * snapshot, so a chained follow-up sees fresh state.
    *
    * Anti-starvation: while a compact is in flight, additional

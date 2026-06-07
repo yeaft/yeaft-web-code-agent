@@ -40,13 +40,6 @@ import { fetchModelsDev } from '../yeaft/llm/models-dev.js';
 import { handleYeaftSessionSend, handleYeaftModeSwitch, handleYeaftModelSwitch, resetYeaftSession, handleYeaftLoadHistory, handleYeaftLoadMoreHistory, handleYeaftAbortThread, handleYeaftAbortAll, handleYeaftAbortTurn, handleYeaftVpSubscribe, handleYeaftVpCreate, handleYeaftVpUpdate, handleYeaftVpDelete, handleYeaftVpRead, handleYeaftListSessions, handleYeaftCreateSession, handleYeaftRenameSession, handleYeaftUpdateSession, handleYeaftUpdateSessionConfig, handleYeaftArchiveSession, handleYeaftDeleteSession, handleYeaftSessionAddMember, handleYeaftSessionRemoveMember, handleYeaftSessionSetDefaultVp, handleYeaftDreamTrigger, handleYeaftFetchToolStats, handleYeaftFetchDebugHistory, broadcastLanguageChange } from '../yeaft/web-bridge.js';
 
 export async function handleMessage(msg) {
-  // Wire-compat: old web bundles send `groupId` on Yeaft messages;
-  // the agent runtime has switched to `sessionId`. Coerce here so
-  // handlers don't each have to do it. Keep both fields populated.
-  if (msg && typeof msg === 'object') {
-    if (msg.sessionId == null && typeof msg.groupId === 'string') msg.sessionId = msg.groupId;
-    if (msg.groupId == null && typeof msg.sessionId === 'string') msg.groupId = msg.sessionId;
-  }
   switch (msg.type) {
     case 'registered':
       if (msg.sessionKey) {
@@ -433,8 +426,8 @@ export async function handleMessage(msg) {
       break;
     }
 
-    // Yeaft — single conversation backed by the default group.
-    case 'yeaft_group_chat':
+    // Yeaft — single conversation backed by the default session.
+    case 'yeaft_session_chat':
     case 'unify_group_chat':
       await handleYeaftSessionSend(msg);
       break;

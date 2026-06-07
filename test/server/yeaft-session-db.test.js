@@ -1,7 +1,7 @@
 /**
  * yeaft-session-db.test.js — exercises the yeaft_sessions table CRUD
  * and the snapshot reconciliation path that the server uses when an
- * agent emits `group_list_updated`.
+ * agent emits `session_list_updated`.
  *
  * Self-contained: spins up an isolated SQLite DB with just the
  * yeaft_sessions schema (no need to import the full production DB).

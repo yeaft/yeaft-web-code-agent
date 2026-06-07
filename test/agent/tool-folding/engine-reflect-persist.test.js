@@ -6,7 +6,7 @@
  *   T1 触发后，磁盘上落的是 collapsed 形态（reflection user msg + 最终
  *   assistant），而不是 BATCH 条 tool_use+tool_result 原始记录。
  *
- *   这样下一个 turn loadRecentByGroup 看到的是 reflection，省 context
+ *   这样下一个 turn loadRecentBySession 看到的是 reflection，省 context
  *   的效果跨 turn 持久化。
  *
  * BATCH = TOOL_BATCH_SIZE 常量（最初为 13，2026-05-15 上调至 30）。测试
@@ -130,7 +130,7 @@ describe('Reflect persistence — T1 collapse should land on disk in collapsed f
         /* drain */
       }
 
-      const persisted = conversationStore.loadAllByGroup('g1');
+      const persisted = conversationStore.loadAllBySession('g1');
 
       // What we want on disk for THIS turn:
       //   - the original user prompt (kept; fold-down doesn't touch it)
@@ -189,7 +189,7 @@ describe('Reflect persistence — T1 collapse should land on disk in collapsed f
         /* drain */
       }
 
-      const persisted = conversationStore.loadAllByGroup('g1');
+      const persisted = conversationStore.loadAllBySession('g1');
 
       const toolMsgs = persisted.filter(m => m.role === 'tool');
       expect(toolMsgs).toHaveLength(0);
@@ -210,7 +210,7 @@ describe('Reflect persistence — T1 collapse should land on disk in collapsed f
     }
   });
 
-  it('next query loadRecentByGroup sees collapsed history (no tool pairs)', async () => {
+  it('next query loadRecentBySession sees collapsed history (no tool pairs)', async () => {
     const yeaftDir = mkdtempSync(join(tmpdir(), 'yeaft-reflect-persist-'));
     try {
       const adapter = new ScriptedAdapter({ toolUseTurns: TOOL_BATCH_SIZE });
@@ -225,11 +225,11 @@ describe('Reflect persistence — T1 collapse should land on disk in collapsed f
         /* drain */
       }
 
-      // Now simulate turn 2's prep: the bridge will call loadRecentByGroup
+      // Now simulate turn 2's prep: the bridge will call loadRecentBySession
       // to rebuild conversationMessages. The whole point of reflect-persist
       // is that THIS load returns the collapsed form, so turn 2's adapter
       // call sees the smaller history.
-      const recent = conversationStore.loadRecentByGroup('g1', 100);
+      const recent = conversationStore.loadRecentBySession('g1', 100);
       const recentTools = recent.filter(m => m.role === 'tool');
       const recentReflections = recent.filter(
         m => m.role === 'user' && typeof m.content === 'string'

@@ -1,15 +1,14 @@
 /**
- * memory/ams-registry.js — group-keyed AMS lifecycle.
+ * memory/ams-registry.js — session-keyed AMS lifecycle.
  *
- * The Active Memory Set is conceptually session-scoped, but Yeaft's
- * unit of "session" is a group: a deactivated group can be reactivated
- * later and should resume with the AMS state it had on disconnect (the
- * onDemand segments it had pulled in, the recent LRU touches, whether
- * `adjust` already ran). Sessions come and go; the group's AMS persists.
+ * The Active Memory Set is conceptually session-scoped, with `sessionId`
+ * as the unit. A deactivated session can be reactivated later and should
+ * resume with the AMS state it had on disconnect (the onDemand segments
+ * it had pulled in, the recent LRU touches, whether `adjust` already ran).
  *
  * Persistence is identity-only:
  *
- *   ~/.yeaft/memory/groups/<sessionId>/ams.json
+ *   ~/.yeaft/memory/sessions/<sessionId>/ams.json
  *   {
  *     "version": 1,
  *     "ownVpId": "alice"|null,
@@ -21,11 +20,11 @@
  *
  * Bodies are NOT serialised — they're re-hydrated from the SegmentIndex
  * on load, so a body edited by Dream after save still surfaces correctly
- * the next time the group is opened. Resident layer is derived state
+ * the next time the session is opened. Resident layer is derived state
  * (rebuilt every turn from `<scope>/summary.md`) — never persisted.
  *
- * For the single-VP Yeaft path (no group), the registry uses the literal
- * key `"default"` so there's still a stable home for AMS state.
+ * For the single-VP Yeaft path (no session id supplied), the registry uses
+ * the literal key `"default"` so there's still a stable home for AMS state.
  */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -87,7 +86,7 @@ export class AmsRegistry {
    */
   amsPath(sessionId) {
     const key = String(sessionId || DEFAULT_GROUP_KEY);
-    return join(this.yeaftDir, 'memory', 'groups', key, 'ams.json');
+    return join(this.yeaftDir, 'memory', 'sessions', key, 'ams.json');
   }
 
   /**

@@ -118,7 +118,7 @@ export function filterEffortForModel(params) {
  * task-715: last-line-of-defense pair sanitize at the wire.
  *
  * `pairSanitize` already runs in two upstream paths
- * (`conversation/persist.js#loadRecentByGroup` and
+ * (`conversation/persist.js#loadRecentBySession` and
  * `history-compact.js#compactHistory`), but the engine's main loop
  * mutates `conversationMessages` AFTER those — appending tool results
  * mid-loop, archiving bulky tool results into stubs, and (in failure

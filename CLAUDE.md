@@ -1,8 +1,8 @@
 # Claude Web Chat (Yeaft)
 
-一个 Web 端的 AI 聊天应用。产品名是 **Yeaft**。当前对外提供两类模式：**Claude Chat**（基于 Claude CLI 的 1:1 对话，旧模式）、**Crew**（多 Agent 团队协作）；以及 Yeaft 自有引擎下的 **Group Mode**（多 VP 群组协作，**当前主开发方向**）。Yeaft 的 **Chat Mode**（单 VP 1:1 对话）已规划，**尚未实现**，会复用同一套引擎。
+一个 Web 端的 AI 聊天应用。产品名是 **Yeaft**。当前对外提供两类模式：**Claude Chat**（基于 Claude CLI 的 1:1 对话，旧模式）、**Crew**（多 Agent 团队协作）；以及 Yeaft 自有引擎下的 **Session**（多 VP 协作，**当前主开发方向**）。一个 Session 默认 1 个 VP（即 1:1 对话）；多 VP 是特殊情况而不是另一种 mode。
 
-> 历史名词注记：早期 Yeaft 引擎叫做 "Yeaft"。代码里很多目录、文件、WebSocket 消息类型、store 字段都保留了 `yeaft` 前缀作为内部别名 — **不要为了改名而批量重命名**，会炸 wire compatibility。文档中一律称呼为 Yeaft；代码标识符按现状保留。
+> 名词说明：项目里早期叫 **Group**（多 VP 群组），现在统一叫 **Session** — 不再区分"chat / group"。代码 / wire / 磁盘路径已全部改用 `session`；前端字段名保留 `yeaft` 前缀作为引擎内部别名（**不要**为了去掉 `yeaft` 前缀做批量重命名 — 会炸 wire compatibility）。
 
 ## 项目结构
 
@@ -39,18 +39,14 @@ test/            — Vitest 测试
 - 角色间通过 `---ROUTE---` 协议路由消息
 - 通过 `.crew/context/features/` 和 `.crew/context/kanban.md` 跟踪 feature
 
-### Yeaft Group Mode（当前主开发方向）
-- **多 VP 群组协作** — 用户拉一个 group，里面有若干个 VP（Virtual Person，可配置人格 / 模型 / 工具），同一个 user turn 可以并行 fan-out 到多个 VP
+### Yeaft Session（当前主开发方向）
+- **多 VP 协作** — 用户开一个 session，里面有若干个 VP（Virtual Person，可配置人格 / 模型 / 工具），同一个 user turn 可以并行 fan-out 到多个 VP
+- **默认 1 VP** — 普通 session 就 1 个 VP（即 1:1 对话）；多 VP 是特殊情况
 - **自有引擎** — 不依赖 Claude CLI，自己跑 query loop（`agent/yeaft/engine.js`）
 - **记忆系统** — H2-AMS 持久化记忆，支持 scope 级 recall、consolidation、dream 维护
 - **多 provider LLM** — 通过 `AdapterRouter` 路由到不同 provider，支持 per-model protocol
 - **工具系统** — 40+ 个内置工具，按 mode 过滤
 - **多 Agent 编排** — VP 可派生子 Agent 并行执行任务
-
-### Yeaft Chat Mode（规划中，尚未实现）
-- **单 VP 1:1 对话** — 不走 group fan-out，只跟一个 VP 说话
-- **共用引擎** — 复用 Group Mode 的 `engine.js` / 记忆 / 工具 / LLM 层；差别只在编排（不开 coordinator、不做并行 fan-out）和 UI（不显示 group selector）
-- **状态**：占位中。新代码如果跟"是否在 chat mode"无关，**不要**为这个未来分支引入分支判断 — 等真做的时候一起。
 
 ## Yeaft 引擎架构（agent/yeaft/）
 
@@ -62,7 +58,8 @@ session.js       — Session orchestrator（loadSession 把所有子系统串起
 config.js        — 从 ~/.yeaft/config.json 读配置（providers、models、limits）
 prompts.js       — 双语 system prompt builder（en/zh）
 models.js        — Model 注册表（上下文窗口、output limit、provider 推断）
-groups/          — Group Mode 编排（coordinator、roster、group-store、pre-flow 等）
+groups/          — Session 编排（coordinator、roster、session-store、pre-flow 等）
+                   注：目录名保留 "groups" 为历史别名
 routing/         — Turn 内路由 + loop guard
 router/          — Continuity / thinking 相关路由策略
 memory/          — H2-AMS 记忆子系统
@@ -109,11 +106,11 @@ segment.js        — 段记录辅助函数
 index-db.js       — SQLite FTS5 索引（每段一行，按 scope 分）
 store-v2.js       — Layer-A summary 读写：<scope>/summary.md
 ams.js            — Active Memory Set：三层缓存（Resident summary / Recent / OnDemand）
-ams-registry.js   — Group 级 AMS 持久化（hydrate + persist with adjustRanThisSession）
+ams-registry.js   — Session 级 AMS 持久化（hydrate + persist with adjustRanThisSession）
 budget.js         — AMS 各层的 token 预算计算
 keywords.js       — FTS 关键词抽取
 preflow.js        — 每 turn 前对相关 scope 做 FTS 召回 -> 注入 system prompt
-adjust.js         — Turn 后用 LLM 修正 AMS（每个 session 每个 group 最多一次）
+adjust.js         — Turn 后用 LLM 修正 AMS（每个 session 最多一次）
 consolidate.js    — 触发 dream 维护的 consolidation 决策
 seed-backfill.js  — 历史数据迁移 / 回填
 ```
@@ -124,15 +121,15 @@ seed-backfill.js  — 历史数据迁移 / 回填
 - `user/<userId>` — 用户级 profile / preference（替代旧的 shard 系统）
 - `vp/<vpId>` — 单个 VP 的人格记忆（VP 即 scope owner）
 - `vp/<vpId>/sub/<subAgentId>` — VP 的子 Agent，嵌套 scope
-- `group/<groupId>` — 组内共享
+- `group/<sessionId>` — Session 内共享（scope 前缀保留 `group/` 为历史别名）
 - `feature/<featureId>` — feature 级协作记忆
 - `global` — 全局
 
-**读路径（每 turn）：** `preflow.js` 对相关 scope 跑 FTS → 命中结果注入 system prompt。AMS 持有当前正在运行的三层缓存，按 groupId 索引。
+**读路径（每 turn）：** `preflow.js` 对相关 scope 跑 FTS → 命中结果注入 system prompt。AMS 持有当前正在运行的三层缓存，按 sessionId 索引。
 
-**写路径：** `store-v2.js` 写 `<scope>/summary.md`（Layer A）；`adjust.js` 每个 session 每个 group 最多跑一次，借 LLM 修正 AMS；`dream-v2.js` 后台跑，把 diff 切分成原子段文件。
+**写路径：** `store-v2.js` 写 `<scope>/summary.md`（Layer A）；`adjust.js` 每个 session 最多跑一次，借 LLM 修正 AMS；`dream-v2.js` 后台跑，把 diff 切分成原子段文件。
 
-**VP / 多 Agent 语义：** VP 和用户一样是 scope owner。VP 的子 Agent 嵌套在 `vp/<vpId>/sub/<subAgentId>`。Group fan-out 时 VP 并行执行；VP 之间的跨视野通过 scope-aware pre-flow 召回实现，**不**走共享 shard、也**不**走共享 transcript。VP→VP 显式 handoff 用 `route_forward` 工具。
+**VP / 多 Agent 语义：** VP 和用户一样是 scope owner。VP 的子 Agent 嵌套在 `vp/<vpId>/sub/<subAgentId>`。Session fan-out 时 VP 并行执行；VP 之间的跨视野通过 scope-aware pre-flow 召回实现，**不**走共享 shard、也**不**走共享 transcript。VP→VP 显式 handoff 用 `route_forward` 工具。
 
 ### 会话持久化（agent/yeaft/conversation/）
 ```
@@ -160,7 +157,7 @@ index.js     — 入口，把所有内置工具聚合成 createFullRegistry()
 base.md             — 核心身份 + 原则（双语）
 identity-yeaft.md   — Yeaft 身份指令
 common-rules.md     — 公共行为规则
-mode-unified.md     — 当前唯一的运行 mode（覆盖 group 协作所需的全部指令）
+mode-unified.md     — 当前唯一的运行 mode（覆盖 session 协作所需的全部指令）
 mode-dream.md       — Dream 模式：记忆维护
 plan-instruction.md — 计划阶段的额外指令
 tool-guidance.md    — 工具使用最佳实践
@@ -173,7 +170,7 @@ harness/            — Harness 级指令（环境信息等）
 ### Web Bridge（agent/yeaft/web-bridge.js）
 - 把 Engine 事件翻译成 `claude_output` 格式（保留这个 wire type 名是为了让前端复用 Claude Chat 渲染管线）
 - 前端复用标准渲染管线（MessageList、AssistantTurn、ToolLine 等）
-- 消息流：`yeaft_group_chat` -> agent message-router -> `handleYeaftGroupChat()` -> 按 VP 调 `runVpTurn()` -> Engine.query() -> 事件 -> `yeaft_output` -> server -> web
+- 消息流：`yeaft_session_chat` -> agent message-router -> `handleYeaftSessionChat()` -> 按 VP 调 `runVpTurn()` -> Engine.query() -> 事件 -> `yeaft_output` -> server -> web
 
 ### Skills 和 MCP
 ```
@@ -201,16 +198,15 @@ yeaftConversationId: null            // Agent session_ready 给出的虚拟 conv
 yeaftModel: null                     // 当前 model
 yeaftSessionReady: false             // Session 初始化状态
 yeaftStatus: null                    // { skills, mcpServers, tools }
-yeaftActiveGroupFilter: null         // 当前选中的 group（Group Mode）
+yeaftActiveSessionFilter: null       // 当前选中的 session
 ```
 
 ### Store 关键 action（Yeaft 相关）
 ```js
 enterYeaft(agentId?)     // 进入 Yeaft 页，创建虚拟 conversationId
 leaveYeaft()             // 回 Claude Chat 页
-sendYeaftGroupChat({groupId, text, mentions, attachments})
-                         // Group Mode 唯一发送通道（wire type: 'yeaft_group_chat'）
-                         // 旧的 sendYeaftChat（1:1）已移除；Chat Mode 真做的时候会重新加
+sendYeaftSessionChat({sessionId, text, mentions, attachments})
+                         // 唯一发送通道（wire type: 'yeaft_session_chat'）
 handleYeaftOutput(msg)   // 把 Engine 事件丢给标准 claude_output 管线
 clearYeaftMessages()     // 重置 session
 ```
@@ -231,16 +227,14 @@ Web 客户端 -> ws "send_message" -> Server -> ws agent -> Claude CLI 进程
 Claude CLI -> agent -> ws "claude_output" -> Server -> ws "claude_output" -> Web 客户端
 ```
 
-### Yeaft Group Mode
+### Yeaft Session
 ```
-Web 客户端 -> ws "yeaft_group_chat" -> Server -> ws agent
-  -> message-router.js -> handleYeaftGroupChat()
+Web 客户端 -> ws "yeaft_session_chat" -> Server -> ws agent
+  -> message-router.js -> handleYeaftSessionChat()
   -> coordinator.ingest() -> Promise.all(按 VP runVpTurn -> Engine.query())
   -> Engine 事件 -> web-bridge.js -> ws "yeaft_output" -> Server
   -> ws "yeaft_output" -> Web 客户端 -> handleYeaftOutput() -> handleClaudeOutput()
 ```
-
-> Yeaft Chat Mode 真做的时候会复用同一个 wire type（或新增一个对应 1:1 的类型），不另起一套引擎。
 
 ## 配置
 

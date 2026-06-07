@@ -22,7 +22,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rename
 import { join, basename } from 'path';
 import { isPermissionError } from '../init.js';
 import { pairSanitize } from '../pair-sanitize.js';
-import { indexOfNthTurnFromEnd, sliceLastNTurns } from '../turn-utils.js';
+import { countTurns, indexOfNthTurnFromEnd, sliceLastNTurns } from '../turn-utils.js';
 
 /**
  * Default cold-start "recent window" size, expressed in TURNS (not raw
@@ -38,8 +38,57 @@ import { indexOfNthTurnFromEnd, sliceLastNTurns } from '../turn-utils.js';
  * The session-level compactor in `history-compact.js` is the authoritative
  * size limiter once the engine is running; this is just the cold-start
  * replay window after a fresh boot or reconnect.
+ *
+ * Configurable via `~/.yeaft/config.json` → `yeaft.recentTurnsLimit`.
+ * Session boot calls `setDefaultRecentTurnsLimit()` once with the
+ * resolved config value; tests can call it directly.
  */
-export const DEFAULT_RECENT_TURNS = 20;
+export let DEFAULT_RECENT_TURNS = 20;
+
+/**
+ * Override the default cold-start replay window. Called once per
+ * session boot (`session.js`) from the loaded config.
+ *
+ * @param {number} n
+ */
+export function setDefaultRecentTurnsLimit(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v < 1) return;
+  DEFAULT_RECENT_TURNS = Math.floor(v);
+}
+
+/**
+ * Per-session warn-once tracker. Keyed by `${storeDir}::${sessionId}`
+ * so a single process running multiple sessions only warns once per
+ * session per boot.
+ */
+const _truncationWarned = new Set();
+
+/**
+ * Warn (once per session per process) when the cold-start replay window
+ * truncated history AND no compact summary exists to cover the dropped
+ * turns. The user is then losing context with no UX signal otherwise.
+ *
+ * @param {string} sessionId
+ * @param {string} storeDir
+ * @param {number} totalTurns      — turns available on disk
+ * @param {number} returnedTurns   — turns the load returned
+ * @param {boolean} hasCompactSummary
+ */
+function maybeWarnHistoryTruncated(sessionId, storeDir, totalTurns, returnedTurns, hasCompactSummary) {
+  if (!sessionId || !storeDir) return;
+  if (returnedTurns >= totalTurns) return;
+  if (hasCompactSummary) return;
+  const key = `${storeDir}::${sessionId}`;
+  if (_truncationWarned.has(key)) return;
+  _truncationWarned.add(key);
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[Yeaft] history for session ${sessionId} truncated to ${returnedTurns} of ${totalTurns} turns (recentTurnsLimit=${DEFAULT_RECENT_TURNS}); ` +
+    `no compact summary exists, so older context is dropped. ` +
+    `Raise yeaft.recentTurnsLimit in ~/.yeaft/config.json if this is a problem.`
+  );
+}
 
 // ─── Token estimation ────────────────────────────────────────
 
@@ -58,7 +107,7 @@ export function estimateTokens(text) {
 /**
  * Parse the global monotonic sequence number out of a message id of the
  * form `m####`. Returns NaN for malformed ids. Used by the pagination
- * cursor (`loadOlderByGroup`) to compare ids numerically without having
+ * cursor (`loadOlderBySession`) to compare ids numerically without having
  * to trust file-system sort order.
  *
  * @param {string} id
@@ -343,7 +392,12 @@ export function parseMessage(raw) {
 export class ConversationStore {
   #dir;         // root dir (e.g. ~/.yeaft)
   #chatDir;     // ~/.yeaft/chat
-  #groupsDir;   // ~/.yeaft/groups
+  // ~/.yeaft/groups — on-disk path literal kept for backward compat with
+  // existing user data; the live disk layout is still `groups/<id>/` even
+  // after the session-v1 meta migration (which only collapses the meta
+  // files, not the conversation tree). All API surfaces above the disk
+  // layer have been renamed to the "session" vocabulary.
+  #sessionsDir;
   #legacyConvDir; // ~/.yeaft/conversation (read-only compatibility)
   #convDir;     // default thread dir root: ~/.yeaft/chat
   #msgDir;      // default hot messages dir: ~/.yeaft/chat/messages
@@ -356,7 +410,7 @@ export class ConversationStore {
   #chatColdDir;
   #legacyMsgDir;
   #legacyColdDir;
-  #nextSeq;     // next message sequence number across chat/group/legacy
+  #nextSeq;     // next message sequence number across chat/session/legacy
   #nextSeqByThread; // Map<threadId, number> — per-thread counters (task-314)
 
   /**
@@ -365,7 +419,7 @@ export class ConversationStore {
   constructor(dir) {
     this.#dir = dir;
     this.#chatDir = join(dir, 'chat');
-    this.#groupsDir = join(dir, 'groups');
+    this.#sessionsDir = join(dir, 'groups');
     this.#legacyConvDir = join(dir, 'conversation');
 
     this.#convDir = this.#chatDir;
@@ -393,7 +447,7 @@ export class ConversationStore {
     // new versions.
     for (const d of [
       this.#chatDir, join(this.#chatDir, 'blobs'), this.#chatMsgDir, this.#chatColdDir,
-      this.#groupsDir,
+      this.#sessionsDir,
     ]) {
       try {
         if (!existsSync(d)) mkdirSync(d, { recursive: true, mode: 0o755 });
@@ -563,7 +617,7 @@ export class ConversationStore {
    */
   #scopedCompactPath(sessionId, vpId) {
     if (!sessionId || !vpId) return null;
-    const compactDir = join(this.#groupConversationDir(sessionId, { create: true }), 'compact');
+    const compactDir = join(this.#sessionConversationDir(sessionId, { create: true }), 'compact');
     return join(compactDir, `${this.#safeIdComponent(vpId)}.md`);
   }
 
@@ -632,9 +686,9 @@ export class ConversationStore {
    * @param {string} sessionId
    * @returns {boolean}
    */
-  hasAnyCompactSummaryForGroup(sessionId) {
+  hasAnyCompactSummaryForSession(sessionId) {
     if (!sessionId) return false;
-    const compactDir = join(this.#groupConversationDir(sessionId), 'compact');
+    const compactDir = join(this.#sessionConversationDir(sessionId), 'compact');
     for (const dir of [compactDir, this.#legacyCompactScopedDir]) {
       if (!existsSync(dir)) continue;
       try {
@@ -689,7 +743,7 @@ export class ConversationStore {
    * Clear all messages (hot + cold + compact).
    */
   clear() {
-    for (const dir of [this.#chatMsgDir, this.#chatColdDir, ...this.#groupMessageDirs('messages'), ...this.#groupMessageDirs('cold')]) {
+    for (const dir of [this.#chatMsgDir, this.#chatColdDir, ...this.#sessionMessageDirs('messages'), ...this.#sessionMessageDirs('cold')]) {
       if (existsSync(dir)) {
         for (const file of readdirSync(dir)) {
           if (file.endsWith('.md')) {
@@ -786,12 +840,26 @@ export class ConversationStore {
    * @param {number} [turnsLimit=DEFAULT_RECENT_TURNS]
    * @returns {object[]}
    */
-  loadRecentByGroup(sessionId, turnsLimit = DEFAULT_RECENT_TURNS) {
+  loadRecentBySession(sessionId, turnsLimit = DEFAULT_RECENT_TURNS) {
     if (!sessionId) return [];
-    const all = this.#loadGroupMessages(sessionId)
+    const all = this.#loadSessionMessages(sessionId)
     const filtered = all.filter(m => m && m.sessionId === sessionId);
     if (turnsLimit === Infinity || turnsLimit < 0) return pairSanitize(filtered);
-    return pairSanitize(sliceLastNTurns(filtered, turnsLimit));
+    const sliced = sliceLastNTurns(filtered, turnsLimit);
+    // Warn once per (sessionId, storeDir) when truncation drops turns
+    // that no compact summary covers — the user is silently losing
+    // older context otherwise. Cheap check: countTurns is O(N) over
+    // already-loaded messages; we only run it when the slice actually
+    // returned fewer rows than the full filtered set.
+    if (sliced.length < filtered.length) {
+      const totalTurns = countTurns(filtered);
+      const returnedTurns = countTurns(sliced);
+      if (returnedTurns < totalTurns) {
+        const hasCompact = this.hasAnyCompactSummaryForSession(sessionId);
+        maybeWarnHistoryTruncated(sessionId, this.#dir, totalTurns, returnedTurns, hasCompact);
+      }
+    }
+    return pairSanitize(sliced);
   }
 
   /**
@@ -800,8 +868,8 @@ export class ConversationStore {
    * @param {string} sessionId
    * @returns {object[]}
    */
-  loadAllByGroup(sessionId) {
-    return this.loadRecentByGroup(sessionId, Infinity);
+  loadAllBySession(sessionId) {
+    return this.loadRecentBySession(sessionId, Infinity);
   }
 
   /**
@@ -829,9 +897,9 @@ export class ConversationStore {
    * @param {string} vpId
    * @returns {object[]}
    */
-  loadGroupHistoryForVp(sessionId, vpId) {
+  loadSessionHistoryForVp(sessionId, vpId) {
     if (!sessionId || !vpId) return [];
-    const all = this.#loadGroupMessages(sessionId)
+    const all = this.#loadSessionMessages(sessionId)
     const out = [];
     for (const m of all) {
       if (!m || m.sessionId !== sessionId) continue;
@@ -896,15 +964,15 @@ export class ConversationStore {
    *     from the newest (no upper bound).
    *   - `0` is a VALID finite cutoff that excludes everything (since seqs
    *     start at 1). Distinct from `null`. A caller writing
-   *     `loadOlderByGroup(g, store.firstSeq || 0, ...)` will silently get
+   *     `loadOlderBySession(g, store.firstSeq || 0, ...)` will silently get
    *     an empty page — pass `null` if you mean "from newest".
    * @param {number} [turnsLimit=DEFAULT_RECENT_TURNS] — max turns per page
    * @returns {{ messages: object[], oldestSeq: number|null, hasMore: boolean }}
    */
-  loadOlderByGroup(sessionId, beforeSeq, turnsLimit = DEFAULT_RECENT_TURNS) {
+  loadOlderBySession(sessionId, beforeSeq, turnsLimit = DEFAULT_RECENT_TURNS) {
     if (!sessionId) return { messages: [], oldestSeq: null, hasMore: false };
-    const hot = this.#loadGroupHotMessages(sessionId);
-    const cold = this.#loadGroupColdMessages(sessionId);
+    const hot = this.#loadSessionHotMessages(sessionId);
+    const cold = this.#loadSessionColdMessages(sessionId);
     // Cold ids strictly < hot ids by construction → chronological concat.
     const all = [...cold, ...hot];
     const cutoff = Number.isFinite(beforeSeq) ? beforeSeq : Infinity;
@@ -930,7 +998,7 @@ export class ConversationStore {
   }
 
   /**
-   * Visible UI pagination read for one group. Unlike `loadOlderByGroup`, this
+   * Visible UI pagination read for one group. Unlike `loadOlderBySession`, this
    * projects out internal/reflection/system rows BEFORE applying the turn
    * window, so a dense run of hidden metadata cannot force the first screen to
    * scan and materialize the group's entire history in the web bridge.
@@ -940,12 +1008,12 @@ export class ConversationStore {
    * @param {number} [turnsLimit=DEFAULT_RECENT_TURNS]
    * @returns {{ messages: object[], oldestSeq: number|null, hasMore: boolean }}
    */
-  loadVisibleByGroup(sessionId, beforeSeq, turnsLimit = DEFAULT_RECENT_TURNS) {
+  loadVisibleBySession(sessionId, beforeSeq, turnsLimit = DEFAULT_RECENT_TURNS) {
     if (!sessionId || !(turnsLimit > 0)) return { messages: [], oldestSeq: null, hasMore: false };
 
     const cutoff = Number.isFinite(beforeSeq) ? beforeSeq : Infinity;
-    const hot = this.#loadVisibleFromDirsByGroup([...this.#groupMessageDirs('messages', sessionId), this.#legacyMsgDir], sessionId, cutoff);
-    const cold = this.#loadVisibleFromDirsByGroup([...this.#groupMessageDirs('cold', sessionId), this.#legacyColdDir], sessionId, cutoff);
+    const hot = this.#loadVisibleFromDirsBySession([...this.#sessionMessageDirs('messages', sessionId), this.#legacyMsgDir], sessionId, cutoff);
+    const cold = this.#loadVisibleFromDirsBySession([...this.#sessionMessageDirs('cold', sessionId), this.#legacyColdDir], sessionId, cutoff);
     const visible = [...cold, ...hot];
     if (visible.length === 0) return { messages: [], oldestSeq: null, hasMore: false };
 
@@ -981,8 +1049,8 @@ export class ConversationStore {
     const limit = Number.isFinite(opts.limit) && opts.limit > 0 ? opts.limit : 500;
     const cutoff = Number.isFinite(afterSeq) && afterSeq >= 0 ? afterSeq : null;
     if (cutoff === null) return { messages: [], latestSeq: null };
-    const hot = this.#loadGroupHotMessages(sessionId);
-    const cold = this.#loadGroupColdMessages(sessionId);
+    const hot = this.#loadSessionHotMessages(sessionId);
+    const cold = this.#loadSessionColdMessages(sessionId);
     const all = [...cold, ...hot].sort(compareMessagesBySeq);
     const after = all.filter((m) => {
       if (!m || m.sessionId !== sessionId) return false;
@@ -1012,7 +1080,7 @@ export class ConversationStore {
    * @returns {number}
    */
   countHot() {
-    return this.#countFilesInDirs([this.#chatMsgDir, ...this.#groupMessageDirs('messages'), this.#legacyMsgDir]);
+    return this.#countFilesInDirs([this.#chatMsgDir, ...this.#sessionMessageDirs('messages'), this.#legacyMsgDir]);
   }
 
   /**
@@ -1021,7 +1089,7 @@ export class ConversationStore {
    * @returns {number}
    */
   countCold() {
-    return this.#countFilesInDirs([this.#chatColdDir, ...this.#groupMessageDirs('cold'), this.#legacyColdDir]);
+    return this.#countFilesInDirs([this.#chatColdDir, ...this.#sessionMessageDirs('cold'), this.#legacyColdDir]);
   }
 
   /**
@@ -1077,7 +1145,7 @@ export class ConversationStore {
   deleteByGroup(sessionId) {
     if (!sessionId) return 0;
     let removed = 0;
-    for (const dir of [this.#chatMsgDir, this.#chatColdDir, ...this.#groupMessageDirs('messages'), ...this.#groupMessageDirs('cold'), this.#legacyMsgDir, this.#legacyColdDir]) {
+    for (const dir of [this.#chatMsgDir, this.#chatColdDir, ...this.#sessionMessageDirs('messages'), ...this.#sessionMessageDirs('cold'), this.#legacyMsgDir, this.#legacyColdDir]) {
       if (!existsSync(dir)) continue;
       let files;
       try {
@@ -1135,7 +1203,7 @@ export class ConversationStore {
     let scanned = 0;
     let removed = 0;
     const orphans = [];
-    for (const dir of [this.#chatMsgDir, this.#chatColdDir, ...this.#groupMessageDirs('messages'), ...this.#groupMessageDirs('cold'), this.#legacyMsgDir, this.#legacyColdDir]) {
+    for (const dir of [this.#chatMsgDir, this.#chatColdDir, ...this.#sessionMessageDirs('messages'), ...this.#sessionMessageDirs('cold'), this.#legacyMsgDir, this.#legacyColdDir]) {
       if (!existsSync(dir)) continue;
       let files;
       try {
@@ -1189,7 +1257,7 @@ export class ConversationStore {
   reassignThread(sourceId, targetId) {
     if (!sourceId || !targetId || sourceId === targetId) return 0;
     let rewritten = 0;
-    for (const dir of [this.#chatMsgDir, this.#chatColdDir, ...this.#groupMessageDirs('messages'), ...this.#groupMessageDirs('cold'), this.#legacyMsgDir, this.#legacyColdDir]) {
+    for (const dir of [this.#chatMsgDir, this.#chatColdDir, ...this.#sessionMessageDirs('messages'), ...this.#sessionMessageDirs('cold'), this.#legacyMsgDir, this.#legacyColdDir]) {
       if (!existsSync(dir)) continue;
       let files;
       try {
@@ -1268,7 +1336,7 @@ export class ConversationStore {
 
     // Collect source-thread candidate files from both hot + cold dirs.
     const candidates = [];
-    for (const dir of [this.#chatColdDir, this.#chatMsgDir, ...this.#groupMessageDirs('cold'), ...this.#groupMessageDirs('messages'), this.#legacyColdDir, this.#legacyMsgDir]) {
+    for (const dir of [this.#chatColdDir, this.#chatMsgDir, ...this.#sessionMessageDirs('cold'), ...this.#sessionMessageDirs('messages'), this.#legacyColdDir, this.#legacyMsgDir]) {
       if (!existsSync(dir)) continue;
       let files;
       try {
@@ -1375,7 +1443,7 @@ export class ConversationStore {
     }
     // Legacy: messages live in the flat dir stamped with threadId.
     const collected = [];
-    for (const dir of [this.#chatColdDir, this.#chatMsgDir, ...this.#groupMessageDirs('cold'), ...this.#groupMessageDirs('messages'), this.#legacyColdDir, this.#legacyMsgDir]) {
+    for (const dir of [this.#chatColdDir, this.#chatMsgDir, ...this.#sessionMessageDirs('cold'), ...this.#sessionMessageDirs('messages'), this.#legacyColdDir, this.#legacyMsgDir]) {
       if (!existsSync(dir)) continue;
       for (const f of readdirSync(dir).filter(x => x.endsWith('.md'))) {
         try {
@@ -1398,7 +1466,7 @@ export class ConversationStore {
   #messageDirFor(msg) {
     if (msg?.chatId) return join(this.#chatConversationDir(msg.chatId, { create: true }), 'messages');
     if (!msg?.sessionId) return this.#chatMsgDir;
-    return join(this.#groupConversationDir(msg.sessionId, { create: true }), 'messages');
+    return join(this.#sessionConversationDir(msg.sessionId, { create: true }), 'messages');
   }
 
   #chatConversationDir(chatId, { create = false } = {}) {
@@ -1462,7 +1530,7 @@ export class ConversationStore {
     }
   }
 
-  /** Recent messages for a chat — chat mode mirror of loadRecentByGroup. */
+  /** Recent messages for a chat — chat mode mirror of loadRecentBySession. */
   loadRecentByChat(chatId, turnsLimit = DEFAULT_RECENT_TURNS) {
     if (!chatId) return [];
     const all = [
@@ -1474,7 +1542,7 @@ export class ConversationStore {
     return pairSanitize(sliceLastNTurns(filtered, turnsLimit));
   }
 
-  /** VP-scoped chat history — chat-mode mirror of loadGroupHistoryForVp. */
+  /** VP-scoped chat history — chat-mode mirror of loadSessionHistoryForVp. */
   loadChatHistoryForVp(chatId, vpId) {
     if (!chatId || !vpId) return [];
     const all = [
@@ -1496,8 +1564,8 @@ export class ConversationStore {
     return pairSanitize(out);
   }
 
-  #groupConversationDir(sessionId, { create = false } = {}) {
-    const dir = join(this.#groupsDir, this.#safeDirComponent(sessionId), 'conversation');
+  #sessionConversationDir(sessionId, { create = false } = {}) {
+    const dir = join(this.#sessionsDir, this.#safeDirComponent(sessionId), 'conversation');
     if (create) this.#ensureConversationDirs(dir);
     return dir;
   }
@@ -1508,11 +1576,11 @@ export class ConversationStore {
     }
   }
 
-  #groupConversationDirs() {
-    if (!existsSync(this.#groupsDir)) return [];
+  #sessionConversationDirs() {
+    if (!existsSync(this.#sessionsDir)) return [];
     const dirs = [];
-    for (const name of readdirSync(this.#groupsDir)) {
-      const sessionDir = join(this.#groupsDir, name);
+    for (const name of readdirSync(this.#sessionsDir)) {
+      const sessionDir = join(this.#sessionsDir, name);
       try {
         if (!statSync(sessionDir).isDirectory()) continue;
       } catch (err) {
@@ -1525,12 +1593,12 @@ export class ConversationStore {
     return dirs;
   }
 
-  #groupMessageDirs(kind, sessionId = null) {
+  #sessionMessageDirs(kind, sessionId = null) {
     if (sessionId) {
-      const dir = join(this.#groupConversationDir(sessionId), kind);
+      const dir = join(this.#sessionConversationDir(sessionId), kind);
       return existsSync(dir) ? [dir] : [];
     }
-    return this.#groupConversationDirs()
+    return this.#sessionConversationDirs()
       .map(dir => join(dir, kind))
       .filter(dir => existsSync(dir));
   }
@@ -1538,7 +1606,7 @@ export class ConversationStore {
   #hotColdDirPairs({ includeLegacy = true } = {}) {
     const pairs = [
       [this.#chatMsgDir, this.#chatColdDir],
-      ...this.#groupConversationDirs().map(dir => [join(dir, 'messages'), join(dir, 'cold')]),
+      ...this.#sessionConversationDirs().map(dir => [join(dir, 'messages'), join(dir, 'cold')]),
     ];
     if (includeLegacy) pairs.push([this.#legacyMsgDir, this.#legacyColdDir]);
     return pairs;
@@ -1554,22 +1622,22 @@ export class ConversationStore {
     ].sort(compareMessagesBySeq);
   }
 
-  #loadGroupHotMessages(sessionId = null) {
+  #loadSessionHotMessages(sessionId = null) {
     return [
       ...this.#loadFromDir(this.#legacyMsgDir, Infinity).filter(m => m?.sessionId),
-      ...this.#groupMessageDirs('messages', sessionId).flatMap(dir => this.#loadFromDir(dir, Infinity)),
+      ...this.#sessionMessageDirs('messages', sessionId).flatMap(dir => this.#loadFromDir(dir, Infinity)),
     ].sort(compareMessagesBySeq);
   }
 
-  #loadGroupColdMessages(sessionId = null) {
+  #loadSessionColdMessages(sessionId = null) {
     return [
       ...this.#loadFromDir(this.#legacyColdDir, Infinity).filter(m => m?.sessionId),
-      ...this.#groupMessageDirs('cold', sessionId).flatMap(dir => this.#loadFromDir(dir, Infinity)),
+      ...this.#sessionMessageDirs('cold', sessionId).flatMap(dir => this.#loadFromDir(dir, Infinity)),
     ].sort(compareMessagesBySeq);
   }
 
-  #loadGroupMessages(sessionId = null) {
-    return [...this.#loadGroupColdMessages(sessionId), ...this.#loadGroupHotMessages(sessionId)].sort(compareMessagesBySeq);
+  #loadSessionMessages(sessionId = null) {
+    return [...this.#loadSessionColdMessages(sessionId), ...this.#loadSessionHotMessages(sessionId)].sort(compareMessagesBySeq);
   }
 
   #loadAllMessages() {
@@ -1578,8 +1646,8 @@ export class ConversationStore {
       ...this.#loadFromDir(this.#legacyMsgDir, Infinity),
       ...this.#loadFromDir(this.#chatColdDir, Infinity),
       ...this.#loadFromDir(this.#chatMsgDir, Infinity),
-      ...this.#groupMessageDirs('cold').flatMap(dir => this.#loadFromDir(dir, Infinity)),
-      ...this.#groupMessageDirs('messages').flatMap(dir => this.#loadFromDir(dir, Infinity)),
+      ...this.#sessionMessageDirs('cold').flatMap(dir => this.#loadFromDir(dir, Infinity)),
+      ...this.#sessionMessageDirs('messages').flatMap(dir => this.#loadFromDir(dir, Infinity)),
     ].sort(compareMessagesBySeq);
   }
 
@@ -1596,8 +1664,8 @@ export class ConversationStore {
     return total;
   }
 
-  #loadVisibleFromDirsByGroup(dirs, sessionId, beforeSeq) {
-    return dirs.flatMap(dir => this.#loadVisibleFromDirByGroup(dir, sessionId, beforeSeq))
+  #loadVisibleFromDirsBySession(dirs, sessionId, beforeSeq) {
+    return dirs.flatMap(dir => this.#loadVisibleFromDirBySession(dir, sessionId, beforeSeq))
       .sort(compareMessagesBySeq);
   }
 
@@ -1659,7 +1727,7 @@ export class ConversationStore {
     return messages;
   }
 
-  #loadVisibleFromDirByGroup(dir, sessionId, beforeSeq) {
+  #loadVisibleFromDirBySession(dir, sessionId, beforeSeq) {
     if (!existsSync(dir)) return [];
 
     const files = readdirSync(dir)
@@ -1693,7 +1761,7 @@ export class ConversationStore {
     if (this.#nextSeq != null) return this.#nextSeq;
 
     let maxSeq = 0;
-    for (const dir of [this.#chatMsgDir, this.#chatColdDir, ...this.#groupMessageDirs('messages'), ...this.#groupMessageDirs('cold'), this.#legacyMsgDir, this.#legacyColdDir]) {
+    for (const dir of [this.#chatMsgDir, this.#chatColdDir, ...this.#sessionMessageDirs('messages'), ...this.#sessionMessageDirs('cold'), this.#legacyMsgDir, this.#legacyColdDir]) {
       if (!existsSync(dir)) continue;
       for (const file of readdirSync(dir)) {
         const match = file.match(/^m(\d+)\.md$/);

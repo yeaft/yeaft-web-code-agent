@@ -29,14 +29,17 @@ describe('normaliseYeaftSection', () => {
     expect(normaliseYeaftSection(null)).toEqual({
       maxConcurrentThreads: 6,
       autoArchiveIdleDays: 30,
+      recentTurnsLimit: 20,
     });
     expect(normaliseYeaftSection(undefined)).toEqual({
       maxConcurrentThreads: 6,
       autoArchiveIdleDays: 30,
+      recentTurnsLimit: 20,
     });
     expect(normaliseYeaftSection('nope')).toEqual({
       maxConcurrentThreads: 6,
       autoArchiveIdleDays: 30,
+      recentTurnsLimit: 20,
     });
   });
 
@@ -45,17 +48,26 @@ describe('normaliseYeaftSection', () => {
     expect(normaliseYeaftSection({ maxConcurrentThreads: 100 }).maxConcurrentThreads).toBe(50);
     expect(normaliseYeaftSection({ autoArchiveIdleDays: 0 }).autoArchiveIdleDays).toBe(1);
     expect(normaliseYeaftSection({ autoArchiveIdleDays: 5000 }).autoArchiveIdleDays).toBe(3650);
+    // recentTurnsLimit clamps to [1, 500].
+    expect(normaliseYeaftSection({ recentTurnsLimit: 0 }).recentTurnsLimit).toBe(1);
+    expect(normaliseYeaftSection({ recentTurnsLimit: 9999 }).recentTurnsLimit).toBe(500);
   });
 
   it('non-numeric values fall through to defaults (treated as "not set")', () => {
     expect(normaliseYeaftSection({ maxConcurrentThreads: 'nope' }).maxConcurrentThreads).toBe(6);
     expect(normaliseYeaftSection({ autoArchiveIdleDays: null }).autoArchiveIdleDays).toBe(30);
+    expect(normaliseYeaftSection({ recentTurnsLimit: 'nope' }).recentTurnsLimit).toBe(20);
   });
 
   it('accepts valid values', () => {
-    expect(normaliseYeaftSection({ maxConcurrentThreads: 10, autoArchiveIdleDays: 7 })).toEqual({
+    expect(normaliseYeaftSection({
       maxConcurrentThreads: 10,
       autoArchiveIdleDays: 7,
+      recentTurnsLimit: 50,
+    })).toEqual({
+      maxConcurrentThreads: 10,
+      autoArchiveIdleDays: 7,
+      recentTurnsLimit: 50,
     });
   });
 });
@@ -66,6 +78,7 @@ describe('getYeaftSettings', () => {
     expect(settings).toEqual({
       maxConcurrentThreads: 6,
       autoArchiveIdleDays: 30,
+      recentTurnsLimit: 20,
     });
   });
 

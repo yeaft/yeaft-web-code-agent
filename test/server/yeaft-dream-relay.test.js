@@ -87,16 +87,16 @@ describe('agent-output.js — yeaft_dream_status relay', () => {
     });
   });
 
-  it('forwards a groupId-scoped running status to the web client', async () => {
+  it('forwards a sessionId-scoped running status to the web client', async () => {
     addClient('c1');
     await handleAgentOutput('a1', baseAgent, {
       type: 'yeaft_dream_status',
-      groupId: 'grp_team',
+      sessionId: 'grp_team',
       status: 'running',
     });
     expect(_sent[0].envelope).toMatchObject({
       type: 'yeaft_dream_status',
-      groupId: 'grp_team',
+      sessionId: 'grp_team',
       status: 'running',
     });
   });
@@ -131,18 +131,18 @@ describe('agent-output.js — yeaft_dream_result relay', () => {
     expect(env.groups).toHaveLength(1);
   });
 
-  it('forwards a groupId-scoped result', async () => {
+  it('forwards a sessionId-scoped result', async () => {
     addClient('c1');
     await handleAgentOutput('a1', baseAgent, {
       type: 'yeaft_dream_result',
-      groupId: 'grp_team',
+      sessionId: 'grp_team',
       success: true,
       entriesCreated: 1,
       lastDreamAt: '2026-05-13T05:01:00Z',
     });
     expect(_sent[0].envelope).toMatchObject({
       type: 'yeaft_dream_result',
-      groupId: 'grp_team',
+      sessionId: 'grp_team',
       success: true,
       entriesCreated: 1,
     });
@@ -168,7 +168,7 @@ describe('agent-output.js — yeaft_dream_result relay', () => {
     addClient('c1');
     await handleAgentOutput('a1', baseAgent, {
       type: 'yeaft_dream_result',
-      groupId: 'grp_team',
+      sessionId: 'grp_team',
       success: false,
       skipped: true,
       entriesCreated: 0,
@@ -176,7 +176,7 @@ describe('agent-output.js — yeaft_dream_result relay', () => {
     });
     expect(_sent[0].envelope).toMatchObject({
       type: 'yeaft_dream_result',
-      groupId: 'grp_team',
+      sessionId: 'grp_team',
       skipped: true,
       success: false,
     });
@@ -190,7 +190,7 @@ describe('agent-output.js — dream relay broadcast semantics', () => {
     _webClients.set('c3', { __id: 'c3', authenticated: false, userId: 'u1' });
     await handleAgentOutput('a1', baseAgent, {
       type: 'yeaft_dream_status',
-      groupId: 'grp_team',
+      sessionId: 'grp_team',
       status: 'running',
     });
     const ids = _sent.map(s => s.clientId).sort();

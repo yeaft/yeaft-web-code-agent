@@ -455,16 +455,17 @@ export function handleYeaftHistoryChunk(store, msg) {
     return;
   }
   // Stale-chunk guard: between the request fly-out and this chunk landing,
-  // the user may have switched groups (or a group lifecycle event —
-  // create / archive / delete — may have flipped `activeGroupId` under
-  // us). Drop on the floor; the active group's spinner/cursor is keyed
-  // separately so accepting this chunk would cross-pollute group history.
-  // The chunk's groupId is authoritative — it's stamped by the agent
-  // from the request groupId, not from messagesMap state.
+  // the user may have switched sessions (or a session lifecycle event —
+  // create / archive / delete — may have flipped `activeSessionId` under
+  // us). Drop on the floor; the active session's spinner/cursor is keyed
+  // separately so accepting this chunk would cross-pollute session history.
+  // The chunk's sessionId is authoritative — it's stamped by the agent
+  // from the request sessionId, not from messagesMap state.
   const activeFilter = store.yeaftActiveSessionFilter ?? null;
-  const hasChunkGroup = msg.groupId != null;
-  if (hasChunkGroup && activeFilter && msg.groupId !== activeFilter) {
-    const staleKey = msg.groupId ?? '__all__';
+  const msgSessionId = msg.sessionId != null ? msg.sessionId : msg.groupId;
+  const hasChunkGroup = msgSessionId != null;
+  if (hasChunkGroup && activeFilter && msgSessionId !== activeFilter) {
+    const staleKey = msgSessionId ?? '__all__';
     if (store.yeaftSessionHistoryState) {
       store.yeaftSessionHistoryState = {
         ...store.yeaftSessionHistoryState,
@@ -503,7 +504,7 @@ export function handleYeaftHistoryChunk(store, msg) {
         type: 'user',
         content: m.content,
         timestamp: normalizeHistoryTimestamp(m),
-        groupId: m.groupId ?? null,
+        groupId: m.groupId ?? msgSessionId ?? null,
         threadId,
         turnId: m.turnId || threadId,
         ...(Array.isArray(m.attachments) && m.attachments.length > 0 ? { attachments: m.attachments } : {}),
@@ -511,13 +512,13 @@ export function handleYeaftHistoryChunk(store, msg) {
       });
     } else if (m.role === 'assistant') {
       const threadId = m.threadId || m.turnId || 'main';
-      const speakerVpId = resolveHistorySpeakerVpId(m, m.groupId ?? msg.groupId ?? null);
+      const speakerVpId = resolveHistorySpeakerVpId(m, m.groupId ?? msgSessionId ?? null);
       formatted.push({
         ...(stableId ? { id: stableId, messageId: stableId } : {}),
         type: 'assistant',
         content: m.content,
         timestamp: normalizeHistoryTimestamp(m),
-        groupId: m.groupId ?? null,
+        groupId: m.groupId ?? msgSessionId ?? null,
         threadId,
         turnId: m.turnId || threadId,
         ...(speakerVpId ? { vpId: speakerVpId, speakerVpId } : {}),
@@ -531,7 +532,7 @@ export function handleYeaftHistoryChunk(store, msg) {
     store.messagesMap[convId].splice(0, 0, ...formatted);
   }
 
-  const groupKey = msg.groupId ?? '__all__';
+  const groupKey = msgSessionId ?? '__all__';
   const nextState = {
     loaded: true,
     loading: false,

@@ -45,21 +45,6 @@ function hydrateInlinePreviewData(data) {
  *        btw_stream, btw_done, btw_error
  */
 export async function handleAgentOutput(agentId, agent, msg) {
-  // Wire-compat shim: agent/yeaft/web-bridge.js stamps envelopes with
-  // `sessionId` after the groups→sessions rename (PR #881), but the web
-  // client (and every relay case below) still reads `msg.groupId`. Map
-  // one to the other once at the top so each relay case can stay simple
-  // and forward `groupId` verbatim. Mirrors the symmetric coercion done
-  // by the agent's `message-router.js` on inbound web → agent traffic.
-  //
-  // Without this, `yeaft_output` / `yeaft_history_chunk` history replay
-  // arrives at the browser with no group attribution, so the per-group
-  // history state machine (`yeaftSessionHistoryState[id].loading`) never
-  // flips loaded → and the session's message list stays empty.
-  if (msg && typeof msg === 'object') {
-    if (msg.groupId == null && typeof msg.sessionId === 'string') msg.groupId = msg.sessionId;
-    if (msg.sessionId == null && typeof msg.groupId === 'string') msg.sessionId = msg.groupId;
-  }
   switch (msg.type) {
     case 'claude_output':
       // 保存消息到数据库
@@ -409,7 +394,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
             // per-agent rosters (cross-agent listing in the unified
             // sidebar). Older web bundles ignore the extra field.
             agentId: agent.id,
-            ...(msg.groupId != null ? { groupId: msg.groupId } : {}),
+            ...(msg.sessionId != null ? { sessionId: msg.sessionId } : {}),
             ...(msg.vpId != null ? { vpId: msg.vpId } : {}),
             ...(msg.turnId != null ? { turnId: msg.turnId } : {}),
             data,
@@ -433,7 +418,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
           await sendToWebClient(c, {
             type: 'yeaft_history_chunk',
             conversationId: msg.conversationId,
-            ...(msg.groupId != null ? { groupId: msg.groupId } : {}),
+            ...(msg.sessionId != null ? { sessionId: msg.sessionId } : {}),
             messages,
             oldestSeq: msg.oldestSeq ?? null,
             hasMore: !!msg.hasMore,
@@ -464,7 +449,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
         if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
           await sendToWebClient(c, {
             type: msg.type,
-            ...(msg.groupId != null ? { groupId: msg.groupId } : {}),
+            ...(msg.sessionId != null ? { sessionId: msg.sessionId } : {}),
             ...(msg.vpId != null ? { vpId: msg.vpId } : {}),
             ...(msg.status != null ? { status: msg.status } : {}),
             ...(typeof msg.success === 'boolean' ? { success: msg.success } : {}),
@@ -498,7 +483,6 @@ export async function handleAgentOutput(agentId, agent, msg) {
       }
       break;
 
-    case 'group_list_updated':
     case 'session_list_updated': {
       // Server-side persistence for yeaft sessions. Mirror the agent's
       // authoritative snapshot into the `yeaft_sessions` table so the
@@ -507,39 +491,33 @@ export async function handleAgentOutput(agentId, agent, msg) {
       // store — agent's on-disk `~/.yeaft/sessions/` remains canonical.
       // Forwarding to the web continues unchanged below.
       try {
-        const rows = Array.isArray(msg.sessions)
-          ? msg.sessions
-          : (Array.isArray(msg.groups) ? msg.groups : []);
+        const rows = Array.isArray(msg.sessions) ? msg.sessions : [];
         if (agent.ownerId) {
           yeaftSessionDb.reconcileFromSnapshot(agent.ownerId, agent.id, rows);
         }
       } catch (e) {
         console.warn(`[Server] yeaft session persist failed for agent ${agent.id}:`, e?.message || e);
       }
-      // Relay the envelope verbatim to the web. The agent emits both
-      // `group_list_updated` (legacy) and `session_list_updated` (new);
-      // forward whichever we received with the same payload shape +
-      // agentId stamp so the web sessions store can merge per-agent.
+      // Relay verbatim to web (agentId stamped so the web sessions store
+      // can merge per-agent rosters).
       for (const [, c] of webClients) {
         if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
           await sendToWebClient(c, {
             type: msg.type,
             agentId: agent.id,
-            ...(Array.isArray(msg.groups) ? { groups: msg.groups } : {}),
-            ...(Array.isArray(msg.sessions) ? { sessions: msg.sessions } : {}),
+            sessions: Array.isArray(msg.sessions) ? msg.sessions : [],
           });
         }
       }
       break;
     }
 
-    case 'group_roster_changed':
     case 'session_roster_changed': {
       // Delta event — update only the affected session row. Same as
       // above: keep the DB shadow + forward to web.
       try {
         if (agent.ownerId && msg) {
-          const sessionId = msg.sessionId || msg.groupId;
+          const sessionId = msg.sessionId;
           if (sessionId) {
             const existing = yeaftSessionDb.get(sessionId);
             // Roster-delta path is a cache update, not authoritative
@@ -577,7 +555,6 @@ export async function handleAgentOutput(agentId, agent, msg) {
       break;
     }
 
-    case 'group_crud_result':
     case 'session_crud_result': {
       // Surface op result to the web (the only client that cares about
       // requestId routing). Also keep the DB shadow consistent for
@@ -585,7 +562,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
       // that follows from the agent.
       try {
         const op = msg.op;
-        const sessionId = msg.sessionId || msg.groupId;
+        const sessionId = msg.sessionId;
         if (msg.ok && sessionId && (op === 'delete' || op === 'archive')) {
           yeaftSessionDb.delete(sessionId);
         }
@@ -605,8 +582,6 @@ export async function handleAgentOutput(agentId, agent, msg) {
       // snapshot from the agent to the web client that requested it via
       // `yeaft_fetch_debug_history`. Without this case the agent's
       // bare-message reply is dropped here and the UI never hydrates.
-      // Whitelist `loops`/`turns`/`groupId`/`threadId`/`error` to fence
-      // off accidental leakage of new fields in future schema bumps.
       for (const [, c] of webClients) {
         if (c.authenticated && (CONFIG.skipAuth || c.userId === agent.ownerId)) {
           await sendToWebClient(c, {
@@ -614,7 +589,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
             loops: Array.isArray(msg.loops) ? msg.loops : [],
             turns: Array.isArray(msg.turns) ? msg.turns : [],
             dreamEvents: Array.isArray(msg.dreamEvents) ? msg.dreamEvents : [],
-            ...(msg.groupId != null ? { groupId: msg.groupId } : {}),
+            ...(msg.sessionId != null ? { sessionId: msg.sessionId } : {}),
             ...(msg.threadId != null ? { threadId: msg.threadId } : {}),
             ...(msg.error != null ? { error: msg.error } : {}),
           });

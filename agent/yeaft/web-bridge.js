@@ -55,6 +55,8 @@ import {
 import { persistYeaftAttachments, attachmentsForPersistence, persistedAttachmentPreviewPayload } from './attachments.js';
 import { parseSeqFromId } from './conversation/persist.js';
 import { sliceLastNTurns } from './turn-utils.js';
+import { pairSanitize } from './pair-sanitize.js';
+import { filterSnapshotForVp } from './snapshot-filter.js';
 import { createVpStatusBroker } from './vp-status-broker.js';
 import { classifyThread as defaultClassifyThread, fallbackTitle } from './vp/thread-classifier.js';
 
@@ -221,7 +223,7 @@ const vpCurrentTodos = new Map();
  *                     router: ReturnType<typeof createRouter>,
  *                     sessionHandle: object }>}
  */
-const groupContexts = new Map();
+const sessionContexts = new Map();
 
 function vpKey(sessionId, vpId) {
   return `${sessionId}::${vpId}`;
@@ -356,7 +358,7 @@ async function waitForRoutePromises(msgId) {
  */
 function invalidateGroupContext(sessionId) {
   if (!sessionId) return;
-  groupContexts.delete(sessionId);
+  sessionContexts.delete(sessionId);
   const prefix = `${sessionId}::`;
   for (const [k, ctrl] of vpAborts) {
     if (!k.startsWith(prefix)) continue;
@@ -458,7 +460,7 @@ let _vpUnsubscribe = null;
 
 /**
  * Per-group conversation history lives on the GroupContext entry
- * (`groupContexts.get(sessionId).history`). The pre-refactor module-level
+ * (`sessionContexts.get(sessionId).history`). The pre-refactor module-level
  * `conversationMessages` was a single array shared across every group —
  * a user prompt in group-A would leak into group-B's next-turn snapshot
  * because the bridge appended every turn to the same array regardless
@@ -466,7 +468,7 @@ let _vpUnsubscribe = null;
  * the in-memory tape was unified.
  *
  * Post-refactor: each GroupContext owns its own `history`, lazily
- * hydrated from `conversationStore.loadRecentByGroup(sessionId)` on first
+ * hydrated from `conversationStore.loadRecentBySession(sessionId)` on first
  * access. Group-A and group-B are isolated.
  *
  * @typedef {Array<{role:'user'|'assistant'|'tool', content:string|Array, toolCalls?:Array, toolCallId?:string, isError?:boolean}>} GroupHistory
@@ -482,7 +484,7 @@ let _vpUnsubscribe = null;
  *   from disk (or explicitly assigned). The flag is required because an
  *   empty array is legitimate post-consolidate / post-clear state and
  *   MUST NOT trigger a re-hydrate. Without the flag, a partial entry
- *   would short-circuit `getOrCreateGroupHistory` on truthy `[]` and skip
+ *   would short-circuit `getOrCreateSessionHistory` on truthy `[]` and skip
  *   the disk load.
  */
 
@@ -602,26 +604,26 @@ function loadVisibleGroupHistoryPage(store, sessionId, limit, beforeSeq = null) 
 
   let rows = [];
   try {
-    if (typeof store.loadVisibleByGroup === 'function') {
-      const page = store.loadVisibleByGroup(sessionId, beforeSeq, limit);
+    if (typeof store.loadVisibleBySession === 'function') {
+      const page = store.loadVisibleBySession(sessionId, beforeSeq, limit);
       return {
         messages: (page.messages || []).map(projectPersistedToVisibleHistoryEntry).filter(Boolean),
         oldestSeq: (typeof page.oldestSeq === 'number') ? page.oldestSeq : null,
         hasMore: !!page.hasMore,
       };
-    } else if (typeof store.loadOlderByGroup === 'function') {
+    } else if (typeof store.loadOlderBySession === 'function') {
       // Compatibility fallback for older test doubles: use an unbounded raw
       // prefix, then project/slice visible rows below.
-      rows = store.loadOlderByGroup(sessionId, beforeSeq, Infinity).messages || [];
+      rows = store.loadOlderBySession(sessionId, beforeSeq, Infinity).messages || [];
     } else if (Number.isFinite(beforeSeq)) {
-      const all = typeof store.loadAllByGroup === 'function'
-        ? store.loadAllByGroup(sessionId)
-        : store.loadRecentByGroup(sessionId, Infinity);
+      const all = typeof store.loadAllBySession === 'function'
+        ? store.loadAllBySession(sessionId)
+        : store.loadRecentBySession(sessionId, Infinity);
       rows = all.filter(m => parseSeqFromId(m?.id) < beforeSeq);
-    } else if (typeof store.loadAllByGroup === 'function') {
-      rows = store.loadAllByGroup(sessionId);
+    } else if (typeof store.loadAllBySession === 'function') {
+      rows = store.loadAllBySession(sessionId);
     } else {
-      rows = store.loadRecentByGroup(sessionId, Infinity);
+      rows = store.loadRecentBySession(sessionId, Infinity);
     }
   } catch (err) {
     console.error('[Yeaft] visible history page load failed:', err?.message || err);
@@ -658,7 +660,7 @@ function hydrateGroupHistory(sessionId) {
   if (!session?.conversationStore || !sessionId) return [];
   let recent;
   try {
-    recent = session.conversationStore.loadRecentByGroup(sessionId);
+    recent = session.conversationStore.loadRecentBySession(sessionId);
   } catch (err) {
     console.warn('[Yeaft] hydrateGroupHistory failed (sessionId=%s):', sessionId, err?.message || err);
     return [];
@@ -674,7 +676,7 @@ function hydrateGroupHistory(sessionId) {
 /**
  * Get-or-create the per-group history array. Used everywhere the bridge
  * needs to read/append/snapshot a group's conversation tape. Lazily
- * inserts an entry into `groupContexts` on first access — no
+ * inserts an entry into `sessionContexts` on first access — no
  * `sessionHandle` required (history is independent of coord/router
  * lifecycle, so a sub-agent / route_forward path that hasn't yet
  * opened the group can still read history).
@@ -687,9 +689,9 @@ function hydrateGroupHistory(sessionId) {
  * @param {string} sessionId
  * @returns {GroupHistory}
  */
-function getOrCreateGroupHistory(sessionId) {
+function getOrCreateSessionHistory(sessionId) {
   if (!sessionId) return [];
-  let entry = groupContexts.get(sessionId);
+  let entry = sessionContexts.get(sessionId);
   // Use `historyHydrated` rather than truthiness on `history` itself —
   // an empty array (post-consolidate, post-clear, or a partial entry
   // seeded by an early `getOrCreateSessionContext` call before data was
@@ -699,7 +701,7 @@ function getOrCreateGroupHistory(sessionId) {
   if (entry && entry.historyHydrated) return entry.history;
   if (!entry) {
     entry = makeGroupContextStub();
-    groupContexts.set(sessionId, entry);
+    sessionContexts.set(sessionId, entry);
   }
   entry.history = hydrateGroupHistory(sessionId);
   entry.historyHydrated = true;
@@ -720,10 +722,10 @@ function getOrCreateGroupHistory(sessionId) {
  */
 function setGroupHistory(sessionId, next) {
   if (!sessionId) return;
-  let entry = groupContexts.get(sessionId);
+  let entry = sessionContexts.get(sessionId);
   if (!entry) {
     entry = makeGroupContextStub();
-    groupContexts.set(sessionId, entry);
+    sessionContexts.set(sessionId, entry);
   }
   entry.history = next;
   entry.historyHydrated = true;
@@ -737,7 +739,7 @@ function setGroupHistory(sessionId, next) {
  * @param {string} sessionId
  */
 export function __testGroupHistory(sessionId) {
-  return getOrCreateGroupHistory(sessionId);
+  return getOrCreateSessionHistory(sessionId);
 }
 
 /**
@@ -758,12 +760,12 @@ export function __testSetSession(sessionLike) {
 /**
  * Test-only: peek at the GroupContext entry for a group (or undefined
  * if never seeded). Lets tests assert the `historyHydrated` flag without
- * exporting the entire `groupContexts` Map.
+ * exporting the entire `sessionContexts` Map.
  *
  * @param {string} sessionId
  */
 export function __testGroupContextEntry(sessionId) {
-  return groupContexts.get(sessionId);
+  return sessionContexts.get(sessionId);
 }
 
 /**
@@ -887,9 +889,9 @@ function getOrCreateVpEngine(sessionId, vpId, threadId = 'main') {
  * @returns {{ coord: object, router: object, sessionHandle: object }}
  */
 function getOrCreateSessionContext(sessionId, sessionHandle) {
-  let entry = groupContexts.get(sessionId);
+  let entry = sessionContexts.get(sessionId);
   if (entry && entry.coord && entry.router) return entry;
-  // Either no entry, or a partial entry seeded by `getOrCreateGroupHistory`
+  // Either no entry, or a partial entry seeded by `getOrCreateSessionHistory`
   // (no coord/router yet). Build the coord/router and merge into the
   // existing record so the per-group history reference and hydration
   // flag are preserved.
@@ -899,13 +901,13 @@ function getOrCreateSessionContext(sessionId, sessionHandle) {
   const router = createRouter({ coordinator: coord });
   if (!entry) {
     entry = makeGroupContextStub();
-    groupContexts.set(sessionId, entry);
+    sessionContexts.set(sessionId, entry);
   }
   entry.coord = coord;
   entry.router = router;
   entry.sessionHandle = sessionHandle;
   // Defend against a future caller that builds a coord/router without
-  // having gone through `getOrCreateGroupHistory` first: a partial entry
+  // having gone through `getOrCreateSessionHistory` first: a partial entry
   // could exist with `historyHydrated:false`, so do the load now.
   if (!entry.historyHydrated) {
     entry.history = hydrateGroupHistory(sessionId);
@@ -1048,8 +1050,13 @@ function ensureDriverRunning(sessionId, vpId, threadId = 'main') {
       vpAborts.set(key, vpAbort);
       turnAbortCtrls.set(turnId, vpAbort);
       turnAbortMeta.set(turnId, { sessionId, vpId, threadId: thread.threadId, key });
-      const baseSnapshot = getOrCreateGroupHistory(sessionId)
-        .filter((m) => !m.threadId || m.threadId === 'main' || m.threadId === thread.threadId);
+      const baseSnapshot = pairSanitize(
+        filterSnapshotForVp(
+          getOrCreateSessionHistory(sessionId)
+            .filter((m) => !m.threadId || m.threadId === 'main' || m.threadId === thread.threadId),
+          vpId,
+        ),
+      );
       const trigger = envelope?.trigger || 'fallback';
       const { text, prompt, promptParts } = buildVpPromptPayload(vpId, envelope);
 
@@ -1104,7 +1111,7 @@ function ensureDriverRunning(sessionId, vpId, threadId = 'main') {
       try {
         if (text && envelope?.msg) {
           sendYeaftEvent({
-            type: 'group_message',
+            type: 'session_message',
             sessionId,
             vpId,
             threadId: thread.threadId,
@@ -1226,7 +1233,7 @@ export async function __testResetVpState() {
   vpDrivers.clear();
   vpEngines.clear();
   vpAborts.clear();
-  groupContexts.clear();
+  sessionContexts.clear();
   vpCurrentTodos.clear();
   threadClassifier = defaultClassifyThread;
   // Per-group compact in-flight + pending state lives on the session's
@@ -1413,49 +1420,36 @@ export function handleYeaftVpRead(msg) {
 }
 
 /**
- * Group CRUD wired to WS events.
+ * Session CRUD wired to WS events.
  */
-function sendGroupCrudResult(payload) {
-  // Wire-compat: emit BOTH legacy `group_crud_result` (old web bundles)
-  // and the new `session_crud_result` alias. Payload includes both
-  // `groupId` and `sessionId` for the same reason — see below.
-  const out = { ...payload };
-  if (out.sessionId != null && out.groupId == null) out.groupId = out.sessionId;
-  if (out.groupId != null && out.sessionId == null) out.sessionId = out.groupId;
-  sendYeaftEvent({ type: 'group_crud_result', ...out });
-  sendYeaftEvent({ type: 'session_crud_result', ...out });
+function sendSessionCrudResult(payload) {
+  sendYeaftEvent({ type: 'session_crud_result', ...payload });
 }
 
-function sendGroupSnapshotBroadcast() {
+function sendSessionSnapshotBroadcast() {
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     if (!yeaftDir) return;
     const sessions = snapshotSessions(yeaftDir);
-    // Wire-compat: emit both legacy `group_list_updated` (groups field)
-    // and new `session_list_updated` (sessions field). Old web bundles
-    // listen on the former.
-    sendYeaftEvent({ type: 'group_list_updated', groups: sessions });
     sendYeaftEvent({ type: 'session_list_updated', sessions });
   } catch (err) {
-    console.warn('[Yeaft] sendGroupSnapshotBroadcast failed:', err?.message || err);
+    console.warn('[Yeaft] sendSessionSnapshotBroadcast failed:', err?.message || err);
   }
 }
 
-function sendGroupRosterChanged(session) {
+function sendSessionRosterChanged(session) {
   if (!session) return;
   const payload = {
     sessionId: session.id,
-    groupId: session.id, // wire-compat for old web bundles
     name: session.name,
     roster: session.roster,
     defaultVpId: session.defaultVpId,
     workDir: session.workDir || '',
   };
-  sendYeaftEvent({ type: 'group_roster_changed', ...payload });
   sendYeaftEvent({ type: 'session_roster_changed', ...payload });
 }
 
-function groupErrorPayload(err) {
+function sessionErrorPayload(err) {
   let code = 'unknown';
   if (err instanceof SessionCrudError) code = err.code;
   else if (err instanceof SessionConfigError) code = err.code;
@@ -1471,9 +1465,9 @@ export function handleYeaftListSessions(msg) {
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     const groups = snapshotSessions(yeaftDir);
-    sendGroupCrudResult({ op: 'list', requestId, ok: true, groups });
+    sendSessionCrudResult({ op: 'list', requestId, ok: true, sessions: groups });
   } catch (err) {
-    sendGroupCrudResult({ op: 'list', requestId, ok: false, error: groupErrorPayload(err) });
+    sendSessionCrudResult({ op: 'list', requestId, ok: false, error: sessionErrorPayload(err) });
   }
 }
 
@@ -1483,10 +1477,10 @@ export function handleYeaftCreateSession(msg) {
   try {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     const group = createSessionFromSpec(yeaftDir, payload);
-    sendGroupCrudResult({ op: 'create', requestId, ok: true, group });
-    sendGroupSnapshotBroadcast();
+    sendSessionCrudResult({ op: 'create', requestId, ok: true, session: group });
+    sendSessionSnapshotBroadcast();
   } catch (err) {
-    sendGroupCrudResult({ op: 'create', requestId, ok: false, error: groupErrorPayload(err) });
+    sendSessionCrudResult({ op: 'create', requestId, ok: false, error: sessionErrorPayload(err) });
   }
 }
 
@@ -1498,10 +1492,10 @@ export function handleYeaftRenameSession(msg) {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     const group = renameSession(yeaftDir, sessionId, name);
     invalidateGroupContext(sessionId);
-    sendGroupCrudResult({ op: 'rename', requestId, ok: true, group });
-    sendGroupSnapshotBroadcast();
+    sendSessionCrudResult({ op: 'rename', requestId, ok: true, session: group });
+    sendSessionSnapshotBroadcast();
   } catch (err) {
-    sendGroupCrudResult({ op: 'rename', requestId, ok: false, error: groupErrorPayload(err) });
+    sendSessionCrudResult({ op: 'rename', requestId, ok: false, error: sessionErrorPayload(err) });
   }
 }
 
@@ -1538,10 +1532,10 @@ export function handleYeaftUpdateSession(msg) {
       group = updateSessionAnnouncement(yeaftDir, sessionId, patch.announcement);
     }
     invalidateGroupContext(sessionId);
-    sendGroupCrudResult({ op: 'update', requestId, ok: true, group });
-    sendGroupSnapshotBroadcast();
+    sendSessionCrudResult({ op: 'update', requestId, ok: true, session: group });
+    sendSessionSnapshotBroadcast();
   } catch (err) {
-    sendGroupCrudResult({ op: 'update', requestId, ok: false, error: groupErrorPayload(err) });
+    sendSessionCrudResult({ op: 'update', requestId, ok: false, error: sessionErrorPayload(err) });
   }
 }
 
@@ -1568,10 +1562,10 @@ export function handleYeaftUpdateSessionConfig(msg) {
       if (k.startsWith(prefix)) vpEngines.delete(k);
     }
     invalidateGroupContext(sessionId);
-    sendGroupCrudResult({ op: 'update_config', requestId, ok: true, sessionId, config: savedConfig });
-    sendGroupSnapshotBroadcast();
+    sendSessionCrudResult({ op: 'update_config', requestId, ok: true, sessionId, config: savedConfig });
+    sendSessionSnapshotBroadcast();
   } catch (err) {
-    sendGroupCrudResult({ op: 'update_config', requestId, ok: false, error: groupErrorPayload(err) });
+    sendSessionCrudResult({ op: 'update_config', requestId, ok: false, error: sessionErrorPayload(err) });
   }
 }
 
@@ -1582,10 +1576,10 @@ export function handleYeaftArchiveSession(msg) {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     const result = archiveSession(yeaftDir, sessionId);
     invalidateGroupContext(sessionId);
-    sendGroupCrudResult({ op: 'archive', requestId, ok: true, sessionId: result.sessionId });
-    sendGroupSnapshotBroadcast();
+    sendSessionCrudResult({ op: 'archive', requestId, ok: true, sessionId: result.sessionId });
+    sendSessionSnapshotBroadcast();
   } catch (err) {
-    sendGroupCrudResult({ op: 'archive', requestId, ok: false, error: groupErrorPayload(err) });
+    sendSessionCrudResult({ op: 'archive', requestId, ok: false, error: sessionErrorPayload(err) });
   }
 }
 
@@ -1616,16 +1610,16 @@ export function handleYeaftDeleteSession(msg) {
     for (const k of Array.from(vpEngines.keys())) {
       if (k.startsWith(prefix)) vpEngines.delete(k);
     }
-    sendGroupCrudResult({
+    sendSessionCrudResult({
       op: 'delete',
       requestId,
       ok: true,
       sessionId: result.sessionId,
       messagesRemoved,
     });
-    sendGroupSnapshotBroadcast();
+    sendSessionSnapshotBroadcast();
   } catch (err) {
-    sendGroupCrudResult({ op: 'delete', requestId, ok: false, error: groupErrorPayload(err) });
+    sendSessionCrudResult({ op: 'delete', requestId, ok: false, error: sessionErrorPayload(err) });
   }
 }
 
@@ -1637,10 +1631,10 @@ export function handleYeaftSessionAddMember(msg) {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     const group = addMember(yeaftDir, sessionId, vpId);
     invalidateGroupContext(sessionId);
-    sendGroupCrudResult({ op: 'add_member', requestId, ok: true, group });
-    sendGroupRosterChanged(group);
+    sendSessionCrudResult({ op: 'add_member', requestId, ok: true, session: group });
+    sendSessionRosterChanged(group);
   } catch (err) {
-    sendGroupCrudResult({ op: 'add_member', requestId, ok: false, error: groupErrorPayload(err) });
+    sendSessionCrudResult({ op: 'add_member', requestId, ok: false, error: sessionErrorPayload(err) });
   }
 }
 
@@ -1658,10 +1652,10 @@ export function handleYeaftSessionRemoveMember(msg) {
     for (const key of Array.from(vpEngines.keys())) {
       if (key.startsWith(removedPrefix)) vpEngines.delete(key);
     }
-    sendGroupCrudResult({ op: 'remove_member', requestId, ok: true, group });
-    sendGroupRosterChanged(group);
+    sendSessionCrudResult({ op: 'remove_member', requestId, ok: true, session: group });
+    sendSessionRosterChanged(group);
   } catch (err) {
-    sendGroupCrudResult({ op: 'remove_member', requestId, ok: false, error: groupErrorPayload(err) });
+    sendSessionCrudResult({ op: 'remove_member', requestId, ok: false, error: sessionErrorPayload(err) });
   }
 }
 
@@ -1673,10 +1667,10 @@ export function handleYeaftSessionSetDefaultVp(msg) {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
     const group = setSessionDefaultVp(yeaftDir, sessionId, vpId);
     invalidateGroupContext(sessionId);
-    sendGroupCrudResult({ op: 'set_default_vp', requestId, ok: true, group });
-    sendGroupRosterChanged(group);
+    sendSessionCrudResult({ op: 'set_default_vp', requestId, ok: true, session: group });
+    sendSessionRosterChanged(group);
   } catch (err) {
-    sendGroupCrudResult({ op: 'set_default_vp', requestId, ok: false, error: groupErrorPayload(err) });
+    sendSessionCrudResult({ op: 'set_default_vp', requestId, ok: false, error: sessionErrorPayload(err) });
   }
 }
 
@@ -2153,12 +2147,12 @@ function handleEngineEvent(event, hctx) {
 }
 
 /**
- * Handle a yeaft_group_chat message from the web UI — the SOLE Yeaft
+ * Handle a yeaft_session_chat message from the web UI — the SOLE Yeaft
  * conversation entry point.
  *
  * Contract (post-consolidation, was previously split between handleYeaftChat
  * and handleYeaftSessionSend):
- *   - Frontend ALWAYS sends `yeaft_group_chat`. There is no `yeaft_chat`.
+ *   - Frontend ALWAYS sends `yeaft_session_chat`. There is no `yeaft_chat`.
  *   - `sessionId` defaults to `'grp_default'` if missing — Yeaft is a single
  *     conversation backed by the default group; the user is never "outside"
  *     a group.
@@ -2230,10 +2224,10 @@ export async function handleYeaftSessionSend(msg) {
       // default-group row across agents. Now we surface the not-found
       // case so the web can show an "agent offline / session missing"
       // hint instead of silently creating a different session.
-      console.warn('[Yeaft] yeaft_group_chat: sessionId %s not found', sessionId);
+      console.warn('[Yeaft] yeaft_session_chat: sessionId %s not found', sessionId);
     }
   } catch (err) {
-    console.warn('[Yeaft] yeaft_group_chat: group open failed', err?.message || err);
+    console.warn('[Yeaft] yeaft_session_chat: group open failed', err?.message || err);
   }
 
   if (!sessionHandle) {
@@ -2267,7 +2261,7 @@ export async function handleYeaftSessionSend(msg) {
       if (rosterMutated) {
         try { sessionHandle.close && sessionHandle.close(); } catch { /* best-effort */ }
         sessionHandle = openSession(sessionRoot, sessionId);
-        sendGroupRosterChanged(sessionHandle.getMeta());
+        sendSessionRosterChanged(sessionHandle.getMeta());
       }
     }
     const meta2 = sessionHandle.getMeta();
@@ -2276,12 +2270,12 @@ export async function handleYeaftSessionSend(msg) {
         setSessionDefaultVp(yeaftDir, sessionId, meta2.roster[0]);
         try { sessionHandle.close && sessionHandle.close(); } catch { /* best-effort */ }
         sessionHandle = openSession(sessionRoot, sessionId);
-        sendGroupRosterChanged(sessionHandle.getMeta());
+        sendSessionRosterChanged(sessionHandle.getMeta());
         rosterMutated = true;
       } catch { /* best-effort */ }
     }
   } catch (err) {
-    console.warn('[Yeaft] yeaft_group_chat: auto-roster heal failed', err?.message || err);
+    console.warn('[Yeaft] yeaft_session_chat: auto-roster heal failed', err?.message || err);
   }
 
   // task-707: per-group persistent coordinator/router. Created once per
@@ -2290,7 +2284,7 @@ export async function handleYeaftSessionSend(msg) {
   // we replace the cached coord so it points at the freshly-opened
   // sessionHandle.
   if (rosterMutated) {
-    groupContexts.delete(sessionId);
+    sessionContexts.delete(sessionId);
   }
   const sessionCtx = getOrCreateSessionContext(sessionId, sessionHandle);
   const coord = sessionCtx.coord;
@@ -2314,7 +2308,7 @@ export async function handleYeaftSessionSend(msg) {
     try {
       attachmentBundle = persistYeaftAttachments(inboundFiles, { subdir: sessionId });
     } catch (err) {
-      console.warn('[Yeaft] yeaft_group_chat: attachment persist failed', err?.message || err);
+      console.warn('[Yeaft] yeaft_session_chat: attachment persist failed', err?.message || err);
     }
   }
   // Surface partial / total upload failures to the user. We don't abort
@@ -2353,7 +2347,7 @@ export async function handleYeaftSessionSend(msg) {
       _promptSuffix: attachmentBundle.promptSuffix,
     });
   } catch (err) {
-    console.warn('[Yeaft] yeaft_group_chat: coord.ingest failed', err?.message || err);
+    console.warn('[Yeaft] yeaft_session_chat: coord.ingest failed', err?.message || err);
     sendYeaftOutput({
       type: 'assistant',
       message: { content: [{ type: 'text', text: `⚠️ Group dispatch error: ${err?.message || err}` }] },
@@ -2557,7 +2551,7 @@ async function ensureSessionLoaded() {
 
   yeaftConversationId = `yeaft-${Date.now()}`;
 
-  // Per-group history is hydrated lazily on first `getOrCreateGroupHistory`
+  // Per-group history is hydrated lazily on first `getOrCreateSessionHistory`
   // — there's no global "all conversations" tape any more.
 
   sendYeaftEvent({
@@ -2570,7 +2564,7 @@ async function ensureSessionLoaded() {
     tools: session.status.tools,
     yeaftDir: ctx.CONFIG?.yeaftDir || null,
   });
-  sendGroupSnapshotBroadcast();
+  sendSessionSnapshotBroadcast();
   // vp-status: rebuild frontend status table from authoritative agent
   // memory. Sent unconditionally so reconnect/refresh paths get the same
   // bootstrap as first-load (the broker dedup logic makes a redundant
@@ -2696,7 +2690,7 @@ async function raceWithEscalation(inner, { deadlineMs, onEscalate }) {
  * appended to `conversationMessages`.
  *
  * task-707: takes a coordinator `envelope` rather than the coordinator
- * itself; the persistent coord lives in `groupContexts[sessionId]`. Uses
+ * itself; the persistent coord lives in `sessionContexts[sessionId]`. Uses
  * `getOrCreateVpEngine(sessionId, vpId)` so each VP runs against its own
  * Engine instance — private state (`#currentAbortCtrl`, `#__queryCounter`,
  * `#pendingT2`, `#abortReason`, `#adjustRanByGroup`, `#execLog`) does not
@@ -2777,10 +2771,10 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
 
       // task-707: per-VP engine + persistent group coord. The coord is
       // created in handleYeaftSessionSend via getOrCreateSessionContext and
-      // cached on `groupContexts`; we pull it here so route_forward
+      // cached on `sessionContexts`; we pull it here so route_forward
       // (router built from this same coord) lands envelopes back on the
       // right inbox set.
-      const sessionCtx = groupContexts.get(sessionId);
+      const sessionCtx = sessionContexts.get(sessionId);
       const sessionCoordinator = sessionCtx?.coord || null;
       const queryOpts = buildVpQueryOpts({
         vpId,
@@ -2839,7 +2833,7 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
       }
 
       // Turn completed — atomically append this VP's output to shared history.
-      appendTurnToGroupHistory(sessionId, threadId, [prompt, ...appendedUserPrompts], assistantTextParts, toolCallsAccum, toolResultsAccum, thinkingBlocksAccum);
+      appendTurnToSessionHistory(sessionId, threadId, vpId, [prompt, ...appendedUserPrompts], assistantTextParts, toolCallsAccum, toolResultsAccum, thinkingBlocksAccum);
 
       sendYeaftOutput({
         type: 'assistant',
@@ -2957,23 +2951,31 @@ async function runVpTurn({ prompt, promptParts = null, sessionId, vpId, threadId
  * exactly once, with the same threadId as the running thread. The
  * engine's own `conversationMessages` (with T1/T2 collapse applied)
  * is persisted to disk via stop-hooks, so the next turn's history is
- * read from disk via `loadRecentByGroup` on next session boot. Within
+ * read from disk via `loadRecentBySession` on next session boot. Within
  * a session, this in-memory tape carries the un-collapsed form — which
  * is fine because each VP turn's `engine.query` re-collapses on the fly.
  */
-function appendTurnToGroupHistory(sessionId, threadId, prompts, assistantTextParts, toolCallsAccum, toolResultsAccum, thinkingBlocksAccum) {
+function appendTurnToSessionHistory(sessionId, threadId, vpId, prompts, assistantTextParts, toolCallsAccum, toolResultsAccum, thinkingBlocksAccum) {
   if (!sessionId) return;
-  const history = getOrCreateGroupHistory(sessionId);
+  const history = getOrCreateSessionHistory(sessionId);
   const promptList = Array.isArray(prompts) ? prompts : [prompts];
   for (const prompt of promptList) {
     if (typeof prompt === 'string' && prompt.trim()) {
+      // user rows intentionally carry NO speakerVpId — every VP in the
+      // session should see the prompt in their history.
       history.push({ role: 'user', content: prompt, threadId: threadId || 'main' });
     }
   }
 
   const fullText = assistantTextParts.join('');
   if (fullText || toolCallsAccum.length > 0) {
+    // Stamp speakerVpId on assistant + tool rows so the in-memory
+    // baseSnapshot filter (filterSnapshotForVp) can mirror the disk
+    // replay's per-VP isolation rules. Without this stamp, the next
+    // VP turn would inherit the previous VP's tool_use ids without
+    // matching tool_result rows → Anthropic API 422.
     const assistantMsg = { role: 'assistant', content: fullText, threadId: threadId || 'main' };
+    if (vpId) assistantMsg.speakerVpId = vpId;
     if (toolCallsAccum.length > 0) {
       assistantMsg.toolCalls = toolCallsAccum.map(tc => ({
         id: tc.id,
@@ -2985,7 +2987,9 @@ function appendTurnToGroupHistory(sessionId, threadId, prompts, assistantTextPar
     // requires us to echo them back on the next request or the API
     // returns "content[].thinking in the thinking mode must be passed
     // back to the API". The signature is server-private — it stays in
-    // this in-memory history and in agent-side persistence only.
+    // this in-memory history and in agent-side persistence only. The
+    // signature is also VP-private; filterSnapshotForVp drops it from
+    // OTHER VPs' rows before each turn's payload is built.
     if (Array.isArray(thinkingBlocksAccum) && thinkingBlocksAccum.length > 0) {
       assistantMsg.thinkingBlocks = thinkingBlocksAccum.map(tb => (
         tb.redacted
@@ -2996,13 +3000,15 @@ function appendTurnToGroupHistory(sessionId, threadId, prompts, assistantTextPar
     history.push(assistantMsg);
 
     for (const tr of toolResultsAccum) {
-      history.push({
+      const toolMsg = {
         role: 'tool',
         toolCallId: tr.toolCallId,
         content: tr.content,
         isError: tr.isError,
         threadId: threadId || 'main',
-      });
+      };
+      if (vpId) toolMsg.speakerVpId = vpId;
+      history.push(toolMsg);
     }
   }
 }
@@ -3611,11 +3617,11 @@ export function handleYeaftModelSwitch(msg) {
 export async function handleYeaftLoadHistory(msg) {
   const sessionId = (msg && typeof msg.sessionId === 'string' && msg.sessionId) || null;
   // `lim` is now expressed in TURNS, not raw messages. `loadRecent` and
-  // `loadRecentByGroup` use turn-based slicing so the cut never lands
+  // `loadRecentBySession` use turn-based slicing so the cut never lands
   // mid-tool-arc. Pass `undefined` to use the persistence-layer default
   // (DEFAULT_RECENT_TURNS = 20 turns).
   const pickRecent = (store, lim) =>
-    sessionId ? store.loadRecentByGroup(sessionId, lim) : store.loadRecent(lim);
+    sessionId ? store.loadRecentBySession(sessionId, lim) : store.loadRecent(lim);
 
   if (!session) {
     const yeaftDir = ctx.CONFIG?.yeaftDir;
@@ -3629,7 +3635,7 @@ export async function handleYeaftLoadHistory(msg) {
 
     yeaftConversationId = `yeaft-${Date.now()}`;
 
-    // Per-group history hydrates lazily via getOrCreateGroupHistory.
+    // Per-group history hydrates lazily via getOrCreateSessionHistory.
     // When the load-history call carries a sessionId, force-refresh THAT
     // group's tape so the next user message sees on-disk state. When
     // it doesn't (legacy callers), do nothing — the per-group lazy
@@ -3653,7 +3659,7 @@ export async function handleYeaftLoadHistory(msg) {
     tools: session.status.tools,
     yeaftDir: ctx.CONFIG?.yeaftDir || null,
   });
-  sendGroupSnapshotBroadcast();
+  sendSessionSnapshotBroadcast();
   // vp-status: replay the authoritative table on reconnect so a refreshed
   // frontend doesn't have to wait for the next transition to learn each
   // VP's current state.
@@ -3778,8 +3784,8 @@ export async function handleYeaftLoadHistory(msg) {
   // replay, only scoped per-(group, vp) summaries count; legacy compact.md is
   // reserved for non-group / pre-scoped 1:1 callers.
   let hasCompactSummaryFlag = !!compactSummary;
-  if (sessionId && typeof session.conversationStore.hasAnyCompactSummaryForGroup === 'function') {
-    hasCompactSummaryFlag = session.conversationStore.hasAnyCompactSummaryForGroup(sessionId);
+  if (sessionId && typeof session.conversationStore.hasAnyCompactSummaryForSession === 'function') {
+    hasCompactSummaryFlag = session.conversationStore.hasAnyCompactSummaryForSession(sessionId);
   }
 
   // Latest seq cursor in the recent-mode reply lets the frontend stamp its
@@ -3839,7 +3845,7 @@ export async function handleYeaftLoadMoreHistory(msg) {
   try {
     result = loadVisibleGroupHistoryPage(session.conversationStore, sessionId, turns, beforeSeq);
   } catch (err) {
-    console.error('[Yeaft] loadOlderByGroup failed:', err.message);
+    console.error('[Yeaft] loadOlderBySession failed:', err.message);
     result = { messages: [], oldestSeq: null, hasMore: false };
   }
 
@@ -3885,7 +3891,7 @@ export async function resetYeaftSession() {
     session = null;
   }
   yeaftConversationId = null;
-  // Per-group histories live on groupContexts entries — clearing the
+  // Per-group histories live on sessionContexts entries — clearing the
   // map (a few lines below) drops every group's history with it. No
   // separate global tape to clear.
   // Re-arm the permission warning. The user might have fixed the
@@ -3905,7 +3911,7 @@ export async function resetYeaftSession() {
   vpInboxes.clear();
   vpDrivers.clear();
   vpEngines.clear();
-  groupContexts.clear();
+  sessionContexts.clear();
   vpCurrentTodos.clear();
   threadClassifier = defaultClassifyThread;
   // History-dedup cache is keyed by per-session coordinator msg ids;
@@ -3934,7 +3940,7 @@ export async function resetYeaftSession() {
 
     yeaftConversationId = `yeaft-${Date.now()}`;
 
-    // Per-group history hydrates lazily via getOrCreateGroupHistory on
+    // Per-group history hydrates lazily via getOrCreateSessionHistory on
     // first read. Nothing to seed here.
 
     sendYeaftEvent({
