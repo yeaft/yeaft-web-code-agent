@@ -54,7 +54,8 @@ export default {
             </select>
           </div>
 
-          <!-- Name -->
+          <!-- Name (optional — only consulted on Create; ignored when
+               clicking a row in the resume list). -->
           <div class="resume-control-row">
             <label class="resume-control-label">{{ $t('yeaft.session.create.nameLabel') }}</label>
             <input
@@ -64,7 +65,6 @@ export default {
               maxlength="60"
               autocomplete="off"
               class="resume-input"
-              ref="nameInput"
               @keydown.enter.prevent="onSubmit"
             />
           </div>
@@ -93,49 +93,69 @@ export default {
             </div>
           </div>
 
-          <!-- VP roster (yeaft-specific) -->
+          <!-- VP roster (yeaft-specific) — collapsed-by-default picker.
+               Trigger shows the current selection summary (names if ≤3, else
+               "N selected"); clicking opens the full list below. Mirrors the
+               Copilot model picker pattern from ChatPage. -->
           <div class="resume-control-row resume-control-row-vp">
             <label class="resume-control-label">{{ $t('yeaft.session.create.vpPicker') }}</label>
-            <div class="yeaft-roster">
+            <div class="yeaft-roster" ref="vpRosterRoot">
               <div v-if="vpList.length === 0 && vpLibraryEmpty" class="yeaft-roster-empty">
                 {{ $t('yeaft.session.create.rosterEmpty') }}
               </div>
               <div v-else-if="vpList.length === 0" class="yeaft-roster-empty">
                 {{ $t('yeaft.session.create.rosterLoading') }}
               </div>
-              <ul v-else class="yeaft-roster-list" role="listbox" aria-multiselectable="true">
-                <li
-                  v-for="vp in vpList"
-                  :key="vp.vpId"
-                  class="yeaft-roster-item"
-                  :class="{ 'is-selected': form.vpIds.includes(vp.vpId), 'is-default': form.defaultVpId === vp.vpId }"
-                  role="option"
-                  :aria-selected="form.vpIds.includes(vp.vpId)"
+              <template v-else>
+                <button
+                  type="button"
+                  class="yeaft-roster-trigger"
+                  :class="{ 'is-open': vpRosterOpen }"
+                  :aria-expanded="vpRosterOpen"
+                  @click="vpRosterOpen = !vpRosterOpen"
                 >
-                  <label class="yeaft-roster-row">
-                    <input
-                      type="checkbox"
-                      :value="vp.vpId"
-                      :checked="form.vpIds.includes(vp.vpId)"
-                      @change="toggleVp(vp.vpId, $event.target.checked)"
-                    />
-                    <VpAvatar :vp-id="vp.vpId" :size="20" :aria-label="vpLabelFor(vp.vpId)" />
-                    <span class="yeaft-roster-name" :style="{ color: vpTextColorFor(vp.vpId) }">{{ vpLabelFor(vp.vpId) }}</span>
-                  </label>
-                  <button
-                    v-if="form.vpIds.includes(vp.vpId)"
-                    type="button"
-                    class="yeaft-roster-default-star"
-                    :class="{ 'is-on': form.defaultVpId === vp.vpId }"
-                    :aria-label="$t('yeaft.session.create.defaultVpHint')"
-                    :aria-pressed="form.defaultVpId === vp.vpId"
-                    :title="$t('yeaft.session.create.defaultVpHint')"
-                    @click.stop="form.defaultVpId = vp.vpId"
+                  <span class="yeaft-roster-trigger-summary">{{ vpRosterSummary }}</span>
+                  <span class="yeaft-roster-caret" aria-hidden="true">▾</span>
+                </button>
+                <ul
+                  v-if="vpRosterOpen"
+                  class="yeaft-roster-list yeaft-roster-popup"
+                  role="listbox"
+                  aria-multiselectable="true"
+                >
+                  <li
+                    v-for="vp in vpList"
+                    :key="vp.vpId"
+                    class="yeaft-roster-item"
+                    :class="{ 'is-selected': form.vpIds.includes(vp.vpId), 'is-default': form.defaultVpId === vp.vpId }"
+                    role="option"
+                    :aria-selected="form.vpIds.includes(vp.vpId)"
                   >
-                    <span aria-hidden="true">{{ form.defaultVpId === vp.vpId ? '★' : '☆' }}</span>
-                  </button>
-                </li>
-              </ul>
+                    <label class="yeaft-roster-row">
+                      <input
+                        type="checkbox"
+                        :value="vp.vpId"
+                        :checked="form.vpIds.includes(vp.vpId)"
+                        @change="toggleVp(vp.vpId, $event.target.checked)"
+                      />
+                      <VpAvatar :vp-id="vp.vpId" :size="20" :aria-label="vpLabelFor(vp.vpId)" />
+                      <span class="yeaft-roster-name" :style="{ color: vpTextColorFor(vp.vpId) }">{{ vpLabelFor(vp.vpId) }}</span>
+                    </label>
+                    <button
+                      v-if="form.vpIds.includes(vp.vpId)"
+                      type="button"
+                      class="yeaft-roster-default-star"
+                      :class="{ 'is-on': form.defaultVpId === vp.vpId }"
+                      :aria-label="$t('yeaft.session.create.defaultVpHint')"
+                      :aria-pressed="form.defaultVpId === vp.vpId"
+                      :title="$t('yeaft.session.create.defaultVpHint')"
+                      @click.stop="form.defaultVpId = vp.vpId"
+                    >
+                      <span aria-hidden="true">{{ form.defaultVpId === vp.vpId ? '★' : '☆' }}</span>
+                    </button>
+                  </li>
+                </ul>
+              </template>
             </div>
           </div>
         </div>
@@ -267,6 +287,10 @@ export default {
       // Track whether the user has manually touched the picker; once true
       // we stop auto-mutating their selection from the hydration watcher.
       vpPickerTouched: false,
+      // Collapsed-by-default VP roster. Most sessions use one VP, so we
+      // hide the list behind a trigger and only open it when the user
+      // wants to multi-select (mirrors the Copilot model picker pattern).
+      vpRosterOpen: false,
     };
   },
   computed: {
@@ -341,13 +365,24 @@ export default {
       const a = this.agentOptions.find(x => x.id === this.form.agentId);
       return !!(a && a.online);
     },
+    // Trigger label: empty / "name1, name2, name3" / "N selected".
+    // 3 is the threshold because the trigger line is narrow and 4 names
+    // already start to ellide. "N selected" is a stable fallback shape.
+    vpRosterSummary() {
+      const ids = this.form.vpIds || [];
+      if (ids.length === 0) return this.$t('yeaft.session.create.vpNone');
+      if (ids.length <= 3) {
+        return ids.map(id => this.vpLabelFor(id)).join(this.$t('common.comma'));
+      }
+      return this.$t('yeaft.session.create.vpCount', { n: ids.length });
+    },
   },
   mounted() {
     window.addEventListener('keydown', this.onEsc);
     window.addEventListener('workbench-message', this.handleFolderPickerMessage);
-    this.$nextTick(() => {
-      try { this.$refs.nameInput?.focus(); } catch (_) {}
-    });
+    document.addEventListener('click', this.handleOutsideRosterClick, true);
+    // Name input is optional — do NOT auto-focus it. Focusing an
+    // optional field signals to users that it's required.
     // Seed agent default: prefer current Yeaft agent, else first online.
     // Never seed an offline agent — sending create to a dead ws is silent
     // failure. If nothing is online, leave agentId null and let canSubmit
@@ -381,6 +416,7 @@ export default {
   beforeUnmount() {
     window.removeEventListener('keydown', this.onEsc);
     window.removeEventListener('workbench-message', this.handleFolderPickerMessage);
+    document.removeEventListener('click', this.handleOutsideRosterClick, true);
     if (this._folderPickerTimer) clearTimeout(this._folderPickerTimer);
   },
   methods: {
@@ -417,8 +453,37 @@ export default {
     selectFolder(path) { this.form.workDir = path; },
     resumeExisting(session) {
       if (!session || !session.id) return;
+      const chat = this.chat;
+      // 1. Cross-agent route — if the session belongs to a different
+      //    agent than the one currently selected, switch first so any
+      //    subsequent CRUD/messaging hits the owning agent. Mirrors
+      //    YeaftSidebar.onSelectGroup.
+      if (session.agentId && chat && chat.currentAgent !== session.agentId
+          && typeof chat.selectAgent === 'function') {
+        chat.selectAgent(session.agentId);
+      }
+      // 2. UI pointer (which session the main pane shows).
       if (this.sessionsStore) this.sessionsStore.setActive(session.id);
+      // 3. The action that actually fires `yeaft_load_history` and
+      //    sets `yeaftActiveSessionFilter`. Without this, the modal
+      //    closes but the main pane stays empty — that's the bug
+      //    users reported as "resume doesn't work". `force: true` so
+      //    it re-fires even when re-picking the currently-active id.
+      if (chat && typeof chat.setActiveSessionFilter === 'function') {
+        chat.setActiveSessionFilter(session.id, { force: true });
+      }
       this.$emit('close');
+    },
+    // Outside-click handler for the collapsible VP roster popup.
+    // Uses capture phase so clicks on overlapping elements (e.g. the
+    // modal's own controls) still close the popup before the click
+    // gets handled elsewhere.
+    handleOutsideRosterClick(e) {
+      if (!this.vpRosterOpen) return;
+      const root = this.$refs.vpRosterRoot;
+      if (!root) return;
+      if (root.contains(e.target)) return;
+      this.vpRosterOpen = false;
     },
     getLastPathSegment(p) { return getLastPathSegment(p); },
     formatDate(iso) { return formatResumeDate(iso, this.$t.bind(this)); },
@@ -543,8 +608,17 @@ export default {
         const defaultVpId = (this.form.defaultVpId && submittedVpIds.includes(this.form.defaultVpId))
           ? this.form.defaultVpId
           : submittedVpIds[0];
+        // Auto-derive name when the user left it blank — the server
+        // rejects empty names with `invalid_name`, and the user said
+        // they shouldn't have to fill it. Prefer the workDir basename
+        // (matches how chat names ad-hoc conversations); fall back to
+        // a localized "Untitled".
+        const trimmedName = this.form.name.trim();
+        const derivedName = trimmedName
+          || getLastPathSegment(this.form.workDir.trim())
+          || this.$t('yeaft.session.create.untitled');
         const res = await this.chat.createYeaftSession({
-          displayName: this.form.name.trim(),
+          displayName: derivedName,
           vpIds: submittedVpIds,
           defaultVpId,
           workDir: this.form.workDir.trim(),
