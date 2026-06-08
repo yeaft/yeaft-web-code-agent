@@ -852,9 +852,15 @@ export default {
     const groupSettingsOpen = Vue.ref(false);
     const groupSettingsId = Vue.ref(null);
     const groupSettingsSection = Vue.ref('announcement');
-    const openGroupSettings = ({ groupId, section = 'announcement' } = {}) => {
-      if (!groupId) return;
-      groupSettingsId.value = groupId;
+    const openGroupSettings = (payload = {}) => {
+      // Accept both { sessionId } (new) and { groupId } (legacy) — child
+      // components were renamed in the msg.groupId→msg.sessionId sweep but
+      // a few legacy callers may still pass either shape during the
+      // deploy window.
+      const sessionId = (payload && (payload.sessionId || payload.groupId)) || null;
+      const section = (payload && payload.section) || 'announcement';
+      if (!sessionId) return;
+      groupSettingsId.value = sessionId;
       groupSettingsSection.value = section;
       groupSettingsOpen.value = true;
     };
@@ -872,9 +878,9 @@ export default {
     // Backwards-compat shim — the empty-group hero, the sidebar kebab,
     // and the invite-modal "open library" CTA still call this. Maps to
     // the Members section of the unified settings modal.
-    const openMemberEditor = (groupId) => {
-      if (!groupId) return;
-      openGroupSettings({ groupId, section: 'members' });
+    const openMemberEditor = (sessionId) => {
+      if (!sessionId) return;
+      openGroupSettings({ sessionId, section: 'members' });
     };
     const topbarGroupName = Vue.computed(
       () => resolveGroupDisplayName(topbarGroup.value),
@@ -882,7 +888,7 @@ export default {
     const openTopbarGroupSettings = () => {
       const g = topbarGroup.value;
       if (!g) return;
-      openGroupSettings({ groupId: g.id, section: 'announcement' });
+      openGroupSettings({ sessionId: g.id, section: 'announcement' });
     };
     // I6: closeMemberEditor shim was unused — dropped. openMemberEditor
     // remains because SessionInviteModal's "open library" CTA still calls
@@ -955,15 +961,16 @@ export default {
       const vpList = selectGroupRosterVpList(roster, vpStore.vpList || []);
 
       // Cross-group leak defense: only include status rows whose
-      // groupId matches the active filter, and whose vpId is in the
-      // active roster. The store keys vpStatuses by `${groupId}::${vpId}`
+      // sessionId matches the active filter, and whose vpId is in the
+      // active roster. The store keys vpStatuses by `${sessionId}::${vpId}`
       // (see chat.js `vpStatusKey`) — iterate values, not keys, since
       // the composite key isn't a usable VP id by itself.
       const rawStatuses = store.vpStatuses || {};
       const scopedStatuses = {};
       for (const entry of Object.values(rawStatuses)) {
         if (!entry || !entry.vpId) continue;
-        if (entry.groupId && entry.groupId !== filter) continue;
+        const entrySessionId = entry.sessionId ?? entry.groupId;
+        if (entrySessionId && entrySessionId !== filter) continue;
         if (!rosterSet.has(entry.vpId)) continue;
         scopedStatuses[entry.vpId] = entry;
       }

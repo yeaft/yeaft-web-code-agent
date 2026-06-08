@@ -49,7 +49,7 @@ describe('yeaftDebugTurnsForActiveSession — live header aggregates', () => {
   it('open turn: derives loopCount/totalMs/totalTokens from loops', () => {
     const state = mkState({
       turn: {
-        turnId: 't1', userPrompt: 'hi', groupId: 'g',
+        turnId: 't1', userPrompt: 'hi', sessionId: 'g',
         openedAt: 1000, closedAt: null,
         totalMs: 0, totalTokens: 0, loopCount: 0,
       },
@@ -67,7 +67,7 @@ describe('yeaftDebugTurnsForActiveSession — live header aggregates', () => {
   it('closed turn with stamped totals: trusts the stamped values', () => {
     const state = mkState({
       turn: {
-        turnId: 't2', userPrompt: 'hi', groupId: 'g',
+        turnId: 't2', userPrompt: 'hi', sessionId: 'g',
         openedAt: 1000, closedAt: 2000,
         totalMs: 999, totalTokens: 1234, loopCount: 7,
       },
@@ -86,7 +86,7 @@ describe('yeaftDebugTurnsForActiveSession — live header aggregates', () => {
     // wrote per-turn totals. Without the backfill, the header read 0/0/0.
     const state = mkState({
       turn: {
-        turnId: 't3', userPrompt: 'hi', groupId: 'g',
+        turnId: 't3', userPrompt: 'hi', sessionId: 'g',
         openedAt: 1000, closedAt: 2000,
         totalMs: 0, totalTokens: 0, loopCount: 0,
       },
@@ -104,7 +104,7 @@ describe('yeaftDebugTurnsForActiveSession — live header aggregates', () => {
   it('open turn with no loops yet: header is 0/0/0 (not undefined)', () => {
     const state = mkState({
       turn: {
-        turnId: 't4', userPrompt: 'hi', groupId: 'g',
+        turnId: 't4', userPrompt: 'hi', sessionId: 'g',
         openedAt: 1000, closedAt: null,
         totalMs: 0, totalTokens: 0, loopCount: 0,
       },

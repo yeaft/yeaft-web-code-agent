@@ -274,8 +274,9 @@ export function handleMessage(store, msg) {
       for (const evt of dreamEvents) {
         if (!evt) continue;
         let scope = null;
+        const evtSessionId = evt.sessionId || evt.groupId;
         if (typeof evt.target === 'string' && evt.target.includes('/')) scope = evt.target;
-        else if (typeof evt.groupId === 'string' && evt.groupId) scope = `group/${evt.groupId}`;
+        else if (typeof evtSessionId === 'string' && evtSessionId) scope = `group/${evtSessionId}`;
         else scope = '*';
         if (typeof store._appendDreamEvent === 'function') store._appendDreamEvent(scope, evt);
         if (evt.type === 'dream_progress' && typeof store.handleYeaftOutput === 'function') {

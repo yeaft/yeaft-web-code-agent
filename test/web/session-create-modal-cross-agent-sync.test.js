@@ -63,7 +63,7 @@ function makeCtx(overrides = {}) {
       setActiveSessionFilter(id, opts) { calls.setActiveSessionFilter.push([id, opts]); },
       createYeaftSession(args) {
         calls.createCalls.push(args);
-        return { ok: true, group: { id: 'grp_new_xxx', agentId: 'agent-B', name: args.displayName } };
+        return { ok: true, session: { id: 'grp_new_xxx', agentId: 'agent-B', name: args.displayName } };
       },
     },
     $emit(name, payload) { calls.emit.push([name, payload]); },
@@ -111,7 +111,7 @@ describe('SessionCreateModal onSubmit cross-agent sync (bug 2 regression)', () =
         currentAgent: 'agent-B',
         selectAgent(id) { calls?.selectAgent.push(id); },
         setActiveSessionFilter() {},
-        createYeaftSession() { return { ok: true, group: { id: 'g1', agentId: 'agent-B' } }; },
+        createYeaftSession() { return { ok: true, session: { id: 'g1', agentId: 'agent-B' } }; },
       },
     });
     await SessionCreateModal.methods.onSubmit.call(ctx);
@@ -144,13 +144,13 @@ describe('SessionCreateModal onSubmit cross-agent sync (bug 2 regression)', () =
     expect(calls.setActiveSessionFilter).toEqual([]);
   });
 
-  it('survives a null res.group (defensive guard)', async () => {
+  it('survives a null created session (defensive guard)', async () => {
     const { ctx, calls } = makeCtx({
       chat: {
         currentAgent: 'agent-A',
         selectAgent(id) { calls.selectAgent.push(id); },
         setActiveSessionFilter(id, opts) { calls.setActiveSessionFilter.push([id, opts]); },
-        createYeaftSession() { return { ok: true, group: null }; },
+        createYeaftSession() { return { ok: true, session: null }; },
       },
     });
     await expect(SessionCreateModal.methods.onSubmit.call(ctx)).resolves.toBeUndefined();

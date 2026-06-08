@@ -184,11 +184,37 @@ describe('SessionRestoreModal.onRestoreClick', () => {
     expect(ctx.restoreError).toBe('');
   });
 
-  // Lock-in for C1: chat.js renames the agent's `session` payload to `group`
-  // and stamps agentId. Earlier versions read raw `res.session` and would
-  // have lost the agentId-stamped payload entirely. Stub the wrapped shape
-  // so the post-wrap behavior is pinned end-to-end.
-  it('Case 4b: emits restored with the post-wrap `group` payload (chat.js renames session→group)', async () => {
+  // Lock-in for C1: chat.js wraps the agent's `session` payload onto the
+  // resolved promise and stamps agentId. Earlier versions read raw
+  // `res.session` from the agent and would have lost the agentId-stamped
+  // payload entirely. Stub the wrapped shape so the post-wrap behavior is
+  // pinned end-to-end. After the 2026-06-08 rename sweep the canonical
+  // field is `session`; legacy `group` is still accepted for one deploy
+  // window in case an older agent is still on the legacy key.
+  it('Case 4b: emits restored with the post-wrap `session` payload (canonical key)', async () => {
+    const chat = makeChat({
+      restoreResult: {
+        ok: true,
+        session: { id: 'grp_w', name: 'W', workDir: '/repo', agentId: 'agent-1' },
+      },
+    });
+    const ctx = makeCtx({ chat });
+
+    await SessionRestoreModal.methods.onRestoreClick.call(ctx, {
+      id: 'grp_w',
+      name: 'W',
+      alreadyRegistered: false,
+    });
+
+    const restoredEvent = ctx.emits.find(e => e.name === 'restored');
+    expect(restoredEvent).toBeTruthy();
+    expect(restoredEvent.payload).toEqual({
+      id: 'grp_w', name: 'W', workDir: '/repo', agentId: 'agent-1',
+    });
+    expect(ctx.emits.map(e => e.name)).toContain('close');
+  });
+
+  it('Case 4c: falls back to legacy `group` key (deploy-window compat)', async () => {
     const chat = makeChat({
       restoreResult: {
         ok: true,
@@ -208,7 +234,6 @@ describe('SessionRestoreModal.onRestoreClick', () => {
     expect(restoredEvent.payload).toEqual({
       id: 'grp_w', name: 'W', workDir: '/repo', agentId: 'agent-1',
     });
-    expect(ctx.emits.map(e => e.name)).toContain('close');
   });
 
   it('Case 5: silent no-op when session.alreadyRegistered is true', async () => {

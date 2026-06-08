@@ -552,7 +552,7 @@ export default {
           // + chat filter to the new session so the next click doesn't
           // snap back. (See commit 54028e1a for the regression history.)
           const chat = this.chat;
-          const created = res.group || null;
+          const created = res.session || res.group || null;
           const id = created && created.id;
           const owner = created && created.agentId;
           if (id) {

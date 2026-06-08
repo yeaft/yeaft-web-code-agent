@@ -123,7 +123,12 @@ describe('YeaftSidebar — kebab menu method behavior', () => {
     expect(() => onTogglePin({ id: 's1' })).not.toThrow();
   });
 
-  it('onRemoveFromList calls sessionCrudRequest("archive", { groupId })', () => {
+  it('onRemoveFromList calls sessionCrudRequest("archive", { sessionId })', () => {
+    // Field rename note (refactor sweep 2026-06-08): web → server wire
+    // payload now sends `sessionId` instead of legacy `groupId`. The
+    // server-side handler reads `msg.sessionId` (see
+    // server/handlers/agent-output.js#session_crud_result). Keeping a
+    // `groupId` here would silently break the archive op.
     const calls = [];
     const ctx = {
       groupMenu: { open: true, groupId: 'sess_1' },
@@ -132,7 +137,7 @@ describe('YeaftSidebar — kebab menu method behavior', () => {
     const onRemoveFromList = extractMethod('onRemoveFromList').bind(ctx);
     onRemoveFromList({ id: 'sess_1' });
     expect(ctx.groupMenu).toEqual({ open: false, groupId: null });
-    expect(calls).toEqual([['archive', { groupId: 'sess_1' }]]);
+    expect(calls).toEqual([['archive', { sessionId: 'sess_1' }]]);
   });
 
   it('onRemoveFromList survives a missing chatStore', () => {

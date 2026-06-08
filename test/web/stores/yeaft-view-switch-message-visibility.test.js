@@ -15,9 +15,9 @@
  * `store.currentView === 'yeaft'`. The yeaft message arrival path in
  * `chat.js#handleYeaftOutput` still ran (server broadcasts to every
  * webClient by owner regardless of view), but `addMessageToConversation`
- * skipped the `groupId` stamp because the predicate returned false.
+ * skipped the `sessionId` stamp because the predicate returned false.
  *
- * The `messages` getter in chat.js does a strict `m.groupId === target`
+ * The `messages` getter in chat.js does a strict `m.sessionId === target`
  * filter, so any untagged row gets silently dropped on the way to
  * MessageList. To the user it looks like nothing arrived. Worse: the
  * delta cursor (chat.js:1201-1210) advanced past those orphan rows, so
@@ -28,6 +28,13 @@
  * Fix: predicate keys off "is this the yeaft conversation id", not
  * "is the user currently looking at yeaft view". View is presentation;
  * data attribution is independent of it.
+ *
+ * Field rename note (msg.groupId → msg.sessionId, refactor sweep 2026-06-08):
+ * the stamped field on every yeaft message is now `sessionId`. Tests
+ * assert on the new name; the strict-equality getter slice below also
+ * keys off `m.sessionId`. The agent / web-bridge wire field is
+ * `sessionId` as well; legacy `groupId` is only accepted as a fallback
+ * on the read side in helpers like `messageHandler.js` and `chat.js`.
  *
  * This test exercises the real production helper (not a reimplementation)
  * and the real getter slice from chat.js.
@@ -45,7 +52,7 @@ function getMessages(state) {
   const raw = convId ? (state.messagesMap[convId] || EMPTY) : EMPTY;
   if (state.currentView === 'yeaft' && state.yeaftActiveSessionFilter) {
     const target = state.yeaftActiveSessionFilter;
-    return raw.filter((m) => m && m.groupId === target);
+    return raw.filter((m) => m && m.sessionId === target);
   }
   return raw;
 }
@@ -96,16 +103,16 @@ describe('yeaft view-switch — messages arriving while in Chat view still surfa
 
     // The background message must be visible. Pre-fix this returned
     // ['first reply'] only — the second row was stamped without a
-    // groupId because the predicate gated on currentView, and the
+    // sessionId because the predicate gated on currentView, and the
     // strict-equality filter in the messages getter dropped it.
     expect(getMessages(store).map((m) => m.content)).toEqual([
       'first reply',
       'background reply',
     ]);
-    expect(store.messagesMap['yeaft-conv-1'][1].groupId).toBe('grp_alpha');
+    expect(store.messagesMap['yeaft-conv-1'][1].sessionId).toBe('grp_alpha');
   });
 
-  it('stamps groupId regardless of view, sourced from _currentYeaftSessionId', () => {
+  it('stamps sessionId regardless of view, sourced from _currentYeaftSessionId', () => {
     // The send-context session id is what determines which session a
     // message belongs to, NOT the user's current filter — that way
     // background turns from a different session also land correctly.
@@ -118,7 +125,7 @@ describe('yeaft view-switch — messages arriving while in Chat view still surfa
       type: 'assistant',
       content: 'beta reply',
     });
-    expect(store.messagesMap['yeaft-conv-1'][0].groupId).toBe('grp_beta');
+    expect(store.messagesMap['yeaft-conv-1'][0].sessionId).toBe('grp_beta');
   });
 
   it('falls back to yeaftActiveSessionFilter when no send-context is set (e.g. local echo)', () => {
@@ -131,10 +138,10 @@ describe('yeaft view-switch — messages arriving while in Chat view still surfa
       type: 'user',
       content: 'hi',
     });
-    expect(store.messagesMap['yeaft-conv-1'][0].groupId).toBe('grp_alpha');
+    expect(store.messagesMap['yeaft-conv-1'][0].sessionId).toBe('grp_alpha');
   });
 
-  it('does NOT stamp yeaft groupId on messages going to a non-yeaft conversation', () => {
+  it('does NOT stamp yeaft sessionId on messages going to a non-yeaft conversation', () => {
     // Cross-conversation isolation — Chat conversation must not pick up
     // yeaft session metadata even when the yeaft routing context is set.
     const store = mkStore({
@@ -147,10 +154,10 @@ describe('yeaft view-switch — messages arriving while in Chat view still surfa
       type: 'assistant',
       content: 'chat reply',
     });
-    expect(store.messagesMap['chat-conv-A'][0].groupId).toBeUndefined();
+    expect(store.messagesMap['chat-conv-A'][0].sessionId).toBeUndefined();
   });
 
-  it('does not double-stamp when caller already set groupId explicitly', () => {
+  it('does not double-stamp when caller already set sessionId explicitly', () => {
     const store = mkStore({
       currentView: 'chat',
       _currentYeaftSessionId: 'grp_alpha',
@@ -158,8 +165,8 @@ describe('yeaft view-switch — messages arriving while in Chat view still surfa
     addMessageToConversation(store, 'yeaft-conv-1', {
       type: 'assistant',
       content: 'x',
-      groupId: 'grp_explicit',
+      sessionId: 'grp_explicit',
     });
-    expect(store.messagesMap['yeaft-conv-1'][0].groupId).toBe('grp_explicit');
+    expect(store.messagesMap['yeaft-conv-1'][0].sessionId).toBe('grp_explicit');
   });
 });

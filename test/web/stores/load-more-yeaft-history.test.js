@@ -11,6 +11,12 @@
  *      and `yeaftOldestLoadedSeq`; flips `yeaftLoadingMoreHistory=true`
  *      and posts a `yeaft_load_more_history` envelope.
  *
+ * Field naming (post msg.groupId → msg.sessionId rename, 2026-06-08):
+ * the wire-level field used by all newly-built envelopes is `sessionId`.
+ * The chunk handler still accepts legacy `msg.groupId` as a fallback for
+ * deploy-window compat with older agents; this is exercised in the
+ * "accepts legacy groupId field" test below.
+ *
  * Both pieces are exercised with synthetic `store` state objects rather
  * than a hot Pinia instance — that's the same pattern the rest of the
  * frontend test suite uses (see messages-getter-isolation.test.js).
@@ -35,30 +41,30 @@ function loadMoreYeaftHistory() {
   if (this.yeaftLoadingMoreHistory || !this.yeaftHasMoreHistory) return;
   if (!this.yeaftAgentId || this.yeaftOldestLoadedSeq == null) return;
 
-  let groupId = this.yeaftActiveSessionFilter || null;
-  if (!groupId) {
+  let sessionId = this.yeaftActiveSessionFilter || null;
+  if (!sessionId) {
     try {
       const gs = (typeof window !== 'undefined') && (
         window.Pinia?.useSessionsStore?.() ||
         (window.__useSessionsStore && window.__useSessionsStore())
       );
-      groupId = (gs && gs.activeSessionId) || null;
-    } catch { /* groups store missing — agent treats null as no-op */ }
+      sessionId = (gs && gs.activeSessionId) || null;
+    } catch { /* sessions store missing — agent treats null as no-op */ }
   }
 
   this.yeaftLoadingMoreHistory = true;
-  const groupKey = groupId || '__all__';
+  const sessionKey = sessionId || '__all__';
   this.yeaftSessionHistoryState = {
     ...this.yeaftSessionHistoryState,
-    [groupKey]: {
-      ...(this.yeaftSessionHistoryState[groupKey] || {}),
+    [sessionKey]: {
+      ...(this.yeaftSessionHistoryState[sessionKey] || {}),
       loading: true,
     },
   };
   this.sendWsMessage({
     type: 'yeaft_load_more_history',
     agentId: this.yeaftAgentId,
-    groupId,
+    sessionId,
     beforeSeq: this.yeaftOldestLoadedSeq,
     turns: 10,
   });
@@ -87,19 +93,19 @@ function visibleMessages(state) {
     : (state.activeConversations?.[0] || null);
   const raw = convId ? (state.messagesMap[convId] || []) : [];
   if (state.currentView === 'yeaft' && state.yeaftActiveSessionFilter) {
-    return raw.filter(m => m && m.groupId === state.yeaftActiveSessionFilter);
+    return raw.filter(m => m && m.sessionId === state.yeaftActiveSessionFilter);
   }
   return raw;
 }
 
-function setActiveSessionFilter(groupId) {
+function setActiveSessionFilter(sessionId) {
   const prev = this.yeaftActiveSessionFilter || null;
-  const next = groupId || null;
+  const next = sessionId || null;
   this.yeaftActiveSessionFilter = next;
   if (next === prev) return;
 
-  const groupKey = next || '__all__';
-  const savedState = this.yeaftSessionHistoryState[groupKey] || null;
+  const sessionKey = next || '__all__';
+  const savedState = this.yeaftSessionHistoryState[sessionKey] || null;
   this.yeaftHasMoreHistory = !!savedState?.hasMore;
   this.yeaftLoadingMoreHistory = !!savedState?.loading;
   this.yeaftOldestLoadedSeq = (typeof savedState?.oldestSeq === 'number') ? savedState.oldestSeq : null;
@@ -108,14 +114,14 @@ function setActiveSessionFilter(groupId) {
   if (this.yeaftAgentId && next && needsHydrate) {
     this.yeaftSessionHistoryState = {
       ...this.yeaftSessionHistoryState,
-      [groupKey]: { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },
+      [sessionKey]: { loaded: false, loading: true, hasMore: false, oldestSeq: null, count: 0 },
     };
     this.yeaftLoadingMoreHistory = true;
     this.sendWsMessage({
       type: 'yeaft_load_history',
       agentId: this.yeaftAgentId,
       limit: 50,
-      groupId: next,
+      sessionId: next,
     });
   }
 }
@@ -134,9 +140,9 @@ describe('handleYeaftHistoryChunk', () => {
       const store = mkStore({ messagesMap: { 'yeaft-1': [] } });
       handleYeaftHistoryChunk(store, {
         conversationId: 'yeaft-1',
-        groupId: 'g1',
+        sessionId: 'g1',
         messages: [
-          { id: 'm0002', role: 'assistant', content: 'older-a1', groupId: 'g1' },
+          { id: 'm0002', role: 'assistant', content: 'older-a1', sessionId: 'g1' },
         ],
         oldestSeq: 1,
         hasMore: false,
@@ -156,16 +162,16 @@ describe('handleYeaftHistoryChunk', () => {
     const store = mkStore({
       messagesMap: {
         'yeaft-1': [
-          { type: 'user', content: 'newer-q', groupId: 'g1' },
+          { type: 'user', content: 'newer-q', sessionId: 'g1' },
         ],
       },
     });
     handleYeaftHistoryChunk(store, {
       conversationId: 'yeaft-1',
-      groupId: 'g1',
+      sessionId: 'g1',
       messages: [
-        { id: 'm0001', role: 'user',      content: 'older-q1', groupId: 'g1' },
-        { id: 'm0002', role: 'assistant', content: 'older-a1', groupId: 'g1' },
+        { id: 'm0001', role: 'user',      content: 'older-q1', sessionId: 'g1' },
+        { id: 'm0002', role: 'assistant', content: 'older-a1', sessionId: 'g1' },
       ],
       oldestSeq: 1,
       hasMore: true,
@@ -176,20 +182,45 @@ describe('handleYeaftHistoryChunk', () => {
     // Streaming flag false on prepended rows.
     expect(arr[0].isStreaming).toBe(false);
     expect(arr[1].isStreaming).toBe(false);
-    // type/content/groupId carried.
+    // type/content/sessionId carried.
     expect(arr[0].type).toBe('user');
     expect(arr[1].type).toBe('assistant');
-    expect(arr[0].groupId).toBe('g1');
+    expect(arr[0].sessionId).toBe('g1');
+  });
+
+  it('accepts legacy groupId field on a chunk for deploy-window compat', () => {
+    // Old agents may still emit `groupId` instead of `sessionId` on the
+    // wire envelope and per-row stamp. The handler must accept both and
+    // promote to the canonical `sessionId` field on the stored row.
+    const store = mkStore({
+      yeaftActiveSessionFilter: 'g1',
+      messagesMap: { 'yeaft-1': [] },
+    });
+    handleYeaftHistoryChunk(store, {
+      conversationId: 'yeaft-1',
+      groupId: 'g1',
+      messages: [
+        { id: 'm0001', role: 'user',      content: 'legacy-q', groupId: 'g1' },
+        { id: 'm0002', role: 'assistant', content: 'legacy-a', groupId: 'g1' },
+      ],
+      oldestSeq: 1,
+      hasMore: false,
+    });
+
+    expect(store.messagesMap['yeaft-1'].map(m => m.content)).toEqual(['legacy-q', 'legacy-a']);
+    // Even though the agent sent `groupId`, the stored rows use `sessionId`.
+    expect(store.messagesMap['yeaft-1'][0].sessionId).toBe('g1');
+    expect(store.messagesMap['yeaft-1'][1].sessionId).toBe('g1');
   });
 
   it('preserves persisted timestamps from paginated history rows', () => {
     const store = mkStore({ messagesMap: { 'yeaft-1': [] } });
     handleYeaftHistoryChunk(store, {
       conversationId: 'yeaft-1',
-      groupId: 'g1',
+      sessionId: 'g1',
       messages: [
-        { id: 'm0001', role: 'user', content: 'older-q1', groupId: 'g1', ts: '2026-05-01T10:00:00.000Z' },
-        { id: 'm0002', role: 'assistant', content: 'older-a1', groupId: 'g1', time: '2026-05-01T10:00:05.000Z' },
+        { id: 'm0001', role: 'user', content: 'older-q1', sessionId: 'g1', ts: '2026-05-01T10:00:00.000Z' },
+        { id: 'm0002', role: 'assistant', content: 'older-a1', sessionId: 'g1', time: '2026-05-01T10:00:05.000Z' },
       ],
       oldestSeq: 1,
       hasMore: false,
@@ -210,22 +241,22 @@ describe('handleYeaftHistoryChunk', () => {
     });
     handleYeaftHistoryChunk(store, {
       conversationId: 'yeaft-1',
-      groupId: 'g1',
+      sessionId: 'g1',
       messages: [
-        { id: 'u-1', role: 'user', content: 'older-q', groupId: 'g1', threadId: 'thr-a' },
-        { id: 'a-1', role: 'assistant', content: 'older-a', groupId: 'g1', threadId: 'thr-a', speakerVpId: 'vp-linus' },
+        { id: 'u-1', role: 'user', content: 'older-q', sessionId: 'g1', threadId: 'thr-a' },
+        { id: 'a-1', role: 'assistant', content: 'older-a', sessionId: 'g1', threadId: 'thr-a', speakerVpId: 'vp-linus' },
       ],
       oldestSeq: 10,
       hasMore: false,
     });
 
     expect(store.messagesMap['yeaft-1']).toEqual([
-      expect.objectContaining({ id: 'u-1', messageId: 'u-1', type: 'user', groupId: 'g1', threadId: 'thr-a', turnId: 'thr-a' }),
-      expect.objectContaining({ id: 'a-1', messageId: 'a-1', type: 'assistant', groupId: 'g1', threadId: 'thr-a', turnId: 'thr-a', vpId: 'vp-linus', speakerVpId: 'vp-linus' }),
+      expect.objectContaining({ id: 'u-1', messageId: 'u-1', type: 'user', sessionId: 'g1', threadId: 'thr-a', turnId: 'thr-a' }),
+      expect.objectContaining({ id: 'a-1', messageId: 'a-1', type: 'assistant', sessionId: 'g1', threadId: 'thr-a', turnId: 'thr-a', vpId: 'vp-linus', speakerVpId: 'vp-linus' }),
     ]);
   });
 
-  it('keeps group-scoped cursor state isolated when accepting matching chunks', () => {
+  it('keeps session-scoped cursor state isolated when accepting matching chunks', () => {
     const store = mkStore({
       yeaftActiveSessionFilter: 'group-A',
       yeaftSessionHistoryState: {
@@ -235,8 +266,8 @@ describe('handleYeaftHistoryChunk', () => {
     });
     handleYeaftHistoryChunk(store, {
       conversationId: 'yeaft-1',
-      groupId: 'group-A',
-      messages: [{ id: 'a-old', role: 'user', content: 'A-old', groupId: 'group-A' }],
+      sessionId: 'group-A',
+      messages: [{ id: 'a-old', role: 'user', content: 'A-old', sessionId: 'group-A' }],
       oldestSeq: 11,
       hasMore: false,
     });
@@ -263,7 +294,7 @@ describe('handleYeaftHistoryChunk', () => {
     });
     handleYeaftHistoryChunk(store, {
       conversationId: 'yeaft-1',
-      messages: [{ id: 'm0050', role: 'user', content: 'q', groupId: null }],
+      messages: [{ id: 'm0050', role: 'user', content: 'q', sessionId: null }],
       oldestSeq: 50,
       hasMore: false,
     });
@@ -309,7 +340,7 @@ describe('handleYeaftHistoryChunk', () => {
     const store = mkStore();
     handleYeaftHistoryChunk(store, {
       // conversationId missing → fall back to store.yeaftConversationId='yeaft-1'
-      messages: [{ id: 'm1', role: 'user', content: 'x', groupId: null }],
+      messages: [{ id: 'm1', role: 'user', content: 'x', sessionId: null }],
       oldestSeq: 1,
       hasMore: true,
     });
@@ -323,10 +354,10 @@ describe('handleYeaftHistoryChunk', () => {
     handleYeaftHistoryChunk(store, {
       conversationId: 'yeaft-1',
       messages: [
-        { id: 'm0001', role: 'user',      content: 'q1', groupId: 'g1' },
+        { id: 'm0001', role: 'user',      content: 'q1', sessionId: 'g1' },
         { id: 'm0002', role: 'tool',      content: '{"ok":true}' },          // dropped
         { id: 'm0003', role: 'system',    content: 'noise' },                 // dropped
-        { id: 'm0004', role: 'assistant', content: 'a1', groupId: 'g1' },
+        { id: 'm0004', role: 'assistant', content: 'a1', sessionId: 'g1' },
         null,                                                                  // dropped
         { id: 'm0005' },                                                       // no role → dropped
       ],
@@ -337,24 +368,24 @@ describe('handleYeaftHistoryChunk', () => {
   });
 
 
-  it('keeps chronological order and dedupes rows when older group history overlaps cached rows', () => {
+  it('keeps chronological order and dedupes rows when older session history overlaps cached rows', () => {
     const store = mkStore({
       yeaftActiveSessionFilter: 'group-A',
       messagesMap: {
         'yeaft-1': [
-          { id: 'm0003', messageId: 'm0003', type: 'user', content: 'newer-q', groupId: 'group-A' },
-          { id: 'm0004', messageId: 'm0004', type: 'assistant', content: 'newer-a', groupId: 'group-A', speakerVpId: 'vp-ada' },
+          { id: 'm0003', messageId: 'm0003', type: 'user', content: 'newer-q', sessionId: 'group-A' },
+          { id: 'm0004', messageId: 'm0004', type: 'assistant', content: 'newer-a', sessionId: 'group-A', speakerVpId: 'vp-ada' },
         ],
       },
     });
 
     handleYeaftHistoryChunk(store, {
       conversationId: 'yeaft-1',
-      groupId: 'group-A',
+      sessionId: 'group-A',
       messages: [
-        { id: 'm0001', role: 'user', content: 'oldest-q', groupId: 'group-A' },
-        { id: 'm0002', role: 'assistant', content: 'oldest-a', groupId: 'group-A', speakerVpId: 'vp-linus' },
-        { id: 'm0003', role: 'user', content: 'newer-q', groupId: 'group-A' },
+        { id: 'm0001', role: 'user', content: 'oldest-q', sessionId: 'group-A' },
+        { id: 'm0002', role: 'assistant', content: 'oldest-a', sessionId: 'group-A', speakerVpId: 'vp-linus' },
+        { id: 'm0003', role: 'user', content: 'newer-q', sessionId: 'group-A' },
       ],
       oldestSeq: 1,
       hasMore: false,
@@ -368,12 +399,12 @@ describe('handleYeaftHistoryChunk', () => {
     const store = mkStore({ messagesMap: { 'yeaft-1': [] } });
     handleYeaftHistoryChunk(store, {
       conversationId: 'yeaft-1',
-      groupId: 'g1',
+      sessionId: 'g1',
       messages: [
-        { id: 'm0001', role: 'user', content: 'visible user', groupId: 'g1' },
-        { id: 'm0002', role: 'user', content: 'reflection text', groupId: 'g1', _reflection: true },
-        { id: 'm0003', role: 'assistant', content: 'system-only note', groupId: 'g1', systemOnly: true },
-        { id: 'm0004', role: 'assistant', content: 'visible assistant', groupId: 'g1', speakerVpId: 'vp-linus' },
+        { id: 'm0001', role: 'user', content: 'visible user', sessionId: 'g1' },
+        { id: 'm0002', role: 'user', content: 'reflection text', sessionId: 'g1', _reflection: true },
+        { id: 'm0003', role: 'assistant', content: 'system-only note', sessionId: 'g1', systemOnly: true },
+        { id: 'm0004', role: 'assistant', content: 'visible assistant', sessionId: 'g1', speakerVpId: 'vp-linus' },
       ],
       oldestSeq: 1,
       hasMore: false,
@@ -392,14 +423,14 @@ describe('handleYeaftHistoryChunk', () => {
       hasMore: false,
     });
     // Cursor is left as the previous value rather than nulled, so a
-    // subsequent reset path (group switch / enter) is the only place that
+    // subsequent reset path (session switch / enter) is the only place that
     // can clear it. hasMore=false alone gates further fetches.
     expect(store.yeaftOldestLoadedSeq).toBe(100);
     expect(store.yeaftHasMoreHistory).toBe(false);
   });
 
-  it('drops stale chunks whose groupId no longer matches the active filter (race-with-group-switch)', () => {
-    // Sequence: user is in group A, "Load older" fires while looking at A,
+  it('drops stale chunks whose sessionId no longer matches the active filter (race-with-session-switch)', () => {
+    // Sequence: user is in session A, "Load older" fires while looking at A,
     // user switches to B before the chunk arrives. The B switch already
     // cleared messagesMap[convId] and reset the cursor; we must NOT
     // splice A's history into B's view when A's chunk finally lands.
@@ -408,29 +439,29 @@ describe('handleYeaftHistoryChunk', () => {
       yeaftLoadingMoreHistory: true,           // spinner up from the A click
       messagesMap: {
         'yeaft-1': [
-          { type: 'user', content: 'B-msg', groupId: 'group-B' },
+          { type: 'user', content: 'B-msg', sessionId: 'group-B' },
         ],
       },
     });
     handleYeaftHistoryChunk(store, {
       conversationId: 'yeaft-1',
-      groupId: 'group-A',                      // stale: chunk is for the OLD group
+      sessionId: 'group-A',                    // stale: chunk is for the OLD session
       messages: [
-        { id: 'm0001', role: 'user',      content: 'A-old-q', groupId: 'group-A' },
-        { id: 'm0002', role: 'assistant', content: 'A-old-a', groupId: 'group-A' },
+        { id: 'm0001', role: 'user',      content: 'A-old-q', sessionId: 'group-A' },
+        { id: 'm0002', role: 'assistant', content: 'A-old-a', sessionId: 'group-A' },
       ],
       oldestSeq: 1,
       hasMore: true,
     });
-    // No prepend — group B's stream is untouched.
+    // No prepend — session B's stream is untouched.
     expect(store.messagesMap['yeaft-1'].map(m => m.content)).toEqual(['B-msg']);
     // Spinner is cleared regardless so the UI doesn't get stuck.
     expect(store.yeaftLoadingMoreHistory).toBe(false);
-    // Cursor not corrupted by group A's data.
+    // Cursor not corrupted by session A's data.
     expect(store.yeaftOldestLoadedSeq).toBe(100);
   });
 
-  it('drops stale chunks with an empty-string groupId instead of treating them as unscoped history', () => {
+  it('drops stale chunks with an empty-string sessionId instead of treating them as unscoped history', () => {
     const store = mkStore({
       yeaftActiveSessionFilter: 'group-B',
       yeaftLoadingMoreHistory: true,
@@ -440,16 +471,16 @@ describe('handleYeaftHistoryChunk', () => {
       },
       messagesMap: {
         'yeaft-1': [
-          { type: 'user', content: 'B-msg', groupId: 'group-B' },
+          { type: 'user', content: 'B-msg', sessionId: 'group-B' },
         ],
       },
     });
 
     handleYeaftHistoryChunk(store, {
       conversationId: 'yeaft-1',
-      groupId: '',
+      sessionId: '',
       messages: [
-        { id: 'm-empty-1', role: 'user', content: 'empty-scope-q', groupId: '' },
+        { id: 'm-empty-1', role: 'user', content: 'empty-scope-q', sessionId: '' },
       ],
       oldestSeq: 1,
       hasMore: true,
@@ -462,7 +493,7 @@ describe('handleYeaftHistoryChunk', () => {
     expect(store.yeaftOldestLoadedSeq).toBe(100);
   });
 
-  it('preserves empty-string row groupId when accepting an empty-string chunk', () => {
+  it('preserves empty-string row sessionId when accepting an empty-string chunk', () => {
     const store = mkStore({
       yeaftActiveSessionFilter: '',
       messagesMap: { 'yeaft-1': [] },
@@ -470,33 +501,33 @@ describe('handleYeaftHistoryChunk', () => {
 
     handleYeaftHistoryChunk(store, {
       conversationId: 'yeaft-1',
-      groupId: '',
+      sessionId: '',
       messages: [
-        { id: 'm-empty-1', role: 'user', content: 'empty-scope-q', groupId: '' },
-        { id: 'm-empty-2', role: 'assistant', content: 'empty-scope-a', groupId: '' },
+        { id: 'm-empty-1', role: 'user', content: 'empty-scope-q', sessionId: '' },
+        { id: 'm-empty-2', role: 'assistant', content: 'empty-scope-a', sessionId: '' },
       ],
       oldestSeq: 1,
       hasMore: false,
     });
 
     expect(store.messagesMap['yeaft-1']).toEqual([
-      expect.objectContaining({ id: 'm-empty-1', groupId: '' }),
-      expect.objectContaining({ id: 'm-empty-2', groupId: '' }),
+      expect.objectContaining({ id: 'm-empty-1', sessionId: '' }),
+      expect.objectContaining({ id: 'm-empty-2', sessionId: '' }),
     ]);
     expect(store.yeaftSessionHistoryState['']).toEqual(expect.objectContaining({ loading: false, hasMore: false }));
     expect(store.yeaftSessionHistoryState.__all__).toBeUndefined();
   });
 
-  it('accepts a chunk whose groupId matches the active filter', () => {
+  it('accepts a chunk whose sessionId matches the active filter', () => {
     const store = mkStore({
       yeaftActiveSessionFilter: 'group-A',
       messagesMap: { 'yeaft-1': [] },
     });
     handleYeaftHistoryChunk(store, {
       conversationId: 'yeaft-1',
-      groupId: 'group-A',
+      sessionId: 'group-A',
       messages: [
-        { id: 'm0001', role: 'user', content: 'A-old-q', groupId: 'group-A' },
+        { id: 'm0001', role: 'user', content: 'A-old-q', sessionId: 'group-A' },
       ],
       oldestSeq: 1,
       hasMore: false,
@@ -505,18 +536,18 @@ describe('handleYeaftHistoryChunk', () => {
     expect(store.yeaftOldestLoadedSeq).toBe(1);
   });
 
-  it('accepts a chunk when the active filter is null (no per-group scope set)', () => {
-    // Edge case: bootstrap path before any group has been selected. The
-    // chunk may carry a groupId stamp; without an active filter we accept.
+  it('accepts a chunk when the active filter is null (no per-session scope set)', () => {
+    // Edge case: bootstrap path before any session has been selected. The
+    // chunk may carry a sessionId stamp; without an active filter we accept.
     const store = mkStore({
       yeaftActiveSessionFilter: null,
       messagesMap: { 'yeaft-1': [] },
     });
     handleYeaftHistoryChunk(store, {
       conversationId: 'yeaft-1',
-      groupId: 'group-X',
+      sessionId: 'group-X',
       messages: [
-        { id: 'm0001', role: 'user', content: 'q', groupId: 'group-X' },
+        { id: 'm0001', role: 'user', content: 'q', sessionId: 'group-X' },
       ],
       oldestSeq: 1,
       hasMore: false,
@@ -540,14 +571,14 @@ describe('loadMoreYeaftHistory — action gates', () => {
     const store = mkStore({
       yeaftOldestLoadedSeq: 42,
     });
-    // No groups store wired — groupId resolves to null, which is fine.
+    // No sessions store wired — sessionId resolves to null, which is fine.
     loadMoreYeaftHistory.call(store);
     expect(store.yeaftLoadingMoreHistory).toBe(true);
     expect(store._sent).toHaveLength(1);
     expect(store._sent[0]).toEqual({
       type: 'yeaft_load_more_history',
       agentId: 'agent-1',
-      groupId: null,
+      sessionId: null,
       beforeSeq: 42,
       turns: 10,
     });
@@ -559,7 +590,7 @@ describe('loadMoreYeaftHistory — action gates', () => {
     };
     const store = mkStore({ yeaftOldestLoadedSeq: 7 });
     loadMoreYeaftHistory.call(store);
-    expect(store._sent[0].groupId).toBe('grp-xyz');
+    expect(store._sent[0].sessionId).toBe('grp-xyz');
     expect(store._sent[0].beforeSeq).toBe(7);
   });
 
@@ -574,7 +605,7 @@ describe('loadMoreYeaftHistory — action gates', () => {
 
     loadMoreYeaftHistory.call(store);
 
-    expect(store._sent[0].groupId).toBe('grp-visible');
+    expect(store._sent[0].sessionId).toBe('grp-visible');
     expect(store.yeaftSessionHistoryState['grp-visible'].loading).toBe(true);
     expect(store.yeaftSessionHistoryState['grp-stale']).toBeUndefined();
   });
@@ -612,25 +643,25 @@ describe('loadMoreYeaftHistory — action gates', () => {
     expect(store._sent).toEqual([]);
   });
 
-  it('survives a throwing groups-store accessor', () => {
+  it('survives a throwing sessions-store accessor', () => {
     globalThis.window.Pinia = {
       useSessionsStore: () => { throw new Error('not registered'); },
     };
     const store = mkStore({ yeaftOldestLoadedSeq: 1 });
     expect(() => loadMoreYeaftHistory.call(store)).not.toThrow();
     expect(store._sent).toHaveLength(1);
-    expect(store._sent[0].groupId).toBeNull();
+    expect(store._sent[0].sessionId).toBeNull();
   });
 });
 
-describe('setActiveSessionFilter — group-scoped conversation cache', () => {
-  it('does not clear the shared Yeaft message stream when switching groups', () => {
+describe('setActiveSessionFilter — session-scoped conversation cache', () => {
+  it('does not clear the shared Yeaft message stream when switching sessions', () => {
     const store = mkStore({
       yeaftActiveSessionFilter: 'group-A',
       messagesMap: {
         'yeaft-1': [
-          { id: 'a1', type: 'user', content: 'A before', groupId: 'group-A' },
-          { id: 'b1', type: 'user', content: 'B before', groupId: 'group-B' },
+          { id: 'a1', type: 'user', content: 'A before', sessionId: 'group-A' },
+          { id: 'b1', type: 'user', content: 'B before', sessionId: 'group-B' },
         ],
       },
       yeaftSessionHistoryState: {
@@ -654,11 +685,11 @@ describe('setActiveSessionFilter — group-scoped conversation cache', () => {
     expect(store.yeaftOldestLoadedSeq).toBe(10);
   });
 
-  it('hydrates only a group without cached rows or loaded history metadata', () => {
+  it('hydrates only a session without cached rows or loaded history metadata', () => {
     const store = mkStore({
       yeaftActiveSessionFilter: 'group-A',
       messagesMap: {
-        'yeaft-1': [{ id: 'a1', type: 'user', content: 'A before', groupId: 'group-A' }],
+        'yeaft-1': [{ id: 'a1', type: 'user', content: 'A before', sessionId: 'group-A' }],
       },
       yeaftSessionHistoryState: {
         'group-A': { loaded: true, loading: false, hasMore: false, oldestSeq: null, count: 1 },
@@ -669,11 +700,11 @@ describe('setActiveSessionFilter — group-scoped conversation cache', () => {
 
     expect(visibleMessages(store)).toEqual([]);
     expect(store.messagesMap['yeaft-1'].map(m => m.id)).toEqual(['a1']);
-    expect(store._sent).toEqual([{ type: 'yeaft_load_history', agentId: 'agent-1', limit: 50, groupId: 'group-C' }]);
+    expect(store._sent).toEqual([{ type: 'yeaft_load_history', agentId: 'agent-1', limit: 50, sessionId: 'group-C' }]);
     expect(store.yeaftSessionHistoryState['group-C']).toEqual(expect.objectContaining({ loading: true, loaded: false }));
   });
 
-  it('keeps selected group and pending history state isolated across groups', () => {
+  it('keeps selected session and pending history state isolated across sessions', () => {
     const store = mkStore({
       yeaftActiveSessionFilter: 'group-A',
       yeaftLoadingMoreHistory: false,
@@ -683,8 +714,8 @@ describe('setActiveSessionFilter — group-scoped conversation cache', () => {
       },
       messagesMap: {
         'yeaft-1': [
-          { id: 'a1', type: 'assistant', content: 'A', groupId: 'group-A', speakerVpId: 'vp-a' },
-          { id: 'b1', type: 'assistant', content: 'B', groupId: 'group-B', speakerVpId: 'vp-b' },
+          { id: 'a1', type: 'assistant', content: 'A', sessionId: 'group-A', speakerVpId: 'vp-a' },
+          { id: 'b1', type: 'assistant', content: 'B', sessionId: 'group-B', speakerVpId: 'vp-b' },
         ],
       },
     });

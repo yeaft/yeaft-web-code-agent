@@ -36,7 +36,7 @@ describe('Yeaft session history re-entry', () => {
     store.yeaftActiveSessionFilter = 'grp_fun';
     store.messagesMap = {
       'yeaft-1': [
-        { type: 'user', content: 'old cached Fun message', groupId: 'grp_fun' },
+        { type: 'user', content: 'old cached Fun message', sessionId: 'grp_fun' },
       ],
     };
 
@@ -61,7 +61,7 @@ describe('Yeaft session history re-entry', () => {
     store.yeaftActiveSessionFilter = 'grp_other';
     store.messagesMap = {
       'yeaft-1': [
-        { type: 'user', content: 'old cached Fun message', groupId: 'grp_fun' },
+        { type: 'user', content: 'old cached Fun message', sessionId: 'grp_fun' },
       ],
     };
 
@@ -100,10 +100,10 @@ describe('Yeaft session history re-entry', () => {
     store.yeaftConversationId = 'yeaft-local-1';
     store.messagesMap = {
       'yeaft-agent-1': [
-        { id: 'old', type: 'user', content: 'cached row', timestamp: 10, groupId: 'grp_fun' },
+        { id: 'old', type: 'user', content: 'cached row', timestamp: 10, sessionId: 'grp_fun' },
       ],
       'yeaft-local-1': [
-        { id: 'new', type: 'user', content: 'local row', timestamp: 20, groupId: 'grp_fun' },
+        { id: 'new', type: 'user', content: 'local row', timestamp: 20, sessionId: 'grp_fun' },
       ],
     };
 
@@ -185,7 +185,7 @@ describe('Yeaft session history re-entry', () => {
     };
     store.messagesMap = {
       'yeaft-1': [
-        { type: 'user', content: 'already loaded Fun message', groupId: 'grp_fun' },
+        { type: 'user', content: 'already loaded Fun message', sessionId: 'grp_fun' },
       ],
     };
 
@@ -207,15 +207,15 @@ describe('Yeaft session history re-entry', () => {
     store.yeaftActiveSessionFilter = 'grp_fun';
     store.messagesMap = {
       'yeaft-1': [
-        { type: 'user', content: 'new Fun message typed before re-entry', groupId: 'grp_fun' },
+        { type: 'user', content: 'new Fun message typed before re-entry', sessionId: 'grp_fun' },
       ],
     };
 
     handleYeaftHistoryChunk(store, {
       conversationId: 'yeaft-1',
-      groupId: 'grp_fun',
+      sessionId: 'grp_fun',
       messages: [
-        { id: 'm0001', role: 'user', content: 'old Fun message', groupId: 'grp_fun' },
+        { id: 'm0001', role: 'user', content: 'old Fun message', sessionId: 'grp_fun' },
       ],
       oldestSeq: 1,
       hasMore: false,

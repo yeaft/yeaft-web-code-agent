@@ -499,12 +499,13 @@ export function handleYeaftHistoryChunk(store, msg) {
     if (stableId) seenIds.add(stableId);
     if (m.role === 'user') {
       const threadId = m.threadId || m.turnId || 'main';
+      const rowSessionId = m.sessionId ?? m.groupId ?? msgSessionId ?? null;
       formatted.push({
         ...(stableId ? { id: stableId, messageId: stableId } : {}),
         type: 'user',
         content: m.content,
         timestamp: normalizeHistoryTimestamp(m),
-        groupId: m.groupId ?? msgSessionId ?? null,
+        sessionId: rowSessionId,
         threadId,
         turnId: m.turnId || threadId,
         ...(Array.isArray(m.attachments) && m.attachments.length > 0 ? { attachments: m.attachments } : {}),
@@ -512,13 +513,14 @@ export function handleYeaftHistoryChunk(store, msg) {
       });
     } else if (m.role === 'assistant') {
       const threadId = m.threadId || m.turnId || 'main';
-      const speakerVpId = resolveHistorySpeakerVpId(m, m.groupId ?? msgSessionId ?? null);
+      const rowSessionId = m.sessionId ?? m.groupId ?? msgSessionId ?? null;
+      const speakerVpId = resolveHistorySpeakerVpId(m, rowSessionId);
       formatted.push({
         ...(stableId ? { id: stableId, messageId: stableId } : {}),
         type: 'assistant',
         content: m.content,
         timestamp: normalizeHistoryTimestamp(m),
-        groupId: m.groupId ?? msgSessionId ?? null,
+        sessionId: rowSessionId,
         threadId,
         turnId: m.turnId || threadId,
         ...(speakerVpId ? { vpId: speakerVpId, speakerVpId } : {}),

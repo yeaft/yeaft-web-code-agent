@@ -99,7 +99,7 @@ describe('store getters — Yeaft isolation via selectActiveConversationId', () 
     const convId = selectActiveConversationId(state);
     const raw = convId ? (state.messagesMap[convId] || EMPTY) : EMPTY;
     if (state.currentView === 'yeaft' && state.yeaftActiveSessionFilter) {
-      return raw.filter(m => m && m.groupId === state.yeaftActiveSessionFilter);
+      return raw.filter(m => m && m.sessionId === state.yeaftActiveSessionFilter);
     }
     return raw;
   }
@@ -118,19 +118,19 @@ describe('store getters — Yeaft isolation via selectActiveConversationId', () 
     expect(getMessages(state).map(m => m.id)).toEqual(['u1']);
   });
 
-  it('yeaft view + group filter: still scoped to yeaft stream and filtered by groupId', () => {
+  it('yeaft view + session filter: still scoped to yeaft stream and filtered by sessionId', () => {
     const state = mkState({
       currentView: 'yeaft',
       activeConversations: ['chat-A'],
       yeaftConversationId: 'yeaft-1',
       yeaftActiveSessionFilter: 'grp_alpha',
       messagesMap: {
-        // Same groupId on the leaked side — strict equality alone
+        // Same sessionId on the leaked side — strict equality alone
         // would let it through; the selector is what blocks it.
-        'chat-A': [{ id: 'leaked', groupId: 'grp_alpha' }],
+        'chat-A': [{ id: 'leaked', sessionId: 'grp_alpha' }],
         'yeaft-1': [
-          { id: 'u1', groupId: 'grp_alpha' },
-          { id: 'u2', groupId: 'grp_beta' },
+          { id: 'u1', sessionId: 'grp_alpha' },
+          { id: 'u2', sessionId: 'grp_beta' },
         ],
       },
     });

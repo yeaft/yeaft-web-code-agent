@@ -31,7 +31,7 @@ describe('Per-message vp_turn_end reducer', () => {
         {
           type: 'assistant',
           content: 'live reply',
-          groupId: 'grp_fun',
+          sessionId: 'grp_fun',
           speakerVpId: 'vp_a',
           turnId: 'turn-1',
           status: 'pending',
@@ -100,10 +100,10 @@ describe('Per-message vp_turn_end reducer', () => {
     store.yeaftConversationId = 'conv1';
     store.messagesMap = {
       conv1: [
-        { type: 'user', content: 'go', groupId: 'grp_fun', speakerVpId: 'vp_a', turnId: 'turn-1' },
-        { type: 'assistant', content: 'part 1', groupId: 'grp_fun', speakerVpId: 'vp_a', turnId: 'turn-1', status: 'pending' },
-        { type: 'assistant', content: 'part 2', groupId: 'grp_fun', speakerVpId: 'vp_a', turnId: 'turn-1', status: 'pending' },
-        { type: 'assistant', content: 'part 3', groupId: 'grp_fun', speakerVpId: 'vp_a', turnId: 'turn-1', status: 'pending' },
+        { type: 'user', content: 'go', sessionId: 'grp_fun', speakerVpId: 'vp_a', turnId: 'turn-1' },
+        { type: 'assistant', content: 'part 1', sessionId: 'grp_fun', speakerVpId: 'vp_a', turnId: 'turn-1', status: 'pending' },
+        { type: 'assistant', content: 'part 2', sessionId: 'grp_fun', speakerVpId: 'vp_a', turnId: 'turn-1', status: 'pending' },
+        { type: 'assistant', content: 'part 3', sessionId: 'grp_fun', speakerVpId: 'vp_a', turnId: 'turn-1', status: 'pending' },
       ],
     };
     store.handleYeaftOutput({

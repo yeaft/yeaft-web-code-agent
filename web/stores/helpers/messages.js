@@ -1,22 +1,25 @@
 // Message CRUD and streaming helpers
 
-// Default group identifier used by the Yeaft "Default" group seed
+// Default session identifier used by the Yeaft "Default" session seed
 // (mirrors agent/yeaft/groups/seed-default.js DEFAULT_GROUP_ID).
-// Every Yeaft message is tagged with a groupId — either the currently
-// active group filter or this default — so the group filter getters
+// The `grp_` prefix is a persistence contract — disk paths, AMS scope
+// regex and migration code all key off it, so the string value stays.
+// What changed is the JS identifier and the message field it stamps:
+// every Yeaft message is tagged with `sessionId` — either the currently
+// active session filter or this default — so the session filter getters
 // can use strict equality without hiding "untagged" messages.
-const DEFAULT_GROUP_ID = 'grp_default';
+const DEFAULT_SESSION_ID = 'grp_default';
 
 // Are we currently writing into the *active* Yeaft conversation? Both
-// the speaker-attribution stamper and the groupId stamper key off this
+// the speaker-attribution stamper and the sessionId stamper key off this
 // same predicate; centralising it keeps the rules in one place.
 //
 // IMPORTANT: this does NOT gate on `store.currentView === 'yeaft'`.
 // Yeaft turns keep running on the agent regardless of which view the
 // user is looking at; messages can arrive while the user is browsing
 // Chat. If we gated on view, those messages would land in messagesMap
-// without a `groupId` and the `messages` getter would silently filter
-// them out (it does a strict `m.groupId === activeSessionFilter` match).
+// without a `sessionId` and the `messages` getter would silently filter
+// them out (it does a strict `m.sessionId === activeSessionFilter` match).
 // The user would see the UI frozen on switch-back until something forced
 // a re-fetch. Keying purely off "is this the yeaft conversation id"
 // keeps stamping consistent regardless of view.
@@ -86,16 +89,16 @@ export function addMessageToConversation(store, conversationId, msg) {
   };
 
   // Yeaft uniformity: stamp every message that lands in the active Yeaft
-  // conversation with a groupId. Never overwrite an explicit groupId set
-  // by the caller (e.g. sendYeaftSessionMessage or task_message handler).
-  // Bug 1: prefer `_currentYeaftSessionId` (the SEND-context group set by
-  // handleYeaftOutput before dispatching streaming chunks) over the user's
-  // current filter — otherwise messages arriving while the user has
-  // switched groups get stamped with the wrong group.
-  if (inActiveYeaftConv(store, conversationId) && !newMsg.groupId) {
-    newMsg.groupId = store._currentYeaftSessionId
+  // conversation with a sessionId. Never overwrite an explicit sessionId
+  // set by the caller (e.g. sendYeaftSessionMessage or task_message
+  // handler). Bug 1: prefer `_currentYeaftSessionId` (the SEND-context
+  // session set by handleYeaftOutput before dispatching streaming
+  // chunks) over the user's current filter — otherwise messages arriving
+  // while the user has switched sessions get stamped with the wrong one.
+  if (inActiveYeaftConv(store, conversationId) && !newMsg.sessionId) {
+    newMsg.sessionId = store._currentYeaftSessionId
       || store.yeaftActiveSessionFilter
-      || DEFAULT_GROUP_ID;
+      || DEFAULT_SESSION_ID;
   }
 
   // Yeaft per-VP turn: stamp vpId + turnId on the message for turn-level
@@ -126,7 +129,7 @@ export function addMessageToConversation(store, conversationId, msg) {
   }
   store.messagesMap[conversationId].push(newMsg);
   // Bug 1: keep messages sorted by timestamp so history loaded out-of-order
-  // (e.g. from different groups) still displays chronologically.
+  // (e.g. from different sessions) still displays chronologically.
   // Only sort Yeaft conversations; crew conversations need insertion order.
   if (conversationId === store.yeaftConversationId) {
     store.messagesMap[conversationId].sort((a, b) => a.timestamp - b.timestamp);

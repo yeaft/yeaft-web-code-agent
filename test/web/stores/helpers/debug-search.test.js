@@ -47,9 +47,14 @@ describe('turnMatchesSearch', () => {
     expect(turnMatchesSearch(t, [], [], 'linus')).toBe(true);
   });
 
-  it('matches groupId', () => {
+  it('matches groupId (legacy field still searched for backward compat)', () => {
     const t = mkTurn({ groupId: 'grp_alpha' });
     expect(turnMatchesSearch(t, [], [], 'grp_alpha')).toBe(true);
+  });
+
+  it('matches sessionId (new canonical field after rename sweep 2026-06-08)', () => {
+    const t = mkTurn({ sessionId: 'grp_beta' });
+    expect(turnMatchesSearch(t, [], [], 'grp_beta')).toBe(true);
   });
 
   it('matches system prompt — but only the first loop (constant)', () => {
