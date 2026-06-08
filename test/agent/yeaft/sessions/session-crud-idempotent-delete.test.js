@@ -70,25 +70,44 @@ describe('deleteSession idempotency (orphan session fix)', () => {
     expect(existsSync(join(sessionsRoot(yeaftDir), meta.id))).toBe(false);
   });
 
-  it('still tears down the memory scope dir even when there is no live session', () => {
-    // Simulate the "orphan with leftover memory" case — the on-disk session
-    // dir is gone, but the memory scope dir for it still exists. The
-    // idempotent delete must not leave that lying around for future
-    // recreations to inherit stale state.
+  it('tears down a stale memory scope dir even when the session is already gone', () => {
+    // The orphan-recreate problem we're guarding against: the on-disk
+    // session dir is gone, but the memory scope dir for it survived a
+    // prior incomplete cleanup. If we leave it behind, a future
+    // createSessionFromSpec that picks the same id (legacy deterministic
+    // ids like `grp_yeaft` are exactly this cohort) would inherit a stale
+    // `summary.md` via `seedSummaryIfMissingSync`.
     const memScope = join(yeaftDir, 'memory', 'group', 'grp_ghost');
     mkdirSync(memScope, { recursive: true });
     writeFileSync(join(memScope, 'summary.md'), '# stale ghost summary\n');
 
     const result = deleteSession(yeaftDir, 'grp_ghost');
 
-    // Idempotent — no throw, alreadyGone: true.
     expect(result.alreadyGone).toBe(true);
-    // The early-return path is intentionally a no-op on memory (the dir was
-    // unreachable from the live session anyway). What matters is that the
-    // call did not throw and the caller (web-bridge → server) can clear the
-    // shadow row. The next createSessionFromSpec that picks the same id will
-    // re-seed summary.md via seedSummaryIfMissingSync.
+    expect(existsSync(memScope)).toBe(false);
     expect(existsSync(join(sessionsRoot(yeaftDir), 'grp_ghost'))).toBe(false);
+  });
+
+  it('cleans only the legacy archive dirs when no live session exists', () => {
+    // Branch: `!liveExists && legacyDirs.length > 0`. The id has no live
+    // dir but a stale soft-archive dir lingers from the pre-Bug-8 flow.
+    // Expected: legacy dirs are swept, `deleted: false` (no live dir was
+    // removed), `alreadyGone: false` (we did clean something).
+    const root = sessionsRoot(yeaftDir);
+    const legacyA = join(root, '.archived-2024-01-01T00-00-00-0000Z-aaaa-grp_legacy');
+    const legacyB = join(root, '.archived-2024-02-02T00-00-00-0000Z-bbbb-grp_legacy');
+    mkdirSync(legacyA, { recursive: true });
+    mkdirSync(legacyB, { recursive: true });
+    writeFileSync(join(legacyA, 'meta.json'), '{}');
+
+    const result = deleteSession(yeaftDir, 'grp_legacy');
+
+    expect(result.sessionId).toBe('grp_legacy');
+    expect(result.deleted).toBe(false);
+    expect(result.legacyCleanedUp).toBe(2);
+    expect(result.alreadyGone).toBe(false);
+    expect(existsSync(legacyA)).toBe(false);
+    expect(existsSync(legacyB)).toBe(false);
   });
 });
 
