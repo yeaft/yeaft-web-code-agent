@@ -118,6 +118,15 @@ describe('SessionCreateModal onSubmit cross-agent sync (bug 2 regression)', () =
     expect(calls.selectAgent).toEqual([]);
   });
 
+  // The wire-translation contract — that chat.js stamps msg.agentId onto
+  // the resolved `group` when the agent's session payload omitted it — is
+  // pinned by test/web/stores/session-crud-result-agentid-injection.test.js.
+  // We do NOT re-test that here; this file's job is to verify the modal's
+  // consumer-side behavior assuming the contract holds. (Original draft of
+  // this regression test mocked a post-injection shape, which would have
+  // passed even with the wire bug; the dedicated chat-store test is what
+  // actually catches the production regression.)
+
   it('does NOT do any sync when the create fails (res.ok=false)', async () => {
     const { ctx, calls } = makeCtx({
       chat: {
