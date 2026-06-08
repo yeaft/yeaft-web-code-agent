@@ -10,8 +10,18 @@ const DEFAULT_GROUP_ID = 'grp_default';
 // Are we currently writing into the *active* Yeaft conversation? Both
 // the speaker-attribution stamper and the groupId stamper key off this
 // same predicate; centralising it keeps the rules in one place.
+//
+// IMPORTANT: this does NOT gate on `store.currentView === 'yeaft'`.
+// Yeaft turns keep running on the agent regardless of which view the
+// user is looking at; messages can arrive while the user is browsing
+// Chat. If we gated on view, those messages would land in messagesMap
+// without a `groupId` and the `messages` getter would silently filter
+// them out (it does a strict `m.groupId === activeSessionFilter` match).
+// The user would see the UI frozen on switch-back until something forced
+// a re-fetch. Keying purely off "is this the yeaft conversation id"
+// keeps stamping consistent regardless of view.
 function inActiveYeaftConv(store, conversationId) {
-  return store.currentView === 'yeaft'
+  return !!store.yeaftConversationId
     && conversationId === store.yeaftConversationId;
 }
 
