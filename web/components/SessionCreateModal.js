@@ -28,6 +28,7 @@
  */
 import VpAvatar from './VpAvatar.js';
 import { getLastPathSegment, formatResumeDate } from '../utils/path-segments.js';
+import { folderPickerData, folderPickerMethods } from './mixins/folder-picker-mixin.js';
 
 const OMNI_VP_ID = 'omni';
 
@@ -278,12 +279,11 @@ export default {
       },
       busy: false,
       submitError: '',
-      folderPickerOpen: false,
-      folderPickerPath: '',
-      folderPickerEntries: [],
-      folderPickerLoading: false,
-      folderPickerSelected: '',
-      _folderPickerTimer: null,
+      // Folder picker state — extracted to a shared mixin so the new
+      // SessionRestoreModal gets the same UX for free. Spreading the
+      // factory keeps field names + the WS conversationId contract
+      // exactly the same (see test/web/session-create-modal-workdir-picker.test.js).
+      ...folderPickerData(),
       // Track whether the user has manually touched the picker; once true
       // we stop auto-mutating their selection from the hydration watcher.
       vpPickerTouched: false,
@@ -494,99 +494,22 @@ export default {
     },
     onOverlayClick() { if (!this.busy) this.requestClose(); },
     requestClose() { this.$emit('close'); },
-    openFolderPicker() {
-      const agentId = this.folderPickerAgentId;
-      if (!agentId || !this.chat || typeof this.chat.sendWsMessage !== 'function') return;
-      this.folderPickerOpen = true;
-      this.folderPickerSelected = '';
-      this.folderPickerLoading = true;
-      const defaultDir = this.form.workDir || this.defaultWorkDir || '';
-      this.folderPickerPath = defaultDir;
-      this.folderPickerEntries = [];
-      this.requestFolderPickerDir(defaultDir);
+    // Folder picker glue — see mixins/folder-picker-mixin.js for the
+    // shared behavior. The two hooks below let the mixin's open/confirm
+    // flow plug into this modal's local state (`form.workDir`).
+    folderPickerInitialDir() {
+      return this.form.workDir || this.defaultWorkDir || '';
     },
-    closeFolderPicker() {
-      this.folderPickerOpen = false;
-      if (this._folderPickerTimer) {
-        clearTimeout(this._folderPickerTimer);
-        this._folderPickerTimer = null;
-      }
-    },
-    requestFolderPickerDir(dirPath) {
-      const agentId = this.folderPickerAgentId;
-      if (!agentId || !this.chat || typeof this.chat.sendWsMessage !== 'function') return;
-      this.chat.sendWsMessage({
-        type: 'list_directory',
-        conversationId: '_workdir_picker',
-        agentId,
-        dirPath,
-        workDir: this.defaultWorkDir || '',
-      });
-      if (this._folderPickerTimer) clearTimeout(this._folderPickerTimer);
-      this._folderPickerTimer = setTimeout(() => {
-        if (this.folderPickerLoading && this.folderPickerOpen) this.requestFolderPickerDir(dirPath);
-      }, 5000);
-    },
-    loadFolderPickerDir(dirPath) {
-      this.folderPickerLoading = true;
-      this.folderPickerSelected = '';
-      this.folderPickerEntries = [];
-      this.requestFolderPickerDir(dirPath);
-    },
-    folderPickerNavigateUp() {
-      if (!this.folderPickerPath) return;
-      const isWin = this.folderPickerPath.includes('\\');
-      const sep = isWin ? '\\' : '/';
-      const parts = this.folderPickerPath.replace(/[/\\]$/, '').split(/[/\\]/);
-      parts.pop();
-      if (parts.length === 0) {
-        this.folderPickerPath = '';
-        this.loadFolderPickerDir('');
-      } else if (isWin && parts.length === 1 && /^[A-Za-z]:$/.test(parts[0])) {
-        this.folderPickerPath = parts[0] + '\\';
-        this.loadFolderPickerDir(this.folderPickerPath);
-      } else {
-        const parent = parts.join(sep);
-        this.folderPickerPath = parent;
-        this.loadFolderPickerDir(parent);
-      }
-    },
-    folderPickerSelectItem(entry) { this.folderPickerSelected = entry.name; },
-    folderPickerEnter(entry) {
-      const isWin = this.folderPickerPath.includes('\\') || /^[A-Z]:/.test(entry.name);
-      const sep = isWin ? '\\' : '/';
-      let newPath;
-      if (!this.folderPickerPath) {
-        newPath = /^[A-Z]:$/.test(entry.name) ? entry.name + '\\' : '/' + entry.name;
-      } else {
-        newPath = this.folderPickerPath.replace(/[/\\]$/, '') + sep + entry.name;
-      }
-      this.folderPickerPath = newPath;
-      this.loadFolderPickerDir(newPath);
-    },
-    confirmFolderPicker() {
-      let path = this.folderPickerPath;
-      if (!path) return;
-      if (this.folderPickerSelected) {
-        const sep = path.includes('\\') ? '\\' : '/';
-        path = path.replace(/[/\\]$/, '') + sep + this.folderPickerSelected;
-      }
+    folderPickerSetWorkDir(path) {
       this.form.workDir = path;
-      this.closeFolderPicker();
     },
-    handleFolderPickerMessage(event) {
-      const msg = event.detail;
-      if (!msg || msg.type !== 'directory_listing' || msg.conversationId !== '_workdir_picker') return;
-      if (this._folderPickerTimer) {
-        clearTimeout(this._folderPickerTimer);
-        this._folderPickerTimer = null;
-      }
-      this.folderPickerLoading = false;
-      this.folderPickerEntries = (msg.entries || [])
-        .filter(e => e.type === 'directory')
-        .sort((a, b) => a.name.localeCompare(b.name));
-      if (msg.dirPath != null) this.folderPickerPath = msg.dirPath;
-    },
+    // Folder-picker behavior (open/close/navigate/confirm/incoming msg).
+    // Spread from the shared mixin so the new SessionRestoreModal can
+    // reuse the same picker without copy-paste. Method names
+    // (`requestFolderPickerDir`, `handleFolderPickerMessage`) are part
+    // of the wire contract pinned by
+    // `test/web/session-create-modal-workdir-picker.test.js`.
+    ...folderPickerMethods,
     async onSubmit() {
       if (this.busy || !this.canSubmit) return;
       this.submitError = '';

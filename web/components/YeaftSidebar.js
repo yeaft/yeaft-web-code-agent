@@ -19,13 +19,14 @@ const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
 import SessionCreateModal from './SessionCreateModal.js';
+import SessionRestoreModal from './SessionRestoreModal.js';
 import SidebarModeToggle from './SidebarModeToggle.js';
 import SidebarAgentHeader from './SidebarAgentHeader.js';
 import { shortenPath } from '../utils/path-display.js';
 
 export default {
   name: 'YeaftSidebar',
-  components: { SessionCreateModal, SidebarModeToggle, SidebarAgentHeader },
+  components: { SessionCreateModal, SessionRestoreModal, SidebarModeToggle, SidebarAgentHeader },
   emits: ['select-group', 'select-chat', 'toggle-sidebar', 'back', 'open-settings', 'open-group-settings'],
   template: `
     <aside class="yeaft-sidebar" :class="{ collapsed: collapsed }">
@@ -90,6 +91,15 @@ export default {
               @click.stop="onOpenSessionCreate"
             >
               <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+            </button>
+            <button
+              type="button"
+              class="session-tab-add-btn session-tab-restore-btn"
+              :title="$t('yeaft.sidebar.restoreHint')"
+              :aria-label="$t('yeaft.sidebar.restore')"
+              @click.stop="onOpenSessionRestore"
+            >
+              <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6a7 7 0 1 1 2.05 4.95L6.63 18.37A9 9 0 1 0 13 3zm-1 5v5l4.25 2.52.77-1.28-3.52-2.09V8H12z"/></svg>
             </button>
           </div>
         </div>
@@ -161,6 +171,15 @@ export default {
         @created="onSessionCreated"
       />
 
+      <!-- feat-yeaft-session-restore: pick a workdir, scan it, restore
+           the one the user clicks. Agent rebroadcasts session_list_updated
+           on restore — no manual refresh needed. -->
+      <SessionRestoreModal
+        v-if="sessionRestoreOpen"
+        @close="sessionRestoreOpen = false"
+        @restored="onSessionRestored"
+      />
+
       <!-- task-yeaft-group-editor: Per-group rename/delete formerly lived
            in inline overlays here. They've been folded into the unified
            SessionSettingsModal — opened via the kebab → unified modal at
@@ -186,6 +205,10 @@ export default {
       now: Date.now(),
       // task-334m: session-create modal visibility.
       sessionCreateOpen: false,
+      // feat-yeaft-session-restore: separate modal for "register an
+      // existing on-disk session into the sidebar". Read-only on disk,
+      // write-only on the workdir registry.
+      sessionRestoreOpen: false,
       // task-yeaft-group-editor: per-row action menu only — the rename
       // and delete modals have been folded into the unified
       // SessionSettingsModal owned by YeaftPage.
@@ -340,6 +363,28 @@ export default {
     onOpenSessionCreate() { this.sessionCreateOpen = true; },
     onSessionCreated(_group) {
       // groups store auto-activates via applyCrudResult; modal closes itself.
+    },
+    // feat-yeaft-session-restore: open the "register existing session"
+    // modal. Selecting a session from there fires the `restored` event;
+    // the modal closes itself on success.
+    onOpenSessionRestore() { this.sessionRestoreOpen = true; },
+    onSessionRestored(session) {
+      // Agent rebroadcasts `session_list_updated` on a successful
+      // restore, so the sidebar list refreshes itself. We still flip
+      // the active session pointer so the just-restored row is shown
+      // immediately — mirrors the create flow's UX.
+      if (!session || !session.id) return;
+      if (session.agentId && this.chatStore && this.chatStore.currentAgent !== session.agentId) {
+        if (typeof this.chatStore.selectAgent === 'function') {
+          this.chatStore.selectAgent(session.agentId);
+        } else {
+          this.chatStore.currentAgent = session.agentId;
+        }
+      }
+      if (this.sessionsStore) this.sessionsStore.setActive(session.id);
+      if (this.chatStore && typeof this.chatStore.setActiveSessionFilter === 'function') {
+        this.chatStore.setActiveSessionFilter(session.id, { force: true });
+      }
     },
     onSelectGroup(g) {
       if (!g || !g.id) return;
