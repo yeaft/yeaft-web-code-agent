@@ -1158,6 +1158,11 @@ export default {
   'yeaft.session.delete': 'Delete',
   'yeaft.session.deleteConfirm': 'Delete "{name}"? This permanently removes the session and all its data — this cannot be undone.',
   'yeaft.session.rename': 'Rename',
+  // fix-yeaft-session-list-and-menu: sidebar ⋯ menu now mirrors chat
+  // (pin / open settings / remove from list). Real delete stays in the
+  // settings modal's danger zone (uses `yeaft.session.delete*` above).
+  'yeaft.session.openSettings': 'Settings',
+  'yeaft.session.removeFromList': 'Remove from list',
   'yeaft.session.manageMembers': 'Manage members',
   'yeaft.session.memberCount.one': '1 member',
   'yeaft.session.memberCount.other': '{count} members',

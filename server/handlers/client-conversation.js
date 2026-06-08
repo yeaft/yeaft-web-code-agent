@@ -6,6 +6,7 @@ import {
   sendToWebClient, forwardToAgent,
   broadcastAgentList, verifyConversationOwnership, verifyAgentOwnership
 } from '../ws-utils.js';
+import { routeSessionPin } from './session-pin-router.js';
 
 function emptyYeaftToolStats(reason = '') {
   const payload = {
@@ -302,16 +303,41 @@ export async function handleClientConversation(clientId, client, msg, checkAgent
 
     case 'pin_session':
     case 'unpin_session': {
-      const pinConvId = msg.conversationId;
-      if (!pinConvId) break;
-      if (!CONFIG.skipAuth && !verifyConversationOwnership(pinConvId, client.userId)) break;
-      const isPinned = msg.type === 'pin_session';
+      // fix-yeaft-session-list-and-menu: yeaft sessions live in a
+      // separate `yeaft_sessions` table (with its own user_id column),
+      // not in `sessions`. The pure router decides which table owns
+      // the id and whether the caller is authorized; this handler is
+      // only responsible for executing the chosen DB write + replying.
+      // Tests cover the router directly (see session-pin-router.js).
+      const route = routeSessionPin(
+        {
+          getYeaftRow: (id) => yeaftSessionDb.get(id),
+          verifyChatOwnership: (id, userId) => verifyConversationOwnership(id, userId),
+          skipAuth: CONFIG.skipAuth,
+        },
+        client,
+        msg,
+      );
+      if (route.kind === 'noop') break;
+      if (route.kind === 'denied') {
+        if (route.reason === 'yeaft-foreign') {
+          console.warn(`[Security] User ${client.userId} attempted to pin yeaft session ${route.id} they don't own`);
+        }
+        break;
+      }
+      if (route.kind === 'yeaft') {
+        try { yeaftSessionDb.setPinned(route.id, route.isPinned); }
+        catch (e) { console.warn(`[Server] yeaftSessionDb.setPinned failed for ${route.id}:`, e?.message || e); }
+        await sendToWebClient(client, { type: 'session_pinned', conversationId: route.id, pinned: route.isPinned });
+        break;
+      }
+      // route.kind === 'chat'
       try {
-        sessionDb.setPinned(pinConvId, isPinned);
+        sessionDb.setPinned(route.id, route.isPinned);
         // If pinning, also ensure session is active (reactivate if it was auto-deactivated)
-        if (isPinned) sessionDb.setActive(pinConvId, true);
+        if (route.isPinned) sessionDb.setActive(route.id, true);
       } catch (e) { /* ignore */ }
-      await sendToWebClient(client, { type: 'session_pinned', conversationId: pinConvId, pinned: isPinned });
+      await sendToWebClient(client, { type: 'session_pinned', conversationId: route.id, pinned: route.isPinned });
       break;
     }
 

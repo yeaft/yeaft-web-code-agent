@@ -48,6 +48,10 @@ function mapRow(row) {
     createdAt: row.created_at || null,
     updatedAt: row.updated_at,
     isArchived: row.is_archived === 1,
+    // fix-yeaft-session-list-and-menu: persisted pin state. Decorated
+    // onto outgoing snapshots in server/handlers/agent-output.js so the
+    // web sees `pinned: true/false` on each session row.
+    isPinned: row.is_pinned === 1,
   };
 }
 
@@ -133,5 +137,21 @@ export const yeaftSessionDb = {
 
   setArchived(id, archived) {
     stmts.setYeaftSessionArchived.run(archived ? 1 : 0, Date.now(), id);
+  },
+
+  /**
+   * Persist the per-session pin state. fix-yeaft-session-list-and-menu:
+   * yeaft sidebar's "置顶" menu item flips this — the existing
+   * `pin_session` / `unpin_session` WebSocket handler in
+   * server/handlers/client-conversation.js detects yeaft-owned ids and
+   * routes here (chat-owned ids fall back to sessionDb.setPinned).
+   *
+   * upsertFromSnapshot does NOT touch is_pinned (the snapshot is
+   * agent-authored and the agent has no notion of pin); the column is
+   * preserved across snapshot upserts naturally because is_pinned is
+   * absent from the ON CONFLICT update set in connection.js.
+   */
+  setPinned(id, pinned) {
+    stmts.setYeaftSessionPinned.run(pinned ? 1 : 0, Date.now(), id);
   },
 };

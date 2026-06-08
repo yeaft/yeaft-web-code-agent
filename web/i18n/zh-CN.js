@@ -1157,6 +1157,11 @@ export default {
   'yeaft.session.deleteConfirm': '删除「{name}」？将永久删除该会话及其所有数据，此操作不可撤销。',
   'yeaft.session.deletingEllipsis': '删除中…',
   'yeaft.session.rename': '重命名',
+  // fix-yeaft-session-list-and-menu: 侧栏 ⋯ 菜单和 chat 对齐
+  // （置顶 / 设置 / 从列表移除）。真删保留在设置 modal 的危险区域
+  // （仍走上面的 `yeaft.session.delete*` 一组 key）。
+  'yeaft.session.openSettings': '设置',
+  'yeaft.session.removeFromList': '从列表移除',
   'yeaft.session.manageMembers': '管理成员',
   'yeaft.session.memberCount.one': '1 位成员',
   'yeaft.session.memberCount.other': '{count} 位成员',

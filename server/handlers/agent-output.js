@@ -498,6 +498,29 @@ export async function handleAgentOutput(agentId, agent, msg) {
       } catch (e) {
         console.warn(`[Server] yeaft session persist failed for agent ${agentId}:`, e?.message || e);
       }
+      // fix-yeaft-session-list-and-menu: decorate the outgoing snapshot
+      // with the server-side pin state. The agent has no notion of
+      // pinning (pin is UI metadata that lives in the `yeaft_sessions`
+      // table); the web sessions store reads `pinned: true` off each
+      // row in applySnapshot and mirrors it into chatStore.pinnedSessions
+      // so chat + yeaft share a single pin registry for sort logic.
+      //
+      // Use one batch read (`getByAgent`) and a Set lookup instead of an
+      // N+1 `get(id)` per row — relays this size hot path on every
+      // snapshot per connected client.
+      const rawRows = Array.isArray(msg.sessions) ? msg.sessions : [];
+      const pinnedIds = new Set();
+      try {
+        for (const row of yeaftSessionDb.getByAgent(agentId)) {
+          if (row && row.isPinned) pinnedIds.add(row.id);
+        }
+      } catch (e) {
+        console.warn(`[Server] yeaft pin decorate read failed for agent ${agentId}:`, e?.message || e);
+      }
+      const decoratedSessions = rawRows.map(s => {
+        if (!s || !s.id) return s;
+        return pinnedIds.has(s.id) ? { ...s, pinned: true } : s;
+      });
       // Relay verbatim to web (agentId stamped so the web sessions store
       // can merge per-agent rosters).
       for (const [, c] of webClients) {
@@ -505,7 +528,7 @@ export async function handleAgentOutput(agentId, agent, msg) {
           await sendToWebClient(c, {
             type: msg.type,
             agentId: agentId,
-            sessions: Array.isArray(msg.sessions) ? msg.sessions : [],
+            sessions: decoratedSessions,
           });
         }
       }
