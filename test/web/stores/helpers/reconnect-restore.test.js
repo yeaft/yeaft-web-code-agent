@@ -34,7 +34,7 @@
  * `sendWsMessage` to capture the wire packets and the bare minimum of
  * store surface the helpers read.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 // `conversation.js` and `messageHandler.js` transitively import
 // `web/stores/auth.js` which does `const { defineStore } = Pinia;`
@@ -224,6 +224,22 @@ describe('Fix C — chat-rejection system errors clear processing state', () => 
     });
   });
 
+  afterEach(() => {
+    // The 'Permission denied' negative case deliberately doesn't fire
+    // stopProcessingWatchdog, so the 9999ms timer planted in beforeEach
+    // would otherwise keep the vitest worker alive. Clear unconditionally
+    // — clearTimeout on an already-cleared id is a no-op.
+    if (store?._processingWatchdogs?.c1) {
+      clearTimeout(store._processingWatchdogs.c1);
+    }
+    // Auto-dismiss timers for system error bubbles (5s) also need a
+    // cleanup pass — handleMessage plants one per error pushed.
+    const msgs = store?.messagesMap?.c1 || [];
+    for (const m of msgs) {
+      if (m?._sysErrRemoveTimer) clearTimeout(m._sysErrRemoveTimer);
+    }
+  });
+
   it("'No conversation selected' → cleans processing + stops watchdog + still shows transient bubble", () => {
     handleMessage(store, {
       type: 'error',
@@ -249,6 +265,31 @@ describe('Fix C — chat-rejection system errors clear processing state', () => 
       conversationId: 'c1',
     });
 
+    expect(store.processingConversations.c1).toBeUndefined();
+    expect(store._processingWatchdogs.c1).toBeUndefined();
+    expect(finishCalls).toContain('c1');
+  });
+
+  it("'No agent available' → cleans processing AND renders as transient bubble", () => {
+    // Regression guard for a subtle asymmetry: the chat-rejection
+    // whitelist (which clears processing) and the isSystemError
+    // whitelist (which marks the bubble transient + enables dedup)
+    // must stay in sync. If 'No agent available' is only in the first
+    // list, the user sees a persistent red bubble that never
+    // auto-dismisses — worst of both worlds. This test pins both
+    // behaviors simultaneously.
+    handleMessage(store, {
+      type: 'error',
+      message: 'No agent available',
+      conversationId: 'c1',
+    });
+
+    // Transient system bubble pushed with transient=true.
+    const bubble = store.messagesMap.c1.find(m => m.type === 'error');
+    expect(bubble).toBeDefined();
+    expect(bubble.transient).toBe(true);
+
+    // Processing cleaned up.
     expect(store.processingConversations.c1).toBeUndefined();
     expect(store._processingWatchdogs.c1).toBeUndefined();
     expect(finishCalls).toContain('c1');
