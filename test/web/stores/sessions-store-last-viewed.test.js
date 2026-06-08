@@ -102,9 +102,12 @@ describe('sessions store — last-viewed restore + cross-agent retention', () =>
     globalThis.window.Pinia.useChatStore = () => fakeChat;
     s.applySnapshot([{ id: 'b1' }], 'agent_2');
     // Pre-fix: this would silently become 'a1' (an A id), reverting
-    // the UI back to Agent A. Post-fix: null (or b1) — never an
-    // unrelated-agent id.
-    expect(fakeChat.yeaftActiveSessionFilter).not.toBe('a1');
+    // the UI back to Agent A. Post-fix: stays null — the sanitizer's
+    // else-if branch never fires because lastViewedMatchesAgent is
+    // false. Pinning `.toBe(null)` ensures a future regression that
+    // falls back to `sessionOrder[0]` (which could be a wrong-agent
+    // id depending on snapshot order) is also caught.
+    expect(fakeChat.yeaftActiveSessionFilter).toBe(null);
     delete globalThis.window.Pinia.useChatStore;
   });
 

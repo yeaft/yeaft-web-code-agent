@@ -625,31 +625,22 @@ export default {
           agentId: this.form.agentId || null,
         });
         if (res && res.ok) {
-          // fix-yeaft-delete-and-agent-revert: mirror `resumeExisting`
-          // exactly so the just-created session's owning agent becomes
-          // the UI's currentAgent + yeaftAgentId immediately, and the
-          // chat-store filter (`yeaftActiveSessionFilter`) is set.
-          // Without these three lines, `currentAgent` stays at whatever
-          // it was when the modal opened (often Agent A) and the next
-          // click on a B-owned row triggers a `selectAgent(B)` round-
-          // trip whose side effects (cleared activeConversations + the
-          // stale `lastViewed` fallback in `sessions.js`'s applySnapshot
-          // sanitizer) silently jump the visible filter back to A.
-          // The chat-store fields must move in lockstep with
-          // sessionsStore.activeSessionId.
+          // Mirror resumeExisting: pin currentAgent + sessionsStore.active
+          // + chat filter to the new session so the next click doesn't
+          // snap back. (See commit 54028e1a for the regression history.)
           const chat = this.chat;
           const created = res.group || null;
-          const createdAgentId = created && created.agentId;
-          if (createdAgentId && chat && chat.currentAgent !== createdAgentId
-              && typeof chat.selectAgent === 'function') {
-            chat.selectAgent(createdAgentId);
-          }
-          if (this.sessionsStore && created && created.id) {
-            this.sessionsStore.setActive(created.id);
-          }
-          if (chat && created && created.id
-              && typeof chat.setActiveSessionFilter === 'function') {
-            chat.setActiveSessionFilter(created.id, { force: true });
+          const id = created && created.id;
+          const owner = created && created.agentId;
+          if (id) {
+            if (owner && chat && chat.currentAgent !== owner
+                && typeof chat.selectAgent === 'function') {
+              chat.selectAgent(owner);
+            }
+            if (this.sessionsStore) this.sessionsStore.setActive(id);
+            if (chat && typeof chat.setActiveSessionFilter === 'function') {
+              chat.setActiveSessionFilter(id, { force: true });
+            }
           }
           this.$emit('created', created);
           this.$emit('close');
