@@ -302,11 +302,47 @@ export function handleMessage(store, msg) {
 
     case 'error': {
       const errorConvId = msg.conversationId || store.currentConversation;
-      const isSystemError = ['Permission denied', 'Agent not found', 'No conversation selected', 'Agent is still syncing', 'Agent access denied'].some(
+      // 'No agent available' is part of the chat-rejection whitelist
+      // below and follows the same lifecycle (transient bubble + dedup
+      // collapse) as its peers, so it belongs here too. Keep these two
+      // lists in sync — every chat-rejection string MUST also be a
+      // system error string, otherwise the user sees a non-transient
+      // red bubble that never auto-dismisses.
+      const isSystemError = ['Permission denied', 'Agent not found', 'No conversation selected', 'Agent is still syncing', 'No agent available', 'Agent access denied'].some(
         s => msg.message?.includes(s)
       );
       if (msg.message?.includes('Agent is still syncing') || msg.message?.includes('Agent not found')) {
         clearSessionLoading(store);
+      }
+
+      // fix-chat-reconnect-race — these three server errors mean the
+      // chat the user just sent was DROPPED. The optimistic user bubble
+      // is already on screen and processingConversations is `true`, so
+      // without clearing them here the typing indicator spins forever
+      // and the user has no idea anything went wrong (the system error
+      // bubble below auto-disappears in 5s).
+      //
+      // We DELIBERATELY exclude 'Permission denied' / 'Agent not found'
+      // / 'Agent access denied' — those can be triggered by auxiliary
+      // messages (select_conversation, sync_messages, refresh, etc.)
+      // that aren't tied to the current turn. Clearing processing on
+      // those would clobber an unrelated in-flight chat.
+      //
+      // Placed BEFORE the dedup branch on purpose: the dedup branch
+      // `return`s early on duplicate bubbles within 3s, but the user
+      // may have sent a second chat in that window — its processing
+      // state still needs to be cleared.
+      //
+      // Match the `.some()` shape used by `isSystemError` above so the
+      // two whitelists stay grep-symmetric — when this list grows, the
+      // diff stays small and obviously parallel to the larger one.
+      const isChatRejection = ['No conversation selected', 'Agent is still syncing', 'No agent available'].some(
+        s => msg.message?.includes(s)
+      );
+      if (isChatRejection && errorConvId) {
+        delete store.processingConversations[errorConvId];
+        stopProcessingWatchdog(store, errorConvId);
+        store.finishStreamingForConversation(errorConvId);
       }
 
       // B: Dedup — collapse identical system error bubbles arriving within 3s.
