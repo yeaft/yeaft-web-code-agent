@@ -252,14 +252,13 @@ export default {
           { agentId: this.form.agentId || null },
         );
         if (res && res.ok) {
-          // chat.js's `sessionCrudRequest` wrapper renames the agent's
-          // `sessions` array to `groups` on the resolved promise (see
-          // chat.js:1759-1771 — the wrap is shared with the group-style
-          // ops and we must read its post-wrap shape, not the raw agent
-          // shape). The `??` keeps us tolerant if the envelope ever
-          // surfaces the raw name to make this less brittle.
-          const list = Array.isArray(res.groups) ? res.groups
-            : Array.isArray(res.sessions) ? res.sessions
+          // chat.js's `sessionCrudRequest` wrapper resolves with both
+          // `sessions` (canonical) and `groups` (legacy alias). Read the
+          // canonical name first; fall through to the legacy alias for
+          // one deploy window in case an older agent surfaces the raw
+          // name.
+          const list = Array.isArray(res.sessions) ? res.sessions
+            : Array.isArray(res.groups) ? res.groups
             : [];
           this.sessions = list;
         } else {
@@ -290,13 +289,15 @@ export default {
           { agentId: this.form.agentId || null },
         );
         if (res && res.ok) {
-          // chat.js's wrap renames the agent's `session` payload to
-          // `group` on the resolved promise (see chat.js:1759-1771).
-          // Reading `res.group` first gets the agentId-stamped payload
-          // (server stamps msg.agentId, wrap forwards it) — falling
-          // through to `res.session` or the click arg is just defense
-          // against shape drift.
-          this.$emit('restored', res.group || res.session || session);
+          // chat.js wraps the agent's `session` payload onto the resolved
+          // promise (see chat.js sessionCrudRequest resolver). The wrap
+          // also stamps msg.agentId onto it (server stamps agentId on
+          // the envelope; the agent payload itself doesn't carry it),
+          // so reading `res.session` here gets the agentId-coherent
+          // shape. Fall through to `res.group` for one deploy window in
+          // case an older agent is still on the legacy key, and to the
+          // click arg as final defense.
+          this.$emit('restored', res.session || res.group || session);
           this.$emit('close');
           return;
         }

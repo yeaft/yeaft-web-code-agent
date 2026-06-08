@@ -1757,23 +1757,26 @@ export const useChatStore = defineStore('chat', {
             // so callers see a wire-coherent shape. Agent payload wins if
             // it ever does start stamping (non-empty values only — an
             // empty-string agentId is treated as absent).
-            const rawGroup = event.session || event.group || null;
-            const groupWithAgent = (rawGroup && msg.agentId && !rawGroup.agentId)
-              ? { ...rawGroup, agentId: msg.agentId }
-              : rawGroup;
+            const rawSession = event.session || event.group || null;
+            const sessionWithAgent = (rawSession && msg.agentId && !rawSession.agentId)
+              ? { ...rawSession, agentId: msg.agentId }
+              : rawSession;
             const resolvedSessionId = event.sessionId || event.groupId || null;
+            const resolvedSessionList = event.sessions || event.groups || null;
             pending.resolve({
               ok: !!event.ok,
               op: event.op,
-              group: groupWithAgent,
-              session: groupWithAgent,
+              // Canonical (post msg.groupId→msg.sessionId sweep, 2026-06-08):
+              // callers should read `session` / `sessionId` / `sessions`.
+              session: sessionWithAgent,
               sessionId: resolvedSessionId,
-              // wire-compat: legacy `groupId` field for callers that still
-              // read it; rename them to `sessionId` and drop this when
-              // safe.
+              sessions: resolvedSessionList,
+              // Legacy aliases kept for one deploy window so any caller
+              // still on the old name keeps working — delete after callers
+              // are confirmed off (`grep -r "res\.group" web/`).
+              group: sessionWithAgent,
               groupId: resolvedSessionId,
-              groups: event.sessions || event.groups || null,
-              sessions: event.sessions || event.groups || null,
+              groups: resolvedSessionList,
               config: event.config || null,
               error: event.error || null,
             });

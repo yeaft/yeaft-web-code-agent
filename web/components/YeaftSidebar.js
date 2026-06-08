@@ -428,7 +428,7 @@ export default {
     // place. YeaftPage owns the modal lifecycle.
     openGroupSettings(g, section = 'members') {
       if (!g || !g.id) return;
-      this.$emit('open-group-settings', { sessionId: g.id, groupId: g.id, section });
+      this.$emit('open-group-settings', { sessionId: g.id, section });
     },
     // Convenience wrapper used by the kebab menu items: closes the menu
     // first so the unified modal opens cleanly without the kebab still

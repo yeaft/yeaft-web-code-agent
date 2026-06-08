@@ -12,14 +12,16 @@
  * `agentId` field — the agent doesn't know its own server-assigned
  * id. The server stamps `msg.agentId` on the envelope only. The web
  * chat-store's `case 'session_crud_result':` was resolving the
- * pending promise with `group: event.session || event.group || null`
+ * pending promise with `session: event.session || event.group || null`
  * — dropping the envelope's agentId. SessionCreateModal.onSubmit
  * then sees `created.agentId === undefined`, the cross-agent guard
  * short-circuits, `currentAgent` stays on A, and downstream behavior
  * (sidebar filter, history load, default-pointer logic) breaks.
  *
- * Fix: chat.js must inject `msg.agentId` into the resolved `group`
+ * Fix: chat.js must inject `msg.agentId` into the resolved `session`
  * payload when the agent omitted it. These tests pin that contract.
+ * The resolver also surfaces a legacy `group` alias for one deploy
+ * window in case any caller is still on the old name.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 
@@ -54,7 +56,7 @@ describe('session_crud_result agentId injection', () => {
     };
   });
 
-  it('injects msg.agentId into the resolved group when the agent payload omits it', () => {
+  it('injects msg.agentId into the resolved session when the agent payload omits it', () => {
     const store = makeStore();
     let resolved = null;
     store._sessionCrudPending = new Map([
@@ -75,13 +77,17 @@ describe('session_crud_result agentId injection', () => {
     });
 
     expect(resolved).not.toBeNull();
-    expect(resolved.group).toBeDefined();
-    expect(resolved.group.id).toBe('grp_test_abc12345');
+    expect(resolved.session).toBeDefined();
+    expect(resolved.session.id).toBe('grp_test_abc12345');
     // The critical assertion — without this injection,
     // SessionCreateModal.onSubmit sees undefined and never calls
     // selectAgent('agent-B'), reverting currentAgent to A on the next
     // store touch and making the new session look like it "didn't open".
-    expect(resolved.group.agentId).toBe('agent-B');
+    expect(resolved.session.agentId).toBe('agent-B');
+    // Deploy-window compat: the legacy `group` alias is still surfaced
+    // as the same payload so any caller still on the old name keeps
+    // working through one release.
+    expect(resolved.group).toBe(resolved.session);
   });
 
   it('also injects for the legacy group_crud_result wire type', () => {
@@ -102,12 +108,12 @@ describe('session_crud_result agentId injection', () => {
       },
     });
 
-    // Locks in BOTH the dual-naming mapping (event.group → resolved.group)
+    // Locks in BOTH the dual-naming mapping (event.group → resolved.session)
     // AND the agentId injection on the legacy code path. The fall-through
     // case label gets it for free today, but pinning it here prevents a
     // future split-cases refactor from regressing only one branch.
-    expect(resolved.group.id).toBe('grp_old');
-    expect(resolved.group.agentId).toBe('agent-X');
+    expect(resolved.session.id).toBe('grp_old');
+    expect(resolved.session.agentId).toBe('agent-X');
   });
 
   it('does NOT overwrite an agentId already present on the agent payload', () => {
@@ -131,10 +137,10 @@ describe('session_crud_result agentId injection', () => {
       },
     });
 
-    expect(resolved.group.agentId).toBe('agent-payload');
+    expect(resolved.session.agentId).toBe('agent-payload');
   });
 
-  it('leaves group as null when neither the agent nor the envelope provide one', () => {
+  it('leaves session as null when neither the agent nor the envelope provide one', () => {
     const store = makeStore();
     let resolved = null;
     store._sessionCrudPending = new Map([
@@ -153,7 +159,7 @@ describe('session_crud_result agentId injection', () => {
     });
 
     expect(resolved.ok).toBe(false);
-    expect(resolved.group).toBeNull();
+    expect(resolved.session).toBeNull();
     expect(resolved.error).toEqual({ code: 'invalid_name', message: 'empty' });
   });
 
@@ -175,7 +181,7 @@ describe('session_crud_result agentId injection', () => {
       },
     });
 
-    expect(resolved.group.id).toBe('grp_noenv');
-    expect(resolved.group.agentId).toBeUndefined();
+    expect(resolved.session.id).toBe('grp_noenv');
+    expect(resolved.session.agentId).toBeUndefined();
   });
 });

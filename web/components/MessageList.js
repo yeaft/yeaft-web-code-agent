@@ -1507,19 +1507,20 @@ export default {
 
     // SessionAnnouncementBar's "open settings" link bubbles a request up
     // to the parent page (YeaftPage) so the unified SessionSettingsModal
-    // can be opened with the right group id and an initial section
+    // can be opened with the right session id and an initial section
     // focus. MessageList is mounted directly inside YeaftPage, so a
     // normal emit chain — rather than a store-as-bus signal — is the
     // simpler path. YeaftPage listens for `@open-group-settings`.
     const onOpenGroupSettings = (payload) => {
+      // Accept legacy bare-string payloads and either { sessionId } or
+      // { groupId } shapes (some still-un-renamed child callers may
+      // emit the old key). Forward as canonical { sessionId } only.
       const norm = typeof payload === 'string'
-        ? { groupId: payload, sessionId: payload, section: 'announcement' }
+        ? { sessionId: payload, section: 'announcement' }
         : (payload || {});
-      if (!(norm.sessionId || norm.groupId)) return;
-      // Forward both fields so downstream listeners can transition.
-      if (!norm.sessionId && norm.groupId) norm.sessionId = norm.groupId;
-      if (!norm.groupId && norm.sessionId) norm.groupId = norm.sessionId;
-      ctx.emit('open-group-settings', norm);
+      const sessionId = norm.sessionId || norm.groupId || null;
+      if (!sessionId) return;
+      ctx.emit('open-group-settings', { sessionId, section: norm.section || 'announcement' });
     };
 
     // Single click handler for the load-more hint. Branches by view so

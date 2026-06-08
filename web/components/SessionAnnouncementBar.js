@@ -114,7 +114,7 @@ export default {
       }
     },
     onOpenSettings() {
-      this.$emit('open-settings', { sessionId: this.groupId, groupId: this.groupId, section: 'announcement' });
+      this.$emit('open-settings', { sessionId: this.groupId, section: 'announcement' });
     },
   },
   template: `
