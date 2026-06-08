@@ -249,7 +249,23 @@ export function handleAgentList(store, msg) {
       }
       return;
     } else {
-      console.log('[Reconnect] Agent not online yet:', store.currentAgent);
+      // fix-chat-reconnect-race — even when the agent hasn't reconnected
+      // yet (agent is an independent process; on a server restart the web
+      // WS comes back in ~1s but the agent typically needs a few more
+      // seconds), we still need to restore `client.currentConversation`
+      // on the server. The server's `select_conversation` handler only
+      // does an ownership check + writes that field — it does NOT touch
+      // any agent. Without this, a user sending a message in the
+      // intervening window hits `chat handler -> No conversation
+      // selected -> error`, and (because that error is classified
+      // system-transient) the typing indicator spins forever while the
+      // chat is silently dropped. The full resume path (sync_messages,
+      // refresh_conversation) still waits for the agent to come online
+      // via the `if (agent)` branch above on the next `agent_list`.
+      console.log('[Reconnect] Agent not online yet, restoring conversation context only:', store.currentAgent);
+      if (store.currentConversation) {
+        store.sendWsMessage({ type: 'select_conversation', conversationId: store.currentConversation });
+      }
       return;
     }
   }

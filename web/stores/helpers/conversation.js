@@ -470,6 +470,19 @@ export function sendMessage(store, text, attachments = [], options = {}) {
   const fileIds = attachments.map(a => a.fileId);
   const wsMsg = {
     type: 'chat',
+    // fix-chat-reconnect-race — always pin the conversationId on chat
+    // wsMsg, even on the legacy single-panel send path. Two reasons:
+    //  1) Defense in depth on top of Fix A: if `client.currentConversation`
+    //     on the server is somehow stale (e.g. a redeploy raced ahead of
+    //     the next agent_list), the server's chat handler still resolves
+    //     via `msg.conversationId || client.currentConversation`.
+    //  2) Unlocks the server's "search all agents for conv owner"
+    //     fallback (client-conversation.js around line 342) — that
+    //     branch is gated on `msg.conversationId` being present, so
+    //     without this we silently lose cross-agent routing.
+    // sendMessageToConversation (the multi-panel variant) already sets
+    // this; we're catching the legacy single-panel path up to it.
+    conversationId: store.currentConversation,
     prompt: text,
     fileIds,
     workDir: store.currentWorkDir,

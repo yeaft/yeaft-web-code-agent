@@ -309,6 +309,32 @@ export function handleMessage(store, msg) {
         clearSessionLoading(store);
       }
 
+      // fix-chat-reconnect-race — these three server errors mean the
+      // chat the user just sent was DROPPED. The optimistic user bubble
+      // is already on screen and processingConversations is `true`, so
+      // without clearing them here the typing indicator spins forever
+      // and the user has no idea anything went wrong (the system error
+      // bubble below auto-disappears in 5s).
+      //
+      // We DELIBERATELY exclude 'Permission denied' / 'Agent not found'
+      // / 'Agent access denied' — those can be triggered by auxiliary
+      // messages (select_conversation, sync_messages, refresh, etc.)
+      // that aren't tied to the current turn. Clearing processing on
+      // those would clobber an unrelated in-flight chat.
+      //
+      // Placed BEFORE the dedup branch on purpose: the dedup branch
+      // `return`s early on duplicate bubbles within 3s, but the user
+      // may have sent a second chat in that window — its processing
+      // state still needs to be cleared.
+      const isChatRejection = msg.message?.includes('No conversation selected')
+                           || msg.message?.includes('Agent is still syncing')
+                           || msg.message?.includes('No agent available');
+      if (isChatRejection && errorConvId) {
+        delete store.processingConversations[errorConvId];
+        stopProcessingWatchdog(store, errorConvId);
+        store.finishStreamingForConversation(errorConvId);
+      }
+
       // B: Dedup — collapse identical system error bubbles arriving within 3s.
       // Keep the first, drop repeats, append " (×N)" counter to the kept bubble.
       if (isSystemError && errorConvId) {
