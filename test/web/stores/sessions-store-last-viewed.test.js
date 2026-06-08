@@ -74,4 +74,53 @@ describe('sessions store — last-viewed restore + cross-agent retention', () =>
     s.applySnapshot([{ id: 'a1' }], 'agent_1');
     expect(Object.keys(s.sessions).sort()).toEqual(['a1', 'b1']);
   });
+
+  // -----------------------------------------------------------------
+  // fix-yeaft-delete-and-agent-revert: cross-agent lastViewed guard.
+  //
+  // Bug 2: after creating a session under Agent B, the chat store
+  // (currentAgent) stayed at A and the chat-store filter
+  // (yeaftActiveSessionFilter) stayed null. When the next snapshot
+  // arrived, the sanitizer at the bottom of applySnapshot saw
+  //   chat.yeaftActiveSessionFilter == null && lastViewed === <some A id>
+  // and "helpfully" seeded the filter back to that A id — visibly
+  // jumping the UI back to Agent A.
+  //
+  // Fix: only honor `lastViewed` when its session belongs to the
+  // SAME agent whose snapshot we just applied. Cross-agent fallback
+  // is exactly what made the bug a silent regression — prefer null.
+  // -----------------------------------------------------------------
+  it('does NOT auto-seed chat.yeaftActiveSessionFilter from lastViewed when it belongs to a different agent', () => {
+    // Seed agent_1 with a1; user "viewed" a1 before. Cache that.
+    const s = makeStore();
+    s.applySnapshot([{ id: 'a1' }], 'agent_1');
+    lastViewedValue = 'a1';
+    // Now agent_2 lands a fresh snapshot. Hook in a chat-store stub
+    // so the sanitizer at the bottom of applySnapshot has something
+    // to write into.
+    const fakeChat = { yeaftActiveSessionFilter: null };
+    globalThis.window.Pinia.useChatStore = () => fakeChat;
+    s.applySnapshot([{ id: 'b1' }], 'agent_2');
+    // Pre-fix: this would silently become 'a1' (an A id), reverting
+    // the UI back to Agent A. Post-fix: stays null — the sanitizer's
+    // else-if branch never fires because lastViewedMatchesAgent is
+    // false. Pinning `.toBe(null)` ensures a future regression that
+    // falls back to `sessionOrder[0]` (which could be a wrong-agent
+    // id depending on snapshot order) is also caught.
+    expect(fakeChat.yeaftActiveSessionFilter).toBe(null);
+    delete globalThis.window.Pinia.useChatStore;
+  });
+
+  it('does honor lastViewed when it belongs to the same agent as the snapshot', () => {
+    const s = makeStore();
+    s.applySnapshot([{ id: 'a1' }, { id: 'a2' }], 'agent_1');
+    lastViewedValue = 'a2';
+    const fakeChat = { yeaftActiveSessionFilter: null };
+    globalThis.window.Pinia.useChatStore = () => fakeChat;
+    // agent_1 snapshot again (a refresh/roster change). lastViewed
+    // a2 is owned by agent_1, so seeding it is correct.
+    s.applySnapshot([{ id: 'a1' }, { id: 'a2' }], 'agent_1');
+    expect(fakeChat.yeaftActiveSessionFilter).toBe('a2');
+    delete globalThis.window.Pinia.useChatStore;
+  });
 });

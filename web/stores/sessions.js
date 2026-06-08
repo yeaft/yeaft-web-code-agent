@@ -130,12 +130,17 @@ export const useSessionsStore = defineStore('sessions', {
       let lastViewed = null;
       try { lastViewed = localStorage.getItem('lastViewedYeaftSession') || null; }
       catch (_) {}
+      // Only trust lastViewed when it belongs to this agent's snapshot —
+      // cross-agent fallback is the "create-in-B reverts to A" regression.
+      const lastViewedSession = lastViewed ? this.sessions[lastViewed] : null;
+      const lastViewedMatchesAgent = lastViewedSession
+        && (!agentId || lastViewedSession.agentId === agentId);
       if (this.activeSessionId && !this.sessions[this.activeSessionId]) {
-        this.activeSessionId = (lastViewed && this.sessions[lastViewed])
+        this.activeSessionId = lastViewedMatchesAgent
           ? lastViewed
           : (this.sessionOrder[0] || null);
       } else if (!this.activeSessionId && this.sessionOrder.length > 0) {
-        this.activeSessionId = (lastViewed && this.sessions[lastViewed])
+        this.activeSessionId = lastViewedMatchesAgent
           ? lastViewed
           : this.sessionOrder[0];
       }
@@ -145,10 +150,10 @@ export const useSessionsStore = defineStore('sessions', {
       try {
         const chat = window.Pinia?.useChatStore?.();
         if (chat && chat.yeaftActiveSessionFilter && !this.sessions[chat.yeaftActiveSessionFilter]) {
-          chat.yeaftActiveSessionFilter = (lastViewed && this.sessions[lastViewed])
+          chat.yeaftActiveSessionFilter = lastViewedMatchesAgent
             ? lastViewed
             : (this.sessionOrder[0] || null);
-        } else if (chat && !chat.yeaftActiveSessionFilter && lastViewed && this.sessions[lastViewed]) {
+        } else if (chat && !chat.yeaftActiveSessionFilter && lastViewedMatchesAgent) {
           chat.yeaftActiveSessionFilter = lastViewed;
         }
       } catch (_) {}

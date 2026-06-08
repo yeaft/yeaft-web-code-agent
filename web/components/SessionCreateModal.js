@@ -625,7 +625,24 @@ export default {
           agentId: this.form.agentId || null,
         });
         if (res && res.ok) {
-          this.$emit('created', res.group);
+          // Mirror resumeExisting: pin currentAgent + sessionsStore.active
+          // + chat filter to the new session so the next click doesn't
+          // snap back. (See commit 54028e1a for the regression history.)
+          const chat = this.chat;
+          const created = res.group || null;
+          const id = created && created.id;
+          const owner = created && created.agentId;
+          if (id) {
+            if (owner && chat && chat.currentAgent !== owner
+                && typeof chat.selectAgent === 'function') {
+              chat.selectAgent(owner);
+            }
+            if (this.sessionsStore) this.sessionsStore.setActive(id);
+            if (chat && typeof chat.setActiveSessionFilter === 'function') {
+              chat.setActiveSessionFilter(id, { force: true });
+            }
+          }
+          this.$emit('created', created);
           this.$emit('close');
           return;
         }
